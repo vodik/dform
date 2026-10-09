@@ -5,12 +5,23 @@
 //! ([`crate::fmt::value`]); a leaf another contribution wrote splits out
 //! at its own line. A leaf no contribution of the program wrote (a
 //! schema's default of a merge key) does not split a value: it prints on
-//! its own line beside it.
+//! its own line beside it. A create's lines are folded so (`folded`,
+//! `Folding`), its leaves in the order the program gave a list's elements.
 
+use super::deformation::{Deformation, Line, Op};
+use super::labels::path;
+use super::mask::Shown;
+use super::tree;
+use super::tree::Site;
+use super::{Why, attr_holding};
+use crate::ast::{Atom, RuleStmt, Term};
 use crate::fmt::value::Tree;
+use crate::ir::Address;
 use crate::spell;
 use crate::value::Value;
+use serde_json::Value as Json;
 use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// One step of a printed path: a key, or a list's selector, with the
 /// text it is printed with (`.name`, `[name=traefik]`, `[0]`).
@@ -363,6 +374,383 @@ fn build(rel: &[(Vec<Tok>, &Tree)]) -> Tree {
         _ => 0,
     });
     Tree::List(children.iter().map(|(_, xs)| build(xs)).collect())
+}
+
+/// Create `d`'s lines folded (R-124): the leaves each contribution wrote
+/// as one value where the writers diverge, a leaf another wrote on its
+/// own line; one no contribution wrote is the schema's default when the
+/// schema gives one there (`type_default`, in `all`).
+pub(super) fn folded(
+    d: &Deformation,
+    p: &tree::Printer,
+    rules: &[RuleStmt],
+    facts: &[&Atom],
+    all: &BTreeSet<Atom>,
+    why: Why,
+    site: &mut dyn FnMut(&Line) -> Option<Site>,
+) -> Vec<Line> {
+    let lines = written_order(d, facts);
+    let paths: Vec<String> = lines.iter().map(|l| l.path.clone()).collect();
+    let writers = leaf_writers(p, facts, &lines, &paths);
+    // A document value (R-131), at the default level: the leaves a
+    // contribution read whole from a loader's document are its row, said
+    // once (below), so their values are not laid out.
+    let mut rows: BTreeMap<crate::circuit::NodeId, Option<tree::DocRow>> = BTreeMap::new();
+    if why == Why::Line {
+        for w in writers.iter().flatten() {
+            rows.entry(*w).or_insert_with(|| p.document_row(rules, *w));
+        }
+    }
+    let f = Folding {
+        p,
+        rules,
+        why,
+        defaults: type_defaults(all, &d.addr.typ),
+        sets: keyless_sets(&d.addr.typ, all),
+        lines,
+        paths,
+        writers,
+        rows,
+    };
+    let values: Vec<crate::fmt::value::Tree> = f
+        .lines
+        .iter()
+        .zip(&f.writers)
+        .map(|(l, w)| match f.in_row(*w) {
+            true => crate::fmt::value::Tree::Leaf(String::new()),
+            false => crate::fmt::value::Tree::Leaf(whole(&l.after, why)),
+        })
+        .collect();
+    let out: Vec<(Option<crate::circuit::NodeId>, Line)> = fold(&f.paths, &f.writers)
+        .into_iter()
+        .flat_map(|g| f.group(&g, &values, site))
+        .collect();
+    if why != Why::Line {
+        return out.into_iter().map(|(_, l)| l).collect();
+    }
+    f.with_rows(out)
+}
+
+/// A deformation's lines in the order the program gave a list's elements.
+pub(super) fn written_order<'d>(d: &'d Deformation, facts: &[&Atom]) -> Vec<&'d Line> {
+    let mut lines: Vec<&Line> = d.lines.iter().collect();
+    lines.sort_by_cached_key(|l| {
+        let Some((a, _, _)) = attr_holding(facts, &l.path) else {
+            return Vec::new();
+        };
+        let (Some(Term::Val(Value::Str(top))), Some(Term::Val(v))) = (a.args.get(2), a.args.get(3))
+        else {
+            return Vec::new();
+        };
+        let toks = tokens(&l.path);
+        let skip = tokens(top).len().min(toks.len());
+        let mut key: Vec<(usize, String)> =
+            toks[..skip].iter().map(|t| (0, t.text.clone())).collect();
+        key.extend(position(v, &toks[skip..]));
+        key
+    });
+    lines
+}
+
+/// The contribution that wrote each leaf line (`None` for another line),
+/// by the fact's address: an attribute fact compared as a key is its whole
+/// value compared, once per leaf.
+pub(super) fn leaf_writers(
+    p: &tree::Printer,
+    facts: &[&Atom],
+    lines: &[&Line],
+    paths: &[String],
+) -> Vec<Option<crate::circuit::NodeId>> {
+    let mut writers: Vec<Option<crate::circuit::NodeId>> = vec![None; paths.len()];
+    let mut by_attr: BTreeMap<*const Atom, (&Atom, Vec<usize>)> = BTreeMap::new();
+    for (i, l) in lines.iter().enumerate() {
+        if l.op == Op::Leaf
+            && let Some((a, _, _)) = attr_holding(facts, &l.path)
+        {
+            by_attr
+                .entry(a as *const Atom)
+                .or_insert_with(|| (a, Vec::new()))
+                .1
+                .push(i);
+        }
+    }
+    for (a, at) in by_attr.into_values() {
+        let held: Vec<String> = at.iter().map(|&i| paths[i].clone()).collect();
+        for (i, w) in at.into_iter().zip(p.writers(a, &held)) {
+            writers[i] = w;
+        }
+    }
+    writers
+}
+
+/// The paths of type `typ` whose value is its schema's default.
+pub(super) fn type_defaults(all: &BTreeSet<Atom>, typ: &str) -> BTreeSet<String> {
+    all.iter()
+        .filter(|f| f.pred == "type_default")
+        .filter_map(|f| match f.args.as_slice() {
+            [Term::Val(Value::Str(t)), Term::Val(Value::Str(p)), _] if *t == typ => Some(p.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A deformation's lines being folded: their paths and writers, the
+/// type's defaults and keyless sets, and each contribution's document row.
+pub(super) struct Folding<'a> {
+    pub(super) p: &'a tree::Printer<'a>,
+    pub(super) rules: &'a [RuleStmt],
+    pub(super) why: Why,
+    pub(super) defaults: BTreeSet<String>,
+    pub(super) sets: BTreeSet<String>,
+    pub(super) lines: Vec<&'a Line>,
+    pub(super) paths: Vec<String>,
+    pub(super) writers: Vec<Option<crate::circuit::NodeId>>,
+    pub(super) rows: BTreeMap<crate::circuit::NodeId, Option<tree::DocRow>>,
+}
+
+impl Folding<'_> {
+    /// The contribution `w` is said as its document's row.
+    pub(super) fn in_row(&self, w: Option<crate::circuit::NodeId>) -> bool {
+        w.and_then(|w| self.rows.get(&w))
+            .is_some_and(Option::is_some)
+    }
+
+    /// A fold group's lines: a leaf of its own with its site found (a
+    /// host with a label that is not ASCII keeps its own line, so its
+    /// A-labels print beside it, R-134), a schema default, an element of a
+    /// set several writers add to named by itself (R-158), or the group's
+    /// value laid out under its path.
+    pub(super) fn group(
+        &self,
+        g: &Group,
+        values: &[crate::fmt::value::Tree],
+        site: &mut dyn FnMut(&Line) -> Option<Site>,
+    ) -> Vec<(Option<crate::circuit::NodeId>, Line)> {
+        let (p, rules, why) = (self.p, self.rules, self.why);
+        let (lines, paths, writers) = (&self.lines, &self.paths, &self.writers);
+        let (defaults, sets) = (&self.defaults, &self.sets);
+        let mut own = |l: &Line| Line {
+            site: site(l),
+            ..l.clone()
+        };
+        let host = |l: &Line| matches!(&l.after, Shown::Value(Json::String(s)) if crate::uri::ascii_form(s).is_some());
+        if g.leaves.len() > 1 && g.leaves.iter().any(|&i| host(lines[i])) {
+            return g
+                .leaves
+                .iter()
+                .map(|&i| (writers[i], own(lines[i])))
+                .collect::<Vec<_>>();
+        }
+        let w = writers[g.leaves[0]];
+        let first = lines[g.leaves[0]];
+        let line = match (g.leaves.as_slice(), w) {
+            ([i], None) if defaults.contains(&schema_path(&paths[*i])) => Line {
+                site: Some(Site {
+                    statement: "schema default".into(),
+                    ..Site::default()
+                }),
+                ..first.clone()
+            },
+            // A scalar element of a set several writers add to is
+            // named by itself (R-158): `policies[app_policy]`.
+            // An element several writers add to says its own writer's
+            // site, which the attribute's winner does not.
+            ([i], Some(w)) if g.path == paths[*i] && paths[*i].ends_with(']') => {
+                let first = own(first);
+                let site = match first.site {
+                    Some(s) => Some(s),
+                    None => p.contribution_site(rules, w, &paths[*i]),
+                };
+                let path = match set_element(&paths[*i], sets) {
+                    Some(list) if scalar(&first.after) => {
+                        format!("{list}[{}]", first.after.said(why))
+                    }
+                    _ => first.path.clone(),
+                };
+                Line {
+                    path,
+                    site,
+                    ..first
+                }
+            }
+            ([i], _) if g.path == paths[*i] => match set_element(&paths[*i], sets) {
+                Some(list) if scalar(&first.after) => Line {
+                    path: format!("{list}[{}]", first.after.said(why)),
+                    ..own(first)
+                },
+                _ => own(first),
+            },
+            (_, w) => Line {
+                op: Op::Leaf,
+                path: g.path.clone(),
+                before: Shown::Absent,
+                after: Shown::Absent,
+                leaves: Vec::new(),
+                site: w.and_then(|w| p.contribution_site(rules, w, &g.path)),
+                chain: Vec::new(),
+                value: (!self.in_row(w)).then(|| assemble(g, paths, values)),
+                row: None,
+            },
+        };
+        vec![(w, line)]
+    }
+
+    /// A document value (R-131): the leaves a contribution read whole from
+    /// a loader's document are its row, said once; a value body's first,
+    /// as the resource's. A leaf another write made stays its own line.
+    pub(super) fn with_rows(&self, out: Vec<(Option<crate::circuit::NodeId>, Line)>) -> Vec<Line> {
+        let rows = &self.rows;
+        let mut said = BTreeSet::new();
+        let mut body = Vec::new();
+        let mut rest = Vec::new();
+        for (w, l) in out {
+            let row = w.and_then(|w| rows.get(&w).cloned().flatten());
+            let Some(row) = row else {
+                rest.push(l);
+                continue;
+            };
+            let at = match row.body {
+                true => String::new(),
+                false => path(&row.path),
+            };
+            if !said.insert((at.clone(), row.at.clone())) {
+                continue;
+            }
+            let line = Line {
+                op: Op::Leaf,
+                path: at,
+                before: Shown::Absent,
+                after: Shown::Absent,
+                leaves: Vec::new(),
+                site: l.site,
+                chain: Vec::new(),
+                value: None,
+                row: Some(row.text()),
+            };
+            if row.body {
+                body.push(line);
+                continue;
+            }
+            // Before a leaf another write made inside it.
+            let under = |x: &Line| {
+                x.path
+                    .strip_prefix(line.path.as_str())
+                    .is_some_and(|r| r.starts_with(['.', '[']))
+            };
+            match rest.iter().position(under) {
+                Some(i) => rest.insert(i, line),
+                None => rest.push(line),
+            }
+        }
+        body.extend(rest);
+        body
+    }
+}
+
+/// A leaf's value inside a folded one: as the line says it, a string
+/// whole (no elision inside a laid-out value).
+pub(super) fn whole(v: &Shown, why: Why) -> String {
+    match v {
+        Shown::Value(Json::String(s)) => spell::quote(s),
+        v => v.said(why),
+    }
+}
+
+/// A printed path's schema path: its keys, no selectors
+/// (`spec.ports[name=web].protocol` is `spec.ports.protocol`).
+/// The keyless sets of type `typ`, by schema path: each attribute
+/// `type_attr` types `set(..)` or `type_lattice` declares a set, but a
+/// list keyed by `type_list_key`.
+pub(super) fn keyless_sets(typ: &str, all: &BTreeSet<Atom>) -> BTreeSet<String> {
+    let mut keyed = BTreeSet::new();
+    let mut sets = BTreeSet::new();
+    for f in all {
+        let (Some(Term::Val(Value::Str(t))), Some(Term::Val(Value::Str(p))), Some(Term::Val(k))) =
+            (f.args.first(), f.args.get(1), f.args.get(2))
+        else {
+            continue;
+        };
+        if t != typ {
+            continue;
+        }
+        match (f.pred.as_str(), k) {
+            ("type_list_key", _) => {
+                keyed.insert(p.clone());
+            }
+            ("type_lattice", Value::Str(l)) if l == "set" => {
+                sets.insert(p.clone());
+            }
+            ("type_attr", Value::Str(ty)) if ty.split('(').next().map(str::trim) == Some("set") => {
+                sets.insert(p.clone());
+            }
+            _ => {}
+        }
+    }
+    &sets - &keyed
+}
+
+/// Where the element a set's update line adds was written (R-158), when
+/// several writers add to the set: its writer's site. The line's path is
+/// the set's, `policies[]`; the element is found in the program's value
+/// by what it prints as.
+pub(super) fn element_site(
+    p: &tree::Printer,
+    rules: &[RuleStmt],
+    facts: &[&Atom],
+    l: &Line,
+) -> Option<Site> {
+    let list = l.path.strip_suffix("[]")?;
+    if l.op != Op::Add || !scalar(&l.after) {
+        return None;
+    }
+    let (a, _, _) = attr_holding(facts, list)?;
+    let Some(Term::Val(Value::List(xs))) = a.args.get(3) else {
+        return None;
+    };
+    let want = l.after.said(Why::Line);
+    let printed = |v: &Value| match v {
+        Value::Ref { typ, name, attr } if attr.is_empty() => Shown::Ref {
+            addr: Address {
+                typ: typ.clone(),
+                name: name.clone(),
+            },
+            value: Json::Null,
+        }
+        .said(Why::Line),
+        Value::Str(s) => Shown::Value(Json::String(s.clone())).said(Why::Line),
+        _ => String::new(),
+    };
+    let i = xs.iter().position(|x| printed(x) == want)?;
+    let path = format!("{list}[{i}]");
+    let w = p.writers(a, std::slice::from_ref(&path)).pop().flatten()?;
+    p.contribution_site(rules, w, &path)
+}
+
+/// A value a set's element is named by (R-158): a string, a reference,
+/// an unknown; a number would read as a position.
+pub(super) fn scalar(v: &Shown) -> bool {
+    matches!(
+        v,
+        Shown::Value(Json::String(_)) | Shown::Ref { .. } | Shown::Null { .. }
+    )
+}
+
+/// The list of printed path `path` when it is an element of one of
+/// `sets` and nothing below it: `policies` of `policies[2]`.
+pub(super) fn set_element(path: &str, sets: &BTreeSet<String>) -> Option<String> {
+    let list = path.strip_suffix(']')?.rsplit_once('[')?.0;
+    (!list.contains('[') && sets.contains(&schema_path(list))).then(|| list.to_string())
+}
+
+pub(super) fn schema_path(path: &str) -> String {
+    tokens(path)
+        .into_iter()
+        .filter_map(|t| match t.step {
+            Step::Key(k) => Some(crate::ir::segment_key(&k).into_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 #[cfg(test)]
