@@ -196,7 +196,7 @@ pub fn lines(
         };
         let l = &mut out[i];
         let text = match a.args.get(1) {
-            Some(Term::Val(ctx)) => format!("{message} ctx={}", crate::engine::value_to_json(ctx)),
+            Some(Term::Val(ctx)) => format!("{message} ctx={}", crate::spell::value_to_json(ctx)),
             _ => message.clone(),
         };
         let (_, bindings) = violation_parts(&text, r);

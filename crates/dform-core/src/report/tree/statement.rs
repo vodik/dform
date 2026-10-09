@@ -6,7 +6,6 @@
 use super::docrow::{place_in, structured};
 use crate::ast::{Atom, Lit, RuleStmt, Term};
 use crate::circuit::Fact;
-use crate::engine;
 use crate::ir::Address;
 use crate::query::Redactor;
 use crate::spell;
@@ -363,7 +362,8 @@ impl Cx<'_> {
                     return None;
                 };
                 let at = place_in(at, &doc, v)?;
-                let size = serde_json::to_vec(&engine::value_to_json(v)).map_or(0, |b| b.len());
+                let size =
+                    serde_json::to_vec(&crate::spell::value_to_json(v)).map_or(0, |b| b.len());
                 Some(format!("{at}  ({})", crate::query::size(size)))
             })
     }

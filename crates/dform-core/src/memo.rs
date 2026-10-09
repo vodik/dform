@@ -180,9 +180,7 @@ pub fn keep(
         }
         let kept = match (secret, key) {
             (true, None) => continue,
-            (false, None)
-                if crate::secrets::standin::carries(&crate::engine::value_to_json(&v)) =>
-            {
+            (false, None) if crate::secrets::standin::carries(&crate::spell::value_to_json(&v)) => {
                 continue;
             }
             (true, Some(key)) => Kept {

@@ -202,7 +202,7 @@ fn unset_required(addr: &ir::Address, cx: &Context) -> Vec<String> {
     let Some(r) = resources.iter().find(|r| r.addr == *addr) else {
         return Vec::new();
     };
-    let doc = engine::value_to_json(&r.attrs);
+    let doc = crate::spell::value_to_json(&r.attrs);
     schema
         .unset_required(&addr.typ, &doc)
         .into_iter()

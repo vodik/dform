@@ -259,7 +259,8 @@ impl<'a> Space<'a> {
         let unset: Vec<String> = resources
             .iter()
             .filter_map(|r| {
-                let m = schema.unset_message(&r.addr.typ, &engine::value_to_json(&r.attrs))?;
+                let m =
+                    schema.unset_message(&r.addr.typ, &crate::spell::value_to_json(&r.attrs))?;
                 let site = report::sites(&res, [&r.addr], None).into_values().next();
                 Some(report::Failure::located(&r.addr, m).at(site).to_string())
             })

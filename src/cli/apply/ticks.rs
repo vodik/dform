@@ -1771,7 +1771,7 @@ fn needing_master(
         desired
             .iter()
             .find(|r| r.addr == *a)
-            .map(|r| crate::engine::value_to_json(&r.attrs))
+            .map(|r| crate::spell::value_to_json(&r.attrs))
     };
     for a in &plan.actions {
         let paths = backend.needs_master(a, doc(&a.addr).as_ref());

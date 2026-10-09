@@ -346,7 +346,7 @@ fn required(e: &Evaluated, read: Reader) -> Vec<Action> {
     let mut out = Vec::new();
     for r in &resources {
         let typ = r.addr.typ.as_str();
-        let doc = engine::value_to_json(&r.attrs);
+        let doc = dform_core::spell::value_to_json(&r.attrs);
         let missing: Vec<(String, &str)> = e
             .schema
             .unset_required(typ, &doc)

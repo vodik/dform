@@ -682,7 +682,7 @@ impl FakeCloud {
         let remote = serde_json::to_string(
             &inputs
                 .iter()
-                .map(dform_core::engine::value_to_json)
+                .map(dform_core::spell::value_to_json)
                 .collect::<Vec<_>>(),
         )?;
         let mut out = Vec::new();
@@ -694,7 +694,7 @@ impl FakeCloud {
                     values.push(pb::Value::from(v));
                     continue;
                 }
-                let j = dform_core::engine::value_to_json(v);
+                let j = dform_core::spell::value_to_json(v);
                 let digest = self
                     .digest_key
                     .as_ref()
@@ -1260,7 +1260,7 @@ impl FakeCloud {
                     .replace("{n}", &(n % 254 + 1).to_string());
                 return json!(fill_doc_refs(&s, doc, minted));
             }
-            Some(v) => return dform_core::engine::value_to_json(v),
+            Some(v) => return dform_core::spell::value_to_json(v),
             None => {}
         }
         let ty = self

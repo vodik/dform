@@ -1553,7 +1553,7 @@ pub const BODIES: &[(&str, Body)] = &[
         _ => None,
     }),
     ("json.encode", |a| match a {
-        [v] if encodable(v) => serde_json::to_string(&crate::engine::value_to_json(v))
+        [v] if encodable(v) => serde_json::to_string(&crate::spell::value_to_json(v))
             .ok()
             .map(Value::Str),
         _ => None,
@@ -1563,7 +1563,7 @@ pub const BODIES: &[(&str, Body)] = &[
         _ => None,
     }),
     ("yaml.encode", |a| match a {
-        [v] if encodable(v) => serde_yaml::to_string(&crate::engine::value_to_json(v))
+        [v] if encodable(v) => serde_yaml::to_string(&crate::spell::value_to_json(v))
             .ok()
             .map(Value::Str),
         _ => None,
@@ -1581,7 +1581,7 @@ pub const BODIES: &[(&str, Body)] = &[
         _ => None,
     }),
     ("toml.encode", |a| match a {
-        [v] if encodable(v) => toml::to_string(&crate::engine::value_to_json(v))
+        [v] if encodable(v) => toml::to_string(&crate::spell::value_to_json(v))
             .ok()
             .map(Value::Str),
         _ => None,

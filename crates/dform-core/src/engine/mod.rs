@@ -35,7 +35,6 @@ use crate::ir::ops;
 use crate::ir::store::{Store, Window};
 use crate::partition::{self, Node};
 use crate::spell;
-pub use crate::spell::value_to_json;
 use crate::stuck::{self, Stuck};
 use crate::transform;
 use crate::value::Value;

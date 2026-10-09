@@ -751,7 +751,7 @@ impl Evaluator {
                 (None, _) => continue,
             };
             if schema_wait {
-                let doc = engine::value_to_json(&r.attrs);
+                let doc = crate::spell::value_to_json(&r.attrs);
                 // No schema says which of its paths are sensitive until
                 // the boundary learns it: each string is, until then
                 // (R-215); a number or a flag is no secret's.
@@ -2071,7 +2071,7 @@ fn policy_text(a: &Atom) -> Option<String> {
         None => Some(msg.clone()),
         Some(Term::Val(ctx)) => Some(format!(
             "{msg} ctx={}",
-            serde_json::to_string(&engine::value_to_json(ctx)).ok()?
+            serde_json::to_string(&crate::spell::value_to_json(ctx)).ok()?
         )),
         Some(_) => None,
     }

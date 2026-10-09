@@ -5,7 +5,6 @@ use super::compress::Compress;
 use super::printer::Printer;
 use crate::ast::{Lit, RuleStmt, Term};
 use crate::circuit::{Circuit, Fact, Leaf, NodeId, View};
-use crate::engine;
 use crate::value::Value;
 use std::collections::BTreeMap;
 
@@ -195,7 +194,8 @@ impl Printer<'_> {
             if let Some(at) = docs.iter().find_map(|d| document_place(d, value)) {
                 return Some(DocRow {
                     at,
-                    size: serde_json::to_vec(&engine::value_to_json(value)).map_or(0, |b| b.len()),
+                    size: serde_json::to_vec(&crate::spell::value_to_json(value))
+                        .map_or(0, |b| b.len()),
                     body: body.is_some(),
                     path,
                 });

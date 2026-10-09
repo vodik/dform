@@ -782,7 +782,7 @@ impl Redactor {
             Value::Null { label, class, .. } => {
                 serde_json::json!({"null": crate::ir::label(label), "class": class.name()})
             }
-            v => engine::value_to_json(v),
+            v => crate::spell::value_to_json(v),
         }
     }
 }

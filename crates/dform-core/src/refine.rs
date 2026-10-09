@@ -370,7 +370,7 @@ pub fn to_assertion(c: &Constraint) -> (String, serde_json::Value) {
         Constraint::Regex(re) => ("regex", json!(re)),
         Constraint::OneOf(vs) => (
             "enum",
-            serde_json::Value::Array(vs.iter().map(crate::engine::value_to_json).collect()),
+            serde_json::Value::Array(vs.iter().map(crate::spell::value_to_json).collect()),
         ),
     };
     (op.to_string(), v)

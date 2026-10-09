@@ -1710,7 +1710,7 @@ pub mod file {
             .filter(|(_, v)| !crate::stuck::has_null(v))
             .map(|(k, v)| {
                 let j = stored(key, report::shown_value(v, r), || {
-                    crate::engine::value_to_json(v)
+                    crate::spell::value_to_json(v)
                 });
                 (k.clone(), j)
             })
@@ -1730,7 +1730,7 @@ pub mod file {
                 [Term::Val(Value::Str(l)), Term::Val(v)] => Some(Resolved {
                     null: l.clone(),
                     value: stored(key, report::shown_value(v, r), || {
-                        crate::engine::value_to_json(v)
+                        crate::spell::value_to_json(v)
                     }),
                 }),
                 _ => None,

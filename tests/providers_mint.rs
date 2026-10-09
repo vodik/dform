@@ -1,6 +1,6 @@
 //! What the mock mints for a computed attribute (`type_mint`): a value
 //! that is not a string template reaches the world as the engine writes
-//! it in JSON (`engine::value_to_json`), a quantity as its canonical text.
+//! it in JSON (`spell::value_to_json`), a quantity as its canonical text.
 
 mod common;
 use common::Scratch;
