@@ -39,6 +39,9 @@ pub struct Collected {
     pub clauses: usize,
     /// Rules folded over their aggregates, the same.
     pub folds: usize,
+    /// The kinds of goal built (`Member/Enum`, `Not/helper`, ..): which
+    /// forms a corpus reaches.
+    pub built: std::collections::BTreeSet<String>,
     pub differences: Vec<Difference>,
 }
 

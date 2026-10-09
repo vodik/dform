@@ -200,7 +200,14 @@ impl Shadow {
             },
             ..d
         });
-        record(d, |c| c.literals += 1);
+        let mut kinds = Vec::new();
+        if let Some(g) = goal {
+            kinds_of(&self.program, g, &mut kinds);
+        }
+        record(d, |c| {
+            c.literals += 1;
+            c.built.extend(kinds);
+        });
         goal
     }
 
@@ -258,7 +265,31 @@ impl Shadow {
             statement: format!("the folded rule at {}", place(span)),
             ..d
         });
-        record(d, |c| c.folds += 1);
+        use crate::program::node::{GoalKind, ItemKind};
+        let ItemKind::Rule {
+            clause: Some(clause),
+            ..
+        } = &self.program.items[item].kind
+        else {
+            unreachable!("a folded rule has a body")
+        };
+        let grouped = self.program.clauses[*clause].goals.iter().any(|g| {
+            matches!(
+                self.program.goals[*g].kind,
+                GoalKind::Fold {
+                    helper: Some(_),
+                    ..
+                }
+            )
+        });
+        let kind = match grouped {
+            true => "Rule/grouped",
+            false => "Rule/head",
+        };
+        record(d, |c| {
+            c.folds += 1;
+            c.built.insert(kind.into());
+        });
     }
 }
 
@@ -271,6 +302,64 @@ impl Frame {
             .map(|i| helpers[i].clone())
             .collect()
     }
+}
+
+/// The kinds of goal `g` is and holds: `Has/Read`, `Member/Enum`,
+/// `Not/helper`, ..
+fn kinds_of(p: &Program, g: GoalId, out: &mut Vec<String>) {
+    use crate::program::node::{Coll, GoalKind, Has};
+    let kind = match &p.goals[g].kind {
+        GoalKind::Rel { .. } => "Rel",
+        GoalKind::Member { coll, .. } => match coll {
+            Coll::Expr(_) => "Member/Expr",
+            Coll::Type(_) => "Member/Type",
+            Coll::Namespace { .. } => "Member/Namespace",
+            Coll::ProviderType { .. } => "Member/ProviderType",
+            Coll::World(_) => "Member/World",
+            Coll::Enum { .. } => "Member/Enum",
+            Coll::Copies { .. } => "Member/Copies",
+            Coll::Each(_) => "Member/Each",
+            Coll::TypeOf(_) => "Member/TypeOf",
+        },
+        GoalKind::Bind { value, .. } => match p.exprs[*value].kind {
+            crate::program::node::ExprKind::Read { .. } => "Bind/Read",
+            crate::program::node::ExprKind::Field { .. } => "Bind/Field",
+            _ => "Bind",
+        },
+        GoalKind::Compare { lhs, ops } => match (&p.exprs[*lhs].kind, ops.len()) {
+            (crate::program::node::ExprKind::Read { .. }, _) => "Compare/Read",
+            (_, 1) => "Compare",
+            _ => "Compare/chain",
+        },
+        GoalKind::Has(h) => match h {
+            Has::Resource { .. } => "Has/Resource",
+            Has::Read(_) => "Has/Read",
+            Has::Walk { .. } => "Has/Walk",
+        },
+        GoalKind::Truth(e) => match p.exprs[*e].kind {
+            crate::program::node::ExprKind::Read { .. } => "Truth/Read",
+            _ => "Truth",
+        },
+        GoalKind::Not { clause, helper } => {
+            for &g in &p.clauses[*clause].goals {
+                kinds_of(p, g, out);
+            }
+            match helper {
+                Some(_) => "Not/helper",
+                None => "Not",
+            }
+        }
+        GoalKind::Fold { .. } => "Fold",
+        GoalKind::Hoisted { goals, .. } => {
+            goals.iter().for_each(|g| kinds_of(p, *g, out));
+            return;
+        }
+        GoalKind::Marked { goal, .. } => {
+            kinds_of(p, *goal, out);
+            "Marked"
+        }
+    };
+    out.push(kind.to_string());
 }
 
 /// Literals and the statements made beside them, as one text: each

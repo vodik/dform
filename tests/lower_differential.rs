@@ -33,6 +33,7 @@ fn the_program_lowers_as_the_resolver_does() {
     assert!(files.len() > 60, "{files:?}");
     let mut failures = Vec::new();
     let (mut compared, mut terms, mut literals, mut clauses, mut folds) = (0, 0, 0, 0, 0);
+    let mut built = std::collections::BTreeSet::new();
     for f in &files {
         let ((), seen) = check::collect(|| lower(f));
         compared += seen.compared;
@@ -40,6 +41,7 @@ fn the_program_lowers_as_the_resolver_does() {
         literals += seen.literals;
         clauses += seen.clauses;
         folds += seen.folds;
+        built.extend(seen.built);
         failures.extend(
             seen.differences
                 .into_iter()
@@ -63,6 +65,7 @@ fn the_program_lowers_as_the_resolver_does() {
         literals += seen.literals;
         clauses += seen.clauses;
         folds += seen.folds;
+        built.extend(seen.built);
         failures.extend(seen.differences.into_iter().map(|d| format!("{what}: {d}")));
     }
     assert!(
@@ -84,4 +87,5 @@ fn the_program_lowers_as_the_resolver_does() {
     );
     assert!(clauses >= 2 * compared, "only {clauses} clauses compared");
     assert!(folds > 0, "no rule folded over its aggregates");
+    eprintln!("goals built: {built:?}");
 }

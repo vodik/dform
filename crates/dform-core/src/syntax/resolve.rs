@@ -9022,6 +9022,87 @@ mod tests {
         }
     }
 
+    /// Every form a written literal takes is built as a goal (R-211 step
+    /// 4) and lowers as the resolver lowers it, its clause and its
+    /// statement's folded rule too: the forms the corpus seldom writes
+    /// included (a `not { }` after a negated literal, a chain, a read
+    /// tested in place, `has` marked, each kind of membership).
+    #[test]
+    fn every_written_literal_is_built_as_the_resolver_lowers_it() {
+        let src = "resource db.postgres pg { public = false, tags = { a: 1 } }\n\
+             type environment = enum(\"staging\", \"prod\")\n\
+             let xs = [1, 2]\n\
+             let o = { a: 1 }\n\
+             p(1)\n\
+             a(x) where p(x)\n\
+             t(1) where pg.public\n\
+             t2(1) where o.a\n\
+             h(1) where has pg\n\
+             h2(1) where has pg.public\n\
+             h3(1) where has pg.tags.a\n\
+             h4(1) where has o.a\n\
+             c(x) where x = 1\n\
+             c2(x) where p(x), x == 1\n\
+             c3(x) where p(x), 0 <= x <= 3\n\
+             c4(y, z) where (y, z) = xs[0]\n\
+             c5(x) where x = pg.public\n\
+             c6(1) where pg.public == false\n\
+             c7(1) where pg == pg\n\
+             m(x) where x in xs\n\
+             m2(k, v) where (k, v) in o\n\
+             m3(r) where r in db.postgres\n\
+             m4(r) where r in resource\n\
+             m5(n) where n in world.net.vpc\n\
+             m6(e) where e in environment\n\
+             m7(v) where v in db.postgres[_].public\n\
+             m8(x) where p(x), x not in xs\n\
+             n(x) where p(x), not a(x)\n\
+             n2(1) where not pg.public\n\
+             n3(1) where not has pg.public\n\
+             n4(1) where not pg.public == true\n\
+             n5(x) where p(x), not a(x), not { a(x), x > 1 }\n\
+             n6(x) where p(x), not x in xs\n\
+             n7(1) where not has pg.tags.a\n\
+             g(k, n) where p(k), n = count(x), a(x)\n\
+             g2(n) where n = count(x), p(x), n > 1\n\
+             set db.postgres[_].public = true\n";
+        let (_, seen) = crate::program::check::collect(|| lower(src));
+        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
+        let missing: Vec<&str> = [
+            "Rel",
+            "Truth",
+            "Truth/Read",
+            "Has/Resource",
+            "Has/Read",
+            "Has/Walk",
+            "Marked",
+            "Bind",
+            "Bind/Field",
+            "Bind/Read",
+            "Compare",
+            "Compare/chain",
+            "Compare/Read",
+            "Member/Expr",
+            "Member/Type",
+            "Member/World",
+            "Member/Enum",
+            "Member/Each",
+            "Not",
+            "Not/helper",
+            "Fold",
+            "Rule/head",
+            "Rule/grouped",
+        ]
+        .into_iter()
+        .filter(|k| !seen.built.contains(*k))
+        .collect();
+        assert!(
+            missing.is_empty(),
+            "not built: {missing:?} of {:?}",
+            seen.built
+        );
+    }
+
     #[test]
     fn value_names_are_read_by_name() {
         let got = lower(
