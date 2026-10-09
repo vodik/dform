@@ -93,7 +93,7 @@ set r.tags = { team: "shop" } where r in resource
 
 ```
 $ dform query 'net.vpc["blue.vpc"].tags'
-{ component: "network", team: "shop" }
+{ team: "shop", component: "network" }
 ```
 
 The component wrote `component`, and the policy wrote `team`. Writes
