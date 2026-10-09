@@ -5376,7 +5376,7 @@ impl<'u> Lowerer<'u> {
 
     /// What written literal `n` is, read off the tree, for its builder
     /// (R-211 step 4); `None` for a form no builder knows yet.
-    fn written_form(&self, _rc: &Rc, n: &SyntaxNode) -> Option<crate::program::build::Form> {
+    fn written_form(&self, rc: &Rc, n: &SyntaxNode) -> Option<crate::program::build::Form> {
         use crate::program::build::Form;
         Some(match n.kind() {
             LIT_ATOM => Form::Atom,
@@ -5397,6 +5397,17 @@ impl<'u> Lowerer<'u> {
                     bind: ops.first() == Some(&EQ),
                     ops: ops.len(),
                     aggregate,
+                }
+            }
+            LIT_IN | LIT_NOT_IN => {
+                // `v in PATH`, PATH with a `[_]` past its type's (R-162).
+                let each = terms(n)
+                    .nth(1)
+                    .and_then(|t| Chain::of(&t))
+                    .is_some_and(|c| self.type_each(rc, c).ops.iter().any(each::is_each));
+                match n.kind() {
+                    LIT_IN => Form::In { each },
+                    _ => Form::NotIn { each },
                 }
             }
             _ => return None,

@@ -12,6 +12,7 @@
 
 mod clause;
 mod expr;
+mod membership;
 mod pattern;
 mod spread;
 

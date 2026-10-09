@@ -103,6 +103,8 @@ impl Builder<'_> {
                 let (last, reads) = w.lits.split_last()?;
                 (self.compare(last, *bind, *aggregate, w.read)?, reads)
             }
+            Form::In { each } => return self.membership(w, *each, false),
+            Form::NotIn { each } => return self.membership(w, *each, true),
             _ => return None,
         };
         Some(self.hoisted_goal(reads, vec![main], w.after))

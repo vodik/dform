@@ -27,6 +27,10 @@ impl Builder<'_> {
             },
             t => PatternKind::Expr(self.expr(t)),
         };
+        self.pattern_node(kind)
+    }
+
+    pub(super) fn pattern_node(&mut self, kind: PatternKind) -> PatternId {
         self.program.patterns.insert(Pattern {
             span: self.span,
             kind,
