@@ -42,8 +42,7 @@ pub struct Collected {
     /// The kinds of goal built (`Member/Enum`, `Not/helper`, ..): which
     /// forms a corpus reaches.
     pub built: std::collections::BTreeSet<String>,
-    /// The items of the programs compared, by kind (`a statement` is an
-    /// opaque one): how far the port has come.
+    /// The items of the programs compared, by kind.
     pub items: std::collections::BTreeMap<String, usize>,
     pub differences: Vec<Difference>,
 }
@@ -61,28 +60,6 @@ impl Collected {
             *self.items.entry(k).or_default() += n;
         }
         self.differences.extend(other.differences);
-    }
-}
-
-/// A statement's variant, in a word.
-fn stmt_kind(s: &Stmt) -> &'static str {
-    match s {
-        Stmt::Fact(_) => "Fact",
-        Stmt::Rule(_) => "Rule",
-        Stmt::Module(_) => "Module",
-        Stmt::Instance(_) => "Instance",
-        Stmt::Use(_) => "Use",
-        Stmt::Input(_) => "Input",
-        Stmt::RelationInput(_) => "RelationInput",
-        Stmt::Extern(_) => "Extern",
-        Stmt::Mixed(_) => "Mixed",
-        Stmt::Mode(_) => "Mode",
-        Stmt::Output(_) => "Output",
-        Stmt::Provider(_) => "Provider",
-        Stmt::Resource(_) => "Resource",
-        Stmt::Decl(_) => "Decl",
-        Stmt::ExternFn(_) => "ExternFn",
-        Stmt::Pending(_) => "Pending",
     }
 }
 
@@ -119,7 +96,7 @@ pub fn compare(old: &Lowered, new: &Lowered) {
 }
 
 /// The program `program` lowered to `new`: compared with what the
-/// resolver lowered it to (its opaque items, `ported` for the rest), its
+/// resolver lowered it to (`ported`), its
 /// items counted by kind.
 pub fn program(program: &Program, ported: &Resolved, new: &Lowered) {
     compare(&resolved(program, ported), new);
@@ -130,14 +107,7 @@ pub fn program(program: &Program, ported: &Resolved, new: &Lowered) {
         if let ItemKind::Module { items, .. } = kind {
             walk.extend(items.iter().copied());
         }
-        kinds.push(match kind {
-            // Not ported yet: by what it lowered to first.
-            ItemKind::Opaque(stmts) => match stmts.first() {
-                Some(s) => format!("a statement ({})", stmt_kind(s)),
-                None => "a statement".to_string(),
-            },
-            kind => super::spell::kind(kind).to_string(),
-        });
+        kinds.push(super::spell::kind(kind).to_string());
     }
     record(None, |c| {
         for k in kinds {
@@ -214,12 +184,11 @@ pub fn collect<T>(f: impl FnOnce() -> T) -> (T, Collected) {
 }
 
 /// What the resolver lowered each ported item to, kept beside the program
-/// for [`resolved`]: an opaque item holds its own.
+/// for [`resolved`].
 pub type Resolved = SecondaryMap<ItemId, Vec<Stmt>>;
 
-/// The resolver's own output for `program`: each opaque item's
-/// statements, each ported item's from `ported`, a module's in its
-/// module, walked from the roots as the resolver walked the files.
+/// The resolver's own output for `program`: each item's from `ported`,
+/// a module's in its module, walked from the roots as the resolver walked the files.
 pub fn resolved(program: &Program, ported: &Resolved) -> Lowered {
     if !program.diags.is_empty() {
         return Err(program.diags.clone());
@@ -237,7 +206,7 @@ pub fn resolved(program: &Program, ported: &Resolved) -> Lowered {
 fn resolved_item(program: &Program, ported: &Resolved, id: ItemId, out: &mut Vec<Stmt>) {
     let it = &program.items[id];
     match (&it.kind, ported.get(id)) {
-        (_, Some(stmts)) | (ItemKind::Opaque(stmts), None) => out.extend(stmts.iter().cloned()),
+        (_, Some(stmts)) => out.extend(stmts.iter().cloned()),
         (
             ItemKind::Module {
                 path,

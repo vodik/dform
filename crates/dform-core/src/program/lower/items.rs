@@ -1,6 +1,6 @@
 //! Items to the statements the resolver has always written for them (R-211
-//! step 5): an opaque item's own, a module's `Stmt::Module` around its
-//! items', and each ported statement's, one function per kind:
+//! step 5): a module's `Stmt::Module` around its items', and each
+//! statement's, one function per kind:
 //!
 //! | item                           | statements                                       |
 //! |--------------------------------|--------------------------------------------------|
@@ -40,7 +40,6 @@ use std::collections::BTreeMap;
 pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<Origin>) {
     let it = &program.items[id];
     let stmts = match &it.kind {
-        ItemKind::Opaque(stmts) => stmts.clone(),
         ItemKind::Module {
             path,
             component,

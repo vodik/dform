@@ -5,9 +5,8 @@
 //! consumer that combines the passes' tables, and the function the
 //! resolver calls once the migration ends.
 //!
-//! An item is opaque (its statements, emitted as they are), a module
-//! (`Stmt::Module` around its items' statements), or a ported statement
-//! (`items.rs`).
+//! An item is a module (`Stmt::Module` around its items' statements) or
+//! a statement of its kind (`items.rs`).
 
 mod clause;
 mod expr;
@@ -59,43 +58,11 @@ pub fn lower(program: &Program) -> LoweredStack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::Stmt;
-    use crate::program::ItemKind;
     use crate::program::check;
 
-    /// A program of opaque items lowers to the statements it was built
-    /// from, spans, origins and module bodies included, and one built from
-    /// diagnostics lowers to them.
+    /// A program the build found wrong lowers to its diagnostics.
     #[test]
-    fn an_opaque_program_lowers_to_what_it_was_built_from() {
-        let src = "\nlet x = 1\np(a) where a = x\ndeny \"no\" where p(2)\n";
-        let lowered = crate::parser::parse_program(src).unwrap();
-        let program = Program::of_statements(lowered.statements.clone());
-        assert_eq!(program.roots.len(), lowered.statements.len());
-        let back = lower(&program);
-        assert_eq!(back.origins.len(), lowered.statements.len());
-        assert_eq!(check::dump(&back.rules), check::dump(&Ok(lowered.clone())));
-
-        let module = ast::Program {
-            statements: vec![Stmt::Module(ast::Module {
-                name: "m".into(),
-                component: false,
-                body: lowered.statements.clone(),
-                span: Default::default(),
-            })],
-            stack: None,
-        };
-        let program = Program::of_statements(module.statements.clone());
-        let ItemKind::Module { body, items, .. } = &program.items[program.roots[0]].kind else {
-            panic!("not a module item");
-        };
-        assert_eq!(items.len(), lowered.statements.len());
-        assert_eq!(program.scopes[*body].parent, Some(program.scope));
-        assert_eq!(
-            check::dump(&lower(&program).rules),
-            check::dump(&Ok(module))
-        );
-
+    fn a_program_of_diagnostics_lowers_to_them() {
         let err = vec![Diagnostic::error(Default::default(), "bad")];
         let program = Program {
             diags: err.clone(),

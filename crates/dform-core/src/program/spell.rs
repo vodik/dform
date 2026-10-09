@@ -3,13 +3,10 @@
 //! message says of a node with no source text of its own (an instanced
 //! read, a helper spelled through its origin) comes from here; where the
 //! exact text matters, the source by the node's span is cheaper.
-//!
-//! An opaque item is spelled as today: a rule or a fact by
-//! `crate::spell`'s core form, any other statement by its header.
 
 use super::node::*;
 use super::{NodeId, Program};
-use crate::ast::{FieldOp, Rank, Stmt, TypeExpr};
+use crate::ast::{FieldOp, Rank, TypeExpr};
 use crate::inputs::type_text;
 
 /// `id` as the program writes it.
@@ -27,7 +24,6 @@ pub fn spell(program: &Program, id: NodeId) -> String {
 /// What kind of statement an item is, in a word or two.
 pub fn kind(k: &ItemKind) -> &'static str {
     match k {
-        ItemKind::Opaque(_) => "a statement",
         ItemKind::Module {
             component: true, ..
         } => "a component",
@@ -83,7 +79,6 @@ fn typed(ty: &Option<TypeExpr>) -> String {
 impl Speller<'_> {
     fn item(&self, id: ItemId) -> String {
         match &self.p.items[id].kind {
-            ItemKind::Opaque(s) => join(s.iter().map(opaque), "\n"),
             ItemKind::Module {
                 path, component, ..
             } => match component {
@@ -612,66 +607,5 @@ fn cmp(o: CmpOp) -> &'static str {
         CmpOp::Le => "<=",
         CmpOp::Gt => ">",
         CmpOp::Ge => ">=",
-    }
-}
-
-/// A statement the resolver lowered, as today: a rule or a fact in the
-/// core form, any other by its header.
-fn opaque(s: &Stmt) -> String {
-    let t = crate::spell::term;
-    match s {
-        Stmt::Fact(a) => crate::spell::atom(a),
-        Stmt::Rule(r) => crate::spell::rule(r),
-        Stmt::Module(m) if m.component => format!("component {}", m.name),
-        Stmt::Module(m) => format!("module {}", m.name),
-        Stmt::Instance(i) => format!("resource {} {}", i.module, i.name),
-        Stmt::Use(i) => format!("use {} as {}", i.module, i.name),
-        Stmt::Input(i) => format!(
-            "{} {}: {}",
-            if i.key { "key" } else { "input" },
-            i.name,
-            type_text(&i.ty)
-        ),
-        Stmt::RelationInput(e) => format!("input {}", e.pred),
-        Stmt::Output(o) => format!("output {}", o.name),
-        Stmt::Provider(c) => format!("provider {}", c.name),
-        Stmt::Resource(r) => format!("resource {} {}", t(&r.typ), t(&r.name)),
-        Stmt::Decl(d) => format!("decl {}({})", d.pred, d.fields.join(", ")),
-        Stmt::Extern(e) | Stmt::Mixed(e) | Stmt::Mode(e) => format!("decl {}/{}", e.pred, e.arity),
-        Stmt::ExternFn(e) => format!("extern {}", e.name),
-        Stmt::Pending(p) => {
-            let crate::ast::PendingKind::TypeDecl { name, .. } = &p.kind;
-            format!("type {name}")
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::program::Program;
-
-    /// An opaque program spells each statement as `crate::spell` does
-    /// today.
-    #[test]
-    fn an_opaque_item_spells_as_today() {
-        let lowered = crate::parser::parse_program("\np(1)\nq(x) where p(x), x > 0\n").unwrap();
-        let today: Vec<String> = lowered
-            .statements
-            .iter()
-            .map(|s| match s {
-                Stmt::Fact(a) => crate::spell::atom(a),
-                Stmt::Rule(r) => crate::spell::rule(r),
-                s => panic!("{s:?}"),
-            })
-            .collect();
-        let program = Program::of_statements(lowered.statements);
-        let spelled: Vec<String> = program
-            .roots
-            .iter()
-            .map(|&i| spell(&program, NodeId::Item(i)))
-            .collect();
-        assert_eq!(spelled, today);
-        assert_eq!(spelled[1], "q(X) :- p(X), X > 0");
     }
 }

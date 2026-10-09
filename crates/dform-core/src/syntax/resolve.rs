@@ -171,12 +171,7 @@ pub fn lower_stack(
     if mode == Mode::Program {
         l.check_heads();
     }
-    let externs = l.declare_builtin_externs();
-    let mut roots: Vec<ItemId> = l
-        .program
-        .opaque(externs, Span::default(), l.item_scope)
-        .into_iter()
-        .collect();
+    let mut roots = l.declare_builtin_externs();
     for &e in entries {
         roots.extend(l.unit(e));
     }

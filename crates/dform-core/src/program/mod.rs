@@ -7,10 +7,9 @@
 //!
 //! The migration builds it one statement kind at a time (WORK.org R-211,
 //! "War game"). The resolver pushes an item per statement as it walks,
-//! in order: a statement not yet ported is an [`ItemKind::Opaque`] item
-//! holding what it lowered to, a module's or a component's statements are
-//! a [`ItemKind::Module`] item's; `lower` gives the resolver's output
-//! back, and [`check`] compares the two.
+//! in order, each of its kind, a module's or a component's statements a
+//! [`ItemKind::Module`] item's; `lower` gives the resolver's output back,
+//! and [`check`] compares the two.
 
 use crate::ast::{self, Span, Stmt};
 use crate::diag::Diagnostic;
@@ -64,9 +63,9 @@ pub struct Program {
 }
 
 /// How many of each numbered helper the build has taken: the one counter
-/// the resolver and the builders take numbers from, so a ported `not { }`
-/// or aggregate (its number stamped at build, `GoalKind::Not.helper`) and
-/// an opaque statement's count as one sequence.
+/// the resolver and the builders take numbers from, in the order the
+/// statements are walked: a `not { }` or an aggregate's number is stamped
+/// at build (`GoalKind::Not.helper`), so `lower` picks none.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Counters {
     /// `__neg_N`.
@@ -111,20 +110,6 @@ impl Program {
         }
     }
 
-    /// The item of a statement not yet ported: what the resolver lowered
-    /// it to, in `scope`; none when it lowered to nothing (an alias, an
-    /// error).
-    pub fn opaque(&mut self, stmts: Vec<Stmt>, span: Span, scope: ScopeId) -> Option<ItemId> {
-        if stmts.is_empty() {
-            return None;
-        }
-        Some(self.items.insert(Item {
-            span,
-            scope,
-            kind: ItemKind::Opaque(stmts),
-        }))
-    }
-
     /// The item `kind` at `span`, in `scope`.
     pub fn item(&mut self, span: Span, scope: ScopeId, kind: ItemKind) -> ItemId {
         self.items.insert(Item { span, scope, kind })
@@ -162,28 +147,6 @@ impl Program {
                 signature: None,
             },
         })
-    }
-}
-
-#[cfg(test)]
-impl Program {
-    /// A program of `stmts`, each an opaque item of its own, a module's in
-    /// a module item: what the resolver would build of them.
-    pub fn of_statements(stmts: Vec<Stmt>) -> Program {
-        let mut p = Program::new();
-        let scope = p.scope;
-        p.roots = stmts.into_iter().map(|s| p.item_of(s, scope)).collect();
-        p
-    }
-
-    fn item_of(&mut self, stmt: Stmt, scope: ScopeId) -> ItemId {
-        let Stmt::Module(m) = stmt else {
-            let span = head_span(&stmt);
-            return self.opaque(vec![stmt], span, scope).expect("a statement");
-        };
-        let body = self.module_scope(scope, &m.name, m.component);
-        let items = m.body.into_iter().map(|s| self.item_of(s, body)).collect();
-        self.module(m.name, body, items, m.span)
     }
 }
 

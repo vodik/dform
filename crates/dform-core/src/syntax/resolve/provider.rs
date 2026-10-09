@@ -418,8 +418,9 @@ impl Lowerer<'_> {
     }
 
     /// The externs of the built-in fact providers the program's `use`s
-    /// name, declared: their statements.
-    pub(super) fn declare_builtin_externs(&mut self) -> Vec<Stmt> {
+    /// name, declared: each an `Extern` item at the `use` that brings it
+    /// in scope (R-211 step 5).
+    pub(super) fn declare_builtin_externs(&mut self) -> Vec<ItemId> {
         let mut out = Vec::new();
         // Declared where a program names it, so a file that does not
         // (a facts file) has no extern.
@@ -446,7 +447,15 @@ impl Lowerer<'_> {
                 f.span = span;
                 let cols = f.args.iter().map(|b| (b.input, b.name.clone())).collect();
                 self.decls.externs.insert(f.name.clone(), cols);
-                out.push(Stmt::ExternFn(f));
+                let kind = crate::program::ItemKind::Extern {
+                    name: f.name.clone(),
+                    args: f.args.clone(),
+                };
+                let item = self.program.item(f.span, self.item_scope, kind);
+                if crate::program::check::enabled() {
+                    self.resolved.insert(item, vec![Stmt::ExternFn(f)]);
+                }
+                out.push(item);
             }
         }
         out

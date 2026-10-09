@@ -8,9 +8,9 @@
 //! nodes of what they copy, and `lower` applies each as an environment.
 //! No pass rewrites a node.
 //!
-//! Day one (step 1) only [`ItemKind::Opaque`] and [`ItemKind::Module`] are
-//! built; every other variant is named here with the step that first
-//! builds it, so each port lands as nodes and not as a new shape.
+//! Every statement the program writes is an item of its kind (step 5);
+//! until reads are built from the tree, the builders make a statement's
+//! nodes from what the resolver lowered it to.
 
 use super::scope::{DeclRef, ScopeId};
 use crate::ast::{self, FieldOp, Rank, Span, TypeExpr};
@@ -363,8 +363,8 @@ pub enum GoalKind {
     /// `not B`, `not { B }`. Without a helper the clause is one goal and
     /// its last literal is negated (`not p(x)`, `x not in e`); with one
     /// the clause is the body of `__neg_N(ȳ)` and the goal is `not
-    /// __neg_N(ȳ)`, N taken at build so ported and opaque statements
-    /// count as one sequence.
+    /// __neg_N(ȳ)`, N taken at build, in the order the statements are
+    /// walked.
     Not {
         clause: ClauseId,
         helper: Option<NegHelper>,
@@ -512,11 +512,6 @@ pub struct Item {
 
 #[derive(Debug, Clone)]
 pub enum ItemKind {
-    /// A statement not yet ported: what the resolver lowered it to (the
-    /// statement's own, then the helpers it made), which `lower` emits as
-    /// it is. Every statement was one on day one; the migration shrinks it
-    /// to nothing (step 5).
-    Opaque(Vec<ast::Stmt>),
     /// A module's file (`modules.net`) or a `component NAME { .. }`: its
     /// items, in its own scope.
     Module {
