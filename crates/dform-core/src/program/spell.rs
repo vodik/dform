@@ -412,7 +412,8 @@ impl Speller<'_> {
 
     fn expr(&self, id: ExprId) -> String {
         match &self.p.exprs[id].kind {
-            ExprKind::Missing => "_".into(),
+            ExprKind::Missing | ExprKind::Hole => "_".into(),
+            ExprKind::Hoisted { value, .. } => self.expr(*value),
             ExprKind::Lit(v) => crate::spell::value(v),
             ExprKind::Quantity { text } => text.clone(),
             ExprKind::Var(v) => self.var(*v),
@@ -497,6 +498,9 @@ impl Speller<'_> {
                         key.clone()
                     }
                     ObjPart::Field { key, value, .. } => format!("{key}: {}", self.expr(*value)),
+                    ObjPart::Computed { key, value } => {
+                        format!("{}: {}", self.expr(*key), self.expr(*value))
+                    }
                     ObjPart::Spread(e) => format!("..{}", self.expr(*e)),
                 });
                 format!("{{ {} }}", join(parts, ", "))

@@ -66,6 +66,17 @@ pub enum ExprKind {
     /// What a file being typed has not written yet: the language server
     /// builds past an error (step 12).
     Missing,
+    /// `_` where a term stands: a relation's column, a pattern's element,
+    /// matching anything and holding nothing (`placeholders` refuses it
+    /// where a value is read).
+    Hole,
+    /// `value`, after the reads the resolver hoisted out of it, in the
+    /// order it hoisted them: a value's `k(V)`, an attribute's `attr(T, A,
+    /// "p", V)`, an index's `member(V, i, W)`. Step 3 builds a term from
+    /// what the resolver lowered it to, so a read is the goals it lowered
+    /// to; each becomes its read's own node (`Value`, `Field`, `Lookup`,
+    /// `Output`, ..) as the builders move to the tree (steps 4-5).
+    Hoisted { reads: Vec<GoalId>, value: ExprId },
     /// `1`, `"a"`, `true`, `10.0.0.0/8`: a literal of a known kind (step 3).
     Lit(Value),
     /// `500m`, `1Gi`: a quantity whose dimension its position decides
@@ -139,7 +150,8 @@ pub enum ExprKind {
 /// server's definition and rename.
 #[derive(Debug, Clone)]
 pub enum Step {
-    /// `.f`.
+    /// `.f`: a key, as a stored path writes its segment (quoted when it
+    /// holds a `.`, R-77).
     Field(Name, Span),
     /// `[0]`.
     Index(ExprId),
@@ -163,7 +175,8 @@ pub enum Callee {
     /// A document's loader, `io.read(..)`.
     Loader(Name),
     /// A constructor read as data: a provider's or stack's setting
-    /// (`local("DIR")`), a `type_refine` constraint.
+    /// (`local("DIR")`), a `type_refine` constraint; any name no function
+    /// declares.
     Data(Name),
 }
 
@@ -191,6 +204,8 @@ pub enum ObjPart {
         value: ExprId,
         pun: bool,
     },
+    /// `"${k}": v`: a key computed when the object is built.
+    Computed { key: ExprId, value: ExprId },
     /// `..e`.
     Spread(ExprId),
 }
@@ -210,6 +225,35 @@ pub enum BinOp {
     Mul,
     Div,
     Mod,
+}
+
+impl BinOp {
+    /// The function it lowers to: `add`, `sub`, ..
+    pub fn function(self) -> &'static str {
+        match self {
+            BinOp::Add => "add",
+            BinOp::Sub => "sub",
+            BinOp::Mul => "mul",
+            BinOp::Div => "div",
+            BinOp::Mod => "mod",
+        }
+    }
+}
+
+/// The operator a lowered function is.
+impl TryFrom<&str> for BinOp {
+    type Error = ();
+
+    fn try_from(f: &str) -> Result<BinOp, ()> {
+        Ok(match f {
+            "add" => BinOp::Add,
+            "sub" => BinOp::Sub,
+            "mul" => BinOp::Mul,
+            "div" => BinOp::Div,
+            "mod" => BinOp::Mod,
+            _ => return Err(()),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -325,14 +369,18 @@ pub enum Coll {
     Copies(DeclRef),
 }
 
-/// A variable of a clause: its source name, where it is first written,
-/// and the item it belongs to. `implicit`: the compiler made it (`[_]`,
-/// a fresh).
+/// A variable of a clause: its source name, the name `lower` writes,
+/// where it is first written, and the item it belongs to (none for a term
+/// built on its own, step 3's check). `implicit`: the compiler made it
+/// (`[_]`, a fresh).
 #[derive(Debug, Clone)]
 pub struct Var {
     pub name: Name,
+    /// Picked at build among the statement's names (`X`, `Item1`), as a
+    /// helper number is, so the rules `lower` writes are the resolver's.
+    pub lowered: Name,
     pub first: Span,
-    pub item: ItemId,
+    pub item: Option<ItemId>,
     pub implicit: bool,
 }
 

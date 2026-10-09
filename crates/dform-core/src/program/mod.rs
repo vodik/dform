@@ -16,6 +16,7 @@ use crate::ast::{self, Span, Stmt};
 use crate::diag::Diagnostic;
 use slotmap::SlotMap;
 
+pub mod build;
 pub mod check;
 pub mod lower;
 pub mod node;
@@ -24,6 +25,7 @@ pub mod scope;
 pub mod spell;
 pub mod types;
 
+pub use build::Builder;
 pub use lower::{LoweredStack, lower};
 pub use node::{
     Clause, ClauseId, Expr, ExprId, Goal, GoalId, Item, ItemId, ItemKind, Pattern, PatternId, Var,
