@@ -3,7 +3,7 @@
 //! at `-v` and `-vv`, a create's lines folded, what changed since the last apply,
 //! and the places relative to the project's root.
 
-use super::deformation::Line;
+use super::deformation::{Deformation, Line};
 use super::fold::{element_site, folded};
 use super::groups::group_address;
 use super::labels::{address, address_text, kind_name};
@@ -88,21 +88,7 @@ impl Report {
             all: false,
         };
         let rules = &res.rules;
-        let changed: BTreeSet<(String, String)> = self
-            .definite
-            .iter()
-            .chain(self.pending.iter().flat_map(|b| b.deformations.iter()))
-            .map(|d| (d.addr.typ.clone(), d.addr.name.clone()))
-            .collect();
-        let mut attrs: BTreeMap<(String, String), Vec<&Atom>> = BTreeMap::new();
-        for f in res.facts.iter().filter(|f| f.pred == "attr") {
-            if let [Term::Val(Value::Str(t)), Term::Val(Value::Str(a)), ..] = f.args.as_slice() {
-                let k = (t.clone(), a.clone());
-                if changed.contains(&k) {
-                    attrs.entry(k).or_default().push(f);
-                }
-            }
-        }
+        let attrs = self.changed_attrs(res);
         let pending = self
             .pending
             .iter_mut()
@@ -147,33 +133,7 @@ impl Report {
                 d.folded = folded(d, &p, rules, facts, &res.facts, why, &mut site);
                 continue;
             }
-            // Each line's site, the lines under one attribute fact asked
-            // together.
-            // By the fact (its address): the fact, and each line's index,
-            // keys and whether they reach the leaf.
-            type Asked<'a> = (&'a Atom, Vec<(usize, (Vec<String>, bool))>);
-            let mut asks: BTreeMap<*const Atom, Asked> = BTreeMap::new();
-            for (i, l) in d.lines.iter().enumerate() {
-                if let Some((a, keys, whole)) = attr_holding(facts, &l.path) {
-                    asks.entry(a as *const Atom)
-                        .or_insert_with(|| (a, Vec::new()))
-                        .1
-                        .push((i, (keys, whole)));
-                }
-            }
-            let mut sites: Vec<Option<tree::Site>> = vec![None; d.lines.len()];
-            for (a, lines) in asks.into_values() {
-                let (at, asked): (Vec<usize>, Vec<(Vec<String>, bool)>) = lines.into_iter().unzip();
-                for (i, site) in at.into_iter().zip(p.attr_sites(rules, a, &asked)) {
-                    sites[i] = site;
-                }
-            }
-            for (l, site) in d.lines.iter_mut().zip(sites) {
-                l.site = site.or_else(|| element_site(&p, rules, facts, l));
-                if why == Why::Full {
-                    l.chain = attr_chain(&p, rules, facts, &l.path, &self.keys);
-                }
-            }
+            line_sites(d, &p, rules, facts, why, &self.keys);
             if folds {
                 d.folded = folded(d, &p, rules, facts, &res.facts, why, &mut |l| {
                     l.site.clone()
@@ -190,6 +150,33 @@ impl Report {
                 .chain(d.folded.iter_mut())
                 .for_each(Line::mask);
         }
+        self.site_others(&p, res);
+    }
+
+    /// The attribute facts of each changed resource, by its address.
+    fn changed_attrs<'r>(&self, res: &'r EvalResult) -> BTreeMap<(String, String), Vec<&'r Atom>> {
+        let changed: BTreeSet<(String, String)> = self
+            .definite
+            .iter()
+            .chain(self.pending.iter().flat_map(|b| b.deformations.iter()))
+            .map(|d| (d.addr.typ.clone(), d.addr.name.clone()))
+            .collect();
+        let mut attrs: BTreeMap<(String, String), Vec<&Atom>> = BTreeMap::new();
+        for f in res.facts.iter().filter(|f| f.pred == "attr") {
+            if let [Term::Val(Value::Str(t)), Term::Val(Value::Str(a)), ..] = f.args.as_slice() {
+                let k = (t.clone(), a.clone());
+                if changed.contains(&k) {
+                    attrs.entry(k).or_default().push(f);
+                }
+            }
+        }
+        attrs
+    }
+
+    /// The sites of what is not a change: a kept value's, a group's, a
+    /// policy's, what is not planned, a deny over the plan's, an approval's.
+    fn site_others(&mut self, p: &tree::Printer, res: &EvalResult) {
+        let rules = &res.rules;
         for d in &mut self.kept {
             d.site = p.want_site(rules, &d.addr);
         }
@@ -221,7 +208,7 @@ impl Report {
         self.denied = self
             .denies
             .iter()
-            .map(|text| denied(&p, res, text))
+            .map(|text| denied(p, res, text))
             .collect();
         for a in &mut self.approvals {
             a.site = res
@@ -362,4 +349,41 @@ pub fn relative_place(at: &str, top: &std::path::Path) -> Option<String> {
     let abs = std::path::absolute(file).ok()?;
     let rest = abs.to_str()?.strip_prefix(&prefix)?;
     Some(format!("{rest}:{line}"))
+}
+
+/// Each line of `d`'s site, the lines under one attribute fact asked
+/// together, and at `Full` its chain.
+fn line_sites(
+    d: &mut Deformation,
+    p: &tree::Printer,
+    rules: &[RuleStmt],
+    facts: &[&Atom],
+    why: Why,
+    keys: &BTreeSet<String>,
+) {
+    // By the fact (its address): the fact, and each line's index,
+    // keys and whether they reach the leaf.
+    type Asked<'a> = (&'a Atom, Vec<(usize, (Vec<String>, bool))>);
+    let mut asks: BTreeMap<*const Atom, Asked> = BTreeMap::new();
+    for (i, l) in d.lines.iter().enumerate() {
+        if let Some((a, keys, whole)) = attr_holding(facts, &l.path) {
+            asks.entry(a as *const Atom)
+                .or_insert_with(|| (a, Vec::new()))
+                .1
+                .push((i, (keys, whole)));
+        }
+    }
+    let mut sites: Vec<Option<tree::Site>> = vec![None; d.lines.len()];
+    for (a, lines) in asks.into_values() {
+        let (at, asked): (Vec<usize>, Vec<(Vec<String>, bool)>) = lines.into_iter().unzip();
+        for (i, site) in at.into_iter().zip(p.attr_sites(rules, a, &asked)) {
+            sites[i] = site;
+        }
+    }
+    for (l, site) in d.lines.iter_mut().zip(sites) {
+        l.site = site.or_else(|| element_site(p, rules, facts, l));
+        if why == Why::Full {
+            l.chain = attr_chain(p, rules, facts, &l.path, keys);
+        }
+    }
 }
