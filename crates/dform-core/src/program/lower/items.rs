@@ -15,6 +15,7 @@
 //! | `resource T n [@r] { p = v .. } [where B]`, `= v` | itself: its entries (a value's the object's keys), its body B's literals then the entries' reads (`reads`), then a name from the clause's binding |
 //! | `set t = v [@r] [where B]`, `set { .. }` | per line `arg(T, A, "p", v'[, "r"])` (`arg_add` for `+=`), an element `arg(T, A, "l", [k, {..}], "r")`, an input `arg("input", "", "k", v', "r")`, a fact or a rule over B's literals and the line's reads, folded over B's aggregates |
 //! | `set from doc [@r] [where B]`  | the document's externs, then `arg("input", "", P, V, "r") :- B', reads` |
+//! | `use p [as n] { k = v .. } [where B]` | the provider, its `source` (the first of its name); `provider_config("n", {k: v'}) [:- B', reads]`; `provider_expect_account("n", v') [:- B', reads]` each; under several clauses (R-104) `__declared` and the first's denies |
 //! | `decl p(a: T) [mixed]`         | `mixed p/1` or (fed from outside) `extern p/1`, then `decl p(a: T)` |
 //! | `extern f(+a: T, -b)`          | itself                                           |
 //! | `type T { .. }`                | itself, pending (`PendingKind::TypeDecl`)        |
@@ -28,7 +29,7 @@ use super::expr::Lowering;
 use crate::ast::{self, Atom, Decl, Rank, RuleStmt, Span, Stmt, TypeExpr, str_term};
 use crate::program::node::{
     CheckKind, ClauseId, ExprId, Head, Header, ItemId, ItemKind, Param, RelRef, ResourceBody,
-    Source, Target, TypeRef, VarId, Write,
+    Setting, Source, Target, TypeRef, VarId, Write,
 };
 use crate::program::{NodeId, Origin, Program};
 use crate::value::Value;
@@ -126,6 +127,7 @@ pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: 
             relation: Some(ref_columns.clone()),
             span: it.span,
         })],
+        ItemKind::Provider { .. } => provider(program, id),
         ItemKind::Decl {
             rel,
             columns,
@@ -474,6 +476,101 @@ fn let_fn(
     let relation = |pred: String, arity| ast::Extern { pred, arity, span };
     out.push(Stmt::Extern(relation(demand, arity - 1)));
     out.push(Stmt::Mode(relation(name.to_string(), arity)));
+    out.append(&mut l.helpers);
+    out
+}
+
+/// A provider's `use p [as n] { .. } [where B]`: when it starts the
+/// provider, the provider with its `source`; its configuration
+/// `provider_config("n", {k: v'}) [:- B', reads]` (a guarded provider's
+/// with no settings too); each `expect_account`'s
+/// `provider_expect_account("n", v') [:- B', reads]`; declared under
+/// several clauses (R-104), where this one holds and, the first, the
+/// denies where two do; then the helpers, in the order its parts made
+/// them.
+fn provider(program: &Program, id: ItemId) -> Vec<Stmt> {
+    let it = &program.items[id];
+    let ItemKind::Provider {
+        name,
+        of,
+        starts,
+        settings,
+        clause,
+        declared,
+        denies,
+    } = &it.kind
+    else {
+        unreachable!("a provider")
+    };
+    let span = it.span;
+    let mut l = Lowering::new(program);
+    let mut lits = Vec::new();
+    if let Some(c) = clause {
+        l.clause(*c, &mut lits);
+    }
+    let mut body = lits.clone();
+    let mut source = Vec::new();
+    let mut config = BTreeMap::new();
+    let mut accounts = Vec::new();
+    for s in settings {
+        match s {
+            Setting::Source { key, span, value } => {
+                source.push((key.clone(), l.expr(*value), *span));
+            }
+            Setting::Value { key, value, .. } => {
+                let v = l.expr(*value);
+                body.append(&mut l.reads);
+                config.insert(key.clone(), v);
+            }
+            Setting::Account {
+                value,
+                clause,
+                span,
+            } => {
+                let mut b = Vec::new();
+                if let Some(c) = clause {
+                    l.clause(*c, &mut b);
+                }
+                let head = Atom {
+                    pred: crate::plugin::providers::EXPECT_ACCOUNT.into(),
+                    args: vec![str_term(name), l.expr(*value)],
+                    record: None,
+                    span: *span,
+                };
+                b.append(&mut l.reads);
+                accounts.push((head, b));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    if *starts {
+        out.push(Stmt::Provider(ast::Config {
+            name: name.clone(),
+            of: of.clone(),
+            config: source,
+            span,
+        }));
+    }
+    if !config.is_empty() || clause.is_some() {
+        let head = Atom {
+            pred: "provider_config".into(),
+            args: vec![str_term(name), ast::Term::Obj(config)],
+            record: None,
+            span,
+        };
+        out.extend(clause_rule(head, body, Vec::new(), false, span));
+    }
+    for (head, b) in accounts {
+        out.extend(clause_rule(head, b, Vec::new(), false, span));
+    }
+    let group = format!("use {name}");
+    if let Some(i) = declared {
+        out.push(crate::modules::declared(&group, *i, lits, span));
+    }
+    if !denies.is_empty() {
+        let sites: Vec<(String, Span)> = denies.iter().map(|s| (group.clone(), *s)).collect();
+        out.extend(crate::modules::denies(&group, &sites));
+    }
     out.append(&mut l.helpers);
     out
 }

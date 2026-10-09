@@ -2154,6 +2154,12 @@ impl<'u> Lowerer<'u> {
             DECL => return Some(self.decl(n, scope)),
             EXTERN => return self.extern_item(n).ok(),
             TYPE_DECL => return self.ported(n, |l| l.type_block(n, scope)),
+            USE if provider_use(n, self.units, &self.decls.deployed).is_some() => {
+                return self.ported(n, |l| {
+                    l.redeclared(n, &use_parts(n).1)?;
+                    l.provider(n, scope, outer)
+                });
+            }
             SET => return self.ported(n, |l| l.set(n, scope, outer)),
             INPUT_RELATION => return self.ported(n, |l| l.relation_input(n, scope, outer)),
             RESOURCE if self.decls.project.contains(&self.file) => {
@@ -4176,9 +4182,6 @@ impl<'u> Lowerer<'u> {
         let span = self.span(n);
         let (written, name) = use_parts(n);
         self.redeclared(n, &name)?;
-        if provider_use(n, self.units, &self.decls.deployed).is_some() {
-            return self.provider(n, scope, outer);
-        }
         if let Some(rest) = written.strip_prefix("std.") {
             let fns = crate::functions::registry();
             if !fns.packages().contains(&rest) {
@@ -9938,6 +9941,38 @@ mod tests {
             "f(A, add(A, K)) :- f?(A), k(K)",
             "__neg_0(B) :- g?(A, B), p(A, X), q(B)",
             "h(A, count(X)) :- h?(A), p(X, A)",
+        ] {
+            assert!(lowered.iter().any(|l| l.contains(s)), "{s}: {lowered:#?}");
+        }
+    }
+
+    /// Every form of a provider's `use` is built as a `Provider` item
+    /// (R-211 step 5) and lowers as the resolver lowers it: its source and
+    /// settings, renamed (R-115), an `expect_account` under the clause
+    /// again (its `not { }` a helper of its own), declared twice under
+    /// clauses (R-104).
+    #[test]
+    fn every_provider_use_is_an_item() {
+        let src = "let k = \"eu\"\nz(1)\nq(2)\n\
+             use p1 { source = \"./p1\", region = k, expect_account = \"a\" } where z(1), not { q(1) }\n\
+             use p2 { source = \"./p2\", r = 1 } where z(1)\n\
+             use p2 { r = 2 } where q(2)\n\
+             use p3 as c { source = \"./p3\" }\n";
+        let (lowered, seen) = crate::program::check::collect(|| parse_as(src, true));
+        let lowered = lowered
+            .map(|p| show(&p.statements))
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
+        assert_eq!(seen.items.get("a provider"), Some(&4), "{:?}", seen.items);
+        assert!(
+            !seen.items.keys().any(|k| k.starts_with("a statement")),
+            "{:?}",
+            seen.items
+        );
+        for s in [
+            "provider_config(\"p1\", {region: K}) :- z(1), not __neg_0(), k(K)",
+            "provider_expect_account(\"p1\", \"a\") :- z(1), not __neg_1()",
+            "__declared(\"use p2\", 1) :- q(2)",
         ] {
             assert!(lowered.iter().any(|l| l.contains(s)), "{s}: {lowered:#?}");
         }

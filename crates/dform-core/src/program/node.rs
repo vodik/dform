@@ -630,11 +630,21 @@ pub enum ItemKind {
     /// `output p`: a relation exported, `true` per reference column
     /// (step 5).
     OutputRelation { rel: RelRef, ref_columns: Vec<bool> },
-    /// `provider p [as n] { k = v }` (step 5).
+    /// `use p [as n] { k = v .. } [where B]`: a provider's configuration
+    /// (R-8, R-115, step 5), its settings in the order written. `starts`:
+    /// this declaration starts the provider (the first of its name), with
+    /// its `source` settings; declared several times,
+    /// each under a clause (R-104), `declared` which this is and `denies`
+    /// the sites the first's denies name. Its clause binds no aggregate
+    /// (the front end refuses one).
     Provider {
         name: Name,
         of: Option<Name>,
-        settings: Vec<(Name, Span, ExprId)>,
+        starts: bool,
+        settings: Vec<Setting>,
+        clause: Option<ClauseId>,
+        declared: Option<usize>,
+        denies: Vec<Span>,
     },
     /// `decl p(a: T, ..) [mixed]` (step 5). `fed`: no rule of its scope
     /// defines it, so its rows come from outside (a provider, given
@@ -657,6 +667,30 @@ pub enum ItemKind {
         kind: &'static str,
         name: Name,
         pairs: Vec<(String, String)>,
+    },
+}
+
+/// One setting of a provider's `use` block.
+#[derive(Debug, Clone)]
+pub enum Setting {
+    /// `source = v`: a constant, how the provider is started.
+    Source {
+        key: Name,
+        span: Span,
+        value: ExprId,
+    },
+    /// `k = v`: a key of the configuration the provider is given.
+    Value {
+        key: Name,
+        span: Span,
+        value: ExprId,
+    },
+    /// `expect_account = v`: what the account the provider reports is
+    /// checked against, under the clause again (its own gathering).
+    Account {
+        value: ExprId,
+        clause: Option<ClauseId>,
+        span: Span,
     },
 }
 

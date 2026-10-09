@@ -23,6 +23,7 @@ mod membership;
 mod negation;
 mod outputs;
 mod pattern;
+mod providers;
 mod resources;
 mod rules;
 mod spread;
@@ -35,6 +36,7 @@ pub use gather::{Gather, Statement};
 pub use inputs::{InputLowered, RelationInputLowered, RelationRows};
 pub use lets::{LetFnLowered, LetLowered};
 pub use outputs::OutputLowered;
+pub use providers::{ProviderLowered, SettingKind, SettingLowered};
 pub use resources::{BodyLowered, EntryLowered, HeaderLowered, ResourceLowered};
 pub use rules::RuleLowered;
 

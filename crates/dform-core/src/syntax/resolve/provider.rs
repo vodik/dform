@@ -36,11 +36,29 @@ const TERM_CALLS: [&str; 4] = [
     crate::files::oci::RESOLVE,
 ];
 
+/// Where a setting's reads (of its body) and the helpers it made are.
+type Ranges = (std::ops::Range<usize>, std::ops::Range<usize>);
+
+/// A setting as lowered: its kind and span, its value, an account's own
+/// body, and its [`Ranges`].
+type Part = (
+    crate::program::build::SettingKind,
+    Span,
+    Term,
+    Option<Vec<Lit>>,
+    Ranges,
+);
+
 /// A provider's `use` block's setting that is checked, not sent.
 const EXPECT_ACCOUNT: &str = "expect_account";
 
 impl Lowerer<'_> {
-    pub(super) fn provider(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+    /// A provider's `use`, built as a `Provider` item (R-211 step 5): its
+    /// settings' values and the reads they hoisted, its clause B's goals,
+    /// which declaration of its name it is; `lower` writes its
+    /// configuration's rules.
+    pub(super) fn provider(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
+        use crate::program::build::{SettingKind, SettingLowered};
         let span = self.span(n);
         // `use ovh as ca` (R-115): the provider `ovh` under the name `ca`,
         // its own process, settings and state, its types `ca.instance`.
@@ -84,10 +102,16 @@ impl Lowerer<'_> {
         let mut out = Vec::new();
         let mut source = Vec::new();
         let mut settings = BTreeMap::new();
+        // Each setting as lowered: its kind and span, its value, the reads
+        // it hoisted (of `body`, or of an account's own) and the helpers
+        // it made.
+        let mut parts: Vec<Part> = Vec::new();
+        let mut written = BTreeSet::new();
         let mut rc = self.rc(n, scope, outer);
         // A guarded provider (R-104): its settings, its account and its
         // start hold only while the clause does.
         let clause = self.clauses(&mut rc, n)?;
+        let gathered = self.gather.as_mut().and_then(|g| g.take_clause());
         let mut body = clause.clone();
         let others = self.providers_named(n, &name)?;
         if let Some(b) = &block {
@@ -102,37 +126,65 @@ impl Lowerer<'_> {
                         ),
                     );
                 }
+                let made = self.helpers.len();
                 match key.as_str() {
                     "source" => {
                         let Some(t) = terms(&a).next() else {
                             return self
                                 .error(at, format!("provider {name}: source is a path string"));
                         };
-                        source.push((key, self.constant(&mut rc, &t)?, at))
+                        let v = self.constant(&mut rc, &t)?;
+                        let made = made..self.helpers.len();
+                        parts.push((
+                            SettingKind::Source(key.clone()),
+                            at,
+                            v.clone(),
+                            None,
+                            (0..0, made),
+                        ));
+                        source.push((key, v, at))
                     }
                     EXPECT_ACCOUNT => {
                         let mut rc = self.rc(&a, scope, outer);
-                        let mut body = match clause.is_empty() {
-                            true => Vec::new(),
-                            false => self.clauses(&mut rc, n)?,
+                        let (mut body, own) = match clause.is_empty() {
+                            true => (Vec::new(), None),
+                            false => {
+                                let body = self.clauses(&mut rc, n)?;
+                                (body, self.gather.as_mut().and_then(|g| g.take_clause()))
+                            }
                         };
+                        let (seed, made) = (body.len(), self.helpers.len());
                         let v = self.entry_value(&mut rc, &a, Pos::Content, &mut body)?;
                         let head = atom_at(
                             crate::plugin::providers::EXPECT_ACCOUNT,
-                            vec![str_term(&name), v],
+                            vec![str_term(&name), v.clone()],
                             at,
                         );
-                        out.push(self.rule_or_fact(&rc, head, body)?);
+                        out.push(self.rule_or_fact(&rc, head, body.clone())?);
+                        written.extend(rc.vars.values().cloned());
+                        let reads = seed..body.len();
+                        let made = made..self.helpers.len();
+                        parts.push((SettingKind::Account(own), at, v, Some(body), (reads, made)));
                     }
                     _ => {
+                        let seed = body.len();
                         let v = self.entry_value(&mut rc, &a, Pos::Content, &mut body)?;
-                        if settings.insert(key.clone(), v).is_some() {
+                        if settings.insert(key.clone(), v.clone()).is_some() {
                             return self.error(at, format!("provider {name}: {key} is set twice"));
                         }
+                        let made = made..self.helpers.len();
+                        parts.push((
+                            SettingKind::Value(key),
+                            at,
+                            v,
+                            None,
+                            (seed..body.len(), made),
+                        ));
                     }
                 }
             }
         }
+        written.extend(rc.vars.values().cloned());
         // A guarded provider is configured by the program, with no
         // settings too: it serves nothing until its clause holds and its
         // `provider_config` fact arrives (`Providers::configure_from`).
@@ -142,17 +194,21 @@ impl Lowerer<'_> {
                 vec![str_term(&name), Term::Obj(settings)],
                 span,
             );
-            out.insert(0, self.rule_or_fact(&rc, head, body)?);
+            out.insert(0, self.rule_or_fact(&rc, head, body.clone())?);
         }
         // Declared more than once, each under a clause (R-104): the first
         // starts it, each holds while its clause does, and two that both
         // hold are the deny naming both.
         // `effects` reads each guarded declaration's clause off it.
+        let mut declared = None;
         if !clause.is_empty() {
             let i = others.iter().position(|o| o == n).unwrap_or_default();
             let group = format!("use {name}");
-            out.push(crate::modules::declared(&group, i, clause, span));
+            out.push(crate::modules::declared(&group, i, clause.clone(), span));
+            declared = Some(i);
         }
+        let mut starts = false;
+        let mut denies = Vec::new();
         match others.first() {
             Some(first) if first != n => {
                 let first_source = node(first, BLOCK)
@@ -191,6 +247,7 @@ impl Lowerer<'_> {
                 }
             }
             _ => {
+                starts = true;
                 out.insert(
                     0,
                     Stmt::Provider(Config {
@@ -201,15 +258,52 @@ impl Lowerer<'_> {
                     }),
                 );
                 if others.len() > 1 {
-                    let sites: Vec<(String, Span)> = others
-                        .iter()
-                        .map(|o| (format!("use {name}"), self.span(o)))
-                        .collect();
+                    denies = others.iter().map(|o| self.span(o)).collect();
+                    let sites: Vec<(String, Span)> =
+                        denies.iter().map(|s| (format!("use {name}"), *s)).collect();
                     out.extend(crate::modules::denies(&format!("use {name}"), &sites));
                 }
             }
         }
-        Ok(out)
+        let resolved =
+            crate::program::check::enabled().then(|| self.resolved_with(out.clone(), span));
+        let settings = parts
+            .iter()
+            .map(|(kind, at, v, own, (reads, made))| SettingLowered {
+                kind: match kind {
+                    SettingKind::Source(k) => SettingKind::Source(k.clone()),
+                    SettingKind::Value(k) => SettingKind::Value(k.clone()),
+                    SettingKind::Account(c) => SettingKind::Account(*c),
+                },
+                span: *at,
+                value: v,
+                reads: &own.as_ref().unwrap_or(&body)[reads.clone()],
+                made: &self.helpers[made.clone()],
+            })
+            .collect();
+        let p = crate::program::build::ProviderLowered {
+            span,
+            scope: self.item_scope,
+            name: name.clone(),
+            of: (of != name).then(|| of.clone()),
+            starts,
+            settings,
+            clause: gathered,
+            declared,
+            denies,
+        };
+        let written = |v: &str| written.contains(v);
+        let gather = self
+            .gather
+            .as_mut()
+            .expect("a ported statement is gathered");
+        let mut b = gather.builder(&mut self.program, span, &written);
+        let item = b.provider_item(p);
+        gather.done(b);
+        if let Some(stmts) = resolved {
+            self.resolved.insert(item, stmts);
+        }
+        Ok(item)
     }
 
     /// The provider's `use`s beside `n` that bind `name` (`use ovh as

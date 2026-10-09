@@ -280,10 +280,26 @@ impl Speller<'_> {
                 self.where_(*clause)
             ),
             ItemKind::OutputRelation { rel, .. } => format!("output {}", rel.name),
-            ItemKind::Provider { name, of, .. } => match of {
-                Some(of) => format!("provider {of} as {name}"),
-                None => format!("provider {name}"),
-            },
+            ItemKind::Provider {
+                name,
+                of,
+                settings,
+                clause,
+                ..
+            } => {
+                let head = match of {
+                    Some(of) => format!("use {of} as {name}"),
+                    None => format!("use {name}"),
+                };
+                let lines = settings.iter().map(|s| match s {
+                    Setting::Source { key, value, .. } | Setting::Value { key, value, .. } => {
+                        (key.as_str(), *value)
+                    }
+                    Setting::Account { value, .. } => ("expect_account", *value),
+                });
+                let block = join(lines.map(|(k, v)| format!("{k} = {}", self.expr(v))), ", ");
+                format!("{head} {{ {block} }}{}", self.where_(*clause))
+            }
             ItemKind::Decl {
                 rel,
                 columns,
