@@ -44,6 +44,9 @@ pub struct Collected {
     pub built: std::collections::BTreeSet<String>,
     /// The items of the programs compared, by kind.
     pub items: std::collections::BTreeMap<String, usize>,
+    /// The reads the programs' builders made their own nodes (step 6):
+    /// a value's.
+    pub value_reads: usize,
     pub differences: Vec<Difference>,
 }
 
@@ -59,6 +62,7 @@ impl Collected {
         for (k, n) in other.items {
             *self.items.entry(k).or_default() += n;
         }
+        self.value_reads += other.value_reads;
         self.differences.extend(other.differences);
     }
 }
@@ -109,10 +113,17 @@ pub fn program(program: &Program, ported: &Resolved, new: &Lowered) {
         }
         kinds.push(super::spell::kind(kind).to_string());
     }
+    // A statistic, not output: the arena's order does not matter.
+    let values = program
+        .exprs
+        .values()
+        .filter(|e| matches!(e.kind, super::node::ExprKind::Value { .. }))
+        .count();
     record(None, |c| {
         for k in kinds {
             *c.items.entry(k).or_default() += 1;
         }
+        c.value_reads += values;
     });
 }
 

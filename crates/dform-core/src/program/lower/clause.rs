@@ -260,6 +260,10 @@ impl Lowering<'_> {
         match &g.kind {
             GoalKind::Rel { rel, args } => vec![Lit::Pos(self.atom(rel, args))],
             GoalKind::Bind { pat, value } => {
+                if let ExprKind::Value { decl, via } = &self.program.exprs[*value].kind {
+                    let v = self.pattern(*pat);
+                    return vec![Lit::Pos(atom_at(&via.relation(&decl.name), vec![v], span))];
+                }
                 if let ExprKind::Read { .. } = self.program.exprs[*value].kind {
                     let v = self.pattern(*pat);
                     return vec![self.read(*value, v)];

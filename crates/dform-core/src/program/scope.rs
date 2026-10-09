@@ -614,6 +614,30 @@ impl Names {
     }
 }
 
+/// How a read reaches the declaration it names (R-186, R-205): the body
+/// it is in declares it; an enclosing definition does, read through the
+/// copy the body was taken from (`modules::lexical_pred`); or a module a
+/// `use` binds to `name` does (`name.k`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reach {
+    Own,
+    Lexical(Name),
+    Use(Name),
+}
+
+impl Reach {
+    /// The relation a read of `name` this way is: its name, an enclosing
+    /// definition's marked for expansion, a used module's by the name the
+    /// `use` binds.
+    pub fn relation(&self, name: &str) -> String {
+        match self {
+            Reach::Own => name.to_string(),
+            Reach::Lexical(body) => crate::modules::lexical_pred(body, name),
+            Reach::Use(m) => format!("{m}::{name}"),
+        }
+    }
+}
+
 /// A read's declaration: the scope that declares the name and which of its
 /// declarations (`at`, R-104).
 #[derive(Debug, Clone, PartialEq, Eq)]

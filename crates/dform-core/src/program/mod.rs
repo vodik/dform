@@ -60,6 +60,26 @@ pub struct Program {
     /// loader's extern): lowered before the node's own (step 5; gone when
     /// terms are built from the tree).
     pub terms_made: std::collections::BTreeMap<NodeId, Vec<Stmt>>,
+    /// The value reads the front end hoisted, `k(V)`, by where the read
+    /// is written, its relation and its variable: what each reads and
+    /// how, so the goal is built as the read's own node (step 6; gone
+    /// when reads are built from the tree).
+    pub value_reads: std::collections::BTreeMap<ReadKey, (scope::DeclRef, scope::Reach)>,
+}
+
+/// Where a hoisted read is written (file, start, end), its relation and
+/// its variable.
+pub type ReadKey = (u32, u32, u32, String, String);
+
+/// The key of the read `pred(var)` written at `span`.
+pub fn read_key(span: Span, pred: &str, var: &str) -> ReadKey {
+    (
+        span.file,
+        span.start,
+        span.end,
+        pred.to_string(),
+        var.to_string(),
+    )
 }
 
 /// How many of each numbered helper the build has taken: the one counter

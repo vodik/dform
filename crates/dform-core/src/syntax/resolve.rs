@@ -33,7 +33,7 @@ use crate::ast::{
 };
 use crate::diag::Diagnostic;
 use crate::program::node::CopyKind;
-use crate::program::scope::{self as scopes, DeclKind, Names};
+use crate::program::scope::{self as scopes, DeclKind, DeclRef, Names, Reach};
 use crate::program::{ItemId, ScopeId};
 use crate::spell;
 use crate::value::Value;
@@ -581,8 +581,13 @@ enum Res {
         addr: Term,
         path: String,
     },
-    /// A value name (input or value rule), `k(V)`.
-    Value { pred: String, path: Vec<Seg> },
+    /// A value name (input or value rule), `k(V)`: what declares it and
+    /// how the read reaches it.
+    Value {
+        decl: DeclRef,
+        via: Reach,
+        path: Vec<Seg>,
+    },
     /// A type's name.
     Type(String),
     /// `p[a, b]`: the relation `p(a, b, V)`, or an extern with its one output.
@@ -1385,18 +1390,25 @@ impl<'u> Lowerer<'u> {
         self.program.scopes.lexical(scope, declared)
     }
 
-    /// The relation a read of the value `name` in `scope` is, looked up
-    /// from `from` outward: its name, or an enclosing body's item marked
-    /// for expansion (`lexical`).
-    fn value_pred(&self, scope: ScopeId, from: ScopeId, name: &str) -> String {
+    /// The value `name` read in `scope`, looked up from `from` outward:
+    /// the scope that declares it, and how the read reaches it, its own
+    /// or an enclosing body's (`lexical`), whose relation is that body's
+    /// item marked for expansion ([`Reach::relation`]).
+    fn value_decl(&self, scope: ScopeId, from: ScopeId, name: &str) -> (DeclRef, Reach) {
         let declared = self
             .chain_of(from)
             .into_iter()
             .find(|s| self.names(*s).is_value(name));
-        match declared.and_then(|d| self.lexical(scope, d)) {
-            Some(body) => crate::modules::lexical_pred(&body, name),
-            None => name.to_string(),
-        }
+        let via = match declared.and_then(|d| self.lexical(scope, d)) {
+            Some(body) => Reach::Lexical(body),
+            None => Reach::Own,
+        };
+        let decl = DeclRef {
+            scope: declared.unwrap_or(from),
+            name: name.to_string(),
+            at: 0,
+        };
+        (decl, via)
     }
 
     /// The relation `p` called in `scope`, looked up from `from` outward:
@@ -8074,7 +8086,8 @@ impl<'u> Lowerer<'u> {
         span: Span,
     ) -> L<Res> {
         let name = c.head.clone();
-        let pred = self.value_pred(rc.scope, from, &name);
+        let (decl, via) = self.value_decl(rc.scope, from, &name);
+        let pred = via.relation(&name);
         // An input typed `ref(T)` holds the reference itself: a dot reads
         // through it, the address taken out of the reference (R-101). It
         // is its user's, so no copy's scope goes in front of it.
@@ -8108,13 +8121,13 @@ impl<'u> Lowerer<'u> {
         // resource is the reference (R-43).
         let Some(ty) = ty.filter(|t| !c.is_bare() || matches!(t, VType::Ref(_))) else {
             let path = self.segs(rc, &c.ops, pre)?;
-            return Ok(Res::Value { pred, path });
+            return Ok(Res::Value { decl, via, path });
         };
         let key = match rc.values.get(&pred) {
             Some(v) => var(v),
             None => {
                 let v = fresh(rc, &capitalise(&name));
-                pre.push(Lit::Pos(atom_at(&pred, vec![var(&v)], span)));
+                self.value_read(&pred, &v, (decl, via), pre, span);
                 rc.values.insert(pred.clone(), v.clone());
                 var(&v)
             }
@@ -8403,10 +8416,13 @@ impl<'u> Lowerer<'u> {
                 let own = self.names(module);
                 if own.is_value(x) {
                     let path = self.segs(rc, &ops[1..], pre)?;
-                    return Ok(Some(Res::Value {
-                        pred: format!("{h}::{x}"),
-                        path,
-                    }));
+                    let decl = DeclRef {
+                        scope: module,
+                        name: x.clone(),
+                        at: 0,
+                    };
+                    let via = Reach::Use(h.to_string());
+                    return Ok(Some(Res::Value { decl, via, path }));
                 }
                 if own.output(x).is_some() {
                     let inst = self.scope_term(rc.scope, declared, str_term(h));
@@ -9013,13 +9029,14 @@ impl<'u> Lowerer<'u> {
                     span,
                 ))
             }
-            Res::Value { pred, path } => {
+            Res::Value { decl, via, path } => {
+                let pred = via.relation(&decl.name);
                 let v = match rc.values.get(&pred) {
                     Some(v) => var(v),
                     None => {
                         let base = crate::modules::lexical_name(&pred).unwrap_or(&pred);
                         let name = fresh(rc, &capitalise(base));
-                        pre.push(Lit::Pos(atom_at(&pred, vec![var(&name)], span)));
+                        self.value_read(&pred, &name, (decl, via), pre, span);
                         rc.values.insert(pred.clone(), name.clone());
                         var(&name)
                     }
@@ -9044,6 +9061,21 @@ impl<'u> Lowerer<'u> {
                 self.path_of(rc, v, path, pre, span)
             }
         }
+    }
+
+    /// The read of a value, `pred(var)`, hoisted, and what it reads kept
+    /// for the program's builder: the goal is the read's own node.
+    fn value_read(
+        &mut self,
+        pred: &str,
+        var_name: &str,
+        read: (DeclRef, Reach),
+        pre: &mut Vec<Lit>,
+        span: Span,
+    ) {
+        let key = crate::program::read_key(span, pred, var_name);
+        self.program.value_reads.insert(key, read);
+        pre.push(Lit::Pos(atom_at(pred, vec![var(var_name)], span)));
     }
 
     /// Fields and indexes into a value: `__path(V, "a.b")`, `member(V, i, W)`.
@@ -9170,8 +9202,8 @@ impl<'u> Lowerer<'u> {
                 ),
                 3,
             )),
-            Res::Value { pred, path } if path.is_empty() => {
-                Some((atom_at(pred, vec![value], span), 0))
+            Res::Value { decl, via, path } if path.is_empty() => {
+                Some((atom_at(&via.relation(&decl.name), vec![value], span), 0))
             }
             Res::Lookup {
                 pred,

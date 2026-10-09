@@ -436,7 +436,7 @@ impl Speller<'_> {
             ExprKind::Lit(v) => crate::spell::value(v),
             ExprKind::Quantity { text } => text.clone(),
             ExprKind::Var(v) => self.var(*v),
-            ExprKind::Value(d) => d.name.clone(),
+            ExprKind::Value { decl, .. } => decl.name.clone(),
             ExprKind::Resource { typ, addr } => format!("{}[{}]", typ.name, self.expr(*addr)),
             ExprKind::RefOf(e) => format!("ref({})", self.expr(*e)),
             ExprKind::Field { base, path } => format!("{}{}", self.expr(*base), self.steps(path)),
@@ -511,7 +511,7 @@ impl Speller<'_> {
                         ..
                     } if matches!(
                         self.p.exprs[*value].kind,
-                        ExprKind::Var(_) | ExprKind::Value(_)
+                        ExprKind::Var(_) | ExprKind::Value { .. }
                     ) =>
                     {
                         key.clone()

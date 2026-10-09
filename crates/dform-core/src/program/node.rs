@@ -12,7 +12,7 @@
 //! until reads are built from the tree, the builders make a statement's
 //! nodes from what the resolver lowered it to.
 
-use super::scope::{DeclRef, ScopeId};
+use super::scope::{DeclRef, Reach, ScopeId};
 use crate::ast::{self, FieldOp, Rank, Span, TypeExpr};
 use crate::functions::Function;
 use crate::ir::ops::AggKind;
@@ -90,8 +90,10 @@ pub enum ExprKind {
     Quantity { text: String },
     /// `x`: a variable of the clause (step 3).
     Var(VarId),
-    /// `k`, `m.k`: a `let`, an input or a key read by name (step 3).
-    Value(DeclRef),
+    /// `k`, `m.k`: a `let`, an input or a key read by name, and how the
+    /// read reaches it (step 6). A read the front end hoists is the goal
+    /// binding its value to a variable, `V = k`, which lowers to `k(V)`.
+    Value { decl: DeclRef, via: Reach },
     /// `db`, `T[e]`, a variable `x in T` types: a resource (step 3).
     Resource { typ: TypeRef, addr: ExprId },
     /// `ref(R)` written out (step 3).

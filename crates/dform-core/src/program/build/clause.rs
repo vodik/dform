@@ -337,6 +337,9 @@ impl Builder<'_> {
     /// The atom `a`: the relation's goal, its columns by position or by
     /// name.
     pub(super) fn rel(&mut self, a: &Atom) -> GoalId {
+        if let Some(g) = self.value_read(a) {
+            return g;
+        }
         self.at(a.span, |b| {
             let args = match &a.record {
                 Some(r) => {
@@ -355,6 +358,21 @@ impl Builder<'_> {
 
     pub(super) fn goal_node(&mut self, span: Span, kind: GoalKind) -> GoalId {
         self.program.goals.insert(Goal { span, kind })
+    }
+
+    /// `k(V)`, a value the front end read and hoisted: the goal binding
+    /// `V` to the `Value` it reads (`V = k`).
+    fn value_read(&mut self, a: &Atom) -> Option<GoalId> {
+        let [Term::Var(v)] = a.args.as_slice() else {
+            return None;
+        };
+        let key = crate::program::read_key(a.span, &a.pred, v);
+        let (decl, via) = self.program.value_reads.get(&key)?.clone();
+        Some(self.at(a.span, |b| {
+            let pat = b.pattern(&a.args[0]);
+            let value = b.expr_node(ExprKind::Value { decl, via });
+            b.goal_node(a.span, GoalKind::Bind { pat, value })
+        }))
     }
 
     /// The read `a` with its value column `column` left open: the value
