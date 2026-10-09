@@ -11,6 +11,12 @@
 //! dotted path (`"tags.team"`) or an object value (`{team: "platform"}`):
 //! it matches the attribute that contains it, and the tree shows only the
 //! contributions that do.
+//!
+//! `printer` prints the tree in the core's spelling, `surface` in the
+//! program's own terms (its statements by `statement`); `because` and
+//! `compress` say a deformation's derivation by its leaves; `sites` says
+//! where a fact is derived, `chains` how a value was made, `docrow` the
+//! row of a document a value was read from.
 
 mod because;
 mod chains;

@@ -255,12 +255,7 @@ impl Surface<'_, '_> {
     /// An element write (`transform::ELEM`) by the element's key, as the
     /// plan names it: `spec.template.spec.containers[name=api]`, and what
     /// it writes there.
-    fn element<'v>(
-        &self,
-        t: &str,
-        p: &str,
-        v: &'v Value,
-    ) -> Option<(String, &'v Value)> {
+    fn element<'v>(&self, t: &str, p: &str, v: &'v Value) -> Option<(String, &'v Value)> {
         let list = p.strip_suffix(crate::transform::ELEM)?;
         let Value::List(kv) = v else { return None };
         let [k, content] = kv.as_slice() else {

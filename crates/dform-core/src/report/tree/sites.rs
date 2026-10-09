@@ -460,12 +460,7 @@ impl Surface<'_, '_> {
     }
 
     /// [`site_of`], found.
-    fn site_found(
-        &mut self,
-        c: &mut Compress,
-        id: NodeId,
-        depth: usize,
-    ) -> Option<Site> {
+    fn site_found(&mut self, c: &mut Compress, id: NodeId, depth: usize) -> Option<Site> {
         let circuit = self.p.circuit;
         let View::Fact { fact, alts, .. } = circuit.view(id) else {
             return None;
@@ -559,10 +554,7 @@ impl Surface<'_, '_> {
 
     /// The statement a stated fact at `span` (`FILE:LINE:COL (..)`) is
     /// written in: its file, first and last lines, and the block entry.
-    fn stated_in(
-        &mut self,
-        span: &str,
-    ) -> Option<(String, usize, usize, Option<String>)> {
+    fn stated_in(&mut self, span: &str) -> Option<(String, usize, usize, Option<String>)> {
         let place = span.split_once(" (").map_or(span, |(p, _)| p);
         let (rest, col) = place.rsplit_once(':')?;
         let (file, line) = rest.rsplit_once(':')?;

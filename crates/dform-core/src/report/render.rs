@@ -483,13 +483,7 @@ impl Report {
     /// Changes in order, a copy's under it (R-67): `+ network blue` at
     /// the place of its first resource, the resources indented beneath, a
     /// copy inside it nested again.
-    fn write_level(
-        &self,
-        rows: &mut Vec<Row>,
-        ds: &[&Deformation],
-        indent: &str,
-        style: Style,
-    ) {
+    fn write_level(&self, rows: &mut Vec<Row>, ds: &[&Deformation], indent: &str, style: Style) {
         self.walk_level(ds, None, 0, &mut |depth, node| {
             let indent = format!("{indent}{}", "  ".repeat(depth));
             match node {

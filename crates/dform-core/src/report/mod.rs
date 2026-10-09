@@ -22,6 +22,17 @@
 //! null prints as its label, a secret, a value equal to one, or a value at
 //! a sensitive path as `(sensitive LABEL)`. Nothing here formats a
 //! sensitive value's bytes.
+//!
+//! This file is the report, what it is built from and its building
+//! (`report`). The rest, by idea: `deformation` (a change and its lines),
+//! `render` and `lines` (the plan as text, one change's text), `json`,
+//! `explain` (why, at each level), `fold` (a create's lines folded),
+//! `chains` (a value's chain), `waits` (what a held change waits on),
+//! `groups` (pending groups), `policy` (the policy block), `errors` (what
+//! went wrong), `tally` (the headline), `labels` (how things are named),
+//! `mask` (a value as shown), `style`, `layout` (the page), `progress` (the
+//! apply's block), `table` and `tree` (the other two printers), `bare`
+//! (`--why=none`), `deployments`.
 
 use crate::ast::Program;
 use crate::engine::EvalResult;

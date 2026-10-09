@@ -393,11 +393,7 @@ fn relabel<'a>(paths: impl Iterator<Item = &'a str>) -> Vec<String> {
 
 /// `(list path, element label, rest)` when `path`'s first list segment is
 /// a keyless set or a list with merge keys.
-fn element_of(
-    typ: &str,
-    path: &str,
-    schema: &Schema,
-) -> Option<(String, String, String)> {
+fn element_of(typ: &str, path: &str, schema: &Schema) -> Option<(String, String, String)> {
     let open = path.find('[')?;
     let close = open + path[open..].find(']')?;
     let list = &path[..open];
