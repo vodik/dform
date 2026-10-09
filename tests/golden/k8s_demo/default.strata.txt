@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/k8s/stacks/k8s_demo.df: 104 nodes, 937 edges (228 negative), 7 strata
+== examples/k8s/stacks/k8s_demo.df: 105 nodes, 949 edges (228 negative), 7 strata
 stratum  node
 0        (arg, k8s.config_map, data)
 0        (want, k8s.config_map)
@@ -21,6 +21,7 @@ stratum  node
 0        (want, k8s.stateful_set)
 0        app
 0        identity
+0        remote_name
 0        resolve
 0        resolved
 0        world_attr
@@ -106,5 +107,5 @@ stratum  node
 5        (arg, k8s.deployment, spec)
 5        __ref_dep
 6        (attr, k8s.deployment, spec)
-(104 rows)
+(105 rows)
 -- stderr --

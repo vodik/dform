@@ -33,6 +33,7 @@ fn action(t: &str, n: &str) -> Action {
         changes: Vec::new(),
         on: Default::default(),
         kept: Vec::new(),
+        renamed: None,
     }
 }
 

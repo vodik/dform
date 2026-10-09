@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== tests/fixtures/adversarial/adv2_rule3_coarse.df: 136 nodes, 980 edges (248 negative), 5 strata
+== tests/fixtures/adversarial/adv2_rule3_coarse.df: 137 nodes, 992 edges (248 negative), 5 strata
 stratum  node
 0        (arg, google.container_cluster, name)
 0        (arg, google.secret_manager_secret_version, secret_data)
@@ -27,6 +27,7 @@ stratum  node
 0        (want, k8s.service_account)
 0        (want, k8s.stateful_set)
 0        identity
+0        remote_name
 0        resolve
 0        resolved
 0        world_attr
@@ -138,5 +139,5 @@ stratum  node
 4        (attr, google.container_node_pool, zone)
 4        __not_planned
 4        deny
-(136 rows)
+(137 rows)
 -- stderr --
