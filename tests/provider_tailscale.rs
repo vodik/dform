@@ -193,6 +193,12 @@ fn a_written_policy_file_is_adopted_not_overwritten() {
 /// Every file under `s` and the runs' output: none holds `secret`.
 #[track_caller]
 fn nowhere(s: &Scratch, runs: &[&Run], secret: &str) {
+    nowhere_but(s, runs, secret, "");
+}
+
+/// The same, but the file `but` (a world the key was written to).
+#[track_caller]
+fn nowhere_but(s: &Scratch, runs: &[&Run], secret: &str, but: &str) {
     fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         for e in std::fs::read_dir(dir).unwrap().flatten() {
             let p = e.path();
@@ -204,7 +210,7 @@ fn nowhere(s: &Scratch, runs: &[&Run], secret: &str) {
     }
     let mut files = Vec::new();
     walk(&s.dir, &mut files);
-    for f in files {
+    for f in files.into_iter().filter(|f| *f != s.path(but)) {
         let bytes = std::fs::read(&f).unwrap();
         assert!(
             !String::from_utf8_lossy(&bytes).contains(secret),
@@ -342,11 +348,6 @@ fn a_key_is_revealed_only_in_the_run_that_made_it() {
 /// read by the mock inside its Apply, `bootstrap` so a new key does not
 /// replace the instance.
 #[test]
-#[ignore = "the engine reveals a secret another provider holds into a Configure only (R-45): an \
-            Apply document's secret held by the tailscale provider is sent to the mock as its \
-            label, which the mock cannot read, and a key interpolated into a string \
-            (`\"authkey: ${nodes.key}\"`) waits forever on a value dform never has; R-197's \
-            hand-back names the engine change"]
 fn a_key_reaches_an_instances_user_data_inside_the_call() {
     let server = Server::start(TAILNET);
     let s = project(
@@ -381,6 +382,35 @@ fn a_key_reaches_an_instances_user_data_inside_the_call() {
     // A later run needs no reveal: the key is given at creation only.
     let again = dform(&s, &["plan", "main.df"]).success();
     assert!(again.stdout.contains("is up to date"), "{}", again.stdout);
+    // Not so given, a new template makes the node again: the key exists
+    // in the run that made it only, so its reveal is refused, an error
+    // at the attribute, and nothing is sent.
+    write(
+        &s,
+        &server,
+        &format!(
+            "{KEY}use cloud\n\
+             resource cloud.vm node {{\n  name = \"k3s-1\"\n  \
+             user_data = \"#cloud-config\\nruncmd: [tailscale up --ssh --authkey ${{nodes.key}}]\\n\"\n}}\n"
+        ),
+    );
+    let r = dform(&s, &["apply", "main.df"]).failure();
+    assert!(
+        r.stderr.contains(
+            "! apply cloud.vm node: not sent\n    cloud.vm node.user_data holds the secret \
+             tailscale.auth_key[\"nodes\"].key, which was not revealed: "
+        ) && r
+            .stderr
+            .contains("the API answers a key once, when it is made, and this run did not make it"),
+        "{}",
+        r.stderr
+    );
+    nowhere_but(
+        &s,
+        &[&apply, &again, &r],
+        &value,
+        "dform.state/main/remote.json",
+    );
 }
 
 /// The node's key, made by a first apply; the node joins with it as

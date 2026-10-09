@@ -133,10 +133,13 @@ resource ovh.instance server {
 lifecycle(server, "bootstrap", "user_data")
 ```
 
+The engine reveals the key into the instance's Apply call, inside the
+template, under the run's lease (docs/reference.md, "Secrets").
 `bootstrap` sends the user data when the instance is made and never
-compares it after (docs/reference.md, "Lifecycle"). Not yet: the engine
-reveals a held secret into a provider's Configure only, so a key in
-another provider's attribute is not revealed there yet ("Not yet").
+compares it after (docs/reference.md, "Lifecycle"), so no later run
+asks for the key. Without it, a later replacement of the instance would
+need the key again, and its reveal is refused: the apply says so at the
+attribute.
 
 ### `tailscale.dns`
 
@@ -203,11 +206,6 @@ deny "${l} is an admin" where tailscale.user("vodik.github", l, "admin")
 
 ## Not yet
 
-- A key in another provider's attribute (an instance's `user_data`): the
-  engine reveals a secret a provider holds into a Configure only, and a
-  key interpolated into a string waits on a value dform never has. It
-  needs the engine to reveal the key into the call that writes the
-  attribute, and nothing at a later run that keeps it (`bootstrap`).
 - The devices the tailnet lists, adopted or not, as facts a policy reads
   (`d in tailscale.device`): R-196.
 - Removal of a device from the program letting it go by default (a
