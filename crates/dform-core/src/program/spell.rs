@@ -40,7 +40,7 @@ pub fn kind(k: &ItemKind) -> &'static str {
         } => "a deny",
         ItemKind::Check { .. } => "a warn",
         ItemKind::Resource { .. } => "a resource",
-        ItemKind::Contribute { .. } | ItemKind::SetFrom { .. } => "a set",
+        ItemKind::Set { .. } | ItemKind::SetFrom { .. } => "a set",
         ItemKind::Copy { .. } => "a copy",
         ItemKind::Input { .. } | ItemKind::RelationInput { .. } => "an input",
         ItemKind::Output { .. } | ItemKind::OutputRelation { .. } => "an output",
@@ -181,28 +181,33 @@ impl Speller<'_> {
                     self.where_(*clause)
                 )
             }
-            ItemKind::Contribute {
-                target,
-                op: o,
-                value,
+            ItemKind::Set { writes, clause } => {
+                let line = |w: &Write| {
+                    format!(
+                        "{} {} {}{}",
+                        self.target(&w.target),
+                        op(w.op),
+                        self.expr(w.value),
+                        rank(w.rank)
+                    )
+                };
+                match writes.as_slice() {
+                    [w] => format!("set {}{}", line(w), self.where_(*clause)),
+                    ws => format!(
+                        "set {{ {} }}{}",
+                        join(ws.iter().map(line), ", "),
+                        self.where_(*clause)
+                    ),
+                }
+            }
+            ItemKind::SetFrom {
+                source,
                 rank: r,
                 clause,
                 ..
             } => format!(
-                "set {} {} {}{}{}",
-                self.target(target),
-                op(*o),
-                self.expr(*value),
-                rank(*r),
-                self.where_(*clause)
-            ),
-            ItemKind::SetFrom {
-                doc,
-                rank: r,
-                clause,
-            } => format!(
                 "set from {}{}{}",
-                self.expr(*doc),
+                self.source(source),
                 rank(*r),
                 self.where_(*clause)
             ),
@@ -538,14 +543,34 @@ impl Speller<'_> {
     }
 
     fn target(&self, t: &Target) -> String {
+        let path = |p: &str| match p {
+            "" => String::new(),
+            p => format!(".{p}"),
+        };
         match t {
-            Target::Attr { res, path } => format!("{}{}", self.expr(*res), self.steps(path)),
-            Target::Input { decl, path } => {
-                let mut out = decl.name.clone();
-                path.iter().for_each(|p| out.push_str(&format!(".{p}")));
-                out
+            Target::Attr { typ, addr, path: p } => {
+                format!("{}[{}]{}", self.expr(*typ), self.expr(*addr), path(p))
             }
+            Target::Element {
+                typ,
+                addr,
+                list,
+                key,
+                rest,
+            } => format!(
+                "{}[{}].{list}[{}]{}",
+                self.expr(*typ),
+                self.expr(*addr),
+                self.expr(*key),
+                path(&rest.join("."))
+            ),
+            Target::Input { path } => path.clone(),
         }
+    }
+
+    /// A document's rows, by the reads they lower to.
+    fn source(&self, s: &Source) -> String {
+        join(s.reads.iter().map(|g| self.goal(*g)), ", ")
     }
 
     fn header(&self, h: &Header) -> String {

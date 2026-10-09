@@ -13,6 +13,7 @@
 mod aggregate;
 mod checks;
 mod clause;
+mod contributions;
 mod each;
 mod expr;
 mod gather;
@@ -25,9 +26,10 @@ mod pattern;
 mod rules;
 mod spread;
 
-pub use aggregate::{grouped, number_folds};
+pub use aggregate::{fold_numbers, grouped, number_folds};
 pub use checks::CheckLowered;
 pub use clause::{Form, Written};
+pub use contributions::{SetFromLowered, SetLowered, TargetLowered, WriteLowered};
 pub use gather::{Gather, Statement};
 pub use inputs::InputLowered;
 pub use lets::LetLowered;

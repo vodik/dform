@@ -565,19 +565,20 @@ pub enum ItemKind {
         body: ResourceBody,
         clause: Option<ClauseId>,
     },
-    /// `set R.p = v`, `set k += v`, a line of `set { .. }` (`group`, the
-    /// block's item) (step 5).
-    Contribute {
-        target: Target,
-        op: FieldOp,
-        value: ExprId,
-        rank: Option<Rank>,
+    /// `set R.p = v`, `set k += v`, `set { R.p = v .. }` [@rank] [where
+    /// B] (step 5): each line a [`Write`], the lines of a block under its
+    /// one clause.
+    Set {
+        writes: Vec<Write>,
         clause: Option<ClauseId>,
-        group: Option<ItemId>,
     },
-    /// `set from doc [@rank] [where B]` (R-38, step 5).
+    /// `set from doc [@rank] [where B]` (R-38, step 5): each leaf of the
+    /// document, `path` and `value`, to the input at its path; `source`
+    /// the document's rows.
     SetFrom {
-        doc: ExprId,
+        source: Source,
+        path: VarId,
+        value: VarId,
         rank: Option<Rank>,
         clause: Option<ClauseId>,
     },
@@ -698,13 +699,56 @@ pub struct Entry {
     pub span: Span,
 }
 
-/// What a `set` writes.
+/// One line of a `set`: `target (=|+=) value [@rank]`, after the reads
+/// its target hoisted (each the goal it lowered to, as an
+/// [`ExprKind::Hoisted`] term's); `folds`, the `__agg_N` each of its
+/// clause's aggregates folds through for this line, when they fold
+/// through helpers (a block's lines each fold on their own).
+#[derive(Debug, Clone)]
+pub struct Write {
+    pub target: Target,
+    pub op: FieldOp,
+    pub value: ExprId,
+    pub rank: Option<Rank>,
+    pub reads: Vec<GoalId>,
+    pub folds: Vec<u32>,
+    pub span: Span,
+}
+
+/// What a `set` writes, as the cell it lowers to.
 #[derive(Debug, Clone)]
 pub enum Target {
-    /// `set R.p`, `set c.p` (an element, R-69), `set T[_].l[_].p` (R-162).
-    Attr { res: ExprId, path: Vec<Step> },
-    /// `set k`, `set m.k`, `set n.k`.
-    Input { decl: DeclRef, path: Vec<Name> },
+    /// `set R.p`, `set T[_].l[_].p` (R-162), `set m.k` and `set n.k` (a
+    /// used module's or a copy's input, `typ` the input's cell): the
+    /// cell `(typ, addr, path)`.
+    Attr {
+        typ: ExprId,
+        addr: ExprId,
+        path: String,
+    },
+    /// `set c.p where c in R.l`, `set R.l[k].p`: the element of the keyed
+    /// list `list` whose key is `key`, the fields below it `rest` (R-35,
+    /// R-69).
+    Element {
+        typ: ExprId,
+        addr: ExprId,
+        list: String,
+        key: ExprId,
+        rest: Vec<Name>,
+    },
+    /// `set k`, `set k.f`: the stack's input (a field of an object one,
+    /// R-54) by its path.
+    Input { path: String },
+}
+
+/// The rows of a document a statement reads (`set from`, `input p from`,
+/// R-39): the externs that read it, declared before the statement, and
+/// the reads, each the goal it lowered to (the document's term bound,
+/// then the table's extern), until reads are built from the tree.
+#[derive(Debug, Clone)]
+pub struct Source {
+    pub externs: Vec<ast::Stmt>,
+    pub reads: Vec<GoalId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

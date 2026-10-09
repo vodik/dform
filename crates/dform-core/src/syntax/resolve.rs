@@ -2153,6 +2153,7 @@ impl<'u> Lowerer<'u> {
             DECL => return Some(self.decl(n, scope)),
             EXTERN => return self.extern_item(n).ok(),
             TYPE_DECL => return self.ported(n, |l| l.type_block(n, scope)),
+            SET => return self.ported(n, |l| l.set(n, scope, outer)),
             _ => {}
         }
         let saved = std::mem::take(&mut self.helpers);
@@ -2531,7 +2532,6 @@ impl<'u> Lowerer<'u> {
             TYPE_ALIAS => Ok(Vec::new()),
             USE => self.use_stmt(n, scope, outer),
             LET if node(n, PARAMS).is_some() => self.function_stmt(n, scope, outer),
-            SET => self.set(n, scope, outer),
             RESOURCE if self.decls.project.contains(&self.file) => self.deployment(n, scope, outer),
             RESOURCE if self.is_copy(n) => self.instance(n, scope, outer),
             RESOURCE => self.block_stmt(n, scope, outer),
@@ -4577,13 +4577,13 @@ impl<'u> Lowerer<'u> {
     /// :- B, reads, table.FORMAT.set(Path, At, P, V)`, which
     /// `tables::expand_set_from` makes one rule per input path, and a deny
     /// for a leaf at a path that is no input's.
-    fn set_from(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+    fn set_from(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
         let span = self.span(n);
-        let src = terms(n).next().ok_or(Skip)?;
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.opt_body(&mut rc, n)?;
-        let rank = self.rank_tok(n)?.unwrap_or(Rank::Normal);
-        let (path, value) = (var(&fresh(&mut rc, "Path")), var(&fresh(&mut rc, "Value")));
+        let clause = self.body_clause(n);
+        let rank = self.rank_tok(n)?;
+        let (path, value) = (fresh(&mut rc, "Path"), fresh(&mut rc, "Value"));
         let cols = [("path", "string"), ("value", "any")]
             .map(|(name, ty)| BindArg {
                 input: false,
@@ -4591,31 +4591,60 @@ impl<'u> Lowerer<'u> {
                 ty: Some(TypeExpr::Name(ty.into())),
             })
             .to_vec();
-        let _ = src;
-        let mut out = self.doc_source(
+        let (seed, made) = (body.len(), self.helpers.len());
+        let externs = self.doc_source(
             &mut rc,
             n,
             crate::tables::SET_DOC,
             cols,
-            vec![path.clone(), value.clone()],
+            vec![var(&path), var(&value)],
             &mut body,
         )?;
         self.check_bound(&rc, &body, &[])?;
-        out.push(Stmt::Rule(RuleStmt::new(
-            atom_at(
-                "arg",
-                vec![
-                    str_term(crate::modules::INPUT),
-                    str_term(""),
-                    path,
-                    value,
-                    str_term(rank.name()),
-                ],
-                span,
-            ),
-            body,
-        )));
-        Ok(out)
+        let head = atom_at(
+            "arg",
+            vec![
+                str_term(crate::modules::INPUT),
+                str_term(""),
+                var(&path),
+                var(&value),
+                str_term(rank.unwrap_or(Rank::Normal).name()),
+            ],
+            span,
+        );
+        let resolved = crate::program::check::enabled().then(|| {
+            let mut out = externs.clone();
+            out.push(Stmt::Rule(RuleStmt::new(head.clone(), body.clone())));
+            self.resolved_with(out, span)
+        });
+        let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
+        let s = crate::program::build::SetFromLowered {
+            span,
+            scope: self.item_scope,
+            clause,
+            rank,
+            path: &path,
+            value: &value,
+            externs,
+            head: &head,
+            body: &body,
+            seed,
+            made: &self.helpers[made..],
+            results: &results,
+        };
+        let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
+        let written = |v: &str| written.contains(v);
+        let gather = self
+            .gather
+            .as_mut()
+            .expect("a ported statement is gathered");
+        let mut b = gather.builder(&mut self.program, span, &written);
+        let item = b.set_from_item(s);
+        gather.done(b);
+        if let Some(stmts) = resolved {
+            self.resolved.insert(item, stmts);
+        }
+        Ok(item)
     }
 
     fn opt_body(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<Vec<Lit>> {
@@ -5059,66 +5088,99 @@ impl<'u> Lowerer<'u> {
     /// own, a field of an object one, a used module's, a copy's), normal
     /// unless ranked (R-38). `set { chain = t .. } [@rank] [where B]` is
     /// several under one clause and rank; `set from DOC [@rank] [where B]`
-    /// a document's leaves, each to the input at its path.
-    fn set(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+    /// a document's leaves, each to the input at its path. Built as a
+    /// `Set` item (R-211 step 5): each line's target, its value and the
+    /// reads they hoisted, the clause B's goals; `lower` writes each
+    /// line's `arg`.
+    fn set(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
         if tokens(n).nth(1).is_some_and(|t| t.text() == "from")
             && !tokens(n).any(|t| matches!(t.kind(), EQ | PLUS_EQ))
         {
             return self.set_from(n, scope, outer);
         }
+        let span = self.span(n);
         let mut rc = self.rc(n, scope, outer);
         let body = self.opt_body(&mut rc, n)?;
         let has_body = node(n, BODY).is_some();
+        let clause = self.body_clause(n);
         let rank = self.rank_tok(n)?;
-        let Some(block) = node(n, BLOCK) else {
-            let lhs = n.children().find(|c| c.kind() == CHAIN).ok_or(Skip)?;
-            let rhs = terms(n).find(|t| *t != lhs).ok_or(Skip)?;
-            let add = tokens(n).any(|t| t.kind() == PLUS_EQ);
-            let span = self.span(n);
-            let st = self.contribution(&mut rc, &lhs, &rhs, add, rank, body, has_body, span)?;
-            return Ok(vec![st]);
+        let block = node(n, BLOCK);
+        let lines: Vec<SyntaxNode> = match &block {
+            Some(b) => b.children().filter(|c| c.kind() == ASSIGN).collect(),
+            None => vec![n.clone()],
         };
-        let mut out = Vec::new();
+        let mut writes = Vec::new();
         let mut failed = false;
-        for a in block.children().filter(|c| c.kind() == ASSIGN) {
+        for a in &lines {
             let r = (|| {
                 let lhs = a.children().find(|c| c.kind() == CHAIN).ok_or(Skip)?;
-                let rhs = terms(&a).find(|t| *t != lhs).ok_or(Skip)?;
-                let add = tokens(&a).any(|t| t.kind() == PLUS_EQ);
-                let rank = self.rank_tok(&a)?.or(rank);
-                let span = self.span(&a);
+                let rhs = terms(a).find(|t| *t != lhs).ok_or(Skip)?;
+                let add = tokens(a).any(|t| t.kind() == PLUS_EQ);
+                let rank = match block {
+                    Some(_) => self.rank_tok(a)?.or(rank),
+                    None => rank,
+                };
+                let span = self.span(a);
                 let mut rc = rc.clone();
-                self.contribution(&mut rc, &lhs, &rhs, add, rank, body.clone(), has_body, span)
+                let line = (&lhs, &rhs, add, rank, span);
+                self.contribution(&mut rc, line, body.clone(), has_body)
             })();
             match r {
-                Ok(st) => out.push(st),
-                Err(Skip) => failed = true,
+                Ok(w) => writes.push(w),
+                Err(Skip) if block.is_some() => failed = true,
+                Err(Skip) => return Err(Skip),
             }
         }
-        if failed { Err(Skip) } else { Ok(out) }
+        if failed {
+            return Err(Skip);
+        }
+        let resolved = crate::program::check::enabled().then(|| {
+            let stmts = writes.iter().map(|w| w.stmt(has_body)).collect();
+            self.resolved_with(stmts, span)
+        });
+        let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
+        let written: BTreeSet<&str> = writes
+            .iter()
+            .flat_map(|w| w.written.iter().map(String::as_str))
+            .collect();
+        let written = |v: &str| written.contains(v);
+        let s = crate::program::build::SetLowered {
+            span,
+            scope: self.item_scope,
+            clause,
+            writes: writes.iter().map(|w| w.lowered(&self.helpers)).collect(),
+            results: &results,
+        };
+        let gather = self
+            .gather
+            .as_mut()
+            .expect("a ported statement is gathered");
+        let mut b = gather.builder(&mut self.program, span, &written);
+        let item = b.set_item(s);
+        gather.done(b);
+        if let Some(stmts) = resolved {
+            self.resolved.insert(item, stmts);
+        }
+        Ok(item)
     }
 
-    /// One contribution of a `set`: `lhs (=|+=) rhs` under the clause
-    /// `body` (`has_body`: one is written).
-    #[allow(clippy::too_many_arguments)]
+    /// One contribution of a `set`: `lhs (=|+=) rhs [@rank]` at `span`,
+    /// under the clause `body` (`has_body`: one is written).
     fn contribution(
         &mut self,
         rc: &mut Rc,
-        lhs: &SyntaxNode,
-        rhs: &SyntaxNode,
-        add: bool,
-        rank: Option<Rank>,
+        (lhs, rhs, add, rank, span): (&SyntaxNode, &SyntaxNode, bool, Option<Rank>, Span),
         mut body: Vec<Lit>,
         has_body: bool,
-        span: Span,
-    ) -> L<Stmt> {
+    ) -> L<Contribution> {
         let c = Chain::of(lhs).ok_or(Skip)?;
         if add && rank.is_some() {
             return self.error(span, "a rank applies to `=`, not `+=`");
         }
-        let (typ, addr, path, block) = match self.set_target(rc, &c, &mut body, span)? {
-            Target::Cell(typ, addr, path, block) => (typ, addr, path, block),
-            Target::Element(typ, addr, list, key, rest, block) => {
+        let (seed, made) = (body.len(), self.helpers.len());
+        let target = self.set_target(rc, &c, &mut body, span)?;
+        match &target {
+            Target::Element(_, _, list, _, _, block) => {
                 if add {
                     return self.error(
                         span,
@@ -5141,25 +5203,6 @@ impl<'u> Lowerer<'u> {
                     self.diags.push(d);
                     return Err(Skip);
                 }
-                let value =
-                    self.wanting(Want::Schema, |l| l.term(rc, rhs, Pos::Value, &mut body))?;
-                let head = atom_at(
-                    "arg",
-                    vec![
-                        typ,
-                        addr,
-                        str_term(&list),
-                        element_write(key, &rest, value),
-                        str_term(rank.unwrap_or(Rank::Normal).name()),
-                    ],
-                    span,
-                );
-                self.check_bound(rc, &body, &atom_terms(&head))?;
-                return Ok(if body.is_empty() && !has_body {
-                    Stmt::Fact(head)
-                } else {
-                    Stmt::Rule(RuleStmt::new(head, body))
-                });
             }
             Target::Input(k) => {
                 // A stack input: `input(k, t)`, as `--set k=t` gives it.
@@ -5177,62 +5220,66 @@ impl<'u> Lowerer<'u> {
                 if add {
                     return self.error(span, "an input is set with `=`");
                 }
-                // A contribution to the input's cell, normal unless ranked
-                // (R-38); written to the cell itself, so that its condition
-                // may read another input.
-                let value = self.term(rc, rhs, Pos::Value, &mut body)?;
-                let head = atom_at(
+            }
+            Target::Cell(_, _, path, Some(block)) if !has_body => {
+                let d = Diagnostic::error(
+                    self.span(lhs),
+                    format!(
+                        "`set {}` with no condition is an entry of `{block}`, declared in the same \
+                         scope",
+                        lhs.text()
+                    ),
+                )
+                .with_help(format!(
+                    "write `{path} = ...` in the block `{block} {{ .. }}`"
+                ));
+                self.diags.push(d);
+                return Err(Skip);
+            }
+            Target::Cell(..) => {}
+        }
+        let mid = (body.len(), self.helpers.len());
+        // A contribution to an input's cell is normal unless ranked (R-38),
+        // written to the cell itself, so that its condition may read
+        // another input.
+        let value = match &target {
+            Target::Input(_) => self.term(rc, rhs, Pos::Value, &mut body)?,
+            _ => self.wanting(Want::Schema, |l| l.term(rc, rhs, Pos::Value, &mut body))?,
+        };
+        let ranked = || str_term(rank.unwrap_or(Rank::Normal).name());
+        let (pred, args) = match &target {
+            Target::Element(typ, addr, list, key, rest, _) => {
+                let elem = crate::program::lower::element_write(key.clone(), rest, value.clone());
+                let args = vec![typ.clone(), addr.clone(), str_term(list), elem, ranked()];
+                ("arg", args)
+            }
+            Target::Input(k) => {
+                let input = str_term(crate::modules::INPUT);
+                (
                     "arg",
-                    vec![
-                        str_term(crate::modules::INPUT),
-                        str_term(""),
-                        str_term(&k),
-                        value,
-                        str_term(rank.unwrap_or(Rank::Normal).name()),
-                    ],
-                    span,
-                );
-                self.check_bound(rc, &body, &atom_terms(&head))?;
-                return Ok(if body.is_empty() && !has_body {
-                    Stmt::Fact(head)
-                } else {
-                    Stmt::Rule(RuleStmt::new(head, body))
-                });
+                    vec![input, str_term(""), str_term(k), value.clone(), ranked()],
+                )
+            }
+            Target::Cell(typ, addr, path, _) => {
+                let mut args = vec![typ.clone(), addr.clone(), str_term(path), value.clone()];
+                args.extend(rank.map(|r| str_term(r.name())));
+                (if add { "arg_add" } else { "arg" }, args)
             }
         };
-        if let Some(block) = block
-            && !has_body
-        {
-            let d = Diagnostic::error(
-                self.span(lhs),
-                format!(
-                    "`set {}` with no condition is an entry of `{block}`, declared in the same \
-                     scope",
-                    lhs.text()
-                ),
-            )
-            .with_help(format!(
-                "write `{path} = ...` in the block `{block} {{ .. }}`"
-            ));
-            self.diags.push(d);
-            return Err(Skip);
-        }
-        let value = self.wanting(Want::Schema, |l| l.term(rc, rhs, Pos::Value, &mut body))?;
-        let mut args = vec![typ, addr, str_term(&path), value];
-        if let Some(rank) = rank {
-            args.push(str_term(rank.name()));
-        }
-        let head = Atom {
-            pred: if add { "arg_add" } else { "arg" }.to_string(),
-            args,
-            record: None,
-            span,
-        };
+        let head = atom_at(pred, args, span);
         self.check_bound(rc, &body, &atom_terms(&head))?;
-        Ok(if body.is_empty() && !has_body {
-            Stmt::Fact(head)
-        } else {
-            Stmt::Rule(RuleStmt::new(head, body))
+        Ok(Contribution {
+            span,
+            target,
+            add,
+            rank,
+            value,
+            head,
+            body,
+            seed,
+            mid: mid.0,
+            made: (made, mid.1, self.helpers.len()),
+            written: rc.vars.values().cloned().collect(),
         })
     }
 
@@ -9051,6 +9098,65 @@ enum Target {
     Input(String),
 }
 
+/// One line of a `set` as the resolver lowered it (R-211 step 5): its
+/// head, and its body: the clause's literals, then from `seed` the reads
+/// its target hoisted and from `mid` its value's, which made the
+/// statement's helpers `made.0..made.1` and `made.1..made.2`.
+struct Contribution {
+    span: Span,
+    target: Target,
+    add: bool,
+    rank: Option<Rank>,
+    value: Term,
+    head: Atom,
+    body: Vec<Lit>,
+    seed: usize,
+    mid: usize,
+    made: (usize, usize, usize),
+    /// The variables the program wrote, by the name each lowers to.
+    written: BTreeSet<String>,
+}
+
+impl Contribution {
+    /// What the resolver wrote of it: a fact, or a rule. For
+    /// `DFORM_CHECK_LOWER=1`; deleted with the switch.
+    fn stmt(&self, has_body: bool) -> Stmt {
+        match self.body.is_empty() && !has_body {
+            true => Stmt::Fact(self.head.clone()),
+            false => Stmt::Rule(RuleStmt::new(self.head.clone(), self.body.clone())),
+        }
+    }
+
+    /// Its parts for the builder, `helpers` the statement's.
+    fn lowered<'a>(&'a self, helpers: &'a [Stmt]) -> crate::program::build::WriteLowered<'a> {
+        use crate::program::build::TargetLowered;
+        let target = match &self.target {
+            Target::Cell(typ, addr, path, _) => TargetLowered::Attr { typ, addr, path },
+            Target::Element(typ, addr, list, key, rest, _) => TargetLowered::Element {
+                typ,
+                addr,
+                list,
+                key,
+                rest,
+            },
+            Target::Input(k) => TargetLowered::Input(k),
+        };
+        let (a, b, c) = self.made;
+        crate::program::build::WriteLowered {
+            span: self.span,
+            target,
+            add: self.add,
+            rank: self.rank,
+            value: &self.value,
+            head: &self.head,
+            body: &self.body,
+            seed: self.seed,
+            mid: self.mid,
+            made: (&helpers[a..b], &helpers[b..c]),
+        }
+    }
+}
+
 /// Mark the literals `out[start..]` that test `has r.PATH` by its value
 /// with `__has(T, A, "PATH", N)` before them (`not` when `negated`), N
 /// their count: the compiler keeps them, or puts the schema's answer in
@@ -9175,26 +9281,6 @@ fn atom_terms(a: &Atom) -> Vec<&Term> {
         .iter()
         .chain(a.record.iter().flat_map(|r| r.values()))
         .collect()
-}
-
-/// What `set L[k].p.q = v` writes at the list `L`, before the transform
-/// lowers it to the core's element write (`transform::ELEM`): an object
-/// with the key under `transform::ELEM_KEY` beside the element's content,
-/// `{"[key]": k, p: {q: v}}`, so that `types::read` reads a quantity in it
-/// at its schema path (`L.p.q`). Content that is not an object literal is
-/// held whole under `transform::ELEM_VALUE`.
-fn element_write(key: Term, rest: &[String], value: Term) -> Term {
-    let content = rest
-        .iter()
-        .rev()
-        .fold(value, |v, k| Term::Obj(BTreeMap::from([(k.clone(), v)])));
-    let mut m = match content {
-        Term::Obj(m) => m,
-        Term::Val(Value::Obj(m)) => m.into_iter().map(|(k, v)| (k, Term::Val(v))).collect(),
-        v => BTreeMap::from([(crate::transform::ELEM_VALUE.to_string(), v)]),
-    };
-    m.insert(crate::transform::ELEM_KEY.to_string(), key);
-    Term::Obj(m)
 }
 
 /// A constant path as a stored path: `a.b[0].c`, `a."b.c"`.
@@ -9555,6 +9641,53 @@ mod tests {
             lowered.iter().any(|l| l.contains("__agg_0")),
             "{lowered:#?}"
         );
+    }
+
+    /// Every form of `set` is built as a `Set` item (R-211 step 5) and
+    /// lowers as the resolver lowers it: an attribute, `+=`, ranked, a
+    /// `[_]` target (its reads before the value's), an element of a keyed
+    /// list by its variable (R-69) and by its key (R-35), an input, a
+    /// block whose lines share one clause (its aggregates folded per line,
+    /// each through helpers of its own), `set from` a document.
+    #[test]
+    fn every_set_is_built_as_a_set_item() {
+        let src = "input size: int = 1\n\
+             resource db.postgres pg { public = false }\n\
+             let k = 1\n\
+             p(1)\np(2)\n\
+             set pg.tags = { a: 1 } where p(1)\n\
+             set pg.tags += { b: 2 } where p(2)\n\
+             set pg.public = true @override where p(2)\n\
+             set db.postgres[_].public = true where p(1)\n\
+             set db.postgres[_].tags = { a: k } where p(1)\n\
+             set c.owner = \"o\" where c in pg.databases\n\
+             set pg.databases[\"a\"].owner = \"o\" where p(1)\n\
+             set size = 2 where p(2)\n\
+             set { pg.public = false @default, pg.tags = { c: n } } where n = count(x), p(x), n > 1\n\
+             set from yaml.decode(io.read(\"c.yaml\")) where p(1)\n";
+        let (lowered, seen) = crate::program::check::collect(|| parse_as(src, true));
+        let lowered = lowered
+            .map(|p| show(&p.statements))
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
+        assert_eq!(seen.items.get("a set"), Some(&10), "{:?}", seen.items);
+        assert!(
+            !seen
+                .items
+                .keys()
+                .any(|k| k.contains("(Rule)") || k.contains("ExternFn")),
+            "{:?}",
+            seen.items
+        );
+        for s in [
+            "arg_add(\"db.postgres\", \"pg\", \"tags\", {b: 2}) :- p(2)",
+            "\"override\") :- p(2)",
+            "__agg_0(count(X))",
+            "__agg_1(count(X))",
+            "arg(\"input\", \"\", Path, Value, \"normal\")",
+        ] {
+            assert!(lowered.iter().any(|l| l.contains(s)), "{s}: {lowered:#?}");
+        }
     }
 
     /// Every form a written literal takes is built as a goal (R-211 step

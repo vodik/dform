@@ -10,6 +10,8 @@
 //! | `input k: T [= d] [check B] [where G]` | itself, its fields', refinement's and clause's literals; under several clauses (R-104) where each holds and the deny where two do |
 //! | `output k[: T] = v [where B]`  | its declaration at its first row; the value, or `output("k", v') :- B', reads` |
 //! | `output p`                     | itself, its reference columns marked             |
+//! | `set t = v [@r] [where B]`, `set { .. }` | per line `arg(T, A, "p", v'[, "r"])` (`arg_add` for `+=`), an element `arg(T, A, "l", [k, {..}], "r")`, an input `arg("input", "", "k", v', "r")`, a fact or a rule over B's literals and the line's reads, folded over B's aggregates |
+//! | `set from doc [@r] [where B]`  | the document's externs, then `arg("input", "", P, V, "r") :- B', reads` |
 //! | `decl p(a: T) [mixed]`         | `mixed p/1` or (fed from outside) `extern p/1`, then `decl p(a: T)` |
 //! | `extern f(+a: T, -b)`          | itself                                           |
 //! | `type T { .. }`                | itself, pending (`PendingKind::TypeDecl`)        |
@@ -21,8 +23,12 @@
 use super::clause::folded;
 use super::expr::Lowering;
 use crate::ast::{self, Atom, Decl, Rank, RuleStmt, Span, Stmt, TypeExpr, str_term};
-use crate::program::node::{CheckKind, ClauseId, ExprId, Head, ItemId, ItemKind, RelRef};
+use crate::program::node::{
+    CheckKind, ClauseId, ExprId, Head, ItemId, ItemKind, RelRef, Source, Target, VarId, Write,
+};
 use crate::program::{NodeId, Origin, Program};
+use crate::value::Value;
+use std::collections::BTreeMap;
 
 /// The statements of the item `id`, onto `out`, one origin each.
 pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<Origin>) {
@@ -127,6 +133,14 @@ pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: 
                 .chain(made.into_iter().flatten().cloned())
                 .collect()
         }
+        ItemKind::Set { writes, clause } => set(program, writes, *clause, it.span),
+        ItemKind::SetFrom {
+            source,
+            path,
+            value,
+            rank,
+            clause,
+        } => set_from(program, source, (*path, *value), *rank, *clause, it.span),
         ItemKind::Doc { kind, name, pairs } => pairs
             .iter()
             .map(|(k, v)| {
@@ -261,6 +275,135 @@ fn output(
         };
         out.extend(clause_rule(head, body, folds, true, span));
     }
+    out.append(&mut l.helpers);
+    out
+}
+
+/// `set ..`: each line's write, a fact or a rule over B's literals (B
+/// lowered once, its helpers once) and the line's reads, folded over B's
+/// aggregates by the line's own numbers (their helpers at the
+/// statement's `span`); then the helpers.
+fn set(program: &Program, writes: &[Write], clause: Option<ClauseId>, span: Span) -> Vec<Stmt> {
+    let mut l = Lowering::new(program);
+    let (lits, folds) = match clause {
+        Some(c) => l.unfolded(c),
+        None => Default::default(),
+    };
+    let mut out = Vec::new();
+    for w in writes {
+        let mut body = lits.clone();
+        for &g in &w.reads {
+            l.goal(g, &mut body);
+        }
+        let value = l.expr(w.value);
+        body.append(&mut l.reads);
+        let head = write_head(&mut l, w, value);
+        let mut folds = folds.clone();
+        for (f, n) in folds.iter_mut().zip(&w.folds) {
+            f.2 = Some(*n);
+        }
+        out.extend(clause_rule(head, body, folds, clause.is_some(), span));
+    }
+    out.append(&mut l.helpers);
+    out
+}
+
+/// A line's head: the cell its target is, `value` written to it.
+fn write_head(l: &mut Lowering, w: &Write, value: ast::Term) -> Atom {
+    let rank = || str_term(w.rank.unwrap_or(Rank::Normal).name());
+    let args = match &w.target {
+        Target::Attr { typ, addr, path } => {
+            let mut args = vec![l.expr(*typ), l.expr(*addr), str_term(path), value];
+            args.extend(w.rank.map(|r| str_term(r.name())));
+            args
+        }
+        Target::Element {
+            typ,
+            addr,
+            list,
+            key,
+            rest,
+        } => {
+            let (typ, addr, key) = (l.expr(*typ), l.expr(*addr), l.expr(*key));
+            let elem = element_write(key, rest, value);
+            vec![typ, addr, str_term(list), elem, rank()]
+        }
+        Target::Input { path } => vec![
+            str_term(crate::modules::INPUT),
+            str_term(""),
+            str_term(path),
+            value,
+            rank(),
+        ],
+    };
+    let pred = match w.op {
+        ast::FieldOp::Add => "arg_add",
+        ast::FieldOp::Assign => "arg",
+    };
+    Atom {
+        pred: pred.into(),
+        args,
+        record: None,
+        span: w.span,
+    }
+}
+
+/// What `set L[k].p.q = v` writes at the list `L` (R-35, R-69), before
+/// the transform lowers it to the core's element write
+/// (`transform::ELEM`): an object with the key under
+/// `transform::ELEM_KEY` beside the element's content, `{"[key]": k, p:
+/// {q: v}}`, so that `types::read` reads a quantity in it at its schema
+/// path (`L.p.q`). Content that is not an object literal is held whole
+/// under `transform::ELEM_VALUE`.
+pub fn element_write(key: ast::Term, rest: &[String], value: ast::Term) -> ast::Term {
+    use ast::Term;
+    let content = rest
+        .iter()
+        .rev()
+        .fold(value, |v, k| Term::Obj(BTreeMap::from([(k.clone(), v)])));
+    let mut m = match content {
+        Term::Obj(m) => m,
+        Term::Val(Value::Obj(m)) => m.into_iter().map(|(k, v)| (k, Term::Val(v))).collect(),
+        v => BTreeMap::from([(crate::transform::ELEM_VALUE.to_string(), v)]),
+    };
+    m.insert(crate::transform::ELEM_KEY.to_string(), key);
+    Term::Obj(m)
+}
+
+/// `set from doc [@rank] [where B]`: the externs reading the document,
+/// then `arg("input", "", Path, Value, "rank") :- B', reads`, folded over
+/// B's aggregates.
+fn set_from(
+    program: &Program,
+    source: &Source,
+    (path, value): (VarId, VarId),
+    rank: Option<Rank>,
+    clause: Option<ClauseId>,
+    span: Span,
+) -> Vec<Stmt> {
+    let mut l = Lowering::new(program);
+    let (mut body, folds) = match clause {
+        Some(c) => l.unfolded(c),
+        None => Default::default(),
+    };
+    for &g in &source.reads {
+        l.goal(g, &mut body);
+    }
+    let args = vec![
+        str_term(crate::modules::INPUT),
+        str_term(""),
+        l.var(path),
+        l.var(value),
+        str_term(rank.unwrap_or(Rank::Normal).name()),
+    ];
+    let head = Atom {
+        pred: "arg".into(),
+        args,
+        record: None,
+        span,
+    };
+    let mut out = source.externs.clone();
+    out.extend(clause_rule(head, body, folds, true, span));
     out.append(&mut l.helpers);
     out
 }

@@ -104,23 +104,41 @@ pub fn grouped(head: &Atom, body: &[Lit], results: &[String]) -> bool {
 /// Each aggregate binding of `clause`, in order, folds through the next
 /// `__agg_N` of the program's counter.
 pub fn number_folds(program: &mut Program, clause: ClauseId) {
-    let goals = program.clauses[clause].goals.clone();
-    for g in goals {
-        let fold = match &program.goals[g].kind {
-            GoalKind::Fold { .. } => g,
-            GoalKind::Hoisted { goals, .. }
-                if let [f] = goals.as_slice()
-                    && matches!(program.goals[*f].kind, GoalKind::Fold { .. }) =>
-            {
-                *f
-            }
-            _ => continue,
-        };
+    for fold in folds(program, clause) {
         let n = u32::try_from(program.helpers.agg()).expect("a helper number");
         if let GoalKind::Fold { helper, .. } = &mut program.goals[fold].kind {
             *helper = Some(n);
         }
     }
+}
+
+/// The next `__agg_N` of the program's counter for each aggregate
+/// binding of `clause`, in order, taken: one statement's of several
+/// sharing the clause (a `set { .. }`'s lines).
+pub fn fold_numbers(program: &mut Program, clause: ClauseId) -> Vec<u32> {
+    let n = folds(program, clause).len();
+    (0..n)
+        .map(|_| u32::try_from(program.helpers.agg()).expect("a helper number"))
+        .collect()
+}
+
+/// The aggregate bindings of `clause`, in order.
+fn folds(program: &Program, clause: ClauseId) -> Vec<GoalId> {
+    let fold = |g: GoalId| match &program.goals[g].kind {
+        GoalKind::Fold { .. } => Some(g),
+        GoalKind::Hoisted { goals, .. }
+            if let [f] = goals.as_slice()
+                && matches!(program.goals[*f].kind, GoalKind::Fold { .. }) =>
+        {
+            Some(*f)
+        }
+        _ => None,
+    };
+    program.clauses[clause]
+        .goals
+        .iter()
+        .filter_map(|&g| fold(g))
+        .collect()
 }
 
 /// Whether `v` is one column of `head` and in no other.
