@@ -406,3 +406,52 @@ pub(super) fn matrix(
     }
     Ok(outcome)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An object is its document with the kind the type says, never what
+    /// the server writes; a kind the document writes otherwise is no
+    /// object of its type.
+    #[test]
+    fn an_object_is_its_document_with_its_kind() {
+        let k8s = Kubernetes::new(&[]).unwrap();
+        let doc = json!({"metadata": {"name": "a", "managedFields": []}, "status": {}, "data": {}});
+        assert_eq!(
+            k8s.object("k8s.config_map", doc).unwrap(),
+            json!({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "a"}, "data": {}})
+        );
+        assert_eq!(
+            k8s.object("k8s.config_map", json!({"kind": "Secret"}))
+                .unwrap_err(),
+            "kind is \"Secret\"; the type says \"ConfigMap\""
+        );
+        assert!(k8s.object("k8s.acme.widget", json!({})).is_err());
+    }
+
+    /// A CRD defines each served version's type and its short name at the
+    /// preferred version.
+    #[test]
+    fn a_crd_defines_its_kinds() {
+        let doc = crate::tables::document(
+            "yaml",
+            "spec:\n  group: acme.example.com\n  names:\n    kind: Widget\n  versions:\n  \
+             - name: v1\n  - name: v1beta1\n  - name: v0\n    served: false\n",
+        )
+        .unwrap();
+        let kinds: Vec<(String, String, String)> = crd_kinds(&doc);
+        let row = |t: &str, a: &str| (t.to_string(), a.to_string(), "Widget".to_string());
+        assert_eq!(
+            kinds,
+            [
+                row("k8s.acme.example.com.v1.widget", "acme.example.com/v1"),
+                row(
+                    "k8s.acme.example.com.v1beta1.widget",
+                    "acme.example.com/v1beta1"
+                ),
+                row("k8s.acme.widget", "acme.example.com/v1"),
+            ]
+        );
+    }
+}
