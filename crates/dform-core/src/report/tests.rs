@@ -3,6 +3,7 @@ use super::mask::LONG;
 use super::tally::KINDS;
 use super::*;
 use crate::spell;
+use serde_json::Value as Json;
 
 /// After R-23: a binding is left out when its value is a whole
 /// segment of the address, not a part of one (`n = 1` is not shown
