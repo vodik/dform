@@ -322,6 +322,8 @@ pub enum DeclKind {
     },
     /// `type T = component { .. }` (R-104), in the file `file`.
     Signature { file: u32 },
+    /// `type T = TYPE`: an alias, by the front end's number for it.
+    Alias(usize),
 }
 
 impl DeclKind {
@@ -555,6 +557,14 @@ impl Names {
             .iter()
             .filter_map(|d| d.kind.arity())
             .collect()
+    }
+
+    /// The type aliases `name` here, by number.
+    pub fn aliases(&self, name: &str) -> impl Iterator<Item = usize> + '_ {
+        self.of(name).iter().filter_map(|d| match d.kind {
+            DeclKind::Alias(id) => Some(id),
+            _ => None,
+        })
     }
 
     /// Whether `name` is a relation here: a head, a `decl` or a `let`.

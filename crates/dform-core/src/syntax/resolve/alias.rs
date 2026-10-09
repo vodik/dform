@@ -30,9 +30,6 @@ struct Def {
 #[derive(Default)]
 pub(super) struct Aliases {
     defs: Vec<Def>,
-    /// Scope -> name -> the aliases of that name visible there: declared
-    /// in it, imported into it, exported into it by one of its modules.
-    visible: BTreeMap<ScopeId, BTreeMap<String, BTreeSet<usize>>>,
     /// Each alias's expansion, once made (`None`: it is in error).
     expanded: BTreeMap<usize, Option<TypeExpr>>,
     /// The aliases being expanded, outermost first.
@@ -42,23 +39,17 @@ pub(super) struct Aliases {
 impl Lowerer<'_> {
     /// Collect every unit's aliases, and what each scope sees.
     pub(super) fn collect_aliases(&mut self) {
-        let mut own: BTreeMap<ScopeId, BTreeMap<String, BTreeSet<usize>>> = BTreeMap::new();
         for u in self.units {
             let fs = self.file_scope(u.file);
-            self.alias_stmts(u.file, &u.root, fs, &mut own);
+            self.alias_stmts(u.file, &u.root, fs);
         }
-        self.aliases.visible = own;
         self.duplicate_aliases();
     }
 
-    /// The aliases of a statement list: `decl` is the scope they land in.
-    fn alias_stmts(
-        &mut self,
-        file: u32,
-        parent: &SyntaxNode,
-        decl: ScopeId,
-        own: &mut BTreeMap<ScopeId, BTreeMap<String, BTreeSet<usize>>>,
-    ) {
+    /// The aliases of a statement list, declared in `decl`: a file's
+    /// in the file's scope (an entry file's too: an alias is in scope in
+    /// its file), a component's in its body.
+    fn alias_stmts(&mut self, file: u32, parent: &SyntaxNode, decl: ScopeId) {
         for n in parent.children() {
             match n.kind() {
                 TYPE_ALIAS => {
@@ -81,17 +72,14 @@ impl Lowerer<'_> {
                         span,
                         ty,
                     });
-                    own.entry(decl)
-                        .or_default()
-                        .entry(name)
-                        .or_default()
-                        .insert(id);
+                    self.names_mut(decl)
+                        .declare(name, DeclKind::Alias(id), n.clone());
                 }
                 COMPONENT => {
                     let start: u32 = n.text_range().start().into();
                     let inner = self.block_scope(file, start);
                     if let Some(b) = node(&n, STMT_BLOCK) {
-                        self.alias_stmts(file, &b, inner, own);
+                        self.alias_stmts(file, &b, inner);
                     }
                 }
                 _ => {}
@@ -113,19 +101,18 @@ impl Lowerer<'_> {
     fn aliases_at(&self, scope: ScopeId, name: &str) -> BTreeSet<usize> {
         self.chain_of(scope)
             .into_iter()
-            .filter_map(|s| self.aliases.visible.get(&s)?.get(name))
-            .flatten()
-            .copied()
+            .flat_map(|s| self.names(s).aliases(name))
             .collect()
     }
 
     /// Two aliases of one name in one scope: an error listing both, once
     /// per set of aliases.
     fn duplicate_aliases(&mut self) {
-        let scopes: Vec<ScopeId> = self.aliases.visible.keys().copied().collect();
+        let scopes: Vec<ScopeId> = self.program.scopes.ids().collect();
         let mut reported = BTreeSet::new();
         for s in scopes {
-            let names: Vec<String> = self.aliases.visible[&s].keys().cloned().collect();
+            let alias = |k: &DeclKind| matches!(k, DeclKind::Alias(_));
+            let names: Vec<String> = self.names(s).names(alias).cloned().collect();
             for name in names {
                 let ids = self.aliases_at(s, &name);
                 if ids.len() < 2 || !reported.insert(ids.clone()) {
@@ -192,8 +179,7 @@ impl Lowerer<'_> {
             Some((m, alias)) => {
                 let path = self.module_path_of(scope, m);
                 self.module_at(&path)
-                    .and_then(|(s, _)| self.aliases.visible.get(&s)?.get(alias))
-                    .cloned()
+                    .map(|(s, _)| self.names(s).aliases(alias).collect())
                     .unwrap_or_default()
             }
             None => self.aliases_at(scope, name),
