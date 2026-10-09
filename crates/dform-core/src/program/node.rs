@@ -119,10 +119,11 @@ pub enum ExprKind {
     /// `settings.k` (step 3).
     Setting { key: Name },
     /// `p[a, b]`, `ext[a].f`: a relation or an extern read by its
-    /// leading columns (step 3).
+    /// other columns, its value the `out`th (step 6).
     Lookup {
         rel: RelRef,
         args: Vec<ExprId>,
+        out: usize,
         path: Vec<Step>,
     },
     /// `inet.subnet(c, 8)`, `f(x, y: 2)` (step 3).

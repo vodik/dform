@@ -60,11 +60,29 @@ pub struct Program {
     /// loader's extern): lowered before the node's own (step 5; gone when
     /// terms are built from the tree).
     pub terms_made: std::collections::BTreeMap<NodeId, Vec<Stmt>>,
-    /// The value reads the front end hoisted, `k(V)`, by where the read
-    /// is written, its relation and its variable: what each reads and
-    /// how, so the goal is built as the read's own node (step 6; gone
-    /// when reads are built from the tree).
-    pub value_reads: std::collections::BTreeMap<ReadKey, (scope::DeclRef, scope::Reach)>,
+    /// The reads the front end hoisted, by where each is written, its
+    /// relation and its variable: what each reads, so its goal is built
+    /// as the read's own node (step 6; gone when reads are built from the
+    /// tree).
+    pub reads: std::collections::BTreeMap<ReadKey, Read>,
+}
+
+/// What a read the front end hoisted, `p(.., V, ..)`, reads: the goal
+/// binding `V` to the node of the read.
+#[derive(Debug, Clone)]
+pub enum Read {
+    /// `k(V)`: a value, `Value`.
+    Value(scope::DeclRef, scope::Reach),
+    /// `attr("T", A, "p", V)`: a resource's attribute, `Field` of a
+    /// `Resource`.
+    Attr,
+    /// `output(C, "k", V)`: a copy's output, `Output`.
+    Output,
+    /// `cloud_attr("T", A, "p", V)`: what the provider reports, `World`.
+    World,
+    /// `p(a, .., V, ..)`: a relation or an extern by its other columns,
+    /// `V` its `out`th, `Lookup`.
+    Lookup { out: usize },
 }
 
 /// Where a hoisted read is written (file, start, end), its relation and

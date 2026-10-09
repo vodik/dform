@@ -64,7 +64,7 @@ fn the_program_lowers_as_the_resolver_does() {
         folds,
         built,
         items,
-        value_reads,
+        reads,
         ..
     } = total;
     assert!(
@@ -92,6 +92,8 @@ fn the_program_lowers_as_the_resolver_does() {
     eprintln!("items: {items:?}");
     assert!(items.get("a let").is_some_and(|n| *n > 0), "{items:?}");
     // Reads built as the read's own node, not the goal it lowered to.
-    eprintln!("value reads: {value_reads}");
-    assert!(value_reads > 0, "no value read built as a `Value`");
+    eprintln!("reads: {reads:?}");
+    for kind in ["value", "attribute", "output", "lookup"] {
+        assert!(reads.get(kind).is_some_and(|n| *n > 0), "{kind}: {reads:?}");
+    }
 }

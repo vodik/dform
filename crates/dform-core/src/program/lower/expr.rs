@@ -225,7 +225,7 @@ impl<'p> Lowering<'p> {
 }
 
 /// A path of field steps as stored: its segments joined by `.`.
-fn stored(path: &[Step]) -> String {
+pub(super) fn stored(path: &[Step]) -> String {
     let segs: Vec<&str> = path
         .iter()
         .map(|s| match s {

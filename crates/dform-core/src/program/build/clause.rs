@@ -23,6 +23,7 @@
 
 use super::Builder;
 use crate::ast::{Atom, Lit, Span, Stmt, Term};
+use crate::program::Read;
 use crate::program::node::*;
 use crate::value::Value;
 
@@ -337,7 +338,7 @@ impl Builder<'_> {
     /// The atom `a`: the relation's goal, its columns by position or by
     /// name.
     pub(super) fn rel(&mut self, a: &Atom) -> GoalId {
-        if let Some(g) = self.value_read(a) {
+        if let Some(g) = self.hoisted_read(a) {
             return g;
         }
         self.at(a.span, |b| {
@@ -360,19 +361,69 @@ impl Builder<'_> {
         self.program.goals.insert(Goal { span, kind })
     }
 
-    /// `k(V)`, a value the front end read and hoisted: the goal binding
-    /// `V` to the `Value` it reads (`V = k`).
-    fn value_read(&mut self, a: &Atom) -> Option<GoalId> {
-        let [Term::Var(v)] = a.args.as_slice() else {
-            return None;
+    /// `p(.., V, ..)`, a read the front end hoisted: the goal binding `V`
+    /// to the node of what it reads (`Program::reads`). `None` for any
+    /// other atom, and an attribute of a resource whose type is a
+    /// variable (`x in T` over several types), which stays its goal.
+    fn hoisted_read(&mut self, a: &Atom) -> Option<GoalId> {
+        let (at, read) = a.args.iter().enumerate().find_map(|(i, t)| {
+            let Term::Var(v) = t else { return None };
+            let key = crate::program::read_key(a.span, &a.pred, v);
+            Some((i, self.program.reads.get(&key)?.clone()))
+        })?;
+        let str_at = |i: usize| match a.args.get(i) {
+            Some(Term::Val(Value::Str(s))) => Some(s.clone()),
+            _ => None,
         };
-        let key = crate::program::read_key(a.span, &a.pred, v);
-        let (decl, via) = self.program.value_reads.get(&key)?.clone();
-        Some(self.at(a.span, |b| {
-            let pat = b.pattern(&a.args[0]);
-            let value = b.expr_node(ExprKind::Value { decl, via });
-            b.goal_node(a.span, GoalKind::Bind { pat, value })
-        }))
+        self.at(a.span, |b| {
+            let value = match read {
+                Read::Value(decl, via) if at == 0 => ExprKind::Value { decl, via },
+                Read::Attr if at == 3 => {
+                    let (typ, p) = (str_at(0)?, str_at(2)?);
+                    let typ = TypeRef {
+                        name: typ,
+                        span: a.span,
+                    };
+                    let addr = b.expr(&a.args[1]);
+                    let base = b.expr_node(ExprKind::Resource { typ, addr });
+                    let path = vec![Step::Field(p, a.span)];
+                    ExprKind::Field { base, path }
+                }
+                Read::Output if at == 2 => ExprKind::Output {
+                    copy: b.expr(&a.args[0]),
+                    key: str_at(1)?,
+                },
+                Read::World if at == 3 => {
+                    let (typ, p) = (str_at(0)?, str_at(2)?);
+                    ExprKind::World {
+                        typ: TypeRef {
+                            name: typ,
+                            span: a.span,
+                        },
+                        addr: b.expr(&a.args[1]),
+                        path: b.fields(&p),
+                    }
+                }
+                Read::Lookup { out } if out == at => {
+                    let args = a.args.iter().enumerate().filter(|(i, _)| *i != at);
+                    let args = args.map(|(_, t)| b.expr(t)).collect();
+                    let rel = RelRef {
+                        name: a.pred.clone(),
+                        span: a.span,
+                    };
+                    ExprKind::Lookup {
+                        rel,
+                        args,
+                        out,
+                        path: Vec::new(),
+                    }
+                }
+                _ => return None,
+            };
+            let pat = b.pattern(&a.args[at]);
+            let value = b.expr_node(value);
+            Some(b.goal_node(a.span, GoalKind::Bind { pat, value }))
+        })
     }
 
     /// The read `a` with its value column `column` left open: the value

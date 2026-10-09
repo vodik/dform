@@ -455,7 +455,9 @@ impl Speller<'_> {
                 self.steps(path)
             ),
             ExprKind::Setting { key } => format!("settings.{key}"),
-            ExprKind::Lookup { rel, args, path } => format!(
+            ExprKind::Lookup {
+                rel, args, path, ..
+            } => format!(
                 "{}[{}]{}",
                 rel.name,
                 join(args.iter().map(|a| self.expr(*a)), ", "),

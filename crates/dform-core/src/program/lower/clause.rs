@@ -260,9 +260,8 @@ impl Lowering<'_> {
         match &g.kind {
             GoalKind::Rel { rel, args } => vec![Lit::Pos(self.atom(rel, args))],
             GoalKind::Bind { pat, value } => {
-                if let ExprKind::Value { decl, via } = &self.program.exprs[*value].kind {
-                    let v = self.pattern(*pat);
-                    return vec![Lit::Pos(atom_at(&via.relation(&decl.name), vec![v], span))];
+                if let Some(read) = self.hoisted_read(*pat, *value, span) {
+                    return vec![Lit::Pos(read)];
                 }
                 if let ExprKind::Read { .. } = self.program.exprs[*value].kind {
                     let v = self.pattern(*pat);
@@ -316,6 +315,43 @@ impl Lowering<'_> {
                 unreachable!("lowered by `goal`")
             }
         }
+    }
+
+    /// The read `value` is, bound to `pat`, as the atom the front end
+    /// hoisted it as: a value's `k(V)`, a resource's attribute's
+    /// `attr("T", A, "p", V)`, a copy's output's `output(C, "k", V)`, a
+    /// live object's `cloud_attr("T", A, "p", V)`, a lookup's relation
+    /// with `V` its `out`th column. `None` for any other value.
+    fn hoisted_read(&mut self, pat: PatternId, value: ExprId, span: Span) -> Option<Atom> {
+        let (pred, args, at) = match &self.program.exprs[value].kind {
+            ExprKind::Value { decl, via } => (via.relation(&decl.name), Vec::new(), 0),
+            ExprKind::Field { base, path } => {
+                let (ExprKind::Resource { typ, addr }, [Step::Field(p, _)]) =
+                    (&self.program.exprs[*base].kind, path.as_slice())
+                else {
+                    return None;
+                };
+                let args = vec![str_term(&typ.name), self.expr(*addr), str_term(p)];
+                ("attr".to_string(), args, 3)
+            }
+            ExprKind::Output { copy, key } => {
+                let args = vec![self.expr(*copy), str_term(key)];
+                ("output".to_string(), args, 2)
+            }
+            ExprKind::World { typ, addr, path } => {
+                let path = super::expr::stored(path);
+                let args = vec![str_term(&typ.name), self.expr(*addr), str_term(&path)];
+                ("cloud_attr".to_string(), args, 3)
+            }
+            ExprKind::Lookup { rel, args, out, .. } => {
+                let args = args.iter().map(|a| self.expr(*a)).collect();
+                (rel.name.clone(), args, *out)
+            }
+            _ => return None,
+        };
+        let mut args = args;
+        args.insert(at, self.pattern(pat));
+        Some(atom_at(&pred, args, span))
     }
 
     /// `x in c`: the literals, the facts it states onto the helpers.

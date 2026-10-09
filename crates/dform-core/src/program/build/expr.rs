@@ -166,7 +166,7 @@ impl Builder<'_> {
 
     /// A stored path, `a."b.c".d`, as a field step per segment, each as
     /// the path stores it (quoted, with its index suffix).
-    fn fields(&self, p: &str) -> Vec<Step> {
+    pub(super) fn fields(&self, p: &str) -> Vec<Step> {
         crate::ir::path_segments(p)
             .into_iter()
             .map(|k| Step::Field(k.to_string(), self.span))

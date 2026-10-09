@@ -34,7 +34,7 @@ use crate::ast::{
 use crate::diag::Diagnostic;
 use crate::program::node::CopyKind;
 use crate::program::scope::{self as scopes, DeclKind, DeclRef, Names, Reach};
-use crate::program::{ItemId, ScopeId};
+use crate::program::{ItemId, Read, ScopeId};
 use crate::spell;
 use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -6875,7 +6875,15 @@ impl<'u> Lowerer<'u> {
             let Res::Output { inst, key, .. } = self.deployed_path(rc, &c, &d, pre, span)? else {
                 return Err(Skip);
             };
-            let rows = self.read_var(rc, "output", vec![inst, str_term(&key)], 2, &p, pre, span);
+            let rows = self.read_var(
+                rc,
+                (Read::Output, "output"),
+                vec![inst, str_term(&key)],
+                2,
+                &p,
+                pre,
+                span,
+            );
             let cols = self.args(rc, n, pos, pre)?;
             return Ok(Some(atom_at("member", vec![rows, Term::List(cols)], span)));
         }
@@ -8588,7 +8596,15 @@ impl<'u> Lowerer<'u> {
                     && !segs.is_empty()
                 {
                     // A typed output: the address it holds, then a reference.
-                    let v = self.read_var(rc, "output", vec![inst, str_term(k)], 2, k, pre, span);
+                    let v = self.read_var(
+                        rc,
+                        (Read::Output, "output"),
+                        vec![inst, str_term(k)],
+                        2,
+                        k,
+                        pre,
+                        span,
+                    );
                     return Ok(Res::Ref {
                         typ: str_term(t),
                         addr: v,
@@ -8943,7 +8959,7 @@ impl<'u> Lowerer<'u> {
     fn read_var(
         &mut self,
         rc: &mut Rc,
-        pred: &str,
+        (read, pred): (crate::program::Read, &str),
         mut args: Vec<Term>,
         out: usize,
         hint: &str,
@@ -8954,8 +8970,11 @@ impl<'u> Lowerer<'u> {
         if let Some(v) = rc.reads.get(&key) {
             return v.clone();
         }
-        let v = var(&fresh(rc, &capitalise(hint)));
+        let name = fresh(rc, &capitalise(hint));
+        let v = var(&name);
         args.insert(out, v.clone());
+        let at = crate::program::read_key(span, pred, &name);
+        self.program.reads.insert(at, read);
         pre.push(Lit::Pos(atom_at(pred, args, span)));
         rc.reads.insert(key, v.clone());
         v
@@ -8991,7 +9010,7 @@ impl<'u> Lowerer<'u> {
                 let first = crate::ir::path_key(first).into_owned();
                 let v = self.read_var(
                     rc,
-                    "attr",
+                    (Read::Attr, "attr"),
                     vec![typ.clone(), addr, str_term(&first)],
                     3,
                     &first,
@@ -9007,7 +9026,15 @@ impl<'u> Lowerer<'u> {
                 path,
                 typ,
             } => {
-                let v = self.read_var(rc, "output", vec![inst, str_term(&key)], 2, &key, pre, span);
+                let v = self.read_var(
+                    rc,
+                    (Read::Output, "output"),
+                    vec![inst, str_term(&key)],
+                    2,
+                    &key,
+                    pre,
+                    span,
+                );
                 match typ {
                     // A typed output holds an address: given as a value, it
                     // is the reference (R-43).
@@ -9021,7 +9048,7 @@ impl<'u> Lowerer<'u> {
                 let last = path.rsplit('.').next().unwrap_or(&path).to_string();
                 Ok(self.read_var(
                     rc,
-                    "cloud_attr",
+                    (Read::World, "cloud_attr"),
                     vec![str_term(&typ), addr, str_term(&path)],
                     3,
                     &last,
@@ -9051,7 +9078,7 @@ impl<'u> Lowerer<'u> {
             } => {
                 let v = self.read_var(
                     rc,
-                    &pred.clone(),
+                    (Read::Lookup { out }, &pred.clone()),
                     args,
                     out,
                     &pred.replace('.', "_"),
@@ -9074,7 +9101,7 @@ impl<'u> Lowerer<'u> {
         span: Span,
     ) {
         let key = crate::program::read_key(span, pred, var_name);
-        self.program.value_reads.insert(key, read);
+        self.program.reads.insert(key, Read::Value(read.0, read.1));
         pre.push(Lit::Pos(atom_at(pred, vec![var(var_name)], span)));
     }
 

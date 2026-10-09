@@ -44,9 +44,9 @@ pub struct Collected {
     pub built: std::collections::BTreeSet<String>,
     /// The items of the programs compared, by kind.
     pub items: std::collections::BTreeMap<String, usize>,
-    /// The reads the programs' builders made their own nodes (step 6):
-    /// a value's.
-    pub value_reads: usize,
+    /// The reads the programs' builders made their own nodes (step 6),
+    /// by kind.
+    pub reads: std::collections::BTreeMap<String, usize>,
     pub differences: Vec<Difference>,
 }
 
@@ -62,7 +62,9 @@ impl Collected {
         for (k, n) in other.items {
             *self.items.entry(k).or_default() += n;
         }
-        self.value_reads += other.value_reads;
+        for (k, n) in other.reads {
+            *self.reads.entry(k).or_default() += n;
+        }
         self.differences.extend(other.differences);
     }
 }
@@ -114,17 +116,40 @@ pub fn program(program: &Program, ported: &Resolved, new: &Lowered) {
         kinds.push(super::spell::kind(kind).to_string());
     }
     // A statistic, not output: the arena's order does not matter.
-    let values = program
-        .exprs
+    let reads: Vec<&str> = program
+        .goals
         .values()
-        .filter(|e| matches!(e.kind, super::node::ExprKind::Value { .. }))
-        .count();
+        .filter_map(|g| read_kind(program, &g.kind))
+        .collect();
     record(None, |c| {
         for k in kinds {
             *c.items.entry(k).or_default() += 1;
         }
-        c.value_reads += values;
+        for k in reads {
+            *c.reads.entry(k.to_string()).or_default() += 1;
+        }
     });
+}
+
+/// The read a goal binds its variable to, when it is one built as the
+/// read's own node.
+fn read_kind(program: &Program, g: &super::node::GoalKind) -> Option<&'static str> {
+    use super::node::{ExprKind, GoalKind};
+    let GoalKind::Bind { value, .. } = g else {
+        return None;
+    };
+    Some(match &program.exprs[*value].kind {
+        ExprKind::Value { .. } => "value",
+        ExprKind::Field { base, .. }
+            if matches!(program.exprs[*base].kind, ExprKind::Resource { .. }) =>
+        {
+            "attribute"
+        }
+        ExprKind::Output { .. } => "output",
+        ExprKind::World { .. } => "world",
+        ExprKind::Lookup { .. } => "lookup",
+        _ => return None,
+    })
 }
 
 /// The diagnostics a ported statement's builder gave (`new`) and the
