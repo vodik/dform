@@ -65,8 +65,9 @@ pub struct Line {
     pub holds: Vec<String>,
     pub hold: usize,
     /// Each failure: the resource it is of, when its context names one
-    /// of those the policy ranges over, and the context (`workload =
-    /// "web"`).
+    /// of those the policy ranges over or its firing bound one (`v in
+    /// net.vpc`), and the context (`workload = "web"`). One of neither
+    /// prints `(no subject)`: it is about the deployment.
     pub fails: Vec<(Option<String>, String)>,
     /// Each thing it is undetermined for, and until what is known
     /// (`k8s.stateful_set db`, `until spec.template.spec.securityContext
@@ -204,11 +205,24 @@ pub fn lines(
             _ => message.clone(),
         };
         let (_, bindings) = violation_parts(&text, r);
-        let of = match a.args.get(1) {
-            Some(Term::Val(ctx)) => subject_in(ctx, &wanted.subjects(&ranges[i])),
+        let why = bindings.join(", ");
+        let subjects = wanted.subjects(&ranges[i]);
+        let named = match a.args.get(1) {
+            Some(Term::Val(ctx)) => subject_in(ctx, &subjects),
             _ => None,
         };
-        l.fails.push((of, bindings.join(", ")));
+        match named {
+            Some(of) => l.fails.push((Some(of), why)),
+            // Its context names none of them (or it has none): each it
+            // fired for, by the variable its range binds; none, about
+            // the deployment.
+            None => match bound_to(&fired(res, a), &ranges[i], &subjects).as_slice() {
+                [] => l.fails.push((None, why)),
+                of => l
+                    .fails
+                    .extend(of.iter().map(|s| (Some(address(s)), why.clone()))),
+            },
+        }
     }
     for p in undetermined {
         let Some(i) = out.iter().position(|l| l.text == p.message) else {
@@ -595,7 +609,7 @@ pub(super) fn rows(lines: &[Line], why: Why, style: Style) -> Vec<Row> {
             let row = match (of, why.is_empty()) {
                 (Some(of), true) => Row::plain(format!("    {of}")),
                 (Some(of), false) => Row::plain(format!("    {of}")).with(vec![why.clone()]),
-                (None, true) => Row::plain("    fails".to_string()),
+                (None, true) => Row::plain("    (no subject)".to_string()),
                 (None, false) => Row::plain(format!("    {why}")),
             };
             rows.push(row.kept());
@@ -678,27 +692,55 @@ impl Policy {
     /// by the variable a range of its deny ranges over (`V: "a"` of `v in
     /// net.vpc`).
     fn bound_in(&self, ranges: &BTreeSet<Range>, subjects: &[Address]) -> Vec<Address> {
-        let mut out: Vec<Address> = Vec::new();
-        for (b, r) in self
-            .bound
-            .iter()
-            .flat_map(|b| ranges.iter().map(move |r| (b, r)))
-        {
-            let name = match b.get(&r.var) {
-                Some(Value::Str(name)) => name,
-                Some(Value::Ref { typ, name, .. }) if *typ == r.typ => name,
-                _ => continue,
-            };
-            let a = Address {
-                typ: r.typ.clone(),
-                name: name.clone(),
-            };
-            if subjects.contains(&a) && !out.contains(&a) {
-                out.push(a);
-            }
-        }
-        out
+        bound_to(&self.bound, ranges, subjects)
     }
+}
+
+/// The ones of `subjects` the instances of a deny with `bound` bindings
+/// are bound to by the variable a range of it ranges over (`V: "a"` of
+/// `v in net.vpc`).
+fn bound_to(
+    bound: &[BTreeMap<String, Value>],
+    ranges: &BTreeSet<Range>,
+    subjects: &[Address],
+) -> Vec<Address> {
+    let mut out: Vec<Address> = Vec::new();
+    for (b, r) in bound
+        .iter()
+        .flat_map(|b| ranges.iter().map(move |r| (b, r)))
+    {
+        let name = match b.get(&r.var) {
+            Some(Value::Str(name)) => name,
+            Some(Value::Ref { typ, name, .. }) if *typ == r.typ => name,
+            _ => continue,
+        };
+        let a = Address {
+            typ: r.typ.clone(),
+            name: name.clone(),
+        };
+        if subjects.contains(&a) && !out.contains(&a) {
+            out.push(a);
+        }
+    }
+    out
+}
+
+/// The bindings of each firing that derived deny `a`, as the circuit
+/// keeps them.
+fn fired(res: &EvalResult, a: &Atom) -> Vec<BTreeMap<String, Value>> {
+    use crate::circuit::View;
+    let Some(id) = res.circuit.fact_id(&crate::engine::circuit_fact(a)) else {
+        return Vec::new();
+    };
+    let View::Fact { alts, .. } = res.circuit.view(id) else {
+        return Vec::new();
+    };
+    alts.iter()
+        .filter_map(|alt| match res.circuit.view(*alt) {
+            View::Times { bindings, .. } => Some(bindings.iter().cloned().collect()),
+            _ => None,
+        })
+        .collect()
 }
 
 impl Line {
@@ -998,6 +1040,30 @@ mod tests {
         assert!(
             text.contains("\x1b[31mfails\x1b[0m  the vm reads an endpoint"),
             "{text}"
+        );
+    }
+
+    /// A failure about no resource (a deny that ranges over none) says
+    /// so under its policy: `fails` never stands alone there.
+    #[test]
+    fn a_failure_of_no_subject_says_so() {
+        let line = Line {
+            text: "the region is not eu".into(),
+            at: "p.df:7".into(),
+            holds: vec![],
+            hold: 0,
+            fails: vec![(None, String::new())],
+            undetermined: vec![],
+        };
+        let text = layout_aligned(
+            &rows(&[line], Why::Line, Style::default()),
+            Style::default(),
+        );
+        assert_eq!(
+            text,
+            "policy  1 fails\n  \
+             fails  the region is not eu  p.df:7  1 fails\n    \
+             (no subject)\n"
         );
     }
 

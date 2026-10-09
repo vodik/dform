@@ -152,3 +152,38 @@ fn an_undetermined_deny_is_about_what_it_ranges_over() {
         "{j:#}"
     );
 }
+
+/// A failing deny with no context is about each resource its firings
+/// range over (`v in net.vpc`), counted as failing, not holding; one
+/// that ranges over none (`where region == "eu"`) is about no subject.
+/// It printed `fails` alone under the policy and counted every vpc a
+/// hold but one.
+#[test]
+fn a_failing_deny_without_context_is_about_what_it_fired_for() {
+    let s = Scratch::project("policy-block-fired");
+    s.write(
+        "p.df",
+        "use fake\n\
+         resource net.vpc a { cidr = \"10.0.0.0/16\" }\n\
+         resource net.vpc b { cidr = \"10.0.0.0/16\" }\n\
+         resource net.vpc c { cidr = \"10.3.0.0/16\" }\n\
+         let region = \"eu\"\n\
+         deny \"no network is 10.0/16\" where v in net.vpc, v.cidr == \"10.0.0.0/16\"\n\
+         deny \"the region is not eu\" where region == \"eu\"\n",
+    );
+    let r = s.run(&["plan", "p.df", "--json"]);
+    let j: serde_json::Value = serde_json::from_str(&r.stdout).expect(&r.stdout);
+    let of = |i: usize| -> Vec<serde_json::Value> {
+        j["policy"][i]["fails"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["resource"].clone())
+            .collect()
+    };
+    assert_eq!(j["policy"][0]["text"], "no network is 10.0/16", "{j:#}");
+    assert_eq!(of(0), ["net.vpc a", "net.vpc b"], "{j:#}");
+    assert_eq!(j["policy"][0]["hold"], 1, "{j:#}");
+    assert_eq!(j["policy"][1]["text"], "the region is not eu", "{j:#}");
+    assert_eq!(of(1), [serde_json::Value::Null], "{j:#}");
+}
