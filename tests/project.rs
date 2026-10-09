@@ -64,8 +64,11 @@ fn a_target_is_a_name_a_file_or_a_deployment() {
     // Apply, as plan does, takes the key's default when the target names
     // none, and says so first.
     s.run(&["apply", "app[env=prod]"]).success();
-    assert!(s.path("dform.state/app/env=prod/state.json").exists());
-    assert!(!s.path("dform.state/app/env=staging").exists());
+    assert!(
+        s.path("dform.state/stacks.app/env=prod/state.json")
+            .exists()
+    );
+    assert!(!s.path("dform.state/stacks.app/env=staging").exists());
     let r = s.run(&["apply", "app"]).success();
     assert!(
         r.stdout
@@ -73,7 +76,10 @@ fn a_target_is_a_name_a_file_or_a_deployment() {
         "{}",
         r.stdout
     );
-    assert!(s.path("dform.state/app/env=staging/state.json").exists());
+    assert!(
+        s.path("dform.state/stacks.app/env=staging/state.json")
+            .exists()
+    );
 }
 
 #[test]
@@ -255,7 +261,7 @@ fn dash_c_runs_from_a_directory() {
         .run_in("elsewhere", &["-C", "..", "apply", "net"])
         .success();
     assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
-    assert!(s.path("dform.state/net/state.json").exists());
+    assert!(s.path("dform.state/stacks.net/state.json").exists());
     assert!(!s.path("elsewhere/dform.state").exists());
 }
 
@@ -294,7 +300,7 @@ default(k, v) where project_default(k, v)
     let r = s.run(&["apply", "p"]).success();
     assert!(r.stdout.contains("+ x.thing a"), "{}", r.stdout);
     // The default backend, under the project root.
-    assert!(s.path("state/p/state.json").exists());
+    assert!(s.path("state/stacks.p/state.json").exists());
     // A plan file's program takes its project's manifest too.
     s.write(
         "stacks/p.df",
@@ -398,7 +404,7 @@ fn a_stack_table_overrides_the_defaults() {
          stacked(n, k, v) where project_stack(n, k, v)\n",
     );
     s.run(&["apply", "p", "--yes"]).success();
-    assert!(s.path("a/p/state.json").exists());
+    assert!(s.path("a/stacks.p/state.json").exists());
     s.write(
         "dform.toml",
         "[project]\nedition = \"2026\"\n\n[defaults]\nbackend = 'local(\"a/{stack}\")'\n\n[stacks.p]\nbackend = 'local(\"b\")'\n",
@@ -422,7 +428,7 @@ fn a_backend_names_the_key() {
         "[project]\nedition = \"2026\"\n\n[stacks.app]\nbackend = 'local(\"state/{stack}-{env}\")'\n",
     );
     s.run(&["apply", "app", "env=prod"]).success();
-    assert!(s.path("state/app-prod/state.json").exists());
+    assert!(s.path("state/stacks.app-prod/state.json").exists());
     let r = s.run(&["plan", "app", "env=prod"]).success();
     assert_eq!(r.summary(), "stack app is up to date", "{}", r.stdout);
 }
@@ -534,10 +540,14 @@ fn state_show_mv_and_unlock() {
 
     // A lock no one holds is removed, whatever pid it names (a live one
     // here: this test's); a held one is not.
-    let lock = s.path("dform.state/net/state.lock");
+    let lock = s.path("dform.state/stacks.net/state.lock");
     std::fs::write(&lock, format!("{}\n", std::process::id())).unwrap();
     let r = s.run(&["stack", "unlock", "net"]).success();
-    assert!(r.stdout.contains("stack net unlocked"), "{}", r.stdout);
+    assert!(
+        r.stdout.contains("stack stacks.net unlocked"),
+        "{}",
+        r.stdout
+    );
     assert!(!lock.exists());
     std::fs::write(&lock, "999999999\n").unwrap();
     let held = std::fs::File::open(&lock).unwrap();
@@ -666,7 +676,7 @@ fn init_makes_a_project() {
     assert!(s.read("dform.toml").contains("name = \"shop\""));
     assert_eq!(s.read(".gitignore"), "target/\ndform.state/\n");
     s.run(&["apply", "net"]).success();
-    assert!(s.path("dform.state/net/state.json").exists());
+    assert!(s.path("dform.state/stacks.net/state.json").exists());
     let r = s.run(&["init"]).failure();
     assert!(r.stderr.contains("is a project already"), "{}", r.stderr);
 }

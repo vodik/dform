@@ -224,12 +224,12 @@ pub(super) fn say(cli: &Cli, e: &anyhow::Error) {
     }
 }
 
-/// Whether the deployment `name` has been applied and not destroyed since.
-fn applied(cli: &Cli, name: &str) -> bool {
+/// Whether the deployment `d` has been applied and not destroyed since.
+fn applied(cli: &Cli, d: &Dependency) -> bool {
     let Ok(registry) = crate::stack::registry(&cli.root) else {
         return false;
     };
-    let Some(entry) = registry.get(name) else {
+    let Some((_, entry)) = crate::stack::registered(&registry, &d.full, &d.name) else {
         return false;
     };
     let opener = super::open_s3(&cli.root, false);
@@ -316,7 +316,7 @@ impl Tree<'_> {
             .map(|d| (d, cli.cmd.clone(), false))
             .chain(removed.iter().map(|d| (d, destroy.clone(), true)));
         for (d, cmd, gone) in runs {
-            let applied = applied(cli, &d.name);
+            let applied = applied(cli, d);
             let kind = match (gone, applied) {
                 (true, _) => ActionKind::Delete,
                 (false, true) => ActionKind::Update,

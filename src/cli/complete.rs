@@ -94,10 +94,14 @@ impl Complete {
                     None => {
                         out.extend(d.stacks.iter().map(|s| s.name.clone()));
                         let root = project.state_root();
+                        // By its full name's directory (R-200), or its short
+                        // one's before its next apply moves it.
                         for s in d.stacks.iter().filter(|s| !s.keys.is_empty()) {
-                            let Ok(entries) = std::fs::read_dir(root.join(&s.name)) else {
-                                continue;
-                            };
+                            let dirs = [root.join(&s.path), root.join(&s.name)];
+                            let entries = dirs
+                                .iter()
+                                .filter_map(|d| std::fs::read_dir(d).ok())
+                                .flatten();
                             for e in entries.flatten() {
                                 let seg = e.file_name().to_string_lossy().into_owned();
                                 if seg.contains('=') && e.path().join("state.json").exists() {

@@ -32,7 +32,7 @@ fn applied(name: &str) -> Scratch {
 
 /// The entries of kind `kind` in the deployment's audit log.
 fn entries(s: &Scratch, kind: &str) -> Vec<serde_json::Value> {
-    s.read("dform.state/crud_api/state.audit.jsonl")
+    s.read("dform.state/stacks.crud_api/state.audit.jsonl")
         .lines()
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
         .filter(|e| e["kind"] == kind)
@@ -41,7 +41,7 @@ fn entries(s: &Scratch, kind: &str) -> Vec<serde_json::Value> {
 
 fn password(s: &Scratch) -> String {
     let w: serde_json::Value =
-        serde_json::from_str(&s.read("dform.state/crud_api/remote.json")).unwrap();
+        serde_json::from_str(&s.read("dform.state/stacks.crud_api/remote.json")).unwrap();
     w["resources"]["google.sql_user::crud_user"]["attrs"]["password"]
         .as_str()
         .unwrap_or_else(|| panic!("{w}"))
@@ -55,12 +55,12 @@ fn password(s: &Scratch) -> String {
 #[test]
 fn a_missing_key_file_is_refused_not_made_again() {
     let s = applied("custody-missing-key");
-    let state: serde_json::Value = s.json("dform.state/crud_api/state.json");
+    let state: serde_json::Value = s.json("dform.state/stacks.crud_api/state.json");
     let id = state["master"]
         .as_str()
         .unwrap_or_else(|| panic!("{state}"));
     let pw = password(&s);
-    std::fs::remove_file(s.path("dform.state/crud_api/state.key")).unwrap();
+    std::fs::remove_file(s.path("dform.state/stacks.crud_api/state.key")).unwrap();
 
     let r = run(&s, &[], &["plan"]).failure();
     assert!(
@@ -71,7 +71,7 @@ fn a_missing_key_file_is_refused_not_made_again() {
         r.stderr
     );
     assert!(
-        !s.path("dform.state/crud_api/state.key").exists(),
+        !s.path("dform.state/stacks.crud_api/state.key").exists(),
         "a refused plan made a key"
     );
     run(&s, &[], &["apply"]).failure();
@@ -150,9 +150,9 @@ fn passphrase(s: &Scratch) {
 fn a_passphrase_seals_the_master() {
     let s = sealed("custody-passphrase");
     run(&s, &[PASS], &["apply"]).success();
-    assert!(!s.path("dform.state/crud_api/state.key").exists());
-    let record = s.json("dform.state/crud_api/state.master");
-    let state = s.json("dform.state/crud_api/state.json");
+    assert!(!s.path("dform.state/stacks.crud_api/state.key").exists());
+    let record = s.json("dform.state/stacks.crud_api/state.master");
+    let state = s.json("dform.state/stacks.crud_api/state.json");
     assert_eq!(record["id"], state["master"], "{record}");
     let sealed = &record["passphrase"];
     assert_eq!(sealed["kdf"], "scrypt", "{record}");
@@ -180,20 +180,20 @@ fn a_passphrase_seals_the_master() {
 fn the_first_apply_with_the_passphrase_seals_the_key_file() {
     let s = applied("custody-migrate");
     let pw = password(&s);
-    let id = s.json("dform.state/crud_api/state.json")["master"].clone();
+    let id = s.json("dform.state/stacks.crud_api/state.json")["master"].clone();
     passphrase(&s);
     // A plan reads the key file as it is, and says once what the next
     // apply does with it (R-109).
     let r = run(&s, &[PASS], &["plan"]).success();
     assert_eq!(r.summary(), "stack crud_api is up to date", "{}", r.stdout);
-    assert!(s.path("dform.state/crud_api/state.key").exists());
+    assert!(s.path("dform.state/stacks.crud_api/state.key").exists());
     let said = "crud_api: its master is still a key file beside its state; the next apply run \
                 with DFORM_TEST_PASSPHRASE set seals it and removes the file  (dform.toml \
                 [secrets])\n";
     assert_eq!(r.stderr.matches(said).count(), 1, "{}", r.stderr);
     run(&s, &[PASS], &["apply"]).success();
-    assert!(!s.path("dform.state/crud_api/state.key").exists());
-    let record = s.json("dform.state/crud_api/state.master");
+    assert!(!s.path("dform.state/stacks.crud_api/state.key").exists());
+    let record = s.json("dform.state/stacks.crud_api/state.master");
     assert_eq!(record["id"], id, "the same master: {record}");
     assert_eq!(password(&s), pw);
     let c = entries(&s, "custody");
@@ -225,7 +225,7 @@ fn a_stack_names_its_own_custody() {
     let lab = [("LAB_PASSPHRASE", "lab team's")];
     run(&s, &prod, &["apply", "prod"]).success();
     run(&s, &lab, &["apply", "lab"]).success();
-    assert!(s.json("dform.state/prod/state.master")["passphrase"].is_object());
+    assert!(s.json("dform.state/stacks.prod/state.master")["passphrase"].is_object());
     // The lab's passphrase does not open prod's master: prod's is another.
     let r = run(&s, &lab, &["plan", "prod"]).success();
     assert!(

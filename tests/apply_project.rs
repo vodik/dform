@@ -52,11 +52,12 @@ fn apply_with_no_target_applies_every_stack_in_dependency_order() {
     ] {
         assert!(r.stdout.contains(at), "{stack}: {}", r.stdout);
         assert!(
-            s.path(&format!("dform.state/{stack}/state.json")).exists(),
+            s.path(&format!("dform.state/stacks.{stack}/state.json"))
+                .exists(),
             "{stack}"
         );
     }
-    let app = s.read("dform.state/app/remote.json");
+    let app = s.read("dform.state/stacks.app/remote.json");
     assert!(app.contains("10.0.0.0/16"), "{app}");
 
     // Each run confirms on its own: without --yes, a declined first stack
@@ -69,7 +70,7 @@ fn apply_with_no_target_applies_every_stack_in_dependency_order() {
         .output()
         .unwrap();
     assert!(!out.status.success());
-    assert!(!s.path("dform.state/app/state.json").exists());
+    assert!(!s.path("dform.state/stacks.app/state.json").exists());
 
     // A --set no stack declares is an error naming it.
     let r = s.run(&["apply", "--set", "nope=1"]).failure();

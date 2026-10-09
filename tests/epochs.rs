@@ -68,15 +68,15 @@ resource db.secret app {{
 }
 
 fn world(s: &Scratch) -> serde_json::Value {
-    s.json("dform.state/p/remote.json")["resources"].clone()
+    s.json("dform.state/stacks.p/remote.json")["resources"].clone()
 }
 
 fn record(s: &Scratch) -> serde_json::Value {
-    s.json("dform.state/p/state.master")
+    s.json("dform.state/stacks.p/state.master")
 }
 
 fn log(s: &Scratch, kind: &str) -> Vec<serde_json::Value> {
-    s.read("dform.state/p/state.audit.jsonl")
+    s.read("dform.state/stacks.p/state.audit.jsonl")
         .lines()
         .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
         .filter(|e| e["kind"] == kind)
@@ -105,7 +105,7 @@ fn a_cycle_changes_nothing_and_a_rotation_moves_one_secret() {
     assert_eq!(rec["earlier"][0]["id"], first, "{rec}");
     assert_ne!(rec["id"], first);
     assert_eq!(
-        s.json("dform.state/p/state.json")["master"],
+        s.json("dform.state/stacks.p/state.json")["master"],
         rec["id"],
         "state is applied with the new master"
     );

@@ -242,7 +242,7 @@ resource net.subnet a {
     assert!(!s.path("dform.state").exists());
     let registry: serde_json::Value =
         serde_json::from_str(&s.read("infra/dform.state/stacks.json")).unwrap();
-    let state = registry["net"].as_str().unwrap();
+    let state = registry["stacks.net"].as_str().unwrap();
     assert!(std::path::Path::new(state).is_absolute(), "{registry}");
 
     let want = "+ net.subnet[\"a\"]\n  cidr = \"10.0.0.0/16\"\n";

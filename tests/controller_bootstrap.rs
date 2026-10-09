@@ -10,7 +10,7 @@ use common::{Run, Scratch, controller_log};
 use dform_core::store::{S3Spec, Store};
 use dform_s3::S3Store;
 
-const HANDED: &str = "dform.state/bootstrap/k8s/dform-system/workload";
+const HANDED: &str = "dform.state/stacks.bootstrap/k8s/dform-system/workload";
 
 /// A copy of the project in a scratch directory.
 fn demo(name: &str) -> Scratch {
@@ -157,7 +157,7 @@ fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
         last.stdout
     );
     assert!(!last.stdout.contains("apply: complete"), "{}", last.stdout);
-    let world = s.read("dform.state/bootstrap/remote.json");
+    let world = s.read("dform.state/stacks.bootstrap/remote.json");
     assert!(world.contains("\"dform-controller\""), "{world}");
 }
 
@@ -167,7 +167,7 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
     // The network and the cluster, then the node pools and the namespace,
     // then dform itself, each tick planned as the one before reports.
     s.run(&["apply", "bootstrap"]).success();
-    let world = s.read("dform.state/bootstrap/remote.json");
+    let world = s.read("dform.state/stacks.bootstrap/remote.json");
     assert!(world.contains("\"dform-controller\""), "{world}");
     assert!(
         world.contains("\"run\",\n") && world.contains("\"workload\""),
@@ -226,9 +226,9 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
     for k in ["state.json", "state.master", "controller.json"] {
         assert!(keys.iter().any(|x| x == k), "{k} in {keys:?}");
     }
-    let world = "dform.state/workload/remote.json";
+    let world = "dform.state/stacks.workload/remote.json";
     assert!(s.read(world).contains("gcr.io/renfry/web:1.0"));
-    assert!(!s.path("dform.state/workload/state.json").exists());
+    assert!(!s.path("dform.state/stacks.workload/state.json").exists());
     // A batch apply of a handed-over stack is refused; plan still reads it.
     let r = b.run(&s, &["apply", "workload"]).failure();
     assert!(
@@ -361,10 +361,10 @@ fn handover_moves_applied_state_to_a_local_backend() {
         controller(&s).last().unwrap(),
         "stack workload is up to date"
     );
-    assert!(s.path("dform.state/workload/state.json").exists());
+    assert!(s.path("dform.state/stacks.workload/state.json").exists());
     s.run(&["stack", "handover", "workload", "--to", "local(\"moved\")"])
         .success();
-    assert!(!s.path("dform.state/workload").exists());
+    assert!(!s.path("dform.state/stacks.workload").exists());
     assert!(s.path("moved/state.json").exists());
     // Nothing to do from the new place: the state and the memo moved too.
     assert_eq!(

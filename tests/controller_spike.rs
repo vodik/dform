@@ -10,7 +10,7 @@ use std::process::Command;
 const WORKLOAD: &str = include_str!("../examples/bootstrap/stacks/workload.df");
 /// The workload's table of examples/bootstrap/dform.toml.
 const MANIFEST: &str = "[project]\nedition = \"2026\"\n\n[stacks.workload]\napprovals = 'jwks_file(\"approvers.jwks.json\")'\n";
-const WORLD: &str = "dform.state/workload/remote.json";
+const WORLD: &str = "dform.state/stacks.workload/remote.json";
 
 fn release(s: &Scratch, image: &str) {
     s.write("data/releases.df", &format!("\n\nrelease(\"{image}\")\n"));
@@ -179,7 +179,7 @@ fn an_input_change_reconciles_held_drift() {
 /// The published digest of a held approval.
 fn pending_digest(s: &Scratch) -> String {
     let doc: serde_json::Value =
-        serde_json::from_str(&s.read("dform.state/workload/approval-pending.json")).unwrap();
+        serde_json::from_str(&s.read("dform.state/stacks.workload/approval-pending.json")).unwrap();
     doc["digest"].as_str().unwrap().to_string()
 }
 
@@ -250,7 +250,7 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
     );
     assert!(s.read(WORLD).contains("k8s.deployment"));
     assert!(
-        !s.path("dform.state/workload/approval-pending.json")
+        !s.path("dform.state/stacks.workload/approval-pending.json")
             .exists()
     );
     // The next release is another plan: held again, the old token is for
@@ -268,12 +268,12 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
         .trim()
         .trim_start_matches("approval(\"")
         .trim_end_matches("\")");
-    s.write("dform.state/workload/approvals/alice.token", token);
+    s.write("dform.state/stacks.workload/approvals/alice.token", token);
     let got = once(&s, &prod);
     assert_eq!(
         got[..2],
         [
-            "event approval (dform.state/workload/approvals changed)".to_string(),
+            "event approval (dform.state/stacks.workload/approvals changed)".to_string(),
             "tick 1: plan: 1 change (1 update) over 1 tick, 1 approval".to_string(),
         ]
     );

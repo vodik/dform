@@ -241,7 +241,7 @@ impl Plan {
             &crate::stack::secret_output_types(&evaluator.program),
         );
         if !unheld.is_empty() && cx.cli.world.is_none() {
-            let readers = readers_of(&cx.root, &cx.deployment, &open_s3(&cx.root, false))?;
+            let readers = readers_of(&cx.root, &cx.stored, &open_s3(&cx.root, false))?;
             held.print(&grants_text(&unheld, &readers));
         }
         // The digest to approve, when a change is held for an approval

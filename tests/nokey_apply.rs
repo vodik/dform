@@ -38,7 +38,7 @@ fn applied(name: &str) -> Scratch {
 }
 
 fn world(s: &Scratch) -> serde_json::Value {
-    s.json("dform.state/crud_api/remote.json")["resources"].clone()
+    s.json("dform.state/stacks.crud_api/remote.json")["resources"].clone()
 }
 
 fn password(s: &Scratch) -> String {
@@ -211,7 +211,7 @@ fn state_holds_no_unkeyed_digest() {
     let s = applied("nokey-digests");
     label(&s);
     run(&s, &[], &["apply"]).success();
-    let st = s.json("dform.state/crud_api/state.json");
+    let st = s.json("dform.state/stacks.crud_api/state.json");
     for (k, e) in st["resources"].as_object().unwrap() {
         for (p, d) in e["written"].as_object().into_iter().flatten() {
             assert!(
@@ -284,7 +284,7 @@ resource compute.vm a {{
         "{}",
         r.stderr
     );
-    let w = s.json("dform.state/p/remote.json");
+    let w = s.json("dform.state/stacks.p/remote.json");
     assert!(w["resources"]["compute.vm::b"].is_object(), "{w}");
     assert_eq!(w["resources"]["compute.vm::a"]["attrs"]["weight"], 1, "{w}");
     run(&s, &[PASS, NK], &["apply", "p"]).success();
@@ -299,7 +299,7 @@ resource compute.vm a {{
 #[test]
 fn a_secret_changed_outside_dform_is_drift_unknown_without_the_master() {
     let s = applied("nokey-drift");
-    let path = "dform.state/crud_api/remote.json";
+    let path = "dform.state/stacks.crud_api/remote.json";
     let mut w = s.json(path);
     w["resources"]["k8s.secret::db_conn"]["attrs"]["stringData"]["PGPASSWORD"] =
         "changed-elsewhere".into();

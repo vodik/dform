@@ -62,7 +62,10 @@ fn dform_df_plans_prod_after_staging_as_creates() {
     let file = repo().join("examples/demo/stacks/dform.df");
     let file = file.to_str().unwrap();
     s.run(&["apply", file, "env=staging"]).success();
-    assert!(s.path("dform.state/dform/env=staging/state.json").exists());
+    assert!(
+        s.path("dform.state/stacks.dform/env=staging/state.json")
+            .exists()
+    );
     let prod = s.run(&["plan", file, "env=prod"]).success();
     let summary = prod.summary();
     assert!(
@@ -278,10 +281,10 @@ fn rekey_lists_what_the_key_renames_and_moves_the_state() {
         "{}",
         r.stdout
     );
-    assert!(!s.path("dform.state/app/env=staging").exists());
-    assert!(s.path("dform.state/app/env=stg/state.json").exists());
+    assert!(!s.path("dform.state/stacks.app/env=staging").exists());
+    assert!(s.path("dform.state/stacks.app/env=stg/state.json").exists());
     let registry = s.read("dform.state/stacks.json");
-    assert!(registry.contains("\"app[env=stg]\""), "{registry}");
+    assert!(registry.contains("\"stacks.app[env=stg]\""), "{registry}");
     assert!(!registry.contains("env=staging"), "{registry}");
     let r = s
         .run(&["plan", "--why=none", "stacks/app.df", "env=stg"])
@@ -343,7 +346,7 @@ fn rekey_moves_the_state_from_before_the_stack_was_keyed() {
     s.run(&["apply", "stacks/app.df"]).success();
     s.write("stacks/app.df", APP);
     s.run(&["stack", "rekey", "app", "env=staging"]).success();
-    assert!(!s.path("dform.state/app/state.json").exists());
+    assert!(!s.path("dform.state/stacks.app/state.json").exists());
     let r = s.run(&["plan", "stacks/app.df"]).success();
     assert_eq!(r.summary(), "stack app is up to date", "{}", r.stdout);
 }

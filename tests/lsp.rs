@@ -1349,7 +1349,10 @@ fn an_s3_deployment_is_read_with_credentials() {
     };
     let (ok, text) = dform(&["apply", "--yes", "p"]);
     assert!(ok, "{text}");
-    assert!(!s.path("dform.state/p/state.json").exists(), "{text}");
+    assert!(
+        !s.path("dform.state/stacks.p/state.json").exists(),
+        "{text}"
+    );
     // The resource goes; the fact names it by its address.
     let gone = net
         .replace(vpc, "")

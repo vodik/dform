@@ -47,7 +47,7 @@ fn git(s: &Scratch, args: &[&str]) {
 
 fn subnets(s: &Scratch) -> usize {
     let st: serde_json::Value =
-        serde_json::from_str(&s.read("dform.state/net/state.json")).unwrap();
+        serde_json::from_str(&s.read("dform.state/stacks.net/state.json")).unwrap();
     st["resources"]
         .as_object()
         .unwrap()

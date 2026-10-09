@@ -79,7 +79,7 @@ fn token(s: &Scratch, name: &str, digest: &str, extra: &[&str]) {
 }
 
 fn world(s: &Scratch) -> String {
-    s.read("dform.state/approvals/env=prod/remote.json")
+    s.read("dform.state/stacks.approvals/env=prod/remote.json")
 }
 
 #[test]

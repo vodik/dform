@@ -120,7 +120,7 @@ impl<'a> Project<'a> {
 
     /// The deployment `dform[env=staging]`'s objects.
     fn store(&self) -> S3Store {
-        self.bucket("dform/env=staging")
+        self.bucket("stacks.dform/env=staging")
     }
 
     /// `s3(...)` of `rel` in the project's prefix, as a backend term.
@@ -278,7 +278,7 @@ fn plan_and_apply_of_the_demo_keep_state_in_the_bucket() {
             "{}: {keys:?}",
             t.what
         );
-        let local = p.s.path("dform.state/dform/env=staging");
+        let local = p.s.path("dform.state/stacks.dform/env=staging");
         assert!(local.join("remote.json").exists(), "{}", t.what);
         for f in ["state.json", "state.key", "state.audit.jsonl", "state.lock"] {
             assert!(!local.join(f).exists(), "{}: {f} is local", t.what);
@@ -497,7 +497,7 @@ fn the_controller_runs_an_s3_stack() {
             t.what
         );
         assert!(
-            !p.s.path("dform.state/dform/env=staging/controller.json")
+            !p.s.path("dform.state/stacks.dform/env=staging/controller.json")
                 .exists(),
             "{}",
             t.what
@@ -536,7 +536,7 @@ fn rekey_moves_an_s3_deployment_in_the_bucket() {
             .success();
         assert!(
             r.stdout.contains(&format!(
-                "stack dform[env=staging] rekeyed to dform[env=dev]: s3://{}/{}/dform/env=dev",
+                "stack dform[env=staging] rekeyed to dform[env=dev]: s3://{}/{}/stacks.dform/env=dev",
                 t.bucket, p.prefix
             )),
             "{}: {}",
@@ -549,7 +549,7 @@ fn rekey_moves_an_s3_deployment_in_the_bucket() {
             "{}: nothing is left behind",
             t.what
         );
-        let moved = p.bucket("dform/env=dev");
+        let moved = p.bucket("stacks.dform/env=dev");
         let keys = moved.list("").unwrap();
         for k in ["state.json", "state.master", "state.audit/000001.jsonl"] {
             assert!(keys.iter().any(|x| x == k), "{}: {k} in {keys:?}", t.what);
@@ -557,8 +557,11 @@ fn rekey_moves_an_s3_deployment_in_the_bucket() {
         let now: serde_json::Value =
             serde_json::from_slice(&moved.get(STATE).unwrap().unwrap().bytes).unwrap();
         assert_eq!(now["resources"], before["resources"], "{}", t.what);
-        assert!(p.s.path("dform.state/dform/env=dev/remote.json").exists());
-        assert!(!p.s.path("dform.state/dform/env=staging").exists());
+        assert!(
+            p.s.path("dform.state/stacks.dform/env=dev/remote.json")
+                .exists()
+        );
+        assert!(!p.s.path("dform.state/stacks.dform/env=staging").exists());
         let log = p.run(&["log", "verify", "dform[env=dev]"]).success();
         assert!(
             log.stdout.contains("the chain holds"),
@@ -583,9 +586,9 @@ fn handover_to_a_bucket_seals_a_key_file() {
     let local = toml.split("\n[defaults]").next().unwrap().to_string();
     p.s.write("dform.toml", &local);
     p.run(APPLY).success();
-    let key = p.s.path("dform.state/dform/env=staging/state.key");
+    let key = p.s.path("dform.state/stacks.dform/env=staging/state.key");
     assert!(key.exists());
-    let id = p.s.json("dform.state/dform/env=staging/state.json")["master"].clone();
+    let id = p.s.json("dform.state/stacks.dform/env=staging/state.json")["master"].clone();
     let to = p.term("handed");
     let r = p
         .run(&["stack", "handover", "dform[env=staging]", "--to", &to])
@@ -761,7 +764,7 @@ fn rotate_forgets_an_answer_in_the_bucket() {
         });
         p.run(&["apply", "p"]).success();
         let state = |p: &Project| {
-            String::from_utf8(p.bucket("p").get(STATE).unwrap().unwrap().bytes).unwrap()
+            String::from_utf8(p.bucket("stacks.p").get(STATE).unwrap().unwrap().bytes).unwrap()
         };
         assert!(state(&p).contains("pw-first"), "{}", t.what);
         let r = p.run(&["secrets", "rotate", "p", "app-pw"]).success();
@@ -805,14 +808,18 @@ fn another_stack_reads_an_s3_stacks_outputs() {
         });
         p.run(&["apply", "net"]).success();
         let published: serde_json::Value = serde_json::from_slice(
-            &p.bucket("net")
+            &p.bucket("stacks.net")
                 .get("outputs.json")
                 .unwrap()
                 .expect("published outputs")
                 .bytes,
         )
         .unwrap();
-        assert_eq!(published["deployment"], "net", "{}: {published}", t.what);
+        assert_eq!(
+            published["deployment"], "stacks.net",
+            "{}: {published}",
+            t.what
+        );
         let r = p.run(&["plan", "--why=none", "app"]).success();
         assert!(
             r.stdout.contains(
@@ -854,7 +861,7 @@ fn a_stale_holder_makes_no_provider_call() {
         wait_for("B's lease", Duration::from_secs(30), || {
             p.state()["fence"] == 2
         });
-        let world = p.s.path("dform.state/dform/env=staging/remote.json");
+        let world = p.s.path("dform.state/stacks.dform/env=staging/remote.json");
         let objects = || -> usize {
             std::fs::read(&world)
                 .ok()
@@ -1005,12 +1012,12 @@ fn the_bucket_never_holds_the_master_nor_a_derived_secret() {
         let p = Project::of(t, "custody", setup);
         p.run(&["apply", "p"]).success();
         let world: serde_json::Value =
-            serde_json::from_str(&p.s.read("dform.state/p/remote.json")).unwrap();
+            serde_json::from_str(&p.s.read("dform.state/stacks.p/remote.json")).unwrap();
         let pw = world["resources"]["db.secret::v"]["attrs"]["password"]
             .as_str()
             .unwrap_or_else(|| panic!("{}: {world}", t.what))
             .to_string();
-        let store = p.bucket("p");
+        let store = p.bucket("stacks.p");
         let keys = store.list("").unwrap();
         assert!(
             !keys.iter().any(|k| k == "state.key"),
@@ -1075,7 +1082,7 @@ fn the_bucket_never_holds_the_master_nor_a_derived_secret() {
             r.stderr
         );
         assert!(
-            bare.bucket("p")
+            bare.bucket("stacks.p")
                 .list("")
                 .unwrap()
                 .iter()

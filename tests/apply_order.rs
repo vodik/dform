@@ -62,11 +62,17 @@ fn apply_applies_what_the_stack_reads_first() {
         "{}",
         r.stdout
     );
-    assert!(s.path("dform.state/net/env=prod/state.json").exists());
-    assert!(s.path("dform.state/app/env=prod/state.json").exists());
+    assert!(
+        s.path("dform.state/stacks.net/env=prod/state.json")
+            .exists()
+    );
+    assert!(
+        s.path("dform.state/stacks.app/env=prod/state.json")
+            .exists()
+    );
     // Nothing that reads app, nor another deployment of net.
-    assert!(!s.path("dform.state/web").exists());
-    assert!(!s.path("dform.state/net/env=dev").exists());
+    assert!(!s.path("dform.state/stacks.web").exists());
+    assert!(!s.path("dform.state/stacks.net/env=dev").exists());
 
     // Through two stacks: web reads app, which reads net.
     let s = project("order-web");
@@ -78,7 +84,7 @@ fn apply_applies_what_the_stack_reads_first() {
         "{}",
         r.stdout
     );
-    let world = s.read("dform.state/web/remote.json");
+    let world = s.read("dform.state/stacks.web/remote.json");
     assert!(world.contains("10.0.0.0/16"), "{world}");
 }
 
@@ -97,7 +103,7 @@ fn a_failed_dependency_stops_the_apply() {
         "{}",
         r.stdout
     );
-    assert!(!s.path("dform.state/app").exists());
+    assert!(!s.path("dform.state/stacks.app").exists());
 }
 
 #[test]
@@ -207,7 +213,7 @@ fn a_defaulted_key_orders_the_deployment_it_names() {
         "{}",
         r.stdout
     );
-    assert!(s.path("dform.state/net/env=dev/state.json").exists());
+    assert!(s.path("dform.state/stacks.net/env=dev/state.json").exists());
 }
 
 /// A deployment named by a key the program computes (from a relation, not

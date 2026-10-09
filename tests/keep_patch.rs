@@ -57,7 +57,7 @@ resource compute.vm a {{
     };
     s.write("stacks/p.df", &program(1));
     run(&s, &[pass()], &["apply", "p"]).success();
-    let world = || s.json("dform.state/p/remote.json")["resources"]["compute.vm::a"].clone();
+    let world = || s.json("dform.state/stacks.p/remote.json")["resources"]["compute.vm::a"].clone();
     let user_data = world()["attrs"]["user_data"].clone();
     assert!(
         user_data

@@ -145,7 +145,7 @@ fn a_rotation_is_an_update_of_the_role() {
     let db = &w.databases["synapse"];
     assert_eq!((db.owner.as_str(), db.collate.as_str()), ("synapse", "C"));
     // State keeps the password's keyed digest, never it.
-    let st = s.json("dform.state/p/state.json");
+    let st = s.json("dform.state/stacks.p/state.json");
     let written = &st["resources"]["postgres.role::synapse"]["written"]["password"];
     assert!(
         written

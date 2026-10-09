@@ -29,7 +29,7 @@ fn yes_applies_a_tick_the_plan_could_not_name() {
         r.stdout
     );
     assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
-    let state = s.read("dform.state/tour/env=prod/state.json");
+    let state = s.read("dform.state/stacks.tour/env=prod/state.json");
     assert!(state.contains("iam.policy"), "{state}");
 }
 
@@ -44,12 +44,12 @@ fn a_plan_file_stops_before_a_tick_the_plan_could_not_name() {
         .success();
     let r = s.run(&["apply", "plan.json"]).stopped();
     assert!(r.stderr.contains(STOPPED), "{}", r.stderr);
-    let state = s.read("dform.state/tour/env=prod/state.json");
+    let state = s.read("dform.state/stacks.tour/env=prod/state.json");
     assert!(state.contains("db.postgres"), "{state}");
     assert!(!state.contains("iam.policy"), "{state}");
     let st: serde_json::Value = serde_json::from_str(&state).unwrap();
     assert!(st["in_flight"].is_null(), "{st}");
-    let audit = s.read("dform.state/tour/env=prod/state.audit.jsonl");
+    let audit = s.read("dform.state/stacks.tour/env=prod/state.audit.jsonl");
     let end: serde_json::Value = serde_json::from_str(audit.lines().last().unwrap()).unwrap();
     assert_eq!(end["kind"], "apply_end", "{end}");
     assert_eq!(end["result"], "stopped", "{end}");

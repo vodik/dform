@@ -1438,7 +1438,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 || !secret_types.is_empty()
                 || cx.dep.store().get(store::OUTPUTS)?.is_some())
         {
-            let published = crate::stack::Published::new(deployment, &outputs);
+            let published = crate::stack::Published::new(&cx.stored, &outputs);
             cx.dep.publish(&published.bytes())?;
         }
         // Every deployment of a keyed stack is registered.
@@ -1449,7 +1449,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
         {
             crate::stack::register(
                 root,
-                deployment,
+                &cx.stored,
                 &self.located.location,
                 stack_cfg.bootstrap,
             )?;
@@ -1471,7 +1471,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
         let (deployment, master, root) = (self.deployment(), &cx.master, &cx.root);
         let readers = match secret_types.is_empty() || cx.cli.world.is_some() {
             true => Vec::new(),
-            false => readers_of(root, deployment, &open_s3(root, false))?,
+            false => readers_of(root, &cx.stored, &open_s3(root, false))?,
         };
         let sealing = std::cell::RefCell::new(None);
         // The same value to the same reader seals the same: the published
@@ -1485,7 +1485,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
             let plain = crate::approval::canonical_json(v);
             for (r, public) in &readers {
                 let Some(public) = public else { continue };
-                let label = sealed_label(deployment, path, r);
+                let label = sealed_label(&cx.stored, path, r);
                 match crate::custody::seal_to(public, &label, plain.as_bytes(), seed.as_ref()) {
                     Ok(b) => {
                         out.insert(r.clone(), b);

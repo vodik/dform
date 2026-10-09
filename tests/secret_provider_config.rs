@@ -148,7 +148,7 @@ fn a_provider_configured_from_a_secret_applies_at_tick_two_and_the_bytes_stay_in
     }
     // The audit log says the provider was configured, by its settings'
     // keys.
-    let audit = s.read("dform.state/p/state.audit.jsonl");
+    let audit = s.read("dform.state/stacks.p/state.audit.jsonl");
     let configured: Vec<serde_json::Value> = audit
         .lines()
         .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())

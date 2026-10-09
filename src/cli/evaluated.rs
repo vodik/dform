@@ -138,6 +138,7 @@ impl Objects {
                 world: cli.world.clone(),
                 inventory: cli.inventory.clone(),
                 objects_only: cli.cmd.objects_only(),
+                migrate: hook.is_some() || matches!(cli.cmd, Cmd::Apply(_)),
             },
             &open_s3(&root, writes),
             &mut Watch::new(hook.as_deref_mut(), &cli.cmd),
@@ -163,6 +164,16 @@ impl Objects {
             manifest.map_or(crate::audit::SINK_TIMEOUT, |m| m.audit_sink_timeout()),
             manifest.is_some_and(|m| m.audit_sink_all()),
         );
+        // Its storage moved from its short name (R-200): said once, and
+        // logged where it now is.
+        if let Some(old) = &located.renamed {
+            let renamed = format!("{old} → {}", located.stored);
+            eprintln!("renamed storage {renamed}");
+            audit.append(
+                "renamed",
+                serde_json::json!({ "storage": renamed, "who": crate::audit::who() }),
+            )?;
+        }
         Ok(Objects {
             cli,
             located,
@@ -210,6 +221,9 @@ pub(super) struct Context {
     pub(super) root: PathBuf,
     /// The deployment, as the user writes it.
     pub(super) deployment: String,
+    /// Its full name (R-200): what the registry, its published outputs
+    /// and the grants of secret outputs name it by.
+    pub(super) stored: String,
     pub(super) dep: store::Deployment,
     pub(super) audit: crate::audit::Log,
     pub(super) entries: Entries,
@@ -525,6 +539,7 @@ impl Context {
             entries: Entries::new(audit.clone()),
             audit,
             deployment,
+            stored: located.stored.clone(),
             saved,
             writes,
             mixing,
@@ -563,12 +578,12 @@ impl Context {
                 read.push(p.over(name, was));
             }
         }
-        let (opened, unsealed) = open_sealed(&mut read, &self.deployment, &self.master);
+        let (opened, unsealed) = open_sealed(&mut read, &self.stored, &self.master);
         if let (Cmd::Apply(_), false, None) = (&self.cli.cmd, unsealed.is_empty(), &self.cli.world)
         {
             crate::stack::register(
                 &self.root,
-                &self.deployment,
+                &self.stored,
                 &located.location,
                 located.loaded.cfg.bootstrap,
             )?;

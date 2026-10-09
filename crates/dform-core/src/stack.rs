@@ -399,13 +399,37 @@ pub fn escape(v: &str) -> String {
     out
 }
 
-/// The directory of the deployment named `name` (`app` or `app[env=prod]`,
-/// as [`Instance::name`] prints it) under the state root.
+/// The directory of the deployment named `name` (`stacks.app` or
+/// `stacks.app[env=prod]`, as [`Instance::full_name`] prints it; a short
+/// name's, its storage before R-200) under the state root.
 pub fn instance_dir(root: &Path, name: &str) -> PathBuf {
     match name.strip_suffix(']').and_then(|n| n.split_once('[')) {
         Some((stack, seg)) => root.join(stack).join(seg),
         None => root.join(name),
     }
+}
+
+/// The name a program of the project reads the deployment stored as
+/// `name` by: its stack's short name and its key, `platform[env=lab]`
+/// for `stacks.platform[env=lab]` (a short name is its own).
+pub fn short_of(name: &str) -> String {
+    let (stack, key) = match name.find('[') {
+        Some(i) => name.split_at(i),
+        None => (name, ""),
+    };
+    let stem = stack.rsplit_once('.').map_or(stack, |(_, s)| s);
+    format!("{stem}{key}")
+}
+
+/// The registry's entry of the deployment `full` (`stacks.app[env=prod]`),
+/// else of its short name `short`, its key before R-200's full names:
+/// the key it is under, and the entry.
+pub fn registered<'a>(
+    reg: &'a BTreeMap<String, Entry>,
+    full: &str,
+    short: &str,
+) -> Option<(&'a String, &'a Entry)> {
+    reg.get_key_value(full).or_else(|| reg.get_key_value(short))
 }
 
 /// The deployment a run is of: the stack, and each key's value as this
@@ -757,11 +781,14 @@ pub fn register(root: &Path, stack: &str, state: &Location, bootstrap: bool) -> 
     save_registry(root, r)
 }
 
-/// The backend a stack was handed over to, and where its state now is.
-pub fn handed_over(root: &Path, stack: &str) -> Result<Option<(String, Location)>> {
-    Ok(registry(root)?
-        .remove(stack)
-        .and_then(|e| Some((e.backend?, e.state))))
+/// The backend a deployment (`full`, else by its short name `short`) was
+/// handed over to, and where its state now is.
+pub fn handed_over(root: &Path, full: &str, short: &str) -> Result<Option<(String, Location)>> {
+    let reg = registry(root)?;
+    Ok(
+        registered(&reg, full, short)
+            .and_then(|(_, e)| Some((e.backend.clone()?, e.state.clone()))),
+    )
 }
 
 /// Where the mock's world file of a deployment at `loc` is: in its
@@ -775,6 +802,7 @@ pub fn world_file(loc: &Location, home: &Path) -> PathBuf {
 }
 
 /// One deployment's place for a move: its location, and its world file.
+#[derive(Debug, Clone)]
 pub struct Place {
     pub location: Location,
     pub world: PathBuf,
@@ -910,7 +938,7 @@ pub fn handover(
                         .join(", ")
                 ),
             };
-            if boot == stack {
+            if short_of(boot) == short_of(stack) {
                 bail!("handover {stack}: a bootstrap stack stays batch and is never handed over");
             }
             let Location::Local(dir) = &e.state else {
@@ -923,7 +951,7 @@ pub fn handover(
             Location::Local(dir.join("k8s").join(key))
         }
     };
-    if reg.get(stack).is_some_and(|e| e.bootstrap) {
+    if registered(&reg, stack, &short_of(stack)).is_some_and(|(_, e)| e.bootstrap) {
         bail!("handover {stack}: a bootstrap stack stays batch and is never handed over");
     }
     if target == from.location {
@@ -937,6 +965,8 @@ pub fn handover(
     let mut saved = None;
     transfer(&what, from, &to_place, s3, times, || {
         let mut reg = reg;
+        // Registered by its short name before R-200: by its full one now.
+        reg.remove(&short_of(stack));
         let state = absolute(&target)?;
         reg.insert(
             stack.to_string(),
@@ -964,9 +994,10 @@ pub fn rekey(
     s3: OpenS3,
     times: crate::store::LeaseTimes,
 ) -> Result<Location> {
-    let (old, new) = (from.name(), to.name());
+    let (old, new) = (from.full_name(), to.full_name());
     let reg = registry(root)?;
-    if let Some(b) = reg.get(&old).and_then(|e| e.backend.clone()) {
+    let key = registered(&reg, &old, &from.name()).map(|(k, _)| k.clone());
+    if let Some(b) = key.as_ref().and_then(|k| reg.get(k)?.backend.clone()) {
         bail!(
             "rekey {old}: it was handed over to {b}; its state is not at {}",
             from_place.location
@@ -982,7 +1013,7 @@ pub fn rekey(
     let what = format!("rekey {old} to {new}");
     transfer(&what, from_place, to_place, s3, times, || {
         let mut reg = reg;
-        if let Some(e) = reg.remove(&old) {
+        if let Some(e) = key.and_then(|k| reg.remove(&k)) {
             reg.insert(
                 new.clone(),
                 Entry {
@@ -996,6 +1027,60 @@ pub fn rekey(
         Ok(())
     })?;
     absolute(&to_place.location)
+}
+
+/// A deployment stored under its short name, its storage before R-200's
+/// full names (`dform.state/platform/env=lab`, the registry's
+/// `platform[env=lab]`): that name, and where its objects are.
+#[derive(Debug, Clone)]
+pub struct Legacy {
+    pub name: String,
+    pub place: Place,
+}
+
+/// Move the storage of the deployment `legacy` holds to its full name
+/// `new` at `to` (R-200): its objects copied, the registry's entry renamed,
+/// then the old objects deleted, under the old place's lock (a bucket's
+/// lease), as [`transfer`] moves them; where the place is the same (a
+/// backend that does not name the stack, a handed-over one) only the
+/// registry's entry is renamed. The target must hold none of a
+/// deployment's objects.
+pub fn rename_storage(
+    root: &Path,
+    legacy: &Legacy,
+    (new, to): (&str, &Place),
+    s3: OpenS3,
+    times: crate::store::LeaseTimes,
+) -> Result<()> {
+    let old = legacy.name.as_str();
+    let rename = |state: Option<Location>| -> Result<()> {
+        let mut reg = registry(root)?;
+        let Some(mut e) = reg.remove(old) else {
+            return Ok(());
+        };
+        if let Some(state) = state.filter(|_| e.backend.is_none()) {
+            e.state = absolute(&state)?;
+        }
+        reg.insert(new.to_string(), e);
+        save_registry(root, reg)
+    };
+    if legacy.place.location == to.location {
+        return rename(None);
+    }
+    let what = format!("rename the storage of {old} to {new}");
+    transfer(&what, &legacy.place, to, s3, times, || {
+        rename(Some(to.location.clone()))
+    })?;
+    // The stack's directory under the state root, once its last
+    // deployment moved.
+    if let Location::Local(dir) = &legacy.place.location
+        && let Some(parent) = dir.parent()
+        && parent != root
+        && parent.starts_with(root)
+    {
+        let _ = fs::remove_dir(parent);
+    }
+    Ok(())
 }
 
 enum Target {
@@ -1317,8 +1402,13 @@ impl Planned {
                 }
             }
         }
+        // A sealed output's label names the producer as it published it.
+        let deployment = match was.deployment.is_empty() {
+            true => self.full.clone(),
+            false => was.deployment.clone(),
+        };
         read.published = Some(Published {
-            deployment: name.to_string(),
+            deployment,
             outputs: self.outputs.known.clone(),
             pending,
             secret,
@@ -1682,8 +1772,10 @@ fn outputs_digest(bytes: Option<&[u8]>) -> String {
 }
 
 /// Read the outputs a deployment published at `loc`; `name` is the
-/// reader's name of it, `own` the project's (checked against the object).
-fn read_published(loc: &Location, s3: OpenS3, name: &str, own: &str) -> Result<Read> {
+/// reader's name of it, `own` the names its project gives it (checked
+/// against the object): its full name, and its short one, which an
+/// object published before R-200's full names says.
+fn read_published(loc: &Location, s3: OpenS3, name: &str, own: &[&str]) -> Result<Read> {
     let store = loc.open(s3)?;
     let at = store.locate(crate::store::OUTPUTS);
     let Some(o) = store.get(crate::store::OUTPUTS)? else {
@@ -1698,11 +1790,12 @@ fn read_published(loc: &Location, s3: OpenS3, name: &str, own: &str) -> Result<R
     };
     let p: Published =
         serde_json::from_slice(&o.bytes).with_context(|| format!("parse the outputs {at}"))?;
-    if p.deployment != own {
+    if !own.contains(&p.deployment.as_str()) {
         bail!(
-            "the outputs of {name}: {at} holds the outputs of {}, not {own}; check the backend \
+            "the outputs of {name}: {at} holds the outputs of {}, not {}; check the backend \
              it was read through",
-            p.deployment
+            p.deployment,
+            own.first().copied().unwrap_or(name)
         );
     }
     Ok(Read {
@@ -1719,45 +1812,57 @@ fn read_published(loc: &Location, s3: OpenS3, name: &str, own: &str) -> Result<R
 }
 
 /// Where a remote project's deployment `name` (`platform.cluster[env=prod]`)
-/// is, from `[remotes] platform = { backend = "..." }` (`remotes`, name ->
-/// backend term). The term's `{stack}` is the stack's name (`cluster`);
-/// without one the stacks are under it by name, as under a state root. A
-/// local directory is relative to the project root `project`. `None`: no
-/// remote is named so.
+/// is, from `[packages] platform = { path = ".." }` (`remotes`, name ->
+/// the package's backend and root), and the names its object may say:
+/// first where it is by its full name in the package
+/// (`stacks.cluster[env=prod]`, R-200: the term's `{stack}` is that path;
+/// without one the stacks are under it by it, as under a state root),
+/// then, where that differs, by its short name, its storage before
+/// R-200's full names. A local directory is relative to the project root
+/// `project`. Empty: no remote is named so.
 pub fn remote_location(
     name: &str,
-    remotes: &BTreeMap<String, String>,
+    remotes: &BTreeMap<String, crate::project::Remote>,
     project: &Path,
-) -> Result<Option<(Location, String)>> {
+) -> Result<Vec<(Location, String)>> {
     let (base, seg) = match name.strip_suffix(']').and_then(|n| n.split_once('[')) {
         Some((b, s)) => (b, Some(s)),
         None => (name, None),
     };
-    let Some((remote, stack)) = base.split_once('.') else {
-        return Ok(None);
+    let Some((remote, stem)) = base.split_once('.') else {
+        return Ok(Vec::new());
     };
-    let Some(term) = remotes.get(remote) else {
-        return Ok(None);
+    let Some(r) = remotes.get(remote) else {
+        return Ok(Vec::new());
     };
+    let term = &r.backend;
     let templated = term.contains("{stack}");
-    let b = term
-        .replace("{stack}", stack)
-        .parse::<Backend>()
-        .with_context(|| format!("[remotes] {remote}: backend {term}"))?;
-    let loc = match b {
-        Backend::Local(dir) => Location::Local(project.join(dir)),
-        Backend::S3(spec) => Location::S3(spec),
+    let at = |stack: &str| -> Result<(Location, String)> {
+        let b = term
+            .replace("{stack}", stack)
+            .parse::<Backend>()
+            .with_context(|| format!("[packages] {remote}: backend {term}"))?;
+        let loc = match b {
+            Backend::Local(dir) => Location::Local(project.join(dir)),
+            Backend::S3(spec) => Location::S3(spec),
+        };
+        let loc = if templated {
+            loc
+        } else {
+            loc.child(Some(stack))
+        };
+        let own = match seg {
+            Some(s) => format!("{stack}[{s}]"),
+            None => stack.to_string(),
+        };
+        Ok((loc.child(seg), own))
     };
-    let loc = if templated {
-        loc
-    } else {
-        loc.child(Some(stack))
-    };
-    let own = match seg {
-        Some(s) => format!("{stack}[{s}]"),
-        None => stack.to_string(),
-    };
-    Ok(Some((loc.child(seg), own)))
+    let path = r.stack_path(stem);
+    let mut out = vec![at(&path)?];
+    if path != stem {
+        out.push(at(stem)?);
+    }
+    Ok(out)
 }
 
 /// A keyed read of a deployment in a body: `instance_of(PATH, _, Name)`
@@ -1974,39 +2079,56 @@ pub fn stack_outputs(
     root: &Path,
     own: &str,
     named: Option<&std::collections::BTreeSet<String>>,
-    remotes: &BTreeMap<String, String>,
+    remotes: &BTreeMap<String, crate::project::Remote>,
     s3: OpenS3,
 ) -> Result<Vec<Read>> {
     let mut out = Vec::new();
     let reg = registry(root)?;
-    for (name, e) in &reg {
-        if name == own || named.is_some_and(|n| !n.contains(name)) {
+    // Each deployment by the name the program reads it by, the entry
+    // under its full name over one under its short name (R-200).
+    let own = short_of(own);
+    let mut by_reader: BTreeMap<String, (&String, &Entry)> = BTreeMap::new();
+    for (key, e) in &reg {
+        let reader = short_of(key);
+        if reader == own || named.is_some_and(|n| !n.contains(&reader)) {
             continue;
         }
-        let mut r = read_published(&e.state, s3, name, name)?;
+        let full = key != &reader;
+        match by_reader.get(&reader) {
+            Some((k, _)) if *k != &reader && !full => {}
+            _ => {
+                by_reader.insert(reader, (key, e));
+            }
+        }
+    }
+    for (reader, (key, e)) in &by_reader {
+        let mut r = read_published(&e.state, s3, reader, &[key.as_str(), reader.as_str()])?;
         // A bucket's deployment keeps its world in its directory under the
         // state root.
         if r.world.is_none() {
-            let (stack, seg) = match name.strip_suffix(']').and_then(|n| n.split_once('[')) {
-                Some((b, s)) => (b, Some(s)),
-                None => (name.as_str(), None),
-            };
-            let home = root.join(stack);
-            r.world = Some(world_file(
-                &e.state,
-                &seg.map_or(home.clone(), |s| home.join(s)),
-            ));
+            r.world = Some(world_file(&e.state, &instance_dir(root, key)));
         }
         out.push(r);
     }
     let project = root.parent().unwrap_or(Path::new(""));
     for name in named.into_iter().flatten() {
-        if name == own || reg.contains_key(name) {
+        if *name == own || by_reader.contains_key(name) {
             continue;
         }
-        if let Some((loc, theirs)) = remote_location(name, remotes, project)? {
-            out.push(read_published(&loc, s3, name, &theirs)?);
+        // Where it is by its full name, else (not migrated yet) by its
+        // short one.
+        let mut read = None;
+        for (loc, theirs) in remote_location(name, remotes, project)? {
+            let r = read_published(&loc, s3, name, &[&theirs])?;
+            let found = r.published.is_some();
+            if read.is_none() || found {
+                read = Some(r);
+            }
+            if found {
+                break;
+            }
         }
+        out.extend(read);
     }
     Ok(out)
 }

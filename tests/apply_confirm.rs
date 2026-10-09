@@ -236,8 +236,8 @@ fn declining_a_dependency_stops_before_its_reader() {
     );
     assert_eq!(said[1].trim(), "", "{}", said[1]);
     assert_eq!(code, 3, "a decline exits 3 (R-147)");
-    let dir = s.path("dform.state/platform/env=lab");
+    let dir = s.path("dform.state/stacks.platform/env=lab");
     assert!(dir.join("state.audit.jsonl").exists(), "{}", dir.display());
     assert!(!dir.join("state.lock").exists(), "platform is still locked");
-    assert!(!s.path("dform.state/apps").exists(), "apps ran");
+    assert!(!s.path("dform.state/stacks.apps").exists(), "apps ran");
 }

@@ -114,11 +114,11 @@ resource db.secret app {
 const PASSPHRASE: &str = "[secrets]\npassphrase = \"env:PASS\"\n";
 
 fn world(s: &Scratch) -> serde_json::Value {
-    s.json("dform.state/p/remote.json")["resources"]["db.secret::app"]["attrs"].clone()
+    s.json("dform.state/stacks.p/remote.json")["resources"]["db.secret::app"]["attrs"].clone()
 }
 
 fn entries(s: &Scratch, kind: &str) -> Vec<serde_json::Value> {
-    s.read("dform.state/p/state.audit.jsonl")
+    s.read("dform.state/stacks.p/state.audit.jsonl")
         .lines()
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
         .filter(|e| e["kind"] == kind)

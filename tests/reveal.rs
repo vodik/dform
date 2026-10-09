@@ -95,12 +95,12 @@ fn a_secret_a_provider_holds_configures_another_and_stays_in_memory() {
         r.stdout,
         r.stderr
     );
-    let state = s.read("dform.state/p/state.json");
+    let state = s.read("dform.state/stacks.p/state.json");
     assert!(state.contains("db.postgres::server"), "{state}");
 
     // The value is where its provider keeps it, its world.
     let world: serde_json::Value =
-        serde_json::from_str(&s.read("dform.state/p/remote.json")).unwrap();
+        serde_json::from_str(&s.read("dform.state/stacks.p/remote.json")).unwrap();
     let token = world["resources"]
         .as_object()
         .unwrap()
@@ -115,7 +115,9 @@ fn a_secret_a_provider_holds_configures_another_and_stays_in_memory() {
     holding(&s.dir, token.as_bytes(), &mut found);
     assert_eq!(
         found,
-        [s.path("dform.state/p/remote.json").display().to_string()],
+        [s.path("dform.state/stacks.p/remote.json")
+            .display()
+            .to_string()],
         "{token}"
     );
     for out in [&plan.stdout, &plan.stderr, &r.stdout, &r.stderr] {

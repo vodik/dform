@@ -168,6 +168,7 @@ impl<'a> Space<'a> {
             .unwrap_or_default()
             .into_keys()
             .filter_map(|n| {
+                let n = crate::stack::short_of(&n);
                 let (s, seg) = n.strip_suffix(']')?.split_once('[')?;
                 (s == self.stack).then_some(())?;
                 seg.split(',')

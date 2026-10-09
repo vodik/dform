@@ -112,7 +112,7 @@ fn a_location_read_secret_output_configures_the_reading_stacks_provider() {
     let r = run(&s, &[PASS], &["plan", "platform", "env=lab"]).success();
     assert!(
         r.stdout.contains(
-            "output kubeconfig  sealed to apps[env=lab]\noutput token  sealed to apps[env=lab]\n"
+            "output kubeconfig  sealed to stacks.apps[env=lab]\noutput token  sealed to stacks.apps[env=lab]\n"
         ),
         "{}",
         r.stdout
@@ -121,39 +121,40 @@ fn a_location_read_secret_output_configures_the_reading_stacks_provider() {
     // whose k8s provider is configured from the opened kubeconfig.
     let r = run(&s, &[PASS], &["apply", "apps", "env=lab"]).success();
     assert!(r.stdout.contains("+ k8s.namespace apps"), "{}", r.stdout);
-    let world = s.read("dform.state/apps/env=lab/remote.json");
+    let world = s.read("dform.state/stacks.apps/env=lab/remote.json");
     assert!(world.contains("\"apps\""), "{world}");
     // A derived secret crosses the same way: the reader's Secret holds
     // the platform's token, which neither stack's state holds.
     let w: serde_json::Value = serde_json::from_str(&world).unwrap();
-    let pw = s.json("dform.state/platform/env=lab/remote.json")["resources"]["db.secret::token"]
-        ["attrs"]["password"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let pw =
+        s.json("dform.state/stacks.platform/env=lab/remote.json")["resources"]["db.secret::token"]
+            ["attrs"]["password"]
+            .as_str()
+            .unwrap()
+            .to_string();
     assert_eq!(
         w["resources"]["k8s.secret::token"]["attrs"]["stringData"]["token"], pw,
         "{w}"
     );
     // Sealed to its reader only: not to `other`, which reads nothing of
     // it, nor to a deployment of `apps` that is not one.
-    let published = s.json("dform.state/platform/env=lab/outputs.json");
+    let published = s.json("dform.state/stacks.platform/env=lab/outputs.json");
     let sealed = published["secret"]["kubeconfig"]["sealed"]
         .as_object()
         .unwrap();
     assert_eq!(
         sealed.keys().collect::<Vec<_>>(),
-        ["apps[env=lab]"],
+        ["stacks.apps[env=lab]"],
         "{published}"
     );
     // The seal and the read are in the logs.
-    let grants = audit(&s, "platform/env=lab", "sealed");
+    let grants = audit(&s, "stacks.platform/env=lab", "sealed");
     assert_eq!(
         grants.last().unwrap()["outputs"]["kubeconfig"],
-        serde_json::json!(["apps[env=lab]"]),
+        serde_json::json!(["stacks.apps[env=lab]"]),
         "{grants:?}"
     );
-    let reads = audit(&s, "apps/env=lab", "opened");
+    let reads = audit(&s, "stacks.apps/env=lab", "opened");
     assert!(
         reads.last().is_some_and(|e| e["outputs"]
             == serde_json::json!(["platform[env=lab].kubeconfig", "platform[env=lab].token"])),
@@ -174,7 +175,7 @@ fn a_location_read_secret_output_configures_the_reading_stacks_provider() {
     // Another apply of the platform, of a change that is no output's,
     // publishes the same seals: outputs.json does not move, so a reader's
     // plan file of it stays fresh.
-    let before = s.read("dform.state/platform/env=lab/outputs.json");
+    let before = s.read("dform.state/stacks.platform/env=lab/outputs.json");
     let text = s.read("stacks/platform.df");
     s.write(
         "stacks/platform.df",
@@ -183,7 +184,7 @@ fn a_location_read_secret_output_configures_the_reading_stacks_provider() {
     let r = run(&s, &[PASS], &["apply", "platform", "env=lab"]).success();
     assert!(r.stdout.contains("~ net.vpc main"), "{}", r.stdout);
     assert_eq!(
-        s.read("dform.state/platform/env=lab/outputs.json"),
+        s.read("dform.state/stacks.platform/env=lab/outputs.json"),
         before,
         "the published outputs moved"
     );

@@ -229,21 +229,12 @@ fn a_plan_file_carries_the_closure_and_apply_applies_it_in_order() {
         "{}",
         r.stdout
     );
-    assert!(s.path("dform.state/platform/env=lab/state.json").exists());
-    assert!(s.path("dform.state/apps/env=lab/state.json").exists());
-}
-
-/// Not yet (R-200): state, the registry and outputs.json name a
-/// deployment by its short name (`dform.state/platform/env=lab`); moving
-/// them to the full name moves applied state, a migration of its own.
-#[test]
-#[ignore = "R-200: state keeps a deployment's short name"]
-fn state_names_a_deployment_by_its_full_name() {
-    let s = project("deps-state-name");
-    s.run(&["apply", "platform", "env=lab", "--yes"]).success();
-    let published = s.read("dform.state/platform/env=lab/outputs.json");
     assert!(
-        published.contains("\"stacks.platform[env=lab]\""),
-        "{published}"
+        s.path("dform.state/stacks.platform/env=lab/state.json")
+            .exists()
+    );
+    assert!(
+        s.path("dform.state/stacks.apps/env=lab/state.json")
+            .exists()
     );
 }

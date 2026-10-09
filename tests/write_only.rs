@@ -33,7 +33,7 @@ fn a_write_only_attribute_is_compared_with_the_digest_state_keeps() {
     let s = project("#cloud-config one", "t1");
     s.run(&["apply", "p"]).success();
     // State keeps a digest of each, beside the resource; never the value.
-    let state = s.read("dform.state/p/state.json");
+    let state = s.read("dform.state/stacks.p/state.json");
     let st: serde_json::Value = serde_json::from_str(&state).unwrap();
     let written = &st["resources"]["compute.vm::a"]["written"];
     for p in ["user_data", "token"] {

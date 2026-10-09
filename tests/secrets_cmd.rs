@@ -61,7 +61,7 @@ resource db.secret app {{
 }
 
 fn world(s: &Scratch) -> serde_json::Value {
-    s.json("dform.state/p/remote.json")["resources"].clone()
+    s.json("dform.state/stacks.p/remote.json")["resources"].clone()
 }
 
 #[test]
@@ -128,9 +128,9 @@ fn a_rotation_changes_one_secret_with_its_reason() {
          generation 2, by alice; the next plan changes it\n"
     );
     // Moved back by forgetting the record: the database password alone.
-    let mut st = s.json("dform.state/p/state.json");
+    let mut st = s.json("dform.state/stacks.p/state.json");
     st["secrets"].as_object_mut().unwrap().remove("k3s");
-    s.write("dform.state/p/state.json", &st.to_string());
+    s.write("dform.state/stacks.p/state.json", &st.to_string());
 
     let r = run(
         &s,
@@ -144,7 +144,7 @@ fn a_rotation_changes_one_secret_with_its_reason() {
         "{}",
         r.stdout
     );
-    let st = s.json("dform.state/p/state.json");
+    let st = s.json("dform.state/stacks.p/state.json");
     assert_eq!(
         st["secrets"]["db"],
         serde_json::json!({
@@ -155,7 +155,7 @@ fn a_rotation_changes_one_secret_with_its_reason() {
         }),
         "{st}"
     );
-    let log = s.read("dform.state/p/state.audit.jsonl");
+    let log = s.read("dform.state/stacks.p/state.audit.jsonl");
     let rotated: Vec<serde_json::Value> = log
         .lines()
         .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
@@ -209,7 +209,7 @@ fn a_rotation_changes_one_secret_with_its_reason() {
     let r = run(&s, NOW, &["plan", "p"]).success();
     assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
     assert_eq!(
-        s.json("dform.state/p/state.json")["secrets"]["db"]["pending"],
+        s.json("dform.state/stacks.p/state.json")["secrets"]["db"]["pending"],
         serde_json::Value::Null
     );
 }
@@ -235,7 +235,7 @@ fn a_given_secret_is_rotated_where_it_lives() {
         "{}",
         r.stderr
     );
-    assert!(s.json("dform.state/p/state.json")["secrets"].is_null());
+    assert!(s.json("dform.state/stacks.p/state.json")["secrets"].is_null());
 }
 
 /// `secrets/4` gives a policy each secret's age through the clock;

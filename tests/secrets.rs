@@ -490,10 +490,10 @@ fn a_secret_output_is_stored_by_label_and_digest_never_by_value() {
     for (path, text) in &files {
         assert!(!text.contains(PRODUCED), "{path}:\n{text}");
     }
-    let state = s.read("dform.state/prod/state.json");
+    let state = s.read("dform.state/stacks.prod/state.json");
     assert!(state.contains("\"label\": \"output/#token\""), "{state}");
     assert!(state.contains("\"digest\": \"hmac-sha256:"), "{state}");
-    let published = s.read("dform.state/prod/outputs.json");
+    let published = s.read("dform.state/stacks.prod/outputs.json");
     assert!(
         published.contains("\"label\": \"output/#pass\""),
         "{published}"
@@ -533,13 +533,19 @@ fn a_secret_output_is_stored_by_label_and_digest_never_by_value() {
     common::Run::from(r).success();
     use dform_core::store::Store;
     let keys = bucket.list("").unwrap();
-    assert!(keys.iter().any(|k| k == "prod/state.json"), "{keys:?}");
-    assert!(keys.iter().any(|k| k == "prod/outputs.json"), "{keys:?}");
+    assert!(
+        keys.iter().any(|k| k == "stacks.prod/state.json"),
+        "{keys:?}"
+    );
+    assert!(
+        keys.iter().any(|k| k == "stacks.prod/outputs.json"),
+        "{keys:?}"
+    );
     for k in &keys {
         let o = bucket.get(k).unwrap().expect("listed");
         let text = String::from_utf8_lossy(&o.bytes);
         assert!(!text.contains(PRODUCED), "{k}:\n{text}");
-        if k == "prod/state.json" {
+        if k == "stacks.prod/state.json" {
             assert!(text.contains("\"label\": \"output/#token\""), "{text}");
         }
     }
@@ -577,7 +583,7 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
     dev(&["apply", "prod", "--set", &set]).success();
     let materialized = |s: &Scratch| -> serde_json::Value {
         let w: serde_json::Value =
-            serde_json::from_str(&s.read("dform.state/app/remote.json")).unwrap();
+            serde_json::from_str(&s.read("dform.state/stacks.app/remote.json")).unwrap();
         w["resources"]["leaky.vault::copy"]["materialized"]["backup"].clone()
     };
 
@@ -643,13 +649,13 @@ fn a_derived_password_is_stable_and_never_stored() {
         ])
         .failure();
     outputs.extend([r.stdout, r.stderr]);
-    let state = s.read("dform.state/crud_api/state.json");
+    let state = s.read("dform.state/stacks.crud_api/state.json");
     assert!(state.contains("\"in_flight\""), "{state}");
     outputs.push(state);
     let r = s.run(&["apply"]).success();
     outputs.extend([r.stdout, r.stderr]);
     let world = |s: &Scratch| -> serde_json::Value {
-        serde_json::from_str(&s.read("dform.state/crud_api/remote.json")).unwrap()
+        serde_json::from_str(&s.read("dform.state/stacks.crud_api/remote.json")).unwrap()
     };
     let w = world(&s);
     let r = &w["resources"];
@@ -701,7 +707,7 @@ fn a_derived_password_is_stable_and_never_stored() {
     }
     // Nothing is kept of it: state has no memo and no extern answer.
     let state: serde_json::Value =
-        serde_json::from_str(&s.read("dform.state/crud_api/state.json")).unwrap();
+        serde_json::from_str(&s.read("dform.state/stacks.crud_api/state.json")).unwrap();
     assert!(
         state["memo"].is_null() && state["externs"].is_null(),
         "{state}"
@@ -742,7 +748,7 @@ fn kept_world_documents_hold_a_sensitive_leaf_by_its_digest() {
         "fail=leaky.vault[\"v\"]",
     ])
     .failure();
-    let state = s.read("dform.state/s/state.json");
+    let state = s.read("dform.state/stacks.s/state.json");
     assert!(state.contains("\"in_flight\""), "{state}");
     assert!(
         state.contains("\"password\": \"(sensitive hmac-sha256:"),
@@ -764,7 +770,7 @@ fn kept_world_documents_hold_a_sensitive_leaf_by_its_digest() {
         "pw=SECOND-KEPT-SECRET",
     ])
     .success();
-    let memo = s.read("dform.state/s/controller.json");
+    let memo = s.read("dform.state/stacks.s/controller.json");
     assert!(
         memo.contains("\"password\": \"(sensitive hmac-sha256:"),
         "{memo}"

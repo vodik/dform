@@ -428,7 +428,7 @@ impl<'a, 'h> Inventory<'a, 'h> {
             &self.run.cx.audit,
         );
         use crate::secrets::inventory::Kind;
-        let deployment = dep.name();
+        let deployment = self.run.cx.deployment.as_str();
         // A memo state keeps that is no secret (a time, a name) is forgotten
         // the same way.
         let plain;
@@ -526,7 +526,7 @@ impl<'a, 'h> Inventory<'a, 'h> {
             &cx.audit,
         );
         use crate::secrets::inventory::Kind;
-        let deployment = dep.name();
+        let deployment = self.run.cx.deployment.as_str();
         if !dep.has_state()? {
             bail!(
                 "secrets cycle: {deployment} was never applied: its first apply makes its master"

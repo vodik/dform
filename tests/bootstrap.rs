@@ -79,7 +79,7 @@ resource compute.vm vm {{
 }
 
 fn world(s: &Scratch) -> serde_json::Value {
-    s.json("dform.state/p/remote.json")["resources"]["compute.vm::vm"]["attrs"].clone()
+    s.json("dform.state/stacks.p/remote.json")["resources"]["compute.vm::vm"]["attrs"].clone()
 }
 
 /// The create sends the value; once the object exists a differing value
@@ -143,7 +143,7 @@ fn an_update_keeps_what_the_object_was_made_with() {
     run(&s, NOW, &["apply", "p"]).success();
     let made = world(&s);
     let digest = |s: &Scratch| {
-        s.json("dform.state/p/state.json")["resources"]["compute.vm::vm"]["written"]["user_data"]
+        s.json("dform.state/stacks.p/state.json")["resources"]["compute.vm::vm"]["written"]["user_data"]
             .clone()
     };
     let was = digest(&s);

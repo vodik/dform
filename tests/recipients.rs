@@ -67,7 +67,7 @@ fn recipients(s: &Scratch, members: &[(&str, &Member)], extra: &str) {
 }
 
 fn entries(s: &Scratch, kind: &str) -> Vec<serde_json::Value> {
-    s.read("dform.state/crud_api/state.audit.jsonl")
+    s.read("dform.state/stacks.crud_api/state.audit.jsonl")
         .lines()
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
         .filter(|e| e["kind"] == kind)
@@ -86,8 +86,8 @@ fn each_member_opens_the_master_with_their_own_identity() {
     let (alice, bob, carol) = (member(), member(), member());
     let s = team("recipients-team", &[("alice", &alice), ("bob", &bob)], "");
     run(&s, Some(&alice), &[], &["apply"]).success();
-    assert!(!s.path("dform.state/crud_api/state.key").exists());
-    let record = s.json("dform.state/crud_api/state.master");
+    assert!(!s.path("dform.state/stacks.crud_api/state.key").exists());
+    let record = s.json("dform.state/stacks.crud_api/state.master");
     assert!(record["passphrase"].is_null(), "{record}");
     let mut want = vec![alice.recipient.clone(), bob.recipient.clone()];
     want.sort();
@@ -96,7 +96,7 @@ fn each_member_opens_the_master_with_their_own_identity() {
         serde_json::json!(want),
         "{record}"
     );
-    let text = s.read("dform.state/crud_api/state.master");
+    let text = s.read("dform.state/stacks.crud_api/state.master");
     assert!(!text.contains(&alice.identity) && !text.contains(&bob.identity));
     up_to_date(&run(&s, Some(&bob), &[], &["plan"]).success());
     let r = run(&s, Some(&carol), &[], &["plan"]).success();
@@ -144,7 +144,7 @@ fn a_recipient_removed_is_sealed_to_no_longer_and_listed() {
         "",
     );
     run(&s, Some(&alice), &[], &["apply"]).success();
-    let id = s.json("dform.state/crud_api/state.master")["id"].clone();
+    let id = s.json("dform.state/stacks.crud_api/state.master")["id"].clone();
     recipients(&s, &[("alice", &alice), ("carol", &carol)], "");
     let r = run(&s, Some(&alice), &[], &["plan"]).success();
     assert!(
@@ -158,7 +158,7 @@ fn a_recipient_removed_is_sealed_to_no_longer_and_listed() {
     // Bob, still in the record, may not reseal what he is leaving: only
     // a run that holds the master does, and his does until then.
     run(&s, Some(&alice), &[], &["apply"]).success();
-    let record = s.json("dform.state/crud_api/state.master");
+    let record = s.json("dform.state/stacks.crud_api/state.master");
     assert_eq!(record["id"], id, "the same master: {record}");
     let mut want = vec![alice.recipient.clone(), carol.recipient.clone()];
     want.sort();
@@ -248,7 +248,7 @@ fn a_passphrase_beside_recipients() {
     );
     // Alice with the passphrase seals it.
     run(&s, Some(&alice), &[pass], &["apply"]).success();
-    assert!(s.json("dform.state/crud_api/state.master")["passphrase"].is_object());
+    assert!(s.json("dform.state/stacks.crud_api/state.master")["passphrase"].is_object());
     up_to_date(&run(&s, None, &[pass], &["plan"]).success());
     up_to_date(&run(&s, Some(&alice), &[], &["plan"]).success());
 }

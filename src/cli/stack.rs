@@ -43,6 +43,7 @@ struct Listing<'a> {
     listed: std::collections::BTreeMap<String, bool>,
     label: String,
     table: report::table::Table,
+    manifest: crate::project::Manifest,
 }
 
 impl<'a> Listing<'a> {
@@ -67,6 +68,7 @@ impl<'a> Listing<'a> {
             listed,
             label,
             table,
+            manifest: project.manifest.clone(),
         })
     }
 
@@ -116,9 +118,9 @@ impl<'a> Listing<'a> {
     fn stack(&mut self, s: &crate::project::Found) -> Result<()> {
         let root = &self.cli.root;
         // Where the stack's deployments are: its backend's, else the state
-        // root's.
+        // root's, by its full name (R-200).
         let backend = stack_backend(s);
-        let base = deployment::stack_location(root, &s.name, backend.as_ref());
+        let base = deployment::stack_location(root, &s.path, backend.as_ref());
         let opener = open_s3(root, false);
         let keys = match base.open(&opener).and_then(|st| st.list("")) {
             Ok(k) => k,
@@ -127,7 +129,36 @@ impl<'a> Listing<'a> {
                 return Ok(());
             }
         };
-        let deployments = self.deployments(s, backend.as_ref(), &base, &keys);
+        let mut deployments = self.deployments(s, &s.path, backend.as_ref(), &base, &keys);
+        // Those still stored by the stack's short name, before R-200: each
+        // moves at its next apply.
+        let mut legacy = std::collections::BTreeSet::new();
+        if s.name != s.path {
+            let old_backend = match self.manifest.legacy_backend(&s.name) {
+                Some(b) => Some(b),
+                None if backend.is_none() => None,
+                None => backend.clone(),
+            };
+            let old = deployment::stack_location(root, &s.name, old_backend.as_ref());
+            if old != base {
+                let keys = old
+                    .open(&opener)
+                    .and_then(|st| st.list(""))
+                    .unwrap_or_default();
+                for (n, l) in self.deployments(s, &s.name, old_backend.as_ref(), &old, &keys) {
+                    if !deployments.iter().any(|(d, _)| *d == n) {
+                        legacy.insert(n.clone());
+                        deployments.push((n, l));
+                    }
+                }
+            }
+            for (n, _) in &deployments {
+                let full = format!("{}{}", s.path, &n[s.name.len()..]);
+                if self.registry.contains_key(n) && !self.registry.contains_key(&full) {
+                    legacy.insert(n.clone());
+                }
+            }
+        }
         // A deployment the module lists that has no state yet.
         let mut unapplied: Vec<String> = self
             .listed
@@ -159,10 +190,19 @@ impl<'a> Listing<'a> {
                 continue;
             }
             any = true;
-            let state = match self.registry.get(&name).and_then(|e| e.backend.clone()) {
+            let full = format!("{}{}", s.path, &name[s.name.len()..]);
+            let entry = crate::stack::registered(&self.registry, &full, &name);
+            let mut state = match entry.and_then(|(_, e)| e.backend.clone()) {
                 Some(b) => format!("handed over to {b}"),
                 None => shown(&location),
             };
+            if legacy.contains(&name) {
+                let moved = format!("stored as {name}: its next apply renames it");
+                state = match state.is_empty() {
+                    true => moved,
+                    false => format!("{state}; {moved}"),
+                };
+            }
             self.row(s, &name, state, entries.as_slice().into());
         }
         unapplied.sort();
@@ -191,6 +231,7 @@ impl<'a> Listing<'a> {
     fn deployments(
         &self,
         s: &crate::project::Found,
+        stored: &str,
         backend: Option<&crate::stack::Backend>,
         base: &store::Location,
         keys: &[String],
@@ -203,7 +244,7 @@ impl<'a> Listing<'a> {
         } else if let (Some(b), Some((parent, rest))) = (backend, keyed) {
             // A backend that names the key (`local("state/app-{env}")`):
             // each place under its directory the template matches.
-            let found = deployment::stack_location(root, &s.name, Some(&parent))
+            let found = deployment::stack_location(root, stored, Some(&parent))
                 .open(&open_s3(root, false))
                 .and_then(|st| st.list(""))
                 .unwrap_or_default();
@@ -216,7 +257,7 @@ impl<'a> Listing<'a> {
             for seg in segs {
                 deployments.push((
                     format!("{}[{seg}]", s.name),
-                    deployment::deployment_location(root, &s.name, Some(b), Some(&seg)),
+                    deployment::deployment_location(root, stored, Some(b), Some(&seg)),
                 ));
             }
         } else {
@@ -230,10 +271,13 @@ impl<'a> Listing<'a> {
                 deployments.push((format!("{}[{seg}]", s.name), base.child(Some(seg))));
             }
         }
-        for (name, e) in &self.registry {
-            let ours = name == &s.name || name.starts_with(&format!("{}[", s.name));
-            if ours && !deployments.iter().any(|(n, _)| n == name) {
-                deployments.push((name.clone(), e.state.clone()));
+        // The registry's, by its full name or (before R-200) its short one,
+        // each listed by its short name as the rest are.
+        for (key, e) in &self.registry {
+            let ours = key == stored || key.starts_with(&format!("{stored}["));
+            let name = format!("{}{}", s.name, &key[stored.len().min(key.len())..]);
+            if ours && !deployments.iter().any(|(n, _)| *n == name) {
+                deployments.push((name, e.state.clone()));
             }
         }
         deployments
@@ -362,7 +406,7 @@ impl Rekey {
         };
         let (cli, root) = (&run.cx.cli, &run.cx.root);
         let located = &run.ev.located;
-        let (stack, stack_cfg) = (&located.loaded.stack, &located.loaded.cfg);
+        let stack_cfg = &located.loaded.cfg;
         let keys: Vec<String> = stack_cfg.keys.iter().map(|(k, _)| k.clone()).collect();
         let named = crate::lint::key_named(&run.ev.res, run.ev.schema(), &keys);
         if named.is_empty() {
@@ -381,22 +425,29 @@ impl Rekey {
                 println!("  {n}");
             }
         }
+        // By its full name (R-200); the old deployment where this run
+        // found it, under its short name if it was not moved yet.
+        let path = &located.loaded.path;
         let place = |i: &crate::stack::Instance| {
             let location = deployment::deployment_location(
                 root,
-                stack,
+                path,
                 stack_cfg.backend.as_ref(),
                 i.segment().as_deref(),
             );
             crate::stack::Place {
-                world: crate::stack::world_file(&location, &i.dir(&root.join(stack))),
+                world: crate::stack::world_file(&location, &i.dir(&root.join(path))),
                 location,
             }
+        };
+        let from = crate::stack::Place {
+            location: located.location.clone(),
+            world: located.paths.world.clone(),
         };
         let opener = open_s3(root, true);
         let moved = crate::stack::rekey(
             root,
-            (&r.from, &place(&r.from)),
+            (&r.from, &from),
             (&r.to, &place(&r.to)),
             &opener,
             located.times,
@@ -432,10 +483,10 @@ pub(super) struct Handover {
 impl Handover {
     pub(super) fn run(&self, cli: &Cli) -> Result<Outcome> {
         let (stack, to) = (&self.stack, &self.to);
-        let (from, home, times) = self.place(cli)?;
+        let (from, home, times, full) = self.place(cli)?;
         let opener = open_s3(&cli.root, true);
         self.seal(cli, &from, &opener, times)?;
-        let moved = crate::stack::handover(&cli.root, stack, &from, &home, to, &opener, times)?;
+        let moved = crate::stack::handover(&cli.root, &full, &from, &home, to, &opener, times)?;
         crate::audit::Log::new(moved.open(&opener)?, cli.audit_sink.clone()).append(
             "handover",
             serde_json::json!({ "stack": stack, "to": to, "who": crate::audit::who() }),
@@ -511,42 +562,73 @@ impl Handover {
         }
     }
 
-    /// Where the deployment `name` (`app`, `app[env=prod]`) is, for a command
-    /// that runs no program: where the registry has it, else where its stack's
-    /// program's backend says, else under the state root. With its default
-    /// directory (its world's when its state is in a bucket) and the lease
-    /// times.
-    fn place(&self, cli: &Cli) -> Result<(crate::stack::Place, PathBuf, store::LeaseTimes)> {
+    /// Where the deployment `name` (`app`, `app[env=prod]`, or by its full
+    /// name) is, for a command that runs no program: where the registry has
+    /// it, else where its stack's program's backend says, else under the
+    /// state root; by its full name (R-200), else, not moved yet, by its
+    /// short one. With its default directory (its world's when its state
+    /// is in a bucket), the lease times and its full name.
+    fn place(
+        &self,
+        cli: &Cli,
+    ) -> Result<(crate::stack::Place, PathBuf, store::LeaseTimes, String)> {
         let name = self.stack.as_str();
         let root = &cli.root;
-        let home = crate::stack::instance_dir(root, name);
         let project = crate::project::Project::find(Path::new("."), env!("CARGO_PKG_VERSION"))?;
         let times = project
             .as_ref()
             .map(|p| p.manifest.lease_times())
             .unwrap_or_default();
-        let location = match crate::stack::registry(root)?.remove(name) {
-            Some(e) => e.state,
+        let (stack, seg) = match name.strip_suffix(']').and_then(|n| n.split_once('[')) {
+            Some((stack, seg)) => (stack, Some(seg)),
+            None => (name, None),
+        };
+        let found = project.as_ref().and_then(|p| {
+            let d = crate::project::discover(p);
+            match d.named(stack).as_slice() {
+                [one] => Some((*one).clone()),
+                _ => None,
+            }
+        });
+        let (short, path) = match &found {
+            Some(f) => (f.name.clone(), f.path.clone()),
+            None => (stack.to_string(), stack.to_string()),
+        };
+        let with_key = |s: &str| match seg {
+            Some(seg) => format!("{s}[{seg}]"),
+            None => s.to_string(),
+        };
+        let (full, old) = (with_key(&path), with_key(&short));
+        let reg = crate::stack::registry(root)?;
+        let (location, home) = match crate::stack::registered(&reg, &full, &old) {
+            Some((k, e)) => (e.state.clone(), crate::stack::instance_dir(root, k)),
             None => {
-                let (stack, seg) = match name.strip_suffix(']').and_then(|n| n.split_once('[')) {
-                    Some((stack, seg)) => (stack, Some(seg)),
-                    None => (name, None),
-                };
-                let backend = project.as_ref().and_then(|p| {
-                    let d = crate::project::discover(p);
-                    match d.named(stack).as_slice() {
-                        [one] => stack_backend(one),
-                        _ => None,
+                let backend = found.as_ref().and_then(stack_backend);
+                let new = deployment::deployment_location(root, &path, backend.as_ref(), seg);
+                let has_state = new
+                    .open(&open_s3(root, false))
+                    .and_then(|st| st.get(store::STATE))
+                    .is_ok_and(|o| o.is_some());
+                match has_state || path == short {
+                    true => (new, crate::stack::instance_dir(root, &full)),
+                    false => {
+                        let backend = project
+                            .as_ref()
+                            .and_then(|p| p.manifest.legacy_backend(&short))
+                            .or(backend);
+                        (
+                            deployment::deployment_location(root, &short, backend.as_ref(), seg),
+                            crate::stack::instance_dir(root, &old),
+                        )
                     }
-                });
-                deployment::deployment_location(root, stack, backend.as_ref(), seg)
+                }
             }
         };
         let place = crate::stack::Place {
             world: crate::stack::world_file(&location, &home),
             location,
         };
-        Ok((place, home, times))
+        Ok((place, crate::stack::instance_dir(root, &full), times, full))
     }
 }
 

@@ -235,6 +235,9 @@ pub struct Selection {
     /// The run reads or moves the deployment's objects only: the
     /// program's other inputs need not be given.
     pub objects_only: bool,
+    /// The run is an apply: storage under the deployment's short name
+    /// moves to its full name first (R-200, [`stack::rename_storage`]).
+    pub migrate: bool,
 }
 
 /// A deployment located: which it is and where its state and world are.
@@ -246,8 +249,16 @@ pub struct Located {
     /// The `input` facts of `Selection::set`.
     pub set_facts: Vec<Atom>,
     pub instance: Instance,
-    /// `instance`'s name.
+    /// `instance`'s name, as the user writes it.
     pub deployment: String,
+    /// `instance`'s full name (R-200): what its storage, the registry,
+    /// its published outputs, its lock and its lease name it by.
+    pub stored: String,
+    /// Its storage is still under its short name (before R-200): where
+    /// this run read it, which its next apply moves.
+    pub legacy: Option<stack::Legacy>,
+    /// This run moved its storage from its short name (the old name).
+    pub renamed: Option<String>,
     /// Where the stack's deployments are: its backend's, else the state
     /// root's.
     pub base: Location,
@@ -283,28 +294,54 @@ impl Loaded {
             None => stack::instance(&self.cfg, (&self.stack, &self.path), &program, &set_facts)?,
         };
         let deployment = instance.name();
+        let stored = instance.full_name();
         if !sel.objects_only {
             inputs::check_required(&self.declared, &given)?;
         }
         let root = sel.root.clone();
-        let base = stack_location(&root, &self.stack, self.cfg.backend.as_ref());
+        // Its storage by its full name (R-200): `dform.state/stacks.app/`.
+        let base = stack_location(&root, &self.path, self.cfg.backend.as_ref());
         let keyed = deployment_location(
             &root,
-            &self.stack,
+            &self.path,
             self.cfg.backend.as_ref(),
             instance.segment().as_deref(),
         );
         // The deployment's own directory under the state root: its world's
         // when its state is in a bucket (the world is the provider's).
-        let home = instance.dir(&root.join(&self.stack));
+        let mut home = instance.dir(&root.join(&self.path));
         let handed = match &sel.world {
-            None => stack::handed_over(&root, &deployment)?,
+            None => stack::handed_over(&root, &stored, &deployment)?,
             Some(_) => None,
         };
-        let location = match &handed {
+        let mut location = match &handed {
             Some((_, loc)) => loc.clone(),
             None => keyed,
         };
+        // Storage under its short name, before R-200: an apply moves it,
+        // anything else reads it where it is.
+        let mut legacy = match &sel.world {
+            None => self.legacy(&root, &instance, &location, s3)?,
+            Some(_) => None,
+        };
+        let mut renamed = None;
+        if let Some(l) = legacy.take_if(|_| sel.migrate) {
+            let to = stack::Place {
+                world: stack::world_file(&location, &home),
+                location: location.clone(),
+            };
+            let times = self
+                .manifest
+                .as_ref()
+                .map(|m| m.lease_times())
+                .unwrap_or_default();
+            stack::rename_storage(&root, &l, (&stored, &to), s3, times)?;
+            renamed = Some(l.name);
+        }
+        if let Some(l) = &legacy {
+            location = l.place.location.clone();
+            home = instance.dir(&root.join(&self.stack));
+        }
         let mut paths = match &sel.world {
             Some(w) => state::world_paths(&root, w),
             None => state::StackPaths {
@@ -323,8 +360,8 @@ impl Loaded {
             .map(|m| m.lease_times())
             .unwrap_or_default();
         let dep = match &sel.world {
-            Some(_) => store::Deployment::local(&paths.state, &deployment),
-            None => store::Deployment::new(location.open(s3)?, &deployment, times),
+            Some(_) => store::Deployment::local(&paths.state, &stored),
+            None => store::Deployment::new(location.open(s3)?, &stored, times),
         };
         Ok(Located {
             loaded: self,
@@ -332,6 +369,9 @@ impl Loaded {
             set_facts,
             instance,
             deployment,
+            stored,
+            legacy,
+            renamed,
             base,
             home,
             handed,
@@ -342,6 +382,72 @@ impl Loaded {
             root,
             world: sel.world.clone(),
         })
+    }
+}
+
+impl Loaded {
+    /// The deployment `instance`'s storage under its short name, before
+    /// R-200's full names (`dform.state/platform/env=lab`, the registry's
+    /// `platform[env=lab]`), when its full name has none: where it is.
+    /// `None` for a stack whose short name is its full one (a root
+    /// file's), and once it moved.
+    fn legacy(
+        &self,
+        root: &Path,
+        instance: &Instance,
+        location: &Location,
+        s3: OpenS3,
+    ) -> Result<Option<stack::Legacy>> {
+        if self.stack == self.path {
+            return Ok(None);
+        }
+        let (old, new) = (instance.name(), instance.full_name());
+        let reg = stack::registry(root)?;
+        if reg.contains_key(&new) {
+            return Ok(None);
+        }
+        let has_state = |loc: &Location| -> Result<bool> {
+            let st = loc.open(s3)?;
+            Ok(st.get(store::STATE)?.is_some() || st.get(store::AUDIT)?.is_some())
+        };
+        // Where the registry has it (a handed-over one too), else where
+        // its backend put it by its short name.
+        let registered = reg.get(&old).map(|e| e.state.clone());
+        let place = match &registered {
+            Some(state) => state.clone(),
+            None => {
+                let backend = match &self.manifest {
+                    Some(m) if self.cfg.backend.is_some() => m
+                        .legacy_backend(&self.stack)
+                        .or_else(|| self.cfg.backend.clone()),
+                    _ => self.cfg.backend.clone(),
+                };
+                deployment_location(
+                    root,
+                    &self.stack,
+                    backend.as_ref(),
+                    instance.segment().as_deref(),
+                )
+            }
+        };
+        // Only the registry's entry is renamed where the place is the
+        // same; else its objects move, when there are some and none are
+        // at its full name's place yet.
+        let moves = match place == *location {
+            true => registered.is_some(),
+            false => has_state(&place)? && !has_state(location)?,
+        };
+        if !moves {
+            return Ok(None);
+        }
+        let home = instance.dir(&root.join(&self.stack));
+        Ok(Some(stack::Legacy {
+            name: old,
+            place: stack::Place {
+                world: stack::world_file(&place, &home),
+                location: place,
+            },
+        }))
     }
 }
 

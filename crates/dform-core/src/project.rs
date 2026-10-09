@@ -227,6 +227,32 @@ pub struct Manifest {
     pub text: String,
 }
 
+/// A package's deployments, as a project that reads them finds them
+/// ([`Manifest::remotes`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Remote {
+    /// The backend term its deployments are under, `{stack}` a stack's
+    /// full name in the package (`stacks.cluster`).
+    pub backend: String,
+    /// The package's root.
+    pub root: PathBuf,
+}
+
+impl Remote {
+    /// The full name in the package of its stack `stem` (`stacks.cluster`
+    /// for `cluster`, R-200): its module path from the package's root;
+    /// the stem when the package has no such stack.
+    pub fn stack_path(&self, stem: &str) -> String {
+        let Ok(Some(project)) = Project::find(&self.root, env!("CARGO_PKG_VERSION")) else {
+            return stem.to_string();
+        };
+        match discover(&project).named(stem).as_slice() {
+            [one] => one.path.clone(),
+            _ => stem.to_string(),
+        }
+    }
+}
+
 /// `[packages.NAME] path = "../infra"`: another project, mounted at
 /// `NAME` (R-65). Its files are modules under the name, `use
 /// infra.config`, and its stacks are deployed, `use infra.stacks.platform`
@@ -736,6 +762,24 @@ impl Manifest {
         text.parse::<crate::stack::Backend>().ok()
     }
 
+    /// The backend `stack`'s deployments had before R-200's full names,
+    /// when its term names the stack (`state/{stack}`, then
+    /// `state/platform`): `{stack}` its short name. `None` when the term
+    /// does not name it, so the name did not place it.
+    pub fn legacy_backend(&self, stack: &str) -> Option<crate::stack::Backend> {
+        let text = self
+            .stack_settings(stack)
+            .into_iter()
+            .find_map(|(k, v)| match (k, v) {
+                ("backend", SettingText::Str(t)) => Some(t.into_inner()),
+                _ => None,
+            })?;
+        if !text.contains("{stack}") {
+            return None;
+        }
+        text.replace("{stack}", stack).parse().ok()
+    }
+
     /// `[packages]`: each package's root, absolute.
     pub fn package_roots(&self) -> BTreeMap<String, PathBuf> {
         self.packages
@@ -749,10 +793,10 @@ impl Manifest {
 
     /// Where each package's deployments are: the backend term its
     /// `dform.toml` gives in `[defaults]` (a `local` directory made
-    /// relative to this project's root), else its `dform.state/`.
-    /// `stack::remote_location` reads a deployment `NAME.STACK[k=v]`
+    /// relative to this project's root), else its `dform.state/`, and its
+    /// root. `stack::remote_location` reads a deployment `NAME.STACK[k=v]`
     /// through it.
-    pub fn remotes(&self) -> BTreeMap<String, String> {
+    pub fn remotes(&self) -> BTreeMap<String, Remote> {
         let mut out = BTreeMap::new();
         for (name, p) in &self.packages {
             let dir = Path::new(&p.path);
@@ -769,7 +813,14 @@ impl Manifest {
                 },
                 None => local(Path::new(STATE_DIR)),
             };
-            out.insert(name.clone(), term);
+            let root = self.root.join(dir);
+            out.insert(
+                name.clone(),
+                Remote {
+                    backend: term,
+                    root: std::fs::canonicalize(&root).unwrap_or(root),
+                },
+            );
         }
         out
     }

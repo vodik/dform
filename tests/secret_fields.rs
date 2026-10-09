@@ -237,8 +237,8 @@ fn another_stacks_output_with_a_secret_field() {
     let set = format!("pw={SECRET}");
     dev(&["apply", "prod", "--set", &set]).success();
     for f in [
-        "dform.state/prod/state.json",
-        "dform.state/prod/outputs.json",
+        "dform.state/stacks.prod/state.json",
+        "dform.state/stacks.prod/outputs.json",
     ] {
         let text = s.read(f);
         assert!(!text.contains(SECRET), "{f}:\n{text}");
@@ -248,7 +248,7 @@ fn another_stacks_output_with_a_secret_field() {
         );
     }
     assert!(
-        s.read("dform.state/prod/outputs.json")
+        s.read("dform.state/stacks.prod/outputs.json")
             .contains("db.example")
     );
 
@@ -268,7 +268,7 @@ fn another_stacks_output_with_a_secret_field() {
         r.stdout
     );
     let w: serde_json::Value =
-        serde_json::from_str(&s.read("dform.state/app/remote.json")).unwrap();
+        serde_json::from_str(&s.read("dform.state/stacks.app/remote.json")).unwrap();
     assert_eq!(
         w["resources"]["leaky.vault::copy"]["materialized"]["backup"],
         SECRET

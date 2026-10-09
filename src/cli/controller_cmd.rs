@@ -106,8 +106,8 @@ impl Controller {
         )?
         .name();
         let registered = crate::stack::registry(&cli.root)?
-            .get(&own)
-            .is_some_and(|e| e.bootstrap);
+            .into_iter()
+            .any(|(n, e)| e.bootstrap && crate::stack::short_of(&n) == own);
         if cfg.bootstrap || registered {
             bail!(
                 "stack {own} is role = bootstrap: it stays batch, and the controller never runs it"

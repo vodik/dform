@@ -20,12 +20,14 @@ pub(super) fn readers_of(
         return Ok(Vec::new());
     };
     let found = crate::project::discover(&project);
-    let own_stack = own.split_once('[').map_or(own, |(s, _)| s);
+    // As a reader's program names it (`platform[env=lab]`, `platform`).
+    let own = crate::stack::short_of(own);
+    let own_stack = own.split_once('[').map_or(own.as_str(), |(s, _)| s);
     let mut loaded: std::collections::BTreeMap<PathBuf, Option<deployment::Loaded>> =
         Default::default();
     let mut out = Vec::new();
     for (name, entry) in crate::stack::registry(root)? {
-        if name == own {
+        if crate::stack::short_of(&name) == own {
             continue;
         }
         let (stack, key) = match name.strip_suffix(']').and_then(|n| n.split_once('[')) {
@@ -69,7 +71,7 @@ pub(super) fn readers_of(
             continue;
         };
         let (names, any) = crate::stack::reads(&l.program, &l.deployed, &instance.key);
-        if names.contains(own) || any.contains(own_stack) {
+        if names.contains(&own) || any.contains(own_stack) {
             let public = crate::custody::public_of(entry.state.open(s3)?.as_ref())?;
             out.push((name, public));
         }
@@ -118,8 +120,16 @@ pub(super) fn open_sealed(
     let mut unsealed = Vec::new();
     for r in read.iter_mut() {
         let Some(p) = &r.published else { continue };
+        // Sealed to its full name, or (by a producer not applied since
+        // R-200's full names) its short one: the label is the name sealed
+        // to.
+        let short = crate::stack::short_of(deployment);
         for (k, o) in &p.secret {
-            let Some(sealed) = o.sealed.get(deployment) else {
+            let Some((to, sealed)) = o
+                .sealed
+                .get_key_value(deployment)
+                .or_else(|| o.sealed.get_key_value(&short))
+            else {
                 if o.held.is_none() && !o.digest.is_empty() {
                     eprintln!(
                         "{deployment}: {}.{k} is held by no provider and not sealed to it yet: \
@@ -134,7 +144,7 @@ pub(super) fn open_sealed(
             // Its stand-in (R-164): a function of its keyed digest, which
             // stays while the value does; what a run without the master
             // reads in its place.
-            let label = sealed_label(&p.deployment, k, deployment);
+            let label = sealed_label(&p.deployment, k, to);
             let standin = format!(
                 "sealed-{}",
                 &crate::approval::sha256_hex(format!("{label}\0{}", o.digest).as_bytes())[..32]

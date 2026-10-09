@@ -216,6 +216,8 @@ impl Order {
         // stack's may be read, so every one there is goes first.
         if !any.is_empty() {
             for name in crate::stack::registry(&self.project.state_root())?.into_keys() {
+                // As the program reads it (`platform[env=lab]`).
+                let name = crate::stack::short_of(&name);
                 let stack = name.split_once('[').map_or(name.as_str(), |(s, _)| s);
                 if any.contains(stack) {
                     names.insert(name);

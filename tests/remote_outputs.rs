@@ -53,9 +53,9 @@ fn projects(name: &str, manifest: &str) -> (Scratch, Scratch) {
 fn a_project_reads_another_projects_outputs_through_a_local_remote() {
     let (platform, app) = projects("remote-local", "[project]\nedition = \"2026\"\n");
     // What crosses: the outputs object, a secret by its label only.
-    let published = platform.read("dform.state/cluster/env=prod/outputs.json");
+    let published = platform.read("dform.state/stacks.cluster/env=prod/outputs.json");
     assert!(
-        published.contains("\"deployment\": \"cluster[env=prod]\""),
+        published.contains("\"deployment\": \"stacks.cluster[env=prod]\""),
         "{published}"
     );
     assert!(
@@ -149,6 +149,45 @@ fn a_remote_backend_takes_the_stack_name() {
     );
 }
 
+/// A package's deployment is where its own runs keep it, by its full name
+/// in the package (R-200's path rule, `{stack}` that name:
+/// `state/stacks.cluster`); one the package has not applied since, under
+/// its short name (`state/cluster`), is read there.
+#[test]
+fn a_remote_deployment_is_read_by_its_full_name_or_where_it_was() {
+    let (platform, app) = projects(
+        "remote-full",
+        "[project]\nedition = \"2026\"\n\n[defaults]\nbackend = 'local(\"state/{stack}\")'\n",
+    );
+    assert!(
+        platform
+            .path("state/stacks.cluster/env=prod/outputs.json")
+            .exists()
+    );
+    let r = app.run(&["plan", "--why=none", "app"]).success();
+    assert!(
+        r.stdout.contains("name = \"https://prod.cluster.example\""),
+        "{}",
+        r.stdout
+    );
+    // As the package kept it before R-200's full names.
+    std::fs::rename(
+        platform.path("state/stacks.cluster"),
+        platform.path("state/cluster"),
+    )
+    .unwrap();
+    let outputs = platform
+        .read("state/cluster/env=prod/outputs.json")
+        .replace("\"stacks.cluster[env=prod]\"", "\"cluster[env=prod]\"");
+    platform.write("state/cluster/env=prod/outputs.json", &outputs);
+    let r = app.run(&["plan", "--why=none", "app"]).success();
+    assert!(
+        r.stdout.contains("name = \"https://prod.cluster.example\""),
+        "{}",
+        r.stdout
+    );
+}
+
 /// A secret output reaches the reader as its label: into a public field it
 /// is the static secret error, and its bytes never cross.
 #[test]
@@ -217,7 +256,7 @@ fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
     );
     s.run(&["apply", "net"]).success();
     let published: serde_json::Value =
-        serde_json::from_str(&s.read("dform.state/net/outputs.json")).unwrap();
+        serde_json::from_str(&s.read("dform.state/stacks.net/outputs.json")).unwrap();
     assert_eq!(
         published["outputs"]["c"],
         serde_json::json!({"t": "Str", "v": "10.0.0.0/16"}),

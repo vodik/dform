@@ -162,7 +162,7 @@ fn an_env_var_is_in_the_plan_file_only_as_its_label() {
     assert!(env_in[0]["digest"].is_string(), "{f}");
     assert!(!f.contains("tok-5ecret"), "{f}");
     run_with_env(&s, &env, &["apply", "plan.json"]).success();
-    let state = s.read("dform.state/app/state.json");
+    let state = s.read("dform.state/stacks.app/state.json");
     assert!(
         !state.contains("tok-5ecret") && !state.contains("FAKE_TOKEN"),
         "{state}"

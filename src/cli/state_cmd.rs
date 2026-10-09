@@ -77,7 +77,7 @@ impl StateShow {
         let (only, from_log) = (self.addr.as_deref(), self.from_log);
         use report::table::{Cell, Table};
         let only = only.map(ir::parse_resource_address).transpose()?;
-        let (deployment, at) = (dep.name(), dep.locate(crate::store::STATE));
+        let (deployment, at) = (cx.deployment(), dep.locate(crate::store::STATE));
         let (st, rebuilt) = match from_log {
             // The log alone (R-146): its `state` entries from the last whole
             // one, the checkpoint not read.
@@ -169,7 +169,7 @@ impl Output {
     /// JSON. A secret output prints as `secret`: state keeps no bytes of it.
     pub(super) fn run(&self, cx: &Objects) -> Result<Outcome> {
         let dep = cx.dep();
-        let deployment = dep.name();
+        let deployment = cx.deployment();
         if !dep.has_state()? {
             bail!(
                 "stack {deployment} has no state at {}: it was never applied",
@@ -353,7 +353,7 @@ impl StateMv {
     pub(super) fn run(&self, cx: &Objects) -> Result<Outcome> {
         let (dep, audit) = (cx.dep(), &cx.audit);
         let (from, to) = (self.from.as_str(), self.to.as_str());
-        let deployment = dep.name();
+        let deployment = cx.deployment();
         let (old, new) = (
             ir::parse_resource_address(from)?,
             ir::parse_resource_address(to)?,
@@ -389,7 +389,7 @@ impl ForgetHost {
     pub(super) fn run(&self, cx: &Objects) -> Result<Outcome> {
         let (dep, audit) = (cx.dep(), &cx.audit);
         let host = self.host.as_str();
-        let deployment = dep.name();
+        let deployment = cx.deployment();
         if !dep.has_state()? {
             bail!(
                 "forget-host {host}: stack {deployment} has no state at {}",

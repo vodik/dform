@@ -26,9 +26,9 @@ fn project(name: &str) -> Scratch {
 }
 
 /// Set the health of the mock's object `typ` `name` in the deployment's
-/// world (`dform.state/STACK/remote.json`).
+/// world (`dform.state/stacks.STACK/remote.json`).
 fn judge(s: &Scratch, stack: &str, typ: &str, name: &str, state: &str, reason: &str) {
-    let rel = format!("dform.state/{stack}/remote.json");
+    let rel = format!("dform.state/stacks.{stack}/remote.json");
     let mut w = s.json(&rel);
     let (_, o) = w["resources"]
         .as_object_mut()
@@ -51,7 +51,7 @@ fn lines(r: &Run) -> Vec<String> {
 #[test]
 fn status_says_each_objects_health_and_exits_by_it() {
     let s = project("status-mock");
-    let state = s.read("dform.state/app/state.json");
+    let state = s.read("dform.state/stacks.app/state.json");
     let r = s.run(&["status", "app"]).success();
     assert_eq!(
         lines(&r),
@@ -103,7 +103,7 @@ fn status_says_each_objects_health_and_exits_by_it() {
         );
     }
     // A status writes nothing, and the plan knows nothing of health.
-    assert_eq!(s.read("dform.state/app/state.json"), state);
+    assert_eq!(s.read("dform.state/stacks.app/state.json"), state);
     let plan = s.run(&["plan", "app"]).success();
     assert_eq!(plan.summary(), "stack app is up to date", "{}", plan.stdout);
 }

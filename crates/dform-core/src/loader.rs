@@ -524,6 +524,9 @@ fn stack_source(
     if settings.is_empty() {
         return Ok(None);
     }
+    // A term's `{stack}` is the stack's full name, its module path from
+    // the root (R-200): `state/{stack}` is `state/stacks.platform`.
+    let full = crate::project::module_path(&root, &abs).unwrap_or_else(|| stack.clone());
     let file = {
         let mut cache = MANIFESTS.lock().unwrap_or_else(|e| e.into_inner());
         match cache.get(&path) {
@@ -562,7 +565,7 @@ fn stack_source(
                         1
                     };
                     let offset = (v.span().start + quote) as u32;
-                    let text = v.get_ref().clone();
+                    let text = v.get_ref().replace("{stack}", &full);
                     (SettingValue::Term { text, offset }, v.span())
                 }
                 SettingText::Str(v) => (
