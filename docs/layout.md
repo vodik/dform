@@ -29,7 +29,8 @@ dform.state/                state: per deployment, audit logs, masters,
   provider takes its source from here), `[stacks.NAME]` (the stack `NAME.df`'s
   operational settings, a closed list: `backend`, `role`,
   `approvals`, `audit_sink`, `isolated`; a term is a string,
-  `{stack}` the stack's name and `{k}` its key `k`'s value), `[defaults]`
+  `{stack}` the stack's full name, `stacks.NAME`, and `{k}` its key `k`'s
+  value), `[defaults]`
   (the same settings for every stack whose table does not say, and an s3
   backend's `lease_duration` and `lease_renewal`), `[io]` (how a
   location is read, the grants a program's `io.read` is satisfied by,

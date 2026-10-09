@@ -12,4 +12,7 @@ too):
 | 6 | locked: another run holds the stack (named, one line) |
 | 128 + N | stopped by signal N after the run unwound (130 for SIGINT, 143 for SIGTERM) |
 
-`plan --json` says the same word in `outcome`: `done` or `refused`.
+`plan --json` says the same word in `outcome`: `done` or `refused`. A
+command of several deployments (`apply X` with what X reads, a plan file
+of several, the project's) exits with the status of the first that did
+not end done, the deployments after it not run.

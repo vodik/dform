@@ -361,10 +361,14 @@ defined in k3s.df; one defined in the stack's own file is bare, as its
 resources are), a stack (`stacks.platform` for stacks/platform.df,
 `infra.platform` for infra/platform.df), a deployment (its stack's name
 and its key, `stacks.platform[env=lab]`), a resource (`k3s.agent-0.vm`),
-a `let`, an input, a relation. State, the plan file, `--json`, `why` and
-`stack list` say the full name; a short name, its last segments, is
-legal wherever it names one thing (a target, `dform plan platform
-env=lab`; a keyed read, `platform[env].kubeconfig`; `why sub`), and one
+a `let`, an input, a relation; a package's deployment is the package's
+name then its path in the package (`platform.stacks.cluster[env=staging]`).
+State (its directory, the registry, `outputs.json`, the lock), the plan
+file, `--json`, `why` and `stack list` say the full name; a short name,
+its last segments, is legal wherever it names one thing (a target,
+`dform plan platform env=lab`; a keyed read, `platform[env].kubeconfig`;
+`why sub`, `why region` for `k3s.region`; `moved`'s old address,
+`moved(net.subnet, "sub", k3s.subnet)` for state's `k3s.sub`), and one
 that names several is an error naming each by its full name. The plan
 prints the path tree: lines that share a prefix (a deployment, a used
 module's instance, a copy) group under one header line, each keeping its

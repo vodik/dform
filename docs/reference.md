@@ -83,8 +83,9 @@ and version (Cargo's semver syntax: `"2.1"` is `^2.1`), each stack's
 operational settings, `[stacks.NAME]` for `stacks/NAME.df` over
 `[defaults]`, and globs discovery skips. A stack's settings are a closed
 list: `backend`, `role`, `approvals`, `audit_sink` and
-`isolated`; a term is written as a string, `{stack}` the stack's name
-and `{k}` the value of its key `k` (in `backend`), and any other key is
+`isolated`; a term is written as a string, `{stack}` the stack's full
+name (`stacks.shop`, R-200) and `{k}` the value of its key `k` (in
+`backend`), and any other key is
 an error naming the list (`config` is gone: a stack's settings document
 is `set from` in its file, "Giving inputs"). A
 `[stacks.NAME]` no file is is an error. Policy reads it as facts,
@@ -220,8 +221,9 @@ is up to date is one line; one whose plan fails or is refused stops the
 chain there, what reads it `not planned`, and the run exits with its
 status. `--json` nests the same: `summary`, `outcome`, and per deployment
 its `deployment`, `mark`, `site`, `state` and its own document under
-`plan`. A stack that reads none plans alone, as before; so do `-q`,
-`--out` and `--destroy`, which plan the one deployment named:
+`plan`. `--out` writes the closure to one plan file, in apply order
+("The plan file"). A stack that reads none plans alone, as before; so do
+`-q` and `--destroy`, which plan the one deployment named:
 
 ```
 $ dform plan apps env=lab
@@ -234,7 +236,7 @@ plan: 3 changes (3 create); 1 create after stacks.platform[env=lab] is applied
     + net.vpc edge    stacks/platform.df:4
         cidr = "10.0.0.0/16"
 
-+ stacks.apps[env=lab]      stacks/apps.df  never applied, 1 change (1 create) over 1 tick; 1 create after stacks.platform[env=lab] is applied  after stacks.platform[env=lab]
++ stacks.apps[env=lab]      stacks/apps.df  never applied, 1 change (1 create) over 1 tick; 1 create after stacks.platform[env=lab] is applied
   tick 1  1 change
     + net.vpc known  stacks/apps.df:5
         cidr = "10.1.0.0/16"
@@ -261,9 +263,9 @@ ones applied, so it cannot be counted before they run). A dependency whose apply
 run before its reader; stacks that read each other are an error naming
 the cycle. A `--set` goes to each stack of the run that declares the
 input (one none declares is the target's error); `--input-file` is the
-target's. A plan file,
-a `--world` fixture and a program outside a project apply only
-themselves. `apply` with no target, in a project of several stacks under
+target's. A plan file applies the deployments it planned, in its order
+("The plan file"); a `--world` fixture and a program outside a project
+apply only themselves. `apply` with no target, in a project of several stacks under
 the working directory and no project module, applies every one of them
 (each with its default key) in dependency order, each run headed and
 confirmed on its own; a `--set` no stack declares is an error.
@@ -441,8 +443,9 @@ dform status forgejo env=prod
 under `stacks/` and root files a `[stacks.NAME]` names; a module run by
 path is no stack of the project), one row per deployment with state
 (not one `destroy` removed) and per deployment project.df lists:
-its stack (with its key) and file, whether project.df lists it, where its state is when that is a
-bucket, its last apply (time, actor and the project's commit, from the
+its stack (with its key) and file, its deployment by its full name, whether project.df lists it, where its state is when that is a
+bucket (and `stored as NAME: its next apply renames it` for one an
+earlier dform stored under its short name, "State backends"), its last apply (time, actor and the project's commit, from the
 audit log) and a saved plan not yet applied. `dform state show TARGET`
 prints the deployment's objects, one row per address with its provider
 and remote id, then its outputs as a key/value table (a secret output as
@@ -510,7 +513,10 @@ too):
 | 6 | locked: another run holds the stack (named, one line) |
 | 128 + N | stopped by signal N after the run unwound (130 for SIGINT, 143 for SIGTERM) |
 
-`plan --json` says the same word in `outcome`: `done` or `refused`.
+`plan --json` says the same word in `outcome`: `done` or `refused`. A
+command of several deployments (`apply X` with what X reads, a plan file
+of several, the project's) exits with the status of the first that did
+not end done, the deployments after it not run.
 <!-- /man:exit-status -->
 
 ### Environment
@@ -540,8 +546,8 @@ Variables a test sets (`DFORM_TEST_*`, the poll intervals) and those
 | `dform.toml` | the project root: the nearest directory up from the working directory (or `-C DIR`) holding one; its providers, stacks and defaults |
 | `stacks/STACK.df` | a stack; every other `.df` file is a module, named by its path from the root |
 | `dform.state/` | at the project root, gitignored: per deployment its state, its master (sealed, or a key file) and audit log, and the project's registry and cache |
-| `dform.state/STACK/state.json` | a deployment's state (`dform.state/STACK/K=V/` for a keyed stack's), with `state.master` (its master sealed under `[secrets] passphrase` and to its `recipients`) or `state.key` (its master in the clear, without `[secrets]`), `state.lock` (the apply lock), `state.audit.jsonl` (the audit log) and `outputs.json` (the published outputs) beside it |
-| `dform.state/stacks.json` | the registry: where each applied deployment's objects are (a directory, or `s3://..`), for the stacks that read its outputs |
+| `dform.state/STACK/state.json` | a deployment's state, STACK the stack's full name (`dform.state/stacks.shop/`; `dform.state/STACK/K=V/` for a keyed stack's), with `state.master` (its master sealed under `[secrets] passphrase` and to its `recipients`) or `state.key` (its master in the clear, without `[secrets]`), `state.lock` (the apply lock), `state.audit.jsonl` (the audit log) and `outputs.json` (the published outputs) beside it |
+| `dform.state/stacks.json` | the registry: where each applied deployment's objects are (a directory, or `s3://..`), by its full name (`stacks.shop[env=prod]`), for the stacks that read its outputs |
 | `dform.state/cache/` | what providers and trust roots fetch (the Kubernetes OpenAPI document, JWKS) |
 | `~/.config/dform/credentials/KIND/NAME` | the operator's credential `KIND:NAME` (under `$XDG_CONFIG_HOME`, or `DFORM_CREDENTIALS`); `age/NAME` an age identity that opens a master sealed to its recipient |
 | `~/.cache/dform/` | git mirrors, compiled wasm providers, the language server's read-only files (under `$XDG_CACHE_HOME`) |
@@ -564,8 +570,9 @@ them under `share/man/man1/`.
 
 ### State backends
 
-`backend = 'local("DIR")'` (the default, `dform.state/<stack>`) keeps a
-deployment's files in a directory. `backend = 's3("BUCKET", "PREFIX",
+`backend = 'local("DIR")'` (the default, `dform.state/<stack>`, the
+stack's full name: `dform.state/stacks.shop`) keeps a deployment's files
+in a directory. `backend = 's3("BUCKET", "PREFIX",
 {endpoint: "URL", region: "R"})'` keeps them in an S3 bucket under PREFIX
 (a keyed stack's deployment under `PREFIX/<k>=<v>`, unless the backend
 names the key, `s3("acme", "shop/{env}")`, and each deployment is where it
@@ -580,10 +587,26 @@ and `approval-pending.json`). The record is
 optional: without an endpoint it is AWS S3's regional endpoint
 (virtual-host style), with one the URL path-style (MinIO, OVH Object
 Storage, anything S3-compatible); the region defaults to `us-east-1`. In
-`[defaults]` and `[stacks.NAME]`, `{stack}` is the stack's name and `{k}`
-the value of its key `k`. The mock's world, the inventory and the cache
-stay under `dform.state/`: they are the provider's and the machine's, not
-state.
+`[defaults]` and `[stacks.NAME]`, `{stack}` is the stack's full name
+(`stacks.shop`) and `{k}` the value of its key `k`. The mock's world, the
+inventory and the cache stay under `dform.state/`: they are the
+provider's and the machine's, not state.
+
+Storage names a deployment by its full name (R-200): its directory (or a
+backend's `{stack}`), the registry's entry, its `outputs.json`'s
+`deployment`, the grants of its sealed outputs, and its lock's and
+lease's holder record, `stacks.platform[env=lab]`. A deployment stored
+under its short name by an earlier dform (`dform.state/platform/env=lab`,
+`s3(.., "state/platform/env=lab")`, the registry's `platform[env=lab]`) is
+read where it is by every run (a plan, `why`, a reader of its outputs),
+listed by `stack list` as `stored as platform[env=lab]: its next apply
+renames it`, and moved by its next apply before anything else: its
+objects copied to the full name's place, the registry's entry renamed,
+then the old objects deleted, under the old place's lock (a bucket's
+lease); the apply says `renamed storage platform[env=lab] →
+stacks.platform[env=lab]` and its audit log has one `renamed` entry
+saying the same. A backend that does not name the stack (`s3("acme",
+"shop/{env}")`) moves nothing; its registry entry is renamed.
 
 ### State and its log
 
@@ -706,7 +729,7 @@ on stderr for each phase of a run and each backend request and provider
 call, with the time since the run began and how long it took:
 
 ```text
-dform:    0.022s       2.2ms  s3 get s3://dform/app/state.master
+dform:    0.022s       2.2ms  s3 get s3://dform/stacks.app/state.master
 dform:    0.969s     606.7ms  provider ovh: Configure
 dform:    1.575s     605.8ms  provider ovh: Read ovh.instance lab-0
 dform:    1.612s    1611.8ms  finished
@@ -718,7 +741,8 @@ dform:    1.612s    1611.8ms  finished
 declares an input that is deployment identity: an input in every other
 respect (typed, a cell, read as `env`), given by the target, never
 `--set`, and never a secret. Each value of the key is its own deployment,
-`app[env=prod]`, with its own state directory (`dform.state/app/env=prod/`;
+`app[env=prod]`, with its own state directory
+(`dform.state/stacks.app/env=prod/`, the stack's full name's;
 several keys are joined, `env=prod,region=us-east1`, and a value is escaped
 for the file system: every byte but letters, digits, `-`, `_` and a `.`
 that does not lead is `%XX`), lock, registry entry and controller. Inputs
@@ -733,7 +757,7 @@ environment`, so `plan dform env=prod` plans prod against prod's state,
 not staging's.
 
 ```bash
-cargo run -- -C examples/demo apply dform env=staging   # dform[env=staging]: dform.state/dform/env=staging/
+cargo run -- -C examples/demo apply dform env=staging   # dform[env=staging]: dform.state/stacks.dform/env=staging/
 cargo run -- -C examples/demo plan dform env=prod       # dform[env=prod]: creates, beside staging
 cargo run -- -C examples/demo stack rekey dform env=staging env=stg   # move a deployment's state
 ```
@@ -744,7 +768,7 @@ new key's. Nothing in the cloud changes. First it lists, from provenance,
 the resources whose name-like attributes depend on the key: the next plan
 renames them, usually a replace. With the new key only (`rekey dform
 env=staging`) it moves the state a stack had before it was keyed, the
-files directly in `dform.state/<stack>/`; a plan of a keyed stack whose
+files directly in `dform.state/<stack>/` (its full name's); a plan of a keyed stack whose
 deployment has no state yet but whose unkeyed state exists says so.
 
 The collision lint: in a keyed stack, a resource whose name-like attribute
@@ -818,10 +842,14 @@ path = "../platform"
 ```
 
 `use platform.stacks.cluster` then `cluster[env="prod"].endpoint` reads
-the deployment through the backend that project's own `dform.toml` names
-in `[defaults] backend` (`{stack}` the stack's name; without one, its
-`dform.state/`), a keyed deployment under its key's segment, and the
-object is that deployment's `outputs.json`. A reader needs read access to
+the deployment `platform.stacks.cluster[env=prod]` (its full name: the
+package's name, then the stack's path in the package, R-200) through the
+backend that project's own `dform.toml` names in `[defaults] backend`
+(`{stack}` the stack's full name in the package, `stacks.cluster`;
+without one, its `dform.state/stacks.cluster/`), a keyed deployment under
+its key's segment, and the object is that deployment's `outputs.json`;
+one the package has not applied since its storage took full names is
+read where it was, under `cluster`. A reader needs read access to
 that object only. A deployment the package has not applied has no
 outputs. The package's other files are modules like this project's:
 `use platform.config`.
@@ -831,7 +859,8 @@ root, so the project's stacks share it wherever in the project dform runs
 from. It is gitignored: it holds each deployment's master (a key file, or
 sealed).
 
-- Core state (Terraform-style address -> remote mapping, outputs): `dform.state/<stack>/state.json`
+- Core state (Terraform-style address -> remote mapping, outputs): `dform.state/<stack>/state.json`,
+  `<stack>` the stack's full name (`stacks.shop`)
   (a keyed stack's deployment: `dform.state/<stack>/<k>=<v>/state.json`), and
   beside it the published outputs `outputs.json`.
 - The fake backend's world (what "exists"): `dform.state/<stack>/remote.json`, beside the state.
@@ -2092,7 +2121,13 @@ under one of them it prints the change and stops before any Apply call, on
 the deny the policy pass derives from `deformation(remaining, ...)` (run
 `apply` again to plan against the world as it now is).
 
-`plan --out PLAN.json` writes the plan file: the inputs (each program file with a
+`plan --out PLAN.json` writes the plan file (format version 5): the
+deployments the plan covers in apply order, `deployments`, the target's
+dependencies first and the target last (R-200: `plan apps env=lab --out
+p.json` writes `stacks.platform[env=lab]`, then `stacks.apps[env=lab]`;
+a deployment that reads none is a file of one), each by its full name,
+`deployment`, with what it is applied after, `after`, and its plan. A
+deployment's plan is: the inputs (each program file with a
 digest of its content, each `--input-file` with its digest keyed like a
 sensitive value's, since an input file may hold a secret, `--set`,
 `--data`, `--provider`, `--world`, `--inventory`), a digest of the
@@ -2106,8 +2141,24 @@ resolved and the ones the delta still carries; the tick schedule; the
 extern answers the plan read (a git table's or document's commit among
 them); the names the program declares more than once, each under a
 clause, `"guarded": [{"name": "db", "declarations": 2}]` (also in `plan
---json`; docs/grammar.md "Guarded declarations"); and the plan's
-digest, with what needs an approval (see "Approvals"). `apply PLAN.json` takes its inputs from the
+--json`; docs/grammar.md "Guarded declarations"); the digest of each
+other deployment's outputs it read, what it was planned against
+(`inputs.stack_outputs`); and the plan's digest, with what needs an
+approval (see "Approvals"). A file of an earlier format is refused,
+naming its version: plan again. `apply PLAN.json` applies the file's
+deployments in its order, each a run of its own headed `== NAME` under a
+`stacks:` line; a file of several asks before each deployment, `Apply
+these N changes to platform[env=lab]?` (or `--yes`), a file of one asks
+nothing, as before; the first that fails, is declined, stops or is
+refused ends the command there, with its status, before the
+deployments after it. Each is checked against its own plan at its turn,
+as below: a dependency's plan made against its state as it was, a
+reader's against its dependency's planned outputs, which hold once the
+dependency's apply in this run published them (a dependency whose
+outputs moved otherwise since the plan refuses the reader, `the outputs
+of platform[env=lab]: published again with other values since the
+plan`). `--approval FILE` goes to the deployment whose plan needs one.
+A deployment's run takes its inputs from the
 file (flags given on the command line must match them), refreshes and re-evaluates at
 every tick, and refuses unless the delta it computes is the file's:
 Terraform's stale-plan rule, stated for Z-sets. Every deformation must be in
@@ -2250,9 +2301,12 @@ approver_allowed(who, r) where requires_approval(r, _), who in ["alice", "bob"]
 A plan with rows prints a `held for approval` section, each change with
 its reason and where the row is derived, and the plan's digest, `plan digest: sha256:...` (a plan that
 writes a file says its digest on stderr, `plan file: PLAN (plan digest:
-sha256:...)`); `plan --json` has them as
+sha256:...)`, a file of several each deployment's, `(plan digests:
+stacks.platform[env=lab] sha256:.., stacks.apps[env=lab] sha256:..)`);
+`plan --json` has them as
 `needs_approval` and `digest`. The digest is sha256 over the canonical JSON
-(sorted keys, no whitespace) of the plan file without its `digest` field:
+(sorted keys, no whitespace) of the deployment's plan in the file without
+its `digest` field:
 the delta, the inputs and the extern answers (a git source's commit among
 them, which `apply PLAN` reads again), with every secret already the stack's HMAC of it. The plan file
 records it (`digest`) and the rows (`needs_approval`).
