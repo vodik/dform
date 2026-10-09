@@ -98,6 +98,12 @@ pub fn title(tick: usize, n: usize) -> String {
     format!("tick {tick}  {n} change{}", if n == 1 { "" } else { "s" })
 }
 
+/// The title of a later tick with no change of its own, `tick 2  waits
+/// on db.postgres main.endpoint`: what it waits on, as its wait says it.
+pub fn waiting(tick: usize, on: &[String]) -> String {
+    format!("tick {tick}  waits on {}", on.join(", "))
+}
+
 /// Whether action `a` is a call the tick makes: a line of its block.
 pub fn is_call(a: &Action) -> bool {
     !matches!(a.kind, ActionKind::Noop | ActionKind::Pending)

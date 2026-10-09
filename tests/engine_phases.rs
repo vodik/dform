@@ -128,7 +128,8 @@ fn world_resources(s: &Scratch) -> Vec<String> {
 /// the boundary resolves the cluster's zones, endpoint and ca; tick 2 creates
 /// a nodepool per zone and the kubernetes objects. The nodepools are a
 /// pending group tick 1's plan could not name: tick 2's plan names them,
-/// and `--yes` applies it (R-122). Apply again: undeformed.
+/// what the group waited on, not a difference from the plan shown, and
+/// `--yes` applies it (R-122). Apply again: undeformed.
 #[test]
 fn gke_two_phase_applies_in_two_ticks() {
     let s = Scratch::new("gke-ticks");
@@ -136,7 +137,7 @@ fn gke_two_phase_applies_in_two_ticks() {
     let said = s.said();
     assert_eq!(
         said.iter().map(brief).collect::<Vec<_>>(),
-        ["plan 1", "policies 1", "plan 2", "differs 2"]
+        ["plan 1", "policies 1", "plan 2"]
     );
     // Tick 2 names the node pools tick 1's plan could not.
     let tick2 = said[2]["text"].as_str().unwrap();
@@ -171,16 +172,21 @@ fn gke_two_phase_applies_in_two_ticks() {
 fn gke_one_zone_stops_after_tick_one() {
     let s = Scratch::new("gke-one-zone");
     let r = gke(&s, "gke_two_phase.df", &["apply", "--set", "zones=1"]).failure();
-    // One plan printed: no later tick was planned.
+    // One plan printed: no later tick was planned; the boundary's
+    // violation refuses it.
+    let said = s.said();
     assert_eq!(
-        s.said().iter().map(brief).collect::<Vec<_>>(),
-        ["plan 1", "policies 1"]
+        said.iter().map(brief).collect::<Vec<_>>(),
+        ["plan 1", "policies 1", "violations"]
+    );
+    assert_eq!(said[2]["after"], 1);
+    assert_eq!(
+        said[2]["lines"],
+        serde_json::json!(["cluster must be in at least two zones  cluster = \"pngu\""])
     );
     assert!(
         r.stderr
-            .contains("- cluster must be in at least two zones  cluster = \"pngu\"")
-            && r.stderr
-                .contains("; stopped after tick 1; ticks 1 to 1 were applied"),
+            .contains("; stopped after tick 1; ticks 1 to 1 were applied"),
         "{}",
         r.stderr
     );

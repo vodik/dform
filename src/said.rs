@@ -1,7 +1,9 @@
 //! What an apply says on stdout around its ticks' blocks (R-206, After
 //! R-206): each tick's plan, the policies after a tick, a provider
 //! configured at a boundary, what a re-planned tick differs in, and the
-//! questions. The apply's ticks decide (`cli::apply`); a [`Teller`] over
+//! questions; and on stderr, through the block's route (above a block
+//! drawn meanwhile, `progress::line`), the violations that refuse it and
+//! the warnings of a boundary. The apply's ticks decide (`cli::apply`); a [`Teller`] over
 //! the [`Said`] events words them, as `progress`'s printer words the
 //! block on stderr: a fixed list of events prints the same every time
 //! (tests/apply_said.rs), and what a run said is read back as events
@@ -81,13 +83,13 @@ pub enum Said {
     Moved(String),
     /// Tick `tick`'s plan, as the plan prints it (`text`): a later tick's
     /// from that tick to the end, its values as the boundary learned
-    /// them. `boundary`: another tick follows it; `idle`: a later tick
+    /// them. `boundary`: another tick follows it; `waits`: a later tick
     /// with no change of its own (it only waits), which the report gives
-    /// no section of its own.
+    /// no section of its own, and what it waits on, its header's.
     Plan {
         tick: usize,
         boundary: bool,
-        idle: bool,
+        waits: Option<Vec<String>>,
         text: String,
     },
     /// What tick 1 carries over from an interrupted apply, as
@@ -118,9 +120,31 @@ pub enum Said {
     Answered(bool),
     /// What chaos did to the fake world in a tick (`dev --chaos`).
     Chaos(String),
+    /// The constraint violations that refuse the apply, each as
+    /// `report::violation_line` says it: of the tick's plan, or (`after`)
+    /// those the boundary after that tick derived. On stderr.
+    Violations {
+        after: Option<usize>,
+        lines: Vec<String>,
+    },
+    /// A warning the boundary's evaluation said, as it may be printed. On
+    /// stderr.
+    Warning(String),
+    /// What changed in the world under the remaining actions of the
+    /// interrupted apply this one resumes, as `executor::format_changes`
+    /// says it. On stderr.
+    ChangedUnder(String),
 }
 
 impl Said {
+    /// Whether it is said on stderr, beside the block, not on stdout.
+    pub fn on_stderr(&self) -> bool {
+        matches!(
+            self,
+            Said::Violations { .. } | Said::Warning(_) | Said::ChangedUnder(_)
+        )
+    }
+
     /// The event as `DFORM_TEST_SAID` records it.
     pub fn json(&self) -> serde_json::Value {
         use serde_json::json;
@@ -129,10 +153,10 @@ impl Said {
             Said::Plan {
                 tick,
                 boundary,
-                idle,
+                waits,
                 text,
             } => json!({
-                "said": "plan", "tick": tick, "boundary": boundary, "idle": idle, "text": text,
+                "said": "plan", "tick": tick, "boundary": boundary, "waits": waits, "text": text,
             }),
             Said::Carried(text) => json!({ "said": "carried", "text": text }),
             Said::Approved { by, digest } => {
@@ -173,6 +197,11 @@ impl Said {
             }
             Said::Answered(yes) => json!({ "said": "answered", "yes": yes }),
             Said::Chaos(note) => json!({ "said": "chaos", "note": note }),
+            Said::Violations { after, lines } => {
+                json!({ "said": "violations", "after": after, "lines": lines })
+            }
+            Said::Warning(text) => json!({ "said": "warning", "text": text }),
+            Said::ChangedUnder(text) => json!({ "said": "changed under", "text": text }),
         }
     }
 }
@@ -194,18 +223,21 @@ impl Teller {
             Said::Plan {
                 tick,
                 boundary,
-                idle,
+                waits,
                 text,
             } => {
                 match self.quiet {
                     true if *tick > 1 || *boundary => writeln!(out, "tick {tick}:")?,
                     true => {}
                     // Apart from the block above it; a tick that only
-                    // waits says which tick the report is of.
+                    // waits says which tick the report is of, and on
+                    // what, as its wait says it.
                     false if *tick > 1 => {
                         writeln!(out)?;
-                        if *idle {
-                            writeln!(out, "{}", report::progress::title(*tick, 0))?;
+                        match waits.as_deref() {
+                            Some([]) => writeln!(out, "{}", report::progress::title(*tick, 0))?,
+                            Some(on) => writeln!(out, "{}", report::progress::waiting(*tick, on))?,
+                            None => {}
                         }
                     }
                     false => {}
@@ -244,13 +276,39 @@ impl Teller {
             // The terminal echoed it.
             Said::Answered(_) => Ok(()),
             Said::Chaos(note) => writeln!(out, "chaos: {note}"),
+            Said::Violations { after, lines } => {
+                match after {
+                    Some(tick) => writeln!(out, "constraint violations after tick {tick}:")?,
+                    None => writeln!(out, "constraint violations:")?,
+                }
+                for l in lines {
+                    writeln!(out, "- {l}")?;
+                }
+                Ok(())
+            }
+            Said::Warning(text) => writeln!(out, "warning: {text}"),
+            Said::ChangedUnder(text) => {
+                write!(out, "the world changed under a remaining action:\n{text}")
+            }
         }
     }
 
-    /// Event `s` said: on stdout, and recorded where `DFORM_TEST_SAID`
-    /// names a file.
+    /// Event `s` said: on stdout, or a line at a time through the block's
+    /// route (`progress::line`: above a block drawn meanwhile, else on
+    /// stderr); and recorded where `DFORM_TEST_SAID` names a file.
     pub fn say(&self, s: Said) {
-        let _ = self.write(&s, &mut std::io::stdout().lock());
+        match s.on_stderr() {
+            false => {
+                let _ = self.write(&s, &mut std::io::stdout().lock());
+            }
+            true => {
+                let mut text = Vec::new();
+                let _ = self.write(&s, &mut text);
+                String::from_utf8_lossy(&text)
+                    .lines()
+                    .for_each(crate::progress::line);
+            }
+        }
         if let Some(path) = record() {
             let line = format!("{}\n", s.json());
             let _ = std::fs::OpenOptions::new()

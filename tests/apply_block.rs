@@ -88,7 +88,7 @@ fn a_later_tick_prints_its_plan_again_after_the_policies() {
 }
 
 /// A policy that fails at the boundary: its line under tick 1, then the
-/// refusal; tick 2 never runs.
+/// violation that refuses tick 2, which never runs.
 #[test]
 fn a_policy_failing_at_the_boundary_is_its_line_above_the_refusal() {
     let s = scratch(
@@ -101,7 +101,7 @@ fn a_policy_failing_at_the_boundary_is_its_line_above_the_refusal() {
     let said = s.said();
     assert_eq!(
         said.iter().map(brief).collect::<Vec<_>>(),
-        ["plan 1", "policies 1"]
+        ["plan 1", "policies 1", "violations"]
     );
     let policies = said[1]["text"].as_str().unwrap();
     assert!(
@@ -109,17 +109,21 @@ fn a_policy_failing_at_the_boundary_is_its_line_above_the_refusal() {
             && policies.contains("\n  fails  the vm reads no endpoint nowhere  p.df:7"),
         "{policies}"
     );
+    assert_eq!(said[2]["after"], 1);
     assert!(
-        r.stderr
-            .contains("constraint violations after tick 1:\n- the vm reads no endpoint nowhere"),
+        said[2]["lines"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("the vm reads no endpoint nowhere"),
         "{}",
-        r.stderr
+        said[2]
     );
     assert_eq!(ticks(&s), [1]);
 }
 
-/// A later tick that adds to the plan shown asks on its header line; its
-/// block follows.
+/// A later tick that adds to the plan shown (a pending group's member,
+/// named only now: what the group waited on, not a difference) asks on
+/// its header line; its block follows.
 #[test]
 fn a_later_tick_asks_on_its_header_line() {
     let s = scratch(
@@ -141,10 +145,10 @@ resource iam.policy "connect-${host}" {
     let events = s.said();
     assert_eq!(
         events.iter().map(brief).collect::<Vec<_>>()[3..],
-        ["plan 2", "differs 2", "asked tick 2", "answered yes"],
+        ["plan 2", "asked tick 2", "answered yes"],
         "{said:?}"
     );
-    assert_eq!(events[5]["changes"], 1);
+    assert_eq!(events[4]["changes"], 1);
 }
 
 /// A failure at tick 2 is said once, below the block; the run ends

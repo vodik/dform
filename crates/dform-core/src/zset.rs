@@ -2192,7 +2192,8 @@ pub mod file {
     /// same changes, the same values where the shown plan knew them; a
     /// value it did not know (a null) is not a difference whatever it
     /// became, nor is a leaf the re-plan adds whose value is still
-    /// unknown. `ran`: what earlier ticks of this apply ran, which changes
+    /// unknown, nor a change the re-plan holds for a later tick (it
+    /// waits). `ran`: what earlier ticks of this apply ran, which changes
     /// again if it is in this tick. `key` the digests are keyed with: a
     /// value shown in the clear that the re-plan holds as a secret, or
     /// one shown as a secret that the re-plan holds in the clear (its
@@ -2309,15 +2310,12 @@ pub mod file {
                 );
             }
         }
+        // A change still to come, in a later tick or `later`, waits on
+        // what this boundary did not make known yet: a wait, not a
+        // difference.
         for (k, s) in shown.iter().filter(|(_, s)| s.tick == Some(tick)) {
-            if ran.contains(k) {
-                continue;
-            }
-            match now.get(k).map(|c| c.tick) {
-                Some(Some(t)) if t == tick => {}
-                Some(Some(t)) => push('-', k, None, format!("{}, now in tick {t}", s.action)),
-                Some(None) => push('-', k, None, format!("{}, now later", s.action)),
-                None => push('-', k, None, format!("{}, no longer a change", s.action)),
+            if !ran.contains(k) && !now.contains_key(k) {
+                push('-', k, None, format!("{}, no longer a change", s.action));
             }
         }
         out
@@ -2573,6 +2571,14 @@ mod tests {
             ]
         );
         assert!(tick_differences(&shown, &shown, 2, &ran, Some(&key)).is_empty());
+        // Held for a later tick, or `later`: it waits, it does not differ.
+        for tick in [Some(3), None] {
+            let held = Entry {
+                tick,
+                ..now[0].clone()
+            };
+            assert!(tick_differences(&shown, &[held], 2, &ran, Some(&key)).is_empty());
+        }
         // Gone from the tick, and a change it did not show.
         let other = Entry {
             name: "c".into(),

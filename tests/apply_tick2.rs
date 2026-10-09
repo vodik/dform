@@ -144,7 +144,8 @@ fn a_plan_file_applies_the_tick_it_showed() {
 /// The server's endpoint not there yet after tick 1 (chaos `not-ready`, a
 /// host still booting): the tick waits on it, then configures the
 /// provider and applies what waited on it. The tick that only waits
-/// prints its header.
+/// prints its header, which says what it waits on; a wait is not a
+/// difference from the plan shown.
 #[test]
 fn the_boundary_waits_for_the_settings_then_configures() {
     let s = scratch("tick2-waits");
@@ -163,19 +164,16 @@ fn the_boundary_waits_for_the_settings_then_configures() {
     let events = s.said();
     assert_eq!(
         events.iter().map(brief).collect::<Vec<_>>(),
-        [
-            "plan 1",
-            "plan 2",
-            "differs 2",
-            "configured k8s 2",
-            "plan 3"
-        ],
+        ["plan 1", "plan 2", "configured k8s 2", "plan 3"],
         "{}",
         r.stdout
     );
-    assert_eq!(events[1]["idle"], true);
+    assert_eq!(
+        events[1]["waits"],
+        serde_json::json!(["db.postgres server.endpoint"])
+    );
     assert!(
-        events[4]["text"]
+        events[3]["text"]
             .as_str()
             .unwrap()
             .contains("  + k8s.namespace ns"),

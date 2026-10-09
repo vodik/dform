@@ -192,7 +192,11 @@ tick 2  1 change   apply? [y/N]
 
 and so on until nothing is `later`. A change gone from the tick (`-
 net.subnet a  update, no longer a change`) is said there too, and not
-asked for: the tick does less than was shown. What was asked for is
+asked for: the tick does less than was shown. A wait is not a
+difference: a change the re-plan holds for a later tick (what it waits
+on is not known yet) is compared at the tick it runs in, and a pending
+group's member named only now is the tick's new address, asked for as
+above. What was asked for is
 what the next boundary compares with. `--yes` answers every question, printing
 what differs. A `n` is not an error: it stops the apply with
 what the earlier ticks did in state, says nothing at tick 1 (nothing was
@@ -1574,7 +1578,7 @@ made; the plan itself says what it is.
   is listed after the tick's changes, and the header says the count is
   not all of it: `tick 2  3+ changes`, `tick 2  ? changes` when the rule
   is all the tick has. A later tick of a running apply is headed the
-  same, `tick 2  0 changes` when it only waits.
+  same, `tick 2  waits on db.postgres main.endpoint` when it only waits.
 - `later`: what no tick of this plan decides (R-156). A resource rule
   stuck on an unknown no tick makes, by the address its
   statement names (`k8s.job "migrate-v${schema}"`), `one per ROW` when
@@ -1836,7 +1840,8 @@ is written again; its header carries a fill bar, the calls answered over
 the tick's calls (a fill, never a spinner), and the time the tick has
 run, then `done` and its time once the tick ends. A line said while the
 block is drawn (a call sent again, a timed-out call looked up, a
-`DFORM_LOG=debug` line) prints above it, and the block is drawn again
+`DFORM_LOG=debug` line, a warning or the constraint violations that
+stop the apply) prints above it, and the block is drawn again
 below:
 
 ```
@@ -1867,7 +1872,8 @@ policy after tick 1   14 hold · 1 undetermined   (was 12 · 1 fails · 2)
 A later tick prints its plan again before it runs, from that tick to
 the end, as the boundary re-derived it: its values as tick 1 made them
 (`db_host = "main.db.fake"` where the first plan said `db_host =
-main.endpoint`), a tick that only waits as `tick 2  0 changes`; `-q`
+main.endpoint`), a tick that only waits headed with what it waits on,
+`tick 2  waits on db.postgres main.endpoint`; `-q`
 prints each tick's bare plan, as scripts read it. A later tick whose
 re-plan has nothing left to change (what it waited on came back as the
 plan had it) prints no plan, whose `up to date` would read as the

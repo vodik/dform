@@ -267,10 +267,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
         let observed = backend.stored_world(&backend.observe(&self.st)?);
         let changed = executor::changed_under(backend, &remaining, &observed);
         if !changed.is_empty() {
-            eprint!(
-                "the world changed under a remaining action:\n{}",
-                executor::format_changes(&changed)
-            );
+            self.say(Said::ChangedUnder(executor::format_changes(&changed)));
         }
         let facts = zset::deformation_facts(
             remaining.keys().map(|a| ("remaining", a)),
@@ -290,10 +287,13 @@ impl<'a, 'h> Ticks<'a, 'h> {
             return Ok(());
         }
         let redact = query::Redactor::new(&after.facts, backend.schema());
-        eprintln!("constraint violations:");
-        for d in &denies {
-            eprintln!("- {}", report::violation_line(d, &redact));
-        }
+        self.say(Said::Violations {
+            after: None,
+            lines: denies
+                .iter()
+                .map(|d| report::violation_line(d, &redact))
+                .collect(),
+        });
         self.persist()?;
         let verb = self.cx.cli.cmd.verb();
         Err(Refused::apply(
@@ -600,10 +600,14 @@ impl<'a, 'h> Ticks<'a, 'h> {
         }
         if !p.denies.is_empty() {
             let redact = query::Redactor::new(&p.res.facts, self.backend().schema());
-            eprintln!("constraint violations:");
-            for d in &p.denies {
-                eprintln!("- {}", report::violation_line(d, &redact));
-            }
+            self.say(Said::Violations {
+                after: None,
+                lines: p
+                    .denies
+                    .iter()
+                    .map(|d| report::violation_line(d, &redact))
+                    .collect(),
+            });
             let at = (tick > 1).then(|| {
                 format!(
                     "stopped at tick {tick}; ticks 1 to {} were applied",
@@ -722,7 +726,8 @@ impl<'a, 'h> Ticks<'a, 'h> {
 
     /// A batch apply's tick printed: its plan, under `tick N:` at the bare
     /// level; a later tick that only waits has no section of its own in the
-    /// report, so its header says which tick the report is of. A later
+    /// report, so its header says which tick the report is of and what it
+    /// waits on, `tick 2  waits on db.postgres main.endpoint`. A later
     /// tick with nothing left to change prints no plan (its "up to date"
     /// is not the apply's end): its block says so, `tick 2  nothing to
     /// do`, on stderr as every block.
@@ -741,10 +746,11 @@ impl<'a, 'h> Ticks<'a, 'h> {
         if tick == 1 {
             text.push_str(&unreachable_text(&p.unreachable));
         }
+        let idle = tick > 1 && !report.undeformed && report.changes() == 0;
         self.say(Said::Plan {
             tick,
             boundary: t.boundary,
-            idle: !report.undeformed && report.changes() == 0,
+            waits: idle.then(|| self.waited_on(t)),
             text,
         });
     }
@@ -902,11 +908,18 @@ impl<'a, 'h> Ticks<'a, 'h> {
 
     /// The tick as its boundary re-plans it (`now`), against the tick as
     /// the plan shown had it (After R-156): the same changes and values, a
-    /// value the plan did not know whatever it became. One that differs is
-    /// printed below the tick with what differs, and asked for again; a
-    /// plan file or an approval stops before it, naming what differs.
+    /// value the plan did not know whatever it became, a change held for a
+    /// later tick a wait. One that differs is printed below the tick with
+    /// what differs, and asked for again; a plan file or an approval stops
+    /// before it, naming what differs. A change no plan listed (a pending
+    /// group's member, named only now: what the group waited on) is the
+    /// tick's new, asked for or stopped on as such (`confirm_later`), not
+    /// a difference.
     fn differs(&self, now: &[zset::file::Entry]) -> Vec<zset::file::Difference> {
         zset::file::tick_differences(&self.shown_delta, now, self.tick, &self.ran, self.key())
+            .into_iter()
+            .filter(|d| d.mark != '+' || self.listed.contains(&d.addr))
+            .collect()
     }
 
     /// The apply stopped before a tick, the state consistent.
@@ -1547,29 +1560,15 @@ impl<'a, 'h> Ticks<'a, 'h> {
     /// cannot is an error.
     fn wait(&mut self, t: &Tick) -> Result<()> {
         let (tick, backend, externs) = (self.tick, self.backend(), &self.evaluator.externs);
-        let sections = &t.planned.sections;
-        let mut waits: Vec<String> = sections.blocking.iter().cloned().collect();
-        waits.extend(t.held.iter().cloned());
-        waits.sort();
-        waits.dedup();
-        let on = waiting_on(sections, &self.st, externs);
+        let on = waiting_on(&t.planned.sections, &self.st, externs);
+        // Said as printed (R-111); the audit log keeps the labels.
+        let names = self.waited_on(t);
         if on.is_empty() {
-            // A null by its label; a provider's settings as `later` names
-            // them (R-110).
-            let waits: Vec<String> = waits
-                .iter()
-                .map(|n| match n.starts_with("provider ") {
-                    true => n.clone(),
-                    false => report::attribute_label(n),
-                })
-                .collect();
             bail!(
                 "apply stopped at tick {tick}: nothing definite to apply, still waiting on {}",
-                waits.join(", ")
+                names.join(", ")
             );
         }
-        // Said as printed (R-111); the audit log keeps the labels.
-        let names: Vec<String> = on.iter().map(|l| report::attribute_label(l)).collect();
         let labels: Vec<String> = on.iter().map(|l| ir::label(l)).collect();
         let (budget, setting) = self.wait_budget(&on);
         let mut w = crate::progress::Wait::new();
@@ -1654,6 +1653,25 @@ impl<'a, 'h> Ticks<'a, 'h> {
             .unwrap_or_else(|| self.waits.budget(None))
     }
 
+    /// What tick `t` waits on, as printed (R-111): the values waiting can
+    /// resolve, else every null its held changes wait on, by its label, a
+    /// provider's settings as `later` names them (R-110).
+    fn waited_on(&self, t: &Tick) -> Vec<String> {
+        let sections = &t.planned.sections;
+        let on = waiting_on(sections, &self.st, &self.evaluator.externs);
+        if !on.is_empty() {
+            return on.iter().map(|l| report::attribute_label(l)).collect();
+        }
+        let waits: BTreeSet<&String> = sections.blocking.iter().chain(&t.held).collect();
+        waits
+            .into_iter()
+            .map(|n| match n.starts_with("provider ") {
+                true => n.clone(),
+                false => report::attribute_label(n),
+            })
+            .collect()
+    }
+
     /// The boundary. The held deformations come back as facts with the
     /// documents they were planned against: the evaluator derives the deny
     /// when the world moved under one. A destroy is refused by what its
@@ -1666,7 +1684,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 .evaluate_with(&self.st, &BTreeSet::new(), &held, Some(tick))?;
         let redact = query::Redactor::new(&next.facts, backend.schema());
         for w in &next.warnings {
-            eprintln!("warning: {}", redact.text(w));
+            self.say(Said::Warning(redact.text(w)));
         }
         // What the tick made known may leave a read with no row (R-194).
         if !self.args.destroy {
@@ -1681,10 +1699,13 @@ impl<'a, 'h> Ticks<'a, 'h> {
         };
         if !refusing.is_empty() {
             self.policy_refused(&next)?;
-            eprintln!("constraint violations after tick {tick}:");
-            for v in &refusing {
-                eprintln!("- {}", report::violation_line(v, &redact));
-            }
+            self.say(Said::Violations {
+                after: Some(tick),
+                lines: refusing
+                    .iter()
+                    .map(|v| report::violation_line(v, &redact))
+                    .collect(),
+            });
             let conflicts = refusing.iter().filter(|v| report::is_conflict(v)).count();
             return Err(Refused::apply(
                 self.cx.cli.cmd.verb(),
