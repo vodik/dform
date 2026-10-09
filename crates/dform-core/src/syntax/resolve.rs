@@ -7119,8 +7119,9 @@ impl<'u> Lowerer<'u> {
     }
 
     /// A block entry's value: its term, or, for an entry that is only a
-    /// path, the pun: the path's last segment as a term, resolved where the
-    /// value would be (R-33), `color` for `spec.selector.color`.
+    /// simple name, the pun: the name as a term, resolved where the value
+    /// would be (R-33), `zone` for `zone`. A pun is one name on both sides
+    /// (R-216): `spec.selector.color` alone is an error.
     fn entry_value(
         &mut self,
         rc: &mut Rc,
@@ -7133,20 +7134,31 @@ impl<'u> Lowerer<'u> {
         }
         let path = node(a, BLOCK_PATH).ok_or(Skip)?;
         let seg = tokens(&path).last().ok_or(Skip)?;
-        if !seg.kind().is_word()
-            || matches!(
+        let named = seg.kind().is_word()
+            && !matches!(
                 seg.kind(),
                 NOT_KW | IN_KW | HAS_KW | WHERE_KW | IF_KW | TRUE_KW | FALSE_KW
-            )
-        {
+            );
+        let written = path.text().to_string();
+        let one = tokens(&path).nth(1).is_none();
+        if named && !one {
+            let parent = written[..written.len() - seg.text().len()].trim_end_matches('.');
             let d = Diagnostic::error(
                 self.span(a),
-                format!(
-                    "`{}` names no value: an entry is `path = term`",
-                    path.text()
-                ),
+                format!("`{written}` alone is not a pun: a pun is one simple name on both sides"),
             )
-            .with_help("an entry that is only a path takes the value its last segment names");
+            .with_help(format!(
+                "write `{written} = {seg}`, or `{parent} = {{ {seg} }}`"
+            ));
+            self.diags.push(d);
+            return Err(Skip);
+        }
+        if !named || !one {
+            let d = Diagnostic::error(
+                self.span(a),
+                format!("`{written}` names no value: an entry is `path = term`"),
+            )
+            .with_help(format!("give it a value: `{written} = ..`"));
             self.diags.push(d);
             return Err(Skip);
         }
@@ -8927,17 +8939,17 @@ mod tests {
         );
     }
 
-    /// An entry that is only a path is the pun of its last segment (R-33),
-    /// resolved as the value would be: a clause variable, a `let` (read
-    /// through its cell), with a rank.
+    /// An entry that is only a name is its pun (R-33), resolved as the
+    /// value would be: a clause variable, a `let` (read through its cell),
+    /// with a rank.
     #[test]
-    fn a_bare_entry_is_its_last_segment() {
+    fn a_bare_entry_is_its_name() {
         let got = lower(
             "let tags = { team: \"x\" }\n\
              resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n\
              resource net.subnet \"s-${zone}\" {\n\
                zone\n\
-               meta.zone\n\
+               meta.zone = zone\n\
                tags @default\n\
              } where data(\"zone\", zone)\n",
         );

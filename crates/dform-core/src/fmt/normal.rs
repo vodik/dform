@@ -366,16 +366,15 @@ impl Ctx {
         }
     }
 
-    /// A block entry whose value is its path's last segment is the pun
-    /// (R-33): `zone = zone` is `zone`, `spec.selector.color = color` is
-    /// `spec.selector.color`. A provider's `source` is a constant, never a
-    /// pun.
+    /// A block entry whose value is its own one-name path is the pun
+    /// (R-33): `zone = zone` is `zone`. A pun is one simple name on both
+    /// sides (R-216): `spec.selector.color = color` stays, and a bare
+    /// dotted path, the pun of its last segment before R-216, is written
+    /// out, `spec.selector.color` is `spec.selector.color = color`. A
+    /// provider's `source` is a constant, never a pun.
     fn entry_puns(&mut self, root: &SyntaxNode) {
         for a in root.descendants().filter(|n| n.kind() == ASSIGN) {
-            let (Some(path), Some(value)) = (
-                a.children().find(|c| c.kind() == BLOCK_PATH),
-                a.children().find(|c| c.kind() == CHAIN),
-            ) else {
+            let Some(path) = a.children().find(|c| c.kind() == BLOCK_PATH) else {
                 continue;
             };
             let Some(seg) = tokens(&path).last() else {
@@ -386,12 +385,26 @@ impl Ctx {
                     seg.kind(),
                     NOT_KW | IN_KW | HAS_KW | WHERE_KW | IF_KW | TRUE_KW | FALSE_KW
                 );
+            let one = tokens(&path).nth(1).is_none();
+            let Some(value) = a.children().find(|c| c.kind() != BLOCK_PATH) else {
+                if named && !one {
+                    let end: usize = path.text_range().end().into();
+                    self.edits.push((end, end, format!(" = {}", seg.text())));
+                }
+                continue;
+            };
             let assign = tokens(&a).any(|t| t.kind() == EQ);
             let source = path.text() == "source"
                 && a.parent()
                     .and_then(|b| b.parent())
                     .is_some_and(|s| crate::syntax::resolve::maybe_provider_use(&s).is_some());
-            if named && assign && !source && self.text(&value) == seg.text() {
+            if named
+                && one
+                && assign
+                && !source
+                && value.kind() == CHAIN
+                && self.text(&value) == seg.text()
+            {
                 let (start, end) = (path.text_range().end(), value.text_range().end());
                 self.edits.push((start.into(), end.into(), String::new()));
             }

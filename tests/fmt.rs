@@ -244,16 +244,33 @@ fn fmt_drops_an_empty_block() {
     assert_eq!(fmt(want), want);
 }
 
-/// An entry that is only a path is `path = SEG`, SEG its last segment
-/// (R-33): `fmt` prints `k` for `k = k` and leaves `k = v`, `k += k` and a
-/// provider's `source` as written; both forms print back.
+/// A block entry `k = k` is the pun `k` (R-33): `fmt` prints `k` and
+/// leaves `k = v`, `k += k` and a provider's `source` as written; both
+/// forms print back. A pun is one simple name on both sides (R-216):
+/// `spec.selector.color = color` stays as written.
 #[test]
 fn fmt_puns_an_entry_whose_value_is_its_name() {
     let src = "use aws { region = region, source = source }\n\
                resource net.subnet s {\n  zone = zone\n  spec.selector.color = color @default\n  \
                cidr = zone\n  tags += tags\n}\n";
     let want = "use aws { region, source = source }\n\
-                resource net.subnet s { zone, spec.selector.color @default, cidr = zone, tags += tags }\n";
+                resource net.subnet s { zone, spec.selector.color = color @default, cidr = zone, tags += tags }\n";
+    assert_eq!(fmt(src), want);
+    assert_eq!(fmt(want), want);
+}
+
+/// A bare dotted path, the pun of its last segment before R-216, is
+/// written out with its value, in every block that takes entries, so
+/// `fmt` repairs a program the formatter wrote under R-33; its rank
+/// stays after it.
+#[test]
+fn fmt_writes_out_a_bare_dotted_path() {
+    let src = "use k3s { net.cidr }\n\
+               resource k8s.deployment d {\n  spec.replicas\n  spec.template.metadata.labels @default\n  \
+               zone\n}\n";
+    let want = "use k3s { net.cidr = cidr }\n\
+                resource k8s.deployment d {\n  spec.replicas = replicas\n  \
+                spec.template.metadata.labels = labels @default\n  zone\n}\n";
     assert_eq!(fmt(src), want);
     assert_eq!(fmt(want), want);
 }
