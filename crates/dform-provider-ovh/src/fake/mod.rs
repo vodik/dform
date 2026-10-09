@@ -13,7 +13,8 @@
 //! a user and a private network change status the same way (`creating`
 //! then `available`, `attaching` then `in-use`, `BUILDING` then
 //! `ACTIVE`). The project is on a vRack until [`Server::no_vrack`]. Every DNS zone is the
-//! account's until [`Server::hosting`] names them; beside it, a DNS
+//! account's until [`Server::hosting`] names them, each served by
+//! [`NAMESERVERS`]; beside it, a DNS
 //! resolver over UDP answers the NS records [`Server::delegated`] gives.
 
 mod http;
@@ -41,6 +42,8 @@ pub const CLIENT_ID: &str = "fake-client-id";
 pub const CLIENT_SECRET: &str = "fake-client-secret";
 pub const PROJECT: &str = "0123456789abcdef0123456789abcdef";
 pub const DESCRIPTION: &str = "lab";
+/// The nameservers the API says serve every zone it hosts.
+pub const NAMESERVERS: [&str; 2] = ["dns200.anycast.me", "ns200.anycast.me"];
 
 /// One call the server answered: method, path (with its query), body.
 #[derive(Debug, Clone)]
@@ -603,7 +606,10 @@ impl World {
             {
                 not_found("This service")
             }
-            ("GET", ["domain", "zone", z]) => (200, json!({"name": z, "dnssecSupported": true})),
+            ("GET", ["domain", "zone", z]) => (
+                200,
+                json!({"name": z, "dnssecSupported": true, "nameServers": NAMESERVERS}),
+            ),
             (_, ["cloud", "project", p, ..]) if *p != PROJECT => not_found("This service"),
             ("GET", ["cloud", "project", _]) => (
                 200,

@@ -354,6 +354,25 @@ pub fn subnet(network: &str, o: &Json) -> (Json, Json) {
     (attrs, computed)
 }
 
+/// `ovh.zone(+name, -id, -nameservers)`: the zone `name` asked for
+/// (`domain.zone.Zone`), its id the name the API answers (the identity a
+/// record's `zone` names) and its nameservers as the API lists them.
+pub fn zone_row(name: &str, zone: &Json) -> Vec<Value> {
+    let nameservers = zone
+        .get("nameServers")
+        .and_then(Json::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Json::as_str)
+        .map(|n| Value::Str(n.trim_end_matches('.').to_string()))
+        .collect();
+    vec![
+        Value::Str(name.into()),
+        Value::Str(str_of(zone, "name").unwrap_or(name).into()),
+        Value::List(nameservers),
+    ]
+}
+
 /// `ovh.flavor(+region, -name, -vcpus: int, -ram: bytes, -disk: bytes)`:
 /// the flavors offered in `region` (`cloud.flavor.Flavor[]`), available
 /// ones, a name once. The API counts RAM in MiB and disk in GiB, as

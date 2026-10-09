@@ -1,11 +1,26 @@
 //! DNS records (`ovh.domain_record`): the API's `/domain/zone/{zone}/record/{id}`,
 //! their remote id `ZONE/ID`, named by their zone, type, subdomain and target.
 //! A zone's changes are served once it is refreshed. A zone the account does
-//! not host is said so, with where it is delegated (R-125).
+//! not host is said so, with where it is delegated (R-125). The zones the
+//! account hosts are a data source, `ovh.zone` (R-196).
 
 use super::*;
 
 impl Ovh {
+    /// `ovh.zone(+name, -id, -nameservers)`: the zone `name` when the
+    /// account hosts it (`GET /domain/zone/{zone}`), its id the name the
+    /// API keys it by and its nameservers those the API says serve it;
+    /// no row when it does not (a 404). A `not { ovh.zone(..) }` deny reads
+    /// that absence; Plan's refusal of a record in such a zone stays.
+    pub(super) fn zone_rows(&self, what: &str, name: &str) -> Result<Vec<Vec<Value>>> {
+        let a = self.account(what)?;
+        Ok(a.client
+            .get_opt(&format!("/domain/zone/{}", escape(name)))?
+            .map(|z| map::zone_row(name, &z))
+            .into_iter()
+            .collect())
+    }
+
     pub(super) fn read_record(&self, a: &Account, remote: &str) -> Result<Option<(Json, Json)>> {
         let (zone, id) = remote
             .rsplit_once('/')

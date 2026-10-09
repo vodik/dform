@@ -27,10 +27,13 @@
 # The data sources (R-106): a program reads them with no `extern` line.
 # `ovh.region` the project's regions, `ovh.flavor` a region's available
 # flavors (RAM and disk as the API counts them), `ovh.image` a region's
-# active images, the distribution the first word of the name.
+# active images, the distribution the first word of the name. `ovh.zone`
+# a DNS zone the account hosts, by its name: no row when it does not
+# (R-196), so `not { ovh.zone(z, _, _) }` is a deny's.
 extern_decl("ovh.region", "+project, -name, -status")
 extern_decl("ovh.flavor", "+region, -name, -vcpus: int, -ram: bytes, -disk: bytes")
 extern_decl("ovh.image", "+region, -name, -id, -distribution")
+extern_decl("ovh.zone", "+name, -id, -nameservers")
 
 type_provider("ovh.instance", "ovh")
 type_provider("ovh.ssh_key", "ovh")

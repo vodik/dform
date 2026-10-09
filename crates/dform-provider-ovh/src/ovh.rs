@@ -68,12 +68,14 @@ pub const SUBNET: &str = "ovh.subnet";
 pub const REGION: &str = "ovh.region";
 pub const FLAVOR: &str = "ovh.flavor";
 pub const IMAGE: &str = "ovh.image";
+pub const ZONE: &str = "ovh.zone";
 
 /// The data sources, each with its columns' binding (`+` an input).
-pub const EXTERNS: [(&str, &[bool]); 3] = [
+pub const EXTERNS: [(&str, &[bool]); 4] = [
     (REGION, &[true, false, false]),
     (FLAVOR, &[true, false, false, false, false]),
     (IMAGE, &[true, false, false, false]),
+    (ZONE, &[true, false, false]),
 ];
 
 /// The schema, as facts.
@@ -967,6 +969,7 @@ impl Ovh {
         let what = format!("answer {pred}({input:?}, ..)");
         Ok(match pred {
             REGION => self.region_rows(&what, input)?,
+            ZONE => self.zone_rows(&what, input)?,
             FLAVOR => {
                 let (a, p) = self.project(&what)?;
                 map::flavor_rows(input, &self.list(&a, &p, "flavor", input)?)
