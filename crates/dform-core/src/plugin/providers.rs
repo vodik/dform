@@ -2500,7 +2500,8 @@ impl Providers {
 
     /// Refresh as facts, for round-0 resolution (E Rule 4, F DR-11 revised):
     /// `identity(T, A, Rid)` for every address state maps to an object Read
-    /// returns, and `world_attr(T, Rid, P, V)` for every schema-computed or
+    /// returns, `remote_name(T, A, Program, Name)` for one dform named
+    /// (`StateEntry::name`), and `world_attr(T, Rid, P, V)` for every schema-computed or
     /// Optional+Computed path the world holds a value for. Secrets are never
     /// handed to the evaluator.
     pub fn world_facts(&self, state: &State) -> Result<Vec<Atom>> {
@@ -2517,6 +2518,18 @@ impl Providers {
                 record: None,
                 span: Default::default(),
             });
+            // The name dform gave it, for the program's (R-189): a read of
+            // the name answers it (`transform::remote_name_prelude`).
+            if let Some(name) = &e.name
+                && let Some((program, _)) = state::generation(name)
+            {
+                out.push(Atom {
+                    pred: crate::transform::REMOTE_NAME.into(),
+                    args: vec![s(&addr.typ), s(&addr.name), s(program), s(name)],
+                    record: None,
+                    span: Default::default(),
+                });
+            }
             let paths = self
                 .schema()
                 .computed_of(&addr.typ)
@@ -2637,6 +2650,9 @@ impl Providers {
             name: name.to_string(),
         };
         let label = crate::value::null_label(typ, name, attr);
+        if ctx.renaming.contains(&addr) && self.schema().remote_name_of(typ) == Some(attr) {
+            return Ok(provider::null_json(&label));
+        }
         if let Some(v) = ctx.resolved.get(&addr).and_then(|d| get_path(d, attr)) {
             return Ok(v.clone());
         }
@@ -2817,6 +2833,42 @@ impl Providers {
         doc
     }
 
+    /// The remote names of a create-first replacement of `addr` whose
+    /// type's remote name is its provider's (`type_remote_name`, R-189):
+    /// the old object's and the one the replacement is given, the next
+    /// generation of the program's, when the program's `want` would
+    /// collide with the old object's (`was`, its world document, or what
+    /// state recorded dform gave it). None when it would not, or the type
+    /// has none.
+    fn renamed(
+        &self,
+        addr: &Address,
+        want: &Json,
+        was: Option<&Json>,
+        entry: Option<&StateEntry>,
+    ) -> Option<(String, String)> {
+        let path = self.schema().remote_name_of(&addr.typ)?;
+        let want = get_path(want, path)?.as_str()?;
+        let generated = entry.and_then(|e| e.name.as_deref());
+        let was = generated
+            .or_else(|| was.and_then(|d| get_path(d, path)).and_then(Json::as_str))
+            .unwrap_or(want);
+        let new = state::next_name(want, was, generated)?;
+        Some((was.to_string(), new))
+    }
+
+    /// The name state recorded dform gave `addr`'s object, when `doc`
+    /// keeps it (`StateEntry::name`): a destroy-first replacement of one
+    /// made under a generation is made under it again.
+    fn kept_name(&self, addr: &Address, doc: &Json, state: &State) -> Option<String> {
+        let path = self.schema().remote_name_of(&addr.typ)?;
+        let sent = get_path(doc, path)?.as_str()?;
+        state
+            .get(addr)
+            .and_then(|e| e.name.clone())
+            .filter(|n| n == sent)
+    }
+
     /// Plan: refresh, then the Z-set `desired − world` (`zset::deformation`),
     /// then the owning provider's Plan (the diff, and replace when a
     /// `force_new` path changes) for each deformation. Actions come in
@@ -2851,6 +2903,14 @@ impl Providers {
         // as the world allows.
         let mut resolved: BTreeMap<Address, Json> = BTreeMap::new();
         let mut order = Vec::new();
+        let renaming: BTreeSet<Address> = retracted
+            .iter()
+            .filter(|a| {
+                self.schema().remote_name_of(&a.typ).is_some()
+                    && lifecycle.create_first(self.schema(), a)
+            })
+            .cloned()
+            .collect();
         for r in topo_sort(desired)? {
             let ctx = Ctx {
                 cloud: self,
@@ -2860,6 +2920,7 @@ impl Providers {
                 resolved: &resolved,
                 strict: None,
                 retracted,
+                renaming: &renaming,
             };
             self.check_held("plan", &r.addr, "", &r.attrs)?;
             let doc = self.desired_doc(&ctx, &r)?;
@@ -2985,12 +3046,23 @@ impl Providers {
                 zset::Kind::Undeformed => (Vec::new(), BTreeSet::new()),
                 _ => (changes, BTreeSet::new()),
             };
+            let renamed = match kind {
+                ActionKind::Replace { create_first: true } => {
+                    if let Some(why) = zset::create_first_refused(self.schema(), &addr) {
+                        return Err(crate::report::Failure::located(&addr, why).into());
+                    }
+                    let want = resolved.get(&addr).expect("a desired address");
+                    self.renamed(&addr, want, before.get(&addr), state.get(&addr))
+                }
+                _ => None,
+            };
             actions.push(Action {
                 kind,
                 addr: addr.clone(),
                 changes,
                 on,
                 kept: kept.remove(&addr).unwrap_or_default(),
+                renamed,
             });
         }
 
@@ -3006,6 +3078,7 @@ impl Providers {
                         changes,
                         on: BTreeSet::new(),
                         kept: Vec::new(),
+                        renamed: None,
                     },
                     deps,
                 )
@@ -3112,6 +3185,10 @@ struct Ctx<'a> {
     /// Plan: addresses being replaced, whose nulls stay unresolved (the
     /// replacement is a new object).
     retracted: &'a BTreeSet<Address>,
+    /// Plan: those of them replaced create-first under a name dform gives
+    /// (R-189): a reference to the name is unknown until the replacement
+    /// is made, as a null of theirs is.
+    renaming: &'a BTreeSet<Address>,
 }
 
 impl Ctx<'_> {
@@ -3166,6 +3243,9 @@ struct InFlight {
     addr: Address,
     /// The object's remote id before the call; empty for a create.
     remote: String,
+    /// A create's or a replace's remote name, when it is not the
+    /// program's (`StateEntry::name`).
+    named: Option<String>,
     /// The call, to send again when it failed in a way worth retrying.
     req: pb::ApplyRequest,
     /// How many times it has been sent again.
@@ -3234,6 +3314,8 @@ impl Tick<'_> {
         if self.world.is_none() {
             self.world = Some(cloud.refresh(state)?);
         }
+        // The remote name dform gives a create-first replacement.
+        let mut generated = None;
         let doc = match a.kind {
             ActionKind::Delete | ActionKind::DeleteDeposed => Json::Null,
             _ => {
@@ -3249,11 +3331,23 @@ impl Tick<'_> {
                     resolved: &self.resolved,
                     strict: Some(addr),
                     retracted: &BTreeSet::new(),
+                    renaming: &BTreeSet::new(),
                 };
-                let doc = cloud.desired_doc(&ctx, r)?;
+                let mut doc = cloud.desired_doc(&ctx, r)?;
+                if let ActionKind::Replace { create_first: true } = a.kind {
+                    generated = self.name_replacement(addr, &mut doc, state);
+                }
                 self.resolved.insert(addr.clone(), doc.clone());
                 doc
             }
+        };
+        // The name dform gave the object this call makes, which state
+        // records (`StateEntry::name`).
+        let named = match a.kind {
+            ActionKind::Create | ActionKind::Replace { .. } => {
+                generated.or_else(|| cloud.kept_name(addr, &doc, state))
+            }
+            _ => None,
         };
         let world = self.world.as_ref().expect("read above");
         // The paths an update asks its provider to leave as they are.
@@ -3398,7 +3492,7 @@ impl Tick<'_> {
             }
             None => None,
         };
-        let idempotency_key = uncertain_from_here(a, addr, &remote, state);
+        let idempotency_key = uncertain_from_here(a, addr, &remote, named.clone(), state);
         let req = pb::ApplyRequest {
             op: op as i32,
             r#type: addr.typ.clone(),
@@ -3421,10 +3515,27 @@ impl Tick<'_> {
             kind: a.kind.clone(),
             addr: addr.clone(),
             remote,
+            named,
             req,
             retried: 0,
         });
         Ok(true)
+    }
+
+    /// Give a create-first replacement of `addr` the next generation of
+    /// its remote name in `doc`, where the program's would be the old
+    /// object's (`Providers::renamed`): the two exist at once until the
+    /// old one is deleted, a tick later. Returns the name given.
+    fn name_replacement(&self, addr: &Address, doc: &mut Json, state: &State) -> Option<String> {
+        let world = self.world.as_ref().expect("read at submit");
+        let entry = state.get(addr);
+        let was = entry
+            .and_then(|e| world.get(&key(&addr.typ, &e.remote)))
+            .map(|o| &o.attrs);
+        let (_, new) = self.cloud.renamed(addr, doc, was, entry)?;
+        let path = self.cloud.schema().remote_name_of(&addr.typ)?;
+        set_path(doc, path, json!(new));
+        Some(new)
     }
 
     /// Whether an Apply call is in flight.
@@ -3674,6 +3785,7 @@ impl Tick<'_> {
                     Providers::object(resp.attrs.as_ref(), resp.computed.as_ref())?,
                 );
                 state.set(addr, provider.clone(), resp.remote.clone());
+                state.set_name(addr, f.named.clone());
                 self.record_written(addr, state, true);
             }
             ActionKind::Update | ActionKind::Drift => {
@@ -3882,7 +3994,13 @@ fn uncertain_key(kind: &ActionKind, addr: &Address) -> String {
 /// A call is uncertain from its submission until it answers: record it,
 /// and return the idempotency key a create or a replace carries (the one
 /// `executor::mark_creates` gave it before the tick, else a new one).
-fn uncertain_from_here(a: &Action, addr: &Address, remote: &str, state: &mut State) -> String {
+fn uncertain_from_here(
+    a: &Action,
+    addr: &Address,
+    remote: &str,
+    name: Option<String>,
+    state: &mut State,
+) -> String {
     use state::UncertainOp as Op;
     let op = match a.kind {
         ActionKind::Create => Op::Create,
@@ -3910,6 +4028,7 @@ fn uncertain_from_here(a: &Action, addr: &Address, remote: &str, state: &mut Sta
             op,
             remote: remote.to_string(),
             key: key.clone(),
+            name,
         },
     );
     key

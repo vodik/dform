@@ -678,6 +678,7 @@ pub const PROVIDER_PREDS: &[&str] = &[
     "cloud_computed",
     "world_attr",
     "identity",
+    crate::transform::REMOTE_NAME,
     "deformation",
     "derived_at_last_apply",
     crate::secrets::SECRETS,

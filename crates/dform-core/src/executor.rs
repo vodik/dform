@@ -40,9 +40,12 @@
 //! reads them is held on the replacement's nulls (`hold_dependents`) until
 //! the boundary after the tick that creates it; the next tick updates it to
 //! the new values. A create that reads them fills them in the same tick,
-//! after the replacement. An object a `create_before_destroy` replacement
-//! deposed is deleted only once nothing that depends on it is still held
-//! (`hold_deposed`).
+//! after the replacement. An object a create-first replacement deposed is
+//! deleted only once nothing that depends on it is still held
+//! (`hold_deposed`), in a later tick than the replacement's. Where the
+//! type's name is its identity, the replacement is given the next
+//! generation of it (R-189, `state::next_name`), so the two exist at once,
+//! and what reads the name moves to the new one before the old goes.
 
 use crate::ast::{Atom, Term};
 use crate::ir::{Address, Adopt, Resource};
@@ -527,7 +530,15 @@ pub fn mark_creates<'a>(
             .get(&a.addr)
             .map(|e| e.remote.clone())
             .unwrap_or_default();
-        state.uncertain.insert(k, Uncertain { op, remote, key });
+        state.uncertain.insert(
+            k,
+            Uncertain {
+                op,
+                remote,
+                key,
+                name: None,
+            },
+        );
     }
 }
 
@@ -602,6 +613,7 @@ pub fn resolve_uncertain(
                     }
                     let provider = cloud.provider_of(&addr.typ).to_string();
                     state.set(&addr, provider, remote.clone());
+                    state.set_name(&addr, u.name.clone());
                     done(state, &k);
                     out.push(format!(
                         "{at}: the {} whose answer was lost made {remote}; state maps it",

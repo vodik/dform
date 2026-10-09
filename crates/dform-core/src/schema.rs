@@ -34,7 +34,11 @@
 //!   type_replace(T, Order).           % optional: how a replacement of T is
 //!                                     % ordered: create_first, destroy_first,
 //!                                     % or either (default; destroy first
-//!                                     % unless lifecycle create_before_destroy)
+//!                                     % unless lifecycle create_first)
+//!   type_remote_name(T, Path).        % optional: Path is the object's name
+//!                                     % in the cloud, and the provider's: a
+//!                                     % create-first replacement gets the
+//!                                     % next generation of it (`web-2`)
 //!   type_refine(T, Path, C).          % optional: a checkable refinement of
 //!                                     % Path (`crate::refine`): range(Lo, Hi),
 //!                                     % prefix_len_le(N), prefix_len_ge(N),
@@ -270,6 +274,10 @@ pub struct Schema {
     pub retries: BTreeMap<String, u32>,
     /// type -> how a replacement is ordered (`type_replace`).
     pub replace: BTreeMap<String, ReplaceOrder>,
+    /// type -> the path of its remote name, where the provider may give a
+    /// create-first replacement the next generation of it
+    /// (`type_remote_name`).
+    pub remote_name: BTreeMap<String, String>,
     /// The facts the schema was built from, to inject as EDB.
     pub facts: Vec<Atom>,
     /// Types whose provider's Schema declares `checks_refinements`: a
@@ -344,7 +352,7 @@ pub const DEFAULT_READ_ATTEMPTS: u32 = 3;
 /// new object of a type at once. `CreateFirst`: the replacement is created
 /// before the old object is deleted (a Deployment rolls). `DestroyFirst`:
 /// the old object must go first (a name that must be unique, a Namespace).
-/// `Either`: destroy first, unless `lifecycle(r, create_before_destroy)`.
+/// `Either`: destroy first, unless `lifecycle(r, "create_first")`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReplaceOrder {
     CreateFirst,
@@ -521,6 +529,24 @@ impl Schema {
             .get(typ)
             .copied()
             .unwrap_or(ReplaceOrder::Either)
+    }
+
+    /// The path of `typ`'s remote name when its provider may generate one
+    /// for a create-first replacement (`type_remote_name`).
+    pub fn remote_name_of(&self, typ: &str) -> Option<&str> {
+        self.remote_name.get(typ).map(String::as_str)
+    }
+
+    /// The path that is `typ`'s identity and that the program names, when
+    /// there is one: an `id` the provider does not compute
+    /// (`metadata.name`). Two objects of the type cannot share it, so a
+    /// replacement created before the old object is deleted needs another.
+    pub fn named_identity(&self, typ: &str) -> Option<&str> {
+        self.attrs
+            .range((typ.to_string(), String::new())..)
+            .take_while(|((t, _), _)| t == typ)
+            .find(|(_, a)| a.has(IDENTITY) && !a.has("computed"))
+            .map(|((_, p), _)| p.as_str())
     }
 
     /// How many times Read is tried for an object of `typ` that state maps
@@ -806,6 +832,16 @@ impl Schema {
                         bail!("type_replace({t}): declared both {prev:?} and {o}");
                     }
                 }
+                "type_remote_name" => {
+                    let [Value::Str(t), Value::Str(p)] = args.as_slice() else {
+                        return Err(bad());
+                    };
+                    if let Some(prev) = s.remote_name.insert(t.clone(), p.clone())
+                        && &prev != p
+                    {
+                        bail!("type_remote_name({t}): declared both {prev} and {p}");
+                    }
+                }
                 "type_mint" => {
                     let [Value::Str(t), Value::Str(p), v] = args.as_slice() else {
                         return Err(bad());
@@ -900,6 +936,13 @@ impl Schema {
                 bail!("type_replace({t}) declared {prev:?} and {o:?} by two schemas");
             }
         }
+        for (t, p) in other.remote_name {
+            if let Some(prev) = self.remote_name.insert(t.clone(), p.clone())
+                && prev != p
+            {
+                bail!("type_remote_name({t}) declared {prev} and {p} by two schemas");
+            }
+        }
         self.facts.extend(other.facts);
         self.checks_refinements.extend(other.checks_refinements);
         for (p, f) in other.externs {
@@ -960,13 +1003,14 @@ impl Schema {
 }
 
 /// Schema predicates with a row per type (the type in the first column).
-pub const PER_TYPE: [&str; 9] = [
+pub const PER_TYPE: [&str; 10] = [
     "type_attr",
     "type_doc",
     "type_list_key",
     "type_default",
     "type_retry",
     "type_replace",
+    "type_remote_name",
     "type_mint",
     "type_lookup",
     crate::refine::TYPE_REFINE,

@@ -41,9 +41,11 @@ use std::collections::{BTreeMap, BTreeSet};
 ///
 ///   lifecycle(r, prevent_destroy).        a delete or replace of r is a deny
 ///                                         (derived by `POLICY_RULES`)
-///   lifecycle(r, create_before_destroy).  a replacement is created first
+///   lifecycle(r, create_first).           a replacement is created first
 ///                                         (where the schema's type_replace
-///                                         allows either order)
+///                                         allows either order, and where
+///                                         the name is the identity, its
+///                                         provider generates one, R-189)
 ///   lifecycle(r, retain).                 a delete of r is a forget: no
 ///                                         Delete call, state drops it and
 ///                                         the world keeps it (R-154); r
@@ -64,7 +66,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// assertion on `T/A` the provider checks after materializing the secret.
 #[derive(Debug, Clone, Default)]
 pub struct Lifecycle {
-    pub create_before_destroy: BTreeSet<Address>,
+    /// `lifecycle(r, "create_first")`: a replace of r creates first.
+    pub created_first: BTreeSet<Address>,
     /// `lifecycle(r, "retain")`: a delete of r forgets it (R-154).
     pub retain: BTreeSet<Address>,
     /// (old, new), applied to state before the diff.
@@ -354,9 +357,10 @@ pub fn reference(addr: &Address) -> Value {
 }
 
 impl Lifecycle {
-    /// The lifecycle facts, checked against the schema: a
-    /// `create_before_destroy` on a `type_replace(T, destroy_first)` type is
-    /// an error naming the type. A flag on a copy (R-67) is on each of its
+    /// The lifecycle facts, checked against the schema: a `create_first`
+    /// on a `type_replace(T, destroy_first)` type, or on one whose name is
+    /// its identity and whose provider cannot generate one, is an error
+    /// naming the resource. A flag on a copy (R-67) is on each of its
     /// resources.
     pub fn from_facts<'a>(
         facts: impl IntoIterator<Item = &'a Atom>,
@@ -427,24 +431,19 @@ impl Lifecycle {
                         // A copy's: each of its resources it still has; an
                         // address the program no longer makes, itself.
                         "retain" => out.retain.extend(each(addr)),
-                        "create_before_destroy" => {
+                        "create_first" => {
                             // On a copy: each of its resources whose type
                             // allows it.
                             let copy = instances.is_instance(&addr);
                             for addr in each(addr) {
-                                let first = schema.replace_order(&addr.typ);
-                                if copy && first == ReplaceOrder::DestroyFirst {
+                                let refused = create_first_refused(schema, &addr);
+                                if copy && refused.is_some() {
                                     continue;
                                 }
-                                if first == ReplaceOrder::DestroyFirst {
-                                    bail!(
-                                        "lifecycle({addr}, create_before_destroy): type {} is \
-                                         type_replace destroy_first; its old object must be \
-                                         deleted before the replacement is created",
-                                        addr.typ
-                                    );
+                                if let Some(why) = refused {
+                                    bail!("{why}");
                                 }
-                                out.create_before_destroy.insert(addr);
+                                out.created_first.insert(addr);
                             }
                         }
                         "bootstrap" => bail!(
@@ -453,7 +452,7 @@ impl Lifecycle {
                         ),
                         other => bail!(
                             "lifecycle({addr}, {other}): unknown flag \
-                             (expected prevent_destroy, create_before_destroy or retain)"
+                             (expected prevent_destroy, create_first or retain)"
                         ),
                     }
                 }
@@ -522,14 +521,41 @@ impl Lifecycle {
 
     /// Whether a replacement of `addr` is created before the old object is
     /// deleted: the schema's `type_replace` decides, and for a type that
-    /// allows either order, `create_before_destroy` (else destroy first).
+    /// allows either order, `lifecycle(r, "create_first")` (else destroy
+    /// first).
     pub fn create_first(&self, schema: &Schema, addr: &Address) -> bool {
         match schema.replace_order(&addr.typ) {
             ReplaceOrder::CreateFirst => true,
             ReplaceOrder::DestroyFirst => false,
-            ReplaceOrder::Either => self.create_before_destroy.contains(addr),
+            ReplaceOrder::Either => self.created_first.contains(addr),
         }
     }
+}
+
+/// Why a replacement of `addr` cannot be created before its old object is
+/// deleted, if it cannot (R-189): its name is its identity (two objects
+/// cannot share it) and its provider cannot generate another
+/// (`type_remote_name`), or its provider replaces it destroy-first
+/// (`type_replace`). An object whose identity is an id the provider
+/// assigns can: the two share a name for a moment.
+pub fn create_first_refused(schema: &Schema, addr: &Address) -> Option<String> {
+    let at = crate::report::address(addr);
+    if let Some(p) = schema.named_identity(&addr.typ)
+        && schema.remote_name_of(&addr.typ).is_none()
+    {
+        return Some(format!(
+            "{at}: create_first is not possible: {p} is its identity, and its provider cannot \
+             generate one; give the replacement another name, or let it be replaced \
+             destroy-first"
+        ));
+    }
+    (schema.replace_order(&addr.typ) == ReplaceOrder::DestroyFirst).then(|| {
+        format!(
+            "{at}: create_first is not possible: type {} is type_replace destroy_first; its \
+             old object must be deleted before the replacement is created",
+            addr.typ
+        )
+    })
 }
 
 /// The Apply assertions of `Lifecycle::assertions`.

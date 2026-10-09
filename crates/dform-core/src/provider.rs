@@ -20,13 +20,14 @@ pub enum ActionKind {
     Pending,
     /// An update that changes a `force_new` path: the provider cannot
     /// update in place. The old object is deleted before the new one is
-    /// created, or after under `lifecycle(r, create_before_destroy)`
-    /// (`create_first`), when it stays deposed in state until then.
+    /// created, or after (`create_first`: the type's `type_replace`, or
+    /// `lifecycle(r, "create_first")`), when it stays deposed in state
+    /// until then.
     Replace {
         create_first: bool,
     },
     Delete,
-    /// Delete the object a `create_before_destroy` replacement deposed.
+    /// Delete the object a create-first replacement deposed.
     DeleteDeposed,
     /// A delete of an object `lifecycle(r, "retain")` keeps (R-154): no
     /// provider call; state drops it and the world keeps it.
@@ -143,6 +144,10 @@ pub struct Action {
     /// the object again, so it sends them: changes that force nothing
     /// ([`Action::sent`]).
     pub kept: Vec<Change>,
+    /// A create-first replace whose replacement dform names (R-189): the
+    /// old object's remote name and the new one's, the next generation of
+    /// the program's (`forgejo-3`, `forgejo-4`).
+    pub renamed: Option<(String, String)>,
 }
 
 impl Action {

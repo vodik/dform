@@ -850,6 +850,7 @@ pub fn compile(program: &Program, given: &[Atom]) -> Result<Compiled> {
     transform::check_computed_writes(&rules, &facts, &schema)?;
     let (mut rules, facts) = transform::rewrite_computed_refs(rules, facts, &schema);
     rules.extend(transform::computed_prelude(&schema));
+    rules.extend(transform::remote_name_prelude(&schema));
     let externs: BTreeSet<String> = lowered.externs.iter().map(|e| e.pred.clone()).collect();
     let mut graph = stratified(&rules, &facts, &schema, &externs);
     // R-116: a write whose type is a variable (`set r.metadata.labels.owner
@@ -1592,8 +1593,12 @@ fn own_type_reads(scc: &BTreeSet<Node>, split: &BTreeSet<String>) -> BTreeSet<St
 /// The provider schema among the facts given to a run (the catalog the
 /// provider injects), plus any schema facts the program itself states.
 fn schema_of(given: &[Atom], program_facts: &[Atom]) -> Result<Schema> {
-    let is_schema =
-        |a: &&Atom| matches!(a.pred.as_str(), "type_attr" | "type_provider" | "type_mint");
+    let is_schema = |a: &&Atom| {
+        matches!(
+            a.pred.as_str(),
+            "type_attr" | "type_provider" | "type_mint" | "type_remote_name"
+        )
+    };
     let rows: Vec<Atom> = given
         .iter()
         .filter(is_schema)

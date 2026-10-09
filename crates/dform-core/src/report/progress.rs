@@ -513,6 +513,7 @@ mod tests {
             changes: Vec::new(),
             on: Default::default(),
             kept: Vec::new(),
+            renamed: None,
         }
     }
 
@@ -660,6 +661,7 @@ mod tests {
             folded: vec![],
             gone: None,
             kept: vec![],
+            renamed: None,
         };
         let (da, db, dc) = (d(&a), d(&b), d(&c));
         let outline = [

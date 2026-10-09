@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 pub struct State {
     pub version: u32,
     pub resources: BTreeMap<String, StateEntry>,
-    /// Objects replaced under `create_before_destroy`: the old object's
+    /// Objects replaced create-first (`lifecycle(r, "create_first")`, or
+    /// the type's `type_replace`): the old object's
     /// identity, kept from the moment its replacement is created until the
     /// deposed object is deleted.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -177,6 +178,10 @@ pub struct Uncertain {
     /// one, so a provider never makes the object twice.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub key: String,
+    /// A create-first replace's remote name, when dform gave it the next
+    /// generation (`StateEntry::name`): what the object it made is called.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -193,6 +198,14 @@ pub enum UncertainOp {
 pub struct StateEntry {
     pub provider: String,
     pub remote: String,
+    /// The object's name in the cloud when it is not the program's: a
+    /// create-first replacement of a type whose remote name is the
+    /// provider's (`type_remote_name`) is given the next generation of it,
+    /// `forgejo-3` for the program's `forgejo` (R-189). The address stays
+    /// the program's, and a read of the name through a reference answers
+    /// this one. None when the object has the program's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// The addresses this object's document referenced when it was last
     /// applied, so that a delete, which has no desired document left to
     /// read them from, runs before the deletes of what it depends on.
@@ -310,6 +323,7 @@ impl State {
             StateEntry {
                 provider,
                 remote,
+                name: None,
                 deps,
                 written: BTreeMap::new(),
                 derived: BTreeMap::new(),
@@ -342,6 +356,14 @@ impl State {
         if let Some(e) = self.resources.get_mut(&key(addr)) {
             e.written = written;
             e.derived = derived;
+        }
+    }
+
+    /// Record the name dform gave `addr`'s object (`StateEntry::name`;
+    /// no-op without an identity).
+    pub fn set_name(&mut self, addr: &Address, name: Option<String>) {
+        if let Some(e) = self.resources.get_mut(&key(addr)) {
+            e.name = name;
         }
     }
 
@@ -413,6 +435,31 @@ impl State {
     pub fn remove(&mut self, addr: &Address) {
         self.resources.remove(&key(addr));
     }
+}
+
+/// A remote name dform generated (`StateEntry::name`) as the program's
+/// name and its generation: `forgejo-3` is `forgejo`'s third.
+pub fn generation(name: &str) -> Option<(&str, u32)> {
+    let (base, n) = name.rsplit_once('-')?;
+    let n: u32 = n.parse().ok()?;
+    (n >= 2 && !base.is_empty()).then_some((base, n))
+}
+
+/// The remote name a create-first replacement of an object called `was`
+/// is given, where the program calls it `want` (R-189): the next
+/// generation of the program's name, `forgejo-4` after `forgejo-3`, or
+/// `forgejo-2` after `forgejo`. None when `want` is another name than
+/// the old object's: the two do not collide, and the program's is used.
+/// `generated` is what state recorded the old one was given.
+pub fn next_name(want: &str, was: &str, generated: Option<&str>) -> Option<String> {
+    if want != was {
+        return None;
+    }
+    let (base, n) = generated
+        .filter(|g| *g == want)
+        .and_then(generation)
+        .unwrap_or((want, 1));
+    Some(format!("{base}-{}", n + 1))
 }
 
 pub fn key(addr: &Address) -> String {

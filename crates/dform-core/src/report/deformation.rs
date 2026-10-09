@@ -100,6 +100,9 @@ pub struct Deformation {
     /// Each attribute given at creation only whose value differs from
     /// what the object was made with: kept, and said ([`KEPT`](crate::report::KEPT), R-198).
     pub kept: Vec<Line>,
+    /// A create-first replace's remote names, old and new, where dform
+    /// names the replacement (R-189, [`Action::renamed`]).
+    pub renamed: Option<(String, String)>,
 }
 
 /// An action's change lines. An update diffs a keyless set, or a list
@@ -228,6 +231,7 @@ pub(super) fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs
         folded: Vec::new(),
         gone: None,
         kept: a.kept().iter().map(|c| leaf(c, c.path.clone())).collect(),
+        renamed: a.renamed.clone(),
     }
 }
 

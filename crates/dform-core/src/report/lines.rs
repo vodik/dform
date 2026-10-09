@@ -35,9 +35,14 @@ impl Report {
                 "  (drift: a fresh null where the world has a value; its identity is stale)"
             }
             ActionKind::DeleteDeposed => "  (deposed)",
-            ActionKind::Replace { create_first: true } => "  (the new one first)",
+            ActionKind::Replace { create_first: true } => "  replace, create first",
             ActionKind::Forget => FORGOTTEN,
             _ => "",
+        };
+        // The replacement's remote name, where dform gives it (R-189).
+        let note = match &d.renamed {
+            Some((was, now)) => format!("{note} ({was} → {now})"),
+            None => note.to_string(),
         };
         let addr = address(&d.addr);
         let plain = format!("{indent}{} {addr}{note}", marker_of(&d.kind));

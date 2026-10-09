@@ -1010,7 +1010,11 @@ impl FakeCloud {
                 if !c.create_first {
                     self.delete_object(&addr.typ, &c.remote);
                 }
-                let remote = self.free_name(&addr.typ, &addr.name);
+                // A name the engine generated is the object's (R-189).
+                let remote = match self.generated(&addr.typ, &doc, &c.remote) {
+                    Some(n) => n,
+                    None => self.free_name(&addr.typ, &addr.name),
+                };
                 self.create_object(addr, &remote, doc, &c.key);
                 Some(remote)
             }
@@ -1190,6 +1194,16 @@ impl FakeCloud {
 
     fn delete_object(&mut self, typ: &str, remote: &str) {
         self.world_mut().resources.remove(&key(typ, remote));
+    }
+
+    /// The remote name of a replacement of a type whose remote name is
+    /// the provider's (`type_remote_name`), where it is another than the
+    /// old object's (`old`): what the engine gave it, the object's key.
+    fn generated(&self, typ: &str, doc: &Json, old: &str) -> Option<String> {
+        let path = self.schema.remote_name_of(typ)?;
+        let name = get_path(doc, path)?.as_str()?;
+        (name != old && !self.world_ref().resources.contains_key(&key(typ, name)))
+            .then(|| name.to_string())
     }
 
     /// `name`, or the first `name-N` no object of `typ` has: a replacement

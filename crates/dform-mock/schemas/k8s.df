@@ -15,6 +15,14 @@
 #     env, volumes, ...): the plan diffs those lists by key, not by index.
 #   - Secret.data and Secret.stringData are sensitive.
 #
+#   - type_remote_name: a kind whose name dform may generate (R-189): a
+#     create-first replacement is made under the next generation of the
+#     program's name (`web-2`), and a reference to the name answers it.
+#     The workloads and the ConfigMaps and Secrets they mount, which are
+#     read through references; not a Service (a DNS name used literally),
+#     a Namespace, a ServiceAccount, a claim or a StatefulSet (whose name
+#     is in its pods' and claims').
+#
 # type_mint gives the mock's answer for a server-picked value.
 #
 # Quantities (R-66): a container's resources.{requests,limits}.{cpu,memory}
@@ -85,6 +93,8 @@ type_mint(k8s.namespace, "status.phase", "Active")
 
 # ConfigMap (core/v1)
 type_provider(k8s.config_map, "k8s")
+type_replace(k8s.config_map, "create_first")
+type_remote_name(k8s.config_map, "metadata.name")
 type_attr(k8s.config_map, "metadata.name", "string", ["optional_computed", "id"])
 type_mint(k8s.config_map, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.config_map, "metadata.generateName", "string", [])
@@ -106,6 +116,7 @@ type_attr(k8s.config_map, "immutable", "bool", [])
 
 # Secret (core/v1)
 type_provider(k8s.secret, "k8s")
+type_remote_name(k8s.secret, "metadata.name")
 type_attr(k8s.secret, "metadata.name", "string", ["optional_computed", "id"])
 type_mint(k8s.secret, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.secret, "metadata.generateName", "string", [])
@@ -150,7 +161,9 @@ type_list_key(k8s.service_account, "imagePullSecrets", ["name"])
 
 # Service (core/v1)
 type_provider(k8s.service, "k8s")
-type_replace(k8s.service, "create_first")
+# Its name is a DNS name other objects use literally: two cannot share it,
+# and dform does not rename it, so the old one goes first.
+type_replace(k8s.service, "destroy_first")
 type_attr(k8s.service, "metadata.name", "string", ["optional_computed", "id"])
 type_mint(k8s.service, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.service, "metadata.generateName", "string", [])
@@ -221,8 +234,10 @@ type_attr(k8s.persistent_volume_claim, "status.capacity", "map", ["computed"])
 
 # Deployment (apps/v1)
 type_provider(k8s.deployment, "k8s")
-# A Deployment rolls: the new one is up before the old one goes.
+# A Deployment rolls: the new one is up before the old one goes, under the
+# next generation of its name (R-189).
 type_replace(k8s.deployment, "create_first")
+type_remote_name(k8s.deployment, "metadata.name")
 type_attr(k8s.deployment, "metadata.name", "string", ["optional_computed", "id"])
 type_mint(k8s.deployment, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.deployment, "metadata.generateName", "string", [])
@@ -420,6 +435,7 @@ type_mint(k8s.stateful_set, "status.observedGeneration", 1)
 
 # DaemonSet (apps/v1)
 type_provider(k8s.daemon_set, "k8s")
+type_remote_name(k8s.daemon_set, "metadata.name")
 type_attr(k8s.daemon_set, "metadata.name", "string", ["optional_computed", "id"])
 type_mint(k8s.daemon_set, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.daemon_set, "metadata.generateName", "string", [])
@@ -504,6 +520,7 @@ type_mint(k8s.daemon_set, "status.observedGeneration", 3)
 
 # Job (batch/v1)
 type_provider(k8s.job, "k8s")
+type_remote_name(k8s.job, "metadata.name")
 type_attr(k8s.job, "metadata.name", "string", ["optional_computed", "id"])
 type_mint(k8s.job, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.job, "metadata.generateName", "string", [])
@@ -570,6 +587,7 @@ type_mint(k8s.job, "status.completionTime", "2026-01-01T00:01:00Z")
 
 # CronJob (batch/v1)
 type_provider(k8s.cron_job, "k8s")
+type_remote_name(k8s.cron_job, "metadata.name")
 type_attr(k8s.cron_job, "metadata.name", "string", ["optional_computed", "id"])
 type_mint(k8s.cron_job, "metadata.name", "{doc:metadata.generateName}{hash}")
 type_attr(k8s.cron_job, "metadata.generateName", "string", [])

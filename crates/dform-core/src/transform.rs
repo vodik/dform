@@ -1575,6 +1575,63 @@ pub fn computed_prelude(schema: &Schema) -> Vec<RuleStmt> {
     out
 }
 
+/// The facts `remote_name(T, A, Program, Name)`: dform named the object
+/// at `T`/`A` `Name` where the program names it `Program` (R-189,
+/// `state::StateEntry::name`).
+pub const REMOTE_NAME: &str = "remote_name";
+
+/// The rules that make a read of a remote name answer the one dform gave
+/// the object (R-189): per type whose provider generates its remote name
+/// (`type_remote_name(T, P)`), the name state recorded wins over the
+/// program's, as an `@override` would, while the program still writes the
+/// name it was generated from. A program that writes another name gets it.
+///
+/// ```text
+/// arg(T, A, P, Name, override) :- remote_name(T, A, Program, Name),
+///     arg(T, A, P, V, Rank), Rank != override, V.P == Program.
+/// ```
+pub fn remote_name_prelude(schema: &Schema) -> Vec<RuleStmt> {
+    let mut out = Vec::new();
+    for (t, p) in &schema.remote_name {
+        let segs = crate::ir::path_segments(p);
+        let rest = segs[1..].join(".");
+        let tt = str_term(t);
+        let (top, value) = normalize_contribution(t, p, var("__Name"));
+        let written = match rest.is_empty() {
+            true => var("__V"),
+            false => Term::Func {
+                name: "__path".into(),
+                args: vec![var("__V"), str_term(&rest)],
+            },
+        };
+        out.push(RuleStmt::new(
+            atom(
+                "arg",
+                vec![
+                    tt.clone(),
+                    var("__A"),
+                    str_term(&top),
+                    value,
+                    str_term("override"),
+                ],
+            ),
+            vec![
+                Lit::Pos(atom(
+                    REMOTE_NAME,
+                    vec![tt.clone(), var("__A"), var("__Program"), var("__Name")],
+                )),
+                Lit::Pos(atom(
+                    "arg",
+                    vec![tt, var("__A"), str_term(&top), var("__V"), var("__Rank")],
+                )),
+                Lit::Neq(var("__Rank"), str_term("override")),
+                Lit::Eq(written, var("__Program")),
+            ],
+        ));
+    }
+    out
+}
+
 /// A contribution to a plain `computed` path is a compile error: the provider
 /// owns it (E §2.5). Optional+Computed paths may be set.
 pub fn check_computed_writes(rules: &[RuleStmt], facts: &[Atom], schema: &Schema) -> Result<()> {
