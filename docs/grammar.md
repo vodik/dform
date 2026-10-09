@@ -922,13 +922,15 @@ element, and `set from DOC` a document's leaves. A value written with `from`, or
 with `=` (`input p = [..]`), is an error that says so; rows written in
 the program are facts, `p("a", 1)`.
 
-An entry that is only a path is the pun of its last segment (R-33), as
-`{ a }` is `{ a: a }` in an object: `availability_zone` alone is
-`availability_zone = availability_zone`, `spec.selector.color` is
-`spec.selector.color = color`, and a rank may follow (`tags @default`).
-The segment is resolved where the value would be, as a clause variable, a
-value name or anything else a bare name can be; a path whose last segment
-is not a name (`a[0]`, `"a-b"`) is an error. A provider's `source` is a
+An entry that is only a name is its pun (R-33), as `{ a }` is `{ a: a }`
+in an object: `availability_zone` alone is `availability_zone =
+availability_zone`, and a rank may follow (`tags @default`). The name is
+resolved where the value would be, as a clause variable, a value name or
+anything else a bare name can be. A pun is one simple name on both sides
+(R-216): an entry that is only a dotted path, `spec.selector.color`, is
+an error whose help writes it out, `spec.selector.color = color`, or puns
+at the last object, `spec.selector = { color }`; an entry that is not a
+name (`a[0]`, `"a-b"`) is an error too. A provider's `source` is a
 constant, never a pun.
 
 `set` is the contribution statement (H-5): the chain is a resource's
@@ -2094,8 +2096,8 @@ an error at the entry naming the call and the attribute or `let` it was
 to give (R-119), never a value left out. Any other function answers
 every input it takes, and one it does not take (`oci.with_digest` of a
 tag, a bad unit, layout, template or port) is an error at the rule
-naming the call (R-134), never a quiet none. A bare path in a block is the pun of its
-last segment ("Statements"), not a test: `has` is the test.
+naming the call (R-134), never a quiet none. A bare name in a block is its pun
+("Statements"), not a test: `has` is the test.
 
 A `.p` or `[i]` after a call reads the call's result (R-71):
 `oci.with_registry(i, r).tag`, `str.split(s, ":")[0]`,
@@ -2742,7 +2744,10 @@ component's own interface (see "The header", R-11a).
 
 The normal forms:
 
-- `{ a: a }` is `{ a }`, and a block's entry `k = k` is `k`;
+- `{ a: a }` is `{ a }`, and a block's entry `k = k` is `k`; a dotted
+  path is never punned (`spec.selector.color = color` stays), and an entry
+  that is only a dotted path, written under R-33, is written out:
+  `spec.selector.color` is `spec.selector.color = color`;
 - a resource block's leaves under one parent path are one entry:
   `metadata.name = "a"` and `metadata.namespace = n` are `metadata = {
   name: "a", namespace: n }` when the parent has two or more entries, each
@@ -2802,3 +2807,8 @@ A formatted file prints back byte for byte.
   entrypoint only when the tool is pointed at it.
 - (R-65, R-113) `use` of a component item is an error naming `resource`:
   a module is imported, a component is a type.
+- (R-33, R-216) A pun is one simple name on both sides, in a block's
+  entry, an object's field, a `use` or a copy's block and a keyed read:
+  R-33's pun of a dotted path's last segment is reversed, since the name
+  written is not the name read; a dotted path takes `= value`, or an
+  object pun at its last object.

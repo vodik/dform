@@ -940,10 +940,10 @@ no default: a program with no provider's `use` starts none, and
 provider: add `use NAME` (dform.toml names its source) or run under
 `dev --provider`". A `use` with no entries is written
 without braces (`use fake`); `fmt` drops a
-`{}`. In any block an entry that is only a path takes the value of its
-last segment's name, `region` for `region = region` and
-`spec.selector.color` for `spec.selector.color = color`, as `{ a }` is
-`{ a: a }`; `fmt` prints that form. `--provider path/to/schema.df` loads a file directly. A
+`{}`. In any block an entry that is only a name takes the value of that
+name, `region` for `region = region`, as `{ a }` is `{ a: a }`; `fmt`
+prints that form. A dotted path is never a pun: `spec.selector.color =
+color`, or `spec.selector = { color }`. `--provider path/to/schema.df` loads a file directly. A
 `providers/<name>/schema.df` in the working directory wins over the schemas
 built into the binary (`crates/dform-mock/schemas/`: `fake`, `gke`, `k8s`,
 `aws-mock`). A `source` (or `--provider` path) that
