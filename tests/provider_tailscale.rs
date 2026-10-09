@@ -673,7 +673,9 @@ fn a_node_not_on_the_tailnet_is_a_deny() {
 /// rest elsewhere is written.
 #[test]
 #[ignore = "R-196: `..` in a relation's arguments is not a rest yet (\"`..` is a spread\"): \
-            each column is written, `_` for the ones not read; the resolver's to lift"]
+            each column is written, `_` for the ones not read. A provider table's columns \
+            arrive with its schema (`deployment::with_schema_externs`), after the resolver: \
+            the rest is the schema stage's to fill (R-211 step 8)"]
 fn the_listing_reads_with_a_rest() {
     let server = Server::start(TAILNET);
     server.add_device("k3s-1");
