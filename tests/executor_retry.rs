@@ -84,6 +84,10 @@ fn a_boundary_refresh_retries() {
         "{}",
         r.stderr
     );
-    // Tick 2 is its block (R-206).
-    assert!(r.stderr.contains("\ntick 2  1 change\n"), "{}", r.stderr);
+    assert!(
+        r.stdout
+            .contains("plan: 1 change (1 update) over 1 tick\n\ntick 2  1 change\n"),
+        "{}",
+        r.stdout
+    );
 }

@@ -160,6 +160,8 @@ tick 2  1 change
   waits on  main
   ~ net.subnet a  p.df:4
       vpc_id = "net.vpc:main" → main
+
+stack p is up to date
 tick 2 differs from the plan shown:
   - net.subnet a  update, no longer a change
 "#
@@ -250,8 +252,11 @@ fn create_before_destroy_in_one_apply_takes_two_ticks() {
         "{}",
         r.stdout
     );
-    // Tick 2 is its block (R-206): the dependent's update, the deposed
-    // object's delete.
-    assert!(r.stderr.contains("\ntick 2  2 changes\n"), "{}", r.stderr);
+    assert!(
+        r.stdout
+            .contains("plan: 2 changes (1 update, 1 delete) over 1 tick\n\ntick 2  2 changes\n"),
+        "{}",
+        r.stdout
+    );
     assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
 }

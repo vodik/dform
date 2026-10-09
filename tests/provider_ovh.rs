@@ -613,30 +613,29 @@ fn an_instance_create_says_build_then_active() {
     let server = Server::start();
     server.build_polls(2);
     let s = project("ovh-events", "", &program(&server, "x", "b2-7"));
-    let r = dform(&s, &server, &["apply", "main.df"]).success();
+    // The provider's events as dform receives them (`DFORM_LOG=debug`);
+    // the block shows each word beside the change (the printer's,
+    // tests/apply_events.rs).
+    let mut c = common::dform();
+    c.args(common::yes(&["apply", "main.df"]))
+        .current_dir(&s.dir)
+        .env("HOME", &s.dir)
+        .env("XDG_CONFIG_HOME", s.path("config"))
+        .env("DFORM_LOG", "debug")
+        .env_remove("OVH_CLOUD_PROJECT_SERVICE");
+    for (k, v) in server.env() {
+        c.env(k, v);
+    }
+    let r = Run::from(c.output().unwrap()).success();
     let mut words: Vec<&str> = r
         .stderr
         .lines()
-        .filter(|l| l.starts_with("  + ovh.instance server  "))
-        .filter_map(|l| l.rsplit("  ").next()?.split(' ').next())
+        .filter_map(|l| l.split_once("  apply ovh.instance server: "))
+        .filter_map(|(_, says)| says.split(": ").next())
         .collect();
-    // A word said again (a heartbeat) is the same word.
+    // A word said again is the same word.
     words.dedup();
-    assert_eq!(
-        words.as_slice(),
-        ["BUILD", "ACTIVE", "made"],
-        "{}",
-        r.stderr
-    );
-    // A key, made at once, says its call's word and time.
-    assert!(
-        r.stderr
-            .lines()
-            .filter(|l| l.starts_with("  + ovh.ssh_key admin  "))
-            .all(|l| l.contains(" made ") && l.ends_with('s')),
-        "{}",
-        r.stderr
-    );
+    assert_eq!(words.as_slice(), ["BUILD", "ACTIVE"], "{}", r.stderr);
 }
 
 /// A Create whose answer does not come within dform's timeout (R-81) is

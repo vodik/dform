@@ -1009,6 +1009,16 @@ fn ovh() -> String {
 
 /// `dform ARGS` in the scratch project, the provider pointed at `server`.
 fn dform(s: &Scratch, server: &Server, args: &[&str]) -> Run {
+    Run::from(command(s, server, args).output().unwrap())
+}
+
+/// As [`dform`], each provider event logged (`DFORM_LOG=debug`).
+fn dform_logged(s: &Scratch, server: &Server, args: &[&str]) -> Run {
+    let mut c = command(s, server, args);
+    Run::from(c.env("DFORM_LOG", "debug").output().unwrap())
+}
+
+fn command(s: &Scratch, server: &Server, args: &[&str]) -> std::process::Command {
     let mut c = common::dform();
     c.args(common::yes(args))
         .current_dir(&s.dir)
@@ -1018,7 +1028,7 @@ fn dform(s: &Scratch, server: &Server, args: &[&str]) -> Run {
     for (k, v) in server.env() {
         c.env(k, v);
     }
-    Run::from(c.output().unwrap())
+    c
 }
 
 fn project(name: &str, program: &str) -> Scratch {
@@ -1116,18 +1126,19 @@ fn a_program_with_every_type_plans_applies_and_plans_clean() {
     }
     assert!(server.instances().is_empty() && server.volumes().is_empty());
 
-    let applied = dform(&s, &server, &["apply", "main.df"]).success();
-    // Each status the API gave, beside the change (R-130).
+    let applied = dform_logged(&s, &server, &["apply", "main.df"]).success();
+    // Each status the API gave reaches dform as the change's event (R-130;
+    // the block shows it beside the change: tests/apply_events.rs).
     for (change, status) in [
-        ("+ ovh.volume data", "attaching"),
-        ("+ ovh.network lab", "BUILDING"),
-        ("+ ovh.cloud_project_user backup", "creating"),
+        ("ovh.volume data", "attaching"),
+        ("ovh.network lab", "BUILDING"),
+        ("ovh.cloud_project_user backup", "creating"),
     ] {
         assert!(
             applied
                 .stderr
                 .lines()
-                .any(|l| l.trim_start().starts_with(change) && l.contains(&format!("  {status} "))),
+                .any(|l| l.contains(&format!("  apply {change}: {status}"))),
             "{change} {status}\n{}",
             applied.stderr
         );

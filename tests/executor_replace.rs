@@ -55,8 +55,12 @@ fn a_replace_updates_its_dependents_after_the_create() {
         r.stdout
     );
     let r = mock(&s, &["apply", "--chaos", "fresh-ids"]).success();
-    // Tick 2 is its block (R-206).
-    assert!(r.stderr.contains("\ntick 2  2 changes\n"), "{}", r.stderr);
+    assert!(
+        r.stdout
+            .contains("plan: 2 changes (2 update) over 1 tick\n\ntick 2  2 changes\n"),
+        "{}",
+        r.stdout
+    );
     let (new, subnets) = ids(&s, "main");
     assert_ne!(new, old);
     assert_eq!(subnets, [new.clone(), new], "{}", r.stdout);
@@ -83,23 +87,28 @@ fn create_before_destroy_moves_dependents_before_the_deposed_delete() {
         ),
     );
     let r = mock(&s, &["apply", "--chaos", "fresh-ids"]).success();
-    // Tick 2's block says each call as it starts (R-206), in the order
-    // the calls are made.
-    let tick2 = r
-        .stderr
-        .split("tick 2  3 changes\n")
-        .nth(1)
-        .unwrap_or_default();
-    let order: Vec<&str> = tick2
+    // Tick 2's calls in the order they were made, as the audit log has
+    // them.
+    let order: Vec<(String, String)> = s
+        .read("w.state.audit.jsonl")
         .lines()
-        .filter(|l| l.starts_with("  ~ ") || l.starts_with("  - "))
-        .filter(|l| l.split_whitespace().count() == 3)
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|e| e["kind"] == "action" && e["tick"] == 2)
+        .map(|e| {
+            let s = |k: &str| e[k].as_str().unwrap_or_default().to_string();
+            (s("action"), s("address"))
+        })
         .collect();
+    let call = |a: &str, b: &str| (a.to_string(), b.to_string());
     assert_eq!(
         order,
-        ["  ~ net.subnet a", "  ~ net.subnet b", "  - net.vpc main"],
+        [
+            call("update", "net.subnet[\"a\"]"),
+            call("update", "net.subnet[\"b\"]"),
+            call("delete_deposed", "net.vpc[\"main\"]"),
+        ],
         "{}",
-        r.stderr
+        r.stdout
     );
     let (new, subnets) = ids(&s, "main-2");
     assert_eq!(subnets, [new.clone(), new], "{}", r.stdout);
