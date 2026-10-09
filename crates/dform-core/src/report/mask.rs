@@ -285,13 +285,7 @@ pub(super) fn masked_text(t: &str) -> String {
     };
     match t.split_once("   ") {
         Some((e, rest)) => format!("{}   {rest}", masked(e)),
-        None if place(t)
-            || t.trim().is_empty()
-            || t.starts_with('@')
-            || t.starts_with("schema default") =>
-        {
-            t.to_string()
-        }
+        None if place(t) || t.trim().is_empty() || t.starts_with('@') => t.to_string(),
         None => masked(t),
     }
 }

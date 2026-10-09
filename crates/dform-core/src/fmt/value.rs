@@ -5,7 +5,9 @@
 //! element is an object hugs it, `[{` .. `}]`, and an object whose only
 //! field is a list hugs that, `{ k: [` .. `] }`, as [`super::layout`]
 //! lays out the source. A leaf is text the caller spelled (a string
-//! quoted whole, a reference by its address, a secret redacted).
+//! quoted whole, a reference by its address, a secret redacted); a leaf
+//! with a note (R-217) is followed by it, `"TCP" (schema default)`, and
+//! breaks every object and list around it, so the note ends its line.
 
 use super::doc::{Doc, concat, group, if_break, indent, line, nil, print, propagate, text};
 use crate::spell;
@@ -15,6 +17,9 @@ use crate::value::Value;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Tree {
     Leaf(String),
+    /// A leaf and a note about it the program did not write, said after
+    /// it: `"TCP" (schema default)` (R-217).
+    Noted(String, String),
     /// Fields by their key as printed (quoted when it is not a name).
     Obj(Vec<(String, Tree)>),
     List(Vec<Tree>),
@@ -41,7 +46,7 @@ impl Tree {
     /// Its leaves.
     pub fn leaves(&self) -> usize {
         match self {
-            Tree::Leaf(_) => 1,
+            Tree::Leaf(_) | Tree::Noted(..) => 1,
             Tree::Obj(fs) => fs.iter().map(|(_, t)| t.leaves()).sum(),
             Tree::List(xs) => xs.iter().map(Tree::leaves).sum(),
         }
@@ -50,6 +55,7 @@ impl Tree {
     fn doc(&self) -> Doc {
         match self {
             Tree::Leaf(s) => text(s.clone()),
+            Tree::Noted(s, note) => concat(vec![text(format!("{s} {note}")), Doc::BreakParent]),
             Tree::Obj(fs) if fs.is_empty() => text("{}"),
             Tree::List(xs) if xs.is_empty() => text("[]"),
             // `{ k: [` .. `] }`
@@ -160,15 +166,20 @@ fn written(fields: Vec<(String, Tree)>) -> Vec<(String, Tree)> {
 }
 
 impl Tree {
-    /// Its objects' fields in the order the source wrote them ([`remember`]).
+    /// Its objects' fields in the order the source wrote them ([`remember`]),
+    /// a field the program did not write (a note's) after them.
     fn in_source_order(&self) -> Tree {
         match self {
-            Tree::Leaf(_) => self.clone(),
-            Tree::Obj(fs) => Tree::Obj(written(
-                fs.iter()
+            Tree::Leaf(_) | Tree::Noted(..) => self.clone(),
+            Tree::Obj(fs) => {
+                let (noted, mine): (Vec<_>, Vec<_>) = fs
+                    .iter()
                     .map(|(k, t)| (k.clone(), t.in_source_order()))
-                    .collect(),
-            )),
+                    .partition(|(_, t)| matches!(t, Tree::Noted(..)));
+                let mut fs = written(mine);
+                fs.extend(noted);
+                Tree::Obj(fs)
+            }
             Tree::List(xs) => Tree::List(xs.iter().map(Tree::in_source_order).collect()),
         }
     }
@@ -288,6 +299,49 @@ mod tests {
                 "  Resource: \"orders.cx3k.us-east-1.rds.amazonaws.com\",",
                 "}] }",
             ]
+        );
+    }
+
+    /// R-217: a note follows its leaf and breaks every object and list
+    /// around it, a field the program did not write after those it did; a
+    /// sibling without one stays on its line.
+    #[test]
+    fn a_note_breaks_what_holds_it() {
+        remember(&["zz_port".into(), "zz_target".into()]);
+        let t = Tree::Obj(vec![
+            (
+                "selector".into(),
+                Tree::Obj(vec![("app".into(), leaf("\"pg\""))]),
+            ),
+            (
+                "ports".into(),
+                Tree::List(vec![Tree::Obj(vec![
+                    (
+                        "protocol".into(),
+                        Tree::Noted("\"TCP\"".into(), "(schema default)".into()),
+                    ),
+                    ("zz_target".into(), leaf("5432")),
+                    ("zz_port".into(), leaf("5432")),
+                ])]),
+            ),
+        ]);
+        assert_eq!(
+            layout("spec = ", &t, 100),
+            [
+                "spec = {",
+                "  selector: { app: \"pg\" },",
+                "  ports: [{",
+                "    zz_port: 5432,",
+                "    zz_target: 5432,",
+                "    protocol: \"TCP\" (schema default),",
+                "  }],",
+                "}",
+            ]
+        );
+        let alone = Tree::Noted("\"TCP\"".into(), "(schema default)".into());
+        assert_eq!(
+            layout("p = ", &alone, 100),
+            ["p = \"TCP\" (schema default)"]
         );
     }
 

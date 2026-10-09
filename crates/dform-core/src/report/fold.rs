@@ -8,13 +8,13 @@
 //! its own line beside it. A create's lines are folded so (`folded`,
 //! `Folding`), its leaves in the order the program gave a list's elements.
 
-use super::Why;
 use super::deformation::{Deformation, Line, Op};
 use super::explain::attr_holding;
 use super::labels::path;
 use super::mask::Shown;
 use super::tree;
 use super::tree::Site;
+use super::{SCHEMA_DEFAULT, Why};
 use crate::ast::{Atom, RuleStmt, Term};
 use crate::fmt::value::Tree;
 use crate::ir::Address;
@@ -223,8 +223,10 @@ pub struct Group {
 /// path that holds them all, where it and the other writers diverge
 /// (`spec.template.spec = { .. }`, `tags = { .. }` beside a policy's
 /// `tags.team`); a writer of one leaf, and a leaf no one wrote, on its
-/// own line.
-pub fn fold<W: PartialEq>(paths: &[String], writers: &[Option<W>]) -> Vec<Group> {
+/// own line. A leaf `noted` (no one wrote it, a note says what made it:
+/// a schema's default, R-217) is inside the deepest value that holds its
+/// path, else on its own line; it makes no list one other writers add to.
+pub fn fold<W: PartialEq>(paths: &[String], writers: &[Option<W>], noted: &[bool]) -> Vec<Group> {
     let toks: Vec<Vec<Tok>> = paths.iter().map(|p| tokens(p)).collect();
     let alone = |i: usize| Group {
         path: paths[i].clone(),
@@ -234,7 +236,7 @@ pub fn fold<W: PartialEq>(paths: &[String], writers: &[Option<W>]) -> Vec<Group>
     let mut out = Vec::new();
     let mut done = vec![false; paths.len()];
     for i in 0..paths.len() {
-        if done[i] {
+        if done[i] || noted[i] {
             continue;
         }
         let Some(w) = &writers[i] else {
@@ -264,7 +266,8 @@ pub fn fold<W: PartialEq>(paths: &[String], writers: &[Option<W>]) -> Vec<Group>
         );
         let shared = positional
             && (0..paths.len()).any(|j| {
-                writers[j].as_ref() != Some(w)
+                !noted[j]
+                    && writers[j].as_ref() != Some(w)
                     && toks[j].len() > depth
                     && toks[j][..depth] == toks[i][..depth]
             });
@@ -306,6 +309,19 @@ pub fn fold<W: PartialEq>(paths: &[String], writers: &[Option<W>]) -> Vec<Group>
                 depth,
                 leaves: mine,
             }),
+        }
+    }
+    // A leaf a note says is inside the deepest value that holds its path,
+    // after the value's own leaves; else on its own line.
+    for i in (0..paths.len()).filter(|&i| noted[i]) {
+        let holds = |g: &Group| {
+            g.path != paths[g.leaves[0]]
+                && toks[i].len() > g.depth
+                && toks[i][..g.depth] == toks[g.leaves[0]][..g.depth]
+        };
+        match out.iter_mut().filter(|g| holds(g)).max_by_key(|g| g.depth) {
+            Some(g) => g.leaves.push(i),
+            None => out.push(alone(i)),
         }
     }
     // A value where its path's leaves begin, before a leaf another
@@ -402,27 +418,36 @@ pub(super) fn folded(
             rows.entry(*w).or_insert_with(|| p.document_row(rules, *w));
         }
     }
+    let defaults = type_defaults(all, &d.addr.typ);
+    // A leaf no contribution wrote that the schema defaults (R-217).
+    let noted: Vec<bool> = paths
+        .iter()
+        .zip(&writers)
+        .map(|(p, w)| w.is_none() && defaults.contains(&schema_path(p)))
+        .collect();
     let f = Folding {
         p,
         rules,
         why,
-        defaults: type_defaults(all, &d.addr.typ),
         sets: keyless_sets(&d.addr.typ, all),
         lines,
         paths,
         writers,
+        noted,
         rows,
     };
-    let values: Vec<crate::fmt::value::Tree> = f
+    let values: Vec<Tree> = f
         .lines
         .iter()
         .zip(&f.writers)
-        .map(|(l, w)| match f.in_row(*w) {
-            true => crate::fmt::value::Tree::Leaf(String::new()),
-            false => crate::fmt::value::Tree::Leaf(whole(&l.after, why)),
+        .zip(&f.noted)
+        .map(|((l, w), noted)| match (f.in_row(*w), noted) {
+            (true, _) => Tree::Leaf(String::new()),
+            (false, true) => Tree::Noted(whole(&l.after, why), SCHEMA_DEFAULT.into()),
+            (false, false) => Tree::Leaf(whole(&l.after, why)),
         })
         .collect();
-    let out: Vec<(Option<crate::circuit::NodeId>, Line)> = fold(&f.paths, &f.writers)
+    let out: Vec<(Option<crate::circuit::NodeId>, Line)> = fold(&f.paths, &f.writers, &f.noted)
         .into_iter()
         .flat_map(|g| f.group(&g, &values, site))
         .collect();
@@ -495,17 +520,19 @@ pub(super) fn type_defaults(all: &BTreeSet<Atom>, typ: &str) -> BTreeSet<String>
         .collect()
 }
 
-/// A deformation's lines being folded: their paths and writers, the
-/// type's defaults and keyless sets, and each contribution's document row.
+/// A deformation's lines being folded: their paths and writers, which
+/// are the schema's defaults, the type's keyless sets, and each
+/// contribution's document row.
 pub(super) struct Folding<'a> {
     pub(super) p: &'a tree::Printer<'a>,
     pub(super) rules: &'a [RuleStmt],
     pub(super) why: Why,
-    pub(super) defaults: BTreeSet<String>,
     pub(super) sets: BTreeSet<String>,
     pub(super) lines: Vec<&'a Line>,
     pub(super) paths: Vec<String>,
     pub(super) writers: Vec<Option<crate::circuit::NodeId>>,
+    /// The leaf no contribution wrote and the schema defaults (R-217).
+    pub(super) noted: Vec<bool>,
     pub(super) rows: BTreeMap<crate::circuit::NodeId, Option<tree::DocRow>>,
 }
 
@@ -518,46 +545,65 @@ impl Folding<'_> {
 
     /// A fold group's lines: a leaf of its own with its site found (a
     /// host with a label that is not ASCII keeps its own line, so its
-    /// A-labels print beside it, R-134), a schema default, an element of a
-    /// set several writers add to named by itself (R-158), or the group's
-    /// value laid out under its path.
+    /// A-labels print beside it, R-134), a schema default with its note,
+    /// an element of a set several writers add to named by itself (R-158),
+    /// or the group's value laid out under its path, the defaults inside
+    /// it with theirs (R-217).
     pub(super) fn group(
         &self,
         g: &Group,
-        values: &[crate::fmt::value::Tree],
+        values: &[Tree],
         site: &mut dyn FnMut(&Line) -> Option<Site>,
     ) -> Vec<(Option<crate::circuit::NodeId>, Line)> {
         let (p, rules, why) = (self.p, self.rules, self.why);
         let (lines, paths, writers) = (&self.lines, &self.paths, &self.writers);
-        let (defaults, sets) = (&self.defaults, &self.sets);
-        let mut own = |l: &Line| Line {
-            site: site(l),
-            ..l.clone()
+        let sets = &self.sets;
+        let mut own = |i: usize| match self.noted[i] {
+            true => self.default_line(i, values),
+            false => Line {
+                site: site(lines[i]),
+                ..lines[i].clone()
+            },
         };
         let host = |l: &Line| matches!(&l.after, Shown::Value(Json::String(s)) if crate::uri::ascii_form(s).is_some());
         if g.leaves.len() > 1 && g.leaves.iter().any(|&i| host(lines[i])) {
             return g
                 .leaves
                 .iter()
-                .map(|&i| (writers[i], own(lines[i])))
+                .map(|&i| (writers[i], own(i)))
                 .collect::<Vec<_>>();
         }
         let w = writers[g.leaves[0]];
         let first = lines[g.leaves[0]];
+        // A value said as its document's row says no default inside it:
+        // each is its own line after it.
+        if g.leaves.len() > 1 && self.in_row(w) && g.leaves.iter().any(|&i| self.noted[i]) {
+            let mine = Group {
+                leaves: g
+                    .leaves
+                    .iter()
+                    .copied()
+                    .filter(|&i| !self.noted[i])
+                    .collect(),
+                ..g.clone()
+            };
+            let mut out = self.group(&mine, values, site);
+            out.extend(
+                g.leaves
+                    .iter()
+                    .filter(|&&i| self.noted[i])
+                    .map(|&i| (None, self.default_line(i, values))),
+            );
+            return out;
+        }
         let line = match (g.leaves.as_slice(), w) {
-            ([i], None) if defaults.contains(&schema_path(&paths[*i])) => Line {
-                site: Some(Site {
-                    statement: "schema default".into(),
-                    ..Site::default()
-                }),
-                ..first.clone()
-            },
+            ([i], None) if self.noted[*i] => self.default_line(*i, values),
             // A scalar element of a set several writers add to is
             // named by itself (R-158): `policies[app_policy]`.
             // An element several writers add to says its own writer's
             // site, which the attribute's winner does not.
             ([i], Some(w)) if g.path == paths[*i] && paths[*i].ends_with(']') => {
-                let first = own(first);
+                let first = own(*i);
                 let site = match first.site {
                     Some(s) => Some(s),
                     None => p.contribution_site(rules, w, &paths[*i]),
@@ -577,9 +623,9 @@ impl Folding<'_> {
             ([i], _) if g.path == paths[*i] => match set_element(&paths[*i], sets) {
                 Some(list) if scalar(&first.after) => Line {
                     path: format!("{list}[{}]", first.after.said(why)),
-                    ..own(first)
+                    ..own(*i)
                 },
-                _ => own(first),
+                _ => own(*i),
             },
             (_, w) => Line {
                 op: Op::Leaf,
@@ -594,6 +640,16 @@ impl Folding<'_> {
             },
         };
         vec![(w, line)]
+    }
+
+    /// Leaf `i`, a schema's default, on its own line: its value and the
+    /// note (R-217), `protocol = "TCP" (schema default)`.
+    fn default_line(&self, i: usize, values: &[Tree]) -> Line {
+        Line {
+            site: None,
+            value: Some(values[i].clone()),
+            ..self.lines[i].clone()
+        }
     }
 
     /// A document value (R-131): the leaves a contribution read whole from
@@ -762,6 +818,10 @@ mod tests {
         ps.iter().map(|p| p.to_string()).collect()
     }
 
+    fn unnoted<W: PartialEq>(ps: &[String], w: &[Option<W>]) -> Vec<Group> {
+        fold(ps, w, &vec![false; ps.len()])
+    }
+
     #[test]
     fn a_path_is_keys_and_selectors() {
         let t = tokens("spec.containers[name=web].args[0]");
@@ -792,7 +852,7 @@ mod tests {
             "spec.c[name=t].ports[name=web].protocol",
         ]);
         let w = [Some(2), Some(3), Some(1), Some(1), Some(1), Some(1), None];
-        let g = fold(&ps, &w);
+        let g = unnoted(&ps, &w);
         let printed: Vec<&str> = g.iter().map(|g| g.path.as_str()).collect();
         assert_eq!(
             printed,
@@ -826,7 +886,7 @@ mod tests {
     #[test]
     fn a_writer_folds_beside_another_in_the_same_object() {
         let ps = paths(&["tags.component", "tags.env", "tags.team"]);
-        let g = fold(&ps, &[Some(1), Some(1), Some(2)]);
+        let g = unnoted(&ps, &[Some(1), Some(1), Some(2)]);
         let printed: Vec<&str> = g.iter().map(|g| g.path.as_str()).collect();
         assert_eq!(printed, ["tags", "tags.team"]);
         // A value comes before a leaf another writer made inside it.
@@ -835,7 +895,7 @@ mod tests {
             "metadata.name",
             "metadata.namespace",
         ]);
-        let g = fold(&ps, &[Some(2), Some(1), Some(1)]);
+        let g = unnoted(&ps, &[Some(2), Some(1), Some(1)]);
         let printed: Vec<&str> = g.iter().map(|g| g.path.as_str()).collect();
         assert_eq!(printed, ["metadata", "metadata.labels.owner"]);
     }
@@ -849,7 +909,7 @@ mod tests {
             "statements[1].resource",
             "statements[2].action",
         ]);
-        let g = fold(&ps, &[Some(2), Some(2), Some(1), Some(1), Some(1)]);
+        let g = unnoted(&ps, &[Some(2), Some(2), Some(1), Some(1), Some(1)]);
         let printed: Vec<&str> = g.iter().map(|g| g.path.as_str()).collect();
         assert_eq!(
             printed,
@@ -860,7 +920,7 @@ mod tests {
     #[test]
     fn a_list_of_one_element_one_writer_wrote_is_the_list() {
         let ps = paths(&["policies[0]", "tags.team"]);
-        let g = fold(&ps, &[Some(1), Some(2)]);
+        let g = unnoted(&ps, &[Some(1), Some(2)]);
         let printed: Vec<&str> = g.iter().map(|g| g.path.as_str()).collect();
         assert_eq!(printed, ["policies", "tags.team"]);
         let values = [Tree::Leaf("p".into()), Tree::Leaf("t".into())];
@@ -869,7 +929,7 @@ mod tests {
             Tree::List(vec![Tree::Leaf("p".into())])
         );
         // Another writer's element beside it: each by its own line.
-        let g = fold(&paths(&["policies[0]", "policies[1]"]), &[Some(1), Some(2)]);
+        let g = unnoted(&paths(&["policies[0]", "policies[1]"]), &[Some(1), Some(2)]);
         let printed: Vec<&str> = g.iter().map(|g| g.path.as_str()).collect();
         assert_eq!(printed, ["policies[0]", "policies[1]"]);
     }
@@ -877,7 +937,7 @@ mod tests {
     #[test]
     fn positions_order_numerically() {
         let ps = paths(&["a[10]", "a[2]"]);
-        let g = fold(&ps, &[Some(1), Some(1)]);
+        let g = unnoted(&ps, &[Some(1), Some(1)]);
         let values = [Tree::Leaf("ten".into()), Tree::Leaf("two".into())];
         assert_eq!(g[0].path, "a");
         assert_eq!(
@@ -886,10 +946,48 @@ mod tests {
         );
     }
 
+    /// R-217: a schema's default is inside the value that holds it, after
+    /// its own leaves, and makes no list one other writers add to; one no
+    /// value holds is its own line.
+    #[test]
+    fn a_default_folds_into_the_value_that_holds_it() {
+        let ps = paths(&[
+            "metadata.name",
+            "spec.ports[port=80,protocol=TCP].port",
+            "spec.ports[port=80,protocol=TCP].protocol",
+            "spec.ports[port=80,protocol=TCP].targetPort",
+            "spec.selector.app",
+            "spec.type",
+        ]);
+        let w = [Some(1), Some(2), None, Some(2), Some(2), None];
+        let g = fold(&ps, &w, &[false, false, true, false, false, true]);
+        let printed: Vec<(&str, &[usize])> = g
+            .iter()
+            .map(|g| (g.path.as_str(), g.leaves.as_slice()))
+            .collect();
+        assert_eq!(
+            printed,
+            [("metadata.name", &[0][..]), ("spec", &[1, 3, 4, 2, 5][..]),]
+        );
+        // Under a list by position, it is the list's still.
+        let ps = paths(&["ports[0].port", "ports[0].protocol", "ports[1].port"]);
+        let g = fold(&ps, &[Some(1), None, Some(1)], &[false, true, false]);
+        assert_eq!(g.len(), 1);
+        assert_eq!(
+            (g[0].path.as_str(), g[0].leaves.as_slice()),
+            ("ports", &[0, 2, 1][..])
+        );
+        // No value holds it: its own line.
+        let ps = paths(&["name", "protocol"]);
+        let g = fold(&ps, &[Some(1), None], &[false, true]);
+        let printed: Vec<&str> = g.iter().map(|g| g.path.as_str()).collect();
+        assert_eq!(printed, ["name", "protocol"]);
+    }
+
     #[test]
     fn leaves_no_contribution_wrote_stay_their_own() {
         let ps = paths(&["a.b", "a.c"]);
-        let g = fold::<u32>(&ps, &[None, None]);
+        let g = unnoted::<u32>(&ps, &[None, None]);
         assert_eq!(g.len(), 2);
     }
 }

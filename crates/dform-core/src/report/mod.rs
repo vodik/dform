@@ -214,6 +214,17 @@ pub const FORGOTTEN: &str = "  forgotten, kept in the world  (lifecycle retain)"
 /// the object's (R-198): `user_data differs (bootstrap): kept`.
 pub const KEPT: &str = "(bootstrap): kept";
 
+/// The note after a value the program did not write and the schema
+/// gives (R-217): `protocol: "TCP" (schema default)`, inside the value
+/// the program wrote around it or on its own line.
+pub const SCHEMA_DEFAULT: &str = "(schema default)";
+
+/// The notes a laid-out value says inside it, each a
+/// [`Style::note`](style::Style::note) as every note is, [`KEPT`] too
+/// (R-217): one where the value would be, `(sensitive)` and `(sensitive
+/// LABEL)`; one after it, [`SCHEMA_DEFAULT`].
+pub(crate) const NOTES: [&str; 2] = ["(sensitive", SCHEMA_DEFAULT];
+
 /// What the report is built from.
 pub struct Input<'a> {
     pub plan: &'a Plan,

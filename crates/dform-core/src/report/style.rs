@@ -1,9 +1,9 @@
 //! How the report's text is painted: plain, or with the terminal's colours for
 //! what a piece of the plan is (`Paint`), a change's by its kind.
 
-use super::Why;
 use super::labels::marker_of;
 use super::mask::Shown;
+use super::{NOTES, Why};
 use crate::provider::ActionKind;
 
 /// How the report's text is painted: plain (what `text` returns, every
@@ -97,8 +97,9 @@ impl Style {
         self.paint(Paint::Note, s)
     }
 
-    /// A value laid out as text (`{ "k": (sensitive), .. }`) with each
-    /// `(sensitive..)` outside a string painted as a [`Style::note`].
+    /// A value laid out as text (`{ "k": (sensitive), p: "TCP" (schema
+    /// default) }`) with each of [`NOTES`] outside a string painted as a
+    /// [`Style::note`] (R-217): one rule for every note.
     pub(super) fn notes_in(&self, text: &str) -> String {
         if !self.color {
             return text.to_string();
@@ -108,7 +109,7 @@ impl Style {
         let mut rest = text;
         while let Some(c) = rest.chars().next() {
             if !quoted
-                && rest.starts_with("(sensitive")
+                && NOTES.iter().any(|n| rest.starts_with(n))
                 && let Some(end) = rest.find(')')
             {
                 out.push_str(&self.note(&rest[..=end]));

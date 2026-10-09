@@ -1466,7 +1466,17 @@ made; the plan itself says what it is.
   layout: on one line when it fits, else a field or an element per line
   with a trailing comma, a list of one object hugging it (`[{` .. `}]`),
   no string elided. A leaf another write made is its own line with its
-  site, a merge key the schema defaults `schema default`:
+  site. What the program did not write inside a value it wrote is the
+  document the provider receives, folded in after the program's fields
+  with a dim note (R-217): a merge key the schema defaults is `protocol:
+  "TCP" (schema default)`. A note after a value breaks every object and
+  list around it, one field per line, so it ends its line; a default no
+  written value holds (an element the program wrote one field of, each
+  its own line) is its own line with the same note,
+  `ports[port=80,protocol=TCP].protocol = "TCP" (schema default)`. Every
+  note is said one way, dim and in parentheses: `(sensitive)` where a
+  secret's value would be (which is a value, and breaks nothing),
+  `(schema default)` after a value, `(bootstrap): kept` after a path:
 
   ```
   + k8s.deployment traefik                     traefik.df:4
@@ -1479,17 +1489,33 @@ made; the plan itself says what it is.
         ],
         image: "traefik:v3.1",
         name: "traefik",
-        ports: [{ containerPort: 80, name: "web" }],
+        ports: [{
+          containerPort: 80,
+          name: "web",
+          protocol: "TCP" (schema default),
+        }],
       }
-      spec.template.spec.containers[name=traefik].ports[containerPort=80,protocol=TCP].protocol = "TCP"  schema default
+  + k8s.service traefik                        traefik.df:30
+      metadata.name = "traefik"
+      spec = {
+        selector: { app: "traefik" },
+        ports: [{
+          port: 80,
+          targetPort: 80,
+          protocol: "TCP" (schema default),
+        }],
+      }
   ```
 
   A keyed element is said by its key (`containers[name=traefik]`); an
   element by position is its list's (`args = [..]`), unless another write
   adds elements to the list too, when each writer's elements are said by
   position (`statements[1] = { .. }  baseline.df:15`). Only a create
-  folds: an update says the leaves that change. `-vv` says every leaf on
-  its own line, with its chain.
+  folds: an update says the leaves that change, a value kept from
+  creation `user_data differs (bootstrap): kept`. `-v` lays a value out
+  the same, notes and all; `-vv` says every leaf on its own line, with
+  its chain, a default's with none; `why` says each element and leaf
+  with the chain of the write that made it.
   A value a read decoded says the row it is, not its content (R-131): a
   resource whose body is a document (`resource T "${d.metadata.name}" =
   d where d in yaml.decode(io.read("vendor/crds.yml"))`), and an attribute whose one

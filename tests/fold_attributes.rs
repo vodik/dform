@@ -2,7 +2,7 @@
 //! contribution wrote fold back into one value, in the formatter's layout,
 //! at the path where the writers diverge; a leaf another contribution
 //! wrote splits out on its own line with its site, a schema's default of a
-//! merge key with `schema default`; `-vv` expands to leaves; `why` and
+//! merge key inside the value with `(schema default)`; `-vv` expands to leaves; `why` and
 //! `query` print a value the same way.
 
 mod common;
@@ -69,8 +69,9 @@ fn run(s: &Scratch, args: &[&str]) -> String {
 }
 
 /// The Traefik deployment: the container one value, laid out, each
-/// argument whole on its own line; the label a policy adds and the
-/// service's port protocols the schema defaults on their own lines.
+/// argument whole on its own line; the label a policy adds on its own
+/// line; the service's port protocols the schema defaults inside its
+/// ports, each with its note (R-217).
 #[test]
 fn a_value_one_write_made_is_one_laid_out_line() {
     let s = project("fold-traefik");
@@ -96,10 +97,10 @@ fn a_value_one_write_made_is_one_laid_out_line() {
     assert!(plan.contains(want), "{plan}");
     assert!(
         plan.contains(
-            "      spec.ports = [\n        { name: \"web\", port: 80, targetPort: 8000 },\n        \
-             { name: \"websecure\", port: 443, targetPort: 8443 },\n      ]\n      \
-             spec.ports[port=80,protocol=TCP].protocol = \"TCP\"  schema default\n      \
-             spec.ports[port=443,protocol=TCP].protocol = \"TCP\"  schema default\n"
+            "      spec.ports = [\n        {\n          name: \"web\",\n          port: 80,\n          \
+             targetPort: 8000,\n          protocol: \"TCP\" (schema default),\n        },\n        \
+             {\n          name: \"websecure\",\n          port: 443,\n          targetPort: 8443,\n          \
+             protocol: \"TCP\" (schema default),\n        },\n      ]\n"
         ),
         "{plan}"
     );

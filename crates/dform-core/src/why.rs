@@ -653,7 +653,8 @@ impl Chains<'_> {
             !printer.redact.is_secret(leaf)
                 && report::surface_in(printer.redact, whole, keys, leaf) == "(sensitive)"
         };
-        for g in report::fold::fold(&paths, &writers) {
+        // `why` says each leaf's chain: a default is its own line, with its own.
+        for g in report::fold::fold(&paths, &writers, &vec![false; paths.len()]) {
             let laid = |v: &Value| {
                 crate::fmt::value::Tree::of(v, &|v| {
                     let open =
