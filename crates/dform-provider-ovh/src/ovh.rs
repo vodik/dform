@@ -609,6 +609,23 @@ impl Ovh {
                 sensitive: false,
             });
         }
+        let replaces = self.replaces(&at, typ, prior, d, &changes);
+        if typ == NETWORK && prior.is_none() {
+            self.check_vrack(&at)?;
+        }
+        Ok((changes, replaces))
+    }
+
+    /// Whether a change of `prior` to `d` replaces the object: a path the
+    /// schema forces new, or one the API changes in one direction only.
+    fn replaces(
+        &self,
+        at: &str,
+        typ: &str,
+        prior: Option<&Json>,
+        d: &Json,
+        changes: &[provider::Change],
+    ) -> bool {
         let replaces = prior.is_some()
             && changes
                 .iter()
@@ -634,15 +651,11 @@ impl Ovh {
         };
         // An instance resizes to a larger flavor in place (it reboots);
         // a smaller one replaces it.
-        let smaller = |p: &Json| self.flavor_shrinks(&at, p, d);
-        let replaces = replaces
+        let smaller = |p: &Json| self.flavor_shrinks(at, p, d);
+        replaces
             || (typ == VOLUME && prior.is_some_and(shrinks))
             || (typ == NETWORK && prior.is_some_and(leaves))
-            || (typ == INSTANCE && prior.is_some_and(smaller));
-        if typ == NETWORK && prior.is_none() {
-            self.check_vrack(&at)?;
-        }
-        Ok((changes, replaces))
+            || (typ == INSTANCE && prior.is_some_and(smaller))
     }
 
     // Apply.
@@ -695,36 +708,7 @@ impl Ovh {
                     ..Default::default()
                 });
             }
-            pb::Op::Replace => {
-                // The key is the name: the old object goes first unless the
-                // replacement has another key.
-                let old = self
-                    .read(typ, &r.remote, &r.name)
-                    .map_err(|e| refused(&at, format!("{e:#}")))?;
-                let same = old
-                    .as_ref()
-                    .is_none_or(|(attrs, _)| self.key_of(typ, attrs) == self.key_of(typ, &config));
-                if r.create_first && same {
-                    notes.push(format!(
-                        "{at}: the replacement has the old object's key, so the old one goes first"
-                    ));
-                }
-                if typ == INSTANCE
-                    && let Some((was, _)) = &old
-                    && self.flavor_shrinks(&at, was, &config)
-                {
-                    notes.push(format!(
-                        "{at}: flavor {} is smaller than {}, and the API resizes an instance \
-                         only to a larger one, so it is replaced",
-                        s(&config, "flavor").unwrap_or_default(),
-                        s(was, "flavor").unwrap_or_default()
-                    ));
-                }
-                if !r.create_first || same {
-                    self.delete(typ, &at, &r.remote, &mut notes, &say)?;
-                }
-                self.create(typ, &at, &config, key, &mut notes, &say)?
-            }
+            pb::Op::Replace => self.replace(r, &at, &config, &mut notes, &say)?,
             _ => return Err(refused(&at, "no operation")),
         };
         let computed = self.outward(typ, &r.name, &computed);
@@ -735,6 +719,48 @@ impl Ovh {
             elapsed_ms: 0,
             notes,
         })
+    }
+
+    /// An object replaced: the old one deleted first when the replacement
+    /// has its key or the host does not create first, then the new one
+    /// created.
+    fn replace(
+        &self,
+        r: &pb::ApplyRequest,
+        at: &str,
+        config: &Json,
+        notes: &mut Vec<String>,
+        say: Say,
+    ) -> std::result::Result<(String, Json, Json), Failed> {
+        let (typ, key) = (r.r#type.as_str(), r.idempotency_key.as_str());
+        // The key is the name: the old object goes first unless the
+        // replacement has another key.
+        let old = self
+            .read(typ, &r.remote, &r.name)
+            .map_err(|e| refused(at, format!("{e:#}")))?;
+        let same = old
+            .as_ref()
+            .is_none_or(|(attrs, _)| self.key_of(typ, attrs) == self.key_of(typ, config));
+        if r.create_first && same {
+            notes.push(format!(
+                "{at}: the replacement has the old object's key, so the old one goes first"
+            ));
+        }
+        if typ == INSTANCE
+            && let Some((was, _)) = &old
+            && self.flavor_shrinks(at, was, config)
+        {
+            notes.push(format!(
+                "{at}: flavor {} is smaller than {}, and the API resizes an instance \
+                 only to a larger one, so it is replaced",
+                s(config, "flavor").unwrap_or_default(),
+                s(was, "flavor").unwrap_or_default()
+            ));
+        }
+        if !r.create_first || same {
+            self.delete(typ, at, &r.remote, notes, say)?;
+        }
+        self.create(typ, at, config, key, notes, say)
     }
 
     /// What a Create of `doc` is found by: each attribute of the type's
@@ -920,24 +946,7 @@ impl Ovh {
 
     pub fn query(&self, pred: &str, plus: &[bool], inputs: &[Value]) -> Result<Vec<Vec<Value>>> {
         if pred == CREATED {
-            let [Value::Str(typ), name, Value::Str(key)] = inputs else {
-                bail!("{CREATED} is asked with Type, Name and Key bound");
-            };
-            if key.is_empty() {
-                return Ok(Vec::new());
-            }
-            return Ok(self
-                .created(key)?
-                .map(|remote| {
-                    vec![
-                        Value::Str(typ.clone()),
-                        name.clone(),
-                        Value::Str(key.clone()),
-                        Value::Str(remote),
-                    ]
-                })
-                .into_iter()
-                .collect());
+            return self.created_rows(inputs);
         }
         let Some((_, binding)) = EXTERNS.iter().find(|(p, _)| *p == pred) else {
             bail!("the ovh provider answers no extern {pred}");
@@ -951,46 +960,11 @@ impl Ovh {
         // Asked before the program's settings came: not yet (an open null
         // in each output column), asked again once they have.
         if self.configured().is_ok_and(|c| c.awaiting) {
-            let ins = dform_core::spell::bare(&inputs[0]);
-            return Ok(vec![
-                binding
-                    .iter()
-                    .enumerate()
-                    .map(|(c, plus)| match plus {
-                        true => Value::Str(input.clone()),
-                        false => Value::Null {
-                            label: dform_core::value::null_label(pred, &ins, &(c + 1).to_string()),
-                            class: dform_core::value::NullClass::Open,
-                            ty: String::new(),
-                        },
-                    })
-                    .collect(),
-            ]);
+            return Ok(vec![not_yet(pred, binding, input)]);
         }
         let what = format!("answer {pred}({input:?}, ..)");
         Ok(match pred {
-            REGION => {
-                let a = self.account(&what)?;
-                let p = resolve_project(&a.client, input, a.cache.as_deref())?;
-                let names = a.client.get(&format!("/cloud/project/{p}/region"))?;
-                let mut rows = Vec::new();
-                for n in names
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Json::as_str)
-                {
-                    let r = a
-                        .client
-                        .get(&format!("/cloud/project/{p}/region/{}", escape(n)))?;
-                    rows.push(vec![
-                        Value::Str(input.clone()),
-                        Value::Str(n.to_string()),
-                        Value::Str(s(&r, "status").unwrap_or_default().to_string()),
-                    ]);
-                }
-                rows
-            }
+            REGION => self.region_rows(&what, input)?,
             FLAVOR => {
                 let (a, p) = self.project(&what)?;
                 map::flavor_rows(input, &self.list(&a, &p, "flavor", input)?)
@@ -1000,6 +974,54 @@ impl Ovh {
                 map::image_rows(input, &self.list(&a, &p, "image", input)?)
             }
         })
+    }
+
+    /// `provider.created(Type, Name, Key, Remote)` asked with its first
+    /// three columns bound.
+    fn created_rows(&self, inputs: &[Value]) -> Result<Vec<Vec<Value>>> {
+        let [Value::Str(typ), name, Value::Str(key)] = inputs else {
+            bail!("{CREATED} is asked with Type, Name and Key bound");
+        };
+        if key.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .created(key)?
+            .map(|remote| {
+                vec![
+                    Value::Str(typ.clone()),
+                    name.clone(),
+                    Value::Str(key.clone()),
+                    Value::Str(remote),
+                ]
+            })
+            .into_iter()
+            .collect())
+    }
+
+    /// `ovh.region(Project, Region, Status)`: each region of the project
+    /// `input` names, with its status.
+    fn region_rows(&self, what: &str, input: &str) -> Result<Vec<Vec<Value>>> {
+        let a = self.account(what)?;
+        let p = resolve_project(&a.client, input, a.cache.as_deref())?;
+        let names = a.client.get(&format!("/cloud/project/{p}/region"))?;
+        let mut rows = Vec::new();
+        for n in names
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Json::as_str)
+        {
+            let r = a
+                .client
+                .get(&format!("/cloud/project/{p}/region/{}", escape(n)))?;
+            rows.push(vec![
+                Value::Str(input.to_string()),
+                Value::Str(n.to_string()),
+                Value::Str(s(&r, "status").unwrap_or_default().to_string()),
+            ]);
+        }
+        Ok(rows)
     }
 
     /// Documents for `dform provider check`: an instance, renamed in
@@ -1030,6 +1052,24 @@ impl Ovh {
             ex(with_data.clone(), with_data, ""),
         ]
     }
+}
+
+/// A data source asked before the program's settings came: not yet, an
+/// open null in each output column, asked again once they have.
+fn not_yet(pred: &str, binding: &[bool], input: &str) -> Vec<Value> {
+    let ins = dform_core::spell::bare(&Value::Str(input.to_string()));
+    binding
+        .iter()
+        .enumerate()
+        .map(|(c, plus)| match plus {
+            true => Value::Str(input.to_string()),
+            false => Value::Null {
+                label: dform_core::value::null_label(pred, &ins, &(c + 1).to_string()),
+                class: dform_core::value::NullClass::Open,
+                ty: String::new(),
+            },
+        })
+        .collect()
 }
 
 fn unix_now() -> u64 {

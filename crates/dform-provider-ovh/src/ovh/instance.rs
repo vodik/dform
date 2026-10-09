@@ -125,51 +125,7 @@ impl Ovh {
             .post(&format!("/cloud/project/{p}/instance"), &body)
             .map_err(|e| failed(at, e))?;
         let id = s(&o, "id").unwrap_or_default().to_string();
-        // Wait for it to run: until then it has no address. Each status
-        // the API gives that is not the last one's is said (`BUILD`,
-        // `ACTIVE`).
-        let start = Instant::now();
-        let status = |o: &Json| s(o, "status").unwrap_or("unknown").to_string();
-        let mut said = status(&o);
-        say(&said, None);
-        let mut last = o;
-        while s(&last, "status") != Some("ACTIVE") {
-            if s(&last, "status") == Some("ERROR") {
-                notes.push(format!(
-                    "{at}: instance {id} is in ERROR; it is kept in state, to be replaced or \
-                     deleted"
-                ));
-                break;
-            }
-            if start.elapsed() > CREATE_WAIT {
-                notes.push(format!(
-                    "{at}: instance {id} is still {} after {}s",
-                    s(&last, "status").unwrap_or("unknown"),
-                    CREATE_WAIT.as_secs()
-                ));
-                break;
-            }
-            std::thread::sleep(a.poll);
-            match a
-                .client
-                .get_opt(&format!("/cloud/project/{p}/instance/{}", escape(&id)))
-            {
-                Ok(Some(o)) => {
-                    if status(&o) != said {
-                        said = status(&o);
-                        say(&said, None);
-                    }
-                    last = o;
-                }
-                Ok(None) => {
-                    return Err(Failed::MaybeApplied(format!(
-                        "{at}: instance {id} went away while it was made"
-                    )));
-                }
-                // A failed poll is no answer about the instance: ask again.
-                Err(e) => say(&said, Some(&format!("a poll failed, asking again: {e:#}"))),
-            }
-        }
+        let last = wait_active(&a, &p, at, &id, o, notes, say)?;
         let (attrs, computed) = self
             .instance_doc(&a, &p, &last)
             .ok_or_else(|| Failed::MaybeApplied(format!("{at}: instance {id} was deleted")))?;
@@ -326,4 +282,64 @@ impl Ovh {
         }
         Ok(())
     }
+}
+
+/// Wait for instance `id` to run (until then it has no address), `o` as
+/// the API last answered it: its document then, or as it was when it
+/// failed or the wait ran out, with a note.
+fn wait_active(
+    a: &Account,
+    p: &str,
+    at: &str,
+    id: &str,
+    o: Json,
+    notes: &mut Vec<String>,
+    say: Say,
+) -> std::result::Result<Json, Failed> {
+    // Wait for it to run: until then it has no address. Each status
+    // the API gives that is not the last one's is said (`BUILD`,
+    // `ACTIVE`).
+    let start = Instant::now();
+    let status = |o: &Json| s(o, "status").unwrap_or("unknown").to_string();
+    let mut said = status(&o);
+    say(&said, None);
+    let mut last = o;
+    while s(&last, "status") != Some("ACTIVE") {
+        if s(&last, "status") == Some("ERROR") {
+            notes.push(format!(
+                "{at}: instance {id} is in ERROR; it is kept in state, to be replaced or \
+                 deleted"
+            ));
+            break;
+        }
+        if start.elapsed() > CREATE_WAIT {
+            notes.push(format!(
+                "{at}: instance {id} is still {} after {}s",
+                s(&last, "status").unwrap_or("unknown"),
+                CREATE_WAIT.as_secs()
+            ));
+            break;
+        }
+        std::thread::sleep(a.poll);
+        match a
+            .client
+            .get_opt(&format!("/cloud/project/{p}/instance/{}", escape(&id)))
+        {
+            Ok(Some(o)) => {
+                if status(&o) != said {
+                    said = status(&o);
+                    say(&said, None);
+                }
+                last = o;
+            }
+            Ok(None) => {
+                return Err(Failed::MaybeApplied(format!(
+                    "{at}: instance {id} went away while it was made"
+                )));
+            }
+            // A failed poll is no answer about the instance: ask again.
+            Err(e) => say(&said, Some(&format!("a poll failed, asking again: {e:#}"))),
+        }
+    }
+    Ok(last)
 }
