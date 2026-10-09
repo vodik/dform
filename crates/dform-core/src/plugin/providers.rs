@@ -2850,8 +2850,10 @@ impl Providers {
         let path = self.schema().remote_name_of(&addr.typ)?;
         let want = get_path(want, path)?.as_str()?;
         let generated = entry.and_then(|e| e.name.as_deref());
-        let was = generated
-            .or_else(|| was.and_then(|d| get_path(d, path)).and_then(Json::as_str))
+        let was = was
+            .and_then(|d| get_path(d, path))
+            .and_then(Json::as_str)
+            .or(generated)
             .unwrap_or(want);
         let new = state::next_name(want, was, generated)?;
         Some((was.to_string(), new))
@@ -2859,7 +2861,8 @@ impl Providers {
 
     /// The name state recorded dform gave `addr`'s object, when `doc`
     /// keeps it (`StateEntry::name`): a destroy-first replacement of one
-    /// made under a generation is made under it again.
+    /// made under a generation is made under it again, and an update
+    /// keeps it; one where the program writes another name drops it.
     fn kept_name(&self, addr: &Address, doc: &Json, state: &State) -> Option<String> {
         let path = self.schema().remote_name_of(&addr.typ)?;
         let sent = get_path(doc, path)?.as_str()?;
@@ -3243,8 +3246,8 @@ struct InFlight {
     addr: Address,
     /// The object's remote id before the call; empty for a create.
     remote: String,
-    /// A create's or a replace's remote name, when it is not the
-    /// program's (`StateEntry::name`).
+    /// The remote name of the object the call makes or updates, when it
+    /// is not the program's (`StateEntry::name`).
     named: Option<String>,
     /// The call, to send again when it failed in a way worth retrying.
     req: pb::ApplyRequest,
@@ -3347,6 +3350,7 @@ impl Tick<'_> {
             ActionKind::Create | ActionKind::Replace { .. } => {
                 generated.or_else(|| cloud.kept_name(addr, &doc, state))
             }
+            ActionKind::Update | ActionKind::Drift => cloud.kept_name(addr, &doc, state),
             _ => None,
         };
         let world = self.world.as_ref().expect("read above");
@@ -3793,6 +3797,8 @@ impl Tick<'_> {
                     key(&addr.typ, &f.remote),
                     Providers::object(resp.attrs.as_ref(), resp.computed.as_ref())?,
                 );
+                // A program that names it another way now: the name is its.
+                state.set_name(addr, f.named.clone());
                 self.record_written(addr, state, false);
             }
             ActionKind::Delete => {

@@ -136,7 +136,11 @@ fn mock_schemas_declare_their_replace_order() {
         k8s.replace_order("k8s.deployment"),
         ReplaceOrder::CreateFirst
     );
-    assert_eq!(k8s.replace_order("k8s.service"), ReplaceOrder::CreateFirst);
+    assert_eq!(k8s.replace_order("k8s.service"), ReplaceOrder::DestroyFirst);
+    assert_eq!(
+        k8s.replace_order("k8s.config_map"),
+        ReplaceOrder::CreateFirst
+    );
     assert_eq!(
         k8s.replace_order("k8s.namespace"),
         ReplaceOrder::DestroyFirst
