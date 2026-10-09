@@ -89,6 +89,9 @@ pub(super) struct Space<'a> {
     images: std::cell::Cell<bool>,
     /// The providers whose Plan was not asked: it needs credentials.
     unplanned: std::cell::RefCell<BTreeSet<String>>,
+    /// The data sources a provider answered "not yet": it is not
+    /// configured, so what reads them is undetermined.
+    not_yet: std::cell::RefCell<BTreeSet<String>>,
     /// The key inputs, given on the target rather than by `--set`.
     keys: BTreeSet<String>,
     /// Each deny's doc comment, by its message.
@@ -134,7 +137,10 @@ impl<'a> Space<'a> {
                 Providers::start(launch(), &loaded.providers, &config)?
             }
         };
-        let lowered = crate::transform::lower(program)?;
+        // A provider's data sources the program reads with no `extern`
+        // line (R-106) are read as plan reads them.
+        let lowered =
+            deployment::with_schema_externs(&crate::transform::lower(program)?, backend.schema());
         crate::secrets::check(&lowered, backend.schema(), &Default::default())?;
         crate::refine::check(&lowered.program, backend.schema())?;
         crate::infer::infer(
@@ -159,6 +165,7 @@ impl<'a> Space<'a> {
             reader,
             images: std::cell::Cell::new(false),
             unplanned: Default::default(),
+            not_yet: Default::default(),
             keys,
             docs: deny_docs(program),
         })
@@ -256,9 +263,25 @@ impl<'a> Space<'a> {
                 if let Some(r) = memos.answer(f, ins) {
                     return r;
                 }
-                backend.query_extern(f, ins)
+                let rows = backend.query_extern(f, ins)?;
+                let open = |v: &Value| {
+                    matches!(
+                        v,
+                        Value::Null {
+                            class: crate::value::NullClass::Open,
+                            ..
+                        }
+                    )
+                };
+                if rows.iter().flatten().any(open) {
+                    let ins: Vec<String> = ins.iter().map(spell::value).collect();
+                    let call = format!("{}({})", f.name, ins.join(", "));
+                    self.not_yet.borrow_mut().insert(call);
+                }
+                Ok(rows)
             });
         let mut p = zset::with_policy_rules(program.clone())?;
+        deployment::declare_externs(&mut p, lowered);
         // Quantity and time literals read as their attributes' types (R-66).
         crate::types::read(&mut p, backend.schema())?;
         let (res, mut violations) = externs.eval(&p, &extra)?;
@@ -345,6 +368,15 @@ impl<'a> Space<'a> {
         for p in self.unplanned.borrow().iter() {
             out.push(format!(
                 "note: {p}'s Plan not run: no offline schema and no fake"
+            ));
+        }
+        let not_yet = self.not_yet.borrow();
+        if !not_yet.is_empty() {
+            let calls: Vec<&str> = not_yet.iter().map(String::as_str).collect();
+            out.push(format!(
+                "note: no provider is configured, so its data sources answer \"not yet\" and \
+                 what reads them is undetermined: {}",
+                calls.join(", ")
             ));
         }
         let stood = self.reader.stood_in();

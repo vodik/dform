@@ -1281,7 +1281,7 @@ fn setting_text(span: Span, key: &str) -> Option<String> {
 /// `l` with the data sources `schema` declares that it reads and does
 /// not declare itself (R-106): each an `extern` declaration, as if the
 /// program had written it.
-fn with_schema_externs(l: &transform::Lowered, schema: &Schema) -> transform::Lowered {
+pub fn with_schema_externs(l: &transform::Lowered, schema: &Schema) -> transform::Lowered {
     if schema.externs.is_empty() {
         return l.clone();
     }
@@ -1312,6 +1312,27 @@ fn with_schema_externs(l: &transform::Lowered, schema: &Schema) -> transform::Lo
         }
     }
     out
+}
+
+/// `program` with an `extern` statement for each data source `l` declares
+/// that it does not ([`with_schema_externs`]'s): what its evaluation
+/// asks.
+pub fn declare_externs(program: &mut Program, l: &transform::Lowered) {
+    let own: BTreeSet<&str> = program
+        .statements
+        .iter()
+        .filter_map(|s| match s {
+            Stmt::ExternFn(f) => Some(f.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    let more: Vec<Stmt> = l
+        .extern_fns
+        .iter()
+        .filter(|f| !own.contains(f.name.as_str()))
+        .map(|f| Stmt::ExternFn(f.clone()))
+        .collect();
+    program.statements.extend(more);
 }
 
 /// A rule waiting on a secret a provider holds would wait forever: no
@@ -1697,21 +1718,7 @@ impl Located {
     ) -> Result<Program> {
         let mut program = self.program.clone();
         if let Some(l) = lowered {
-            let own: BTreeSet<&str> = program
-                .statements
-                .iter()
-                .filter_map(|s| match s {
-                    Stmt::ExternFn(f) => Some(f.name.as_str()),
-                    _ => None,
-                })
-                .collect();
-            let more: Vec<Stmt> = l
-                .extern_fns
-                .iter()
-                .filter(|f| !own.contains(f.name.as_str()))
-                .map(|f| Stmt::ExternFn(f.clone()))
-                .collect();
-            program.statements.extend(more);
+            declare_externs(&mut program, l);
         }
         crate::types::read(&mut program, schema)?;
         Ok(program)
