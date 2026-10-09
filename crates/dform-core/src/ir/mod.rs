@@ -315,6 +315,15 @@ fn collect_deps(v: &Value, out: &mut BTreeSet<Address>) {
                 out.insert(Address { typ, name });
             }
         }
+        // So does a held secret in a template (R-218): it is revealed
+        // once its object exists.
+        Value::Str(s) => {
+            for l in crate::secrets::held::labels(s) {
+                if let Some((typ, name)) = crate::value::null_owner(&l) {
+                    out.insert(Address { typ, name });
+                }
+            }
+        }
         Value::CloudRef { .. } => {}
         Value::List(xs) => {
             for x in xs {

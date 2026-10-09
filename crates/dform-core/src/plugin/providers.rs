@@ -35,6 +35,7 @@ use crate::ast::{Atom, Term};
 use crate::ir::{Address, Adopt, Resource};
 use crate::provider::{self, Action, ActionKind, Change, Plan, get_path, remove_path, set_path};
 use crate::schema::Schema;
+use crate::secrets::held;
 use crate::spell;
 use crate::state::{self, State, StateEntry};
 use crate::value::{NullClass, Value};
@@ -762,6 +763,14 @@ impl Providers {
                 class: NullClass::Secret,
                 ..
             } => provider::held_json(label, &self.holder(label, identity)?.1),
+            // A template over held secrets as it is, once each has its
+            // holder (R-218).
+            Value::Str(t) if held::carries(t) => {
+                for l in held::labels(t) {
+                    self.holder(&l, identity)?;
+                }
+                Json::String(t.clone())
+            }
             Value::List(xs) => Json::Array(
                 xs.iter()
                     .map(|x| self.settings_of(x, identity))
@@ -791,21 +800,9 @@ impl Providers {
                 label,
                 class: NullClass::Secret,
                 ..
-            } => {
-                let (i, held) = self.holder(label, identity).ok_or_else(|| {
-                    anyhow!("no provider holds the secret {}", crate::ir::label(label))
-                })?;
-                let bytes = self.reveal(i, &held, label)?;
-                let text = std::str::from_utf8(bytes.expose()).map_err(|_| {
-                    anyhow!(
-                        "the secret {} that provider {} revealed is not text",
-                        crate::ir::label(label),
-                        held.provider
-                    )
-                })?;
-                let text = json!(text);
-                shown.push((label.clone(), bytes));
-                text
+            } => json!(self.revealed_text(label, identity, shown)?),
+            Value::Str(t) if held::carries(t) => {
+                json!(held::fill(t, |l| self.revealed_text(l, identity, shown))?)
             }
             Value::List(xs) => Json::Array(
                 xs.iter()
@@ -819,6 +816,151 @@ impl Providers {
             ),
             other => known_json(other).ok_or_else(|| anyhow!("a setting is not known yet"))?,
         })
+    }
+
+    /// The secret labeled `label` as text, revealed by the provider that
+    /// holds it (and kept in `shown`, by its label, zeroed when dropped).
+    fn revealed_text(
+        &self,
+        label: &str,
+        identity: &BTreeMap<(String, String), String>,
+        shown: &mut Vec<(String, super::credentials::Secret)>,
+    ) -> Result<String> {
+        let (i, held) = self.holder(label, identity).ok_or_else(|| {
+            anyhow!(
+                "no provider holds the secret {}: its object is not made",
+                crate::ir::label(label)
+            )
+        })?;
+        let bytes = self.reveal(i, &held, label)?;
+        let text = std::str::from_utf8(bytes.expose())
+            .map_err(|_| {
+                anyhow!(
+                    "the secret {} that provider {} revealed is not text",
+                    crate::ir::label(label),
+                    held.provider
+                )
+            })?
+            .to_string();
+        shown.push((label.to_string(), bytes));
+        Ok(text)
+    }
+
+    /// The object each address of `state` maps to, for a secret its
+    /// attribute holds ([`Providers::holder`]).
+    fn identities(&self, state: &State) -> BTreeMap<(String, String), String> {
+        self.entries(&state.resources)
+            .map(|(a, e)| ((a.typ, a.name), e.remote.clone()))
+            .collect()
+    }
+
+    /// `doc`, an Apply call's document for `addr`, with each secret another
+    /// provider holds revealed into it (R-218, as into a Configure): at a
+    /// path the schema marks sensitive, one written whole that the writing
+    /// provider does not hold itself (one it holds it materializes, as it
+    /// always has), and every one inside a template. Each is revealed by
+    /// the provider that holds it under this run's lease; the bytes are in
+    /// this call only. A reveal that does not happen is the call's error,
+    /// naming the attribute.
+    fn reveal_into(&self, addr: &Address, doc: &mut Json, state: &State) -> Result<()> {
+        if self.revealed_attrs(&addr.typ, doc).is_empty() {
+            return Ok(());
+        }
+        let identity = self.identities(state);
+        let writer = self.route(&addr.typ);
+        self.reveal_at(addr, writer, &identity, doc, "", "")
+    }
+
+    fn reveal_at(
+        &self,
+        addr: &Address,
+        writer: usize,
+        identity: &BTreeMap<(String, String), String>,
+        v: &mut Json,
+        path: &str,
+        norm: &str,
+    ) -> Result<()> {
+        let sensitive = !norm.is_empty() && self.schema().is_sensitive(&addr.typ, norm);
+        let text = |label: &str| {
+            self.revealed_text(label, identity, &mut Vec::new())
+                .map_err(|e| unrevealed(addr, path, label, &e))
+        };
+        if let Some((key, label)) = provider::marker(v) {
+            if sensitive && key == provider::SECRET_KEY && self.holder_link(label) != Some(writer) {
+                *v = Json::String(text(&label.to_string())?);
+            }
+            return Ok(());
+        }
+        match v {
+            Json::String(t) if sensitive && held::carries(t) => *t = held::fill(t, text)?,
+            Json::Object(m) => {
+                for (k, x) in m.iter_mut() {
+                    let (p, n) = (crate::ir::path_join(path, k), crate::ir::path_join(norm, k));
+                    self.reveal_at(addr, writer, identity, x, &p, &n)?;
+                }
+            }
+            Json::Array(xs) => {
+                for (i, x) in xs.iter_mut().enumerate() {
+                    self.reveal_at(addr, writer, identity, x, &format!("{path}[{i}]"), norm)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// The link of the provider that holds the secret labeled `label`:
+    /// an extern's or another stack's, as it was answered; a resource's
+    /// sensitive attribute, the one serving its type.
+    fn holder_link(&self, label: &str) -> Option<usize> {
+        if let Some(h) = self.held.borrow().get(label) {
+            return self.link_named(&h.provider);
+        }
+        let (typ, _, _) = crate::value::null_parts(label)?;
+        Some(self.route(&typ))
+    }
+
+    /// The attributes of a document for `typ` that [`Providers::reveal_into`]
+    /// reveals a secret into, by path: what its provider is sent is not
+    /// what dform has, so each is compared as a write-only one is, by the
+    /// digest state keeps of what was sent (R-106).
+    fn revealed_attrs(&self, typ: &str, doc: &Json) -> Vec<String> {
+        let writer = self.route(typ);
+        let reveals = |v: &Json, norm: &str| {
+            let mut found = false;
+            self.reveals(typ, writer, v, norm, &mut found);
+            found
+        };
+        doc.as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(k, v)| reveals(v, &crate::ir::path_join("", k)))
+            .map(|(k, _)| crate::ir::path_join("", k))
+            .collect()
+    }
+
+    fn reveals(&self, typ: &str, writer: usize, v: &Json, norm: &str, found: &mut bool) {
+        let sensitive = || self.schema().is_sensitive(typ, norm);
+        match v {
+            _ if *found => {}
+            v if let Some((key, label)) = provider::marker(v) => {
+                *found = key == provider::SECRET_KEY
+                    && self.holder_link(label) != Some(writer)
+                    && sensitive();
+            }
+            Json::String(t) => *found = held::carries(t) && sensitive(),
+            Json::Object(m) => {
+                for (k, x) in m {
+                    self.reveals(typ, writer, x, &crate::ir::path_join(norm, k), found);
+                }
+            }
+            Json::Array(xs) => {
+                for x in xs {
+                    self.reveals(typ, writer, x, norm, found);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// The secret `held` names, from provider `i`, which holds it: under
@@ -1866,18 +2008,37 @@ impl Providers {
     /// is what state kept from the last apply (or state kept none: an
     /// object made before, or elsewhere), else `(write-only)`, a change.
     fn written_before(&self, typ: &str, entry: &StateEntry, want: &Json, doc: &mut Json) {
-        for p in self.schema().write_only_of(typ) {
-            let Some(v) = get_path(want, p) else { continue };
+        for p in self.compared_written(typ, want) {
+            let Some(v) = get_path(want, &p) else {
+                continue;
+            };
             let same = entry
                 .written
-                .get(p)
+                .get(&p)
                 .is_none_or(|kept| self.written_matches(v, kept));
             let v = match same {
                 true => v.clone(),
                 false => Json::String("(write-only)".into()),
             };
-            set_path(doc, p, v);
+            set_path(doc, &p, v);
         }
+    }
+
+    /// The paths of `doc` compared by the digest of what was sent: its
+    /// type's write-only attributes, and those a secret is revealed into.
+    fn compared_written(&self, typ: &str, doc: &Json) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .schema()
+            .write_only_of(typ)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        for p in self.revealed_attrs(typ, doc) {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+        out
     }
 
     /// Of an object that exists, each attribute `lifecycle` says is given
@@ -1946,14 +2107,13 @@ impl Providers {
         doc: &Json,
         before: &BTreeMap<String, String>,
     ) -> BTreeMap<String, String> {
-        self.schema()
-            .write_only_of(typ)
+        self.compared_written(typ, doc)
             .into_iter()
             .filter_map(|p| {
                 let d = self
-                    .written_digest(get_path(doc, p)?)
-                    .or_else(|| before.get(p).cloned())?;
-                Some((p.to_string(), d))
+                    .written_digest(get_path(doc, &p)?)
+                    .or_else(|| before.get(&p).cloned())?;
+                Some((p, d))
             })
             .collect()
     }
@@ -2897,6 +3057,13 @@ impl Providers {
 
     /// The class of the null labeled `T/A#P`: the schema's, else open (a
     /// ref to a configured attribute nobody set).
+    /// Whether the null labeled `label` is a secret a provider holds,
+    /// which no evaluation fills (R-218): a resource's sensitive computed
+    /// value, an extern's secret column, another stack's held output.
+    pub fn holds_secret(&self, label: &str) -> bool {
+        self.held.borrow().contains_key(label) || self.null_class(label) == NullClass::Secret
+    }
+
     fn null_class(&self, label: &str) -> NullClass {
         let Some((typ, _, path)) = crate::value::null_parts(label) else {
             return NullClass::Open;
@@ -3033,6 +3200,20 @@ fn keep_under(now: &mut BTreeMap<String, String>, was: &BTreeMap<String, String>
 /// sent`, the reason on its own line.
 fn not_sent(addr: &Address, why: &str) -> anyhow::Error {
     crate::report::Failure::of("apply", addr, "not sent", why).into()
+}
+
+/// An Apply call not sent because the secret `label` at `path` of its
+/// document was not revealed (R-218): why, as the holder said it.
+fn unrevealed(addr: &Address, path: &str, label: &str, e: &anyhow::Error) -> anyhow::Error {
+    let why = e.chain().last().map(ToString::to_string).unwrap_or_default();
+    not_sent(
+        addr,
+        &format!(
+            "{} holds the secret {}, which was not revealed: {why}",
+            crate::report::attribute(addr, path),
+            crate::ir::label(label)
+        ),
+    )
 }
 
 impl Tick<'_> {
@@ -3205,6 +3386,13 @@ impl Tick<'_> {
                  run does not hold",
             ));
         }
+        let config = match config {
+            Some(mut doc) => {
+                cloud.reveal_into(addr, &mut doc, state)?;
+                Some(doc)
+            }
+            None => None,
+        };
         let idempotency_key = uncertain_from_here(a, addr, &remote, state);
         let req = pb::ApplyRequest {
             op: op as i32,

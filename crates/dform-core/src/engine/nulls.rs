@@ -166,6 +166,10 @@ fn blocked_by_null(t: &Term, state: &HashMap<String, Value>) -> Option<(String, 
             if forwards_nulls(name) {
                 return None;
             }
+            // A template over held secrets has its value (R-218).
+            if name == crate::ir::FORMAT && eval_term(t, state).is_some() {
+                return None;
+            }
             let mut nulls = BTreeSet::new();
             for a in args {
                 // A bound variable's value is read where it is, not copied.

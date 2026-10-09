@@ -1034,6 +1034,7 @@ impl Evaluator {
         {
             bail!(self.no_crd(&r.addr));
         }
+        unrevealable(backend, &res).map_err(|e| with_site(e, &res))?;
         let asked = |res: &EvalResult, docs: &[ir::Resource]| asked(backend, res, docs);
         // The run's secrets that are not derived: a leaf holding one has no
         // derivation digest (`secrets::standin`, R-164).
@@ -1309,6 +1310,48 @@ fn with_schema_externs(l: &transform::Lowered, schema: &Schema) -> transform::Lo
         }
     }
     out
+}
+
+/// A rule waiting on a secret a provider holds would wait forever: no
+/// evaluation fills one, as dform never has its bytes (R-218). Written
+/// whole, or inside a string template, it is revealed into the call that
+/// writes it; any other function over it is an error at the attribute
+/// that reads it, never a wait.
+fn unrevealable(backend: &Providers, res: &EvalResult) -> Result<()> {
+    for s in &res.stuck {
+        let Some(label) = s.nulls.iter().find(|l| backend.holds_secret(l)) else {
+            continue;
+        };
+        let secret = ir::label(label);
+        let through = s
+            .reason
+            .strip_prefix("builtin ")
+            .and_then(|r| r.strip_suffix(" over a null"))
+            .map(|f| format!(" through {f}"))
+            .unwrap_or_default();
+        let why = format!(
+            "reads the secret {secret}{through}, which dform cannot compute: a provider holds \
+             it, and its bytes exist for dform only inside the call that writes it"
+        );
+        let help = format!("write it whole, or inside a string template: \"..${{{secret}}}..\"");
+        let head = |i: usize| match s.head.args.get(i) {
+            Some(Term::Val(Value::Str(x))) => Some(x.clone()),
+            _ => None,
+        };
+        if s.head.pred == "arg"
+            && let (Some(typ), Some(name), Some(path)) = (head(0), head(1), head(2))
+        {
+            // A `let`'s value is no resource's: said by its name.
+            if transform::is_pseudo_type(&typ) {
+                bail!("{typ} {path} {why}\n  help: {help}");
+            }
+            let addr = Address { typ, name };
+            let message = format!("{path} {why}\nhelp: {help}");
+            return Err(report::Failure::located(&addr, message).into());
+        }
+        bail!("`{}` {why}\n  help: {help}", s.text);
+    }
+    Ok(())
 }
 
 /// E §2.7's sections for an evaluation: what waits on a boundary.

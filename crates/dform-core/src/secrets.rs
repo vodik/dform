@@ -48,6 +48,8 @@ use crate::value::Value;
 use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod held;
+
 /// Whether a secret flows through `name` uninspected: a function declared
 /// `forwards` (`std/*.df`), or an aggregate that only collects.
 fn carries(name: &str) -> bool {

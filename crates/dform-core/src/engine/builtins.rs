@@ -279,9 +279,11 @@ pub(super) fn eval_func(
         vals.push(eval_term(a, state)?);
     }
     // Rule 2: every builtin argument is a content position. A builtin
-    // over a null has no value; the literal that needs it is stuck.
+    // over a null has no value; the literal that needs it is stuck. But a
+    // string template over secrets a provider holds, which no evaluation
+    // fills: each is in place as its placeholder (R-218).
     if !forwards_nulls(name) && vals.iter().any(stuck::has_null) {
-        return None;
+        vals = crate::secrets::held::in_template(name, &vals)?;
     }
     if spreads(name) && vals.iter().any(|v| matches!(v, Value::Null { .. })) {
         return None;
