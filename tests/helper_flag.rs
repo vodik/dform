@@ -172,20 +172,3 @@ fn a_modules_helper_is_never_stuck_in_its_rules_place() {
         );
     }
 }
-
-/// Not reached yet: a component copy's clause is its gate,
-/// `g::__instance(..)`, a relation the compiler names but the program's
-/// clause, so it is no helper and `stuck/4` names it by the compiler's
-/// word. How it is spelled is R-211's (its origin), not a flag's.
-#[test]
-#[ignore = "a copy's gate is spelled by the compiler's name in stuck/4 (R-211)"]
-fn a_copys_gate_is_stuck_in_the_programs_words() {
-    let s = boxes(
-        "helper-gate",
-        "component pair {\n  input n: int\n  resource x.box inner { size = n }\n}\n\
-         resource x.box b { size = 1 }\n\
-         resource pair g { n = 2 } where b.status.ready == true\n",
-    );
-    let r = dev(&s, &["query", "stuck"]).success();
-    assert!(!r.stdout.contains("__instance"), "{}", r.stdout);
-}
