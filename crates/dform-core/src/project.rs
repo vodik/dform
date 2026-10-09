@@ -1647,15 +1647,49 @@ mod tests {
         let e = manifest("[providers]\nfake = { source = \"fake\", timeout = \"soon\" }\n")
             .unwrap_err();
         assert!(e.to_string().contains("[providers.fake] timeout"), "{e}");
-        // A stack's `wait` is over the project's `[apply] wait` (R-201).
-        let m = manifest("[apply]\nwait = \"5m\"\n\n[stacks.app]\nwait = \"30m\"\n").unwrap();
-        let app = (Duration::from_secs(1800), WaitSetting::Stack("app".into()));
-        assert_eq!(m.waits("app").budget(None), app);
-        let other = (Duration::from_secs(300), WaitSetting::Apply);
-        assert_eq!(m.waits("other").budget(None), other);
         // The ssh provider is gone (R-153): its wait is `[io] wait`.
         let e = manifest("[providers]\nssh = { wait = \"10m\" }\n").unwrap_err();
         assert!(e.to_string().contains("[io] wait"), "{e}");
+    }
+
+    /// A wait's deadline (R-201): the run's flag, else the stack's, else
+    /// the provider's that answers the value, else `[apply] wait`, else
+    /// 10m; each named as the stop says it.
+    #[test]
+    fn a_waits_deadline_is_the_most_specific_setting() {
+        use std::time::Duration;
+        let m = manifest(
+            "[apply]\nwait = \"5m\"\n\n[stacks.app]\nwait = \"30m\"\n\n[providers]\n\
+             fake = { source = \"fake\", wait = \"20m\" }\n\n[io]\nwait = \"2m\"\n",
+        )
+        .unwrap();
+        let said = |w: &Waits, p: Option<&str>| {
+            let (d, s) = w.budget(p);
+            (d.as_secs(), s.to_string())
+        };
+        let flag = Waits {
+            flag: Some(Duration::from_secs(90)),
+            ..m.waits("app")
+        };
+        assert_eq!(said(&flag, Some("fake")), (90, "`--wait-timeout`".into()));
+        let stack = (1800, "`[stacks.app] wait` in dform.toml".into());
+        assert_eq!(said(&m.waits("app"), Some("fake")), stack);
+        let other = m.waits("other");
+        let fake = (1200, "`[providers.fake] wait` in dform.toml".into());
+        assert_eq!(said(&other, Some("fake")), fake);
+        let io = (120, "`[io] wait` in dform.toml".into());
+        assert_eq!(said(&other, Some("read")), io);
+        let apply = (300, "`[apply] wait` in dform.toml".into());
+        assert_eq!(said(&other, None), apply);
+        let none = manifest("").unwrap().waits("app");
+        let default = "the default; `[apply] wait` in dform.toml or `--wait-timeout` sets it";
+        assert_eq!(said(&none, None), (600, default.into()));
+        // Each is a duration, said where it is written.
+        let e = manifest("[apply]\nwait = \"soon\"\n").unwrap_err();
+        let want = "[apply] wait = \"soon\": a duration, `500ms`, `30s` or `10m`";
+        assert!(e.to_string().contains(want), "{e}");
+        let e = manifest("[stacks.app]\nwait = \"0s\"\n").unwrap_err();
+        assert!(e.to_string().contains("[stacks.app] wait = \"0s\""), "{e}");
     }
 
     /// `[secrets] passphrase` says where the passphrase a master is sealed
