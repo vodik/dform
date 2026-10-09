@@ -1043,10 +1043,12 @@ fn properties(first: &Planned, second: &Planned, by: &BTreeMap<String, Value>) -
             for leaf in alt {
                 // The prelude's `not resolved(L)` is the null itself:
                 // resolution is what flips it (Rule 4).
-                if let Leaf::Absent { pattern } = leaf
-                    && !pattern.starts_with("resolved(")
+                if let Leaf::Absent { atom } = leaf
+                    && atom.pred != "resolved"
                 {
-                    decided.entry(pattern).or_insert_with(|| spell::atom(a));
+                    decided
+                        .entry(spell::atom(&atom))
+                        .or_insert_with(|| spell::atom(a));
                 }
             }
         }
