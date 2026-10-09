@@ -209,116 +209,163 @@ pub fn resolve(
     env: &dyn Fn(&str) -> Option<String>,
     files: &[PathBuf],
 ) -> Result<Credentials> {
-    let env = |k: &str| env(k).filter(|v| !v.is_empty());
-    let mut conf: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-    for f in files {
-        if let Ok(text) = std::fs::read_to_string(f) {
-            for (s, kv) in parse_ini(&text) {
-                conf.entry(s).or_default().extend(kv);
-            }
-        }
-    }
-    let looked = |var: &str| {
-        let files = files
-            .iter()
-            .map(|f| f.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("the environment ({var}) and {files}")
-    };
-    let endpoint = match endpoint.filter(|e| !e.is_empty()) {
-        Some(e) => e.to_string(),
-        None => match env("OVH_ENDPOINT")
-            .or_else(|| conf.get("default").and_then(|d| d.get("endpoint")).cloned())
-        {
-            Some(e) => e,
-            None => bail!(
-                "no OVH endpoint: the provider block names none (`use ovh {{ endpoint = \
-                 \"ovh-ca\" }}`), and neither does {}",
-                looked("OVH_ENDPOINT")
-            ),
-        },
-    };
+    let sources = Sources::read(env, files);
+    let endpoint = sources.endpoint(endpoint)?;
     let Some(url) = endpoint_url(&endpoint) else {
         bail!(
             "the OVH endpoint {endpoint:?} is not one of {}, nor a URL",
             ENDPOINTS.map(|(n, _)| n).join(", ")
         );
     };
-    let section = conf.get(&endpoint);
-    let key = |var: &str, name: &str| -> Result<String> {
-        match env(var).or_else(|| section.and_then(|s| s.get(name)).cloned()) {
-            Some(v) => Ok(v),
-            None => bail!(
-                "no OVH {name} for the endpoint {endpoint}: set it under [{endpoint}] in \
-                 ovh.conf, or {var}; looked in {}",
-                looked(var)
-            ),
-        }
-    };
-    // Each key of each form that is set, by where it was set.
-    let set = |keys: &[(&str, &str)]| -> Vec<String> {
-        keys.iter()
-            .filter_map(|(var, name)| match env(var) {
-                Some(_) => Some(var.to_string()),
-                None => section.and_then(|s| s.get(*name)).map(|_| name.to_string()),
-            })
-            .collect()
-    };
-    let three = set(&KEYS);
-    let client = set(&CLIENT);
-    let token = set(&TOKEN);
-    let given: Vec<String> = [
-        ("a consumer key's", &three),
-        ("a service account's", &client),
-        ("an access token's", &token),
-    ]
-    .into_iter()
-    .filter(|(_, keys)| !keys.is_empty())
-    .map(|(form, keys)| format!("{form} ({})", keys.join(", ")))
-    .collect();
-    if let [first @ .., last] = given.as_slice()
-        && !first.is_empty()
-    {
-        let (both, which) = match first.len() {
-            1 => ("both ", "one or the other"),
-            _ => ("", "one of them"),
-        };
-        bail!(
-            "the credentials for the endpoint {endpoint} give {both}{} and {last}: they are \
-             {which}; remove the ones you do not use from [{endpoint}] in ovh.conf or the \
-             environment",
-            first.join(", ")
-        );
-    }
-    let auth = if !token.is_empty() {
-        Auth::Token {
-            access_token: key("OVH_ACCESS_TOKEN", "access_token")?,
-        }
-    } else if client.is_empty() {
-        Auth::Keys {
-            application_key: key("OVH_APPLICATION_KEY", "application_key")?,
-            application_secret: key("OVH_APPLICATION_SECRET", "application_secret")?,
-            consumer_key: key("OVH_CONSUMER_KEY", "consumer_key")?,
-        }
-    } else {
-        let Some(token_url) = token_url(&endpoint, &url) else {
-            bail!(
-                "the OVH endpoint {endpoint} takes no service account: give it application_key, \
-                 application_secret and consumer_key under [{endpoint}] in ovh.conf"
-            );
-        };
-        Auth::OAuth2 {
-            client_id: key("OVH_CLIENT_ID", "client_id")?,
-            client_secret: key("OVH_CLIENT_SECRET", "client_secret")?,
-            token_url,
-        }
-    };
+    let auth = sources.auth(&endpoint, &url)?;
     Ok(Credentials {
         endpoint,
         url,
         auth,
     })
+}
+
+/// Where credentials are read: the environment, over the files' sections
+/// merged (a later file's key over an earlier one's).
+struct Sources<'a> {
+    env: &'a dyn Fn(&str) -> Option<String>,
+    files: &'a [PathBuf],
+    conf: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+impl<'a> Sources<'a> {
+    fn read(env: &'a dyn Fn(&str) -> Option<String>, files: &'a [PathBuf]) -> Self {
+        let mut conf: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        for f in files {
+            if let Ok(text) = std::fs::read_to_string(f) {
+                for (s, kv) in parse_ini(&text) {
+                    conf.entry(s).or_default().extend(kv);
+                }
+            }
+        }
+        Sources { env, files, conf }
+    }
+
+    /// A variable's value, unless empty.
+    fn env(&self, k: &str) -> Option<String> {
+        (self.env)(k).filter(|v| !v.is_empty())
+    }
+
+    /// Where `var` was looked for, for a message.
+    fn looked(&self, var: &str) -> String {
+        let files = self
+            .files
+            .iter()
+            .map(|f| f.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("the environment ({var}) and {files}")
+    }
+
+    /// The endpoint `given`, else the environment's, else the files'
+    /// default.
+    fn endpoint(&self, given: Option<&str>) -> Result<String> {
+        if let Some(e) = given.filter(|e| !e.is_empty()) {
+            return Ok(e.to_string());
+        }
+        match self.env("OVH_ENDPOINT").or_else(|| {
+            self.conf
+                .get("default")
+                .and_then(|d| d.get("endpoint"))
+                .cloned()
+        }) {
+            Some(e) => Ok(e),
+            None => bail!(
+                "no OVH endpoint: the provider block names none (`use ovh {{ endpoint = \
+                 \"ovh-ca\" }}`), and neither does {}",
+                self.looked("OVH_ENDPOINT")
+            ),
+        }
+    }
+
+    /// `endpoint`'s key `name`, or the variable `var`.
+    fn key(&self, endpoint: &str, var: &str, name: &str) -> Result<String> {
+        let section = self.conf.get(endpoint);
+        match self
+            .env(var)
+            .or_else(|| section.and_then(|s| s.get(name)).cloned())
+        {
+            Some(v) => Ok(v),
+            None => bail!(
+                "no OVH {name} for the endpoint {endpoint}: set it under [{endpoint}] in \
+                 ovh.conf, or {var}; looked in {}",
+                self.looked(var)
+            ),
+        }
+    }
+
+    /// Each key of `keys` that is set for `endpoint`, by where it was set.
+    fn set(&self, endpoint: &str, keys: &[(&str, &str)]) -> Vec<String> {
+        let section = self.conf.get(endpoint);
+        keys.iter()
+            .filter_map(|(var, name)| match self.env(var) {
+                Some(_) => Some(var.to_string()),
+                None => section.and_then(|s| s.get(*name)).map(|_| name.to_string()),
+            })
+            .collect()
+    }
+
+    /// The one form of credentials set for `endpoint` (at `url`): an
+    /// access token, a service account, or a consumer key's three keys
+    /// when neither is; more than one form is an error naming them.
+    fn auth(&self, endpoint: &str, url: &str) -> Result<Auth> {
+        let three = self.set(endpoint, &KEYS);
+        let client = self.set(endpoint, &CLIENT);
+        let token = self.set(endpoint, &TOKEN);
+        let given: Vec<String> = [
+            ("a consumer key's", &three),
+            ("a service account's", &client),
+            ("an access token's", &token),
+        ]
+        .into_iter()
+        .filter(|(_, keys)| !keys.is_empty())
+        .map(|(form, keys)| format!("{form} ({})", keys.join(", ")))
+        .collect();
+        if let [first @ .., last] = given.as_slice()
+            && !first.is_empty()
+        {
+            let (both, which) = match first.len() {
+                1 => ("both ", "one or the other"),
+                _ => ("", "one of them"),
+            };
+            bail!(
+                "the credentials for the endpoint {endpoint} give {both}{} and {last}: they are \
+                 {which}; remove the ones you do not use from [{endpoint}] in ovh.conf or the \
+                 environment",
+                first.join(", ")
+            );
+        }
+        let key = |var: &str, name: &str| self.key(endpoint, var, name);
+        Ok(if !token.is_empty() {
+            Auth::Token {
+                access_token: key("OVH_ACCESS_TOKEN", "access_token")?,
+            }
+        } else if client.is_empty() {
+            Auth::Keys {
+                application_key: key("OVH_APPLICATION_KEY", "application_key")?,
+                application_secret: key("OVH_APPLICATION_SECRET", "application_secret")?,
+                consumer_key: key("OVH_CONSUMER_KEY", "consumer_key")?,
+            }
+        } else {
+            let Some(token_url) = token_url(endpoint, url) else {
+                bail!(
+                    "the OVH endpoint {endpoint} takes no service account: give it \
+                     application_key, application_secret and consumer_key under [{endpoint}] \
+                     in ovh.conf"
+                );
+            };
+            Auth::OAuth2 {
+                client_id: key("OVH_CLIENT_ID", "client_id")?,
+                client_secret: key("OVH_CLIENT_SECRET", "client_secret")?,
+                token_url,
+            }
+        })
+    }
 }
 
 /// The three keys' variables and names in ovh.conf.
