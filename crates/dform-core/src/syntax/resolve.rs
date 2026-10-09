@@ -302,12 +302,8 @@ struct Decls {
     /// provider schema's the compiler does not read (`--provider`, a
     /// plugin's).
     closed: BTreeSet<String>,
-    /// Relations: rule and fact heads, `decl`s, input relations.
-    relations: BTreeSet<String>,
     /// `extern` relations: their columns, `(input, name)`.
     externs: BTreeMap<String, Vec<(bool, String)>>,
-    /// Relations the program's own facts and rules define.
-    heads: BTreeSet<String>,
     /// Each `resource T n` statement as collected, before what `T` names
     /// is known: the scope it declares into, its file and the statement.
     pending: Vec<(ScopeId, u32, SyntaxNode)>,
@@ -1095,22 +1091,17 @@ impl<'u> Lowerer<'u> {
                 LET if node(&n, PARAMS).is_some() => {
                     let name = word_text(&n, 1);
                     let arity = function::params(&n).map_or(0, |p| p.len()) + 1;
-                    self.decls.relations.insert(name.clone());
-                    self.decls.heads.insert(name.clone());
                     self.names_mut(decl)
                         .declare(name, DeclKind::LetFn { arity }, n.clone());
                 }
                 LET => {
                     let name = word_text(&n, 1);
-                    self.decls.relations.insert(name.clone());
                     self.names_mut(decl).declare(name, DeclKind::Let, n.clone());
                 }
                 // `input p from ..` or `input p`: rows of `p`, which its
                 // `decl` declares (R-55).
                 INPUT_RELATION => {
                     let name = word_text(&n, 1);
-                    self.decls.relations.insert(name.clone());
-                    self.decls.heads.insert(name.clone());
                     let given = terms(&n).next().is_none();
                     self.names_mut(decl).declare(
                         name,
@@ -1150,7 +1141,6 @@ impl<'u> Lowerer<'u> {
                 }
                 DECL => {
                     let name = dotted_text(&n, 1);
-                    self.decls.relations.insert(name.clone());
                     let kind = DeclKind::Decl { arity: arity(&n) };
                     self.names_mut(decl).declare(name, kind, n.clone());
                 }
@@ -1229,8 +1219,6 @@ impl<'u> Lowerer<'u> {
                         });
                         let kind = DeclKind::Rule { arity: n_args };
                         self.names_mut(decl).declare(name.clone(), kind, n.clone());
-                        self.decls.heads.insert(name.clone());
-                        self.decls.relations.insert(name);
                     }
                 }
                 _ => {}
@@ -2364,7 +2352,7 @@ impl<'u> Lowerer<'u> {
         // schema's the compiler does not read (`--provider`, a plugin's).
         let namespace = self.decls.namespaces.contains(&c.head)
             || self.any_type
-            || !self.decls.relations.contains(&c.head);
+            || !self.program.scopes.declares_relation(&c.head);
         (!local && !resource && namespace && !c.ops.is_empty()).then_some(name)
     }
 
@@ -3451,7 +3439,8 @@ impl<'u> Lowerer<'u> {
             return None;
         }
         let name = self.callee(n)?;
-        if !crate::tables::FORMATS.contains(&name.as_str()) || self.decls.relations.contains(&name)
+        if !crate::tables::FORMATS.contains(&name.as_str())
+            || self.program.scopes.declares_relation(&name)
         {
             return None;
         }
@@ -8846,7 +8835,10 @@ impl<'u> Lowerer<'u> {
                 path,
             }));
         }
-        if k == 1 && self.decls.relations.contains(&name) && !self.decls.types.contains(&name) {
+        if k == 1
+            && self.program.scopes.declares_relation(&name)
+            && !self.decls.types.contains(&name)
+        {
             let mut args = Vec::new();
             for t in ts {
                 args.push(self.bind(true, |l| l.term(rc, t, Pos::Content, pre))?);

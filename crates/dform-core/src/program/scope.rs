@@ -145,6 +145,16 @@ impl Scopes {
         self.paths.iter().map(|(p, s)| (p, *s))
     }
 
+    /// Whether any scope declares the relation `name`: a head, a `decl`,
+    /// a `let` or an input relation.
+    pub fn declares_relation(&self, name: &str) -> bool {
+        self.names.values().any(|n| {
+            n.of(name).iter().any(|d| {
+                d.kind.arity().is_some() || matches!(d.kind, DeclKind::RelationInput { .. })
+            })
+        })
+    }
+
     /// Every scope, in the order they were made.
     pub fn ids(&self) -> impl Iterator<Item = ScopeId> + '_ {
         self.tree.keys()

@@ -211,7 +211,7 @@ impl Lowerer<'_> {
             || self.is_value(rc.scope, h)
             || self.resource(rc.scope, h).is_some()
             || self.module_at(h).is_some()
-            || self.decls.relations.contains(h)
+            || self.program.scopes.declares_relation(h)
             || self.chain_of(rc.scope).into_iter().any(|s| {
                 let s = self.names(s);
                 s.module(h).is_some() || s.instance(h).is_some() || s.component(h).is_some()
