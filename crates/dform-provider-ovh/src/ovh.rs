@@ -11,9 +11,11 @@
 //!
 //! Remote ids: an instance's, an SSH key's, a volume's, a private
 //! network's and a user's are the API's ids; a DNS record's is `ZONE/ID`,
-//! a subnet's `NETWORK/ID`, an S3 container's `REGION/NAME`. The types
-//! beyond the instance, key and record are in the modules below
-//! (`storage`, `user`, `volume`, `network`). Plan diffs locally (`provider::diff`), and an
+//! a subnet's `NETWORK/ID`, an S3 container's `REGION/NAME`. Each type is
+//! its module below (`instance`, `ssh_key`, `record`, `storage`, `user`,
+//! `volume`, `network`), what a region offers `catalog`, the protocol
+//! `handler`, an object's health `health`; this file dispatches to them.
+//! Plan diffs locally (`provider::diff`), and an
 //! instance's flavor and image are checked against what its region offers.
 //! An instance is resized in place to a larger flavor and replaced for a
 //! smaller one; its networks are interfaces attached and detached.
