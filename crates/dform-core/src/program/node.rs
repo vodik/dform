@@ -77,6 +77,12 @@ pub enum ExprKind {
     /// to; each becomes its read's own node (`Value`, `Field`, `Lookup`,
     /// `Output`, ..) as the builders move to the tree (steps 4-5).
     Hoisted { reads: Vec<GoalId>, value: ExprId },
+    /// The value a read gives in its `column`, where a literal tests or
+    /// binds it in the read itself: `R.p == c`, `x = k`, `not R.ready`,
+    /// `has n.k` (step 4). `goal` is the read the resolver made (a
+    /// relation's goal, its `column` a hole) until reads are built from
+    /// the tree; the literal holding it fills the column.
+    Read { goal: GoalId, column: usize },
     /// `1`, `"a"`, `true`, `10.0.0.0/8`: a literal of a known kind (step 3).
     Lit(Value),
     /// `500m`, `1Gi`: a quantity whose dimension its position decides
@@ -256,6 +262,28 @@ impl TryFrom<&str> for BinOp {
     }
 }
 
+/// The function an aggregate is written as: `count`, `collect_set`, ..
+pub fn aggregate_name(k: AggKind) -> &'static str {
+    match k {
+        AggKind::Set => "collect_set",
+        AggKind::List => "collect_list",
+        AggKind::Count => "count",
+        AggKind::Sum => "sum",
+        AggKind::Min => "min",
+        AggKind::Max => "max",
+        AggKind::Any => "any",
+        AggKind::All => "all",
+    }
+}
+
+/// The aggregate a function is, if it is one.
+pub fn aggregate_kind(name: &str) -> Option<AggKind> {
+    use AggKind::*;
+    [Set, List, Count, Sum, Min, Max, Any, All]
+        .into_iter()
+        .find(|k| aggregate_name(*k) == name)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CmpOp {
     Eq,
@@ -317,30 +345,86 @@ pub enum GoalKind {
     Rel { rel: RelRef, args: RelArgs },
     /// `x in e`, `(k, v) in e`; `x not in e` is a `Not` around it.
     Member { pat: PatternId, coll: Coll },
-    /// `x = e`, `(a, b) = e`, `{ a, ..r } = e`.
+    /// `x = e`, `(a, b) = e`, `{ a, ..r } = e`; `p = e[i]` an element
+    /// (`value` a `Field` of one `Index` step); `x = R.p` the read itself
+    /// (`value` an [`ExprKind::Read`]).
     Bind { pat: PatternId, value: ExprId },
-    /// `a < b`, chained `1 <= x <= 35`.
+    /// `a < b`, chained `1 <= x <= 35`; `R.p == c` the read itself (`lhs`
+    /// an [`ExprKind::Read`]).
     Compare {
         lhs: ExprId,
         ops: Vec<(CmpOp, ExprId)>,
     },
-    /// `has x.p`.
-    Has(ExprId),
-    /// `x.ready`: a truth test.
+    /// `has r`, `has r.p`, `has x.f` (step 4).
+    Has(Has),
+    /// `x.ready`: a truth test, `x = true`, or the read itself with
+    /// `true` in its value column (an [`ExprKind::Read`]).
     Truth(ExprId),
-    /// `not B`, `not { B }`. `helper` is the `__neg_N` number taken at
-    /// build, so ported and opaque statements count as one sequence.
+    /// `not B`, `not { B }`. Without a helper the clause is one goal and
+    /// its last literal is negated (`not p(x)`, `x not in e`); with one
+    /// the clause is the body of `__neg_N(ȳ)` and the goal is `not
+    /// __neg_N(ȳ)`, N taken at build so ported and opaque statements
+    /// count as one sequence.
     Not {
         clause: ClauseId,
-        helper: Option<u32>,
+        helper: Option<NegHelper>,
     },
     /// `n = count(x)`: an aggregate's binding. `helper` is the `__agg_N`
-    /// number taken at build.
+    /// number, taken where its rule's body is folded over it.
     Fold {
         var: VarId,
         agg: ExprId,
         helper: Option<u32>,
     },
+    /// The goals one written literal lowered to, after the reads it
+    /// hoisted (each the goal it lowered to, as in an
+    /// [`ExprKind::Hoisted`] term) and before the field reads an object
+    /// pattern makes after its binding (step 4). A chained comparison
+    /// whose middle term the two sides read as different quantities is a
+    /// goal per pair.
+    Hoisted {
+        reads: Vec<GoalId>,
+        goals: Vec<GoalId>,
+        after: Vec<GoalId>,
+    },
+    /// `goal`, a `has` of a resource's attribute path (or `not` of one),
+    /// marked as that test: the compiler keeps it, or puts the schema's
+    /// answer in its place (R-106, `partition::answer_has`).
+    Marked { mark: HasMark, goal: GoalId },
+}
+
+/// What `has` tests.
+#[derive(Debug, Clone)]
+pub enum Has {
+    /// `has r`: the resource exists, `__identity(T, A)` (R-152).
+    Resource { typ: ExprId, addr: ExprId },
+    /// `has R.p`, `has k`: the read itself, `_` in its value column (an
+    /// [`ExprKind::Read`]).
+    Read(ExprId),
+    /// `has x.f`, `has R.p.q`: the walk to it has a value, bound to a
+    /// variable nothing else reads (`resolve::HAS_VAR`).
+    Walk { var: VarId, value: ExprId },
+}
+
+/// The resource attribute path a `has` tests: `__has(T, A, "PATH", N)`
+/// before the N literals it covers.
+#[derive(Debug, Clone)]
+pub struct HasMark {
+    pub typ: ExprId,
+    pub addr: ExprId,
+    pub path: String,
+}
+
+/// The rule `__neg_N(args) :- P, B` a `not` no single literal says
+/// lowers through: N taken at build, `args` the variables B shares with
+/// what is bound before it, P the positive literals before it in its
+/// clause except those that read `folded`, the statement's aggregate
+/// values (folded after the helper, not inside it).
+#[derive(Debug, Clone)]
+pub struct NegHelper {
+    pub number: u32,
+    pub args: Vec<VarId>,
+    pub folded: Vec<VarId>,
 }
 
 /// A relation's arguments: by position, or by column name.
@@ -350,23 +434,55 @@ pub enum RelArgs {
     Record(Vec<(Name, PatternId)>),
 }
 
-/// What `in` ranges over.
+/// What `in` ranges over: each the lowered form of a written membership,
+/// with the facts it states beside it (step 4).
 #[derive(Debug, Clone)]
 pub enum Coll {
-    /// A list, an object, a range: `x in xs`.
+    /// A list, an object, a range: `x in xs`, `member(xs, x)`; `(k, v) in
+    /// o`, `member(o, k, v)`.
     Expr(ExprId),
-    /// The resources of a type: `x in net.vpc`.
-    Type(TypeRef),
-    /// A provider namespace's resources: `x in k8s`.
-    Namespace(Name),
-    /// A provider's type of a renamed provider: `x in ca.instance`.
-    ProviderType(TypeRef),
-    /// What the provider reports exists: `x in world.T`.
-    World(TypeRef),
-    /// An enum's members.
-    Enum(TypeRef),
-    /// A component's copies: `x in network`.
-    Copies(DeclRef),
+    /// The resources of a type: `x in net.vpc`, `want("net.vpc", x)`. The
+    /// type is a term: a variable for `x in resource`, or the one a typed
+    /// variable already holds.
+    Type(ExprId),
+    /// A provider namespace's resources (R-49): the fact `__namespace(ns,
+    /// t)` per type of it, the test `__namespace(ns, Type)`, then
+    /// `want(Type, x)` unless `x` is bound already.
+    Namespace {
+        ns: Name,
+        types: Vec<Name>,
+        typ: ExprId,
+        enumerate: bool,
+    },
+    /// A provider's type a `use .. as` also names (R-115): the fact
+    /// `__provider_type(typ, n)` per name, the test `__provider_type(typ,
+    /// Type)`, then `want(Type, x)` unless `x` is bound already.
+    ProviderType {
+        typ: Name,
+        names: Vec<Name>,
+        var: ExprId,
+        enumerate: bool,
+    },
+    /// What the provider reports exists: `x in world.T`,
+    /// `cloud_exists("T", x)`.
+    World(Name),
+    /// An enum type's values (R-70): the fact `__enum(name, values)` at
+    /// the type's declaration `def`, and `member(list, x)` over the list
+    /// a hoisted `__enum(name, list)` reads.
+    Enum {
+        name: Name,
+        values: Vec<String>,
+        def: Span,
+        list: ExprId,
+    },
+    /// A component's copies (R-67): `instance_of("component", scope, x)`.
+    Copies { component: Name, scope: ExprId },
+    /// The values a path with `[_]` steps reaches (R-162): `x = e`, the
+    /// steps enumerating.
+    Each(ExprId),
+    /// `r in T` of a reference column's `r` (R-42): the type the column
+    /// read tested, `Type = "T"`.
+    TypeOf(ExprId),
 }
 
 /// A variable of a clause: its source name, the name `lower` writes,

@@ -11,7 +11,6 @@ use super::node::*;
 use super::{NodeId, Program};
 use crate::ast::{FieldOp, Rank, Stmt, TypeExpr};
 use crate::inputs::type_text;
-use crate::ir::ops::AggKind;
 
 /// `id` as the program writes it.
 pub fn spell(program: &Program, id: NodeId) -> String {
@@ -79,19 +78,6 @@ fn op(o: FieldOp) -> &'static str {
 fn typed(ty: &Option<TypeExpr>) -> String {
     ty.as_ref()
         .map_or(String::new(), |t| format!(": {}", type_text(t)))
-}
-
-fn aggregate(k: AggKind) -> &'static str {
-    match k {
-        AggKind::Set => "collect_set",
-        AggKind::List => "collect_list",
-        AggKind::Count => "count",
-        AggKind::Sum => "sum",
-        AggKind::Min => "min",
-        AggKind::Max => "max",
-        AggKind::Any => "any",
-        AggKind::All => "all",
-    }
 }
 
 impl Speller<'_> {
@@ -343,8 +329,15 @@ impl Speller<'_> {
                 }
                 out
             }
-            GoalKind::Has(e) => format!("has {}", self.expr(*e)),
+            GoalKind::Has(h) => match h {
+                Has::Resource { typ, addr } => {
+                    format!("has {}[{}]", self.expr(*typ), self.expr(*addr))
+                }
+                Has::Read(e) | Has::Walk { value: e, .. } => format!("has {}", self.expr(*e)),
+            },
             GoalKind::Truth(e) => self.expr(*e),
+            GoalKind::Hoisted { goals, .. } => join(goals.iter().map(|g| self.goal(*g)), ", "),
+            GoalKind::Marked { goal, .. } => self.goal(*goal),
             GoalKind::Not { clause, .. } => {
                 let goals = &self.p.clauses[*clause].goals;
                 match goals.as_slice() {
@@ -374,11 +367,12 @@ impl Speller<'_> {
 
     fn coll(&self, c: &Coll) -> String {
         match c {
-            Coll::Expr(e) => self.expr(*e),
-            Coll::Type(t) | Coll::ProviderType(t) | Coll::Enum(t) => t.name.clone(),
-            Coll::Namespace(n) => n.clone(),
-            Coll::World(t) => format!("world.{}", t.name),
-            Coll::Copies(d) => d.name.clone(),
+            Coll::Expr(e) | Coll::Type(e) | Coll::Each(e) | Coll::TypeOf(e) => self.expr(*e),
+            Coll::ProviderType { typ: n, .. }
+            | Coll::Enum { name: n, .. }
+            | Coll::Namespace { ns: n, .. }
+            | Coll::Copies { component: n, .. } => n.clone(),
+            Coll::World(t) => format!("world.{t}"),
         }
     }
 
@@ -414,6 +408,7 @@ impl Speller<'_> {
         match &self.p.exprs[id].kind {
             ExprKind::Missing | ExprKind::Hole => "_".into(),
             ExprKind::Hoisted { value, .. } => self.expr(*value),
+            ExprKind::Read { goal, .. } => self.goal(*goal),
             ExprKind::Lit(v) => crate::spell::value(v),
             ExprKind::Quantity { text } => text.clone(),
             ExprKind::Var(v) => self.var(*v),
@@ -522,7 +517,7 @@ impl Speller<'_> {
                 format!("[{} | {}]", self.expr(*item), self.clause(*clause))
             }
             ExprKind::Aggregate { kind, item } => {
-                format!("{}({})", aggregate(*kind), self.expr(*item))
+                format!("{}({})", aggregate_name(*kind), self.expr(*item))
             }
             ExprKind::As { value, ty } => format!("{} as {}", self.expr(*value), type_text(ty)),
             ExprKind::Type(t) => t.name.clone(),

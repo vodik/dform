@@ -3,29 +3,37 @@
 //! literal that holds it, in the order it was hoisted. `lower_expr` gives
 //! back what the resolver's `term` gave for the same term, byte for byte.
 
-use crate::ast::{Atom, Lit, Term, TypeExpr, str_term};
+use crate::ast::{Lit, Stmt, Term, TypeExpr, str_term};
 use crate::program::Program;
 use crate::program::node::*;
 use std::collections::BTreeMap;
 
 /// The term `id` is, and the reads it hoists, in order.
 pub fn lower_expr(program: &Program, id: ExprId) -> (Term, Vec<Lit>) {
-    let mut l = Lowering {
-        program,
-        reads: Vec::new(),
-    };
+    let mut l = Lowering::new(program);
     let t = l.expr(id);
     (t, l.reads)
 }
 
-/// One term's lowering: the reads hoisted so far.
-struct Lowering<'p> {
-    program: &'p Program,
-    reads: Vec<Lit>,
+/// A lowering in progress: the reads the term being lowered hoisted so
+/// far, and the helper statements written so far (a `not { }`'s rule, the
+/// facts a membership states), in order.
+pub(super) struct Lowering<'p> {
+    pub(super) program: &'p Program,
+    pub(super) reads: Vec<Lit>,
+    pub(super) helpers: Vec<Stmt>,
 }
 
-impl Lowering<'_> {
-    fn expr(&mut self, id: ExprId) -> Term {
+impl<'p> Lowering<'p> {
+    pub(super) fn new(program: &'p Program) -> Self {
+        Lowering {
+            program,
+            reads: Vec::new(),
+            helpers: Vec::new(),
+        }
+    }
+
+    pub(super) fn expr(&mut self, id: ExprId) -> Term {
         let e = &self.program.exprs[id];
         match &e.kind {
             ExprKind::Lit(v) => Term::Val(v.clone()),
@@ -34,8 +42,9 @@ impl Lowering<'_> {
             ExprKind::Hole => Term::Wildcard,
             ExprKind::Hoisted { reads, value } => {
                 for &g in reads {
-                    let lit = self.goal(g);
-                    self.reads.push(lit);
+                    let mut lits = Vec::new();
+                    self.goal(g, &mut lits);
+                    self.reads.extend(lits);
                 }
                 self.expr(*value)
             }
@@ -66,7 +75,8 @@ impl Lowering<'_> {
             ExprKind::Field { base, path } => self.field(*base, path),
             ExprKind::RefOf(r) => self.reference(*r),
             ExprKind::Comprehension { item, clause } => {
-                let body = self.clause(*clause);
+                let mut body = Vec::new();
+                self.clause(*clause, &mut body);
                 Term::ListComp {
                     item: Box::new(self.expr(*item)),
                     body,
@@ -81,11 +91,15 @@ impl Lowering<'_> {
                 let args = args.iter().map(|a| self.expr(a.value)).collect();
                 Term::Func { name, args }
             }
-            k => unreachable!("no builder makes {k:?} before steps 4-5"),
+            ExprKind::Aggregate { kind, item } => func(
+                super::super::node::aggregate_name(*kind),
+                vec![self.expr(*item)],
+            ),
+            k => unreachable!("no builder makes {k:?} as a term before step 5"),
         }
     }
 
-    fn var(&self, v: VarId) -> Term {
+    pub(super) fn var(&self, v: VarId) -> Term {
         Term::Var(self.program.vars[v].lowered.clone())
     }
 
@@ -199,84 +213,6 @@ impl Lowering<'_> {
             vec![str_term(&typ.name), addr, str_term(&path)],
         )
     }
-
-    fn clause(&mut self, id: ClauseId) -> Vec<Lit> {
-        let goals = self.program.clauses[id].goals.clone();
-        goals.into_iter().map(|g| self.goal(g)).collect()
-    }
-
-    fn goal(&mut self, id: GoalId) -> Lit {
-        let g = &self.program.goals[id];
-        match &g.kind {
-            GoalKind::Rel { rel, args } => Lit::Pos(self.atom(rel, args)),
-            GoalKind::Not { clause, .. } => {
-                let goals = &self.program.clauses[*clause].goals;
-                let [one] = goals.as_slice() else {
-                    unreachable!("no builder makes `not {{ .. }}` before step 4")
-                };
-                match self.goal(*one) {
-                    Lit::Pos(a) => Lit::Not(a),
-                    l => unreachable!("a negated literal is an atom: {l:?}"),
-                }
-            }
-            GoalKind::Bind { pat, value } => {
-                let p = self.pattern(*pat);
-                Lit::Eq(p, self.expr(*value))
-            }
-            GoalKind::Compare { lhs, ops } => {
-                let [(op, rhs)] = ops.as_slice() else {
-                    unreachable!("no builder chains a comparison before step 4")
-                };
-                let (a, b) = (self.expr(*lhs), self.expr(*rhs));
-                match op {
-                    CmpOp::Eq => Lit::Eq(a, b),
-                    CmpOp::Ne => Lit::Neq(a, b),
-                    CmpOp::Gt => Lit::Gt(a, b),
-                    CmpOp::Ge => Lit::Ge(a, b),
-                    CmpOp::Lt => Lit::Lt(a, b),
-                    CmpOp::Le => Lit::Le(a, b),
-                }
-            }
-            k => unreachable!("no builder makes {k:?} before step 4"),
-        }
-    }
-
-    fn atom(&mut self, rel: &RelRef, args: &RelArgs) -> Atom {
-        let (args, record) = match args {
-            RelArgs::Positional(ps) => (ps.iter().map(|p| self.pattern(*p)).collect(), None),
-            RelArgs::Record(fs) => {
-                let r = fs
-                    .iter()
-                    .map(|(k, p)| (k.clone(), self.pattern(*p)))
-                    .collect();
-                (Vec::new(), Some(r))
-            }
-        };
-        Atom {
-            pred: rel.name.clone(),
-            args,
-            record,
-            span: rel.span,
-        }
-    }
-
-    fn pattern(&mut self, id: PatternId) -> Term {
-        match &self.program.patterns[id].kind {
-            PatternKind::Hole => Term::Wildcard,
-            PatternKind::Bind(v) => self.var(*v),
-            PatternKind::Expr(e) => self.expr(*e),
-            PatternKind::Tuple { elems, rest: None } => {
-                Term::List(elems.iter().map(|p| self.pattern(*p)).collect())
-            }
-            PatternKind::Object { fields, rest: None } => Term::Obj(
-                fields
-                    .iter()
-                    .map(|(k, _, p)| (k.clone(), self.pattern(*p)))
-                    .collect(),
-            ),
-            k => unreachable!("no builder makes {k:?} before step 4"),
-        }
-    }
 }
 
 /// A path of field steps as stored: its segments joined by `.`.
@@ -291,7 +227,7 @@ fn stored(path: &[Step]) -> String {
     segs.join(".")
 }
 
-fn func(name: &str, args: Vec<Term>) -> Term {
+pub(super) fn func(name: &str, args: Vec<Term>) -> Term {
     Term::Func {
         name: name.to_string(),
         args,
@@ -301,7 +237,7 @@ fn func(name: &str, args: Vec<Term>) -> Term {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Span, var};
+    use crate::ast::{Atom, Span, var};
     use crate::program::Builder;
     use crate::value::Value;
 

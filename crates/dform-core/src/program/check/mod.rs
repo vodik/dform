@@ -7,6 +7,9 @@
 //! [`collect`] runs it for a test and returns what differs. Deleted with
 //! the old path at the migration's end.
 
+mod clauses;
+pub use clauses::Shadow;
+
 use super::{ItemId, ItemKind, Program};
 use crate::ast::{self, Atom, AttrDecl, Config, InputDecl, Lit, Span, Stmt, Term};
 use crate::diag::{self, Diagnostic};
@@ -24,12 +27,16 @@ thread_local! {
     static COLLECTING: RefCell<Option<Collected>> = const { RefCell::new(None) };
 }
 
-/// What [`collect`] saw: how many lowerings and terms it compared and
-/// those that differed.
+/// What [`collect`] saw: how many lowerings, terms, literals and clauses
+/// it compared, and those that differed.
 #[derive(Debug, Default)]
 pub struct Collected {
     pub compared: usize,
     pub terms: usize,
+    /// Written literals built as goals and lowered back (step 4).
+    pub literals: usize,
+    /// Clauses, each a statement's body or a `let`'s, the same.
+    pub clauses: usize,
     pub differences: Vec<Difference>,
 }
 

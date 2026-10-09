@@ -763,6 +763,10 @@ pub struct Lowerer<'u> {
     /// What the resolver lowers each ported statement to, kept for
     /// `DFORM_CHECK_LOWER=1` (`program::check`).
     resolved: crate::program::check::Resolved,
+    /// Each written literal and clause also built as goals and lowered
+    /// back, under `DFORM_CHECK_LOWER=1` (R-211 step 4,
+    /// `program::check::Shadow`).
+    shadow: Option<Box<crate::program::check::Shadow>>,
     /// Helper rules of the statement being lowered.
     helpers: Vec<Stmt>,
     /// Whether the term being lowered is in a binding position.
@@ -839,6 +843,7 @@ impl<'u> Lowerer<'u> {
             program: crate::program::Program::new(),
             item_scope: Default::default(),
             resolved: Default::default(),
+            shadow: crate::program::check::enabled().then(Default::default),
             helpers: Vec::new(),
             binding: false,
             text: false,
@@ -5298,10 +5303,26 @@ impl<'u> Lowerer<'u> {
         lits: &[SyntaxNode],
         mut out: Vec<Lit>,
     ) -> L<Vec<Lit>> {
+        // A statement's clause is compared whole (R-211 step 4); a body
+        // nested in a literal, with the literal.
+        let (seed, made) = (out.len(), self.helpers.len());
+        let whole = self.nested == 0 && self.shadow.is_some() && !lits.is_empty();
+        if whole && let Some(s) = &mut self.shadow {
+            s.open();
+        }
         let mut failed = false;
         for l in lits {
             if self.lit(rc, l, &mut out).is_err() {
                 failed = true;
+            }
+        }
+        if whole {
+            let span = self.span(&lits[0]);
+            if let Some(s) = &mut self.shadow {
+                match failed {
+                    true => s.failed(),
+                    false => s.clause(span, &out, seed, (&self.helpers, made)),
+                }
             }
         }
         if failed { Err(Skip) } else { Ok(out) }
@@ -5310,10 +5331,76 @@ impl<'u> Lowerer<'u> {
     /// One literal, with the reads it hoists before it, into `out`.
     fn lit(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<()> {
         let saved = std::mem::take(&mut self.after);
+        let (start, made) = (out.len(), self.helpers.len());
+        let form = self.shadow.is_some().then(|| self.written_form(rc, n));
+        if let Some(s) = &mut self.shadow {
+            s.open();
+        }
         let r = self.bind(true, |l| l.lit1(rc, n, out));
+        let mid = out.len();
         out.append(&mut self.after);
         self.after = saved;
+        match (form, &mut self.shadow) {
+            (Some(form), _) if r.is_ok() => {
+                self.built_literal(rc, n, form, out, (start, mid, made))
+            }
+            (Some(_), Some(s)) => s.failed(),
+            _ => {}
+        }
         r
+    }
+
+    /// The written literal `n` lowered to `out[start..]` (`out[mid..]`
+    /// the field reads after it), making `self.helpers[made..]`, also
+    /// built as a goal, lowered back and compared (R-211 step 4).
+    fn built_literal(
+        &mut self,
+        rc: &Rc,
+        n: &SyntaxNode,
+        form: Option<crate::program::build::Form>,
+        out: &[Lit],
+        (start, mid, made): (usize, usize, usize),
+    ) {
+        let span = self.span(n);
+        let Some(s) = &mut self.shadow else { return };
+        let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
+        s.literal(
+            form.as_ref(),
+            span,
+            out,
+            (start, mid),
+            (&self.helpers, made),
+            &|v| written.contains(v),
+        );
+    }
+
+    /// What written literal `n` is, read off the tree, for its builder
+    /// (R-211 step 4); `None` for a form no builder knows yet.
+    fn written_form(&self, _rc: &Rc, n: &SyntaxNode) -> Option<crate::program::build::Form> {
+        use crate::program::build::Form;
+        Some(match n.kind() {
+            LIT_ATOM => Form::Atom,
+            LIT_TRUTH => Form::Truth,
+            LIT_HAS => Form::Has,
+            LIT_CMP => {
+                let ts: Vec<SyntaxNode> = terms(n).collect();
+                let ops: Vec<SyntaxKind> = tokens(n).map(|t| t.kind()).collect();
+                let aggregate = ts.len() == 2
+                    && ops == [EQ]
+                    && ts
+                        .iter()
+                        .any(|t| t.kind() == CALL && self.aggregate_name(t).is_some());
+                if aggregate {
+                    return None;
+                }
+                Form::Compare {
+                    bind: ops.first() == Some(&EQ),
+                    ops: ops.len(),
+                    aggregate,
+                }
+            }
+            _ => return None,
+        })
     }
 
     fn lit1(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<()> {
@@ -6621,8 +6708,12 @@ impl<'u> Lowerer<'u> {
     // --- terms ------------------------------------------------------------
 
     fn term(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
-        let before = pre.len();
-        let t = self.term_of(rc, n, pos, pre)?;
+        let (before, made) = (pre.len(), self.helpers.len());
+        let t = self.term_of(rc, n, pos, pre);
+        if let Some(s) = &mut self.shadow {
+            s.term(made..self.helpers.len());
+        }
+        let t = t?;
         // R-211 step 3: under `DFORM_CHECK_LOWER=1` each term is also built
         // as nodes from what it lowered to and lowered back, the two
         // compared (`program::check::term`).
@@ -8450,33 +8541,50 @@ impl<'u> Lowerer<'u> {
     /// is not one read.
     fn read_atom(&mut self, rc: &mut Rc, res: &Res, value: Term, span: Span) -> Option<Atom> {
         let _ = rc;
+        let (a, column) = Self::read_with(res, value, span)?;
+        if let Some(s) = &mut self.shadow {
+            s.read(column);
+        }
+        Some(a)
+    }
+
+    /// The read `res` is with `value` in its value column, and that
+    /// column.
+    fn read_with(res: &Res, value: Term, span: Span) -> Option<(Atom, usize)> {
         match res {
             Res::Ref { typ, addr, path } if path.len() == 1 => match &path[0] {
-                Seg::F(p) => Some(atom_at(
-                    "attr",
-                    vec![
-                        typ.clone(),
-                        addr.clone(),
-                        str_term(&crate::ir::path_key(p)),
-                        value,
-                    ],
-                    span,
+                Seg::F(p) => Some((
+                    atom_at(
+                        "attr",
+                        vec![
+                            typ.clone(),
+                            addr.clone(),
+                            str_term(&crate::ir::path_key(p)),
+                            value,
+                        ],
+                        span,
+                    ),
+                    3,
                 )),
                 Seg::I(_) | Seg::K(_) => None,
             },
             Res::Output {
                 inst, key, path, ..
-            } if path.is_empty() => Some(atom_at(
-                "output",
-                vec![inst.clone(), str_term(key), value],
-                span,
+            } if path.is_empty() => Some((
+                atom_at("output", vec![inst.clone(), str_term(key), value], span),
+                2,
             )),
-            Res::World { typ, addr, path } => Some(atom_at(
-                "cloud_attr",
-                vec![str_term(typ), addr.clone(), str_term(path), value],
-                span,
+            Res::World { typ, addr, path } => Some((
+                atom_at(
+                    "cloud_attr",
+                    vec![str_term(typ), addr.clone(), str_term(path), value],
+                    span,
+                ),
+                3,
             )),
-            Res::Value { pred, path } if path.is_empty() => Some(atom_at(pred, vec![value], span)),
+            Res::Value { pred, path } if path.is_empty() => {
+                Some((atom_at(pred, vec![value], span), 0))
+            }
             Res::Lookup {
                 pred,
                 args,
@@ -8485,7 +8593,7 @@ impl<'u> Lowerer<'u> {
             } if path.is_empty() => {
                 let mut args = args.clone();
                 args.insert(*out, value);
-                Some(atom_at(pred, args, span))
+                Some((atom_at(pred, args, span), *out))
             }
             _ => None,
         }
@@ -8730,7 +8838,8 @@ fn outer_names(rc: &Rc, outer: &BTreeSet<String>) -> BTreeSet<String> {
         .collect()
 }
 
-fn lit_vars(l: &Lit, out: &mut BTreeSet<String>) {
+/// Every variable literal `l` names, a comprehension's included.
+pub(crate) fn lit_vars(l: &Lit, out: &mut BTreeSet<String>) {
     fn term(t: &Term, out: &mut BTreeSet<String>) {
         match t {
             Term::Var(v) => {

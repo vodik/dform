@@ -15,6 +15,8 @@ mod expr;
 mod pattern;
 mod spread;
 
+pub use clause::{Form, Written};
+
 use super::Program;
 use super::node::{Expr, ExprId, ExprKind, ItemId, Var, VarId};
 use crate::ast::Span;
@@ -54,7 +56,7 @@ impl<'p> Builder<'p> {
         self
     }
 
-    fn expr_node(&mut self, kind: ExprKind) -> ExprId {
+    pub(super) fn expr_node(&mut self, kind: ExprKind) -> ExprId {
         self.program.exprs.insert(Expr {
             span: self.span,
             kind,
