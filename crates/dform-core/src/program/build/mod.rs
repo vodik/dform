@@ -12,6 +12,7 @@
 
 mod aggregate;
 mod clause;
+mod each;
 mod expr;
 mod membership;
 mod negation;

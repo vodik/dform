@@ -63,43 +63,20 @@ impl Lowerer<'_> {
                 unreachable!("is_each")
             };
             let r = *r;
-            let at = self.span_of(r);
-            let prefix = Chain {
-                ops: c.ops[..k].to_vec(),
-                range: rowan::TextRange::new(c.range.start(), r.end()),
-                ..c.clone()
-            };
-            let src = format!("_[_]@{}", u32::from(r.start()));
-            let v = each_var(u32::from(r.start()));
-            if let Some(t) = self.chain_type(rc, &prefix) {
-                let typ = self.each_type(rc, &t, body, at);
-                body.push(Lit::Pos(atom_at("want", vec![typ.clone(), var(&v)], at)));
-                rc.types.insert(src.clone(), typ);
-            } else {
-                let res = self.resolve(rc, &prefix, body)?;
-                let of = match &res {
-                    Res::Ref { typ, addr, path } => path_string(path)
-                        .filter(|p| !p.is_empty())
-                        .map(|p| (typ.clone(), addr.clone(), p)),
-                    _ => None,
-                };
-                let Some(of) = of else {
-                    return self.error(
-                        at,
-                        "`[_]` in a `set` is every resource of a type (`T[_]`) or every element \
-                         of a resource's list (`r.l[_]`), and the path before this one is neither",
-                    );
-                };
-                let list = self.realize(rc, res, Pos::Content, body, span)?;
-                body.push(Lit::Pos(atom_at("member", vec![list, var(&v)], at)));
-                rc.elems.insert(src.clone(), of);
+            let (start, made) = (body.len(), self.helpers.len());
+            if let Some(s) = &mut self.shadow {
+                s.open();
             }
-            rc.reserved.insert(v.clone());
-            rc.vars.insert(src.clone(), v);
-            rc.first.insert(src.clone(), at);
-            rc.binders.insert(src.clone());
+            let src = self.each_binding(rc, &c, k, body, span);
+            let at = self.span_of(r);
+            if let Some(s) = &mut self.shadow {
+                match &src {
+                    Ok(_) => s.each(at, body, start, (&self.helpers, made)),
+                    Err(_) => s.failed(),
+                }
+            }
             c = Chain {
-                head: src,
+                head: src?,
                 head_kind: IDENT,
                 call: None,
                 range: rowan::TextRange::new(r.start(), c.range.end()),
@@ -107,6 +84,59 @@ impl Lowerer<'_> {
             };
         }
         Ok(c)
+    }
+
+    /// The `[_]` at `c.ops[k]` bound, into `body`: each resource of the
+    /// type before it, `want(T, Each_AT)`, or each element of the
+    /// resource's list before it, `member(L, Each_AT)`; the name it binds.
+    fn each_binding(
+        &mut self,
+        rc: &mut Rc,
+        c: &Chain,
+        k: usize,
+        body: &mut Vec<Lit>,
+        span: Span,
+    ) -> L<String> {
+        let Op::Index(_, r) = &c.ops[k] else {
+            unreachable!("is_each")
+        };
+        let r = *r;
+        let at = self.span_of(r);
+        let prefix = Chain {
+            ops: c.ops[..k].to_vec(),
+            range: rowan::TextRange::new(c.range.start(), r.end()),
+            ..c.clone()
+        };
+        let src = format!("_[_]@{}", u32::from(r.start()));
+        let v = each_var(u32::from(r.start()));
+        if let Some(t) = self.chain_type(rc, &prefix) {
+            let typ = self.each_type(rc, &t, body, at);
+            body.push(Lit::Pos(atom_at("want", vec![typ.clone(), var(&v)], at)));
+            rc.types.insert(src.clone(), typ);
+        } else {
+            let res = self.resolve(rc, &prefix, body)?;
+            let of = match &res {
+                Res::Ref { typ, addr, path } => path_string(path)
+                    .filter(|p| !p.is_empty())
+                    .map(|p| (typ.clone(), addr.clone(), p)),
+                _ => None,
+            };
+            let Some(of) = of else {
+                return self.error(
+                    at,
+                    "`[_]` in a `set` is every resource of a type (`T[_]`) or every element \
+                     of a resource's list (`r.l[_]`), and the path before this one is neither",
+                );
+            };
+            let list = self.realize(rc, res, Pos::Content, body, span)?;
+            body.push(Lit::Pos(atom_at("member", vec![list, var(&v)], at)));
+            rc.elems.insert(src.clone(), of);
+        }
+        rc.reserved.insert(v.clone());
+        rc.vars.insert(src.clone(), v);
+        rc.first.insert(src.clone(), at);
+        rc.binders.insert(src.clone());
+        Ok(src)
     }
 
     /// The type term of a resource of `t`: `t`, or with the provider also

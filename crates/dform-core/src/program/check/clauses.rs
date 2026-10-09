@@ -133,25 +133,9 @@ impl Shadow {
                 negation: negation.map(|(n, folded, _)| (*n, folded.as_slice())),
             };
             let goal = Builder::new(&mut self.program, span, written).literal(&w);
-            let what = || format!("the literal at {}: {form:?}", place(span));
-            let Some(goal) = goal else {
-                let lowered = text(&out[start..], &own);
-                let d = differ(&lowered, "").map(|d| super::Difference {
-                    statement: format!("{}: no goal is built of it", what()),
-                    ..d
-                });
-                record(d, |c| c.literals += 1);
-                return None;
-            };
-            let (lits, made) = lower_goal(&self.program, goal, &out[..start]);
-            let d = differ(&text(&out[start..], &own), &text(&lits, &made)).map(|d| {
-                super::Difference {
-                    statement: what(),
-                    ..d
-                }
-            });
-            record(d, |c| c.literals += 1);
-            Some(goal)
+            self.compare(goal, &w, &out[..start], || {
+                format!("the literal at {}: {form:?}", place(span))
+            })
         });
         if let Some(f) = self.frames.last_mut() {
             match built {
@@ -159,6 +143,65 @@ impl Shadow {
                 None => f.complete = false,
             }
         }
+    }
+
+    /// A `set` target's `[_]` at `span` bound by `body[start..]` after the
+    /// statement's `body[..start]`, making `helpers[made..]`: built as the
+    /// membership goal it is, lowered back and compared.
+    pub fn each(
+        &mut self,
+        span: Span,
+        body: &[Lit],
+        start: usize,
+        (helpers, made): (&[Stmt], usize),
+    ) {
+        let frame = self.frames.pop().expect("a `[_]`'s frame");
+        let own = frame.own(helpers, made);
+        let form = Form::In { each: false };
+        let w = Written {
+            form: &form,
+            span,
+            lits: &body[start..],
+            after: &[],
+            helpers: &own,
+            body: &[],
+            read: None,
+            negation: None,
+        };
+        let implicit = |v: &str| !v.starts_with("Each_");
+        let goal = Builder::new(&mut self.program, span, &implicit).each(&w);
+        self.compare(goal, &w, &body[..start], || {
+            format!("the `[_]` at {}", place(span))
+        });
+    }
+
+    /// `goal`, built of `w` (none: no builder knew its form), lowered after
+    /// `context` and compared with what `w` lowered to; `what` names it.
+    fn compare(
+        &mut self,
+        goal: Option<GoalId>,
+        w: &Written,
+        context: &[Lit],
+        what: impl FnOnce() -> String,
+    ) -> Option<GoalId> {
+        let lowered: Vec<Lit> = w.lits.iter().chain(w.after).cloned().collect();
+        let expected = text(&lowered, w.helpers);
+        let (got, goal) = match goal {
+            Some(g) => {
+                let (lits, made) = lower_goal(&self.program, g, context);
+                (text(&lits, &made), Some(g))
+            }
+            None => (String::new(), None),
+        };
+        let d = differ(&expected, &got).map(|d| super::Difference {
+            statement: match goal {
+                Some(_) => what(),
+                None => format!("{}: no goal is built of it", what()),
+            },
+            ..d
+        });
+        record(d, |c| c.literals += 1);
+        goal
     }
 
     /// The clause being lowered, `out[seed..]` after the literals its
