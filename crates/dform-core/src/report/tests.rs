@@ -1,4 +1,5 @@
 use super::labels::printed_label;
+use super::lines::terse;
 use super::mask::LONG;
 use super::tally::KINDS;
 use super::*;
