@@ -314,8 +314,11 @@ pub fn assemble(g: &Group, paths: &[String], values: &[Tree]) -> Tree {
 /// in program order ([`in_program_order`]).
 type Below<'a> = Vec<(Vec<Tok>, &'a Tree, Option<usize>)>;
 
+/// A value and its first rank in program order ([`in_program_order`]).
+type Ranked = (Tree, Option<usize>);
+
 /// The value of leaves `rel`, and its first rank.
-fn build(rel: &[(Vec<Tok>, &Tree, Option<usize>)]) -> (Tree, Option<usize>) {
+fn build(rel: &[(Vec<Tok>, &Tree, Option<usize>)]) -> Ranked {
     if let [(t, v, rank)] = rel
         && t.is_empty()
     {
@@ -667,8 +670,8 @@ impl Shape {
             path: String,
             open: &dyn Fn(&Value) -> bool,
             shape: &Shape,
-            each: &mut dyn FnMut(&Value, String) -> (Tree, Option<usize>),
-        ) -> (Tree, Option<usize>) {
+            each: &mut dyn FnMut(&Value, String) -> Ranked,
+        ) -> Ranked {
             match v {
                 Value::Obj(m) if open(v) => {
                     let fields: Vec<(String, Tree, Option<usize>)> = m
