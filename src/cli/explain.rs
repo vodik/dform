@@ -125,16 +125,20 @@ impl Query {
                     false => vec![t],
                 }
             }
-            // A resource: its attributes, a path and a value each.
+            // A resource: its attributes, a path and a value each, an
+            // object or a list as the plan lays it out, on one line.
             Some((_, None)) => {
                 let mut t = Table::new(["path".to_string(), "value".to_string()]);
                 for (addr, _) in &named {
-                    let query::Query::Body { body, vars } = query::pattern(addr, None, false)
-                    else {
-                        continue;
-                    };
-                    for row in query::table(&body, &vars, facts)?.rows {
-                        t.push(row.iter().map(|v| Cell::value(v, redact)).collect());
+                    for (path, v, laid) in query::attributes(addr, res, redact, &|v| redact.cell(v))
+                    {
+                        let value = match v {
+                            Value::Obj(_) | Value::List(_) if !redact.is_secret(&v) => {
+                                Cell::text(laid.line()).with_json(redact.json(&v))
+                            }
+                            v => Cell::value(&v, redact),
+                        };
+                        t.push(vec![Cell::value(&Value::Str(path), redact), value]);
                     }
                 }
                 vec![t]

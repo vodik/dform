@@ -175,6 +175,42 @@ pub fn values(
     out
 }
 
+/// Each attribute of the resource `addr`, by its path: the path, the
+/// value, and that value as the plan lays it out (`fold::Shape::laid`, an
+/// object's fields in the order the program wrote them), each leaf as
+/// `leaf` spells it: the rows of `query pg`.
+pub fn attributes(
+    addr: &crate::ir::Address,
+    res: &engine::EvalResult,
+    redact: &Redactor,
+    leaf: &dyn Fn(&Value) -> String,
+) -> Vec<(String, Value, crate::fmt::value::Tree)> {
+    let printer = crate::report::tree::Printer {
+        circuit: &res.circuit,
+        redact,
+        all: false,
+    };
+    let mut out = Vec::new();
+    for f in res.facts.iter().filter(|a| a.pred == "attr") {
+        let [
+            Term::Val(Value::Str(t)),
+            Term::Val(Value::Str(a)),
+            Term::Val(Value::Str(path)),
+            Term::Val(v),
+        ] = f.args.as_slice()
+        else {
+            continue;
+        };
+        if *t != addr.typ || *a != addr.name {
+            continue;
+        }
+        let shape = crate::report::fold::Shape::of(&res.facts, f);
+        let laid = shape.laid(&printer, &res.rules, f, path, v, leaf);
+        out.push((path.clone(), v.clone(), laid));
+    }
+    out
+}
+
 /// A pattern that names a resource's list as the plan prints it, past
 /// an element the list does not have (`pg.spec.ports[port=1]`) or a field
 /// the element does not (`pg.spec.ports[0].prot`): what it names, and

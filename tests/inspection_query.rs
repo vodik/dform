@@ -142,3 +142,25 @@ fn a_path_below_the_top_attribute_is_its_field() {
         assert_eq!(out, "\"platform\"\n", "{path}");
     }
 }
+
+/// A resource's attributes as a table say each value as the plan lays it
+/// out, on one line: an object's fields in the order the program wrote
+/// them, not by key (`{component: "network", team: "shop"}`).
+#[test]
+fn a_resources_table_says_a_value_in_program_order() {
+    let s = Scratch::new("query-table-order");
+    s.write(
+        "p.df",
+        "use fake\n\
+         resource net.vpc main { cidr = \"10.0.0.0/16\", tags = { team: \"shop\", component: \"network\" } }\n",
+    );
+    let out = s
+        .run(&["dev", "--world", "w.json", "query", "main", "p.df"])
+        .success()
+        .stdout;
+    assert!(
+        out.lines()
+            .any(|l| l == "\"tags\"  { team: \"shop\", component: \"network\" }"),
+        "{out}"
+    );
+}
