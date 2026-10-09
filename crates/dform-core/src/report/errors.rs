@@ -5,6 +5,7 @@
 
 use super::Why;
 use super::explain::relative_place;
+use super::fold::whole;
 use super::labels::{address, attribute};
 use super::layout::{Row, WIDTH, layout};
 use super::mask::{Shown, shown_value};
@@ -12,6 +13,7 @@ use super::style::{Paint, Style};
 use super::tree;
 use crate::ast::{Atom, Term};
 use crate::engine::EvalResult;
+use crate::fmt::value::Tree;
 use crate::ir::Address;
 use crate::provider::json_to_value;
 use crate::query::Redactor;
@@ -194,6 +196,26 @@ pub struct Witness {
     /// Where each was written, `FILE:LINE` (R-111): what the default
     /// level prints.
     pub at: Vec<String>,
+    /// An object or a list as the plan lays a value out
+    /// ([`crate::fmt::value`]), each leaf as a change line says it.
+    pub laid: Option<Tree>,
+}
+
+impl Witness {
+    /// Value `v` of a witness, as [`Witness::laid`] holds it: none for a
+    /// scalar, and for a value the plan says as a whole (a secret, one
+    /// holding a secret).
+    fn laid(v: &Value, shown: &Shown, r: &Redactor) -> Option<Tree> {
+        if !matches!(shown, Shown::Value(Json::Object(_) | Json::Array(_))) {
+            return None;
+        }
+        let leaf = |x: &Value| match x {
+            Value::Obj(_) | Value::List(_) => None,
+            Value::Ref { .. } | Value::CloudRef { .. } => Some(r.surface(x)),
+            x => Some(whole(&shown_value(x, r), Why::Line)),
+        };
+        Some(Tree::of(v, &leaf))
+    }
 }
 
 /// The place `FILE:LINE` of a statement the engine names with its place
@@ -258,6 +280,7 @@ pub(super) fn diag(ctx: &BTreeMap<String, Value>, r: &Redactor) -> Diag {
                     Some(v) => shown_value(v, r),
                     None => Shown::Absent,
                 };
+                let laid = w.get("value").and_then(|v| Witness::laid(v, &value, r));
                 // The contributing rule's text may spell the value.
                 let from: Vec<String> = match w.get("from") {
                     Some(Value::List(fs)) => fs
@@ -272,6 +295,7 @@ pub(super) fn diag(ctx: &BTreeMap<String, Value>, r: &Redactor) -> Diag {
                     value,
                     from,
                     at,
+                    laid,
                 }
             })
             .collect(),
@@ -542,10 +566,20 @@ pub(super) fn diag_lines(d: &Diag, why: Why, style: Style, conflict: bool) -> St
             }
             _ => String::new(),
         };
-        out.push_str(&format!(
-            "      {rank}{}{from}\n",
-            style.said(&w.value, why)
-        ));
+        let Some(laid) = &w.laid else {
+            out.push_str(&format!(
+                "      {rank}{}{from}\n",
+                style.said(&w.value, why)
+            ));
+            continue;
+        };
+        // An object or a list laid out as the plan's change lines lay
+        // one out, where it was written on its first row.
+        let rows = crate::fmt::value::layout(&rank, laid, WIDTH.saturating_sub(6));
+        for (i, row) in rows.iter().enumerate() {
+            let from = if i == 0 { from.as_str() } else { "" };
+            out.push_str(&format!("      {row}{from}\n"));
+        }
     }
     out
 }

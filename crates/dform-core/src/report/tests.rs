@@ -257,3 +257,52 @@ fn a_kept_line_says_why_dim() {
         "user_data differs (bootstrap): kept"
     );
 }
+
+/// A conflict's witness that is an object prints as the plan's change
+/// lines print one, as the program writes it, a value not known yet as
+/// the reference it is; never the context's JSON (`{"class":"fresh",
+/// "null":..}`).
+#[test]
+fn a_conflicts_object_value_is_the_programs_text() {
+    use crate::value::{NullClass, Value};
+    let s = |x: &str| Value::Str(x.into());
+    let obj = |kv: Vec<(&str, Value)>| {
+        Value::Obj(kv.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+    };
+    let null = Value::Null {
+        label: "k8s.config_map/web_config#metadata.name".into(),
+        class: NullClass::Fresh,
+        ty: String::new(),
+    };
+    let witness = |v: Value, at: &str| {
+        obj(vec![
+            ("rank", s("normal")),
+            ("value", v),
+            ("from", Value::List(vec![s(&format!("set (at {at}:3)"))])),
+        ])
+    };
+    let ctx = [
+        ("type", s("k8s.deployment")),
+        ("addr", s("web")),
+        ("path", s("spec")),
+        ("reason", s("two contributions disagree")),
+        (
+            "witnesses",
+            Value::List(vec![
+                witness(obj(vec![("name", null)]), "main.df:5"),
+                witness(obj(vec![("name", s("other"))]), "main.df:9"),
+            ]),
+        ),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+    let r = Redactor::new(&BTreeSet::new(), &Schema::default());
+    let out = errors::diag_lines(&errors::diag(&ctx, &r), Why::Line, Style::PLAIN, true);
+    assert_eq!(
+        out,
+        "  ! k8s.deployment web.spec: two contributions disagree\n      \
+         { name: web_config.metadata.name }  main.df:5\n      \
+         { name: \"other\" }  main.df:9\n"
+    );
+}
