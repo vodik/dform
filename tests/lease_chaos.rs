@@ -3,7 +3,8 @@
 //! renewer and refuses the next write; a renewer that died is the lost
 //! lease at the next use; a panic releases; a release that fails says so.
 //! A renewal that fails, or whose answer was lost, is store.rs's, its
-//! renewer stepped by hand.
+//! renewer stepped by hand. A write that hangs waits on a gate the test
+//! opens, never on the clock.
 
 use anyhow::{Result, bail};
 use dform::state::State;
@@ -21,8 +22,8 @@ enum Fault {
     Fails,
     /// The store panics (a bug in a client library).
     Panics,
-    /// The write takes 2s, and lands.
-    Slow,
+    /// The write hangs until the test opens the gate, and lands.
+    Hangs,
 }
 
 /// The memory store, its next `n` writes of the lease object that renew or
@@ -32,6 +33,8 @@ struct Chaos {
     fault: std::sync::Mutex<Option<(Fault, usize)>>,
     /// The writes of the lease object that met a fault.
     faulted: AtomicUsize,
+    /// Open: a write that hangs goes on.
+    gate: (std::sync::Mutex<bool>, std::sync::Condvar),
 }
 
 impl Chaos {
@@ -40,11 +43,18 @@ impl Chaos {
             objects: MemoryStore::new(),
             fault: std::sync::Mutex::new(None),
             faulted: AtomicUsize::new(0),
+            gate: Default::default(),
         })
     }
 
     fn inject(&self, f: Fault, n: usize) {
         *self.fault.lock().unwrap() = Some((f, n));
+    }
+
+    /// Let a write that hangs go on.
+    fn open(&self) {
+        *self.gate.0.lock().unwrap() = true;
+        self.gate.1.notify_all();
     }
 
     fn record(&self) -> LeaseRecord {
@@ -81,8 +91,9 @@ impl Store for Chaos {
         match fault {
             Fault::Fails => bail!("PUT {key}: timed out"),
             Fault::Panics => panic!("the store's client panicked"),
-            Fault::Slow => {
-                std::thread::sleep(Duration::from_secs(2));
+            Fault::Hangs => {
+                let open = self.gate.0.lock().unwrap();
+                drop(self.gate.1.wait_while(open, |open| !*open).unwrap());
                 self.objects.put(key, bytes, cond)
             }
         }
@@ -116,21 +127,35 @@ fn until(what: &str, f: impl Fn() -> bool) {
 }
 
 /// The renewer holds no lock across the store's call: a state write
-/// beside a renewal that hangs goes through at once.
+/// beside a renewal that hangs lands while it hangs.
 #[test]
 fn a_hanging_renewal_does_not_hold_up_a_state_write() {
     let store = Chaos::new();
-    let a = deployment(&store, 400);
+    // Renewed at once, and not expiring while the renewal hangs.
+    let times = LeaseTimes {
+        duration: Duration::from_secs(600),
+        renewal: Duration::from_millis(10),
+    };
+    let a = Deployment::new(store.clone(), "app", times);
     a.load_state().unwrap();
     let g = a.lock().unwrap();
-    store.inject(Fault::Slow, 1);
+    store.inject(Fault::Hangs, 1);
     until("a renewal hangs", || {
         store.faulted.load(Ordering::SeqCst) == 1
     });
-    let start = std::time::Instant::now();
-    a.save_state(&State::default()).unwrap();
-    let took = start.elapsed();
-    assert!(took < Duration::from_millis(1000), "{took:?}");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let saved = std::thread::scope(|s| {
+        let a = &a;
+        s.spawn(move || tx.send(a.save_state(&State::default())).unwrap());
+        // The renewal goes on only after the write landed, or failed to
+        // in time (were it waiting on the renewal, it would never land).
+        let saved = rx.recv_timeout(Duration::from_secs(10));
+        store.open();
+        saved
+    });
+    saved
+        .expect("the state write waited on the hanging renewal")
+        .unwrap();
     g.release().unwrap();
     assert_eq!(store.record().holder, "");
 }

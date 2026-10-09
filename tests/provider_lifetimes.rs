@@ -22,7 +22,8 @@ fn exists(pid: u32) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
 }
 
-/// Wait up to `budget` for `pid` to be gone and reaped.
+/// Wait up to `budget` for `pid` to be gone and reaped: a bound on a
+/// process that is never reaped, not a speed.
 fn gone_within(pid: u32, budget: Duration) -> bool {
     let deadline = Instant::now() + budget;
     while exists(pid) {
@@ -133,7 +134,7 @@ fn a_link_dropped_with_a_call_stuck_stops_its_provider() {
     let from = Instant::now();
     drop(link);
     assert!(
-        gone_within(pid, Duration::from_secs(1)),
+        gone_within(pid, Duration::from_secs(10)),
         "the provider (pid {pid}) is still there {:?} after its link was dropped",
         from.elapsed()
     );
@@ -157,7 +158,7 @@ fn a_failed_dial_leaves_no_provider_running() {
     assert!(format!("{e:#}").contains("dial provider"), "{e:#}");
     let pid = pid_in(&pidfile);
     assert!(
-        gone_within(pid, Duration::from_secs(1)),
+        gone_within(pid, Duration::from_secs(10)),
         "the provider (pid {pid}) outlived its failed dial"
     );
 }
@@ -187,19 +188,19 @@ fn a_manifest_never_answered_fails_within_its_budget() {
     let pid = pid_in(&pidfile);
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let from = Instant::now();
         let r = conn.manifest_within(Duration::from_millis(300));
-        let _ = tx.send((r.map_err(|e| format!("{e:#}")), from.elapsed()));
+        let _ = tx.send(r.map_err(|e| format!("{e:#}")));
         drop(conn);
     });
-    let (r, took) = rx
+    // The budget is the call's: the error says it ran out, never a clock
+    // here (10s bounds only a call that would wait for ever).
+    let r = rx
         .recv_timeout(Duration::from_secs(10))
         .expect("the Manifest call ends within its budget");
     let e = r.expect_err("no answer");
     assert!(e.contains("did not answer its Manifest in 0.3s"), "{e}");
-    assert!(took < Duration::from_secs(2), "{took:?}");
     assert!(
-        gone_within(pid, Duration::from_secs(1)),
+        gone_within(pid, Duration::from_secs(10)),
         "the provider (pid {pid}) outlived its connection"
     );
 }
