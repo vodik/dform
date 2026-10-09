@@ -173,6 +173,46 @@ impl Printer<'_> {
         self.surface(rules).site(id, bindings)
     }
 
+    /// What rule `id` (`r12`) that dform wrote does, in its words: the `#|`
+    /// doc comment of a rule written as text (`zset::POLICY_RULES`, a
+    /// type's seeded lifecycle), what one written in the core makes
+    /// ([`core_words`]); `None` for a rule of the program and one with no
+    /// words.
+    pub fn rule_words(&self, rules: &[RuleStmt], id: &str) -> Option<String> {
+        if self.circuit.rule_source(id).is_none() {
+            let i: usize = id.strip_prefix('r')?.parse().ok()?;
+            return core_words(rules.get(i)?).map(str::to_string);
+        }
+        let (place, words, _) = self.surface(rules).source_line(id)?;
+        (place == "dform").then_some(words)
+    }
+
+    /// Where row node `id`, which holds, comes from, on its line as the
+    /// tree says it: its place when the program states it or a rule of
+    /// the program derives it (`p.df:4`), the program's own row where a
+    /// type's lifecycle is seeded, the words of the rule dform derives it
+    /// by (`(the schema of provider fakecloud: ..)`). `None` when none says.
+    pub fn held_at(&self, rules: &[RuleStmt], id: NodeId) -> Option<String> {
+        let s = self.surface(rules);
+        let id = s.written(id).unwrap_or(id);
+        let View::Fact { alts, .. } = self.circuit.view(id) else {
+            return None;
+        };
+        let View::Times { children, .. } = self.circuit.view(*alts.first()?) else {
+            return None;
+        };
+        children.iter().find_map(|ch| match self.circuit.view(*ch) {
+            View::Leaf(Leaf::Base { span }) => Some(base_place(span)),
+            View::Leaf(Leaf::Rule { id }) if !id.starts_with('Σ') => {
+                match self.rule_site(rules, id, &[]) {
+                    Some(site) => Some(site.at),
+                    None => self.rule_words(rules, id).map(|w| format!("({w})")),
+                }
+            }
+            _ => None,
+        })
+    }
+
     /// Where fact node `id` is derived.
     pub fn site(&self, rules: &[RuleStmt], id: NodeId) -> Option<Site> {
         let mut s = self.surface(rules);
@@ -671,4 +711,30 @@ impl Surface<'_, '_> {
             stated: false,
         })
     }
+}
+
+/// What a rule dform writes in the core does, where it has no text to
+/// carry a doc comment (`transform::computed_prelude`,
+/// `transform::remote_name_prelude`, `zset::SAID`'s rules): by what it
+/// makes from what it reads.
+fn core_words(r: &RuleStmt) -> Option<&'static str> {
+    use crate::ast::Lit;
+    let reads = |p: &str| {
+        r.body
+            .iter()
+            .any(|l| matches!(l, Lit::Pos(a) | Lit::Not(a) if a.pred == p))
+    };
+    Some(match r.head.pred.as_str() {
+        "resolve" => "a computed attribute's value, as the world holds it",
+        "resolved" => "the world holds a computed attribute's value",
+        "arg" if reads(crate::transform::REMOTE_NAME) => {
+            "the name dform gave the object (remote_name), over the one the program writes"
+        }
+        "arg" if reads("resolved") => {
+            "a computed attribute is not known until its provider gives it"
+        }
+        "arg" if reads("resolve") => "a computed attribute is the value its provider gave",
+        crate::zset::SAID => "the program writes a lifecycle for the object, or for its copy",
+        _ => return None,
+    })
 }

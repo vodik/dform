@@ -20,6 +20,7 @@
 //! no reason.
 
 use crate::ast::{Atom, Lit, RuleStmt, Term};
+use crate::circuit::View;
 use crate::engine::{self, EvalResult};
 use crate::query::{self, Redactor};
 use crate::report::tree::Printer;
@@ -55,6 +56,7 @@ pub fn why_not(pattern: &str, res: &EvalResult, redact: &Redactor) -> Result<Str
             _ => bail!("why: expected {}, got '{pattern}'", super::FORMS),
         },
     };
+    let atom = evaluated(atom);
     let mut w = WhyNot::new(res, redact);
     let name = w.name(&atom);
     if !engine::query(&[Lit::Pos(atom.clone())], &res.facts)?.is_empty() {
@@ -94,6 +96,28 @@ pub fn waiting(
         ("want" | "attr", Some(Term::Val(Value::Str(t)))) => waits(t).or_else(|| unapplied(a, res)),
         _ => None,
     }
+}
+
+/// `atom` with each call in its columns that needs no row evaluated: a
+/// reference the pattern names (`net.vpc["main"]`, read as
+/// `__ref("net.vpc", "main", "")`) as the value the rows hold, so a head
+/// binds it and a row prints it as its address.
+fn evaluated(mut atom: Atom) -> Atom {
+    fn value(t: &Term) -> Option<Value> {
+        match t {
+            Term::Func { name, args } => {
+                let args = args.iter().map(value).collect::<Option<Vec<_>>>()?;
+                crate::functions::body(name)?(&args)
+            }
+            t => t.ground(),
+        }
+    }
+    for t in atom.args.iter_mut() {
+        if let (Term::Func { .. }, Some(v)) = (&*t, value(t)) {
+            *t = Term::Val(v);
+        }
+    }
+    atom
 }
 
 /// Why the program derives no resource `typ` `name`, on one line (R-120):
@@ -362,12 +386,13 @@ impl<'a> WhyNot<'a> {
                     .unwrap_or_default();
                 format!("{}  {}{origin}", s.at, s.statement)
             }
-            None => self
-                .res
-                .circuit
-                .rule_text(&id)
-                .unwrap_or(id.as_str())
-                .to_string(),
+            // A rule dform writes: its words, at `dform`.
+            None => format!(
+                "dform  {}",
+                self.printer
+                    .rule_words(rules, &id)
+                    .unwrap_or_else(|| self.written.rule(rule))
+            ),
         };
         self.out.push_str(&format!("{pad}  {site}\n"));
         let inner = format!("{pad}    ");
@@ -379,9 +404,9 @@ impl<'a> WhyNot<'a> {
                     .push_str(&format!("{inner}{}\n", self.redact.text(&t)));
                 return Ok(());
             }
-            let with = match a.seed.is_empty() || atom.pred == "attr" {
-                true => String::new(),
-                false => format!(" with {}", self.written.bindings(&a.seed)),
+            let with = match self.written.bindings(&a.seed) {
+                b if b.is_empty() || atom.pred == "attr" => String::new(),
+                b => format!(" with {b}"),
             };
             let what = match (atom.args.get(2), rule.head.args.get(2)) {
                 (Some(Term::Val(Value::Str(p))), Some(Term::Val(Value::Str(h))))
@@ -432,17 +457,23 @@ impl<'a> WhyNot<'a> {
                     self.explain(b, &inner, depth + 1)?;
                 }
             }
+            // The row the `not` found: said as the program would, with
+            // where it is written; one of dform's own said in words, by
+            // the program's rows it was derived from.
             Lit::Not(b) => {
                 let held = engine::query(&[Lit::Pos(b.clone())], &self.res.facts)?;
-                let row = held
+                let rows = held
                     .first()
                     .and_then(|(_, used)| used.first())
-                    .map(|r| format!(": {}", self.written.atom(r)))
+                    .map(|r| self.held(r))
                     .unwrap_or_default();
-                self.out.push_str(&format!(
-                    "{inner}not {}: the row exists{row}\n",
-                    self.written.atom(b)
-                ));
+                let said = match (spell::worded(&b.pred), rows.is_empty()) {
+                    (true, _) => format!("it writes {}", rows.join(", ")),
+                    (false, true) => "the row exists".to_string(),
+                    (false, false) => format!("the row exists: {}", rows.join(", ")),
+                };
+                self.out
+                    .push_str(&format!("{inner}{}: {said}\n", self.written.lit(&bound)));
             }
             _ => {
                 let mut vars = BTreeSet::new();
@@ -506,6 +537,40 @@ impl<'a> WhyNot<'a> {
                 .find(|l| matches!(l, Lit::Pos(a) if a.pred == "__known"))?;
             known_text(helper, lit, &env).map(|t| format!("not {t}"))
         })
+    }
+
+    /// Row `row`, which holds, as the program says it, with where it
+    /// comes from (`lifecycle(net.vpc main, "destroy")   p.df:4`); a row of
+    /// dform's own said in words, as the program's rows it was derived
+    /// from.
+    fn held(&self, row: &Atom) -> Vec<String> {
+        let circuit = &self.res.circuit;
+        let rules = &self.res.rules;
+        let Some(id) = circuit.fact_id(&engine::circuit_fact(row)) else {
+            return vec![self.written.atom(row)];
+        };
+        let placed = |id: usize, row: &Atom| match self.printer.held_at(rules, id) {
+            Some(at) => format!("{}   {at}", self.written.atom(row)),
+            None => self.written.atom(row),
+        };
+        if !spell::worded(&row.pred) {
+            return vec![placed(id, row)];
+        }
+        let View::Fact { alts, .. } = circuit.view(id) else {
+            return vec![];
+        };
+        let Some(View::Times { children, .. }) = alts.first().map(|a| circuit.view(*a)) else {
+            return vec![];
+        };
+        children
+            .iter()
+            .filter_map(|ch| match circuit.view(*ch) {
+                View::Fact { fact, .. } if fact.pred == crate::zset::WRITTEN => {
+                    Some(placed(*ch, &fact.atom()))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// The rows of relation `pred/arity`, in the store's order.
@@ -832,6 +897,25 @@ fn unify(t: &Term, v: &Value, body: &[Lit]) -> Vec<Env> {
             }
             out
         }
+        // A reference the head makes (`__ref(T, A, "")`, a seeded
+        // lifecycle row's) is read back from the reference, part by part.
+        Term::Func { name, args } if name == crate::ir::REF && args.len() == 3 => {
+            let Value::Ref { typ, name, attr } = v else {
+                return vec![];
+            };
+            let mut envs = vec![Env::new()];
+            for (a, part) in args.iter().zip([typ, name, attr]) {
+                envs = envs
+                    .iter()
+                    .flat_map(|env| {
+                        unify(a, &Value::Str(part.clone()), body)
+                            .into_iter()
+                            .filter_map(|e| merge(env, &e))
+                    })
+                    .collect();
+            }
+            envs
+        }
         // A header name's segment (R-112) is its name, quoted or not.
         Term::Func { name, args } if name == crate::ir::NAME_SEGMENT && args.len() == 1 => {
             let Value::Str(s) = v else { return vec![] };
@@ -850,7 +934,18 @@ fn unify(t: &Term, v: &Value, body: &[Lit]) -> Vec<Env> {
             for parts in splits(s, &pieces) {
                 let mut envs = vec![Env::new()];
                 for (a, part) in args[1..].iter().zip(&parts) {
-                    let mut vals = vec![Value::Str(part.clone())];
+                    // A reference interpolates as its address, `T["A"]`:
+                    // read so before the string it also is.
+                    let mut vals: Vec<Value> = crate::ir::parse_address(part)
+                        .ok()
+                        .map(|(a, attr)| Value::Ref {
+                            typ: a.typ,
+                            name: a.name,
+                            attr: attr.unwrap_or_default(),
+                        })
+                        .into_iter()
+                        .collect();
+                    vals.push(Value::Str(part.clone()));
                     if let Ok(n) = part.parse::<i64>() {
                         vals.push(Value::Int(n));
                     }

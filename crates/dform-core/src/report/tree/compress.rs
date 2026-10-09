@@ -166,9 +166,7 @@ impl Compress {
             // A read of a computed attribute, as the compiler lowers it:
             // not the program's to explain.
             Leaf::Absent { atom } if atom.pred == "resolved" => return None,
-            Leaf::Absent { atom } => {
-                Because::new("absent", None, format!("not {}", s.absent(atom)))
-            }
+            Leaf::Absent { atom } => Because::new("absent", None, s.absent(atom)),
             Leaf::Schema { .. } | Leaf::Rule { .. } => return None,
         })
     }

@@ -144,6 +144,51 @@ pub(crate) fn rule_short(r: &RuleStmt) -> String {
     }
 }
 
+/// A row of one of dform's own relations, as `why` says it (`not` before
+/// it when `negated`); `None` for any other relation. The one table of
+/// their spellings: where a type's lifecycle is seeded, the program's own
+/// `lifecycle` rows are [`crate::zset::WRITTEN`]'s and print as
+/// `lifecycle(..)`, and [`crate::zset::SAID`] says in words whether the
+/// program gives an object a removal word. `term` spells a column.
+pub fn internal(a: &Atom, negated: bool, term: &dyn Fn(&Term) -> String) -> Option<String> {
+    let not = if negated { "not " } else { "" };
+    match (a.pred.as_str(), a.args.as_slice()) {
+        (crate::zset::WRITTEN, args) => Some(format!(
+            "{not}lifecycle({})",
+            args.iter().map(term).collect::<Vec<_>>().join(", ")
+        )),
+        (crate::zset::SAID, [t, r]) => {
+            let what = match (t, r) {
+                (Term::Val(Value::Str(typ)), Term::Val(Value::Str(name))) => {
+                    crate::report::address(&crate::ir::Address {
+                        typ: typ.clone(),
+                        name: name.clone(),
+                    })
+                }
+                (_, r) => term(r),
+            };
+            let writes = if negated { "no" } else { "a" };
+            Some(format!("the program writes {writes} lifecycle for {what}"))
+        }
+        _ => None,
+    }
+}
+
+/// Whether a row of `pred` is one of dform's own that [`internal`] says
+/// in words, not as a relation's row.
+pub fn worded(pred: &str) -> bool {
+    pred == crate::zset::SAID
+}
+
+/// The name a relation is printed by: dform's own by the program's name
+/// for what it holds ([`internal`]).
+pub fn relation(pred: &str) -> &str {
+    match pred {
+        crate::zset::WRITTEN | crate::zset::SAID => "lifecycle",
+        p => p,
+    }
+}
+
 /// The program's atoms, terms and literals as it wrote them, for a
 /// message about what it does: a variable by its source name, an
 /// interpolated string with its holes, an attribute read by its address, a
@@ -169,13 +214,16 @@ impl<'a> Written<'a> {
     }
 
     pub fn pred(&self, pred: &str) -> String {
-        pred.to_string()
+        relation(pred).to_string()
     }
 
     /// A body atom as the program would write it: a copy's guard as the
     /// copy, an attribute read by its address, a row with its variables by
     /// the source's names.
     pub fn atom(&self, a: &Atom) -> String {
+        if let Some(text) = internal(a, false, &|t| self.term(t)) {
+            return text;
+        }
         if let Some(scope) = a.pred.strip_suffix("::__instance")
             && let [Term::Val(Value::Str(c))] = a.args.as_slice()
         {
@@ -221,6 +269,17 @@ impl<'a> Written<'a> {
                 }
                 _ => term(t),
             },
+            // A reference by its address, as the plan prints it.
+            Term::Func { name, args } if name == crate::ir::REF && args.len() == 3 => {
+                match (&args[0], &args[1], &args[2]) {
+                    (
+                        Term::Val(Value::Str(typ)),
+                        Term::Val(Value::Str(name)),
+                        Term::Val(Value::Str(p)),
+                    ) => Written::attribute(typ.clone(), name.clone(), p),
+                    (t, n, _) => format!("{} {}", self.term(t), self.term(n)),
+                }
+            }
             Term::Func { name, args } => format!(
                 "{name}({})",
                 args.iter()
@@ -243,13 +302,26 @@ impl<'a> Written<'a> {
         let bin = |a: &Term, op: &str, b: &Term| format!("{} {op} {}", self.term(a), self.term(b));
         match l {
             Lit::Pos(a) => self.atom(a),
-            Lit::Not(a) => format!("not {}", self.atom(a)),
+            Lit::Not(a) => internal(a, true, &|t| self.term(t))
+                .unwrap_or_else(|| format!("not {}", self.atom(a))),
             Lit::Eq(a, b) => bin(a, "==", b),
             Lit::Neq(a, b) => bin(a, "!=", b),
             Lit::Gt(a, b) => bin(a, ">", b),
             Lit::Ge(a, b) => bin(a, ">=", b),
             Lit::Lt(a, b) => bin(a, "<", b),
             Lit::Le(a, b) => bin(a, "<=", b),
+        }
+    }
+
+    /// A rule as the program would write it, `head where body`.
+    pub fn rule(&self, r: &RuleStmt) -> String {
+        let head = self.atom(&r.head);
+        match r.body.is_empty() {
+            true => head,
+            false => {
+                let body: Vec<String> = r.body.iter().map(|l| self.lit(l)).collect();
+                format!("{head} where {}", body.join(", "))
+            }
         }
     }
 

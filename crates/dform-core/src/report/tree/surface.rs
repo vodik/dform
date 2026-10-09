@@ -137,7 +137,7 @@ impl Surface<'_, '_> {
     /// The program's row fact node `id` is, where a type's lifecycle is
     /// seeded (`zset::WRITTEN`): `lifecycle(r, w)` is the program's
     /// statement, not the rule that makes `lifecycle` of it.
-    fn written(&self, id: NodeId) -> Option<NodeId> {
+    pub(super) fn written(&self, id: NodeId) -> Option<NodeId> {
         let c = self.p.circuit;
         let View::Fact {
             fact, alts: [a], ..
@@ -224,11 +224,6 @@ impl Surface<'_, '_> {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            // The program's lifecycle row, where a type's is seeded.
-            (crate::zset::WRITTEN, _) => r.surface_atom(&crate::ast::Atom {
-                pred: "lifecycle".into(),
-                ..f.atom()
-            }),
             // A copy (R-65), as the statement that makes it.
             (
                 crate::modules::INSTANCE_OF,
@@ -247,7 +242,9 @@ impl Surface<'_, '_> {
             }
             _ => {
                 let a = f.atom();
-                crate::modules::private_text(&a, &|a| r.surface_atom(a), "   ")
+                // dform's own relation, as the program names what it holds.
+                spell::internal(&a, false, &|t| self.term(t))
+                    .or_else(|| crate::modules::private_text(&a, &|a| r.surface_atom(a), "   "))
                     .unwrap_or_else(|| r.surface_atom(&a))
             }
         }
@@ -323,10 +320,14 @@ impl Surface<'_, '_> {
         Some((format!("{list}[{label}]"), content))
     }
 
-    /// A fact the firing found absent, spelled as the program would: as
-    /// [`Surface::fact_text`] when it is ground, each value as the plan
-    /// spells it (a reference by its address) otherwise.
+    /// A fact the firing found absent, as the program would say it: `not`
+    /// the fact as [`Surface::fact_text`] spells it when it is ground, each
+    /// value as the plan spells it (a reference by its address) otherwise;
+    /// a row of dform's own as [`spell::internal`] says it.
     pub(super) fn absent(&self, a: &Atom) -> String {
+        if let Some(text) = spell::internal(a, true, &|t| self.term(t)) {
+            return text;
+        }
         let ground: Option<Vec<Value>> = a
             .args
             .iter()
@@ -335,9 +336,18 @@ impl Surface<'_, '_> {
                 _ => None,
             })
             .collect();
-        match ground {
+        let fact = match ground {
             Some(args) => self.fact_text(&Fact::new(&a.pred, args)),
             None => self.p.redact.surface_atom(a),
+        };
+        format!("not {fact}")
+    }
+
+    /// A column of a row, as the plan spells a value.
+    fn term(&self, t: &Term) -> String {
+        match t {
+            Term::Val(v) => self.p.redact.surface(v),
+            t => spell::term(t),
         }
     }
 
@@ -459,9 +469,11 @@ impl Surface<'_, '_> {
             let (b, _) = mark(facts.len() + j);
             let text = match l {
                 Leaf::Base { span } => base_place(span),
-                Leaf::Absent { atom } => match said(atom) {
-                    Some(addr) => format!("the program writes no lifecycle for {addr}"),
-                    None => format!("not {}   (absent)", self.absent(atom)),
+                // A `not` says it found the row absent; a row of dform's
+                // own is said in words.
+                Leaf::Absent { atom } => match self.absent(atom) {
+                    t if t.starts_with("not ") => format!("{t}   (absent)"),
+                    t => t,
                 },
                 l => self.p.redact.text(&leaf_text(l)),
             };
@@ -590,22 +602,5 @@ impl Surface<'_, '_> {
                 self.push(format!("{pad}     {}", redact.text(&t)));
             }
         }
-    }
-}
-
-/// The resource an absent `__lifecycle_said(T, A)` is about
-/// (`zset::SAID`): the program gives it no removal word, so its type's
-/// lifecycle is seeded.
-fn said(a: &Atom) -> Option<String> {
-    match a.args.as_slice() {
-        [Term::Val(Value::Str(typ)), Term::Val(Value::Str(name))]
-            if a.pred == crate::zset::SAID =>
-        {
-            Some(crate::report::address(&Address {
-                typ: typ.clone(),
-                name: name.clone(),
-            }))
-        }
-        _ => None,
     }
 }
