@@ -115,36 +115,13 @@ pub fn notes(client: &Client, full: bool, cache: Option<&Path>, now: u64) -> Vec
         }
     };
     let file = cache.filter(|_| !full).map(|c| c.join(api::CACHE_FILE));
-    let cache_key = format!("{endpoint} {CURRENT}");
-    let digest: String = Sha256::digest(consumer_key.as_bytes())[..8]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    let kept = file.as_deref().and_then(|f| {
-        let entry = api::read_cache(f).remove(&cache_key)?;
-        let (d, expires) = entry.split_once(' ')?;
-        (d == digest).then(|| Key {
-            expires: expires.parse().ok(),
-            rules: Vec::new(),
-        })
-    });
-    let key = match kept {
-        Some(k) => k,
-        None => match client.get(CURRENT) {
-            Ok(j) => {
-                let k = Key::from(&j);
-                if let Some(f) = &file {
-                    let expires = k.expires.map_or("never".to_string(), |e| e.to_string());
-                    api::write_cache(f, &cache_key, &format!("{digest} {expires}"));
-                }
-                k
-            }
-            // A refused key is said by the call that needs it.
-            Err(e) if full => {
-                return vec![format!("provider ovh: credentials for {endpoint}: {e}")];
-            }
-            Err(_) => return Vec::new(),
-        },
+    let key = match current(client, consumer_key, file.as_deref()) {
+        Ok(k) => k,
+        // A refused key is said by the call that needs it.
+        Err(e) if full => {
+            return vec![format!("provider ovh: credentials for {endpoint}: {e}")];
+        }
+        Err(_) => return Vec::new(),
     };
     let mut out = Vec::new();
     if full {
@@ -175,6 +152,33 @@ pub fn notes(client: &Client, full: bool, cache: Option<&Path>, now: u64) -> Vec
         ));
     }
     out
+}
+
+/// The consumer key `client` signs with: its expiry as `file` (a cache)
+/// keeps it for the key's digest, else as the API answers, then kept.
+fn current(client: &Client, consumer_key: &str, file: Option<&Path>) -> api::Result<Key> {
+    let cache_key = format!("{} {CURRENT}", client.credentials().endpoint);
+    let digest: String = Sha256::digest(consumer_key.as_bytes())[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let kept = file.and_then(|f| {
+        let entry = api::read_cache(f).remove(&cache_key)?;
+        let (d, expires) = entry.split_once(' ')?;
+        (d == digest).then(|| Key {
+            expires: expires.parse().ok(),
+            rules: Vec::new(),
+        })
+    });
+    if let Some(k) = kept {
+        return Ok(k);
+    }
+    let k = Key::from(&client.get(CURRENT)?);
+    if let Some(f) = file {
+        let expires = k.expires.map_or("never".to_string(), |e| e.to_string());
+        api::write_cache(f, &cache_key, &format!("{digest} {expires}"));
+    }
+    Ok(k)
 }
 
 /// `secs` in hours under two days, else in days.
