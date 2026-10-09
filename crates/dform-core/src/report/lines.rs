@@ -181,56 +181,7 @@ pub(super) fn write_line(
     let plain = |v: &Shown| v.said(why);
     let painted = |v: &Shown| style.said(v, why);
     match l.op {
-        Op::Add | Op::Remove => {
-            let (sign, paint, v) = if l.op == Op::Add {
-                ("+", Paint::Create, &l.after)
-            } else {
-                ("-", Paint::Delete, &l.before)
-            };
-            let painted_sign = style.paint(paint, sign);
-            // A scalar element of a keyless set is named by itself
-            // (R-158): `- policies[app_policy]`.
-            if l.leaves.is_empty()
-                && let Some(list) = l.path.strip_suffix("[]")
-            {
-                let (plain, painted) = (plain(v), painted(v));
-                push(
-                    format!("{indent}{sign} {list}[{plain}]"),
-                    format!("{indent}{painted_sign} {list}[{painted}]"),
-                    right,
-                );
-                return;
-            }
-            if l.leaves.is_empty() {
-                push(
-                    format!("{indent}{sign} {} = {}", l.path, plain(v)),
-                    format!("{indent}{painted_sign} {} = {}", l.path, painted(v)),
-                    right,
-                );
-                return;
-            }
-            push(
-                format!("{indent}{sign} {}", l.path),
-                format!("{indent}{painted_sign} {}", l.path),
-                right,
-            );
-            let inner = if l.op == Op::Add {
-                ActionKind::Create
-            } else {
-                ActionKind::Delete
-            };
-            for x in &l.leaves {
-                write_line(
-                    rows,
-                    &inner,
-                    x,
-                    &format!("{indent}    "),
-                    style,
-                    why,
-                    vec![],
-                );
-            }
-        }
+        Op::Add | Op::Remove => write_element(rows, l, indent, style, why, right),
         // A document value (R-131): its row; a value body's, the
         // resource's (`= vendor/crds.yml:412  (24.0 KB)`).
         Op::Leaf if let Some(row) = &l.row => {
@@ -240,22 +191,7 @@ pub(super) fn write_line(
             };
             push(text.clone(), text, right);
         }
-        Op::Leaf if l.value.is_some() => {
-            let head = format!("{} = ", l.path);
-            let width = WIDTH.saturating_sub(indent.chars().count());
-            let tree = l.value.as_ref().expect("a fold has its value");
-            for (i, text) in crate::fmt::value::layout(&head, tree, width)
-                .into_iter()
-                .enumerate()
-            {
-                let row = format!("{indent}{text}");
-                let painted = style.notes_in(&row);
-                match i {
-                    0 => push(row, painted, right.clone()),
-                    _ => push(row, painted, vec![]),
-                }
-            }
-        }
+        Op::Leaf if l.value.is_some() => write_folded(rows, l, indent, style, right),
         // An element named by itself says no value (R-158).
         Op::Leaf
             if matches!(kind, ActionKind::Create | ActionKind::Adopt)
@@ -296,6 +232,93 @@ pub(super) fn write_line(
             ),
             ActionKind::Noop | ActionKind::Forget => {}
         },
+    }
+}
+
+/// An element added or removed (`+`/`-`), by itself when it is a scalar
+/// of a keyless set, else its path and then each of its leaves.
+fn write_element(
+    rows: &mut Vec<Row>,
+    l: &Line,
+    indent: &str,
+    style: Style,
+    why: Why,
+    right: Vec<String>,
+) {
+    let mut push = |plain: String, painted: String, right: Vec<String>| {
+        rows.push(Row::new(&plain, painted).with(right))
+    };
+    let plain = |v: &Shown| v.said(why);
+    let painted = |v: &Shown| style.said(v, why);
+    let (sign, paint, v) = if l.op == Op::Add {
+        ("+", Paint::Create, &l.after)
+    } else {
+        ("-", Paint::Delete, &l.before)
+    };
+    let painted_sign = style.paint(paint, sign);
+    // A scalar element of a keyless set is named by itself
+    // (R-158): `- policies[app_policy]`.
+    if l.leaves.is_empty()
+        && let Some(list) = l.path.strip_suffix("[]")
+    {
+        let (plain, painted) = (plain(v), painted(v));
+        push(
+            format!("{indent}{sign} {list}[{plain}]"),
+            format!("{indent}{painted_sign} {list}[{painted}]"),
+            right,
+        );
+        return;
+    }
+    if l.leaves.is_empty() {
+        push(
+            format!("{indent}{sign} {} = {}", l.path, plain(v)),
+            format!("{indent}{painted_sign} {} = {}", l.path, painted(v)),
+            right,
+        );
+        return;
+    }
+    push(
+        format!("{indent}{sign} {}", l.path),
+        format!("{indent}{painted_sign} {}", l.path),
+        right,
+    );
+    let inner = if l.op == Op::Add {
+        ActionKind::Create
+    } else {
+        ActionKind::Delete
+    };
+    for x in &l.leaves {
+        write_line(
+            rows,
+            &inner,
+            x,
+            &format!("{indent}    "),
+            style,
+            why,
+            vec![],
+        );
+    }
+}
+
+/// A folded value (R-124): laid out as the formatter writes it, the right
+/// column on its first row.
+fn write_folded(rows: &mut Vec<Row>, l: &Line, indent: &str, style: Style, right: Vec<String>) {
+    let mut push = |plain: String, painted: String, right: Vec<String>| {
+        rows.push(Row::new(&plain, painted).with(right))
+    };
+    let head = format!("{} = ", l.path);
+    let width = WIDTH.saturating_sub(indent.chars().count());
+    let tree = l.value.as_ref().expect("a fold has its value");
+    for (i, text) in crate::fmt::value::layout(&head, tree, width)
+        .into_iter()
+        .enumerate()
+    {
+        let row = format!("{indent}{text}");
+        let painted = style.notes_in(&row);
+        match i {
+            0 => push(row, painted, right.clone()),
+            _ => push(row, painted, vec![]),
+        }
     }
 }
 
