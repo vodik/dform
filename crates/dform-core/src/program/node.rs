@@ -602,6 +602,9 @@ pub enum ItemKind {
         refinement: Option<ClauseId>,
         guard: Option<ClauseId>,
         fields: Vec<ItemId>,
+        /// Declared several times, each under a clause (R-104): which
+        /// declaration this is, and at the first where each is.
+        rows: Option<(usize, Vec<Span>)>,
     },
     /// `input p [from src [where B]]`: a relation's rows (R-55, step 5).
     RelationInput {
@@ -609,7 +612,9 @@ pub enum ItemKind {
         source: Option<ExprId>,
         clause: Option<ClauseId>,
     },
-    /// `output k[: T] [= v] [where B]` (step 5).
+    /// `output k[: T] [= v] [where B]` (step 5). `ty`: the row that
+    /// declares the output in its scope, the type written (`any` when
+    /// none, `addr` for a resource type).
     Output {
         name: Name,
         ty: Option<TypeExpr>,

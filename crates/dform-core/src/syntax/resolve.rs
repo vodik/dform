@@ -2147,9 +2147,12 @@ impl<'u> Lowerer<'u> {
                 return self.ported(n, |l| l.let_stmt(n, scope, outer));
             }
             RULE | FACT => return self.ported(n, |l| l.rule(n, scope, outer)),
+            CHECK => return self.ported(n, |l| l.check(n, scope, outer)),
+            OUTPUT_DECL => return self.ported(n, |l| l.output(n, scope, outer)),
+            INPUT => return self.ported(n, |l| l.input(n, scope, outer)),
             DECL => return Some(self.decl(n, scope)),
             EXTERN => return self.extern_item(n).ok(),
-            TYPE_DECL => return self.type_block(n, scope).ok(),
+            TYPE_DECL => return self.ported(n, |l| l.type_block(n, scope)),
             _ => {}
         }
         let saved = std::mem::take(&mut self.helpers);
@@ -2523,100 +2526,7 @@ impl<'u> Lowerer<'u> {
     fn stmt1(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
         match n.kind() {
-            INPUT => {
-                let name = word_text(n, 1);
-                // `input k { f: T [= d] [check B] .. }` (R-54).
-                let fields = self.input_fields(n, scope, outer)?;
-                let ty = match node(n, TYPE_EXPR) {
-                    Some(t) => self.input_type(&t),
-                    None => crate::inputs::fields_type(&fields),
-                };
-                let key = is_key(n);
-                if key && let Some(path) = self.decls.paths.get(&self.file).cloned() {
-                    return self.key_in_module(n, &name, &path, span);
-                }
-                if key && n.parent().is_some_and(|p| p.kind() != SOURCE_FILE) {
-                    return self.error(
-                        span,
-                        format!(
-                            "key {name} inside a block: a key selects the stack's deployment, \
-                             so it is declared at the top of the stack's file"
-                        ),
-                    );
-                }
-                if key && matches!(&ty, TypeExpr::Apply(t, _) if t == "secret") {
-                    let d = Diagnostic::error(span, format!("key {name} is a secret")).with_note(
-                        "a key's value names the deployment: its state's directory and \
-                             its registry entry",
-                    );
-                    self.diags.push(d);
-                    return Err(Skip);
-                }
-                let mut rc = self.rc(n, scope, outer);
-                let default = match terms(n).next() {
-                    // A literal default is read as the declared type (R-31).
-                    Some(t) => match crate::types::literal(
-                        &crate::types::of_expr(&ty),
-                        self.constant(&mut rc, &t)?,
-                    ) {
-                        Ok(d) => Some(d),
-                        Err(why) => {
-                            return self.error(self.span(&t), format!("input {name} {why}"));
-                        }
-                    },
-                    None => None,
-                };
-                let refinement = self.refinement(n, scope)?;
-                // `input k: T where B` (R-104): declared where `B` holds. A
-                // clause that reads the input itself is a check misspelled.
-                if let Some(c) = node(n, CLAUSE)
-                    && c.descendants()
-                        .filter_map(|x| Chain::of(&x))
-                        .any(|x| x.head == name)
-                {
-                    let head = n.text().to_string();
-                    let at: usize = (c.text_range().start() - n.text_range().start()).into();
-                    let body = c.text().to_string();
-                    let body = body.trim_start().trim_start_matches("where").trim();
-                    let d = Diagnostic::error(
-                        self.span(&c),
-                        format!("the clause of input {name} reads {name}: a clause picks where it is declared"),
-                    )
-                    .with_help(format!(
-                        "a refinement is spelled `check` (R-1): `{} check {body}`",
-                        head[..at].trim()
-                    ));
-                    self.diags.push(d);
-                    return Err(Skip);
-                }
-                let guard = self.clauses(&mut rc, n)?;
-                if key && !guard.is_empty() {
-                    return self.error(
-                        span,
-                        format!(
-                            "key {name} has a clause: a key names the deployment, so every \
-                             deployment has it"
-                        ),
-                    );
-                }
-                let mut out = self.inputs_named(n, &name, &guard, span)?;
-                out.insert(
-                    0,
-                    Stmt::Input(InputDecl {
-                        name,
-                        ty,
-                        default,
-                        refinement,
-                        key,
-                        guard,
-                        fields,
-                        span,
-                    }),
-                );
-                Ok(out)
-            }
             INPUT_RELATION => self.relation_input(n, scope, outer),
-            OUTPUT_DECL => self.output(n, scope, outer),
             // An alias lowers to nothing: each use is its type.
             TYPE_ALIAS => Ok(Vec::new()),
             USE => self.use_stmt(n, scope, outer),
@@ -2625,16 +2535,179 @@ impl<'u> Lowerer<'u> {
             RESOURCE if self.decls.project.contains(&self.file) => self.deployment(n, scope, outer),
             RESOURCE if self.is_copy(n) => self.instance(n, scope, outer),
             RESOURCE => self.block_stmt(n, scope, outer),
-            CHECK => self.check(n, scope, outer),
             k => self.error(span, format!("unexpected {k:?}")),
         }
+    }
+
+    /// `input k: T [= d] [check B] [where G]`, `key k: T`, `input k { f:
+    /// T .. }` built as an `Input` item (R-211 step 5): its default read
+    /// as its type, its refinement's and its clause's goals, its fields
+    /// items of their own; `lower` writes the declaration.
+    fn input(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
+        let span = self.span(n);
+        let name = word_text(n, 1);
+        // `input k { f: T [= d] [check B] .. }` (R-54).
+        let fields = self.input_fields(n, scope, outer)?;
+        let ty = match node(n, TYPE_EXPR) {
+            Some(t) => self.input_type(&t),
+            None => self.fields_type(&fields),
+        };
+        let key = is_key(n);
+        if key && let Some(path) = self.decls.paths.get(&self.file).cloned() {
+            return self.key_in_module(n, &name, &path, span);
+        }
+        if key && n.parent().is_some_and(|p| p.kind() != SOURCE_FILE) {
+            return self.error(
+                span,
+                format!(
+                    "key {name} inside a block: a key selects the stack's deployment, \
+                             so it is declared at the top of the stack's file"
+                ),
+            );
+        }
+        if key && matches!(&ty, TypeExpr::Apply(t, _) if t == "secret") {
+            let d = Diagnostic::error(span, format!("key {name} is a secret")).with_note(
+                "a key's value names the deployment: its state's directory and \
+                             its registry entry",
+            );
+            self.diags.push(d);
+            return Err(Skip);
+        }
+        let mut rc = self.rc(n, scope, outer);
+        let default = match terms(n).next() {
+            // A literal default is read as the declared type (R-31).
+            Some(t) => match crate::types::literal(
+                &crate::types::of_expr(&ty),
+                self.constant(&mut rc, &t)?,
+            ) {
+                Ok(d) => Some(d),
+                Err(why) => {
+                    return self.error(self.span(&t), format!("input {name} {why}"));
+                }
+            },
+            None => None,
+        };
+        let refinement = self.refinement(n, scope)?;
+        let refined = self.clause_at(node(n, REFINEMENT).and_then(|r| node(&r, BODY)));
+        // `input k: T where B` (R-104): declared where `B` holds. A
+        // clause that reads the input itself is a check misspelled.
+        if let Some(c) = node(n, CLAUSE)
+            && c.descendants()
+                .filter_map(|x| Chain::of(&x))
+                .any(|x| x.head == name)
+        {
+            let head = n.text().to_string();
+            let at: usize = (c.text_range().start() - n.text_range().start()).into();
+            let body = c.text().to_string();
+            let body = body.trim_start().trim_start_matches("where").trim();
+            let d = Diagnostic::error(
+                self.span(&c),
+                format!(
+                    "the clause of input {name} reads {name}: a clause picks where it is declared"
+                ),
+            )
+            .with_help(format!(
+                "a refinement is spelled `check` (R-1): `{} check {body}`",
+                head[..at].trim()
+            ));
+            self.diags.push(d);
+            return Err(Skip);
+        }
+        let guard = self.clauses(&mut rc, n)?;
+        let guarded = self.clause_at(node(n, CLAUSE));
+        if key && !guard.is_empty() {
+            return self.error(
+                span,
+                format!(
+                    "key {name} has a clause: a key names the deployment, so every \
+                             deployment has it"
+                ),
+            );
+        }
+        let rows = self.inputs_named(n, &name, span)?;
+        let resolved = crate::program::check::enabled().then(|| {
+            let decl = InputDecl {
+                name: name.clone(),
+                ty: ty.clone(),
+                default: default.clone(),
+                refinement,
+                key,
+                guard: guard.clone(),
+                fields: fields.iter().map(|&f| self.field_decl(f)).collect(),
+                span,
+            };
+            let mut stmts = vec![Stmt::Input(decl)];
+            if let Some((i, sites)) = &rows {
+                let group = format!("input {name}");
+                stmts.push(crate::modules::declared(&group, *i, guard.clone(), span));
+                if *i == 0 {
+                    let sites: Vec<(String, Span)> =
+                        sites.iter().map(|s| (group.clone(), *s)).collect();
+                    stmts.extend(crate::modules::denies(&group, &sites));
+                }
+            }
+            self.resolved_with(stmts, span)
+        });
+        let i = crate::program::build::InputLowered {
+            name,
+            key,
+            ty,
+            default: default.as_ref(),
+            refinement: refined,
+            guard: guarded,
+            fields,
+            rows,
+            span,
+            scope: self.item_scope,
+        };
+        let gather = self
+            .gather
+            .as_mut()
+            .expect("a ported statement is gathered");
+        let mut b = gather.builder(&mut self.program, span, &|_| true);
+        let item = b.input_item(i);
+        gather.done(b);
+        if let Some(stmts) = resolved {
+            self.resolved.insert(item, stmts);
+        }
+        Ok(item)
+    }
+
+    /// The object type of an input's fields.
+    fn fields_type(&self, fields: &[ItemId]) -> TypeExpr {
+        let field = |&f: &ItemId| match &self.program.items[f].kind {
+            crate::program::ItemKind::Input { name, ty, .. } => (name.clone(), ty.clone()),
+            _ => unreachable!("a field is an input"),
+        };
+        TypeExpr::Object(fields.iter().map(field).collect())
+    }
+
+    /// The field `f` declared, as the resolver wrote it, for
+    /// `DFORM_CHECK_LOWER=1` (deleted with the switch).
+    fn field_decl(&self, f: ItemId) -> InputDecl {
+        match crate::program::lower_item(&self.program, f)
+            .into_iter()
+            .next()
+        {
+            Some(Stmt::Input(d)) => d,
+            _ => unreachable!("a field lowers to its declaration"),
+        }
+    }
+
+    /// The clause of the body `at` just lowered, gathered (empty when no
+    /// literal is written in it); none when there is no body, or nothing
+    /// gathers.
+    fn clause_at(&mut self, at: Option<SyntaxNode>) -> Option<crate::program::ClauseId> {
+        let span = self.span(&at?);
+        let gather = self.gather.as_mut()?;
+        Some(gather.body_clause(&mut self.program, span))
     }
 
     /// The fields of an object input's block form (R-54), each a
     /// declaration named by its field: `f: T [= d] [check B]`, a nested
     /// object `f: { .. }`. A field's default is read as its type (R-31).
-    fn input_fields(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<InputDecl>> {
-        let mut out: Vec<InputDecl> = Vec::new();
+    fn input_fields(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<ItemId>> {
+        let mut out: Vec<(String, Span, ItemId)> = Vec::new();
         let mut failed = false;
         for a in n.children().filter(|c| c.kind() == ATTR_DECL) {
             let r = (|| {
@@ -2650,16 +2723,16 @@ impl<'u> Lowerer<'u> {
                         ),
                     );
                 }
-                if let Some(first) = out.iter().find(|f| f.name == name) {
+                if let Some((_, first, _)) = out.iter().find(|(f, ..)| *f == name) {
                     let d = Diagnostic::error(span, format!("field {name} is declared twice"))
-                        .with_label(first.span, "first here");
+                        .with_label(*first, "first here");
                     self.diags.push(d);
                     return Err(Skip);
                 }
                 let fields = self.input_fields(&a, scope, outer)?;
                 let ty = match node(&a, TYPE_EXPR) {
                     Some(t) => self.input_type(&t),
-                    None => crate::inputs::fields_type(&fields),
+                    None => self.fields_type(&fields),
                 };
                 let mut rc = self.rc(&a, scope, outer);
                 let default = match terms(&a).next() {
@@ -2674,24 +2747,38 @@ impl<'u> Lowerer<'u> {
                     },
                     None => None,
                 };
-                let refinement = self.refinement(&a, scope)?;
-                Ok(InputDecl {
-                    name,
-                    ty,
-                    default,
-                    refinement,
+                self.refinement(&a, scope)?;
+                let refinement = self.clause_at(node(&a, REFINEMENT).and_then(|r| node(&r, BODY)));
+                let i = crate::program::build::InputLowered {
+                    name: name.clone(),
                     key: false,
-                    guard: Vec::new(),
+                    ty,
+                    default: default.as_ref(),
+                    refinement,
+                    guard: None,
                     fields,
+                    rows: None,
                     span,
-                })
+                    scope: self.item_scope,
+                };
+                let gather = self
+                    .gather
+                    .as_mut()
+                    .expect("a ported statement is gathered");
+                let mut b = gather.builder(&mut self.program, span, &|_| true);
+                let item = b.input_item(i);
+                gather.done(b);
+                Ok((name, span, item))
             })();
             match r {
                 Ok(f) => out.push(f),
                 Err(Skip) => failed = true,
             }
         }
-        if failed { Err(Skip) } else { Ok(out) }
+        match failed {
+            true => Err(Skip),
+            false => Ok(out.into_iter().map(|(.., f)| f).collect()),
+        }
     }
 
     // --- declarations that lower to themselves ----------------------------
@@ -2737,7 +2824,15 @@ impl<'u> Lowerer<'u> {
         let name = dotted_text(n, 1);
         let attrs = self.attr_decls(n, scope)?;
         let kind = crate::program::ItemKind::TypeBlock { name, attrs };
-        Ok(self.program.item(self.span(n), self.item_scope, kind))
+        let item = self.program.item(self.span(n), self.item_scope, kind);
+        // The helpers its refinements made (a `not`'s rule) follow it.
+        if !self.helpers.is_empty() {
+            let made = std::mem::take(&mut self.helpers);
+            self.program
+                .terms_made
+                .insert(crate::program::NodeId::Item(item), made);
+        }
+        Ok(item)
     }
 
     /// `decl p(a, b)` declares the relation `p/2` by its columns (H-11):
@@ -3541,7 +3636,7 @@ impl<'u> Lowerer<'u> {
     /// `output k [: T] = t [where B]` (H-7): the declaration, when typed, and
     /// its value; a value that reads, or one with a condition, is the rule
     /// `output(k, t') :- B, reads`.
-    fn output(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+    fn output(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
         let span = self.span(n);
         let name = word_text(n, 1);
         if node(n, ATTR_DECL).is_some() {
@@ -3561,14 +3656,10 @@ impl<'u> Lowerer<'u> {
                 [n] => {
                     // A column of references holds the copy's resources,
                     // and never leaves a deployment (R-204).
-                    let refs = self.published_refs(scope, &name, **n, span)?;
-                    return Ok(vec![Stmt::Output(OutputDecl {
-                        name,
-                        ty: None,
-                        value: None,
-                        relation: Some(refs),
-                        span,
-                    })]);
+                    let ref_columns = self.published_refs(scope, &name, **n, span)?;
+                    let rel = crate::program::node::RelRef { name, span };
+                    let kind = crate::program::ItemKind::OutputRelation { rel, ref_columns };
+                    return Ok(self.program.item(span, self.item_scope, kind));
                 }
                 [] => {}
                 _ => {
@@ -3579,7 +3670,6 @@ impl<'u> Lowerer<'u> {
                 }
             }
         }
-        let mut out = Vec::new();
         // The declaration, once per scope (an output may have several rows);
         // with no type written, any.
         let ty = match node(n, TYPE_EXPR) {
@@ -3590,15 +3680,7 @@ impl<'u> Lowerer<'u> {
             None => TypeExpr::Name("any".to_string()),
         };
         let addr_typed = matches!(&ty, TypeExpr::Name(n) if n == "addr");
-        if self.outputs.insert((scope, name.clone())) {
-            out.push(Stmt::Output(OutputDecl {
-                name: name.clone(),
-                ty: Some(ty),
-                value: None,
-                relation: None,
-                span,
-            }));
-        }
+        let declared = self.outputs.insert((scope, name.clone())).then_some(ty);
         let Some(t) = terms(n).next() else {
             let d =
                 Diagnostic::error(span, format!("output {name} has no value")).with_help(format!(
@@ -3610,7 +3692,8 @@ impl<'u> Lowerer<'u> {
         };
         let mut rc = self.rc(n, scope, outer);
         let mut pre = self.opt_body(&mut rc, n)?;
-        let has_body = node(n, BODY).is_some();
+        let clause = self.body_clause(n);
+        let (seed, made) = (pre.len(), self.helpers.len());
         // An output typed by a resource type holds its address (`scoped` by
         // the module); any other output is a value, a resource in it the
         // reference (R-43).
@@ -3626,61 +3709,98 @@ impl<'u> Lowerer<'u> {
             _ if addr_typed => self.term(&mut rc, &t, Pos::Whole, &mut pre)?,
             _ => self.term(&mut rc, &t, Pos::Value, &mut pre)?,
         };
-        if pre.is_empty() && !has_body {
-            self.check_bound(&rc, &[], &[&value])?;
-            out.push(Stmt::Output(OutputDecl {
-                name,
-                ty: None,
-                value: Some(value),
-                relation: None,
-                span,
-            }));
-            return Ok(out);
+        let head = atom_at("output", vec![str_term(&name), value], span);
+        match pre.is_empty() && clause.is_none() {
+            true => self.check_bound(&rc, &[], &[&head.args[1]])?,
+            false => self.check_bound(&rc, &pre, &head.args.iter().collect::<Vec<_>>())?,
         }
-        let head = Atom {
-            pred: "output".to_string(),
-            args: vec![str_term(&name), value],
-            record: None,
+        let parts = (name, declared, clause, seed, made);
+        self.output_item(n, &rc, parts, head, pre)
+    }
+
+    /// An output row's item, of what it lowered to: its name, its type
+    /// where it declares the output, its clause, its value `head.args[1]`
+    /// after `pre[..seed]`, made the statement's helpers from `made`.
+    #[allow(clippy::type_complexity)]
+    fn output_item(
+        &mut self,
+        n: &SyntaxNode,
+        rc: &Rc,
+        (name, declared, clause, seed, made): (
+            String,
+            Option<TypeExpr>,
+            Option<crate::program::ClauseId>,
+            usize,
+            usize,
+        ),
+        head: Atom,
+        pre: Vec<Lit>,
+    ) -> L<ItemId> {
+        let span = self.span(n);
+        let resolved = crate::program::check::enabled().then(|| {
+            let decl = |ty, value| {
+                Stmt::Output(OutputDecl {
+                    name: name.clone(),
+                    ty,
+                    value,
+                    relation: None,
+                    span,
+                })
+            };
+            let mut stmts: Vec<Stmt> = declared
+                .iter()
+                .map(|t| decl(Some(t.clone()), None))
+                .collect();
+            stmts.push(match pre.is_empty() && clause.is_none() {
+                true => decl(None, Some(head.args[1].clone())),
+                false => Stmt::Rule(RuleStmt::new(head.clone(), pre.clone())),
+            });
+            self.resolved_with(stmts, span)
+        });
+        let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
+        let o = crate::program::build::OutputLowered {
+            name,
+            ty: declared,
             span,
+            scope: self.item_scope,
+            clause,
+            head: &head,
+            body: &pre,
+            seed,
+            made: &self.helpers[made..],
+            results: &results,
         };
-        self.check_bound(&rc, &pre, &head.args.iter().collect::<Vec<_>>())?;
-        out.push(Stmt::Rule(RuleStmt::new(head, pre)));
-        Ok(out)
+        let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
+        let written = |v: &str| written.contains(v);
+        let gather = self
+            .gather
+            .as_mut()
+            .expect("a ported statement is gathered");
+        let mut b = gather.builder(&mut self.program, span, &written);
+        let item = b.output_item(o);
+        gather.done(b);
+        if let Some(stmts) = resolved {
+            self.resolved.insert(item, stmts);
+        }
+        Ok(item)
     }
 
     /// `output k { f [: T] = t, g: { .. } } [where B]` (R-55): an object
     /// output by its fields, one value, typed by its fields' types (`any`
     /// where a field gives none).
-    fn output_object(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+    fn output_object(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
         let span = self.span(n);
         let name = word_text(n, 1);
         let mut rc = self.rc(n, scope, outer);
         let mut pre = self.opt_body(&mut rc, n)?;
+        let clause = self.body_clause(n);
+        let (seed, made) = (pre.len(), self.helpers.len());
         let (value, ty) = self.output_fields(&mut rc, n, &mut pre)?;
-        let mut out = Vec::new();
-        if self.outputs.insert((scope, name.clone())) {
-            out.push(Stmt::Output(OutputDecl {
-                name: name.clone(),
-                ty: Some(ty),
-                value: None,
-                relation: None,
-                span,
-            }));
-        }
+        let declared = self.outputs.insert((scope, name.clone())).then_some(ty);
         let head = atom_at("output", vec![str_term(&name), value], span);
         self.check_bound(&rc, &pre, &head.args.iter().collect::<Vec<_>>())?;
-        out.push(if pre.is_empty() {
-            Stmt::Output(OutputDecl {
-                name,
-                ty: None,
-                value: Some(head.args[1].clone()),
-                relation: None,
-                span,
-            })
-        } else {
-            Stmt::Rule(RuleStmt::new(head, pre))
-        });
-        Ok(out)
+        let parts = (name, declared, clause, seed, made);
+        self.output_item(n, &rc, parts, head, pre)
     }
 
     /// An object output's fields: the object term and its type.
@@ -3878,15 +3998,15 @@ impl<'u> Lowerer<'u> {
     }
 
     /// The checks of an input declared more than once beside `n` (R-104):
-    /// each under a clause, of one type; its own `__declared` row, and at
-    /// the first the denies of two that both hold.
+    /// each under a clause, of one type. Which declaration it is, and at
+    /// the first where each is (its `__declared` row and the denies of two
+    /// that both hold, `lower` writes).
     fn inputs_named(
         &mut self,
         n: &SyntaxNode,
         name: &str,
-        guard: &[Lit],
         span: Span,
-    ) -> L<Vec<Stmt>> {
+    ) -> L<Option<(usize, Vec<Span>)>> {
         let same: Vec<SyntaxNode> = n
             .parent()
             .into_iter()
@@ -3894,7 +4014,7 @@ impl<'u> Lowerer<'u> {
             .filter(|c| c.kind() == INPUT && word_text(c, 1) == name)
             .collect();
         if same.len() < 2 {
-            return Ok(Vec::new());
+            return Ok(None);
         }
         if same.first() != Some(n) && !same.iter().all(|c| node(c, CLAUSE).is_some()) {
             let d = Diagnostic::error(
@@ -3928,17 +4048,12 @@ impl<'u> Lowerer<'u> {
             ));
             return Err(Skip);
         }
-        let group = format!("input {name}");
         let i = same.iter().position(|c| c == n).unwrap_or_default();
-        let mut out = vec![crate::modules::declared(&group, i, guard.to_vec(), span)];
-        if i == 0 {
-            let sites: Vec<(String, Span)> = same
-                .iter()
-                .map(|c| (format!("input {name}"), self.span(c)))
-                .collect();
-            out.extend(crate::modules::denies(&group, &sites));
-        }
-        Ok(out)
+        let sites = match i {
+            0 => same.iter().map(|c| self.span(c)).collect(),
+            _ => Vec::new(),
+        };
+        Ok(Some((i, sites)))
     }
 
     /// The declarations of `name` by a `use` or an `instance` beside `n`,
@@ -4756,9 +4871,22 @@ impl<'u> Lowerer<'u> {
     /// when no literal is written in it); none without a body, or when
     /// nothing gathers.
     fn body_clause(&mut self, n: &SyntaxNode) -> Option<crate::program::ClauseId> {
-        let span = self.span(&node(n, BODY)?);
-        let gather = self.gather.as_mut()?;
-        Some(gather.body_clause(&mut self.program, span))
+        self.clause_at(node(n, BODY))
+    }
+
+    /// What the resolver lowered a statement at `span` to, `stmts`, for
+    /// `DFORM_CHECK_LOWER=1`: folded over its aggregates (the numbers they
+    /// take given back for the item's), then the statement's helpers.
+    /// Deleted with the switch.
+    fn resolved_with(&mut self, stmts: Vec<Stmt>, span: Span) -> Vec<Stmt> {
+        let mut out = stmts;
+        if !self.aggs.is_empty() {
+            let counters = self.program.helpers;
+            out = self.fold_aggregates(out, span).unwrap_or_default();
+            self.program.helpers = counters;
+        }
+        out.extend(self.helpers.iter().cloned());
+        out
     }
 
     /// What the resolver lowered a rule (a `let`'s too) at `span` to, for
@@ -4778,13 +4906,7 @@ impl<'u> Lowerer<'u> {
             Stmt::Rule(RuleStmt::new(head, body))
         }];
         out.extend(then);
-        if !self.aggs.is_empty() {
-            let counters = self.program.helpers;
-            out = self.fold_aggregates(out, span).unwrap_or_default();
-            self.program.helpers = counters;
-        }
-        out.extend(self.helpers.iter().cloned());
-        out
+        self.resolved_with(out, span)
     }
 
     /// The literal of `let NAME = LITERAL [@rank]` (R-211's first port): no
@@ -5404,16 +5526,21 @@ impl<'u> Lowerer<'u> {
     }
 
     /// `deny "m" {o} where B`, `warn ...`.
-    fn check(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+    /// `deny "m" [{ .. }] [where B]`, `warn ..` built as a `Check` item
+    /// (R-211 step 5): its message and detail the terms' nodes, its clause
+    /// B's goals; `lower` writes `deny(m[, detail])`.
+    fn check(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
         let span = self.span(n);
         let kw = tokens(n).next().ok_or(Skip)?;
         let msg = tokens(n).find(|t| t.kind() == STRING).ok_or(Skip)?;
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.opt_body(&mut rc, n)?;
-        let has_body = node(n, BODY).is_some();
+        let clause = self.body_clause(n);
+        let (seed, made) = (body.len(), self.helpers.len());
         // The message is a string like any other: `${e}` reads the body's
         // variables (H-13).
         let message = self.string_term(&mut rc, &msg, &mut body)?;
+        let (mid, made_mid) = (body.len(), self.helpers.len());
         let mut args = vec![message];
         if let Some(o) = node(n, OBJECT) {
             args.push(self.term(&mut rc, &o, Pos::Whole, &mut body)?);
@@ -5425,11 +5552,40 @@ impl<'u> Lowerer<'u> {
             span,
         };
         self.check_bound(&rc, &body, &atom_terms(&head))?;
-        Ok(vec![if body.is_empty() && !has_body {
-            Stmt::Fact(head)
-        } else {
-            Stmt::Rule(RuleStmt::new(head, body))
-        }])
+        let resolved = crate::program::check::enabled().then(|| {
+            let rule = (head.clone(), body.clone(), clause.is_some());
+            self.rule_resolved(rule, Vec::new(), span)
+        });
+        let kind = match kw.kind() {
+            WARN_KW => crate::program::node::CheckKind::Warn,
+            _ => crate::program::node::CheckKind::Deny,
+        };
+        let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
+        let c = crate::program::build::CheckLowered {
+            kind,
+            span,
+            scope: self.item_scope,
+            clause,
+            head: &head,
+            body: &body,
+            seed,
+            mid,
+            made: (&self.helpers[made..made_mid], &self.helpers[made_mid..]),
+            results: &results,
+        };
+        let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
+        let written = |v: &str| written.contains(v);
+        let gather = self
+            .gather
+            .as_mut()
+            .expect("a ported statement is gathered");
+        let mut b = gather.builder(&mut self.program, span, &written);
+        let item = b.check_item(c);
+        gather.done(b);
+        if let Some(stmts) = resolved {
+            self.resolved.insert(item, stmts);
+        }
+        Ok(item)
     }
 
     /// Every variable written in the statement is bound: by a relation
@@ -5527,8 +5683,14 @@ impl<'u> Lowerer<'u> {
         // nested in a literal, with the literal.
         let (seed, made) = (out.len(), self.helpers.len());
         let whole = self.nested == 0 && self.gather.is_some() && !lits.is_empty();
-        if whole && let Some(s) = &mut self.gather {
-            s.open();
+        if self.nested == 0
+            && let Some(s) = &mut self.gather
+        {
+            // The clause gathered is this body's, or none.
+            s.take_clause();
+            if whole {
+                s.open();
+            }
         }
         let mut failed = false;
         for l in lits {
@@ -9345,6 +9507,54 @@ mod tests {
         ] {
             assert!(lowered.iter().any(|l| l.contains(s)), "{s}: {lowered:#?}");
         }
+    }
+
+    /// Every form of check, output and input is built as an item (R-211
+    /// step 5) and lowers as the resolver lowers it: a deny with a detail
+    /// and an aggregate, a warn, an output declared at its first row with a
+    /// value or a rule, an object output, an exported relation, an input
+    /// with a default, a refinement, a clause and object fields, one
+    /// declared under two clauses (R-104).
+    #[test]
+    fn every_check_output_and_input_is_an_item() {
+        let src = "input size: int = 3 check size > 0\n\
+             input region: string = \"eu\" where cloud(\"aws\")\n\
+             input region: string = \"us\" where cloud(\"gcp\")\n\
+             input db { host: string = \"h\", port: int = 5432 check port > 0 }\n\
+             p(1)\np(2)\ncloud(\"aws\")\n\
+             deny \"too many: ${n}\" { n } where n = count(x), p(x), n > 1\n\
+             warn \"p ${x}\" where p(x), not { cloud(\"gcp\") }\n\
+             output total = 3\n\
+             output each = x where p(x)\n\
+             output each = 9\n\
+             output obj { a = 1, b: { c = \"d\" } }\n\
+             output p\n";
+        let (lowered, seen) = crate::program::check::collect(|| parse_as(src, true));
+        let lowered = lowered
+            .map(|p| show(&p.statements))
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
+        let items = |k: &str| seen.items.get(k).copied().unwrap_or_default();
+        assert_eq!(
+            (
+                items("a deny"),
+                items("a warn"),
+                items("an output"),
+                items("an input")
+            ),
+            (1, 1, 5, 4),
+            "{:?}",
+            seen.items
+        );
+        assert!(
+            !seen.items.keys().any(|k| k.starts_with("a statement")),
+            "{:?}",
+            seen.items
+        );
+        assert!(
+            lowered.iter().any(|l| l.contains("__agg_0")),
+            "{lowered:#?}"
+        );
     }
 
     /// Every form a written literal takes is built as a goal (R-211 step

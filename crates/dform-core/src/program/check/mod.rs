@@ -44,7 +44,7 @@ pub struct Collected {
     pub built: std::collections::BTreeSet<String>,
     /// The items of the programs compared, by kind (`a statement` is an
     /// opaque one): how far the port has come.
-    pub items: std::collections::BTreeMap<&'static str, usize>,
+    pub items: std::collections::BTreeMap<String, usize>,
     pub differences: Vec<Difference>,
 }
 
@@ -61,6 +61,28 @@ impl Collected {
             *self.items.entry(k).or_default() += n;
         }
         self.differences.extend(other.differences);
+    }
+}
+
+/// A statement's variant, in a word.
+fn stmt_kind(s: &Stmt) -> &'static str {
+    match s {
+        Stmt::Fact(_) => "Fact",
+        Stmt::Rule(_) => "Rule",
+        Stmt::Module(_) => "Module",
+        Stmt::Instance(_) => "Instance",
+        Stmt::Use(_) => "Use",
+        Stmt::Input(_) => "Input",
+        Stmt::RelationInput(_) => "RelationInput",
+        Stmt::Extern(_) => "Extern",
+        Stmt::Mixed(_) => "Mixed",
+        Stmt::Mode(_) => "Mode",
+        Stmt::Output(_) => "Output",
+        Stmt::Provider(_) => "Provider",
+        Stmt::Resource(_) => "Resource",
+        Stmt::Decl(_) => "Decl",
+        Stmt::ExternFn(_) => "ExternFn",
+        Stmt::Pending(_) => "Pending",
     }
 }
 
@@ -108,7 +130,14 @@ pub fn program(program: &Program, ported: &Resolved, new: &Lowered) {
         if let ItemKind::Module { items, .. } = kind {
             walk.extend(items.iter().copied());
         }
-        kinds.push(super::spell::kind(kind));
+        kinds.push(match kind {
+            // Not ported yet: by what it lowered to first.
+            ItemKind::Opaque(stmts) => match stmts.first() {
+                Some(s) => format!("a statement ({})", stmt_kind(s)),
+                None => "a statement".to_string(),
+            },
+            kind => super::spell::kind(kind).to_string(),
+        });
     }
     record(None, |c| {
         for k in kinds {
@@ -235,7 +264,8 @@ fn resolved_item(program: &Program, ported: &Resolved, id: ItemId, out: &mut Vec
             ItemKind::Decl { .. }
             | ItemKind::Extern { .. }
             | ItemKind::TypeBlock { .. }
-            | ItemKind::Doc { .. },
+            | ItemKind::Doc { .. }
+            | ItemKind::OutputRelation { .. },
             None,
         ) => out.extend(super::lower_item(program, id)),
         (kind, None) => panic!(

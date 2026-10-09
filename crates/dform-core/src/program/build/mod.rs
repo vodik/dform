@@ -11,21 +11,27 @@
 //! The statement builders read the tree (step 5).
 
 mod aggregate;
+mod checks;
 mod clause;
 mod each;
 mod expr;
 mod gather;
+mod inputs;
 mod lets;
 mod membership;
 mod negation;
+mod outputs;
 mod pattern;
 mod rules;
 mod spread;
 
 pub use aggregate::{grouped, number_folds};
+pub use checks::CheckLowered;
 pub use clause::{Form, Written};
 pub use gather::{Gather, Statement};
+pub use inputs::InputLowered;
 pub use lets::LetLowered;
+pub use outputs::OutputLowered;
 pub use rules::RuleLowered;
 
 use super::Program;

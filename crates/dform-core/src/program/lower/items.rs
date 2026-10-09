@@ -6,6 +6,10 @@
 //! |--------------------------------|--------------------------------------------------|
 //! | `let k[: T] = v [@r] [where B]`| `let("k", v', "r") [:- B', reads]`, folded over B's aggregates; `__secret_let("k", "p")` per secret path; `decl k(k: T)` at the first typed row |
 //! | `p(a, b) [@r] [where B]`       | `p(a', b'[, "r"]) [:- B', reads]`, folded over B's aggregates |
+//! | `deny "m" [{..}] [where B]`    | `deny(m'[, d']) [:- B', reads]`, folded over B's aggregates |
+//! | `input k: T [= d] [check B] [where G]` | itself, its fields', refinement's and clause's literals; under several clauses (R-104) where each holds and the deny where two do |
+//! | `output k[: T] = v [where B]`  | its declaration at its first row; the value, or `output("k", v') :- B', reads` |
+//! | `output p`                     | itself, its reference columns marked             |
 //! | `decl p(a: T) [mixed]`         | `mixed p/1` or (fed from outside) `extern p/1`, then `decl p(a: T)` |
 //! | `extern f(+a: T, -b)`          | itself                                           |
 //! | `type T { .. }`                | itself, pending (`PendingKind::TypeDecl`)        |
@@ -17,7 +21,7 @@
 use super::clause::folded;
 use super::expr::Lowering;
 use crate::ast::{self, Atom, Decl, Rank, RuleStmt, Span, Stmt, TypeExpr, str_term};
-use crate::program::node::{ClauseId, ExprId, Head, ItemId, ItemKind, RelRef};
+use crate::program::node::{CheckKind, ClauseId, ExprId, Head, ItemId, ItemKind, RelRef};
 use crate::program::{NodeId, Origin, Program};
 
 /// The statements of the item `id`, onto `out`, one origin each.
@@ -63,6 +67,42 @@ pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: 
             l.statements(program, it.span)
         }
         ItemKind::Rule { head, clause, rank } => rule(program, id, (head, *rank), *clause, it.span),
+        ItemKind::Check {
+            kind,
+            message,
+            detail,
+            clause,
+        } => check(program, *kind, (*message, *detail), *clause, it.span),
+        ItemKind::Input { name, rows, .. } => {
+            let (decl, helpers) = input(program, id);
+            let mut out = vec![Stmt::Input(decl.clone())];
+            if let Some((i, sites)) = rows {
+                // Declared under clauses (R-104): where each holds, and a
+                // deny where two do.
+                let group = format!("input {name}");
+                out.push(crate::modules::declared(&group, *i, decl.guard, it.span));
+                if *i == 0 {
+                    let sites: Vec<(String, Span)> =
+                        sites.iter().map(|s| (group.clone(), *s)).collect();
+                    out.extend(crate::modules::denies(&group, &sites));
+                }
+            }
+            out.extend(helpers);
+            out
+        }
+        ItemKind::Output {
+            name,
+            ty,
+            value,
+            clause,
+        } => output(program, (name, ty.as_ref()), *value, *clause, it.span),
+        ItemKind::OutputRelation { rel, ref_columns } => vec![Stmt::Output(ast::OutputDecl {
+            name: rel.name.clone(),
+            ty: None,
+            value: None,
+            relation: Some(ref_columns.clone()),
+            span: it.span,
+        })],
         ItemKind::Decl {
             rel,
             columns,
@@ -74,13 +114,19 @@ pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: 
             args: args.clone(),
             span: it.span,
         })],
-        ItemKind::TypeBlock { name, attrs } => vec![Stmt::Pending(ast::Pending {
-            kind: ast::PendingKind::TypeDecl {
-                name: name.clone(),
-                attrs: attrs.clone(),
-            },
-            span: it.span,
-        })],
+        ItemKind::TypeBlock { name, attrs } => {
+            let pending = Stmt::Pending(ast::Pending {
+                kind: ast::PendingKind::TypeDecl {
+                    name: name.clone(),
+                    attrs: attrs.clone(),
+                },
+                span: it.span,
+            });
+            let made = program.terms_made.get(&NodeId::Item(id));
+            std::iter::once(pending)
+                .chain(made.into_iter().flatten().cloned())
+                .collect()
+        }
         ItemKind::Doc { kind, name, pairs } => pairs
             .iter()
             .map(|(k, v)| {
@@ -130,13 +176,159 @@ fn rule(
         l.goal(g, &mut body);
     }
     l.terms_made(NodeId::Item(id));
-    let mut out = match (folds.is_empty(), clause) {
-        (false, _) => folded(atom, body, folds, span),
-        (true, None) if body.is_empty() => vec![Stmt::Fact(atom)],
-        (true, _) => vec![Stmt::Rule(RuleStmt::new(atom, body))],
-    };
+    let mut out = clause_rule(atom, body, folds, clause.is_some(), span);
     out.append(&mut l.helpers);
     out
+}
+
+/// `deny "m" [{ .. }] [where B]`, `warn ..`: `deny(m[, detail])`, a fact
+/// or a rule over B's literals and the reads the message and the detail
+/// hoisted, its aggregates folded.
+fn check(
+    program: &Program,
+    kind: CheckKind,
+    (message, detail): (ExprId, Option<ExprId>),
+    clause: Option<ClauseId>,
+    span: Span,
+) -> Vec<Stmt> {
+    let mut l = Lowering::new(program);
+    let (mut body, folds) = match clause {
+        Some(c) => l.unfolded(c),
+        None => Default::default(),
+    };
+    let mut args = vec![l.expr(message)];
+    body.append(&mut l.reads);
+    if let Some(d) = detail {
+        args.push(l.expr(d));
+        body.append(&mut l.reads);
+    }
+    let pred = match kind {
+        CheckKind::Deny => "deny",
+        CheckKind::Warn => "warn",
+    };
+    let head = Atom {
+        pred: pred.to_string(),
+        args,
+        record: None,
+        span,
+    };
+    let mut out = clause_rule(head, body, folds, clause.is_some(), span);
+    out.append(&mut l.helpers);
+    out
+}
+
+/// `output k[: T] = v [where B]`: the output declared (at its first
+/// row), then its value: as it is when nothing is read, else the rule
+/// `output("k", v) :- B', reads`, folded over B's aggregates.
+fn output(
+    program: &Program,
+    (name, ty): (&str, Option<&TypeExpr>),
+    value: Option<ExprId>,
+    clause: Option<ClauseId>,
+    span: Span,
+) -> Vec<Stmt> {
+    let decl = |ty: Option<TypeExpr>, value| {
+        Stmt::Output(ast::OutputDecl {
+            name: name.to_string(),
+            ty,
+            value,
+            relation: None,
+            span,
+        })
+    };
+    let mut out: Vec<Stmt> = ty
+        .map(|t| decl(Some(t.clone()), None))
+        .into_iter()
+        .collect();
+    let Some(value) = value else {
+        return out;
+    };
+    let mut l = Lowering::new(program);
+    let (mut body, folds) = match clause {
+        Some(c) => l.unfolded(c),
+        None => Default::default(),
+    };
+    let v = l.expr(value);
+    body.append(&mut l.reads);
+    if body.is_empty() && clause.is_none() {
+        out.push(decl(None, Some(v)));
+    } else {
+        let head = Atom {
+            pred: "output".into(),
+            args: vec![str_term(name), v],
+            record: None,
+            span,
+        };
+        out.extend(clause_rule(head, body, folds, true, span));
+    }
+    out.append(&mut l.helpers);
+    out
+}
+
+/// The input `id` declared, and the helper statements its fields', its
+/// refinement's and its clause's bodies made, in that order.
+fn input(program: &Program, id: ItemId) -> (ast::InputDecl, Vec<Stmt>) {
+    let it = &program.items[id];
+    let ItemKind::Input {
+        name,
+        key,
+        ty,
+        default,
+        refinement,
+        guard,
+        fields,
+        ..
+    } = &it.kind
+    else {
+        unreachable!("an input")
+    };
+    let mut helpers = Vec::new();
+    let fields = fields
+        .iter()
+        .map(|&f| {
+            let (decl, made) = input(program, f);
+            helpers.extend(made);
+            decl
+        })
+        .collect();
+    let default = default.map(|d| super::lower_expr(program, d).0);
+    let mut body = |c: &Option<ClauseId>| match c {
+        Some(c) => {
+            let (lits, made) = super::lower_clause(program, *c, &[]);
+            helpers.extend(made);
+            lits
+        }
+        None => Vec::new(),
+    };
+    let refinement = body(refinement);
+    let guard = body(guard);
+    let decl = ast::InputDecl {
+        name: name.clone(),
+        ty: ty.clone(),
+        default,
+        refinement,
+        key: *key,
+        guard,
+        fields,
+        span: it.span,
+    };
+    (decl, helpers)
+}
+
+/// `head` over `body`: a fact when nothing is written after `where` and
+/// nothing read, else a rule, folded over `folds`.
+fn clause_rule(
+    head: Atom,
+    body: Vec<ast::Lit>,
+    folds: Vec<super::clause::Fold>,
+    has_clause: bool,
+    span: Span,
+) -> Vec<Stmt> {
+    match (folds.is_empty(), has_clause) {
+        (false, _) => folded(head, body, folds, span),
+        (true, false) if body.is_empty() => vec![Stmt::Fact(head)],
+        (true, _) => vec![Stmt::Rule(RuleStmt::new(head, body))],
+    }
 }
 
 /// `decl p(a: T, ..) [mixed]` (H-11): the relation's columns, after
@@ -199,11 +391,7 @@ impl Let<'_> {
             record: None,
             span,
         };
-        let mut out = match (folds.is_empty(), self.clause) {
-            (false, _) => folded(head, body, folds, span),
-            (true, None) if body.is_empty() => vec![Stmt::Fact(head)],
-            (true, _) => vec![Stmt::Rule(RuleStmt::new(head, body))],
-        };
+        let mut out = clause_rule(head, body, folds, self.clause.is_some(), span);
         for (q, _) in self.ty.iter().flat_map(|d| crate::types::secret_fields(d)) {
             out.push(Stmt::Fact(Atom {
                 pred: crate::modules::SECRET_LET.into(),
