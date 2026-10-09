@@ -505,7 +505,7 @@ impl Surface<'_, '_> {
     fn fact_text(&self, f: &Fact) -> String {
         let r = self.p.redact;
         match (f.pred.as_str(), f.args.as_slice()) {
-            ("want", [Value::Str(t), Value::Str(a)]) => super::address(&Address {
+            ("want", [Value::Str(t), Value::Str(a)]) => crate::report::address(&Address {
                 typ: t.clone(),
                 name: a.clone(),
             }),
@@ -1370,18 +1370,20 @@ impl Printer<'_> {
             })
             .collect();
         let (top, merged) = match attr.args.as_slice() {
-            [_, _, Term::Val(Value::Str(p)), Term::Val(v)] => (super::fold::tokens(p).len(), v),
+            [_, _, Term::Val(Value::Str(p)), Term::Val(v)] => {
+                (crate::report::fold::tokens(p).len(), v)
+            }
             _ => return none(),
         };
         // Each contribution followed to the leaves once per prefix: a
         // list's element is matched against the merged list's once, not
         // once per leaf under it (a CRD's `versions[0]` holds hundreds).
-        let mut memos: Vec<super::fold::Reached> =
+        let mut memos: Vec<crate::report::fold::Reached> =
             vec![std::collections::HashMap::new(); contributions.len()];
         paths
             .iter()
             .map(|p| {
-                let toks = super::fold::tokens(p);
+                let toks = crate::report::fold::tokens(p);
                 contributions
                     .iter()
                     .zip(memos.iter_mut())
@@ -1641,13 +1643,13 @@ fn contribution_focus(fact: &Fact, path: &str) -> Option<Focus> {
     let at = fact.args.get(2).and_then(Value::as_str).unwrap_or_default();
     let skip = match at.ends_with(crate::transform::ELEM) {
         true => usize::MAX,
-        false => super::fold::tokens(at).len(),
+        false => crate::report::fold::tokens(at).len(),
     };
-    let keys: Vec<String> = super::fold::tokens(path)
+    let keys: Vec<String> = crate::report::fold::tokens(path)
         .into_iter()
         .skip(skip)
         .map_while(|t| match t.step {
-            super::fold::Step::Key(k) => Some(crate::ir::segment_key(&k).into_owned()),
+            crate::report::fold::Step::Key(k) => Some(crate::ir::segment_key(&k).into_owned()),
             _ => None,
         })
         .collect();
@@ -1657,17 +1659,17 @@ fn contribution_focus(fact: &Fact, path: &str) -> Option<Focus> {
 /// Whether contribution `f` (an `arg/5`) holds the leaf at printed path
 /// `toks`: its path is a prefix, and its value has the rest.
 fn holds<'v>(
-    memo: &mut super::fold::Reached<'v, 'v>,
+    memo: &mut crate::report::fold::Reached<'v, 'v>,
     f: &'v Fact,
-    toks: &[super::fold::Tok],
+    toks: &[crate::report::fold::Tok],
     merged: &'v Value,
     top: usize,
 ) -> bool {
-    use super::fold::Step;
+    use crate::report::fold::Step;
     // The merged value where the contribution's path ends: a list's
     // element is found in a contribution by its value, not its position
     // in the merged list.
-    let merged_at = |n: usize| super::fold::reach(merged, &toks[top.min(n)..n]);
+    let merged_at = |n: usize| crate::report::fold::reach(merged, &toks[top.min(n)..n]);
     let (Some(at), Some(v)) = (f.args.get(2).and_then(Value::as_str), f.args.get(3)) else {
         return false;
     };
@@ -1676,7 +1678,7 @@ fn holds<'v>(
         _ => None,
     };
     let prefix = |p: &str| -> Option<usize> {
-        let ptoks = super::fold::tokens(p);
+        let ptoks = crate::report::fold::tokens(p);
         let same = ptoks.len() <= toks.len()
             && ptoks
                 .iter()
@@ -1695,14 +1697,17 @@ fn holds<'v>(
             return false;
         };
         let matches = match k {
-            Value::Obj(_) => super::fold::keyed(k, pairs),
+            Value::Obj(_) => crate::report::fold::keyed(k, pairs),
             k => matches!(pairs.as_slice(), [(_, want)] if spell::bare(k) == *want),
         };
         let elem = merged_at(n + 1);
-        return matches && super::fold::reach_along(content, elem, &toks[n + 1..]).is_some();
+        return matches
+            && crate::report::fold::reach_along(content, elem, &toks[n + 1..]).is_some();
     }
     match prefix(at) {
-        Some(n) => super::fold::reach_along_memo(memo, v, merged_at(n), &toks[n..]).is_some(),
+        Some(n) => {
+            crate::report::fold::reach_along_memo(memo, v, merged_at(n), &toks[n..]).is_some()
+        }
         None => false,
     }
 }
@@ -2273,7 +2278,7 @@ impl Surface<'_, '_> {
                 let r = rank_of(f).1;
                 w.lost.push(Step {
                     expr: match f.args.get(3) {
-                        Some(whole) => super::surface_in(
+                        Some(whole) => crate::report::surface_in(
                             self.p.redact,
                             whole,
                             focus.map(|f| f.keys.as_slice()).unwrap_or_default(),
@@ -2336,7 +2341,7 @@ impl Surface<'_, '_> {
         let secret = match (value, fact.pred.as_str(), fact.args.get(3)) {
             (Some(v), "arg" | "attr", Some(whole)) => {
                 self.p.redact.is_secret(v)
-                    || super::surface_in(
+                    || crate::report::surface_in(
                         self.p.redact,
                         whole,
                         focus.map(|f| f.keys.as_slice()).unwrap_or_default(),
@@ -2347,11 +2352,11 @@ impl Surface<'_, '_> {
             _ => false,
         };
         let expr = match (&rhs, value) {
-            (Some(r), _) if secret => super::masked(r),
+            (Some(r), _) if secret => crate::report::masked(r),
             (Some(r), _) => r.clone(),
             // A plain leaf of a secret object is `(sensitive)` too.
             (None, Some(v)) => match (fact.pred.as_str(), fact.args.get(3)) {
-                ("arg" | "attr", Some(whole)) => super::surface_in(
+                ("arg" | "attr", Some(whole)) => crate::report::surface_in(
                     self.p.redact,
                     whole,
                     focus.map(|f| f.keys.as_slice()).unwrap_or_default(),
@@ -2677,7 +2682,7 @@ fn cell(t: &str, a: &str, p: &str) -> String {
     match t {
         "input" | "let" | "output" if a.is_empty() => format!("{t} {p}"),
         "input" | "let" | "output" => format!("{t} {a}.{p}"),
-        _ => super::attribute(
+        _ => crate::report::attribute(
             &Address {
                 typ: t.to_string(),
                 name: a.to_string(),
@@ -3046,7 +3051,7 @@ impl Cx<'_> {
         let typ = self.want_type(var);
         match (typ, v) {
             (Some(Value::Str(t)), Value::Str(name)) if !redact.is_secret(v) => {
-                super::address(&Address {
+                crate::report::address(&Address {
                     typ: t,
                     name: name.clone(),
                 })
