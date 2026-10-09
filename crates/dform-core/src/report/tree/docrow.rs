@@ -1,7 +1,8 @@
 //! A value a loader read (R-131): the plan says it by its row in the document it
 //! came from (`crds.yml:412`), not by the statement that read the document.
 
-use super::{Compress, Printer};
+use super::compress::Compress;
+use super::printer::Printer;
 use crate::ast::{Lit, RuleStmt, Term};
 use crate::circuit::{Circuit, Fact, Leaf, NodeId, View};
 use crate::engine;

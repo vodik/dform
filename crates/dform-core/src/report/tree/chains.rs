@@ -2,8 +2,11 @@
 //! `= EXPR   SITE` from where it was written through the cells that passed it on,
 //! and the writes it beat; a contribution's part followed the same way.
 
+use super::compress::Compress;
+use super::printer::{Focus, Printer};
+use super::sites::Site;
 use super::statement::is_check;
-use super::{Compress, Focus, Printer, Site, Surface};
+use super::surface::Surface;
 use crate::ast::{Atom, RuleStmt};
 use crate::circuit::{Circuit, Fact, Leaf, NodeId, View};
 use crate::engine;

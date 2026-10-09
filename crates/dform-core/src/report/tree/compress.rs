@@ -1,8 +1,10 @@
 //! A derivation compressed to its leaves (`plan --why`, `diff`): walked
 //! through the shortest alternative of each fact, each line a `Because`.
 
+use super::because::Because;
+use super::printer::{Focus, plan_text};
 use super::sites::{base_parts, table_row};
-use super::{Because, Focus, Surface, plan_text};
+use super::surface::Surface;
 use crate::circuit::{Circuit, Leaf, NodeId, View};
 use crate::value::Value;
 use std::collections::BTreeMap;

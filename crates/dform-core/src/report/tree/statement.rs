@@ -3,7 +3,7 @@
 //! shown with its value as the firing bound it (`Cx`), a call evaluated as the
 //! engine would.
 
-use super::{place_in, structured};
+use super::docrow::{place_in, structured};
 use crate::ast::{Atom, Lit, RuleStmt, Term};
 use crate::circuit::Fact;
 use crate::engine;

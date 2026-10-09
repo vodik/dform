@@ -2,9 +2,9 @@
 //! as its statement at `file:line`, its bindings by the source's names, a derived
 //! fact as its address, an aggregate as the contributions it merged.
 
+use super::printer::{Focus, Printer, Walk, leaf_text, plan_text, world_text};
 use super::sites::{Site, base_place, cell, rank_text};
 use super::statement::{Cx, Shown, collapse, is_check, statement_at};
-use super::{Focus, Printer, Walk, leaf_text, plan_text, world_text};
 use crate::ast::{Lit, RuleStmt, Term};
 use crate::circuit::{Fact, Leaf, NodeId, View};
 use crate::ir::Address;

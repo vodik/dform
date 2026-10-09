@@ -6,9 +6,9 @@ use super::chains::{
     FOLLOW, contribution_focus, field_of, holds, passed_cell, placeholder, rank_of,
 };
 use super::compress::Compress;
+use super::printer::{Focus, Printer};
 use super::statement::{Cx, collapse, is_check, statement_at};
 use super::surface::Surface;
-use super::{Focus, Printer};
 use crate::ast::{Atom, RuleStmt, Term};
 use crate::circuit::{Circuit, Fact, Leaf, NodeId, View};
 use crate::engine;
