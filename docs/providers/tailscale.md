@@ -3,7 +3,8 @@
 `dform-provider-tailscale` manages one tailnet over the Tailscale API v2:
 its policy file (`tailscale.acl`), its auth keys (`tailscale.auth_key`),
 its DNS settings (`tailscale.dns`) and the devices on it
-(`tailscale.device`); its users are a data source (`tailscale.user`). It
+(`tailscale.device`); its users are a data source (`tailscale.user`), and
+so are its devices, adopted or not (`tailscale.device(..)`). It
 is a native provider written with the SDK (`crates/dform-sdk`): every
 request goes through dform's HTTP client ("Writing a provider",
 docs/providers.md).
@@ -204,10 +205,21 @@ name and role (`owner`, `admin`, `member`, ..):
 deny "${l} is an admin" where tailscale.user("vodik.github", l, "admin")
 ```
 
+`tailscale.device(+tailnet, -hostname, -id, -addresses, -tags, -os,
+-authorized, -last_seen)`: every device the tailnet lists, adopted or
+not, under the type's own name. The relation is the tailnet's devices;
+`d in tailscale.device` is still the program's own (the devices it
+adopts), so a policy over those never ranges over the tailnet. A node
+that did not join is a deny:
+
+```dform
+deny "k3s-2 is not on the tailnet" where not {
+  tailscale.device("vodik.github", "k3s-2", _, _, _, _, _, _)
+}
+```
+
 ## Not yet
 
-- The devices the tailnet lists, adopted or not, as facts a policy reads
-  (`d in tailscale.device`): R-196.
 - Removal of a device from the program letting it go by default (a
   type's default `retain`, `lifecycle(d, "destroy")` to remove it): a
   removal removes it today.

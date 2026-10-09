@@ -297,6 +297,7 @@ program reads like any relation with no `extern` line:
 ovh.region(+project, -name, -status)
 ovh.flavor(+region, -name, -vcpus: int, -ram: bytes, -disk: bytes)
 ovh.image(+region, -name, -id, -distribution)
+ovh.zone(+name, -id, -nameservers)
 
 resource ovh.instance db {
   name = "db"
@@ -309,6 +310,25 @@ resource ovh.instance db {
 `ovh.flavor` lists the region's available flavors (RAM and disk as the
 API counts them, MiB and GiB); `ovh.image` its active images, the
 distribution being the first word of the image's name.
+
+`ovh.zone` is a DNS zone the account hosts (`GET /domain/zone/{zone}`):
+its id the name the API keys it by, what a record's `zone` names, and
+its nameservers as the API lists them; a zone the account does not host
+has no row. A record whose clause reads a missing row is simply not
+wanted, which is correct and silent, so the deny is what makes the
+absence loud; the refusal above stays as the backstop:
+
+```dform
+let zone = "vodik.xyz"
+deny "the zone ${zone} is not hosted on this account" where not { ovh.zone(zone, _, _) }
+
+resource ovh.domain_record k8s {
+  zone = z
+  subdomain = "k8s-lab"
+  type = "A"
+  target = "51.79.29.179"
+} where ovh.zone(zone, z, _)
+```
 
 ## What a Create that does not answer does
 

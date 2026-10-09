@@ -250,7 +250,11 @@ fn main() -> std::process::ExitCode {
 - A data source is an `extern_decl` fact given to
   `Typed::facts_text` (`provider_setting` facts too), answered by
   `Provider::query(pred, inputs)`; asked before the program's settings
-  came, the SDK answers it not yet.
+  came, the SDK answers it not yet. It may take one of the provider's
+  types' names (`tailscale.device`, R-196): the relation `T(..)` is then
+  what the provider lists, managed or not, and `x in T` stays the
+  program's own resources of `T`, so a policy over them never ranges
+  over the account.
 
 Not yet in the typed layer: refinements on secret paths (an Apply with
 assertions is refused saying so), the `managed` capability, and schema
@@ -299,7 +303,7 @@ on both; tests/host_wasm.rs keeps them from drifting.
 |---|---|---|---|
 | `postgres` (`crates/dform-provider-postgres`) | the SDK's typed layer | native only: it dials the server itself | docs/providers/postgres.md |
 | `vault` (`crates/dform-provider-vault`) | the SDK's typed layer, a scheme and no resource | native: every request through the host's HTTP client | docs/providers/vault.md |
-| `tailscale` (`crates/dform-provider-tailscale`) | the SDK's typed layer: a tailnet's policy file, auth keys (held), DNS and devices (adopted), its users a data source | native: every request through the host's HTTP client | docs/providers/tailscale.md |
+| `tailscale` (`crates/dform-provider-tailscale`) | the SDK's typed layer: a tailnet's policy file, auth keys (held), DNS and devices (adopted), its users and devices data sources | native: every request through the host's HTTP client | docs/providers/tailscale.md |
 
 ## Grants and credentials
 
