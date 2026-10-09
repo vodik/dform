@@ -367,7 +367,7 @@ impl StateMv {
             bail!("state mv: stack {deployment} already has an object at {new}");
         }
         let (from, to) = (old.to_string(), new.to_string());
-        st.apply_moves(&[(old, new)]);
+        st.apply_moves(&[(old, new)])?;
         dep.save_state(&st)?;
         audit.append(
             "state_mv",

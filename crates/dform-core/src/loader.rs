@@ -93,8 +93,8 @@ struct Mounts {
 enum Target {
     /// A module's file: its module path, its canonical file.
     File(String, PathBuf),
-    /// A stack, deployed by the tool.
-    Stack(crate::syntax::resolve::Deployed),
+    /// A stack, deployed by the tool, and its canonical file.
+    Stack(crate::syntax::resolve::Deployed, PathBuf),
     /// The standard library.
     Std,
     /// Nothing: the files it could have been.
@@ -217,15 +217,18 @@ impl Mounts {
                 .unwrap_or_default();
             let outputs = tree.as_ref().map(crate::syntax::resolve::output_names);
             let stem = crate::state::stack_name(&found);
-            return Target::Stack(crate::syntax::resolve::Deployed {
-                path: module,
-                name: match prefix {
-                    Some(p) => format!("{p}.{stem}"),
-                    None => stem,
+            return Target::Stack(
+                crate::syntax::resolve::Deployed {
+                    path: module,
+                    name: match prefix {
+                        Some(p) => format!("{p}.{stem}"),
+                        None => stem,
+                    },
+                    keys,
+                    outputs,
                 },
-                keys,
-                outputs,
-            });
+                found,
+            );
         }
         Target::File(module, found)
     }
@@ -348,7 +351,7 @@ fn load_units(
                         };
                         edges.push((i, j, span));
                     }
-                    Target::Stack(d) => {
+                    Target::Stack(d, f) => {
                         // An entry file that is no stack making a resource
                         // of one is a project module (R-114); in any other
                         // file the resolver says a stack is `use`d.
@@ -356,6 +359,7 @@ fn load_units(
                             loaded.units[i].project = true;
                         }
                         if !loaded.deployed.iter().any(|x| x.path == d.path) {
+                            errors.extend(unparsed(&d, &f, read));
                             loaded.deployed.push(d);
                         }
                     }
@@ -365,8 +369,9 @@ fn load_units(
             }
             match mounts.lookup(&path) {
                 Target::Std => {}
-                Target::Stack(d) => {
+                Target::Stack(d, f) => {
                     if !loaded.deployed.iter().any(|x| x.path == d.path) {
+                        errors.extend(unparsed(&d, &f, read));
                         loaded.deployed.push(d);
                     }
                 }
@@ -590,6 +595,24 @@ pub fn program_files(entry_files: &[PathBuf]) -> Result<Vec<PathBuf>> {
 pub fn is_project_module(file: &Path) -> bool {
     load_units(&[file.to_path_buf()], &|p| fs::read_to_string(p))
         .is_ok_and(|l| l.units.first().is_some_and(|u| u.project))
+}
+
+/// A stack another file reads whose own file does not parse (`Deployed::outputs`
+/// is `None`): its syntax errors, once, so the reader's run says them, not
+/// what a read of a stack with no keys and no outputs would be.
+fn unparsed(
+    d: &crate::syntax::resolve::Deployed,
+    file: &Path,
+    read: &dyn Fn(&Path) -> std::io::Result<String>,
+) -> Vec<diag::Diagnostic> {
+    if d.outputs.is_some() {
+        return Vec::new();
+    }
+    let Ok(text) = read(file) else {
+        return Vec::new();
+    };
+    let parse = crate::syntax::parser::parse(&text);
+    crate::parser::syntax_diagnostics(&display_name(file), &text, &parse).0
 }
 
 /// Parse `abs` (canonical) into a unit: an entry file, or with `module`

@@ -393,11 +393,13 @@ impl Tree<'_> {
                 true => state,
                 false => format!("{state}  (not listed: a listed deployment reads it)"),
             };
-            // What it is applied after: what it reads (R-30).
+            // What it is applied after: what it reads (R-30), less what
+            // its state says it already waits on (`.. after X is applied`).
             let after: Vec<&str> = order
                 .iter()
                 .filter(|o| d.reads.contains(&o.name))
                 .map(|o| o.full.as_str())
+                .filter(|full| !state.contains(&format!("after {full} is applied")))
                 .collect();
             if !after.is_empty() && !gone && !matches!(node.kind, ActionKind::Noop) {
                 state.push_str(&format!("  after {}", after.join(", ")));

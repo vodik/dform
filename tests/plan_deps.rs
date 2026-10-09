@@ -56,7 +56,7 @@ fn a_dependency_never_applied_is_planned_first_and_its_known_outputs_flow() {
         headers(&r.stdout),
         [
             "+ stacks.platform[env=lab] stacks/platform.df never applied, 2 changes (2 create) over 1 tick",
-            "+ stacks.apps[env=lab] stacks/apps.df never applied, 1 change (1 create) over 1 tick; 1 create after stacks.platform[env=lab] is applied after stacks.platform[env=lab]",
+            "+ stacks.apps[env=lab] stacks/apps.df never applied, 1 change (1 create) over 1 tick; 1 create after stacks.platform[env=lab] is applied",
         ],
         "{}",
         r.stdout
@@ -119,6 +119,27 @@ fn a_dependency_s_plan_failing_stops_the_chain() {
     );
     assert!(r.stderr.contains("missing.txt"), "{}", r.stderr);
     assert!(!r.stdout.contains("net.vpc known"), "{}", r.stdout);
+}
+
+/// A dependency whose file does not parse: its reader's run says the
+/// parse error, where it is, not what reading a stack with no outputs
+/// would be.
+#[test]
+fn a_dependency_that_does_not_parse_is_its_parse_error() {
+    let s = project("deps-unparsed");
+    s.write(
+        "stacks/platform.df",
+        &PLATFORM.replace("cidr = \"10.0.0.0/16\" }", "cidr = \"10.0.0.0/16\""),
+    );
+    for args in [
+        &["plan", "apps", "env=lab"][..],
+        &["apply", "apps", "env=lab", "--yes"],
+    ] {
+        let r = s.run(args);
+        assert_eq!(r.code, Some(1), "{}\n{}", r.stdout, r.stderr);
+        assert!(r.stderr.contains("stacks/platform.df:"), "{}", r.stderr);
+        assert!(!r.stderr.contains("is deployed"), "{}", r.stderr);
+    }
 }
 
 /// A stack that reads no other plans as it did: its deployment line,

@@ -1686,7 +1686,8 @@ impl Evaluator {
         obs: &mut dyn Observer,
     ) -> Result<(EvalResult, Vec<String>, Vec<(Address, Address)>)> {
         let (mut res, mut violations) = self.evaluate(st)?;
-        let moves = st.apply_moves(&zset::Lifecycle::from_facts(&res.facts, self.schema())?.moved);
+        let moves =
+            st.apply_moves(&zset::Lifecycle::from_facts(&res.facts, self.schema())?.moved)?;
         if !moves.is_empty() {
             (res, violations) = self.evaluate(st)?;
         }

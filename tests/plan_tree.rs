@@ -109,32 +109,55 @@ fn why_takes_a_short_name_where_it_is_unique() {
     assert!(r.stdout.starts_with("key env = \"lab\""), "{}", r.stdout);
 }
 
-/// Not yet (R-200): `moved` takes the old address as state has it; a
-/// short one (`moved(net.vpc, "vm", ..)` for `k3s.agent-0.vm`) is not
-/// resolved against state.
+/// `moved` takes the old address by a short name where it is unique
+/// (`"sub"` for state's `k3s.sub`), as `why` does; one several objects of
+/// the type end in is an error naming each.
 #[test]
-#[ignore = "R-200: moved takes a full old address only"]
 fn moved_takes_a_short_old_name_where_it_is_unique() {
     let s = project("tree-moved");
     s.run(&["apply", "platform", "env=lab", "--yes"]).success();
     s.write(
+        "k3s.df",
+        &K3S.replace("net.subnet sub ", "net.subnet subnet "),
+    );
+    s.write(
         "stacks/platform.df",
-        &PLATFORM
-            .replace("resource net.vpc edge", "resource net.vpc border")
-            .replace(
-                "output cidr",
-                "moved(net.vpc, \"edge\", border)\noutput cidr",
-            ),
+        &PLATFORM.replace(
+            "output cidr = k3s.sub.cidr",
+            "moved(net.subnet, \"sub\", k3s.subnet)\noutput cidr = k3s.subnet.cidr",
+        ),
     );
     let r = s.run(&["plan", "platform", "env=lab"]).success();
-    assert!(r.stdout.contains("moved"), "{}", r.stdout);
+    assert!(
+        r.stdout
+            .contains("moved net.subnet[\"k3s.sub\"] -> net.subnet[\"k3s.subnet\"]\n"),
+        "{}",
+        r.stdout
+    );
+    assert!(r.stdout.contains("up to date"), "{}", r.stdout);
+    s.write("k3s.df", K3S);
+    s.write(
+        "stacks/platform.df",
+        &PLATFORM.replace(
+            "output cidr",
+            "resource net.vpc node { cidr = \"10.5.0.0/16\" }\nmoved(net.vpc, \"vm\", node)\noutput cidr",
+        ),
+    );
+    let r = s.run(&["plan", "platform", "env=lab"]).failure();
+    assert!(
+        r.stderr.contains(
+            "moved(net.vpc, \"vm\", ..): vm is the short name of net.vpc k3s.agent-0.vm and \
+             net.vpc k3s.agent-1.vm; name one by its full name"
+        ),
+        "{}",
+        r.stderr
+    );
 }
 
-/// Not yet (R-200): `why` resolves a resource's short name; a `let`'s, an
-/// input's or a relation's of a module (`why region` for `config.region`)
-/// is answered as the scope question it was.
+/// `why` resolves a used module's value by its short name (`why region`
+/// for `k3s.region`) as it does a resource's; one several scopes declare
+/// is an error naming each.
 #[test]
-#[ignore = "R-200: why's short names reach resources only"]
 fn why_takes_a_module_value_s_short_name() {
     let s = project("tree-why-value");
     s.write("k3s.df", &format!("{K3S}let region = \"bhs5\"\n"));
@@ -143,5 +166,13 @@ fn why_takes_a_module_value_s_short_name() {
         r.stdout.starts_with("let k3s.region = \"bhs5\""),
         "{}",
         r.stdout
+    );
+    let r = s.run(&["why", "index", "platform"]).failure();
+    assert!(
+        r.stderr.contains(
+            "why index: index is the short name of k3s.agent-0.index and k3s.agent-1.index"
+        ),
+        "{}",
+        r.stderr
     );
 }

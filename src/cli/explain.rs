@@ -319,9 +319,10 @@ impl Why {
 }
 
 /// `why`'s pattern with a resource's short name (`sub`, `net.subnet sub`)
-/// as its full one (`net.subnet k3s.sub`, R-200): a name is legal where it
-/// is unique, and one several resources end in is an error naming each. A
-/// pattern that names a resource or a value as it is stays.
+/// as its full one (`net.subnet k3s.sub`, R-200), and a used module's or a
+/// copy's value's (`region` as `k3s.region`): a name is legal where it is
+/// unique, and one several end in is an error naming each. A pattern that
+/// names a resource or a value as it is stays.
 fn short_name(pattern: &str, res: &crate::engine::EvalResult) -> Result<String> {
     let (typ, name) = match pattern.split_once(' ') {
         Some((t, n)) => (Some(t), n),
@@ -360,16 +361,41 @@ fn short_name(pattern: &str, res: &crate::engine::EvalResult) -> Result<String> 
         return Ok(pattern.to_string());
     }
     let suffix = format!(".{name}");
-    let ends: Vec<&ir::Address> = wanted
+    let mut ends: Vec<String> = wanted
         .iter()
         .filter(of_type)
         .filter(|a| a.name.ends_with(&suffix))
+        .map(report::address)
         .collect();
+    // A used module's or a copy's value by its name in that scope
+    // (`region` for `k3s.region`), its full name its scope's path.
+    if typ.is_none() {
+        let cells = [crate::modules::INPUT, crate::modules::LET];
+        let values: std::collections::BTreeSet<String> = res
+            .facts
+            .iter()
+            .filter_map(|a| match (a.pred.as_str(), a.args.as_slice()) {
+                (
+                    "attr",
+                    [
+                        Term::Val(Value::Str(k)),
+                        Term::Val(Value::Str(scope)),
+                        Term::Val(Value::Str(n)),
+                        ..,
+                    ],
+                ) if cells.contains(&k.as_str()) && !scope.is_empty() && n == name => {
+                    Some(format!("{scope}.{name}"))
+                }
+                _ => None,
+            })
+            .collect();
+        ends.extend(values);
+    }
     match ends.as_slice() {
         [] => Ok(pattern.to_string()),
-        [one] => Ok(report::address(one)),
+        [one] => Ok(one.clone()),
         many => {
-            let each: Vec<String> = many.iter().map(|a| report::address(a)).collect();
+            let each = many.to_vec();
             anyhow::bail!(
                 "why {pattern}: {name} is the short name of {}; name one by its full name",
                 each.join(" and ")

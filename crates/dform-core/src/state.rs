@@ -355,18 +355,51 @@ impl State {
     /// `moved(T, Old, New)`: New takes Old's identity, so the object is
     /// neither destroyed nor created. Applies only while state maps Old and
     /// not New, so a move already made is a no-op. Returns the moves made.
-    pub fn apply_moves(&mut self, moves: &[(Address, Address)]) -> Vec<(Address, Address)> {
+    /// Old may be a short name (R-200): the one object of its type whose
+    /// name ends in it; two such is an error naming both.
+    pub fn apply_moves(&mut self, moves: &[(Address, Address)]) -> Result<Vec<(Address, Address)>> {
         let mut out = Vec::new();
         for (old, new) in moves {
             if self.get(new).is_some() {
                 continue;
             }
-            if let Some(e) = self.resources.remove(&key(old)) {
+            let old = self.moved_from(old)?;
+            if let Some(e) = self.resources.remove(&key(&old)) {
                 self.resources.insert(key(new), e);
-                out.push((old.clone(), new.clone()));
+                out.push((old, new.clone()));
             }
         }
-        out
+        Ok(out)
+    }
+
+    /// The object a `moved`'s old address names: the address itself when
+    /// state maps it, else the one object of its type whose full name ends
+    /// in it (`k3s.agent-0.vm` for `vm`); two such is an error naming each.
+    fn moved_from(&self, old: &Address) -> Result<Address> {
+        if self.get(old).is_some() {
+            return Ok(old.clone());
+        }
+        let suffix = format!(".{}", old.name);
+        let ending: Vec<Address> = self
+            .resources
+            .keys()
+            .filter_map(|k| parse_key(k))
+            .filter(|a| a.typ == old.typ && a.name.ends_with(&suffix))
+            .collect();
+        match ending.as_slice() {
+            [one] => Ok(one.clone()),
+            [] => Ok(old.clone()),
+            many => {
+                let names: Vec<String> = many.iter().map(crate::report::address).collect();
+                anyhow::bail!(
+                    "moved({}, {:?}, ..): {} is the short name of {}; name one by its full name",
+                    old.typ,
+                    old.name,
+                    old.name,
+                    names.join(" and ")
+                )
+            }
+        }
     }
 
     /// Move `addr`'s identity aside as deposed, making room for its
