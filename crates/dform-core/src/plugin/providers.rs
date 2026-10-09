@@ -3205,7 +3205,11 @@ fn not_sent(addr: &Address, why: &str) -> anyhow::Error {
 /// An Apply call not sent because the secret `label` at `path` of its
 /// document was not revealed (R-218): why, as the holder said it.
 fn unrevealed(addr: &Address, path: &str, label: &str, e: &anyhow::Error) -> anyhow::Error {
-    let why = e.chain().last().map(ToString::to_string).unwrap_or_default();
+    let why = e
+        .chain()
+        .last()
+        .map(ToString::to_string)
+        .unwrap_or_default();
     not_sent(
         addr,
         &format!(
