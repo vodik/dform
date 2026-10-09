@@ -2121,12 +2121,12 @@ lifecycle(tailscale.device server, "retain")
   with r = tailscale.device server, w = "retain"
   ├─ type_lifecycle("tailscale.device", "retain")   provider schema
   ├─ tailscale.device server   main.df:3
-  ├─ not lifecycle(ref(tailscale.device, server, ), "destroy")   (absent)
-  └─ not lifecycle(ref(tailscale.device, server, ), "prevent_destroy")   (absent)
+  └─ the program writes no lifecycle for tailscale.device server
 ```
 
-A copy's word reaches its resources in the plan; a body still reads the
-type's row for them.
+A row the program writes is explained by its statement, as any other. A
+copy's word is its resources' (`lifecycle(p, "destroy")` on a copy `p`
+deletes each of its resources of a retained type).
 
 A lifecycle word is said of the object, `lifecycle(r, "retain")`, or of
 one of its attributes, by its path, `lifecycle(r, "bootstrap",

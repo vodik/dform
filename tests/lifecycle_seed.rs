@@ -131,21 +131,25 @@ fn a_body_reads_the_seeded_row_and_the_programs_wins() {
     );
 }
 
-/// `why` says who answered the row: the provider's schema, by name, and
-/// the schema fact it read.
+/// `why` says who answered the row: for a seeded one, the provider's
+/// schema by name, the schema fact it read and that the program writes
+/// none; for the program's, its statement, as where no type is seeded.
 #[test]
-fn why_names_the_providers_schema() {
-    let s = seeded("seed-why", BOTH);
+fn why_names_who_answered() {
+    let s = seeded("seed-why", &format!("{BOTH}lifecycle(main, \"destroy\")\n"));
     let w = dev(&s, &["why", "lifecycle(data, \"retain\")"]).success();
-    for line in [
-        "lifecycle(net.vpc data, \"retain\")\n",
-        "  dform  the schema of provider fakecloud: each net.vpc is \"retain\" (type_lifecycle), \
-         unless the program writes another\n",
-        "  ├─ type_lifecycle(\"net.vpc\", \"retain\")   provider schema\n",
-        "  ├─ net.vpc data   p.df:4\n",
-    ] {
-        assert!(w.stdout.contains(line), "{line}\n{}", w.stdout);
-    }
+    assert_eq!(
+        w.stdout,
+        "lifecycle(net.vpc data, \"retain\")\n\
+         \x20 dform  the schema of provider fakecloud: each net.vpc is \"retain\" (type_lifecycle), \
+         unless the program writes another\n\
+         \x20 with r = net.vpc data, w = \"retain\"\n\
+         \x20 ├─ type_lifecycle(\"net.vpc\", \"retain\")   provider schema\n\
+         \x20 ├─ net.vpc data   p.df:4\n\
+         \x20 └─ the program writes no lifecycle for net.vpc data\n"
+    );
+    let w = dev(&s, &["why", "lifecycle(net.vpc[\"main\"], \"destroy\")"]).success();
+    assert_eq!(w.stdout, "lifecycle(net.vpc main, \"destroy\")   p.df:5\n");
 }
 
 /// A destroy forgets what its type retains, as it does what the program
@@ -162,13 +166,9 @@ fn a_destroy_forgets_what_the_type_retains() {
     );
 }
 
-/// A copy's `destroy` reaches each of its resources in the plan, but the
-/// seeded row is still read for them in a body: the seed reads the
-/// resource's own rows, not its copy's.
+/// A copy's `destroy` reaches each of its resources: the seeded row is
+/// not theirs, in a body or in the plan.
 #[test]
-#[ignore = "a copy's removal word does not yet suppress the seeded row of its resources in the \
-            evaluation (the plan honours it, `zset::Lifecycle::from_facts`): the seed would read \
-            the copy's rows through `instance_of`"]
 fn a_copys_destroy_replaces_the_seeded_row_of_its_resources() {
     let s = seeded(
         "seed-copy",
@@ -183,4 +183,22 @@ deny "${v} is retained" where v in net.vpc, lifecycle(v, "retain")
 "#,
     );
     dev(&s, &["plan"]).success();
+}
+
+/// The program's rows where a type is seeded are dform's own relation: a
+/// program does not write it by name.
+#[test]
+fn the_internal_relation_is_not_the_programs() {
+    let s = seeded(
+        "seed-internal",
+        &format!("{MAIN}__lifecycle_written(main, \"destroy\")\n"),
+    );
+    let r = dev(&s, &["plan"]).failure();
+    assert!(
+        r.stderr.contains(
+            "p.df:4:1: __lifecycle_written is dform's own, not a relation a program writes"
+        ),
+        "{}",
+        r.stderr
+    );
 }
