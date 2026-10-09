@@ -44,8 +44,9 @@ struct Key {
     rules: Vec<(String, String)>,
 }
 
-impl Key {
-    fn from_answer(j: &Json) -> Key {
+/// A key as `GET /auth/currentCredential` answers it.
+impl From<&Json> for Key {
+    fn from(j: &Json) -> Key {
         Key {
             expires: j
                 .get("expiration")
@@ -64,7 +65,9 @@ impl Key {
                 .collect(),
         }
     }
+}
 
+impl Key {
     /// Each of [`RIGHTS`] none of its rules grants.
     fn lacks(&self) -> Vec<String> {
         RIGHTS
@@ -129,7 +132,7 @@ pub fn notes(client: &Client, full: bool, cache: Option<&Path>, now: u64) -> Vec
         Some(k) => k,
         None => match client.get(CURRENT) {
             Ok(j) => {
-                let k = Key::from_answer(&j);
+                let k = Key::from(&j);
                 if let Some(f) = &file {
                     let expires = k.expires.map_or("never".to_string(), |e| e.to_string());
                     api::write_cache(f, &cache_key, &format!("{digest} {expires}"));
