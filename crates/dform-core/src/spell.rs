@@ -252,6 +252,9 @@ impl<'a> Written<'a> {
     pub fn term(&self, t: &Term) -> String {
         match t {
             Term::Val(v) => self.redact.surface(v),
+            // A variable the compiler named is no name of the program's:
+            // any value, as `_` is.
+            Term::Var(v) if v.starts_with("__") => "_".into(),
             Term::Var(v) => crate::syntax::resolve::source_name(v),
             Term::Wildcard => "_".into(),
             // An interpolated string as written.
@@ -269,8 +272,11 @@ impl<'a> Written<'a> {
                 }
                 _ => term(t),
             },
-            // A reference by its address, as the plan prints it.
-            Term::Func { name, args } if name == crate::ir::REF && args.len() == 3 => {
+            // A reference, or a computed attribute's label, by its
+            // address, as the plan prints it.
+            Term::Func { name, args }
+                if (name == crate::ir::REF || name == "__label") && args.len() == 3 =>
+            {
                 match (&args[0], &args[1], &args[2]) {
                     (
                         Term::Val(Value::Str(typ)),
