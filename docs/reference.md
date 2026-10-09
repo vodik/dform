@@ -2797,7 +2797,11 @@ is planned in the tick that makes the key and applied after it. State,
 the plan file, the audit log and every message hold the label; an
 attribute a secret is revealed into is compared as a write-only one is,
 by the digest of what was sent (`write_only`, "Providers are processes"), so
-the next plan asks no provider for anything.
+the next plan asks no provider for anything. What is digested names the
+object that held each secret (its remote id, as state has it): a key
+replaced under the same label is a new object, so the attribute differs
+and the server is sent the new key (replaced, where the attribute is
+`force_new`), after the key's replacement is made.
 
 Only a template composes such a secret: a function that would need its
 bytes (`json.encode`, `base64.encode`, a hash) has no value, and the plan
@@ -2824,6 +2828,16 @@ sent:
 A secret needed at creation only is `bootstrap` (`lifecycle(server,
 "bootstrap", "user_data")`, "Lifecycle"): an apply after the server is
 made neither compares nor sends it, so no later run asks for the key.
+Once the key is replaced the server keeps the one it was made with, and
+the plan says so (`user_data differs (bootstrap): kept`).
+
+A held secret is revealed by the deployment whose object holds it. A
+template over one, published as a stack's output (`output join:
+secret(string) = "token: ${t.value}"`), is not revealed into another
+stack's Apply: the reader's run has no object holding the secret, and
+the call is refused (`.. which was not revealed: no object of this
+deployment holds the secret ..`). The holder's stack writes the
+template, on the resource that needs it.
 
 ### Secret outputs across stacks
 

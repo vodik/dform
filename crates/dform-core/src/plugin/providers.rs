@@ -2008,7 +2008,14 @@ impl Providers {
     /// the world never answers one, so the program's value when its digest
     /// is what state kept from the last apply (or state kept none: an
     /// object made before, or elsewhere), else `(write-only)`, a change.
-    fn written_before(&self, typ: &str, entry: &StateEntry, want: &Json, doc: &mut Json) {
+    fn written_before(
+        &self,
+        typ: &str,
+        entry: &StateEntry,
+        want: &Json,
+        doc: &mut Json,
+        identity: &BTreeMap<(String, String), String>,
+    ) {
         for p in self.compared_written(typ, want) {
             let Some(v) = get_path(want, &p) else {
                 continue;
@@ -2016,7 +2023,7 @@ impl Providers {
             let same = entry
                 .written
                 .get(&p)
-                .is_none_or(|kept| self.written_matches(v, kept));
+                .is_none_or(|kept| self.written_matches(v, kept, identity));
             let v = match same {
                 true => v.clone(),
                 false => Json::String("(write-only)".into()),
@@ -2083,8 +2090,12 @@ impl Providers {
     /// deployment's master, `hmac-sha256:..`; none in a run that does not
     /// hold it (never an unkeyed digest: a short password's is a table
     /// lookup away from it, R-164).
-    fn written_digest(&self, v: &Json) -> Option<String> {
-        let text = crate::approval::canonical_json(v);
+    fn written_digest(
+        &self,
+        v: &Json,
+        identity: &BTreeMap<(String, String), String>,
+    ) -> Option<String> {
+        let text = self.written_text(v, identity);
         let k = self.digest_key.as_ref()?;
         Some(format!("hmac-sha256:{}", k.digest(text.as_bytes())))
     }
@@ -2092,12 +2103,36 @@ impl Providers {
     /// Whether `v` is the value whose digest is `kept`. A run that does
     /// not hold the master cannot tell: the value is compared at apply (a
     /// leaf it derives may still be proven unchanged, [`Providers::derived_before`]).
-    fn written_matches(&self, v: &Json, kept: &str) -> bool {
-        let text = crate::approval::canonical_json(v);
+    fn written_matches(
+        &self,
+        v: &Json,
+        kept: &str,
+        identity: &BTreeMap<(String, String), String>,
+    ) -> bool {
+        let text = self.written_text(v, identity);
         match (kept.split_once(':'), &self.digest_key) {
             (Some(("hmac-sha256", d)), Some(k)) => k.digest(text.as_bytes()) == d,
             _ => false,
         }
+    }
+
+    /// What the digest of a value sent is of: its canonical text, and of
+    /// each secret a provider holds in it (a template's placeholder, a
+    /// marker), the object that holds it by its remote id (none while it is
+    /// not made, or is being replaced). A secret's label names where it is
+    /// read, not its bytes: a new object under the same label (a key
+    /// replaced) is a new value, so what was sent with the old one differs.
+    /// A value with no held secret is digested as its text alone.
+    fn written_text(&self, v: &Json, identity: &BTreeMap<(String, String), String>) -> String {
+        let mut text = crate::approval::canonical_json(v);
+        for label in held_in(v) {
+            let remote = self
+                .holder(&label, identity)
+                .map(|(_, h)| h.remote)
+                .unwrap_or_default();
+            text.push_str(&format!("\n{label} held by {remote}"));
+        }
+        text
     }
 
     /// The digests of `doc`'s write-only attributes, by path; one this run
@@ -2107,12 +2142,13 @@ impl Providers {
         typ: &str,
         doc: &Json,
         before: &BTreeMap<String, String>,
+        identity: &BTreeMap<(String, String), String>,
     ) -> BTreeMap<String, String> {
         self.compared_written(typ, doc)
             .into_iter()
             .filter_map(|p| {
                 let d = self
-                    .written_digest(get_path(doc, &p)?)
+                    .written_digest(get_path(doc, &p)?, identity)
                     .or_else(|| before.get(&p).cloned())?;
                 Some((p, d))
             })
@@ -2901,6 +2937,15 @@ impl Providers {
         let world = self.refresh(state)?;
         let adopt_map = state::adopt_map(adopts);
         self.proven.borrow_mut().clear();
+        // The objects a held secret is read from; a replaced one is made
+        // anew, so what was sent with its secret differs.
+        let mut identity = self.identities(state);
+        identity.retain(|(typ, name), _| {
+            !retracted.contains(&Address {
+                typ: typ.clone(),
+                name: name.clone(),
+            })
+        });
 
         // desired: the assembled documents, refs and nulls resolved as far
         // as the world allows.
@@ -2944,7 +2989,7 @@ impl Providers {
                     None => cur.attrs.clone(),
                 };
                 if let Some(want) = resolved.get(&addr) {
-                    self.written_before(&addr.typ, entry, want, &mut doc);
+                    self.written_before(&addr.typ, entry, want, &mut doc, &identity);
                     self.derived_before(&addr, entry, want, &mut doc);
                 }
                 if let Some(want) = resolved.get_mut(&addr) {
@@ -3284,6 +3329,28 @@ fn keep_under(now: &mut BTreeMap<String, String>, was: &BTreeMap<String, String>
 /// sent`, the reason on its own line.
 fn not_sent(addr: &Address, why: &str) -> anyhow::Error {
     crate::report::Failure::of("apply", addr, "not sent", why).into()
+}
+
+/// The labels of the secrets a provider holds in `v`, in order: each
+/// template's placeholders and each secret marker.
+fn held_in(v: &Json) -> Vec<String> {
+    fn walk(v: &Json, out: &mut Vec<String>) {
+        if let Some((key, label)) = provider::marker(v) {
+            if key == provider::SECRET_KEY {
+                out.push(label.to_string());
+            }
+            return;
+        }
+        match v {
+            Json::String(t) => out.extend(held::labels(t)),
+            Json::Object(m) => m.values().for_each(|x| walk(x, out)),
+            Json::Array(xs) => xs.iter().for_each(|x| walk(x, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(v, &mut out);
+    out
 }
 
 /// An Apply call not sent because the secret `label` at `path` of its
@@ -3825,7 +3892,8 @@ impl Tick<'_> {
         };
         let was = state.get(addr).cloned();
         let before = was.as_ref().map(|e| e.written.clone()).unwrap_or_default();
-        let mut written = self.cloud.written(&addr.typ, doc, &before);
+        let identity = self.cloud.identities(state);
+        let mut written = self.cloud.written(&addr.typ, doc, &before, &identity);
         let mut derived = self.cloud.derivations(doc);
         let given: Vec<&String> = self.lifecycle.at_create_of(addr).map(|(p, _)| p).collect();
         match (made, was) {
