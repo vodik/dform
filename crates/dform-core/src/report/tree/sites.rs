@@ -35,6 +35,11 @@ pub struct Site {
     /// The statement's variables with their values (`az = "us-east-1c"`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub with: Vec<String>,
+    /// Those of `with` that are values the clause reads (an input, a
+    /// `let`), not variables it binds: the same on every row, so a
+    /// change's line does not say them ([`Cx::reads`]).
+    #[serde(skip)]
+    pub reads: Vec<String>,
     /// The pack or module instance it came from (`use synapse`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
@@ -670,6 +675,7 @@ impl Surface<'_, '_> {
             .and_then(|(_, e)| e)
             .map(|e| redact.text(&collapse(&e.text().to_string())));
         let mut with = Vec::new();
+        let mut reads = Vec::new();
         if let Some(shown) = shown {
             let rule = id
                 .strip_prefix('r')
@@ -686,7 +692,11 @@ impl Surface<'_, '_> {
                     continue;
                 }
                 if let Some(v) = cx.env.get(var.as_str()) {
-                    with.push(redact.text(&format!("{name} = {}", cx.show_var(&var, v, redact))));
+                    let b = redact.text(&format!("{name} = {}", cx.show_var(&var, v, redact)));
+                    if cx.reads(&var, &name, &src.text) {
+                        reads.push(b.clone());
+                    }
+                    with.push(b);
                 }
             }
             for (name, var) in shown.each {
@@ -700,6 +710,7 @@ impl Surface<'_, '_> {
             statement,
             entry,
             with,
+            reads,
             origin,
             rank: None,
             beat: None,

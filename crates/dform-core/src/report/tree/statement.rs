@@ -307,6 +307,23 @@ impl Cx<'_> {
         }
     }
 
+    /// Whether `var`, shown as `name`, is a value the clause reads (an
+    /// input, a `let`, an enclosing body's value: `agents` of `i in
+    /// 0..agents`) rather than a variable it binds: the read is a
+    /// literal of the rule written as the name alone in `text`, the
+    /// statement's file.
+    pub(super) fn reads(&self, var: &str, name: &str, text: &str) -> bool {
+        let named = |t: &Term| matches!(t, Term::Var(x) if x == var);
+        self.rule.is_some_and(|r| {
+            r.body.iter().any(|l| match l {
+                Lit::Pos(a) if a.args.iter().any(named) => text
+                    .get(a.span.start as usize..a.span.end as usize)
+                    .is_some_and(|t| t == name),
+                _ => false,
+            })
+        })
+    }
+
     /// The type `want(T, var)` in the rule's body gives `var`.
     fn want_type(&self, var: &str) -> Option<Value> {
         let named = |t: &Term| matches!(t, Term::Var(x) if x == var);

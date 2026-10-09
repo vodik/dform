@@ -1693,7 +1693,8 @@ usage error.
   create's `FILE:LINE` and the bindings that made this one whose value
   its address does not show (`k3s.agent-3` shows `n = 3`), at most two
   and then `…`, each long value elided (`network.df:24  with region =
-  "us-test-1"`); an update's `FILE:LINE` alone; a replace's with the
+  "us-test-1"`): its clause's variables, never a value the clause reads
+  (`i` of `i in 0..agents`, not the input `agents`); an update's `FILE:LINE` alone; a replace's with the
   attribute that forces it (`storageClassName forces replace`, that
   attribute first among its lines); a delete's why it is gone (see
   above), none on a destroy. A column that does not fit the line falls

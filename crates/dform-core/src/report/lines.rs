@@ -74,8 +74,8 @@ impl Report {
             }
             (ActionKind::Delete, _) if !self.removing => gone_column(d, self.why),
             (ActionKind::Delete | ActionKind::DeleteDeposed, _) => vec![],
-            // A create: the bindings that made this one, those its address
-            // does not show (After R-149 amendment 5).
+            // A create: the bindings of the clause that made this one,
+            // those its address does not show (After R-149 amendment 5).
             (ActionKind::Create | ActionKind::Adopt, Some(at)) if self.why == Why::Line => {
                 let s = d.site.as_ref().expect("a site");
                 // A value the body prints (an attribute, a document by
@@ -90,9 +90,12 @@ impl Report {
                             .filter_map(|l| l.row.clone()),
                     )
                     .collect();
+                // A value the clause reads (`agents` of `i in 0..agents`)
+                // is no binding of this row: the clause's are.
                 let with: Vec<String> = s
                     .with
                     .iter()
+                    .filter(|b| !s.reads.contains(b))
                     .filter(|b| {
                         !b.split_once(" = ")
                             .is_some_and(|(_, v)| shown.contains(v.trim_matches('"')))
