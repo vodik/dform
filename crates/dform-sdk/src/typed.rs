@@ -705,13 +705,43 @@ impl<P: Provider> Typed<P> {
         })
     }
 
-    /// The rows of an extern, each value as the protocol has it.
+    /// The rows of an extern, each value as the protocol has it. Asked
+    /// before the program's settings came, it is not yet: one row, each
+    /// answer column an open null, asked again once they have.
     fn query(&self, r: pb::QueryRequest) -> Result<Vec<pb::Row>> {
         let inputs = r
             .inputs
             .iter()
             .map(wire::from_doc)
             .collect::<anyhow::Result<Vec<_>>>()?;
+        let configured = self
+            .provider
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some();
+        if !configured {
+            let bare = r
+                .inputs
+                .iter()
+                .map(|v| dform_core::value::Value::try_from(v).map(|v| dform_core::spell::bare(&v)))
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .join(",");
+            let mut given = r.inputs.iter();
+            let values = r
+                .input
+                .iter()
+                .enumerate()
+                .map(|(c, plus)| match plus {
+                    true => given.next().cloned().unwrap_or_default(),
+                    false => pb::Value::from(&dform_core::value::Value::Null {
+                        label: dform_core::value::null_label(&r.pred, &bare, &(c + 1).to_string()),
+                        class: dform_core::value::NullClass::Open,
+                        ty: String::new(),
+                    }),
+                })
+                .collect();
+            return Ok(vec![pb::Row { values }]);
+        }
         let rows = self.with(|p| p.query(&r.pred, &inputs))?;
         Ok(rows
             .iter()
