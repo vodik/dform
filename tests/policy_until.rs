@@ -32,6 +32,10 @@ deny "networks are not named nowhere" where v in net.vpc, v.name == "nowhere"
 deny "the endpoint is somewhere" { vpc: v } where v in net.vpc, platform[env].endpoint == "nowhere"
 "#;
 
+/// A policy line as `--json` says it: its text, what holds, and each
+/// resource undetermined with until when.
+type Policy = (String, Vec<String>, Vec<(String, String)>);
+
 const AFTER: &str = "(after stacks.platform[env=lab] is applied)";
 
 #[test]
@@ -47,7 +51,7 @@ fn a_deny_waiting_on_another_deployment_is_about_what_it_ranges_over() {
         .iter()
         .find(|d| d["deployment"] == "stacks.apps[env=lab]")
         .expect(&r.stdout);
-    let lines: Vec<(String, Vec<String>, Vec<(String, String)>)> = apps["plan"]["policy"]
+    let lines: Vec<Policy> = apps["plan"]["policy"]
         .as_array()
         .expect(&r.stdout)
         .iter()

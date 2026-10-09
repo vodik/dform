@@ -978,7 +978,7 @@ mod tests {
         };
         let text = after(
             1,
-            &[held.clone()],
+            std::slice::from_ref(&held),
             Some((0, 0, 1)),
             Why::Line,
             Style::default(),
