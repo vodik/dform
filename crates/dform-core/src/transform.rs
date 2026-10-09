@@ -1703,7 +1703,8 @@ fn leaf_paths(t: &Term, prefix: &str, out: &mut Vec<String>) {
 /// would be an edge and apply with it. One note per block, at its first
 /// such read (`file:line:col` first), in the order of the program. A read
 /// the block's name needs (an interpolated header) is the point of the
-/// wait, and has none.
+/// wait, and has none. Nor has a secret's: a provider holds it and no
+/// tick fills it, and a template over it is a value at once (R-218).
 pub fn computed_reads(statements: &[Stmt], schema: &Schema) -> Vec<(Span, String)> {
     // A block's rules (its `want` and each field's `arg`) share one body:
     // the block is known by its reads' places.
@@ -1746,9 +1747,11 @@ pub fn computed_reads(statements: &[Stmt], schema: &Schema) -> Vec<(Span, String
             }
             let mut paths = vec![p.clone()];
             walks(v, &r.body, p, &mut paths);
-            let path = paths
-                .into_iter()
-                .find(|q| schema.class_of(t, q).is_some())?;
+            let path = paths.into_iter().find(|q| {
+                schema
+                    .class_of(t, q)
+                    .is_some_and(|c| c != NullClass::Secret)
+            })?;
             let at = match addr {
                 Term::Val(Value::Str(a)) => crate::ir::scope_split(a)
                     .map_or(a.as_str(), |(_, n)| n)
@@ -2173,4 +2176,48 @@ pub fn columns(n: usize) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A block that interpolates a computed value waits for the tick that
+    /// makes it, and is told so; one that interpolates a secret a
+    /// provider holds waits for nothing, and is told nothing.
+    #[test]
+    fn a_secrets_read_is_no_wait() {
+        let schema = crate::parser::parse_program(
+            "type_attr(\"db.postgres\", \"endpoint\", \"string\", [\"computed\"])\n\
+             type_attr(\"vault.token\", \"value\", \"string\", [\"computed\", \"sensitive\"])\n",
+        )
+        .unwrap()
+        .statements
+        .into_iter()
+        .filter_map(|s| match s {
+            Stmt::Fact(a) => Some(a),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+        let schema = Schema::from_facts(&schema).unwrap();
+        let program = crate::parser::parse_program(
+            "resource db.postgres db { size = 1 }\n\
+             resource vault.token t { name = \"t\" }\n\
+             resource compute.vm app { url = \"pg://${db.endpoint}/app\" }\n\
+             resource compute.vm vm { user_data = \"token: ${t.value}\" }\n",
+        )
+        .unwrap();
+        let lowered = lower(&program).unwrap();
+        let notes: Vec<String> = computed_reads(&lowered.program.statements, &schema)
+            .into_iter()
+            .map(|(_, n)| n)
+            .collect();
+        assert_eq!(
+            notes,
+            [
+                "<input>:3:41: reads `db.endpoint` now, a computed value: this block waits for the tick that \
+              creates `db`; a field written `= db.endpoint` would be an edge and apply with it"
+            ]
+        );
+    }
 }
