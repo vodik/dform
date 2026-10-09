@@ -1,7 +1,7 @@
 //! Progress lines (R-81): what a run that takes a while is doing, on
 //! stderr, one line each, so stdout stays the report (R-63). A retry
-//! (`plugin::link::Retry::line`) and a tick waiting on open nulls
-//! ([`Wait`]) say so here.
+//! (`plugin::link::Retry::line`), a tick waiting on open nulls ([`Wait`])
+//! and a `DFORM_LOG=debug` line (`timing`) say so here.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -117,8 +117,9 @@ mod tests {
         assert_eq!(w.since().len(), 5, "{}", w.since());
     }
 
-    /// A line said while a block is drawn goes to the block's printer,
-    /// never past it to stderr; once the block is gone, to stderr again.
+    /// A line said while a block is drawn (a retry, a `DFORM_LOG=debug`
+    /// line) goes to the block's printer, never past it to stderr; once
+    /// the block is gone, to stderr again.
     #[test]
     fn a_line_goes_where_it_is_routed() {
         let said = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
@@ -127,10 +128,17 @@ mod tests {
             to.lock().unwrap().push(l.to_string())
         })));
         line("retry net.vpc main apply (2/5)");
+        // A `DFORM_LOG=debug` line too: it is said as a progress line.
+        crate::timing::say("apply net.vpc main: made", Duration::ZERO);
         route(None);
         line("after the block");
         let said = said.lock().unwrap();
         assert!(said.contains(&"retry net.vpc main apply (2/5)".to_string()));
+        assert!(
+            said.iter()
+                .any(|l| l.starts_with("dform: ") && l.ends_with("  apply net.vpc main: made")),
+            "{said:?}"
+        );
         assert!(!said.contains(&"after the block".to_string()));
     }
 }

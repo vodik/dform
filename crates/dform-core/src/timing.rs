@@ -1,6 +1,7 @@
 //! `DFORM_LOG=debug`: a line on stderr for each phase of a run and each
 //! call it makes over the network, with its wall time, so where a slow
-//! plan spends its time is read off the run rather than an strace:
+//! plan spends its time is read off the run rather than an strace (while
+//! an apply's block is drawn, above it, as any progress line):
 //!
 //!   dform:   0.412s    61.3ms  s3 get s3://bucket/app/state.json (200)
 //!
@@ -40,15 +41,20 @@ pub fn enabled() -> bool {
 
 /// One line: `what` took `took`, and ended now.
 pub fn line(what: &str, took: Duration) {
-    let (begun, on) = start();
-    if !*on {
-        return;
+    if enabled() {
+        say(what, took);
     }
-    eprintln!(
+}
+
+/// The line of `what`, which took `took`, said as a progress line is:
+/// on stderr, or above the apply's block while one is drawn
+/// (`progress::route`), never through it.
+pub(crate) fn say(what: &str, took: Duration) {
+    crate::progress::line(&format!(
         "dform: {:>8.3}s {:>9.1}ms  {what}",
-        begun.elapsed().as_secs_f64(),
+        start().0.elapsed().as_secs_f64(),
         took.as_secs_f64() * 1000.0
-    );
+    ));
 }
 
 /// What `f` took, as a line; `what` is only made when the lines are on.

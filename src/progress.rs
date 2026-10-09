@@ -8,7 +8,7 @@
 //! a change's line once its call answered, a running change's line again
 //! every [`BEAT`] as a heartbeat, and the tick's end; under `-q` only the
 //! tick's end. A line said while the block is drawn (a retry, a stop
-//! asked for) is the printer's too: above the block, which a terminal
+//! asked for, a `DFORM_LOG=debug` line) is the printer's too: above the block, which a terminal
 //! draws again below it. Between ticks, on a terminal, the tick's wait is
 //! one line counting up. [`Progress`] is the driver: the printer on
 //! stderr, the clock that beats it, the signal it says.
@@ -85,7 +85,8 @@ pub enum Event {
     Done(Address),
     /// A change's call failed, as it may be printed.
     Failed(Address, Failure),
-    /// A line said while the block is drawn: a retry, a stop asked for.
+    /// A line said while the block is drawn: a retry, a stop asked for,
+    /// a `DFORM_LOG=debug` line.
     Note(String),
     /// The clock: a terminal's block drawn again, a running change's
     /// heartbeat elsewhere, when one is due.
