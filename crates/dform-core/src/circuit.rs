@@ -59,8 +59,10 @@ pub enum Leaf {
     Extern {
         call: String,
     },
+    /// A fact a firing found absent (`not p(..)`): the negated atom,
+    /// ground but for its wildcards, spelled where it is printed.
     Absent {
-        pattern: String,
+        atom: Atom,
     },
 }
 
@@ -589,8 +591,8 @@ fn leaf_bytes(l: &Leaf) -> usize {
         | Leaf::World { event: s }
         | Leaf::Plan { fact: s, .. }
         | Leaf::Input { source: s }
-        | Leaf::Extern { call: s }
-        | Leaf::Absent { pattern: s } => s.len(),
+        | Leaf::Extern { call: s } => s.len(),
+        Leaf::Absent { atom } => atom.pred.len() + atom.args.len() * size_of::<Term>(),
     }
 }
 

@@ -97,9 +97,7 @@ impl Prov {
     }
 
     pub(super) fn absent(&mut self, a: &Atom) -> NodeId {
-        self.circuit.leaf(Leaf::Absent {
-            pattern: spell::atom(a),
-        })
+        self.circuit.leaf(Leaf::Absent { atom: a.clone() })
     }
 
     pub(super) fn id(&self, t: TupleId) -> NodeId {

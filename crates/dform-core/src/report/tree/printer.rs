@@ -390,6 +390,6 @@ pub(super) fn leaf_text(l: &Leaf) -> String {
         Leaf::Plan { fact, tick } => format!("{} {fact}", plan_text(*tick)),
         Leaf::Extern { call } => call.clone(),
         Leaf::Rule { id } => format!("by {id}"),
-        Leaf::Absent { pattern } => format!("not {pattern}   (absent)"),
+        Leaf::Absent { atom } => format!("not {}   (absent)", crate::spell::atom(atom)),
     }
 }

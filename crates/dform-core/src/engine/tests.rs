@@ -1143,9 +1143,10 @@ fn a_firing_records_its_rule_body_facts_and_negations() {
     assert!(why.contains(&Leaf::Base {
         span: "<input>:1:1 (p)".into()
     }));
-    assert!(why.contains(&Leaf::Absent {
-        pattern: "s(1)".into()
-    }));
+    assert!(
+        why.iter()
+            .any(|l| matches!(l, Leaf::Absent { atom } if crate::spell::atom(atom) == "s(1)"))
+    );
     let Some(Leaf::Rule { id }) = why.iter().find(|l| matches!(l, Leaf::Rule { .. })) else {
         panic!("no rule leaf: {why:?}");
     };

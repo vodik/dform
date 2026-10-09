@@ -5,7 +5,7 @@
 use super::printer::{Focus, Printer, Walk, leaf_text, plan_text, world_text};
 use super::sites::{Site, base_place, cell, rank_text};
 use super::statement::{Cx, Shown, collapse, is_check, statement_at};
-use crate::ast::{Lit, RuleStmt, Term};
+use crate::ast::{Atom, Lit, RuleStmt, Term};
 use crate::circuit::{Fact, Leaf, NodeId, View};
 use crate::ir::Address;
 use crate::spell;
@@ -323,29 +323,21 @@ impl Surface<'_, '_> {
         Some((format!("{list}[{label}]"), content))
     }
 
-    /// A fact the firing found absent, spelled as the program would; its
-    /// core text when it does not read back as one ground fact.
-    pub(super) fn absent(&self, pattern: &str) -> String {
-        let fact = match crate::query::parse(pattern) {
-            Ok(crate::query::Query::Body { body, vars }) if vars.is_empty() => {
-                match body.as_slice() {
-                    [Lit::Pos(a)] => a
-                        .args
-                        .iter()
-                        .map(|t| match t {
-                            Term::Val(v) => Some(v.clone()),
-                            _ => None,
-                        })
-                        .collect::<Option<Vec<_>>>()
-                        .map(|args| Fact::new(&a.pred, args)),
-                    _ => None,
-                }
-            }
-            _ => None,
-        };
-        match fact {
-            Some(f) if spell::atom(&f.atom()) == pattern => self.fact_text(&f),
-            _ => self.p.redact.text(pattern),
+    /// A fact the firing found absent, spelled as the program would: as
+    /// [`Surface::fact_text`] when it is ground, each value as the plan
+    /// spells it (a reference by its address) otherwise.
+    pub(super) fn absent(&self, a: &Atom) -> String {
+        let ground: Option<Vec<Value>> = a
+            .args
+            .iter()
+            .map(|t| match t {
+                Term::Val(v) => Some(v.clone()),
+                _ => None,
+            })
+            .collect();
+        match ground {
+            Some(args) => self.fact_text(&Fact::new(&a.pred, args)),
+            None => self.p.redact.surface_atom(a),
         }
     }
 
@@ -467,9 +459,9 @@ impl Surface<'_, '_> {
             let (b, _) = mark(facts.len() + j);
             let text = match l {
                 Leaf::Base { span } => base_place(span),
-                Leaf::Absent { pattern } => match said(pattern) {
+                Leaf::Absent { atom } => match said(atom) {
                     Some(addr) => format!("the program writes no lifecycle for {addr}"),
-                    None => format!("not {}   (absent)", self.absent(pattern)),
+                    None => format!("not {}   (absent)", self.absent(atom)),
                 },
                 l => self.p.redact.text(&leaf_text(l)),
             };
@@ -604,13 +596,7 @@ impl Surface<'_, '_> {
 /// The resource an absent `__lifecycle_said(T, A)` is about
 /// (`zset::SAID`): the program gives it no removal word, so its type's
 /// lifecycle is seeded.
-fn said(pattern: &str) -> Option<String> {
-    let crate::query::Query::Body { body, .. } = crate::query::parse(pattern).ok()? else {
-        return None;
-    };
-    let [Lit::Pos(a)] = body.as_slice() else {
-        return None;
-    };
+fn said(a: &Atom) -> Option<String> {
     match a.args.as_slice() {
         [Term::Val(Value::Str(typ)), Term::Val(Value::Str(name))]
             if a.pred == crate::zset::SAID =>
