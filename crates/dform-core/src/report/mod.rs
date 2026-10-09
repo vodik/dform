@@ -34,6 +34,7 @@ use crate::stuck::{Sections, Stuck};
 use crate::value::{Value, null_owner};
 use chains::write_chain;
 use labels::extern_label;
+use layout::{Row, layout};
 use mask::{confusables_in, masked_text, null_class};
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -45,6 +46,7 @@ mod chains;
 pub mod deployments;
 pub mod fold;
 mod labels;
+mod layout;
 mod mask;
 pub mod policy;
 pub mod progress;
@@ -57,6 +59,7 @@ pub use labels::{
     address, address_text, attribute, attribute_label, kind_name, label, marker_of, path,
     reference, relation_name, short_id,
 };
+pub use layout::WIDTH;
 pub(crate) use mask::elide;
 pub use mask::{Shown, masked, shown, shown_value, surface_in};
 pub use style::{Paint, Style};
@@ -1992,107 +1995,6 @@ fn owners(on: &BTreeSet<String>) -> Vec<String> {
         if !out.contains(&w) {
             out.push(w);
         }
-    }
-    out
-}
-
-/// The page width the right column folds at.
-pub const WIDTH: usize = 100;
-/// The right column starts here, unless every left column is narrower.
-const COLUMN: usize = 52;
-
-/// One printed line: its text, its visible width, and what may follow it
-/// in the right column, the longest that fits first.
-struct Row {
-    left: String,
-    width: usize,
-    right: Vec<String>,
-    /// The right column is what the line says (a deny's wait): when none
-    /// fits beside it, the shortest goes on the line below.
-    keep: bool,
-    /// The right column is said, not a note: unpainted (an apply's
-    /// status once its call answered, R-206), where a site is dim.
-    set: bool,
-    /// The right column starts after it also while it has none: a line
-    /// whose right column comes and goes (an apply's change) moves no
-    /// other line's.
-    aligned: bool,
-}
-
-impl Row {
-    fn new(plain: &str, painted: String) -> Row {
-        Row {
-            left: painted,
-            width: plain.chars().count(),
-            right: Vec::new(),
-            keep: false,
-            set: false,
-            aligned: false,
-        }
-    }
-
-    fn plain(s: String) -> Row {
-        Row {
-            width: s.chars().count(),
-            left: s,
-            right: Vec::new(),
-            keep: false,
-            set: false,
-            aligned: false,
-        }
-    }
-
-    fn with(mut self, right: Vec<String>) -> Row {
-        self.right = right.into_iter().filter(|r| !r.is_empty()).collect();
-        self
-    }
-
-    /// The right column is never folded to nothing.
-    fn kept(mut self) -> Row {
-        self.keep = true;
-        self
-    }
-
-    /// The right column unpainted.
-    fn set(mut self) -> Row {
-        self.set = true;
-        self
-    }
-
-    /// The right column after it, whether it has one now or not.
-    fn aligned(mut self) -> Row {
-        self.aligned = true;
-        self
-    }
-}
-
-/// The rows, the right column aligned across them and dim (R-111); a
-/// right column that does not fit in [`WIDTH`] folds to a shorter one, or
-/// to nothing; a kept one to the line below.
-fn layout(rows: &[Row], style: Style) -> String {
-    let col = rows
-        .iter()
-        .filter(|r| (r.aligned || !r.right.is_empty()) && r.width + 2 <= COLUMN)
-        .map(|r| r.width + 2)
-        .max()
-        .unwrap_or(0);
-    let mut out = String::new();
-    for r in rows {
-        out.push_str(&r.left);
-        let at = col.max(r.width + 2);
-        if let Some(x) = r.right.iter().find(|x| at + x.chars().count() <= WIDTH) {
-            out.push_str(&" ".repeat(at - r.width));
-            match r.set {
-                true => out.push_str(x),
-                false => out.push_str(&style.paint(Paint::Dim, x)),
-            }
-        } else if let Some(x) = r.right.last().filter(|_| r.keep) {
-            let indent = r.left.len() - r.left.trim_start().len() + 4;
-            out.push('\n');
-            out.push_str(&" ".repeat(indent));
-            out.push_str(&style.paint(Paint::Dim, x));
-        }
-        out.push('\n');
     }
     out
 }
