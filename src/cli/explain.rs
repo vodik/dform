@@ -9,6 +9,7 @@ use crate::spell;
 use crate::value::Value;
 use crate::{deployment, ir, query, report, schema};
 use anyhow::Result;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 /// `dform query PATTERN`.
@@ -68,33 +69,124 @@ impl Query {
     fn run(&self, run: &Evaluated, x: &deployment::Explained) -> Result<Outcome> {
         self.print(
             &run.ev.located.loaded.program,
-            &x.res.facts,
+            &x.res,
             &x.redact,
             &run.cx.cli.table,
         )?;
         Ok(Outcome::Done)
     }
+
+    /// The resources and values the pattern names as `why` reads a path
+    /// (`query::named`), as the plan prints it or in full; none where a
+    /// relation or a cell (R-176) has the name, whose rows the query is.
+    /// A path past a list that reaches nothing says the nearest it has.
+    fn named(&self, facts: &BTreeSet<Atom>) -> Result<Vec<(ir::Address, Option<String>)>> {
+        let pattern = self.pattern.trim();
+        if facts.iter().any(|a| a.pred == pattern) || query::names_cell(pattern, facts) {
+            return Ok(Vec::new());
+        }
+        if let Some(e) = query::unreached(pattern, facts)? {
+            anyhow::bail!("query: {e}");
+        }
+        query::named(pattern, facts)
+    }
+
     /// `query`'s output, a result set (R-63): one column per variable of the
     /// goal, or per argument of a bare predicate; `yes` or `no` for a ground
     /// goal. `--json` is the rows as an array of objects keyed by column.
     fn print(
         &self,
         program: &crate::ast::Program,
-        facts: &std::collections::BTreeSet<Atom>,
+        res: &crate::engine::EvalResult,
         redact: &query::Redactor,
         o: &report::table::Options,
     ) -> Result<()> {
-        let (pattern, json) = (self.pattern.as_str(), self.json);
+        let (json, facts) = (self.json, &res.facts);
         use report::table::{Cell, Table};
+        let named = self.named(facts)?;
+        let tables: Vec<Table> = match named.first() {
+            // A value by its path: as the plan lays it out (R-124, R-217),
+            // the same text `why` heads it with.
+            Some((_, Some(_))) => {
+                let found = query::found(named, facts)?;
+                let values = query::values(&found, res, redact, &|v| redact.cell(v));
+                if let (false, [(_, tree)]) = (json, values.as_slice()) {
+                    for line in crate::fmt::value::layout("", tree, o.width.min(report::WIDTH)) {
+                        println!("{line}");
+                    }
+                    return Ok(());
+                }
+                let mut t = Table::new(["value".to_string()]);
+                for (v, _) in &values {
+                    t.push(vec![Cell::value(v, redact)]);
+                }
+                match values.is_empty() {
+                    true => Vec::new(),
+                    false => vec![t],
+                }
+            }
+            // A resource: its attributes, a path and a value each.
+            Some((_, None)) => {
+                let mut t = Table::new(["path".to_string(), "value".to_string()]);
+                for (addr, _) in &named {
+                    let query::Query::Body { body, vars } = query::pattern(addr, None, false)
+                    else {
+                        continue;
+                    };
+                    for row in query::table(&body, &vars, facts)?.rows {
+                        t.push(row.iter().map(|v| Cell::value(v, redact)).collect());
+                    }
+                }
+                vec![t]
+            }
+            None => match self.relations(program, facts, redact)? {
+                Some(tables) => tables,
+                None => return Ok(()),
+            },
+        };
+        if json {
+            let rows: Vec<serde_json::Value> = tables
+                .iter()
+                .flat_map(|t| t.json().as_array().cloned().unwrap_or_default())
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&rows)?);
+            return Ok(());
+        }
+        if tables.is_empty() {
+            println!("(0 rows)");
+        }
+        let shown: Vec<String> = tables.iter().map(|t| t.render(o)).collect();
+        print!("{}", shown.join("\n"));
+        Ok(())
+    }
+
+    /// A relation's facts, a cell's value, or the rows of the query's
+    /// literals; `None` when the goal is ground, its `yes` or `no` printed.
+    fn relations(
+        &self,
+        program: &crate::ast::Program,
+        facts: &BTreeSet<Atom>,
+        redact: &query::Redactor,
+    ) -> Result<Option<Vec<report::table::Table>>> {
+        use report::table::{Cell, Table};
+        let pattern = self.pattern.as_str();
         // A `let`'s, an input's or an output's cell by its path (R-176),
         // where no relation is so named (a `let k` is the relation `k` too).
-        let parsed = match query::parse(pattern)? {
-            query::Query::Pred(p) if !facts.iter().any(|a| a.pred == p) => {
+        let parsed = match query::parse(pattern) {
+            Ok(query::Query::Pred(p)) if !facts.iter().any(|a| a.pred == p) => {
                 query::cell(pattern, facts).unwrap_or(query::Query::Pred(p))
             }
-            q => q,
+            Ok(q) => q,
+            // A path no command reads: the forms one takes.
+            Err(_) if !pattern.contains('(') => anyhow::bail!(query::expected(
+                "query",
+                "a relation such as 'want', or literals such as \
+                 'attr(t, a, \"cidr\", c), want(t, a)'",
+                pattern.trim(),
+            )),
+            Err(e) => return Err(e),
         };
-        let tables: Vec<Table> = match parsed {
+        Ok(Some(match parsed {
             query::Query::Pred(pred) => {
                 // One table per arity a predicate is used at.
                 let mut by: std::collections::BTreeMap<usize, Table> = Default::default();
@@ -116,43 +208,13 @@ impl Query {
             }
             query::Query::Body { body, vars } => {
                 let table = query::table(&body, &vars, facts)?;
-                if vars.is_empty() && !json {
+                if vars.is_empty() && !self.json {
                     println!("{}", if table.rows.is_empty() { "no" } else { "yes" });
-                    return Ok(());
-                }
-                // One attribute's value (`T["A"].p`), in the formatter's
-                // layout, as the plan and `why` print a value (R-124).
-                if let (false, Some(_), [row]) =
-                    (json, query::address(pattern, false)?, table.rows.as_slice())
-                    && table.vars == ["value"]
-                {
-                    let tree = crate::fmt::value::Tree::of(&row[0], &|v| {
-                        let open =
-                            matches!(v, Value::Obj(_) | Value::List(_)) && !redact.is_secret(v);
-                        (!open).then(|| redact.cell(v))
-                    });
-                    for line in crate::fmt::value::layout("", &tree, o.width.min(report::WIDTH)) {
-                        println!("{line}");
-                    }
-                    return Ok(());
+                    return Ok(None);
                 }
                 vec![table.result(redact)]
             }
-        };
-        if json {
-            let rows: Vec<serde_json::Value> = tables
-                .iter()
-                .flat_map(|t| t.json().as_array().cloned().unwrap_or_default())
-                .collect();
-            println!("{}", serde_json::to_string_pretty(&rows)?);
-            return Ok(());
-        }
-        if tables.is_empty() {
-            println!("(0 rows)");
-        }
-        let shown: Vec<String> = tables.iter().map(|t| t.render(o)).collect();
-        print!("{}", shown.join("\n"));
-        Ok(())
+        }))
     }
 }
 

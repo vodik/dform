@@ -64,110 +64,14 @@ pub type Lookup<'a> = dyn Fn(&str) -> Option<String> + 'a;
 /// A text an attribute of a resource maps to, when it has one.
 pub type AttrLookup<'a> = dyn Fn(&ir::Address, &str) -> Option<String> + 'a;
 
-/// The forms `why` takes, as the plan prints them.
-pub(crate) const FORMS: &str = "an address as the plan prints it, 'net.vpc main' or its path \
-     'main', an attribute such as 'main.cidr' or \
-     'pg.spec.ports[port=5432,protocol=TCP].protocol', an input such as 'nodes.count', a \
-     row such as 'zone(\"us-east-1c\", n)', or a deny such as 'deny \"MESSAGE\"'";
-
-/// A pattern that names a resource's list as the plan prints it, past
-/// an element the list does not have (`pg.spec.ports[port=1]`) or a field
-/// the element does not (`pg.spec.ports[0].prot`): what it names, and
-/// the nearest the value has, as the plan prints it.
-fn unreached(pattern: &str, facts: &BTreeSet<Atom>) -> Option<String> {
-    use report::fold::{Step, tokens};
-    let src = pattern.trim();
-    let (name, rest) = src.split_at(src.find('[')?);
-    for (addr, list) in query::printed(name, facts) {
-        let Some(list) = list else { continue };
-        let path = format!("{list}{rest}");
-        let toks = tokens(&path);
-        let Some(Step::Key(top)) = toks.first().map(|t| &t.step) else {
-            continue;
-        };
-        let s = |x: &str| Term::Val(Value::Str(x.to_string()));
-        let Some(attr) = facts.iter().find(|a| {
-            a.pred == "attr"
-                && a.args.len() == 4
-                && a.args[..3] == [s(&addr.typ), s(&addr.name), s(top)]
-        }) else {
-            continue;
-        };
-        let (Some(Term::Val(v)), shape) = (attr.args.get(3), report::fold::Shape::of(facts, attr))
-        else {
-            continue;
-        };
-        // The steps that reach, each element as the plan prints it, and
-        // what the first that does not reaches into.
-        let (mut at, mut reached) = (v, top.clone());
-        let mut k = 1;
-        while let Some(next) = toks
-            .get(k)
-            .and_then(|t| report::fold::reach(at, std::slice::from_ref(t)))
-        {
-            reached = match at {
-                Value::List(xs) => {
-                    let j = xs.iter().position(|x| std::ptr::eq(x, next))?;
-                    shape.element(&reached, j, next)
-                }
-                _ => reached + &toks[k].text,
-            };
-            (at, k) = (next, k + 1);
-        }
-        let said: String = toks.iter().map(|t| t.text.as_str()).collect();
-        let past_list = toks[..k.min(toks.len())]
-            .iter()
-            .any(|t| !matches!(t.step, Step::Key(_)));
-        let wrote = match toks.get(k) {
-            Some(t) => t.text.as_str(),
-            None if said != path => &path[said.len()..],
-            None => continue,
-        };
-        let own = name.strip_suffix(list.as_str()).unwrap_or_default();
-        let named = report::attribute(&addr, top) + &reached[top.len()..];
-        let (what, rule, near) = match at {
-            Value::List(xs) => (
-                format!("no element {wrote}"),
-                "an element is named as the plan prints it, by its key in a keyed list, \
-                 else by its position",
-                xs.iter()
-                    .enumerate()
-                    .map(|(j, x)| shape.element(&reached, j, x))
-                    .collect::<Vec<_>>(),
-            ),
-            Value::Obj(m)
-                if past_list && matches!(toks.get(k).map(|t| &t.step), Some(Step::Key(_))) =>
-            {
-                (
-                    format!("no field {}", wrote.trim_start_matches('.')),
-                    "a field is named by its key",
-                    m.keys()
-                        .map(|key| crate::ir::path_join(&reached, key))
-                        .collect(),
-                )
-            }
-            _ if toks.get(k).is_some_and(|t| !matches!(t.step, Step::Key(_))) => {
-                return Some(format!(
-                    "why: {named} is not a list, so it has no element {wrote}"
-                ));
-            }
-            _ => continue,
-        };
-        // A position past the end is nearest the last; else the fewest edits.
-        let nearest = match toks.get(k).map(|t| &t.step) {
-            Some(Step::Index(n)) => near.get((*n).min(near.len().saturating_sub(1))),
-            _ => near
-                .iter()
-                .min_by_key(|e| crate::diag::edits(wrote, &e[reached.len()..])),
-        };
-        return Some(match nearest {
-            Some(e) => {
-                format!("why: {named} has {what}: {rule}\n  help: the nearest it has is '{own}{e}'")
-            }
-            None => format!("why: {named} has {what}: it is empty"),
-        });
-    }
-    None
+/// What `why` cannot read: the forms it takes, a path's as the plan
+/// prints them, a row's and a deny's.
+pub(crate) fn expected(pattern: &str) -> String {
+    query::expected(
+        "why",
+        "a row such as 'zone(\"us-east-1c\", n)', or a deny such as 'deny \"MESSAGE\"'",
+        pattern,
+    )
 }
 
 /// `dform why PATTERN`, as text.
@@ -179,8 +83,8 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
     if let Some(p) = scope::normal(pattern.trim(), cx.res) {
         return why(&p, how, cx);
     }
-    if let Some(e) = unreached(pattern, &cx.res.facts) {
-        bail!(e);
+    if let Some(e) = query::unreached(pattern, &cx.res.facts)? {
+        bail!("why: {e}");
     }
     // What the program does not derive yet, a resource rule the plan
     // holds as a group: why not, and the tick it waits for. A name read
@@ -196,7 +100,7 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
         }
         // An attribute as the plan prints it is the attribute of the
         // resource it names.
-        let full = match query::printed(pattern, &cx.res.facts).as_slice() {
+        let full = match query::named(pattern, &cx.res.facts)?.as_slice() {
             [(addr, Some(path))] => addr.attr(path),
             _ => pattern.to_string(),
         };
@@ -367,31 +271,20 @@ pub fn why_json(pattern: &str, how: As, cx: &Context) -> Result<serde_json::Valu
 /// an address as the plan prints it, an address or a fact pattern, a
 /// copy's output.
 fn matches(pattern: &str, facts: &BTreeSet<Atom>) -> Result<Vec<Matched>> {
-    let printed = query::printed(pattern, facts);
+    let named = query::named(pattern, facts)?;
     let cells = [crate::modules::INPUT, crate::modules::LET];
     let matched = match input_cell(pattern, &cells, facts)? {
         Some(m) => m,
-        // An address as the plan prints it, `ovh.ssh_key k3s.admin`, or
-        // its path, `k3s.admin` (R-111).
-        None if !printed.is_empty() => {
-            let mut out = Vec::new();
-            for (addr, path) in printed {
-                let query::Query::Body { body, .. } = query::pattern(&addr, path, true) else {
-                    continue;
-                };
-                if let [Lit::Pos(pat)] = body.as_slice() {
-                    out.extend(tree::find(pat, facts)?);
-                }
-            }
-            out
-        }
+        // An address as the plan prints it, `ovh.ssh_key k3s.admin`, its
+        // path, `k3s.admin` (R-111), or in full, `T["A"]`, a path after.
+        None if !named.is_empty() => query::found(named, facts)?,
         None => {
-            let parsed = match query::address(pattern, true)? {
+            let parsed = match query::address(pattern)? {
                 Some(q) => q,
                 None => query::parse(pattern)?,
             };
             let query::Query::Body { body, .. } = parsed else {
-                bail!("why: expected {FORMS}, got '{pattern}'");
+                bail!(expected(pattern));
             };
             let [Lit::Pos(pat)] = body.as_slice() else {
                 bail!("why: expected one fact pattern, got '{pattern}'");

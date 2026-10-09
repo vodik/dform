@@ -132,12 +132,13 @@ fn a_row_prints_a_reference_as_its_address() {
 
 /// An address's path below its top attribute reads the field out of the
 /// attribute's object (After R-124): before, no `attr` row was at it and
-/// the query said nothing.
+/// the query said nothing. As the plan prints it the path is the same
+/// value: the resource's, before a field of the cell `main.vpc` (the
+/// copy's output), as `why` reads it.
 #[test]
 fn a_path_below_the_top_attribute_is_its_field() {
-    let out = dform(
-        "examples/demo/stacks/dform.df",
-        &["query", r#"net.vpc["main.vpc"].tags.team"#],
-    );
-    assert_eq!(out, "\"platform\"\n");
+    for path in [r#"net.vpc["main.vpc"].tags.team"#, "main.vpc.tags.team"] {
+        let out = dform("examples/demo/stacks/dform.df", &["query", path]);
+        assert_eq!(out, "\"platform\"\n", "{path}");
+    }
 }

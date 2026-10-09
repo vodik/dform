@@ -43,7 +43,7 @@ type Env = BTreeMap<String, Value>;
 /// (`T["A"]`), an attribute (`T["A"].path`) or a relation's row with
 /// constants (`zone("x", n)`).
 pub fn why_not(pattern: &str, res: &EvalResult, redact: &Redactor) -> Result<String> {
-    let atom = match query::address(pattern, true)? {
+    let atom = match query::address(pattern)? {
         Some(query::Query::Body { body, .. }) => match body.as_slice() {
             [Lit::Pos(a)] => a.clone(),
             _ => bail!("why: expected one address, got '{pattern}'"),
@@ -53,7 +53,7 @@ pub fn why_not(pattern: &str, res: &EvalResult, redact: &Redactor) -> Result<Str
                 [Lit::Pos(a)] => a.clone(),
                 _ => bail!("why: expected one fact pattern, got '{pattern}'"),
             },
-            _ => bail!("why: expected {}, got '{pattern}'", super::FORMS),
+            _ => bail!(super::expected(pattern)),
         },
     };
     let atom = evaluated(atom);

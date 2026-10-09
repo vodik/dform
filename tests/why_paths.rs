@@ -1,8 +1,10 @@
-//! After R-217: `why` takes every path the plan prints, an element of a
-//! keyed list by its key (`pg.spec.ports[port=5432,protocol=TCP].protocol`,
-//! R-158) and an element of any list by its position, and says a value
-//! as the plan does: in the program's field order, a default no write of
-//! the program made with its note (R-217).
+//! After R-217: `why` and `query` take every path the plan prints, an
+//! element of a keyed list by its key
+//! (`pg.spec.ports[port=5432,protocol=TCP].protocol`, R-158) and an
+//! element of any list by its position, as the plan prints it or after
+//! the full address, and say a value as the plan does: in the program's
+//! field order, a default no write of the program made with its note
+//! (R-217).
 
 mod common;
 use common::Scratch;
@@ -221,5 +223,120 @@ fn the_full_address_takes_a_keyed_element() {
     assert!(
         why.starts_with("kube.service pg.spec.ports[port=5432,protocol=TCP].port = 5432\n"),
         "{why}"
+    );
+}
+
+/// `query` reads a path as `why` does, as the plan prints it, after its
+/// type or not, or after the full address: one value prints alone, as
+/// the plan lays it out; `--json` is its row.
+#[test]
+fn query_takes_each_path_the_plan_prints() {
+    let s = project("query-paths");
+    let element =
+        "{\n  port: 5432,\n  targetPort: 5432,\n  protocol: \"TCP\" (schema default),\n}\n";
+    let list =
+        "[{\n  port: 5432,\n  targetPort: 5432,\n  protocol: \"TCP\" (schema default),\n}]\n";
+    for (p, want) in [
+        ("pg.spec.ports", list),
+        ("kube.service pg.spec.ports", list),
+        (r#"kube.service["pg"].spec.ports"#, list),
+        ("pg.spec.ports[port=5432,protocol=TCP]", element),
+        (
+            r#"kube.service["pg"].spec.ports[port=5432,protocol=TCP]"#,
+            element,
+        ),
+        ("pg.spec.ports[0]", element),
+        ("pg.spec.ports[0].targetPort", "5432\n"),
+        (
+            r#"kube.service["pg"].spec.ports[port=5432,protocol=TCP].protocol"#,
+            "\"TCP\" (schema default)\n",
+        ),
+    ] {
+        let q = run(&s, &["query", p, "main.df"]).success().stdout;
+        assert_eq!(q, want, "{p}");
+    }
+    let json = run(
+        &s,
+        &[
+            "query",
+            "--json",
+            "pg.spec.ports[port=5432,protocol=TCP].protocol",
+            "main.df",
+        ],
+    )
+    .success()
+    .stdout;
+    let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(json, serde_json::json!([{ "value": "TCP" }]));
+    // A resource by its path is its attributes.
+    let q = run(&s, &["query", "pg", "main.df"]).success().stdout;
+    assert!(q.starts_with("path        value\n\"metadata\""), "{q}");
+}
+
+/// The plan, `why` and `query` say one value in one text: the program's
+/// field order, the default with its note.
+#[test]
+fn plan_why_and_query_say_a_value_alike() {
+    let s = project("query-paths-alike");
+    let query = run(&s, &["query", "pg.spec.ports", "main.df"])
+        .success()
+        .stdout;
+    let why = run(&s, &["why", "pg.spec.ports", "main.df"])
+        .success()
+        .stdout;
+    assert!(
+        why.starts_with(&format!("kube.service pg.spec.ports = {query}  = ")),
+        "{why}"
+    );
+    // In the plan, the value `spec` holds, under its key, a comma after.
+    let plan = run(&s, &["plan", "main.df"]).success().stdout;
+    let held: String = format!("ports: {}", query.trim_end())
+        .lines()
+        .map(|l| format!("        {l}\n"))
+        .collect();
+    let held = held.trim_end().to_string() + ",\n";
+    assert!(plan.contains(&held), "{plan}");
+}
+
+/// A path `query` cannot follow says what `why` says of it: the element
+/// a list does not have and the nearest it does, or the forms a path
+/// takes, in the plan's spelling.
+#[test]
+fn a_query_path_that_reaches_nothing_says_the_nearest() {
+    let s = project("query-paths-bad");
+    let r = run(&s, &["query", "pg.spec.ports[port=1]", "main.df"]).failure();
+    assert_eq!(
+        r.stderr,
+        "Error: query: kube.service pg.spec.ports has no element [port=1]: an element is \
+         named as the plan prints it, by its key in a keyed list, else by its position\n  \
+         help: the nearest it has is 'pg.spec.ports[port=5432,protocol=TCP]'\n"
+    );
+    let r = run(
+        &s,
+        &[
+            "query",
+            r#"kube.service["pg"].spec.ports[port=1]"#,
+            "main.df",
+        ],
+    )
+    .failure();
+    assert!(
+        r.stderr.ends_with(
+            "help: the nearest it has is \
+             'kube.service[\"pg\"].spec.ports[port=5432,protocol=TCP]'\n"
+        ),
+        "{}",
+        r.stderr
+    );
+    let r = run(&s, &["query", "not a path", "main.df"]).failure();
+    assert!(
+        r.stderr.starts_with(
+            "Error: query: expected an address as the plan prints it, 'net.vpc main' or its \
+             path 'main', an attribute such as 'main.cidr' or \
+             'pg.spec.ports[port=5432,protocol=TCP].protocol', an input such as 'nodes.count', \
+             a relation such as 'want'"
+        ),
+        "{}",
+        r.stderr
     );
 }

@@ -30,20 +30,32 @@ pub enum Query {
     Body { body: Vec<Lit>, vars: Vec<String> },
 }
 
-/// An address as `plan` prints it (H-16, `ir::parse_address`), as a
-/// pattern: `T["A"].p` is its attribute, `attr(T, A, "p", value)`; `T["A"]`
-/// is the resource, `want(T, A)` for `why` and every `attr(T, A, path,
-/// value)` for `query`. For `why`, a resource is also its path, as the
-/// plan prints it, with its type before it or not (R-112): `k3s.admin`,
-/// `ovh.ssh_key k3s.admin`. `None` when `src` is not an address; an
-/// address with an old scope separator, `/` or `::`, is an error.
-pub fn address(src: &str, why: bool) -> Result<Option<Query>> {
+/// The forms a path names a resource or a value by, as the plan prints
+/// them: what `why` and `query` read alike.
+pub const FORMS: &str = "an address as the plan prints it, 'net.vpc main' or its path \
+     'main', an attribute such as 'main.cidr' or \
+     'pg.spec.ports[port=5432,protocol=TCP].protocol', an input such as 'nodes.count'";
+
+/// What command `cmd` says of a pattern it cannot read, `got`: the forms
+/// a path takes ([`FORMS`]), then `more`, the command's own.
+pub fn expected(cmd: &str, more: &str, got: &str) -> String {
+    format!("{cmd}: expected {FORMS}, {more}, got '{got}'")
+}
+
+/// An address as `plan` prints it (H-16, `ir::parse_address`), as `why`'s
+/// pattern: `T["A"].p` is its attribute, `attr(T, A, "p", value)`;
+/// `T["A"]` is the resource, `want(T, A)`. A resource is also its path,
+/// as the plan prints it, with its type before it or not (R-112):
+/// `k3s.admin`, `ovh.ssh_key k3s.admin`. `None` when `src` is not an
+/// address; an address with an old scope separator, `/` or `::`, is an
+/// error.
+pub fn address(src: &str) -> Result<Option<Query>> {
     let s = |x: &str| Term::Val(Value::Str(x.to_string()));
     let v = |x: &str| Term::Var(x.to_string());
     let (addr, path) = match crate::ir::parse_address(src) {
         Ok(a) => a,
         Err(e) if e.is::<crate::ir::OldScope>() => return Err(e),
-        Err(_) if why => {
+        Err(_) => {
             let (typ, at) = match src.trim().split_once(char::is_whitespace) {
                 Some((t, p)) if t.split('.').all(crate::lexer::is_word) => (s(t), p),
                 Some(_) => return Ok(None),
@@ -64,9 +76,156 @@ pub fn address(src: &str, why: bool) -> Result<Option<Query>> {
                 vars,
             }));
         }
-        Err(_) => return Ok(None),
     };
-    Ok(Some(pattern(&addr, path, why)))
+    Ok(Some(pattern(&addr, path, true)))
+}
+
+/// The resources path `src` names and the attribute path past each, as
+/// `why` and `query` read it: the full address, `T["A"]` with a path
+/// after it (`ir::parse_address`), else as the plan prints it
+/// ([`printed`]). Empty when it names none; an address with an old scope
+/// separator is an error.
+pub fn named(
+    src: &str,
+    facts: &BTreeSet<Atom>,
+) -> Result<Vec<(crate::ir::Address, Option<String>)>> {
+    match crate::ir::parse_address(src) {
+        Ok(a) => Ok(vec![a]),
+        Err(e) if e.is::<crate::ir::OldScope>() => Err(e),
+        Err(_) => Ok(printed(src, facts)),
+    }
+}
+
+/// The facts `named` names ([`named`]): each resource's `want`, or the
+/// attribute holding its path with the part of it the path names
+/// (`tree::find`).
+pub fn found(
+    named: Vec<(crate::ir::Address, Option<String>)>,
+    facts: &BTreeSet<Atom>,
+) -> Result<Vec<(Atom, Option<crate::report::tree::Focus>)>> {
+    let mut out = Vec::new();
+    for (addr, path) in named {
+        if let Query::Body { body, .. } = pattern(&addr, path, true)
+            && let [Lit::Pos(pat)] = body.as_slice()
+        {
+            out.extend(crate::report::tree::find(pat, facts)?);
+        }
+    }
+    Ok(out)
+}
+
+/// The value each attribute fact of `found` holds at the part its focus
+/// names, and that value as the plan lays it out (`fold::Shape::laid`),
+/// each leaf as `leaf` spells it: what `why` heads the value with and
+/// `query` prints.
+pub fn values(
+    found: &[(Atom, Option<crate::report::tree::Focus>)],
+    res: &engine::EvalResult,
+    redact: &Redactor,
+    leaf: &dyn Fn(&Value) -> String,
+) -> Vec<(Value, crate::fmt::value::Tree)> {
+    let printer = crate::report::tree::Printer {
+        circuit: &res.circuit,
+        redact,
+        all: false,
+    };
+    let mut out = Vec::new();
+    for (f, focus) in found.iter().filter(|(f, _)| f.pred == "attr") {
+        let keys = focus.as_ref().map(|f| f.keys()).unwrap_or_default();
+        let below = focus.as_ref().map(|f| f.below()).unwrap_or_default();
+        let shape = crate::report::fold::Shape::of(&res.facts, f);
+        if let Some((v, _, path)) = shape.reach(f, keys, below) {
+            out.push((v.clone(), shape.laid(&printer, f, &path, v, leaf)));
+        }
+    }
+    out
+}
+
+/// A pattern that names a resource's list as the plan prints it, past
+/// an element the list does not have (`pg.spec.ports[port=1]`) or a field
+/// the element does not (`pg.spec.ports[0].prot`): what it names, and
+/// the nearest the value has, as the plan prints it.
+pub fn unreached(pattern: &str, facts: &BTreeSet<Atom>) -> Result<Option<String>> {
+    use crate::report::fold::{Shape, Step, reach, tokens};
+    let src = pattern.trim();
+    for (addr, path) in named(src, facts)? {
+        let Some(path) = path.filter(|p| p.contains('[')) else {
+            continue;
+        };
+        let toks = tokens(&path);
+        let Some(Step::Key(top)) = toks.first().map(|t| &t.step) else {
+            continue;
+        };
+        let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+        let Some(attr) = facts.iter().find(|a| {
+            a.pred == "attr"
+                && a.args.len() == 4
+                && a.args[..3] == [s(&addr.typ), s(&addr.name), s(top)]
+        }) else {
+            continue;
+        };
+        let (Some(Term::Val(v)), shape) = (attr.args.get(3), Shape::of(facts, attr)) else {
+            continue;
+        };
+        // The steps that reach, each element as the plan prints it, and
+        // what the first that does not reaches into.
+        let (mut at, mut reached) = (v, top.clone());
+        let mut k = 1;
+        while let Some(next) = toks.get(k).and_then(|t| reach(at, std::slice::from_ref(t))) {
+            reached = match at {
+                Value::List(xs) => {
+                    let j = xs.iter().position(|x| std::ptr::eq(x, next)).unwrap_or(0);
+                    shape.element(&reached, j, next)
+                }
+                _ => reached + &toks[k].text,
+            };
+            (at, k) = (next, k + 1);
+        }
+        let Some(wrote) = toks.get(k).map(|t| t.text.as_str()) else {
+            continue;
+        };
+        let past_list = toks[..k].iter().any(|t| !matches!(t.step, Step::Key(_)));
+        let own = src.strip_suffix(path.as_str()).unwrap_or_default();
+        let named = crate::report::attribute(&addr, top) + &reached[top.len()..];
+        let (what, rule, near) = match at {
+            Value::List(xs) => (
+                format!("no element {wrote}"),
+                "an element is named as the plan prints it, by its key in a keyed list, \
+                 else by its position",
+                xs.iter()
+                    .enumerate()
+                    .map(|(j, x)| shape.element(&reached, j, x))
+                    .collect::<Vec<_>>(),
+            ),
+            Value::Obj(m) if past_list && matches!(toks[k].step, Step::Key(_)) => (
+                format!("no field {}", wrote.trim_start_matches('.')),
+                "a field is named by its key",
+                m.keys()
+                    .map(|key| crate::ir::path_join(&reached, key))
+                    .collect(),
+            ),
+            _ if !matches!(toks[k].step, Step::Key(_)) => {
+                return Ok(Some(format!(
+                    "{named} is not a list, so it has no element {wrote}"
+                )));
+            }
+            _ => continue,
+        };
+        // A position past the end is nearest the last; else the fewest edits.
+        let nearest = match &toks[k].step {
+            Step::Index(n) => near.get((*n).min(near.len().saturating_sub(1))),
+            _ => near
+                .iter()
+                .min_by_key(|e| crate::diag::edits(wrote, &e[reached.len()..])),
+        };
+        return Ok(Some(match nearest {
+            Some(e) => {
+                format!("{named} has {what}: {rule}\n  help: the nearest it has is '{own}{e}'")
+            }
+            None => format!("{named} has {what}: it is empty"),
+        }));
+    }
+    Ok(None)
 }
 
 /// An address as the plan prints it (R-111), `ovh.ssh_key k3s.admin`, or
@@ -204,33 +363,18 @@ pub fn cell(src: &str, facts: &BTreeSet<Atom>) -> Option<Query> {
     None
 }
 
-/// Address `addr`, or its attribute `path`, as a pattern: for `why` the
-/// resource is `want(T, A)`, for `query` every `attr(T, A, path, value)`.
+/// `src` names a cell whole ([`cell`]), no field past its name: what a
+/// path is read as before a resource's (as `why` reads it).
+pub fn names_cell(src: &str, facts: &BTreeSet<Atom>) -> bool {
+    matches!(cell(src, facts), Some(Query::Body { body, .. }) if body.len() == 1)
+}
+
+/// Address `addr`, or its attribute `path`, as a pattern: `attr(T, A,
+/// path, value)`; the resource for `why` is `want(T, A)`, for `query`
+/// every `attr(T, A, path, value)`.
 pub fn pattern(addr: &crate::ir::Address, path: Option<String>, why: bool) -> Query {
     let s = |x: &str| Term::Val(Value::Str(x.to_string()));
     let v = |x: &str| Term::Var(x.to_string());
-    // Below the top attribute (After R-124): the attribute holds the
-    // object, and the value is the field read out of it.
-    if !why
-        && let Some(p) = &path
-        && let [top, rest @ ..] = crate::ir::path_segments(p).as_slice()
-        && !rest.is_empty()
-    {
-        let read = Atom {
-            pred: "attr".into(),
-            args: vec![s(&addr.typ), s(&addr.name), s(top), v("__Top")],
-            record: None,
-            span: Default::default(),
-        };
-        let field = Term::Func {
-            name: "__path".into(),
-            args: vec![v("__Top"), s(&rest.join("."))],
-        };
-        return Query::Body {
-            body: vec![Lit::Pos(read), Lit::Eq(v("value"), field)],
-            vars: vec!["value".into()],
-        };
-    }
     let (pred, args) = match (path, why) {
         (Some(p), _) => ("attr", vec![s(&addr.typ), s(&addr.name), s(&p), v("value")]),
         (None, true) => ("want", vec![s(&addr.typ), s(&addr.name)]),
@@ -253,12 +397,9 @@ pub fn pattern(addr: &crate::ir::Address, path: Option<String>, why: bool) -> Qu
     }
 }
 
-/// Parse an address (`address`), `pred`, or body literals such as
-/// `attr(t, a, .cidr, c), want(t, a)`, with the program's own parser.
+/// Parse `pred`, or body literals such as `attr(t, a, .cidr, c), want(t,
+/// a)`, with the program's own parser.
 pub fn parse(src: &str) -> Result<Query> {
-    if let Some(q) = address(src, false)? {
-        return Ok(q);
-    }
     let src = src.trim().trim_end_matches('.').trim();
     if !src.is_empty()
         && src

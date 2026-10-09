@@ -3254,6 +3254,7 @@ cargo run -- -C examples/demo query 'want(net.vpc, "main.vpc")'    # yes / no
 cargo run -- -C examples/demo query want                                    # every want fact
 cargo run -- -C examples/demo query 'net.vpc["main.vpc"]'          # its attributes: path, value
 cargo run -- -C examples/demo query 'net.vpc["main.vpc"].cidr'     # one attribute's value, laid out
+cargo run -- -C examples/demo query main.vpc.cidr                   # the same, as the plan prints it
 dform query synapse.agent_init                                     # a cell by its path: value
 ```
 
@@ -3280,9 +3281,14 @@ A secret prints as its size, `secret(32 B)` (in `--json`, as its label
 value equal to it or string containing it, so a rule that forwards a
 secret does not leak it either.
 
-One attribute's value, `query 'T["A"].p'`, prints alone in `dform fmt`'s
-layout, as the plan prints a folded value (R-124); every other query is
-its table.
+A resource or one of its values is named as `why` names it, as the plan
+prints it (`query main.vpc.cidr`, `query 'pg.spec.ports[port=5432,protocol=TCP]'`)
+or after the full address (`query 'net.vpc["main.vpc"].cidr'`); a path
+past a list that reaches nothing names the nearest element the list has.
+One value prints alone in `dform fmt`'s layout, as the plan lays it out
+(R-124): in the program's field order, a default no write of the
+program made with its note, `protocol: "TCP" (schema default)` (R-217);
+every other query is its table.
 
 Rows print values as the program writes them: a reference is the address
 it names as the plan prints it (R-111), `google.sql_database_instance
