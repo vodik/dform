@@ -82,7 +82,7 @@ pub fn fold(
     let scope = program.scope;
     let mut b = Builder::new(&mut program, span, &any);
     let item = b.folded_rule((&r.head, &r.body), results, &mut counters, span, scope);
-    let lowered = crate::program::lower_folded_rule(&program, item);
+    let lowered = crate::program::lower_item(&program, item);
     let text = |stmts: &[Stmt]| {
         dump(&Ok(ast::Program {
             statements: stmts.to_vec(),

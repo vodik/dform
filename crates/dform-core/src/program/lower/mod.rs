@@ -12,7 +12,7 @@
 mod clause;
 mod expr;
 mod items;
-pub use clause::{lower_clause, lower_folded_rule, lower_goal};
+pub use clause::{lower_clause, lower_goal};
 pub use expr::lower_expr;
 pub use items::lower_item;
 

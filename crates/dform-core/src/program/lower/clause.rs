@@ -36,26 +36,6 @@ pub fn lower_goal(program: &Program, id: GoalId, context: &[Lit]) -> (Vec<Lit>, 
     (out, l.helpers)
 }
 
-/// The rule item `id` with its body's aggregate bindings folded, as the
-/// resolver's `fold_rule` writes it ([`Lowering::folded`]).
-pub fn lower_folded_rule(program: &Program, id: ItemId) -> Vec<Stmt> {
-    let item = &program.items[id];
-    let ItemKind::Rule {
-        head,
-        clause: Some(clause),
-        ..
-    } = &item.kind
-    else {
-        unreachable!("a folded rule has a body")
-    };
-    let mut l = Lowering::new(program);
-    let head = l.atom(&head.rel, &head.args);
-    let (lits, folds) = l.unfolded(*clause);
-    let mut out = folded(head, lits, folds, item.span);
-    out.append(&mut l.helpers);
-    out
-}
-
 /// One aggregate binding of a clause: the variable, the call, and its
 /// `__agg_N` when it folds through one.
 pub(super) type Fold = (Term, Term, Option<u32>);

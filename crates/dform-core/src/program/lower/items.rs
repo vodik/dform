@@ -5,6 +5,7 @@
 //! | item                           | statements                                       |
 //! |--------------------------------|--------------------------------------------------|
 //! | `let k[: T] = v [@r] [where B]`| `let("k", v', "r") [:- B', reads]`, folded over B's aggregates; `__secret_let("k", "p")` per secret path; `decl k(k: T)` at the first typed row |
+//! | `p(a, b) [@r] [where B]`       | `p(a', b'[, "r"]) [:- B', reads]`, folded over B's aggregates |
 //!
 //! Then the helper statements its clause and terms made, in the order
 //! they made them.
@@ -12,8 +13,8 @@
 use super::clause::folded;
 use super::expr::Lowering;
 use crate::ast::{self, Atom, Decl, Rank, RuleStmt, Span, Stmt, TypeExpr, str_term};
-use crate::program::node::{ClauseId, ExprId, ItemId, ItemKind};
-use crate::program::{Origin, Program};
+use crate::program::node::{ClauseId, ExprId, Head, ItemId, ItemKind};
+use crate::program::{NodeId, Origin, Program};
 
 /// The statements of the item `id`, onto `out`, one origin each.
 pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<Origin>) {
@@ -57,6 +58,7 @@ pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: 
             };
             l.statements(program, it.span)
         }
+        ItemKind::Rule { head, clause, rank } => rule(program, id, (head, *rank), *clause, it.span),
         kind => unreachable!(
             "no builder makes {} before its step",
             super::super::spell::kind(kind)
@@ -70,6 +72,36 @@ pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: 
 pub fn lower_item(program: &Program, id: ItemId) -> Vec<Stmt> {
     let mut out = Vec::new();
     item(program, id, &mut out, &mut Vec::new());
+    out
+}
+
+/// `p(a, b) [@rank] [where B]`: a fact, or a rule over B's literals and
+/// the reads the head hoisted, its aggregates folded; a rank the head's
+/// last argument (`arg(T, A, p, v, rank)`).
+fn rule(
+    program: &Program,
+    id: ItemId,
+    (head, rank): (&Head, Option<Rank>),
+    clause: Option<ClauseId>,
+    span: Span,
+) -> Vec<Stmt> {
+    let mut l = Lowering::new(program);
+    let mut atom = l.atom(&head.rel, &head.args);
+    atom.args.extend(rank.map(|r| str_term(r.name())));
+    let (mut body, folds) = match clause {
+        Some(c) => l.unfolded(c),
+        None => Default::default(),
+    };
+    for &g in &head.reads {
+        l.goal(g, &mut body);
+    }
+    l.terms_made(NodeId::Item(id));
+    let mut out = match (folds.is_empty(), clause) {
+        (false, _) => folded(atom, body, folds, span),
+        (true, None) if body.is_empty() => vec![Stmt::Fact(atom)],
+        (true, _) => vec![Stmt::Rule(RuleStmt::new(atom, body))],
+    };
+    out.append(&mut l.helpers);
     out
 }
 

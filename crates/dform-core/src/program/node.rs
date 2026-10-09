@@ -655,11 +655,14 @@ pub struct Param {
 }
 
 /// A rule's head; an aggregate in it is an [`ExprKind::Aggregate`]
-/// argument.
+/// argument. `reads`: the reads its arguments hoisted, in order, each
+/// the goal it lowered to (as an [`ExprKind::Hoisted`] term's), written
+/// after the clause until reads are built from the tree.
 #[derive(Debug, Clone)]
 pub struct Head {
     pub rel: RelRef,
     pub args: RelArgs,
+    pub reads: Vec<GoalId>,
 }
 
 /// A block's name: `n`, `"n"`, `"a-${i}"` (bound last).

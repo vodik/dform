@@ -68,23 +68,12 @@ impl Builder<'_> {
             })
             .collect();
         let clause = self.clause_of(goals);
-        let rel = RelRef {
-            name: head.pred.clone(),
-            span: head.span,
-        };
-        let args = match &head.record {
-            Some(r) => RelArgs::Record(
-                r.iter()
-                    .map(|(k, t)| (k.clone(), self.pattern(t)))
-                    .collect(),
-            ),
-            None => RelArgs::Positional(head.args.iter().map(|t| self.pattern(t)).collect()),
-        };
+        let head = self.head(head, &[]);
         self.program.items.insert(Item {
             span,
             scope,
             kind: ItemKind::Rule {
-                head: Head { rel, args },
+                head,
                 clause: Some(clause),
                 rank: None,
             },
