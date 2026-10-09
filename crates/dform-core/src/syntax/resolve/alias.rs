@@ -210,14 +210,21 @@ impl Lowerer<'_> {
     /// reference: `collect` met it before the aliases were known.
     pub(super) fn unalias_outputs(&mut self) {
         for scope in self.program.scopes.ids().collect::<Vec<_>>() {
-            let aliased: Vec<String> = self.decls.scopes[scope]
-                .outputs
-                .iter()
-                .filter(|(_, t)| t.as_deref().is_some_and(|t| self.names_alias(scope, t)))
-                .map(|(k, _)| k.clone())
+            let names = self.names(scope);
+            let aliased: Vec<String> = names
+                .names(|k| matches!(k, DeclKind::Output { .. }))
+                .filter(|k| {
+                    let typ = names.output(k).flatten();
+                    typ.is_some_and(|t| self.names_alias(scope, t))
+                })
+                .cloned()
                 .collect();
             for k in aliased {
-                self.decls.scopes[scope].outputs.insert(k, None);
+                for d in self.names_mut(scope).of_mut(&k) {
+                    if let DeclKind::Output { typ, .. } = &mut d.kind {
+                        *typ = None;
+                    }
+                }
             }
         }
     }

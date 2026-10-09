@@ -12,8 +12,8 @@
 //! the scope its block is written in.
 
 use super::node::{ItemId, Name};
-use crate::ast::Span;
-use slotmap::SlotMap;
+use crate::syntax::SyntaxNode;
+use slotmap::{SecondaryMap, SlotMap};
 use std::collections::BTreeMap;
 
 slotmap::new_key_type! {
@@ -26,18 +26,11 @@ pub struct Scope {
     /// The enclosing scope; none for the program's and a module's file.
     pub parent: Option<ScopeId>,
     pub kind: ScopeKind,
-    /// What the scope declares, by name: several for a name declared under
-    /// several guards (R-104) or a `let`'s rows.
-    pub decls: BTreeMap<Name, Vec<Decl>>,
 }
 
 impl Scope {
     pub fn new(parent: Option<ScopeId>, kind: ScopeKind) -> Scope {
-        Scope {
-            parent,
-            kind,
-            decls: BTreeMap::new(),
-        }
+        Scope { parent, kind }
     }
 }
 
@@ -60,6 +53,8 @@ pub enum ScopeKind {
 #[derive(Debug, Default)]
 pub struct Scopes {
     tree: SlotMap<ScopeId, Scope>,
+    /// What each scope declares.
+    pub names: SecondaryMap<ScopeId, Names>,
     /// The program's scope, every entry file's outermost.
     pub root: ScopeId,
     /// Each file's top level, by `diag` source id.
@@ -87,13 +82,16 @@ impl std::ops::IndexMut<ScopeId> for Scopes {
 impl Scopes {
     /// The program's scope and nothing in it.
     pub fn new() -> Scopes {
-        let mut tree = SlotMap::with_key();
-        let root = tree.insert(Scope::new(None, ScopeKind::Program));
-        Scopes {
-            tree,
-            root,
-            ..Scopes::default()
-        }
+        let mut scopes = Scopes::default();
+        scopes.root = scopes.insert(None, ScopeKind::Program);
+        scopes
+    }
+
+    /// A new scope, declaring nothing yet.
+    fn insert(&mut self, parent: Option<ScopeId>, kind: ScopeKind) -> ScopeId {
+        let s = self.tree.insert(Scope::new(parent, kind));
+        self.names.insert(s, Names::default());
+        s
     }
 
     /// The top level of `file`: an entry file's inside the program's, a
@@ -102,13 +100,11 @@ impl Scopes {
         let scope = match module {
             Some(path) => {
                 let kind = ScopeKind::Module { path: path.into() };
-                let s = self.tree.insert(Scope::new(None, kind));
+                let s = self.insert(None, kind);
                 self.paths.insert(path.into(), s);
                 s
             }
-            None => self
-                .tree
-                .insert(Scope::new(Some(self.root), ScopeKind::File(file))),
+            None => self.insert(Some(self.root), ScopeKind::File(file)),
         };
         self.files.insert(file, scope);
         scope
@@ -118,7 +114,7 @@ impl Scopes {
     /// in `file`, written in `parent`.
     pub fn component(&mut self, file: u32, offset: u32, parent: ScopeId, path: &str) -> ScopeId {
         let kind = ScopeKind::Component { path: path.into() };
-        let s = self.tree.insert(Scope::new(Some(parent), kind));
+        let s = self.insert(Some(parent), kind);
         self.blocks.insert((file, offset), s);
         self.paths.insert(path.into(), s);
         s
@@ -262,34 +258,340 @@ impl Scopes {
     }
 }
 
-/// One declaration of a name.
+/// What a scope declares, by name: every declaration of each, in the
+/// order the front end met them (a module's `use`s and the program's
+/// rules as `collect` walks the file, copies and resources once every
+/// `use` is known). Iteration is by name.
+#[derive(Debug, Clone, Default)]
+pub struct Names {
+    decls: BTreeMap<Name, Vec<Decl>>,
+}
+
+/// One declaration of a name: what it is, and the statement that
+/// declares it, which the front end reads its parts from (a `let`'s rows,
+/// an input's type, a `decl`'s columns).
 #[derive(Debug, Clone)]
 pub struct Decl {
     pub kind: DeclKind,
-    pub item: ItemId,
-    pub span: Span,
+    pub node: SyntaxNode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeclKind {
-    Let,
-    LetFn,
+    /// `input k: T`: a value read bare.
     Input,
-    Key,
-    /// A resource, of its type.
+    /// A row of `let k = v`: a value read bare, a relation of one column.
+    Let,
+    /// `let f(a, b) = v` (R-187): a relation of its parameters' columns and
+    /// its value's.
+    LetFn { arity: usize },
+    /// `resource T n` with a static name (R-76): of the type `T`.
     Resource(Name),
-    Copy,
-    Use,
-    Stack,
-    Component,
-    Relation {
-        arity: usize,
+    /// `resource C n`, `C` a component (R-113): the component's path as
+    /// written, as resolved (`None`: it names no component, and the copy
+    /// is the error), and whether it binds the name (a copy named by its
+    /// clause binds none, R-191).
+    Copy {
+        written: Name,
+        component: Option<Name>,
+        binds: bool,
     },
-    RelationInput,
+    /// `use m [as n]`: the module's path as written, then as resolved.
+    Use { written: Name, module: Name },
+    /// `use s [as n]` of a stack the tool deploys: its index in the
+    /// program's deployed stacks.
+    Stack(usize),
+    /// `component n`: its path.
+    Component(Name),
+    /// A component copied here, by its last segment (`resource postgres
+    /// db` makes `postgres[t]` readable): its path.
+    Copied(Name),
+    /// A rule's or a fact's head, of this many columns.
+    Rule { arity: usize },
+    /// `decl p(..)`, of this many columns (R-55).
+    Decl { arity: usize },
+    /// `input p from ..`, or `input p`, whose rows the module's user
+    /// gives (R-55).
+    RelationInput { given: bool },
+    /// `output p` alone: a relation exported (R-55).
     RelationOutput,
-    Output,
-    Alias,
-    Signature,
+    /// `output k [: T]`: `T` when it is a resource type, and as written.
+    Output {
+        typ: Option<Name>,
+        written: Option<String>,
+    },
+    /// `type T = component { .. }` (R-104), in the file `file`.
+    Signature { file: u32 },
+}
+
+impl DeclKind {
+    /// A value read bare: an input or a `let`.
+    pub fn is_value(&self) -> bool {
+        matches!(self, DeclKind::Input | DeclKind::Let)
+    }
+
+    /// The columns of the relation it declares, if it declares one.
+    pub fn arity(&self) -> Option<usize> {
+        match self {
+            DeclKind::Let => Some(1),
+            DeclKind::LetFn { arity } | DeclKind::Rule { arity } | DeclKind::Decl { arity } => {
+                Some(*arity)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether the scope's own statements give the relation its rows.
+    pub fn defines(&self) -> bool {
+        matches!(
+            self,
+            DeclKind::LetFn { .. } | DeclKind::Rule { .. } | DeclKind::RelationInput { .. }
+        )
+    }
+}
+
+impl Names {
+    /// `name` declared by `node` as `kind`.
+    pub fn declare(&mut self, name: impl Into<Name>, kind: DeclKind, node: SyntaxNode) {
+        let decl = Decl { kind, node };
+        self.decls.entry(name.into()).or_default().push(decl);
+    }
+
+    /// Every declaration of `name`, in order.
+    pub fn of(&self, name: &str) -> &[Decl] {
+        self.decls.get(name).map_or(&[], Vec::as_slice)
+    }
+
+    /// Every declaration of `name`, mutably (the front end resolves a
+    /// `use`'s and a copy's paths once every scope's names are known).
+    pub fn of_mut(&mut self, name: &str) -> &mut [Decl] {
+        self.decls.get_mut(name).map_or(&mut [], Vec::as_mut_slice)
+    }
+
+    /// Every name and its declarations, by name.
+    pub fn iter(&self) -> impl Iterator<Item = (&Name, &[Decl])> {
+        self.decls.iter().map(|(n, d)| (n, d.as_slice()))
+    }
+
+    /// The names some declaration of which `pick` takes, in order.
+    pub fn names(&self, pick: impl Fn(&DeclKind) -> bool) -> impl Iterator<Item = &Name> {
+        self.decls
+            .iter()
+            .filter(move |(_, ds)| ds.iter().any(|d| pick(&d.kind)))
+            .map(|(n, _)| n)
+    }
+
+    fn first(&self, name: &str, pick: impl Fn(&DeclKind) -> bool) -> Option<&Decl> {
+        self.of(name).iter().find(|d| pick(&d.kind))
+    }
+
+    fn last(&self, name: &str, pick: impl Fn(&DeclKind) -> bool) -> Option<&Decl> {
+        self.of(name).iter().rev().find(|d| pick(&d.kind))
+    }
+
+    /// Whether `name` is a value read bare here: an input or a `let`.
+    pub fn is_value(&self, name: &str) -> bool {
+        self.first(name, DeclKind::is_value).is_some()
+    }
+
+    /// The last `input name` here.
+    pub fn input(&self, name: &str) -> Option<&SyntaxNode> {
+        self.last(name, |k| *k == DeclKind::Input).map(|d| &d.node)
+    }
+
+    /// The `let name` statements here, in order.
+    pub fn lets(&self, name: &str) -> impl Iterator<Item = &SyntaxNode> {
+        self.of(name)
+            .iter()
+            .filter(|d| d.kind == DeclKind::Let)
+            .map(|d| &d.node)
+    }
+
+    /// The first `let name(..)` here.
+    pub fn function(&self, name: &str) -> Option<&SyntaxNode> {
+        let fun = |k: &DeclKind| matches!(k, DeclKind::LetFn { .. });
+        self.first(name, fun).map(|d| &d.node)
+    }
+
+    /// The types of the resources `name` here, one per declaration.
+    pub fn resources(&self, name: &str) -> Option<Vec<Name>> {
+        let types: Vec<Name> = self
+            .of(name)
+            .iter()
+            .filter_map(|d| match &d.kind {
+                DeclKind::Resource(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        (!types.is_empty()).then_some(types)
+    }
+
+    /// The first copy `name` here.
+    fn copy(&self, name: &str) -> Option<&Decl> {
+        self.first(name, |k| matches!(k, DeclKind::Copy { .. }))
+    }
+
+    /// The component the copy `name` here is of, when it names one.
+    pub fn instance(&self, name: &str) -> Option<&Name> {
+        match &self.copy(name)?.kind {
+            DeclKind::Copy { component, .. } => component.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// The copies here whose component is resolved: name and component.
+    pub fn instances(&self) -> impl Iterator<Item = (&Name, &Name)> {
+        self.decls
+            .keys()
+            .filter_map(|n| self.instance(n).map(|c| (n, c)))
+    }
+
+    /// Whether the copy `name` here names no component: its statement is
+    /// the error.
+    pub fn unbound(&self, name: &str) -> bool {
+        self.copy(name).is_some_and(|d| {
+            matches!(
+                d.kind,
+                DeclKind::Copy {
+                    component: None,
+                    ..
+                }
+            )
+        })
+    }
+
+    /// The component `name` declares here: its path.
+    pub fn component(&self, name: &str) -> Option<&Name> {
+        let decl = self.last(name, |k| matches!(k, DeclKind::Component(_)))?;
+        match &decl.kind {
+            DeclKind::Component(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// The component copied here whose last segment is `name`: its path.
+    pub fn copied(&self, name: &str) -> Option<&Name> {
+        let decl = self.first(name, |k| matches!(k, DeclKind::Copied(_)))?;
+        match &decl.kind {
+            DeclKind::Copied(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// The module the first `use` of `name` here binds: its path.
+    pub fn module(&self, name: &str) -> Option<&Name> {
+        let decl = self.first(name, |k| matches!(k, DeclKind::Use { .. }))?;
+        match &decl.kind {
+            DeclKind::Use { module, .. } => Some(module),
+            _ => None,
+        }
+    }
+
+    /// The modules `use`d here: the name each binds and its path.
+    pub fn uses(&self) -> impl Iterator<Item = (&Name, &Name)> {
+        self.decls
+            .keys()
+            .filter_map(|n| self.module(n).map(|m| (n, m)))
+    }
+
+    /// The `use`s and the copies that bind `name` here, in order: several
+    /// are guarded declarations (R-104).
+    pub fn bound(&self, name: &str) -> impl Iterator<Item = &Decl> {
+        self.of(name).iter().filter(|d| {
+            matches!(
+                d.kind,
+                DeclKind::Use { .. } | DeclKind::Copy { binds: true, .. }
+            )
+        })
+    }
+
+    /// The stack the last `use` of `name` here binds: its index.
+    pub fn stack(&self, name: &str) -> Option<usize> {
+        let decl = self.last(name, |k| matches!(k, DeclKind::Stack(_)))?;
+        match decl.kind {
+            DeclKind::Stack(i) => Some(i),
+            _ => None,
+        }
+    }
+
+    /// The stacks `use`d here, by index.
+    pub fn stacks(&self) -> impl Iterator<Item = usize> + '_ {
+        self.decls.keys().filter_map(|n| self.stack(n))
+    }
+
+    /// Whether `name` is an output here, and the resource type it holds
+    /// when it holds one: the last declaration's that says one.
+    pub fn output(&self, name: &str) -> Option<Option<&Name>> {
+        let mut outputs = self.of(name).iter().filter_map(|d| match &d.kind {
+            DeclKind::Output { typ, .. } => Some(typ.as_ref()),
+            _ => None,
+        });
+        let first = outputs.next()?;
+        Some(outputs.fold(first, |typ, t| t.or(typ)))
+    }
+
+    /// The output `name`'s type as the last declaration writing one
+    /// writes it (R-104).
+    pub fn output_type(&self, name: &str) -> Option<&String> {
+        self.of(name).iter().rev().find_map(|d| match &d.kind {
+            DeclKind::Output { written, .. } => written.as_ref(),
+            _ => None,
+        })
+    }
+
+    /// The last component signature `name` here: its file and statement.
+    pub fn signature(&self, name: &str) -> Option<(u32, &SyntaxNode)> {
+        let decl = self.last(name, |k| matches!(k, DeclKind::Signature { .. }))?;
+        match decl.kind {
+            DeclKind::Signature { file } => Some((file, &decl.node)),
+            _ => None,
+        }
+    }
+
+    /// The columns the relation `name` has here, one per arity its heads
+    /// and declarations give it.
+    pub fn arities(&self, name: &str) -> std::collections::BTreeSet<usize> {
+        self.of(name)
+            .iter()
+            .filter_map(|d| d.kind.arity())
+            .collect()
+    }
+
+    /// Whether `name` is a relation here: a head, a `decl` or a `let`.
+    pub fn is_relation(&self, name: &str) -> bool {
+        self.first(name, |k| k.arity().is_some()).is_some()
+    }
+
+    /// The first `decl name(..)` here.
+    pub fn decl(&self, name: &str) -> Option<&SyntaxNode> {
+        let decl = |k: &DeclKind| matches!(k, DeclKind::Decl { .. });
+        self.first(name, decl).map(|d| &d.node)
+    }
+
+    /// Every relation `decl`ared here and its first `decl`, by name.
+    pub fn decls(&self) -> impl Iterator<Item = (&Name, &SyntaxNode)> {
+        self.decls
+            .keys()
+            .filter_map(|n| self.decl(n).map(|d| (n, d)))
+    }
+
+    /// Whether the module's user gives the relation `name` here (`input
+    /// p`, R-55).
+    pub fn takes(&self, name: &str) -> bool {
+        let given = |k: &DeclKind| matches!(k, DeclKind::RelationInput { given: true });
+        self.first(name, given).is_some()
+    }
+
+    /// Whether `output name` exports the relation here (R-55).
+    pub fn exports(&self, name: &str) -> bool {
+        self.first(name, |k| *k == DeclKind::RelationOutput)
+            .is_some()
+    }
+
+    /// Whether this scope's own statements give the relation `name` rows.
+    pub fn defines(&self, name: &str) -> bool {
+        self.first(name, DeclKind::defines).is_some()
+    }
 }
 
 /// A read's declaration: the scope that declares the name and which of its

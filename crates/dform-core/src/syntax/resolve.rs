@@ -33,10 +33,10 @@ use crate::ast::{
 };
 use crate::diag::Diagnostic;
 use crate::program::node::CopyKind;
+use crate::program::scope::{self as scopes, DeclKind, Names};
 use crate::program::{ItemId, ScopeId};
 use crate::spell;
 use crate::value::Value;
-use slotmap::SecondaryMap;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod aggregate;
@@ -280,68 +280,8 @@ enum VType {
     World(String),
 }
 
-/// What a scope declares, by kind of name.
-#[derive(Default)]
-struct Scope {
-    /// Inputs and `let`s: names read bare.
-    values: BTreeSet<String>,
-    /// Each input's declaration, for its type.
-    input_nodes: BTreeMap<String, SyntaxNode>,
-    /// A `let`'s rows: the terms it is defined by.
-    lets: BTreeMap<String, Vec<SyntaxNode>>,
-    /// The lets with parameters (R-187): name -> the first statement.
-    functions: BTreeMap<String, SyntaxNode>,
-    /// Resources with a static name: name -> the types declaring it.
-    resources: BTreeMap<String, Vec<String>>,
-    /// Instances declared here: name -> its component's path as written,
-    /// then, once bound, as resolved (`instances`).
-    instances_written: BTreeMap<String, String>,
-    instances: BTreeMap<String, String>,
-    /// Components declared here (`component network`) -> the path.
-    components: BTreeMap<String, String>,
-    /// Components instanced here, by their last segment (`instance
-    /// postgres db` makes `postgres[t]` readable) -> the path. A path an
-    /// `instance` or a `use` writes never reads one, so binding does not
-    /// depend on which statement comes first.
-    copied: BTreeMap<String, String>,
-    /// Instances whose component names nothing: the `instance` is the
-    /// error, and a read of its name says nothing more.
-    unbound: BTreeSet<String>,
-    /// Modules used here: the name it binds -> the module's path.
-    uses: BTreeMap<String, String>,
-    /// The names a `use` or an `instance` binds here, each declaration in
-    /// source order: `(path as written, whether it is a use, the
-    /// statement)`. Several of one name are guarded declarations (R-104).
-    bound: BTreeMap<String, Vec<(String, bool, SyntaxNode)>>,
-    /// A name declared more than once (R-104) -> each declaration's
-    /// module or component path, as resolved, and its statement.
-    alternatives: BTreeMap<String, Vec<(String, SyntaxNode)>>,
-    /// Each value output's declared type, as written (R-104): what two
-    /// declarations of one name must agree on.
-    output_types: BTreeMap<String, String>,
-    /// Component signatures declared here, `type T = component { .. }`
-    /// (R-104): name -> the file and the `type` statement.
-    signatures: BTreeMap<String, (u32, SyntaxNode)>,
-    /// Stacks used here: the name it binds -> its index in `deployed`.
-    stacks: BTreeMap<String, usize>,
-    /// A component's `output k: T`: `Some(T)` when T is a resource type.
-    outputs: BTreeMap<String, Option<String>>,
-    /// The arities each relation this scope's heads and `decl`s give it.
-    arities: BTreeMap<String, BTreeSet<usize>>,
-    /// Each relation's `decl`: its columns (R-55).
-    decl_nodes: BTreeMap<String, SyntaxNode>,
-    /// `input p` with no `from`: the relations a module's user gives.
-    relation_inputs: BTreeSet<String>,
-    /// `output p`: the relations a component exports (R-55).
-    relation_outputs: BTreeSet<String>,
-    /// Relations this scope's own facts and rules define.
-    heads: BTreeSet<String>,
-}
-
 #[derive(Default)]
 struct Decls {
-    /// What each of the program's scopes (`program.scopes`) declares.
-    scopes: SecondaryMap<ScopeId, Scope>,
     /// The stacks the program's `use`s name.
     deployed: Vec<Deployed>,
     /// The project modules' source ids (R-114).
@@ -853,7 +793,6 @@ impl<'u> Lowerer<'u> {
         };
         let root = l.program.scopes.root;
         l.item_scope = root;
-        l.decls.scopes.insert(root, Scope::default());
         l.decls.deployed = deployed.to_vec();
         l.decls.project = units.iter().filter(|u| u.project).map(|u| u.file).collect();
         for (i, u) in units.iter().enumerate() {
@@ -861,7 +800,6 @@ impl<'u> Lowerer<'u> {
             // it: a module never reads its user's names (R-205).
             let module = u.path.as_deref().filter(|_| !entries.contains(&i));
             let scope = l.program.scopes.file(u.file, module);
-            l.decls.scopes.insert(scope, Scope::default());
             l.collect(u.file, &u.root, l.program.scopes.declaring(scope), scope);
         }
         l.bind_instances();
@@ -901,58 +839,109 @@ impl<'u> Lowerer<'u> {
     /// each instanced component readable by its last segment there
     /// (`postgres[t]`).
     fn bind_instances(&mut self) {
-        for s in self.program.scopes.ids().collect::<Vec<_>>() {
-            let used = self.decls.scopes[s].uses.clone();
-            for (name, written) in used {
-                let path = self.module_path_of(s, &written);
-                self.decls.scopes[s].uses.insert(name, path);
+        let scopes: Vec<ScopeId> = self.program.scopes.ids().collect();
+        for &s in &scopes {
+            let names: Vec<String> = self
+                .names(s)
+                .names(|k| matches!(k, DeclKind::Use { .. }))
+                .cloned()
+                .collect();
+            for name in names {
+                for i in 0..self.names(s).of(&name).len() {
+                    let DeclKind::Use { written, .. } = &self.names(s).of(&name)[i].kind else {
+                        continue;
+                    };
+                    let path = self.module_path_of(s, &written.clone());
+                    if let DeclKind::Use { module, .. } =
+                        &mut self.names_mut(s).of_mut(&name)[i].kind
+                    {
+                        *module = path;
+                    }
+                }
             }
         }
         self.classify_resources();
-        // A name declared more than once: each declaration's path (R-104).
-        for s in self.program.scopes.ids().collect::<Vec<_>>() {
-            let bound = self.decls.scopes[s].bound.clone();
-            for (name, decls) in bound.into_iter().filter(|(_, d)| d.len() > 1) {
-                let mut alts = Vec::new();
-                for (written, used, n) in decls {
-                    let path = match used {
-                        true => self.module_path_of(s, &written),
-                        false => match self.component_path(s, &written) {
-                            Ok(p) => p,
-                            Err(_) => continue,
-                        },
-                    };
-                    if !used {
-                        let last = written.rsplit('.').next().unwrap_or(&written).to_string();
-                        if self.use_in(s, &last).is_none() && self.stack_in(s, &last).is_none() {
-                            self.decls.scopes[s]
-                                .copied
-                                .entry(last)
-                                .or_insert(path.clone());
-                        }
-                    }
-                    alts.push((path, n));
+        // A copy of a name declared more than once (R-104) makes its
+        // component readable by its last segment.
+        for &s in &scopes {
+            let mut copied = Vec::new();
+            for (_, decls) in self.names(s).iter() {
+                let bound: Vec<&scopes::Decl> = decls
+                    .iter()
+                    .filter(|d| {
+                        matches!(
+                            d.kind,
+                            DeclKind::Use { .. } | DeclKind::Copy { binds: true, .. }
+                        )
+                    })
+                    .collect();
+                if bound.len() < 2 {
+                    continue;
                 }
-                self.decls.scopes[s].alternatives.insert(name, alts);
+                for d in bound {
+                    if let DeclKind::Copy { written, .. } = &d.kind {
+                        copied.push((written.clone(), d.node.clone()));
+                    }
+                }
+            }
+            for (written, n) in copied {
+                let Ok(path) = self.component_path(s, &written) else {
+                    continue;
+                };
+                self.copy_by_last(s, &written, path, n);
             }
         }
-        for s in self.program.scopes.ids().collect::<Vec<_>>() {
-            let written = self.decls.scopes[s].instances_written.clone();
-            for (name, path) in written {
+        for &s in &scopes {
+            let names: Vec<String> = self
+                .names(s)
+                .names(|k| matches!(k, DeclKind::Copy { .. }))
+                .cloned()
+                .collect();
+            for name in names {
+                let Some(d) = self
+                    .names(s)
+                    .of(&name)
+                    .iter()
+                    .find(|d| matches!(d.kind, DeclKind::Copy { .. }))
+                else {
+                    continue;
+                };
+                let (DeclKind::Copy { written: path, .. }, n) = (d.kind.clone(), d.node.clone())
+                else {
+                    continue;
+                };
                 let Ok(full) = self.component_path(s, &path) else {
-                    self.decls.scopes[s].unbound.insert(name);
                     continue;
                 };
                 // A used module of the name is read by it, and its
                 // component's copies by the path (`k3s.k3s[t]`).
-                let last = path.rsplit('.').next().unwrap_or(&path).to_string();
-                let used = self.use_in(s, &last).is_some() || self.stack_in(s, &last).is_some();
-                let scope = &mut self.decls.scopes[s];
-                if !used {
-                    scope.copied.entry(last).or_insert(full.clone());
+                self.copy_by_last(s, &path, full.clone(), n);
+                let copy = self
+                    .names_mut(s)
+                    .of_mut(&name)
+                    .iter_mut()
+                    .find(|d| matches!(d.kind, DeclKind::Copy { .. }));
+                if let Some(scopes::Decl {
+                    kind: DeclKind::Copy { component, .. },
+                    ..
+                }) = copy
+                {
+                    *component = Some(full);
                 }
-                scope.instances.insert(name, full);
             }
+        }
+    }
+
+    /// The component at `path`, copied in `s` by the path `written`,
+    /// readable there by its last segment (`postgres[t]`) unless a used
+    /// module or stack of that name is read by it.
+    fn copy_by_last(&mut self, s: ScopeId, written: &str, path: String, n: SyntaxNode) {
+        let last = written.rsplit('.').next().unwrap_or(written);
+        if self.use_in(s, last).is_some() || self.stack_in(s, last).is_some() {
+            return;
+        }
+        if self.names(s).copied(last).is_none() {
+            self.names_mut(s).declare(last, DeclKind::Copied(path), n);
         }
     }
 
@@ -969,8 +958,8 @@ impl<'u> Lowerer<'u> {
             // is the fake cloud's, not net.df's `component vpc`.
             let head = typ.split('.').next().unwrap_or(&typ);
             let bound = self.chain_of(decl).into_iter().any(|s| {
-                let sc = &self.decls.scopes[s];
-                sc.components.contains_key(head) || sc.uses.contains_key(head)
+                let sc = self.names(s);
+                sc.component(head).is_some() || sc.module(head).is_some()
             });
             let typed = schema_types().contains(&typ) || self.decls.types.contains(&typ);
             // A project module's resource of a stack is a deployment
@@ -987,26 +976,20 @@ impl<'u> Lowerer<'u> {
                 self.decls
                     .copies
                     .insert((file, n.text_range().start().into()));
-                let sc = &mut self.decls.scopes[decl];
                 // A copy named by its clause binds no name (R-191): its
                 // copies are read `C[t]`, as a provider type's are `T[t]`.
-                if !named_by_clause(&n) {
-                    sc.bound.entry(name.clone()).or_default().push((
-                        path.clone(),
-                        false,
-                        n.clone(),
-                    ));
-                }
-                sc.instances_written.entry(name).or_insert(path);
+                let kind = DeclKind::Copy {
+                    written: path,
+                    component: None,
+                    binds: !named_by_clause(&n),
+                };
+                self.names_mut(decl).declare(name, kind, n.clone());
                 continue;
             }
             self.decls.types.insert(typ.clone());
             if let Some(name) = self.static_header(&n) {
-                self.decls.scopes[decl]
-                    .resources
-                    .entry(name)
-                    .or_default()
-                    .push(typ);
+                self.names_mut(decl)
+                    .declare(name, DeclKind::Resource(typ), n.clone());
             }
         }
     }
@@ -1034,11 +1017,8 @@ impl<'u> Lowerer<'u> {
             None => (written, None),
         };
         let base = self.chain_of(scope).into_iter().find_map(|s| {
-            let sc = &self.decls.scopes[s];
-            sc.components
-                .get(head)
-                .or_else(|| sc.uses.get(head))
-                .cloned()
+            let sc = self.names(s);
+            sc.component(head).or_else(|| sc.module(head)).cloned()
         });
         match (base, rest) {
             (Some(b), Some(r)) => format!("{b}.{r}"),
@@ -1107,8 +1087,8 @@ impl<'u> Lowerer<'u> {
             match n.kind() {
                 INPUT => {
                     let name = word_text(&n, 1);
-                    self.decls.scopes[decl].values.insert(name.clone());
-                    self.decls.scopes[decl].input_nodes.insert(name, n.clone());
+                    self.names_mut(decl)
+                        .declare(name, DeclKind::Input, n.clone());
                 }
                 // A let with parameters is a relation (R-187): its
                 // parameters' columns, then its value's.
@@ -1117,20 +1097,13 @@ impl<'u> Lowerer<'u> {
                     let arity = function::params(&n).map_or(0, |p| p.len()) + 1;
                     self.decls.relations.insert(name.clone());
                     self.decls.heads.insert(name.clone());
-                    let s = &mut self.decls.scopes[decl];
-                    s.heads.insert(name.clone());
-                    s.arities.entry(name.clone()).or_default().insert(arity);
-                    s.functions.entry(name).or_insert(n.clone());
+                    self.names_mut(decl)
+                        .declare(name, DeclKind::LetFn { arity }, n.clone());
                 }
                 LET => {
                     let name = word_text(&n, 1);
                     self.decls.relations.insert(name.clone());
-                    let s = &mut self.decls.scopes[decl];
-                    s.values.insert(name.clone());
-                    s.arities.entry(name.clone()).or_default().insert(1);
-                    if let Some(t) = terms(&n).next() {
-                        s.lets.entry(name).or_default().push(t);
-                    }
+                    self.names_mut(decl).declare(name, DeclKind::Let, n.clone());
                 }
                 // `input p from ..` or `input p`: rows of `p`, which its
                 // `decl` declares (R-55).
@@ -1138,10 +1111,12 @@ impl<'u> Lowerer<'u> {
                     let name = word_text(&n, 1);
                     self.decls.relations.insert(name.clone());
                     self.decls.heads.insert(name.clone());
-                    self.decls.scopes[decl].heads.insert(name.clone());
-                    if terms(&n).next().is_none() {
-                        self.decls.scopes[decl].relation_inputs.insert(name);
-                    }
+                    let given = terms(&n).next().is_none();
+                    self.names_mut(decl).declare(
+                        name,
+                        DeclKind::RelationInput { given },
+                        n.clone(),
+                    );
                 }
                 // `output p` alone: a relation exported (R-55).
                 OUTPUT_DECL
@@ -1150,17 +1125,16 @@ impl<'u> Lowerer<'u> {
                         && node(&n, ATTR_DECL).is_none() =>
                 {
                     let k = word_text(&n, 1);
-                    self.decls.scopes[decl].relation_outputs.insert(k);
+                    self.names_mut(decl)
+                        .declare(k, DeclKind::RelationOutput, n.clone());
                 }
                 OUTPUT_DECL => {
                     let ty = node(&n, TYPE_EXPR).and_then(|t| self.resource_type(decl, &t));
                     let k = word_text(&n, 1);
-                    if let Some(t) = node(&n, TYPE_EXPR) {
-                        let text = t.text().to_string().replace(char::is_whitespace, "");
-                        self.decls.scopes[decl].output_types.insert(k.clone(), text);
-                    }
-                    let typed = self.decls.scopes[decl].outputs.get(&k).cloned().flatten();
-                    self.decls.scopes[decl].outputs.insert(k, ty.or(typed));
+                    let written = node(&n, TYPE_EXPR)
+                        .map(|t| t.text().to_string().replace(char::is_whitespace, ""));
+                    let kind = DeclKind::Output { typ: ty, written };
+                    self.names_mut(decl).declare(k, kind, n.clone());
                 }
                 EXTERN => {
                     let name = dotted_text(&n, 1);
@@ -1177,24 +1151,16 @@ impl<'u> Lowerer<'u> {
                 DECL => {
                     let name = dotted_text(&n, 1);
                     self.decls.relations.insert(name.clone());
-                    self.decls.scopes[decl]
-                        .decl_nodes
-                        .entry(name.clone())
-                        .or_insert(n.clone());
-                    self.decls.scopes[decl]
-                        .arities
-                        .entry(name)
-                        .or_default()
-                        .insert(arity(&n));
+                    let kind = DeclKind::Decl { arity: arity(&n) };
+                    self.names_mut(decl).declare(name, kind, n.clone());
                 }
                 TYPE_DECL => {
                     self.decls.types.insert(dotted_text(&n, 1));
                 }
                 TYPE_ALIAS if node(&n, SIGNATURE).is_some() => {
                     let name = word_text(&n, 1);
-                    self.decls.scopes[decl]
-                        .signatures
-                        .insert(name, (file, n.clone()));
+                    let kind = DeclKind::Signature { file };
+                    self.names_mut(decl).declare(name, kind, n.clone());
                 }
                 // A resource of a provider's type, or a copy of a component
                 // (R-113): which, once every module's components and every
@@ -1207,16 +1173,15 @@ impl<'u> Lowerer<'u> {
                     let (path, name) = use_parts(&n);
                     match self.decls.deployed.iter().position(|d| d.path == path) {
                         Some(i) => {
-                            self.decls.scopes[decl].stacks.insert(name, i);
+                            self.names_mut(decl)
+                                .declare(name, DeclKind::Stack(i), n.clone());
                         }
                         None if path.split('.').next() != Some("std") => {
-                            let sc = &mut self.decls.scopes[decl];
-                            sc.bound.entry(name.clone()).or_default().push((
-                                path.clone(),
-                                true,
-                                n.clone(),
-                            ));
-                            sc.uses.entry(name).or_insert(path);
+                            let kind = DeclKind::Use {
+                                written: path.clone(),
+                                module: path,
+                            };
+                            self.names_mut(decl).declare(name, kind, n.clone());
                         }
                         None => {}
                     }
@@ -1229,8 +1194,8 @@ impl<'u> Lowerer<'u> {
                         None => name.clone(),
                     };
                     let scope = self.program.scopes.component(file, start, outer, &path);
-                    self.decls.scopes.insert(scope, Scope::default());
-                    self.decls.scopes[decl].components.insert(name, path);
+                    self.names_mut(decl)
+                        .declare(name, DeclKind::Component(path), n.clone());
                     if let Some(b) = node(&n, STMT_BLOCK) {
                         self.collect(file, &b, scope, scope);
                     }
@@ -1262,13 +1227,9 @@ impl<'u> Lowerer<'u> {
                                 .filter(|c| is_term(c.kind()) || c.kind() == NAMED_ARG)
                                 .count()
                         });
-                        self.decls.scopes[decl]
-                            .arities
-                            .entry(name.clone())
-                            .or_default()
-                            .insert(n_args);
+                        let kind = DeclKind::Rule { arity: n_args };
+                        self.names_mut(decl).declare(name.clone(), kind, n.clone());
                         self.decls.heads.insert(name.clone());
-                        self.decls.scopes[decl].heads.insert(name.clone());
                         self.decls.relations.insert(name);
                     }
                 }
@@ -1323,6 +1284,15 @@ impl<'u> Lowerer<'u> {
         self.program.scopes.declaring(scope)
     }
 
+    /// What `scope` declares.
+    fn names(&self, scope: ScopeId) -> &Names {
+        &self.program.scopes.names[scope]
+    }
+
+    fn names_mut(&mut self, scope: ScopeId) -> &mut Names {
+        &mut self.program.scopes.names[scope]
+    }
+
     /// The program's scope.
     fn root(&self) -> ScopeId {
         self.program.scopes.root
@@ -1368,12 +1338,12 @@ impl<'u> Lowerer<'u> {
     fn scope_names(&self, rc: &Rc) -> Vec<String> {
         let mut out: Vec<String> = rc.vars.keys().cloned().collect();
         for s in self.chain_of(rc.scope) {
-            let s = &self.decls.scopes[s];
-            out.extend(s.values.iter().cloned());
-            out.extend(s.resources.keys().cloned());
-            out.extend(s.instances.keys().cloned());
-            out.extend(s.components.keys().cloned());
-            out.extend(s.uses.keys().cloned());
+            let s = self.names(s);
+            out.extend(s.names(DeclKind::is_value).cloned());
+            out.extend(s.names(|k| matches!(k, DeclKind::Resource(_))).cloned());
+            out.extend(s.instances().map(|(n, _)| n.clone()));
+            out.extend(s.names(|k| matches!(k, DeclKind::Component(_))).cloned());
+            out.extend(s.uses().map(|(n, _)| n.clone()));
         }
         out
     }
@@ -1412,7 +1382,7 @@ impl<'u> Lowerer<'u> {
         let declared = self
             .chain_of(from)
             .into_iter()
-            .find(|s| self.decls.scopes[*s].resources.contains_key(name))
+            .find(|s| self.names(*s).resources(name).is_some())
             .unwrap_or(from);
         let segment = crate::ir::name_segment(name);
         match self.lexical(scope, declared) {
@@ -1434,7 +1404,7 @@ impl<'u> Lowerer<'u> {
         let declared = self
             .chain_of(from)
             .into_iter()
-            .find(|s| self.decls.scopes[*s].values.contains(name));
+            .find(|s| self.names(*s).is_value(name));
         match declared.and_then(|d| self.lexical(scope, d)) {
             Some(body) => crate::modules::lexical_pred(&body, name),
             None => name.to_string(),
@@ -1449,8 +1419,8 @@ impl<'u> Lowerer<'u> {
             return p.to_string();
         }
         let declared = self.chain_of(from).into_iter().find(|s| {
-            let sc = &self.decls.scopes[*s];
-            sc.arities.contains_key(p) || sc.relation_inputs.contains(p)
+            let sc = self.names(*s);
+            sc.is_relation(p) || sc.takes(p)
         });
         match declared.and_then(|d| self.lexical(scope, d)) {
             Some(body) => crate::modules::lexical_pred(&body, p),
@@ -1563,13 +1533,13 @@ impl<'u> Lowerer<'u> {
         span: Span,
     ) -> L<Option<Res>> {
         let x = c.head.as_str();
-        let here = &self.decls.scopes[from];
-        if (outward && self.is_value(from, x)) || here.values.contains(x) {
+        let here = self.names(from);
+        if (outward && self.is_value(from, x)) || here.is_value(x) {
             return self.value(rc, from, c, pre, span).map(Some);
         }
         let types = match outward {
             true => self.resource(from, x),
-            false => here.resources.get(x).cloned(),
+            false => here.resources(x),
         };
         let Some(types) = types else {
             return Ok(None);
@@ -1591,7 +1561,7 @@ impl<'u> Lowerer<'u> {
     fn self_module(&self, scope: ScopeId, h: &str) -> Option<ScopeId> {
         let module = self.module_at(h).filter(|(_, c)| !c)?.0;
         for s in self.chain_of(scope) {
-            if self.decls.scopes[s].uses.contains_key(h) {
+            if self.names(s).module(h).is_some() {
                 return None;
             }
             if s == module {
@@ -1610,21 +1580,17 @@ impl<'u> Lowerer<'u> {
     /// The instance `name` in scope: the scope that declares it and its
     /// component's path.
     fn instance_in(&self, scope: ScopeId, name: &str) -> Option<(ScopeId, String)> {
-        self.chain_of(scope).into_iter().find_map(|s| {
-            self.decls.scopes[s]
-                .instances
-                .get(name)
-                .map(|p| (s, p.clone()))
-        })
+        self.chain_of(scope)
+            .into_iter()
+            .find_map(|s| self.names(s).instance(name).map(|p| (s, p.clone())))
     }
 
     /// The stack `name` a `use` in scope binds.
     fn stack_in(&self, scope: ScopeId, name: &str) -> Option<Deployed> {
         self.chain_of(scope).into_iter().find_map(|s| {
-            self.decls.scopes[s]
-                .stacks
-                .get(name)
-                .map(|&i| self.decls.deployed[i].clone())
+            self.names(s)
+                .stack(name)
+                .map(|i| self.decls.deployed[i].clone())
         })
     }
 
@@ -1637,10 +1603,9 @@ impl<'u> Lowerer<'u> {
             let Op::Field(f) = op else { return None };
             at = format!("{at}.{f}");
             let found = self.chain_of(scope).into_iter().find_map(|s| {
-                self.decls.scopes[s]
-                    .stacks
-                    .values()
-                    .map(|&i| &self.decls.deployed[i])
+                self.names(s)
+                    .stacks()
+                    .map(|i| &self.decls.deployed[i])
                     .find(|d| d.path == at)
                     .cloned()
             });
@@ -1655,7 +1620,7 @@ impl<'u> Lowerer<'u> {
     fn use_in(&self, scope: ScopeId, name: &str) -> Option<String> {
         self.chain_of(scope)
             .into_iter()
-            .find_map(|s| self.decls.scopes[s].uses.get(name).cloned())
+            .find_map(|s| self.names(s).module(name).cloned())
     }
 
     /// The name a `use` in scope binds the module `path` to, when `scope`
@@ -1668,21 +1633,16 @@ impl<'u> Lowerer<'u> {
             return None;
         }
         chain.into_iter().find_map(|s| {
-            let uses = &self.decls.scopes[s].uses;
-            uses.iter()
-                .find(|(_, p)| *p == path)
-                .map(|(n, _)| n.clone())
+            let mut uses = self.names(s).uses();
+            uses.find(|(_, p)| *p == path).map(|(n, _)| n.clone())
         })
     }
 
     /// The component `name` reads as in scope: its path.
     fn component_in(&self, scope: ScopeId, name: &str) -> Option<String> {
         self.chain_of(scope).into_iter().find_map(|s| {
-            let sc = &self.decls.scopes[s];
-            sc.components
-                .get(name)
-                .or_else(|| sc.copied.get(name))
-                .cloned()
+            let sc = self.names(s);
+            sc.component(name).or_else(|| sc.copied(name)).cloned()
         })
     }
 
@@ -1691,16 +1651,18 @@ impl<'u> Lowerer<'u> {
     fn unbound_instance(&self, scope: ScopeId, name: &str) -> bool {
         self.chain_of(scope)
             .into_iter()
-            .any(|s| self.decls.scopes[s].unbound.contains(name))
+            .any(|s| self.names(s).unbound(name))
     }
 
     /// A `let`'s rows and the scope that declares it.
     fn find_let(&self, scope: ScopeId, name: &str) -> Option<(ScopeId, Vec<SyntaxNode>)> {
         self.chain_of(scope).into_iter().find_map(|s| {
-            self.decls.scopes[s]
-                .lets
-                .get(name)
-                .map(|rows| (s, rows.clone()))
+            let rows: Vec<SyntaxNode> = self
+                .names(s)
+                .lets(name)
+                .filter_map(|n| terms(n).next())
+                .collect();
+            (!rows.is_empty()).then_some((s, rows))
         })
     }
 
@@ -1710,7 +1672,7 @@ impl<'u> Lowerer<'u> {
         let n = self
             .chain_of(scope)
             .into_iter()
-            .find_map(|s| self.decls.scopes[s].input_nodes.get(name).cloned())?;
+            .find_map(|s| self.names(s).input(name).cloned())?;
         let ty = node(&n, TYPE_EXPR)?;
         let typ = dotted_text(&ty, 0);
         let typ = match node(&ty, TYPE_EXPR) {
@@ -1818,20 +1780,19 @@ impl<'u> Lowerer<'u> {
             _ => None,
         };
         let indexed = matches!(c.ops.first(), Some(Op::Index(..) | Op::Keyed(..)));
-        let items = |sc: &Scope| -> Vec<String> {
-            sc.values
-                .iter()
-                .chain(sc.outputs.keys())
-                .chain(sc.resources.keys())
+        let items = |sc: &Names| -> Vec<String> {
+            sc.names(DeclKind::is_value)
+                .chain(sc.names(|k| matches!(k, DeclKind::Output { .. })))
+                .chain(sc.names(|k| matches!(k, DeclKind::Resource(_))))
                 .cloned()
                 .collect()
         };
         let (what, other) = if let Some(s) = self
             .chain_of(scope)
             .into_iter()
-            .find(|s| self.decls.scopes[*s].values.contains(h))
+            .find(|s| self.names(*s).is_value(h))
         {
-            let kind = if self.decls.scopes[s].input_nodes.contains_key(h) {
+            let kind = if self.names(s).input(h).is_some() {
                 "the input"
             } else {
                 "the let"
@@ -1840,7 +1801,7 @@ impl<'u> Lowerer<'u> {
         } else if let Some(path) = self.use_in(scope, h) {
             let own = self
                 .module_at(&path)
-                .map(|(m, _)| items(&self.decls.scopes[m]))
+                .map(|(m, _)| items(self.names(m)))
                 .unwrap_or_default();
             if field.is_some_and(|f| own.iter().any(|i| i == f)) {
                 return Ok(true);
@@ -1852,7 +1813,10 @@ impl<'u> Lowerer<'u> {
         } else if let Some((_, path)) = self.instance_in(scope, h) {
             let outputs: Vec<String> = self
                 .module_at(&path)
-                .map(|(m, _)| self.decls.scopes[m].outputs.keys().cloned().collect())
+                .map(|(m, _)| {
+                    let output = |k: &DeclKind| matches!(k, DeclKind::Output { .. });
+                    self.names(m).names(output).cloned().collect()
+                })
                 .unwrap_or_default();
             if field.is_some_and(|f| outputs.iter().any(|o| o == f)) {
                 return Ok(true);
@@ -1917,15 +1881,15 @@ impl<'u> Lowerer<'u> {
     /// alone (the program's top level, where R-76's ambiguity stands).
     fn own_wins(&self, scope: ScopeId, name: &str) -> Option<bool> {
         let own = self.own_scopes(scope);
-        let names = |s: &Scope| {
-            s.values.contains(name)
-                || s.uses.contains_key(name)
-                || s.instances.contains_key(name)
-                || s.stacks.contains_key(name)
+        let names = |s: &Names| {
+            s.is_value(name)
+                || s.module(name).is_some()
+                || s.instance(name).is_some()
+                || s.stack(name).is_some()
         };
-        let resource = |s: &Scope| s.resources.contains_key(name);
+        let resource = |s: &Names| s.resources(name).is_some();
         let (res_own, other_own) = own.iter().fold((false, false), |(r, o), s| {
-            let sc = &self.decls.scopes[*s];
+            let sc = self.names(*s);
             (r || resource(sc), o || names(sc))
         });
         if res_own && !other_own && self.names_other(scope, name) {
@@ -1948,7 +1912,7 @@ impl<'u> Lowerer<'u> {
     fn is_value(&self, scope: ScopeId, name: &str) -> bool {
         self.chain_of(scope)
             .into_iter()
-            .any(|s| self.decls.scopes[s].values.contains(name))
+            .any(|s| self.names(s).is_value(name))
     }
 
     /// The types a resource name has in scope (the innermost scope that
@@ -1956,14 +1920,13 @@ impl<'u> Lowerer<'u> {
     fn resource(&self, scope: ScopeId, name: &str) -> Option<Vec<String>> {
         self.chain_of(scope)
             .into_iter()
-            .find_map(|s| self.decls.scopes[s].resources.get(name).cloned())
+            .find_map(|s| self.names(s).resources(name))
     }
 
     fn resource_of_type(&self, scope: ScopeId, typ: &str, name: &str) -> bool {
         self.chain_of(scope).into_iter().any(|s| {
-            self.decls.scopes[s]
-                .resources
-                .get(name)
+            self.names(s)
+                .resources(name)
                 .is_some_and(|ts| ts.iter().any(|t| t == typ))
         })
     }
@@ -2145,9 +2108,9 @@ impl<'u> Lowerer<'u> {
         let start: u32 = n.text_range().start().into();
         let inner = self.block_scope(self.file, start);
         let name = word_text(n, 1);
-        let path = self.decls.scopes[self.decl_scope(scope)]
-            .components
-            .get(&name)
+        let path = self
+            .names(self.decl_scope(scope))
+            .component(&name)
             .cloned()
             .unwrap_or(name);
         if let Some(t) = node(n, TYPE_EXPR) {
@@ -2411,10 +2374,11 @@ impl<'u> Lowerer<'u> {
     /// in, labelled where the module is used.
     fn key_in_module<T>(&mut self, n: &SyntaxNode, name: &str, path: &str, span: Span) -> L<T> {
         let ty = node(n, TYPE_EXPR).map_or_else(|| "TYPE".to_string(), |t| t.text().to_string());
-        let site = self.decls.scopes.values().find_map(|sc| {
-            sc.bound.values().flatten().find_map(|(_, is_use, stmt)| {
-                (*is_use && sc.uses.values().any(|p| p == path) && use_parts(stmt).0 == path)
-                    .then(|| stmt.clone())
+        let site = self.program.scopes.names.values().find_map(|sc| {
+            let used = sc.uses().any(|(_, m)| m == path);
+            sc.iter().flat_map(|(_, ds)| ds).find_map(|d| {
+                let is_use = matches!(d.kind, DeclKind::Use { .. });
+                (is_use && used && use_parts(&d.node).0 == path).then(|| d.node.clone())
             })
         });
         let used = site.as_ref().map_or_else(
@@ -2773,9 +2737,7 @@ impl<'u> Lowerer<'u> {
         let mixed = tokens(n).last().is_some_and(|t| t.text() == "mixed");
         // A relation the scope's own statements do not define: one in
         // another module of the same name is another relation (R-65).
-        let fed = !self.decls.scopes[self.decl_scope(scope)]
-            .heads
-            .contains(&pred);
+        let fed = !self.names(self.decl_scope(scope)).defines(&pred);
         let span = self.span(n);
         let rel = crate::program::node::RelRef { name: pred, span };
         let kind = crate::program::ItemKind::Decl {
@@ -2999,7 +2961,7 @@ impl<'u> Lowerer<'u> {
     fn relation_decl(&self, scope: ScopeId, pred: &str) -> Option<SyntaxNode> {
         self.chain_of(scope)
             .into_iter()
-            .find_map(|s| self.decls.scopes[s].decl_nodes.get(pred).cloned())
+            .find_map(|s| self.names(s).decl(pred).cloned())
     }
 
     fn rank_tok(&mut self, n: &SyntaxNode) -> L<Option<Rank>> {
@@ -3077,10 +3039,11 @@ impl<'u> Lowerer<'u> {
                 let ns = n.split('.').next().unwrap_or_default();
                 let module = self.module_at(ns).is_some()
                     || self
-                        .decls
+                        .program
                         .scopes
+                        .names
                         .values()
-                        .any(|s| s.uses.contains_key(ns) || s.components.contains_key(ns));
+                        .any(|s| s.module(ns).is_some() || s.component(ns).is_some());
                 let known = self.decls.types.contains(&n) || !self.decls.closed.contains(ns);
                 if n.contains('.') && known && !module {
                     TypeExpr::Apply("ref".into(), vec![TypeExpr::Name(n)])
@@ -3647,9 +3610,7 @@ impl<'u> Lowerer<'u> {
             let arities: BTreeSet<usize> = self
                 .chain_of(scope)
                 .into_iter()
-                .filter_map(|s| self.decls.scopes[s].arities.get(&name))
-                .flatten()
-                .copied()
+                .flat_map(|s| self.names(s).arities(&name))
                 .collect();
             match arities.iter().collect::<Vec<_>>().as_slice() {
                 [n] => {
@@ -3891,12 +3852,13 @@ impl<'u> Lowerer<'u> {
             Some((m, s)) => {
                 let path = self.module_path_of(scope, m);
                 let at = self.module_at(&path)?.0;
-                self.decls.scopes[at].signatures.get(s).cloned()
+                let sig = self.names(at).signature(s);
+                sig.map(|(f, n)| (f, n.clone()))
             }
             None => self
                 .chain_of(scope)
                 .into_iter()
-                .find_map(|s| self.decls.scopes[s].signatures.get(name).cloned()),
+                .find_map(|s| self.names(s).signature(name).map(|(f, n)| (f, n.clone()))),
         }
     }
 
@@ -4261,10 +4223,10 @@ impl<'u> Lowerer<'u> {
         let (head, _) = written.split_once('.')?;
         let (parent, _) = component.rsplit_once('.')?;
         let declared = self.chain_of(scope).into_iter().find(|s| {
-            let sc = &self.decls.scopes[*s];
-            sc.components.contains_key(head) || sc.uses.contains_key(head)
+            let sc = self.names(*s);
+            sc.component(head).is_some() || sc.module(head).is_some()
         })?;
-        if self.decls.scopes[declared].uses.get(head)? != parent {
+        if self.names(declared).module(head)? != parent {
             return None;
         }
         Some(Via {
@@ -4410,7 +4372,8 @@ impl<'u> Lowerer<'u> {
         let Some(inner) = self.module_at(module).map(|m| m.0) else {
             return Ok(Default::default());
         };
-        let takes = self.decls.scopes[inner].relation_inputs.clone();
+        let given = |k: &DeclKind| matches!(k, DeclKind::RelationInput { given: true });
+        let takes: BTreeSet<String> = self.names(inner).names(given).cloned().collect();
         let mut out = Vec::new();
         let mut failed = false;
         for n in block
@@ -4442,7 +4405,7 @@ impl<'u> Lowerer<'u> {
             }
             let r = match n.kind() {
                 INPUT_RELATION => (|| {
-                    let Some(decl) = self.decls.scopes[inner].decl_nodes.get(&pred).cloned() else {
+                    let Some(decl) = self.names(inner).decl(&pred).cloned() else {
                         return self.error(
                             span,
                             format!(
@@ -5438,7 +5401,7 @@ impl<'u> Lowerer<'u> {
             && let Some(at) = self
                 .chain_of(scope)
                 .into_iter()
-                .find(|&s| self.decls.scopes[s].uses.contains_key(&c.head))
+                .find(|&s| self.names(s).module(&c.head).is_some())
         {
             let own = at == self.decl_scope(scope);
             return Ok(Target::Cell(
@@ -5541,11 +5504,10 @@ impl<'u> Lowerer<'u> {
     /// The block that owns the cells of `(T, A)` when it is declared in
     /// `scope`: `resource T A`.
     fn owning_block(&self, scope: ScopeId, typ: &Term, addr: &Term) -> Option<String> {
-        let s = &self.decls.scopes[self.decl_scope(scope)];
+        let s = self.names(self.decl_scope(scope));
         match (typ, addr) {
             (Term::Val(Value::Str(t)), Term::Val(Value::Str(a))) => s
-                .resources
-                .get(a)
+                .resources(a)
                 .is_some_and(|ts| ts.contains(t))
                 .then(|| format!("resource {t} {a}")),
             _ => None,
@@ -6745,7 +6707,7 @@ impl<'u> Lowerer<'u> {
             let Some(scope) = self.module_at(&path).map(|m| m.0) else {
                 return Err(Skip);
             };
-            if !self.decls.scopes[scope].arities.contains_key(p) {
+            if !self.names(scope).is_relation(p) {
                 return self.error(span, format!("the module {path} has no relation `{p}`"));
             }
             pred = format!("{m}::{p}");
@@ -6757,8 +6719,8 @@ impl<'u> Lowerer<'u> {
             let (from, rest) = self.super_chain(rc, &c, span)?;
             let p = &rest.head;
             let known = self.chain_of(from).into_iter().any(|s| {
-                let sc = &self.decls.scopes[s];
-                sc.arities.contains_key(p) || sc.relation_inputs.contains(p)
+                let sc = self.names(s);
+                sc.is_relation(p) || sc.takes(p)
             });
             if !rest.ops.is_empty() || !known {
                 let around = self.scope_name(from);
@@ -6767,7 +6729,7 @@ impl<'u> Lowerer<'u> {
             pred = self.relation_pred(rc.scope, from, p);
         } else if let Some((m, p)) = pred.split_once('.')
             && let Some(from) = self.self_module(rc.scope, m)
-            && self.decls.scopes[from].arities.contains_key(p)
+            && self.names(from).is_relation(p)
         {
             // The module's own relation by its name, in its file: the
             // instance's the read is in (R-186).
@@ -6922,7 +6884,7 @@ impl<'u> Lowerer<'u> {
         if let Some((_, path)) = &named {
             let exports = self
                 .module_at(path)
-                .is_some_and(|(m, _)| self.decls.scopes[m].relation_outputs.contains(&p));
+                .is_some_and(|(m, _)| self.names(m).exports(&p));
             if !exports {
                 let d = Diagnostic::error(
                     span,
@@ -7019,7 +6981,12 @@ impl<'u> Lowerer<'u> {
         let own = self
             .own_scopes(rc.scope)
             .iter()
-            .find(|s| self.decls.scopes[**s].instances.values().any(|p| p == path))
+            .find(|s| {
+                self.names(**s)
+                    .instances()
+                    .map(|(_, c)| c)
+                    .any(|p| p == path)
+            })
             .copied();
         self.scope_term(rc.scope, own.unwrap_or(self.root()), str_term(""))
     }
@@ -8396,7 +8363,12 @@ impl<'u> Lowerer<'u> {
                 let own = self
                     .own_scopes(rc.scope)
                     .iter()
-                    .find(|s| self.decls.scopes[**s].instances.values().any(|p| *p == at))
+                    .find(|s| {
+                        self.names(**s)
+                            .instances()
+                            .map(|(_, c)| c)
+                            .any(|p| *p == at)
+                    })
                     .copied();
                 let at_scope = own.unwrap_or(self.root());
                 let parent = self.scope_term(rc.scope, at_scope, str_term(""));
@@ -8433,21 +8405,21 @@ impl<'u> Lowerer<'u> {
                 let declared = self
                     .chain_of(rc.scope)
                     .into_iter()
-                    .find(|s| self.decls.scopes[*s].uses.contains_key(h))
+                    .find(|s| self.names(*s).module(h).is_some())
                     .unwrap_or(self.root());
-                let own = &self.decls.scopes[module];
-                if own.values.contains(x) {
+                let own = self.names(module);
+                if own.is_value(x) {
                     let path = self.segs(rc, &ops[1..], pre)?;
                     return Ok(Some(Res::Value {
                         pred: format!("{h}::{x}"),
                         path,
                     }));
                 }
-                if own.outputs.contains_key(x) {
+                if own.output(x).is_some() {
                     let inst = self.scope_term(rc.scope, declared, str_term(h));
                     return self.output_of(rc, inst, &at, ops, pre, span).map(Some);
                 }
-                if let Some(types) = own.resources.get(x).cloned() {
+                if let Some(types) = own.resources(x) {
                     if types.len() > 1 {
                         return self.ambiguous(x, &types, span).map(Some);
                     }
@@ -8477,6 +8449,27 @@ impl<'u> Lowerer<'u> {
         }
     }
 
+    /// Each declaration of `h` in `s`, when it is declared more than once
+    /// (R-104): the module or component path each binds it to, and its
+    /// statement. A copy whose component names nothing is its own error.
+    fn alternatives(&self, s: ScopeId, h: &str) -> Option<Vec<(String, SyntaxNode)>> {
+        let bound: Vec<_> = self.names(s).bound(h).collect();
+        if bound.len() < 2 {
+            return None;
+        }
+        let alts = bound.into_iter().filter_map(|d| match &d.kind {
+            DeclKind::Use { written, .. } => {
+                Some((self.module_path_of(s, written), d.node.clone()))
+            }
+            DeclKind::Copy { written, .. } => {
+                let path = self.component_path(s, written).ok()?;
+                Some((path, d.node.clone()))
+            }
+            _ => None,
+        });
+        Some(alts.collect())
+    }
+
     /// `h.x` where `h` is declared more than once, each under a clause
     /// (R-104): every declaration has `x`, of one type, else the read is
     /// an error naming every declaration.
@@ -8484,8 +8477,8 @@ impl<'u> Lowerer<'u> {
         let Some(alts) = self
             .chain_of(scope)
             .into_iter()
-            .find(|s| self.decls.scopes[*s].bound.contains_key(h))
-            .and_then(|s| self.decls.scopes[s].alternatives.get(h).cloned())
+            .find(|s| self.names(*s).bound(h).next().is_some())
+            .and_then(|s| self.alternatives(s, h))
         else {
             return Ok(());
         };
@@ -8499,22 +8492,21 @@ impl<'u> Lowerer<'u> {
                 }
             };
             let item = self.module_at(path).and_then(|(m, _)| {
-                let sc = &self.decls.scopes[m];
-                if sc.outputs.contains_key(x) {
-                    let ty = sc.output_types.get(x).map_or("any", String::as_str);
+                let sc = self.names(m);
+                if sc.output(x).is_some() {
+                    let ty = sc.output_type(x).map_or("any", String::as_str);
                     return Some(format!("output {x}: {ty}"));
                 }
-                if let Some(i) = sc.input_nodes.get(x) {
+                if let Some(i) = sc.input(x) {
                     let ty = node(i, TYPE_EXPR)
                         .map(|t| t.text().to_string().replace(char::is_whitespace, ""))
                         .unwrap_or_default();
                     return Some(format!("input {x}: {ty}"));
                 }
-                if sc.values.contains(x) {
+                if sc.is_value(x) {
                     return Some(format!("let {x}"));
                 }
-                sc.resources
-                    .get(x)
+                sc.resources(x)
                     .map(|ts| format!("resource {}", ts.join(", ")))
             });
             found.push((what, item, self.span(n)));
@@ -8582,8 +8574,7 @@ impl<'u> Lowerer<'u> {
                 }
                 let typed = self
                     .module_at(path)
-                    .and_then(|(m, _)| self.decls.scopes[m].outputs.get(k).cloned())
-                    .flatten();
+                    .and_then(|(m, _)| self.names(m).output(k).flatten().cloned());
                 if let Some(t) = &typed
                     && !segs.is_empty()
                 {
@@ -8610,11 +8601,11 @@ impl<'u> Lowerer<'u> {
     /// `k` names one of them and no output of it.
     fn copy_resource(&self, path: &str, k: &str) -> Option<Vec<String>> {
         let (m, _) = self.module_at(path).filter(|m| m.1)?;
-        let sc = &self.decls.scopes[m];
-        if sc.outputs.contains_key(k) {
+        let sc = self.names(m);
+        if sc.output(k).is_some() {
             return None;
         }
-        sc.resources.get(k).cloned()
+        sc.resources(k)
     }
 
     /// `k` read of a deployment of `d` is one of its outputs (R-208): the

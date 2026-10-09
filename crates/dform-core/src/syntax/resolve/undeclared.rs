@@ -63,8 +63,8 @@ impl Lowerer<'_> {
     /// [`Self::undeclared`]: a module's call of its user's relation.
     pub(super) fn undeclared_relation(&mut self, rc: &Rc, p: &str, span: Span) -> L<()> {
         let defines = self.chain_of(rc.scope).into_iter().any(|s| {
-            let sc = &self.decls.scopes[s];
-            sc.arities.contains_key(p) || sc.relation_inputs.contains(p)
+            let sc = self.names(s);
+            sc.is_relation(p) || sc.takes(p)
         });
         if defines || !crate::modules::is_private(p) || self.decls.externs.contains_key(p) {
             return Ok(());
@@ -171,39 +171,32 @@ impl Lowerer<'_> {
         h: &str,
         relation: bool,
     ) -> Option<UserDecl> {
-        let uses = |s: &Scope| {
-            s.uses.values().any(|p| p == module)
-                || component.is_some_and(|c| s.instances.values().any(|p| p == c))
+        let uses = |s: &Names| {
+            s.uses().map(|(_, m)| m).any(|p| p == module)
+                || component.is_some_and(|c| s.instances().map(|(_, c)| c).any(|p| p == c))
         };
-        let users = std::iter::once(self.root()).chain(
-            self.program
-                .scopes
-                .ids()
-                .filter(|s| uses(&self.decls.scopes[*s])),
-        );
+        let users = std::iter::once(self.root())
+            .chain(self.program.scopes.ids().filter(|s| uses(self.names(*s))));
         for user in users {
             for s in self.chain_of(user) {
-                let sc = &self.decls.scopes[s];
+                let sc = self.names(s);
                 if relation {
-                    match sc.arities.get(h).and_then(|a| a.first()) {
+                    match sc.arities(h).first() {
                         Some(n) => return Some(UserDecl::Relation(*n)),
                         None => continue,
                     }
                 }
-                if let Some(n) = sc.input_nodes.get(h) {
+                if let Some(n) = sc.input(h) {
                     let ty = node(n, TYPE_EXPR).map_or("TYPE".into(), |t| self.unaliased(&t));
                     return Some(UserDecl::Value(ty));
                 }
-                if sc.values.contains(h) {
+                if sc.is_value(h) {
                     return Some(UserDecl::Value("TYPE".into()));
                 }
-                if let Some(types) = sc.resources.get(h) {
+                if let Some(types) = sc.resources(h) {
                     return Some(UserDecl::Value(format!("ref({})", types[0])));
                 }
-                if sc.instances.contains_key(h)
-                    || sc.uses.contains_key(h)
-                    || sc.stacks.contains_key(h)
-                {
+                if sc.instance(h).is_some() || sc.module(h).is_some() || sc.stack(h).is_some() {
                     return Some(UserDecl::Scope);
                 }
             }

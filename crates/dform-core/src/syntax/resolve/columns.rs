@@ -73,7 +73,7 @@ impl Lowerer<'_> {
         self.chain_of(scope)
             .into_iter()
             .map(|s| self.decl_scope(s))
-            .find(|s| self.decls.scopes[*s].heads.contains(pred))
+            .find(|s| self.names(*s).defines(pred))
             .map(|s| (s, pred.to_string()))
     }
 
@@ -138,7 +138,7 @@ impl Lowerer<'_> {
     ) -> BTreeMap<usize, RefColumn> {
         // A row a block gives a module's relation writes the module's.
         if let Some(m) = self.given
-            && self.decls.scopes[m].relation_inputs.contains(pred)
+            && self.names(m).takes(pred)
         {
             return self
                 .decls
@@ -230,8 +230,8 @@ impl Lowerer<'_> {
     /// rules fill does.
     fn decl_refs(&self) -> Vec<((RelKey, usize), usize, RefColumn)> {
         let mut out = Vec::new();
-        for (scope, sc) in self.decls.scopes.iter() {
-            for (pred, decl) in &sc.decl_nodes {
+        for (scope, sc) in self.program.scopes.names.iter() {
+            for (pred, decl) in sc.decls() {
                 let binds: Vec<SyntaxNode> =
                     decl.children().filter(|c| c.kind() == BIND_ARG).collect();
                 for (i, b) in binds.iter().enumerate() {

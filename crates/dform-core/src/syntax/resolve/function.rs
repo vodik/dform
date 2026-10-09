@@ -48,12 +48,9 @@ impl Lowerer<'_> {
     /// The let with parameters `name` in `scope`, looked up outward: the
     /// scope that declares it and its first statement.
     pub(super) fn function_def(&self, scope: ScopeId, name: &str) -> Option<(ScopeId, SyntaxNode)> {
-        self.chain_of(scope).into_iter().find_map(|s| {
-            self.decls.scopes[s]
-                .functions
-                .get(name)
-                .map(|n| (s, n.clone()))
-        })
+        self.chain_of(scope)
+            .into_iter()
+            .find_map(|s| self.names(s).function(name).map(|n| (s, n.clone())))
     }
 
     /// How many leading columns of the relation `name` a read in `scope`
@@ -230,11 +227,11 @@ impl Lowerer<'_> {
                 if let Some(path) = self.use_in(rc.scope, m) {
                     let module = self.module_at(&path).map(|m| m.0);
                     module.and_then(|s| {
-                        let def = self.decls.scopes[s].functions.get(f.as_str())?;
+                        let def = self.names(s).function(f)?;
                         Some((format!("{m}::{f}"), s, def.clone()))
                     })
                 } else if let Some(from) = self.self_module(rc.scope, m) {
-                    let def = self.decls.scopes[from].functions.get(f.as_str()).cloned();
+                    let def = self.names(from).function(f).cloned();
                     def.map(|def| (self.relation_pred(rc.scope, from, f), from, def))
                 } else {
                     None
@@ -370,7 +367,10 @@ impl Lowerer<'_> {
         let lets: Vec<String> = self
             .chain_of(scope)
             .into_iter()
-            .flat_map(|s| self.decls.scopes[s].functions.keys().cloned())
+            .flat_map(|s| {
+                let fun = |k: &DeclKind| matches!(k, DeclKind::LetFn { .. });
+                self.names(s).names(fun).cloned().collect::<Vec<_>>()
+            })
             .collect();
         let Some(near) = crate::diag::nearest(name, lets.iter().map(String::as_str)) else {
             return Ok(());

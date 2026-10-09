@@ -199,7 +199,7 @@ impl Lowerer<'_> {
     fn input_node(&self, scope: ScopeId, name: &str) -> Option<SyntaxNode> {
         self.chain_of(scope)
             .into_iter()
-            .find_map(|s| self.decls.scopes[s].input_nodes.get(name).cloned())
+            .find_map(|s| self.names(s).input(name).cloned())
     }
 
     /// The provider namespace a bare name is, where nothing else of that
@@ -213,10 +213,8 @@ impl Lowerer<'_> {
             || self.module_at(h).is_some()
             || self.decls.relations.contains(h)
             || self.chain_of(rc.scope).into_iter().any(|s| {
-                let s = &self.decls.scopes[s];
-                s.uses.contains_key(h)
-                    || s.instances.contains_key(h)
-                    || s.components.contains_key(h)
+                let s = self.names(s);
+                s.module(h).is_some() || s.instance(h).is_some() || s.component(h).is_some()
             });
         (c.is_bare() && !shadowed && self.decls.namespaces.contains(h)).then(|| h.clone())
     }

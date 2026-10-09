@@ -204,9 +204,7 @@ impl Lowerer<'_> {
         };
         let mut arities = BTreeSet::new();
         for s in scopes {
-            if let Some(a) = self.decls.scopes[s].arities.get(name) {
-                arities.extend(a.iter().copied());
-            }
+            arities.extend(self.names(s).arities(name));
         }
         !arities.is_empty() && !arities.contains(&1)
     }

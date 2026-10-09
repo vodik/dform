@@ -30,11 +30,11 @@ impl Lowerer<'_> {
                 None if !key.contains('.') => (key.clone(), true),
                 None => continue,
             };
-            let input = self.decls.scopes[inner].input_nodes.get(&key).cloned();
+            let input = self.names(inner).input(&key).cloned();
             let declared = self
                 .chain_of(scope)
                 .into_iter()
-                .find(|s| self.decls.scopes[*s].values.contains(&given));
+                .find(|s| self.names(*s).is_value(&given));
             let Some(declared) = declared else {
                 if pun && self.resource(scope, &given).is_none() && !clause_binds(n, &given) {
                     self.pun_of_nothing(&a, &key, module, input.as_ref());
@@ -42,10 +42,8 @@ impl Lowerer<'_> {
                 }
                 continue;
             };
-            let (Some(input), Some(value)) = (
-                input,
-                self.decls.scopes[declared].input_nodes.get(&given).cloned(),
-            ) else {
+            let (Some(input), Some(value)) = (input, self.names(declared).input(&given).cloned())
+            else {
                 continue;
             };
             failed |= self.enum_given(&a, module, &key, &input, &given, &value);
