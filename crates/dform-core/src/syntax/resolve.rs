@@ -28,8 +28,8 @@ use super::parser as parse;
 use super::{SyntaxNode, SyntaxToken, tokens};
 use crate::ast::{
     Atom, AttrDecl, BindArg, Config, Decl, Extern, ExternFn, FieldAssign, FieldOp, Helper,
-    InputDecl, Instance, Lit, OutputDecl, Pending, PendingKind, Program, Rank, Resource, RuleStmt,
-    Span, Stmt, Term, TypeExpr, Via, str_term, var,
+    InputDecl, Instance, Lit, OutputDecl, Program, Rank, Resource, RuleStmt, Span, Stmt, Term,
+    TypeExpr, Via, str_term, var,
 };
 use crate::diag::Diagnostic;
 use crate::program::ItemId;
@@ -2097,12 +2097,13 @@ impl<'u> Lowerer<'u> {
         // (docs/grammar.md "Doc comments").
         if !self.text && !self.any_type {
             for d in super::doc::collect(&root) {
+                if d.pairs.is_empty() {
+                    continue;
+                }
                 let span = self.span_of(d.range);
-                let facts = d.pairs.iter().map(|(k, v)| {
-                    let args = [d.kind, &d.name, k, v].map(str_term).to_vec();
-                    Stmt::Fact(atom_at("doc", args, span))
-                });
-                items.extend(self.program.opaque(facts.collect(), span, self.item_scope));
+                let (kind, name, pairs) = (d.kind, d.name, d.pairs);
+                let kind = crate::program::ItemKind::Doc { kind, name, pairs };
+                items.push(self.program.item(span, self.item_scope, kind));
             }
         }
         self.file = saved.0;
@@ -2146,6 +2147,9 @@ impl<'u> Lowerer<'u> {
                 return self.ported(n, |l| l.let_stmt(n, scope, outer));
             }
             RULE | FACT => return self.ported(n, |l| l.rule(n, scope, outer)),
+            DECL => return Some(self.decl(n, scope)),
+            EXTERN => return self.extern_item(n).ok(),
+            TYPE_DECL => return self.type_block(n, scope).ok(),
             _ => {}
         }
         let saved = std::mem::take(&mut self.helpers);
@@ -2518,7 +2522,6 @@ impl<'u> Lowerer<'u> {
 
     fn stmt1(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
-        let one = |s: Stmt| Ok(vec![s]);
         match n.kind() {
             INPUT => {
                 let name = word_text(n, 1);
@@ -2616,46 +2619,6 @@ impl<'u> Lowerer<'u> {
             OUTPUT_DECL => self.output(n, scope, outer),
             // An alias lowers to nothing: each use is its type.
             TYPE_ALIAS => Ok(Vec::new()),
-            EXTERN => {
-                let name = dotted_text(n, 1);
-                self.check_extern(&name, span)?;
-                let args = n
-                    .children()
-                    .filter(|c| c.kind() == BIND_ARG)
-                    .map(|b| BindArg {
-                        input: tokens(&b).next().is_some_and(|t| t.kind() == PLUS),
-                        name: word_text(&b, 0),
-                        ty: node(&b, TYPE_EXPR).map(|t| self.type_expr(&t)),
-                    })
-                    .collect();
-                // R-60: one persistence concept, `memo.first`, said by the
-                // program where a value is kept, not by the extern.
-                if let Some(t) = tokens(n).find(|t| t.text() == "persist") {
-                    let r = t.text_range();
-                    let at = Span {
-                        start: u32::from(r.start()),
-                        end: u32::from(r.end()),
-                        ..span
-                    };
-                    let d = Diagnostic::error(at, format!("extern {name}: `persist` is gone"))
-                        .with_help(
-                            "keep an answer where it is read: `memo.first(KEY, CANDIDATE, VALUE)` \
-                             keeps the first candidate given for KEY",
-                        );
-                    self.diags.push(d);
-                    return Err(Skip);
-                }
-                one(Stmt::ExternFn(ExternFn { name, args, span }))
-            }
-            TYPE_DECL => {
-                let name = dotted_text(n, 1);
-                let attrs = self.attr_decls(n, scope)?;
-                one(Stmt::Pending(Pending {
-                    kind: PendingKind::TypeDecl { name, attrs },
-                    span,
-                }))
-            }
-            DECL => Ok(self.decl(n, scope, span)),
             USE => self.use_stmt(n, scope, outer),
             LET if node(n, PARAMS).is_some() => self.function_stmt(n, scope, outer),
             SET => self.set(n, scope, outer),
@@ -2733,43 +2696,81 @@ impl<'u> Lowerer<'u> {
 
     // --- declarations that lower to themselves ----------------------------
 
+    /// `extern f(+a: T, -b)`: a relation a provider answers, its columns
+    /// as declared (R-211 step 5: an item carrying them).
+    fn extern_item(&mut self, n: &SyntaxNode) -> L<ItemId> {
+        let span = self.span(n);
+        let name = dotted_text(n, 1);
+        self.check_extern(&name, span)?;
+        let args = n
+            .children()
+            .filter(|c| c.kind() == BIND_ARG)
+            .map(|b| BindArg {
+                input: tokens(&b).next().is_some_and(|t| t.kind() == PLUS),
+                name: word_text(&b, 0),
+                ty: node(&b, TYPE_EXPR).map(|t| self.type_expr(&t)),
+            })
+            .collect();
+        // R-60: one persistence concept, `memo.first`, said by the
+        // program where a value is kept, not by the extern.
+        if let Some(t) = tokens(n).find(|t| t.text() == "persist") {
+            let r = t.text_range();
+            let at = Span {
+                start: u32::from(r.start()),
+                end: u32::from(r.end()),
+                ..span
+            };
+            let d = Diagnostic::error(at, format!("extern {name}: `persist` is gone")).with_help(
+                "keep an answer where it is read: `memo.first(KEY, CANDIDATE, VALUE)` keeps the \
+                 first candidate given for KEY",
+            );
+            self.diags.push(d);
+            return Err(Skip);
+        }
+        let kind = crate::program::ItemKind::Extern { name, args };
+        Ok(self.program.item(span, self.item_scope, kind))
+    }
+
+    /// `type T { p: T flag* }`: a type block, its attributes as read
+    /// (R-211 step 5: an item carrying them).
+    fn type_block(&mut self, n: &SyntaxNode, scope: usize) -> L<ItemId> {
+        let name = dotted_text(n, 1);
+        let attrs = self.attr_decls(n, scope)?;
+        let kind = crate::program::ItemKind::TypeBlock { name, attrs };
+        Ok(self.program.item(self.span(n), self.item_scope, kind))
+    }
+
     /// `decl p(a, b)` declares the relation `p/2` by its columns (H-11):
     /// one no rule of the program defines is fed from outside (a provider,
     /// a given fact); `decl p(a, b) mixed` lets it have both facts and
     /// rules. The column names are the named-argument form's.
-    fn decl(&mut self, n: &SyntaxNode, scope: usize, span: Span) -> Vec<Stmt> {
+    fn decl(&mut self, n: &SyntaxNode, scope: usize) -> ItemId {
         let pred = dotted_text(n, 1);
         let binds: Vec<SyntaxNode> = n.children().filter(|c| c.kind() == BIND_ARG).collect();
-        let fields: Vec<String> = binds.iter().map(|b| word_text(b, 0)).collect();
-        let types = binds
+        let columns = binds
             .iter()
-            .map(|b| node(b, TYPE_EXPR).map(|t| self.type_expr(&t)))
+            .map(|b| {
+                (
+                    word_text(b, 0),
+                    node(b, TYPE_EXPR).map(|t| self.type_expr(&t)),
+                )
+            })
             .collect();
-        let arity = fields.len();
         let mixed = tokens(n).last().is_some_and(|t| t.text() == "mixed");
-        let e = Extern {
-            pred: pred.clone(),
-            arity,
-            span,
-        };
-        let mut out = Vec::new();
-        if mixed {
-            out.push(Stmt::Mixed(e));
-        } else if !self.decls.scopes[self.decl_scope(scope)]
+        // A relation the scope's own statements do not define: one in
+        // another module of the same name is another relation (R-65).
+        let fed = !self.decls.scopes[self.decl_scope(scope)]
             .heads
-            .contains(&pred)
-        {
-            // A relation the scope's own statements do not define: one in
-            // another module of the same name is another relation (R-65).
-            out.push(Stmt::Extern(e));
-        }
-        out.push(Stmt::Decl(Decl {
-            pred,
-            fields,
-            types,
-            span,
-        }));
-        out
+            .contains(&pred);
+        let span = self.span(n);
+        let rel = crate::program::node::RelRef { name: pred, span };
+        let kind = crate::program::ItemKind::Decl {
+            rel,
+            columns,
+            mixed,
+            fed,
+        };
+        self.program.item(span, self.item_scope, kind)
     }
 
     /// `input p from TERM [where B]` (R-55): rows of the relation `p`, its

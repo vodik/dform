@@ -280,6 +280,7 @@ impl Speller<'_> {
                 rel,
                 columns,
                 mixed,
+                ..
             } => format!(
                 "decl {}({}){}",
                 rel.name,

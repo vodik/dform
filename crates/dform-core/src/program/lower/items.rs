@@ -6,6 +6,10 @@
 //! |--------------------------------|--------------------------------------------------|
 //! | `let k[: T] = v [@r] [where B]`| `let("k", v', "r") [:- B', reads]`, folded over B's aggregates; `__secret_let("k", "p")` per secret path; `decl k(k: T)` at the first typed row |
 //! | `p(a, b) [@r] [where B]`       | `p(a', b'[, "r"]) [:- B', reads]`, folded over B's aggregates |
+//! | `decl p(a: T) [mixed]`         | `mixed p/1` or (fed from outside) `extern p/1`, then `decl p(a: T)` |
+//! | `extern f(+a: T, -b)`          | itself                                           |
+//! | `type T { .. }`                | itself, pending (`PendingKind::TypeDecl`)        |
+//! | a doc comment                  | `doc(kind, name, key, value)` per pair            |
 //!
 //! Then the helper statements its clause and terms made, in the order
 //! they made them.
@@ -13,7 +17,7 @@
 use super::clause::folded;
 use super::expr::Lowering;
 use crate::ast::{self, Atom, Decl, Rank, RuleStmt, Span, Stmt, TypeExpr, str_term};
-use crate::program::node::{ClauseId, ExprId, Head, ItemId, ItemKind};
+use crate::program::node::{ClauseId, ExprId, Head, ItemId, ItemKind, RelRef};
 use crate::program::{NodeId, Origin, Program};
 
 /// The statements of the item `id`, onto `out`, one origin each.
@@ -59,6 +63,36 @@ pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: 
             l.statements(program, it.span)
         }
         ItemKind::Rule { head, clause, rank } => rule(program, id, (head, *rank), *clause, it.span),
+        ItemKind::Decl {
+            rel,
+            columns,
+            mixed,
+            fed,
+        } => decl(rel, columns, *mixed, *fed, it.span),
+        ItemKind::Extern { name, args } => vec![Stmt::ExternFn(ast::ExternFn {
+            name: name.clone(),
+            args: args.clone(),
+            span: it.span,
+        })],
+        ItemKind::TypeBlock { name, attrs } => vec![Stmt::Pending(ast::Pending {
+            kind: ast::PendingKind::TypeDecl {
+                name: name.clone(),
+                attrs: attrs.clone(),
+            },
+            span: it.span,
+        })],
+        ItemKind::Doc { kind, name, pairs } => pairs
+            .iter()
+            .map(|(k, v)| {
+                let args = [*kind, name, k, v].map(str_term).to_vec();
+                Stmt::Fact(Atom {
+                    pred: "doc".into(),
+                    args,
+                    record: None,
+                    span: it.span,
+                })
+            })
+            .collect(),
         kind => unreachable!(
             "no builder makes {} before its step",
             super::super::spell::kind(kind)
@@ -102,6 +136,36 @@ fn rule(
         (true, _) => vec![Stmt::Rule(RuleStmt::new(atom, body))],
     };
     out.append(&mut l.helpers);
+    out
+}
+
+/// `decl p(a: T, ..) [mixed]` (H-11): the relation's columns, after
+/// `mixed` (facts and rules both) or, fed from outside, `extern`.
+fn decl(
+    rel: &RelRef,
+    columns: &[(String, Option<TypeExpr>)],
+    mixed: bool,
+    fed: bool,
+    span: Span,
+) -> Vec<Stmt> {
+    let e = ast::Extern {
+        pred: rel.name.clone(),
+        arity: columns.len(),
+        span,
+    };
+    let mut out = Vec::new();
+    match (mixed, fed) {
+        (true, _) => out.push(Stmt::Mixed(e)),
+        (false, true) => out.push(Stmt::Extern(e)),
+        (false, false) => {}
+    }
+    let (fields, types) = columns.iter().cloned().unzip();
+    out.push(Stmt::Decl(Decl {
+        pred: rel.name.clone(),
+        fields,
+        types,
+        span,
+    }));
     out
 }
 

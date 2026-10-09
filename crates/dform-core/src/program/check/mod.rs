@@ -229,6 +229,15 @@ fn resolved_item(program: &Program, ported: &Resolved, id: ItemId, out: &mut Vec
                 span: it.span,
             }));
         }
+        // What carries the parts the resolver read as they are lowers as
+        // the resolver did, by construction.
+        (
+            ItemKind::Decl { .. }
+            | ItemKind::Extern { .. }
+            | ItemKind::TypeBlock { .. }
+            | ItemKind::Doc { .. },
+            None,
+        ) => out.extend(super::lower_item(program, id)),
         (kind, None) => panic!(
             "{} was ported with nothing kept of what the resolver lowered it to",
             super::spell::kind(kind)

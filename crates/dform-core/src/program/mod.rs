@@ -125,6 +125,11 @@ impl Program {
         }))
     }
 
+    /// The item `kind` at `span`, in `scope`.
+    pub fn item(&mut self, span: Span, scope: ScopeId, kind: ItemKind) -> ItemId {
+        self.items.insert(Item { span, scope, kind })
+    }
+
     /// The scope of a module's file or a component's body, inside `parent`.
     pub fn module_scope(&mut self, parent: ScopeId, path: &str, component: bool) -> ScopeId {
         let path = path.to_string();

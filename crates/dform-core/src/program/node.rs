@@ -625,11 +625,14 @@ pub enum ItemKind {
         of: Option<Name>,
         settings: Vec<(Name, Span, ExprId)>,
     },
-    /// `decl p(a: T, ..) [mixed]` (step 5).
+    /// `decl p(a: T, ..) [mixed]` (step 5). `fed`: no rule of its scope
+    /// defines it, so its rows come from outside (a provider, given
+    /// facts); a `mixed` one has both.
     Decl {
         rel: RelRef,
         columns: Vec<(Name, Option<TypeExpr>)>,
         mixed: bool,
+        fed: bool,
     },
     /// `extern p(+a: T, -b)` (step 5).
     Extern { name: Name, args: Vec<ast::BindArg> },
