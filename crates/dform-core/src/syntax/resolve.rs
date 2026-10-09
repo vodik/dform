@@ -2154,6 +2154,7 @@ impl<'u> Lowerer<'u> {
             EXTERN => return self.extern_item(n).ok(),
             TYPE_DECL => return self.ported(n, |l| l.type_block(n, scope)),
             SET => return self.ported(n, |l| l.set(n, scope, outer)),
+            INPUT_RELATION => return self.ported(n, |l| l.relation_input(n, scope, outer)),
             RESOURCE if self.decls.project.contains(&self.file) => {
                 return self.ported(n, |l| l.deployment(n, scope, outer));
             }
@@ -2533,7 +2534,6 @@ impl<'u> Lowerer<'u> {
     fn stmt1(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
         match n.kind() {
-            INPUT_RELATION => self.relation_input(n, scope, outer),
             // An alias lowers to nothing: each use is its type.
             TYPE_ALIAS => Ok(Vec::new()),
             USE => self.use_stmt(n, scope, outer),
@@ -2877,7 +2877,7 @@ impl<'u> Lowerer<'u> {
     /// together, and facts the program states join them. `input p` alone,
     /// in a module or a component, is a relation its user gives the rows
     /// of, in the `use` or `instance` block.
-    fn relation_input(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+    fn relation_input(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
         let span = self.span(n);
         let pred = word_text(n, 1);
         let module = self.decls.paths.contains_key(&self.file)
@@ -2895,7 +2895,25 @@ impl<'u> Lowerer<'u> {
             let arity = self
                 .relation_decl(scope, &pred)
                 .map_or(0, |d| d.children().filter(|c| c.kind() == BIND_ARG).count());
-            return Ok(vec![Stmt::RelationInput(Extern { pred, arity, span })]);
+            let stmt = Stmt::RelationInput(Extern {
+                pred: pred.clone(),
+                arity,
+                span,
+            });
+            let r = crate::program::build::RelationInputLowered {
+                span,
+                scope: self.item_scope,
+                rel: pred,
+                arity,
+                from: None,
+            };
+            let mut b = crate::program::Builder::new(&mut self.program, span, &|_| true);
+            let item = b.relation_input_item(r);
+            if crate::program::check::enabled() {
+                let resolved = self.resolved_with(vec![stmt], span);
+                self.resolved.insert(item, resolved);
+            }
+            return Ok(item);
         };
         if module {
             return self.error(
@@ -2907,33 +2925,70 @@ impl<'u> Lowerer<'u> {
             );
         }
         self.reject_facts(&source)?;
-        let Some(decl) = self.relation_decl(scope, &pred) else {
+        let (cols, arity) = match self.relation_decl(scope, &pred) {
             // No `decl`: the columns are the first source's (R-34).
-            let cols = match self.read_columns.get(&pred) {
-                Some(c) => c.clone(),
-                None => {
-                    let c = self.first_source_columns(&pred, n, &source, span)?;
-                    self.read_columns.insert(pred.clone(), c.clone());
-                    c
-                }
-            };
-            let arity = cols.len();
-            let mut rc = self.rc(n, scope, outer);
-            let body = self.opt_body(&mut rc, n)?;
-            let mut out = self.table(&mut rc, &pred, cols, n, body, span)?;
-            out.push(Stmt::Mixed(Extern { pred, arity, span }));
-            return Ok(out);
+            None => {
+                let cols = match self.read_columns.get(&pred) {
+                    Some(c) => c.clone(),
+                    None => {
+                        let c = self.first_source_columns(&pred, n, &source, span)?;
+                        self.read_columns.insert(pred.clone(), c.clone());
+                        c
+                    }
+                };
+                let arity = cols.len();
+                (cols, arity)
+            }
+            Some(decl) => {
+                let cols = self.table_columns(&pred, &decl)?;
+                (
+                    cols,
+                    decl.children().filter(|c| c.kind() == BIND_ARG).count(),
+                )
+            }
         };
-        let cols = self.table_columns(&pred, &decl)?;
         let mut rc = self.rc(n, scope, outer);
         let body = self.opt_body(&mut rc, n)?;
-        let mut out = self.table(&mut rc, &pred, cols, n, body, span)?;
-        out.push(Stmt::Mixed(Extern {
-            pred,
-            arity: decl.children().filter(|c| c.kind() == BIND_ARG).count(),
+        let clause = self.body_clause(n);
+        let rows = self.table(&mut rc, &pred, cols, n, body, span)?;
+        let resolved = crate::program::check::enabled().then(|| {
+            let mut out = rows.stmts();
+            out.push(Stmt::Mixed(Extern {
+                pred: pred.clone(),
+                arity,
+                span,
+            }));
+            self.resolved_with(out, span)
+        });
+        let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
+        let r = crate::program::build::RelationInputLowered {
             span,
-        }));
-        Ok(out)
+            scope: self.item_scope,
+            rel: pred,
+            arity,
+            from: Some(crate::program::build::RelationRows {
+                clause,
+                externs: rows.externs.clone(),
+                head: &rows.head,
+                body: &rows.body,
+                seed: rows.seed,
+                made: &self.helpers[rows.made..],
+                results: &results,
+            }),
+        };
+        let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
+        let written = |v: &str| written.contains(v);
+        let gather = self
+            .gather
+            .as_mut()
+            .expect("a ported statement is gathered");
+        let mut b = gather.builder(&mut self.program, span, &written);
+        let item = b.relation_input_item(r);
+        gather.done(b);
+        if let Some(stmts) = resolved {
+            self.resolved.insert(item, stmts);
+        }
+        Ok(item)
     }
 
     /// The columns of `input p from FORMAT("path")` with no `decl`: the
@@ -3264,15 +3319,21 @@ impl<'u> Lowerer<'u> {
         n: &SyntaxNode,
         mut body: Vec<Lit>,
         span: Span,
-    ) -> L<Vec<Stmt>> {
+    ) -> L<TableRows> {
         let vars: Vec<Term> = cols
             .iter()
             .map(|c| var(&fresh(rc, &capitalise(&c.name))))
             .collect();
-        let mut out = self.doc_source(rc, n, pred, cols, vars.clone(), &mut body)?;
+        let (seed, made) = (body.len(), self.helpers.len());
+        let externs = self.doc_source(rc, n, pred, cols, vars.clone(), &mut body)?;
         self.check_bound(rc, &body, &[])?;
-        out.push(Stmt::Rule(RuleStmt::new(atom_at(pred, vars, span), body)));
-        Ok(out)
+        Ok(TableRows {
+            externs,
+            head: atom_at(pred, vars, span),
+            body,
+            seed,
+            made,
+        })
     }
 
     /// A table's columns, its relation's `decl`'s: each typed, with an
@@ -4408,7 +4469,8 @@ impl<'u> Lowerer<'u> {
                     let cols = self.table_columns(&pred, &decl)?;
                     let mut rc = self.rc(&n, scope, outer);
                     let body = self.opt_body(&mut rc, &n)?;
-                    self.table(&mut rc, &pred, cols, &n, body, span)
+                    let rows = self.table(&mut rc, &pred, cols, &n, body, span)?;
+                    Ok(rows.stmts())
                 })(),
                 // A row's references are the user's resources, the
                 // module's column typed as its `decl` says.
@@ -9230,6 +9292,30 @@ impl Contribution {
     }
 }
 
+/// A relation's rows read from a document (R-39), as the resolver
+/// lowered them: the externs reading it, then the rule `head :- body`,
+/// its clause's literals then from `seed` the document's reads, which
+/// made the statement's helpers from `made`.
+struct TableRows {
+    externs: Vec<Stmt>,
+    head: Atom,
+    body: Vec<Lit>,
+    seed: usize,
+    made: usize,
+}
+
+impl TableRows {
+    /// What the resolver writes of them.
+    fn stmts(&self) -> Vec<Stmt> {
+        let mut out = self.externs.clone();
+        out.push(Stmt::Rule(RuleStmt::new(
+            self.head.clone(),
+            self.body.clone(),
+        )));
+        out
+    }
+}
+
 /// Mark the literals `out[start..]` that test `has r.PATH` by its value
 /// with `__has(T, A, "PATH", N)` before them (`not` when `negated`), N
 /// their count: the compiler keeps them, or puts the schema's answer in
@@ -9802,6 +9888,31 @@ mod tests {
             e.contains("an aggregate is bound in the body of a rule"),
             "{e}"
         );
+    }
+
+    /// Every form of relation input is built as a `RelationInput` item
+    /// (R-211 step 5) and lowers as the resolver lowers it: a stack's
+    /// rows from a document under a clause, a component's relation its
+    /// user gives.
+    #[test]
+    fn every_relation_input_is_an_item() {
+        let src = "input p from csv.decode(io.read(\"p.csv\")) where z(1)\n\
+             decl p(a: int, b: string)\n\
+             z(1)\n\
+             component c {\n  input q\n  decl q(a: int)\n}\n";
+        let (lowered, seen) = crate::program::check::collect(|| parse_as(src, true));
+        let lowered = lowered
+            .map(|p| show(&p.statements))
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
+        assert_eq!(seen.items.get("an input"), Some(&2), "{:?}", seen.items);
+        assert!(
+            !seen.items.keys().any(|k| k.contains("(RelationInput)")),
+            "{:?}",
+            seen.items
+        );
+        let s = "p(A, B) :- z(1), Path = \"p.csv\", table.csv.p(Path, At, A, B)";
+        assert!(lowered.iter().any(|l| l.contains(s)), "{s}: {lowered:#?}");
     }
 
     /// Every form a written literal takes is built as a goal (R-211 step

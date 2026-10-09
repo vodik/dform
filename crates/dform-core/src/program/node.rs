@@ -607,10 +607,15 @@ pub enum ItemKind {
         /// declaration this is, and at the first where each is.
         rows: Option<(usize, Vec<Span>)>,
     },
-    /// `input p [from src [where B]]`: a relation's rows (R-55, step 5).
+    /// `input p`, a module's relation its user gives (R-55), or `input p
+    /// from src [where B]`, a stack's relation the rows of a document
+    /// (R-39), each the variables `columns` (step 5); `arity` its
+    /// declaration's columns.
     RelationInput {
         rel: RelRef,
-        source: Option<ExprId>,
+        arity: usize,
+        source: Option<Source>,
+        columns: Vec<VarId>,
         clause: Option<ClauseId>,
     },
     /// `output k[: T] [= v] [where B]` (step 5). `ty`: the row that

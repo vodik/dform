@@ -83,6 +83,19 @@ pub struct SetFromLowered<'a> {
 }
 
 impl Builder<'_> {
+    /// The rows of a document: the externs reading it, its reads `reads`
+    /// (each the goal it lowered to), the helpers its terms made the first
+    /// read's.
+    pub(super) fn source(&mut self, externs: Vec<Stmt>, reads: &[Lit], made: &[Stmt]) -> Source {
+        let reads: Vec<GoalId> = reads.iter().map(|l| self.goal(l)).collect();
+        if let (Some(&g), false) = (reads.first(), made.is_empty()) {
+            self.program
+                .terms_made
+                .insert(NodeId::Goal(g), made.to_vec());
+        }
+        Source { externs, reads }
+    }
+
     /// The `Set` item of `s`.
     pub fn set_item(&mut self, s: SetLowered) -> ItemId {
         let writes = s
@@ -162,12 +175,7 @@ impl Builder<'_> {
 
     /// The `SetFrom` item of `s`.
     pub fn set_from_item(&mut self, s: SetFromLowered) -> ItemId {
-        let reads: Vec<GoalId> = s.body[s.seed..].iter().map(|l| self.goal(l)).collect();
-        if let (Some(&g), false) = (reads.first(), s.made.is_empty()) {
-            self.program
-                .terms_made
-                .insert(NodeId::Goal(g), s.made.to_vec());
-        }
+        let source = self.source(s.externs, &s.body[s.seed..], s.made);
         let (path, value): (VarId, VarId) = (self.var(s.path), self.var(s.value));
         if let Some(c) = s.clause
             && !s.results.is_empty()
@@ -176,10 +184,7 @@ impl Builder<'_> {
             super::number_folds(self.program, c);
         }
         let kind = ItemKind::SetFrom {
-            source: Source {
-                externs: s.externs,
-                reads,
-            },
+            source,
             path,
             value,
             rank: s.rank,

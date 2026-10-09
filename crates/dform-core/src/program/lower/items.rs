@@ -10,6 +10,7 @@
 //! | `input k: T [= d] [check B] [where G]` | itself, its fields', refinement's and clause's literals; under several clauses (R-104) where each holds and the deny where two do |
 //! | `output k[: T] = v [where B]`  | its declaration at its first row; the value, or `output("k", v') :- B', reads` |
 //! | `output p`                     | itself, its reference columns marked             |
+//! | `input p`, `input p from src [where B]` | itself; the document's externs, `p(cols) :- B', reads`, `mixed p/n` |
 //! | `resource T n [@r] { p = v .. } [where B]`, `= v` | itself: its entries (a value's the object's keys), its body B's literals then the entries' reads (`reads`), then a name from the clause's binding |
 //! | `set t = v [@r] [where B]`, `set { .. }` | per line `arg(T, A, "p", v'[, "r"])` (`arg_add` for `+=`), an element `arg(T, A, "l", [k, {..}], "r")`, an input `arg("input", "", "k", v', "r")`, a fact or a rule over B's literals and the line's reads, folded over B's aggregates |
 //! | `set from doc [@r] [where B]`  | the document's externs, then `arg("input", "", P, V, "r") :- B', reads` |
@@ -98,6 +99,13 @@ pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: 
             out.extend(helpers);
             out
         }
+        ItemKind::RelationInput {
+            rel,
+            arity,
+            source,
+            columns,
+            clause,
+        } => relation_input(program, (rel, *arity), source.as_ref(), columns, *clause),
         ItemKind::Output {
             name,
             ty,
@@ -378,6 +386,46 @@ pub fn value_entries(value: ast::Term, span: Span) -> Option<Vec<ast::FieldAssig
             span,
         }],
     })
+}
+
+/// `input p` (a module's relation, its user gives the rows): itself; `input
+/// p from src [where B]`: the externs reading the document, the rule
+/// `p(columns) :- B', reads` folded over B's aggregates, and `mixed p/n`
+/// (rows from the document and from rules); then the helpers.
+fn relation_input(
+    program: &Program,
+    (rel, arity): (&RelRef, usize),
+    source: Option<&Source>,
+    columns: &[VarId],
+    clause: Option<ClauseId>,
+) -> Vec<Stmt> {
+    let e = ast::Extern {
+        pred: rel.name.clone(),
+        arity,
+        span: rel.span,
+    };
+    let Some(source) = source else {
+        return vec![Stmt::RelationInput(e)];
+    };
+    let mut l = Lowering::new(program);
+    let (mut body, folds) = match clause {
+        Some(c) => l.unfolded(c),
+        None => Default::default(),
+    };
+    for &g in &source.reads {
+        l.goal(g, &mut body);
+    }
+    let head = Atom {
+        pred: rel.name.clone(),
+        args: columns.iter().map(|v| l.var(*v)).collect(),
+        record: None,
+        span: rel.span,
+    };
+    let mut out = source.externs.clone();
+    out.extend(clause_rule(head, body, folds, true, rel.span));
+    out.push(Stmt::Mixed(e));
+    out.append(&mut l.helpers);
+    out
 }
 
 /// `set ..`: each line's write, a fact or a rule over B's literals (B

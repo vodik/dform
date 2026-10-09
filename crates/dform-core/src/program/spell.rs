@@ -259,10 +259,13 @@ impl Speller<'_> {
                 rel,
                 source,
                 clause,
+                ..
             } => format!(
                 "input {}{}{}",
                 rel.name,
-                source.map_or(String::new(), |s| format!(" from {}", self.expr(s))),
+                source
+                    .as_ref()
+                    .map_or(String::new(), |s| format!(" from {}", self.source(s))),
                 self.where_(*clause)
             ),
             ItemKind::Output {

@@ -32,7 +32,7 @@ pub use checks::CheckLowered;
 pub use clause::{Form, Written};
 pub use contributions::{SetFromLowered, SetLowered, TargetLowered, WriteLowered};
 pub use gather::{Gather, Statement};
-pub use inputs::InputLowered;
+pub use inputs::{InputLowered, RelationInputLowered, RelationRows};
 pub use lets::LetLowered;
 pub use outputs::OutputLowered;
 pub use resources::{BodyLowered, EntryLowered, HeaderLowered, ResourceLowered};
