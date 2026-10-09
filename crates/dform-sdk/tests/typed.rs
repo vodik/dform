@@ -628,3 +628,122 @@ fn a_type_that_declares_health_answers_it() {
         )]
     );
 }
+
+/// An API that answers a token's value once, to its create: the provider
+/// keeps it, and only the engine is told it.
+struct Issuer {
+    issued: Mutex<BTreeMap<String, String>>,
+}
+
+impl Provider for Issuer {
+    const NAME: &'static str = "issuer";
+    fn configure(_: &Json) -> Result<(Issuer, Option<String>)> {
+        Ok((
+            Issuer {
+                issued: Mutex::new(BTreeMap::new()),
+            },
+            None,
+        ))
+    }
+    fn reveal(&self, held: &pb::Held) -> Result<Vec<u8>> {
+        match self.issued.lock().unwrap().get(&held.remote) {
+            Some(v) => Ok(v.clone().into_bytes()),
+            None => Err(dform_sdk::typed::Error::Refused("not issued here".into())),
+        }
+    }
+}
+
+#[derive(Resource, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[dform(type = "issuer.token")]
+struct Token {
+    #[dform(required, force_new)]
+    name: String,
+    #[dform(computed, id)]
+    #[serde(default)]
+    id: Option<String>,
+    #[dform(computed, sensitive)]
+    #[serde(default)]
+    value: Option<String>,
+}
+
+impl Lifecycle<Issuer> for Token {
+    fn read(_: &Issuer, remote: &str) -> Result<Option<Token>> {
+        Ok(Some(Token {
+            name: remote.into(),
+            id: Some(remote.into()),
+            value: Some(String::new()),
+        }))
+    }
+    fn create(p: &Issuer, d: Token, _: &str, _: &Progress) -> Result<(String, Token)> {
+        let v = format!("secret-of-{}", d.name);
+        p.issued.lock().unwrap().insert(d.name.clone(), v.clone());
+        let t = Token {
+            id: Some(d.name.clone()),
+            value: Some(v),
+            ..d
+        };
+        Ok((t.name.clone(), t))
+    }
+    fn update(_: &Issuer, _: &str, prior: Token, _: Token, _: &Progress) -> Result<Token> {
+        Ok(prior)
+    }
+    fn delete(_: &Issuer, _: &str, _: &Progress) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// A sensitive computed value leaves as its label, the object's address
+/// in it; its bytes are revealed to the engine's call alone (a lease).
+#[test]
+fn a_sensitive_computed_value_is_held_and_revealed() {
+    let h = Typed::<Issuer>::new().resource::<Token>();
+    let _: pb::ConfigureResponse = call_on(&h, pb::ConfigureRequest::default());
+    let a: pb::ApplyResponse = call_on(
+        &h,
+        pb::ApplyRequest {
+            op: pb::Op::Create as i32,
+            r#type: "issuer.token".into(),
+            name: "ci".into(),
+            config: Some(wire::doc(&json!({"name": "t1"}))),
+            ..Default::default()
+        },
+    );
+    let computed = wire::from_doc(a.computed.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        computed,
+        json!({"id": "t1", "value": {"$secret": "issuer.token/ci#value"}})
+    );
+    let held = pb::Held {
+        provider: "issuer".into(),
+        r#type: "issuer.token".into(),
+        remote: "t1".into(),
+        path: "value".into(),
+        ..Default::default()
+    };
+    let e = h
+        .handle(
+            pb::RevealRequest {
+                held: Some(held.clone()),
+                lease: String::new(),
+            }
+            .into(),
+            &silent,
+        )
+        .unwrap_err();
+    assert!(
+        format!("{e:?}").contains("without the deployment's lease"),
+        "{e:?}"
+    );
+    let r: pb::RevealResponse = call_on(
+        &h,
+        pb::RevealRequest {
+            held: Some(held),
+            lease: "simon@host pid 1".into(),
+        },
+    );
+    assert_eq!(r.value, b"secret-of-t1");
+}
+
+fn call_on<P: Provider, R: TryFrom<Reply, Error = Reply>>(h: &Typed<P>, c: impl Into<Call>) -> R {
+    R::try_from(h.handle(c.into(), &silent).unwrap()).unwrap()
+}
