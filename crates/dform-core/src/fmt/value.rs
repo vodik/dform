@@ -54,6 +54,29 @@ impl Tree {
         }
     }
 
+    /// The tree on one line whatever its width, a note after its leaf
+    /// (`{ port: 5432, protocol: "TCP" (schema default) }`): what a cell
+    /// of a table and a line of the bare plan print, where [`layout`]
+    /// would break it.
+    pub fn line(&self) -> String {
+        match self {
+            Tree::Leaf(s) => s.clone(),
+            Tree::Noted(s, note) => format!("{s} {note}"),
+            Tree::Obj(fs) if fs.is_empty() => "{}".into(),
+            Tree::Obj(fs) => {
+                let fs: Vec<String> = fs
+                    .iter()
+                    .map(|(k, t)| format!("{k}: {}", t.line()))
+                    .collect();
+                format!("{{ {} }}", fs.join(", "))
+            }
+            Tree::List(xs) => {
+                let xs: Vec<String> = xs.iter().map(Tree::line).collect();
+                format!("[{}]", xs.join(", "))
+            }
+        }
+    }
+
     fn doc(&self) -> Doc {
         match self {
             Tree::Leaf(s) => text(s.clone()),
@@ -215,6 +238,31 @@ mod tests {
             layout("c = ", &t, 100),
             ["c = { name: \"web\", args: [\"a\", \"b\"] }"]
         );
+    }
+
+    /// One line is the layout's line where it fits, and stays one line
+    /// past the width and with a note.
+    #[test]
+    fn a_line_is_the_layouts_one_line_form() {
+        let t = Tree::Obj(vec![
+            ("name".into(), leaf("\"web\"")),
+            (
+                "ports".into(),
+                Tree::List(vec![Tree::Obj(vec![("port".into(), leaf("80"))])]),
+            ),
+            ("tags".into(), Tree::Obj(Vec::new())),
+            (
+                "args".into(),
+                Tree::List(vec![leaf("\"a\""), leaf("\"b\"")]),
+            ),
+        ]);
+        assert_eq!(layout("", &t, 100), [t.line()]);
+        assert!(layout("", &t, 10).len() > 1);
+        let noted = Tree::Obj(vec![(
+            "protocol".into(),
+            Tree::Noted("\"TCP\"".into(), "(schema default)".into()),
+        )]);
+        assert_eq!(noted.line(), "{ protocol: \"TCP\" (schema default) }");
     }
 
     #[test]

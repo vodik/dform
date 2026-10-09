@@ -172,7 +172,13 @@ impl Report {
                         let names: Vec<String> = from.iter().map(|f| bold(f)).collect();
                         format!("  from {}", names.join("; "))
                     };
-                    out.push_str(&format!("    {r} {}{from}\n", style.shown(v)));
+                    // An object or a list as the plan lays it out, on
+                    // one line.
+                    let v = match &w.laid {
+                        Some(laid) => laid.line(),
+                        None => style.shown(v),
+                    };
+                    out.push_str(&format!("    {r} {v}{from}\n"));
                 }
             }
         }
