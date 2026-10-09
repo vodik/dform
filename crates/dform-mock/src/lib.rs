@@ -929,7 +929,9 @@ impl FakeCloud {
         if let Some(ms) = self.chaos.delay.get(addr)
             && self.delayed.insert(addr.clone())
         {
-            eprintln!("chaos: apply {shown} answers {ms}ms late");
+            // Said by the call's event (`made`, its message under
+            // `DFORM_LOG=debug`), never on the mock's stderr: a line there
+            // lands inside dform's block as it is drawn.
             out.delay_ms = *ms;
         }
         if let Some(ms) = self.chaos.latency.get(addr) {

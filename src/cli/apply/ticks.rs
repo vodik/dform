@@ -569,14 +569,15 @@ impl<'a, 'h> Ticks<'a, 'h> {
         )
     }
 
-    /// A batch apply's tick shown and asked for: the plan printed, a deny
-    /// over it refused, tick 1 confirmed (and what it empties, R-80), a
+    /// A batch apply's tick shown and asked for: the plan printed (a later
+    /// tick's from that tick to the end, its values as the boundary learned
+    /// them: seen before it runs, After R-206), a deny over it refused, tick 1 confirmed (and what it empties, R-80), a
     /// later tick that adds what no plan listed asked for again or, of a
     /// plan file or an approval, stopped before. `Some`: the apply ends.
     fn show(&mut self, t: &Tick) -> Result<Option<Outcome>> {
         let tick = self.tick;
         let p = &t.planned;
-        if self.hook.is_none() && self.replanned(t) {
+        if self.hook.is_none() {
             self.print(t);
         }
         if !p.denies.is_empty() {
@@ -651,19 +652,6 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 .collect();
         }
         Ok(None)
-    }
-
-    /// Whether a tick's plan is printed as the tick starts: tick 1's, a
-    /// refused one's, and under `-q` (the bare form scripts read) and
-    /// `-v` every later one's too. Otherwise a later tick is its block, its
-    /// plan printed only where it adds to the plan shown (R-206,
-    /// [`Ticks::confirm_later`]).
-    fn replanned(&self, t: &Tick) -> bool {
-        let why = self.r.why();
-        self.tick == 1
-            || why == report::Why::None
-            || why >= report::Why::How
-            || !t.planned.denies.is_empty()
     }
 
     /// The policy block under the tick before (R-206): the policies as
@@ -802,11 +790,6 @@ impl<'a, 'h> Ticks<'a, 'h> {
         // A change gone from the tick is said, not asked for: the tick does
         // less than was shown.
         let more = differs.iter().any(|d| d.mark != '-');
-        // What the tick adds to the plan shown is shown: its plan, then
-        // what differs, above the question.
-        if (new + planned > 0 || more) && !self.replanned(t) {
-            self.print(t);
-        }
         if new > 0 && self.shown {
             let unnamed = std::mem::take(&mut self.unnamed);
             return self
@@ -1239,7 +1222,9 @@ impl<'a, 'h> Ticks<'a, 'h> {
         let report = self
             .r
             .report(&p.plan, &p.res, &p.sections, self.tick, &[], &p.denies);
-        let mut block = report::progress::Block::new(self.tick, &actions).nested(&report.outline());
+        let mut block =
+            report::progress::Block::new(self.tick, &actions, std::time::Instant::now())
+                .nested(&report.outline());
         block.sites = report::sites(
             &p.res,
             actions.iter().map(|a| &a.addr),

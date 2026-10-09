@@ -222,14 +222,10 @@ fn a_pending_update_applies_after_the_boundary() {
         "p.df",
         "\nresource db.postgres main { size = 1 }\nresource compute.vm app { db_host = ref(db.postgres, \"main\", \"endpoint\") }\nuse fake\n",
     );
-    // `-v`: tick 2's plan, re-derived at the boundary, is printed with the
-    // value it now knows (R-206: without it, tick 2 is its block).
+    // Tick 2's plan, re-derived at the boundary, is printed again with the
+    // value it now knows (After R-206).
     let r = s
-        .run(&common::on(
-            "p.df",
-            &["--world", "w.json"],
-            &["apply", "-v"],
-        ))
+        .run(&common::on("p.df", &["--world", "w.json"], &["apply"]))
         .success();
     assert!(
         r.stdout

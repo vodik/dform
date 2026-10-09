@@ -9,8 +9,11 @@
 //! spinner) and the time it has run, `done 4.2s` once it ends. A failed
 //! change's mark is `!`; its error is said once, in full, below the block
 //! ([`Block::failures`]), in R-109's shape. Colour is on the marks only.
-//! The driver (the `dform` binary's `progress`) prints it: redrawn in
-//! place on a terminal, a line per change of state otherwise.
+//! The block keeps no clock of its own: each change of state says when it
+//! happened, and the block says its times as of the last, so a fixed list
+//! of them always prints the same. The `dform` binary's `progress` prints
+//! it: redrawn in place on a terminal, a line per change once its call
+//! answered otherwise.
 
 use super::errors::Failure;
 use super::labels::{address, attribute_label, marker_of};
@@ -67,6 +70,9 @@ pub struct Block {
     /// them.
     tree: Vec<(usize, Item)>,
     started: Instant,
+    /// The time as of the last change of state: what a running call's and
+    /// the tick's times are said as of.
+    now: Instant,
     /// How long the tick ran, once it ended.
     ended: Option<Duration>,
     /// Every failure's full error, in the order they came.
@@ -126,8 +132,9 @@ fn words(k: &ActionKind) -> (&'static str, &'static str) {
 }
 
 impl Block {
-    /// The tick's changes, in plan order, each waiting.
-    pub fn new(tick: usize, actions: &[&Action]) -> Block {
+    /// The tick's changes, in plan order, each waiting; the tick started
+    /// `at`.
+    pub fn new(tick: usize, actions: &[&Action], at: Instant) -> Block {
         let entries: Vec<Entry> = actions
             .iter()
             .filter(|a| is_call(a))
@@ -146,7 +153,8 @@ impl Block {
             tick,
             tree: (0..entries.len()).map(|i| (0, Item::Change(i))).collect(),
             entries,
-            started: Instant::now(),
+            started: at,
+            now: at,
             ended: None,
             errors: Vec::new(),
             sites: Default::default(),
@@ -203,29 +211,38 @@ impl Block {
         self.entries.iter_mut().find(|e| e.addr == *addr)
     }
 
-    /// Its Apply call was submitted.
-    pub fn start(&mut self, addr: &Address) {
+    /// The time is `at`: what a running call's time and the tick's are
+    /// said as of.
+    pub fn clock(&mut self, at: Instant) {
+        self.now = self.now.max(at);
+    }
+
+    /// Its Apply call was submitted `at`.
+    pub fn start(&mut self, addr: &Address, at: Instant) {
+        self.clock(at);
         if let Some(e) = self.entry(addr) {
             e.state = State::Running;
-            e.started = Some(Instant::now());
+            e.started = Some(at);
         }
     }
 
-    /// Its Apply call answered.
-    pub fn done(&mut self, addr: &Address) {
+    /// Its Apply call answered `at`.
+    pub fn done(&mut self, addr: &Address, at: Instant) {
+        self.clock(at);
         if let Some(e) = self.entry(addr) {
             e.state = State::Done;
-            e.took = e.started.map(|s| s.elapsed());
+            e.took = e.started.map(|s| at.saturating_duration_since(s));
         }
     }
 
-    /// Its Apply call failed with `error`: its line keeps its mark and
-    /// time; the error is said below the block, at where the change is
+    /// Its Apply call failed `at` with `error`: its line keeps its mark
+    /// and time; the error is said below the block, at where the change is
     /// derived unless it says where.
-    pub fn fail(&mut self, addr: &Address, error: Failure) {
+    pub fn fail(&mut self, addr: &Address, error: Failure, at: Instant) {
+        self.clock(at);
         if let Some(e) = self.entry(addr) {
             e.state = State::Failed;
-            e.took = e.started.map(|s| s.elapsed());
+            e.took = e.started.map(|s| at.saturating_duration_since(s));
         }
         let error = error.at(self.sites.get(addr).cloned());
         self.errors.push((addr.clone(), error));
@@ -240,9 +257,11 @@ impl Block {
         }
     }
 
-    /// The tick ended: its time stops.
-    pub fn end(&mut self) {
-        self.ended.get_or_insert_with(|| self.started.elapsed());
+    /// The tick ended `at`: its time stops.
+    pub fn end(&mut self, at: Instant) {
+        self.clock(at);
+        let ran = self.now.saturating_duration_since(self.started);
+        self.ended.get_or_insert(ran);
     }
 
     /// The failures, each in full in R-109's shape, `! ` before its first
@@ -277,9 +296,10 @@ impl Block {
         })
     }
 
-    /// The tick's time: as of now, or what it ran.
+    /// The tick's time: as of the last change of state, or what it ran.
     fn elapsed(&self) -> Duration {
-        self.ended.unwrap_or_else(|| self.started.elapsed())
+        self.ended
+            .unwrap_or_else(|| self.now.saturating_duration_since(self.started))
     }
 
     /// The header's right column on a terminal: the fill bar, then `2 of
@@ -313,7 +333,11 @@ impl Block {
     fn state(&self, i: usize) -> (String, bool) {
         let e = &self.entries[i];
         let (running, ran) = words(&e.kind);
-        let time = || e.took.or_else(|| e.started.map(|s| s.elapsed())).map(took);
+        let time = || {
+            e.took
+                .or_else(|| e.started.map(|s| self.now.saturating_duration_since(s)))
+                .map(took)
+        };
         match &e.state {
             State::Waiting(Some(on)) => (format!("waits on {on}"), false),
             State::Waiting(None) => (String::new(), false),
@@ -422,18 +446,6 @@ impl Block {
         out
     }
 
-    /// Change `i`'s line as its call starts: its mark and name alone.
-    pub fn started(&self, i: usize, style: Style, said: &mut Vec<usize>) -> Vec<String> {
-        let mut out = self.line(i, style, said);
-        if let Some(last) = out.last_mut() {
-            let e = &self.entries[i];
-            let (_, painted) = Block::mark(e, style);
-            let indent = "  ".repeat(self.tree[self.place(i).0].0 + 1);
-            *last = format!("{indent}{painted} {}", e.printed);
-        }
-        out
-    }
-
     /// The tick's end where no bar says it: `tick 1  done 4.2s`.
     pub fn ended(&self) -> String {
         format!(
@@ -457,7 +469,7 @@ impl Block {
         };
         let elapsed = e
             .took
-            .or_else(|| e.started.map(|s| s.elapsed()))
+            .or_else(|| e.started.map(|s| self.now.saturating_duration_since(s)))
             .map(|d| d.as_secs_f64());
         serde_json::json!({
             "tick": self.tick,
@@ -504,38 +516,41 @@ mod tests {
         }
     }
 
+    /// `ms` after `t0`.
+    fn at(t0: Instant, ms: u64) -> Instant {
+        t0 + Duration::from_millis(ms)
+    }
+
     #[test]
     fn the_mark_alone_is_painted() {
+        let t0 = Instant::now();
         let a = action(ActionKind::Create, "net.vpc", "a");
         let d = action(ActionKind::Delete, "net.vpc", "d");
-        let mut block = Block::new(1, &[&a, &d]);
+        let mut block = Block::new(1, &[&a, &d], t0);
         let color = Style { color: true };
         let mut said = Vec::new();
-        assert_eq!(
-            block.started(0, color, &mut said),
-            ["  \x1b[32m+\x1b[0m net.vpc a"]
-        );
-        assert_eq!(
-            block.started(1, color, &mut said),
-            ["  \x1b[31m-\x1b[0m net.vpc d"]
-        );
-        block.start(&a.addr);
-        block.fail(&a.addr, Failure::of("apply", &a.addr, "refused", "no"));
-        let line = &block.line(0, color, &mut said)[0];
-        assert!(
-            line.starts_with("  \x1b[31m!\x1b[0m net.vpc a  "),
-            "{line:?}"
+        block.start(&a.addr, at(t0, 0));
+        block.fail(
+            &a.addr,
+            Failure::of("apply", &a.addr, "refused", "no"),
+            at(t0, 300),
         );
         // The status once the call is over is set, not dim: no colour.
-        assert!(line.ends_with("failed 0.0s"), "{line:?}");
+        assert_eq!(
+            block.line(0, color, &mut said),
+            ["  \x1b[31m!\x1b[0m net.vpc a  failed 0.3s"]
+        );
+        block.start(&d.addr, at(t0, 300));
+        block.done(&d.addr, at(t0, 500));
+        assert_eq!(
+            block.line(1, color, &mut said),
+            ["  \x1b[31m-\x1b[0m net.vpc d  deleted 0.2s"]
+        );
         // The terminal's header: bold as the plan's, its bar unpainted.
-        block.start(&d.addr);
-        block.done(&d.addr);
-        block.end();
-        let head = &block.lines(color)[0];
-        assert!(
-            head.starts_with("\x1b[1mtick 1  2 changes\x1b[0m  ━━━━━━━━━━━━  failed "),
-            "{head:?}"
+        block.end(at(t0, 600));
+        assert_eq!(
+            block.lines(color)[0],
+            "\x1b[1mtick 1  2 changes\x1b[0m  ━━━━━━━━━━━━  failed 0.6s"
         );
     }
 
@@ -560,45 +575,33 @@ mod tests {
     /// a failure said once below the block.
     #[test]
     fn each_line_says_its_call_and_the_header_fills() {
+        let t0 = Instant::now();
         let a = action(ActionKind::Update, "k8s.deployment", "forgejo.server");
         let b = action(ActionKind::Create, "k8s.secret", "synapse.homeserver");
         let c = action(ActionKind::Create, "k8s.service", "synapse_db.svc");
-        let mut block = Block::new(1, &[&a, &b, &c]);
-        block.start(&a.addr);
-        block.done(&a.addr);
-        block.start(&b.addr);
-        let plain = |block: &Block| -> Vec<String> {
-            block
-                .lines(Style::default())
-                .into_iter()
-                .map(|l| {
-                    l.split(' ')
-                        .map(|w| {
-                            match w.ends_with('s') && w[..w.len() - 1].parse::<f64>().is_ok() {
-                                true => "T",
-                                false => w,
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                })
-                .collect()
-        };
+        let mut block = Block::new(1, &[&a, &b, &c], t0);
+        block.start(&a.addr, at(t0, 0));
+        block.done(&a.addr, at(t0, 1100));
+        block.start(&b.addr, at(t0, 1100));
+        block.clock(at(t0, 3100));
         assert_eq!(
-            plain(&block),
+            block.lines(Style::default()),
             [
-                "tick 1  3 changes                  ━━━━░░░░░░░░  1 of 3  T",
-                "  ~ k8s.deployment forgejo.server  updated T",
-                "  + k8s.secret synapse.homeserver  making T",
+                "tick 1  3 changes                  ━━━━░░░░░░░░  1 of 3  3.1s",
+                "  ~ k8s.deployment forgejo.server  updated 1.1s",
+                "  + k8s.secret synapse.homeserver  making 2.0s",
                 "  + k8s.service synapse_db.svc",
             ]
         );
         // The provider's own word, verbatim, while its call runs.
         block.entries[1].status = Some("BUILD".into());
-        assert!(plain(&block)[2].ends_with("BUILD T"), "{:?}", plain(&block));
-        block.done(&b.addr);
+        assert_eq!(
+            block.lines(Style::default())[2],
+            "  + k8s.secret synapse.homeserver  BUILD 2.0s"
+        );
+        block.done(&b.addr, at(t0, 3400));
         block.sites.insert(c.addr.clone(), "synapse.df:40".into());
-        block.start(&c.addr);
+        block.start(&c.addr, at(t0, 3400));
         // The provider names the change in its own form: dform says it as
         // the plan does, once, below the block.
         block.fail(
@@ -609,15 +612,19 @@ mod tests {
                 "refused, nothing changed",
                 "apply k8s.service[\"synapse_db.svc\"]: 403 Forbidden",
             ),
+            at(t0, 3600),
         );
-        block.end();
-        let lines = plain(&block);
+        block.end(at(t0, 4200));
+        let lines = block.lines(Style::default());
         assert_eq!(
-            lines[0],
-            "tick 1  3 changes                  ━━━━━━━━━━━━  failed T"
+            lines,
+            [
+                "tick 1  3 changes                  ━━━━━━━━━━━━  failed 4.2s",
+                "  ~ k8s.deployment forgejo.server  updated 1.1s",
+                "  + k8s.secret synapse.homeserver  made 2.3s",
+                "  ! k8s.service synapse_db.svc     failed 0.2s",
+            ]
         );
-        assert_eq!(lines[3], "  ! k8s.service synapse_db.svc     failed T");
-        assert!(!lines.iter().any(|l| l.contains("403")), "{lines:?}");
         assert_eq!(
             block.failures(Style::default()),
             [
@@ -626,17 +633,18 @@ mod tests {
                 "    synapse.df:40",
             ]
         );
-        assert!(block.ended().starts_with("tick 1  failed "));
+        assert_eq!(block.ended(), "tick 1  failed 4.2s");
     }
 
     /// A copy's changes nest under its header, as the plan's do; a line
     /// per change of state says a header once, before its first.
     #[test]
     fn a_copy_nests_as_the_plan_nests_it() {
+        let t0 = Instant::now();
         let a = action(ActionKind::Create, "net.vpc", "edge");
         let b = action(ActionKind::Create, "net.subnet", "k3s.agent-0.sub");
         let c = action(ActionKind::Create, "ovh.instance", "k3s.agent-0.vm");
-        let mut block = Block::new(1, &[&a, &b, &c]);
+        let mut block = Block::new(1, &[&a, &b, &c], t0);
         let copy = Address {
             typ: "k3s.node".into(),
             name: "k3s.agent-0".into(),
@@ -668,18 +676,20 @@ mod tests {
         ];
         block = block.nested(&outline);
         let mut said = Vec::new();
-        block.start(&c.addr);
+        block.start(&c.addr, at(t0, 0));
+        block.done(&c.addr, at(t0, 100));
         assert_eq!(
-            block.started(2, Style::default(), &mut said),
+            block.line(2, Style::default(), &mut said),
             [
                 "  + k3s.node k3s.agent-0",
-                "    + ovh.instance k3s.agent-0.vm"
+                "    + ovh.instance k3s.agent-0.vm  made 0.1s"
             ]
         );
-        block.start(&b.addr);
+        block.start(&b.addr, at(t0, 100));
+        block.done(&b.addr, at(t0, 300));
         assert_eq!(
-            block.started(1, Style::default(), &mut said),
-            ["    + net.subnet k3s.agent-0.sub"]
+            block.line(1, Style::default(), &mut said),
+            ["    + net.subnet k3s.agent-0.sub   made 0.2s"]
         );
     }
 }

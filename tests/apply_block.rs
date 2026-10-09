@@ -1,13 +1,14 @@
-//! The apply's block (R-206, as sketched on 2026-10-08), with no
-//! terminal or under `--yes`: no bar, the plan's lines, each change once
-//! as its call starts and once with its call's word and time (`made
-//! 0.1s`), nested as the plan nests them; the tick's end `tick 1  done
-//! 0.4s`; under each tick a boundary follows, the policy block as it
+//! The apply's ticks as a run of the binary shows them (R-206, After
+//! R-206): what ticks.rs decides to print and ask on stdout, and how the
+//! run ends. Under each tick a boundary follows, the policy block as it
 //! re-derived it, `policy after tick 1   2 hold  (was 1 · 1
-//! undetermined)`, a policy failing there its line above the refusal; a
-//! later tick's question on its header line, `tick 2  1 change   apply?
-//! [y/N]`; a failure once below the block. The terminal's lines (the bar,
-//! the dim word while a call runs) are report/progress.rs's unit tests.
+//! undetermined)`; a later tick's plan printed again from that tick on,
+//! its values as the boundary learned them; a policy failing at the
+//! boundary its line above the refusal, exit 4; a later tick that adds to
+//! the plan shown asked on its header line, `tick 2  1 change   apply?
+//! [y/N]`; a failure said once. What the block on stderr prints is the
+//! printer's (tests/apply_events.rs, over a fixed list of events; the
+//! lines themselves report/progress.rs's).
 
 mod common;
 use common::Scratch;
@@ -44,59 +45,25 @@ fn apply(s: &Scratch, chaos: &[&str], args: &[&str]) -> std::process::Command {
     c
 }
 
-/// `text` with each time `T`: the same line for line whatever the
-/// machine's speed.
-fn timeless(text: &str) -> String {
-    text.lines()
-        .map(|l| {
-            l.split(' ')
-                .map(|w| match w.strip_suffix('s').map(str::parse::<f64>) {
-                    Some(Ok(_)) => "T",
-                    _ => w,
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Under `--yes`: tick 1's block, the policies after it, tick 2's block;
-/// the vm's update applied with the endpoint tick 1 made.
+/// Under `--yes`: the policies after tick 1, then tick 2's plan again,
+/// the endpoint tick 1 made in place of what it waited on; the vm's
+/// update applied with it.
 #[test]
-fn two_ticks_print_their_blocks_and_the_policies_between() {
+fn a_later_tick_prints_its_plan_again_after_the_policies() {
     let s = scratch("block-two", TWO);
     let out = apply(&s, &[], &["--yes"]).output().unwrap();
     let r = common::Run::from(out).success();
-    assert_eq!(
-        timeless(&r.stderr),
-        "\n\
-         tick 1  2 changes\n  \
-         + db.postgres db\n  \
-         + db.postgres db  made T\n  \
-         + net.vpc main\n  \
-         + net.vpc main    made T\n\
-         tick 1  done T\n\
-         \n\
-         tick 2  1 change\n  \
-         + compute.vm app\n  \
-         + compute.vm app  made T\n\
-         tick 2  done T",
-        "{}",
-        r.stderr
-    );
-    // The policies as the boundary re-derived them, under tick 1: the
-    // count, and what it was before (the words the line says left out).
+    let (_, after) = r
+        .stdout
+        .split_once("\npolicy after tick 1   2 hold  (was 1 · 1 undetermined)\n")
+        .unwrap_or_else(|| panic!("{}", r.stdout));
     assert!(
-        r.stdout
-            .ends_with("\npolicy after tick 1   2 hold  (was 1 · 1 undetermined)\n"),
-        "{}",
-        r.stdout
-    );
-    // Tick 2 is its block: its plan is not printed again.
-    assert_eq!(
-        r.stdout.matches("tick 2  1 change").count(),
-        1,
+        after.starts_with(
+            "\nplan: 1 change (1 create) over 1 tick; policy: 2 hold\n\n\
+             tick 2  1 change\n  \
+             + compute.vm app  p.df:5\n      \
+             db_host = \"db.db.fake\"\n"
+        ),
         "{}",
         r.stdout
     );
@@ -169,84 +136,26 @@ resource iam.policy "connect-${host}" {
         "{}",
         said[1]
     );
-    assert!(
-        timeless(&said[2]).contains(
-            "tick 2  1 change\n  \
-             + iam.policy \"connect-orders.db.fake\"\n  \
-             + iam.policy \"connect-orders.db.fake\"  made T\n\
-             tick 2  done T"
-        ),
-        "{}",
-        said[2]
-    );
 }
 
-/// A failure at tick 2: its line `!` and `failed`, the tick's end, then
-/// the error once, in the plan's form, below the block.
+/// A failure at tick 2 is said once, below the block; the run ends
+/// naming what failed.
 #[test]
-fn a_failure_is_said_once_below_the_block() {
+fn a_failure_is_said_once() {
     let s = scratch("block-fails", TWO);
     let out = apply(&s, &["fail=compute.vm[\"app\"]"], &["--yes"])
         .output()
         .unwrap();
     let r = common::Run::from(out).failure();
-    let (_, tick2) = r
-        .stderr
-        .split_once("\ntick 2  1 change\n")
-        .unwrap_or_else(|| panic!("{}", r.stderr));
-    assert_eq!(
-        timeless(tick2),
-        "  + compute.vm app\n  \
-         ! compute.vm app  failed T\n\
-         tick 2  failed T\n\
-         ! apply compute.vm app: refused, nothing changed\n    \
-         injected failure (chaos fail=compute.vm app)\n    \
-         p.df:5\n\
-         Error: apply p: tick 2 failed: compute.vm app",
-        "{}",
-        r.stderr
-    );
     assert_eq!(
         r.stderr.matches("injected failure").count(),
         1,
         "{}",
         r.stderr
     );
-}
-
-/// A copy's changes nest under its header as the plan's do, each line
-/// its full name; the header once, before its first change (a line per
-/// change of state: in the order the calls answer).
-#[test]
-fn a_copy_nests_in_the_block_as_in_the_plan() {
-    let s = scratch(
-        "block-copy",
-        r#"
-use fake
-component node {
-  input index: int
-  resource net.vpc vm { cidr = "10.${index}.0.0/16" }
-  resource net.subnet sub { vpc_id = ref(vm), cidr = "10.${index}.1.0/24" }
-}
-resource node "agent-0" { index = 0 }
-resource net.vpc edge { cidr = "10.9.0.0/16" }
-"#,
-    );
-    let out = apply(&s, &[], &["--yes"]).output().unwrap();
-    let r = common::Run::from(out).success();
-    let lines: Vec<String> = timeless(&r.stderr)
-        .lines()
-        .filter(|l| l.ends_with("made T") || l.contains("node"))
-        .map(str::to_string)
-        .collect();
-    assert_eq!(
-        lines,
-        [
-            "  + node agent-0",
-            "    + net.vpc agent-0.vm      made T",
-            "  + net.vpc edge              made T",
-            "    + net.subnet agent-0.sub  made T",
-        ],
+    assert!(
+        r.stderr
+            .ends_with("Error: apply p: tick 2 failed: compute.vm app\n"),
         "{}",
         r.stderr
     );

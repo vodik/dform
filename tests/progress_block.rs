@@ -1,13 +1,10 @@
-//! R-127, R-206: apply's progress is the tick's block filling in, on
-//! stderr. Not a terminal (these tests; `--yes` too): no bar, a line per
-//! change of state, a change's mark and address as it starts and with
-//! its call's word and time once it answered (`made 0.3s`), a heartbeat
-//! line per running change (`making 0.6s`), the tick's end line (`tick 1
-//! done 0.9s`); a failure stops the tick, its line marked `!`, `failed`
-//! and its time, its error below the block; `-q` only the end; Ctrl-C
-//! stops after the change in flight, what never started `interrupted`,
-//! and the next apply resumes it. The terminal's block is
-//! tests/apply_block.rs's.
+//! R-127, R-206, R-137: what only a run of the binary shows of a tick's
+//! block: a failure stops the tick and the run fails; Ctrl-C (chaos
+//! `interrupt`, the stop a signal asks for, sent with a create) stops
+//! after the call in flight, exits 130, and the next apply resumes the
+//! tick. What the block prints is the printer's (tests/apply_events.rs,
+//! over a fixed list of events); that a signal is what asks is
+//! interrupt.rs's.
 
 mod common;
 use common::Scratch;
@@ -29,150 +26,52 @@ fn project(name: &str) -> Scratch {
     s
 }
 
-/// `dform dev --world w.json [--chaos C].. apply [EXTRA..] p.df`.
-fn apply(s: &Scratch, chaos: &[&str], extra: &[&str]) -> std::process::Command {
+/// `dform dev --world w.json [--chaos C].. apply --yes p.df`.
+fn apply(s: &Scratch, chaos: &[&str]) -> std::process::Output {
     let mut mock = vec!["--world", "w.json"];
     for c in chaos {
         mock.extend(["--chaos", c]);
     }
-    let mut args = vec!["apply"];
-    args.extend_from_slice(extra);
-    let mut c = common::dform();
-    c.args(common::on("p.df", &mock, &args))
-        .current_dir(s.path(""));
-    c
-}
-
-/// The progress lines of `stderr`, each time `T`: what a run prints is
-/// the same line for line, whatever the machine's speed.
-fn block(stderr: &str) -> Vec<String> {
-    stderr
-        .lines()
-        .filter(|l| !l.starts_with("chaos: ") && !l.starts_with("Error: "))
-        .map(|l| {
-            l.split(' ')
-                .map(|w| {
-                    let digits = w.trim_end_matches('s').replace(['.', 'm', 'h'], "");
-                    match w.ends_with('s')
-                        && !digits.is_empty()
-                        && digits.chars().all(|c| c.is_ascii_digit())
-                    {
-                        true => "T",
-                        false => w,
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .collect()
-}
-
-/// A slow create counts up, the creates after it wait for it; the first
-/// failure stops the tick with its error inline.
-#[test]
-fn a_tick_says_each_change_of_state_and_stops_at_a_failure() {
-    let s = project("progress-fail");
-    let out = apply(
-        &s,
-        &["delay=net.subnet[\"a\"]:600", "fail=net.subnet[\"b\"]"],
-        &["--yes"],
-    )
-    .output()
-    .unwrap();
-    let r = common::Run::from(out).failure();
-    assert_eq!(
-        block(&r.stderr),
-        [
-            "",
-            "tick 1  3 changes",
-            "  + net.vpc main",
-            "  + net.vpc main  made T",
-            "  + net.subnet a",
-            // The mock says it made the object and answers late (R-130):
-            // its word while the call runs, then the call's once over.
-            "  + net.subnet a  made T",
-            "  + net.subnet a  made T",
-            "  + net.subnet b",
-            // The failure's mark and time; its error once, below the
-            // block, in full (R-109).
-            "  ! net.subnet b  failed T",
-            "tick 1  failed T",
-            "! apply net.subnet b: refused, nothing changed",
-            "    injected failure (chaos fail=net.subnet b)",
-            "    p.df:5",
-        ],
-        "{}",
-        r.stderr
-    );
-    // The slow one took its time, and the tick at least that.
-    let took = r
-        .stderr
-        .lines()
-        .rfind(|l| l.starts_with("  + net.subnet a  "))
-        .unwrap();
-    assert!(!took.contains(" 0.0s") && !took.contains(" 0.1s"), "{took}");
-    // Stdout keeps the plan, no progress.
-    assert!(!r.stdout.contains("tick 1  failed"), "{}", r.stdout);
-}
-
-/// A running change says so again every heartbeat (`DFORM_HEARTBEAT_MS`;
-/// 30s by default); `-q` prints the tick's end alone.
-#[test]
-fn a_running_change_beats_and_quiet_says_only_the_end() {
-    let s = project("progress-beat");
-    let out = apply(&s, &["delay=net.subnet[\"a\"]:900"], &["--yes"])
-        .env("DFORM_HEARTBEAT_MS", "200")
+    common::dform()
+        .args(common::on("p.df", &mock, &["apply", "--yes"]))
+        .current_dir(s.path(""))
         .output()
-        .unwrap();
-    let r = common::Run::from(out).success();
-    let beats = r
-        .stderr
-        .lines()
-        .filter(|l| l.starts_with("  + net.subnet a  "))
-        .count();
-    assert!(beats >= 3, "{}", r.stderr);
-    assert!(
-        block(&r.stderr).contains(&"tick 1  done T".to_string()),
-        "{}",
-        r.stderr
-    );
-
-    let s = project("progress-quiet");
-    let out = apply(&s, &[], &["--yes", "-q"]).output().unwrap();
-    let r = common::Run::from(out).success();
-    assert_eq!(block(&r.stderr), ["tick 1  done T"], "{}", r.stderr);
+        .unwrap()
 }
 
-/// Ctrl-C while a create runs (chaos `interrupt`, the stop a signal asks
-/// for, sent with the create): said, the create awaited, what never
-/// started `interrupted`, the tick's end, what to do; the next apply
-/// resumes the tick. That a signal is what asks is interrupt.rs's.
+/// The first failure stops the tick: what failed is not in state, the
+/// run fails.
 #[test]
-fn an_interrupt_says_what_ran_and_the_next_apply_resumes() {
+fn a_failure_stops_the_tick() {
+    let s = project("progress-fail");
+    let out = apply(&s, &["fail=net.subnet[\"b\"]"]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let made = common::identities(&s);
+    assert!(made.contains(&"net.vpc::main".to_string()), "{made:?}");
+    assert!(!made.contains(&"net.subnet::b".to_string()), "{made:?}");
+}
+
+/// Ctrl-C while a create runs: the create awaited and kept, what never
+/// started not made, exit 130; the next apply resumes the tick and makes
+/// the rest.
+#[test]
+fn an_interrupt_exits_130_and_the_next_apply_resumes() {
     let s = project("progress-int");
-    // `delay`: the create is made and answers late, its status `made`
-    // while it is awaited.
     let chaos = ["delay=net.subnet[\"a\"]:200", "interrupt=net.subnet[\"a\"]"];
-    let out = apply(&s, &chaos, &["--yes"]).output().unwrap();
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(130), "{stderr}");
-    let lines = block(&stderr);
-    // The create in flight is awaited (R-137): it answers; what never
-    // started is interrupted.
-    assert!(
-        lines.contains(
-            &"Ctrl-C: stopping after the calls in flight; Ctrl-C again to quit now".to_string()
-        ) && lines.contains(&"  + net.subnet a  made T".to_string())
-            && lines.contains(&"  + net.subnet b  interrupted".to_string())
-            && lines.contains(&"tick 1  interrupted T".to_string())
-            && lines.last().unwrap() == "interrupted: the next apply resumes it",
-        "{stderr}"
+    let out = apply(&s, &chaos);
+    assert_eq!(
+        out.status.code(),
+        Some(130),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    let r = common::Run::from(apply(&s, &[], &["--yes"]).output().unwrap()).success();
-    assert!(
-        !r.stdout.contains("apply: complete"),
-        "{}{}",
-        r.stdout,
-        r.stderr
-    );
+    assert_eq!(common::identities(&s), ["net.subnet::a", "net.vpc::main"]);
+    let out = apply(&s, &[]);
+    assert!(out.status.success());
+    assert_eq!(common::identities(&s).len(), 3);
 }

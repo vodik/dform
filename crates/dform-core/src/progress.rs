@@ -3,11 +3,28 @@
 //! (`plugin::link::Retry::line`) and a tick waiting on open nulls
 //! ([`Wait`]) say so here.
 
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// Print one progress line.
+/// Where a progress line goes instead of stderr: the printer of the block
+/// drawn meanwhile (the `dform` binary's apply), which says it above the
+/// block and draws the block again below it.
+type Route = Box<dyn Fn(&str) + Send>;
+
+static ROUTE: Mutex<Option<Route>> = Mutex::new(None);
+
+/// Send progress lines to `to` from now on; `None`: to stderr again.
+pub fn route(to: Option<Route>) {
+    *ROUTE.lock().unwrap_or_else(|e| e.into_inner()) = to;
+}
+
+/// Print one progress line: on stderr, or through the block drawn
+/// meanwhile ([`route`]).
 pub fn line(text: &str) {
-    eprintln!("{text}");
+    match &*ROUTE.lock().unwrap_or_else(|e| e.into_inner()) {
+        Some(to) => to(text),
+        None => eprintln!("{text}"),
+    }
 }
 
 /// How often a wait says it is still waiting.
@@ -98,5 +115,22 @@ mod tests {
             "{t}"
         );
         assert_eq!(w.since().len(), 5, "{}", w.since());
+    }
+
+    /// A line said while a block is drawn goes to the block's printer,
+    /// never past it to stderr; once the block is gone, to stderr again.
+    #[test]
+    fn a_line_goes_where_it_is_routed() {
+        let said = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
+        let to = said.clone();
+        route(Some(Box::new(move |l: &str| {
+            to.lock().unwrap().push(l.to_string())
+        })));
+        line("retry net.vpc main apply (2/5)");
+        route(None);
+        line("after the block");
+        let said = said.lock().unwrap();
+        assert!(said.contains(&"retry net.vpc main apply (2/5)".to_string()));
+        assert!(!said.contains(&"after the block".to_string()));
     }
 }

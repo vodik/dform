@@ -123,18 +123,21 @@ fn an_interrupt_stops_after_the_calls_in_flight_and_unwinds() {
 }
 
 /// `dform dev --world w.json --chaos delay=..:800 apply --yes p.df`, the
-/// subnet's create answering in 0.8s, started with SIGINT's disposition
-/// `disposition` (default here whatever the harness's is: a suite run as
-/// a background job of a shell has it ignored), read up to the line
-/// saying the subnet's create started. The rest of stderr follows on the
-/// returned reader.
-fn apply_at_subnet(
+/// vpc's and the subnet's creates each answering in 0.8s, started with
+/// SIGINT's disposition `disposition` (default here whatever the
+/// harness's is: a suite run as a background job of a shell has it
+/// ignored), its stdout read up to the plan's last line: the calls start
+/// as the plan is printed, so a signal now lands in the vpc's. The rest
+/// of stdout follows on the returned reader.
+fn apply_at_plan(
     s: &Scratch,
     disposition: libc::sighandler_t,
-) -> (Child, std::io::Lines<BufReader<std::process::ChildStderr>>) {
+) -> (Child, std::io::Lines<BufReader<std::process::ChildStdout>>) {
     let mock = [
         "--world",
         "w.json",
+        "--chaos",
+        "delay=net.vpc[\"main\"]:800",
         "--chaos",
         "delay=net.subnet[\"a\"]:800",
     ];
@@ -151,39 +154,44 @@ fn apply_at_subnet(
         });
     }
     let mut child = cmd.spawn().unwrap();
-    let mut lines = BufReader::new(child.stderr.take().unwrap()).lines();
-    let started = lines
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let planned = lines
         .by_ref()
         .map_while(Result::ok)
-        .any(|l| l.starts_with("  + net.subnet a"));
-    assert!(started, "the subnet's create never started");
+        .any(|l| l.starts_with("  + compute.vm app"));
+    assert!(planned, "the plan was never printed");
     (child, lines)
 }
 
 /// SIGINT to `child`, then its exit status and stderr.
 fn interrupt(
     child: Child,
-    rest: std::io::Lines<BufReader<std::process::ChildStderr>>,
+    rest: std::io::Lines<BufReader<std::process::ChildStdout>>,
 ) -> (std::process::ExitStatus, String) {
     // SAFETY: a signal to the child this test spawned.
     unsafe {
         libc::kill(child.id() as i32, libc::SIGINT);
     }
+    // Read to its end: a closed stdout would fail the run's next print.
+    rest.map_while(Result::ok).for_each(drop);
     let out = child.wait_with_output().unwrap();
-    let stderr: Vec<String> = rest.map_while(Result::ok).collect();
-    (out.status, stderr.join("\n"))
+    (
+        out.status,
+        String::from_utf8_lossy(&out.stderr).trim_end().to_string(),
+    )
 }
 
 /// The binary installs the handler and its exit reaches the shell: one
-/// SIGINT during a call, and the run ends 130 once the call is awaited.
+/// SIGINT during a call, and the run ends 130 once the call is awaited,
+/// the subnet never made.
 #[test]
 fn an_interrupt_exits_130() {
     let s = project("int-exit");
-    let (child, rest) = apply_at_subnet(&s, libc::SIG_DFL);
+    let (child, rest) = apply_at_plan(&s, libc::SIG_DFL);
     let (status, stderr) = interrupt(child, rest);
     assert_eq!(status.code(), Some(130), "{stderr}");
     assert!(
-        stderr.ends_with("interrupted: the next apply resumes it"),
+        !common::identities(&s).contains(&"net.subnet::a".to_string()),
         "{stderr}"
     );
 }
@@ -194,7 +202,7 @@ fn an_interrupt_exits_130() {
 #[test]
 fn a_run_started_with_sigint_ignored_still_ignores_it() {
     let s = project("int-ignored");
-    let (child, rest) = apply_at_subnet(&s, libc::SIG_IGN);
+    let (child, rest) = apply_at_plan(&s, libc::SIG_IGN);
     let (status, stderr) = interrupt(child, rest);
     assert!(status.success(), "{stderr}");
     assert_eq!(common::identities(&s).len(), 3);
