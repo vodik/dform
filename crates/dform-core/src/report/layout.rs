@@ -81,10 +81,44 @@ impl Row {
 pub(super) fn layout(rows: &[Row], style: Style) -> String {
     let col = rows
         .iter()
-        .filter(|r| (r.aligned || !r.right.is_empty()) && r.width + 2 <= COLUMN)
+        .filter(|r| r.columned() && r.width + 2 <= COLUMN)
         .map(|r| r.width + 2)
         .max()
         .unwrap_or(0);
+    lay(rows, col, style)
+}
+
+/// As [`layout`], the right column past every left column that has one,
+/// however wide, while each row's shortest right column still fits in
+/// [`WIDTH`] there: a block whose lines are read across (a policy's line
+/// and what is under it) keeps one column when one of its lines is wider
+/// than [`COLUMN`].
+pub(super) fn layout_aligned(rows: &[Row], style: Style) -> String {
+    let wide = rows
+        .iter()
+        .filter(|r| r.columned())
+        .map(|r| r.width + 2)
+        .max()
+        .unwrap_or(0);
+    let fits = rows.iter().all(|r| {
+        let shortest = r.right.iter().map(|x| x.chars().count()).min();
+        shortest.is_none_or(|n| wide + n <= WIDTH)
+    });
+    match fits {
+        true => lay(rows, wide, style),
+        false => layout(rows, style),
+    }
+}
+
+impl Row {
+    /// Whether the right column's place is set by it.
+    fn columned(&self) -> bool {
+        self.aligned || !self.right.is_empty()
+    }
+}
+
+/// The rows, their right column at `col` (or past a wider left column).
+fn lay(rows: &[Row], col: usize, style: Style) -> String {
     let mut out = String::new();
     for r in rows {
         out.push_str(&r.left);

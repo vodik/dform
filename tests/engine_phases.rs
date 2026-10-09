@@ -47,7 +47,7 @@ tick 2  3+ changes
 
 policy  1 hold · 1 undetermined
   undetermined  cluster must be in at least two zones  stacks/gke_two_phase.df:100  1 undetermined
-    google.container_cluster pngu  until zones is known (tick 2)
+    google.container_cluster pngu                      until zones is known (tick 2)
 "#;
 
 /// Three definite, three pending on the kubernetes provider's configuration,

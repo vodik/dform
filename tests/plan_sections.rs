@@ -70,8 +70,8 @@ deny "no nodepool in zone z" {pool: n} where n in google.container_node_pool, ar
     let r = gke(&s, &["extra.df"], "plan").success();
     assert!(
         r.stdout.contains(
-            "  undetermined  no nodepool in zone z  p.df:113  1 undetermined\n    \
-             google.container_cluster pngu      until zones is known (tick 2)\n"
+            "  undetermined  no nodepool in zone z                  p.df:113  1 undetermined\n    \
+             google.container_cluster pngu                      until zones is known (tick 2)\n"
         ),
         "{}",
         r.stdout

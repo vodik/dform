@@ -12,7 +12,7 @@
 
 use super::errors::violation_parts;
 use super::labels::{address, attribute, label};
-use super::layout::{Row, layout};
+use super::layout::{Row, layout_aligned};
 use super::style::{Paint, Style};
 use super::tree;
 use super::tree::Site;
@@ -207,15 +207,17 @@ pub fn lines(
         l.fails.push((of, bindings.join(", ")));
     }
     for p in undetermined {
-        let Some(l) = out.iter_mut().find(|l| l.text == p.message) else {
+        let Some(i) = out.iter().position(|l| l.text == p.message) else {
             continue;
         };
+        let l = &mut out[i];
         if l.at.is_empty()
             && let Some(s) = &p.site
         {
             l.at = s.at.clone();
         }
-        l.undetermined.extend(waits(p));
+        let subjects = wanted.subjects(&ranges[i]);
+        l.undetermined.extend(waits(p, &subjects, &wanted));
     }
     for (l, types) in out.iter_mut().zip(&ranges) {
         l.fails.sort();
@@ -339,11 +341,12 @@ fn written(program: &Program) -> Vec<(&RuleStmt, Option<&str>)> {
         .collect()
 }
 
-/// The resources the program wants, by type, and the scope of each copy
-/// of a component (`k3s.agent-0` of `k3s.node`).
+/// The resources the program wants, by type, the scope of each copy of a
+/// component (`k3s.agent-0` of `k3s.node`), and each one's attributes.
 struct Wanted<'a> {
     by_type: BTreeMap<&'a str, Vec<&'a str>>,
     copies: BTreeMap<&'a str, Vec<String>>,
+    attrs: BTreeMap<(&'a str, &'a str), Vec<(&'a str, &'a Value)>>,
 }
 
 impl<'a> Wanted<'a> {
@@ -351,12 +354,22 @@ impl<'a> Wanted<'a> {
         let mut w = Wanted {
             by_type: BTreeMap::new(),
             copies: BTreeMap::new(),
+            attrs: BTreeMap::new(),
         };
         for a in &res.facts {
             match (a.pred.as_str(), a.args.as_slice()) {
                 ("want", [Term::Val(Value::Str(t)), Term::Val(Value::Str(n))]) => {
                     w.by_type.entry(t).or_default().push(n)
                 }
+                (
+                    "attr",
+                    [
+                        Term::Val(Value::Str(t)),
+                        Term::Val(Value::Str(n)),
+                        Term::Val(Value::Str(path)),
+                        Term::Val(v),
+                    ],
+                ) => w.attrs.entry((t, n)).or_default().push((path, v)),
                 (
                     crate::modules::INSTANCE_OF,
                     [
@@ -403,6 +416,24 @@ impl<'a> Wanted<'a> {
     }
 }
 
+impl Wanted<'_> {
+    /// Each of `subjects` whose wanted value holds the null `n`, with the
+    /// path it holds it at: what a policy over them waits on through `n`
+    /// (`compute.vm app`, `db_host`, of `db.postgres db`'s endpoint).
+    fn holding(&self, subjects: &[Address], n: &str) -> Vec<(Address, String)> {
+        let holds =
+            |v: &Value| v.any_scalar(&mut |x| matches!(x, Value::Null { label, .. } if label == n));
+        let mut out = Vec::new();
+        for a in subjects {
+            let attrs = self.attrs.get(&(a.typ.as_str(), a.name.as_str()));
+            for (path, _) in attrs.into_iter().flatten().filter(|(_, v)| holds(v)) {
+                out.push((a.clone(), path.to_string()));
+            }
+        }
+        out
+    }
+}
+
 /// The type a deny ranges over: its body's first `x in T`.
 fn ranged(body: &[Lit]) -> Option<String> {
     body.iter().find_map(|l| match l {
@@ -416,8 +447,11 @@ fn ranged(body: &[Lit]) -> Option<String> {
 
 /// What an undetermined policy waits on, by what it is about: each
 /// resource with the cell it waits on (`until spec.x is known (tick 2)`),
-/// else the value.
-fn waits(p: &Policy) -> Vec<(String, String)> {
+/// else the value. A policy over `subjects` (a deny's `x in T`) is about
+/// them: a value of another resource it waits on is said of the subject
+/// that reads it, at the path it reads it at (`compute.vm app  until
+/// db_host is known`, not the database whose endpoint it is).
+fn waits(p: &Policy, subjects: &[Address], wanted: &Wanted) -> Vec<(String, String)> {
     let when = match p.after {
         Some(t) => format!("(tick {})", t + 1),
         None => match until_text(&p.until) {
@@ -425,8 +459,25 @@ fn waits(p: &Policy) -> Vec<(String, String)> {
             u => format!("({u})"),
         },
     };
-    p.on.iter()
-        .map(|n| match crate::value::null_parts(n) {
+    let mut out = Vec::new();
+    for n in &p.on {
+        let owner = crate::value::null_owner(n);
+        let of_subject = owner
+            .as_ref()
+            .is_some_and(|(typ, name)| subjects.iter().any(|a| a.typ == *typ && a.name == *name));
+        let readers = match of_subject {
+            true => Vec::new(),
+            false => wanted.holding(subjects, n),
+        };
+        if !readers.is_empty() {
+            out.extend(
+                readers
+                    .into_iter()
+                    .map(|(a, path)| (address(&a), format!("{path}\t{when}"))),
+            );
+            continue;
+        }
+        out.push(match crate::value::null_parts(n) {
             Some((typ, name, path))
                 if !name.is_empty()
                     && typ != crate::stack::UNAPPLIED
@@ -436,8 +487,9 @@ fn waits(p: &Policy) -> Vec<(String, String)> {
                 (address(&Address { typ, name }), format!("{path}\t{when}"))
             }
             _ => (label(n), format!("{}\t{when}", label(n))),
-        })
-        .collect()
+        });
+    }
+    out
 }
 
 /// What `waits` found, one line per resource: `until A, B are known
@@ -552,7 +604,7 @@ pub fn after(
         header = header.with(vec![format!("(was {})", was_text(now, was))]);
     }
     rows[0] = header;
-    layout(&rows, style)
+    layout_aligned(&rows, style)
 }
 
 /// The count before, each part's word left out where the count now says
@@ -865,6 +917,34 @@ mod tests {
         );
         assert!(
             text.contains("\x1b[31mfails\x1b[0m  the vm reads an endpoint"),
+            "{text}"
+        );
+    }
+
+    /// A policy's text wider than the page's column: what is under it
+    /// says why in the same column as the policy's site, as long as the
+    /// page holds it.
+    #[test]
+    fn a_wide_policy_keeps_one_column_with_what_is_under_it() {
+        let line = Line {
+            text: "the vm reads no endpoint that is nowhere at all".into(),
+            at: "p.df:4".into(),
+            holds: vec![],
+            hold: 0,
+            fails: vec![],
+            undetermined: vec![(
+                "compute.vm app".into(),
+                "until db_host is known (tick 2)".into(),
+            )],
+        };
+        let text = after(1, &[line], None, Why::Line, Style::default());
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines[1..],
+            [
+                "  undetermined  the vm reads no endpoint that is nowhere at all  p.df:4  1 undetermined",
+                "    compute.vm app                                               until db_host is known (tick 2)",
+            ],
             "{text}"
         );
     }

@@ -124,3 +124,31 @@ fn json_carries_each_policy() {
     assert_eq!(j["policy"][0]["fails"][0]["resource"], "net.vpc c", "{j:#}");
     assert_eq!(j["policy"][0]["hold"], 2, "{j:#}");
 }
+
+/// A deny over the vms (`m in compute.vm`) undetermined while a vm's
+/// `db_host` waits on the database's endpoint is about the vm: its
+/// subject is the vm, at the path it reads, and the vm is not counted as
+/// holding (it named the database, and counted the vm a hold).
+#[test]
+fn an_undetermined_deny_is_about_what_it_ranges_over() {
+    let s = Scratch::project("policy-block-subject");
+    s.write(
+        "p.df",
+        "use fake\n\
+         resource db.postgres db { size = 1 }\n\
+         resource compute.vm app { db_host = db.endpoint }\n\
+         deny \"the vm reads no endpoint nowhere\" where m in compute.vm, m.db_host == \"nowhere\"\n",
+    );
+    let r = s.run(&["plan", "p.df", "--json"]);
+    let j: serde_json::Value = serde_json::from_str(&r.stdout).expect(&r.stdout);
+    let p = &j["policy"][0];
+    assert_eq!(
+        (&p["mark"], &p["hold"], &p["undetermined"]),
+        (
+            &serde_json::json!("undetermined"),
+            &serde_json::json!(0),
+            &serde_json::json!([{ "of": "compute.vm app", "until": "until db_host is known (tick 2)" }]),
+        ),
+        "{j:#}"
+    );
+}

@@ -6,7 +6,7 @@ use super::deformation::{Deformation, Line};
 use super::errors::diag_lines;
 use super::groups::{Group, group_address, group_copy};
 use super::labels::{address, address_text, attribute, marker_of, relation_name};
-use super::layout::{Row, layout};
+use super::layout::{Row, layout, layout_aligned};
 use super::lines::both;
 use super::mask::{Shown, confusables_in};
 use super::policy;
@@ -225,7 +225,7 @@ impl Report {
         let policy = policy::rows(&self.policy, self.why, style);
         if !policy.is_empty() {
             rows.push(Row::plain(String::new()));
-            for line in layout(&policy, style).lines() {
+            for line in layout_aligned(&policy, style).lines() {
                 rows.push(Row::plain(line.to_string()));
             }
         }
