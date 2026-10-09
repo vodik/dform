@@ -705,8 +705,15 @@ fn is_provider_pred(pred: &str) -> bool {
 }
 
 /// Predicates the evaluator itself derives (the prelude and Rule 2): the
-/// round-0 resolution and the stuck instances.
-pub const ENGINE_PREDS: &[&str] = &["resolve", "resolved", "stuck", "__ref_dep"];
+/// round-0 resolution, the stuck instances, and the program's
+/// `lifecycle` rows where a type's is seeded (`zset::WRITTEN`).
+pub const ENGINE_PREDS: &[&str] = &[
+    "resolve",
+    "resolved",
+    "stuck",
+    "__ref_dep",
+    crate::zset::WRITTEN,
+];
 
 fn is_engine_pred(pred: &str) -> bool {
     ENGINE_PREDS.contains(&pred)

@@ -400,9 +400,8 @@ impl Lifecycle {
             true => instances.members(&addr, &wants),
             false => vec![addr],
         };
-        // What each object's removal means, by the rows that say it: each
-        // word with whether a copy's row says it.
-        let mut removal: BTreeMap<Address, BTreeMap<String, bool>> = BTreeMap::new();
+        // What each object's removal means, by the rows that say it.
+        let mut removal: BTreeMap<Address, BTreeSet<String>> = BTreeMap::new();
         for f in facts {
             match (f.pred.as_str(), f.args.as_slice()) {
                 ("lifecycle", [r, what, path]) => {
@@ -441,10 +440,8 @@ impl Lifecycle {
                         // resources it still has; an address the program
                         // no longer makes, itself.
                         w if REMOVAL.contains(&w) => {
-                            let copy = instances.is_instance(&addr);
                             for addr in each(addr) {
-                                let said = removal.entry(addr).or_default();
-                                *said.entry(what.clone()).or_default() |= copy;
+                                removal.entry(addr).or_default().insert(what.clone());
                             }
                         }
                         "create_first" => {
@@ -494,20 +491,10 @@ impl Lifecycle {
             }
         }
         out.seeded = schema.lifecycle.clone();
-        for (addr, mut words) in removal {
-            // The type's word, seeded, yields to another the program
-            // writes on the object's copy (the seed reads the object's
-            // own rows only, `lifecycle_prelude`).
-            if words.values().any(|copy| *copy)
-                && let Some(w) = schema.lifecycle_of(&addr.typ)
-                && words.get(w) == Some(&false)
-                && words.len() > 1
-            {
-                words.remove(w);
-            }
+        for (addr, words) in removal {
             // A delete of it would be two things at once: which is meant
             // is the program's to say.
-            if let [a, b, ..] = words.keys().collect::<Vec<_>>().as_slice() {
+            if let [a, b, ..] = words.iter().collect::<Vec<_>>().as_slice() {
                 bail!(
                     "lifecycle({addr}, {a:?}) and lifecycle({addr}, {b:?}) are both written: a \
                      delete of it {} by the first and {} by the second; keep one",
@@ -515,7 +502,7 @@ impl Lifecycle {
                     removal_means(b)
                 );
             }
-            if words.contains_key("retain") {
+            if words.contains("retain") {
                 out.retain.insert(addr.clone());
             }
             out.said.insert(addr);
@@ -590,37 +577,75 @@ fn removal_means(w: &str) -> &'static str {
     }
 }
 
-/// The rules that seed `lifecycle` from the schema: per type whose
-/// provider says what removal from the program means for it
-/// (`type_lifecycle(T, W)`), each resource of the type has the row
-/// `lifecycle(r, W)`, unless the program writes it another removal word
-/// ([`REMOVAL`]), which wins as a `set` wins over a schema default. A
-/// body reads the row and `why` explains it as any other, by the rule's
-/// doc comment; the stratifier puts the rule above the program's rows of
-/// the type and below every reader of `lifecycle` (`partition::SEED`).
+/// The relation the program's own `lifecycle/2` rows are, where a type's
+/// lifecycle is seeded ([`lifecycle_written`]): `lifecycle` is then
+/// these rows and the seeded ones.
+pub const WRITTEN: &str = "__lifecycle_written";
+
+/// `__lifecycle_said(T, A)`: the program gives `T[A]` a removal word
+/// ([`REMOVAL`]), by its own row or its copy's.
+pub const SAID: &str = "__lifecycle_said";
+
+/// The program's `lifecycle/2` rows as [`WRITTEN`]'s, when the schema
+/// seeds a type's lifecycle ([`lifecycle_prelude`] makes `lifecycle` of
+/// them again); `rules` and `facts` as they are otherwise. A program that
+/// writes [`WRITTEN`] or [`SAID`] by name is refused: they are dform's.
+pub fn lifecycle_written(
+    mut rules: Vec<RuleStmt>,
+    mut facts: Vec<Atom>,
+    schema: &Schema,
+) -> Result<(Vec<RuleStmt>, Vec<Atom>)> {
+    if let Some(a) = rules
+        .iter()
+        .map(|r| &r.head)
+        .chain(&facts)
+        .find(|a| a.pred == WRITTEN || a.pred == SAID)
+    {
+        let at = crate::diag::place(a.span).map_or(String::new(), |p| format!("{p}: "));
+        bail!(
+            "{at}{} is dform's own, not a relation a program writes; a resource's lifecycle is \
+             `lifecycle(r, \"retain\")`",
+            a.pred
+        );
+    }
+    if schema.lifecycle.is_empty() {
+        return Ok((rules, facts));
+    }
+    let rename = |a: &mut Atom| {
+        if a.pred == "lifecycle" && a.args.len() == 2 {
+            a.pred = WRITTEN.into();
+        }
+    };
+    rules.iter_mut().for_each(|r| rename(&mut r.head));
+    facts.iter_mut().for_each(rename);
+    Ok((rules, facts))
+}
+
+/// The rules that make `lifecycle` where the schema seeds a type's
+/// (`type_lifecycle(T, W)`): the program's rows ([`WRITTEN`]), and for
+/// each resource of a seeded type the program gives no removal word
+/// ([`SAID`]: its own row or its copy's), the row `lifecycle(r, W)`. The
+/// program's word wins as a `set` wins over a schema default. A body
+/// reads the rows as the program's own, and `why` explains a seeded one
+/// by the rule's doc comment.
 pub fn lifecycle_prelude(schema: &Schema) -> Result<Vec<RuleStmt>> {
-    let mut src = String::new();
+    if schema.lifecycle.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut src = format!("#| the program's lifecycle\nlifecycle(r, w) where {WRITTEN}(r, w)\n");
     for (t, w) in &schema.lifecycle {
         let by = match schema.provider_of.get(t) {
             Some(p) => format!("the schema of provider {p}"),
             None => "the schema".into(),
         };
-        let others: Vec<String> = REMOVAL
-            .iter()
-            .filter(|o| *o != w)
-            .map(|o| format!(", not lifecycle(r, \"{o}\")"))
-            .collect();
         src.push_str(&format!(
-            "#| {by}: each {t} is {w:?} (type_lifecycle), unless the \
-             program writes another\nlifecycle(r, w) where {{ type_lifecycle(\"{t}\", w), r in {t}{} }}\n",
-            others.concat()
+            "#| {by}: each {t} is {w:?} (type_lifecycle), unless the program writes another\n\
+             lifecycle(r, w) where {{ type_lifecycle(\"{t}\", w), r in {t}, \
+             not {SAID}(\"{t}\", r) }}\n"
         ));
     }
-    if src.is_empty() {
-        return Ok(Vec::new());
-    }
     let lowered = crate::transform::lower(&crate::parser::parse_program(&src)?)?;
-    Ok(lowered
+    let mut out: Vec<RuleStmt> = lowered
         .program
         .statements
         .into_iter()
@@ -628,7 +653,84 @@ pub fn lifecycle_prelude(schema: &Schema) -> Result<Vec<RuleStmt>> {
             crate::ast::Stmt::Rule(r) => Some(r),
             _ => None,
         })
-        .collect())
+        .collect();
+    out.extend(said_rules());
+    Ok(out)
+}
+
+/// [`SAID`]'s rules, in the core: the program's removal word for `T[A]`
+/// itself, or for a copy whose scope `A` is in (`S`, or `U.N` for the
+/// copy `N` in `U`).
+///
+/// ```text
+/// __lifecycle_said(T, A) :- __lifecycle_written(__ref(T, A, ""), W), member(REMOVAL, W).
+/// __lifecycle_said(T, A) :- __lifecycle_written(__ref(C, S, ""), W), member(REMOVAL, W),
+///     instance_of(C, U, N), S = scope(U, N), want(T, A), str.starts_with(A, "S.").
+/// ```
+fn said_rules() -> Vec<RuleStmt> {
+    use crate::ast::{Lit, str_term};
+    let var = |v: &str| Term::Var(v.into());
+    let atom = |pred: &str, args: Vec<Term>| Atom {
+        pred: pred.into(),
+        args,
+        record: None,
+        span: Default::default(),
+    };
+    let reference = |t: &str, a: &str| Term::Func {
+        name: crate::ir::REF.into(),
+        args: vec![var(t), var(a), str_term("")],
+    };
+    let format = |f: &str, args: Vec<Term>| Term::Func {
+        name: crate::ir::FORMAT.into(),
+        args: std::iter::once(str_term(f)).chain(args).collect(),
+    };
+    let removal = Lit::Pos(atom(
+        "member",
+        vec![
+            Term::Val(Value::List(
+                REMOVAL.iter().map(|w| Value::Str(w.to_string())).collect(),
+            )),
+            var("W"),
+        ],
+    ));
+    let head = atom(SAID, vec![var("T"), var("A")]);
+    let own = RuleStmt::new(
+        head.clone(),
+        vec![
+            Lit::Pos(atom(WRITTEN, vec![reference("T", "A"), var("W")])),
+            removal.clone(),
+        ],
+    );
+    let copy = |scope: Vec<Lit>| {
+        let mut body = vec![
+            Lit::Pos(atom(WRITTEN, vec![reference("C", "S"), var("W")])),
+            removal.clone(),
+        ];
+        body.extend(scope);
+        body.push(Lit::Pos(atom("want", vec![var("T"), var("A")])));
+        body.push(Lit::Pos(atom(
+            "str.starts_with",
+            vec![var("A"), format("%s.", vec![var("S")])],
+        )));
+        RuleStmt::new(head.clone(), body)
+    };
+    vec![
+        own,
+        // A copy at the top: its scope is its name.
+        copy(vec![Lit::Pos(atom(
+            crate::modules::INSTANCE_OF,
+            vec![var("C"), str_term(""), var("S")],
+        ))]),
+        // A copy inside another: `U.N`.
+        copy(vec![
+            Lit::Pos(atom(
+                crate::modules::INSTANCE_OF,
+                vec![var("C"), var("U"), var("N")],
+            )),
+            Lit::Neq(var("U"), str_term("")),
+            Lit::Eq(var("S"), format("%s.%s", vec![var("U"), var("N")])),
+        ]),
+    ]
 }
 
 /// Why a replacement of `addr` cannot be created before its old object is

@@ -77,7 +77,9 @@ impl Surface<'_, '_> {
         let id = if contribution {
             id
         } else {
-            self.cell_read(id).unwrap_or(id)
+            self.cell_read(id)
+                .or_else(|| self.written(id))
+                .unwrap_or(id)
         };
         let View::Fact {
             fact,
@@ -130,6 +132,29 @@ impl Surface<'_, '_> {
                 crate::circuit::MAX_ALTS
             ));
         }
+    }
+
+    /// The program's row fact node `id` is, where a type's lifecycle is
+    /// seeded (`zset::WRITTEN`): `lifecycle(r, w)` is the program's
+    /// statement, not the rule that makes `lifecycle` of it.
+    fn written(&self, id: NodeId) -> Option<NodeId> {
+        let c = self.p.circuit;
+        let View::Fact {
+            fact, alts: [a], ..
+        } = c.view(id)
+        else {
+            return None;
+        };
+        let View::Times { children, .. } = c.view(*a) else {
+            return None;
+        };
+        (fact.pred == "lifecycle")
+            .then(|| {
+                children.iter().copied().find(
+                    |ch| matches!(c.view(*ch), View::Fact { fact, .. } if fact.pred == crate::zset::WRITTEN),
+                )
+            })
+            .flatten()
     }
 
     /// The cell fact node `id` only reads: `env("prod")` derived from
@@ -199,6 +224,11 @@ impl Surface<'_, '_> {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            // The program's lifecycle row, where a type's is seeded.
+            (crate::zset::WRITTEN, _) => r.surface_atom(&crate::ast::Atom {
+                pred: "lifecycle".into(),
+                ..f.atom()
+            }),
             // A copy (R-65), as the statement that makes it.
             (
                 crate::modules::INSTANCE_OF,
@@ -437,7 +467,10 @@ impl Surface<'_, '_> {
             let (b, _) = mark(facts.len() + j);
             let text = match l {
                 Leaf::Base { span } => base_place(span),
-                Leaf::Absent { pattern } => format!("not {}   (absent)", self.absent(pattern)),
+                Leaf::Absent { pattern } => match said(pattern) {
+                    Some(addr) => format!("the program writes no lifecycle for {addr}"),
+                    None => format!("not {}   (absent)", self.absent(pattern)),
+                },
                 l => self.p.redact.text(&leaf_text(l)),
             };
             self.push(format!("{pad}{b}{text}"));
@@ -565,5 +598,28 @@ impl Surface<'_, '_> {
                 self.push(format!("{pad}     {}", redact.text(&t)));
             }
         }
+    }
+}
+
+/// The resource an absent `__lifecycle_said(T, A)` is about
+/// (`zset::SAID`): the program gives it no removal word, so its type's
+/// lifecycle is seeded.
+fn said(pattern: &str) -> Option<String> {
+    let crate::query::Query::Body { body, .. } = crate::query::parse(pattern).ok()? else {
+        return None;
+    };
+    let [Lit::Pos(a)] = body.as_slice() else {
+        return None;
+    };
+    match a.args.as_slice() {
+        [Term::Val(Value::Str(typ)), Term::Val(Value::Str(name))]
+            if a.pred == crate::zset::SAID =>
+        {
+            Some(crate::report::address(&Address {
+                typ: typ.clone(),
+                name: name.clone(),
+            }))
+        }
+        _ => None,
     }
 }
