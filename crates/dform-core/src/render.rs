@@ -115,6 +115,13 @@ impl<'a> Documents<'a> {
         if self.redact.is_secret(v) {
             return hole(Why::Secret(self.redact.derived(v).map(str::to_string)));
         }
+        // A template over a secret a provider holds is its text with a
+        // placeholder where the secret goes (R-218): a secret as a whole.
+        if let Value::Str(s) = v
+            && crate::secrets::held::carries(s)
+        {
+            return hole(Why::Secret(None));
+        }
         match v {
             Value::Str(s) => Json::String(s.clone()),
             Value::Int(i) => Json::from(*i),
@@ -418,6 +425,32 @@ mod tests {
         assert_eq!(
             holes.iter().map(|h| h.to_string()).collect::<Vec<_>>(),
             ["k8s.config_map cfg data.uid[0] = k8s.namespace shop.metadata.uid, known after apply"]
+        );
+    }
+
+    /// A template over a secret a provider holds is a secret: a hole, said
+    /// as one written whole is, never its placeholder.
+    #[test]
+    fn a_template_over_a_held_secret_is_a_hole() {
+        let token = crate::secrets::held::placeholder("vault.token/t#value");
+        let secret = resource(
+            "k8s.secret",
+            "join",
+            obj(&[(
+                "stringData",
+                obj(&[("token", Value::Str(format!("token: {token}")))]),
+            )]),
+            &[],
+        );
+        let all = [secret];
+        let redact = Redactor::default();
+        let docs = Documents::new(&all, &redact);
+        let Wire::Holes(holes) = docs.wire(&all[0], &Schema::default()).unwrap() else {
+            panic!("the token is a secret");
+        };
+        assert_eq!(
+            holes.iter().map(|h| h.to_string()).collect::<Vec<_>>(),
+            ["k8s.secret join stringData.token is a secret: a render prints none"]
         );
     }
 
