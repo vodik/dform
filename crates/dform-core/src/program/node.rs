@@ -348,10 +348,11 @@ pub struct Item {
 
 #[derive(Debug, Clone)]
 pub enum ItemKind {
-    /// A statement not yet ported: what the resolver lowered it to, which
-    /// `lower` emits as it is. Every statement is one on day one; the
-    /// migration shrinks it to nothing (step 5).
-    Opaque(Box<ast::Stmt>),
+    /// A statement not yet ported: what the resolver lowered it to (the
+    /// statement's own, then the helpers it made), which `lower` emits as
+    /// it is. Every statement was one on day one; the migration shrinks it
+    /// to nothing (step 5).
+    Opaque(Vec<ast::Stmt>),
     /// A module's file (`modules.net`) or a `component NAME { .. }`: its
     /// items, in its own scope.
     Module {

@@ -6,10 +6,11 @@
 //! never an arena's.
 //!
 //! The migration builds it one statement kind at a time (WORK.org R-211,
-//! "War game"). Day one every statement the resolver lowers is an
-//! [`ItemKind::Opaque`] item holding what it lowered to, a module's or a
-//! component's in a [`ItemKind::Module`] item; `lower` gives the
-//! resolver's output back, and [`check`] compares the two.
+//! "War game"). The resolver pushes an item per statement as it walks,
+//! in order: a statement not yet ported is an [`ItemKind::Opaque`] item
+//! holding what it lowered to, a module's or a component's statements are
+//! a [`ItemKind::Module`] item's; `lower` gives the resolver's output
+//! back, and [`check`] compares the two.
 
 use crate::ast::{self, Span, Stmt};
 use crate::diag::Diagnostic;
@@ -55,15 +56,30 @@ pub struct Program {
     pub diags: Vec<Diagnostic>,
 }
 
-/// How many of each numbered helper the build has taken: a ported `not
-/// { }` or aggregate takes its number at build (`GoalKind::Not.helper`),
-/// so ported and opaque statements count as one sequence.
+/// How many of each numbered helper the build has taken: the one counter
+/// the resolver and the builders take numbers from, so a ported `not { }`
+/// or aggregate (its number stamped at build, `GoalKind::Not.helper`) and
+/// an opaque statement's count as one sequence.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Counters {
     /// `__neg_N`.
     pub negs: usize,
     /// `__agg_N`.
     pub aggs: usize,
+}
+
+impl Counters {
+    /// The next `__neg_N` number, taken.
+    pub fn neg(&mut self) -> usize {
+        self.negs += 1;
+        self.negs - 1
+    }
+
+    /// The next `__agg_N` number, taken.
+    pub fn agg(&mut self) -> usize {
+        self.aggs += 1;
+        self.aggs - 1
+    }
 }
 
 /// Any node.
@@ -88,63 +104,74 @@ impl Program {
         }
     }
 
-    /// The program of what the resolver lowered, every statement opaque, a
-    /// module or a component an item of its own in a scope of its own; on
-    /// an error, a program of the diagnostics alone.
-    pub fn opaque(lowered: Result<ast::Program, Vec<Diagnostic>>, helpers: Counters) -> Program {
-        let mut p = Program {
-            helpers,
-            ..Program::new()
-        };
-        match lowered {
-            Ok(ast::Program { statements, stack }) => {
-                let scope = p.scope;
-                let roots = statements
-                    .into_iter()
-                    .map(|s| p.opaque_item(s, scope))
-                    .collect();
-                p.roots = roots;
-                p.stack = stack;
-            }
-            Err(diags) => p.diags = diags,
+    /// The item of a statement not yet ported: what the resolver lowered
+    /// it to, in `scope`; none when it lowered to nothing (an alias, an
+    /// error).
+    pub fn opaque(&mut self, stmts: Vec<Stmt>, span: Span, scope: ScopeId) -> Option<ItemId> {
+        if stmts.is_empty() {
+            return None;
         }
-        p
+        Some(self.items.insert(Item {
+            span,
+            scope,
+            kind: ItemKind::Opaque(stmts),
+        }))
     }
 
-    fn opaque_item(&mut self, stmt: Stmt, scope: ScopeId) -> ItemId {
-        let Stmt::Module(m) = stmt else {
-            let span = head_span(&stmt);
-            return self.items.insert(Item {
-                span,
-                scope,
-                kind: ItemKind::Opaque(Box::new(stmt)),
-            });
+    /// The scope of a module's file or a component's body, inside `parent`.
+    pub fn module_scope(&mut self, parent: ScopeId, path: &str, component: bool) -> ScopeId {
+        let path = path.to_string();
+        let kind = match component {
+            true => ScopeKind::Component { path },
+            false => ScopeKind::Module { path },
         };
-        let kind = match m.component {
-            true => ScopeKind::Component {
-                path: m.name.clone(),
-            },
-            false => ScopeKind::Module {
-                path: m.name.clone(),
-            },
-        };
-        let body = self.scopes.insert(Scope::new(Some(scope), kind));
-        let items = m
-            .body
-            .into_iter()
-            .map(|s| self.opaque_item(s, body))
-            .collect();
+        self.scopes.insert(Scope::new(Some(parent), kind))
+    }
+
+    /// The item of a module's file or a component: its items, in its
+    /// scope `body` (a [`Program::module_scope`]).
+    pub fn module(
+        &mut self,
+        path: String,
+        body: ScopeId,
+        items: Vec<ItemId>,
+        span: Span,
+    ) -> ItemId {
+        let scope = self.scopes[body].parent.unwrap_or(self.scope);
+        let component = matches!(self.scopes[body].kind, ScopeKind::Component { .. });
         self.items.insert(Item {
-            span: m.span,
+            span,
             scope,
             kind: ItemKind::Module {
-                path: m.name,
-                component: m.component,
+                path,
+                component,
                 body,
                 items,
                 signature: None,
             },
         })
+    }
+}
+
+#[cfg(test)]
+impl Program {
+    /// A program of `stmts`, each an opaque item of its own, a module's in
+    /// a module item: what the resolver would build of them.
+    pub fn of_statements(stmts: Vec<Stmt>) -> Program {
+        let mut p = Program::new();
+        let scope = p.scope;
+        p.roots = stmts.into_iter().map(|s| p.item_of(s, scope)).collect();
+        p
+    }
+
+    fn item_of(&mut self, stmt: Stmt, scope: ScopeId) -> ItemId {
+        let Stmt::Module(m) = stmt else {
+            let span = head_span(&stmt);
+            return self.opaque(vec![stmt], span, scope).expect("a statement");
+        };
+        let body = self.module_scope(scope, &m.name, m.component);
+        let items = m.body.into_iter().map(|s| self.item_of(s, body)).collect();
+        self.module(m.name, body, items, m.span)
     }
 }
 

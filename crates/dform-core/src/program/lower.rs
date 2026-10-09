@@ -36,11 +36,10 @@ pub fn lower(program: &Program) -> LoweredStack {
         };
     }
     let mut origins = Vec::new();
-    let statements = program
-        .roots
-        .iter()
-        .map(|&id| item(program, id, &mut origins))
-        .collect();
+    let mut statements = Vec::new();
+    for &id in &program.roots {
+        item(program, id, &mut statements, &mut origins);
+    }
     LoweredStack {
         rules: Ok(ast::Program {
             statements,
@@ -50,22 +49,32 @@ pub fn lower(program: &Program) -> LoweredStack {
     }
 }
 
-fn item(program: &Program, id: ItemId, origins: &mut Vec<Origin>) -> Stmt {
-    origins.push(Origin::of(id));
+/// The statements of the item `id`, onto `out`.
+fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<Origin>) {
     let it = &program.items[id];
     match &it.kind {
-        ItemKind::Opaque(stmt) => (**stmt).clone(),
+        ItemKind::Opaque(stmts) => {
+            origins.extend(stmts.iter().map(|_| Origin::of(id)));
+            out.extend(stmts.iter().cloned());
+        }
         ItemKind::Module {
             path,
             component,
             items,
             ..
-        } => Stmt::Module(ast::Module {
-            name: path.clone(),
-            component: *component,
-            body: items.iter().map(|&i| item(program, i, origins)).collect(),
-            span: it.span,
-        }),
+        } => {
+            origins.push(Origin::of(id));
+            let mut body = Vec::new();
+            for &i in items {
+                item(program, i, &mut body, origins);
+            }
+            out.push(Stmt::Module(ast::Module {
+                name: path.clone(),
+                component: *component,
+                body,
+                span: it.span,
+            }));
+        }
         kind => unreachable!(
             "no builder makes {} before R-211 step 3",
             super::spell::kind(kind)
@@ -85,7 +94,7 @@ mod tests {
     fn an_opaque_program_lowers_to_what_it_was_built_from() {
         let src = "\nlet x = 1\np(a) where a = x\ndeny \"no\" where p(2)\n";
         let lowered = crate::parser::parse_program(src).unwrap();
-        let program = Program::opaque(Ok(lowered.clone()), Default::default());
+        let program = Program::of_statements(lowered.statements.clone());
         assert_eq!(program.roots.len(), lowered.statements.len());
         let back = lower(&program);
         assert_eq!(back.origins.len(), lowered.statements.len());
@@ -100,7 +109,7 @@ mod tests {
             })],
             stack: None,
         };
-        let program = Program::opaque(Ok(module.clone()), Default::default());
+        let program = Program::of_statements(module.statements.clone());
         let ItemKind::Module { body, items, .. } = &program.items[program.roots[0]].kind else {
             panic!("not a module item");
         };
@@ -112,7 +121,10 @@ mod tests {
         );
 
         let err = vec![Diagnostic::error(Default::default(), "bad")];
-        let program = Program::opaque(Err(err.clone()), Default::default());
+        let program = Program {
+            diags: err.clone(),
+            ..Program::new()
+        };
         assert_eq!(check::dump(&lower(&program).rules), check::dump(&Err(err)));
     }
 }

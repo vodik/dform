@@ -7,8 +7,10 @@
 //! [`collect`] runs it for a test and returns what differs. Deleted with
 //! the old path at the migration's end.
 
+use super::{ItemId, ItemKind, Program};
 use crate::ast::{self, Atom, AttrDecl, Config, InputDecl, Lit, Span, Stmt, Term};
 use crate::diag::{self, Diagnostic};
+use slotmap::SecondaryMap;
 use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::sync::OnceLock;
@@ -80,6 +82,58 @@ pub fn collect<T>(f: impl FnOnce() -> T) -> (T, Collected) {
         .with(|c| c.borrow_mut().take())
         .unwrap_or_default();
     (out, seen)
+}
+
+/// What the resolver lowered each ported item to, kept beside the program
+/// for [`resolved`]: an opaque item holds its own.
+pub type Resolved = SecondaryMap<ItemId, Vec<Stmt>>;
+
+/// The resolver's own output for `program`: each opaque item's
+/// statements, each ported item's from `ported`, a module's in its
+/// module, walked from the roots as the resolver walked the files.
+pub fn resolved(program: &Program, ported: &Resolved) -> Lowered {
+    if !program.diags.is_empty() {
+        return Err(program.diags.clone());
+    }
+    let mut statements = Vec::new();
+    for &id in &program.roots {
+        resolved_item(program, ported, id, &mut statements);
+    }
+    Ok(ast::Program {
+        statements,
+        stack: program.stack.clone(),
+    })
+}
+
+fn resolved_item(program: &Program, ported: &Resolved, id: ItemId, out: &mut Vec<Stmt>) {
+    let it = &program.items[id];
+    match (&it.kind, ported.get(id)) {
+        (_, Some(stmts)) | (ItemKind::Opaque(stmts), None) => out.extend(stmts.iter().cloned()),
+        (
+            ItemKind::Module {
+                path,
+                component,
+                items,
+                ..
+            },
+            None,
+        ) => {
+            let mut body = Vec::new();
+            for &i in items {
+                resolved_item(program, ported, i, &mut body);
+            }
+            out.push(Stmt::Module(ast::Module {
+                name: path.clone(),
+                component: *component,
+                body,
+                span: it.span,
+            }));
+        }
+        (kind, None) => panic!(
+            "{} was ported with nothing kept of what the resolver lowered it to",
+            super::spell::kind(kind)
+        ),
+    }
 }
 
 fn differ(old: &str, new: &str) -> Option<Difference> {

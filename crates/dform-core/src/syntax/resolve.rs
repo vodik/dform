@@ -28,10 +28,11 @@ use super::parser as parse;
 use super::{SyntaxNode, SyntaxToken, tokens};
 use crate::ast::{
     Atom, AttrDecl, BindArg, Config, Decl, Extern, ExternFn, FieldAssign, FieldOp, Helper,
-    InputDecl, Instance, Lit, Module, OutputDecl, Pending, PendingKind, Program, Rank, Resource,
-    RuleStmt, Span, Stmt, Term, TypeExpr, Via, str_term, var,
+    InputDecl, Instance, Lit, OutputDecl, Pending, PendingKind, Program, Rank, Resource, RuleStmt,
+    Span, Stmt, Term, TypeExpr, Via, str_term, var,
 };
 use crate::diag::Diagnostic;
+use crate::program::ItemId;
 use crate::spell;
 use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -169,34 +170,32 @@ pub fn lower_stack(
     if mode == Mode::Program {
         l.check_heads();
     }
-    let mut statements = l.declare_builtin_externs();
+    let externs = l.declare_builtin_externs();
+    let mut roots: Vec<ItemId> = l
+        .program
+        .opaque(externs, Span::default(), l.item_scope)
+        .into_iter()
+        .collect();
     for &e in entries {
-        statements.extend(l.unit(e));
+        roots.extend(l.unit(e));
     }
     for (i, u) in units.iter().enumerate() {
         if u.path.is_some() && !entries.contains(&i) {
-            statements.extend(l.unit(i));
+            roots.extend(l.unit(i));
         }
     }
     let settings = stack.and_then(|st| l.stack_settings(st, entries));
-    let lowered = if l.diags.is_empty() {
-        Ok(Program {
-            statements,
-            stack: settings,
-        })
-    } else {
-        Err(l.diags)
-    };
-    // The program (R-211) is built of what the resolver lowered, every
-    // statement opaque, and lowered back. `DFORM_CHECK_LOWER=1` compares
-    // the two; it is deleted with the old path at the migration's end.
-    let helpers = crate::program::Counters {
-        negs: l.negs,
-        aggs: l.agg_rules,
-    };
-    let old = crate::program::check::enabled().then(|| lowered.clone());
-    let new = crate::program::lower(&crate::program::Program::opaque(lowered, helpers));
-    if let Some(old) = old {
+    // The program (R-211), built as the walk went, is what the stack
+    // lowers to. `DFORM_CHECK_LOWER=1` compares it with what the resolver
+    // lowered each statement to; it is deleted with the old path at the
+    // migration's end.
+    let mut program = std::mem::take(&mut l.program);
+    program.roots = roots;
+    program.stack = settings;
+    program.diags = std::mem::take(&mut l.diags);
+    let new = crate::program::lower(&program);
+    if crate::program::check::enabled() {
+        let old = crate::program::check::resolved(&program, &l.resolved);
         crate::program::check::compare(&old, &new.rules);
     }
     new.into_result()
@@ -755,8 +754,15 @@ pub struct Lowerer<'u> {
     offset: u32,
     pub diags: Vec<Diagnostic>,
     lenient: bool,
-    /// `__neg_N` helpers generated so far.
-    negs: usize,
+    /// The program being built (R-211): an item per statement, pushed in
+    /// order as the walk lowers each, and the helper numbers taken so far.
+    program: crate::program::Program,
+    /// The program's scope the statements being lowered are in: the
+    /// program's own, a module file's or a component's.
+    item_scope: crate::program::ScopeId,
+    /// What the resolver lowers each ported statement to, kept for
+    /// `DFORM_CHECK_LOWER=1` (`program::check`).
+    resolved: crate::program::check::Resolved,
     /// Helper rules of the statement being lowered.
     helpers: Vec<Stmt>,
     /// Whether the term being lowered is in a binding position.
@@ -776,8 +782,6 @@ pub struct Lowerer<'u> {
     outputs: BTreeSet<(usize, String)>,
     /// The aggregate bindings of the statement being lowered.
     aggs: Vec<aggregate::Agg>,
-    /// `__agg_N` helpers generated so far.
-    agg_rules: usize,
     /// How deep in `not { }` bodies and comprehensions the lowering is.
     nested: usize,
     /// An object pattern's field reads, appended after the literal that
@@ -832,7 +836,9 @@ impl<'u> Lowerer<'u> {
             offset: 0,
             diags: Vec::new(),
             lenient,
-            negs: 0,
+            program: crate::program::Program::new(),
+            item_scope: Default::default(),
+            resolved: Default::default(),
             helpers: Vec::new(),
             binding: false,
             text: false,
@@ -842,13 +848,13 @@ impl<'u> Lowerer<'u> {
             aliases: alias::Aliases::default(),
             outputs: BTreeSet::new(),
             aggs: Vec::new(),
-            agg_rules: 0,
             nested: 0,
             after: Vec::new(),
             read_columns: BTreeMap::new(),
             want: Want::Nothing,
             given: None,
         };
+        l.item_scope = l.program.scope;
         l.decls.deployed = deployed.to_vec();
         l.decls.project = units.iter().filter(|u| u.project).map(|u| u.file).collect();
         for (i, u) in units.iter().enumerate() {
@@ -2031,51 +2037,55 @@ impl<'u> Lowerer<'u> {
 
     // --- files --------------------------------------------------------------
 
-    fn unit(&mut self, i: usize) -> Vec<Stmt> {
+    /// The items of the file `i`: its statements', or, a module's file,
+    /// the module it is (R-65); then its doc comments'.
+    fn unit(&mut self, i: usize) -> Vec<ItemId> {
         let unit = &self.units[i];
         let (file, root) = (unit.file, unit.root.clone());
-        let saved = self.file;
+        let saved = (self.file, self.item_scope);
         self.file = file;
         let scope = self.decls.files[&file];
-        let mut statements = Vec::new();
+        let module = self.decls.paths.get(&file).cloned();
+        if let Some(path) = &module {
+            let component = self.decls.modules[path].component;
+            self.item_scope = self.program.module_scope(self.item_scope, path, component);
+        }
+        let mut items = Vec::new();
         for n in root.children() {
             match n.kind() {
                 // `edition` is a syntax error (R-68).
                 ERROR | EDITION => {}
-                _ => statements.extend(self.stmt(&n, scope, &Rc::default())),
+                _ => items.extend(self.stmt(&n, scope, &Rc::default())),
             }
         }
         // A module's file lowers to the module it is (R-65), named by its
         // path.
-        if let Some(path) = self.decls.paths.get(&file).cloned() {
-            let m = self.decls.modules[&path].clone();
+        if let Some(path) = module {
             let r = root.text_range();
-            statements = vec![Stmt::Module(Module {
-                name: path,
-                component: m.component,
-                body: statements,
-                span: Span {
-                    end: u32::from(r.start()),
-                    ..self.span_of(r)
-                },
-            })];
+            let span = Span {
+                end: u32::from(r.start()),
+                ..self.span_of(r)
+            };
+            items = vec![self.program.module(path, self.item_scope, items, span)];
+            self.item_scope = saved.1;
         }
         // Each doc comment is a `doc(Kind, Name, Key, Value)` fact per pair
         // (docs/grammar.md "Doc comments").
         if !self.text && !self.any_type {
             for d in super::doc::collect(&root) {
                 let span = self.span_of(d.range);
-                for (k, v) in &d.pairs {
+                let facts = d.pairs.iter().map(|(k, v)| {
                     let args = [d.kind, &d.name, k, v].map(str_term).to_vec();
-                    statements.push(Stmt::Fact(atom_at("doc", args, span)));
-                }
+                    Stmt::Fact(atom_at("doc", args, span))
+                });
+                items.extend(self.program.opaque(facts.collect(), span, self.item_scope));
             }
         }
-        self.file = saved;
-        statements
+        self.file = saved.0;
+        items
     }
 
-    fn stmts(&mut self, block: Option<SyntaxNode>, scope: usize, outer: &Rc) -> Vec<Stmt> {
+    fn stmts(&mut self, block: Option<SyntaxNode>, scope: usize, outer: &Rc) -> Vec<ItemId> {
         let Some(block) = block else {
             return Vec::new();
         };
@@ -2086,9 +2096,13 @@ impl<'u> Lowerer<'u> {
         out
     }
 
-    /// A statement's lowering, with the helper rules it generated after it.
-    /// `outer` carries the variables an enclosing `for`/`when` binds.
-    fn stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> Vec<Stmt> {
+    /// A statement's item: what it lowers to, with the helper rules it
+    /// generated after it. `outer` carries the variables an enclosing
+    /// `for`/`when` binds.
+    fn stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> Option<ItemId> {
+        if n.kind() == COMPONENT {
+            return Some(self.component(n, scope, outer));
+        }
         let saved = std::mem::take(&mut self.helpers);
         let aggs = std::mem::take(&mut self.aggs);
         let mut out = self.stmt1(n, scope, outer).unwrap_or_default();
@@ -2099,13 +2113,36 @@ impl<'u> Lowerer<'u> {
         self.aggs = aggs;
         out.append(&mut self.helpers);
         self.helpers = saved;
-        if !(self.core || self.lenient || self.text || self.any_type) {
-            let span = self.span(n);
-            if self.placeholders(&out, span).is_err() {
-                return Vec::new();
-            }
+        let span = self.span(n);
+        if !(self.core || self.lenient || self.text || self.any_type)
+            && self.placeholders(&out, span).is_err()
+        {
+            return None;
         }
-        out
+        self.program.opaque(out, span, self.item_scope)
+    }
+
+    /// `component NAME [: S] { .. }`: its statements' items in a scope of
+    /// its own.
+    fn component(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> ItemId {
+        let span = self.span(n);
+        let start: u32 = n.text_range().start().into();
+        let inner = self.decls.blocks[&(self.file, start)];
+        let name = word_text(n, 1);
+        let path = self.decls.scopes[self.decl_scope(scope)]
+            .components
+            .get(&name)
+            .cloned()
+            .unwrap_or(name);
+        if let Some(t) = node(n, TYPE_EXPR) {
+            self.check_signature(n, &t, scope);
+        }
+        let saved = self.item_scope;
+        self.item_scope = self.program.module_scope(saved, &path, true);
+        let body = self.stmts(node(n, STMT_BLOCK), inner, outer);
+        let item = self.program.module(path, self.item_scope, body, span);
+        self.item_scope = saved;
+        item
     }
 
     /// `_` stands where a variable could and is never accessed: not as a
@@ -2523,26 +2560,6 @@ impl<'u> Lowerer<'u> {
                 }))
             }
             DECL => Ok(self.decl(n, scope, span)),
-            COMPONENT => {
-                let start: u32 = n.text_range().start().into();
-                let inner = self.decls.blocks[&(self.file, start)];
-                let name = word_text(n, 1);
-                let path = self.decls.scopes[self.decl_scope(scope)]
-                    .components
-                    .get(&name)
-                    .cloned()
-                    .unwrap_or(name);
-                if let Some(t) = node(n, TYPE_EXPR) {
-                    self.check_signature(n, &t, scope);
-                }
-                let body = self.stmts(node(n, STMT_BLOCK), inner, outer);
-                one(Stmt::Module(Module {
-                    name: path,
-                    component: true,
-                    body,
-                    span,
-                }))
-            }
             USE => self.use_stmt(n, scope, outer),
             LET if node(n, PARAMS).is_some() => self.function_stmt(n, scope, outer),
             LET => self.let_stmt(n, scope, outer),
@@ -5189,9 +5206,8 @@ impl<'u> Lowerer<'u> {
         let saved = (
             rc.clone(),
             self.helpers.len(),
-            self.negs,
+            self.program.helpers,
             self.aggs.len(),
-            self.agg_rules,
         );
         let outer = rc.outer.clone();
         let out = self.lits_as_written(rc, lits, seed.clone())?;
@@ -5199,12 +5215,11 @@ impl<'u> Lowerer<'u> {
         if order.iter().enumerate().all(|(i, &j)| i == j) {
             return Ok(out);
         }
-        let (rc0, helpers, negs, aggs, agg_rules) = saved;
+        let (rc0, helpers, counters, aggs) = saved;
         *rc = rc0;
         self.helpers.truncate(helpers);
-        self.negs = negs;
+        self.program.helpers = counters;
         self.aggs.truncate(aggs);
-        self.agg_rules = agg_rules;
         let lits: Vec<SyntaxNode> = order.iter().map(|&i| lits[i].clone()).collect();
         self.lits_as_written(rc, &lits, seed)
     }
@@ -5456,8 +5471,7 @@ impl<'u> Lowerer<'u> {
             lit_vars(l, &mut used);
         }
         let shared: Vec<String> = used.intersection(&outer_bound).cloned().collect();
-        let pred = format!("__neg_{}", self.negs);
-        self.negs += 1;
+        let pred = format!("__neg_{}", self.program.helpers.neg());
         let head = atom_at(&pred, shared.iter().map(|v| var(v)).collect(), span);
         // An aggregate's value is not the helper's: it is folded after.
         let results: BTreeSet<&String> = self.aggs.iter().map(|a| &a.var).collect();
@@ -5669,12 +5683,12 @@ impl<'u> Lowerer<'u> {
     fn probe<T>(&mut self, f: impl FnOnce(&mut Self) -> L<T>) -> L<T> {
         let n = self.diags.len();
         let helpers = self.helpers.len();
-        let negs = self.negs;
+        let negs = self.program.helpers.negs;
         let r = f(self);
         if r.is_err() {
             self.diags.truncate(n);
             self.helpers.truncate(helpers);
-            self.negs = negs;
+            self.program.helpers.negs = negs;
         }
         r
     }
@@ -5873,12 +5887,16 @@ impl<'u> Lowerer<'u> {
     /// the side: the caller lowers `t` itself.
     fn resource_list(&mut self, rc: &Rc, t: &SyntaxNode) -> Option<(Term, Term, String)> {
         let c = Chain::of(t).filter(|c| !c.is_bare())?;
-        let (diags, helpers, negs) = (self.diags.len(), self.helpers.len(), self.negs);
+        let (diags, helpers, negs) = (
+            self.diags.len(),
+            self.helpers.len(),
+            self.program.helpers.negs,
+        );
         let mut rc = rc.clone();
         let res = self.probe(|l| l.resolve(&mut rc, &c, &mut Vec::new()));
         self.diags.truncate(diags);
         self.helpers.truncate(helpers);
-        self.negs = negs;
+        self.program.helpers.negs = negs;
         match res {
             Ok(Res::Ref { typ, addr, path }) => path_string(&path)
                 .filter(|p| !p.is_empty())

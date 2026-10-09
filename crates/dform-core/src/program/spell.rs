@@ -97,7 +97,7 @@ fn aggregate(k: AggKind) -> &'static str {
 impl Speller<'_> {
     fn item(&self, id: ItemId) -> String {
         match &self.p.items[id].kind {
-            ItemKind::Opaque(s) => opaque(s),
+            ItemKind::Opaque(s) => join(s.iter().map(opaque), "\n"),
             ItemKind::Module {
                 path, component, ..
             } => match component {
@@ -617,7 +617,7 @@ mod tests {
                 s => panic!("{s:?}"),
             })
             .collect();
-        let program = Program::opaque(Ok(lowered), Default::default());
+        let program = Program::of_statements(lowered.statements);
         let spelled: Vec<String> = program
             .roots
             .iter()

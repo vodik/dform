@@ -299,8 +299,7 @@ impl Lowerer<'_> {
         let mut out = Vec::new();
         let mut body = Vec::new();
         for (_, v, call) in &found {
-            let pred = format!("__agg_{}", self.agg_rules);
-            self.agg_rules += 1;
+            let pred = format!("__agg_{}", self.program.helpers.agg());
             let mut args = group.clone();
             args.push(call.clone());
             out.push(Stmt::Rule(RuleStmt::helper(
