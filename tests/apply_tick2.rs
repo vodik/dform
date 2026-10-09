@@ -229,7 +229,8 @@ fn a_kind_served_after_the_boundary_is_planned_with_its_schema() {
         "{}",
         r.stdout
     );
-    assert!(!tick2.contains("TOKEN-VALUE"), "{}", r.stdout);
+    // Nor before the boundary, its schema not known yet (R-215).
+    assert!(!r.stdout.contains("TOKEN-VALUE"), "{}", r.stdout);
     assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     let w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
     assert_eq!(

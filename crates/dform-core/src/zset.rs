@@ -1912,9 +1912,10 @@ pub mod file {
     /// became, nor is a leaf the re-plan adds whose value is still
     /// unknown. `ran`: what earlier ticks of this apply ran, which changes
     /// again if it is in this tick. `key` the digests are keyed with: a
-    /// value shown in the clear that the re-plan holds as a secret (its
-    /// schema arrived at the boundary) is the same value when its digest
-    /// is the shown one's. Empty when the tick is as shown.
+    /// value shown in the clear that the re-plan holds as a secret, or
+    /// one shown as a secret that the re-plan holds in the clear (its
+    /// schema arrived at the boundary, R-215), is the same value when the
+    /// one digest is the other's. Empty when the tick is as shown.
     pub fn tick_differences(
         shown: &[Entry],
         now: &[Entry],
@@ -1922,12 +1923,13 @@ pub mod file {
         ran: &std::collections::BTreeSet<(String, String)>,
         key: Option<&Key>,
     ) -> Vec<Difference> {
+        let digest = |v: &Json| key.map(|k| k.digest(&serde_json::to_vec(v).unwrap_or_default()));
+        let held = |v: &Json| v.get("digest").and_then(Json::as_str).map(str::to_string);
         let same = |was: &Json, is: &Json| {
             was == is
-                || match (sensitive(was), is.get("digest").and_then(Json::as_str), key) {
-                    (false, Some(d), Some(k)) => {
-                        k.digest(&serde_json::to_vec(was).unwrap_or_default()) == d
-                    }
+                || match (sensitive(was), sensitive(is)) {
+                    (false, true) => held(is).is_some_and(|d| digest(was) == Some(d)),
+                    (true, false) => held(was).is_some_and(|d| digest(is) == Some(d)),
                     _ => false,
                 }
         };
@@ -2227,8 +2229,9 @@ mod tests {
     /// A tick re-planned at its boundary (After R-156): a value the plan
     /// did not know is not a difference whatever it became; a value it
     /// knew that is another now is; a clear value the re-plan holds as a
-    /// secret with the same digest is the same, and one with another
-    /// digest is said without its bytes.
+    /// secret with the same digest is the same, as is a secret shown that
+    /// the re-plan holds in the clear (R-215), and one with another digest
+    /// is said without its bytes.
     #[test]
     fn a_tick_differs_where_a_known_value_does() {
         use file::{Entry, Leaf, tick_differences};
@@ -2252,6 +2255,8 @@ mod tests {
             provisional: false,
         };
         let null = serde_json::json!({"null": "t[\"b\"].id", "class": "fresh"});
+        let secret =
+            |v: &str| serde_json::json!({"sensitive": "t/a#x", "digest": digest(&v.into())});
         let shown = [entry(
             2,
             &[
@@ -2259,10 +2264,9 @@ mod tests {
                 ("rv", "115".into()),
                 ("token", "T".into()),
                 ("pw", "P".into()),
+                ("name", secret("n")),
             ],
         )];
-        let secret =
-            |v: &str| serde_json::json!({"sensitive": "t/a#x", "digest": digest(&v.into())});
         let now = [entry(
             2,
             &[
@@ -2270,6 +2274,7 @@ mod tests {
                 ("rv", "200".into()),
                 ("token", secret("T")),
                 ("pw", secret("Q")),
+                ("name", "n".into()),
             ],
         )];
         let ran = BTreeSet::new();

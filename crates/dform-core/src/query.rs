@@ -394,6 +394,12 @@ impl Redactor {
                 paths.entry((t, p)).or_default().push(sub);
             }
         }
+        // The paths each type's schema marks sensitive: a value holding
+        // one (`spec` of a `spec.value` that is) holds a secret there.
+        let mut marked: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for ((t, p), _) in schema.attrs.iter().filter(|(_, a)| a.has("sensitive")) {
+            marked.entry(t).or_default().push(p);
+        }
         // A `let` holding a secret: by the secret it holds, when that has
         // a label of its own (`random.signing_key("synapse")`).
         let mut lets = Vec::new();
@@ -422,12 +428,19 @@ impl Redactor {
                 }
             }
             // A field its object type declares secret (`conn.password`),
-            // and where a rule writes a secret into the value (`data = {
-            // yaml: "key: ${signing}" }`): that part of it, whole.
+            // a path below it its schema marks sensitive (R-215), and
+            // where a rule writes a secret into the value (`data = { yaml:
+            // "key: ${signing}" }`): that part of it, whole.
+            let below = marked
+                .get(t)
+                .into_iter()
+                .flatten()
+                .filter_map(|q| q.strip_prefix(p)?.strip_prefix('.'));
             let fields = cells
                 .iter()
                 .filter(|(ct, ca, _)| *ct == tv && *ca == addr)
                 .filter_map(|(_, _, k)| k.as_str()?.strip_prefix(p)?.strip_prefix('.'))
+                .chain(below)
                 .chain(paths.get(&(t, p)).into_iter().flatten().copied());
             for field in fields {
                 if let Some(x) = part(v, field) {
@@ -522,6 +535,24 @@ impl Redactor {
                     );
                 }
             }
+        }
+        r
+    }
+
+    /// This redactor, saying each string of the attributes of a resource
+    /// of a type `unclassified` picks as a secret's (R-215): a kind no
+    /// schema has yet, which its provider learns at a tick's boundary, has
+    /// no path known not to be sensitive. For one subject (`why`, `show`):
+    /// its strings hide every equal one the run prints.
+    pub fn unclassified(
+        &self,
+        facts: &BTreeSet<Atom>,
+        unclassified: impl Fn(&str) -> bool,
+    ) -> Redactor {
+        let mut r = self.clone();
+        for (t, addr, p, v) in unclassified_attrs(facts, &unclassified) {
+            let label = |path: &str| crate::value::null_label(t, &spell::bare(addr), path);
+            string_leaves(v, p, &mut |path, leaf| r.add(leaf, &label(path)));
         }
         r
     }
@@ -768,6 +799,87 @@ fn part<'v>(v: &'v Value, path: &str) -> Option<&'v Value> {
             "" => Some(x),
             rest => part(x, rest.strip_prefix('.')?),
         })
+}
+
+/// The attribute values of resources of the types `unclassified` picks,
+/// as `(type, address, path, value)` (R-215).
+fn unclassified_attrs<'f>(
+    facts: &'f BTreeSet<Atom>,
+    unclassified: &'f impl Fn(&str) -> bool,
+) -> impl Iterator<Item = (&'f str, &'f Value, &'f str, &'f Value)> {
+    facts
+        .iter()
+        .filter(|a| VALUE_PREDS.contains(&a.pred.as_str()))
+        .filter_map(move |a| match a.args.as_slice() {
+            [
+                Term::Val(Value::Str(t)),
+                Term::Val(addr),
+                Term::Val(Value::Str(p)),
+                Term::Val(v),
+                ..,
+            ] if unclassified(t) => Some((t.as_str(), addr, p.as_str(), v)),
+            _ => None,
+        })
+}
+
+/// Each string inside `v`, the value at `path`, with its path: a
+/// reference names what it reads, and a number or a flag is no secret's.
+fn string_leaves<'v>(v: &'v Value, path: &str, f: &mut impl FnMut(&str, &'v Value)) {
+    match v {
+        Value::Obj(m) => {
+            for (k, x) in m {
+                string_leaves(x, &crate::types::dotted(path, k), f);
+            }
+        }
+        Value::List(xs) => xs.iter().for_each(|x| string_leaves(x, path, f)),
+        Value::Str(_) => f(path, v),
+        _ => {}
+    }
+}
+
+/// `facts` with each string of an attribute value of a resource of a type
+/// `unclassified` picks a secret by its path (R-215): a query over every
+/// resource at once says them `(sensitive)` and matches none by its
+/// bytes, and an equal string elsewhere prints as it is.
+pub fn unclassified_facts(
+    facts: &BTreeSet<Atom>,
+    unclassified: impl Fn(&str) -> bool,
+) -> BTreeSet<Atom> {
+    fn mask(v: &Value, label: &dyn Fn(&str) -> String, path: &str) -> Value {
+        match v {
+            Value::Obj(m) => Value::Obj(
+                m.iter()
+                    .map(|(k, x)| (k.clone(), mask(x, label, &crate::types::dotted(path, k))))
+                    .collect(),
+            ),
+            Value::List(xs) => Value::List(xs.iter().map(|x| mask(x, label, path)).collect()),
+            Value::Str(_) => Value::Null {
+                label: label(path),
+                class: NullClass::Secret,
+                ty: "string".into(),
+            },
+            v => v.clone(),
+        }
+    }
+    facts
+        .iter()
+        .map(|a| match a.args.as_slice() {
+            [
+                Term::Val(Value::Str(t)),
+                Term::Val(addr),
+                Term::Val(Value::Str(p)),
+                Term::Val(v),
+                rest @ ..,
+            ] if VALUE_PREDS.contains(&a.pred.as_str()) && unclassified(t) => {
+                let label = |path: &str| crate::value::null_label(t, &spell::bare(addr), path);
+                let mut args = a.args[..3].to_vec();
+                args.push(Term::Val(mask(v, &label, p)));
+                args.extend(rest.iter().cloned());
+                Atom { args, ..a.clone() }
+            }
+            _ => a.clone(),
+        })
+        .collect()
 }
 
 /// A secret in text, by its label: `(sensitive T.a.p)`.

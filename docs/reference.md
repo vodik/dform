@@ -1873,7 +1873,12 @@ it: the question before tick 1 counted it, and a plan file holds it
 (its diff is checked against the file's as any tick's). A value the
 plan showed in the clear that the provider's schema makes a secret is
 the same value when its digest is; it prints as `(sensitive)` from then
-on. What the plan
+on. A kind no schema has before the boundary (a CRD the program makes, a
+kind its provider's cluster serves once reached) has no path known not
+to be sensitive: each string it is given prints as `(sensitive)` in
+every printer (the plan at every level, `--json`, `why`, `query`,
+`show`) until its schema is learned, and is the same value at the
+boundary when its digest is. What the plan
 had under `later` for a provider's settings, or listed as state has it
 (below), it prints and asks before as it asked before tick 1; `--yes`
 applies it. A plan file or an approval did not see that diff, so applying
@@ -2139,7 +2144,8 @@ cargo run -- dev --chaos 'mutate=google.container_cluster["pngu"].name="other"' 
 A `sensitive` computed value never leaves the provider: what dform sees, stores
 in consumers and prints is its label, `(sensitive T["N"].attr)`. A value at a
 `sensitive` path the program sets prints as `(sensitive)` in a diff, and as its
-label wherever else it appears. Everything dform prints goes through one
+label wherever else it appears, a path below the attribute the program writes
+(`spec.value` of the object `spec`) as well. Everything dform prints goes through one
 redactor: `plan` (text, `--json`, the plan file), `show`, `query`, `why`,
 `graph`, and the policy messages on stderr, whose context quotes values and
 rule text.

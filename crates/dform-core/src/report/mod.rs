@@ -813,6 +813,29 @@ pub struct Line {
     pub row: Option<String>,
 }
 
+impl Line {
+    /// A line at a path its schema marks, or may mark, sensitive says no
+    /// literal where it was written (R-124 amendment 2, R-215): its site,
+    /// the statement's bound variables and each step of its chain are
+    /// [`masked`], in every printer. A secret with a label needs none: the
+    /// redactor says it wherever it is written.
+    fn mask(&mut self) {
+        let path = |s: &Shown| matches!(s, Shown::Sensitive(None));
+        if path(&self.before) || path(&self.after) {
+            if let Some(s) = &mut self.site {
+                s.statement = masked(&s.statement);
+                s.entry = s.entry.as_deref().map(masked);
+                s.with.iter_mut().for_each(|w| *w = masked(w));
+            }
+            for step in &mut self.chain {
+                step.expr = masked(&step.expr);
+                step.with.iter_mut().for_each(|w| *w = masked(w));
+            }
+        }
+        self.leaves.iter_mut().for_each(Line::mask);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Deformation {
     pub kind: ActionKind,
@@ -2888,6 +2911,16 @@ impl Report {
                     l.site.clone()
                 });
             }
+        }
+        let pending = self
+            .pending
+            .iter_mut()
+            .flat_map(|b| b.deformations.iter_mut());
+        for d in self.definite.iter_mut().chain(pending) {
+            d.lines
+                .iter_mut()
+                .chain(d.folded.iter_mut())
+                .for_each(Line::mask);
         }
         for d in &mut self.kept {
             d.site = p.want_site(rules, &d.addr);

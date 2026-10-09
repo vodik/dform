@@ -41,7 +41,9 @@ pub struct As {
 /// it (R-110, `deployment::Evaluator::provider_wait`), and, when a plan
 /// was made, when the change or the group at an address runs
 /// (`report::Report::when`, After R-156), and what the object an
-/// attribute is given to at its creation only was made with (R-198).
+/// attribute is given to at its creation only was made with (R-198);
+/// and which types no schema has yet (R-215).
+#[derive(Clone, Copy)]
 pub struct Context<'a> {
     pub res: &'a EvalResult,
     /// The providers' schema, for what a resource leaves unset that it
@@ -56,6 +58,9 @@ pub struct Context<'a> {
     /// Of an attribute given at creation only whose value the plan keeps
     /// (R-198), the object's value and where it was made.
     pub kept: Option<&'a AttrLookup<'a>>,
+    /// A kind no schema has yet, its provider learning it at a tick's
+    /// boundary (`deployment::Evaluator::unclassified`).
+    pub unclassified: &'a dyn Fn(&str) -> bool,
 }
 
 /// A text an address or a type maps to, when it has one.
@@ -100,6 +105,11 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
     if matched.is_empty() {
         return why_not();
     }
+    let masked = unclassified(&matched, cx);
+    let cx = &Context {
+        redact: masked.as_ref().unwrap_or(cx.redact),
+        ..*cx
+    };
     let mut out = derivations(&matched, how, cx)?;
     // What a resource leaves unset that its schema requires: what the
     // plan refuses it for, before its provider is asked (R-184).
@@ -167,6 +177,19 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
     Ok(cx.redact.text(&out))
 }
 
+/// Of facts of a resource whose kind no schema has yet, the redactor
+/// that says each string of its attributes as a secret's (R-215): no path
+/// of it is known not to be sensitive until its provider learns it.
+fn unclassified(matched: &[Matched], cx: &Context) -> Option<Redactor> {
+    let types: BTreeSet<String> = matched
+        .iter()
+        .filter_map(|(a, _)| resource_of(a))
+        .map(|a| a.typ)
+        .filter(|t| (cx.unclassified)(t))
+        .collect();
+    (!types.is_empty()).then(|| cx.redact.unclassified(&cx.res.facts, |t| types.contains(t)))
+}
+
 /// Each attribute the resource at `addr` leaves unset that its schema
 /// requires, a line `  PATH  (WHAT IT IS)`.
 fn unset_required(addr: &ir::Address, cx: &Context) -> Vec<String> {
@@ -219,6 +242,11 @@ pub fn why_json(pattern: &str, how: As, cx: &Context) -> Result<serde_json::Valu
             let text = not::why_not(pattern, cx.res, cx.redact)?;
             return Ok(serde_json::json!({ "why_not": text }));
         }
+    };
+    let masked = unclassified(&matched, cx);
+    let cx = &Context {
+        redact: masked.as_ref().unwrap_or(cx.redact),
+        ..*cx
     };
     let mut out = Vec::new();
     for m in &matched {

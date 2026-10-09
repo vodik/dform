@@ -66,9 +66,12 @@ pub(super) fn run(run: &mut Evaluated) -> Result<Outcome> {
 
 impl Query {
     fn run(&self, run: &Evaluated, x: &deployment::Explained) -> Result<Outcome> {
+        // The strings of a kind no schema has yet are each a secret's
+        // (R-215).
+        let facts = query::unclassified_facts(&x.res.facts, |t| run.ev.evaluator.unclassified(t));
         self.print(
             &run.ev.located.loaded.program,
-            &x.res.facts,
+            &facts,
             &x.redact,
             &run.cx.cli.table,
         )?;
@@ -262,6 +265,7 @@ impl Why {
     ) -> Result<Outcome> {
         let ev = &run.ev;
         let waits = |t: &str| ev.evaluator.provider_wait(t);
+        let unclassified = |t: &str| ev.evaluator.unclassified(t);
         let when = |at: &str| schedule.and_then(|r| r.when(at));
         let keys = ev
             .located
@@ -295,6 +299,7 @@ impl Why {
                 .is_some()
                 .then_some(&when as &dyn Fn(&str) -> Option<String>),
             kept: Some(&kept),
+            unclassified: &unclassified,
         };
         let how = crate::why::As {
             tree: self.tree || self.all,

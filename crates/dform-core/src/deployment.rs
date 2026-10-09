@@ -636,8 +636,7 @@ impl Evaluator {
             let typ = &r.addr.typ;
             // A kind no schema has: its provider's cluster serves it once
             // reached (R-110), or does not, reached (R-126).
-            let schema_wait = matches!(self.backend.waits(typ), Some(ProviderWait::Schema(_)))
-                || self.backend.unserved(typ);
+            let schema_wait = self.unclassified(typ);
             let waits = self.provider_wait(typ).or_else(|| unset_of(typ));
             let label = match (waits, crd_of(&crds, typ)) {
                 (_, Some(crd)) if schema_wait => report::address(crd),
@@ -647,11 +646,24 @@ impl Evaluator {
             };
             if schema_wait {
                 let doc = engine::value_to_json(&r.attrs);
+                // No schema says which of its paths are sensitive until
+                // the boundary learns it: each string is, until then
+                // (R-215); a number or a flag is no secret's.
+                let unclassified = |c: provider::Change| provider::Change {
+                    sensitive: c.sensitive
+                        || [&c.before, &c.after]
+                            .iter()
+                            .any(|v| matches!(v, Some(serde_json::Value::String(_)))),
+                    ..c
+                };
                 let (kind, changes) = match st.get(&r.addr) {
                     Some(_) => (provider::ActionKind::Pending, Vec::new()),
                     None => (
                         provider::ActionKind::Create,
-                        provider::diff(self.schema(), &r.addr.typ, None, Some(&doc)),
+                        provider::diff(self.schema(), &r.addr.typ, None, Some(&doc))
+                            .into_iter()
+                            .map(unclassified)
+                            .collect(),
                     ),
                 };
                 plan.actions.push(provider::Action {
@@ -754,6 +766,14 @@ impl Evaluator {
             return Ok(false);
         }
         self.backend.relearn(&types)
+    }
+
+    /// Whether `typ` is a kind no schema has yet: its provider's cluster
+    /// serves it once reached (R-110), or once it has the CRD the program
+    /// makes (R-126). No path of it is known not to be sensitive (R-215).
+    pub fn unclassified(&self, typ: &str) -> bool {
+        matches!(self.backend.waits(typ), Some(ProviderWait::Schema(_)))
+            || self.backend.unserved(typ)
     }
 
     /// What a resource of `typ` waits on before its provider plans it, as
