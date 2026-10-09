@@ -1923,9 +1923,10 @@ Configure call only: they are not in state, the plan file, the audit log
 (a `configure` entry names the provider, the tick and the settings' keys)
 or any output. A setting that is a secret another provider holds (a
 managed cluster's kubeconfig, a sensitive computed attribute: the
-program has only its label) is revealed by that provider into this
-Configure call once the object that holds it exists (the protocol's
-`Reveal`, R-45): the bytes are in dform's memory for the call and
+program has only its label), whole or inside a string template, is
+revealed by that provider into this Configure call once the object that
+holds it exists (the protocol's `Reveal`, R-45; "A secret a provider
+holds"): the bytes are in dform's memory for the call and
 nowhere else, and an account the provider reports that equals them
 prints as the secret's label. Settings that no wait brings stop the apply at that tick,
 `nothing definite to apply, still waiting on .. provider k8s (kubeconfig
@@ -2667,6 +2668,60 @@ object reads `secrets unchanged, drift unknown without the key` (a
 write-only one, which the world never answers, is compared by no run). A
 resource named by a `random.id` needs the master to plan: its name is a
 stand-in without it.
+
+### A secret a provider holds
+
+Some secrets dform never has: a resource's sensitive computed value (a
+Tailscale auth key, a managed cluster's kubeconfig, the OVH S3 secret),
+an extern's secret column, another stack's output a provider holds. The
+program has the label (`tailscale.auth_key/nodes#key`); the provider
+that holds the bytes reveals them, under the deployment's lease, into
+the call that writes them and nowhere else: a provider's Configure
+(above) and the Apply of a resource whose attribute holds one.
+
+```dform
+resource ovh.instance server {
+  user_data = "#cloud-config\nruncmd:\n  - tailscale up --authkey=${nodes.key}\n"
+  ..
+}
+```
+
+Written whole (`token = t.value`) or inside a string template, the
+secret is revealed into the Apply call that makes or changes the server,
+at a path its schema marks sensitive (a secret reaches no other, E0304);
+one whole that the writing provider holds itself it reads in the call,
+as it always has. A template over one is a value at once, so the server
+is planned in the tick that makes the key and applied after it. State,
+the plan file, the audit log and every message hold the label; an
+attribute a secret is revealed into is compared as a write-only one is,
+by the digest of what was sent (`write_only`, "Providers are processes"), so
+the next plan asks no provider for anything.
+
+Only a template composes such a secret: a function that would need its
+bytes (`json.encode`, `base64.encode`, a hash) has no value, and the plan
+says so at the attribute instead of waiting:
+
+```text
+Error: main.df:4, compute.vm vm: user_data reads the secret vault.token["t"].value through
+json.encode(), which dform cannot compute: a provider holds it, and its bytes exist for dform
+only inside the call that writes it
+  help: write it whole, or inside a string template: "..${vault.token["t"].value}.."
+```
+
+A reveal the holder refuses (the Tailscale key after the run that made
+it: the API answers a key once; a value gone from where it was held) is
+that call's error, at the attribute, with the holder's reason; nothing is
+sent:
+
+```text
+! apply ovh.instance server: not sent
+    ovh.instance server.user_data holds the secret tailscale.auth_key["nodes"].key, which was
+    not revealed: the API answers a key once, when it is made, and this run did not make it ..
+```
+
+A secret needed at creation only is `bootstrap` (`lifecycle(server,
+"bootstrap", "user_data")`, "Lifecycle"): an apply after the server is
+made neither compares nor sends it, so no later run asks for the key.
 
 ### Secret outputs across stacks
 

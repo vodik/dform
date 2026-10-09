@@ -161,6 +161,13 @@ fn main() -> std::process::ExitCode {
   has every setting as its connection: its offline plan is the only
   one there is until then. One that waits on another setting (the
   namespace) holds its objects without the mark.
+- `apply` gets a sensitive attribute's bytes when the secret is another
+  provider's (a Tailscale key in an instance's `user_data`), whole or
+  inside a string template: dform reveals it into the document for that
+  call only (R-218). Plan sees it as dform has it: a secret as its label,
+  `{"$secret": "T/N#P"}`, a template with each secret held in place. One
+  the provider holds itself comes as its label in Apply too, for it to
+  read where it keeps it.
 - `const KEEP: bool = true` on the `Provider` says each `update` sends
   only what `desired` holds, leaving an absent attribute as the object
   has it. The provider then has the `keep` capability: an Apply update's
