@@ -512,10 +512,14 @@ pub(super) fn unreachable_text(unreachable: &[(ir::Address, String)]) -> String 
 }
 
 /// The project's root, else the program's directory: what a site's place
-/// is relative to.
+/// is relative to. The file as the loader names its sites, its links and
+/// `..` resolved: `plan ../p.df` from inside a project is the program's
+/// directory, not the project's it is named from.
 pub(super) fn site_root(files: &[PathBuf]) -> Option<PathBuf> {
     files.first().and_then(|f| {
-        let f = std::path::absolute(f).ok()?;
+        let f = std::fs::canonicalize(f)
+            .or_else(|_| std::path::absolute(f))
+            .ok()?;
         crate::project::manifest_root(&f).or_else(|| f.parent().map(Path::to_path_buf))
     })
 }
