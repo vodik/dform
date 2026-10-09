@@ -216,9 +216,26 @@ fn main() -> std::process::ExitCode {
   provider (`crates/dform-provider-fake`) is `provider!(dform_mock::Mock::process())`,
   the mock answering every call itself.
 
-Not yet in the typed layer: externs (Query), refinements on secret paths
-(an Apply with assertions is refused saying so), the `managed`
-capability, and schema docs from `///`.
+- A type whose objects the API makes (a device joins a tailnet) says why
+  in `Lifecycle::NOT_CREATED`: Plan refuses a create of one, naming the
+  address, and a program adopts it. `Lifecycle::adopt(p, given)` answers
+  the remote id of what a program adopts by a name that is not its id
+  (a hostname), and refuses a name two objects have; state keeps the id.
+- `progress.note(..)` is something the user sees under the change once
+  the call is done (a destroy that wrote a default rather than removing
+  anything).
+- A `sensitive` computed value leaves the provider as its label: the
+  provider keeps the bytes (an API that answers a key once, to its
+  create) and `Provider::reveal(held)` answers them to the engine, under
+  the deployment's lease only, for the one call that takes them (R-45).
+- A data source is an `extern_decl` fact given to
+  `Typed::facts_text` (`provider_setting` facts too), answered by
+  `Provider::query(pred, inputs)`; asked before the program's settings
+  came, the SDK answers it not yet.
+
+Not yet in the typed layer: refinements on secret paths (an Apply with
+assertions is refused saying so), the `managed` capability, and schema
+docs from `///`.
 A provider that needs them implements `Handler` itself.
 
 ## Two transports, one source
@@ -263,6 +280,7 @@ on both; tests/host_wasm.rs keeps them from drifting.
 |---|---|---|---|
 | `postgres` (`crates/dform-provider-postgres`) | the SDK's typed layer | native only: it dials the server itself | docs/providers/postgres.md |
 | `vault` (`crates/dform-provider-vault`) | the SDK's typed layer, a scheme and no resource | native: every request through the host's HTTP client | docs/providers/vault.md |
+| `tailscale` (`crates/dform-provider-tailscale`) | the SDK's typed layer: a tailnet's policy file, auth keys (held), DNS and devices (adopted), its users a data source | native: every request through the host's HTTP client | docs/providers/tailscale.md |
 
 ## Grants and credentials
 
