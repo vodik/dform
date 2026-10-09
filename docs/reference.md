@@ -1426,7 +1426,10 @@ made; the plan itself says what it is.
   site; a copy's `x in T` ranges over that copy's resources. Under it, what does not hold, each
   with why: a failure's resource and context (`net.vpc c  vpc = "c"`),
   an undetermined one's resource and the cell and tick that decide it
-  (`until spec.storageClassName is known (tick 2)`); the rest are one `N
+  (`until spec.storageClassName is known (tick 2)`), or the deployment
+  whose apply does (`net.vpc a  until stacks.platform[env=lab].endpoint
+  is known (after stacks.platform[env=lab] is applied)`): the resource is
+  the one the deny ranges over, never the deployment; the rest are one `N
   hold` line. The block is headed by how many policies hold, fail and
   are undetermined, `policy  12 hold · 1 fails · 2 undetermined`, and a
   holding policy is only that count; `-v` lists every policy and what

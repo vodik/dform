@@ -161,8 +161,12 @@ pub fn lines(
                 out.len() - 1
             }
         };
-        if let Some(t) = ranged(&rule.body) {
-            ranges[i].insert((t, component.map(str::to_string)));
+        if let Some((typ, var)) = ranged(&rule.body) {
+            ranges[i].insert(Range {
+                typ,
+                var,
+                component: component.map(str::to_string),
+            });
         }
     }
     // A check a value waits on is a policy of its own, written where its
@@ -217,7 +221,8 @@ pub fn lines(
             l.at = s.at.clone();
         }
         let subjects = wanted.subjects(&ranges[i]);
-        l.undetermined.extend(waits(p, &subjects, &wanted));
+        let bound = p.bound_in(&ranges[i], &subjects);
+        l.undetermined.extend(waits(p, &subjects, &bound, &wanted));
     }
     for (l, types) in out.iter_mut().zip(&ranges) {
         l.fails.sort();
@@ -311,10 +316,16 @@ fn subject_in(ctx: &Value, subjects: &[Address]) -> Option<String> {
     }
 }
 
-/// What a deny ranges over: the type of its first `x in T`, and the
-/// component it is written in, if any, for a copy's `x in T` is its own
-/// resources of `T` (a module's, like the stack's, is every one).
-type Range = (String, Option<String>);
+/// What a deny ranges over: the type of its first `x in T` and its
+/// variable, and the component it is written in, if any, for a copy's `x
+/// in T` is its own resources of `T` (a module's, like the stack's, is
+/// every one).
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Range {
+    typ: String,
+    var: String,
+    component: Option<String>,
+}
 
 /// Each deny the program writes where the plan carries what it derives:
 /// the stack's own, those of each module a `use` reaches and each
@@ -392,7 +403,7 @@ impl<'a> Wanted<'a> {
     /// only those inside one of its copies.
     fn subjects(&self, ranges: &BTreeSet<Range>) -> Vec<Address> {
         let mut out: Vec<Address> = Vec::new();
-        for (typ, component) in ranges {
+        for Range { typ, component, .. } in ranges {
             let inside = |name: &str| match component {
                 None => true,
                 Some(c) => self.copies.get(c.as_str()).is_some_and(|scopes| {
@@ -434,11 +445,12 @@ impl Wanted<'_> {
     }
 }
 
-/// The type a deny ranges over: its body's first `x in T`.
-fn ranged(body: &[Lit]) -> Option<String> {
+/// The type a deny ranges over and its variable: its body's first `x in
+/// T`.
+fn ranged(body: &[Lit]) -> Option<(String, String)> {
     body.iter().find_map(|l| match l {
         Lit::Pos(a) if a.pred == "want" => match a.args.as_slice() {
-            [Term::Val(Value::Str(t)), Term::Var(_)] => Some(t.clone()),
+            [Term::Val(Value::Str(t)), Term::Var(v)] => Some((t.clone(), v.clone())),
             _ => None,
         },
         _ => None,
@@ -450,8 +462,17 @@ fn ranged(body: &[Lit]) -> Option<String> {
 /// else the value. A policy over `subjects` (a deny's `x in T`) is about
 /// them: a value of another resource it waits on is said of the subject
 /// that reads it, at the path it reads it at (`compute.vm app  until
-/// db_host is known`, not the database whose endpoint it is).
-fn waits(p: &Policy, subjects: &[Address], wanted: &Wanted) -> Vec<(String, String)> {
+/// db_host is known`, not the database whose endpoint it is). When its
+/// undetermined instances are `bound` to subjects, those are what waits:
+/// one that reads the value at a path of its own says the path, the rest
+/// the value (`net.vpc a  until stacks.platform[env=lab].endpoint is
+/// known`, not the deployment).
+fn waits(
+    p: &Policy,
+    subjects: &[Address],
+    bound: &[Address],
+    wanted: &Wanted,
+) -> Vec<(String, String)> {
     let when = match p.after {
         Some(t) => format!("(tick {})", t + 1),
         None => match until_text(&p.until) {
@@ -465,15 +486,29 @@ fn waits(p: &Policy, subjects: &[Address], wanted: &Wanted) -> Vec<(String, Stri
         let of_subject = owner
             .as_ref()
             .is_some_and(|(typ, name)| subjects.iter().any(|a| a.typ == *typ && a.name == *name));
-        let readers = match of_subject {
-            true => Vec::new(),
-            false => wanted.holding(subjects, n),
+        let (readers, bound) = match of_subject {
+            true => (Vec::new(), Vec::new()),
+            false => {
+                // What an instance is bound to is what waits, when one is.
+                let mut readers = wanted.holding(subjects, n);
+                readers.retain(|(a, _)| bound.is_empty() || bound.contains(a));
+                let bound: Vec<&Address> = bound
+                    .iter()
+                    .filter(|b| !readers.iter().any(|(a, _)| a == *b))
+                    .collect();
+                (readers, bound)
+            }
         };
-        if !readers.is_empty() {
+        if !readers.is_empty() || !bound.is_empty() {
             out.extend(
                 readers
                     .into_iter()
                     .map(|(a, path)| (address(&a), format!("{path}\t{when}"))),
+            );
+            out.extend(
+                bound
+                    .into_iter()
+                    .map(|a| (address(a), format!("{}\t{when}", value_label(n)))),
             );
             continue;
         }
@@ -490,6 +525,16 @@ fn waits(p: &Policy, subjects: &[Address], wanted: &Wanted) -> Vec<(String, Stri
         });
     }
     out
+}
+
+/// The value the null `n` stands for, as a policy waits on it: the
+/// reference it is (`db.endpoint`), another deployment's output as it is
+/// read (`stacks.platform[env=lab].endpoint`), not the deployment.
+fn value_label(n: &str) -> String {
+    match crate::value::null_parts(n) {
+        Some((typ, _, _)) if typ == crate::stack::UNAPPLIED => crate::ir::label(n),
+        _ => label(n),
+    }
 }
 
 /// What `waits` found, one line per resource: `until A, B are known
@@ -628,6 +673,34 @@ fn was_text(now: (usize, usize, usize), was: (usize, usize, usize)) -> String {
     }
 }
 
+impl Policy {
+    /// The ones of `subjects` an undetermined instance of it is bound to
+    /// by the variable a range of its deny ranges over (`V: "a"` of `v in
+    /// net.vpc`).
+    fn bound_in(&self, ranges: &BTreeSet<Range>, subjects: &[Address]) -> Vec<Address> {
+        let mut out: Vec<Address> = Vec::new();
+        for (b, r) in self
+            .bound
+            .iter()
+            .flat_map(|b| ranges.iter().map(move |r| (b, r)))
+        {
+            let name = match b.get(&r.var) {
+                Some(Value::Str(name)) => name,
+                Some(Value::Ref { typ, name, .. }) if *typ == r.typ => name,
+                _ => continue,
+            };
+            let a = Address {
+                typ: r.typ.clone(),
+                name: name.clone(),
+            };
+            if subjects.contains(&a) && !out.contains(&a) {
+                out.push(a);
+            }
+        }
+        out
+    }
+}
+
 impl Line {
     /// The line as `--json` says it: its mark, text, site and tally, and
     /// what is under it.
@@ -667,6 +740,9 @@ pub struct Policy {
     /// What it waits on outside this plan ([`Until`]), when no tick of
     /// it decides it.
     pub until: BTreeSet<Until>,
+    /// Each undetermined instance's bindings (`{V: "a"}`): which of what
+    /// it ranges over waits.
+    pub bound: Vec<BTreeMap<String, Value>>,
 }
 
 /// A deny over the plan, the row of the plan it matched and where it is
@@ -707,12 +783,14 @@ pub(super) fn policies(
             rule: s.rule.map(|r| format!("r{r}")),
             site: None,
             until: BTreeSet::new(),
+            bound: vec![s.bindings.clone()],
         };
-        if !out
-            .iter()
-            .any(|x| x.message == p.message && x.on == p.on && x.reason == p.reason)
+        match out
+            .iter_mut()
+            .find(|x| x.message == p.message && x.on == p.on && x.reason == p.reason)
         {
-            out.push(p);
+            Some(x) => x.bound.extend(p.bound),
+            None => out.push(p),
         }
     }
     out.sort_by(|a, b| (&a.message, &a.on).cmp(&(&b.message, &b.on)));
@@ -748,6 +826,7 @@ pub(super) fn policies(
             rule: rule.map(|r| format!("r{r}")),
             site: None,
             until: BTreeSet::new(),
+            bound: Vec::new(),
         });
     }
     may.sort_by(|a, b| a.message.cmp(&b.message));
@@ -804,6 +883,7 @@ pub(super) fn deferred(
             rule: None,
             site: None,
             until: BTreeSet::new(),
+            bound: Vec::new(),
         });
     }
     out

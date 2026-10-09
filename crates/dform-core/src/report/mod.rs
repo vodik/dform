@@ -297,10 +297,10 @@ pub fn report(i: &Input) -> Report {
     let not_planned = crate::zset::not_planned(i.res, &r);
     let mut policies = policies(i, &tick_of, &resolves);
     policies.extend(deferred(i.res, &tick_of, &resolves));
-    let policy = policy::lines(i.program, i.res, &policies, &r);
     for p in policies.iter_mut().filter(|p| p.after.is_none()) {
         p.until = follow.until(&p.on);
     }
+    let policy = policy::lines(i.program, i.res, &policies, &r);
 
     let (ticks, unscheduled) = ticks(i, &definite, &held, &groups, &tick_of);
 
