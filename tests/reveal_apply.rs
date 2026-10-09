@@ -148,6 +148,13 @@ fn a_held_secret_is_revealed_into_the_apply_that_writes_it() {
     assert_eq!(again.summary(), "stack p is up to date", "{}", again.stdout);
     let json = dform(&s, &["plan", "--json", "p"]).success();
     let shown = dform(&s, &["state", "show", "p"]).success();
+    // A plan file of an update that sends both again.
+    s.write(
+        "stacks/p.df",
+        &program("token", "").replace("weight = 1", "weight = 2"),
+    );
+    let out = dform(&s, &["plan", "--out", "plan.json", "p"]).success();
+    assert!(s.path("plan.json").exists());
     let mut found = Vec::new();
     holding(&s.dir, &s.dir, value.as_bytes(), &mut found);
     found.sort();
@@ -159,7 +166,7 @@ fn a_held_secret_is_revealed_into_the_apply_that_writes_it() {
         ],
         "{value}"
     );
-    for r in [&plan, &apply, &again, &json, &shown] {
+    for r in [&plan, &apply, &again, &json, &shown, &out] {
         assert!(
             !r.stdout.contains(&value) && !r.stderr.contains(&value),
             "{}\n{}",
