@@ -11,7 +11,7 @@
 
 mod clause;
 mod expr;
-pub use clause::{lower_clause, lower_goal};
+pub use clause::{lower_clause, lower_folded_rule, lower_goal};
 pub use expr::lower_expr;
 
 use super::node::{ExprId, ItemId, ItemKind};

@@ -37,6 +37,8 @@ pub struct Collected {
     pub literals: usize,
     /// Clauses, each a statement's body or a `let`'s, the same.
     pub clauses: usize,
+    /// Rules folded over their aggregates, the same.
+    pub folds: usize,
     pub differences: Vec<Difference>,
 }
 

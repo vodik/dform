@@ -10,6 +10,7 @@
 //! (`program::check` holds the two equal under `DFORM_CHECK_LOWER=1`).
 //! The statement builders read the tree (step 5).
 
+mod aggregate;
 mod clause;
 mod expr;
 mod membership;

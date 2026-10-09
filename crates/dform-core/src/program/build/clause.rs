@@ -207,7 +207,7 @@ impl Builder<'_> {
         read: Option<usize>,
     ) -> Option<GoalId> {
         if aggregate {
-            return None;
+            return self.fold(l);
         }
         let span = self.span;
         let kind = match (l, read) {

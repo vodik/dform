@@ -36,6 +36,93 @@ pub fn lower_goal(program: &Program, id: GoalId, context: &[Lit]) -> (Vec<Lit>, 
     (out, l.helpers)
 }
 
+/// The rule item `id` with its body's aggregate bindings folded, as the
+/// resolver's `fold_rule` writes it: a fold with no helper number applied
+/// by the head (`p(K, count(X)) :- B`); else the rule over each fold's
+/// `__agg_N(group, agg(x)) :- B`, joined by the group (the head's other
+/// variables and what the literals after the fold read, as B binds them),
+/// the literals that read a fold's value after it, then each helper.
+pub fn lower_folded_rule(program: &Program, id: ItemId) -> Vec<Stmt> {
+    let item = &program.items[id];
+    let ItemKind::Rule {
+        head,
+        clause: Some(clause),
+        ..
+    } = &item.kind
+    else {
+        unreachable!("a folded rule has a body")
+    };
+    let mut l = Lowering::new(program);
+    let mut head = l.atom(&head.rel, &head.args);
+    // The body's literals but each fold's binding, and the folds.
+    let mut lits = Vec::new();
+    let mut folds = Vec::new();
+    for &g in &program.clauses[*clause].goals {
+        match &program.goals[g].kind {
+            GoalKind::Fold { var, agg, helper } => {
+                let call = l.expr(*agg);
+                lits.append(&mut l.reads);
+                folds.push((l.var(*var), call, *helper));
+            }
+            _ => l.goal(g, &mut lits),
+        }
+    }
+    let results: BTreeSet<&str> = folds
+        .iter()
+        .filter_map(|(v, ..)| match v {
+            Term::Var(v) => Some(v.as_str()),
+            _ => None,
+        })
+        .collect();
+    let (post, base): (Vec<Lit>, Vec<Lit>) = lits.into_iter().partition(|l| reads_any(l, &results));
+    if let [(v, call, None)] = folds.as_slice() {
+        let at = head
+            .args
+            .iter()
+            .position(|t| t == v)
+            .expect("the head applies it");
+        head.args[at] = call.clone();
+        return vec![Stmt::Rule(RuleStmt::new(head, base))];
+    }
+    let bound = crate::syntax::resolve::bound_vars(&base);
+    let mut wanted = BTreeSet::new();
+    for t in head
+        .args
+        .iter()
+        .chain(head.record.iter().flat_map(|r| r.values()))
+    {
+        crate::syntax::resolve::lit_vars(&Lit::Eq(t.clone(), t.clone()), &mut wanted);
+    }
+    for l in &post {
+        crate::syntax::resolve::lit_vars(l, &mut wanted);
+    }
+    let group: Vec<Term> = wanted
+        .iter()
+        .filter(|v| !results.contains(v.as_str()) && bound.contains(*v))
+        .map(|v| Term::Var(v.clone()))
+        .collect();
+    let mut helpers = Vec::new();
+    let mut body = Vec::new();
+    for (v, call, n) in folds {
+        let pred = format!("__agg_{}", n.expect("a grouped fold's helper number"));
+        let mut args = group.clone();
+        args.push(call);
+        let rule = RuleStmt::helper(
+            Helper::Aggregate,
+            atom_at(&pred, args, item.span),
+            base.clone(),
+        );
+        helpers.push(Stmt::Rule(rule));
+        let mut args = group.clone();
+        args.push(v);
+        body.push(Lit::Pos(atom_at(&pred, args, item.span)));
+    }
+    body.extend(post);
+    let mut out = vec![Stmt::Rule(RuleStmt::new(head, body))];
+    out.extend(helpers);
+    out
+}
+
 impl Lowering<'_> {
     /// Clause `id`'s literals onto `out`.
     pub(super) fn clause(&mut self, id: ClauseId, out: &mut Vec<Lit>) {

@@ -32,13 +32,14 @@ fn the_program_lowers_as_the_resolver_does() {
     df_files(&repo().join("tests/syntax/err"), true, &mut files);
     assert!(files.len() > 60, "{files:?}");
     let mut failures = Vec::new();
-    let (mut compared, mut terms, mut literals, mut clauses) = (0, 0, 0, 0);
+    let (mut compared, mut terms, mut literals, mut clauses, mut folds) = (0, 0, 0, 0, 0);
     for f in &files {
         let ((), seen) = check::collect(|| lower(f));
         compared += seen.compared;
         terms += seen.terms;
         literals += seen.literals;
         clauses += seen.clauses;
+        folds += seen.folds;
         failures.extend(
             seen.differences
                 .into_iter()
@@ -61,6 +62,7 @@ fn the_program_lowers_as_the_resolver_does() {
         terms += seen.terms;
         literals += seen.literals;
         clauses += seen.clauses;
+        folds += seen.folds;
         failures.extend(seen.differences.into_iter().map(|d| format!("{what}: {d}")));
     }
     assert!(
@@ -72,11 +74,14 @@ fn the_program_lowers_as_the_resolver_does() {
     assert!(compared >= files.len() / 2, "only {compared} compared");
     // Every term, written literal and clause the resolver lowers is built
     // as nodes and lowered back.
-    eprintln!("{compared} lowerings, {terms} terms, {literals} literals, {clauses} clauses");
+    eprintln!(
+        "{compared} lowerings, {terms} terms, {literals} literals, {clauses} clauses, {folds} folds"
+    );
     assert!(terms >= 10 * compared, "only {terms} terms compared");
     assert!(
         literals >= 4 * compared,
         "only {literals} literals compared"
     );
     assert!(clauses >= 2 * compared, "only {clauses} clauses compared");
+    assert!(folds > 0, "no rule folded over its aggregates");
 }

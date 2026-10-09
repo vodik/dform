@@ -5390,9 +5390,6 @@ impl<'u> Lowerer<'u> {
                     && ts
                         .iter()
                         .any(|t| t.kind() == CALL && self.aggregate_name(t).is_some());
-                if aggregate {
-                    return None;
-                }
                 Form::Compare {
                     bind: ops.first() == Some(&EQ),
                     ops: ops.len(),
@@ -8795,7 +8792,7 @@ fn path_string(path: &[Seg]) -> Option<String> {
 
 /// The variables a body binds: arguments of its positive relation reads
 /// (patterns included), and both sides of an equality.
-fn bound_vars(body: &[Lit]) -> BTreeSet<String> {
+pub(crate) fn bound_vars(body: &[Lit]) -> BTreeSet<String> {
     fn pattern(t: &Term, out: &mut BTreeSet<String>) {
         match t {
             Term::Var(v) => {

@@ -187,6 +187,38 @@ impl Shadow {
     }
 }
 
+impl Shadow {
+    /// The rule `r` a statement lowered to at `span`, its aggregate
+    /// bindings those binding `results`, which the resolver folded to
+    /// `folded` taking numbers from `counters`: built as a rule item from
+    /// the same counter, lowered and compared.
+    pub fn fold(
+        &mut self,
+        r: &ast::RuleStmt,
+        results: &[String],
+        mut counters: crate::program::Counters,
+        span: Span,
+        folded: &[Stmt],
+    ) {
+        let any = |_: &str| true;
+        let scope = self.program.scope;
+        let mut b = Builder::new(&mut self.program, span, &any);
+        let item = b.folded_rule((&r.head, &r.body), results, &mut counters, span, scope);
+        let lowered = crate::program::lower_folded_rule(&self.program, item);
+        let text = |stmts: &[Stmt]| {
+            dump(&Ok(ast::Program {
+                statements: stmts.to_vec(),
+                stack: None,
+            }))
+        };
+        let d = differ(&text(folded), &text(&lowered)).map(|d| super::Difference {
+            statement: format!("the folded rule at {}", place(span)),
+            ..d
+        });
+        record(d, |c| c.folds += 1);
+    }
+}
+
 impl Frame {
     /// The helper statements of `helpers[made..]` the frame's own goals
     /// made: not its terms'.

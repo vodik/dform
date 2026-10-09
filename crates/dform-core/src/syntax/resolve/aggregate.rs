@@ -225,7 +225,27 @@ impl Lowerer<'_> {
         body.is_some_and(|b| !self.agg_lits(b).is_empty())
     }
 
+    /// [`Self::fold_rule1`], under `DFORM_CHECK_LOWER=1` also built as a
+    /// rule item, its folds numbered from the same counter, lowered and
+    /// compared (R-211 step 4).
     fn fold_rule(&mut self, r: RuleStmt, span: Span) -> Vec<Stmt> {
+        if self.shadow.is_none() {
+            return self.fold_rule1(r, span);
+        }
+        let results: Vec<String> = self
+            .agg_lits(&r.body)
+            .into_iter()
+            .map(|(_, v, _)| v)
+            .collect();
+        let (written, counters) = (r.clone(), self.program.helpers);
+        let out = self.fold_rule1(r, span);
+        if let Some(s) = &mut self.shadow {
+            s.fold(&written, &results, counters, span, &out);
+        }
+        out
+    }
+
+    fn fold_rule1(&mut self, r: RuleStmt, span: Span) -> Vec<Stmt> {
         let found = self.agg_lits(&r.body);
         if found.is_empty() {
             return vec![Stmt::Rule(r)];
