@@ -400,16 +400,7 @@ impl AttrAggregate {
                 .filter(|(_, r)| r.applies(typ, addr, path))
                 .collect(),
         };
-        let mut cell = collapse_group(
-            &group.key,
-            &group.contribs,
-            &group.elems,
-            &refs,
-            &lat,
-            &nested,
-            origins,
-            &prov.store,
-        );
+        let mut cell = collapse_group(group, &refs, &lat, &nested, origins, &prov.store);
         if group.base {
             cell.retain(|a| a.pred == "attr" || a.pred == "attr_stuck");
             for a in cell.iter_mut().filter(|a| a.pred == "attr") {
@@ -465,11 +456,11 @@ impl AttrAggregate {
 /// A complete group being emitted: its key, whether it is the base
 /// (`transform::ATTR_BASE`: every contribution but the element writes), and
 /// its contributions and element writes in fact order.
-struct Ready {
-    key: GroupKey,
+pub(super) struct Ready {
+    pub(super) key: GroupKey,
     base: bool,
-    contribs: Vec<Contribution>,
-    elems: Vec<ElemContribution>,
+    pub(super) contribs: Vec<Contribution>,
+    pub(super) elems: Vec<ElemContribution>,
 }
 
 impl Ready {

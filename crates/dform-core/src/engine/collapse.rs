@@ -2,7 +2,7 @@
 //! writes and refinements joined in the path's lattice, and the cell's facts: the value, a
 //! conflict or a violated refinement with its deny, a stuck disagreement, a shadowed warning.
 
-use super::contributions::{Contribution, ElemContribution, GroupKey, Origins, rank_name};
+use super::contributions::{Contribution, ElemContribution, GroupKey, Origins, Ready, rank_name};
 use super::errors::with_place;
 use super::policy::policy_fact;
 use crate::ast::{Atom, Term, str_term};
@@ -20,50 +20,30 @@ pub(super) fn obj(kv: Vec<(&str, Value)>) -> Value {
 /// The collapsed cell as facts: the value, or the conflict with a `deny`
 /// naming every witness, or the stuck disagreement; plus a warning per
 /// shadowed disagreement at a losing rank.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn collapse_group(
-    key: &GroupKey,
-    contribs: &[Contribution],
-    elems: &[ElemContribution],
+    group: &Ready,
     refs: &[&(TupleId, crate::refine::Stated)],
     lat: &Lattice,
     nested: &BTreeMap<String, Lattice>,
     origins: &Origins,
     store: &Store,
 ) -> Vec<Atom> {
-    let path = &key.2;
-    let cells: Vec<RankedContribution> = contribs
-        .iter()
-        .enumerate()
-        .map(|(i, (_, r, v))| (i as u32, *r, v.clone()))
-        .collect();
+    let (key, contribs, elems) = (&group.key, &group.contribs[..], &group.elems[..]);
     // An element write's witness follows the contributions', a
     // refinement's the element writes'.
-    let writes: Vec<lattice::ElemWrite> = elems
-        .iter()
-        .enumerate()
-        .map(|(i, (_, r, list, k, v))| lattice::ElemWrite {
-            witness: (contribs.len() + i) as u32,
-            rank: *r,
-            list: list.clone(),
-            key: k.clone(),
-            value: v.clone(),
-        })
-        .collect();
+    let writes = elem_writes(elems, contribs.len());
     let first_ref = contribs.len() + elems.len();
-    let refinements: Vec<lattice::Refinement> = refs
-        .iter()
-        .enumerate()
-        .map(|(i, (_, r))| lattice::Refinement {
-            path: r.path.clone(),
-            constraint: r.constraint.clone(),
-            witness: (first_ref + i) as u32,
-        })
-        .collect();
     let below = lattice::Below {
         lattices: Some(nested),
         elems: &writes,
     };
+    let collapsed = lattice::lub_ranked_refined(
+        lat,
+        &key.2,
+        &ranked(contribs),
+        &refinements(refs, first_ref),
+        below,
+    );
     let mut cell = Collapse {
         key,
         contribs,
@@ -74,53 +54,50 @@ pub(super) fn collapse_group(
         store,
         out: Vec::new(),
     };
-    let shadowed = match lattice::lub_ranked_refined(lat, path, &cells, &refinements, below) {
-        Collapsed::Bottom => vec![],
-        Collapsed::Val {
-            value,
-            shadowed,
-            deferred,
-            ..
-        } => {
-            cell.value(value, deferred);
-            shadowed
-        }
-        Collapsed::Violated {
-            path: at,
-            constraint,
-            value,
-            witnesses: ws,
-            refinement,
-            shadowed,
-        } => {
-            cell.violated(at, &constraint, value, &ws, &refinement);
-            shadowed
-        }
-        Collapsed::Stuck {
-            nulls, shadowed, ..
-        } => {
-            cell.out.push(cell.head(
-                "attr_stuck",
-                vec![Value::List(nulls.into_iter().map(Value::Str).collect())],
-            ));
-            shadowed
-        }
-        Collapsed::Conflict {
-            a,
-            b,
-            reason,
-            witnesses: ws,
-            shadowed,
-            ..
-        } => {
-            cell.conflict(&a.1, &b.1, reason, &ws);
-            shadowed
-        }
-    };
-    for sh in shadowed {
+    for sh in cell.collapsed(collapsed) {
         cell.shadowed(sh);
     }
     cell.out
+}
+
+/// The contributions as the lattice ranks them, each its own witness.
+fn ranked(contribs: &[Contribution]) -> Vec<RankedContribution> {
+    contribs
+        .iter()
+        .enumerate()
+        .map(|(i, (_, r, v))| (i as u32, *r, v.clone()))
+        .collect()
+}
+
+/// The element writes, their witnesses numbered from `first`.
+fn elem_writes(elems: &[ElemContribution], first: usize) -> Vec<lattice::ElemWrite> {
+    elems
+        .iter()
+        .enumerate()
+        .map(|(i, (_, r, list, k, v))| lattice::ElemWrite {
+            witness: (first + i) as u32,
+            rank: *r,
+            list: list.clone(),
+            key: k.clone(),
+            value: v.clone(),
+        })
+        .collect()
+}
+
+/// The refinements joined into the cell, their witnesses numbered from
+/// `first`.
+fn refinements(
+    refs: &[&(TupleId, crate::refine::Stated)],
+    first: usize,
+) -> Vec<lattice::Refinement> {
+    refs.iter()
+        .enumerate()
+        .map(|(i, (_, r))| lattice::Refinement {
+            path: r.path.clone(),
+            constraint: r.constraint.clone(),
+            witness: (first + i) as u32,
+        })
+        .collect()
 }
 
 /// A cell being collapsed, its witnesses numbered: the contributions', the
@@ -138,6 +115,54 @@ struct Collapse<'a> {
 }
 
 impl Collapse<'_> {
+    /// The cell's facts for what the lattice made of it; the disagreements
+    /// it shadowed.
+    fn collapsed(&mut self, collapsed: Collapsed) -> Vec<Shadowed> {
+        match collapsed {
+            Collapsed::Bottom => vec![],
+            Collapsed::Val {
+                value,
+                shadowed,
+                deferred,
+                ..
+            } => {
+                self.value(value, deferred);
+                shadowed
+            }
+            Collapsed::Violated {
+                path: at,
+                constraint,
+                value,
+                witnesses: ws,
+                refinement,
+                shadowed,
+            } => {
+                self.violated(at, &constraint, value, &ws, &refinement);
+                shadowed
+            }
+            Collapsed::Stuck {
+                nulls, shadowed, ..
+            } => {
+                self.out.push(self.head(
+                    "attr_stuck",
+                    vec![Value::List(nulls.into_iter().map(Value::Str).collect())],
+                ));
+                shadowed
+            }
+            Collapsed::Conflict {
+                a,
+                b,
+                reason,
+                witnesses: ws,
+                shadowed,
+                ..
+            } => {
+                self.conflict(&a.1, &b.1, reason, &ws);
+                shadowed
+            }
+        }
+    }
+
     /// A fact of the cell: `pred(T, A, P, rest..)`.
     fn head(&self, pred: &str, rest: Vec<Value>) -> Atom {
         let (typ, addr, path) = self.key;
