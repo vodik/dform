@@ -21,7 +21,10 @@
 //! it; state keeps its digest), `name_like`. `list_key = "a,b"` is a `type_list_key`; the struct's
 //! `replace` a `type_replace`, its `retry` a `type_retry`, its `lookup =
 //! "a,b"` a `type_lookup` (R-195: what a Create that timed out is found
-//! by, each one of the struct's fields). `health` says the provider answers
+//! by, each one of the struct's fields), its `remote_name = "name"` a
+//! `type_remote_name` (R-189: the field is the object's name, and the
+//! provider makes a create-first replacement under the name it is sent,
+//! the next generation of it). `health` says the provider answers
 //! Health for the type (R-203): the handshake lists it, and `dform status`
 //! asks its `Lifecycle::health`.
 
@@ -84,7 +87,7 @@ pub fn derive_resource(input: TokenStream) -> TokenStream {
 fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let ident = &input.ident;
     let (mut typ, mut replace, mut retry) = (None::<String>, None::<String>, None::<u32>);
-    let mut lookup = None::<LitStr>;
+    let (mut lookup, mut remote_name) = (None::<LitStr>, None::<LitStr>);
     let mut health = false;
     for a in input.attrs.iter().filter(|a| a.path().is_ident("dform")) {
         a.parse_nested_meta(|m| {
@@ -100,10 +103,12 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 retry = Some(m.value()?.parse::<LitInt>()?.base10_parse()?);
             } else if m.path.is_ident("lookup") {
                 lookup = Some(m.value()?.parse::<LitStr>()?);
+            } else if m.path.is_ident("remote_name") {
+                remote_name = Some(m.value()?.parse::<LitStr>()?);
             } else if m.path.is_ident("health") {
                 health = true;
             } else {
-                return Err(m.error("expected type, replace, retry, lookup or health"));
+                return Err(m.error("expected type, replace, retry, lookup, remote_name or health"));
             }
             Ok(())
         })?;
@@ -182,6 +187,19 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             "type_lookup({}, [{}])",
             quoted(&typ),
             attrs.join(", ")
+        ));
+    }
+    if let Some(n) = remote_name {
+        if !names.contains(&n.value()) {
+            return Err(syn::Error::new_spanned(
+                &n,
+                format!("remote_name: {} is not a field of {ident}", n.value()),
+            ));
+        }
+        lines.push(format!(
+            "type_remote_name({}, {})",
+            quoted(&typ),
+            quoted(&n.value())
         ));
     }
     let facts = lines.join("\n");

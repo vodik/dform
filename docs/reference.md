@@ -1054,6 +1054,7 @@ type_list_key(k8s.deployment, "spec.template.spec.containers", ["name"])  # list
 type_mint(db.postgres, "endpoint", "{name}.db.fake")        # optional: how the mock mints it
 type_retry(db.postgres, 5)                                  # optional: Read attempts (default 3)
 type_replace(k8s.deployment, "create_first")                # optional: create_first, destroy_first, either (default)
+type_remote_name(k8s.deployment, "metadata.name")           # optional: a name the provider generates for a create-first replacement
 type_lookup(ovh.instance, ["name", "region"])               # optional: what a Create that timed out is found by (the provider's)
 type_doc(net.vpc, "cidr", "The network's IPv4 range.")      # optional: a path's description ("" the type's)
 extern_decl("ovh.image", "+region, -name, -id, -distribution")  # a data source, no `extern` line needed
@@ -1163,8 +1164,12 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   `metadata.namespace` (default: the kubeconfig's) are `optional_computed`
   and `force_new`; a property its object lists as `required` is required
   where the object is set; a Secret's `data` and `stringData` are sensitive;
-  `type_retry` is 5; a Deployment, Service or ConfigMap is replaced
-  `create_first`, a Namespace `destroy_first`. An OpenAPI `description`
+  `type_retry` is 5; a Deployment or ConfigMap is replaced
+  `create_first`, a Service or Namespace `destroy_first`; a Deployment,
+  DaemonSet, Job, CronJob, ConfigMap or Secret has
+  `type_remote_name(T, "metadata.name")` (what other objects reach
+  through dform's references; a Service's name is a DNS name read
+  literally, a StatefulSet's is in its pods' and claims'). An OpenAPI `description`
   is its path's `type_doc` (the kind's is the type's): the snapshot keeps
   them (868K; 213K without).
 - A field the API server defaults is `optional_computed`: one whose schema
@@ -1540,8 +1545,9 @@ made; the plan itself says what it is.
   take it or the printed one (`why 'ovh.ssh_key k3s.admin'`, or its path
   alone, `why k3s.admin`, `why k3s.server.public_ip`).
 - `tick 1  K changes`: what this apply makes first. A change
-  is `+` create, `~` update, `-` delete, `>` adopt, `±` replace (`(the new
-  one first)` for a `create_before_destroy` one, whose deposed object is
+  is `+` create, `~` update, `-` delete, `>` adopt, `±` replace (`replace,
+  create first` for a create-first one, `replace, create first (web-2 →
+  web-3)` where dform names the replacement, whose deposed object is
   `- T a  (deposed)` in the next tick). An update diffs a keyless set,
   or a list with merge keys (`containers[name=web]`), by element: an
   element that is new or gone is one `+`/`-` line with its leaves, not
@@ -2001,17 +2007,45 @@ reverse dependency order (a delete has no desired document left, so state
 records each object's dependencies when it is applied). Which way a
 replacement goes is the schema's `type_replace(T, Order)`: `destroy_first`
 (`-/+`), `create_first` (`+/-`), or `either` (the default), where it is
-`-/+` unless `lifecycle(r, "create_before_destroy")` says `+/-`. That fact
-on a `destroy_first` type is an error naming the type; on a `create_first`
-type it is redundant. In the mocks a Kubernetes Deployment or Service and an
-`aws.instance` are `create_first`, a Namespace and an `aws.s3_bucket`
-`destroy_first`, the fake `net.vpc` `either`. A `-/+` replace deletes the old
-object, then creates the new one under the same name. A `+/-` one: the new object is
-created first under a free name (`main-2`), the old one is *deposed* (kept in
-state's `deposed` section), and a boundary follows; the next tick moves what
-depends on it to the replacement and then deletes the deposed object
-(`- T["A"]  (deposed)`). A deposed object left by a failed apply is deleted by
-the next one, once nothing that depends on it is still pending.
+`-/+` unless `lifecycle(r, "create_first")` says `+/-`. That fact
+on a `destroy_first` type is an error naming the resource; on a `create_first`
+type it is redundant. In the mocks a Kubernetes Deployment or ConfigMap and an
+`aws.instance` are `create_first`, a Namespace, a Service and an
+`aws.s3_bucket` `destroy_first`, the fake `net.vpc` `either`. A `-/+`
+replace deletes the old object, then creates the new one under the same
+name. A `+/-` one: the new object is created first, the old one is
+*deposed* (kept in state's `deposed` section), and a boundary follows; the
+next tick moves what depends on it to the replacement and then deletes the
+deposed object (`- T a  (deposed)`). A deposed object left by a failed or
+stopped apply is deleted by the next one, once nothing that depends on it
+is still pending, and nothing is made again. The apply does not wait on
+the new object's health: `dform status` is where it is checked.
+
+Two objects exist between those ticks, which is no matter where an
+object's identity is an id its provider assigns (an OVH instance: two
+share a name for a moment). Where its name is its identity (an `id` path
+the program writes: a Kubernetes object's `metadata.name`), the two need
+two names, and the provider says whether it can give one:
+`type_remote_name(T, Path)`. Then the replacement is made under the next
+generation of the program's name (`forgejo` → `forgejo-2` → `forgejo-3`),
+and the plan says so, `± k8s.deployment forgejo  replace, create first
+(forgejo-2 → forgejo-3)`. The address stays the program's, `forgejo`;
+state records the name beside the object's remote id (`name`), a read of
+it through the reference answers it (`forgejo.metadata.name` is
+`"forgejo-3"`, and what reads it moves to it in the tick after the
+replacement, before the old one goes), `why` says it is dform's, and
+`status` names the object by it. A program that writes another name gets
+that one, and the generation is dropped; a `moved` keeps it. Where the
+provider cannot generate one, `create_first` is an error at plan:
+
+```text
+Error: k8s.namespace x: create_first is not possible: metadata.name is its identity, and its provider cannot generate one; give the replacement another name, or let it be replaced destroy-first
+```
+
+The Kubernetes provider generates the names of a Deployment, DaemonSet,
+Job, CronJob, ConfigMap and Secret, which other objects reach through
+dform's references; the OVH provider an instance's (its name is free,
+and the replacement's must differ from the old one's for its lookup).
 
 Either way the replacement is a new object, so every null that named the old
 one (its id, its other computed values) is unresolved again: an existing
@@ -2032,7 +2066,7 @@ at once by a rule that binds them with `in`:
 
 ```dform
 lifecycle(main, "prevent_destroy")                   # a delete or replace of it is a deny
-lifecycle(main, "create_before_destroy")             # replace creates first (type_replace either)
+lifecycle(main, "create_first")                      # replace creates first (type_replace either)
 lifecycle(libvirt.volume["data"], "retain")          # a delete forgets it: the world keeps it
 lifecycle(vm, "bootstrap", "user_data")              # sent at creation; a difference after is kept, and said
 moved(net.vpc, "main.vpc", net.vpc["core.vpc"])  # rename without destroy
@@ -4761,7 +4795,7 @@ start)"` starts MinIO in rootless podman and prints the variables, and
 
 `tests/model.rs` is a model test of the executor: a seed picks a random
 program over the fake schema and a few versions of it (refs, force_new
-cidrs, `prevent_destroy`, `create_before_destroy`, `moved`), objects in the
+cidrs, `prevent_destroy`, `create_first`, `moved`), objects in the
 cloud dform does not manage, and a schedule of applies and plan-file
 applies under random chaos (every knob, `--parallel`, the order calls in
 flight answer in, drift between a plan and its apply), then one apply

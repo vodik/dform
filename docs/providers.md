@@ -119,7 +119,8 @@ fn main() -> std::process::ExitCode {
   password; dform keeps its digest in state and a changed one is a
   change, R-106), `name_like`; `list_key = "name"`. On the struct: `type`
   (required), `replace`, `retry`, `lookup = "name,region"` (its
-  `type_lookup`, below), `health` (it answers Health, below). A computed field is an `Option` with
+  `type_lookup`, below), `remote_name = "name"` (its `type_remote_name`,
+  below), `health` (it answers Health, below). A computed field is an `Option` with
   `#[serde(default)]`: the engine's desired document does not have it.
   An `optional_computed` one is answered as computed (dform compares it
   only where the program writes it), so leave it out of what Read
@@ -136,6 +137,17 @@ fn main() -> std::process::ExitCode {
   by its zone, subdomain, type and target, and changes the subdomain,
   target and ttl in place on the record's id. dform carries the fact
   and does not read it; a provider reads its own.
+- Where an object's name is its identity (an `id` path the program
+  writes, a Kubernetes `metadata.name`), a replacement created before
+  the old object is deleted needs another name. A provider that can make
+  an object under another name than the program's says so per type,
+  `type_remote_name(Type, Path)`: dform then sends a create-first
+  Replace the next generation of the program's name at Path
+  (`forgejo-3`), records it, and answers it to every read of the name; a
+  type with a named identity and no such fact is refused `create_first`
+  at plan. Declare it only where nothing names the object literally
+  (a Kubernetes Service's name is a DNS name: not it). dform reads this
+  fact; the provider just makes what it is sent.
 - `Lifecycle` is the four calls, and `check`, a refusal of a document
   the provider cannot apply as configured (Postgres refuses to manage the
   role it connects as), called by Plan once the provider is configured

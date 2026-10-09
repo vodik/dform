@@ -123,6 +123,24 @@ fn the_derive_gives_the_schema() {
     assert!(s.facts.iter().any(|f| f.pred == "type_attr"));
 }
 
+/// A type whose name the provider makes under what it is sent (R-189).
+#[derive(Resource, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[dform(type = "acme.worker", replace = "create_first", remote_name = "name")]
+struct Worker {
+    #[dform(required, id)]
+    name: String,
+}
+
+#[test]
+fn the_derive_declares_a_remote_name() {
+    use dform_sdk::Resource as _;
+    assert!(
+        Worker::FACTS.contains("type_remote_name(\"acme.worker\", \"name\")"),
+        "{}",
+        Worker::FACTS
+    );
+}
+
 #[test]
 fn plan_comes_from_the_schema_and_apply_from_the_lifecycle() {
     let h = provider();
