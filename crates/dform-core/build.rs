@@ -23,9 +23,16 @@ fn main() {
     }
     // Build again when HEAD moves: HEAD itself (a checkout, a detached
     // commit), the branch it names (a commit), and packed-refs (a branch
-    // with no loose ref).
+    // with no loose ref); and their logs, which every commit appends to:
+    // a branch whose ref was packed has no loose ref to watch until a
+    // commit writes one, and HEAD names the branch without changing. In a
+    // worktree HEAD and its log are the worktree's own.
     let mut watch = vec!["HEAD".to_string(), "packed-refs".to_string()];
-    watch.extend(git(&["symbolic-ref", "-q", "HEAD"]));
+    watch.push("logs/HEAD".to_string());
+    if let Some(branch) = git(&["symbolic-ref", "-q", "HEAD"]) {
+        watch.push(format!("logs/{branch}"));
+        watch.push(branch);
+    }
     for p in watch {
         if let Some(path) = git(&["rev-parse", "--path-format=absolute", "--git-path", &p])
             && Path::new(&path).exists()
