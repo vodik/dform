@@ -1424,8 +1424,9 @@ made; the plan itself says what it is.
   failure makes a failing policy. A used module's denies and a
   component's are listed as the stack's own, each at its own file's
   site; a copy's `x in T` ranges over that copy's resources. Under it, what does not hold, each
-  with why: a failure's resource and context (`net.vpc c  vpc = "c"`),
-  an undetermined one's resource and the cell and tick that decide it
+  with why: a failure's resource and context (`net.vpc c  vpc = "c"`;
+  a deny with no context names each resource it fired for, one that
+  ranges over none `(no subject)`), an undetermined one's resource and the cell and tick that decide it
   (`until spec.storageClassName is known (tick 2)`), or the deployment
   whose apply does (`net.vpc a  until stacks.platform[env=lab].endpoint
   is known (after stacks.platform[env=lab] is applied)`): the resource is
@@ -1833,8 +1834,9 @@ the cursor moved back over the block's own lines and each cleared as it
 is written again; its header carries a fill bar, the calls answered over
 the tick's calls (a fill, never a spinner), and the time the tick has
 run, then `done` and its time once the tick ends. A line said while the
-block is drawn (a call sent again, a timed-out call looked up) prints
-above it, and the block is drawn again below:
+block is drawn (a call sent again, a timed-out call looked up, a
+`DFORM_LOG=debug` line) prints above it, and the block is drawn again
+below:
 
 ```
 tick 1  3 changes                        ━━━━━━━━░░░░  2 of 3  3.1s
@@ -1865,7 +1867,10 @@ A later tick prints its plan again before it runs, from that tick to
 the end, as the boundary re-derived it: its values as tick 1 made them
 (`db_host = "main.db.fake"` where the first plan said `db_host =
 main.endpoint`), a tick that only waits as `tick 2  0 changes`; `-q`
-prints each tick's bare plan, as scripts read it. A tick that asks
+prints each tick's bare plan, as scripts read it. A later tick whose
+re-plan has nothing left to change (what it waited on came back as the
+plan had it) prints no plan, whose `up to date` would read as the
+apply's end: its block is one line, `tick 2  nothing to do`. A tick that asks
 (it adds to the plan shown, above) does so below its plan, on its
 header line, `tick 2  1 change   apply? [y/N]`, which the block's header
 takes the place of once answered.
