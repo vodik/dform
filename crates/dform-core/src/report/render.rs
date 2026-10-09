@@ -213,49 +213,7 @@ impl Report {
             false => vec![Row::plain(self.summary())],
         };
         for (t, s) in self.sections() {
-            rows.push(Row::plain(String::new()));
-            // A held object state has, unread until the boundary
-            // (R-177), is listed as state has it, not counted.
-            let n = s
-                .changes
-                .iter()
-                .filter(|d| self.show_noop || !matches!(d.kind, ActionKind::Noop))
-                .count();
-            // A rule the tick before decides may add changes: how many
-            // is not known yet (R-156).
-            let head = match (self.resumed && t == self.tick, s.groups.is_empty(), n) {
-                (true, _, _) => format!("tick {t}  {n} remaining, resumed"),
-                (false, true, _) => format!("tick {t}  {}", count(n, "change")),
-                (false, false, 0) => format!("tick {t}  ? changes"),
-                (false, false, _) => format!("tick {t}  {n}+ changes"),
-            };
-            rows.push(Row::new(&head, bold(&head)));
-            for (i, w) in waited(&s.waits).into_iter().enumerate() {
-                let lead = if i == 0 {
-                    "  waits on  "
-                } else {
-                    "            "
-                };
-                rows.push(Row::plain(format!("{lead}{w}")));
-            }
-            if !s.provisional.is_empty() {
-                rows.push(Row::plain(format!(
-                    "  {}",
-                    provisional_text(&s.provisional)
-                )));
-            }
-            self.write_level(&mut rows, &s.changes, "  ", style);
-            for a in &s.deposed {
-                let addr = address(a);
-                let plain = format!("  - {addr}  (deposed)");
-                let painted = format!(
-                    "  {} {}  (deposed)",
-                    style.paint(Paint::Delete, "-"),
-                    style.address(&ActionKind::Delete, &addr)
-                );
-                rows.push(Row::new(&plain, painted));
-            }
-            self.write_groups(&mut rows, &s.groups, style);
+            self.write_tick(&mut rows, t, &s, style);
         }
         if !self.kept.is_empty() {
             rows.push(Row::plain(String::new()));
@@ -277,8 +235,78 @@ impl Report {
             rows.push(Row::new(head, bold(head)));
             self.write_later(&mut rows, style);
         }
-        // What the program states and derives nothing of (R-120): each
-        // statement as a group row is, its place and why on the right.
+        self.write_not_planned(&mut rows, style);
+        self.write_warnings(&mut rows, style);
+        self.write_denied(&mut rows, style);
+        self.write_approvals(&mut rows, style);
+        out.push_str(&layout(&rows, style));
+        self.write_diags(&mut out, style);
+        if self.undeformed {
+            if !self.nested {
+                out.push_str(&format!("\nstack {} is up to date\n", self.stack));
+            }
+            return out;
+        }
+        if let Some(line) = self.apply_line() {
+            out.push('\n');
+            out.push_str(&line);
+            out.push('\n');
+        }
+        out
+    }
+
+    /// One tick's section: its head (how many changes, `+` while a rule may add
+    /// more), what it waits on, and its changes, deposed objects and groups.
+    fn write_tick(&self, rows: &mut Vec<Row>, t: usize, s: &Section, style: Style) {
+        let bold = |s: &str| style.paint(Paint::Bold, s);
+        rows.push(Row::plain(String::new()));
+        // A held object state has, unread until the boundary
+        // (R-177), is listed as state has it, not counted.
+        let n = s
+            .changes
+            .iter()
+            .filter(|d| self.show_noop || !matches!(d.kind, ActionKind::Noop))
+            .count();
+        // A rule the tick before decides may add changes: how many
+        // is not known yet (R-156).
+        let head = match (self.resumed && t == self.tick, s.groups.is_empty(), n) {
+            (true, _, _) => format!("tick {t}  {n} remaining, resumed"),
+            (false, true, _) => format!("tick {t}  {}", count(n, "change")),
+            (false, false, 0) => format!("tick {t}  ? changes"),
+            (false, false, _) => format!("tick {t}  {n}+ changes"),
+        };
+        rows.push(Row::new(&head, bold(&head)));
+        for (i, w) in waited(&s.waits).into_iter().enumerate() {
+            let lead = if i == 0 {
+                "  waits on  "
+            } else {
+                "            "
+            };
+            rows.push(Row::plain(format!("{lead}{w}")));
+        }
+        if !s.provisional.is_empty() {
+            rows.push(Row::plain(format!(
+                "  {}",
+                provisional_text(&s.provisional)
+            )));
+        }
+        self.write_level(rows, &s.changes, "  ", style);
+        for a in &s.deposed {
+            let addr = address(a);
+            let plain = format!("  - {addr}  (deposed)");
+            let painted = format!(
+                "  {} {}  (deposed)",
+                style.paint(Paint::Delete, "-"),
+                style.address(&ActionKind::Delete, &addr)
+            );
+            rows.push(Row::new(&plain, painted));
+        }
+        self.write_groups(rows, &s.groups, style);
+    }
+
+    /// What the program states and derives nothing of (R-120).
+    fn write_not_planned(&self, rows: &mut Vec<Row>, style: Style) {
+        // Each statement as a group row is, its place and why on the right.
         if !self.not_planned.is_empty() {
             rows.push(Row::plain(String::new()));
             let head = "not planned";
@@ -295,6 +323,10 @@ impl Report {
                 rows.push(Row::new(&plain, painted).with(right));
             }
         }
+    }
+
+    /// The warnings, and the hosts a reader may mistake for others.
+    fn write_warnings(&self, rows: &mut Vec<Row>, style: Style) {
         let confusable = self.confusable_lines();
         if !self.warnings.is_empty() || !confusable.is_empty() {
             rows.push(Row::plain(String::new()));
@@ -304,6 +336,10 @@ impl Report {
                 rows.push(Row::plain(format!("  {line}")));
             }
         }
+    }
+
+    /// The denies over the plan itself, each with the row it matched.
+    fn write_denied(&self, rows: &mut Vec<Row>, style: Style) {
         if !self.denies.is_empty() {
             rows.push(Row::plain(String::new()));
             rows.push(Row::new("denied", style.paint(Paint::Error, "denied")));
@@ -329,6 +365,10 @@ impl Report {
                 rows.push(Row::new(&left, style.paint(Paint::Error, &left)).with(right));
             }
         }
+    }
+
+    /// The changes held for an approval, each with its reason and place.
+    fn write_approvals(&self, rows: &mut Vec<Row>, style: Style) {
         if !self.approvals.is_empty() {
             rows.push(Row::plain(String::new()));
             let head = "held for approval";
@@ -346,7 +386,11 @@ impl Report {
                 rows.push(Row::plain(format!("  {}", address_text(&a.addr))).with(vec![right]));
             }
         }
-        out.push_str(&layout(&rows, style));
+    }
+
+    /// The shadowed disagreements, then the conflicts.
+    fn write_diags(&self, out: &mut String, style: Style) {
+        let bold = |s: &str| style.paint(Paint::Bold, s);
         let header = |s: &str| format!("{}\n", bold(s));
         let diags = [("shadowed", &self.shadowed), ("conflicts", &self.conflicts)];
         for (title, ds) in diags {
@@ -364,18 +408,6 @@ impl Report {
                 out.push_str(&diag_lines(d, self.why, style, conflict));
             }
         }
-        if self.undeformed {
-            if !self.nested {
-                out.push_str(&format!("\nstack {} is up to date\n", self.stack));
-            }
-            return out;
-        }
-        if let Some(line) = self.apply_line() {
-            out.push('\n');
-            out.push_str(&line);
-            out.push('\n');
-        }
-        out
     }
 
     /// The objects left as they are but for a value given at their
