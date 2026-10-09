@@ -13,7 +13,7 @@ mod undetermined;
 mod unify;
 
 use crate::ast::{Atom, Helper, Lit, Program, RuleStmt, Span, Term};
-use crate::circuit::{Circuit, Leaf, NodeId};
+use crate::circuit::{Circuit, NodeId};
 use crate::ir::ops;
 use crate::ir::store::{Store, Window};
 use crate::partition::{self, Node};
