@@ -1,7 +1,8 @@
 //! Values, documents and facts as the protocol's messages.
 //!
 //! A value maps one to one (`From<&Value> for pb::Value`, `TryFrom<&pb::Value>
-//! for Value`), and a fact so (`TryFrom` both ways). A document is JSON in
+//! for Value`), and a fact and a plan's change so (`TryFrom` both ways, a
+//! change `From` to the wire). A document is JSON in
 //! the engine and the fake: its null and secret markers (`provider::marker`)
 //! travel as `Null` messages, a float as `Float`, and a number beyond `i64`
 //! or a JSON `null` as a string. The value model has no float: the engine
@@ -237,6 +238,33 @@ pub fn from_doc(v: &pb::Value) -> Result<Json> {
         Kind::Float(f) => Json::from(f64::from(float(*f)?)),
         other => bail!("a document holds JSON values, not {other:?}"),
     })
+}
+
+/// A plan's change as the protocol's message: each side a document.
+impl From<&provider::Change> for pb::Change {
+    fn from(c: &provider::Change) -> pb::Change {
+        pb::Change {
+            path: c.path.clone(),
+            before: c.before.as_ref().map(doc),
+            after: c.after.as_ref().map(doc),
+            sensitive: c.sensitive,
+        }
+    }
+}
+
+/// A plan's change back from its message.
+impl TryFrom<&pb::Change> for provider::Change {
+    type Error = anyhow::Error;
+
+    fn try_from(c: &pb::Change) -> Result<provider::Change> {
+        let side = |v: &Option<pb::Value>| v.as_ref().map(from_doc).transpose();
+        Ok(provider::Change {
+            path: c.path.clone(),
+            before: side(&c.before)?,
+            after: side(&c.after)?,
+            sensitive: c.sensitive,
+        })
+    }
 }
 
 /// An optional document field; absent is an empty object.

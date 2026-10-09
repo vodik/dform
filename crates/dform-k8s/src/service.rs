@@ -1161,15 +1161,7 @@ impl pb::provider_server::Provider for Service {
             .await
             .map_err(invalid)?;
         Ok(Response::new(pb::PlanResponse {
-            changes: changes
-                .iter()
-                .map(|c| pb::Change {
-                    path: c.path.clone(),
-                    before: c.before.as_ref().map(wire::doc),
-                    after: c.after.as_ref().map(wire::doc),
-                    sensitive: c.sensitive,
-                })
-                .collect(),
+            changes: changes.iter().map(pb::Change::from).collect(),
             requires_replace,
         }))
     }

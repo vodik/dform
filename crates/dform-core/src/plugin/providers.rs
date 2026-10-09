@@ -2455,18 +2455,10 @@ impl Providers {
                 ))
             });
             out[i] = Some(r.and_then(|r| {
-                let side = |v: &Option<pb::Value>| v.as_ref().map(wire::from_doc).transpose();
                 let changes = r
                     .changes
                     .iter()
-                    .map(|c| {
-                        Ok(Change {
-                            path: c.path.clone(),
-                            before: side(&c.before)?,
-                            after: side(&c.after)?,
-                            sensitive: c.sensitive,
-                        })
-                    })
+                    .map(Change::try_from)
                     .collect::<Result<_>>()?;
                 Ok((changes, r.requires_replace))
             }));

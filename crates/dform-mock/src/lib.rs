@@ -1555,15 +1555,7 @@ impl Handler for Mock {
                     .plan(&addr, prior.as_ref(), desired.as_ref())
                     .map_err(invalid)?;
                 Reply::Plan(pb::PlanResponse {
-                    changes: changes
-                        .iter()
-                        .map(|c| pb::Change {
-                            path: c.path.clone(),
-                            before: c.before.as_ref().map(wire::doc),
-                            after: c.after.as_ref().map(wire::doc),
-                            sensitive: c.sensitive,
-                        })
-                        .collect(),
+                    changes: changes.iter().map(pb::Change::from).collect(),
                     requires_replace,
                 })
             }
