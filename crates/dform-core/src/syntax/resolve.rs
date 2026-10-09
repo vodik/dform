@@ -6553,6 +6553,21 @@ impl<'u> Lowerer<'u> {
     // --- terms ------------------------------------------------------------
 
     fn term(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
+        let before = pre.len();
+        let t = self.term_of(rc, n, pos, pre)?;
+        // R-211 step 3: under `DFORM_CHECK_LOWER=1` each term is also built
+        // as nodes from what it lowered to and lowered back, the two
+        // compared (`program::check::term`).
+        if crate::program::check::enabled()
+            && let Some(reads) = pre.get(before..)
+        {
+            let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
+            crate::program::check::term(&t, reads, self.span(n), &|v| written.contains(v));
+        }
+        Ok(t)
+    }
+
+    fn term_of(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
         match n.kind() {
             LITERAL => self.literal(rc, n, pre),
             CHAIN | CALL_CHAIN => self.chain_term(rc, n, pos, pre),

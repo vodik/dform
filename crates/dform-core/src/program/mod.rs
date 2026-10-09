@@ -26,7 +26,7 @@ pub mod spell;
 pub mod types;
 
 pub use build::Builder;
-pub use lower::{LoweredStack, lower};
+pub use lower::{LoweredStack, lower, lower_expr};
 pub use node::{
     Clause, ClauseId, Expr, ExprId, Goal, GoalId, Item, ItemId, ItemKind, Pattern, PatternId, Var,
     VarId,

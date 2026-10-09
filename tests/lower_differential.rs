@@ -2,7 +2,8 @@
 //! tests/syntax/ok and err, the mock's schemas) is lowered by the resolver
 //! and through the program, and the two compared statement by statement,
 //! every span with its origin and every diagnostic included
-//! (`program::check::dump`). The same comparison runs in every
+//! (`program::check::dump`), and every term in them as well, built as
+//! nodes and lowered back (`program::check::term`). The same comparison runs in every
 //! `lower_stack` of the suite under `DFORM_CHECK_LOWER=1`; both are deleted
 //! with the old path at the migration's end.
 
@@ -30,10 +31,11 @@ fn the_program_lowers_as_the_resolver_does() {
     df_files(&repo().join("tests/syntax/err"), true, &mut files);
     assert!(files.len() > 60, "{files:?}");
     let mut failures = Vec::new();
-    let mut compared = 0;
+    let (mut compared, mut terms) = (0, 0);
     for f in &files {
         let ((), seen) = check::collect(|| lower(f));
         compared += seen.compared;
+        terms += seen.terms;
         failures.extend(
             seen.differences
                 .into_iter()
@@ -53,6 +55,7 @@ fn the_program_lowers_as_the_resolver_does() {
     for (what, read) in modes {
         let ((), seen) = check::collect(read);
         compared += seen.compared;
+        terms += seen.terms;
         failures.extend(seen.differences.into_iter().map(|d| format!("{what}: {d}")));
     }
     assert!(
@@ -62,4 +65,7 @@ fn the_program_lowers_as_the_resolver_does() {
         failures.join("\n")
     );
     assert!(compared >= files.len() / 2, "only {compared} compared");
+    // Every term the resolver lowers is built as nodes and lowered back.
+    eprintln!("{compared} lowerings, {terms} terms");
+    assert!(terms >= 10 * compared, "only {terms} terms compared");
 }

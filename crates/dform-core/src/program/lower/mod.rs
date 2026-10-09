@@ -8,6 +8,9 @@
 //! Day one an item is opaque (its statement, emitted as it is) or a
 //! module (`Stmt::Module` around its items' statements).
 
+mod expr;
+pub use expr::lower_expr;
+
 use super::node::{ItemId, ItemKind};
 use super::{Origin, Program};
 use crate::ast::{self, Stmt};

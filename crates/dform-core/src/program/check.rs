@@ -24,11 +24,12 @@ thread_local! {
     static COLLECTING: RefCell<Option<Collected>> = const { RefCell::new(None) };
 }
 
-/// What [`collect`] saw: how many lowerings it compared and those that
-/// differed.
+/// What [`collect`] saw: how many lowerings and terms it compared and
+/// those that differed.
 #[derive(Debug, Default)]
 pub struct Collected {
     pub compared: usize,
+    pub terms: usize,
     pub differences: Vec<Difference>,
 }
 
@@ -72,6 +73,43 @@ pub fn compare(old: &Lowered, new: &Lowered) {
     if let Some(d) = unseen {
         panic!("{d}\n({SWITCH}=1)");
     }
+}
+
+/// A term the resolver lowered (`term`, after the reads it hoisted,
+/// `reads`), written at `span`, built as nodes and lowered back: the two
+/// compared as [`compare`] does a program. `written`: whether a lowered
+/// variable is one the program wrote.
+pub fn term(term: &Term, reads: &[Lit], span: Span, written: &dyn Fn(&str) -> bool) {
+    let mut program = Program::new();
+    let id = super::Builder::new(&mut program, span, written).hoisted(term, reads);
+    let (t, rs) = super::lower_expr(&program, id);
+    let difference = differ(&term_dump(term, reads), &term_dump(&t, &rs)).map(|d| Difference {
+        statement: format!("the term at {}: {term:?}", place(span)),
+        ..d
+    });
+    let unseen = COLLECTING.with(|c| match c.borrow_mut().as_mut() {
+        Some(c) => {
+            c.terms += 1;
+            c.differences.extend(difference);
+            None
+        }
+        None => difference,
+    });
+    if let Some(d) = unseen {
+        panic!("{d}\n({SWITCH}=1)");
+    }
+}
+
+/// A term and its reads as one text: the term, then each read and the
+/// spans in it.
+fn term_dump(term: &Term, reads: &[Lit]) -> String {
+    let mut out = format!("term {term:?}\n");
+    for r in reads {
+        let mut spans = Spans::default();
+        spans.lits(std::slice::from_ref(r));
+        let _ = writeln!(out, "read {r:?}\n  spans {}", spans.text());
+    }
+    out
 }
 
 /// `f`, every `lower_stack` it runs compared, and what that found.
