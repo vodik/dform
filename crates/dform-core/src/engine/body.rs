@@ -83,6 +83,20 @@ pub(super) struct Src<'a> {
     pub(super) all: Window,
 }
 
+impl<'a> Src<'a> {
+    /// Every literal of a body of `len` literals reading every tuple of
+    /// `store`.
+    pub(super) fn whole(store: &'a Store, body: &'a ops::Body, len: usize) -> Self {
+        let all = Window::below(store.len());
+        Src {
+            store,
+            body,
+            win: vec![all; len],
+            all,
+        }
+    }
+}
+
 pub(super) fn eval_rule(
     rule: &RuleStmt,
     plan: &ops::Rule,

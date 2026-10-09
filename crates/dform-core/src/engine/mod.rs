@@ -303,6 +303,19 @@ impl Compiled {
         }
     }
 
+    /// The recorder of rule `i`'s instances that wait, reading `known`.
+    fn rec<'a>(&'a self, i: usize, known: &'a RefCell<stuck::Known>) -> Rec<'a> {
+        Rec {
+            rule: i,
+            head: &self.rules[i].head,
+            text: &self.rule_text[i],
+            known,
+            aggregates: &self.aggregates,
+            negations: &self.negations,
+            found: RefCell::new(Vec::new()),
+        }
+    }
+
     /// Whether `s` is a helper's: the rule it was written for is stuck
     /// when it is, and says so in the program's words.
     fn is_helper(&self, s: &Stuck) -> bool {
@@ -436,7 +449,6 @@ fn run_strata(
         stuck_facts,
     } = st;
     let known: &RefCell<stuck::Known> = known;
-    let (rules, plans) = (&c.rules, &c.plans);
     for s in range {
         let mut fix = std::borrow::Cow::Borrowed(&c.fixes[s]);
         if let Some(only) = only {
@@ -456,121 +468,8 @@ fn run_strata(
         if fix.rules.is_empty() {
             continue;
         }
-        let recs: Vec<Rec> = fix
-            .rules
-            .iter()
-            .map(|&i| Rec {
-                rule: i,
-                head: &rules[i].head,
-                text: &c.rule_text[i],
-                known,
-                aggregates: &c.aggregates,
-                negations: &c.negations,
-                found: RefCell::new(Vec::new()),
-            })
-            .collect();
-
-        // Semi-naive iteration to the stratum's fixpoint. It terminates:
-        // facts only grow, and a stratum derives finitely many unless a
-        // builtin invents values without bound (`n(Y) :- n(X), Y = X + 1`).
-        //
-        // The first round reads every tuple. After it, a round joins each
-        // rule once per body position against the tuples the last round
-        // derived there (the delta): the positions before it read the
-        // tuples older than the delta, the positions after it every tuple.
-        // So every combination of tuples is joined in exactly one round,
-        // the round after its newest tuple arrived.
-        //
-        // An aggregate may share a stratum with its readers, so a stuck
-        // instance found here is known to the next round (Rule 3). Rule 3
-        // can turn a combination that fired into a stuck one, so a round
-        // after a stuck instance is found reads every tuple again, as the
-        // first does.
-        let mut seen = vec![0usize; recs.len()];
-        let mut full = true;
-        let mut delta = Window::below(0);
-        loop {
-            let hi = prov.store.len();
-            let mut derived: Vec<(usize, Derived)> = Vec::new();
-            for (&i, rec) in fix.rules.iter().zip(&recs) {
-                let plan = &plans[i];
-                let wins = |w: &dyn Fn(usize) -> Window| -> Vec<Window> {
-                    (0..rules[i].body.len()).map(w).collect()
-                };
-                if full {
-                    let src = Src {
-                        store: &prov.store,
-                        body: &plan.body,
-                        win: wins(&|_| Window::below(hi)),
-                        all: Window::below(hi),
-                    };
-                    let out = eval_rule(&rules[i], plan, &src, rec)?;
-                    derived.extend(out.into_iter().map(|d| (i, d)));
-                    continue;
-                }
-                if matches!(plan.head, ops::Head::Agg { .. }) {
-                    // Every relation an aggregate reads is complete below
-                    // this stratum: the first round decided it.
-                    continue;
-                }
-                for read in plan.body.reads() {
-                    if !prov.store.any_in(&read.rel, delta) {
-                        continue;
-                    }
-                    let at = read.lit;
-                    let src = Src {
-                        store: &prov.store,
-                        body: &plan.body,
-                        win: wins(&|l| match l.cmp(&at) {
-                            Ordering::Less => Window::below(delta.lo),
-                            Ordering::Equal => delta,
-                            Ordering::Greater => Window::below(hi),
-                        }),
-                        all: Window::below(hi),
-                    };
-                    let out = eval_rule(&rules[i], plan, &src, rec)?;
-                    derived.extend(out.into_iter().map(|d| (i, d)));
-                }
-            }
-            // The order a naive round would derive in (rule, then the
-            // tuples each body literal matched, in fact order): it decides
-            // circuit node ids, and so the order `why` prints children in.
-            let store = &prov.store;
-            derived.sort_by(|(i, a), (j, b)| {
-                i.cmp(j).then_with(|| cmp_order(store, &a.order, &b.order))
-            });
-            let mut changed = false;
-            for (i, d) in derived {
-                let contribution = is_contribution(&d.head);
-                let mut children = vec![c.rule_leaf[i]];
-                children.extend(d.used.iter().map(|&t| prov.id(t)));
-                for a in &d.absent {
-                    children.push(prov.absent(a));
-                }
-                let (t, new) = prov.record(d.head, children, d.bindings);
-                if contribution {
-                    origins.note(t, Origin::Rule(i));
-                }
-                changed |= new;
-            }
-            let mut grew = false;
-            for (rec, n) in recs.iter().zip(seen.iter_mut()) {
-                let found = rec.found.borrow();
-                for st in &found[*n..] {
-                    known.borrow_mut().add(st);
-                    grew = true;
-                }
-                *n = found.len();
-            }
-            if !changed && !grew {
-                break;
-            }
-            full = grew;
-            delta = Window {
-                lo: hi,
-                hi: prov.store.len(),
-            };
-        }
+        let recs: Vec<Rec> = fix.rules.iter().map(|&i| c.rec(i, known)).collect();
+        fixpoint(c, fix, &recs, prov, origins, known)?;
         stucks.extend(recs.into_iter().flat_map(|r| r.found.into_inner()));
         // Rule 3 per key sees a head this stratum may derive after a
         // boundary as it sees a stuck head (F DR-2 revised): a negation or
@@ -580,6 +479,142 @@ fn run_strata(
         }
     }
     Ok(())
+}
+
+/// Semi-naive iteration to the stratum's fixpoint. It terminates: facts
+/// only grow, and a stratum derives finitely many unless a builtin invents
+/// values without bound (`n(Y) :- n(X), Y = X + 1`).
+///
+/// The first round reads every tuple. After it, a round joins each rule
+/// once per body position against the tuples the last round derived there
+/// (the delta): the positions before it read the tuples older than the
+/// delta, the positions after it every tuple. So every combination of
+/// tuples is joined in exactly one round, the round after its newest tuple
+/// arrived.
+///
+/// An aggregate may share a stratum with its readers, so a stuck instance
+/// found here is known to the next round (Rule 3). Rule 3 can turn a
+/// combination that fired into a stuck one, so a round after a stuck
+/// instance is found reads every tuple again, as the first does.
+fn fixpoint(
+    c: &Compiled,
+    fix: &ops::Fix,
+    recs: &[Rec],
+    prov: &mut Prov,
+    origins: &mut Origins,
+    known: &RefCell<stuck::Known>,
+) -> Result<()> {
+    let mut seen = vec![0usize; recs.len()];
+    let mut full = true;
+    let mut delta = Window::below(0);
+    loop {
+        let hi = prov.store.len();
+        let derived = round(c, fix, recs, &prov.store, full, delta)?;
+        let changed = record_round(c, prov, origins, derived);
+        let grew = learn_stucks(recs, &mut seen, known);
+        if !changed && !grew {
+            return Ok(());
+        }
+        full = grew;
+        delta = Window {
+            lo: hi,
+            hi: prov.store.len(),
+        };
+    }
+}
+
+/// One round of the stratum's rules over `store`: every tuple when `full`,
+/// else each body position against `delta`; what they derive, in the order
+/// a naive round would derive it (rule, then the tuples each body literal
+/// matched, in fact order), which decides circuit node ids, and so the
+/// order `why` prints children in.
+fn round(
+    c: &Compiled,
+    fix: &ops::Fix,
+    recs: &[Rec],
+    store: &Store,
+    full: bool,
+    delta: Window,
+) -> Result<Vec<(usize, Derived)>> {
+    let hi = store.len();
+    let mut derived: Vec<(usize, Derived)> = Vec::new();
+    for (&i, rec) in fix.rules.iter().zip(recs) {
+        let plan = &c.plans[i];
+        let wins = |w: &dyn Fn(usize) -> Window| -> Vec<Window> {
+            (0..c.rules[i].body.len()).map(w).collect()
+        };
+        if full {
+            let src = Src::whole(store, &plan.body, c.rules[i].body.len());
+            let out = eval_rule(&c.rules[i], plan, &src, rec)?;
+            derived.extend(out.into_iter().map(|d| (i, d)));
+            continue;
+        }
+        if matches!(plan.head, ops::Head::Agg { .. }) {
+            // Every relation an aggregate reads is complete below
+            // this stratum: the first round decided it.
+            continue;
+        }
+        for read in plan.body.reads() {
+            if !store.any_in(&read.rel, delta) {
+                continue;
+            }
+            let at = read.lit;
+            let src = Src {
+                store,
+                body: &plan.body,
+                win: wins(&|l| match l.cmp(&at) {
+                    Ordering::Less => Window::below(delta.lo),
+                    Ordering::Equal => delta,
+                    Ordering::Greater => Window::below(hi),
+                }),
+                all: Window::below(hi),
+            };
+            let out = eval_rule(&c.rules[i], plan, &src, rec)?;
+            derived.extend(out.into_iter().map(|d| (i, d)));
+        }
+    }
+    derived.sort_by(|(i, a), (j, b)| i.cmp(j).then_with(|| cmp_order(store, &a.order, &b.order)));
+    Ok(derived)
+}
+
+/// Record a round's heads with their firings (and a contribution's rule);
+/// whether one is new.
+fn record_round(
+    c: &Compiled,
+    prov: &mut Prov,
+    origins: &mut Origins,
+    derived: Vec<(usize, Derived)>,
+) -> bool {
+    let mut changed = false;
+    for (i, d) in derived {
+        let contribution = is_contribution(&d.head);
+        let mut children = vec![c.rule_leaf[i]];
+        children.extend(d.used.iter().map(|&t| prov.id(t)));
+        for a in &d.absent {
+            children.push(prov.absent(a));
+        }
+        let (t, new) = prov.record(d.head, children, d.bindings);
+        if contribution {
+            origins.note(t, Origin::Rule(i));
+        }
+        changed |= new;
+    }
+    changed
+}
+
+/// Make the stuck instances the rules found since `seen` known to the next
+/// round (Rule 3); whether there were any.
+fn learn_stucks(recs: &[Rec], seen: &mut [usize], known: &RefCell<stuck::Known>) -> bool {
+    let mut grew = false;
+    for (rec, n) in recs.iter().zip(seen.iter_mut()) {
+        let found = rec.found.borrow();
+        for st in &found[*n..] {
+            known.borrow_mut().add(st);
+            grew = true;
+        }
+        *n = found.len();
+    }
+    grew
 }
 
 /// Read the policy facts of the final fact set, and derive `stuck/4`.
@@ -687,13 +722,7 @@ pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
         negations: &negations,
         found: RefCell::new(Vec::new()),
     };
-    let all = Window::below(store.len());
-    let src = Src {
-        store: &store,
-        body: &plan,
-        win: vec![all; body.len()],
-        all,
-    };
+    let src = Src::whole(&store, &plan, body.len());
     Ok(eval_body(body, &src, &rec)?
         .into_iter()
         .map(|r| {

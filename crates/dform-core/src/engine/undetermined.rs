@@ -9,7 +9,7 @@ use super::nulls::Rec;
 use super::provenance::Prov;
 use crate::ast::{Atom, Lit, RuleStmt, Term};
 use crate::ir::ops;
-use crate::ir::store::{Store, Window};
+use crate::ir::store::Store;
 use crate::stuck::{self, Stuck};
 use anyhow::Result;
 use std::cell::RefCell;
@@ -66,7 +66,6 @@ pub(super) fn may_derive_over(
     over: &[usize],
     skip: &BTreeSet<usize>,
 ) -> Result<Vec<stuck::MayDerive>> {
-    let all = Window::below(store.len());
     let rule_of = |i: usize| -> (&RuleStmt, &ops::Body) { (&c.rules[i], &c.plans[i].body) };
     let mut out: Vec<stuck::MayDerive> = Vec::new();
     let mut transitive: BTreeSet<Atom> = BTreeSet::new();
@@ -84,20 +83,10 @@ pub(super) fn may_derive_over(
                 }
                 // The prefix as it ran; what it finds stuck is already known.
                 let rec = Rec {
-                    rule: i,
-                    head: &r.head,
                     text: "",
-                    known,
-                    aggregates: &c.aggregates,
-                    negations: &c.negations,
-                    found: RefCell::new(Vec::new()),
+                    ..c.rec(i, known)
                 };
-                let src = Src {
-                    store,
-                    body,
-                    win: vec![all; r.body.len()],
-                    all,
-                };
+                let src = Src::whole(store, body, r.body.len());
                 for row in eval_body(&r.body[..j], &src, &rec)? {
                     let pat = stuck::as_read(&read_pattern(a, &row.s));
                     for (read, nulls) in heads.borrow().matching(&pat) {
@@ -172,8 +161,6 @@ pub(super) fn derive_stuck(
     stucks: &[Stuck],
     s: usize,
 ) -> Result<BTreeSet<Stuck>> {
-    let hi = prov.store.len();
-    let all = Window::below(hi);
     let mut found: Vec<Stuck> = stucks.to_vec();
     for (i, r) in c.rules.iter().enumerate() {
         if c.rule_strata[i].last().is_some_and(|&t| t < s) {
@@ -182,21 +169,8 @@ pub(super) fn derive_stuck(
         if !stuck::can_stick(&r.head, &r.body, &c.aggregates) {
             continue;
         }
-        let rec = Rec {
-            rule: i,
-            head: &r.head,
-            text: &c.rule_text[i],
-            known,
-            aggregates: &c.aggregates,
-            negations: &c.negations,
-            found: RefCell::new(Vec::new()),
-        };
-        let src = Src {
-            store: &prov.store,
-            body: &c.plans[i].body,
-            win: vec![all; r.body.len()],
-            all,
-        };
+        let rec = c.rec(i, known);
+        let src = Src::whole(&prov.store, &c.plans[i].body, r.body.len());
         eval_rule(r, &c.plans[i], &src, &rec)?;
         found.extend(rec.found.into_inner());
     }
