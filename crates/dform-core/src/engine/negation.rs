@@ -44,6 +44,38 @@ pub(super) fn eval_not(grounded: &Atom, src: &Src, s: &HashMap<String, Value>, r
         );
         return false;
     }
+    let Some(unknown) = unknown_matches(grounded, src, helper) else {
+        return false;
+    };
+    if !unknown.is_empty() {
+        rec.stuck(
+            s,
+            unknown,
+            format!("not {}(..) against an open/secret null", grounded.pred),
+        );
+        return false;
+    }
+    let known = rec.known.borrow();
+    let nulls = known.blocking(grounded);
+    if (!nulls.is_empty() || known.any(grounded)) && !planted(Rule3Clause::Negation) {
+        rec.stuck(
+            s,
+            nulls,
+            format!(
+                "not {}: {} has a stuck instance that may derive it",
+                spell::atom(grounded),
+                grounded.pred
+            ),
+        );
+        return false;
+    }
+    true
+}
+
+/// The facts `grounded` matches in the store: `None` when one equals it,
+/// else the nulls of those equal to it only Unknown-ly (none for a helper,
+/// whose rows the body decides).
+fn unknown_matches(grounded: &Atom, src: &Src, helper: bool) -> Option<BTreeSet<String>> {
     // Every column is bound: an index lookup on all of them.
     let rel = ops::Rel::of(grounded);
     let key: ops::Key = (0..rel.arity).collect();
@@ -77,7 +109,7 @@ pub(super) fn eval_not(grounded: &Atom, src: &Src, s: &HashMap<String, Value>, r
             }
         }
         match t {
-            Truth::True => return false,
+            Truth::True => return None,
             // Another row's value: equal to this one only were their
             // nulls the same, when the body would agree on both.
             Truth::Unknown if helper => {}
@@ -91,27 +123,5 @@ pub(super) fn eval_not(grounded: &Atom, src: &Src, s: &HashMap<String, Value>, r
             Truth::False => {}
         }
     }
-    if !unknown.is_empty() {
-        rec.stuck(
-            s,
-            unknown,
-            format!("not {}(..) against an open/secret null", grounded.pred),
-        );
-        return false;
-    }
-    let known = rec.known.borrow();
-    let nulls = known.blocking(grounded);
-    if (!nulls.is_empty() || known.any(grounded)) && !planted(Rule3Clause::Negation) {
-        rec.stuck(
-            s,
-            nulls,
-            format!(
-                "not {}: {} has a stuck instance that may derive it",
-                spell::atom(grounded),
-                grounded.pred
-            ),
-        );
-        return false;
-    }
-    true
+    Some(unknown)
 }
