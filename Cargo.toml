@@ -11,6 +11,7 @@ members = [
     "crates/dform-provider-ovh",
     "crates/dform-provider-postgres",
     "crates/dform-provider-vault",
+    "crates/dform-provider-tailscale",
     "crates/dform-direct",
     "crates/dform-proptest",
     "crates/dform-s3",
@@ -37,6 +38,7 @@ default-members = [
     "crates/dform-provider-ovh",
     "crates/dform-provider-postgres",
     "crates/dform-provider-vault",
+    "crates/dform-provider-tailscale",
     "crates/dform-direct",
     "crates/dform-proptest",
     "crates/dform-s3",
@@ -122,6 +124,8 @@ dform-provider-ovh = { path = "crates/dform-provider-ovh", features = ["fake"] }
 dform-provider-postgres = { path = "crates/dform-provider-postgres", features = ["fake"] }
 # tests/vault_scheme.rs: the Vault provider's scheme against a fake Vault.
 dform-provider-vault = { path = "crates/dform-provider-vault", features = ["fake"] }
+# tests/provider_tailscale.rs: the Tailscale provider against a fake API.
+dform-provider-tailscale = { path = "crates/dform-provider-tailscale", features = ["fake"] }
 # tests/host_wasm.rs writes a component from its text; tests/host_grpc.rs
 # calls the host as a native SDK provider does.
 wat = "1"

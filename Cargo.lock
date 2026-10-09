@@ -1266,6 +1266,7 @@ dependencies = [
  "dform-mock",
  "dform-provider-ovh",
  "dform-provider-postgres",
+ "dform-provider-tailscale",
  "dform-provider-vault",
  "dform-s3",
  "dform-sdk",
@@ -1485,6 +1486,17 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-rustls",
+]
+
+[[package]]
+name = "dform-provider-tailscale"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dform-provider-tailscale",
+ "dform-sdk",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

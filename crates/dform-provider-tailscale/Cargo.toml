@@ -1,0 +1,27 @@
+[package]
+name = "dform-provider-tailscale"
+version = "0.1.0"
+license = "Apache-2.0"
+edition = "2024"
+publish = false
+
+# The Tailscale provider (R-197), written with the SDK: a tailnet's policy
+# file, its auth keys, its DNS settings and the devices on it, over the
+# Tailscale API v2, every request through the host's HTTP client.
+[features]
+# `fake`: a Tailscale API in the test process (`src/fake.rs`), for tests.
+fake = []
+
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dform-sdk = { path = "../dform-sdk" }
+
+[dev-dependencies]
+dform-provider-tailscale = { path = ".", features = ["fake"] }
+
+# `dform_sdk::provider!` also writes the component's exports, under the
+# `component` feature on wasm; this provider is native only for now.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("component"))'] }
