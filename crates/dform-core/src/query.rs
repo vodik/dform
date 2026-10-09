@@ -73,11 +73,22 @@ pub fn address(src: &str, why: bool) -> Result<Option<Query>> {
 /// its path alone, `k3s.admin`, with an attribute path after it
 /// (`k3s.server.public_ip`), read against the resources `facts` wants:
 /// the longest prefix of the path that names one is the resource, the
-/// rest its attribute. Every resource it names, of any type when none is
+/// rest its attribute, which reaches into a list as the plan prints it,
+/// by an element's key or position (`pg.spec.ports[port=5432,protocol=TCP].protocol`,
+/// `vm.tags[0]`). Every resource it names, of any type when none is
 /// given; empty when it names none.
 pub fn printed(src: &str, facts: &BTreeSet<Atom>) -> Vec<(crate::ir::Address, Option<String>)> {
+    use crate::report::fold::Step;
     let src = src.trim();
-    if src.is_empty() || src.contains('[') {
+    // A selector the plan prints, never `T["A"]`'s.
+    let selects = |p: &str| {
+        let toks = crate::report::fold::tokens(p);
+        toks.iter().map(|t| t.text.as_str()).collect::<String>() == p
+            && toks
+                .iter()
+                .all(|t| matches!(t.step, Step::Key(_) | Step::Index(_) | Step::Keyed(_)))
+    };
+    if src.is_empty() {
         return Vec::new();
     }
     let (typ, rest) = match src.split_once(char::is_whitespace) {
@@ -85,6 +96,9 @@ pub fn printed(src: &str, facts: &BTreeSet<Atom>) -> Vec<(crate::ir::Address, Op
         Some(_) => return Vec::new(),
         None => (None, src),
     };
+    if !selects(rest) {
+        return Vec::new();
+    }
     // As stored (R-112): a quoted segment keeps its quotes.
     let segs = crate::ir::path_segments(rest);
     fn s(t: &Term) -> Option<&str> {
@@ -100,6 +114,9 @@ pub fn printed(src: &str, facts: &BTreeSet<Atom>) -> Vec<(crate::ir::Address, Op
         .filter(|(t, _)| typ.is_none_or(|x| x == *t))
         .collect();
     for k in (1..=segs.len()).rev() {
+        if segs[..k].iter().any(|s| s.contains('[')) {
+            continue;
+        }
         let name = segs[..k].join(".");
         let path = segs[k..].join(".");
         let found: Vec<_> = wants

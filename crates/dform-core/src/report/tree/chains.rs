@@ -227,7 +227,7 @@ impl Surface<'_, '_> {
             _ => false,
         };
         if let Some((p, keys)) = next.filter(|(p, _)| !key(*p)) {
-            let focus = (!keys.is_empty()).then_some(Focus { keys, value: None });
+            let focus = (!keys.is_empty()).then_some(Focus::from(keys));
             self.winner_chain(c, p, focus.as_ref(), depth + 1, w);
         }
     }
@@ -249,7 +249,7 @@ pub(super) fn contribution_focus(fact: &Fact, path: &str) -> Option<Focus> {
             _ => None,
         })
         .collect();
-    (!keys.is_empty()).then_some(Focus { keys, value: None })
+    (!keys.is_empty()).then_some(Focus::from(keys))
 }
 
 /// Whether contribution `f` (an `arg/5`) holds the leaf at printed path
@@ -663,10 +663,7 @@ impl Printer<'_> {
         let Some(id) = self.circuit.fact_id(&engine::circuit_fact(attr)) else {
             return Vec::new();
         };
-        let focus = (!keys.is_empty()).then(|| Focus {
-            keys: keys.to_vec(),
-            value: None,
-        });
+        let focus = (!keys.is_empty()).then(|| Focus::from(keys.to_vec()));
         self.chain(rules, id, focus.as_ref(), stack_keys)
     }
 

@@ -52,11 +52,7 @@ pub fn why_not(pattern: &str, res: &EvalResult, redact: &Redactor) -> Result<Str
                 [Lit::Pos(a)] => a.clone(),
                 _ => bail!("why: expected one fact pattern, got '{pattern}'"),
             },
-            _ => bail!(
-                "why: expected an address such as 'net.subnet[\"private-a\"]' or \
-                 'net.subnet[\"private-a\"].cidr', a row such as 'zone(\"us-east-1c\", n)', \
-                 or a deny such as 'deny \"MESSAGE\"', got '{pattern}'"
-            ),
+            _ => bail!("why: expected {}, got '{pattern}'", super::FORMS),
         },
     };
     let mut w = WhyNot::new(res, redact);

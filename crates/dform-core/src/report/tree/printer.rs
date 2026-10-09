@@ -7,16 +7,31 @@ use crate::ast::{Atom, Lit, Term};
 use crate::circuit::{Circuit, Fact, Leaf, NodeId, View};
 use crate::engine;
 use crate::query::Redactor;
+use crate::report::fold::{self, Step, Tok};
 use crate::value::Value;
 use anyhow::Result;
 use std::collections::BTreeSet;
 
 /// The part of an object attribute a pattern named: the keys below the
-/// top-level path, and the value there (`None`: any).
+/// top-level path, the steps past a list after them, as the plan prints
+/// them (`[port=5432,protocol=TCP].protocol`), and the value there
+/// (`None`: any).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Focus {
     pub(super) keys: Vec<String>,
+    pub(super) below: Vec<Tok>,
     pub(super) value: Option<Value>,
+}
+
+/// The part of an object at `keys`, any value.
+impl From<Vec<String>> for Focus {
+    fn from(keys: Vec<String>) -> Focus {
+        Focus {
+            keys,
+            below: Vec::new(),
+            value: None,
+        }
+    }
 }
 
 impl Focus {
@@ -25,14 +40,35 @@ impl Focus {
         &self.keys
     }
 
+    /// The steps past a list below [`Focus::keys`]: an element by its key
+    /// or position, and the keys inside it.
+    pub fn below(&self) -> &[Tok] {
+        &self.below
+    }
+
+    /// The part of `v` at the keys.
+    fn at<'v>(&self, v: &'v Value) -> Option<&'v Value> {
+        self.keys.iter().try_fold(v, |at, k| match at {
+            Value::Obj(m) => m.get(k),
+            _ => None,
+        })
+    }
+
+    /// A contribution's value `v` holds the part: its keys, and the value
+    /// there (an element past a list is not one a contribution need
+    /// hold whole: the merge may have defaulted its keys).
     pub(super) fn holds(&self, v: &Value) -> bool {
-        let mut at = v;
-        for k in &self.keys {
-            let Value::Obj(m) = at else { return false };
-            let Some(x) = m.get(k) else { return false };
-            at = x;
-        }
-        self.value.as_ref().is_none_or(|w| contains(at, w))
+        self.at(v).is_some_and(|at| {
+            !self.below.is_empty() || self.value.as_ref().is_none_or(|w| contains(at, w))
+        })
+    }
+
+    /// The merged value `v` has the part the pattern named: its keys,
+    /// the element and the keys past a list, and the value there.
+    fn named_in(&self, v: &Value) -> bool {
+        self.at(v)
+            .and_then(|at| fold::reach(at, &self.below))
+            .is_some_and(|at| self.value.as_ref().is_none_or(|w| contains(at, w)))
     }
 }
 
@@ -69,10 +105,26 @@ pub fn find(pattern: &Atom, facts: &BTreeSet<Atom>) -> Result<Vec<(Atom, Option<
     let Term::Val(Value::Str(path)) = &pattern.args[2] else {
         return Ok(vec![]);
     };
-    // A quoted segment is one key (R-77): `annotations."a.b/c"`.
-    let mut keys = crate::ir::path_keys(path);
-    let top = crate::ir::path_segments(path)[0].to_string();
-    keys.remove(0);
+    // A quoted segment is one key (R-77): `annotations."a.b/c"`; past a
+    // list, the element by its key or position as the plan prints it,
+    // `ports[port=5432,protocol=TCP].protocol`.
+    let toks = fold::tokens(path);
+    let Some(Tok {
+        step: Step::Key(top),
+        ..
+    }) = toks.first()
+    else {
+        return Ok(vec![]);
+    };
+    let top = top.clone();
+    let keys: Vec<String> = toks[1..]
+        .iter()
+        .map_while(|t| match &t.step {
+            Step::Key(k) => Some(crate::ir::segment_key(k).into_owned()),
+            _ => None,
+        })
+        .collect();
+    let below = toks[1 + keys.len()..].to_vec();
     let value = match &pattern.args[3] {
         Term::Var(_) | Term::Wildcard => None,
         t => match t.ground() {
@@ -80,16 +132,16 @@ pub fn find(pattern: &Atom, facts: &BTreeSet<Atom>) -> Result<Vec<(Atom, Option<
             None => return Ok(vec![]),
         },
     };
-    if keys.is_empty() && !matches!(value, Some(Value::Obj(_))) {
+    if keys.is_empty() && below.is_empty() && !matches!(value, Some(Value::Obj(_))) {
         return Ok(vec![]);
     }
-    let focus = Focus { keys, value };
+    let focus = Focus { keys, below, value };
     let mut relaxed = pattern.clone();
     relaxed.args[2] = Term::Val(Value::Str(top));
     relaxed.args[3] = Term::Wildcard;
     Ok(matched(&relaxed)?
         .into_iter()
-        .filter(|a| matches!(&a.args[3], Term::Val(v) if focus.holds(v)))
+        .filter(|a| matches!(&a.args[3], Term::Val(v) if focus.named_in(v)))
         .map(|a| (a, Some(focus.clone())))
         .collect())
 }

@@ -510,7 +510,7 @@ pub(super) fn leaf_writers(
 }
 
 /// The paths of type `typ` whose value is its schema's default.
-pub(super) fn type_defaults(all: &BTreeSet<Atom>, typ: &str) -> BTreeSet<String> {
+pub(crate) fn type_defaults(all: &BTreeSet<Atom>, typ: &str) -> BTreeSet<String> {
     all.iter()
         .filter(|f| f.pred == "type_default")
         .filter_map(|f| match f.args.as_slice() {
@@ -799,7 +799,7 @@ pub(super) fn set_element(path: &str, sets: &BTreeSet<String>) -> Option<String>
     (!list.contains('[') && sets.contains(&schema_path(list))).then(|| list.to_string())
 }
 
-pub(super) fn schema_path(path: &str) -> String {
+pub(crate) fn schema_path(path: &str) -> String {
     tokens(path)
         .into_iter()
         .filter_map(|t| match t.step {

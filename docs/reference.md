@@ -1519,8 +1519,8 @@ made; the plan itself says what it is.
   folds: an update says the leaves that change, a value kept from
   creation `user_data differs (bootstrap): kept`. `-v` lays a value out
   the same, notes and all; `-vv` says every leaf on its own line, with
-  its chain, a default's with none; `why` says each element and leaf
-  with the chain of the write that made it.
+  its chain, a default's with none; `why` says a value as the plan
+  does, notes and all, with the chain of the write that made it.
   A value a read decoded says the row it is, not its content (R-131): a
   resource whose body is a document (`resource T "${d.metadata.name}" =
   d where d in yaml.decode(io.read("vendor/crds.yml"))`), and an attribute whose one
@@ -3319,7 +3319,11 @@ An address is a pattern too, as plan prints it or in full: `why 'net.vpc
 main.vpc'`, its path alone `why main.vpc`, or `why 'net.vpc["main.vpc"]'`
 explains the resource; `why main.vpc.cidr` (the longest prefix of the
 path that names a resource is the resource, the rest its attribute) or
-`why 'T["A"].path'` the attribute. An input or a `let` is named as the
+`why 'T["A"].path'` the attribute. Past a list the path goes on as the
+plan prints it: an element of a keyed list by its key, `why
+'pg.spec.ports[port=5432,protocol=TCP].protocol'`, any element by its
+position (`pg.spec.ports[0]`, said by its key when it has one); an
+element or a field the value does not have names the nearest it does. An input or a `let` is named as the
 stack reads it: `why replicas`, `why nodes.count` (a leaf of an object
 input), `why traefik.acme_email` (a used module's). An `attr`/`arg`
 pattern may name part of an object attribute, by dotted path or by

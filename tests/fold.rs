@@ -148,10 +148,12 @@ resource kube.service pg {
         ),
         "{plan}"
     );
+    // `why` says the value as the plan does, the default with its note.
     let why = run(&s, &["why", "pg.spec.ports", "main.df"]);
     assert!(
         why.contains(
-            "kube.service pg.spec.ports[0] = {port: 1, protocol: \"TCP\"}\n  \
+            "kube.service pg.spec.ports = [\n  {\n    port: 1,\n    \
+             protocol: \"TCP\" (schema default),\n  },\n  { port: 2, protocol: \"UDP\" },\n]\n  \
              = [{port: 1}, {port: 2, protocol: \"UDP\"}]  main.df:6\n"
         ),
         "{why}"

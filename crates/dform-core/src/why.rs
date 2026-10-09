@@ -64,6 +64,111 @@ pub type Lookup<'a> = dyn Fn(&str) -> Option<String> + 'a;
 /// A text an attribute of a resource maps to, when it has one.
 pub type AttrLookup<'a> = dyn Fn(&ir::Address, &str) -> Option<String> + 'a;
 
+/// The forms `why` takes, as the plan prints them.
+pub(crate) const FORMS: &str = "an address as the plan prints it, 'net.vpc main' or its path \
+     'main', an attribute such as 'main.cidr' or \
+     'pg.spec.ports[port=5432,protocol=TCP].protocol', an input such as 'nodes.count', a \
+     row such as 'zone(\"us-east-1c\", n)', or a deny such as 'deny \"MESSAGE\"'";
+
+/// A pattern that names a resource's list as the plan prints it, past
+/// an element the list does not have (`pg.spec.ports[port=1]`) or a field
+/// the element does not (`pg.spec.ports[0].prot`): what it names, and
+/// the nearest the value has, as the plan prints it.
+fn unreached(pattern: &str, facts: &BTreeSet<Atom>) -> Option<String> {
+    use report::fold::{Step, tokens};
+    let src = pattern.trim();
+    let (name, rest) = src.split_at(src.find('[')?);
+    for (addr, list) in query::printed(name, facts) {
+        let Some(list) = list else { continue };
+        let path = format!("{list}{rest}");
+        let toks = tokens(&path);
+        let Some(Step::Key(top)) = toks.first().map(|t| &t.step) else {
+            continue;
+        };
+        let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+        let Some(attr) = facts.iter().find(|a| {
+            a.pred == "attr"
+                && a.args.len() == 4
+                && a.args[..3] == [s(&addr.typ), s(&addr.name), s(top)]
+        }) else {
+            continue;
+        };
+        let (Some(Term::Val(v)), shape) = (attr.args.get(3), Shape::of(facts, attr)) else {
+            continue;
+        };
+        // The steps that reach, each element as the plan prints it, and
+        // what the first that does not reaches into.
+        let (mut at, mut reached) = (v, top.clone());
+        let mut k = 1;
+        while let Some(next) = toks
+            .get(k)
+            .and_then(|t| report::fold::reach(at, std::slice::from_ref(t)))
+        {
+            reached = match at {
+                Value::List(xs) => {
+                    let j = xs.iter().position(|x| std::ptr::eq(x, next))?;
+                    shape.element(&reached, j, next)
+                }
+                _ => reached + &toks[k].text,
+            };
+            (at, k) = (next, k + 1);
+        }
+        let said: String = toks.iter().map(|t| t.text.as_str()).collect();
+        let past_list = toks[..k.min(toks.len())]
+            .iter()
+            .any(|t| !matches!(t.step, Step::Key(_)));
+        let wrote = match toks.get(k) {
+            Some(t) => t.text.as_str(),
+            None if said != path => &path[said.len()..],
+            None => continue,
+        };
+        let own = name.strip_suffix(list.as_str()).unwrap_or_default();
+        let named = report::attribute(&addr, top) + &reached[top.len()..];
+        let (what, rule, near) = match at {
+            Value::List(xs) => (
+                format!("no element {wrote}"),
+                "an element is named as the plan prints it, by its key in a keyed list, \
+                 else by its position",
+                xs.iter()
+                    .enumerate()
+                    .map(|(j, x)| shape.element(&reached, j, x))
+                    .collect::<Vec<_>>(),
+            ),
+            Value::Obj(m)
+                if past_list && matches!(toks.get(k).map(|t| &t.step), Some(Step::Key(_))) =>
+            {
+                (
+                    format!("no field {}", wrote.trim_start_matches('.')),
+                    "a field is named by its key",
+                    m.keys()
+                        .map(|key| crate::ir::path_join(&reached, key))
+                        .collect(),
+                )
+            }
+            _ if toks.get(k).is_some_and(|t| !matches!(t.step, Step::Key(_))) => {
+                return Some(format!(
+                    "why: {named} is not a list, so it has no element {wrote}"
+                ));
+            }
+            _ => continue,
+        };
+        // A position past the end is nearest the last; else the fewest edits.
+        let nearest = match toks.get(k).map(|t| &t.step) {
+            Some(Step::Index(n)) => near.get((*n).min(near.len().saturating_sub(1))),
+            _ => near
+                .iter()
+                .min_by_key(|e| crate::diag::edits(wrote, &e[reached.len()..])),
+        };
+        return Some(match nearest {
+            Some(e) => {
+                format!("why: {named} has {what}: {rule}\n  help: the nearest it has is '{own}{e}'")
+            }
+            None => format!("why: {named} has {what}: it is empty"),
+        });
+    }
+    None
+}
+
 /// `dform why PATTERN`, as text.
 pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
     if let Some(message) = deny_message(pattern)? {
@@ -72,6 +177,9 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
     // A copy as `c[t]` names it, `volume["forgejo_backup"].tag`: its scope.
     if let Some(p) = scope::normal(pattern.trim(), cx.res) {
         return why(&p, how, cx);
+    }
+    if let Some(e) = unreached(pattern, &cx.res.facts) {
+        bail!(e);
     }
     // What the program does not derive yet, a resource rule the plan
     // holds as a group: why not, and the tick it waits for. A name read
@@ -85,7 +193,13 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
             }
             return Ok(out);
         }
-        let mut out = not::why_not(pattern, cx.res, cx.redact)?;
+        // An attribute as the plan prints it is the attribute of the
+        // resource it names.
+        let full = match query::printed(pattern, &cx.res.facts).as_slice() {
+            [(addr, Some(path))] => addr.attr(path),
+            _ => pattern.to_string(),
+        };
+        let mut out = not::why_not(&full, cx.res, cx.redact)?;
         if let Some(w) = cx.when.and_then(|when| when(pattern.trim())) {
             out.push_str(&cx.redact.text(&format!("{w}\n")));
         }
@@ -224,21 +338,22 @@ pub fn why_json(pattern: &str, how: As, cx: &Context) -> Result<serde_json::Valu
     for m in &matched {
         let (a, focus) = m;
         let keys = focus.as_ref().map(tree::Focus::keys).unwrap_or_default();
-        let fact = match head_name(a, cx.stack_keys).filter(|_| a.pred == "attr") {
-            Some(n) => keys.iter().fold(n, |p, k| crate::ir::path_join(&p, k)),
-            None => cx.redact.surface_atom(a),
+        let below = focus.as_ref().map(tree::Focus::below).unwrap_or_default();
+        let reached = match a.pred.as_str() {
+            "attr" => Shape::of(&cx.res.facts, a).reach(a, keys, below),
+            _ => None,
+        };
+        // As the head names it, at the path the pattern named.
+        let fact = match (head_name(a, cx.stack_keys), &reached) {
+            (Some(n), Some((_, top, path))) => match n.strip_suffix(top.as_str()) {
+                Some(head) => format!("{head}{path}"),
+                None => n,
+            },
+            _ => cx.redact.surface_atom(a),
         };
         let mut o = serde_json::json!({ "fact": fact });
-        if a.pred == "attr"
-            && let Some(Term::Val(v)) = a.args.get(3)
-        {
-            let v = keys.iter().try_fold(v, |v, k| match v {
-                Value::Obj(m) => m.get(k),
-                _ => None,
-            });
-            if let Some(v) = v {
-                o["value"] = cx.redact.json(v);
-            }
+        if let Some((v, ..)) = reached {
+            o["value"] = cx.redact.json(v);
         }
         let text = derivations(std::slice::from_ref(m), how, cx)?;
         o["text"] = serde_json::Value::String(cx.redact.text(&text));
@@ -275,12 +390,7 @@ fn matches(pattern: &str, facts: &BTreeSet<Atom>) -> Result<Vec<Matched>> {
                 None => query::parse(pattern)?,
             };
             let query::Query::Body { body, .. } = parsed else {
-                bail!(
-                    "why: expected an address such as 'net.vpc main' or \
-                     'net.vpc[\"main\"].cidr', an input such as 'nodes.count', a fact \
-                     pattern such as 'want(net.vpc, N)', or a deny such as 'deny \"MESSAGE\"', \
-                     got '{pattern}'"
-                );
+                bail!("why: expected {FORMS}, got '{pattern}'");
             };
             let [Lit::Pos(pat)] = body.as_slice() else {
                 bail!("why: expected one fact pattern, got '{pattern}'");
@@ -505,8 +615,7 @@ pub fn chain(
     let style = report::Style::PLAIN;
     match a.pred.as_str() {
         "attr" => {
-            let keys = focus.map(tree::Focus::keys).unwrap_or_default();
-            let items = c.leaves(a, &head_name(a, stack_keys)?, keys);
+            let items = c.leaves(a, &head_name(a, stack_keys)?, focus);
             Some(report::chains_text(&items, "", style, whole))
         }
         "want" => c.want(a, whole),
@@ -582,7 +691,7 @@ impl Chains<'_> {
                 continue;
             };
             if (ft, fname) == (t, n) {
-                items.extend(self.leaves(f, path, &[]));
+                items.extend(self.leaves(f, path, None));
             }
         }
         out.push_str(&report::chains_text(&items, "  ", style, whole));
@@ -622,13 +731,18 @@ impl Chains<'_> {
         out
     }
 
-    /// `T NAME.path = value` per leaf of attribute fact `f` below `keys`,
-    /// each with its chain; a cell's by its own name. The leaves one
-    /// contribution wrote fold to one value where the writers diverge
-    /// (R-124), with that contribution's chain.
-    fn leaves(&self, f: &Atom, head: &str, keys: &[String]) -> Vec<report::ChainItem> {
+    /// `T NAME.path = value` per leaf of attribute fact `f` at the part
+    /// `focus` names, each with its chain; a cell's by its own name. The
+    /// leaves one contribution wrote fold to one value where the writers
+    /// diverge (R-124), with that contribution's chain; a leaf no write of
+    /// the program made that the schema defaults is inside the value that
+    /// holds it with its note, as the plan says it (R-217).
+    fn leaves(&self, f: &Atom, head: &str, focus: Option<&tree::Focus>) -> Vec<report::ChainItem> {
         let (printer, res, stack_keys) = (self.printer, self.res, self.stack_keys);
-        let Some((v, top)) = attr_value(f, keys) else {
+        let keys = focus.map(tree::Focus::keys).unwrap_or_default();
+        let below = focus.map(tree::Focus::below).unwrap_or_default();
+        let shape = Shape::of(&res.facts, f);
+        let Some((v, top, base)) = shape.reach(f, keys, below) else {
             return Vec::new();
         };
         let Leaves {
@@ -636,7 +750,7 @@ impl Chains<'_> {
             paths,
             writers,
             elem,
-        } = self.found(f, v, top, keys);
+        } = self.found(f, v, &base, &shape);
         let mut items = Vec::new();
         let printed = |p: &str| match head.strip_suffix(top.as_str()) {
             Some(addr) => format!("{addr}{p}"),
@@ -644,46 +758,52 @@ impl Chains<'_> {
         };
         let surface = |v: &Value| printer.redact.surface(v);
         // A plain leaf of a secret object is `(sensitive)` (R-124
-        // amendment 2): its value is no secret elsewhere.
-        let whole = match f.args.get(3) {
-            Some(Term::Val(w)) => w,
-            _ => v,
+        // amendment 2): its value is no secret elsewhere. Past a list,
+        // within the element the pattern named.
+        let (whole, outer) = match (f.args.get(3), below.is_empty()) {
+            (Some(Term::Val(w)), true) => (w, keys),
+            _ => (v, &[][..]),
         };
-        let hidden = |keys: &[String], leaf: &Value| {
+        let hidden = |rel: &[String], leaf: &Value| {
+            let keys: Vec<String> = outer.iter().chain(rel).cloned().collect();
             !printer.redact.is_secret(leaf)
-                && report::surface_in(printer.redact, whole, keys, leaf) == "(sensitive)"
+                && report::surface_in(printer.redact, whole, &keys, leaf) == "(sensitive)"
         };
-        // `why` says each leaf's chain: a default is its own line, with its own.
-        for g in report::fold::fold(&paths, &writers, &vec![false; paths.len()]) {
-            let laid = |v: &Value| {
-                crate::fmt::value::Tree::of(v, &|v| {
-                    let open =
-                        matches!(v, Value::Obj(_) | Value::List(_)) && !printer.redact.is_secret(v);
-                    (!open).then(|| surface(v))
-                })
-            };
+        let noted: Vec<bool> = paths
+            .iter()
+            .zip(&writers)
+            .map(|(p, w)| w.is_none() && shape.defaulted(p))
+            .collect();
+        let laid = |path: &str, v: &Value| self.laid(f, path, v, &shape);
+        for g in report::fold::fold(&paths, &writers, &noted) {
             if let [i] = g.leaves.as_slice() {
-                let (keys, leaf) = &found[*i];
-                let chain = match (elem[*i], writers[*i]) {
-                    (true, Some(w)) => self.relative_chain(
+                let (rel, leaf) = &found[*i];
+                let chain = match writers[*i] {
+                    Some(w) if elem[*i] || !below.is_empty() => self.relative_chain(
                         printer.contribution_chain(&res.rules, w, &paths[*i], stack_keys),
                     ),
-                    _ => self.relative_chain(printer.attr_chain(&res.rules, f, keys, stack_keys)),
+                    // A default no write of the program made has no
+                    // chain: its note says what made it.
+                    None if noted[*i] => Vec::new(),
+                    _ => {
+                        let keys: Vec<String> = keys.iter().chain(rel).cloned().collect();
+                        self.relative_chain(printer.attr_chain(&res.rules, f, &keys, stack_keys))
+                    }
                 };
-                // A list is laid out as a fold is.
-                if matches!(leaf, Value::List(xs) if !xs.is_empty())
+                // A list is laid out as a fold is; a default with its note.
+                if (matches!(leaf, Value::List(xs) if !xs.is_empty()) || noted[*i])
                     && !printer.redact.is_secret(leaf)
-                    && !hidden(keys, leaf)
+                    && !hidden(rel, leaf)
                 {
                     items.push(report::ChainItem {
                         head: format!("{} = ", printed(&paths[*i])),
                         shown: surface(leaf),
                         chain,
-                        value: Some(laid(leaf)),
+                        value: Some(laid(&paths[*i], leaf)),
                     });
                     continue;
                 }
-                let shown = match hidden(keys, leaf) {
+                let shown = match hidden(rel, leaf) {
                     true => "(sensitive)".to_string(),
                     false => surface(leaf),
                 };
@@ -697,18 +817,19 @@ impl Chains<'_> {
             }
             let values: Vec<crate::fmt::value::Tree> = found
                 .iter()
-                .map(|(keys, leaf)| match hidden(keys, leaf) {
+                .zip(&paths)
+                .map(|((rel, leaf), path)| match hidden(rel, leaf) {
                     true => crate::fmt::value::Tree::Leaf("(sensitive)".into()),
-                    false => laid(leaf),
+                    false => laid(path, leaf),
                 })
                 .collect();
             let w = writers[g.leaves[0]].expect("a fold has its writer");
             // The part of the value the fold prints, as a chain's step
-            // that is the literal itself says it.
+            // that is the literal itself says it: the program's leaves.
             let mut part = Value::Obj(Default::default());
-            for &i in &g.leaves {
-                let (keys, leaf) = &found[i];
-                let below = &keys[(g.depth - report::fold::tokens(top).len()).min(keys.len())..];
+            for &i in g.leaves.iter().filter(|&&i| !noted[i]) {
+                let (rel, leaf) = &found[i];
+                let below = &rel[(g.depth - report::fold::tokens(&base).len()).min(rel.len())..];
                 nest(&mut part, below, leaf.clone());
             }
             items.push(report::ChainItem {
@@ -722,20 +843,82 @@ impl Chains<'_> {
         items
     }
 
-    /// The leaves of `v`, attribute fact `f`'s value at `top` below `keys`;
-    /// a list several writers add to (a set, R-158) said element by element,
-    /// each with its own writer.
-    fn found(&self, f: &Atom, v: &Value, top: &str, keys: &[String]) -> Leaves {
+    /// Value `v` at printed path `path` of attribute fact `f` as a tree to
+    /// lay out, a list's elements at their paths as the plan prints them:
+    /// a leaf no write of the program made that the schema defaults
+    /// followed by its note (R-217).
+    fn laid(&self, f: &Atom, path: &str, v: &Value, shape: &Shape) -> crate::fmt::value::Tree {
+        use crate::fmt::value::Tree;
+        let redact = self.printer.redact;
+        let open = |v: &Value| matches!(v, Value::Obj(_) | Value::List(_)) && !redact.is_secret(v);
+        // Each leaf of `v` at its path, as `each` takes it.
+        fn walk(
+            v: &Value,
+            path: String,
+            open: &dyn Fn(&Value) -> bool,
+            shape: &Shape,
+            each: &mut dyn FnMut(&Value, String) -> Tree,
+        ) -> Tree {
+            match v {
+                Value::Obj(m) if open(v) => Tree::Obj(
+                    m.iter()
+                        .map(|(k, x)| {
+                            let at = crate::ir::path_join(&path, k);
+                            let t = walk(x, at, open, shape, each);
+                            (crate::fmt::value::key_text(k), t)
+                        })
+                        .collect(),
+                ),
+                Value::List(xs) if open(v) => Tree::List(
+                    xs.iter()
+                        .enumerate()
+                        .map(|(j, x)| walk(x, shape.element(&path, j, x), open, shape, each))
+                        .collect(),
+                ),
+                v => each(v, path),
+            }
+        }
+        // The leaves the schema defaults, and of them those no write made.
+        let mut defaulted = Vec::new();
+        if !shape.defaults.is_empty() {
+            walk(v, path.to_string(), &open, shape, &mut |_, p| {
+                if shape.defaulted(&p) {
+                    defaulted.push(p);
+                }
+                Tree::Leaf(String::new())
+            });
+        }
+        let noted: BTreeSet<&String> = defaulted
+            .iter()
+            .zip(self.printer.writers(f, &defaulted))
+            .filter_map(|(p, w)| w.is_none().then_some(p))
+            .collect();
+        walk(
+            v,
+            path.to_string(),
+            &open,
+            shape,
+            &mut |v, p| match noted.contains(&p) {
+                true => Tree::Noted(redact.surface(v), report::SCHEMA_DEFAULT.into()),
+                false => Tree::Leaf(redact.surface(v)),
+            },
+        )
+    }
+
+    /// The leaves of `v`, attribute fact `f`'s value at printed path
+    /// `base`, each by its keys below it; a list several writers add to
+    /// (a set, R-158) said element by element, each with its own writer.
+    fn found(&self, f: &Atom, v: &Value, base: &str, shape: &Shape) -> Leaves {
         let printer = self.printer;
         let mut found = Vec::new();
-        object_leaves(v, &mut keys.to_vec(), &mut found);
+        object_leaves(v, &mut Vec::new(), &mut found);
         // Each leaf's path from the resource (`spec.replicas`), and the
         // contribution that wrote it.
         let paths: Vec<String> = found
             .iter()
             .map(|(keys, _)| {
                 keys.iter()
-                    .fold(top.to_string(), |p, k| crate::ir::path_join(&p, k))
+                    .fold(base.to_string(), |p, k| crate::ir::path_join(&p, k))
             })
             .collect();
         let resource = matches!(f.args.first(), Some(Term::Val(Value::Str(t)))
@@ -764,8 +947,10 @@ impl Chains<'_> {
                     i += 1;
                     continue;
                 }
-                let at: Vec<String> = (0..xs.len())
-                    .map(|j| format!("{}[{j}]", paths[i]))
+                let at: Vec<String> = xs
+                    .iter()
+                    .enumerate()
+                    .map(|(j, x)| shape.element(&paths[i], j, x))
                     .collect();
                 let ws = printer.writers(f, &at);
                 if ws.iter().all(|w| *w == ws[0]) {
@@ -803,6 +988,107 @@ fn attr_value<'f>(f: &'f Atom, keys: &[String]) -> Option<(&'f Value, &'f String
         _ => None,
     })?;
     Some((v, top))
+}
+
+/// What the schema says of an attribute's type that the plan's paths
+/// and notes read: the paths whose value is its default (R-217), and
+/// each keyed list's keys (`type_list_key`), by schema path.
+struct Shape {
+    defaults: BTreeSet<String>,
+    lists: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+impl Shape {
+    /// The shape of attribute fact `f`'s type, from the schema's facts.
+    fn of(facts: &BTreeSet<Atom>, f: &Atom) -> Shape {
+        let Some(Term::Val(Value::Str(typ))) = f.args.first() else {
+            return Shape {
+                defaults: BTreeSet::new(),
+                lists: Default::default(),
+            };
+        };
+        let lists = facts
+            .iter()
+            .filter(|a| a.pred == "type_list_key")
+            .filter_map(|a| match a.args.as_slice() {
+                [
+                    Term::Val(Value::Str(t)),
+                    Term::Val(Value::Str(l)),
+                    Term::Val(ks),
+                ] if t == typ => {
+                    let ks = match ks {
+                        Value::List(ks) => ks
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(String::from)
+                            .collect(),
+                        Value::Str(k) => vec![k.clone()],
+                        _ => return None,
+                    };
+                    Some((l.clone(), ks))
+                }
+                _ => None,
+            })
+            .collect();
+        Shape {
+            defaults: report::fold::type_defaults(facts, typ),
+            lists,
+        }
+    }
+
+    /// The leaf at printed path `path` is where the schema gives a default.
+    fn defaulted(&self, path: &str) -> bool {
+        self.defaults.contains(&report::fold::schema_path(path))
+    }
+
+    /// Element `j` of the list at printed path `list`, `x`, as the plan
+    /// prints its path: by its key in a keyed list,
+    /// `spec.ports[port=5432,protocol=TCP]`, else by its position.
+    fn element(&self, list: &str, j: usize, x: &Value) -> String {
+        let label = self
+            .lists
+            .get(&report::fold::schema_path(list))
+            .zip(match x {
+                Value::Obj(m) => Some(m),
+                _ => None,
+            })
+            .and_then(|(ks, m)| {
+                ks.iter()
+                    .map(|k| Some(format!("{k}={}", spell::bare(m.get(k)?))))
+                    .collect::<Option<Vec<_>>>()
+            });
+        match label {
+            Some(kv) => format!("{list}[{}]", kv.join(",")),
+            None => format!("{list}[{j}]"),
+        }
+    }
+
+    /// Attribute fact `f`'s value below `keys`, and past a list `below`
+    /// (`[0].protocol`), its path, and the path the pattern named from the
+    /// resource as the plan prints it (`spec.ports[port=5432,protocol=TCP].protocol`).
+    fn reach<'f>(
+        &self,
+        f: &'f Atom,
+        keys: &[String],
+        below: &[report::fold::Tok],
+    ) -> Option<(&'f Value, &'f String, String)> {
+        let (mut v, top) = attr_value(f, keys)?;
+        let mut path = keys
+            .iter()
+            .fold(top.clone(), |p, k| crate::ir::path_join(&p, k));
+        for t in below {
+            let next = report::fold::reach(v, std::slice::from_ref(t))?;
+            path = match v {
+                Value::List(xs) => {
+                    let j = xs.iter().position(|x| std::ptr::eq(x, next))?;
+                    self.element(&path, j, next)
+                }
+                _ => path + &t.text,
+            };
+            v = next;
+        }
+        Some((v, top, path))
+    }
 }
 
 /// The name `why` heads an attribute fact with: `let agent_init`,

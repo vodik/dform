@@ -219,10 +219,7 @@ impl Printer<'_> {
         };
         asks.iter()
             .map(|(keys, whole)| {
-                let focus = (!keys.is_empty()).then(|| Focus {
-                    keys: keys.clone(),
-                    value: None,
-                });
+                let focus = (!keys.is_empty()).then(|| Focus::from(keys.clone()));
                 s.winner_site(&mut c, id, focus.as_ref(), !whole, 0)
             })
             .collect()
@@ -439,7 +436,7 @@ impl Surface<'_, '_> {
             && let View::Times { children, .. } = circuit.view(alt)
             && let Some((p, keys)) = passed_cell(c, circuit, children, v, read.as_deref())
         {
-            let focus = (!keys.is_empty()).then_some(Focus { keys, value: None });
+            let focus = (!keys.is_empty()).then_some(Focus::from(keys));
             if let Some(site) = self.winner_site(c, p, focus.as_ref(), false, depth + 1) {
                 return Some(site);
             }
