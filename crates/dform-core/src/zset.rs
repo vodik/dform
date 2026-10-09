@@ -26,7 +26,7 @@
 //! The provider's per-resource `Plan` (the fake provider's diff) turns each
 //! deformation into an action and decides replace.
 
-use crate::ast::{Atom, Term};
+use crate::ast::{Atom, RuleStmt, Term};
 use crate::ir::Address;
 use crate::lattice::{Truth, eq3, nulls_in};
 use crate::schema::{ReplaceOrder, Schema};
@@ -50,6 +50,9 @@ use std::collections::{BTreeMap, BTreeSet};
 ///                                         Delete call, state drops it and
 ///                                         the world keeps it (R-154); r
 ///                                         may be an address no rule wants
+///   lifecycle(r, destroy).                a delete of r deletes it: the
+///                                         default, written over a type's
+///                                         `type_lifecycle`
 ///   moved(T, Old, r).                     state's identity for the address
 ///                                         Old (text: it no longer exists)
 ///                                         is r's
@@ -70,6 +73,12 @@ pub struct Lifecycle {
     pub created_first: BTreeSet<Address>,
     /// `lifecycle(r, "retain")`: a delete of r forgets it (R-154).
     pub retain: BTreeSet<Address>,
+    /// The objects a row says what their removal means ([`REMOVAL`]):
+    /// their type's `type_lifecycle` is not theirs.
+    pub said: BTreeSet<Address>,
+    /// type -> what removal means for it (`type_lifecycle`), for an
+    /// object no row is about: one no rule wants any more.
+    pub seeded: BTreeMap<String, String>,
     /// (old, new), applied to state before the diff.
     pub moved: Vec<(Address, Address)>,
     /// The attributes given at creation only, by address and path: once
@@ -391,8 +400,9 @@ impl Lifecycle {
             true => instances.members(&addr, &wants),
             false => vec![addr],
         };
-        // What `prevent_destroy` names, against `retain` on the same object.
-        let mut prevent: BTreeSet<Address> = BTreeSet::new();
+        // What each object's removal means, by the rows that say it: each
+        // word with whether a copy's row says it.
+        let mut removal: BTreeMap<Address, BTreeMap<String, bool>> = BTreeMap::new();
         for f in facts {
             match (f.pred.as_str(), f.args.as_slice()) {
                 ("lifecycle", [r, what, path]) => {
@@ -426,11 +436,17 @@ impl Lifecycle {
                         bail!("lifecycle expects a resource and a flag, got {f:?}");
                     };
                     match what.as_str() {
-                        // A deny the evaluator derives (`POLICY_RULES`).
-                        "prevent_destroy" => prevent.extend(each(addr)),
-                        // A copy's: each of its resources it still has; an
-                        // address the program no longer makes, itself.
-                        "retain" => out.retain.extend(each(addr)),
+                        // `prevent_destroy` a deny the evaluator derives
+                        // (`POLICY_RULES`); a copy's: each of its
+                        // resources it still has; an address the program
+                        // no longer makes, itself.
+                        w if REMOVAL.contains(&w) => {
+                            let copy = instances.is_instance(&addr);
+                            for addr in each(addr) {
+                                let said = removal.entry(addr).or_default();
+                                *said.entry(what.clone()).or_default() |= copy;
+                            }
+                        }
                         "create_first" => {
                             // On a copy: each of its resources whose type
                             // allows it.
@@ -452,7 +468,7 @@ impl Lifecycle {
                         ),
                         other => bail!(
                             "lifecycle({addr}, {other}): unknown flag \
-                             (expected prevent_destroy, create_first or retain)"
+                             (expected prevent_destroy, create_first, retain or destroy)"
                         ),
                     }
                 }
@@ -477,16 +493,43 @@ impl Lifecycle {
                 _ => {}
             }
         }
-        // A delete of it would be refused and forgotten at once: which is
-        // meant is the program's to say.
-        if let Some(addr) = out.retain.intersection(&prevent).next() {
-            bail!(
-                "lifecycle({addr}, \"prevent_destroy\") and lifecycle({addr}, \"retain\") are \
-                 both written: a delete of it is refused by the first and forgets it by the \
-                 second; keep one"
-            );
+        out.seeded = schema.lifecycle.clone();
+        for (addr, mut words) in removal {
+            // The type's word, seeded, yields to another the program
+            // writes on the object's copy (the seed reads the object's
+            // own rows only, `lifecycle_prelude`).
+            if words.values().any(|copy| *copy)
+                && let Some(w) = schema.lifecycle_of(&addr.typ)
+                && words.get(w) == Some(&false)
+                && words.len() > 1
+            {
+                words.remove(w);
+            }
+            // A delete of it would be two things at once: which is meant
+            // is the program's to say.
+            if let [a, b, ..] = words.keys().collect::<Vec<_>>().as_slice() {
+                bail!(
+                    "lifecycle({addr}, {a:?}) and lifecycle({addr}, {b:?}) are both written: a \
+                     delete of it {} by the first and {} by the second; keep one",
+                    removal_means(a),
+                    removal_means(b)
+                );
+            }
+            if words.contains_key("retain") {
+                out.retain.insert(addr.clone());
+            }
+            out.said.insert(addr);
         }
         Ok(out)
+    }
+
+    /// Whether a delete of `addr` forgets it (R-154): a row says `retain`,
+    /// or none says what its removal means and its type's lifecycle is
+    /// `retain` (`type_lifecycle`).
+    pub fn retains(&self, addr: &Address) -> bool {
+        self.retain.contains(addr)
+            || (!self.said.contains(addr)
+                && self.seeded.get(&addr.typ).is_some_and(|w| w == "retain"))
     }
 
     /// `path` of `addr` is given at creation only, `how`; one path is said
@@ -530,6 +573,62 @@ impl Lifecycle {
             ReplaceOrder::Either => self.created_first.contains(addr),
         }
     }
+}
+
+/// The words that say what removal from the program means for an object:
+/// a delete of it deletes it, is refused, or forgets it. A type's
+/// `type_lifecycle` seeds one of them, which a row the program writes
+/// with another replaces.
+pub const REMOVAL: [&str; 3] = ["destroy", "prevent_destroy", "retain"];
+
+/// What a delete is under removal word `w`, for the error naming two.
+fn removal_means(w: &str) -> &'static str {
+    match w {
+        "prevent_destroy" => "is refused",
+        "retain" => "forgets it",
+        _ => "is sent",
+    }
+}
+
+/// The rules that seed `lifecycle` from the schema: per type whose
+/// provider says what removal from the program means for it
+/// (`type_lifecycle(T, W)`), each resource of the type has the row
+/// `lifecycle(r, W)`, unless the program writes it another removal word
+/// ([`REMOVAL`]), which wins as a `set` wins over a schema default. A
+/// body reads the row and `why` explains it as any other, by the rule's
+/// doc comment; the stratifier puts the rule above the program's rows of
+/// the type and below every reader of `lifecycle` (`partition::SEED`).
+pub fn lifecycle_prelude(schema: &Schema) -> Result<Vec<RuleStmt>> {
+    let mut src = String::new();
+    for (t, w) in &schema.lifecycle {
+        let by = match schema.provider_of.get(t) {
+            Some(p) => format!("the schema of provider {p}"),
+            None => "the schema".into(),
+        };
+        let others: Vec<String> = REMOVAL
+            .iter()
+            .filter(|o| *o != w)
+            .map(|o| format!(", not lifecycle(r, \"{o}\")"))
+            .collect();
+        src.push_str(&format!(
+            "#| {by}: each {t} is {w:?} (type_lifecycle), unless the \
+             program writes another\nlifecycle(r, w) where {{ type_lifecycle(\"{t}\", w), r in {t}{} }}\n",
+            others.concat()
+        ));
+    }
+    if src.is_empty() {
+        return Ok(Vec::new());
+    }
+    let lowered = crate::transform::lower(&crate::parser::parse_program(&src)?)?;
+    Ok(lowered
+        .program
+        .statements
+        .into_iter()
+        .filter_map(|s| match s {
+            crate::ast::Stmt::Rule(r) => Some(r),
+            _ => None,
+        })
+        .collect())
 }
 
 /// Why a replacement of `addr` cannot be created before its old object is

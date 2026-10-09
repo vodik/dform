@@ -1065,10 +1065,10 @@ impl Evaluator {
             true => self.unreachable(&mut plan, lifecycle, st),
             false => Vec::new(),
         };
-        // `lifecycle(r, "retain")` (R-154): a delete of r forgets it.
+        // `lifecycle(r, "retain")` (R-154), or its type's: a delete of r
+        // forgets it.
         for a in &mut plan.actions {
-            if matches!(a.kind, provider::ActionKind::Delete) && lifecycle.retain.contains(&a.addr)
-            {
+            if matches!(a.kind, provider::ActionKind::Delete) && lifecycle.retains(&a.addr) {
                 a.kind = provider::ActionKind::Forget;
                 a.changes.clear();
             }
@@ -1122,7 +1122,7 @@ impl Evaluator {
             if planned.contains(&a) {
                 continue;
             }
-            if lifecycle.retain.contains(&a) {
+            if lifecycle.retains(&a) {
                 plan.actions.push(provider::Action {
                     kind: provider::ActionKind::Delete,
                     addr: a,

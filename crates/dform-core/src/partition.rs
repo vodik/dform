@@ -695,7 +695,26 @@ fn head_of(r: &RuleStmt) -> Node {
     if let Some(p) = other_path(r) {
         n.path = Some(p);
     }
+    if is_seed(r) {
+        n.path = Some(SEED.into());
+    }
     n
+}
+
+/// The path of the node a type's seeded `lifecycle` rows are
+/// (`zset::lifecycle_prelude`): apart from the program's rows of the type,
+/// which the seed reads under `not`, and read by every reader of
+/// `lifecycle`.
+pub const SEED: &str = crate::schema::TYPE_LIFECYCLE;
+
+/// Whether `r` seeds `lifecycle` from the schema
+/// (`zset::lifecycle_prelude`): its head is `lifecycle` and its body
+/// reads `type_lifecycle`.
+fn is_seed(r: &RuleStmt) -> bool {
+    r.head.pred == "lifecycle"
+        && r.body
+            .iter()
+            .any(|l| matches!(l, Lit::Pos(a) if a.pred == crate::schema::TYPE_LIFECYCLE))
 }
 
 /// The path of [`per_path`]'s catch-all: `!{K1,K2,..}`, the segments of
@@ -851,6 +870,7 @@ pub fn compile(program: &Program, given: &[Atom]) -> Result<Compiled> {
     let (mut rules, facts) = transform::rewrite_computed_refs(rules, facts, &schema);
     rules.extend(transform::computed_prelude(&schema));
     rules.extend(transform::remote_name_prelude(&schema));
+    rules.extend(crate::zset::lifecycle_prelude(&schema)?);
     let externs: BTreeSet<String> = lowered.externs.iter().map(|e| e.pred.clone()).collect();
     let mut graph = stratified(&rules, &facts, &schema, &externs);
     // R-116: a write whose type is a variable (`set r.metadata.labels.owner
@@ -1596,7 +1616,11 @@ fn schema_of(given: &[Atom], program_facts: &[Atom]) -> Result<Schema> {
     let is_schema = |a: &&Atom| {
         matches!(
             a.pred.as_str(),
-            "type_attr" | "type_provider" | "type_mint" | "type_remote_name"
+            "type_attr"
+                | "type_provider"
+                | "type_mint"
+                | "type_remote_name"
+                | crate::schema::TYPE_LIFECYCLE
         )
     };
     let rows: Vec<Atom> = given
@@ -1854,7 +1878,12 @@ impl Builder<'_> {
                 // to every head; the read a head takes its address from, to
                 // the head at that address.
                 let mut matched = false;
+                // A seed reads the program's rows, never its own.
+                let seed = is_seed(r);
                 for d in unifying(&self.defs, &pat) {
+                    if seed && d.path.as_deref() == Some(SEED) {
+                        continue;
+                    }
                     matched = true;
                     self.read[i].push(d.clone());
                     for head in &self.heads[i] {
