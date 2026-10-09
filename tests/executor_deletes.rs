@@ -1,6 +1,6 @@
 //! Delete ordering and replacement: deletes in reverse dependency order;
 //! a force_new change replaces, destroying first unless
-//! create_before_destroy, when the old object stays deposed in state until
+//! create_first, when the old object stays deposed in state until
 //! what depends on it has moved.
 
 mod common;
@@ -176,23 +176,24 @@ tick 2 differs from the plan shown:
     assert!(st.get("deposed").is_none(), "{st}");
 }
 
-/// create_before_destroy: tick 1 creates the replacement under a new name
+/// create_first: tick 1 creates the replacement under a new name
 /// and deposes the old object; tick 2 moves the subnet to the new vpc and
 /// then deletes the deposed one.
 #[test]
-fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
+fn create_first_deposes_the_old_object_until_dependents_move() {
     let s = Scratch::new("cbd");
     s.write("p.df", NET);
     mock(&s, &["apply"]).success();
     let cbd = format!(
-        "{}lifecycle(main, \"create_before_destroy\")\n",
+        "{}lifecycle(main, \"create_first\")\n",
         NET.replace("10.0.0.0/16", "10.1.0.0/16")
     );
     s.write("p.df", &cbd);
     // Stop after tick 1: the old object is deposed in state.
     let r = mock(&s, &["apply", "--max-ticks", "1"]).failure();
     assert!(
-        r.stdout.contains("  ± net.vpc main  (the new one first)  "),
+        r.stdout
+            .contains("  ± net.vpc main  replace, create first  "),
         "{}",
         r.stdout
     );
@@ -234,14 +235,14 @@ fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
 
 /// In one apply the deposed object's delete is tick 2.
 #[test]
-fn create_before_destroy_in_one_apply_takes_two_ticks() {
+fn create_first_in_one_apply_takes_two_ticks() {
     let s = Scratch::new("cbd-one");
     s.write("p.df", NET);
     mock(&s, &["apply"]).success();
     s.write(
         "p.df",
         &format!(
-            "{}lifecycle(main, \"create_before_destroy\")\n",
+            "{}lifecycle(main, \"create_first\")\n",
             NET.replace("10.0.0.0/16", "10.1.0.0/16")
         ),
     );

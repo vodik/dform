@@ -324,11 +324,11 @@ fn a_two_phase_plan_file_stops_before_the_tick_it_could_not_name() {
     assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
 }
 
-/// create_before_destroy: the file records the replace's dependents, so
+/// create_first: the file records the replace's dependents, so
 /// their update to the new identity at tick 2, and the deposed object's
 /// delete, are the file's delta, not drift.
 #[test]
-fn a_create_before_destroy_plan_file_applies_in_two_ticks() {
+fn a_create_first_plan_file_applies_in_two_ticks() {
     let s = Scratch::new("planfile-cbd");
     let net = "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.subnet a { vpc_id = ref(net.vpc, \"main\", \"id\"), tier = \"web\" }\nuse fake\n";
     s.write("p.df", net);
@@ -337,7 +337,7 @@ fn a_create_before_destroy_plan_file_applies_in_two_ticks() {
     s.write(
         "p.df",
         &format!(
-            "{}lifecycle(main, \"create_before_destroy\")\n",
+            "{}lifecycle(main, \"create_first\")\n",
             net.replace("10.0.0.0/16", "10.1.0.0/16")
         ),
     );

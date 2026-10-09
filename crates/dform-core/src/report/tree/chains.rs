@@ -112,10 +112,25 @@ impl Surface<'_, '_> {
         w: &mut Chain,
     ) {
         let circuit = self.p.circuit;
-        let Some(own) = self.site_of(c, id, depth) else {
+        let View::Fact { fact, alts, .. } = circuit.view(id) else {
             return;
         };
-        let View::Fact { fact, alts, .. } = circuit.view(id) else {
+        // A name dform gave a replacement (R-189): state's, not a line of
+        // the program's.
+        if let Some((program, name)) = generated_name(circuit, alts) {
+            w.out.push(Step {
+                expr: self.p.redact.surface(&name),
+                at: format!(
+                    "dform's name for a replacement of {}",
+                    spell::value(&program)
+                ),
+                with: Vec::new(),
+                rank: rank.map(str::to_string),
+                lost: false,
+            });
+            return;
+        }
+        let Some(own) = self.site_of(c, id, depth) else {
             return;
         };
         let mut value = match fact.pred.as_str() {
@@ -291,6 +306,23 @@ pub(super) fn holds<'v>(
         }
         None => false,
     }
+}
+
+/// The `remote_name(T, A, Program, Name)` fact a contribution was derived
+/// from, when it was (`transform::remote_name_prelude`): the program's
+/// name and the one dform gave the object.
+fn generated_name(circuit: &Circuit, alts: &[NodeId]) -> Option<(Value, Value)> {
+    alts.iter().find_map(|a| {
+        let View::Times { children, .. } = circuit.view(*a) else {
+            return None;
+        };
+        children.iter().find_map(|ch| match circuit.view(*ch) {
+            View::Fact { fact, .. } if fact.pred == crate::transform::REMOTE_NAME => {
+                Some((fact.args.get(2)?.clone(), fact.args.get(3)?.clone()))
+            }
+            _ => None,
+        })
+    })
 }
 
 /// How deep a value is followed through cells that pass it on.

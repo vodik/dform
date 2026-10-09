@@ -9,6 +9,7 @@
 #                                       nullable optional_computed force_new
 #   type_provider(Type, Provider).
 #   type_replace(Type, Order).          create_first, destroy_first or either
+#   type_remote_name(Type, Path).       a name the provider may generate
 #   type_lookup(Type, Attrs).           what a Create that timed out is found by
 #
 # An object's identity is its `id`: state holds it, and an update goes to
@@ -18,7 +19,10 @@
 # A record's lookup is its zone, subdomain, type and target, and its
 # subdomain, target and ttl change in place. An instance's lookup is its
 # name in its region, an SSH key's its name, so a replacement deletes
-# the old one first.
+# the old one first; an instance's name is free (it is not its
+# identity), so `lifecycle(vm, "create_first")` makes the replacement
+# first under the next generation of it (`agent-1-2`, R-189), and the
+# old one goes a tick later, once what reads it has moved.
 
 # The data sources (R-106): a program reads them with no `extern` line.
 # `ovh.region` the project's regions, `ovh.flavor` a region's available
@@ -54,7 +58,8 @@ type_attr("ovh.instance", "public_ip", "ip", ["computed"])
 type_attr("ovh.instance", "private_ip", "ip", ["computed", "nullable"])
 type_attr("ovh.instance", "private_ips", "map(ip)", ["computed"])
 type_attr("ovh.instance", "status", "string", ["computed"])
-type_replace("ovh.instance", "destroy_first")
+type_replace("ovh.instance", "either")
+type_remote_name("ovh.instance", "name")
 type_lookup("ovh.instance", ["name", "region"])
 
 # The API has no update call for an SSH key.

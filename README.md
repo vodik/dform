@@ -479,7 +479,7 @@ read it:
 
 ```dform
 lifecycle(k3s.server, "prevent_destroy") where env == "prod"   # a delete or replace is a deny
-lifecycle(nodes, "create_before_destroy")                       # a replace builds the new one first
+lifecycle(nodes, "create_first")                               # a replace builds the new one first
 lifecycle(libvirt.volume["data"], "retain")                     # a delete forgets it; the world keeps it
 moved(net.vpc, "main.vpc", net.vpc["core.vpc"])                 # renamed: state follows
 ignore_changes(bastion, "tags.last_scan")                       # set on create, then the world's

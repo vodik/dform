@@ -75,14 +75,14 @@ fn a_replace_updates_its_dependents_after_the_create() {
 /// Create-first: the subnets move in tick 2, before the deposed vpc is
 /// deleted.
 #[test]
-fn create_before_destroy_moves_dependents_before_the_deposed_delete() {
+fn create_first_moves_dependents_before_the_deposed_delete() {
     let s = Scratch::new("replace-deps-cbd");
     s.write("p.df", NET);
     mock(&s, &["apply", "--chaos", "fresh-ids"]).success();
     s.write(
         "p.df",
         &format!(
-            "{}lifecycle(main, \"create_before_destroy\")\n",
+            "{}lifecycle(main, \"create_first\")\n",
             NET.replace("10.0.0.0/16", "10.1.0.0/16")
         ),
     );
@@ -130,7 +130,7 @@ use fake
     s.write("p.df", net);
     mock(&s, &["apply"]).success();
     let cbd = format!(
-        "{}lifecycle(main, \"create_before_destroy\")\n",
+        "{}lifecycle(main, \"create_first\")\n",
         net.replace("10.0.0.0/16", "10.1.0.0/16")
     );
     s.write("p.df", &cbd);

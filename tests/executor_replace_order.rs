@@ -1,5 +1,5 @@
 //! Replacement order is the schema's: `type_replace(T, create_first |
-//! destroy_first | either)`. `lifecycle(r, create_before_destroy)` picks
+//! destroy_first | either)`. `lifecycle(r, create_first)` picks
 //! the order only where the schema allows either, and is an error on a
 //! destroy_first type.
 
@@ -58,11 +58,11 @@ fn either_destroys_first_unless_lifecycle_says_otherwise() {
     let (_s, r) = replan(
         "order-either-cbd",
         "type_replace(\"net.subnet\", \"either\")\n",
-        "lifecycle(a, \"create_before_destroy\")\n",
+        "lifecycle(a, \"create_first\")\n",
     );
     let r = r.success();
     assert!(
-        r.stdout.contains("± net.subnet a  (the new one first)"),
+        r.stdout.contains("± net.subnet a  replace, create first"),
         "{}",
         r.stdout
     );
@@ -79,36 +79,36 @@ fn create_first_needs_no_lifecycle_fact() {
     );
     let r = r.success();
     assert!(
-        r.stdout.contains("± net.subnet a  (the new one first)"),
+        r.stdout.contains("± net.subnet a  replace, create first"),
         "{}",
         r.stdout
     );
     let (_s, r) = replan(
         "order-create-first-cbd",
         "type_replace(\"net.subnet\", \"create_first\")\n",
-        "lifecycle(a, \"create_before_destroy\")\n",
+        "lifecycle(a, \"create_first\")\n",
     );
     assert!(
         r.success()
             .stdout
-            .contains("± net.subnet a  (the new one first)"),
+            .contains("± net.subnet a  replace, create first"),
         "redundant lifecycle fact"
     );
 }
 
-/// create_before_destroy on a destroy_first type is an error naming the
+/// create_first on a destroy_first type is an error naming the
 /// type.
 #[test]
-fn create_before_destroy_on_a_destroy_first_type_is_an_error() {
+fn create_first_on_a_destroy_first_type_is_an_error() {
     let (_s, r) = replan(
         "order-destroy-first",
         "type_replace(\"net.subnet\", \"destroy_first\")\n",
-        "lifecycle(a, \"create_before_destroy\")\n",
+        "lifecycle(a, \"create_first\")\n",
     );
     let r = r.failure();
     assert!(
         r.stderr.contains(
-            "lifecycle(net.subnet[\"a\"], create_before_destroy): type net.subnet is \
+            "net.subnet a: create_first is not possible: type net.subnet is \
              type_replace destroy_first"
         ),
         "{}",

@@ -56,6 +56,8 @@ fn paint(s: HealthState) -> Paint {
 /// type has none).
 struct Object {
     addr: Address,
+    /// Its name in the cloud, where dform gave it one (R-189).
+    named: Option<String>,
     provider: String,
     health: Option<(HealthState, String)>,
 }
@@ -87,6 +89,7 @@ impl Report {
                 });
                 Some(Object {
                     addr,
+                    named: e.name.clone(),
                     provider: e.provider.clone(),
                     health,
                 })
@@ -140,7 +143,8 @@ impl Report {
         }
     }
 
-    /// One line per object: its address, its state, the reason.
+    /// One line per object: its address (and the name dform gave it), its
+    /// state, the reason.
     fn table(&self) -> Table {
         let mut t = Table::new(["resource", "health", "reason"]);
         for o in &self.objects {
@@ -148,11 +152,11 @@ impl Report {
                 Some((s, r)) => (Cell::text(word(*s)).painted(paint(*s)), r.clone()),
                 None => (Cell::text("-"), String::new()),
             };
-            t.push(vec![
-                Cell::text(report::address(&o.addr)),
-                state,
-                Cell::text(reason),
-            ]);
+            let at = match &o.named {
+                Some(n) => format!("{}  named {n}", report::address(&o.addr)),
+                None => report::address(&o.addr),
+            };
+            t.push(vec![Cell::text(at), state, Cell::text(reason)]);
         }
         t
     }
@@ -167,6 +171,7 @@ impl Report {
                     "address": report::address(&o.addr),
                     "type": o.addr.typ,
                     "name": o.addr.name,
+                    "remote_name": o.named,
                     "provider": o.provider,
                     "health": o.health.as_ref().map(|(s, _)| word(*s)),
                     "reason": o.health.as_ref().map(|(_, r)| r),

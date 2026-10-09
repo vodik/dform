@@ -2178,7 +2178,7 @@ defines, and its resource is addressed as any is, `network["blue"]`:
 in a reference column (`lifecycle`, `requires_approval`, `deformation`)
 a copy's name or such an `x` is the copy. `lifecycle(blue,
 "prevent_destroy")` and `ignore_changes`, `lifecycle(blue, "bootstrap",
-"user_data")` or `create_before_destroy` on a copy are on each of its
+"user_data")` or `create_first` on a copy are on each of its
 resources; the plan gives a copy a `deformation`
 row of its own (`delete` once the program wants none of its resources,
 `create` when one is created, else `update`) and says which resources are

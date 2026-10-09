@@ -72,7 +72,7 @@ type_instead("iam.role_policy_attachment", "iam.role", "policies")
 type_instead(net.route, net.route_table, "routes")
 
 # How a replacement is ordered: a vpc may be replaced either way (destroy
-# first unless lifecycle create_before_destroy says otherwise).
+# first unless lifecycle create_first says otherwise).
 type_replace(net.vpc, "either")
 
 type_attr("db.postgres", "endpoint", "string", ["computed"])

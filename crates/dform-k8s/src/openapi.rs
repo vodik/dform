@@ -34,8 +34,12 @@
 //!   type's (path `""`).
 //!
 //! Every type gets `type_retry(T, 5)` and a `type_replace` order: a
-//! Deployment, Service or ConfigMap `create_first`, a Namespace
-//! `destroy_first`, the rest `either`. The short names of the mock
+//! Deployment or ConfigMap `create_first`, a Service or Namespace
+//! `destroy_first`, the rest `either`. A kind whose name dform may give
+//! the next generation of in a create-first replacement (R-189) gets
+//! `type_remote_name(T, "metadata.name")`: one read through references,
+//! not by other objects' literal names ([`GENERATED_NAMES`]). The short
+//! names of the mock
 //! (`crates/dform-mock/schemas/k8s.df`'s `type_alias` facts, `k8s.deployment`) are
 //! the same types under a second name.
 
@@ -808,10 +812,29 @@ fn atom(pred: &str, args: Vec<Term>) -> Atom {
     }
 }
 
+/// The kinds whose name dform may generate for a create-first
+/// replacement (R-189), by (group, kind): the workloads and the ConfigMaps
+/// and Secrets they mount, which other objects reach through dform's
+/// references, so a reader moves to the new name before the old object
+/// goes. Not a Service (its name is a DNS name read literally), a
+/// Namespace or a ServiceAccount (named literally by everything in and
+/// around the cluster: RBAC subjects, workload identity), a
+/// PersistentVolumeClaim (its name binds its volume) or a StatefulSet
+/// (its name is in its pods' and its claims').
+pub const GENERATED_NAMES: [(&str, &str); 6] = [
+    ("apps", "Deployment"),
+    ("apps", "DaemonSet"),
+    ("batch", "Job"),
+    ("batch", "CronJob"),
+    ("", "ConfigMap"),
+    ("", "Secret"),
+];
+
 fn type_facts(typ: &str, kind: &Kind, w: &Walk) -> Vec<Atom> {
-    let order = match (kind.group.as_str(), kind.kind.as_str()) {
-        ("apps", "Deployment") | ("", "Service") | ("", "ConfigMap") => "create_first",
-        ("", "Namespace") => "destroy_first",
+    let gk = (kind.group.as_str(), kind.kind.as_str());
+    let order = match gk {
+        ("apps", "Deployment") | ("", "ConfigMap") => "create_first",
+        ("", "Service") | ("", "Namespace") => "destroy_first",
         _ => "either",
     };
     let mut out = vec![
@@ -819,6 +842,12 @@ fn type_facts(typ: &str, kind: &Kind, w: &Walk) -> Vec<Atom> {
         atom("type_retry", vec![sym(typ), Term::Val(Value::Int(RETRY))]),
         atom("type_replace", vec![sym(typ), sym(order)]),
     ];
+    if GENERATED_NAMES.contains(&gk) {
+        out.push(atom(
+            "type_remote_name",
+            vec![sym(typ), sym("metadata.name")],
+        ));
+    }
     for (path, ty, flags) in &w.attrs {
         let flags = flags.iter().map(|f| Term::Val(Value::Str(f.to_string())));
         out.push(atom(

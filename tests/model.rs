@@ -1,6 +1,6 @@
 //! The executor under random chaos (a model test). A seed picks a random
 //! program over the fake schema and a sequence of its versions (refs,
-//! force_new cidrs, `prevent_destroy`, `create_before_destroy`, `moved`),
+//! force_new cidrs, `prevent_destroy`, `create_first`, `moved`),
 //! a starting world (empty, or with objects dform does not manage), and a
 //! schedule: applies and plan-file applies, each with chaos knobs (fail,
 //! timeout, crash, read-lag, mutate, latency, fresh-ids, `stop-after=N`),
@@ -104,7 +104,7 @@ struct Res {
     /// A ref to an earlier resource: its address and the attribute read.
     to: Option<(&'static str, String, &'static str)>,
     prevent_destroy: bool,
-    create_before_destroy: bool,
+    create_first: bool,
 }
 
 /// One version of the program.
@@ -143,7 +143,7 @@ impl Version {
         for r in &self.res {
             for (on, what) in [
                 (r.prevent_destroy, "prevent_destroy"),
-                (r.create_before_destroy, "create_before_destroy"),
+                (r.create_first, "create_first"),
             ] {
                 if on {
                     out.push_str(&format!("lifecycle({}, \"{what}\")\n", r.name));
@@ -206,7 +206,7 @@ fn new_res(rng: &mut Rng, names: &mut Names, earlier: &[Res]) -> Res {
         tier: rng.below(3) as u8,
         to,
         prevent_destroy: rng.chance(10),
-        create_before_destroy: matches!(typ, VPC | SUBNET) && rng.chance(30),
+        create_first: matches!(typ, VPC | SUBNET) && rng.chance(30),
     }
 }
 
@@ -267,7 +267,7 @@ fn next_version(rng: &mut Rng, names: &mut Names, v: &Version) -> Version {
             6 => {
                 let idx: Vec<usize> = (0..res.len()).filter(|&i| res[i].cidr.is_some()).collect();
                 if let Some(&i) = rng.pick(&idx) {
-                    res[i].create_before_destroy = !res[i].create_before_destroy;
+                    res[i].create_first = !res[i].create_first;
                 }
             }
             _ => {}
