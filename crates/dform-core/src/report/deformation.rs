@@ -34,7 +34,7 @@ pub struct Line {
     pub after: Shown,
     /// An element's leaves, paths relative to the element.
     pub leaves: Vec<Line>,
-    /// Where its value was written (R-79, [`Report::explain`]).
+    /// Where its value was written (R-79, [`Report::explain`](crate::report::Report::explain)).
     pub site: Option<Site>,
     /// At `-vv`, how its value was made: each expression it passed
     /// through, then what it beat (R-122, [`tree::Printer::attr_chain`]).
@@ -79,7 +79,7 @@ pub struct Deformation {
     /// Where it is derived (R-79): its `want`'s site; a delete's, where
     /// the last apply derived it.
     pub site: Option<Site>,
-    /// The leaf that changed since the last apply ([`Report::because`]).
+    /// The leaf that changed since the last apply ([`Report::because`](crate::report::Report::because)).
     pub because: Option<String>,
     /// Of a run that does not hold the deployment's master (R-164):
     /// `secrets unchanged` (each secret leaf it derives proven so), or
@@ -90,15 +90,15 @@ pub struct Deformation {
     pub forces: Vec<String>,
     /// The lines as the plan prints them below `-vv` (R-124): each value
     /// one contribution wrote folded back to where the writers diverge
-    /// ([`fold`]). Empty: [`Deformation::lines`] as they are.
+    /// ([`fold`](crate::report::fold)). Empty: [`Deformation::lines`] as they are.
     pub folded: Vec<Line>,
     /// A plan's delete: why the program no longer derives it, for the
-    /// site column of its change line ([`Report::explain`], After R-149).
+    /// site column of its change line ([`Report::explain`](crate::report::Report::explain), After R-149).
     /// Where the rule that would derive it is written, and why it does
     /// not.
     pub gone: Option<(Option<String>, String)>,
     /// Each attribute given at creation only whose value differs from
-    /// what the object was made with: kept, and said ([`KEPT`], R-198).
+    /// what the object was made with: kept, and said ([`KEPT`](crate::report::KEPT), R-198).
     pub kept: Vec<Line>,
 }
 

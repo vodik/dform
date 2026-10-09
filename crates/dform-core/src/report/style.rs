@@ -92,7 +92,7 @@ impl Style {
     }
 
     /// A note about a value, printed where a value would be
-    /// (`(sensitive)`, [`KEPT`]): dim, so it does not read as one.
+    /// (`(sensitive)`, [`KEPT`](crate::report::KEPT)): dim, so it does not read as one.
     pub fn note(&self, s: &str) -> String {
         self.paint(Paint::Note, s)
     }

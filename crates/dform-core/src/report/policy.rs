@@ -618,7 +618,7 @@ pub struct Policy {
 }
 
 /// A deny over the plan, the row of the plan it matched and where it is
-/// written ([`Report::explain`]).
+/// written ([`Report::explain`](crate::report::Report::explain)).
 #[derive(Debug, Clone)]
 pub struct Denied {
     pub message: String,

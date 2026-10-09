@@ -24,7 +24,7 @@ pub struct Group {
     /// What it reads that may derive after a boundary, as the body reads
     /// it (`release("crud_api", "schema", _)`).
     pub reads: Option<String>,
-    /// Where the rule is written ([`Report::explain`]).
+    /// Where the rule is written ([`Report::explain`](crate::report::Report::explain)).
     pub site: Option<Site>,
 }
 

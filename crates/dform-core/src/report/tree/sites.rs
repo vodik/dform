@@ -62,7 +62,7 @@ pub struct Site {
 }
 
 /// The cell an `attr` or `arg` of an input, a `let` or an output names,
-/// as a [`Because`]'s text spells it (`input kubernetes.nodepool_max`).
+/// as a [`Because`](super::Because)'s text spells it (`input kubernetes.nodepool_max`).
 pub fn cell_name(t: &str, a: &str, p: &str) -> String {
     cell(t, a, p)
 }
