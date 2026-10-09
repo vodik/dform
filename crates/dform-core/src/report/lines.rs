@@ -46,6 +46,14 @@ impl Report {
             style.marker(&d.kind),
             style.address(&d.kind, &addr)
         );
+        let right = self.change_column(d, &addr);
+        rows.push(Row::new(&plain, painted).with(right));
+        self.write_attrs(rows, d, &format!("{indent}    "), style);
+    }
+    /// A change line's right column: where it is derived and, for a
+    /// replace, what forces it; a delete's reason; a create's bindings at
+    /// the default level; its custody.
+    fn change_column(&self, d: &Deformation, addr: &str) -> Vec<String> {
         let at = d.site.as_ref().map(|s| place_text(s, self.why));
         let right: Vec<String> = match (&d.kind, at) {
             (ActionKind::Replace { .. }, at) => {
@@ -86,7 +94,7 @@ impl Report {
                     })
                     .cloned()
                     .collect();
-                match terse(&with, &addr) {
+                match terse(&with, addr) {
                     Some(w) => vec![format!("{at}  {w}"), at],
                     None => vec![at],
                 }
@@ -103,10 +111,15 @@ impl Report {
             Some(c) => right.into_iter().map(|r| format!("{r}  {c}")).collect(),
             None => right,
         };
-        rows.push(Row::new(&plain, painted).with(right));
+        right
+    }
+
+    /// A change's attribute lines (the forced first, at most 40), each
+    /// with its site and at `-vv` its chain; the values kept; why it
+    /// changed since the last apply.
+    fn write_attrs(&self, rows: &mut Vec<Row>, d: &Deformation, inner: &str, style: Style) {
         // Keep plan output readable.
         let max = 40usize;
-        let inner = format!("{indent}    ");
         let lines = match d.folded.is_empty() {
             true => &d.lines,
             false => &d.folded,
@@ -135,13 +148,13 @@ impl Report {
                 None => vec![],
                 Some(s) => attr_text(d, l, s, self.why),
             };
-            write_line(rows, &d.kind, l, &inner, style, self.why, right);
+            write_line(rows, &d.kind, l, inner, style, self.why, right);
             if self.why == Why::Full {
                 write_chain(rows, l, &format!("{inner}  "), self.why);
             }
         }
         for l in &d.kept {
-            write_kept(rows, l, &inner, style, self.why);
+            write_kept(rows, l, inner, style, self.why);
         }
         // A delete's reason is in its change line's site column (After
         // R-149), a destroy's none: no line under its attributes.
