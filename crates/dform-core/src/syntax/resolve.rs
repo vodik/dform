@@ -2146,6 +2146,7 @@ impl<'u> Lowerer<'u> {
             LET if node(n, PARAMS).is_none() => {
                 return self.ported(n, |l| l.let_stmt(n, scope, outer));
             }
+            LET => return self.ported(n, |l| l.function_stmt(n, scope, outer)),
             RULE | FACT => return self.ported(n, |l| l.rule(n, scope, outer)),
             CHECK => return self.ported(n, |l| l.check(n, scope, outer)),
             OUTPUT_DECL => return self.ported(n, |l| l.output(n, scope, outer)),
@@ -2537,7 +2538,6 @@ impl<'u> Lowerer<'u> {
             // An alias lowers to nothing: each use is its type.
             TYPE_ALIAS => Ok(Vec::new()),
             USE => self.use_stmt(n, scope, outer),
-            LET if node(n, PARAMS).is_some() => self.function_stmt(n, scope, outer),
             RESOURCE if self.is_copy(n) => self.instance(n, scope, outer),
             k => self.error(span, format!("unexpected {k:?}")),
         }
@@ -9913,6 +9913,34 @@ mod tests {
         );
         let s = "p(A, B) :- z(1), Path = \"p.csv\", table.csv.p(Path, At, A, B)";
         assert!(lowered.iter().any(|l| l.contains(s)), "{s}: {lowered:#?}");
+    }
+
+    /// Every form of `let` with parameters is built as a `LetFn` item
+    /// (R-211 step 5) and lowers as the resolver lowers it: no clause, a
+    /// clause whose `not { }` takes the demand among its positive
+    /// literals, a value that reads, an aggregate folded by the head.
+    #[test]
+    fn every_let_with_parameters_is_an_item() {
+        let src = "p(1, 2)\nq(2)\nlet k = 3\n\
+             let f(a) = a + k\n\
+             let g(a, b) = x where p(a, x), not { q(b) }\n\
+             let h(a) = n where n = count(x), p(x, a)\n\
+             r(f(1), g(1, 2), h(2))\n";
+        let (lowered, seen) = crate::program::check::collect(|| lower(src));
+        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
+        assert_eq!(seen.items.get("a let"), Some(&4), "{:?}", seen.items);
+        assert!(
+            !seen.items.keys().any(|k| k.starts_with("a statement")),
+            "{:?}",
+            seen.items
+        );
+        for s in [
+            "f(A, add(A, K)) :- f?(A), k(K)",
+            "__neg_0(B) :- g?(A, B), p(A, X), q(B)",
+            "h(A, count(X)) :- h?(A), p(X, A)",
+        ] {
+            assert!(lowered.iter().any(|l| l.contains(s)), "{s}: {lowered:#?}");
+        }
     }
 
     /// Every form a written literal takes is built as a goal (R-211 step

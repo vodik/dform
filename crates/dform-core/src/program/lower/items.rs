@@ -5,6 +5,7 @@
 //! | item                           | statements                                       |
 //! |--------------------------------|--------------------------------------------------|
 //! | `let k[: T] = v [@r] [where B]`| `let("k", v', "r") [:- B', reads]`, folded over B's aggregates; `__secret_let("k", "p")` per secret path; `decl k(k: T)` at the first typed row |
+//! | `let f(a, b) = v [where B]`    | `f(A, B, v') :- demand(A, B), B', reads`, folded over B's aggregates; `extern demand/n`; `mode f/n+1` |
 //! | `p(a, b) [@r] [where B]`       | `p(a', b'[, "r"]) [:- B', reads]`, folded over B's aggregates |
 //! | `deny "m" [{..}] [where B]`    | `deny(m'[, d']) [:- B', reads]`, folded over B's aggregates |
 //! | `input k: T [= d] [check B] [where G]` | itself, its fields', refinement's and clause's literals; under several clauses (R-104) where each holds and the deny where two do |
@@ -26,8 +27,8 @@ use super::clause::folded;
 use super::expr::Lowering;
 use crate::ast::{self, Atom, Decl, Rank, RuleStmt, Span, Stmt, TypeExpr, str_term};
 use crate::program::node::{
-    CheckKind, ClauseId, ExprId, Head, Header, ItemId, ItemKind, RelRef, ResourceBody, Source,
-    Target, TypeRef, VarId, Write,
+    CheckKind, ClauseId, ExprId, Head, Header, ItemId, ItemKind, Param, RelRef, ResourceBody,
+    Source, Target, TypeRef, VarId, Write,
 };
 use crate::program::{NodeId, Origin, Program};
 use crate::value::Value;
@@ -75,6 +76,12 @@ pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: 
             };
             l.statements(program, it.span)
         }
+        ItemKind::LetFn {
+            name,
+            params,
+            value,
+            clause,
+        } => let_fn(program, name, params, *value, *clause, it.span),
         ItemKind::Rule { head, clause, rank } => rule(program, id, (head, *rank), *clause, it.span),
         ItemKind::Check {
             kind,
@@ -424,6 +431,49 @@ fn relation_input(
     let mut out = source.externs.clone();
     out.extend(clause_rule(head, body, folds, true, rel.span));
     out.push(Stmt::Mixed(e));
+    out.append(&mut l.helpers);
+    out
+}
+
+/// `let f(a, b) = v [where B]` (R-187): the rule `f(A, B, v') :-
+/// demand(A, B), B', reads`, folded over B's aggregates, its parameters
+/// bound by the demand its readers feed (`crate::demand`); the demand
+/// declared `extern`, so a module's copy names it its own with the let;
+/// the relation's mode; then the helpers.
+fn let_fn(
+    program: &Program,
+    name: &str,
+    params: &[Param],
+    value: ExprId,
+    clause: Option<ClauseId>,
+    span: Span,
+) -> Vec<Stmt> {
+    let mut l = Lowering::new(program);
+    let mut args: Vec<ast::Term> = params.iter().map(|p| l.var(p.var)).collect();
+    let demand = crate::demand::of(name);
+    let seed = vec![ast::Lit::Pos(Atom {
+        pred: demand.clone(),
+        args: args.clone(),
+        record: None,
+        span,
+    })];
+    let (mut body, folds) = match clause {
+        Some(c) => l.unfolded_after(c, seed),
+        None => (seed, Vec::new()),
+    };
+    args.push(l.expr(value));
+    body.append(&mut l.reads);
+    let arity = args.len();
+    let head = Atom {
+        pred: name.to_string(),
+        args,
+        record: None,
+        span,
+    };
+    let mut out = clause_rule(head, body, folds, true, span);
+    let relation = |pred: String, arity| ast::Extern { pred, arity, span };
+    out.push(Stmt::Extern(relation(demand, arity - 1)));
+    out.push(Stmt::Mode(relation(name.to_string(), arity)));
     out.append(&mut l.helpers);
     out
 }

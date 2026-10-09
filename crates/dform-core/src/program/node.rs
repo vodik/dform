@@ -660,7 +660,9 @@ pub enum ItemKind {
     },
 }
 
-/// A parameter of a `let` with parameters.
+/// A parameter of a `let` with parameters: its variable (its type and
+/// default are read where it is called, until they are built from the
+/// tree).
 #[derive(Debug, Clone)]
 pub struct Param {
     pub var: VarId,

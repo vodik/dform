@@ -4,12 +4,15 @@
 //! hoisted (the helper statements the value's terms made the value's);
 //! `let n = count(x) where B` the clause with the binding a `Fold` last,
 //! its value the variable. A clause whose aggregates fold through helpers
-//! takes their numbers here, as a rule's does (`folded_rule`).
+//! takes their numbers here, as a rule's does (`folded_rule`). A `let`
+//! with parameters ([`LetFnLowered`], R-187) is a `LetFn` item: its
+//! parameters' variables, its value, its clause after the demand that
+//! binds them.
 
 use super::{Builder, Form, Written, grouped, number_folds};
 use crate::ast::{Atom, Lit, Rank, Span, Stmt, TypeExpr};
 use crate::program::NodeId;
-use crate::program::node::{ClauseId, Item, ItemId, ItemKind};
+use crate::program::node::{ClauseId, Item, ItemId, ItemKind, Param};
 use crate::program::scope::ScopeId;
 
 /// A `let` as the resolver lowered it.
@@ -91,5 +94,60 @@ impl Builder<'_> {
             scope: l.scope,
             kind,
         }))
+    }
+}
+
+/// A `let` with parameters as the resolver lowered it (R-187): the rule
+/// `f(params, v) :- demand, B, reads`.
+pub struct LetFnLowered<'a> {
+    pub name: String,
+    pub span: Span,
+    pub scope: ScopeId,
+    /// The clause of B, gathered after the demand; none without `where`.
+    pub clause: Option<ClauseId>,
+    /// `f(params, v)`, as the resolver wrote it.
+    pub head: &'a Atom,
+    /// The demand, B's literals, then from `seed` the value's reads.
+    pub body: &'a [Lit],
+    pub seed: usize,
+    /// The helper statements the value's terms made.
+    pub made: &'a [Stmt],
+    pub results: &'a [String],
+}
+
+impl Builder<'_> {
+    /// The `LetFn` item of `l`: its parameters the head's leading
+    /// variables, its value the last column's node after its reads.
+    pub fn let_fn_item(&mut self, l: LetFnLowered) -> ItemId {
+        let (value, params) = l.head.args.split_last().expect("a value column");
+        let params = params
+            .iter()
+            .map(|t| match t {
+                crate::ast::Term::Var(v) => Param {
+                    var: self.var(v),
+                    ty: None,
+                    default: None,
+                },
+                t => unreachable!("a parameter is a variable: {t:?}"),
+            })
+            .collect();
+        let value = self.made(value, &l.body[l.seed..], l.made);
+        if let Some(c) = l.clause
+            && !l.results.is_empty()
+            && grouped(l.head, l.body, l.results)
+        {
+            number_folds(self.program, c);
+        }
+        let kind = ItemKind::LetFn {
+            name: l.name,
+            params,
+            value,
+            clause: l.clause,
+        };
+        self.program.items.insert(Item {
+            span: l.span,
+            scope: l.scope,
+            kind,
+        })
     }
 }

@@ -64,13 +64,10 @@ impl Lowerer<'_> {
     }
 
     /// `let f(a, b) [: T] = t [where B]`: the rule `f(A, B, t') :- B,
-    /// reads` and its mode.
-    pub(super) fn function_stmt(
-        &mut self,
-        n: &SyntaxNode,
-        scope: usize,
-        outer: &Rc,
-    ) -> L<Vec<Stmt>> {
+    /// reads` and its mode, built as a `LetFn` item (R-211 step 5): its
+    /// parameters, its value's node, its clause B's goals after the
+    /// demand; `lower` writes them.
+    pub(super) fn function_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
         let span = self.span(n);
         let name = word_text(n, 1);
         let ps = params(n).unwrap_or_default();
@@ -138,6 +135,8 @@ impl Lowerer<'_> {
             }
             None => vec![demand],
         };
+        let clause = self.body_clause(n);
+        let (seed, made) = (body.len(), self.helpers.len());
         let t = terms(n).next().ok_or(Skip)?;
         let declared = node(n, TYPE_EXPR).map(|t| self.type_expr(&t));
         let value = self.let_value(&mut rc, &t, &mut body)?;
@@ -149,23 +148,50 @@ impl Lowerer<'_> {
         args.push(value);
         let head = atom_at(&name, args, span);
         self.check_bound(&rc, &body, &atom_terms(&head))?;
-        let arity = head.args.len();
-        // The demand is a relation the readers feed, declared so that a
-        // module's copy names it its own with the let.
-        let demand = Extern {
-            pred: crate::demand::of(&name),
-            arity: arity - 1,
-            span,
-        };
-        Ok(vec![
-            Stmt::Rule(RuleStmt::new(head, body)),
-            Stmt::Extern(demand),
-            Stmt::Mode(Extern {
-                pred: name,
+        let resolved = crate::program::check::enabled().then(|| {
+            let arity = head.args.len();
+            let demand = Extern {
+                pred: crate::demand::of(&name),
+                arity: arity - 1,
+                span,
+            };
+            let mode = Extern {
+                pred: name.clone(),
                 arity,
                 span,
-            }),
-        ])
+            };
+            let out = vec![
+                Stmt::Rule(RuleStmt::new(head.clone(), body.clone())),
+                Stmt::Extern(demand),
+                Stmt::Mode(mode),
+            ];
+            self.resolved_with(out, span)
+        });
+        let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
+        let l = crate::program::build::LetFnLowered {
+            name,
+            span,
+            scope: self.item_scope,
+            clause,
+            head: &head,
+            body: &body,
+            seed,
+            made: &self.helpers[made..],
+            results: &results,
+        };
+        let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
+        let written = |v: &str| written.contains(v);
+        let gather = self
+            .gather
+            .as_mut()
+            .expect("a ported statement is gathered");
+        let mut b = gather.builder(&mut self.program, span, &written);
+        let item = b.let_fn_item(l);
+        gather.done(b);
+        if let Some(stmts) = resolved {
+            self.resolved.insert(item, stmts);
+        }
+        Ok(item)
     }
 
     /// The let with parameters a call names in `rc`, when it names one:

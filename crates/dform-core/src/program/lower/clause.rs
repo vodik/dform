@@ -104,7 +104,16 @@ impl Lowering<'_> {
     /// Clause `id`'s literals but its aggregate bindings, and those
     /// bindings: each fold's call (its reads hoisted with the literals).
     pub(super) fn unfolded(&mut self, id: ClauseId) -> (Vec<Lit>, Vec<Fold>) {
-        let mut lits = Vec::new();
+        self.unfolded_after(id, Vec::new())
+    }
+
+    /// [`Self::unfolded`] after `lits`, the literals its statement holds
+    /// before it (a let's parameters' demand, R-187).
+    pub(super) fn unfolded_after(
+        &mut self,
+        id: ClauseId,
+        mut lits: Vec<Lit>,
+    ) -> (Vec<Lit>, Vec<Fold>) {
         let mut folds = Vec::new();
         for &g in &self.program.clauses[id].goals {
             let (reads, fold, after) = match &self.program.goals[g].kind {
