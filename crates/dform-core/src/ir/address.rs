@@ -326,7 +326,9 @@ fn constant(text: &str) -> Option<String> {
 
 /// Read an address the way `Display` prints it, `T["A"]`, with an optional
 /// attribute path after it (`T["A"].tags.team`, `T["A"].subnet_ids[0]`),
-/// by the term parser: the text must be one chain of that shape.
+/// by the term parser: the text must be one chain of that shape. Past a
+/// list the path names an element as the plan prints it, by its position
+/// or by its key (`T["A"].spec.ports[port=5432,protocol=TCP].protocol`).
 pub fn parse(src: &str) -> Result<(Address, Option<String>)> {
     let bad = || {
         anyhow!(
@@ -334,6 +336,27 @@ pub fn parse(src: &str) -> Result<(Address, Option<String>)> {
              attribute path ('net.vpc[\"main\"].cidr'), got '{src}'"
         )
     };
+    // A keyed element is no term: the address and the path up to it are
+    // the term's, the rest the plan's path.
+    if let Some(at) = keyed_at(src) {
+        let (addr, Some(mut path)) = parse(&src[..at])? else {
+            return Err(bad());
+        };
+        let rest = &src[at..];
+        let toks = crate::report::fold::tokens(rest);
+        if toks.iter().map(|t| t.text.as_str()).collect::<String>() != rest {
+            return Err(bad());
+        }
+        for t in toks {
+            use crate::report::fold::Step;
+            match t.step {
+                Step::Key(k) => path = path_join(&path, &segment_key(&k)),
+                Step::Index(_) | Step::Keyed(_) => path.push_str(&t.text),
+                Step::Other(_) => return Err(bad()),
+            }
+        }
+        return Ok((addr, Some(path)));
+    }
     let parse = crate::syntax::parser::parse_term(src.trim());
     if !parse.errors.is_empty() {
         return Err(bad());
@@ -417,6 +440,25 @@ pub fn parse(src: &str) -> Result<(Address, Option<String>)> {
         return Err(bad());
     };
     Ok((Address { typ, name }, (!path.is_empty()).then_some(path)))
+}
+
+/// Where the first element named by its key (`[port=5432]`) begins in
+/// `src`: a `[` whose text up to its `]` holds an `=` outside a string.
+fn keyed_at(src: &str) -> Option<usize> {
+    let (mut open, mut quoted, mut escaped) = (None, false, false);
+    for (i, c) in src.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            _ if quoted => {}
+            '[' => open = Some(i),
+            ']' => open = None,
+            '=' if open.is_some() => return open,
+            _ => {}
+        }
+    }
+    None
 }
 
 /// A resource's address written as a path, as the plan prints it after
@@ -595,6 +637,39 @@ mod tests {
         assert!(parse_path("k3s/admin").is_err());
         for not in ["want(t, a)", "a..b", "a[0]", "a b"] {
             assert_eq!(parse_path(not).unwrap(), None, "{not}");
+        }
+    }
+
+    /// Past a list, an element as the plan prints it: by its position or
+    /// by its key, a field of it after.
+    #[test]
+    fn reads_a_keyed_element() {
+        for (text, path) in [
+            (
+                r#"kube.service["pg"].spec.ports[port=5432,protocol=TCP].protocol"#,
+                "spec.ports[port=5432,protocol=TCP].protocol",
+            ),
+            (
+                r#"kube.service["pg"].spec.ports[port=5432]"#,
+                "spec.ports[port=5432]",
+            ),
+            (
+                r#"t["x"].c[name=web].args[0]."a.b""#,
+                r#"c[name=web].args[0]."a.b""#,
+            ),
+        ] {
+            let (addr, got) = parse(text).unwrap();
+            assert_eq!(addr.name, if text.starts_with('t') { "x" } else { "pg" });
+            assert_eq!(got.as_deref(), Some(path), "{text}");
+        }
+        assert_eq!(parse(r#"t["a=b"]"#).unwrap(), (a("t", "a=b"), None));
+        for s in [
+            r#"t["x"][k=v]"#,
+            r#"t["x"].c[k=v"#,
+            r#"t["x"].c[k=v] d"#,
+            r#"t["a/b"].c[k=v]"#,
+        ] {
+            assert!(parse(s).is_err(), "{s}");
         }
     }
 

@@ -203,11 +203,9 @@ fn a_path_that_reaches_nothing_says_the_nearest() {
     );
 }
 
-/// The full address, `T["A"]`, is the plan file's and `--json`'s, whose
-/// paths name an element by its position; past it the plan's keyed form
-/// is not read yet (`ir::parse_address` takes an index, not a key).
+/// The full address, `T["A"]`, is the plan file's and `--json`'s: past
+/// it a path names an element as the plan prints it too, by its key.
 #[test]
-#[ignore = "the full address `T[\"A\"]` takes `[N]` only: a keyed element after it is not parsed"]
 fn the_full_address_takes_a_keyed_element() {
     let s = project("why-paths-full");
     let why = run(
