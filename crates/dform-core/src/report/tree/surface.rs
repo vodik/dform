@@ -309,12 +309,12 @@ impl Surface<'_, '_> {
             out
         });
         let label = match (keys.get(&(t.to_string(), list.to_string())), k) {
-            (Some(ks), Value::Obj(m)) => ks
-                .iter()
-                .map(|f| Some(format!("{f}={}", spell::bare(m.get(f)?))))
-                .collect::<Option<Vec<_>>>()?
-                .join(","),
-            (Some(ks), k) if ks.len() == 1 => format!("{}={}", ks[0], spell::bare(k)),
+            (Some(ks), Value::Obj(_)) => crate::report::fold::label(ks, k)?,
+            // A list keyed by one field written by that field's value.
+            (Some(ks), k) if ks.len() == 1 => {
+                let one = Value::Obj([(ks[0].clone(), k.clone())].into());
+                crate::report::fold::label(ks, &one)?
+            }
             _ => spell::bare(k),
         };
         Some((format!("{list}[{label}]"), content))

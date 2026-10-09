@@ -374,16 +374,10 @@ pub fn flatten(
             let is_set = schema.attr(typ, norm).is_some_and(|a| a.kind() == "set");
             let mut items: Vec<(String, &Json)> = Vec::new();
             for (i, vv) in xs.iter().enumerate() {
-                let by_key = keys.and_then(|ks| {
-                    ks.iter()
-                        .map(|k| {
-                            vv.get(k)
-                                .map(|x| format!("{k}={}", fmt_value(Some(x)).trim_matches('"')))
-                        })
-                        .collect::<Option<Vec<_>>>()
-                });
+                let by_key =
+                    keys.and_then(|ks| crate::report::fold::label(ks, &key_fields(ks, vv)));
                 let label = match by_key {
-                    Some(parts) => parts.join(","),
+                    Some(label) => label,
                     None if is_set => serde_json::to_string(vv).unwrap_or_default(),
                     None => i.to_string(),
                 };
@@ -417,6 +411,20 @@ pub fn flatten(
             out.insert(prefix.to_string(), (v.clone(), norm.to_string()));
         }
     }
+}
+
+/// Element `x`'s fields `keys` as the evaluator's value, to label it by
+/// (`report::fold::label`): an unknown or a secret as its label.
+fn key_fields(keys: &[String], x: &Json) -> Value {
+    let field = |x: &Json| match marker(x) {
+        Some(_) => Value::Str(fmt_value(Some(x))),
+        None => json_to_value(x),
+    };
+    Value::Obj(
+        keys.iter()
+            .filter_map(|k| Some((k.clone(), field(x.get(k)?))))
+            .collect(),
+    )
 }
 
 #[cfg(test)]

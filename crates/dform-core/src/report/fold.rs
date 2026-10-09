@@ -183,6 +183,18 @@ pub fn keyed(x: &Value, pairs: &[(String, String)]) -> bool {
         .all(|(k, want)| m.get(k).is_none_or(|v| spell::bare(v) == *want))
 }
 
+/// The label the plan names element `x` of a list keyed by `keys` with
+/// (R-158), `port=5432,protocol=TCP`: each key field and its value bare,
+/// as [`keyed`] reads it back. `None` when `x` leaves a key field out.
+pub fn label(keys: &[String], x: &Value) -> Option<String> {
+    let Value::Obj(m) = x else { return None };
+    let fields: Option<Vec<String>> = keys
+        .iter()
+        .map(|k| Some(format!("{k}={}", spell::bare(m.get(k)?))))
+        .collect();
+    Some(fields?.join(","))
+}
+
 /// Where the leaf at `toks` sits in value `v`, to order leaves by: a
 /// key by its name, an element by its position in the list (a keyed
 /// one's in the order the program gave the elements).
@@ -520,6 +532,175 @@ pub(crate) fn type_defaults(all: &BTreeSet<Atom>, typ: &str) -> BTreeSet<String>
         .collect()
 }
 
+/// What the schema says of an attribute's type that the plan's paths
+/// and notes read: the paths whose value is its default (R-217), and
+/// each keyed list's keys (`type_list_key`), by schema path.
+pub struct Shape {
+    defaults: BTreeSet<String>,
+    lists: BTreeMap<String, Vec<String>>,
+}
+
+impl Shape {
+    /// The shape of attribute fact `f`'s type, from the schema's facts.
+    pub fn of(facts: &BTreeSet<Atom>, f: &Atom) -> Shape {
+        let Some(Term::Val(Value::Str(typ))) = f.args.first() else {
+            return Shape {
+                defaults: BTreeSet::new(),
+                lists: BTreeMap::new(),
+            };
+        };
+        let lists = facts
+            .iter()
+            .filter(|a| a.pred == "type_list_key")
+            .filter_map(|a| match a.args.as_slice() {
+                [
+                    Term::Val(Value::Str(t)),
+                    Term::Val(Value::Str(l)),
+                    Term::Val(ks),
+                ] if t == typ => {
+                    let ks = match ks {
+                        Value::List(ks) => ks
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(String::from)
+                            .collect(),
+                        Value::Str(k) => vec![k.clone()],
+                        _ => return None,
+                    };
+                    Some((l.clone(), ks))
+                }
+                _ => None,
+            })
+            .collect();
+        Shape {
+            defaults: type_defaults(facts, typ),
+            lists,
+        }
+    }
+
+    /// The leaf at printed path `path` is where the schema gives a default.
+    pub fn defaulted(&self, path: &str) -> bool {
+        self.defaults.contains(&schema_path(path))
+    }
+
+    /// Element `j` of the list at printed path `list`, `x`, as the plan
+    /// prints its path: by its key in a keyed list,
+    /// `spec.ports[port=5432,protocol=TCP]`, else by its position.
+    pub fn element(&self, list: &str, j: usize, x: &Value) -> String {
+        match self
+            .lists
+            .get(&schema_path(list))
+            .and_then(|ks| label(ks, x))
+        {
+            Some(label) => format!("{list}[{label}]"),
+            None => format!("{list}[{j}]"),
+        }
+    }
+
+    /// Attribute fact `f`'s value below `keys`, and past a list `below`
+    /// (`[0].protocol`), its path, and the path the pattern named from the
+    /// resource as the plan prints it (`spec.ports[port=5432,protocol=TCP].protocol`).
+    pub fn reach<'f>(
+        &self,
+        f: &'f Atom,
+        keys: &[String],
+        below: &[Tok],
+    ) -> Option<(&'f Value, &'f String, String)> {
+        let (Some(Term::Val(v)), Some(Term::Val(Value::Str(top)))) = (f.args.get(3), f.args.get(2))
+        else {
+            return None;
+        };
+        let mut v = keys.iter().try_fold(v, |v, k| match v {
+            Value::Obj(m) => m.get(k),
+            _ => None,
+        })?;
+        let mut path = keys
+            .iter()
+            .fold(top.clone(), |p, k| crate::ir::path_join(&p, k));
+        for t in below {
+            let next = reach(v, std::slice::from_ref(t))?;
+            path = match v {
+                Value::List(xs) => {
+                    let j = xs.iter().position(|x| std::ptr::eq(x, next))?;
+                    self.element(&path, j, next)
+                }
+                _ => path + &t.text,
+            };
+            v = next;
+        }
+        Some((v, top, path))
+    }
+
+    /// Value `v` at printed path `path` of attribute fact `f` as a tree to
+    /// lay out, as the plan lays a value out: a list's elements at their
+    /// paths as the plan prints them, each leaf as `leaf` spells it, and
+    /// a leaf no write of the program made that the schema defaults
+    /// followed by its note (R-217).
+    pub fn laid(
+        &self,
+        p: &tree::Printer,
+        f: &Atom,
+        path: &str,
+        v: &Value,
+        leaf: &dyn Fn(&Value) -> String,
+    ) -> Tree {
+        let open =
+            |v: &Value| matches!(v, Value::Obj(_) | Value::List(_)) && !p.redact.is_secret(v);
+        // Each leaf of `v` at its path, as `each` takes it.
+        fn walk(
+            v: &Value,
+            path: String,
+            open: &dyn Fn(&Value) -> bool,
+            shape: &Shape,
+            each: &mut dyn FnMut(&Value, String) -> Tree,
+        ) -> Tree {
+            match v {
+                Value::Obj(m) if open(v) => Tree::Obj(
+                    m.iter()
+                        .map(|(k, x)| {
+                            let at = crate::ir::path_join(&path, k);
+                            let t = walk(x, at, open, shape, each);
+                            (crate::fmt::value::key_text(k), t)
+                        })
+                        .collect(),
+                ),
+                Value::List(xs) if open(v) => Tree::List(
+                    xs.iter()
+                        .enumerate()
+                        .map(|(j, x)| walk(x, shape.element(&path, j, x), open, shape, each))
+                        .collect(),
+                ),
+                v => each(v, path),
+            }
+        }
+        // The leaves the schema defaults, and of them those no write made.
+        let mut defaulted = Vec::new();
+        if !self.defaults.is_empty() {
+            walk(v, path.to_string(), &open, self, &mut |_, at| {
+                if self.defaulted(&at) {
+                    defaulted.push(at);
+                }
+                Tree::Leaf(String::new())
+            });
+        }
+        let noted: BTreeSet<&String> = defaulted
+            .iter()
+            .zip(p.writers(f, &defaulted))
+            .filter_map(|(at, w)| w.is_none().then_some(at))
+            .collect();
+        walk(
+            v,
+            path.to_string(),
+            &open,
+            self,
+            &mut |v, at| match noted.contains(&at) {
+                true => Tree::Noted(leaf(v), SCHEMA_DEFAULT.into()),
+                false => Tree::Leaf(leaf(v)),
+            },
+        )
+    }
+}
+
 /// A deformation's lines being folded: their paths and writers, which
 /// are the schema's defaults, the type's keyless sets, and each
 /// contribution's document row.
@@ -713,8 +894,6 @@ pub(super) fn whole(v: &Shown, why: Why) -> String {
     }
 }
 
-/// A printed path's schema path: its keys, no selectors
-/// (`spec.ports[name=web].protocol` is `spec.ports.protocol`).
 /// The keyless sets of type `typ`, by schema path: each attribute
 /// `type_attr` types `set(..)` or `type_lattice` declares a set, but a
 /// list keyed by `type_list_key`.
@@ -799,6 +978,8 @@ pub(super) fn set_element(path: &str, sets: &BTreeSet<String>) -> Option<String>
     (!list.contains('[') && sets.contains(&schema_path(list))).then(|| list.to_string())
 }
 
+/// A printed path's schema path: its keys, no selectors
+/// (`spec.ports[name=web].protocol` is `spec.ports.protocol`).
 pub(crate) fn schema_path(path: &str) -> String {
     tokens(path)
         .into_iter()
