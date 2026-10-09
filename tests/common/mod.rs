@@ -130,8 +130,25 @@ impl Scratch {
     pub fn run_in<S: AsRef<std::ffi::OsStr>>(&self, rel: &str, args: &[S]) -> Run {
         let dir = self.path(rel);
         std::fs::create_dir_all(&dir).unwrap();
-        let out = dform().args(yes(args)).current_dir(&dir).output().unwrap();
+        let mut c = dform();
+        let out = saying(&mut c, self)
+            .args(yes(args))
+            .current_dir(&dir)
+            .output()
+            .unwrap();
         self.plain(Run::from(out))
+    }
+
+    /// What the runs since the last call said on stdout, as events
+    /// (`dform::said::Said::json`, recorded through `DFORM_TEST_SAID`):
+    /// each read once.
+    pub fn said(&self) -> Vec<serde_json::Value> {
+        let path = self.path("said.jsonl");
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let _ = std::fs::remove_file(&path);
+        text.lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
     }
 
     /// Run the command line `ARGS` over `backend`.
@@ -382,6 +399,38 @@ pub fn yes<S: AsRef<std::ffi::OsStr>>(args: &[S]) -> Vec<std::ffi::OsString> {
 /// fake`).
 pub fn dform() -> Command {
     Command::new(env!("CARGO_BIN_EXE_dform"))
+}
+
+/// `cmd` records what it says on stdout as events in `s`
+/// (`DFORM_TEST_SAID`), for [`Scratch::said`].
+pub fn saying<'c>(cmd: &'c mut Command, s: &Scratch) -> &'c mut Command {
+    cmd.env("DFORM_TEST_SAID", s.path("said.jsonl"))
+}
+
+/// An event of [`Scratch::said`] in brief: what was said and of which
+/// tick, `plan 2`, `policies 1`, `differs 2`, `asked tick 2`, `answered
+/// yes`, `configured k8s 1`.
+pub fn brief(e: &serde_json::Value) -> String {
+    let n = |k: &str| e[k].as_u64().unwrap_or_default();
+    match e["said"].as_str().unwrap_or_default() {
+        "plan" => format!("plan {}", n("tick")),
+        "policies" => format!("policies {}", n("after")),
+        "differs" => format!("differs {}", n("tick")),
+        "configured" => format!(
+            "configured {} {}",
+            e["provider"].as_str().unwrap(),
+            n("after")
+        ),
+        "asked" => match e["question"].as_str().unwrap_or_default() {
+            "tick" => format!("asked tick {}", n("tick")),
+            q => format!("asked {q}"),
+        },
+        "answered" => match e["yes"].as_bool() {
+            Some(true) => "answered yes".into(),
+            _ => "answered no".into(),
+        },
+        k => k.to_string(),
+    }
 }
 
 /// `cmd` run answering each `[y/N]` question in turn, its answers on stdin

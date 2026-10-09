@@ -8,10 +8,11 @@
 //!
 //! The server is the mock's `db.postgres` (the mock run as a plugin, a
 //! second provider process), the settings its endpoint behind an
-//! `env.var`, the provider configured from them the mock's `k8s`.
+//! `env.var`, the provider configured from them the mock's `k8s`. What
+//! the apply decides is read back as what it said (`common::brief`).
 
 mod common;
-use common::{Run, STOPPED, Scratch};
+use common::{Run, STOPPED, Scratch, brief};
 
 const PROG: &str = r#"
 use env
@@ -36,7 +37,8 @@ fn scratch(name: &str) -> Scratch {
 
 fn dform(s: &Scratch, args: &[&str]) -> std::process::Command {
     let mut c = common::dform();
-    c.args(args)
+    common::saying(&mut c, s)
+        .args(args)
         .env("R45_KUBECONFIG", "kc")
         .env("DFORM_WAIT_POLL_MS", "50")
         .env("NO_COLOR", "1")
@@ -75,27 +77,25 @@ fn apply_asks_once_for_what_waits_on_the_provider() {
     let s = scratch("tick2-asks");
     let (said, code) = answers(&s, &["y"]);
     assert_eq!(code, 0, "{said:?}");
-    assert!(
-        said[0].contains("tick 2  1 change\n  waits on  provider k8s  kubeconfig = kc\n"),
-        "{}",
-        said[0]
+    let events = s.said();
+    assert_eq!(
+        events.iter().map(brief).collect::<Vec<_>>(),
+        [
+            "plan 1",
+            "asked plan",
+            "answered yes",
+            "configured k8s 1",
+            "plan 2"
+        ],
+        "{said:?}"
     );
-    assert!(
-        said[0].ends_with("Apply these 2 changes to p? [y/N] "),
-        "{}",
-        said[0]
+    assert_eq!(events[1]["changes"], 2);
+    // A setting is said by its key at the default level: its value may
+    // be a secret.
+    assert_eq!(
+        events[3]["settings"],
+        serde_json::json!(["kubeconfig = (sensitive)"])
     );
-    assert!(
-        said[1].contains("provider k8s: configured after tick 1: kubeconfig = (sensitive)\n"),
-        "{}",
-        said[1]
-    );
-    assert!(
-        said[1].contains("tick 2  1 change\n  + k8s.namespace ns"),
-        "{}",
-        said[1]
-    );
-    assert!(!said[1].contains("[y/N]"), "{}", said[1]);
     assert!(s.read("w.json").contains("k8s.namespace"));
 }
 
@@ -112,9 +112,11 @@ fn declining_makes_neither_tick() {
 #[test]
 fn yes_applies_tick_two() {
     let s = scratch("tick2-yes");
-    let r = dev(&s, &["apply", "--yes", "p.df"]).success();
-    assert!(r.stdout.contains("tick 2  1 change"), "{}", r.stdout);
-    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
+    dev(&s, &["apply", "--yes", "p.df"]).success();
+    assert_eq!(
+        s.said().iter().map(brief).collect::<Vec<_>>(),
+        ["plan 1", "configured k8s 1", "plan 2"]
+    );
     let c = audit(&s, "configure");
     assert_eq!(c.len(), 1, "{c:?}");
     assert_eq!(
@@ -157,22 +159,29 @@ fn the_boundary_waits_for_the_settings_then_configures() {
         ],
     )
     .success();
-    // Tick 2 only waits: its header says which tick the report is of.
-    assert!(
-        r.stdout.contains(
-            "tick 2  0 changes\nplan: 1 create waiting on provider k8s  kubeconfig = kc\n"
-        ),
+    // Tick 2 only waits: the report gives it no section of its own.
+    let events = s.said();
+    assert_eq!(
+        events.iter().map(brief).collect::<Vec<_>>(),
+        [
+            "plan 1",
+            "plan 2",
+            "differs 2",
+            "configured k8s 2",
+            "plan 3"
+        ],
         "{}",
         r.stdout
     );
+    assert_eq!(events[1]["idle"], true);
     assert!(
-        r.stdout
-            .contains("provider k8s: configured after tick 2: kubeconfig = (sensitive)"),
+        events[4]["text"]
+            .as_str()
+            .unwrap()
+            .contains("  + k8s.namespace ns"),
         "{}",
         r.stdout
     );
-    assert!(r.stdout.contains("  + k8s.namespace ns"), "{}", r.stdout);
-    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     let w = audit(&s, "wait");
     assert_eq!(w.len(), 1, "{w:?}");
     assert_eq!(w[0]["result"], "resolved");
@@ -212,18 +221,20 @@ fn a_kind_served_after_the_boundary_is_planned_with_its_schema() {
     // Tick 2's plan, as the boundary planned it with the schema it
     // learned, is printed again (After R-206).
     let r = dev(&s, &["apply", "--yes", "p.df"]).success();
-    let (_, tick2) = r
-        .stdout
-        .split_once("provider k8s: configured after tick 1: ")
-        .unwrap_or_else(|| panic!("{}", r.stdout));
-    assert!(
-        tick2.contains("  + k8s.example.io.v1.token t  ")
-            && tick2.contains("      spec.value = (sensitive)\n"),
+    let events = s.said();
+    assert_eq!(
+        events.iter().map(brief).collect::<Vec<_>>(),
+        ["plan 1", "configured k8s 1", "plan 2"],
         "{}",
         r.stdout
     );
-    assert!(!tick2.contains("TOKEN-VALUE"), "{}", r.stdout);
-    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
+    let tick2 = events[2]["text"].as_str().unwrap();
+    assert!(
+        tick2.contains("  + k8s.example.io.v1.token t  ")
+            && tick2.contains("      spec.value = (sensitive)\n"),
+        "{tick2}"
+    );
+    assert!(!tick2.contains("TOKEN-VALUE"), "{tick2}");
     let w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
     assert_eq!(
         w["resources"]["k8s.config_map::c"]["attrs"]["data"]["uid"], "uid-t",

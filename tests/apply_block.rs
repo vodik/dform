@@ -1,5 +1,6 @@
-//! The apply's ticks as a run of the binary shows them (R-206, After
-//! R-206): what ticks.rs decides to print and ask on stdout, and how the
+//! The apply's ticks as a run of the binary decides them (R-206, After
+//! R-206): what ticks.rs says on stdout, read back as events
+//! (`common::brief`; their words are tests/apply_said.rs's), and how the
 //! run ends. Under each tick a boundary follows, the policy block as it
 //! re-derived it, `policy after tick 1   2 hold  (was 1 · 1
 //! undetermined)`; a later tick's plan printed again from that tick on,
@@ -11,7 +12,7 @@
 //! lines themselves report/progress.rs's).
 
 mod common;
-use common::Scratch;
+use common::{Scratch, brief};
 
 /// Two ticks: the vm reads the database's endpoint, known once tick 1
 /// made it; one policy holds, one is undetermined until tick 2.
@@ -39,10 +40,21 @@ fn apply(s: &Scratch, chaos: &[&str], args: &[&str]) -> std::process::Command {
     let mut verb = vec!["apply"];
     verb.extend_from_slice(args);
     let mut c = common::dform();
-    c.args(common::on("p.df", &mock, &verb))
+    common::saying(&mut c, s)
+        .args(common::on("p.df", &mock, &verb))
         .env("NO_COLOR", "1")
         .current_dir(&s.dir);
     c
+}
+
+/// The ticks the audit log says ran.
+fn ticks(s: &Scratch) -> Vec<u64> {
+    s.read("w.state.audit.jsonl")
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .filter(|e| e["kind"] == "tick")
+        .filter_map(|e| e["tick"].as_u64())
+        .collect()
 }
 
 /// Under `--yes`: the policies after tick 1, then tick 2's plan again,
@@ -52,20 +64,21 @@ fn apply(s: &Scratch, chaos: &[&str], args: &[&str]) -> std::process::Command {
 fn a_later_tick_prints_its_plan_again_after_the_policies() {
     let s = scratch("block-two", TWO);
     let out = apply(&s, &[], &["--yes"]).output().unwrap();
-    let r = common::Run::from(out).success();
-    let (_, after) = r
-        .stdout
-        .split_once("\npolicy after tick 1   2 hold  (was 1 · 1 undetermined)\n")
-        .unwrap_or_else(|| panic!("{}", r.stdout));
+    common::Run::from(out).success();
+    let said = s.said();
+    assert_eq!(
+        said.iter().map(brief).collect::<Vec<_>>(),
+        ["plan 1", "policies 1", "plan 2"]
+    );
+    assert_eq!(
+        said[1]["text"],
+        "policy after tick 1   2 hold  (was 1 · 1 undetermined)\n"
+    );
+    // The value tick 1 made known, in place of what tick 2 waited on.
+    let tick2 = said[2]["text"].as_str().unwrap();
     assert!(
-        after.starts_with(
-            "\nplan: 1 change (1 create) over 1 tick; policy: 2 hold\n\n\
-             tick 2  1 change\n  \
-             + compute.vm app  p.df:5\n      \
-             db_host = \"db.db.fake\"\n"
-        ),
-        "{}",
-        r.stdout
+        tick2.contains("  + compute.vm app  p.df:5\n      db_host = \"db.db.fake\"\n"),
+        "{tick2}"
     );
     let w = s.json("w.json");
     assert_eq!(
@@ -85,23 +98,16 @@ fn a_policy_failing_at_the_boundary_is_its_line_above_the_refusal() {
     let out = apply(&s, &[], &["--yes"]).output().unwrap();
     let r = common::Run::from(out);
     assert_eq!(r.code, Some(4), "{}{}", r.stdout, r.stderr);
-    let (_, after) = r
-        .stdout
-        .split_once("\npolicy after tick 1   1 hold · 1 fails ")
-        .unwrap_or_else(|| panic!("{}", r.stdout));
-    let mut lines = after.lines();
+    let said = s.said();
     assert_eq!(
-        lines.next().map(str::trim),
-        Some("(was 1 · 1 undetermined)"),
-        "{}",
-        r.stdout
+        said.iter().map(brief).collect::<Vec<_>>(),
+        ["plan 1", "policies 1"]
     );
+    let policies = said[1]["text"].as_str().unwrap();
     assert!(
-        lines
-            .next()
-            .is_some_and(|l| l.starts_with("  fails  the vm reads no endpoint nowhere  p.df:7")),
-        "{}",
-        r.stdout
+        policies.starts_with("policy after tick 1   1 hold · 1 fails ")
+            && policies.contains("\n  fails  the vm reads no endpoint nowhere  p.df:7"),
+        "{policies}"
     );
     assert!(
         r.stderr
@@ -109,7 +115,7 @@ fn a_policy_failing_at_the_boundary_is_its_line_above_the_refusal() {
         "{}",
         r.stderr
     );
-    assert!(!r.stderr.contains("tick 2"), "{}", r.stderr);
+    assert_eq!(ticks(&s), [1]);
 }
 
 /// A later tick that adds to the plan shown asks on its header line; its
@@ -127,15 +133,18 @@ resource iam.policy "connect-${host}" {
 "#,
     );
     let mut cmd = common::dform();
-    cmd.args(["dev", "--world", "w.json", "apply", "p.df"])
+    common::saying(&mut cmd, &s)
+        .args(["dev", "--world", "w.json", "apply", "p.df"])
         .current_dir(&s.dir);
     let (said, code) = common::answering(&s.dir, cmd, &["y", "y"]);
     assert_eq!(code, 0, "{said:?}");
-    assert!(
-        said[1].ends_with("\ntick 2  1 change   apply? [y/N] "),
-        "{}",
-        said[1]
+    let events = s.said();
+    assert_eq!(
+        events.iter().map(brief).collect::<Vec<_>>()[3..],
+        ["plan 2", "differs 2", "asked tick 2", "answered yes"],
+        "{said:?}"
     );
+    assert_eq!(events[5]["changes"], 1);
 }
 
 /// A failure at tick 2 is said once, below the block; the run ends
@@ -159,4 +168,27 @@ fn a_failure_is_said_once() {
         "{}",
         r.stderr
     );
+}
+
+/// A later tick whose re-plan has nothing left to change (the subnet
+/// waited on the vpc's new id, which the replacement kept) prints no plan
+/// mid-apply, where it said `stack p is up to date` as if the apply had
+/// ended: its block says `tick 2  nothing to do` (the printer's,
+/// tests/apply_events.rs), and the apply ends as it does.
+#[test]
+fn a_later_tick_with_nothing_to_do_prints_no_plan() {
+    const NET: &str = "use fake\n\
+         resource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
+         resource net.subnet a { vpc_id = ref(net.vpc, \"main\", \"id\"), tier = \"web\" }\n";
+    let s = scratch("block-nothing", NET);
+    apply(&s, &[], &["--yes"]).status().unwrap();
+    s.said();
+    s.write("p.df", &NET.replace("10.0.0.0/16", "10.1.0.0/16"));
+    let out = apply(&s, &[], &["--yes"]).output().unwrap();
+    common::Run::from(out).success();
+    assert_eq!(
+        s.said().iter().map(brief).collect::<Vec<_>>(),
+        ["plan 1", "differs 2"]
+    );
+    assert_eq!(ticks(&s), [1, 1]);
 }

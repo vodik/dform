@@ -2,7 +2,7 @@
 //! C's two-phase GKE stack against the gke mock schema.
 
 mod common;
-use common::{Scratch, repo};
+use common::{Scratch, brief, repo};
 
 const GKE_PLAN: &str = r#"plan: 6 changes (6 create) over 2 ticks; policy: 1 hold · 1 undetermined
 
@@ -132,22 +132,18 @@ fn world_resources(s: &Scratch) -> Vec<String> {
 #[test]
 fn gke_two_phase_applies_in_two_ticks() {
     let s = Scratch::new("gke-ticks");
-    let r = gke(&s, "gke_two_phase.df", &["apply"]).success();
-    assert!(
-        r.stdout.starts_with(
-            "plan: 6 changes (6 create) over 2 ticks; policy: 1 hold · 1 undetermined\n\ntick 1  "
-        ),
-        "{}",
-        r.stdout
+    gke(&s, "gke_two_phase.df", &["apply"]).success();
+    let said = s.said();
+    assert_eq!(
+        said.iter().map(brief).collect::<Vec<_>>(),
+        ["plan 1", "policies 1", "plan 2", "differs 2"]
     );
+    // Tick 2 names the node pools tick 1's plan could not.
+    let tick2 = said[2]["text"].as_str().unwrap();
     assert!(
-        r.stdout.contains(
-            "plan: 5 changes (5 create) over 1 tick; policy: 2 hold\n\ntick 2  5 changes\n"
-        ),
-        "{}",
-        r.stdout
+        tick2.starts_with("plan: 5 changes (5 create) over 1 tick; policy: 2 hold\n"),
+        "{tick2}"
     );
-    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     assert_eq!(
         world_resources(&s),
         [
@@ -161,8 +157,10 @@ fn gke_two_phase_applies_in_two_ticks() {
             "k8s.secret::db_credentials",
         ]
     );
-    let again = gke(&s, "gke_two_phase.df", &["apply"]).success();
-    assert_eq!(again.stdout, "stack gke_two_phase is up to date\n");
+    gke(&s, "gke_two_phase.df", &["apply"]).success();
+    let said = s.said();
+    assert_eq!(said.iter().map(brief).collect::<Vec<_>>(), ["plan 1"]);
+    assert_eq!(said[0]["text"], "stack gke_two_phase is up to date\n");
 }
 
 /// The other branch of item 6: placed in one zone (`--set zones=1`), the
@@ -173,9 +171,11 @@ fn gke_two_phase_applies_in_two_ticks() {
 fn gke_one_zone_stops_after_tick_one() {
     let s = Scratch::new("gke-one-zone");
     let r = gke(&s, "gke_two_phase.df", &["apply", "--set", "zones=1"]).failure();
-    assert!(r.stdout.contains("tick 1  "), "{}", r.stdout);
     // One plan printed: no later tick was planned.
-    assert_eq!(r.stdout.matches("plan: ").count(), 1, "{}", r.stdout);
+    assert_eq!(
+        s.said().iter().map(brief).collect::<Vec<_>>(),
+        ["plan 1", "policies 1"]
+    );
     assert!(
         r.stderr
             .contains("- cluster must be in at least two zones  cluster = \"pngu\"")
@@ -224,21 +224,17 @@ fn a_pending_update_applies_after_the_boundary() {
     );
     // Tick 2's plan, re-derived at the boundary, is printed again with the
     // value it now knows (After R-206).
-    let r = s
-        .run(&common::on("p.df", &["--world", "w.json"], &["apply"]))
+    s.run(&common::on("p.df", &["--world", "w.json"], &["apply"]))
         .success();
-    assert!(
-        r.stdout
-            .contains("plan: 2 changes (1 create, 1 update) over 2 ticks\n"),
-        "{}",
-        r.stdout
+    let said = s.said();
+    assert_eq!(
+        said.iter().map(brief).collect::<Vec<_>>(),
+        ["plan 1", "plan 2"]
     );
+    let tick2 = said[1]["text"].as_str().unwrap();
     assert!(
-        r.stdout
-            .split_once("plan: 1 change (1 update) over 1 tick\n\ntick 2  1 change\n")
-            .is_some_and(|(_, t)| t.contains("db_host = \"old.db.fake\" → \"main.db.fake\"")),
-        "{}",
-        r.stdout
+        tick2.contains("db_host = \"old.db.fake\" → \"main.db.fake\""),
+        "{tick2}"
     );
     let r = s
         .run(&common::on("p.df", &["--world", "w.json"], &["plan"]))

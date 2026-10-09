@@ -140,7 +140,8 @@ use fake
 
 /// A force_new change is a replace; by default the old object goes first
 /// and the new one takes its name. The subnet waits for the new id; the
-/// mock without `fresh-ids` mints the same one, so tick 2 has nothing to do.
+/// mock without `fresh-ids` mints the same one, so tick 2 has nothing to do:
+/// its block says so on stderr, never the plan's "up to date".
 #[test]
 fn a_force_new_change_replaces_destroying_first() {
     let s = Scratch::new("replace");
@@ -160,8 +161,6 @@ tick 2  1 change
   waits on  main
   ~ net.subnet a  p.df:4
       vpc_id = "net.vpc:main" → main
-
-stack p is up to date
 tick 2 differs from the plan shown:
   - net.subnet a  update, no longer a change
 "#

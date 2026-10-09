@@ -3,7 +3,10 @@
 //! the plan knew them, apply without a word; a tick that differs (a value
 //! the provider reports otherwise after tick 1) is printed with what
 //! differs, `a → b`, and asked for again, unless `--yes`; a plan file
-//! stops before it, exit 5, naming what differs.
+//! stops before it, exit 5, naming what differs. What the apply decides
+//! is read back as what it said (`common::brief`); the words of each
+//! line are tests/apply_said.rs's, and the one test here that reads
+//! stdout checks the question follows what differs on a terminal.
 //!
 //! The namespace's update in tick 1 is followed by chaos `mutate` of its
 //! `metadata.resourceVersion`, as a cluster bumps it; the vm's update,
@@ -11,7 +14,7 @@
 //! showed `rv = <none> → "115"`; tick 2 plans `"200"`.
 
 mod common;
-use common::Scratch;
+use common::{Scratch, brief};
 
 const BEFORE: &str = r#"use fake
 use k8s
@@ -31,6 +34,26 @@ const MUTATE: &str = "mutate=k8s.namespace[\"ns\"].metadata.resourceVersion=\"20
 const DIFFERS: &str =
     "tick 2 differs from the plan shown:\n  ~ compute.vm app  rv = \"115\" → \"200\"\n";
 
+/// What tick 2 differs in: the vm's `rv`, the value tick 1's boundary
+/// learned.
+fn differs() -> serde_json::Value {
+    serde_json::json!({
+        "said": "differs",
+        "tick": 2,
+        "differences": [{
+            "mark": "~",
+            "address": "compute.vm app",
+            "path": "rv",
+            "what": "rv = \"115\" → \"200\"",
+        }],
+    })
+}
+
+/// What `s`'s last runs said, in brief.
+fn briefly(s: &Scratch) -> Vec<String> {
+    s.said().iter().map(brief).collect()
+}
+
 /// The namespace and the vm applied as `BEFORE` has them; `p.df` is
 /// `PROG`.
 fn scratch(name: &str) -> Scratch {
@@ -41,6 +64,7 @@ fn scratch(name: &str) -> Scratch {
         &["dev", "--world", "w.json", "apply", "--yes", "before.df"],
     );
     s.write("p.df", PROG);
+    s.said();
     s
 }
 
@@ -51,7 +75,10 @@ fn dform(s: &Scratch, args: &[&str]) -> common::Run {
 
 fn command(s: &Scratch, args: &[&str]) -> std::process::Command {
     let mut c = common::dform();
-    c.args(args).env("NO_COLOR", "1").current_dir(&s.dir);
+    common::saying(&mut c, s)
+        .args(args)
+        .env("NO_COLOR", "1")
+        .current_dir(&s.dir);
     c
 }
 
@@ -79,13 +106,11 @@ fn a_tick_as_shown_is_not_asked_again() {
     let s = scratch("reask-same");
     let (said, code) = answers(&s, false, &["y"]);
     assert_eq!(code, 0, "{said:?}");
-    assert!(
-        said[0].contains("tick 2  1 change\n  waits on  main.endpoint\n"),
-        "{}",
-        said[0]
+    assert_eq!(
+        briefly(&s),
+        ["plan 1", "asked plan", "answered yes", "plan 2"],
+        "{said:?}"
     );
-    assert!(!said[1].contains("differs"), "{}", said[1]);
-    assert!(!said[1].contains("[y/N]"), "{}", said[1]);
     assert_eq!(vm(&s)["rv"], "115");
 }
 
@@ -96,16 +121,22 @@ fn a_tick_that_differs_is_asked_again_with_what_differs() {
     let s = scratch("reask-differs");
     let (said, code) = answers(&s, true, &["y", "y"]);
     assert_eq!(code, 0, "{said:?}");
-    assert!(
-        said[0].contains("      rv = <none> → \"115\"\n"),
-        "{}",
-        said[0]
+    let events = s.said();
+    assert_eq!(
+        events.iter().map(brief).collect::<Vec<_>>(),
+        [
+            "plan 1",
+            "asked plan",
+            "answered yes",
+            "chaos",
+            "plan 2",
+            "differs 2",
+            "asked tick 2",
+            "answered yes"
+        ],
+        "{said:?}"
     );
-    assert!(
-        said[1].contains("tick 2  1 change\n  ~ compute.vm app  p.df:5\n"),
-        "{}",
-        said[1]
-    );
+    assert_eq!(events[5], differs());
     assert!(
         // Asked on the tick's header line (R-206).
         said[1].ends_with(&format!("{DIFFERS}tick 2  1 change   apply? [y/N] ")),
@@ -122,10 +153,16 @@ fn declining_a_tick_that_differs_keeps_tick_one() {
     let s = scratch("reask-declined");
     let (said, code) = answers(&s, true, &["y", "n"]);
     assert_eq!(code, 3, "{said:?}");
-    assert!(
-        said[2].contains("apply p: not confirmed at tick 2; ticks 1 to 1 were applied"),
-        "{}",
-        said[2]
+    assert_eq!(
+        briefly(&s)[3..],
+        [
+            "chaos",
+            "plan 2",
+            "differs 2",
+            "asked tick 2",
+            "answered no"
+        ],
+        "{said:?}"
     );
     assert_eq!(vm(&s)["db_host"], "old.db.fake");
     let w = s.read("w.json");
@@ -136,14 +173,19 @@ fn declining_a_tick_that_differs_keeps_tick_one() {
 #[test]
 fn yes_prints_what_differs_and_applies_it() {
     let s = scratch("reask-yes");
-    let r = dform(
+    dform(
         &s,
         &[
             "dev", "--world", "w.json", "--chaos", MUTATE, "apply", "--yes", "p.df",
         ],
     )
     .success();
-    assert!(r.stdout.contains(DIFFERS), "{}", r.stdout);
+    let events = s.said();
+    assert_eq!(
+        events.iter().map(brief).collect::<Vec<_>>(),
+        ["plan 1", "chaos", "plan 2", "differs 2"]
+    );
+    assert_eq!(events[3], differs());
     assert_eq!(vm(&s)["rv"], "200");
 }
 
@@ -166,9 +208,17 @@ fn a_plan_file_stops_before_a_tick_that_differs() {
         ],
     )
     .success();
+    s.said();
     let r = dform(&s, &["dev", "--chaos", MUTATE, "apply", "plan.json"]).failure();
     assert_eq!(r.code, Some(5), "{}\n{}", r.stdout, r.stderr);
-    assert!(r.stdout.contains(DIFFERS), "{}", r.stdout);
+    let events = s.said();
+    assert_eq!(
+        events.iter().map(brief).collect::<Vec<_>>(),
+        ["plan 1", "chaos", "plan 2", "differs 2"],
+        "{}",
+        r.stdout
+    );
+    assert_eq!(events[3], differs());
     assert!(
         r.stderr.contains(
             "apply stopped after tick 1: tick 2 differs from the plan it applies: compute.vm \

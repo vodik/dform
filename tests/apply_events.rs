@@ -6,8 +6,9 @@
 //! one's line again every heartbeat (the provider's own word in it, R-130),
 //! the tick's end, each failure once below; `-q` the end alone; on a
 //! terminal the block drawn in place, the header's bar filling, a line
-//! said meanwhile (a retry, the stop) above it with no stale copy of the
-//! block left. That the events reach the printer from every backend is
+//! said meanwhile (a retry, the stop, a `DFORM_LOG=debug` line) above it
+//! with no stale copy of the block left; a tick with nothing to do its
+//! header alone. That the events reach the printer from every backend is
 //! the last test's (a provider launched).
 
 mod common;
@@ -324,6 +325,28 @@ fn the_block_takes_the_questions_place() {
             "tick 2  1 change    ━━━━━━━━━━━━  done 0.4s",
             "  + compute.vm app  made 0.4s",
         ]
+    );
+}
+
+/// A later tick whose re-plan has nothing left to change: its block is
+/// its header alone, `tick 2  nothing to do`, in every mode, with no bar
+/// and no end line of its own; never the plan's "up to date" mid-apply.
+#[test]
+fn a_tick_with_nothing_to_do_says_so() {
+    let t0 = Instant::now();
+    let empty = || Block::new(2, &[], t0);
+    let end = vec![(5, Event::Ended { interrupted: false })];
+    assert_eq!(
+        print(empty(), Mode::Lines, 0, t0, end.clone()),
+        "\ntick 2  nothing to do\n"
+    );
+    assert_eq!(
+        print(empty(), Mode::Quiet, 0, t0, end.clone()),
+        "tick 2  nothing to do\n"
+    );
+    assert_eq!(
+        screen(&print(empty(), Mode::Terminal, 0, t0, end)),
+        ["", "tick 2  nothing to do"]
     );
 }
 
