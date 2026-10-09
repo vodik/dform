@@ -27,17 +27,19 @@ pub enum Tree {
 
 impl Tree {
     /// `v` as a tree: `leaf` spells a value that is one (a scalar, a
-    /// secret, a null), `None` for an object or a list to open.
+    /// secret, a null), `None` for an object or a list to open; an
+    /// object's fields in the order one write wrote them ([`written`]),
+    /// the writes that made it unknown here.
     pub fn of(v: &Value, leaf: &dyn Fn(&Value) -> Option<String>) -> Tree {
         if let Some(t) = leaf(v) {
             return Tree::Leaf(t);
         }
         match v {
-            Value::Obj(m) => Tree::Obj(
+            Value::Obj(m) => Tree::Obj(written(
                 m.iter()
                     .map(|(k, x)| (key_text(k), Tree::of(x, leaf)))
                     .collect(),
-            ),
+            )),
             Value::List(xs) => Tree::List(xs.iter().map(|x| Tree::of(x, leaf)).collect()),
             v => Tree::Leaf(spell::value(v)),
         }
@@ -122,10 +124,12 @@ pub fn remember(keys: &[String]) {
     }
 }
 
-/// `fields` in the order a program wrote them, when one wrote them all
-/// in one object or block (the narrowest, all of those agreeing); else as
-/// they are.
-fn written(fields: Vec<(String, Tree)>) -> Vec<(String, Tree)> {
+/// `fields`, which one write made, in the order the program wrote them,
+/// when it wrote them all in one object or block (the narrowest, all of
+/// those agreeing); else as they are. Which write made a field, and so
+/// the order of fields several writes made, is the fold's to say
+/// (`report::fold`).
+pub fn written<T>(fields: Vec<(String, T)>) -> Vec<(String, T)> {
     if fields.len() < 2 {
         return fields;
     }
@@ -160,37 +164,17 @@ fn written(fields: Vec<(String, Tree)>) -> Vec<(String, Tree)> {
     if orders.any(|ks| rank(ks) != want) {
         return fields;
     }
-    let mut ranked: Vec<(usize, (String, Tree))> = want.into_iter().zip(fields).collect();
+    let mut ranked: Vec<(usize, (String, T))> = want.into_iter().zip(fields).collect();
     ranked.sort_by_key(|(r, _)| *r);
     ranked.into_iter().map(|(_, f)| f).collect()
-}
-
-impl Tree {
-    /// Its objects' fields in the order the source wrote them ([`remember`]),
-    /// a field the program did not write (a note's) after them.
-    fn in_source_order(&self) -> Tree {
-        match self {
-            Tree::Leaf(_) | Tree::Noted(..) => self.clone(),
-            Tree::Obj(fs) => {
-                let (noted, mine): (Vec<_>, Vec<_>) = fs
-                    .iter()
-                    .map(|(k, t)| (k.clone(), t.in_source_order()))
-                    .partition(|(_, t)| matches!(t, Tree::Noted(..)));
-                let mut fs = written(mine);
-                fs.extend(noted);
-                Tree::Obj(fs)
-            }
-            Tree::List(xs) => Tree::List(xs.iter().map(Tree::in_source_order).collect()),
-        }
-    }
 }
 
 /// `head` followed by `t`, in `width` columns: the lines, the first
 /// starting with `head`, the others indented from column 0 (the caller
 /// indents them as it indents the first). An object's fields are in the
-/// order the program wrote them when it wrote them together.
+/// order they come: the order the program wrote them is the tree's
+/// maker's to give ([`Tree::of`], `report::fold`).
 pub fn layout(head: &str, t: &Tree, width: usize) -> Vec<String> {
-    let t = t.in_source_order();
     let mut d = concat(vec![text(head.to_string()), t.doc()]);
     propagate(&mut d);
     print(&d, width).lines().map(str::to_string).collect()
@@ -303,11 +287,9 @@ mod tests {
     }
 
     /// R-217: a note follows its leaf and breaks every object and list
-    /// around it, a field the program did not write after those it did; a
-    /// sibling without one stays on its line.
+    /// around it; a sibling without one stays on its line.
     #[test]
     fn a_note_breaks_what_holds_it() {
-        remember(&["zz_port".into(), "zz_target".into()]);
         let t = Tree::Obj(vec![
             (
                 "selector".into(),
@@ -316,12 +298,12 @@ mod tests {
             (
                 "ports".into(),
                 Tree::List(vec![Tree::Obj(vec![
+                    ("port".into(), leaf("5432")),
+                    ("target".into(), leaf("5432")),
                     (
                         "protocol".into(),
                         Tree::Noted("\"TCP\"".into(), "(schema default)".into()),
                     ),
-                    ("zz_target".into(), leaf("5432")),
-                    ("zz_port".into(), leaf("5432")),
                 ])]),
             ),
         ]);
@@ -331,8 +313,8 @@ mod tests {
                 "spec = {",
                 "  selector: { app: \"pg\" },",
                 "  ports: [{",
-                "    zz_port: 5432,",
-                "    zz_target: 5432,",
+                "    port: 5432,",
+                "    target: 5432,",
                 "    protocol: \"TCP\" (schema default),",
                 "  }],",
                 "}",
@@ -345,18 +327,25 @@ mod tests {
         );
     }
 
-    /// After R-124: fields print in the order a program wrote them, not
-    /// by key.
+    /// After R-124: a value's fields are in the order a program wrote
+    /// them, not by key, when one write wrote them all.
     #[test]
-    fn fields_print_in_the_order_written() {
-        remember(&["zz_labels".into(), "zz_name".into()]);
-        let t = Tree::Obj(vec![
-            ("zz_name".into(), leaf("\"a\"")),
-            ("zz_labels".into(), Tree::Obj(vec![])),
-        ]);
+    fn fields_are_in_the_order_written() {
+        remember(&["zz_of_name".into(), "zz_of_labels".into()]);
+        let v = Value::Obj(
+            [
+                ("zz_of_labels".into(), Value::Obj(Default::default())),
+                ("zz_of_name".into(), Value::Str("a".into())),
+            ]
+            .into(),
+        );
+        let t = Tree::of(&v, &|v| match v {
+            Value::Obj(_) | Value::List(_) => None,
+            v => Some(spell::value(v)),
+        });
         assert_eq!(
             layout("m = ", &t, 100),
-            ["m = { zz_labels: {}, zz_name: \"a\" }"]
+            ["m = { zz_of_name: \"a\", zz_of_labels: {} }"]
         );
     }
 

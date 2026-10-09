@@ -353,11 +353,26 @@ fn a_query_path_that_reaches_nothing_says_the_nearest() {
 
 /// A value several writes made (`spec`, its `aliases` another's) is one
 /// value to `query`, where the plan says each write's part on its own
-/// line: its fields in the order the program wrote them.
+/// line: its fields in the order the program wrote them, the first
+/// write's first, each write's in its own order.
 #[test]
-#[ignore = "fmt::value orders an object's fields as written only when one write wrote them all: `spec` is alphabetical"]
 fn query_orders_a_value_several_writes_made() {
     let s = project("query-paths-writers");
     let q = run(&s, &["query", "pg.spec", "main.df"]).success().stdout;
     assert!(q.starts_with("{\n  selector: "), "{q}");
+    assert!(
+        q.ends_with("  aliases: [\"db\", \"postgres\"],\n}\n"),
+        "{q}"
+    );
+    // The aliases written first: first.
+    let (spec, aliases) = (MAIN.lines().nth(4).unwrap(), MAIN.lines().nth(5).unwrap());
+    s.write(
+        "main.df",
+        &MAIN.replace(&format!("{spec}\n{aliases}"), &format!("{aliases}\n{spec}")),
+    );
+    let q = run(&s, &["query", "pg.spec", "main.df"]).success().stdout;
+    assert!(
+        q.starts_with("{\n  aliases: [\"db\", \"postgres\"],\n  selector: "),
+        "{q}"
+    );
 }

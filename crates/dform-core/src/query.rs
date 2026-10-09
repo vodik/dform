@@ -166,7 +166,10 @@ pub fn values(
         let below = focus.as_ref().map(|f| f.below()).unwrap_or_default();
         let shape = crate::report::fold::Shape::of(&res.facts, f);
         if let Some((v, _, path)) = shape.reach(f, keys, below) {
-            out.push((v.clone(), shape.laid(&printer, f, &path, v, leaf)));
+            out.push((
+                v.clone(),
+                shape.laid(&printer, &res.rules, f, &path, v, leaf),
+            ));
         }
     }
     out

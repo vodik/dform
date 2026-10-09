@@ -295,54 +295,126 @@ fn text(toks: &[Tok], n: usize) -> String {
 }
 
 /// The value of group `g`: its leaves' values (`values[i]` of leaf
-/// `paths[i]`) below its path, objects by key in the order they come,
-/// a list's elements by position.
+/// `paths[i]`) below its path, its objects' fields in the order the
+/// program wrote them ([`in_program_order`]: a group is one write's, a
+/// schema's default after its leaves), a list's elements by position.
 pub fn assemble(g: &Group, paths: &[String], values: &[Tree]) -> Tree {
-    let rel: Vec<(Vec<Tok>, &Tree)> = g
+    let rel: Vec<(Vec<Tok>, &Tree, Option<usize>)> = g
         .leaves
         .iter()
-        .map(|&i| (tokens(&paths[i])[g.depth..].to_vec(), &values[i]))
+        .map(|&i| {
+            let rank = (!matches!(values[i], Tree::Noted(..))).then_some(0);
+            (tokens(&paths[i])[g.depth..].to_vec(), &values[i], rank)
+        })
         .collect();
-    build(&rel)
+    build(&rel).0
 }
 
-/// Leaves below a path: the steps left, and each leaf's value.
-type Below<'a> = Vec<(Vec<Tok>, &'a Tree)>;
+/// Leaves below a path: the steps left, each leaf's value and its rank
+/// in program order ([`in_program_order`]).
+type Below<'a> = Vec<(Vec<Tok>, &'a Tree, Option<usize>)>;
 
-fn build(rel: &[(Vec<Tok>, &Tree)]) -> Tree {
-    if let [(t, v)] = rel
+/// The value of leaves `rel`, and its first rank.
+fn build(rel: &[(Vec<Tok>, &Tree, Option<usize>)]) -> (Tree, Option<usize>) {
+    if let [(t, v, rank)] = rel
         && t.is_empty()
     {
-        return (*v).clone();
+        return ((*v).clone(), *rank);
     }
     let mut children: Vec<(&Tok, Below)> = Vec::new();
-    for (t, v) in rel {
+    for (t, v, rank) in rel {
         let Some((first, rest)) = t.split_first() else {
             continue;
         };
-        let item = (rest.to_vec(), *v);
+        let item = (rest.to_vec(), *v, *rank);
         match children.iter_mut().find(|(s, _)| s.step == first.step) {
             Some((_, xs)) => xs.push(item),
             None => children.push((first, vec![item])),
         }
     }
+    let first = rel.iter().filter_map(|(_, _, r)| *r).min();
     let keyed = children.iter().all(|(t, _)| matches!(t.step, Step::Key(_)));
     if keyed {
-        return Tree::Obj(
-            children
-                .iter()
-                .map(|(t, xs)| match &t.step {
-                    Step::Key(k) => (k.clone(), build(xs)),
-                    _ => unreachable!("every step is a key"),
-                })
-                .collect(),
-        );
+        let fields = children
+            .iter()
+            .map(|(t, xs)| match &t.step {
+                Step::Key(k) => {
+                    let (v, rank) = build(xs);
+                    (k.clone(), v, rank)
+                }
+                _ => unreachable!("every step is a key"),
+            })
+            .collect();
+        return (Tree::Obj(in_program_order(fields)), first);
     }
     children.sort_by_key(|(t, _)| match t.step {
         Step::Index(n) => n,
         _ => 0,
     });
-    Tree::List(children.iter().map(|(_, xs)| build(xs)).collect())
+    let xs = children.iter().map(|(_, xs)| build(xs).0).collect();
+    (Tree::List(xs), first)
+}
+
+/// An object's fields in the order the program wrote them (After R-124),
+/// each with its rank: where the first write that made a leaf of it is
+/// in the program ([`program_order`]). The first write's fields first, the
+/// fields one write made in the order it wrote them
+/// ([`crate::fmt::value::written`]); a field no write made (a schema's
+/// default, R-217) after those, as they come.
+fn in_program_order(mut fields: Vec<(String, Tree, Option<usize>)>) -> Vec<(String, Tree)> {
+    fields.sort_by_key(|(_, _, rank)| rank.unwrap_or(usize::MAX));
+    let mut out = Vec::with_capacity(fields.len());
+    let mut fields = fields.into_iter().peekable();
+    while let Some((k, t, rank)) = fields.next() {
+        let mut run = vec![(k, t)];
+        while let Some((k, t, _)) = fields.next_if(|f| f.2 == rank) {
+            run.push((k, t));
+        }
+        match rank {
+            Some(_) => out.extend(crate::fmt::value::written(run)),
+            None => out.extend(run),
+        }
+    }
+    out
+}
+
+/// The rank in program order of the write of each leaf (`writers[i]`
+/// wrote leaf `paths[i]`): the position of its site among the writers',
+/// the first first (by file, then line; two writes on one line by the
+/// circuit's order); `None` for a leaf no write made.
+fn program_order(
+    p: &tree::Printer,
+    rules: &[RuleStmt],
+    paths: &[String],
+    writers: &[Option<crate::circuit::NodeId>],
+) -> Vec<Option<usize>> {
+    let mut first: Vec<(crate::circuit::NodeId, &str)> = Vec::new();
+    for (path, w) in paths.iter().zip(writers) {
+        if let Some(w) = w
+            && !first.iter().any(|(x, _)| x == w)
+        {
+            first.push((*w, path));
+        }
+    }
+    if first.len() > 1 {
+        first.sort_by_cached_key(|(w, path)| {
+            let at = p
+                .contribution_site(rules, *w, path)
+                .map(|s| s.at)
+                .unwrap_or_default();
+            // `file:line`, its origin after it (`   (use synapse)`).
+            let at = at.split_once("   (").map_or(at.as_str(), |(a, _)| a);
+            let (file, line) = match at.rsplit_once(':') {
+                Some((file, line)) => (file, line.parse().unwrap_or(0)),
+                None => (at, 0usize),
+            };
+            (file.to_string(), line, *w)
+        });
+    }
+    writers
+        .iter()
+        .map(|w| w.and_then(|w| first.iter().position(|(x, _)| *x == w)))
+        .collect()
 }
 
 /// Create `d`'s lines folded (R-124): the leaves each contribution wrote
@@ -573,12 +645,15 @@ impl Shape {
 
     /// Value `v` at printed path `path` of attribute fact `f` as a tree to
     /// lay out, as the plan lays a value out: a list's elements at their
-    /// paths as the plan prints them, each leaf as `leaf` spells it, and
-    /// a leaf no write of the program made that the schema defaults
-    /// followed by its note (R-217).
+    /// paths as the plan prints them, its objects' fields in the order the
+    /// program wrote them, the writes that made it by where they are
+    /// ([`in_program_order`]), each leaf as `leaf` spells it, and a leaf no
+    /// write of the program made that the schema defaults followed by its
+    /// note (R-217).
     pub fn laid(
         &self,
         p: &tree::Printer,
+        rules: &[RuleStmt],
         f: &Atom,
         path: &str,
         v: &Value,
@@ -586,58 +661,59 @@ impl Shape {
     ) -> Tree {
         let open =
             |v: &Value| matches!(v, Value::Obj(_) | Value::List(_)) && !p.redact.is_secret(v);
-        // Each leaf of `v` at its path, as `each` takes it.
+        // Each leaf of `v` at its path, as `each` takes it, with its rank.
         fn walk(
             v: &Value,
             path: String,
             open: &dyn Fn(&Value) -> bool,
             shape: &Shape,
-            each: &mut dyn FnMut(&Value, String) -> Tree,
-        ) -> Tree {
+            each: &mut dyn FnMut(&Value, String) -> (Tree, Option<usize>),
+        ) -> (Tree, Option<usize>) {
             match v {
-                Value::Obj(m) if open(v) => Tree::Obj(
-                    m.iter()
+                Value::Obj(m) if open(v) => {
+                    let fields: Vec<(String, Tree, Option<usize>)> = m
+                        .iter()
                         .map(|(k, x)| {
                             let at = crate::ir::path_join(&path, k);
-                            let t = walk(x, at, open, shape, each);
-                            (crate::fmt::value::key_text(k), t)
+                            let (t, rank) = walk(x, at, open, shape, each);
+                            (crate::fmt::value::key_text(k), t, rank)
                         })
-                        .collect(),
-                ),
-                Value::List(xs) if open(v) => Tree::List(
-                    xs.iter()
+                        .collect();
+                    let first = fields.iter().filter_map(|f| f.2).min();
+                    (Tree::Obj(in_program_order(fields)), first)
+                }
+                Value::List(xs) if open(v) => {
+                    let (xs, ranks): (Vec<Tree>, Vec<Option<usize>>) = xs
+                        .iter()
                         .enumerate()
                         .map(|(j, x)| walk(x, shape.element(&path, j, x), open, shape, each))
-                        .collect(),
-                ),
+                        .unzip();
+                    (Tree::List(xs), ranks.into_iter().flatten().min())
+                }
                 v => each(v, path),
             }
         }
-        // The leaves the schema defaults, and of them those no write made.
-        let mut defaulted = Vec::new();
-        if !self.defaults.is_empty() {
-            walk(v, path.to_string(), &open, self, &mut |_, at| {
-                if self.defaulted(&at) {
-                    defaulted.push(at);
-                }
-                Tree::Leaf(String::new())
-            });
-        }
-        let noted: BTreeSet<&String> = defaulted
-            .iter()
-            .zip(p.writers(f, &defaulted))
-            .filter_map(|(at, w)| w.is_none().then_some(at))
-            .collect();
-        walk(
-            v,
-            path.to_string(),
-            &open,
-            self,
-            &mut |v, at| match noted.contains(&at) {
-                true => Tree::Noted(leaf(v), SCHEMA_DEFAULT.into()),
-                false => Tree::Leaf(leaf(v)),
-            },
-        )
+        // The leaves, the write that made each and where it is.
+        let mut leaves = Vec::new();
+        walk(v, path.to_string(), &open, self, &mut |_, at| {
+            leaves.push(at);
+            (Tree::Leaf(String::new()), None)
+        });
+        // A scalar's write is asked only when it may be a default.
+        let writers = match open(v) || leaves.iter().any(|l| self.defaulted(l)) {
+            true => p.writers(f, &leaves),
+            false => vec![None; leaves.len()],
+        };
+        let ranks = program_order(p, rules, &leaves, &writers);
+        let mut at = leaves.iter().zip(&writers).zip(ranks);
+        walk(v, path.to_string(), &open, self, &mut |v, _| {
+            let ((path, w), rank) = at.next().expect("one leaf per leaf");
+            match w.is_none() && self.defaulted(path) {
+                true => (Tree::Noted(leaf(v), SCHEMA_DEFAULT.into()), None),
+                false => (Tree::Leaf(leaf(v)), rank),
+            }
+        })
+        .0
     }
 }
 

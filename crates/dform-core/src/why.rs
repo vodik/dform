@@ -669,7 +669,7 @@ impl Chains<'_> {
             .map(|(p, w)| w.is_none() && shape.defaulted(p))
             .collect();
         let leaf = |v: &Value| printer.redact.surface(v);
-        let laid = |path: &str, v: &Value| shape.laid(printer, f, path, v, &leaf);
+        let laid = |path: &str, v: &Value| shape.laid(printer, &res.rules, f, path, v, &leaf);
         for g in report::fold::fold(&paths, &writers, &noted) {
             if let [i] = g.leaves.as_slice() {
                 let (rel, leaf) = &found[*i];

@@ -3294,8 +3294,9 @@ prints it (`query main.vpc.cidr`, `query 'pg.spec.ports[port=5432,protocol=TCP]'
 or after the full address (`query 'net.vpc["main.vpc"].cidr'`); a path
 past a list that reaches nothing names the nearest element the list has.
 One value prints alone in `dform fmt`'s layout, as the plan lays it out
-(R-124): in the program's field order, a default no write of the
-program made with its note, `protocol: "TCP" (schema default)` (R-217);
+(R-124): in the program's field order (of a value several writes made,
+the first write's fields first, each write's in its own order), a
+default no write of the program made with its note, `protocol: "TCP" (schema default)` (R-217);
 every other query is its table.
 
 Rows print values as the program writes them: a reference is the address
