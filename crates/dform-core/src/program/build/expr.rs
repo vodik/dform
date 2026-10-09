@@ -18,7 +18,8 @@
 //! | `[item \| body]`                         | `Comprehension` (`clause.rs`)     |
 //! | any other `f(..)`                        | `Call` of the function, or of a name read as data |
 //!
-//! The reads a term hoisted are goals before it ([`Builder::hoisted`]).
+//! The reads a term hoisted are its nodes in term position
+//! ([`Builder::hoisted`], `hoist.rs`).
 
 use super::Builder;
 use crate::ast::{Lit, Term, TypeExpr};
@@ -27,29 +28,39 @@ use crate::value::Value;
 
 impl Builder<'_> {
     /// The term `t` the resolver lowered, after the reads it hoisted,
-    /// `reads`.
+    /// `reads`: each the node of the first use of its variable in `t`.
     pub fn hoisted(&mut self, t: &Term, reads: &[Lit]) -> ExprId {
-        if reads.is_empty() {
-            return self.expr(t);
-        }
-        let reads = reads.iter().map(|l| self.goal(l)).collect();
-        let value = self.expr(t);
-        self.expr_node(ExprKind::Hoisted { reads, value })
+        let (e, left) = self.part(t, reads);
+        assert!(
+            left.is_empty(),
+            "a term uses every read it hoisted: {t:?} after {left:?}"
+        );
+        e
+    }
+
+    /// The term `t`, a part of a statement's term, after the reads
+    /// `reads` hoisted while it was lowered, and those of them it does not
+    /// use (a read of the term around it).
+    pub fn part(&mut self, t: &Term, reads: &[Lit]) -> (ExprId, Vec<Lit>) {
+        self.reading(reads, |b| b.expr(t))
     }
 
     /// The lowered term `t`.
     pub fn expr(&mut self, t: &Term) -> ExprId {
         let kind = match t {
             Term::Val(v) => ExprKind::Lit(v.clone()),
-            Term::Var(x) => ExprKind::Var(self.var(x)),
+            Term::Var(x) => match self.pending_read(x) {
+                Some(read) => return read,
+                None => ExprKind::Var(self.var(x)),
+            },
             Term::Wildcard => ExprKind::Hole,
             Term::List(xs) => return self.list_of(xs),
             Term::Obj(m) => return self.object_of(m),
-            Term::ListComp { item, body } => {
-                let clause = self.clause(body);
-                let item = self.expr(item);
+            Term::ListComp { item, body } => self.sealed(|b| {
+                let clause = b.clause(body);
+                let item = b.expr(item);
                 ExprKind::Comprehension { item, clause }
-            }
+            }),
             Term::Func { name, args } => return self.func(name, args),
         };
         self.expr_node(kind)
@@ -188,7 +199,7 @@ mod tests {
     }
 
     /// Each internal function the resolver writes is built as the node of
-    /// the form it lowers, and a term's reads as goals before it.
+    /// the form it lowers, and a term's read as its node in term position.
     #[test]
     fn a_lowered_term_is_the_node_of_its_form() {
         let mut p = Program::new();
@@ -258,14 +269,13 @@ mod tests {
             span: Span::default(),
         });
         let id = b.hoisted(&var("Cidr"), &[read]);
-        let ExprKind::Hoisted { reads, value } = &b.program.exprs[id].kind else {
-            panic!("no reads");
-        };
-        assert_eq!(reads.len(), 1);
-        let ExprKind::Var(v) = b.program.exprs[*value].kind else {
-            panic!("not a variable");
-        };
-        let v = &b.program.vars[v];
+        let e = &b.program.exprs[id];
+        assert!(
+            matches!(e.kind, ExprKind::Read { column: 3, .. }),
+            "{:?}",
+            e.kind
+        );
+        let v = &b.program.vars[e.hoisted.expect("read into its variable")];
         assert!(
             v.implicit && v.lowered == "Cidr" && v.name == "cidr",
             "{v:?}"

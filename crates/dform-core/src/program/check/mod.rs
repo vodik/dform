@@ -116,10 +116,15 @@ pub fn program(program: &Program, ported: &Resolved, new: &Lowered) {
         kinds.push(super::spell::kind(kind).to_string());
     }
     // A statistic, not output: the arena's order does not matter.
-    let reads: Vec<&str> = program
-        .goals
-        .values()
-        .filter_map(|g| read_kind(program, &g.kind))
+    let bound = program.goals.values().filter_map(|g| match g.kind {
+        super::node::GoalKind::Bind { value, .. } => Some(&program.exprs[value]),
+        _ => None,
+    });
+    let bound = bound.filter(|e| e.hoisted.is_none());
+    let hoisted = program.exprs.values().filter(|e| e.hoisted.is_some());
+    let reads: Vec<&str> = bound
+        .chain(hoisted)
+        .filter_map(|e| read_kind(program, &e.kind))
         .collect();
     record(None, |c| {
         for k in kinds {
@@ -131,14 +136,11 @@ pub fn program(program: &Program, ported: &Resolved, new: &Lowered) {
     });
 }
 
-/// The read a goal binds its variable to, when it is one built as the
-/// read's own node.
-fn read_kind(program: &Program, g: &super::node::GoalKind) -> Option<&'static str> {
-    use super::node::{ExprKind, GoalKind};
-    let GoalKind::Bind { value, .. } = g else {
-        return None;
-    };
-    Some(match &program.exprs[*value].kind {
+/// The kind of read a node read in term position or bound in place is,
+/// when it is one built as the read's own node.
+fn read_kind(program: &Program, e: &super::node::ExprKind) -> Option<&'static str> {
+    use super::node::ExprKind;
+    Some(match e {
         ExprKind::Value { .. } => "value",
         ExprKind::Field { base, .. }
             if matches!(program.exprs[*base].kind, ExprKind::Resource { .. }) =>
@@ -184,13 +186,21 @@ fn record(difference: Option<Difference>, count: impl FnOnce(&mut Collected)) {
 
 /// A term the resolver lowered (`term`, after the reads it hoisted,
 /// `reads`), written at `span`, built as nodes and lowered back: the two
-/// compared as [`compare`] does a program. `written`: whether a lowered
+/// compared as [`compare`] does a program, but for the reads the term
+/// does not use. `written`: whether a lowered
 /// variable is one the program wrote.
 pub fn term(term: &Term, reads: &[Lit], span: Span, written: &dyn Fn(&str) -> bool) {
     let mut program = Program::new();
-    let id = super::Builder::new(&mut program, span, written).hoisted(term, reads);
+    let (id, left) = super::Builder::new(&mut program, span, written).part(term, reads);
     let (t, rs) = super::lower_expr(&program, id);
-    let difference = differ(&term_dump(term, reads), &term_dump(&t, &rs)).map(|d| Difference {
+    // A read the term does not use is the term's around it, compared there.
+    let left: Vec<String> = left.iter().map(|l| format!("{l:?}")).collect();
+    let reads: Vec<Lit> = reads
+        .iter()
+        .filter(|l| !left.contains(&format!("{l:?}")))
+        .cloned()
+        .collect();
+    let difference = differ(&term_dump(term, &reads), &term_dump(&t, &rs)).map(|d| Difference {
         statement: format!("the term at {}: {term:?}", place(span)),
         ..d
     });

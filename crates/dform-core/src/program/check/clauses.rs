@@ -166,7 +166,7 @@ fn kinds_of(p: &Program, g: GoalId, out: &mut Vec<String>) {
             }
         }
         GoalKind::Fold { .. } => "Fold",
-        GoalKind::Hoisted { goals, .. } => {
+        GoalKind::Group { goals, .. } => {
             goals.iter().for_each(|g| kinds_of(p, *g, out));
             return;
         }

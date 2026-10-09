@@ -360,7 +360,7 @@ impl Speller<'_> {
                 Has::Read(e) | Has::Walk { value: e, .. } => format!("has {}", self.expr(*e)),
             },
             GoalKind::Truth(e) => self.expr(*e),
-            GoalKind::Hoisted { goals, .. } => join(goals.iter().map(|g| self.goal(*g)), ", "),
+            GoalKind::Group { goals, .. } => join(goals.iter().map(|g| self.goal(*g)), ", "),
             GoalKind::Marked { goal, .. } => self.goal(*goal),
             GoalKind::Not { clause, .. } => {
                 let goals = &self.p.clauses[*clause].goals;
@@ -431,8 +431,8 @@ impl Speller<'_> {
     fn expr(&self, id: ExprId) -> String {
         match &self.p.exprs[id].kind {
             ExprKind::Missing | ExprKind::Hole => "_".into(),
-            ExprKind::Hoisted { value, .. } => self.expr(*value),
             ExprKind::Read { goal, .. } => self.goal(*goal),
+            ExprKind::Address { of, .. } | ExprKind::Alias(of) => self.expr(*of),
             ExprKind::Lit(v) => crate::spell::value(v),
             ExprKind::Quantity { text } => text.clone(),
             ExprKind::Var(v) => self.var(*v),
@@ -440,7 +440,7 @@ impl Speller<'_> {
             ExprKind::Resource { typ, addr } => format!("{}[{}]", typ.name, self.expr(*addr)),
             ExprKind::RefOf(e) => format!("ref({})", self.expr(*e)),
             ExprKind::Field { base, path } => format!("{}{}", self.expr(*base), self.steps(path)),
-            ExprKind::Output { copy, key } => format!("{}.{key}", self.expr(*copy)),
+            ExprKind::Output { copy, key, .. } => format!("{}.{key}", self.expr(*copy)),
             ExprKind::Deployed { stack, keys, out } => {
                 let keys = keys.iter().map(|(k, e, pun)| match pun {
                     true => k.clone(),
@@ -554,7 +554,9 @@ impl Speller<'_> {
         path.iter()
             .map(|s| match s {
                 Step::Field(n, _) => format!(".{n}"),
-                Step::Index(e) | Step::Key(e) => format!("[{}]", self.expr(*e)),
+                Step::Index(e) | Step::Key(e) | Step::Keyed { key: e, .. } => {
+                    format!("[{}]", self.expr(*e))
+                }
                 Step::Each(..) => "[_]".into(),
                 Step::Len => ".len".into(),
             })
@@ -587,9 +589,9 @@ impl Speller<'_> {
         }
     }
 
-    /// A document's rows, by the reads they lower to.
+    /// A document's rows, by the extern that reads them.
     fn source(&self, s: &Source) -> String {
-        join(s.reads.iter().map(|g| self.goal(*g)), ", ")
+        self.goal(s.rows)
     }
 
     fn header(&self, h: &Header) -> String {

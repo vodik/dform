@@ -1,9 +1,11 @@
 //! A term's nodes to the term and the reads the resolver hoisted for it
-//! (R-211 step 3): each node as the resolver writes it, a read before the
-//! literal that holds it, in the order it was hoisted. `lower_expr` gives
-//! back what the resolver's `term` gave for the same term, byte for byte.
+//! (R-211 step 3): each node as the resolver writes it, a read in term
+//! position (`Expr::hoisted`) the literal it is, before the literal that
+//! holds the term, its variable in its place, in the order the term holds
+//! them (step 6b). `lower_expr` gives back what the resolver's `term`
+//! gave for the same term, byte for byte.
 
-use crate::ast::{Lit, Stmt, Term, TypeExpr, str_term};
+use crate::ast::{Atom, Lit, Span, Stmt, Term, TypeExpr, str_term};
 use crate::program::node::*;
 use crate::program::{NodeId, Program};
 use std::collections::BTreeMap;
@@ -35,20 +37,154 @@ impl<'p> Lowering<'p> {
 
     pub(super) fn expr(&mut self, id: ExprId) -> Term {
         self.terms_made(NodeId::Expr(id));
+        match self.program.exprs[id].hoisted {
+            Some(v) => self.hoist(id, v),
+            None => self.kind(id),
+        }
+    }
+
+    /// The read in term position `id`, read into `v`: its literal onto
+    /// the reads, after those its own terms hold; the term is `v`.
+    fn hoist(&mut self, id: ExprId, v: VarId) -> Term {
+        let span = self.program.exprs[id].span;
+        if let ExprKind::Field { base, path } = &self.program.exprs[id].kind
+            && let [Step::Keyed { .. }] = path.as_slice()
+        {
+            self.keyed(*base, &path[0], v, span);
+            return self.var(v);
+        }
+        let lit = match self.read_atom(id, span, |l| l.var(v)) {
+            Some(a) => Lit::Pos(a),
+            None => {
+                let t = self.kind(id);
+                Lit::Eq(self.var(v), t)
+            }
+        };
+        self.reads.push(lit);
+        self.var(v)
+    }
+
+    /// The element `v` of the keyed list `base` by its key (`step`):
+    /// `member(L, V), type_list_key(T, "l", Keys), Keys = [Key],
+    /// __path(V, Key) == k`.
+    fn keyed(&mut self, base: ExprId, step: &Step, v: VarId, span: Span) {
+        let Step::Keyed {
+            key,
+            typ,
+            list,
+            keys,
+            field,
+        } = step
+        else {
+            unreachable!("a keyed step")
+        };
+        let (base, key, typ) = (self.expr(base), self.expr(*key), self.expr(*typ));
+        let (item, keys, field) = (self.var(v), self.var(*keys), self.var(*field));
+        let atom = |pred: &str, args| {
+            Lit::Pos(Atom {
+                pred: pred.to_string(),
+                args,
+                record: None,
+                span,
+            })
+        };
+        self.reads.extend([
+            atom("member", vec![base, item.clone()]),
+            atom("type_list_key", vec![typ, str_term(list), keys.clone()]),
+            Lit::Eq(keys, Term::List(vec![field.clone()])),
+            Lit::Eq(func("__path", vec![item, field]), key),
+        ]);
+    }
+
+    /// The read `value` is, its value `value_of`, as the atom the front
+    /// end hoists it as at `span`: a value's `k(V)`, a resource's
+    /// attribute's `attr("T", A, "p", V)`, a copy's output's `output(C,
+    /// "k", V)`, a live object's `cloud_attr("T", A, "p", V)`, a lookup's
+    /// relation with `V` its `out`th column, an element's `member(L, i,
+    /// V)`, a relation's read in its column. `None` for any other value.
+    pub(super) fn read_atom(
+        &mut self,
+        value: ExprId,
+        span: Span,
+        value_of: impl FnOnce(&mut Self) -> Term,
+    ) -> Option<Atom> {
+        let (pred, args, at) = match &self.program.exprs[value].kind {
+            ExprKind::Value { decl, via } => (via.relation(&decl.name), Vec::new(), 0),
+            ExprKind::Field { base, path } => match (&self.program.exprs[*base].kind, &path[..]) {
+                (ExprKind::Resource { typ, addr }, [Step::Field(p, _)]) => {
+                    let args = vec![str_term(&typ.name), self.expr(*addr), str_term(p)];
+                    ("attr".to_string(), args, 3)
+                }
+                (_, [Step::Index(i)]) => {
+                    let args = vec![self.expr(*base), self.expr(*i)];
+                    ("member".to_string(), args, 2)
+                }
+                _ => return None,
+            },
+            ExprKind::Output { copy, key, of } => {
+                let copy = self.expr(*copy);
+                if let Some((of, scope)) = of {
+                    // At the test's own place, its scope's.
+                    let at = self.program.exprs[*scope].span;
+                    let args = vec![str_term(of), self.expr(*scope), copy.clone()];
+                    let test = Atom {
+                        pred: crate::modules::INSTANCE_OF.to_string(),
+                        args,
+                        record: None,
+                        span: at,
+                    };
+                    self.reads.push(Lit::Pos(test));
+                }
+                ("output".to_string(), vec![copy, str_term(key)], 2)
+            }
+            ExprKind::World { typ, addr, path } => {
+                let path = stored(path);
+                let args = vec![str_term(&typ.name), self.expr(*addr), str_term(&path)];
+                ("cloud_attr".to_string(), args, 3)
+            }
+            ExprKind::Lookup { rel, args, out, .. } => {
+                let args = args.iter().map(|a| self.expr(*a)).collect();
+                (rel.name.clone(), args, *out)
+            }
+            ExprKind::Read { .. } => {
+                let v = value_of(self);
+                let Lit::Pos(a) = self.read(value, v) else {
+                    unreachable!("a read is an atom")
+                };
+                return Some(a);
+            }
+            ExprKind::Address { of, typ } => {
+                let v = value_of(self);
+                let mark = func(crate::modules::ABSOLUTE, vec![v]);
+                let r = func(
+                    crate::ir::REF,
+                    vec![str_term(&typ.name), mark, str_term("")],
+                );
+                let Lit::Pos(a) = self.read(*of, r) else {
+                    unreachable!("a read is an atom")
+                };
+                return Some(a);
+            }
+            _ => return None,
+        };
+        let mut args = args;
+        args.insert(at, value_of(self));
+        Some(Atom {
+            pred,
+            args,
+            record: None,
+            span,
+        })
+    }
+
+    /// The term node `id` is, its reads lowered where they stand.
+    fn kind(&mut self, id: ExprId) -> Term {
         let e = &self.program.exprs[id];
         match &e.kind {
             ExprKind::Lit(v) => Term::Val(v.clone()),
             ExprKind::Quantity { text } => crate::types::ambiguous_literal(text, e.span),
             ExprKind::Var(v) => self.var(*v),
             ExprKind::Hole => Term::Wildcard,
-            ExprKind::Hoisted { reads, value } => {
-                for &g in reads {
-                    let mut lits = Vec::new();
-                    self.goal(g, &mut lits);
-                    self.reads.extend(lits);
-                }
-                self.expr(*value)
-            }
             ExprKind::Binary { op, lhs, rhs } => {
                 func(op.function(), vec![self.expr(*lhs), self.expr(*rhs)])
             }
@@ -75,6 +211,7 @@ impl<'p> Lowering<'p> {
             }
             ExprKind::Field { base, path } => self.field(*base, path),
             ExprKind::RefOf(r) => self.reference(*r),
+            ExprKind::Alias(e) => self.expr(*e),
             ExprKind::Comprehension { item, clause } => {
                 let mut body = Vec::new();
                 self.clause(*clause, &mut body);
@@ -274,7 +411,8 @@ mod tests {
     /// The forms the corpus seldom writes lower back as the resolver wrote
     /// them: an empty spread part, a computed key, holes at a string's
     /// ends, a quantity's span, a path into a path, a reference's path, a
-    /// comprehension's body, a record's columns, each read at its span.
+    /// comprehension's body and a record's columns in it, a term's reads
+    /// in term position, each read at its span.
     #[test]
     fn a_term_lowers_back_to_what_it_was_built_from() {
         let int = |i| Term::Val(Value::Int(i));
@@ -355,6 +493,7 @@ mod tests {
                         Lit::Not(at("q", vec![var("X")], 2)),
                         Lit::Eq(obj(&[("a", var("A"))]), var("X")),
                         Lit::Gt(var("A"), int(0)),
+                        Lit::Pos(record),
                     ],
                 },
                 vec![],
@@ -362,7 +501,7 @@ mod tests {
             (
                 var("V"),
                 vec![
-                    Lit::Pos(record),
+                    Lit::Pos(at("zone", vec![str_term("a"), var("N")], 9)),
                     Lit::Eq(
                         var("V"),
                         f("add", vec![var("N"), f("sub", vec![int(0), int(1)])]),

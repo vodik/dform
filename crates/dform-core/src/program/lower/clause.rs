@@ -116,16 +116,13 @@ impl Lowering<'_> {
     ) -> (Vec<Lit>, Vec<Fold>) {
         let mut folds = Vec::new();
         for &g in &self.program.clauses[id].goals {
-            let (reads, fold, after) = match &self.program.goals[g].kind {
-                GoalKind::Fold { .. } => (&[][..], g, &[][..]),
-                GoalKind::Hoisted {
-                    reads,
-                    goals,
-                    after,
-                } if let [f] = goals.as_slice()
-                    && matches!(self.program.goals[*f].kind, GoalKind::Fold { .. }) =>
+            let (fold, after) = match &self.program.goals[g].kind {
+                GoalKind::Fold { .. } => (g, &[][..]),
+                GoalKind::Group { goals, after }
+                    if let [f] = goals.as_slice()
+                        && matches!(self.program.goals[*f].kind, GoalKind::Fold { .. }) =>
                 {
-                    (reads.as_slice(), *f, after.as_slice())
+                    (*f, after.as_slice())
                 }
                 _ => {
                     self.goal(g, &mut lits);
@@ -133,9 +130,6 @@ impl Lowering<'_> {
                 }
             };
             self.terms_made(NodeId::Goal(g));
-            for &r in reads {
-                self.goal(r, &mut lits);
-            }
             let GoalKind::Fold { var, agg, helper } = &self.program.goals[fold].kind else {
                 unreachable!("a fold")
             };
@@ -162,24 +156,24 @@ impl Lowering<'_> {
         self.terms_made(NodeId::Goal(id));
         let g = &self.program.goals[id];
         match &g.kind {
-            GoalKind::Hoisted {
-                reads,
-                goals,
-                after,
-            } => {
-                for &each in reads.iter().chain(goals).chain(after) {
+            GoalKind::Group { goals, after } => {
+                for &each in goals.iter().chain(after) {
                     self.goal(each, out);
                 }
             }
             GoalKind::Marked { mark, goal } => {
+                // The reads that name the resource before the mark.
+                let saved = std::mem::take(&mut self.reads);
+                let (typ, addr) = (self.expr(mark.typ), self.expr(mark.addr));
+                out.extend(std::mem::replace(&mut self.reads, saved));
                 let start = out.len();
                 self.goal(*goal, out);
                 let covered = (out.len() - start) as i64;
                 let mark = atom_at(
                     crate::partition::HAS,
                     vec![
-                        self.expr(mark.typ),
-                        self.expr(mark.addr),
+                        typ,
+                        addr,
                         str_term(&mark.path),
                         Term::Val(Value::Int(covered)),
                     ],
@@ -260,30 +254,23 @@ impl Lowering<'_> {
         match &g.kind {
             GoalKind::Rel { rel, args } => vec![Lit::Pos(self.atom(rel, args))],
             GoalKind::Bind { pat, value } => {
-                if let Some(read) = self.hoisted_read(*pat, *value, span) {
-                    return vec![Lit::Pos(read)];
-                }
-                if let ExprKind::Read { .. } = self.program.exprs[*value].kind {
-                    let v = self.pattern(*pat);
-                    return vec![self.read(*value, v)];
-                }
-                if let ExprKind::Field { base, path } = &self.program.exprs[*value].kind
-                    && let [Step::Index(i)] = path.as_slice()
+                // A read bound in place (`x = R.p`, `P = e[i]`, a value's
+                // `k(V)`): the read with the pattern in its value column.
+                if self.program.exprs[*value].hoisted.is_none()
+                    && let Some(read) = self.read_atom(*value, span, |l| l.pattern(*pat))
                 {
-                    let (base, i) = (self.expr(*base), self.expr(*i));
-                    let p = self.pattern(*pat);
-                    return vec![Lit::Pos(atom_at("member", vec![base, i, p], span))];
+                    return vec![Lit::Pos(read)];
                 }
                 let p = self.pattern(*pat);
                 vec![Lit::Eq(p, self.expr(*value))]
             }
             GoalKind::Compare { lhs, ops } => {
-                if let ExprKind::Read { .. } = self.program.exprs[*lhs].kind {
+                if self.in_place(*lhs) {
                     let [(CmpOp::Eq, v)] = ops.as_slice() else {
                         unreachable!("a read is compared in place by `==`")
                     };
                     let v = self.expr(*v);
-                    return vec![self.read(*lhs, v)];
+                    return vec![self.in_place_read(*lhs, v)];
                 }
                 let mut prev = self.expr(*lhs);
                 let mut lits = Vec::new();
@@ -296,62 +283,25 @@ impl Lowering<'_> {
             }
             GoalKind::Truth(e) => {
                 let yes = Term::Val(Value::Bool(true));
-                match self.program.exprs[*e].kind {
-                    ExprKind::Read { .. } => vec![self.read(*e, yes)],
-                    _ => vec![Lit::Eq(self.expr(*e), yes)],
+                match self.in_place(*e) {
+                    true => vec![self.in_place_read(*e, yes)],
+                    false => vec![Lit::Eq(self.expr(*e), yes)],
                 }
             }
             GoalKind::Has(Has::Resource { typ, addr }) => {
                 let args = vec![self.expr(*typ), self.expr(*addr)];
                 vec![Lit::Pos(atom_at(crate::partition::IDENTITY, args, span))]
             }
-            GoalKind::Has(Has::Read(e)) => vec![self.read(*e, Term::Wildcard)],
+            GoalKind::Has(Has::Read(e)) => vec![self.in_place_read(*e, Term::Wildcard)],
             GoalKind::Has(Has::Walk { var, value }) => {
                 vec![Lit::Eq(self.var(*var), self.expr(*value))]
             }
             GoalKind::Member { pat, coll } => self.member(*pat, coll, span),
             GoalKind::Fold { var, agg, .. } => vec![Lit::Eq(self.var(*var), self.expr(*agg))],
-            GoalKind::Hoisted { .. } | GoalKind::Marked { .. } | GoalKind::Not { .. } => {
+            GoalKind::Group { .. } | GoalKind::Marked { .. } | GoalKind::Not { .. } => {
                 unreachable!("lowered by `goal`")
             }
         }
-    }
-
-    /// The read `value` is, bound to `pat`, as the atom the front end
-    /// hoisted it as: a value's `k(V)`, a resource's attribute's
-    /// `attr("T", A, "p", V)`, a copy's output's `output(C, "k", V)`, a
-    /// live object's `cloud_attr("T", A, "p", V)`, a lookup's relation
-    /// with `V` its `out`th column. `None` for any other value.
-    fn hoisted_read(&mut self, pat: PatternId, value: ExprId, span: Span) -> Option<Atom> {
-        let (pred, args, at) = match &self.program.exprs[value].kind {
-            ExprKind::Value { decl, via } => (via.relation(&decl.name), Vec::new(), 0),
-            ExprKind::Field { base, path } => {
-                let (ExprKind::Resource { typ, addr }, [Step::Field(p, _)]) =
-                    (&self.program.exprs[*base].kind, path.as_slice())
-                else {
-                    return None;
-                };
-                let args = vec![str_term(&typ.name), self.expr(*addr), str_term(p)];
-                ("attr".to_string(), args, 3)
-            }
-            ExprKind::Output { copy, key } => {
-                let args = vec![self.expr(*copy), str_term(key)];
-                ("output".to_string(), args, 2)
-            }
-            ExprKind::World { typ, addr, path } => {
-                let path = super::expr::stored(path);
-                let args = vec![str_term(&typ.name), self.expr(*addr), str_term(&path)];
-                ("cloud_attr".to_string(), args, 3)
-            }
-            ExprKind::Lookup { rel, args, out, .. } => {
-                let args = args.iter().map(|a| self.expr(*a)).collect();
-                (rel.name.clone(), args, *out)
-            }
-            _ => return None,
-        };
-        let mut args = args;
-        args.insert(at, self.pattern(pat));
-        Some(atom_at(&pred, args, span))
     }
 
     /// `x in c`: the literals, the facts it states onto the helpers.
@@ -458,9 +408,22 @@ impl Lowering<'_> {
         }
     }
 
+    /// Whether `e` is a read the literal holding it tests or binds in
+    /// place: an [`ExprKind::Read`] not in term position.
+    fn in_place(&self, e: ExprId) -> bool {
+        let e = &self.program.exprs[e];
+        matches!(e.kind, ExprKind::Read { .. } | ExprKind::Output { .. }) && e.hoisted.is_none()
+    }
+
+    /// The read `e` tests or binds in place, `value` in its value column.
+    fn in_place_read(&mut self, e: ExprId, value: Term) -> Lit {
+        let span = self.program.exprs[e].span;
+        Lit::Pos(self.read_atom(e, span, |_| value).expect("a read"))
+    }
+
     /// The read `e` (an [`ExprKind::Read`]) with `value` in its value
     /// column.
-    fn read(&mut self, e: ExprId, value: Term) -> Lit {
+    pub(super) fn read(&mut self, e: ExprId, value: Term) -> Lit {
         let ExprKind::Read { goal, column } = self.program.exprs[e].kind else {
             unreachable!("not a read")
         };

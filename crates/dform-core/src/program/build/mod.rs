@@ -6,9 +6,10 @@
 //!
 //! Step 3 builds a term from what the resolver lowered it to, its
 //! `ast::Term` and the reads it hoisted ([`Builder::hoisted`]): every
-//! form a term takes there has its node, and `lower` gives the term back
-//! (`program::check` holds the two equal under `DFORM_CHECK_LOWER=1`).
-//! The statement builders read the tree (step 5).
+//! form a term takes there has its node, a read in term position its own
+//! (`hoist.rs`), and `lower` gives the term back (`program::check` holds
+//! the two equal under `DFORM_CHECK_LOWER=1`). The statement builders
+//! read the tree (step 5).
 
 mod aggregate;
 mod checks;
@@ -17,6 +18,7 @@ mod contributions;
 mod each;
 mod expr;
 mod gather;
+mod hoist;
 mod inputs;
 mod lets;
 mod membership;
@@ -61,6 +63,9 @@ pub struct Builder<'p> {
     /// Whether a lowered name is a variable the program wrote; any other
     /// the compiler made (`implicit`).
     written: &'p dyn Fn(&str) -> bool,
+    /// The reads hoisted before what is being built that no node holds
+    /// yet, in order, each by the variable it binds (`hoist.rs`).
+    pending: Vec<hoist::Pending>,
 }
 
 impl<'p> Builder<'p> {
@@ -72,6 +77,7 @@ impl<'p> Builder<'p> {
             item: None,
             vars: BTreeMap::new(),
             written,
+            pending: Vec::new(),
         }
     }
 
@@ -97,6 +103,7 @@ impl<'p> Builder<'p> {
         self.program.exprs.insert(Expr {
             span: self.span,
             kind,
+            hoisted: None,
         })
     }
 

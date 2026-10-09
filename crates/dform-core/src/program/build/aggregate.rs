@@ -126,7 +126,7 @@ pub fn fold_numbers(program: &mut Program, clause: ClauseId) -> Vec<u32> {
 fn folds(program: &Program, clause: ClauseId) -> Vec<GoalId> {
     let fold = |g: GoalId| match &program.goals[g].kind {
         GoalKind::Fold { .. } => Some(g),
-        GoalKind::Hoisted { goals, .. }
+        GoalKind::Group { goals, .. }
             if let [f] = goals.as_slice()
                 && matches!(program.goals[*f].kind, GoalKind::Fold { .. }) =>
         {

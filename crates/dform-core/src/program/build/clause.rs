@@ -12,10 +12,10 @@
 //! | `x in e`, `not in`   | `Member` (`membership.rs`)                            |
 //! | `not L`, `not { B }` | `Not`, through a helper when no literal says it (`negation.rs`) |
 //!
-//! The reads a literal hoisted are goals before it, as a term's are
-//! (`GoalKind::Hoisted`), each the goal it lowered to: which surface read
-//! made `attr(T, A, "p", V)` is the resolver's knowledge until reads are
-//! built from the tree. A read the literal tests or binds in place
+//! The reads a literal hoisted are its terms' nodes in term position, as
+//! a term's are (`hoist.rs`); one whose variable no term of the literal
+//! holds (a membership its terms range over) is a goal before it
+//! (`GoalKind::Group`). A read the literal tests or binds in place
 //! (`R.p == c`, `has n.k`) is an `ExprKind::Read`, its value column the
 //! one the resolver says. A body's literal the resolver lowered (a
 //! comprehension's, a hoisted read) is the goal of its `Lit`
@@ -23,7 +23,6 @@
 
 use super::Builder;
 use crate::ast::{Atom, Lit, Span, Stmt, Term};
-use crate::program::Read;
 use crate::program::node::*;
 use crate::value::Value;
 
@@ -83,16 +82,16 @@ impl Builder<'_> {
     }
 
     fn literal_at(&mut self, w: &Written) -> Option<GoalId> {
-        let (main, reads) = match w.form {
+        let (main, left) = match w.form {
             Form::Atom => {
                 let (Lit::Pos(a), reads) = w.lits.split_last()? else {
                     return None;
                 };
-                (self.rel(a), reads)
+                self.reading(reads, |b| Some(b.rel(a)))
             }
             Form::Truth => {
                 let (last, reads) = w.lits.split_last()?;
-                (self.truth(last, w.read)?, reads)
+                self.reading(reads, |b| b.truth(last, w.read))
             }
             Form::Has => return self.has(w),
             Form::Compare { bind, ops, .. } if *ops > 1 => {
@@ -102,7 +101,7 @@ impl Builder<'_> {
                 bind, aggregate, ..
             } => {
                 let (last, reads) = w.lits.split_last()?;
-                (self.compare(last, *bind, *aggregate, w.read)?, reads)
+                self.reading(reads, |b| b.compare(last, *bind, *aggregate, w.read))
             }
             Form::In { each } => return self.membership(w, *each, false),
             // `v not in PATH[_]`: through a helper over the membership.
@@ -111,26 +110,19 @@ impl Builder<'_> {
             Form::Not(inner) => return self.negation(w, Some(inner)),
             Form::NotBlock => return self.negation(w, None),
         };
-        Some(self.hoisted_goal(reads, vec![main], w.after))
+        Some(self.group(&left, vec![main?], w.after))
     }
 
-    /// `goals` after the reads `reads` and before `after`, one goal.
-    pub(super) fn hoisted_goal(
-        &mut self,
-        reads: &[Lit],
-        goals: Vec<GoalId>,
-        after: &[Lit],
-    ) -> GoalId {
-        if reads.is_empty() && after.is_empty() && goals.len() == 1 {
+    /// `goals` after the reads `left` no term of theirs holds (each its
+    /// goal) and before `after`, one goal.
+    pub(super) fn group(&mut self, left: &[Lit], goals: Vec<GoalId>, after: &[Lit]) -> GoalId {
+        if left.is_empty() && after.is_empty() && goals.len() == 1 {
             return goals[0];
         }
-        let reads = reads.iter().map(|l| self.goal(l)).collect();
+        let mut all: Vec<GoalId> = left.iter().map(|l| self.goal(l)).collect();
+        all.extend(goals);
         let after = after.iter().map(|l| self.goal(l)).collect();
-        let kind = GoalKind::Hoisted {
-            reads,
-            goals,
-            after,
-        };
+        let kind = GoalKind::Group { goals: all, after };
         self.goal_node(self.span, kind)
     }
 
@@ -147,13 +139,32 @@ impl Builder<'_> {
 
     /// `has x`: the resource's identity, the read with `_` in its value
     /// column, or the walk to it bound; marked when it tests a resource's
-    /// attribute path, the mark between the reads that name the resource
-    /// and those of the walk.
+    /// attribute path, the mark after the reads that name the resource
+    /// and before those of the walk.
     fn has(&mut self, w: &Written) -> Option<GoalId> {
         let (outer, mark, lits) = split_mark(w.lits);
         let (last, reads) = lits.split_last()?;
-        let test = match (last, w.read) {
-            (Lit::Pos(a), None) if a.pred == crate::partition::IDENTITY && mark.is_none() => {
+        let (mark, outer) = self.reading(outer, |b| mark.map(|m| b.mark(m)));
+        let (test, left) = self.reading(reads, |b| b.has_test(last, w.read, mark.is_none()));
+        let test = test?;
+        let span = match last {
+            Lit::Pos(a) => a.span,
+            _ => self.span,
+        };
+        let has = self.goal_node(span, GoalKind::Has(test));
+        let inner = self.group(&left, vec![has], &[]);
+        let marked = match mark {
+            Some(m) => self.marked(m?, inner),
+            None => inner,
+        };
+        Some(self.group(&outer, vec![marked], w.after))
+    }
+
+    /// What `has` tests, written `last` (`unmarked`: no attribute path's
+    /// mark before it).
+    fn has_test(&mut self, last: &Lit, read: Option<usize>, unmarked: bool) -> Option<Has> {
+        Some(match (last, read) {
+            (Lit::Pos(a), None) if a.pred == crate::partition::IDENTITY && unmarked => {
                 let [typ, addr] = a.args.as_slice() else {
                     return None;
                 };
@@ -172,32 +183,25 @@ impl Builder<'_> {
                 }
             }
             _ => return None,
-        };
-        let span = match last {
-            Lit::Pos(a) => a.span,
-            _ => self.span,
-        };
-        let has = self.goal_node(span, GoalKind::Has(test));
-        let inner = self.hoisted_goal(reads, vec![has], &[]);
-        let marked = match mark {
-            Some(m) => self.marked(m, inner)?,
-            None => inner,
-        };
-        Some(self.hoisted_goal(outer, vec![marked], w.after))
+        })
     }
 
-    /// `goal` marked by `mark`, `__has(T, A, "PATH", N)`.
-    pub(super) fn marked(&mut self, mark: &Atom, goal: GoalId) -> Option<GoalId> {
+    /// The mark `__has(T, A, "PATH", N)`, at its span.
+    pub(super) fn mark(&mut self, mark: &Atom) -> Option<(HasMark, Span)> {
         let [typ, addr, Term::Val(Value::Str(path)), _] = mark.args.as_slice() else {
             return None;
         };
-        let span = mark.span;
-        let mark = HasMark {
+        let m = HasMark {
             typ: self.expr(typ),
             addr: self.expr(addr),
             path: path.clone(),
         };
-        Some(self.goal_node(span, GoalKind::Marked { mark, goal }))
+        Some((m, mark.span))
+    }
+
+    /// `goal` marked by `mark`.
+    pub(super) fn marked(&mut self, (mark, span): (HasMark, Span), goal: GoalId) -> GoalId {
+        self.goal_node(span, GoalKind::Marked { mark, goal })
     }
 
     /// `a = b`, `a == b`, `a < b`: a pattern bound, an element, the read
@@ -259,24 +263,22 @@ impl Builder<'_> {
     /// when a middle term was read as a different quantity on each side.
     fn chain(&mut self, w: &Written, bind: bool, ops: usize) -> Option<GoalId> {
         let at = w.lits.len().checked_sub(ops)?;
-        let (reads, pairs) = w.lits.split_at(at);
+        let (reads, written) = w.lits.split_at(at);
         let pairs: Vec<(CmpOp, &Term, &Term)> =
-            pairs.iter().map(comparison).collect::<Option<_>>()?;
+            written.iter().map(comparison).collect::<Option<_>>()?;
         let shared = pairs.windows(2).all(|p| p[0].2 == p[1].1);
-        let goals = match shared {
+        let (goals, left) = self.reading(reads, |b| match shared {
             true => {
-                let lhs = self.expr(pairs[0].1);
-                let ops = pairs.iter().map(|(op, _, b)| (*op, self.expr(b))).collect();
-                vec![self.goal_node(self.span, GoalKind::Compare { lhs, ops })]
+                let lhs = b.expr(pairs[0].1);
+                let ops = pairs.iter().map(|(op, _, x)| (*op, b.expr(x))).collect();
+                Some(vec![b.goal_node(b.span, GoalKind::Compare { lhs, ops })])
             }
-            false => {
-                let pairs = w.lits[at..].iter();
-                pairs
-                    .map(|l| self.compare(l, bind, false, None))
-                    .collect::<Option<_>>()?
-            }
-        };
-        Some(self.hoisted_goal(reads, goals, w.after))
+            false => written
+                .iter()
+                .map(|l| b.compare(l, bind, false, None))
+                .collect::<Option<_>>(),
+        });
+        Some(self.group(&left, goals?, w.after))
     }
 
     /// The lowered body `lits`.
@@ -342,13 +344,7 @@ impl Builder<'_> {
             return g;
         }
         self.at(a.span, |b| {
-            let args = match &a.record {
-                Some(r) => {
-                    debug_assert!(a.args.is_empty(), "a record atom has no positional column");
-                    RelArgs::Record(r.iter().map(|(k, t)| (k.clone(), b.pattern(t))).collect())
-                }
-                None => RelArgs::Positional(a.args.iter().map(|t| b.pattern(t)).collect()),
-            };
+            let args = b.args(a);
             let rel = RelRef {
                 name: a.pred.clone(),
                 span: a.span,
@@ -357,69 +353,36 @@ impl Builder<'_> {
         })
     }
 
+    /// The columns of `a`, by position or by name (a record's in the
+    /// order its reads were hoisted).
+    pub(super) fn args(&mut self, a: &Atom) -> RelArgs {
+        match &a.record {
+            Some(r) => {
+                debug_assert!(a.args.is_empty(), "a record atom has no positional column");
+                let cols = self.in_read_order(r);
+                RelArgs::Record(
+                    cols.into_iter()
+                        .map(|(k, t)| (k.clone(), self.pattern(t)))
+                        .collect(),
+                )
+            }
+            None => RelArgs::Positional(a.args.iter().map(|t| self.pattern(t)).collect()),
+        }
+    }
+
     pub(super) fn goal_node(&mut self, span: Span, kind: GoalKind) -> GoalId {
         self.program.goals.insert(Goal { span, kind })
     }
 
-    /// `p(.., V, ..)`, a read the front end hoisted: the goal binding `V`
-    /// to the node of what it reads (`Program::reads`). `None` for any
-    /// other atom, and an attribute of a resource whose type is a
-    /// variable (`x in T` over several types), which stays its goal.
+    /// `p(.., V, ..)`, a read the front end hoisted, as a literal of a
+    /// body: the goal binding `V` to the node of what it reads
+    /// (`Program::reads`). `None` for any other atom, and an attribute of
+    /// a resource whose type is a variable (`x in T` over several types),
+    /// which stays its goal.
     fn hoisted_read(&mut self, a: &Atom) -> Option<GoalId> {
-        let (at, read) = a.args.iter().enumerate().find_map(|(i, t)| {
-            let Term::Var(v) = t else { return None };
-            let key = crate::program::read_key(a.span, &a.pred, v);
-            Some((i, self.program.reads.get(&key)?.clone()))
-        })?;
-        let str_at = |i: usize| match a.args.get(i) {
-            Some(Term::Val(Value::Str(s))) => Some(s.clone()),
-            _ => None,
-        };
+        let (at, read) = self.recorded(a)?;
         self.at(a.span, |b| {
-            let value = match read {
-                Read::Value(decl, via) if at == 0 => ExprKind::Value { decl, via },
-                Read::Attr if at == 3 => {
-                    let (typ, p) = (str_at(0)?, str_at(2)?);
-                    let typ = TypeRef {
-                        name: typ,
-                        span: a.span,
-                    };
-                    let addr = b.expr(&a.args[1]);
-                    let base = b.expr_node(ExprKind::Resource { typ, addr });
-                    let path = vec![Step::Field(p, a.span)];
-                    ExprKind::Field { base, path }
-                }
-                Read::Output if at == 2 => ExprKind::Output {
-                    copy: b.expr(&a.args[0]),
-                    key: str_at(1)?,
-                },
-                Read::World if at == 3 => {
-                    let (typ, p) = (str_at(0)?, str_at(2)?);
-                    ExprKind::World {
-                        typ: TypeRef {
-                            name: typ,
-                            span: a.span,
-                        },
-                        addr: b.expr(&a.args[1]),
-                        path: b.fields(&p),
-                    }
-                }
-                Read::Lookup { out } if out == at => {
-                    let args = a.args.iter().enumerate().filter(|(i, _)| *i != at);
-                    let args = args.map(|(_, t)| b.expr(t)).collect();
-                    let rel = RelRef {
-                        name: a.pred.clone(),
-                        span: a.span,
-                    };
-                    ExprKind::Lookup {
-                        rel,
-                        args,
-                        out,
-                        path: Vec::new(),
-                    }
-                }
-                _ => return None,
-            };
+            let value = b.read_kind(a, at, read)?;
             let pat = b.pattern(&a.args[at]);
             let value = b.expr_node(value);
             Some(b.goal_node(a.span, GoalKind::Bind { pat, value }))
@@ -429,6 +392,16 @@ impl Builder<'_> {
     /// The read `a` with its value column `column` left open: the value
     /// the literal holding it tests or binds in place.
     pub(super) fn read(&mut self, a: &Atom, column: usize) -> ExprId {
+        // A copy's output by its key, its copy tested to exist first.
+        if let ("output", [copy, Term::Val(Value::Str(key)), _], 2) =
+            (a.pred.as_str(), a.args.as_slice(), column)
+            && let Some(of) = self.instance_test(copy)
+        {
+            let copy = self.expr(copy);
+            let key = key.clone();
+            let of = Some(of);
+            return self.expr_node(ExprKind::Output { copy, key, of });
+        }
         let mut open = a.clone();
         open.args[column] = Term::Wildcard;
         let goal = self.rel(&open);

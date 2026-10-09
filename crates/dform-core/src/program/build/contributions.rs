@@ -1,9 +1,9 @@
 //! `set target (=|+=) v [@rank] [where B]`, `set { .. }` and `set from
 //! doc` as items (R-211 step 5), from what the resolver lowered them to
 //! ([`SetLowered`], [`SetFromLowered`]): each line's target the cell it
-//! writes, its terms' nodes, the reads the target hoisted the line's own
-//! (each the goal it lowered to, a `[_]`'s binding among them), the value
-//! the term's node after the reads it hoisted; the clause B's goals as
+//! writes, its terms' nodes, the reads it hoisted in them (a `[_]`'s
+//! binding among them), the value the term's node after the reads it
+//! hoisted; the clause B's goals as
 //! gathered, once for a block's lines. A clause whose aggregates fold
 //! through helpers takes their numbers per line, as each line's rule
 //! folds on its own.
@@ -11,9 +11,7 @@
 use super::{Builder, fold_numbers, grouped};
 use crate::ast::{Atom, FieldOp, Lit, Rank, Span, Stmt, Term};
 use crate::program::NodeId;
-use crate::program::node::{
-    ClauseId, GoalId, Item, ItemId, ItemKind, Source, Target, VarId, Write,
-};
+use crate::program::node::{ClauseId, Item, ItemId, ItemKind, Source, Target, VarId, Write};
 use crate::program::scope::ScopeId;
 
 /// A `set` as the resolver lowered it: its lines, under one clause.
@@ -83,17 +81,24 @@ pub struct SetFromLowered<'a> {
 }
 
 impl Builder<'_> {
-    /// The rows of a document: the externs reading it, its reads `reads`
-    /// (each the goal it lowered to), the helpers its terms made the first
-    /// read's.
+    /// The rows of a document: the externs reading it, and its reads
+    /// `reads`, the table's extern last, the document's term (`Path = t`)
+    /// and its reads before it; the helpers its terms made the rows'.
     pub(super) fn source(&mut self, externs: Vec<Stmt>, reads: &[Lit], made: &[Stmt]) -> Source {
-        let reads: Vec<GoalId> = reads.iter().map(|l| self.goal(l)).collect();
-        if let (Some(&g), false) = (reads.first(), made.is_empty()) {
+        let Some((Lit::Pos(table), before)) = reads.split_last() else {
+            unreachable!("a document's rows are read by its table's extern: {reads:?}")
+        };
+        let (rows, left) = self.reading(before, |b| b.rel(table));
+        assert!(
+            left.is_empty(),
+            "a table's extern reads its document: {table:?} after {left:?}"
+        );
+        if !made.is_empty() {
             self.program
                 .terms_made
-                .insert(NodeId::Goal(g), made.to_vec());
+                .insert(NodeId::Goal(rows), made.to_vec());
         }
-        Source { externs, reads }
+        Source { externs, rows }
     }
 
     /// The `Set` item of `s`.
@@ -117,22 +122,7 @@ impl Builder<'_> {
     /// One line, its aggregates numbered when they fold through helpers.
     fn write(&mut self, w: &WriteLowered, clause: Option<ClauseId>, results: &[String]) -> Write {
         self.at(w.span, |b| {
-            let reads: Vec<GoalId> = w.body[w.seed..w.mid].iter().map(|l| b.goal(l)).collect();
-            let value = b.hoisted(w.value, &w.body[w.mid..]);
-            // The helpers the target's terms made before the value's.
-            let made_by = match reads.first() {
-                Some(&g) => vec![
-                    (NodeId::Goal(g), w.made.0.to_vec()),
-                    (NodeId::Expr(value), w.made.1.to_vec()),
-                ],
-                None => vec![(NodeId::Expr(value), [w.made.0, w.made.1].concat())],
-            };
-            for (node, made) in made_by {
-                if !made.is_empty() {
-                    b.program.terms_made.insert(node, made);
-                }
-            }
-            let target = match &w.target {
+            let (target, left) = b.reading(&w.body[w.seed..w.mid], |b| match &w.target {
                 TargetLowered::Attr { typ, addr, path } => Target::Attr {
                     typ: b.expr(typ),
                     addr: b.expr(addr),
@@ -154,7 +144,27 @@ impl Builder<'_> {
                 TargetLowered::Input(path) => Target::Input {
                     path: path.to_string(),
                 },
+            });
+            assert!(
+                left.is_empty(),
+                "a target uses every read it hoisted: after {left:?}"
+            );
+            let value = b.hoisted(w.value, &w.body[w.mid..]);
+            // The helpers the target's terms made before the value's.
+            let made_by = match &target {
+                Target::Attr { typ, .. } | Target::Element { typ, .. } => vec![
+                    (NodeId::Expr(*typ), w.made.0.to_vec()),
+                    (NodeId::Expr(value), w.made.1.to_vec()),
+                ],
+                Target::Input { .. } => {
+                    vec![(NodeId::Expr(value), [w.made.0, w.made.1].concat())]
+                }
             };
+            for (node, made) in made_by {
+                if !made.is_empty() {
+                    b.program.terms_made.insert(node, made);
+                }
+            }
             let folds = match clause {
                 Some(c) if !results.is_empty() && grouped(w.head, w.body, results) => {
                     fold_numbers(b.program, c)
@@ -166,7 +176,6 @@ impl Builder<'_> {
                 op: if w.add { FieldOp::Add } else { FieldOp::Assign },
                 value,
                 rank: w.rank,
-                reads,
                 folds,
                 span: w.span,
             }

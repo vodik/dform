@@ -63,7 +63,8 @@ impl Builder<'_> {
     }
 
     fn fields_of(&mut self, m: &BTreeMap<String, Term>) -> Vec<ObjPart> {
-        m.iter()
+        self.in_read_order(m)
+            .into_iter()
             .map(|(k, v)| ObjPart::Field {
                 key: k.clone(),
                 key_span: self.span,

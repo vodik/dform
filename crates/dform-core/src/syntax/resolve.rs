@@ -7434,10 +7434,11 @@ impl<'u> Lowerer<'u> {
             TRUE_KW => ExprKind::Lit(Value::Bool(true)),
             _ => ExprKind::Lit(Value::Bool(false)),
         };
-        Ok(self
-            .program
-            .exprs
-            .insert(crate::program::Expr { span, kind }))
+        Ok(self.program.exprs.insert(crate::program::Expr {
+            span,
+            kind,
+            hoisted: None,
+        }))
     }
 
     /// A chain: `x.len` (R-155), a resource by its bare name given as a

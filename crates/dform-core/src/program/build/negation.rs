@@ -23,9 +23,9 @@ impl Builder<'_> {
                 let (Lit::Not(a), reads) = w.lits.split_last()? else {
                     return None;
                 };
-                let rel = self.rel(a);
+                let (rel, left) = self.reading(reads, |b| b.rel(a));
                 let not = self.not_one(rel);
-                Some(self.hoisted_goal(reads, vec![not], w.after))
+                Some(self.group(&left, vec![not], w.after))
             }
             Form::In { each } => self.membership(w, *each, true),
             form @ (Form::Truth | Form::Has | Form::Compare { .. }) => self.not_in_place(w, form),
@@ -42,24 +42,27 @@ impl Builder<'_> {
         };
         let column = w.read?;
         let value = a.args.get(column)?;
-        let read = self.at(a.span, |b| b.read(a, column));
-        let kind = match form {
-            Form::Truth if *value == Term::Val(Value::Bool(true)) => GoalKind::Truth(read),
-            Form::Has if *value == Term::Wildcard => GoalKind::Has(Has::Read(read)),
-            Form::Compare { .. } => GoalKind::Compare {
-                lhs: read,
-                ops: vec![(CmpOp::Eq, self.expr(value))],
-            },
-            _ => return None,
-        };
-        let goal = self.goal_node(a.span, kind);
+        let (mark, outer) = self.reading(outer, |b| mark.map(|m| b.mark(m)));
+        let (kind, left) = self.reading(reads, |b| {
+            let read = b.at(a.span, |b| b.read(a, column));
+            Some(match form {
+                Form::Truth if *value == Term::Val(Value::Bool(true)) => GoalKind::Truth(read),
+                Form::Has if *value == Term::Wildcard => GoalKind::Has(Has::Read(read)),
+                Form::Compare { .. } => GoalKind::Compare {
+                    lhs: read,
+                    ops: vec![(CmpOp::Eq, b.expr(value))],
+                },
+                _ => return None,
+            })
+        });
+        let goal = self.goal_node(a.span, kind?);
         let not = self.not_one(goal);
-        let not = self.hoisted_goal(reads, vec![not], &[]);
+        let not = self.group(&left, vec![not], &[]);
         let marked = match mark {
-            Some(m) => self.marked(m, not)?,
+            Some(m) => self.marked(m?, not),
             None => not,
         };
-        Some(self.hoisted_goal(outer, vec![marked], w.after))
+        Some(self.group(&outer, vec![marked], w.after))
     }
 
     /// `not { B }` (or a `not` no literal says) through `__neg_{number}`:
@@ -72,6 +75,7 @@ impl Builder<'_> {
         if head.pred != format!("__neg_{number}") {
             return None;
         }
+        let (mark, outer) = self.reading(outer, |b| mark.map(|m| b.mark(m)));
         let args = head
             .args
             .iter()
@@ -95,9 +99,9 @@ impl Builder<'_> {
             },
         );
         let marked = match mark {
-            Some(m) => self.marked(m, not)?,
+            Some(m) => self.marked(m?, not),
             None => not,
         };
-        Some(self.hoisted_goal(outer, vec![marked], w.after))
+        Some(self.group(&outer, vec![marked], w.after))
     }
 }

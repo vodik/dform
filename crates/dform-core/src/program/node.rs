@@ -54,11 +54,15 @@ pub struct RelRef {
 
 // --- expressions --------------------------------------------------------
 
-/// A term.
+/// A term. `hoisted`: a read in term position (a value, an attribute,
+/// a lookup, an element, a call's result), the variable `lower` reads it
+/// into before the literal that holds it, picked at build as a fresh
+/// variable's name is; the term is then that variable.
 #[derive(Debug, Clone)]
 pub struct Expr {
     pub span: Span,
     pub kind: ExprKind,
+    pub hoisted: Option<VarId>,
 }
 
 #[derive(Debug, Clone)]
@@ -70,18 +74,13 @@ pub enum ExprKind {
     /// matching anything and holding nothing (`placeholders` refuses it
     /// where a value is read).
     Hole,
-    /// `value`, after the reads the resolver hoisted out of it, in the
-    /// order it hoisted them: a value's `k(V)`, an attribute's `attr(T, A,
-    /// "p", V)`, an index's `member(V, i, W)`. Step 3 builds a term from
-    /// what the resolver lowered it to, so a read is the goals it lowered
-    /// to; each becomes its read's own node (`Value`, `Field`, `Lookup`,
-    /// `Output`, ..) as the builders move to the tree (steps 4-5).
-    Hoisted { reads: Vec<GoalId>, value: ExprId },
     /// The value a read gives in its `column`, where a literal tests or
     /// binds it in the read itself: `R.p == c`, `x = k`, `not R.ready`,
-    /// `has n.k` (step 4). `goal` is the read the resolver made (a
-    /// relation's goal, its `column` a hole) until reads are built from
-    /// the tree; the literal holding it fills the column.
+    /// `has n.k` (step 4); in term position (`hoisted`), a relation read
+    /// by its other columns that no other node says (a copy of a
+    /// component, a document's rows). `goal` is the read the resolver
+    /// made (a relation's goal, its `column` a hole) until reads are
+    /// built from the tree; the literal holding it fills the column.
     Read { goal: GoalId, column: usize },
     /// `1`, `"a"`, `true`, `10.0.0.0/8`: a literal of a known kind (step 3).
     Lit(Value),
@@ -91,18 +90,33 @@ pub enum ExprKind {
     /// `x`: a variable of the clause (step 3).
     Var(VarId),
     /// `k`, `m.k`: a `let`, an input or a key read by name, and how the
-    /// read reaches it (step 6). A read the front end hoists is the goal
-    /// binding its value to a variable, `V = k`, which lowers to `k(V)`.
+    /// read reaches it (step 6). Read in term position it is `hoisted`,
+    /// `k(V)`.
     Value { decl: DeclRef, via: Reach },
     /// `db`, `T[e]`, a variable `x in T` types: a resource (step 3).
     Resource { typ: TypeRef, addr: ExprId },
     /// `ref(R)` written out (step 3).
     RefOf(ExprId),
+    /// A term read into a variable of its own, read again into another:
+    /// `f(x).p` of a loader's call, its value read once (step 6b).
+    Alias(ExprId),
+    /// The address of the resource of type `typ` the reference a read
+    /// gives names (`of`, read in place, its value column the reference):
+    /// an input typed `ref(T)` read through (R-101), `k(ref(T, A, ""))`,
+    /// the address its user's (step 6b).
+    Address { of: ExprId, typ: TypeRef },
     /// `x.f[i]["k"].len`, `R.p.q`: a path into a value or a resource
     /// (step 3).
     Field { base: ExprId, path: Vec<Step> },
-    /// `n.k`, `c[e].k`: a copy's output (step 3).
-    Output { copy: ExprId, key: Name },
+    /// `n.k`, `c[e].k`: a copy's output (step 3). `of`: a copy named by
+    /// its key (`c["a"].k`, a deployment's `platform[env = e].k`), the
+    /// component or stack it is a copy of and the scope that makes it:
+    /// its copy is tested to exist before its output is read.
+    Output {
+        copy: ExprId,
+        key: Name,
+        of: Option<(Name, ExprId)>,
+    },
     /// `platform[env = e].x`: a deployment's output; a key's `bool` is a
     /// pun, `platform[env].x` (step 3).
     Deployed {
@@ -168,6 +182,16 @@ pub enum Step {
     Key(ExprId),
     /// `[_]`: each element, its binding the variable.
     Each(VarId, Span),
+    /// `[k]` of a list the schema keys (R-35, R-69): the element whose key
+    /// is `key`, its key's field read off the type `typ`'s list `list`
+    /// (`type_list_key`) into `keys`, `[field]` (step 6b).
+    Keyed {
+        key: ExprId,
+        typ: ExprId,
+        list: String,
+        keys: VarId,
+        field: VarId,
+    },
     /// `.len`.
     Len,
 }
@@ -379,14 +403,12 @@ pub enum GoalKind {
         agg: ExprId,
         helper: Option<u32>,
     },
-    /// The goals one written literal lowered to, after the reads it
-    /// hoisted (each the goal it lowered to, as in an
-    /// [`ExprKind::Hoisted`] term) and before the field reads an object
-    /// pattern makes after its binding (step 4). A chained comparison
-    /// whose middle term the two sides read as different quantities is a
-    /// goal per pair.
-    Hoisted {
-        reads: Vec<GoalId>,
+    /// The goals one written literal lowered to, before the field reads
+    /// an object pattern makes after its binding (step 4): a chained
+    /// comparison whose middle term the two sides read as different
+    /// quantities is a goal per pair; a membership the literal's terms
+    /// range over (`instance_of`, `want`) a goal before it.
+    Group {
         goals: Vec<GoalId>,
         after: Vec<GoalId>,
     },
@@ -712,14 +734,11 @@ pub struct Param {
 }
 
 /// A rule's head; an aggregate in it is an [`ExprKind::Aggregate`]
-/// argument. `reads`: the reads its arguments hoisted, in order, each
-/// the goal it lowered to (as an [`ExprKind::Hoisted`] term's), written
-/// after the clause until reads are built from the tree.
+/// argument. The reads in its arguments are written after the clause.
 #[derive(Debug, Clone)]
 pub struct Head {
     pub rel: RelRef,
     pub args: RelArgs,
-    pub reads: Vec<GoalId>,
 }
 
 /// A block's name: `n` (the name, R-76), `"n"` (one segment of the
@@ -753,9 +772,8 @@ pub struct Entry {
     pub span: Span,
 }
 
-/// One line of a `set`: `target (=|+=) value [@rank]`, after the reads
-/// its target hoisted (each the goal it lowered to, as an
-/// [`ExprKind::Hoisted`] term's); `folds`, the `__agg_N` each of its
+/// One line of a `set`: `target (=|+=) value [@rank]`, the reads in its
+/// target before its value's; `folds`, the `__agg_N` each of its
 /// clause's aggregates folds through for this line, when they fold
 /// through helpers (a block's lines each fold on their own).
 #[derive(Debug, Clone)]
@@ -764,7 +782,6 @@ pub struct Write {
     pub op: FieldOp,
     pub value: ExprId,
     pub rank: Option<Rank>,
-    pub reads: Vec<GoalId>,
     pub folds: Vec<u32>,
     pub span: Span,
 }
@@ -797,12 +814,12 @@ pub enum Target {
 
 /// The rows of a document a statement reads (`set from`, `input p from`,
 /// R-39): the externs that read it, declared before the statement, and
-/// the reads, each the goal it lowered to (the document's term bound,
-/// then the table's extern), until reads are built from the tree.
+/// the goal of the table's extern, its first column the document's term
+/// (read into its variable, `Path = t`).
 #[derive(Debug, Clone)]
 pub struct Source {
     pub externs: Vec<ast::Stmt>,
-    pub reads: Vec<GoalId>,
+    pub rows: GoalId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

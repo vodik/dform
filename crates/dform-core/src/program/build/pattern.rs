@@ -13,14 +13,18 @@ impl Builder<'_> {
     pub(super) fn pattern(&mut self, t: &Term) -> PatternId {
         let kind = match t {
             Term::Wildcard => PatternKind::Hole,
-            Term::Var(x) => PatternKind::Bind(self.var(x)),
+            Term::Var(x) => match self.pending_read(x) {
+                Some(read) => PatternKind::Expr(read),
+                None => PatternKind::Bind(self.var(x)),
+            },
             Term::List(xs) => PatternKind::Tuple {
                 elems: xs.iter().map(|x| self.pattern(x)).collect(),
                 rest: None,
             },
             Term::Obj(m) => PatternKind::Object {
-                fields: m
-                    .iter()
+                fields: self
+                    .in_read_order(m)
+                    .into_iter()
                     .map(|(k, v)| (k.clone(), self.span, self.pattern(v)))
                     .collect(),
                 rest: None,

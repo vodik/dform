@@ -24,6 +24,24 @@ use crate::ast::{Atom, Lit, Stmt, Term};
 use crate::program::node::*;
 use crate::value::Value;
 
+/// The namespace's or renamed type's test before `last`, `want(T, x)`
+/// of the type it tests, which enumerates it.
+fn tested<'l>(last: &Lit, before: &'l [Lit]) -> Option<&'l Atom> {
+    let Lit::Pos(a) = last else { return None };
+    let ("want", [typ, _]) = (a.pred.as_str(), a.args.as_slice()) else {
+        return None;
+    };
+    match before.last() {
+        Some(Lit::Pos(t))
+            if matches!(t.pred.as_str(), NAMESPACE | PROVIDER_TYPE)
+                && t.args.get(1) == Some(typ) =>
+        {
+            Some(t)
+        }
+        _ => None,
+    }
+}
+
 /// The relations a membership states facts of beside it.
 const ENUM: &str = "__enum";
 const NAMESPACE: &str = "__namespace";
@@ -38,61 +56,52 @@ impl Builder<'_> {
             true => negate(last),
             false => last.clone(),
         };
-        let (member, reads) = self.member(&last, rest, w, each)?;
+        let reads = match tested(&last, rest) {
+            Some(_) => &rest[..rest.len() - 1],
+            None => rest,
+        };
+        let (member, left) = self.reading(reads, |b| b.member(&last, rest, w, each));
+        let member = member?;
         let goal = match negated {
             true => self.not_one(member),
             false => member,
         };
-        Some(self.hoisted_goal(reads, vec![goal], w.after))
+        Some(self.group(&left, vec![goal], w.after))
     }
 
-    /// The membership `last` is (after `before`, the literals before it),
-    /// and the reads before it.
-    fn member<'l>(
-        &mut self,
-        last: &Lit,
-        before: &'l [Lit],
-        w: &Written,
-        each: bool,
-    ) -> Option<(GoalId, &'l [Lit])> {
+    /// The membership `last` is (after `before`, the literals before it).
+    fn member(&mut self, last: &Lit, before: &[Lit], w: &Written, each: bool) -> Option<GoalId> {
         let a = match last {
             Lit::Eq(x, e) => {
                 let pat = self.pattern(x);
                 let e = self.expr(e);
                 let coll = if each { Coll::Each(e) } else { Coll::TypeOf(e) };
-                return Some((
-                    self.goal_node(self.span, GoalKind::Member { pat, coll }),
-                    before,
-                ));
+                return Some(self.goal_node(self.span, GoalKind::Member { pat, coll }));
             }
             Lit::Pos(a) => a,
             _ => return None,
         };
-        let test = before.last().and_then(|l| match l {
-            Lit::Pos(t) if matches!(t.pred.as_str(), NAMESPACE | PROVIDER_TYPE) => Some(t),
-            _ => None,
-        });
-        let (pat, coll, reads) = match (a.pred.as_str(), a.args.as_slice()) {
-            ("want", [typ, x]) => match test {
-                Some(t) if t.args.get(1) == Some(typ) => {
+        let (pat, coll) = match (a.pred.as_str(), a.args.as_slice()) {
+            ("want", [typ, x]) => match tested(last, before) {
+                Some(t) => {
                     let coll = self.tested(t, w.helpers, true)?;
-                    (self.pattern(x), coll, &before[..before.len() - 1])
+                    (self.pattern(x), coll)
                 }
-                _ => (self.pattern(x), Coll::Type(self.expr(typ)), before),
+                None => (self.pattern(x), Coll::Type(self.expr(typ))),
             },
             (NAMESPACE | PROVIDER_TYPE, [_, _]) => {
                 let coll = self.tested(a, w.helpers, false)?;
-                (self.hole(), coll, before)
+                (self.hole(), coll)
             }
             ("cloud_exists", [Term::Val(Value::Str(t)), x]) => {
-                (self.pattern(x), Coll::World(t.clone()), before)
+                (self.pattern(x), Coll::World(t.clone()))
             }
             (crate::modules::INSTANCE_OF, [Term::Val(Value::Str(c)), scope, x]) => {
                 let coll = Coll::Copies {
                     component: c.clone(),
                     scope: self.expr(scope),
                 };
-                (self.pattern(x), coll, before)
+                (self.pattern(x), coll)
             }
             ("member", [list, elem @ ..]) if !elem.is_empty() && elem.len() <= 2 => {
                 let pat = match elem {
@@ -104,12 +113,11 @@ impl Builder<'_> {
                     Some(f) => self.enum_values(f, list)?,
                     None => Coll::Expr(list),
                 };
-                (pat, coll, before)
+                (pat, coll)
             }
             _ => return None,
         };
-        let goal = self.goal_node(a.span, GoalKind::Member { pat, coll });
-        Some((goal, reads))
+        Some(self.goal_node(a.span, GoalKind::Member { pat, coll }))
     }
 
     /// The namespace's or renamed type's test `t`, its facts among

@@ -7,7 +7,7 @@
 use super::{Builder, grouped, number_folds};
 use crate::ast::{Atom, Lit, Rank, Span, Stmt};
 use crate::program::NodeId;
-use crate::program::node::{ClauseId, Head, Item, ItemId, ItemKind, RelArgs, RelRef};
+use crate::program::node::{ClauseId, Head, Item, ItemId, ItemKind, RelRef};
 use crate::program::scope::ScopeId;
 
 /// A rule as the resolver lowered it.
@@ -64,11 +64,11 @@ impl Builder<'_> {
             name: a.pred.clone(),
             span: a.span,
         };
-        let args = self.at(a.span, |b| match &a.record {
-            Some(r) => RelArgs::Record(r.iter().map(|(k, t)| (k.clone(), b.pattern(t))).collect()),
-            None => RelArgs::Positional(a.args.iter().map(|t| b.pattern(t)).collect()),
-        });
-        let reads = reads.iter().map(|l| self.goal(l)).collect();
-        Head { rel, args, reads }
+        let (args, left) = self.reading(reads, |b| b.at(a.span, |b| b.args(a)));
+        assert!(
+            left.is_empty(),
+            "a head uses every read it hoisted: {a:?} after {left:?}"
+        );
+        Head { rel, args }
     }
 }

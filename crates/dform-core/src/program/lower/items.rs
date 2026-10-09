@@ -202,13 +202,13 @@ fn rule(
 ) -> Vec<Stmt> {
     let mut atom = l.atom(&head.rel, &head.args);
     atom.args.extend(rank.map(|r| str_term(r.name())));
+    // The head's reads, after the clause.
+    let reads = std::mem::take(&mut l.reads);
     let (mut body, folds) = match clause {
         Some(c) => l.unfolded(c),
         None => Default::default(),
     };
-    for &g in &head.reads {
-        l.goal(g, &mut body);
-    }
+    body.extend(reads);
     l.terms_made(NodeId::Item(id));
     clause_rule(atom, body, folds, clause.is_some(), span)
 }
@@ -491,9 +491,7 @@ fn relation_input(
         Some(c) => l.unfolded(c),
         None => Default::default(),
     };
-    for &g in &source.reads {
-        l.goal(g, &mut body);
-    }
+    l.goal(source.rows, &mut body);
     let head = Atom {
         pred: rel.name.clone(),
         args: columns.iter().map(|v| l.var(*v)).collect(),
@@ -659,12 +657,11 @@ fn set(program: &Program, writes: &[Write], clause: Option<ClauseId>, span: Span
     let mut out = Vec::new();
     for w in writes {
         let mut body = lits.clone();
-        for &g in &w.reads {
-            l.goal(g, &mut body);
-        }
+        let cell = cell(&mut l, &w.target);
+        body.append(&mut l.reads);
         let value = l.expr(w.value);
         body.append(&mut l.reads);
-        let head = write_head(&mut l, w, value);
+        let head = write_head(w, cell, value);
         let mut folds = folds.clone();
         for (f, n) in folds.iter_mut().zip(&w.folds) {
             f.2 = Some(*n);
@@ -675,23 +672,30 @@ fn set(program: &Program, writes: &[Write], clause: Option<ClauseId>, span: Span
     out
 }
 
-/// A line's head: the cell its target is, `value` written to it.
-fn write_head(l: &mut Lowering, w: &Write, value: ast::Term) -> Atom {
+/// The terms of the cell a line's target is, the reads they hold onto
+/// `l`'s: its type, its address, an element's key.
+fn cell(l: &mut Lowering, target: &Target) -> Vec<ast::Term> {
+    match target {
+        Target::Attr { typ, addr, .. } => vec![l.expr(*typ), l.expr(*addr)],
+        Target::Element { typ, addr, key, .. } => vec![l.expr(*typ), l.expr(*addr), l.expr(*key)],
+        Target::Input { .. } => Vec::new(),
+    }
+}
+
+/// A line's head: the cell its target is (its terms `cell`), `value`
+/// written to it.
+fn write_head(w: &Write, cell: Vec<ast::Term>, value: ast::Term) -> Atom {
     let rank = || str_term(w.rank.unwrap_or(Rank::Normal).name());
+    let mut cell = cell.into_iter();
+    let mut next = || cell.next().expect("a term of the cell");
     let args = match &w.target {
-        Target::Attr { typ, addr, path } => {
-            let mut args = vec![l.expr(*typ), l.expr(*addr), str_term(path), value];
+        Target::Attr { path, .. } => {
+            let mut args = vec![next(), next(), str_term(path), value];
             args.extend(w.rank.map(|r| str_term(r.name())));
             args
         }
-        Target::Element {
-            typ,
-            addr,
-            list,
-            key,
-            rest,
-        } => {
-            let (typ, addr, key) = (l.expr(*typ), l.expr(*addr), l.expr(*key));
+        Target::Element { list, rest, .. } => {
+            let (typ, addr, key) = (next(), next(), next());
             let elem = element_write(key, rest, value);
             vec![typ, addr, str_term(list), elem, rank()]
         }
@@ -753,9 +757,7 @@ fn set_from(
         Some(c) => l.unfolded(c),
         None => Default::default(),
     };
-    for &g in &source.reads {
-        l.goal(g, &mut body);
-    }
+    l.goal(source.rows, &mut body);
     let args = vec![
         str_term(crate::modules::INPUT),
         str_term(""),
