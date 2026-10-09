@@ -49,7 +49,7 @@ use mask::null_class;
 use policy::{Denied, deferred, policies};
 use std::collections::{BTreeMap, BTreeSet};
 use tree::Site;
-use waits::{Follow, boundary_owners, provisional};
+use waits::{Follow, Resolves, boundary_owners, provisional};
 
 mod bare;
 mod chains;
@@ -262,16 +262,8 @@ pub fn report(i: &Input) -> Report {
         .filter(|a| matches!(a.kind, ActionKind::Noop))
         .count();
 
-    // The schedule, by the dependency graph alone (R-156): definite
-    // deformations run in this tick; a held one runs after everything it
-    // waits on is made, which is the tick after the last of their owners'.
     // A wait no null names (a provider's settings, a CRD) is made by what
     // `boundary_owners` says; one nothing in this plan makes is `later`'s.
-    let mut tick_of: BTreeMap<(String, String), usize> = definite
-        .iter()
-        .filter(|a| !matches!(a.kind, ActionKind::Noop))
-        .map(|a| ((a.addr.typ.clone(), a.addr.name.clone()), i.tick))
-        .collect();
     let made_by = boundary_owners(i, &held);
     let resolves = |on: &[String], tick_of: &BTreeMap<(String, String), usize>| {
         on.iter()
@@ -286,49 +278,9 @@ pub fn report(i: &Input) -> Report {
             .collect::<Option<Vec<usize>>>()
             .and_then(|ts| ts.into_iter().max())
     };
-    loop {
-        let mut changed = false;
-        for a in &held {
-            let key = (a.addr.typ.clone(), a.addr.name.clone());
-            if tick_of.contains_key(&key) {
-                continue;
-            }
-            let on = waits_on(a, i.sections).unwrap_or_default();
-            if let Some(t) = resolves(&on, &tick_of) {
-                tick_of.insert(key, t + 1);
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-
-    let mut by_nulls: BTreeMap<Vec<String>, Vec<Deformation>> = BTreeMap::new();
-    for a in &held {
-        let on = waits_on(a, i.sections).unwrap_or_default();
-        by_nulls
-            .entry(on)
-            .or_default()
-            .push(deformation(a, i.schema, &r, &refs));
-    }
+    let tick_of = schedule(i, &definite, &held, &resolves);
     let follow = Follow::new(i, &held, &tick_of);
-    let pending: Vec<PendingBlock> = by_nulls
-        .into_iter()
-        .map(|(on, deformations)| {
-            let resolves_after = resolves(&on, &tick_of);
-            PendingBlock {
-                until: match resolves_after {
-                    Some(_) => BTreeSet::new(),
-                    None => follow.until(&on),
-                },
-                provisional: provisional(&on, i.sections),
-                resolves_after,
-                on,
-                deformations,
-            }
-        })
-        .collect();
+    let pending = pending_blocks(i, &held, (&r, &refs), &tick_of, &resolves, &follow);
 
     let groups = groups(i.res, &tick_of, &resolves);
     let not_planned = crate::zset::not_planned(i.res, &r);
@@ -339,34 +291,7 @@ pub fn report(i: &Input) -> Report {
         p.until = follow.until(&p.on);
     }
 
-    let mut ticks: BTreeMap<usize, Vec<String>> = BTreeMap::new();
-    let mut unscheduled = Vec::new();
-    for a in definite.iter().chain(&held) {
-        if matches!(a.kind, ActionKind::Noop) {
-            continue;
-        }
-        let name = a.addr.to_string();
-        match tick_of.get(&(a.addr.typ.clone(), a.addr.name.clone())) {
-            Some(t) => ticks.entry(*t).or_default().push(name),
-            None => unscheduled.push(name),
-        }
-    }
-    // create_before_destroy deposes the old object; it is deleted at the
-    // next tick, once what depends on it has moved to the replacement.
-    for a in &definite {
-        if matches!(a.kind, ActionKind::Replace { create_first: true }) {
-            ticks
-                .entry(i.tick + 1)
-                .or_default()
-                .push(format!("{} (deposed)", a.addr));
-        }
-    }
-    for g in &groups {
-        match g.resolves_after {
-            Some(t) => ticks.entry(t + 1).or_default().push(g.pattern.clone()),
-            None => unscheduled.push(g.pattern.clone()),
-        }
-    }
+    let (ticks, unscheduled) = ticks(i, &definite, &held, &groups, &tick_of);
 
     // E §2.7: undeformed is the zero Z-set, nothing stuck, no cell stuck.
     let undeformed = noops == definite.len()
@@ -437,6 +362,114 @@ pub fn report(i: &Input) -> Report {
         policy,
         nested: false,
     }
+}
+
+/// The schedule, by the dependency graph alone (R-156): definite
+/// deformations run in this tick; a held one runs after everything it
+/// waits on is made, which is the tick after the last of their owners'.
+fn schedule(
+    i: &Input,
+    definite: &[&Action],
+    held: &[&Action],
+    resolves: &Resolves,
+) -> BTreeMap<(String, String), usize> {
+    let mut tick_of: BTreeMap<(String, String), usize> = definite
+        .iter()
+        .filter(|a| !matches!(a.kind, ActionKind::Noop))
+        .map(|a| ((a.addr.typ.clone(), a.addr.name.clone()), i.tick))
+        .collect();
+    loop {
+        let mut changed = false;
+        for a in held {
+            let key = (a.addr.typ.clone(), a.addr.name.clone());
+            if tick_of.contains_key(&key) {
+                continue;
+            }
+            let on = waits_on(a, i.sections).unwrap_or_default();
+            if let Some(t) = resolves(&on, &tick_of) {
+                tick_of.insert(key, t + 1);
+                changed = true;
+            }
+        }
+        if !changed {
+            return tick_of;
+        }
+    }
+}
+
+/// The held deformations by what they wait on, each block with the tick
+/// it resolves after, or what it waits on outside this plan.
+fn pending_blocks(
+    i: &Input,
+    held: &[&Action],
+    (r, refs): (&Redactor, &Refs),
+    tick_of: &BTreeMap<(String, String), usize>,
+    resolves: &Resolves,
+    follow: &Follow,
+) -> Vec<PendingBlock> {
+    let mut by_nulls: BTreeMap<Vec<String>, Vec<Deformation>> = BTreeMap::new();
+    for a in held {
+        let on = waits_on(a, i.sections).unwrap_or_default();
+        by_nulls
+            .entry(on)
+            .or_default()
+            .push(deformation(a, i.schema, r, refs));
+    }
+    by_nulls
+        .into_iter()
+        .map(|(on, deformations)| {
+            let resolves_after = resolves(&on, tick_of);
+            PendingBlock {
+                until: match resolves_after {
+                    Some(_) => BTreeSet::new(),
+                    None => follow.until(&on),
+                },
+                provisional: provisional(&on, i.sections),
+                resolves_after,
+                on,
+                deformations,
+            }
+        })
+        .collect()
+}
+
+/// What each tick makes, by address, and what no tick of this plan makes.
+fn ticks(
+    i: &Input,
+    definite: &[&Action],
+    held: &[&Action],
+    groups: &[Group],
+    tick_of: &BTreeMap<(String, String), usize>,
+) -> (BTreeMap<usize, Vec<String>>, Vec<String>) {
+    let mut ticks: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    let mut unscheduled = Vec::new();
+    for a in definite.iter().chain(held) {
+        if matches!(a.kind, ActionKind::Noop) {
+            continue;
+        }
+        let name = a.addr.to_string();
+        match tick_of.get(&(a.addr.typ.clone(), a.addr.name.clone())) {
+            Some(t) => ticks.entry(*t).or_default().push(name),
+            None => unscheduled.push(name),
+        }
+    }
+    // create_before_destroy deposes the old object; it is deleted at the
+    // next tick, once what depends on it has moved to the replacement.
+    for a in definite {
+        if matches!(a.kind, ActionKind::Replace { create_first: true }) {
+            ticks
+                .entry(i.tick + 1)
+                .or_default()
+                .push(format!("{} (deposed)", a.addr));
+        }
+    }
+    for g in groups {
+        match g.resolves_after {
+            Some(t) => ticks.entry(t + 1).or_default().push(g.pattern.clone()),
+            None => unscheduled.push(g.pattern.clone()),
+        }
+    }
+    (ticks, unscheduled)
 }
 
 #[cfg(test)]
