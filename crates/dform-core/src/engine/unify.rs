@@ -6,7 +6,7 @@ use super::nulls::Rec;
 use crate::ast::{Atom, Term};
 use crate::value::Value;
 use anyhow::{Result, anyhow, bail};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub(super) fn unify_atom(
     pattern: &Atom,
@@ -46,85 +46,32 @@ pub(super) fn unify_term(
             }
         }
         Term::Wildcard => Ok(true),
-        Term::List(items) => {
-            let Value::List(vs) = fv else {
-                return Ok(false);
-            };
-            if items.len() != vs.len() {
-                return Ok(false);
-            }
-            let mut tmp = out.clone();
-            for (t, v) in items.iter().zip(vs) {
-                if !unify_term(t, v, &mut tmp, rec)? {
-                    return Ok(false);
-                }
-            }
-            *out = tmp;
-            Ok(true)
+        Term::List(items) => unify_list(items, fv, out, rec),
+        Term::Obj(m) => unify_obj(m, fv, out, rec),
+        // Special pattern unification for scoped(Scope, LocalName).
+        // This allows rules to join on component-scoped resources while still
+        // binding LocalName variables.
+        Term::Func { name, args } if name == crate::ir::SCOPED && args.len() == 2 => {
+            unify_scoped(&args[0], &args[1], fv, out, rec)
         }
-        Term::Obj(m) => {
-            let Value::Obj(vm) = fv else {
-                return Ok(false);
-            };
-            if m.len() != vm.len() {
-                return Ok(false);
-            }
-            let mut tmp = out.clone();
-            for (k, t) in m {
-                let Some(v) = vm.get(k) else {
-                    return Ok(false);
-                };
-                if !unify_term(t, v, &mut tmp, rec)? {
-                    return Ok(false);
-                }
-            }
-            *out = tmp;
-            Ok(true)
-        }
-        Term::Func { name, args } => {
-            // Special pattern unification for scoped(Scope, LocalName).
-            // This allows rules to join on component-scoped resources while still
-            // binding LocalName variables.
-            if name == crate::ir::SCOPED && args.len() == 2 {
-                let Some(Value::Str(scope)) = eval_term(&args[0], out) else {
-                    return Ok(false);
-                };
-                let Value::Str(full) = fv else {
-                    return Ok(false);
-                };
-                let prefix = crate::ir::scoped(&scope, "");
-                if let Some(suffix) = full.strip_prefix(&prefix)
-                    && !crate::ir::is_scoped(suffix)
-                {
-                    let mut tmp = out.clone();
-                    if unify_term(&args[1], &Value::Str(suffix.to_string()), &mut tmp, rec)? {
-                        *out = tmp;
-                        return Ok(true);
-                    }
-                }
-                // As the function: a bound name that is already an address
-                // is itself (R-65), another copy's resource read through
-                // its output. An unbound one ranges over the scope's own.
-                return Ok(crate::ir::is_scoped(full)
-                    && eval_term(&args[1], out).is_some_and(|v| v == *fv));
-            }
-            // `ref(T, A, P)` as a pattern takes a reference apart (R-42):
-            // `deformation(k, ref("aws.vpc", A, ""), _)` binds `A`.
+        // `ref(T, A, P)` as a pattern takes a reference apart (R-42):
+        // `deformation(k, ref("aws.vpc", A, ""), _)` binds `A`.
+        Term::Func { name, args }
             if name == crate::ir::REF
                 && args.len() == 3
                 && let Value::Ref { typ, name, attr } = fv
-                && eval_term(pat, out).is_none()
-            {
-                let mut tmp = out.clone();
-                for (t, v) in args.iter().zip([typ, name, attr]) {
-                    if !unify_term(t, &Value::Str(v.clone()), &mut tmp, rec)? {
-                        return Ok(false);
-                    }
+                && eval_term(pat, out).is_none() =>
+        {
+            let mut tmp = out.clone();
+            for (t, v) in args.iter().zip([typ, name, attr]) {
+                if !unify_term(t, &Value::Str(v.clone()), &mut tmp, rec)? {
+                    return Ok(false);
                 }
-                *out = tmp;
-                return Ok(true);
             }
-
+            *out = tmp;
+            Ok(true)
+        }
+        Term::Func { .. } => {
             let pv = match eval_term(pat, out) {
                 Some(v) => v,
                 None => return Ok(false),
@@ -136,6 +83,88 @@ pub(super) fn unify_term(
             Ok(false)
         }
     }
+}
+
+/// A tuple pattern against a list of its length, element by element;
+/// `out` binds only when every element unifies.
+fn unify_list(
+    items: &[Term],
+    fv: &Value,
+    out: &mut HashMap<String, Value>,
+    rec: &Rec,
+) -> Result<bool> {
+    let Value::List(vs) = fv else {
+        return Ok(false);
+    };
+    if items.len() != vs.len() {
+        return Ok(false);
+    }
+    let mut tmp = out.clone();
+    for (t, v) in items.iter().zip(vs) {
+        if !unify_term(t, v, &mut tmp, rec)? {
+            return Ok(false);
+        }
+    }
+    *out = tmp;
+    Ok(true)
+}
+
+/// An object pattern against an object of its keys, field by field;
+/// `out` binds only when every field unifies.
+fn unify_obj(
+    m: &BTreeMap<String, Term>,
+    fv: &Value,
+    out: &mut HashMap<String, Value>,
+    rec: &Rec,
+) -> Result<bool> {
+    let Value::Obj(vm) = fv else {
+        return Ok(false);
+    };
+    if m.len() != vm.len() {
+        return Ok(false);
+    }
+    let mut tmp = out.clone();
+    for (k, t) in m {
+        let Some(v) = vm.get(k) else {
+            return Ok(false);
+        };
+        if !unify_term(t, v, &mut tmp, rec)? {
+            return Ok(false);
+        }
+    }
+    *out = tmp;
+    Ok(true)
+}
+
+/// `scoped(Scope, LocalName)` against a value: an address in the scope
+/// binds its local name.
+fn unify_scoped(
+    scope: &Term,
+    local: &Term,
+    fv: &Value,
+    out: &mut HashMap<String, Value>,
+    rec: &Rec,
+) -> Result<bool> {
+    let Some(Value::Str(scope)) = eval_term(scope, out) else {
+        return Ok(false);
+    };
+    let Value::Str(full) = fv else {
+        return Ok(false);
+    };
+    let prefix = crate::ir::scoped(&scope, "");
+    if let Some(suffix) = full.strip_prefix(&prefix)
+        && !crate::ir::is_scoped(suffix)
+    {
+        let mut tmp = out.clone();
+        if unify_term(local, &Value::Str(suffix.to_string()), &mut tmp, rec)? {
+            *out = tmp;
+            return Ok(true);
+        }
+    }
+    // As the function: a bound name that is already an address
+    // is itself (R-65), another copy's resource read through
+    // its output. An unbound one ranges over the scope's own.
+    Ok(crate::ir::is_scoped(full) && eval_term(local, out).is_some_and(|v| v == *fv))
 }
 
 /// A negated atom's pattern: every argument bound, but a wildcard, which
