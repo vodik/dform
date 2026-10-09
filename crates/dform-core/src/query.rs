@@ -146,7 +146,8 @@ pub fn values(
 /// the element does not (`pg.spec.ports[0].prot`): what it names, and
 /// the nearest the value has, as the plan prints it.
 pub fn unreached(pattern: &str, facts: &BTreeSet<Atom>) -> Result<Option<String>> {
-    use crate::report::fold::{Shape, Step, reach, tokens};
+    use crate::ir::{Step, tokens};
+    use crate::report::fold::{Shape, reach};
     let src = pattern.trim();
     for (addr, path) in named(src, facts)? {
         let Some(path) = path.filter(|p| p.contains('[')) else {
@@ -237,11 +238,11 @@ pub fn unreached(pattern: &str, facts: &BTreeSet<Atom>) -> Result<Option<String>
 /// `vm.tags[0]`). Every resource it names, of any type when none is
 /// given; empty when it names none.
 pub fn printed(src: &str, facts: &BTreeSet<Atom>) -> Vec<(crate::ir::Address, Option<String>)> {
-    use crate::report::fold::Step;
+    use crate::ir::Step;
     let src = src.trim();
     // A selector the plan prints, never `T["A"]`'s.
     let selects = |p: &str| {
-        let toks = crate::report::fold::tokens(p);
+        let toks = crate::ir::tokens(p);
         toks.iter().map(|t| t.text.as_str()).collect::<String>() == p
             && toks
                 .iter()

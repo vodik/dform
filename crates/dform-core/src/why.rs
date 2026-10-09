@@ -724,7 +724,7 @@ impl Chains<'_> {
             let mut part = Value::Obj(Default::default());
             for &i in g.leaves.iter().filter(|&&i| !noted[i]) {
                 let (rel, leaf) = &found[i];
-                let below = &rel[(g.depth - report::fold::tokens(&base).len()).min(rel.len())..];
+                let below = &rel[(g.depth - ir::tokens(&base).len()).min(rel.len())..];
                 nest(&mut part, below, leaf.clone());
             }
             items.push(report::ChainItem {

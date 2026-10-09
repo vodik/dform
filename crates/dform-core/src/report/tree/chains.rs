@@ -239,13 +239,13 @@ pub(super) fn contribution_focus(fact: &Fact, path: &str) -> Option<Focus> {
     let at = fact.args.get(2).and_then(Value::as_str).unwrap_or_default();
     let skip = match at.ends_with(crate::transform::ELEM) {
         true => usize::MAX,
-        false => crate::report::fold::tokens(at).len(),
+        false => crate::ir::tokens(at).len(),
     };
-    let keys: Vec<String> = crate::report::fold::tokens(path)
+    let keys: Vec<String> = crate::ir::tokens(path)
         .into_iter()
         .skip(skip)
         .map_while(|t| match t.step {
-            crate::report::fold::Step::Key(k) => Some(crate::ir::segment_key(&k).into_owned()),
+            crate::ir::Step::Key(k) => Some(crate::ir::segment_key(&k).into_owned()),
             _ => None,
         })
         .collect();
@@ -257,11 +257,11 @@ pub(super) fn contribution_focus(fact: &Fact, path: &str) -> Option<Focus> {
 pub(super) fn holds<'v>(
     memo: &mut crate::report::fold::Reached<'v, 'v>,
     f: &'v Fact,
-    toks: &[crate::report::fold::Tok],
+    toks: &[crate::ir::Tok],
     merged: &'v Value,
     top: usize,
 ) -> bool {
-    use crate::report::fold::Step;
+    use crate::ir::Step;
     // The merged value where the contribution's path ends: a list's
     // element is found in a contribution by its value, not its position
     // in the merged list.
@@ -274,7 +274,7 @@ pub(super) fn holds<'v>(
         _ => None,
     };
     let prefix = |p: &str| -> Option<usize> {
-        let ptoks = crate::report::fold::tokens(p);
+        let ptoks = crate::ir::tokens(p);
         let same = ptoks.len() <= toks.len()
             && ptoks
                 .iter()

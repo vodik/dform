@@ -217,6 +217,66 @@ pub fn segment_parts(seg: &str) -> (std::borrow::Cow<'_, str>, &str) {
     (seg[..i].into(), &seg[i..])
 }
 
+/// One step of a printed path: a key, or a list's selector, with the
+/// text it is printed with (`.name`, `[name=traefik]`, `[0]`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tok {
+    pub step: Step,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Step {
+    /// An object's field, as printed (quoted when it is not a name).
+    Key(String),
+    /// A positional element.
+    Index(usize),
+    /// A keyed element, `[name=traefik]`: its key fields.
+    Keyed(Vec<(String, String)>),
+    /// Any other selector (an element of a set before it is labeled).
+    Other(String),
+}
+
+/// The steps of printed path `path` (`spec.containers[name=web].args[0]`).
+pub fn tokens(path: &str) -> Vec<Tok> {
+    let mut out = Vec::new();
+    for (i, seg) in path_segments(path).into_iter().enumerate() {
+        let index = segment_parts(seg).1;
+        let key = &seg[..seg.len() - index.len()];
+        if !key.is_empty() {
+            out.push(Tok {
+                step: Step::Key(key.to_string()),
+                text: match i {
+                    0 => key.to_string(),
+                    _ => format!(".{key}"),
+                },
+            });
+        }
+        let mut rest = index;
+        while let Some(r) = rest.strip_prefix('[') {
+            let Some(end) = r.find(']') else { break };
+            let inner = &r[..end];
+            let step = match inner.parse::<usize>() {
+                Ok(n) => Step::Index(n),
+                Err(_) if inner.contains('=') => Step::Keyed(
+                    inner
+                        .split(',')
+                        .filter_map(|kv| kv.split_once('='))
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                ),
+                Err(_) => Step::Other(inner.to_string()),
+            };
+            out.push(Tok {
+                step,
+                text: format!("[{inner}]"),
+            });
+            rest = &r[end + 1..];
+        }
+    }
+    out
+}
+
 /// The byte just past the closing quote of the quoted segment `seg`.
 fn quote_end(seg: &str) -> usize {
     let mut escaped = false;
@@ -343,12 +403,11 @@ pub fn parse(src: &str) -> Result<(Address, Option<String>)> {
             return Err(bad());
         };
         let rest = &src[at..];
-        let toks = crate::report::fold::tokens(rest);
+        let toks = tokens(rest);
         if toks.iter().map(|t| t.text.as_str()).collect::<String>() != rest {
             return Err(bad());
         }
         for t in toks {
-            use crate::report::fold::Step;
             match t.step {
                 Step::Key(k) => path = path_join(&path, &segment_key(&k)),
                 Step::Index(_) | Step::Keyed(_) => path.push_str(&t.text),
@@ -688,5 +747,23 @@ mod tests {
         ] {
             assert!(parse(s).is_err(), "{s}");
         }
+    }
+
+    #[test]
+    fn a_path_is_keys_and_selectors() {
+        let t = tokens("spec.containers[name=web].args[0]");
+        let steps: Vec<&Step> = t.iter().map(|t| &t.step).collect();
+        assert_eq!(
+            steps,
+            [
+                &Step::Key("spec".into()),
+                &Step::Key("containers".into()),
+                &Step::Keyed(vec![("name".into(), "web".into())]),
+                &Step::Key("args".into()),
+                &Step::Index(0),
+            ]
+        );
+        let back: String = t.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(back, "spec.containers[name=web].args[0]");
     }
 }

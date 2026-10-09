@@ -306,9 +306,7 @@ impl Printer<'_> {
             })
             .collect();
         let (top, merged) = match attr.args.as_slice() {
-            [_, _, Term::Val(Value::Str(p)), Term::Val(v)] => {
-                (crate::report::fold::tokens(p).len(), v)
-            }
+            [_, _, Term::Val(Value::Str(p)), Term::Val(v)] => (crate::ir::tokens(p).len(), v),
             _ => return none(),
         };
         // Each contribution followed to the leaves once per prefix: a
@@ -319,7 +317,7 @@ impl Printer<'_> {
         paths
             .iter()
             .map(|p| {
-                let toks = crate::report::fold::tokens(p);
+                let toks = crate::ir::tokens(p);
                 contributions
                     .iter()
                     .zip(memos.iter_mut())

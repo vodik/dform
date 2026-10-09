@@ -6,8 +6,9 @@
 use crate::ast::{Atom, Lit, Term};
 use crate::circuit::{Circuit, Fact, Leaf, NodeId, View};
 use crate::engine;
+use crate::ir::{Step, Tok};
 use crate::query::Redactor;
-use crate::report::fold::{self, Step, Tok};
+use crate::report::fold;
 use crate::value::Value;
 use anyhow::Result;
 use std::collections::BTreeSet;
@@ -108,7 +109,7 @@ pub fn find(pattern: &Atom, facts: &BTreeSet<Atom>) -> Result<Vec<(Atom, Option<
     // A quoted segment is one key (R-77): `annotations."a.b/c"`; past a
     // list, the element by its key or position as the plan prints it,
     // `ports[port=5432,protocol=TCP].protocol`.
-    let toks = fold::tokens(path);
+    let toks = crate::ir::tokens(path);
     let Some(Tok {
         step: Step::Key(top),
         ..
