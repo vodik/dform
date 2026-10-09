@@ -3,12 +3,13 @@
 //! (`Diag`), a violation a run refuses on, a read of a row that does not exist
 //! (`Unanswered`).
 
+use super::Why;
+use super::explain::relative_place;
 use super::labels::{address, attribute};
 use super::layout::{Row, WIDTH, layout};
 use super::mask::{Shown, shown_value};
 use super::style::{Paint, Style};
 use super::tree;
-use super::{Why, relative_place};
 use crate::ast::{Atom, Term};
 use crate::engine::EvalResult;
 use crate::ir::Address;

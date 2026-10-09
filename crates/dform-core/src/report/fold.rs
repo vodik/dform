@@ -8,12 +8,13 @@
 //! its own line beside it. A create's lines are folded so (`folded`,
 //! `Folding`), its leaves in the order the program gave a list's elements.
 
+use super::Why;
 use super::deformation::{Deformation, Line, Op};
+use super::explain::attr_holding;
 use super::labels::path;
 use super::mask::Shown;
 use super::tree;
 use super::tree::Site;
-use super::{Why, attr_holding};
 use crate::ast::{Atom, RuleStmt, Term};
 use crate::fmt::value::Tree;
 use crate::ir::Address;

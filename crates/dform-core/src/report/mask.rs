@@ -3,8 +3,9 @@
 //! secret's, a long string elided, a host a reader may mistake for another
 //! named.
 
+use super::Why;
 use super::labels::{printed_attribute, printed_label, reference};
-use super::{Why, reads};
+use super::lines::reads;
 use crate::ir::Address;
 use crate::provider::{NULL_KEY, json_to_value, marker};
 use crate::query::Redactor;

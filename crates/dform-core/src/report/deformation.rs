@@ -3,8 +3,8 @@
 //! as one line with its leaves, a resolved reference as its resource, the paths
 //! that force a replace.
 
+use super::fold::schema_path;
 use super::mask::{Shown, masked, shown};
-use super::schema_path;
 use super::tree;
 use super::tree::Site;
 use crate::ast::{Atom, Term};

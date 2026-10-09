@@ -1,7 +1,9 @@
 //! How the report's text is painted: plain, or with the terminal's colours for
 //! what a piece of the plan is (`Paint`), a change's by its kind.
 
-use super::{Shown, Why, marker_of};
+use super::Why;
+use super::labels::marker_of;
+use super::mask::Shown;
 use crate::provider::ActionKind;
 
 /// How the report's text is painted: plain (what `text` returns, every

@@ -3,8 +3,9 @@
 //! plan it is followed to (`Until`), the resources of this plan it resolves
 //! after, a block planned provisionally against an offline schema.
 
+use super::Input;
+use super::deformation::Deformation;
 use super::labels::{address, extern_label, label, reference};
-use super::{Deformation, Input};
 use crate::ast::{Atom, RuleStmt, Term};
 use crate::ir::Address;
 use crate::provider::{Action, ActionKind};

@@ -12,7 +12,7 @@
 //! cyan, a secret dim. The width a cell folds at is the terminal's (100
 //! when the output is not one).
 
-use super::{Paint, Style};
+use super::style::{Paint, Style};
 use crate::query::{Redactor, size};
 use crate::value::Value;
 use serde_json::Value as Json;

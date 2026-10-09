@@ -6,7 +6,10 @@
 //! line serves an apply (R-206): the mark and the full name, then what
 //! happened where the plan says where.
 
-use super::{ActionKind, Paint, Style, Tally, kind_paint, marker_of};
+use super::labels::marker_of;
+use super::style::{Paint, Style, kind_paint};
+use super::tally::Tally;
+use crate::provider::ActionKind;
 
 /// One deployment in a tree of them: its header line, and its plan.
 #[derive(Debug, Clone)]

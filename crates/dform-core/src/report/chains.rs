@@ -1,10 +1,12 @@
 //! A value's chain as `why` and `-vv` print it (R-122): each step of how the value
 //! was made, its expression whole or with long literals elided.
 
+use super::Why;
+use super::deformation::Line;
+use super::layout::{Row, WIDTH, layout};
 use super::mask::elide;
 use super::style::Style;
 use super::tree;
-use super::{Line, Row, WIDTH, Why, layout};
 
 /// Under attribute line `l`, at `-vv`, how its value was made (R-122):
 /// one `= EXPR   SITE` row per step, then `over EXPR   SITE` per write

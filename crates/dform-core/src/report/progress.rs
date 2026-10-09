@@ -12,10 +12,12 @@
 //! The driver (the `dform` binary's `progress`) prints it: redrawn in
 //! place on a terminal, a line per change of state otherwise.
 
-use super::{
-    Address, Failure, Node, Paint, Row, Style, address, attribute_label, kind_paint, layout,
-    marker_of,
-};
+use super::errors::Failure;
+use super::labels::{address, attribute_label, marker_of};
+use super::layout::{Row, layout};
+use super::render::Node;
+use super::style::{Paint, Style, kind_paint};
+use crate::ir::Address;
 use crate::provider::{Action, ActionKind, NULL_KEY, marker};
 use serde_json::Value as Json;
 use std::time::{Duration, Instant};

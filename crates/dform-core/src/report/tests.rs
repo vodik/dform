@@ -1,7 +1,8 @@
 use super::labels::printed_label;
+use super::layout::{Row, layout};
 use super::lines::terse;
 use super::mask::LONG;
-use super::tally::KINDS;
+use super::tally::{KINDS, by_kind, changes_text};
 use super::*;
 use crate::spell;
 use serde_json::Value as Json;

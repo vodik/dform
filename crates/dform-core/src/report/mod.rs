@@ -33,16 +33,10 @@ use crate::stuck::Sections;
 use crate::value::null_owner;
 use deformation::{Refs, deformation};
 use errors::diags;
-use explain::attr_holding;
-use fold::schema_path;
 use groups::groups;
-use layout::{Row, layout};
-use lines::{gone, reads, values};
 use mask::null_class;
 use policy::{Denied, deferred, policies};
 use std::collections::{BTreeMap, BTreeSet};
-use style::kind_paint;
-use tally::{by_kind, changes_text};
 use tree::Site;
 use waits::{Follow, boundary_owners, provisional};
 

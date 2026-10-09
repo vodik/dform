@@ -5,12 +5,14 @@
 //! provenance. Only its words follow the tool's (R-88): changes, not
 //! deformations; up to date, not undeformed.
 
-use super::tally::count;
-use super::{
-    ActionKind, Deformation, Line, Op, Paint, Report, Shown, Style, by_kind, changes_text,
-    moved_text,
-};
+use super::Report;
+use super::deformation::{Deformation, Line, Op};
+use super::mask::Shown;
+use super::render::moved_text;
+use super::style::{Paint, Style};
+use super::tally::{by_kind, changes_text, count};
 use crate::ir::Address;
+use crate::provider::ActionKind;
 use std::collections::BTreeSet;
 
 use crate::stuck::nulls_text;
