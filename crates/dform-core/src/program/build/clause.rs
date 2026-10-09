@@ -104,6 +104,8 @@ impl Builder<'_> {
                 (self.compare(last, *bind, *aggregate, w.read)?, reads)
             }
             Form::In { each } => return self.membership(w, *each, false),
+            // `v not in PATH[_]`: through a helper over the membership.
+            Form::NotIn { .. } if w.negation.is_some() => return self.negation(w, None),
             Form::NotIn { each } => return self.membership(w, *each, true),
             Form::Not(inner) => return self.negation(w, Some(inner)),
             Form::NotBlock => return self.negation(w, None),

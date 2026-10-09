@@ -20,7 +20,8 @@
 //!   anywhere in the body (`deformation(k, r, _)`, written before or
 //!   after), is a type test as well, so a plan row of a deleted resource
 //!   binds: the column takes the reference apart as `ref("T", R, "")`,
-//!   which is the test.
+//!   which is the test. `r not in T` there (or `not r in T`) takes it
+//!   apart as `ref(Type, R, "")` and tests `Type != "T"` (R-219).
 //! - `r in T`, `T` a provider's type (`ovh.instance`) whose provider a
 //!   `use ovh as ca` also names (R-115), is a resource of `T` or of the
 //!   same type under each such name: `__provider_type("ovh.instance",
@@ -246,7 +247,7 @@ impl Lowerer<'_> {
         let lit = |k: SyntaxKind| {
             matches!(
                 k,
-                LIT_ATOM | LIT_TRUTH | LIT_HAS | LIT_CMP | LIT_IN | LIT_NOT_IN
+                LIT_ATOM | LIT_TRUTH | LIT_HAS | LIT_CMP | LIT_IN | LIT_NOT_IN | LIT_NOT
             )
         };
         let Some(stmt) = n

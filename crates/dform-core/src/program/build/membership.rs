@@ -13,8 +13,10 @@
 //! | `v in T[_].p` (R-162)      | `V = e'`                                        | `Each`         |
 //! | `r in T`, `r` a column's   | `Type = "T"`                                    | `TypeOf`       |
 //!
-//! `x not in e` is `not` around it: its last literal negated, the test a
-//! namespace or a renamed type makes before it as it is.
+//! `x not in e` is `not` around it: its last literal negated (`Type !=
+//! "T"` for a reference column's, R-219), the test a namespace or a
+//! renamed type makes before it as it is; `v not in PATH[_]` is the
+//! helper `not { v in PATH[_] }` lowers through.
 
 use super::Builder;
 use super::clause::Written;
@@ -206,12 +208,14 @@ fn fact<'h>(helpers: &'h [Stmt], pred: &'h str) -> Option<&'h Atom> {
     facts(helpers, pred).next()
 }
 
-/// `not l` as the resolver writes it: a read negated, a negation read; a
-/// comparison as it is.
+/// `not l` as the resolver writes it: a read negated, a negation read, a
+/// type test the type that differs (R-219).
 pub(super) fn negate(l: &Lit) -> Lit {
     match l {
         Lit::Pos(a) => Lit::Not(a.clone()),
         Lit::Not(a) => Lit::Pos(a.clone()),
+        Lit::Eq(a, b) => Lit::Neq(a.clone(), b.clone()),
+        Lit::Neq(a, b) => Lit::Eq(a.clone(), b.clone()),
         other => other.clone(),
     }
 }

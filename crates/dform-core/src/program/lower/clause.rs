@@ -469,11 +469,14 @@ fn compare(op: CmpOp, a: Term, b: Term) -> Lit {
     }
 }
 
-/// `not l`: a read negated, a negation read; a comparison is as it is.
+/// `not l`: a read negated, a negation read, an equality a difference
+/// (a reference column's type test, R-219).
 fn negate(l: Lit) -> Lit {
     match l {
         Lit::Pos(a) => Lit::Not(a),
         Lit::Not(a) => Lit::Pos(a),
+        Lit::Eq(a, b) => Lit::Neq(a, b),
+        Lit::Neq(a, b) => Lit::Eq(a, b),
         other => other,
     }
 }

@@ -2306,7 +2306,10 @@ impl<'u> Lowerer<'u> {
         }
         rc.candidates.extend(outer.vars.keys().cloned());
         // `x in T`: x has the static type T wherever it is used.
-        for c in n.descendants().filter(|c| c.kind() == LIT_IN) {
+        for c in n
+            .descendants()
+            .filter(|c| matches!(c.kind(), LIT_IN | LIT_NOT_IN))
+        {
             let mut ts = terms(&c);
             let Some(lhs) = ts.next().and_then(|t| Chain::of(&t)) else {
                 continue;
@@ -2316,6 +2319,26 @@ impl<'u> Lowerer<'u> {
                 || rc.types.contains_key(&lhs.head)
                 || self.resource(scope, &lhs.head).is_some()
             {
+                continue;
+            }
+            // `r not in T`, `r` a reference column's (R-42): the column
+            // binds its type, which the test says is not `T` (R-219).
+            let negated = c.kind() == LIT_NOT_IN || c.parent().is_some_and(|p| p.kind() == LIT_NOT);
+            if negated && Self::ref_bound(&c, &lhs.head) {
+                let typed = terms(&c)
+                    .nth(1)
+                    .and_then(|t| Chain::of(&t))
+                    .is_some_and(|r| {
+                        let r = self.type_each(&rc, r);
+                        self.chain_type(&rc, &r).is_some() || self.namespace_of(&rc, &r).is_some()
+                    });
+                if typed {
+                    let tv = fresh(&mut rc, "Type");
+                    rc.types.insert(lhs.head, var(&tv));
+                    continue;
+                }
+            }
+            if c.kind() == LIT_NOT_IN {
                 continue;
             }
             if tokens(&c).any(|t| t.kind() == RESOURCE_KW) {
@@ -5330,13 +5353,26 @@ impl<'u> Lowerer<'u> {
 
     /// One literal, with the reads it hoists before it, into `out`.
     fn lit(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<()> {
+        let form = self.shadow.is_some().then(|| self.written_form(rc, n));
+        self.lit_as(rc, n, out, form, Self::lit1)
+    }
+
+    /// [`Self::lit`] of `n` lowered by `lower`: under the switch, built as
+    /// the literal of `form`.
+    fn lit_as(
+        &mut self,
+        rc: &mut Rc,
+        n: &SyntaxNode,
+        out: &mut Vec<Lit>,
+        form: Option<Option<crate::program::build::Form>>,
+        lower: impl FnOnce(&mut Self, &mut Rc, &SyntaxNode, &mut Vec<Lit>) -> L<()>,
+    ) -> L<()> {
         let saved = std::mem::take(&mut self.after);
         let (start, made) = (out.len(), self.helpers.len());
-        let form = self.shadow.is_some().then(|| self.written_form(rc, n));
         if let Some(s) = &mut self.shadow {
             s.open();
         }
-        let r = self.bind(true, |l| l.lit1(rc, n, out));
+        let r = self.bind(true, |l| lower(l, rc, n, out));
         let mid = out.len();
         out.append(&mut self.after);
         self.after = saved;
@@ -5397,11 +5433,7 @@ impl<'u> Lowerer<'u> {
                 }
             }
             LIT_IN | LIT_NOT_IN => {
-                // `v in PATH`, PATH with a `[_]` past its type's (R-162).
-                let each = terms(n)
-                    .nth(1)
-                    .and_then(|t| Chain::of(&t))
-                    .is_some_and(|c| self.type_each(rc, c).ops.iter().any(each::is_each));
+                let each = self.each_membership(rc, n);
                 match n.kind() {
                     LIT_IN => Form::In { each },
                     _ => Form::NotIn { each },
@@ -5411,6 +5443,23 @@ impl<'u> Lowerer<'u> {
             LIT_NOT_BLOCK => Form::NotBlock,
             _ => return None,
         })
+    }
+
+    /// `v in PATH`, PATH with a `[_]` past its type's (R-162): `v` is
+    /// each value the path reaches.
+    fn each_membership(&self, rc: &Rc, n: &SyntaxNode) -> bool {
+        terms(n)
+            .nth(1)
+            .and_then(|t| Chain::of(&t))
+            .is_some_and(|c| self.type_each(rc, c).ops.iter().any(each::is_each))
+    }
+
+    /// A membership, positive whatever `n` says: the body of the helper
+    /// a negated one lowers through.
+    fn member_lit(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<()> {
+        let lit = self.membership(rc, n, out)?;
+        out.push(lit);
+        Ok(())
     }
 
     fn lit1(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<()> {
@@ -5434,9 +5483,13 @@ impl<'u> Lowerer<'u> {
                 }
             }
             LIT_CMP => self.cmp(rc, n, out)?,
-            LIT_IN | LIT_NOT_IN => {
+            LIT_IN => self.member_lit(rc, n, out)?,
+            // `v not in PATH[_]`: no value the path reaches is `v`, a
+            // helper over the membership (R-219).
+            LIT_NOT_IN if self.each_membership(rc, n) => self.neg_helper(rc, n, out, span)?,
+            LIT_NOT_IN => {
                 let lit = self.membership(rc, n, out)?;
-                out.push(if n.kind() == LIT_IN { lit } else { negate(lit) });
+                out.push(negate(lit));
             }
             LIT_HAS => {
                 let t = terms(n).next().ok_or(Skip)?;
@@ -5515,7 +5568,9 @@ impl<'u> Lowerer<'u> {
                 out.push(Lit::Not(atom));
                 return Ok(());
             }
-            LIT_IN if !n.descendants().any(|d| d.kind() == TUPLE) => {
+            LIT_IN
+                if !n.descendants().any(|d| d.kind() == TUPLE) && !self.each_membership(rc, n) =>
+            {
                 let lit = self.membership(rc, n, out)?;
                 out.push(negate(lit));
                 return Ok(());
@@ -5610,10 +5665,15 @@ impl<'u> Lowerer<'u> {
         rc2.reads.clear();
         rc2.values.clear();
         self.nested += 1;
-        let lowered = if n.kind() == BODY {
-            self.body(&mut rc2, n).map(|b| inner = b)
-        } else {
-            self.lit(&mut rc2, n, &mut inner)
+        let lowered = match n.kind() {
+            BODY => self.body(&mut rc2, n).map(|b| inner = b),
+            // `v not in PATH[_]`: the helper's body is the membership.
+            LIT_NOT_IN => {
+                let each = crate::program::build::Form::In { each: true };
+                let form = self.shadow.is_some().then_some(Some(each));
+                self.lit_as(&mut rc2, n, &mut inner, form, Self::member_lit)
+            }
+            _ => self.lit(&mut rc2, n, &mut inner),
         };
         self.nested -= 1;
         lowered?;
@@ -8737,10 +8797,15 @@ fn atom_at(pred: &str, args: Vec<Term>, span: Span) -> Atom {
     }
 }
 
+/// A membership negated: a read negated, a negation read, the type
+/// test of a reference column's `r in T` (R-42) the type that differs
+/// (R-219).
 fn negate(l: Lit) -> Lit {
     match l {
         Lit::Pos(a) => Lit::Not(a),
         Lit::Not(a) => Lit::Pos(a),
+        Lit::Eq(a, b) => Lit::Neq(a, b),
+        Lit::Neq(a, b) => Lit::Eq(a, b),
         other => other,
     }
 }
@@ -9063,6 +9128,9 @@ mod tests {
              n5(x) where p(x), not a(x), not { a(x), x > 1 }\n\
              n6(x) where p(x), not x in xs\n\
              n7(1) where not has pg.tags.a\n\
+             n8(v) where p(v), v not in xs[_]\n\
+             n9(r) where lifecycle(r, _), r not in db.postgres\n\
+             m9(r) where lifecycle(r, _), r in db.postgres\n\
              g(k, n) where p(k), n = count(x), a(x)\n\
              g2(n) where n = count(x), p(x), n > 1\n\
              set db.postgres[_].public = true\n";
@@ -9087,6 +9155,7 @@ mod tests {
             "Member/World",
             "Member/Enum",
             "Member/Each",
+            "Member/TypeOf",
             "Not",
             "Not/helper",
             "Fold",
