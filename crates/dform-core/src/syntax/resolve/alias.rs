@@ -32,7 +32,7 @@ pub(super) struct Aliases {
     defs: Vec<Def>,
     /// Scope -> name -> the aliases of that name visible there: declared
     /// in it, imported into it, exported into it by one of its modules.
-    visible: BTreeMap<usize, BTreeMap<String, BTreeSet<usize>>>,
+    visible: BTreeMap<ScopeId, BTreeMap<String, BTreeSet<usize>>>,
     /// Each alias's expansion, once made (`None`: it is in error).
     expanded: BTreeMap<usize, Option<TypeExpr>>,
     /// The aliases being expanded, outermost first.
@@ -42,9 +42,9 @@ pub(super) struct Aliases {
 impl Lowerer<'_> {
     /// Collect every unit's aliases, and what each scope sees.
     pub(super) fn collect_aliases(&mut self) {
-        let mut own: BTreeMap<usize, BTreeMap<String, BTreeSet<usize>>> = BTreeMap::new();
+        let mut own: BTreeMap<ScopeId, BTreeMap<String, BTreeSet<usize>>> = BTreeMap::new();
         for u in self.units {
-            let fs = self.decls.files[&u.file];
+            let fs = self.file_scope(u.file);
             self.alias_stmts(u.file, &u.root, fs, &mut own);
         }
         self.aliases.visible = own;
@@ -56,8 +56,8 @@ impl Lowerer<'_> {
         &mut self,
         file: u32,
         parent: &SyntaxNode,
-        decl: usize,
-        own: &mut BTreeMap<usize, BTreeMap<String, BTreeSet<usize>>>,
+        decl: ScopeId,
+        own: &mut BTreeMap<ScopeId, BTreeMap<String, BTreeSet<usize>>>,
     ) {
         for n in parent.children() {
             match n.kind() {
@@ -89,7 +89,7 @@ impl Lowerer<'_> {
                 }
                 COMPONENT => {
                     let start: u32 = n.text_range().start().into();
-                    let inner = self.decls.blocks[&(file, start)];
+                    let inner = self.block_scope(file, start);
                     if let Some(b) = node(&n, STMT_BLOCK) {
                         self.alias_stmts(file, &b, inner, own);
                     }
@@ -110,7 +110,7 @@ impl Lowerer<'_> {
     }
 
     /// The aliases of `name` in scope at `scope`.
-    fn aliases_at(&self, scope: usize, name: &str) -> BTreeSet<usize> {
+    fn aliases_at(&self, scope: ScopeId, name: &str) -> BTreeSet<usize> {
         self.chain_of(scope)
             .into_iter()
             .filter_map(|s| self.aliases.visible.get(&s)?.get(name))
@@ -122,7 +122,7 @@ impl Lowerer<'_> {
     /// Two aliases of one name in one scope: an error listing both, once
     /// per set of aliases.
     fn duplicate_aliases(&mut self) {
-        let scopes: Vec<usize> = self.aliases.visible.keys().copied().collect();
+        let scopes: Vec<ScopeId> = self.aliases.visible.keys().copied().collect();
         let mut reported = BTreeSet::new();
         for s in scopes {
             let names: Vec<String> = self.aliases.visible[&s].keys().cloned().collect();
@@ -149,14 +149,13 @@ impl Lowerer<'_> {
 
     /// The scope a node of the current file is in: its component's, else
     /// the file's.
-    fn scope_of_node(&self, n: &SyntaxNode) -> usize {
+    fn scope_of_node(&self, n: &SyntaxNode) -> ScopeId {
+        let scopes = &self.program.scopes;
         n.ancestors()
             .find(|a| a.kind() == COMPONENT)
-            .and_then(|a| {
-                let start: u32 = a.text_range().start().into();
-                self.decls.blocks.get(&(self.file, start)).copied()
-            })
-            .unwrap_or_else(|| self.decls.files.get(&self.file).copied().unwrap_or(PROGRAM))
+            .and_then(|a| scopes.of_block(self.file, a.text_range().start().into()))
+            .or_else(|| scopes.of_file(self.file))
+            .unwrap_or(scopes.root)
     }
 
     /// `name` at the type node `at`, expanded if it is an alias in scope
@@ -185,17 +184,15 @@ impl Lowerer<'_> {
     /// or another module's by a name a `use` there binds or its path from
     /// the root (R-65), its own, not what is visible there. Lexical: a
     /// module another file uses is not in scope here (R-208).
-    fn alias_ids(&self, scope: usize, name: &str) -> BTreeSet<usize> {
+    fn alias_ids(&self, scope: ScopeId, name: &str) -> BTreeSet<usize> {
         if self.aliases.defs.is_empty() {
             return BTreeSet::new();
         }
         match name.rsplit_once('.') {
             Some((m, alias)) => {
                 let path = self.module_path_of(scope, m);
-                self.decls
-                    .modules
-                    .get(&path)
-                    .and_then(|d| self.aliases.visible.get(&d.scope)?.get(alias))
+                self.module_at(&path)
+                    .and_then(|(s, _)| self.aliases.visible.get(&s)?.get(alias))
                     .cloned()
                     .unwrap_or_default()
             }
@@ -205,14 +202,14 @@ impl Lowerer<'_> {
 
     /// Whether `name`, written in `scope`, is a type alias: a dotted name
     /// is one before it is a resource type (`types.environment`).
-    pub(super) fn names_alias(&self, scope: usize, name: &str) -> bool {
+    pub(super) fn names_alias(&self, scope: ScopeId, name: &str) -> bool {
         !self.alias_ids(scope, name).is_empty()
     }
 
     /// An output typed by an alias by path holds a value, not a
     /// reference: `collect` met it before the aliases were known.
     pub(super) fn unalias_outputs(&mut self) {
-        for scope in 0..self.decls.scopes.len() {
+        for scope in self.program.scopes.ids().collect::<Vec<_>>() {
             let aliased: Vec<String> = self.decls.scopes[scope]
                 .outputs
                 .iter()

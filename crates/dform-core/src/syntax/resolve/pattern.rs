@@ -191,16 +191,16 @@ impl Lowerer<'_> {
 
     /// Whether relation `pred` has several columns, each named: what a
     /// record pattern `p({ a, b })` matches.
-    pub(super) fn named_columns(&self, scope: usize, pred: &str) -> bool {
+    pub(super) fn named_columns(&self, scope: ScopeId, pred: &str) -> bool {
         let (scopes, name) = match pred.split_once("::") {
             Some((m, p)) => (
                 self.use_in(scope, m)
-                    .and_then(|path| self.decls.modules.get(&path))
-                    .map(|m| vec![m.scope])
+                    .and_then(|path| self.module_at(&path))
+                    .map(|m| vec![m.0])
                     .unwrap_or_default(),
                 p,
             ),
-            None => ((0..self.decls.scopes.len()).collect(), pred),
+            None => (self.program.scopes.ids().collect(), pred),
         };
         let mut arities = BTreeSet::new();
         for s in scopes {

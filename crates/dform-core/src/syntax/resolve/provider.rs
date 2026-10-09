@@ -57,7 +57,7 @@ impl Lowerer<'_> {
     /// settings' values and the reads they hoisted, its clause B's goals,
     /// which declaration of its name it is; `lower` writes its
     /// configuration's rules.
-    pub(super) fn provider(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
+    pub(super) fn provider(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
         use crate::program::build::{SettingKind, SettingLowered};
         let span = self.span(n);
         // `use ovh as ca` (R-115): the provider `ovh` under the name `ca`,

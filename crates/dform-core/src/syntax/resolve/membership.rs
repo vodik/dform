@@ -196,7 +196,7 @@ impl Lowerer<'_> {
     }
 
     /// The declaration of the input `name` in scope.
-    fn input_node(&self, scope: usize, name: &str) -> Option<SyntaxNode> {
+    fn input_node(&self, scope: ScopeId, name: &str) -> Option<SyntaxNode> {
         self.chain_of(scope)
             .into_iter()
             .find_map(|s| self.decls.scopes[s].input_nodes.get(name).cloned())
@@ -210,7 +210,7 @@ impl Lowerer<'_> {
             || rc.types.contains_key(h)
             || self.is_value(rc.scope, h)
             || self.resource(rc.scope, h).is_some()
-            || self.decls.modules.contains_key(h)
+            || self.module_at(h).is_some()
             || self.decls.relations.contains(h)
             || self.chain_of(rc.scope).into_iter().any(|s| {
                 let s = &self.decls.scopes[s];

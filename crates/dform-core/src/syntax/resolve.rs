@@ -32,10 +32,11 @@ use crate::ast::{
     TypeExpr, Via, str_term, var,
 };
 use crate::diag::Diagnostic;
-use crate::program::ItemId;
 use crate::program::node::CopyKind;
+use crate::program::{ItemId, ScopeId};
 use crate::spell;
 use crate::value::Value;
+use slotmap::SecondaryMap;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod aggregate;
@@ -257,7 +258,7 @@ pub fn data_term(src: &str) -> Result<Term, String> {
         .next()
         .ok_or_else(|| "not a term".to_string())?;
     let mut l = Lowerer::new(&[], &[], &[], false);
-    let mut rc = l.rc(&t, PROGRAM, &Rc::default());
+    let mut rc = l.rc(&t, l.root(), &Rc::default());
     l.calls(Calls::Data, |l| l.constant(&mut rc, &t))
         .map_err(|_| {
             l.diags
@@ -279,9 +280,9 @@ enum VType {
     World(String),
 }
 
+/// What a scope declares, by kind of name.
 #[derive(Default)]
 struct Scope {
-    parent: Option<usize>,
     /// Inputs and `let`s: names read bare.
     values: BTreeSet<String>,
     /// Each input's declaration, for its type.
@@ -339,18 +340,8 @@ struct Scope {
 
 #[derive(Default)]
 struct Decls {
-    scopes: Vec<Scope>,
-    /// The scope of each file's top level, by source id.
-    files: BTreeMap<u32, usize>,
-    /// The scope of a component block, by (file, offset).
-    blocks: BTreeMap<(u32, u32), usize>,
-    /// The entry files' top-level scopes: what they declare is the
-    /// program's.
-    entries: BTreeSet<usize>,
-    /// Each module file's path, by source id (R-65).
-    paths: BTreeMap<u32, String>,
-    /// Modules and components by path: a file, or a component item.
-    modules: BTreeMap<String, ModDecl>,
+    /// What each of the program's scopes (`program.scopes`) declares.
+    scopes: SecondaryMap<ScopeId, Scope>,
     /// The stacks the program's `use`s name.
     deployed: Vec<Deployed>,
     /// The project modules' source ids (R-114).
@@ -360,7 +351,7 @@ struct Decls {
     types: BTreeSet<String>,
     /// Every rule and fact statement `collect` found, with the scope it is
     /// lowered in: what `find_ref_columns` reads.
-    rules: Vec<(usize, SyntaxNode)>,
+    rules: Vec<(ScopeId, SyntaxNode)>,
     /// The program relations' reference columns (R-185), by relation and
     /// arity, then index.
     refs: BTreeMap<(columns::RelKey, usize), BTreeMap<usize, columns::RefColumn>>,
@@ -379,7 +370,7 @@ struct Decls {
     heads: BTreeSet<String>,
     /// Each `resource T n` statement as collected, before what `T` names
     /// is known: the scope it declares into, its file and the statement.
-    pending: Vec<(usize, u32, SyntaxNode)>,
+    pending: Vec<(ScopeId, u32, SyntaxNode)>,
     /// The `resource C n` statements whose type is a component (R-113):
     /// copies, by file and offset.
     copies: BTreeSet<(u32, u32)>,
@@ -389,21 +380,10 @@ struct Decls {
     renamed: BTreeMap<String, BTreeSet<String>>,
 }
 
-const PROGRAM: usize = 0;
-
 /// The built-in schemas' namespaces they do not close: a mock of part of a
 /// real provider's types (`aws`, `google`; R-36), and `k8s`, whose types
 /// are a cluster's own, CRDs included.
 const OPEN_NAMESPACES: &[&str] = &["aws", "google", "k8s"];
-
-/// A module or a component (R-65).
-#[derive(Clone)]
-struct ModDecl {
-    /// Its body's scope.
-    scope: usize,
-    /// Whether it is a component, an item; else a module, a file.
-    component: bool,
-}
 
 fn node(n: &SyntaxNode, k: SyntaxKind) -> Option<SyntaxNode> {
     n.children().find(|c| c.kind() == k)
@@ -696,7 +676,7 @@ enum Pos {
 /// Per-statement state: the variables and what the rule has read.
 #[derive(Default, Clone)]
 struct Rc {
-    scope: usize,
+    scope: ScopeId,
     /// Source name -> lowered name.
     vars: BTreeMap<String, String>,
     /// Where each variable is first written.
@@ -770,9 +750,9 @@ pub struct Lowerer<'u> {
     /// The program being built (R-211): an item per statement, pushed in
     /// order as the walk lowers each, and the helper numbers taken so far.
     program: crate::program::Program,
-    /// The program's scope the statements being lowered are in: the
-    /// program's own, a module file's or a component's.
-    item_scope: crate::program::ScopeId,
+    /// The scope the statements being lowered are in: an entry file's,
+    /// a module file's or a component's.
+    item_scope: ScopeId,
     /// What the resolver lowers each ported statement to, kept for
     /// `DFORM_CHECK_LOWER=1` (`program::check`).
     resolved: crate::program::check::Resolved,
@@ -797,7 +777,7 @@ pub struct Lowerer<'u> {
     /// Type aliases and where each is in scope.
     aliases: alias::Aliases,
     /// The outputs declared so far, by scope.
-    outputs: BTreeSet<(usize, String)>,
+    outputs: BTreeSet<(ScopeId, String)>,
     /// The aggregate bindings of the statement being lowered.
     aggs: Vec<aggregate::Agg>,
     /// How deep in `not { }` bodies and comprehensions the lowering is.
@@ -814,7 +794,7 @@ pub struct Lowerer<'u> {
     /// The module whose relations the `use` or `instance` block being
     /// lowered gives rows of (R-204): a row's reference columns are the
     /// module's.
-    given: Option<usize>,
+    given: Option<ScopeId>,
 }
 
 /// What a value's position says of the resource a bare name two types
@@ -846,10 +826,7 @@ impl<'u> Lowerer<'u> {
     fn new(units: &'u [Unit], entries: &[usize], deployed: &[Deployed], lenient: bool) -> Self {
         let mut l = Lowerer {
             units,
-            decls: Decls {
-                scopes: vec![Scope::default()],
-                ..Decls::default()
-            },
+            decls: Decls::default(),
             file: 0,
             offset: 0,
             diags: Vec::new(),
@@ -874,33 +851,18 @@ impl<'u> Lowerer<'u> {
             want: Want::Nothing,
             given: None,
         };
-        l.item_scope = l.program.scope;
+        let root = l.program.scopes.root;
+        l.item_scope = root;
+        l.decls.scopes.insert(root, Scope::default());
         l.decls.deployed = deployed.to_vec();
         l.decls.project = units.iter().filter(|u| u.project).map(|u| u.file).collect();
         for (i, u) in units.iter().enumerate() {
-            let scope = l.new_scope(PROGRAM);
-            l.decls.files.insert(u.file, scope);
-            match &u.path {
-                // A module's file is its own scope (R-65).
-                // A module's file is its own scope (R-65), with none around
-                // it: a module never reads its user's names (R-205).
-                Some(path) if !entries.contains(&i) => {
-                    l.decls.scopes[scope].parent = None;
-                    l.decls.paths.insert(u.file, path.clone());
-                    l.decls.modules.insert(
-                        path.clone(),
-                        ModDecl {
-                            scope,
-                            component: false,
-                        },
-                    );
-                    l.collect(u.file, &u.root, scope, scope);
-                }
-                _ => {
-                    l.decls.entries.insert(scope);
-                    l.collect(u.file, &u.root, PROGRAM, scope);
-                }
-            }
+            // A module's file is its own scope (R-65), with none around
+            // it: a module never reads its user's names (R-205).
+            let module = u.path.as_deref().filter(|_| !entries.contains(&i));
+            let scope = l.program.scopes.file(u.file, module);
+            l.decls.scopes.insert(scope, Scope::default());
+            l.collect(u.file, &u.root, l.program.scopes.declaring(scope), scope);
         }
         l.bind_instances();
         l.decls.types.extend(schema_types().iter().cloned());
@@ -939,7 +901,7 @@ impl<'u> Lowerer<'u> {
     /// each instanced component readable by its last segment there
     /// (`postgres[t]`).
     fn bind_instances(&mut self) {
-        for s in 0..self.decls.scopes.len() {
+        for s in self.program.scopes.ids().collect::<Vec<_>>() {
             let used = self.decls.scopes[s].uses.clone();
             for (name, written) in used {
                 let path = self.module_path_of(s, &written);
@@ -948,7 +910,7 @@ impl<'u> Lowerer<'u> {
         }
         self.classify_resources();
         // A name declared more than once: each declaration's path (R-104).
-        for s in 0..self.decls.scopes.len() {
+        for s in self.program.scopes.ids().collect::<Vec<_>>() {
             let bound = self.decls.scopes[s].bound.clone();
             for (name, decls) in bound.into_iter().filter(|(_, d)| d.len() > 1) {
                 let mut alts = Vec::new();
@@ -974,7 +936,7 @@ impl<'u> Lowerer<'u> {
                 self.decls.scopes[s].alternatives.insert(name, alts);
             }
         }
-        for s in 0..self.decls.scopes.len() {
+        for s in self.program.scopes.ids().collect::<Vec<_>>() {
             let written = self.decls.scopes[s].instances_written.clone();
             for (name, path) in written {
                 let Ok(full) = self.component_path(s, &path) else {
@@ -1017,7 +979,7 @@ impl<'u> Lowerer<'u> {
                 && self.decls.deployed.iter().any(|d| d.path == full);
             let copy = !deployment
                 && (bound || !typed)
-                && (self.decls.modules.contains_key(&full)
+                && (self.module_at(&full).is_some()
                     || self.decls.deployed.iter().any(|d| d.path == full)
                     || self.signature(decl, &typ).is_some());
             if copy {
@@ -1066,7 +1028,7 @@ impl<'u> Lowerer<'u> {
 
     /// The module path a path written in `scope` names: its first segment
     /// a component or a used module in scope, else the path from the root.
-    fn module_path_of(&self, scope: usize, written: &str) -> String {
+    fn module_path_of(&self, scope: ScopeId, written: &str) -> String {
         let (head, rest) = match written.split_once('.') {
             Some((h, r)) => (h, Some(r)),
             None => (written, None),
@@ -1087,10 +1049,10 @@ impl<'u> Lowerer<'u> {
 
     /// The component a path written in `scope` names, or the error that
     /// says what it names instead.
-    fn component_path(&self, scope: usize, written: &str) -> Result<String, Box<Diagnostic>> {
+    fn component_path(&self, scope: ScopeId, written: &str) -> Result<String, Box<Diagnostic>> {
         let full = self.module_path_of(scope, written);
-        match self.decls.modules.get(&full) {
-            Some(m) if m.component => Ok(full),
+        match self.module_at(&full) {
+            Some((_, true)) => Ok(full),
             Some(_) => {
                 let mut d =
                     Diagnostic::error(Span::default(), format!("{written} is a module; `use` it"))
@@ -1101,11 +1063,11 @@ impl<'u> Lowerer<'u> {
                         );
                 // `resource k3s cluster` for k3s.df's `component k3s`.
                 let items: Vec<String> = self
-                    .decls
-                    .modules
-                    .iter()
-                    .filter(|(p, m)| {
-                        m.component
+                    .program
+                    .scopes
+                    .paths()
+                    .filter(|(p, s)| {
+                        self.program.scopes.is_component(*s)
                             && p.strip_prefix(&full)
                                 .and_then(|r| r.strip_prefix('.'))
                                 .is_some_and(|r| !r.contains('.'))
@@ -1137,16 +1099,9 @@ impl<'u> Lowerer<'u> {
         }
     }
 
-    fn new_scope(&mut self, parent: usize) -> usize {
-        self.decls.scopes.push(Scope {
-            parent: Some(parent),
-            ..Scope::default()
-        });
-        self.decls.scopes.len() - 1
-    }
     /// Record the declarations of a statement list in `decl`; a component
     /// block nests in `outer`.
-    fn collect(&mut self, file: u32, parent: &SyntaxNode, decl: usize, outer: usize) {
+    fn collect(&mut self, file: u32, parent: &SyntaxNode, decl: ScopeId, outer: ScopeId) {
         let arity = |n: &SyntaxNode| n.children().filter(|c| c.kind() == BIND_ARG).count();
         for n in parent.children() {
             match n.kind() {
@@ -1267,21 +1222,14 @@ impl<'u> Lowerer<'u> {
                     }
                 }
                 COMPONENT => {
-                    let scope = self.new_scope(outer);
                     let start: u32 = n.text_range().start().into();
-                    self.decls.blocks.insert((file, start), scope);
                     let name = word_text(&n, 1);
-                    let path = match self.decls.paths.get(&file) {
+                    let path = match self.module_path(file) {
                         Some(m) => format!("{m}.{name}"),
                         None => name.clone(),
                     };
-                    self.decls.modules.insert(
-                        path.clone(),
-                        ModDecl {
-                            scope,
-                            component: true,
-                        },
-                    );
+                    let scope = self.program.scopes.component(file, start, outer, &path);
+                    self.decls.scopes.insert(scope, Scope::default());
                     self.decls.scopes[decl].components.insert(name, path);
                     if let Some(b) = node(&n, STMT_BLOCK) {
                         self.collect(file, &b, scope, scope);
@@ -1359,7 +1307,7 @@ impl<'u> Lowerer<'u> {
     /// `T` in `output k: T`, written in `scope`, when it names a resource
     /// type: a dotted name that is no type alias (`types.environment` is
     /// one by its module's path, R-208).
-    fn resource_type(&self, scope: usize, t: &SyntaxNode) -> Option<String> {
+    fn resource_type(&self, scope: ScopeId, t: &SyntaxNode) -> Option<String> {
         if node(t, TYPE_EXPR).is_some() {
             return None;
         }
@@ -1371,12 +1319,47 @@ impl<'u> Lowerer<'u> {
 
     /// The scope a statement lowered in `scope` declares into: a file's top
     /// level declares into the program.
-    fn decl_scope(&self, scope: usize) -> usize {
-        if self.decls.entries.contains(&scope) {
-            PROGRAM
-        } else {
-            scope
+    fn decl_scope(&self, scope: ScopeId) -> ScopeId {
+        self.program.scopes.declaring(scope)
+    }
+
+    /// The program's scope.
+    fn root(&self) -> ScopeId {
+        self.program.scopes.root
+    }
+
+    /// The path of the module whose file `file` is (R-65); `None` for an
+    /// entry file.
+    fn module_path(&self, file: u32) -> Option<String> {
+        let scope = self.program.scopes.of_file(file)?;
+        match self.program.scopes.definition(scope) {
+            Some((path, false)) => Some(path.clone()),
+            _ => None,
         }
+    }
+
+    /// The top level of `file`, collected.
+    fn file_scope(&self, file: u32) -> ScopeId {
+        self.program
+            .scopes
+            .of_file(file)
+            .expect("every file is collected")
+    }
+
+    /// The body of the component whose statement is at `start` in `file`,
+    /// collected.
+    fn block_scope(&self, file: u32, start: u32) -> ScopeId {
+        let scopes = &self.program.scopes;
+        scopes
+            .of_block(file, start)
+            .expect("every component is collected")
+    }
+
+    /// The body of the module or component at `path`, and whether it is a
+    /// component's.
+    fn module_at(&self, path: &str) -> Option<(ScopeId, bool)> {
+        let s = self.program.scopes.by_path(path)?;
+        Some((s, self.program.scopes.is_component(s)))
     }
 
     /// The names a rule at `rc` may read: its variables and what its
@@ -1395,36 +1378,20 @@ impl<'u> Lowerer<'u> {
         out
     }
 
-    fn chain_of(&self, scope: usize) -> Vec<usize> {
-        let mut out = vec![scope];
-        let mut s = scope;
-        while let Some(p) = self.decls.scopes[s].parent {
-            out.push(p);
-            s = p;
-        }
-        out
+    fn chain_of(&self, scope: ScopeId) -> Vec<ScopeId> {
+        self.program.scopes.chain(scope)
     }
 
-    /// The scopes from `scope` out to the body of the component or module
-    /// it is in, that body's included: what is the body's own. At the
-    /// program's top level, every scope.
-    fn own_scopes(&self, scope: usize) -> Vec<usize> {
-        let bodies: BTreeSet<usize> = self.decls.modules.values().map(|m| m.scope).collect();
-        let mut out = Vec::new();
-        for s in self.chain_of(scope) {
-            out.push(s);
-            if bodies.contains(&s) {
-                break;
-            }
-        }
-        out
+    /// The scopes from `scope` out to the body it is in ([`Scopes::own`]).
+    fn own_scopes(&self, scope: ScopeId) -> Vec<ScopeId> {
+        self.program.scopes.own(scope)
     }
 
     /// An instance's scope, `t`, as a read in `scope` writes it: relative
     /// when the copy is the body's own (expansion puts the body's scope in
     /// front of it), else its user's, marked `scope(t)` so that expansion
     /// leaves it as it is (`modules::ABSOLUTE`).
-    fn scope_term(&self, scope: usize, declared: usize, t: Term) -> Term {
+    fn scope_term(&self, scope: ScopeId, declared: ScopeId, t: Term) -> Term {
         match self.own_scopes(scope).contains(&declared) {
             true => t,
             false => func(crate::modules::ABSOLUTE, vec![t]),
@@ -1435,13 +1402,13 @@ impl<'u> Lowerer<'u> {
     /// writes it: the body's own is relative (expansion scopes it), its
     /// user's marked as written (`scope_term`), an enclosing body's its
     /// instance's (`lexical`).
-    fn resource_addr(&self, scope: usize, name: &str) -> Term {
+    fn resource_addr(&self, scope: ScopeId, name: &str) -> Term {
         self.resource_addr_from(scope, scope, name)
     }
 
     /// [`Self::resource_addr`] of `name` looked up from `from` outward:
     /// `super.x` looks up from the enclosing scope (R-186).
-    fn resource_addr_from(&self, scope: usize, from: usize, name: &str) -> Term {
+    fn resource_addr_from(&self, scope: ScopeId, from: ScopeId, name: &str) -> Term {
         let declared = self
             .chain_of(from)
             .into_iter()
@@ -1455,33 +1422,15 @@ impl<'u> Lowerer<'u> {
     }
 
     /// The definition whose body `declared` is, when a read in `scope`
-    /// reaches it past the body `scope` is in (R-186): a component reads
-    /// its module's items bare, and an enclosing component's, as a Rust
-    /// `fn` reads its module's; expansion makes the read the instance's
-    /// the copy was taken from (`modules::lexical_pred`). The program's,
-    /// `""`, read in a component: no copy around it takes the name. `None`
-    /// for the body's own, and for the program's read in a module's body,
-    /// which reads its user's.
-    fn lexical(&self, scope: usize, declared: usize) -> Option<String> {
-        let own = self.own_scopes(scope);
-        if own.contains(&declared) {
-            return None;
-        }
-        let body = |s: usize| self.decls.modules.iter().find(|(_, m)| m.scope == s);
-        if declared == PROGRAM {
-            let in_component = own
-                .last()
-                .and_then(|b| body(*b))
-                .is_some_and(|(_, m)| m.component);
-            return in_component.then(String::new);
-        }
-        body(declared).map(|(p, _)| p.clone())
+    /// reaches it past its own body ([`Scopes::lexical`], R-186).
+    fn lexical(&self, scope: ScopeId, declared: ScopeId) -> Option<String> {
+        self.program.scopes.lexical(scope, declared)
     }
 
     /// The relation a read of the value `name` in `scope` is, looked up
     /// from `from` outward: its name, or an enclosing body's item marked
     /// for expansion (`lexical`).
-    fn value_pred(&self, scope: usize, from: usize, name: &str) -> String {
+    fn value_pred(&self, scope: ScopeId, from: ScopeId, name: &str) -> String {
         let declared = self
             .chain_of(from)
             .into_iter()
@@ -1495,7 +1444,7 @@ impl<'u> Lowerer<'u> {
     /// The relation `p` called in `scope`, looked up from `from` outward:
     /// an enclosing body's own relation marked as [`Self::value_pred`]
     /// marks a value; anything else by its name.
-    fn relation_pred(&self, scope: usize, from: usize, p: &str) -> String {
+    fn relation_pred(&self, scope: ScopeId, from: ScopeId, p: &str) -> String {
         if !crate::modules::is_private(p) {
             return p.to_string();
         }
@@ -1515,14 +1464,13 @@ impl<'u> Lowerer<'u> {
     /// module never reaches its user.
     /// `outer` counts the `super`s before this one: `super.super.x` past a
     /// component's module is the module's error too.
-    fn super_scope(&mut self, scope: usize, item: &str, outer: usize, span: Span) -> L<usize> {
-        let body = self.own_scopes(scope).last().copied().unwrap_or(PROGRAM);
+    fn super_scope(&mut self, scope: ScopeId, item: &str, outer: usize, span: Span) -> L<ScopeId> {
+        let body = self.program.scopes.body(scope);
         let module = self
-            .decls
-            .modules
-            .iter()
-            .find(|(_, m)| m.scope == body)
-            .map(|(p, m)| (p.clone(), m.component));
+            .program
+            .scopes
+            .definition(body)
+            .map(|(p, c)| (p.clone(), c));
         match module {
             Some((_, true)) => {}
             Some((path, false)) => {
@@ -1554,17 +1502,13 @@ impl<'u> Lowerer<'u> {
                 return Err(Skip);
             }
         }
-        let parent = self.decls.scopes[body].parent.unwrap_or(PROGRAM);
-        Ok(match self.decls.entries.contains(&parent) {
-            true => PROGRAM,
-            false => parent,
-        })
+        Ok(self.program.scopes.around(body))
     }
 
     /// The scope a chain's leading `super`s name and the chain after
     /// them (`super.repository.metadata.name`: the module's scope and
     /// `repository.metadata.name`).
-    fn super_chain(&mut self, rc: &Rc, c: &Chain, span: Span) -> L<(usize, Chain)> {
+    fn super_chain(&mut self, rc: &Rc, c: &Chain, span: Span) -> L<(ScopeId, Chain)> {
         let supers = c
             .ops
             .iter()
@@ -1612,7 +1556,7 @@ impl<'u> Lowerer<'u> {
     fn item_read(
         &mut self,
         rc: &mut Rc,
-        from: usize,
+        from: ScopeId,
         outward: bool,
         c: &Chain,
         pre: &mut Vec<Lit>,
@@ -1644,13 +1588,13 @@ impl<'u> Lowerer<'u> {
     /// The scope of the module `h` names when the read in `scope` is in
     /// that module's own file and no `use` there binds `h`: `backups` in
     /// backups.df reads the module itself, the instance the read is in.
-    fn self_module(&self, scope: usize, h: &str) -> Option<usize> {
-        let module = self.decls.modules.get(h).filter(|m| !m.component)?;
+    fn self_module(&self, scope: ScopeId, h: &str) -> Option<ScopeId> {
+        let module = self.module_at(h).filter(|(_, c)| !c)?.0;
         for s in self.chain_of(scope) {
             if self.decls.scopes[s].uses.contains_key(h) {
                 return None;
             }
-            if s == module.scope {
+            if s == module {
                 return Some(s);
             }
         }
@@ -1659,20 +1603,13 @@ impl<'u> Lowerer<'u> {
 
     /// A scope as a message names it: `module backups`, `component
     /// backups.volume`, `the stack`.
-    fn scope_name(&self, scope: usize) -> String {
-        self.decls
-            .modules
-            .iter()
-            .find(|(_, m)| m.scope == scope)
-            .map_or("the stack".to_string(), |(p, m)| match m.component {
-                true => format!("component {p}"),
-                false => format!("module {p}"),
-            })
+    fn scope_name(&self, scope: ScopeId) -> String {
+        self.program.scopes.describe(scope)
     }
 
     /// The instance `name` in scope: the scope that declares it and its
     /// component's path.
-    fn instance_in(&self, scope: usize, name: &str) -> Option<(usize, String)> {
+    fn instance_in(&self, scope: ScopeId, name: &str) -> Option<(ScopeId, String)> {
         self.chain_of(scope).into_iter().find_map(|s| {
             self.decls.scopes[s]
                 .instances
@@ -1682,7 +1619,7 @@ impl<'u> Lowerer<'u> {
     }
 
     /// The stack `name` a `use` in scope binds.
-    fn stack_in(&self, scope: usize, name: &str) -> Option<Deployed> {
+    fn stack_in(&self, scope: ScopeId, name: &str) -> Option<Deployed> {
         self.chain_of(scope).into_iter().find_map(|s| {
             self.decls.scopes[s]
                 .stacks
@@ -1694,7 +1631,7 @@ impl<'u> Lowerer<'u> {
     /// The stack a `use` in scope binds that `head.f1.f2..` names by its
     /// module path (`stacks.platform`), and how many of `ops` the path
     /// takes.
-    fn stack_by_path(&self, scope: usize, head: &str, ops: &[Op]) -> Option<(Deployed, usize)> {
+    fn stack_by_path(&self, scope: ScopeId, head: &str, ops: &[Op]) -> Option<(Deployed, usize)> {
         let mut at = head.to_string();
         for (i, op) in ops.iter().enumerate() {
             let Op::Field(f) = op else { return None };
@@ -1715,7 +1652,7 @@ impl<'u> Lowerer<'u> {
     }
 
     /// The module `name` a `use` in scope binds: its path.
-    fn use_in(&self, scope: usize, name: &str) -> Option<String> {
+    fn use_in(&self, scope: ScopeId, name: &str) -> Option<String> {
         self.chain_of(scope)
             .into_iter()
             .find_map(|s| self.decls.scopes[s].uses.get(name).cloned())
@@ -1724,10 +1661,10 @@ impl<'u> Lowerer<'u> {
     /// The name a `use` in scope binds the module `path` to, when `scope`
     /// is in that module's file and `path` is bound by no `use` of its
     /// own name (`use backups as b`: `b`).
-    fn alias_in(&self, scope: usize, path: &str) -> Option<String> {
-        let module = self.decls.modules.get(path)?;
+    fn alias_in(&self, scope: ScopeId, path: &str) -> Option<String> {
+        let module = self.module_at(path)?.0;
         let chain = self.chain_of(scope);
-        if !chain.contains(&module.scope) || self.use_in(scope, path).is_some() {
+        if !chain.contains(&module) || self.use_in(scope, path).is_some() {
             return None;
         }
         chain.into_iter().find_map(|s| {
@@ -1739,7 +1676,7 @@ impl<'u> Lowerer<'u> {
     }
 
     /// The component `name` reads as in scope: its path.
-    fn component_in(&self, scope: usize, name: &str) -> Option<String> {
+    fn component_in(&self, scope: ScopeId, name: &str) -> Option<String> {
         self.chain_of(scope).into_iter().find_map(|s| {
             let sc = &self.decls.scopes[s];
             sc.components
@@ -1751,14 +1688,14 @@ impl<'u> Lowerer<'u> {
 
     /// Whether `name` is an instance in scope whose component names
     /// nothing: its `instance` statement is the error.
-    fn unbound_instance(&self, scope: usize, name: &str) -> bool {
+    fn unbound_instance(&self, scope: ScopeId, name: &str) -> bool {
         self.chain_of(scope)
             .into_iter()
             .any(|s| self.decls.scopes[s].unbound.contains(name))
     }
 
     /// A `let`'s rows and the scope that declares it.
-    fn find_let(&self, scope: usize, name: &str) -> Option<(usize, Vec<SyntaxNode>)> {
+    fn find_let(&self, scope: ScopeId, name: &str) -> Option<(ScopeId, Vec<SyntaxNode>)> {
         self.chain_of(scope).into_iter().find_map(|s| {
             self.decls.scopes[s]
                 .lets
@@ -1769,7 +1706,7 @@ impl<'u> Lowerer<'u> {
 
     /// The input `name` in scope when its type is a resource type, `ref(T)`
     /// or `T` (R-101): `T`.
-    fn input_ref(&self, scope: usize, name: &str) -> Option<String> {
+    fn input_ref(&self, scope: ScopeId, name: &str) -> Option<String> {
         let n = self
             .chain_of(scope)
             .into_iter()
@@ -1787,13 +1724,13 @@ impl<'u> Lowerer<'u> {
     /// The static type of a value name whose value is a reference (H-6):
     /// what every row of its `let` names, read from the rows' text. `Err`
     /// names the rows' types when they disagree.
-    fn value_type(&self, scope: usize, name: &str) -> Result<Option<VType>, String> {
+    fn value_type(&self, scope: ScopeId, name: &str) -> Result<Option<VType>, String> {
         self.value_type_depth(scope, name, 0)
     }
 
     fn value_type_depth(
         &self,
-        scope: usize,
+        scope: ScopeId,
         name: &str,
         depth: usize,
     ) -> Result<Option<VType>, String> {
@@ -1829,7 +1766,7 @@ impl<'u> Lowerer<'u> {
     /// The reference a `let` row's term names, if it names one: a resource
     /// (by name in scope or `T[e]`), a live object, or another `let`
     /// holding one.
-    fn term_vtype(&self, scope: usize, t: &SyntaxNode, depth: usize) -> Option<VType> {
+    fn term_vtype(&self, scope: ScopeId, t: &SyntaxNode, depth: usize) -> Option<VType> {
         match declared_ref(t).filter(|typ| !self.names_alias(scope, typ)) {
             Some(typ) => Some(VType::Ref(typ)),
             None => self.written_vtype(scope, t, depth),
@@ -1838,7 +1775,7 @@ impl<'u> Lowerer<'u> {
 
     /// The reference a `let` row's term names as written, whatever the
     /// row declares.
-    fn written_vtype(&self, scope: usize, t: &SyntaxNode, depth: usize) -> Option<VType> {
+    fn written_vtype(&self, scope: ScopeId, t: &SyntaxNode, depth: usize) -> Option<VType> {
         let c = Chain::of(t)?;
         let index_then_end = |ops: &[Op]| matches!(ops, [Op::Index(ts, _)] if ts.len() == 1);
         if c.head == "world" {
@@ -1871,7 +1808,7 @@ impl<'u> Lowerer<'u> {
     /// module's item (`config.base_domain`), an instance's output and a
     /// stack's or a component's copy (`platform[env]`) read the other one;
     /// the resource always reads by its type, `net.vpc["nodes"]`.
-    fn shared_name(&mut self, scope: usize, c: &Chain, span: Span) -> L<bool> {
+    fn shared_name(&mut self, scope: ScopeId, c: &Chain, span: Span) -> L<bool> {
         let h = c.head.as_str();
         let Some(types) = self.resource(scope, h) else {
             return Ok(false);
@@ -1902,10 +1839,8 @@ impl<'u> Lowerer<'u> {
             (kind.to_string(), None)
         } else if let Some(path) = self.use_in(scope, h) {
             let own = self
-                .decls
-                .modules
-                .get(&path)
-                .map(|m| items(&self.decls.scopes[m.scope]))
+                .module_at(&path)
+                .map(|(m, _)| items(&self.decls.scopes[m]))
                 .unwrap_or_default();
             if field.is_some_and(|f| own.iter().any(|i| i == f)) {
                 return Ok(true);
@@ -1916,10 +1851,8 @@ impl<'u> Lowerer<'u> {
             )
         } else if let Some((_, path)) = self.instance_in(scope, h) {
             let outputs: Vec<String> = self
-                .decls
-                .modules
-                .get(&path)
-                .map(|m| self.decls.scopes[m.scope].outputs.keys().cloned().collect())
+                .module_at(&path)
+                .map(|(m, _)| self.decls.scopes[m].outputs.keys().cloned().collect())
                 .unwrap_or_default();
             if field.is_some_and(|f| outputs.iter().any(|o| o == f)) {
                 return Ok(true);
@@ -1982,7 +1915,7 @@ impl<'u> Lowerer<'u> {
     /// traefik`. `Some(true)`: the body's resource is read; `Some(false)`:
     /// the body's value, module or copy is; `None`: neither is the body's
     /// alone (the program's top level, where R-76's ambiguity stands).
-    fn own_wins(&self, scope: usize, name: &str) -> Option<bool> {
+    fn own_wins(&self, scope: ScopeId, name: &str) -> Option<bool> {
         let own = self.own_scopes(scope);
         let names = |s: &Scope| {
             s.values.contains(name)
@@ -2006,13 +1939,13 @@ impl<'u> Lowerer<'u> {
 
     /// Whether `name` names a value, a used module or an instance in
     /// scope: what a resource's bare name may share ambiguously.
-    fn names_other(&self, scope: usize, name: &str) -> bool {
+    fn names_other(&self, scope: ScopeId, name: &str) -> bool {
         self.is_value(scope, name)
             || self.use_in(scope, name).is_some()
             || self.instance_in(scope, name).is_some()
     }
 
-    fn is_value(&self, scope: usize, name: &str) -> bool {
+    fn is_value(&self, scope: ScopeId, name: &str) -> bool {
         self.chain_of(scope)
             .into_iter()
             .any(|s| self.decls.scopes[s].values.contains(name))
@@ -2020,13 +1953,13 @@ impl<'u> Lowerer<'u> {
 
     /// The types a resource name has in scope (the innermost scope that
     /// declares it).
-    fn resource(&self, scope: usize, name: &str) -> Option<Vec<String>> {
+    fn resource(&self, scope: ScopeId, name: &str) -> Option<Vec<String>> {
         self.chain_of(scope)
             .into_iter()
             .find_map(|s| self.decls.scopes[s].resources.get(name).cloned())
     }
 
-    fn resource_of_type(&self, scope: usize, typ: &str, name: &str) -> bool {
+    fn resource_of_type(&self, scope: ScopeId, typ: &str, name: &str) -> bool {
         self.chain_of(scope).into_iter().any(|s| {
             self.decls.scopes[s]
                 .resources
@@ -2064,12 +1997,9 @@ impl<'u> Lowerer<'u> {
         let (file, root) = (unit.file, unit.root.clone());
         let saved = (self.file, self.item_scope);
         self.file = file;
-        let scope = self.decls.files[&file];
-        let module = self.decls.paths.get(&file).cloned();
-        if let Some(path) = &module {
-            let component = self.decls.modules[path].component;
-            self.item_scope = self.program.module_scope(self.item_scope, path, component);
-        }
+        let scope = self.file_scope(file);
+        let module = self.module_path(file);
+        self.item_scope = scope;
         let mut items = Vec::new();
         for n in root.children() {
             match n.kind() {
@@ -2086,8 +2016,7 @@ impl<'u> Lowerer<'u> {
                 end: u32::from(r.start()),
                 ..self.span_of(r)
             };
-            items = vec![self.program.module(path, self.item_scope, items, span)];
-            self.item_scope = saved.1;
+            items = vec![self.program.module(path, scope, items, span)];
         }
         // Each doc comment is a `doc(Kind, Name, Key, Value)` fact per pair
         // (docs/grammar.md "Doc comments").
@@ -2102,11 +2031,11 @@ impl<'u> Lowerer<'u> {
                 items.push(self.program.item(span, self.item_scope, kind));
             }
         }
-        self.file = saved.0;
+        (self.file, self.item_scope) = saved;
         items
     }
 
-    fn stmts(&mut self, block: Option<SyntaxNode>, scope: usize, outer: &Rc) -> Vec<ItemId> {
+    fn stmts(&mut self, block: Option<SyntaxNode>, scope: ScopeId, outer: &Rc) -> Vec<ItemId> {
         let Some(block) = block else {
             return Vec::new();
         };
@@ -2120,7 +2049,7 @@ impl<'u> Lowerer<'u> {
     /// A statement's item: what it lowers to, with the helper rules it
     /// generated after it. `outer` carries the variables an enclosing
     /// `for`/`when` binds.
-    fn stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> Option<ItemId> {
+    fn stmt(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> Option<ItemId> {
         if n.kind() == COMPONENT {
             return Some(self.component(n, scope, outer));
         }
@@ -2134,7 +2063,7 @@ impl<'u> Lowerer<'u> {
 
     /// [`Self::stmt`], the statement's variables and clause gathered on
     /// their own.
-    fn stmt_item(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> Option<ItemId> {
+    fn stmt_item(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> Option<ItemId> {
         if let Some(value) = self.literal_let(n) {
             return self.let_literal(n, scope, outer, &value);
         }
@@ -2211,10 +2140,10 @@ impl<'u> Lowerer<'u> {
 
     /// `component NAME [: S] { .. }`: its statements' items in a scope of
     /// its own.
-    fn component(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> ItemId {
+    fn component(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> ItemId {
         let span = self.span(n);
         let start: u32 = n.text_range().start().into();
-        let inner = self.decls.blocks[&(self.file, start)];
+        let inner = self.block_scope(self.file, start);
         let name = word_text(n, 1);
         let path = self.decls.scopes[self.decl_scope(scope)]
             .components
@@ -2224,10 +2153,9 @@ impl<'u> Lowerer<'u> {
         if let Some(t) = node(n, TYPE_EXPR) {
             self.check_signature(n, &t, scope);
         }
-        let saved = self.item_scope;
-        self.item_scope = self.program.module_scope(saved, &path, true);
+        let saved = std::mem::replace(&mut self.item_scope, inner);
         let body = self.stmts(node(n, STMT_BLOCK), inner, outer);
-        let item = self.program.module(path, self.item_scope, body, span);
+        let item = self.program.module(path, inner, body, span);
         self.item_scope = saved;
         item
     }
@@ -2362,7 +2290,7 @@ impl<'u> Lowerer<'u> {
     }
 
     /// A fresh rule context for a statement in `scope`.
-    fn rc(&self, n: &SyntaxNode, scope: usize, outer: &Rc) -> Rc {
+    fn rc(&self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> Rc {
         let mut rc = Rc {
             scope,
             vars: outer.vars.clone(),
@@ -2463,7 +2391,7 @@ impl<'u> Lowerer<'u> {
             || rc.types.contains_key(&c.head)
             || rc.vars.contains_key(&c.head)
             || self.resource(rc.scope, &c.head).is_some()
-            || self.decls.modules.contains_key(&c.head)
+            || self.module_at(&c.head).is_some()
             || rc.candidates.contains(&c.head);
         // `T.n.path` is a read of a resource, not a type.
         let fields = c.fields();
@@ -2483,7 +2411,7 @@ impl<'u> Lowerer<'u> {
     /// in, labelled where the module is used.
     fn key_in_module<T>(&mut self, n: &SyntaxNode, name: &str, path: &str, span: Span) -> L<T> {
         let ty = node(n, TYPE_EXPR).map_or_else(|| "TYPE".to_string(), |t| t.text().to_string());
-        let site = self.decls.scopes.iter().find_map(|sc| {
+        let site = self.decls.scopes.values().find_map(|sc| {
             sc.bound.values().flatten().find_map(|(_, is_use, stmt)| {
                 (*is_use && sc.uses.values().any(|p| p == path) && use_parts(stmt).0 == path)
                     .then(|| stmt.clone())
@@ -2534,7 +2462,7 @@ impl<'u> Lowerer<'u> {
     /// T .. }` built as an `Input` item (R-211 step 5): its default read
     /// as its type, its refinement's and its clause's goals, its fields
     /// items of their own; `lower` writes the declaration.
-    fn input(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
+    fn input(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
         let span = self.span(n);
         let name = word_text(n, 1);
         // `input k { f: T [= d] [check B] .. }` (R-54).
@@ -2544,7 +2472,7 @@ impl<'u> Lowerer<'u> {
             None => self.fields_type(&fields),
         };
         let key = is_key(n);
-        if key && let Some(path) = self.decls.paths.get(&self.file).cloned() {
+        if key && let Some(path) = self.module_path(self.file) {
             return self.key_in_module(n, &name, &path, span);
         }
         if key && n.parent().is_some_and(|p| p.kind() != SOURCE_FILE) {
@@ -2697,7 +2625,7 @@ impl<'u> Lowerer<'u> {
     /// The fields of an object input's block form (R-54), each a
     /// declaration named by its field: `f: T [= d] [check B]`, a nested
     /// object `f: { .. }`. A field's default is read as its type (R-31).
-    fn input_fields(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<ItemId>> {
+    fn input_fields(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<Vec<ItemId>> {
         let mut out: Vec<(String, Span, ItemId)> = Vec::new();
         let mut failed = false;
         for a in n.children().filter(|c| c.kind() == ATTR_DECL) {
@@ -2811,7 +2739,7 @@ impl<'u> Lowerer<'u> {
 
     /// `type T { p: T flag* }`: a type block, its attributes as read
     /// (R-211 step 5: an item carrying them).
-    fn type_block(&mut self, n: &SyntaxNode, scope: usize) -> L<ItemId> {
+    fn type_block(&mut self, n: &SyntaxNode, scope: ScopeId) -> L<ItemId> {
         let name = dotted_text(n, 1);
         let attrs = self.attr_decls(n, scope)?;
         let kind = crate::program::ItemKind::TypeBlock { name, attrs };
@@ -2830,7 +2758,7 @@ impl<'u> Lowerer<'u> {
     /// one no rule of the program defines is fed from outside (a provider,
     /// a given fact); `decl p(a, b) mixed` lets it have both facts and
     /// rules. The column names are the named-argument form's.
-    fn decl(&mut self, n: &SyntaxNode, scope: usize) -> ItemId {
+    fn decl(&mut self, n: &SyntaxNode, scope: ScopeId) -> ItemId {
         let pred = dotted_text(n, 1);
         let binds: Vec<SyntaxNode> = n.children().filter(|c| c.kind() == BIND_ARG).collect();
         let columns = binds
@@ -2864,10 +2792,10 @@ impl<'u> Lowerer<'u> {
     /// together, and facts the program states join them. `input p` alone,
     /// in a module or a component, is a relation its user gives the rows
     /// of, in the `use` or `instance` block.
-    fn relation_input(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
+    fn relation_input(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
         let span = self.span(n);
         let pred = word_text(n, 1);
-        let module = self.decls.paths.contains_key(&self.file)
+        let module = self.module_path(self.file).is_some()
             || n.parent().is_some_and(|p| p.kind() != SOURCE_FILE);
         let Some(source) = terms(n).next() else {
             if !module {
@@ -2944,7 +2872,7 @@ impl<'u> Lowerer<'u> {
     fn table_item(
         &mut self,
         n: &SyntaxNode,
-        scope: usize,
+        scope: ScopeId,
         outer: &Rc,
         (pred, arity, mixed): (String, usize, bool),
         cols: Vec<BindArg>,
@@ -3068,7 +2996,7 @@ impl<'u> Lowerer<'u> {
     }
 
     /// The `decl` of the relation `pred` in scope.
-    fn relation_decl(&self, scope: usize, pred: &str) -> Option<SyntaxNode> {
+    fn relation_decl(&self, scope: ScopeId, pred: &str) -> Option<SyntaxNode> {
         self.chain_of(scope)
             .into_iter()
             .find_map(|s| self.decls.scopes[s].decl_nodes.get(pred).cloned())
@@ -3088,7 +3016,7 @@ impl<'u> Lowerer<'u> {
         }
     }
 
-    fn attr_decls(&mut self, n: &SyntaxNode, scope: usize) -> L<Vec<AttrDecl>> {
+    fn attr_decls(&mut self, n: &SyntaxNode, scope: ScopeId) -> L<Vec<AttrDecl>> {
         let mut out = Vec::new();
         for a in n.children().filter(|c| c.kind() == ATTR_DECL) {
             let path = self.block_path(&node(&a, BLOCK_PATH).ok_or(Skip)?)?;
@@ -3113,7 +3041,7 @@ impl<'u> Lowerer<'u> {
 
     /// A refinement's `check` body: names are their own text (the
     /// attribute, an input).
-    fn refinement(&mut self, n: &SyntaxNode, scope: usize) -> L<Vec<Lit>> {
+    fn refinement(&mut self, n: &SyntaxNode, scope: ScopeId) -> L<Vec<Lit>> {
         let Some(b) = node(n, REFINEMENT).and_then(|w| node(&w, BODY)) else {
             return Ok(Vec::new());
         };
@@ -3147,11 +3075,11 @@ impl<'u> Lowerer<'u> {
         match t {
             TypeExpr::Name(n) => {
                 let ns = n.split('.').next().unwrap_or_default();
-                let module = self.decls.modules.contains_key(ns)
+                let module = self.module_at(ns).is_some()
                     || self
                         .decls
                         .scopes
-                        .iter()
+                        .values()
                         .any(|s| s.uses.contains_key(ns) || s.components.contains_key(ns));
                 let known = self.decls.types.contains(&n) || !self.decls.closed.contains(ns);
                 if n.contains('.') && known && !module {
@@ -3384,7 +3312,7 @@ impl<'u> Lowerer<'u> {
     /// constant, held by the program's `stack`.
     fn stack_settings(&mut self, st: &StackSource, entries: &[usize]) -> Option<Config> {
         let &first = entries.first()?;
-        let scope = self.decls.files[&self.units[first].file];
+        let scope = self.file_scope(self.units[first].file);
         let (saved_file, saved_offset) = (self.file, self.offset);
         let mut config = Vec::new();
         for s in &st.settings {
@@ -3707,7 +3635,7 @@ impl<'u> Lowerer<'u> {
     /// `output k [: T] = t [where B]` (H-7): the declaration, when typed, and
     /// its value; a value that reads, or one with a condition, is the rule
     /// `output(k, t') :- B, reads`.
-    fn output(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
+    fn output(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
         let span = self.span(n);
         let name = word_text(n, 1);
         if node(n, ATTR_DECL).is_some() {
@@ -3859,7 +3787,7 @@ impl<'u> Lowerer<'u> {
     /// `output k { f [: T] = t, g: { .. } } [where B]` (R-55): an object
     /// output by its fields, one value, typed by its fields' types (`any`
     /// where a field gives none).
-    fn output_object(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
+    fn output_object(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
         let span = self.span(n);
         let name = word_text(n, 1);
         let mut rc = self.rc(n, scope, outer);
@@ -3958,11 +3886,11 @@ impl<'u> Lowerer<'u> {
     /// The component signature `name` in scope: the file and the `type`
     /// statement. A dotted name is another module's, by its path or the
     /// name its `use` binds (`db.database`).
-    fn signature(&self, scope: usize, name: &str) -> Option<(u32, SyntaxNode)> {
+    fn signature(&self, scope: ScopeId, name: &str) -> Option<(u32, SyntaxNode)> {
         match name.rsplit_once('.') {
             Some((m, s)) => {
                 let path = self.module_path_of(scope, m);
-                let at = self.decls.modules.get(&path)?.scope;
+                let at = self.module_at(&path)?.0;
                 self.decls.scopes[at].signatures.get(s).cloned()
             }
             None => self
@@ -3988,7 +3916,7 @@ impl<'u> Lowerer<'u> {
     /// the signature `T` does, of its type; an input `T` does not declare
     /// has a default, so a copy picked by `T` can be given what `T` says
     /// alone. Each difference is an error at the component.
-    fn check_signature(&mut self, n: &SyntaxNode, t: &SyntaxNode, scope: usize) {
+    fn check_signature(&mut self, n: &SyntaxNode, t: &SyntaxNode, scope: ScopeId) {
         let span = self.span(n);
         let comp = word_text(n, 1);
         let sig = dotted_text(t, 0);
@@ -4178,7 +4106,7 @@ impl<'u> Lowerer<'u> {
     /// once under NAME, its inputs the block's, its rules and denies run
     /// over what this scope sees, its items read as `NAME.x`; or a stack's
     /// deployments, read as `NAME[k=v].out`.
-    fn use_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Option<ItemId>> {
+    fn use_stmt(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<Option<ItemId>> {
         let span = self.span(n);
         let (written, name) = use_parts(n);
         self.redeclared(n, &name)?;
@@ -4209,9 +4137,9 @@ impl<'u> Lowerer<'u> {
             return Ok(None);
         }
         let path = self.module_path_of(scope, &written);
-        match self.decls.modules.get(&path) {
+        match self.module_at(&path) {
             None => return self.error(span, format!("no module `{written}`")),
-            Some(m) if m.component => {
+            Some((_, true)) => {
                 let d = Diagnostic::error(
                     span,
                     format!(
@@ -4238,7 +4166,7 @@ impl<'u> Lowerer<'u> {
     /// (R-114): a deployment of the stack S, a resource of its type whose
     /// attributes are its key's values. A project module makes nothing
     /// else. Built as the `Resource` item it is.
-    fn deployment(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
+    fn deployment(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
         let written = dotted_text(n, 1);
         if self.decls.deployed.iter().any(|d| d.path == written) {
             return self.block_stmt(n, scope, outer);
@@ -4273,7 +4201,7 @@ impl<'u> Lowerer<'u> {
 
     /// `resource PATH NAME { k = v } [where B]` of a component (R-113,
     /// R-65): one copy of the component, named NAME.
-    fn instance(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
+    fn instance(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
         let span = self.span(n);
         let (written, name) = copy_parts(n);
         let module = match self.component_path(scope, &written) {
@@ -4329,7 +4257,7 @@ impl<'u> Lowerer<'u> {
     /// in `scope`, is named through (R-186): `a.volume` under `use backups
     /// as a`, the component an item of that module. Its body reads that
     /// instance's items bare.
-    fn via(&self, scope: usize, written: &str, component: &str) -> Option<Via> {
+    fn via(&self, scope: ScopeId, written: &str, component: &str) -> Option<Via> {
         let (head, _) = written.split_once('.')?;
         let (parent, _) = component.rsplit_once('.')?;
         let declared = self.chain_of(scope).into_iter().find(|s| {
@@ -4354,7 +4282,7 @@ impl<'u> Lowerer<'u> {
     fn copy(
         &mut self,
         n: &SyntaxNode,
-        scope: usize,
+        scope: ScopeId,
         outer: &Rc,
         (kind, module, name, via): (CopyKind, String, String, Option<Via>),
     ) -> L<ItemId> {
@@ -4476,10 +4404,10 @@ impl<'u> Lowerer<'u> {
         &mut self,
         block: &SyntaxNode,
         module: &str,
-        scope: usize,
+        scope: ScopeId,
         outer: &Rc,
     ) -> L<(Vec<ItemId>, Vec<Stmt>)> {
-        let Some(inner) = self.decls.modules.get(module).map(|m| m.scope) else {
+        let Some(inner) = self.module_at(module).map(|m| m.0) else {
             return Ok(Default::default());
         };
         let takes = self.decls.scopes[inner].relation_inputs.clone();
@@ -4582,7 +4510,7 @@ impl<'u> Lowerer<'u> {
     /// the program declares. Built as a `Resource` item (R-211 step 5):
     /// its header, each entry's value and the reads it hoisted, the clause
     /// B's goals; `lower` writes the statement.
-    fn block_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
+    fn block_stmt(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
         use crate::program::build::{BodyLowered, EntryLowered, HeaderLowered};
         let span = self.span(n);
         let block = node(n, BLOCK);
@@ -4783,7 +4711,7 @@ impl<'u> Lowerer<'u> {
     /// :- B, reads, table.FORMAT.set(Path, At, P, V)`, which
     /// `tables::expand_set_from` makes one rule per input path, and a deny
     /// for a leaf at a path that is no input's.
-    fn set_from(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
+    fn set_from(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
         let span = self.span(n);
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.opt_body(&mut rc, n)?;
@@ -4864,7 +4792,7 @@ impl<'u> Lowerer<'u> {
     /// `rule` item (R-211 step 5): its head the relation and its
     /// arguments, the reads they hoisted the head's, its clause B's goals;
     /// `lower` writes it.
-    fn rule(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
+    fn rule(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
         let r = self.rule_parts(n, scope, outer)?;
         let resolved = crate::program::check::enabled().then(|| {
             let rule = (r.ranked.clone(), r.body.clone(), r.has_body);
@@ -4899,7 +4827,7 @@ impl<'u> Lowerer<'u> {
     }
 
     /// A rule lowered: its head, its body and what binds it.
-    fn rule_parts(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<RuleParts> {
+    fn rule_parts(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<RuleParts> {
         let span = self.span(n);
         let head_node = n.children().find(|c| c.kind() == CALL).ok_or(Skip)?;
         let mut rc = self.rc(n, scope, outer);
@@ -4965,7 +4893,7 @@ impl<'u> Lowerer<'u> {
     /// `k`'s value is that reference and a dot on `k` reads through it.
     /// Built as a `let` item (R-211 step 5): its clause B's goals, its
     /// value the term's node; `lower` writes it.
-    fn let_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
+    fn let_stmt(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
         let span = self.span(n);
         let name = word_text(n, 1);
         if let Err(e) = self.value_type(scope, &name) {
@@ -5157,7 +5085,7 @@ impl<'u> Lowerer<'u> {
     fn let_literal(
         &mut self,
         n: &SyntaxNode,
-        scope: usize,
+        scope: ScopeId,
         outer: &Rc,
         t: &SyntaxNode,
     ) -> Option<ItemId> {
@@ -5181,7 +5109,7 @@ impl<'u> Lowerer<'u> {
         item
     }
 
-    fn let_item(&mut self, n: &SyntaxNode, scope: usize, t: &SyntaxNode) -> L<ItemId> {
+    fn let_item(&mut self, n: &SyntaxNode, scope: ScopeId, t: &SyntaxNode) -> L<ItemId> {
         let span = self.span(n);
         let name = word_text(n, 1);
         if let Err(e) = self.value_type(scope, &name) {
@@ -5208,7 +5136,7 @@ impl<'u> Lowerer<'u> {
     /// an object type's fields each as theirs (R-192).
     fn let_typed(
         &mut self,
-        scope: usize,
+        scope: ScopeId,
         name: &str,
         (ty, d): (&crate::types::Ty, &crate::ast::TypeExpr),
         t: &SyntaxNode,
@@ -5287,7 +5215,7 @@ impl<'u> Lowerer<'u> {
     /// `Set` item (R-211 step 5): each line's target, its value and the
     /// reads they hoisted, the clause B's goals; `lower` writes each
     /// line's `arg`.
-    fn set(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
+    fn set(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
         if tokens(n).nth(1).is_some_and(|t| t.text() == "from")
             && !tokens(n).any(|t| matches!(t.kind(), EQ | PLUS_EQ))
         {
@@ -5612,7 +5540,7 @@ impl<'u> Lowerer<'u> {
 
     /// The block that owns the cells of `(T, A)` when it is declared in
     /// `scope`: `resource T A`.
-    fn owning_block(&self, scope: usize, typ: &Term, addr: &Term) -> Option<String> {
+    fn owning_block(&self, scope: ScopeId, typ: &Term, addr: &Term) -> Option<String> {
         let s = &self.decls.scopes[self.decl_scope(scope)];
         match (typ, addr) {
             (Term::Val(Value::Str(t)), Term::Val(Value::Str(a))) => s
@@ -5771,7 +5699,7 @@ impl<'u> Lowerer<'u> {
     /// `deny "m" [{ .. }] [where B]`, `warn ..` built as a `Check` item
     /// (R-211 step 5): its message and detail the terms' nodes, its clause
     /// B's goals; `lower` writes `deny(m[, detail])`.
-    fn check(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
+    fn check(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
         let span = self.span(n);
         let kw = tokens(n).next().ok_or(Skip)?;
         let msg = tokens(n).find(|t| t.kind() == STRING).ok_or(Skip)?;
@@ -6814,7 +6742,7 @@ impl<'u> Lowerer<'u> {
         if let Some((m, p)) = pred.split_once('.')
             && let Some(path) = self.use_in(rc.scope, m)
         {
-            let Some(scope) = self.decls.modules.get(&path).map(|m| m.scope) else {
+            let Some(scope) = self.module_at(&path).map(|m| m.0) else {
                 return Err(Skip);
             };
             if !self.decls.scopes[scope].arities.contains_key(p) {
@@ -6993,10 +6921,8 @@ impl<'u> Lowerer<'u> {
         }
         if let Some((_, path)) = &named {
             let exports = self
-                .decls
-                .modules
-                .get(path)
-                .is_some_and(|m| self.decls.scopes[m.scope].relation_outputs.contains(&p));
+                .module_at(path)
+                .is_some_and(|(m, _)| self.decls.scopes[m].relation_outputs.contains(&p));
             if !exports {
                 let d = Diagnostic::error(
                     span,
@@ -7083,11 +7009,7 @@ impl<'u> Lowerer<'u> {
         for f in &fields[1..] {
             at = format!("{at}.{f}");
         }
-        self.decls
-            .modules
-            .get(&at)
-            .is_some_and(|m| m.component)
-            .then_some(at)
+        self.module_at(&at).is_some_and(|m| m.1).then_some(at)
     }
 
     /// The scope whose copies of the component `path` a read in this body
@@ -7099,7 +7021,7 @@ impl<'u> Lowerer<'u> {
             .iter()
             .find(|s| self.decls.scopes[**s].instances.values().any(|p| p == path))
             .copied();
-        self.scope_term(rc.scope, own.unwrap_or(PROGRAM), str_term(""))
+        self.scope_term(rc.scope, own.unwrap_or(self.root()), str_term(""))
     }
 
     /// A copy where a resource is taken (R-67): its name in scope (`blue`)
@@ -8186,7 +8108,7 @@ impl<'u> Lowerer<'u> {
     fn value(
         &mut self,
         rc: &mut Rc,
-        from: usize,
+        from: ScopeId,
         c: &Chain,
         pre: &mut Vec<Lit>,
         span: Span,
@@ -8439,13 +8361,13 @@ impl<'u> Lowerer<'u> {
         if path.is_none() {
             let mut at = h.to_string();
             while let Some(Op::Field(f)) = ops.first() {
-                if self.decls.modules.contains_key(&at) {
+                if self.module_at(&at).is_some() {
                     break;
                 }
                 at = format!("{at}.{f}");
                 ops = &ops[1..];
             }
-            if !self.decls.modules.contains_key(&at) {
+            if !self.module_at(&at).is_some() {
                 return Ok(None);
             }
             path = Some(at);
@@ -8455,13 +8377,13 @@ impl<'u> Lowerer<'u> {
         };
         while let Some(Op::Field(f)) = ops.first() {
             let next = format!("{at}.{f}");
-            if !self.decls.modules.get(&next).is_some_and(|m| m.component) {
+            if !self.module_at(&next).is_some_and(|m| m.1) {
                 break;
             }
             at = next;
             ops = &ops[1..];
         }
-        let component = self.decls.modules.get(&at).is_some_and(|m| m.component);
+        let component = self.module_at(&at).is_some_and(|m| m.1);
         match ops.first() {
             Some(Op::Index(ts, _)) if component && ts.len() == 1 => {
                 let mut t = self.bind(true, |l| l.term(rc, &ts[0], Pos::Content, pre))?;
@@ -8476,7 +8398,7 @@ impl<'u> Lowerer<'u> {
                     .iter()
                     .find(|s| self.decls.scopes[**s].instances.values().any(|p| *p == at))
                     .copied();
-                let at_scope = own.unwrap_or(PROGRAM);
+                let at_scope = own.unwrap_or(self.root());
                 let parent = self.scope_term(rc.scope, at_scope, str_term(""));
                 pre.push(Lit::Pos(atom_at(
                     crate::modules::INSTANCE_OF,
@@ -8505,15 +8427,15 @@ impl<'u> Lowerer<'u> {
             Some(Op::Field(x))
                 if self.use_in(rc.scope, h).is_some() && ops.len() == c.ops.len() =>
             {
-                let Some(module) = self.decls.modules.get(&at).cloned() else {
+                let Some((module, _)) = self.module_at(&at) else {
                     return Err(Skip);
                 };
                 let declared = self
                     .chain_of(rc.scope)
                     .into_iter()
                     .find(|s| self.decls.scopes[*s].uses.contains_key(h))
-                    .unwrap_or(PROGRAM);
-                let own = &self.decls.scopes[module.scope];
+                    .unwrap_or(self.root());
+                let own = &self.decls.scopes[module];
                 if own.values.contains(x) {
                     let path = self.segs(rc, &ops[1..], pre)?;
                     return Ok(Some(Res::Value {
@@ -8558,7 +8480,7 @@ impl<'u> Lowerer<'u> {
     /// `h.x` where `h` is declared more than once, each under a clause
     /// (R-104): every declaration has `x`, of one type, else the read is
     /// an error naming every declaration.
-    fn alternatives_agree(&mut self, scope: usize, h: &str, x: &str, span: Span) -> L<()> {
+    fn alternatives_agree(&mut self, scope: ScopeId, h: &str, x: &str, span: Span) -> L<()> {
         let Some(alts) = self
             .chain_of(scope)
             .into_iter()
@@ -8576,8 +8498,8 @@ impl<'u> Lowerer<'u> {
                     format!("resource {c} {name}")
                 }
             };
-            let item = self.decls.modules.get(path).and_then(|m| {
-                let sc = &self.decls.scopes[m.scope];
+            let item = self.module_at(path).and_then(|(m, _)| {
+                let sc = &self.decls.scopes[m];
                 if sc.outputs.contains_key(x) {
                     let ty = sc.output_types.get(x).map_or("any", String::as_str);
                     return Some(format!("output {x}: {ty}"));
@@ -8659,10 +8581,8 @@ impl<'u> Lowerer<'u> {
                     });
                 }
                 let typed = self
-                    .decls
-                    .modules
-                    .get(path)
-                    .and_then(|m| self.decls.scopes[m.scope].outputs.get(k).cloned())
+                    .module_at(path)
+                    .and_then(|(m, _)| self.decls.scopes[m].outputs.get(k).cloned())
                     .flatten();
                 if let Some(t) = &typed
                     && !segs.is_empty()
@@ -8689,8 +8609,8 @@ impl<'u> Lowerer<'u> {
     /// The types of the resource `k` the component at `path` makes, when
     /// `k` names one of them and no output of it.
     fn copy_resource(&self, path: &str, k: &str) -> Option<Vec<String>> {
-        let m = self.decls.modules.get(path).filter(|m| m.component)?;
-        let sc = &self.decls.scopes[m.scope];
+        let (m, _) = self.module_at(path).filter(|m| m.1)?;
+        let sc = &self.decls.scopes[m];
         if sc.outputs.contains_key(k) {
             return None;
         }
@@ -8840,8 +8760,8 @@ impl<'u> Lowerer<'u> {
         // The keyed read of a copy's output (`network[t].k`), the
         // deployment the instance: `instance_of(PATH, "", NAME), output(NAME,
         // k, V)`, both served from what it published (I-modules section 6).
-        let inst = self.scope_term(rc.scope, PROGRAM, name);
-        let user = self.scope_term(rc.scope, PROGRAM, str_term(""));
+        let inst = self.scope_term(rc.scope, self.root(), name);
+        let user = self.scope_term(rc.scope, self.root(), str_term(""));
         pre.push(Lit::Pos(atom_at(
             crate::modules::INSTANCE_OF,
             vec![str_term(&d.path), user, inst.clone()],

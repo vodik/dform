@@ -47,7 +47,7 @@ fn signature(name: &str, ps: &[Param]) -> String {
 impl Lowerer<'_> {
     /// The let with parameters `name` in `scope`, looked up outward: the
     /// scope that declares it and its first statement.
-    pub(super) fn function_def(&self, scope: usize, name: &str) -> Option<(usize, SyntaxNode)> {
+    pub(super) fn function_def(&self, scope: ScopeId, name: &str) -> Option<(ScopeId, SyntaxNode)> {
         self.chain_of(scope).into_iter().find_map(|s| {
             self.decls.scopes[s]
                 .functions
@@ -58,7 +58,7 @@ impl Lowerer<'_> {
 
     /// How many leading columns of the relation `name` a read in `scope`
     /// must bind: a let's parameters (R-187).
-    pub(super) fn function_inputs(&self, scope: usize, name: &str) -> Option<usize> {
+    pub(super) fn function_inputs(&self, scope: ScopeId, name: &str) -> Option<usize> {
         let (_, def) = self.function_def(scope, name)?;
         Some(params(&def)?.len())
     }
@@ -67,7 +67,12 @@ impl Lowerer<'_> {
     /// reads` and its mode, built as a `LetFn` item (R-211 step 5): its
     /// parameters, its value's node, its clause B's goals after the
     /// demand; `lower` writes them.
-    pub(super) fn function_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
+    pub(super) fn function_stmt(
+        &mut self,
+        n: &SyntaxNode,
+        scope: ScopeId,
+        outer: &Rc,
+    ) -> L<ItemId> {
         let span = self.span(n);
         let name = word_text(n, 1);
         let ps = params(n).unwrap_or_default();
@@ -202,7 +207,7 @@ impl Lowerer<'_> {
         &mut self,
         rc: &Rc,
         n: &SyntaxNode,
-    ) -> L<Option<(String, usize, SyntaxNode)>> {
+    ) -> L<Option<(String, ScopeId, SyntaxNode)>> {
         let Some(c) = n.children().find_map(|c| Chain::of(&c)) else {
             return Ok(None);
         };
@@ -223,7 +228,7 @@ impl Lowerer<'_> {
             }
             [m, f] => {
                 if let Some(path) = self.use_in(rc.scope, m) {
-                    let module = self.decls.modules.get(&path).map(|d| d.scope);
+                    let module = self.module_at(&path).map(|m| m.0);
                     module.and_then(|s| {
                         let def = self.decls.scopes[s].functions.get(f.as_str())?;
                         Some((format!("{m}::{f}"), s, def.clone()))
@@ -261,7 +266,7 @@ impl Lowerer<'_> {
         rc: &mut Rc,
         n: &SyntaxNode,
         pred: &str,
-        scope: usize,
+        scope: ScopeId,
         def: &SyntaxNode,
         pre: &mut Vec<Lit>,
     ) -> L<Term> {
@@ -361,7 +366,7 @@ impl Lowerer<'_> {
 
     /// A call of an unknown function whose name is nearest a let with
     /// parameters in `scope`: the error, naming the let.
-    pub(super) fn near_function(&mut self, scope: usize, name: &str, span: Span) -> L<()> {
+    pub(super) fn near_function(&mut self, scope: ScopeId, name: &str, span: Span) -> L<()> {
         let lets: Vec<String> = self
             .chain_of(scope)
             .into_iter()

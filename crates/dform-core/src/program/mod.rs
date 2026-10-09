@@ -31,7 +31,7 @@ pub use node::{
     VarId,
 };
 pub use origin::Origin;
-pub use scope::{Scope, ScopeId, ScopeKind};
+pub use scope::{Scope, ScopeId, ScopeKind, Scopes};
 pub use spell::spell;
 
 /// A program of one stack (or one text read on its own).
@@ -43,12 +43,12 @@ pub struct Program {
     pub patterns: SlotMap<PatternId, Pattern>,
     pub clauses: SlotMap<ClauseId, Clause>,
     pub vars: SlotMap<VarId, Var>,
-    pub scopes: SlotMap<ScopeId, Scope>,
+    /// The scopes the program's names are written in, and what each
+    /// declares.
+    pub scopes: Scopes,
     /// The program's top-level items in lowering order: the only order
     /// anything iterates in.
     pub roots: Vec<ItemId>,
-    /// The program's scope, every other scope's outermost.
-    pub scope: ScopeId,
     /// The stack's settings, as the resolver reads them.
     pub stack: Option<ast::Config>,
     /// The helper numbers taken so far.
@@ -101,11 +101,8 @@ pub enum NodeId {
 impl Program {
     /// An empty program: its own scope and nothing in it.
     pub fn new() -> Program {
-        let mut scopes = SlotMap::with_key();
-        let scope = scopes.insert(Scope::new(None, ScopeKind::Program));
         Program {
-            scopes,
-            scope,
+            scopes: Scopes::new(),
             ..Program::default()
         }
     }
@@ -115,18 +112,8 @@ impl Program {
         self.items.insert(Item { span, scope, kind })
     }
 
-    /// The scope of a module's file or a component's body, inside `parent`.
-    pub fn module_scope(&mut self, parent: ScopeId, path: &str, component: bool) -> ScopeId {
-        let path = path.to_string();
-        let kind = match component {
-            true => ScopeKind::Component { path },
-            false => ScopeKind::Module { path },
-        };
-        self.scopes.insert(Scope::new(Some(parent), kind))
-    }
-
     /// The item of a module's file or a component: its items, in its
-    /// scope `body` (a [`Program::module_scope`]).
+    /// scope `body`.
     pub fn module(
         &mut self,
         path: String,
@@ -134,8 +121,8 @@ impl Program {
         items: Vec<ItemId>,
         span: Span,
     ) -> ItemId {
-        let scope = self.scopes[body].parent.unwrap_or(self.scope);
-        let component = matches!(self.scopes[body].kind, ScopeKind::Component { .. });
+        let scope = self.scopes[body].parent.unwrap_or(self.scopes.root);
+        let component = self.scopes.is_component(body);
         self.items.insert(Item {
             span,
             scope,

@@ -58,16 +58,16 @@ impl RefColumn {
 }
 
 /// A relation by the scope it is declared in and its name there.
-pub(super) type RelKey = (usize, String);
+pub(super) type RelKey = (ScopeId, String);
 
 impl Lowerer<'_> {
     /// The relation `pred` (as an atom writes it, `p` or `m::p`) read or
     /// written in `scope`: the nearest scope whose rules define it, or the
     /// module `m` a `use` binds.
-    pub(super) fn relation_key(&self, scope: usize, pred: &str) -> Option<RelKey> {
+    pub(super) fn relation_key(&self, scope: ScopeId, pred: &str) -> Option<RelKey> {
         if let Some((m, p)) = pred.split_once("::") {
             let path = self.use_in(scope, m)?;
-            let s = self.decls.modules.get(&path)?.scope;
+            let s = self.module_at(&path)?.0;
             return Some((s, p.to_string()));
         }
         self.chain_of(scope)
@@ -117,7 +117,7 @@ impl Lowerer<'_> {
             [Op::Index(..), _] => self.component_in(rc.scope, &c.head)?,
             _ => return None,
         };
-        let scope = self.decls.modules.get(&path)?.scope;
+        let scope = self.module_at(&path)?.0;
         let key = self.relation_key(scope, p)?;
         Some(
             self.decls
@@ -132,7 +132,7 @@ impl Lowerer<'_> {
     /// `scope`, by index.
     pub(super) fn ref_columns(
         &self,
-        scope: usize,
+        scope: ScopeId,
         pred: &str,
         arity: usize,
     ) -> BTreeMap<usize, RefColumn> {
@@ -160,13 +160,13 @@ impl Lowerer<'_> {
     /// the error at the output, naming the column.
     pub(super) fn published_refs(
         &mut self,
-        scope: usize,
+        scope: ScopeId,
         name: &str,
         arity: usize,
         span: Span,
     ) -> L<Vec<bool>> {
         let cols = self.ref_columns(scope, name, arity);
-        if self.decl_scope(scope) == PROGRAM
+        if self.decl_scope(scope) == self.root()
             && let Some((i, col)) = cols.first_key_value()
         {
             let column = match &col.name {
@@ -230,7 +230,7 @@ impl Lowerer<'_> {
     /// rules fill does.
     fn decl_refs(&self) -> Vec<((RelKey, usize), usize, RefColumn)> {
         let mut out = Vec::new();
-        for (scope, sc) in self.decls.scopes.iter().enumerate() {
+        for (scope, sc) in self.decls.scopes.iter() {
             for (pred, decl) in &sc.decl_nodes {
                 let binds: Vec<SyntaxNode> =
                     decl.children().filter(|c| c.kind() == BIND_ARG).collect();
@@ -262,7 +262,11 @@ impl Lowerer<'_> {
     /// The reference columns the head of the rule or fact `n` in `scope`
     /// writes: each argument that is a variable the statement types as a
     /// resource, or a resource's name. By relation and arity, and index.
-    fn head_refs(&self, scope: usize, n: &SyntaxNode) -> Vec<((RelKey, usize), usize, RefColumn)> {
+    fn head_refs(
+        &self,
+        scope: ScopeId,
+        n: &SyntaxNode,
+    ) -> Vec<((RelKey, usize), usize, RefColumn)> {
         let Some(head) = n.children().find(|c| c.kind() == CALL) else {
             return Vec::new();
         };
@@ -304,7 +308,7 @@ impl Lowerer<'_> {
     /// `p(x)` positive in the statement `n`, `p`'s column a reference: `x`
     /// is that resource wherever the statement uses it (its type the
     /// column's, or the row's), unless `x in T` typed it already.
-    pub(super) fn ref_column_vars(&self, n: &SyntaxNode, scope: usize, rc: &mut Rc) {
+    pub(super) fn ref_column_vars(&self, n: &SyntaxNode, scope: ScopeId, rc: &mut Rc) {
         if self.decls.refs.is_empty() {
             return;
         }
@@ -343,7 +347,7 @@ impl Lowerer<'_> {
 
     /// A relation's name as an atom lowers it: `m.p`, `m` a module a `use`
     /// binds, is `m::p`.
-    fn written_relation(&self, scope: usize, pred: String) -> String {
+    fn written_relation(&self, scope: ScopeId, pred: String) -> String {
         match pred.split_once('.') {
             Some((m, p)) if self.use_in(scope, m).is_some() => format!("{m}::{p}"),
             _ => pred,

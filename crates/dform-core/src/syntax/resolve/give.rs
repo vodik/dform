@@ -10,11 +10,11 @@ impl Lowerer<'_> {
     /// The entries of the block of `n`, a `use` or a copy of `module` in
     /// `scope`, that give an input a value the input cannot hold, or pun a
     /// name nothing declares: each an error at the entry.
-    pub(super) fn check_gives(&mut self, n: &SyntaxNode, scope: usize, module: &str) -> L<()> {
+    pub(super) fn check_gives(&mut self, n: &SyntaxNode, scope: ScopeId, module: &str) -> L<()> {
         let Some(block) = node(n, BLOCK) else {
             return Ok(());
         };
-        let Some(inner) = self.decls.modules.get(module).map(|m| m.scope) else {
+        let Some(inner) = self.module_at(module).map(|m| m.0) else {
             return Ok(());
         };
         let mut failed = false;
@@ -68,7 +68,7 @@ impl Lowerer<'_> {
             .map_or_else(|| "TYPE".to_string(), |t| t.text().to_string());
         // A module takes what it gives on as an input; the file the tool
         // runs declares the deployment's key.
-        let declare = match self.decls.paths.contains_key(&self.file) {
+        let declare = match self.module_path(self.file).is_some() {
             true => format!("`input {key}: {ty}`"),
             false => format!("`key {key}: {ty}`"),
         };

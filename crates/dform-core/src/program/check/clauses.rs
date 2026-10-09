@@ -79,7 +79,7 @@ pub fn fold(
 ) {
     let mut program = Program::new();
     let any = |_: &str| true;
-    let scope = program.scope;
+    let scope = program.scopes.root;
     let mut b = Builder::new(&mut program, span, &any);
     let item = b.folded_rule((&r.head, &r.body), results, &mut counters, span, scope);
     let lowered = crate::program::lower_item(&program, item);

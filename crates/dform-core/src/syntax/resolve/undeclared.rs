@@ -72,18 +72,18 @@ impl Lowerer<'_> {
         self.not_declared(rc.scope, p, true, span)
     }
 
-    fn not_declared(&mut self, scope: usize, h: &str, relation: bool, span: Span) -> L<()> {
+    fn not_declared(&mut self, scope: ScopeId, h: &str, relation: bool, span: Span) -> L<()> {
         let Some(module) = self.module_of(scope) else {
             return Ok(());
         };
         // The body the read is in: a component's input is given in each
         // copy, a module's in its `use`.
-        let body = self.own_scopes(scope).last().copied().unwrap_or(PROGRAM);
+        let body = self.program.scopes.body(scope);
         let component = self
-            .decls
-            .modules
-            .iter()
-            .find(|(_, m)| m.scope == body && m.component)
+            .program
+            .scopes
+            .definition(body)
+            .filter(|(_, c)| *c)
             .map(|(p, _)| p.clone());
         let Some(user) = self.user_decl(&module, component.as_deref(), h, relation) else {
             return Ok(());
@@ -129,22 +129,17 @@ impl Lowerer<'_> {
 
     /// The module whose file `scope` is in: the module itself, or a
     /// component of it. `None` in a stack's file.
-    fn module_of(&self, scope: usize) -> Option<String> {
-        let root = *self.chain_of(scope).last()?;
-        self.decls
-            .modules
-            .iter()
-            .find(|(_, m)| m.scope == root && !m.component)
-            .map(|(p, _)| p.clone())
+    fn module_of(&self, scope: ScopeId) -> Option<String> {
+        self.program.scopes.module_of(scope).cloned()
     }
 
     /// Whether `h` names anything in scope: a value, a resource, a used
     /// module or stack, a copy, a component, the module itself in its
     /// file, or a path from the root (`modules.net.vpc[t]`).
-    fn declares(&self, scope: usize, h: &str) -> bool {
+    fn declares(&self, scope: ScopeId, h: &str) -> bool {
         let root = |p: &String| p == h || p.strip_prefix(h).is_some_and(|r| r.starts_with('.'));
         self.self_module(scope, h).is_some()
-            || self.decls.modules.keys().any(root)
+            || self.program.scopes.paths().any(|(p, _)| root(p))
             || self.is_value(scope, h)
             || self.resource(scope, h).is_some()
             || self.use_in(scope, h).is_some()
@@ -155,12 +150,8 @@ impl Lowerer<'_> {
 
     /// The module's file name, for the help.
     fn module_file(&self, module: &str) -> String {
-        let file = self
-            .decls
-            .paths
-            .iter()
-            .find(|(_, p)| *p == module)
-            .map(|(f, _)| *f);
+        let scopes = &self.program.scopes;
+        let file = scopes.by_path(module).and_then(|s| scopes.file_of(s));
         file.and_then(|f| {
             crate::diag::source_of(Span {
                 file: f,
@@ -184,8 +175,12 @@ impl Lowerer<'_> {
             s.uses.values().any(|p| p == module)
                 || component.is_some_and(|c| s.instances.values().any(|p| p == c))
         };
-        let users = std::iter::once(PROGRAM)
-            .chain((0..self.decls.scopes.len()).filter(|s| uses(&self.decls.scopes[*s])));
+        let users = std::iter::once(self.root()).chain(
+            self.program
+                .scopes
+                .ids()
+                .filter(|s| uses(&self.decls.scopes[*s])),
+        );
         for user in users {
             for s in self.chain_of(user) {
                 let sc = &self.decls.scopes[s];
