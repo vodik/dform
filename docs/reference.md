@@ -3751,8 +3751,11 @@ resource aws.subnet "private-${zone}" {
 
 A body literal of an extern is asked once the literals before it bind its
 `+` arguments (an input that is a null waits), and the answers are facts of
-the extern with those inputs (`why` shows them as extern calls). An extern
-under `not`, in a recursive rule, stated by the program, or with an input
+the extern with those inputs (`why` shows them as extern calls). Under
+`not` it is asked the same way and binds nothing: `not ovh.zone(zone, _,
+_)` holds when the answer has no row, as `not { ovh.zone(zone, _, _) }`
+does (`dform fmt` writes the one-literal block in the bare form). An
+extern in a recursive rule, stated by the program, or with an input
 nothing before it binds is a compile error. Evaluation is by rounds: every
 call the rules demand is asked once, then the program is evaluated again,
 until no call is new.
@@ -4452,7 +4455,11 @@ reference (so `oci.pinned` holds), a location a provider's scheme names
 is not read, so what reads it is undetermined, and no provider is
 configured: one the program's `use` block configures is left so, and one
 that would read its credentials from the environment or its files is not
-given them; each is said once, in a `note:` line above the matrix.
+given them; each is said once, in a `note:` line above the matrix. A
+provider's data source is read as plan reads it (R-106), and one so left
+unconfigured answers "not yet", so what reads it is undetermined: `note:
+no provider is configured, so its data sources answer "not yet" and what
+reads them is undetermined: ovh.zone("example.com")`.
 dform's own transports (`https://`, `ssh://`, git) read as plan's do.
 
 Each combination's resources then go to their providers' Plan, as
