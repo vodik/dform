@@ -121,3 +121,40 @@ fn a_deny_waiting_on_another_deployment_is_about_what_it_ranges_over() {
         r.stdout
     );
 }
+
+/// Not reached yet: a component's deny over an input that waits on
+/// another deployment. Its undetermined instance is bound to the
+/// resource's name inside the copy (`{W: "v"}`), and the copy it is in
+/// (`__copy1`) is not among a stuck instance's bindings (the engine's
+/// `stuck_as` keeps no `__` variable), so the block cannot say which
+/// copy's `net.vpc` waits: it names the deployment and counts both as
+/// holding.
+#[test]
+#[ignore = "a stuck instance's bindings name no copy (engine/nulls.rs `stuck_as`)"]
+fn a_components_deny_waiting_on_another_deployment_is_about_its_copys_resources() {
+    let s = Scratch::project("policy-until-copy");
+    s.write("stacks/platform.df", PLATFORM);
+    s.write(
+        "stacks/apps.df",
+        r#"
+key env: enum("lab", "prod") = "lab"
+use fake
+use stacks.platform
+component node {
+  input ep: string
+  resource net.vpc v { cidr = "10.1.0.0/16" }
+  deny "a node's endpoint is somewhere" { vpc: w } where w in net.vpc, ep == "nowhere"
+}
+resource node n0 { ep = platform[env].endpoint }
+resource node n1 { ep = "x" }
+"#,
+    );
+    let r = s.run(&["plan", "apps"]).success();
+    assert!(
+        r.stdout.contains(&format!(
+            "net.vpc n0.v\n        until stacks.platform[env=lab].endpoint is known {AFTER}"
+        )) && r.stdout.contains("1 hold · 1 undetermined"),
+        "{}",
+        r.stdout
+    );
+}
