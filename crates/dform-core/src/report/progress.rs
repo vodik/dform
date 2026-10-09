@@ -279,9 +279,14 @@ impl Block {
         out
     }
 
-    /// Its title, `tick 1  3 changes`.
+    /// Its title, `tick 1  3 changes`; a tick with no call, `tick 2
+    /// nothing to do`: all the block of a later tick whose re-plan has
+    /// nothing left to change says.
     pub fn title(&self) -> String {
-        title(self.tick, self.entries.len())
+        match self.entries.is_empty() {
+            true => format!("tick {}  nothing to do", self.tick),
+            false => title(self.tick, self.entries.len()),
+        }
     }
 
     /// How the tick ended, `done`, `failed`, `interrupted`; `None` while
@@ -359,7 +364,7 @@ impl Block {
     fn rows(&self, style: Style, bar: bool) -> Vec<Row> {
         let head = self.title();
         let mut header = Row::new(&head, style.paint(Paint::Bold, &head));
-        if bar {
+        if bar && !self.entries.is_empty() {
             header = header.with(vec![self.progress()]).set().aligned();
         }
         let mut rows = vec![header];
@@ -446,8 +451,12 @@ impl Block {
         out
     }
 
-    /// The tick's end where no bar says it: `tick 1  done 4.2s`.
+    /// The tick's end where no bar says it: `tick 1  done 4.2s`; a tick
+    /// with no call, its title.
     pub fn ended(&self) -> String {
+        if self.entries.is_empty() {
+            return self.title();
+        }
         format!(
             "tick {}  {} {}",
             self.tick,

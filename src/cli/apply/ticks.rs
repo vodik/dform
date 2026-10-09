@@ -13,6 +13,7 @@ use crate::cli::{Outcome, Refused, Session, open_s3};
 use crate::deployment::{self, Planned};
 use crate::provider::ActionKind;
 use crate::report::waits_on;
+use crate::said::{Said, Teller};
 use crate::value::Value;
 use crate::{controller, engine, executor, ir, query, report, state, store, stuck, zset};
 use anyhow::{Result, bail};
@@ -72,6 +73,8 @@ pub(super) struct Ticks<'a, 'h> {
     /// later tick's, on its header line): on a terminal the block's
     /// header takes their place.
     asked: std::cell::Cell<usize>,
+    /// What the apply says on stdout: its plans, policies and questions.
+    teller: Teller,
 }
 
 /// One tick's plan, and what the tick made of it.
@@ -86,7 +89,8 @@ pub(super) struct Tick {
     pub(super) held: Vec<String>,
     /// The tick ends at a boundary: another tick follows.
     pub(super) boundary: bool,
-    /// Controller mode: the plan changes nothing.
+    /// The plan changes nothing: a later tick's re-plan has nothing left
+    /// to do; a controller's tick ends the apply.
     pub(super) undeformed: bool,
 }
 
@@ -159,7 +163,16 @@ impl<'a, 'h> Ticks<'a, 'h> {
             ran: BTreeSet::new(),
             policy: None,
             asked: std::cell::Cell::new(0),
+            teller: Teller {
+                quiet: r.why() == report::Why::None,
+                style: cx.cli.style,
+            },
         })
+    }
+
+    /// `s` said on stdout.
+    pub(super) fn say(&self, s: Said) {
+        self.teller.say(s);
     }
 
     /// Chaos names only resources of this stack.
@@ -395,13 +408,11 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 .settings_shown(&name, &res.facts, why >= report::Why::How)
                 .into_iter()
                 .unzip();
-            if why != report::Why::None {
-                println!(
-                    "provider {name}: configured after tick {}: {}",
-                    tick - 1,
-                    shown.join(", ")
-                );
-            }
+            self.say(Said::Configured {
+                provider: name.clone(),
+                after: tick - 1,
+                settings: shown,
+            });
             self.cx.audit.append(
                 "configure",
                 serde_json::json!({ "tick": tick - 1, "provider": name, "settings": keys }),
@@ -454,6 +465,13 @@ impl<'a, 'h> Ticks<'a, 'h> {
             boundary: false,
             undeformed: false,
         };
+        if self.hook.is_none() {
+            let p = &t.planned;
+            t.undeformed = self
+                .r
+                .report(&p.plan, &p.res, &p.sections, tick, &[], &p.denies)
+                .undeformed;
+        }
         self.gate(&mut t)?;
         let (plan, sections) = (&t.planned.plan, &t.planned.sections);
         t.held = plan
@@ -669,9 +687,12 @@ impl<'a, 'h> Ticks<'a, 'h> {
         if tick > 1 {
             self.r.explain(&mut report, &p.plan, &p.res, tick);
             let (why, style) = (self.r.why(), self.cx.cli.style);
-            let after = report::policy::after(tick - 1, &report.policy, self.policy, why, style);
-            if !after.is_empty() {
-                print!("\n{after}");
+            let text = report::policy::after(tick - 1, &report.policy, self.policy, why, style);
+            if !text.is_empty() {
+                self.say(Said::Policies {
+                    after: tick - 1,
+                    text,
+                });
             }
         }
         self.policy = Some(report::policy::count(&report.policy));
@@ -692,37 +713,40 @@ impl<'a, 'h> Ticks<'a, 'h> {
         let mut report = self.r.report(&plan, res, &sections, tick + 1, &[], &[]);
         self.r.explain(&mut report, &plan, res, tick + 1);
         let (why, style) = (self.r.why(), self.cx.cli.style);
-        let after = report::policy::after(tick, &report.policy, self.policy, why, style);
-        if !after.is_empty() {
-            print!("\n{after}");
+        let text = report::policy::after(tick, &report.policy, self.policy, why, style);
+        if !text.is_empty() {
+            self.say(Said::Policies { after: tick, text });
         }
         Ok(())
     }
 
     /// A batch apply's tick printed: its plan, under `tick N:` at the bare
     /// level; a later tick that only waits has no section of its own in the
-    /// report, so its header says which tick the report is of.
+    /// report, so its header says which tick the report is of. A later
+    /// tick with nothing left to change prints no plan (its "up to date"
+    /// is not the apply's end): its block says so, `tick 2  nothing to
+    /// do`, on stderr as every block.
     fn print(&self, t: &Tick) {
-        let (tick, p, why) = (self.tick, &t.planned, self.r.why());
-        // Apart from the block above it.
-        if why != report::Why::None && tick > 1 {
-            println!();
+        let (tick, p) = (self.tick, &t.planned);
+        if tick > 1 && t.undeformed {
+            self.progress(p).finish();
+            return;
         }
-        if why == report::Why::None && (tick > 1 || t.boundary) {
-            println!("tick {tick}:");
-        } else if why != report::Why::None && tick > 1 {
-            let report = self
-                .r
-                .report(&p.plan, &p.res, &p.sections, tick, &[], &p.denies);
-            if !report.undeformed && report.changes() == 0 {
-                println!("tick {tick}  0 changes");
-            }
-        }
-        self.r
-            .show(&p.plan, &p.res, &p.sections, tick, &[], &p.denies);
+        let report = self
+            .r
+            .report(&p.plan, &p.res, &p.sections, tick, &[], &p.denies);
+        let mut text = self
+            .r
+            .shown(&p.plan, &p.res, &p.sections, tick, &[], &p.denies);
         if tick == 1 {
-            print!("{}", unreachable_text(&p.unreachable));
+            text.push_str(&unreachable_text(&p.unreachable));
         }
+        self.say(Said::Plan {
+            tick,
+            boundary: t.boundary,
+            idle: !report.undeformed && report.changes() == 0,
+            text,
+        });
     }
 
     /// A batch apply asks before it changes anything, unless `--yes` or it
@@ -735,11 +759,10 @@ impl<'a, 'h> Ticks<'a, 'h> {
             return Ok(None);
         }
         let (tick, p) = (self.tick, &t.planned);
-        let style = self.cx.cli.style;
-        print!(
-            "{}",
-            executor::carried_over(self.resumed.as_ref(), &self.st, &p.plan)
-        );
+        let carried = executor::carried_over(self.resumed.as_ref(), &self.st, &p.plan);
+        if !carried.is_empty() {
+            self.say(Said::Carried(carried));
+        }
         // A plan file of several deployments asks before each (R-200).
         let asks = self.cx.saved.is_none() || self.cx.cli.sequence.is_some();
         if !self.args.yes && asks {
@@ -749,14 +772,21 @@ impl<'a, 'h> Ticks<'a, 'h> {
             if !report.undeformed {
                 let n = report.changes();
                 self.still_held()?;
-                if !confirm(n, false, self.args.destroy, self.deployment(), tick, style)? {
+                if !confirm(
+                    &self.teller,
+                    n,
+                    false,
+                    self.args.destroy,
+                    self.deployment(),
+                    tick,
+                )? {
                     return Ok(Some(declined(self.deployment(), tick)));
                 }
             }
         }
         for e in self.r.emptied(&p.plan, &p.res, &|_| None) {
             self.still_held()?;
-            if !confirm_emptied(&e, self.deployment(), style)? {
+            if !confirm_emptied(&self.teller, &e, self.deployment())? {
                 return Ok(Some(declined(self.deployment(), tick)));
             }
         }
@@ -814,10 +844,10 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 .map(Some);
         }
         if !differs.is_empty() {
-            println!("tick {tick} differs from the plan shown:");
-            for d in &differs {
-                println!("{}", d.line());
-            }
+            self.say(Said::Differs {
+                tick,
+                differences: differs.clone(),
+            });
         }
         if more && self.shown {
             let mut names: Vec<String> = Vec::new();
@@ -848,12 +878,12 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 .filter(|a| report::progress::is_call(a) && waits_on(a, &p.sections).is_none())
                 .count();
             if !confirm(
+                &self.teller,
                 n,
                 true,
                 self.args.destroy,
                 self.deployment(),
                 tick,
-                self.cx.cli.style,
             )? {
                 return Ok(Some(declined(self.deployment(), tick)));
             }
@@ -896,8 +926,13 @@ impl<'a, 'h> Ticks<'a, 'h> {
             (false, true) => Asked::Destroy,
             (false, false) => Asked::Apply,
         };
-        self.approvals
-            .entry(self.tick, t, self.args.approval.as_deref(), asked)
+        self.approvals.entry(
+            &self.teller,
+            self.tick,
+            t,
+            self.args.approval.as_deref(),
+            asked,
+        )
     }
 
     /// Tick 1's entries in the audit log: the apply's start (who, the
@@ -1173,7 +1208,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
             applied => applied,
         };
         for note in backend.take_notes() {
-            println!("chaos: {note}");
+            self.say(Said::Chaos(note));
         }
         if let Some(e) = log.failed.into_inner() {
             return Err(e);

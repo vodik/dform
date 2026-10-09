@@ -235,9 +235,9 @@ impl<'a> Reporter<'a> {
         }
     }
 
-    /// The plan of `tick` printed: the lines the default level folds away
-    /// say no site.
-    pub(super) fn show(
+    /// The plan of `tick` as printed: the lines the default level folds
+    /// away say no site.
+    pub(super) fn shown(
         &self,
         plan: &crate::provider::Plan,
         res: &engine::EvalResult,
@@ -245,11 +245,11 @@ impl<'a> Reporter<'a> {
         tick: usize,
         moved: &[(ir::Address, ir::Address)],
         denies: &[String],
-    ) {
+    ) -> String {
         let mut report = self.report(plan, res, sections, tick, moved, denies);
         report.every_site = false;
         self.explain(&mut report, plan, res, tick);
-        print!("{}", self.rendered(&report))
+        self.rendered(&report)
     }
 
     /// The delta of the plan at `tick`, as a plan file records it.

@@ -3,6 +3,7 @@
 use super::ticks::Tick;
 use crate::ast::Atom;
 use crate::cli::evaluated::Context;
+use crate::said::{Said, Teller};
 use crate::{deployment, executor};
 use anyhow::{Result, bail};
 use std::collections::BTreeSet;
@@ -75,6 +76,7 @@ impl Approvals<'_> {
     /// goes to the audit log.
     pub(super) fn entry(
         &mut self,
+        teller: &Teller,
         tick: usize,
         t: &Tick,
         token: Option<&Path>,
@@ -121,7 +123,10 @@ impl Approvals<'_> {
                     "approval",
                     serde_json::json!({ "result": "approved", "digest": digest, "attestation": v }),
                 )?;
-                println!("approved by {}: plan digest {digest}", v.statement.approver);
+                teller.say(Said::Approved {
+                    by: v.statement.approver.clone(),
+                    digest: digest.to_string(),
+                });
                 self.approved = Some(v);
                 Ok(())
             }

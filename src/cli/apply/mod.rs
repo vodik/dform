@@ -99,7 +99,7 @@ impl Apply {
         ticks.check_chaos(&compiled.resources)?;
         ticks.begin()?;
         if !moves.is_empty() {
-            print!("{}", report::moved_text(&moves));
+            ticks.say(crate::said::Said::Moved(report::moved_text(&moves)));
         }
         ticks.resume(&violations)?;
         let mut wanted = Wanted {

@@ -2,7 +2,8 @@
 //! no or a plan file bounds it.
 
 use crate::cli::Outcome;
-use crate::{report, zset};
+use crate::said::{Question, Said, Teller};
+use crate::zset;
 use anyhow::{Result, bail};
 
 /// Ask on the terminal whether to apply `n` changes to `deployment`
@@ -12,14 +13,13 @@ use anyhow::{Result, bail};
 /// With no terminal to ask on, a refusal naming `--yes`, never a wait.
 /// Answered no, `false`: a decline, not an error.
 pub(super) fn confirm(
+    teller: &Teller,
     n: usize,
     new: bool,
     destroy: bool,
     deployment: &str,
     tick: usize,
-    style: report::Style,
 ) -> Result<bool> {
-    use std::io::Write;
     let verb = match destroy {
         true => "destroy",
         false => "apply",
@@ -30,20 +30,24 @@ pub(super) fn confirm(
              pass --yes to {verb} without asking"
         );
     }
-    let ask = match (new, destroy, n) {
-        (true, _, _) => format!("{}   {verb}?", report::progress::title(tick, n)),
-        (false, true, 1) => format!("Destroy this object of {deployment}?"),
-        (false, true, _) => format!("Destroy these {n} objects of {deployment}?"),
-        (false, false, 1) => format!("Apply this change to {deployment}?"),
-        (false, false, _) => format!("Apply these {n} changes to {deployment}?"),
+    let q = match new {
+        true => Question::Tick { tick, n, destroy },
+        false => Question::Plan {
+            n,
+            destroy,
+            deployment: deployment.to_string(),
+        },
     };
-    print!("{} [y/N] ", style.paint(report::Paint::Bold, &ask));
-    std::io::stdout().flush()?;
+    ask(teller, q)
+}
+
+/// Ask `q`, and say the answer: only `y` or `yes` proceeds.
+fn ask(teller: &Teller, q: Question) -> Result<bool> {
+    teller.say(Said::Asked(q));
     let answer = answer()?;
-    Ok(matches!(
-        answer.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
+    let yes = matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes");
+    teller.say(Said::Answered(yes));
+    Ok(yes)
 }
 
 /// Whether a question can be asked: stdin is a terminal. A test gives its
@@ -89,11 +93,10 @@ fn answer() -> Result<String> {
 /// only: there is no `--yes` for it, only `--allow-empty`. Answered no,
 /// `false`.
 pub(super) fn confirm_emptied(
+    teller: &Teller,
     e: &zset::Emptied,
     deployment: &str,
-    style: report::Style,
 ) -> Result<bool> {
-    use std::io::Write;
     if !can_ask() {
         bail!(
             "apply {deployment}: {}; nothing to ask on (stdin is not a terminal): confirm it \
@@ -102,15 +105,7 @@ pub(super) fn confirm_emptied(
             e.flag()
         );
     }
-    let what = e.what();
-    let ask = format!("T{}. Apply it anyway?", &what[1..]);
-    print!("{} [y/N] ", style.paint(report::Paint::Warn, &ask));
-    std::io::stdout().flush()?;
-    let answer = answer()?;
-    Ok(matches!(
-        answer.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
+    ask(teller, Question::Emptied { what: e.what() })
 }
 
 /// An apply whose confirmation of `tick` was answered no: at tick 1

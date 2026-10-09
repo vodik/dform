@@ -371,14 +371,15 @@ impl Printer {
             }
         }
         // On a terminal the header says how the tick ended; elsewhere its
-        // own line does.
-        match self.mode {
-            Mode::Terminal => self.draw(out),
-            _ => {
-                if let Board::Tick(b) = &self.board {
-                    let _ = writeln!(out, "{}", b.ended());
-                }
+        // own line does, but of a tick with no call: its header said it
+        // all (`tick 2  nothing to do`).
+        match (self.mode, &self.board) {
+            (Mode::Terminal, _) => self.draw(out),
+            (Mode::Lines, Board::Tick(b)) if b.entries.is_empty() => {}
+            (_, Board::Tick(b)) => {
+                let _ = writeln!(out, "{}", b.ended());
             }
+            _ => {}
         }
         if let Board::Tick(b) = &self.board {
             for line in b.failures(style) {
