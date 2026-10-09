@@ -216,110 +216,22 @@ pub(super) fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> 
         // (a document among them) are moved on, not copied.
         let rows = std::mem::take(&mut states);
         match lit {
-            Lit::Pos(atom) => {
-                if atom.pred == "member" || atom.pred == "enumerate" {
-                    for row in &rows {
-                        if !rec.any_blocked(&atom.args, &row.s) {
-                            let mut out = Vec::new();
-                            eval_member_like(atom, &row.s, &mut out, rec)?;
-                            next.extend(out.into_iter().enumerate().map(|(n, s)| {
-                                let mut r = row.with(s);
-                                r.order.push(Choice::Nth(n as u32));
-                                r
-                            }));
-                        }
-                    }
-                } else if ops::is_builtin_pred(&atom.pred) {
-                    for row in rows {
-                        if !rec.any_blocked(&atom.args, &row.s)
-                            && eval_builtin_pred(atom, &row.s, rec)? == Some(true)
-                        {
-                            next.push(row);
-                        }
-                    }
-                } else {
-                    let read =
-                        src.body.op(i).read().ok_or_else(|| {
-                            anyhow!("internal: {} is not a relation read", atom.pred)
-                        })?;
-                    for row in &rows {
-                        let s = &row.s;
-                        if rec.any_blocked(&atom.args, s) {
-                            continue;
-                        }
-                        // Rule 3: a positive reader of an undetermined
-                        // aggregate group is undetermined. It still reads
-                        // the groups that were decided.
-                        if rec.aggregates.contains(&atom.pred) && !planted(Rule3Clause::Reader) {
-                            let nulls = rec.known.borrow().blocking(&read_pattern(atom, s));
-                            if !nulls.is_empty() {
-                                rec.stuck(
-                                    s,
-                                    nulls,
-                                    format!("reads undetermined aggregate {}", atom.pred),
-                                );
-                            }
-                        }
-                        let key = probe(atom, read, s);
-                        let before = next.len();
-                        for t in src.store.candidates(
-                            &read.rel,
-                            &read.key,
-                            key.as_deref(),
-                            read.loose,
-                            src.win[i],
-                        ) {
-                            if let Some(s2) = unify_atom(atom, src.store.get(t), s, rec)? {
-                                let mut r = row.with(s2);
-                                r.used.push(t);
-                                r.order.push(Choice::Tuple(t));
-                                next.push(r);
-                            }
-                        }
-                        if next.len() == before
-                            && let Some(cell) = string_cell(atom, read)
-                        {
-                            reference_at_string_cell(atom, &cell, s, src, src.win[i], rec)?;
-                        }
+            Lit::Pos(atom) if atom.pred == "member" || atom.pred == "enumerate" => {
+                expand_members(atom, &rows, rec, &mut next)?
+            }
+            Lit::Pos(atom) if ops::is_builtin_pred(&atom.pred) => {
+                for row in rows {
+                    if !rec.any_blocked(&atom.args, &row.s)
+                        && eval_builtin_pred(atom, &row.s, rec)? == Some(true)
+                    {
+                        next.push(row);
                     }
                 }
             }
+            Lit::Pos(atom) => read_relation(atom, i, &rows, src, rec, &mut next)?,
             Lit::Not(atom) => {
-                for mut row in rows {
-                    let s = &row.s;
-                    if rec.any_blocked(&atom.args, s) {
-                        continue;
-                    }
-                    if atom.pred == "member" {
-                        let holds = match atom.args.len() {
-                            2 => eval_not_member2(atom, s, rec)?,
-                            3 => eval_not_member3(atom, s, rec)?,
-                            _ => bail!("member/2 or member/3 expected"),
-                        };
-                        if holds {
-                            next.push(row);
-                        }
-                        continue;
-                    }
-                    if atom.pred == "enumerate" {
-                        // `enumerate/3` is a generator; `not enumerate(...)` is meaningless
-                        // (it would require checking existence over an implicit domain).
-                        bail!("negation not supported for enumerate/3");
-                    }
-                    if ops::is_builtin_pred(&atom.pred) {
-                        // Negation-as-failure for builtin predicates is just boolean
-                        // negation; a call over a null is undetermined either way.
-                        if !rec.any_blocked(&atom.args, s)
-                            && eval_builtin_pred(atom, s, rec)? == Some(false)
-                        {
-                            next.push(row);
-                        }
-                        continue;
-                    }
-                    let grounded = ground_atom(atom, s)
-                        .with_context(|| format!("unsafe negation: not {}(...)", atom.pred))?;
-                    if eval_not(&grounded, src, s, rec) {
-                        row.absent.push(grounded);
+                for row in rows {
+                    if let Some(row) = negate(atom, row, src, rec)? {
                         next.push(row);
                     }
                 }
@@ -354,6 +266,113 @@ pub(super) fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> 
         }
     }
     Ok(states)
+}
+
+/// `member`/`enumerate` over each row: a row per element it expands to.
+fn expand_members(atom: &Atom, rows: &[Row], rec: &Rec, next: &mut Vec<Row>) -> Result<()> {
+    for row in rows {
+        if !rec.any_blocked(&atom.args, &row.s) {
+            let mut out = Vec::new();
+            eval_member_like(atom, &row.s, &mut out, rec)?;
+            next.extend(out.into_iter().enumerate().map(|(n, s)| {
+                let mut r = row.with(s);
+                r.order.push(Choice::Nth(n as u32));
+                r
+            }));
+        }
+    }
+    Ok(())
+}
+
+/// A relation read, body literal `i`, over each row: a row per tuple it
+/// unifies with in the literal's window.
+fn read_relation(
+    atom: &Atom,
+    i: usize,
+    rows: &[Row],
+    src: &Src,
+    rec: &Rec,
+    next: &mut Vec<Row>,
+) -> Result<()> {
+    let read = src
+        .body
+        .op(i)
+        .read()
+        .ok_or_else(|| anyhow!("internal: {} is not a relation read", atom.pred))?;
+    for row in rows {
+        let s = &row.s;
+        if rec.any_blocked(&atom.args, s) {
+            continue;
+        }
+        // Rule 3: a positive reader of an undetermined
+        // aggregate group is undetermined. It still reads
+        // the groups that were decided.
+        if rec.aggregates.contains(&atom.pred) && !planted(Rule3Clause::Reader) {
+            let nulls = rec.known.borrow().blocking(&read_pattern(atom, s));
+            if !nulls.is_empty() {
+                rec.stuck(
+                    s,
+                    nulls,
+                    format!("reads undetermined aggregate {}", atom.pred),
+                );
+            }
+        }
+        let key = probe(atom, read, s);
+        let before = next.len();
+        for t in src
+            .store
+            .candidates(&read.rel, &read.key, key.as_deref(), read.loose, src.win[i])
+        {
+            if let Some(s2) = unify_atom(atom, src.store.get(t), s, rec)? {
+                let mut r = row.with(s2);
+                r.used.push(t);
+                r.order.push(Choice::Tuple(t));
+                next.push(r);
+            }
+        }
+        if next.len() == before
+            && let Some(cell) = string_cell(atom, read)
+        {
+            reference_at_string_cell(atom, &cell, s, src, src.win[i], rec)?;
+        }
+    }
+    Ok(())
+}
+
+/// `not atom` over a row: the row, with the negation it held by, or
+/// `None`.
+fn negate(atom: &Atom, mut row: Row, src: &Src, rec: &Rec) -> Result<Option<Row>> {
+    let s = &row.s;
+    if rec.any_blocked(&atom.args, s) {
+        return Ok(None);
+    }
+    if atom.pred == "member" {
+        let holds = match atom.args.len() {
+            2 => eval_not_member2(atom, s, rec)?,
+            3 => eval_not_member3(atom, s, rec)?,
+            _ => bail!("member/2 or member/3 expected"),
+        };
+        return Ok(holds.then_some(row));
+    }
+    if atom.pred == "enumerate" {
+        // `enumerate/3` is a generator; `not enumerate(...)` is meaningless
+        // (it would require checking existence over an implicit domain).
+        bail!("negation not supported for enumerate/3");
+    }
+    if ops::is_builtin_pred(&atom.pred) {
+        // Negation-as-failure for builtin predicates is just boolean
+        // negation; a call over a null is undetermined either way.
+        let holds =
+            !rec.any_blocked(&atom.args, s) && eval_builtin_pred(atom, s, rec)? == Some(false);
+        return Ok(holds.then_some(row));
+    }
+    let grounded =
+        ground_atom(atom, s).with_context(|| format!("unsafe negation: not {}(...)", atom.pred))?;
+    if eval_not(&grounded, src, s, rec) {
+        row.absent.push(grounded);
+        return Ok(Some(row));
+    }
+    Ok(None)
 }
 
 /// A read `attr(T, X, P, "s")` whose type is a variable (`x in resource,
