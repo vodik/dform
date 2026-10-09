@@ -1230,6 +1230,8 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
             .collect();
         let at = ext.args[ext.args.len() - 3].clone();
         let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+        // The document's rule at one input's path.
+        let at_path = |x: &str| BTreeMap::from([(p.clone(), Value::Str(x.to_string()))]);
         // An input that is not secret, at a path a sealed file gives: a
         // deny naming it and the declaration that takes it.
         let plain: Vec<(String, &crate::inputs::Declared)> = declared
@@ -1245,7 +1247,7 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
                 .body
                 .iter()
                 .map(|l| match l {
-                    Lit::Pos(a) => Lit::Pos(subst(a, p, &s(path))),
+                    Lit::Pos(a) => Lit::Pos(a.subst(&at_path(path))),
                     l => l.clone(),
                 })
                 .collect();
@@ -1268,13 +1270,13 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
             known.insert((scope.clone(), path.clone()));
         }
         for (path, cell, d) in &inputs {
-            let mut head = subst(&r.head, p, &s(path));
+            let mut head = r.head.subst(&at_path(path));
             head.args[1] = s(cell);
             let mut body: Vec<Lit> = r
                 .body
                 .iter()
                 .map(|l| match l {
-                    Lit::Pos(a) => Lit::Pos(subst(a, p, &s(path))),
+                    Lit::Pos(a) => Lit::Pos(a.subst(&at_path(path))),
                     l => l.clone(),
                 })
                 .collect();
@@ -1398,19 +1400,6 @@ fn read_leaf(ty: &TypeExpr, v: &str, csv: bool) -> Option<(String, Lit)> {
         crate::types::at_run_time(&crate::types::Ty::parse(&n), var),
     );
     Some((parsed, l))
-}
-
-/// `a` with variable `v` replaced by `t` in its arguments.
-fn subst(a: &Atom, v: &str, t: &Term) -> Atom {
-    let args = a
-        .args
-        .iter()
-        .map(|x| match x {
-            Term::Var(w) if w == v => t.clone(),
-            x => x.clone(),
-        })
-        .collect();
-    Atom { args, ..a.clone() }
 }
 
 /// The commit of each read of a repository's file among `answers` (a

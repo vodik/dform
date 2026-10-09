@@ -46,6 +46,28 @@ pub fn atom(pred: &str, args: Vec<Term>, span: Span) -> Atom {
     }
 }
 
+impl Atom {
+    /// The atom with each variable `env` binds replaced by its value.
+    pub fn subst(&self, env: &BTreeMap<String, Value>) -> Atom {
+        Atom {
+            args: self.args.iter().map(|t| t.subst(env)).collect(),
+            ..self.clone()
+        }
+    }
+}
+
+/// The name of `names` whose field `s` reads (`net.bits`: `net`), its
+/// term, and the field: the shortest such name.
+fn name_of_field<'a, 'n>(
+    s: &'a str,
+    names: &'n BTreeMap<String, Term>,
+) -> Option<(&'a str, &'n Term, &'a str)> {
+    s.match_indices('.').find_map(|(i, _)| {
+        let name = &s[..i];
+        Some((name, names.get(name)?, &s[i + 1..]))
+    })
+}
+
 impl Term {
     /// The term with each variable `env` binds replaced by its value.
     pub fn subst(&self, env: &std::collections::BTreeMap<String, Value>) -> Term {
@@ -61,6 +83,42 @@ impl Term {
             Term::List(xs) => Term::List(xs.iter().map(|a| a.subst(env)).collect()),
             Term::Obj(m) => Term::Obj(m.iter().map(|(k, a)| (k.clone(), a.subst(env))).collect()),
             t => t.clone(),
+        }
+    }
+
+    /// The term with each string a refinement names (a key of `names`: a
+    /// refinement's text writes the cell it refines, and the attributes
+    /// beside it, by name) read as its term. A field of one, `net.bits`
+    /// (R-134), is read off it: renamed with a name it is given as a
+    /// string, as written where the name reads as itself, else by
+    /// `__path`.
+    pub fn replace_names(&self, names: &BTreeMap<String, Term>) -> Term {
+        match self {
+            Term::Val(Value::Str(s)) => match names.get(s) {
+                Some(v) => v.clone(),
+                None => match name_of_field(s, names) {
+                    Some((name, v, field)) => match v {
+                        Term::Val(Value::Str(n)) => Term::Val(Value::Str(format!("{n}.{field}"))),
+                        Term::Var(n) if n == name => Term::Var(s.clone()),
+                        v => Term::Func {
+                            name: "__path".into(),
+                            args: vec![v.clone(), Term::Val(Value::Str(field.to_string()))],
+                        },
+                    },
+                    None => self.clone(),
+                },
+            },
+            Term::Func { name, args } => Term::Func {
+                name: name.clone(),
+                args: args.iter().map(|a| a.replace_names(names)).collect(),
+            },
+            Term::List(xs) => Term::List(xs.iter().map(|a| a.replace_names(names)).collect()),
+            Term::Obj(m) => Term::Obj(
+                m.iter()
+                    .map(|(k, a)| (k.clone(), a.replace_names(names)))
+                    .collect(),
+            ),
+            other => other.clone(),
         }
     }
 
@@ -620,6 +678,12 @@ impl Lit {
     /// The literal with each variable `env` binds replaced by its value.
     pub fn subst(&self, env: &std::collections::BTreeMap<String, Value>) -> Lit {
         self.clone().map_terms(|t| t.subst(env))
+    }
+
+    /// The literal with each name of a refinement read as its term
+    /// ([`Term::replace_names`]).
+    pub fn replace_names(&self, names: &BTreeMap<String, Term>) -> Lit {
+        self.clone().map_terms(|t| t.replace_names(names))
     }
 
     /// `self` with its atom passed through `atom`, or each side of its

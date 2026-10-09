@@ -1533,12 +1533,13 @@ pub fn refinement(i: &InputDecl, scope: &str) -> Vec<Stmt> {
         }
     };
     let mut body = read.clone();
-    body.extend(rest.iter().map(|l| subst_lit(l, &i.name, &v)));
+    let names = |v: &Term| BTreeMap::from([(i.name.clone(), v.clone())]);
+    body.extend(rest.iter().map(|l| l.replace_names(&names(&v))));
     let ok = atom(&refine_pred(&i.name), vec![v.clone()], i.span);
     let named = Term::Var(i.name.clone());
     let text = rest
         .iter()
-        .map(|l| spell::written(&subst_lit(l, &i.name, &named)))
+        .map(|l| spell::written(&l.replace_names(&names(&named))))
         .collect::<Vec<_>>()
         .join(", ");
     let who = if scope.is_empty() {
@@ -1567,41 +1568,6 @@ pub fn refinement(i: &InputDecl, scope: &str) -> Vec<Stmt> {
             read.into_iter().chain([Lit::Not(ok)]).collect(),
         )),
     ]
-}
-
-/// `l` with the name `name` (a refinement's text) read as `v`.
-pub(crate) fn subst_lit(l: &Lit, name: &str, v: &Term) -> Lit {
-    l.clone().map_terms(|t| subst_term(&t, name, v))
-}
-
-fn subst_term(t: &Term, name: &str, v: &Term) -> Term {
-    match t {
-        Term::Val(Value::Str(s)) if s == name => v.clone(),
-        // A field of the value, `net.bits` (R-134): renamed with it, read
-        // off it, or where the name prints as written, as written.
-        Term::Val(Value::Str(s)) if s.strip_prefix(name).is_some_and(|r| r.starts_with('.')) => {
-            let field = &s[name.len() + 1..];
-            match v {
-                Term::Val(Value::Str(n)) => Term::Val(Value::Str(format!("{n}.{field}"))),
-                Term::Var(n) if n == name => Term::Var(s.clone()),
-                v => Term::Func {
-                    name: "__path".into(),
-                    args: vec![v.clone(), Term::Val(Value::Str(field.to_string()))],
-                },
-            }
-        }
-        Term::Func { name: f, args } => Term::Func {
-            name: f.clone(),
-            args: args.iter().map(|a| subst_term(a, name, v)).collect(),
-        },
-        Term::List(xs) => Term::List(xs.iter().map(|a| subst_term(a, name, v)).collect()),
-        Term::Obj(m) => Term::Obj(
-            m.iter()
-                .map(|(k, a)| (k.clone(), subst_term(a, name, v)))
-                .collect(),
-        ),
-        other => other.clone(),
-    }
 }
 
 /// `k(V) :- attr(input, Scope, k, V)` per input, and its `@default`

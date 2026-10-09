@@ -17,7 +17,7 @@ use crate::diag::{Diagnostic, Diagnostics};
 use crate::spell;
 use crate::value::Value;
 use anyhow::Result;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A declared input: `scope` is `""` for the stack's own, `m.i` for a
 /// module instance's. An object input is declared once per leaf (R-54):
@@ -94,7 +94,12 @@ fn leaves_into(i: &InputDecl, path: &str, out: &mut Vec<InputDecl>) {
             leaf.refinement = i
                 .refinement
                 .iter()
-                .map(|l| crate::modules::subst_lit(l, &i.name, &Term::Val(Value::Str(path.into()))))
+                .map(|l| {
+                    l.replace_names(&BTreeMap::from([(
+                        i.name.clone(),
+                        Term::Val(Value::Str(path.into())),
+                    )]))
+                })
                 .collect();
         }
         out.push(leaf);

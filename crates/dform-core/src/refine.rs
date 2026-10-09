@@ -642,7 +642,7 @@ fn deny_rules(
         reads.extend(read_attr(typ, &addr, other, &w, i + 1, span));
         subst.insert(other.clone(), typed(other, &w));
     }
-    let body: Vec<Lit> = rest.iter().map(|l| subst_lit(l, &subst)).collect();
+    let body: Vec<Lit> = rest.iter().map(|l| l.replace_names(&subst)).collect();
     // The attribute (and each other one named) printed as written, not as
     // a string.
     let named: BTreeMap<String, Term> = subst
@@ -651,7 +651,7 @@ fn deny_rules(
         .collect();
     let text = rest
         .iter()
-        .map(|l| spell::written(&subst_lit(l, &named)))
+        .map(|l| spell::written(&l.replace_names(&named)))
         .collect::<Vec<_>>()
         .join(", ");
     let ok = atom(
@@ -713,39 +713,6 @@ fn lit_strs(l: &Lit, out: &mut BTreeSet<String>) {
             term(b, out);
         }
     }
-}
-
-fn subst_term(t: &Term, s: &BTreeMap<String, Term>) -> Term {
-    match t {
-        Term::Val(Value::Str(x)) => match s.get(x) {
-            Some(v) => v.clone(),
-            // A field of the value, `net.bits` (R-134): read off it, or,
-            // where the names print as written, as written.
-            None => match x.split_once('.').and_then(|(h, f)| Some((s.get(h)?, h, f))) {
-                Some((Term::Var(v), h, _)) if v == h => Term::Var(x.clone()),
-                Some((v, _, f)) => Term::Func {
-                    name: "__path".into(),
-                    args: vec![v.clone(), Term::Val(Value::Str(f.to_string()))],
-                },
-                None => t.clone(),
-            },
-        },
-        Term::Func { name, args } => Term::Func {
-            name: name.clone(),
-            args: args.iter().map(|a| subst_term(a, s)).collect(),
-        },
-        Term::List(xs) => Term::List(xs.iter().map(|a| subst_term(a, s)).collect()),
-        Term::Obj(m) => Term::Obj(
-            m.iter()
-                .map(|(k, a)| (k.clone(), subst_term(a, s)))
-                .collect(),
-        ),
-        other => other.clone(),
-    }
-}
-
-fn subst_lit(l: &Lit, s: &BTreeMap<String, Term>) -> Lit {
-    l.clone().map_terms(|t| subst_term(&t, s))
 }
 
 /// One checkable refinement a program or schema states.
