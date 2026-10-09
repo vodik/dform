@@ -1796,7 +1796,9 @@ On a terminal the block's lines change in place about once a second,
 the cursor moved back over the block's own lines and each cleared as it
 is written again; its header carries a fill bar, the calls answered over
 the tick's calls (a fill, never a spinner), and the time the tick has
-run, then `done` and its time once the tick ends:
+run, then `done` and its time once the tick ends. A line said while the
+block is drawn (a call sent again, a timed-out call looked up) prints
+above it, and the block is drawn again below:
 
 ```
 tick 1  3 changes                        ━━━━━━━━░░░░  2 of 3  3.1s
@@ -1823,20 +1825,29 @@ policy after tick 1   14 hold · 1 undetermined   (was 12 · 1 fails · 2)
     k8s.stateful_set synapse_db.db              until spec.template.spec.securityContext is known (tick 2)
 ```
 
-A later tick is its block: its plan, which the boundary re-derived, is
-printed only where it adds to the plan shown (asked again, above), and
-under `-v` (`-q` prints each tick's bare plan, as scripts read it). A
-tick that asks does so on its header line, `tick 2  1 change   apply?
-[y/N]`, which the block's header takes the place of once answered.
+A later tick prints its plan again before it runs, from that tick to
+the end, as the boundary re-derived it: its values as tick 1 made them
+(`db_host = "main.db.fake"` where the first plan said `db_host =
+main.endpoint`), a tick that only waits as `tick 2  0 changes`; `-q`
+prints each tick's bare plan, as scripts read it. A tick that asks
+(it adds to the plan shown, above) does so below its plan, on its
+header line, `tick 2  1 change   apply? [y/N]`, which the block's header
+takes the place of once answered.
 
 Under `--yes`, and wherever stdout or stderr is not a terminal (a pipe,
-CI), there is no bar: the block's header, then a line per change of
-state, appended: a change's mark and name as its call starts, the line
-with its word and time once it answers (and again when the provider
-says a new status word), the line again every 30s while it runs (a
-heartbeat; `DFORM_HEARTBEAT_MS` sets it), a copy's header once before
-its first change; the tick ends with `tick 1  done 1m50s`. `-q` prints
-only that end line. The first failure stops the tick: nothing new
+CI), there is no bar: the block's header, then each change's line once
+its call answers, with its word and time; a call still running says its
+line again every 30s (a heartbeat, the sign a long call is alive, with
+the provider's word as it last said it; `DFORM_HEARTBEAT_MS` sets it); a
+copy's header once before its first change; the tick ends with `tick 1
+done 1m50s`. `-q` prints only that end line:
+
+```
+tick 1  2 changes
+  + db.postgres db  made 0.4s
+  + net.vpc main    made 0.2s
+tick 1  done 0.6s
+``` The first failure stops the tick: nothing new
 starts, what is in flight finishes, and the failed change's mark is `!`,
 its word `failed` with its time (`tick 1  failed ..` ends the block).
 Each failure is said once, below the block, in full, in the one shape
