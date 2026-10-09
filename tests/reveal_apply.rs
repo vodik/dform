@@ -205,7 +205,7 @@ fn a_reveal_that_cannot_happen_is_the_calls_error() {
 
 /// Given at creation only, the user data is not compared once the server
 /// exists: a later plan and apply reveal nothing (the vault could not),
-/// and say the differing template is kept.
+/// and say the differing template is kept, and why.
 #[test]
 fn a_bootstrap_attribute_is_not_revealed_after_the_object_is_made() {
     let bootstrap = "lifecycle(vm, \"bootstrap\", \"user_data\")\n";
@@ -219,7 +219,7 @@ fn a_bootstrap_attribute_is_not_revealed_after_the_object_is_made() {
     let plan = dform(&s, &["plan", "p"]).success();
     assert!(
         plan.stdout
-            .contains("    user_data differs (bootstrap): kept\n"),
+            .contains("    user_data differs (bootstrap): kept  (the template changed)\n"),
         "{}",
         plan.stdout
     );

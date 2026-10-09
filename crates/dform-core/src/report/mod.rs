@@ -73,7 +73,7 @@ mod tally;
 pub mod tree;
 mod waits;
 pub use chains::{ChainItem, chains_text};
-pub use deformation::{Deformation, Line, Op};
+pub use deformation::{Deformation, Kept, Line, Op};
 pub use errors::{
     CONFLICT, Diag, Failure, Unanswered, Witness, is_conflict, said_of, sites, violation_conflict,
     violation_line, violations,

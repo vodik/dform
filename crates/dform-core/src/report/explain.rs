@@ -66,8 +66,8 @@ impl Report {
             .chain(pending)
             .filter(|d| d.addr == *addr)
             .flat_map(|d| &d.kept)
-            .find(|l| l.path == path)
-            .map(|l| l.before.said(Why::Line))
+            .find(|k| k.line.path == path)
+            .map(|k| k.line.before.said(Why::Line))
     }
 
     /// Say why each change is planned, at level `why` (R-79), from the

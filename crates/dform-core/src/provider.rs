@@ -42,7 +42,21 @@ pub struct Change {
     pub after: Option<serde_json::Value>,
     /// The schema marks the path sensitive: print neither side.
     pub sensitive: bool,
+    /// What the plan says of it beside its line, where dform can tell
+    /// more than the two sides: of a value given at creation only that is
+    /// kept (R-198) and holds a secret a provider holds, which part
+    /// differs, [`HOLDER_REPLACED`] or [`TEMPLATE_CHANGED`]. dform's own;
+    /// never on the wire.
+    pub note: Option<String>,
 }
+
+/// A kept value's note (R-218): the object holding a secret it reveals
+/// is another one (a key replaced), the value around it is the same.
+pub const HOLDER_REPLACED: &str = "(the key was replaced)";
+
+/// A kept value's note (R-218): the value around the secrets it reveals
+/// changed.
+pub const TEMPLATE_CHANGED: &str = "(the template changed)";
 
 /// How a labeled null (proposal E §2.2) travels in a provider document: an
 /// object with the single key `$null` holding the label `type/addr#attr`.
@@ -328,6 +342,7 @@ pub fn diff(
             before: av.map(|x| x.0.clone()),
             after: bv.map(|x| x.0.clone()),
             sensitive: schema.is_sensitive(typ, norm),
+            note: None,
         });
     }
     out

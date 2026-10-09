@@ -4,20 +4,27 @@
 //! sent). A new token under the same label is a new value: what is
 //! digested carries the holder's remote id, so the server's user data
 //! differs and is sent again with the new token, or under `bootstrap`
-//! (R-198) is kept, and the plan says so. Nothing replaced, nothing
-//! differs.
+//! (R-198) is kept, and the plan says why: the key was replaced, or the
+//! template changed. Nothing replaced, nothing differs.
 
 mod common;
 use common::{Run, Scratch};
 
 /// The vault's token, its `scope` given at creation only by the API: a
-/// new scope is a new token, made before the old one goes under the next
-/// generation of its name (R-189), so its remote id is new.
+/// new scope is a new token. Its remote id is its name, which a
+/// destroy-first replace keeps; its computed `id` is new (chaos
+/// `fresh-ids`).
 const VAULT: &str = r#"
 type_provider("vault.token", "vault")
 type_attr("vault.token", "name", "string", ["required", "id"])
 type_attr("vault.token", "scope", "string", ["force_new"])
 type_attr("vault.token", "value", "string", ["computed", "sensitive"])
+type_attr("vault.token", "id", "string", ["computed"])
+"#;
+
+/// The token made before the old one goes, under the next generation of
+/// its name (R-189): its remote id is new.
+const CREATE_FIRST: &str = r#"
 type_remote_name("vault.token", "name")
 type_replace("vault.token", "create_first")
 "#;
@@ -37,6 +44,13 @@ resource compute.vm vm {{
 }}
 {facts}"##
     )
+}
+
+/// Each token's replacement made before the old one goes.
+fn create_first(name: &str, body: &str) -> Scratch {
+    let s = project(name, body);
+    s.write("vault/schema.df", &format!("{VAULT}{CREATE_FIRST}"));
+    s
 }
 
 fn project(name: &str, body: &str) -> Scratch {
@@ -67,6 +81,8 @@ fn dform(s: &Scratch, args: &[&str]) -> Run {
     let mut args = common::yes(args);
     if args.first().is_some_and(|a| a == "apply") {
         args.extend(["--wait-timeout".into(), "5s".into()]);
+        // Every create mints new ids, as a real cloud does.
+        args.splice(0..0, ["dev", "--chaos", "fresh-ids"].map(Into::into));
     }
     Run::from(
         common::dform()
@@ -108,7 +124,7 @@ fn user_data(s: &Scratch) -> String {
 /// sent with the new token's bytes. Nothing replaced, the plan is clean.
 #[test]
 fn a_replaced_holder_replaces_its_writer() {
-    let s = project("rotation-update", &program("a", ""));
+    let s = create_first("rotation-update", &program("a", ""));
     dform(&s, &["apply", "p"]).success();
     let first = token(&s);
     let again = dform(&s, &["plan", "p"]).success();
@@ -133,8 +149,10 @@ fn a_replaced_holder_replaces_its_writer() {
 }
 
 /// Under `bootstrap` the server keeps what it was made with: the plan
-/// says the user data is kept, and the apply sends none. Before the token
-/// is replaced nothing is kept.
+/// says the user data is kept because the key was replaced, and the
+/// apply sends none. Before the token is replaced nothing is kept. The
+/// token is replaced under its name: after the apply its remote id is
+/// the old one's, and its `id` tells the server's key from it.
 #[test]
 fn a_replaced_holder_under_bootstrap_is_kept() {
     let bootstrap = "lifecycle(vm, \"bootstrap\", \"user_data\")\n";
@@ -148,21 +166,43 @@ fn a_replaced_holder_under_bootstrap_is_kept() {
     let plan = dform(&s, &["plan", "p"]).success();
     assert!(
         plan.stdout.contains(
-            "= compute.vm vm                                     stacks/p.df:7\n    \
-             user_data differs (bootstrap): kept\n"
+            "= compute.vm vm    stacks/p.df:7\n    user_data differs (bootstrap): kept  (the key \
+             was replaced)\n"
         ),
         "{}",
         plan.stdout
     );
     dform(&s, &["apply", "p"]).success();
     assert_ne!(token(&s), first);
-    let plan = dform(&s, &["plan", "p"]).success();
+    let plan = dform(&s, &["plan", "p", "-v"]).success();
     assert!(
-        plan.stdout
-            .contains("    user_data differs (bootstrap): kept\n"),
+        plan.stdout.contains(
+            "    user_data = (sensitive) → (sensitive)  (bootstrap): kept  (the key was \
+             replaced)\n"
+        ),
         "{}",
         plan.stdout
     );
     assert_eq!(plan.summary(), "stack p is up to date", "{}", plan.stdout);
     assert_eq!(user_data(&s), format!("#cloud-config\ntoken: {first}\n"));
+}
+
+/// Under `bootstrap` an edited template with the same token is kept
+/// because the template changed.
+#[test]
+fn an_edited_template_under_bootstrap_is_kept() {
+    let bootstrap = "lifecycle(vm, \"bootstrap\", \"user_data\")\n";
+    let s = project("rotation-template", &program("a", bootstrap));
+    dform(&s, &["apply", "p"]).success();
+    s.write(
+        "stacks/p.df",
+        &program("a", bootstrap).replace("token: ", "key: "),
+    );
+    let plan = dform(&s, &["plan", "p"]).success();
+    assert!(
+        plan.stdout
+            .contains("    user_data differs (bootstrap): kept  (the template changed)\n"),
+        "{}",
+        plan.stdout
+    );
 }

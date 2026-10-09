@@ -611,6 +611,7 @@ impl Ovh {
                 before: None,
                 after: Some(Json::String(pool)),
                 sensitive: false,
+                note: None,
             });
         }
         let replaces = self.replaces(&at, typ, prior, d, &changes);

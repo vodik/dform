@@ -219,3 +219,41 @@ fn notes_are_dim() {
     let secret = Shown::Sensitive(None);
     assert_eq!(c.said(&secret, Why::Line), "\x1b[2m(sensitive)\x1b[0m");
 }
+
+/// A kept value's note (R-218) follows its line, dim as every note; one
+/// without a note says only that it is kept.
+#[test]
+fn a_kept_line_says_why_dim() {
+    let kept = |note: Option<&str>| Kept {
+        line: Line {
+            op: Op::Leaf,
+            path: "user_data".into(),
+            before: Shown::Sensitive(None),
+            after: Shown::Sensitive(None),
+            leaves: vec![],
+            site: None,
+            chain: vec![],
+            value: None,
+            row: None,
+        },
+        note: note.map(str::to_string),
+    };
+    let said = |k: &Kept, style: Style| {
+        let mut rows = Vec::new();
+        super::lines::write_kept(&mut rows, k, "", style, Why::Line);
+        rows.remove(0).left
+    };
+    let replaced = kept(Some(crate::provider::HOLDER_REPLACED));
+    assert_eq!(
+        said(&replaced, Style::PLAIN),
+        "user_data differs (bootstrap): kept  (the key was replaced)"
+    );
+    assert_eq!(
+        said(&replaced, Style { color: true }),
+        "user_data differs \x1b[2m(bootstrap): kept\x1b[0m  \x1b[2m(the key was replaced)\x1b[0m"
+    );
+    assert_eq!(
+        said(&kept(None), Style::PLAIN),
+        "user_data differs (bootstrap): kept"
+    );
+}

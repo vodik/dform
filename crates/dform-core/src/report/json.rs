@@ -227,17 +227,21 @@ impl Report {
         let pending = self.pending.iter().flat_map(|b| b.deformations.iter());
         let ds = self.kept.iter().chain(&self.definite).chain(pending);
         ds.flat_map(|d| {
-            d.kept.iter().map(move |l| {
-                json!({
+            d.kept.iter().map(move |k| {
+                let mut j = json!({
                     "address": d.addr.to_string(),
                     "type": d.addr.typ,
                     "name": d.addr.name,
-                    "path": l.path,
-                    "before": l.before.json(),
-                    "after": l.after.json(),
+                    "path": k.line.path,
+                    "before": k.line.before.json(),
+                    "after": k.line.after.json(),
                     "lifecycle": "bootstrap",
                     "site": d.site.as_ref().filter(|_| self.why != Why::None),
-                })
+                });
+                if let Some(n) = &k.note {
+                    j["note"] = json!(n);
+                }
+                j
             })
         })
         .collect()

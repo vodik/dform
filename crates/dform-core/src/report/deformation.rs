@@ -71,6 +71,15 @@ impl Line {
     }
 }
 
+/// A value given at creation only that the plan keeps (R-198): its line,
+/// and the note it says of why the value differs where dform can tell
+/// (`(the key was replaced)`, [`provider::Change::note`](crate::provider::Change::note)).
+#[derive(Debug, Clone)]
+pub struct Kept {
+    pub line: Line,
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Deformation {
     pub kind: ActionKind,
@@ -99,7 +108,7 @@ pub struct Deformation {
     pub gone: Option<(Option<String>, String)>,
     /// Each attribute given at creation only whose value differs from
     /// what the object was made with: kept, and said ([`KEPT`](crate::report::KEPT), R-198).
-    pub kept: Vec<Line>,
+    pub kept: Vec<Kept>,
     /// A create-first replace's remote names, old and new, where dform
     /// names the replacement (R-189, [`Action::renamed`]).
     pub renamed: Option<(String, String)>,
@@ -230,7 +239,14 @@ pub(super) fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs
         },
         folded: Vec::new(),
         gone: None,
-        kept: a.kept().iter().map(|c| leaf(c, c.path.clone())).collect(),
+        kept: a
+            .kept()
+            .iter()
+            .map(|c| Kept {
+                line: leaf(c, c.path.clone()),
+                note: c.note.clone(),
+            })
+            .collect(),
         renamed: a.renamed.clone(),
     }
 }

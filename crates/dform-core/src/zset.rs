@@ -1614,6 +1614,10 @@ pub mod file {
         pub path: String,
         pub before: Json,
         pub after: Json,
+        /// Why it differs, where dform can tell (`(the key was replaced)`,
+        /// R-218).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub note: Option<String>,
     }
 
     /// The values `plan` keeps of objects given at their creation only
@@ -1633,6 +1637,7 @@ pub mod file {
                     path: c.path.clone(),
                     before: side(c.before.as_ref(), c.sensitive),
                     after: side(c.after.as_ref(), c.sensitive),
+                    note: c.note.clone(),
                 })
             })
             .collect()

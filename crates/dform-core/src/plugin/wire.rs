@@ -263,6 +263,7 @@ impl TryFrom<&pb::Change> for provider::Change {
             before: side(&c.before)?,
             after: side(&c.after)?,
             sensitive: c.sensitive,
+            note: None,
         })
     }
 }

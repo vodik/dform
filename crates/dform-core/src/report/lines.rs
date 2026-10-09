@@ -4,7 +4,7 @@
 //! bindings as the default level says them.
 
 use super::chains::write_chain;
-use super::deformation::{Deformation, Line, Op};
+use super::deformation::{Deformation, Kept, Line, Op};
 use super::fold::scalar;
 use super::labels::{address, marker_of, reference};
 use super::layout::{Row, WIDTH};
@@ -157,8 +157,8 @@ impl Report {
                 write_chain(rows, l, &format!("{inner}  "), self.why);
             }
         }
-        for l in &d.kept {
-            write_kept(rows, l, inner, style, self.why);
+        for k in &d.kept {
+            write_kept(rows, k, inner, style, self.why);
         }
         // A delete's reason is in its change line's site column (After
         // R-149), a destroy's none: no line under its attributes.
@@ -327,9 +327,11 @@ fn write_folded(rows: &mut Vec<Row>, l: &Line, indent: &str, style: Style, right
 }
 
 /// A value given at creation only that differs from the object's (R-198):
-/// `user_data differs (bootstrap): kept`; from `-v` the two values, the
-/// object's first.
-pub(super) fn write_kept(rows: &mut Vec<Row>, l: &Line, indent: &str, style: Style, why: Why) {
+/// `user_data differs (bootstrap): kept`, then why where dform can tell,
+/// a note (`  (the key was replaced)`, R-218); from `-v` the two values,
+/// the object's first.
+pub(super) fn write_kept(rows: &mut Vec<Row>, k: &Kept, indent: &str, style: Style, why: Why) {
+    let l = &k.line;
     let (plain, painted) = match why >= Why::How {
         true => (
             format!(
@@ -350,6 +352,13 @@ pub(super) fn write_kept(rows: &mut Vec<Row>, l: &Line, indent: &str, style: Sty
             format!("{indent}{} differs {KEPT}", l.path),
             format!("{indent}{} differs {}", l.path, style.note(KEPT)),
         ),
+    };
+    let (plain, painted) = match &k.note {
+        Some(n) => (
+            format!("{plain}  {n}"),
+            format!("{painted}  {}", style.note(n)),
+        ),
+        None => (plain, painted),
     };
     rows.push(Row::new(&plain, painted));
 }

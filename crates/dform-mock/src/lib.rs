@@ -1286,7 +1286,9 @@ impl FakeCloud {
             .unwrap_or("string");
         match (class, ty) {
             (NullClass::Secret, _) => json!(format!("fake-secret-{hash}")),
-            (NullClass::Fresh, _) if attr == "id" => json!(default_id(typ, name, salt)),
+            // An object's computed `id`, the identity or beside a named one
+            // (a token's): new on every create under `fresh-ids`.
+            (_, _) if attr == dform_core::schema::IDENTITY => json!(default_id(typ, name, salt)),
             (NullClass::Fresh, _) => json!(format!("{name}-{hash}")),
             (_, "int") => json!(n % 100),
             (_, "bool") => json!(true),

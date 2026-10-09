@@ -288,11 +288,13 @@ fn write_change(out: &mut String, d: &Deformation, indent: &str, style: Style) {
         }
         write_line(out, &d.kind, l, &inner, style);
     }
-    for l in &d.kept {
+    for k in &d.kept {
+        let note = k.note.as_deref().map(|n| format!("  {}", style.note(n)));
         out.push_str(&format!(
-            "{inner}{} differs {}\n",
-            l.path,
-            style.note(crate::report::KEPT)
+            "{inner}{} differs {}{}\n",
+            k.line.path,
+            style.note(crate::report::KEPT),
+            note.unwrap_or_default()
         ));
     }
 }
