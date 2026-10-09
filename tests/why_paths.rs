@@ -340,3 +340,14 @@ fn a_query_path_that_reaches_nothing_says_the_nearest() {
         r.stderr
     );
 }
+
+/// A value several writes made (`spec`, its `aliases` another's) is one
+/// value to `query`, where the plan says each write's part on its own
+/// line: its fields in the order the program wrote them.
+#[test]
+#[ignore = "fmt::value orders an object's fields as written only when one write wrote them all: `spec` is alphabetical"]
+fn query_orders_a_value_several_writes_made() {
+    let s = project("query-paths-writers");
+    let q = run(&s, &["query", "pg.spec", "main.df"]).success().stdout;
+    assert!(q.starts_with("{\n  selector: "), "{q}");
+}
