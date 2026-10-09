@@ -24,7 +24,11 @@
 //! by, each one of the struct's fields), its `remote_name = "name"` a
 //! `type_remote_name` (R-189: the field is the object's name, and the
 //! provider makes a create-first replacement under the name it is sent,
-//! the next generation of it). `health` says the provider answers
+//! the next generation of it), its `lifecycle = "retain"` a
+//! `type_lifecycle` (what removal from the program means for the type:
+//! `retain` forgets the object and leaves it in the world, `destroy`
+//! deletes it, the default; a program's `lifecycle` row for an object
+//! says otherwise). `health` says the provider answers
 //! Health for the type (R-203): the handshake lists it, and `dform status`
 //! asks its `Lifecycle::health`.
 
@@ -88,6 +92,7 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let ident = &input.ident;
     let (mut typ, mut replace, mut retry) = (None::<String>, None::<String>, None::<u32>);
     let (mut lookup, mut remote_name) = (None::<LitStr>, None::<LitStr>);
+    let mut lifecycle = None::<String>;
     let mut health = false;
     for a in input.attrs.iter().filter(|a| a.path().is_ident("dform")) {
         a.parse_nested_meta(|m| {
@@ -105,10 +110,18 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 lookup = Some(m.value()?.parse::<LitStr>()?);
             } else if m.path.is_ident("remote_name") {
                 remote_name = Some(m.value()?.parse::<LitStr>()?);
+            } else if m.path.is_ident("lifecycle") {
+                let v = m.value()?.parse::<LitStr>()?.value();
+                if !["destroy", "retain"].contains(&v.as_str()) {
+                    return Err(m.error("lifecycle is destroy or retain"));
+                }
+                lifecycle = Some(v);
             } else if m.path.is_ident("health") {
                 health = true;
             } else {
-                return Err(m.error("expected type, replace, retry, lookup, remote_name or health"));
+                return Err(m.error(
+                    "expected type, replace, retry, lookup, remote_name, lifecycle or health",
+                ));
             }
             Ok(())
         })?;
@@ -201,6 +214,9 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             quoted(&typ),
             quoted(&n.value())
         ));
+    }
+    if let Some(w) = lifecycle {
+        lines.push(format!("type_lifecycle({}, {})", quoted(&typ), quoted(&w)));
     }
     let facts = lines.join("\n");
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();

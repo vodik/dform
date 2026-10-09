@@ -478,6 +478,43 @@ fn a_device_is_adopted_by_its_hostname_and_tagged() {
     );
 }
 
+/// A device removed from the program is let go, not removed from the
+/// tailnet: its type's lifecycle is `retain` (`type_lifecycle`), which
+/// the plan shows as a program's `retain`; `why` says the provider's
+/// schema answered it.
+#[test]
+fn a_device_removed_from_the_program_stays_on_the_tailnet() {
+    let server = Server::start(TAILNET);
+    let s = project("ts-device-retain", &server, KEY);
+    let id = joined(&s, &server, "k3s-1");
+    write(&s, &server, &format!("{KEY}{DEVICE}"));
+    dform(&s, &["apply", "main.df"]).success();
+    let why = dform(&s, &["why", "lifecycle(server, \"retain\")", "main.df"]).success();
+    assert!(
+        why.stdout.contains(
+            "dform  the schema of provider tailscale: each tailscale.device is \"retain\""
+        ),
+        "{}",
+        why.stdout
+    );
+    write(&s, &server, KEY);
+    let plan = dform(&s, &["plan", "main.df"]).success();
+    assert!(
+        plan.stdout.contains(
+            "~ tailscale.device server  forgotten, kept in the world  (lifecycle retain)"
+        ),
+        "{}",
+        plan.stdout
+    );
+    dform(&s, &["apply", "main.df"]).success();
+    assert!(server.device(&id).is_some());
+    let state = s.json("dform.state/main/state.json");
+    assert!(
+        state["resources"].get("tailscale.device::server").is_none(),
+        "{state}"
+    );
+}
+
 /// A device a program would create is refused at the plan, naming the
 /// adopt; a hostname two devices have is refused naming both ids.
 #[test]

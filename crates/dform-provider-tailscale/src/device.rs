@@ -10,7 +10,10 @@
 //! What a program writes: `tags`, `routes` (the subnet routes approved of
 //! those it advertises), `authorized` and `name` (its MagicDNS name), each
 //! its own call of the API; the rest is the device's (`id`, `addresses`,
-//! `os`, `last_seen`). A delete removes the device from the tailnet.
+//! `os`, `last_seen`). Removal from the program forgets the device and
+//! leaves it on the tailnet (`lifecycle = "retain"`: the node joined it,
+//! and an ephemeral one leaves once offline); `lifecycle(d, "destroy")`
+//! removes it instead.
 //! Health is the device's own: on the tailnet and connected, waiting for
 //! approval, or not connected.
 //!
@@ -34,7 +37,7 @@ pub const LISTING: &str =
 
 /// A device.
 #[derive(Resource, Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
-#[dform(type = "tailscale.device", health)]
+#[dform(type = "tailscale.device", lifecycle = "retain", health)]
 pub struct Device {
     /// The node's own hostname, what a program adopts it by.
     #[dform(required)]
