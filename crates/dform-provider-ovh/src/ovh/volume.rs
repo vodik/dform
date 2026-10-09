@@ -221,6 +221,23 @@ impl Ovh {
             say,
         )
     }
+
+    /// The volume named `name` in `region`, unless it is deleted.
+    pub(super) fn find_volume(&self, name: &str, region: &str) -> Result<Option<String>> {
+        let (a, p) = self.project("find a volume")?;
+        let list = a.client.get(&format!(
+            "/cloud/project/{p}/volume?region={}",
+            escape(region)
+        ))?;
+        Ok(list
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|o| !matches!(s(o, "status"), Some("deleted" | "deleting")))
+            .find(|o| s(o, "name") == Some(name) && s(o, "region") == Some(region))
+            .and_then(|o| s(o, "id"))
+            .map(str::to_string))
+    }
 }
 
 fn volume_path(p: &str, remote: &str) -> String {

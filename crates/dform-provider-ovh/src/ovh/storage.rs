@@ -70,6 +70,26 @@ impl Ovh {
             .map_err(|e| failed(at, e))?;
         Ok(())
     }
+
+    /// The container named `name` in `region`.
+    pub(super) fn find_container(&self, region: &str, name: &str) -> Result<Option<String>> {
+        let (a, p) = self.project("find an S3 container")?;
+        Ok(self
+            .read_container(&a, &p, &map::container_remote(region, name))?
+            .map(|_| map::container_remote(region, name)))
+    }
+
+    pub(super) fn delete_container(
+        &self,
+        at: &str,
+        remote: &str,
+        notes: &mut Vec<String>,
+        say: Say,
+    ) -> std::result::Result<(), Failed> {
+        let (a, p) = self.project_for(at)?;
+        let path = map::container_path(&p, remote);
+        self.delete_at(&a, at, &path, false, notes, say)
+    }
 }
 
 /// A user's id as the API takes it, a number: what a reference to an

@@ -47,6 +47,7 @@ mod health;
 mod instance;
 mod network;
 mod record;
+mod ssh_key;
 mod storage;
 mod user;
 mod volume;
@@ -515,9 +516,7 @@ impl Ovh {
             }
             SSH_KEY => {
                 let (a, p) = self.project(&at)?;
-                a.client
-                    .get_opt(&format!("/cloud/project/{p}/sshkey/{}", escape(remote)))?
-                    .map(|o| map::ssh_key(&o))
+                self.read_ssh_key(&a, &p, remote)?
             }
             RECORD => {
                 let a = self.account(&at)?;
@@ -757,76 +756,13 @@ impl Ovh {
         let k = |a: &str| made.get(a);
         Ok(match made.typ.as_str() {
             INSTANCE => self.find_instance(k("name"), k("region"))?,
-            SSH_KEY => {
-                let name = k("name");
-                let (a, p) = self.project("find an SSH key")?;
-                let list = a.client.get(&format!("/cloud/project/{p}/sshkey"))?;
-                list.as_array()
-                    .into_iter()
-                    .flatten()
-                    .find(|o| s(o, "name") == Some(name))
-                    .and_then(|o| s(o, "id"))
-                    .map(str::to_string)
-            }
+            SSH_KEY => self.find_ssh_key(k("name"))?,
             RECORD => self.find_record(k("zone"), k("type"), k("subdomain"), k("target"))?,
-            CONTAINER => {
-                let (region, name) = (k("region"), k("name"));
-                let (a, p) = self.project("find an S3 container")?;
-                self.read_container(&a, &p, &map::container_remote(region, name))?
-                    .map(|_| map::container_remote(region, name))
-            }
-            USER => {
-                let description = k("description");
-                let (a, p) = self.project("find a user")?;
-                let list = a.client.get(&format!("/cloud/project/{p}/user"))?;
-                list.as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter(|o| !matches!(s(o, "status"), Some("deleted" | "deleting")))
-                    .find(|o| s(o, "description") == Some(description))
-                    .and_then(|o| o.get("id").and_then(Json::as_i64))
-                    .map(|id| id.to_string())
-            }
-            VOLUME => {
-                let (name, region) = (k("name"), k("region"));
-                let (a, p) = self.project("find a volume")?;
-                let list = a.client.get(&format!(
-                    "/cloud/project/{p}/volume?region={}",
-                    escape(region)
-                ))?;
-                list.as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter(|o| !matches!(s(o, "status"), Some("deleted" | "deleting")))
-                    .find(|o| s(o, "name") == Some(name) && s(o, "region") == Some(region))
-                    .and_then(|o| s(o, "id"))
-                    .map(str::to_string)
-            }
-            NETWORK => {
-                let name = k("name");
-                let (a, p) = self.project("find a private network")?;
-                let list = a
-                    .client
-                    .get(&format!("/cloud/project/{p}/network/private"))?;
-                list.as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter(|o| s(o, "status") != Some("DELETING"))
-                    .find(|o| s(o, "name") == Some(name))
-                    .and_then(|o| s(o, "id"))
-                    .map(str::to_string)
-            }
-            SUBNET => {
-                let (network, region, range) = (k("network"), k("region"), k("range"));
-                let (a, p) = self.project("find a subnet")?;
-                self.subnets(&a, &p, network)?
-                    .iter()
-                    .map(|o| map::subnet(network, o))
-                    .find(|(attrs, _)| {
-                        s(attrs, "region") == Some(region) && s(attrs, "range") == Some(range)
-                    })
-                    .and_then(|(_, computed)| s(&computed, "id").map(str::to_string))
-            }
+            CONTAINER => self.find_container(k("region"), k("name"))?,
+            USER => self.find_user(k("description"))?,
+            VOLUME => self.find_volume(k("name"), k("region"))?,
+            NETWORK => self.find_network(k("name"))?,
+            SUBNET => self.find_subnet(k("network"), k("region"), k("range"))?,
             typ => bail!("the ovh provider has no lookup for {typ}"),
         })
     }
@@ -886,21 +822,7 @@ impl Ovh {
         }
         match typ {
             INSTANCE => self.create_instance(at, config, notes, say),
-            SSH_KEY => {
-                let (a, p) = self
-                    .project(at)
-                    .map_err(|e| refused(at, format!("{e:#}")))?;
-                let body = json!({
-                    "name": need(at, config, "name")?,
-                    "publicKey": need(at, config, "public_key")?,
-                });
-                let o = a
-                    .client
-                    .post(&format!("/cloud/project/{p}/sshkey"), &body)
-                    .map_err(|e| failed(at, e))?;
-                let (attrs, computed) = map::ssh_key(&o);
-                Ok((s(&o, "id").unwrap_or_default().to_string(), attrs, computed))
-            }
+            SSH_KEY => self.create_ssh_key(at, config),
             RECORD => self.create_record(at, config, notes),
             CONTAINER => self.create_container(at, config),
             USER => self.create_user(at, config, notes, say),
@@ -958,49 +880,15 @@ impl Ovh {
         notes: &mut Vec<String>,
         say: Say,
     ) -> std::result::Result<(), Failed> {
-        let gone_already = |e: &api::Error| e.is_not_found();
         match typ {
             INSTANCE => self.delete_instance(at, remote, notes, say)?,
-            SSH_KEY => {
-                let (a, p) = self
-                    .project(at)
-                    .map_err(|e| refused(at, format!("{e:#}")))?;
-                match a
-                    .client
-                    .delete(&format!("/cloud/project/{p}/sshkey/{}", escape(remote)))
-                {
-                    Ok(_) => {}
-                    Err(e) if gone_already(&e) => {}
-                    Err(e) => return Err(failed(at, e)),
-                }
-            }
+            SSH_KEY => self.delete_ssh_key(at, remote)?,
             RECORD => self.delete_record(at, remote, notes)?,
-            CONTAINER => {
-                let (a, p) = self.project_for(at)?;
-                let path = map::container_path(&p, remote);
-                self.delete_at(&a, at, &path, false, notes, say)?;
-            }
-            USER => {
-                let (a, p) = self.project_for(at)?;
-                let path = format!("/cloud/project/{p}/user/{}", escape(remote));
-                self.delete_at(&a, at, &path, true, notes, say)?;
-            }
+            CONTAINER => self.delete_container(at, remote, notes, say)?,
+            USER => self.delete_user(at, remote, notes, say)?,
             VOLUME => self.delete_volume(at, remote, notes, say)?,
-            NETWORK => {
-                let (a, p) = self.project_for(at)?;
-                let path = format!("/cloud/project/{p}/network/private/{}", escape(remote));
-                self.delete_at(&a, at, &path, true, notes, say)?;
-            }
-            SUBNET => {
-                let (a, p) = self.project_for(at)?;
-                let (network, id) = map::subnet_parts(remote);
-                let path = format!(
-                    "/cloud/project/{p}/network/private/{}/subnet/{}",
-                    escape(network),
-                    escape(id)
-                );
-                self.delete_at(&a, at, &path, false, notes, say)?;
-            }
+            NETWORK => self.delete_network(at, remote, notes, say)?,
+            SUBNET => self.delete_subnet(at, remote, notes, say)?,
             _ => return Err(refused(at, format!("the ovh provider has no type {typ}"))),
         }
         Ok(())

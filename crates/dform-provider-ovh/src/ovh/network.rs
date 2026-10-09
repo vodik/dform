@@ -155,6 +155,34 @@ impl Ovh {
         }
         Ok(())
     }
+
+    /// The private network named `name`, unless it is being deleted.
+    pub(super) fn find_network(&self, name: &str) -> Result<Option<String>> {
+        let (a, p) = self.project("find a private network")?;
+        let list = a
+            .client
+            .get(&format!("/cloud/project/{p}/network/private"))?;
+        Ok(list
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|o| s(o, "status") != Some("DELETING"))
+            .find(|o| s(o, "name") == Some(name))
+            .and_then(|o| s(o, "id"))
+            .map(str::to_string))
+    }
+
+    pub(super) fn delete_network(
+        &self,
+        at: &str,
+        remote: &str,
+        notes: &mut Vec<String>,
+        say: Say,
+    ) -> std::result::Result<(), Failed> {
+        let (a, p) = self.project_for(at)?;
+        let path = format!("/cloud/project/{p}/network/private/{}", escape(remote));
+        self.delete_at(&a, at, &path, true, notes, say)
+    }
 }
 
 fn network_path(p: &str, remote: &str) -> String {
@@ -289,6 +317,41 @@ impl Ovh {
         let (attrs, computed) = map::subnet(network, &o);
         let id = map::subnet_remote(network, s(&o, "id").unwrap_or_default());
         Ok((id, attrs, computed))
+    }
+
+    /// The subnet of `network` in `region` over `range`.
+    pub(super) fn find_subnet(
+        &self,
+        network: &str,
+        region: &str,
+        range: &str,
+    ) -> Result<Option<String>> {
+        let (a, p) = self.project("find a subnet")?;
+        Ok(self
+            .subnets(&a, &p, network)?
+            .iter()
+            .map(|o| map::subnet(network, o))
+            .find(|(attrs, _)| {
+                s(attrs, "region") == Some(region) && s(attrs, "range") == Some(range)
+            })
+            .and_then(|(_, computed)| s(&computed, "id").map(str::to_string)))
+    }
+
+    pub(super) fn delete_subnet(
+        &self,
+        at: &str,
+        remote: &str,
+        notes: &mut Vec<String>,
+        say: Say,
+    ) -> std::result::Result<(), Failed> {
+        let (a, p) = self.project_for(at)?;
+        let (network, id) = map::subnet_parts(remote);
+        let path = format!(
+            "/cloud/project/{p}/network/private/{}/subnet/{}",
+            escape(network),
+            escape(id)
+        );
+        self.delete_at(&a, at, &path, false, notes, say)
     }
 }
 

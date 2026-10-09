@@ -161,6 +161,32 @@ impl Ovh {
             value: secret.as_bytes().to_vec(),
         })
     }
+
+    /// The user of `description`, unless it is deleted.
+    pub(super) fn find_user(&self, description: &str) -> Result<Option<String>> {
+        let (a, p) = self.project("find a user")?;
+        let list = a.client.get(&format!("/cloud/project/{p}/user"))?;
+        Ok(list
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|o| !matches!(s(o, "status"), Some("deleted" | "deleting")))
+            .find(|o| s(o, "description") == Some(description))
+            .and_then(|o| o.get("id").and_then(Json::as_i64))
+            .map(|id| id.to_string()))
+    }
+
+    pub(super) fn delete_user(
+        &self,
+        at: &str,
+        remote: &str,
+        notes: &mut Vec<String>,
+        say: Say,
+    ) -> std::result::Result<(), Failed> {
+        let (a, p) = self.project_for(at)?;
+        let path = format!("/cloud/project/{p}/user/{}", escape(remote));
+        self.delete_at(&a, at, &path, true, notes, say)
+    }
 }
 
 /// The program's roles, names as the API spells them.
