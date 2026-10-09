@@ -106,12 +106,11 @@ impl Report {
             },
             (_, None) => vec![],
         };
-        let right = match &d.custody {
+        match &d.custody {
             Some(c) if right.is_empty() => vec![c.clone()],
             Some(c) => right.into_iter().map(|r| format!("{r}  {c}")).collect(),
             None => right,
-        };
-        right
+        }
     }
 
     /// A change's attribute lines (the forced first, at most 40), each

@@ -323,7 +323,7 @@ fn wait_active(
         std::thread::sleep(a.poll);
         match a
             .client
-            .get_opt(&format!("/cloud/project/{p}/instance/{}", escape(&id)))
+            .get_opt(&format!("/cloud/project/{p}/instance/{}", escape(id)))
         {
             Ok(Some(o)) => {
                 if status(&o) != said {
