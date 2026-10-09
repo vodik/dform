@@ -192,11 +192,7 @@ pub(super) fn eval_rule_collect(
 
 /// A group's aggregated value, from its items sorted; `Err` with what is
 /// wrong with them.
-fn fold(
-    name: &str,
-    kind: AggKind,
-    items: Vec<Value>,
-) -> std::result::Result<Value, String> {
+fn fold(name: &str, kind: AggKind, items: Vec<Value>) -> std::result::Result<Value, String> {
     match kind {
         AggKind::Set | AggKind::List => Ok(Value::List(items)),
         AggKind::Count => Ok(Value::Int(items.len() as i64)),

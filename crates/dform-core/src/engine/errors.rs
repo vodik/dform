@@ -7,6 +7,7 @@ use super::body::Src;
 use super::builtins::{eval_func, eval_term};
 use super::nulls::Rec;
 use super::unify::unify_atom;
+use super::{AGGREGATE_OUTPUTS, LATTICE_DECLS, REFINE_DECLS};
 use crate::ast::{Atom, Lit, RuleStmt, Span, Term};
 use crate::diag;
 use crate::ir::ops;
@@ -17,6 +18,44 @@ use crate::stuck;
 use crate::value::Value;
 use anyhow::{Result, bail};
 use std::collections::{BTreeSet, HashMap};
+
+/// A rule may not derive what the attribute aggregate or the evaluator
+/// derives, nor a schema fact the aggregate reads.
+pub(super) fn check_heads(rules: &[RuleStmt]) -> Result<()> {
+    for r in rules {
+        if AGGREGATE_OUTPUTS.contains(&r.head.pred.as_str()) {
+            bail!(
+                "{} is derived by the attribute aggregate; contribute with arg instead: {}{}",
+                r.head.pred,
+                spell::rule(r),
+                at_suffix(r.head.span)
+            );
+        }
+        if r.head.pred == partition::STUCK || r.head.pred == stuck::MAY_DERIVE {
+            bail!(
+                "{} is derived by the evaluator; no rule may: {}{}",
+                if r.head.pred == partition::STUCK {
+                    "stuck/4"
+                } else {
+                    "may_derive/3"
+                },
+                spell::rule(r),
+                at_suffix(r.head.span)
+            );
+        }
+        if LATTICE_DECLS.contains(&r.head.pred.as_str())
+            || REFINE_DECLS.contains(&r.head.pred.as_str())
+        {
+            bail!(
+                "{} must be a fact, not a rule: {}{}",
+                r.head.pred,
+                spell::rule(r),
+                at_suffix(r.head.span)
+            );
+        }
+    }
+    Ok(())
+}
 
 /// E §2.6: a body predicate with no definition is a compile error. Defined
 /// means: a fact or a rule head, a builtin, a compiler-owned or

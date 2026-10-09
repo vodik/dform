@@ -14,7 +14,6 @@ mod unify;
 
 use crate::ast::{Atom, Helper, Lit, Program, RuleStmt, Span, Term};
 use crate::circuit::{Circuit, Leaf, NodeId};
-use crate::diag;
 use crate::ir::ops;
 use crate::ir::store::{Store, Window};
 use crate::partition::{self, Node};
@@ -28,7 +27,7 @@ use body::{Derived, Src, cmp_order, eval_body, eval_rule, string_cells};
 use builtins::eval_term;
 pub(crate) use builtins::order;
 use contributions::{AttrAggregate, Origin, Origins, is_contribution};
-use errors::{at_suffix, check_defined, self_spread, with_place};
+use errors::{check_defined, check_heads, self_spread, with_place};
 pub use membership::holds;
 use nulls::Rec;
 use policy::format_policy_fact;
@@ -239,6 +238,71 @@ struct Compiled {
 }
 
 impl Compiled {
+    /// The rules planned over `strata`: the stratum each runs at, their
+    /// operator IR and a Fix per stratum, the indexes the bodies read
+    /// through (made in `prov`'s store), and each rule's leaf in its circuit.
+    fn new(
+        rules: Vec<RuleStmt>,
+        externs: BTreeSet<crate::ast::Extern>,
+        graph: &partition::Graph,
+        strata: &BTreeMap<Node, usize>,
+        prov: &mut Prov,
+    ) -> Self {
+        // A rule runs at the stratum of each node it defines: one, or one per
+        // address it reads (`partition::Graph::heads`).
+        let rule_strata: Vec<BTreeSet<usize>> = graph
+            .heads
+            .iter()
+            .map(|hs| {
+                hs.iter()
+                    .map(|h| strata.get(h).copied().unwrap_or(0))
+                    .collect()
+            })
+            .collect();
+        // The operator IR: one body per rule, a Fix per
+        // stratum, and the indexes the bodies read through.
+        let extern_preds: BTreeSet<String> = externs.iter().map(|e| e.pred.clone()).collect();
+        let plans: Vec<ops::Rule> = rules
+            .iter()
+            .map(|r| ops::compile_rule(r, &extern_preds))
+            .collect();
+        let fixes = ops::fixes(&rules, &rule_strata, &plans);
+        index_reads(&mut prov.store, &rules, &plans);
+
+        let rule_text: Vec<String> = rules.iter().map(spell::rule).collect();
+        let rule_leaf: Vec<NodeId> = rule_text
+            .iter()
+            .enumerate()
+            .map(|(i, t)| prov.rule(format!("r{i}"), t, rules[i].head.span))
+            .collect();
+        let sigma = prov.rule(
+            ATTR_SIGMA.into(),
+            "attribute aggregate (lub_ranked, E §2.5)",
+            Span::default(),
+        );
+        let aggregates: BTreeSet<String> = rules
+            .iter()
+            .filter(|r| partition::is_aggregate_head(&r.head))
+            .map(|r| r.head.pred.clone())
+            .chain(["attr".to_string(), transform::ATTR_BASE.to_string()])
+            .collect();
+        let negations = Helper::Negation.heads(&rules);
+        let stuck_at = strata.get(&Node::plain(partition::STUCK)).copied();
+        Compiled {
+            rules: std::sync::Arc::new(rules),
+            externs,
+            plans,
+            rule_strata,
+            fixes,
+            rule_text,
+            rule_leaf,
+            sigma,
+            aggregates,
+            negations,
+            stuck_at,
+        }
+    }
+
     /// Whether `s` is a helper's: the rule it was written for is stuck
     /// when it is, and says so in the program's words.
     fn is_helper(&self, s: &Stuck) -> bool {
@@ -279,49 +343,11 @@ fn start(
     }
 
     let (rules, fact_atoms) = (compiled.rules, compiled.facts);
-    for r in &rules {
-        if AGGREGATE_OUTPUTS.contains(&r.head.pred.as_str()) {
-            bail!(
-                "{} is derived by the attribute aggregate; contribute with arg instead: {}{}",
-                r.head.pred,
-                spell::rule(r),
-                at_suffix(r.head.span)
-            );
-        }
-        if r.head.pred == partition::STUCK || r.head.pred == stuck::MAY_DERIVE {
-            bail!(
-                "{} is derived by the evaluator; no rule may: {}{}",
-                if r.head.pred == partition::STUCK {
-                    "stuck/4"
-                } else {
-                    "may_derive/3"
-                },
-                spell::rule(r),
-                at_suffix(r.head.span)
-            );
-        }
-        if LATTICE_DECLS.contains(&r.head.pred.as_str())
-            || REFINE_DECLS.contains(&r.head.pred.as_str())
-        {
-            bail!(
-                "{} must be a fact, not a rule: {}{}",
-                r.head.pred,
-                spell::rule(r),
-                at_suffix(r.head.span)
-            );
-        }
-    }
-
+    check_heads(&rules)?;
     for a in &fact_atoms {
         let g = ensure_ground(a)?;
-        let at = g.span;
-        let span = match (diag::at(g.span), diag::origin(g.span)) {
-            (Some(at), Some(o)) => format!("{at} ({}, {o})", g.pred),
-            (Some(at), None) => format!("{at} ({})", g.pred),
-            (None, _) => format!("compiler ({})", g.pred),
-        };
-        let contribution = is_contribution(&g);
-        let t = prov.given(g, Leaf::Base { span });
+        let (at, contribution) = (g.span, is_contribution(&g));
+        let t = prov.stated(g);
         if contribution {
             origins.note(t, Origin::Fact(at));
         }
@@ -332,98 +358,43 @@ fn start(
     // Stratified evaluation over the partition graph (E §2.6, F DR-12
     // revised). Every rule runs in the stratum of its head node.
     let graph = compiled.graph;
-    let strata = match partition::stratify(&graph) {
-        partition::Verdict::Stratified { strata } => strata,
+    let strata = stratify(&graph)?;
+    let c = Compiled::new(rules, externs, &graph, &strata, &mut prov);
+    origins.rules = c
+        .rule_text
+        .iter()
+        .zip(c.rules.iter())
+        .map(|(t, r)| with_place(t.clone(), r.head.span))
+        .collect();
+    let attrs = AttrAggregate::new(&strata, &graph.split);
+    let state = State {
+        prov,
+        origins,
+        known: RefCell::new(stuck::Known::default()),
+        stucks: Vec::new(),
+        attrs,
+        stuck_facts: None,
+    };
+    Ok((c, state))
+}
+
+/// The partition graph's strata, or the cycle through a negation or an
+/// aggregate that has none (with the help for a rule spreading its own
+/// value).
+fn stratify(graph: &partition::Graph) -> Result<BTreeMap<Node, usize>> {
+    match partition::stratify(graph) {
+        partition::Verdict::Stratified { strata } => Ok(strata),
         partition::Verdict::Rejected {
             scc,
             negative_edges,
         } => {
-            let help = self_spread(&graph, &negative_edges).unwrap_or_default();
+            let help = self_spread(graph, &negative_edges).unwrap_or_default();
             bail!(
                 "{}{help}",
-                partition::cycle_error(&graph, &scc, &negative_edges)
+                partition::cycle_error(graph, &scc, &negative_edges)
             )
         }
-    };
-    // A rule runs at the stratum of each node it defines: one, or one per
-    // address it reads (`partition::Graph::heads`).
-    let rule_strata: Vec<BTreeSet<usize>> = graph
-        .heads
-        .iter()
-        .map(|hs| {
-            hs.iter()
-                .map(|h| strata.get(h).copied().unwrap_or(0))
-                .collect()
-        })
-        .collect();
-    // The operator IR: one body per rule, a Fix per
-    // stratum, and the indexes the bodies read through.
-    let extern_preds: BTreeSet<String> = externs.iter().map(|e| e.pred.clone()).collect();
-    let plans: Vec<ops::Rule> = rules
-        .iter()
-        .map(|r| ops::compile_rule(r, &extern_preds))
-        .collect();
-    let fixes = ops::fixes(&rules, &rule_strata, &plans);
-    let bodies = plans.iter().map(|p| &p.body);
-    for (rel, keys) in ops::indexes(bodies) {
-        for key in keys {
-            prov.store.index(&rel, &key);
-        }
     }
-    for r in rules.iter().zip(&plans) {
-        for (rel, key) in string_cells(&r.0.body, &r.1.body) {
-            prov.store.index(&rel, &key);
-        }
-    }
-
-    let rule_text: Vec<String> = rules.iter().map(spell::rule).collect();
-    origins.rules = rule_text
-        .iter()
-        .zip(&rules)
-        .map(|(t, r)| with_place(t.clone(), r.head.span))
-        .collect();
-    let rule_leaf: Vec<NodeId> = rule_text
-        .iter()
-        .enumerate()
-        .map(|(i, t)| prov.rule(format!("r{i}"), t, rules[i].head.span))
-        .collect();
-    let sigma = prov.rule(
-        ATTR_SIGMA.into(),
-        "attribute aggregate (lub_ranked, E §2.5)",
-        Span::default(),
-    );
-    let aggregates: BTreeSet<String> = rules
-        .iter()
-        .filter(|r| partition::is_aggregate_head(&r.head))
-        .map(|r| r.head.pred.clone())
-        .chain(["attr".to_string(), transform::ATTR_BASE.to_string()])
-        .collect();
-    let negations = Helper::Negation.heads(&rules);
-    let attrs = AttrAggregate::new(&strata, &graph.split);
-    let stuck_at = strata.get(&Node::plain(partition::STUCK)).copied();
-    Ok((
-        Compiled {
-            rules: std::sync::Arc::new(rules),
-            externs,
-            plans,
-            rule_strata,
-            fixes,
-            rule_text,
-            rule_leaf,
-            sigma,
-            aggregates,
-            negations,
-            stuck_at,
-        },
-        State {
-            prov,
-            origins,
-            known: RefCell::new(stuck::Known::default()),
-            stucks: Vec::new(),
-            attrs,
-            stuck_facts: None,
-        },
-    ))
 }
 
 /// Evaluate every stratum from `from`, then collapse what is left of the
@@ -731,6 +702,22 @@ pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
             (b.collect(), used)
         })
         .collect())
+}
+
+/// The indexes the rules' bodies read through: the operator IR's, and
+/// those a read of a string cell looks a reference up by.
+fn index_reads(store: &mut Store, rules: &[RuleStmt], plans: &[ops::Rule]) {
+    let bodies = plans.iter().map(|p| &p.body);
+    for (rel, keys) in ops::indexes(bodies) {
+        for key in keys {
+            store.index(&rel, &key);
+        }
+    }
+    for r in rules.iter().zip(plans) {
+        for (rel, key) in string_cells(&r.0.body, &r.1.body) {
+            store.index(&rel, &key);
+        }
+    }
 }
 
 fn ensure_ground(a: &Atom) -> Result<Atom> {

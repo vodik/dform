@@ -64,6 +64,16 @@ impl Prov {
         self.record(a, vec![l], vec![]).0
     }
 
+    /// Insert a fact the program states, labelled with where it is written.
+    pub(super) fn stated(&mut self, g: Atom) -> TupleId {
+        let span = match (diag::at(g.span), diag::origin(g.span)) {
+            (Some(at), Some(o)) => format!("{at} ({}, {o})", g.pred),
+            (Some(at), None) => format!("{at} ({})", g.pred),
+            (None, _) => format!("compiler ({})", g.pred),
+        };
+        self.given(g, Leaf::Base { span })
+    }
+
     pub(super) fn rule(&mut self, id: String, text: &str, span: Span) -> NodeId {
         self.circuit.name_rule(&id, text);
         if let Some(at) = diag::place(span) {

@@ -145,10 +145,7 @@ pub(super) fn forwards_nulls(name: &str) -> bool {
 /// The innermost builtin application in `t` whose arguments are ground but
 /// carry a null, with those nulls: every builtin argument is a content
 /// position (Rule 2).
-fn blocked_by_null(
-    t: &Term,
-    state: &HashMap<String, Value>,
-) -> Option<(String, BTreeSet<String>)> {
+fn blocked_by_null(t: &Term, state: &HashMap<String, Value>) -> Option<(String, BTreeSet<String>)> {
     match t {
         Term::Func { name, args } => {
             if let Some(inner) = args.iter().find_map(|a| blocked_by_null(a, state)) {
