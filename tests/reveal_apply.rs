@@ -299,11 +299,11 @@ fn a_template_over_a_held_secret_configures_a_provider() {
 /// A template over a held secret, published as another stack's output
 /// and written by the reader: the reader's Apply would get the bytes.
 #[test]
-#[ignore = "a template's held secret is revealed from an object of the deployment that writes \
-            it: the reader's run finds no object of its own holding the platform's token and \
-            the Apply is refused (`no object of this deployment holds the secret ..`); a reveal \
-            from another deployment's object needs its identity (`Held.deployment`, as a whole \
-            held output carries) inside the template"]
+#[ignore = "a documented limit (reference.md, \"A secret a provider holds\"): a template's held \
+            secret is revealed from an object of the deployment that writes it, so the reader's \
+            Apply is refused (`no object of this deployment holds the secret ..`); revealing \
+            through the holder's deployment would give the reader the holder's provider \
+            credentials, a custody question left open"]
 fn a_template_in_another_stacks_output_is_revealed_into_the_readers_apply() {
     let s = project("reveal-output", "");
     s.write(
