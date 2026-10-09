@@ -888,7 +888,7 @@ impl Providers {
         };
         if let Some((key, label)) = provider::marker(v) {
             if sensitive && key == provider::SECRET_KEY && self.holder_link(label) != Some(writer) {
-                *v = Json::String(text(&label.to_string())?);
+                *v = Json::String(text(label)?);
             }
             return Ok(());
         }
