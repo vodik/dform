@@ -33,9 +33,10 @@ use crate::spell;
 use crate::stuck::Sections;
 use crate::value::{Value, null_owner};
 use chains::write_chain;
-use errors::{diag_lines, diags, violation_parts};
+use errors::{diag_lines, diags};
 use layout::{Row, layout};
 use mask::{confusables_in, masked_text, null_class};
+use policy::{Denied, deferred, denied, policies};
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
 use style::kind_paint;
@@ -71,6 +72,7 @@ pub use labels::{
 pub use layout::WIDTH;
 pub(crate) use mask::elide;
 pub use mask::{Shown, masked, shown, shown_value, surface_in};
+pub use policy::Policy;
 pub use style::{Paint, Style};
 pub use tally::Tally;
 pub(crate) use waits::waited;
@@ -176,35 +178,6 @@ pub struct Group {
     /// it (`release("crud_api", "schema", _)`).
     pub reads: Option<String>,
     /// Where the rule is written ([`Report::explain`]).
-    pub site: Option<Site>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Policy {
-    pub message: String,
-    pub on: Vec<String>,
-    pub reason: String,
-    pub after: Option<usize>,
-    /// Undetermined (Rule 3), or may derive after a boundary (a positive
-    /// read of a predicate with a stuck instance).
-    pub may_derive: bool,
-    /// A deferred refinement check, not a deny (`message` names it).
-    pub refinement: bool,
-    /// The deny's rule (`r12`), and where it is written.
-    pub rule: Option<String>,
-    pub site: Option<Site>,
-    /// What it waits on outside this plan ([`Until`]), when no tick of
-    /// it decides it.
-    pub until: BTreeSet<Until>,
-}
-
-/// A deny over the plan, the row of the plan it matched and where it is
-/// written ([`Report::explain`]).
-#[derive(Debug, Clone)]
-pub struct Denied {
-    pub message: String,
-    /// The resource of the `deformation` row it read, when it read one.
-    pub addr: String,
     pub site: Option<Site>,
 }
 
@@ -660,136 +633,6 @@ pub fn group_pattern(head: &Atom) -> String {
         },
         _ => spell::atom(head),
     }
-}
-
-fn deny_message(head: &Atom) -> String {
-    match head.args.first() {
-        Some(Term::Val(Value::Str(m))) => m.clone(),
-        _ => spell::atom(head),
-    }
-}
-
-/// Undetermined denies (Rule 3), then denies that may derive after a
-/// boundary: a body that positively reads a predicate with a stuck
-/// instance in its partition (F DR-2 revised, last clause).
-fn policies(
-    i: &Input,
-    tick_of: &BTreeMap<(String, String), usize>,
-    resolves: &Resolves,
-) -> Vec<Policy> {
-    let mut out: Vec<Policy> = Vec::new();
-    for s in i.res.stuck.iter().filter(|s| s.head.pred == "deny") {
-        let on = nulls(s);
-        let p = Policy {
-            message: deny_message(&s.head),
-            after: resolves(&on, tick_of),
-            on,
-            reason: s.reason.clone(),
-            may_derive: false,
-            refinement: false,
-            rule: s.rule.map(|r| format!("r{r}")),
-            site: None,
-            until: BTreeSet::new(),
-        };
-        if !out
-            .iter()
-            .any(|x| x.message == p.message && x.on == p.on && x.reason == p.reason)
-        {
-            out.push(p);
-        }
-    }
-    out.sort_by(|a, b| (&a.message, &a.on).cmp(&(&b.message, &b.on)));
-
-    type Found = (BTreeSet<String>, Vec<String>, Option<usize>);
-    let mut found: BTreeMap<String, Found> = BTreeMap::new();
-    for m in i.res.may_derive.iter().filter(|m| m.head.pred == "deny") {
-        let message = deny_message(&m.head);
-        if out.iter().any(|p| p.message == message) {
-            continue;
-        }
-        let (on, reads, rule) = found.entry(message).or_default();
-        on.extend(m.nulls.iter().cloned());
-        // A reference column's row by its address (R-185).
-        reads.push(crate::query::Redactor::default().surface_atom(&m.reads));
-        rule.get_or_insert(m.rule);
-    }
-    let mut may: Vec<Policy> = Vec::new();
-    for (message, (on, mut reads, rule)) in found {
-        if on.is_empty() {
-            continue;
-        }
-        reads.sort();
-        reads.dedup();
-        let on: Vec<String> = on.into_iter().collect();
-        may.push(Policy {
-            message,
-            after: resolves(&on, tick_of),
-            on,
-            reason: format!("reads {} with a stuck instance", reads.join(", ")),
-            may_derive: true,
-            refinement: false,
-            rule: rule.map(|r| format!("r{r}")),
-            site: None,
-            until: BTreeSet::new(),
-        });
-    }
-    may.sort_by(|a, b| a.message.cmp(&b.message));
-    may.dedup_by(|a, b| a.message == b.message);
-    out.extend(may);
-    out
-}
-
-/// Refinements the winning value could not decide yet (E §2.4 step 4):
-/// `refinement_deferred(T, A, Path, C, Nulls)`, re-checked at the boundary
-/// that resolves `Nulls`.
-fn deferred(
-    res: &EvalResult,
-    tick_of: &BTreeMap<(String, String), usize>,
-    resolves: &Resolves,
-) -> Vec<Policy> {
-    let mut out = Vec::new();
-    for a in res
-        .facts
-        .iter()
-        .filter(|a| a.pred == crate::refine::DEFERRED)
-    {
-        let [
-            Term::Val(Value::Str(t)),
-            Term::Val(addr),
-            Term::Val(Value::Str(path)),
-            Term::Val(Value::Str(c)),
-            Term::Val(Value::List(nulls)),
-        ] = a.args.as_slice()
-        else {
-            continue;
-        };
-        let on: Vec<String> = nulls
-            .iter()
-            .filter_map(|n| n.as_str().map(str::to_string))
-            .collect();
-        let addr = spell::bare(addr);
-        out.push(Policy {
-            message: format!(
-                "{c} of {}",
-                attribute(
-                    &Address {
-                        typ: t.to_string(),
-                        name: addr,
-                    },
-                    path
-                )
-            ),
-            after: resolves(&on, tick_of),
-            on,
-            reason: "the value carries a null".into(),
-            may_derive: false,
-            refinement: true,
-            rule: None,
-            site: None,
-            until: BTreeSet::new(),
-        });
-    }
-    out
 }
 
 /// An action's change lines. An update diffs a keyless set, or a list
@@ -2312,60 +2155,6 @@ fn gone_column(d: &Deformation, how: Why) -> Vec<String> {
         }
         Some(at) => vec![format!("{at}  {why}"), why, at],
         None => vec![why],
-    }
-}
-
-/// Deny `text` over the plan (`MESSAGE`, or `MESSAGE ctx={..}`) as the
-/// plan's rows say it: its message, the resource of the `deformation` row
-/// its firing read, and where it is written.
-fn denied(p: &tree::Printer, res: &EvalResult, text: &str) -> Denied {
-    let message = |a: &Atom| match a.args.first() {
-        Some(Term::Val(Value::Str(m))) => Some(m.clone()),
-        _ => None,
-    };
-    let fact =
-        res.facts.iter().filter(|a| a.pred == "deny").find(|a| {
-            message(a).is_some_and(|m| text == m || text.starts_with(&format!("{m} ctx=")))
-        });
-    let Some(fact) = fact else {
-        return Denied {
-            message: text.to_string(),
-            addr: String::new(),
-            site: None,
-        };
-    };
-    let id = res.circuit.fact_id(&crate::engine::circuit_fact(fact));
-    let addr = id
-        .and_then(|id| match res.circuit.view(id) {
-            crate::circuit::View::Fact { alts, .. } => alts.first().copied(),
-            _ => None,
-        })
-        .and_then(|alt| match res.circuit.view(alt) {
-            crate::circuit::View::Times { children, .. } => {
-                children.iter().find_map(|c| match res.circuit.view(*c) {
-                    crate::circuit::View::Fact { fact, .. } if fact.pred == "deformation" => {
-                        match fact.args.get(1) {
-                            Some(Value::Ref { typ, name, .. }) => Some(
-                                Address {
-                                    typ: typ.clone(),
-                                    name: name.clone(),
-                                }
-                                .to_string(),
-                            ),
-                            Some(v) => Some(spell::bare(v)),
-                            None => None,
-                        }
-                    }
-                    _ => None,
-                })
-            }
-            _ => None,
-        })
-        .unwrap_or_default();
-    Denied {
-        message: message(fact).unwrap_or_else(|| text.to_string()),
-        addr,
-        site: id.and_then(|id| p.site(&res.rules, id)),
     }
 }
 
