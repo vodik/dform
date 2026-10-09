@@ -4472,8 +4472,11 @@ impl<'u> Lowerer<'u> {
                     let cols = self.table_columns(&pred, &decl)?;
                     let mut rc = self.rc(&n, scope, outer);
                     let body = self.opt_body(&mut rc, &n)?;
-                    let rows = self.table(&mut rc, &pred, cols, &n, body, span)?;
-                    Ok(rows.stmts())
+                    let rows = self.table(&mut rc, &pred, cols, &n, body, span)?.stmts();
+                    match rows.iter().any(|s| self.agg_lits_in(s)) {
+                        true => self.fold_aggregates(rows, span),
+                        false => Ok(rows),
+                    }
                 })(),
                 // A row's references are the user's resources, the
                 // module's column typed as its `decl` says.
@@ -4831,14 +4834,19 @@ impl<'u> Lowerer<'u> {
     }
 
     /// A row of a copy's relation input, `p(a, b) [where B]` in a `use` or
-    /// copy block (R-55), as it is written: a fact or a rule (the block's
-    /// statement is not ported yet).
+    /// copy block (R-55), as it is written: a fact or a rule, folded over
+    /// its aggregates as a rule is (the block's statement is not ported
+    /// yet).
     fn row(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let r = self.rule_parts(n, scope, outer)?;
-        Ok(vec![match r.has_body || !r.body.is_empty() {
+        let row = match r.has_body || !r.body.is_empty() {
             false => Stmt::Fact(r.ranked),
             true => Stmt::Rule(RuleStmt::new(r.ranked, r.body)),
-        }])
+        };
+        match self.agg_lits_in(&row) {
+            true => self.fold_aggregates(vec![row], self.span(n)),
+            false => Ok(vec![row]),
+        }
     }
 
     /// A rule lowered: its head, its body and what binds it.
@@ -9976,6 +9984,36 @@ mod tests {
         ] {
             assert!(lowered.iter().any(|l| l.contains(s)), "{s}: {lowered:#?}");
         }
+    }
+
+    /// A row a copy's block gives its component's relation input folds
+    /// its aggregate as a rule does: the head applies it, or a helper
+    /// does (it was left in the body as `N = count(X)`, a call of no
+    /// function), a table's rows too.
+    #[test]
+    fn a_row_of_a_copy_folds_its_aggregate() {
+        let src = "z(1)\nz(2)\n\
+             component c {\n  input p\n  input t\n  decl p(a: int)\n  decl t(a: int)\n  q(x) where p(x), t(x)\n}\n\
+             resource c one {\n  p(n) where n = count(x), z(x)\n\
+               t from csv.decode(io.read(\"t.csv\")) where n = count(x), z(x), n > 1\n}\n";
+        let lowered = parse_as(src, true).unwrap_or_else(|e| panic!("{e:#}"));
+        let rows: Vec<String> = lowered
+            .statements
+            .iter()
+            .filter_map(|s| match s {
+                Stmt::Instance(i) => Some(show(&i.rows)),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                "p(count(X)) :- z(X)",
+                "t(A) :- __agg_0(A, N), N > 1",
+                "__agg_0(A, count(X)) :- z(X), Path = \"t.csv\", table.csv.t(Path, At, A)",
+            ]
+        );
     }
 
     /// Every form a written literal takes is built as a goal (R-211 step

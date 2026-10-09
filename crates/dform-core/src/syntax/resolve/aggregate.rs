@@ -227,6 +227,11 @@ impl Lowerer<'_> {
         )
     }
 
+    /// Whether a rule's body binds one of the statement's aggregates.
+    pub(super) fn agg_lits_in(&self, s: &Stmt) -> bool {
+        matches!(s, Stmt::Rule(r) if !self.agg_lits(&r.body).is_empty())
+    }
+
     fn has_aggregate(&self, s: &Stmt) -> bool {
         let body = match s {
             Stmt::Resource(r) => r.body.as_deref(),
