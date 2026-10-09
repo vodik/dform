@@ -46,6 +46,7 @@ mod catalog;
 mod health;
 mod instance;
 mod network;
+mod record;
 mod storage;
 mod user;
 mod volume;
@@ -211,25 +212,6 @@ fn failed(at: &str, e: api::Error) -> Failed {
         api::Error::Unreachable { .. } => Failed::MaybeApplied(format!("{at}: {e}")),
         api::Error::Status { .. } => Failed::Refused(format!("{at}: {e}")),
     }
-}
-
-/// A 404 under `/domain/zone/{zone}` when the account does not host the
-/// zone itself: says so, and where it is delegated when DNS answers.
-fn not_hosted(a: &Account, zone: &str, e: &api::Error) -> Option<String> {
-    if !e.is_not_found() {
-        return None;
-    }
-    let path = format!("/domain/zone/{}", escape(zone));
-    if !matches!(a.client.get_opt(&path), Ok(None)) {
-        return None;
-    }
-    Some(match crate::dns::nameservers(zone) {
-        Some(ns) => format!(
-            "zone {zone} is not hosted on this OVH account (its nameservers are {})",
-            ns.join(", ")
-        ),
-        None => format!("zone {zone} is not hosted on this OVH account"),
-    })
 }
 
 fn refused(at: &str, e: impl std::fmt::Display) -> Failed {
@@ -524,19 +506,6 @@ impl Ovh {
 
     // Read.
 
-    fn read_record(&self, a: &Account, remote: &str) -> Result<Option<(Json, Json)>> {
-        let (zone, id) = remote
-            .rsplit_once('/')
-            .ok_or_else(|| anyhow!("a record's remote id is ZONE/ID, not {remote:?}"))?;
-        Ok(a.client
-            .get_opt(&format!(
-                "/domain/zone/{}/record/{}",
-                escape(zone),
-                escape(id)
-            ))?
-            .map(|o| map::record(&o)))
-    }
-
     pub fn read(&self, typ: &str, remote: &str, name: &str) -> Result<Option<(Json, Json)>> {
         let at = format!("read {}", address(typ, name));
         Ok(match typ {
@@ -799,53 +768,7 @@ impl Ovh {
                     .and_then(|o| s(o, "id"))
                     .map(str::to_string)
             }
-            RECORD => {
-                let (zone_name, typ) = (k("zone"), k("type"));
-                let (subdomain, target) = (k("subdomain"), k("target"));
-                let a = self.account("find a DNS record")?;
-                let zone = escape(zone_name);
-                let ids = a
-                    .client
-                    .get(&format!(
-                        "/domain/zone/{zone}/record?fieldType={}&subDomain={}",
-                        escape(typ),
-                        escape(subdomain)
-                    ))
-                    .map_err(|e| match not_hosted(&a, zone_name, &e) {
-                        Some(m) => anyhow!(m),
-                        None => e.into(),
-                    })?;
-                let ids: Vec<i64> = ids
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Json::as_i64)
-                    .collect();
-                // Each record of the name asked at once: a name with
-                // several waits one round trip, not one per record.
-                let records: Vec<api::Result<Option<Json>>> = std::thread::scope(|scope| {
-                    let asks: Vec<_> = ids
-                        .iter()
-                        .map(|id| {
-                            let (client, zone) = (&a.client, &zone);
-                            scope.spawn(move || {
-                                client.get_opt(&format!("/domain/zone/{zone}/record/{id}"))
-                            })
-                        })
-                        .collect();
-                    asks.into_iter()
-                        .map(|h| h.join().expect("a record's GET does not panic"))
-                        .collect()
-                });
-                let mut found = None;
-                for (id, o) in ids.into_iter().zip(records) {
-                    if o?.is_some_and(|o| s(&o, "target") == Some(target)) {
-                        found = Some(map::record_remote(zone_name, id));
-                        break;
-                    }
-                }
-                found
-            }
+            RECORD => self.find_record(k("zone"), k("type"), k("subdomain"), k("target"))?,
             CONTAINER => {
                 let (region, name) = (k("region"), k("name"));
                 let (a, p) = self.project("find an S3 container")?;
@@ -978,31 +901,7 @@ impl Ovh {
                 let (attrs, computed) = map::ssh_key(&o);
                 Ok((s(&o, "id").unwrap_or_default().to_string(), attrs, computed))
             }
-            RECORD => {
-                let a = self
-                    .account(at)
-                    .map_err(|e| refused(at, format!("{e:#}")))?;
-                let zone = need(at, config, "zone")?;
-                let mut body = json!({
-                    "fieldType": need(at, config, "type")?,
-                    "subDomain": s(config, "subdomain").unwrap_or_default(),
-                    "target": need(at, config, "target")?,
-                });
-                if let Some(ttl) = config.get("ttl").and_then(Json::as_i64) {
-                    body["ttl"] = json!(ttl);
-                }
-                let o = a
-                    .client
-                    .post(&format!("/domain/zone/{}/record", escape(zone)), &body)
-                    .map_err(|e| match not_hosted(&a, zone, &e) {
-                        Some(m) => refused(at, m),
-                        None => failed(at, e),
-                    })?;
-                self.refresh_zone(&a, at, zone, notes);
-                let (attrs, computed) = map::record(&o);
-                let id = o.get("id").and_then(Json::as_i64).unwrap_or(0);
-                Ok((map::record_remote(zone, id), attrs, computed))
-            }
+            RECORD => self.create_record(at, config, notes),
             CONTAINER => self.create_container(at, config),
             USER => self.create_user(at, config, notes, say),
             VOLUME => self.create_volume(at, config, notes, say),
@@ -1039,35 +938,7 @@ impl Ovh {
             .ok_or_else(|| refused(at, format!("{typ} {remote} is not there")))?;
         match typ {
             INSTANCE => self.update_instance(at, remote, &now.0, config, notes, say)?,
-            RECORD => {
-                let a = self
-                    .account(at)
-                    .map_err(|e| refused(at, format!("{e:#}")))?;
-                // The API's update takes the subdomain, the target and
-                // the ttl (R-195); the zone and type are the record's.
-                // A ttl the program does not write is left as it is.
-                let (zone, id) = remote.rsplit_once('/').unwrap_or_default();
-                let was = now.1.get("ttl").and_then(Json::as_i64).unwrap_or(0);
-                let body = json!({
-                    "subDomain": s(config, "subdomain").unwrap_or_default(),
-                    "target": need(at, config, "target")?,
-                    "ttl": config.get("ttl").and_then(Json::as_i64).unwrap_or(was),
-                });
-                let had = json!({
-                    "subDomain": s(&now.0, "subdomain").unwrap_or_default(),
-                    "target": s(&now.0, "target").unwrap_or_default(),
-                    "ttl": was,
-                });
-                if body != had {
-                    a.client
-                        .put(
-                            &format!("/domain/zone/{}/record/{}", escape(zone), escape(id)),
-                            &body,
-                        )
-                        .map_err(|e| failed(at, e))?;
-                    self.refresh_zone(&a, at, zone, &mut Vec::new());
-                }
-            }
+            RECORD => self.update_record(at, remote, &now, config)?,
             CONTAINER => self.update_container(at, remote, &now.1, config)?,
             USER => self.update_user(at, remote, &now, config)?,
             VOLUME => self.update_volume(at, remote, config, notes, say)?,
@@ -1103,22 +974,7 @@ impl Ovh {
                     Err(e) => return Err(failed(at, e)),
                 }
             }
-            RECORD => {
-                let a = self
-                    .account(at)
-                    .map_err(|e| refused(at, format!("{e:#}")))?;
-                let (zone, id) = remote.rsplit_once('/').unwrap_or_default();
-                match a.client.delete(&format!(
-                    "/domain/zone/{}/record/{}",
-                    escape(zone),
-                    escape(id)
-                )) {
-                    Ok(_) => {}
-                    Err(e) if gone_already(&e) => {}
-                    Err(e) => return Err(failed(at, e)),
-                }
-                self.refresh_zone(&a, at, zone, notes);
-            }
+            RECORD => self.delete_record(at, remote, notes)?,
             CONTAINER => {
                 let (a, p) = self.project_for(at)?;
                 let path = map::container_path(&p, remote);
@@ -1148,17 +1004,6 @@ impl Ovh {
             _ => return Err(refused(at, format!("the ovh provider has no type {typ}"))),
         }
         Ok(())
-    }
-
-    /// A zone's changes are served once it is refreshed; a refresh that
-    /// fails is a note, the record is written.
-    fn refresh_zone(&self, a: &Account, at: &str, zone: &str, notes: &mut Vec<String>) {
-        if let Err(e) = a.client.post(
-            &format!("/domain/zone/{}/refresh", escape(zone)),
-            &json!({}),
-        ) {
-            notes.push(format!("{at}: the zone {zone} is not refreshed: {e}"));
-        }
     }
 
     /// A computed document as it leaves the provider: each sensitive
