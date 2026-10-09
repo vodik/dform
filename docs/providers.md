@@ -120,7 +120,8 @@ fn main() -> std::process::ExitCode {
   change, R-106), `name_like`; `list_key = "name"`. On the struct: `type`
   (required), `replace`, `retry`, `lookup = "name,region"` (its
   `type_lookup`, below), `remote_name = "name"` (its `type_remote_name`,
-  below), `health` (it answers Health, below). A computed field is an `Option` with
+  below), `lifecycle = "retain"` (its `type_lifecycle`, below), `health`
+  (it answers Health, below). A computed field is an `Option` with
   `#[serde(default)]`: the engine's desired document does not have it.
   An `optional_computed` one is answered as computed (dform compares it
   only where the program writes it), so leave it out of what Read
@@ -148,6 +149,14 @@ fn main() -> std::process::ExitCode {
   at plan. Declare it only where nothing names the object literally
   (a Kubernetes Service's name is a DNS name: not it). dform reads this
   fact; the provider just makes what it is sent.
+- What removal from the program means for a type is `destroy` unless
+  its schema says `type_lifecycle(Type, "retain")`: dform then forgets
+  an object of it the program no longer makes and sends no Delete. The
+  fact seeds the row `lifecycle(r, "retain")` for each resource of the
+  type, which a program's own word for it replaces (docs/reference.md,
+  "Lifecycle"). Declare it where the object is not the program's to
+  remove: a Tailscale device, which its node joined to the tailnet. The
+  Kubernetes and OVH providers declare none.
 - `Lifecycle` is the four calls, and `check`, a refusal of a document
   the provider cannot apply as configured (Postgres refuses to manage the
   role it connects as), called by Plan once the provider is configured

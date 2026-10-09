@@ -188,9 +188,10 @@ the device advertises), `authorized` and `name` (its machine name, the
 first label of its MagicDNS name), each compared only where it writes
 it. `hostname` is the node's own: a change is refused. `id`,
 `addresses` (IPv4 then IPv6), `os` and `last_seen` are the device's.
-Removing the resource from the program removes the device from the
-tailnet; `lifecycle(tailscale.device["server"], "retain")`, by its
-address, lets it go instead (docs/reference.md, "Lifecycle").
+Removing the resource from the program forgets the device and leaves it
+on the tailnet (its type's lifecycle is `retain`);
+`lifecycle(tailscale.device["server"], "destroy")`, by its address,
+removes it instead (docs/reference.md, "Lifecycle").
 
 `dform status` asks each device's health: `healthy` connected (`connected
 at 100.64.0.1`), `degraded` not authorized, not connected (`not
@@ -220,8 +221,5 @@ deny "k3s-2 is not on the tailnet" where not {
 
 ## Not yet
 
-- Removal of a device from the program letting it go by default (a
-  type's default `retain`, `lifecycle(d, "destroy")` to remove it): a
-  removal removes it today.
 - Posture attributes, device key expiry, invites, webhooks, the tailnet's
   settings; a component build (native only).

@@ -1056,6 +1056,7 @@ type_retry(db.postgres, 5)                                  # optional: Read att
 type_replace(k8s.deployment, "create_first")                # optional: create_first, destroy_first, either (default)
 type_remote_name(k8s.deployment, "metadata.name")           # optional: a name the provider generates for a create-first replacement
 type_lookup(ovh.instance, ["name", "region"])               # optional: what a Create that timed out is found by (the provider's)
+type_lifecycle(tailscale.device, "retain")                  # optional: what removal from the program means (destroy default)
 type_doc(net.vpc, "cidr", "The network's IPv4 range.")      # optional: a path's description ("" the type's)
 extern_decl("ovh.image", "+region, -name, -id, -distribution")  # a data source, no `extern` line needed
 ```
@@ -2068,6 +2069,7 @@ at once by a rule that binds them with `in`:
 lifecycle(main, "prevent_destroy")                   # a delete or replace of it is a deny
 lifecycle(main, "create_first")                      # replace creates first (type_replace either)
 lifecycle(libvirt.volume["data"], "retain")          # a delete forgets it: the world keeps it
+lifecycle(tailscale.device["old"], "destroy")        # a delete deletes it, over its type's retain
 lifecycle(vm, "bootstrap", "user_data")              # sent at creation; a difference after is kept, and said
 moved(net.vpc, "main.vpc", net.vpc["core.vpc"])  # rename without destroy
 ignore_changes(main, "tags.owner")                   # set on create, then ignored
@@ -2096,9 +2098,35 @@ r, _)` to policy, so a deny over deletes does not see it), and counts as
 `1 forget`. Written by address it holds once no rule wants the object, the
 way dform lets go of something it made without removing it; a destroy
 honours it, and forgets an object whose provider cannot be configured.
-`prevent_destroy` and `retain` on one object is an error naming both.
+Two removal words on one object (`prevent_destroy`, `retain`,
+`destroy`) are an error naming both.
 There is no imperative `state forget` for objects: retaining is said in
 the program, reviewed in the plan and logged.
+
+What removal means can be its type's: a provider's schema says
+`type_lifecycle(T, "retain")` where removing an object from the program
+should let it go (a Tailscale device, which its node joined to the
+tailnet), and each resource of `T` then has the row `lifecycle(r,
+"retain")` without the program writing it. The program's own removal
+word for it replaces that row, as a `set` replaces a schema default:
+`lifecycle(d, "destroy")` deletes it, by its address once no rule wants
+it. The row is read as the program's are (`deny "${d} is not retained"
+where d in tailscale.device, not lifecycle(d, "retain")`), and `why`
+says who answered it:
+
+```text
+$ dform why 'lifecycle(server, "retain")'
+lifecycle(tailscale.device server, "retain")
+  dform  the schema of provider tailscale: each tailscale.device is "retain" (type_lifecycle), unless the program writes another
+  with r = tailscale.device server, w = "retain"
+  ├─ type_lifecycle("tailscale.device", "retain")   provider schema
+  ├─ tailscale.device server   main.df:3
+  ├─ not lifecycle(ref(tailscale.device, server, ), "destroy")   (absent)
+  └─ not lifecycle(ref(tailscale.device, server, ), "prevent_destroy")   (absent)
+```
+
+A copy's word reaches its resources in the plan; a body still reads the
+type's row for them.
 
 A lifecycle word is said of the object, `lifecycle(r, "retain")`, or of
 one of its attributes, by its path, `lifecycle(r, "bootstrap",
