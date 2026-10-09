@@ -291,6 +291,19 @@ pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
             out.push(Constraint::OneOf(vs.into_iter().collect()));
             continue;
         }
+        // `x in lo..=hi` is `lo <= x <= hi` (`x in lo..hi` its end left
+        // out): one range, whichever way it is written.
+        if let Lit::Pos(a) = l
+            && a.pred == "member"
+            && let [r, x] = a.args.as_slice()
+            && is_self(x)
+            && let Some(Value::Range(r)) = r.ground()
+            && let (Value::Int(start), Value::Int(end)) = (&r.start, &r.end)
+        {
+            lo.push((*start, l));
+            hi.push((if r.inclusive { *end } else { end - 1 }, l));
+            continue;
+        }
         if let Lit::Pos(a) = l
             && a.pred == "matches"
             && let [x, Term::Val(Value::Str(re))] = a.args.as_slice()
@@ -347,7 +360,16 @@ pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
     }
     match (lo.iter().map(|x| x.0).max(), hi.iter().map(|x| x.0).min()) {
         (Some(l), Some(h)) if l <= h => out.push(Constraint::Range(l, h)),
-        _ => rest.extend(lo.iter().chain(&hi).map(|(_, l)| (*l).clone())),
+        _ => {
+            // A range literal is both bounds: it goes back once.
+            let mut back: Vec<&Lit> = Vec::new();
+            for (_, l) in lo.iter().chain(&hi) {
+                if !back.iter().any(|b| std::ptr::eq(*b, *l)) {
+                    back.push(l);
+                }
+            }
+            rest.extend(back.into_iter().cloned())
+        }
     }
     (out, rest)
 }
@@ -1000,6 +1022,15 @@ mod tests {
         );
         let (cs, _) = split(&lits("env in [dev, prod]"), &["env"]);
         assert_eq!(cs.len(), 1);
+        // A range literal is its two bounds, its end in it or not.
+        for src in ["n in 0..=3", "n in 0..4", "0 <= n <= 3"] {
+            let (cs, rest) = split(&lits(src), &["n"]);
+            assert_eq!(cs, vec![Constraint::Range(0, 3)], "{src}");
+            assert!(rest.is_empty(), "{src}");
+        }
+        let (cs, rest) = split(&lits("n in 4..=0"), &["n"]);
+        assert!(cs.is_empty());
+        assert_eq!(rest.len(), 1);
         // One bound alone, another attribute, a user predicate: the rest.
         let (cs, rest) = split(&lits("n <= 5"), &["n"]);
         assert!(cs.is_empty());
