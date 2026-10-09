@@ -36,10 +36,41 @@ pub const FORMS: &str = "an address as the plan prints it, 'net.vpc main' or its
      'main', an attribute such as 'main.cidr' or \
      'pg.spec.ports[port=5432,protocol=TCP].protocol', an input such as 'nodes.count'";
 
-/// What command `cmd` says of a pattern it cannot read, `got`: the forms
-/// a path takes ([`FORMS`]), then `more`, the command's own.
+/// What command `cmd` says of a pattern it cannot read, `got`: a `[` it
+/// leaves open ([`unclosed`]), else the forms a path takes ([`FORMS`]),
+/// then `more`, the command's own.
 pub fn expected(cmd: &str, more: &str, got: &str) -> String {
-    format!("{cmd}: expected {FORMS}, {more}, got '{got}'")
+    match unclosed(got.trim()) {
+        Some(m) => format!("{cmd}: {m}"),
+        None => format!("{cmd}: expected {FORMS}, {more}, got '{got}'"),
+    }
+}
+
+/// What a path with a `[` no `]` closes says (`pg.spec.ports[port=1`):
+/// the first such `[`, and the path closed.
+fn unclosed(got: &str) -> Option<String> {
+    let mut open = Vec::new();
+    let (mut quoted, mut escaped) = (false, false);
+    for (i, c) in got.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            _ if quoted => {}
+            '[' => open.push(i),
+            ']' => {
+                open.pop();
+            }
+            _ => {}
+        }
+    }
+    let at = *open.first().filter(|_| !quoted)?;
+    Some(format!(
+        "the `[` after '{}' is not closed: an element is named between `[` and `]`\n  \
+         help: close it, '{got}{}'",
+        &got[..at],
+        "]".repeat(open.len())
+    ))
 }
 
 /// An address as `plan` prints it (H-16, `ir::parse_address`), as `why`'s
@@ -971,6 +1002,28 @@ mod tests {
     fn facts(src: &str) -> BTreeSet<Atom> {
         let program = crate::parser::parse_program(src).unwrap();
         engine::eval(&program, &[]).unwrap().0.facts
+    }
+
+    /// A `[` a path leaves open says so, and the path closed, before the
+    /// forms a path takes; one inside a quoted key is the key's.
+    #[test]
+    fn an_unclosed_bracket_is_named() {
+        assert_eq!(
+            expected("why", "more", "pg.spec.ports[port=1"),
+            "why: the `[` after 'pg.spec.ports' is not closed: an element is named between \
+             `[` and `]`\n  help: close it, 'pg.spec.ports[port=1]'"
+        );
+        assert_eq!(
+            expected("query", "more", "pg.spec.ports[0].x[1"),
+            "query: the `[` after 'pg.spec.ports[0].x' is not closed: an element is named \
+             between `[` and `]`\n  help: close it, 'pg.spec.ports[0].x[1]'"
+        );
+        for whole in [r#"m.labels."a[b""#, "pg.spec.ports[0]", "not a path"] {
+            assert!(
+                expected("why", "more", whole).starts_with("why: expected "),
+                "{whole}"
+            );
+        }
     }
 
     #[test]

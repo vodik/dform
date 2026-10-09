@@ -299,8 +299,8 @@ fn plan_why_and_query_say_a_value_alike() {
 }
 
 /// A path `query` cannot follow says what `why` says of it: the element
-/// a list does not have and the nearest it does, or the forms a path
-/// takes, in the plan's spelling.
+/// a list does not have and the nearest it does, a `[` it leaves open, or
+/// the forms a path takes, in the plan's spelling.
 #[test]
 fn a_query_path_that_reaches_nothing_says_the_nearest() {
     let s = project("query-paths-bad");
@@ -328,6 +328,16 @@ fn a_query_path_that_reaches_nothing_says_the_nearest() {
         "{}",
         r.stderr
     );
+    for cmd in ["why", "query"] {
+        let r = run(&s, &[cmd, "pg.spec.ports[port=1", "main.df"]).failure();
+        assert_eq!(
+            r.stderr,
+            format!(
+                "Error: {cmd}: the `[` after 'pg.spec.ports' is not closed: an element is \
+                 named between `[` and `]`\n  help: close it, 'pg.spec.ports[port=1]'\n"
+            )
+        );
+    }
     let r = run(&s, &["query", "not a path", "main.df"]).failure();
     assert!(
         r.stderr.starts_with(
