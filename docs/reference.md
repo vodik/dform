@@ -3385,9 +3385,16 @@ same relation that differ in the fewest columns the literal fixes (the
 columns the source states must match and are left out; with none that
 do, the nearest rows whole; an attribute by its value there); a
 comparison says `false` with the values it compared; a negation the row
-that exists; a row a rule of the program derives (a copy's guard,
+that exists and where it comes from (`not lifecycle(net.vpc main,
+"prevent_destroy"): the row exists: lifecycle(net.vpc main,
+"prevent_destroy")   p.df:4`); a row a rule of the program derives (a copy's guard,
 `resource network.vpc peer: not made`, a relation of its own) is
 followed one level in, up to three, with the rule that did not derive it.
+A rule dform writes beside the program (a lifecycle deny, a type's
+seeded lifecycle, a generated name) is printed by its words at `dform`,
+as the derivation tree prints one that fired, and every value in every
+line, a `not` included, as the plan prints it: a reference by its
+address.
 What no rule mentions gets one line and nothing invented:
 `no rule derives aws.vpc main.vpc: no resource aws.vpc is named like
 it`, and under it the address the program derives that is nearest in
