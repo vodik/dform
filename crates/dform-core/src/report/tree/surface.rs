@@ -50,7 +50,7 @@ pub(super) struct Surface<'a, 'b> {
     /// Each source file a printed rule is in, parsed once.
     pub(super) files: BTreeMap<String, SyntaxNode>,
     /// The keyed lists' keys, `type_list_key(T, L, Keys)`, read once.
-    pub(super) list_keys: std::cell::OnceCell<BTreeMap<(String, String), Vec<String>>>,
+    list_keys: std::cell::OnceCell<BTreeMap<(String, String), Vec<String>>>,
     /// Each fact node's site at a depth ([`site_of`]), found once: the
     /// leaves of one large value (a manifest's document) share their
     /// statement, whose bindings print the whole value.
@@ -135,7 +135,7 @@ impl Surface<'_, '_> {
     /// The cell fact node `id` only reads: `env("prod")` derived from
     /// `input env = "prod"` by the rule that reads the input by its name.
     /// The program writes `env`, so the tree shows the cell.
-    pub(super) fn cell_read(&self, id: NodeId) -> Option<NodeId> {
+    fn cell_read(&self, id: NodeId) -> Option<NodeId> {
         let c = self.p.circuit;
         let View::Fact {
             fact, alts: [a], ..
@@ -225,7 +225,7 @@ impl Surface<'_, '_> {
 
     /// A contribution under its aggregate: the value it contributes and its
     /// rank (the cell is the aggregate's, printed above).
-    pub(super) fn contribution_text(&self, f: &Fact) -> String {
+    fn contribution_text(&self, f: &Fact) -> String {
         match f.args.as_slice() {
             [Value::Str(t), _, Value::Str(p), v, rank] if f.pred == "arg" => {
                 if let Some((p, content)) = self.element(t, p, v) {
@@ -244,7 +244,7 @@ impl Surface<'_, '_> {
 
     /// An element write's content: `(sensitive)` when the write is a
     /// secret's and the content is no secret by itself (R-124 amendment 2).
-    pub(super) fn content_text(&self, write: &Value, content: &Value) -> String {
+    fn content_text(&self, write: &Value, content: &Value) -> String {
         let r = self.p.redact;
         match r.is_secret(write) && !r.is_secret(content) {
             true => "(sensitive)".into(),
@@ -255,7 +255,7 @@ impl Surface<'_, '_> {
     /// An element write (`transform::ELEM`) by the element's key, as the
     /// plan names it: `spec.template.spec.containers[name=api]`, and what
     /// it writes there.
-    pub(super) fn element<'v>(
+    fn element<'v>(
         &self,
         t: &str,
         p: &str,

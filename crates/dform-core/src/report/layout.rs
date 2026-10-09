@@ -8,7 +8,7 @@ use super::style::{Paint, Style};
 pub const WIDTH: usize = 100;
 
 /// The right column starts here, unless every left column is narrower.
-pub(super) const COLUMN: usize = 52;
+const COLUMN: usize = 52;
 
 /// One printed line: its text, its visible width, and what may follow it
 /// in the right column, the longest that fits first.

@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 impl Surface<'_, '_> {
     /// [`winner_site`], each step kept: the winning contribution's chain,
     /// and each one it beat into `lost`.
-    pub(super) fn winner_chain(
+    fn winner_chain(
         &mut self,
         c: &mut Compress,
         id: NodeId,
@@ -102,7 +102,7 @@ impl Surface<'_, '_> {
 
     /// [`value_site`], each step kept: the expression that wrote fact `id`,
     /// then the chain of the input or `let` it reads.
-    pub(super) fn value_chain(
+    fn value_chain(
         &mut self,
         c: &mut Compress,
         id: NodeId,
@@ -325,9 +325,9 @@ pub struct Step {
 
 /// A chain being walked: its steps, the writes they beat, and the stack
 /// keys that end it.
-pub(super) struct Chain<'a> {
+struct Chain<'a> {
     pub(super) out: &'a mut Vec<Step>,
-    pub(super) lost: &'a mut Vec<Step>,
+    lost: &'a mut Vec<Step>,
     pub(super) keys: &'a BTreeSet<String>,
 }
 
@@ -367,7 +367,7 @@ pub(super) fn place(site: &Site) -> String {
 /// The one input or `let` cell among a firing's `children` that
 /// expression `e` reads, with the keys below it; `None` when it reads
 /// none, or several.
-pub(super) fn read_cell(
+fn read_cell(
     c: &mut Compress,
     circuit: &Circuit,
     children: &[NodeId],
@@ -410,7 +410,7 @@ pub(super) fn read_cell(
 
 /// Expression `e` without its string literals' text, their
 /// interpolations kept: what it reads (`name` of `"${name}-gke"`).
-pub(super) fn code_of(e: &str) -> String {
+fn code_of(e: &str) -> String {
     let mut out = String::new();
     let (mut quoted, mut depth, mut escaped) = (false, 0usize, false);
     let mut chars = e.chars().peekable();
@@ -451,7 +451,7 @@ pub(super) fn code_of(e: &str) -> String {
 
 /// When fact `id` is an input or `let` cell and `read` names it (or a
 /// path into it), the keys of `read` below the cell.
-pub(super) fn cell_reads(circuit: &Circuit, id: NodeId, read: &[String]) -> Option<Vec<String>> {
+fn cell_reads(circuit: &Circuit, id: NodeId, read: &[String]) -> Option<Vec<String>> {
     let View::Fact { fact: f, .. } = circuit.view(id) else {
         return None;
     };

@@ -157,7 +157,7 @@ pub fn shown_value(v: &Value, r: &Redactor) -> Shown {
 }
 
 /// The label of the first `{"sensitive": label}` inside a redacted value.
-pub(super) fn secret_in(v: &Json) -> Option<String> {
+fn secret_in(v: &Json) -> Option<String> {
     match v {
         Json::Object(m) if m.len() == 1 && m.contains_key("sensitive") => {
             Some(m["sensitive"].as_str().unwrap_or_default().to_string())
@@ -169,7 +169,7 @@ pub(super) fn secret_in(v: &Json) -> Option<String> {
 }
 
 /// A secret marker anywhere inside a value.
-pub(super) fn has_secret(v: &Json) -> bool {
+fn has_secret(v: &Json) -> bool {
     match (marker(v), v) {
         (Some((NULL_KEY, _)), _) => false,
         (Some(_), _) => true,
@@ -250,7 +250,7 @@ impl Shown {
 /// text as written, then two spaces and its A-labels, what a provider
 /// receives (`"bücher.example"  xn--bcher-kva.example`); at every level,
 /// and carried by no colour. Empty for any other text.
-pub(super) fn host_ascii_text(s: &str) -> String {
+fn host_ascii_text(s: &str) -> String {
     crate::uri::ascii_form(s)
         .map(|a| format!("  {a}"))
         .unwrap_or_default()

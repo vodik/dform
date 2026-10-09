@@ -104,7 +104,7 @@ pub(super) fn extern_label(l: &str) -> Option<String> {
 
 /// A label as [`crate::ir::label`] printed it (`T["A"].p`), when it is an
 /// extern call's ([`extern_label`]).
-pub(super) fn printed_call(l: &str) -> Option<String> {
+fn printed_call(l: &str) -> Option<String> {
     let (typ, rest) = l.split_once('[')?;
     let (inputs, col) = rest.rsplit_once("].")?;
     let inputs = crate::syntax::resolve::unescape(inputs).ok()?;

@@ -193,7 +193,7 @@ impl Report {
 
     /// Each value given at creation only the plan keeps (R-198): of an
     /// object it leaves as it is, or one it changes otherwise.
-    pub(super) fn kept_json(&self) -> Vec<Json> {
+    fn kept_json(&self) -> Vec<Json> {
         let pending = self.pending.iter().flat_map(|b| b.deformations.iter());
         let ds = self.kept.iter().chain(&self.definite).chain(pending);
         ds.flat_map(|d| {
@@ -213,7 +213,7 @@ impl Report {
         .collect()
     }
 
-    pub(super) fn change_json(&self, d: &Deformation) -> Json {
+    fn change_json(&self, d: &Deformation) -> Json {
         let explained = self.why != Why::None;
         let mut m = serde_json::Map::new();
         m.insert("kind".into(), json!(kind_name(&d.kind)));
@@ -262,7 +262,7 @@ impl Report {
     }
 }
 
-pub(super) fn line_json(l: &Line, explained: bool) -> Json {
+fn line_json(l: &Line, explained: bool) -> Json {
     let op = match l.op {
         Op::Leaf => "set",
         Op::Add => "add",
@@ -299,7 +299,7 @@ pub(super) fn line_json(l: &Line, explained: bool) -> Json {
     Json::Object(m)
 }
 
-pub(super) fn diag_json(d: &Diag) -> Json {
+fn diag_json(d: &Diag) -> Json {
     json!({
         "address": d.addr.attr(&d.path),
         "type": d.addr.typ,

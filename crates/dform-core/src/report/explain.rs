@@ -305,7 +305,7 @@ impl Report {
 }
 
 /// The chain of change path `path`'s value ([`attr_site`]'s fact).
-pub(super) fn attr_chain(
+fn attr_chain(
     p: &tree::Printer,
     rules: &[RuleStmt],
     facts: &[&Atom],

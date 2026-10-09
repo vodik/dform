@@ -23,7 +23,7 @@ pub(super) fn write_chain(rows: &mut Vec<Row>, l: &Line, indent: &str, why: Why)
 }
 
 /// The rows of a value's chain ([`write_chain`], `why`).
-pub(super) fn chain_rows(chain: &[tree::Step], indent: &str) -> Vec<Row> {
+fn chain_rows(chain: &[tree::Step], indent: &str) -> Vec<Row> {
     let mut rows = Vec::new();
     for step in chain {
         let word = if step.lost { "over" } else { "=" };
@@ -119,7 +119,7 @@ pub fn chains_text(items: &[ChainItem], indent: &str, style: Style, whole: bool)
 
 /// `e` whole, each `\n` in a string literal a line break (R-61's form of
 /// a string that spans lines): its lines.
-pub(super) fn whole_lines(e: &str) -> Vec<String> {
+fn whole_lines(e: &str) -> Vec<String> {
     let mut out = String::new();
     let mut quoted = false;
     let mut cs = e.chars();
@@ -144,7 +144,7 @@ pub(super) fn whole_lines(e: &str) -> Vec<String> {
 }
 
 /// `e` with each string literal past [`LONG`] characters elided.
-pub(super) fn elide_literals(e: &str) -> String {
+fn elide_literals(e: &str) -> String {
     let mut out = String::new();
     let mut rest = e;
     while let Some(start) = rest.find('"') {

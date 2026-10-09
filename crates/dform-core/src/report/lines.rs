@@ -357,7 +357,7 @@ pub(crate) fn terse(with: &[String], addr: &str) -> Option<String> {
 /// Whether `addr` shows `v` whole: `v` in it with no letter or digit
 /// either side, so a segment (`3` of `agent-3`, `us-east-1b` of
 /// `private-us-east-1b`) and not a part of one (`1` of `1b`).
-pub(super) fn shows(addr: &str, v: &str) -> bool {
+fn shows(addr: &str, v: &str) -> bool {
     let word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
     !v.is_empty()
         && addr.match_indices(v).any(|(i, _)| {
@@ -366,7 +366,7 @@ pub(super) fn shows(addr: &str, v: &str) -> bool {
 }
 
 /// A delete, of the object or of a deposed one.
-pub(super) fn is_delete(k: &ActionKind) -> bool {
+fn is_delete(k: &ActionKind) -> bool {
     matches!(k, ActionKind::Delete | ActionKind::DeleteDeposed)
 }
 
@@ -438,7 +438,7 @@ pub(super) fn gone(
 /// SITE)`; a rename guess alone. The reason alone when that is too
 /// wide, else the site;
 /// from `-v`, the site with the bindings the last apply derived it with.
-pub(super) fn gone_column(d: &Deformation, how: Why) -> Vec<String> {
+fn gone_column(d: &Deformation, how: Why) -> Vec<String> {
     let Some((rule_at, why)) = &d.gone else {
         return d
             .site
@@ -473,7 +473,7 @@ pub(super) fn gone_column(d: &Deformation, how: Why) -> Vec<String> {
 /// written in its own block is the entry's expression when it reads
 /// something the value does not show; anything else is the statement
 /// that wrote it; either with the writes it won over.
-pub(super) fn attr_text(d: &Deformation, l: &Line, s: &Site, why: Why) -> Vec<String> {
+fn attr_text(d: &Deformation, l: &Line, s: &Site, why: Why) -> Vec<String> {
     if matches!(d.kind, ActionKind::Delete | ActionKind::DeleteDeposed) {
         return vec![];
     }
@@ -488,7 +488,7 @@ pub(super) fn attr_text(d: &Deformation, l: &Line, s: &Site, why: Why) -> Vec<St
     }
 }
 
-pub(super) fn attr_texts(d: &Deformation, l: &Line, s: &Site, why: Why) -> Vec<String> {
+fn attr_texts(d: &Deformation, l: &Line, s: &Site, why: Why) -> Vec<String> {
     let own = d.site.as_ref().is_some_and(|h| match (&h.stmt, &s.stmt) {
         (Some((hf, first)), Some((sf, line))) => {
             hf == sf && (first == line || (first..=&h.last).contains(&line))
@@ -573,7 +573,7 @@ pub(super) fn reads(e: &str) -> bool {
 /// Where a change is derived, as its line's site column says it at `why`
 /// (R-111): `FILE:LINE` (a value given on the command line, the flag);
 /// from `-v`, the statement's bindings after it, `with z = "a"`.
-pub(super) fn place_text(s: &Site, why: Why) -> String {
+fn place_text(s: &Site, why: Why) -> String {
     let mut out = match s.at.is_empty() {
         true => s.statement.clone(),
         false => s.at.clone(),
@@ -590,7 +590,7 @@ pub(super) fn place_text(s: &Site, why: Why) -> String {
 /// The writes a winning value of change `d` overrode, from `-v` (R-111):
 /// `  @normal over k3s.df:9 @default`; not one in `d`'s own block (a
 /// default the compiler writes there).
-pub(super) fn beat_text(s: &Site, d: &Deformation) -> String {
+fn beat_text(s: &Site, d: &Deformation) -> String {
     let own = |at: &str| {
         let (Some(h), Some((file, line))) = (&d.site, at.rsplit_once(':')) else {
             return false;
@@ -617,7 +617,7 @@ pub(super) fn beat_text(s: &Site, d: &Deformation) -> String {
 /// What wrote an attribute's value at `-v`: `STATEMENT   FILE:LINE`, then
 /// `FILE:LINE` alone (a constant: its entry when it reads something, else
 /// its place); the writes it won over after either.
-pub(super) fn written_text(s: &Site, d: &Deformation) -> Vec<String> {
+fn written_text(s: &Site, d: &Deformation) -> Vec<String> {
     let beat = beat_text(s, d);
     if s.at.is_empty() {
         return vec![format!("{}{beat}", s.statement)];

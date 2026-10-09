@@ -230,7 +230,7 @@ impl Shown {
 
 /// A chain that is a type (`x in T`), a function's name, or the target of
 /// a `set`: not a value of the statement.
-pub(super) fn is_type_or_target(c: &SyntaxNode) -> bool {
+fn is_type_or_target(c: &SyntaxNode) -> bool {
     use SyntaxKind::*;
     let Some(parent) = c.parent() else {
         return false;
@@ -245,7 +245,7 @@ pub(super) fn is_type_or_target(c: &SyntaxNode) -> bool {
 
 /// The name of a chain that is one word: a variable (or a cell read by
 /// its name).
-pub(super) fn bare_name(c: &SyntaxNode) -> Option<String> {
+fn bare_name(c: &SyntaxNode) -> Option<String> {
     let mut words = c.children_with_tokens().filter(|t| !t.kind().is_trivia());
     match (words.next(), words.next()) {
         (Some(NodeOrToken::Token(t)), None) if t.kind() == SyntaxKind::IDENT => {
@@ -257,7 +257,7 @@ pub(super) fn bare_name(c: &SyntaxNode) -> Option<String> {
 
 /// Under a `not` within `stmt`: what it names was not found, so it has no
 /// value to show.
-pub(super) fn negated(n: &SyntaxNode, stmt: &SyntaxNode) -> bool {
+fn negated(n: &SyntaxNode, stmt: &SyntaxNode) -> bool {
     use SyntaxKind::*;
     n.ancestors()
         .take_while(|a| a != stmt)
@@ -276,7 +276,7 @@ pub(super) fn is_check(f: &Fact) -> bool {
 
 /// A string literal holds an interpolation `${..}` (`$${` is a literal
 /// `${`).
-pub(super) fn has_hole(text: &str) -> bool {
+fn has_hole(text: &str) -> bool {
     pieces(text).is_some_and(|ps| ps.iter().any(|p| matches!(p, Piece::Hole(..))))
 }
 
@@ -292,7 +292,7 @@ pub(super) struct Cx<'a> {
 impl Cx<'_> {
     /// The address of the resource the source variable `name` ranges
     /// over (`r in T`), `T["A"]`; `None` for anything else.
-    pub(super) fn address_of(&self, name: &str) -> Option<String> {
+    fn address_of(&self, name: &str) -> Option<String> {
         let var = capitalise(name);
         let v = *self.env.get(var.as_str())?;
         let typ = self.want_type(&var)?;
@@ -309,7 +309,7 @@ impl Cx<'_> {
     }
 
     /// The type `want(T, var)` in the rule's body gives `var`.
-    pub(super) fn want_type(&self, var: &str) -> Option<Value> {
+    fn want_type(&self, var: &str) -> Option<Value> {
         let named = |t: &Term| matches!(t, Term::Var(x) if x == var);
         self.rule.and_then(|r| {
             r.body.iter().find_map(|l| match l {
@@ -369,7 +369,7 @@ impl Cx<'_> {
     }
 
     /// [`Cx::core`], a variable's or a literal's value borrowed.
-    pub(super) fn bound<'t>(&'t self, t: &'t Term) -> Option<std::borrow::Cow<'t, Value>> {
+    fn bound<'t>(&'t self, t: &'t Term) -> Option<std::borrow::Cow<'t, Value>> {
         use std::borrow::Cow;
         match t {
             Term::Val(v) => Some(Cow::Borrowed(v)),
@@ -379,7 +379,7 @@ impl Cx<'_> {
     }
 
     /// A lowered term's value under the bindings.
-    pub(super) fn core(&self, t: &Term) -> Option<Value> {
+    fn core(&self, t: &Term) -> Option<Value> {
         match t {
             Term::Val(v) => Some(v.clone()),
             Term::Var(x) => self.env.get(x.as_str()).map(|v| (*v).clone()),
@@ -426,7 +426,7 @@ impl Cx<'_> {
     /// A source term's value under the firing's bindings: literals,
     /// variables, interpolations and calls computed again; a read or a
     /// lookup is the value the firing found for it.
-    pub(super) fn eval(&self, n: &SyntaxNode) -> Option<Value> {
+    fn eval(&self, n: &SyntaxNode) -> Option<Value> {
         use SyntaxKind::*;
         match n.kind() {
             LITERAL => {
@@ -486,7 +486,7 @@ impl Cx<'_> {
     }
 
     /// A string literal's value, its holes filled.
-    pub(super) fn string(&self, text: &str) -> Option<Value> {
+    fn string(&self, text: &str) -> Option<Value> {
         let mut out = String::new();
         for p in pieces(text)? {
             match p {
@@ -647,7 +647,7 @@ impl Cx<'_> {
 
     /// The lowered owner `a` is what the source calls `name`: its variable,
     /// or the resource, module instance or cell of that name.
-    pub(super) fn owns(&self, a: &Term, name: &str) -> bool {
+    fn owns(&self, a: &Term, name: &str) -> bool {
         if matches!(a, Term::Var(x) if *x == capitalise(name)) {
             return true;
         }

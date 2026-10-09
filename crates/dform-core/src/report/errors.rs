@@ -198,7 +198,7 @@ pub struct Witness {
 
 /// The place `FILE:LINE` of a statement the engine names with its place
 /// after it, `.. (at FILE:LINE:COL)` or `.. (at FILE:LINE:COL, use m)`.
-pub(super) fn statement_place(from: &str) -> Option<String> {
+fn statement_place(from: &str) -> Option<String> {
     let inner = from.strip_suffix(')')?;
     let at = &inner[inner.rfind(" (at ")? + 5..];
     let at = at.split(", ").next()?;
@@ -368,7 +368,7 @@ pub(super) fn violation_parts(v: &str, r: &Redactor) -> (String, Vec<String>) {
 /// A value of a deny's context as the program would write it: a string
 /// quoted, a reference (`ref(T,N,A)` in the context) as the address it
 /// names, a secret as the plan says one ([`Redactor::surface`]).
-pub(super) fn binding(x: &Json, r: &Redactor) -> String {
+fn binding(x: &Json, r: &Redactor) -> String {
     if let Json::String(s) = x
         && let Some(inner) = s.strip_prefix("ref(").and_then(|s| s.strip_suffix(')'))
         && let [typ, name, attr] = inner.splitn(3, ',').collect::<Vec<_>>()[..]

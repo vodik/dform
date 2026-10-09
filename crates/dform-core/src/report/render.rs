@@ -23,7 +23,7 @@ impl Report {
     /// The changes the plan counts: every definite one that is not a
     /// no-op, and every held one a later tick of this plan makes (one
     /// waiting on what this plan does not resolve is `later`'s).
-    pub(super) fn counted(&self) -> impl Iterator<Item = &Deformation> {
+    fn counted(&self) -> impl Iterator<Item = &Deformation> {
         self.definite
             .iter()
             .filter(|d| !matches!(d.kind, ActionKind::Noop))
@@ -86,7 +86,7 @@ impl Report {
     /// What `later` holds: rules that may derive an unknown number of
     /// resources, and held changes whose nulls this plan does not resolve
     /// (an undetermined deny or check is the policy block's).
-    pub(super) fn has_later(&self) -> bool {
+    fn has_later(&self) -> bool {
         self.groups.iter().any(|g| g.resolves_after.is_none())
             || self.pending.iter().any(|b| b.resolves_after.is_none())
     }
@@ -388,7 +388,7 @@ impl Report {
 
     /// `later`'s rows: each group no tick of this plan decides, each held
     /// change this plan does not schedule (R-156).
-    pub(super) fn write_later(&self, rows: &mut Vec<Row>, style: Style) {
+    fn write_later(&self, rows: &mut Vec<Row>, style: Style) {
         let unscheduled: Vec<&Group> = self
             .groups
             .iter()
@@ -410,7 +410,7 @@ impl Report {
     /// Group rows (R-67, R-156): each by the address its rule names (a
     /// copy that may derive once, its resources under it), with what it
     /// reads or waits on; `later`'s, or a tick's whose boundary decides it.
-    pub(super) fn write_groups(&self, rows: &mut Vec<Row>, groups: &[&Group], style: Style) {
+    fn write_groups(&self, rows: &mut Vec<Row>, groups: &[&Group], style: Style) {
         let site = |s: &Option<Site>| s.as_ref().map(|s| s.at.clone()).unwrap_or_default();
         let full = self.why >= Why::How;
         let both = |at: String, cond: String, reason: &str| both(full, at, cond, reason);
@@ -483,7 +483,7 @@ impl Report {
     /// Changes in order, a copy's under it (R-67): `+ network blue` at
     /// the place of its first resource, the resources indented beneath, a
     /// copy inside it nested again.
-    pub(super) fn write_level(
+    fn write_level(
         &self,
         rows: &mut Vec<Row>,
         ds: &[&Deformation],
@@ -524,7 +524,7 @@ impl Report {
     /// its kind: its `deformation` row's (`zset::Instances::row_kind`),
     /// `-` when the program wants none of its resources, `+` when one is
     /// created, else `~`.
-    pub(super) fn walk_level<'r>(
+    fn walk_level<'r>(
         &'r self,
         ds: &[&'r Deformation],
         outer: Option<&Address>,
@@ -582,7 +582,7 @@ impl Report {
 
 /// The scopes of `addrs` that are no copy (a used module's instance) and
 /// hold two or more of them: what the plan's tree groups under a header.
-pub(super) fn shared_modules<'a>(
+fn shared_modules<'a>(
     addrs: impl Iterator<Item = &'a Address>,
     instances: &crate::zset::Instances,
 ) -> BTreeSet<String> {
@@ -612,7 +612,7 @@ pub fn moved_text(moves: &[(Address, Address)]) -> String {
 
 /// The header of a used module's instance in the plan's tree, `module
 /// k3s` (R-200), as `why` names the scope.
-pub(super) const MODULE: &str = "module";
+const MODULE: &str = "module";
 
 /// One line of a tick's tree ([`Report::outline`]).
 #[derive(Debug, Clone)]

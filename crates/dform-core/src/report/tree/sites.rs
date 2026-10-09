@@ -318,7 +318,7 @@ impl Printer<'_> {
 impl Surface<'_, '_> {
     /// The site of aggregate fact `id`'s winning contribution (holding the
     /// focused part), the value followed to where it was written.
-    pub(super) fn winner_site(
+    fn winner_site(
         &mut self,
         c: &mut Compress,
         id: NodeId,
@@ -394,7 +394,7 @@ impl Surface<'_, '_> {
     /// The site of fact `id`, a contribution or a cell's value: where its
     /// firing's statement is, unless the firing only passes on the value of
     /// an input or a `let` it reads, whose winning site it is then.
-    pub(super) fn value_site(
+    fn value_site(
         &mut self,
         c: &mut Compress,
         id: NodeId,
@@ -460,7 +460,7 @@ impl Surface<'_, '_> {
     }
 
     /// [`site_of`], found.
-    pub(super) fn site_found(
+    fn site_found(
         &mut self,
         c: &mut Compress,
         id: NodeId,
@@ -559,7 +559,7 @@ impl Surface<'_, '_> {
 
     /// The statement a stated fact at `span` (`FILE:LINE:COL (..)`) is
     /// written in: its file, first and last lines, and the block entry.
-    pub(super) fn stated_in(
+    fn stated_in(
         &mut self,
         span: &str,
     ) -> Option<(String, usize, usize, Option<String>)> {

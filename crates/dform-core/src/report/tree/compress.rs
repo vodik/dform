@@ -149,7 +149,7 @@ impl Compress {
     }
 
     /// Leaf `l` of a firing of the fact printed as `text`.
-    pub(super) fn leaf(&self, s: &Surface, l: &Leaf, text: &str) -> Option<Because> {
+    fn leaf(&self, s: &Surface, l: &Leaf, text: &str) -> Option<Because> {
         let r = s.p.redact;
         Some(match l {
             Leaf::Base { span } => {

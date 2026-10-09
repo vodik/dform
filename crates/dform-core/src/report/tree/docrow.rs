@@ -36,7 +36,7 @@ impl DocRow {
 /// The loader documents (`table.FORMAT.document(.., At, Doc)`) a firing's
 /// `children` read, and those the cells it reads read (`d in docs`, a
 /// `let docs = yaml(..)`), a few steps deep.
-pub(super) fn documents<'c>(
+fn documents<'c>(
     c: &mut Compress,
     circuit: &'c Circuit,
     children: &[NodeId],
@@ -77,7 +77,7 @@ pub(super) fn structured(v: &Value) -> bool {
 /// stream's document by the line it starts on), and the steps to it from
 /// there, `teams.yml .teams[2]`. `None` when the document does not hold
 /// it.
-pub(super) fn document_place(d: &Fact, v: &Value) -> Option<String> {
+fn document_place(d: &Fact, v: &Value) -> Option<String> {
     let [.., Value::Str(at), doc] = d.args.as_slice() else {
         return None;
     };
@@ -109,7 +109,7 @@ pub(super) fn place_in(at: &str, doc: &Value, v: &Value) -> Option<String> {
 
 /// The steps from `d` to a part of it equal to `v` (an element by its
 /// index), the first in document order; `false` when there is none.
-pub(super) fn locate(d: &Value, v: &Value, steps: &mut Vec<(Option<usize>, String)>) -> bool {
+fn locate(d: &Value, v: &Value, steps: &mut Vec<(Option<usize>, String)>) -> bool {
     if d == v {
         return true;
     }

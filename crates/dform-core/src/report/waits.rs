@@ -115,7 +115,7 @@ pub(super) struct Follow<'a> {
     /// The waits of each held change no tick makes, by its full and its
     /// printed address and by its key.
     pub(super) later: BTreeMap<String, Vec<String>>,
-    pub(super) by_key: BTreeMap<(String, String), Vec<String>>,
+    by_key: BTreeMap<(String, String), Vec<String>>,
 }
 
 impl<'a> Follow<'a> {
@@ -186,7 +186,7 @@ impl<'a> Follow<'a> {
 
     /// The nulls provider `name`'s settings hold, as its `provider_config`
     /// row has them.
-    pub(super) fn settings_nulls(&self, name: &str) -> BTreeSet<String> {
+    fn settings_nulls(&self, name: &str) -> BTreeSet<String> {
         self.i
             .res
             .facts
@@ -250,7 +250,7 @@ pub(super) fn boundary_owners(
 /// its settings' rules read (a kubeconfig read from the server a tick
 /// creates). `None` when they wait on something no resource makes (a
 /// read that said "not yet", a stand-in) or on nothing this run can see.
-pub(super) fn settings_owners(i: &Input, name: &str) -> Option<BTreeSet<(String, String)>> {
+fn settings_owners(i: &Input, name: &str) -> Option<BTreeSet<(String, String)>> {
     let named = |a: &Atom| matches!(a.args.first(), Some(Term::Val(Value::Str(n))) if n == name);
     let mut nulls: BTreeSet<String> = BTreeSet::new();
     let rows: Vec<&Atom> = i

@@ -252,8 +252,8 @@ pub(super) fn forces(a: &Action, schema: &Schema) -> Vec<String> {
 /// ids, `identity(T, A, R)` joined with `world_attr(T, R, IDENTITY, V)`, by
 /// value, and the desired documents' attributes that hold a reference.
 pub(super) struct Refs<'a> {
-    pub(super) ids: BTreeMap<&'a str, Address>,
-    pub(super) desired: BTreeMap<(&'a str, &'a str, &'a str), &'a Value>,
+    ids: BTreeMap<&'a str, Address>,
+    desired: BTreeMap<(&'a str, &'a str, &'a str), &'a Value>,
 }
 
 impl<'a> Refs<'a> {
@@ -335,11 +335,11 @@ impl<'a> Refs<'a> {
 
 /// Whether a value holds a uri: its host is the program's spelling,
 /// the provider's its A-labels ([`Refs::shown`]).
-pub(super) fn holds_uri(v: &Value) -> bool {
+fn holds_uri(v: &Value) -> bool {
     v.any_scalar(&mut |x| matches!(x, Value::Uri(u) if u.unicode_host()))
 }
 
-pub(super) fn holds_ref(v: &Value) -> bool {
+fn holds_ref(v: &Value) -> bool {
     v.any_scalar(&mut |x| matches!(x, Value::Ref { attr, .. } if attr.is_empty()))
 }
 
@@ -360,11 +360,11 @@ pub(super) fn walk<'v>(v: &'v Value, rest: &str) -> Option<&'v Value> {
 }
 
 /// An element's changes, each with its path relative to the element.
-pub(super) type ElementChanges<'a> = Vec<(&'a Change, String)>;
+type ElementChanges<'a> = Vec<(&'a Change, String)>;
 
 /// Replace every content label `[#hash]` by the element's position among
 /// the labels under the same list, in order of appearance.
-pub(super) fn relabel<'a>(paths: impl Iterator<Item = &'a str>) -> Vec<String> {
+fn relabel<'a>(paths: impl Iterator<Item = &'a str>) -> Vec<String> {
     let mut seen: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut out = Vec::new();
     for p in paths {
@@ -393,7 +393,7 @@ pub(super) fn relabel<'a>(paths: impl Iterator<Item = &'a str>) -> Vec<String> {
 
 /// `(list path, element label, rest)` when `path`'s first list segment is
 /// a keyless set or a list with merge keys.
-pub(super) fn element_of(
+fn element_of(
     typ: &str,
     path: &str,
     schema: &Schema,
