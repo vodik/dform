@@ -21,33 +21,39 @@ use aws { region = "us-east-1" }
 
 resource aws.vpc main { cidr_block = "10.0.0.0/16" }
 
+let cidr(n) = inet.subnet(main.cidr_block, 8, n)
+
 #| One private subnet in every available zone of the region.
 resource aws.subnet "private-${availability_zone}" {
   vpc_id = main
-  cidr_block = inet.subnet(main.cidr_block, 8, n)
+  cidr_block = cidr(n)
   availability_zone
 } where aws.availability_zone("available", availability_zone, n)
+
+deny "no public subnets" { subnet: s } where s in aws.subnet, s.map_public_ip_on_launch
 ```
 
 ```
 $ dform plan
-plan: 4 changes (4 create) over 1 tick
+plan: 4 changes (4 create) over 1 tick; policy: 1 hold
 
 tick 1  4 changes
-  + aws.vpc main                   shop.df:3
+  + aws.vpc main                   stacks/shop.df:3
       cidr_block = "10.0.0.0/16"
-  + aws.subnet private-us-east-1a  shop.df:6  with n = 0
+  + aws.subnet private-us-east-1a  stacks/shop.df:8  with n = 0
       availability_zone = "us-east-1a"
       cidr_block = "10.0.0.0/24"
       vpc_id = main
-  + aws.subnet private-us-east-1b  shop.df:6  with n = 1
+  + aws.subnet private-us-east-1b  stacks/shop.df:8  with n = 1
       availability_zone = "us-east-1b"
       cidr_block = "10.0.1.0/24"
       vpc_id = main
-  + aws.subnet private-us-east-1c  shop.df:6  with n = 2
+  + aws.subnet private-us-east-1c  stacks/shop.df:8  with n = 2
       availability_zone = "us-east-1c"
       cidr_block = "10.0.2.0/24"
       vpc_id = main
+
+policy  1 hold
 ```
 
 The subnet block ends in `where`, which makes it a rule: one subnet per
@@ -56,6 +62,7 @@ source), binding each zone's name and its stable index `n`, so the n-th
 zone gets the n-th /24. `vpc_id = main` is a reference, printed as the
 address it names; apply makes the VPC first. When the region gains a
 zone, the next plan has one more subnet and the file does not change.
+The deny is the policy, and the plan ends with its verdict.
 
 The examples run on a fake cloud built into dform, with no credentials:
 `cargo install --path .`, then `dform -C examples/tour plan`.
@@ -108,6 +115,9 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 ```
 $ dform plan --set public_db=true
 ...
+policy  1 fails
+  fails  a database must not be public  stacks/tour.df:172  1 fails
+    db.postgres orders                  database = "orders"
 constraint violations:
 - a database must not be public  database = "orders"
 Error: blocked by constraints
@@ -180,10 +190,16 @@ Apply makes tick 1, learns the endpoint, prints tick 2's plan with real
 names, and asks again:
 
 ```
-plan: 1 change (1 create) over 1 tick
+plan: 1 change (1 create) over 1 tick; policy: 1 hold
 
 tick 2  1 change
   + iam.policy "connect-orders.db.fake"  stacks/tour.df:323  with pg = db.postgres orders
+      statements = [{ action: "db.connect", resource: "orders.db.fake" }]
+      tags.team = "shop"                 stacks/tour.df:170
+
+policy  1 hold
+tick 2 differs from the plan shown:
+  + iam.policy "connect-orders.db.fake"  create, not in the plan shown
 tick 2  1 change   apply? [y/N]
 ```
 
@@ -260,14 +276,22 @@ value now, and the compiler says when that makes the block wait a tick.
 copy's output `blue.vpc`, a deployment's `platform[env].ingress_ip`, a
 module's resource `k3s.admin`. A segment holding a dot is quoted,
 `k3s."k8s-lab.vodik.xyz"`. `[k]` takes one element by key; `[_]` ranges
-over every one, so a baseline is one line per workload type:
+over every one, so a baseline is one line per workload type, and the
+exception one more:
 
 ```dform
-set k8s.deployment[_].spec.template.spec.containers[_].resources.limits = {
-  cpu: 500m,
-  memory: 256Mi,
-} @default
+let limits = { cpu: 500m, memory: 256Mi }
+
+set k8s.deployment[_].spec.template.spec.containers[_].resources.limits = limits @default
+set k8s.deployment["web"].spec.template.spec.containers["web"].resources.limits = {
+  ..limits,
+  memory: 1Gi,
+}
 ```
+
+The plan names a list's element by its key,
+`spec.ports[port=80,protocol=TCP]`, and `why` takes it back, the key in
+part: `dform why 'web.spec.ports[port=80].targetPort'`.
 
 **Types.** Strings stop at the edge: a provider's schema types every
 attribute, and a `--set`, a YAML cell or a CSV field is parsed to the
@@ -276,13 +300,14 @@ the type its position wants, as in Postgres. `inet` and `ip` with their
 arithmetic (`inet.subnet`, `n.bits`, `"10.0.0.5" in n`); quantities
 (`512Mi` is `bytes`, `500m` a `cpu`, `30d` a `duration`), compared in
 base units and sent in each provider's form; `time`, `semver`, `uri`
-(`u.host`, `u.port`), `oci` (`c.image.tag`); `enum`, `list`, `set`,
-`ref(T)`, `secret(T)`, objects. A `check` refines any of them and is a
+(`u.host`), `oci` (`c.image.tag`). A `check` refines any type and is a
 deny over the value:
 
 ```dform
 input agents: int = 0 check 0 <= agents <= 3
 input disk: bytes = 50Gi check 10Gi <= disk <= 4Ti
+
+resource compute.vm "agent-${i}" { disk } where i in 0..agents
 
 deny "subnets overlap" { a: x, b: y } where {
   x in net.subnet
@@ -309,7 +334,8 @@ the first value it was given, for what cannot be derived again.
 
 **Documents.** `io.read(LOCATION)` is a location's text; a location is a
 project path or a uri whose scheme picks the transport (`file:`,
-`https://`, `git+https://..?ref=`, `ssh://` over SFTP, `s3://`, `data:`).
+`https://`, `git+https://..?ref=`, `ssh://` over SFTP, `s3://`,
+`vault://`, `data:`).
 Each format's package decodes it, and rows keep their file and line:
 
 ```dform
@@ -349,6 +375,7 @@ lives in code (`set .. where env == ..`), in a document others keep
 (`set from yaml.decode(..)`), or, a secret someone types, in a file
 per deployment sealed to its recipients, written by `dform secrets set`
 and committed: `set from secrets.decode(io.read("secrets/${env}.json"))`.
+The file is SOPS's format, so `sops -d` opens it with a member's own key.
 `--set` is for a one-off, and audited; a `.env` is the backend's and
 the providers', never the program's.
 
@@ -360,8 +387,9 @@ agents }`. A component is a type with inputs and outputs, made by
 `resource network blue { cidr = "10.1.0.0/16" }`; its resources stay
 visible to policy. Scope is lexical: a module reads only what its file
 declares, and takes what it needs from its user as an input (`use
-baseline { env }`). A declaration with a clause exists only where it
-holds (`use backups { .. } where backup`).
+baseline { env }`); in a component, `super.region` is the name one
+scope out. A declaration with a clause exists only where it holds (`use
+backups { .. } where backup`).
 
 **Providers.** `use` imports a provider's types and configures it; its
 settings are terms like any other, so one can be made from a resource.
@@ -370,6 +398,8 @@ The shape of a k3s cluster on OVH and what runs on it:
 ```dform
 use ovh { endpoint = "ovh-ca", project = config.ovh_project }
 
+deny "${config.zone} is not on this account" where not ovh.zone(config.zone, _, _)
+
 use k3s { name = "k8s-${env}", region = config.region, agents }
 
 use k8s { kubeconfig = k3s.kubeconfig }
@@ -377,10 +407,12 @@ use k8s { kubeconfig = k3s.kubeconfig }
 resource k8s.namespace apps { metadata.name = "apps" }
 ```
 
-`k3s.kubeconfig` is read off the server over `ssh://` once it answers,
-so the namespace and everything else of `k8s` plan in tick 2. `use ovh
-as ca { endpoint = "ovh-ca" }` beside `use ovh as eu { .. }` is two
-configurations of one provider, `ca.instance` and `eu.instance`.
+A provider's table is a relation like any other, so a deny can ask the
+account what it lacks. `k3s.kubeconfig` is read off the server over
+`ssh://` once it answers, so the namespace and everything else of `k8s`
+plan in tick 2. `use ovh as ca { endpoint = "ovh-ca" }` beside `use ovh
+as eu { .. }` is two configurations of one provider, `ca.instance` and
+`eu.instance`.
 
 **Secrets.** The schema says which attributes are sensitive, and the
 compiler follows every value made from one. A secret reaching a place
@@ -397,10 +429,9 @@ resource aws.iam_user "u-${pw}" { name = "x" }         # E0305: addresses are pr
 `secret.declassify(v, reason)` is the one way out, and says why.
 
 **Policy and tests.** A policy pack is a module of `set`, `deny`,
-`warn` and `requires_approval`, applied by `use policies.baseline`;
-`dform dev effects` lists what a module reads and writes. `dform test`
-evaluates the program once per combination of its enums, bools and keys,
-against an empty world, and every deny must hold:
+`warn` and `requires_approval`, applied by `use policies.baseline`.
+`dform test` evaluates the program once per combination of its enums,
+bools and keys, against an empty world, and every deny must hold:
 
 ```
 $ dform test
@@ -422,69 +453,74 @@ A file under `stacks/` is a stack; every other `.df` file is a module.
 State lives in the gitignored `dform.state/`, or an S3 bucket. A
 command runs on a target: `dform plan platform env=prod`.
 
-**plan** prints what will change, by tick. A line is one of two shapes:
-a change, its mark (`+ ~ - ±`), its address as the source names it and
-the file and line that derive it; or an attribute, `path = value`,
-with a site only when the value was written outside its own block. A
-`because` line says what moved since the last apply. `-v` adds the
-bindings and the writes that lost; `-vv` each value's chain:
+**plan** prints what will change, by tick, then what the policy says
+of it. A change is its mark (`+ ~ - ±`), its address as the source
+names it and the file and line that derive it; an attribute is `path =
+value`, with a site only when the value was written outside its own
+block. A `because` line says what moved since the last apply:
 
 ```
 $ dform plan --set database.backup_days=7
-deployment: tour[env=dev]
-plan: 1 change (1 update) over 1 tick
+deployment: stacks.tour[env=dev]
+plan: 1 change (1 update) over 1 tick; policy: 1 hold
 
 tick 1  1 change
   ~ db.postgres orders     stacks/tour.df:143
       backup_days = 1 → 7  --set database.backup_days=7
       because input database is now {backup_days: 7, multi_az: false} (was {backup_days: 1, multi_az: false})
-$ dform plan -v --set database.backup_days=7
-...
-      backup_days = 1 → 7  --set database.backup_days=7  @override over stacks/tour.df:27 @default
+
+policy  1 hold
 ```
 
-A change is in the first tick after everything it waits on is made,
-and the tick's header says what that is; `?` or `3+` counts a rule
-whose answers are not known yet. `later` holds what no tick of this plan
-makes: another deployment's output not applied yet, a provider
-configured from outside, a deny `until tick 2`. A secret prints
-`(sensitive)`. `--json` carries all of it as fields; `-q` is the bare
-diff; `--out FILE` writes a plan file.
+A policy holds, fails, or is undetermined: it reads what the cloud has
+not made yet, and the plan names the value and the tick that decide it,
+`until spec.storageClassName is known (tick 2)`, where a policy engine
+over plan JSON would pass it or guess. `later` holds what no tick of
+this plan makes, such as another deployment's output not applied yet. A
+secret prints `(sensitive)`; `-v` adds the writes that lost, `--json`
+carries all of it, `--out FILE` writes a plan file.
 
 **apply** prints the plan and asks once; at a tick whose plan holds what
-the first could not name, it prints that plan and asks again. `--yes`
-answers every question. A plan file applies what it showed and stops
-before the rest. State is written after every provider call, so an
-interrupted apply resumes where it stopped; a create carries an
-idempotency key, so a lost answer is looked up, never made twice. Every
-call has a timeout, a retryable failure is retried with backoff, and a
-tick waiting on the world (a Job's `status.succeeded`) waits within the
-provider's `wait`, saying so every ten seconds. `--parallel N` overlaps
-independent calls.
-
-| exit | meaning |
-|---|---|
-| 0 | done, with or without changes |
-| 1 | an error |
-| 2 | usage: the command line is wrong |
-| 3 | declined: a question answered no |
-| 4 | refused by the program: a deny or a conflict |
-| 5 | stopped: a plan file, a destroy or a run without the master did what it could; state is consistent and the next run resumes |
-| 6 | locked: another run holds the deployment |
+the first could not name, it prints that plan and asks again. A plan
+file applies what it showed and stops before the rest. State is written
+after every provider call, so an interrupted apply resumes where it
+stopped, and a create whose answer was lost is found again, never made
+twice. `docs/reference.md` has the exit codes, timeouts and retries,
+locking and the audit log.
 
 **destroy** removes a deployment: the plan against an empty program,
-dependents first, asked for as apply asks (`plan --destroy` prints it).
-A deny over deletes refuses it. Lifecycle is facts, so policy and `why`
-read it:
+dependents first, asked for as apply asks. A deny over deletes refuses
+it. Lifecycle is facts, so policy and `why` read it:
 
 ```dform
 lifecycle(k3s.server, "prevent_destroy") where env == "prod"   # a delete or replace is a deny
-lifecycle(nodes, "create_first")                               # a replace builds the new one first
+lifecycle(web, "create_first")                                  # a replace makes the new one first, as web-2
 lifecycle(libvirt.volume["data"], "retain")                     # a delete forgets it; the world keeps it
 moved(net.vpc, "main.vpc", net.vpc["core.vpc"])                 # renamed: state follows
 ignore_changes(bastion, "tags.last_scan")                       # set on create, then the world's
 adopt(legacy, "vpc-0a1b2c")                                     # exists already: take it over
 ```
+
+Where a name is the object's identity, a replace made first gets the
+next generation of it (`web-2`), and what reads the name follows. A
+provider can seed a type's lifecycle: a Tailscale device dropped from
+the program is let go, not deleted, unless the program says otherwise.
+
+**status** is health, kept out of apply. An apply makes what the
+program says and returns; it does not wait for a rollout to go green.
+`dform status` asks each provider, when you want to know, how each
+object is doing (`healthy`, `progressing`, `degraded` with the
+provider's reason, `CrashLoopBackOff: container migrate`), and exits 1
+unless all is well: a pipeline step after the apply, a cron job, an
+alert. Health is a provider call of its own, never a condition of the
+plan.
+
+**render** prints a Kubernetes stack's planned objects as manifests,
+with no provider configured, no credentials and no state: `dform render
+apps env=lab` is a YAML stream for Argo CD's config management plugin,
+a CI job or `kubectl apply -f -`. The program's policy holds over what
+it renders or nothing is printed, and a value only an apply could know
+is refused by name, never left a hole.
 
 **why, query, diff.** `dform why ADDR` explains a resource, a value, a
 row or an absence, `why 'deny "MESSAGE"'` a deny. `dform query` asks
@@ -499,45 +535,37 @@ env=lab` applies platform first, each with its own plan, question and
 state, and a plan of apps before platform is applied shows its outputs
 as values not known yet. Which deployments there are is code:
 `project.df` lists them, `resource stacks.platform lab { env = "lab" }`,
-with clauses and ranges as anywhere; `dform plan` with no target says
-each one's state and plans each, `dform apply` applies them in
-dependency order, and one the file no longer lists is destroyed by the
-next apply. `dform stack list` is every deployment, its
-last apply and by whom; `dform output` its outputs; `state show` and
-`state mv` its objects. A deployment holds a lock while it applies;
-its audit log is hash-chained, and `dform log` prints it.
+with clauses and ranges as anywhere; `dform plan` with no target plans
+each, `dform apply` applies them in dependency order, and one the file
+no longer lists is destroyed by the next apply.
 
 **Secrets.** State holds no secret: ids, names and keyed digests only.
 Every generated secret derives from the deployment's master, kept
-sealed (`state.master`) under the passphrase `[secrets] passphrase`
-names, so a copy of the bucket opens nothing. A run without the
-passphrase still plans in full, and proves a secret unchanged without
-knowing it. `dform secrets rotate D KEY` changes one generated secret,
-one plan line per place it lands; `dform secrets list` shows each
-secret's age and who reads it; `dform secrets cycle` makes a new master
-and changes no value. A secret output another stack reads is sealed to
-that stack's key.
+sealed under a passphrase, so a copy of the bucket opens nothing, and a
+run without the passphrase still plans in full and proves a secret
+unchanged without knowing it. A secret only the cloud has (an auth key
+it mints, a managed cluster's kubeconfig) stays with the provider that
+holds it: the program carries its label, `user_data = "..
+--authkey=${nodes.key}"`, and the bytes are revealed into the one Apply
+call that writes them, and nowhere else. `dform secrets rotate D KEY`
+changes one generated secret, one plan line per place it lands.
 
 **Approvals.** `requires_approval(r, reason)` holds a change until
 someone signs the plan's digest (a JWT or a DSSE envelope), checked
 against the stack's trust root: `apply --approval FILE`.
 
 **Providers.** A provider is a process dform starts and speaks gRPC to,
-or a wasm component behind `--features wasm`; HTTP, SSH and git are the
-host's, with credentials granted by name in `dform.toml`. Three are
-real: Kubernetes (its schema from the cluster's OpenAPI document), OVH,
-and Postgres (`postgres.role`, `postgres.database`, configured from a
-connection; a password rotation is one `ALTER ROLE` with a SCRAM
-verifier). The fake cloud and the AWS- and Google-shaped mocks run the
-examples. `dform provider check` runs the conformance suite;
-`docs/providers.md` is the protocol and the SDK, `docs/providers/` each
-provider.
+or, in an experimental build, a wasm component; HTTP, SSH and git are
+the host's, with credentials granted by name in `dform.toml`. Real ones
+serve Kubernetes (its schema from the cluster's own OpenAPI document),
+OVH, Postgres and Tailscale, and Vault behind `vault://`; the fake
+cloud and the AWS- and Google-shaped mocks run the examples.
+`dform provider check` runs the conformance suite; `docs/providers.md`
+is the protocol and the SDK.
 
-**The editor.** `dform lsp` gives diagnostics, hover with each term's
-value for a deployment and who wrote it, completion, references, rename,
-and go-to-definition, std functions and provider types included. `dform
-fmt` has one normal form. `tree-sitter-dform/` is the grammar,
-`editors/emacs` a mode.
+**The editor.** `dform lsp` hovers each term with its value for a
+deployment and who wrote it; `dform fmt` has one normal form;
+`tree-sitter-dform/` is the grammar, `editors/emacs` a mode.
 
 ## What you cannot do elsewhere
 
@@ -549,12 +577,15 @@ fmt` has one normal form. `tree-sitter-dform/` is the grammar,
 | "why is this here?" | read the source | every plan line says; `dform why ADDR` |
 | "why is this not here?" | read the source harder | `dform why` names the condition that failed |
 | how many rounds an apply takes | find out during it | the plan is grouped by tick |
-| rules about the change set | plan JSON through a policy engine | `deformation` rows the program's denies read |
+| rules about the change set | plan JSON through a policy engine | `deformation` rows the program's denies read; every plan says what holds, fails and cannot be known yet |
 | routes from reachability | write them out by hand | a recursive rule |
 | a policy that sees inside modules | export every value as an output | policy reads any resource |
 | policies tested over every environment | one test per case | `dform test` |
 | one generated password rotated | taint and hope nothing else moves | `dform secrets rotate D KEY` |
 | a state file that leaks nothing | encrypt the bucket | state holds no secret |
+| a key the cloud mints, written into another resource | it lands in state in the clear | the provider holds it; dform reveals it into the one call that writes it |
+| health after a deploy | apply waits on it, or a second tool | `dform status`, asked when you want it |
+| manifests for GitOps, under your policy | a template engine beside the infrastructure tool | `dform render`: no provider, no state |
 
 ## What it is not
 
@@ -568,9 +599,9 @@ fmt` has one normal form. `tree-sitter-dform/` is the grammar,
 - Not a proof. `dform test` enumerates enums, bools and keys and leaves
   every other input at its default.
 - Not finished. It is pre-release: the language changes without
-  compatibility (every `.df` here is rewritten when it does), and the
-  real providers are the three above. Controller mode (`dform
-  controller run`) is experimental, behind `DFORM_EXPERIMENTAL=1`.
+  compatibility (every `.df` here is rewritten when it does), and few
+  providers are real yet. Controller mode (`dform controller run`) is
+  experimental, behind `DFORM_EXPERIMENTAL=1`.
 
 ## Where next
 
