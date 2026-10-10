@@ -2064,6 +2064,21 @@ fn an_attribute_goes_to_its_schema_row() {
     c.shutdown();
 }
 
+/// A reference the program names for the resource (`vpc`) goes to the
+/// row that declares it under the provider's name (`vpc_id`).
+#[test]
+fn a_reference_goes_to_its_providers_row() {
+    let (_s, root) = example("aws");
+    let stack = root.join("stacks/aws_demo.df");
+    let mut c = Client::start(&root, json!({}));
+    c.open(&stack);
+    let found = definitions(&mut c, &root, &stack, "vpc = main", 0);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].0, "schemas/aws-mock.df");
+    assert_eq!(found[0].2, "vpc_id");
+    c.shutdown();
+}
+
 /// Ranges (R-180) in the editor: a range attribute plans clean and its
 /// hover prints its canonical form; a dense range enumerated is the
 /// compiler's error, with its fix, at the `in`.

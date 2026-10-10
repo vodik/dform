@@ -776,8 +776,7 @@ fn aws_optional_computed_is_the_programs_when_set() {
     );
     assert!(
         attrs.contains(
-            &"attr(\"aws.security_group\", \"web\", \"vpc\", ?aws.vpc/main#id:Fresh)"
-                .to_string()
+            &"attr(\"aws.security_group\", \"web\", \"vpc\", ?aws.vpc/main#id:Fresh)".to_string()
         ),
         "{attrs:#?}"
     );

@@ -177,10 +177,16 @@ fn attribute(d: &Decls, t: &dform_core::syntax::SyntaxToken) -> Option<(String, 
 }
 
 /// The `type_attr` row of a schema file that declares `typ`'s attribute
-/// `attr`: the attribute's path, quoted.
+/// `attr`: the attribute's path, quoted, as the provider names it (a
+/// reference the program names for the resource, `vpc`, is its `vpc_id`).
 fn schema_attr(files: &[PathBuf], typ: &str, attr: &str) -> Option<Location> {
     files.iter().find_map(|f| {
         let t = std::fs::read_to_string(f).ok()?;
+        let wire = dform_core::schema::Schema::parse(&t, &f.display().to_string())
+            .and_then(dform_core::schema::Schema::imported)
+            .ok()
+            .and_then(|s| s.wire.get(&(typ.to_string(), attr.to_string())).cloned());
+        let attr = wire.as_deref().unwrap_or(attr);
         let at = [
             format!("type_attr({typ}, \"{attr}\""),
             format!("type_attr(\"{typ}\", \"{attr}\""),
