@@ -115,12 +115,15 @@ Kind      Resource
 
 **What may change is a rule too.** "No deletes in prod" is `deny "no
 deletes in prod" where env == "prod", deformation("delete", _, _)`, and
-it is checked by every plan and refuses the apply. A policy over a value
-known only after apply says so: the logic has three values, nothing is
-assumed false for being unknown, so such a policy is undetermined and
-the plan names the tick that decides it. With Terraform, policy is a
-second tool and a second language over the plan's JSON, where such a
-value is only marked unknown.
+it is checked by every plan and refuses the apply. A risky change waits
+instead for a signature over exactly what will apply, and lifecycle is
+facts the same rules condition: `lifecycle(k3s.server,
+"prevent_destroy") where env == "prod"`, with a provider able to seed a
+type's default. A policy over a value known only after apply says so:
+the logic has three values, nothing is assumed false for being unknown,
+so such a policy is undetermined and the plan says when it will be
+known. With Terraform, policy is a second tool and a second language
+over the plan's JSON, where such a value is only marked unknown.
 
 **Secrets are part of the language too.** A secret cannot reach an
 output, an address or a count by accident. The compiler follows every
@@ -258,29 +261,3 @@ db.postgres db     healthy
 net.vpc main       -
 status: 1 healthy, 1 degraded, 1 suspended, 1 without health
 ```
-
-A risky change waits for a signature over exactly what will apply.
-Lifecycle is facts: `lifecycle(k3s.server, "prevent_destroy") where env
-== "prod"`, and a provider can seed a type's default, so a Tailscale
-device dropped from the program is released, not deleted.
-
-## What it is not
-
-- Not a proof. `dform test` enumerates enums, bools and keys and leaves
-  every other input at its default.
-- Not finished. It is pre-release. The language changes without
-  compatibility, and every `.df` here is rewritten when it does. Few
-  providers are real yet.
-
-## Where next
-
-- `examples/tour`: the tutorial. `examples/crud-api`: a blue/green
-  rollout gated on a migration Job. Each example's README says what it
-  shows and the commands to run.
-- `docs/grammar.md`: the language. `docs/reference.md`: every command
-  and how to run dform. `docs/best_practices.md`: how to write a
-  program.
-- `proposals/` and `DESIGN.org`: the model and the decisions.
-
-Apache-2.0. Contributions under the Developer Certificate of Origin
-(`git commit -s`); there is no CLA.
