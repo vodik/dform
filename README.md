@@ -14,9 +14,8 @@ is the difference between the two. A policy is a query that must return
 no rows, and "why is this here" asks which rows produced it.
 
 Every plan is the least model of the program over the world as it is,
-and every line of it carries its proof. Apply reconciles the world with
-the plan in ticks, and what one tick creates, an endpoint or a
-kubeconfig, is a value the next tick plans with.
+and every line of it carries its proof. Apply makes the world match, and
+what it learns on the way, an endpoint, a kubeconfig, it plans with.
 
 A complete program:
 
