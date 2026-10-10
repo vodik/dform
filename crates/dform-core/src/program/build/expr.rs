@@ -271,7 +271,7 @@ mod tests {
         let id = b.hoisted(&var("Cidr"), &[read]);
         let e = &b.program.exprs[id];
         assert!(
-            matches!(e.kind, ExprKind::Read { column: 3, .. }),
+            matches!(e.kind, ExprKind::Lookup { out: 3, .. }),
             "{:?}",
             e.kind
         );

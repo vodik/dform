@@ -23,6 +23,7 @@
 
 use super::Builder;
 use crate::ast::{Atom, Lit, Span, Stmt, Term};
+use crate::program::Read;
 use crate::program::node::*;
 use crate::value::Value;
 
@@ -41,8 +42,9 @@ pub struct Written<'a> {
     pub helpers: &'a [Stmt],
     /// The goals of a `not`'s body, built already.
     pub body: &'a [GoalId],
-    /// The value column of the read it tests or binds in place.
-    pub read: Option<usize>,
+    /// The value column of the read it tests or binds in place, and what
+    /// it reads.
+    pub read: Option<(usize, Read)>,
     /// The `__neg_N` it took, and the statement's aggregate values then
     /// (lowered names), when it lowers through a helper.
     pub negation: Option<(u32, &'a [String])>,
@@ -91,7 +93,7 @@ impl Builder<'_> {
             }
             Form::Truth => {
                 let (last, reads) = w.lits.split_last()?;
-                self.reading(reads, |b| b.truth(last, w.read))
+                self.reading(reads, |b| b.truth(last, w.read.as_ref()))
             }
             Form::Has => return self.has(w),
             Form::Compare { bind, ops, .. } if *ops > 1 => {
@@ -101,7 +103,9 @@ impl Builder<'_> {
                 bind, aggregate, ..
             } => {
                 let (last, reads) = w.lits.split_last()?;
-                self.reading(reads, |b| b.compare(last, *bind, *aggregate, w.read))
+                self.reading(reads, |b| {
+                    b.compare(last, *bind, *aggregate, w.read.as_ref())
+                })
             }
             Form::In { each } => return self.membership(w, *each, false),
             // `v not in PATH[_]`: through a helper over the membership.
@@ -127,10 +131,10 @@ impl Builder<'_> {
     }
 
     /// `x.ready`: the read with `true` in its value column, or `t = true`.
-    fn truth(&mut self, l: &Lit, read: Option<usize>) -> Option<GoalId> {
+    fn truth(&mut self, l: &Lit, read: Option<&(usize, Read)>) -> Option<GoalId> {
         let yes = Term::Val(Value::Bool(true));
         let e = match (l, read) {
-            (Lit::Pos(a), Some(c)) if a.args.get(c) == Some(&yes) => self.read(a, c),
+            (Lit::Pos(a), Some((c, r))) if a.args.get(*c) == Some(&yes) => self.read(a, *c, r),
             (Lit::Eq(t, v), None) if *v == yes => self.expr(t),
             _ => return None,
         };
@@ -145,7 +149,8 @@ impl Builder<'_> {
         let (outer, mark, lits) = split_mark(w.lits);
         let (last, reads) = lits.split_last()?;
         let (mark, outer) = self.reading(outer, |b| mark.map(|m| b.mark(m)));
-        let (test, left) = self.reading(reads, |b| b.has_test(last, w.read, mark.is_none()));
+        let (test, left) =
+            self.reading(reads, |b| b.has_test(last, w.read.as_ref(), mark.is_none()));
         let test = test?;
         let span = match last {
             Lit::Pos(a) => a.span,
@@ -162,7 +167,12 @@ impl Builder<'_> {
 
     /// What `has` tests, written `last` (`unmarked`: no attribute path's
     /// mark before it).
-    fn has_test(&mut self, last: &Lit, read: Option<usize>, unmarked: bool) -> Option<Has> {
+    fn has_test(
+        &mut self,
+        last: &Lit,
+        read: Option<&(usize, Read)>,
+        unmarked: bool,
+    ) -> Option<Has> {
         Some(match (last, read) {
             (Lit::Pos(a), None) if a.pred == crate::partition::IDENTITY && unmarked => {
                 let [typ, addr] = a.args.as_slice() else {
@@ -173,8 +183,8 @@ impl Builder<'_> {
                     addr: self.expr(addr),
                 }
             }
-            (Lit::Pos(a), Some(c)) if a.args.get(c) == Some(&Term::Wildcard) => {
-                Has::Read(self.read(a, c))
+            (Lit::Pos(a), Some((c, r))) if a.args.get(*c) == Some(&Term::Wildcard) => {
+                Has::Read(self.read(a, *c, r))
             }
             (Lit::Eq(Term::Var(v), t), None) if crate::syntax::resolve::is_has_var(v) => {
                 Has::Walk {
@@ -211,16 +221,16 @@ impl Builder<'_> {
         l: &Lit,
         bind: bool,
         aggregate: bool,
-        read: Option<usize>,
+        read: Option<&(usize, Read)>,
     ) -> Option<GoalId> {
         if aggregate {
             return self.fold(l);
         }
         let span = self.span;
         let kind = match (l, read) {
-            (Lit::Pos(a), Some(c)) => {
-                let v = a.args.get(c)?;
-                let goal = self.at(a.span, |b| b.read(a, c));
+            (Lit::Pos(a), Some((c, r))) => {
+                let v = a.args.get(*c)?;
+                let goal = self.at(a.span, |b| b.read(a, *c, r));
                 match bind {
                     true => GoalKind::Bind {
                         pat: self.pattern(v),
@@ -389,23 +399,22 @@ impl Builder<'_> {
         })
     }
 
-    /// The read `a` with its value column `column` left open: the value
-    /// the literal holding it tests or binds in place.
-    pub(super) fn read(&mut self, a: &Atom, column: usize) -> ExprId {
-        // A copy's output by its key, its copy tested to exist first.
-        if let ("output", [copy, Term::Val(Value::Str(key)), _], 2) =
-            (a.pred.as_str(), a.args.as_slice(), column)
-            && let Some(of) = self.instance_test(copy)
-        {
-            let copy = self.expr(copy);
-            let key = key.clone();
-            let of = Some(of);
-            return self.expr_node(ExprKind::Output { copy, key, of });
-        }
-        let mut open = a.clone();
-        open.args[column] = Term::Wildcard;
-        let goal = self.rel(&open);
-        self.expr_node(ExprKind::Read { goal, column })
+    /// The read `a`, `read` (what the front end said it reads), with its
+    /// value column `column` left open: the value the literal holding it
+    /// tests or binds in place, or holds in term position. A read no node
+    /// of its own says (an attribute of a resource whose type is a
+    /// variable, a copy of a component, a document's rows) is a `Lookup`
+    /// of its relation by its other columns.
+    pub(super) fn read(&mut self, a: &Atom, column: usize, read: &Read) -> ExprId {
+        self.at(a.span, |b| {
+            let kind = match b.read_kind(a, column, read.clone()) {
+                Some(kind) => kind,
+                None => b
+                    .read_kind(a, column, Read::Lookup { out: column })
+                    .expect("a relation is read by its other columns"),
+            };
+            b.expr_node(kind)
+        })
     }
 }
 

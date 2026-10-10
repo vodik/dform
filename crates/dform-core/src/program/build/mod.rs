@@ -44,8 +44,8 @@ pub use providers::{ProviderLowered, SettingKind, SettingLowered};
 pub use resources::{BodyLowered, EntryLowered, HeaderLowered, ResourceLowered};
 pub use rules::RuleLowered;
 
-use super::Program;
 use super::node::{Expr, ExprId, ExprKind, ItemId, Var, VarId};
+use super::{Program, Read};
 use crate::ast::Span;
 use std::collections::BTreeMap;
 
@@ -66,7 +66,14 @@ pub struct Builder<'p> {
     /// The reads hoisted before what is being built that no node holds
     /// yet, in order, each by the variable it binds (`hoist.rs`).
     pending: Vec<hoist::Pending>,
+    /// What each read the front end hoisted in the statement reads.
+    reads: Reads,
 }
+
+/// What each read the front end hoisted in a statement reads, by its
+/// relation and the variable it binds: the read's own node is built from
+/// it (`hoist.rs`).
+pub type Reads = BTreeMap<(String, String), Read>;
 
 impl<'p> Builder<'p> {
     /// A builder into `program` of what is written at `span`.
@@ -78,19 +85,22 @@ impl<'p> Builder<'p> {
             vars: BTreeMap::new(),
             written,
             pending: Vec::new(),
+            reads: Reads::new(),
         }
     }
 
     /// The builder of a statement whose variables built so far are
-    /// `vars`.
-    pub fn with_vars(mut self, vars: BTreeMap<String, VarId>) -> Self {
+    /// `vars`, and whose hoisted reads read `reads`.
+    pub fn of_statement(mut self, vars: BTreeMap<String, VarId>, reads: Reads) -> Self {
         self.vars = vars;
+        self.reads = reads;
         self
     }
 
-    /// The variables built, by the name each lowers to.
-    pub fn into_vars(self) -> BTreeMap<String, VarId> {
-        self.vars
+    /// The variables built, by the name each lowers to, and the
+    /// statement's reads.
+    pub fn into_statement(self) -> (BTreeMap<String, VarId>, Reads) {
+        (self.vars, self.reads)
     }
 
     /// The variables built belong to `item`.

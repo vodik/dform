@@ -17,7 +17,7 @@
 //! | `member(L, i, V)`                         | `Field` of an `Index` step      |
 //! | `member(L, V), type_list_key(..), ..`     | `Field` of a `Keyed` step       |
 //! | `k(__ref("T", __scope(V), ""))`           | `Address` of the read           |
-//! | any other `p(.., V)`                      | `Read`, `V` its last column     |
+//! | any other `p(.., V)`                      | `Lookup`, `V` its last column   |
 //! | `V = t`                                   | `t`'s node                      |
 //!
 //! A read whose variable the terms do not use is given back: a literal's
@@ -96,13 +96,12 @@ impl Builder<'_> {
         }
     }
 
-    /// The read the front end recorded `a` as (`Program::reads`), and the
+    /// What the front end said the read `a` it hoisted reads, and the
     /// column its variable is in.
     pub(super) fn recorded(&self, a: &Atom) -> Option<(usize, Read)> {
         a.args.iter().enumerate().find_map(|(i, t)| {
             let Term::Var(v) = t else { return None };
-            let key = crate::program::read_key(a.span, &a.pred, v);
-            Some((i, self.program.reads.get(&key)?.clone()))
+            Some((i, self.reads.get(&(a.pred.clone(), v.clone()))?.clone()))
         })
     }
 
@@ -144,7 +143,8 @@ impl Builder<'_> {
                 name: typ.to_string(),
                 span: a.span,
             };
-            let of = self.read(a, a.args.len() - 1);
+            let out = a.args.len() - 1;
+            let of = self.read(a, out, &Read::Lookup { out });
             return self.expr_node(ExprKind::Address { of, typ });
         }
         let column = a
@@ -174,7 +174,7 @@ impl Builder<'_> {
                     path: vec![step],
                 })
             }
-            _ => self.read(a, column),
+            _ => self.read(a, column, &Read::Lookup { out: column }),
         }
     }
 

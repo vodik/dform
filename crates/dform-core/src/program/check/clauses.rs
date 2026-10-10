@@ -137,14 +137,14 @@ fn kinds_of(p: &Program, g: GoalId, out: &mut Vec<String>) {
             Coll::Each(_) => "Member/Each",
             Coll::TypeOf(_) => "Member/TypeOf",
         },
+        GoalKind::Bind { value, .. } if p.in_place(*value) => "Bind/Read",
         GoalKind::Bind { value, .. } => match p.exprs[*value].kind {
-            crate::program::node::ExprKind::Read { .. } => "Bind/Read",
             crate::program::node::ExprKind::Field { .. } => "Bind/Field",
             _ => "Bind",
         },
-        GoalKind::Compare { lhs, ops } => match (&p.exprs[*lhs].kind, ops.len()) {
-            (crate::program::node::ExprKind::Read { .. }, _) => "Compare/Read",
-            (_, 1) => "Compare",
+        GoalKind::Compare { lhs, .. } if p.in_place(*lhs) => "Compare/Read",
+        GoalKind::Compare { ops, .. } => match ops.len() {
+            1 => "Compare",
             _ => "Compare/chain",
         },
         GoalKind::Has(h) => match h {
@@ -152,10 +152,8 @@ fn kinds_of(p: &Program, g: GoalId, out: &mut Vec<String>) {
             Has::Read(_) => "Has/Read",
             Has::Walk { .. } => "Has/Walk",
         },
-        GoalKind::Truth(e) => match p.exprs[*e].kind {
-            crate::program::node::ExprKind::Read { .. } => "Truth/Read",
-            _ => "Truth",
-        },
+        GoalKind::Truth(e) if p.in_place(*e) => "Truth/Read",
+        GoalKind::Truth(_) => "Truth",
         GoalKind::Not { clause, helper } => {
             for &g in &p.clauses[*clause].goals {
                 kinds_of(p, g, out);

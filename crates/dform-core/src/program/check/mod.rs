@@ -115,23 +115,26 @@ pub fn program(program: &Program, ported: &Resolved, new: &Lowered) {
         }
         kinds.push(super::spell::kind(kind).to_string());
     }
-    // A statistic, not output: the arena's order does not matter.
-    let bound = program.goals.values().filter_map(|g| match g.kind {
-        super::node::GoalKind::Bind { value, .. } => Some(&program.exprs[value]),
-        _ => None,
-    });
-    let bound = bound.filter(|e| e.hoisted.is_none());
-    let hoisted = program.exprs.values().filter(|e| e.hoisted.is_some());
-    let reads: Vec<&str> = bound
-        .chain(hoisted)
-        .filter_map(|e| read_kind(program, &e.kind))
+    // A statistic, not output: the arena's order does not matter. A read
+    // tested or bound in place is counted as `in place: KIND`.
+    let reads: Vec<String> = program
+        .exprs
+        .iter()
+        .filter_map(|(id, e)| {
+            let kind = read_kind(program, &e.kind)?;
+            match (e.hoisted, program.in_place(id)) {
+                (Some(_), _) => Some(kind.to_string()),
+                (None, true) => Some(format!("in place: {kind}")),
+                (None, false) => None,
+            }
+        })
         .collect();
     record(None, |c| {
         for k in kinds {
             *c.items.entry(k).or_default() += 1;
         }
         for k in reads {
-            *c.reads.entry(k.to_string()).or_default() += 1;
+            *c.reads.entry(k).or_default() += 1;
         }
     });
 }

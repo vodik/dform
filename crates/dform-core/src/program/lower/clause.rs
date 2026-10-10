@@ -409,30 +409,15 @@ impl Lowering<'_> {
     }
 
     /// Whether `e` is a read the literal holding it tests or binds in
-    /// place: an [`ExprKind::Read`] not in term position.
+    /// place ([`Program::in_place`]).
     fn in_place(&self, e: ExprId) -> bool {
-        let e = &self.program.exprs[e];
-        matches!(e.kind, ExprKind::Read { .. } | ExprKind::Output { .. }) && e.hoisted.is_none()
+        self.program.in_place(e)
     }
 
     /// The read `e` tests or binds in place, `value` in its value column.
     fn in_place_read(&mut self, e: ExprId, value: Term) -> Lit {
         let span = self.program.exprs[e].span;
-        Lit::Pos(self.read_atom(e, span, |_| value).expect("a read"))
-    }
-
-    /// The read `e` (an [`ExprKind::Read`]) with `value` in its value
-    /// column.
-    pub(super) fn read(&mut self, e: ExprId, value: Term) -> Lit {
-        let ExprKind::Read { goal, column } = self.program.exprs[e].kind else {
-            unreachable!("not a read")
-        };
-        let GoalKind::Rel { rel, args } = &self.program.goals[goal].kind else {
-            unreachable!("a read is a relation's goal")
-        };
-        let mut a = self.atom(rel, args);
-        a.args[column] = value;
-        Lit::Pos(a)
+        Lit::Pos(self.read_holding(e, span, value).expect("a read"))
     }
 
     pub(super) fn atom(&mut self, rel: &RelRef, args: &RelArgs) -> Atom {

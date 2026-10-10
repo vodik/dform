@@ -40,11 +40,11 @@ impl Builder<'_> {
         let (Lit::Not(a), reads) = lits.split_last()? else {
             return None;
         };
-        let column = w.read?;
-        let value = a.args.get(column)?;
+        let (column, r) = w.read.as_ref()?;
+        let value = a.args.get(*column)?;
         let (mark, outer) = self.reading(outer, |b| mark.map(|m| b.mark(m)));
         let (kind, left) = self.reading(reads, |b| {
-            let read = b.at(a.span, |b| b.read(a, column));
+            let read = b.at(a.span, |b| b.read(a, *column, r));
             Some(match form {
                 Form::Truth if *value == Term::Val(Value::Bool(true)) => GoalKind::Truth(read),
                 Form::Has if *value == Term::Wildcard => GoalKind::Has(Has::Read(read)),

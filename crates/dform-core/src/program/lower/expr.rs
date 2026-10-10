@@ -146,13 +146,6 @@ impl<'p> Lowering<'p> {
                 let args = args.iter().map(|a| self.expr(*a)).collect();
                 (rel.name.clone(), args, *out)
             }
-            ExprKind::Read { .. } => {
-                let v = value_of(self);
-                let Lit::Pos(a) = self.read(value, v) else {
-                    unreachable!("a read is an atom")
-                };
-                return Some(a);
-            }
             ExprKind::Address { of, typ } => {
                 let v = value_of(self);
                 let mark = func(crate::modules::ABSOLUTE, vec![v]);
@@ -160,10 +153,8 @@ impl<'p> Lowering<'p> {
                     crate::address::REF,
                     vec![str_term(&typ.name), mark, str_term("")],
                 );
-                let Lit::Pos(a) = self.read(*of, r) else {
-                    unreachable!("a read is an atom")
-                };
-                return Some(a);
+                let at = self.program.exprs[*of].span;
+                return self.read_holding(*of, at, r);
             }
             _ => return None,
         };
@@ -175,6 +166,12 @@ impl<'p> Lowering<'p> {
             record: None,
             span,
         })
+    }
+
+    /// The read `value` is with `held` in its value column, at `span`
+    /// ([`Self::read_atom`]).
+    pub(super) fn read_holding(&mut self, value: ExprId, span: Span, held: Term) -> Option<Atom> {
+        self.read_atom(value, span, |_| held)
     }
 
     /// The term node `id` is, its reads lowered where they stand.

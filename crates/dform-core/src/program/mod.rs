@@ -27,8 +27,8 @@ pub mod types;
 pub use build::Builder;
 pub use lower::{LoweredStack, lower, lower_clause, lower_expr, lower_goal, lower_item};
 pub use node::{
-    Clause, ClauseId, Expr, ExprId, Goal, GoalId, Item, ItemId, ItemKind, Pattern, PatternId, Var,
-    VarId,
+    Clause, ClauseId, Expr, ExprId, ExprKind, Goal, GoalId, Item, ItemId, ItemKind, Pattern,
+    PatternId, Var, VarId,
 };
 pub use origin::Origin;
 pub use scope::{Scope, ScopeId, ScopeKind, Scopes};
@@ -60,15 +60,10 @@ pub struct Program {
     /// loader's extern): lowered before the node's own (step 5; gone when
     /// terms are built from the tree).
     pub terms_made: std::collections::BTreeMap<NodeId, Vec<Stmt>>,
-    /// The reads the front end hoisted, by where each is written, its
-    /// relation and its variable: what each reads, so its goal is built
-    /// as the read's own node (step 6; gone when reads are built from the
-    /// tree).
-    pub reads: std::collections::BTreeMap<ReadKey, Read>,
 }
 
-/// What a read the front end hoisted, `p(.., V, ..)`, reads: the goal
-/// binding `V` to the node of the read.
+/// What a read the front end makes, `p(.., V, ..)`, reads: hoisted, its
+/// node binds `V`; in place, the literal holding it fills `V`'s column.
 #[derive(Debug, Clone)]
 pub enum Read {
     /// `k(V)`: a value, `Value`.
@@ -83,21 +78,6 @@ pub enum Read {
     /// `p(a, .., V, ..)`: a relation or an extern by its other columns,
     /// `V` its `out`th, `Lookup`.
     Lookup { out: usize },
-}
-
-/// Where a hoisted read is written (file, start, end), its relation and
-/// its variable.
-pub type ReadKey = (u32, u32, u32, String, String);
-
-/// The key of the read `pred(var)` written at `span`.
-pub fn read_key(span: Span, pred: &str, var: &str) -> ReadKey {
-    (
-        span.file,
-        span.start,
-        span.end,
-        pred.to_string(),
-        var.to_string(),
-    )
 }
 
 /// How many of each numbered helper the build has taken: the one counter
@@ -148,6 +128,25 @@ impl Program {
     /// The item `kind` at `span`, in `scope`.
     pub fn item(&mut self, span: Span, scope: ScopeId, kind: ItemKind) -> ItemId {
         self.items.insert(Item { span, scope, kind })
+    }
+
+    /// Whether `e` is a read a literal tests or binds in place (`R.p ==
+    /// c`, `x = k`, `not R.ready`, `has n.k`), its value column the
+    /// literal's: a read's node not in term position.
+    pub fn in_place(&self, e: ExprId) -> bool {
+        let e = &self.exprs[e];
+        let read = match &e.kind {
+            ExprKind::Value { .. }
+            | ExprKind::Output { .. }
+            | ExprKind::World { .. }
+            | ExprKind::Lookup { .. } => true,
+            ExprKind::Field { base, path } => matches!(
+                (&self.exprs[*base].kind, path.as_slice()),
+                (ExprKind::Resource { .. }, [node::Step::Field(..)])
+            ),
+            _ => false,
+        };
+        read && e.hoisted.is_none()
     }
 
     /// The item of a module's file or a component: its items, in its

@@ -431,7 +431,6 @@ impl Speller<'_> {
     fn expr(&self, id: ExprId) -> String {
         match &self.p.exprs[id].kind {
             ExprKind::Missing | ExprKind::Hole => "_".into(),
-            ExprKind::Read { goal, .. } => self.goal(*goal),
             ExprKind::Address { of, .. } | ExprKind::Alias(of) => self.expr(*of),
             ExprKind::Lit(v) => crate::spell::value(v),
             ExprKind::Quantity { text } => text.clone(),

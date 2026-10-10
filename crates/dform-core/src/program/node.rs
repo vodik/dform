@@ -74,14 +74,6 @@ pub enum ExprKind {
     /// matching anything and holding nothing (`placeholders` refuses it
     /// where a value is read).
     Hole,
-    /// The value a read gives in its `column`, where a literal tests or
-    /// binds it in the read itself: `R.p == c`, `x = k`, `not R.ready`,
-    /// `has n.k` (step 4); in term position (`hoisted`), a relation read
-    /// by its other columns that no other node says (a copy of a
-    /// component, a document's rows). `goal` is the read the resolver
-    /// made (a relation's goal, its `column` a hole) until reads are
-    /// built from the tree; the literal holding it fills the column.
-    Read { goal: GoalId, column: usize },
     /// `1`, `"a"`, `true`, `10.0.0.0/8`: a literal of a known kind (step 3).
     Lit(Value),
     /// `500m`, `1Gi`: a quantity whose dimension its position decides
@@ -133,7 +125,9 @@ pub enum ExprKind {
     /// `settings.k` (step 3).
     Setting { key: Name },
     /// `p[a, b]`, `ext[a].f`: a relation or an extern read by its
-    /// other columns, its value the `out`th (step 6).
+    /// other columns, its value the `out`th (step 6); any read no other
+    /// node says (a copy of a component, a document's rows, an attribute
+    /// of a resource whose type is a variable) is its relation's.
     Lookup {
         rel: RelRef,
         args: Vec<ExprId>,
@@ -374,10 +368,10 @@ pub enum GoalKind {
     Member { pat: PatternId, coll: Coll },
     /// `x = e`, `(a, b) = e`, `{ a, ..r } = e`; `p = e[i]` an element
     /// (`value` a `Field` of one `Index` step); `x = R.p` the read itself
-    /// (`value` an [`ExprKind::Read`]).
+    /// (`value` a read in place, [`crate::program::Program::in_place`]).
     Bind { pat: PatternId, value: ExprId },
     /// `a < b`, chained `1 <= x <= 35`; `R.p == c` the read itself (`lhs`
-    /// an [`ExprKind::Read`]).
+    /// a read in place).
     Compare {
         lhs: ExprId,
         ops: Vec<(CmpOp, ExprId)>,
@@ -385,7 +379,7 @@ pub enum GoalKind {
     /// `has r`, `has r.p`, `has x.f` (step 4).
     Has(Has),
     /// `x.ready`: a truth test, `x = true`, or the read itself with
-    /// `true` in its value column (an [`ExprKind::Read`]).
+    /// `true` in its value column (a read in place).
     Truth(ExprId),
     /// `not B`, `not { B }`. Without a helper the clause is one goal and
     /// its last literal is negated (`not p(x)`, `x not in e`); with one
@@ -423,8 +417,8 @@ pub enum GoalKind {
 pub enum Has {
     /// `has r`: the resource exists, `__identity(T, A)` (R-152).
     Resource { typ: ExprId, addr: ExprId },
-    /// `has R.p`, `has k`: the read itself, `_` in its value column (an
-    /// [`ExprKind::Read`]).
+    /// `has R.p`, `has k`: the read itself, `_` in its value column (a
+    /// read in place).
     Read(ExprId),
     /// `has x.f`, `has R.p.q`: the walk to it has a value, bound to a
     /// variable nothing else reads (`resolve::HAS_VAR`).

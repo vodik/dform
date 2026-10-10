@@ -93,7 +93,17 @@ fn the_program_lowers_as_the_resolver_does() {
     assert!(items.get("a let").is_some_and(|n| *n > 0), "{items:?}");
     // Reads built as the read's own node, not the goal it lowered to.
     eprintln!("reads: {reads:?}");
-    for kind in ["value", "attribute", "output", "lookup"] {
+    // A read tested or bound in place (`R.p == c`, `x = k`) is the
+    // read's own node too, not its relation's goal.
+    for kind in [
+        "value",
+        "attribute",
+        "output",
+        "lookup",
+        "in place: value",
+        "in place: attribute",
+        "in place: output",
+    ] {
         assert!(reads.get(kind).is_some_and(|n| *n > 0), "{kind}: {reads:?}");
     }
 }

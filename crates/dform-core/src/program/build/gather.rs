@@ -10,10 +10,10 @@
 //! { }` rule, a loader's extern) no node of the term lowers to yet: they
 //! are the goal's, [`Program::terms_made`], lowered before its own.
 
-use super::{Builder, Form, Written};
+use super::{Builder, Form, Reads, Written};
 use crate::ast::{Lit, Span, Stmt};
 use crate::program::node::{ClauseId, GoalId, VarId};
-use crate::program::{NodeId, Program, check};
+use crate::program::{NodeId, Program, Read, check};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
@@ -24,15 +24,18 @@ pub struct Gather {
     frames: Vec<Frame>,
     /// The statement's variables, by the name each lowers to.
     vars: BTreeMap<String, VarId>,
+    /// What each read the statement hoisted reads.
+    reads: Reads,
     /// The clause of the statement's body, once it is lowered whole.
     clause: Option<ClauseId>,
     /// Whether each goal and clause built is lowered back and compared.
     compare: bool,
 }
 
-/// What a statement gathered: its variables and its clause.
+/// What a statement gathered: its variables, its reads and its clause.
 pub struct Statement {
     vars: BTreeMap<String, VarId>,
+    reads: Reads,
     clause: Option<ClauseId>,
 }
 
@@ -45,8 +48,9 @@ struct Frame {
     goals: Vec<(GoalId, BTreeSet<usize>)>,
     /// Whether each literal lowered inside it was built.
     failed: bool,
-    /// The value column of the read the literal tests in place.
-    read: Option<usize>,
+    /// The value column of the read the literal tests in place, and what
+    /// it reads.
+    read: Option<(usize, Read)>,
     /// The `__neg_N` it took, the statement's aggregate values then, and
     /// where in `goals` its body starts.
     negation: Option<(u32, Vec<String>, usize)>,
@@ -65,16 +69,22 @@ impl Gather {
         }
     }
 
+    /// The statement hoisted the read `pred(.., var, ..)`, which reads
+    /// `read`.
+    pub fn hoisted(&mut self, pred: &str, var: &str, read: Read) {
+        self.reads.insert((pred.to_string(), var.to_string()), read);
+    }
+
     /// A literal's or a clause's lowering starts.
     pub fn open(&mut self) {
         self.frames.push(Frame::default());
     }
 
-    /// The literal being lowered tests or binds a read in place, its
-    /// value in `column`.
-    pub fn read(&mut self, column: usize) {
+    /// The literal being lowered tests or binds the read `read` in
+    /// place, its value in `column`.
+    pub fn read(&mut self, column: usize, read: Read) {
         if let Some(f) = self.frames.last_mut() {
-            f.read = Some(column);
+            f.read = Some((column, read));
         }
     }
 
@@ -137,12 +147,16 @@ impl Gather {
         span: Span,
         written: &'p dyn Fn(&str) -> bool,
     ) -> Builder<'p> {
-        Builder::new(program, span, written).with_vars(std::mem::take(&mut self.vars))
+        let (vars, reads) = (
+            std::mem::take(&mut self.vars),
+            std::mem::take(&mut self.reads),
+        );
+        Builder::new(program, span, written).of_statement(vars, reads)
     }
 
-    /// `b`'s variables are the statement's again.
+    /// `b`'s variables and reads are the statement's again.
     pub fn done(&mut self, b: Builder) {
-        self.vars = b.into_vars();
+        (self.vars, self.reads) = b.into_statement();
     }
 
     /// A statement starts: what the one around it gathered so far, for
@@ -150,6 +164,7 @@ impl Gather {
     pub fn begin(&mut self) -> Statement {
         Statement {
             vars: std::mem::take(&mut self.vars),
+            reads: std::mem::take(&mut self.reads),
             clause: self.clause.take(),
         }
     }
@@ -157,6 +172,7 @@ impl Gather {
     /// The statement ends: the one around it gathers on.
     pub fn resume(&mut self, outer: Statement) {
         self.vars = outer.vars;
+        self.reads = outer.reads;
         self.clause = outer.clause;
     }
 
@@ -190,7 +206,7 @@ impl Gather {
                 after: &out[mid..],
                 helpers: &own,
                 body: &body,
-                read: frame.read,
+                read: frame.read.clone(),
                 negation: negation.map(|(n, folded, _)| (*n, folded.as_slice())),
             };
             let mut b = self.builder(program, span, written);

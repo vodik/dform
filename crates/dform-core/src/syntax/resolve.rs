@@ -9053,8 +9053,9 @@ impl<'u> Lowerer<'u> {
         let name = fresh(rc, &capitalise(hint));
         let v = var(&name);
         args.insert(out, v.clone());
-        let at = crate::program::read_key(span, pred, &name);
-        self.program.reads.insert(at, read);
+        if let Some(g) = &mut self.gather {
+            g.hoisted(pred, &name, read);
+        }
         pre.push(Lit::Pos(atom_at(pred, args, span)));
         rc.reads.insert(key, v.clone());
         v
@@ -9180,8 +9181,9 @@ impl<'u> Lowerer<'u> {
         pre: &mut Vec<Lit>,
         span: Span,
     ) {
-        let key = crate::program::read_key(span, pred, var_name);
-        self.program.reads.insert(key, Read::Value(read.0, read.1));
+        if let Some(g) = &mut self.gather {
+            g.hoisted(pred, var_name, Read::Value(read.0, read.1));
+        }
         pre.push(Lit::Pos(atom_at(pred, vec![var(var_name)], span)));
     }
 
@@ -9264,20 +9266,20 @@ impl<'u> Lowerer<'u> {
     }
 
     /// The read a resolved chain is, with `value` in its value column: the
-    /// direct forms `R.p == c`, `k == c`, `not R.p`. `None` when the chain
-    /// is not one read.
+    /// direct forms `R.p == c`, `k == c`, `not R.p`, and what it reads for
+    /// the program's builder. `None` when the chain is not one read.
     fn read_atom(&mut self, rc: &mut Rc, res: &Res, value: Term, span: Span) -> Option<Atom> {
         let _ = rc;
-        let (a, column) = Self::read_with(res, value, span)?;
+        let (a, column, read) = Self::read_with(res, value, span)?;
         if let Some(s) = &mut self.gather {
-            s.read(column);
+            s.read(column, read);
         }
         Some(a)
     }
 
-    /// The read `res` is with `value` in its value column, and that
-    /// column.
-    fn read_with(res: &Res, value: Term, span: Span) -> Option<(Atom, usize)> {
+    /// The read `res` is with `value` in its value column, that column,
+    /// and what it reads.
+    fn read_with(res: &Res, value: Term, span: Span) -> Option<(Atom, usize, Read)> {
         match res {
             Res::Ref { typ, addr, path } if path.len() == 1 => match &path[0] {
                 Seg::F(p) => Some((
@@ -9292,6 +9294,7 @@ impl<'u> Lowerer<'u> {
                         span,
                     ),
                     3,
+                    Read::Attr,
                 )),
                 Seg::I(_) | Seg::K(_) => None,
             },
@@ -9300,6 +9303,7 @@ impl<'u> Lowerer<'u> {
             } if path.is_empty() => Some((
                 atom_at("output", vec![inst.clone(), str_term(key), value], span),
                 2,
+                Read::Output,
             )),
             Res::World { typ, addr, path } => Some((
                 atom_at(
@@ -9308,10 +9312,13 @@ impl<'u> Lowerer<'u> {
                     span,
                 ),
                 3,
+                Read::World,
             )),
-            Res::Value { decl, via, path } if path.is_empty() => {
-                Some((atom_at(&via.relation(&decl.name), vec![value], span), 0))
-            }
+            Res::Value { decl, via, path } if path.is_empty() => Some((
+                atom_at(&via.relation(&decl.name), vec![value], span),
+                0,
+                Read::Value(decl.clone(), via.clone()),
+            )),
             Res::Lookup {
                 pred,
                 args,
@@ -9320,7 +9327,7 @@ impl<'u> Lowerer<'u> {
             } if path.is_empty() => {
                 let mut args = args.clone();
                 args.insert(*out, value);
-                Some((atom_at(pred, args, span), *out))
+                Some((atom_at(pred, args, span), *out, Read::Lookup { out: *out }))
             }
             _ => None,
         }
