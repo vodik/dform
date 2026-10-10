@@ -28,7 +28,7 @@ fn a_refused_plan_prints_a_deny_by_its_bindings() {
     assert!(!r.stderr.contains("ctx="), "{}", r.stderr);
     assert!(
         r.stderr.contains(
-            "constraint violations:\n- image not pinned  image = \"traefik:v3.7\", size = 1\n"
+            "refused  image not pinned  p.df:4\n  └─ image = \"traefik:v3.7\", size = 1\n"
         ),
         "{}",
         r.stderr

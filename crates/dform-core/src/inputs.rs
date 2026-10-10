@@ -691,18 +691,22 @@ fn fails_check(k: &str, name: &str, v: &Value, decl: &InputDecl) -> Result<()> {
         // A field of an object given whole, as its type is checked.
         false => format!("{given}: {name} is outside its check"),
     };
-    // The check, where the declaration writes it.
-    let at = crate::diag::find_in(decl.span, "check ")
-        .map(|c| Span {
-            end: decl.span.end,
-            ..c
-        })
-        .unwrap_or(decl.span);
-    let d = Diagnostic::error(at, message)
+    let d = Diagnostic::error(check_span(decl), message)
         .labelled("checked here")
         .with_given(given, "given here")
         .with_help(format!("give {name} a value of {ty} check {check}"));
     Err(Diagnostics(vec![d]).into())
+}
+
+/// Where input `decl`'s check is written: from `check` to the end of
+/// its declaration, else the declaration.
+fn check_span(decl: &InputDecl) -> Span {
+    crate::diag::find_in(decl.span, "check ")
+        .map(|c| Span {
+            end: decl.span.end,
+            ..c
+        })
+        .unwrap_or(decl.span)
 }
 
 /// Every value the program writes for an input as a literal (a `set`, a
@@ -780,8 +784,13 @@ impl Declared {
             false => format!("{} = {}", self.decl.name, spell::bare(x)),
         };
         Some(
-            Diagnostic::error(at, format!("{said}: {who} is {ty} check {check}"))
-                .with_label(self.decl.span, format!("checked here: {check}")),
+            Diagnostic::error(at, format!("{said} is outside the check on {who}"))
+                .labelled("given here")
+                .with_label(check_span(&self.decl), "checked here")
+                .with_help(format!(
+                    "give {} a value of {ty} check {check}",
+                    self.decl.name
+                )),
         )
     }
 }

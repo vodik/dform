@@ -6,9 +6,15 @@
 //! engine_phases) through `DFORM_TEST_SAID`.
 
 use dform::address::Address;
+use dform::diag::{Diagnostic, Kind};
 use dform::report::Style;
 use dform::said::{Question, Said, Teller};
 use dform::zset::file::Difference;
+
+/// A deny refusing, as `report::refusals` makes one.
+fn refused() -> Diagnostic {
+    Diagnostic::bare(Kind::Refused, "deny x").with_given("net.vpc main", "")
+}
 
 fn text(quiet: bool, said: &[Said]) -> String {
     let t = Teller {
@@ -179,15 +185,15 @@ fn an_approval_and_a_chaos_note_are_a_line_each() {
 fn a_violation_and_a_warning_are_said_on_stderr() {
     let violations = |after| Said::Violations {
         after,
-        lines: vec!["deny x  net.vpc main".into()],
+        refusals: vec![refused()],
     };
     assert_eq!(
         text(false, &[violations(None)]),
-        "constraint violations:\n- deny x  net.vpc main\n"
+        "refused  deny x\n  net.vpc main\n"
     );
     assert_eq!(
         text(false, &[violations(Some(1))]),
-        "constraint violations after tick 1:\n- deny x  net.vpc main\n"
+        "refused  deny x\n  net.vpc main\n  after tick 1\n"
     );
     assert_eq!(text(false, &[Said::Warning("w".into())]), "warning: w\n");
     assert_eq!(
@@ -220,15 +226,16 @@ fn a_line_on_stderr_goes_through_the_blocks_route() {
     };
     t.say(Said::Violations {
         after: Some(2),
-        lines: vec!["deny x  net.vpc main".into()],
+        refusals: vec![refused()],
     });
     t.say(Said::Warning("w".into()));
     dform::progress::route(None);
     assert_eq!(
         *lines.lock().unwrap(),
         [
-            "constraint violations after tick 2:",
-            "- deny x  net.vpc main",
+            "refused  deny x",
+            "  net.vpc main",
+            "  after tick 2",
             "warning: w"
         ]
     );

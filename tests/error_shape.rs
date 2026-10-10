@@ -11,7 +11,7 @@
 //! Code the message quotes for the reader to write (between backticks,
 //! `net.vpc["main"].cidr` in a help) is the source's syntax, not an
 //! address dform printed, and is not checked; nor is a source line a
-//! diagnostic quotes. The mock's own chaos log on its stderr says the
+//! diagnostic quotes beside its site. The mock's own chaos log on its stderr says the
 //! address as the plan does too.
 
 mod common;
@@ -22,12 +22,13 @@ use common::{Run, Scratch, repo};
 fn stored_forms(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in text.lines() {
-        // A source line a diagnostic quotes (`16 │ p(c) where ..`) is the
-        // program's text.
+        // A source line a diagnostic quotes beside its site (`├─
+        // p.df:16  p(c) where ..`) is the program's text.
         let quoted = line
-            .trim_start()
-            .split_once(" │")
-            .is_some_and(|(n, _)| n.chars().all(|c| c.is_ascii_digit()));
+            .trim_start_matches([' ', '├', '└', '│', '─'])
+            .split_once("  ")
+            .and_then(|(site, _)| site.rsplit_once(':'))
+            .is_some_and(|(_, n)| n.chars().all(|c| c.is_ascii_digit() || c == '-'));
         if quoted {
             continue;
         }
@@ -62,8 +63,8 @@ fn check(what: &str, r: &Run, found: &mut Vec<String>) {
 #[test]
 fn the_check_finds_a_stored_form() {
     assert_eq!(
-        stored_forms("Error: apply ovh.domain_record[\"k3s.\\\"x.y\\\"\"]: no"),
-        ["Error: apply ovh.domain_record[\"k3s.\\\"x.y\\\"\"]: no"]
+        stored_forms("error  apply ovh.domain_record[\"k3s.\\\"x.y\\\"\"]: no"),
+        ["error  apply ovh.domain_record[\"k3s.\\\"x.y\\\"\"]: no"]
     );
     assert!(stored_forms("  help: write `v = net.vpc[\"main\"].cidr` (H-15)").is_empty());
     assert!(stored_forms("\"[\" is not a valid pattern").is_empty());
@@ -167,7 +168,7 @@ fn a_refused_apply_is_said_once_in_three_lines() {
     );
     assert!(
         r.stderr
-            .ends_with(&format!("Error: apply p: tick 1 failed: {at}\n")),
+            .ends_with(&format!("error  apply p: tick 1 failed: {at}\n")),
         "{}",
         r.stderr
     );
@@ -228,15 +229,15 @@ fn an_error_outside_apply_has_no_caused_by_list() {
     for (args, said) in [
         (
             &["dev", "--world", "w.json", "plan", "p.df"][..],
-            "Error: parse state\n    expected ident at line 1 column 2\n",
+            "error  parse state\n    expected ident at line 1 column 2\n",
         ),
         (
             &["apply", "missing.json"][..],
-            "Error: read plan file missing.json\n    No such file or directory (os error 2)\n",
+            "error  read plan file missing.json\n    No such file or directory (os error 2)\n",
         ),
         (
             &["apply", "bad.json"][..],
-            "Error: parse plan file bad.json\n    EOF while parsing an object at line 1 column 1\n",
+            "error  parse plan file bad.json\n    EOF while parsing an object at line 1 column 1\n",
         ),
     ] {
         let r = run(args);

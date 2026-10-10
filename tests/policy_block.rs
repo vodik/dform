@@ -63,7 +63,7 @@ fn each_policy_is_a_line_with_its_tally_and_what_does_not_hold_under_it() {
     // A refused plan still leads with the error naming the policy.
     assert!(
         r.stderr
-            .contains("constraint violations:\n- a network is no bigger than a /16  vpc = \"c\""),
+            .contains("refused  a network is no bigger than a /16  p.df:7\n  └─ vpc = \"c\"\n"),
         "{}",
         r.stderr
     );

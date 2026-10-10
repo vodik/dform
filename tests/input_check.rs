@@ -30,7 +30,10 @@ fn a_set_value_is_checked_against_the_whole_check() {
         assert_eq!(r.code, Some(1), "{}", r.stderr);
         assert!(
             r.stderr.contains(&format!(
-                "--set agents={v}: input agents is int check agents < 4, agents != 7"
+                "error  --set agents={v} is outside the check on agents\n  \
+                 ├─ stacks/app.df:2  input agents: int = 2 check agents < 4, agents != 7\n  \
+                 │                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ checked here\n  \
+                 └─ --set agents={v}   given here\n"
             )),
             "{}",
             r.stderr
@@ -49,8 +52,10 @@ fn an_input_files_value_is_checked_at_its_line() {
         .run(&["plan", "app", "env=dev", "--input-file", "in.df"])
         .failure();
     assert!(
-        r.stderr
-            .contains("in.df:1:1: agents = 7: input agents is int check agents < 4, agents != 7"),
+        r.stderr.contains(
+            "error  agents = 7 is outside the check on input agents\n  \
+             ├─ in.df:1          agents(7)  given here\n"
+        ),
         "{}",
         r.stderr
     );
@@ -65,9 +70,13 @@ fn a_literal_set_is_checked_where_it_is_written() {
     );
     let r = s.run(&["plan", "app", "env=prod"]).failure();
     assert!(
-        r.stderr.contains(
-            "stacks/app.df:5:1: agents = 7: input agents is int check agents < 4, agents != 7"
-        ) && r.stderr.contains("checked here: agents < 4, agents != 7"),
+        r.stderr.contains(&format!(
+            "error  agents = 7 is outside the check on input agents\n  \
+             ├─ stacks/app.df:5  set agents = 7 where env == \"prod\"  given here\n  \
+             └─ stacks/app.df:2  input agents: int = 2 check agents < 4, agents != 7\n\
+             {}^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ checked here\n",
+            " ".repeat(44)
+        )),
         "{}",
         r.stderr
     );
@@ -99,8 +108,9 @@ fn a_check_over_another_input_is_a_policy() {
         r.stdout
     );
     assert!(
-        r.stderr
-            .contains("- input agents check fits(agents)  value = 5"),
+        r.stderr.contains(
+            "refused  input agents check fits(agents)  stacks/app.df:3\n  └─ value = 5\n"
+        ),
         "{}",
         r.stderr
     );

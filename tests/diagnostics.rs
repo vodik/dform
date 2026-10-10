@@ -11,18 +11,20 @@ fn plan(src: &str) -> common::Run {
     s.run(&["dev", "--world", "w.json", "plan", "p.df"])
 }
 
-/// A syntax error prints through ariadne: the location, the source line
-/// and what was expected; every error in the file, then a count.
+/// A syntax error prints what was expected, then where: the location
+/// and the source line; every error in the file, then a count.
 #[test]
 fn syntax_errors_print_with_their_source_line() {
     let r = plan("\np(\"a\") where q(]\nr(\"b\") where ,\nuse fake\n").failure();
     assert!(
-        r.stderr.contains("p.df:2:16: expected a term, found `]`"),
+        r.stderr
+            .contains("error  expected a term, found `]`\n  p.df:2  p(\"a\") where q(]\n"),
         "{}",
         r.stderr
     );
     assert!(
-        r.stderr.contains("p.df:3:14: expected a term, found `,`"),
+        r.stderr
+            .contains("error  expected a term, found `,`\n  p.df:3  r(\"b\") where ,\n"),
         "{}",
         r.stderr
     );
@@ -34,14 +36,15 @@ fn syntax_errors_print_with_their_source_line() {
 fn an_undefined_predicate_names_its_literal() {
     let r = plan("\nenv(\"prod\")\nq(x) where envv(x)\nuse fake\n").failure();
     assert!(
-        r.stderr.contains("p.df:3:12: undefined predicate envv/1"),
+        r.stderr
+            .contains("error  undefined predicate envv/1\n  p.df:3  q(x) where envv(x)\n"),
         "{}",
         r.stderr
     );
     // The relation it is nearest, and no rule in the compiler's form.
     assert!(
         r.stderr
-            .contains("Help: `env` is a relation of the program; else define `envv`"),
+            .contains("help: `env` is a relation of the program; else define `envv`"),
         "{}",
         r.stderr
     );
@@ -56,7 +59,8 @@ fn an_undefined_predicate_names_its_literal() {
 fn an_unknown_function_names_its_call() {
     let r = plan("\nenv(\"prod\")\nq(y) where env(x), y = lowr(x)\nuse fake\n").failure();
     assert!(
-        r.stderr.contains("p.df:3:24: unknown function lowr"),
+        r.stderr
+            .contains("error  unknown function lowr\n  p.df:3  q(y) where env(x), y = lowr(x)\n"),
         "{}",
         r.stderr
     );
@@ -68,14 +72,16 @@ fn an_unknown_function_names_its_call() {
     );
     let r = plan("\nresource net.a x {\n  name = uper(\"x\")\n}\nuse fake\n").failure();
     assert!(
-        r.stderr.contains("p.df:3:10: unknown function uper"),
+        r.stderr
+            .contains("error  unknown function uper\n  p.df:3  name = uper(\"x\")\n"),
         "{}",
         r.stderr
     );
     let r = plan("\nenv(\"prod\")\nq(count(x)) where env(x)\nuse fake\n").failure();
     assert!(
         r.stderr.contains(
-            "p.df:3:3: `count` is an aggregate: name its result after `where`, `n = count(x)`"
+            "error  `count` is an aggregate: name its result after `where`, `n = count(x)`\n  \
+             p.df:3  q(count(x)) where env(x)\n"
         ),
         "{}",
         r.stderr
@@ -99,8 +105,10 @@ fn a_negative_cycle_names_each_rule() {
 fn a_lowering_error_names_its_statement() {
     let r = plan("\nresource nope main {}\nuse fake\n").failure();
     assert!(
-        r.stderr
-            .contains("p.df:2:1: provider fake does not declare nope"),
+        r.stderr.contains(
+            "error  provider fake does not declare nope; no known provider schema declares it\n  \
+             ├─ p.df:2  resource nope main {}\n"
+        ),
         "{}",
         r.stderr
     );
