@@ -76,12 +76,12 @@ examples/tour plan`.
 A dform file says what should exist and under which conditions, and
 dform works out how many, in what order, and when. The file itself has
 no order either: a block may use a name declared further down or in
-another file. A block is a
-description that holds for every answer to its clause, so repetition is
-a condition, an edge is a reference, and a value known later is a later
-tick. Terraform makes a block a template and adds `for_each`,
-`depends_on`, `-target` and `default_tags` for what a template cannot
-say.
+another file, and a function is pure or reads the world, so the language
+knows what to wait for. A block is a description that holds for every
+answer to its clause, so repetition is a condition, an edge is a
+reference, and a value known later is a later tick. Terraform makes a
+block a template and adds `for_each`, `depends_on`, `-target` and
+`default_tags` for what a template cannot say.
 
 **Policy is part of the language.** Conformance has two halves, the
 shape every resource should have and the changes that may not happen,
@@ -170,46 +170,18 @@ tick 2  ? changes
 
 Terraform stops here and asks for a `-target` and a second run.
 
-**Everything explains itself, absence included.** A missing resource
-has an answer as precise as a present one. `dform why` names
-the rule that could have made it and the condition that failed:
+A provider can be configured from the plan's own values, so a host, the
+cluster on it and what runs in the cluster are one program and one plan.
 
-```
-$ dform why 'net.subnet private-us-test-1c'
-net.subnet private-us-test-1c: no rule derives it
-  stacks/tour.df:104  resource net.subnet "private-${z}" { .. } where zone(z, n)
-    zone("us-test-1c", n): no row
-    nearest: ("us-test-1a", 1), ("us-test-1b", 2)
-```
-
-## The language
-
-Evaluation order is never part of a program. `has x` guards that a
-value exists and, like every construct, waits for one not reported yet,
-so `not has c.resources.limits` finds a container without limits. A
-function is pure or reads the world, and the language knows which, so
-`random.password("db")` is the same every run and a read of a host
-still booting waits for its tick.
-
-A document is a value wherever it lives, and its rows keep their file
-and line:
+A provider is facts as well. Its types, its tables and its defaults are
+rows the program reads, so "is this zone on the account" is one line:
 
 ```dform
-input peering from csv.decode(io.read("data/peerings.csv"))
-
-let net = toml.decode(io.read("data/network.toml"))
-set from yaml.decode(io.read("config/${env}.yaml"))
-
-let raw: secret(string) = io.read("ssh://ubuntu@${server.public_ip}/etc/rancher/k3s/k3s.yaml")
-
-resource k8s.custom_resource_definition "${d.metadata.name}" = d where {
-  d in yaml.decode(io.read("git+https://github.com/traefik/traefik/docs/crds.yml?ref=v3.7.14"))
-}
+deny "example.com is not on this account" where not ovh.zone("example.com", _, _)
 ```
 
-Environments differ in one file. Each value of a `key` is its own
-deployment with its own state, and a `set` under a condition overrides
-an input's default:
+Environments are one file, and every policy is checked over all of them
+before anything ships:
 
 ```dform
 key env: enum("lab", "prod") = "lab"
@@ -219,10 +191,6 @@ output ingress_ip: ip = k3s.ingress_ip
 
 set { agents = 1, sizes.synapse = 100Gi } where env == "prod"
 ```
-
-Every deny holds in every environment before anything ships, or
-`dform test` says which does not. It runs the program once per combination of its enums, bools
-and keys, against an empty world:
 
 ```
 $ dform test
@@ -237,7 +205,37 @@ denied  dform plan tour env=dev --set public_db=true
 ...
 ```
 
-## The tool
+A document is a value and a value is a document:
+
+```dform
+input peering from csv.decode(io.read("data/peerings.csv"))
+
+let net = toml.decode(io.read("data/network.toml"))
+set from yaml.decode(io.read("config/${env}.yaml"))
+
+let raw: secret(string) = io.read("ssh://ubuntu@${server.public_ip}/etc/rancher/k3s/k3s.yaml")
+
+resource k8s.custom_resource_definition "${d.metadata.name}" = d where {
+  d in yaml.decode(io.read("git+https://github.com/traefik/traefik/docs/crds.yml?ref=v3.7.14"))
+}
+```
+
+**Everything explains itself, absence included.** A missing resource
+has an answer as precise as a present one. `dform why` names
+the rule that could have made it and the condition that failed:
+
+```
+$ dform why 'net.subnet private-us-test-1c'
+net.subnet private-us-test-1c: no rule derives it
+  stacks/tour.df:104  resource net.subnet "private-${z}" { .. } where zone(z, n)
+    zone("us-test-1c", n): no row
+    nearest: ("us-test-1a", 1), ("us-test-1b", 2)
+```
+
+## The work
+
+Day to day it is `plan` and `apply`. Apply asks once, resumes where it
+was interrupted, and never makes the same thing twice.
 
 **Stacks and deployments.** An estate plans and applies as one, each
 deployment with its own plan, question and state, in dependency order.
@@ -248,20 +246,9 @@ env=lab` applies platform first. Terragrunt wires this with `dependency`
 blocks, and Argo CD's ApplicationSet matrix generator does the matrix
 for Applications.
 
-**apply** asks once, and again only at a tick whose plan it could not
-show in full. An interrupted apply resumes where it stopped, and a
-create whose answer was lost is found again, never made twice.
-
-**destroy** is the plan against an empty program, so a deny over
-deletes refuses it. Lifecycle is facts a rule can condition,
-`lifecycle(k3s.server, "prevent_destroy") where env == "prod"`, and a
-provider can seed a type's default lifecycle. The Tailscale provider
-seeds its device's, so a device dropped from the program is let go
-unless the program says otherwise.
-
-**status** shows the health a provider reports for each object dform
-manages, `-` for a type its provider does not judge, and fails unless
-all is well:
+For a pipeline, `render` prints what would be sent, under policy, with
+no credentials and no state, and `status` says whether everything is
+healthy and fails if not:
 
 ```
 $ dform status app
@@ -272,59 +259,18 @@ net.vpc main       -
 status: 1 healthy, 1 degraded, 1 suspended, 1 without health
 ```
 
-Argo CD's health view uses the same words for Kubernetes resources.
-
-**render** prints a deployment's planned documents as their provider
-would send them, under the program's policy, with no provider
-configured and no state. For the Kubernetes provider, `dform render
-apps env=lab` is a YAML stream for Argo CD's config management plugin or
-`kubectl apply -f -`.
-
-**Approvals.** A risky change waits for a person, and the approval
-covers exactly what applies. `requires_approval(r,
-reason)` holds the change until someone signs the plan's digest, and
-`apply --approval FILE` brings the signature. Atlantis's `approved`
-requirement holds an apply until someone other than its author approves
-the pull request.
-
-**Providers** are written against the SDK in `docs/providers.md`, and
-`dform provider check` runs the conformance suite on one;
-`docs/reference.md` has every command and flag.
-
-## What you cannot do elsewhere
-
-| You want | The usual workaround | In dform |
-|---|---|---|
-| a resource per value only apply knows | `-target`, then a second run | it plans in the next tick |
-| how many rounds an apply takes | find out during it | the plan is grouped by tick |
-| a cluster and what runs on it, in one plan | two root modules | `use k8s { kubeconfig = k3s.kubeconfig }` |
-| a tag on everything, overridable | a variable threaded through every module | `set r.tags.team = "shop" @default where r in resource` |
-| a policy that sees inside modules | export every value as an output | policy reads any resource |
-| rules about the change set | plan JSON through a policy engine | denies over `deformation` rows; the plan says what holds, fails and cannot be known yet |
-| "why is this here?" | read the source | every plan line cites its file and line; `dform why ADDR` |
-| "why is this not here?" | read the source harder | `dform why` names the condition that failed |
-| routes from reachability | write them out by hand | a recursive rule |
-| policies tested over every environment | one test per case | `dform test` runs every combination of enums, bools and keys |
-| one generated password rotated | taint and hope nothing else moves | `dform secrets rotate D KEY` |
-| a state file that leaks nothing | encrypt the bucket | state holds no secret |
-| a key the cloud mints, written into another resource | it lands in state in the clear | the provider holds it; dform reveals it into the one call that writes it |
-| health after a deploy | apply waits on it, or a second tool | `dform status`, across every provider that reports it |
-| manifests for GitOps, under the program's policy | a template engine beside the infrastructure tool | `dform render`: no provider, no state |
+A risky change waits for a signature over exactly what will apply.
+Lifecycle is facts: `lifecycle(k3s.server, "prevent_destroy") where env
+== "prod"`, and a provider can seed a type's default, so a Tailscale
+device dropped from the program is released, not deleted.
 
 ## What it is not
 
-- Not a general-purpose language. There are no loops, no mutation and
-  no effects.
-- Not a configuration manager. It runs nothing on a host; cloud-init in
-  `user_data` and the cluster's own controllers do that.
-- Not a Helm. A manifest of one kind is a resource per document; a
-  chart's render of mixed kinds is not read by kind.
 - Not a proof. `dform test` enumerates enums, bools and keys and leaves
   every other input at its default.
 - Not finished. It is pre-release. The language changes without
   compatibility, and every `.df` here is rewritten when it does. Few
-  providers are real yet. Controller mode, `dform controller run`, is
-  experimental, behind `DFORM_EXPERIMENTAL=1`.
+  providers are real yet.
 
 ## Where next
 
