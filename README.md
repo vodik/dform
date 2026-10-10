@@ -159,9 +159,9 @@ tick 1  3 changes
 
 **Policy is part of the language.** The shape every resource should have
 and the changes that may not happen are both rules in the same file as
-the resources, and every plan checks them. `resource` is the table of
-every resource, whatever its type, so one `set` tags them all, beside
-what each block wrote:
+the resources, and every plan checks them. For example, every resource
+should carry the team's tag, whatever its type, and nobody should have
+to remember to add it:
 
 ```dform
 resource aws.vpc main { cidr_block = "10.0.0.0/16", tags = { component: "network" } }
@@ -174,8 +174,8 @@ $ dform query 'main.tags'
 { component: "network", team: "shop" }
 ```
 
-The plan is a table too. After apply, every change the next plan would
-make is a `deformation` row, so a policy can ask what the plan will do:
+The plan is a table too. For example, after an apply we can ask what the
+next plan would change, as rows of `deformation`:
 
 ```
 $ dform query 'deformation(kind, resource, _)' --set database.backup_days=14
@@ -191,8 +191,8 @@ exactly what will apply. With Terraform, policy is a second tool and a
 second language over the plan's JSON, where such a value is only marked
 unknown.
 
-**Lifecycle is a table too.** A rule writes it, a provider defaults it
-for its own types, and a policy reads it back:
+**Lifecycle is a table too.** For example, a prod database must never be
+deleted, and a policy can check that every one of them is protected:
 
 ```dform
 lifecycle(orders, "prevent_destroy") where env == "prod"
@@ -257,8 +257,9 @@ tick 2  ? changes
 Terraform cannot plan a resource address from a value it learns at
 apply; it asks for a `-target` and a second run.
 
-A provider takes its settings from the plan's own values, so a host, the
-cluster on it and what runs in the cluster are one program and one plan:
+For example, a host, the cluster installed on it and what runs in that
+cluster can be one program and one plan, with the cluster's provider
+configured from the host's address once it exists:
 
 ```dform
 use aws { region = "us-east-1" }
@@ -292,16 +293,16 @@ tick 2  1 change
 The Kubernetes provider's own documentation asks for the cluster and
 what runs on it in separate applies.
 
-A provider is facts as well. Its types, its tables and its defaults are
-rows the program reads, so "is this domain on the account" is one line:
+A provider is facts as well: its types, its tables and its defaults are
+rows the program reads. For example, a plan can refuse to write records
+into a domain the account does not host:
 
 ```dform
 deny "the domain is hosted here" where not ovh.zone("example.com", _, _)
 ```
 
-Environments are one file, prod differing by a `set` under a condition,
-and `dform test` runs every policy over every combination of enums and
-bools:
+For example, staging and prod can differ by one `set`, and `dform test`
+runs every policy over every combination of enums and bools:
 
 ```dform
 key env: enum("staging", "prod") = "staging"
