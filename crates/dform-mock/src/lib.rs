@@ -210,6 +210,10 @@ pub struct FakeCloud {
     world_path: Option<PathBuf>,
     inventory_path: Option<PathBuf>,
     schema: Schema,
+    /// The account the AWS-shaped mock reports, so `expect_account` has
+    /// something to check against; the fake cloud reports none unless
+    /// its settings name one.
+    account: Option<String>,
     chaos: Chaos,
     /// What `query` answers externs with: `providers/<name>/externs.df`.
     answers: Vec<Atom>,
@@ -290,6 +294,10 @@ impl FakeCloud {
         } else {
             specs
         };
+        self.account = specs
+            .iter()
+            .any(|n| n.ends_with("aws-mock"))
+            .then(|| "123456789012".to_string());
         let mut schema = Schema::default();
         for n in &specs {
             schema = schema.merge(dform_core::schema::load_provider(n)?)?;
@@ -1506,7 +1514,8 @@ impl Handler for Mock {
                 let account = config
                     .pointer("/settings/account")
                     .and_then(Json::as_str)
-                    .map(str::to_string);
+                    .map(str::to_string)
+                    .or_else(|| self.cloud().account.clone());
                 Reply::Configure(pb::ConfigureResponse {
                     account,
                     notes: Vec::new(),

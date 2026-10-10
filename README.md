@@ -14,10 +14,10 @@ is the difference between the two. A policy is a query that must return
 no rows, and we answer "why is this here" by tracking the rows that
 produced it.
 
-A complete program:
+A complete program. It refuses to plan against any other account:
 
 ```dform
-use aws { region = "us-east-1" }
+use aws { region = "us-east-1", expect_account = "123456789012" }
 
 resource aws.vpc main { cidr_block = "10.0.0.0/16" }
 
@@ -56,10 +56,11 @@ tick 1  4 changes
 policy  1 hold
 ```
 
-When the region gains a zone, the next plan has one more subnet and
-the file does not change, because `aws.availability_zone` is a table
-backed by the provider. `policy  1 hold` is the deny, checked and
-holding.
+When the region gains a zone, the next plan has one more subnet and the
+file does not change, because `aws.availability_zone` is a table backed
+by the provider. Each row says which answer produced it: `with n = 0`. A
+value set from another line carries that line. `policy 1 hold` is the
+deny, checked and holding.
 
 ## Describe what should exist
 
@@ -68,9 +69,7 @@ dform works out how many, in what order, and when. The file itself has
 no order: a block may use a name declared further down or in another
 file. A block holds for every answer to its clause, so repetition is a
 condition, an edge is a reference, and dform plans a value known later,
-later. Terraform makes a block a template and adds `for_each`,
-`depends_on`, `-target` and `default_tags` for what a template cannot
-say.
+later.
 
 For example, we can use dform to describe a rough network layout and
 derive and validate the topology from that description. Add a spoke and
@@ -235,9 +234,6 @@ tick 2  1 change
       metadata.name = "apps"
 ```
 
-The Kubernetes provider's own documentation asks for the cluster and
-what runs on it in separate applies.
-
 For example, we want a blue/green rollout: the Service moves only after
 the schema migration succeeds and every replica of the new colour is
 ready:
@@ -334,9 +330,8 @@ deny "every prod database is kept" { db } where {
 }
 ```
 
-Terraform's `prevent_destroy` must be a literal, and `moved(aws.vpc,
-"main", network.vpc)` moves a resource to a new address without
-replacing it.
+`moved(aws.vpc, "main", network.vpc)` moves a resource to a new address
+without replacing it.
 
 For example, we want `dform test` to run every policy over every
 combination of enums and bools, staging and prod included:
@@ -394,9 +389,10 @@ aws.subnet private-us-east-1d: no rule derives it
 
 ## The work
 
-Day to day it is `plan` and `apply`. Apply asks before anything
-changes and again only when a later plan differs from the one shown;
-interrupted, it resumes where it stopped.
+Day to day it is `plan` and `apply`. Apply asks before anything changes
+and again only when a later plan differs from the one shown;
+interrupted, it resumes where it stopped. dform fences state: a stalled
+apply cannot write once its lease has expired.
 
 **Stacks and deployments.** An estate plans and applies as one, each
 deployment with its own plan, approval and state, in dependency order.
