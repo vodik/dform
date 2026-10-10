@@ -1,4 +1,10 @@
-tests/syntax/err/set_target.df:5:5: `set` writes a resource's attribute or an input: nothing in scope is named `api`
+error  `set` writes a resource's attribute or an input: nothing in scope is named `api`
+  tests/syntax/err/set_target.df:5  set api.spec.template.spec.containers["api"].image = "api:2" where on(1)
+                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   help: a resource is named as its block declares it (`resource T api`), or by its type and key, `T["api"]`
-tests/syntax/err/set_target.df:6:11: unknown name `api`
+
+error  unknown name `api`
+  tests/syntax/err/set_target.df:6  let img = api.spec.template.spec.containers["api"].image
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   help: nothing in scope is named `api`: give it a value after `where` (`api in ..`, `api = ..`), or quote a string, "api.spec.template.spec.containers"
+2 errors

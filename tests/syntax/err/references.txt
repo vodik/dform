@@ -1,7 +1,19 @@
-tests/syntax/err/references.df:3:34: `main.id`: a program does not read an id; a reference is the resource
+error  `main.id`: a program does not read an id; a reference is the resource
+  tests/syntax/err/references.df:3  resource net.subnet a { vpc_id = main.id }
+                                                                     ^^^^^^^
   help: write `main` itself where an attribute takes the resource, or `ref(main)` where an attribute that is not a `ref(T)` needs its id (R-43)
-tests/syntax/err/references.df:4:30: `v.id`: a program does not read an id; a reference is the resource
+
+error  `v.id`: a program does not read an id; a reference is the resource
+  tests/syntax/err/references.df:4  p(x) where v in net.vpc, x = v.id
+                                                                 ^^^^
   help: write `v` itself where an attribute takes the resource, or `ref(v)` where an attribute that is not a `ref(T)` needs its id (R-43)
-tests/syntax/err/references.df:6:34: `r` is a reference of no known type: `r.path` reads nothing
+
+error  `r` is a reference of no known type: `r.path` reads nothing
+  tests/syntax/err/references.df:6  q(k) where deformation(k, r, _), r.cidr == "10.0.0.0/16"
+                                                                     ^^^^^^
   help: bind its type first, `r in T`, and `r.path` reads that resource (R-43)
-tests/syntax/err/references.df:8:36: a resource here, not a value: its name in scope, `T["a"]`, or a variable (R-42)
+
+error  a resource here, not a value: its name in scope, `T["a"]`, or a variable (R-42)
+  tests/syntax/err/references.df:8  resource net.subnet b { note = ref("main") }
+                                                                       ^^^^^^
+4 errors

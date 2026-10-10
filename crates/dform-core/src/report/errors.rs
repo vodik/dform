@@ -7,12 +7,13 @@ use super::Why;
 use super::explain::relative_place;
 use super::fold::whole;
 use super::labels::{address, attribute};
-use super::layout::{Row, WIDTH, layout};
+use super::layout::WIDTH;
 use super::mask::{Shown, shown_value};
 use super::style::{Paint, Style};
 use super::tree;
 use crate::address::Address;
 use crate::ast::{Atom, Term};
+use crate::diag::{self, Diagnostic, Kind};
 use crate::engine::EvalResult;
 use crate::fmt::value::Tree;
 use crate::provider::json_to_value;
@@ -119,6 +120,34 @@ impl Failure {
     }
 }
 
+impl Failure {
+    /// As every error is printed ([`crate::diag`]): what happened and
+    /// the provider's first line on one line, a refusal by its word; the
+    /// resource's block, where the program derives it, as its site; the
+    /// message's other lines under it. None for the program's own error
+    /// ([`Failure::located`]), said at its site as the compiler says one.
+    pub fn diagnostic(&self) -> Option<Diagnostic> {
+        if self.located {
+            return None;
+        }
+        let (kind, what) = match self.what.strip_suffix(": refused") {
+            Some(what) => (Kind::Refused, what),
+            None => (Kind::Error, self.what.as_str()),
+        };
+        let mut lines = self.message.lines().filter(|l| !l.trim().is_empty());
+        let message = match lines.next() {
+            Some(l) => format!("{what}: {}", l.trim()),
+            None => what.to_string(),
+        };
+        let span = self.site.as_deref().and_then(diag::span_at);
+        let mut d = Diagnostic::new(kind, span.unwrap_or_default(), message);
+        if let (None, Some(site)) = (span, &self.site) {
+            d = d.with_given(site.clone(), "");
+        }
+        Some(lines.fold(d, |d, l| d.with_note(l.trim())))
+    }
+}
+
 impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.lines("").join("\n"))
@@ -221,18 +250,22 @@ impl Witness {
 /// The place `FILE:LINE` of a statement the engine names with its place
 /// after it, `.. (at FILE:LINE:COL)` or `.. (at FILE:LINE:COL, use m)`.
 fn statement_place(from: &str) -> Option<String> {
+    let (file_line, _) = statement_at(from)?.rsplit_once(':')?;
+    Some(file_line.to_string())
+}
+
+/// The same, `FILE:LINE:COL`.
+pub(super) fn statement_at(from: &str) -> Option<&str> {
     let inner = from.strip_suffix(')')?;
     let at = &inner[inner.rfind(" (at ")? + 5..];
     let at = at.split(", ").next()?;
-    let (file_line, col) = at.rsplit_once(':')?;
-    col.bytes()
-        .all(|b| b.is_ascii_digit())
-        .then(|| file_line.to_string())
+    let (_, col) = at.rsplit_once(':')?;
+    col.bytes().all(|b| b.is_ascii_digit()).then_some(at)
 }
 
 /// The rank a conflict's witness has when it is the check the value
 /// violates (`engine::collapse`).
-const REFINEMENT: &str = "refinement";
+pub(super) const REFINEMENT: &str = "refinement";
 
 /// The deny that names an attribute whose contributions conflict.
 pub const CONFLICT: &str = "conflicting attribute contributions";
@@ -326,6 +359,11 @@ pub(super) fn diag(ctx: &BTreeMap<String, Value>, r: &Redactor) -> Diag {
 /// ctx={..}` or `refinement violated ctx={..}`): what a run that refuses
 /// before it plans says in place of the raw context.
 pub fn violation_conflict(v: &str, r: &Redactor, why: Why, style: Style) -> Option<String> {
+    Some(diag_lines(&conflict_of(v, r)?, why, style, true))
+}
+
+/// The conflict violation `v` is, when it is one ([`is_conflict`]).
+pub(super) fn conflict_of(v: &str, r: &Redactor) -> Option<Diag> {
     let (msg, ctx) = v.split_once(" ctx=")?;
     if msg != CONFLICT && msg != crate::refine::VIOLATED {
         return None;
@@ -334,44 +372,7 @@ pub fn violation_conflict(v: &str, r: &Redactor, why: Why, style: Style) -> Opti
     let Value::Obj(ctx) = json_to_value(&ctx) else {
         return None;
     };
-    Some(diag_lines(&diag(&ctx, r), why, style, true))
-}
-
-/// The violations a run that refuses prints under `constraint
-/// violations:`, on the plan, apply and destroy paths alike: each as the
-/// plan's `!` line, a conflict as the `conflicts` section prints it
-/// ([`violation_conflict`]), a deny as its message with its bindings in
-/// the site column, `key = value` as the program would write the value
-/// and never the context's JSON (After R-149), aligned across the lines;
-/// bindings too wide for the column go one to a line beneath it.
-pub fn violations(vs: &[String], r: &Redactor, style: Style) -> String {
-    let mut out = String::new();
-    let mut rows = Vec::new();
-    let flush = |rows: &mut Vec<Row>, out: &mut String| {
-        out.push_str(&layout(rows, style));
-        rows.clear();
-    };
-    for v in vs {
-        if let Some(c) = violation_conflict(v, r, Why::Line, style) {
-            flush(&mut rows, &mut out);
-            out.push_str(&c);
-            continue;
-        }
-        let (message, bindings) = violation_parts(v, r);
-        let left = format!("  ! {message}");
-        let row = Row::new(&left, style.paint(Paint::Error, &left));
-        let joined = bindings.join(", ");
-        if left.chars().count() + 4 + joined.chars().count() <= WIDTH {
-            rows.push(row.with(vec![joined]));
-            continue;
-        }
-        rows.push(row);
-        for b in bindings {
-            rows.push(Row::plain(format!("      {}", style.paint(Paint::Dim, &b))));
-        }
-    }
-    flush(&mut rows, &mut out);
-    out
+    Some(diag(&ctx, r))
 }
 
 /// A violation's message and, for a deny with a context object, its
@@ -408,22 +409,6 @@ fn binding(x: &Json, r: &Redactor) -> String {
         return attribute(&a, attr);
     }
     r.surface(&json_to_value(x))
-}
-
-/// A violation as a run that refuses says it on one line: a deny as its
-/// message and its bindings ([`violations`]); any other as the evaluator
-/// words it.
-pub fn violation_line(v: &str, r: &Redactor) -> String {
-    // A conflict (a refinement violated) as the `conflicts` section says
-    // it, its witnesses beneath.
-    if let Some(c) = violation_conflict(v, r, Why::Line, Style::PLAIN) {
-        return c.trim_start().trim_end().to_string();
-    }
-    let (message, bindings) = violation_parts(v, r);
-    match bindings.is_empty() {
-        true => message,
-        false => format!("{message}  {}", bindings.join(", ")),
-    }
 }
 
 /// A contribution's read of a row that does not exist (R-194): a ref to

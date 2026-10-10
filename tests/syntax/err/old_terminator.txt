@@ -1,4 +1,10 @@
-tests/syntax/err/old_terminator.df:2:7: expected the end of the line, found `.`
+error  expected the end of the line, found `.`
+  tests/syntax/err/old_terminator.df:2  p("a").
+                                              ^
   help: a statement ends at the end of its line; there is no `.` terminator
-tests/syntax/err/old_terminator.df:3:6: expected `where` or the end of the line, found `:-`
+
+error  expected `where` or the end of the line, found `:-`
+  tests/syntax/err/old_terminator.df:3  q(x) :- p(x)
+                                             ^^
   help: `:-` is spelled `where`: `p(x) where q(x)`
+2 errors

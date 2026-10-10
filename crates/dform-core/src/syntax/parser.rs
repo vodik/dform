@@ -22,6 +22,8 @@ pub struct ParseError {
     pub end: usize,
     pub message: String,
     pub hint: Option<String>,
+    /// What the caret under its end says (`expected `}` by here`).
+    pub label: Option<String>,
     /// A header statement written after the body began (R-27): the
     /// statement parsed, and `fmt` moves it.
     pub misplaced: bool,
@@ -176,6 +178,8 @@ struct Parser<'a> {
     /// The chain being parsed is a `from` term's: `[_]` ends it, the
     /// selector's first step (`source_term`).
     each_ends: bool,
+    /// Byte offset of each `{` not yet closed, the innermost last.
+    opened: Vec<usize>,
 }
 
 impl<'a> Parser<'a> {
@@ -192,6 +196,7 @@ impl<'a> Parser<'a> {
             stmt_start: 0,
             selector: false,
             each_ends: false,
+            opened: Vec::new(),
         }
     }
 
@@ -313,6 +318,13 @@ impl<'a> Parser<'a> {
         self.flush_trivia();
         if let Some(t) = self.toks.get(self.pos) {
             self.builder.token(t.kind.into(), &self.src[t.start..t.end]);
+            match t.kind {
+                L_BRACE => self.opened.push(t.start),
+                R_BRACE => {
+                    self.opened.pop();
+                }
+                _ => {}
+            }
             self.pos += 1;
         }
     }
@@ -393,11 +405,30 @@ impl<'a> Parser<'a> {
                 (at, at)
             }
         };
+        // The end of the file where a `}` would do: the block it would
+        // close is what is wrong, from its first line to here.
+        if self.nth(0) == EOF
+            && message.contains("`}`")
+            && let Some(&open) = self.opened.last()
+        {
+            let first = self.src[..open].rfind('\n').map_or(0, |i| i + 1);
+            let line = self.src[..open].matches('\n').count() + 1;
+            self.errors.push(ParseError {
+                start: first,
+                end: start.max(first),
+                message: format!("the block opened on line {line} is never closed"),
+                hint: Some("close it: a `}` after its last line".into()),
+                label: Some("expected `}` by here".into()),
+                misplaced: false,
+            });
+            return;
+        }
         self.errors.push(ParseError {
             start,
             end,
             message,
             hint,
+            label: None,
             misplaced: false,
         });
     }
@@ -621,6 +652,7 @@ impl<'a> Parser<'a> {
                 "a file's `key` and `input` lines come first; `dform fmt` moves `{what}` above \
                  line {line}"
             )),
+            label: None,
             misplaced: true,
         }
     }
@@ -673,6 +705,7 @@ impl<'a> Parser<'a> {
                 crate::project::EDITION
             ),
             hint: Some("delete the line; `dform fmt` does".to_string()),
+            label: None,
             misplaced: false,
         });
         Ok(())

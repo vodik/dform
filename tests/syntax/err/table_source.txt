@@ -1,9 +1,26 @@
-tests/syntax/err/table_source.df:8:26: token: column value is a secret
-  note: a table's rows are read in the clear and recorded in the plan file; a secret comes from a secret input, a data source's secret column or a std function such as `random.password`
-tests/syntax/err/table_source.df:3:18: unknown format xml: a table's source is FORMAT.decode(io.read(LOCATION))
+error  token: column value is a secret
+  tests/syntax/err/table_source.df:8  decl token(name: string, value: secret(string))
+                                                               ^^^^^^^^^^^^^^^^^^^^^
+  a table's rows are read in the clear and recorded in the plan file; a secret comes from a secret input, a data source's secret column or a std function such as `random.password`
+
+error  unknown format xml: a table's source is FORMAT.decode(io.read(LOCATION))
+  tests/syntax/err/table_source.df:3  input peers from xml("peers.xml")
+                                                       ^^^^^^^^^^^^^^^^
   help: FORMAT is one of csv, json, yaml, toml; LOCATION is a path, `"data/p.csv"`, or a uri, `"git+https://HOST/OWNER/REPO/PATH?ref=TAG"`, `"ssh://USER@HOST/PATH"`
-tests/syntax/err/table_source.df:4:37: `git(..)` is gone (R-153): a repository's file is a location
+
+error  `git(..)` is gone (R-153): a repository's file is a location
+  tests/syntax/err/table_source.df:4  input pins from yaml.decode(io.read(git("ops.git", "pins.yaml")))
+                                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
   help: `io.read("git+https://HOST/OWNER/REPO/PATH?ref=TAG")` (`git+ssh://` over ssh, `git+file:REPO/PATH?ref=TAG` for a repository in the project), read at the commit the ref names, which the plan file records
-tests/syntax/err/table_source.df:11:24: dup: two columns are named name
-tests/syntax/err/table_source.df:12:11: typo: column name: unknown type strng
-tests/syntax/err/table_source.df:15:3: a module's relation is given by its user: declare `input inner`, and its user writes `inner from ..` in the `use` block
+
+error  dup: two columns are named name
+  tests/syntax/err/table_source.df:11  decl dup(name: string, name: int)
+                                                              ^^^^^^^^^
+
+error  typo: column name: unknown type strng
+  tests/syntax/err/table_source.df:12  decl typo(name: strng)
+                                                 ^^^^^^^^^^^
+
+error  a module's relation is given by its user: declare `input inner`, and its user writes `inner from ..` in the `use` block
+  tests/syntax/err/table_source.df:15  input inner from csv.decode(io.read("inner.csv"))
+6 errors

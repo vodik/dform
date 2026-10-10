@@ -29,5 +29,5 @@ mod surface;
 pub use because::Because;
 pub use chains::Step;
 pub use docrow::DocRow;
-pub use printer::{Focus, Printer, find};
+pub use printer::{Focus, Printer, branch, find};
 pub use sites::{Site, cell_name};

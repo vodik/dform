@@ -77,6 +77,8 @@ struct Cli {
     audit_sink: Option<String>,
     /// How plan text is painted on stdout (`--color`).
     style: report::Style,
+    /// How an error is painted on stderr.
+    err_style: report::Style,
     /// How a result set prints on stdout: `style`, at the terminal's width.
     table: report::table::Options,
     /// `apply` with no target in a project of several stacks: every one,
@@ -218,10 +220,7 @@ pub fn main(
         Err(e) => {
             use std::io::IsTerminal;
             let color = color.style(std::io::stderr().is_terminal()).color;
-            match e.downcast_ref::<Refused>().filter(|r| r.footer) {
-                Some(r) => eprintln!("{r}"),
-                None => eprint!("{}", crate::diag::report(&e, color)),
-            }
+            eprint!("{}", Refused::report(&e, color));
             Outcome::of_error(&e)
         }
     };
@@ -418,6 +417,21 @@ impl Refused {
             conflicts,
             denies,
             footer: true,
+        }
+    }
+}
+
+impl Refused {
+    /// How error `e` is printed: an apply's refusal as its footer says
+    /// it, another refusal and any other error as every error is
+    /// (`diag::report`), a refusal by its kind's word.
+    pub(super) fn report(e: &anyhow::Error, color: bool) -> String {
+        match e.downcast_ref::<Refused>() {
+            Some(r) if r.footer => format!("{r}\n"),
+            Some(r) => {
+                crate::diag::Diagnostic::bare(crate::diag::Kind::Refused, &r.what).render(color)
+            }
+            None => crate::diag::report(e, color),
         }
     }
 }

@@ -1,2 +1,4 @@
-tests/syntax/err/provider_gone.df:3:1: expected a statement, found `provider`
+error  expected a statement, found `provider`
+  tests/syntax/err/provider_gone.df:3  provider fake { region = "eu-west-1" }
+                                       ^^^^^^^^
   help: `provider` is gone (R-112): a provider is imported and configured by `use`, `use NAME { k = v }`, or `use NAME` with no settings

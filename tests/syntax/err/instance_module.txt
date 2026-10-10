@@ -1,2 +1,3 @@
-tests/syntax/err/instance_module/stacks/main.df:2:1: config is a module; `use` it
-  note: a module, a file, is imported once by `use`; a component, an item `component NAME { .. }` of a module, is a type: `resource C NAME { .. }` makes one
+error  config is a module; `use` it
+  tests/syntax/err/instance_module/stacks/main.df:2  resource config main {}
+  a module, a file, is imported once by `use`; a component, an item `component NAME { .. }` of a module, is a type: `resource C NAME { .. }` makes one

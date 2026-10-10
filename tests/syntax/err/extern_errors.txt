@@ -1,5 +1,13 @@
-tests/syntax/err/extern_errors.df:8:1: next.hop is answered by its provider; the program may not state it
-  tests/syntax/err/extern_errors.df:5:1: declared here
-tests/syntax/err/extern_errors.df:11:32: next.hop in a recursive rule
-  note: reach depends on itself through reach; a data source is asked once its inputs are complete
-tests/syntax/err/extern_errors.df:13:26: next.hop takes 2 arguments, not 3
+error  next.hop is answered by its provider; the program may not state it
+  ├─ tests/syntax/err/extern_errors.df:8  next.hop("b.txt", "b")
+  └─ tests/syntax/err/extern_errors.df:5  extern next.hop(+from, -to)  declared here
+
+error  next.hop in a recursive rule
+  tests/syntax/err/extern_errors.df:11  reach(a, c) where reach(a, b), next.hop(b, c)
+                                                                       ^^^^^^^^^^^^^^
+  reach depends on itself through reach; a data source is asked once its inputs are complete
+
+error  next.hop takes 2 arguments, not 3
+  tests/syntax/err/extern_errors.df:13  arity(v) where paths(p), next.hop(p, v, 1)
+                                                                 ^^^^^^^^^^^^^^^^^
+3 errors

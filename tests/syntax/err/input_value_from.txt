@@ -1,2 +1,4 @@
-tests/syntax/err/input_value_from.df:3:21: expected `=` or the end of the line, found `from`
+error  expected `=` or the end of the line, found `from`
+  tests/syntax/err/input_value_from.df:3  input replicas: int from facts("replicas.facts")
+                                                              ^^^^
   help: `from` gives rows and `=` gives a value: a relation's rows are `input p from facts(..)`, its columns its `decl p(a, b)`, and a value is `input x: T = d`

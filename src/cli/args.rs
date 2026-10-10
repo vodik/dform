@@ -850,6 +850,7 @@ impl Cli {
             inventory: mock.inventory,
             audit_sink: inputs.audit_sink,
             style,
+            err_style: inputs.color.style(std::io::stderr().is_terminal()),
             table: report::table::Options {
                 width: terminal_width().unwrap_or(report::table::Options::PLAIN.width),
                 style,

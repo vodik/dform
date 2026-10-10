@@ -1,2 +1,4 @@
-tests/syntax/err/hyphen_subtraction.df:2:8: `us-east` is arithmetic on two names
+error  `us-east` is arithmetic on two names
+  tests/syntax/err/hyphen_subtraction.df:2  region(us-east)
+                                                   ^^^^^^^
   help: `-` subtracts `east` from `us`; a name with a `-` in it is a string, "us-east"

@@ -1,7 +1,28 @@
-tests/syntax/err/durations.df:3:3: `1.5h`: a duration's numbers are whole: write `1h30m`
-tests/syntax/err/durations.df:4:3: `30m1h`: a duration's units are written once each, largest first (`1h30m`)
-tests/syntax/err/durations.df:5:3: `1h1h`: a duration's units are written once each, largest first (`1h30m`)
-tests/syntax/err/durations.df:7:15: let d is time: `2026-13-01T00:00:00Z`: failed to parse two digit integer as month: parameter 'month' is not in the required range of 1..=12; a time is RFC 3339 with an offset (`2026-10-02T09:00:00+02:00`) or with a zone (`2026-10-02T09:00[Europe/Paris]`)
-tests/syntax/err/durations.df:8:15: let e is time: `2026-10-02T09:00` has neither an offset nor a zone; a time is RFC 3339 with an offset (`2026-10-02T09:00:00+02:00`) or with a zone (`2026-10-02T09:00[Europe/Paris]`)
-tests/syntax/err/durations.df:9:15: let f is time: `2026-10-02T09:00[Mars/Olympus]`: failed to find time zone `Mars/Olympus` in time zone database
-tests/syntax/err/durations.df:10:19: let g is duration: `P1Q` is not an ISO 8601 duration: expected to find date unit designator suffix (`Y`, `M`, `W` or `D`), but found `Q` instead
+error  `1.5h`: a duration's numbers are whole: write `1h30m`
+  tests/syntax/err/durations.df:3  a(1.5h)
+                                     ^^^^
+
+error  `30m1h`: a duration's units are written once each, largest first (`1h30m`)
+  tests/syntax/err/durations.df:4  b(30m1h)
+                                     ^^^^^
+
+error  `1h1h`: a duration's units are written once each, largest first (`1h30m`)
+  tests/syntax/err/durations.df:5  c(1h1h)
+                                     ^^^^
+
+error  let d is time: `2026-13-01T00:00:00Z`: failed to parse two digit integer as month: parameter 'month' is not in the required range of 1..=12; a time is RFC 3339 with an offset (`2026-10-02T09:00:00+02:00`) or with a zone (`2026-10-02T09:00[Europe/Paris]`)
+  tests/syntax/err/durations.df:7  let d: time = "2026-13-01T00:00:00Z"
+                                                 ^^^^^^^^^^^^^^^^^^^^^^
+
+error  let e is time: `2026-10-02T09:00` has neither an offset nor a zone; a time is RFC 3339 with an offset (`2026-10-02T09:00:00+02:00`) or with a zone (`2026-10-02T09:00[Europe/Paris]`)
+  tests/syntax/err/durations.df:8  let e: time = "2026-10-02T09:00"
+                                                 ^^^^^^^^^^^^^^^^^^
+
+error  let f is time: `2026-10-02T09:00[Mars/Olympus]`: failed to find time zone `Mars/Olympus` in time zone database
+  tests/syntax/err/durations.df:9  let f: time = "2026-10-02T09:00[Mars/Olympus]"
+                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error  let g is duration: `P1Q` is not an ISO 8601 duration: expected to find date unit designator suffix (`Y`, `M`, `W` or `D`), but found `Q` instead
+  tests/syntax/err/durations.df:10  let g: duration = "P1Q"
+                                                      ^^^^^
+7 errors

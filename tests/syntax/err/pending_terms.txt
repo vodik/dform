@@ -1,1 +1,3 @@
-tests/syntax/err/pending_terms.df:3:19: expected `]`, found `ordered`
+error  expected `]`, found `ordered`
+  tests/syntax/err/pending_terms.df:3  t(l) where l = [x ordered by x | r(x)]
+                                                         ^^^^^^^

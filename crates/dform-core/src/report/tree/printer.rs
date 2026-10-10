@@ -297,13 +297,7 @@ impl Printer<'_> {
             hidden = before - facts.len();
         }
         let n = facts.len() + others.len() + usize::from(hidden > 0);
-        let mark = |i: usize| {
-            if i + 1 == n {
-                ("└─ ", "   ")
-            } else {
-                ("├─ ", "│  ")
-            }
-        };
+        let mark = |i: usize| branch(i, n);
         for (i, f) in facts.iter().enumerate() {
             let (b, p) = mark(i);
             let note = if aggregate { self.owner(*f) } else { None };
@@ -392,5 +386,15 @@ pub(super) fn leaf_text(l: &Leaf) -> String {
         Leaf::Extern { call } => call.clone(),
         Leaf::Rule { id } => format!("by {id}"),
         Leaf::Absent { atom } => format!("not {}   (absent)", crate::spell::atom(atom)),
+    }
+}
+
+/// The glyphs of entry `i` of `n` hung off a tree: its own line's
+/// (`├─ `, the last's `└─ `) and the lines under it (`│  `, the last's
+/// blank): what `why --tree` and a diagnostic's sites draw.
+pub fn branch(i: usize, n: usize) -> (&'static str, &'static str) {
+    match i + 1 == n {
+        true => ("└─ ", "   "),
+        false => ("├─ ", "│  "),
     }
 }

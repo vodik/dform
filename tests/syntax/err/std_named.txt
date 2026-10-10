@@ -1,2 +1,3 @@
-tests/syntax/err/std_named/stacks/main.df:2:1: the module tests/syntax/err/std_named/modules/str.df is named like the standard library's `str`
+error  the module tests/syntax/err/std_named/modules/str.df is named like the standard library's `str`
+  tests/syntax/err/std_named/stacks/main.df:2  use modules.str
   help: rename it: std.str is always in scope

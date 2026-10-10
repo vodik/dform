@@ -66,6 +66,7 @@ mod lines;
 mod mask;
 pub mod policy;
 pub mod progress;
+mod refusal;
 mod render;
 mod style;
 pub mod table;
@@ -76,7 +77,6 @@ pub use chains::{ChainItem, chains_text};
 pub use deformation::{Deformation, Kept, Line, Op};
 pub use errors::{
     CONFLICT, Diag, Failure, Unanswered, Witness, is_conflict, said_of, sites, violation_conflict,
-    violation_line, violations,
 };
 pub use explain::relative_place;
 pub use groups::{Group, group_pattern};
@@ -88,6 +88,7 @@ pub use layout::WIDTH;
 pub(crate) use mask::elide;
 pub use mask::{Shown, masked, shown, shown_value, surface_in};
 pub use policy::Policy;
+pub use refusal::refusals;
 pub use render::{Node, moved_text};
 pub use style::{Paint, Style};
 pub use tally::Tally;

@@ -1,10 +1,23 @@
-tests/syntax/err/column_types.df:7:1: `name_of`'s column `n` is string here (decl name_of), and joins `count_of`'s column `n`, which is int
-  tests/syntax/err/column_types.df:6:1: `count_of`'s column `n` is int here (decl count_of)
+error  `name_of`'s column `n` is string here (decl name_of), and joins `count_of`'s column `n`, which is int
+  ├─ tests/syntax/err/column_types.df:7  decl name_of(n: string)
+  └─ tests/syntax/err/column_types.df:6  decl count_of(n: int)  `count_of`'s column `n` is int here (decl count_of)
   help: one column has one type: declare it `any` to take both
-tests/syntax/err/column_types.df:4:1: `az`'s column 2 holds the int 1 here and strings elsewhere
-  tests/syntax/err/column_types.df:5:1: the string "2" here
+
+error  `az`'s column 2 holds the int 1 here and strings elsewhere
+  ├─ tests/syntax/err/column_types.df:4  az("us-east-1a", 1)
+  └─ tests/syntax/err/column_types.df:5  az("us-east-1b", "2")  the string "2" here
   help: one column has one type: write the int as one everywhere, or declare the column
-tests/syntax/err/column_types.df:12:1: `net`'s column 1 is an inet: "ten" is not a network (`a.b.c.d/n`)
-  tests/syntax/err/column_types.df:13:1: `net`'s column 1 is inet here (`inet.host`'s argument `net`)
-tests/syntax/err/column_types.df:15:1: `n + 1`: `n` is string, and arithmetic is on numbers, quantities and times
-tests/syntax/err/column_types.df:17:1: `n > "0"`: `n` is int, not the string "0"
+
+error  `net`'s column 1 is an inet: "ten" is not a network (`a.b.c.d/n`)
+  ├─ tests/syntax/err/column_types.df:12  net("ten")
+  └─ tests/syntax/err/column_types.df:13  first(n, h) where net(n), h = inet.host(n, 1)
+                                          ^^^^^^^^^^^ `net`'s column 1 is inet here (`inet.host`'s argument `net`)
+
+error  `n + 1`: `n` is string, and arithmetic is on numbers, quantities and times
+  tests/syntax/err/column_types.df:15  next(k, m) where label(k, n), m = n + 1
+                                       ^^^^^^^^^^
+
+error  `n > "0"`: `n` is int, not the string "0"
+  tests/syntax/err/column_types.df:17  big(k) where size(k, n), n > "0"
+                                       ^^^^^^
+5 errors

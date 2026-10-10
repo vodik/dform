@@ -1,8 +1,20 @@
-tests/syntax/err/removed_grants.df:5:3: expected a statement, found `export`
+error  expected a statement, found `export`
+  tests/syntax/err/removed_grants.df:5  export subnet_of
+                                        ^^^^^^
   help: `export` is gone (R-65): a module's items are public, and a component's outputs are its public face
-tests/syntax/err/removed_grants.df:6:3: expected a statement, found `contributes`
+
+error  expected a statement, found `contributes`
+  tests/syntax/err/removed_grants.df:6  contributes iam_need
+                                        ^^^^^^^^^^^
   help: `contributes` is gone (R-5): a write needs no grant, delete the line; a module's relation reaches the stack through an output
-tests/syntax/err/removed_grants.df:7:3: expected a statement, found `export`
+
+error  expected a statement, found `export`
+  tests/syntax/err/removed_grants.df:7  export type subnets
+                                        ^^^^^^
   help: `export` is gone (R-65): a module's items are public, and a component's outputs are its public face
-tests/syntax/err/removed_grants.df:13:3: expected a statement, found `contributes`
+
+error  expected a statement, found `contributes`
+  tests/syntax/err/removed_grants.df:13  contributes t.tags
+                                         ^^^^^^^^^^^
   help: `contributes` is gone (R-5): a write needs no grant, delete the line; a module's relation reaches the stack through an output
+4 errors

@@ -1,1 +1,3 @@
-tests/syntax/err/unknown_char.df:1:8: expected the end of the line, found unknown character `?`
+error  expected the end of the line, found unknown character `?`
+  tests/syntax/err/unknown_char.df:1  p("a") ? q("b")
+                                             ^

@@ -1,2 +1,7 @@
-tests/syntax/err/bad_rank.df:1:23: unknown rank `@normal`: a rank is `@default` or `@override`
-tests/syntax/err/bad_rank.df:2:1: a rank orders the writes to one attribute, `set r.p = v @override`: `p` is a relation, whose rows are not ranked
+error  unknown rank `@normal`: a rank is `@default` or `@override`
+  tests/syntax/err/bad_rank.df:1  resource net.vpc main @normal { cidr = "10.0.0.0/16" }
+                                                        ^^^^^^^
+
+error  a rank orders the writes to one attribute, `set r.p = v @override`: `p` is a relation, whose rows are not ranked
+  tests/syntax/err/bad_rank.df:2  p("a") @override
+2 errors

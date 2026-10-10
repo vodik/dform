@@ -324,7 +324,9 @@ impl<'h> Evaluated<'h> {
         // A read of what nothing derives is an error before them (R-194).
         if opts.blocking && !cx.cli.cmd.destroys() {
             crate::report::Unanswered::check(&ev.res.facts)?;
-            cx.cli.cmd.blocked(&ev.violations, &ev.redact)?;
+            cx.cli
+                .cmd
+                .blocked(&ev.violations, &ev.res.rules, &ev.redact, cx.cli.err_style)?;
         }
         Ok(Evaluated { cx, ev, hook })
     }

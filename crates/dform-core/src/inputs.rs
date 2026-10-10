@@ -674,24 +674,35 @@ fn is_secret(t: &TypeExpr) -> bool {
 /// A value `--set` gives input `name` (at `k`, the flag's key: an
 /// object's when it gives the object whole) that the input's own check
 /// does not hold of ([`check_given`]): refused before evaluation, as a
-/// value outside its type is, `--set agents=4: input agents is int check
-/// 0 <= agents, agents <= 3`; a secret's value is not said.
+/// value outside its type is, `--set agents=4 is outside the check on
+/// agents`, the check labelled where it is declared and the flag where it
+/// was given; a secret's value is not said.
 fn fails_check(k: &str, name: &str, v: &Value, decl: &InputDecl) -> Result<()> {
     if check_given(decl, v) != Truth::False {
         return Ok(());
     }
     let (check, ty) = (check_text(decl), type_text(&decl.ty));
-    let v = match is_secret(&decl.ty) {
-        true => String::new(),
-        false => spell::bare(v),
+    let given = match is_secret(&decl.ty) {
+        true => format!("--set {k}"),
+        false => format!("--set {k}={}", spell::bare(v)),
     };
-    match (k == name, v.is_empty()) {
-        (true, false) => anyhow::bail!("--set {k}={v}: input {k} is {ty} check {check}"),
-        (true, true) => anyhow::bail!("--set {k}: input {k} is {ty} check {check}"),
+    let message = match k == name {
+        true => format!("{given} is outside the check on {k}"),
         // A field of an object given whole, as its type is checked.
-        (false, false) => anyhow::bail!("--set {k}: {name} = {v} is not {ty} check {check}"),
-        (false, true) => anyhow::bail!("--set {k}: {name} is not {ty} check {check}"),
-    }
+        false => format!("{given}: {name} is outside its check"),
+    };
+    // The check, where the declaration writes it.
+    let at = crate::diag::find_in(decl.span, "check ")
+        .map(|c| Span {
+            end: decl.span.end,
+            ..c
+        })
+        .unwrap_or(decl.span);
+    let d = Diagnostic::error(at, message)
+        .labelled("checked here")
+        .with_given(given, "given here")
+        .with_help(format!("give {name} a value of {ty} check {check}"));
+    Err(Diagnostics(vec![d]).into())
 }
 
 /// Every value the program writes for an input as a literal (a `set`, a

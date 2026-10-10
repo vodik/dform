@@ -1,8 +1,23 @@
-tests/syntax/err/binding.df:3:25: `y` is unbound at this `<`; bind it with `=`, `in`, or a relation first
-tests/syntax/err/binding.df:3:36: `z` is unbound at this `=`; bind it with `=`, `in`, or a relation first
-tests/syntax/err/binding.df:4:27: `image` is unbound at this `==`; `=` binds, `==` compares
+error  `y` is unbound at this `<`; bind it with `=`, `in`, or a relation first
+  tests/syntax/err/binding.df:3  cycle(x) where q(x, _), y < x, y = z, z = y + 1
+                                                         ^
+
+error  `z` is unbound at this `=`; bind it with `=`, `in`, or a relation first
+  tests/syntax/err/binding.df:3  cycle(x) where q(x, _), y < x, y = z, z = y + 1
+                                                                    ^
+
+error  `image` is unbound at this `==`; `=` binds, `==` compares
+  tests/syntax/err/binding.df:4  compare(x) where q(x, _), image == str.upper("a"), not has image.p
+                                                           ^^^^^
   help: bind it with `image = ..`, `in`, or a relation; a string is quoted: "image"
-tests/syntax/err/binding.df:5:27: both sides are bound; write `==`
+
+error  both sides are bound; write `==`
+  tests/syntax/err/binding.df:5  twice(x) where q(x, y), x = y
+                                                           ^
   help: `x` and `y` have their values already: `==` compares; `=` gives a value to a name nothing else does
-tests/syntax/err/binding.df:6:30: both sides are bound; write `==`
+
+error  both sides are bound; write `==`
+  tests/syntax/err/binding.df:6  constant(x) where q(x, _), x = 1
+                                                              ^
   help: `x` has its value already: `==` compares; `=` gives a value to a name nothing else does
+5 errors

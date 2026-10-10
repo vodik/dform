@@ -1,3 +1,7 @@
-tests/syntax/err/key.df:3:1: key token is a secret
-  note: a key's value names the deployment: its state's directory and its registry entry
-tests/syntax/err/key.df:6:3: key env inside a block: a key selects the stack's deployment, so it is declared at the top of the stack's file
+error  key token is a secret
+  tests/syntax/err/key.df:3  key token: secret(string)
+  a key's value names the deployment: its state's directory and its registry entry
+
+error  key env inside a block: a key selects the stack's deployment, so it is declared at the top of the stack's file
+  tests/syntax/err/key.df:6  key env: string
+2 errors

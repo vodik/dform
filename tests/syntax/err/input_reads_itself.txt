@@ -1,5 +1,13 @@
-tests/syntax/err/input_reads_itself.df:3:25: the clause of input replicas reads replicas: a clause picks where it is declared
+error  the clause of input replicas reads replicas: a clause picks where it is declared
+  tests/syntax/err/input_reads_itself.df:3  input replicas: int = 2 where replicas >= 1
+                                                                    ^^^^^^^^^^^^^^^^^^^
   help: a refinement is spelled `check` (R-1): `input replicas: int = 2 check replicas >= 1`
-tests/syntax/err/input_reads_itself.df:4:18: the clause of input zones reads zones: a clause picks where it is declared
+
+error  the clause of input zones reads zones: a clause picks where it is declared
+  tests/syntax/err/input_reads_itself.df:4  input zones: int where zones >= 1
+                                                             ^^^^^^^^^^^^^^^^
   help: a refinement is spelled `check` (R-1): `input zones: int check zones >= 1`
-tests/syntax/err/input_reads_itself.df:5:1: key env has a clause: a key names the deployment, so every deployment has it
+
+error  key env has a clause: a key names the deployment, so every deployment has it
+  tests/syntax/err/input_reads_itself.df:5  key env: string where zones > 1
+3 errors

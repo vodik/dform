@@ -216,14 +216,7 @@ pub(super) fn head(cli: &Cli, name: &str, note: &str) {
 
 /// Say `e`, a deployment's run's error, as `main` would.
 pub(super) fn say(cli: &Cli, e: &anyhow::Error) {
-    use std::io::IsTerminal;
-    match e.downcast_ref::<Refused>().filter(|r| r.footer) {
-        Some(r) => eprintln!("{r}"),
-        None => eprint!(
-            "{}",
-            crate::diag::report(e, cli.style.color && std::io::stderr().is_terminal())
-        ),
-    }
+    eprint!("{}", Refused::report(e, cli.err_style.color));
 }
 
 /// Whether the deployment `d` has been applied and not destroyed since.

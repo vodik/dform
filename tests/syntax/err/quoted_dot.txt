@@ -1,1 +1,3 @@
-tests/syntax/err/quoted_dot.df:3:65: the key "a.b" holds `.`, `[` or `]`, which a selector's step cannot carry
+error  the key "a.b" holds `.`, `[` or `]`, which a selector's step cannot carry
+  tests/syntax/err/quoted_dot.df:3  input zone from yaml.decode(io.read("regions.yaml")).regions[_]."a.b"
+                                                                                                    ^^^^^

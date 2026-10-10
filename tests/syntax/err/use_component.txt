@@ -1,2 +1,3 @@
-tests/syntax/err/use_component/stacks/main.df:3:1: net.vpc is a component, a type: make a resource of it, `resource net.vpc NAME { .. }`
-  note: `use` imports a module, a file, once under its name; a component, an item `component NAME { .. }`, is a type the program defines
+error  net.vpc is a component, a type: make a resource of it, `resource net.vpc NAME { .. }`
+  tests/syntax/err/use_component/stacks/main.df:3  use net.vpc
+  `use` imports a module, a file, once under its name; a component, an item `component NAME { .. }`, is a type the program defines

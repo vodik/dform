@@ -1,6 +1,14 @@
-tests/syntax/err/address_scope.df:16:16: "main/vpc": an address is a path, its scope separated by `.`, not `/`
+error  "main/vpc": an address is a path, its scope separated by `.`, not `/`
+  tests/syntax/err/address_scope.df:16  p(c) where c = net.vpc["main/vpc"].cidr
+                                                       ^^^^^^^^^^^^^^^^^^^^^^^^
   help: write "main.vpc" (R-112)
-tests/syntax/err/address_scope.df:17:22: "peer::vpc": an address is a path, its scope separated by `.`, not `/`
+
+error  "peer::vpc": an address is a path, its scope separated by `.`, not `/`
+  tests/syntax/err/address_scope.df:17  deny "no peer" where "peer::vpc" in net.vpc
+                                                             ^^^^^^^^^^^^^^^^^^^^^^
   help: write "peer.vpc" (R-112)
-tests/syntax/err/address_scope.df:18:1: "old/vpc": an address is a path, its scope separated by `.`, not `/`
+
+error  "old/vpc": an address is a path, its scope separated by `.`, not `/`
+  tests/syntax/err/address_scope.df:18  moved(net.vpc, "old/vpc", net.vpc["main.vpc"])
   help: write "old.vpc" (R-112)
+3 errors

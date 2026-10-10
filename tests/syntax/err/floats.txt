@@ -1,5 +1,20 @@
-tests/syntax/err/floats.df:3:20: input count is int, not the float 0.5
-tests/syntax/err/floats.df:4:21: input size is bytes: `1.5` is not a whole number of bytes
-tests/syntax/err/floats.df:5:25: input grace is duration, not the float 0.5
-tests/syntax/err/floats.df:8:16: `1Gi * 0.5`: a quantity scales by an int; a float scales none
-tests/syntax/err/floats.df:10:16: `str.slice`'s argument `start` is int, not the float 1.5
+error  input count is int, not the float 0.5
+  tests/syntax/err/floats.df:3  input count: int = 0.5
+                                                   ^^^
+
+error  input size is bytes: `1.5` is not a whole number of bytes
+  tests/syntax/err/floats.df:4  input size: bytes = 1.5
+                                                    ^^^
+
+error  input grace is duration, not the float 0.5
+  tests/syntax/err/floats.df:5  input grace: duration = 0.5
+                                                        ^^^
+
+error  `1Gi * 0.5`: a quantity scales by an int; a float scales none
+  tests/syntax/err/floats.df:8  a(x) where x = 1Gi * 0.5
+                                               ^^^^^^^^^
+
+error  `str.slice`'s argument `start` is int, not the float 1.5
+  tests/syntax/err/floats.df:10  b(x) where x = str.slice("abc", 1.5)
+                                                ^^^^^^^^^^^^^^^^^^^^^
+5 errors

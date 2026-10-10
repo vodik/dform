@@ -1,7 +1,7 @@
 //! The parser's test suite (docs/grammar.md): every `.df` file in the
 //! repository and `tests/syntax/ok/` parses and prints back byte for byte;
 //! each `tests/syntax/err/*.df` fails with the diagnostics in its `.txt`,
-//! and so does each `tests/syntax/err/NAME/`, a project whose
+//! as the terminal shows them (`diag::report`), and so does each `tests/syntax/err/NAME/`, a project whose
 //! `stacks/main.df` is loaded with the modules its paths name.
 //! Accept a changed `.txt` with `UPDATE_GOLDEN=1 cargo test --test syntax`.
 
@@ -96,7 +96,7 @@ fn check(name: &str, src: &str) -> String {
         },
         Err(e) => e,
     };
-    format!("{err:#}\n")
+    dform::diag::report(&err, false)
 }
 
 /// What loading a project's stack prints (an error case that is a
@@ -110,7 +110,7 @@ fn check_project(dir: &Path) -> String {
         },
         Err(e) => e,
     };
-    format!("{err:#}\n")
+    dform::diag::report(&err, false)
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn three_independent_errors_are_three_diagnostics() {
         assert!(l.contains(want), "{l}");
     }
     let rendered = d.render(false);
-    assert!(rendered.contains("three_errors.df:3:16"), "{rendered}");
+    assert!(rendered.contains("three_errors.df:3  "), "{rendered}");
     assert!(rendered.ends_with("3 errors\n"), "{rendered}");
 }
 
@@ -198,8 +198,8 @@ fn no_help_serves_two_kinds_of_error() {
                     kinds.entry(help.to_string()).or_default().insert(k.clone());
                 }
             } else if !l.starts_with("  ") {
-                // `file:line:col: message`
-                kind = l.splitn(4, ':').nth(3).map(|m| kind_of(m.trim()));
+                // `error  message  [E0304]`
+                kind = l.split_once("  ").map(|(_, m)| kind_of(m.trim()));
             }
         }
     }

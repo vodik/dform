@@ -1,3 +1,4 @@
-tests/syntax/err/instance_names.df:8:1: `main` is declared twice; give each a `where`
-  tests/syntax/err/instance_names.df:7:1: first here
+error  `main` is declared twice; give each a `where`
+  ├─ tests/syntax/err/instance_names.df:8  resource network main { cidr = "10.2.0.0/16" }
+  └─ tests/syntax/err/instance_names.df:7  resource network main { cidr = "10.1.0.0/16" }  first here
   help: a name is declared once in a scope, or several times each under a clause that picks it (`resource pg_aws db { .. } where cloud == "aws"`); another name is another statement, `resource C NAME { .. }`, `use PATH as NAME`

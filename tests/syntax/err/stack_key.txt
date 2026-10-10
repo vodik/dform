@@ -1,4 +1,10 @@
-tests/syntax/err/stack_key.df:4:1: expected a statement, found `stack`
+error  expected a statement, found `stack`
+  tests/syntax/err/stack_key.df:4  stack web[env] {}
+                                   ^^^^^
   help: the `stack` statement is gone (R-29): a file under stacks/ is a stack named after itself, `key env: T` keys it, and dform.toml's `[stacks.NAME]` holds its settings
-tests/syntax/err/stack_key.df:7:10: expected `:` after the key's name, found `(`
+
+error  expected `:` after the key's name, found `(`
+  tests/syntax/err/stack_key.df:7  key peers(name: string) from csv.decode(io.read("peers.csv"))
+                                            ^
   help: a key is a scalar value, `key env: environment`; a relation or an object is not a key
+2 errors

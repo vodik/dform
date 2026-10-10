@@ -17,7 +17,6 @@ anyhow = "1.0"
 # The audit sink's process group (`killpg`) and the interrupt's
 # `sigaction` (src/interrupt.rs).
 libc = "0.2"
-ariadne = "0.6"
 logos = "0.16"
 rowan = "0.16"
 serde = { version = "1.0", features = ["derive"] }

@@ -1,4 +1,13 @@
-tests/syntax/err/set_entries.df:7:7: `set` sets a resource's attribute (`r.tags`, `T[e].p`) or an input
-tests/syntax/err/set_entries.df:8:7: `set` sets a resource's attribute (`r.tags`, `T[e].p`) or an input
-tests/syntax/err/set_entries.df:9:7: `set db.size` at the top of the program sets the program's own input
+error  `set` sets a resource's attribute (`r.tags`, `T[e].p`) or an input
+  tests/syntax/err/set_entries.df:7  set { nope = 1 }
+                                           ^^^^^^^^
+
+error  `set` sets a resource's attribute (`r.tags`, `T[e].p`) or an input
+  tests/syntax/err/set_entries.df:8  set { region = "eu-west-1" }
+                                           ^^^^^^^^^^^^^^^^^^^^
+
+error  `set db.size` at the top of the program sets the program's own input
+  tests/syntax/err/set_entries.df:9  set { db.size += 1 }
+                                           ^^^^^^^^^^^^
   help: give `input db.size` a default, or pass `--set db.size=...` on the command line
+3 errors

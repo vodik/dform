@@ -1,25 +1,60 @@
-tests/syntax/err/h_spellings.df:9:5: `set main.tags` with no condition is an entry of `resource net.vpc main`, declared in the same scope
+error  `set main.tags` with no condition is an entry of `resource net.vpc main`, declared in the same scope
+  tests/syntax/err/h_spellings.df:9  set main.tags = { team: "x" }
+                                         ^^^^^^^^^
   help: write `tags = ...` in the block `resource net.vpc main { .. }`
-tests/syntax/err/h_spellings.df:11:1: `set env` at the top of the program sets the program's own input
+
+error  `set env` at the top of the program sets the program's own input
+  tests/syntax/err/h_spellings.df:11  set env = "prod"
   help: give `input env` a default, or pass `--set env=...` on the command line
-tests/syntax/err/h_spellings.df:14:1: output vpc has no value
+
+error  output vpc has no value
+  tests/syntax/err/h_spellings.df:14  output vpc: net.vpc
   help: an output is one statement, `output vpc: T = term`; `output vpc` alone exports the relation vpc, which is declared or defined here
-tests/syntax/err/h_spellings.df:18:17: a rule reads `deny`
+
+error  a rule reads `deny`
+  tests/syntax/err/h_spellings.df:18  denied(m) where deny(m)
+                                                      ^^^^^^^
   help: a deny or a warn is checked after evaluation: no rule may read deny/2 or warn/2 (H-8); read what the deny reads instead
-tests/syntax/err/h_spellings.df:21:16: `net.vpc["main"]` names the resource `main` in scope
+
+error  `net.vpc["main"]` names the resource `main` in scope
+  tests/syntax/err/h_spellings.df:21  a(c) where c = net.vpc["main"].cidr
+                                                     ^^^^^^^^^^^^^^^^^^^^
   help: write `main` (H-10)
-tests/syntax/err/h_spellings.df:22:16: `net.vpc.main` names a resource by a dot after its type
+
+error  `net.vpc.main` names a resource by a dot after its type
+  tests/syntax/err/h_spellings.df:22  b(c) where c = net.vpc.main.cidr
+                                                     ^^^^^^^^^^^^^^^^^
   help: a resource in scope is named `main` (H-10); `.` is static, `[ ]` a key
-tests/syntax/err/h_spellings.df:23:16: unknown type `net.vcp`: no resource header, `type` block or provider schema declares it
-tests/syntax/err/h_spellings.df:26:12: `want(net.vpc, x)` is the core's spelling of `in`
+
+error  unknown type `net.vcp`: no resource header, `type` block or provider schema declares it
+  tests/syntax/err/h_spellings.df:23  d(c) where c = net.vcp["x"].cidr
+                                                     ^^^^^^^^^^^^^^^^^
+
+error  `want(net.vpc, x)` is the core's spelling of `in`
+  tests/syntax/err/h_spellings.df:26  e(x) where want(net.vpc, x)
+                                                 ^^^^^^^^^^^^^^^^
   help: write `x in net.vpc` (H-15)
-tests/syntax/err/h_spellings.df:27:12: `attr(net.vpc, "main", "cidr", v)` is the core's spelling of a read
+
+error  `attr(net.vpc, "main", "cidr", v)` is the core's spelling of a read
+  tests/syntax/err/h_spellings.df:27  f(v) where attr(net.vpc, "main", "cidr", v)
+                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   help: write `v = net.vpc["main"].cidr` (H-15)
-tests/syntax/err/h_spellings.df:28:1: `arg(net.vpc, "main", "size", 3)` is the core's spelling of a surface form
+
+error  `arg(net.vpc, "main", "size", 3)` is the core's spelling of a surface form
+  tests/syntax/err/h_spellings.df:28  arg(net.vpc, "main", "size", 3)
   help: write `set net.vpc["main"].size = 3` (H-15)
-tests/syntax/err/h_spellings.df:29:1: `output("k", 1)` is the core's spelling of a surface form
+
+error  `output("k", 1)` is the core's spelling of a surface form
+  tests/syntax/err/h_spellings.df:29  output("k", 1)
   help: write `output k = 1` (H-15)
-tests/syntax/err/h_spellings.df:30:1: `deny("m")` is the core's spelling of a surface form
+
+error  `deny("m")` is the core's spelling of a surface form
+  tests/syntax/err/h_spellings.df:30  deny("m") where env == "y"
+                                      ^^^^^^^^^
   help: write `deny "m" where ..` (H-15)
-tests/syntax/err/h_spellings.df:31:12: `member` is what `in` lowers to
+
+error  `member` is what `in` lowers to
+  tests/syntax/err/h_spellings.df:31  g(x) where member([1], x)
+                                                 ^^^^^^^^^^^^^^
   help: write `x in [1]` (H-9)
+13 errors

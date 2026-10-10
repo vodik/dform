@@ -26,32 +26,31 @@ fn a_binding_is_hidden_by_a_whole_segment_of_the_address() {
     assert_eq!(terse(&with(&["n = 0"]), "net.subnet a[0]"), None);
 }
 
-/// After R-149: a run that refuses prints a deny as the plan's `!`
-/// line, its bindings `key = value` in the site column aligned across
-/// the lines, a reference by its address, and never the context's
-/// JSON; bindings too wide for the column go beneath it.
+/// After R-149: a run that refuses says a deny's bindings `key = value`,
+/// a reference by its address, never the context's JSON; each firing of
+/// one deny under its one line.
 #[test]
-fn a_violation_prints_its_bindings_never_its_json() {
+fn a_refusal_says_its_bindings_never_its_json() {
     let r = Redactor::new(&BTreeSet::new(), &Schema::default());
     let vs = [
         r#"image not pinned ctx={"image":"traefik:v3.7","replicas":2}"#.to_string(),
+        r#"image not pinned ctx={"image":"nginx","replicas":1}"#.to_string(),
         r#"no owner ctx={"of":"ref(net.vpc,main,)"}"#.to_string(),
         "need the pngu namespace".to_string(),
     ];
+    let said: Vec<String> = refusals(&vs, &[], &r)
+        .iter()
+        .map(|d| d.render(false))
+        .collect();
     assert_eq!(
-        violations(&vs, &r, Style::PLAIN),
-        "  ! image not pinned  image = \"traefik:v3.7\", replicas = 2\n  \
-             ! no owner          of = net.vpc main\n  \
-             ! need the pngu namespace\n"
+        said.concat(),
+        "refused  image not pinned\n  \
+             image = \"traefik:v3.7\", replicas = 2\n  \
+             image = \"nginx\", replicas = 1\n\
+         refused  no owner\n  \
+             of = net.vpc main\n\
+         refused  need the pngu namespace\n"
     );
-    assert_eq!(
-        violation_line(&vs[0], &r),
-        "image not pinned  image = \"traefik:v3.7\", replicas = 2"
-    );
-    let wide = format!(r#"too wide ctx={{"a":"{}","b":1}}"#, "x".repeat(90));
-    let out = violations(&[wide], &r, Style::PLAIN);
-    assert!(out.starts_with("  ! too wide\n      a = \"xxx"), "{out}");
-    assert!(out.ends_with("\n      b = 1\n"), "{out}");
 }
 
 fn a(t: &str, n: &str) -> Address {

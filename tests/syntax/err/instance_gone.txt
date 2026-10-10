@@ -1,2 +1,4 @@
-tests/syntax/err/instance_gone.df:6:1: expected a statement, found `instance`
+error  expected a statement, found `instance`
+  tests/syntax/err/instance_gone.df:6  instance network blue { cidr = "10.1.0.0/16" }
+                                       ^^^^^^^^
   help: `instance` is gone (R-113): a component is a type, and `resource C NAME { .. }` makes one of it, as `resource` makes one of a provider's type

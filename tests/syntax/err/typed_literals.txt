@@ -1,8 +1,26 @@
-tests/syntax/err/typed_literals.df:2:19: input net is an inet: "10.0.0/16" is not a network (`a.b.c.d/n`)
-tests/syntax/err/typed_literals.df:3:16: input n is int, not the string "3"
-tests/syntax/err/typed_literals.df:4:30: input tier is enum("a", "b"): "c" is not one of its members
-tests/syntax/err/typed_literals.df:6:16: `inet.subnet`'s argument `net` is an inet: "10.0.0.0/33" is not a network (`a.b.c.d/n`)
-tests/syntax/err/typed_literals.df:8:34: `r` is a reference and "main" a string: they are never equal
+error  input net is an inet: "10.0.0/16" is not a network (`a.b.c.d/n`)
+  tests/syntax/err/typed_literals.df:2  input net: inet = "10.0.0/16"
+                                                          ^^^^^^^^^^^
+
+error  input n is int, not the string "3"
+  tests/syntax/err/typed_literals.df:3  input n: int = "3"
+                                                       ^^^
+
+error  input tier is enum("a", "b"): "c" is not one of its members
+  tests/syntax/err/typed_literals.df:4  input tier: enum("a", "b") = "c"
+                                                                     ^^^
+
+error  `inet.subnet`'s argument `net` is an inet: "10.0.0.0/33" is not a network (`a.b.c.d/n`)
+  tests/syntax/err/typed_literals.df:6  p(x) where x = inet.subnet("10.0.0.0/33", 8, 1)
+                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error  `r` is a reference and "main" a string: they are never equal
+  tests/syntax/err/typed_literals.df:8  d(k) where deformation(k, r, _), r == "main"
+                                                                         ^^^^^^^^^^^
   help: compare with the resource: `r == main`, or `r == T["main"]` (R-31)
-tests/syntax/err/typed_literals.df:9:26: `r` is a reference and "main" a string: they are never equal
+
+error  `r` is a reference and "main" a string: they are never equal
+  tests/syntax/err/typed_literals.df:9  e(1) where r in net.vpc, r != "main"
+                                                                 ^^^^^^^^^^^
   help: compare with the resource: `r != main`, or `r != T["main"]` (R-31)
+6 errors

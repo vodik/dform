@@ -1,3 +1,12 @@
-tests/syntax/err/three_errors.df:3:16: expected a term, found `]`
-tests/syntax/err/three_errors.df:5:14: expected a term, found `,`
-tests/syntax/err/three_errors.df:7:18: expected a resource name (a name or a string), found `{`
+error  expected a term, found `]`
+  tests/syntax/err/three_errors.df:3  p("a") where q(]
+                                                     ^
+
+error  expected a term, found `,`
+  tests/syntax/err/three_errors.df:5  r("b") where ,
+                                                   ^
+
+error  expected a resource name (a name or a string), found `{`
+  tests/syntax/err/three_errors.df:7  resource net.vpc { cidr = "10.0.0.0/16" }
+                                                       ^
+3 errors

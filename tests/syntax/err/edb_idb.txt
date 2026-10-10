@@ -1,3 +1,5 @@
-tests/syntax/err/edb_idb.df:4:1: region/1 has both ground facts and rules: it is extensional and intensional
-  tests/syntax/err/edb_idb.df:3:1: a ground fact of region/1
+error  region/1 has both ground facts and rules: it is extensional and intensional
+  ├─ tests/syntax/err/edb_idb.df:4  region(r) where extra_region(r)
+  │                                 ^^^^^^^^^
+  └─ tests/syntax/err/edb_idb.df:3  region("us-east-1")  a ground fact of region/1
   help: derive the facts with rules too, or declare it: `decl region(a) mixed`

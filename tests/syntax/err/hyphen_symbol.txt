@@ -1,2 +1,4 @@
-tests/syntax/err/hyphen_symbol.df:2:6: `us-test-1a` is arithmetic, not a name
+error  `us-test-1a` is arithmetic, not a name
+  tests/syntax/err/hyphen_symbol.df:2  zone(us-test-1a)
+                                            ^^^^^^^^^^
   help: `-` subtracts here, a quantity from a name; a name with a `-` in it is a string, "us-test-1a"

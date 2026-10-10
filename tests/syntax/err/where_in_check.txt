@@ -1,4 +1,10 @@
-tests/syntax/err/where_in_check.df:6:20: expected `check` or the end of the line, found keyword `where`
+error  expected `check` or the end of the line, found keyword `where`
+  tests/syntax/err/where_in_check.df:6  backup_days: int where 1 <= backup_days <= 35
+                                                         ^^^^^
   help: a refinement is spelled `check` (R-1): `backup_days: int check 1 <= backup_days <= 35`
-tests/syntax/err/where_in_check.df:8:11: expected `where` or the end of the line, found `check`
+
+error  expected `where` or the end of the line, found `check`
+  tests/syntax/err/where_in_check.df:8  let k = 1 check k > 0
+                                                  ^^^^^
   help: `check` refines an input's or an attribute's type; a clause is `where`
+2 errors

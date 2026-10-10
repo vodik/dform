@@ -89,7 +89,9 @@ impl Plan {
         if report.up_to_date() && !self.json {
             unshown.extend(denies.iter().cloned());
         }
-        cx.cli.cmd.blocked(&unshown, &redact)?;
+        cx.cli
+            .cmd
+            .blocked(&unshown, &planned.res.rules, &redact, cx.cli.err_style)?;
         if !violations.is_empty() || !denies.is_empty() {
             let conflicts = violations.iter().filter(|v| report::is_conflict(v)).count();
             return Err(Refused::new(

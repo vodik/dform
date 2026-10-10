@@ -1,2 +1,4 @@
-tests/syntax/err/star_step.df:2:61: expected a term, found `*`: `[*]` is no step, every element is `[_]`
+error  expected a term, found `*`: `[*]` is no step, every element is `[_]`
+  tests/syntax/err/star_step.df:2  input zone from yaml.decode(io.read("regions.yaml")).regions[*].zones
+                                                                                               ^
   help: `[_]` takes each element: `teams[_].services`

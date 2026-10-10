@@ -1,7 +1,19 @@
-tests/syntax/err/aggregate_binding.df:4:12: `count` is an aggregate: name its result after `where`, `n = count(x)`
+error  `count` is an aggregate: name its result after `where`, `n = count(x)`
+  tests/syntax/err/aggregate_binding.df:4  in_head(v, count(s)) where subnet(s, v)
+                                                      ^^^^^^^^
   help: `p(k, n) where n = count(x), ..` gives one `n` per `k`; `let n = count(x) where ..` gives one in all
-tests/syntax/err/aggregate_binding.df:5:25: `count(x)` aggregates `x`, which nothing after `where` gives values
+
+error  `count(x)` aggregates `x`, which nothing after `where` gives values
+  tests/syntax/err/aggregate_binding.df:5  unbound(v, n) where n = count(x), subnet(_, v)
+                                                                   ^^^^^^^^
   help: give `x` values in the same clause, `count(x), x in ..`
-tests/syntax/err/aggregate_binding.df:6:15: `sum(y)` aggregates `y`, which nothing after `where` gives values
+
+error  `sum(y)` aggregates `y`, which nothing after `where` gives values
+  tests/syntax/err/aggregate_binding.df:6  let nothing = sum(y) where subnet(_, _)
+                                                         ^^^^^^
   help: give `y` values in the same clause, `sum(y), y in ..`
-tests/syntax/err/aggregate_binding.df:7:41: an aggregate is named at the top of a clause, not inside `not { }` or a comprehension
+
+error  an aggregate is named at the top of a clause, not inside `not { }` or a comprehension
+  tests/syntax/err/aggregate_binding.df:7  nested(v) where subnet(_, v), not { n = count(s), subnet(s, v) }
+                                                                                   ^^^^^^^^
+4 errors

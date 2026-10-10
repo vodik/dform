@@ -1,8 +1,20 @@
-tests/syntax/err/singleton.df:5:32: variable `b` is used once; a typo, or `_b` if it is meant to be unbound
+error  variable `b` is used once; a typo, or `_b` if it is meant to be unbound
+  tests/syntax/err/singleton.df:5  reaches(a, c) where reaches(a, b), link(bb, c)
+                                                                  ^
   help: a variable joins where it is written twice; written once it matches anything
-tests/syntax/err/singleton.df:5:41: variable `bb` is used once; a typo, or `_bb` if it is meant to be unbound
+
+error  variable `bb` is used once; a typo, or `_bb` if it is meant to be unbound
+  tests/syntax/err/singleton.df:5  reaches(a, c) where reaches(a, b), link(bb, c)
+                                                                           ^^
   help: a variable joins where it is written twice; written once it matches anything
-tests/syntax/err/singleton.df:7:66: variable `i` is used once; a typo, or `_i` if it is meant to be unbound
+
+error  variable `i` is used once; a typo, or `_i` if it is meant to be unbound
+  tests/syntax/err/singleton.df:7  resource net.vpc "${t}" { cidr = "10.0.0.0/16" } where tenant(t, i)
+                                                                                                    ^
   help: a variable joins where it is written twice; written once it matches anything
-tests/syntax/err/singleton.df:9:43: variable `z` is used once; a typo, or `_z` if it is meant to be unbound
+
+error  variable `z` is used once; a typo, or `_z` if it is meant to be unbound
+  tests/syntax/err/singleton.df:9  lonely(a) where link(a, _), not { link(a, z) }
+                                                                             ^
   help: a variable joins where it is written twice; written once it matches anything
+4 errors

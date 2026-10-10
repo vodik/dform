@@ -1,10 +1,20 @@
-tests/syntax/err/module_errors.df:12:25: component network has no input vpc_cidr
-  note: its inputs: vpc_net, zones
-tests/syntax/err/module_errors.df:12:1: input main.vpc_net is required and has no value
-  tests/syntax/err/module_errors.df:4:3: vpc_net: inet declared here
+error  component network has no input vpc_cidr
+  tests/syntax/err/module_errors.df:12  resource network main { vpc_cidr = "10.0.0.0/16" }
+                                                                ^^^^^^^^^^^^^^^^^^^^^^^^
+  its inputs: vpc_net, zones
+
+error  input main.vpc_net is required and has no value
+  ├─ tests/syntax/err/module_errors.df:12  resource network main { vpc_cidr = "10.0.0.0/16" }
+  └─ tests/syntax/err/module_errors.df:4   input vpc_net: inet  vpc_net: inet declared here
   help: give it in the block, `{ vpc_net = ... }`, or give it a default
-tests/syntax/err/module_errors.df:13:1: input peer.vpc_net is required and has no value
-  tests/syntax/err/module_errors.df:4:3: vpc_net: inet declared here
+
+error  input peer.vpc_net is required and has no value
+  ├─ tests/syntax/err/module_errors.df:13  resource network peer {}
+  └─ tests/syntax/err/module_errors.df:4   input vpc_net: inet  vpc_net: inet declared here
   help: give it in the block, `{ vpc_net = ... }`, or give it a default
-tests/syntax/err/module_errors.df:15:24: zone_index is private to component network
+
+error  zone_index is private to component network
+  tests/syntax/err/module_errors.df:15  reads_private(z) where zone_index(z, _)
+                                                               ^^^^^^^^^^^^^^^^
   help: pass the value through an output of component network, `output zone_index = ...`, and read it as INSTANCE.zone_index
+4 errors

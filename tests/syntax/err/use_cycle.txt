@@ -1,2 +1,3 @@
-tests/syntax/err/use_cycle/b.df:1:1: use cycle: a -> b -> a
-  note: a module is loaded before what uses it, so none may use itself
+error  use cycle: a -> b -> a
+  tests/syntax/err/use_cycle/b.df:1  use a
+  a module is loaded before what uses it, so none may use itself

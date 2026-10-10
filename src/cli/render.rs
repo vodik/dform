@@ -55,7 +55,8 @@ impl Render {
         let e = space.evaluated(&pairs)?;
         let schema = space.backend.schema();
         let redact = query::Redactor::new(&e.res.facts, schema);
-        cli.cmd.blocked(&e.violations, &redact)?;
+        cli.cmd
+            .blocked(&e.violations, &e.res.rules, &redact, cli.err_style)?;
         let mut rendered = Rendered::new(&e.resources, &space.backend, &redact)?;
         rendered.undecided =
             crate::render::undecided(&e.res, |t| provider(&space.backend, t) == KUBERNETES);

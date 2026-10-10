@@ -249,35 +249,28 @@ impl Cmd {
         (self.explains() && !matches!(self, Cmd::Secrets(_))) || matches!(self, Cmd::Plan(_))
     }
 
-    /// The violations that refuse a run, printed, and the refusal: a
-    /// conflict as the plan's `conflicts` section says it (R-111), not its
-    /// raw context; an apply's as its footer says it.
-    pub(super) fn blocked(&self, violations: &[String], redact: &query::Redactor) -> Result<()> {
+    /// The violations that refuse a run, printed as every error is
+    /// (`report::refusals`: a conflict at its writes' sites, a deny at its
+    /// own), and the refusal; an apply's as its footer says it. `rules`:
+    /// the evaluation's, where each deny is written.
+    pub(super) fn blocked(
+        &self,
+        violations: &[String],
+        rules: &[crate::ast::RuleStmt],
+        redact: &query::Redactor,
+        style: report::Style,
+    ) -> Result<()> {
         if violations.is_empty() {
             return Ok(());
         }
-        let (conflicts, rest): (Vec<&String>, Vec<&String>) =
-            violations.iter().partition(|v| report::is_conflict(v));
-        if !conflicts.is_empty() {
-            eprintln!("conflicts");
-            for v in &conflicts {
-                let shown =
-                    report::violation_conflict(v, redact, report::Why::Line, report::Style::PLAIN);
-                eprint!(
-                    "{}",
-                    shown.unwrap_or_else(|| format!("- {}\n", redact.text(v)))
-                );
-            }
+        for d in report::refusals(violations, rules, redact) {
+            eprint!("{}", d.render(style.color));
         }
-        if !rest.is_empty() {
-            eprintln!("constraint violations:");
-            for v in &rest {
-                eprintln!("- {}", report::violation_line(v, redact));
-            }
-        }
+        let conflicts = violations.iter().filter(|v| report::is_conflict(v)).count();
+        let denies = violations.len() - conflicts;
         Err(match self {
-            Cmd::Apply(_) => Refused::apply(self.verb(), conflicts.len(), rest.len(), None),
-            _ => Refused::new("blocked by constraints", conflicts.len(), rest.len()),
+            Cmd::Apply(_) => Refused::apply(self.verb(), conflicts, denies, None),
+            _ => Refused::new("blocked by constraints", conflicts, denies),
         }
         .into())
     }

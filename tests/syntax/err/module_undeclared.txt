@@ -1,6 +1,15 @@
-tests/syntax/err/module_undeclared/baseline.df:3:19: `env` is not declared in module baseline: a module reads only what it declares
+error  `env` is not declared in module baseline: a module reads only what it declares
+  tests/syntax/err/module_undeclared/baseline.df:3  warn "prod" where env == "prod"
+                                                                      ^^^
   help: take it as an input: `input env: enum("lab", "prod")` in tests/syntax/err/module_undeclared/baseline.df, and give it in the use: `use baseline { env }`
-tests/syntax/err/module_undeclared/baseline.df:4:37: `region` is not declared in module baseline: a module reads only what it declares
+
+error  `region` is not declared in module baseline: a module reads only what it declares
+  tests/syntax/err/module_undeclared/baseline.df:4  warn "eu prod" where env == "prod", region == "eu"
+                                                                                        ^^^^^^
   help: take it as an input: `input region: string` in tests/syntax/err/module_undeclared/baseline.df, and give it in the use: `use baseline { region }`
-tests/syntax/err/module_undeclared/baseline.df:5:21: `peer` is not declared in module baseline: a module reads only what it declares
+
+error  `peer` is not declared in module baseline: a module reads only what it declares
+  tests/syntax/err/module_undeclared/baseline.df:5  warn "peered" where peer(_)
+                                                                        ^^^^^^^
   help: take it as an input: `decl peer(c1: T)` and `input peer` in tests/syntax/err/module_undeclared/baseline.df, and give it in the use: `use baseline { peer(x1) where peer(x1) }`
+3 errors

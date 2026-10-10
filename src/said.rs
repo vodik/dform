@@ -120,12 +120,12 @@ pub enum Said {
     Answered(bool),
     /// What chaos did to the fake world in a tick (`dev --chaos`).
     Chaos(String),
-    /// The constraint violations that refuse the apply, each as
-    /// `report::violation_line` says it: of the tick's plan, or (`after`)
-    /// those the boundary after that tick derived. On stderr.
+    /// The constraint violations that refuse the apply, each as every
+    /// error is said (`report::refusals`): of the tick's plan, or
+    /// (`after`) those the boundary after that tick derived. On stderr.
     Violations {
         after: Option<usize>,
-        lines: Vec<String>,
+        refusals: Vec<crate::diag::Diagnostic>,
     },
     /// A warning the boundary's evaluation said, as it may be printed. On
     /// stderr.
@@ -197,7 +197,8 @@ impl Said {
             }
             Said::Answered(yes) => json!({ "said": "answered", "yes": yes }),
             Said::Chaos(note) => json!({ "said": "chaos", "note": note }),
-            Said::Violations { after, lines } => {
+            Said::Violations { after, refusals } => {
+                let lines: Vec<String> = refusals.iter().map(|d| d.to_string()).collect();
                 json!({ "said": "violations", "after": after, "lines": lines })
             }
             Said::Warning(text) => json!({ "said": "warning", "text": text }),
@@ -276,13 +277,13 @@ impl Teller {
             // The terminal echoed it.
             Said::Answered(_) => Ok(()),
             Said::Chaos(note) => writeln!(out, "chaos: {note}"),
-            Said::Violations { after, lines } => {
-                match after {
-                    Some(tick) => writeln!(out, "constraint violations after tick {tick}:")?,
-                    None => writeln!(out, "constraint violations:")?,
-                }
-                for l in lines {
-                    writeln!(out, "- {l}")?;
+            Said::Violations { after, refusals } => {
+                for d in refusals {
+                    let d = match after {
+                        Some(tick) => d.clone().with_note(format!("after tick {tick}")),
+                        None => d.clone(),
+                    };
+                    write!(out, "{}", d.render(self.style.color))?;
                 }
                 Ok(())
             }

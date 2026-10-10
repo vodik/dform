@@ -1,2 +1,4 @@
-tests/syntax/err/input_relation_with_eq.df:3:11: expected `:`, `{`, `from` or the end of the line after the input's name, found `(`
+error  expected `:`, `{`, `from` or the end of the line after the input's name, found `(`
+  tests/syntax/err/input_relation_with_eq.df:3  input zone(name, index) = [["us-east-1a", 0]]
+                                                          ^
   help: a relation is declared once, `decl zone(a: T, ..)`, and `input zone from ..` gives its rows

@@ -291,10 +291,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
         let redact = query::Redactor::new(&after.facts, backend.schema());
         self.say(Said::Violations {
             after: None,
-            lines: denies
-                .iter()
-                .map(|d| report::violation_line(d, &redact))
-                .collect(),
+            refusals: report::refusals(&denies, &after.rules, &redact),
         });
         self.persist()?;
         let verb = self.cx.cli.cmd.verb();
@@ -604,11 +601,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
             let redact = query::Redactor::new(&p.res.facts, self.backend().schema());
             self.say(Said::Violations {
                 after: None,
-                lines: p
-                    .denies
-                    .iter()
-                    .map(|d| report::violation_line(d, &redact))
-                    .collect(),
+                refusals: report::refusals(&p.denies, &p.res.rules, &redact),
             });
             let at = (tick > 1).then(|| {
                 format!(
@@ -1705,12 +1698,10 @@ impl<'a, 'h> Ticks<'a, 'h> {
         };
         if !refusing.is_empty() {
             self.policy_refused(&next)?;
+            let refused: Vec<String> = refusing.iter().map(|v| v.to_string()).collect();
             self.say(Said::Violations {
                 after: Some(tick),
-                lines: refusing
-                    .iter()
-                    .map(|v| report::violation_line(v, &redact))
-                    .collect(),
+                refusals: report::refusals(&refused, &next.rules, &redact),
             });
             let conflicts = refusing.iter().filter(|v| report::is_conflict(v)).count();
             return Err(Refused::apply(

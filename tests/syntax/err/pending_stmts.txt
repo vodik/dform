@@ -1,2 +1,4 @@
-tests/syntax/err/pending_stmts.df:3:6: expected a relation name, found `type`
+error  expected a relation name, found `type`
+  tests/syntax/err/pending_stmts.df:3  decl type k8s.custom open
+                                            ^^^^
   help: an open type is not supported: declare the type's attributes with a `type` block

@@ -1,3 +1,12 @@
-tests/syntax/err/bad_string.df:1:3: unknown escape `\q`
-tests/syntax/err/bad_string.df:2:3: integer out of range
-tests/syntax/err/bad_string.df:3:6: in an interpolation: expected a term, found the end of the hole
+error  unknown escape `\q`
+  tests/syntax/err/bad_string.df:1  p("a\qb")
+                                      ^^^^^^
+
+error  integer out of range
+  tests/syntax/err/bad_string.df:2  q(99999999999999999999)
+                                      ^^^^^^^^^^^^^^^^^^^^
+
+error  in an interpolation: expected a term, found the end of the hole
+  tests/syntax/err/bad_string.df:3  r("${}")
+                                         ^
+3 errors

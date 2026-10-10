@@ -1,6 +1,15 @@
-tests/syntax/err/settings_reads.df:5:11: settings rows are gone (R-38): a setting is an input
+error  settings rows are gone (R-38): a setting is an input
+  tests/syntax/err/settings_reads.df:5  let cfg = settings[env]
+                                                  ^^^^^^^^^^^^^
   help: declare it, `input k: T = default`, give it per deployment with `set k = v where env == "prod"`, and read the input by its name
-tests/syntax/err/settings_reads.df:6:16: settings rows are gone (R-38): a setting is an input
+
+error  settings rows are gone (R-38): a setting is an input
+  tests/syntax/err/settings_reads.df:6  p(s) where s = settings["prod"].db.size
+                                                       ^^^^^^^^^^^^^^^^^^^^^^^^
   help: declare it, `input k: T = default`, give it per deployment with `set k = v where env == "prod"`, and read the input by its name, `db.size`
-tests/syntax/err/settings_reads.df:7:14: settings rows are gone (R-38): a setting is an input
+
+error  settings rows are gone (R-38): a setting is an input
+  tests/syntax/err/settings_reads.df:7  type_lattice(settings, "audit.sinks", "set")
+                                                     ^^^^^^^^
   help: declare it, `input k: T = default`, give it per deployment with `set k = v where env == "prod"`, and read the input by its name
+3 errors

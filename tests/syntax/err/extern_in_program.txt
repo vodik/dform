@@ -1,5 +1,9 @@
-tests/syntax/err/extern_in_program.df:3:1: env.var is the env provider's extern: a program does not declare it
-  tests/syntax/err/extern_in_program.df:2:1: the env provider is declared here
+error  env.var is the env provider's extern: a program does not declare it
+  ├─ tests/syntax/err/extern_in_program.df:3  extern env.var(+name, -value)
+  └─ tests/syntax/err/extern_in_program.df:2  use env {}  the env provider is declared here
   help: delete the `extern` statement
-tests/syntax/err/extern_in_program.df:4:1: memo.first is the memo provider's extern: a program does not declare it
+
+error  memo.first is the memo provider's extern: a program does not declare it
+  tests/syntax/err/extern_in_program.df:4  extern memo.first(+key, +candidate, -value)
   help: `memo.first` is in scope with no `use`: delete the `extern` statement
+2 errors

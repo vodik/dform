@@ -1,2 +1,3 @@
-tests/syntax/err/input_relation_arity.df:3:1: input release from ..: release has no `decl`, so its columns are its first source's, and that is no file path the compiler can read
+error  input release from ..: release has no `decl`, so its columns are its first source's, and that is no file path the compiler can read
+  tests/syntax/err/input_relation_arity.df:3  input release from csv.decode(io.read(git("ops.git", "main", "releases.csv")))
   help: declare its columns: `decl release(a: T, ..)`

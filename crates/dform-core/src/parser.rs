@@ -24,6 +24,7 @@ fn syntax_errors(file: u32, parse: &Parse) -> Vec<Diagnostic> {
                 },
                 e.message.clone(),
             );
+            let d = d.labelled(e.label.clone().unwrap_or_default());
             match &e.hint {
                 Some(h) => d.with_help(h),
                 None => d,

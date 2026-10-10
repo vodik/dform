@@ -1,6 +1,18 @@
-tests/syntax/err/unknown_name.df:6:27: `prod` is unbound at this `==`; `=` binds, `==` compares
+error  `prod` is unbound at this `==`; `=` binds, `==` compares
+  tests/syntax/err/unknown_name.df:6  prod_only(1) where env == prod
+                                                                ^^^^
   help: bind it with `prod = ..`, `in`, or a relation; a string is quoted: "prod"
-tests/syntax/err/unknown_name.df:7:34: variable `main` shadows the resource `main`: rename the variable, or write `main.path` to read it
-tests/syntax/err/unknown_name.df:8:22: variable `net` shadows the type namespace `net`: rename the variable, or write `net.path` to read it
-tests/syntax/err/unknown_name.df:9:20: unknown name `cfg`
+
+error  variable `main` shadows the resource `main`: rename the variable, or write `main.path` to read it
+  tests/syntax/err/unknown_name.df:7  tagged(main) where want(net.vpc, main)
+                                                                       ^^^^
+
+error  variable `net` shadows the type namespace `net`: rename the variable, or write `net.path` to read it
+  tests/syntax/err/unknown_name.df:8  nets(net) where want(net, _)
+                                                           ^^^
+
+error  unknown name `cfg`
+  tests/syntax/err/unknown_name.df:9  twice(x) where x = cfg.region
+                                                         ^^^^^^^^^^
   help: nothing in scope is named `cfg`: give it a value after `where` (`cfg in ..`, `cfg = ..`), or quote a string, "cfg.region"
+4 errors
