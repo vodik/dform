@@ -311,11 +311,11 @@ exit: ok
               },
               "before": null,
               "op": "set",
-              "path": "subnetwork_id",
+              "path": "subnetwork",
               "site": {
                 "at": "stacks/gke_two_phase.df:59",
-                "entry": "subnetwork_id = gke_subnet",
-                "statement": "resource google.container_cluster pngu { .. subnetwork_id = gke_subnet .. } where project(id, name, _, net_id)",
+                "entry": "subnetwork = gke_subnet",
+                "statement": "resource google.container_cluster pngu { .. subnetwork = gke_subnet .. } where project(id, name, _, net_id)",
                 "with": [
                   "id = \"renfry-dev-973682\"",
                   "name = \"renfry-dev\"",
@@ -393,11 +393,11 @@ exit: ok
               },
               "before": null,
               "op": "set",
-              "path": "subnetwork_id",
+              "path": "subnetwork",
               "site": {
                 "at": "stacks/gke_two_phase.df:51",
-                "entry": "subnetwork_id = gke_subnet",
-                "statement": "resource google.compute_address static_ip { .. subnetwork_id = gke_subnet } where project(id, _, region, _)",
+                "entry": "subnetwork = gke_subnet",
+                "statement": "resource google.compute_address static_ip { .. subnetwork = gke_subnet } where project(id, _, region, _)",
                 "with": [
                   "id = \"renfry-dev-973682\"",
                   "region = \"us-east1\""

@@ -126,9 +126,9 @@ stratum  node
 5        (attr, output, project_id)
 5        __not_planned
 5        __unanswered
-6        (arg, google.compute_address, subnetwork_id)
-6        (arg, google.container_cluster, subnetwork_id)
-7        (attr, google.compute_address, subnetwork_id)
-7        (attr, google.container_cluster, subnetwork_id)
+6        (arg, google.compute_address, subnetwork)
+6        (arg, google.container_cluster, subnetwork)
+7        (attr, google.compute_address, subnetwork)
+7        (attr, google.container_cluster, subnetwork)
 (128 rows)
 -- stderr --

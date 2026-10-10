@@ -48,7 +48,7 @@ tick 1  7 changes
       network_id = "projects/renfry-dev-973682/glo…l/networks/renfry-dev-network"
       project_id = "renfry-dev-973682"              stacks/pngu.df:54
       project_name = "renfry-dev"                   stacks/pngu.df:55
-      subnetwork_id = gke_subnet
+      subnetwork = gke_subnet
   + google.monitoring_dashboard pngu                stacks/pngu.df:207
       dashboard_json = files/dashboard-pngu.json  (93 B)
       project = "renfry-dev-973682"                 stacks/pngu.df:54
@@ -57,7 +57,7 @@ tick 1  7 changes
       name = "pngu-grpc"
       project = "renfry-dev-973682"                 stacks/pngu.df:54
       region = "us-east1"                           stacks/pngu.df:56
-      subnetwork_id = gke_subnet
+      subnetwork = gke_subnet
 
 policy  1 hold
 -- stderr --

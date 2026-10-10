@@ -174,8 +174,8 @@ stratum  node
 5        (attr, google.container_cluster, node_locations)
 5        (attr, google.container_cluster, project_id)
 5        (attr, google.container_cluster, zones)
-6        (arg, google.compute_address, subnetwork_id)
-6        (arg, google.container_cluster, subnetwork_id)
+6        (arg, google.compute_address, subnetwork)
+6        (arg, google.container_cluster, subnetwork)
 6        (arg, google.container_node_pool, cluster)
 6        (arg, google.container_node_pool, id)
 6        (arg, google.container_node_pool, max)
@@ -186,8 +186,8 @@ stratum  node
 6        deny
 6        provider_config
 6        zone_count
-7        (attr, google.compute_address, subnetwork_id)
-7        (attr, google.container_cluster, subnetwork_id)
+7        (attr, google.compute_address, subnetwork)
+7        (attr, google.container_cluster, subnetwork)
 7        (attr, google.container_node_pool, cluster)
 7        (attr, google.container_node_pool, id)
 7        (attr, google.container_node_pool, max)
