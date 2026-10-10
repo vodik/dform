@@ -703,6 +703,12 @@ pub struct Lowerer<'u> {
     /// `modules::refinement`); every other name reads as in any clause.
     /// `None` reading leniently elsewhere, where every name is its text.
     checked: Option<String>,
+    /// The object inputs whose fields are being lowered, outermost first:
+    /// each object's path (`db`, `db.pool`) and its fields' names. In a
+    /// field's `check` a field of an enclosing object is in scope by its
+    /// bare name, the innermost first (the lexical rule): `check hi >= lo`
+    /// reads `db.lo`.
+    objects: Vec<(String, Vec<String>)>,
     /// The program being built (R-211): an item per statement, pushed in
     /// order as the walk lowers each, and the helper numbers taken so far.
     program: crate::program::Program,
@@ -788,6 +794,7 @@ impl<'u> Lowerer<'u> {
             diags: Vec::new(),
             lenient,
             checked: None,
+            objects: Vec::new(),
             program: crate::program::Program::new(),
             item_scope: Default::default(),
             resolved: Default::default(),
@@ -2448,7 +2455,7 @@ impl<'u> Lowerer<'u> {
         let span = self.span(n);
         let name = word_text(n, 1);
         // `input k { f: T [= d] [check B] .. }` (R-54).
-        let fields = self.input_fields(n, scope, outer)?;
+        let fields = self.input_fields(n, scope, outer, &name)?;
         let ty = match node(n, TYPE_EXPR) {
             Some(t) => self.input_type(&t),
             None => self.fields_type(&fields),
@@ -2611,7 +2618,35 @@ impl<'u> Lowerer<'u> {
     /// The fields of an object input's block form (R-54), each a
     /// declaration named by its field: `f: T [= d] [check B]`, a nested
     /// object `f: { .. }`. A field's default is read as its type (R-31).
-    fn input_fields(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<Vec<ItemId>> {
+    /// `path` is the object's (`db`, `db.pool`); its fields are in scope by
+    /// their bare names in each field's check, as the enclosing objects'.
+    fn input_fields(
+        &mut self,
+        n: &SyntaxNode,
+        scope: ScopeId,
+        outer: &Rc,
+        path: &str,
+    ) -> L<Vec<ItemId>> {
+        let names = n
+            .children()
+            .filter(|c| c.kind() == ATTR_DECL)
+            .filter_map(|a| node(&a, BLOCK_PATH))
+            .map(|p| p.text().to_string())
+            .collect();
+        self.objects.push((path.to_string(), names));
+        let r = self.field_decls(n, scope, outer, path);
+        self.objects.pop();
+        r
+    }
+
+    /// The fields of `input_fields`, with the object's in scope.
+    fn field_decls(
+        &mut self,
+        n: &SyntaxNode,
+        scope: ScopeId,
+        outer: &Rc,
+        object: &str,
+    ) -> L<Vec<ItemId>> {
         let mut out: Vec<(String, Span, ItemId)> = Vec::new();
         let mut failed = false;
         for a in n.children().filter(|c| c.kind() == ATTR_DECL) {
@@ -2634,7 +2669,7 @@ impl<'u> Lowerer<'u> {
                     self.diags.push(d);
                     return Err(Skip);
                 }
-                let fields = self.input_fields(&a, scope, outer)?;
+                let fields = self.input_fields(&a, scope, outer, &format!("{object}.{name}"))?;
                 let ty = match node(&a, TYPE_EXPR) {
                     Some(t) => self.input_type(&t),
                     None => self.fields_type(&fields),
@@ -7942,6 +7977,33 @@ impl<'u> Lowerer<'u> {
 
     // --- resolution -------------------------------------------------------
 
+    /// In a field's `check`, a bare name of a field of an enclosing object
+    /// (not the field checked, nor a variable): the chain read by the
+    /// object's path, `lo` as `db.lo`.
+    fn field_in_check(&self, rc: &Rc, c: &Chain) -> Option<Chain> {
+        let h = c.head.as_str();
+        if self.checked.as_deref().is_none_or(|n| n == h) || rc.vars.contains_key(h) {
+            return None;
+        }
+        let (path, _) = self
+            .objects
+            .iter()
+            .rev()
+            .find(|(_, f)| f.iter().any(|f| f == h))?;
+        let mut words = path.split('.');
+        let head = words.next()?.to_string();
+        let mut ops: Vec<Op> = words.map(|w| Op::Field(w.to_string())).collect();
+        ops.push(Op::Field(h.to_string()));
+        ops.extend(c.ops.iter().cloned());
+        Some(Chain {
+            head,
+            head_kind: IDENT,
+            call: None,
+            range: c.range,
+            ops,
+        })
+    }
+
     /// A variable's lowered name, recording it.
     fn var_named(&mut self, rc: &mut Rc, name: &str, span: Span) -> String {
         if self.binding {
@@ -7968,6 +8030,8 @@ impl<'u> Lowerer<'u> {
         if let Some(call) = &c.call {
             return self.call_read(rc, call, &c.ops, pre);
         }
+        let field = self.field_in_check(rc, c);
+        let c = field.as_ref().unwrap_or(c);
         let h = c.head.as_str();
         if self.lenient && !rc.vars.contains_key(h) && self.checked.as_ref().is_none_or(|n| n == h)
         {

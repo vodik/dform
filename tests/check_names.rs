@@ -76,6 +76,34 @@ fn an_object_fields_check_reads_a_sibling_field() {
         .success();
 }
 
+/// A field's check reads a sibling field by its bare name, and a field of
+/// an enclosing object too (the lexical rule: the innermost object first).
+#[test]
+fn an_object_fields_check_reads_a_bare_sibling() {
+    let s = project(
+        "check-names-bare-field",
+        "key env: enum(dev, prod)\n\
+         input db {\n  lo: int = 1\n  hi: int = 4 check hi >= lo\n  \
+         pool: { top: int = 5 check top >= lo }\n}\n\
+         use fake\n\
+         resource net.vpc \"main\" { cidr = \"10.0.0.0/16\" }\n",
+    );
+    s.run(&["plan", "app", "env=dev"]).success();
+    let r = s
+        .run(&["plan", "app", "env=dev", "--set", "db.lo=6"])
+        .failure();
+    assert_eq!(r.code, Some(4), "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        r.stdout.contains("  fails  input db.hi check ")
+            && r.stdout.contains("  fails  input db.pool.top check ")
+            && r.summary().ends_with("policy: 2 fails"),
+        "{}",
+        r.stdout
+    );
+    s.run(&["plan", "app", "env=dev", "--set", "db.lo=4"])
+        .success();
+}
+
 /// A check reads a `let` of the module.
 #[test]
 fn a_check_reads_a_let() {
