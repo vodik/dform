@@ -233,12 +233,12 @@ use aws { region = "us-east-1" }
 resource aws.db_instance orders { instance_class = "db.t3.micro" }
 
 resource aws.iam_policy "connect-${id}" {
-  policy = json.encode(
-    { Statement: [{
+  policy = json.encode({
+    Statement: [{
       Action: "rds-db:connect",
       Resource: "arn:aws:rds-db:us-east-1:*:dbuser:${id}/app",
-    }] },
-  )
+    }],
+  })
 } where pg in aws.db_instance, id = pg.resource_id
 ```
 
