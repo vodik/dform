@@ -126,6 +126,17 @@ fn main() -> std::process::ExitCode {
   An `optional_computed` one is answered as computed (dform compares it
   only where the program writes it), so leave it out of what Read
   answers when unset: `skip_serializing_if = "Option::is_none"`.
+- A reference is the resource: a program writes `vpc = main` and the
+  provider is sent `main`'s id. So dform names an attribute typed
+  `ref(T)`, or a list or set of them, for the resource: a name ending in
+  `_id` is the program's without it (`vpc_id` is `vpc`, `peer_vpc_id`
+  `peer_vpc`), and a list or set named `_ids` is the plural
+  (`security_group_ids` is `security_groups`). The provider keeps its
+  own name: every document, path and inventory row it is sent or
+  answers carries it, and dform renames at the boundary. A program that
+  writes the provider's name is told the program's. Name a reference
+  for the thing in a new schema (`network`, `instance`), as the OVH and
+  Kubernetes providers do.
 - Identity, replacement and the lookup are three things. An
   object's identity is its `id`: state holds it, and an update goes to
   it. An attribute is `force_new` only if the API cannot change it on
