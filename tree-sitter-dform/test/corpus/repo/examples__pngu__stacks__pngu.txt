@@ -179,7 +179,7 @@ resource google.compute_address "static-ip-${ip}" {
   region = gcp.region
   name = ip
   address_type = gke.static_ips."pngu-grpc".type
-  subnetwork_id = gke_subnet
+  subnetwork = gke_subnet
 } where ip = "pngu-grpc"
 
 ########################################
@@ -194,7 +194,7 @@ resource google.container_cluster pngu {
   project_name = gcp.project_name
   name = "${gcp.project_name}-gke"
   network_id = "projects/${gcp.project_id}/global/networks/${gcp.network_name}"
-  subnetwork_id = gke_subnet
+  subnetwork = gke_subnet
   master_control_plane_cidr = gke.control_plane_cidr
   ip_range_pods = "${gcp.project_name}-gke-pods-range"
   ip_range_services = "${gcp.project_name}-gke-svc-range"
