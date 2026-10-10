@@ -30,7 +30,7 @@ let cidr(n) = inet.subnet(main.cidr_block, 8, n)
 
 #| One private subnet in every available zone of the region.
 resource aws.subnet "private-${availability_zone}" {
-  vpc_id = main
+  vpc = main
   cidr_block = cidr(n)
   availability_zone
 } where aws.availability_zone("available", availability_zone, n)
@@ -48,15 +48,15 @@ tick 1  4 changes
   + aws.subnet private-us-east-1a  stacks/shop.df:8  with n = 0
       availability_zone = "us-east-1a"
       cidr_block = "10.0.0.0/24"
-      vpc_id = main
+      vpc = main
   + aws.subnet private-us-east-1b  stacks/shop.df:8  with n = 1
       availability_zone = "us-east-1b"
       cidr_block = "10.0.1.0/24"
-      vpc_id = main
+      vpc = main
   + aws.subnet private-us-east-1c  stacks/shop.df:8  with n = 2
       availability_zone = "us-east-1c"
       cidr_block = "10.0.2.0/24"
-      vpc_id = main
+      vpc = main
 
 policy  1 hold
 ```
@@ -95,14 +95,14 @@ spoke(data)
 link(from, to) where hub(from), spoke(to)
 
 resource aws.vpc_peering_connection "${from.tags.Name}-${to.tags.Name}" {
-  vpc_id = from
-  peer_vpc_id = to
+  vpc = from
+  peer_vpc = to
 } where link(from, to)
 
 deny "a spoke peers only the core" { peering } where {
   peering in aws.vpc_peering_connection
-  spoke(peering.vpc_id)
-  spoke(peering.peer_vpc_id)
+  spoke(peering.vpc)
+  spoke(peering.peer_vpc)
 }
 ```
 
@@ -111,11 +111,11 @@ $ dform plan
 plan: 5 changes (5 create) over 1 tick; policy: 1 hold
 ...
   + aws.vpc_peering_connection core-data  stacks/net.df:12
-      peer_vpc_id = data
-      vpc_id = core
+      peer_vpc = data
+      vpc = core
   + aws.vpc_peering_connection core-shop  stacks/net.df:12
-      peer_vpc_id = shop
-      vpc_id = core
+      peer_vpc = shop
+      vpc = core
 
 policy  1 hold
 ```
