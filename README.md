@@ -159,9 +159,9 @@ tick 1  3 changes
 
 **Policy is part of the language.** The shape every resource should have
 and the changes that may not happen are both rules in the same file as
-the resources, and every plan checks them. For example, every resource
-should carry the team's tag, whatever its type, and nobody should have
-to remember to add it:
+the resources, and every plan checks them. For example, we want every
+resource to carry its team's tag; remembering to tag each one by hand is
+error-prone:
 
 ```dform
 resource aws.vpc main { cidr_block = "10.0.0.0/16", tags = { component: "network" } }
@@ -174,8 +174,8 @@ $ dform query 'main.tags'
 { component: "network", team: "shop" }
 ```
 
-The plan is a table too. For example, after an apply we can ask what the
-next plan would change, as rows of `deformation`:
+The plan is a table too. For example, after an apply we want to ask what
+the next plan would change, as rows of `deformation`:
 
 ```
 $ dform query 'deformation(kind, resource, _)' --set database.backup_days=14
@@ -191,8 +191,9 @@ exactly what will apply. With Terraform, policy is a second tool and a
 second language over the plan's JSON, where such a value is only marked
 unknown.
 
-**Lifecycle is a table too.** For example, a prod database must never be
-deleted, and a policy can check that every one of them is protected:
+**Lifecycle is a table too.** For example, we never want a prod database
+deleted, and we want a policy to check that every one of them is
+protected:
 
 ```dform
 lifecycle(orders, "prevent_destroy") where env == "prod"
@@ -223,8 +224,8 @@ deployment's master. `dform secrets` imports, lists and rotates them.
 Terraform's `sensitive` keeps a value out of its CLI output and still
 stores it in state.
 
-A value the cloud has not produced yet is planned around, even in a
-resource's name:
+We often need a value the cloud has not produced yet, sometimes in a
+resource's name; the plan tracks it and plans around it:
 
 ```dform
 use aws { region = "us-east-1" }
@@ -257,9 +258,9 @@ tick 2  ? changes
 Terraform cannot plan a resource address from a value it learns at
 apply; it asks for a `-target` and a second run.
 
-For example, a host, the cluster installed on it and what runs in that
-cluster can be one program and one plan, with the cluster's provider
-configured from the host's address once it exists:
+For example, we want a host, the cluster installed on it and what runs
+in that cluster to be one program and one plan, with the cluster's
+provider configured from the host's address once it exists:
 
 ```dform
 use aws { region = "us-east-1" }
@@ -294,15 +295,16 @@ The Kubernetes provider's own documentation asks for the cluster and
 what runs on it in separate applies.
 
 A provider is facts as well: its types, its tables and its defaults are
-rows the program reads. For example, a plan can refuse to write records
-into a domain the account does not host:
+rows the program reads. For example, we want a plan to refuse records
+for a domain the account does not host:
 
 ```dform
 deny "the domain is hosted here" where not ovh.zone("example.com", _, _)
 ```
 
-For example, staging and prod can differ by one `set`, and `dform test`
-runs every policy over every combination of enums and bools:
+For example, we want staging and prod to differ by one `set`, and we
+want `dform test` to run every policy over every combination of enums
+and bools:
 
 ```dform
 key env: enum("staging", "prod") = "staging"
@@ -331,8 +333,9 @@ denied  dform plan app env=prod --set public=true
 test app: 4 combinations, 1 failed
 ```
 
-`dform why` answers for a resource that does not exist, naming the rule
-that could have made it and the row it lacked:
+We want to know why a resource does not exist as much as why one does.
+`dform why` names the rule that could have made it and the row it
+lacked:
 
 ```
 $ dform why 'aws.subnet private-us-east-1d'
