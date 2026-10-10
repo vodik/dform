@@ -661,7 +661,9 @@ fn a_node_not_on_the_tailnet_is_a_deny() {
     );
     let r = dform(&s, &["plan", "main.df"]).failure();
     assert!(
-        r.stderr.contains("- k3s-2 is not on the tailnet\n") && !r.stderr.contains("is adopted"),
+        r.stderr
+            .contains("refused  k3s-2 is not on the tailnet  main.df:2\n")
+            && !r.stderr.contains("is adopted"),
         "{}",
         r.stderr
     );
@@ -688,7 +690,8 @@ fn the_listing_reads_with_a_rest() {
     );
     let r = dform(&s, &["plan", "main.df"]).failure();
     assert!(
-        r.stderr.contains("- k3s-2 is not on the tailnet\n"),
+        r.stderr
+            .contains("refused  k3s-2 is not on the tailnet  main.df:2\n"),
         "{}",
         r.stderr
     );

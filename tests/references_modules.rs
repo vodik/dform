@@ -77,10 +77,10 @@ fn every_copys_relation_carries_references() {
          deny \"zone\" { copy: t, cidr: c } where vnet[t].subnet(s), s.zone == \"b\", c = s.cidr\n",
     );
     let r = mock(&s, &["plan"]).failure();
+    let fired = common::refused_for(&r.stderr, "zone");
     for (t, c) in [("blue", "10.0.1.0/24"), ("green", "10.1.1.0/24")] {
         assert!(
-            r.stderr
-                .contains(&format!("- zone  cidr = \"{c}\", copy = \"{t}\"\n")),
+            fired.contains(&format!("cidr = \"{c}\", copy = \"{t}\"")),
             "{t}: {}",
             r.stderr
         );

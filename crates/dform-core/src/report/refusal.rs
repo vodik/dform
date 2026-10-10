@@ -70,8 +70,15 @@ pub(super) fn conflict(d: &Diag) -> Diagnostic {
         .as_ref()
         .map(|r| format!(" at rank {r}"))
         .unwrap_or_default();
+    // A value its type's check refuses is a refusal, two writes that
+    // disagree a conflict (the plan lists both under `conflicts`).
+    let checked = d.at.is_some() || d.witnesses.iter().any(|w| w.rank == REFINEMENT);
+    let kind = match checked {
+        true => Kind::Refused,
+        false => Kind::Conflict,
+    };
     let mut out = Diagnostic::bare(
-        Kind::Conflict,
+        kind,
         format!("{}{rank}: {}", attribute(&d.addr, &d.path), d.reason),
     );
     for w in &d.witnesses {

@@ -43,7 +43,7 @@ fn a_deny_reads_through_a_reference_attribute() {
     );
     let r = mock(&s, &["plan"]).failure();
     assert!(
-        r.stderr.contains("- in a /16  subnet = \"a\"\n"),
+        common::refused_for(&r.stderr, "in a /16") == ["subnet = \"a\""],
         "{}",
         r.stderr
     );
@@ -74,7 +74,7 @@ fn a_chain_of_references_is_read_through() {
     );
     let r = mock(&s, &["plan"]).failure();
     assert!(
-        r.stderr.contains("- wide  pool = \"pool\"\n"),
+        common::refused_for(&r.stderr, "wide") == ["pool = \"pool\""],
         "{}",
         r.stderr
     );
@@ -149,14 +149,13 @@ fn references_compare_as_references() {
     );
     let r = mock(&s, &["plan"]).failure();
     for (deny, v) in [("same", "main"), ("other", "other"), ("held", "main")] {
-        assert!(
-            r.stderr.contains(&format!("- {deny}  v = \"{v}\"\n")),
+        assert_eq!(
+            common::refused_for(&r.stderr, deny),
+            [format!("v = \"{v}\"")],
             "{deny}: {}",
             r.stderr
         );
     }
-    assert!(!r.stderr.contains("same  v = \"other\""), "{}", r.stderr);
-    assert!(!r.stderr.contains("other  v = \"main\""), "{}", r.stderr);
 }
 
 /// A reference compared with a string is never equal: a compile error
@@ -251,8 +250,18 @@ fn a_direct_join_with_a_string_at_run_time_is_an_error() {
             + "deny \"cidr\" { r: x } where x in resource, x.cidr == \"10.1.0.0/16\"\n"),
     );
     let r = mock(&s, &["plan"]).failure();
-    assert!(r.stderr.contains("- main  r = \"a\"\n"), "{}", r.stderr);
-    assert!(r.stderr.contains("- cidr  r = \"other\"\n"), "{}", r.stderr);
+    assert_eq!(
+        common::refused_for(&r.stderr, "main"),
+        ["r = \"a\""],
+        "{}",
+        r.stderr
+    );
+    assert_eq!(
+        common::refused_for(&r.stderr, "cidr"),
+        ["r = \"other\""],
+        "{}",
+        r.stderr
+    );
 }
 
 /// The reviewer's shape: a `set` of `cpu: 100m` through `x in resource`
@@ -347,7 +356,7 @@ fn an_exported_relation_carries_references() {
     );
     let r = mock(&s, &["plan"]).failure();
     assert!(
-        r.stderr.contains("- zone  subnet = \"blue.s-a\"\n"),
+        common::refused_for(&r.stderr, "zone") == ["subnet = \"blue.s-a\""],
         "{}",
         r.stderr
     );

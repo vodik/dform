@@ -49,7 +49,7 @@ fn a_required_input_with_no_value_is_an_error_naming_it() {
     let r = plan(&s, &[]).failure();
     assert!(
         r.stderr
-            .contains("p.df:5:1: input owner is required and has no value"),
+            .contains("error  input owner is required and has no value"),
         "{}",
         r.stderr
     );
@@ -87,7 +87,7 @@ fn a_refinement_on_an_input_is_a_deny() {
     let r = plan(&s, &["--set", "owner=ops", "--set", "replicas=9"]).failure();
     assert!(
         r.stderr
-            .contains("--set replicas=9: input replicas is int check 1 <= replicas, replicas <= 5"),
+            .contains("error  --set replicas=9 is outside the check on replicas\n"),
         "{}",
         r.stderr
     );
@@ -125,7 +125,7 @@ fn an_input_file_gives_inputs_as_facts() {
     let r = plan(&s, &["--input-file", "stray.df"]).failure();
     assert!(
         r.stderr
-            .contains("stray.df:3:1: region/1 is not an input of the program"),
+            .contains("error  region/1 is not an input of the program"),
         "{}",
         r.stderr
     );
@@ -342,7 +342,7 @@ fn an_object_input_is_a_block_of_fields() {
     let r = object_plan(&s, &["--set", "nodes.count=9"]).failure();
     assert!(
         r.stderr
-            .contains("--set nodes.count=9: input nodes.count is int check "),
+            .contains("error  --set nodes.count=9 is outside the check on nodes.count\n"),
         "{}",
         r.stderr
     );
@@ -507,7 +507,7 @@ fn a_field_with_no_default_is_required() {
     let r = object_plan(&s, &[]).failure();
     assert!(
         r.stderr
-            .contains("p.df:3:3: input db.size is required and has no value"),
+            .contains("error  input db.size is required and has no value"),
         "{}",
         r.stderr
     );

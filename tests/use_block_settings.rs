@@ -219,7 +219,7 @@ fn a_secret_goes_only_to_a_setting_declared_sensitive() {
         let r = settings_plan(&s, "use k8s { host = pw }", plugin).failure();
         assert!(
             r.stderr.contains(
-                "E0304: a secret reaches provider k8s's setting host, not declared sensitive"
+                "error  a secret reaches provider k8s's setting host, not declared sensitive"
             ) && r.stderr.contains(help)
                 && r.stderr.contains("kubeconfig")
                 && r.stderr.contains("token"),
@@ -229,7 +229,7 @@ fn a_secret_goes_only_to_a_setting_declared_sensitive() {
         let r = settings_plan(&s, "use k8s { cluster_name = pw }", plugin).failure();
         assert!(
             r.stderr.contains(
-                "E0304: a secret reaches provider k8s's setting cluster_name, which it does not declare"
+                "error  a secret reaches provider k8s's setting cluster_name, which it does not declare"
             ),
             "plugin={plugin}\n{}",
             r.stderr

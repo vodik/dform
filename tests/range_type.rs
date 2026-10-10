@@ -168,7 +168,7 @@ fn an_input_is_checked_against_a_range() {
     let r = plan(&["--set", "storage=600Gi"]).failure();
     assert!(
         r.stderr
-            .contains("--set storage=600Gi: input storage is bytes check storage in 1Gi..=500Gi"),
+            .contains("error  --set storage=600Gi is outside the check on storage\n"),
         "{}",
         r.stderr
     );

@@ -254,7 +254,7 @@ fn a_function_over_a_held_secret_is_an_error_not_a_wait() {
     let r = dform(&s, &["plan", "p"]).failure();
     assert!(
         r.stderr.ends_with(
-            "Error: stacks/p.df:4, compute.vm vm: user_data reads the secret \
+            "error  stacks/p.df:4, compute.vm vm: user_data reads the secret \
          vault.token[\"t\"].value through json.encode(), which dform cannot compute: a provider \
          holds it, and its bytes exist for dform only inside the call that writes it\n  help: \
          write it whole, or inside a string template: \"..${vault.token[\"t\"].value}..\"\n"

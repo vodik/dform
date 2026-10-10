@@ -120,7 +120,8 @@ fn a_body_reads_the_seeded_row_and_the_programs_wins() {
     );
     let r = dev(&s, &["plan"]).failure();
     assert!(
-        r.stderr.contains("- net.vpc[\"main\"] is not retained"),
+        r.stderr
+            .contains("refused  net.vpc[\"main\"] is not retained\n"),
         "{}",
         r.stderr
     );

@@ -178,7 +178,10 @@ fn a_read_of_what_nothing_derives_is_an_error_at_its_site() {
                      forgejo_backup.job.spec.jobTemplate.spec.template.spec has no value: \
                      nothing derives k8s.secret forgejo_backup.absent";
         assert!(
-            r.stderr.contains(&format!("Error: {error}\n")) && !r.stderr.contains("refused"),
+            r.stderr.contains(&format!(
+                "error  {}\n  backups.df:12  ",
+                error.split_once(": ").unwrap().1
+            )) && !r.stderr.contains("refused"),
             "real: {real}\n{}",
             r.stderr
         );

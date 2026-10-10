@@ -127,12 +127,14 @@ fn a_statement_that_derives_nothing_is_listed_with_why() {
          data = { x: ghost.metadata.name } }\n",
     );
     let r = s.run(&["plan", "main.df"]).failure();
-    assert_eq!(
-        r.stderr,
-        "Error: main.df:4:73: k8s.secret ghost.metadata.name answered nothing, so \
-         k8s.config_map cm.data.x has no value: nothing derives k8s.secret ghost\n",
+    assert!(
+        r.stderr.starts_with(
+            "error  k8s.secret ghost.metadata.name answered nothing, so \
+             k8s.config_map cm.data.x has no value: nothing derives k8s.secret ghost\n  \
+             main.df:4  resource k8s.config_map cm"
+        ),
         "{}",
-        r.stdout
+        r.stderr
     );
 }
 

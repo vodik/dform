@@ -65,7 +65,7 @@ fn a_zone_not_on_the_account_is_a_deny() {
     let r = dform(&s, &server, &["plan", "main.df"]).failure();
     assert!(
         r.stderr
-            .contains("- the zone vodik.xyz is not hosted on this account\n"),
+            .contains("refused  the zone vodik.xyz is not hosted on this account\n"),
         "{}\n{}",
         r.stdout,
         r.stderr

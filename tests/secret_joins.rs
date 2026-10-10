@@ -35,14 +35,18 @@ fn run(body: &str) -> common::Run {
 
 fn refused(body: &str, want: &str) {
     let r = run(body).failure();
-    assert!(r.stderr.contains(want), "{body}\nwant {want}\n{}", r.stderr);
+    assert!(
+        common::says_error(&r.stderr, want),
+        "{body}\nwant {want}\n{}",
+        r.stderr
+    );
 }
 
 #[test]
 fn a_join_on_a_secret_is_e0301() {
     refused(
         "known(\"hunter2\")\ndeny \"x\" where pw(p), known(p)\n",
-        "p.df:5:23: E0301: a join over a secret",
+        "error  E0301: a join over a secret",
     );
     // Two secrets joined: whether they are equal is a bit of each.
     refused(
@@ -66,7 +70,7 @@ fn a_declassified_join_and_a_forward_stay_allowed() {
          resource leaky.vault v { password = p } where copy(p)\n")
     .failure();
     let out = format!("{}{}", r.stdout, r.stderr);
-    assert!(out.contains("- leaked"), "{out}");
+    assert!(out.contains("refused  leaked  p.df:5\n"), "{out}");
     assert!(!out.contains("E0301"), "{out}");
     assert!(out.contains("password = (sensitive)"), "{out}");
 }

@@ -29,6 +29,7 @@ impl Site {
     /// The site of `span`, unless the compiler made it up.
     fn of(span: Span, label: &str) -> Option<Site> {
         let (name, text, lines) = source_lines(span.file)?;
+        let name = relative(&name);
         let end = (span.end as usize).min(text.len());
         let start = (span.start as usize).min(end);
         let line_of = |at: usize| lines.partition_point(|&l| l <= at);
@@ -130,6 +131,18 @@ impl Site {
     }
 }
 
+/// A source's name as the reader writes it: a path under the working
+/// directory relative to it, as the plan's site column says one.
+fn relative(name: &str) -> String {
+    let Ok(cwd) = std::env::current_dir() else {
+        return name.to_string();
+    };
+    match std::path::Path::new(name).strip_prefix(&cwd) {
+        Ok(rest) => rest.display().to_string(),
+        Err(_) => name.to_string(),
+    }
+}
+
 /// `d` as the terminal shows it, painted in `style`.
 pub(super) fn render(d: &Diagnostic, style: Style) -> String {
     let (code, sentence) = d.code();
@@ -145,10 +158,8 @@ pub(super) fn render(d: &Diagnostic, style: Style) -> String {
     match d.inline {
         true => {
             if let Some((f, l, _)) = location(d.span) {
-                head.push_str(&format!(
-                    "  {}",
-                    style.paint(Paint::Dim, &format!("{f}:{l}"))
-                ));
+                let at = format!("{}:{l}", relative(&f));
+                head.push_str(&format!("  {}", style.paint(Paint::Dim, &at)));
                 tree = true;
             }
         }

@@ -109,5 +109,5 @@ fn an_instance_of_a_module_names_its_components() {
         r.stderr
     );
     assert!(!r.stderr.contains("unknown name"), "{}", r.stderr);
-    assert!(r.stderr.contains("1 error"), "{}", r.stderr);
+    assert_eq!(r.stderr.matches("error  ").count(), 1, "{}", r.stderr);
 }

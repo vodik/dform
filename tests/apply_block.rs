@@ -168,7 +168,7 @@ fn a_failure_is_said_once() {
     );
     assert!(
         r.stderr
-            .ends_with("Error: apply p: tick 2 failed: compute.vm app\n"),
+            .ends_with("error  apply p: tick 2 failed: compute.vm app\n"),
         "{}",
         r.stderr
     );

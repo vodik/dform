@@ -136,10 +136,12 @@ pub fn location(span: Span) -> Option<(String, usize, usize)> {
 }
 
 /// The span a place said as text names (`file:line:col`, as [`at`] says
-/// one, or `file:line`): from its column (else the line's first word) to
+/// one, or `file:line`, either with what it was lowered out of after it,
+/// as [`place`] says it): from its column (else the line's first word) to
 /// the end of the line's text. A site printed in a message, a conflict's
 /// witness's, found again.
 pub fn span_at(place: &str) -> Option<Span> {
+    let place = place.split(", ").next()?;
     let (rest, last) = place.rsplit_once(':')?;
     let last: usize = last.parse().ok()?;
     let (name, line, col) = match rest.rsplit_once(':') {
@@ -354,6 +356,17 @@ impl Diagnostic {
         }
     }
 
+    /// Its message and the sites in no file it is about, on one line:
+    /// what a record of the run keeps (`deny x  net.vpc main`).
+    pub fn line(&self) -> String {
+        let mut out = self.message.clone();
+        for (text, _) in &self.given {
+            out.push_str("  ");
+            out.push_str(text);
+        }
+        out
+    }
+
     /// As the terminal shows it ([`render`]): the kind word and the
     /// message, the sites as a tree, notes dim, the help last.
     pub fn render(&self, color: bool) -> String {
@@ -372,6 +385,9 @@ impl fmt::Display for Diagnostic {
             if let Some(at) = at(*s) {
                 write!(f, "\n  {at}: {m}")?;
             }
+        }
+        for (text, label) in &self.given {
+            write!(f, "\n  {text}: {label}")?;
         }
         for n in &self.notes {
             write!(f, "\n  note: {n}")?;

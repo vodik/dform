@@ -49,8 +49,8 @@ fn a_mutation_under_a_pending_deformation_stops_before_tick_two() {
     // The stop is a deny the evaluator derives from the held deformation.
     assert!(
         r.stderr.contains(
-            "constraint violations after tick 1:\n\
-             - the world changed under a pending change: compute.vm[\"app\"]\n"
+            "refused  the world changed under a pending change: compute.vm[\"app\"]\n  \
+             after tick 1\n"
         ),
         "{}",
         r.stderr

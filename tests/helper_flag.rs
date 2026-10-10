@@ -55,7 +55,7 @@ fn decided(r: Run) {
     let r = r.failure();
     let all = format!("{}{}", r.stdout, r.stderr);
     assert!(
-        all.contains("- pod may run as root  workload = \"web\"\n")
+        common::refused_for(&all, "pod may run as root") == ["workload = \"web\""]
             && !all.contains("workload = \"api\"")
             && !r.stdout.contains("undetermined")
             && !r.stdout.contains("deny \"pod may run as root\""),

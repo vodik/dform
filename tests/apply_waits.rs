@@ -94,7 +94,7 @@ fn past_the_providers_wait_the_apply_stops_saying_what_it_waited_on() {
     let r = apply(&s, &["--chaos", "not-ready=db.postgres[\"d\"].endpoint:40"]).failure();
     assert!(
         r.stderr.contains(
-            "Error: apply stopped at tick 2: db.postgres d.endpoint not reached in 1s \
+            "error  apply stopped at tick 2: db.postgres d.endpoint not reached in 1s \
              (`[providers.fake] wait` in dform.toml); state is consistent: run apply \
              again to wait again\n"
         ),

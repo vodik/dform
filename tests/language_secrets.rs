@@ -30,7 +30,11 @@ fn run(body: &str) -> common::Run {
 
 fn refused(body: &str, want: &str) {
     let r = run(body).failure();
-    assert!(r.stderr.contains(want), "want {want}\n{}", r.stderr);
+    assert!(
+        common::says_error(&r.stderr, want),
+        "want {want}\n{}",
+        r.stderr
+    );
     assert!(!r.stderr.contains("hunter2"), "{}", r.stderr);
 }
 
@@ -126,7 +130,7 @@ fn a_secret_input_refinement_does_not_print_it() {
         .failure();
     assert!(
         r.stderr
-            .contains("--set pw: input pw is secret(string) check pw.len >= 12\n"),
+            .contains("error  --set pw is outside the check on pw\n"),
         "{}",
         r.stderr
     );
@@ -283,16 +287,16 @@ fn each_code_has_its_own_help_computed_from_the_site() {
     let mut codes: std::collections::BTreeMap<String, String> = Default::default();
     for (code, body, want) in cases {
         let r = run(body).failure();
-        // `Error: p.df:L:C: E030N: ..`, then its `Help: ..` line.
+        // `error  ..  [E030N]`, then its `help: ..` line.
         let mut lines = r.stderr.lines();
         let mut found = false;
         while let Some(l) = lines.next() {
-            if !l.starts_with("Error: ") || !l.contains(&format!("{code}:")) {
+            if !l.starts_with("error  ") || !l.ends_with(&format!("[{code}]")) {
                 continue;
             }
             let help = lines
                 .by_ref()
-                .find_map(|l| l.split_once("Help: ").map(|(_, h)| h.to_string()))
+                .find_map(|l| l.split_once("help: ").map(|(_, h)| h.to_string()))
                 .unwrap_or_else(|| panic!("{code} has no help:\n{}", r.stderr));
             if let Some(other) = codes.insert(help.clone(), code.to_string())
                 && other != code

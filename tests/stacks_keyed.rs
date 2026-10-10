@@ -174,7 +174,7 @@ fn a_key_is_the_stacks_and_not_a_secret() {
     s.write("app.df", "\nkey env: secret(string)\nuse fake\n");
     let r = s.run(&["plan", "app.df", "env=prod"]).failure();
     assert!(r.stderr.contains("key env is a secret"), "{}", r.stderr);
-    assert!(r.stderr.contains("app.df:2:1"), "{}", r.stderr);
+    assert!(r.stderr.contains("\n  app.df:2  "), "{}", r.stderr);
     s.write(
         "app.df",
         "\ncomponent m {\n  key env: string\n}\nuse fake\n",

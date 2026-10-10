@@ -128,7 +128,7 @@ fn a_secret_in_a_public_field_is_still_refused() {
     let r = plan(&s).failure();
     assert!(
         r.stderr.contains(
-            "E0304: a secret reaches output conn.user, not declared secret(T): its type is string"
+            "error  a secret reaches output conn.user, not declared secret(T): its type is string"
         ),
         "{}",
         r.stderr
@@ -141,7 +141,7 @@ fn a_secret_in_a_public_field_is_still_refused() {
     let r = plan(&s).failure();
     assert!(
         r.stderr
-            .contains("E0304: a secret reaches leaky.oops .password, not marked sensitive"),
+            .contains("error  a secret reaches leaky.oops .password, not marked sensitive"),
         "{}",
         r.stderr
     );
@@ -155,7 +155,7 @@ fn a_secret_in_a_public_field_is_still_refused() {
     let r = plan(&s).failure();
     assert!(
         r.stderr.contains(
-            "E0304: a secret reaches output conn.password, not declared secret(T): its type is string"
+            "error  a secret reaches output conn.password, not declared secret(T): its type is string"
         ),
         "{}",
         r.stderr
@@ -201,7 +201,7 @@ fn an_input_of_an_object_type_with_a_secret_field() {
     let r = run(&s).failure();
     assert!(
         r.stderr
-            .contains("E0304: a secret reaches leaky.oops .password, not marked sensitive"),
+            .contains("error  a secret reaches leaky.oops .password, not marked sensitive"),
         "{}",
         r.stderr
     );
@@ -281,7 +281,7 @@ fn another_stacks_output_with_a_secret_field() {
     let r = dev(&["plan", "app", "--set", &set]).failure();
     assert!(
         r.stderr
-            .contains("E0304: a secret reaches leaky.oops .password, not marked sensitive"),
+            .contains("error  a secret reaches leaky.oops .password, not marked sensitive"),
         "{}",
         r.stderr
     );

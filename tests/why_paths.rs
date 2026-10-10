@@ -191,7 +191,7 @@ fn a_path_that_reaches_nothing_says_the_nearest() {
         ),
     ] {
         let r = run(&s, &["why", p, "main.df"]).failure();
-        assert_eq!(r.stderr, format!("Error: {want}"), "{p}");
+        assert_eq!(r.stderr, format!("error  {want}"), "{p}");
     }
     let r = run(&s, &["why", "not a path", "main.df"]).failure();
     assert!(
@@ -307,7 +307,7 @@ fn a_query_path_that_reaches_nothing_says_the_nearest() {
     let r = run(&s, &["query", "pg.spec.ports[port=1]", "main.df"]).failure();
     assert_eq!(
         r.stderr,
-        "Error: query: kube.service pg.spec.ports has no element [port=1]: an element is \
+        "error  query: kube.service pg.spec.ports has no element [port=1]: an element is \
          named as the plan prints it, by its key in a keyed list, else by its position\n  \
          help: the nearest it has is 'pg.spec.ports[port=5432,protocol=TCP]'\n"
     );
@@ -333,7 +333,7 @@ fn a_query_path_that_reaches_nothing_says_the_nearest() {
         assert_eq!(
             r.stderr,
             format!(
-                "Error: {cmd}: the `[` after 'pg.spec.ports' is not closed: an element is \
+                "error  {cmd}: the `[` after 'pg.spec.ports' is not closed: an element is \
                  named between `[` and `]`\n  help: close it, 'pg.spec.ports[port=1]'\n"
             )
         );
@@ -341,7 +341,7 @@ fn a_query_path_that_reaches_nothing_says_the_nearest() {
     let r = run(&s, &["query", "not a path", "main.df"]).failure();
     assert!(
         r.stderr.starts_with(
-            "Error: query: expected an address as the plan prints it, 'net.vpc main' or its \
+            "error  query: expected an address as the plan prints it, 'net.vpc main' or its \
              path 'main', an attribute such as 'main.cidr' or \
              'pg.spec.ports[port=5432,protocol=TCP].protocol', an input such as 'nodes.count', \
              a relation such as 'want'"

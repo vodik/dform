@@ -550,6 +550,52 @@ pub fn error(src: &str) -> String {
         .to_string()
 }
 
+/// Whether `stderr` says the error `want`, written as its plain form
+/// says it (`[FILE:L:C: ][E0301: ]message`): a first line `error
+/// message..`, the code at its end (`[E0301]`), and the site `FILE:L`
+/// beside its source line; a `want` with neither, anywhere.
+pub fn says_error(stderr: &str, want: &str) -> bool {
+    let (site, want) = match want.split_once(".df:") {
+        Some((file, rest)) => match rest.splitn(3, ':').collect::<Vec<_>>()[..] {
+            [line, _, msg] => (Some(format!("{file}.df:{line}")), msg.trim_start()),
+            _ => (None, want),
+        },
+        None => (None, want),
+    };
+    let want = want.strip_prefix("error  ").unwrap_or(want);
+    let code = |c: &str| c.len() == 5 && c.starts_with('E');
+    let (code, message) = match want.split_once(": ") {
+        Some((c, m)) if code(c) => (Some(c), m),
+        _ if code(want) => (Some(want), ""),
+        // Neither a site nor a code: a part of what it says.
+        _ if site.is_none() => return stderr.contains(want),
+        _ => (None, want),
+    };
+    let head = stderr.lines().any(|l| {
+        l.starts_with(&format!("error  {message}"))
+            && code.is_none_or(|c| l.ends_with(&format!("[{c}]")))
+    });
+    // A site's span may be several lines, `p.df:18-21`.
+    let at = |s: &str| stderr.contains(&format!("{s}  ")) || stderr.contains(&format!("{s}-"));
+    head && site.is_none_or(|s| at(&s))
+}
+
+/// What deny `message` refusing fired for, as `stderr` says it: the
+/// entries hung under its `refused  message  SITE` line.
+pub fn refused_for(stderr: &str, message: &str) -> Vec<String> {
+    let mut lines = stderr.lines();
+    let head = |l: &str| {
+        l == format!("refused  {message}") || l.starts_with(&format!("refused  {message}  "))
+    };
+    if !lines.by_ref().any(head) {
+        return Vec::new();
+    }
+    lines
+        .map_while(|l| l.strip_prefix("  ├─ ").or_else(|| l.strip_prefix("  └─ ")))
+        .map(str::to_string)
+        .collect()
+}
+
 /// The `.df` files in `dir`, sorted, and with `recurse` those of its
 /// subdirectories.
 pub fn df_files(dir: &Path, recurse: bool, out: &mut Vec<PathBuf>) {

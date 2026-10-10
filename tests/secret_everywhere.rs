@@ -158,7 +158,7 @@ fn a_secret_never_reaches_a_kind_no_schema_has() {
         assert!(
             !r.ok
                 && r.stderr.contains(
-                    "E0304: a secret reaches k8s.example.io.v1.token .spec.value, not marked \
+                    "error  a secret reaches k8s.example.io.v1.token .spec.value, not marked \
                      sensitive in the schema"
                 )
                 && !r.stdout.contains(TOKEN)

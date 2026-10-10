@@ -81,10 +81,10 @@ fn a_refused_plan_says_each_conflict_once() {
 fn a_refused_apply_says_each_conflict_as_the_plan_does() {
     let (s, at) = project();
     let r = dform(&s, &["apply", "--yes"]);
-    let want = "  ! google.compute_address one.a.name: two contributions disagree";
+    let want = "conflict  google.compute_address one.a.name: two contributions disagree";
     let n = r.stderr.lines().filter(|l| *l == want).count();
     assert_eq!(n, 1, "{}", r.stderr);
-    let b = format!("\n      \"b\"  p.df:{}\n", at + 1);
+    let b = format!("\n  └─ p.df:{}  set a.name = \"b\" where on(1)\n", at + 1);
     assert!(r.stderr.contains(&b), "{}", r.stderr);
     assert!(!r.stderr.contains("ctx="), "{}", r.stderr);
 }

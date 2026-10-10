@@ -106,7 +106,7 @@ fn an_object_input_given_whole_with_an_unknown_field_or_no_object_is_a_violation
     let r = s.run(&["plan", "apps"]).failure();
     assert!(
         r.stderr
-            .contains("- input backups.destination has no field regoin\n"),
+            .contains("refused  input backups.destination has no field regoin\n"),
         "{}\n{}",
         r.stdout,
         r.stderr
@@ -123,7 +123,7 @@ fn an_object_input_given_whole_with_an_unknown_field_or_no_object_is_a_violation
     let r = s.run(&["plan", "apps"]).failure();
     assert!(
         r.stderr.contains(
-            "- input backups.destination: s3://x is not an object \
+            "refused  input backups.destination: s3://x is not an object \
              (its fields: bucket, region, endpoint, prefix)\n"
         ),
         "{}\n{}",

@@ -198,7 +198,7 @@ impl Said {
             Said::Answered(yes) => json!({ "said": "answered", "yes": yes }),
             Said::Chaos(note) => json!({ "said": "chaos", "note": note }),
             Said::Violations { after, refusals } => {
-                let lines: Vec<String> = refusals.iter().map(|d| d.to_string()).collect();
+                let lines: Vec<String> = refusals.iter().map(|d| d.line()).collect();
                 json!({ "said": "violations", "after": after, "lines": lines })
             }
             Said::Warning(text) => json!({ "said": "warning", "text": text }),

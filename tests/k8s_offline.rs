@@ -165,7 +165,7 @@ fn offline_plan_validates_and_hides_secrets() {
     let r = dform(&s, None, &["plan", "p.df"]).failure();
     assert!(
         r.stderr
-            .contains("Error: p.df:3, k8s.deployment api: spec.selector is unset (required: "),
+            .contains("error  p.df:3, k8s.deployment api: spec.selector is unset (required: "),
         "{}",
         r.stderr
     );

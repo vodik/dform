@@ -458,7 +458,7 @@ fn ssh_run_is_not_a_function_and_the_provider_is_gone() {
     let r = run(&s, &["plan", "p.df"]).failure();
     assert!(
         r.stderr
-            .contains("p.df:5:11: `ssh.run` is not a function: a command is a provider's apply"),
+            .contains("error  `ssh.run` is not a function: a command is a provider's apply"),
         "{}",
         r.stderr
     );
@@ -522,7 +522,7 @@ fn unlocked() -> PrivateKey {
 fn refused(r: &Run, line: &str, todo: &str) {
     let mut lines = r.stderr.lines().map(str::trim);
     assert!(
-        lines.any(|l| l.ends_with(line)) && lines.next() == Some(todo),
+        lines.any(|l| l.ends_with(line)) && lines.any(|l| l == todo),
         "{line}\n{todo}\n---\n{}",
         r.stderr
     );

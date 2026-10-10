@@ -72,8 +72,8 @@ fn a_key_in_a_module_is_an_error_at_its_line() {
     let r = s.run(&["plan", "platform", "env=lab"]).failure();
     assert!(
         r.stderr.contains(
-            "k3s.df:1:1: `key env` in a file that is not an entrypoint: a key is a \
-             deployment's identity; a module takes `input env` instead"
+            "error  `key env` in a file that is not an entrypoint: a key is a \
+             deployment's identity; a module takes `input env` instead\n  ├─ k3s.df:1  "
         ),
         "{}",
         r.stderr

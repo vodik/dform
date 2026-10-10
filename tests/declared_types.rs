@@ -126,8 +126,9 @@ fn a_value_not_of_the_declared_type_names_the_let() {
     );
     let r = plan(&s, "lab").failure();
     assert!(
-        r.stderr
-            .contains("s.df:4:1: let apex: string takes count: an int is not a string"),
+        r.stderr.contains(
+            "error  let apex: string takes count: an int is not a string\n  ├─ stacks/s.df:4"
+        ),
         "{}",
         r.stderr
     );

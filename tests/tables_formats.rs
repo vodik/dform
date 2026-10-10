@@ -210,7 +210,7 @@ fn a_table_whose_source_reads_its_rows_is_a_compile_error() {
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
         r.stderr
-            .contains("p.df:2:14: input relation t: its source reads its own rows"),
+            .contains("error  input relation t: its source reads its own rows"),
         "{}",
         r.stderr
     );

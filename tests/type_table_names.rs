@@ -40,9 +40,9 @@ deny "the cluster runs ${n} at ${i}" where k8s.deployment("apps", n, i), n != "a
     );
     let r = s.run(&["plan", "main.df"]).failure();
     assert!(
-        r.stderr.contains("- the program runs api\n")
+        r.stderr.contains("refused  the program runs api\n")
             && r.stderr
-                .contains("- the cluster runs legacy at legacy:latest\n")
+                .contains("refused  the cluster runs legacy at legacy:latest\n")
             && !r.stderr.contains("the program runs legacy"),
         "{}\n{}",
         r.stdout,

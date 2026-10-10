@@ -69,9 +69,9 @@ fn a_literal_that_violates_a_refinement_is_a_compile_error() {
     .failure();
     assert!(
         r.stderr
-            .contains("p.df:6:1: db.backup_days = 40: input db.backup_days is int check 1 <= db.backup_days, db.backup_days <= 35")
-            && r.stderr.contains("checked here: 1 <= db.backup_days, db.backup_days <= 35")
-            && r.stderr.contains(" 3 │   backup_days: int = 3 check"),
+            .contains("error  db.backup_days = 40 is outside the check on input db.backup_days\n")
+            && r.stderr.contains(" checked here\n")
+            && r.stderr.contains("p.df:3  backup_days: int = 3 check"),
         "{}",
         r.stderr
     );
@@ -161,11 +161,12 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     assert_eq!(r.stdout.matches("plan: ").count(), 1, "{}", r.stdout);
     assert!(
         r.stderr.contains(
-            "constraint violations after tick 1:\n- ! google.container_cluster pngu.zones: \
-                       [\"us-east1-b\", \"us-east1-c\"] violates len_ge(3)\n"
-        ) && r.stderr.contains("check len_ge(3)  ")
+            "refused  google.container_cluster pngu.zones: \
+             [\"us-east1-b\", \"us-east1-c\"] violates len_ge(3)\n"
+        ) && r.stderr.contains("^ checked here\n")
             && r.stderr
-                .contains("examples/refine/stacks/refine_gke.df:126\n")
+                .contains("examples/refine/stacks/refine_gke.df:126  ")
+            && r.stderr.contains("\n  after tick 1\n")
             && !r.stderr.contains("ctx=")
             && r.stderr
                 .contains("; stopped after tick 1; ticks 1 to 1 were applied"),
@@ -249,8 +250,8 @@ fn e0306_a_refinement_on_a_sensitive_path_the_provider_cannot_check() {
     let r = Run::from(out).failure();
     assert!(
         r.stderr.contains(
-            "p.df:4:3: E0306: a refinement on sensitive path k8s.secret .data.password cannot be checked by the engine, and provider k8s does not check refinements"
-        ) && r.stderr.contains("1 error"),
+            "error  a refinement on sensitive path k8s.secret .data.password cannot be checked by the engine, and provider k8s does not check refinements"
+        ) && !r.stderr.contains(" errors"),
         "{}",
         r.stderr
     );
@@ -319,7 +320,7 @@ fn an_unknown_function_or_a_bad_pattern_is_a_compile_error() {
     .failure();
     assert!(
         r.stderr
-            .contains("p.df:3:3: in a refinement: unknown function frobnicate"),
+            .contains("error  in a refinement: unknown function frobnicate"),
         "{}",
         r.stderr
     );
@@ -330,14 +331,14 @@ fn an_unknown_function_or_a_bad_pattern_is_a_compile_error() {
     .failure();
     assert!(
         r.stderr
-            .contains("p.df:3:3: in a refinement: regex(\"a(\"): regex parse error"),
+            .contains("error  in a refinement: regex(\"a(\"): regex parse error"),
         "{}",
         r.stderr
     );
     let r = plan(&s, "\ninput n: int = 1 check frob(n) == 1\nuse fake\n").failure();
     assert!(
         r.stderr
-            .contains("p.df:2:1: in a refinement: unknown function frob"),
+            .contains("error  in a refinement: unknown function frob"),
         "{}",
         r.stderr
     );

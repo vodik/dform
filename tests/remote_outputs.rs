@@ -197,7 +197,7 @@ fn a_secret_output_cannot_be_read_into_a_public_field() {
     let r = app.run(&["plan", "app"]).failure();
     assert!(
         r.stderr
-            .contains("E0304: a secret reaches net.vpc .name, not marked sensitive in the schema"),
+            .contains("error  a secret reaches net.vpc .name, not marked sensitive in the schema"),
         "{}",
         r.stderr
     );

@@ -15,19 +15,20 @@ resource net.subnet a { cidr = \"10.0.1.0/24\", vpc = other }
 use fake
 ";
 
-const ERROR: &str = "p.df:4:47: net.vpc other answered nothing, so net.subnet a.vpc has no \
-                     value: nothing derives net.vpc other";
+const ERROR: &str = "error  net.vpc other answered nothing, so net.subnet a.vpc has no value: \
+                     nothing derives net.vpc other\n  \
+                     p.df:4  resource net.subnet a { cidr = \"10.0.1.0/24\", vpc = other }\n";
 
 #[test]
 fn plan_and_apply_refuse_the_read_at_its_site() {
     let s = Scratch::project("dangling-reads");
     s.write("p.df", PROGRAM);
     let r = s.run(&["plan", "p.df"]).failure();
-    assert_eq!(r.stderr, format!("Error: {ERROR}\n"));
+    assert!(r.stderr.starts_with(ERROR), "{}", r.stderr);
     assert!(r.stdout.is_empty(), "{}", r.stdout);
     // Nothing is applied, `main` included: the program is refused whole.
     let r = s.run(&common::yes(&["apply", "p.df"])).failure();
-    assert_eq!(r.stderr, format!("Error: {ERROR}\n"));
+    assert!(r.stderr.starts_with(ERROR), "{}", r.stderr);
     let r = s.run(&["plan", "p.df", "--set", "peered=true"]).success();
     assert_eq!(
         r.summary(),
@@ -47,7 +48,8 @@ fn test_fails_the_combination_with_the_read() {
     assert!(
         r.stdout.contains("test p: 2 combinations of peered\n")
             && r.stdout.contains(&format!(
-                "error  dform plan p.df --set peered=false\n  Error: {ERROR}\n"
+                "error  dform plan p.df --set peered=false\n  {}",
+                ERROR.replace("\n  ", "\n    ")
             ))
             && r.stdout.contains("test p: 2 combinations, 1 failed\n"),
         "{}",

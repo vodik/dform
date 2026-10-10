@@ -79,7 +79,7 @@ fn a_required_attribute_left_unset_is_an_error_at_the_resources_site() {
         let r = run(&s, &["plan", "apps"]).failure();
         assert!(
             r.stderr.contains(&format!(
-                "Error: backups.df:5, k8s.cron_job forgejo_backup.job: {unset}\n"
+                "error  backups.df:5, k8s.cron_job forgejo_backup.job: {unset}\n"
             )) && !r.stderr.contains("refused"),
             "real: {real}\n{}",
             r.stderr
@@ -148,7 +148,7 @@ fn dform_test_fails_what_the_plan_refuses() {
         assert!(
             r.stdout.contains("error  dform plan apps\n")
                 && r.stdout.contains(
-                    "  Error: backups.df:5, k8s.cron_job forgejo_backup.job: spec.jobTemplate.spec.template"
+                    "  error  backups.df:5, k8s.cron_job forgejo_backup.job: spec.jobTemplate.spec.template"
                 )
                 && r.stdout.contains("test apps: 1 combination, 1 failed"),
             "real: {real}\n{}\n{}",

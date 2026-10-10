@@ -146,7 +146,11 @@ fn a_ref_attribute_refuses_what_is_no_reference_of_its_type() {
         "p.df:7:26: db.postgres[\"d\"].subnets takes a ref(net.subnet), got net.vpc[\"main\"]",
         "p.df:8:27: k8s.nodepool[\"n\"].cluster takes a ref(k8s.cluster), got net.vpc[\"main\"]",
     ] {
-        assert!(r.stderr.contains(want), "{want}\n---\n{}", r.stderr);
+        assert!(
+            common::says_error(&r.stderr, want),
+            "{want}\n---\n{}",
+            r.stderr
+        );
     }
 }
 
@@ -189,7 +193,11 @@ fn a_string_attribute_takes_a_reference_only_written_out() {
         "or write `ref(r)`",
         "app.thing[\"b\"].net is an inet: \"10.0.0/8\" is not a network",
     ] {
-        assert!(r.stderr.contains(want), "{want}\n---\n{}", r.stderr);
+        assert!(
+            common::says_error(&r.stderr, want),
+            "{want}\n---\n{}",
+            r.stderr
+        );
     }
 }
 
@@ -226,7 +234,7 @@ fn an_instance_input_literal_is_checked() {
     let r = plan(&s).failure();
     assert!(
         r.stderr
-            .contains("p.df:7:18: input cidr of component m is an inet: \"nope\" is not a network"),
+            .contains("error  input cidr of component m is an inet: \"nope\" is not a network"),
         "{}",
         r.stderr
     );

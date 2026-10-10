@@ -23,10 +23,13 @@ use fake
     let r = s.run(&["plan", "p.df"]).failure();
     // Where the read is, what it reads, the attribute it leaves without a
     // value, and why (R-119's form); no plan is printed.
-    assert_eq!(
-        r.stderr,
-        "Error: p.df:4:47: net.vpc other.id answered nothing, so net.subnet a.vpc_id has no \
-         value: nothing derives net.vpc other\n"
+    assert!(
+        r.stderr.starts_with(
+            "error  net.vpc other.id answered nothing, so net.subnet a.vpc_id has no \
+             value: nothing derives net.vpc other\n  p.df:4  "
+        ),
+        "{}",
+        r.stderr
     );
     assert!(r.stdout.is_empty(), "{}", r.stdout);
 }
@@ -74,7 +77,7 @@ use fake
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
         r.stderr.contains(
-            "p.df:11:3: net.vpc main.id answered nothing, so net.vpc_peering \
+            "error  net.vpc main.id answered nothing, so net.vpc_peering \
              peer_main_peer.requester_vpc_id has no value: nothing derives net.vpc main\n"
         ),
         "{}",

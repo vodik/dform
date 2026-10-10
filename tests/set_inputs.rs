@@ -63,7 +63,7 @@ fn a_leaf_that_is_no_input_is_a_deny() {
     let r = s.run(&["plan", "--why=none", "p.df", "env=prod"]).failure();
     assert!(
         r.stderr.contains(
-            "- config/prod.yaml:3: db.zome is not an input (its inputs: db.size, db.zone)"
+            "refused  config/prod.yaml:3: db.zome is not an input (its inputs: db.size, db.zone)\n"
         ),
         "{}",
         r.stderr

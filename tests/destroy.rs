@@ -268,7 +268,7 @@ fn a_deny_over_deletes_refuses_a_destroy() {
     assert_eq!(r.code, Some(4), "{}\n{}", r.stdout, r.stderr);
     assert!(
         r.stderr
-            .contains("constraint violations:\n- the database stays: db.postgres[\"server\"]\n"),
+            .contains("refused  the database stays: db.postgres[\"server\"]\n"),
         "{}",
         r.stderr
     );

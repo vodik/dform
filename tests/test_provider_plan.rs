@@ -63,8 +63,8 @@ fn a_resource_the_k8s_provider_refuses_fails_the_test() {
     assert!(
         r.stdout.contains(
             "named  result\nfalse  error\ntrue   ok\nerror  dform plan p --set named=false\n  \
-             Error: plan k8s.config_map cm: refused\n    \
-             metadata.name is not set, nor metadata.generateName\n    p.df:3\n"
+             refused  plan k8s.config_map cm: metadata.name is not set, nor \
+             metadata.generateName\n    p.df:3  resource k8s.config_map cm {\n"
         ) && r.stdout.contains(
             "note: no registry is asked: an image's digest is the one this machine last \
              resolved, else a stand-in\n"
@@ -105,9 +105,11 @@ fn the_ovh_provider_plans_with_no_credentials() {
     let r = dform(&s, &env, &["test", "main.df"]).failure();
     assert!(
         r.stdout.contains(
-            "  Error: plan ovh.subnet lab: refused\n    \
+            "  refused  plan ovh.subnet lab: \
              pool 10.43.0.10..=10.43.0.200 is not in range 10.42.0.0/24"
-        ) && r.stdout.contains("\n    main.df:3\n"),
+        ) && r
+            .stdout
+            .contains("\n    main.df:3  resource ovh.subnet lab {\n"),
         "{}\n{}",
         r.stdout,
         r.stderr

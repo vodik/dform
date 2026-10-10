@@ -38,21 +38,21 @@ fn an_undeclared_read_is_an_error_naming_the_input() {
     let region =
         "`region` is not declared in module baseline: a module reads only what it declares";
     // Two errors, one per name, though each is read twice; a message
-    // prints in its header and under its site.
+    // prints once, its site under it.
     assert_eq!(
-        r.stderr.matches("Error: baseline.df").count(),
+        r.stderr.matches("\n  baseline.df:").count(),
         2,
         "{}",
         r.stderr
     );
     for msg in [env, region] {
-        assert_eq!(r.stderr.matches(msg).count(), 2, "{}", r.stderr);
+        assert_eq!(r.stderr.matches(msg).count(), 1, "{}", r.stderr);
     }
-    assert!(r.stderr.contains("baseline.df:1:"), "{}", r.stderr);
-    assert!(r.stderr.contains("baseline.df:2:"), "{}", r.stderr);
+    assert!(r.stderr.contains("\n  baseline.df:1  "), "{}", r.stderr);
+    assert!(r.stderr.contains("\n  baseline.df:2  "), "{}", r.stderr);
     assert!(
         r.stderr.contains(
-            "Help: take it as an input: `input env: enum(\"lab\", \"prod\")` in baseline.df, and \
+            "help: take it as an input: `input env: enum(\"lab\", \"prod\")` in baseline.df, and \
              give it in the use: `use baseline { env }`"
         ),
         "{}",
@@ -222,7 +222,7 @@ fn a_users_resource_is_taken_as_a_reference() {
     let r = s.run(&["plan", "--why=none", "main.df"]).failure();
     assert!(
         r.stderr.contains(
-            "Help: take it as an input: `input main: ref(net.vpc)` in baseline.df, and give it \
+            "help: take it as an input: `input main: ref(net.vpc)` in baseline.df, and give it \
              in the use: `use baseline { main }`"
         ),
         "{}",

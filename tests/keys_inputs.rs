@@ -81,7 +81,7 @@ fn a_key_value_outside_its_type_names_the_key_and_its_members() {
     let r = s.run(&["plan", "platform", "env=dev"]).failure();
     assert!(
         r.stderr.contains(
-            "stacks/platform.df:1:1: `env=dev` in the target: key env is enum(lab, prod), and \
+            "error  `env=dev` in the target: key env is enum(lab, prod), and \
              `dev` is not one of its members"
         ),
         "{}",
@@ -148,7 +148,7 @@ fn the_project_module_checks_a_used_modules_inputs() {
     let r = s.run(&["plan"]).failure();
     assert!(
         r.stderr
-            .contains("project.df:1:1: input config.env is required and has no value"),
+            .contains("error  input config.env is required and has no value"),
         "{}",
         r.stderr
     );
@@ -191,7 +191,7 @@ fn a_key_given_to_a_narrower_enum_is_an_error_naming_both() {
     let r = s.run(&["plan", "s", "env=prod"]).failure();
     assert!(
         r.stderr.contains(
-            "stacks/s.df:3:11: key env, enum(lab, prod), is given to input mod.env, enum(dev, \
+            "error  key env, enum(lab, prod), is given to input mod.env, enum(dev, \
              prod): `lab` is not one of its members"
         ),
         "{}",
@@ -231,7 +231,7 @@ fn an_ungiven_input_suggests_the_pun() {
     let r = s.run(&["plan", "s", "env=lab"]).failure();
     assert!(
         r.stderr
-            .contains("stacks/s.df:3:1: input mod.env is required and has no value"),
+            .contains("error  input mod.env is required and has no value"),
         "{}",
         r.stderr
     );
@@ -264,7 +264,7 @@ fn the_pun_with_nothing_named_says_so() {
     let r = s.run(&["plan", "s", "region=eu"]).failure();
     assert!(
         r.stderr.contains(
-            "stacks/s.df:3:11: `env` in the block of `use mod` is `env = env`, and nothing \
+            "error  `env` in the block of `use mod` is `env = env`, and nothing \
              here declares `env`"
         ),
         "{}",
@@ -294,7 +294,7 @@ fn a_keyed_read_names_an_output_of_the_dependency() {
     let r = s.run(&["plan", "apps", "env=lab"]).failure();
     assert!(
         r.stderr
-            .contains("stacks/apps.df:4:29: stacks.platform has no output `nosuch`"),
+            .contains("error  stacks.platform has no output `nosuch`"),
         "{}",
         r.stderr
     );

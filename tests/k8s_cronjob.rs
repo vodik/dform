@@ -118,7 +118,7 @@ fn a_cron_job_without_its_template_is_refused_naming_it() {
     let r = plan(&s);
     assert!(
         r.stderr.contains(
-            "Error: p.df:3, k8s.cron_job job: spec.jobTemplate.spec.template is unset (required: "
+            "error  p.df:3, k8s.cron_job job: spec.jobTemplate.spec.template is unset (required: "
         ),
         "{}",
         r.stderr

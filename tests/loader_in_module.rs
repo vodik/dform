@@ -162,7 +162,7 @@ fn two_uses_name_one_source() {
     let r = s.run(&["plan", "platform"]).failure();
     assert!(
         r.stderr
-            .contains("traefik.df:1:1: provider fake: two `use`s name another source"),
+            .contains("error  provider fake: two `use`s name another source"),
         "{}",
         r.stderr
     );

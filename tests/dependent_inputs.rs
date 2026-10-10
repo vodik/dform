@@ -104,7 +104,7 @@ fn a_key_takes_no_clause_and_a_twice_declared_input_follows_the_rule() {
     let r = plan(&s, &[]).failure();
     assert!(
         r.stderr
-            .contains("p.df:6:1: `region` is declared twice; give each a `where`"),
+            .contains("error  `region` is declared twice; give each a `where`\n  ├─ p.df:6"),
         "{}",
         r.stderr
     );

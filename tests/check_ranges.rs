@@ -43,7 +43,7 @@ fn an_inputs_range_check_is_its_bounds() {
         &[],
     );
     assert!(
-        r.stderr.contains("input agents is int check"),
+        r.stderr.contains("is outside the check on input agents"),
         "{}",
         r.stderr
     );
@@ -100,7 +100,8 @@ fn a_quantity_range_check_is_its_bounds() {
         &[],
     );
     assert!(
-        r.stderr.contains("disk = 5Ti: input disk is bytes check"),
+        r.stderr
+            .contains("disk = 5Ti is outside the check on input disk"),
         "{}",
         r.stderr
     );
@@ -120,7 +121,7 @@ fn a_quantity_range_check_is_its_bounds() {
         let r = plan(&s, &src, &["--set", "disk=5Ti"]).failure();
         assert!(
             r.stderr
-                .contains("--set disk=5Ti: input disk is bytes check"),
+                .contains("error  --set disk=5Ti is outside the check on disk\n"),
             "{check}: {}",
             r.stderr
         );

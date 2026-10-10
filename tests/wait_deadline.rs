@@ -64,7 +64,7 @@ fn past_the_deadline_the_apply_stops_and_the_wait_is_the_next_applys() {
     assert_eq!(r.code, Some(1), "{}", r.stderr);
     assert!(
         r.stderr.contains(
-            "Error: apply stopped at tick 2: db.postgres d.endpoint not reached in 1s \
+            "error  apply stopped at tick 2: db.postgres d.endpoint not reached in 1s \
              (`[apply] wait` in dform.toml); state is consistent: run apply again to \
              wait again\n"
         ),

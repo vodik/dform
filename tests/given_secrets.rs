@@ -673,12 +673,13 @@ fn secrets_as_a_loader_names_the_form() {
     );
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
-        r.stderr.contains(
-            "Error: p.df:3:10: a file of given secrets is read by `secrets.decode(io.read(..))`"
-        ) && r.stderr.contains(
-            "Help: `secrets.decode(io.read(\"secrets/p.json\"))`: the file `dform secrets set` \
+        r.stderr
+            .contains("error  a file of given secrets is read by `secrets.decode(io.read(..))`")
+            && r.stderr.contains(
+                "help: `secrets.decode(io.read(\"secrets/p.json\"))`: the file `dform secrets set` \
                  writes, opened with the deployment's key"
-        ) && !r.stderr.contains("gone"),
+            )
+            && !r.stderr.contains("gone"),
         "{}",
         r.stderr
     );

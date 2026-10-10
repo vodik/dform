@@ -117,8 +117,9 @@ fn a_deny_over_an_oci_attribute_reads_its_print() {
         ])
         .failure();
     assert!(
-        r.stderr
-            .contains("constraint violations:\n- image not pinned: app.thing[\"floating\"]\nError"),
+        r.stderr.contains(
+            "refused  image not pinned: app.thing[\"floating\"]\nrefused  blocked by constraints\n"
+        ),
         "{}",
         r.stderr
     );

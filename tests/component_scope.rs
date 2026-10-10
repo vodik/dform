@@ -107,11 +107,11 @@ fn a_copy_by_its_path_without_a_use_reads_no_instance() {
     let r = s.run(&["plan", "main.df"]).failure();
     assert!(
         r.stderr.contains(
-            "Error: backups.df:6:33: `label` is an item of module backups, and the copy x of \
+            "error  `label` is an item of module backups, and the copy x of \
              backups.volume is made outside every instance of backups: a component reads the \
              items of the instance it is taken from"
         ) && r.stderr.contains(
-            "Help: `use backups` beside the copy: `resource backups.volume x` then reads that \
+            "help: `use backups` beside the copy: `resource backups.volume x` then reads that \
              instance's `label`"
         ),
         "{}",
@@ -193,10 +193,10 @@ fn super_in_a_modules_body_is_an_error() {
     let r = s.run(&["plan", "main.df"]).failure();
     assert!(
         r.stderr.contains(
-            "Error: backups.df:1:36: `super` in module backups: a module has no scope \
+            "error  `super` in module backups: a module has no scope \
              around it"
         ) && r.stderr.contains(
-            "Help: a module never reaches its user: declare `input region: TYPE` in it and give \
+            "help: a module never reaches its user: declare `input region: TYPE` in it and give \
              it in the `use`, `use backups { region = .. }`"
         ),
         "{}",
@@ -214,11 +214,11 @@ fn super_in_a_modules_body_is_an_error() {
     let r = s.run(&["plan", "main.df"]).failure();
     assert!(
         r.stderr.contains(
-            "Error: backups.df:3:38: `super` in module backups: a module has no scope \
+            "error  `super` in module backups: a module has no scope \
              around it"
         ) && r
             .stderr
-            .contains("Help: read module backups's own as `super.region`"),
+            .contains("help: read module backups's own as `super.region`"),
         "{}",
         r.stderr
     );
@@ -229,9 +229,9 @@ fn super_in_a_modules_body_is_an_error() {
     let r = s.run(&["plan", "main.df"]).failure();
     assert!(
         r.stderr.contains(
-            "Error: main.df:3:36: `super` at the stack's top level: it names the scope around a \
+            "error  `super` at the stack's top level: it names the scope around a \
              component"
-        ) && r.stderr.contains("Help: read `region` bare"),
+        ) && r.stderr.contains("help: read `region` bare"),
         "{}",
         r.stderr
     );

@@ -682,14 +682,26 @@ fn fails_check(k: &str, name: &str, v: &Value, decl: &InputDecl) -> Result<()> {
         return Ok(());
     }
     let (check, ty) = (check_text(decl), type_text(&decl.ty));
-    let given = match is_secret(&decl.ty) {
-        true => format!("--set {k}"),
-        false => format!("--set {k}={}", spell::bare(v)),
-    };
-    let message = match k == name {
-        true => format!("{given} is outside the check on {k}"),
+    let v = (!is_secret(&decl.ty)).then(|| spell::bare(v));
+    let (given, message) = match (k == name, v) {
+        (true, Some(v)) => {
+            let given = format!("--set {k}={v}");
+            let message = format!("{given} is outside the check on {k}");
+            (given, message)
+        }
+        (true, None) => (
+            format!("--set {k}"),
+            format!("--set {k} is outside the check on {k}"),
+        ),
         // A field of an object given whole, as its type is checked.
-        false => format!("{given}: {name} is outside its check"),
+        (false, Some(v)) => (
+            format!("--set {k}"),
+            format!("--set {k}: {name} = {v} is outside its check"),
+        ),
+        (false, None) => (
+            format!("--set {k}"),
+            format!("--set {k}: {name} is outside its check"),
+        ),
     };
     let d = Diagnostic::error(check_span(decl), message)
         .labelled("checked here")

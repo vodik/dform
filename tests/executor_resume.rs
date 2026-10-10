@@ -84,7 +84,7 @@ fn apply_after_a_stop_finishes_the_remaining_actions() {
         let r = dform_on(&s, backend, &["apply", "--chaos", "stop-after=2"]).failure();
         assert!(
             r.stderr.contains(
-                "Error: apply net.subnet a: dform stopped after this Apply call returned\n  \
+                "error  apply net.subnet a: dform stopped after this Apply call returned: \
                  chaos stop-after; the next apply resumes"
             ),
             "{backend:?}: {}",
@@ -160,9 +160,8 @@ fn apply_stops_when_the_world_changed_under_a_remaining_action() {
     // deformation and the world's digest (`zset::POLICY_RULES`), as at a
     // phase boundary.
     assert!(
-        r.stderr.contains(
-            "constraint violations:\n- the world changed under a remaining action: net.subnet[\"a\"]\n"
-        ),
+        r.stderr
+            .contains("refused  the world changed under a remaining action: net.subnet[\"a\"]\n"),
         "{}",
         r.stderr
     );

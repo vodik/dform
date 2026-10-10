@@ -81,7 +81,11 @@ fn a_component_that_differs_from_its_signature_is_an_error() {
         "p.df:18:1: input tier of component pg_gcp is not in database and has no default",
         "the signature database",
     ] {
-        assert!(r.stderr.contains(want), "{want}\n---\n{}", r.stderr);
+        assert!(
+            common::says_error(&r.stderr, want),
+            "{want}\n---\n{}",
+            r.stderr
+        );
     }
     s.write(
         "p.df",

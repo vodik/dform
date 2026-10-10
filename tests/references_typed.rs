@@ -68,8 +68,7 @@ fn a_deny_reads_through_a_relation_of_references() {
     );
     let r = mock(&s, &["plan"]).failure();
     assert!(
-        r.stderr
-            .contains("- pod may run as root  workload = \"web\"\n"),
+        common::refused_for(&r.stderr, "pod may run as root") == ["workload = \"web\""],
         "{}",
         r.stderr
     );

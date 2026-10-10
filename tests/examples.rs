@@ -416,7 +416,10 @@ fn walkthrough(name: &str, file: &str) {
         }
         let r = s.run(&args);
         let out = format!("{}{}", r.stdout, r.stderr);
-        let fails = step.quoted.iter().any(|q| q.starts_with("Error:"));
+        let fails = step
+            .quoted
+            .iter()
+            .any(|q| q.starts_with("error  ") || q.starts_with("refused  "));
         assert_eq!(
             !r.ok, fails,
             "examples/{name}/{file}: `{}`\n{out}",

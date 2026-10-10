@@ -255,10 +255,10 @@ fn a_body_reads_an_element_by_its_key() {
     );
     let r = plan(&s).failure();
     for l in [
-        "- api api:1\n",
-        "- side 2\n",
-        "- again api:1\n",
-        "- first api\n",
+        "refused  api api:1\n",
+        "refused  side 2\n",
+        "refused  again api:1\n",
+        "refused  first api\n",
     ] {
         assert!(r.stderr.contains(l), "{l}:\n{}", r.stderr);
     }

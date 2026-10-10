@@ -95,7 +95,7 @@ fn an_unguarded_duplicate_is_an_error() {
     let r = plan(&s, &[]).failure();
     assert!(
         r.stderr
-            .contains("p.df:15:1: `store` is declared twice; give each a `where`"),
+            .contains("error  `store` is declared twice; give each a `where`"),
         "{}",
         r.stderr
     );
@@ -262,7 +262,7 @@ fn guarded_providers_follow_the_rule() {
     let r = plan(&s, &[]).failure();
     assert!(
         r.stderr
-            .contains("p.df:4:1: `fake` is declared twice; give each a `where`"),
+            .contains("error  `fake` is declared twice; give each a `where`"),
         "{}",
         r.stderr
     );

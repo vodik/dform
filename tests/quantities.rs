@@ -88,7 +88,7 @@ fn m_is_read_by_its_position_and_alone_is_an_error() {
     let r = query(&s, "bare(x)").failure();
     assert!(
         r.stderr.contains(
-            "p.df:3:19: `500m` is millicores in a cpu position and minutes in a duration \
+            "error  `500m` is millicores in a cpu position and minutes in a duration \
              position, and this position has no type: give it one, `let c: cpu = 500m` or `let d: \
              duration = 500m`"
         ),
@@ -183,7 +183,7 @@ fn one_spelling_renders_per_schema() {
         .failure();
     assert!(
         r.stderr.contains(
-            "Error: main.df:6, aws.db_instance db: allocated_storage is sent to the provider in \
+            "error  main.df:6, aws.db_instance db: allocated_storage is sent to the provider in \
              whole GiB, and 1536Mi is not"
         ),
         "{}",

@@ -65,7 +65,7 @@ fn a_duration_range_refines_its_value() {
         let r = plan(&s, &src, &["--set", "ttl=3h"]).failure();
         assert!(
             r.stderr
-                .contains("--set ttl=3h: input ttl is duration check"),
+                .contains("error  --set ttl=3h is outside the check on ttl\n"),
             "{check}: {}",
             r.stderr
         );
@@ -109,14 +109,14 @@ fn a_bound_of_another_unit_is_an_error_at_the_check() {
     .failure();
     assert!(
         r.stderr.contains(
-            "p.df:2:1: input disk is bytes, and its bound 1s is duration: a check bounds a value \
+            "error  input disk is bytes, and its bound 1s is duration: a check bounds a value \
              by values of its type"
         ),
         "{}",
         r.stderr
     );
     assert!(
-        r.stderr.contains("Help: write the bound as bytes"),
+        r.stderr.contains("help: write the bound as bytes"),
         "{}",
         r.stderr
     );
@@ -129,7 +129,7 @@ fn a_bound_of_another_unit_is_an_error_at_the_check() {
     .failure();
     assert!(
         r.stderr
-            .contains("p.df:3:3: compute.vm .disk is bytes, and its bound 1s is duration"),
+            .contains("error  compute.vm .disk is bytes, and its bound 1s is duration"),
         "{}",
         r.stderr
     );

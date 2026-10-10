@@ -91,7 +91,7 @@ fn a_deny_refuses_the_render() {
     assert!(r.stdout.is_empty(), "{}", r.stdout);
     assert!(
         r.stderr
-            .contains("constraint violations:\n- prod is not rendered here\n"),
+            .contains("refused  prod is not rendered here  p.df:21\n"),
         "{}",
         r.stderr
     );
@@ -123,7 +123,7 @@ fn a_hole_refuses_the_render_unless_partial() {
     let secret = "hole: k8s.secret pw stringData is a secret: a render prints none";
     assert!(
         r.stderr.contains(&format!(
-            "Error: render p: 2 of what its documents need are not known to a render, and a \
+            "error  render p: 2 of what its documents need are not known to a render, and a \
              rendered document has no holes:\n  {secret}\n  {cell}\n  help: apply the \
              deployment first, and give the cluster a secret another way; or render the \
              documents with none with `--partial`"

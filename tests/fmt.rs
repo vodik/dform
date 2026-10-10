@@ -185,7 +185,7 @@ fn fmt_refuses_a_file_that_does_not_parse() {
     let bad = "p(\"a\") where q(]\nuse fake\n";
     s.write("bad.df", bad);
     let r = s.run(&["fmt", "bad.df"]).failure();
-    assert!(r.stderr.contains("bad.df:1:"), "{}", r.stderr);
+    assert!(r.stderr.contains("  bad.df:1  "), "{}", r.stderr);
     assert_eq!(s.read("bad.df"), bad);
 }
 

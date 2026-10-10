@@ -471,9 +471,14 @@ impl Unanswered {
     /// A run that derives such a read refuses it, before any provider is
     /// asked: each at its site.
     pub fn check<'a>(facts: impl IntoIterator<Item = &'a Atom>) -> anyhow::Result<()> {
-        match Unanswered::messages(facts).as_slice() {
-            [] => Ok(()),
-            said => Err(anyhow::anyhow!(said.join("\n"))),
+        let said: BTreeMap<String, Diagnostic> = facts
+            .into_iter()
+            .filter_map(Unanswered::of)
+            .map(|u| (u.message(), u.diagnostic()))
+            .collect();
+        match said.is_empty() {
+            true => Ok(()),
+            false => Err(diag::Diagnostics(said.into_values().collect()).into()),
         }
     }
 
@@ -488,21 +493,39 @@ impl Unanswered {
     /// The read as an error at its site (R-119's form): it answered
     /// nothing, so the holder's attribute has no value.
     pub fn message(&self) -> String {
+        match &self.at {
+            Some(at) => format!("{at}: {}", self.sentence()),
+            None => self.sentence(),
+        }
+    }
+
+    /// The same without its site.
+    fn sentence(&self) -> String {
         let what = match (&self.holder, &self.attr) {
             (Some(h), Some(a)) => attribute(h, a),
             (Some(h), None) => address(h),
             (None, _) => self.from.clone(),
         };
-        let at = self
-            .at
-            .as_ref()
-            .map(|a| format!("{a}: "))
-            .unwrap_or_default();
         format!(
-            "{at}{} answered nothing, so {what} has no value: nothing derives {}",
+            "{} answered nothing, so {what} has no value: nothing derives {}",
             self.read(),
             address(&self.to)
         )
+    }
+
+    /// As every error is printed, at the reference; what it was lowered
+    /// out of (`resource backups.volume forgejo_backup`), a note.
+    fn diagnostic(&self) -> Diagnostic {
+        let span = self.at.as_deref().and_then(diag::span_at);
+        let d = Diagnostic::error(span.unwrap_or_default(), self.sentence());
+        let d = match (span, &self.at) {
+            (None, Some(at)) => d.with_given(at.clone(), ""),
+            _ => d,
+        };
+        match self.at.as_deref().and_then(|a| a.split_once(", ")) {
+            Some((_, origin)) if span.is_some() => d.with_note(origin),
+            _ => d,
+        }
     }
 }
 

@@ -185,7 +185,7 @@ resource net.vpc u { cidr = c } where cidr(q, 2, c), q = c.len
     .failure();
     assert!(
         r.stderr.contains(
-            "p.df:3:44: `q` is unbound in this call of `cidr`; bind it with `=`, `in`, or a \
+            "error  `q` is unbound in this call of `cidr`; bind it with `=`, `in`, or a \
              relation first"
         ),
         "{}",
@@ -206,7 +206,7 @@ resource net.vpc u { cidr = c } where c in cidr
     .failure();
     assert!(
         r.stderr.contains(
-            "p.df:3:44: `in` over `cidr`: a let with parameters is a relation whose arguments \
+            "error  `in` over `cidr`: a let with parameters is a relation whose arguments \
              must be bound, so nothing enumerates it"
         ) && r.stderr.contains(
             "call it with its arguments, `cidr(a, b)`; `x in cidr(a, b)` reads a list it returns"
@@ -240,7 +240,7 @@ resource net.vpc u { cidr = resti(1) }
     )
     .failure();
     assert!(
-        r.stderr.contains("p.df:3:29: unknown function resti")
+        r.stderr.contains("error  unknown function resti")
             && r.stderr
                 .contains("the let with parameters in scope is `restic`"),
         "{}",
@@ -288,7 +288,7 @@ resource net.vpc u { cidr = f(1) }
     .failure();
     assert!(
         r.stderr
-            .contains("p.df:2:1: let f calls itself: f calls g calls f"),
+            .contains("error  let f calls itself: f calls g calls f"),
         "{}",
         r.stderr
     );
@@ -365,7 +365,7 @@ resource net.vpc u { cidr = sub("10.0.0.0/16", "x") }
     .failure();
     assert!(
         r.stderr
-            .contains("p.df:3:48: `sub`'s `i` is int, not the string \"x\""),
+            .contains("error  `sub`'s `i` is int, not the string \"x\""),
         "{}",
         r.stderr
     );

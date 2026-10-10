@@ -32,7 +32,11 @@ fn run(body: &str) -> common::Run {
 
 fn refused(body: &str, want: &str) {
     let r = run(body).failure();
-    assert!(r.stderr.contains(want), "{body}\nwant {want}\n{}", r.stderr);
+    assert!(
+        common::says_error(&r.stderr, want),
+        "{body}\nwant {want}\n{}",
+        r.stderr
+    );
 }
 
 /// The old README's example compiled and ran the comparison: it is the
@@ -129,5 +133,5 @@ fn what_stays_allowed() {
     )
     .failure();
     let out = format!("{}{}", r.stdout, r.stderr);
-    assert!(out.contains("- weak"), "{out}");
+    assert!(out.contains("refused  weak  p.df:4\n"), "{out}");
 }

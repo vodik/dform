@@ -46,8 +46,9 @@ fn prevent_destroy_makes_a_delete_a_deny() {
     s.write("p.df", &NET.replace("10.0.0.0/16", "10.1.0.0/16"));
     let r = mock(&s, &["apply"]).failure();
     assert!(
-        r.stderr
-            .contains("- lifecycle prevent_destroy: the plan would replace net.vpc[\"main\"]\n"),
+        r.stderr.contains(
+            "refused  lifecycle prevent_destroy: the plan would replace net.vpc[\"main\"]\n"
+        ),
         "{}",
         r.stderr
     );

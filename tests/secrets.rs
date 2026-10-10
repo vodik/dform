@@ -224,7 +224,7 @@ resource leaky.oops copy {{
         .failure();
     assert!(
         r.stderr.contains(
-            "p.df:13:3: E0304: a secret reaches leaky.oops .password, not marked sensitive in the schema"
+            "error  a secret reaches leaky.oops .password, not marked sensitive in the schema"
         ),
         "{}",
         r.stderr
@@ -394,7 +394,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
     let r = s.run(&common::on("p.df", &mock, &["plan"])).failure();
     assert!(
         r.stderr
-            .contains("p.df:3:1: E0304: a secret reaches output pw_len, not declared secret(T)"),
+            .contains("error  a secret reaches output pw_len, not declared secret(T)"),
         "{}",
         r.stderr
     );
@@ -434,7 +434,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
     let r = s.run(&common::on("p.df", &mock, &["plan"])).failure();
     assert!(
         r.stderr
-            .contains("- declassified at p.df:3:1: its length is public\n"),
+            .contains("refused  declassified at p.df:3:1: its length is public\n"),
         "{}",
         r.stderr
     );

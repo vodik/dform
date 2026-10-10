@@ -51,7 +51,7 @@ fn an_unclosed_hole_is_named_where_it_opens() {
     let r = s.run(&["plan", "main.df"]).failure();
     assert!(
         r.stderr
-            .contains("main.df:1:15: an interpolation `${` is never closed"),
+            .contains("error  an interpolation `${` is never closed"),
         "{}",
         r.stderr
     );

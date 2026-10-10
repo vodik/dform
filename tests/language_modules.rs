@@ -60,8 +60,7 @@ use fake
     )
     .failure();
     assert!(
-        r.stderr
-            .contains("p.df:6:14: size is private to component m"),
+        r.stderr.contains("error  size is private to component m"),
         "{}",
         r.stderr
     );
@@ -118,7 +117,7 @@ use fake
     .failure();
     assert!(
         r.stderr
-            .contains("p.df:3:3: expected a statement, found `export`"),
+            .contains("error  expected a statement, found `export`"),
         "{}",
         r.stderr
     );
@@ -130,7 +129,7 @@ use fake
     );
     assert!(
         r.stderr
-            .contains("p.df:4:3: expected a statement, found `contributes`"),
+            .contains("error  expected a statement, found `contributes`\n  p.df:4  "),
         "{}",
         r.stderr
     );
@@ -173,7 +172,7 @@ use fake
     let r = plan(&src.replace("input n: int = 7", "input n: int")).failure();
     assert!(
         r.stderr
-            .contains("p.df:8:1: input a.n is required and has no value"),
+            .contains("error  input a.n is required and has no value"),
         "{}",
         r.stderr
     );
@@ -194,7 +193,8 @@ use fake
 "#;
     let r = plan(&format!("{component}resource m a {{ n = 9 }}\n")).failure();
     assert!(
-        r.stderr.contains("n = 9: input n of a is int check n <= 5"),
+        r.stderr
+            .contains("error  n = 9 is outside the check on input n of a\n"),
         "{}",
         r.stderr
     );
@@ -204,7 +204,7 @@ use fake
     .failure();
     assert!(
         r.stderr
-            .contains("- input n check n <= 5  of = \"a\", value = 9"),
+            .contains("refused  input n check n <= 5  p.df:3\n  └─ of = \"a\", value = 9\n"),
         "{}",
         r.stderr
     );
@@ -241,8 +241,7 @@ use fake
         .run(&["dev", "--world", "w.json", "plan", "--why=none", "p.df"])
         .failure();
     assert!(
-        r.stderr
-            .contains("p.df:5:15: team is private to module tags"),
+        r.stderr.contains("error  team is private to module tags"),
         "{}",
         r.stderr
     );
@@ -703,7 +702,7 @@ fn an_unbound_input_of_a_used_module_is_a_stack_inputs_error() {
         .failure();
     assert!(
         r.stderr
-            .contains("p.df:2:1: input postgres.database is required and has no value"),
+            .contains("error  input postgres.database is required and has no value"),
         "{}",
         r.stderr
     );
