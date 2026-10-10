@@ -1,6 +1,6 @@
 exit: error
 -- stdout --
-== tests/fixtures/adversarial/adv9_default_tag_unless_present.df: 47 nodes, 99 edges (34 negative)
+== tests/fixtures/adversarial/adv9_default_tag_unless_present.df: 50 nodes, 106 edges (36 negative)
    REJECTED: negative cycle through 3 nodes
    scc: (arg, *, tags)  (attr, *, tags)  (attr, net.vpc, tags)
    (arg, *, tags) -> (attr, *, tags)  [attribute aggregate (lub_ranked)]  prelude

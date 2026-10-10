@@ -1,6 +1,6 @@
 exit: error
 -- stdout --
-== tests/fixtures/adversarial/adv7_mutual_recursion_attr.df: 45 nodes, 91 edges (36 negative)
+== tests/fixtures/adversarial/adv7_mutual_recursion_attr.df: 48 nodes, 97 edges (38 negative)
    REJECTED: negative cycle through 4 nodes
    scc: (arg, net.subnet, name)  (arg, net.vpc, peer)  (attr, net.subnet, name)  (attr, net.vpc, peer)
    (arg, net.subnet, name) -> (attr, net.subnet, name)  [attribute aggregate (lub_ranked)]  prelude

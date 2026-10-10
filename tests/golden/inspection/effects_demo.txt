@@ -79,6 +79,7 @@ stack       writes  (k8s.cluster, api_endpoint)
 stack       writes  (k8s.cluster, ca_cert)
 stack       writes  (k8s.cluster, id)
 stack       writes  (k8s.nodepool, id)
+stack       writes  (net.peering, id)
 stack       writes  (net.route_table, id)
 stack       writes  (net.subnet, id)
 stack       writes  (net.vpc, id)
@@ -105,4 +106,4 @@ stack       writes  rows stdlib_net.vpc_peer
 stdlib_net  reads   compute.vm.private_ip
 stdlib_net  reads   input vpc_peer
 stdlib_net  reads   net.vpc.cidr
-(106 rows)
+(107 rows)

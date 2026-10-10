@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== tests/fixtures/adversarial/adv7b_mutual_via_different_paths.df: 47 nodes, 91 edges (35 negative), 6 strata
+== tests/fixtures/adversarial/adv7b_mutual_via_different_paths.df: 50 nodes, 97 edges (37 negative), 6 strata
 stratum  node
 0        (arg, net.vpc, z)
 0        (want, compute.vm)
@@ -9,6 +9,7 @@ stratum  node
 0        (want, iam.role)
 0        (want, k8s.cluster)
 0        (want, k8s.nodepool)
+0        (want, net.peering)
 0        (want, net.route_table)
 0        (want, net.vpc)
 0        (want, net.vpc_peering)
@@ -25,6 +26,7 @@ stratum  node
 1        (arg, k8s.cluster, ca_cert)
 1        (arg, k8s.cluster, id)
 1        (arg, k8s.nodepool, id)
+1        (arg, net.peering, id)
 1        (arg, net.route_table, id)
 1        (arg, net.vpc, id)
 1        (arg, net.vpc_peering, id)
@@ -40,6 +42,7 @@ stratum  node
 2        (attr, k8s.cluster, ca_cert)
 2        (attr, k8s.cluster, id)
 2        (attr, k8s.nodepool, id)
+2        (attr, net.peering, id)
 2        (attr, net.route_table, id)
 2        (attr, net.vpc, id)
 2        (attr, net.vpc_peering, id)
@@ -49,5 +52,5 @@ stratum  node
 3        __not_planned
 4        (arg, net.vpc, y)
 5        (attr, net.vpc, y)
-(47 rows)
+(50 rows)
 -- stderr --

@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/advanced/stacks/dform-advanced.df: 82 nodes, 171 edges (57 negative), 6 strata
+== examples/advanced/stacks/dform-advanced.df: 85 nodes, 177 edges (59 negative), 6 strata
 stratum  node
 0        (arg, input, env)
 0        (arg, input, mesh)
@@ -11,6 +11,7 @@ stratum  node
 0        (want, iam.role)
 0        (want, k8s.cluster)
 0        (want, k8s.nodepool)
+0        (want, net.peering)
 0        (want, net.subnet)
 0        corp_net
 0        group_edge
@@ -31,6 +32,7 @@ stratum  node
 1        (arg, k8s.cluster, ca_cert)
 1        (arg, k8s.cluster, id)
 1        (arg, k8s.nodepool, id)
+1        (arg, net.peering, id)
 1        (arg, net.subnet, id)
 1        (attr, input, env)
 1        (attr, input, mesh)
@@ -49,6 +51,7 @@ stratum  node
 2        (attr, k8s.cluster, ca_cert)
 2        (attr, k8s.cluster, id)
 2        (attr, k8s.nodepool, id)
+2        (attr, net.peering, id)
 2        (attr, net.subnet, id)
 2        (want, net.route_table)
 2        (want, net.vpc)
@@ -84,5 +87,5 @@ stratum  node
 5        (attr, net.route_table, vpc)
 5        (attr, net.vpc_peering, accepter_vpc)
 5        (attr, net.vpc_peering, requester_vpc)
-(82 rows)
+(85 rows)
 -- stderr --

@@ -1299,12 +1299,12 @@ mod tests {
         assert_eq!(s.class_of("net.vpc", "id"), Some(NullClass::Fresh));
         assert_eq!(s.class_of("db.postgres", "endpoint"), Some(NullClass::Open));
         assert_eq!(s.class_of("k8s.cluster", "ca_cert"), Some(NullClass::Open));
-        assert_eq!(s.types().len(), 10);
+        assert_eq!(s.types().len(), 11);
         assert_eq!(
             s.provider_of.get("net.route_table").map(String::as_str),
             Some("fakecloud")
         );
-        assert_eq!(s.computed.len(), 13);
+        assert_eq!(s.computed.len(), 14);
     }
 
     #[test]

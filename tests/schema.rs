@@ -11,7 +11,7 @@ fn schema_facts_are_queryable_edb() {
         .run(&["query", "type_attr", prog.to_str().unwrap()])
         .success();
     assert!(r.stdout.starts_with("type "), "{}", r.stdout);
-    assert!(r.stdout.ends_with("(28 rows)\n"), "{}", r.stdout);
+    assert!(r.stdout.ends_with("(31 rows)\n"), "{}", r.stdout);
     assert!(
         r.stdout
             .lines()

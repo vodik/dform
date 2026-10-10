@@ -161,11 +161,49 @@ derived, so reachability stays right as spokes come and go, and this is
 where the descriptions are rules in the Datalog sense:
 
 ```dform
-link(h, t) where hub(h), spoke(t)
-link(t, h) where hub(h), spoke(t)
+use fake
 
-reaches(a, b) where link(a, b)
-reaches(a, c) where reaches(a, b), link(b, c)
+resource net.vpc core { name = "core", cidr = "10.0.0.0/16" }
+resource net.vpc shop { name = "shop", cidr = "10.1.0.0/16" }
+resource net.vpc data { name = "data", cidr = "10.2.0.0/16" }
+
+hub(core)
+spoke(shop)
+spoke(data)
+
+link(from, to) where hub(from), spoke(to)
+
+resource net.peering "${from.name}-${to.name}" { from, to } where link(from, to)
+
+reaches(from, to) where link(from, to)
+reaches(to, from) where link(from, to)
+reaches(from, to) where reaches(from, via), link(via, to)
+
+deny "every spoke reaches core" { spoke } where spoke(spoke), not reaches(spoke, core)
+```
+
+```
+$ dform plan
+plan: 5 changes (5 create) over 1 tick; policy: 1 hold
+
+tick 1  5 changes
+  + net.vpc core           stacks/net.df:3
+      cidr = "10.0.0.0/16"
+      name = "core"
+  + net.vpc data           stacks/net.df:5
+      cidr = "10.2.0.0/16"
+      name = "data"
+  + net.vpc shop           stacks/net.df:4
+      cidr = "10.1.0.0/16"
+      name = "shop"
+  + net.peering core-data  stacks/net.df:13  with from = net.vpc core, to = net.vpc data
+      from = core
+      to = data
+  + net.peering core-shop  stacks/net.df:13  with from = net.vpc core, to = net.vpc shop
+      from = core
+      to = shop
+
+policy  1 hold
 ```
 
 Resources are wired by reference, and a value the cloud has not

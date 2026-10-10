@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/demo/stacks/dform.df: 170 nodes, 444 edges (161 negative), 13 strata
+== examples/demo/stacks/dform.df: 173 nodes, 451 edges (163 negative), 13 strata
 stratum  node
 0        (arg, iam.policy, name)
 0        (arg, iam.role, assume)
@@ -9,6 +9,7 @@ stratum  node
 0        (arg, output, main::vpc)
 0        (want, iam.policy)
 0        (want, iam.role)
+0        (want, net.peering)
 0        (want, net.route_table)
 0        __set_path
 0        data
@@ -24,6 +25,7 @@ stratum  node
 0        world_attr
 1        (arg, iam.policy, id)
 1        (arg, iam.role, id)
+1        (arg, net.peering, id)
 1        (arg, net.route_table, id)
 1        (attr, iam.policy, name)
 1        (attr, iam.role, assume)
@@ -41,6 +43,7 @@ stratum  node
 2        (arg, output, peer::vpc)
 2        (attr, iam.policy, id)
 2        (attr, iam.role, id)
+2        (attr, net.peering, id)
 2        (attr, net.route_table, id)
 2        database::__instance
 2        env
@@ -172,5 +175,5 @@ stratum  node
 11       __lc_2
 12       (attr, db.postgres, subnets)
 12       (attr, k8s.cluster, subnets)
-(170 rows)
+(173 rows)
 -- stderr --
