@@ -7,17 +7,15 @@ it. We should be able to plan with a value the cloud has not produced
 yet. The program should be as clear to the language model helping an
 operator as to the operator.
 
-It can, because infrastructure is a database. An account is a table of
-networks, a table of instances, a table of DNS records, each row with
-attributes and pointing at others. What the program wants is a set of
-tables too, and a plan is the difference between the two. A policy is a
-query that must return no rows, and "why is this here" asks which rows
-produced it. A dform program is facts and rules over those tables,
-evaluated the way Datalog evaluates a query, so every plan is the least
-model of the program over the world as it is and every line of it
-carries its proof. Apply reconciles the world with the plan in ticks,
-and what one tick creates, an endpoint or a kubeconfig, is a value the
-next tick plans with.
+It can, if we treat infrastructure like a database. An account is a
+table of networks, a table of instances, a table of DNS records, each
+row pointing at others. What we want is a set of tables too, and a plan
+is the difference between the two. A policy is a query that must return
+no rows, and "why is this here" asks which rows produced it. Every plan
+is the least model of the program over the world as it is, and every
+line of it carries its proof. Apply reconciles the world with the plan
+in ticks, and what one tick creates, an endpoint or a kubeconfig, is a
+value the next tick plans with.
 
 A complete program:
 
@@ -248,18 +246,24 @@ the schema migration succeeds and every replica of the new colour is
 ready:
 
 ```dform
-let active = world.k8s.service["shop/api"].spec.selector.color
-let rollout = other[active] where live_image != released_image
+use k8s
+
+let release = toml.decode(io.read("release.toml"))
+
+let live = world.k8s.service["shop/api"].spec.selector.color
+let live_image = world.k8s.deployment["shop/api-${live}"].spec.template.spec.containers[0].image
+let next = "green" where live == "blue"
+let next = "blue" where live == "green"
 
 migrated(schema) where k8s.job["migrate-v${schema}"].status.succeeded == 1
 
-run(active, live_image, live_schema)
-run(rollout, released_image, schema) where migrated(schema)
+run(live, live_image)
+run(next, release.image) where migrated(release.schema)
 
-ready(colour) where run(colour, _, _), app[colour].ready_replicas == app[colour].total_replicas
+ready(colour) where run(colour, _), app[colour].ready_replicas == app[colour].total_replicas
 
-let serving = rollout where ready(rollout)
-let serving = active where not ready(rollout)
+let serving = next where ready(next)
+let serving = live where not ready(next)
 
 resource k8s.service api {
   metadata = { name: "api", namespace: "shop" }
@@ -274,7 +278,9 @@ rows the program reads. For example, we want a plan to refuse records
 for a domain the account does not host:
 
 ```dform
-deny "the domain is hosted here" where not ovh.zone("example.com", _, _)
+use ovh { project = "shop" }
+
+deny "the domain is not on this account" where not ovh.zone("example.com", _, _)
 ```
 
 ## Policy
@@ -286,15 +292,13 @@ resource to carry its team's tag, inside components too; remembering to
 tag each one by hand is error-prone:
 
 ```dform
-set r.tags = { team: "shop" } @default where r in resource
+set r.tags = { team: "shop" } where r in resource
 ```
 
 ```
 $ dform query 'blue.vpc.tags'
 { team: "shop", component: "network" }
 ```
-
-`@default` yields to a block's own value and `@override` beats it.
 
 The plan is a table too. For example, after an apply we want to ask what
 the next plan would change, as rows of `deformation`:
@@ -335,20 +339,15 @@ Terraform's `prevent_destroy` must be a literal, and `moved(aws.vpc,
 "main", network.vpc)` moves a resource to a new address without
 replacing it.
 
-For example, we want staging and prod to differ by one `set`, and we
-want `dform test` to run every policy over every combination of enums
-and bools:
+For example, we want `dform test` to run every policy over every
+combination of enums and bools, staging and prod included:
 
 ```dform
 key env: enum("staging", "prod") = "staging"
-input agents: int = 0 check 0 <= agents <= 3
 input public: bool = false
 use aws { region = "us-east-1" }
 
-set agents = 2 where env == "prod"
-
 resource aws.db_instance orders { instance_class = "db.t3.micro", publicly_accessible = public }
-resource aws.instance "agent-${n}" { instance_type = "t3.small" } where n in 0..agents
 
 deny "no public database in prod" where env == "prod", public
 ```
