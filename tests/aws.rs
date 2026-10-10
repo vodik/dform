@@ -122,7 +122,7 @@ resource aws.vpc main {
 }
 
 resource aws.subnet "private-${availability_zone}" {
-  vpc_id = main
+  vpc = main
   cidr_block = inet.subnet(main.cidr_block, 8, n)
   availability_zone
 } where aws.availability_zone("available", availability_zone, n)

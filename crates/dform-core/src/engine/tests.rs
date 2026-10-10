@@ -751,10 +751,13 @@ fn k8s_metadata_name_is_a_default_null_until_set() {
 /// aws-mock's Optional+Computed attributes, the Terraform shape.
 #[test]
 fn aws_optional_computed_is_the_programs_when_set() {
-    let schema = crate::schema::load_provider("aws-mock").unwrap().facts;
+    let schema = crate::schema::load_provider("aws-mock")
+        .and_then(crate::schema::Schema::imported)
+        .unwrap()
+        .facts;
     let (r, violations) = run_with(
         "resource aws.vpc main { cidr_block = \"10.0.0.0/16\" }
-             resource aws.security_group web { vpc_id = ref(\"aws.vpc\", \"main\", \"id\") }",
+             resource aws.security_group web { vpc = ref(\"aws.vpc\", \"main\", \"id\") }",
         &schema,
     )
     .unwrap();
@@ -773,7 +776,7 @@ fn aws_optional_computed_is_the_programs_when_set() {
     );
     assert!(
         attrs.contains(
-            &"attr(\"aws.security_group\", \"web\", \"vpc_id\", ?aws.vpc/main#id:Fresh)"
+            &"attr(\"aws.security_group\", \"web\", \"vpc\", ?aws.vpc/main#id:Fresh)"
                 .to_string()
         ),
         "{attrs:#?}"

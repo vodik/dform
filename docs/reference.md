@@ -3831,7 +3831,7 @@ not rewritten.
     indentation its lines share).
   - list comprehensions: `[x | pred(x), pred2(x)]` (lowers to a `collect_list` rule).
   - aggregates are bound in a body: `subnets(v, n) where n = count(s), s in
-    aws.subnet, s.vpc_id == v` counts per group of the head's other
+    aws.subnet, s.vpc == v` counts per group of the head's other
     variables (`v`); `let n = count(s) where s in aws.subnet` is one group
     (docs/grammar.md "Aggregates").
   - expression terms: `ib = ia + 1` lowers to `IB = add(IA, 1)`; a

@@ -112,7 +112,7 @@ fn plan_json_nulls_carry_their_class() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|c| c["path"] == "subnetwork_id")
+        .find(|c| c["path"] == "subnetwork")
         .unwrap();
     assert_eq!(
         sub["after"],

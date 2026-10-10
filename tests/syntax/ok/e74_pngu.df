@@ -133,7 +133,7 @@ resource google.compute_address "${s}" {
   region
   name = ip_name
   address_type = type_
-  subnetwork_id = ref(google.compute_subnetwork, "gke_subnet", "id")
+  subnetwork = ref(google.compute_subnetwork, "gke_subnet", "id")
 } where {
   project(id, _, region, _)
   static_ip(ip_name, type_)
@@ -151,7 +151,7 @@ resource gke.cluster pngu {
   project_name = name
   name = str.format("%s-gke", name)
   network_id = net_id
-  subnetwork_id = ref(google.compute_subnetwork, "gke_subnet", "id")
+  subnetwork = ref(google.compute_subnetwork, "gke_subnet", "id")
   master_control_plane_cidr = cp_cidr
   ip_range_pods = str.format("%s-gke-pods-range", name)
   ip_range_services = str.format("%s-gke-svc-range", name)

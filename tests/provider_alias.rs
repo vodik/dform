@@ -30,7 +30,7 @@ resource west.vpc b {
 }
 
 resource west.subnet s {
-  vpc_id = b
+  vpc = b
   cidr_block = "10.1.1.0/24"
   tags = { peer: ref(a), peer_cidr: a.cidr_block }
 }
@@ -134,7 +134,7 @@ resource east.vpc a {
 }
 
 resource east.subnet "z-${zone}" {
-  vpc_id = a
+  vpc = a
   cidr_block = inet.subnet(a.cidr_block, 8, n)
   availability_zone = zone
 } where east.availability_zone("available", zone, n)
@@ -186,11 +186,11 @@ fn what_a_name_may_not_do() {
         let r = s.run(&["plan", file]).failure();
         assert!(r.stderr.contains(want), "{file}: {want}\n{}", r.stderr);
     }
-    s.write("cross.df", &TWO.replace("vpc_id = b", "vpc_id = a"));
+    s.write("cross.df", &TWO.replace("vpc = b", "vpc = a"));
     let r = s.run(&["plan", "cross.df"]).failure();
     assert!(
         r.stderr
-            .contains("west.subnet[\"s\"].vpc_id takes a ref(west.vpc), got east.vpc[\"a\"]"),
+            .contains("west.subnet[\"s\"].vpc takes a ref(west.vpc), got east.vpc[\"a\"]"),
         "{}",
         r.stderr
     );
@@ -335,7 +335,7 @@ fn the_schema_is_asked_once_and_served_under_each_name() {
     assert!(schema.knows_type("east.vpc") && schema.knows_type("west.subnet"));
     assert!(!schema.knows_type("aws.vpc"));
     assert_eq!(
-        schema.attr("west.subnet", "vpc_id").map(|a| a.ty.as_str()),
+        schema.attr("west.subnet", "vpc").map(|a| a.ty.as_str()),
         Some("ref(west.vpc)")
     );
     assert!(schema.externs.contains_key("east.availability_zone"));

@@ -2180,7 +2180,7 @@ aggregate := ("count" | "sum" | "min" | "max" | "any" | "all"
 
 `n = count(x)` in a body binds `n` to the fold of `x` over the body's
 matches. The groups are the head's other variables: in
-`subnets(v, n) where n = count(s), s in aws.subnet, s.vpc_id == v` there
+`subnets(v, n) where n = count(s), s in aws.subnet, s.vpc == v` there
 is a count per `v`. A head with no other variable is one group, and so is
 a `let`: `let n = count(s) where s in aws.subnet`. The literal may stand
 anywhere in the body; a literal that reads `n` (`n > 3`) is applied after
