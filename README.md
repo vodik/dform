@@ -137,10 +137,9 @@ reaches(a, b) where link(a, b)
 reaches(a, c) where reaches(a, b), link(b, c)
 ```
 
-**The cloud's own values are planned too.** Whatever needs an endpoint
-or an address the cloud has not produced yet is planned in the tick
-after it exists, and the plan says what it waits on. A reference is the
-resource, so there is no `.id` to copy between blocks:
+**A reference is the resource, so there is no `.id` to copy, and
+what the cloud has not produced yet is planned in the tick after it
+exists:**
 
 ```dform
 resource iam.policy "connect-${host}" {
@@ -156,11 +155,7 @@ tick 2  ? changes
   iam.policy "connect-${host}"             stacks/tour.df:323  waits on orders.endpoint
 ```
 
-Terraform stops on a `for_each` over such a value and says a `-target`
-may be needed. A provider's settings are values too, so `use k8s {
-kubeconfig = k3s.kubeconfig }` puts a cluster and what runs on it in
-one plan, where the Terraform Kubernetes provider's documentation asks
-for the two in separate `apply` operations.
+Terraform stops here and asks for a `-target` and a second run.
 
 **Everything explains itself, absence included.** A missing resource
 has an answer as precise as a present one. `dform why` names
