@@ -132,7 +132,7 @@ value made from one, and a leak is an error at its line:
 ```dform
 output password: string = pw                           # E0304: not declared secret(string)
 
-deny "short password" where pw.len < 12               # E0301: inspecting it leaks it
+deny "short password" where pw.len < 12                # E0301: inspecting it leaks it
 n(c) where c = count(p), p = pw                        # E0303: a count leaks cardinality
 resource aws.iam_user "u-${pw}" { name = "x" }         # E0305: addresses are printed
 ```
