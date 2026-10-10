@@ -3,9 +3,9 @@
 Infrastructure should be a program its operators can read, planned over
 the world as it is. Every line of the plan should say what produced it.
 Policy should live beside what it governs, and every plan should check
-it. A value the cloud knows only later should be a value the plan
-already waits for. The program should be as clear to the language model
-helping an operator as to the operator.
+it. We should be able to plan with a value the cloud has not produced
+yet. The program should be as clear to the language model helping an
+operator as to the operator.
 
 It can, because infrastructure is a database. An account is a table of
 networks, a table of instances, a table of DNS records, each row with
