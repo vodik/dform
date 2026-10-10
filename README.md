@@ -78,9 +78,8 @@ later. Terraform makes a block a template and adds `for_each`,
 `depends_on`, `-target` and `default_tags` for what a template cannot
 say.
 
-A hub-and-spoke network, for example, is described once: the peerings
-follow from it, a new spoke is one line, and a policy proves every spoke
-still reaches the core:
+For example, we can use dform to describe a rough network layout and
+derive and validate the topology from that description:
 
 ```dform
 resource aws.vpc core { cidr_block = "10.0.0.0/16", tags = { Name: "core" } }
