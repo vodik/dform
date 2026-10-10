@@ -2,10 +2,10 @@
 
 Infrastructure should be a program its operators can read, planned over
 the world as it is. Every line of the plan should say what produced it.
-Policy should live beside what it governs and be checked by every plan.
-A value the cloud knows only later should be a value the plan already
-waits for. The program should be as clear to the language model helping
-an operator as to the operator.
+Policy should live beside what it governs, and every plan should check
+it. A value the cloud knows only later should be a value the plan
+already waits for. The program should be as clear to the language model
+helping an operator as to the operator.
 
 It can, because infrastructure is a database. An account is a table of
 networks, a table of instances, a table of DNS records, each row with
@@ -72,7 +72,7 @@ A dform file says what should exist and under which conditions, and
 dform works out how many, in what order, and when. The file itself has
 no order: a block may use a name declared further down or in another
 file. A block holds for every answer to its clause, so repetition is a
-condition, an edge is a reference, and a value known later is planned
+condition, an edge is a reference, and dform plans a value known later,
 later. Terraform makes a block a template and adds `for_each`,
 `depends_on`, `-target` and `default_tags` for what a template cannot
 say.
