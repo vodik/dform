@@ -87,8 +87,10 @@ say.
 shape every resource should have and the changes that may not happen,
 and both are rules in the same file as the resources, in the same
 language, run by every plan and every apply. The shape is a `set` that
-applies everywhere: it writes into every resource its clause matches,
-leaf by leaf, beside what the resource's own block wrote:
+applies everywhere. `resource` is the table of every resource the
+program declares, whatever its type, and a `set` over it writes into
+each one its clause matches, leaf by leaf, beside what the resource's
+own block wrote:
 
 ```dform
 set r.tags = { team: "shop" } where r in resource
