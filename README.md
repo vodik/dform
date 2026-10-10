@@ -8,10 +8,14 @@ rows. "Why is this here" is a question about which rows produced it.
 
 A dform program is facts and rules over those tables, evaluated all at
 once to a fixpoint, the way Datalog evaluates a query. Every derived row
-has a derivation, so every line of the plan says where it came from. The
-plan is itself a table the program's own policy reads. Apply reconciles
-the world with the plan in ticks, and what one tick creates, an endpoint
-or a kubeconfig, is a value the next tick plans with.
+has a derivation, so every line of the plan says where it came from.
+Every plan is the least model of the program over the world as it is,
+and every line of it carries its proof, so `why` never disagrees with
+the plan. The plan is itself a table the program's own policy reads.
+Apply reconciles the world with the plan in ticks, and what one tick
+creates, an endpoint or a kubeconfig, is a value the next tick plans
+with. Each tick is the least model over the world the one before it
+left.
 
 So the resources, the policy over them and the reason for each line
 come from one program and arrive in one plan. Here is a complete
@@ -451,10 +455,11 @@ tick 1  1 change
 policy  1 hold
 ```
 
-A policy holds, fails, or is undetermined. It is undetermined when it
-reads what the cloud has not made yet, and the plan names the value and
-the tick that decide it, `until spec.storageClassName is known (tick
-2)`. A policy engine over plan JSON would pass it or guess. `later`
+A policy holds, fails, or is undetermined. The logic has three values,
+and nothing is assumed false for being unknown. A policy is undetermined
+when it reads what the cloud has not made yet, and the plan names the
+value and the tick that decide it, `until spec.storageClassName is
+known (tick 2)`. A policy engine over plan JSON would pass it or guess. `later`
 holds what no tick of this plan makes, such as another deployment's
 output not applied yet.
 
