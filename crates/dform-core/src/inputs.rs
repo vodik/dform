@@ -650,7 +650,9 @@ pub fn check_given(decl: &InputDecl, v: &Value) -> Truth {
     body.extend(rest.iter().map(|l| l.replace_names(&named)));
     let alone = body.iter().all(|l| match l {
         Lit::Pos(a) | Lit::Not(a) => {
-            a.pred == "member" || a.pred == "enumerate" || crate::ir::ops::is_builtin_pred(&a.pred)
+            a.pred == "member"
+                || a.pred == "enumerate"
+                || crate::engine::ops::is_builtin_pred(&a.pred)
         }
         _ => true,
     });

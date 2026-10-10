@@ -14,6 +14,8 @@
 //! - `provenance`: the store with its circuit
 //! - `policy`: `deny`/`warn` facts
 //! - `errors`: the errors an evaluation stops at
+//! - `ops`: the operator plan rules compile to, `store`: the tuple store
+//!   it runs over, `fx`: the hasher of both
 
 mod aggregate;
 mod body;
@@ -21,18 +23,19 @@ mod builtins;
 mod collapse;
 mod contributions;
 mod errors;
+pub mod fx;
 mod membership;
 mod negation;
 mod nulls;
+pub mod ops;
 mod policy;
 mod provenance;
+pub mod store;
 mod undetermined;
 mod unify;
 
 use crate::ast::{Atom, Helper, Lit, Program, RuleStmt, Span, Term};
 use crate::circuit::{Circuit, NodeId};
-use crate::ir::ops;
-use crate::ir::store::{Store, Window};
 use crate::partition::{self, Node};
 use crate::spell;
 use crate::stuck::{self, Stuck};
@@ -52,6 +55,7 @@ use provenance::{Prov, given_leaf};
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use store::{Store, Window};
 use undetermined::{derive_stuck, may_derive, may_derive_over, record_stucks};
 
 #[derive(Debug, Clone)]

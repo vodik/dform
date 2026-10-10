@@ -6,12 +6,12 @@
 use super::body::Src;
 use super::builtins::{eval_func, eval_term};
 use super::nulls::Rec;
+use super::ops;
+use super::store::Window;
 use super::unify::unify_atom;
 use super::{AGGREGATE_OUTPUTS, LATTICE_DECLS, REFINE_DECLS};
 use crate::ast::{Atom, Lit, RuleStmt, Span, Term};
 use crate::diag;
-use crate::ir::ops;
-use crate::ir::store::Window;
 use crate::partition;
 use crate::spell;
 use crate::stuck;

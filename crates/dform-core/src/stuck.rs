@@ -188,7 +188,7 @@ pub fn can_stick(head: &Atom, body: &[Lit], aggregates: &BTreeSet<String>) -> bo
         };
         if aggregates.contains(&a.pred)
             || matches!(a.pred.as_str(), "member" | "enumerate")
-            || crate::ir::ops::is_builtin_pred(&a.pred)
+            || crate::engine::ops::is_builtin_pred(&a.pred)
         {
             return true;
         }

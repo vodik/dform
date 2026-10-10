@@ -5,9 +5,9 @@
 use super::contributions::{Contribution, ElemContribution, GroupKey, Origins, Ready, rank_name};
 use super::errors::with_place;
 use super::policy::policy_fact;
+use super::store::{Store, TupleId};
 use crate::ast::{Atom, Term, str_term};
 use crate::diag;
-use crate::ir::store::{Store, TupleId};
 use crate::lattice::{self, Collapsed, Lattice, RankedContribution, Shadowed, Witnesses};
 use crate::spell;
 use crate::value::Value;

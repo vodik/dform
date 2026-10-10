@@ -2,9 +2,6 @@
 //! rules compile to.
 
 mod address;
-pub mod fx;
-pub mod ops;
-pub mod store;
 
 use crate::ast::{Atom, Term};
 use crate::schema::Schema;

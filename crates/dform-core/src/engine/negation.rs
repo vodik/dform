@@ -3,8 +3,8 @@
 
 use super::body::Src;
 use super::nulls::{Rec, Rule3Clause, planted};
+use super::ops;
 use crate::ast::{Atom, Term};
-use crate::ir::ops;
 use crate::lattice::{Truth, nulls_in};
 use crate::spell;
 use crate::stuck;

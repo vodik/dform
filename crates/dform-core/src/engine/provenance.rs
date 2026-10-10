@@ -1,10 +1,10 @@
 //! Provenance (E §3.1, DR-10): the fact store with a circuit node per tuple, a firing
 //! recorded as it is inserted, and the leaf a given fact is labelled with.
 
+use super::store::{Store, TupleId};
 use crate::ast::{Atom, Span, Term};
 use crate::circuit::{self, Circuit, Leaf, NodeId};
 use crate::diag;
-use crate::ir::store::{Store, TupleId};
 use crate::spell;
 use crate::value::Value;
 use std::collections::BTreeSet;

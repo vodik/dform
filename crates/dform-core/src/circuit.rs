@@ -16,7 +16,7 @@
 //! always on). A firing also keeps the rule's variable bindings, for `why`.
 
 use crate::ast::{Atom, Term};
-use crate::ir::fx::{FxHashMap, FxHashSet};
+use crate::engine::fx::{FxHashMap, FxHashSet};
 use crate::lattice::{nulls_in, subst};
 use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};

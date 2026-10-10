@@ -4958,10 +4958,10 @@ pinned in its `.txt` (accept with `UPDATE_GOLDEN=1 cargo test --test syntax`).
 
 ## Performance
 
-The evaluator is semi-naive over an operator IR (`crates/dform-core/src/ir/ops.rs`: Scan,
+The evaluator is semi-naive over an operator IR (`crates/dform-core/src/engine/ops.rs`: Scan,
 Join, Extern, AntiJoin, Filter with Stuck as its third output, Map,
 Distinct, Agg, and a Fix per stratum), with a hash index per relation and
-key the rules read through (`crates/dform-core/src/ir/store.rs`). Its output is the naive
+key the rules read through (`crates/dform-core/src/engine/store.rs`). Its output is the naive
 loop's, byte for byte, circuit node ids included.
 
 `benches/scale.rs` generates programs from a mock schema of 10^3 types (a

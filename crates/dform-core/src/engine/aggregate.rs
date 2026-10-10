@@ -6,9 +6,9 @@ use super::body::{Choice, Derived, Row, Src, cmp_order, eval_body, read_pattern}
 use super::builtins::{eval_term, order};
 use super::collapse::obj;
 use super::nulls::Rec;
+use super::ops::{self, AggKind};
+use super::store::TupleId;
 use crate::ast::{Atom, Lit, RuleStmt, Term};
-use crate::ir::ops::{self, AggKind};
-use crate::ir::store::TupleId;
 use crate::lattice::nulls_in;
 use crate::spell;
 use crate::stuck;

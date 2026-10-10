@@ -1,7 +1,7 @@
 //! Aggregates (docs/grammar.md "Aggregates", R-59): `n = count(x)` in a
 //! body binds `n` to the fold of `x` over the body's matches, per group of
 //! the head's other variables; `let n = count(x) where B` folds over one
-//! group. The core applies an aggregate in a rule head (`ir::ops::find_agg`),
+//! group. The core applies an aggregate in a rule head (`engine::ops::find_agg`),
 //! so a body binding lowers to one:
 //!
 //! | written                                     | lowers to                                 |

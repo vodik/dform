@@ -14,8 +14,8 @@
 
 use super::scope::{DeclRef, Reach, ScopeId};
 use crate::ast::{self, FieldOp, Rank, Span, TypeExpr};
+use crate::engine::ops::AggKind;
 use crate::functions::Function;
-use crate::ir::ops::AggKind;
 use crate::value::Value;
 
 slotmap::new_key_type! {
