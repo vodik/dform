@@ -101,9 +101,6 @@ $ dform query 'net.vpc["blue.vpc"].tags'
 { team: "shop", component: "network" }
 ```
 
-The AWS provider's `default_tags` does this for tags, across the
-resources that one provider handles.
-
 **The plan is a table too.** Every change the plan would make is a
 `deformation` row, the kind of change and the resource it touches, so a
 policy can ask about the change and the resource's configuration in one
@@ -177,9 +174,8 @@ function is pure or reads the world, and the language knows which, so
 `random.password("db")` is the same every run and a read of a host
 still booting waits for its tick.
 
-A document is a value wherever it lives. `io.read` takes a
-project path or a uri, and a format's package decodes it into rows that
-keep their file and line:
+A document is a value wherever it lives, and its rows keep their file
+and line:
 
 ```dform
 input peering from csv.decode(io.read("data/peerings.csv"))
@@ -194,8 +190,6 @@ resource k8s.custom_resource_definition "${d.metadata.name}" = d where {
 }
 ```
 
-Terraform's `file()` reads only files on disk at the start of a run.
-
 Environments differ in one file. Each value of a `key` is its own
 deployment with its own state, and a `set` under a condition overrides
 an input's default:
@@ -208,9 +202,6 @@ output ingress_ip: ip = k3s.ingress_ip
 
 set { agents = 1, sizes.synapse = 100Gi } where env == "prod"
 ```
-
-Terraform keeps a state per workspace and varies a configuration by
-`terraform.workspace`.
 
 A secret cannot reach an output, an address or a count by accident.
 The compiler follows every value made from one, and a leak is an error
@@ -246,8 +237,6 @@ denied  dform plan tour env=dev --set public_db=true
 ...
 ```
 
-A `terraform test` file runs the `run` blocks its author writes.
-
 ## The tool
 
 **Stacks and deployments.** An estate plans and applies as one, each
@@ -255,11 +244,9 @@ deployment with its own plan, question and state, in dependency order.
 Which deployments exist is code. `project.df` lists them as resources,
 `resource stacks.platform lab { env = "lab" }`, and a stack reads
 another's outputs as `platform[env].kubeconfig`, so `dform apply apps
-env=lab` applies platform first. Terraform links root modules through
-remote state, Terragrunt through `dependency` blocks that export a
-module's outputs, and Pulumi through a `StackReference`. Argo CD's
-ApplicationSet matrix generator crosses two generators' parameters into
-Applications.
+env=lab` applies platform first. Terragrunt wires this with `dependency`
+blocks, and Argo CD's ApplicationSet matrix generator does the matrix
+for Applications.
 
 **apply** asks once, and again only at a tick whose plan it could not
 show in full. An interrupted apply resumes where it stopped, and a
@@ -270,8 +257,7 @@ deletes refuses it. Lifecycle is facts a rule can condition,
 `lifecycle(k3s.server, "prevent_destroy") where env == "prod"`, and a
 provider can seed a type's default lifecycle. The Tailscale provider
 seeds its device's, so a device dropped from the program is let go
-unless the program says otherwise. Terraform's `lifecycle` settings take
-only literal values.
+unless the program says otherwise.
 
 **status** shows the health a provider reports for each object dform
 manages, `-` for a type its provider does not judge, and fails unless
