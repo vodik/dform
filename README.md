@@ -169,7 +169,7 @@ tick 1  3 changes
 ```
 
 We often need a value the cloud has not produced yet, sometimes in a
-resource's name; the plan tracks it and plans around it:
+resource's name:
 
 ```dform
 use aws { region = "us-east-1" }
@@ -297,8 +297,8 @@ $ dform query 'blue.vpc.tags'
 { team: "shop", component: "network" }
 ```
 
-The plan is a table too. For example, after an apply we want to ask what
-the next plan would change, as rows of `deformation`:
+After an apply, we want to ask what the next plan would change. The plan
+is a table as well, `deformation`, one row per change:
 
 ```
 $ dform query 'deformation(kind, resource, _)' --set database.backup_days=14
@@ -311,16 +311,18 @@ deformation("delete", _, _)`, and it refuses the apply. A policy over a
 value known only after apply stays undetermined, and the plan says when
 it will know. With Terraform, policy is a second tool and a second
 language over the plan's JSON, where such a value is only marked
-unknown. For a risky change, we want someone to sign off on exactly what
-will apply:
+unknown.
+
+For a risky change, we want someone to sign off on exactly what will
+apply:
 
 ```dform
 requires_approval(r, "${kind} of ${r} in prod") where env == "prod", deformation(kind, r, _), kind in ["replace", "delete"]
 ```
 
-**Lifecycle is a table too.** For example, we never want a prod database
-deleted, and we want a policy to check that every one of them is
-protected:
+We never want a prod database deleted, and we want a policy to check
+that every one is protected. Lifecycle is a table, so a rule writes it
+and a policy reads it:
 
 ```dform
 lifecycle(orders, "prevent_destroy") where env == "prod"
@@ -362,9 +364,8 @@ denied  dform plan app env=prod --set public=true
 test app: 4 combinations, 1 failed
 ```
 
-**Secrets are part of the language too.** A secret cannot reach an
-output, a condition or an address by accident; a leak is an error at its
-line:
+We want the compiler to catch a secret leaking into an output, a
+condition or an address, at its line:
 
 ```dform
 let pw = random.password("db")
