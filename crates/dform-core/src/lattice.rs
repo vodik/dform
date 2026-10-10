@@ -583,8 +583,11 @@ pub enum Constraint {
     IsStr,
     IsBool,
     IsInet,
-    /// `range(Lo, Hi)`: an int in `[Lo, Hi]`.
-    Range(i64, i64),
+    /// `range(Lo, Hi)`: a value of an ordered type (an int, a float, a
+    /// quantity of one dimension, a time, an ip, a semver) in `[Lo, Hi]`
+    /// (`range(Lo, Hi, open)`: in `[Lo, Hi)`), its bounds of that type: a
+    /// range value, whose order is the one `x in r` reads.
+    Range(crate::range::Range),
     /// `prefix_len_le(N)` / `prefix_len_ge(N)`: a CIDR's prefix length.
     PrefixLenLe(u8),
     PrefixLenGe(u8),
@@ -599,6 +602,15 @@ pub enum Constraint {
 }
 
 impl Constraint {
+    /// `range(lo, hi)` over ints.
+    pub fn range(lo: i64, hi: i64) -> Constraint {
+        Constraint::Range(crate::range::Range {
+            start: Value::Int(lo),
+            end: Value::Int(hi),
+            inclusive: true,
+        })
+    }
+
     /// Three-valued: `Unknown` when the value carries a null (or a ref,
     /// which only the provider layer resolves), else whether it holds.
     pub fn check(&self, v: &Value) -> Truth {
@@ -616,7 +628,7 @@ impl Constraint {
             (Constraint::IsStr, Value::Str(_)) => true,
             (Constraint::IsBool, Value::Bool(_)) => true,
             (Constraint::IsInet, v) => prefix(v).is_some(),
-            (Constraint::Range(lo, hi), Value::Int(i)) => lo <= i && i <= hi,
+            (Constraint::Range(r), v) => r.holds(v).unwrap_or(false),
             (Constraint::PrefixLenLe(n), v) => prefix(v).is_some_and(|p| p <= *n),
             (Constraint::PrefixLenGe(n), v) => prefix(v).is_some_and(|p| p >= *n),
             (Constraint::LenLe(n), v) => len(v).is_some_and(|l| l <= *n),
@@ -1337,7 +1349,7 @@ mod tests {
 
         // A constraint is never out-ranked: an @override that violates it is a violation.
         let (_, c) = ranked_all_orders(&[
-            Ranked::constraint(Constraint::Range(0, 20), 100),
+            Ranked::constraint(Constraint::range(0, 20), 100),
             Ranked::at(Rank::Default, 1, i(3)),
             Ranked::at(Rank::Override, 2, i(30)),
         ]);

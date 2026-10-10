@@ -4,7 +4,8 @@
 //!
 //! The checkable table, the `Constraint` term language:
 //!
-//!   range(Lo, Hi)       an int in [Lo, Hi]
+//!   range(Lo, Hi)       a value of an ordered type in [Lo, Hi]
+//!   range(Lo, Hi, open) ... in [Lo, Hi)
 //!   prefix_len_le(N)    a CIDR's prefix length <= N
 //!   prefix_len_ge(N)    a CIDR's prefix length >= N
 //!   enum([V, ...])      one of the values
@@ -57,7 +58,13 @@ impl fmt::Display for Constraint {
             Constraint::IsStr => write!(f, "type(string)"),
             Constraint::IsBool => write!(f, "type(bool)"),
             Constraint::IsInet => write!(f, "type(inet)"),
-            Constraint::Range(lo, hi) => write!(f, "range({lo}, {hi})"),
+            Constraint::Range(r) => {
+                write!(f, "range({}, {}", bound(&r.start), bound(&r.end))?;
+                match r.inclusive {
+                    true => write!(f, ")"),
+                    false => write!(f, ", {OPEN})"),
+                }
+            }
             Constraint::PrefixLenLe(n) => write!(f, "prefix_len_le({n})"),
             Constraint::PrefixLenGe(n) => write!(f, "prefix_len_ge({n})"),
             Constraint::LenLe(n) => write!(f, "len_le({n})"),
@@ -69,6 +76,23 @@ impl fmt::Display for Constraint {
                 vs.iter().map(spell::value).collect::<Vec<_>>().join(", ")
             ),
         }
+    }
+}
+
+/// The third argument of a range without its end, `range(0.0, 1.0, open)`.
+const OPEN: &str = "open";
+
+/// A range's bound in the term language, as a value prints
+/// (`range(10Gi, 4Ti)`), read back as the same value: an int, a float,
+/// bytes and a duration as their literals; a bound whose literal is read
+/// by its position (cpu's `500m` and `2`) or that has none (an ip, a
+/// time, a semver) as its quoted text, which the value it is compared
+/// with reads as its own type.
+fn bound(v: &Value) -> String {
+    match v {
+        Value::Quantity(q) if q.dim() == crate::quantity::Dim::Cpu => spell::quote(&q.to_string()),
+        Value::Int(_) | Value::Float(_) | Value::Str(_) | Value::Quantity(_) => spell::value(v),
+        v => spell::quote(&v.typed_text().unwrap_or_else(|| spell::value(v))),
     }
 }
 
@@ -106,12 +130,26 @@ impl TryFrom<&Term> for Constraint {
         };
         Ok(match name {
             "range" => {
-                arity(2)?;
-                let (lo, hi) = (int(0)?, int(1)?);
-                if lo > hi {
-                    return Err(format!("range({lo}, {hi}) is empty"));
+                let open = match args.get(2).map(Term::ground) {
+                    None => false,
+                    Some(Some(Value::Str(o))) if o == OPEN && args.len() == 3 => true,
+                    _ => {
+                        return Err(format!(
+                            "range takes its bounds, and `{OPEN}` third when its end is left out"
+                        ));
+                    }
+                };
+                let end = |i: usize| {
+                    args.get(i)
+                        .and_then(Term::ground)
+                        .ok_or_else(|| format!("range: argument {} must be a value", i + 1))
+                };
+                let r = crate::range::Range::new(end(0)?, end(1)?, !open)
+                    .map_err(|e| format!("range: {e}"))?;
+                if is_empty(&r) {
+                    return Err(format!("{} is empty", Constraint::Range(r)));
                 }
-                Constraint::Range(lo, hi)
+                Constraint::Range(r)
             }
             "prefix_len_le" => {
                 arity(1)?;
@@ -164,6 +202,17 @@ impl TryFrom<&Term> for Constraint {
                 ));
             }
         })
+    }
+}
+
+/// Whether range `r` holds nothing: its end before its start, or at it
+/// and left out. Bounds that do not compare (strings read as the value's
+/// type) are not known to be empty.
+fn is_empty(r: &crate::range::Range) -> bool {
+    match crate::engine::order(&r.start, &r.end) {
+        Ok(std::cmp::Ordering::Greater) => true,
+        Ok(std::cmp::Ordering::Equal) => !r.inclusive,
+        _ => false,
     }
 }
 
@@ -221,13 +270,14 @@ pub fn of_type(t: &TypeExpr) -> Option<Constraint> {
 
 /// A `check` body over the value written `names`, split into what fits the
 /// checkable table and the rest (which lowers to a deny). A literal fits
-/// when it reads the value alone: `lo <= x <= hi` (both bounds: a range;
-/// one alone does not fit), `x == v`, `x in [..]`, `x.len OP n`,
+/// when it reads the value alone: `lo <= x <= hi` or `x in lo..=hi` (both
+/// bounds, of one ordered type: a range; one alone does not fit), `x ==
+/// v`, `x in [..]`, `x.len OP n`,
 /// `x.bits OP n` (a network's prefix length), `matches(x, "re")`. The split is sound because a
 /// `check` is a conjunction: `not (A, B)` is `not A` or `not B`, and a
 /// literal that fits shares no variable with the rest.
 pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
-    let is_self = |t: &Term| matches!(t, Term::Val(Value::Str(s)) if names.contains(&s.as_str()));
+    let is_self = |t: &Term| is_named(t, names);
     let of_self = |t: &Term, f: &str| matches!(t, Term::Func { name, args } if name == f && args.len() == 1 && is_self(&args[0]));
     // `x.bits`: a network's prefix length, its field (R-134), named by
     // its text as the value is.
@@ -278,8 +328,7 @@ pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
     let mut out = Vec::new();
     let mut rest = Vec::new();
     // Bounds on the value itself, with the literal each came from.
-    type Bounds<'a> = Vec<(i64, &'a Lit)>;
-    let (mut lo, mut hi): (Bounds, Bounds) = Default::default();
+    let mut bounds = Vec::new();
     for l in body {
         if let Lit::Pos(a) = l
             && a.pred == "member"
@@ -291,17 +340,9 @@ pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
             out.push(Constraint::OneOf(vs.into_iter().collect()));
             continue;
         }
-        // `x in lo..=hi` is `lo <= x <= hi` (`x in lo..hi` its end left
-        // out): one range, whichever way it is written.
-        if let Lit::Pos(a) = l
-            && a.pred == "member"
-            && let [r, x] = a.args.as_slice()
-            && is_self(x)
-            && let Some(Value::Range(r)) = r.ground()
-            && let (Value::Int(start), Value::Int(end)) = (&r.start, &r.end)
-        {
-            lo.push((*start, l));
-            hi.push((if r.inclusive { *end } else { end - 1 }, l));
+        let bs = Bound::all_in(l, names);
+        if !bs.is_empty() {
+            bounds.extend(bs);
             continue;
         }
         if let Lit::Pos(a) = l
@@ -318,14 +359,10 @@ pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
             continue;
         };
         if is_self(&subject) {
-            match (op, int(&c), c.ground()) {
-                (Op::Eq, _, Some(v)) if nulls_free(&v) => {
+            match (op, c.ground()) {
+                (Op::Eq, Some(v)) if nulls_free(&v) => {
                     out.push(Constraint::OneOf(BTreeSet::from([v])))
                 }
-                (Op::Le, Some(n), _) => hi.push((n, l)),
-                (Op::Lt, Some(n), _) => hi.push((n - 1, l)),
-                (Op::Ge, Some(n), _) => lo.push((n, l)),
-                (Op::Gt, Some(n), _) => lo.push((n + 1, l)),
                 _ => rest.push(l.clone()),
             }
             continue;
@@ -358,20 +395,183 @@ pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
             None => rest.push(l.clone()),
         }
     }
-    match (lo.iter().map(|x| x.0).max(), hi.iter().map(|x| x.0).min()) {
-        (Some(l), Some(h)) if l <= h => out.push(Constraint::Range(l, h)),
-        _ => {
+    match Bound::range(&bounds) {
+        Some(r) => out.push(r),
+        None => {
             // A range literal is both bounds: it goes back once.
             let mut back: Vec<&Lit> = Vec::new();
-            for (_, l) in lo.iter().chain(&hi) {
-                if !back.iter().any(|b| std::ptr::eq(*b, *l)) {
-                    back.push(l);
+            for b in &bounds {
+                if !back.iter().any(|l| std::ptr::eq(*l, b.lit)) {
+                    back.push(b.lit);
                 }
             }
             rest.extend(back.into_iter().cloned())
         }
     }
     (out, rest)
+}
+
+/// Why a `check` over `who`, a value of type `ty` written `names`,
+/// bounds it by a value of another type (`disk: bytes check disk in
+/// 1s..=2s`), or orders a value of a type with no order: the error at the
+/// check, its help the fix. None for a type a bound is not checked
+/// against (`any`, a list, a secret's).
+pub fn mistyped(
+    body: &[Lit],
+    names: &[&str],
+    who: &str,
+    ty: &TypeExpr,
+) -> Option<(String, String)> {
+    let TypeExpr::Name(t) = ty else {
+        return None;
+    };
+    let t = t.as_str();
+    let ordered = t == "number" || crate::range::ORDERED.contains(&t);
+    if matches!(t, "any" | "addr") {
+        return None;
+    }
+    body.iter()
+        .flat_map(|l| Bound::all_in(l, names))
+        .find_map(|b| {
+            let of = crate::value::type_name(&b.at);
+            let fits = match t {
+                "int" => of == "int",
+                "float" | "number" => matches!(of, "int" | "float"),
+                t if ordered => crate::value::read_typed(t, &b.at).is_ok(),
+                _ => false,
+            };
+            if fits {
+                return None;
+            }
+            let at = spell::value(&b.at);
+            Some(match ordered {
+                true => (
+                    format!(
+                        "{who} is {t}, and its bound {at} is {of}: a check bounds a value by \
+                         values of its type"
+                    ),
+                    format!("write the bound as {t}"),
+                ),
+                false => (
+                    format!(
+                        "{who} is {t}, which has no order: a bound ({at}) orders an int, a \
+                         float, a quantity, a time, an ip or a semver"
+                    ),
+                    "check it by `==`, `in [..]` or `matches(..)`".to_string(),
+                ),
+            })
+        })
+}
+
+/// Whether `t` is the value a `check` is over, written by one of `names`.
+fn is_named(t: &Term, names: &[&str]) -> bool {
+    matches!(t, Term::Val(Value::Str(s)) if names.contains(&s.as_str()))
+}
+
+/// A bound a `check` puts on the value itself, of an ordered type: `lo
+/// <= x` (`lo < x` strict) below it, `x <= hi` above, with the literal
+/// it came from.
+struct Bound<'a> {
+    above: bool,
+    at: Value,
+    strict: bool,
+    lit: &'a Lit,
+}
+
+impl<'a> Bound<'a> {
+    /// The bounds literal `l` puts on the value written `names`: `x in
+    /// lo..=hi` two (`x in lo..hi` its end left out), `x <= v` or `v > x`
+    /// one; none unless the other side is a value with an order.
+    fn all_in(l: &'a Lit, names: &[&str]) -> Vec<Bound<'a>> {
+        let ordered = |v: &Value| crate::range::ORDERED.contains(&crate::value::type_name(v));
+        let at = |above, at, strict| Bound {
+            above,
+            at,
+            strict,
+            lit: l,
+        };
+        if let Lit::Pos(a) = l
+            && a.pred == "member"
+            && let [r, x] = a.args.as_slice()
+            && is_named(x, names)
+            && let Some(Value::Range(r)) = r.ground()
+            && ordered(&r.start)
+        {
+            let crate::range::Range {
+                start,
+                end,
+                inclusive,
+            } = *r;
+            return vec![at(false, start, false), at(true, end, !inclusive)];
+        }
+        // `a OP b`, and whether `a <= b` bounds `a` above.
+        let (a, b, strict, a_above) = match l {
+            Lit::Le(a, b) => (a, b, false, true),
+            Lit::Lt(a, b) => (a, b, true, true),
+            Lit::Ge(a, b) => (a, b, false, false),
+            Lit::Gt(a, b) => (a, b, true, false),
+            _ => return Vec::new(),
+        };
+        let (above, other) = match (is_named(a, names), is_named(b, names)) {
+            (true, false) => (a_above, b),
+            (false, true) => (!a_above, a),
+            _ => return Vec::new(),
+        };
+        match other.ground() {
+            Some(v) if ordered(&v) => vec![at(above, v, strict)],
+            _ => Vec::new(),
+        }
+    }
+
+    /// An int's strict bound as the int past it, `x < 4` as `x <= 3`, so
+    /// an int range holds its end as an int range value does.
+    fn closed(&self) -> Option<(Value, bool)> {
+        match (&self.at, self.strict) {
+            (Value::Int(n), true) => {
+                let n = if self.above {
+                    n.checked_sub(1)
+                } else {
+                    n.checked_add(1)
+                }?;
+                Some((Value::Int(n), false))
+            }
+            (v, strict) => Some((v.clone(), strict)),
+        }
+    }
+
+    /// The tightest of `bounds` on one side: the greatest below, the
+    /// least above, a strict one over its equal; none for none, or when
+    /// two do not compare.
+    fn tightest(bounds: &[Bound], above: bool) -> Option<(Value, bool)> {
+        let mut best: Option<(Value, bool)> = None;
+        for b in bounds.iter().filter(|b| b.above == above) {
+            let (at, strict) = b.closed()?;
+            let tighter = match &best {
+                None => true,
+                Some((cur, cur_strict)) => match crate::engine::order(&at, cur).ok()? {
+                    std::cmp::Ordering::Equal => strict && !cur_strict,
+                    o => (o == std::cmp::Ordering::Less) == above,
+                },
+            };
+            if tighter {
+                best = Some((at, strict));
+            }
+        }
+        best
+    }
+
+    /// The one range `bounds` say, or none: a side with no bound, bounds
+    /// that do not compare, an empty range, or a strict bound below a
+    /// type with no next value (`0.0 < x`: a range holds its start).
+    fn range(bounds: &[Bound]) -> Option<Constraint> {
+        let (lo, lo_strict) = Bound::tightest(bounds, false)?;
+        let (hi, hi_strict) = Bound::tightest(bounds, true)?;
+        if lo_strict {
+            return None;
+        }
+        let r = crate::range::Range::new(lo, hi, !hi_strict).ok()?;
+        (!is_empty(&r)).then_some(Constraint::Range(r))
+    }
 }
 
 /// A refinement as an Apply assertion (F DR-13 revised): the op is the
@@ -384,7 +584,16 @@ pub fn to_assertion(c: &Constraint) -> (String, serde_json::Value) {
         Constraint::IsStr => ("type", json!("string")),
         Constraint::IsBool => ("type", json!("bool")),
         Constraint::IsInet => ("type", json!("inet")),
-        Constraint::Range(lo, hi) => ("range", json!([lo, hi])),
+        Constraint::Range(r) => {
+            let mut bounds = vec![
+                crate::spell::value_to_json(&r.start),
+                crate::spell::value_to_json(&r.end),
+            ];
+            if !r.inclusive {
+                bounds.push(json!(OPEN));
+            }
+            ("range", serde_json::Value::Array(bounds))
+        }
         Constraint::PrefixLenLe(n) => ("prefix_len_le", json!(n)),
         Constraint::PrefixLenGe(n) => ("prefix_len_ge", json!(n)),
         Constraint::LenLe(n) => ("len_le", json!(n)),
@@ -402,9 +611,17 @@ pub fn to_assertion(c: &Constraint) -> (String, serde_json::Value) {
 /// them in this crate (the mock).
 pub fn from_assertion(op: &str, v: &serde_json::Value) -> Option<Constraint> {
     let args: Vec<Term> = match v {
+        // A bound is its value, or its text (`"10Gi"`) read as the
+        // quantity its literal is.
         serde_json::Value::Array(xs) if op == "range" => xs
             .iter()
-            .map(|x| Term::Val(crate::provider::json_to_value(x)))
+            .map(|x| match crate::provider::json_to_value(x) {
+                Value::Str(s) => match crate::quantity::literal(&s) {
+                    Ok(crate::quantity::Literal::Known(q)) => Term::Val(Value::Quantity(q)),
+                    _ => Term::Val(Value::Str(s)),
+                },
+                v => Term::Val(v),
+            })
             .collect(),
         serde_json::Value::Array(xs) => vec![Term::List(
             xs.iter()
@@ -540,6 +757,13 @@ pub fn lower_types(program: &Program) -> Result<Program> {
                 out.push(refine_fact(name, None, &path, &c, a.span));
             }
             let names = [path.as_str(), a.path.as_str()];
+            if let Some((msg, help)) =
+                a.ty.as_ref()
+                    .and_then(|t| mistyped(&a.refinement, &names, &format!("{name} .{path}"), t))
+            {
+                diags.push(Diagnostic::error(a.span, msg).with_help(help));
+                continue;
+            }
             let (cs, rest) = split(&a.refinement, &names);
             for c in cs {
                 out.push(refine_fact(name, None, &path, &c, a.span));
@@ -963,20 +1187,58 @@ mod tests {
             assert_eq!(c.to_string(), text);
         }
         assert!(parse("range(5, 1)").is_err());
+        // A range of any ordered type, its bounds printed as values.
+        for text in [
+            "range(10Gi, 4Ti)",
+            "range(1h30m, 2d)",
+            "range(0.5, 1.5)",
+            "range(0.0, 1.0, open)",
+            "range(\"500m\", \"2\")",
+            "range(\"10.0.0.1\", \"10.0.0.9\")",
+        ] {
+            let c = parse(text).unwrap();
+            assert_eq!(c.to_string(), text);
+            assert_eq!(parse(&c.to_string()).unwrap(), c, "{text}");
+        }
+        assert!(parse("range(1s, 2Gi)").is_err());
+        assert!(parse("range(1.0, 1.0, open)").is_err());
+        assert!(parse("range(1, 2, shut)").is_err());
         assert!(parse("prefix_len_le(40)").is_err());
         assert!(parse("regex(\"(\")").is_err());
         assert!(parse("between(1, 2)").is_err());
     }
 
+    /// A range's Apply assertion is its bounds, an int's as numbers (the
+    /// wire form it always had), another's as its text, which a provider
+    /// reads against the document's own text (`"5Ti"`).
+    #[test]
+    fn a_range_is_an_assertion_of_its_bounds() {
+        use serde_json::json;
+        for text in ["range(1, 35)", "range(10Gi, 4Ti)", "range(0.0, 1.0, open)"] {
+            let c = parse(text).unwrap();
+            let (op, v) = to_assertion(&c);
+            assert_eq!(from_assertion(&op, &v), Some(c), "{text}");
+        }
+        assert_eq!(to_assertion(&Constraint::range(1, 35)).1, json!([1, 35]));
+        let c = from_assertion("range", &json!(["10Gi", "4Ti"])).unwrap();
+        assert_eq!(c.to_string(), "range(10Gi, 4Ti)");
+        assert_eq!(c.check(&Value::Str("5Ti".into())), Truth::False);
+        assert_eq!(c.check(&Value::Str("1Ti".into())), Truth::True);
+    }
+
     #[test]
     fn the_checks() {
+        use crate::value::Float;
         use Constraint::*;
         let net = |s: &str| {
             let (addr, prefix) = crate::value::parse_ipnet(s).unwrap();
             Value::IpNet { addr, prefix }
         };
-        assert_eq!(Range(1, 35).check(&Value::Int(35)), Truth::True);
-        assert_eq!(Range(1, 35).check(&Value::Int(40)), Truth::False);
+        assert_eq!(Constraint::range(1, 35).check(&Value::Int(35)), Truth::True);
+        assert_eq!(
+            Constraint::range(1, 35).check(&Value::Int(40)),
+            Truth::False
+        );
         assert_eq!(PrefixLenLe(24).check(&net("10.0.0.0/24")), Truth::True);
         assert_eq!(
             PrefixLenLe(24).check(&Value::Str("10.0.0.0/26".into())),
@@ -1001,13 +1263,30 @@ mod tests {
             class: crate::value::NullClass::Open,
             ty: "string".into(),
         };
-        assert_eq!(Range(1, 2).check(&null), Truth::Unknown);
+        assert_eq!(Constraint::range(1, 2).check(&null), Truth::Unknown);
+        let bytes = parse("range(10Gi, 4Ti)").unwrap();
+        let q = |s: &str| match crate::quantity::literal(s).unwrap() {
+            crate::quantity::Literal::Known(q) => Value::Quantity(q),
+            _ => panic!("{s}"),
+        };
+        assert_eq!(bytes.check(&q("4Ti")), Truth::True);
+        assert_eq!(bytes.check(&q("5Ti")), Truth::False);
+        assert_eq!(bytes.check(&q("1h")), Truth::False);
+        let open = parse("range(0.0, 1.0, open)").unwrap();
+        assert_eq!(
+            open.check(&Value::Float(Float::new(0.5).unwrap())),
+            Truth::True
+        );
+        assert_eq!(
+            open.check(&Value::Float(Float::new(1.0).unwrap())),
+            Truth::False
+        );
     }
 
     #[test]
     fn a_where_splits_into_the_table_and_the_rest() {
         let (cs, rest) = split(&lits("1 <= days, days <= 35"), &["days"]);
-        assert_eq!(cs, vec![Constraint::Range(1, 35)]);
+        assert_eq!(cs, vec![Constraint::range(1, 35)]);
         assert!(rest.is_empty());
         let (cs, rest) = split(&lits("cidr.bits == 28"), &["cidr"]);
         assert_eq!(
@@ -1025,8 +1304,29 @@ mod tests {
         // A range literal is its two bounds, its end in it or not.
         for src in ["n in 0..=3", "n in 0..4", "0 <= n <= 3"] {
             let (cs, rest) = split(&lits(src), &["n"]);
-            assert_eq!(cs, vec![Constraint::Range(0, 3)], "{src}");
+            assert_eq!(cs, vec![Constraint::range(0, 3)], "{src}");
             assert!(rest.is_empty(), "{src}");
+        }
+        // Of every ordered type, both forms: a quantity's, a duration's,
+        // a float's (its end left out).
+        for (srcs, text) in [
+            (["d in 10Gi..=4Ti", "10Gi <= d <= 4Ti"], "range(10Gi, 4Ti)"),
+            (["d in 1s..=1h", "1s <= d, d <= 1h"], "range(1s, 1h)"),
+            (["d in 0.0..1.0", "0.0 <= d < 1.0"], "range(0.0, 1.0, open)"),
+        ] {
+            for src in srcs {
+                let (cs, rest) = split(&lits(src), &["d"]);
+                assert_eq!(cs.len(), 1, "{src}: {rest:?}");
+                assert_eq!(cs[0].to_string(), text, "{src}");
+                assert!(rest.is_empty(), "{src}");
+            }
+        }
+        // Bounds that say no range: a dense type's strict start (a range
+        // holds its start), bounds of two dimensions, an empty one.
+        for src in ["0.0 < d <= 1.0", "1s <= d <= 4Ti", "d in 1.0..1.0"] {
+            let (cs, rest) = split(&lits(src), &["d"]);
+            assert!(cs.is_empty(), "{src}: {cs:?}");
+            assert!(!rest.is_empty(), "{src}");
         }
         let (cs, rest) = split(&lits("n in 4..=0"), &["n"]);
         assert!(cs.is_empty());

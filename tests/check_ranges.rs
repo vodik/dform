@@ -86,18 +86,41 @@ fn a_type_attributes_range_check_is_its_bounds() {
     assert!(r.stderr.contains("range(1, 8)"), "{}", r.stderr);
 }
 
-/// A range of quantities is checked over the value as its bounds are:
-/// `--set disk=5Ti` is refused by either form.
+/// A range of quantities is a refinement as an int range is: a literal
+/// outside it is refused before evaluation, in an input and in a `type`
+/// block, and a `--set` outside it at the flag.
 #[test]
-fn a_quantity_range_check_refuses_as_its_bounds_do() {
-    let s = Scratch::new("range-bytes");
-    for check in ["disk in 10Gi..=4Ti", "10Gi <= disk <= 4Ti"] {
+fn a_quantity_range_check_is_its_bounds() {
+    let forms = ["disk in 10Gi..=4Ti", "10Gi <= disk <= 4Ti"];
+    let r = same(
+        "range-bytes",
+        "\ninput disk: bytes = 50Gi check CHECK\non(1)\nset disk = 5Ti where on(1)\n\
+         resource compute.vm a { disk }\nuse fake\n",
+        forms,
+        &[],
+    );
+    assert!(
+        r.stderr.contains("disk = 5Ti: input disk is bytes check"),
+        "{}",
+        r.stderr
+    );
+    let r = same(
+        "range-bytes-type",
+        "\ntype compute.vm {\n  disk: bytes check CHECK\n}\n\
+         resource compute.vm a { disk = 5Ti }\nuse fake\n",
+        forms,
+        &[],
+    );
+    assert!(r.stderr.contains("range(10Gi, 4Ti)"), "{}", r.stderr);
+    let s = Scratch::new("range-bytes-set");
+    for check in forms {
         let src = format!(
             "\ninput disk: bytes = 50Gi check {check}\nresource compute.vm a {{ disk }}\nuse fake\n"
         );
         let r = plan(&s, &src, &["--set", "disk=5Ti"]).failure();
         assert!(
-            r.stderr.contains("input disk is bytes check"),
+            r.stderr
+                .contains("--set disk=5Ti: input disk is bytes check"),
             "{check}: {}",
             r.stderr
         );

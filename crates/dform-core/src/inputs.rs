@@ -702,6 +702,23 @@ fn fails_check(k: &str, name: &str, v: &Value, decl: &InputDecl) -> Result<()> {
 /// 0 <= agents, agents <= 3`. A value an object is given whole is
 /// checked leaf by leaf.
 pub fn check_literals(program: &Program, declared: &[Declared]) -> Result<()> {
+    // A check that bounds its input by values of another type first: no
+    // value is checked against it.
+    let mut spans = BTreeSet::new();
+    let mistyped: Vec<Diagnostic> = declared
+        .iter()
+        .flat_map(|d| leaves(&d.decl))
+        .filter(|l| spans.insert((l.span.file, l.span.start, l.span.end)))
+        .filter_map(|l| {
+            let who = format!("input {}", l.name);
+            let (msg, help) =
+                crate::refine::mistyped(&l.refinement, &[l.name.as_str()], &who, &l.ty)?;
+            Some(Diagnostic::error(l.span, msg).with_help(help))
+        })
+        .collect();
+    if !mistyped.is_empty() {
+        return Err(Diagnostics(mistyped).into());
+    }
     let mut diags = Vec::new();
     for s in &program.statements {
         let head = match s {

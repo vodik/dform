@@ -4378,7 +4378,10 @@ type google.container_cluster { zones: list(string) check zones.len >= 3 }
 ```
 
 A `check` over the value alone that fits the checkable table is a
-constraint in the attribute's cell: `lo <= x <= hi` is `range(Lo, Hi)`,
+constraint in the attribute's cell: `lo <= x <= hi` or `x in lo..=hi` is
+`range(Lo, Hi)` (`x < hi`, `x in lo..hi`: `range(Lo, Hi, open)`), for a
+value of every ordered type, its bounds of the value's type (`disk in
+10Gi..=4Ti` is `range(10Gi, 4Ti)`; a bound of another type is an error),
 `x.bits <= N` (`>=`, `==`) is `prefix_len_le(N)` / `prefix_len_ge(N)`,
 `x.len <= N` is `len_le(N)` / `len_ge(N)`, `x in [..]` or `x == v` is
 `enum([..])`, `matches(x, "re")` is `regex("re")`; a `type` block's `int`,
