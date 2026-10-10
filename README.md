@@ -140,9 +140,9 @@ resource aws.iam_user "u-${pw}" { name = "x" }         # E0305: addresses are pr
 ```
 
 State holds no secret, because a generated one derives from the
-deployment's master, and `dform secrets rotate D KEY` changes one, one
-plan line per place it lands. Terraform's `sensitive` keeps a value out
-of its CLI output and still stores it in state.
+deployment's master. Secrets are imported, managed and rotated with
+`dform secrets`. Terraform's `sensitive` keeps a value out of its CLI
+output and still stores it in state.
 
 **Descriptions build on each other.** Anything shaped like a graph is
 derived, so reachability stays right as spokes come and go, and this is
