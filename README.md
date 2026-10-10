@@ -74,17 +74,19 @@ examples/tour plan`.
 ## Describe what should exist
 
 A dform file says what should exist and under which conditions, and
-dform works out how many, in what order, and when. A block is a
+dform works out how many, in what order, and when. The file itself has
+no order either: a block may use a name declared further down, in
+another file, or in a tick that has not run yet. A block is a
 description that holds for every answer to its clause, so repetition is
 a condition, an edge is a reference, and a value known later is a later
 tick. Terraform makes a block a template and adds `for_each`,
 `depends_on`, `-target` and `default_tags` for what a template cannot
 say.
 
-**Every description sees every resource, and an attribute has many
-authors.** A convention is written once and holds in every module. A
-`set` writes into any resource its clause matches, merged per leaf with
-what the module wrote itself:
+**Every description sees every resource, and any part of the program
+can add to one.** A convention is written once and holds in every
+module. A `set` writes into any resource its clause matches, merged per
+leaf with what the module wrote itself:
 
 ```dform
 set r.tags = { team: "shop" } where r in resource
