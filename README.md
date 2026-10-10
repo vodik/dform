@@ -263,26 +263,18 @@ an `input` the variable, a clause the repetition, and a reference or
 `examples/tour` has each idea with the command to run;
 `docs/grammar.md` is the reference.
 
-**Facts and rules.** A fact is a row, `zone("us-test-1a", 1)`. A rule
-derives rows, `link(h, t) where hub(h), spoke(t)`. Lower-case names are
-variables; a variable used once is an error, so a typo is not a cross
-product of cloud resources.
+A fact is a row, `zone("us-test-1a", 1)`, and a rule derives rows from
+rows, `link(h, t) where hub(h), spoke(t)`. A variable used once is an
+error, so a typo cannot become a cross product of cloud resources. A
+resource names what it uses, `vpc = main`, and the provider sends the
+VPC's id once it exists, so a program never reads an id or writes a
+`depends_on`. A dot in a function or a clause reads the value now, and
+the compiler says when that makes the block wait a tick.
 
-**Resources and references.** A resource is `resource TYPE NAME { attr
-= value }`. With `where` it is one per answer, its name interpolating
-the clause. An entry that is only a name takes the value of that name.
-`vpc = main` gives the resource, the provider sends its id once it
-exists, and a program never reads an id. A dot in a function or a
-clause reads the value now, and the compiler says when that makes the
-block wait a tick. `resource T NAME = VALUE` takes a whole document as
-the body.
-
-**Paths.** One dotted grammar names everything: `config.region`, a
-copy's output `blue.vpc`, a deployment's `platform[env].ingress_ip`, a
-module's resource `k3s.admin`. A segment holding a dot is quoted,
-`k3s."k8s-lab.vodik.xyz"`. `[k]` takes one element by key, and `[_]`
-ranges over every one. A baseline is then one line per workload type,
-and the exception is one more:
+One dotted grammar names everything, a copy's output `blue.vpc` as much
+as a deployment's `platform[env].ingress_ip`. `[k]` takes one element by
+key and `[_]` ranges over every one, so a baseline is one line per
+workload type, and the exception is one more:
 
 ```dform
 let limits = { cpu: 500m, memory: 256Mi }
@@ -295,18 +287,13 @@ set k8s.deployment["web"].spec.template.spec.containers["web"].resources.limits 
 ```
 
 The plan names a list's element by its key,
-`spec.ports[port=80,protocol=TCP]`, and `why` takes it back, the key in
-part: `dform why 'web.spec.ports[port=80].targetPort'`.
+`spec.ports[port=80,protocol=TCP]`, and `why` takes the same path back.
 
-**Types.** Strings stop at the edge. A provider's schema types every
-attribute, and a `--set`, a YAML cell or a CSV field is parsed to the
-declared type there, or rejected with its file and line. A literal takes
-the type its position wants, as in Postgres. The language has `inet` and
-`ip` with their arithmetic (`inet.subnet`, `n.bits`, `"10.0.0.5" in
-n`), and quantities (`512Mi` is `bytes`, `500m` a `cpu`, `30d` a
-`duration`) compared in base units and sent in each provider's form. It
-has `time`, `semver`, `uri` (`u.host`) and `oci` (`c.image.tag`). A
-`check` refines any type and is a deny over the value:
+**Types.** Strings stop at the edge. A `--set`, a YAML cell or a CSV
+field is parsed to its declared type where it enters, or rejected with
+its file and line. Inside, a network is an `inet` with its arithmetic
+and `50Gi` is bytes, compared in base units and sent in each provider's
+form. A `check` refines any type and is a deny over the value:
 
 ```dform
 input agents: int = 0 check 0 <= agents <= 3
@@ -322,26 +309,24 @@ deny "subnets overlap" { a: x, b: y } where {
 }
 ```
 
-**Definedness.** `has x` holds when `x` has a value: `not has
-c.resources.limits` finds a container without limits. A computed
-attribute has none until the provider reports it, so what `has` gates
-waits for it. `has r` of a resource holds once it exists: `resource
+`has x` holds when `x` has a value, so `not has c.resources.limits`
+finds a container without limits. Like every construct, it waits for a
+value the provider has not reported yet, so you never think about
+evaluation order. Of a resource, `has r` holds once it exists, which
+turns an order with no value passed into a clause. `resource
 k8s.deployment web { .. } where has warm_cache` applies the tick after
-the cache, an order with no value passed.
+the cache.
 
-**Functions.** A function is pure or a coeffect, a read the context
-satisfies: `io.read`, `time.now()`, `memo.first`, a provider's extern.
-Each is named by its package, subject first (`str.split(s, ",")`,
-`inet.subnet(n, 4, i)`, `oci.with_tag(base, release)`); there is no
-prelude. `random.password("db")` is pure: derived from the deployment's
-master, the same every run, stored nowhere. `memo.first(key, v)` keeps
-the first value it was given, for what cannot be derived again.
+A function is pure or it reads the world, and the language knows which.
+`random.password("db")` is pure, derived from the deployment's master,
+the same every run and stored nowhere. A read is a coeffect the context
+satisfies, at plan time or in the tick that can answer it, so the order
+calls run in is never yours to manage. Nothing in the language writes,
+and the one effect is a provider's apply.
 
-**Documents.** `io.read(LOCATION)` is a location's text; a location is a
-project path or a uri whose scheme picks the transport (`file:`,
-`https://`, `git+https://..?ref=`, `ssh://` over SFTP, `s3://`,
-`vault://`, `data:`). Each format's package decodes it, and rows keep
-their file and line:
+**Documents.** A path or a uri names a document wherever it lives, and a
+format's package decodes it into rows that keep their file and line. The
+result is a value like any other, down to a resource's whole body:
 
 ```dform
 input peering from csv.decode(io.read("data/peerings.csv"))
@@ -357,10 +342,8 @@ resource k8s.custom_resource_definition "${d.metadata.name}" = d where {
 ```
 
 A git read is pinned to the commit the plan recorded, so `apply PLAN`
-reads what plan read. A host still booting is "not yet", and the read
-waits for the tick that makes it. `io` has no write, because a write is
-a provider's apply. `yaml.encode`, `json.encode`, `toml.encode` build a document
-from a value for an API that wants one as a string.
+reads what plan read. A read of a host still booting waits for the tick
+that makes it.
 
 **The header.** A file begins with what it takes:
 
@@ -378,30 +361,21 @@ by the target, `dform plan platform env=prod`. A `set` writes an input
 under a condition, over its default, and `--set` wins over both.
 
 A value can live in code, `set .. where env == ..`, or in a document
-others keep, `set from yaml.decode(..)`. A secret someone types lives
-in a file per deployment, sealed to its recipients, written by `dform
-secrets set` and committed. The program reads it with `set from
-secrets.decode(io.read("secrets/${env}.json"))`. The file is SOPS's
-format, so `sops -d` opens it with a member's own key. `--set` is for a
-one-off, and audited. A `.env` is the backend's and the providers',
-never the program's.
+others keep, `set from yaml.decode(..)`. A secret someone types is a
+file per deployment, sealed to its recipients and committed. It is
+SOPS's format, so `sops -d` opens it with a member's own key.
 
 **Modules and components.** Every `.df` file is a module named by its
-path. `use config` imports it, its rules run over what you can see, and
-its items read as `config.x`. A module with resources is stamped once by
-its `use`, with its inputs in the block, `use k3s { name = "k8s-${env}",
-agents }`. A component is a type with inputs and outputs, made by
-`resource network blue { cidr = "10.1.0.0/16" }`, and its resources
-stay visible to policy. Names are lexical and types are global: a
-module reads only what its file declares, while `r in aws.subnet`
-ranges over every subnet in the deployment, whichever file made it. A
-module takes what it needs from its user as an input, `use
-baseline { env }`. In a component, `super.region` is the name one scope
-out. A declaration with a clause exists only where it holds, `use
-backups { .. } where backup`.
+path. A module with resources is stamped once by its `use`, its inputs
+in the block, `use k3s { name = "k8s-${env}", agents }`. A component is
+a type with inputs and outputs, `resource network blue { cidr =
+"10.1.0.0/16" }`. Names are lexical and types are global. A module reads
+only what its file declares, while `r in aws.subnet` ranges over every
+subnet in the deployment, whichever file made it, so policy sees inside
+every module without an output per value.
 
 **Providers.** `use` imports a provider's types and configures it. Its
-settings are terms like any other, so one can be made from a resource.
+settings are values like any other, so one can be made from a resource.
 The shape of a k3s cluster on OVH and what runs on it:
 
 ```dform
@@ -416,12 +390,9 @@ use k8s { kubeconfig = k3s.kubeconfig }
 resource k8s.namespace apps { metadata.name = "apps" }
 ```
 
-A provider's table is a relation like any other, so a deny can ask the
-account what it lacks. `k3s.kubeconfig` is read off the server over
-`ssh://` once it answers, so the namespace and everything else of `k8s`
-plan in tick 2. Two configurations of one provider sit side by side:
-`use ovh as ca { endpoint = "ovh-ca" }` beside `use ovh as eu { .. }`
-gives `ca.instance` and `eu.instance`.
+A provider's table is a relation, so a deny can ask the account what it
+lacks. `k3s.kubeconfig` is read off the server once it answers, so the
+namespace and everything else of `k8s` plan in tick 2.
 
 **Secrets.** The schema says which attributes are sensitive, and the
 compiler follows every value made from one. A secret reaching a place
@@ -437,10 +408,10 @@ resource aws.iam_user "u-${pw}" { name = "x" }         # E0305: addresses are pr
 
 `secret.declassify(v, reason)` is the one way out, and says why.
 
-**Policy and tests.** A policy pack is a module of `set`, `deny`,
-`warn` and `requires_approval`, applied by `use policies.baseline`.
-`dform test` evaluates the program once per combination of its enums,
-bools and keys, against an empty world, and every deny must hold:
+**Policy and tests.** A policy pack is a module, applied by `use
+policies.baseline`. `dform test` evaluates the program once per
+combination of its enums, bools and keys, against an empty world, and
+every deny must hold:
 
 ```
 $ dform test
@@ -485,7 +456,7 @@ reads what the cloud has not made yet, and the plan names the value and
 the tick that decide it, `until spec.storageClassName is known (tick
 2)`. A policy engine over plan JSON would pass it or guess. `later`
 holds what no tick of this plan makes, such as another deployment's
-output not applied yet. A secret prints as `(sensitive)`.
+output not applied yet.
 
 **apply** prints the plan and asks once. At a tick whose plan holds what
 the first could not name, it prints that plan and asks again. A plan
@@ -563,11 +534,9 @@ FILE` takes it.
 
 **Providers.** A provider is a process dform starts and speaks gRPC to,
 or, in an experimental build, a wasm component. HTTP, SSH and git are
-the host's, with credentials granted by name in `dform.toml`. Real
-providers serve Kubernetes, its schema read from the cluster's own
-OpenAPI document, and OVH, Postgres and Tailscale, with Vault behind
-`vault://`. The fake cloud and the AWS- and Google-shaped mocks run the
-examples. `dform provider check` runs the conformance suite, and
+the host's, with credentials granted by name in `dform.toml`. The
+Kubernetes provider reads its schema from the cluster's own OpenAPI
+document. `dform provider check` runs the conformance suite, and
 `docs/providers.md` is the protocol and the SDK.
 
 **The editor.** `dform lsp` hovers each term with its value for a
