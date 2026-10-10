@@ -9,7 +9,8 @@
 //! `state.audit.jsonl` when a log from before segments has one.
 //!
 //! Every entry is one line of canonical JSON: `seq` (from 1), `time` (RFC
-//! 3339, UTC), `kind`, `prev` (the previous entry's `hash`, "" for the
+//! 3339, UTC, by dform's clock, [`crate::memo::now`], as every time it
+//! compares the entry's with), `kind`, `prev` (the previous entry's `hash`, "" for the
 //! first), the kind's fields, and `hash`, sha256 over the entry's canonical
 //! JSON without `hash`. Editing an entry breaks its own hash; removing or
 //! reordering one breaks the next one's `prev`; [`verify`] names the first
@@ -48,7 +49,7 @@
 //! entries (`state`, `lease`; one per Apply call) only under `[defaults]
 //! audit_sink_entries = "all"`.
 
-use crate::approval::{canonical_json, digest_of, now, rfc3339};
+use crate::approval::{canonical_json, digest_of};
 use crate::store::{AUDIT, AUDIT_SEGMENTS, Cond, LocalStore, Store};
 use anyhow::{Context, Result};
 use serde_json::{Map, Value as Json};
@@ -208,7 +209,7 @@ impl Log {
             };
             let mut entry = Map::new();
             entry.insert("seq".into(), seq.into());
-            entry.insert("time".into(), rfc3339(now()).into());
+            entry.insert("time".into(), crate::memo::now().into());
             entry.insert("kind".into(), kind.into());
             entry.insert("prev".into(), prev.into());
             if let Json::Object(m) = &fields {

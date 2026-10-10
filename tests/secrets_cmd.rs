@@ -87,22 +87,17 @@ fn a_rotation_changes_one_secret_with_its_reason() {
             .join(" ")
     };
     // A key never rotated is as old as the master's first apply, in
-    // the log by the clock.
-    let without_age = |l: String| {
-        let mut w: Vec<&str> = l.split(' ').collect();
-        assert!(w[3].ends_with('d') || w[3].ends_with('h'), "{l}");
-        w.remove(3);
-        w.join(" ")
-    };
+    // the log by the same clock the listing reads: `run`'s, never the
+    // machine's (applied at NOW, listed three days on).
     assert_eq!(
-        without_age(line("db")),
-        "db random 1 db.secret app.password update",
+        line("db"),
+        "db random 1 3d db.secret app.password update",
         "{}",
         r.stdout
     );
     assert_eq!(
-        without_age(line("k3s")),
-        "k3s random 1 compute.vm lab.user_data, compute.vm prod.user_data refused by \
+        line("k3s"),
+        "k3s random 1 3d compute.vm lab.user_data, compute.vm prod.user_data refused by \
          prevent_destroy",
         "{}",
         r.stdout
