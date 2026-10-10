@@ -388,7 +388,7 @@ prints the same plan and applies nothing.
 | `state show`, `state forget-host`, `state mv` | a deployment's state |
 | `secrets list`, `secrets rotate`, `secrets cycle`, `secrets set`, `secrets unset` | a deployment's secrets |
 | `provider check`, `provider schema` | providers |
-| `dev strata`, `dev graph`, `dev effects`, `dev --world W --inventory I --provider P --chaos C COMMAND` | the mock and the evaluator; `dev effects` with no target on project.df's stacks |
+| `dev strata`, `dev graph`, `dev effects`, `dev eval`, `dev show ADDR`, `dev --world W --inventory I --provider P --chaos C COMMAND` | the mock and the evaluator: the strata, a graph as Graphviz DOT, what each scope reads, writes and offers, the evaluation's size and resources, a resource's desired document; `dev effects` with no target on project.df's stacks |
 | `doc [TARGET]` | the doc comments as Markdown, on stdout |
 | `init [NAME]` | make the working directory a project |
 | `completions zsh\|bash\|fish` | a completion script |

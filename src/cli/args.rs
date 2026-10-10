@@ -140,31 +140,23 @@ pub(super) struct Target {
 pub(super) enum Command {
     #[command(flatten)]
     Run(Run),
-    /// Format .df files in place: spacing, indentation and the commas a
-    /// newline makes redundant (line breaks are kept). No PATH formats the
-    /// project's .df files. `--check` changes nothing and fails if any
-    /// file would.
+    /// Format .df files in place.
     Fmt {
         paths: Vec<PathBuf>,
         #[arg(long)]
         check: bool,
     },
-    /// The project's doc comments (`#|` lines above an item) as Markdown on
-    /// stdout: every .df file's, or with a TARGET its program's; then the
-    /// standard library's functions.
+    /// Print the project's doc comments as Markdown.
     Doc {
         #[command(flatten)]
         target: Target,
     },
-    /// The project's stacks and their deployments.
+    /// List, rekey and unlock the project's stacks' deployments.
     Stack {
         #[command(subcommand)]
         cmd: StackCommand,
     },
-    /// A result set: a deployment's outputs as of its last apply, the
-    /// scalars as a key/value table and each relation as its own table;
-    /// with NAME, that output's bare value for the shell (a string's bytes
-    /// unquoted, a relation's rows tab-separated).
+    /// Print a deployment's outputs as of its last apply.
     Output {
         /// The stack (or deployment) and its key values, then the output's
         /// NAME: `dform output app env=prod url`.
@@ -173,55 +165,42 @@ pub(super) enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Each of a deployment's objects whose provider judges its health,
-    /// as it judges it now (R-203): one line each (`-` for a type it does
-    /// not judge), then a summary. Exit 0 when each is healthy or
-    /// suspended, 1 otherwise. With no target, in a project with a
-    /// project module, each deployment it lists.
+    /// Show each object's health, as its provider judges it now.
     Status {
         #[command(flatten)]
         target: Target,
         #[arg(long)]
         json: bool,
     },
-    /// A deployment's state.
+    /// Show and edit a deployment's state.
     State {
         #[command(subcommand)]
         cmd: StateCommand,
     },
-    /// A deployment's secrets: list them, rotate one (R-161), give one
-    /// (R-108).
+    /// List, rotate, cycle and give a deployment's secrets.
     Secrets {
         #[command(subcommand)]
         cmd: SecretsCommand,
     },
-    /// Provider tools.
+    /// Check a provider, or print its schema.
     Provider {
         #[command(subcommand)]
         cmd: ProviderCommand,
     },
-    /// Make the working directory a project: a minimal dform.toml, and
-    /// dform.state/ in the nearest .gitignore.
+    /// Make the working directory a project.
     Init { name: Option<String> },
-    /// Print dform's version and the release of the time zone database
-    /// built into it (R-62: zones never come from the host).
+    /// Print dform's version and its time zone database's release.
     Version,
-    /// Print a shell completion script: `dform completions zsh > _dform`.
-    /// It completes stack names, key values and deployments by asking
-    /// dform.
+    /// Print a shell completion script.
     Completions { shell: Shell },
-    /// Development: the mock's flags (--world, --inventory, --provider,
-    /// --chaos) before any command, and the evaluator's own views.
+    /// Run a command against the mock, or show the evaluator's views.
     Dev {
         #[command(flatten)]
         mock: Mock,
         #[command(subcommand)]
         cmd: DevCommand,
     },
-    /// Serve the language server protocol on stdin and stdout: diagnostics
-    /// of the selected environment, a contributors hover and docs at
-    /// point, schema completion, signature help (docs/reference.md,
-    /// "Language server").
+    /// Serve the language server protocol on stdin and stdout.
     Lsp,
     /// The completion scripts' helper: candidates for the next word.
     #[command(name = "__complete", hide = true)]
@@ -232,8 +211,8 @@ pub(super) enum Command {
     ServeProvider { name: String },
 }
 
-/// How much each change of a report says of why it is planned (R-79,
-/// R-111): `-q`, the default, `-v`, `-vv`; `--why=LEVEL` by name.
+/// How much each change of a report says of why it is planned:
+/// `-q`, the default, `-v`, `-vv`; `--why=LEVEL` by name.
 #[derive(clap::Args, Debug, Clone)]
 pub(super) struct Ladder {
     /// Quiet: the bare diff in apply order, each change by its full
@@ -260,8 +239,7 @@ pub(super) struct Ladder {
 /// The commands that run on a target, at the top level and under `dev`.
 #[derive(Subcommand, Debug, Clone)]
 pub(super) enum Run {
-    /// A report: plan a deployment, what apply would do, and what it
-    /// waits on.
+    /// Plan a deployment: what apply would do, and what it waits on.
     Plan {
         #[command(flatten)]
         target: Target,
@@ -280,16 +258,13 @@ pub(super) enum Run {
         /// Take the master this run has (`RANDOM_MASTER`, a restored or a
         /// new key file) though state was applied with another, or make
         /// one where the key file is missing: every `random.*` value and
-        /// every secret digest changes, on purpose (R-163).
+        /// every secret digest changes, on purpose.
         #[arg(long = "new-master")]
         new_master: bool,
         #[command(flatten)]
         why: Ladder,
     },
-    /// A report: apply a deployment, every key value named (`apply app
-    /// env=prod`), after the deployments it reads, or a plan file from `plan
-    /// --out` (`apply PLAN.json`): refresh, re-evaluate, and refuse unless the
-    /// delta is the file's.
+    /// Apply a deployment, or a plan file from `plan --out`.
     Apply {
         #[command(flatten)]
         target: Target,
@@ -315,7 +290,7 @@ pub(super) enum Run {
         /// before such a tick.
         #[arg(long = "yes", short = 'y')]
         yes: bool,
-        /// A rule or relation this apply may empty (R-80): the plan's
+        /// A rule or relation this apply may empty: the plan's
         /// `warning` names it and apply asks for it on its own, also
         /// under `--yes`, unless named here: the rule's `FILE:LINE`, a
         /// resource type it derives, or the relation. Repeatable; dform.toml
@@ -324,7 +299,7 @@ pub(super) enum Run {
         allow_empty: Vec<String>,
         /// How long a tick waits on a value the world has not reached yet
         /// (a rollout's `status.availableReplicas`, a Job's, an extern's
-        /// "not yet") before the apply stops, exit 1 (R-201): `90s`, `10m`.
+        /// "not yet") before the apply stops, exit 1: `90s`, `10m`.
         /// Over dform.toml's `[stacks.NAME] wait`, each provider's and
         /// `[apply] wait` (10m by default).
         #[arg(long = "wait-timeout", value_name = "DURATION", value_parser = wait_timeout)]
@@ -332,17 +307,13 @@ pub(super) enum Run {
         /// Take the master this run has (`RANDOM_MASTER`, a restored or a
         /// new key file) though state was applied with another, or make
         /// one where the key file is missing: every `random.*` value and
-        /// every secret digest changes, on purpose (R-163).
+        /// every secret digest changes, on purpose.
         #[arg(long = "new-master")]
         new_master: bool,
         #[command(flatten)]
         why: Ladder,
     },
-    /// A report: remove a deployment (`destroy platform env=lab`), the
-    /// plan against an empty wanted set: every object its state holds is
-    /// deleted, dependents first, asked for as `apply` asks. Its state is
-    /// left empty and `stack list` no longer shows it; its audit log
-    /// stays. `plan --destroy` prints the plan.
+    /// Remove a deployment: delete every object its state holds.
     Destroy {
         #[command(flatten)]
         target: Target,
@@ -360,22 +331,13 @@ pub(super) enum Run {
         #[arg(long = "yes", short = 'y')]
         yes: bool,
         /// How long a tick waits on a value not reached yet before the
-        /// destroy stops, as `apply --wait-timeout` (R-201).
+        /// destroy stops, as `apply --wait-timeout`.
         #[arg(long = "wait-timeout", value_name = "DURATION", value_parser = wait_timeout)]
         wait_timeout: Option<std::time::Duration>,
         #[command(flatten)]
         why: Ladder,
     },
-    /// A derivation: how a value was made, one `= EXPRESSION   SITE`
-    /// step per expression it passed through (an attribute, an input); a
-    /// resource's header and each attribute's steps, and what it waits on
-    /// when `later` holds it; any other fact's rule, bindings and the
-    /// facts it read, recursively. Variables are allowed; every match is
-    /// printed. What the program does not derive (an address, an
-    /// attribute, a row), why not: each rule that could have, the first
-    /// condition of it that failed and the nearest rows or name.
-    /// `why 'deny "MESSAGE"'`: whether that deny holds, and if not, which
-    /// clause failed on what.
+    /// Show how a value was derived, or why it was not.
     Why {
         pattern: String,
         #[command(flatten)]
@@ -401,9 +363,7 @@ pub(super) enum Run {
         #[arg(long)]
         json: bool,
     },
-    /// A result set: query the final fact store, a predicate name (every
-    /// fact of it) or body literals with variables, one column per
-    /// variable: `dform query 'attr(net.vpc, n, .cidr, c)'`.
+    /// Query the final fact store.
     Query {
         pattern: String,
         #[command(flatten)]
@@ -412,9 +372,7 @@ pub(super) enum Run {
         #[arg(long)]
         json: bool,
     },
-    /// A report: what the applies since REF did, each change with why it was
-    /// planned (as `plan --why`, by the program as it was at that apply),
-    /// and which inputs and stated rows changed since the apply before.
+    /// Show what the applies since REF did, and why.
     Diff {
         #[command(flatten)]
         target: Target,
@@ -437,22 +395,12 @@ pub(super) enum Run {
         #[arg(long = "address")]
         addresses: Vec<String>,
     },
-    /// A result set: run the program's denies over its input space (each enum
-    /// input's values, a bool both ways, a key's enum or applied values; the
-    /// rest their defaults), once per combination against an empty mock world.
-    /// `K=V` and `--set` pin inputs. Fails if any combination is denied,
-    /// printing the command that plans it.
+    /// Run the program's denies over its input space.
     Test {
         #[command(flatten)]
         target: Target,
     },
-    /// The deployment's planned documents as the objects their provider
-    /// sends (Kubernetes's, with `apiVersion` and `kind`), a YAML stream
-    /// in the plan's order, for a tool that applies them (`kubectl apply
-    /// -f -`, Argo CD). Evaluated as `test` does, with no credentials;
-    /// its policy holds or it is refused (exit 4). A resource of a
-    /// provider with no document form is said on stderr. With no target,
-    /// in a project with a project module, each deployment it lists.
+    /// Print the planned documents as a YAML stream for another tool.
     Render {
         #[command(flatten)]
         target: Target,
@@ -464,9 +412,7 @@ pub(super) enum Run {
         #[arg(long)]
         partial: bool,
     },
-    /// The deployment's audit log (`state.audit.jsonl` beside its state),
-    /// one line per entry; `log verify` checks its hash chain and names the
-    /// first broken link.
+    /// Print a deployment's audit log.
     Log {
         #[command(subcommand)]
         cmd: Option<LogCommand>,
@@ -480,8 +426,7 @@ pub(super) enum Run {
         #[arg(long)]
         json: bool,
     },
-    /// Controller mode: experimental, listed only with
-    /// `DFORM_EXPERIMENTAL=1`.
+    /// Run a stack in controller mode (experimental).
     #[command(hide = !experimental())]
     Controller {
         #[command(subcommand)]
@@ -491,10 +436,7 @@ pub(super) enum Run {
 
 #[derive(Subcommand, Debug, Clone)]
 pub(super) enum ControllerCommand {
-    /// Wait for a source it read (a table, a document, a program file) or
-    /// the world to change, then
-    /// refresh, evaluate, plan, gate on policy and apply, one log line per
-    /// event and per tick. Refuses a `role = bootstrap` stack.
+    /// Apply a stack whenever a source it reads or the world changes.
     Run {
         #[command(flatten)]
         target: Target,
@@ -516,8 +458,7 @@ pub(super) enum ControllerCommand {
 
 #[derive(Subcommand, Debug, Clone)]
 pub(super) enum LogCommand {
-    /// Check the chain: every entry's hash is its content's and names the
-    /// entry before. Fails naming the first broken link.
+    /// Check the audit log's hash chain.
     Verify {
         #[command(flatten)]
         target: Target,
@@ -526,38 +467,23 @@ pub(super) enum LogCommand {
 
 #[derive(Subcommand, Debug, Clone)]
 pub(super) enum StackCommand {
-    /// A result set: every stack of the project, its key, the deployments with
-    /// state, and per deployment the last apply (commit, time, actor, from the
-    /// audit log) and whether a saved plan is pending.
+    /// List the project's stacks and their deployments.
     List,
-    /// Move one deployment of a keyed stack to another key value: `rekey
-    /// app env=staging env=stg` moves the state of `app[env=staging]` to
-    /// `app[env=stg]` (a directory, or a prefix of the stack's bucket), and
-    /// its registry entry. Nothing in the cloud
-    /// changes. First it lists the resources whose name-like attributes
-    /// depend on the key (from provenance): the next plan renames them,
-    /// usually a replace. With one side only (`rekey app env=staging`), it
-    /// moves the state the stack had before it was keyed.
+    /// Move a deployment's state to another key value.
     Rekey {
         stack: String,
         /// Each key input as `k=v`: the old values, then the new ones.
         #[arg(value_name = "K=V", required = true)]
         pairs: Vec<String>,
     },
-    /// Move a deployment's state to another backend and record it in the
-    /// registry: `local("DIR")`, `s3("BUCKET", "PREFIX", {endpoint: "URL",
-    /// region: "R"})` (the deployment's own prefix), or `k8s("ns/name")`,
-    /// the in-cluster backend (for now a directory in the bootstrap stack's
-    /// state). The controller runs the stack from there; a batch `apply`
-    /// refuses it. Experimental (R-41), as controller mode is.
+    /// Move a deployment's state to another backend (experimental).
     #[command(hide = !experimental())]
     Handover {
         stack: String,
         #[arg(long = "to")]
         to: String,
     },
-    /// Remove a deployment's apply lock left by an apply that is gone.
-    /// Refuses while the holder runs.
+    /// Remove an apply lock left by an apply that is gone.
     Unlock {
         #[command(flatten)]
         target: Target,
@@ -566,9 +492,7 @@ pub(super) enum StackCommand {
 
 #[derive(Subcommand, Debug, Clone)]
 pub(super) enum StateCommand {
-    /// A result set: the deployment's state, each address, its provider and
-    /// remote id; with `--address ADDR` (`T["N"]`, as plan prints it), that
-    /// object's only.
+    /// Print a deployment's state.
     Show {
         #[arg(long = "address", value_name = "ADDR")]
         addr: Option<String>,
@@ -579,18 +503,13 @@ pub(super) enum StateCommand {
         #[command(flatten)]
         target: Target,
     },
-    /// Forget the host key `use ssh` recorded for HOST (as the
-    /// program names it, `10.0.0.5` or `name:2222`): the next contact
-    /// records the key the host offers then. For a host rebuilt with a new
-    /// key.
+    /// Forget the host key recorded for HOST.
     ForgetHost {
         host: String,
         #[command(flatten)]
         target: Target,
     },
-    /// Give the object at FROM the address TO (each `T["N"]`, as plan
-    /// prints it): nothing in the cloud changes, and the next plan sees the
-    /// object under TO.
+    /// Give the object at FROM the address TO.
     Mv {
         from: String,
         to: String,
@@ -601,51 +520,31 @@ pub(super) enum StateCommand {
 
 #[derive(Subcommand, Debug, Clone)]
 pub(super) enum SecretsCommand {
-    /// A result set: every secret the deployment's program holds, by key:
-    /// its kind (random, memo, given, held), generation, age, the cells
-    /// that read it and how a new value lands there (update, forces
-    /// replace, refused by prevent_destroy). Never a value.
+    /// List the deployment's secrets, never a value.
     List {
         #[command(flatten)]
         target: Target,
         #[arg(long)]
         json: bool,
     },
-    /// Rotate one secret, KEY after the deployment (`rotate apps env=lab
-    /// synapse-db`): a `random.*` key's generation moves on, a memo
-    /// forgets what it keeps, recorded in state and the audit log with who
-    /// and when. The next plan changes exactly that value, with the
-    /// reason. A given or held secret is rotated where it lives: rotate
-    /// says where, and fails.
+    /// Rotate one secret: the next plan changes its value.
     Rotate {
         /// [TARGET] [K=V..] KEY
         #[arg(value_name = "TARGET K=V.. KEY", required = true, num_args = 1..)]
         words: Vec<String>,
     },
-    /// Make a new master, the next epoch, sealed under the passphrase
-    /// beside the current one (R-165). No value changes: each secret stays
-    /// on the epoch it was derived on until it is rotated, which moves it
-    /// to the new one; the apply that moves an epoch's last secret retires
-    /// it. Needs `[secrets] passphrase`, and the passphrase.
+    /// Make a new master epoch beside the current one.
     Cycle {
         #[command(flatten)]
         target: Target,
     },
-    /// Give a secret, NAME after the deployment (`set apps env=lab
-    /// admin-pw`): the value is read from stdin, else asked on the
-    /// terminal, never an argument; sealed (SOPS's format) to the
-    /// deployment's age recipients, and its master's own key where a
-    /// passphrase or the key file opens it, into the file of given secrets
-    /// its program reads (`set from secrets.decode(io.read(..))`); NAME is
-    /// one of its `secret(T)` inputs. Every other value is kept as it is.
-    /// The audit log has a `given` entry. Commit the file; the next plan
-    /// reads it.
+    /// Give a secret, read from stdin and sealed into the file of given secrets.
     Set {
         /// [TARGET] [K=V..] NAME
         #[arg(value_name = "TARGET K=V.. NAME", required = true, num_args = 1..)]
         words: Vec<String>,
     },
-    /// Remove a given secret, NAME after the deployment, from its file.
+    /// Remove a given secret from its file.
     Unset {
         /// [TARGET] [K=V..] NAME
         #[arg(value_name = "TARGET K=V.. NAME", required = true, num_args = 1..)]
@@ -655,13 +554,9 @@ pub(super) enum SecretsCommand {
 
 #[derive(Subcommand, Debug, Clone)]
 pub(super) enum ProviderCommand {
-    /// The conformance suite: run every protocol method against the
-    /// provider at PATH (an executable, a directory holding one, or a mock
-    /// schema, which the mock provider plays) with a synthetic schema, and
-    /// report what deviates. Fails if anything does.
+    /// Run the conformance suite against a provider.
     Check { path: String },
-    /// Print a provider's schema facts: a built-in mock schema's name, a
-    /// schema .df, or a plugin executable.
+    /// Print a provider's schema facts.
     Schema { provider: String },
 }
 
@@ -669,15 +564,12 @@ pub(super) enum ProviderCommand {
 pub(super) enum DevCommand {
     #[command(flatten)]
     Run(Run),
-    /// A result set: the stratification of the program (partition graph
-    /// strata), a row per node.
+    /// Print the program's stratification.
     Strata {
         #[command(flatten)]
         target: Target,
     },
-    /// A result set: what each scope reads, writes and offers (R-11c): the
-    /// stack, each module instance and each pack in use. From the lowered
-    /// program and the partition graph; no evaluation.
+    /// Print what each scope reads, writes and offers.
     Effects {
         #[command(flatten)]
         target: Target,
@@ -685,8 +577,7 @@ pub(super) enum DevCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Graphviz DOT: the resource dependency DAG, the partition graph
-    /// (`--strata`), or a binary relation (`--relation PRED` or `PRED/2`).
+    /// Print a graph as Graphviz DOT: dependencies, strata or a relation.
     Graph {
         #[command(flatten)]
         target: Target,
@@ -695,13 +586,12 @@ pub(super) enum DevCommand {
         #[arg(long)]
         relation: Option<String>,
     },
-    /// The evaluation's size and resources.
+    /// Print the evaluation's size and resources.
     Eval {
         #[command(flatten)]
         target: Target,
     },
-    /// A resource's desired document, by its address (`T["N"]`, as plan
-    /// prints it).
+    /// Print a resource's desired document.
     Show {
         #[arg(value_name = "ADDR")]
         addr: String,
