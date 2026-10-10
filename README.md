@@ -137,9 +137,10 @@ reaches(a, b) where link(a, b)
 reaches(a, c) where reaches(a, b), link(b, c)
 ```
 
-**A value the cloud produces later is a value now.** What depends on a
-value the cloud has not assigned yet is in the plan anyway, in the tick
-after that value exists, naming what it waits on:
+**The cloud's own values are planned too.** Whatever needs an endpoint
+or an address the cloud has not produced yet is planned in the tick
+after it exists, and the plan says what it waits on. A reference is the
+resource, so there is no `.id` to copy between blocks:
 
 ```dform
 resource iam.policy "connect-${host}" {
