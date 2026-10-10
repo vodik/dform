@@ -71,18 +71,20 @@ answer. The examples run on a fake cloud built into dform with
 no credentials. To try one, `cargo install --path .`, then `dform -C
 examples/tour plan`.
 
-## Why a rule, not a template
+## Describe what should exist
 
-A resource block should be a rule, a query whose every answer is a
-resource, with attributes other rules can write too. Repetition is then
-a clause, an edge a reference, and a value known later a later tick.
-Terraform makes a block a template and adds `for_each`, `depends_on`,
-`-target` and `default_tags` for what a template cannot say.
+A dform file says what should exist and under which conditions, and
+dform works out how many, in what order, and when. A block is a
+description that holds for every answer to its clause, so repetition is
+a condition, an edge is a reference, and a value known later is a later
+tick. Terraform makes a block a template and adds `for_each`,
+`depends_on`, `-target` and `default_tags` for what a template cannot
+say.
 
-**Every rule sees every resource, and an attribute has many authors.**
-A convention is written once and holds in every module. A `set`
-writes into any resource its clause matches, merged per leaf with what
-the module wrote itself:
+**Every description sees every resource, and an attribute has many
+authors.** A convention is written once and holds in every module. A
+`set` writes into any resource its clause matches, merged per leaf with
+what the module wrote itself:
 
 ```dform
 set r.tags = { team: "shop" } where r in resource
@@ -114,8 +116,9 @@ such a policy is undetermined and the plan names the tick that decides
 it. OPA reads Terraform's plan JSON, where such a value is only marked
 unknown.
 
-**Rules recurse.** Anything shaped like a graph is derived, so
-reachability stays right as spokes come and go:
+**Descriptions build on each other.** Anything shaped like a graph is
+derived, so reachability stays right as spokes come and go, and this is
+where the descriptions are rules in the Datalog sense:
 
 ```dform
 link(h, t) where hub(h), spoke(t)
