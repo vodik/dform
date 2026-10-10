@@ -123,6 +123,25 @@ policy  1 hold
 In Terraform the peerings are a `for_each` over a `setproduct`, and
 nothing refuses one added by hand.
 
+For example, a network and its subnets as one unit, stamped twice:
+
+```dform
+component network {
+  input cidr: inet
+  output vpc: aws.vpc = vpc
+
+  resource aws.vpc vpc { cidr_block = cidr, tags = { component: "network" } }
+  resource aws.subnet "private-${zone}" {
+    vpc
+    cidr_block = inet.subnet(cidr, 8, n)
+    availability_zone = zone
+  } where aws.availability_zone("available", zone, n)
+}
+
+resource network blue { cidr = "10.1.0.0/16" }
+resource network green { cidr = "10.2.0.0/16" }
+```
+
 For example, we may want to keep the networks in a toml list, or an
 environment's inputs in yaml:
 
@@ -156,106 +175,6 @@ tick 1  3 changes
   + aws.vpc shop                   stacks/app.df:8  with v = {cidr: "10.1.0.0/16", name: "shop"}
       cidr_block = "10.1.0.0/16"
 ```
-
-**Policy is part of the language.** The shape every resource should have
-and the changes that may not happen are both rules in the same file as
-the resources, and every plan checks them. For example, we want every
-resource to carry its team's tag; remembering to tag each one by hand is
-error-prone:
-
-```dform
-resource aws.vpc main { cidr_block = "10.0.0.0/16", tags = { component: "network" } }
-
-set r.tags = { team: "shop" } @default where r in resource
-```
-
-```
-$ dform query 'main.tags'
-{ component: "network", team: "shop" }
-```
-
-`@default` yields to a block's own value and `@override` beats it.
-
-For example, a network and its subnets as one unit, stamped twice, and
-the tag rule above still works as expected:
-
-```dform
-component network {
-  input cidr: inet
-  output vpc: aws.vpc = vpc
-
-  resource aws.vpc vpc { cidr_block = cidr, tags = { component: "network" } }
-  resource aws.subnet "private-${zone}" {
-    vpc
-    cidr_block = inet.subnet(cidr, 8, n)
-    availability_zone = zone
-  } where aws.availability_zone("available", zone, n)
-}
-
-resource network blue { cidr = "10.1.0.0/16" }
-resource network green { cidr = "10.2.0.0/16" }
-```
-
-```
-$ dform query 'blue.vpc.tags'
-{ team: "shop", component: "network" }
-```
-
-The plan is a table too. For example, after an apply we want to ask what
-the next plan would change, as rows of `deformation`:
-
-```
-$ dform query 'deformation(kind, resource, _)' --set database.backup_days=14
-Kind      Resource
-"update"  aws.db_instance orders
-```
-
-"No deletes in prod" is `deny "no deletes in prod" where env == "prod",
-deformation("delete", _, _)`, and it refuses the apply. A policy over a
-value known only after apply stays undetermined, and the plan says when
-it will know. With Terraform, policy is a second tool and a second
-language over the plan's JSON, where such a value is only marked
-unknown. For a risky change, we want someone to sign off on exactly what
-will apply:
-
-```dform
-requires_approval(r, "${kind} of ${r} in prod") where env == "prod", deformation(kind, r, _), kind in ["replace", "delete"]
-```
-
-**Lifecycle is a table too.** For example, we never want a prod database
-deleted, and we want a policy to check that every one of them is
-protected:
-
-```dform
-lifecycle(orders, "prevent_destroy") where env == "prod"
-
-deny "every prod database is kept" { db } where {
-  env == "prod"
-  db in aws.db_instance
-  not lifecycle(db, "prevent_destroy")
-}
-```
-
-Terraform's `prevent_destroy` must be a literal, and `moved(aws.vpc,
-"main", network.vpc)` moves a resource to a new address without
-replacing it.
-
-**Secrets are part of the language too.** A secret cannot reach an
-output, a condition or an address by accident; a leak is an error at its
-line:
-
-```dform
-let pw = random.password("db")
-
-output password: string = pw                           # E0304: not declared secret(string)
-deny "short password" where pw.len < 12                # E0301: inspecting it leaks it
-resource aws.iam_user "u-${pw}" { name = "x" }         # E0305: addresses are printed
-```
-
-State holds no secret, because a generated one derives from the
-deployment's master. `dform secrets` imports, lists and rotates them.
-Terraform's `sensitive` keeps a value out of its CLI output and still
-stores it in state.
 
 We often need a value the cloud has not produced yet, sometimes in a
 resource's name; the plan tracks it and plans around it:
@@ -361,6 +280,64 @@ for a domain the account does not host:
 deny "the domain is hosted here" where not ovh.zone("example.com", _, _)
 ```
 
+## Policy
+
+Policy is part of the language: the shape every resource should have and
+the changes that may not happen are both rules in the same file as the
+resources, and every plan checks them. For example, we want every
+resource to carry its team's tag, inside components too; remembering to
+tag each one by hand is error-prone:
+
+```dform
+set r.tags = { team: "shop" } @default where r in resource
+```
+
+```
+$ dform query 'blue.vpc.tags'
+{ team: "shop", component: "network" }
+```
+
+`@default` yields to a block's own value and `@override` beats it.
+
+The plan is a table too. For example, after an apply we want to ask what
+the next plan would change, as rows of `deformation`:
+
+```
+$ dform query 'deformation(kind, resource, _)' --set database.backup_days=14
+Kind      Resource
+"update"  aws.db_instance orders
+```
+
+"No deletes in prod" is `deny "no deletes in prod" where env == "prod",
+deformation("delete", _, _)`, and it refuses the apply. A policy over a
+value known only after apply stays undetermined, and the plan says when
+it will know. With Terraform, policy is a second tool and a second
+language over the plan's JSON, where such a value is only marked
+unknown. For a risky change, we want someone to sign off on exactly what
+will apply:
+
+```dform
+requires_approval(r, "${kind} of ${r} in prod") where env == "prod", deformation(kind, r, _), kind in ["replace", "delete"]
+```
+
+**Lifecycle is a table too.** For example, we never want a prod database
+deleted, and we want a policy to check that every one of them is
+protected:
+
+```dform
+lifecycle(orders, "prevent_destroy") where env == "prod"
+
+deny "every prod database is kept" { db } where {
+  env == "prod"
+  db in aws.db_instance
+  not lifecycle(db, "prevent_destroy")
+}
+```
+
+Terraform's `prevent_destroy` must be a literal, and `moved(aws.vpc,
+"main", network.vpc)` moves a resource to a new address without
+replacing it.
+
 For example, we want staging and prod to differ by one `set`, and we
 want `dform test` to run every policy over every combination of enums
 and bools:
@@ -391,6 +368,23 @@ denied  dform plan app env=prod --set public=true
   - no public database in prod
 test app: 4 combinations, 1 failed
 ```
+
+**Secrets are part of the language too.** A secret cannot reach an
+output, a condition or an address by accident; a leak is an error at its
+line:
+
+```dform
+let pw = random.password("db")
+
+output password: string = pw                           # E0304: not declared secret(string)
+deny "short password" where pw.len < 12                # E0301: inspecting it leaks it
+resource aws.iam_user "u-${pw}" { name = "x" }         # E0305: addresses are printed
+```
+
+State holds no secret, because a generated one derives from the
+deployment's master. `dform secrets` imports, lists and rotates them.
+Terraform's `sensitive` keeps a value out of its CLI output and still
+stores it in state.
 
 We want to know why a resource does not exist as much as why one does.
 `dform why` names the rule that could have made it and the row it
