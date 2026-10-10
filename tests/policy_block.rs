@@ -219,3 +219,32 @@ fn a_failing_deny_on_a_plan_with_no_changes_is_in_the_block() {
     let j: serde_json::Value = serde_json::from_str(&j.stdout).expect(&j.stdout);
     assert_eq!(j["up_to_date"], false, "{j:#}");
 }
+
+/// An input's check that stays a deny after evaluation (`fits` reads a
+/// relation) is listed as any deny is, holding too: counted in the
+/// headline, its line under `-v`. It was listed only where it failed.
+#[test]
+fn an_input_check_that_is_a_deny_is_listed_when_it_holds() {
+    let s = Scratch::project("policy-block-input-check");
+    s.write(
+        "p.df",
+        "input max: int = 3\n\
+         input agents: int = 2 check fits(agents)\n\
+         use fake\n\
+         fits(n) where max(m), n in 0..=m\n\
+         resource net.vpc a { cidr = \"10.0.0.0/16\" }\n",
+    );
+    let r = s.run(&["plan", "p.df", "-v"]).success();
+    assert_eq!(
+        r.summary(),
+        "plan: 1 change (1 create) over 1 tick; policy: 1 hold",
+        "{}",
+        r.stdout
+    );
+    assert_eq!(
+        block(&r.stdout),
+        "policy  1 hold\n  holds  input agents check fits(agents)  p.df:2  1 hold",
+        "{}",
+        r.stdout
+    );
+}

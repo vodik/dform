@@ -4301,7 +4301,7 @@ at the line that writes the value (`agents = 7: input agents is int check agents
 agents != 7`). A value the program computes (an input of
 a used module or a copy, a `set`'s) is checked after evaluation and a wrong type blocks the
 plan; so is a check the value cannot decide alone (one that reads a relation): it is a
-deny, `input agents check fits(agents)`, which the policy block lists where it fails. A required input with no value is an error at its declaration; one
+deny, `input agents check fits(agents)`, which the policy block lists as any deny, holding or failing. A required input with no value is an error at its declaration; one
 a `set` gives, in the deployments none holds in. `check
 R` refines the input (`R` names it by its name; see Refinement types).
 

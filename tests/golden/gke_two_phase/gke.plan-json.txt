@@ -53,6 +53,15 @@ exit: ok
       "mark": "holds",
       "text": "cluster must not be deletable",
       "undetermined": []
+    },
+    {
+      "at": "stacks/gke_two_phase.df:13",
+      "fails": [],
+      "hold": 1,
+      "holds": [],
+      "mark": "holds",
+      "text": "input zones check zones >= 1",
+      "undetermined": []
     }
   ],
   "shadowed": [],

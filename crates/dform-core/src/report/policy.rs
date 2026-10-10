@@ -171,22 +171,12 @@ pub fn lines(
         }
     }
     // An input's check that is a deny after evaluation (what of it the
-    // input's cell does not check, `modules::refinement`) is a policy
-    // written where the input is declared, about the deployment; listed
-    // where it fails (one that holds is the input's own, as a check the
-    // cell holds is).
-    let denied: BTreeSet<&str> = res
-        .facts
-        .iter()
-        .filter(|a| a.pred == "deny")
-        .filter_map(|a| match a.args.first() {
-            Some(Term::Val(Value::Str(m))) => Some(m.as_str()),
-            _ => None,
-        })
-        .collect();
+    // input's cell does not check, `refine::split_input`) is a policy
+    // written where the input is declared, about the deployment: listed
+    // as any deny, holding or failing.
     for i in input_checks(program) {
         let text = crate::inputs::check_message(&i);
-        if !denied.contains(text.as_str()) || out.iter().any(|l| l.text == text) {
+        if out.iter().any(|l| l.text == text) {
             continue;
         }
         out.push(Line {

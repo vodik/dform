@@ -4,7 +4,7 @@
 mod common;
 use common::{Scratch, brief, repo};
 
-const GKE_PLAN: &str = r#"plan: 6 changes (6 create) over 2 ticks; policy: 1 hold · 1 undetermined
+const GKE_PLAN: &str = r#"plan: 6 changes (6 create) over 2 ticks; policy: 2 hold · 1 undetermined
 
 tick 1  3 changes
   + google.compute_subnetwork gke_subnet            stacks/gke_two_phase.df:38
@@ -45,7 +45,7 @@ tick 2  3+ changes
       metadata.namespace = "pngu"
   google.container_node_pool "np-${z}"              stacks/gke_two_phase.df:91  waits on pngu.zones
 
-policy  1 hold · 1 undetermined
+policy  2 hold · 1 undetermined
   undetermined  cluster must be in at least two zones  stacks/gke_two_phase.df:100  1 undetermined
     google.container_cluster pngu                      until zones is known (tick 2)
 "#;
@@ -142,7 +142,7 @@ fn gke_two_phase_applies_in_two_ticks() {
     // Tick 2 names the node pools tick 1's plan could not.
     let tick2 = said[2]["text"].as_str().unwrap();
     assert!(
-        tick2.starts_with("plan: 5 changes (5 create) over 1 tick; policy: 2 hold\n"),
+        tick2.starts_with("plan: 5 changes (5 create) over 1 tick; policy: 3 hold\n"),
         "{tick2}"
     );
     assert_eq!(

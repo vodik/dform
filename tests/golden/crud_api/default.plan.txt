@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-plan: 8 changes (8 create) over 2 ticks; policy: 4 hold · 8 undetermined
+plan: 8 changes (8 create) over 2 ticks; policy: 5 hold · 8 undetermined
 
 tick 1  8 changes
   + google.compute_network vpc       stacks/crud_api.df:75
@@ -73,7 +73,7 @@ tick 2  ? changes
     k8s.network_policy green.allow_http
   k8s.service api                    stacks/crud_api.df:190  if serving(_)
 
-policy  4 hold · 8 undetermined
+policy  5 hold · 8 undetermined
   undetermined  a rollout runs a schema the migration has not reached  stacks/crud_api.df:263
     k8s.job migrate-v42                            until status.succeeded is known (tick 2)
   undetermined  container memory limit above 2Gi   stacks/crud_api.df:303  1 undetermined

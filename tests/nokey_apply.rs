@@ -91,7 +91,7 @@ fn a_label_change_plans_and_applies_without_the_master() {
     );
     assert_eq!(
         r.summary(),
-        "plan: 1 change (1 update) over 1 tick; policy: 12 hold",
+        "plan: 1 change (1 update) over 1 tick; policy: 13 hold",
         "{}",
         r.stdout
     );

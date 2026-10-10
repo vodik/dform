@@ -39,14 +39,14 @@ fn gke_plan_has_the_summary_ticks_and_later() {
     let first = r.stdout.lines().next().unwrap();
     assert_eq!(
         first,
-        "plan: 6 changes (6 create) over 2 ticks; policy: 1 hold · 1 undetermined"
+        "plan: 6 changes (6 create) over 2 ticks; policy: 2 hold · 1 undetermined"
     );
     for want in [
         "\ntick 1  3 changes\n  + google.compute_subnetwork gke_subnet  ",
         "\ntick 2  3+ changes\n  waits on  pngu.ca_certificate\n            pngu.endpoint\n            pngu.zones\n  + k8s.deployment api  ",
         // The rule tick 1 decides is tick 2's (R-156).
         "\n  google.container_node_pool \"np-${z}\"  ",
-        "  waits on pngu.zones\n\npolicy  1 hold · 1 undetermined\n",
+        "  waits on pngu.zones\n\npolicy  2 hold · 1 undetermined\n",
         "  undetermined  cluster must be in at least two zones  ",
         "  until zones is known (tick 2)\n",
     ] {
