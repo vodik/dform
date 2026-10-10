@@ -116,14 +116,28 @@ Kind      Resource
 **What may change is a rule too.** "No deletes in prod" is `deny "no
 deletes in prod" where env == "prod", deformation("delete", _, _)`, and
 it is checked by every plan and refuses the apply. A risky change waits
-instead for a signature over exactly what will apply, and lifecycle is
-facts the same rules condition: `lifecycle(k3s.server,
-"prevent_destroy") where env == "prod"`, with a provider able to seed a
-type's default. A policy over a value known only after apply says so:
-the logic has three values, nothing is assumed false for being unknown,
-so such a policy is undetermined and the plan says when it will be
-known. With Terraform, policy is a second tool and a second language
-over the plan's JSON, where such a value is only marked unknown.
+instead for a signature over exactly what will apply. A policy over a
+value known only after apply says so: the logic has three values,
+nothing is assumed false for being unknown, so such a policy is
+undetermined and the plan says when it will be known. With Terraform,
+policy is a second tool and a second language over the plan's JSON,
+where such a value is only marked unknown.
+
+**Lifecycle is a table too.** One row per resource and word:
+`prevent_destroy`, `retain`, `create_first`, `bootstrap`. The program
+writes rows, a provider seeds defaults for its own types, and the plan
+reads them, so lifecycle is decided by a rule like anything else, and a
+policy can read it back:
+
+```dform
+lifecycle(k3s.server, "prevent_destroy") where env == "prod"
+
+deny "every prod database is kept" { db } where {
+  env == "prod"
+  db in db.postgres
+  not lifecycle(db, "prevent_destroy")
+}
+```
 
 **Secrets are part of the language too.** A secret cannot reach an
 output, an address or a count by accident. The compiler follows every
