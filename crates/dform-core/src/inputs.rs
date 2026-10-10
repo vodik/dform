@@ -12,8 +12,9 @@
 //! type is one too (from the command line, before evaluation) or a
 //! violation (a value a rule computed).
 
-use crate::ast::{Atom, InputDecl, Program, Span, Stmt, Term, TypeExpr};
+use crate::ast::{Atom, InputDecl, Lit, Program, Span, Stmt, Term, TypeExpr};
 use crate::diag::{Diagnostic, Diagnostics};
+use crate::lattice::Truth;
 use crate::spell;
 use crate::value::Value;
 use anyhow::Result;
@@ -609,32 +610,149 @@ fn set_path(v: &mut Value, rest: &str, x: Value) {
     *v = x;
 }
 
-/// A value `--set` gives input `name` (at `k`, the flag's key: an
-/// object's when it gives the object whole) that the input's own check
-/// does not hold of: refused before evaluation, as a value outside its
-/// type is, `--set agents=4: input agents is int check 0 <= agents,
-/// agents <= 3`. A check the engine reads as the input's
-/// cell's (`crate::refine::split_input`); the rest is its deny's.
-fn fails_check(k: &str, name: &str, v: &Value, decl: &InputDecl) -> Result<()> {
-    let (checks, _) = crate::refine::split_input(decl);
-    if !checks
-        .iter()
-        .any(|c| c.check(v) == crate::lattice::Truth::False)
-    {
-        return Ok(());
-    }
+/// The check of input `decl` as the program writes it, its name read
+/// as written: `0 <= agents, agents <= 3` (spelled back from its parts).
+pub fn check_text(decl: &InputDecl) -> String {
     let named = BTreeMap::from([(decl.name.clone(), Term::Var(decl.name.clone()))]);
-    let check = decl
-        .refinement
+    decl.refinement
         .iter()
         .map(|l| spell::written(&l.replace_names(&named)))
         .collect::<Vec<_>>()
-        .join(", ");
-    let (v, ty) = (spell::bare(v), type_text(&decl.ty));
-    match k == name {
-        true => anyhow::bail!("--set {k}={v}: input {k} is {ty} check {check}"),
+        .join(", ")
+}
+
+/// The deny an input's check is after evaluation, as the policy block
+/// and the refusal name it: `input agents check agents < 4, agents !=
+/// 7`, the input by its name in the scope that declares it.
+pub fn check_message(decl: &InputDecl) -> String {
+    format!("input {} check {}", decl.name, check_text(decl))
+}
+
+/// What input `decl`'s whole check says of a value given to it (`--set`,
+/// an `--input-file`, a literal the program writes): the part the engine
+/// reads as the input's cell's constraints (`crate::refine::split_input`)
+/// and the rest, any condition over the value alone, evaluated with the
+/// input's name bound to it. `Unknown` when the rest reads anything
+/// besides the value (a relation of the program, a function the
+/// evaluator does not have): that is the deny's to decide, after
+/// evaluation (`modules::refinement`).
+pub fn check_given(decl: &InputDecl, v: &Value) -> Truth {
+    let (checks, rest) = crate::refine::split_input(decl);
+    if checks.iter().any(|c| c.check(v) == Truth::False) {
+        return Truth::False;
+    }
+    if rest.is_empty() {
+        return Truth::True;
+    }
+    let x = Term::Var("__Input".into());
+    let named = BTreeMap::from([(decl.name.clone(), x.clone())]);
+    let mut body = vec![Lit::Eq(x, Term::Val(v.clone()))];
+    body.extend(rest.iter().map(|l| l.replace_names(&named)));
+    let alone = body.iter().all(|l| match l {
+        Lit::Pos(a) | Lit::Not(a) => {
+            a.pred == "member" || a.pred == "enumerate" || crate::ir::ops::is_builtin_pred(&a.pred)
+        }
+        _ => true,
+    });
+    if !alone {
+        return Truth::Unknown;
+    }
+    match crate::engine::query(&body, &BTreeSet::new()) {
+        Ok(answers) if answers.is_empty() => Truth::False,
+        Ok(_) => Truth::True,
+        Err(_) => Truth::Unknown,
+    }
+}
+
+/// Is `t` a secret's type: its value is never printed.
+fn is_secret(t: &TypeExpr) -> bool {
+    matches!(t, TypeExpr::Apply(n, _) if n == "secret")
+}
+
+/// A value `--set` gives input `name` (at `k`, the flag's key: an
+/// object's when it gives the object whole) that the input's own check
+/// does not hold of ([`check_given`]): refused before evaluation, as a
+/// value outside its type is, `--set agents=4: input agents is int check
+/// 0 <= agents, agents <= 3`; a secret's value is not said.
+fn fails_check(k: &str, name: &str, v: &Value, decl: &InputDecl) -> Result<()> {
+    if check_given(decl, v) != Truth::False {
+        return Ok(());
+    }
+    let (check, ty) = (check_text(decl), type_text(&decl.ty));
+    let v = match is_secret(&decl.ty) {
+        true => String::new(),
+        false => spell::bare(v),
+    };
+    match (k == name, v.is_empty()) {
+        (true, false) => anyhow::bail!("--set {k}={v}: input {k} is {ty} check {check}"),
+        (true, true) => anyhow::bail!("--set {k}: input {k} is {ty} check {check}"),
         // A field of an object given whole, as its type is checked.
-        false => anyhow::bail!("--set {k}: {name} = {v} is not {ty} check {check}"),
+        (false, false) => anyhow::bail!("--set {k}: {name} = {v} is not {ty} check {check}"),
+        (false, true) => anyhow::bail!("--set {k}: {name} is not {ty} check {check}"),
+    }
+}
+
+/// Every value the program writes for an input as a literal (a `set`, a
+/// `use` block's or a copy's, the declared default; an `arg(input, ..)`
+/// whose value is ground) that the input's check does not hold of
+/// ([`check_given`]): an error at the write before evaluation, the check
+/// labelled where it is declared, `agents = 4: input agents is int check
+/// 0 <= agents, agents <= 3`. A value an object is given whole is
+/// checked leaf by leaf.
+pub fn check_literals(program: &Program, declared: &[Declared]) -> Result<()> {
+    let mut diags = Vec::new();
+    for s in &program.statements {
+        let head = match s {
+            Stmt::Fact(a) => a,
+            Stmt::Rule(r) => &r.head,
+            _ => continue,
+        };
+        let [ty, scope, path, value, _] = head.args.as_slice() else {
+            continue;
+        };
+        if head.pred != "arg" || ty.ground() != Some(Value::Str(crate::modules::INPUT.into())) {
+            continue;
+        }
+        let (Some(Value::Str(scope)), Some(Value::Str(path)), Some(value)) =
+            (scope.ground(), path.ground(), value.ground())
+        else {
+            continue;
+        };
+        for d in declared.iter().filter(|d| d.scope == scope) {
+            let x = match d.decl.name.strip_prefix(path.as_str()) {
+                Some("") => Some(&value),
+                Some(rest) => rest.strip_prefix('.').and_then(|r| at_path(&value, r)),
+                None => None,
+            };
+            diags.extend(x.and_then(|x| d.refuses(x, head.span)));
+        }
+    }
+    if diags.is_empty() {
+        Ok(())
+    } else {
+        Err(Diagnostics(diags).into())
+    }
+}
+
+impl Declared {
+    /// The error at `at`, a literal that gives this input `x`, when its
+    /// check does not hold of `x` ([`check_given`]): `agents = 4: input
+    /// agents is int check 0 <= agents, agents <= 3`, the check labelled
+    /// where it is declared. A value outside the input's type is the type
+    /// check's.
+    fn refuses(&self, x: &Value, at: Span) -> Option<Diagnostic> {
+        if !has_type(&self.decl.ty, x) || check_given(&self.decl, x) != Truth::False {
+            return None;
+        }
+        let (ty, who, check) = (type_text(&self.decl.ty), self.who(), check_text(&self.decl));
+        let said = match is_secret(&self.decl.ty) {
+            true => self.decl.name.clone(),
+            false => format!("{} = {}", self.decl.name, spell::bare(x)),
+        };
+        Some(
+            Diagnostic::error(at, format!("{said}: {who} is {ty} check {check}"))
+                .with_label(self.decl.span, format!("checked here: {check}")),
+        )
     }
 }
 
@@ -792,6 +910,11 @@ pub fn file_stmts(program: &Program, declared: &[Declared]) -> Result<Vec<Stmt>>
                 None => None,
             };
             if let Some(v) = value {
+                // A value its input's check refuses: at the file's line.
+                if let Some(e) = v.ground().and_then(|x| d.refuses(&x, span)) {
+                    diags.push(e);
+                    continue;
+                }
                 given.push(d.decl.name.clone());
                 out.push(Stmt::Fact(Atom {
                     pred: "arg".into(),

@@ -1795,6 +1795,7 @@ fn check(
     externs.mark_secret(&crate::secrets::secret_memos(l, schema, secret_outputs));
     externs.mark_secret(&crate::secrets::secret_reads(l, schema, secret_outputs));
     crate::refine::check(&l.program, schema)?;
+    crate::inputs::check_literals(&l.program, &l.inputs)?;
     crate::types::check(&l.program, schema)?;
     // Column types again, the attributes read into a column typed by the
     // schema (R-34).

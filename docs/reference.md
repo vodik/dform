@@ -4289,9 +4289,15 @@ another module's alias is read through its name, `network.subnets`
 a `string` takes the text) and checked before evaluation: `--set
 replicas=two` is an error naming the input and its type, and so is `--set` of an input
 the program does not declare, and a value its own check does not hold of (`--set
-agents=4: input agents is int check 0 <= agents, agents <= 3`). A value the program computes (an input of
+agents=4: input agents is int check 0 <= agents, agents <= 3`). Every given value takes that one path:
+`--set`, an `--input-file`'s fact and a literal the program writes (a `set`, a `use` block's
+or a copy's, the default) are checked before evaluation against the input's whole check
+(a range, a bound, `!=`, any condition over the value alone), an error at the flag or
+at the line that writes the value (`agents = 7: input agents is int check agents < 4,
+agents != 7`). A value the program computes (an input of
 a used module or a copy, a `set`'s) is checked after evaluation and a wrong type blocks the
-plan. A required input with no value is an error at its declaration; one
+plan; so is a check the value cannot decide alone (one that reads a relation): it is a
+deny, `input agents check fits(agents)`, which the policy block lists where it fails. A required input with no value is an error at its declaration; one
 a `set` gives, in the deployments none holds in. `check
 R` refines the input (`R` names it by its name; see Refinement types).
 

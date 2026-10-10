@@ -168,7 +168,7 @@ fn an_input_is_checked_against_a_range() {
     let r = plan(&["--set", "storage=600Gi"]).failure();
     assert!(
         r.stderr
-            .contains("input storage fails its refinement: storage in 1Gi..=500Gi"),
+            .contains("--set storage=600Gi: input storage is bytes check storage in 1Gi..=500Gi"),
         "{}",
         r.stderr
     );

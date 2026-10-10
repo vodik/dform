@@ -143,6 +143,7 @@ impl<'a> Space<'a> {
             deployment::with_schema_externs(&crate::transform::lower(program)?, backend.schema());
         crate::secrets::check(&lowered, backend.schema(), &Default::default())?;
         crate::refine::check(&lowered.program, backend.schema())?;
+        crate::inputs::check_literals(&lowered.program, &lowered.inputs)?;
         crate::infer::infer(
             &lowered.program,
             &lowered.extern_fns,

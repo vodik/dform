@@ -170,6 +170,37 @@ pub fn lines(
             });
         }
     }
+    // An input's check that is a deny after evaluation (what of it the
+    // input's cell does not check, `modules::refinement`) is a policy
+    // written where the input is declared, about the deployment; listed
+    // where it fails (one that holds is the input's own, as a check the
+    // cell holds is).
+    let denied: BTreeSet<&str> = res
+        .facts
+        .iter()
+        .filter(|a| a.pred == "deny")
+        .filter_map(|a| match a.args.first() {
+            Some(Term::Val(Value::Str(m))) => Some(m.as_str()),
+            _ => None,
+        })
+        .collect();
+    for i in input_checks(program) {
+        let text = crate::inputs::check_message(&i);
+        if !denied.contains(text.as_str()) || out.iter().any(|l| l.text == text) {
+            continue;
+        }
+        out.push(Line {
+            text,
+            at: crate::diag::location(i.span)
+                .map(|(f, l, _)| format!("{f}:{l}"))
+                .unwrap_or_default(),
+            holds: Vec::new(),
+            hold: 0,
+            fails: Vec::new(),
+            undetermined: Vec::new(),
+        });
+        ranges.push(BTreeSet::new());
+    }
     // A check a value waits on is a policy of its own, written where its
     // type's check is.
     let checks = check_sites(program, res);
@@ -363,6 +394,21 @@ fn written(program: &Program) -> Vec<(&RuleStmt, Option<&str>)> {
             }
             _ => None,
         })
+        .collect()
+}
+
+/// Each input the program declares whose check is a deny after
+/// evaluation, leaf by leaf: the stack's own and those of each module a
+/// `use` reaches and each component a copy does.
+fn input_checks(program: &Program) -> Vec<crate::ast::InputDecl> {
+    crate::modules::reached(program)
+        .into_iter()
+        .filter_map(|s| match s {
+            Stmt::Input(i) => Some(crate::inputs::leaves(i)),
+            _ => None,
+        })
+        .flatten()
+        .filter(|l| !crate::refine::split_input(l).1.is_empty())
         .collect()
 }
 

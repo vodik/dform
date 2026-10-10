@@ -69,8 +69,8 @@ fn a_literal_that_violates_a_refinement_is_a_compile_error() {
     .failure();
     assert!(
         r.stderr
-            .contains("p.df:6:1: 40 violates the refinement range(1, 35) of input .db.backup_days")
-            && r.stderr.contains("refined here: range(1, 35)")
+            .contains("p.df:6:1: db.backup_days = 40: input db.backup_days is int check 1 <= db.backup_days, db.backup_days <= 35")
+            && r.stderr.contains("checked here: 1 <= db.backup_days, db.backup_days <= 35")
             && r.stderr.contains(" 3 │   backup_days: int = 3 check"),
         "{}",
         r.stderr

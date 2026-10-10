@@ -36,7 +36,6 @@ use crate::ast::{
 };
 use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::inputs::Declared;
-use crate::spell;
 use crate::value::Value;
 use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
@@ -1536,29 +1535,19 @@ pub fn refinement(i: &InputDecl, scope: &str) -> Vec<Stmt> {
     let names = |v: &Term| BTreeMap::from([(i.name.clone(), v.clone())]);
     body.extend(rest.iter().map(|l| l.replace_names(&names(&v))));
     let ok = atom(&refine_pred(&i.name), vec![v.clone()], i.span);
-    let named = Term::Var(i.name.clone());
-    let text = rest
-        .iter()
-        .map(|l| spell::written(&l.replace_names(&names(&named))))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let who = if scope.is_empty() {
-        format!("input {}", i.name)
-    } else {
-        format!("input {} of {scope}", i.name)
-    };
-    // A secret input's value is not printed.
-    let ctx = if matches!(&i.ty, TypeExpr::Apply(n, _) if n == "secret") {
-        BTreeMap::new()
-    } else {
-        BTreeMap::from([("value".to_string(), v.clone())])
-    };
+    // The check as the program writes it, one policy wherever the scope
+    // that declares it is copied; the copy is the deny's context, and a
+    // secret input's value is not said.
+    let mut ctx = BTreeMap::new();
+    if !matches!(&i.ty, TypeExpr::Apply(n, _) if n == "secret") {
+        ctx.insert("value".to_string(), v.clone());
+    }
+    if !scope.is_empty() {
+        ctx.insert("of".to_string(), str_term(scope));
+    }
     let deny = atom(
         "deny",
-        vec![
-            str_term(&format!("{who} fails its refinement: {text}")),
-            Term::Obj(ctx),
-        ],
+        vec![str_term(&crate::inputs::check_message(i)), Term::Obj(ctx)],
         i.span,
     );
     vec![

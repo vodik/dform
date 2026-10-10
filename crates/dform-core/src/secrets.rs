@@ -534,11 +534,19 @@ fn rules(program: &Program) -> Vec<(Option<&Atom>, &[Lit], Span)> {
         .collect()
 }
 
-fn is_refinement(head: Option<&Atom>) -> bool {
+/// An input check's rules (`modules::refinement`): its helper
+/// `__refine_k`, and the deny that fires where the helper does not hold.
+fn is_refinement(head: Option<&Atom>, body: &[Lit]) -> bool {
+    let refine = |a: &Atom| {
+        a.pred
+            .rsplit("::")
+            .next()
+            .unwrap_or(&a.pred)
+            .starts_with("__refine_")
+    };
     head.is_some_and(|h| {
-        h.pred.rsplit("::").next().unwrap_or(&h.pred).starts_with("__refine_")
-            || (h.pred == "deny"
-                && matches!(h.args.first(), Some(Term::Val(Value::Str(m))) if m.contains("fails its refinement")))
+        refine(h)
+            || (h.pred == "deny" && body.iter().any(|l| matches!(l, Lit::Not(a) if refine(a))))
     })
 }
 
@@ -910,7 +918,7 @@ impl<'a> Checker<'a> {
             body,
             span,
             vars: self.pass.body_vars(body),
-            refinement: is_refinement(head),
+            refinement: is_refinement(head, body),
         };
         self.coeffects(&r);
         if !r.refinement {

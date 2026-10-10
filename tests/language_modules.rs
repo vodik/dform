@@ -179,24 +179,32 @@ use fake
     );
 }
 
+/// A copy's input's check: a literal the copy is given is refused where
+/// it is written; a value the program computes is a deny of the copy.
 #[test]
 fn a_refinement_on_a_component_input_is_a_deny() {
-    let r = plan(
-        r#"
+    let component = r#"
 component m {
   input n: int check n <= 5
   resource net.vpc vpc {
     size = n_
   } where n(n_)
 }
-resource m a { n = 9 }
 use fake
-"#,
-    )
+"#;
+    let r = plan(&format!("{component}resource m a {{ n = 9 }}\n")).failure();
+    assert!(
+        r.stderr.contains("n = 9: input n of a is int check n <= 5"),
+        "{}",
+        r.stderr
+    );
+    let r = plan(&format!(
+        "{component}resource m a {{ n = k }} where k = 4 + 5\n"
+    ))
     .failure();
     assert!(
         r.stderr
-            .contains("input n of a fails its refinement: n <= 5  value = 9"),
+            .contains("- input n check n <= 5  of = \"a\", value = 9"),
         "{}",
         r.stderr
     );

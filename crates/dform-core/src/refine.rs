@@ -806,7 +806,8 @@ pub fn stated(program: &Program, schema: &Schema) -> Result<Vec<Stated>> {
 }
 
 /// The compile-time checks: a literal contribution that violates a
-/// checkable refinement (both spans), and E0306, a refinement on a path the
+/// checkable refinement (both spans; an input's is
+/// `inputs::check_literals`), and E0306, a refinement on a path the
 /// schema marks `sensitive` whose provider does not check refinements.
 pub fn check(program: &Program, schema: &Schema) -> Result<()> {
     let refs = stated(program, schema)?;
@@ -863,6 +864,11 @@ pub fn check(program: &Program, schema: &Schema) -> Result<()> {
         ) else {
             continue;
         };
+        // An input's literal is checked against its whole check
+        // (`inputs::check_literals`), one path with `--set`'s.
+        if typ == crate::modules::INPUT {
+            continue;
+        }
         let addr = head.args[1].ground();
         for r in &refs {
             // A variable address meets only the per-type refinements.
