@@ -100,11 +100,9 @@ $ dform query 'net.vpc["blue.vpc"].tags'
 The AWS provider's `default_tags` does this for tags, across the
 resources that one provider handles.
 
-**Policy adds as well as forbids, in the same file.** A rule about a
-change sits beside the resources it governs. The plan is a table
-of `deformation` rows the same rules read, so "no deletes in prod" is
-`deny "no deletes in prod" where env == "prod", deformation("delete", _,
-_)` over rows like these:
+**The plan is a table too.** Every change the plan would make is a
+`deformation` row, its kind and its resource, and the program reads it
+like any other table:
 
 ```
 $ dform query 'deformation(kind, resource, _)' --set database.backup_days=7
@@ -112,11 +110,14 @@ Kind      Resource
 "update"  db.postgres orders
 ```
 
-A policy over a value known only after apply says so. The logic
-has three values, and nothing is assumed false for being unknown, so
-such a policy is undetermined and the plan names the tick that decides
-it. OPA reads Terraform's plan JSON, where such a value is only marked
-unknown.
+**Policy adds as well as forbids, in the same file.** A rule about a
+change sits beside the resources it governs, and reads those rows: "no
+deletes in prod" is `deny "no deletes in prod" where env == "prod",
+deformation("delete", _, _)`. A policy over a value known only after
+apply says so. The logic has three values, and nothing is assumed false
+for being unknown, so such a policy is undetermined and the plan names
+the tick that decides it. OPA reads Terraform's plan JSON, where such a
+value is only marked unknown.
 
 **Descriptions build on each other.** Anything shaped like a graph is
 derived, so reachability stays right as spokes come and go, and this is
