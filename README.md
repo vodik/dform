@@ -176,8 +176,8 @@ $ dform query 'main.tags'
 
 `@default` yields to a block's own value and `@override` beats it.
 
-For example, a network and its subnets as one unit, stamped twice; the
-tag rule above reaches inside it:
+For example, a network and its subnets as one unit, stamped twice, and
+the tag rule above still works as expected:
 
 ```dform
 component network {
