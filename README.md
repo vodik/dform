@@ -13,9 +13,9 @@ row pointing at others. What we want is a set of tables too, and a plan
 is the difference between the two. A policy is a query that must return
 no rows, and "why is this here" asks which rows produced it.
 
-Every plan is the least model of the program over the world as it is,
-and every line of it carries its proof. Apply makes the world match, and
-what it learns on the way, an endpoint, a kubeconfig, it plans with.
+dform plans the least model of the program over the world as it is, and
+proves every line. Apply makes the world match, learns an endpoint or a
+kubeconfig on the way, and plans with it.
 
 A complete program:
 
