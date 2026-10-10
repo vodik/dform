@@ -484,7 +484,7 @@ fn dform_df_set_from_matches_the_blocks() {
             .into_iter()
             .collect();
         let (r, violations) = eval_tables(&program, &extra).unwrap();
-        let docs: Vec<String> = crate::ir::compile_resources(
+        let docs: Vec<String> = crate::resources::compile_resources(
             r.facts.iter().cloned(),
             &crate::schema::Schema::default(),
         )
@@ -693,7 +693,7 @@ fn optional_computed_mints_a_default_null() {
     // The user's value beat the @default null without a conflict or a
     // shadowed warning (the null is alone on its shelf).
     assert!(r.warnings.is_empty(), "{:?}", r.warnings);
-    let docs = crate::ir::compile_resources(
+    let docs = crate::resources::compile_resources(
         r.facts.iter().cloned(),
         &crate::schema::Schema::from_facts(&schema).unwrap(),
     )
@@ -860,7 +860,7 @@ fn run_file(
     let mut extra = extra.to_vec();
     extra.extend(schema.facts.clone());
     let (r, violations) = eval_tables(&program, &extra).unwrap();
-    let docs = crate::ir::compile_resources(r.facts.iter().cloned(), schema)
+    let docs = crate::resources::compile_resources(r.facts.iter().cloned(), schema)
         .unwrap()
         .into_iter()
         .map(|d| ((d.addr.typ, d.addr.name), d.attrs))
@@ -1053,7 +1053,7 @@ fn a_resource_rule_reading_a_stuck_helper_may_derive() {
             .any(|m| m.contains(r#"db.postgres["b"]"#) && m.contains("\"s\"")),
         "{may:#?}"
     );
-    let docs = crate::ir::compile_resources(r.facts.iter().cloned(), &crate::schema::fake())
+    let docs = crate::resources::compile_resources(r.facts.iter().cloned(), &crate::schema::fake())
         .unwrap()
         .into_iter()
         .map(|d| ((d.addr.typ, d.addr.name), d.attrs))

@@ -1,5 +1,5 @@
 use crate::address::Address;
-use crate::ir::Adopt;
+use crate::resources::Adopt;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

@@ -8,9 +8,9 @@
 //! (Kubernetes's `apiVersion` and `kind`) is its caller's.
 
 use crate::address::{self, Address};
-use crate::ir::Resource;
 use crate::query::Redactor;
 use crate::report;
+use crate::resources::Resource;
 use crate::schema::Schema;
 use crate::value::Value;
 use anyhow::Result;

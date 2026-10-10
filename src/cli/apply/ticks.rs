@@ -15,7 +15,9 @@ use crate::provider::ActionKind;
 use crate::report::waits_on;
 use crate::said::{Said, Teller};
 use crate::value::Value;
-use crate::{address, controller, engine, executor, ir, query, report, state, store, stuck, zset};
+use crate::{
+    address, controller, engine, executor, query, report, resources, state, store, stuck, zset,
+};
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -176,7 +178,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
     }
 
     /// Chaos names only resources of this stack.
-    pub(super) fn check_chaos(&self, resources: &[ir::Resource]) -> Result<()> {
+    pub(super) fn check_chaos(&self, resources: &[resources::Resource]) -> Result<()> {
         for addr in self.cx.chaos.addresses() {
             if !resources.iter().any(|r| &r.addr == addr) && self.st.get(addr).is_none() {
                 bail!(
@@ -709,7 +711,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
             return Ok(());
         }
         let (tick, backend) = (self.tick, self.backend());
-        let docs = ir::compile_resources(res.facts.iter().cloned(), backend.schema())?;
+        let docs = resources::compile_resources(res.facts.iter().cloned(), backend.schema())?;
         let sections = deployment::sections(res, &docs, backend.schema());
         let plan = crate::provider::Plan {
             actions: Vec::new(),
@@ -1073,7 +1075,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
     fn call(
         &mut self,
         t: &mut Tick,
-        adopts: &[ir::Adopt],
+        adopts: &[resources::Adopt],
         lifecycle: &zset::Lifecycle,
     ) -> Result<(executor::Seen, BTreeSet<address::Address>, bool)> {
         let tick = self.tick;
@@ -1146,7 +1148,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
     fn run_calls(
         &mut self,
         p: &Planned,
-        adopts: &[ir::Adopt],
+        adopts: &[resources::Adopt],
         lifecycle: &zset::Lifecycle,
     ) -> Result<executor::Seen> {
         let tick = self.tick;
@@ -1592,7 +1594,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
             let (next, _) =
                 self.evaluator
                     .evaluate_with(&self.st, &BTreeSet::new(), &[], Some(tick))?;
-            let docs = ir::compile_resources(next.facts.iter().cloned(), backend.schema())?;
+            let docs = resources::compile_resources(next.facts.iter().cloned(), backend.schema())?;
             let now = deployment::sections(&next, &docs, backend.schema());
             if waiting_on(&now, &self.st, externs) != on {
                 break true;
@@ -1722,8 +1724,8 @@ impl<'a, 'h> Ticks<'a, 'h> {
             .into());
         }
         Ok(Wanted {
-            resources: ir::compile_resources(next.facts.iter().cloned(), backend.schema())?,
-            adopts: ir::compile_adopts(next.facts.iter())?,
+            resources: resources::compile_resources(next.facts.iter().cloned(), backend.schema())?,
+            adopts: resources::compile_adopts(next.facts.iter())?,
             lifecycle: zset::Lifecycle::from_facts(&next.facts, backend.schema())?,
             res: next,
             violations,
@@ -1804,7 +1806,7 @@ fn log_retries(
 /// delete of what it references.
 fn needing_master(
     plan: &crate::provider::Plan,
-    desired: &[ir::Resource],
+    desired: &[resources::Resource],
     st: &state::State,
     backend: &crate::plugin::Providers,
 ) -> std::collections::BTreeMap<address::Address, Vec<String>> {

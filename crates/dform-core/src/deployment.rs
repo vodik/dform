@@ -21,11 +21,11 @@ use crate::diag::{Diagnostic, Diagnostics, Fix};
 use crate::engine::{self, EvalResult};
 use crate::externs::{self, Externs};
 use crate::inputs::{self, Declared};
-use crate::ir;
 use crate::plugin::providers::ProviderWait;
 use crate::plugin::{self, Launch, Providers};
 use crate::project::{self, Manifest};
 use crate::query::Redactor;
+use crate::resources;
 use crate::schema::{self, Schema};
 use crate::spell;
 use crate::stack::{self, Instance};
@@ -519,16 +519,16 @@ impl<'a> Options<'a> {
 /// An evaluation's resources, as compiled from its facts.
 #[derive(Debug, Clone)]
 pub struct Compiled {
-    pub resources: Vec<ir::Resource>,
-    pub adopts: Vec<ir::Adopt>,
+    pub resources: Vec<resources::Resource>,
+    pub adopts: Vec<resources::Adopt>,
     pub lifecycle: zset::Lifecycle,
 }
 
 impl Compiled {
     pub fn of(res: &EvalResult, schema: &Schema) -> Result<Compiled> {
         Ok(Compiled {
-            resources: ir::compile_resources(res.facts.iter().cloned(), schema)?,
-            adopts: ir::compile_adopts(res.facts.iter())?,
+            resources: resources::compile_resources(res.facts.iter().cloned(), schema)?,
+            adopts: resources::compile_adopts(res.facts.iter())?,
             lifecycle: zset::Lifecycle::from_facts(&res.facts, schema)?,
         })
     }
@@ -539,7 +539,7 @@ pub struct Planned {
     /// The policy pass: the program with the plan's deformations as facts.
     pub res: EvalResult,
     /// The documents the plan was taken from.
-    pub resources: Vec<ir::Resource>,
+    pub resources: Vec<resources::Resource>,
     pub plan: provider::Plan,
     pub sections: stuck::Sections,
     /// Denies over the plan: what the policy pass derives beyond the plan's
@@ -716,7 +716,7 @@ impl Evaluator {
     fn wait_on_providers(
         &self,
         plan: &mut provider::Plan,
-        resources: &[ir::Resource],
+        resources: &[resources::Resource],
         sections: &mut stuck::Sections,
         st: &State,
         unset: &BTreeMap<String, BTreeSet<String>>,
@@ -854,7 +854,7 @@ impl Evaluator {
             .iter()
             .filter(|a| typ(a).is_some_and(|t| crate::crd::TYPES.contains(&t.as_str())))
             .cloned();
-        let made = ir::compile_resources(facts, self.schema())?;
+        let made = resources::compile_resources(facts, self.schema())?;
         let types: BTreeSet<String> = crds_made(&made)
             .into_iter()
             .filter(|(crd, _)| st.get(crd).is_some())
@@ -993,8 +993,8 @@ impl Evaluator {
         &self,
         res: EvalResult,
         violations: &[String],
-        mut resources: Vec<ir::Resource>,
-        adopts: &[ir::Adopt],
+        mut resources: Vec<resources::Resource>,
+        adopts: &[resources::Adopt],
         lifecycle: &zset::Lifecycle,
         st: &State,
     ) -> Result<Planned> {
@@ -1004,7 +1004,7 @@ impl Evaluator {
         // as on what it references: a delete of the server a kubeconfig
         // is read from waits for the deletes of the cluster's objects.
         let reads = settings_reads(&res);
-        let configured_from = |docs: &mut [ir::Resource]| {
+        let configured_from = |docs: &mut [resources::Resource]| {
             for r in docs {
                 for (p, from) in &reads {
                     if backend.serves(p, &r.addr.typ) {
@@ -1037,7 +1037,7 @@ impl Evaluator {
             bail!(self.no_crd(&r.addr));
         }
         unrevealable(backend, &res).map_err(|e| with_site(e, &res))?;
-        let asked = |res: &EvalResult, docs: &[ir::Resource]| asked(backend, res, docs);
+        let asked = |res: &EvalResult, docs: &[resources::Resource]| asked(backend, res, docs);
         // The run's secrets that are not derived: a leaf holding one has no
         // derivation digest (`secrets::standin`, R-164).
         crate::secrets::standin::set_sources(
@@ -1051,7 +1051,7 @@ impl Evaluator {
             (res, violations.to_vec(), resources)
         } else {
             let (again, violations) = self.evaluate_with(st, &replaced, &[], None)?;
-            let mut docs = ir::compile_resources(again.facts.iter().cloned(), schema)?;
+            let mut docs = resources::compile_resources(again.facts.iter().cloned(), schema)?;
             configured_from(&mut docs);
             plan =
                 backend.plan_retracting(&asked(&again, &docs), adopts, lifecycle, st, &replaced)?;
@@ -1173,10 +1173,10 @@ impl Evaluator {
 /// rule that reads the deformation would make the plan depend on itself.
 fn unchanged_by_policy(
     res: &EvalResult,
-    wanted: &[ir::Resource],
+    wanted: &[resources::Resource],
     schema: &crate::schema::Schema,
 ) -> Result<()> {
-    let again = ir::compile_resources(res.facts.iter().cloned(), schema)?;
+    let again = resources::compile_resources(res.facts.iter().cloned(), schema)?;
     if again.len() != wanted.len()
         || again
             .iter()
@@ -1240,7 +1240,7 @@ fn crd_of<'a>(crds: &'a [(Address, Vec<String>)], typ: &str) -> Option<&'a Addre
 
 /// The CRDs among `resources` and the types each defines
 /// (`crd::defines`).
-fn crds_made(resources: &[ir::Resource]) -> Vec<(Address, Vec<String>)> {
+fn crds_made(resources: &[resources::Resource]) -> Vec<(Address, Vec<String>)> {
     resources
         .iter()
         .filter(|r| crate::crd::TYPES.contains(&r.addr.typ.as_str()))
@@ -1378,7 +1378,11 @@ fn unrevealable(backend: &Providers, res: &EvalResult) -> Result<()> {
 }
 
 /// E §2.7's sections for an evaluation: what waits on a boundary.
-pub fn sections(res: &EvalResult, resources: &[ir::Resource], schema: &Schema) -> stuck::Sections {
+pub fn sections(
+    res: &EvalResult,
+    resources: &[resources::Resource],
+    schema: &Schema,
+) -> stuck::Sections {
     let docs = resources
         .iter()
         .map(|r| ((r.addr.typ.clone(), r.addr.name.clone()), r.attrs.clone()))
@@ -2328,7 +2332,11 @@ fn disagreements(facts: &BTreeSet<Atom>) -> BTreeMap<String, String> {
 /// asked of: not one with a conflicting attribute, nor one whose
 /// provider has no schema of its type yet (R-110) or whose cluster does
 /// not serve its kind (R-126).
-pub fn asked(backend: &Providers, res: &EvalResult, docs: &[ir::Resource]) -> Vec<ir::Resource> {
+pub fn asked(
+    backend: &Providers,
+    res: &EvalResult,
+    docs: &[resources::Resource],
+) -> Vec<resources::Resource> {
     let conflicted = report::conflicted(res);
     docs.iter()
         .filter(|r| !conflicted.contains(&r.addr))
@@ -2367,7 +2375,7 @@ pub fn with_site(e: anyhow::Error, res: &EvalResult) -> anyhow::Error {
 fn unconfigured(
     program: &Program,
     facts: &BTreeSet<Atom>,
-    resources: &[ir::Resource],
+    resources: &[resources::Resource],
     st: &State,
 ) -> BTreeMap<String, BTreeSet<String>> {
     let made: BTreeSet<(&str, &str)> = resources

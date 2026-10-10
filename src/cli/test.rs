@@ -6,7 +6,7 @@ use crate::ast::Term;
 use crate::plugin::{self, Providers};
 use crate::spell;
 use crate::value::Value;
-use crate::{deployment, engine, inputs, ir, query, report, schema, state, zset};
+use crate::{deployment, engine, inputs, query, report, resources, schema, state, zset};
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -291,7 +291,7 @@ impl<'a> Space<'a> {
         // What the plan refuses before any provider is asked (R-184): a
         // resource that leaves unset what its schema requires.
         let schema = backend.schema();
-        let resources = ir::compile_resources(res.facts.iter().cloned(), schema)?;
+        let resources = resources::compile_resources(res.facts.iter().cloned(), schema)?;
         let unset: Vec<String> = resources
             .iter()
             .filter_map(|r| {
@@ -318,9 +318,9 @@ impl<'a> Space<'a> {
     /// asked; a refusal is the combination's error, at the resource's
     /// site in the plan's words. One that would need them is not, and
     /// said once ([`Space::notes`]).
-    fn plan(&self, res: &engine::EvalResult, resources: &[ir::Resource]) -> Result<()> {
+    fn plan(&self, res: &engine::EvalResult, resources: &[resources::Resource]) -> Result<()> {
         let backend = &self.backend;
-        let offline: Vec<ir::Resource> = resources
+        let offline: Vec<resources::Resource> = resources
             .iter()
             .filter(|r| match backend.plans_offline(&r.addr.typ) {
                 Ok(()) => true,
@@ -394,7 +394,7 @@ impl<'a> Space<'a> {
 /// One combination evaluated ([`Space::evaluated`]).
 pub(super) struct Evaluation {
     pub(super) res: engine::EvalResult,
-    pub(super) resources: Vec<ir::Resource>,
+    pub(super) resources: Vec<resources::Resource>,
     /// What it denies, and its conflicts, unredacted.
     pub(super) violations: Vec<String>,
 }

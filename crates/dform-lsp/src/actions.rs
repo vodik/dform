@@ -12,7 +12,7 @@ use crate::analysis::{self, Evaluated, Outcome, Reader, Where};
 use dform_core::ast::Term;
 use dform_core::syntax::{SyntaxKind, SyntaxNode};
 use dform_core::value::Value;
-use dform_core::{engine, ir, report, stack};
+use dform_core::{engine, report, resources, stack};
 use rowan::TextSize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -340,7 +340,7 @@ fn placeholder(ty: &str) -> &'static str {
 /// typed placeholder, at the end of its block. Paths inside a list element
 /// are the element's.
 fn required(e: &Evaluated, read: Reader) -> Vec<Action> {
-    let Ok(resources) = ir::compile_resources(e.res.facts.iter().cloned(), &e.schema) else {
+    let Ok(resources) = resources::compile_resources(e.res.facts.iter().cloned(), &e.schema) else {
         return Vec::new();
     };
     let mut out = Vec::new();

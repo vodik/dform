@@ -49,11 +49,11 @@
 
 use crate::address::Address;
 use crate::ast::{Atom, Term};
-use crate::ir::{Adopt, Resource};
 use crate::lattice::nulls_in;
 use crate::plugin::Providers;
 use crate::provider::{Action, ActionKind, Change, Plan, fmt_value};
 use crate::report::waits_on;
+use crate::resources::{Adopt, Resource};
 use crate::state::{self, InFlight, State, Uncertain, UncertainOp};
 use crate::stuck::Sections;
 use crate::value::{Value, null_owner};

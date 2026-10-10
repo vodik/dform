@@ -1,5 +1,6 @@
-//! The resource IR (`compile_resources`) and, in [`ops`], the operator IR
-//! rules compile to.
+//! The desired resources, the plan's `desired` side (`crate::zset`): one
+//! document per `want(T, A)` assembled from the evaluation's facts
+//! (`compile_resources`), and the adoptions (`compile_adopts`).
 
 use crate::address::{Address, path_join, path_split_first, path_suffix, segment_key};
 use crate::ast::{Atom, Term};

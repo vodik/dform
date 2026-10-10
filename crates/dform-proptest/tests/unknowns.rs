@@ -43,10 +43,11 @@ use dform_core::ast::{Atom, Term};
 use dform_core::circuit::Leaf;
 use dform_core::engine::{self, EvalResult};
 use dform_core::hooks::{self, Rule3};
-use dform_core::ir::{self, Resource};
 use dform_core::plugin::{Config, Providers};
 use dform_core::provider::json_to_value;
 use dform_core::report::{self, Report};
+use dform_core::resources;
+use dform_core::resources::Resource;
 use dform_core::spell;
 use dform_core::state::State;
 use dform_core::stuck;
@@ -722,8 +723,8 @@ fn plan(program: &dform_core::ast::Program, world: &Path, state: &State) -> Resu
     let mut extra = backend.catalog(None)?;
     extra.extend(backend.world_facts(state)?);
     let (res, _violations) = engine::eval(program, &extra)?;
-    let resources = ir::compile_resources(res.facts.iter().cloned(), schema)?;
-    let adopts = ir::compile_adopts(res.facts.iter())?;
+    let resources = resources::compile_resources(res.facts.iter().cloned(), schema)?;
+    let adopts = resources::compile_adopts(res.facts.iter())?;
     let lifecycle = Lifecycle::from_facts(&res.facts, schema)?;
     let p = backend.plan(&resources, &adopts, &lifecycle, state)?;
     let docs = resources

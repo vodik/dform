@@ -3,9 +3,9 @@
 //! and edges are sorted, so the output is deterministic.
 
 use crate::ast::{Atom, Term};
-use crate::ir::Resource;
 use crate::partition::{self, Node};
 use crate::query::Redactor;
+use crate::resources::Resource;
 use crate::value::Value;
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};

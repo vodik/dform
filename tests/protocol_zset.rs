@@ -81,7 +81,7 @@ fn plan_on(
     });
     let (res, violations) = externs.eval(program, &extra).unwrap();
     assert!(violations.is_empty(), "{violations:?}");
-    let desired = dform::ir::compile_resources(res.facts.iter().cloned(), &schema).unwrap();
+    let desired = dform::resources::compile_resources(res.facts.iter().cloned(), &schema).unwrap();
     backend
         .plan(&desired, &[], &Lifecycle::default(), &st)
         .unwrap()

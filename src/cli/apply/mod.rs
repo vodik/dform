@@ -9,7 +9,7 @@ use self::ticks::Ticks;
 use super::evaluated::Evaluated;
 use super::planning::Reporter;
 use super::{Outcome, Session};
-use crate::{deployment, engine, ir, report, zset};
+use crate::{deployment, engine, report, resources, zset};
 use anyhow::Result;
 use std::path::PathBuf;
 
@@ -44,8 +44,8 @@ pub(super) struct Apply {
 struct Wanted {
     res: engine::EvalResult,
     violations: Vec<String>,
-    resources: Vec<ir::Resource>,
-    adopts: Vec<ir::Adopt>,
+    resources: Vec<resources::Resource>,
+    adopts: Vec<resources::Adopt>,
     lifecycle: zset::Lifecycle,
 }
 

@@ -4,7 +4,7 @@
 use super::evaluated::Context;
 use super::run_inputs::{answer_inputs, answer_text, env_inputs};
 use crate::provider::ActionKind;
-use crate::{address, deployment, engine, ir, query, report, state, stuck, zset};
+use crate::{address, deployment, engine, query, report, resources, state, stuck, zset};
 use anyhow::{Result, bail};
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -337,7 +337,7 @@ impl<'a> Reporter<'a> {
         plan: &crate::provider::Plan,
         res: &engine::EvalResult,
         sections: &stuck::Sections,
-        resources: &[ir::Resource],
+        resources: &[resources::Resource],
         st: &state::State,
         key: Option<&zset::file::Key>,
         inputs: zset::file::Inputs,

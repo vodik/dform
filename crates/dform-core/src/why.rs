@@ -11,7 +11,7 @@
 use crate::address;
 use crate::ast::{Atom, Lit, Term};
 use crate::engine::{self, EvalResult};
-use crate::ir;
+use crate::resources;
 
 use crate::query::{self, Redactor};
 use crate::report::{self, tree};
@@ -193,7 +193,7 @@ fn unset_required(addr: &address::Address, cx: &Context) -> Vec<String> {
     let Some(schema) = cx.schema else {
         return Vec::new();
     };
-    let Ok(resources) = ir::compile_resources(cx.res.facts.iter().cloned(), schema) else {
+    let Ok(resources) = resources::compile_resources(cx.res.facts.iter().cloned(), schema) else {
         return Vec::new();
     };
     let Some(r) = resources.iter().find(|r| r.addr == *addr) else {

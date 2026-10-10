@@ -1866,7 +1866,7 @@ pub fn rewrite_computed_refs(
         // A contribution that holds a reference (`vpc = main`, R-43) joins
         // the resource's identity as a read of it would, so it holds once
         // the resource is wanted and is pending while that may derive; the
-        // value stays the reference (`ir::compile_resources` gives the
+        // value stays the reference (`resources::compile_resources` gives the
         // provider the id). To an address no rule wants it is the same
         // error.
         let mut wants = Vec::new();
@@ -1895,7 +1895,7 @@ pub fn rewrite_computed_refs(
         body.extend(wants.into_iter().map(Lit::Pos));
         // The value is read now, but the order of Apply still follows the
         // ref: a contribution that reads another resource's attribute
-        // depends on it (`ir::compile_resources` reads `__ref_dep`).
+        // depends on it (`resources::compile_resources` reads `__ref_dep`).
         if head.pred == "arg" && head.args.len() == 5 {
             for (read, _) in &head_reads {
                 out_rules.push(RuleStmt::helper(
