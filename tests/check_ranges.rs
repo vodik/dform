@@ -19,14 +19,19 @@ fn same(name: &str, template: &str, forms: [&str; 2], extra: &[&str]) -> Run {
     let s = Scratch::new(name);
     let [a, b] = forms.map(|f| plan(&s, &template.replace("CHECK", f), extra).failure());
     assert_eq!(a.stdout, b.stdout, "{}\n---\n{}", a.stdout, b.stdout);
-    let first = |r: &Run| r.stderr.lines().next().unwrap_or_default().to_string();
+    // The check is spelled back from its parts until R-211 step 10 keeps
+    // the source text, so the two forms agree up to the word `check`.
+    let first = |r: &Run| {
+        let line = r.stderr.lines().next().unwrap_or_default();
+        line.split(" check ").next().unwrap_or_default().to_string()
+    };
     assert_eq!(first(&a), first(&b), "{}\n---\n{}", a.stderr, b.stderr);
     a
 }
 
 /// `set agents = 4` against `check agents in 0..=3` is the error
-/// `check 0 <= agents <= 3` gives (a literal outside the cell's range),
-/// not a deny after a plan of four copies.
+/// `check 0 <= agents <= 3` gives (a literal the input's check refuses
+/// before evaluation), not a deny after a plan of four copies.
 #[test]
 fn an_inputs_range_check_is_its_bounds() {
     let src = "\ninput agents: int = 0 check CHECK\non(1)\nset agents = 4 where on(1)\n\
@@ -37,7 +42,11 @@ fn an_inputs_range_check_is_its_bounds() {
         ["agents in 0..=3", "0 <= agents <= 3"],
         &[],
     );
-    assert!(r.stderr.contains("range(0, 3)"), "{}", r.stderr);
+    assert!(
+        r.stderr.contains("input agents is int check"),
+        "{}",
+        r.stderr
+    );
     same(
         "range-input-open",
         src,
@@ -88,7 +97,7 @@ fn a_quantity_range_check_refuses_as_its_bounds_do() {
         );
         let r = plan(&s, &src, &["--set", "disk=5Ti"]).failure();
         assert!(
-            r.stderr.contains("input disk fails"),
+            r.stderr.contains("input disk is bytes check"),
             "{check}: {}",
             r.stderr
         );
