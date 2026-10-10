@@ -1,7 +1,6 @@
-//! After R-149: a run that refuses prints each violation as the plan's
-//! `!` line does, through one renderer (`report::violations`,
-//! `report::violation_line`): a deny's message, then its bindings as
-//! `key = value`, never the context's JSON.
+//! After R-149: a run that refuses prints each violation as every error
+//! is printed (`report::refusals`): a deny's message and its site, then
+//! its bindings as `key = value`, never the context's JSON.
 
 mod common;
 use common::Scratch;
