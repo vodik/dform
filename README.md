@@ -38,7 +38,7 @@ resource aws.subnet "private-${availability_zone}" {
   availability_zone
 } where aws.availability_zone("available", availability_zone, n)
 
-deny "no public subnets" { subnet: s } where s in aws.subnet, s.map_public_ip_on_launch
+deny "no public subnets" { subnet } where subnet in aws.subnet, subnet.map_public_ip_on_launch
 ```
 
 ```
@@ -103,8 +103,8 @@ of `deformation` rows the same rules read, so "no deletes in prod" is
 _)` over rows like these:
 
 ```
-$ dform query 'deformation(k, r, _)' --set database.backup_days=7
-K         R
+$ dform query 'deformation(kind, resource, _)' --set database.backup_days=7
+Kind      Resource
 "update"  db.postgres orders
 ```
 
