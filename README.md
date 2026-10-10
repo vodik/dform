@@ -225,16 +225,29 @@ denied  dform plan tour env=dev --set public_db=true
 A document is a value and a value is a document:
 
 ```dform
-input peering from csv.decode(io.read("data/peerings.csv"))
+key env: enum("lab", "prod") = "lab"
+input database { backup_days: int = 1 }
+use fake
 
 let net = toml.decode(io.read("data/network.toml"))
 set from yaml.decode(io.read("config/${env}.yaml"))
 
-let raw: secret(string) = io.read("ssh://ubuntu@${server.public_ip}/etc/rancher/k3s/k3s.yaml")
+resource net.vpc "${v.name}" { cidr = v.cidr } where v in net.vpcs
+resource db.postgres orders { backup_days = database.backup_days }
+```
 
-resource k8s.custom_resource_definition "${d.metadata.name}" = d where {
-  d in yaml.decode(io.read("git+https://github.com/traefik/traefik/docs/crds.yml?ref=v3.7.14"))
-}
+```
+$ dform plan
+deployment: stacks.shop[env=lab]
+plan: 3 changes (3 create) over 1 tick
+
+tick 1  3 changes
+  + db.postgres orders  stacks/shop.df:9
+      backup_days = 7   stacks/shop.df:6
+  + net.vpc data        stacks/shop.df:8  with v = {cidr: "10.2.0.0/16", name: "data"}
+      cidr = "10.2.0.0/16"
+  + net.vpc shop        stacks/shop.df:8  with v = {cidr: "10.1.0.0/16", name: "shop"}
+      cidr = "10.1.0.0/16"
 ```
 
 **Everything explains itself, absence included.** A missing resource
