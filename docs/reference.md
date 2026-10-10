@@ -4958,7 +4958,7 @@ pinned in its `.txt` (accept with `UPDATE_GOLDEN=1 cargo test --test syntax`).
 
 ## Performance
 
-The evaluator is semi-naive over an operator IR (`crates/dform-core/src/engine/ops.rs`: Scan,
+The evaluator is semi-naive over an operator plan (`crates/dform-core/src/engine/ops.rs`: Scan,
 Join, Extern, AntiJoin, Filter with Stuck as its third output, Map,
 Distinct, Agg, and a Fix per stratum), with a hash index per relation and
 key the rules read through (`crates/dform-core/src/engine/store.rs`). Its output is the naive

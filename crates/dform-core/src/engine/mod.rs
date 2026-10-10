@@ -237,7 +237,7 @@ impl Resumable {
 }
 
 /// The program compiled for evaluation: rules, their
-/// operator IR, the strata, and the circuit's rule leaves.
+/// operator plan, the strata, and the circuit's rule leaves.
 struct Compiled {
     rules: std::sync::Arc<Vec<RuleStmt>>,
     externs: BTreeSet<crate::ast::Extern>,
@@ -259,7 +259,7 @@ struct Compiled {
 
 impl Compiled {
     /// The rules planned over `strata`: the stratum each runs at, their
-    /// operator IR and a Fix per stratum, the indexes the bodies read
+    /// operator plan and a Fix per stratum, the indexes the bodies read
     /// through (made in `prov`'s store), and each rule's leaf in its circuit.
     fn new(
         rules: Vec<RuleStmt>,
@@ -279,7 +279,7 @@ impl Compiled {
                     .collect()
             })
             .collect();
-        // The operator IR: one body per rule, a Fix per
+        // The operator plan: one body per rule, a Fix per
         // stratum, and the indexes the bodies read through.
         let extern_preds: BTreeSet<String> = externs.iter().map(|e| e.pred.clone()).collect();
         let plans: Vec<ops::Rule> = rules
@@ -753,7 +753,7 @@ pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
         .collect())
 }
 
-/// The indexes the rules' bodies read through: the operator IR's, and
+/// The indexes the rules' bodies read through: the operator plan's, and
 /// those a read of a string cell looks a reference up by.
 fn index_reads(store: &mut Store, rules: &[RuleStmt], plans: &[ops::Rule]) {
     let bodies = plans.iter().map(|p| &p.body);

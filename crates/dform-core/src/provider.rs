@@ -272,7 +272,7 @@ pub fn set_path(v: &mut Json, path: &str, x: Json) {
 }
 
 /// The value at a keypath (`tags.owner`, `subnets[0].id`, `labels."a.b"`)
-/// in nested JSON, the shape `ir::insert_keypath` builds and `flatten`
+/// in nested JSON, the shape `set_path` builds and `flatten`
 /// spells.
 pub fn get_path<'a>(v: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
     let mut cur = v;

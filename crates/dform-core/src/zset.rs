@@ -11,9 +11,10 @@
 //! * `desired` is defined after round 0: the evaluator has already replaced
 //!   every null whose resource exists in the world through the identity
 //!   mapping, and `assemble` has dropped schema-computed paths
-//!   (`resources::compile_resources`); an `ignore_changes` path is dropped from both
-//!   sides of an object that exists (the provider's plan). A steady-state
-//!   stack therefore carries no nulls and cancels to the zero Z-set.
+//!   (`resources::compile_resources`); an `ignore_changes` path is dropped
+//!   from both sides of an object that exists (the provider's plan). A
+//!   steady-state stack therefore carries no nulls and cancels to the zero
+//!   Z-set.
 //! * An update whose desired document carries an *open* null against a world
 //!   constant is pending: the comparison is a content position, decided at
 //!   the next boundary.

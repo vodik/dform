@@ -1,4 +1,4 @@
-//! The operator IR rules compile to (E §2.6, DR-20): every body literal is
+//! The operator plan rules compile to (E §2.6, DR-20): every body literal is
 //! one operator with a DBSP counterpart, and a stratum is a `Fix` over its
 //! rules. `engine::eval` interprets it semi-naively: per stratum, each rule
 //! joins the tuples the last round derived (the delta) against the full
