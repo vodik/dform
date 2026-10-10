@@ -207,6 +207,15 @@ pub struct Report {
     pub nested: bool,
 }
 
+impl Report {
+    /// The plan says `up to date`: nothing to change, and no policy that
+    /// fails or is undetermined. A deny that refuses a plan with no
+    /// changes is listed in the policy block, as it is in any plan.
+    pub fn up_to_date(&self) -> bool {
+        self.undeformed && self.policy.iter().all(|l| l.mark() == policy::Mark::Holds)
+    }
+}
+
 /// A forget's note on its line (R-154).
 pub const FORGOTTEN: &str = "  forgotten, kept in the world  (lifecycle retain)";
 

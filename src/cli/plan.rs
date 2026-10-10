@@ -86,7 +86,7 @@ impl Plan {
             .filter(|v| !report::is_conflict(v))
             .cloned()
             .collect();
-        if report.undeformed && !self.json {
+        if report.up_to_date() && !self.json {
             unshown.extend(denies.iter().cloned());
         }
         cx.cli.cmd.blocked(&unshown, &redact)?;

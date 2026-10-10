@@ -54,7 +54,7 @@ impl Report {
         let bold = |s: &str| style.paint(Paint::Bold, s);
         let header = |s: &str| format!("{}\n", bold(s));
         let mut out = moved_text(&self.moved);
-        if self.undeformed && !self.show_noop {
+        if self.up_to_date() && !self.show_noop {
             self.write_bare(&mut out, &self.kept, style);
             out.push_str(&format!("stack {} is up to date\n", self.stack));
             return out;
@@ -202,7 +202,7 @@ impl Report {
                 }
             }
         }
-        if self.undeformed {
+        if self.up_to_date() {
             out.push_str(&format!("stack {} is up to date\n", self.stack));
         }
         out

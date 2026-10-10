@@ -199,7 +199,7 @@ impl Report {
     pub fn render(&self, style: Style) -> String {
         let bold = |s: &str| style.paint(Paint::Bold, s);
         let mut out = moved_text(&self.moved);
-        if self.undeformed && !self.show_noop {
+        if self.up_to_date() && !self.show_noop {
             let mut rows = Vec::new();
             self.write_kept(&mut rows, style);
             out.push_str(&layout(&rows, style));
@@ -241,7 +241,7 @@ impl Report {
         self.write_approvals(&mut rows, style);
         out.push_str(&layout(&rows, style));
         self.write_diags(&mut out, style);
-        if self.undeformed {
+        if self.up_to_date() {
             if !self.nested {
                 out.push_str(&format!("\nstack {} is up to date\n", self.stack));
             }

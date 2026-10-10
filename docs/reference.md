@@ -1439,7 +1439,10 @@ made; the plan itself says what it is.
   are undetermined, `policy  12 hold · 1 fails · 2 undetermined`, and a
   holding policy is only that count; `-v` lists every policy and what
   each holds for. A plan a policy fails is still refused, its error
-  naming the policy on stderr (`constraint violations:`). `--json`
+  naming the policy on stderr (`constraint violations:`). The block
+  prints whenever a policy fails or is undetermined, changes or not: a
+  deny that refuses a plan with no changes is `plan: 0 changes; policy:
+  1 fails`, the block, exit 4. `--json`
   carries `policy`: each line's `mark`, `text`, `at`, `hold`, `holds`,
   `fails` and `undetermined`.
 - Changes share their address's path: a copy's are nested under its
@@ -1683,8 +1686,9 @@ made; the plan itself says what it is.
   that refuses ends with the same line on stderr, and says where it
   stopped when it had applied a tick: `apply: refused  1 deny; stopped
   after tick 1; ticks 1 to 1 were applied`.
-- `stack NAME is up to date`: nothing to do, nothing stuck (the only line
-  but for a `moved` and a value kept at creation, R-198).
+- `stack NAME is up to date`: nothing to do, nothing stuck, no policy
+  that fails or is undetermined (the only line but for a `moved` and a
+  value kept at creation, R-198).
 
 How much each change says of why it is planned is a ladder (R-79,
 R-111), the same on `plan`, `apply` and `diff --since`: `-q`, the

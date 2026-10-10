@@ -187,3 +187,35 @@ fn a_failing_deny_without_context_is_about_what_it_fired_for() {
     assert_eq!(j["policy"][1]["text"], "the region is not eu", "{j:#}");
     assert_eq!(of(1), [serde_json::Value::Null], "{j:#}");
 }
+
+/// A deny that refuses a plan with no changes is listed as in any plan:
+/// the headline counts it, the block says it, and the plan ends refused,
+/// not `up to date` (it said `stack p is up to date`, no block, exit 4,
+/// the violation only on stderr). Neither `-q` nor `--json` says up to
+/// date.
+#[test]
+fn a_failing_deny_on_a_plan_with_no_changes_is_in_the_block() {
+    let s = Scratch::project("policy-block-empty");
+    s.write("p.df", "use fake\ndeny \"never\" where 1 == 1\n");
+    let r = s.run(&["plan", "p.df"]);
+    assert_eq!(r.code, Some(4), "{}\n{}", r.stdout, r.stderr);
+    assert_eq!(
+        r.summary(),
+        "plan: 0 changes; policy: 1 fails",
+        "{}",
+        r.stdout
+    );
+    assert_eq!(
+        block(&r.stdout),
+        "policy  1 fails\n  fails  never  p.df:2  1 fails\n    (no subject)",
+        "{}",
+        r.stdout
+    );
+    assert!(!r.stdout.contains("up to date"), "{}", r.stdout);
+    let q = s.run(&["plan", "p.df", "-q"]);
+    assert_eq!(q.code, Some(4), "{}\n{}", q.stdout, q.stderr);
+    assert!(!q.stdout.contains("up to date"), "{}", q.stdout);
+    let j = s.run(&["plan", "p.df", "--json"]);
+    let j: serde_json::Value = serde_json::from_str(&j.stdout).expect(&j.stdout);
+    assert_eq!(j["up_to_date"], false, "{j:#}");
+}

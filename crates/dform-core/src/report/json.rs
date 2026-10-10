@@ -21,7 +21,7 @@ impl Report {
     pub fn json(&self) -> Json {
         let mut j = json!({
             "stack": self.stack,
-            "up_to_date": self.undeformed,
+            "up_to_date": self.up_to_date(),
             "summary": self.summary_json(),
             "ticks": self.ticks_json(),
             "later": self.later_json(),
