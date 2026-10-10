@@ -5,8 +5,7 @@ the world as it is. Every line of the plan should say what produced it.
 Policy should live beside what it governs and be checked by every plan.
 A value the cloud knows only later should be a value the plan already
 waits for. The program should be as clear to the language model helping
-an operator as to the operator. It is. Most of this repository was
-written by one, reading `why` the same way an operator does.
+an operator as to the operator.
 
 It works because infrastructure is a database. An account is a table of
 networks, a table of instances, a table of DNS records, each row with
@@ -19,8 +18,7 @@ Every plan is the least model of the program over the world as it is,
 and every line of it carries its proof, so `why` never disagrees with
 the plan. Apply reconciles the world with the plan in ticks, and what
 one tick creates, an endpoint or a kubeconfig, is a value the next tick
-plans with. Each tick is the least model over the world the one before
-it left.
+plans with.
 
 A complete program, on the AWS-shaped mock:
 
@@ -64,33 +62,32 @@ tick 1  4 changes
 policy  1 hold
 ```
 
-When the region gains a zone, the next plan has one more subnet and
-the file does not change: `aws.availability_zone` is a relation the
-provider answers, and a block ending in `where` makes one resource per
-answer. The examples run on a fake cloud built into dform with
-no credentials. To try one, `cargo install --path .`, then `dform -C
-examples/tour plan`.
+When the region gains a zone, the next plan has one more subnet and the
+file does not change, because `aws.availability_zone` is a table the
+provider answers. `policy 1 hold` is the deny, checked by this plan and
+holding. The examples run on a fake cloud built into dform with no
+credentials; `cargo install --path .`, then `dform -C examples/tour
+plan`. dform is pre-release: the language still changes without
+compatibility, few providers are real, and the project it is built
+against has not applied to a real cloud yet.
 
 ## Describe what should exist
 
 A dform file says what should exist and under which conditions, and
 dform works out how many, in what order, and when. The file itself has
 no order either: a block may use a name declared further down or in
-another file, and a function is pure or reads the world, so the language
-knows what to wait for. A block is a description that holds for every
-answer to its clause, so repetition is a condition, an edge is a
-reference, and a value known later is a later tick. Terraform makes a
-block a template and adds `for_each`, `depends_on`, `-target` and
-`default_tags` for what a template cannot say.
+another file. A block is a description that holds for every answer to
+its clause, so repetition is a condition, an edge is a reference, and a
+value known later is a later tick. Terraform makes a block a template
+and adds `for_each`, `depends_on`, `-target` and `default_tags` for what
+a template cannot say.
 
-**Policy is part of the language.** Conformance has two halves, the
-shape every resource should have and the changes that may not happen,
-and both are rules in the same file as the resources, in the same
-language, run by every plan and every apply. The shape is a `set` that
-applies everywhere. `resource` is the table of every resource the
-program declares, whatever its type, and a `set` over it writes into
-each one its clause matches, leaf by leaf, beside what the resource's
-own block wrote:
+**Policy is part of the language.** The shape every resource should have
+and the changes that may not happen are both rules in the same file as
+the resources, checked by every plan. `resource` is the table of every
+resource the program declares, whatever its type, and a `set` over it
+writes into each one its clause matches, leaf by leaf, beside what the
+resource's own block wrote:
 
 ```dform
 set r.tags = { team: "shop" } where r in resource
@@ -101,11 +98,10 @@ $ dform query 'net.vpc["blue.vpc"].tags'
 { team: "shop", component: "network" }
 ```
 
-**The plan is a table too.** Every change the plan would make is a
+**The plan is a table too.** Every change it would make is a
 `deformation` row, the kind of change and the resource it touches, so a
-policy can ask about the change and the resource's configuration in one
-question: no deleting a database in prod, no replacing a volume that
-holds data. What the plan would do, as rows:
+policy asks about the change and the resource's configuration in one
+question:
 
 ```
 $ dform query 'deformation(kind, resource, _)' --set database.backup_days=7
@@ -113,21 +109,18 @@ Kind      Resource
 "update"  db.postgres orders
 ```
 
-**What may change is a rule too.** "No deletes in prod" is `deny "no
-deletes in prod" where env == "prod", deformation("delete", _, _)`, and
-it is checked by every plan and refuses the apply. A risky change waits
-instead for a signature over exactly what will apply. A policy over a
-value known only after apply says so: the logic has three values,
-nothing is assumed false for being unknown, so such a policy is
-undetermined and the plan says when it will be known. With Terraform,
-policy is a second tool and a second language over the plan's JSON,
-where such a value is only marked unknown.
+"No deletes in prod" is `deny "no deletes in prod" where env == "prod",
+deformation("delete", _, _)`, checked by every plan, and it refuses the
+apply. A policy over a value known only after apply is undetermined,
+since nothing is assumed false for being unknown, and the plan says when
+it will be known. A risky change waits instead for a signature over
+exactly what will apply. With Terraform, policy is a second tool and a
+second language over the plan's JSON, where such a value is only marked
+unknown.
 
-**Lifecycle is a table too.** One row per resource and word:
-`prevent_destroy`, `retain`, `create_first`, `bootstrap`. The program
-writes rows, a provider seeds defaults for its own types, and the plan
-reads them, so lifecycle is decided by a rule like anything else, and a
-policy can read it back:
+**Lifecycle is a table too.** A rule writes it, a provider defaults it
+for its own types, and a policy reads it back. Terraform's
+`prevent_destroy` must be a literal:
 
 ```dform
 lifecycle(k3s.server, "prevent_destroy") where env == "prod"
@@ -327,21 +320,22 @@ net.subnet private-us-test-1c: no rule derives it
 
 ## The work
 
-Day to day it is `plan` and `apply`. Apply asks once, resumes where it
-was interrupted, and never makes the same thing twice.
+Day to day it is `plan` and `apply`. Apply asks before anything changes
+and again only when a later plan differs from the one shown;
+interrupted, it resumes where it stopped.
 
 **Stacks and deployments.** An estate plans and applies as one, each
 deployment with its own plan, question and state, in dependency order.
 Which deployments exist is code. `project.df` lists them as resources,
 `resource stacks.platform lab { env = "lab" }`, and a stack reads
 another's outputs as `platform[env].kubeconfig`, so `dform apply apps
-env=lab` applies platform first. Terragrunt wires this with `dependency`
-blocks, and Argo CD's ApplicationSet matrix generator does the matrix
-for Applications.
+env=lab` applies platform first. Terragrunt needs a `dependency` block
+per edge and a directory per environment.
 
-For a pipeline, `render` prints what would be sent, under policy, with
-no credentials and no state, and `status` says whether everything is
-healthy and fails if not:
+For a pipeline, `status` says whether everything is healthy and fails if
+not, and `render` prints what would be sent, under policy, with no
+credentials and no state, a stream Argo CD or kustomize reads as plain
+manifests:
 
 ```
 $ dform status app
