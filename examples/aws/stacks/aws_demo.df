@@ -15,11 +15,7 @@ use aws
 
 resource aws.vpc main { cidr_block = "10.0.0.0/16", tags = { "Name": "main" } }
 
-resource aws.subnet a {
-  vpc = main
-  cidr_block = "10.0.1.0/24"
-  availability_zone = "us-east-1a"
-}
+resource aws.subnet a { vpc = main, cidr_block = "10.0.1.0/24", availability_zone = "us-east-1a" }
 
 resource aws.security_group web {
   name = "web"

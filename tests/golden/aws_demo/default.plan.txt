@@ -6,7 +6,7 @@ tick 1  7 changes
   + aws.vpc main            stacks/aws_demo.df:16
       cidr_block = "10.0.0.0/16"
       tags.Name = "main"
-  + aws.security_group web  stacks/aws_demo.df:24
+  + aws.security_group web  stacks/aws_demo.df:20
       egress = [{ from_port: 0, to_port: 0, protocol: "-1", cidr_blocks: ["0.0.0.0/0"] }]
       ingress = [
         { from_port: 443, to_port: 443, protocol: "tcp", cidr_blocks: ["0.0.0.0/0"] },
@@ -18,21 +18,21 @@ tick 1  7 changes
       availability_zone = "us-east-1a"
       cidr_block = "10.0.1.0/24"
       vpc = main
-  + aws.db_instance app     stacks/aws_demo.df:48
+  + aws.db_instance app     stacks/aws_demo.df:44
       identifier = "app"
       instance_class = "db.t3.micro"
       password = (sensitive)
       skip_final_snapshot = true
       vpc_security_groups = [web]
-  + aws.instance web        stacks/aws_demo.df:34
+  + aws.instance web        stacks/aws_demo.df:30
       ami = "ami-0abcdef1234567890"
       instance_type = "t3.small"
       subnet = a
       vpc_security_groups = [web]
-  + aws.eip web             stacks/aws_demo.df:46
+  + aws.eip web             stacks/aws_demo.df:42
       domain = "vpc"
       instance = web
-  + aws.instance bastion    stacks/aws_demo.df:41
+  + aws.instance bastion    stacks/aws_demo.df:37
       instance_type = "t3.micro"
       tags = { subnet_az: "us-east-1a", web_az: web.availability_zone }
 -- stderr --
