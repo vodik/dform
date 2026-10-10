@@ -5,9 +5,8 @@ the world as it is. Every line of the plan should say what produced it.
 Policy should live beside what it governs and be checked by every plan.
 A value the cloud knows only later should be a value the plan already
 waits for. The program should be as clear to the language model helping
-an operator as to the operator. dform is small, declarative and explains
-its own plan, and this repository was built by model agents that wrote
-and reviewed dform programs no training data had shown them.
+an operator as to the operator. It is. Most of this repository was
+written by one, reading `why` the same way an operator does.
 
 It works because infrastructure is a database. An account is a table of
 networks, a table of instances, a table of DNS records, each row with
