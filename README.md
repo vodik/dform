@@ -122,6 +122,23 @@ the plan names the tick that decides it. With Terraform, policy is a
 second tool and a second language over the plan's JSON, where such a
 value is only marked unknown.
 
+**Secrets are part of the language too.** A secret cannot reach an
+output, an address or a count by accident. The compiler follows every
+value made from one, and a leak is an error at its line:
+
+```dform
+output password: string = pw                           # E0304: not declared secret(string)
+
+deny "short password" where pw.len < 12               # E0301: inspecting it leaks it
+n(c) where c = count(p), p = pw                        # E0303: a count leaks cardinality
+resource aws.iam_user "u-${pw}" { name = "x" }         # E0305: addresses are printed
+```
+
+State holds no secret, because a generated one derives from the
+deployment's master, and `dform secrets rotate D KEY` changes one, one
+plan line per place it lands. Terraform's `sensitive` keeps a value out
+of its CLI output and still stores it in state.
+
 **Descriptions build on each other.** Anything shaped like a graph is
 derived, so reachability stays right as spokes come and go, and this is
 where the descriptions are rules in the Datalog sense:
@@ -202,23 +219,6 @@ output ingress_ip: ip = k3s.ingress_ip
 
 set { agents = 1, sizes.synapse = 100Gi } where env == "prod"
 ```
-
-A secret cannot reach an output, an address or a count by accident.
-The compiler follows every value made from one, and a leak is an error
-at its line:
-
-```dform
-output password: string = pw                           # E0304: not declared secret(string)
-
-deny "short password" where pw.len < 12               # E0301: inspecting it leaks it
-n(c) where c = count(p), p = pw                        # E0303: a count leaks cardinality
-resource aws.iam_user "u-${pw}" { name = "x" }         # E0305: addresses are printed
-```
-
-State holds no secret, because a generated one derives from the
-deployment's master, and `dform secrets rotate D KEY` changes one, one
-plan line per place it lands. Terraform's `sensitive` keeps a value out
-of its CLI output and still stores it in state.
 
 Every deny holds in every environment before anything ships, or
 `dform test` says which does not. It runs the program once per combination of its enums, bools
