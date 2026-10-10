@@ -101,9 +101,10 @@ The AWS provider's `default_tags` does this for tags, across the
 resources that one provider handles.
 
 **The plan is a table too.** Every change the plan would make is a
-`deformation` row: the kind of change and the resource it changes, the
-resource itself rather than a name, so a rule can read how that
-resource is configured and react to what is about to happen to it:
+`deformation` row, the kind of change and the resource it touches, so a
+policy can ask about the change and the resource's configuration in one
+question: no deleting a database in prod, no replacing a volume that
+holds data. What the plan would do, as rows:
 
 ```
 $ dform query 'deformation(kind, resource, _)' --set database.backup_days=7
