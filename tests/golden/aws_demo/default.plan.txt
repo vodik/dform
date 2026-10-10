@@ -1,4 +1,38 @@
-exit: error
+exit: ok
 -- stdout --
+plan: 7 changes (7 create) over 1 tick
+
+tick 1  7 changes
+  + aws.vpc main            stacks/aws_demo.df:16
+      cidr_block = "10.0.0.0/16"
+      tags.Name = "main"
+  + aws.security_group web  stacks/aws_demo.df:24
+      egress = [{ from_port: 0, to_port: 0, protocol: "-1", cidr_blocks: ["0.0.0.0/0"] }]
+      ingress = [
+        { from_port: 443, to_port: 443, protocol: "tcp", cidr_blocks: ["0.0.0.0/0"] },
+        { from_port: 80, to_port: 80, protocol: "tcp", cidr_blocks: ["0.0.0.0/0"] },
+      ]
+      name = "web"
+      vpc_id = main
+  + aws.subnet a            stacks/aws_demo.df:18
+      availability_zone = "us-east-1a"
+      cidr_block = "10.0.1.0/24"
+      vpc_id = main
+  + aws.db_instance app     stacks/aws_demo.df:48
+      identifier = "app"
+      instance_class = "db.t3.micro"
+      password = (sensitive)
+      skip_final_snapshot = true
+      vpc_security_group_ids = [web]
+  + aws.instance web        stacks/aws_demo.df:34
+      ami = "ami-0abcdef1234567890"
+      instance_type = "t3.small"
+      subnet_id = a
+      vpc_security_group_ids = [web]
+  + aws.eip web             stacks/aws_demo.df:46
+      domain = "vpc"
+      instance = web
+  + aws.instance bastion    stacks/aws_demo.df:41
+      instance_type = "t3.micro"
+      tags = { subnet_az: "us-east-1a", web_az: web.availability_zone }
 -- stderr --
-Error: schema crates/dform-mock/schemas/aws-mock.df: type_attr(aws.instance, public_ip) declared twice
