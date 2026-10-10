@@ -3,7 +3,7 @@
 //! survives it (R-52), and the CLI rewrites or checks.
 
 mod common;
-use common::{Scratch, corpus, rel};
+use common::{Scratch, corpus, df_files, rel, repo};
 use dform::syntax::SyntaxKind::{COMMA, WHITESPACE};
 use dform::syntax::parser::parse;
 
@@ -32,11 +32,29 @@ fn meaning(src: &str) -> Vec<String> {
         .collect()
 }
 
+/// The corpus, and the programs the crates carry (a provider's schema).
+/// A signature file (`package ..`: std's, the lowering's) has its own
+/// normal form, which `dform fmt --check` holds it to.
+fn shipped() -> Vec<std::path::PathBuf> {
+    let mut out = corpus();
+    df_files(&repo().join("crates"), true, &mut out);
+    out.retain(|f| {
+        let src = std::fs::read_to_string(f).unwrap();
+        !src.lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty() && !l.starts_with('#'))
+            .is_some_and(|l| l.starts_with("package "))
+    });
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Every file the repository ships prints back byte for byte (E §7's
 /// programs are kept as E writes them).
 #[test]
 fn the_repository_is_formatted() {
-    for f in corpus() {
+    for f in shipped() {
         let name = rel(&f);
         if name.starts_with("tests/syntax/ok/e7") {
             continue;
@@ -58,7 +76,7 @@ fn the_repository_is_formatted() {
 /// sit in R-11a's order).
 #[test]
 fn formatting_keeps_every_token_but_commas() {
-    for f in corpus() {
+    for f in shipped() {
         let src = std::fs::read_to_string(&f).unwrap();
         let once = fmt(&src);
         assert_eq!(fmt(&once), once, "{} is not idempotent", f.display());
@@ -73,7 +91,7 @@ fn formatting_keeps_every_token_but_commas() {
 #[test]
 fn the_authors_line_breaks_do_not_survive() {
     let mut joins = 0;
-    for f in corpus() {
+    for f in shipped() {
         let name = rel(&f);
         let src = plain(&std::fs::read_to_string(&f).unwrap());
         let joined = join_lines(&src);

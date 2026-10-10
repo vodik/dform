@@ -2697,9 +2697,11 @@ The groups, and how each breaks:
 - a list, an object, an argument list, a tuple, an object type and a
   declaration's columns: one element per line, each with a trailing
   comma; on one line, none (`[1, 2]`, `{ a: 1 }`, `f(x)`);
-- a list whose only element is an object hugs it, `[{` and `}]` on the
-  outer lines, and an object whose only field is a list hugs that
-  (`{ k: [` .. `] }`): the only closers not on their own line;
+- a list or an argument list whose only element is an object or a
+  list hugs it, `[{` and `}]`, `json.encode({` and `})` on the outer
+  lines: the only closers not on their own line; a keyed element (an
+  object's field, a named argument) is not hugged, its key is on its
+  own line;
 - a comprehension: `[ item |` on the first line, a body literal per line
   with a trailing comma, the last's too, `]` on its own line;
 - a block (a resource's, a `use`'s, a `set`'s, a type's, an object input's or output's fields) and a

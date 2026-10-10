@@ -1479,7 +1479,7 @@ made; the plan itself says what it is.
   write made (a block's entry, a `set`, a policy's element) fold back
   into one value at the path where its writers diverge, in `dform fmt`'s
   layout: on one line when it fits, else a field or an element per line
-  with a trailing comma, a list of one object hugging it (`[{` .. `}]`),
+  with a trailing comma, a list of one object or list hugging it (`[{` .. `}]`),
   no string elided. A leaf another write made is its own line with its
   site. What the program did not write inside a value it wrote is the
   document the provider receives, folded in after the program's fields
@@ -3762,8 +3762,11 @@ columns, else `where { .. }`; `{ a }` for `{ a: a }`; `==` between bound
 sides; docs/grammar.md "Formatting"), two-space indentation per open
 bracket, block or body, one space around operators and after commas,
 `{ a: 1 }` inside braces, at most one blank line, and no comma where a
-newline already separates block entries. A formatted file prints back byte
-for byte, and a file with a syntax error is reported, not rewritten.
+newline already separates block entries. A list or a call whose only
+element is an object or a list hugs it when it breaks, `[{` .. `}]`,
+`json.encode({` .. `})`, the closers on one line. A formatted file
+prints back byte for byte, and a file with a syntax error is reported,
+not rewritten.
 `--check` rewrites nothing and fails listing the files that would change.
 
 - Core intent IR (what the surface lowers to; `why --core` and `strata` print it):

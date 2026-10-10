@@ -2,12 +2,12 @@
 //! `query` and the editor's hover print for a value with structure. An
 //! object or a list on one line when it fits, else one field or element
 //! per line with a trailing comma, from the outside in; a list whose only
-//! element is an object hugs it, `[{` .. `}]`, and an object whose only
-//! field is a list hugs that, `{ k: [` .. `] }`, as [`super::layout`]
-//! lays out the source. A leaf is text the caller spelled (a string
-//! quoted whole, a reference by its address, a secret redacted); a leaf
-//! with a note (R-217) is followed by it, `"TCP" (schema default)`, and
-//! breaks every object and list around it, so the note ends its line.
+//! element is an object or a list hugs it, `[{` .. `}]`, as
+//! [`super::layout`] lays out the source. A leaf is text the caller
+//! spelled (a string quoted whole, a reference by its address, a secret
+//! redacted); a leaf with a note (R-217) is followed by it,
+//! `"TCP" (schema default)`, and breaks every object and list around it,
+//! so the note ends its line.
 
 use super::doc::{Doc, concat, group, if_break, indent, line, nil, print, propagate, text};
 use crate::spell;
@@ -77,17 +77,22 @@ impl Tree {
         }
     }
 
+    /// An object or a list with something in it: what a list of it alone
+    /// hugs.
+    fn composite(&self) -> bool {
+        match self {
+            Tree::Obj(fs) => !fs.is_empty(),
+            Tree::List(xs) => !xs.is_empty(),
+            Tree::Leaf(_) | Tree::Noted(..) => false,
+        }
+    }
+
     fn doc(&self) -> Doc {
         match self {
             Tree::Leaf(s) => text(s.clone()),
             Tree::Noted(s, note) => concat(vec![text(format!("{s} {note}")), Doc::BreakParent]),
             Tree::Obj(fs) if fs.is_empty() => text("{}"),
             Tree::List(xs) if xs.is_empty() => text("[]"),
-            // `{ k: [` .. `] }`
-            Tree::Obj(fs) if matches!(fs.as_slice(), [(_, Tree::List(xs))] if !xs.is_empty()) => {
-                let (k, l) = &fs[0];
-                concat(vec![text(format!("{{ {k}: ")), l.doc(), text(" }")])
-            }
             Tree::Obj(fs) => bracketed(
                 "{",
                 "}",
@@ -96,8 +101,8 @@ impl Tree {
                     .map(|(k, t)| concat(vec![text(format!("{k}: ")), t.doc()]))
                     .collect(),
             ),
-            // `[{` .. `}]`
-            Tree::List(xs) if matches!(xs.as_slice(), [Tree::Obj(fs)] if !fs.is_empty()) => {
+            // `[{` .. `}]`, `[[` .. `]]`
+            Tree::List(xs) if matches!(xs.as_slice(), [t] if t.composite()) => {
                 concat(vec![text("["), xs[0].doc(), text("]")])
             }
             Tree::List(xs) => bracketed("[", "]", "", xs.iter().map(Tree::doc).collect()),
@@ -311,8 +316,10 @@ mod tests {
         );
     }
 
+    /// A field's value is not hugged: the field is on its own line, and
+    /// a list of one object inside it hugs that.
     #[test]
-    fn an_object_of_one_list_hugs_it() {
+    fn an_object_of_one_list_breaks_its_field() {
         let t = Tree::Obj(vec![(
             "Statement".into(),
             Tree::List(vec![Tree::Obj(vec![
@@ -326,10 +333,12 @@ mod tests {
         assert_eq!(
             layout("policy = ", &t, 94),
             [
-                "policy = { Statement: [{",
-                "  Action: \"rds-db:connect\",",
-                "  Resource: \"orders.cx3k.us-east-1.rds.amazonaws.com\",",
-                "}] }",
+                "policy = {",
+                "  Statement: [{",
+                "    Action: \"rds-db:connect\",",
+                "    Resource: \"orders.cx3k.us-east-1.rds.amazonaws.com\",",
+                "  }],",
+                "}",
             ]
         );
     }

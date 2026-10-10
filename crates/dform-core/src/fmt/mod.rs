@@ -350,8 +350,8 @@ mod tests {
         assert_eq!(fmt(&chain), chain);
     }
 
-    /// A list whose only element is an object hugs it, `[{` .. `}]`, and an
-    /// object whose only field is a list hugs that.
+    /// A list whose only element is an object hugs it, `[{` .. `}]`; an
+    /// object whose only field is a list does not: the field is keyed.
     #[test]
     fn a_list_of_one_object_hugs_it() {
         let wide = "x".repeat(50);
@@ -365,7 +365,45 @@ mod tests {
         let src = format!("let o = {{ k: [\"{wide}\", \"{wide}\"] }}\n");
         assert_eq!(
             fmt(&src),
-            format!("let o = {{ k: [\n  \"{wide}\",\n  \"{wide}\",\n] }}\n")
+            format!("let o = {{\n  k: [\n    \"{wide}\",\n    \"{wide}\",\n  ],\n}}\n")
+        );
+    }
+
+    /// A call whose only argument is an object or a list hugs it, `f({`
+    /// .. `})`, as a list hugs its only element, and what it holds hugs
+    /// by the same rule (the README's IAM policy); a call of several
+    /// arguments, or of one named argument (keyed, as an object's field
+    /// is), breaks a line per argument.
+    #[test]
+    fn a_call_of_one_composite_hugs_it() {
+        let wide = "x".repeat(50);
+        let src = format!(
+            "resource t n {{ p = json.encode({{ S: [{{ a: \"{wide}\", b: \"{wide}\" }}] }}) }}\n"
+        );
+        let want = format!(
+            "resource t n {{\n  p = json.encode({{\n    S: [{{\n      a: \"{wide}\",\n      b: \"{wide}\",\n    }}],\n  }})\n}}\n"
+        );
+        assert_eq!(fmt(&src), want);
+        assert_eq!(fmt(&want), want);
+        let src = format!("let l = f([\"{wide}\", \"{wide}\"])\n");
+        assert_eq!(
+            fmt(&src),
+            format!("let l = f([\n  \"{wide}\",\n  \"{wide}\",\n])\n")
+        );
+        let src = format!("let l = [[\"{wide}\", \"{wide}\"]]\n");
+        assert_eq!(
+            fmt(&src),
+            format!("let l = [[\n  \"{wide}\",\n  \"{wide}\",\n]]\n")
+        );
+        let src = format!("let l = f([\"{wide}\"], \"{wide}\")\n");
+        assert_eq!(
+            fmt(&src),
+            format!("let l = f(\n  [\"{wide}\"],\n  \"{wide}\",\n)\n")
+        );
+        let src = format!("let l = f(x: [\"{wide}\", \"{wide}\"])\n");
+        assert_eq!(
+            fmt(&src),
+            format!("let l = f(\n  x: [\n    \"{wide}\",\n    \"{wide}\",\n  ],\n)\n")
         );
     }
 

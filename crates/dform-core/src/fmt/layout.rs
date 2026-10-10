@@ -8,8 +8,8 @@
 //! The groups:
 //! - a list, an object, an argument list, a tuple, an object type and a
 //!   declaration's columns: one element per line when broken, each with a
-//!   trailing comma; a list whose only element is an object (or an object
-//!   whose only field is a list) hugs it, `[{` .. `}]`;
+//!   trailing comma; a list or an argument list whose only element is a
+//!   list or an object hugs it, `[{` .. `}]`, `f({` .. `})`;
 //! - a comprehension: `[ item |`, a literal per line with a trailing
 //!   comma, `]`;
 //! - a block (a resource's, a `set`'s, a type's, an object input's
@@ -450,10 +450,17 @@ impl Layout {
     fn node(&mut self, n: &SyntaxNode) -> Doc {
         let elems = significant(n);
         match n.kind() {
-            LIST => self.list(n, &elems),
-            OBJECT => self.object(n, &elems),
+            // `[a, b]`, `f(a, b)`; `[{ .. }]`, `f([ .. ])`.
+            LIST | ARG_LIST => self.hug(n, &elems).unwrap_or_else(|| {
+                self.bracketed(&elems, 0, Shape::term("", Commas::Trailing))
+                    .0
+            }),
+            OBJECT => {
+                self.bracketed(&elems, 0, Shape::term(" ", Commas::Trailing))
+                    .0
+            }
             COMPREHENSION => self.comprehension(&elems),
-            ARG_LIST | TUPLE => {
+            TUPLE => {
                 self.bracketed(&elems, 0, Shape::term("", Commas::Trailing))
                     .0
             }
@@ -513,57 +520,27 @@ impl Layout {
         concat(out)
     }
 
-    /// `[a, b]`; `[{ .. }]` hugs its one object.
-    fn list(&mut self, n: &SyntaxNode, elems: &[SyntaxElement]) -> Doc {
-        let items: Vec<SyntaxNode> = n.children().collect();
-        if let [obj] = items.as_slice()
-            && obj.kind() == OBJECT
-            && obj.children().next().is_some()
-            && !self.commented_around(n, obj)
+    /// `outer`'s brackets hugging their only element, `[{` .. `}]`,
+    /// `f([` .. `])`, when it is a list or an object with something in it
+    /// and no comment sits between them: its own group breaks, the
+    /// brackets stay on its outer lines. A keyed element (an object's
+    /// field, a named argument) is not hugged: its key is on its own line.
+    fn hug(&mut self, outer: &SyntaxNode, elems: &[SyntaxElement]) -> Option<Doc> {
+        let mut items = outer.children();
+        let (Some(sole), None) = (items.next(), items.next()) else {
+            return None;
+        };
+        if !matches!(sole.kind(), OBJECT | LIST)
+            || sole.children().next().is_none()
+            || self.commented_around(outer, &sole)
         {
-            let (SyntaxElement::Token(o), Some(SyntaxElement::Token(c))) =
-                (&elems[0], elems.last())
-            else {
-                unreachable!("a list is bracketed")
-            };
-            return concat(vec![self.tok(o), self.node(obj), self.tok(c)]);
+            return None;
         }
-        self.bracketed(elems, 0, Shape::term("", Commas::Trailing))
-            .0
-    }
-
-    /// `{ k: v }`; `{ k: [ .. ] }` hugs its one list.
-    fn object(&mut self, n: &SyntaxNode, elems: &[SyntaxElement]) -> Doc {
-        let fields: Vec<SyntaxNode> = n.children().collect();
-        if let [f] = fields.as_slice()
-            && f.kind() == OBJECT_FIELD
-            && let Some(list) = f.children().next()
-            && list.kind() == LIST
-            && list.children().next().is_some()
-            && !self.commented_around(n, &list)
-        {
-            let (SyntaxElement::Token(o), Some(SyntaxElement::Token(c))) =
-                (&elems[0], elems.last())
-            else {
-                unreachable!("an object is braced")
-            };
-            let key = significant(f);
-            let (SyntaxElement::Token(k), SyntaxElement::Token(colon)) = (&key[0], &key[1]) else {
-                unreachable!("a field with a value is `k: v`")
-            };
-            return concat(vec![
-                self.tok(o),
-                text(" "),
-                self.tok(k),
-                self.tok(colon),
-                text(" "),
-                self.node(&list),
-                text(" "),
-                self.tok(c),
-            ]);
-        }
-        self.bracketed(elems, 0, Shape::term(" ", Commas::Trailing))
-            .0
+        let (SyntaxElement::Token(o), Some(SyntaxElement::Token(c))) = (&elems[0], elems.last())
+        else {
+            unreachable!("a list or an argument list is bracketed")
+        };
+        Some(concat(vec![self.tok(o), self.node(&sole), self.tok(c)]))
     }
 
     /// Whether a comment no element took is on `t`.
