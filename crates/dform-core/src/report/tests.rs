@@ -45,8 +45,8 @@ fn a_refusal_says_its_bindings_never_its_json() {
     assert_eq!(
         said.concat(),
         "refused  image not pinned\n  \
-             image = \"traefik:v3.7\", replicas = 2\n  \
-             image = \"nginx\", replicas = 1\n\
+             ├─ image = \"traefik:v3.7\", replicas = 2\n  \
+             └─ image = \"nginx\", replicas = 1\n\
          refused  no owner\n  \
              of = net.vpc main\n\
          refused  need the pngu namespace\n"
