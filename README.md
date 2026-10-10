@@ -20,7 +20,7 @@ the plan. Apply reconciles the world with the plan in ticks, and what
 one tick creates, an endpoint or a kubeconfig, is a value the next tick
 plans with.
 
-A complete program, on the AWS-shaped mock:
+A complete program:
 
 ```dform
 use aws { region = "us-east-1" }
@@ -64,12 +64,9 @@ policy  1 hold
 
 When the region gains a zone, the next plan has one more subnet and the
 file does not change, because `aws.availability_zone` is a table backed
-by the provider. `policy 1 hold` is the deny, checked by this plan and
-holding. The examples run on a fake cloud built into dform with no
-credentials; `cargo install --path .`, then `dform -C examples/tour
-plan`. dform is pre-release: the language still changes without
-compatibility, few providers are real, and the project it is built
-against has not applied to a real cloud yet.
+by the provider. `policy 1 hold` is the deny, checked and holding. dform
+is pre-release: the language still changes, few providers are real, and
+nothing has applied to a real cloud yet.
 
 ## Describe what should exist
 
