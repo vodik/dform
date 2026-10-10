@@ -22,7 +22,7 @@ one tick creates, an endpoint or a kubeconfig, is a value the next tick
 plans with. Each tick is the least model over the world the one before
 it left.
 
-Here is a complete program, on the AWS-shaped mock:
+A complete program, on the AWS-shaped mock:
 
 ```dform
 use aws { region = "us-east-1" }
@@ -64,10 +64,10 @@ tick 1  4 changes
 policy  1 hold
 ```
 
-`aws.availability_zone` is a relation the provider answers, and the
-subnet block, ending in `where`, makes one subnet per answer, so when
-the region gains a zone the next plan has one more subnet and the file
-does not change. The examples run on a fake cloud built into dform with
+When the region gains a zone, the next plan has one more subnet and
+the file does not change: `aws.availability_zone` is a relation the
+provider answers, and a block ending in `where` makes one resource per
+answer. The examples run on a fake cloud built into dform with
 no credentials. To try one, `cargo install --path .`, then `dform -C
 examples/tour plan`.
 
@@ -80,7 +80,7 @@ Terraform makes a block a template and adds `for_each`, `depends_on`,
 `-target` and `default_tags` for what a template cannot say.
 
 **Every rule sees every resource, and an attribute has many authors.**
-A convention should be written once and hold in every module. A `set`
+A convention is written once and holds in every module. A `set`
 writes into any resource its clause matches, merged per leaf with what
 the module wrote itself:
 
@@ -97,10 +97,10 @@ The AWS provider's `default_tags` does this for tags, across the
 resources that one provider handles.
 
 **Policy adds as well as forbids, in the same file.** A rule about a
-change should sit beside the resources it governs. The plan is a table
+change sits beside the resources it governs. The plan is a table
 of `deformation` rows the same rules read, so "no deletes in prod" is
 `deny "no deletes in prod" where env == "prod", deformation("delete", _,
-_)` over this:
+_)` over rows like these:
 
 ```
 $ dform query 'deformation(k, r, _)' --set database.backup_days=7
@@ -108,15 +108,14 @@ K         R
 "update"  db.postgres orders
 ```
 
-A policy over a value known only after apply should say so. The logic
+A policy over a value known only after apply says so. The logic
 has three values, and nothing is assumed false for being unknown, so
 such a policy is undetermined and the plan names the tick that decides
 it. OPA reads Terraform's plan JSON, where such a value is only marked
 unknown.
 
-**Rules recurse.** Anything shaped like a graph should be derived, so
-routes over which networks reach which stay right as spokes come and
-go:
+**Rules recurse.** Anything shaped like a graph is derived, so
+reachability stays right as spokes come and go:
 
 ```dform
 link(h, t) where hub(h), spoke(t)
@@ -127,8 +126,8 @@ reaches(a, c) where reaches(a, b), link(b, c)
 ```
 
 **A value the cloud produces later is a value now.** What depends on a
-value the cloud has not assigned yet should be in the plan anyway, in
-the tick after that value exists, naming what it waits on:
+value the cloud has not assigned yet is in the plan anyway, in the tick
+after that value exists, naming what it waits on:
 
 ```dform
 resource iam.policy "connect-${host}" {
@@ -151,7 +150,7 @@ one plan, where the Terraform Kubernetes provider's documentation asks
 for the two in separate `apply` operations.
 
 **Everything explains itself, absence included.** A missing resource
-should have an answer as precise as a present one. `dform why` names
+has an answer as precise as a present one. `dform why` names
 the rule that could have made it and the condition that failed:
 
 ```
@@ -171,7 +170,7 @@ function is pure or reads the world, and the language knows which, so
 `random.password("db")` is the same every run and a read of a host
 still booting waits for its tick.
 
-A document should be a value wherever it lives. `io.read` takes a
+A document is a value wherever it lives. `io.read` takes a
 project path or a uri, and a format's package decodes it into rows that
 keep their file and line:
 
@@ -190,7 +189,7 @@ resource k8s.custom_resource_definition "${d.metadata.name}" = d where {
 
 Terraform's `file()` reads only files on disk at the start of a run.
 
-Environments should differ in one file. Each value of a `key` is its own
+Environments differ in one file. Each value of a `key` is its own
 deployment with its own state, and a `set` under a condition overrides
 an input's default:
 
@@ -206,7 +205,7 @@ set { agents = 1, sizes.synapse = 100Gi } where env == "prod"
 Terraform keeps a state per workspace and varies a configuration by
 `terraform.workspace`.
 
-A secret should not reach an output, an address or a count by accident.
+A secret cannot reach an output, an address or a count by accident.
 The compiler follows every value made from one, and a leak is an error
 at its line:
 
@@ -223,8 +222,8 @@ deployment's master, and `dform secrets rotate D KEY` changes one, one
 plan line per place it lands. Terraform's `sensitive` keeps a value out
 of its CLI output and still stores it in state.
 
-Every deny should hold in every environment before anything ships.
-`dform test` runs the program once per combination of its enums, bools
+Every deny holds in every environment before anything ships, or
+`dform test` says which does not. It runs the program once per combination of its enums, bools
 and keys, against an empty world:
 
 ```
@@ -244,7 +243,7 @@ A `terraform test` file runs the `run` blocks its author writes.
 
 ## The tool
 
-**Stacks and deployments.** An estate should plan and apply as one, each
+**Stacks and deployments.** An estate plans and applies as one, each
 deployment with its own plan, question and state, in dependency order.
 Which deployments exist is code. `project.df` lists them as resources,
 `resource stacks.platform lab { env = "lab" }`, and a stack reads
@@ -288,8 +287,8 @@ configured and no state. For the Kubernetes provider, `dform render
 apps env=lab` is a YAML stream for Argo CD's config management plugin or
 `kubectl apply -f -`.
 
-**Approvals.** A risky change should wait for a person, and the
-approval should cover exactly what applies. `requires_approval(r,
+**Approvals.** A risky change waits for a person, and the approval
+covers exactly what applies. `requires_approval(r,
 reason)` holds the change until someone signs the plan's digest, and
 `apply --approval FILE` brings the signature. Atlantis's `approved`
 requirement holds an apply until someone other than its author approves
