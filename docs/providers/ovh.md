@@ -178,7 +178,7 @@ network not in its region is refused naming the regions it is in.
 `server.private_ips[lab.id]` is its address on `lab`.
 
 The API never answers an instance's user data: the schema marks it
-`write_only` (R-106), so dform keeps the digest of what it applied (never
+`write_only`, so dform keeps the digest of what it applied (never
 the text) in state beside the instance, and Plan compares the program's
 user data with it: a different one replaces the instance, on any machine
 that reads the state. With nothing kept (an instance made elsewhere) the
@@ -290,7 +290,7 @@ apply ovh.domain_record["k8s"]: zone vodik.xyz is not hosted on this OVH account
 
 ## Data sources
 
-Tables the provider's schema declares (`extern_decl`, R-106), which a
+Tables the provider's schema declares (`extern_decl`), which a
 program reads like any relation with no `extern` line:
 
 ```text
@@ -334,7 +334,7 @@ resource ovh.domain_record k8s {
 
 OVH's create calls are not idempotent. A Create first looks for an object
 of its content, what the table above says it is found by (the schema's
-`type_lookup`, R-195; not its identity, and not what replaces it): one
+`type_lookup`; not its identity, and not what replaces it): one
 this provider process made for the
 same idempotency key is the answer, brought to the document (a user's S3
 credential made, a volume attached); another is refused, to be adopted

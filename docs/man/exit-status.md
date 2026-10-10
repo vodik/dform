@@ -4,7 +4,7 @@ too):
 | Status | Meaning |
 |---|---|
 | 0 | done: the command did what it was asked (`plan` produced a plan, with or without changes) |
-| 1 | failed: an error, printed; or an apply's wait on a value the world has not reached ran past its deadline (`not reached in 10m`, R-201: state is consistent, and the next apply waits again); or `status` found an object not healthy or suspended (its line says which); or `render` met a value it cannot print (each named) |
+| 1 | failed: an error, printed; or an apply's wait on a value the world has not reached ran past its deadline (`not reached in 10m`: state is consistent, and the next apply waits again); or `status` found an object not healthy or suspended (its line says which); or `render` met a value it cannot print (each named) |
 | 2 | usage: the command line is wrong (the argument parser's own) |
 | 3 | declined: a question was answered no; nothing of that tick was applied, and nothing is printed as an error |
 | 4 | refused by the program: its conflicts and denies, printed (`plan`, `apply` and `render` alike) |

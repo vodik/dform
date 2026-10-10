@@ -1,6 +1,6 @@
 # Controller mode (experimental)
 
-Controller mode is experimental (DESIGN.org R-41): `dform controller run`
+Controller mode is experimental: `dform controller run`
 and `dform stack handover` run, each printing a warning first, but `dform
 --help`, `dform stack --help` and the shell completions list them only
 with `DFORM_EXPERIMENTAL=1`. The relations the controller hands a program
@@ -20,8 +20,8 @@ What is not decided, and why it is not handed to a user yet:
   no status to query, no health endpoint, no way to pause it but to stop
   it.
 - What it is told: `drift`, `auto_reconcile`, `approve` and `hold` still
-  take a resource's type and address as text, not a reference (R-42
-  converted every other lifecycle relation).
+  take a resource's type and address as text, not a reference (every other lifecycle relation
+  takes a reference).
 
 ## Running a controller
 

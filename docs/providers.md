@@ -2,7 +2,7 @@
 
 A provider is what dform asks about the world: it reads objects, plans a
 change to one, applies it. The protocol it speaks is
-`wit/dform-provider.wit` (DESIGN.org R-13). This page is how to write one
+`wit/dform-provider.wit`. This page is how to write one
 with the SDK (`crates/dform-sdk`), what the host gives it, how the
 operator grants it, and the two ways it runs.
 
@@ -15,7 +15,7 @@ reach it, is a call to the host (`wit/host/dform-host.wit`, `dform:host`):
 | interface | what it does |
 |---|---|
 | `http` | a request with TLS by the host: the machine's CA and proxy (`HTTPS_PROXY`, `NO_PROXY`), a credential applied (a header, a client certificate and its CA), optionally through a tunnel |
-| `io` | `read` a location, whatever its scheme (read-only: a write is a provider's apply, R-155): `ssh://USER@HOST/PATH`, `https://`, `git+https://HOST/OWNER/REPO/PATH?ref=TAG` through a mirror in `$XDG_CACHE_HOME/dform/git/<host>-<owner>/<repo>.git/`, `s3://BUCKET/KEY`, a scheme another provider declares (R-153; docs/reference.md, "Locations and transports"); as dform.toml grants |
+| `io` | `read` a location, whatever its scheme (read-only: a write is a provider's apply): `ssh://USER@HOST/PATH`, `https://`, `git+https://HOST/OWNER/REPO/PATH?ref=TAG` through a mirror in `$XDG_CACHE_HOME/dform/git/<host>-<owner>/<repo>.git/`, `s3://BUCKET/KEY`, a scheme another provider declares (docs/reference.md, "Locations and transports"); as dform.toml grants |
 | `ssh` | `exec` (argv, never a shell string), `write` a file, `forward` a port to a tunnel; keys from the operator's agent (a file is read through `io`) |
 | `git` | a commit onto a branch of a local repository (a file is read through `io`) |
 | `secrets` | open a credential by name: a handle, never the value |
@@ -24,7 +24,7 @@ reach it, is a call to the host (`wit/host/dform-host.wit`, `dform:host`):
 A read of something the world has not reached yet (a file cloud-init has
 not written, a host still booting) answers `not-yet`, distinct from an
 error, so the engine waits on it, within the provider's `wait` (10m
-unless dform.toml says; R-81, R-122), not a call's `timeout`. An error carries a class: `final`, `retryable` (nothing changed,
+unless dform.toml says), not a call's `timeout`. An error carries a class: `final`, `retryable` (nothing changed,
 worth sending again) or `maybe-applied` (no answer came; it may have
 taken effect).
 
@@ -117,7 +117,7 @@ fn main() -> std::process::ExitCode {
   `computed`, `id`, `sensitive`, `force_new`, `optional_computed`,
   `nullable`, `write_only` (the API takes it and never answers it: a
   password; dform keeps its digest in state and a changed one is a
-  change, R-106), `name_like`; `list_key = "name"`. On the struct: `type`
+  change), `name_like`; `list_key = "name"`. On the struct: `type`
   (required), `replace`, `retry`, `lookup = "name,region"` (its
   `type_lookup`, below), `remote_name = "name"` (its `type_remote_name`,
   below), `lifecycle = "retain"` (its `type_lifecycle`, below), `health`
@@ -126,7 +126,7 @@ fn main() -> std::process::ExitCode {
   An `optional_computed` one is answered as computed (dform compares it
   only where the program writes it), so leave it out of what Read
   answers when unset: `skip_serializing_if = "Option::is_none"`.
-- Identity, replacement and the lookup are three things (R-195). An
+- Identity, replacement and the lookup are three things. An
   object's identity is its `id`: state holds it, and an update goes to
   it. An attribute is `force_new` only if the API cannot change it on
   the object's id; that it names the object to a person, or is what a
@@ -178,14 +178,14 @@ fn main() -> std::process::ExitCode {
   `later` marked `provisional: planned against the offline schema;
   planned again once kubeconfig is known`, counts them, and records
   the mark in the plan file; the run that has the settings plans them
-  again against what they reach (R-193). A provider that flags none
+  again against what they reach. A provider that flags none
   has every setting as its connection: its offline plan is the only
   one there is until then. One that waits on another setting (the
   namespace) holds its objects without the mark.
 - `apply` gets a sensitive attribute's bytes when the secret is another
   provider's (a Tailscale key in an instance's `user_data`), whole or
   inside a string template: dform reveals it into the document for that
-  call only (R-218). Plan sees it as dform has it: a secret as its label,
+  call only. Plan sees it as dform has it: a secret as its label,
   `{"$secret": "T/N#P"}`, a template with each secret held in place. One
   the provider holds itself comes as its label in Apply too, for it to
   read where it keeps it.
@@ -193,17 +193,17 @@ fn main() -> std::process::ExitCode {
   only what `desired` holds, leaving an absent attribute as the object
   has it. The provider then has the `keep` capability: an Apply update's
   `keep` paths (a write-only secret a run without the deployment's master
-  proved unchanged, R-164) come filled from what Read answers, or absent
+  proved unchanged) come filled from what Read answers, or absent
   where it answers nothing. Without it a `keep` is refused, and dform
   sends none: such an update needs the master.
 - A typed provider has the `offline` capability: its Plan with no
   credentials checks the desired document against its schema, as with
-  them but for `Lifecycle::check`, so `dform test` asks it (R-188). A
+  them but for `Lifecycle::check`, so `dform test` asks it. A
   provider of its own declares `offline` in its handshake when its Plan
   answers with no credentials as it would with them (from a schema it
   holds, or a fake of its API); one that does not is not asked under
   test, which says so.
-- Health (R-203) is a call of its own, beside Read, and `dform status`
+- Health is a call of its own, beside Read, and `dform status`
   is the only one that asks it: an object's state now, one of
   `healthy`, `progressing`, `degraded`, `suspended` and `unknown`, and a
   reason in one line, never a sensitive value. `#[dform(health)]` on
@@ -235,7 +235,7 @@ fn main() -> std::process::ExitCode {
   status beside the change in apply's progress, as it is, with the time
   the call has run; say it when your view changes, never on a timer.
   Over gRPC it is the Apply's stream of events, in a component the
-  `stream<event>` its `apply` answers (R-130). A `Handler` gets the same
+  `stream<event>` its `apply` answers. A `Handler` gets the same
   sink as `handle`'s second argument.
 - An error refuses the call. One the host classed `maybe-applied` is
   `MaybeApplied` (dform looks before it sends it again); a `retryable`
@@ -255,12 +255,12 @@ fn main() -> std::process::ExitCode {
 - A `sensitive` computed value leaves the provider as its label: the
   provider keeps the bytes (an API that answers a key once, to its
   create) and `Provider::reveal(held)` answers them to the engine, under
-  the deployment's lease only, for the one call that takes them (R-45).
+  the deployment's lease only, for the one call that takes them.
 - A data source is an `extern_decl` fact given to
   `Typed::facts_text` (`provider_setting` facts too), answered by
   `Provider::query(pred, inputs)`; asked before the program's settings
   came, the SDK answers it not yet. It may take one of the provider's
-  types' names (`tailscale.device`, R-196): the relation `T(..)` is then
+  types' names (`tailscale.device`): the relation `T(..)` is then
   what the provider lists, managed or not, and `x in T` stays the
   program's own resources of `T`, so a policy over them never ranges
   over the account.
@@ -335,8 +335,8 @@ matches it to [providers.k8s] reads in dform.toml`. A project's own file
 is never a provider's to read. A provider that reads a scheme of its own
 (`gs://`) declares it, `schemes = ["gs"]` in its manifest (the gRPC
 `Manifest`'s `schemes`; a `Handler`'s `schemes` and `read_location` in the
-SDK, or a typed provider's `Provider::SCHEMES` and `Provider::read`), and serves `io` for it (the gRPC `Io` service, and `Files`, its name
-before R-155; the WIT world
+SDK, or a typed provider's `Provider::SCHEMES` and `Provider::read`), and serves `io` for it (the gRPC `Io` service, and `Files`, its earlier
+name; the WIT world
 `scheme-provider` exports it): dform routes a read of the scheme to it, the
 program's (`yaml.decode(io.read("gs://.."))`) and another provider's alike, through the
 host, never one provider to another; dform's own schemes are never a
@@ -344,7 +344,7 @@ provider's. A source that keeps versions (a secret manager) answers the
 version with the bytes (`io.read-versioned`, gRPC `Io.ReadVersioned`, the
 SDK's `Document { bytes, version }`), and a provider's own read of such
 a location gets it too (`Calls::io_read_versioned`, `Host.ReadVersioned`); dform records it in the plan file
-and refuses `apply PLAN` once it moved (R-172). The Vault provider is the
+and refuses `apply PLAN` once it moved. The Vault provider is the
 reference (`vault://`); a 1Password provider would declare `op` and read
 `op://VAULT/ITEM/FIELD` over 1Password Connect's HTTP API, a fnox one
 `fnox`, running fnox itself if its author chooses: dform never does.
@@ -369,7 +369,7 @@ A credential is a name; its kind says how the host applies it:
 
 The value comes from the program (`use k8s { kubeconfig =
 cluster.kubeconfig }` registers the secret under the name the grant
-lists, R-45's reveal), else the operator's file
+lists), else the operator's file
 `$XDG_CONFIG_HOME/dform/credentials/KIND/NAME` (`DFORM_CREDENTIALS`
 names another directory). It stays in dform's memory, is never
 serialized to a provider, and is zeroed when dropped. A provider opening
@@ -398,7 +398,7 @@ host  wasm: credentials: kubeconfig:prod
 - `io.read` answers a `list<u8>` in a component and a stream of chunks
   over gRPC; a component's `stream<u8>` waits on the host interfaces'
   move to WASI 0.3's async, with the rest of `dform:host`. `io` has no
-  write, and will not (R-155): a write is an effect with no state to
+  write, and will not: a write is an effect with no state to
   converge, a provider's apply.
 - A wasm component cannot declare a scheme yet: the wasm host does not
   call a component's `io` export (a native provider's `Io` is called).

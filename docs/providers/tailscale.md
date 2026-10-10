@@ -116,7 +116,7 @@ the API's.
 
 `key` is sensitive and held by the provider. The API answers it once, to
 the create; the provider keeps it in memory for the run and gives it to
-dform's engine alone, which reveals it into the call that takes it (R-45).
+dform's engine alone, which reveals it into the call that takes it.
 State, the plan file, the audit log and every message have its label,
 `tailscale.auth_key/nodes#key`, never the bytes. A run after the one that
 made the key cannot reveal it: the API keeps no copy, and the reveal is

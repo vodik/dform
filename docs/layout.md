@@ -2,12 +2,12 @@
 
 A dform project is a directory tree whose root holds `dform.toml`. One
 directory has a meaning, `stacks/`; every other `.df` file is a module,
-named by its path from the root (R-65).
+named by its path from the root.
 
 ```
 dform.toml                  the project root (`dform init` writes one)
 project.df                  the project module: the deployments, each a
-                            resource of its stack's type (R-114)
+                            resource of its stack's type
 stacks/<stack>.df           one stack per file, named after it
 <name>.df, <dir>/<name>.df  modules: `config.df` is the module
                             `config`, `modules/net.df` is `modules.net`
@@ -33,8 +33,7 @@ dform.state/                state: per deployment, audit logs, masters,
   value), `[defaults]`
   (the same settings for every stack whose table does not say, and an s3
   backend's `lease_duration` and `lease_renewal`), `[io]` (how a
-  location is read, the grants a program's `io.read` is satisfied by,
-  R-153, R-155: `wait`, the wait on one not there yet, and `credentials`,
+  location is read, the grants a program's `io.read` is satisfied by: `wait`, the wait on one not there yet, and `credentials`,
   a location pattern to a credential by name),
   `[discovery]` (`exclude` globs) and `[packages.NAME]` (another project mounted at
   `NAME`, `path = "../infra"`: its modules are `infra.config`, its stacks
@@ -47,7 +46,7 @@ dform.state/                state: per deployment, audit logs, masters,
   and the root files a `[stacks.NAME]` names (a one-file project is
   `dform.toml` beside `shop.df` with `[stacks.shop]`); any other root
   file is a module. Any file runs by path, named after itself, as an
-  entrypoint (R-208). A `[stacks.NAME]` no file is is an error. A directory
+  entrypoint. A `[stacks.NAME]` no file is is an error. A directory
   holding its own `dform.toml` is another project, not walked.
 - A stack's keys are its `key` statements: `key env: environment` makes
   each value of `env` a deployment, given by the target (`dform plan shop
@@ -91,7 +90,7 @@ dform.state/                state: per deployment, audit logs, masters,
   its secrets' root (docs/reference.md "Secrets").
 
 The lints: a `key` in a file a program uses as a module is an error at
-its line (R-208), and so is a resource of a stack anywhere but in the
+its line, and so is a resource of a stack anywhere but in the
 project module.
 
 ## This repository

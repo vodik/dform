@@ -2,12 +2,12 @@
 #+STARTUP: overview
 
 *History.* This walk-through is in the surface of 2026-10-01, before
-R-65 (modules, components and stacks), R-38 (settings are inputs) and
-R-73 (a deployment's outputs are a keyed read): =stack ovh.infra[env]
+modules, components and stacks, settings as inputs, and a deployment's
+outputs as a keyed read: =stack ovh.infra[env]
 {..}=, =settings dev {..}= rows and =settings[env]=, =module=,
 =stack_output(..)= and =input relation .. from= are gone. It is
 kept for its reasoning about OVH; the example and its rewrite in the
-current syntax, without the bridge, are Phase 10's (DESIGN.org R-46).
+current syntax, without the bridge, are still to come.
 docs/grammar.md is the syntax.
 
 A worked example in the surface syntax of its day (edition 2026): a

@@ -27,7 +27,7 @@ file   := (header NL)* (stmt NL)*
 header := key | input                 ; in that order: key, input, input p from
 ```
 
-The edition is the project's, not the file's (R-68): dform.toml says it,
+The edition is the project's, not the file's: dform.toml says it,
 `[project] edition = "2026"`, and requires it; a manifest without it, or
 with another, is an error naming the key. A program in no project is read
 in this dform's edition. An `edition 2026` line, every file's first
@@ -49,14 +49,14 @@ A header statement after the body's first statement is an error that says
 to move it ("`key env` is a header statement: move it above the file's
 first other statement, line 5"); `dform fmt` moves it, and puts the header's
 kinds in order, keeping the author's order within a kind. A type alias,
-`type NAME = ..`, may stand among the header's lines (R-208), so the type
+`type NAME = ..`, may stand among the header's lines, so the type
 an input names can come first (`type environment = enum("lab", "prod")`,
 then `input env: environment`); it neither begins the body nor moves. The
 header reads names the body declares: `input env: environment` above
 `type environment = ..` resolves too.
 
 What a file or a component offers, not only what it takes, comes first
-too (R-11a): `decl`, then `output`, after `input` and before the rest.
+too: `decl`, then `output`, after `input` and before the rest.
 Unlike `key` and `input`, the parser does not reject a `decl` or an
 `output` written below the body (it is not a syntax error at any
 position); `dform fmt` places them regardless, moving each with the
@@ -83,16 +83,15 @@ body block (`where { }`) separate their entries by a newline or a comma.
 IDENT    := [A-Za-z_][A-Za-z0-9_]*       ; case decides nothing; "_" alone is the placeholder
 STRING   := "\"" ... "\""                ; may span lines; escapes \" \\ \n \t \u{hex}, \ at a line end joins; ${e} interpolates, holes nest
 INT      := [0-9]+                       ; -1 is unary minus applied to 1
-QUANTITY := [0-9]+ ("." [0-9]+)? [A-Za-z][A-Za-z0-9]*   ; 1Gi 500m 1h30m 1.5Gi (R-66)
-          | [0-9]+ "." [0-9]+                           ; 0.5: a float (R-75); cores in a cpu position
+QUANTITY := [0-9]+ ("." [0-9]+)? [A-Za-z][A-Za-z0-9]*   ; 1Gi 500m 1h30m 1.5Gi
+          | [0-9]+ "." [0-9]+                           ; 0.5: a float; cores in a cpu position
 RANK     := "@default" | "@override"
 COMMENT  := "#" to end of line
 ```
 
 Punctuation: `( ) { } [ ] , . .. ..= : = == += != < <= > >= + - * / % |`.
 
-`.` is always member access, `..` and `..=` between two terms a range's
-(R-56), `..` leading a field or an element a spread's (R-199), and `/`
+`.` is always member access, `..` and `..=` between two terms a range's, `..` leading a field or an element a spread's, and `/`
 always division. A number with a letter adjacent is one QUANTITY token
 (`1Gi`, `us-test-1a`'s `1a`), so it never splits into a number and a
 name; what its unit means is the literal's ("Quantities and times").
@@ -108,13 +107,13 @@ component  use  resource
 deny  warn
 ```
 
-`settings` is reserved: the statement of an earlier surface (R-38), an
+`settings` is reserved: the statement of an earlier surface, an
 error naming `set`. `provider`, `instance` and the other statements of
 earlier surfaces are names, and a statement starting with one is an
 error naming its spelling now (`use NAME { .. }`, `resource C n { ..
 }`).
 
-Body words: `not in has`. The clause word: `where` (R-1). Literals: `true
+Body words: `not in has`. The clause word: `where`. Literals: `true
 false`. These six, and the reserved `if`, are never a name in a term; `if`
 is an error wherever it stands, which prints the statement with its clause
 spelled `where`. Anywhere a plain name is expected (a
@@ -124,10 +123,9 @@ keyword may start a chain in a term. Contextual words in
 declarations, where the position is fixed: `from`, `check`,
 `mixed`, `as` (in `use`), the attribute flags (`required computed id
 sensitive nullable`). `module`, `policy`, `import` and `export` are
-words of an earlier surface: each is an error that names what to write
-(R-65).
+words of an earlier surface: each is an error that names what to write.
 Roots: `world`, the inventory, and `super`, the scope around a component
-(R-186, "Components"): never a name in a term.
+("Components"): never a name in a term.
 
 ### Strings and interpolation
 
@@ -138,7 +136,7 @@ A string is a string constant: every constant is quoted (`"prod"`,
 `"a${e}b"` interpolates the term `e` (H-13): it lowers to
 `str.format("a%sb", e)`. `$${` is a literal `${`; a lone `{`, `}` or `$` is
 itself. A hole runs to the `}` that matches its `${` and holds a term
-like any other, strings included (R-175): a string in a hole is lexed
+like any other, strings included: a string in a hole is lexed
 as its own, so its braces are its text and its holes nest to any depth,
 `"#cloud-config\n${yaml.encode({ runcmd: ["${install} sh -s - server"] })}"`.
 A hole never closed is an error at its `${`. A hole is a content
@@ -151,7 +149,7 @@ reference column binds it untyped: `deny "${r}" where deformation(k, r,
 _), r in k8s` prints `k8s.namespace["ns"]`. A literal part may not contain
 `%s`.
 
-A string may span lines (R-61), as in Lisp: its text is everything
+A string may span lines, as in Lisp: its text is everything
 between the quotes, newlines and leading spaces included, and nothing is
 stripped, so what is written is what the provider gets. A hole works on
 any line. A `\` at a line end joins the line with the next: the
@@ -174,7 +172,7 @@ resource compute.vm web {
 never re-indent the lines inside a string and never break a line inside
 one.
 
-A quoted path segment (`x."a-b"`) is one key, whatever it holds (R-77):
+A quoted path segment (`x."a-b"`) is one key, whatever it holds:
 a Kubernetes annotation is written and read as one leaf,
 `metadata.annotations."traefik.ingress.kubernetes.io/router.tls.certresolver"
 = "letsencrypt"`. A stored path is a list of segments: a segment holding
@@ -182,7 +180,7 @@ a Kubernetes annotation is written and read as one leaf,
 label and the plan file print it as written, and `why` takes it back. `dform fmt` keeps the quoted segment, or folds it with its
 siblings into the object form (`metadata.annotations = { "a.b/c": "1",
 "d.e/f": "2" }`, "Formatting"). A selector's quoted step (`input p from
-json.decode(io.read(..))."k"`, R-39) may still not hold `.`, `[` or `]`.
+json.decode(io.read(..))."k"`) may still not hold `.`, `[` or `]`.
 
 ### Doc comments
 
@@ -237,7 +235,7 @@ Case decides nothing; a resolver does (`syntax/resolve.rs`). Resolution is
 program-wide: `loader::load_program` parses the entry file and every module
 its paths name (see "Modules"), collects the declarations of all of them,
 then lowers each: the entry as the program's top level, each module as
-itself. Statement order means nothing (R-100): a read may come before
+itself. Statement order means nothing: a read may come before
 the resource, `let` or `use` it names, as `dform fmt` writes
 a file with its outputs first. `parser::parse_file` and `parse_program` lower one text on its
 own.
@@ -272,7 +270,7 @@ several, and never an error for a key that is not there.
 | `p[a, b]`       | relation or extern `p`  | every column but the last         | `p(a, b, V)`                         |
 | `e[i]`          | a list value            | index (a fresh `i` enumerates)    | `member(e, i, V)`                    |
 
-Scope is lexical (R-186, R-205): a name resolves in the scope it is
+Scope is lexical: a name resolves in the scope it is
 written in, then the enclosing scopes of the same file's nesting, never
 through a `use`. A component reads its own names, then those of the
 component or module around it; a module reads only what its file
@@ -309,7 +307,7 @@ program):
 
 Anything else is `unknown name`, with a hint to quote it.
 
-A scope's reads are one namespace (R-76): a resource may be named like a
+A scope's reads are one namespace: a resource may be named like a
 value, a used module or a copy in scope (its header name is literal, see
 "Block names"), but a read whose first name means both is an error at
 the read, naming both: "`config` names the module and the resource
@@ -321,7 +319,7 @@ resource, so rename one. The resource reads by its type, `T["n"]`, which
 H-10 allows here. A component and a stack are read only by a copy
 (`c[t]`, `s[k=v]`), which a resource never is, so they share a name with
 a resource unambiguously. Inside a module's or a component's body, what
-the body declares wins over a name of the module's own (R-101):
+the body declares wins over a name of the module's own:
 traefik.df's own `resource k8s.namespace traefik` is what
 `traefik.metadata.name` reads there, though `traefik` also names the
 module; the error stands where both are one scope's own.
@@ -332,7 +330,7 @@ component or a type namespace in scope ("variable `net` shadows the type
 namespace `net`"). A bare
 resource name is its address in two places: the value of an `output`
 typed by a resource type, and the left side of `in`, where the type on the
-right picks among resources of one name. It is a reference value (R-42),
+right picks among resources of one name. It is a reference value,
 which prints as its address `T["A"]`, everywhere else it stands for the
 resource: a whole value given to something (an entry, `vpc = main` or the
 pun `vpc`, also inside the component that declares it; a `set`, a `let`,
@@ -340,9 +338,9 @@ an input of a copy, any other output, an element of a list or object there,
 a comprehension's item), a column that takes a resource (the plan's
 `deformation(kind, r, before)` and `world_digest(r, now)`,
 `requires_approval(r, reason)`, `lifecycle(r, what)` and an attribute's
-`lifecycle(r, what, "path")` (R-198), `adopt(r, remote)`,
+`lifecycle(r, what, "path")`, `adopt(r, remote)`,
 `ignore_changes(r, path)`, the last of `moved(T, "old-address", r)`), and
-either side of `==` or `!=` with a resource on the other (R-43). `T[e]`
+either side of `==` or `!=` with a resource on the other. `T[e]`
 and a typed variable are references in the same places.
 
 A variable must have a binding occurrence somewhere in its rule: an
@@ -355,7 +353,7 @@ test; they do not bind.
 ### Paths
 
 A thing's name is its path from the project root, and the module path
-is its namespace, for every kind (R-200): a provider's type
+is its namespace, for every kind: a provider's type
 (`ovh.instance`, the item `instance` of `ovh`), a component (`k3s.node`,
 defined in k3s.df; one defined in the stack's own file is bare, as its
 resources are), a stack (`stacks.platform` for stacks/platform.df,
@@ -374,7 +372,7 @@ prints the path tree: lines that share a prefix (a deployment, a used
 module's instance, a copy) group under one header line, each keeping its
 full name.
 
-There is one grammar for a dotted name (R-112): a path, segments joined
+There is one grammar for a dotted name: a path, segments joined
 by `.`, read from its first segment as "Names" says. A value is
 `config.region`, a copy's output `blue.cidr`, a deployment's
 `platform[env].ingress_ip`, and a resource is addressed the same way:
@@ -389,18 +387,17 @@ as two `use`s may not share a name).
 
 A segment is a name, or any text quoted: a resource whose own name holds
 `.`, `[`, `]`, `/` or `"` (an interpolated DNS name) is one quoted
-segment, `k3s."k8s-lab.vodik.xyz"`, as an attribute path's key is
-(R-77), and a name a value brings at run time is quoted the same way, so
+segment, `k3s."k8s-lab.vodik.xyz"`, as an attribute path's key is, and a name a value brings at run time is quoted the same way, so
 a name never splits into a scope. A resource's address is that path:
 state, the plan file and `--json` carry it, `T["k3s.admin"]` is the
 bracket spelling for one computed or written whole (`T["blue.vpc"]`,
 `T["k3s.\"a.b\""]`), and `why` takes it bare or after its type
-(`why k3s.admin`, `why 'ovh.ssh_key k3s.admin'`). `/` (R-72's separator)
+(`why k3s.admin`, `why 'ovh.ssh_key k3s.admin'`). `/` (an earlier separator)
 and `::` before it in an address a program, `why` or `query` writes are
 errors naming the dot form. State written with `/` addresses is
 pre-release and not migrated.
 
-`[_]` in a path binds each anonymously (R-162): it is the placeholder of
+`[_]` in a path binds each anonymously: it is the placeholder of
 an atom or a pattern written as a step, so it ranges over every match,
 and each `[_]` is its own. After a type, `k8s.stateful_set[_]` is every
 resource of it, as `w in k8s.stateful_set` is; after a list, every
@@ -413,7 +410,7 @@ end not walked again. A `set` is the clause form with a variable per
 k8s.stateful_set[_].spec.template.spec.containers[_].resources.limits =
 { cpu: 500m, memory: 256Mi } @default` is `set c.resources.limits = ..
 where w in k8s.stateful_set, c in w.spec.template.spec.containers`, and
-over a list it writes the elements there are, by their key (R-69): one
+over a list it writes the elements there are, by their key: one
 `[_]` per list, below it fields. `[k]` takes one element by its key as
 before (`containers["api"]`), beside `[_]` or not, and `where` stays for
 a binding that has a name. `why` prints each `[_]`'s binding under
@@ -425,7 +422,7 @@ document's selector takes the same step (`..teams[_].services`,
 ### Types
 
 Types are names of the core (`net.vpc`, `aws.vpc`, `k8s.deployment`).
-A provider's types are `provider.type` (R-36): the provider's name is
+A provider's types are `provider.type`: the provider's name is
 their namespace, so `use aws` serves `aws.vpc` and `aws.s3_bucket`,
 `use k8s` serves `k8s.deployment`, and a bridged Terraform type
 drops its prefix's underscore (`google_compute_subnetwork` is
@@ -449,7 +446,7 @@ and `x in T` there take `T` as written.
 `query` and `why` patterns are read without the program's declarations:
 there, any dotted name that names nothing else is a type.
 
-**Column types** (R-34). A relation's columns are typed: by its `decl`
+**Column types**. A relation's columns are typed: by its `decl`
 where it has one, else by its uses. A non-string literal is its kind
 (`az("a", 1)` gives `az(string, int)`); a string literal is unknown, as
 in Postgres, until its column is settled. A variable in two columns makes
@@ -480,7 +477,7 @@ of nothing.
 The settled signature (`az(string, int)`, a `decl`'s or a rule head's
 column names where there are some) is what the editor's hover prints.
 
-**A value's type is the edge it reaches** (R-192). Every position that
+**A value's type is the edge it reaches**. Every position that
 holds a value is an edge that types what flows into it: a resource's
 attribute (the schema's type at each path under it), a `set`'s target, a
 typed `let`, input or output, a declared column, a function's parameter,
@@ -499,10 +496,10 @@ types are an error naming both (`100m` in `let t` is duration where it
 reaches output d and cpu where it reaches `..requests.cpu`); a `100m` no
 edge reaches is the error naming what would type it. The types read
 from a literal take part (a quantity, a time, a value type read from a
-string); a `string` position takes any of them as its text (R-133), so
+string); a `string` position takes any of them as its text, so
 it joins none.
 
-**Sets** (R-158). A type is an API object with identity; a relationship
+**Sets**. A type is an API object with identity; a relationship
 whose state lives on one side is an attribute of that side, a reference or
 a set of them, and the order of applies comes from the reference: a role's
 policies are `iam.role`'s `policies`, not an attachment resource. An
@@ -542,7 +539,7 @@ unchanged from `plan` (H-16): `net.vpc["main.vpc"]`. A resource in scope is writ
 name: `T["n"]` for a resource `n` in scope, and `T.n`, are errors naming
 `n`. A name declared twice in scope (three resources named `web`) is an
 error listing the candidates by address, but where the position's type
-picks one (R-74): an attribute the provider's schema types `ref(T)`
+picks one: an attribute the provider's schema types `ref(T)`
 (`list(ref(T))`, `set(ref(T))`) takes the one of type `T` (`network =
 main` with `ovh.network main` and `ovh.kube main` in scope), and so does
 a `let` typed `T`. An untyped position (no schema, a `string` attribute,
@@ -551,9 +548,9 @@ dot on a variable with no static type is field access on a value:
 `__path(X, "f")`. A variable a
 reference column binds with no `in` (`deformation(k, r, _)`) is a
 reference of no known type, and `r.p` on it is an error that says to bind
-it with `r in T` (R-43).
+it with `r in T`.
 
-A reference is a reference everywhere (R-185). A program's own relation
+A reference is a reference everywhere. A program's own relation
 has a reference column where a rule's head writes a variable `in` types
 (`workload(w) where w in k8s.deployment`), one `x in resource` or `x in
 NS` binds, one another reference column binds, or a resource by its name:
@@ -569,8 +566,7 @@ in such a column (`workload("web")`) is an error naming the column and
 its type. A column a `decl` types by a resource type (`decl subnet(s:
 net.subnet)`, or `ref(T)`) holds references too. A relation a copy
 exports or a module takes from its user (`output p`, `input p`) carries
-its references across the module's boundary as references (R-204,
-"Inputs and outputs").
+its references across the module's boundary as references ("Inputs and outputs").
 
 A read through an attribute the provider's schema types `ref(T)` reads
 the resource it names: `s.vpc.cidr` (`vpc: ref(net.vpc)`) is `v.cidr
@@ -603,7 +599,7 @@ never a literal that does not hold, so a deny over it cannot pass
 without checking. A field an object does not have is no value
 ("Definedness").
 
-A program never reads an id (R-43). A reference is the resource, and
+A program never reads an id. A reference is the resource, and
 where an attribute identifies another resource the provider's schema
 types it `ref(T)` (`list(ref(T))`, `set(ref(T))`), so the attribute takes
 the resource itself: `vpc = main`, `subnets = [ s | s in net.subnet ]`.
@@ -621,7 +617,7 @@ role.name` read it, and `r == role` compares addresses.
 
 ### Numbers
 
-A number is an `int` (a whole `i64`) or a `float` (R-75: an `f64`).
+A number is an `int` (a whole `i64`) or a `float` (an `f64`).
 An integer literal is an int, `2`; a decimal literal is a float, `0.5`,
 `2.0`. A float is finite: NaN and the infinities are errors where a
 float is read (`--set`, a document, `"nan"` at a `float` position, a division by
@@ -635,7 +631,7 @@ promoted and the result is a float (`7 / 2.0` is `3.5`, `1 + 0.5` is
 `1.5`). An int from a float is named by how it rounds, `int.trunc(f)`,
 `int.round(f)` (a half away from zero), `int.floor(f)`, `int.ceil(f)`; a
 float from an int, and a number from its text, is a typed position's
-read, `let f: float = n`, `let port: int = cfg.port` (R-155); nothing
+read, `let f: float = n`, `let port: int = cfg.port`; nothing
 converts silently.
 Comparison is by value across the two: `1 == 1.0`, `1 < 1.5`, exactly
 (no rounding of a large int). A join matches a value as it is, so a
@@ -654,8 +650,7 @@ its text by the input's declared type: `--set ratio=0.25` is a float,
 
 ### Quantities and times
 
-A quantity is a number with its unit, held in the dimension's base unit
-(R-66): `bytes` (bytes), `cpu` (millicores) and `duration` (R-62). A
+A quantity is a number with its unit, held in the dimension's base unit: `bytes` (bytes), `cpu` (millicores) and `duration`. A
 quantity literal is one token, its unit adjacent:
 
 | type       | written                                             | base       | prints          |
@@ -683,13 +678,13 @@ resource`, `x in k8s`) reads it as every type of the schema (of the
 namespace) that declares the attribute does, when they agree (`cpu:
 100m` under `resources.requests` is cpu); written in a `let`, it is read where
 the let's value reaches (`let limits = { cpu: 100m }` given to
-`resources.requests`, R-192). Where nothing gives it a type the literal
+`resources.requests`). Where nothing gives it a type the literal
 is an error naming both readings, and a typed `let` says which, `let
 limit: cpu = 500m`. A bare
 fraction, `0.5`, is a float ("Numbers"), read as cores where a `cpu`
 is wanted (`0.5` is `500m`, and so is `c > 0.5` where `c` is a cpu).
 
-The algebra (R-66 amendments 3, 4): a quantity scales by a number
+The algebra: a quantity scales by a number
 (`512Mi * 2`, `max_size / 2`, whole base units as integer division),
 adds, subtracts and compares only within its dimension, `sum`, `min` and
 `max` aggregate within one, and a quantity over one of its own dimension
@@ -699,14 +694,14 @@ the operands are literals; at evaluation a mix has no value. Two
 durations compare with a day taken as 24 hours; months compare only with
 months (`1mo` and `30d` do not, a month's length depends on the date).
 
-A `time` (R-62) is a zoned instant, the Temporal model: written as a
+A `time` is a zoned instant, the Temporal model: written as a
 string in a `time` position (`let t: time = ".."`), RFC 3339 with an offset
 (`"2026-10-02T09:00:00Z"`, `Z` is UTC) or a date and time with a zone
 (`"2026-10-02T09:00[Europe/Paris]"`). It carries its zone, prints as
 `2026-10-02T09:00:00+02:00[Europe/Paris]`, and orders by its instant
 whatever the zones (`<`, `min`); `==` is the same instant in the same
 zone, as a value is equal only to itself. `b - a` is the exact duration
-from `a` to `b`, in hours and smaller units (R-134: a type with operators
+from `a` to `b`, in hours and smaller units (a type with operators
 has no functions for them). `t + d` and `t - d` are
 calendar-aware in the time's zone: a month is a calendar month (the 31st
 plus a month is the next month's last day), a day a calendar day across
@@ -725,7 +720,7 @@ is then one spelling for every provider; a value its form cannot hold
 provider sends back at such an attribute is read the same way.
 
 At an attribute the schema types `int` (a CRD's `integer`) a quantity
-is its number in its base unit, `quantity.to(q, "")` (R-190): `512Mi`
+is its number in its base unit, `quantity.to(q, "")`: `512Mi`
 goes as `536870912`, a cpu as whole cores; a cpu that is not a whole
 number of cores, and a duration (no one unit an int means), are a plan
 error naming the attribute and `quantity.to` in the unit the field
@@ -735,7 +730,7 @@ format that spells sizes another way gets its spelling from a string
 the program writes, `max_upload_size: "${quantity.to(size, "Mi")}M"`
 (Synapse's `M` being a MiB).
 
-A `uri` is a value, like `inet` (R-134): RFC 3986's generic syntax, the
+A `uri` is a value, like `inet`: RFC 3986's generic syntax, the
 same for every scheme, not a browser's WHATWG url. What a program holds
 is `s3://bucket/key`, `postgres://user:pw@host:5432/db`,
 `git+ssh://git@host/repo`, `ssh://ops@host`, `oci://ghcr.io/o/app`,
@@ -751,8 +746,7 @@ dropped and an empty path `/`), so two spellings of one uri are equal. A
 uri never equals a string: `base == "https://h/"` is false; give the
 string a `uri` position (a typed `let`). It prints as its text in the
 plan, the plan file, state and JSON. `u.scheme`, `u.user`, `u.password`
-(escaped as written; a secret's when the uri was written from one,
-R-118), `u.host` (absent: no authority), `u.port` (absent: the scheme's
+(escaped as written; a secret's when the uri was written from one), `u.host` (absent: no authority), `u.port` (absent: the scheme's
 default), `u.path`, `u.query` (an object of its pairs, each unescaped)
 and `u.fragment` read its parts. `uri.with_scheme`, `uri.with_user`,
 `uri.with_password`, `uri.with_host`, `uri.with_port`, `uri.with_path`,
@@ -761,8 +755,7 @@ and `u.fragment` read its parts. `uri.with_scheme`, `uri.with_user`,
 as `uri.join` appends a path segment; `uri.escape` escapes a string for
 a part. `url`, in a type or a call, is an error naming `uri`.
 
-A host is IDNA's to encode, at the edge, as a quantity's unit is
-(R-134): a uri's host is held as written (its Unicode form, NFC,
+A host is IDNA's to encode, at the edge, as a quantity's unit is: a uri's host is held as written (its Unicode form, NFC,
 lower-case) and printed so everywhere (the plan, `why`, state), and two
 hosts are equal by their A-labels (UTS 46), so `bücher.example` and
 `xn--bcher-kva.example` are one host and never a replace. The A-labels
@@ -776,7 +769,7 @@ and a label that mixes scripts, or that is wholly in a script confusable
 with Latin (UTS 39), is a warning naming it ("Reports" in
 docs/reference.md).
 
-An `oci` is a container image reference, a value as a uri is (R-133):
+An `oci` is a container image reference, a value as a uri is:
 the OCI distribution reference `[registry/]repository[:tag][@digest]`,
 written as a string where an `oci` is wanted (a parameter, an
 attribute typed `oci`, `let base: oci = "ghcr.io/element-hq/synapse"`)
@@ -798,7 +791,7 @@ is `has r.digest`. `oci.resolve(r)` is a coeffect, a read of the registry:
 the plan file (docs/reference.md "Locations and transports"). Where a string is wanted, an attribute typed
 `string` (Kubernetes's `image`) or an interpolation, an `oci` is its
 text: `image: oci.with_tag(base, release)`. A `semver` is a value the
-same way (R-134): a version in Cargo's syntax, `1.2.3-rc.1`, written as
+same way: a version in Cargo's syntax, `1.2.3-rc.1`, written as
 a string where one is wanted (`semver.satisfies`'s version, `let v:
 semver = cfg.version`), ordered by precedence (`v < "2.0.0"`), its parts
 `v.major`, `v.minor`, `v.patch` and `v.pre` (absent: none). An `inet`'s
@@ -807,7 +800,7 @@ length). A `regex` is a
 parameter type only (`regex.match`'s pattern): a string whose text is
 checked as a pattern at compile time.
 
-A `range(T)` (R-180) is the values of an ordered `T` (an `int`, a
+A `range(T)` is the values of an ordered `T` (an `int`, a
 `float`, a quantity, a `time`, an `ip`, a `semver`) between two: `a..b`
 leaves its end out, `a..=b` takes it. Its ends are terms of `T`, a
 number or a quantity as written (`0..=3`, `100m..=1`, `1Gi..=500Gi`) and
@@ -824,9 +817,9 @@ time's, a version's) is an error naming the fix, ints scaled (`i in
 1..=500, size = i * 1Gi`). There is no step syntax: an int range and
 arithmetic are the step. `iprange` is `range(ip)`.
 
-There are no constructors (R-134): a value of a type is made by writing
+There are no constructors: a value of a type is made by writing
 a string where the type is wanted, and the type comes from the position
-or from inference carrying it back from where the value lands (R-34): a
+or from inference carrying it back from where the value lands: a
 resource attribute the schema types, a function's parameter, an input's
 or a `let`'s declared type, a field read like `net.bits`. A literal there
 is checked at compile time; a computed string (a document's cell, an
@@ -838,7 +831,7 @@ hint: `let base: url = ".."`, never a call. A string compared with `<`
 to a time, a version or a quantity is read as the other side's type.
 
 A literal in a position whose type is known is checked as that type at
-compile time (R-31, Postgres's unknown-literal rule): a schema attribute's
+compile time (Postgres's unknown-literal rule): a schema attribute's
 type (`inet`, `int`, `float`, `number`, `bool`, `uri`, `oci`, `semver`, `enum(..)`, `ref(T)`), an input's declared
 type for its default and a copy's value, a function's parameter.
 `cidr_block = "10.0.0/16"` in an `inet` attribute, `vpc = "main"` in a
@@ -857,27 +850,27 @@ stmt       := KEYWORD ...                      ; one production per keyword, bel
 
 provider   := "provider" NAME block? ("where" body)?   ; no block when it has no entries
 type       := "type" NAME "=" type | "type" DOTTED attrs
-            | "type" NAME "=" "component" stmts    ; a component signature (R-104)
+            | "type" NAME "=" "component" stmts    ; a component signature
 decl       := "decl" DOTTED columns "mixed"?
 extern     := "extern" DOTTED "(" bindarg ("," bindarg)* ")"
 bindarg    := ("+" | "-") NAME (":" type)?
 input      := ("input" | "key") NAME ":" type ("=" term)? ("check" body1)? ("where" body)?
-            | "input" NAME fields                  ; an object input (R-54)
-            | "input" NAME ("from" term ("where" body)?)?   ; rows of a relation (R-55)
+            | "input" NAME fields                  ; an object input
+            | "input" NAME ("from" term ("where" body)?)?   ; rows of a relation
 fields     := "{" (field SEP)* "}"
 field      := NAME ":" (fields | type ("=" term)? ("check" body1)?)
 output     := "output" NAME (":" type)? ("=" term)? ("where" body)?
             | "output" NAME ofields ("where" body)?         ; an object output
-            | "output" NAME                        ; a relation exported (R-55)
+            | "output" NAME                        ; a relation exported
 ofields    := "{" (ofield SEP)* "}"
 ofield     := NAME (":" type)? "=" term | NAME ":" ofields
 let        := "let" NAME params? (":" type)? "=" term RANK? ("where" body)?
-params     := "(" param ("," param)* ")"          ; a let with parameters (R-187)
+params     := "(" param ("," param)* ")"          ; a let with parameters
 param      := NAME (":" type)? ("=" term)?
 set        := "set" chain ("=" | "+=") term RANK? ("where" body)?
             | "set" "{" (chain ("=" | "+=") term RANK? SEP)* "}" RANK? ("where" body)?
-            | "set" "from" term selector? RANK? ("where" body)?   ; a document's leaves (R-38)
-selector   := ("." SEG | "[" "*" "]")+                ; a path into a document (R-39)
+            | "set" "from" term selector? RANK? ("where" body)?   ; a document's leaves
+selector   := ("." SEG | "[" "*" "]")+                ; a path into a document
 use        := "use" path ("as" NAME)? cblock? ("where" body)?
 component  := "component" NAME (":" type)? stmts   ; an item of a module, of a signature
 path       := NAME ("." NAME)*                    ; a/b.df from the root; std.x; a package mount
@@ -903,7 +896,7 @@ SEP        := "," | NL
 DOTTED     := NAME ("." NAME)*                     ; no spaces
 ```
 
-Every statement is `head where body` (R-1): the clause follows its head,
+Every statement is `head where body`: the clause follows its head,
 on the head's line, and a block is a head. A resource, `set` block
 or `use` takes at most one clause, after its block's `}` (and a
 `set` block's rank): `resource T n { .. } where B`, and a body of
@@ -915,19 +908,18 @@ another ("Guarded declarations"). `if`, the clause word of an earlier surface (H
 error wherever it stands, and the error prints the statement with its
 clause spelled `where`.
 
-The verb says what a statement gives (R-57): `=` gives a value, `from`
+The verb says what a statement gives: `=` gives a value, `from`
 gives rows. `input x: T = d`, `let x = t` and `output x = t` are values;
 `input p from DOC` and a copy's `p from TERM` are relations, a row per
 element, and `set from DOC` a document's leaves. A value written with `from`, or rows
 with `=` (`input p = [..]`), is an error that says so; rows written in
 the program are facts, `p("a", 1)`.
 
-An entry that is only a name is its pun (R-33), as `{ a }` is `{ a: a }`
+An entry that is only a name is its pun, as `{ a }` is `{ a: a }`
 in an object: `availability_zone` alone is `availability_zone =
 availability_zone`, and a rank may follow (`tags @default`). The name is
 resolved where the value would be, as a clause variable, a value name or
-anything else a bare name can be. A pun is one simple name on both sides
-(R-216): an entry that is only a dotted path, `spec.selector.color`, is
+anything else a bare name can be. A pun is one simple name on both sides: an entry that is only a dotted path, `spec.selector.color`, is
 an error whose help writes it out, `spec.selector.color = color`, or puns
 at the last object, `spec.selector = { color }`; an entry that is not a
 name (`a[0]`, `"a-b"`) is an error too. A provider's `source` is a
@@ -941,13 +933,12 @@ declared in the same scope is an error that names the block to write the
 entry in; a top-level `set` of the program's own input is an error too
 (give it a default, or pass `--set`). `set { a.b = 1, c = 2 } [@rank]
 [where B]` is several under one clause and rank, each entry a `set`'s,
-and `set from DOC` gives the inputs from a document ("Giving inputs"). `scenario` is gone (R-32): the
+and `set from DOC` gives the inputs from a document ("Giving inputs"). `scenario` is gone: the
 program's denies are its tests, and `dform test` runs them over the
 inputs' values; a what-if plan is `plan --set k=v`.
 
 A list the schema keys (`type_list_key(k8s.deployment,
-"spec.template.spec.containers", ["name"])`) is written by element
-(R-35): `set w.spec.template.spec.containers[k].resources.limits = ..`
+"spec.template.spec.containers", ["name"])`) is written by element: `set w.spec.template.spec.containers[k].resources.limits = ..`
 writes the element whose key is `k`, any term but an integer (an integer
 stays the position): a variable, a path (`c.name`), a string
 (`containers["api"]`), an object for a list keyed by several fields. Its
@@ -960,7 +951,7 @@ with no key is one value: writing an element of it is an error naming the
 `type_list_key` to declare. One index per written path: below the element
 the path is fields. A variable an `in` binds to an element of a
 resource's list (`c in w.spec.template.spec.containers`, or `(i, c) in`)
-is that element (R-69): `set c.resources.limits = { cpu: 500m, memory:
+is that element: `set c.resources.limits = { cpu: 500m, memory:
 256Mi } @default where w in k8s.deployment, c in
 w.spec.template.spec.containers` writes `w`'s container `c` by its key,
 as `containers[c.name]` would; over a list with no key it is the error
@@ -977,7 +968,7 @@ when there is none or the list has no key. The key is a string or a read
 enumerates the positions, `containers[i]`), is the position.
 
 `let k = t [@rank] [where B]` is a value (H-6), a cell of the attribute
-aggregate like an input (R-3): each row contributes to the cell `(let,
+aggregate like an input: each row contributes to the cell `(let,
 SCOPE, k)` (scope `""` for the program's, `n` in the copy or import
 `n`), and a read
 of `k` reads the collapsed cell. Rows that agree are one value; two that
@@ -989,8 +980,8 @@ reference's, so a dot on `k` reads through it: `let pg =
 db.postgres["main"]`, then `pg.endpoint`; `k` alone, given as a value, is
 the reference (`db = pg`).
 
-`let k: T = t` declares the cell's type (R-74): the value is checked as in
-any typed position (R-31), a literal read as `T` (`let region:
+`let k: T = t` declares the cell's type: the value is checked as in
+any typed position, a literal read as `T` (`let region:
 enum("eu", "us") = "ca"` is an error at `"ca"`, `let n: inet =
 "10.0.0.0/16"` a network); a reference is an error unless `T` is its
 resource type (`let v: net.vpc = main`, also written `ref(net.vpc)`),
@@ -999,8 +990,8 @@ type reads each field as its type and a list type each element (`let
 hosts: { a: ip, b: uri } = { a: "10.0.0.1", b: "https://x" }`; `"10.0"`
 there is an error at `hosts.a`), as an input's and an attribute's do.
 Every row of a typed `let` declares the same `T`. The type is the column
-of `k`'s reads (R-34), so hover and the inferred signatures show it. An
-untyped `let k = t` is typed by its uses (R-192, "Types"): every place
+of `k`'s reads, so hover and the inferred signatures show it. An
+untyped `let k = t` is typed by its uses ("Types"): every place
 its value reaches (an attribute, a typed input, a parameter, another
 typed `let`) gives the paths it reaches their types, and its literal is
 read at them, `let limits = { cpu: 100m, memory: 128Mi }` given to
@@ -1010,22 +1001,22 @@ let a type, `let limits: { cpu: cpu }`, or use it where a cpu or a
 duration is wanted`. A let with parameters is the same: its call's value
 flows to where the call is written.
 
-`let f(a, b) = t [where B]` is a let with parameters (R-187): the
+`let f(a, b) = t [where B]` is a let with parameters: the
 relation `f(a, b, v)` with the mode `(+, +, -)`, every column but the
 last bound by whoever reads it, as a provider's table's `+` columns are
 ("Functions"). It lowers to the rule `f(A, B, V) :- B, V = t`; a call
 `f(x, y)` in a term is a variable bound through the relation where the
-call stands, as `f(x).p` reads a call's result (R-71); `f(x, y, v)` after
+call stands, as `f(x).p` reads a call's result; `f(x, y, v)` after
 `where` is the same read. Its arguments must be bound: one the body does
-not bind is R-10's error ("`q` is unbound in this call of `f`"), and `in`
+not bind is an error ("`q` is unbound in this call of `f`"), and `in`
 over `f` is an error, as is `f` uncalled, since nothing enumerates a
 relation whose inputs are its reader's. It is pure: a read of a data
 source in it (`io.read`, a provider's table, `env.var`, the clock) is an
 error at the read naming the let. A parameter's type is inferred from
-its uses as a relation's column is (R-34), or written, `let
+its uses as a relation's column is, or written, `let
 restic(tag: string, mounts: list(object)) = ..`, its argument read as
 that type; a parameter may have a default, a constant, and a call names
-its arguments as a std function's call does (R-155): `cidr(1)`,
+its arguments as a std function's call does: `cidr(1)`,
 `cidr(b: 3, a: 2)`. Each call is answered where it is written, its rows
 its own (`why 'f(a, b, v)'` prints them `(in call at FILE:LINE:COL)`,
 under the let's rule), so a call stratifies where its site does. A let
@@ -1055,7 +1046,7 @@ after evaluation; no rule may read `deny` or `warn`.
 A relation is declared by its columns (H-11): `decl p(a, b)`, a type on a
 column optional; `mixed` lets it have both facts and rules. A copy's
 relations are its own (`n::p`, which no source spells); a value leaves it
-through an `output` (DESIGN.org R-5), a relation through `output p`
+through an `output`, a relation through `output p`
 ("Inputs and outputs"). A module's are its import's, `m::p`, read as
 `m.p(..)`.
 
@@ -1075,8 +1066,7 @@ tests).
 
 ### Inputs and outputs
 
-Inputs and outputs are one grammar in both directions and in every scope
-(R-55): a declaration is a value, `input|output k: T [= t]`, an object
+Inputs and outputs are one grammar in both directions and in every scope: a declaration is a value, `input|output k: T [= t]`, an object
 by its fields, or a relation.
 
 **Values.** `input k: T [= d] [check B] [where C]` is a cell of the attribute
@@ -1092,13 +1082,13 @@ An input typed by a resource type, a provider's (`input namespace:
 k8s.namespace`) or the program's, is typed `ref(T)`: it takes a
 reference to a resource of `T` (`namespace = shop`), and one of another
 type is an error at the block that gives it. A dot on it reads through
-the reference (R-101): `vpc.cidr`, with `input vpc: ref(net.vpc)`, is the
+the reference: `vpc.cidr`, with `input vpc: ref(net.vpc)`, is the
 given vpc's `cidr`, the resource its user's wherever the copy is. A dotted name a used module
 declares as a type alias is that alias (`input env: types.environment`),
 and a name in a namespace whose every type the compiler knows (`net`)
 must be one of them.
 
-An object input is declared by its fields (R-54): `input nodes { flavor:
+An object input is declared by its fields: `input nodes { flavor:
 string = "b3-8", count: int = 1 check 1 <= count <= 3, pool: { size: int }
 }`, a nested object in braces, each field's default and check its own (the
 check names the field or its path). It is one cell per leaf: the field's
@@ -1128,7 +1118,7 @@ value of another type is an error naming its key. A bare `map` (a
 schema's untyped object) takes any object.
 
 **Relations.** A relation is declared once, by `decl p(a: T, ..)` or by
-its uses (R-34); `input` and `output` name it and never re-spell its
+its uses; `input` and `output` name it and never re-spell its
 columns:
 
 - `input p from TERM [selector] [where B]`, in a stack, gives `p` rows
@@ -1160,7 +1150,7 @@ columns:
   copy's rows are read `blue.p(x, y)` and every copy's `network[t].p(x,
   y)`, one fact per row, and a stack's `output p` publishes its rows,
   read `platform[env=e].p(x, y)`. A reference crosses the copy's
-  boundary as a reference (R-204): in `blue.subnet(s)` over `decl
+  boundary as a reference: in `blue.subnet(s)` over `decl
   subnet(s: net.subnet)`, or a column a rule fills with `s in
   net.subnet`, `s` is the copy's subnet, so `s.zone` reads it with no
   `s in net.subnet` to type it again. A stack's `output p` of a column
@@ -1173,7 +1163,7 @@ columns:
 - `output k { f = t, g: T = u } [where B]` is an object output by its
   fields, typed by them (`any` where a field gives no type).
 
-A stack's inputs are flat (R-55): its own and every used module's, by
+A stack's inputs are flat: its own and every used module's, by
 the module's name, `--set traefik.acme_email=..`, `why traefik.acme_email`,
 and `dform test` enumerates them all. A used module's input nothing gives
 is the stack input's error, at the `use`. Only a component's inputs nest:
@@ -1181,7 +1171,7 @@ the block of a resource of it gives them.
 
 ### Giving inputs
 
-Configuration is the inputs (R-38), and a `set` is a contribution to
+Configuration is the inputs, and a `set` is a contribution to
 one, under a condition:
 
 ```
@@ -1226,7 +1216,7 @@ by the file provider, one rule per input the scope gives
 (`tables::expand_set_from`). This replaces dform.toml's `config`, and
 needs no clause. `set from secrets.decode(io.read("secrets/${env}.json"))`
 reads a file of given secrets, SOPS's JSON sealed to the deployment's
-recipients (R-108; docs/reference.md "Given secrets"): each value a
+recipients (docs/reference.md "Given secrets"): each value a
 `secret(T)` input's, and only through `set from`.
 
 An input a `set` gives with no default is required only in the
@@ -1239,7 +1229,7 @@ exercised through its guards: `set cloud.region = "r-prod" where env ==
 "prod"` is tested in the combinations where `env` is `"prod"`, never as
 an axis of its own.
 
-Gone (R-38): the `settings` statement and its rows (`settings prod { ..
+Gone: the `settings` statement and its rows (`settings prod { ..
 }`, `settings _`), their reads (`settings[e].p`, `let cfg =
 settings[env]`), the `settings` pseudo-type (`type settings`,
 `type_lattice(settings, ..)`), and a stack's `config`; each is an error
@@ -1257,7 +1247,7 @@ net.subnet ]`.
 ### Modules
 
 Every `.df` file is a module, named by its path from the project root
-with dots (R-65): `config.df` is `config`, `modules/net.df` is
+with dots: `config.df` is `config`, `modules/net.df` is
 `modules.net`, `stacks/platform.df` is `stacks.platform`. A path is
 looked up, never searched: `a.b` is `a/b.df` under the root (outside every
 project, beside the entry file), `std.x` is the standard library, and a
@@ -1298,7 +1288,7 @@ imports, each given its inputs by its own `use`.
 ### Components
 
 `component NAME { .. }` is an item of a module: a type the program
-defines, a resource made of resources, with inputs and outputs (R-113).
+defines, a resource made of resources, with inputs and outputs.
 A resource is a thing dform makes and manages, whatever defines its
 type, so `resource PATH NAME { k = v } [where B]` makes one of a
 component as `resource ovh.instance web { .. }` makes one of a
@@ -1319,13 +1309,13 @@ name)` joined to their outputs, and `x in c` binds them ("Membership");
 `blue in c` holds for one in scope. A resource of a component inside
 another is scoped under it (`edge.left.vpc`).
 
-A component is an item of its module as a Rust `fn` is (R-186): its
+A component is an item of its module as a Rust `fn` is: its
 body reads a name bare from its own scope (its inputs, `let`s and
 resources), then from the scope around it (the module's `let`s, inputs,
 resources and relations; for a component inside another, the enclosing
 component's first), then, for a component of a stack's file, the
 stack's; never from the copy's user, and a component of a module's file
-reads nothing past its module (R-205).
+reads nothing past its module.
 The scope is lexical and by instance: a copy reads the items of the
 module instance it was taken from, the one its statement stands in or
 the one a `use` binds, so under `use backups as a` and `use backups as
@@ -1350,7 +1340,7 @@ resource takes no rank, and a provider's type's resource takes no
 rows. A resource of a module is an error naming `use`.
 
 A component's resource takes its name from its clause as a provider
-type's does (R-191): a header with holes is a term per row of the
+type's does: a header with holes is a term per row of the
 clause, so each row is one copy, its resources under its name, as a
 stack's deployments are its rows (`resource stacks.apps "${e}" { env =
 e } where e in environment`). The name binds nothing in the scope; the
@@ -1381,7 +1371,7 @@ given a reference, `namespace = apps`, and binds from it as from any
 value; the copy reads the resource's attributes through it
 (`namespace.metadata.name`). A value that holds a reference waits while
 the resource may be derived and holds once it is, whatever attributes
-its type declares (R-120). A resource statement whose own clause holds
+its type declares. A resource statement whose own clause holds
 and that derives no resource (an input of its copy with no value, a
 `let` with no row, an attribute nothing sets) is never silently absent:
 the plan lists it under `not planned` with why, the deepest condition
@@ -1393,7 +1383,7 @@ copy's output as it does an input or a `let`.
 
 A named statement, `let`, `use` (a module's or a provider's),
 `resource` (a component's too) or `input`, may be declared more than once in a scope when every
-declaration of the name has a clause (R-104); one without a clause is
+declaration of the name has a clause; one without a clause is
 the only one of its name, and a second beside it is the error at the
 second, naming the first: "`db` is declared twice; give each a
 `where`". The clauses pick one, and the compiler does not prove that
@@ -1451,7 +1441,7 @@ every name declared more than once, `"guarded": [{"name": "db",
 
 ### Component signatures
 
-`type NAME = component { stmts }` is a component signature (R-104): the
+`type NAME = component { stmts }` is a component signature: the
 inputs and outputs, by name and type, that a component of it has.
 `component C: NAME { .. }` is checked against it at the component: each
 input and output the signature declares, of its type (aliases read on
@@ -1494,7 +1484,7 @@ state. Several `key` lines make a composite key in source order
 file. `stack`, the statement of an earlier surface, is an error that says
 so.
 
-**Entrypoints** (R-208). A file the tool runs is an entrypoint: a file
+**Entrypoints**. A file the tool runs is an entrypoint: a file
 under `stacks/`, a root file a `[stacks.NAME]` names, or the one file the
 tool is pointed at (`dform plan envs/one.df env=lab`), which then acts as
 a stack named by its path (`envs.one[env=lab]`). The first two are the
@@ -1546,21 +1536,20 @@ reads an unkeyed stack's. It is the keyed read of a
 copy's output (`network[t].out`): a deployment is a copy of its
 stack named by its key, `instance_of("stacks.platform", "",
 "platform[env=e]"), output("platform[env=e]", "out", V)`, those facts
-served from what the deployment published rather than evaluated (R-73).
+served from what the deployment published rather than evaluated.
 An output not published yet is `?platform[env=e].out`. A deployment that
 has not been applied has published nothing: what reads it waits on it,
 listed under `later` as `waits on  stack platform[env=e]` with its
-attributes as written, and `why` says it waits on it
-(R-121); a deployment that has published and lacks the output finds no
+attributes as written, and `why` says it waits on it; a deployment that has published and lacks the output finds no
 row, as any absent output. Such a read is what
-`apply X` applies first (R-30), a key the target does not give at its
+`apply X` applies first, a key the target does not give at its
 default; a deployment named by a key the program computes may be any of
 the stack's, and every one there is is applied first. A stack or a
 module never makes a resource of a stack ("stacks.platform is deployed
 by the tool; `use` it"): the project module does. A stack's `use`
 takes no block and no clause.
 
-Which deployments a project has is code too (R-114). The project module,
+Which deployments a project has is code too. The project module,
 `project.df` at the root (or a file that is no stack and makes resources
 of stacks, named as the target: `dform plan envs/lab.df`), makes each
 deployment a resource of its stack's type, whose attributes are its
@@ -1579,7 +1568,7 @@ deployments of stacks`), a field is a key of the stack (`region` is not
 a key of the stack platform), a key it leaves out is its default as a
 target's is, and a deployment is listed once. `plan`, `apply` and
 `test` with no target run on it: each deployment it lists, and those
-they read (R-30), in dependency order, each a run of its own with its
+they read, in dependency order, each a run of its own with its
 own plan, question, state and `[secrets]`, as its target's run is
 (docs/reference.md "Targets and commands"). A deployment it does not
 list is a target of its own, as before: nothing is forced. One an apply
@@ -1594,7 +1583,7 @@ A stack's operational settings are not in the program: they are
 dform.toml's `[stacks.NAME]` for `stacks/NAME.df`, over `[defaults]`. A
 term is written as a string, `{stack}` in it the stack's name and `{k}`
 the value of its key `k` (in `backend`). The list is closed; any other
-key is an error naming it, and `config`, gone (R-38), one naming `set
+key is an error naming it, and `config`, gone, one naming `set
 from` ("Giving inputs"):
 
 | setting      | value                                                                 |
@@ -1611,7 +1600,7 @@ place in dform.toml, so an error in one is reported there.
 ### Providers
 
 A provider is imported with `use` and configured by the block the `use`
-takes (R-112): `use ovh { endpoint = "ovh-ca", project = config.project
+takes: `use ovh { endpoint = "ovh-ca", project = config.project
 }`, `use fake` with no settings. It imports a namespace and configures
 it: `ovh`'s items are its types (`ovh.instance`) and externs
 (`ovh.image(..)`), read as a module's are ("Paths"), and its name is in
@@ -1625,10 +1614,10 @@ of aws-mock's `aws.vpc`), a project's `providers/NAME/`, or one whose
 block names its `source`; any other is the error for a missing module,
 which says it is no provider either. `provider`, the statement of an
 earlier surface, is an error naming `use`; so is `use ssh` and its
-`ssh.read(..)`, gone (R-153): a host's file is a location
+`ssh.read(..)`, gone: a host's file is a location
 ("Documents").
 
-`use P as A` imports the provider P under the name A (R-115), a second
+`use P as A` imports the provider P under the name A, a second
 configuration of the same types: `use ovh as ca { endpoint = "ovh-ca" }`
 beside `use ovh as eu { endpoint = "ovh-eu" }` in one scope, `resource
 ca.instance x { .. }`, `ca.image(..)`; `use ovh` is `use ovh as ovh`.
@@ -1673,12 +1662,12 @@ A setting is a content position: a dot in it reads now. A block takes no
 provider only where it holds ("Guarded declarations"): `use fake {
 region = "eu-west-1" } where cloud == "aws"`. A provider's `use` stands
 in any module a stack reaches and configures the provider for the
-deployment, as the stack's own would (R-129): one configuration per
+deployment, as the stack's own would: one configuration per
 provider, so two `use`s that configure it differently are a conflict the
 plan names with both sites, and the same configuration twice is one.
 
 A provider's `use` also brings its externs into scope, with their
-binding modes (DESIGN.org R-8): a program does not write `extern` for
+binding modes: a program does not write `extern` for
 them. `env` and `time` are built-in fact providers, used like any
 provider and needing no `dform.toml` source (`externs::BUILTINS`);
 dform answers them itself (a file is read by `io.read`, no provider's,
@@ -1689,7 +1678,7 @@ use env          env.var(+name, -value: secret(string))
 use time         time.now(-t: time)
 ```
 
-Any other provider declares its externs in its schema (R-106), one fact
+Any other provider declares its externs in its schema, one fact
 each, the signature as an `extern` line writes it:
 
 ```
@@ -1725,8 +1714,7 @@ schema declares.
 
 ### Memo
 
-`memo.first(+key: string, +candidate, -value)` keeps a value across runs
-(R-60): the first candidate ever given for a key is the value on that
+`memo.first(+key: string, +candidate, -value)` keeps a value across runs: the first candidate ever given for a key is the value on that
 run and every later one, whatever the candidate becomes. It is a built-in
 relation, in scope with no `use`; `memo.first(k, c)` as a
 term is its value. The program says what is kept, where it reads it:
@@ -1781,8 +1769,7 @@ its `use` binds or its path from the root (`config.environment`,
 `network.node_pool`). Two aliases of one name in one scope are an error
 listing both.
 
-An alias read by a module's path is the type in every type position
-(R-208): a `key`'s, an input's, a typed `let`'s (read as a value, not a
+An alias read by a module's path is the type in every type position: a `key`'s, an input's, a typed `let`'s (read as a value, not a
 reference), a `decl` column's, an output's (read by the module's user as
 the value), `x in config.environment`, and a comparison of its members.
 It is lexical: the module is the one the file's own `use` binds, or the
@@ -1794,16 +1781,15 @@ alias is a resource type (`ref(T)`).
 
 ### Documents
 
-Data that is not code is a document (R-39). It is read by the one read,
+Data that is not code is a document. It is read by the one read,
 `io.read(LOCATION)`, the location's text, a coeffect ("Functions"), and
 decoded by its format's package: `yaml.decode(io.read(LOCATION))`,
 `toml.decode(..)`, `json.decode(..)` and `csv.decode(..)` (a list of
-objects by its header, every cell text) (R-155). The composition is the
+objects by its header, every cell text). The composition is the
 loader: a decode over an `io.read` keeps the document's place, each row
 at its line (`crds.yml:412`), and the chain a plan or `why` prints ends
 in `io.read("..")`. `io` is read-only, and has no write: a write is an
-effect with no state to converge, so it is a provider's apply. A location
-(R-153) is a path from the project root, or a uri whose scheme selects
+effect with no state to converge, so it is a provider's apply. A location is a path from the project root, or a uri whose scheme selects
 the host's transport; the scheme, the user and the host are in it, and
 nothing remote is configured elsewhere (Emacs TRAMP's model):
 
@@ -1851,7 +1837,7 @@ provider's `file.text(PATH)` are gone, an error naming the read.
 
 `input p from DOC [selector] [where B]` destructures a document into the
 relation `p`, by the columns of its `decl`, or with no `decl` by its first
-source's (R-34; "Inputs and outputs"):
+source's ("Inputs and outputs"):
 
 ```
 input az from toml.decode(io.read("data/network.toml"))                 # its [[az]] tables
@@ -1878,7 +1864,7 @@ resource's or `use`'s block.
 A read's table lowers to an extern (`src/tables.rs`), the location its
 bound input, the selector in the table's name. The declarations are the
 compiler's: the same wherever the call stands (a used module, a
-component, a `let`), one per table, and no message names them (R-129):
+component, a `let`), one per table, and no message names them:
 
 ```
 extern table.FORMAT.p(+path, -at, -col: type, ...)
@@ -1894,8 +1880,7 @@ own). The controller watches every file and ref a run's tables and
 documents read, and every program file; a location read over a transport
 (`ssh://`, `https://`, `s3://`) is read again by every run, not polled.
 
-A document becomes a resource by `resource T NAME = VALUE [where B]`
-(R-126): the body is a value of the type, an object, in place of the
+A document becomes a resource by `resource T NAME = VALUE [where B]`: the body is a value of the type, an object, in place of the
 block. An object written out is the block of its entries, checked as a
 block's are (`resource k8s.namespace apps = { metadata: { name: "apps" }
 }`); any other value is one contribution at the root of the resource, an
@@ -1919,7 +1904,7 @@ that makes a cycle (a rule that reads one attribute of the type and
 writes another of it, `set c.metadata.labels.team = "x" where c in
 k8s.config_map, c.data.k == "v"`), the rule is written once per
 attribute the type declares and once for every other key (a document's
-`apiVersion`, `kind`), so each write is a node of its own (After R-126).
+`apiVersion`, `kind`), so each write is a node of its own.
 A rule that reads an attribute to write that same attribute is still a
 cycle (write the condition on another type, or give the resource a
 block).
@@ -1933,7 +1918,7 @@ deny for a leaf at any other path ("Giving inputs").
 
 A resource's header name is a string or a name. A string
 with holes (`"private-${z}"`) is the variable `Addr`, bound last in the
-body by `str.format`. A bare name is always the literal name (R-76):
+body by `str.format`. A bare name is always the literal name:
 `resource k8s.secret config` is the secret named "config", whatever
 `config` names in scope (a `let`, an input, a used module); reading it
 bare where `config` also names that is the error "Names" shows. A name
@@ -1946,7 +1931,7 @@ entries, clause, interpolated names) is one rule; a header name's scope
 is its block and its clause. The clause follows the block, so the
 holes of a header name are read forward: they name variables the reader
 meets in the clause below, as a rule's head names variables its body
-binds (R-1 keeps the rule and moves only the clause).
+binds.
 
 ### The placeholder `_`
 
@@ -1959,7 +1944,7 @@ has no finite set of values); `resource T _` names
 nothing; `[_]` in a path binds each anonymously ("Paths"). A name that starts with `_` (`_x`) is an ordinary name, but for one
 thing: any other variable written once in its rule (header, clause,
 entries and interpolated names together, a `not { }` body once) is an
-error, a typo or a placeholder that should say so (R-2); `_x` opts out.
+error, a typo or a placeholder that should say so; `_x` opts out.
 
 ## Literals and terms
 
@@ -1975,7 +1960,7 @@ lit1       := atom
             | "has" read                         ; the attribute has a value
             | read                               ; a truth test: == true
             | term cmpop term (cmpop term)*      ; a <= b <= c is a <= b, b <= c
-            | pattern "=" term                   ; a tuple or object pattern matches (R-58)
+            | pattern "=" term                   ; a tuple or object pattern matches
             | term "in" ("resource" | term)
             | tuple "in" term                    ; `(k, v) in obj`, `(i, x) in list`
             | term "not" "in" term
@@ -1984,7 +1969,7 @@ atom       := chain "(" args ")"
 args       := (arg ("," arg)* ","?)?
 arg        := term | tuple | NAME ":" term       ; a named argument: its column's name
 
-term       := add ((".." | "..=") add)?        ; a range (R-56, R-180)
+term       := add ((".." | "..=") add)?        ; a range
 add        := mul (("+" | "-") mul)*
 mul        := unary (("*" | "/" | "%") unary)*
 unary      := "-" unary | primary
@@ -1992,9 +1977,9 @@ primary    := INT | QUANTITY | STRING | "true" | "false"
             | read | call | list | object | comprehension | "(" term ")"
 chain      := NAME ("." SEG | "[" term ("," term)* "]")*
 call       := chain "(" args ")"
-read       := chain | call ("." SEG | "[" term "]")+   ; a call's result, read (R-71)
+read       := chain | call ("." SEG | "[" term "]")+   ; a call's result, read
 list       := "[" (item ("," item)* ","?)? "]"
-item       := term | ".." term                    ; a spread (R-199)
+item       := term | ".." term                    ; a spread
 object     := "{" (field ("," field)* ","?)? "}"
 field      := key (":" term)? | ".." term          ; `{ a }` is `{ a: a }`; a spread
 key        := NAME | STRING
@@ -2005,13 +1990,13 @@ type       := DOTTED ("(" type ("," type)* ")")? | "{" NAME ":" type ("," NAME "
 In a literal position a chain applied to arguments is an atom, unless an
 operator follows it (`f(x) == 3` compares a call).
 
-A spread `..x` (R-199) leads a field of an object or an element of a
+A spread `..x` leads a field of an object or an element of a
 list and gives what `x` holds there, in order with what is written: `{
 ..base, replicas: 3 }` is base's fields then `replicas`, a key written
 after a spread replacing the spread's and one written before it a default
 the spread replaces; `[..a, x, ..b]` is a's elements, `x`, then b's; and
 `[..0..3]` is `[0, 1, 2]`, a discrete range's members (a dense range's is
-R-180's error). A range sits between two terms and a spread leads an
+an error). A range sits between two terms and a spread leads an
 entry, so position decides. There is no deep merge: an object written
 after a spread replaces the spread's whole, and depth is written where it
 is wanted, `{ ..base, spec: { ..base.spec, replicas: 3 } }`. A spread of
@@ -2042,7 +2027,7 @@ p.spec.podSelector.matchLabels`: the policy selects every pod). A computed
 attribute has a value once the provider reports it; until then `has` over
 it, or over a field of it (`has b.status.ready`), is undetermined, as any
 read of it is: what it gates waits on it, `not has` too, and `why` says
-`has cache.endpoint: cache.endpoint is not known yet`. One exception (R-106): in a rule
+`has cache.endpoint: cache.endpoint is not known yet`. One exception: in a rule
 that writes under the path it tests, of a resource's attribute the
 provider's schema declares (one a program sets, or an object holding one),
 `has r.PATH` asks the schema whether the type has it, not the value:
@@ -2064,7 +2049,7 @@ any test is: E0301, and `not has pw` E0302 (docs/reference.md,
 identity is known: false while no rule wants it, undetermined from plan
 until the tick that creates it, so a block gated `where has warm_cache`
 waits on `warm_cache` and applies the tick after it, and `not has r`
-guards on its absence (R-152); `has r.id` is an error naming `has r`.
+guards on its absence; `has r.id` is an error naming `has r`.
 A variable bound to a resource (`c in db.postgres`) is one: `has c`.
 A type whose identity is a field (a Kubernetes object's `metadata.uid`)
 waits on that field.
@@ -2073,7 +2058,7 @@ A value read from a resource no rule wants (`vpc = other`,
 `other.cidr`, `other`'s clause false) has no row to answer it, so where
 it reaches a cell it is an error at the read naming the attribute it
 leaves without a value, in plan, apply, `test` and the editor before
-any provider is asked (R-194, R-119's form), while a read of a value
+any provider is asked, while a read of a value
 not known yet (a computed attribute, or a resource whose clause waits on
 one) is an unknown the plan carries until the tick that makes it.
 
@@ -2084,7 +2069,7 @@ it with what the world answered (CUE's top, `_`, refined). That is
 why `later` lists what waits and what on, why `has` over it is
 undetermined rather than false, and why `not { .. }` waits only on what
 its body reads: a negation over what the program wrote is decided now,
-though the object it reads holds an unknown elsewhere (R-193), and `why`
+though the object it reads holds an unknown elsewhere, and `why`
 says a comparison over the unknown is not known yet, never false.
 
 A call of a function whose result is optional (`T?`: `regex.capture`
@@ -2093,26 +2078,25 @@ has no value where it answers none: in a clause the literal fails, as
 above, a binding and a comparison included; as a value that reaches a
 cell (an entry or a `let`, directly or inside an object or a list) it is
 an error at the entry naming the call and the attribute or `let` it was
-to give (R-119), never a value left out. Any other function answers
+to give, never a value left out. Any other function answers
 every input it takes, and one it does not take (`oci.with_digest` of a
 tag, a bad unit, layout, template or port) is an error at the rule
-naming the call (R-134), never a quiet none. A bare name in a block is its pun
+naming the call, never a quiet none. A bare name in a block is its pun
 ("Statements"), not a test: `has` is the test.
 
-A `.p` or `[i]` after a call reads the call's result (R-71):
+A `.p` or `[i]` after a call reads the call's result:
 `oci.with_registry(i, r).tag`, `str.split(s, ":")[0]`,
 `json.decode(t).a[0].b`, anywhere a chain stands, `has` and `not`
 included, so `not has json.decode(c.body).pre` reads "no pre-release".
 It is the call bound to a variable and the path read from it, `p =
-json.decode(c.body), p.pre`. A partial call with no answer (R-134 rule
-3: `json.decode` of text that is no JSON, `list.first` of an empty
+json.decode(c.body), p.pre`. A partial call with no answer (`json.decode` of text that is no JSON, `list.first` of an empty
 list) fails the literal as the binding would, and under `not` the
 binding is inside what is negated: `has f(x).p` is false and `not has
 f(x).p` holds, never an evaluation error; a call of any other function
 with an input it does not take is the error it is anywhere. A call's result
 is never called (`f(x).g(y)` is an error: a function is named by a plain
 name), and after `from` a path after the call is the document's
-(`toml.decode(io.read("x")).peerings`, R-39). Precedence, loosest
+(`toml.decode(io.read("x")).peerings`). Precedence, loosest
 first: `+ -` (left), `* / %` (left), unary `-`. An aggregate (`count(x)`,
 `sum(x)`, `collect_set(x)`, ...) is bound in a body, `n = count(x)`
 ("Aggregates"). Named arguments
@@ -2128,21 +2112,20 @@ resource` for any, `r in NS` for any resource of a provider's namespace,
 `x in E` for each value of an enum type, `x in world.T` for a live
 object, `i in lo..hi` for
 the integers from `lo` up to `hi` (half-open) and `i in lo..=hi` up to
-and including it (R-56); `(i, x) in e` gives each index and element of
-a list, `(k, v) in e` each key and value of an object (R-58,
-"Patterns"), and `x = e[i]` the element at an index. A
+and including it; `(i, x) in e` gives each index and element of
+a list, `(k, v) in e` each key and value of an object ("Patterns"), and `x = e[i]` the element at an index. A
 range's ends are bound, and an int's or an ip's range is enumerated in
 order; with `x` bound, `x in r` tests it, for a range of any ordered
-type ("Types", R-180). A range
+type ("Types"). A range
 is for "once per i", things that have a position and no identity: a
 replica, a shard, the n-th /24; anything with a name is a relation, a
-row per thing (R-55). A range is a value, never a list: `[0..3]` is a
+row per thing. A range is a value, never a list: `[0..3]` is a
 list of one range, and `int.range(lo, hi, step)` is the function that
 gives a list.
 
 `x in E`, `E` an enum type alias (`type environment = enum("staging",
 "prod")`), binds `x` to each value in the order the type declares them,
-as a range does, and `(i, x) in E` each with its position (R-70): a
+as a range does, and `(i, x) in E` each with its position: a
 bucket per environment is `resource T "b-${e}" { .. } where e in
 environment`, with no fact restating the values. `why` shows the type as
 the leaf. An input of an enum type holds one value, so `x in env` is an
@@ -2150,8 +2133,8 @@ error that says to name the type and range over it; an inline
 `enum(..)` has no name, so it says to declare one. `dform test` takes an
 enum input's values from the same type, in the same order.
 
-`r in NS`, `NS` a provider's name (R-36: its types' namespace, `k8s`), is
-a resource of any type in it (R-49): `set r.metadata.labels.owner =
+`r in NS`, `NS` a provider's name (its types' namespace, `k8s`), is
+a resource of any type in it: `set r.metadata.labels.owner =
 "platform" where r in k8s` labels every Kubernetes object and nothing
 else; `r in resource` stays every resource of any provider. Its types
 are the program's own in the namespace and the built-in schemas' the
@@ -2171,7 +2154,7 @@ too.
 
 `x in c`, `c` a component (`x in network`, `x in net.vpc`), binds `x` to
 each copy of it the scope sees, `instance_of("c", User, X)` as `c[t]`
-reads it (R-67): `x` is the copy's name and `x.k` its output, `route(x,
+reads it: `x` is the copy's name and `x.k` its output, `route(x,
 c) where x in network, c = x.cidr`; `blue in network` holds for the
 resource `blue` of it in scope. A component is a type the program
 defines, and its resource is addressed as any is, `network["blue"]`:
@@ -2196,7 +2179,7 @@ aggregate := ("count" | "sum" | "min" | "max" | "any" | "all"
 ```
 
 `n = count(x)` in a body binds `n` to the fold of `x` over the body's
-matches (R-59). The groups are the head's other variables: in
+matches. The groups are the head's other variables: in
 `subnets(v, n) where n = count(s), s in aws.subnet, s.vpc_id == v` there
 is a count per `v`. A head with no other variable is one group, and so is
 a `let`: `let n = count(s) where s in aws.subnet`. The literal may stand
@@ -2240,7 +2223,7 @@ tuple      := "(" pattern "," pattern ("," pattern)* ","? ")"
 pfield     := key (":" pattern)?                ; `{ a }` is `{ a: a }`
 ```
 
-One production, in three places (R-58): on the left of `in`, on the left
+One production, in three places: on the left of `in`, on the left
 of `=` in a body (a rule's, a check's, a `let`'s clause), and as a
 relation's argument. A name binds, or compares when it is bound
 already; `_` matches anything; a literal compares. A tuple needs the
@@ -2248,7 +2231,7 @@ exact arity: `(a, b) = pair` matches a list of two elements and fails
 the match otherwise. An object pattern binds the fields it names and
 ignores the rest: `{ host, port } = conn` matches `{host: "db", port:
 5432, user: "app"}`, and an object without `port` does not match. Its
-last entry may be `..name`, which binds the rest (R-199): the object
+last entry may be `..name`, which binds the rest: the object
 without the keys the pattern names, `{ metadata: m, ..body } = doc`, and
 `{ ..body, metadata: m2 }` puts it back together, the spread and the rest
 being one notation. `..` alone is an error, since a pattern ignores what
@@ -2278,7 +2261,7 @@ the statement with its patterns as written.
 
 ### Bodies
 
-What binds a variable (R-10): `x = t` with `x` bound by no other literal
+What binds a variable: `x = t` with `x` bound by no other literal
 (a tuple or object pattern on the left binds its names), the left of
 `x in t`, an aggregate (`n = count(x)` binds `n`), a relation atom's free
 variables, and a name alone as an index (`T[e].p`, `xs[i]`: the key of
@@ -2355,7 +2338,7 @@ rejected when what decides a cell reads that cell, through negation, a
 count or an attribute read: the error names the cycle and the rules on
 it (`dform dev strata` prints the groups, or the cycle).
 
-A resource may read another resource of its own type (R-107): agents
+A resource may read another resource of its own type: agents
 that join a server by its address, `join = "https://${server.ip}:6443"`
 in `resource instance "agent-${i}"`. Grouped by type alone, the agents'
 existence would read the instances' `ip`, which waits on every instance's
@@ -2372,7 +2355,7 @@ addresses: a resource reading its own attribute (`(want, T["a"])` from
 text does not fix (`where s in servers`) is every address of the type.
 
 An input, a `let` and an output are cells of the scope that declares
-them (R-209): module `k3s`'s `name`, a copy's `name` and the stack's
+them: module `k3s`'s `name`, a copy's `name` and the stack's
 `name` are three cells, never one, so a copy's `name` given from its
 module's (`resource node server { name = "${name}-s" }`) reads one cell
 to write another. The scope is as far as the text fixes it, as an
@@ -2382,7 +2365,7 @@ cycle error names a cell as the program does: `input k3s.name`, and
 what writes it `writes to input k3s.name`.
 
 A write whose type is a variable is grouped by each concrete type it can
-be (R-116): `set r.metadata.labels.owner = "simon" @default where r in
+be: `set r.metadata.labels.owner = "simon" @default where r in
 k8s` beside `resource k8s.deployment server { metadata = { name:
 "traefik", namespace: traefik.metadata.name } }`. Grouped as one, the
 policy's `metadata` of any type would be one cell, and the Deployment's
@@ -2428,7 +2411,7 @@ among them), the host (the std functions, `io.read`), and a provider (its
 tables, `ovh.zone(+name, -id, -nameservers)`, and a type's objects). A
 relation's `+` columns are bound by the literal that reads it and its
 `-` columns are its answer, whoever answers: the same syntax, the same
-binding order (R-10), the same `why` and the same strata. The host's and
+binding order, the same `why` and the same strata. The host's and
 a provider's answers are coeffects, recorded in the plan file and stood
 in for under `dform test`; the program's are pure, so a let with
 parameters (`let f(a, b) = t`, "Statements") is a function written in
@@ -2458,14 +2441,14 @@ A type has an operator in the table or not at all: `+` or `<` on two
 strings is an error naming the types that have it (`"${a}${b}"` joins
 two strings). `x in s` with `s` a string holds when
 `x` occurs in it; `a in n` with `n` an `inet` when the network holds the
-address, and with `n` a range when `a` is between its ends (R-180); the right side's
+address, and with `n` a range when `a` is between its ends; the right side's
 type decides, so a string read as a network is typed first (`let n:
 inet = cfg.net`). A field of a value is a part of it, never a
 computation over it but `len`: `xs.len` of a list, `s.len` of a string
 (its characters), `o.len` of an object (its keys; `o."len"` reads a key
 named `len`).
 
-Over a `secret(T)` every test is a read (R-178): `==`, `!=`, the
+Over a `secret(T)` every test is a read: `==`, `!=`, the
 orders, `in` on either side, `has` and a join (`pw(p), known(p)`)
 are E0301, `not` and `not has` E0302, unless the operand is `secret.declassify(v, why)`; `${..}` and
 arithmetic carry the secret into their result, which is a secret
@@ -2499,7 +2482,7 @@ comment above a signature is its summary, and its `example:` key the
 example hover shows; `dform doc` renders every callable function, per
 signature file, after the project's items.
 
-The standard library follows nine rules (R-134), so that knowing how
+The standard library follows nine rules, so that knowing how
 one package works says how the others do. (1) A value of a type is made
 by writing a string where the type is wanted, never by a call: there are
 no constructors, and a type's parts are its fields (`n.bits`, `v.major`,
@@ -2520,7 +2503,7 @@ first, options last, and a list rather than any number of values
 (`path.join` as `list.join`), but `str.format`'s. (7) A type's package is
 its namespace: a function is named by its package, the type it is about
 (`inet.subnet`, `uri.with_host`, `quantity.to`, `secret.declassify`), and
-nothing is bare: there is no prelude (R-155). `ref(r)` and `cloud_ref(T,
+nothing is bare: there is no prelude. `ref(r)` and `cloud_ref(T,
 n, p)` are forms of the language, listed nowhere; the lowering's own
 (`__ref`, `__scoped`, `__path`, `add`) no program writes. (8) A
 uri is RFC 3986's generic syntax, the type `uri`, never a browser's url.
@@ -2542,7 +2525,7 @@ implement.
 | `list`    | `list.join(l, sep)`, `list.sort(l)`, `list.sort_by(l, field)`, `list.unique(l)`, `list.flatten(l)`, `list.zip(a, b)`, `list.min(l)`, `list.max(l)`, `list.sum(l)`, `list.first(l)`, `list.last(l)`; `v in l`, `l.len` |
 | `time`    | `time.format(t, layout)`, `time.in_zone(t, zone)`; operators `t + d`, `t - d`, `b - a`, `a < b` |
 | `random`  | `random.password(key[, length[, alphabet]])`, `random.base64(key, length)`, `random.signing_key(key)` (secrets); `random.id(key[, length])`, `random.uuid(key)` |
-| `regex`   | `regex.match(s, re)`, `regex.capture(s, re, n)`, `regex.replace(s, re, with)` (`re` a `regex`-typed pattern, checked at compile time, R-31) |
+| `regex`   | `regex.match(s, re)`, `regex.capture(s, re, n)`, `regex.replace(s, re, with)` (`re` a `regex`-typed pattern, checked at compile time) |
 | `semver`  | `semver.satisfies(v, range)`; `a < b`; fields `v.major`, `v.minor`, `v.patch`, `v.pre` |
 | `oci`     | `oci.pinned(r)`, `oci.with_tag(r, t)`, `oci.with_digest(r, d)`, `oci.with_registry(r, host)`, `oci.resolve(r)` (a coeffect: the tag pinned to its digest at plan) (`r` an `oci`, the OCI distribution reference `[registry/]repository[:tag][@digest]`, a string read as one; its parts are fields, `r.digest`; "Types") |
 | `hash`    | `hash.sha256(s)` (a short one is `str.slice(hash.sha256(s), 0, 8)`)       |
@@ -2615,14 +2598,14 @@ as it is.
 | `set R.p = t @r where B` (`+=`: `arg_add`) | `arg(T, A, "p", t', r) :- B, reads`                   |
 | `set R.l[k].p = t @r where B` (`l` keyed) | `arg(T, A, "l[]", [k', {p: t'}], r) :- B, reads`, the body's reads of `R`'s attribute `attr_base(..)` |
 | `set c.p = t where .., c in R.l`          | `set R.l[c].p = t`: the key is `c`'s key fields        |
-| `set T[_].l[_].p = t`                     | `set c.p = t where r in T, c in r.l` (R-162)           |
+| `set T[_].l[_].p = t`                     | `set c.p = t where r in T, c in r.l`           |
 | `output k: T = t` (`T` a resource type)   | `output k: addr`, and its value                        |
 | `output k = t` (no reads)                 | `output k = t'`                                        |
 | `output k = t where B` (reads, or a body) | `output(k, t') :- B, reads`                            |
 | `output k { f = t }`                      | `output k = { f: t }`, typed by its fields             |
 | `output p` (a copy's relation)            | `__rows(Scope, "p", [X, ..]) :- p(X, ..)`, read by `n.p(x, ..)` and `c[t].p(x, ..)` |
 | `output p` (a stack's relation)           | `output p = [ [X, ..] \| p(X, ..) ]`, read by `s[k=v].p(x, ..)` as `member(Rows, [x, ..])` |
-| `input k { f: T = d }` (R-54)             | the leaf `k.f`'s `arg("input", S, "k.f", d, default)`, its check `k.f`'s refinement |
+| `input k { f: T = d }`             | the leaf `k.f`'s `arg("input", S, "k.f", d, default)`, its check `k.f`'s refinement |
 | `decl p(a: t, b_c: t)`                    | record fields `a`, `b_c`                               |
 | `yaml.decode(io.read(S))` (a read, as a value) | `V`, reading `table.yaml.@document(S', At, V)`         |
 | `input p from F(S) where B`               | `p(C) :- B, reads, Path = S', table.F.p(Path, At, C)` ("Documents") |
@@ -2683,10 +2666,9 @@ an input `k` the cell `n::k(V) :- attr(input, "n", k, V)` with its default
 at `@default`, its resources `n.x`, its writes needing no grant (ranks
 decide); a top-level input also takes `--set`. A copy inside a copy puts
 the outer scope in front (`edge.left.vpc`). `extern p(+a, -b)` is asked
-on demand, and `secret.declassify(v, "reason")` lowers a secret's label
-(E DR-19).
+on demand, and `secret.declassify(v, "reason")` lowers a secret's label.
 
-A refinement (`check`, R-1) names the attribute or input by its own name,
+A refinement (`check`) names the attribute or input by its own name,
 as text (G-24): `input replicas: int = 2 check replicas >= 1`,
 `db.backup_days: int check 1 <= db.backup_days <= 35`. `where` in a
 refinement's place is an error naming `check`: `where` has one meaning,
@@ -2700,7 +2682,7 @@ of the program are rejected with "not yet supported".
 ## Formatting
 
 `dform fmt` prints the normal form of each construct (H section 3) in one
-layout (R-52). The author's line breaks are not kept: what fits in 100
+layout. The author's line breaks are not kept: what fits in 100
 columns is printed on one line however it was written, and what does not
 breaks from the outside in, its outermost group first, then each part
 measured again, so an inner group that fits stays on its line. A blank
@@ -2726,10 +2708,10 @@ The groups, and how each breaks:
   (a row's `where`) is always an entry per line;
 - a `where` body: on its line, `where a, b`, else in braces, one literal
   per line; a body of more than three literals is in braces whatever the
-  width (R-10). A refinement's `check` body has no braces and stays on its
+  width. A refinement's `check` body has no braces and stays on its
   line;
 - a component's statements: one per line, always, in its interface
-  order (R-11a), like a file's.
+  order, like a file's.
 
 Of the groups of one statement, its block breaks before its body, and a
 term's group (a call's arguments, a list) is measured up to the next
@@ -2740,13 +2722,13 @@ as it is. A string is printed as written: the lines inside one that spans
 lines keep their indentation, and the groups around it break (but for a
 `where` body, which may stay on its line). Entries, elements and
 statements stay in the author's order but for the header's and a
-component's own interface (see "The header", R-11a).
+component's own interface (see "The header").
 
 The normal forms:
 
 - `{ a: a }` is `{ a }`, and a block's entry `k = k` is `k`; a dotted
   path is never punned (`spec.selector.color = color` stays), and an entry
-  that is only a dotted path, written under R-33, is written out:
+  that is only a dotted path, an earlier pun, is written out:
   `spec.selector.color` is `spec.selector.color = color`;
 - a resource block's leaves under one parent path are one entry:
   `metadata.name = "a"` and `metadata.namespace = n` are `metadata = {
@@ -2765,7 +2747,7 @@ The normal forms:
 - the header is `key`, `input`, `input p from`, `decl`, `output`, before
   the body, each statement with the comments directly above it and on its
   line (see "The header"); a component's `{ }` block takes the same
-  order, `input` then `decl` then `output`, before its own body (R-11a);
+  order, `input` then `decl` then `output`, before its own body;
 - in a project, a literal in a typed position is in its shortest
   spelling: a string in a `bytes`, `cpu` or `duration` position that reads
   as one loses its quotes (`"2Gi"` is `2Gi`, `"500m"` is `500m`). The positions are
@@ -2786,8 +2768,7 @@ A formatted file prints back byte for byte.
 
 - The edition is 2026 (the user's decision): there are no releases and
   2026 was not formalized, so proposal H's grammar is edition 2026 itself,
-  and the grammar before it is gone. A project names it in dform.toml
-  (R-68), never a file.
+  and the grammar before it is gone. A project names it in dform.toml, never a file.
 - A read in any field gates the whole block, as F10 has it.
 - Type namespaces are known from headers, `type` blocks, `type_*` facts
   and the built-in provider schemas; the resolver runs before providers are
@@ -2799,16 +2780,16 @@ A formatted file prints back byte for byte.
   ("Bodies").
 - An `output` with a body, or whose value reads, is the rule
   `output(k, t') :- B, reads`, in a module or a component too.
-- A module reads only its own file's names (R-205), but it lowers through
-  the programs that use it (R-65): its inputs are given there.
-- (R-65, R-208) A stack is a file under `stacks/` or a root file one
+- A module reads only its own file's names, but it lowers through
+  the programs that use it: its inputs are given there.
+- A stack is a file under `stacks/` or a root file one
   `[stacks.NAME]` names, for `use`, discovery and the language server
   alike (`project::is_stack`); a root file is otherwise a module, an
   entrypoint only when the tool is pointed at it.
-- (R-65, R-113) `use` of a component item is an error naming `resource`:
+- `use` of a component item is an error naming `resource`:
   a module is imported, a component is a type.
-- (R-33, R-216) A pun is one simple name on both sides, in a block's
+- A pun is one simple name on both sides, in a block's
   entry, an object's field, a `use` or a copy's block and a keyed read:
-  R-33's pun of a dotted path's last segment is reversed, since the name
+  a dotted path does not pun its last segment, since the name
   written is not the name read; a dotted path takes `= value`, or an
   object pun at its last object.

@@ -67,7 +67,7 @@ world file, and runs anywhere). A stack is a file, named after itself:
 `[stacks.NAME]` names (`dform.toml` beside `shop.df` with `[stacks.shop]`
 is a project with one stack); any other root file is a module, not
 listed. Any file runs by path, named after itself: it is then an
-entrypoint and may have a `key` (R-208). A `key` in a file a program
+entrypoint and may have a `key`. A `key` in a file a program
 uses as a module is an error at its line, and so is a
 resource of a stack anywhere but in the project module, `project.df`,
 which lists the deployments (below). `docs/layout.md` has the convention; every
@@ -84,7 +84,7 @@ operational settings, `[stacks.NAME]` for `stacks/NAME.df` over
 `[defaults]`, and globs discovery skips. A stack's settings are a closed
 list: `backend`, `role`, `approvals`, `audit_sink` and
 `isolated`; a term is written as a string, `{stack}` the stack's full
-name (`stacks.shop`, R-200) and `{k}` the value of its key `k` (in
+name (`stacks.shop`) and `{k}` the value of its key `k` (in
 `backend`), and any other key is
 an error naming the list (`config` is gone: a stack's settings document
 is `set from` in its file, "Giving inputs"). A
@@ -125,7 +125,7 @@ exclude = ["scratch/**"]
 ```
 
 A provider's `path` names its executable, relative to the root, absolute,
-or under `~/`, until a registry serves it (R-24); a `[providers]` table
+or under `~/`, until a registry serves it; a `[providers]` table
 has a `source` or a `path`, not both.
 
 ### Targets and commands
@@ -146,8 +146,7 @@ target does not name is its input's default, for `plan` and `apply` alike;
 both print the deployment first by its full name, `deployment:
 stacks.shop[env=dev]`, `-v` adding which key values are defaults, `(env
 from its default)` (`plan --json`: `deployment` and `key_defaults`). A
-stack's full name is its module path from the project root (R-200:
-`stacks/shop.df` is `stacks.shop`, docs/grammar.md "Paths"); a target
+stack's full name is its module path from the project root (`stacks/shop.df` is `stacks.shop`, docs/grammar.md "Paths"); a target
 names it by that or by its short name, `shop`, where that is unique, and
 a short name two stacks share is an error naming each. `apply` also takes a plan file (`dform apply plan.json`).
 
@@ -161,7 +160,7 @@ boundary (below) and applied without asking when it is the tick the plan
 showed: the same changes, the same values where the plan knew them (a
 value it did not know, `main.endpoint`, may be anything). A plan that is up to date
 asks nothing, nor does `apply plan.json` (the file was reviewed; approvals
-guard it). The one exception is the plan's `warning` (R-80): a rule the
+guard it). The one exception is the plan's `warning`: a rule the
 plan deletes everything of, or a relation it empties, since the last
 apply is asked for on its own after that question, also under `--yes`
 or of a plan file, and with no terminal apply refuses naming
@@ -176,7 +175,7 @@ tick, waits for the values it unblocks (within its `wait`, 10m, or
 tick whose plan holds what no earlier plan showed (a pending group's
 member: `iam.policy[?]` at tick 1, named once the endpoint it is built
 from exists; what `later` held for a provider's settings), or that
-differs from the tick as the plan showed it (After R-156): a change
+differs from the tick as the plan showed it: a change
 added to it, another action, or a value the plan knew that is another
 now (a `resourceVersion` the cluster bumped when tick 1
 updated the object, an object the world changed after tick 1 that the
@@ -217,7 +216,7 @@ tick 1, by name. There is no strict mode, no resource-level target and no
 flag for how long to wait: a plan that needs a second tick applies tick
 by tick, and a program that wants to apply part of itself is two stacks.
 
-`plan X` in a project plans what `apply X` applies (R-200): the
+`plan X` in a project plans what `apply X` applies: the
 deployments X reads and theirs, in apply order, then X, one tree. Each
 is planned against the outputs of those planned before it as they will
 be once applied: a value its plan knows flows (`name = "10.0.0.0/16"`),
@@ -291,10 +290,10 @@ With no target, `plan`, `apply` and `test` run on it; a file that is no
 stack and makes resources of stacks, named as the target (`dform plan
 envs/lab.df`), is one too. Each deployment it lists, and each one those
 read that it does not (said `(not listed: a listed deployment reads
-it)`), runs in dependency order as `apply X` runs X's (R-30): its own
+it)`), runs in dependency order as `apply X` runs X's: its own
 plan, question, state, lock and `[secrets]`, a `--set` going to each
 whose stack declares the input. `plan` prints them as one tree, as `plan
-X` does (R-200): one headline across it, then a header line per
+X` does: one headline across it, then a header line per
 deployment (its mark: `+` never applied, `~` changed, `=` up to date, `-`
 removed; its full name; where the module lists it; its state; what it is
 applied after), its plan nested under it, each planned against what
@@ -415,7 +414,7 @@ dform output app env=prod zone            # prod-a<TAB>0, a row per line
 ```
 
 `dform status TARGET` asks each provider how the deployment's objects
-are doing now (R-203): one line per object in state, its health and the
+are doing now: one line per object in state, its health and the
 provider's reason, then a summary. A provider judges the types its
 handshake lists (docs/providers.md "Health"): the Kubernetes provider a
 Deployment, StatefulSet, DaemonSet, Job, CronJob, Service (a
@@ -515,7 +514,7 @@ too):
 | Status | Meaning |
 |---|---|
 | 0 | done: the command did what it was asked (`plan` produced a plan, with or without changes) |
-| 1 | failed: an error, printed; or an apply's wait on a value the world has not reached ran past its deadline (`not reached in 10m`, R-201: state is consistent, and the next apply waits again); or `status` found an object not healthy or suspended (its line says which); or `render` met a value it cannot print (each named) |
+| 1 | failed: an error, printed; or an apply's wait on a value the world has not reached ran past its deadline (`not reached in 10m`: state is consistent, and the next apply waits again); or `status` found an object not healthy or suspended (its line says which); or `render` met a value it cannot print (each named) |
 | 2 | usage: the command line is wrong (the argument parser's own) |
 | 3 | declined: a question was answered no; nothing of that tick was applied, and nothing is printed as an error |
 | 4 | refused by the program: its conflicts and denies, printed (`plan`, `apply` and `render` alike) |
@@ -602,7 +601,7 @@ Storage, anything S3-compatible); the region defaults to `us-east-1`. In
 inventory and the cache stay under `dform.state/`: they are the
 provider's and the machine's, not state.
 
-Storage names a deployment by its full name (R-200): its directory (or a
+Storage names a deployment by its full name: its directory (or a
 backend's `{stack}`), the registry's entry, its `outputs.json`'s
 `deployment`, the grants of its sealed outputs, and its lock's and
 lease's holder record, `stacks.platform[env=lab]`. A deployment stored
@@ -649,9 +648,9 @@ makes. The log is kept whole: it is the history too (compaction, folding
 an old log into its checkpoint, is not done).
 
 State keys each resource by its type and address, `T::A`, A the
-resource's path (R-112: `net.vpc::main.vpc`, a quoted segment as
+resource's path (`net.vpc::main.vpc`, a quoted segment as
 written, `net.vpc::k3s."a.b"`); the plan file, `--json` and the mock's
-world use the same path. State written before R-112, with `/` in its
+world use the same path. State written by an earlier dform, with `/` in its
 addresses (`main/vpc`), is pre-release and is not migrated.
 
 ```toml
@@ -795,7 +794,7 @@ identity module's names are fixed. A provider whose `use` block
 reads the key, or a value that depends on it, or a computed attribute of
 a resource (`use k8s { kubeconfig = k3s.kubeconfig }`, read back
 from a server each deployment creates) reaches a per-deployment account
-already, and its names are not linted (R-117).
+already, and its names are not linted.
 
 `use stacks.app` then `app[env="prod"].k` reads one deployment's outputs
 (the core's `stack_output("app[env=prod]", k, V)`).
@@ -814,7 +813,7 @@ is published as pending, and its reader has a null (`?stack_output/net#c`)
 that its resources wait on until a later apply publishes the value. An
 output declared `secret(T)` is recorded and
 published as its label (`output/#k`) and the keyed digest of its value
-(`hmac-sha256:..`, keyed with the deployment's master), never its value (E DR-19):
+(`hmac-sha256:..`, keyed with the deployment's master), never its value:
 a reader gets a secret null, and using it in a public place is the static
 secret error (E0304). A secret output that is a resource's attribute
 (`output pw = db.user.main.password`, or a sensitive computed value) is
@@ -844,7 +843,7 @@ the plan").
 #### Remote outputs
 
 A project reads the outputs of another project's stacks by mounting that
-project as a package in its `dform.toml` (R-65):
+project as a package in its `dform.toml`:
 
 ```toml
 [packages.platform]
@@ -853,7 +852,7 @@ path = "../platform"
 
 `use platform.stacks.cluster` then `cluster[env="prod"].endpoint` reads
 the deployment `platform.stacks.cluster[env=prod]` (its full name: the
-package's name, then the stack's path in the package, R-200) through the
+package's name, then the stack's path in the package) through the
 backend that project's own `dform.toml` names in `[defaults] backend`
 (`{stack}` the stack's full name in the package, `stacks.cluster`;
 without one, its `dform.state/stacks.cluster/`), a keyed deployment under
@@ -968,7 +967,7 @@ type the program declares itself with a `type` block is the mock's to
 play. A mock playing several providers on one link (`use google`
 and `use k8s` on mock schemas) takes no settings from any of them.
 
-`use P as A` starts the provider P again under the name A (R-115):
+`use P as A` starts the provider P again under the name A:
 its own process (a mock schema under a second name is a mock link of
 its own, its world `remote.A.json`), configured by its own block, its
 types written `A.T` and renamed to P's at the link, so the provider
@@ -1065,7 +1064,7 @@ type_doc(net.vpc, "cidr", "The network's IPv4 range.")      # optional: a path's
 extern_decl("ovh.image", "+region, -name, -id, -distribution")  # a data source, no `extern` line needed
 ```
 
-A `write_only` attribute (R-106) is one the API takes and never answers:
+A `write_only` attribute is one the API takes and never answers:
 state keeps the digest of the value last applied beside the resource
 (`written`, keyed with the stack's key, never the value), and Plan
 compares the program's value with it: the same is no change, another a
@@ -1153,8 +1152,7 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   has not, a CRD's) is served under `k8s.<the group's first
   label>.<kind>` too, at its preferred version, when no other kind takes
   that name: `traefik.io`'s `Middleware` is
-  `k8s.traefik.io.v1alpha1.middleware` and `k8s.traefik.middleware`
-  (R-126).
+  `k8s.traefik.io.v1alpha1.middleware` and `k8s.traefik.middleware`.
 - The schema is derived at Configure from the cluster's `/openapi/v3`, and
   cached as `k8s-openapi.json` in the stack's state directory (fetched again
   when the server's index changes); the schema derived from it is cached
@@ -1226,7 +1224,7 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   deployment's name as a label value), and a Create's idempotency key rides
   on the annotation `dform.io/idempotency-key`; neither is configuration.
   The provider has the `keep` capability: an update's `keep` path is
-  applied again as the cluster has it (R-164).
+  applied again as the cluster has it.
   The provider has the `managed` capability: a Create whose answer was lost
   (a generated name nobody knows yet) is found by listing the type with that
   label as the selector and matching the annotation, so the next run maps
@@ -1246,12 +1244,12 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   and the cluster's document, written when the program's settings
   configure the cluster). A kind in neither waits on the provider for its
   schema until the settings arrive (in the tick after what they are made
-  from, R-156; `later` when no tick of the plan makes them); from that Configure on the
+  from; `later` when no tick of the plan makes them); from that Configure on the
   provider serves its cluster's kinds, and dform asks it then for the
   kinds the run names that no schema had, so the rest of the run plans
   them typed (a computed `metadata.uid` another object reads, a sensitive
   field), as the next run, loading the cache, does.
-- A kind its cluster does not serve, the cluster reached (R-126): when
+- A kind its cluster does not serve, the cluster reached: when
   the program makes a `k8s.custom_resource_definition` whose group and
   kind define it (`spec.group`, `spec.names.kind`, a served
   `spec.versions[_].name`, or the short name above), the resource waits
@@ -1318,7 +1316,7 @@ cargo run -- -C examples/demo plan
 #     vpc = main.vpc
 ```
 
-A reference is the resource (R-43). Where an attribute points at another
+A reference is the resource. Where an attribute points at another
 resource, the schema types it `ref(T)` and the program gives it the
 resource: `vpc = vpc`, `subnets = [ s | s in net.subnet ]`. The provider
 gives its API the object's id once it exists; the plan prints the
@@ -1328,7 +1326,7 @@ error naming `x`, and `ref(x)` writes the reference out where an attribute
 that is no `ref(T)` needs the id as text.
 
 An order with no value passed along is a clause on the resource's
-existence (R-152): `has r` holds once `r`'s identity is known, so
+existence: `has r` holds once `r`'s identity is known, so
 
 ```dform
 resource db.postgres warm_cache { size = 1 }
@@ -1341,7 +1339,7 @@ after the cache, as a read of a value the cache computes would.
 `r`, and fails once `r` exists.
 
 The plan, `why`, `query`, `diff` and the editor's hints print an address
-as the source names it (R-111): its type and its path, a copy's scope in
+as the source names it: its type and its path, a copy's scope in
 front, `net.vpc edge.left.vpc`, a value referring to it by the path
 alone, `main.vpc`. The full address is the source term that names it,
 `T["A"]` (`A` the path, a copy's scope included: `n.x`, `edge.left.vpc`), an
@@ -1350,15 +1348,14 @@ attribute of it `.path` after it: the plan file, `--json`, state, `plan
 `why`, `apply`'s progress lines and the audit log's retries say the
 printed one (`apply net.subnet a: ..`, `waiting on db.postgres
 d.endpoint`), and a document dform's own read has not answered yet is
-its location (`ssh://ubuntu@10.0.0.5/etc/k3s.yaml`, R-153). Every
+its location (`ssh://ubuntu@10.0.0.5/etc/k3s.yaml`). Every
 address the command line takes is read that way (`why`, `query`, `state
 show`, `state mv`, `dev show`, `--chaos`), and `why` also takes the
 printed one, so an address copied from a plan pastes into a command;
 quote it for the shell (`why 'net.vpc main.vpc'`, `why main.vpc.cidr`).
 
 The plan is the Z-set `desired - world` (proposal E §2.8): per address a
-create, a delete, an update, or nothing. It is printed grouped by tick
-(R-79), the only grouping, each change with where it is derived:
+create, a delete, an update, or nothing. It is printed grouped by tick, the only grouping, each change with where it is derived:
 
 ```
 $ dform plan apps env=prod
@@ -1394,7 +1391,7 @@ A plan line is a label and a value; none explains how evaluation works.
 The ticks are the one rule behind them: tick 1 is what apply makes
 first; a later tick is planned when the one before reports, and holds
 the changes that read what an earlier tick makes. A change is in the
-first tick after every tick that makes what it waits on (R-156): a value
+first tick after every tick that makes what it waits on: a value
 another change computes, a provider's settings made from one (the
 kubeconfig read from the server tick 1 creates), a CRD the plan creates;
 it is counted, its attributes as written even when its schema arrives
@@ -1411,7 +1408,7 @@ made; the plan itself says what it is.
   holds is counted after it by kind and by what it waits on outside the
   plan, followed through what that is made from (a provider's settings,
   the CRD a resource waits on, a value of a held object), one clause per
-  wait in `later`'s order (R-193), then the policy block's count (R-200):
+  wait in `later`'s order, then the policy block's count:
   `plan: 21 creates after stacks.platform[env=lab] is applied; policy:
   12 hold · 2 undetermined`, or `plan: 3 changes (3 create) over 1 tick;
   1 create waiting on ssh://ubuntu@10.0.0.5/etc/rancher/k3s/k3s.yaml`. A
@@ -1419,7 +1416,7 @@ made; the plan itself says what it is.
   `later` lists as state has them are `N later` (`plan: 0 changes, 3
   later`). A tree of deployments has one summary across it, its ticks
   each deployment's own.
-- The policy block (R-200) follows the ticks, before `later`: each
+- The policy block follows the ticks, before `later`: each
   policy (a `deny`, a check a value waits on) is one line, as a change
   is: its mark in the first column, `holds` (green), `fails` (red) or
   `undetermined` (dim), its text unquoted, its site and its tally over
@@ -1447,16 +1444,16 @@ made; the plan itself says what it is.
   `fails` and `undetermined`.
 - Changes share their address's path: a copy's are nested under its
   line (`+ k3s.node k3s.agent-0`), and those of a used module's instance
-  two or more of them are in under `+ module k3s` (R-200: the plan is the
+  two or more of them are in under `+ module k3s` (the plan is the
   path tree printed); every line keeps its full name.
 - `moved T["Old"] -> T["New"]` lines come first, one per `moved/3` rename
   of state.
-- Every other line is one of two shapes (R-111). A change: its mark, then
+- Every other line is one of two shapes. A change: its mark, then
   its address as the source names it, the type and the path, a copy's
   scope in front (`+ ovh.ssh_key k3s.admin`, `+ net.vpc blue.vpc`, a
   name holding a dot one quoted segment, `k3s."k8s-lab.vodik.xyz"`),
   then where it is derived, `FILE:LINE`; a delete, why the program no
-  longer derives it, in one line (R-150's why-not): the condition that
+  longer derives it, in one line: the condition that
   stopped holding with the bindings that made it false (`k3s.df:52
   n < agents: agents = 1`), `not in the program` (with `(was FILE:LINE)`
   when where the last apply derived it is known), a copy whose `use` is
@@ -1477,7 +1474,7 @@ made; the plan itself says what it is.
   a later tick, whose header says what it `waits on`). A secret is
   `(sensitive)`. A string past 60 characters elides its middle (`"ssh-
   ed25519 AAAA…2DK7 simon@framework"`), but inside a laid-out value.
-  An attribute prints as the source wrote it (R-124): the leaves one
+  An attribute prints as the source wrote it: the leaves one
   write made (a block's entry, a `set`, a policy's element) fold back
   into one value at the path where its writers diverge, in `dform fmt`'s
   layout: on one line when it fits, else a field or an element per line
@@ -1485,7 +1482,7 @@ made; the plan itself says what it is.
   no string elided. A leaf another write made is its own line with its
   site. What the program did not write inside a value it wrote is the
   document the provider receives, folded in after the program's fields
-  with a dim note (R-217): a merge key the schema defaults is `protocol:
+  with a dim note: a merge key the schema defaults is `protocol:
   "TCP" (schema default)`. A note after a value breaks every object and
   list around it, one field per line, so it ends its line; a default no
   written value holds (an element the program wrote one field of, each
@@ -1533,7 +1530,7 @@ made; the plan itself says what it is.
   the same, notes and all; `-vv` says every leaf on its own line, with
   its chain, a default's with none; `why` says a value as the plan
   does, notes and all, with the chain of the write that made it.
-  A value a read decoded says the row it is, not its content (R-131): a
+  A value a read decoded says the row it is, not its content: a
   resource whose body is a document (`resource T "${d.metadata.name}" =
   d where d in yaml.decode(io.read("vendor/crds.yml"))`), and an attribute whose one
   contribution is a document's value (`dashboard_json =
@@ -1549,7 +1546,7 @@ made; the plan itself says what it is.
       = vendor/traefik-crds-v3.7.14.yml:412  (24.0 KB)
   ```
 
-  `-v` lays the value out as R-124 folds it, and says a variable bound
+  `-v` lays the value out as the plan folds it, and says a variable bound
   to a document by its row (`with d = vendor/crds.yml:412  (24.0 KB)`, as
   `why` does); `-vv` says its leaves; an update says the leaves that
   change; `--json` and the plan file keep every leaf. The full address,
@@ -1564,11 +1561,11 @@ made; the plan itself says what it is.
   or a list with merge keys (`containers[name=web]`), by element: an
   element that is new or gone is one `+`/`-` line with its leaves, not
   every later index shifting. A copy
-  (R-67) prints as its own entry, `+ network blue`, in bold, its resources
+  prints as its own entry, `+ network blue`, in bold, its resources
   indented under it with their full paths (`+ net.vpc blue.vpc`), a copy
   inside it nested again, inside the tick they run in. A value given at
   the object's creation only that differs from the object's is a line
-  of its own, `user_data differs (bootstrap): kept` (R-198, "Lifecycle"),
+  of its own, `user_data differs (bootstrap): kept` ("Lifecycle"),
   under the change; an object with nothing else to change is listed `=`
   after the ticks, or above `stack NAME is up to date`.
 - `tick N  K changes`: changes held until what a tick before makes is
@@ -1582,7 +1579,7 @@ made; the plan itself says what it is.
   not all of it: `tick 2  3+ changes`, `tick 2  ? changes` when the rule
   is all the tick has. A later tick of a running apply is headed the
   same, `tick 2  waits on db.postgres main.endpoint` when it only waits.
-- `later`: what no tick of this plan decides (R-156). A resource rule
+- `later`: what no tick of this plan decides. A resource rule
   stuck on an unknown no tick makes, by the address its
   statement names (`k8s.job "migrate-v${schema}"`), `one per ROW` when
   what it reads may gain rows, `if ROW` when one may (`if app blue`, a
@@ -1598,7 +1595,7 @@ made; the plan itself says what it is.
   (docs/providers.md: `kubeconfig`, not `namespace`), the provider
   planned them against its offline schema (the k8s snapshot), and the
   header's next line says so, the changes under it as a tick's, each
-  with its document (R-193):
+  with its document:
 
   ```
   later
@@ -1619,7 +1616,7 @@ made; the plan itself says what it is.
   schema has yet (a cluster's CRD) under `waits on  provider k8s
   schema`, its attributes as written, or under the CRD the program makes
   for it, `waits on  k8s.custom_resource_definition
-  "middlewares.traefik.io"` (R-126); one reading a deployment not
+  "middlewares.traefik.io"`; one reading a deployment not
   applied yet under `waits on  stack platform[env=lab]`. When a tick of
   the plan makes what they wait on, they are that tick's instead. The summary
   counts them by what they wait on (above), and `why` names what such a resource
@@ -1630,11 +1627,11 @@ made; the plan itself says what it is.
   when its body reads it: `not p.securityContext.runAsNonRoot == true`
   over a pod spec the program wrote is decided before the cluster exists. A type whose namespace names no provider is the compile
   error it always was.
-- `warning` (R-80): what the plan empties since the last apply: a
+- `warning`: what the plan empties since the last apply: a
   rule the plan deletes every resource of that it derived at the last
   apply, by its `FILE:LINE` and statement, with what it deletes (`deletes
   all 2 it derived at the last apply: ..`, three named and `and N more`)
-  and the leaf that changed since (R-79's `because`, when there is one);
+  and the leaf that changed since (its `because`, when there is one);
   and a relation of the program that had rows at the last apply and has
   none now (`active  had 1 row at the last apply, has none now`). A rule
   is one that binds variables (a `where` with a join, an `in`); a
@@ -1651,7 +1648,7 @@ made; the plan itself says what it is.
   entry; a plan with no apply before it warns of nothing. `--json`
   carries them as `warnings` (each `{rule, statement, relation, deletes,
   rows_at_last_apply, because}`), only when there is one. A host label a
-  reader may mistake for another (R-134, UTS 39) is one too, at every
+  reader may mistake for another (UTS 39) is one too, at every
   level, `-q` included: one that mixes scripts (`host label "exаmple"
   mixes Latin and Cyrillic  net.vpc main.tags.host  p.df:6`) or one
   wholly in a script whose letters read as Latin (`"рау" is Cyrillic that
@@ -1688,16 +1685,15 @@ made; the plan itself says what it is.
   after tick 1; ticks 1 to 1 were applied`.
 - `stack NAME is up to date`: nothing to do, nothing stuck, no policy
   that fails or is undetermined (the only line but for a `moved` and a
-  value kept at creation, R-198).
+  value kept at creation).
 
-How much each change says of why it is planned is a ladder (R-79,
-R-111), the same on `plan`, `apply` and `diff --since`: `-q`, the
+How much each change says of why it is planned is a ladder, the same on `plan`, `apply` and `diff --since`: `-q`, the
 default, `-v`, `-vv`, or by name `--why=none|line|how|full` (`--why`
 alone is `full`). `-q` and `-v` together, or either with `--why`, are a
 usage error.
 
 - The default (`line`): the two shapes above. On a change's line, the
-  rule and the binding, the kind choosing which (After R-149): a
+  rule and the binding, the kind choosing which: a
   create's `FILE:LINE` and the bindings that made this one whose value
   its address does not show (`k3s.agent-3` shows `n = 3`), at most two
   and then `…`, each long value elided (`network.df:24  with region =
@@ -1729,8 +1725,7 @@ usage error.
   stacks/net.df:4 @default`), unless that write is in the change's own
   block. A secret by its label (`(sensitive random.password("db"))`), a
   long string whole.
-- `-vv` (`full`): `-v`, and under each attribute how its value was made
-  (R-122), the chain `why` prints: one `= EXPRESSION   SITE` step per
+- `-vv` (`full`): `-v`, and under each attribute how its value was made, the chain `why` prints: one `= EXPRESSION   SITE` step per
   expression the value passed through, following only what that
   expression reads (a copy's input to where the copy is given it, a
   `let`, a settings block), until a literal, a key or a provider's
@@ -1825,7 +1820,7 @@ cargo run -- -C examples/gke apply                  # asks again at tick 2
 cargo run -- -C examples/gke apply --set zones=1   # one zone: stops after tick 1
 ```
 
-Once a tick is approved its block fills in on stderr (R-127, R-206),
+Once a tick is approved its block fills in on stderr,
 stdout keeping the plan and the questions. Its lines are the plan's
 lines (one printer: a copy's and a used module's changes nested under
 its header as the plan nests them, each by its full name), with where
@@ -1835,7 +1830,7 @@ first (`waits on k3s.server.public_ip`), or its call's word and time,
 (`updated`, `deleted`, `replaced`, `adopted`, `kept` for a forget). The
 time ticking is the only sign of life (no spinner); while the call runs
 the provider's own status word stands in for `making`, verbatim, as its
-Apply streams it (R-130: the call's events, each time the provider's
+Apply streams it (the call's events, each time the provider's
 view of the object changes, never on a timer; an OVH instance says
 `BUILD`, then `ACTIVE`; an event's message goes to `DFORM_LOG=debug`).
 On a terminal the block's lines change in place about once a second,
@@ -1903,7 +1898,7 @@ tick 1  done 0.6s
 starts, what is in flight finishes, and the failed change's mark is `!`,
 its word `failed` with its time (`tick 1  failed ..` ends the block).
 Each failure is said once, below the block, in full, in the one shape
-every error has (R-109): what happened, to the change as the plan
+every error has: what happened, to the change as the plan
 prints it; the provider's or the rule's message on its own line (a
 provider's own naming of the change dropped, any mention of the address
 said as the plan says it); where the change is derived:
@@ -1956,8 +1951,7 @@ SSH from the server tick 1 creates) is configured at the boundary where
 they become known, waiting for them as for any value when the read
 answers "not yet". The plan lists its resources in the tick after the
 one that makes the settings (`tick 2  9 changes` / `waits on  provider
-k8s  kubeconfig = k3s.kubeconfig`), counted, their attributes as written
-(R-156), or under `later` when no tick of the plan makes them; apply
+k8s  kubeconfig = k3s.kubeconfig`), counted, their attributes as written, or under `later` when no tick of the plan makes them; apply
 makes tick 1, configures the provider, says so, each setting a secret
 reaches as `(sensitive)` and `-v` adding what it is written as, never a
 value:
@@ -1988,7 +1982,7 @@ or any output. A setting that is a secret another provider holds (a
 managed cluster's kubeconfig, a sensitive computed attribute: the
 program has only its label), whole or inside a string template, is
 revealed by that provider into this Configure call once the object that
-holds it exists (the protocol's `Reveal`, R-45; "A secret a provider
+holds it exists (the protocol's `Reveal`; "A secret a provider
 holds"): the bytes are in dform's memory for the call and
 nowhere else, and an account the provider reports that equals them
 prints as the secret's label. Settings that no wait brings stop the apply at that tick,
@@ -2007,7 +2001,7 @@ before it plans the next tick. An Apply call of the provider whose answer
 was lost (`uncertain` in state, see "Chaos: failure and latency
 injection") is looked up once the provider is configured, a create not
 found sent again with its idempotency key, and a message names its
-address, never that key (R-177).
+address, never that key.
 
 At a boundary apply also compares the refreshed world with what it last saw
 (the tick's refresh and its Apply responses). A change under an address whose
@@ -2107,7 +2101,7 @@ drops the path from the desired document and from the world's, and an
 update keeps the world's value there (or its absence). `prevent_destroy`
 blocks `plan` and `apply` with `lifecycle prevent_destroy: the plan would
 delete T["A"]`.
-`retain` (R-154; Terraform's `removed` block, Pulumi's `retainOnDelete`,
+`retain` (Terraform's `removed` block, Pulumi's `retainOnDelete`,
 a Kubernetes `Retain` policy) turns a planned delete of the object into a
 forget: no Delete is sent, state drops the object, the world keeps it,
 and the audit log records `forgot` with its address and remote id. It
@@ -2149,7 +2143,7 @@ deletes each of its resources of a retained type).
 
 A lifecycle word is said of the object, `lifecycle(r, "retain")`, or of
 one of its attributes, by its path, `lifecycle(r, "bootstrap",
-"user_data")` (R-198; one fact per attribute). `bootstrap` says the value
+"user_data")` (one fact per attribute). `bootstrap` says the value
 matters when the object is made and never after: a first boot's cloud-init
 holding a k3s token or a Tailscale auth key, which a rotation would
 otherwise turn into replacing every server it is in. A create sends it,
@@ -2192,7 +2186,7 @@ reference that prints as its address, `T["A"]` (`Kind` is
 `create`, `adopt`, `update`, `drift`, `pending`, `replace`, `delete`,
 `delete_deposed`, `forget` or `remaining`; `Before` a digest of the world document it was planned
 against, `absent` for none) and `world_digest(r, Now)`; and
-`derived_at_last_apply(rule, n)` (R-80), from the last apply's `derived`
+`derived_at_last_apply(rule, n)`, from the last apply's `derived`
 entry in the audit log: a rule that derived resources then, by its
 `FILE:LINE`, with how many, and a relation of the program, by its name,
 with its rows. The lifecycle
@@ -2247,7 +2241,7 @@ the deny the policy pass derives from `deformation(remaining, ...)` (run
 
 `plan --out PLAN.json` writes the plan file (format version 5): the
 deployments the plan covers in apply order, `deployments`, the target's
-dependencies first and the target last (R-200: `plan apps env=lab --out
+dependencies first and the target last (`plan apps env=lab --out
 p.json` writes `stacks.platform[env=lab]`, then `stacks.apps[env=lab]`;
 a deployment that reads none is a file of one), each by its full name,
 `deployment`, with what it is applied after, `after`, and its plan. A
@@ -2325,7 +2319,7 @@ redactor: `plan` (text, `--json`, the plan file), `show`, `query`, `why`,
 `graph`, and the policy messages on stderr, whose context quotes values and
 rule text.
 
-The redactor works by taint, never by text (R-128). A value prints as a
+The redactor works by taint, never by text. A value prints as a
 secret because of where it is or where it came from: a `sensitive` path, a
 cell declared `secret(T)` (an input, an output, a field of an object type),
 a `let` or a relation's column the secret pass found a secret reaches
@@ -2340,7 +2334,7 @@ print as written. The last line holds: a secret value, whole, never
 prints, as a value, as a literal quoted in rule text, or as a `--set`
 flag's value; a string that merely holds its bytes is not searched.
 
-Secrets are also checked statically (E DR-19): one dataflow pass over
+Secrets are also checked statically: one dataflow pass over
 the predicate signatures labels every position a secret reaches, from a
 `sensitive` schema attribute, an input declared `secret(T)` (`input pw:
 secret(string)`) or an extern column declared `-value: secret(T)`, through
@@ -2354,7 +2348,7 @@ is a compile error with a span, before anything is evaluated:
 | E0303 | an aggregate other than `collect_*` (`count` leaks cardinality) |
 | E0304 | a public place: a resource attribute the schema does not mark `sensitive`, a provider's setting it does not declare sensitive (when it declares its settings), an output or input not declared `secret(T)`, a `deny`/`warn` |
 | E0305 | a resource address (`want`, a resource name, `ref`, `scoped`) |
-| E0306 | what a coeffect is asked with, sent off the machine at plan: a location (`io.read("https://x/${pw}")`), an extern's `+` column not declared `+x: secret(T)` (R-167) |
+| E0306 | what a coeffect is asked with, sent off the machine at plan: a location (`io.read("https://x/${pw}")`), an extern's `+` column not declared `+x: secret(T)` |
 
 A field an object type declares `secret(T)` is declared the same way,
 through a `type` alias as well as inline: with `type conn = { host:
@@ -2372,7 +2366,7 @@ publishes each secret field by its label (`output/#conn.password`) and
 digest, the rest of the object by value, and the reader's
 `prod.conn.password` is a secret null as a whole secret output's is.
 
-Every operator over a secret is a read of it (R-178): `deny "weak"
+Every operator over a secret is a read of it: `deny "weak"
 where pw == "hunter2"` is E0301, as `pw.len < 12` is, because a
 comparison answers one bit at a time; `has pw` is E0301 and `not has pw`
 E0302, because presence is a bit too. A `forwards` function
@@ -2969,7 +2963,7 @@ secrets/lab.json: 1 given secret, sealed to alice, bob and the deployment's mast
 ```
 
 An object made with an older generation of a key at an attribute given
-at its creation only (R-198) is named under the table, `k3s-token: made
+at its creation only is named under the table, `k3s-token: made
 with generation 2 (current 3): ovh.instance lab-server user_data`
 (`--json`: `made with`, each address, path and generation), until a
 replace makes it again.
@@ -3150,14 +3144,14 @@ The kinds:
   text (the provider's message, the site) under `detail`, in every
   entry that has one (`retry`, `approval`, `apply_end` too);
 - `tick`: the world as the executor saw it, as an HMAC with the stack's key;
-- `retry`: a provider call sent again (R-81): the tick, the provider, the
+- `retry`: a provider call sent again: the tick, the provider, the
   call, the attempt and its budget (`of`), the delay, and why the last
   attempt failed (redacted);
 - `wait`: a tick that waited on open nulls: the tick, what it waited on,
   since when, how long, and whether they `resolved` or the provider's
   `timeout` `expired`;
 - `configure`: a provider configured from the program's settings at a
-  tick's boundary (R-45): the tick, the provider, the settings' keys
+  tick's boundary: the tick, the provider, the settings' keys
   (never their values);
 - `sealed`: an apply whose grants changed: each secret output no
   provider holds and the deployments it is now `sealed` to (`outputs`),
@@ -3188,7 +3182,7 @@ The kinds:
   (`record`), when it derived any: each rule that binds variables by its
   `FILE:LINE`, its statement and the resources it derived, and each
   relation of the program with its rows; the next plan's guardrail and
-  its `derived_at_last_apply` read the last apply's (R-80);
+  its `derived_at_last_apply` read the last apply's;
 - `apply_end`: `ok`, `declined` (the confirmation was answered no) or
   `stopped` (a plan file or approval stopped before what it did not
   show), each with its `tick`, or `failed` and the error;
@@ -3198,7 +3192,7 @@ The kinds:
 Who is `DFORM_ACTOR` when the environment sets it (say a CI job's OIDC
 subject), else `user@host`. Secrets never appear: a diff is a digest of its
 redacted form, where a sensitive leaf is already the stack's HMAC of it.
-Nothing in plan or apply reads the log as truth (E DR-16).
+Nothing in plan or apply reads the log as truth.
 
 ```bash
 cargo run -- -C examples/demo log dform env=staging                     # SEQ TIME KIND field=value ...
@@ -3277,8 +3271,7 @@ cargo run -- -C examples/demo query main.vpc.cidr                   # the same, 
 dform query synapse.agent_init                                     # a cell by its path: value
 ```
 
-A `let`, an input or an output is named by its path as `why` names it
-(R-176): `agent_init`, a used module's `synapse.agent_init`, a leaf of an
+A `let`, an input or an output is named by its path as `why` names it: `agent_init`, a used module's `synapse.agent_init`, a leaf of an
 object input `nodes.count`; the result set is its `value`, which
 `--json` carries whole. A name that is also a relation's (the program's
 own `let k` is the relation `k`) lists the relation's facts.
@@ -3304,24 +3297,23 @@ A resource or one of its values is named as `why` names it, as the plan
 prints it (`query main.vpc.cidr`, `query 'pg.spec.ports[port=5432,protocol=TCP]'`)
 or after the full address (`query 'net.vpc["main.vpc"].cidr'`); a path
 past a list that reaches nothing names the nearest element the list has.
-One value prints alone in `dform fmt`'s layout, as the plan lays it out
-(R-124): in the program's field order (of a value several writes made,
+One value prints alone in `dform fmt`'s layout, as the plan lays it out: in the program's field order (of a value several writes made,
 the first write's fields first, each write's in its own order), a
-default no write of the program made with its note, `protocol: "TCP" (schema default)` (R-217);
+default no write of the program made with its note, `protocol: "TCP" (schema default)`;
 every other query is its table.
 
 Rows print values as the program writes them: a reference is the address
-it names as the plan prints it (R-111), `google.sql_database_instance
+it names as the plan prints it, `google.sql_database_instance
 db.name`, an unknown the attribute it stands for after a `?`,
 `?k8s.service web.spec.clusterIP`.
 
-`dform why PATTERN` prints how a value was made (R-122): an attribute,
+`dform why PATTERN` prints how a value was made: an attribute,
 or an input or `let`, as its line, `T NAME.path = VALUE`, and under it
 its chain, as `plan -vv` prints it under the attribute: each
 `= EXPRESSION   SITE` the value passed through, following only what the
 expression reads, then each write it beat (`over 1 @default`). A value
 written as the literal it is is one line, its place beside it. An object
-folds as the plan folds it (R-124): the leaves one write made are one
+folds as the plan folds it: the leaves one write made are one
 value in `dform fmt`'s layout with that write's chain, a leaf another
 write made its own line; a list is laid out the same way. A resource is its header, `T NAME
 SITE` with the statement's bindings, then each attribute and its chain;
@@ -3338,7 +3330,7 @@ cargo run -- -C examples/demo why main.vpc.tags.team dform env=prod
 ```
 
 A long string is elided in its middle, at the default and at `-v`;
-`-vv` prints the value whole (R-176), a string's line breaks as lines,
+`-vv` prints the value whole, a string's line breaks as lines,
 as a string that spans lines is written, its site after the closing
 quote, so a rendered document reads as it is:
 
@@ -3357,7 +3349,7 @@ as `query --json` spells it), and `text`, what `-vv` prints; what the
 program does not derive is `{"why_not": ..}`, a deny `{"text": ..}`.
 
 `--tree` prints the derivation instead, from the provenance circuit
-every evaluation records (proposal E §3, DR-10), in the program's own
+every evaluation records (proposal E §3), in the program's own
 terms; any other fact (a relation's row, a `deny`, a `want` by its
 pattern) always prints so. Each statement that fired, as written, at its
 `file:line` (a block shows the entry that fired, the rest elided as
@@ -3367,7 +3359,7 @@ by their names in the source, and under them each computed term of the
 statement with its value: an interpolation, a function call, a read
 (`database.backup_days = 14`), a lookup (`zone_index[z] = 1`), an
 unknown as its `?` label. Under that are the facts the firing read,
-recursively, each spelled as the plan prints it (R-111): `net.vpc main`
+recursively, each spelled as the plan prints it: `net.vpc main`
 for a resource, a copy's `net.vpc blue.vpc`, `net.vpc main.cidr =
 10.0.0.0/16` for an attribute, `input env = "prod"` and `let n = 3` for
 a cell, a relation as `zone("us-test-1a", 1)` (its facts after its
@@ -3411,8 +3403,7 @@ cargo run -- -C examples/demo why --tree 'attr(net.vpc, "main.vpc", "tags.team",
 #   └─ ... 1 other contribution (--all)
 ```
 
-What the program does not derive, `why` explains why not (R-80, R-150:
-there is one `why`, and what the pattern names decides): a resource
+What the program does not derive, `why` explains why not (there is one `why`, and what the pattern names decides): a resource
 address (`T["A"]`), an attribute (`T["A"].path`, an attribute of a
 resource not derived explains the resource) or a relation's row with
 constants (`zone("us-east-1c", n)`). It finds the rules whose head could produce
@@ -3442,9 +3433,9 @@ What no rule mentions gets one line and nothing invented:
 `no rule derives aws.vpc main.vpc: no resource aws.vpc is named like
 it`, and under it the address the program derives that is nearest in
 spelling, when one is within a third of its length in edits, `nearest:
-net.vpc main.vpc`. It names each address as the plan prints it (R-111).
+net.vpc main.vpc`. It names each address as the plan prints it.
 A resource the plan holds is derived: its chain, then the tick it runs
-in and what it waits on, as the plan says it (After R-156): `tick 2
+in and what it waits on, as the plan says it: `tick 2
 waits on  provider k8s  kubeconfig = kc` for one whose wait a tick of
 the plan makes (a server tick 1 creates), `later  waits on  provider
 k8s  kubeconfig = raw` for one no tick makes (its provider's settings
@@ -3470,7 +3461,7 @@ cargo run -- -C examples/demo why 'net.vpc["peer.vpc"]' dform env=dev
 
 A resource that leaves unset an attribute its schema requires is
 refused by the plan at the resource's site, before its provider is
-asked (R-184), one line per attribute, and under them the fix:
+asked, one line per attribute, and under them the fix:
 
 ```
 Error: backups.df:53, k8s.cron_job forgejo_backup.job: spec.jobTemplate.spec.template is unset (required: describes the pod that will be created when executing a job)
@@ -3488,13 +3479,13 @@ unset, required by the schema:
   spec.jobTemplate.spec.template  (describes the pod that will be created when executing a job)
 ```
 
-A name is read in the scope it names (R-184): `why NAME` the stack's,
+A name is read in the scope it names: `why NAME` the stack's,
 `why COPY.NAME` a copy's (as `c[t]` names it too,
 `why 'volume["forgejo_backup"].tag'`), `why MODULE.NAME` a used
 module's. What the scope declares, a resource, an input, a `let`, an
 output, prints as above. A copy reads what its component does not
 declare from the scope around the component, the instance of its module
-it was taken from, then the stack (R-186), a module from the stack, and
+it was taken from, then the stack, a module from the stack, and
 `why` says whose before the chain: `repository in volume forgejo_backup:
 module backups's k8s.secret backups.repository  backups.df:3`, `env in
 volume forgejo_backup: the stack's key env  stacks/apps.df:1`. A name
@@ -3521,7 +3512,7 @@ cargo run -- -C examples/demo dev graph --relation vpc_peer/2        # any binar
 scope (the stack, each copy of a component, each module used), what it
 reads
 (inputs by name, world types, another copy's outputs), its coeffects by
-kind and grant (R-155), a capability list a review reads: `reads
+kind and grant, a capability list a review reads: `reads
 ssh://*` (a location by scheme and host, `*` for a computed host; a
 project file by its path, `reads file:config/*.yaml`), `reads provider
 ovh` (a data source), `needs secret K3S_TOKEN` (`env.var`), `reads clock`
@@ -3592,7 +3583,7 @@ waiting on k8s.job["migrate-v42"].status.succeeded since 02:14 (3m)
 
 Once one changes the run goes on, the wait counted as a boundary: the next
 tick is planned and asked for as at any boundary (see `apply` above). The
-wait is the tick's own retry, bounded by its deadline (R-201): not the
+wait is the tick's own retry, bounded by its deadline: not the
 `timeout` that bounds each call, since a host that boots or a rollout
 takes minutes while a call that hangs is wrong after one. The deadline is
 the first of these that says:
@@ -3601,7 +3592,7 @@ the first of these that says:
 2. the stack's `[stacks.NAME] wait`: a deployment whose rollouts are slow;
 3. the `wait` of the provider that answers what it waits on (the longest,
    for several): `[providers.NAME] wait`, and `[io] wait` for a
-   location's read that is not there yet (a host that boots, R-153);
+   location's read that is not there yet (a host that boots);
 4. the project's `[apply] wait`;
 5. 10m.
 
@@ -3617,7 +3608,7 @@ is in flight: the wait is the next apply's, which plans the tick again
 and waits again. Under CI (`--yes`) a rollout that never comes fails the
 job at the deadline instead of hanging. The value waited on is absent, so
 the line says nothing of how near it got: how a rollout is doing is
-`dform status` (R-203). A null waiting cannot bring
+`dform status`. A null waiting cannot bring
 (another stack's output not published yet, a value of an object no tick
 makes) stops the tick at once, as `nothing definite to apply, still
 waiting on ...`. Every wait is a `wait` entry in the audit log.
@@ -3638,7 +3629,7 @@ wait = "30m"      # this stack's waits, over the providers' and the project's
 
 A provider's table also grants it what it may use beyond the host's own
 interfaces, the credentials it may open by name, and the locations it may
-read through the host (R-13b, R-153; docs/providers.md, "Grants and
+read through the host (docs/providers.md, "Grants and
 credentials"):
 
 ```toml
@@ -3798,7 +3789,7 @@ for byte, and a file with a syntax error is reported, not rewritten.
   - `decl pred(field_one: type, field_two)` declares a relation by its
     columns (a type optional); named arguments match by them:
     `pred(field_one: x)`.
-  - A relation with no `decl` is typed by its uses (R-34): `az("a", 1)`
+  - A relation with no `decl` is typed by its uses: `az("a", 1)`
     gives `az(string, int)`, a rule's head takes its body's columns, a
     function's parameter or an attribute read types the column it reads,
     and `input p from FORMAT("path")` takes its first document's columns.
@@ -3841,14 +3832,14 @@ until no call is new.
 `env` and `time` are built-in fact providers, declared like any
 provider and needing no `dform.toml` source; a file is read by
 `io.read(LOCATION)`, the one read, a std function with no provider
-(R-155: `use file` and `file.text` are errors naming it):
+(`use file` and `file.text` are errors naming it):
 
 | provider | externs                                                   | answered by |
 |----------|-----------------------------------------------------------|-------------|
 | `env`    | `env.var(+name, -value: secret(string))`; `env.var(NAME)` as a term reads it | dform |
 | `time`   | `time.now(-t: time)`, the current time in UTC; `time.now()` as a term reads it | dform |
 
-There is no `ssh` provider (R-153): a host's file is a location, read by
+There is no `ssh` provider: a host's file is a location, read by
 `io.read` like any document, `io.read("ssh://ubuntu@10.0.0.5/etc/k3s.yaml")`
 ("Locations and transports" below). `use ssh`, `ssh.read(..)` and
 `[providers] ssh` are errors naming the location. Nothing runs a command
@@ -3859,7 +3850,7 @@ provider's apply").
 
 ### Locations and transports
 
-`io.read` reads a location (R-153): a path from the project root (which
+`io.read` reads a location: a path from the project root (which
 is `file:`), or a uri whose scheme selects the transport. As in Emacs
 TRAMP, one syntax carries the method, the user and the host, and nothing
 remote is configured separately: `yaml.decode(io.read("vendor/crds.yml"))`,
@@ -3894,7 +3885,7 @@ moved ref is said before the plan ("Documents and tables"). git is gix
 inside dform, never the `git` binary, over dform's HTTP or SSH client.
 
 A provider's scheme may keep versions: a secret manager answers the
-version it names the bytes by beside them (`io.read-versioned`, R-172),
+version it names the bytes by beside them (`io.read-versioned`),
 and the rows say the location pinned to it
 (`vault://kv/synapse/signing?version=3#key`), as a repository's say the
 commit. A read into a secret `let` is recorded by its keyed digest and
@@ -3928,7 +3919,7 @@ wait = "20m"
 credentials = { "ssh://51.79.*" = "ssh:k3s-admin", "https://git.example.com/*" = "bearer:git" }
 ```
 
-An image's tag is pinned the same way (R-132): `oci.resolve(r)` asks the
+An image's tag is pinned the same way: `oci.resolve(r)` asks the
 registry for the digest the tag names now (a registry v2 `HEAD` of its
 manifest, `Docker-Content-Digest`, an index's for a multi-platform
 image), through dform's HTTP client, at plan: `image:
@@ -3959,7 +3950,7 @@ is no location (what it names moves): pin it with `oci.resolve`.
 So a location never holds a secret: one built from it (`io.read(
 "https://x.example/${pw}")`) is E0306 at compile time, because its host
 and path go to DNS and the server at plan, before any review, and print
-in a `waits on` line (R-167). The same holds for an extern's `+`
+in a `waits on` line. The same holds for an extern's `+`
 column, unless the extern declares it `+x: secret(T)`. A read into a
 secret cell is the other way round: its answer is the secret, its
 location public.
@@ -4020,7 +4011,7 @@ functions (below), and `use random` is an error saying so.
 A program that writes `extern env.var(..)` is told to write `use env`
 instead; `extern` is the schema's word (provider schemas, the
 compiler's tests). Another provider's externs are, for now, still declared
-in the program until its schema is read at compile time (DESIGN.org R-24),
+in the program until its schema is read at compile time,
 and the mock answers them from `providers/<name>/externs.df` beside the
 provider's schema: facts of the extern, the rows whose `+` columns are the
 inputs.
@@ -4071,7 +4062,7 @@ master is `memo.first(KEY, random.base64(KEY, 32))`: a memo of a secret
 candidate is kept sealed with a key derived from the stack's key, never in
 state in the clear, and opened in memory by the run that reads it.
 
-A provider's `secret(T)` column never enters dform (E DR-19). The Query
+A provider's `secret(T)` column never enters dform. The Query
 names the secret columns (`QueryRequest.secret`), and the provider
 answers each with where it holds the value: a SECRET null whose `held`
 names the provider, the deployment, the extern and its inputs, the
@@ -4096,7 +4087,7 @@ whole of it, a string) and decoded by its format's package:
 `yaml.decode(io.read(LOCATION))`, `toml.decode(..)`, `json.decode(..)`,
 `csv.decode(..)` (a list of objects by its header), each over a location,
 a path from the project root or a uri whose scheme is a transport
-("Locations and transports", R-39, R-153, R-155). The decode of a read
+("Locations and transports"). The decode of a read
 keeps the document's place, each row at its line. A read is a value, `let
 net = toml.decode(io.read("data/network.toml"))`, read like any
 (`net.region`). `input p from DOC` destructures a document
@@ -4328,7 +4319,7 @@ A program with no `input` declarations reads `--set k=v` as the fact
 
 ### Giving inputs
 
-Configuration is the inputs (R-38). The declaration gives the default, a
+Configuration is the inputs. The declaration gives the default, a
 `set` contributes a value under a condition, and `--set` on the command
 line wins over both:
 
@@ -4410,8 +4401,7 @@ come from the provider's schema).
 
 ### Modules
 
-Every `.df` file is a module, named by its path from the project root
-(R-65): `config.df` is `config`, `modules/net.df` is `modules.net`,
+Every `.df` file is a module, named by its path from the project root: `config.df` is `config`, `modules/net.df` is `modules.net`,
 `stacks/platform.df` is `stacks.platform`. A path is looked up, never
 searched; `[packages.NAME] path = "../infra"` in `dform.toml` mounts
 another project at `NAME`; `std` is in every scope. `use` imports a
@@ -4485,7 +4475,7 @@ a name (`database`, `main`):
   is an object;
 - with a clause, the copy or the import exists only while it holds.
 
-A module reads only what its file declares (R-205), never its user's
+A module reads only what its file declares, never its user's
 names: a policy pack keyed by the stack's `env` declares `input env`
 and the stack gives it, `use baseline { env }`; a read of a name the
 user declares and the module does not is an error naming the input and
@@ -4524,7 +4514,7 @@ A used module's inputs are the stack's to give, from a `set`
 
 ## Testing
 
-The denies are the tests; there is no test or scenario syntax (R-32).
+The denies are the tests; there is no test or scenario syntax.
 `dform test [TARGET] [K=V..]` evaluates the program once for every
 combination of its inputs against an empty mock world (the provider's
 schema, no world, no state, nothing written), and every deny must hold in
@@ -4536,7 +4526,7 @@ and every used module's input its `use` block leaves to the stack
 deployment of the stack was applied with; any other input takes its
 default, and one with none is an error naming it (pin it, or give it an
 enum type). An input a `set` gives is the program's to decide in
-the deployments it holds in, and no axis (R-38). More than 4096 combinations is an error asking to pin some.
+the deployments it holds in, and no axis. More than 4096 combinations is an error asking to pin some.
 It asks no registry and no provider for data: `oci.resolve` answers the
 digest this machine last resolved, else a stand-in derived from the
 reference (so `oci.pinned` holds), a location a provider's scheme names
@@ -4544,14 +4534,14 @@ is not read, so what reads it is undetermined, and no provider is
 configured: one the program's `use` block configures is left so, and one
 that would read its credentials from the environment or its files is not
 given them; each is said once, in a `note:` line above the matrix. A
-provider's data source is read as plan reads it (R-106), and one so left
+provider's data source is read as plan reads it, and one so left
 unconfigured answers "not yet", so what reads it is undetermined: `note:
 no provider is configured, so its data sources answer "not yet" and what
 reads them is undetermined: ovh.zone("example.com")`.
 dform's own transports (`https://`, `ssh://`, git) read as plan's do.
 
 Each combination's resources then go to their providers' Plan, as
-`plan` sends them, with no credentials (R-188): a provider whose Plan
+`plan` sends them, with no credentials: a provider whose Plan
 answers so as it would with them (the `offline` capability: the k8s
 provider against its OpenAPI snapshot, the OVH and SDK providers' own
 checks, the mock; a provider built with a fake of its API answers from
@@ -4567,9 +4557,9 @@ deny "dev has no database" where env == "dev", _ in db.postgres
 
 It prints a result set, a row per combination: its inputs, then `ok` or
 `denied` (or `error`, for one that does not compile, that reads what
-nothing derives (R-194), whose plan would refuse a resource for an
-attribute its schema requires and the program leaves unset (R-184), or
-whose provider's Plan refuses a resource (R-188), each said as the plan
+nothing derives, whose plan would refuse a resource for an
+attribute its schema requires and the program leaves unset, or
+whose provider's Plan refuses a resource, each said as the plan
 says it). Each that failed
 follows as the command that plans it with its denies (or its error),
 each with its doc comment (`#|` above the deny: the test's doc) beside
@@ -4774,21 +4764,21 @@ examples/demo an evaluation takes about 30 ms in a release build.
   (`type_doc`), the winning rank and every contribution with its rank and
   owner (rule, `file:line:col`, the module used or the copy), then the
   derivation as `dform why --core` prints it.
-- *Values at point* (R-20): on a read or the declaration of an input, a
+- *Values at point*: on a read or the declaration of an input, a
   `let`, an output (`n.k`, `c[e].k`, `m.k`), an object input's field
   (`cidrs.main`) or a resource's attribute (`vpc.cidr`): its value for
   the selected deployment (one per copy, a null as the plan prints it,
   a secret by its label), then the cell's winning rank, every
   contribution with its rank and owner, and the derivation, as for an
   attribute above.
-- *Inlay hints* (`textDocument/inlayHint`, R-20): at the end of each
+- *Inlay hints* (`textDocument/inlayHint`): at the end of each
   resource header's line, the plan's deformation of each object the
   block declares (`+ create`, `~ update`, `- delete`, `-/+ replace`,
   `undeformed`, `~ pending on ?T["a"].p`; `2× + create` for a
   component's copies), as many in all as `dform plan` plans; after each
   read of the values above, `= value`. The client shows them or not (the
   Emacs mode: `dform-ts-mode-inlay-hints`, off by default).
-- *Explain* (a code action wherever something is derived, R-20): runs
+- *Explain* (a code action wherever something is derived): runs
   `dform.why` with `"document": true`, which writes the derivation to a
   read-only file under `$XDG_CACHE_HOME/dform/` and asks the client to
   show it (`window/showDocument`).
@@ -4850,15 +4840,14 @@ examples/demo an evaluation takes about 30 ms in a release build.
 - Formatting (`dform fmt`'s formatter) and go-to-definition of every
   name the references find: its declaration (a relation's `decl`, else
   its first rule; an output's typed declaration; a resource two types
-  name, the one the attribute's `ref(T)` takes, R-74); on a `use`'s path
-  or a component's resource's type, the file (or the component in it) the path names
-  (R-65), and from a name a `use` binds, its file. A std function
+  name, the one the attribute's `ref(T)` takes); on a `use`'s path
+  or a component's resource's type, the file (or the component in it) the path names, and from a name a `use` binds, its file. A std function
   (`inet.subnet`) goes to its signature line, a provider type
   (`net.vpc`) to the line of its schema file that declares it and an
   attribute (`cidr = ..`, `vpc.cidr`) to its `type_attr` row; a type
   only a provider's run time declares has none, its hover says so. The
   files shipped inside dform (`std/*.df`, the built-in schemas) are
-  extracted read-only under `$XDG_CACHE_HOME/dform/` (R-24). A place
+  extracted read-only under `$XDG_CACHE_HOME/dform/`. A place
   that names nothing answers empty, never an error.
 
 Two commands (`workspace/executeCommand`), which the Emacs mode binds:
@@ -4998,7 +4987,7 @@ share: the time spent in the mock's calls.
 This is an MVP:
 
 - semi-naive evaluator with hash indexes (see Performance)
-- functions declared in `std/*.df` (docs/grammar.md "Functions"): none bare (R-155); `inet.subnet`, `inet.host`, `inet.overlaps`, `int.range`, `int.trunc`, `int.round`, `int.floor`, `int.ceil`, `quantity.to`, `secret.declassify`, `ip.unspecified`, `str.format`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.pad_left`, `str.pad_right`, `str.slice`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `random.password`, `random.base64`, `random.id`, `random.uuid`, `random.signing_key`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `base64.encode`, `base64.decode`, `uri.join`, `uri.with_scheme`, `uri.with_user`, `uri.with_password`, `uri.with_host`, `uri.with_port`, `uri.with_path`, `uri.with_query`, `uri.with_fragment`, `uri.escape`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`, `csv.decode`, `csv.encode`; the one read, `io.read`, and `oci.resolve`, a tag pinned to its digest (the coeffects); operators `in`, `+ - * / %`, `< <= > >=`, `==` and the field `x.len` (docs/grammar.md "Functions"); aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
+- functions declared in `std/*.df` (docs/grammar.md "Functions"): none bare; `inet.subnet`, `inet.host`, `inet.overlaps`, `int.range`, `int.trunc`, `int.round`, `int.floor`, `int.ceil`, `quantity.to`, `secret.declassify`, `ip.unspecified`, `str.format`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.pad_left`, `str.pad_right`, `str.slice`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `random.password`, `random.base64`, `random.id`, `random.uuid`, `random.signing_key`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `base64.encode`, `base64.decode`, `uri.join`, `uri.with_scheme`, `uri.with_user`, `uri.with_password`, `uri.with_host`, `uri.with_port`, `uri.with_path`, `uri.with_query`, `uri.with_fragment`, `uri.escape`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`, `csv.decode`, `csv.encode`; the one read, `io.read`, and `oci.resolve`, a tag pinned to its digest (the coeffects); operators `in`, `+ - * / %`, `< <= > >=`, `==` and the field `x.len` (docs/grammar.md "Functions"); aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
 - list helper predicate: `member(List, Item)` and `member(List, Index, Item)` (Index starts at 0)
 - safe(ish) negation: `not` requires the atom be ground at evaluation time
 

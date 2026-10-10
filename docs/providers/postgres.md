@@ -168,7 +168,7 @@ is refused, saying to adopt it (`adopt(r, "synapse")`).
 ### Passwords
 
 The server keeps a verifier of a password, never the password, so Read
-never answers one: `password` is write-only (R-106). dform keeps its
+never answers one: `password` is write-only. dform keeps its
 keyed digest in state and compares the program's value with it; a
 different one is a change, an update of the role. The provider sends a
 SCRAM-SHA-256 verifier it computes (`SCRAM-SHA-256$4096:SALT$STOREDKEY:SERVERKEY`,
@@ -191,7 +191,7 @@ $ dform plan apps env=lab
 ```
 
 The role's update and every reader of the same key (the application's
-configuration) are in the same plan. A run without the master (R-164)
+configuration) are in the same plan. A run without the master
 cannot send the new password: dform stops the role's update and says the
 master is needed.
 
