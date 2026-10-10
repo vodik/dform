@@ -1,5 +1,5 @@
 # Mock AWS provider in the shape of the Terraform AWS provider (v5 schema),
-# twelve resource types, written by hand from the provider's schema. A type is
+# thirteen resource types, written by hand from the provider's schema. A type is
 # Terraform's under the provider's name (`aws_vpc` is `aws.vpc`, R-36); the
 # data source aws.availability_zone, declared below (`extern_decl`, R-106),
 # is answered from aws-mock.externs.df. It
@@ -74,6 +74,18 @@ type_mint("aws.subnet", "availability_zone_id", "use1-az1")
 type_attr("aws.subnet", "map_public_ip_on_launch", "bool", [])
 type_attr("aws.subnet", "owner_id", "string", ["computed"])
 type_mint("aws.subnet", "owner_id", "123456789012")
+
+# aws.vpc_peering_connection
+type_provider("aws.vpc_peering_connection", "aws")
+type_attr("aws.vpc_peering_connection", "id", "string", ["computed", "id"])
+type_mint("aws.vpc_peering_connection", "id", "pcx-{hash}")
+type_attr("aws.vpc_peering_connection", "tags", "map", [])
+type_attr("aws.vpc_peering_connection", "tags_all", "map", ["computed"])
+type_attr("aws.vpc_peering_connection", "vpc_id", "ref(aws.vpc)", ["required", "force_new"])
+type_attr("aws.vpc_peering_connection", "peer_vpc_id", "ref(aws.vpc)", ["required", "force_new"])
+type_attr("aws.vpc_peering_connection", "auto_accept", "bool", [])
+type_attr("aws.vpc_peering_connection", "accept_status", "string", ["computed"])
+type_mint("aws.vpc_peering_connection", "accept_status", "active")
 
 # aws.security_group
 type_provider("aws.security_group", "aws")
