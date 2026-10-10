@@ -79,7 +79,9 @@ later. Terraform makes a block a template and adds `for_each`,
 say.
 
 For example, we can use dform to describe a rough network layout and
-derive and validate the topology from that description:
+derive and validate the topology from that description. Add a spoke and
+its peering follows; peer two spokes by hand and the policy refuses the
+plan:
 
 ```dform
 resource aws.vpc core { cidr_block = "10.0.0.0/16", tags = { Name: "core" } }
@@ -96,11 +98,11 @@ resource aws.vpc_peering_connection "${from.tags.Name}-${to.tags.Name}" {
   peer_vpc_id = to
 } where link(from, to)
 
-reaches(a, b) where link(a, b)
-reaches(b, a) where link(a, b)
-reaches(a, c) where reaches(a, b), link(b, c)
-
-deny "every spoke reaches core" { vpc } where spoke(vpc), not reaches(vpc, core)
+deny "a spoke peers only the core" { peering } where {
+  peering in aws.vpc_peering_connection
+  spoke(peering.vpc_id)
+  spoke(peering.peer_vpc_id)
+}
 ```
 
 ```
@@ -120,12 +122,12 @@ policy  1 hold
 Terraform has no recursion; a hub and its spokes are a list kept by
 hand.
 
-**Policy is part of the language.** The shape every resource should
-have and the changes that may not happen are both rules in the same file
-as the resources, checked by every plan. `resource` is the table of every
-resource the program declares, whatever its type, and a `set` over it
-writes into each one its clause matches, leaf by leaf, beside what the
-resource's own block wrote:
+**Policy is part of the language.** The shape every resource should have
+and the changes that may not happen are both rules in the same file as
+the resources, and every plan checks them. `resource` is the table of
+every resource the program declares, whatever its type, and a `set` over
+it writes into each one its clause matches, leaf by leaf, beside what
+the resource's own block wrote:
 
 ```dform
 resource aws.vpc main { cidr_block = "10.0.0.0/16", tags = { component: "network" } }
@@ -139,7 +141,7 @@ $ dform query 'main.tags'
 ```
 
 Data files are facts. A toml names the networks, a yaml holds an
-environment's settings, and both are read like any other table:
+environment's settings, and the program reads both like any other table:
 
 ```dform
 key env: enum("staging", "prod") = "staging"
@@ -183,14 +185,14 @@ Kind      Resource
 "update"  aws.db_instance orders
 ```
 
-"No deletes in prod" is `deny "no deletes in prod" where env ==
-"prod", deformation("delete", _, _)`, checked by every plan, and it
-refuses the apply. A policy over a value known only after apply is
-undetermined, since nothing is assumed false for being unknown, and the
-plan says when it will be known. A risky change waits instead for a
-signature over exactly what will apply. With Terraform, policy is a
-second tool and a second language over the plan's JSON, where such a
-value is only marked unknown.
+"No deletes in prod" is `deny "no deletes in prod" where env == "prod",
+deformation("delete", _, _)`; every plan checks it, and it refuses the
+apply. A policy over a value known only after apply stays undetermined,
+since dform assumes nothing false for being unknown, and the plan says
+when it will know. A risky change waits instead for a signature over
+exactly what will apply. With Terraform, policy is a second tool and a
+second language over the plan's JSON, where such a value is only marked
+unknown.
 
 **Lifecycle is a table too.** A rule writes it, a provider defaults it
 for its own types, and a policy reads it back. Terraform's
@@ -219,12 +221,12 @@ resource aws.iam_user "u-${pw}" { name = "x" }         # E0305: addresses are pr
 ```
 
 State holds no secret, because a generated one derives from the
-deployment's master. Secrets are imported, managed and rotated with
-`dform secrets`. Terraform's `sensitive` keeps a value out of its CLI
-output and still stores it in state.
+deployment's master. `dform secrets` imports, lists and rotates them.
+Terraform's `sensitive` keeps a value out of its CLI output and still
+stores it in state.
 
-Resources are wired by reference, and a value the cloud has not
-produced yet is tracked and planned around:
+Resources are wired by reference, and dform tracks a value the cloud has
+not produced yet and plans around it:
 
 ```dform
 resource aws.db_instance orders { instance_class = "db.t3.micro" }
@@ -247,11 +249,11 @@ tick 2  ? changes
   aws.iam_policy "connect-${host}"  stacks/db.df:5  waits on orders.address
 ```
 
-Terraform stops here and asks for a `-target` and a second run.
+Terraform cannot plan a resource address from a value it learns at
+apply; it asks for a `-target` and a second run.
 
-A provider can be configured from the plan's own values, so a host, the
-cluster on it and what runs in the cluster are one program and one
-plan:
+A provider takes its settings from the plan's own values, so a host, the
+cluster on it and what runs in the cluster are one program and one plan:
 
 ```dform
 use aws { region = "us-east-1" }
@@ -260,7 +262,8 @@ let k3s_init = "#!/bin/sh\ncurl -sfL https://get.k3s.io | sh -\n"
 
 resource aws.instance server { instance_type = "t3.small", user_data = k3s_init }
 
-let kc: secret(string) = io.read("ssh://ubuntu@${server.public_ip}/etc/rancher/k3s/k3s.yaml")
+let raw: secret(string) = io.read("ssh://ubuntu@${server.public_ip}/etc/rancher/k3s/k3s.yaml")
+let kc = str.replace(raw, "https://127.0.0.1:6443", "https://${server.public_ip}:6443")
 use k8s { kubeconfig = kc }
 
 resource k8s.namespace apps { metadata.name = "apps" }
@@ -278,7 +281,7 @@ tick 1  1 change
 tick 2  1 change
   waits on  provider k8s  kubeconfig = kc
   provisional: planned against the offline schema; planned again once kubeconfig is known
-  + k8s.namespace apps   stacks/cluster.df:10
+  + k8s.namespace apps   stacks/cluster.df:11
       metadata.name = "apps"
 ```
 
@@ -346,8 +349,8 @@ another's outputs as `platform[env].kubeconfig`, so `dform apply apps
 env=prod` applies platform first. Terragrunt needs a `dependency` block
 per edge and a directory per environment.
 
-For a pipeline, `status` says whether everything is healthy and fails
-if not, and `render` prints what would be sent, under policy, with no
+For a pipeline, `status` says whether everything is healthy and fails if
+not, and `render` prints what dform would send, under policy, with no
 credentials and no state, a stream Argo CD or kustomize reads as plain
 manifests:
 
