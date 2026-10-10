@@ -166,12 +166,39 @@ error-prone:
 ```dform
 resource aws.vpc main { cidr_block = "10.0.0.0/16", tags = { component: "network" } }
 
-set r.tags = { team: "shop" } where r in resource
+set r.tags = { team: "shop" } @default where r in resource
 ```
 
 ```
 $ dform query 'main.tags'
 { component: "network", team: "shop" }
+```
+
+`@default` yields to a block's own value and `@override` beats it.
+
+For example, a network and its subnets as one unit, stamped twice; the
+tag rule above reaches inside it:
+
+```dform
+component network {
+  input cidr: inet
+  output vpc: aws.vpc = vpc
+
+  resource aws.vpc vpc { cidr_block = cidr, tags = { component: "network" } }
+  resource aws.subnet "private-${zone}" {
+    vpc
+    cidr_block = inet.subnet(cidr, 8, n)
+    availability_zone = zone
+  } where aws.availability_zone("available", zone, n)
+}
+
+resource network blue { cidr = "10.1.0.0/16" }
+resource network green { cidr = "10.2.0.0/16" }
+```
+
+```
+$ dform query 'blue.vpc.tags'
+{ team: "shop", component: "network" }
 ```
 
 The plan is a table too. For example, after an apply we want to ask what
@@ -186,10 +213,14 @@ Kind      Resource
 "No deletes in prod" is `deny "no deletes in prod" where env == "prod",
 deformation("delete", _, _)`, and it refuses the apply. A policy over a
 value known only after apply stays undetermined, and the plan says when
-it will know. A risky change can instead wait for a signature over
-exactly what will apply. With Terraform, policy is a second tool and a
-second language over the plan's JSON, where such a value is only marked
-unknown.
+it will know. With Terraform, policy is a second tool and a second
+language over the plan's JSON, where such a value is only marked
+unknown. A risky change can instead wait for a signature over exactly
+what will apply:
+
+```dform
+requires_approval(r, "${kind} of ${r} in prod") where env == "prod", deformation(kind, r, _), kind in ["replace", "delete"]
+```
 
 **Lifecycle is a table too.** For example, we never want a prod database
 deleted, and we want a policy to check that every one of them is
@@ -205,7 +236,9 @@ deny "every prod database is kept" { db } where {
 }
 ```
 
-Terraform's `prevent_destroy` must be a literal.
+Terraform's `prevent_destroy` must be a literal, and `moved(aws.vpc,
+"main", network.vpc)` moves a resource to a new address without
+replacing it.
 
 **Secrets are part of the language too.** A secret cannot reach an
 output, a condition or an address by accident; a leak is an error at its
@@ -294,6 +327,32 @@ tick 2  1 change
 The Kubernetes provider's own documentation asks for the cluster and
 what runs on it in separate applies.
 
+For example, we want a blue/green rollout: the Service moves only after
+the schema migration succeeds and every replica of the new colour is
+ready:
+
+```dform
+let active = world.k8s.service["shop/api"].spec.selector.color
+let rollout = other[active] where live_image != released_image
+
+migrated(schema) where k8s.job["migrate-v${schema}"].status.succeeded == 1
+
+run(active, live_image, live_schema)
+run(rollout, released_image, schema) where migrated(schema)
+
+ready(colour) where run(colour, _, _), app[colour].ready_replicas == app[colour].total_replicas
+
+let serving = rollout where ready(rollout)
+let serving = active where not ready(rollout)
+
+resource k8s.service api {
+  metadata = { name: "api", namespace: "shop" }
+  spec.selector = { app: "api", color: serving }
+}
+```
+
+dform works out the order.
+
 A provider is facts as well: its types, its tables and its defaults are
 rows the program reads. For example, we want a plan to refuse records
 for a domain the account does not host:
@@ -369,7 +428,9 @@ status: 1 degraded, 1 without health
 ```
 
 `render` prints what apply would send, policy checked, with no
-credentials and no state, as plain manifests for Argo CD or kustomize:
+credentials and no state, as plain manifests for Argo CD or kustomize;
+a tag resolves to its digest at plan, so a moved tag shows up as an
+update:
 
 ```
 $ dform render apps env=staging
@@ -384,6 +445,19 @@ kind: Deployment
 metadata:
   name: web
   namespace: apps
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+      - image: nginx:1.27@sha256:c4ab9b7d9cdbba02d12e91035d6350386d1c05daa28b1f5c816f3d3f34c75147
+        name: web
 ...
 $ dform render apps env=staging > manifests/apps.yaml
 $ kustomize build manifests | kubectl apply -f -
