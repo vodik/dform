@@ -7,19 +7,14 @@ the difference between the two. A policy is a query that must return no
 rows. "Why is this here" is a question about which rows produced it.
 
 A dform program is facts and rules over those tables, evaluated all at
-once to a fixpoint, the way Datalog evaluates a query. Every derived row
-has a derivation, so every line of the plan says where it came from.
-Every plan is the least model of the program over the world as it is,
-and every line of it carries its proof, so `why` never disagrees with
-the plan. The plan is itself a table the program's own policy reads.
-Apply reconciles the world with the plan in ticks, and what one tick
-creates, an endpoint or a kubeconfig, is a value the next tick plans
-with. Each tick is the least model over the world the one before it
-left.
+once to a fixpoint, the way Datalog evaluates a query. Every plan is the
+least model of the program over the world as it is, and every line of it
+carries its proof, so `why` never disagrees with the plan. Apply
+reconciles the world with the plan in ticks, and what one tick creates,
+an endpoint or a kubeconfig, is a value the next tick plans with. Each
+tick is the least model over the world the one before it left.
 
-So the resources, the policy over them and the reason for each line
-come from one program and arrive in one plan. Here is a complete
-program, on the AWS-shaped mock:
+Here is a complete program, on the AWS-shaped mock:
 
 ```dform
 use aws { region = "us-east-1" }
@@ -61,35 +56,22 @@ tick 1  4 changes
 policy  1 hold
 ```
 
-When the region gains a zone, the next plan has one more subnet and the
-file does not change. The deny is checked by every plan, which ends with
-its verdict.
-
-The subnet block is a rule because it ends in `where`, and it makes one
-subnet per answer. `aws.availability_zone` is a table the provider
-answers, a data source. It binds each zone's name and its stable index
-`n`, so the n-th zone gets the n-th /24. `vpc_id = main` is a reference,
-printed as the address it names, and apply makes the VPC first.
-
-The examples run on a fake cloud built into dform and need no
-credentials. To try one, `cargo install --path .`, then `dform -C
-examples/tour plan`. `examples/tour` is a tutorial read top to bottom,
-and each sample below that cites `stacks/tour.df` is its output.
+The subnet block ends in `where`, so it makes one subnet per zone the
+provider lists, and when the region gains a zone the next plan has one
+more subnet with no edit to the file. The examples run on a fake cloud
+built into dform with no credentials. To try one, `cargo install --path
+.`, then `dform -C examples/tour plan`.
 
 ## Why a rule, not a template
 
-In HCL a resource block is a template filled in from variables,
-evaluated top down, with a patch for each thing a template cannot say:
-`for_each` and `dynamic` for repetition, `depends_on` for an edge it
-cannot see, `-target` and a second run for a value not known yet,
-`default_tags` for a tag that should be everywhere. In dform a block is
-a rule. Its clause is a query, and its attributes are contributions to
-cells that other rules may also write. The rest of this section follows
-from that.
+In HCL a resource block is a template, patched by `for_each`,
+`depends_on`, `-target` and `default_tags` wherever a template cannot
+say what you mean. In dform a block is a rule, and the rest follows.
 
 **Every rule sees every resource, and an attribute has many authors.**
-A policy reads any resource in any module, declared anywhere, and writes
-into it:
+A team's conventions are written once and hold in every module, without
+a variable threaded through each one. A `set` writes into any resource
+its clause matches, merged per leaf with what the module wrote itself:
 
 ```dform
 set r.tags = { team: "shop" } where r in resource
@@ -100,42 +82,14 @@ $ dform query 'net.vpc["blue.vpc"].tags'
 { team: "shop", component: "network" }
 ```
 
-The component wrote `component`, and the policy wrote `team`. Writes
-merge per leaf by rank, `@default` below normal below `@override`. Two
-writes at one rank that disagree are a conflict naming both. Order never
-matters, and `why` names every layer:
+Terraform's `default_tags` does this for tags on one provider; here any
+attribute of any resource can be written so.
 
-```
-$ dform why orders.backup_days env=prod
-db.postgres orders.backup_days = 14
-  = database.backup_days  stacks/tour.df:145
-  = 14                    stacks/tour.df:139
-  over 1 @default         stacks/tour.df:27
-```
-
-**Policy adds as well as forbids, in the same file.** The `set` above
-is policy. So is a deny, checked by every plan and every apply:
-
-```dform
-deny "a database must not be public" { database: pg } where pg in db.postgres, pg.public
-```
-
-```
-$ dform plan --set public_db=true
-...
-policy  1 fails
-  fails  a database must not be public  stacks/tour.df:172  1 fails
-    db.postgres orders                  database = "orders"
-constraint violations:
-- a database must not be public  database = "orders"
-Error: blocked by constraints
-```
-
-Policy can read the change set too. The plan is a table the
-same rules read, one `deformation(kind, resource, before)` row per
-change. "No deletes in prod" is `deny "no deletes in prod" where env ==
-"prod", deformation("delete", _, _)`, and "a replace needs a signature"
-is a `requires_approval` row. A query shows the table:
+**Policy adds as well as forbids, in the same file.** Rules about the
+change itself sit beside the resources, with no plan JSON exported to a
+second engine. The plan is a table of `deformation` rows, so "no deletes
+in prod" is `deny "no deletes in prod" where env == "prod",
+deformation("delete", _, _)` over this:
 
 ```
 $ dform query 'deformation(k, r, _)' --set database.backup_days=7
@@ -143,9 +97,14 @@ K         R
 "update"  db.postgres orders
 ```
 
-**Rules recurse.** Which networks reach which through a hub is a path of
-any length. Write the routes as a rule over it, and they stay right as
-spokes come and go:
+A policy engine over plan JSON passes or guesses at a value known only
+after apply. The logic has three values, and nothing is assumed false
+for being unknown, so a dform policy over such a value is undetermined
+and the plan names the tick that decides it.
+
+**Rules recurse.** Anything shaped like a graph, such as routes over
+which networks reach which, is derived and stays right as spokes come
+and go. HCL has no recursion, so these are written out by hand:
 
 ```dform
 link(h, t) where hub(h), spoke(t)
@@ -155,30 +114,10 @@ reaches(a, b) where link(a, b)
 reaches(a, c) where reaches(a, b), link(b, c)
 ```
 
-```
-$ dform why --tree 'reaches("blue", "green")'
-decl reaches(a: string, b: string)
-reaches("blue", "green")
-  stacks/tour.df:281  reaches(a, c) where reaches(a, b), link(b, c)
-  with a = "blue", c = "green", b = "main"
-  ├─ reaches("blue", "main")
-  │    stacks/tour.df:280  reaches(a, b) where link(a, b)
-  │    with a = "blue", b = "main"
-  │    └─ link("blue", "main")
-  │         stacks/tour.df:278  link(t, h) where hub(h), spoke(t)
-  │         with t = "blue", h = "main"
-  │         ├─ hub("main")   stacks/tour.df:250
-  │         └─ spoke("blue")   stacks/tour.df:247
-  └─ link("main", "green")
-       stacks/tour.df:277  link(h, t) where hub(h), spoke(t)
-       with h = "main", t = "green"
-       ├─ hub("main")   stacks/tour.df:250
-       └─ spoke("green")   stacks/tour.df:248
-```
-
-**A value the cloud produces later is a value now.** An IAM policy named
-after a database's endpoint cannot be counted before the database
-exists. dform plans it in the tick after, and says what it waits on:
+**A value the cloud produces later is a value now.** One apply makes
+what depends on a value the cloud has not assigned yet, and the plan
+says how many rounds it will take. What waits names what it waits on
+and lands in a later tick:
 
 ```dform
 resource iam.policy "connect-${host}" {
@@ -194,32 +133,15 @@ tick 2  ? changes
   iam.policy "connect-${host}"             stacks/tour.df:323  waits on orders.endpoint
 ```
 
-Apply makes tick 1, learns the endpoint, prints tick 2's plan with real
-names, and asks again:
+In Terraform a `for_each` over such a value fails with "cannot be
+determined until apply", and the way out is `-target` and a second run.
+A provider's settings are values too, so `use k8s { kubeconfig =
+k3s.kubeconfig }` puts a cluster and what runs on it in one program,
+where Terraform's guidance is two root modules.
 
-```
-plan: 1 change (1 create) over 1 tick; policy: 1 hold
-
-tick 2  1 change
-  + iam.policy "connect-orders.db.fake"  stacks/tour.df:323  with pg = db.postgres orders
-      statements = [{ action: "db.connect", resource: "orders.db.fake" }]
-      tags.team = "shop"                 stacks/tour.df:170
-
-policy  1 hold
-tick 2 differs from the plan shown:
-  + iam.policy "connect-orders.db.fake"  create, not in the plan shown
-tick 2  1 change   apply? [y/N]
-```
-
-A provider's settings are values like any other, so a cluster and what
-runs on it are one program and one plan. `use k8s { kubeconfig =
-k3s.kubeconfig }` puts every Kubernetes object in the tick after the
-server it is read from.
-
-**Everything explains itself, absence included.** Every plan line has
-its file and line. `why` takes any address, value or row, and for one
-that is not there it names the rule that could have made it and the
-first condition that failed:
+**Everything explains itself, absence included.** The question you ask
+in an incident, why is this missing, has an answer. `dform why` names
+the rule that could have made it and the condition that failed:
 
 ```
 $ dform why 'net.subnet private-us-test-1c'
@@ -229,56 +151,11 @@ net.subnet private-us-test-1c: no rule derives it
     nearest: ("us-test-1a", 1), ("us-test-1b", 2)
 ```
 
-The words, with Terraform's nearest:
-
-| word | means | in Terraform |
-|---|---|---|
-| **resource** | a thing dform makes and manages; with a `where` clause, one per answer | resource, `for_each` |
-| **type** | what a resource is: a provider's (`aws.vpc`) or a component | resource type |
-| **component** | a type you define: resources with inputs and outputs | a module instance |
-| **module** | a `.df` file, named by its path; `use` imports it, its rules run here | a module's source |
-| **provider** | a namespace of types and externs a process serves; `use ovh { .. }` configures it, `use ovh as ca` is a second one | provider, `alias` |
-| **extern** | a table a provider answers on demand | data source |
-| **stack** | a file under `stacks/`, deployed with its own state | root module |
-| **key** | an input that selects the deployment: one state per value | `terraform.workspace` |
-| **deployment** | a stack at one key, `shop[env=prod]` | workspace |
-| **project module** | `project.df`: the deployments, each a resource of its stack's type | workspaces, a directory per environment |
-| **input**, **let**, **output** | a value given from outside; computed; published | variable, local, output |
-| **set** | a write into any cell from anywhere, at a rank | none |
-| **set(T)** | an attribute every writer adds elements to (a role's policies) | an attachment resource |
-| **deny**, **warn** | a query whose rows refuse the plan, or report | Sentinel, OPA |
-| **change** | one plan line: create, update, replace, delete, forget | planned action |
-| **tick** | one round of apply; a later tick plans with what earlier ones made | a second run with `-target` |
-| **later** | what waits on something no tick of this plan makes | none |
-| **has** | whether a value is there, or a resource exists | `can()`, `depends_on` |
-| **master** | a deployment's root secret, sealed under a passphrase; every generated secret derives from it | none |
-| **destroy** | the plan against an empty program: every object deleted, dependents first | `terraform destroy` |
-| **uri** | a location's type; its scheme picks the transport (`ssh://`, `git+https://`) | none |
-| **coeffect** | a function that reads the context (`io.read`, `time.now()`); every other is pure | none |
-| **why** | the derivation of any value, row or absence | none |
-
-There is no `data` block, no `locals`, no `variable`, no `count` and no
-`depends_on`. A provider's table is the data source, a `let` the local,
-an `input` the variable, a clause the repetition, and a reference or
-`where has r` the edge.
-
 ## The language
 
-`examples/tour` has each idea with the command to run;
-`docs/grammar.md` is the reference.
-
-A fact is a row, `zone("us-test-1a", 1)`, and a rule derives rows from
-rows, `link(h, t) where hub(h), spoke(t)`. A variable used once is an
-error, so a typo cannot become a cross product of cloud resources. A
-resource names what it uses, `vpc = main`, and the provider sends the
-VPC's id once it exists, so a program never reads an id or writes a
-`depends_on`. A dot in a function or a clause reads the value now, and
-the compiler says when that makes the block wait a tick.
-
-One dotted grammar names everything, a copy's output `blue.vpc` as much
-as a deployment's `platform[env].ingress_ip`. `[k]` takes one element by
-key and `[_]` ranges over every one, so a baseline is one line per
-workload type, and the exception is one more:
+**Paths.** A baseline for every container in every deployment is one
+line and its exception one more, each written where it belongs. `[_]`
+ranges over every element of a list and `[k]` takes one by its key:
 
 ```dform
 let limits = { cpu: 500m, memory: 256Mi }
@@ -290,47 +167,12 @@ set k8s.deployment["web"].spec.template.spec.containers["web"].resources.limits 
 }
 ```
 
-The plan names a list's element by its key,
-`spec.ports[port=80,protocol=TCP]`, and `why` takes the same path back.
+A Helm chart gets the same only for the values its author exposed.
 
-**Types.** Strings stop at the edge. A `--set`, a YAML cell or a CSV
-field is parsed to its declared type where it enters, or rejected with
-its file and line. Inside, a network is an `inet` with its arithmetic
-and `50Gi` is bytes, compared in base units and sent in each provider's
-form. A `check` refines any type and is a deny over the value:
-
-```dform
-input agents: int = 0 check 0 <= agents <= 3
-input disk: bytes = 50Gi check 10Gi <= disk <= 4Ti
-
-resource compute.vm "agent-${i}" { disk } where i in 0..agents
-
-deny "subnets overlap" { a: x, b: y } where {
-  x in net.subnet
-  y in net.subnet
-  x != y
-  inet.overlaps(x.cidr, y.cidr)
-}
-```
-
-`has x` holds when `x` has a value, so `not has c.resources.limits`
-finds a container without limits. Like every construct, it waits for a
-value the provider has not reported yet, so you never think about
-evaluation order. Of a resource, `has r` holds once it exists, which
-turns an order with no value passed into a clause. `resource
-k8s.deployment web { .. } where has warm_cache` applies the tick after
-the cache.
-
-A function is pure or it reads the world, and the language knows which.
-`random.password("db")` is pure, derived from the deployment's master,
-the same every run and stored nowhere. A read is a coeffect the context
-satisfies, at plan time or in the tick that can answer it, so the order
-calls run in is never yours to manage. Nothing in the language writes,
-and the one effect is a provider's apply.
-
-**Documents.** A path or a uri names a document wherever it lives, and a
-format's package decodes it into rows that keep their file and line. The
-result is a value like any other, down to a resource's whole body:
+**Documents.** Config others keep, CRDs at a pinned release and a
+kubeconfig on a host still booting are read the same way, by path or
+uri, and decoded to typed rows that keep their file and line. A read
+that is not ready yet waits for the tick that makes it:
 
 ```dform
 input peering from csv.decode(io.read("data/peerings.csv"))
@@ -345,11 +187,12 @@ resource k8s.custom_resource_definition "${d.metadata.name}" = d where {
 }
 ```
 
-A git read is pinned to the commit the plan recorded, so `apply PLAN`
-reads what plan read. A read of a host still booting waits for the tick
-that makes it.
+Terraform reads a local file with `file()`, but a file on a host it
+just booted takes a provisioner and a `null_resource`.
 
-**The header.** A file begins with what it takes:
+**Environments.** One file says how lab and prod differ, and each value
+of a `key` is its own deployment with its own state. A `set` under a
+condition overrides an input's default:
 
 ```dform
 key env: enum("lab", "prod") = "lab"
@@ -360,47 +203,12 @@ output ingress_ip: ip = k3s.ingress_ip
 set { agents = 1, sizes.synapse = 100Gi } where env == "prod"
 ```
 
-A `key` selects the deployment. `env` gives one state per value, named
-by the target, `dform plan platform env=prod`. A `set` writes an input
-under a condition, over its default, and `--set` wins over both.
+Terraform spreads the same across workspaces and a `.tfvars` per
+environment.
 
-A value can live in code, `set .. where env == ..`, or in a document
-others keep, `set from yaml.decode(..)`. A secret someone types is a
-file per deployment, sealed to its recipients and committed. It is
-SOPS's format, so `sops -d` opens it with a member's own key.
-
-**Modules and components.** Every `.df` file is a module named by its
-path. A module with resources is stamped once by its `use`, its inputs
-in the block, `use k3s { name = "k8s-${env}", agents }`. A component is
-a type with inputs and outputs, `resource network blue { cidr =
-"10.1.0.0/16" }`. Names are lexical and types are global. A module reads
-only what its file declares, while `r in aws.subnet` ranges over every
-subnet in the deployment, whichever file made it, so policy sees inside
-every module without an output per value.
-
-**Providers.** `use` imports a provider's types and configures it. Its
-settings are values like any other, so one can be made from a resource.
-The shape of a k3s cluster on OVH and what runs on it:
-
-```dform
-use ovh { endpoint = "ovh-ca", project = config.ovh_project }
-
-deny "${config.zone} is not on this account" where not ovh.zone(config.zone, _, _)
-
-use k3s { name = "k8s-${env}", region = config.region, agents }
-
-use k8s { kubeconfig = k3s.kubeconfig }
-
-resource k8s.namespace apps { metadata.name = "apps" }
-```
-
-A provider's table is a relation, so a deny can ask the account what it
-lacks. `k3s.kubeconfig` is read off the server once it answers, so the
-namespace and everything else of `k8s` plan in tick 2.
-
-**Secrets.** The schema says which attributes are sensitive, and the
-compiler follows every value made from one. A secret reaching a place
-where it would be seen is a compile error, located:
+**Secrets.** A secret cannot reach an output, an address or a count by
+accident. The compiler follows every value made from one, and a leak
+is an error at its line:
 
 ```dform
 output password: string = pw                           # E0304: not declared secret(string)
@@ -410,12 +218,14 @@ n(c) where c = count(p), p = pw                        # E0303: a count leaks ca
 resource aws.iam_user "u-${pw}" { name = "x" }         # E0305: addresses are printed
 ```
 
-`secret.declassify(v, reason)` is the one way out, and says why.
+Terraform's `sensitive` redacts what it prints, and the value is still
+in state in the clear. dform's state holds no secret, because a
+generated one derives from the deployment's master, and `dform secrets
+rotate D KEY` changes one, one plan line per place it lands.
 
-**Policy and tests.** A policy pack is a module, applied by `use
-policies.baseline`. `dform test` evaluates the program once per
-combination of its enums, bools and keys, against an empty world, and
-every deny must hold:
+**Tests.** Every deny is checked in every environment before anything
+ships. `dform test` runs the program once per combination of its enums,
+bools and keys, against an empty world:
 
 ```
 $ dform test
@@ -430,123 +240,53 @@ denied  dform plan tour env=dev --set public_db=true
 ...
 ```
 
+`terraform test` and OPA's tests run the cases you write; this one
+enumerates them. `examples/tour` has each idea with the command to run,
+and `docs/grammar.md` is the language's reference.
+
 ## The tool
 
-A project is a directory holding `dform.toml` (`dform init` writes one).
-A file under `stacks/` is a stack; every other `.df` file is a module.
-State lives in the gitignored `dform.state/`, or an S3 bucket. A
-command runs on a target: `dform plan platform env=prod`.
+**Stacks and deployments.** One command plans and applies a whole
+estate, the cluster and what runs on it, each deployment with its own
+plan, question and state, in dependency order. Which deployments exist
+is code. `project.df` lists them as resources, `resource stacks.platform
+lab { env = "lab" }`, and a stack reads another's outputs as
+`platform[env].kubeconfig`, so `dform apply apps env=lab` applies
+platform first. Terraform does this with root modules and remote state,
+and Terragrunt with `dependency` blocks written by hand. Pulumi's stack
+references link stacks one by one with no matrix, and Argo CD's
+ApplicationSets have the matrix for manifests only.
 
-**plan** prints what will change, by tick, then what the policy says
-of it. Each change names the file and line that derive it, and an
-attribute shows a site only when its value was written outside its own
-block. A `because` line says what moved since the last apply:
-
-```
-$ dform plan --set database.backup_days=7
-deployment: stacks.tour[env=dev]
-plan: 1 change (1 update) over 1 tick; policy: 1 hold
-
-tick 1  1 change
-  ~ db.postgres orders     stacks/tour.df:143
-      backup_days = 1 → 7  --set database.backup_days=7
-      because input database is now {backup_days: 7, multi_az: false} (was {backup_days: 1, multi_az: false})
-
-policy  1 hold
-```
-
-A policy holds, fails, or is undetermined. The logic has three values,
-and nothing is assumed false for being unknown. A policy is undetermined
-when it reads what the cloud has not made yet, and the plan names the
-value and the tick that decide it, `until spec.storageClassName is
-known (tick 2)`. A policy engine over plan JSON would pass it or guess. `later`
-holds what no tick of this plan makes, such as another deployment's
-output not applied yet.
-
-**apply** prints the plan and asks once. At a tick whose plan holds what
-the first could not name, it prints that plan and asks again. A plan
-file applies what it showed and stops before the rest. State is written
-after every provider call, so an interrupted apply resumes where it
+**apply** shows the plan and asks once, and again only at a tick whose
+plan it could not show in full. An interrupted apply resumes where it
 stopped, and a create whose answer was lost is found again, never made
-twice. `docs/reference.md` has the flags, exit codes, timeouts and
-retries, locking and the audit log.
+twice.
 
-**destroy** removes a deployment. It is the plan against an empty
-program, dependents first, and it asks as apply asks. A deny over
-deletes refuses it. Lifecycle is facts, so policy and `why` read it:
+**destroy** is the plan against an empty program, so a deny over
+deletes refuses it. Lifecycle is facts policy can condition,
+`lifecycle(k3s.server, "prevent_destroy") where env == "prod"`, where
+Terraform's `prevent_destroy` takes only a literal.
 
-```dform
-lifecycle(k3s.server, "prevent_destroy") where env == "prod"   # a delete or replace is a deny
-lifecycle(web, "create_first")                                  # a replace makes the new one first, as web-2
-lifecycle(libvirt.volume["data"], "retain")                     # a delete forgets it; the world keeps it
-moved(net.vpc, "main.vpc", net.vpc["core.vpc"])                 # renamed: state follows
-ignore_changes(bastion, "tags.last_scan")                       # set on create, then the world's
-adopt(legacy, "vpc-0a1b2c")                                     # exists already: take it over
-```
+**status** gives a bird's-eye view of your managed resources' health,
+for those whose provider reports it: `healthy`, `progressing`, or
+`degraded` with the reason, `CrashLoopBackOff: container migrate`. It
+reads like Argo CD's health view, across everything dform manages, and
+it fails unless all is well, so it fits a pipeline step or a cron job.
 
-Where a name is the object's identity, a replace made first gets the
-next generation of it (`web-2`), and what reads the name follows. A
-provider can seed a type's lifecycle: a Tailscale device dropped from
-the program is let go, not deleted, unless the program says otherwise.
+**render** prints a Kubernetes stack as manifests under the program's
+policy, with no provider, credentials or state, so GitOps keeps one
+source of truth. `dform render apps env=lab` is a YAML stream for Argo
+CD's config management plugin or `kubectl apply -f -`, where Helm or
+Kustomize would be a second language beside the infrastructure.
 
-**status** is health, kept out of apply. An apply makes what the
-program says and returns without waiting for a rollout to go green,
-because health is never a condition of the plan. When you want to know,
-`dform status` asks each provider how each object is doing: `healthy`,
-`progressing`, or `degraded` with the provider's reason,
-`CrashLoopBackOff: container migrate`. It fails unless all is well, so
-it fits a pipeline step after the apply, a cron job or an alert.
+**Approvals.** A risky change waits for a person, and the signature is
+over the plan's digest, so what was approved is what applies.
+`requires_approval(r, reason)` holds the change until `apply --approval
+FILE` brings it, where Atlantis gates on a pull request review instead.
 
-**render** prints a Kubernetes stack's planned objects as manifests,
-with no provider configured, no credentials and no state: `dform render
-apps env=lab` is a YAML stream for Argo CD's config management plugin,
-a CI job or `kubectl apply -f -`. The program's policy holds over what
-it renders or nothing is printed. A value only an apply could know is
-refused by name, never left a hole.
-
-**why, query, diff.** `dform why ADDR` explains a resource, a value, a
-row or an absence, and `why 'deny "MESSAGE"'` explains a deny. `dform
-query` asks the fact store anything. `dform diff --since 2026-09-20`
-lists what the applies since did and why. A plan that empties a rule
-which derived resources at the last apply warns, naming the rule, and
-apply asks for that on its own.
-
-**Stacks and deployments.** A stack reads another's outputs by `use
-stacks.platform` and `platform[env].kubeconfig`. `dform apply apps
-env=lab` applies platform first, each with its own plan, question and
-state. A plan of apps before platform is applied shows its outputs as
-values not known yet. Which deployments there are is code. `project.df`
-lists them, `resource stacks.platform lab { env = "lab" }`, with clauses
-and ranges as anywhere. `dform plan` with no target plans each, `dform
-apply` applies them in dependency order, and one the file no longer
-lists is destroyed by the next apply.
-
-**Secrets.** State holds no secret, only ids, names and keyed digests.
-Every generated secret derives from the deployment's master, kept
-sealed under a passphrase, so a copy of the bucket opens nothing. A run
-without the passphrase still plans in full and proves a secret
-unchanged without knowing it. A secret only the cloud has, such as an
-auth key it mints or a managed cluster's kubeconfig, stays with the
-provider that holds it. The program carries its label, `user_data = "..
---authkey=${nodes.key}"`, and the bytes are revealed into the one Apply
-call that writes them and nowhere else. `dform secrets rotate D KEY`
-changes one generated secret, one plan line per place it lands.
-
-**Approvals.** `requires_approval(r, reason)` holds a change until
-someone signs the plan's digest. The signature is a JWT or a DSSE
-envelope, checked against the stack's trust root, and `apply --approval
-FILE` takes it.
-
-**Providers.** A provider is a process dform starts and speaks gRPC to,
-or, in an experimental build, a wasm component. HTTP, SSH and git are
-the host's, with credentials granted by name in `dform.toml`. The
-Kubernetes provider reads its schema from the cluster's own OpenAPI
-document. `dform provider check` runs the conformance suite, and
-`docs/providers.md` is the protocol and the SDK.
-
-**The editor.** `dform lsp` hovers each term with its value for a
-deployment and who wrote it. `dform fmt` has one normal form.
-`tree-sitter-dform/` is the grammar, and `editors/emacs` is a mode.
+**Providers** of your own are written against the SDK in
+`docs/providers.md`, and `dform provider check` runs the conformance
+suite on them. `docs/reference.md` has every command and flag.
 
 ## What you cannot do elsewhere
 
@@ -571,8 +311,7 @@ deployment and who wrote it. `dform fmt` has one normal form.
 ## What it is not
 
 - Not a general-purpose language. There are no loops, no mutation and
-  no effects. A function is pure or reads, and only a provider's apply
-  changes the world.
+  no effects.
 - Not a configuration manager. It runs nothing on a host; cloud-init in
   `user_data` and the cluster's own controllers do that.
 - Not a Helm. A manifest of one kind is a resource per document; a
@@ -589,9 +328,9 @@ deployment and who wrote it. `dform fmt` has one normal form.
 - `examples/tour`: the tutorial. `examples/crud-api`: a blue/green
   rollout gated on a migration Job. Each example's README says what it
   shows and the commands to run.
-- `docs/grammar.md`: the language. `docs/reference.md`: every command,
-  state backends, keyed stacks, secrets, approvals, the audit log.
-  `docs/best_practices.md`: how to write a program.
+- `docs/grammar.md`: the language. `docs/reference.md`: every command
+  and how to run dform. `docs/best_practices.md`: how to write a
+  program.
 - `proposals/` and `DESIGN.org`: the model and the decisions.
 
 Apache-2.0. Contributions under the Developer Certificate of Origin
