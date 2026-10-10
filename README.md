@@ -120,9 +120,6 @@ plan: 5 changes (5 create) over 1 tick; policy: 1 hold
 policy  1 hold
 ```
 
-In Terraform the peerings are a `for_each` over a `setproduct`, and
-nothing refuses one added by hand.
-
 For example, a network and its subnets as one unit, stamped twice:
 
 ```dform
