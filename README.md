@@ -83,10 +83,12 @@ tick. Terraform makes a block a template and adds `for_each`,
 `depends_on`, `-target` and `default_tags` for what a template cannot
 say.
 
-**A convention is written once and applies everywhere.** Any block can
-add to any resource, and the pieces merge: a `set` writes into every
-resource its clause matches, leaf by leaf, beside what the resource's
-own block wrote:
+**Policy is part of the language.** Conformance has two halves, the
+shape every resource should have and the changes that may not happen,
+and both are rules in the same file as the resources, in the same
+language, run by every plan and every apply. The shape is a `set` that
+applies everywhere: it writes into every resource its clause matches,
+leaf by leaf, beside what the resource's own block wrote:
 
 ```dform
 set r.tags = { team: "shop" } where r in resource
@@ -112,15 +114,14 @@ Kind      Resource
 "update"  db.postgres orders
 ```
 
-**Policy is part of the language.** A rule about what may change lives
-in the same file as the resources it governs, is written in the same
-language, and runs in every plan and every apply: "no deletes in prod"
-is `deny "no deletes in prod" where env == "prod", deformation("delete",
-_, _)`. A policy over a value known only after apply says so. The logic
-has three values, and nothing is assumed false for being unknown, so
-such a policy is undetermined and the plan names the tick that decides
-it. With Terraform, policy is a second tool and a second language over
-the plan's JSON, where such a value is only marked unknown.
+**What may change is a rule too.** "No deletes in prod" is `deny "no
+deletes in prod" where env == "prod", deformation("delete", _, _)`, and
+it is checked by every plan and refuses the apply. A policy over a value
+known only after apply says so: the logic has three values, nothing is
+assumed false for being unknown, so such a policy is undetermined and
+the plan names the tick that decides it. With Terraform, policy is a
+second tool and a second language over the plan's JSON, where such a
+value is only marked unknown.
 
 **Descriptions build on each other.** Anything shaped like a graph is
 derived, so reachability stays right as spokes come and go, and this is
