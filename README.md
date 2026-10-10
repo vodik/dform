@@ -7,18 +7,17 @@ A value the cloud knows only later should be a value the plan already
 waits for. The program should be as clear to the language model helping
 an operator as to the operator.
 
-It works because infrastructure is a database. An account is a table of
+It can, because infrastructure is a database. An account is a table of
 networks, a table of instances, a table of DNS records, each row with
 attributes and pointing at others. What the program wants is a set of
 tables too, and a plan is the difference between the two. A policy is a
 query that must return no rows, and "why is this here" asks which rows
 produced it. A dform program is facts and rules over those tables,
-evaluated all at once to a fixpoint, the way Datalog evaluates a query.
-Every plan is the least model of the program over the world as it is,
-and every line of it carries its proof, so `why` never disagrees with
-the plan. Apply reconciles the world with the plan in ticks, and what
-one tick creates, an endpoint or a kubeconfig, is a value the next tick
-plans with.
+evaluated the way Datalog evaluates a query, so every plan is the least
+model of the program over the world as it is and every line of it
+carries its proof. Apply reconciles the world with the plan in ticks,
+and what one tick creates, an endpoint or a kubeconfig, is a value the
+next tick plans with.
 
 A complete program:
 
@@ -73,7 +72,7 @@ A dform file says what should exist and under which conditions, and
 dform works out how many, in what order, and when. The file itself has
 no order: a block may use a name declared further down or in another
 file. A block holds for every answer to its clause, so repetition is a
-condition, an edge is a reference, and a value known later is simply
+condition, an edge is a reference, and a value known later is planned
 later. Terraform makes a block a template and adds `for_each`,
 `depends_on`, `-target` and `default_tags` for what a template cannot
 say.
@@ -84,6 +83,8 @@ its peering follows; peer two spokes by hand and the policy refuses the
 plan:
 
 ```dform
+use aws { region = "us-east-1" }
+
 resource aws.vpc core { cidr_block = "10.0.0.0/16", tags = { Name: "core" } }
 resource aws.vpc shop { cidr_block = "10.1.0.0/16", tags = { Name: "shop" } }
 resource aws.vpc data { cidr_block = "10.2.0.0/16", tags = { Name: "data" } }
@@ -119,29 +120,11 @@ plan: 5 changes (5 create) over 1 tick; policy: 1 hold
 policy  1 hold
 ```
 
-Terraform has no recursion; a hub and its spokes are a list kept by
-hand.
+In Terraform the peerings are a `for_each` over a `setproduct`, and
+nothing refuses one added by hand.
 
-**Policy is part of the language.** The shape every resource should have
-and the changes that may not happen are both rules in the same file as
-the resources, and every plan checks them. `resource` is the table of
-every resource the program declares, whatever its type, and a `set` over
-it writes into each one its clause matches, leaf by leaf, beside what
-the resource's own block wrote:
-
-```dform
-resource aws.vpc main { cidr_block = "10.0.0.0/16", tags = { component: "network" } }
-
-set r.tags = { team: "shop" } where r in resource
-```
-
-```
-$ dform query 'main.tags'
-{ component: "network", team: "shop" }
-```
-
-Data files are facts. A toml names the networks, a yaml holds an
-environment's settings, and the program reads both like any other table:
+Data files are facts. A toml names the networks, a yaml sets an
+environment's inputs, and the plan cites the line that read each value:
 
 ```dform
 key env: enum("staging", "prod") = "staging"
@@ -161,23 +144,38 @@ resource aws.db_instance orders {
 
 ```
 $ dform plan
-deployment: stacks.shop[env=staging]
+deployment: stacks.app[env=staging]
 plan: 3 changes (3 create) over 1 tick
 
 tick 1  3 changes
-  + aws.db_instance orders         stacks/shop.df:10
-      backup_retention_period = 7  stacks/shop.df:6
+  + aws.db_instance orders         stacks/app.df:10
+      backup_retention_period = 7  stacks/app.df:6
       instance_class = "db.t3.micro"
-  + aws.vpc data                   stacks/shop.df:8  with v = {cidr: "10.2.0.0/16", name: "data"}
+  + aws.vpc data                   stacks/app.df:8  with v = {cidr: "10.2.0.0/16", name: "data"}
       cidr_block = "10.2.0.0/16"
-  + aws.vpc shop                   stacks/shop.df:8  with v = {cidr: "10.1.0.0/16", name: "shop"}
+  + aws.vpc shop                   stacks/app.df:8  with v = {cidr: "10.1.0.0/16", name: "shop"}
       cidr_block = "10.1.0.0/16"
 ```
 
-**The plan is a table too.** Every change it would make is a
-`deformation` row, the kind of change and the resource it touches, so a
-policy asks about the change and the resource's configuration in one
-question:
+**Policy is part of the language.** The shape every resource should have
+and the changes that may not happen are both rules in the same file as
+the resources, and every plan checks them. `resource` is the table of
+every resource, whatever its type, so one `set` tags them all, beside
+what each block wrote:
+
+```dform
+resource aws.vpc main { cidr_block = "10.0.0.0/16", tags = { component: "network" } }
+
+set r.tags = { team: "shop" } where r in resource
+```
+
+```
+$ dform query 'main.tags'
+{ component: "network", team: "shop" }
+```
+
+The plan is a table too. After apply, every change the next plan would
+make is a `deformation` row, so a policy can ask what the plan will do:
 
 ```
 $ dform query 'deformation(kind, resource, _)' --set database.backup_days=14
@@ -186,17 +184,15 @@ Kind      Resource
 ```
 
 "No deletes in prod" is `deny "no deletes in prod" where env == "prod",
-deformation("delete", _, _)`; every plan checks it, and it refuses the
-apply. A policy over a value known only after apply stays undetermined,
-since dform assumes nothing false for being unknown, and the plan says
-when it will know. A risky change waits instead for a signature over
+deformation("delete", _, _)`, and it refuses the apply. A policy over a
+value known only after apply stays undetermined, and the plan says when
+it will know. A risky change can instead wait for a signature over
 exactly what will apply. With Terraform, policy is a second tool and a
 second language over the plan's JSON, where such a value is only marked
 unknown.
 
 **Lifecycle is a table too.** A rule writes it, a provider defaults it
-for its own types, and a policy reads it back. Terraform's
-`prevent_destroy` must be a literal:
+for its own types, and a policy reads it back:
 
 ```dform
 lifecycle(orders, "prevent_destroy") where env == "prod"
@@ -208,9 +204,11 @@ deny "every prod database is kept" { db } where {
 }
 ```
 
+Terraform's `prevent_destroy` must be a literal.
+
 **Secrets are part of the language too.** A secret cannot reach an
-output, an address or a count by accident. The compiler follows every
-value made from one, and a leak is an error at its line:
+output, a condition or an address by accident; a leak is an error at its
+line:
 
 ```dform
 let pw = random.password("db")
@@ -225,15 +223,22 @@ deployment's master. `dform secrets` imports, lists and rotates them.
 Terraform's `sensitive` keeps a value out of its CLI output and still
 stores it in state.
 
-Resources are wired by reference, and dform tracks a value the cloud has
-not produced yet and plans around it:
+A value the cloud has not produced yet is planned around, even in a
+resource's name:
 
 ```dform
+use aws { region = "us-east-1" }
+
 resource aws.db_instance orders { instance_class = "db.t3.micro" }
 
-resource aws.iam_policy "connect-${host}" {
-  policy = json.encode({ Statement: [{ Action: "rds-db:connect", Resource: host }] })
-} where pg in aws.db_instance, host = pg.address
+resource aws.iam_policy "connect-${id}" {
+  policy = json.encode(
+    { Statement: [{
+      Action: "rds-db:connect",
+      Resource: "arn:aws:rds-db:us-east-1:*:dbuser:${id}/app",
+    }] },
+  )
+} where pg in aws.db_instance, id = pg.resource_id
 ```
 
 ```
@@ -241,12 +246,12 @@ $ dform plan
 plan: 1 change (1 create) over 2 ticks
 
 tick 1  1 change
-  + aws.db_instance orders          stacks/db.df:3
+  + aws.db_instance orders        stacks/db.df:3
       instance_class = "db.t3.micro"
 
 tick 2  ? changes
-  waits on  orders.address
-  aws.iam_policy "connect-${host}"  stacks/db.df:5  waits on orders.address
+  waits on  orders.resource_id
+  aws.iam_policy "connect-${id}"  stacks/db.df:5  waits on orders.resource_id
 ```
 
 Terraform cannot plan a resource address from a value it learns at
@@ -263,8 +268,8 @@ let k3s_init = "#!/bin/sh\ncurl -sfL https://get.k3s.io | sh -\n"
 resource aws.instance server { instance_type = "t3.small", user_data = k3s_init }
 
 let raw: secret(string) = io.read("ssh://ubuntu@${server.public_ip}/etc/rancher/k3s/k3s.yaml")
-let kc = str.replace(raw, "https://127.0.0.1:6443", "https://${server.public_ip}:6443")
-use k8s { kubeconfig = kc }
+let kubeconfig = str.replace(raw, "https://127.0.0.1:6443", "https://${server.public_ip}:6443")
+use k8s { kubeconfig }
 
 resource k8s.namespace apps { metadata.name = "apps" }
 ```
@@ -279,22 +284,24 @@ tick 1  1 change
       user_data = "#!/bin/sh\ncurl -sfL https://get.k3s.io | sh -\n"  stacks/cluster.df:3
 
 tick 2  1 change
-  waits on  provider k8s  kubeconfig = kc
-  provisional: planned against the offline schema; planned again once kubeconfig is known
+  waits on  provider k8s  kubeconfig
   + k8s.namespace apps   stacks/cluster.df:11
       metadata.name = "apps"
 ```
 
+The Kubernetes provider's own documentation asks for the cluster and
+what runs on it in separate applies.
+
 A provider is facts as well. Its types, its tables and its defaults are
-rows the program reads, so "is this zone on the account" is one line:
+rows the program reads, so "is this domain on the account" is one line:
 
 ```dform
-deny "example.com is not on this account" where not ovh.zone("example.com", _, _)
+deny "the domain is hosted here" where not ovh.zone("example.com", _, _)
 ```
 
-Environments are one file: each value of a key is its own deployment,
-and `dform test` runs every policy over every combination of the
-program's enums and bools:
+Environments are one file, prod differing by a `set` under a condition,
+and `dform test` runs every policy over every combination of enums and
+bools:
 
 ```dform
 key env: enum("staging", "prod") = "staging"
@@ -323,9 +330,8 @@ denied  dform plan app env=prod --set public=true
 test app: 4 combinations, 1 failed
 ```
 
-**Everything explains itself, absence included.** A missing resource
-has an answer as precise as a present one. `dform why` names the rule
-that could have made it and the condition that failed:
+`dform why` answers for a resource that does not exist, naming the rule
+that could have made it and the row it lacked:
 
 ```
 $ dform why 'aws.subnet private-us-east-1d'
@@ -342,17 +348,14 @@ changes and again only when a later plan differs from the one shown;
 interrupted, it resumes where it stopped.
 
 **Stacks and deployments.** An estate plans and applies as one, each
-deployment with its own plan, question and state, in dependency order.
-Which deployments exist is code. `project.df` lists them as resources,
-`resource stacks.platform prod { env = "prod" }`, and a stack reads
+deployment with its own plan, approval and state, in dependency order.
+Which deployments exist is code: `project.df` lists them as resources,
+`resource stacks.platform prod { env = "prod" }`. A stack reads
 another's outputs as `platform[env].kubeconfig`, so `dform apply apps
 env=prod` applies platform first. Terragrunt needs a `dependency` block
 per edge and a directory per environment.
 
-For a pipeline, `status` says whether everything is healthy and fails if
-not, and `render` prints what dform would send, under policy, with no
-credentials and no state, a stream Argo CD or kustomize reads as plain
-manifests:
+In a pipeline, `status` fails unless everything is healthy:
 
 ```
 $ dform status apps env=staging
@@ -360,6 +363,9 @@ k8s.deployment web  degraded  CrashLoopBackOff: container web
 k8s.namespace apps  -
 status: 1 degraded, 1 without health
 ```
+
+`render` prints what apply would send, policy checked, with no
+credentials and no state, as plain manifests for Argo CD or kustomize:
 
 ```
 $ dform render apps env=staging
