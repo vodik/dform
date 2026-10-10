@@ -74,7 +74,7 @@ that manages the role in `user` is refused at plan, before anything
 changes:
 
 ```
-Error: plan postgres.role["admin"]: name: "dform_admin" is the role provider postgres connects as (user = "dform_admin"): changing it (a password rotated, LOGIN taken away) or dropping it would lock the provider out mid-apply. Connect as a separate admin role that no resource manages (`use postgres { user = .. }`; docs/providers/postgres.md, "The admin role")
+refused  plan postgres.role admin: name: "dform_admin" is the role provider postgres connects as (user = "dform_admin"): changing it (a password rotated, LOGIN taken away) or dropping it would lock the provider out mid-apply. Connect as a separate admin role that no resource manages (`use postgres { user = .. }`; docs/providers/postgres.md, "The admin role")
 ```
 
 The admin role is the one the server's bootstrap makes (the image's

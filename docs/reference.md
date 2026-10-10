@@ -1436,7 +1436,8 @@ made; the plan itself says what it is.
   are undetermined, `policy  12 hold · 1 fails · 2 undetermined`, and a
   holding policy is only that count; `-v` lists every policy and what
   each holds for. A plan a policy fails is still refused, its error
-  naming the policy on stderr (`constraint violations:`). The block
+  naming the policy on stderr as every error is said (`refused  no big
+  networks  p.df:7`, what it fired for under it). The block
   prints whenever a policy fails or is undetermined, changes or not: a
   deny that refuses a plan with no changes is `plan: 0 changes; policy:
   1 fails`, the block, exit 4. `--json`
@@ -1839,8 +1840,8 @@ is written again; its header carries a fill bar, the calls answered over
 the tick's calls (a fill, never a spinner), and the time the tick has
 run, then `done` and its time once the tick ends. A line said while the
 block is drawn (a call sent again, a timed-out call looked up, a
-`DFORM_LOG=debug` line, a warning or the constraint violations that
-stop the apply) prints above it, and the block is drawn again
+`DFORM_LOG=debug` line, a warning or the refusals that stop the
+apply) prints above it, and the block is drawn again
 below:
 
 ```
@@ -1908,7 +1909,7 @@ tick 1  failed 4.1s
 ! apply ovh.domain_record k3s."k8s-lab.vodik.xyz": refused, nothing changed
     zone vodik.xyz is not hosted on this OVH account
     k3s.df:66
-Error: apply platform[env=lab]: tick 1 failed: ovh.domain_record k3s."k8s-lab.vodik.xyz"
+error  apply platform[env=lab]: tick 1 failed: ovh.domain_record k3s."k8s-lab.vodik.xyz"
 ```
 
 What happened is `refused, nothing changed`, `no answer; the change may
@@ -1919,10 +1920,10 @@ and the run's last line names them. A data source's failure has the
 same shape, the call as the plan says it (`ssh.read("10.0.0.5",
 "ubuntu", "/etc/rancher/k3s/k3s.yaml") failed`), why, and where it is
 written. Any other error, of any command (a state that does not parse,
-a plan file that is not there), says what happened on its `Error:` line
-and what caused it on the lines under it, indented (`Error: parse
-state` / `    expected ident at line 1 column 2`), never a `Caused by:`
-list. The marks are painted as the plan paints them on a terminal:
+a plan file that is not there), says what happened on its first line,
+after the word `error`, and what caused it on the lines under it,
+indented (`error  parse state` / `    expected ident at line 1 column
+2`), never a `Caused by:` list. The marks are painted as the plan paints them on a terminal:
 `+` green, `~` yellow, `-` red, `!` red, a policy's `fails` red; nothing
 else is coloured. Ctrl-C (SIGINT) or SIGTERM asks the apply to
 stop: it says `Ctrl-C: stopping after the calls in flight; Ctrl-C again
@@ -2053,7 +2054,7 @@ that one, and the generation is dropped; a `moved` keeps it. Where the
 provider cannot generate one, `create_first` is an error at plan:
 
 ```text
-Error: k8s.namespace x: create_first is not possible: metadata.name is its identity, and its provider cannot generate one; give the replacement another name, or let it be replaced destroy-first
+error  k8s.namespace x: create_first is not possible: metadata.name is its identity, and its provider cannot generate one; give the replacement another name, or let it be replaced destroy-first
 ```
 
 The Kubernetes provider generates the names of a Deployment, DaemonSet,
@@ -2493,7 +2494,7 @@ compares: a run whose master is another refuses before it plans, naming
 both ids and where this run's came from:
 
 ```text
-Error: crud_api: the master this run derives from (RANDOM_MASTER, id 3f2a9c1b0d4e) is not
+error  crud_api: the master this run derives from (RANDOM_MASTER, id 3f2a9c1b0d4e) is not
 the one its state was applied with (id 9c1b3f2a0e7d): every random.* value and every secret
 digest would change. unset RANDOM_MASTER, or run with --new-master to take this master and
 change them all
@@ -2820,7 +2821,7 @@ bytes (`json.encode`, `base64.encode`, a hash) has no value, and the plan
 says so at the attribute instead of waiting:
 
 ```text
-Error: main.df:4, compute.vm vm: user_data reads the secret vault.token["t"].value through
+error  main.df:4, compute.vm vm: user_data reads the secret vault.token["t"].value through
 json.encode(), which dform cannot compute: a provider holds it, and its bytes exist for dform
 only inside the call that writes it
   help: write it whole, or inside a string template: "..${vault.token["t"].value}.."
@@ -3464,7 +3465,7 @@ refused by the plan at the resource's site, before its provider is
 asked, one line per attribute, and under them the fix:
 
 ```
-Error: backups.df:53, k8s.cron_job forgejo_backup.job: spec.jobTemplate.spec.template is unset (required: describes the pod that will be created when executing a job)
+error  backups.df:53, k8s.cron_job forgejo_backup.job: spec.jobTemplate.spec.template is unset (required: describes the pod that will be created when executing a job)
   help: give it in the resource's block: spec.jobTemplate.spec.template = ..
 ```
 
@@ -3600,7 +3601,7 @@ Past it the apply stops, exit 1, naming each value it waited on and the
 setting that set the deadline:
 
 ```
-Error: apply stopped at tick 2: k8s.job migrate-v42.status.succeeded not reached in 10m (`[apply] wait` in dform.toml); state is consistent: run apply again to wait again
+error  apply stopped at tick 2: k8s.job migrate-v42.status.succeeded not reached in 10m (`[apply] wait` in dform.toml); state is consistent: run apply again to wait again
 ```
 
 What ticks before applied stays applied and nothing of the waiting tick
@@ -3714,9 +3715,46 @@ prints and every command takes. `.` is static and `[ ]` a key computed at
 run time. A dot is a reference where it is a whole value (a field:
 `endpoint = db.endpoint`) and a read everywhere else; the resource alone,
 `vpc = vpc`, is the reference. `-` and `/` are operators,
-so hyphenated names are strings (`"us-east-1"`). A syntax error names
-`file:line:col` and what was expected, and parsing goes on to the next
-statement, so every error in a file is reported at once.
+so hyphenated names are strings (`"us-east-1"`). A syntax error says
+what was expected and where, and parsing goes on to the next statement,
+so every error in a file is reported at once.
+
+Every error, refusal and conflict prints in one shape, the plan's: a
+word for what it is (`error`, `refused`, `conflict`) and a sentence
+that reads alone, its code at the end (`[E0304]`); under it each site
+it is about, `file:line` (`file:3-7` for several lines) and the source
+line, a caret under the span when it is narrower than the line and
+what the span is (`checked here`), hung off `why --tree`'s `├─`/`└─`
+when there are several; a site in no file is its text (`--set
+agents=4`); notes dim, the help last. A deny that refuses says its site
+on its line and what it fired for under it; a provider's refusal of a
+change says the resource's block. An error with no site is its first
+line:
+
+```text
+error  --set agents=4 is outside the check on agents
+  ├─ stacks/app.df:2  input agents: int = 2 check agents < 4, agents != 7
+  │                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ checked here
+  └─ --set agents=4   given here
+  help: give agents a value of int check agents < 4, agents != 7
+
+conflict  net.vpc a.cidr: two contributions disagree
+  ├─ p.df:2  resource net.vpc a { cidr = "10.0.0.0/16" }
+  │                                      ^^^^^^^^^^^^^
+  └─ p.df:4  cidr = "10.1.0.0/16"
+                    ^^^^^^^^^^^^^
+  help: rank one of them, `@default` or `@override`
+
+refused  a network is no bigger than a /16  p.df:7
+  └─ vpc = "c"
+
+error  the block opened on line 3 is never closed
+  p.df:3-7  resource net.vpc main {
+              cidr = "10.0.0.0/16"
+            ...
+                  ^ expected `}` by here
+  help: close it: a `}` after its last line
+```
 
 `dform fmt [PATH...]` formats files in place (no PATH: the project's `.df` files):
 each construct in its normal form (a body on one line when it fits in 100
@@ -4621,7 +4659,7 @@ naming each, exit 1:
 
 ```
 $ dform -C examples/k8s render k8s_demo
-Error: render stacks.k8s_demo: 1 of what its documents need is not known to a render, and a rendered document has no holes:
+error  render stacks.k8s_demo: 1 of what its documents need is not known to a render, and a rendered document has no holes:
   hole: k8s.deployment web spec.template.spec.containers[0].envFrom[0].configMapRef.name = k8s.config_map web_config.metadata.name, known after apply
   help: apply the deployment first, so a value an apply makes is known; or render the documents with none with `--partial`
 ```

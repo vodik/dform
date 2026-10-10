@@ -75,7 +75,7 @@ PLAN` reads the secret again and refuses one that moved:
 ```
 plan file plan.json is stale: re-evaluation after refresh does not reproduce its delta:
 - io.read("vault://kv/synapse/signing#key"): version 3 in the plan, 4 now: it moved in its secret manager since the plan
-Error: stale plan: run plan again
+error  stale plan: run plan again
 ```
 
 A new plan reads version 4 and shows what it changes. `dform secrets
