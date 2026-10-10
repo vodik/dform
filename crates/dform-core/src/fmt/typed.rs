@@ -100,10 +100,10 @@ fn schema_of(root: &Path, src: &str) -> Option<Schema> {
         root.join("providers").join(src).join("schema.df")
     };
     if file.extension().is_some_and(|e| e == "df") && file.is_file() {
-        return Schema::load(&file).ok();
+        return Schema::load(&file).and_then(Schema::imported).ok();
     }
     let text = crate::schema::builtin(src)?;
-    Schema::parse(text, src).ok()
+    Schema::parse(text, src).and_then(Schema::imported).ok()
 }
 
 fn words(n: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> + '_ {

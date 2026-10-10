@@ -48,6 +48,12 @@ pub struct Link {
     rename: Option<(super::wire::Rename, super::wire::Rename)>,
     /// The Queries in flight whose answer's first column is a type.
     typed: std::collections::BTreeSet<Ticket>,
+    /// The provider's attribute names where the program's differ: what
+    /// renames a call, and what renames its answer back.
+    names: (super::wire::Names, super::wire::Names),
+    /// What each call in flight whose answer is renamed named
+    /// ([`super::wire::Names::answered_by`]).
+    answers: BTreeMap<Ticket, String>,
 }
 
 /// One failed call sent again: for the progress line and the audit log.
@@ -121,6 +127,8 @@ impl Link {
             events: Vec::new(),
             rename: None,
             typed: Default::default(),
+            names: Default::default(),
+            answers: BTreeMap::new(),
         };
         let hs: pb::HandshakeResponse = link.call(pb::HandshakeRequest {
             protocol_version: VERSION,
@@ -201,26 +209,47 @@ impl Link {
         self.rename = Some((out.inverse(), out));
     }
 
+    /// Send the provider's attributes under its own names where the
+    /// program's differ (`Schema::wire`), and take its answers back under
+    /// the program's.
+    pub fn names(&mut self, out: super::wire::Names) {
+        self.names = (out.inverse(), out);
+    }
+
     pub fn submit(&mut self, call: impl Into<Call>) -> Ticket {
         let call = call.into();
-        let Some((_, out)) = &self.rename else {
-            return self.backend.submit(call);
+        let answered = match self.names.1.is_empty() {
+            true => None,
+            false => super::wire::Names::answered_by(&call),
         };
-        let typed = matches!(&call, Call::Query(q) if super::wire::Rename::typed(&q.pred));
-        let t = self.backend.submit(out.call(call));
-        if typed {
-            self.typed.insert(t);
+        let call = self.names.1.call(call);
+        let t = match &self.rename {
+            None => self.backend.submit(call),
+            Some((_, out)) => {
+                let typed = matches!(&call, Call::Query(q) if super::wire::Rename::typed(&q.pred));
+                let t = self.backend.submit(out.call(call));
+                if typed {
+                    self.typed.insert(t);
+                }
+                t
+            }
+        };
+        if let Some(a) = answered {
+            self.answers.insert(t, a);
         }
         t
     }
 
-    /// An answer from the backend, its types as the program names them.
+    /// An answer from the backend, its types and attributes as the
+    /// program names them.
     fn back(&mut self, t: Ticket, r: Result<Reply, CallError>) -> Result<Reply, CallError> {
         let typed = self.typed.remove(&t);
-        match &self.rename {
+        let answered = self.answers.remove(&t);
+        let r = match &self.rename {
             Some((back, _)) => r.map(|r| back.reply(r, typed)),
             None => r,
-        }
+        };
+        r.map(|r| self.names.0.reply(r, answered.as_deref()))
     }
 
     /// Send the calls submitted so far ([`Timed::flush`]).

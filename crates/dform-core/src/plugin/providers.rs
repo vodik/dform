@@ -1561,6 +1561,7 @@ impl Providers {
                 .map(Atom::try_from)
                 .collect::<Result<Vec<Atom>>>()?;
             let mut s = Schema::from_facts(&facts)
+                .and_then(Schema::imported)
                 .with_context(|| format!("the schema of provider {}", self.names[i]))?;
             // A provider takes another name only when its types are under
             // its own (`ovh.instance`): one it names otherwise (the fake
@@ -1621,6 +1622,7 @@ impl Providers {
             }
             schema = schema.merge(s)?;
         }
+        self.wire_names(&schema);
         let loaded = Loaded {
             schema: Generation::new(schema),
             learned: RefCell::new(Vec::new()),
@@ -1632,6 +1634,16 @@ impl Providers {
             bail!("internal: the providers' schema is loaded once");
         }
         Ok(())
+    }
+
+    /// Each link sends the provider its own names of the attributes the
+    /// program names otherwise (`Schema::wire`): a type is one link's, so
+    /// each is given them all.
+    fn wire_names(&self, schema: &Schema) {
+        let names = wire::Names::new(&schema.wire);
+        for l in &self.links {
+            l.borrow_mut().names(names.clone());
+        }
     }
 
     fn loaded(&self) -> &Loaded {
@@ -1697,8 +1709,10 @@ impl Providers {
             return Ok(());
         }
         let s = Schema::from_facts(&facts)
+            .and_then(Schema::imported)
             .with_context(|| format!("the schema of provider {}", self.names[i]))?;
         let merged = known.clone().merge(s)?;
+        self.wire_names(&merged);
         if l.schema
             .latest()
             .next

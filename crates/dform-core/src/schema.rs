@@ -98,6 +98,39 @@ pub const IDENTITY: &str = "id";
 /// type's own with the flag `name_like`.
 pub const NAME_LIKE: [&str; 3] = ["name", "metadata.name", "bucket"];
 
+/// What a program calls the attribute `path` typed `ty`, when that is not
+/// the provider's name: a reference is the resource (`vpc = main`), so an
+/// attribute typed `ref(T)`, or a list or set of them, whose name ends in
+/// `_id` is named without the suffix (`vpc_id` is `vpc`, `peer_vpc_id`
+/// `peer_vpc`), and a list or set of them whose name ends in `_ids` is
+/// the plural (`vpc_security_group_ids` is `vpc_security_groups`). The
+/// provider's name is kept for the boundary ([`Schema::wire`]).
+pub fn reference_name(path: &str, ty: &str) -> Option<String> {
+    use crate::types::Ty;
+    let (parent, last) = match crate::address::path_split_last(path) {
+        Some((parent, last)) => (Some(parent), last),
+        None => (None, path),
+    };
+    let ty = Ty::parse(ty);
+    let many = matches!(ty, Ty::List(_));
+    let mut each = ty;
+    while let Ty::List(t) = each {
+        each = *t;
+    }
+    if !matches!(each, Ty::Ref(_)) {
+        return None;
+    }
+    let named = match (last.strip_suffix("_id"), last.strip_suffix("_ids")) {
+        (Some(one), _) if !one.is_empty() => one.to_string(),
+        (_, Some(them)) if !them.is_empty() && many => format!("{them}s"),
+        _ => return None,
+    };
+    Some(match parent {
+        Some(parent) => format!("{parent}.{named}"),
+        None => named,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttrSpec {
     pub ty: String,
@@ -311,6 +344,10 @@ pub struct Schema {
     /// against its offline schema, provisionally (R-193); one that flags
     /// none counts every setting so ([`Schema::connects`]).
     pub connection: BTreeMap<String, BTreeSet<String>>,
+    /// (type, attr as the program names it) -> the provider's name, for
+    /// each attribute [`reference_name`] renames ([`Schema::imported`]):
+    /// what the link sends the provider in its place.
+    pub wire: BTreeMap<(String, String), String>,
 }
 
 /// A schema's data source declaration (R-106): `extern_decl(Pred, Sig)`.
@@ -933,6 +970,75 @@ impl Schema {
         Ok(s)
     }
 
+    /// The schema as a program reads it: each reference attribute named
+    /// for the resource ([`reference_name`]) in every row that names its
+    /// path, its provider's name kept in [`Schema::wire`]. A provider's
+    /// own view is [`Schema::from_facts`]; dform imports what it is
+    /// given.
+    pub fn imported(self) -> Result<Schema> {
+        let renamed: BTreeMap<(String, String), String> = self
+            .attrs
+            .iter()
+            .filter_map(|((t, p), a)| Some(((t.clone(), p.clone()), reference_name(p, &a.ty)?)))
+            .collect();
+        if renamed.is_empty() {
+            return Ok(self);
+        }
+        for ((t, p), n) in &renamed {
+            if self.attrs.contains_key(&(t.clone(), n.clone())) {
+                bail!(
+                    "type_attr({t}, {p}): a reference is named for the resource, `{n}`, \
+                     which {t} also declares"
+                );
+            }
+        }
+        let rename = |t: &Term, p: &Term| -> Option<Term> {
+            let key = (t.as_str()?.to_string(), p.as_str()?.to_string());
+            renamed.get(&key).map(|n| Term::Val(Value::Str(n.clone())))
+        };
+        let facts: Vec<Atom> = self
+            .facts
+            .iter()
+            .map(|f| {
+                let mut f = f.clone();
+                if PER_TYPE.contains(&f.pred.as_str())
+                    && let [t, p, ..] = f.args.as_mut_slice()
+                {
+                    match p {
+                        Term::Val(Value::List(keys)) => {
+                            for k in keys.iter_mut() {
+                                if let Some(Term::Val(n)) = rename(t, &Term::Val(k.clone())) {
+                                    *k = n;
+                                }
+                            }
+                        }
+                        _ => {
+                            if let Some(n) = rename(t, p) {
+                                *p = n;
+                            }
+                        }
+                    }
+                }
+                f
+            })
+            .collect();
+        let mut s = Schema::from_facts(&facts)?;
+        s.checks_refinements = self.checks_refinements;
+        s.wire = self.wire;
+        s.wire
+            .extend(renamed.into_iter().map(|((t, p), n)| ((t, n), p)));
+        Ok(s)
+    }
+
+    /// What the program calls the attribute the provider names `path` on
+    /// `typ`, when the two differ ([`reference_name`]).
+    pub fn program_name(&self, typ: &str, path: &str) -> Option<&str> {
+        self.wire
+            .iter()
+            .find(|((t, _), w)| t == typ && w.as_str() == path)
+            .map(|((_, n), _)| n.as_str())
+    }
+
     /// Parse a schema file's source: plain facts only.
     pub fn parse(src: &str, origin: &str) -> Result<Schema> {
         let prog = crate::parser::parse_program(src).with_context(|| format!("parse {origin}"))?;
@@ -1008,6 +1114,7 @@ impl Schema {
         for (p, s) in other.connection {
             self.connection.entry(p).or_default().extend(s);
         }
+        self.wire.extend(other.wire);
         Ok(self)
     }
 
@@ -1274,8 +1381,11 @@ pub fn load_provider(name: &str) -> Result<Schema> {
     Schema::parse(src, &format!("crates/dform-mock/schemas/{name}.df"))
 }
 
+/// A built-in schema as a program reads it ([`Schema::imported`]).
 fn builtin_schema(name: &str) -> Schema {
-    Schema::parse(builtin(name).unwrap(), name).expect("built-in schema parses")
+    Schema::parse(builtin(name).unwrap(), name)
+        .and_then(Schema::imported)
+        .expect("built-in schema parses")
 }
 
 /// The fake provider behind the examples:
@@ -1404,6 +1514,63 @@ mod tests {
         .unwrap_err();
         assert!(format!("{e:#}").contains("unknown flag 'computd'"), "{e:#}");
         assert!(Schema::parse("type_attr(\"t\", x, \"string\", []) where foo(x)", "test").is_err());
+    }
+
+    /// A reference is named for the resource: the import drops the `_id`
+    /// of a reference attribute's name (a collection's `_ids` is its
+    /// plural) in every row that names it, and keeps the provider's name
+    /// for the boundary; an id that is not a reference keeps its name.
+    #[test]
+    fn a_reference_is_named_for_the_resource() {
+        assert_eq!(
+            reference_name("vpc_id", "ref(aws.vpc)").as_deref(),
+            Some("vpc")
+        );
+        assert_eq!(
+            reference_name("spec.subnet_id", "list(ref(net.subnet))").as_deref(),
+            Some("spec.subnet")
+        );
+        assert_eq!(
+            reference_name("group_ids", "set(ref(aws.security_group))").as_deref(),
+            Some("groups")
+        );
+        assert_eq!(reference_name("vpc_id", "string"), None);
+        assert_eq!(reference_name("vpc_ids", "ref(aws.vpc)"), None);
+        assert_eq!(reference_name("vpc", "ref(aws.vpc)"), None);
+        assert_eq!(reference_name("_id", "ref(aws.vpc)"), None);
+        let raw = Schema::parse(
+            "type_attr(\"t.s\", \"vpc_id\", \"ref(t.v)\", [\"required\"])\n\
+             type_attr(\"t.s\", \"owner_id\", \"string\", [\"computed\"])\n\
+             type_doc(\"t.s\", \"vpc_id\", \"The VPC.\")\n\
+             type_mint(\"t.s\", \"vpc_id\", \"vpc-1\")\n",
+            "test",
+        )
+        .unwrap();
+        assert!(raw.attr("t.s", "vpc_id").is_some());
+        let s = raw.imported().unwrap();
+        assert!(s.attr("t.s", "vpc").is_some_and(|a| a.has("required")));
+        assert!(s.attr("t.s", "vpc_id").is_none());
+        assert!(s.attr("t.s", "owner_id").is_some());
+        assert_eq!(
+            s.wire
+                .get(&("t.s".into(), "vpc".into()))
+                .map(String::as_str),
+            Some("vpc_id")
+        );
+        assert_eq!(s.program_name("t.s", "vpc_id"), Some("vpc"));
+        assert_eq!(s.required_doc("t.s", "vpc").as_deref(), Some("the VPC"));
+        assert!(s.mints.contains_key(&("t.s".into(), "vpc".into())));
+        // Imported twice, the same.
+        let again = s.clone().imported().unwrap();
+        assert_eq!((again.attrs, again.wire), (s.attrs, s.wire));
+        let clash = Schema::parse(
+            "type_attr(\"t.s\", \"vpc_id\", \"ref(t.v)\", [])\n\
+             type_attr(\"t.s\", \"vpc\", \"string\", [])\n",
+            "test",
+        )
+        .unwrap();
+        let e = clash.imported().unwrap_err().to_string();
+        assert!(e.contains("`vpc`, which t.s also declares"), "{e}");
     }
 
     /// A provider's Plan refuses a document without a required attribute

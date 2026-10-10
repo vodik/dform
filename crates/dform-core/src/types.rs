@@ -826,6 +826,18 @@ pub fn check(program: &Program, schema: &Schema) -> Result<()> {
         else {
             continue;
         };
+        // The provider's name of a reference the program names for the
+        // resource (`schema::reference_name`).
+        if let Some(named) = schema.program_name(typ, path) {
+            diags.push(
+                Diagnostic::error(
+                    head.span,
+                    format!("`{path}` is `{named}` here: a reference is the resource"),
+                )
+                .with_help(format!("write `{named}`")),
+            );
+            continue;
+        }
         let Some(spec) = schema.attr(typ, path) else {
             continue;
         };
@@ -1383,6 +1395,40 @@ mod tests {
             assert!(measured(t) && Ty::parse(t).measured(), "{t}");
         }
         assert!(!measured("int") && !Ty::parse("inet").measured());
+    }
+
+    /// A program that writes the provider's name of a reference is told
+    /// the name it has, at the site.
+    #[test]
+    fn the_providers_name_of_a_reference_names_the_programs() {
+        let schema = Schema::parse("type_attr(\"t.s\", \"vpc_id\", \"ref(t.v)\", [])\n", "test")
+            .and_then(Schema::imported)
+            .unwrap();
+        let s = |x: &str| Term::Val(Value::Str(x.into()));
+        let main = Term::Func {
+            name: crate::address::REF.into(),
+            args: vec![s("t.v"), s("main"), s("")],
+        };
+        let arg = |path: &str| {
+            Stmt::Fact(crate::ast::Atom {
+                pred: "arg".into(),
+                args: vec![s("t.s"), s("a"), s(path), main.clone(), s("")],
+                record: None,
+                span: Default::default(),
+            })
+        };
+        let program = |path: &str| Program {
+            statements: vec![arg(path)],
+            ..Default::default()
+        };
+        assert!(check(&program("vpc"), &schema).is_ok());
+        let e = check(&program("vpc_id"), &schema).unwrap_err();
+        let d = &e.downcast_ref::<Diagnostics>().unwrap().0[0];
+        assert_eq!(
+            d.message,
+            "`vpc_id` is `vpc` here: a reference is the resource"
+        );
+        assert_eq!(d.help.as_deref(), Some("write `vpc`"));
     }
 
     #[test]

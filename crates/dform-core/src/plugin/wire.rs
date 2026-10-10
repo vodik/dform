@@ -15,6 +15,7 @@ use crate::provider;
 use crate::value::{NullClass, Value};
 use anyhow::{Result, anyhow, bail};
 use serde_json::Value as Json;
+use std::collections::BTreeMap;
 
 impl From<NullClass> for pb::NullClass {
     fn from(c: NullClass) -> pb::NullClass {
@@ -537,6 +538,259 @@ impl Rename {
     }
 }
 
+/// A provider's attribute names where the program's differ: a reference
+/// is named for the resource (`vpc` for the provider's `vpc_id`,
+/// `schema::reference_name`). Applied at the link only, as [`Rename`] is,
+/// so the rest of dform knows the program's names and the provider its
+/// own: a call goes out through `Names::new(&schema.wire)` and its answer
+/// comes back through the [`Names::inverse`]. An attribute is renamed
+/// where the protocol carries one: a document's keys, at any depth, a
+/// change's path and values, an assertion's and a kept path, an inventory
+/// row's path and value, and a null's label (`T/N#P`) and its holder's
+/// path.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Names {
+    /// type -> path -> the path it is renamed to; the two differ in their
+    /// last key only.
+    paths: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+impl Names {
+    /// `(type, path) -> path` renames, the program's to the provider's
+    /// (`schema::Schema::wire`).
+    pub fn new(wire: &BTreeMap<(String, String), String>) -> Names {
+        let mut paths: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        for ((t, from), to) in wire {
+            paths
+                .entry(t.clone())
+                .or_default()
+                .insert(from.clone(), to.clone());
+        }
+        Names { paths }
+    }
+
+    pub fn inverse(&self) -> Names {
+        let paths = self
+            .paths
+            .iter()
+            .map(|(t, m)| {
+                (
+                    t.clone(),
+                    m.iter().map(|(a, b)| (b.clone(), a.clone())).collect(),
+                )
+            })
+            .collect();
+        Names { paths }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty()
+    }
+
+    /// The key the last segment of `path` (keys only, no indices) of
+    /// `typ` becomes, when it is renamed.
+    fn key(&self, typ: &str, path: &str) -> Option<String> {
+        let to = self.paths.get(typ)?.get(path)?;
+        crate::address::path_keys(to).pop()
+    }
+
+    /// A path as the protocol prints it (`rules[0].subnet_id`), each
+    /// segment renamed where its keys so far name a renamed attribute.
+    pub fn path(&self, typ: &str, path: &str) -> String {
+        if self.is_empty() || path.is_empty() {
+            return path.to_string();
+        }
+        let mut at = String::new();
+        let segs: Vec<String> = crate::address::path_segments(path)
+            .into_iter()
+            .map(|seg| {
+                let (key, index) = crate::address::segment_parts(seg);
+                at = crate::address::path_join(&at, &key);
+                match self.key(typ, &at) {
+                    Some(k) => format!("{}{index}", crate::address::path_key(&k)),
+                    None => seg.to_string(),
+                }
+            })
+            .collect();
+        segs.join(".")
+    }
+
+    /// A path's keys, its indices dropped: where a value at it is.
+    fn keys(path: &str) -> String {
+        crate::address::path_keys(path)
+            .iter()
+            .fold(String::new(), |at, k| {
+                let k = crate::address::segment_parts(k).0;
+                crate::address::path_join(&at, &k)
+            })
+    }
+
+    /// A null's label `T/N#P`, its path renamed by its type.
+    fn label(&self, label: &str) -> String {
+        match crate::value::null_parts(label) {
+            Some((t, n, p)) => {
+                let renamed = self.path(&t, &p);
+                match renamed == p {
+                    true => label.to_string(),
+                    false => crate::value::null_label(&t, &n, &renamed),
+                }
+            }
+            None => label.to_string(),
+        }
+    }
+
+    /// A value at `at` (keys only) of a `typ` document: each object key
+    /// whose path is renamed, and each null's label and holder's path.
+    pub fn value(&self, typ: &str, at: &str, v: &mut pb::Value) {
+        use pb::value::Kind;
+        if self.is_empty() {
+            return;
+        }
+        match &mut v.kind {
+            Some(Kind::Null(n)) => {
+                n.label = self.label(&n.label);
+                if let Some(h) = &mut n.held {
+                    h.path = self.path(&h.r#type, &h.path);
+                }
+            }
+            Some(Kind::List(l)) => l.items.iter_mut().for_each(|x| self.value(typ, at, x)),
+            Some(Kind::Obj(o)) => {
+                o.fields = std::mem::take(&mut o.fields)
+                    .into_iter()
+                    .map(|(k, mut x)| {
+                        let p = crate::address::path_join(at, &k);
+                        self.value(typ, &p, &mut x);
+                        (self.key(typ, &p).unwrap_or(k), x)
+                    })
+                    .collect();
+            }
+            _ => {}
+        }
+    }
+
+    fn some(&self, typ: &str, at: &str, v: &mut Option<pb::Value>) {
+        if let Some(v) = v {
+            self.value(typ, at, v);
+        }
+    }
+
+    /// What a call's answer is renamed by: the type it reads, plans or
+    /// applies, or the inventory relation it asks for (its rows name
+    /// their types).
+    pub fn answered_by(c: &super::backend::Call) -> Option<String> {
+        use super::backend::Call;
+        match c {
+            Call::Read(r) => Some(r.r#type.clone()),
+            Call::Plan(r) => Some(r.r#type.clone()),
+            Call::Apply(r) => Some(r.r#type.clone()),
+            Call::Query(q) if Self::inventory(&q.pred) => Some(q.pred.clone()),
+            _ => None,
+        }
+    }
+
+    /// Whether `pred` is an inventory relation, `(Type, Name, Path,
+    /// Value)`.
+    fn inventory(pred: &str) -> bool {
+        super::providers::INVENTORY
+            .iter()
+            .any(|(p, n)| *p == pred && *n == 4)
+    }
+
+    /// A call, its attribute names renamed.
+    pub fn call(&self, mut c: super::backend::Call) -> super::backend::Call {
+        use super::backend::Call;
+        if self.is_empty() {
+            return c;
+        }
+        match &mut c {
+            Call::Plan(r) => {
+                self.some(&r.r#type, "", &mut r.prior);
+                self.some(&r.r#type, "", &mut r.desired);
+            }
+            Call::Apply(r) => {
+                let typ = r.r#type.clone();
+                self.some(&typ, "", &mut r.config);
+                for a in &mut r.assertions {
+                    a.path = self.path(&typ, &a.path);
+                    self.some(&typ, &Self::keys(&a.path), &mut a.value);
+                }
+                for k in &mut r.keep {
+                    *k = self.path(&typ, k);
+                }
+            }
+            Call::Reveal(r) => {
+                if let Some(h) = &mut r.held {
+                    h.path = self.path(&h.r#type, &h.path);
+                }
+            }
+            Call::Query(r) => r.inputs.iter_mut().for_each(|v| self.value("", "", v)),
+            _ => {}
+        }
+        c
+    }
+
+    /// An answer, its attribute names renamed; `typ` what its call named
+    /// ([`Names::answered_by`]).
+    pub fn reply(&self, mut r: super::backend::Reply, typ: Option<&str>) -> super::backend::Reply {
+        use super::backend::Reply;
+        if self.is_empty() {
+            return r;
+        }
+        let typ = typ.unwrap_or_default();
+        match &mut r {
+            Reply::Read(x) => {
+                self.some(typ, "", &mut x.attrs);
+                self.some(typ, "", &mut x.computed);
+            }
+            Reply::Apply(x) => {
+                self.some(typ, "", &mut x.attrs);
+                self.some(typ, "", &mut x.computed);
+            }
+            Reply::Import(x) => {
+                let typ = x.r#type.clone();
+                self.some(&typ, "", &mut x.attrs);
+                self.some(&typ, "", &mut x.computed);
+            }
+            Reply::Plan(x) => {
+                for c in &mut x.changes {
+                    let at = Self::keys(&c.path);
+                    self.some(typ, &at, &mut c.before);
+                    self.some(typ, &at, &mut c.after);
+                    c.path = self.path(typ, &c.path);
+                }
+            }
+            Reply::Query(rows) if Self::inventory(typ) => {
+                for row in rows {
+                    self.row(&mut row.values);
+                }
+            }
+            _ => {}
+        }
+        r
+    }
+
+    /// An inventory row, `(Type, Name, Path, Value)` (`cloud_attr`,
+    /// `cloud_computed`), its path and value renamed by its type.
+    fn row(&self, values: &mut [pb::Value]) {
+        use pb::value::Kind;
+        if let [
+            pb::Value {
+                kind: Some(Kind::Str(t)),
+            },
+            _,
+            pb::Value {
+                kind: Some(Kind::Str(p)),
+            },
+            v,
+        ] = values
+        {
+            let at = Self::keys(p);
+            self.value(t, &at, v);
+            *p = self.path(t, p);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -664,6 +918,90 @@ mod tests {
         assert_eq!(
             Value::try_from(&rows[0].values[1]).unwrap(),
             Value::Str("ovh.x".into())
+        );
+    }
+
+    /// The provider is sent its own names of the attributes the program
+    /// names for the resource, wherever the protocol carries one, and
+    /// its answers come back under the program's; a key elsewhere that
+    /// happens to be one is not renamed.
+    #[test]
+    fn names_rename_attributes_where_the_protocol_carries_them() {
+        use super::super::backend::{Call, Reply};
+        let wire: BTreeMap<(String, String), String> = [
+            (("t.s".into(), "vpc".into()), "vpc_id".into()),
+            (
+                ("t.s".into(), "rules.subnet".into()),
+                "rules.subnet_id".into(),
+            ),
+        ]
+        .into();
+        let out = Names::new(&wire);
+        let req = pb::ApplyRequest {
+            r#type: "t.s".into(),
+            config: Some(doc(&json!({
+                "vpc": "vpc-1",
+                "tags": {"vpc": "x"},
+                "rules": [{"subnet": "s-1", "port": 80}],
+                "peer": {"$secret": "t.s/b#vpc"},
+            }))),
+            assertions: vec![pb::Assertion {
+                path: "vpc".into(),
+                ..Default::default()
+            }],
+            keep: vec!["rules[0].subnet".into()],
+            ..Default::default()
+        };
+        let Call::Apply(sent) = out.call(Call::Apply(req)) else {
+            unreachable!()
+        };
+        assert_eq!(
+            from_doc(sent.config.as_ref().unwrap()).unwrap(),
+            json!({
+                "vpc_id": "vpc-1",
+                "tags": {"vpc": "x"},
+                "rules": [{"subnet_id": "s-1", "port": 80}],
+                "peer": {"$secret": "t.s/b#vpc_id"},
+            })
+        );
+        assert_eq!(sent.assertions[0].path, "vpc_id");
+        assert_eq!(sent.keep, ["rules[0].subnet_id"]);
+        let back = out.inverse();
+        let plan = pb::PlanResponse {
+            changes: vec![pb::Change {
+                path: "rules[0].subnet_id".into(),
+                ..Default::default()
+            }],
+            requires_replace: false,
+        };
+        let Reply::Plan(plan) = back.reply(Reply::Plan(plan), Some("t.s")) else {
+            unreachable!()
+        };
+        assert_eq!(plan.changes[0].path, "rules[0].subnet");
+        let read = pb::ReadResponse {
+            found: true,
+            attrs: Some(doc(&json!({"vpc_id": "vpc-1"}))),
+            computed: None,
+        };
+        let Reply::Read(read) = back.reply(Reply::Read(read), Some("t.s")) else {
+            unreachable!()
+        };
+        assert_eq!(
+            from_doc(read.attrs.as_ref().unwrap()).unwrap(),
+            json!({"vpc": "vpc-1"})
+        );
+        // Another type's document is its own.
+        let other = pb::ReadResponse {
+            found: true,
+            attrs: Some(doc(&json!({"vpc_id": "vpc-1"}))),
+            computed: None,
+        };
+        let Reply::Read(other) = back.reply(Reply::Read(other), Some("t.u")) else {
+            unreachable!()
+        };
+        assert_eq!(
+            from_doc(other.attrs.as_ref().unwrap()).unwrap(),
+            json!({"vpc_id": "vpc-1"})
         );
     }
 }

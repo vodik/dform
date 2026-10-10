@@ -730,7 +730,7 @@ impl Server<'_> {
                     Source::Mock(name) => return builtin_schema(&name),
                 };
                 let f = if f.is_absolute() { f } else { dir.join(f) };
-                let schema = Schema::load(&f).ok()?;
+                let schema = Schema::load(&f).and_then(Schema::imported).ok()?;
                 Some((f, Arc::new(schema)))
             })
             .collect()
@@ -1126,7 +1126,7 @@ fn builtin_schema(name: &str) -> Option<(PathBuf, Arc<Schema>)> {
     read.entry(name.to_string())
         .or_insert_with(|| {
             let text = dform_core::schema::builtin(name)?;
-            let schema = Schema::parse(text, name).ok()?;
+            let schema = Schema::parse(text, name).and_then(Schema::imported).ok()?;
             Some((
                 cached(&format!("schemas/{name}.df"), text)?,
                 Arc::new(schema),
