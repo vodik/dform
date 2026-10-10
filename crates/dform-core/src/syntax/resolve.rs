@@ -33,8 +33,9 @@ use crate::ast::{
 };
 use crate::diag::Diagnostic;
 use crate::program::node::CopyKind;
+use crate::program::node::{BinOp, ExprKind};
 use crate::program::scope::{self as scopes, DeclKind, DeclRef, Names, Reach};
-use crate::program::{ItemId, Read, ScopeId};
+use crate::program::{ExprId, ItemId, Read, ScopeId};
 use crate::spell;
 use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -608,6 +609,14 @@ enum Res {
     },
     /// A variable with fields or indexes.
     Var { var: Term, path: Vec<Seg> },
+}
+
+/// A term as built (R-211 step 7): its node, or, for a form whose node
+/// is not built from the tree yet, what the resolver lowered it to and the
+/// reads it made.
+enum Built {
+    Node(ExprId),
+    Lowered(Term, Vec<Lit>),
 }
 
 /// Where a term stands: a whole value (a field, a head argument, an
@@ -7391,80 +7400,153 @@ impl<'u> Lowerer<'u> {
 
     // --- terms ------------------------------------------------------------
 
+    /// A term as its node (R-211 step 7), the reads it makes held by the
+    /// node; a read no node of it holds goes into `pre`. A form whose node
+    /// is not built from the tree yet is built from what the resolver
+    /// lowered it to.
+    fn expr(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<ExprId> {
+        match self.built(rc, n, pos, pre)? {
+            Built::Node(id) => Ok(id),
+            Built::Lowered(t, reads) => {
+                let span = self.span(n);
+                let (id, left) = self.building(rc, span, |b| b.part(&t, &reads));
+                pre.extend(left);
+                Ok(id)
+            }
+        }
+    }
+
+    /// A term as a rule holds it, the reads it makes into `pre`: lowered
+    /// from its node.
     fn term(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
-        let (before, made) = (pre.len(), self.helpers.len());
-        let t = self.term_of(rc, n, pos, pre);
+        Ok(match self.built(rc, n, pos, pre)? {
+            Built::Node(id) => self.lowered(id, pre),
+            Built::Lowered(t, reads) => {
+                pre.extend(reads);
+                t
+            }
+        })
+    }
+
+    /// The term the node `id` lowers to, the reads it makes into `pre`.
+    fn lowered(&self, id: ExprId, pre: &mut Vec<Lit>) -> Term {
+        let (t, reads) = crate::program::lower_expr(&self.program, id);
+        pre.extend(reads);
+        t
+    }
+
+    /// The term `n` built; the helper statements made while it is are its
+    /// terms'. Under `DFORM_CHECK_LOWER=1` a term built from what it was
+    /// lowered to is built back and compared (`program::check::term`).
+    fn built(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Built> {
+        let made = self.helpers.len();
+        let b = self.built_of(rc, n, pos, pre);
         if let Some(s) = &mut self.gather {
             s.term(made..self.helpers.len());
         }
-        let t = t?;
-        // R-211 step 3: under `DFORM_CHECK_LOWER=1` each term is also built
-        // as nodes from what it lowered to and lowered back, the two
-        // compared (`program::check::term`).
-        if crate::program::check::enabled()
-            && let Some(reads) = pre.get(before..)
+        let b = b?;
+        if let Built::Lowered(t, reads) = &b
+            && crate::program::check::enabled()
         {
             let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
-            crate::program::check::term(&t, reads, self.span(n), &|v| written.contains(v));
+            crate::program::check::term(t, reads, self.span(n), &|v| written.contains(v));
         }
-        Ok(t)
+        Ok(b)
     }
 
-    fn term_of(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
-        match n.kind() {
-            LITERAL => self.literal(rc, n, pre),
-            CHAIN | CALL_CHAIN => self.chain_term(rc, n, pos, pre),
-            CALL => self.call(rc, n, pos, pre),
-            LIST => self.list(rc, n, pos, pre),
-            OBJECT => self.object(rc, n, pos, pre),
-            SPREAD => self.misplaced_spread(n),
-            COMPREHENSION => self.comprehension(rc, n, pos),
+    fn built_of(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Built> {
+        let node = Built::Node;
+        let mut reads = Vec::new();
+        let t = match n.kind() {
+            LITERAL => return self.literal(rc, n, pre).map(node),
             PAREN => {
                 let inner = terms(n).next().ok_or(Skip)?;
-                self.bind(false, |l| l.term(rc, &inner, Pos::Content, pre))
+                return self
+                    .bind(false, |l| l.expr(rc, &inner, Pos::Content, pre))
+                    .map(node);
             }
-            TUPLE => self.tuple_value(n),
-            BIN_EXPR => self.binary(rc, n, pre),
-            UNARY_EXPR => self.unary(rc, n, pre),
-            RANGE => self.range(rc, n, pre),
+            BIN_EXPR => return self.binary(rc, n, pre).map(node),
+            UNARY_EXPR => return self.unary(rc, n, pre).map(node),
+            RANGE => return self.range(rc, n, pre).map(node),
+            SPREAD => return self.misplaced_spread(n),
+            TUPLE => return self.tuple_value(n),
+            CHAIN | CALL_CHAIN => self.chain_term(rc, n, pos, &mut reads),
+            CALL => self.call(rc, n, pos, &mut reads),
+            LIST => self.list(rc, n, pos, &mut reads),
+            OBJECT => self.object(rc, n, pos, &mut reads),
+            COMPREHENSION => self.comprehension(rc, n, pos),
             k => {
                 let span = self.span(n);
-                self.error(span, format!("unexpected {k:?} as a term"))
+                return self.error(span, format!("unexpected {k:?} as a term"));
             }
+        };
+        Ok(Built::Lowered(t?, reads))
+    }
+
+    /// `f` with a builder of the statement's nodes at `span`, its variables
+    /// the statement's (none outside one).
+    fn building<T>(
+        &mut self,
+        rc: &Rc,
+        span: Span,
+        f: impl FnOnce(&mut crate::program::Builder) -> T,
+    ) -> T {
+        let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
+        let written = |v: &str| written.contains(v);
+        match self.gather.as_mut() {
+            Some(g) => {
+                let mut b = g.builder(&mut self.program, span, &written);
+                let out = f(&mut b);
+                g.done(b);
+                out
+            }
+            None => f(&mut crate::program::Builder::new(
+                &mut self.program,
+                span,
+                &written,
+            )),
         }
+    }
+
+    /// A node of the program at `span`.
+    fn node(&mut self, span: Span, kind: ExprKind) -> ExprId {
+        self.program.exprs.insert(crate::program::Expr {
+            span,
+            kind,
+            hoisted: None,
+        })
+    }
+
+    /// The term node `id` is, its reads aside: what a typing of a term
+    /// reads (`types::operands`, `types::range_ends`).
+    fn term_of(&self, id: ExprId) -> Term {
+        crate::program::lower_expr(&self.program, id).0
+    }
+
+    /// `id`, whose term is `was`, as a typing read it, `now` (an ambiguous
+    /// quantity read as the other side's dimension, R-66): the node of the
+    /// constant `now` where it differs.
+    fn read_as(&mut self, id: ExprId, was: &Term, now: Term) -> ExprId {
+        if format!("{now:?}") == format!("{was:?}") {
+            return id;
+        }
+        let Term::Val(v) = now else { return id };
+        let span = self.program.exprs[id].span;
+        self.node(span, ExprKind::Lit(v))
     }
 
     /// A literal: an int, a quantity (R-66), a string, a bool.
-    fn literal(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<Term> {
-        let span = self.span(n);
-        let first = || tokens(n).next().unwrap();
-        let t = first();
-        match t.kind() {
-            INT => match t.text().parse::<i64>() {
-                Ok(i) => Ok(Term::Val(Value::Int(i))),
-                Err(_) => self.error(span, "integer out of range"),
-            },
-            // A quantity (R-66): `500m` and `0.5` wait for the
-            // type of their position (`types::literal`, the
-            // schema's in `types::read`).
-            QUANTITY => match crate::quantity::literal(t.text()) {
-                Ok(crate::quantity::Literal::Known(q)) => Ok(Term::Val(Value::Quantity(q))),
-                Ok(crate::quantity::Literal::Ambiguous) => {
-                    Ok(crate::types::ambiguous_literal(t.text(), span))
-                }
-                Err(why) => self.error(span, why),
-            },
-            STRING => self.string_term(rc, &t, pre),
-            TRUE_KW => Ok(Term::Val(Value::Bool(true))),
-            _ => Ok(Term::Val(Value::Bool(false))),
+    fn literal(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<ExprId> {
+        match tokens(n).next() {
+            Some(t) if t.kind() == STRING => self.string_expr(rc, &t, pre),
+            _ => self.literal_expr(n),
         }
     }
 
-    /// A literal's node, as [`Lowerer::literal`] reads it: an int, a
-    /// quantity (one whose dimension its position decides kept as written),
-    /// a string with no interpolation, a bool.
-    fn literal_expr(&mut self, n: &SyntaxNode) -> L<crate::program::ExprId> {
-        use crate::program::node::ExprKind;
+    /// A literal's node: an int, a quantity (one whose dimension its
+    /// position decides kept as written), a string read whole (its holes
+    /// are [`Lowerer::string_expr`]'s), a bool.
+    fn literal_expr(&mut self, n: &SyntaxNode) -> L<ExprId> {
         let span = self.span(n);
         let t = tokens(n).next().ok_or(Skip)?;
         let kind = match t.kind() {
@@ -7483,11 +7565,7 @@ impl<'u> Lowerer<'u> {
             TRUE_KW => ExprKind::Lit(Value::Bool(true)),
             _ => ExprKind::Lit(Value::Bool(false)),
         };
-        Ok(self.program.exprs.insert(crate::program::Expr {
-            span,
-            kind,
-            hoisted: None,
-        }))
+        Ok(self.node(span, kind))
     }
 
     /// A chain: `x.len` (R-155), a resource by its bare name given as a
@@ -7687,7 +7765,7 @@ impl<'u> Lowerer<'u> {
 
     /// Arithmetic; `us-east` and `us-test-1a`, meant as strings, are
     /// errors that say so.
-    fn binary(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<Term> {
+    fn binary(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<ExprId> {
         let span = self.span(n);
         let ts: Vec<SyntaxNode> = terms(n).collect();
         let op = tokens(n).next().ok_or(Skip)?;
@@ -7729,64 +7807,70 @@ impl<'u> Lowerer<'u> {
             self.diags.push(d);
             return Err(Skip);
         }
-        let name = match op.kind() {
-            PLUS => "add",
-            MINUS => "sub",
-            STAR => "mul",
-            SLASH => "div",
-            _ => "mod",
+        let bin = match op.kind() {
+            PLUS => BinOp::Add,
+            MINUS => BinOp::Sub,
+            STAR => BinOp::Mul,
+            SLASH => BinOp::Div,
+            _ => BinOp::Mod,
         };
-        let a = self.bind(false, |l| l.term(rc, &ts[0], Pos::Content, pre))?;
-        let b = self.bind(false, |l| l.term(rc, &ts[1], Pos::Content, pre))?;
-        match crate::types::operands(op.text(), a, b) {
-            Ok((a, b)) => Ok(func(name, vec![a, b])),
+        let a = self.bind(false, |l| l.expr(rc, &ts[0], Pos::Content, pre))?;
+        let b = self.bind(false, |l| l.expr(rc, &ts[1], Pos::Content, pre))?;
+        let (ta, tb) = (self.term_of(a), self.term_of(b));
+        match crate::types::operands(op.text(), ta.clone(), tb.clone()) {
+            Ok((x, y)) => {
+                let lhs = self.read_as(a, &ta, x);
+                let rhs = self.read_as(b, &tb, y);
+                Ok(self.node(span, ExprKind::Binary { op: bin, lhs, rhs }))
+            }
             Err(why) => self.error(span, why),
         }
     }
 
     /// A negation: of a literal, its value.
-    fn unary(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<Term> {
+    fn unary(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<ExprId> {
         let span = self.span(n);
         let inner = terms(n).next().ok_or(Skip)?;
-        Ok(
-            match self.bind(false, |l| l.term(rc, &inner, Pos::Content, pre))? {
-                Term::Val(Value::Int(i)) if inner.kind() == LITERAL => Term::Val(Value::Int(-i)),
-                Term::Val(Value::Quantity(q)) if inner.kind() == LITERAL => {
-                    match q.checked_mul(-1) {
-                        Some(q) => Term::Val(Value::Quantity(q)),
-                        None => return self.error(span, "quantity out of range"),
-                    }
+        let e = self.bind(false, |l| l.expr(rc, &inner, Pos::Content, pre))?;
+        let kind = match &self.program.exprs[e].kind {
+            ExprKind::Lit(Value::Int(i)) if inner.kind() == LITERAL => {
+                ExprKind::Lit(Value::Int(-i))
+            }
+            ExprKind::Lit(Value::Quantity(q)) if inner.kind() == LITERAL => {
+                match q.checked_mul(-1) {
+                    Some(q) => ExprKind::Lit(Value::Quantity(q)),
+                    None => return self.error(span, "quantity out of range"),
                 }
-                t => func("sub", vec![Term::Val(Value::Int(0)), t]),
-            },
-        )
+            }
+            _ => ExprKind::Neg(e),
+        };
+        Ok(self.node(span, kind))
     }
 
     /// `lo..hi` (its end left out) or `lo..=hi` (its end in it): a range
     /// (R-180), the value when its ends are known, else
     /// `__range(lo, hi, inclusive)`. An ambiguous quantity end is read as
     /// the other end's (`100m..=1` is a cpu's).
-    fn range(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<Term> {
+    fn range(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<ExprId> {
+        let span = self.span(n);
         let ends: Vec<SyntaxNode> = terms(n).collect();
         let [lo, hi] = ends.as_slice() else {
             return Err(Skip);
         };
-        let lo = self.term(rc, lo, Pos::Content, out)?;
-        let hi = self.term(rc, hi, Pos::Content, out)?;
-        let (lo, hi) = crate::types::range_ends(lo, hi);
-        let inclusive = Term::Val(Value::Bool(tokens(n).any(|t| t.kind() == DOT2_EQ)));
-        let call = match crate::types::folded(vec![lo, hi, inclusive]) {
-            Ok(t) => return Ok(t),
-            Err(call) => call,
-        };
-        // Known ends that make no range: why.
-        if let Term::Func { args, .. } = &call
-            && let [Term::Val(a), Term::Val(b), Term::Val(Value::Bool(i))] = args.as_slice()
-            && let Err(why) = crate::range::Range::new(a.clone(), b.clone(), *i)
-        {
-            return self.error(self.span(n), format!("`{}` is no range: {why}", n.text()));
+        let lo = self.expr(rc, lo, Pos::Content, out)?;
+        let hi = self.expr(rc, hi, Pos::Content, out)?;
+        let (tl, th) = (self.term_of(lo), self.term_of(hi));
+        let (rl, rh) = crate::types::range_ends(tl.clone(), th.clone());
+        let inclusive = tokens(n).any(|t| t.kind() == DOT2_EQ);
+        if let (Term::Val(a), Term::Val(b)) = (&rl, &rh) {
+            match crate::range::Range::new(a.clone(), b.clone(), inclusive) {
+                Ok(r) => return Ok(self.node(span, ExprKind::Lit(r.into()))),
+                // Known ends that make no range: why.
+                Err(why) => return self.error(span, format!("`{}` is no range: {why}", n.text())),
+            }
         }
-        Ok(call)
+        let (lo, hi) = (self.read_as(lo, &tl, rl), self.read_as(hi, &th, rh));
+        Ok(self.node(span, ExprKind::Range { lo, hi, inclusive }))
     }
 
     /// A string literal: `"a${e}b"` is `str.format("a%sb", e)` (H-13), `$${`
@@ -7829,29 +7913,22 @@ impl<'u> Lowerer<'u> {
     }
 
     fn string_term(&mut self, rc: &mut Rc, t: &SyntaxToken, pre: &mut Vec<Lit>) -> L<Term> {
+        let id = self.string_expr(rc, t, pre)?;
+        Ok(self.lowered(id, pre))
+    }
+
+    /// [`Lowerer::string_term`] as its node: its text, or its pieces of
+    /// text and holes.
+    fn string_expr(&mut self, rc: &mut Rc, t: &SyntaxToken, pre: &mut Vec<Lit>) -> L<ExprId> {
+        use crate::program::node::Piece as Part;
         let text = t.text();
-        if self.text || !text.contains("${") {
-            return Ok(str_term(&self.string(t)?));
-        }
         let span = self.span_of(t.text_range());
+        if self.text || !text.contains("${") {
+            let s = self.string(t)?;
+            return Ok(self.node(span, ExprKind::Lit(Value::Str(s))));
+        }
         let base: u32 = t.text_range().start().into();
-        let mut fmt = String::new();
-        let mut args = Vec::new();
-        let flush = |lit: &str, fmt: &mut String, l: &mut Self| -> L<()> {
-            let s = unescape(&format!("\"{lit}\"")).map_err(|e| {
-                l.diags.push(Diagnostic::error(span, e));
-                Skip
-            })?;
-            if s.contains("%s") {
-                l.diags.push(Diagnostic::error(
-                    span,
-                    "an interpolated string cannot hold `%s`",
-                ));
-                return Err(Skip);
-            }
-            fmt.push_str(&s);
-            Ok(())
-        };
+        let mut parts = Vec::new();
         let ps = match scan(text) {
             Ok(ps) => ps,
             Err(at) => {
@@ -7865,24 +7942,39 @@ impl<'u> Lowerer<'u> {
         };
         for p in ps {
             match p {
-                Piece::Text(lit) => flush(&lit, &mut fmt, self)?,
+                Piece::Text(lit) => {
+                    let s = unescape(&format!("\"{lit}\"")).map_err(|e| {
+                        self.diags.push(Diagnostic::error(span, e));
+                        Skip
+                    })?;
+                    if s.contains("%s") {
+                        return self.error(span, "an interpolated string cannot hold `%s`");
+                    }
+                    if !s.is_empty() {
+                        parts.push(Part::Text(s));
+                    }
+                }
                 Piece::Hole(hole, at) => {
-                    fmt.push_str("%s");
                     let at = base + at as u32;
-                    args.push(self.bind(false, |l| l.hole(rc, hole, at, pre))?);
+                    parts.push(Part::Hole(self.bind(false, |l| l.hole(rc, hole, at, pre))?));
                 }
             }
         }
-        if args.is_empty() {
-            return Ok(str_term(&fmt));
+        if !parts.iter().any(|p| matches!(p, Part::Hole(_))) {
+            let s: String = parts
+                .into_iter()
+                .map(|p| match p {
+                    Part::Text(s) => s,
+                    Part::Hole(_) => unreachable!("no hole"),
+                })
+                .collect();
+            return Ok(self.node(span, ExprKind::Lit(Value::Str(s))));
         }
-        let mut all = vec![str_term(&fmt)];
-        all.extend(args);
-        Ok(func(crate::address::FORMAT, all))
+        Ok(self.node(span, ExprKind::Interp { parts }))
     }
 
     /// An interpolation hole: a term, read now (a content position).
-    fn hole(&mut self, rc: &mut Rc, src: &str, at: u32, pre: &mut Vec<Lit>) -> L<Term> {
+    fn hole(&mut self, rc: &mut Rc, src: &str, at: u32, pre: &mut Vec<Lit>) -> L<ExprId> {
         // A variable `in T` types is a reference: it interpolates as its
         // address, `T["A"]`, as an untyped one does (R-42).
         let parse = parse::parse_term(src.trim());
@@ -7891,7 +7983,7 @@ impl<'u> Lowerer<'u> {
             .and_then(|t| Chain::of(&t))
             .is_some_and(|c| c.is_bare() && rc.types.contains_key(&c.head));
         let pos = if typed { Pos::Value } else { Pos::Content };
-        self.text_term(rc, src, at, pos, pre)
+        self.text_expr(rc, src, at, pos, pre)
     }
 
     /// A block entry's value: its term, or, for an entry that is only a
@@ -7951,6 +8043,19 @@ impl<'u> Lowerer<'u> {
         pos: Pos,
         pre: &mut Vec<Lit>,
     ) -> L<Term> {
+        let id = self.text_expr(rc, src, at, pos, pre)?;
+        Ok(self.lowered(id, pre))
+    }
+
+    /// [`Lowerer::text_term`] as its node.
+    fn text_expr(
+        &mut self,
+        rc: &mut Rc,
+        src: &str,
+        at: u32,
+        pos: Pos,
+        pre: &mut Vec<Lit>,
+    ) -> L<ExprId> {
         let parse = parse::parse_term(src);
         let saved = self.offset;
         self.offset += at;
@@ -7969,7 +8074,7 @@ impl<'u> Lowerer<'u> {
             }
             let root = parse.syntax();
             let t = terms(&root).next().ok_or(Skip)?;
-            self.term(rc, &t, pos, pre)
+            self.expr(rc, &t, pos, pre)
         })();
         self.offset = saved;
         r
