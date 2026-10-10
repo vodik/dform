@@ -203,7 +203,14 @@ fn walk(name: &str, root: &Path, every_token: bool) -> Vec<String> {
             for loc in &def {
                 let (file, start, covered) = target(loc);
                 let whole_file = start == (0, 0) && covered.is_empty();
-                if !whole_file && !covered.split(['.', '(', ' ']).any(|s| s == t.text()) {
+                // A reference the program names for the resource goes to
+                // the provider's name of it (`vpc` to `vpc_id`).
+                let reference = dform_core::schema::reference_name(&covered, "list(ref(T))")
+                    .is_some_and(|n| n == t.text());
+                if !whole_file
+                    && !reference
+                    && !covered.split(['.', '(', ' ']).any(|s| s == t.text())
+                {
                     problems.push(format!(
                         "{here}: definition {}:{}:{} covers `{covered}`, not the name",
                         file.display(),

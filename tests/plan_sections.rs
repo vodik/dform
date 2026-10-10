@@ -108,7 +108,7 @@ fn a_keyless_set_diffs_by_element() {
     let r = aws(&s, "plan").success();
     assert!(
         r.stdout.contains(
-            "  ~ aws.security_group web  stacks/aws_demo.df:24\n      - ingress[]\n          cidr_blocks[0] = \"0.0.0.0/0\"\n          from_port = 22\n          protocol = \"tcp\"\n          to_port = 22\n"
+            "  ~ aws.security_group web  stacks/aws_demo.df:20\n      - ingress[]\n          cidr_blocks[0] = \"0.0.0.0/0\"\n          from_port = 22\n          protocol = \"tcp\"\n          to_port = 22\n"
         ),
         "{}",
         r.stdout
