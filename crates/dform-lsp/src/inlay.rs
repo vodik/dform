@@ -9,7 +9,7 @@
 use crate::analysis::{self, Evaluated, Planned, Where};
 use crate::cells;
 use crate::refs::Project;
-use dform_core::ir::Address;
+use dform_core::address::Address;
 use dform_core::syntax::{SyntaxKind, SyntaxNode};
 use std::path::Path;
 

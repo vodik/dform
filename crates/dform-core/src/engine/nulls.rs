@@ -97,7 +97,7 @@ impl Rec<'_> {
     fn blocked(&self, t: &Term, state: &HashMap<String, Value>) -> bool {
         match blocked_by_null(t, state) {
             Some((name, nulls)) => {
-                match name == crate::ir::SCOPED || name == crate::ir::REF {
+                match name == crate::address::SCOPED || name == crate::address::REF {
                     true => self.stuck(state, nulls, "resource address carries a null"),
                     false => self.stuck_in(state, nulls, &name),
                 }
@@ -175,7 +175,7 @@ fn blocked_by_null(t: &Term, state: &HashMap<String, Value>) -> Option<(String, 
                 return None;
             }
             // A template over held secrets has its value (R-218).
-            if name == crate::ir::FORMAT && eval_term(t, state).is_some() {
+            if name == crate::address::FORMAT && eval_term(t, state).is_some() {
                 return None;
             }
             let mut nulls = BTreeSet::new();

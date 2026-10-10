@@ -184,11 +184,11 @@ pub fn normalize_contribution(typ: &str, path: &str, value: Term) -> (String, Te
     if typ == OUTPUT {
         return (path.to_string(), value);
     }
-    let segs = crate::ir::path_segments(path);
+    let segs = crate::address::path_segments(path);
     let first = segs[0].to_string();
     let value = segs[1..].iter().rev().fold(value, |v, k| {
         Term::Obj(BTreeMap::from([(
-            crate::ir::segment_key(k).into_owned(),
+            crate::address::segment_key(k).into_owned(),
             v,
         )]))
     });
@@ -1183,7 +1183,7 @@ fn resource_to_stmts(r: Resource) -> Result<Vec<Stmt>> {
                 body.push(Lit::Eq(
                     Term::Var(x.clone()),
                     Term::Func {
-                        name: crate::ir::RESOURCE_BODY.into(),
+                        name: crate::address::RESOURCE_BODY.into(),
                         args: vec![f.value],
                     },
                 ));
@@ -1194,7 +1194,7 @@ fn resource_to_stmts(r: Resource) -> Result<Vec<Stmt>> {
                 body.push(Lit::Eq(
                     Term::Var(p.clone()),
                     Term::Func {
-                        name: crate::ir::NAME_SEGMENT.into(),
+                        name: crate::address::NAME_SEGMENT.into(),
                         args: vec![Term::Var(k)],
                     },
                 ));
@@ -1300,7 +1300,7 @@ fn unread_field_reports(r: &Resource, n: &mut usize) -> Vec<Stmt> {
             .all(|v| bound.contains(v));
         let resource = if names_bound {
             Term::Func {
-                name: crate::ir::FORMAT.into(),
+                name: crate::address::FORMAT.into(),
                 args: vec![str_term("%s.%s"), r.typ.clone(), r.name.clone()],
             }
         } else {
@@ -1593,7 +1593,7 @@ pub const REMOTE_NAME: &str = "remote_name";
 pub fn remote_name_prelude(schema: &Schema) -> Vec<RuleStmt> {
     let mut out = Vec::new();
     for (t, p) in &schema.remote_name {
-        let segs = crate::ir::path_segments(p);
+        let segs = crate::address::path_segments(p);
         let rest = segs[1..].join(".");
         let tt = str_term(t);
         let (top, value) = normalize_contribution(t, p, var("__Name"));
@@ -1652,7 +1652,7 @@ pub fn check_computed_writes(rules: &[RuleStmt], facts: &[Atom], schema: &Schema
         for path in paths {
             if schema.class_of(t, &path).is_some() {
                 let addr = match &h.args[1] {
-                    Term::Val(Value::Str(a)) => crate::ir::Address {
+                    Term::Val(Value::Str(a)) => crate::address::Address {
                         typ: t.to_string(),
                         name: a.clone(),
                     }
@@ -1686,7 +1686,7 @@ fn leaf_paths(t: &Term, prefix: &str, out: &mut Vec<String>) {
         _ => return,
     };
     for (k, v) in entries {
-        let p = crate::ir::path_join(prefix, k);
+        let p = crate::address::path_join(prefix, k);
         if let Some(v) = v {
             leaf_paths(v, &p, out);
         } else if let Term::Val(Value::Obj(m)) = t {
@@ -1753,7 +1753,7 @@ pub fn computed_reads(statements: &[Stmt], schema: &Schema) -> Vec<(Span, String
                     .is_some_and(|c| c != NullClass::Secret)
             })?;
             let at = match addr {
-                Term::Val(Value::Str(a)) => crate::ir::scope_split(a)
+                Term::Val(Value::Str(a)) => crate::address::scope_split(a)
                     .map_or(a.as_str(), |(_, n)| n)
                     .to_string(),
                 other => format!("{t}[{}]", spell::term(other)),
@@ -1955,7 +1955,7 @@ fn unanswered_read(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -> 
     let (typ, addr) = (read.args[0].clone(), read.args[1].clone());
     let from = if head.pred == "arg" && head.args.len() == 5 {
         Term::Func {
-            name: crate::ir::FORMAT.into(),
+            name: crate::address::FORMAT.into(),
             args: vec![
                 str_term("%s.%s"),
                 head.args[0].clone(),
@@ -2033,7 +2033,7 @@ fn unanswered_read(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -> 
 /// address.
 fn references(t: &Term, out: &mut Vec<(Term, Term)>) {
     match t {
-        Term::Func { name, args } if name == crate::ir::REF && args.len() == 3 => {
+        Term::Func { name, args } if name == crate::address::REF && args.len() == 3 => {
             if let (Term::Val(Value::Str(_)), Term::Val(Value::Str(p))) = (&args[0], &args[2])
                 && p.is_empty()
             {
@@ -2088,7 +2088,7 @@ fn rewrite_term_refs(
     reads: &mut Vec<(Atom, String)>,
 ) -> Term {
     match t {
-        Term::Func { name, args } if name == crate::ir::REF && args.len() == 3 => {
+        Term::Func { name, args } if name == crate::address::REF && args.len() == 3 => {
             if let (Term::Val(Value::Str(typ)), Term::Val(Value::Str(path))) = (&args[0], &args[2])
             {
                 let class = schema
@@ -2114,7 +2114,7 @@ fn rewrite_term_refs(
                     }
                     *n += 1;
                     let v = var(&format!("__ref{n}"));
-                    let (top, rest) = match crate::ir::path_split_first(path) {
+                    let (top, rest) = match crate::address::path_split_first(path) {
                         Some((top, rest)) => (top, Some(rest)),
                         None => (path.as_str(), None),
                     };

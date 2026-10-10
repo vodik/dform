@@ -411,7 +411,7 @@ fn pattern(t: &crate::ast::Term) -> String {
     use crate::ast::Term;
     match t {
         Term::Val(crate::value::Value::Str(s)) => s.clone(),
-        Term::Func { name, args } if name == crate::ir::FORMAT => match args.first() {
+        Term::Func { name, args } if name == crate::address::FORMAT => match args.first() {
             Some(Term::Val(crate::value::Value::Str(t))) => t.replace("%s", "*"),
             _ => "*".to_string(),
         },

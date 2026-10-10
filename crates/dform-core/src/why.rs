@@ -8,6 +8,7 @@
 //! failed on what. The language server's explain prints a fact the same
 //! way ([`fact_text`]).
 
+use crate::address;
 use crate::ast::{Atom, Lit, Term};
 use crate::engine::{self, EvalResult};
 use crate::ir;
@@ -62,7 +63,7 @@ pub struct Context<'a> {
 pub type Lookup<'a> = dyn Fn(&str) -> Option<String> + 'a;
 
 /// A text an attribute of a resource maps to, when it has one.
-pub type AttrLookup<'a> = dyn Fn(&ir::Address, &str) -> Option<String> + 'a;
+pub type AttrLookup<'a> = dyn Fn(&address::Address, &str) -> Option<String> + 'a;
 
 /// What `why` cannot read: the forms it takes, a path's as the plan
 /// prints them, a row's and a deny's.
@@ -137,7 +138,7 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
     }
     // A contribution of the resource that reads what nothing derives
     // answered nothing (R-183): say the read, as the plan's error does.
-    let holders: BTreeSet<ir::Address> =
+    let holders: BTreeSet<address::Address> =
         matched.iter().filter_map(|(a, _)| resource_of(a)).collect();
     let mut unset: Vec<String> = Vec::new();
     for d in cx.res.facts.iter().filter_map(report::Unanswered::of) {
@@ -188,7 +189,7 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
 
 /// Each attribute the resource at `addr` leaves unset that its schema
 /// requires, a line `  PATH  (WHAT IT IS)`.
-fn unset_required(addr: &ir::Address, cx: &Context) -> Vec<String> {
+fn unset_required(addr: &address::Address, cx: &Context) -> Vec<String> {
     let Some(schema) = cx.schema else {
         return Vec::new();
     };
@@ -210,10 +211,10 @@ fn unset_required(addr: &ir::Address, cx: &Context) -> Vec<String> {
 }
 
 /// The resource a `want` or an `attr` fact is of.
-fn resource_of(a: &Atom) -> Option<ir::Address> {
+fn resource_of(a: &Atom) -> Option<address::Address> {
     match (a.pred.as_str(), a.args.as_slice()) {
         ("want" | "attr", [Term::Val(Value::Str(t)), Term::Val(Value::Str(n)), ..]) => {
-            Some(ir::Address {
+            Some(address::Address {
                 typ: t.clone(),
                 name: n.clone(),
             })
@@ -560,7 +561,7 @@ impl Chains<'_> {
         let [Term::Val(Value::Str(t)), Term::Val(Value::Str(n))] = a.args.as_slice() else {
             return None;
         };
-        let addr = ir::Address {
+        let addr = address::Address {
             typ: t.clone(),
             name: n.clone(),
         };
@@ -597,7 +598,7 @@ impl Chains<'_> {
     /// `  in node agent-1  k3s.df:12  with i = 1`.
     fn copies_of(&self, name: &str) -> String {
         let (printer, res) = (self.printer, self.res);
-        let mut copies: Vec<(ir::Address, &Atom)> = res
+        let mut copies: Vec<(address::Address, &Atom)> = res
             .facts
             .iter()
             .filter_map(|a| Some((crate::modules::copy_by_clause(a)?, a)))
@@ -724,7 +725,7 @@ impl Chains<'_> {
             let mut part = Value::Obj(Default::default());
             for &i in g.leaves.iter().filter(|&&i| !noted[i]) {
                 let (rel, leaf) = &found[i];
-                let below = &rel[(g.depth - ir::tokens(&base).len()).min(rel.len())..];
+                let below = &rel[(g.depth - address::tokens(&base).len()).min(rel.len())..];
                 nest(&mut part, below, leaf.clone());
             }
             items.push(report::ChainItem {
@@ -751,7 +752,7 @@ impl Chains<'_> {
             .iter()
             .map(|(keys, _)| {
                 keys.iter()
-                    .fold(base.to_string(), |p, k| crate::ir::path_join(&p, k))
+                    .fold(base.to_string(), |p, k| crate::address::path_join(&p, k))
             })
             .collect();
         let resource = matches!(f.args.first(), Some(Term::Val(Value::Str(t)))
@@ -837,7 +838,7 @@ fn head_name(f: &Atom, stack_keys: &BTreeSet<String>) -> Option<String> {
             format!("{kind} {scoped}")
         }
         _ => report::attribute(
-            &ir::Address {
+            &address::Address {
                 typ: t.clone(),
                 name: n.clone(),
             },

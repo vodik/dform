@@ -1,3 +1,4 @@
+pub mod address;
 pub mod approval;
 pub mod ast;
 pub mod audit;

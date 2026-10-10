@@ -471,7 +471,7 @@ impl Schema {
                 (path.to_string(), why)
             });
         }
-        let join = |k: &str| crate::ir::path_join(path, k);
+        let join = |k: &str| crate::address::path_join(path, k);
         Ok(match v {
             Value::Obj(m) => Value::Obj(
                 m.iter()

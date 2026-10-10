@@ -136,7 +136,7 @@ impl Problem {
 /// as `dform plan` prints it (a no-op included).
 #[derive(Debug, Clone)]
 pub struct Planned {
-    pub addr: dform_core::ir::Address,
+    pub addr: dform_core::address::Address,
     pub kind: dform_core::provider::ActionKind,
     /// The nulls it waits on, when it is held until a boundary.
     pub on: Option<Vec<String>>,

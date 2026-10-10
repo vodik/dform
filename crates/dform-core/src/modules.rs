@@ -1164,13 +1164,13 @@ pub const GATE: &str = "__instance";
 /// (R-191): its address (its component's path and its scope, `node
 /// agent-1`, `node main.agent-1` inside the copy `main`). Each row of the
 /// clause holds one such fact.
-pub fn copy_by_clause(a: &Atom) -> Option<crate::ir::Address> {
+pub fn copy_by_clause(a: &Atom) -> Option<crate::address::Address> {
     let (scope, p) = a.pred.rsplit_once("::")?;
     let (name, args) = named::runtime_scope(scope, &a.args);
     let [Term::Val(Value::Str(path))] = args else {
         return None;
     };
-    (p == GATE && args.len() < a.args.len()).then(|| crate::ir::Address {
+    (p == GATE && args.len() < a.args.len()).then(|| crate::address::Address {
         typ: path.clone(),
         name,
     })
@@ -1189,7 +1189,7 @@ pub fn private_text(a: &Atom, fmt: &dyn Fn(&Atom) -> String, gap: &str) -> Optio
     if p == GATE
         && let Some(Term::Val(Value::Str(path))) = args.first()
     {
-        return Some(match crate::ir::scope_split(&scope) {
+        return Some(match crate::address::scope_split(&scope) {
             None => format!("resource {path} {scope}"),
             Some((user, name)) => format!("resource {path} {name}{gap}(in {user})"),
         });
@@ -1442,7 +1442,7 @@ fn module_stmts(scope: &str, iface: &Interface, body: Vec<Stmt>) -> Vec<Stmt> {
         // the copy itself (`""`), which scoping makes its own name.
         if matches!(&decl.ty, Some(TypeExpr::Name(t)) if t == "addr") {
             value = Term::Func {
-                name: crate::ir::SCOPED.into(),
+                name: crate::address::SCOPED.into(),
                 args: vec![str_term(""), value],
             };
         }
@@ -1965,7 +1965,7 @@ fn prefix_scope(scope: &str, inner: Term) -> Term {
         Term::Val(Value::Str(s)) => str_term(&crate::types::dotted(scope, &s)),
         Term::Func { ref name, .. } if name == ABSOLUTE => inner,
         t => Term::Func {
-            name: crate::ir::FORMAT.into(),
+            name: crate::address::FORMAT.into(),
             args: vec![str_term(&format!("{scope}.%s")), t],
         },
     }
@@ -1985,13 +1985,13 @@ fn rewrite_term(term: Term, sc: Sc) -> Term {
             body: body.into_iter().map(|l| rewrite_lit(l, sc)).collect(),
         },
         // A name a copy inside this one scoped: its scope is relative.
-        Term::Func { name, mut args } if name == crate::ir::SCOPED && args.len() == 2 => {
+        Term::Func { name, mut args } if name == crate::address::SCOPED && args.len() == 2 => {
             args[0] = prefix_scope(sc.name, args[0].clone());
             args[1] = rewrite_term(args[1].clone(), sc);
             Term::Func { name, args }
         }
         Term::Func { name, args } => {
-            let is_ref = name == crate::ir::REF && args.len() == 3;
+            let is_ref = name == crate::address::REF && args.len() == 3;
             let args = args
                 .into_iter()
                 .enumerate()
@@ -2013,13 +2013,13 @@ fn rewrite_term(term: Term, sc: Sc) -> Term {
 /// its own: a variable ranges over every resource its user sees.
 fn scoped_term(sc: Sc, name: Term) -> Term {
     match name {
-        Term::Func { name: ref f, .. } if f == crate::ir::SCOPED => rewrite_term(name, sc),
+        Term::Func { name: ref f, .. } if f == crate::address::SCOPED => rewrite_term(name, sc),
         Term::Func { name: ref f, .. } if f == ABSOLUTE => name,
         _ if lexical::is_mark(&name) => name,
-        Term::Val(Value::Str(s)) if crate::ir::is_scoped(&s) => Term::Val(Value::Str(s)),
+        Term::Val(Value::Str(s)) if crate::address::is_scoped(&s) => Term::Val(Value::Str(s)),
         name if !sc.vars && !matches!(name, Term::Val(_)) => rewrite_term(name, sc),
         name => Term::Func {
-            name: crate::ir::SCOPED.to_string(),
+            name: crate::address::SCOPED.to_string(),
             args: vec![str_term(sc.name), rewrite_term(name, sc)],
         },
     }
@@ -2117,7 +2117,7 @@ mod tests {
                 assert_eq!(
                     scoped_term(sc, str_term(local)),
                     Term::Func {
-                        name: crate::ir::SCOPED.to_string(),
+                        name: crate::address::SCOPED.to_string(),
                         args: vec![str_term("m"), str_term(local)],
                     }
                 );

@@ -15,9 +15,9 @@ use super::mask::Shown;
 use super::tree;
 use super::tree::Site;
 use super::{SCHEMA_DEFAULT, Why};
+use crate::address::{Address, Step, Tok, tokens};
 use crate::ast::{Atom, RuleStmt, Term};
 use crate::fmt::value::Tree;
-use crate::ir::{Address, Step, Tok, tokens};
 use crate::spell;
 use crate::value::Value;
 use serde_json::Value as Json;
@@ -30,7 +30,7 @@ pub fn reach<'v>(v: &'v Value, toks: &[Tok]) -> Option<&'v Value> {
         return Some(v);
     };
     let next = match (&t.step, v) {
-        (Step::Key(k), Value::Obj(m)) => m.get(crate::ir::segment_key(k).as_ref())?,
+        (Step::Key(k), Value::Obj(m)) => m.get(crate::address::segment_key(k).as_ref())?,
         (Step::Index(i), Value::List(xs)) => xs.get(*i)?,
         (Step::Keyed(pairs), Value::List(xs)) => xs.iter().find(|x| keyed(x, pairs))?,
         _ => return None,
@@ -89,7 +89,7 @@ fn step_along<'v, 'm>(
 ) -> Option<(&'v Value, Option<&'m Value>)> {
     Some(match (&t.step, v) {
         (Step::Key(k), Value::Obj(m)) => {
-            let k = crate::ir::segment_key(k);
+            let k = crate::address::segment_key(k);
             let merged = match merged {
                 Some(Value::Obj(mm)) => mm.get(k.as_ref()),
                 _ => None,
@@ -143,7 +143,9 @@ pub fn position(v: &Value, toks: &[Tok]) -> Vec<(usize, String)> {
     let mut at = Some(v);
     for t in toks {
         let (pos, next) = match (&t.step, at) {
-            (Step::Key(k), Some(Value::Obj(m))) => (0, m.get(crate::ir::segment_key(k).as_ref())),
+            (Step::Key(k), Some(Value::Obj(m))) => {
+                (0, m.get(crate::address::segment_key(k).as_ref()))
+            }
             (Step::Index(i), Some(Value::List(xs))) => (*i, xs.get(*i)),
             (Step::Keyed(pairs), Some(Value::List(xs))) => {
                 match xs.iter().position(|x| keyed(x, pairs)) {
@@ -631,7 +633,7 @@ impl Shape {
         })?;
         let mut path = keys
             .iter()
-            .fold(top.clone(), |p, k| crate::ir::path_join(&p, k));
+            .fold(top.clone(), |p, k| crate::address::path_join(&p, k));
         for t in below {
             let next = reach(v, std::slice::from_ref(t))?;
             path = match v {
@@ -677,7 +679,7 @@ impl Shape {
                     let fields: Vec<(String, Tree, Option<usize>)> = m
                         .iter()
                         .map(|(k, x)| {
-                            let at = crate::ir::path_join(&path, k);
+                            let at = crate::address::path_join(&path, k);
                             let (t, rank) = walk(x, at, open, shape, each);
                             (crate::fmt::value::key_text(k), t, rank)
                         })
@@ -1003,7 +1005,7 @@ pub(crate) fn schema_path(path: &str) -> String {
     tokens(path)
         .into_iter()
         .filter_map(|t| match t.step {
-            Step::Key(k) => Some(crate::ir::segment_key(&k).into_owned()),
+            Step::Key(k) => Some(crate::address::segment_key(&k).into_owned()),
             _ => None,
         })
         .collect::<Vec<_>>()

@@ -14,7 +14,7 @@
 
 use super::evaluated::Evaluated;
 use super::{Cli, Dependency, Held, Outcome};
-use crate::ir::Address;
+use crate::address::Address;
 use crate::plugin::pb::HealthState;
 use crate::report::table::{Cell, Table};
 use crate::report::{self, Paint};

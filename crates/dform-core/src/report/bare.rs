@@ -11,7 +11,7 @@ use super::mask::Shown;
 use super::render::moved_text;
 use super::style::{Paint, Style};
 use super::tally::{by_kind, changes_text, count};
-use crate::ir::Address;
+use crate::address::Address;
 use crate::provider::ActionKind;
 use std::collections::BTreeSet;
 

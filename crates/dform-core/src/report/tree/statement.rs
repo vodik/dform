@@ -4,9 +4,9 @@
 //! engine would.
 
 use super::docrow::{place_in, structured};
+use crate::address::Address;
 use crate::ast::{Atom, Lit, RuleStmt, Term};
 use crate::circuit::Fact;
-use crate::ir::Address;
 use crate::query::Redactor;
 use crate::spell;
 use crate::syntax::resolve::{Piece, capitalise, pieces};
@@ -335,7 +335,7 @@ impl Cx<'_> {
                 // A relation's reference column taken apart (R-185):
                 // `workload(ref(T, W, ""))`.
                 Lit::Pos(a) => a.args.iter().find_map(|t| match t {
-                    Term::Func { name, args } if name == crate::ir::REF && args.len() == 3 => {
+                    Term::Func { name, args } if name == crate::address::REF && args.len() == 3 => {
                         named(&args[1]).then(|| self.core(&args[0])).flatten()
                     }
                     _ => None,
@@ -524,7 +524,7 @@ impl Cx<'_> {
                         v if crate::stuck::has_null(&v) => return None,
                         // A reference interpolates as its address (R-42).
                         Value::Ref { typ, name, attr } => {
-                            out.push_str(&crate::ir::Address { typ, name }.attr(&attr))
+                            out.push_str(&crate::address::Address { typ, name }.attr(&attr))
                         }
                         v => out.push_str(&spell::value(&v)),
                     }
@@ -669,7 +669,7 @@ impl Cx<'_> {
             return true;
         }
         match self.core(a) {
-            Some(Value::Str(s)) => s == name || s.ends_with(&crate::ir::scoped("", name)),
+            Some(Value::Str(s)) => s == name || s.ends_with(&crate::address::scoped("", name)),
             _ => false,
         }
     }

@@ -7,7 +7,8 @@
 //! the YAML stream ([`yaml_stream`]). What a form adds to the document
 //! (Kubernetes's `apiVersion` and `kind`) is its caller's.
 
-use crate::ir::{self, Address, Resource};
+use crate::address::{self, Address};
+use crate::ir::Resource;
 use crate::query::Redactor;
 use crate::report;
 use crate::schema::Schema;
@@ -138,7 +139,7 @@ impl<'a> Documents<'a> {
             Value::Obj(m) => Json::Object(
                 m.iter()
                     .map(|(k, x)| {
-                        let at = ir::path_join(path, k);
+                        let at = address::path_join(path, k);
                         (k.clone(), self.json(addr, &at, x, holes, depth))
                     })
                     .collect(),
@@ -178,8 +179,8 @@ impl<'a> Documents<'a> {
     /// these documents and sets it.
     fn at(&self, addr: &Address, path: &str) -> Option<&'a Value> {
         let mut cur = *self.by_addr.get(addr)?;
-        for seg in ir::path_segments(path) {
-            let (key, mut rest) = ir::segment_parts(seg);
+        for seg in address::path_segments(path) {
+            let (key, mut rest) = address::segment_parts(seg);
             if !key.is_empty() {
                 cur = match cur {
                     Value::Obj(m) => m.get(key.as_ref())?,
@@ -220,7 +221,7 @@ fn named(label: &str) -> String {
         {
             cell(&Address { typ, name }, &path)
         }
-        _ => ir::label(label),
+        _ => address::label(label),
     }
 }
 

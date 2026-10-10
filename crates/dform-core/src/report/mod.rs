@@ -34,9 +34,9 @@
 //! apply's block), `table` and `tree` (the other two printers), `bare`
 //! (`--why=none`), `deployments`.
 
+use crate::address::Address;
 use crate::ast::Program;
 use crate::engine::EvalResult;
-use crate::ir::Address;
 use crate::provider::{Action, ActionKind, Plan};
 use crate::query::Redactor;
 use crate::schema::Schema;

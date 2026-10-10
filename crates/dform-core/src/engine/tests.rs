@@ -1431,7 +1431,11 @@ fn the_operators_are_over_the_types_the_table_lists() {
                     Value::Str(_) => holds(a, b).is_ok(),
                     _ => holds(a, &read("ip", "10.0.0.2")).is_ok(),
                 },
-                "${..}" => call(crate::ir::FORMAT, &[Value::Str("%s".into()), a.clone()]).is_some(),
+                "${..}" => call(
+                    crate::address::FORMAT,
+                    &[Value::Str("%s".into()), a.clone()],
+                )
+                .is_some(),
                 _ => unreachable!("{op}"),
             };
             assert_eq!(has, types.contains(ty), "`{op}` over {ty}");

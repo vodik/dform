@@ -448,7 +448,7 @@ impl Pass<'_> {
         let Term::Func { name, args } = t else {
             return None;
         };
-        if name == crate::ir::REF && args.len() == 3 {
+        if name == crate::address::REF && args.len() == 3 {
             return match &args[0] {
                 Term::Val(Value::Str(typ)) => Some((Ty::Ref(typ.clone()), "a reference".into())),
                 _ => None,
@@ -994,7 +994,7 @@ pub fn infer(
                 for (k, t) in r.head.args.iter().enumerate() {
                     // A reference column's variable (R-185): `ref(T, W, "")`.
                     let named = match t {
-                        Term::Func { name, args } if name == crate::ir::REF => args.get(1),
+                        Term::Func { name, args } if name == crate::address::REF => args.get(1),
                         t => Some(t),
                     };
                     if let Some(Term::Var(v)) = named
@@ -1254,7 +1254,7 @@ impl Pass<'_> {
         if let Some(a) = schema.attr(typ, path) {
             return Some(Ty::parse(&a.ty));
         }
-        let keys = crate::ir::path_keys(path);
+        let keys = crate::address::path_keys(path);
         (1..keys.len()).rev().find_map(|i| {
             let head = keys[..i].join(".");
             match Ty::parse(&schema.attr(typ, &head)?.ty) {
@@ -1280,7 +1280,7 @@ impl Pass<'_> {
             .min_by_key(|c| (self.declared.get(&c.0).is_none(), c.0.contains("::")))?;
         let col = shown_col(col, self.declared, &self.head_names);
         let x = shown_var(&f.var);
-        let first = crate::ir::path_keys(&f.path).into_iter().next()?;
+        let first = crate::address::path_keys(&f.path).into_iter().next()?;
         let read = format!("{x}.{}", f.path);
         let help = match &ty {
             Ty::Ref(t) => format!(
@@ -1657,7 +1657,7 @@ fn ref_and_string(written: &str, read: &str, want: &str, text: &str, span: Span)
         (true, _) => format!("`has {read}` tests whether it is set"),
         (false, Some(typ)) if !want.contains('|') => format!(
             "compare with the resource: `{}`, or its name in scope",
-            crate::ir::Address {
+            crate::address::Address {
                 typ: typ.to_string(),
                 name: text.to_string(),
             }

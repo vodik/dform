@@ -243,7 +243,7 @@ pub fn hover(e: &Evaluated, facts: &[NodeId]) -> String {
             (dform_core::modules::INPUT | dform_core::modules::LET | "output", n) => {
                 format!("{typ} {n}.{key}")
             }
-            _ => dform_core::ir::Address { typ, name }.attr(&key),
+            _ => dform_core::address::Address { typ, name }.attr(&key),
         };
         // The value in the formatter's layout, as `plan`, `why` and
         // `query` print one (R-124).

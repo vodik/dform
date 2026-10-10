@@ -14,7 +14,7 @@ pub fn term(t: &Term) -> String {
         Term::Var(v) => v.clone(),
         Term::Wildcard => "_".into(),
         // `x.len` (R-155), as the program writes it.
-        Term::Func { name, args } if name == crate::ir::LEN && args.len() == 1 => {
+        Term::Func { name, args } if name == crate::address::LEN && args.len() == 1 => {
             format!("{}.len", term(&args[0]))
         }
         Term::Func { name, args } => format!(
@@ -160,7 +160,7 @@ pub fn internal(a: &Atom, negated: bool, term: &dyn Fn(&Term) -> String) -> Opti
         (crate::zset::SAID, [t, r]) => {
             let what = match (t, r) {
                 (Term::Val(Value::Str(typ)), Term::Val(Value::Str(name))) => {
-                    crate::report::address(&crate::ir::Address {
+                    crate::report::address(&crate::address::Address {
                         typ: typ.clone(),
                         name: name.clone(),
                     })
@@ -209,7 +209,7 @@ impl<'a> Written<'a> {
         match typ == crate::modules::INPUT {
             true if name.is_empty() => format!("input {p}"),
             true => format!("input {name}.{p}"),
-            false => crate::report::attribute(&crate::ir::Address { typ, name }, p),
+            false => crate::report::attribute(&crate::address::Address { typ, name }, p),
         }
     }
 
@@ -258,7 +258,8 @@ impl<'a> Written<'a> {
             Term::Var(v) => crate::syntax::resolve::source_name(v),
             Term::Wildcard => "_".into(),
             // An interpolated string as written.
-            Term::Func { name, args } if name == crate::ir::FORMAT => match args.split_first() {
+            Term::Func { name, args } if name == crate::address::FORMAT => match args.split_first()
+            {
                 Some((Term::Val(Value::Str(f)), rest)) => {
                     let mut out = String::from("\"");
                     let mut parts = f.split("%s");
@@ -275,7 +276,7 @@ impl<'a> Written<'a> {
             // A reference, or a computed attribute's label, by its
             // address, as the plan prints it.
             Term::Func { name, args }
-                if (name == crate::ir::REF || name == "__label") && args.len() == 3 =>
+                if (name == crate::address::REF || name == "__label") && args.len() == 3 =>
             {
                 match (&args[0], &args[1], &args[2]) {
                     (

@@ -31,8 +31,9 @@ use super::policy::{self, Class};
 use super::source::{self, Source};
 use super::timed::timed_out;
 use super::wire;
+use crate::address::Address;
 use crate::ast::{Atom, Term};
-use crate::ir::{Address, Adopt, Resource};
+use crate::ir::{Adopt, Resource};
 use crate::provider::{self, Action, ActionKind, Change, Plan, get_path, remove_path, set_path};
 use crate::schema::Schema;
 use crate::secrets::held;
@@ -830,7 +831,7 @@ impl Providers {
             anyhow!(
                 "no object of this deployment holds the secret {} (it is not made, or it is \
                  another deployment's)",
-                crate::ir::label(label)
+                crate::address::label(label)
             )
         })?;
         let bytes = self.reveal(i, &held, label)?;
@@ -838,7 +839,7 @@ impl Providers {
             .map_err(|_| {
                 anyhow!(
                     "the secret {} that provider {} revealed is not text",
-                    crate::ir::label(label),
+                    crate::address::label(label),
                     held.provider
                 )
             })?
@@ -896,7 +897,10 @@ impl Providers {
             Json::String(t) if sensitive && held::carries(t) => *t = held::fill(t, text)?,
             Json::Object(m) => {
                 for (k, x) in m.iter_mut() {
-                    let (p, n) = (crate::ir::path_join(path, k), crate::ir::path_join(norm, k));
+                    let (p, n) = (
+                        crate::address::path_join(path, k),
+                        crate::address::path_join(norm, k),
+                    );
                     self.reveal_at(addr, writer, identity, x, &p, &n)?;
                 }
             }
@@ -935,8 +939,8 @@ impl Providers {
         doc.as_object()
             .into_iter()
             .flatten()
-            .filter(|(k, v)| reveals(v, &crate::ir::path_join("", k)))
-            .map(|(k, _)| crate::ir::path_join("", k))
+            .filter(|(k, v)| reveals(v, &crate::address::path_join("", k)))
+            .map(|(k, _)| crate::address::path_join("", k))
             .collect()
     }
 
@@ -952,7 +956,7 @@ impl Providers {
             Json::String(t) => *found = held::carries(t) && sensitive(),
             Json::Object(m) => {
                 for (k, x) in m {
-                    self.reveals(typ, writer, x, &crate::ir::path_join(norm, k), found);
+                    self.reveals(typ, writer, x, &crate::address::path_join(norm, k), found);
                 }
             }
             Json::Array(xs) => {
@@ -988,7 +992,7 @@ impl Providers {
             format!(
                 "provider {} reveals the secret {}",
                 held.provider,
-                crate::ir::label(label)
+                crate::address::label(label)
             )
         })?;
         Ok(super::credentials::Secret::new(r.value))
@@ -1198,21 +1202,23 @@ impl Providers {
                         }
                         .attr(attr),
                     ),
-                    Term::Func { name, args } if name == crate::ir::REF => match args.as_slice() {
-                        [Term::Val(Value::Str(t)), Term::Val(Value::Str(n)), p]
-                            if types.contains(t) =>
-                        {
-                            let a = Address {
-                                typ: t.clone(),
-                                name: n.clone(),
-                            };
-                            Some(match p {
-                                Term::Val(Value::Str(p)) => a.attr(p.trim_start_matches('.')),
-                                _ => format!("{a}.."),
-                            })
+                    Term::Func { name, args } if name == crate::address::REF => {
+                        match args.as_slice() {
+                            [Term::Val(Value::Str(t)), Term::Val(Value::Str(n)), p]
+                                if types.contains(t) =>
+                            {
+                                let a = Address {
+                                    typ: t.clone(),
+                                    name: n.clone(),
+                                };
+                                Some(match p {
+                                    Term::Val(Value::Str(p)) => a.attr(p.trim_start_matches('.')),
+                                    _ => format!("{a}.."),
+                                })
+                            }
+                            _ => None,
                         }
-                        _ => None,
-                    },
+                    }
                     Term::Func { args, .. } | Term::List(args) => {
                         args.iter().find_map(|a| reference(a, types))
                     }
@@ -1457,7 +1463,7 @@ impl Providers {
         }
         let reported = |i: usize, got: &String| {
             if let Some(label) = self.secret_accounts.borrow().get(&i) {
-                return format!("{} (a secret)", crate::ir::label(label));
+                return format!("{} (a secret)", crate::address::label(label));
             }
             match secrets.iter().find(|(v, _)| v == got) {
                 Some((_, label)) => format!("{label} (a secret)"),
@@ -1985,7 +1991,7 @@ impl Providers {
                     None => "(sensitive)".into(),
                 });
             }
-            let join = |k: &str| crate::ir::path_join(path, k);
+            let join = |k: &str| crate::address::path_join(path, k);
             match v {
                 Json::Object(m) => Json::Object(
                     m.iter()
@@ -2221,7 +2227,7 @@ impl Providers {
             match v {
                 Json::Object(m) if provider::marker(v).is_none() => {
                     for (k, x) in m {
-                        walk(x, &crate::ir::path_join(path, k), out);
+                        walk(x, &crate::address::path_join(path, k), out);
                     }
                 }
                 _ if !path.is_empty() => {
@@ -2824,7 +2830,7 @@ impl Providers {
     /// it here.
     /// `verb` and `addr` name the resource, `path` the attribute.
     fn check_held(&self, verb: &str, addr: &Address, path: &str, v: &Value) -> Result<()> {
-        let join = |k: &str| crate::ir::path_join(path, k);
+        let join = |k: &str| crate::address::path_join(path, k);
         match v {
             Value::Null {
                 label,
@@ -2837,7 +2843,7 @@ impl Providers {
                          and it is not sealed to this deployment: apply {name} again, which \
                          seals it to each deployment of the project that reads it (R-166)",
                         addr.attr(path),
-                        crate::ir::label(label)
+                        crate::address::label(label)
                     );
                 }
                 Ok(())
@@ -3497,7 +3503,7 @@ fn unrevealed(addr: &Address, path: &str, label: &str, e: &anyhow::Error) -> any
         &format!(
             "{} holds the secret {}, which was not revealed: {why}",
             crate::report::attribute(addr, path),
-            crate::ir::label(label)
+            crate::address::label(label)
         ),
     )
 }

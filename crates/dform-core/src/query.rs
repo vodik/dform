@@ -73,7 +73,7 @@ fn unclosed(got: &str) -> Option<String> {
     ))
 }
 
-/// An address as `plan` prints it (H-16, `ir::parse_address`), as `why`'s
+/// An address as `plan` prints it (H-16, `address::parse`), as `why`'s
 /// pattern: `T["A"].p` is its attribute, `attr(T, A, "p", value)`;
 /// `T["A"]` is the resource, `want(T, A)`. A resource is also its path,
 /// as the plan prints it, with its type before it or not (R-112):
@@ -83,16 +83,16 @@ fn unclosed(got: &str) -> Option<String> {
 pub fn address(src: &str) -> Result<Option<Query>> {
     let s = |x: &str| Term::Val(Value::Str(x.to_string()));
     let v = |x: &str| Term::Var(x.to_string());
-    let (addr, path) = match crate::ir::parse_address(src) {
+    let (addr, path) = match crate::address::parse(src) {
         Ok(a) => a,
-        Err(e) if e.is::<crate::ir::OldScope>() => return Err(e),
+        Err(e) if e.is::<crate::address::OldScope>() => return Err(e),
         Err(_) => {
             let (typ, at) = match src.trim().split_once(char::is_whitespace) {
                 Some((t, p)) if t.split('.').all(crate::lexer::is_word) => (s(t), p),
                 Some(_) => return Ok(None),
                 None => (v("type"), src),
             };
-            let Some(name) = crate::ir::parse_path(at)? else {
+            let Some(name) = crate::address::parse_path(at)? else {
                 return Ok(None);
             };
             let mut vars = Vec::new();
@@ -113,16 +113,16 @@ pub fn address(src: &str) -> Result<Option<Query>> {
 
 /// The resources path `src` names and the attribute path past each, as
 /// `why` and `query` read it: the full address, `T["A"]` with a path
-/// after it (`ir::parse_address`), else as the plan prints it
+/// after it (`address::parse`), else as the plan prints it
 /// ([`printed`]). Empty when it names none; an address with an old scope
 /// separator is an error.
 pub fn named(
     src: &str,
     facts: &BTreeSet<Atom>,
-) -> Result<Vec<(crate::ir::Address, Option<String>)>> {
-    match crate::ir::parse_address(src) {
+) -> Result<Vec<(crate::address::Address, Option<String>)>> {
+    match crate::address::parse(src) {
         Ok(a) => Ok(vec![a]),
-        Err(e) if e.is::<crate::ir::OldScope>() => Err(e),
+        Err(e) if e.is::<crate::address::OldScope>() => Err(e),
         Err(_) => Ok(printed(src, facts)),
     }
 }
@@ -131,7 +131,7 @@ pub fn named(
 /// attribute holding its path with the part of it the path names
 /// (`tree::find`).
 pub fn found(
-    named: Vec<(crate::ir::Address, Option<String>)>,
+    named: Vec<(crate::address::Address, Option<String>)>,
     facts: &BTreeSet<Atom>,
 ) -> Result<Vec<(Atom, Option<crate::report::tree::Focus>)>> {
     let mut out = Vec::new();
@@ -180,7 +180,7 @@ pub fn values(
 /// object's fields in the order the program wrote them), each leaf as
 /// `leaf` spells it: the rows of `query pg`.
 pub fn attributes(
-    addr: &crate::ir::Address,
+    addr: &crate::address::Address,
     res: &engine::EvalResult,
     redact: &Redactor,
     leaf: &dyn Fn(&Value) -> String,
@@ -216,7 +216,7 @@ pub fn attributes(
 /// the element does not (`pg.spec.ports[0].prot`): what it names, and
 /// the nearest the value has, as the plan prints it.
 pub fn unreached(pattern: &str, facts: &BTreeSet<Atom>) -> Result<Option<String>> {
-    use crate::ir::{Step, tokens};
+    use crate::address::{Step, tokens};
     use crate::report::fold::{Shape, reach};
     let src = pattern.trim();
     for (addr, path) in named(src, facts)? {
@@ -272,7 +272,7 @@ pub fn unreached(pattern: &str, facts: &BTreeSet<Atom>) -> Result<Option<String>
                 format!("no field {}", wrote.trim_start_matches('.')),
                 "a field is named by its key",
                 m.keys()
-                    .map(|key| crate::ir::path_join(&reached, key))
+                    .map(|key| crate::address::path_join(&reached, key))
                     .collect(),
             ),
             _ if !matches!(toks[k].step, Step::Key(_)) => {
@@ -307,12 +307,15 @@ pub fn unreached(pattern: &str, facts: &BTreeSet<Atom>) -> Result<Option<String>
 /// by an element's key or position (`pg.spec.ports[port=5432,protocol=TCP].protocol`,
 /// `vm.tags[0]`). Every resource it names, of any type when none is
 /// given; empty when it names none.
-pub fn printed(src: &str, facts: &BTreeSet<Atom>) -> Vec<(crate::ir::Address, Option<String>)> {
-    use crate::ir::Step;
+pub fn printed(
+    src: &str,
+    facts: &BTreeSet<Atom>,
+) -> Vec<(crate::address::Address, Option<String>)> {
+    use crate::address::Step;
     let src = src.trim();
     // A selector the plan prints, never `T["A"]`'s.
     let selects = |p: &str| {
-        let toks = crate::ir::tokens(p);
+        let toks = crate::address::tokens(p);
         toks.iter().map(|t| t.text.as_str()).collect::<String>() == p
             && toks
                 .iter()
@@ -330,7 +333,7 @@ pub fn printed(src: &str, facts: &BTreeSet<Atom>) -> Vec<(crate::ir::Address, Op
         return Vec::new();
     }
     // As stored (R-112): a quoted segment keeps its quotes.
-    let segs = crate::ir::path_segments(rest);
+    let segs = crate::address::path_segments(rest);
     fn s(t: &Term) -> Option<&str> {
         match t {
             Term::Val(Value::Str(s)) => Some(s.as_str()),
@@ -353,7 +356,7 @@ pub fn printed(src: &str, facts: &BTreeSet<Atom>) -> Vec<(crate::ir::Address, Op
             .iter()
             .filter(|(_, a)| *a == name)
             .map(|(t, a)| {
-                let addr = crate::ir::Address {
+                let addr = crate::address::Address {
                     typ: t.to_string(),
                     name: a.to_string(),
                 };
@@ -443,7 +446,7 @@ pub fn names_cell(src: &str, facts: &BTreeSet<Atom>) -> bool {
 /// Address `addr`, or its attribute `path`, as a pattern: `attr(T, A,
 /// path, value)`; the resource for `why` is `want(T, A)`, for `query`
 /// every `attr(T, A, path, value)`.
-pub fn pattern(addr: &crate::ir::Address, path: Option<String>, why: bool) -> Query {
+pub fn pattern(addr: &crate::address::Address, path: Option<String>, why: bool) -> Query {
     let s = |x: &str| Term::Val(Value::Str(x.to_string()));
     let v = |x: &str| Term::Var(x.to_string());
     let (pred, args) = match (path, why) {
@@ -830,7 +833,7 @@ impl Redactor {
     }
 
     /// `spell::value`, with secrets as `(sensitive T["A"].p)` and
-    /// nulls as `?T["A"].p` (`ir::label`).
+    /// nulls as `?T["A"].p` (`address::label`).
     pub fn fmt(&self, v: &Value) -> String {
         self.spell(v, Spelling::Core)
     }
@@ -855,7 +858,7 @@ impl Redactor {
                 (Spelling::Cell, Value::Null { .. }) => "secret(?)".into(),
                 (Spelling::Cell, Value::Str(s)) => format!("secret({})", size(s.len())),
                 (Spelling::Cell, v) => format!("secret({})", size(spell::value(v).len())),
-                (Spelling::Core, _) => format!("(sensitive {})", crate::ir::label(&l)),
+                (Spelling::Core, _) => format!("(sensitive {})", crate::address::label(&l)),
                 _ => format!("(sensitive {})", crate::report::attribute_label(&l)),
             };
         }
@@ -878,9 +881,9 @@ impl Redactor {
             Value::Null { label, .. } if surface => {
                 format!("?{}", crate::report::attribute_label(label))
             }
-            Value::Null { label, .. } => format!("?{}", crate::ir::label(label)),
+            Value::Null { label, .. } => format!("?{}", crate::address::label(label)),
             Value::Ref { typ, name, attr } if surface => crate::report::attribute(
-                &crate::ir::Address {
+                &crate::address::Address {
                     typ: typ.clone(),
                     name: name.clone(),
                 },
@@ -888,9 +891,9 @@ impl Redactor {
             ),
             Value::CloudRef { typ, name, attr } if surface => format!(
                 "cloud_ref({}, {}, {})",
-                crate::ir::string_literal(typ),
-                crate::ir::string_literal(name),
-                crate::ir::string_literal(attr)
+                crate::address::string_literal(typ),
+                crate::address::string_literal(name),
+                crate::address::string_literal(attr)
             ),
             v => spell::value(v),
         }
@@ -983,7 +986,7 @@ impl Redactor {
 
     pub fn json(&self, v: &Value) -> serde_json::Value {
         if let Some(l) = self.secret(v) {
-            return serde_json::json!({ "sensitive": crate::ir::label(&l) });
+            return serde_json::json!({ "sensitive": crate::address::label(&l) });
         }
         match v {
             Value::List(xs) => serde_json::Value::Array(xs.iter().map(|x| self.json(x)).collect()),
@@ -991,7 +994,7 @@ impl Redactor {
                 m.iter().map(|(k, x)| (k.clone(), self.json(x))).collect(),
             ),
             Value::Null { label, class, .. } => {
-                serde_json::json!({"null": crate::ir::label(label), "class": class.name()})
+                serde_json::json!({"null": crate::address::label(label), "class": class.name()})
             }
             v => crate::spell::value_to_json(v),
         }

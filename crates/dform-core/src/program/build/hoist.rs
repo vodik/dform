@@ -358,6 +358,6 @@ fn address(t: &Term) -> Option<(&str, &str)> {
     let [Term::Var(v)] = v.as_slice() else {
         return None;
     };
-    (name == crate::ir::REF && mark == crate::modules::ABSOLUTE && p.is_empty())
+    (name == crate::address::REF && mark == crate::modules::ABSOLUTE && p.is_empty())
         .then_some((typ.as_str(), v.as_str()))
 }

@@ -1230,8 +1230,8 @@ pub fn serve() -> Result<()> {
 }
 
 /// A resource's address as dform prints it, `T["N"]`.
-fn address(typ: &str, name: &str) -> dform_core::ir::Address {
-    dform_core::ir::Address {
+fn address(typ: &str, name: &str) -> dform_core::address::Address {
+    dform_core::address::Address {
         typ: typ.to_string(),
         name: name.to_string(),
     }

@@ -131,7 +131,7 @@ pub(super) fn eval_eq(
                     return Ok(None);
                 }
                 if let Some((name, args)) = failed_builtin(t, &out) {
-                    if name == crate::ir::RESOURCE_BODY {
+                    if name == crate::address::RESOURCE_BODY {
                         let args: Vec<String> = args.iter().map(spell::value).collect();
                         bail!(
                             "`resource T NAME = VALUE` takes an object, a value of the type: not {}{}",

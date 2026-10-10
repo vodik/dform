@@ -459,7 +459,7 @@ impl Lowerer<'_> {
         let help = match (col.typ(), name) {
             (Some(typ), Some(a)) => format!(
                 "write the resource: `{}`, or its name in scope",
-                crate::ir::Address {
+                crate::address::Address {
                     typ: typ.clone(),
                     name: a,
                 }

@@ -9,10 +9,10 @@ use super::compress::Compress;
 use super::printer::{Focus, Printer};
 use super::statement::{Cx, collapse, is_check, statement_at};
 use super::surface::Surface;
+use crate::address::Address;
 use crate::ast::{Atom, RuleStmt, Term};
 use crate::circuit::{Circuit, Fact, Leaf, NodeId, View};
 use crate::engine;
-use crate::ir::Address;
 use crate::syntax::resolve::capitalise;
 use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -311,7 +311,7 @@ impl Printer<'_> {
             })
             .collect();
         let (top, merged) = match attr.args.as_slice() {
-            [_, _, Term::Val(Value::Str(p)), Term::Val(v)] => (crate::ir::tokens(p).len(), v),
+            [_, _, Term::Val(Value::Str(p)), Term::Val(v)] => (crate::address::tokens(p).len(), v),
             _ => return none(),
         };
         // Each contribution followed to the leaves once per prefix: a
@@ -322,7 +322,7 @@ impl Printer<'_> {
         paths
             .iter()
             .map(|p| {
-                let toks = crate::ir::tokens(p);
+                let toks = crate::address::tokens(p);
                 contributions
                     .iter()
                     .zip(memos.iter_mut())
@@ -471,7 +471,7 @@ impl Surface<'_, '_> {
         let read: Option<Vec<String>> = rhs.as_deref().and_then(|rhs| {
             let plain = !rhs.is_empty()
                 && !rhs.contains(|c: char| c.is_whitespace() || "()[]{}$,".contains(c));
-            plain.then(|| crate::ir::path_keys(rhs))
+            plain.then(|| crate::address::path_keys(rhs))
         });
         if depth < FOLLOW
             && let Some(v) = value

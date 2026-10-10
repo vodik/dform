@@ -5,10 +5,10 @@
 use super::compress::Compress;
 use super::printer::{Focus, Printer, find};
 use super::sites::{base_parts, table_row};
+use crate::address::Address;
 use crate::ast::{Atom, RuleStmt, Term};
 use crate::circuit::{Fact, Leaf, NodeId, View};
 use crate::engine;
-use crate::ir::Address;
 use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
 

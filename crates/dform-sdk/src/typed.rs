@@ -16,7 +16,7 @@
 //! before it sends it again; a transient one says `retryable:`, so dform's
 //! retry policy sends it again (R-81).
 
-use dform_core::ir::Address;
+use dform_core::address::Address;
 use dform_core::plugin::backend::{self, Call, CallError, Handler, Reply, VERSION};
 use dform_core::plugin::{pb, wire};
 use dform_core::schema::Schema;
@@ -538,7 +538,7 @@ impl<P: Provider> Typed<P> {
             )));
         }
         let progress = Progress::new(
-            dform_core::ir::Address {
+            dform_core::address::Address {
                 typ: r.r#type.clone(),
                 name: r.name.clone(),
             }

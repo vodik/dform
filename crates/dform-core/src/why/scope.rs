@@ -179,7 +179,7 @@ impl<'a> Names<'a> {
     fn own(&self, s: &str, n: &str) -> Option<Denoted> {
         let qualified = join(s, n);
         if let Some((t, name)) = self.resources().find(|(_, name)| *name == qualified) {
-            let addr = crate::ir::Address {
+            let addr = crate::address::Address {
                 typ: t.to_string(),
                 name: name.to_string(),
             };

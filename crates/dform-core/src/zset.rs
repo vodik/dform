@@ -26,8 +26,8 @@
 //! The provider's per-resource `Plan` (the fake provider's diff) turns each
 //! deformation into an action and decides replace.
 
+use crate::address::Address;
 use crate::ast::{Atom, RuleStmt, Term};
-use crate::ir::Address;
 use crate::lattice::{Truth, eq3, nulls_in};
 use crate::schema::{ReplaceOrder, Schema};
 use crate::value::{NullClass, Value};
@@ -132,7 +132,7 @@ impl Instances {
             if let ("want", [_, Term::Val(Value::Str(name))]) = (a.pred.as_str(), a.args.as_slice())
             {
                 let mut name = name.as_str();
-                while let Some((scope, _)) = crate::ir::scope_split(name) {
+                while let Some((scope, _)) = crate::address::scope_split(name) {
                     live.insert(scope.to_string());
                     name = scope;
                 }
@@ -199,7 +199,7 @@ impl Instances {
     pub fn enclosing(&self, addr: &Address) -> Vec<Address> {
         let mut out = Vec::new();
         let mut name = addr.name.as_str();
-        while let Some((scope, _)) = crate::ir::scope_split(name) {
+        while let Some((scope, _)) = crate::address::scope_split(name) {
             out.extend(self.address(scope));
             name = scope;
         }
@@ -677,11 +677,11 @@ fn said_rules() -> Vec<RuleStmt> {
         span: Default::default(),
     };
     let reference = |t: &str, a: &str| Term::Func {
-        name: crate::ir::REF.into(),
+        name: crate::address::REF.into(),
         args: vec![var(t), var(a), str_term("")],
     };
     let format = |f: &str, args: Vec<Term>| Term::Func {
-        name: crate::ir::FORMAT.into(),
+        name: crate::address::FORMAT.into(),
         args: std::iter::once(str_term(f)).chain(args).collect(),
     };
     let removal = Lit::Pos(atom(
@@ -1257,12 +1257,12 @@ pub fn not_planned(
                         && r.head.args.iter().zip(&f.args).all(|(h, v)| match h {
                             Term::Var(_) => !exact,
                             // A copy's own resource, `scoped(n, name)`.
-                            Term::Func { name, args } if name == crate::ir::SCOPED => {
+                            Term::Func { name, args } if name == crate::address::SCOPED => {
                                 match (args.as_slice(), v) {
                                     (
                                         [Term::Val(Value::Str(n)), Term::Val(Value::Str(a))],
                                         Term::Val(Value::Str(v)),
-                                    ) => crate::ir::scoped(n, a) == *v,
+                                    ) => crate::address::scoped(n, a) == *v,
                                     _ => !exact,
                                 }
                             }
@@ -1313,7 +1313,7 @@ impl Emptied {
                 || self
                     .deleted
                     .iter()
-                    .any(|a| crate::ir::parse_resource_address(a).is_ok_and(|a| a.typ == *n))
+                    .any(|a| crate::address::parse_resource(a).is_ok_and(|a| a.typ == *n))
         })
     }
 
@@ -2109,7 +2109,7 @@ pub mod file {
                 current.iter().map(|e| (key(e), e)).collect();
             let mut out = Vec::new();
             for (k, c) in &now {
-                let addr = crate::ir::Address {
+                let addr = crate::address::Address {
                     typ: k.0.clone(),
                     name: k.1.clone(),
                 };
@@ -2137,7 +2137,7 @@ pub mod file {
                 if now.contains_key(k) {
                     continue;
                 }
-                let at = report::address(&crate::ir::Address {
+                let at = report::address(&crate::address::Address {
                     typ: k.0.clone(),
                     name: k.1.clone(),
                 });
@@ -2157,7 +2157,7 @@ pub mod file {
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct Difference {
         pub mark: char,
-        pub addr: crate::ir::Address,
+        pub addr: crate::address::Address,
         /// The attribute a value difference is of.
         pub path: Option<String>,
         /// What differs, after the address: `cidr = "a" → "b"`, `not in
@@ -2224,7 +2224,7 @@ pub mod file {
         let key = |e: &Entry| (e.typ.clone(), e.name.clone());
         let shown: BTreeMap<(String, String), &Entry> = shown.iter().map(|e| (key(e), e)).collect();
         let now: BTreeMap<(String, String), &Entry> = now.iter().map(|e| (key(e), e)).collect();
-        let address = |k: &(String, String)| crate::ir::Address {
+        let address = |k: &(String, String)| crate::address::Address {
             typ: k.0.clone(),
             name: k.1.clone(),
         };
@@ -2339,7 +2339,7 @@ pub mod file {
     fn leaf_text(v: &Json) -> String {
         if is_null(v) {
             let n = v["null"].as_str().unwrap_or_default();
-            return match crate::ir::parse_address(n) {
+            return match crate::address::parse(n) {
                 Ok((a, Some(p))) => format!("?{}", report::attribute(&a, &p)),
                 Ok((a, None)) => format!("?{}", report::address(&a)),
                 Err(_) => format!("?{n}"),
@@ -2361,7 +2361,7 @@ pub mod file {
         matches!(v, Json::Object(m) if m.len() == 2 && m.contains_key("null") && m.contains_key("class"))
     }
 
-    fn leaf_differences(at: &crate::ir::Address, saved: &Entry, now: &Entry) -> Vec<String> {
+    fn leaf_differences(at: &crate::address::Address, saved: &Entry, now: &Entry) -> Vec<String> {
         let s: BTreeMap<&str, &Leaf> = saved.changes.iter().map(|l| (l.path.as_str(), l)).collect();
         let n: BTreeMap<&str, &Leaf> = now.changes.iter().map(|l| (l.path.as_str(), l)).collect();
         // A sensitive value by its label and the head of its digest.

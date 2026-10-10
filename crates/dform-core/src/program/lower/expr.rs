@@ -157,7 +157,7 @@ impl<'p> Lowering<'p> {
                 let v = value_of(self);
                 let mark = func(crate::modules::ABSOLUTE, vec![v]);
                 let r = func(
-                    crate::ir::REF,
+                    crate::address::REF,
                     vec![str_term(&typ.name), mark, str_term("")],
                 );
                 let Lit::Pos(a) = self.read(*of, r) else {
@@ -263,7 +263,7 @@ impl<'p> Lowering<'p> {
             }
         }
         args[0] = str_term(&f);
-        func(crate::ir::FORMAT, args)
+        func(crate::address::FORMAT, args)
     }
 
     /// Written fields an object; any computed key `__object` of each key
@@ -338,7 +338,7 @@ impl<'p> Lowering<'p> {
     fn field(&mut self, base: ExprId, path: &[Step]) -> Term {
         let v = self.expr(base);
         match path {
-            [Step::Len] => func(crate::ir::LEN, vec![v]),
+            [Step::Len] => func(crate::address::LEN, vec![v]),
             path => func("__path", vec![v, str_term(&stored(path))]),
         }
     }
@@ -355,7 +355,7 @@ impl<'p> Lowering<'p> {
         };
         let addr = self.expr(*addr);
         func(
-            crate::ir::REF,
+            crate::address::REF,
             vec![str_term(&typ.name), addr, str_term(&path)],
         )
     }

@@ -94,7 +94,7 @@ pub fn nulls_text<'a>(
         .map(|n| {
             style.paint(
                 crate::report::Paint::Null,
-                &format!("?{}", crate::ir::label(n)),
+                &format!("?{}", crate::address::label(n)),
             )
         })
         .collect::<Vec<_>>()

@@ -47,7 +47,7 @@ pub fn placeholder(label: &str) -> String {
 /// known yet waits for it, and no other function reads a secret dform
 /// does not have.
 pub fn in_template(name: &str, vals: &[Value]) -> Option<Vec<Value>> {
-    if name != crate::ir::FORMAT {
+    if name != crate::address::FORMAT {
         return None;
     }
     vals.iter()
@@ -130,7 +130,7 @@ pub fn shown(text: &str) -> String {
         .into_iter()
         .map(|p| match p {
             Part::Text(t) => t.to_string(),
-            Part::Held(l) => format!("${{{}}}", crate::ir::label(l)),
+            Part::Held(l) => format!("${{{}}}", crate::address::label(l)),
         })
         .collect()
 }
@@ -154,8 +154,8 @@ mod tests {
             secret("tailscale.auth_key/nodes#key"),
             secret("tailscale.auth_key/nodes#key"),
         ];
-        let args = in_template(crate::ir::FORMAT, &vals).unwrap();
-        let Some(Value::Str(text)) = crate::functions::body(crate::ir::FORMAT).unwrap()(&args)
+        let args = in_template(crate::address::FORMAT, &vals).unwrap();
+        let Some(Value::Str(text)) = crate::functions::body(crate::address::FORMAT).unwrap()(&args)
         else {
             panic!("a template is a string");
         };
@@ -183,9 +183,9 @@ mod tests {
         };
         let fmt = Value::Str("%s %s".into());
         let s = secret("vault.token/t#value");
-        assert!(in_template(crate::ir::FORMAT, &[fmt.clone(), s.clone(), open]).is_none());
+        assert!(in_template(crate::address::FORMAT, &[fmt.clone(), s.clone(), open]).is_none());
         assert!(in_template("json.encode", &[s.clone()]).is_none());
-        assert!(in_template(crate::ir::FORMAT, &[fmt, s, Value::Int(1)]).is_some());
+        assert!(in_template(crate::address::FORMAT, &[fmt, s, Value::Int(1)]).is_some());
     }
 
     /// Text that looks like a placeholder no evaluation minted is text.

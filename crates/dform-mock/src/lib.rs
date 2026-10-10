@@ -28,9 +28,9 @@
 //! clock advances at every END_TICK, when chaos `mutate` lands.
 
 use anyhow::{Context, Result, anyhow, bail};
+use dform_core::address::Address;
 use dform_core::ast::{Atom, Term};
 use dform_core::chaos::Chaos;
-use dform_core::ir::Address;
 use dform_core::plugin::backend::{self, CallError, Handler, Reply, VERSION};
 use dform_core::plugin::link::Link;
 use dform_core::plugin::pb;

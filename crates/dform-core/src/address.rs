@@ -5,11 +5,16 @@
 //! [`Address`] is the one printer, [`parse`] the one reader: every address
 //! the CLI prints or takes goes through them.
 
-use super::Address;
 use crate::syntax::SyntaxKind::{self, *};
 use anyhow::{Result, anyhow};
 use rowan::NodeOrToken;
 use std::fmt;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Address {
+    pub typ: String,
+    pub name: String,
+}
 
 impl fmt::Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

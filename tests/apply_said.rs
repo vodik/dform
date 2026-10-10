@@ -5,7 +5,7 @@
 //! process tests (boundary_reask, apply_block, apply_tick2,
 //! engine_phases) through `DFORM_TEST_SAID`.
 
-use dform::ir::Address;
+use dform::address::Address;
 use dform::report::Style;
 use dform::said::{Question, Said, Teller};
 use dform::zset::file::Difference;

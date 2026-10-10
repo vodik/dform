@@ -51,13 +51,13 @@ pub(super) fn unify_term(
         // Special pattern unification for scoped(Scope, LocalName).
         // This allows rules to join on component-scoped resources while still
         // binding LocalName variables.
-        Term::Func { name, args } if name == crate::ir::SCOPED && args.len() == 2 => {
+        Term::Func { name, args } if name == crate::address::SCOPED && args.len() == 2 => {
             unify_scoped(&args[0], &args[1], fv, out, rec)
         }
         // `ref(T, A, P)` as a pattern takes a reference apart (R-42):
         // `deformation(k, ref("aws.vpc", A, ""), _)` binds `A`.
         Term::Func { name, args }
-            if name == crate::ir::REF
+            if name == crate::address::REF
                 && args.len() == 3
                 && let Value::Ref { typ, name, attr } = fv
                 && eval_term(pat, out).is_none() =>
@@ -151,9 +151,9 @@ fn unify_scoped(
     let Value::Str(full) = fv else {
         return Ok(false);
     };
-    let prefix = crate::ir::scoped(&scope, "");
+    let prefix = crate::address::scoped(&scope, "");
     if let Some(suffix) = full.strip_prefix(&prefix)
-        && !crate::ir::is_scoped(suffix)
+        && !crate::address::is_scoped(suffix)
     {
         let mut tmp = out.clone();
         if unify_term(local, &Value::Str(suffix.to_string()), &mut tmp, rec)? {
@@ -164,7 +164,7 @@ fn unify_scoped(
     // As the function: a bound name that is already an address
     // is itself (R-65), another copy's resource read through
     // its output. An unbound one ranges over the scope's own.
-    Ok(crate::ir::is_scoped(full) && eval_term(local, out).is_some_and(|v| v == *fv))
+    Ok(crate::address::is_scoped(full) && eval_term(local, out).is_some_and(|v| v == *fv))
 }
 
 /// A negated atom's pattern: every argument bound, but a wildcard, which
@@ -212,7 +212,7 @@ pub(super) fn bind_term(
     match t {
         Term::List(_) => unify_term(t, &v, out, rec),
         // `ref(T, A, "") = V` takes a reference apart (`through`).
-        Term::Func { name, .. } if name == crate::ir::REF => unify_term(t, &v, out, rec),
+        Term::Func { name, .. } if name == crate::address::REF => unify_term(t, &v, out, rec),
         Term::Var(name) => {
             if let Some(bound) = out.get(name) {
                 Ok(bound == &v)

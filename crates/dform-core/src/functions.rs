@@ -282,7 +282,7 @@ pub fn callable(name: &str) -> bool {
 /// `x.len` lowers from (R-155).
 pub fn shown_call(name: &str) -> String {
     match name {
-        crate::ir::LEN => "`.len`".to_string(),
+        crate::address::LEN => "`.len`".to_string(),
         OBJECT => "an object's key".to_string(),
         MERGE | CONCAT => "a spread `..`".to_string(),
         REST => "a pattern's rest `..`".to_string(),
@@ -818,7 +818,7 @@ pub fn path_of(v: &Value, path: &str) -> Option<Value> {
         return Some(v.clone());
     }
     let mut v: Cow<Value> = Cow::Borrowed(v);
-    for seg in crate::ir::path_keys(path) {
+    for seg in crate::address::path_keys(path) {
         // A url's or an image reference's parts read as an object's
         // (`u.host`, `r.digest`).
         if let Value::Oci(r) = &*v {
@@ -843,7 +843,7 @@ pub fn path_of(v: &Value, path: &str) -> Option<Value> {
 pub fn not_an_object(v: &Value, path: &str) -> Option<(Vec<String>, Value)> {
     let mut v = v.clone();
     let mut walked = Vec::new();
-    for seg in crate::ir::path_keys(path) {
+    for seg in crate::address::path_keys(path) {
         if let Value::Null { .. } = v {
             return None;
         }
@@ -920,7 +920,7 @@ pub const BODIES: &[(&str, Body)] = &[
         _ => None,
     }),
     ("quantity.to", unit_of),
-    (crate::ir::FORMAT, |a| {
+    (crate::address::FORMAT, |a| {
         let fmt = a.first()?.as_str()?;
         let mut out = String::new();
         let mut parts = fmt.split("%s");
@@ -936,8 +936,8 @@ pub const BODIES: &[(&str, Body)] = &[
         }
         Some(Value::Str(out))
     }),
-    (crate::ir::LEN, len_of),
-    (crate::ir::REF, |a| match a {
+    (crate::address::LEN, len_of),
+    (crate::address::REF, |a| match a {
         [Value::Str(t), Value::Str(n), Value::Str(p)] => Some(Value::Ref {
             typ: t.clone(),
             name: n.clone(),
@@ -947,7 +947,7 @@ pub const BODIES: &[(&str, Body)] = &[
         [r @ Value::Ref { .. }] => Some(r.clone()),
         _ => None,
     }),
-    (crate::ir::CLOUD_REF, |a| match a {
+    (crate::address::CLOUD_REF, |a| match a {
         [Value::Str(t), Value::Str(n), Value::Str(p)] => Some(Value::CloudRef {
             typ: t.clone(),
             name: n.clone(),
@@ -957,9 +957,9 @@ pub const BODIES: &[(&str, Body)] = &[
     }),
     // A name that is already an address (another copy's resource, read
     // through its output) is itself (R-65).
-    (crate::ir::SCOPED, |a| match a {
-        [_, Value::Str(name)] if crate::ir::is_scoped(name) => Some(Value::Str(name.clone())),
-        [scope, name] => Some(Value::Str(crate::ir::scoped(
+    (crate::address::SCOPED, |a| match a {
+        [_, Value::Str(name)] if crate::address::is_scoped(name) => Some(Value::Str(name.clone())),
+        [scope, name] => Some(Value::Str(crate::address::scoped(
             &value_to_string(scope),
             &value_to_string(name),
         ))),
@@ -967,12 +967,12 @@ pub const BODIES: &[(&str, Body)] = &[
     }),
     // A resource's name interpolated at run time as one segment of its
     // address (R-112): quoted when it holds a dot (`"a.b"`).
-    (crate::ir::NAME_SEGMENT, |a| match a {
-        [Value::Str(name)] => Some(Value::Str(crate::ir::name_segment(name).into_owned())),
+    (crate::address::NAME_SEGMENT, |a| match a {
+        [Value::Str(name)] => Some(Value::Str(crate::address::name_segment(name).into_owned())),
         _ => None,
     }),
     // A resource's value body (R-126): an object, a document of the type.
-    (crate::ir::RESOURCE_BODY, |a| match a {
+    (crate::address::RESOURCE_BODY, |a| match a {
         [v @ Value::Obj(_)] => Some(v.clone()),
         _ => None,
     }),
@@ -1626,7 +1626,7 @@ pub(crate) fn value_to_string(v: &Value) -> String {
         Value::IpNet { addr, prefix } => crate::value::ipnet_to_string(*addr, *prefix),
         Value::Range(r) => r.to_string(),
         // H-16: a reference reads as the source names it, `T["A"].path`.
-        Value::Ref { typ, name, attr } => crate::ir::Address {
+        Value::Ref { typ, name, attr } => crate::address::Address {
             typ: typ.clone(),
             name: name.clone(),
         }
@@ -1987,7 +1987,7 @@ mod tests {
         );
         assert!(callable("int.round") && !callable("int") && !callable("add"));
         assert!(callable("ref") && callable("cloud_ref") && !callable("scoped"));
-        assert!(!callable(crate::ir::REF) && !callable(crate::ir::SCOPED));
+        assert!(!callable(crate::address::REF) && !callable(crate::address::SCOPED));
         assert_eq!(
             r.packages(),
             [
@@ -2097,7 +2097,7 @@ mod tests {
         // list, as `list.join` does.
         for f in registry().functions().filter(|f| !f.internal) {
             assert!(
-                !f.variadic || f.name == crate::ir::FORMAT,
+                !f.variadic || f.name == crate::address::FORMAT,
                 "{}: a function takes a list, not any number of values ({}:{})",
                 f.signature,
                 f.file,

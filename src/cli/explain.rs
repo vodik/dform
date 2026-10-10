@@ -7,7 +7,7 @@ use super::{Cli, Cmd, Outcome};
 use crate::ast::{Atom, Term};
 use crate::spell;
 use crate::value::Value;
-use crate::{deployment, ir, query, report, schema};
+use crate::{address, deployment, query, report, schema};
 use anyhow::Result;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -80,7 +80,7 @@ impl Query {
     /// (`query::named`), as the plan prints it or in full; none where a
     /// relation or a cell (R-176) has the name, whose rows the query is.
     /// A path past a list that reaches nothing says the nearest it has.
-    fn named(&self, facts: &BTreeSet<Atom>) -> Result<Vec<(ir::Address, Option<String>)>> {
+    fn named(&self, facts: &BTreeSet<Atom>) -> Result<Vec<(address::Address, Option<String>)>> {
         let pattern = self.pattern.trim();
         if facts.iter().any(|a| a.pred == pattern) || query::names_cell(pattern, facts) {
             return Ok(Vec::new());
@@ -341,7 +341,7 @@ impl Why {
         // at its creation (R-198): the object's value, and the apply that
         // made it.
         let applies = crate::diff::applies(&run.cx.audit.entries().unwrap_or_default());
-        let kept = |a: &ir::Address, path: &str| {
+        let kept = |a: &address::Address, path: &str| {
             let value = schedule?.kept_value(a, path)?;
             let made = match crate::diff::made_by(&applies, &a.to_string()) {
                 Some(m) => format!("made by apply {} at {} by {}", m.seq, m.time, m.who),
@@ -397,7 +397,7 @@ fn short_name(pattern: &str, res: &crate::engine::EvalResult) -> Result<String> 
     for a in res.facts.iter() {
         match (a.pred.as_str(), a.args.as_slice()) {
             ("want", [Term::Val(Value::Str(t)), Term::Val(Value::Str(n))]) => {
-                wanted.push(ir::Address {
+                wanted.push(address::Address {
                     typ: t.clone(),
                     name: n.clone(),
                 })
@@ -417,7 +417,7 @@ fn short_name(pattern: &str, res: &crate::engine::EvalResult) -> Result<String> 
             _ => {}
         }
     }
-    let of_type = |a: &&ir::Address| typ.is_none_or(|t| a.typ == t);
+    let of_type = |a: &&address::Address| typ.is_none_or(|t| a.typ == t);
     if wanted.iter().filter(of_type).any(|a| a.name == name) {
         return Ok(pattern.to_string());
     }
@@ -470,7 +470,7 @@ impl Explain {
         let addresses = self
             .addresses
             .iter()
-            .map(|a| ir::parse_resource_address(a))
+            .map(|a| address::parse_resource(a))
             .collect::<Result<Vec<_>>>()?;
         let s = crate::diff::snapshot(&x.res, &x.redact, &addresses);
         println!("{}", serde_json::to_string(&s)?);

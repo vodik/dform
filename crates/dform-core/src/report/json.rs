@@ -89,7 +89,7 @@ impl Report {
                 .get(l)
                 .cloned()
                 .unwrap_or_else(|| "unknown".into());
-            json!({"null": crate::ir::label(l), "class": class})
+            json!({"null": crate::address::label(l), "class": class})
         })
         .collect()
     }

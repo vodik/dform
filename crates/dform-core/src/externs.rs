@@ -864,7 +864,7 @@ pub fn call_text(pred: &str, inputs: &str) -> String {
         let read = format!(
             "{}({})",
             crate::tables::READ,
-            crate::ir::string_literal(inputs)
+            crate::address::string_literal(inputs)
         );
         return match format {
             "text" => read,
@@ -877,7 +877,10 @@ pub fn call_text(pred: &str, inputs: &str) -> String {
         (Some(n), p) if p.len() != n => vec![inputs],
         (_, p) => p,
     };
-    let args: Vec<String> = parts.iter().map(|a| crate::ir::string_literal(a)).collect();
+    let args: Vec<String> = parts
+        .iter()
+        .map(|a| crate::address::string_literal(a))
+        .collect();
     format!("{pred}({})", args.join(", "))
 }
 

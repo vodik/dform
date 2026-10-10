@@ -205,7 +205,7 @@ impl Surface<'_, '_> {
         let read: Option<Vec<String>> = rhs.as_deref().and_then(|rhs| {
             let plain = !rhs.is_empty()
                 && !rhs.contains(|c: char| c.is_whitespace() || "()[]{}$,\"".contains(c));
-            plain.then(|| crate::ir::path_keys(rhs))
+            plain.then(|| crate::address::path_keys(rhs))
         });
         let next = match value {
             Some(v) => passed_cell(c, circuit, children, v, read.as_deref()),
@@ -239,13 +239,13 @@ pub(super) fn contribution_focus(fact: &Fact, path: &str) -> Option<Focus> {
     let at = fact.args.get(2).and_then(Value::as_str).unwrap_or_default();
     let skip = match at.ends_with(crate::transform::ELEM) {
         true => usize::MAX,
-        false => crate::ir::tokens(at).len(),
+        false => crate::address::tokens(at).len(),
     };
-    let keys: Vec<String> = crate::ir::tokens(path)
+    let keys: Vec<String> = crate::address::tokens(path)
         .into_iter()
         .skip(skip)
         .map_while(|t| match t.step {
-            crate::ir::Step::Key(k) => Some(crate::ir::segment_key(&k).into_owned()),
+            crate::address::Step::Key(k) => Some(crate::address::segment_key(&k).into_owned()),
             _ => None,
         })
         .collect();
@@ -257,11 +257,11 @@ pub(super) fn contribution_focus(fact: &Fact, path: &str) -> Option<Focus> {
 pub(super) fn holds<'v>(
     memo: &mut crate::report::fold::Reached<'v, 'v>,
     f: &'v Fact,
-    toks: &[crate::ir::Tok],
+    toks: &[crate::address::Tok],
     merged: &'v Value,
     top: usize,
 ) -> bool {
-    use crate::ir::Step;
+    use crate::address::Step;
     // The merged value where the contribution's path ends: a list's
     // element is found in a contribution by its value, not its position
     // in the merged list.
@@ -270,11 +270,11 @@ pub(super) fn holds<'v>(
         return false;
     };
     let key = |s: &Step| match s {
-        Step::Key(k) => Some(crate::ir::segment_key(k).into_owned()),
+        Step::Key(k) => Some(crate::address::segment_key(k).into_owned()),
         _ => None,
     };
     let prefix = |p: &str| -> Option<usize> {
-        let ptoks = crate::ir::tokens(p);
+        let ptoks = crate::address::tokens(p);
         let same = ptoks.len() <= toks.len()
             && ptoks
                 .iter()
@@ -408,7 +408,7 @@ fn read_cell(
     let paths: Vec<Vec<String>> = code_of(e)
         .split(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '.'))
         .filter(|t| t.starts_with(|ch: char| ch.is_alphabetic() || ch == '_'))
-        .map(crate::ir::path_keys)
+        .map(crate::address::path_keys)
         .collect();
     let mut cells: Vec<NodeId> = children.to_vec();
     for ch in children {
@@ -495,7 +495,7 @@ fn cell_reads(circuit: &Circuit, id: NodeId, read: &[String]) -> Option<Vec<Stri
     {
         return None;
     }
-    let name = crate::ir::path_keys(f.args.get(2)?.as_str()?);
+    let name = crate::address::path_keys(f.args.get(2)?.as_str()?);
     let scoped: Vec<String> = match f.args.get(1)?.as_str()? {
         "" => Vec::new(),
         scope => scope
@@ -585,7 +585,7 @@ pub(super) fn passed_cell(
         let at = f.args.get(3)?;
         // `gcp.project_id` of the cell `gcp`: the keys after its name;
         // a used module's item by its scope too, `config.zone` (R-111).
-        let name = crate::ir::path_keys(f.args.get(2)?.as_str()?);
+        let name = crate::address::path_keys(f.args.get(2)?.as_str()?);
         let scoped: Vec<String> = match f.args.get(1)?.as_str()? {
             "" => Vec::new(),
             scope => scope

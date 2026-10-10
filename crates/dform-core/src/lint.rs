@@ -13,10 +13,10 @@
 //! ([`key_named`]): the resources whose names do depend on the key, and so
 //! change when it does.
 
+use crate::address::Address;
 use crate::ast::{Atom, Lit, Program, RuleStmt, Span, Stmt, Term};
 use crate::circuit::{self, Circuit, Leaf, NodeId, View};
 use crate::engine::EvalResult;
-use crate::ir::Address;
 use crate::schema::Schema;
 use crate::spell;
 use crate::transform;

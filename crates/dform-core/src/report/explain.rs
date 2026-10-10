@@ -13,9 +13,9 @@ use super::tree;
 use super::tree::Site;
 use super::waits::waited;
 use super::{Report, Why};
+use crate::address::Address;
 use crate::ast::{Atom, RuleStmt, Term};
 use crate::engine::EvalResult;
-use crate::ir::Address;
 use crate::provider::ActionKind;
 use crate::query::Redactor;
 use crate::value::Value;
@@ -311,10 +311,10 @@ pub(super) fn attr_holding<'a>(
     facts: &[&'a Atom],
     path: &str,
 ) -> Option<(&'a Atom, Vec<String>, bool)> {
-    let segs = crate::ir::path_segments(path);
+    let segs = crate::address::path_segments(path);
     for k in (1..=segs.len()).rev() {
         let last = segs[k - 1];
-        let index = crate::ir::segment_parts(last).1;
+        let index = crate::address::segment_parts(last).1;
         // The segments are `path`'s own, joined by dots: the prefix to
         // `last`, its index left out, is a slice of it.
         let start = last.as_ptr() as usize - path.as_ptr() as usize;
@@ -326,8 +326,8 @@ pub(super) fn attr_holding<'a>(
             let keys: Vec<String> = match index.is_empty() {
                 true => segs[k..]
                     .iter()
-                    .take_while(|s| crate::ir::segment_parts(s).1.is_empty())
-                    .map(|s| crate::ir::segment_key(s).into_owned())
+                    .take_while(|s| crate::address::segment_parts(s).1.is_empty())
+                    .map(|s| crate::address::segment_key(s).into_owned())
                     .collect(),
                 false => vec![],
             };

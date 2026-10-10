@@ -15,7 +15,7 @@ use super::tally::{by_kind, count};
 use super::tree::Site;
 use super::waits::{owners, provisional_text, waited};
 use super::{Report, Why};
-use crate::ir::Address;
+use crate::address::Address;
 use crate::provider::ActionKind;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -498,7 +498,7 @@ impl Report {
     pub(super) fn enclosing(&self, addr: &Address, shared: &BTreeSet<String>) -> Vec<Address> {
         let mut out = Vec::new();
         let mut name = addr.name.as_str();
-        while let Some((scope, _)) = crate::ir::scope_split(name) {
+        while let Some((scope, _)) = crate::address::scope_split(name) {
             match self.instances.address(scope) {
                 Some(copy) => out.push(copy),
                 None if shared.contains(scope) => out.push(Address {
@@ -615,7 +615,7 @@ fn shared_modules<'a>(
     let mut n: BTreeMap<&str, usize> = BTreeMap::new();
     for a in addrs {
         let mut name = a.name.as_str();
-        while let Some((scope, _)) = crate::ir::scope_split(name) {
+        while let Some((scope, _)) = crate::address::scope_split(name) {
             if instances.address(scope).is_none() {
                 *n.entry(scope).or_default() += 1;
             }

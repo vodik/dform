@@ -13,7 +13,7 @@
 
 mod common;
 use common::{BACKENDS, Run, Scratch};
-use dform::ir::Address;
+use dform::address::Address;
 use dform::progress::{Event, Mode, Printer, stop_text};
 use dform::provider::{Action, ActionKind};
 use dform::report::progress::Block;

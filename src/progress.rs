@@ -23,8 +23,8 @@
 pub use dform_core::progress::*;
 
 use crossterm::{QueueableCommand, cursor, terminal};
+use dform_core::address::Address;
 use dform_core::interrupt;
-use dform_core::ir::Address;
 use dform_core::report::progress::{Block, State, took};
 use dform_core::report::{Failure, Style};
 use std::io::Write;

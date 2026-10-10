@@ -14,10 +14,10 @@
 //! apply, and the report says so where a program file's or a document's
 //! digest moved since.
 
+use crate::address::Address;
 use crate::ast::Term;
 use crate::circuit::Leaf;
 use crate::engine::EvalResult;
-use crate::ir::Address;
 use crate::query::Redactor;
 use crate::report::Why;
 use crate::report::tree::{Because, Printer, Site, cell_name};
@@ -641,7 +641,7 @@ pub fn diff(
     let addresses: Vec<Address> = all[first..]
         .iter()
         .flat_map(|a| &a.actions)
-        .filter_map(|a| crate::ir::parse_resource_address(&a.address).ok())
+        .filter_map(|a| crate::address::parse_resource(&a.address).ok())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();

@@ -4,7 +4,7 @@
 use super::evaluated::Evaluated;
 use super::{Cli, Outcome, launch};
 use crate::plugin::{self, Providers};
-use crate::{deployment, graph, ir, partition, query, report, schema};
+use crate::{address, deployment, graph, partition, query, report, schema};
 use anyhow::{Result, bail};
 
 /// `dform dev eval`: the evaluation's size and resources.
@@ -30,7 +30,7 @@ pub(super) struct Show {
 
 impl Show {
     pub(super) fn run(&self, run: &Evaluated, compiled: &deployment::Compiled) -> Result<Outcome> {
-        let addr = ir::parse_resource_address(&self.addr)?;
+        let addr = address::parse_resource(&self.addr)?;
         let Some(r) = compiled.resources.iter().find(|r| r.addr == addr) else {
             bail!("no resource {} in this deployment", report::address(&addr));
         };

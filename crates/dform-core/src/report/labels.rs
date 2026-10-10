@@ -2,7 +2,7 @@
 //! and an attribute, a null's or a secret's label as what it stands for, a stored
 //! name as the source names it, a relation, a change's kind and mark, an id.
 
-use crate::ir::Address;
+use crate::address::Address;
 use crate::provider::ActionKind;
 
 /// A resource's address as the plan, `why`, `query` and the editor print
@@ -21,13 +21,13 @@ pub fn path(name: &str) -> String {
     if name.is_empty() {
         return "\"\"".into();
     }
-    crate::ir::path_segments(name)
+    crate::address::path_segments(name)
         .into_iter()
         .map(|seg| {
             let bare = !seg.starts_with('"')
                 && seg.contains(|c: char| c.is_whitespace() || c.is_control());
             match bare {
-                true => crate::ir::string_literal(seg),
+                true => crate::address::string_literal(seg),
                 false => seg.to_string(),
             }
         })
@@ -38,7 +38,7 @@ pub fn path(name: &str) -> String {
 /// A reference to resource `a`, or to its attribute `attr`, as a value
 /// prints: its path, `k3s.server`, `k3s.server.public_ip`.
 pub fn reference(a: &Address, attr: &str) -> String {
-    format!("{}{}", path(&a.name), crate::ir::path_suffix(attr))
+    format!("{}{}", path(&a.name), crate::address::path_suffix(attr))
 }
 
 /// A resource's attribute as a diagnostic names it: `T k3s.server.p`;
@@ -53,7 +53,7 @@ pub fn attribute(a: &Address, attr: &str) -> String {
 /// A null's or a secret's label `T/A#P` as a diagnostic names what it
 /// stands for: [`attribute`], `T k3s.server.public_ip`; a resource's
 /// identity [`address`]; an input's or an output's as
-/// [`crate::ir::label`] says it.
+/// [`crate::address::label`] says it.
 pub fn attribute_label(l: &str) -> String {
     if let Some(call) = extern_label(l) {
         return call;
@@ -67,14 +67,14 @@ pub fn attribute_label(l: &str) -> String {
                 false => attribute(&a, &p),
             }
         }
-        _ => crate::ir::label(l),
+        _ => crate::address::label(l),
     }
 }
 
 /// A null's or a secret's label `T/A#P` as the value it stands for
 /// (R-111): the reference it is, `k3s.server.public_ip`; a resource's
 /// identity the resource, `k3s.server`; an input's or an output's as
-/// [`crate::ir::label`] says it.
+/// [`crate::address::label`] says it.
 pub fn label(l: &str) -> String {
     if let Some(call) = extern_label(l) {
         return call;
@@ -89,7 +89,7 @@ pub fn label(l: &str) -> String {
                 false => reference(&a, &p),
             }
         }
-        _ => crate::ir::label(l),
+        _ => crate::address::label(l),
     }
 }
 
@@ -102,7 +102,7 @@ pub(super) fn extern_label(l: &str) -> Option<String> {
     crate::externs::is_call_label(&pred, &col).then(|| crate::externs::call_text(&pred, &inputs))
 }
 
-/// A label as [`crate::ir::label`] printed it (`T["A"].p`), when it is an
+/// A label as [`crate::address::label`] printed it (`T["A"].p`), when it is an
 /// extern call's ([`extern_label`]).
 fn printed_call(l: &str) -> Option<String> {
     let (typ, rest) = l.split_once('[')?;
@@ -112,26 +112,26 @@ fn printed_call(l: &str) -> Option<String> {
     crate::externs::is_call_label(typ, col).then(|| crate::externs::call_text(typ, &inputs))
 }
 
-/// A label as [`crate::ir::label`] printed it (`T["A"].p`), as
+/// A label as [`crate::address::label`] printed it (`T["A"].p`), as
 /// [`label`] prints it.
 pub(super) fn printed_label(l: &str) -> String {
     if let Some(call) = printed_call(l) {
         return call;
     }
-    match crate::ir::parse_address(l) {
+    match crate::address::parse(l) {
         Ok((a, p)) => reference(&a, p.as_deref().unwrap_or_default()),
         Err(_) => l.to_string(),
     }
 }
 
-/// A label as [`crate::ir::label`] printed it (`T["A"].p`), as
+/// A label as [`crate::address::label`] printed it (`T["A"].p`), as
 /// [`attribute_label`] prints it; a call (`random.password("db")`) as
 /// itself.
 pub(super) fn printed_attribute(l: &str) -> String {
     if let Some(call) = printed_call(l) {
         return call;
     }
-    match crate::ir::parse_address(l) {
+    match crate::address::parse(l) {
         Ok((a, p)) => attribute(&a, p.as_deref().unwrap_or_default()),
         Err(_) => l.to_string(),
     }
@@ -141,7 +141,7 @@ pub(super) fn printed_attribute(l: &str) -> String {
 /// `T[?]` or `T["name-${x}"]`) as [`address`] prints it: `T ?` for an
 /// unknown number, a template as the statement writes it.
 pub fn address_text(s: &str) -> String {
-    if let Ok(a) = crate::ir::parse_resource_address(s) {
+    if let Ok(a) = crate::address::parse_resource(s) {
         return address(&a);
     }
     match s.split_once('[') {

@@ -7,8 +7,8 @@ use super::fold::schema_path;
 use super::mask::{Shown, masked, shown};
 use super::tree;
 use super::tree::Site;
+use crate::address::Address;
 use crate::ast::{Atom, Term};
-use crate::ir::Address;
 use crate::provider::{Action, ActionKind, Change};
 use crate::query::Redactor;
 use crate::schema::Schema;
@@ -256,7 +256,7 @@ pub(super) fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs
 pub(super) fn forces(a: &Action, schema: &Schema) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for c in &a.changes {
-        let p = crate::ir::path_keys(&c.path)
+        let p = crate::address::path_keys(&c.path)
             .iter()
             .map(|k| k.split('[').next().unwrap_or(k).to_string())
             .collect::<Vec<_>>()

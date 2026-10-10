@@ -234,7 +234,7 @@ pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
     let bits = |t: &Term| matches!(t, Term::Val(Value::Str(s)) if s.strip_suffix(".bits").is_some_and(|n| names.contains(&n)));
     // `x.len`: its length (R-155), lowered or as its text.
     let length = |t: &Term| {
-        of_self(t, crate::ir::LEN)
+        of_self(t, crate::address::LEN)
             || matches!(t, Term::Val(Value::Str(s)) if s.strip_suffix(".len").is_some_and(|n| names.contains(&n)))
     };
     let int = |t: &Term| match t {
@@ -690,7 +690,7 @@ fn deny_rules(
         (
             "reason".to_string(),
             Term::Func {
-                name: crate::ir::FORMAT.into(),
+                name: crate::address::FORMAT.into(),
                 args: vec![str_term(&format!("%s does not satisfy {text}")), v],
             },
         ),

@@ -187,7 +187,7 @@ fn addr_globs(t: &Term, text: &Text, depth: usize) -> Option<Vec<Vec<String>>> {
             .or_else(|| text.copy_of(x)),
         // A template: its literal text, each argument the text fixes
         // spliced in, any other a gap.
-        Term::Func { name, args } if name == crate::ir::FORMAT => {
+        Term::Func { name, args } if name == crate::address::FORMAT => {
             let fmt = args.first()?.as_str()?;
             let mut globs = vec![vec![String::new()]];
             for (i, part) in fmt.split("%s").enumerate() {
@@ -211,16 +211,16 @@ fn addr_globs(t: &Term, text: &Text, depth: usize) -> Option<Vec<Vec<String>>> {
             Some(globs)
         }
         // A header name's segment (R-112).
-        Term::Func { name, args } if name == crate::ir::NAME_SEGMENT && args.len() == 1 => {
+        Term::Func { name, args } if name == crate::address::NAME_SEGMENT && args.len() == 1 => {
             Some(segment_globs(addr_globs(&args[0], text, depth)?))
         }
-        Term::Func { name, args } if name == crate::ir::SCOPED && args.len() == 2 => {
+        Term::Func { name, args } if name == crate::address::SCOPED && args.len() == 2 => {
             let scope = args[0].as_str()?;
-            let prefix = crate::ir::scoped(scope, "");
+            let prefix = crate::address::scoped(scope, "");
             let mut out = Vec::new();
             for g in addr_globs(&args[1], text, depth)? {
                 // A name that is already an address is itself (R-65).
-                let scoped = g.iter().any(|p| crate::ir::is_scoped(p));
+                let scoped = g.iter().any(|p| crate::address::is_scoped(p));
                 if !scoped {
                     let mut s = g.clone();
                     s[0] = format!("{prefix}{}", s[0]);
@@ -267,12 +267,14 @@ fn splice(g: &[String], a: &[String]) -> Vec<String> {
 fn segment_globs(globs: Vec<Vec<String>>) -> Vec<Vec<String>> {
     let mut out = Vec::new();
     for g in globs {
-        let must = g.iter().any(|p| crate::ir::name_segment(p) != p.as_str());
+        let must = g
+            .iter()
+            .any(|p| crate::address::name_segment(p) != p.as_str());
         if must || g.len() > 1 {
             let mut q: Vec<String> = g
                 .iter()
                 .map(|p| {
-                    let l = crate::ir::string_literal(p);
+                    let l = crate::address::string_literal(p);
                     l[1..l.len() - 1].to_string()
                 })
                 .collect();
@@ -564,11 +566,11 @@ pub fn normalize_path(typ: &Option<String>, path: &str) -> String {
         Some(transform::OUTPUT) => path.to_string(),
         // An element write (`transform::ELEM`) is its own node, `P[]`.
         _ if path.ends_with(transform::ELEM) => {
-            let first = crate::ir::path_segments(path)[0];
-            let top = crate::ir::segment_parts(first).0;
-            format!("{}{}", crate::ir::path_key(&top), transform::ELEM)
+            let first = crate::address::path_segments(path)[0];
+            let top = crate::address::segment_parts(first).0;
+            format!("{}{}", crate::address::path_key(&top), transform::ELEM)
         }
-        _ => crate::ir::path_segments(path)[0].to_string(),
+        _ => crate::address::path_segments(path)[0].to_string(),
     }
 }
 
@@ -664,7 +666,7 @@ fn type_keyed(pred: &str) -> bool {
 fn key_type(t: &Term) -> Option<String> {
     match t {
         Term::Val(Value::Ref { typ, .. }) => Some(typ.clone()),
-        Term::Func { name, args } if name == crate::ir::REF && args.len() == 3 => {
+        Term::Func { name, args } if name == crate::address::REF && args.len() == 3 => {
             const_str(&args[0])
         }
         t => const_str(t),
@@ -710,7 +712,7 @@ fn other_path(r: &RuleStmt) -> Option<String> {
     };
     let k = r.body.iter().find_map(|l| match l {
         Lit::Eq(Term::Var(x), Term::Func { name, args })
-            if x == p && name == crate::ir::NAME_SEGMENT =>
+            if x == p && name == crate::address::NAME_SEGMENT =>
         {
             match args.as_slice() {
                 [Term::Var(k)] => Some(k),
@@ -724,7 +726,9 @@ fn other_path(r: &RuleStmt) -> Option<String> {
             [Term::Val(Value::List(keys)), Term::Var(x)] if x == k => {
                 let segs: Vec<String> = keys
                     .iter()
-                    .map(|v| crate::ir::name_segment(v.as_str().unwrap_or_default()).into_owned())
+                    .map(|v| {
+                        crate::address::name_segment(v.as_str().unwrap_or_default()).into_owned()
+                    })
                     .collect();
                 Some(format!("{OTHER_OPEN}{}}}", segs.join(",")))
             }
@@ -1012,7 +1016,7 @@ fn value_body(r: &RuleStmt) -> Option<ValueBody<'_>> {
     };
     let (x, value) = r.body.iter().find_map(|l| match l {
         Lit::Eq(Term::Var(x), Term::Func { name, args })
-            if name == crate::ir::RESOURCE_BODY && args.len() == 1 =>
+            if name == crate::address::RESOURCE_BODY && args.len() == 1 =>
         {
             Some((x, &args[0]))
         }
@@ -1030,7 +1034,7 @@ fn value_body(r: &RuleStmt) -> Option<ValueBody<'_>> {
     };
     let segment = r.body.iter().position(|l| {
         matches!(l, Lit::Eq(Term::Var(y), Term::Func { name, args })
-            if y == p && name == crate::ir::NAME_SEGMENT
+            if y == p && name == crate::address::NAME_SEGMENT
                 && matches!(args.as_slice(), [Term::Var(z)] if z == k))
     })?;
     Some(ValueBody {
@@ -1056,7 +1060,9 @@ fn per_key(r: &RuleStmt, vb: &ValueBody, schema: &Schema) -> Option<Vec<RuleStmt
                 .attrs
                 .keys()
                 .filter(|(t, _)| t == vb.typ)
-                .map(|(_, p)| crate::ir::segment_key(crate::ir::path_segments(p)[0]).into_owned())
+                .map(|(_, p)| {
+                    crate::address::segment_key(crate::address::path_segments(p)[0]).into_owned()
+                })
                 .collect();
             if declared.is_empty() {
                 return None;
@@ -1084,7 +1090,7 @@ fn per_key(r: &RuleStmt, vb: &ValueBody, schema: &Schema) -> Option<Vec<RuleStmt
             })
             .collect();
         let mut head = r.head.clone();
-        head.args[2] = Term::Val(Value::Str(crate::ir::name_segment(key).into_owned()));
+        head.args[2] = Term::Val(Value::Str(crate::address::name_segment(key).into_owned()));
         out.push(RuleStmt {
             head,
             body,
@@ -1365,7 +1371,7 @@ fn answer_has(
         if spec.has("computed") {
             continue;
         }
-        let segs = crate::ir::path_segments(p);
+        let segs = crate::address::path_segments(p);
         for n in 1..=segs.len() {
             declared.insert((t.clone(), segs[..n].join(".")));
         }
@@ -1402,7 +1408,7 @@ fn answer_has(
     let computed = |a: &Atom| -> bool {
         let Some(top) = a.args[2]
             .as_str()
-            .and_then(|p| crate::ir::path_segments(p).into_iter().next())
+            .and_then(|p| crate::address::path_segments(p).into_iter().next())
         else {
             return false;
         };

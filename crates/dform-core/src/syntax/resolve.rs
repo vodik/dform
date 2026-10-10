@@ -226,7 +226,7 @@ fn field_orders(root: &SyntaxNode) {
                         continue;
                     };
                     let text = path.text().to_string();
-                    let segs: Vec<String> = crate::ir::path_keys(text.trim());
+                    let segs: Vec<String> = crate::address::path_keys(text.trim());
                     for i in 0..segs.len() {
                         let (at, key) = (segs[..i].to_vec(), segs[i].clone());
                         match under.iter_mut().find(|(p, _)| *p == at) {
@@ -457,7 +457,7 @@ pub fn copy_parts(n: &SyntaxNode) -> (String, String) {
         .map(|t| match t.kind() {
             STRING if has_hole(t.text()) => {
                 let text = string_value(t.text()).unwrap_or_else(|_| t.text().to_string());
-                crate::ir::name_segment(&text).into_owned()
+                crate::address::name_segment(&text).into_owned()
             }
             STRING => string_value(t.text()).unwrap_or_else(|_| t.text().to_string()),
             _ => t.text().to_string(),
@@ -1388,7 +1388,7 @@ impl<'u> Lowerer<'u> {
             .into_iter()
             .find(|s| self.names(*s).resources(name).is_some())
             .unwrap_or(from);
-        let segment = crate::ir::name_segment(name);
+        let segment = crate::address::name_segment(name);
         match self.lexical(scope, declared) {
             Some(body) if !body.is_empty() => crate::modules::lexical_term(&body, &segment),
             _ => self.scope_term(scope, declared, str_term(&segment)),
@@ -3167,7 +3167,7 @@ impl<'u> Lowerer<'u> {
             match t.kind() {
                 DOT => out.push('.'),
                 L_BRACKET | R_BRACKET | INT => out.push_str(t.text()),
-                STRING => out.push_str(&crate::ir::path_key(&self.string(&t)?)),
+                STRING => out.push_str(&crate::address::path_key(&self.string(&t)?)),
                 _ => out.push_str(t.text()),
             }
         }
@@ -4481,7 +4481,10 @@ impl<'u> Lowerer<'u> {
         let t = self.string_term(rc, header, &mut pre)?;
         body.extend(pre);
         let v = fresh(rc, "Addr");
-        body.push(Lit::Eq(var(&v), func(crate::ir::NAME_SEGMENT, vec![t])));
+        body.push(Lit::Eq(
+            var(&v),
+            func(crate::address::NAME_SEGMENT, vec![t]),
+        ));
         Ok(var(&v))
     }
 
@@ -4538,7 +4541,7 @@ impl<'u> Lowerer<'u> {
         let name = if interp {
             self.name_from_clause(&mut rc, &header, &mut body)?
         } else if header.kind() == STRING {
-            str_term(&crate::ir::name_segment(&self.string(&header)?))
+            str_term(&crate::address::name_segment(&self.string(&header)?))
         } else {
             let text = header.text();
             let bound = bound_vars(&body);
@@ -5139,7 +5142,7 @@ impl<'u> Lowerer<'u> {
         match got {
             Some(typ) => {
                 let r = func(
-                    crate::ir::REF,
+                    crate::address::REF,
                     vec![str_term(&typ), value.clone(), str_term("")],
                 );
                 match crate::types::mismatch(ty, &r) {
@@ -5597,7 +5600,7 @@ impl<'u> Lowerer<'u> {
                 let target = match t.as_str() {
                     crate::modules::INPUT if s(1).as_deref() == Some("") => p,
                     crate::modules::INPUT => format!("{}.{p}", s(1).unwrap_or_default()),
-                    _ => format!("{t}[{}]{}", a[1], crate::ir::path_suffix(&p)),
+                    _ => format!("{t}[{}]{}", a[1], crate::address::path_suffix(&p)),
                 };
                 Some(format!("`set {target} {op} {}{cond}`", a[3]))
             }
@@ -5681,7 +5684,7 @@ impl<'u> Lowerer<'u> {
                     a[3],
                     s(0).unwrap(),
                     a[1],
-                    crate::ir::path_suffix(&s(2).unwrap())
+                    crate::address::path_suffix(&s(2).unwrap())
                 ),
             ),
             ("output", 3) if s(0).is_some() && s(1).is_some() => (
@@ -5700,7 +5703,7 @@ impl<'u> Lowerer<'u> {
                     a[3],
                     s(0).unwrap(),
                     a[1],
-                    crate::ir::path_suffix(&s(2).unwrap())
+                    crate::address::path_suffix(&s(2).unwrap())
                 ),
             ),
             ("cloud_exists", 2) if s(0).is_some() => (
@@ -6737,7 +6740,7 @@ impl<'u> Lowerer<'u> {
             .iter()
             .map(|t| {
                 func(
-                    crate::ir::REF,
+                    crate::address::REF,
                     vec![str_term(t), addr.clone(), str_term("")],
                 )
             })
@@ -7066,7 +7069,7 @@ impl<'u> Lowerer<'u> {
         if let Some(path) = rc.instances.get(&c.head).cloned() {
             let v = self.var_named(rc, &c.head, span);
             return Some(func(
-                crate::ir::REF,
+                crate::address::REF,
                 vec![str_term(&path), var(&v), str_term("")],
             ));
         }
@@ -7076,7 +7079,7 @@ impl<'u> Lowerer<'u> {
         let (at, path) = self.instance_in(rc.scope, &c.head)?;
         let name = self.scope_term(rc.scope, at, str_term(&c.head));
         Some(func(
-            crate::ir::REF,
+            crate::address::REF,
             vec![str_term(&path), name, str_term("")],
         ))
     }
@@ -7101,11 +7104,11 @@ impl<'u> Lowerer<'u> {
             && self.resource(rc.scope, &c.head).is_some()
         {
             let (typ, addr) = self.reference(rc, &c, pre, span)?;
-            return Ok(func(crate::ir::REF, vec![typ, addr, str_term("")]));
+            return Ok(func(crate::address::REF, vec![typ, addr, str_term("")]));
         }
         match self.resolve(rc, &c, pre)? {
             Res::Ref { typ, addr, path } if path.is_empty() => {
-                Ok(func(crate::ir::REF, vec![typ, addr, str_term("")]))
+                Ok(func(crate::address::REF, vec![typ, addr, str_term("")]))
             }
             res => {
                 if c.is_bare() && matches!(res, Res::Val(Term::Var(_))) {
@@ -7188,7 +7191,7 @@ impl<'u> Lowerer<'u> {
     ) -> L<Term> {
         let arg = terms(list).next().ok_or(Skip)?;
         match self.ref_term(rc, &arg, Pos::Content, pre)? {
-            r @ Term::Func { .. } => Ok(func(crate::ir::REF, vec![r])),
+            r @ Term::Func { .. } => Ok(func(crate::address::REF, vec![r])),
             _ => self.error(
                 span,
                 "`ref(r)` takes a resource: its name in scope, `T[\"a\"]`, or a variable `in T`",
@@ -7458,7 +7461,7 @@ impl<'u> Lowerer<'u> {
             c.ops.pop();
             let res = self.resolve(rc, &c, pre)?;
             let t = self.realize(rc, res, Pos::Content, pre, span)?;
-            return Ok(func(crate::ir::LEN, vec![t]));
+            return Ok(func(crate::address::LEN, vec![t]));
         }
         // A resource by its bare name, given as a value: the
         // reference, in its module or out of it (R-43).
@@ -7474,7 +7477,7 @@ impl<'u> Lowerer<'u> {
                 return Ok(t);
             }
             let (typ, addr) = self.reference(rc, &c, pre, span)?;
-            return Ok(func(crate::ir::REF, vec![typ, addr, str_term("")]));
+            return Ok(func(crate::address::REF, vec![typ, addr, str_term("")]));
         }
         let res = self.resolve(rc, &c, pre)?;
         if let Res::Ref { path, .. } = &res
@@ -7547,8 +7550,8 @@ impl<'u> Lowerer<'u> {
         // `cloud_ref(T, name, path)`, a form of the language, is
         // the lowering's `__cloud_ref` (R-155).
         let name = match name.as_str() {
-            "cloud_ref" => crate::ir::CLOUD_REF.to_string(),
-            "ref" => crate::ir::REF.to_string(),
+            "cloud_ref" => crate::address::CLOUD_REF.to_string(),
+            "ref" => crate::address::REF.to_string(),
             _ => name,
         };
         let args = self.typed_args(&name, args, span)?;
@@ -7829,7 +7832,7 @@ impl<'u> Lowerer<'u> {
         }
         let mut all = vec![str_term(&fmt)];
         all.extend(args);
-        Ok(func(crate::ir::FORMAT, all))
+        Ok(func(crate::address::FORMAT, all))
     }
 
     /// An interpolation hole: a term, read now (a content position).
@@ -8161,7 +8164,10 @@ impl<'u> Lowerer<'u> {
                 None => {
                     let name = fresh(rc, &capitalise(&name));
                     let mark = func(crate::modules::ABSOLUTE, vec![var(&name)]);
-                    let whole = func(crate::ir::REF, vec![str_term(&typ), mark, str_term("")]);
+                    let whole = func(
+                        crate::address::REF,
+                        vec![str_term(&typ), mark, str_term("")],
+                    );
                     pre.push(Lit::Pos(atom_at(&pred, vec![whole], span)));
                     rc.values.insert(key, name.clone());
                     var(&name)
@@ -8498,8 +8504,8 @@ impl<'u> Lowerer<'u> {
                     return Ok(Some(Res::Ref {
                         typ: str_term(&types[0]),
                         addr: func(
-                            crate::ir::SCOPED,
-                            vec![scope, str_term(&crate::ir::name_segment(x))],
+                            crate::address::SCOPED,
+                            vec![scope, str_term(&crate::address::name_segment(x))],
                         ),
                         path,
                     }));
@@ -8636,8 +8642,8 @@ impl<'u> Lowerer<'u> {
                     return Ok(Res::Ref {
                         typ: str_term(&types[0]),
                         addr: func(
-                            crate::ir::SCOPED,
-                            vec![inst, str_term(&crate::ir::name_segment(k))],
+                            crate::address::SCOPED,
+                            vec![inst, str_term(&crate::address::name_segment(k))],
                         ),
                         path: segs,
                     });
@@ -8786,7 +8792,7 @@ impl<'u> Lowerer<'u> {
                     None => {
                         let holes = text(vec!["%s".to_string(); keys.len()]);
                         func(
-                            crate::ir::FORMAT,
+                            crate::address::FORMAT,
                             std::iter::once(str_term(&holes)).chain(values).collect(),
                         )
                     }
@@ -8865,7 +8871,7 @@ impl<'u> Lowerer<'u> {
                 let write = if unique {
                     n.clone()
                 } else {
-                    crate::ir::Address {
+                    crate::address::Address {
                         typ,
                         name: n.clone(),
                     }
@@ -9002,7 +9008,7 @@ impl<'u> Lowerer<'u> {
     /// error naming the dot form, `"blue.vpc"`.
     fn address_key(&mut self, addr: &Term, span: Span) -> L<()> {
         if let Term::Val(Value::Str(a)) = addr
-            && let Some(fixed) = crate::ir::old_scope(a)
+            && let Some(fixed) = crate::address::old_scope(a)
         {
             let d = Diagnostic::error(
                 span,
@@ -9056,20 +9062,20 @@ impl<'u> Lowerer<'u> {
             Res::Type(t) => Ok(str_term(&t)),
             Res::Var { var: v, path } => self.path_of(rc, v, path, pre, span),
             Res::Ref { typ, addr, path } if path.is_empty() => Ok(match pos {
-                Pos::Value => func(crate::ir::REF, vec![typ, addr, str_term("")]),
+                Pos::Value => func(crate::address::REF, vec![typ, addr, str_term("")]),
                 _ => addr,
             }),
             Res::Ref { typ, addr, path } if pos != Pos::Content => {
                 let Some(p) = path_string(&path) else {
                     return self.error(span, "a reference's path is constant");
                 };
-                Ok(func(crate::ir::REF, vec![typ, addr, str_term(&p)]))
+                Ok(func(crate::address::REF, vec![typ, addr, str_term(&p)]))
             }
             Res::Ref { typ, addr, path } => {
                 let Seg::F(first) = &path[0] else {
                     return self.error(span, "a resource's attribute is `r.name`");
                 };
-                let first = crate::ir::path_key(first).into_owned();
+                let first = crate::address::path_key(first).into_owned();
                 let v = self.read_var(
                     rc,
                     (Read::Attr, "attr"),
@@ -9101,7 +9107,7 @@ impl<'u> Lowerer<'u> {
                     // A typed output holds an address: given as a value, it
                     // is the reference (R-43).
                     Some(typ) if pos == Pos::Value && path.is_empty() => {
-                        Ok(func(crate::ir::REF, vec![typ, v, str_term("")]))
+                        Ok(func(crate::address::REF, vec![typ, v, str_term("")]))
                     }
                     _ => self.path_of(rc, v, path, pre, span),
                 }
@@ -9200,7 +9206,7 @@ impl<'u> Lowerer<'u> {
             }
             let p = fields
                 .iter()
-                .map(|f| crate::ir::path_key(f))
+                .map(|f| crate::address::path_key(f))
                 .collect::<Vec<_>>()
                 .join(".");
             fields.clear();
@@ -9211,7 +9217,7 @@ impl<'u> Lowerer<'u> {
                 Seg::F(f) => {
                     if let Some((_, list)) = &mut at {
                         list.push('.');
-                        list.push_str(&crate::ir::path_key(&f));
+                        list.push_str(&crate::address::path_key(&f));
                     }
                     fields.push(f)
                 }
@@ -9268,7 +9274,7 @@ impl<'u> Lowerer<'u> {
                         vec![
                             typ.clone(),
                             addr.clone(),
-                            str_term(&crate::ir::path_key(p)),
+                            str_term(&crate::address::path_key(p)),
                             value,
                         ],
                         span,
@@ -9446,7 +9452,7 @@ fn has_atom(res: &Res, span: Span) -> Option<Atom> {
     let keys: Vec<String> = path
         .iter()
         .map(|s| match s {
-            Seg::F(p) => Some(crate::ir::path_key(p).into_owned()),
+            Seg::F(p) => Some(crate::address::path_key(p).into_owned()),
             Seg::I(_) | Seg::K(_) => None,
         })
         .collect::<Option<_>>()?;
@@ -9539,7 +9545,7 @@ fn path_string(path: &[Seg]) -> Option<String> {
                 if !out.is_empty() {
                     out.push('.');
                 }
-                out.push_str(&crate::ir::path_key(f));
+                out.push_str(&crate::address::path_key(f));
             }
             Seg::I(Term::Val(Value::Int(i))) => out.push_str(&format!("[{i}]")),
             Seg::I(_) | Seg::K(_) => return None,
@@ -9559,7 +9565,7 @@ pub(crate) fn bound_vars(body: &[Lit]) -> BTreeSet<String> {
             // A relation's column takes a reference apart (R-42), in a
             // row of a copy's relation too (`__rows(.., [ref(T, A, "")])`).
             Term::Func { name, args }
-                if name == crate::ir::REF || name == crate::modules::ABSOLUTE =>
+                if name == crate::address::REF || name == crate::modules::ABSOLUTE =>
             {
                 args.iter().for_each(|x| pattern(x, out))
             }

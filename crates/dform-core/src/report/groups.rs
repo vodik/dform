@@ -4,9 +4,9 @@
 
 use super::tree::Site;
 use super::waits::{Resolves, nulls};
+use crate::address::Address;
 use crate::ast::{Atom, Term};
 use crate::engine::EvalResult;
-use crate::ir::Address;
 use crate::spell;
 use crate::value::Value;
 use std::collections::BTreeMap;

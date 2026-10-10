@@ -14,13 +14,14 @@
 //! for the commands that stop between them: [`load`] (`dform test`,
 //! `strata`), [`Loaded::locate`] (`state show`, `log`, ...).
 
+use crate::address::{self, Address};
 use crate::ast::{Atom, Lit, Program, Span, Stmt, Term};
 use crate::circuit::{Leaf, NodeId, View};
 use crate::diag::{Diagnostic, Diagnostics, Fix};
 use crate::engine::{self, EvalResult};
 use crate::externs::{self, Externs};
 use crate::inputs::{self, Declared};
-use crate::ir::{self, Address};
+use crate::ir;
 use crate::plugin::providers::ProviderWait;
 use crate::plugin::{self, Launch, Providers};
 use crate::project::{self, Manifest};
@@ -1345,7 +1346,7 @@ fn unrevealable(backend: &Providers, res: &EvalResult) -> Result<()> {
         let Some(label) = s.nulls.iter().find(|l| backend.holds_secret(l)) else {
             continue;
         };
-        let secret = ir::label(label);
+        let secret = address::label(label);
         let through = s
             .func
             .as_deref()
@@ -2163,7 +2164,7 @@ pub fn provenance(res: &EvalResult, id: NodeId) -> (Option<At>, Vec<(At, String)
                         Some(Value::Str(r)) => r.clone(),
                         _ => "?".into(),
                     };
-                    let at = crate::ir::Address {
+                    let at = crate::address::Address {
                         typ: text_of(fact.args.first()),
                         name: text_of(fact.args.get(1)),
                     };

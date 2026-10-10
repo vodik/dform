@@ -328,7 +328,7 @@ fn map_normalize(elem: &Lattice, path: &str, items: Vec<(Value, Witnesses)>) -> 
     let mut out = BTreeMap::new();
     let mut stuck: BTreeSet<String> = BTreeSet::new();
     for (k, contribs) in per_key {
-        let child = crate::ir::path_join(path, &k);
+        let child = crate::address::path_join(path, &k);
         match normalize(elem, &child, contribs) {
             Elem::Bottom => {}
             Elem::Val(v, _) => {
@@ -1953,7 +1953,7 @@ pub(crate) fn value_at<'v>(v: &'v Value, path: &str) -> Option<&'v Value> {
     if path.is_empty() {
         return Some(v);
     }
-    crate::ir::path_keys(path)
+    crate::address::path_keys(path)
         .into_iter()
         .try_fold(v, |v, k| match v {
             Value::Obj(m) => m.get(&k),
@@ -1977,10 +1977,10 @@ fn lub_ranked_map(
             .list
             .strip_prefix(&here)
             .and_then(|r| r.strip_prefix('.'))
-            .and_then(|r| crate::ir::path_segments(r).into_iter().next())
+            .and_then(|r| crate::address::path_segments(r).into_iter().next())
         {
             per_key
-                .entry(crate::ir::segment_key(k).into_owned())
+                .entry(crate::address::segment_key(k).into_owned())
                 .or_default();
         }
     }
@@ -2004,7 +2004,7 @@ fn lub_ranked_map(
         // Nested objects merge per key too: a dotted path `a.b.c` is the
         // contribution `{b: {c: V}}` to `a`, so two dotted paths under one
         // attribute meet here and must not conflict on `b`.
-        let key_path = crate::ir::path_join(path, &k);
+        let key_path = crate::address::path_join(path, &k);
         let map = Lattice::Map(Box::new(elem.clone()));
         let lat = if let Some(l) = nested.lattice(&key_path) {
             l

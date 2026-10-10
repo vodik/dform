@@ -47,8 +47,9 @@
 //! generation of it (R-189, `state::next_name`), so the two exist at once,
 //! and what reads the name moves to the new one before the old goes.
 
+use crate::address::Address;
 use crate::ast::{Atom, Term};
-use crate::ir::{Address, Adopt, Resource};
+use crate::ir::{Adopt, Resource};
 use crate::lattice::nulls_in;
 use crate::plugin::Providers;
 use crate::provider::{Action, ActionKind, Change, Plan, fmt_value};

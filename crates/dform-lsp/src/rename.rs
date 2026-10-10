@@ -9,8 +9,8 @@ use crate::analysis::{Outcome, Severity};
 use crate::refs::Project;
 use crate::text;
 use anyhow::{Result, anyhow, bail};
+use dform_core::address::{scope_split, scoped};
 use dform_core::ast::Term;
-use dform_core::ir::{scope_split, scoped};
 use dform_core::names::{self, Parsed, Symbol, What};
 use dform_core::syntax::{SyntaxKind, SyntaxToken};
 use dform_core::value::Value;
@@ -308,7 +308,7 @@ impl Renaming {
                 })
                 .collect();
             let planned_after = deformations(a);
-            let at = |t: &String, x: &String| dform_core::ir::Address {
+            let at = |t: &String, x: &String| dform_core::address::Address {
                 typ: t.clone(),
                 name: x.clone(),
             };
@@ -345,8 +345,8 @@ fn severity(s: Severity) -> &'static str {
 /// name, one of a module instance by its address, which a module body
 /// does not scope again.
 fn reference(typ: &str, b: &str) -> String {
-    if dform_core::ir::is_scoped(b) {
-        dform_core::ir::Address {
+    if dform_core::address::is_scoped(b) {
+        dform_core::address::Address {
             typ: typ.to_string(),
             name: b.to_string(),
         }

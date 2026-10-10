@@ -3,10 +3,10 @@
 //! where it came from; the facts a pattern names and the part of an object it
 //! focuses on (`find`, `Focus`).
 
+use crate::address::{Step, Tok};
 use crate::ast::{Atom, Lit, Term};
 use crate::circuit::{Circuit, Fact, Leaf, NodeId, View};
 use crate::engine;
-use crate::ir::{Step, Tok};
 use crate::query::Redactor;
 use crate::report::fold;
 use crate::value::Value;
@@ -109,7 +109,7 @@ pub fn find(pattern: &Atom, facts: &BTreeSet<Atom>) -> Result<Vec<(Atom, Option<
     // A quoted segment is one key (R-77): `annotations."a.b/c"`; past a
     // list, the element by its key or position as the plan prints it,
     // `ports[port=5432,protocol=TCP].protocol`.
-    let toks = crate::ir::tokens(path);
+    let toks = crate::address::tokens(path);
     let Some(Tok {
         step: Step::Key(top),
         ..
@@ -121,7 +121,7 @@ pub fn find(pattern: &Atom, facts: &BTreeSet<Atom>) -> Result<Vec<(Atom, Option<
     let keys: Vec<String> = toks[1..]
         .iter()
         .map_while(|t| match &t.step {
-            Step::Key(k) => Some(crate::ir::segment_key(k).into_owned()),
+            Step::Key(k) => Some(crate::address::segment_key(k).into_owned()),
             _ => None,
         })
         .collect();

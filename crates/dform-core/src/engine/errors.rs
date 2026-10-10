@@ -198,7 +198,7 @@ pub(super) fn head_error(head: &Atom, state: &HashMap<String, Value>) -> Option<
         ("arg", [t, a, k, _, _]) => match (s(t), s(a), s(k)) {
             (Some(typ), Some(name), Some(k)) => Some(match typ.as_str() {
                 crate::modules::INPUT | crate::transform::OUTPUT => format!("{typ} {k}"),
-                _ => crate::report::attribute(&crate::ir::Address { typ, name }, &k),
+                _ => crate::report::attribute(&crate::address::Address { typ, name }, &k),
             }),
             _ => None,
         },
@@ -322,7 +322,7 @@ fn ref_and_string_written(
         }
         _ => return None,
     };
-    let reference = crate::report::address(&crate::ir::Address {
+    let reference = crate::report::address(&crate::address::Address {
         typ: typ.clone(),
         name: name.clone(),
     });
@@ -330,7 +330,7 @@ fn ref_and_string_written(
         true => "`has r` tests whether a reference is set".to_string(),
         false => format!(
             "compare with the resource: `{}`, or its name in scope",
-            crate::ir::Address {
+            crate::address::Address {
                 typ: typ.clone(),
                 name: text.clone(),
             }
@@ -403,7 +403,7 @@ pub(super) fn self_spread(graph: &partition::Graph, edges: &[partition::Edge]) -
             let at = parts
                 .iter()
                 .position(|p| matches!(p, Term::Var(v) if v == read))?;
-            let a = crate::ir::Address {
+            let a = crate::address::Address {
                 typ: typ.as_str()?.to_string(),
                 name: name.as_str()?.to_string(),
             };
@@ -514,7 +514,7 @@ pub(super) fn not_an_object(t: &Term, state: &HashMap<String, Value>, rec: &Rec)
         Term::Var(x) => crate::syntax::resolve::source_name(x),
         t => spell::term(t),
     };
-    let keys = crate::ir::path_keys(&path);
+    let keys = crate::address::path_keys(&path);
     let reached = std::iter::once(base.clone())
         .chain(walked.iter().cloned())
         .collect::<Vec<_>>()
@@ -525,7 +525,7 @@ pub(super) fn not_an_object(t: &Term, state: &HashMap<String, Value>, rec: &Rec)
         Value::Ref { typ, name, attr } if attr.is_empty() => (
             format!(
                 "a reference, {}",
-                crate::report::address(&crate::ir::Address {
+                crate::report::address(&crate::address::Address {
                     typ: typ.clone(),
                     name: name.clone(),
                 })

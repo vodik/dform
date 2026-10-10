@@ -38,11 +38,12 @@
 //! caught within the default count.
 
 use anyhow::{Result, anyhow};
+use dform_core::address::Address;
 use dform_core::ast::{Atom, Term};
 use dform_core::circuit::Leaf;
 use dform_core::engine::{self, EvalResult};
 use dform_core::hooks::{self, Rule3};
-use dform_core::ir::{self, Address, Resource};
+use dform_core::ir::{self, Resource};
 use dform_core::plugin::{Config, Providers};
 use dform_core::provider::json_to_value;
 use dform_core::report::{self, Report};

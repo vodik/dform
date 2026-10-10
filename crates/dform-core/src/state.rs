@@ -1,4 +1,5 @@
-use crate::ir::{Address, Adopt};
+use crate::address::Address;
+use crate::ir::Adopt;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

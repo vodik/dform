@@ -267,7 +267,7 @@ impl<'a> Rule<'a> {
         let Some(Held::Ref(typ)) = self.held.get(v).cloned() else {
             return None;
         };
-        let keys = crate::ir::path_keys(path);
+        let keys = crate::address::path_keys(path);
         let (first, rest) = keys.split_first()?;
         let key = (v.to_string(), first.clone());
         let w = match self.hops.get(&key) {
@@ -307,7 +307,7 @@ impl<'a> Rule<'a> {
         }
         let rest: Vec<String> = rest
             .iter()
-            .map(|k| crate::ir::path_key(k).into_owned())
+            .map(|k| crate::address::path_key(k).into_owned())
             .collect();
         let rest = rest.join(".");
         Some(self.hop(&w, &rest, pre).unwrap_or_else(|| Term::Func {
@@ -336,7 +336,7 @@ fn var(v: &str) -> Term {
 /// `ref(T, A, "")`: the resource `A` of type `T`.
 fn reference(typ: &str, addr: Term) -> Term {
     Term::Func {
-        name: crate::ir::REF.into(),
+        name: crate::address::REF.into(),
         args: vec![
             Term::Val(Value::Str(typ.to_string())),
             addr,

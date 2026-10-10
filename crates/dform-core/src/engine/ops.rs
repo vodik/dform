@@ -245,11 +245,11 @@ fn bind_vars(t: &Term, out: &mut BTreeSet<String>) {
         Term::List(xs) => xs.iter().for_each(|x| bind_vars(x, out)),
         Term::Obj(m) => m.values().for_each(|x| bind_vars(x, out)),
         // `scoped(Scope, Local)` as a pattern binds `Local`.
-        Term::Func { name, args } if name == crate::ir::SCOPED && args.len() == 2 => {
+        Term::Func { name, args } if name == crate::address::SCOPED && args.len() == 2 => {
             bind_vars(&args[1], out)
         }
         // `ref(T, A, P)` as a pattern binds its parts (R-42).
-        Term::Func { name, args } if name == crate::ir::REF && args.len() == 3 => {
+        Term::Func { name, args } if name == crate::address::REF && args.len() == 3 => {
             args.iter().for_each(|x| bind_vars(x, out))
         }
         _ => {}

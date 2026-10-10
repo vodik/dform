@@ -174,7 +174,9 @@ impl Printer<'_> {
         // A value body's contribution is one key of the body: the body
         // is the value read.
         let body = rule.body.iter().find_map(|l| match l {
-            Lit::Eq(Term::Var(x), Term::Func { name, .. }) if name == crate::ir::RESOURCE_BODY => {
+            Lit::Eq(Term::Var(x), Term::Func { name, .. })
+                if name == crate::address::RESOURCE_BODY =>
+            {
                 bindings.iter().find(|(k, _)| k == x).map(|(_, v)| v)
             }
             _ => None,
@@ -203,7 +205,7 @@ impl Printer<'_> {
             match value {
                 Value::Obj(m) if body.is_none() && m.len() == 1 => {
                     let (k, v) = m.iter().next()?;
-                    path = crate::ir::path_join(&path, k);
+                    path = crate::address::path_join(&path, k);
                     value = v;
                 }
                 _ => return None,

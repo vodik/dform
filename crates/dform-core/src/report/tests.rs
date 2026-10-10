@@ -70,7 +70,7 @@ fn an_extern_label_is_its_call() {
     let call = "ssh.read(\"127.0.0.1:22\", \"ubuntu\", \"/etc/k3s.yaml\")";
     assert_eq!(label(&l), call);
     assert_eq!(attribute_label(&l), call);
-    assert_eq!(printed_label(&crate::ir::label(&l)), call);
+    assert_eq!(printed_label(&crate::address::label(&l)), call);
     assert_eq!(waited(&BTreeSet::from([l])), [call]);
     let l = crate::value::null_label("aws.availability_zone", "available", "2");
     assert_eq!(label(&l), "aws.availability_zone(\"available\")");

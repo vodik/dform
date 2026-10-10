@@ -352,7 +352,7 @@ impl Pass<'_> {
                     .map(|(_, y)| y.as_str()),
                 k,
             ),
-            Term::Func { name, .. } if name == crate::ir::FORMAT => {
+            Term::Func { name, .. } if name == crate::address::FORMAT => {
                 label_at(self.outputs.iter().map(|(_, y)| y.as_str()), k)
             }
             _ => Label::new(),
@@ -373,7 +373,7 @@ impl Pass<'_> {
             Term::Func { name, .. } if name == DECLASSIFY => Label::new(),
             // A function whose value is a secret (`-> secret(T)`).
             Term::Func { name, .. } if returns_secret(name) => whole(),
-            Term::Func { name, args } if name == crate::ir::REF && args.len() == 3 => {
+            Term::Func { name, args } if name == crate::address::REF && args.len() == 3 => {
                 all(!self.attr_label(&args[0], &args[1], &args[2]).is_empty()
                     || args.iter().any(|a| self.term_secret(a, vars)))
             }
@@ -1533,8 +1533,8 @@ fn names_secret(t: &Term, secret: &dyn Fn(&Term) -> bool) -> bool {
     match t {
         Term::Func { name, .. } if name == DECLASSIFY => false,
         Term::Func { name, args } => {
-            (name == crate::ir::REF && args.len() == 3 && secret(&args[1]))
-                || (name == crate::ir::SCOPED && args.iter().any(secret))
+            (name == crate::address::REF && args.len() == 3 && secret(&args[1]))
+                || (name == crate::address::SCOPED && args.iter().any(secret))
                 || args.iter().any(|a| names_secret(a, secret))
         }
         Term::List(xs) => xs.iter().any(|a| names_secret(a, secret)),
@@ -1938,7 +1938,7 @@ pub mod inventory {
         /// The objects made with an older generation of it, at an
         /// attribute given at their creation only (R-198): each address,
         /// path and the generation it was made with.
-        pub older: Vec<(crate::ir::Address, String, u32)>,
+        pub older: Vec<(crate::address::Address, String, u32)>,
         /// The values: matched, never printed.
         values: BTreeSet<Value>,
     }
@@ -1997,7 +1997,7 @@ pub mod inventory {
         match v {
             Value::Obj(m) => {
                 for (k, x) in m {
-                    reaches(x, secret, crate::ir::path_join(&at, k), out);
+                    reaches(x, secret, crate::address::path_join(&at, k), out);
                 }
             }
             Value::List(xs) => {
@@ -2218,7 +2218,7 @@ pub mod inventory {
         fn cells(&mut self, held_at: &BTreeSet<(String, String, String)>) {
             let (facts, schema) = (self.facts, self.schema);
             // `lifecycle(r, "prevent_destroy")`.
-            let prevent: BTreeSet<crate::ir::Address> = facts
+            let prevent: BTreeSet<crate::address::Address> = facts
                 .iter()
                 .filter(|a| a.pred == "lifecycle")
                 .filter_map(|a| match a.args.as_slice() {
@@ -2227,7 +2227,7 @@ pub mod inventory {
                 })
                 .collect();
             // `lifecycle(r, "bootstrap", P)` (R-198).
-            let bootstrap: BTreeSet<(crate::ir::Address, &str)> = facts
+            let bootstrap: BTreeSet<(crate::address::Address, &str)> = facts
                 .iter()
                 .filter(|a| a.pred == "lifecycle")
                 .filter_map(|a| match a.args.as_slice() {
@@ -2237,7 +2237,7 @@ pub mod inventory {
                     _ => None,
                 })
                 .collect();
-            let given = |addr: &crate::ir::Address, path: &str| {
+            let given = |addr: &crate::address::Address, path: &str| {
                 bootstrap.iter().any(|(a, p)| {
                     a == addr
                         && path
@@ -2277,7 +2277,7 @@ pub mod inventory {
                                 s if s.starts_with('[') => format!("{p}{s}"),
                                 s => crate::types::dotted(p, s),
                             };
-                            let addr = crate::ir::Address {
+                            let addr = crate::address::Address {
                                 typ: t.to_string(),
                                 name: name.clone(),
                             };

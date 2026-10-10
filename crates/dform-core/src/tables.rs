@@ -1252,7 +1252,7 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
                 })
                 .collect();
             let message = Term::Func {
-                name: crate::ir::FORMAT.into(),
+                name: crate::address::FORMAT.into(),
                 args: vec![
                     s(&format!(
                         "%s: {path} is not a secret input: a file of given secrets gives only \
@@ -1346,7 +1346,7 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
         )));
         let names: Vec<&str> = inputs.iter().map(|(p, _, _)| *p).collect();
         let message = Term::Func {
-            name: crate::ir::FORMAT.into(),
+            name: crate::address::FORMAT.into(),
             args: vec![
                 s(&format!(
                     "%s: %s is not an input{} ({})",

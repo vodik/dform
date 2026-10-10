@@ -20,7 +20,7 @@ use super::labels::{address, attribute_label, marker_of};
 use super::layout::{Row, layout};
 use super::render::Node;
 use super::style::{Paint, Style, kind_paint};
-use crate::ir::Address;
+use crate::address::Address;
 use crate::provider::{Action, ActionKind, NULL_KEY, marker};
 use serde_json::Value as Json;
 use std::time::{Duration, Instant};

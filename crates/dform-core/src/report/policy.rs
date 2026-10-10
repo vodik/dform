@@ -18,9 +18,9 @@ use super::tree;
 use super::tree::Site;
 use super::waits::{Resolves, Until, nulls, until_text};
 use super::{Input, Why};
+use crate::address::Address;
 use crate::ast::{Atom, Lit, Program, RuleStmt, Stmt, Term};
 use crate::engine::EvalResult;
-use crate::ir::Address;
 use crate::query::Redactor;
 use crate::spell;
 use crate::value::Value;
@@ -592,7 +592,7 @@ fn waits(
 /// read (`stacks.platform[env=lab].endpoint`), not the deployment.
 fn value_label(n: &str) -> String {
     match crate::value::null_parts(n) {
-        Some((typ, _, _)) if typ == crate::stack::UNAPPLIED => crate::ir::label(n),
+        Some((typ, _, _)) if typ == crate::stack::UNAPPLIED => crate::address::label(n),
         _ => label(n),
     }
 }

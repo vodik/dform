@@ -15,7 +15,7 @@ use crate::provider::ActionKind;
 use crate::report::waits_on;
 use crate::said::{Said, Teller};
 use crate::value::Value;
-use crate::{controller, engine, executor, ir, query, report, state, store, stuck, zset};
+use crate::{address, controller, engine, executor, ir, query, report, state, store, stuck, zset};
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -51,12 +51,12 @@ pub(super) struct Ticks<'a, 'h> {
     shown: bool,
     /// Every address a tick's plan has listed so far, and the last one's
     /// pending groups: what it could not name.
-    listed: BTreeSet<ir::Address>,
+    listed: BTreeSet<address::Address>,
     unnamed: Vec<String>,
     /// What the last tick's plan held under `later` waiting on a
     /// provider's settings (R-110): listed, but planned only once the
     /// provider is configured, so asked for again (R-45).
-    on_provider: BTreeSet<ir::Address>,
+    on_provider: BTreeSet<address::Address>,
     /// What the first tick's plan scheduled in a later tick, its
     /// attributes as written (R-156): shown, so not asked again.
     scheduled: BTreeSet<String>,
@@ -101,9 +101,9 @@ struct ActionLog<'a> {
     tick: usize,
     audit: &'a crate::audit::Log,
     redact: &'a query::Redactor,
-    diffs: BTreeMap<ir::Address, String>,
+    diffs: BTreeMap<address::Address, String>,
     /// What a forget drops from state: its remote id, which the log keeps.
-    forgotten: BTreeMap<ir::Address, String>,
+    forgotten: BTreeMap<address::Address, String>,
     failed: std::cell::RefCell<Option<anyhow::Error>>,
 }
 
@@ -625,7 +625,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
         // pending group's member, named only now) asks again, its plan
         // printed above, counting the new ones; with a plan file too, whose
         // groups bound them (`check_saved`).
-        let addresses: BTreeSet<&ir::Address> = p
+        let addresses: BTreeSet<&address::Address> = p
             .plan
             .actions
             .iter()
@@ -807,7 +807,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
     fn confirm_later(
         &mut self,
         t: &Tick,
-        addresses: &BTreeSet<&ir::Address>,
+        addresses: &BTreeSet<&address::Address>,
     ) -> Result<Option<Outcome>> {
         let (tick, p) = (self.tick, &t.planned);
         let new = addresses
@@ -1075,7 +1075,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
         t: &mut Tick,
         adopts: &[ir::Adopt],
         lifecycle: &zset::Lifecycle,
-    ) -> Result<(executor::Seen, BTreeSet<ir::Address>, bool)> {
+    ) -> Result<(executor::Seen, BTreeSet<address::Address>, bool)> {
         let tick = self.tick;
         let backend = self.backend();
         let p = &mut t.planned;
@@ -1103,7 +1103,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 .filter(|a| waits_on(a, sections).is_none()),
         );
         self.persist()?;
-        let pending: BTreeSet<ir::Address> = p
+        let pending: BTreeSet<address::Address> = p
             .plan
             .actions
             .iter()
@@ -1242,7 +1242,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
 
     /// A digest of each action's redacted diff, as the plan file records
     /// it.
-    fn diffs(&self, p: &Planned) -> BTreeMap<ir::Address, String> {
+    fn diffs(&self, p: &Planned) -> BTreeMap<address::Address, String> {
         self.r
             .delta(&p.plan, &p.res, &p.sections, self.tick, self.key())
             .into_iter()
@@ -1250,7 +1250,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 let digest =
                     crate::approval::digest_of(&serde_json::to_value(&e).unwrap_or_default());
                 (
-                    ir::Address {
+                    address::Address {
                         typ: e.typ,
                         name: e.name,
                     },
@@ -1291,7 +1291,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
 
     /// A destroy's last tick: what no Delete could reach stays in state,
     /// and the destroy stops there (exit 5); else the deployment is gone.
-    fn finish_destroy(&mut self, unreachable: &[(ir::Address, String)]) -> Result<Outcome> {
+    fn finish_destroy(&mut self, unreachable: &[(address::Address, String)]) -> Result<Outcome> {
         let (tick, deployment) = (self.tick, self.deployment());
         self.st.in_flight = None;
         // Run again once their provider can be configured, or retain them.
@@ -1397,7 +1397,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
         self.evaluator.files.keep(&mut self.st);
         crate::tables::record(&mut self.st.externs, &self.evaluator.externs.recorded());
         // The copies state still holds resources of (R-67).
-        let held: Vec<ir::Address> = self
+        let held: Vec<address::Address> = self
             .st
             .resources
             .keys()
@@ -1569,7 +1569,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 names.join(", ")
             );
         }
-        let labels: Vec<String> = on.iter().map(|l| ir::label(l)).collect();
+        let labels: Vec<String> = on.iter().map(|l| address::label(l)).collect();
         let (budget, setting) = self.wait_budget(&on);
         let mut w = crate::progress::Wait::new();
         // On a terminal, the wait is one line counting up (R-127);
@@ -1676,7 +1676,11 @@ impl<'a, 'h> Ticks<'a, 'h> {
     /// documents they were planned against: the evaluator derives the deny
     /// when the world moved under one. A destroy is refused by what its
     /// held changes derive, not by the program's own violations.
-    fn boundary(&self, seen: &executor::Seen, pending: &BTreeSet<ir::Address>) -> Result<Wanted> {
+    fn boundary(
+        &self,
+        seen: &executor::Seen,
+        pending: &BTreeSet<address::Address>,
+    ) -> Result<Wanted> {
         let (tick, backend) = (self.tick, self.backend());
         let held = executor::check_boundary(backend, seen, pending, &self.st, tick)?;
         let (next, violations) =
@@ -1803,12 +1807,12 @@ fn needing_master(
     desired: &[ir::Resource],
     st: &state::State,
     backend: &crate::plugin::Providers,
-) -> std::collections::BTreeMap<ir::Address, Vec<String>> {
+) -> std::collections::BTreeMap<address::Address, Vec<String>> {
     let mut out = std::collections::BTreeMap::new();
     if !crate::secrets::standin::active() {
         return out;
     }
-    let doc = |a: &ir::Address| {
+    let doc = |a: &address::Address| {
         desired
             .iter()
             .find(|r| r.addr == *a)
@@ -1820,8 +1824,8 @@ fn needing_master(
             out.insert(a.addr.clone(), paths);
         }
     }
-    let deps = |a: &ir::Address| -> BTreeSet<ir::Address> {
-        let mut d: BTreeSet<ir::Address> = desired
+    let deps = |a: &address::Address| -> BTreeSet<address::Address> {
+        let mut d: BTreeSet<address::Address> = desired
             .iter()
             .find(|r| r.addr == *a)
             .map(|r| r.deps.clone())
@@ -1834,7 +1838,7 @@ fn needing_master(
         d
     };
     loop {
-        let more: Vec<ir::Address> = plan
+        let more: Vec<address::Address> = plan
             .actions
             .iter()
             .filter(|a| !out.contains_key(&a.addr))
@@ -1859,7 +1863,7 @@ fn needing_master(
 /// Why a run that does not hold the master stopped: what it did not make.
 fn needing_text(
     deployment: &str,
-    needing: &std::collections::BTreeMap<ir::Address, Vec<String>>,
+    needing: &std::collections::BTreeMap<address::Address, Vec<String>>,
     without: Option<&str>,
 ) -> String {
     let n = match needing.len() {

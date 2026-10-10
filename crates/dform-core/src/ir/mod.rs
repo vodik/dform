@@ -1,28 +1,13 @@
 //! The resource IR (`compile_resources`) and, in [`ops`], the operator IR
 //! rules compile to.
 
-mod address;
-
+use crate::address::{Address, path_join, path_split_first, path_suffix, segment_key};
 use crate::ast::{Atom, Term};
 use crate::schema::Schema;
 use crate::transform;
 use crate::value::Value;
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
-
-pub use address::{
-    CLOUD_REF, FORMAT, LEN, NAME_SEGMENT, OldScope, REF, RESOURCE_BODY, SCOPED, Step, Tok,
-    is_scoped, label, name_segment, old_scope, parse as parse_address, parse_path,
-    parse_resource as parse_resource_address, path_join, path_key, path_keys, path_segments,
-    path_split_first, path_split_last, path_suffix, scope_split, scoped, segment_key,
-    segment_parts, string_literal, tokens,
-};
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Address {
-    pub typ: String,
-    pub name: String,
-}
 
 #[derive(Debug, Clone)]
 pub struct Resource {

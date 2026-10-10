@@ -417,7 +417,7 @@ fn resource(
     let reads = start..lits.len();
     let name = match name {
         Header::Bare(n) => str_term(n),
-        Header::Literal(s) => str_term(&crate::ir::name_segment(s)),
+        Header::Literal(s) => str_term(&crate::address::name_segment(s)),
         Header::Interp(e) => {
             let t = l.expr(*e);
             lits.append(&mut l.reads);
@@ -445,7 +445,7 @@ fn resource(
 pub fn value_entries(value: ast::Term, span: Span) -> Option<Vec<ast::FieldAssign>> {
     use ast::Term;
     let entry = |key: &str, value: Term| ast::FieldAssign {
-        key: crate::ir::path_join("", key),
+        key: crate::address::path_join("", key),
         op: ast::FieldOp::Assign,
         value,
         rank: None,

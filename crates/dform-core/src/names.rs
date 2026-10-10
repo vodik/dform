@@ -665,8 +665,8 @@ impl Decls {
         let Symbol::Resource(scope, typ, name) = sym else {
             return Vec::new();
         };
-        let name = crate::ir::name_segment(name).into_owned();
-        let under = |n: &str| (typ.clone(), crate::ir::scoped(n, &name));
+        let name = crate::address::name_segment(name).into_owned();
+        let under = |n: &str| (typ.clone(), crate::address::scoped(n, &name));
         match scope.as_deref() {
             None => vec![(typ.clone(), name.clone())],
             Some(s) => match (s.strip_prefix("component "), s.strip_prefix("module ")) {

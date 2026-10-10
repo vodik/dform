@@ -708,7 +708,7 @@ impl<'a> WhyNot<'a> {
         match (a.pred.as_str(), a.args.as_slice()) {
             ("want", [t, n]) => match (s(t), s(n)) {
                 (Some(t), Some(n)) => {
-                    crate::report::address(&crate::ir::Address { typ: t, name: n })
+                    crate::report::address(&crate::address::Address { typ: t, name: n })
                 }
                 _ => self.written.atom(a),
             },
@@ -759,7 +759,7 @@ fn known_text(rule: &RuleStmt, lit: &Lit, known: &Env) -> Option<String> {
                     Term::Var(x) => known.get(x).and_then(|v| v.as_str().map(str::to_string)),
                     _ => None,
                 };
-                let a = crate::ir::Address {
+                let a = crate::address::Address {
                     typ: val(&read.args[0])?,
                     name: val(&read.args[1])?,
                 };
@@ -806,7 +806,7 @@ fn unify_head(head: &Atom, atom: &Atom, body: &[Lit]) -> Vec<Env> {
             // The path: the attribute, or the one it is under.
             (true, 2, Value::Str(p)) => {
                 let mut ps = vec![v.clone()];
-                let top = crate::ir::path_segments(p)[0].to_string();
+                let top = crate::address::path_segments(p)[0].to_string();
                 if top != *p {
                     ps.push(Value::Str(top));
                 }
@@ -880,12 +880,12 @@ fn unify(t: &Term, v: &Value, body: &[Lit]) -> Vec<Env> {
         }
         // A scope a copy's clause names (R-191) is read as any term: each
         // way the address splits into a scope and a name below it.
-        Term::Func { name, args } if name == crate::ir::SCOPED => {
+        Term::Func { name, args } if name == crate::address::SCOPED => {
             let [scope, inner] = args.as_slice() else {
                 return vec![Env::new()];
             };
             let Value::Str(s) = v else { return vec![] };
-            let segs = crate::ir::path_segments(s);
+            let segs = crate::address::path_segments(s);
             let mut out = Vec::new();
             for k in 1..segs.len() {
                 let (at, rest) = (segs[..k].join("."), segs[k..].join("."));
@@ -899,7 +899,7 @@ fn unify(t: &Term, v: &Value, body: &[Lit]) -> Vec<Env> {
         }
         // A reference the head makes (`__ref(T, A, "")`, a seeded
         // lifecycle row's) is read back from the reference, part by part.
-        Term::Func { name, args } if name == crate::ir::REF && args.len() == 3 => {
+        Term::Func { name, args } if name == crate::address::REF && args.len() == 3 => {
             let Value::Ref { typ, name, attr } = v else {
                 return vec![];
             };
@@ -917,15 +917,15 @@ fn unify(t: &Term, v: &Value, body: &[Lit]) -> Vec<Env> {
             envs
         }
         // A header name's segment (R-112) is its name, quoted or not.
-        Term::Func { name, args } if name == crate::ir::NAME_SEGMENT && args.len() == 1 => {
+        Term::Func { name, args } if name == crate::address::NAME_SEGMENT && args.len() == 1 => {
             let Value::Str(s) = v else { return vec![] };
             unify(
                 &args[0],
-                &Value::Str(crate::ir::segment_key(s).into_owned()),
+                &Value::Str(crate::address::segment_key(s).into_owned()),
                 body,
             )
         }
-        Term::Func { name, args } if name == crate::ir::FORMAT => {
+        Term::Func { name, args } if name == crate::address::FORMAT => {
             let (Some(Term::Val(Value::Str(f))), Value::Str(s)) = (args.first(), v) else {
                 return vec![Env::new()];
             };
@@ -936,7 +936,7 @@ fn unify(t: &Term, v: &Value, body: &[Lit]) -> Vec<Env> {
                 for (a, part) in args[1..].iter().zip(&parts) {
                     // A reference interpolates as its address, `T["A"]`:
                     // read so before the string it also is.
-                    let mut vals: Vec<Value> = crate::ir::parse_address(part)
+                    let mut vals: Vec<Value> = crate::address::parse(part)
                         .ok()
                         .map(|(a, attr)| Value::Ref {
                             typ: a.typ,

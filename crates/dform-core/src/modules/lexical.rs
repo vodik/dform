@@ -121,7 +121,7 @@ impl Lexical<'_> {
         {
             return match self.via {
                 Some(v) => Term::Func {
-                    name: crate::ir::SCOPED.into(),
+                    name: crate::address::SCOPED.into(),
                     args: vec![v.scope.clone(), str_term(name)],
                 },
                 None => str_term(name),

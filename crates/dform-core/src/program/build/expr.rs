@@ -68,8 +68,8 @@ impl Builder<'_> {
 
     /// `name(args)`: the form of the language it lowers, else a call.
     fn func(&mut self, name: &str, args: &[Term]) -> ExprId {
+        use crate::address::{FORMAT, LEN, REF};
         use crate::functions::{CONCAT, MERGE, OBJECT};
-        use crate::ir::{FORMAT, LEN, REF};
         let kind = match (name, args) {
             ("sub", [Term::Val(Value::Int(0)), a]) => ExprKind::Neg(self.expr(a)),
             (_, [a, b]) if let Ok(op) = BinOp::try_from(name) => ExprKind::Binary {
@@ -178,7 +178,7 @@ impl Builder<'_> {
     /// A stored path, `a."b.c".d`, as a field step per segment, each as
     /// the path stores it (quoted, with its index suffix).
     pub(super) fn fields(&self, p: &str) -> Vec<Step> {
-        crate::ir::path_segments(p)
+        crate::address::path_segments(p)
             .into_iter()
             .map(|k| Step::Field(k.to_string(), self.span))
             .collect()

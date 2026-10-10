@@ -6,8 +6,8 @@
 use super::Input;
 use super::deformation::Deformation;
 use super::labels::{address, extern_label, label, reference};
+use crate::address::Address;
 use crate::ast::{Atom, RuleStmt, Term};
-use crate::ir::Address;
 use crate::provider::{Action, ActionKind};
 use crate::stuck::{Sections, Stuck};
 use crate::value::{Value, null_owner};

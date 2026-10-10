@@ -4,7 +4,7 @@
 use super::evaluated::Context;
 use super::run_inputs::{answer_inputs, answer_text, env_inputs};
 use crate::provider::ActionKind;
-use crate::{deployment, engine, ir, query, report, state, stuck, zset};
+use crate::{address, deployment, engine, ir, query, report, state, stuck, zset};
 use anyhow::{Result, bail};
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -78,7 +78,7 @@ impl<'a> Reporter<'a> {
         res: &engine::EvalResult,
         sections: &stuck::Sections,
         tick: usize,
-        moved: &[(ir::Address, ir::Address)],
+        moved: &[(address::Address, address::Address)],
         denies: &[String],
     ) -> report::Report {
         let backend = &*self.evaluator.backend;
@@ -123,7 +123,7 @@ impl<'a> Reporter<'a> {
         if self.why() == report::Why::None || !dform || cli.files.is_empty() {
             return;
         }
-        let addresses: Vec<ir::Address> = plan
+        let addresses: Vec<address::Address> = plan
             .actions
             .iter()
             .filter(|a| !matches!(a.kind, ActionKind::Noop))
@@ -243,7 +243,7 @@ impl<'a> Reporter<'a> {
         res: &engine::EvalResult,
         sections: &stuck::Sections,
         tick: usize,
-        moved: &[(ir::Address, ir::Address)],
+        moved: &[(address::Address, address::Address)],
         denies: &[String],
     ) -> String {
         let mut report = self.report(plan, res, sections, tick, moved, denies);
@@ -351,7 +351,7 @@ impl<'a> Reporter<'a> {
             .iter_mut()
             .filter(|e| e.action.starts_with("replace"))
         {
-            let addr = ir::Address {
+            let addr = address::Address {
                 typ: e.typ.clone(),
                 name: e.name.clone(),
             };
@@ -500,7 +500,7 @@ pub(super) fn needs_text(needs: &[zset::file::NeedsApproval]) -> String {
 
 /// A destroy's objects no Delete can reach ([`Planned::unreachable`]),
 /// as the plan says a change and its reason.
-pub(super) fn unreachable_text(unreachable: &[(ir::Address, String)]) -> String {
+pub(super) fn unreachable_text(unreachable: &[(address::Address, String)]) -> String {
     if unreachable.is_empty() {
         return String::new();
     }

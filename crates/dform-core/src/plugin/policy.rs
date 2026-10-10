@@ -126,14 +126,14 @@ pub fn retryable(m: &str) -> bool {
 }
 
 /// The resource a call is about: a Read's, a Plan's or an Apply's.
-pub fn address_of(call: &Call) -> Option<crate::ir::Address> {
+pub fn address_of(call: &Call) -> Option<crate::address::Address> {
     let (typ, name) = match call {
         Call::Read(r) => (&r.r#type, &r.name),
         Call::Plan(r) => (&r.r#type, &r.name),
         Call::Apply(r) => (&r.r#type, &r.name),
         _ => return None,
     };
-    (!typ.is_empty()).then(|| crate::ir::Address {
+    (!typ.is_empty()).then(|| crate::address::Address {
         typ: typ.clone(),
         name: name.clone(),
     })
@@ -148,7 +148,7 @@ pub fn describe(call: &Call) -> String {
         } else {
             format!(
                 " {}",
-                crate::report::address(&crate::ir::Address {
+                crate::report::address(&crate::address::Address {
                     typ: typ.to_string(),
                     name: name.to_string(),
                 })

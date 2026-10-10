@@ -47,7 +47,7 @@ impl Named<'_> {
         ];
         all.extend(args);
         Term::Func {
-            name: crate::ir::FORMAT.into(),
+            name: crate::address::FORMAT.into(),
             args: all,
         }
     }
@@ -117,7 +117,7 @@ impl Named<'_> {
             },
             // A template a copy inside this one scoped, `format(
             // "agent-${i}.%s", N)`: `format("%s.%s", copy, N)`.
-            Term::Func { name, mut args } if name == crate::ir::FORMAT => {
+            Term::Func { name, mut args } if name == crate::address::FORMAT => {
                 let rest = match args.first() {
                     Some(Term::Val(Value::Str(tmpl))) => self.under(tmpl).map(str::to_string),
                     _ => None,
@@ -158,7 +158,7 @@ fn by_clause(segment: &str) -> bool {
 /// `agent-0.inner`, and the columns that are the relation's own.
 pub fn runtime_scope<'a>(scope: &str, args: &'a [Term]) -> (String, &'a [Term]) {
     let mut used = 0;
-    let segments: Vec<String> = crate::ir::path_segments(scope)
+    let segments: Vec<String> = crate::address::path_segments(scope)
         .into_iter()
         .map(|seg| match (by_clause(seg), args.get(used)) {
             (true, Some(Term::Val(Value::Str(name)))) => {

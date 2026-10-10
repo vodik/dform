@@ -22,7 +22,8 @@
 use super::run_inputs::split_kv;
 use super::test::Space;
 use super::{Cli, Dependency, Held, Outcome};
-use crate::ir::{Address, Resource};
+use crate::address::Address;
+use crate::ir::Resource;
 use crate::plugin::Providers;
 use crate::plugin::backend::KUBERNETES;
 use crate::query::Redactor;

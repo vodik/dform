@@ -7,7 +7,7 @@
 //! every apply advances by one, and for `read-lag` the count of Reads, so
 //! that a retried Read can see the object.
 //!
-//! An address is written as `plan` prints it, `T["N"]` (`ir::parse_address`);
+//! An address is written as `plan` prints it, `T["N"]` (`address::parse`);
 //! quote the spec for the shell.
 //!
 //! | SPEC                           | effect                                                  |
@@ -37,7 +37,7 @@
 //! | `not-yet=PRED:K`               | the first K Query calls of the extern PRED answer "not  |
 //! |                                | yet": an open null in every output column (R-81)        |
 
-use crate::ir::Address;
+use crate::address::Address;
 use anyhow::{Context, Result, anyhow, bail};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -66,7 +66,7 @@ pub struct Chaos {
     pub fresh_ids: bool,
 }
 
-use crate::ir::parse_resource_address as parse_addr;
+use crate::address::parse_resource as parse_addr;
 
 /// `T["N"]:X`: the last `:` splits, so a name with `::` in it survives.
 fn addr_and(s: &str, what: &str) -> Result<(Address, String)> {
@@ -142,14 +142,14 @@ impl Chaos {
             "not-ready" => {
                 let bad = || anyhow!("expected not-ready=T[\"N\"].PATH:K");
                 let (lhs, k) = arg.rsplit_once(':').ok_or_else(bad)?;
-                let (a, path) = crate::ir::parse_address(lhs)?;
+                let (a, path) = crate::address::parse(lhs)?;
                 let path = path.ok_or_else(bad)?;
                 self.not_ready.push((a, path, k.parse().context("reads")?));
             }
             "mutate" => {
                 let bad = || anyhow!("expected mutate=T[\"N\"].PATH=JSON");
                 let (lhs, json) = arg.split_once('=').ok_or_else(bad)?;
-                let (a, path) = crate::ir::parse_address(lhs)?;
+                let (a, path) = crate::address::parse(lhs)?;
                 let path = path.ok_or_else(bad)?;
                 let v =
                     serde_json::from_str(json).with_context(|| format!("JSON value '{json}'"))?;

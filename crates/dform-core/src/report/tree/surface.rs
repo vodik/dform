@@ -5,9 +5,9 @@
 use super::printer::{Focus, Printer, Walk, leaf_text, plan_text, world_text};
 use super::sites::{Site, base_place, cell, rank_text};
 use super::statement::{Cx, Shown, collapse, is_check, statement_at};
+use crate::address::Address;
 use crate::ast::{Atom, Lit, RuleStmt, Term};
 use crate::circuit::{Fact, Leaf, NodeId, View};
-use crate::ir::Address;
 use crate::spell;
 use crate::syntax::SyntaxNode;
 use crate::syntax::resolve::capitalise;

@@ -29,9 +29,9 @@
 //! value type read from a string: `inet`, `ip`, `uri`, `oci`, `semver`, a
 //! range): a `string` position takes any of them as its text (R-133).
 
+use crate::address::Address;
 use crate::ast::{Atom, Lit, Program, Span, Stmt, Term, TypeExpr};
 use crate::diag::Diagnostic;
-use crate::ir::Address;
 use crate::schema::Schema;
 use crate::types::{self, Ty};
 use crate::value::Value;
@@ -84,7 +84,7 @@ fn shown_path(p: &[Seg]) -> String {
 
 /// The keys of a stored path (`spec.template.spec`).
 fn keys(path: &str) -> Path {
-    crate::ir::path_keys(path)
+    crate::address::path_keys(path)
         .into_iter()
         .map(Seg::Key)
         .collect()

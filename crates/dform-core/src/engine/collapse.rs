@@ -343,7 +343,7 @@ impl Collapse<'_> {
                     "undecided until {}",
                     nulls
                         .iter()
-                        .map(|n| format!("?{}", crate::ir::label(n)))
+                        .map(|n| format!("?{}", crate::address::label(n)))
                         .collect::<Vec<_>>()
                         .join(" ")
                 ),

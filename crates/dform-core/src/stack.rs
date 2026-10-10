@@ -1431,7 +1431,7 @@ impl Planned {
 pub fn outputs(
     facts: &BTreeSet<Atom>,
     secret: &BTreeMap<String, String>,
-    world: &BTreeMap<crate::ir::Address, serde_json::Value>,
+    world: &BTreeMap<crate::address::Address, serde_json::Value>,
     state: &crate::state::State,
     deployment: &str,
     digest: &dyn Fn(&[u8]) -> Option<String>,
@@ -1470,7 +1470,7 @@ pub fn outputs(
             _ => None,
         };
         let held = at.and_then(|(typ, name, path)| {
-            let addr = crate::ir::Address {
+            let addr = crate::address::Address {
                 typ: typ.clone(),
                 name: name.clone(),
             };
@@ -1649,7 +1649,7 @@ fn put_field(v: &mut Value, path: &str, x: Value) -> bool {
 /// any part of it is unknown.
 struct Resolver<'a> {
     attrs: &'a BTreeMap<(&'a str, &'a str, &'a str), &'a Value>,
-    world: &'a BTreeMap<crate::ir::Address, serde_json::Value>,
+    world: &'a BTreeMap<crate::address::Address, serde_json::Value>,
 }
 
 impl Resolver<'_> {
@@ -1677,7 +1677,7 @@ impl Resolver<'_> {
                 {
                     Some(v) => self.resolve(v, depth + 1),
                     None => {
-                        let addr = crate::ir::Address {
+                        let addr = crate::address::Address {
                             typ: typ.clone(),
                             name: name.clone(),
                         };
@@ -1947,7 +1947,7 @@ pub fn reads(
                     .map(|(_, v)| v.clone()),
                 _ => None,
             }),
-            Term::Func { name: f, args } if f == crate::ir::FORMAT => {
+            Term::Func { name: f, args } if f == crate::address::FORMAT => {
                 let (Some(Term::Val(Value::Str(fmt))), rest) = (args.first(), &args[1..]) else {
                     return None;
                 };

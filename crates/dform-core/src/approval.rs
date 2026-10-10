@@ -131,7 +131,7 @@ fn text(t: &crate::ast::Term) -> String {
     use crate::value::Value;
     match t {
         crate::ast::Term::Val(Value::Str(s)) => s.clone(),
-        crate::ast::Term::Val(Value::Ref { typ, name, attr }) => crate::ir::Address {
+        crate::ast::Term::Val(Value::Ref { typ, name, attr }) => crate::address::Address {
             typ: typ.clone(),
             name: name.clone(),
         }

@@ -135,8 +135,8 @@ pub fn fmt_value(v: Option<&serde_json::Value>) -> String {
         return "<none>".to_string();
     };
     match marker(v) {
-        Some((NULL_KEY, l)) => return format!("?{}", crate::ir::label(l)),
-        Some((_, l)) => return format!("(sensitive {})", crate::ir::label(l)),
+        Some((NULL_KEY, l)) => return format!("?{}", crate::address::label(l)),
+        Some((_, l)) => return format!("(sensitive {})", crate::address::label(l)),
         None => {}
     }
     match v {
@@ -148,7 +148,7 @@ pub fn fmt_value(v: Option<&serde_json::Value>) -> String {
 #[derive(Debug, Clone)]
 pub struct Action {
     pub kind: ActionKind,
-    pub addr: crate::ir::Address,
+    pub addr: crate::address::Address,
     pub changes: Vec<Change>,
     /// Pending: the nulls the comparison waits on.
     pub on: std::collections::BTreeSet<String>,
@@ -238,12 +238,12 @@ pub fn remove_path(v: &mut Json, path: &str) {
     let Some(m) = v.as_object_mut() else {
         return;
     };
-    match crate::ir::path_split_first(path) {
+    match crate::address::path_split_first(path) {
         None => {
-            m.remove(crate::ir::segment_key(path).as_ref());
+            m.remove(crate::address::segment_key(path).as_ref());
         }
         Some((head, rest)) => {
-            let head = crate::ir::segment_key(head);
+            let head = crate::address::segment_key(head);
             if let Some(child) = m.get_mut(head.as_ref()) {
                 remove_path(child, rest);
                 if child.as_object().is_some_and(|c| c.is_empty()) {
@@ -256,7 +256,7 @@ pub fn remove_path(v: &mut Json, path: &str) {
 
 pub fn set_path(v: &mut Json, path: &str, x: Json) {
     let mut cur = v;
-    let keys = crate::ir::path_keys(path);
+    let keys = crate::address::path_keys(path);
     let mut parts = keys.into_iter().peekable();
     while let Some(p) = parts.next() {
         if !cur.is_object() {
@@ -276,8 +276,8 @@ pub fn set_path(v: &mut Json, path: &str, x: Json) {
 /// spells.
 pub fn get_path<'a>(v: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
     let mut cur = v;
-    for seg in crate::ir::path_segments(path) {
-        let (key, mut rest) = crate::ir::segment_parts(seg);
+    for seg in crate::address::path_segments(path) {
+        let (key, mut rest) = crate::address::segment_parts(seg);
         if !key.is_empty() {
             cur = cur.get(key.as_ref())?;
         }
@@ -380,7 +380,7 @@ pub fn flatten(
             for (k, vv) in m {
                 // A key holding `.`, `[`, `]` or `/` is its segment quoted
                 // (R-77): `metadata.annotations."a.b/c"`.
-                let join = |p: &str| crate::ir::path_join(p, k);
+                let join = |p: &str| crate::address::path_join(p, k);
                 flatten(schema, typ, vv, &join(prefix), &join(norm), by_content, out);
             }
         }

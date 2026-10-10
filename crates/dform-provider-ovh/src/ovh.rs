@@ -31,7 +31,7 @@ use crate::api::{self, Client, escape};
 use crate::config;
 use crate::map;
 use anyhow::{Result, anyhow, bail};
-use dform_core::ir::Address;
+use dform_core::address::Address;
 use dform_core::plugin::backend::{self, CallError, Handler, Reply, VERSION};
 use dform_core::plugin::pb;
 use dform_core::plugin::providers::CREATED;

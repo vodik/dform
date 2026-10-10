@@ -6,7 +6,7 @@
 use super::Why;
 use super::labels::{printed_attribute, printed_label, reference};
 use super::lines::reads;
-use crate::ir::Address;
+use crate::address::Address;
 use crate::provider::{NULL_KEY, json_to_value, marker};
 use crate::query::Redactor;
 use crate::schema::Schema;
@@ -60,10 +60,10 @@ pub fn shown(v: Option<&Json>, sensitive: bool, schema: &Schema, r: &Redactor) -
     };
     match marker(v) {
         Some((NULL_KEY, l)) => Shown::Null {
-            label: crate::ir::label(l),
+            label: crate::address::label(l),
             class: null_class(l, schema),
         },
-        Some((_, l)) => Shown::Sensitive(Some(crate::ir::label(l))),
+        Some((_, l)) => Shown::Sensitive(Some(crate::address::label(l))),
         // At a sensitive path, a derived secret by the call that derived
         // it (`random.password("db")`), anything else bare.
         None if sensitive || has_secret(v) => {

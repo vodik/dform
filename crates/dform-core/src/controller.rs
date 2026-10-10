@@ -33,8 +33,8 @@
 //! * The log: one line per event and per tick, `HH:MM:SS` (UTC) first.
 //!   Events, holds and releases also go to the stack's audit log.
 
+use crate::address::Address;
 use crate::ast::{Atom, Span, Term};
-use crate::ir::Address;
 use crate::provider::{ActionKind, Plan};
 use crate::spell;
 use crate::store::{DROPS, MEMO, PENDING, Store};
@@ -726,7 +726,7 @@ fn leaves(j: &Json, at: &str, out: &mut BTreeMap<String, Json>) {
     match j {
         Json::Object(m) if !m.is_empty() => {
             for (k, v) in m {
-                leaves(v, &crate::ir::path_join(at, k), out);
+                leaves(v, &crate::address::path_join(at, k), out);
             }
         }
         Json::Array(xs) if !xs.is_empty() => {

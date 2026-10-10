@@ -24,9 +24,9 @@
 //! A term the compiler cannot see the value of (a variable, a call) is
 //! checked when it has one, at evaluation.
 
+use crate::address::Address;
 use crate::ast::{Lit, Program, Stmt, Term, TypeExpr};
 use crate::diag::{Diagnostic, Diagnostics};
-use crate::ir::Address;
 use crate::quantity::{self, Dim};
 use crate::schema::Schema;
 use crate::spell;
@@ -159,7 +159,7 @@ impl std::fmt::Display for Ty {
 /// A reference as it lowers: `ref(T, A, "")`, its type and address.
 fn reference(t: &Term) -> Option<(&str, &Term)> {
     match t {
-        Term::Func { name, args } if name == crate::ir::REF && args.len() == 3 => {
+        Term::Func { name, args } if name == crate::address::REF && args.len() == 3 => {
             match (&args[0], &args[2]) {
                 (Term::Val(Value::Str(typ)), Term::Val(Value::Str(p))) if p.is_empty() => {
                     Some((typ, &args[1]))
@@ -174,7 +174,9 @@ fn reference(t: &Term) -> Option<(&str, &Term)> {
 /// `ref(r)` written out: `ref(ref(T, A, ""))`.
 fn explicit(t: &Term) -> Option<&Term> {
     match t {
-        Term::Func { name, args } if name == crate::ir::REF && args.len() == 1 => Some(&args[0]),
+        Term::Func { name, args } if name == crate::address::REF && args.len() == 1 => {
+            Some(&args[0])
+        }
         _ => None,
     }
 }
@@ -664,7 +666,10 @@ pub fn at_run_time(ty: &Ty, t: Term) -> Term {
         Term::Func { name, .. }
             if matches!(
                 name.as_str(),
-                AS | AMBIGUOUS | crate::ir::REF | crate::ir::CLOUD_REF | crate::ir::SCOPED
+                AS | AMBIGUOUS
+                    | crate::address::REF
+                    | crate::address::CLOUD_REF
+                    | crate::address::SCOPED
             ) =>
         {
             t

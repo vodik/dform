@@ -5,7 +5,7 @@
 use super::Outcome;
 use super::evaluated::Objects;
 use crate::value::Value;
-use crate::{ir, query, report, state, store};
+use crate::{address, query, report, state, store};
 use anyhow::{Result, bail};
 use std::collections::BTreeSet;
 
@@ -76,7 +76,7 @@ impl StateShow {
         let (dep, o) = (cx.dep(), &cx.cli.table);
         let (only, from_log) = (self.addr.as_deref(), self.from_log);
         use report::table::{Cell, Table};
-        let only = only.map(ir::parse_resource_address).transpose()?;
+        let only = only.map(address::parse_resource).transpose()?;
         let (deployment, at) = (cx.deployment(), dep.locate(crate::store::STATE));
         let (st, rebuilt) = match from_log {
             // The log alone (R-146): its `state` entries from the last whole
@@ -354,10 +354,7 @@ impl StateMv {
         let (dep, audit) = (cx.dep(), &cx.audit);
         let (from, to) = (self.from.as_str(), self.to.as_str());
         let deployment = cx.deployment();
-        let (old, new) = (
-            ir::parse_resource_address(from)?,
-            ir::parse_resource_address(to)?,
-        );
+        let (old, new) = (address::parse_resource(from)?, address::parse_resource(to)?);
         let lock = dep.lock()?;
         let mut st = dep.load_state()?;
         if st.get(&old).is_none() {
@@ -438,7 +435,7 @@ fn output_table(st: &state::State) -> report::table::Table {
         .map(|(k, v)| (k, Cell::value(v, &redact)))
         .collect();
     rows.extend(st.secret_outputs.iter().map(|(k, o)| {
-        let label = serde_json::json!({ "sensitive": ir::label(&o.label) });
+        let label = serde_json::json!({ "sensitive": address::label(&o.label) });
         (k, Cell::secret(None, label))
     }));
     rows.sort_by(|a, b| a.0.cmp(b.0));
