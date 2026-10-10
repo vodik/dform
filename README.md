@@ -137,9 +137,8 @@ reaches(a, b) where link(a, b)
 reaches(a, c) where reaches(a, b), link(b, c)
 ```
 
-**A reference is the resource, so there is no `.id` to copy, and
-what the cloud has not produced yet is planned in the tick after it
-exists:**
+Resources are wired by reference, and a value the cloud has not
+produced yet is tracked and planned around:
 
 ```dform
 resource iam.policy "connect-${host}" {
