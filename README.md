@@ -215,8 +215,8 @@ deformation("delete", _, _)`, and it refuses the apply. A policy over a
 value known only after apply stays undetermined, and the plan says when
 it will know. With Terraform, policy is a second tool and a second
 language over the plan's JSON, where such a value is only marked
-unknown. A risky change can instead wait for a signature over exactly
-what will apply:
+unknown. For a risky change, we want someone to sign off on exactly what
+will apply:
 
 ```dform
 requires_approval(r, "${kind} of ${r} in prod") where env == "prod", deformation(kind, r, _), kind in ["replace", "delete"]
