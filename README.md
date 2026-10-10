@@ -14,9 +14,10 @@ is the difference between the two. A policy is a query that must return
 no rows, and we answer "why is this here" by tracking the rows that
 produced it.
 
-dform plans the least model of the program over the world as it is, and
-proves every line. Apply changes the world, and whatever comes back, an
-endpoint or a kubeconfig, feeds the rest of the plan.
+There is exactly one plan for a program and a world: the least model.
+Every line in it comes with the derivation that produced it, and that
+derivation is what `why` prints, so `why` is the computation itself,
+never a guess.
 
 A complete program:
 
