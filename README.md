@@ -78,8 +78,9 @@ later. Terraform makes a block a template and adds `for_each`,
 `depends_on`, `-target` and `default_tags` for what a template cannot
 say.
 
-A topology is derived, recursion included. A new spoke is one line; the
-plan peers it and the policy proves it reaches the core:
+A hub-and-spoke network, for example, is three facts and two rules: the
+peerings are derived from them, a new spoke is one line, and a policy
+over the same rules proves every spoke reaches the core:
 
 ```dform
 resource aws.vpc core { cidr_block = "10.0.0.0/16", tags = { Name: "core" } }
