@@ -351,3 +351,18 @@ db.postgres db     healthy
 net.vpc main       -
 status: 1 healthy, 1 degraded, 1 suspended, 1 without health
 ```
+
+```
+$ dform render apps env=lab
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: apps
+---
+apiVersion: apps/v1
+kind: Deployment
+...
+$ dform render apps env=lab > manifests/apps.yaml
+$ kustomize build manifests | kubectl apply -f -
+```
