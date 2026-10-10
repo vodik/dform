@@ -123,8 +123,8 @@ policy  1 hold
 In Terraform the peerings are a `for_each` over a `setproduct`, and
 nothing refuses one added by hand.
 
-Data files are facts. A toml names the networks, a yaml sets an
-environment's inputs, and the plan cites the line that read each value:
+For example, we may want to keep the networks in a toml list, or an
+environment's inputs in yaml:
 
 ```dform
 key env: enum("staging", "prod") = "staging"
