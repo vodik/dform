@@ -75,18 +75,18 @@ examples/tour plan`.
 
 A dform file says what should exist and under which conditions, and
 dform works out how many, in what order, and when. The file itself has
-no order either: a block may use a name declared further down, in
-another file, or in a tick that has not run yet. A block is a
+no order either: a block may use a name declared further down or in
+another file. A block is a
 description that holds for every answer to its clause, so repetition is
 a condition, an edge is a reference, and a value known later is a later
 tick. Terraform makes a block a template and adds `for_each`,
 `depends_on`, `-target` and `default_tags` for what a template cannot
 say.
 
-**Every description sees every resource, and any part of the program
-can add to one.** A convention is written once and holds in every
-module. A `set` writes into any resource its clause matches, merged per
-leaf with what the module wrote itself:
+**A convention is written once and applies everywhere.** Any block can
+add to any resource, and the pieces merge: a `set` writes into every
+resource its clause matches, leaf by leaf, beside what the resource's
+own block wrote:
 
 ```dform
 set r.tags = { team: "shop" } where r in resource
@@ -101,8 +101,9 @@ The AWS provider's `default_tags` does this for tags, across the
 resources that one provider handles.
 
 **The plan is a table too.** Every change the plan would make is a
-`deformation` row, its kind and its resource, and the program reads it
-like any other table:
+`deformation` row: the kind of change and the resource it changes, the
+resource itself rather than a name, so a rule can read how that
+resource is configured and react to what is about to happen to it:
 
 ```
 $ dform query 'deformation(kind, resource, _)' --set database.backup_days=7
