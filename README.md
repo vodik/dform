@@ -11,7 +11,8 @@ It can, if we treat infrastructure like a database. An account is a
 table of networks, a table of instances, a table of DNS records, each
 row pointing at others. What we want is a set of tables too, and a plan
 is the difference between the two. A policy is a query that must return
-no rows, and "why is this here" asks which rows produced it.
+no rows, and "why is this here" is answered by tracking the rows that
+produced it.
 
 dform plans the least model of the program over the world as it is, and
 proves every line. Apply makes the world match, learns an endpoint or a
