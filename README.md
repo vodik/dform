@@ -250,6 +250,31 @@ tick 1  3 changes
       cidr = "10.1.0.0/16"
 ```
 
+An object spreads into another, so a rendered config is a shared base
+and what differs:
+
+```dform
+input region: string = "eu-west-1"
+use k8s
+
+let common = { log_level: "info", region }
+
+resource k8s.namespace apps { metadata.name = "apps" }
+
+resource k8s.config_map app {
+  metadata = { name: "app", namespace: apps.metadata.name }
+  data = { "config.json": json.encode({ ..common, replicas: 3 }) }
+}
+```
+
+```
+$ dform plan
+...
+  + k8s.config_map app  stacks/app.df:8
+      data."config.json" = "{\"log_level\":\"info\",\"region\":\"eu-west-1\",\"replicas\":3}"
+      metadata = { name: "app", namespace: "apps" }
+```
+
 **Everything explains itself, absence included.** A missing resource
 has an answer as precise as a present one. `dform why` names
 the rule that could have made it and the condition that failed:
