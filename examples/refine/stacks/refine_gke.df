@@ -1,4 +1,4 @@
-# gke_two_phase.df with refinements (E §4.1 case 4, DR-13): the cluster's
+# gke_two_phase.df with refinements: the cluster's
 # zones are an open null until the cluster exists, so the refinement on
 # them is deferred at plan time ("refinement on ?google.container_cluster/pngu#zones
 # deferred"). Tick 1 creates the cluster in the zones its node_locations
@@ -7,10 +7,10 @@
 # and apply stops after tick 1, before the nodepools and the kubernetes
 # objects. To run it, from this directory: README.md.
 #
-# The input's refinements (E §7.4's settings type) are checked in its cell
+# The input's refinements are checked in its cell
 # against the CIDRs the settings give (they hold).
 #
-# C's two-phase GKE / kubernetes stack (E §7.4), in the current syntax, with
+# The two-phase GKE / kubernetes stack (examples/gke), with
 # the gke mock schema, which makes the cluster's zones, endpoint and ca open
 # nulls until the cluster exists, and the k8s mock's, configured from them.
 

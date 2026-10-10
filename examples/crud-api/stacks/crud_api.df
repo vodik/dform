@@ -108,7 +108,7 @@ resource k8s.network_policy default_deny {
   metadata.name = "default-deny"
   metadata.namespace = shop.metadata.name
   # Every pod in the namespace: {} at an object path with no required
-  # field is a value, not absent (E DR-6 as amended).
+  # field is a value, not absent.
   spec.podSelector = {}
   spec.policyTypes = ["Ingress", "Egress"]
 }
@@ -278,7 +278,7 @@ deny "cutover to a color with unready pods" { color: c } where {
 
 # Every container has limits: these unless it sets its own. A container
 # is written by its key, `name`, so the write lands in the one the block
-# wrote (R-35, R-69); `@default` gives way to the container's own.
+# wrote; `@default` gives way to the container's own.
 set c.resources.limits = { cpu: 500m, memory: 256Mi } @default where {
   w in k8s.deployment
   c in w.spec.template.spec.containers
@@ -297,7 +297,7 @@ deny "container without resource limits" { workload: w, container: c.name } wher
 }
 
 # Resource limits: the schema types a container's memory `bytes` and its
-# cpu `cpu` (R-66), so `512Mi` above is a quantity and these compare in
+# cpu `cpu`, so `512Mi` above is a quantity and these compare in
 # bytes whatever unit each side is written in (`500m` is millicores there
 # because the attribute is a cpu).
 deny "container memory limit above 2Gi" { workload: w, container: c.name } where {

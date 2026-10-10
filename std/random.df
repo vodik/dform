@@ -1,11 +1,11 @@
-# Generated values: functions about a key (R-60; docs/grammar.md
+# Generated values: functions about a key (docs/grammar.md
 # "Functions", "Memo"). Not random at all: each is derived by HKDF from
 # the deployment's master (docs/reference.md "Secrets"; `RANDOM_MASTER` in
 # the environment for tests) with the deployment, the function, the key,
 # every knob and the key's generation, so a value is the same on every run
 # and a changed knob (or master) is a new value. Nothing is stored. A key's
-# generation is 1 until `dform secrets rotate DEPLOYMENT KEY` moves it on
-# (R-161); `generation:` asks for an earlier one, for an overlap window
+# generation is 1 until `dform secrets rotate DEPLOYMENT KEY` moves it on;
+# `generation:` asks for an earlier one, for an overlap window
 # (the verify key a rotated signing key still publishes, the user a
 # rotated database password alternates with). A value that must be made
 # once and kept whatever the master becomes is `memo.first(KEY,
@@ -36,6 +36,6 @@ fn signing_key(key: string, generation?: int) -> secret(string)
 #| example: let verify = random.verify_key("synapse")
 fn verify_key(key: string, generation?: int) -> string
 
-#| The generation of `key` in this deployment: 1 until `dform secrets rotate` moves it on (R-161). Public.
+#| The generation of `key` in this deployment: 1 until `dform secrets rotate` moves it on. Public.
 #| example: let g = random.generation("synapse")
 fn generation(key: string) -> int

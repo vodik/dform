@@ -1,5 +1,5 @@
 # Integers: functions about an `int` (docs/grammar.md "Functions"). An
-# int from a float is named by how it rounds (R-155): `int.trunc`,
+# int from a float is named by how it rounds: `int.trunc`,
 # `int.round`, `int.floor`, `int.ceil`; a float from an int is the int, at
 # a typed position (`let f: float = n`); an int from a string's text is a
 # typed position too (`let port: int = cfg.port`).

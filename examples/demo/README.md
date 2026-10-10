@@ -11,7 +11,7 @@ dform test dform                # the denies, in every env
 dform test                      # each deployment project.df lists
 dform dev effects               # per scope: what it reads, writes, offers
 ```
-Features: `project.df` (the environments as code: a deployment per env, R-114), `key env`, `set from` a document per env, dform.toml's `[stacks.dform]` (`isolated`),
+Features: `project.df` (the environments as code: a deployment per env), `key env`, `set from` a document per env, dform.toml's `[stacks.dform]` (`isolated`),
 `use database { .. }` (a module with inputs and resources), `resource
 network.vpc main` (a resource of a component, network.df's `vpc`), `use baseline` (a
 policy pack), `network.subnets` (another module's type alias), denies

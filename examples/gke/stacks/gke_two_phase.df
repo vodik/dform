@@ -1,8 +1,8 @@
-# C's two-phase GKE / kubernetes stack (E §7.4), in the current syntax.
+# A two-phase GKE / kubernetes stack.
 # Run with the gke and k8s mock schemas: the cluster's zones, endpoint and
 # ca are open nulls until the cluster exists. Two ticks.
 #
-# E §2.7 worked example item 6, both branches: the cluster is placed in
+# Both branches of a deny at a boundary: the cluster is placed in
 # `zones` zones, two by default. With one (`--set zones=1`) its zones come
 # back with one element, so at the boundary the two-zones deny derives and
 # apply stops after tick 1, before the nodepools and the kubernetes objects.

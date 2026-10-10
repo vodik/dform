@@ -1,4 +1,4 @@
-# The demo's deployments (R-114): which there are is code. `dform plan`
+# The demo's deployments: which there are is code. `dform plan`
 # with no target says each one's state and plans each; `dform apply`
 # applies each, confirmed on its own. A deployment this file does not
 # list is still a target of its own; `dform plan dform env=staging` plans

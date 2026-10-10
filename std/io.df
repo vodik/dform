@@ -1,4 +1,4 @@
-# Reading: the one read (R-155; docs/grammar.md "Functions", "Documents").
+# Reading: the one read (docs/grammar.md "Functions", "Documents").
 # `io.read` is a coeffect: what it reads the context satisfies, a location
 # by its scheme and host (a path from the project root, `file:`, `data:`,
 # `ssh://`, `https://`, `git+https://`, `s3://`, a provider's scheme), the

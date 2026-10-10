@@ -4,7 +4,7 @@
 # wanted (a parameter, an attribute, `let r: oci = ".."`) is parsed there,
 # a literal at compile time, and it prints canonically; `.registry`
 # (absent: the default registry), `.repository`, `.tag` and `.digest`
-# read its parts (R-133).
+# read its parts.
 package oci
 
 #| Whether the reference carries a digest; also a predicate (a string that is no reference is not pinned).

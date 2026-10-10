@@ -1,5 +1,5 @@
-# Quantities: functions about a `bytes`, a `cpu` or a `duration` (R-66;
-# docs/grammar.md "Quantities and times"). A quantity has operators (`+`,
+# Quantities: functions about a `bytes`, a `cpu` or a `duration` (docs/grammar.md
+# "Quantities and times"). A quantity has operators (`+`,
 # `-`, `*` and `/` by an int, `<`); its value in a unit is `quantity.to`.
 package quantity
 

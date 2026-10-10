@@ -1,4 +1,4 @@
-# URIs: functions about a `uri` (R-134; docs/grammar.md "Functions"). A
+# URIs: functions about a `uri` (docs/grammar.md "Functions"). A
 # `uri` is RFC 3986's generic syntax, every scheme alike: `https://h/p`,
 # `postgres://user:pw@host:5432/db`, `git+ssh://git@host/r`, `s3://b/k`,
 # `file:///etc/hosts`, and the forms with no authority,

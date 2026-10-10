@@ -5,7 +5,7 @@ package list
 #| example: let hosts = list.join(names, ",")
 fn join(parts: list, sep: string) -> string forwards
 
-#| The list in its natural order (R-59: a comprehension's own order is its body's first relation's; `sort` is how a program asks for another).
+#| The list in its natural order (a comprehension's own order is its body's first relation's; `sort` is how a program asks for another).
 #| example: let ordered = list.sort(zones)
 fn sort(xs: list) -> list forwards
 
@@ -33,7 +33,7 @@ fn min(xs: list) -> any? forwards
 #| example: let busiest = list.max(replica_counts)
 fn max(xs: list) -> any? forwards
 
-#| The sum of the list's numbers, a float if one is (R-75); an error when one is not a number.
+#| The sum of the list's numbers, a float if one is; an error when one is not a number.
 #| example: let total = list.sum(replica_counts)
 fn sum(xs: list) -> number
 

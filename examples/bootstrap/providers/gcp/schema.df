@@ -12,7 +12,7 @@ type_attr("google.compute_subnetwork", "id", "string", ["computed", "id"])
 type_attr("google.container_cluster", "id", "string", ["computed", "id"])
 type_attr("google.container_node_pool", "id", "string", ["computed", "id"])
 
-# What points at another resource takes it, and gets its id at Apply (R-43).
+# What points at another resource takes it, and gets its id at Apply.
 type_attr("google.compute_subnetwork", "network", "ref(google.compute_network)", [])
 type_attr("google.container_cluster", "network", "ref(google.compute_network)", [])
 type_attr("google.container_cluster", "subnetwork", "ref(google.compute_subnetwork)", [])

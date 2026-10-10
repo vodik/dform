@@ -1,6 +1,6 @@
 # Pattern matching: functions about a `string` and a regular expression
 # (docs/grammar.md "Functions"). A pattern is a `regex`: a string in a
-# `regex`-typed position is checked at compile time (R-31); a bad
+# `regex`-typed position is checked at compile time; a bad
 # pattern is a compile error at the literal.
 package regex
 
