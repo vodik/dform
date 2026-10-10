@@ -112,14 +112,15 @@ Kind      Resource
 "update"  db.postgres orders
 ```
 
-**Policy adds as well as forbids, in the same file.** A rule about a
-change sits beside the resources it governs, and reads those rows: "no
-deletes in prod" is `deny "no deletes in prod" where env == "prod",
-deformation("delete", _, _)`. A policy over a value known only after
-apply says so. The logic has three values, and nothing is assumed false
-for being unknown, so such a policy is undetermined and the plan names
-the tick that decides it. OPA reads Terraform's plan JSON, where such a
-value is only marked unknown.
+**Policy is part of the language.** A rule about what may change lives
+in the same file as the resources it governs, is written in the same
+language, and runs in every plan and every apply: "no deletes in prod"
+is `deny "no deletes in prod" where env == "prod", deformation("delete",
+_, _)`. A policy over a value known only after apply says so. The logic
+has three values, and nothing is assumed false for being unknown, so
+such a policy is undetermined and the plan names the tick that decides
+it. With Terraform, policy is a second tool and a second language over
+the plan's JSON, where such a value is only marked unknown.
 
 **Descriptions build on each other.** Anything shaped like a graph is
 derived, so reachability stays right as spokes come and go, and this is
