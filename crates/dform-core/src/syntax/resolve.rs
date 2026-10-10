@@ -697,6 +697,12 @@ pub struct Lowerer<'u> {
     offset: u32,
     pub diags: Vec<Diagnostic>,
     lenient: bool,
+    /// In an input's `check`, the name of the value checked (the input,
+    /// a field by its field's name): it is its own text, which the check's
+    /// readers bind to the value (`refine::split_input`,
+    /// `modules::refinement`); every other name reads as in any clause.
+    /// `None` reading leniently elsewhere, where every name is its text.
+    checked: Option<String>,
     /// The program being built (R-211): an item per statement, pushed in
     /// order as the walk lowers each, and the helper numbers taken so far.
     program: crate::program::Program,
@@ -781,6 +787,7 @@ impl<'u> Lowerer<'u> {
             offset: 0,
             diags: Vec::new(),
             lenient,
+            checked: None,
             program: crate::program::Program::new(),
             item_scope: Default::default(),
             resolved: Default::default(),
@@ -2481,7 +2488,7 @@ impl<'u> Lowerer<'u> {
             },
             None => None,
         };
-        let refinement = self.refinement(n, scope)?;
+        let refinement = self.refinement(n, scope, Some(&name))?;
         let refined = self.clause_at(node(n, REFINEMENT).and_then(|r| node(&r, BODY)));
         // `input k: T where B` (R-104): declared where `B` holds. A
         // clause that reads the input itself is a check misspelled.
@@ -2645,7 +2652,7 @@ impl<'u> Lowerer<'u> {
                     },
                     None => None,
                 };
-                self.refinement(&a, scope)?;
+                self.refinement(&a, scope, Some(&name))?;
                 let refinement = self.clause_at(node(&a, REFINEMENT).and_then(|r| node(&r, BODY)));
                 let i = crate::program::build::InputLowered {
                     name: name.clone(),
@@ -3002,7 +3009,7 @@ impl<'u> Lowerer<'u> {
                 .filter(|t| t.kind() == IDENT)
                 .map(|t| t.text().to_string())
                 .collect();
-            let refinement = self.refinement(&a, scope)?;
+            let refinement = self.refinement(&a, scope, None)?;
             let children = self.attr_decls(&a, scope)?;
             out.push(AttrDecl {
                 path,
@@ -3016,20 +3023,24 @@ impl<'u> Lowerer<'u> {
         Ok(out)
     }
 
-    /// A refinement's `check` body: names are their own text (the
-    /// attribute, an input).
-    fn refinement(&mut self, n: &SyntaxNode, scope: ScopeId) -> L<Vec<Lit>> {
+    /// A refinement's `check` body. An input's (`checked` its name, a
+    /// field's name) is a clause like any other: the value checked is its
+    /// name's text, every other name in scope reads as it would anywhere
+    /// (a sibling input, an object's field by its path, a `let`). A type
+    /// block's names are their own text (its attributes).
+    fn refinement(&mut self, n: &SyntaxNode, scope: ScopeId, checked: Option<&str>) -> L<Vec<Lit>> {
         let Some(b) = node(n, REFINEMENT).and_then(|w| node(&w, BODY)) else {
             return Ok(Vec::new());
         };
-        let saved = self.lenient;
+        let saved = (self.lenient, self.checked.take());
         self.lenient = true;
+        self.checked = checked.map(str::to_string);
         let mut rc = Rc {
             scope,
             ..Rc::default()
         };
         let r = self.body(&mut rc, &b);
-        self.lenient = saved;
+        (self.lenient, self.checked) = saved;
         r
     }
 
@@ -7958,7 +7969,8 @@ impl<'u> Lowerer<'u> {
             return self.call_read(rc, call, &c.ops, pre);
         }
         let h = c.head.as_str();
-        if self.lenient && !rc.vars.contains_key(h) {
+        if self.lenient && !rc.vars.contains_key(h) && self.checked.as_ref().is_none_or(|n| n == h)
+        {
             if c.ops.iter().any(|o| !matches!(o, Op::Field(..))) {
                 return self.error(span, "a name here is a path: `a.b.c`");
             }
