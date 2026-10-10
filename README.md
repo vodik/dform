@@ -63,8 +63,8 @@ policy  1 hold
 ```
 
 When the region gains a zone, the next plan has one more subnet and the
-file does not change, because `aws.availability_zone` is a table the
-provider answers. `policy 1 hold` is the deny, checked by this plan and
+file does not change, because `aws.availability_zone` is a table backed
+by the provider. `policy 1 hold` is the deny, checked by this plan and
 holding. The examples run on a fake cloud built into dform with no
 credentials; `cargo install --path .`, then `dform -C examples/tour
 plan`. dform is pre-release: the language still changes without
