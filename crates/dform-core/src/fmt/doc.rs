@@ -7,7 +7,8 @@
 //! line could break, so of two groups on a line the later one breaks
 //! first (prettier's rule); a `where` clause is such a place, so a
 //! statement's head stays whole and its clause moves to a line of its
-//! own or breaks ([`Doc::Clause`]).
+//! own or breaks ([`Doc::Clause`]). But a statement's block is measured
+//! with its clause on the line: the block breaks before its clause.
 
 /// One piece of a document.
 pub enum Doc {
@@ -229,10 +230,11 @@ fn fits(next: &Doc, stmt: bool, rest: &[(usize, Mode, &Doc)], left: usize) -> bo
             Doc::Fresh => return true,
             Doc::IfBreak(b, f) => cmds.push((mode, if mode == Mode::Break { b } else { f }, after)),
             Doc::Suffix(_) | Doc::BreakParent => {}
-            // On one line, its literals after `where`; after `next`, or
-            // broken, a line may end where it starts.
+            // On one line, its literals after `where`, and so after a
+            // statement's group, which breaks before its clause; after a
+            // term's group, or broken, a line may end where it starts.
             Doc::Clause { lits, .. } => match lits {
-                Some(l) if !after && mode == Mode::Flat => {
+                Some(l) if (!after && mode == Mode::Flat) || (after && stmt) => {
                     left -= width_of(WHERE_ON_LINE) as isize;
                     cmds.push((Mode::Flat, l, after));
                 }
