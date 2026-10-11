@@ -190,6 +190,7 @@ mod pun;
 mod quantities;
 mod range_type;
 mod range_values;
+mod readme;
 mod recipients;
 mod redact_by_taint;
 mod references;

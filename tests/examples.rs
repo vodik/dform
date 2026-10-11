@@ -444,7 +444,7 @@ fn steps(df: &str) -> Vec<Step> {
 }
 
 /// A command line's words, as a shell splits one with only single quotes.
-fn words(line: &str) -> Vec<String> {
+pub(crate) fn words(line: &str) -> Vec<String> {
     let mut out = vec![];
     let mut word = None::<String>;
     let mut quoted = false;

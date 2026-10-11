@@ -1,0 +1,8 @@
+# The README's leaks of a secret, each a compile error at its line.
+
+[project]
+name = "readme"
+edition = "2026"
+
+[providers]
+aws = { source = "aws-mock" }
