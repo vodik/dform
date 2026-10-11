@@ -1,0 +1,8 @@
+#| The shop's policy: every resource carries the team's tag, and a
+#| replace or a delete in prod is signed off before it applies.
+input env: enum("staging", "prod")
+
+set r.tags = { team: "shop" } where r in resource
+
+requires_approval(r, "${kind} of ${r} in prod")
+  where env == "prod", deformation(kind, r, _), kind in ["replace", "delete"]

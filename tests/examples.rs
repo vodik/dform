@@ -114,6 +114,10 @@ const CASES: &[Case] = &[
         stacks: &[one(&["apply"], Apply::Completes)],
     },
     Case {
+        name: "shop",
+        stacks: &[one(&["apply"], Apply::Completes)],
+    },
+    Case {
         name: "gke-platform",
         stacks: &[one(&["apply", "gke_platform", "env=dev"], Apply::Completes)],
     },
@@ -324,6 +328,11 @@ fn k8s() {
 #[test]
 fn gke_platform() {
     check("gke-platform");
+}
+
+#[test]
+fn shop() {
+    check("shop");
 }
 
 #[test]

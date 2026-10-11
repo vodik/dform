@@ -1,0 +1,9 @@
+# The shop's root (docs/layout.md).
+
+[project]
+name = "shop"
+edition = "2026"
+
+# The mock plays AWS's types and answers the account 123456789012.
+[providers]
+aws = { source = "aws-mock" }

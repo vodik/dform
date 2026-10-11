@@ -1,0 +1,97 @@
+key env: enum("staging", "prod") = "staging"
+input public: bool = false
+input database { class: string = "db.t3.micro", multi_az: bool = false, backup_days: int = 1 }
+input web { type: string = "t3.small" }
+use aws { region = "us-east-1", expect_account = "123456789012" }
+
+resource aws.vpc main { cidr_block = "10.0.0.0/16" }
+
+let cidr(n) = inet.subnet(main.cidr_block, 8, n)
+
+#| One private subnet in every available zone of the region.
+resource aws.subnet "private-${availability_zone}" {
+  vpc = main
+  cidr_block = cidr(n)
+  availability_zone
+} where aws.availability_zone("available", availability_zone, n)
+
+deny "no public subnets" { subnet } where subnet in aws.subnet, subnet.map_public_ip_on_launch
+
+use policy { env }
+
+set {
+  database.multi_az = true
+  database.class = "db.m6g.large"
+  database.backup_days = 14
+} where env == "prod"
+set web.type = "m6g.large" where env == "prod"
+
+#| The orders database, reachable from the web servers only.
+resource aws.db_instance orders {
+  identifier = "orders-${env}"
+  instance_class = database.class
+  multi_az = database.multi_az
+  backup_retention_period = database.backup_days
+  publicly_accessible = public
+  password = random.password("orders")
+  vpc_security_groups = [postgres]
+}
+
+#| The app connects to the database as `app` with its role, not a
+#| password: one policy per database, named for its resource id.
+resource aws.iam_policy "connect-${id}" {
+  policy = json.encode({
+    Statement: [{
+      Action: "rds-db:connect",
+      Resource: "arn:aws:rds-db:us-east-1:*:dbuser:${id}/app",
+    }],
+  })
+} where pg in aws.db_instance, id = pg.resource_id
+
+deny "no public database in prod" where env == "prod", public
+
+deny "a prod database survives a zone" where env == "prod", not database.multi_az
+
+lifecycle(orders, "prevent_destroy") where env == "prod"
+
+deny "every prod database is kept" { db }
+  where env == "prod", db in aws.db_instance, not lifecycle(db, "prevent_destroy")
+
+#| The role the web servers run as: it may connect to the database.
+resource aws.iam_role app {
+  name = "shop-app-${env}"
+  assume_role_policy = json.encode({
+    Statement: [{
+      Effect: "Allow",
+      Action: "sts:AssumeRole",
+      Principal: { Service: "ec2.amazonaws.com" },
+    }],
+  })
+  managed_policy_arns = [ ref(p) | p in aws.iam_policy ]
+}
+
+#| A web server in every private subnet, behind the load balancer.
+resource aws.instance "web-${s.availability_zone}" {
+  instance_type = web.type
+  subnet = s
+  vpc_security_groups = [https]
+  tags = { Name: "shop-web-${env}" }
+} where s in aws.subnet
+
+resource aws.lb storefront {
+  name = "shop-${env}"
+  subnets = [ ref(s) | s in aws.subnet ]
+  security_groups = [ref(https)]
+}
+
+resource aws.security_group https {
+  name = "shop-web-${env}"
+  vpc = main
+  ingress = [{ from_port: 443, to_port: 443, protocol: "tcp", cidr_blocks: ["0.0.0.0/0"] }]
+}
+
+resource aws.security_group postgres {
+  name = "shop-db-${env}"
+  vpc = main
+  ingress = [{ from_port: 5432, to_port: 5432, protocol: "tcp", security_groups: [ref(https)] }]
+}
