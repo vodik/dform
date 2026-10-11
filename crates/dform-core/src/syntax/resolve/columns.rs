@@ -364,7 +364,7 @@ impl Lowerer<'_> {
         list: Option<&SyntaxNode>,
         pos: Pos,
         pre: &mut Vec<Lit>,
-    ) -> L<Vec<Term>> {
+    ) -> L<(Vec<Term>, Option<Vec<ExprId>>)> {
         let list: Vec<SyntaxNode> = list.map(|l| terms(l).collect()).unwrap_or_default();
         let cols = self.ref_columns(rc.scope, pred, list.len());
         self.ref_args_by(rc, pred, &cols, &list, pos, pre)
@@ -380,25 +380,38 @@ impl Lowerer<'_> {
         list: &[SyntaxNode],
         pos: Pos,
         pre: &mut Vec<Lit>,
-    ) -> L<Vec<Term>> {
+    ) -> L<(Vec<Term>, Option<Vec<ExprId>>)> {
         let mut args = Vec::new();
+        let mut nodes = Some(Vec::new());
         for (i, t) in list.iter().enumerate() {
-            args.push(match cols.get(&i) {
+            let id = match cols.get(&i) {
                 Some(col) if t.kind() == LITERAL => {
                     return self.literal_in_ref_column(pred, i, col, t);
                 }
                 Some(col) if Self::typed(rc, t) || self.named_resource(rc, t) => {
-                    let r = self.ref_term(rc, t, pos, pre)?;
+                    let id = self.ref_expr(rc, t, pos, pre)?;
+                    args.push(self.lowered(id, pre));
                     if pos == Pos::Content {
-                        Self::row_types(rc, t, col, pre);
+                        self.row_types(rc, t, col, pre);
                     }
-                    r
+                    Some(id)
                 }
-                _ if pos == Pos::Content && t.kind() == TUPLE => self.pattern(rc, t, pre)?,
-                _ => self.term(rc, t, pos, pre)?,
+                _ if pos == Pos::Content && t.kind() == TUPLE => {
+                    args.push(self.pattern(rc, t, pre)?);
+                    None
+                }
+                _ => {
+                    let (t, id) = self.arg_node(rc, t, pos, pre)?;
+                    args.push(t);
+                    Some(id)
+                }
+            };
+            nodes = nodes.zip(id).map(|(mut ns, id)| {
+                ns.push(id);
+                ns
             });
         }
-        Ok(args)
+        Ok((args, nodes))
     }
 
     /// Whether `t` names a resource where a reference column takes it, by
@@ -418,7 +431,7 @@ impl Lowerer<'_> {
     /// A row's type where the column holds several: one of them,
     /// `member([T1, T2], Type)` before the atom, so what reads by it (a
     /// `set` through the column, `types::read`) knows each it may be.
-    fn row_types(rc: &Rc, t: &SyntaxNode, col: &RefColumn, pre: &mut Vec<Lit>) {
+    fn row_types(&mut self, rc: &Rc, t: &SyntaxNode, col: &RefColumn, pre: &mut Vec<Lit>) {
         let Some(c) = Chain::of(t).filter(Chain::is_bare) else {
             return;
         };
@@ -429,12 +442,37 @@ impl Lowerer<'_> {
             return;
         }
         let types = col.types.iter().map(|t| str_term(t)).collect();
-        pre.push(Lit::Pos(Atom {
+        let test = Lit::Pos(Atom {
             pred: "member".into(),
             args: vec![Term::List(types), tv.clone()],
             record: None,
             span: Span::default(),
-        }));
+        });
+        let span = Span::default();
+        let Term::Var(v) = tv else {
+            unreachable!("matched")
+        };
+        let v = v.clone();
+        let parts = col
+            .types
+            .iter()
+            .map(|t| ListPart::Elem(self.str_node(span, t)));
+        let parts = parts.collect();
+        let list = self.node(span, ExprKind::List { parts });
+        let g = self.building(rc, span, |b| {
+            let typ = b.variable(&v);
+            let args = vec![b.pattern_of(list), b.pattern_of(typ)];
+            let rel = RelRef {
+                name: "member".into(),
+                span,
+            };
+            let args = RelArgs::Positional(args);
+            b.goal_node(span, GoalKind::Rel { rel, args })
+        });
+        if let Some(s) = &mut self.gather {
+            s.test(&test, g);
+        }
+        pre.push(test);
     }
 
     /// A literal where a program relation's column holds references: the

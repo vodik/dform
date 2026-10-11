@@ -182,6 +182,19 @@ impl Builder<'_> {
         }
     }
 
+    /// [`Self::element`] of the node `x`.
+    pub fn element_of(&mut self, x: ExprId) -> PatternId {
+        let e = &self.program.exprs[x];
+        match (&e.kind, e.hoisted) {
+            (ExprKind::List { parts }, None)
+                if parts.iter().all(|p| matches!(p, ListPart::Elem(_))) =>
+            {
+                self.pattern_node(PatternKind::Expr(x))
+            }
+            _ => self.pattern_of(x),
+        }
+    }
+
     /// `(k, v)`.
     fn tuple(&mut self, elems: &[Term]) -> PatternId {
         let elems = elems.iter().map(|t| self.pattern(t)).collect();

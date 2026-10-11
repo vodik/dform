@@ -34,7 +34,8 @@ use crate::ast::{
 use crate::diag::Diagnostic;
 use crate::program::node::CopyKind;
 use crate::program::node::{
-    BinOp, CmpOp, ExprKind, GoalId, GoalKind, Has, HasMark, ListPart, ObjPart, RelArgs, RelRef,
+    BinOp, CmpOp, Coll, ExprKind, GoalId, GoalKind, Has, HasMark, ListPart, ObjPart, RelArgs,
+    RelRef,
 };
 use crate::program::scope::{self as scopes, DeclKind, DeclRef, Names, Reach};
 use crate::program::{ExprId, ItemId, Read, ScopeId};
@@ -704,6 +705,12 @@ struct DocRead {
     at: String,
     name: String,
     span: Span,
+}
+
+/// A relation atom's arguments as their nodes (`Lowerer::atom_args`).
+enum AtomArgs {
+    Positional(Vec<ExprId>),
+    Record(Vec<(String, ExprId)>),
 }
 
 /// An error already recorded in `diags`.
@@ -6144,8 +6151,11 @@ impl<'u> Lowerer<'u> {
     /// A membership, positive whatever `n` says: the body of the helper
     /// a negated one lowers through.
     fn member_lit(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<()> {
-        let lit = self.membership(rc, n, out)?;
+        let (lit, g) = self.membership(rc, n, out)?;
         out.push(lit);
+        if let Some(g) = g {
+            self.built(g);
+        }
         Ok(())
     }
 
@@ -6154,8 +6164,12 @@ impl<'u> Lowerer<'u> {
         match n.kind() {
             LIT_ATOM => {
                 let a = terms(n).next().ok_or(Skip)?;
-                let atom = self.atom(rc, &a, Pos::Content, out)?;
+                let (atom, args) = self.atom_args(rc, &a, Pos::Content, out)?;
                 self.core_read(&a, &atom)?;
+                if let Some(args) = args {
+                    let g = self.rel_goal(rc, &atom, args);
+                    self.built(g);
+                }
                 out.push(Lit::Pos(atom));
             }
             LIT_TRUTH => {
@@ -6184,8 +6198,12 @@ impl<'u> Lowerer<'u> {
             // helper over the membership (R-219).
             LIT_NOT_IN if self.each_membership(rc, n) => self.neg_helper(rc, n, out, span)?,
             LIT_NOT_IN => {
-                let lit = self.membership(rc, n, out)?;
+                let (lit, g) = self.membership(rc, n, out)?;
                 out.push(negate(lit));
+                if let Some(g) = g {
+                    let g = self.building(rc, span, |b| b.not_one(g));
+                    self.built(g);
+                }
             }
             LIT_HAS => {
                 let t = terms(n).next().ok_or(Skip)?;
@@ -6286,16 +6304,25 @@ impl<'u> Lowerer<'u> {
         match n.kind() {
             LIT_ATOM => {
                 let a = terms(n).next().ok_or(Skip)?;
-                let atom = self.atom(rc, &a, Pos::Content, out)?;
+                let (atom, args) = self.atom_args(rc, &a, Pos::Content, out)?;
                 self.core_read(&a, &atom)?;
+                if let Some(args) = args {
+                    let g = self.rel_goal(rc, &atom, args);
+                    let g = self.building(rc, span, |b| b.not_one(g));
+                    self.built(g);
+                }
                 out.push(Lit::Not(atom));
                 return Ok(());
             }
             LIT_IN
                 if !n.descendants().any(|d| d.kind() == TUPLE) && !self.each_membership(rc, n) =>
             {
-                let lit = self.membership(rc, n, out)?;
+                let (lit, g) = self.membership(rc, n, out)?;
                 out.push(negate(lit));
+                if let Some(g) = g {
+                    let g = self.building(rc, span, |b| b.not_one(g));
+                    self.built(g);
+                }
                 return Ok(());
             }
             // `not has r` of a resource: a helper over its identity.
@@ -6612,26 +6639,36 @@ impl<'u> Lowerer<'u> {
             && matches!(ops.as_slice(), [EQ | EQ2 | NEQ])
             && (refs || ts.iter().any(|t| self.names_resource(rc, t)))
         {
-            let mut lowered = Vec::new();
+            let mut ids = Vec::new();
             for (i, t) in ts.iter().enumerate() {
                 let binding = i == 0 && ops[0] == EQ;
-                lowered.push(self.bind(binding, |l| l.ref_term(rc, t, Pos::Content, out))?);
+                ids.push(self.bind(binding, |l| l.ref_expr(rc, t, Pos::Content, out))?);
             }
-            let (a, b) = (lowered[0].clone(), lowered[1].clone());
+            let (a, b) = (self.lowered(ids[0], out), self.lowered(ids[1], out));
             out.push(if ops[0] == NEQ {
                 Lit::Neq(a, b)
             } else {
                 Lit::Eq(a, b)
             });
+            let pair = match ops[0] {
+                NEQ => vec![(CmpOp::Ne, ids[0], ids[1])],
+                _ => vec![(CmpOp::Eq, ids[0], ids[1])],
+            };
+            let g = self.compare_goal(rc, span, ops[0] == EQ, pair);
+            self.built(g);
             return Ok(());
         }
         let mut lowered = Vec::new();
+        let mut ids = Vec::new();
         for (i, t) in ts.iter().enumerate() {
             // `=` binds either side; `==`, `!=` and the orders test.
             let binding = ops.get(i.saturating_sub(1)) == Some(&EQ) && i <= 1
                 || (i == 0 && ops.first() == Some(&EQ));
-            lowered.push(self.bind(binding, |l| l.term(rc, t, Pos::Content, out))?);
+            let (t, id) = self.bind(binding, |l| l.arg_node(rc, t, Pos::Content, out))?;
+            lowered.push(t);
+            ids.push(id);
         }
+        let mut pairs = Vec::new();
         for (i, op) in ops.iter().enumerate() {
             let (a, b) = (lowered[i].clone(), lowered[i + 1].clone());
             let sign = match op {
@@ -6643,20 +6680,77 @@ impl<'u> Lowerer<'u> {
                 GT => ">",
                 _ => ">=",
             };
+            let (was_a, was_b) = (a.clone(), b.clone());
             let (a, b) = match crate::types::operands(sign, a, b) {
                 Ok(ab) => ab,
                 Err(why) => return self.error(span, why),
             };
-            out.push(match op {
-                EQ | EQ2 => Lit::Eq(a, b),
-                NEQ => Lit::Neq(a, b),
-                LT => Lit::Lt(a, b),
-                LE => Lit::Le(a, b),
-                GT => Lit::Gt(a, b),
-                _ => Lit::Ge(a, b),
-            });
+            let ia = self.read_as(ids[i], &was_a, a.clone());
+            let ib = self.read_as(ids[i + 1], &was_b, b.clone());
+            let (lit, cmp) = match op {
+                EQ | EQ2 => (Lit::Eq(a, b), CmpOp::Eq),
+                NEQ => (Lit::Neq(a, b), CmpOp::Ne),
+                LT => (Lit::Lt(a, b), CmpOp::Lt),
+                LE => (Lit::Le(a, b), CmpOp::Le),
+                GT => (Lit::Gt(a, b), CmpOp::Gt),
+                _ => (Lit::Ge(a, b), CmpOp::Ge),
+            };
+            out.push(lit);
+            pairs.push((cmp, ia, ib));
         }
+        let g = self.compare_goal(rc, span, ops[0] == EQ, pairs);
+        self.built(g);
         Ok(())
+    }
+
+    /// The goal of a comparison written at `span`, its pairs `pairs` as
+    /// typed: `x = e` binds (`bind`, its first operator `=`); a chain whose
+    /// middle terms each pair reads alike is one comparison, else a goal
+    /// per pair.
+    fn compare_goal(
+        &mut self,
+        rc: &Rc,
+        span: Span,
+        bind: bool,
+        pairs: Vec<(CmpOp, ExprId, ExprId)>,
+    ) -> GoalId {
+        let term = |l: &Self, id: ExprId| format!("{:?}", l.term_of(id));
+        let shared = pairs
+            .windows(2)
+            .all(|p| term(self, p[0].2) == term(self, p[1].1));
+        self.building(rc, span, |b| {
+            if pairs.len() > 1 && shared {
+                let lhs = pairs[0].1;
+                let ops = pairs.iter().map(|(op, _, x)| (*op, *x)).collect();
+                return b.goal_node(span, GoalKind::Compare { lhs, ops });
+            }
+            let mut goals: Vec<GoalId> = pairs
+                .into_iter()
+                .map(|(op, x, y)| {
+                    let kind = match (op, bind) {
+                        (CmpOp::Eq, true) => GoalKind::Bind {
+                            pat: b.pattern_of(x),
+                            value: y,
+                        },
+                        _ => GoalKind::Compare {
+                            lhs: x,
+                            ops: vec![(op, y)],
+                        },
+                    };
+                    b.goal_node(span, kind)
+                })
+                .collect();
+            match goals.len() {
+                1 => goals.pop().expect("one"),
+                _ => {
+                    let kind = GoalKind::Group {
+                        goals,
+                        after: Vec::new(),
+                    };
+                    b.goal_node(span, kind)
+                }
+            }
+        })
     }
 
     /// Run `f` with the binding flag set to `binding`.
@@ -6691,7 +6785,12 @@ impl<'u> Lowerer<'u> {
 
     /// `x in T` (a generator over `want`), `x in resource`, `x in world.T`,
     /// or `x in list`.
-    fn membership(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<Lit> {
+    fn membership(
+        &mut self,
+        rc: &mut Rc,
+        n: &SyntaxNode,
+        out: &mut Vec<Lit>,
+    ) -> L<(Lit, Option<GoalId>)> {
         let span = self.span(n);
         let ts: Vec<SyntaxNode> = terms(n).collect();
         let lhs_node = ts.first().ok_or(Skip)?;
@@ -6704,7 +6803,9 @@ impl<'u> Lowerer<'u> {
             && let Some((_, def)) = self.function_def(rc.scope, &c.head)
         {
             let at = self.span_of(c.range);
-            return self.in_function(at, &c.head.clone(), &def);
+            return self
+                .in_function(at, &c.head.clone(), &def)
+                .map(|l| (l, None));
         }
         // `v in PATH` with a `[_]` in it binds `v` to each value the path
         // reaches (R-162): the steps enumerate.
@@ -6721,9 +6822,10 @@ impl<'u> Lowerer<'u> {
                     ),
                 );
             }
-            let value = self.bind(false, |l| l.term(rc, rhs_node, Pos::Content, out))?;
-            let item = self.term(rc, lhs_node, Pos::Content, out)?;
-            return Ok(Lit::Eq(item, value));
+            let (value, v) = self.bind(false, |l| l.arg_node(rc, rhs_node, Pos::Content, out))?;
+            let (item, i) = self.arg_node(rc, lhs_node, Pos::Content, out)?;
+            let g = self.member_goal(rc, span, i, Coll::Each(v));
+            return Ok((Lit::Eq(item, value), Some(g)));
         }
         if !any_type && let (Some(c), Some(rhs_node)) = (&rhs, ts.get(1)) {
             // `x in T`, `T` an enum type (R-70): each of its values, in
@@ -6744,16 +6846,25 @@ impl<'u> Lowerer<'u> {
                     .filter(|l| l.is_bare() && !rc.vars.contains_key(&l.head))
                     .filter(|l| self.instance_in(rc.scope, &l.head).is_some())
                     .map(|l| str_term(&l.head));
-                let x = match copy {
-                    Some(name) => name,
-                    None => self.term(rc, lhs_node, Pos::Content, out)?,
+                let (x, xid) = match copy {
+                    Some(name) => {
+                        let id = self.name_node(rc, span, &name);
+                        (name, id)
+                    }
+                    None => self.arg_node(rc, lhs_node, Pos::Content, out)?,
                 };
-                let parent = self.copies_scope(rc, &path);
-                return Ok(Lit::Pos(atom_at(
+                let parent = self.copies_scope(rc, &path, span);
+                let lit = Lit::Pos(atom_at(
                     crate::modules::INSTANCE_OF,
-                    vec![str_term(&path), parent, x],
+                    vec![str_term(&path), self.term_of(parent), x],
                     span,
-                )));
+                ));
+                let coll = Coll::Copies {
+                    component: path,
+                    scope: parent,
+                };
+                let g = self.member_goal(rc, span, xid, coll);
+                return Ok((lit, Some(g)));
             }
         }
         let mut typ = if any_type {
@@ -6790,11 +6901,18 @@ impl<'u> Lowerer<'u> {
                     span,
                 )));
             }
-            renamed = Some(Lit::Pos(atom_at(
+            let test = Lit::Pos(atom_at(
                 membership::PROVIDER_TYPE,
                 vec![str_term(&t), tv.clone()],
                 span,
-            )));
+            ));
+            let coll = Coll::ProviderType {
+                typ: t.clone(),
+                names: self.covering(&t),
+                var: self.name_node(rc, span, &tv),
+                enumerate: false,
+            };
+            renamed = Some((test, coll));
             typ = Some(tv);
         }
         if (typ.is_some() || world.is_some()) && lhs_node.kind() == TUPLE {
@@ -6810,32 +6928,29 @@ impl<'u> Lowerer<'u> {
         if typ.is_some() || world.is_some() {
             // The left side: an element, bound or checked; a bare resource
             // name is its address; a computed name is bound first.
-            let lhs = match Chain::of(lhs_node) {
+            let lhs_id = match Chain::of(lhs_node) {
                 Some(c) if c.is_bare() && self.resource(rc.scope, &c.head).is_some() => {
                     // The type on the right picks among resources of one name.
                     let named = self.resource(rc.scope, &c.head).unwrap_or_default();
                     match &typ {
                         Some(Term::Val(Value::Str(t))) if named.contains(t) => {
-                            let addr = self.resource_addr(rc.scope, &c.head, span);
-                            self.term_of(addr)
+                            self.resource_addr(rc.scope, &c.head, span)
                         }
-                        _ => {
-                            let (_, addr) = self.reference(rc, &c, out, span)?;
-                            self.term_of(addr)
-                        }
+                        _ => self.reference(rc, &c, out, span)?.1,
                     }
                 }
                 _ => {
-                    let t = self.term(rc, lhs_node, Pos::Content, out)?;
+                    let (t, id) = self.arg_node(rc, lhs_node, Pos::Content, out)?;
                     if matches!(t, Term::Func { .. }) {
                         let v = fresh(rc, "Name");
                         out.push(Lit::Eq(var(&v), t));
-                        var(&v)
+                        self.building(rc, span, |b| b.bound_into(id, &v))
                     } else {
-                        t
+                        id
                     }
                 }
             };
+            let lhs = self.term_of(lhs_id);
             // `r in T` with `r` a reference column's (`deformation(k, r,
             // _)`): the column's `ref(T, R, "")` tests the type, so a row
             // of a deleted resource passes (R-42).
@@ -6844,27 +6959,38 @@ impl<'u> Lowerer<'u> {
                 && c.is_bare()
                 && Self::ref_bound(n, &c.head)
             {
-                if let Some(test) = renamed {
-                    return Ok(test);
+                if let Some((test, coll)) = renamed {
+                    let hole = self.node(span, ExprKind::Hole);
+                    let coll = Self::tested(coll, false);
+                    let g = self.member_goal(rc, span, hole, coll);
+                    return Ok((test, Some(g)));
                 }
                 let have = rc.types.get(&c.head).cloned().unwrap_or_else(|| t.clone());
-                return Ok(Lit::Eq(have, t.clone()));
+                let (h, ty) = (self.name_node(rc, span, &have), self.name_node(rc, span, t));
+                let g = self.member_goal(rc, span, h, Coll::TypeOf(ty));
+                return Ok((Lit::Eq(have, t.clone()), Some(g)));
             }
             if let Some(w) = world {
                 let typ = w.fields()[1..].join(".");
-                return Ok(Lit::Pos(atom_at(
-                    "cloud_exists",
-                    vec![str_term(&typ), lhs],
-                    span,
-                )));
+                let lit = Lit::Pos(atom_at("cloud_exists", vec![str_term(&typ), lhs], span));
+                let g = self.member_goal(rc, span, lhs_id, Coll::World(typ));
+                return Ok((lit, Some(g)));
             }
             self.address_key(&lhs, span)?;
-            out.extend(renamed);
-            return Ok(Lit::Pos(atom_at("want", vec![typ.unwrap(), lhs], span)));
+            let typ = typ.expect("a type or the world");
+            let coll = match renamed {
+                Some((test, coll)) => {
+                    out.push(test);
+                    Self::tested(coll, true)
+                }
+                None => Coll::Type(self.name_node(rc, span, &typ)),
+            };
+            let g = self.member_goal(rc, span, lhs_id, coll);
+            return Ok((Lit::Pos(atom_at("want", vec![typ, lhs], span)), Some(g)));
         }
         let rhs = ts.get(1).ok_or(Skip)?;
         let of = self.resource_list(rc, rhs);
-        let list = self.bind(false, |l| l.term(rc, rhs, Pos::Content, out))?;
+        let (list, list_id) = self.bind(false, |l| l.arg_node(rc, rhs, Pos::Content, out))?;
         // The element's name, for `set c.p` (R-69): `c in L`, `(i, c) in L`.
         let elem = match lhs_node.kind() {
             TUPLE => terms(lhs_node).nth(1),
@@ -6876,10 +7002,52 @@ impl<'u> Lowerer<'u> {
             rc.elems.insert(c.head, of);
         }
         if lhs_node.kind() == TUPLE {
-            return self.pattern_in(rc, lhs_node, list, out, span);
+            return Ok((self.pattern_in(rc, lhs_node, list, out, span)?, None));
         }
-        let item = self.term(rc, lhs_node, Pos::Content, out)?;
-        Ok(Lit::Pos(atom_at("member", vec![list, item], span)))
+        let (item, i) = self.arg_node(rc, lhs_node, Pos::Content, out)?;
+        let g = self.element_goal(rc, span, i, list_id);
+        Ok((Lit::Pos(atom_at("member", vec![list, item], span)), Some(g)))
+    }
+
+    /// `x in coll` at `span`, `x` the node `x` in a binding position.
+    fn member_goal(&mut self, rc: &Rc, span: Span, x: ExprId, coll: Coll) -> GoalId {
+        self.building(rc, span, |b| {
+            let pat = b.pattern_of(x);
+            b.goal_node(span, GoalKind::Member { pat, coll })
+        })
+    }
+
+    /// `x in list` at `span`: a list written as the element is a value,
+    /// not a tuple (a tuple is a key and a value).
+    fn element_goal(&mut self, rc: &Rc, span: Span, x: ExprId, list: ExprId) -> GoalId {
+        self.building(rc, span, |b| {
+            let pat = b.element_of(x);
+            let coll = Coll::Expr(list);
+            b.goal_node(span, GoalKind::Member { pat, coll })
+        })
+    }
+
+    /// A namespace's or a renamed type's test as the collection a
+    /// membership ranges over: enumerated by a `want` after it, or a test
+    /// alone.
+    fn tested(coll: Coll, enumerate: bool) -> Coll {
+        match coll {
+            Coll::Namespace { ns, types, typ, .. } => Coll::Namespace {
+                ns,
+                types,
+                typ,
+                enumerate,
+            },
+            Coll::ProviderType {
+                typ, names, var, ..
+            } => Coll::ProviderType {
+                typ,
+                names,
+                var,
+                enumerate,
+            },
+            coll => coll,
+        }
     }
 
     /// The resource attribute `t` names, `(T, A, path)`, when it is one
@@ -6971,6 +7139,17 @@ impl<'u> Lowerer<'u> {
     /// A relation atom, its arguments lowered at `pos`: positional, or
     /// named by the relation's columns (`p(a: x)`, H-12).
     fn atom(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Atom> {
+        Ok(self.atom_args(rc, n, pos, pre)?.0)
+    }
+
+    /// [`Self::atom`], and its arguments' nodes where each is one.
+    fn atom_args(
+        &mut self,
+        rc: &mut Rc,
+        n: &SyntaxNode,
+        pos: Pos,
+        pre: &mut Vec<Lit>,
+    ) -> L<(Atom, Option<AtomArgs>)> {
         let span = self.span(n);
         if let Some(a) = self.exported_relation(rc, n, pos, pre)? {
             return Ok(a);
@@ -7031,19 +7210,22 @@ impl<'u> Lowerer<'u> {
                 );
             }
             let mut fields = BTreeMap::new();
+            let mut nodes = Vec::new();
             for f in named {
                 let key = tokens(&f).next().ok_or(Skip)?.text().to_string();
-                let value = self.term(rc, &terms(&f).next().ok_or(Skip)?, pos, pre)?;
+                let (value, id) = self.arg_node(rc, &terms(&f).next().ok_or(Skip)?, pos, pre)?;
                 if fields.insert(key.clone(), value).is_some() {
                     return self.error(self.span(&f), format!("column `{key}` given twice"));
                 }
+                nodes.push((key, id));
             }
-            return Ok(Atom {
+            let a = Atom {
                 pred,
                 args: Vec::new(),
                 record: Some(fields),
                 span,
-            });
+            };
+            return Ok((a, Some(AtomArgs::Record(nodes))));
         }
         let args = match crate::zset::REF_RELATIONS.iter().find(|(p, ..)| *p == pred) {
             Some(_) => {
@@ -7058,17 +7240,18 @@ impl<'u> Lowerer<'u> {
                 let mut args = Vec::new();
                 for (i, t) in list.iter().enumerate() {
                     args.push(if Some(i) == at {
-                        self.ref_term(rc, t, pos, pre)?
+                        let id = self.ref_expr(rc, t, pos, pre)?;
+                        (self.lowered(id, pre), id)
                     } else {
-                        self.term(rc, t, pos, pre)?
+                        self.arg_node(rc, t, pos, pre)?
                     });
                 }
                 // `moved(T, "old-address", r)`: the old address is a path
                 // too (R-112).
                 if pred == "moved" {
-                    self.address_key(&args[1], span)?;
+                    self.address_key(&args[1].0, span)?;
                 }
-                args
+                return Ok(Self::positional(pred, args, span));
             }
             // A program relation's reference column (R-185): a resource
             // there is the reference, as in the plan's relations.
@@ -7080,7 +7263,14 @@ impl<'u> Lowerer<'u> {
                 )
                 .is_empty() =>
             {
-                self.ref_args(rc, &pred, list.as_ref(), pos, pre)?
+                let (args, nodes) = self.ref_args(rc, &pred, list.as_ref(), pos, pre)?;
+                let a = Atom {
+                    pred,
+                    args,
+                    record: None,
+                    span,
+                };
+                return Ok((a, nodes.map(AtomArgs::Positional)));
             }
             // In a body an argument is a pattern (R-58): `pair((a, b))`;
             // a relation of several named columns takes one object
@@ -7095,30 +7285,92 @@ impl<'u> Lowerer<'u> {
                     && self.named_columns(rc.scope, &pred)
                 {
                     let record = self.record_pattern(rc, o, pre)?;
-                    return Ok(Atom {
+                    let a = Atom {
                         pred,
                         args: Vec::new(),
                         record: Some(record),
                         span,
-                    });
+                    };
+                    return Ok((a, None));
                 }
-                let mut args = Vec::new();
-                for t in &list {
-                    args.push(if t.kind() == TUPLE {
-                        self.pattern(rc, t, pre)?
-                    } else {
-                        self.term(rc, t, pos, pre)?
-                    });
+                if list.iter().any(|t| t.kind() == TUPLE) {
+                    let mut args = Vec::new();
+                    for t in &list {
+                        args.push(if t.kind() == TUPLE {
+                            self.pattern(rc, t, pre)?
+                        } else {
+                            self.term(rc, t, pos, pre)?
+                        });
+                    }
+                    args
+                } else {
+                    let mut args = Vec::new();
+                    for t in &list {
+                        args.push(self.arg_node(rc, t, pos, pre)?);
+                    }
+                    return Ok(Self::positional(pred, args, span));
                 }
-                args
             }
-            None => self.args(rc, n, pos, pre)?,
+            None => {
+                let (args, nodes) = self.args(rc, n, pos, pre)?;
+                return Ok(Self::positional(
+                    pred,
+                    args.into_iter().zip(nodes).collect(),
+                    span,
+                ));
+            }
         };
-        Ok(Atom {
+        let a = Atom {
             pred,
             args,
             record: None,
             span,
+        };
+        Ok((a, None))
+    }
+
+    /// The atom `pred(args)` at `span`, each argument its term and node.
+    fn positional(pred: String, args: Vec<(Term, ExprId)>, span: Span) -> (Atom, Option<AtomArgs>) {
+        let (args, nodes): (Vec<Term>, Vec<ExprId>) = args.into_iter().unzip();
+        let a = Atom {
+            pred,
+            args,
+            record: None,
+            span,
+        };
+        (a, Some(AtomArgs::Positional(nodes)))
+    }
+
+    /// A relation's argument at `pos`: its term, the reads it makes into
+    /// `pre`, and its node.
+    fn arg_node(
+        &mut self,
+        rc: &mut Rc,
+        t: &SyntaxNode,
+        pos: Pos,
+        pre: &mut Vec<Lit>,
+    ) -> L<(Term, ExprId)> {
+        let id = self.expr(rc, t, pos, pre)?;
+        Ok((self.lowered(id, pre), id))
+    }
+
+    /// The goal of the atom `a` whose arguments are `args`: its relation's.
+    fn rel_goal(&mut self, rc: &Rc, a: &Atom, args: AtomArgs) -> GoalId {
+        let span = a.span;
+        let rel = RelRef {
+            name: a.pred.clone(),
+            span,
+        };
+        self.building(rc, span, |b| {
+            let args = match args {
+                AtomArgs::Positional(xs) => {
+                    RelArgs::Positional(xs.into_iter().map(|x| b.pattern_of(x)).collect())
+                }
+                AtomArgs::Record(xs) => {
+                    RelArgs::Record(xs.into_iter().map(|(k, x)| (k, b.pattern_of(x))).collect())
+                }
+            };
+            b.goal_node(span, GoalKind::Rel { rel, args })
         })
     }
 
@@ -7134,7 +7386,7 @@ impl<'u> Lowerer<'u> {
         n: &SyntaxNode,
         pos: Pos,
         pre: &mut Vec<Lit>,
-    ) -> L<Option<Atom>> {
+    ) -> L<Option<(Atom, Option<AtomArgs>)>> {
         let span = self.span(n);
         let Some(c) = n.children().find_map(|c| Chain::of(&c)) else {
             return Ok(None);
@@ -7157,9 +7409,11 @@ impl<'u> Lowerer<'u> {
                 of,
             };
             let rows = self.read_var(rc, (Read::Output, "output"), read, 2, &p, pre, span);
-            let rows = self.term_of(rows);
-            let cols = self.args(rc, n, pos, pre)?;
-            return Ok(Some(atom_at("member", vec![rows, Term::List(cols)], span)));
+            let (cols, nodes) = self.args(rc, n, pos, pre)?;
+            let parts = nodes.into_iter().map(ListPart::Elem).collect();
+            let list = self.node(span, ExprKind::List { parts });
+            let a = atom_at("member", vec![self.term_of(rows), Term::List(cols)], span);
+            return Ok(Some((a, Some(AtomArgs::Positional(vec![rows, list])))));
         }
         let named = self
             .instance_in(rc.scope, &c.head)
@@ -7191,22 +7445,35 @@ impl<'u> Lowerer<'u> {
         let Some(Res::Val(inst)) = self.scope_path(rc, &prefix, pre, span)? else {
             return Ok(None);
         };
-        let inst = self.term_of(inst);
+        let inst_term = self.term_of(inst);
         // A column the component's relation holds references in is the
         // reference here too (R-204): `s` in `blue.subnet(s)` is the
         // subnet, its address what `s in net.subnet` reads.
         let list: Vec<SyntaxNode> = node(n, ARG_LIST)
             .map(|l| terms(&l).collect())
             .unwrap_or_default();
-        let cols = match self.exported_ref_columns(rc, n, list.len()) {
+        let (cols, nodes) = match self.exported_ref_columns(rc, n, list.len()) {
             Some(refs) if !refs.is_empty() => self.ref_args_by(rc, &p, &refs, &list, pos, pre)?,
-            _ => self.args(rc, n, pos, pre)?,
+            _ => {
+                let mut cols = Vec::new();
+                for t in &list {
+                    cols.push(self.arg_node(rc, t, pos, pre)?);
+                }
+                let (cols, nodes) = cols.into_iter().unzip();
+                (cols, Some(nodes))
+            }
         };
-        Ok(Some(atom_at(
+        let a = atom_at(
             crate::modules::ROWS,
-            vec![inst, str_term(&p), Term::List(cols)],
+            vec![inst_term, str_term(&p), Term::List(cols)],
             span,
-        )))
+        );
+        let args = nodes.map(|nodes| {
+            let parts = nodes.into_iter().map(ListPart::Elem).collect();
+            let list = self.node(span, ExprKind::List { parts });
+            AtomArgs::Positional(vec![inst, self.str_node(span, &p), list])
+        });
+        Ok(Some((a, args)))
     }
 
     /// Is `n` a reference: a resource, a typed variable, or a variable a
@@ -7265,7 +7532,7 @@ impl<'u> Lowerer<'u> {
     /// The scope whose copies of the component `path` a read in this body
     /// sees: the body's own when it makes one, else its user's (the
     /// `instance_of` user column, as `c[t]` reads it).
-    fn copies_scope(&self, rc: &Rc, path: &str) -> Term {
+    fn copies_scope(&mut self, rc: &Rc, path: &str, span: Span) -> ExprId {
         let own = self
             .own_scopes(rc.scope)
             .iter()
@@ -7276,7 +7543,8 @@ impl<'u> Lowerer<'u> {
                     .any(|p| p == path)
             })
             .copied();
-        self.scope_term(rc.scope, own.unwrap_or(self.root()), str_term(""))
+        let user = self.str_node(span, "");
+        self.scoped(rc.scope, own.unwrap_or(self.root()), user, span)
     }
 
     /// A copy where a resource is taken (R-67): its name in scope (`blue`)
@@ -7301,13 +7569,8 @@ impl<'u> Lowerer<'u> {
         Some(self.building(rc, span, |b| b.form(crate::address::REF, args)))
     }
 
-    fn ref_term(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
-        let id = self.ref_expr(rc, n, pos, pre)?;
-        Ok(self.lowered(id, pre))
-    }
-
-    /// [`Self::ref_term`] as its node, the reads no node of it holds into
-    /// `pre`.
+    /// A resource where a relation takes one (R-42) as its node, the reads
+    /// no node of it holds into `pre`.
     fn ref_expr(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<ExprId> {
         let span = self.span(n);
         if n.kind() == LITERAL {
@@ -7571,15 +7834,20 @@ impl<'u> Lowerer<'u> {
         Some(c.fields().join("."))
     }
 
-    fn args(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Vec<Term>> {
-        let Some(list) = node(n, ARG_LIST) else {
-            return Ok(Vec::new());
-        };
+    /// `n`'s positional arguments at `pos`: each its term and node
+    /// ([`Self::arg_node`]).
+    fn args(
+        &mut self,
+        rc: &mut Rc,
+        n: &SyntaxNode,
+        pos: Pos,
+        pre: &mut Vec<Lit>,
+    ) -> L<(Vec<Term>, Vec<ExprId>)> {
         let mut out = Vec::new();
-        for t in terms(&list) {
-            out.push(self.term(rc, &t, pos, pre)?);
+        for t in node(n, ARG_LIST).iter().flat_map(|l| terms(l)) {
+            out.push(self.arg_node(rc, &t, pos, pre)?);
         }
-        Ok(out)
+        Ok(out.into_iter().unzip())
     }
 
     /// The arguments of `n` as parts of what a chain resolves to

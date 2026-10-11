@@ -175,24 +175,33 @@ impl Lowerer<'_> {
         (name, members, def): (String, Vec<String>, Span),
         out: &mut Vec<Lit>,
         span: Span,
-    ) -> L<Lit> {
-        let values = Term::Val(Value::List(members.into_iter().map(Value::Str).collect()));
+    ) -> L<(Lit, Option<GoalId>)> {
+        let values = members.iter().cloned().map(Value::Str).collect();
         self.helpers.push(Stmt::Fact(atom_at(
             ENUM,
-            vec![str_term(&name), values],
+            vec![str_term(&name), Term::Val(Value::List(values))],
             def,
         )));
-        let list = var(&fresh(rc, "Values"));
-        out.push(Lit::Pos(atom_at(
-            ENUM,
-            vec![str_term(&name), list.clone()],
-            span,
-        )));
+        let v = fresh(rc, "Values");
+        let list = var(&v);
+        let of = self.str_node(span, &name);
+        let read = self.building(rc, span, |b| b.call_into(ENUM, vec![of], &v));
+        self.hoisted_into(read, out);
         if lhs.kind() == TUPLE {
-            return self.pattern_in(rc, lhs, list, out, span);
+            return Ok((self.pattern_in(rc, lhs, list, out, span)?, None));
         }
-        let item = self.term(rc, lhs, Pos::Content, out)?;
-        Ok(Lit::Pos(atom_at("member", vec![list, item], span)))
+        let (item, i) = self.arg_node(rc, lhs, Pos::Content, out)?;
+        let coll = Coll::Enum {
+            name,
+            values: members,
+            def,
+            list: read,
+        };
+        let g = self.building(rc, span, |b| {
+            let pat = b.element_of(i);
+            b.goal_node(span, GoalKind::Member { pat, coll })
+        });
+        Ok((Lit::Pos(atom_at("member", vec![list, item], span)), Some(g)))
     }
 
     /// The declaration of the input `name` in scope.
@@ -283,7 +292,7 @@ impl Lowerer<'_> {
         ns: &str,
         out: &mut Vec<Lit>,
         span: Span,
-    ) -> L<Lit> {
+    ) -> L<(Lit, Option<GoalId>)> {
         let Some(c) = Chain::of(lhs).filter(Chain::is_bare) else {
             return self.error(
                 span,
@@ -295,18 +304,33 @@ impl Lowerer<'_> {
             Some(t) => t.clone(),
             None => var(&fresh(rc, "Type")),
         };
-        let addr = var(&self.var_named(rc, &c.head, span));
-        for t in self.namespace_types(ns) {
-            let mut fact = atom_at(NAMESPACE, vec![str_term(ns), str_term(&t)], span);
+        let addr = self.var_named(rc, &c.head, span);
+        let types = self.namespace_types(ns);
+        for t in &types {
+            let mut fact = atom_at(NAMESPACE, vec![str_term(ns), str_term(t)], span);
             fact.span = span;
             self.helpers.push(Stmt::Fact(fact));
         }
         let test = Lit::Pos(atom_at(NAMESPACE, vec![str_term(ns), typ.clone()], span));
+        let coll = Coll::Namespace {
+            ns: ns.to_string(),
+            types,
+            typ: self.name_node(rc, span, &typ),
+            enumerate: !bound,
+        };
+        let x = match bound {
+            true => self.node(span, ExprKind::Hole),
+            false => self.var_node(rc, span, &addr),
+        };
+        let g = self.member_goal(rc, span, x, coll);
         if bound {
-            return Ok(test);
+            return Ok((test, Some(g)));
         }
         out.push(test);
-        Ok(Lit::Pos(atom_at("want", vec![typ, addr], span)))
+        Ok((
+            Lit::Pos(atom_at("want", vec![typ, var(&addr)], span)),
+            Some(g),
+        ))
     }
 
     /// `r.p` on a variable a namespace ranges: an error naming the types
