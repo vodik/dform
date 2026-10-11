@@ -69,15 +69,27 @@ const CASES: &[Case] = &[
     ),
     Case {
         keys: &["env=dev"],
-        ..case("gke_platform", "dev", "examples/gke-platform/stacks/gke_platform.df")
+        ..case(
+            "gke_platform",
+            "dev",
+            "examples/gke-platform/stacks/gke_platform.df",
+        )
     },
     Case {
         keys: &["env=stg"],
-        ..case("gke_platform", "stg", "examples/gke-platform/stacks/gke_platform.df")
+        ..case(
+            "gke_platform",
+            "stg",
+            "examples/gke-platform/stacks/gke_platform.df",
+        )
     },
     Case {
         keys: &["env=prod"],
-        ..case("gke_platform", "prod", "examples/gke-platform/stacks/gke_platform.df")
+        ..case(
+            "gke_platform",
+            "prod",
+            "examples/gke-platform/stacks/gke_platform.df",
+        )
     },
     case("decl_demo", "default", "examples/decl/stacks/decl_demo.df"),
     Case {

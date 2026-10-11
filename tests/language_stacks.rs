@@ -303,7 +303,10 @@ fn a_type_the_provider_does_not_declare_is_a_plan_error() {
     copy_dir(&repo().join("examples/gke-platform"), &s.dir);
     let src = s.read("stacks/gke_platform.df");
     assert!(src.contains("use gke {"), "{src}");
-    s.write("stacks/gke_platform.df", &src.replace("use gke {", "use fake {"));
+    s.write(
+        "stacks/gke_platform.df",
+        &src.replace("use gke {", "use fake {"),
+    );
     let r = s.run(&["plan", "gke_platform"]).failure();
     assert!(
         r.stderr

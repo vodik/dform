@@ -1226,11 +1226,15 @@ mod tests {
         );
 
         // Resolution decides: equal -> the value with both witnesses; unequal -> conflict naming both.
-        let same = cell.resolve("gke/gke_platform#endpoint", &s("1.2.3.4")).collapse();
+        let same = cell
+            .resolve("gke/gke_platform#endpoint", &s("1.2.3.4"))
+            .collapse();
         assert!(
             matches!(&same, Collapsed::Val { value, witnesses, .. } if *value == s("1.2.3.4") && *witnesses == Witnesses::from([1, 2]))
         );
-        let diff = cell.resolve("gke/gke_platform#endpoint", &s("9.9.9.9")).collapse();
+        let diff = cell
+            .resolve("gke/gke_platform#endpoint", &s("9.9.9.9"))
+            .collapse();
         let Collapsed::Conflict { a, b, .. } = diff else {
             panic!("expected conflict, got {diff:?}")
         };

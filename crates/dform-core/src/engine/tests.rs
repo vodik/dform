@@ -925,7 +925,11 @@ fn other_examples_have_no_stuck_instances() {
             crate::schema::fake(),
             &prod,
         ),
-        ("examples/gke-platform/stacks/gke_platform.df", crate::schema::gke(), &prod),
+        (
+            "examples/gke-platform/stacks/gke_platform.df",
+            crate::schema::gke(),
+            &prod,
+        ),
         (
             "examples/decl/stacks/decl_demo.df",
             crate::schema::fake(),
