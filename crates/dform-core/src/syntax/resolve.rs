@@ -33,7 +33,7 @@ use crate::ast::{
 };
 use crate::diag::Diagnostic;
 use crate::program::node::CopyKind;
-use crate::program::node::{Arg, BinOp, Callee, ExprKind};
+use crate::program::node::{Arg, BinOp, Callee, ExprKind, ListPart};
 use crate::program::scope::{self as scopes, DeclKind, DeclRef, Names, Reach};
 use crate::program::{ExprId, ItemId, Read, ScopeId};
 use crate::spell;
@@ -7472,8 +7472,11 @@ impl<'u> Lowerer<'u> {
             TUPLE => return self.tuple_value(n),
             CHAIN | CALL_CHAIN => self.chain_term(rc, n, pos, &mut reads),
             CALL => return self.call(rc, n, pos, pre),
+            LIST if !n.children().any(|c| c.kind() == SPREAD) => {
+                return self.list_expr(rc, n, pos, pre).map(node);
+            }
             LIST => self.list(rc, n, pos, &mut reads),
-            OBJECT => self.object(rc, n, pos, &mut reads),
+            OBJECT => return self.object(rc, n, pos, pre),
             COMPREHENSION => self.comprehension(rc, n, pos),
             k => {
                 let span = self.span(n);
@@ -7747,15 +7750,97 @@ impl<'u> Lowerer<'u> {
         Ok(out)
     }
 
+    /// `[a, b]`, written element by element: its node, each element's.
+    /// A list with a spread is `spread.rs`'s.
+    fn list_expr(
+        &mut self,
+        rc: &mut Rc,
+        n: &SyntaxNode,
+        pos: Pos,
+        pre: &mut Vec<Lit>,
+    ) -> L<ExprId> {
+        let mut parts = Vec::new();
+        for t in terms(n) {
+            parts.push(ListPart::Elem(self.expr(rc, &t, pos, pre)?));
+        }
+        Ok(self.node(self.span(n), ExprKind::List { parts }))
+    }
+
     /// An object, its keys given or computed (`{ "${k}": v }`), its
-    /// fields written or spread (`{ ..base, k: v }`, R-199).
-    fn object(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
+    /// fields written or spread (`{ ..base, k: v }`, R-199). An object of
+    /// written fields, each key written, is its node, each field's value
+    /// its node; the others are built from what they lower to.
+    fn object(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Built> {
         self.written_twice(n)?;
+        let mut reads = Vec::new();
         if n.children().any(|c| c.kind() == SPREAD) {
-            return self.spread_object(rc, n, pos, pre);
+            let t = self.spread_object(rc, n, pos, &mut reads)?;
+            return Ok(Built::Lowered(t, reads));
         }
         let fields: Vec<SyntaxNode> = n.children().filter(|c| c.kind() == OBJECT_FIELD).collect();
-        self.object_fields(rc, &fields, pos, pre)
+        if self.computed_keys(&fields) {
+            let t = self.computed_object(rc, &fields, pos, &mut reads)?;
+            return Ok(Built::Lowered(t, reads));
+        }
+        let mut parts = Vec::new();
+        for f in &fields {
+            let k = tokens(f).next().ok_or(Skip)?;
+            let key = if k.kind() == STRING {
+                self.string(&k)?
+            } else {
+                k.text().to_string()
+            };
+            let key_span = self.span_of(k.text_range());
+            let (value, pun) = match terms(f).next() {
+                Some(t) => (self.expr(rc, &t, pos, pre)?, false),
+                // `{ a }` is `{ a: a }`.
+                None => {
+                    let mut reads = Vec::new();
+                    let t = self.punned(rc, &key, &k, pos, &mut reads)?;
+                    let (id, left) = self.building(rc, key_span, |b| b.part(&t, &reads));
+                    pre.extend(left);
+                    (id, true)
+                }
+            };
+            parts.push(crate::program::node::ObjPart::Field {
+                key,
+                key_span,
+                value,
+                pun,
+            });
+        }
+        Ok(Built::Node(
+            self.node(self.span(n), ExprKind::Object { parts }),
+        ))
+    }
+
+    /// Whether a field's key has holes (`{ "${k}": v }`): the object is
+    /// built at run time (`functions::OBJECT`).
+    fn computed_keys(&self, fields: &[SyntaxNode]) -> bool {
+        fields
+            .iter()
+            .filter_map(|f| tokens(f).next())
+            .any(|k| k.kind() == STRING && !self.text && has_hole(k.text()))
+    }
+
+    /// `{ a }`'s value: the name `a` read.
+    fn punned(
+        &mut self,
+        rc: &mut Rc,
+        key: &str,
+        k: &SyntaxToken,
+        pos: Pos,
+        pre: &mut Vec<Lit>,
+    ) -> L<Term> {
+        let c = Chain {
+            head: key.to_string(),
+            head_kind: k.kind(),
+            call: None,
+            range: k.text_range(),
+            ops: Vec::new(),
+        };
+        let res = self.resolve(rc, &c, pre)?;
+        self.realize(rc, res, pos, pre, self.span_of(k.text_range()))
     }
 
     /// Written fields as an object: a key with holes (`{ "${k}": v }`)
@@ -7768,11 +7853,7 @@ impl<'u> Lowerer<'u> {
         pos: Pos,
         pre: &mut Vec<Lit>,
     ) -> L<Term> {
-        let computed = fields
-            .iter()
-            .filter_map(|f| tokens(f).next())
-            .any(|k| k.kind() == STRING && !self.text && has_hole(k.text()));
-        if computed {
+        if self.computed_keys(fields) {
             return self.computed_object(rc, fields, pos, pre);
         }
         let mut m = BTreeMap::new();
@@ -7786,17 +7867,7 @@ impl<'u> Lowerer<'u> {
             let v = match terms(f).next() {
                 Some(t) => self.term(rc, &t, pos, pre)?,
                 // `{ a }` is `{ a: a }`.
-                None => {
-                    let c = Chain {
-                        head: key.clone(),
-                        head_kind: k.kind(),
-                        call: None,
-                        range: k.text_range(),
-                        ops: Vec::new(),
-                    };
-                    let res = self.resolve(rc, &c, pre)?;
-                    self.realize(rc, res, pos, pre, self.span_of(k.text_range()))?
-                }
+                None => self.punned(rc, &key, &k, pos, pre)?,
             };
             m.insert(key, v);
         }
