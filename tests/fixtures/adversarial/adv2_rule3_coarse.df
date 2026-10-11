@@ -8,7 +8,11 @@ resource google.container_cluster gke_platform { name = "gke-platform-gke" }
 resource google.container_node_pool "${np}" {
   cluster = ref("google.container_cluster", "gke_platform", "id")
   zone = z
-} where arg("google.container_cluster", "gke_platform", "zones", zs), z in zs, np = str.format("np-%s", z)
+} where {
+  arg("google.container_cluster", "gke_platform", "zones", zs)
+  z in zs
+  np = str.format("np-%s", z)
+}
 
 resource k8s.namespace gke_platform { metadata.name = "gke-platform" }
 
