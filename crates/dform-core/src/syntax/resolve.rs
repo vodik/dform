@@ -33,7 +33,7 @@ use crate::ast::{
 };
 use crate::diag::Diagnostic;
 use crate::program::node::CopyKind;
-use crate::program::node::{Arg, BinOp, Callee, ExprKind, ListPart};
+use crate::program::node::{BinOp, ExprKind, ListPart, ObjPart};
 use crate::program::scope::{self as scopes, DeclKind, DeclRef, Names, Reach};
 use crate::program::{ExprId, ItemId, Read, ScopeId};
 use crate::spell;
@@ -611,14 +611,6 @@ enum Res {
     },
     /// A variable with fields or indexes.
     Var { var: Term, path: Vec<Seg> },
-}
-
-/// A term as built (R-211 step 7): its node, or, for a form whose node
-/// is not built from the tree yet, what the resolver lowered it to and the
-/// reads it made.
-enum Built {
-    Node(ExprId),
-    Lowered(Term, Vec<Lit>),
 }
 
 /// Where a term stands: a whole value (a field, a head argument, an
@@ -3460,9 +3452,14 @@ impl<'u> Lowerer<'u> {
     /// their place (R-131). `None` for any other call; an old loader
     /// (`yaml(..)`) no relation of the program names is an error naming
     /// the composition.
-    fn loader_call(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> Option<L<Term>> {
+    fn loader_call(
+        &mut self,
+        rc: &mut Rc,
+        n: &SyntaxNode,
+        pre: &mut Vec<Lit>,
+    ) -> Option<L<ExprId>> {
         if let Some(e) = self.old_loader(n) {
-            return Some(e);
+            return Some(e.map(|never| match never {}));
         }
         let (format, _) = self.loader_of(n)?;
         let table = crate::tables::DOCUMENT.to_string();
@@ -3472,18 +3469,18 @@ impl<'u> Lowerer<'u> {
             name: "value".into(),
             ty: Some(TypeExpr::Name("any".into())),
         }];
-        Some(
-            self.table_body(rc, n, &table, cols, vec![v.clone()], pre)
-                .map(|stmts| {
-                    for st in stmts {
-                        let known = |h: &Stmt| matches!((h, &st), (Stmt::ExternFn(a), Stmt::ExternFn(b)) if a.name == b.name);
-                        if !self.helpers.iter().any(known) {
-                            self.helpers.push(st);
-                        }
-                    }
-                    v
-                }),
-        )
+        let mut local = Vec::new();
+        let stmts = match self.table_body(rc, n, &table, cols, vec![v.clone()], &mut local) {
+            Ok(stmts) => stmts,
+            Err(e) => return Some(Err(e)),
+        };
+        for st in stmts {
+            let known = |h: &Stmt| matches!((h, &st), (Stmt::ExternFn(a), Stmt::ExternFn(b)) if a.name == b.name);
+            if !self.helpers.iter().any(known) {
+                self.helpers.push(st);
+            }
+        }
+        Some(Ok(self.rebuilt(rc, self.span(n), &v, &local, pre)))
     }
 
     /// A read's format and its `io.read(..)` call (R-155): `io.read(L)`
@@ -3514,7 +3511,7 @@ impl<'u> Lowerer<'u> {
     /// `yaml(LOCATION)`, `text(..)` and the other loaders a program wrote
     /// before R-155, when no relation of the program has the name: an
     /// error naming the read and its decode.
-    fn old_loader(&mut self, n: &SyntaxNode) -> Option<L<Term>> {
+    fn old_loader(&mut self, n: &SyntaxNode) -> Option<L<std::convert::Infallible>> {
         if n.kind() != CALL {
             return None;
         }
@@ -7252,10 +7249,14 @@ impl<'u> Lowerer<'u> {
         list: &SyntaxNode,
         pre: &mut Vec<Lit>,
         span: Span,
-    ) -> L<Term> {
+    ) -> L<ExprId> {
         let arg = terms(list).next().ok_or(Skip)?;
-        match self.ref_term(rc, &arg, Pos::Content, pre)? {
-            r @ Term::Func { .. } => Ok(func(crate::address::REF, vec![r])),
+        let mut local = Vec::new();
+        match self.ref_term(rc, &arg, Pos::Content, &mut local)? {
+            r @ Term::Func { .. } => {
+                let t = func(crate::address::REF, vec![r]);
+                Ok(self.rebuilt(rc, span, &t, &local, pre))
+            }
             _ => self.error(
                 span,
                 "`ref(r)` takes a resource: its name in scope, `T[\"a\"]`, or a variable `in T`",
@@ -7410,31 +7411,22 @@ impl<'u> Lowerer<'u> {
     // --- terms ------------------------------------------------------------
 
     /// A term as its node (R-211 step 7), the reads it makes held by the
-    /// node; a read no node of it holds goes into `pre`. A form whose node
-    /// is not built from the tree yet is built from what the resolver
-    /// lowered it to.
+    /// node; a read no node of it holds goes into `pre`. The helper
+    /// statements made while it is built are its terms'.
     fn expr(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<ExprId> {
-        match self.built(rc, n, pos, pre)? {
-            Built::Node(id) => Ok(id),
-            Built::Lowered(t, reads) => {
-                let span = self.span(n);
-                let (id, left) = self.building(rc, span, |b| b.part(&t, &reads));
-                pre.extend(left);
-                Ok(id)
-            }
+        let made = self.helpers.len();
+        let id = self.expr_of(rc, n, pos, pre);
+        if let Some(s) = &mut self.gather {
+            s.term(made..self.helpers.len());
         }
+        id
     }
 
     /// A term as a rule holds it, the reads it makes into `pre`: lowered
     /// from its node.
     fn term(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
-        Ok(match self.built(rc, n, pos, pre)? {
-            Built::Node(id) => self.lowered(id, pre),
-            Built::Lowered(t, reads) => {
-                pre.extend(reads);
-                t
-            }
-        })
+        let id = self.expr(rc, n, pos, pre)?;
+        Ok(self.lowered(id, pre))
     }
 
     /// The term the node `id` lowers to, the reads it makes into `pre`.
@@ -7444,55 +7436,46 @@ impl<'u> Lowerer<'u> {
         t
     }
 
-    /// The term `n` built; the helper statements made while it is are its
-    /// terms'. Under `DFORM_CHECK_LOWER=1` a term built from what it was
-    /// lowered to is built back and compared (`program::check::term`).
-    fn built(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Built> {
-        let made = self.helpers.len();
-        let b = self.built_of(rc, n, pos, pre);
-        if let Some(s) = &mut self.gather {
-            s.term(made..self.helpers.len());
-        }
-        let b = b?;
-        if let Built::Lowered(t, reads) = &b
-            && crate::program::check::enabled()
-        {
-            let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
-            crate::program::check::term(t, reads, self.span(n), &|v| written.contains(v));
-        }
-        Ok(b)
+    /// A term the resolver made of what it resolved (a resource's address
+    /// with its scope's mark, a document's read), after the reads it made,
+    /// `local`: its node built from it, each read the node of the first
+    /// use of its variable; those no node holds into `pre`.
+    fn rebuilt(
+        &mut self,
+        rc: &Rc,
+        span: Span,
+        t: &Term,
+        local: &[Lit],
+        pre: &mut Vec<Lit>,
+    ) -> ExprId {
+        let (id, left) = self.building(rc, span, |b| b.part(t, local));
+        pre.extend(left);
+        id
     }
 
-    fn built_of(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Built> {
-        let node = Built::Node;
-        let mut reads = Vec::new();
-        let t = match n.kind() {
-            LITERAL => return self.literal(rc, n, pre).map(node),
+    fn expr_of(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<ExprId> {
+        match n.kind() {
+            LITERAL => self.literal(rc, n, pre),
             PAREN => {
                 let inner = terms(n).next().ok_or(Skip)?;
-                return self
-                    .bind(false, |l| l.expr(rc, &inner, Pos::Content, pre))
-                    .map(node);
+                self.bind(false, |l| l.expr(rc, &inner, Pos::Content, pre))
             }
-            BIN_EXPR => return self.binary(rc, n, pre).map(node),
-            UNARY_EXPR => return self.unary(rc, n, pre).map(node),
-            RANGE => return self.range(rc, n, pre).map(node),
-            SPREAD => return self.misplaced_spread(n),
-            TUPLE => return self.tuple_value(n),
-            CHAIN | CALL_CHAIN => return self.chain_term(rc, n, pos, pre),
-            CALL => return self.call(rc, n, pos, pre),
-            LIST if !n.children().any(|c| c.kind() == SPREAD) => {
-                return self.list_expr(rc, n, pos, pre).map(node);
-            }
-            LIST => self.list(rc, n, pos, &mut reads),
-            OBJECT => return self.object(rc, n, pos, pre),
+            BIN_EXPR => self.binary(rc, n, pre),
+            UNARY_EXPR => self.unary(rc, n, pre),
+            RANGE => self.range(rc, n, pre),
+            SPREAD => self.misplaced_spread(n),
+            TUPLE => self.tuple_value(n),
+            CHAIN | CALL_CHAIN => self.chain_term(rc, n, pos, pre),
+            CALL => self.call(rc, n, pos, pre),
+            LIST if !n.children().any(|c| c.kind() == SPREAD) => self.list_expr(rc, n, pos, pre),
+            LIST => self.list(rc, n, pos, pre),
+            OBJECT => self.object(rc, n, pos, pre),
             COMPREHENSION => self.comprehension(rc, n, pos),
             k => {
                 let span = self.span(n);
-                return self.error(span, format!("unexpected {k:?} as a term"));
+                self.error(span, format!("unexpected {k:?} as a term"))
             }
-        };
-        Ok(Built::Lowered(t?, reads))
+        }
     }
 
     /// `f` with a builder of the statement's nodes at `span`, its variables
@@ -7588,7 +7571,7 @@ impl<'u> Lowerer<'u> {
         n: &SyntaxNode,
         pos: Pos,
         pre: &mut Vec<Lit>,
-    ) -> L<Built> {
+    ) -> L<ExprId> {
         let span = self.span(n);
         let mut c = Chain::read(n).ok_or(Skip)?;
         let mut local = Vec::new();
@@ -7605,7 +7588,7 @@ impl<'u> Lowerer<'u> {
             let res = self.resolve(rc, &c, &mut local)?;
             let base = self.realize_expr(rc, res, Pos::Content, (local, pre), span)?;
             let path = vec![crate::program::node::Step::Len];
-            return Ok(Built::Node(self.node(span, ExprKind::Field { base, path })));
+            return Ok(self.node(span, ExprKind::Field { base, path }));
         }
         // A resource by its bare name, given as a value: the
         // reference, in its module or out of it (R-43).
@@ -7618,11 +7601,11 @@ impl<'u> Lowerer<'u> {
             && self.resource(rc.scope, &c.head).is_some()
         {
             if let Some(t) = self.deferred_ref(rc, &c.head, span) {
-                return Ok(Built::Lowered(t, local));
+                return Ok(self.rebuilt(rc, span, &t, &local, pre));
             }
             let (typ, addr) = self.reference(rc, &c, &mut local, span)?;
             let t = func(crate::address::REF, vec![typ, addr, str_term("")]);
-            return Ok(Built::Lowered(t, local));
+            return Ok(self.rebuilt(rc, span, &t, &local, pre));
         }
         let res = self.resolve(rc, &c, &mut local)?;
         if let Res::Ref { path, .. } = &res
@@ -7630,8 +7613,7 @@ impl<'u> Lowerer<'u> {
         {
             return self.identity_read(n, span);
         }
-        let id = self.realize_expr(rc, res, pos, (local, pre), span)?;
-        Ok(Built::Node(id))
+        self.realize_expr(rc, res, pos, (local, pre), span)
     }
 
     /// A call of a function, with its named arguments; `env.var`, a
@@ -7639,18 +7621,17 @@ impl<'u> Lowerer<'u> {
     /// nodes; a call the lowering writes as a form of its own (an
     /// operator's function, `ref`, `__path`, ..) and the others are still
     /// built from what they lower to.
-    fn call(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Built> {
+    fn call(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<ExprId> {
         let span = self.span(n);
-        let mut reads = Vec::new();
-        if let Some(t) = self.env_var_call(rc, n, pos, &mut reads) {
-            return t.map(|t| Built::Lowered(t, reads));
+        if let Some(id) = self.env_var_call(rc, n, pos, pre) {
+            return id;
         }
-        if let Some(t) = self.loader_call(rc, n, &mut reads) {
-            return t.map(|t| Built::Lowered(t, reads));
+        if let Some(id) = self.loader_call(rc, n, pre) {
+            return id;
         }
         // A let with parameters (R-187).
-        if let Some(t) = self.function_call(rc, n, &mut reads) {
-            return t.map(|t| Built::Lowered(t, reads));
+        if let Some(id) = self.function_call(rc, n, pre) {
+            return id;
         }
         let name = self.callee(n);
         let Some(name) = name else {
@@ -7660,8 +7641,7 @@ impl<'u> Lowerer<'u> {
             && let Some(list) = node(n, ARG_LIST)
             && terms(&list).count() == 1
         {
-            let t = self.ref_call(rc, &list, &mut reads, span)?;
-            return Ok(Built::Lowered(t, reads));
+            return self.ref_call(rc, &list, pre, span);
         }
         let named: Vec<(String, SyntaxNode)> = node(n, ARG_LIST)
             .into_iter()
@@ -7732,24 +7712,7 @@ impl<'u> Lowerer<'u> {
             .zip(was.iter().zip(now))
             .map(|(a, (was, now))| self.read_as(a, was, now))
             .collect();
-        if crate::program::Builder::is_form(&name) {
-            let args = args
-                .into_iter()
-                .map(|a| self.lowered(a, &mut reads))
-                .collect();
-            return Ok(Built::Lowered(Term::Func { name, args }, reads));
-        }
-        let callee = match crate::functions::get(&name) {
-            Some(f) => Callee::Std(f),
-            None => Callee::Data(name),
-        };
-        let args = args
-            .into_iter()
-            .map(|value| Arg { name: None, value })
-            .collect();
-        Ok(Built::Node(
-            self.node(span, ExprKind::Call { callee, args }),
-        ))
+        Ok(self.building(rc, span, |b| b.form(&name, args)))
     }
 
     /// A call's positional arguments, each its node.
@@ -7786,51 +7749,62 @@ impl<'u> Lowerer<'u> {
     }
 
     /// An object, its keys given or computed (`{ "${k}": v }`), its
-    /// fields written or spread (`{ ..base, k: v }`, R-199). An object of
-    /// written fields, each key written, is its node, each field's value
-    /// its node; the others are built from what they lower to.
-    fn object(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Built> {
+    /// fields written or spread (`{ ..base, k: v }`, R-199): its node,
+    /// each field's value its node.
+    fn object(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<ExprId> {
         self.written_twice(n)?;
-        let mut reads = Vec::new();
         if n.children().any(|c| c.kind() == SPREAD) {
-            let t = self.spread_object(rc, n, pos, &mut reads)?;
-            return Ok(Built::Lowered(t, reads));
+            return self.spread_object(rc, n, pos, pre);
         }
         let fields: Vec<SyntaxNode> = n.children().filter(|c| c.kind() == OBJECT_FIELD).collect();
-        if self.computed_keys(&fields) {
-            let t = self.computed_object(rc, &fields, pos, &mut reads)?;
-            return Ok(Built::Lowered(t, reads));
-        }
+        let parts = self.object_fields(rc, &fields, pos, pre)?;
+        Ok(self.node(self.span(n), ExprKind::Object { parts }))
+    }
+
+    /// Written fields, each its key and its value's node; a key with holes
+    /// (`{ "${k}": v }`) is computed, so each key of the fields is (the
+    /// object is built at run time, `functions::OBJECT`).
+    fn object_fields(
+        &mut self,
+        rc: &mut Rc,
+        fields: &[SyntaxNode],
+        pos: Pos,
+        pre: &mut Vec<Lit>,
+    ) -> L<Vec<ObjPart>> {
+        let computed = self.computed_keys(fields);
         let mut parts = Vec::new();
-        for f in &fields {
+        for f in fields {
             let k = tokens(f).next().ok_or(Skip)?;
-            let key = if k.kind() == STRING {
-                self.string(&k)?
-            } else {
-                k.text().to_string()
-            };
             let key_span = self.span_of(k.text_range());
+            let computed_key = match (computed, k.kind()) {
+                (false, _) => None,
+                (true, STRING) => Some(self.string_expr(rc, &k, pre)?),
+                (true, _) => Some(self.node(key_span, ExprKind::Lit(Value::Str(k.text().into())))),
+            };
+            let key = match k.kind() {
+                _ if computed => String::new(),
+                STRING => self.string(&k)?,
+                _ => k.text().to_string(),
+            };
             let (value, pun) = match terms(f).next() {
                 Some(t) => (self.expr(rc, &t, pos, pre)?, false),
                 // `{ a }` is `{ a: a }`.
                 None => {
-                    let mut reads = Vec::new();
-                    let t = self.punned(rc, &key, &k, pos, &mut reads)?;
-                    let (id, left) = self.building(rc, key_span, |b| b.part(&t, &reads));
-                    pre.extend(left);
-                    (id, true)
+                    let name = if computed { k.text() } else { &key };
+                    (self.punned(rc, name, &k, pos, pre)?, true)
                 }
             };
-            parts.push(crate::program::node::ObjPart::Field {
-                key,
-                key_span,
-                value,
-                pun,
+            parts.push(match computed_key {
+                Some(key) => ObjPart::Computed { key, value },
+                None => ObjPart::Field {
+                    key,
+                    key_span,
+                    value,
+                    pun,
+                },
             });
         }
-        Ok(Built::Node(
-            self.node(self.span(n), ExprKind::Object { parts }),
-        ))
+        Ok(parts)
     }
 
     /// Whether a field's key has holes (`{ "${k}": v }`): the object is
@@ -7850,7 +7824,7 @@ impl<'u> Lowerer<'u> {
         k: &SyntaxToken,
         pos: Pos,
         pre: &mut Vec<Lit>,
-    ) -> L<Term> {
+    ) -> L<ExprId> {
         let c = Chain {
             head: key.to_string(),
             head_kind: k.kind(),
@@ -7858,52 +7832,33 @@ impl<'u> Lowerer<'u> {
             range: k.text_range(),
             ops: Vec::new(),
         };
-        let mark = pre.len();
-        let res = self.resolve(rc, &c, pre)?;
-        let local = pre.split_off(mark);
-        self.realize(rc, res, pos, (local, pre), self.span_of(k.text_range()))
-    }
-
-    /// Written fields as an object: a key with holes (`{ "${k}": v }`)
-    /// is computed, so the object is built at run time
-    /// (`functions::OBJECT`).
-    fn object_fields(
-        &mut self,
-        rc: &mut Rc,
-        fields: &[SyntaxNode],
-        pos: Pos,
-        pre: &mut Vec<Lit>,
-    ) -> L<Term> {
-        if self.computed_keys(fields) {
-            return self.computed_object(rc, fields, pos, pre);
-        }
-        let mut m = BTreeMap::new();
-        for f in fields {
-            let k = tokens(f).next().ok_or(Skip)?;
-            let key = if k.kind() == STRING {
-                self.string(&k)?
-            } else {
-                k.text().to_string()
-            };
-            let v = match terms(f).next() {
-                Some(t) => self.term(rc, &t, pos, pre)?,
-                // `{ a }` is `{ a: a }`.
-                None => self.punned(rc, &key, &k, pos, pre)?,
-            };
-            m.insert(key, v);
-        }
-        Ok(Term::Obj(m))
+        let mut local = Vec::new();
+        let res = self.resolve(rc, &c, &mut local)?;
+        self.realize_expr(rc, res, pos, (local, pre), self.span_of(k.text_range()))
     }
 
     /// A list comprehension: its body resolved nested, its item over it.
-    fn comprehension(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos) -> L<Term> {
+    /// Its node's clause is the goals its literals were built as; outside
+    /// a statement, or a literal not built, the clause is built from what
+    /// the body lowered to.
+    fn comprehension(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos) -> L<ExprId> {
+        let span = self.span(n);
+        let body_node = node(n, BODY).ok_or(Skip)?;
         let saved = (
             std::mem::take(&mut rc.reads),
             std::mem::take(&mut rc.values),
         );
+        if let Some(g) = &mut self.gather {
+            g.open();
+        }
         self.nested += 1;
-        let body = self.body(rc, &node(n, BODY).ok_or(Skip)?);
+        let body = self.body(rc, &body_node);
         self.nested -= 1;
+        let at = self.span_of(body_node.text_range());
+        let clause = match &mut self.gather {
+            Some(g) => g.close(&mut self.program, at),
+            None => None,
+        };
         let mut body = body?;
         let item_node = terms(n).next().ok_or(Skip)?;
         // A resource collected into a value is its reference.
@@ -7912,12 +7867,16 @@ impl<'u> Lowerer<'u> {
         } else {
             Pos::Whole
         };
-        let item = self.bind(false, |l| l.term(rc, &item_node, item_pos, &mut body))?;
+        let lits = body.len();
+        let item = self.bind(false, |l| l.expr(rc, &item_node, item_pos, &mut body))?;
         (rc.reads, rc.values) = saved;
-        Ok(Term::ListComp {
-            item: Box::new(item),
-            body,
-        })
+        if let Some(clause) = clause
+            && body.len() == lits
+        {
+            return Ok(self.node(span, ExprKind::Comprehension { item, clause }));
+        }
+        let item = self.lowered(item, &mut body);
+        Ok(self.building(rc, span, |b| b.comprehension(&item, &body)))
     }
 
     /// Arithmetic; `us-east` and `us-test-1a`, meant as strings, are
@@ -8032,45 +7991,6 @@ impl<'u> Lowerer<'u> {
 
     /// A string literal: `"a${e}b"` is `str.format("a%sb", e)` (H-13), `$${`
     /// is a literal `${`, and a brace is itself.
-    /// `{ "${k}": v, b: w }`: an object with a computed key, built at run
-    /// time, each key then its value (`functions::OBJECT`). A key is a
-    /// string term like any other: its holes are read now.
-    fn computed_object(
-        &mut self,
-        rc: &mut Rc,
-        fields: &[SyntaxNode],
-        pos: Pos,
-        pre: &mut Vec<Lit>,
-    ) -> L<Term> {
-        let mut args = Vec::new();
-        for f in fields {
-            let k = tokens(f).next().ok_or(Skip)?;
-            let key = match k.kind() {
-                STRING => self.string_term(rc, &k, pre)?,
-                _ => str_term(k.text()),
-            };
-            let v = match terms(f).next() {
-                Some(t) => self.term(rc, &t, pos, pre)?,
-                // `{ a }` is `{ a: a }`.
-                None => {
-                    let c = Chain {
-                        head: k.text().to_string(),
-                        head_kind: k.kind(),
-                        call: None,
-                        range: k.text_range(),
-                        ops: Vec::new(),
-                    };
-                    let mark = pre.len();
-                    let res = self.resolve(rc, &c, pre)?;
-                    let local = pre.split_off(mark);
-                    self.realize(rc, res, pos, (local, pre), self.span_of(k.text_range()))?
-                }
-            };
-            args.extend([key, v]);
-        }
-        Ok(func(crate::functions::OBJECT, args))
-    }
-
     fn string_term(&mut self, rc: &mut Rc, t: &SyntaxToken, pre: &mut Vec<Lit>) -> L<Term> {
         let id = self.string_expr(rc, t, pre)?;
         Ok(self.lowered(id, pre))

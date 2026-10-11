@@ -341,7 +341,7 @@ impl Lowerer<'_> {
         n: &SyntaxNode,
         pos: Pos,
         pre: &mut Vec<Lit>,
-    ) -> Option<L<Term>> {
+    ) -> Option<L<ExprId>> {
         let name = self.callee(n)?;
         if name == "ssh.run" {
             let d = Diagnostic::error(
@@ -397,7 +397,7 @@ impl Lowerer<'_> {
         pos: Pos,
         pre: &mut Vec<Lit>,
         name: &str,
-    ) -> L<Term> {
+    ) -> L<ExprId> {
         let span = self.span(n);
         let mut local = Vec::new();
         let args = self.bind(true, |l| l.args(rc, n, Pos::Content, &mut local))?;
@@ -417,7 +417,7 @@ impl Lowerer<'_> {
             out: ins,
             path: Vec::new(),
         };
-        self.realize(rc, res, pos, (local, pre), span)
+        self.realize_expr(rc, res, pos, (local, pre), span)
     }
 
     /// The externs of the built-in fact providers the program's `use`s

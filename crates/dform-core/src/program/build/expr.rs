@@ -56,146 +56,136 @@ impl Builder<'_> {
             Term::Wildcard => ExprKind::Hole,
             Term::List(xs) => return self.list_of(xs),
             Term::Obj(m) => return self.object_of(m),
-            Term::ListComp { item, body } => self.sealed(|b| {
-                let clause = b.clause(body);
-                let item = b.expr(item);
-                ExprKind::Comprehension { item, clause }
-            }),
+            Term::ListComp { item, body } => return self.comprehension(item, body),
             Term::Func { name, args } => return self.func(name, args),
         };
         self.expr_node(kind)
     }
 
-    /// `name(args)`: the form of the language it lowers, else a call.
+    /// `[item | body]` as lowered: its clause the body's literals, its
+    /// reads its own.
+    pub fn comprehension(&mut self, item: &Term, body: &[Lit]) -> ExprId {
+        let kind = self.sealed(|b| {
+            let clause = b.clause(body);
+            let item = b.expr(item);
+            ExprKind::Comprehension { item, clause }
+        });
+        self.expr_node(kind)
+    }
+
+    /// `name(args)`: its arguments' nodes, the form of the language it
+    /// lowers ([`Builder::form`]).
     fn func(&mut self, name: &str, args: &[Term]) -> ExprId {
+        let args = args.iter().map(|a| self.expr(a)).collect();
+        self.form(name, args)
+    }
+
+    /// `name(args)` of the nodes `args`: the form of the language the
+    /// lowering writes it as (an operator, an interpolation, a spread, a
+    /// range, a typing, a path, a reference), else a call of the function
+    /// the standard library or the lowering declares, or of a name read as
+    /// data.
+    pub fn form(&mut self, name: &str, args: Vec<ExprId>) -> ExprId {
         use crate::address::{FORMAT, LEN, REF};
         use crate::functions::{CONCAT, MERGE, OBJECT};
-        let kind = match (name, args) {
-            ("sub", [Term::Val(Value::Int(0)), a]) => ExprKind::Neg(self.expr(a)),
+        let kind = match (name, args.as_slice()) {
+            ("sub", [zero, a]) if self.constant(*zero) == Some(&Value::Int(0)) => ExprKind::Neg(*a),
             (_, [a, b]) if let Ok(op) = BinOp::try_from(name) => ExprKind::Binary {
                 op,
-                lhs: self.expr(a),
-                rhs: self.expr(b),
+                lhs: *a,
+                rhs: *b,
             },
-            (FORMAT, [Term::Val(Value::Str(f)), holes @ ..])
-                if f.matches("%s").count() == holes.len() =>
+            (FORMAT, [f, holes @ ..])
+                if let Some(Value::Str(f)) = self.constant(*f)
+                    && f.matches("%s").count() == holes.len() =>
             {
-                self.interp(f, holes)
+                interp(&f.clone(), holes)
             }
             (MERGE, parts) => return self.merge(parts),
             (CONCAT, parts) => return self.concat(parts),
             (OBJECT, pairs) if pairs.len() % 2 == 0 => return self.computed(pairs),
-            (crate::range::LOWERED, [lo, hi, Term::Val(Value::Bool(inclusive))]) => {
+            (crate::range::LOWERED, [lo, hi, incl])
+                if let Some(Value::Bool(inclusive)) = self.constant(*incl) =>
+            {
                 ExprKind::Range {
-                    lo: self.expr(lo),
-                    hi: self.expr(hi),
+                    lo: *lo,
+                    hi: *hi,
                     inclusive: *inclusive,
                 }
             }
-            (crate::types::AS, [v, Term::Val(Value::Str(ty))]) => ExprKind::As {
-                value: self.expr(v),
-                ty: TypeExpr::Name(ty.clone()),
-            },
-            (crate::types::AMBIGUOUS, [Term::Val(Value::Str(text)), file, start, end]) => {
-                let n = |t: &Term| match t {
-                    Term::Val(Value::Int(i)) => u32::try_from(*i).ok(),
-                    _ => None,
-                };
-                match (n(file), n(start), n(end)) {
-                    (Some(file), Some(start), Some(end)) => {
-                        let span = crate::ast::Span {
-                            file,
-                            start,
-                            end,
-                            origin: 0,
-                        };
-                        let text = text.clone();
-                        return self.at(span, |b| b.expr_node(ExprKind::Quantity { text }));
-                    }
-                    _ => self.call(name, args),
+            (crate::types::AS, [v, ty]) if let Some(Value::Str(ty)) = self.constant(*ty) => {
+                ExprKind::As {
+                    value: *v,
+                    ty: TypeExpr::Name(ty.clone()),
                 }
             }
+            (crate::types::AMBIGUOUS, [text, file, start, end])
+                if let Some(Value::Str(text)) = self.constant(*text)
+                    && let (Some(file), Some(start), Some(end)) =
+                        (self.index(*file), self.index(*start), self.index(*end)) =>
+            {
+                let span = crate::ast::Span {
+                    file,
+                    start,
+                    end,
+                    origin: 0,
+                };
+                let text = text.clone();
+                return self.at(span, |b| b.expr_node(ExprKind::Quantity { text }));
+            }
             (LEN, [v]) => ExprKind::Field {
-                base: self.expr(v),
+                base: *v,
                 path: vec![Step::Len],
             },
-            ("__path", [v, Term::Val(Value::Str(p))]) => ExprKind::Field {
-                base: self.expr(v),
-                path: self.fields(p),
+            ("__path", [v, p]) if let Some(Value::Str(p)) = self.constant(*p) => ExprKind::Field {
+                base: *v,
+                path: self.fields(&p.clone()),
             },
-            (REF, [Term::Val(Value::Str(typ)), addr, Term::Val(Value::Str(p))]) => {
+            (REF, [typ, addr, p])
+                if let (Some(Value::Str(typ)), Some(Value::Str(p))) =
+                    (self.constant(*typ), self.constant(*p)) =>
+            {
                 let typ = TypeRef {
                     name: typ.clone(),
                     span: self.span,
                 };
-                let addr = self.expr(addr);
-                let mut res = self.expr_node(ExprKind::Resource { typ, addr });
-                if !p.is_empty() {
-                    let path = self.fields(p);
+                let path = (!p.is_empty()).then(|| self.fields(&p.clone()));
+                let mut res = self.expr_node(ExprKind::Resource { typ, addr: *addr });
+                if let Some(path) = path {
                     res = self.expr_node(ExprKind::Field { base: res, path });
                 }
                 ExprKind::RefOf(res)
             }
-            _ => self.call(name, args),
+            _ => {
+                let callee = match crate::functions::get(name) {
+                    Some(f) => Callee::Std(f),
+                    None => Callee::Data(name.to_string()),
+                };
+                let args = args.into_iter().map(|value| Arg { name: None, value });
+                ExprKind::Call {
+                    callee,
+                    args: args.collect(),
+                }
+            }
         };
         self.expr_node(kind)
     }
 
-    /// Whether a call of `name` is built as a form of its own (an
-    /// operator, an interpolation, a spread, a range, a typing, a path, a
-    /// reference) rather than as a call: [`Builder::func`]'s forms.
-    pub fn is_form(name: &str) -> bool {
-        use crate::address::{FORMAT, LEN, REF};
-        use crate::functions::{CONCAT, MERGE, OBJECT};
-        BinOp::try_from(name).is_ok()
-            || [
-                "sub",
-                "__path",
-                FORMAT,
-                MERGE,
-                CONCAT,
-                OBJECT,
-                crate::range::LOWERED,
-                crate::types::AS,
-                crate::types::AMBIGUOUS,
-                LEN,
-                REF,
-            ]
-            .contains(&name)
-    }
-
-    /// `f(args)`: a function the standard library or the lowering
-    /// declares, else a name read as data.
-    fn call(&mut self, name: &str, args: &[Term]) -> ExprKind {
-        let callee = match crate::functions::get(name) {
-            Some(f) => Callee::Std(f),
-            None => Callee::Data(name.to_string()),
-        };
-        let args = args
-            .iter()
-            .map(|a| Arg {
-                name: None,
-                value: self.expr(a),
-            })
-            .collect();
-        ExprKind::Call { callee, args }
-    }
-
-    /// `str.format(f, holes..)` as the string it was written as: `f`'s
-    /// text between its `%s`, each the next hole.
-    fn interp(&mut self, f: &str, holes: &[Term]) -> ExprKind {
-        let mut parts = Vec::new();
-        let mut holes = holes.iter();
-        for (i, text) in f.split("%s").enumerate() {
-            if i > 0 {
-                let hole = holes.next().expect("one hole per %s");
-                parts.push(Piece::Hole(self.expr(hole)));
-            }
-            if !text.is_empty() {
-                parts.push(Piece::Text(text.to_string()));
-            }
+    /// The constant node `id` is, when it is one.
+    fn constant(&self, id: ExprId) -> Option<&Value> {
+        let e = &self.program.exprs[id];
+        match (&e.kind, e.hoisted) {
+            (ExprKind::Lit(v), None) => Some(v),
+            _ => None,
         }
-        ExprKind::Interp { parts }
+    }
+
+    /// The constant `u32` node `id` is: a quantity's place.
+    fn index(&self, id: ExprId) -> Option<u32> {
+        match self.constant(id) {
+            Some(Value::Int(i)) => u32::try_from(*i).ok(),
+            _ => None,
+        }
     }
 
     /// A stored path, `a."b.c".d`, as a field step per segment, each as
@@ -206,6 +196,23 @@ impl Builder<'_> {
             .map(|k| Step::Field(k.to_string(), self.span))
             .collect()
     }
+}
+
+/// `str.format(f, holes..)` as the string it was written as: `f`'s text
+/// between its `%s`, each the next hole.
+fn interp(f: &str, holes: &[ExprId]) -> ExprKind {
+    let mut parts = Vec::new();
+    let mut holes = holes.iter();
+    for (i, text) in f.split("%s").enumerate() {
+        if i > 0 {
+            let hole = holes.next().expect("one hole per %s");
+            parts.push(Piece::Hole(*hole));
+        }
+        if !text.is_empty() {
+            parts.push(Piece::Text(text.to_string()));
+        }
+    }
+    ExprKind::Interp { parts }
 }
 
 #[cfg(test)]

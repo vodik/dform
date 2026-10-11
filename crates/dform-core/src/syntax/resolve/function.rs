@@ -250,7 +250,7 @@ impl Lowerer<'_> {
         rc: &mut Rc,
         n: &SyntaxNode,
         pre: &mut Vec<Lit>,
-    ) -> Option<L<Term>> {
+    ) -> Option<L<ExprId>> {
         let (pred, scope, def) = match self.called_function(rc, n) {
             Ok(found) => found?,
             Err(e) => return Some(Err(e)),
@@ -266,7 +266,7 @@ impl Lowerer<'_> {
         scope: ScopeId,
         def: &SyntaxNode,
         pre: &mut Vec<Lit>,
-    ) -> L<Term> {
+    ) -> L<ExprId> {
         let span = self.span(n);
         let name = word_text(def, 1);
         let ps = params(def).unwrap_or_default();
@@ -287,10 +287,10 @@ impl Lowerer<'_> {
                 ),
             );
         }
-        let mut given: Vec<Option<(Term, Span)>> = (0..ps.len()).map(|_| None).collect();
+        let mut given: Vec<Option<(ExprId, Span)>> = (0..ps.len()).map(|_| None).collect();
         for (i, t) in positional.iter().enumerate() {
-            let term = self.bind(false, |l| l.term(rc, t, Pos::Content, pre))?;
-            given[i] = Some((term, self.span(t)));
+            let arg = self.bind(false, |l| l.expr(rc, t, Pos::Content, pre))?;
+            given[i] = Some((arg, self.span(t)));
         }
         let named = list
             .iter()
@@ -311,19 +311,21 @@ impl Lowerer<'_> {
                 return self.error(self.span(&a), format!("`{name}`'s `{k}` is given twice"));
             }
             let t = terms(&a).next().ok_or(Skip)?;
-            let term = self.bind(false, |l| l.term(rc, &t, Pos::Content, pre))?;
-            given[i] = Some((term, self.span(&t)));
+            let arg = self.bind(false, |l| l.expr(rc, &t, Pos::Content, pre))?;
+            given[i] = Some((arg, self.span(&t)));
         }
         let mut args = Vec::new();
         for (p, g) in ps.iter().zip(given) {
-            let (term, at) = match (g, &p.default) {
+            let (arg, at) = match (g, &p.default) {
                 (Some(g), _) => g,
                 (None, Some(d)) => {
                     let mut at_def = Rc {
                         scope,
                         ..Rc::default()
                     };
-                    (self.constant(&mut at_def, d)?, self.span(d))
+                    let t = self.constant(&mut at_def, d)?;
+                    let at = self.span(d);
+                    (self.rebuilt(rc, at, &t, &[], pre), at)
                 }
                 (None, None) => {
                     return self.error(
@@ -335,30 +337,35 @@ impl Lowerer<'_> {
                     );
                 }
             };
+            let was = self.term_of(arg);
             let term = match &p.ty {
                 Some(t) => {
                     let te = self.type_expr(t);
                     let ty = crate::types::of_expr(&te);
-                    match crate::types::literal(&ty, term) {
+                    match crate::types::literal(&ty, was.clone()) {
                         Ok(t) => t,
                         Err(why) => {
                             return self.error(at, format!("`{name}`'s `{}` {why}", p.name));
                         }
                     }
                 }
-                None => term,
+                None => was.clone(),
             };
-            args.push(term);
+            args.push((self.read_as(arg, &was, term.clone()), term));
         }
-        let key = format!("fn {pred} {args:?}");
-        if let Some(v) = rc.reads.get(&key) {
-            return Ok(v.clone());
+        let (args, terms): (Vec<ExprId>, Vec<Term>) = args.into_iter().unzip();
+        let key = format!("fn {pred} {terms:?}");
+        if let Some(Term::Var(v)) = rc.reads.get(&key) {
+            // Read already: its arguments' reads are made again.
+            let v = v.clone();
+            for a in args {
+                self.lowered(a, pre);
+            }
+            return Ok(self.rebuilt(rc, span, &var(&v), &[], pre));
         }
-        let v = var(&fresh(rc, &capitalise(&name)));
-        args.push(v.clone());
-        pre.push(Lit::Pos(atom_at(pred, args, span)));
-        rc.reads.insert(key, v.clone());
-        Ok(v)
+        let v = fresh(rc, &capitalise(&name));
+        rc.reads.insert(key, var(&v));
+        Ok(self.building(rc, span, |b| b.call_into(pred, args, &v)))
     }
 
     /// A call of an unknown function whose name is nearest a let with

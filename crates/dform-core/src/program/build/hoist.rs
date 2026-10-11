@@ -250,6 +250,24 @@ impl Builder<'_> {
         self.hoist_into(id, v)
     }
 
+    /// A call of a let with parameters, `f(args..)`, read into `v`: the
+    /// relation `f(args.., V)` (R-187).
+    pub fn call_into(&mut self, rel: &str, args: Vec<ExprId>, v: &str) -> ExprId {
+        let rel = RelRef {
+            name: rel.to_string(),
+            span: self.span,
+        };
+        let out = args.len();
+        let kind = ExprKind::Lookup {
+            rel,
+            args,
+            out,
+            path: Vec::new(),
+        };
+        let id = self.expr_node(kind);
+        self.hoist_into(id, v)
+    }
+
     /// The element `i` of the list `base`, read into `v`: `member(L, i,
     /// V)`.
     pub fn element_at(&mut self, base: ExprId, i: &Term, v: &str) -> ExprId {

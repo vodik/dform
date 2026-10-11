@@ -17,6 +17,7 @@
 
 use super::*;
 use crate::functions::{CONCAT, MERGE};
+use crate::program::node::ObjPart;
 
 /// What a spread spreads into.
 #[derive(Clone, Copy, PartialEq)]
@@ -34,16 +35,24 @@ impl Target {
     }
 }
 
+/// A part of an object or a list being spread into, as the lowering folds
+/// it: a run of written fields or elements, or another value spread.
+enum Part<T> {
+    Run(Vec<T>),
+    Spread(ExprId),
+}
+
 impl Lowerer<'_> {
     /// `{ a: 1, ..base, b: x }`: the parts in order, folded where each is
-    /// written, else `__merge` of them.
+    /// written (a written object spread is its fields), a run of fields
+    /// with a computed key its object spread.
     pub(super) fn spread_object(
         &mut self,
         rc: &mut Rc,
         n: &SyntaxNode,
         pos: Pos,
         pre: &mut Vec<Lit>,
-    ) -> L<Term> {
+    ) -> L<ExprId> {
         let mut parts = Vec::new();
         let mut run = Vec::new();
         for c in n.children() {
@@ -51,55 +60,172 @@ impl Lowerer<'_> {
                 OBJECT_FIELD => run.push(c),
                 SPREAD => {
                     if !run.is_empty() {
-                        parts.push(self.object_fields(rc, &std::mem::take(&mut run), pos, pre)?);
+                        let fields = std::mem::take(&mut run);
+                        parts.push(self.field_run(rc, &fields, pos, pre)?);
                     }
-                    parts.push(self.spread_source(rc, &c, Target::Object, pre)?);
+                    let id = self.spread_source(rc, &c, Target::Object, pre)?;
+                    parts.push(self.object_part(id));
                 }
                 _ => {}
             }
         }
         if !run.is_empty() {
-            parts.push(self.object_fields(rc, &run, pos, pre)?);
+            parts.push(self.field_run(rc, &run, pos, pre)?);
         }
-        Ok(merged(parts))
+        let parts = folded(parts);
+        let parts = match parts.as_slice() {
+            [Part::Run(_)] => match parts.into_iter().next() {
+                Some(Part::Run(fields)) => fields,
+                _ => unreachable!("one run"),
+            },
+            _ => self.unfolded(
+                parts,
+                self.span(n),
+                |parts| ExprKind::Object { parts },
+                ObjPart::Spread,
+            ),
+        };
+        Ok(self.node(self.span(n), ExprKind::Object { parts }))
     }
 
-    /// `[a, ..xs, b]`: the parts in order, folded where each is written,
-    /// else `__concat` of them.
+    /// `[a, ..xs, b]`: the parts in order, folded where each is written (a
+    /// written list spread is its elements, a known range its members).
     pub(super) fn list(
         &mut self,
         rc: &mut Rc,
         n: &SyntaxNode,
         pos: Pos,
         pre: &mut Vec<Lit>,
-    ) -> L<Term> {
+    ) -> L<ExprId> {
         let mut parts = Vec::new();
         let mut run = Vec::new();
         for t in terms(n) {
             if t.kind() == SPREAD {
                 if !run.is_empty() {
-                    parts.push(Term::List(std::mem::take(&mut run)));
+                    parts.push(Part::Run(std::mem::take(&mut run)));
                 }
-                parts.push(self.spread_source(rc, &t, Target::List, pre)?);
+                let id = self.spread_source(rc, &t, Target::List, pre)?;
+                parts.push(self.list_part(id));
             } else {
-                run.push(self.term(rc, &t, pos, pre)?);
+                run.push(ListPart::Elem(self.expr(rc, &t, pos, pre)?));
             }
         }
         if !run.is_empty() || parts.is_empty() {
-            parts.push(Term::List(run));
+            parts.push(Part::Run(run));
         }
-        Ok(concatenated(parts))
+        let parts = folded(parts);
+        let parts = match parts.as_slice() {
+            [Part::Run(_)] => match parts.into_iter().next() {
+                Some(Part::Run(elems)) => elems,
+                _ => unreachable!("one run"),
+            },
+            _ => self.unfolded(
+                parts,
+                self.span(n),
+                |parts| ExprKind::List { parts },
+                ListPart::Spread,
+            ),
+        };
+        Ok(self.node(self.span(n), ExprKind::List { parts }))
+    }
+
+    /// A run of written fields: its fields, or, a key computed, the
+    /// object they make spread.
+    fn field_run(
+        &mut self,
+        rc: &mut Rc,
+        fields: &[SyntaxNode],
+        pos: Pos,
+        pre: &mut Vec<Lit>,
+    ) -> L<Part<ObjPart>> {
+        let parts = self.object_fields(rc, fields, pos, pre)?;
+        if !parts.iter().any(|p| matches!(p, ObjPart::Computed { .. })) {
+            return Ok(Part::Run(parts));
+        }
+        let span = self.span(&fields[0]);
+        Ok(Part::Spread(self.node(span, ExprKind::Object { parts })))
+    }
+
+    /// What a value spread into an object is: the fields of a written
+    /// object or of a constant one, else the value.
+    fn object_part(&mut self, id: ExprId) -> Part<ObjPart> {
+        let e = &self.program.exprs[id];
+        let span = e.span;
+        match (&e.kind, e.hoisted) {
+            (ExprKind::Object { parts }, None)
+                if parts.iter().all(|p| matches!(p, ObjPart::Field { .. })) =>
+            {
+                Part::Run(parts.clone())
+            }
+            (ExprKind::Lit(Value::Obj(m)), None) => {
+                let m = m.clone();
+                let fields = m.into_iter().map(|(key, v)| ObjPart::Field {
+                    key,
+                    key_span: span,
+                    value: self.node(span, ExprKind::Lit(v)),
+                    pun: false,
+                });
+                Part::Run(fields.collect())
+            }
+            _ => Part::Spread(id),
+        }
+    }
+
+    /// What a value spread into a list is: the elements of a written list
+    /// or of a constant one, else the value.
+    fn list_part(&mut self, id: ExprId) -> Part<ListPart> {
+        let e = &self.program.exprs[id];
+        let span = e.span;
+        match (&e.kind, e.hoisted) {
+            (ExprKind::List { parts }, None)
+                if parts.iter().all(|p| matches!(p, ListPart::Elem(_))) =>
+            {
+                Part::Run(parts.clone())
+            }
+            (ExprKind::Lit(Value::List(xs)), None) => {
+                let xs = xs.clone();
+                let elems = xs
+                    .into_iter()
+                    .map(|v| ListPart::Elem(self.node(span, ExprKind::Lit(v))));
+                Part::Run(elems.collect())
+            }
+            _ => Part::Spread(id),
+        }
+    }
+
+    /// Parts that do not fold into one run: each run its fields or
+    /// elements, an empty one (a written `{}` or `[]` spread) a spread of
+    /// itself.
+    fn unfolded<T>(
+        &mut self,
+        parts: Vec<Part<T>>,
+        span: Span,
+        empty: impl Fn(Vec<T>) -> ExprKind,
+        spread: impl Fn(ExprId) -> T,
+    ) -> Vec<T> {
+        let mut out = Vec::new();
+        for p in parts {
+            match p {
+                Part::Run(xs) if xs.is_empty() => {
+                    out.push(spread(self.node(span, empty(xs))));
+                }
+                Part::Run(xs) => out.extend(xs),
+                Part::Spread(id) => out.push(spread(id)),
+            }
+        }
+        out
     }
 
     /// The value a spread `..x` gives, read where it stands; an error when
-    /// what it is is known and is not what the literal takes.
+    /// what it is is known and is not what the literal takes. A known
+    /// range spread into a list is its members.
     fn spread_source(
         &mut self,
         rc: &mut Rc,
         n: &SyntaxNode,
         into: Target,
         pre: &mut Vec<Lit>,
-    ) -> L<Term> {
+    ) -> L<ExprId> {
         let span = self.span(n);
         let Some(inner) = terms(n).next() else {
             let example = match into {
@@ -112,23 +238,30 @@ impl Lowerer<'_> {
                 format!("name it after the dots, `{example}`"),
             );
         };
-        let t = self.bind(false, |l| l.term(rc, &inner, Pos::Content, pre))?;
+        let id = self.bind(false, |l| l.expr(rc, &inner, Pos::Content, pre))?;
+        let t = self.term_of(id);
         let src = inner.text().to_string();
         if let (Target::List, Term::Val(Value::Range(r))) = (into, &t) {
             return match r.members() {
-                Ok(xs) => Ok(Term::List(xs.into_iter().map(Term::Val).collect())),
+                Ok(xs) => {
+                    let parts = xs
+                        .into_iter()
+                        .map(|v| ListPart::Elem(self.node(span, ExprKind::Lit(v))))
+                        .collect();
+                    Ok(self.node(span, ExprKind::List { parts }))
+                }
                 Err(why) => self.error(span, format!("`..{src}`: {why}")),
             };
         }
         let Some(kind) = kind_of(&t) else {
-            return Ok(t);
+            return Ok(id);
         };
         let fits = match into {
             Target::Object => kind == "object" || kind.starts_with("map"),
             Target::List => kind == "list" || kind.starts_with("list(") || kind == "range",
         };
         if fits {
-            return Ok(t);
+            return Ok(id);
         }
         let help = match (into, kind.as_str()) {
             (Target::Object, "list") => format!("a list spreads into a list, `[..{src}]`"),
@@ -232,44 +365,14 @@ fn kind_of(t: &Term) -> Option<String> {
     Some(kind)
 }
 
-/// An object's parts merged: adjacent written ones folded into one, and
-/// one written object alone is itself.
-fn merged(parts: Vec<Term>) -> Term {
-    let mut out: Vec<Term> = Vec::new();
+/// Adjacent runs folded into one.
+fn folded<T>(parts: Vec<Part<T>>) -> Vec<Part<T>> {
+    let mut out: Vec<Part<T>> = Vec::new();
     for p in parts {
-        let p = match p {
-            Term::Val(Value::Obj(m)) => {
-                Term::Obj(m.into_iter().map(|(k, v)| (k, Term::Val(v))).collect())
-            }
-            p => p,
-        };
         match (out.last_mut(), p) {
-            (Some(Term::Obj(a)), Term::Obj(b)) => a.extend(b),
+            (Some(Part::Run(a)), Part::Run(b)) => a.extend(b),
             (_, p) => out.push(p),
         }
     }
-    match out.as_slice() {
-        [Term::Obj(_)] => out.pop().unwrap(),
-        _ => func(MERGE, out),
-    }
-}
-
-/// A list's parts concatenated: adjacent written ones folded into one,
-/// and one written list alone is itself.
-fn concatenated(parts: Vec<Term>) -> Term {
-    let mut out: Vec<Term> = Vec::new();
-    for p in parts {
-        let p = match p {
-            Term::Val(Value::List(xs)) => Term::List(xs.into_iter().map(Term::Val).collect()),
-            p => p,
-        };
-        match (out.last_mut(), p) {
-            (Some(Term::List(a)), Term::List(b)) => a.extend(b),
-            (_, p) => out.push(p),
-        }
-    }
-    match out.as_slice() {
-        [Term::List(_)] => out.pop().unwrap(),
-        _ => func(CONCAT, out),
-    }
+    out
 }

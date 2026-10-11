@@ -79,9 +79,6 @@ fn the_program_lowers_as_the_resolver_does() {
     eprintln!(
         "{compared} lowerings, {terms} terms, {literals} literals, {clauses} clauses, {folds} folds"
     );
-    // A term is its node where it is built from the tree (R-211 step
-    // 7); the forms still built from what they lowered to are compared.
-    assert!(terms > 0, "no term compared");
     assert!(
         literals >= 4 * compared,
         "only {literals} literals compared"

@@ -209,11 +209,15 @@ impl<'p> Lowering<'p> {
             ExprKind::Field { base, path } => self.field(*base, path),
             ExprKind::RefOf(r) => self.reference(*r),
             ExprKind::Alias(e) => self.expr(*e),
+            // The item's reads are the body's, after its literals.
             ExprKind::Comprehension { item, clause } => {
                 let mut body = Vec::new();
                 self.clause(*clause, &mut body);
+                let outer = std::mem::take(&mut self.reads);
+                let item = self.expr(*item);
+                body.extend(std::mem::replace(&mut self.reads, outer));
                 Term::ListComp {
-                    item: Box::new(self.expr(*item)),
+                    item: Box::new(item),
                     body,
                 }
             }

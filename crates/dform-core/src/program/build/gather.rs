@@ -114,6 +114,21 @@ impl Gather {
         }
     }
 
+    /// The goals of the literals lowered since [`Gather::open`], a
+    /// comprehension's body: a clause in `program` at `span`, or none when
+    /// one failed.
+    pub fn close(&mut self, program: &mut Program, span: Span) -> Option<ClauseId> {
+        let frame = self.frames.pop().expect("a body's frame");
+        if frame.failed {
+            return None;
+        }
+        let goals = frame.goals.into_iter().map(|(g, _)| g).collect();
+        let mut b = self.builder(program, span, &|_| true);
+        let clause = b.clause_of(goals);
+        self.done(b);
+        Some(clause)
+    }
+
     /// The literal being lowered failed: nothing to build, and its clause
     /// is not built.
     pub fn failed(&mut self) {
