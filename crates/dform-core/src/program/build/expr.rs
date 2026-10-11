@@ -15,11 +15,16 @@
 //! | `__as(v, "T")`                           | `As`                              |
 //! | `__path(v, "a.b")`, `__len(v)`           | `Field` of `Field` and `Len` steps |
 //! | `__ref("T", a, "p")`                     | `RefOf` a `Resource` (or its `Field`) |
+//! | `__scope(n)`, `__lexical("B", "n")`      | `Scoped`, `Absolute`, `Lexical("B")` |
 //! | `[item \| body]`                         | `Comprehension` (`clause.rs`)     |
 //! | any other `f(..)`                        | `Call` of the function, or of a name read as data |
 //!
 //! The reads a term hoisted are its nodes in term position
-//! ([`Builder::hoisted`], `hoist.rs`).
+//! ([`Builder::hoisted`], `hoist.rs`). The resolver builds a term written
+//! in the program as its node (R-211 step 7), the forms over its
+//! arguments' nodes ([`Builder::form`]); a term is built from what it
+//! lowered to where a statement's builder reads a lowered literal, and
+//! for the terms the resolver makes of what it resolved.
 
 use super::Builder;
 use crate::ast::{Lit, Term, TypeExpr};

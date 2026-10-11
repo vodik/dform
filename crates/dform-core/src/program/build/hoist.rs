@@ -22,6 +22,11 @@
 //!
 //! A read whose variable the terms do not use is given back: a literal's
 //! builder makes it a goal before the literal's own.
+//!
+//! The resolver builds a read where its term is, from what it reads
+//! ([`Builder::read_into`], R-211 step 7), and keeps the node by the
+//! variable it binds: a builder given the literal that read lowered to
+//! takes that node, with the reads it holds, rather than remaking it.
 
 use super::Builder;
 use crate::ast::{Atom, Lit, Term, str_term};

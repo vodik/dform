@@ -7,9 +7,12 @@
 //! Step 3 builds a term from what the resolver lowered it to, its
 //! `ast::Term` and the reads it hoisted ([`Builder::hoisted`]): every
 //! form a term takes there has its node, a read in term position its own
-//! (`hoist.rs`), and `lower` gives the term back (`program::check` holds
-//! the two equal under `DFORM_CHECK_LOWER=1`). The statement builders
-//! read the tree (step 5).
+//! (`hoist.rs`), and `lower` gives the term back. The statement builders
+//! read the tree (step 5), and the resolver builds each term it reads
+//! off the tree as its node (step 7), lowering it for the rules it still
+//! writes; a statement's items hold the nodes built from what that
+//! lowered to (`program::check` holds the two equal under
+//! `DFORM_CHECK_LOWER=1`).
 
 mod aggregate;
 mod checks;

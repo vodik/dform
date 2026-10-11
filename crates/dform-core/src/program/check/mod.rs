@@ -27,12 +27,11 @@ thread_local! {
     static COLLECTING: RefCell<Option<Collected>> = const { RefCell::new(None) };
 }
 
-/// What [`collect`] saw: how many lowerings, terms, literals and clauses
-/// it compared, and those that differed.
+/// What [`collect`] saw: how many lowerings, literals and clauses it
+/// compared, and those that differed.
 #[derive(Debug, Default)]
 pub struct Collected {
     pub compared: usize,
-    pub terms: usize,
     /// Written literals built as goals and lowered back (step 4).
     pub literals: usize,
     /// Clauses, each a statement's body or a `let`'s, the same.
@@ -54,7 +53,6 @@ impl Collected {
     /// What `other` saw added to this.
     pub fn add(&mut self, other: Collected) {
         self.compared += other.compared;
-        self.terms += other.terms;
         self.literals += other.literals;
         self.clauses += other.clauses;
         self.folds += other.folds;
@@ -185,41 +183,6 @@ fn record(difference: Option<Difference>, count: impl FnOnce(&mut Collected)) {
     if let Some(d) = unseen {
         panic!("{d}\n({SWITCH}=1)");
     }
-}
-
-/// A term the resolver lowered (`term`, after the reads it hoisted,
-/// `reads`), written at `span`, built as nodes and lowered back: the two
-/// compared as [`compare`] does a program, but for the reads the term
-/// does not use. `written`: whether a lowered
-/// variable is one the program wrote.
-pub fn term(term: &Term, reads: &[Lit], span: Span, written: &dyn Fn(&str) -> bool) {
-    let mut program = Program::new();
-    let (id, left) = super::Builder::new(&mut program, span, written).part(term, reads);
-    let (t, rs) = super::lower_expr(&program, id);
-    // A read the term does not use is the term's around it, compared there.
-    let left: Vec<String> = left.iter().map(|l| format!("{l:?}")).collect();
-    let reads: Vec<Lit> = reads
-        .iter()
-        .filter(|l| !left.contains(&format!("{l:?}")))
-        .cloned()
-        .collect();
-    let difference = differ(&term_dump(term, &reads), &term_dump(&t, &rs)).map(|d| Difference {
-        statement: format!("the term at {}: {term:?}", place(span)),
-        ..d
-    });
-    record(difference, |c| c.terms += 1);
-}
-
-/// A term and its reads as one text: the term, then each read and the
-/// spans in it.
-fn term_dump(term: &Term, reads: &[Lit]) -> String {
-    let mut out = format!("term {term:?}\n");
-    for r in reads {
-        let mut spans = Spans::default();
-        spans.lits(std::slice::from_ref(r));
-        let _ = writeln!(out, "read {r:?}\n  spans {}", spans.text());
-    }
-    out
 }
 
 /// `f`, every `lower_stack` it runs compared, and what that found.

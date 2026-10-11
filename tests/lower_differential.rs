@@ -2,10 +2,9 @@
 //! tests/syntax/ok and err, the mock's schemas) is lowered by the resolver
 //! and through the program, and the two compared statement by statement,
 //! every span with its origin and every diagnostic included
-//! (`program::check::dump`), and every term, written literal and clause
-//! in them as well, built as nodes and lowered back
-//! (`program::check::{term, literal, clause}`), and the items counted by
-//! kind. The same comparison runs in every
+//! (`program::check::dump`), and every written literal and clause in
+//! them as well, built as goals and lowered back
+//! (`program::check::{literal, clause}`), and the items counted by kind. The same comparison runs in every
 //! `lower_stack` of the suite under `DFORM_CHECK_LOWER=1`; both are deleted
 //! with the old path at the migration's end.
 
@@ -58,7 +57,6 @@ fn the_program_lowers_as_the_resolver_does() {
     }
     let check::Collected {
         compared,
-        terms,
         literals,
         clauses,
         folds,
@@ -74,11 +72,9 @@ fn the_program_lowers_as_the_resolver_does() {
         failures.join("\n")
     );
     assert!(compared >= files.len() / 2, "only {compared} compared");
-    // Every term, written literal and clause the resolver lowers is built
-    // as nodes and lowered back.
-    eprintln!(
-        "{compared} lowerings, {terms} terms, {literals} literals, {clauses} clauses, {folds} folds"
-    );
+    // Every written literal and clause the resolver lowers is built as
+    // goals and lowered back; a term is its node (R-211 step 7).
+    eprintln!("{compared} lowerings, {literals} literals, {clauses} clauses, {folds} folds");
     assert!(
         literals >= 4 * compared,
         "only {literals} literals compared"
