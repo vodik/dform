@@ -15,17 +15,20 @@
 //! - a block (a resource's, a `set`'s, a type's, an object input's
 //!   fields), and a `not { }` body: one entry per line when broken, and no
 //!   commas then, the newline separates;
-//! - a `where` body: `a, b` on its line, else in braces a literal per line,
-//!   and in braces whatever the width when it has more than
-//!   [`INLINE_LITERALS`] literals (R-10). A body of one literal is never
-//!   braced: its own groups break instead.
+//! - a `where` clause: `where a, b` on the statement's line; else on a
+//!   line of its own one step deeper; else `where` ends the statement's
+//!   line and a literal per line follows one step deeper, each with a
+//!   trailing comma, the last too: an insertion, a deletion or a reorder
+//!   is a one-line diff. A literal per line whatever the width when the
+//!   body has more than [`INLINE_LITERALS`] literals (R-10), a comment or
+//!   an empty line.
 //!
 //! A chain, an operator and a string have no break in them: a line that
 //! is too long after every group broke stays too long. A comment forces
 //! the groups around it to break; a string of several lines does too.
 
 use super::doc::{
-    Doc, concat, group, hard, has_break, if_break, indent, line, nil, stmt_group, text,
+    Doc, clause, concat, group, hard, has_break, if_break, indent, line, nil, stmt_group, text,
 };
 use crate::syntax::SyntaxKind::{self, *};
 use crate::syntax::{SyntaxElement, SyntaxNode, SyntaxToken};
@@ -162,8 +165,6 @@ struct Shape {
     commas: Commas,
     force: bool,
     stmt: bool,
-    /// A `where` body: a literal that spans lines does not brace it.
-    barrier: bool,
 }
 
 impl Shape {
@@ -175,7 +176,6 @@ impl Shape {
             commas,
             force: false,
             stmt: false,
-            barrier: false,
         }
     }
 
@@ -186,7 +186,6 @@ impl Shape {
             commas: Commas::Newline,
             force: false,
             stmt: true,
-            barrier: false,
         }
     }
 
@@ -376,7 +375,6 @@ impl Layout {
             commas,
             force,
             stmt,
-            barrier,
         } = shape;
         let dangling = close.map(|t| self.take_leading(t)).unwrap_or_default();
         let close = close_doc(self);
@@ -409,7 +407,7 @@ impl Layout {
         }
         let d = concat(vec![open, indent(concat(inner)), line(pad), close]);
         if stmt {
-            stmt_group(d, force, barrier)
+            stmt_group(d, force)
         } else {
             group(d, force)
         }
@@ -465,6 +463,10 @@ impl Layout {
                     .0
             }
             BODY => self.body(n, &elems),
+            CLAUSE => match (elems.first(), n.children().find(|c| c.kind() == BODY)) {
+                (Some(SyntaxElement::Token(w)), Some(b)) => self.clause(w, &b),
+                _ => self.generic(n, &elems),
+            },
             BLOCK => {
                 // An entry with a body runs into the next on one line.
                 let force = n.children().any(|e| e.children().any(|c| c.kind() == BODY));
@@ -483,7 +485,18 @@ impl Layout {
         while i < elems.len() {
             let e = &elems[i];
             let k = e.kind();
+            // A clause prints the space before it, or the line break.
+            let clause_body = match (e, elems.get(i + 1)) {
+                (SyntaxElement::Token(w), Some(SyntaxElement::Node(b)))
+                    if k == WHERE_KW && b.kind() == BODY =>
+                {
+                    Some((w.clone(), b.clone()))
+                }
+                _ => None,
+            };
+            let is_clause = clause_body.is_some() || k == CLAUSE;
             let (doc, next) = match (n.kind(), k) {
+                _ if let Some((w, b)) = &clause_body => (self.clause(w, b), i + 2),
                 // Fields of a type, an object input or output.
                 (TYPE_DECL | INPUT | OUTPUT_DECL | ATTR_DECL, L_BRACE) => {
                     self.bracketed(elems, i, Shape::stmt(" "))
@@ -507,7 +520,9 @@ impl Layout {
                 SyntaxElement::Token(t) => Some(t.clone()),
                 SyntaxElement::Node(c) => first_token(c),
             };
-            if let (Some(p), Some(f)) = (&prev, &first) {
+            if let (Some(p), Some(f)) = (&prev, &first)
+                && !is_clause
+            {
                 out.push(text(space(p, f)));
             }
             prev = match &elems[next - 1] {
@@ -613,53 +628,50 @@ impl Layout {
         )
     }
 
-    /// A body: a refinement's on its line; `not { .. }`'s braced; a
-    /// `where` body braced only when broken.
+    /// A body not a clause's: a refinement's on its line, `not { .. }`'s
+    /// braced.
     fn body(&mut self, n: &SyntaxNode, elems: &[SyntaxElement]) -> Doc {
-        let lits: Vec<SyntaxNode> = n.children().collect();
-        let parent = n.parent().map(|p| p.kind());
-        if parent == Some(REFINEMENT) {
-            return self.generic(n, elems);
-        }
-        let many = lits.len() > INLINE_LITERALS;
-        if parent == Some(LIT_NOT_BLOCK) {
+        if n.parent().map(|p| p.kind()) == Some(LIT_NOT_BLOCK) {
+            let many = n.children().count() > INLINE_LITERALS;
             let shape = Shape::term(" ", Commas::Newline).force(many);
             return self.bracketed(elems, 0, shape).0;
         }
-        let comments = self.comments_in(n);
-        let braces = match (elems.first(), elems.last()) {
-            (Some(SyntaxElement::Token(o)), Some(SyntaxElement::Token(c)))
-                if o.kind() == L_BRACE && c.kind() == R_BRACE =>
-            {
-                Some((o.clone(), c.clone()))
-            }
-            _ => None,
-        };
-        let open = match &braces {
-            Some((o, _)) => {
-                let d = self.tok(o);
-                if_break(d, nil())
-            }
-            None => if_break(text("{"), nil()),
-        };
-        let items: Vec<Item> = lits.iter().map(|l| self.item_node(l)).collect();
-        let close = braces.as_ref().map(|(_, c)| c.clone());
-        self.seq(
-            open,
-            items,
-            close.as_ref(),
-            |s| match &close {
-                Some(c) => {
-                    let d = s.tok(c);
-                    if_break(d, nil())
+        self.generic(n, elems)
+    }
+
+    /// `where` and its body, in the first layout that fits
+    /// ([`Doc::Clause`]): on the statement's line, on a hanging line, or a
+    /// literal per line, each with its comma. Only the last when the body
+    /// has more than [`INLINE_LITERALS`] literals, a comment or an empty
+    /// line.
+    fn clause(&mut self, word: &SyntaxToken, body: &SyntaxNode) -> Doc {
+        let lits: Vec<SyntaxNode> = body.children().collect();
+        let broken_only = lits.len() > INLINE_LITERALS
+            || self.commented(word)
+            || self.comments_in(body)
+            || lits
+                .iter()
+                .skip(1)
+                .filter_map(first_token)
+                .any(|t| self.c.blank.contains(&key(&t)));
+        let one_line = (!broken_only).then(|| {
+            let mut v = Vec::new();
+            for (i, l) in lits.iter().enumerate() {
+                if i > 0 {
+                    v.push(text(", "));
                 }
-                None => if_break(text("}"), nil()),
-            },
-            Shape {
-                barrier: true,
-                ..Shape::stmt("").force(many || comments)
-            },
-        )
+                v.push(self.node(l));
+            }
+            concat(v)
+        });
+        let mut inner = Vec::new();
+        for (i, l) in lits.iter().enumerate() {
+            let it = self.item_node(l);
+            inner.push(hard(i > 0 && it.blank_above()));
+            inner.extend(it.docs(text(",")));
+        }
+        let broken = concat(vec![text(" "), self.tok(word), indent(concat(inner))]);
+        clause(one_line, broken)
     }
 
     /// A component's statements: a statement per line, always.

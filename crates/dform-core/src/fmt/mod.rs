@@ -260,18 +260,18 @@ mod tests {
     }
 
     /// A body that fits the line is written on it; one that does not is
-    /// in braces, a literal per line (R-52), and so is one of more than
-    /// three literals whatever the width (R-10).
+    /// on a line of its own, else a literal per line (R-52), and so is one
+    /// of more than three literals whatever the width (R-10).
     #[test]
     fn a_body_goes_on_one_line_when_it_fits() {
         assert_eq!(
             fmt(
-                "resource t n {\nf = x\n} where {\n  a(x)\n  b(x)\n}\ndeny \"m\" { x } where {\na(x)\nnot b(x)\n}\n"
+                "resource t n {\nf = x\n} where\n  a(x),\n  b(x),\ndeny \"m\" { x } where\n a(x),\n not b(x)\n"
             ),
             "resource t n { f = x } where a(x), b(x)\ndeny \"m\" { x } where a(x), not b(x)\n"
         );
-        let long = "p(x) where {\n  q(x, \"a rather long string that fills the line\")\n  \
-                    r(x, \"and another one that runs past its end\")\n}\n";
+        let long = "p(x) where\n  q(x, \"a rather long string that fills the line\"),\n  \
+                    r(x, \"and another one that runs past its end\"),\n";
         assert_eq!(fmt(long), long);
         assert_eq!(
             fmt(
@@ -286,7 +286,7 @@ mod tests {
         );
         assert_eq!(
             fmt("p(x) where a(x), b(x), c(x), d(x)\n"),
-            "p(x) where {\n  a(x)\n  b(x)\n  c(x)\n  d(x)\n}\n"
+            "p(x) where\n  a(x),\n  b(x),\n  c(x),\n  d(x),\n"
         );
         let four = "deny \"m\" where not { a(x), b(x), c(x), d(x) }\n";
         assert_eq!(
@@ -452,7 +452,7 @@ mod tests {
     fn comments_stay_in_place() {
         let src = "resource t n {\n  # above\n  a = 1 # after\n\n  b = [\n    1, # one\n    2,\n  ]\n  # last\n}\n";
         assert_eq!(fmt(src), src);
-        let src = "p(x) where {\n  q(x) # why\n  r(x)\n}\n";
+        let src = "p(x) where\n  q(x), # why\n  r(x),\n";
         assert_eq!(fmt(src), src);
         let src = "use k8s { # later\n}\np(x) where q(x) # a rule\n# the end\n";
         assert_eq!(fmt(src), src);
@@ -497,7 +497,7 @@ mod tests {
 
     #[test]
     fn idempotent() {
-        let src = "p(x)where {\n  q(x)\n  r(x)\n}\nresource t n { a=1, b=2\n c=3 }\n";
+        let src = "p(x)where\n  q(x),\n  r(x)\nresource t n { a=1, b=2\n c=3 }\n";
         let once = fmt(src);
         assert_eq!(fmt(&once), once);
     }

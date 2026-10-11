@@ -678,10 +678,10 @@ mod tests {
     /// Through a variable bound over a keyed list's elements (R-69).
     #[test]
     fn a_set_through_an_element_is_typed() {
-        let src = "set c.resources.limits = { memory: \"1Gi\" } @default where {\n  \
-                   w in k8s.deployment\n  c in w.spec.template.spec.containers\n}\n";
-        let want = "set c.resources.limits = { memory: 1Gi } @default where {\n  \
-                    w in k8s.deployment\n  c in w.spec.template.spec.containers\n}\n";
+        let src = "set c.resources.limits = { memory: \"1Gi\" } @default\n  \
+                   where w in k8s.deployment, c in w.spec.template.spec.containers\n";
+        let want = "set c.resources.limits = { memory: 1Gi } @default\n  \
+                    where w in k8s.deployment, c in w.spec.template.spec.containers\n";
         assert_eq!(fmt(src), want);
     }
 

@@ -330,3 +330,54 @@ fn a_spread_is_spaced_as_its_literal() {
     assert_eq!(fmt(want), want);
     assert_eq!(fmt("let o = { ..[1] }\n"), "let o = { ..[1] }\n");
 }
+
+/// A `where` clause in the first of its three layouts that fits: on the
+/// statement's line; on a line of its own one step deeper (a hanging
+/// line); else `where` ends the statement's line and a literal per line
+/// follows, each with a trailing comma, the last too. More than three
+/// literals, or a comment among them, is a literal per line whatever the
+/// width. Each layout prints back as it is, and so does its clause
+/// written on one line.
+#[test]
+fn a_clause_fits_hangs_or_breaks_a_literal_per_line() {
+    let head = "deny \"a spoke peers only the core\" { p }";
+    let lits = [
+        "p in aws.vpc_peering_connection",
+        "p.peer_vpc != core_vpc_main",
+        "p.vpc != core_vpc_main_and_some_more",
+    ];
+    let one_line = |n: usize| format!("{head} where {}\n", lits[..n].join(", "));
+    let per_line = |n: usize| {
+        let body: String = lits[..n].iter().map(|l| format!("  {l},\n")).collect();
+        format!("{head} where\n{body}")
+    };
+    let fits = one_line(1);
+    let hangs = format!("{head}\n  where {}\n", lits[..2].join(", "));
+    let broken = per_line(3);
+    for (src, want) in [
+        (fits.clone(), fits.clone()),
+        (one_line(2), hangs.clone()),
+        (per_line(2), hangs.clone()),
+        (one_line(3), broken.clone()),
+    ] {
+        assert_eq!(fmt(&src), want, "{src}");
+        assert_eq!(fmt(&want), want, "{want}");
+    }
+    // Four literals, and a comment among them: a literal per line.
+    let four = "deny \"m\" where a(x), b(x), c(x), d(x)\n";
+    let want = "deny \"m\" where\n  a(x),\n  b(x),\n  c(x),\n  d(x),\n";
+    assert_eq!(fmt(four), want);
+    assert_eq!(fmt(want), want);
+    let commented = "deny \"m\" where\n  a(x),\n  # why\n  b(x), # and\n  c(x),\n";
+    assert_eq!(
+        fmt("deny \"m\" where a(x),\n # why\n b(x), # and\n c(x)\n"),
+        commented
+    );
+    assert_eq!(fmt(commented), commented);
+    // In a component, a step deeper than its statement.
+    let inner = format!(
+        "component m {{\n  {head}\n    where {}\n}}\n",
+        lits[..2].join(", ")
+    );
+    assert_eq!(fmt(&inner), inner);
+}

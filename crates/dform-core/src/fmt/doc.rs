@@ -5,27 +5,25 @@
 //! breaks before an inner one, and an inner group that then fits stays on
 //! one line. A group is measured up to the first place the rest of its
 //! line could break, so of two groups on a line the later one breaks
-//! first (prettier's rule); but a statement's own groups (its block, its
-//! body) are measured together, so its block breaks before its body.
+//! first (prettier's rule); a `where` clause is such a place, so a
+//! statement's head stays whole and its clause moves to a line of its
+//! own or breaks ([`Doc::Clause`]).
 
 /// One piece of a document.
 pub enum Doc {
     Text(String),
     Concat(Vec<Doc>),
     /// Its lines one step deeper, when its group breaks (a group on one
-    /// line breaks inside only where a forced break crossed a barrier:
-    /// that is indented from the line, not from the group).
+    /// line breaks inside only where a forced break crossed a clause's
+    /// literals: that is indented from the line, not from the group).
     Indent(Box<Doc>),
     /// Breaks all its own lines, or none. `force`: it must break (it holds
     /// a comment, a hard line, a string of several lines). `stmt`: a
-    /// statement's own group, not a term's. `barrier`: a forced break
-    /// inside it does not force it (a body whose literal spans lines can
-    /// stay on its line).
+    /// statement's own group, not a term's.
     Group {
         doc: Box<Doc>,
         force: bool,
         stmt: bool,
-        barrier: bool,
     },
     /// A line break, or `flat` when its group is on one line. `hard`: a
     /// break whatever the group, which breaks every group around it.
@@ -44,6 +42,17 @@ pub enum Doc {
     Suffix(String),
     /// Breaks every group around it.
     BreakParent,
+    /// A `where` clause after its statement's head, in the first of three
+    /// layouts that fits: ` where a, b` on the statement's line; `where a,
+    /// b` on a line of its own one step deeper (a hanging line); else
+    /// `broken`, `where` ending the line and a literal per line under it.
+    /// `lits` is the literals on one line, `None` when only `broken` will
+    /// do. A break inside `lits` (a string of several lines) forces nothing
+    /// outside it.
+    Clause {
+        lits: Option<Box<Doc>>,
+        broken: Box<Doc>,
+    },
 }
 
 pub fn text(s: impl Into<String>) -> Doc {
@@ -68,18 +77,15 @@ pub fn group(d: Doc, force: bool) -> Doc {
         doc: Box::new(d),
         force,
         stmt: false,
-        barrier: false,
     }
 }
 
-/// A statement's group: its block or its body (`barrier`, see
-/// [`Doc::Group`]).
-pub fn stmt_group(d: Doc, force: bool, barrier: bool) -> Doc {
+/// A statement's group: its block.
+pub fn stmt_group(d: Doc, force: bool) -> Doc {
     Doc::Group {
         doc: Box::new(d),
         force,
         stmt: true,
-        barrier,
     }
 }
 
@@ -101,6 +107,14 @@ pub fn hard(blank: bool) -> Doc {
     }
 }
 
+/// A `where` clause ([`Doc::Clause`]).
+pub fn clause(lits: Option<Doc>, broken: Doc) -> Doc {
+    Doc::Clause {
+        lits: lits.map(Box::new),
+        broken: Box::new(broken),
+    }
+}
+
 pub fn if_break(broken: Doc, flat: Doc) -> Doc {
     Doc::IfBreak(Box::new(broken), Box::new(flat))
 }
@@ -116,6 +130,7 @@ pub fn has_break(d: &Doc) -> bool {
         Doc::Fresh | Doc::BreakParent => true,
         Doc::IfBreak(_, f) => has_break(f),
         Doc::Suffix(_) => false,
+        Doc::Clause { lits, .. } => lits.is_none(),
     }
 }
 
@@ -126,17 +141,9 @@ pub fn propagate(d: &mut Doc) -> bool {
         Doc::Text(s) => s.contains('\n'),
         Doc::Concat(v) => v.iter_mut().fold(false, |acc, d| propagate(d) | acc),
         Doc::Indent(d) => propagate(d),
-        Doc::Group {
-            doc,
-            force,
-            barrier,
-            ..
-        } => {
-            let inner = propagate(doc);
-            if !*barrier {
-                *force |= inner;
-            }
-            *force || inner
+        Doc::Group { doc, force, .. } => {
+            *force |= propagate(doc);
+            *force
         }
         Doc::Line { hard, .. } => *hard,
         Doc::Fresh | Doc::BreakParent => true,
@@ -145,6 +152,13 @@ pub fn propagate(d: &mut Doc) -> bool {
             propagate(f)
         }
         Doc::Suffix(_) => false,
+        Doc::Clause { lits, broken } => {
+            if let Some(l) = lits {
+                propagate(l);
+            }
+            propagate(broken);
+            lits.is_none()
+        }
     }
 }
 
@@ -155,6 +169,11 @@ enum Mode {
 }
 
 const INDENT: &str = "  ";
+
+/// A clause's word with the space before it on the statement's line, and
+/// with the space after it on a hanging line.
+const WHERE_ON_LINE: &str = " where ";
+const WHERE_HANGING: &str = "where ";
 
 fn width_of(s: &str) -> usize {
     s.chars().count()
@@ -210,6 +229,15 @@ fn fits(next: &Doc, stmt: bool, rest: &[(usize, Mode, &Doc)], left: usize) -> bo
             Doc::Fresh => return true,
             Doc::IfBreak(b, f) => cmds.push((mode, if mode == Mode::Break { b } else { f }, after)),
             Doc::Suffix(_) | Doc::BreakParent => {}
+            // On one line, its literals after `where`; after `next`, or
+            // broken, a line may end where it starts.
+            Doc::Clause { lits, .. } => match lits {
+                Some(l) if !after && mode == Mode::Flat => {
+                    left -= width_of(WHERE_ON_LINE) as isize;
+                    cmds.push((Mode::Flat, l, after));
+                }
+                _ => return true,
+            },
         }
     }
 }
@@ -292,6 +320,24 @@ pub fn print(d: &Doc, width: usize) -> String {
             Doc::IfBreak(b, f) => cmds.push((ind, mode, if mode == Mode::Break { b } else { f })),
             Doc::Suffix(s) => out.suffixes.push(s.clone()),
             Doc::BreakParent => {}
+            Doc::Clause { lits, broken } => {
+                let Some(l) = lits else {
+                    cmds.push((ind, Mode::Break, broken));
+                    continue;
+                };
+                let on_line = width.saturating_sub(out.col + width_of(WHERE_ON_LINE));
+                let deeper = (ind + 1) * INDENT.len() + width_of(WHERE_HANGING);
+                if mode == Mode::Flat || fits(l, false, &cmds, on_line) {
+                    out.push(WHERE_ON_LINE);
+                    cmds.push((ind, Mode::Flat, l));
+                } else if fits(l, false, &cmds, width.saturating_sub(deeper)) {
+                    out.newline(ind + 1, false);
+                    out.push(WHERE_HANGING);
+                    cmds.push((ind + 1, Mode::Flat, l));
+                } else {
+                    cmds.push((ind, Mode::Break, broken));
+                }
+            }
         }
     }
     out.end_line();
