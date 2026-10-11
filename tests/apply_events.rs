@@ -11,7 +11,7 @@
 //! header alone. That the events reach the printer from every backend is
 //! the last test's (a provider launched).
 
-mod common;
+use crate::common;
 use common::{BACKENDS, Run, Scratch};
 use dform::address::Address;
 use dform::progress::{Event, Mode, Printer, stop_text};

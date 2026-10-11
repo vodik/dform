@@ -4,7 +4,7 @@
 //! prompt; state and the world are written only after `y`. On a pty, as
 //! a person answers it.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const PROG: &str = r#"

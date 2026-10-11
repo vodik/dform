@@ -5,7 +5,7 @@
 //! program writes is an error naming the dot form. State, the world and
 //! the plan file carry the path.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// k3s.df holds two resources, one named by a DNS name; the stack uses

@@ -1,6 +1,6 @@
 //! Adoption against the discovery inventory.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 /// `cloud_ref(T, N, tags.owner)` walks the inventory's nested attributes.

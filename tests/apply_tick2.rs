@@ -11,7 +11,7 @@
 //! `env.var`, the provider configured from them the mock's `k8s`. What
 //! the apply decides is read back as what it said (`common::brief`).
 
-mod common;
+use crate::common;
 use common::{Run, STOPPED, Scratch, brief};
 
 const PROG: &str = r#"

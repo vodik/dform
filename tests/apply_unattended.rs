@@ -5,7 +5,7 @@
 //! question: it plans each later tick as the one before reports and
 //! applies it (R-122). The controller keeps running through ticks.
 
-mod common;
+use crate::common;
 use common::{Scratch, copy_dir, repo};
 
 const STOPPED: &str = "apply stopped after tick 1: tick 2 adds 1 change the plan could \

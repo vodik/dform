@@ -11,7 +11,7 @@
 //! printer's (tests/apply_events.rs, over a fixed list of events; the
 //! lines themselves report/progress.rs's).
 
-mod common;
+use crate::common;
 use common::{Scratch, brief};
 
 /// Two ticks: the vm reads the database's endpoint, known once tick 1

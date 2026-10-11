@@ -3,7 +3,7 @@
 //! started in its place, so its prelude does not expand into the program,
 //! and the audit log records no provider.
 
-mod common;
+use crate::common;
 use common::Scratch;
 use serde_json::Value;
 

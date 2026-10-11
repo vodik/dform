@@ -3,7 +3,7 @@
 //! a way worth trying again is retried with backoff up to a budget, after
 //! which the apply stops naming the resource and the last error.
 
-mod common;
+use crate::common;
 use common::{BACKENDS, Backend, Scratch};
 
 const PROG: &str = r#"

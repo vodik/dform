@@ -3,7 +3,7 @@
 //! B` folds over one group. An aggregate is bound in a body and nowhere
 //! else, and what it folds is bound by the rest of the body.
 
-mod common;
+use crate::common;
 use common::{Scratch, error, facts};
 use dform_core::engine;
 use dform_core::parser::parse_program;

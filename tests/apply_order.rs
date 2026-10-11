@@ -3,7 +3,7 @@
 //! `network[env=env].cidr`) first, each its own run with its
 //! own plan, confirmation and state, then X, and nothing that reads X.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const NET: &str = r#"

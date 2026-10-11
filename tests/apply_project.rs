@@ -2,7 +2,7 @@
 //! leftover): every stack, in dependency order, each a run of its own with
 //! its own plan, confirmation and state.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const NET: &str = r#"
