@@ -93,7 +93,9 @@ fn units(root: &SyntaxNode) -> Vec<Unit> {
 /// statements first, sorted by rank and kept in source order within one,
 /// then the rest as written, from `prefix_end` to `end`; `None` when it is
 /// already in that order. `end` is the file's length for a file, or a
-/// component block's `}` for [`reorder_block`].
+/// component block's `}` for [`reorder_block`]. Each statement keeps its
+/// line's indentation: a clause continues on a line indented deeper than
+/// its statement's, so the text must parse as the tree did.
 fn reordered_span(units: &[Unit], src: &str, prefix_end: usize, end: usize) -> Option<String> {
     let mut seen_body = false;
     let mut last = 0u8;
@@ -116,6 +118,11 @@ fn reordered_span(units: &[Unit], src: &str, prefix_end: usize, end: usize) -> O
     header.sort_by_key(|u| u.rank);
     let mut out = String::new();
     for u in &header {
+        let line = src[..u.start].rfind('\n').map_or(0, |i| i + 1);
+        let indent = &src[line..u.start];
+        if indent.trim().is_empty() {
+            out.push_str(indent);
+        }
         out.push_str(&src[u.start..u.end]);
         out.push('\n');
     }
@@ -130,7 +137,9 @@ fn reordered_span(units: &[Unit], src: &str, prefix_end: usize, end: usize) -> O
         at = line_end(src, u.end);
     }
     rest.push_str(&src[at..end]);
-    let rest = rest.trim_start();
+    // The blank lines above the rest, not its first line's indentation.
+    let first = rest.len() - rest.trim_start().len();
+    let rest = &rest[rest[..first].rfind('\n').map_or(0, |i| i + 1)..];
     if !rest.is_empty() {
         out.push('\n');
         out.push_str(rest);

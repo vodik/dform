@@ -172,6 +172,9 @@ struct Parser<'a> {
     nl_eaten: Option<usize>,
     /// Byte offset of the statement being parsed, for a hint that prints it.
     stmt_start: usize,
+    /// The column of the statement being parsed (of a block's row): a line
+    /// indented deeper continues its clause.
+    head_col: usize,
     /// The term being parsed follows `from`: a path after its call is a
     /// selector, not a read of the call (`source_term`).
     selector: bool,
@@ -194,6 +197,7 @@ impl<'a> Parser<'a> {
             nl: vec![true],
             nl_eaten: None,
             stmt_start: 0,
+            head_col: 0,
             selector: false,
             each_ends: false,
             opened: Vec::new(),
@@ -291,6 +295,36 @@ impl<'a> Parser<'a> {
         } else {
             false
         }
+    }
+
+    /// The column of byte `at`, its distance from its line's start.
+    fn column(&self, at: usize) -> usize {
+        at - self.src[..at].rfind('\n').map_or(0, |i| i + 1)
+    }
+
+    /// The next token is on a new line indented deeper than the statement
+    /// (the block's row) being parsed: a continuation of its clause.
+    fn at_continuation(&self) -> bool {
+        self.nth(0) == NEWLINE
+            && self
+                .nth_index(0)
+                .is_some_and(|i| self.column(self.toks[i].start) > self.head_col)
+    }
+
+    /// Take a continuation line's newline (`at_continuation`).
+    fn continue_line(&mut self) {
+        if self.at_continuation() {
+            self.eat_nl();
+        }
+    }
+
+    /// At `where`: on the statement's line, or starting a continuation
+    /// line, whose newline is taken.
+    fn at_where(&mut self) -> bool {
+        if self.raw(0) == WHERE_KW {
+            self.continue_line();
+        }
+        self.at(WHERE_KW)
     }
 
     /// The next token starts its line in column 0.
@@ -445,8 +479,8 @@ impl<'a> Parser<'a> {
         match self.nth(0) {
             NEWLINE => {
                 return Some(
-                    "a newline ends a statement: a clause of several lines is `where { .. }`, one \
-                     literal per line; a long term wraps inside brackets"
+                    "a newline ends a statement: a clause of several lines ends a line with `where` \
+                     or `,` and indents the next; a long term wraps inside brackets"
                         .to_string(),
                 );
             }
@@ -606,6 +640,7 @@ impl<'a> Parser<'a> {
             self.flush_trivia();
             let start = self.pos;
             self.stmt_start = self.toks.get(start).map_or(self.src.len(), |t| t.start);
+            self.head_col = self.column(self.stmt_start);
             let header = header_stmt(self.nth(0)) && !self.at_head();
             // A type alias may stand among the header's lines (R-208): an
             // input's type is often one the file declares.
@@ -1021,7 +1056,9 @@ impl<'a> Parser<'a> {
                     Some(h.to_string())
                 } else if matches!(k, IF_KW | WHERE_KW) {
                     Some(
-                        "`where` goes on the line of the statement it guards, after it".to_string(),
+                        "`where` goes after the statement it guards, on its line or on the next, \
+                         indented"
+                            .to_string(),
                     )
                 } else if term_name(k) && matches!(self.raw(1), EQ | PLUS_EQ) {
                     Some(format!("a value is `let {text} = t`"))
@@ -1051,14 +1088,15 @@ impl<'a> Parser<'a> {
         let cp = self.checkpoint();
         self.chain_term()?;
         self.eat(RANK);
-        let has_body = self.at(WHERE_KW);
+        let has_body = self.at_where();
         self.start_at(cp, if has_body { RULE } else { FACT });
         self.opt_where_body()?;
         self.finish();
         Ok(())
     }
 
-    /// `[where body]` on the line the statement is on.
+    /// `[where body]` after the statement, on its line or a continuation
+    /// line below it.
     fn opt_where_body(&mut self) -> P {
         if self.at(NECK) {
             return self.err_expected("`where` or the end of the line");
@@ -1079,7 +1117,8 @@ impl<'a> Parser<'a> {
             );
             return Err(Bail);
         }
-        if self.eat(WHERE_KW) {
+        if self.at_where() {
+            self.bump();
             self.body()?;
         }
         Ok(())
@@ -1090,7 +1129,7 @@ impl<'a> Parser<'a> {
         if self.at(IF_KW) {
             return self.if_is_gone();
         }
-        if self.at(WHERE_KW) {
+        if self.at_where() {
             self.start(CLAUSE);
             self.bump();
             self.body()?;
@@ -1122,7 +1161,7 @@ impl<'a> Parser<'a> {
     }
 
     /// The text of a clause's body starting after token `from`, for a
-    /// hint: the rest of its line, or `{ .. }` for a body of several lines.
+    /// hint: the rest of its line, or `..` for a body of several lines.
     fn rest_of_clause(&self, from: usize) -> String {
         let start = self.toks[from..]
             .iter()
@@ -1137,9 +1176,7 @@ impl<'a> Parser<'a> {
         let line = line.trim();
         // A clause inside a one-line block runs into its entries.
         let closers = line.matches('}').count() > line.matches('{').count();
-        if line == "{" {
-            "{ .. }".to_string()
-        } else if closers {
+        if line.is_empty() || line == "{" || closers {
             "..".to_string()
         } else {
             line.to_string()
@@ -1306,6 +1343,10 @@ impl<'a> Parser<'a> {
                 if p.at(EOF) {
                     return p.err_expected("`}`");
                 }
+                let head_col = p.head_col;
+                if let Some(i) = p.nth_index(0) {
+                    p.head_col = p.column(p.toks[i].start);
+                }
                 if rows && p.at_head() {
                     p.rule()?;
                 } else if rows
@@ -1322,6 +1363,7 @@ impl<'a> Parser<'a> {
                 } else {
                     p.assign()?;
                 }
+                p.head_col = head_col;
                 p.sep()?;
             }
             Ok(())
@@ -1560,26 +1602,74 @@ impl<'a> Parser<'a> {
     // --- bodies and literals ---------------------------------------------
 
     /// `{ lit (, | newline) lit ... }` or `lit, lit, ...` on one line.
+    /// A `where` body: literals separated by commas, a comma after the last
+    /// too. A line that ends in `where` or a comma continues on the next
+    /// when that is indented deeper than the statement: a literal per line,
+    /// each with its comma, as a broken list.
     fn body(&mut self) -> P {
-        if self.at(L_BRACE) {
+        if self.at_braced_body() {
             return self.body_block();
         }
-        self.body1()
-    }
-
-    fn body1(&mut self) -> P {
         self.start(BODY);
+        self.continue_line();
         loop {
             self.lit()?;
             if !self.eat(COMMA) {
                 break;
             }
+            self.continue_line();
+            if matches!(self.nth(0), NEWLINE | EOF | R_BRACE) {
+                break;
+            }
         }
         self.finish();
+        if self.at_continuation() && self.raw(0) != WHERE_KW {
+            let msg = "expected `,`, found the end of the line: the line below is indented under \
+                       the statement, a literal of its clause"
+                .to_string();
+            self.error_here(
+                msg,
+                Some(
+                    "a literal on a line of its own ends with `,`: `where` ends the statement's \
+                     line, then a literal per line, indented, each with a trailing comma"
+                        .to_string(),
+                ),
+            );
+            return Err(Bail);
+        }
         Ok(())
     }
 
-    /// A comprehension's literals: `body1`, and a comma after the last,
+    /// At a `{` that braces a body, not one that starts a literal (`{ cpu:
+    /// x } = lim`): its `}` ends the line, or the block it is in.
+    fn at_braced_body(&self) -> bool {
+        let Some(open) = self.nth_index(0).filter(|_| self.at(L_BRACE)) else {
+            return false;
+        };
+        let mut depth = 0usize;
+        for (i, t) in self.toks.iter().enumerate().skip(open) {
+            match t.kind {
+                L_BRACE | L_PAREN | L_BRACKET => depth += 1,
+                R_BRACE | R_PAREN | R_BRACKET => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let mut after = self.toks[i + 1..].iter();
+                        return match after.find(|t| !t.kind.is_trivia()) {
+                            None => true,
+                            Some(next) => {
+                                matches!(next.kind, COMMA | R_BRACE)
+                                    || self.src[t.end..next.start].contains('\n')
+                            }
+                        };
+                    }
+                }
+                _ => {}
+            }
+        }
+        true
+    }
+
+    /// A comprehension's literals: a body's on one line, and a comma after the last,
     /// as a broken one prints (R-52).
     fn comprehension_body(&mut self) -> P {
         self.start(BODY);
@@ -2094,8 +2184,7 @@ mod tests {
             "{e:?}"
         );
         for src in [
-            "r(c) where q(c),\n  p(c)\n",
-            "r(c) where\n  q(c)\n",
+            "r(c) where\nq(c)\n",
             "let x = 1 +\n  2\n",
             "resource t a {\n  b =\n    1\n}\n",
         ] {
@@ -2108,6 +2197,33 @@ mod tests {
         }
         // Inside brackets a newline is whitespace.
         assert!(errors("p(a,\n  b)\nlet x = (1 +\n  2)\n").is_empty());
+    }
+
+    /// A clause continues on a line indented deeper than its statement (a
+    /// block's row) after `where` or a comma ending a line, and a `where`
+    /// may start such a line; the next statement is at the statement's
+    /// column.
+    #[test]
+    fn a_clause_continues_on_lines_indented_under_its_statement() {
+        for src in [
+            "r(c) where q(c),\n  p(c)\n",
+            "r(c) where\n  q(c),\n  # why\n  p(c),\ns(1)\n",
+            "r(c)\n  where q(c), p(c)\ns(1)\n",
+            "r(c) where q(c), p(c),\n",
+            "resource t a {\n  b = 1\n} where\n  q(1),\n  p(1),\n",
+            "resource t a { b = 1 }\n  where q(1)\n",
+            "component m {\n  r(c) where\n    q(c),\n  s(1)\n}\n",
+            "use m {\n  p(x) where\n    q(x),\n  n = 1\n}\n",
+            "let c = x where { cpu: x } = lim\n",
+        ] {
+            assert!(errors(src).is_empty(), "{src}: {:?}", errors(src));
+        }
+        let src = "r(c) where\n  q(c),\n  p(c),\ns(1)\nt(1)\n  where q(1)\n";
+        assert_eq!(kinds(src, &[RULE, FACT]), vec![RULE, FACT, RULE]);
+        // A literal on its own line without its comma.
+        let e = errors("r(c) where\n  q(c)\n  p(c)\ns(1)\n");
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(e[0].starts_with("expected `,`"), "{e:?}");
     }
 
     #[test]
@@ -2180,7 +2296,7 @@ mod tests {
                 "`resource t a { .. } where q(x), r(x)`",
             ),
             ("p(x) if q(x) # c\n", "`p(x) where q(x)`"),
-            ("let k = 1 if {\n  q(1)\n}\n", "`let k = 1 where { .. }`"),
+            ("let k = 1 if {\n  q(1)\n}\n", "`let k = 1 where ..`"),
             ("resource m i {} if p(1)\n", "`resource m i {} where p(1)`"),
             ("input k: int = 1 if k > 0\n", "spelled `check`"),
             ("type t.u { a: int where a > 0 }\n", "spelled `check`"),
