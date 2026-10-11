@@ -176,6 +176,19 @@ fn kinds_of(p: &Program, g: GoalId, out: &mut Vec<String>) {
     out.push(kind.to_string());
 }
 
+/// Whether goal `goal` lowers after `context` to `lowered` and makes
+/// `helpers`: what the resolver wrote of the literal it built it of.
+pub fn lowers_as(
+    program: &Program,
+    goal: GoalId,
+    lowered: &[Lit],
+    helpers: &[Stmt],
+    context: &[Lit],
+) -> bool {
+    let (lits, made) = lower_goal(program, goal, context);
+    text(&lits, &made) == text(lowered, helpers)
+}
+
 /// Literals and the statements made beside them, as one text: each
 /// literal with the spans in it, then the statements as a lowering's.
 fn text(lits: &[Lit], helpers: &[Stmt]) -> String {

@@ -8,7 +8,7 @@
 //! the old path at the migration's end.
 
 mod clauses;
-pub use clauses::{clause, fold, literal};
+pub use clauses::{clause, fold, literal, lowers_as};
 
 use super::{ItemId, ItemKind, Program};
 use crate::ast::{self, Atom, AttrDecl, Config, InputDecl, Lit, Span, Stmt, Term};

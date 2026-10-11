@@ -33,7 +33,9 @@ use crate::ast::{
 };
 use crate::diag::Diagnostic;
 use crate::program::node::CopyKind;
-use crate::program::node::{BinOp, ExprKind, ListPart, ObjPart};
+use crate::program::node::{
+    BinOp, CmpOp, ExprKind, GoalId, GoalKind, Has, HasMark, ListPart, ObjPart, RelArgs, RelRef,
+};
 use crate::program::scope::{self as scopes, DeclKind, DeclRef, Names, Reach};
 use crate::program::{ExprId, ItemId, Read, ScopeId};
 use crate::spell;
@@ -6160,14 +6162,21 @@ impl<'u> Lowerer<'u> {
                 let c = terms(n).next().and_then(|t| Chain::read(&t)).ok_or(Skip)?;
                 let mark = out.len();
                 let res = self.resolve(rc, &c, out)?;
-                match self.read_atom(rc, &res, Term::Val(Value::Bool(true)), span) {
-                    Some(a) => out.push(Lit::Pos(a)),
+                let e = match self.read_atom(rc, &res, Term::Val(Value::Bool(true)), span) {
+                    Some(a) => {
+                        out.push(Lit::Pos(a));
+                        self.in_place(rc, &res, span).ok_or(Skip)?
+                    }
                     None => {
                         let local = out.split_off(mark);
-                        let t = self.realize(rc, res, Pos::Content, (local, out), span)?;
+                        let id = self.realize_expr(rc, res, Pos::Content, (local, out), span)?;
+                        let t = self.lowered(id, out);
                         out.push(Lit::Eq(t, Term::Val(Value::Bool(true))));
+                        id
                     }
-                }
+                };
+                let g = self.goal(rc, span, GoalKind::Truth(e));
+                self.built(g);
             }
             LIT_CMP => self.cmp(rc, n, out)?,
             LIT_IN => self.member_lit(rc, n, out)?,
@@ -6185,6 +6194,8 @@ impl<'u> Lowerer<'u> {
                     let (typ, addr) = self.reference(rc, &c, out, span)?;
                     let args = vec![self.term_of(typ), self.term_of(addr)];
                     out.push(Lit::Pos(atom_at(IDENTITY, args, span)));
+                    let g = self.goal(rc, span, GoalKind::Has(Has::Resource { typ, addr }));
+                    self.built(g);
                     return Ok(());
                 }
                 let res = self.resolve(rc, &c, out)?;
@@ -6193,6 +6204,9 @@ impl<'u> Lowerer<'u> {
                         let args = vec![self.term_of(*typ), self.term_of(*addr)];
                         let a = atom_at(IDENTITY, args, span);
                         out.push(Lit::Pos(a));
+                        let (typ, addr) = (*typ, *addr);
+                        let g = self.goal(rc, span, GoalKind::Has(Has::Resource { typ, addr }));
+                        self.built(g);
                         return Ok(());
                     }
                     Res::Ref { path, .. } if is_identity(path) => {
@@ -6202,12 +6216,21 @@ impl<'u> Lowerer<'u> {
                 }
                 let start = out.len();
                 let marked = self.has_atom(&res, span);
+                let mark = self.has_mark(&res);
                 // The reads the mark covers are the test's own: where the
                 // schema answers it they are gone (R-106), so nothing
                 // after it reads through them (R-204).
                 let reads = marked.as_ref().map(|_| rc.reads.clone());
-                match self.read_atom(rc, &res, Term::Wildcard, span) {
-                    Some(a) => out.push(Lit::Pos(a)),
+                let test = match self.read_atom(rc, &res, Term::Wildcard, span) {
+                    Some(a) => {
+                        out.push(Lit::Pos(a));
+                        // A marked read's resource is the mark's.
+                        let res = match mark {
+                            Some(_) => self.settled(rc, res, span),
+                            None => res,
+                        };
+                        Has::Read(self.in_place(rc, &res, span).ok_or(Skip)?)
+                    }
                     // A nested path, or a field of a value: it has a value
                     // when the walk to it does.
                     None if matches!(
@@ -6217,10 +6240,14 @@ impl<'u> Lowerer<'u> {
                     {
                         // The reads resolving it stay before the mark.
                         let res = self.settled(rc, res, span);
-                        let t = self.realize(rc, res, Pos::Content, (Vec::new(), out), span)?;
+                        let value =
+                            self.realize_expr(rc, res, Pos::Content, (Vec::new(), out), span)?;
+                        let t = self.lowered(value, out);
                         let v = fresh(rc, HAS_VAR);
                         out.push(Lit::Eq(var(&v), t));
+                        let var = self.building(rc, span, |b| b.var(&v));
                         rc.outer.insert(v);
+                        Has::Walk { var, value }
                     }
                     None => {
                         return self.error(
@@ -6229,11 +6256,16 @@ impl<'u> Lowerer<'u> {
                              or a field of a value",
                         );
                     }
-                }
+                };
                 mark_has(out, start, marked, false);
                 if let Some(reads) = reads {
                     rc.reads = reads;
                 }
+                let mut g = self.goal(rc, span, GoalKind::Has(test));
+                if let Some(mark) = mark {
+                    g = self.goal(rc, span, GoalKind::Marked { mark, goal: g });
+                }
+                self.built(g);
             }
             LIT_NOT => {
                 let inner = n.children().next().ok_or(Skip)?;
@@ -6299,6 +6331,23 @@ impl<'u> Lowerer<'u> {
                     let start = out.len();
                     out.push(Lit::Not(a));
                     mark_has(out, start, marked, true);
+                    let mark = (n.kind() == LIT_HAS).then(|| self.has_mark(&res)).flatten();
+                    // A marked read's resource is the mark's.
+                    let res = match mark {
+                        Some(_) => self.settled(rc, res, span),
+                        None => res,
+                    };
+                    let e = self.in_place(rc, &res, span).ok_or(Skip)?;
+                    let kind = match n.kind() {
+                        LIT_HAS => GoalKind::Has(Has::Read(e)),
+                        _ => GoalKind::Truth(e),
+                    };
+                    let g = self.goal(rc, span, kind);
+                    let mut g = self.building(rc, span, |b| b.not_one(g));
+                    if let Some(mark) = mark {
+                        g = self.goal(rc, span, GoalKind::Marked { mark, goal: g });
+                    }
+                    self.built(g);
                     return Ok(());
                 }
                 if marked.is_some() {
@@ -6323,11 +6372,12 @@ impl<'u> Lowerer<'u> {
                             continue;
                         }
                         let mut vpre = Vec::new();
-                        let Ok(value) = self.probe(|l| {
-                            l.bind(false, |l| l.term(&mut rc2, v, Pos::Content, &mut vpre))
+                        let Ok(id) = self.probe(|l| {
+                            l.bind(false, |l| l.expr(&mut rc2, v, Pos::Content, &mut vpre))
                         }) else {
                             continue;
                         };
+                        let value = self.lowered(id, &mut vpre);
                         if !vpre.is_empty() {
                             continue;
                         }
@@ -6335,6 +6385,11 @@ impl<'u> Lowerer<'u> {
                             *rc = rc2;
                             out.extend(pre);
                             out.push(Lit::Not(a));
+                            let e = self.in_place(rc, &res, span).ok_or(Skip)?;
+                            let ops = vec![(CmpOp::Eq, id)];
+                            let g = self.goal(rc, span, GoalKind::Compare { lhs: e, ops });
+                            let g = self.building(rc, span, |b| b.not_one(g));
+                            self.built(g);
                             return Ok(());
                         }
                     }
@@ -6497,11 +6552,12 @@ impl<'u> Lowerer<'u> {
                 }
                 let mut vpre = Vec::new();
                 let binding = ops[0] == EQ;
-                let Ok(value) = self
-                    .probe(|l| l.bind(binding, |l| l.term(&mut rc2, v, Pos::Content, &mut vpre)))
+                let Ok(id) = self
+                    .probe(|l| l.bind(binding, |l| l.expr(&mut rc2, v, Pos::Content, &mut vpre)))
                 else {
                     continue;
                 };
+                let value = self.lowered(id, &mut vpre);
                 if !vpre.is_empty() {
                     continue;
                 }
@@ -6509,6 +6565,19 @@ impl<'u> Lowerer<'u> {
                     *rc = rc2;
                     out.extend(pre);
                     out.push(Lit::Pos(a));
+                    let e = self.in_place(rc, &res, span).ok_or(Skip)?;
+                    let kind = match binding {
+                        true => GoalKind::Bind {
+                            pat: self.building(rc, span, |b| b.pattern_of(id)),
+                            value: e,
+                        },
+                        false => GoalKind::Compare {
+                            lhs: e,
+                            ops: vec![(CmpOp::Eq, id)],
+                        },
+                    };
+                    let g = self.goal(rc, span, kind);
+                    self.built(g);
                     return Ok(());
                 }
             }
@@ -7616,6 +7685,70 @@ impl<'u> Lowerer<'u> {
     /// The constant string `s`'s node at `span`.
     fn str_node(&mut self, span: Span, s: &str) -> ExprId {
         self.node(span, ExprKind::Lit(Value::Str(s.to_string())))
+    }
+
+    /// The goal `kind` at `span`.
+    fn goal(&mut self, rc: &Rc, span: Span, kind: GoalKind) -> GoalId {
+        self.building(rc, span, |b| b.goal_node(span, kind))
+    }
+
+    /// The written literal being lowered is the goal `g`, built of its
+    /// terms' nodes (R-211 step 7c).
+    fn built(&mut self, g: GoalId) {
+        if let Some(s) = &mut self.gather {
+            s.built(g);
+        }
+    }
+
+    /// What `res` reads when it is one read, its parts as resolved: the
+    /// forms a literal tests or binds in place ([`Self::read_with`]).
+    fn in_place_read(res: &Res) -> Option<PlanRead> {
+        Some(match res {
+            Res::Ref { typ, addr, path } if path.len() == 1 => match &path[0] {
+                Seg::F(p) => PlanRead::Attr {
+                    typ: *typ,
+                    addr: *addr,
+                    attr: crate::address::path_key(p).into_owned(),
+                },
+                Seg::I(_) | Seg::K(_) => return None,
+            },
+            Res::Output {
+                inst,
+                key,
+                path,
+                of,
+                ..
+            } if path.is_empty() => PlanRead::Output {
+                copy: *inst,
+                key: key.clone(),
+                of: of.clone(),
+            },
+            Res::World { typ, addr, path } => PlanRead::World {
+                typ: typ.clone(),
+                addr: *addr,
+                path: path.clone(),
+            },
+            Res::Value { decl, via, path } if path.is_empty() => {
+                PlanRead::Value(decl.clone(), via.clone())
+            }
+            Res::Lookup {
+                pred,
+                args,
+                out,
+                path,
+            } if path.is_empty() => PlanRead::Lookup {
+                rel: pred.clone(),
+                args: args.clone(),
+                out: *out,
+            },
+            _ => return None,
+        })
+    }
+
+    /// The read `res` is, in place, at `span`: its node.
+    fn in_place(&mut self, rc: &Rc, res: &Res, span: Span) -> Option<ExprId> {
+        let read = Self::in_place_read(res)?;
+        Some(self.building(rc, span, |b| b.read_node(read.of())))
     }
 
     /// The node of the variable `v` (its lowered name) of the statement.
@@ -8874,12 +9007,7 @@ impl<'u> Lowerer<'u> {
                 let at_scope = own.unwrap_or(self.root());
                 let user = self.str_node(span, "");
                 let parent = self.scoped(rc.scope, at_scope, user, span);
-                let copy = self.term_of(t);
-                pre.push(Lit::Pos(atom_at(
-                    crate::modules::INSTANCE_OF,
-                    vec![str_term(&at), self.term_of(parent), copy],
-                    span,
-                )));
+                self.copy_test(rc, (&at, parent, t), pre, span);
                 let inst = self.scoped(rc.scope, at_scope, t, span);
                 // The test is the read's when it names the copy as the
                 // read does: the body's own copies.
@@ -9050,6 +9178,38 @@ impl<'u> Lowerer<'u> {
             return Err(Skip);
         }
         Ok(())
+    }
+
+    /// The test that `copy` is a copy of `component` made in `scope`,
+    /// `instance_of(component, scope, copy)`, into `pre` before what reads
+    /// the copy by its key; its goal kept for the builders.
+    fn copy_test(
+        &mut self,
+        rc: &Rc,
+        (component, scope, copy): (&str, ExprId, ExprId),
+        pre: &mut Vec<Lit>,
+        span: Span,
+    ) {
+        let pred = crate::modules::INSTANCE_OF;
+        let args = vec![str_term(component), self.term_of(scope), self.term_of(copy)];
+        let test = Lit::Pos(atom_at(pred, args, span));
+        let of = self.str_node(span, component);
+        let g = self.building(rc, span, |b| {
+            let args = [of, b.settled(scope), b.settled(copy)]
+                .into_iter()
+                .map(|a| b.pattern_of(a))
+                .collect();
+            let rel = RelRef {
+                name: pred.to_string(),
+                span,
+            };
+            let args = RelArgs::Positional(args);
+            b.goal_node(span, GoalKind::Rel { rel, args })
+        });
+        if let Some(s) = &mut self.gather {
+            s.test(&test, g);
+        }
+        pre.push(test);
     }
 
     /// `.k.path` after an instance's scope `inst`, of the component at
@@ -9277,11 +9437,7 @@ impl<'u> Lowerer<'u> {
         let inst = self.scoped(rc.scope, root, name, span);
         let user = self.str_node(span, "");
         let user = self.scoped(rc.scope, root, user, span);
-        pre.push(Lit::Pos(atom_at(
-            crate::modules::INSTANCE_OF,
-            vec![str_term(&d.path), self.term_of(user), self.term_of(inst)],
-            span,
-        )));
+        self.copy_test(rc, (&d.path, user, inst), pre, span);
         Ok(Res::Output {
             inst,
             key: k.clone(),
@@ -9568,13 +9724,7 @@ impl<'u> Lowerer<'u> {
     /// part that holds a read is the term it lowered to, its reads'
     /// variables in their place.
     fn settled(&mut self, rc: &Rc, res: Res, span: Span) -> Res {
-        let settle = |l: &mut Self, id: ExprId| {
-            let (t, reads) = crate::program::lower_expr(&l.program, id);
-            match reads.is_empty() {
-                true => id,
-                false => l.building(rc, span, |b| b.expr(&t)),
-            }
-        };
+        let settle = |l: &mut Self, id: ExprId| l.building(rc, span, |b| b.settled(id));
         let segs = |l: &mut Self, path: Vec<Seg>| -> Vec<Seg> {
             path.into_iter()
                 .map(|s| match s {
@@ -9887,6 +10037,17 @@ impl<'u> Lowerer<'u> {
     /// `__has(T, A, "PATH")`, which the compiler answers from the schema in
     /// a rule that writes under PATH ([`mark_has`]).
     fn has_atom(&self, res: &Res, span: Span) -> Option<Atom> {
+        let m = self.has_mark(res)?;
+        Some(atom_at(
+            crate::partition::HAS,
+            vec![self.term_of(m.typ), self.term_of(m.addr), str_term(&m.path)],
+            span,
+        ))
+    }
+
+    /// The mark of `has r.PATH` ([`Self::has_atom`]), its parts the nodes
+    /// of what resolved `r`.
+    fn has_mark(&self, res: &Res) -> Option<HasMark> {
         let Res::Ref { typ, addr, path } = res else {
             return None;
         };
@@ -9897,16 +10058,10 @@ impl<'u> Lowerer<'u> {
                 Seg::I(_) | Seg::K(_) => None,
             })
             .collect::<Option<_>>()?;
-        (!keys.is_empty()).then(|| {
-            atom_at(
-                crate::partition::HAS,
-                vec![
-                    self.term_of(*typ),
-                    self.term_of(*addr),
-                    str_term(&keys.join(".")),
-                ],
-                span,
-            )
+        (!keys.is_empty()).then(|| HasMark {
+            typ: *typ,
+            addr: *addr,
+            path: keys.join("."),
         })
     }
 

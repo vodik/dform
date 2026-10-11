@@ -34,6 +34,48 @@ impl Builder<'_> {
         self.pattern_node(kind)
     }
 
+    /// The node `id` in a binding position: `_` a hole, a variable a
+    /// binding, a written list a tuple and a written object an object
+    /// pattern (each part in its place), anything else the term it
+    /// compares with.
+    pub fn pattern_of(&mut self, id: ExprId) -> PatternId {
+        let e = &self.program.exprs[id];
+        let kind = match (&e.kind, e.hoisted) {
+            (ExprKind::Hole, None) => PatternKind::Hole,
+            (ExprKind::Var(v), None) => PatternKind::Bind(*v),
+            (ExprKind::List { parts }, None)
+                if parts.iter().all(|p| matches!(p, ListPart::Elem(_))) =>
+            {
+                let parts = parts.clone();
+                let elems = parts
+                    .into_iter()
+                    .map(|p| match p {
+                        ListPart::Elem(x) => self.pattern_of(x),
+                        ListPart::Spread(_) => unreachable!("matched"),
+                    })
+                    .collect();
+                PatternKind::Tuple { elems, rest: None }
+            }
+            (ExprKind::Object { parts }, None)
+                if parts.iter().all(|p| matches!(p, ObjPart::Field { .. })) =>
+            {
+                let parts = parts.clone();
+                let fields = parts
+                    .into_iter()
+                    .map(|p| match p {
+                        ObjPart::Field { key, value, .. } => {
+                            (key, self.span, self.pattern_of(value))
+                        }
+                        _ => unreachable!("matched"),
+                    })
+                    .collect();
+                PatternKind::Object { fields, rest: None }
+            }
+            _ => PatternKind::Expr(id),
+        };
+        self.pattern_node(kind)
+    }
+
     pub(super) fn pattern_node(&mut self, kind: PatternKind) -> PatternId {
         self.program.patterns.insert(Pattern {
             span: self.span,

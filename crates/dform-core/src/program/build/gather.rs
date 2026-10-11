@@ -57,6 +57,8 @@ struct Frame {
     /// The helper statements its terms made (a comprehension's `not { }`,
     /// a loader's extern), which no goal of its own makes.
     terms: BTreeSet<usize>,
+    /// The goal the resolver built of it from its nodes.
+    built: Option<GoalId>,
 }
 
 impl Gather {
@@ -87,6 +89,20 @@ impl Gather {
     pub fn read(&mut self, column: usize, read: Read) {
         if let Some(f) = self.frames.last_mut() {
             f.read = Some((column, read));
+        }
+    }
+
+    /// The resolver made the test `lit` before what holds it as the goal
+    /// `g` ([`Reads::test`]).
+    pub fn test(&mut self, lit: &Lit, g: GoalId) {
+        self.reads.test(lit, g);
+    }
+
+    /// The resolver built the literal being lowered as `goal`, from the
+    /// nodes of its terms.
+    pub fn built(&mut self, goal: GoalId) {
+        if let Some(f) = self.frames.last_mut() {
+            f.built = Some(goal);
         }
     }
 
@@ -226,9 +242,40 @@ impl Gather {
                 read: frame.read.clone(),
                 negation: negation.map(|(n, folded, _)| (*n, folded.as_slice())),
             };
-            let mut b = self.builder(program, span, written);
-            let goal = b.literal(&w);
-            self.done(b);
+            let context = &out[..start];
+            let built = frame.built.and_then(|g| {
+                if check::lowers_as(program, g, &out[start..], &own, context) {
+                    return Some(g);
+                }
+                // The literals before what it lowers to, each made of
+                // what the statement kept.
+                let (lits, _) = crate::program::lower_goal(program, g, context);
+                let n = out[start..].len().checked_sub(lits.len())?;
+                let mut b = self.builder(program, span, written);
+                let left: Option<Vec<GoalId>> = out[start..start + n]
+                    .iter()
+                    .map(|l| b.made_goal(l))
+                    .collect();
+                let group = left.map(|mut goals| {
+                    goals.push(g);
+                    let kind = crate::program::node::GoalKind::Group {
+                        goals,
+                        after: Vec::new(),
+                    };
+                    b.goal_node(span, kind)
+                });
+                self.done(b);
+                group.filter(|&g| check::lowers_as(program, g, &out[start..], &own, context))
+            });
+            let goal = match built {
+                Some(g) => Some(g),
+                None => {
+                    let mut b = self.builder(program, span, written);
+                    let goal = b.literal(&w);
+                    self.done(b);
+                    goal
+                }
+            };
             if let Some(g) = goal {
                 let made_by_terms = frame.attached(helpers);
                 if !made_by_terms.is_empty() {

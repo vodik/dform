@@ -88,6 +88,14 @@ pub(super) struct Pending {
     lit: Lit,
 }
 
+impl super::Reads {
+    /// The resolver made the test `lit` (an `instance_of` before a copy's
+    /// read by its key) as the goal `g`.
+    pub fn test(&mut self, lit: &Lit, g: GoalId) {
+        self.tests.push((written(lit), g));
+    }
+}
+
 impl Builder<'_> {
     /// `f`, the reads `reads` hoisted before what it builds, each the node
     /// of the first use of the variable it binds; the reads whose
@@ -190,6 +198,30 @@ impl Builder<'_> {
         })
     }
 
+    /// The goal of `lit`, a literal the resolver made before the one that
+    /// holds it, no term of that literal's holding it: a test it made
+    /// ([`Reads::test`]), or a read whose node it kept, bound in place
+    /// to its variable.
+    pub(super) fn made_goal(&mut self, lit: &Lit) -> Option<GoalId> {
+        let key = written(lit);
+        if let Some(&(_, g)) = self.reads.tests.iter().find(|(k, _)| *k == key) {
+            return Some(g);
+        }
+        let x = self.binder(lit)?;
+        let id = self.built_read(&x, lit)?;
+        let (_, reads) = crate::program::lower_expr(self.program, id);
+        if reads.last().map(written) != Some(key) {
+            return None;
+        }
+        let span = self.program.exprs[id].span;
+        self.at(span, |b| {
+            let value = b.copy_settled(id);
+            let var = b.var(&x);
+            let pat = b.pattern_node(PatternKind::Bind(var));
+            Some(b.goal_node(span, GoalKind::Bind { pat, value }))
+        })
+    }
+
     /// The node `id`, built where its term is (step 7), holds the reads
     /// its lowering writes: taken from those pending.
     pub fn took(&mut self, id: ExprId) {
@@ -207,6 +239,13 @@ impl Builder<'_> {
     /// what resolved them. Kept for the literals that hold its read
     /// ([`Builder::pending_read`]).
     pub fn read_into(&mut self, read: ReadOf, v: &str) -> ExprId {
+        let id = self.read_node(read);
+        self.hoist_into(id, v)
+    }
+
+    /// The read `read` in place: what a literal tests or binds, its value
+    /// column the literal's (`R.p == c`, `not R.ready`, `has n.k`).
+    pub fn read_node(&mut self, read: ReadOf) -> ExprId {
         let span = self.span;
         let kind = match read {
             ReadOf::Value(decl, via) => ExprKind::Value { decl, via },
@@ -254,8 +293,7 @@ impl Builder<'_> {
                 path: Vec::new(),
             },
         };
-        let id = self.expr_node(kind);
-        self.hoist_into(id, v)
+        self.expr_node(kind)
     }
 
     /// The address of the resource of type `typ` the input `rel`, typed

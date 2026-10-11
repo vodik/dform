@@ -380,7 +380,7 @@ impl Builder<'_> {
         }
     }
 
-    pub(super) fn goal_node(&mut self, span: Span, kind: GoalKind) -> GoalId {
+    pub fn goal_node(&mut self, span: Span, kind: GoalKind) -> GoalId {
         self.program.goals.insert(Goal { span, kind })
     }
 

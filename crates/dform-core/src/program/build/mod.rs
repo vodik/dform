@@ -82,6 +82,10 @@ pub struct Builder<'p> {
 pub struct Reads {
     kinds: BTreeMap<(String, String), Read>,
     nodes: BTreeMap<String, Vec<ExprId>>,
+    /// The tests the resolver made before what holds them (a copy named
+    /// by its key, `instance_of`), each by its literal as written: its
+    /// goal.
+    tests: Vec<(String, super::node::GoalId)>,
 }
 
 impl<'p> Builder<'p> {
@@ -127,7 +131,7 @@ impl<'p> Builder<'p> {
     }
 
     /// The variable that lowers to `lowered`, one per name.
-    fn var(&mut self, lowered: &str) -> VarId {
+    pub fn var(&mut self, lowered: &str) -> VarId {
         if let Some(&v) = self.vars.get(lowered) {
             return v;
         }

@@ -183,6 +183,169 @@ impl Builder<'_> {
         self.expr_node(kind)
     }
 
+    /// A copy of the node `id` whose reads are made already, before what
+    /// holds it: each read in it is its variable.
+    pub fn settled(&mut self, id: ExprId) -> ExprId {
+        let e = &self.program.exprs[id];
+        match e.hoisted {
+            Some(v) => self.at(e.span, |b| b.expr_node(ExprKind::Var(v))),
+            None => self.copy_settled(id),
+        }
+    }
+
+    /// A copy of the node `id`, a read in place when it is one, whose
+    /// parts' reads are made already ([`Self::settled`]).
+    pub fn copy_settled(&mut self, id: ExprId) -> ExprId {
+        let e = self.program.exprs[id].clone();
+        let s = |b: &mut Self, x: ExprId| b.settled(x);
+        let kind = match e.kind {
+            ExprKind::Resource { typ, addr } => ExprKind::Resource {
+                typ,
+                addr: s(self, addr),
+            },
+            ExprKind::RefOf(x) => ExprKind::RefOf(s(self, x)),
+            ExprKind::Scoped { name, via } => ExprKind::Scoped {
+                name: s(self, name),
+                via,
+            },
+            ExprKind::Alias(x) => ExprKind::Alias(s(self, x)),
+            ExprKind::Field { base, path } => ExprKind::Field {
+                base: s(self, base),
+                path: self.settled_path(path),
+            },
+            ExprKind::Lookup {
+                rel,
+                args,
+                out,
+                path,
+            } => ExprKind::Lookup {
+                rel,
+                args: args.into_iter().map(|a| s(self, a)).collect(),
+                out,
+                path: self.settled_path(path),
+            },
+            ExprKind::Call { callee, args } => ExprKind::Call {
+                callee,
+                args: args
+                    .into_iter()
+                    .map(|a| Arg {
+                        name: a.name,
+                        value: s(self, a.value),
+                    })
+                    .collect(),
+            },
+            ExprKind::Binary { op, lhs, rhs } => ExprKind::Binary {
+                op,
+                lhs: s(self, lhs),
+                rhs: s(self, rhs),
+            },
+            ExprKind::Neg(x) => ExprKind::Neg(s(self, x)),
+            ExprKind::Interp { parts } => ExprKind::Interp {
+                parts: parts
+                    .into_iter()
+                    .map(|p| match p {
+                        Piece::Hole(x) => Piece::Hole(s(self, x)),
+                        t => t,
+                    })
+                    .collect(),
+            },
+            ExprKind::List { parts } => ExprKind::List {
+                parts: parts
+                    .into_iter()
+                    .map(|p| match p {
+                        ListPart::Elem(x) => ListPart::Elem(s(self, x)),
+                        ListPart::Spread(x) => ListPart::Spread(s(self, x)),
+                    })
+                    .collect(),
+            },
+            ExprKind::Object { parts } => ExprKind::Object {
+                parts: parts
+                    .into_iter()
+                    .map(|p| match p {
+                        ObjPart::Field {
+                            key,
+                            key_span,
+                            value,
+                            pun,
+                        } => ObjPart::Field {
+                            key,
+                            key_span,
+                            value: s(self, value),
+                            pun,
+                        },
+                        ObjPart::Computed { key, value } => ObjPart::Computed {
+                            key: s(self, key),
+                            value: s(self, value),
+                        },
+                        ObjPart::Spread(x) => ObjPart::Spread(s(self, x)),
+                    })
+                    .collect(),
+            },
+            ExprKind::Range { lo, hi, inclusive } => ExprKind::Range {
+                lo: s(self, lo),
+                hi: s(self, hi),
+                inclusive,
+            },
+            ExprKind::As { value, ty } => ExprKind::As {
+                value: s(self, value),
+                ty,
+            },
+            ExprKind::Address { of, typ } => ExprKind::Address {
+                of: self.copy_settled(of),
+                typ,
+            },
+            ExprKind::Output { copy, key, of } => ExprKind::Output {
+                copy: s(self, copy),
+                key,
+                of: of.map(|(c, scope)| (c, s(self, scope))),
+            },
+            ExprKind::World { typ, addr, path } => ExprKind::World {
+                typ,
+                addr: s(self, addr),
+                path: self.settled_path(path),
+            },
+            ExprKind::Aggregate { kind, item } => ExprKind::Aggregate {
+                kind,
+                item: s(self, item),
+            },
+            kind @ (ExprKind::Missing
+            | ExprKind::Hole
+            | ExprKind::Lit(_)
+            | ExprKind::Quantity { .. }
+            | ExprKind::Var(_)
+            | ExprKind::Value { .. }
+            | ExprKind::Type(_)
+            | ExprKind::Setting { .. }) => kind,
+            // A clause of its own; read by its keys.
+            ExprKind::Comprehension { .. } | ExprKind::Deployed { .. } => return id,
+        };
+        self.at(e.span, |b| b.expr_node(kind))
+    }
+
+    /// The steps `path` with the reads in them made already.
+    fn settled_path(&mut self, path: Vec<Step>) -> Vec<Step> {
+        path.into_iter()
+            .map(|st| match st {
+                Step::Index(x) => Step::Index(self.settled(x)),
+                Step::Key(x) => Step::Key(self.settled(x)),
+                Step::Keyed {
+                    key,
+                    typ,
+                    list,
+                    keys,
+                    field,
+                } => Step::Keyed {
+                    key: self.settled(key),
+                    typ: self.settled(typ),
+                    list,
+                    keys,
+                    field,
+                },
+                st => st,
+            })
+            .collect()
+    }
+
     /// The constant node `id` is, when it is one.
     pub(super) fn constant(&self, id: ExprId) -> Option<&Value> {
         let e = &self.program.exprs[id];
