@@ -1,0 +1,20 @@
+error  `where { .. }` is gone: a clause's literals are separated by commas
+  tests/syntax/err/where_braced.df:5  p(x) where { zone(x) }
+                                                 ^
+  help: `p(x) where zone(x)`; a clause too long for its line ends the line with `where`, then a literal per line, indented, each with a trailing comma
+
+error  `where { .. }` is gone: a clause's literals are separated by commas
+  tests/syntax/err/where_braced.df:6  q(x) where {
+                                                 ^
+  help: `q(x) where zone(x), x != "b"`; a clause too long for its line ends the line with `where`, then a literal per line, indented, each with a trailing comma
+
+error  `where { .. }` is gone: a clause's literals are separated by commas
+  tests/syntax/err/where_braced.df:12  } where {
+                                               ^
+  help: `resource net.vpc w { .. } where zone(z), z != "b", ..`; a clause too long for its line ends the line with `where`, then a literal per line, indented, each with a trailing comma
+
+error  expected `,`, found the end of the line: the line below is indented under the statement, a literal of its clause
+  tests/syntax/err/where_braced.df:24  zone(x)
+                                              ^
+  help: a literal on a line of its own ends with `,`: `where` ends the statement's line, then a literal per line, indented, each with a trailing comma
+4 errors

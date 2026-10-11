@@ -1608,7 +1608,7 @@ impl<'a> Parser<'a> {
     /// each with its comma, as a broken list.
     fn body(&mut self) -> P {
         if self.at_braced_body() {
-            return self.body_block();
+            return self.braced_where();
         }
         self.start(BODY);
         self.continue_line();
@@ -1623,7 +1623,8 @@ impl<'a> Parser<'a> {
             }
         }
         self.finish();
-        if self.at_continuation() && self.raw(0) != WHERE_KW {
+        // A statement below it is not its literal, however indented.
+        if self.at_continuation() && self.raw(0) != WHERE_KW && !self.raw(0).is_stmt_keyword() {
             let msg = "expected `,`, found the end of the line: the line below is indented under \
                        the statement, a literal of its clause"
                 .to_string();
@@ -1637,6 +1638,60 @@ impl<'a> Parser<'a> {
             );
             return Err(Bail);
         }
+        Ok(())
+    }
+
+    /// `where { .. }`, which is gone: an error that prints the clause with
+    /// its literals separated by commas. The braced body parses, so the
+    /// statements after it are read as they were written.
+    fn braced_where(&mut self) -> P {
+        let open = self.nth_index(0).expect("at `{`");
+        let word = self.toks[..open]
+            .iter()
+            .rfind(|t| t.kind == WHERE_KW)
+            .map_or(self.toks[open].start, |t| t.start);
+        let head = self.head_text(word);
+        let (start, end) = (self.toks[open].start, self.toks[open].end);
+        let mut lits = Vec::new();
+        self.start(BODY);
+        self.bump();
+        self.with_nl(true, |p| {
+            p.eat_nl();
+            while !p.at(R_BRACE) {
+                if p.at(EOF) {
+                    return p.err_expected("`}`");
+                }
+                let from = p.nth_index(0).map_or(p.src.len(), |i| p.toks[i].start);
+                p.lit()?;
+                let to = p.toks[..p.pos]
+                    .iter()
+                    .rev()
+                    .find(|t| !t.kind.is_trivia())
+                    .map_or(from, |t| t.end);
+                lits.push(p.src[from..to].to_string());
+                p.sep()?;
+            }
+            Ok(())
+        })?;
+        self.bump();
+        self.finish();
+        let clause = if lits.len() <= crate::fmt::INLINE_LITERALS {
+            format!("`{head} where {}`", lits.join(", "))
+        } else {
+            format!("`{head} where {}, ..`", lits[..2].join(", "))
+        };
+        self.errors.push(ParseError {
+            start,
+            end,
+            message: "`where { .. }` is gone: a clause's literals are separated by commas"
+                .to_string(),
+            hint: Some(format!(
+                "{clause}; a clause too long for its line ends the line with `where`, then a \
+                 literal per line, indented, each with a trailing comma"
+            )),
+            label: None,
+            misplaced: false,
+        });
         Ok(())
     }
 
@@ -2176,7 +2231,7 @@ mod tests {
 
     #[test]
     fn a_newline_ends_a_statement_and_nothing_continues_it() {
-        assert!(errors("p(a)\nq(b)\nr(c) where {\n  q(c)\n  p(c)\n}\n").is_empty());
+        assert!(errors("p(a)\nq(b)\nr(c) where\n  q(c),\n  p(c),\n").is_empty());
         let e = parse("p(a) q(b)\n").errors;
         assert_eq!(e.len(), 1);
         assert!(
@@ -2226,6 +2281,23 @@ mod tests {
         assert!(e[0].starts_with("expected `,`"), "{e:?}");
     }
 
+    /// `where { .. }` is gone: an error that prints the clause with commas,
+    /// and the statements after it parse.
+    #[test]
+    fn a_braced_clause_is_an_error_that_names_the_comma_form() {
+        let e = parse("q(x) where {\n  zone(x)\n  x != \"b\"\n}\nok(1) where\n").errors;
+        assert_eq!(e.len(), 2, "{e:?}");
+        assert!(e[0].message.contains("`where { .. }` is gone"), "{e:?}");
+        assert!(
+            e[0].hint
+                .as_deref()
+                .unwrap()
+                .starts_with("`q(x) where zone(x), x != \"b\"`"),
+            "{e:?}"
+        );
+        assert!(errors("p(x) where { q(x), r(x) }\n").len() == 1);
+    }
+
     #[test]
     fn an_old_terminator_says_so() {
         let e = parse("p(a).\nq(b).\n").errors;
@@ -2241,7 +2313,7 @@ mod tests {
     #[test]
     fn the_first_token_decides() {
         let src = "let k = 1 where p(1)\nset r.tags = {} where r in resource\ndeny \"m\" { a } where p(a)\n\
-                   p(x) where { q(x)\n r(x) }\nlet cfg = settings[env]\ndeny(\"m\") where q(1)\n\
+                   p(x) where q(x),\n r(x)\nlet cfg = settings[env]\ndeny(\"m\") where q(1)\n\
                    input(\"a\", 1)\nfor(1)\n";
         assert!(errors(src).is_empty(), "{:?}", errors(src));
         assert_eq!(
@@ -2358,8 +2430,8 @@ mod tests {
     #[test]
     fn a_block_is_the_head_of_the_clause_after_it() {
         let src = "resource net.subnet \"s-${z}\" {\n  \
-                   cidr = inet.subnet(vpc.cidr, 4, zone_index[z])\n  zone = z\n} where {\n  \
-                   data(\"zone\", z)\n  z != \"x\"\n}\n";
+                   cidr = inet.subnet(vpc.cidr, 4, zone_index[z])\n  zone = z\n} where\n  \
+                   data(\"zone\", z),\n  z != \"x\",\n";
         assert!(errors(src).is_empty(), "{:?}", errors(src));
         assert_eq!(kinds(src, &[CLAUSE, ASSIGN]), vec![ASSIGN, ASSIGN, CLAUSE]);
         let clause = parse(src)

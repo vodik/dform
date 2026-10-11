@@ -6,7 +6,7 @@ error  expected `where` or the end of the line, found keyword `if`
 error  expected `where` or the end of the line, found keyword `if`
   tests/syntax/err/if_is_gone.df:6  q(x) if {
                                          ^^
-  help: the clause word is `where` (R-1): `q(x) where { .. }`
+  help: the clause word is `where` (R-1): `q(x) where ..`
 
 error  expected `where` or the end of the line, found keyword `if`
   tests/syntax/err/if_is_gone.df:10  let size = 1 if env == "prod"
@@ -46,7 +46,7 @@ error  expected an entry or `}`, found keyword `if`
 error  expected an entry or `}`, found keyword `if`
   tests/syntax/err/if_is_gone.df:21  if {
                                      ^^
-  help: a block's clause follows the block (R-1): `resource m i { .. } where { .. }`
+  help: a block's clause follows the block (R-1): `resource m i { .. } where ..`
 
 error  expected `where` or the end of the line, found keyword `if`
   tests/syntax/err/if_is_gone.df:27  } if zone("a")

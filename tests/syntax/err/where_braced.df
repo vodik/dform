@@ -1,0 +1,25 @@
+# A `where` body is literals separated by commas: `where { .. }` is an
+# error that prints the clause in the comma form; a clause of several
+# lines ends each literal with a comma.
+zone("a")
+p(x) where { zone(x) }
+q(x) where {
+  zone(x)
+  x != "b"
+}
+resource net.vpc w {
+  cidr = "10.0.0.0/16"
+} where {
+  zone(z)
+  z != "b"
+  z != "c"
+  z != "d"
+}
+let k = x where { cpu: x } = { cpu: 1 }
+r(x) where
+  zone(x),
+  # a comment between literals is its own line's
+  x != "b",
+s(x) where
+  zone(x)
+  x != "c"
