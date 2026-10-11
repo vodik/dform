@@ -1679,12 +1679,12 @@ mod tests {
         assert!(m.policies().contains_key(&lab));
     }
 
-    /// A provider without a `source` is its executable where the lookup
-    /// finds it, before its `path`; one with a `source` is never looked
-    /// up, nor is the mock, which is dform itself.
+    /// A provider without a `source` is its `path` when it gives one,
+    /// else its executable where the lookup finds it; one with a `source`
+    /// is never looked up, nor is the mock, which is dform itself.
     #[cfg(unix)]
     #[test]
-    fn a_provider_without_a_source_is_looked_up_before_its_path() {
+    fn a_providers_own_path_wins_and_the_rest_are_looked_up() {
         use crate::plugin::source::Place;
         use std::os::unix::fs::PermissionsExt;
         let m = manifest(
@@ -1703,7 +1703,10 @@ mod tests {
         let at = |n: &str| m.provider_location(n, &lookup);
         let found =
             |n: &str| Located::Found(Place::Bundled, dir.join(format!("dform-provider-{n}")));
-        assert_eq!(at("lab"), Some(found("lab")));
+        assert_eq!(
+            at("lab"),
+            Some(Located::Path(m.root.join("bin/dform-provider-lab")))
+        );
         assert_eq!(at("net"), Some(found("net")));
         assert_eq!(at("k8s"), Some(Located::Source("k8s".into())));
         assert_eq!(at("fake"), None);
