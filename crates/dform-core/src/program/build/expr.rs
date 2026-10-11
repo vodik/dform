@@ -36,19 +36,12 @@ impl Builder<'_> {
     /// The term `t` the resolver lowered, after the reads it hoisted,
     /// `reads`: each the node of the first use of its variable in `t`.
     pub fn hoisted(&mut self, t: &Term, reads: &[Lit]) -> ExprId {
-        let (e, left) = self.part(t, reads);
+        let (e, left) = self.reading(reads, |b| b.expr(t));
         assert!(
             left.is_empty(),
             "a term uses every read it hoisted: {t:?} after {left:?}"
         );
         e
-    }
-
-    /// The term `t`, a part of a statement's term, after the reads
-    /// `reads` hoisted while it was lowered, and those of them it does not
-    /// use (a read of the term around it).
-    pub fn part(&mut self, t: &Term, reads: &[Lit]) -> (ExprId, Vec<Lit>) {
-        self.reading(reads, |b| b.expr(t))
     }
 
     /// The lowered term `t`.
@@ -191,7 +184,7 @@ impl Builder<'_> {
     }
 
     /// The constant node `id` is, when it is one.
-    fn constant(&self, id: ExprId) -> Option<&Value> {
+    pub(super) fn constant(&self, id: ExprId) -> Option<&Value> {
         let e = &self.program.exprs[id];
         match (&e.kind, e.hoisted) {
             (ExprKind::Lit(v), None) => Some(v),

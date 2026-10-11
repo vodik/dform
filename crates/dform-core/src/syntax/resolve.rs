@@ -61,6 +61,7 @@ pub use names::{capitalise, use_parts};
 mod pattern;
 mod provider;
 mod realize;
+use crate::program::build::ReadOf;
 use realize::{Plan, PlanRead, PlanStep};
 mod singleton;
 mod spread;
@@ -557,40 +558,45 @@ fn func(name: &str, args: Vec<Term>) -> Term {
     }
 }
 
-/// A resolved path segment.
+/// A resolved path segment, an index its node.
 #[derive(Clone, Debug)]
 enum Seg {
     F(String),
-    I(Term),
+    I(ExprId),
     /// `[k]` with `k` a string or a read (`["api"]`, `[c.name]`): the
     /// element of a keyed list whose key is `k` (R-35); a bare variable or
     /// an integer is the position.
-    K(Term),
+    K(ExprId),
 }
 
-/// What a chain denotes.
+/// What a chain denotes, each part the node of what resolved it, the
+/// reads it makes held by the node (and made into the resolver's
+/// literals where it was resolved).
 #[derive(Clone, Debug)]
 enum Res {
     /// A value: a variable, a constant, an instance scope.
-    Val(Term),
+    Val(ExprId),
     /// A resource reference and a path into it.
     Ref {
-        typ: Term,
-        addr: Term,
+        typ: ExprId,
+        addr: ExprId,
         path: Vec<Seg>,
     },
     /// An instance output; `typ` when its declared type is a resource
-    /// type (it holds that resource's address).
+    /// type (it holds that resource's address); `of`, the component and
+    /// the scope of the test that the copy `inst` exists, made before the
+    /// read when the copy is named by its key.
     Output {
-        inst: Term,
+        inst: ExprId,
         key: String,
         path: Vec<Seg>,
-        typ: Option<Term>,
+        typ: Option<String>,
+        of: Option<(String, ExprId)>,
     },
     /// A live object: `world.T[e].path`.
     World {
         typ: String,
-        addr: Term,
+        addr: ExprId,
         path: String,
     },
     /// A value name (input or value rule), `k(V)`: what declares it and
@@ -605,12 +611,12 @@ enum Res {
     /// `p[a, b]`: the relation `p(a, b, V)`, or an extern with its one output.
     Lookup {
         pred: String,
-        args: Vec<Term>,
+        args: Vec<ExprId>,
         out: usize,
         path: Vec<Seg>,
     },
     /// A variable with fields or indexes.
-    Var { var: Term, path: Vec<Seg> },
+    Var { var: ExprId, path: Vec<Seg> },
 }
 
 /// Where a term stands: a whole value (a field, a head argument, an
@@ -686,6 +692,16 @@ struct RuleParts {
     made: usize,
     /// The variables the program wrote, by the name each lowers to.
     written: BTreeSet<String>,
+}
+
+/// A document's rows read (`Lowerer::doc_read`): `name(Path, At, ..)`
+/// after `Path = LOCATION`, at `span`.
+struct DocRead {
+    location: ExprId,
+    path: String,
+    at: String,
+    name: String,
+    span: Span,
 }
 
 /// An error already recorded in `diags`.
@@ -1389,26 +1405,49 @@ impl<'u> Lowerer<'u> {
         }
     }
 
+    /// [`Self::scope_term`] as its node: the name `name` itself, or the
+    /// name as a scope no copy of the body is taken from reaches it
+    /// (`Reach::Absolute`), at `span`.
+    fn scoped(&mut self, scope: ScopeId, declared: ScopeId, name: ExprId, span: Span) -> ExprId {
+        match self.own_scopes(scope).contains(&declared) {
+            true => name,
+            false => {
+                let via = Reach::Absolute;
+                self.node(span, ExprKind::Scoped { name, via })
+            }
+        }
+    }
+
     /// The address of the resource `name` in scope, as a read in `scope`
-    /// writes it: the body's own is relative (expansion scopes it), its
-    /// user's marked as written (`scope_term`), an enclosing body's its
-    /// instance's (`lexical`).
-    fn resource_addr(&self, scope: ScopeId, name: &str) -> Term {
-        self.resource_addr_from(scope, scope, name)
+    /// writes it, at `span`: the body's own is relative (expansion scopes
+    /// it), its user's reached as written (`scoped`), an enclosing body's
+    /// its instance's (`lexical`).
+    fn resource_addr(&mut self, scope: ScopeId, name: &str, span: Span) -> ExprId {
+        self.resource_addr_from(scope, scope, name, span)
     }
 
     /// [`Self::resource_addr`] of `name` looked up from `from` outward:
     /// `super.x` looks up from the enclosing scope (R-186).
-    fn resource_addr_from(&self, scope: ScopeId, from: ScopeId, name: &str) -> Term {
+    fn resource_addr_from(
+        &mut self,
+        scope: ScopeId,
+        from: ScopeId,
+        name: &str,
+        span: Span,
+    ) -> ExprId {
         let declared = self
             .chain_of(from)
             .into_iter()
             .find(|s| self.names(*s).resources(name).is_some())
             .unwrap_or(from);
         let segment = crate::address::name_segment(name);
+        let seg = self.node(span, ExprKind::Lit(Value::Str(segment.into_owned())));
         match self.lexical(scope, declared) {
-            Some(body) if !body.is_empty() => crate::modules::lexical_term(&body, &segment),
-            _ => self.scope_term(scope, declared, str_term(&segment)),
+            Some(body) if !body.is_empty() => {
+                let via = Reach::Lexical(body);
+                self.node(span, ExprKind::Scoped { name: seg, via })
+            }
+            _ => self.scoped(scope, declared, seg, span),
         }
     }
 
@@ -1577,8 +1616,8 @@ impl<'u> Lowerer<'u> {
         }
         let path = self.segs(rc, &c.ops, pre)?;
         Ok(Some(Res::Ref {
-            typ: str_term(&types[0]),
-            addr: self.resource_addr_from(rc.scope, from, x),
+            typ: self.str_node(span, &types[0]),
+            addr: self.resource_addr_from(rc.scope, from, x, span),
             path,
         }))
     }
@@ -3255,8 +3294,15 @@ impl<'u> Lowerer<'u> {
 
     /// A term that must be a constant: no read, no variable.
     fn constant(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<Term> {
+        let id = self.constant_node(rc, n)?;
+        Ok(self.term_of(id))
+    }
+
+    /// [`Self::constant`] as its node.
+    fn constant_node(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<ExprId> {
         let mut pre = Vec::new();
-        let t = self.term(rc, n, Pos::Whole, &mut pre)?;
+        let id = self.expr(rc, n, Pos::Whole, &mut pre)?;
+        let t = self.lowered(id, &mut pre);
         if !pre.is_empty() {
             return self.error(
                 self.span(n),
@@ -3264,7 +3310,7 @@ impl<'u> Lowerer<'u> {
             );
         }
         self.check_bound(rc, &[], &[&t])?;
-        Ok(t)
+        Ok(id)
     }
 
     /// `input p from DOC [where B]`: a table (`crate::tables`), its
@@ -3463,15 +3509,14 @@ impl<'u> Lowerer<'u> {
         }
         let (format, _) = self.loader_of(n)?;
         let table = crate::tables::DOCUMENT.to_string();
-        let v = var(&fresh(rc, &capitalise(&format)));
+        let v = fresh(rc, &capitalise(&format));
         let cols = vec![BindArg {
             input: false,
             name: "value".into(),
             ty: Some(TypeExpr::Name("any".into())),
         }];
-        let mut local = Vec::new();
-        let stmts = match self.table_body(rc, n, &table, cols, vec![v.clone()], &mut local) {
-            Ok(stmts) => stmts,
+        let (stmts, read) = match self.doc_read(rc, n, &table, cols, pre) {
+            Ok(r) => r,
             Err(e) => return Some(Err(e)),
         };
         for st in stmts {
@@ -3480,7 +3525,12 @@ impl<'u> Lowerer<'u> {
                 self.helpers.push(st);
             }
         }
-        Some(Ok(self.rebuilt(rc, self.span(n), &v, &local, pre)))
+        // `table.FORMAT.document(Path, At, V)` after `Path = LOCATION`.
+        Some(Ok(self.building(rc, read.span, |b| {
+            let path = b.bound_into(read.location, &read.path);
+            let at = b.variable(&read.at);
+            b.call_into(&read.name, vec![path, at], &v)
+        })))
     }
 
     /// A read's format and its `io.read(..)` call (R-155): `io.read(L)`
@@ -3594,8 +3644,29 @@ impl<'u> Lowerer<'u> {
         outs: Vec<Term>,
         body: &mut Vec<Lit>,
     ) -> L<Vec<Stmt>> {
+        let (stmts, read) = self.doc_read(rc, src, table, cols, body)?;
+        let t = self.lowered(read.location, body);
+        body.push(Lit::Eq(var(&read.path), t));
+        let mut args = vec![var(&read.path), var(&read.at)];
+        args.extend(outs);
+        body.push(Lit::Pos(atom_at(&read.name, args, read.span)));
+        Ok(stmts)
+    }
+
+    /// The read of a document's rows [`Self::table_body`] makes: the
+    /// extern declared for it, its location's node (the reads no node of
+    /// it holds into `pre`), the variables it is read into and the
+    /// extern's name.
+    fn doc_read(
+        &mut self,
+        rc: &mut Rc,
+        src: &SyntaxNode,
+        table: &str,
+        cols: Vec<BindArg>,
+        pre: &mut Vec<Lit>,
+    ) -> L<(Vec<Stmt>, DocRead)> {
         let span = self.span(src);
-        let bad = |l: &mut Self, what: &str| -> L<Vec<Stmt>> {
+        let bad = |l: &mut Self, what: &str| -> L<(Vec<Stmt>, DocRead)> {
             let d = Diagnostic::error(
                 span,
                 format!("{what}: a table's source is FORMAT.decode(io.read(LOCATION))"),
@@ -3609,7 +3680,7 @@ impl<'u> Lowerer<'u> {
             Err(Skip)
         };
         if let Some(e) = self.old_loader(src) {
-            return e.map(|_| Vec::new());
+            return e.and_then(|never| match never {});
         }
         let (format, read) = match (self.loader_of(src), self.callee(src)) {
             (Some(r), _) => r,
@@ -3637,12 +3708,9 @@ impl<'u> Lowerer<'u> {
             self.diags.push(d);
             return Err(Skip);
         }
-        let t = self.term(rc, arg, Pos::Content, body)?;
-        let given = var(&fresh(rc, "Path"));
-        body.push(Lit::Eq(given.clone(), t));
-        let at = var(&fresh(rc, "At"));
-        let mut args = vec![given, at];
-        args.extend(outs);
+        let location = self.expr(rc, arg, Pos::Content, pre)?;
+        let path = fresh(rc, "Path");
+        let at = fresh(rc, "At");
         let mut ins = vec![
             BindArg {
                 input: true,
@@ -3657,12 +3725,19 @@ impl<'u> Lowerer<'u> {
         ];
         ins.extend(cols);
         let name = crate::tables::extern_name(&format, table);
-        body.push(Lit::Pos(atom_at(&name, args, span)));
-        Ok(vec![Stmt::ExternFn(ExternFn {
-            name,
+        let decl = Stmt::ExternFn(ExternFn {
+            name: name.clone(),
             args: ins,
             span,
-        })])
+        });
+        let read = DocRead {
+            location,
+            path,
+            at,
+            name,
+            span,
+        };
+        Ok((vec![decl], read))
     }
 
     /// `output k [: T] = t [where B]` (H-7): the declaration, when typed, and
@@ -5222,20 +5297,21 @@ impl<'u> Lowerer<'u> {
                 && self.resource(rc.scope, &c.head).is_some()
             {
                 let span = self.span(t);
-                return Ok(self.reference(rc, &c, body, span)?.1);
+                let (_, addr) = self.reference(rc, &c, body, span)?;
+                return Ok(self.term_of(addr));
             }
             let mut pre = Vec::new();
             let mut rc2 = rc.clone();
             if let Ok(res) = self.probe(|l| l.resolve(&mut rc2, &c, &mut pre)) {
                 let key = match &res {
-                    Res::Ref { addr, path, .. } if path.is_empty() => Some(addr.clone()),
-                    Res::World { addr, path, .. } if path.is_empty() => Some(addr.clone()),
+                    Res::Ref { addr, path, .. } if path.is_empty() => Some(*addr),
+                    Res::World { addr, path, .. } if path.is_empty() => Some(*addr),
                     _ => None,
                 };
                 if let Some(k) = key {
                     *rc = rc2;
                     body.extend(pre);
-                    return Ok(k);
+                    return Ok(self.term_of(k));
                 }
             }
         }
@@ -5526,7 +5602,9 @@ impl<'u> Lowerer<'u> {
         let res = self.resolve(rc, c, &mut pre)?;
         body.extend(pre);
         let (typ, addr, path) = match res {
-            Res::Ref { typ, addr, path } if !path.is_empty() => (typ, addr, path),
+            Res::Ref { typ, addr, path } if !path.is_empty() => {
+                (self.term_of(typ), self.term_of(addr), path)
+            }
             _ => {
                 return self.error(
                     span,
@@ -5537,7 +5615,7 @@ impl<'u> Lowerer<'u> {
         // `containers[k]`: the element of a keyed list whose key is `k`, any
         // term but an integer, which stays the position (R-35, R-69).
         let keyed = path.iter().position(|s| match s {
-            Seg::I(t) => !matches!(t, Term::Val(Value::Int(_))),
+            Seg::I(t) => !matches!(self.term_of(*t), Term::Val(Value::Int(_))),
             Seg::K(_) => true,
             Seg::F(_) => false,
         });
@@ -5547,7 +5625,8 @@ impl<'u> Lowerer<'u> {
             let (Seg::I(key) | Seg::K(key)) = path[i].clone() else {
                 unreachable!("found above")
             };
-            let Some(list) = path_string(&path[..i]).filter(|l| !l.is_empty()) else {
+            let key = self.term_of(key);
+            let Some(list) = self.path_string(&path[..i]).filter(|l| !l.is_empty()) else {
                 return self.error(span, "a contribution's path is constant");
             };
             let mut rest = Vec::new();
@@ -5568,7 +5647,7 @@ impl<'u> Lowerer<'u> {
             let block = self.owning_block(scope, &typ, &addr);
             return Ok(Target::Element(typ, addr, list, key, rest, block));
         }
-        let Some(path) = path_string(&path) else {
+        let Some(path) = self.path_string(&path) else {
             return self.error(span, "a contribution's path is constant");
         };
         let block = self.owning_block(scope, &typ, &addr);
@@ -6104,13 +6183,15 @@ impl<'u> Lowerer<'u> {
                 let c = Chain::read(&t).ok_or(Skip)?;
                 if self.bare_resource(rc, &c) {
                     let (typ, addr) = self.reference(rc, &c, out, span)?;
-                    out.push(Lit::Pos(atom_at(IDENTITY, vec![typ, addr], span)));
+                    let args = vec![self.term_of(typ), self.term_of(addr)];
+                    out.push(Lit::Pos(atom_at(IDENTITY, args, span)));
                     return Ok(());
                 }
                 let res = self.resolve(rc, &c, out)?;
                 match &res {
                     Res::Ref { typ, addr, path } if path.is_empty() => {
-                        let a = atom_at(IDENTITY, vec![typ.clone(), addr.clone()], span);
+                        let args = vec![self.term_of(*typ), self.term_of(*addr)];
+                        let a = atom_at(IDENTITY, args, span);
                         out.push(Lit::Pos(a));
                         return Ok(());
                     }
@@ -6120,7 +6201,7 @@ impl<'u> Lowerer<'u> {
                     _ => {}
                 }
                 let start = out.len();
-                let marked = has_atom(&res, span);
+                let marked = self.has_atom(&res, span);
                 // The reads the mark covers are the test's own: where the
                 // schema answers it they are gone (R-106), so nothing
                 // after it reads through them (R-204).
@@ -6135,6 +6216,7 @@ impl<'u> Lowerer<'u> {
                     ) =>
                     {
                         // The reads resolving it stay before the mark.
+                        let res = self.settled(rc, res, span);
                         let t = self.realize(rc, res, Pos::Content, (Vec::new(), out), span)?;
                         let v = fresh(rc, HAS_VAR);
                         out.push(Lit::Eq(var(&v), t));
@@ -6210,7 +6292,7 @@ impl<'u> Lowerer<'u> {
                     _ => {}
                 }
                 let marked = (n.kind() == LIT_HAS)
-                    .then(|| has_atom(&res, span))
+                    .then(|| self.has_atom(&res, span))
                     .flatten();
                 if let Some(a) = self.read_atom(rc, &res, value, span) {
                     out.extend(pre);
@@ -6665,9 +6747,13 @@ impl<'u> Lowerer<'u> {
                     let named = self.resource(rc.scope, &c.head).unwrap_or_default();
                     match &typ {
                         Some(Term::Val(Value::Str(t))) if named.contains(t) => {
-                            self.resource_addr(rc.scope, &c.head)
+                            let addr = self.resource_addr(rc.scope, &c.head, span);
+                            self.term_of(addr)
                         }
-                        _ => self.reference(rc, &c, out, span)?.1,
+                        _ => {
+                            let (_, addr) = self.reference(rc, &c, out, span)?;
+                            self.term_of(addr)
+                        }
                     }
                 }
                 _ => {
@@ -6743,9 +6829,10 @@ impl<'u> Lowerer<'u> {
         self.helpers.truncate(helpers);
         self.program.helpers.negs = negs;
         match res {
-            Ok(Res::Ref { typ, addr, path }) => path_string(&path)
+            Ok(Res::Ref { typ, addr, path }) => self
+                .path_string(&path)
                 .filter(|p| !p.is_empty())
-                .map(|p| (typ, addr, p)),
+                .map(|p| (self.term_of(typ), self.term_of(addr), p)),
             _ => None,
         }
     }
@@ -6757,7 +6844,7 @@ impl<'u> Lowerer<'u> {
         c: &Chain,
         out: &mut Vec<Lit>,
         span: Span,
-    ) -> L<(Term, Term)> {
+    ) -> L<(ExprId, ExprId)> {
         if c.is_bare()
             && let Some(types) = self.resource(rc.scope, &c.head)
         {
@@ -6767,7 +6854,8 @@ impl<'u> Lowerer<'u> {
                 _ => return self.ambiguous(&c.head, &types, span),
             };
             let typ = typ.clone();
-            return Ok((str_term(&typ), self.resource_addr(rc.scope, &c.head)));
+            let typ = self.str_node(span, &typ);
+            return Ok((typ, self.resource_addr(rc.scope, &c.head, span)));
         }
         match self.resolve(rc, c, out)? {
             Res::Ref { typ, addr, path } if path.is_empty() => Ok((typ, addr)),
@@ -6789,22 +6877,26 @@ impl<'u> Lowerer<'u> {
 
     /// A resource's attribute given a bare name two types share: every
     /// candidate, for the schema's `ref(T)` to pick (`types::read`, R-74).
-    fn deferred_ref(&self, rc: &Rc, name: &str, span: Span) -> Option<Term> {
+    fn deferred_ref(&mut self, rc: &Rc, name: &str, span: Span) -> Option<ExprId> {
         let types = self.resource(rc.scope, name)?;
         if self.want != Want::Schema || types.len() < 2 {
             return None;
         }
-        let addr = self.resource_addr(rc.scope, name);
-        let candidates = types
-            .iter()
-            .map(|t| {
-                func(
-                    crate::address::REF,
-                    vec![str_term(t), addr.clone(), str_term("")],
-                )
-            })
-            .collect();
-        Some(crate::types::ambiguous_ref(name, span, candidates))
+        let int = |l: &mut Self, i: u32| l.node(span, ExprKind::Lit(Value::Int(i64::from(i))));
+        let mut args = vec![
+            self.str_node(span, name),
+            int(self, span.file),
+            int(self, span.start),
+            int(self, span.end),
+        ];
+        for t in &types {
+            let typ = self.str_node(span, t);
+            let addr = self.resource_addr(rc.scope, name, span);
+            let empty = self.str_node(span, "");
+            let r = vec![typ, addr, empty];
+            args.push(self.building(rc, span, |b| b.form(crate::address::REF, r)));
+        }
+        Some(self.building(rc, span, |b| b.form(crate::types::AMBIGUOUS_REF, args)))
     }
 
     /// A relation atom, its arguments lowered at `pos`: positional, or
@@ -6986,18 +7078,17 @@ impl<'u> Lowerer<'u> {
             return Ok(None);
         }
         if let Some(d) = self.stack_in(rc.scope, &c.head) {
-            let Res::Output { inst, key, .. } = self.deployed_path(rc, &c, &d, pre, span)? else {
+            let Res::Output { inst, key, of, .. } = self.deployed_path(rc, &c, &d, pre, span)?
+            else {
                 return Err(Skip);
             };
-            let rows = self.read_var(
-                rc,
-                (Read::Output, "output"),
-                vec![inst, str_term(&key)],
-                2,
-                &p,
-                pre,
-                span,
-            );
+            let read = PlanRead::Output {
+                copy: inst,
+                key,
+                of,
+            };
+            let rows = self.read_var(rc, (Read::Output, "output"), read, 2, &p, pre, span);
+            let rows = self.term_of(rows);
             let cols = self.args(rc, n, pos, pre)?;
             return Ok(Some(atom_at("member", vec![rows, Term::List(cols)], span)));
         }
@@ -7031,6 +7122,7 @@ impl<'u> Lowerer<'u> {
         let Some(Res::Val(inst)) = self.scope_path(rc, &prefix, pre, span)? else {
             return Ok(None);
         };
+        let inst = self.term_of(inst);
         // A column the component's relation holds references in is the
         // reference here too (R-204): `s` in `blue.subnet(s)` is the
         // subnet, its address what `s in net.subnet` reads.
@@ -7121,29 +7213,33 @@ impl<'u> Lowerer<'u> {
     /// A copy where a resource is taken (R-67): its name in scope (`blue`)
     /// or a variable `x in network` binds, as a reference `ref(PATH, name,
     /// "")`, the copy's address `network["blue"]`.
-    fn instance_ref(&mut self, rc: &mut Rc, c: &Chain, span: Span) -> Option<Term> {
+    fn instance_ref(&mut self, rc: &mut Rc, c: &Chain, span: Span) -> Option<ExprId> {
         if !c.is_bare() {
             return None;
         }
-        if let Some(path) = rc.instances.get(&c.head).cloned() {
+        let (path, name) = if let Some(path) = rc.instances.get(&c.head).cloned() {
             let v = self.var_named(rc, &c.head, span);
-            return Some(func(
-                crate::address::REF,
-                vec![str_term(&path), var(&v), str_term("")],
-            ));
-        }
-        if rc.vars.contains_key(&c.head) || self.resource(rc.scope, &c.head).is_some() {
-            return None;
-        }
-        let (at, path) = self.instance_in(rc.scope, &c.head)?;
-        let name = self.scope_term(rc.scope, at, str_term(&c.head));
-        Some(func(
-            crate::address::REF,
-            vec![str_term(&path), name, str_term("")],
-        ))
+            (path, self.var_node(rc, span, &v))
+        } else {
+            if rc.vars.contains_key(&c.head) || self.resource(rc.scope, &c.head).is_some() {
+                return None;
+            }
+            let (at, path) = self.instance_in(rc.scope, &c.head)?;
+            let name = self.str_node(span, &c.head);
+            (path, self.scoped(rc.scope, at, name, span))
+        };
+        let args = vec![self.str_node(span, &path), name, self.str_node(span, "")];
+        Some(self.building(rc, span, |b| b.form(crate::address::REF, args)))
     }
 
     fn ref_term(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
+        let id = self.ref_expr(rc, n, pos, pre)?;
+        Ok(self.lowered(id, pre))
+    }
+
+    /// [`Self::ref_term`] as its node, the reads no node of it holds into
+    /// `pre`.
+    fn ref_expr(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<ExprId> {
         let span = self.span(n);
         if n.kind() == LITERAL {
             return self.error(
@@ -7153,7 +7249,7 @@ impl<'u> Lowerer<'u> {
             );
         }
         let Some(c) = Chain::of(n) else {
-            return self.term(rc, n, pos, pre);
+            return self.expr(rc, n, pos, pre);
         };
         if let Some(r) = self.instance_ref(rc, &c, span) {
             return Ok(r);
@@ -7162,20 +7258,30 @@ impl<'u> Lowerer<'u> {
             && !rc.vars.contains_key(&c.head)
             && self.resource(rc.scope, &c.head).is_some()
         {
-            let (typ, addr) = self.reference(rc, &c, pre, span)?;
-            return Ok(func(crate::address::REF, vec![typ, addr, str_term("")]));
+            let mut local = Vec::new();
+            let (typ, addr) = self.reference(rc, &c, &mut local, span)?;
+            let empty = self.str_node(span, "");
+            let args = vec![typ, addr, empty];
+            return Ok(self.building(rc, span, |b| b.form(crate::address::REF, args)));
         }
-        let mark = pre.len();
-        match self.resolve(rc, &c, pre)? {
+        let mut local = Vec::new();
+        match self.resolve(rc, &c, &mut local)? {
             Res::Ref { typ, addr, path } if path.is_empty() => {
-                Ok(func(crate::address::REF, vec![typ, addr, str_term("")]))
+                let empty = self.str_node(span, "");
+                let args = vec![typ, addr, empty];
+                let id = self.building(rc, span, |b| b.form(crate::address::REF, args));
+                let left = self.building(rc, span, |b| b.reading(&local, |b| b.took(id)).1);
+                pre.extend(left);
+                Ok(id)
             }
             res => {
-                if c.is_bare() && matches!(res, Res::Val(Term::Var(_))) {
+                if c.is_bare()
+                    && let Res::Val(v) = &res
+                    && matches!(self.program.exprs[*v].kind, ExprKind::Var(_))
+                {
                     rc.untyped_refs.insert(c.head.clone());
                 }
-                let local = pre.split_off(mark);
-                self.realize(rc, res, pos, (local, pre), span)
+                self.realize_expr(rc, res, pos, (local, pre), span)
             }
         }
     }
@@ -7251,11 +7357,10 @@ impl<'u> Lowerer<'u> {
         span: Span,
     ) -> L<ExprId> {
         let arg = terms(list).next().ok_or(Skip)?;
-        let mut local = Vec::new();
-        match self.ref_term(rc, &arg, Pos::Content, &mut local)? {
-            r @ Term::Func { .. } => {
-                let t = func(crate::address::REF, vec![r]);
-                Ok(self.rebuilt(rc, span, &t, &local, pre))
+        let r = self.ref_expr(rc, &arg, Pos::Content, pre)?;
+        match self.term_of(r) {
+            Term::Func { .. } => {
+                Ok(self.building(rc, span, |b| b.form(crate::address::REF, vec![r])))
             }
             _ => self.error(
                 span,
@@ -7408,6 +7513,19 @@ impl<'u> Lowerer<'u> {
         Ok(out)
     }
 
+    /// The arguments of `n` as parts of what a chain resolves to
+    /// ([`Self::part`]).
+    fn arg_parts(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<Vec<ExprId>> {
+        let Some(list) = node(n, ARG_LIST) else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for t in terms(&list) {
+            out.push(self.part(rc, &t, pre)?);
+        }
+        Ok(out)
+    }
+
     // --- terms ------------------------------------------------------------
 
     /// A term as its node (R-211 step 7), the reads it makes held by the
@@ -7434,23 +7552,6 @@ impl<'u> Lowerer<'u> {
         let (t, reads) = crate::program::lower_expr(&self.program, id);
         pre.extend(reads);
         t
-    }
-
-    /// A term the resolver made of what it resolved (a resource's address
-    /// with its scope's mark, a document's read), after the reads it made,
-    /// `local`: its node built from it, each read the node of the first
-    /// use of its variable; those no node holds into `pre`.
-    fn rebuilt(
-        &mut self,
-        rc: &Rc,
-        span: Span,
-        t: &Term,
-        local: &[Lit],
-        pre: &mut Vec<Lit>,
-    ) -> ExprId {
-        let (id, left) = self.building(rc, span, |b| b.part(t, local));
-        pre.extend(left);
-        id
     }
 
     fn expr_of(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<ExprId> {
@@ -7510,6 +7611,52 @@ impl<'u> Lowerer<'u> {
             kind,
             hoisted: None,
         })
+    }
+
+    /// The constant string `s`'s node at `span`.
+    fn str_node(&mut self, span: Span, s: &str) -> ExprId {
+        self.node(span, ExprKind::Lit(Value::Str(s.to_string())))
+    }
+
+    /// The node of the variable `v` (its lowered name) of the statement.
+    fn var_node(&mut self, rc: &Rc, span: Span, v: &str) -> ExprId {
+        self.building(rc, span, |b| b.variable(v))
+    }
+
+    /// The node of a resolved name's term: a constant, a variable (a
+    /// variable's type, `x in T` over several), `_`.
+    fn name_node(&mut self, rc: &Rc, span: Span, t: &Term) -> ExprId {
+        match t {
+            Term::Val(v) => self.node(span, ExprKind::Lit(v.clone())),
+            Term::Var(v) => self.var_node(rc, span, v),
+            Term::Wildcard => self.node(span, ExprKind::Hole),
+            t => unreachable!("a resolved name is a constant or a variable: {t:?}"),
+        }
+    }
+
+    /// A second node of the leaf `id` (a constant, a variable): a node
+    /// stands in one place.
+    fn leaf_copy(&mut self, id: ExprId) -> ExprId {
+        let e = self.program.exprs[id].clone();
+        debug_assert!(matches!(e.kind, ExprKind::Lit(_) | ExprKind::Var(_)));
+        self.program.exprs.insert(e)
+    }
+
+    /// A part of what a chain resolves to (an index, a key, an address):
+    /// the term's node, the reads it makes into `pre` too, where the
+    /// resolver's literals hold them.
+    fn part(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<ExprId> {
+        let id = self.expr(rc, n, Pos::Content, pre)?;
+        self.lowered(id, pre);
+        Ok(id)
+    }
+
+    /// The read `id` the resolver hoisted, its own literal into `pre`
+    /// (the reads of its parts are there already): the last its lowering
+    /// writes.
+    fn hoisted_into(&self, id: ExprId, pre: &mut Vec<Lit>) {
+        let (_, mut reads) = crate::program::lower_expr(&self.program, id);
+        pre.extend(reads.pop());
     }
 
     /// The term node `id` is, its reads aside: what a typing of a term
@@ -7600,12 +7747,13 @@ impl<'u> Lowerer<'u> {
             && !self.is_value(rc.scope, &c.head)
             && self.resource(rc.scope, &c.head).is_some()
         {
-            if let Some(t) = self.deferred_ref(rc, &c.head, span) {
-                return Ok(self.rebuilt(rc, span, &t, &local, pre));
+            if let Some(id) = self.deferred_ref(rc, &c.head, span) {
+                return Ok(id);
             }
             let (typ, addr) = self.reference(rc, &c, &mut local, span)?;
-            let t = func(crate::address::REF, vec![typ, addr, str_term("")]);
-            return Ok(self.rebuilt(rc, span, &t, &local, pre));
+            let empty = self.str_node(span, "");
+            let args = vec![typ, addr, empty];
+            return Ok(self.building(rc, span, |b| b.form(crate::address::REF, args)));
         }
         let res = self.resolve(rc, &c, &mut local)?;
         if let Res::Ref { path, .. } = &res
@@ -8222,10 +8370,11 @@ impl<'u> Lowerer<'u> {
             if c.ops.iter().any(|o| !matches!(o, Op::Field(..))) {
                 return self.error(span, "a name here is a path: `a.b.c`");
             }
-            return Ok(Res::Val(str_term(&c.fields().join("."))));
+            let name = c.fields().join(".");
+            return Ok(Res::Val(self.str_node(span, &name)));
         }
         if h == "_" && c.is_bare() {
-            return Ok(Res::Val(Term::Wildcard));
+            return Ok(Res::Val(self.node(span, ExprKind::Hole)));
         }
         if h == "_" {
             return self.error(
@@ -8252,7 +8401,8 @@ impl<'u> Lowerer<'u> {
         // A copy `x in network` binds (R-67): its name, `x.k` its output.
         if let Some(path) = rc.instances.get(h).cloned() {
             let v = self.var_named(rc, h, span);
-            return self.output_of(rc, var(&v), &path, &c.ops, pre, span);
+            let inst = self.var_node(rc, span, &v);
+            return self.output_of(rc, (inst, None), &path, &c.ops, pre, span);
         }
         // A typed variable: a reference.
         if let Some(t) = rc.types.get(h).cloned() {
@@ -8261,11 +8411,16 @@ impl<'u> Lowerer<'u> {
             }
             let v = self.var_named(rc, h, span);
             let path = self.segs(rc, &c.ops, pre)?;
+            let name = self.var_node(rc, span, &v);
             let addr = match rc.row_refs.contains(h) {
-                true => func(crate::modules::ABSOLUTE, vec![var(&v)]),
-                false => var(&v),
+                true => {
+                    let via = Reach::Absolute;
+                    self.node(span, ExprKind::Scoped { name, via })
+                }
+                false => name,
             };
-            return Ok(Res::Ref { typ: t, addr, path });
+            let typ = self.name_node(rc, span, &t);
+            return Ok(Res::Ref { typ, addr, path });
         }
         // A name a resource shares, read as the other thing's (R-76); in a
         // module's or a component's body, the body's own (R-101).
@@ -8307,8 +8462,8 @@ impl<'u> Lowerer<'u> {
                 }
                 let path = self.segs(rc, &c.ops, pre)?;
                 return Ok(Res::Ref {
-                    typ: str_term(&types[0]),
-                    addr: self.resource_addr(rc.scope, h),
+                    typ: self.str_node(span, &types[0]),
+                    addr: self.resource_addr(rc.scope, h, span),
                     path,
                 });
             }
@@ -8336,7 +8491,8 @@ impl<'u> Lowerer<'u> {
         {
             let v = self.var_named(rc, h, span);
             let path = self.segs(rc, &c.ops, pre)?;
-            return Ok(Res::Var { var: var(&v), path });
+            let var = self.var_node(rc, span, &v);
+            return Ok(Res::Var { var, path });
         }
         // A dotted name in a type namespace is a type's name, and must be a
         // known type (H-10): a typo is an error, never a string.
@@ -8380,21 +8536,26 @@ impl<'u> Lowerer<'u> {
         ops: &[Op],
         pre: &mut Vec<Lit>,
     ) -> L<Res> {
-        let t = self.bind(false, |l| l.term(rc, call, Pos::Content, pre))?;
+        let span = self.span(call);
+        let id = self.bind(false, |l| l.part(rc, call, pre))?;
+        let t = self.term_of(id);
         let key = format!("call {t:?}");
-        let v = match rc.reads.get(&key) {
-            Some(v) => v.clone(),
-            None => {
+        let var = match rc.reads.get(&key) {
+            Some(Term::Var(v)) => {
+                let v = v.clone();
+                self.var_node(rc, span, &v)
+            }
+            _ => {
                 let name = self.callee(call).unwrap_or_default();
                 let base = capitalise(name.rsplit('.').next().unwrap_or_default());
-                let v = var(&fresh(rc, &base));
-                pre.push(Lit::Eq(v.clone(), t));
-                rc.reads.insert(key, v.clone());
-                v
+                let v = fresh(rc, &base);
+                pre.push(Lit::Eq(var(&v), t));
+                rc.reads.insert(key, var(&v));
+                self.building(rc, span, |b| b.bound_into(id, &v))
             }
         };
         let path = self.segs(rc, ops, pre)?;
-        Ok(Res::Var { var: v, path })
+        Ok(Res::Var { var, path })
     }
 
     /// A value name: `k(V)`, read once per rule. A `let` holding a
@@ -8419,24 +8580,24 @@ impl<'u> Lowerer<'u> {
             && let Some(typ) = self.input_ref(from, &name)
         {
             let key = format!("ref {pred}");
-            let addr = match rc.values.get(&key) {
-                Some(v) => var(v),
+            let read = match rc.values.get(&key) {
+                Some(v) => {
+                    let v = v.clone();
+                    self.var_node(rc, span, &v)
+                }
                 None => {
                     let name = fresh(rc, &capitalise(&name));
-                    let mark = func(crate::modules::ABSOLUTE, vec![var(&name)]);
-                    let whole = func(
-                        crate::address::REF,
-                        vec![str_term(&typ), mark, str_term("")],
-                    );
-                    pre.push(Lit::Pos(atom_at(&pred, vec![whole], span)));
+                    let id = self.building(rc, span, |b| b.address_into(&pred, &typ, &name));
+                    self.hoisted_into(id, pre);
                     rc.values.insert(key, name.clone());
-                    var(&name)
+                    id
                 }
             };
             let path = self.segs(rc, &c.ops, pre)?;
+            let via = Reach::Absolute;
             return Ok(Res::Ref {
-                typ: str_term(&typ),
-                addr: func(crate::modules::ABSOLUTE, vec![addr]),
+                typ: self.str_node(span, &typ),
+                addr: self.node(span, ExprKind::Scoped { name: read, via }),
                 path,
             });
         }
@@ -8451,26 +8612,29 @@ impl<'u> Lowerer<'u> {
             return Ok(Res::Value { decl, via, path });
         };
         let key = match rc.values.get(&pred) {
-            Some(v) => var(v),
+            Some(v) => {
+                let v = v.clone();
+                self.var_node(rc, span, &v)
+            }
             None => {
                 let v = fresh(rc, &capitalise(&name));
-                self.value_read(&pred, &v, (decl, via), pre, span);
+                let key = self.value_read(rc, &pred, &v, (decl, via), pre, span);
                 rc.values.insert(pred.clone(), v.clone());
-                var(&v)
+                key
             }
         };
         match ty {
             VType::Ref(typ) => {
                 let path = self.segs(rc, &c.ops, pre)?;
                 Ok(Res::Ref {
-                    typ: str_term(&typ),
+                    typ: self.str_node(span, &typ),
                     addr: key,
                     path,
                 })
             }
             VType::World(typ) => {
                 let segs = self.segs(rc, &c.ops, pre)?;
-                let Some(path) = path_string(&segs) else {
+                let Some(path) = self.path_string(&segs) else {
                     return self.error(span, "a live object's path is constant");
                 };
                 Ok(Res::World {
@@ -8517,7 +8681,7 @@ impl<'u> Lowerer<'u> {
             }
         }
         let v = self.var_named(rc, h, span);
-        Ok(Res::Val(var(&v)))
+        Ok(Res::Val(self.var_node(rc, span, &v)))
     }
 
     /// The parts after a reference or value, lowered.
@@ -8535,7 +8699,7 @@ impl<'u> Lowerer<'u> {
                         CALL => true,
                         _ => Chain::of(&ts[0]).is_some_and(|c| !c.is_bare()),
                     };
-                    let t = self.bind(true, |l| l.term(rc, &ts[0], Pos::Content, pre))?;
+                    let t = self.bind(true, |l| l.part(rc, &ts[0], pre))?;
                     out.push(if keyed { Seg::K(t) } else { Seg::I(t) });
                 }
                 Op::Keyed(_, r) => {
@@ -8586,9 +8750,9 @@ impl<'u> Lowerer<'u> {
         if ts.len() != 1 {
             return self.error(span, "a live object is `world.T[name]`");
         }
-        let addr = self.bind(true, |l| l.term(rc, &ts[0], Pos::Content, pre))?;
+        let addr = self.bind(true, |l| l.part(rc, &ts[0], pre))?;
         let segs = self.segs(rc, &rest[1..], pre)?;
-        let Some(path) = path_string(&segs) else {
+        let Some(path) = self.path_string(&segs) else {
             return self.error(span, "a live object's path is constant");
         };
         Ok(Res::World { typ, addr, path })
@@ -8633,8 +8797,11 @@ impl<'u> Lowerer<'u> {
             self.alternatives_agree(rc.scope, h, x, span)?;
         }
         if let Some((at, path)) = self.instance_in(rc.scope, h) {
-            let inst = self.scope_term(rc.scope, at, str_term(h));
-            return self.output_of(rc, inst, &path, &c.ops, pre, span).map(Some);
+            let name = self.str_node(span, h);
+            let inst = self.scoped(rc.scope, at, name, span);
+            return self
+                .output_of(rc, (inst, None), &path, &c.ops, pre, span)
+                .map(Some);
         }
         if let Some(d) = self.stack_in(rc.scope, h) {
             return self.deployed_path(rc, c, &d, pre, span).map(Some);
@@ -8686,11 +8853,12 @@ impl<'u> Lowerer<'u> {
         let component = self.module_at(&at).is_some_and(|m| m.1);
         match ops.first() {
             Some(Op::Index(ts, _)) if component && ts.len() == 1 => {
-                let mut t = self.bind(true, |l| l.term(rc, &ts[0], Pos::Content, pre))?;
+                let mut t = self.bind(true, |l| l.part(rc, &ts[0], pre))?;
                 // `c[_]` binds each copy (R-162): a name its resources'
                 // addresses are made of (`c[_].vm`, R-191).
-                if matches!(t, Term::Wildcard) {
-                    t = var(&fresh(rc, "Copy"));
+                if matches!(self.program.exprs[t].kind, ExprKind::Hole) {
+                    let copy = fresh(rc, "Copy");
+                    t = self.var_node(rc, span, &copy);
                 }
                 // The copies of `at` this body makes, or its user's.
                 let own = self
@@ -8704,14 +8872,19 @@ impl<'u> Lowerer<'u> {
                     })
                     .copied();
                 let at_scope = own.unwrap_or(self.root());
-                let parent = self.scope_term(rc.scope, at_scope, str_term(""));
+                let user = self.str_node(span, "");
+                let parent = self.scoped(rc.scope, at_scope, user, span);
+                let copy = self.term_of(t);
                 pre.push(Lit::Pos(atom_at(
                     crate::modules::INSTANCE_OF,
-                    vec![str_term(&at), parent, t.clone()],
+                    vec![str_term(&at), self.term_of(parent), copy],
                     span,
                 )));
-                let inst = self.scope_term(rc.scope, at_scope, t);
-                self.output_of(rc, inst, &at, &ops[1..], pre, span)
+                let inst = self.scoped(rc.scope, at_scope, t, span);
+                // The test is the read's when it names the copy as the
+                // read does: the body's own copies.
+                let of = (inst == t).then(|| (at.clone(), parent));
+                self.output_of(rc, (inst, of), &at, &ops[1..], pre, span)
                     .map(Some)
             }
             _ if component => self
@@ -8752,21 +8925,24 @@ impl<'u> Lowerer<'u> {
                     return Ok(Some(Res::Value { decl, via, path }));
                 }
                 if own.output(x).is_some() {
-                    let inst = self.scope_term(rc.scope, declared, str_term(h));
-                    return self.output_of(rc, inst, &at, ops, pre, span).map(Some);
+                    let name = self.str_node(span, h);
+                    let inst = self.scoped(rc.scope, declared, name, span);
+                    return self
+                        .output_of(rc, (inst, None), &at, ops, pre, span)
+                        .map(Some);
                 }
                 if let Some(types) = own.resources(x) {
                     if types.len() > 1 {
                         return self.ambiguous(x, &types, span).map(Some);
                     }
-                    let scope = self.scope_term(rc.scope, declared, str_term(h));
+                    let name = self.str_node(span, h);
+                    let scope = self.scoped(rc.scope, declared, name, span);
                     let path = self.segs(rc, &ops[1..], pre)?;
+                    let x = self.str_node(span, &crate::address::name_segment(x));
                     return Ok(Some(Res::Ref {
-                        typ: str_term(&types[0]),
-                        addr: func(
-                            crate::address::SCOPED,
-                            vec![scope, str_term(&crate::address::name_segment(x))],
-                        ),
+                        typ: self.str_node(span, &types[0]),
+                        addr: self
+                            .building(rc, span, |b| b.form(crate::address::SCOPED, vec![scope, x])),
                         path,
                     }));
                 }
@@ -8878,11 +9054,12 @@ impl<'u> Lowerer<'u> {
 
     /// `.k.path` after an instance's scope `inst`, of the component at
     /// `path`: its output `k`, a reference when the output is typed by a
-    /// resource type.
+    /// resource type; `of`, the test that the copy exists, made before the
+    /// read when it is named by its key.
     fn output_of(
         &mut self,
         rc: &mut Rc,
-        inst: Term,
+        (inst, of): (ExprId, Option<(String, ExprId)>),
         path: &str,
         ops: &[Op],
         pre: &mut Vec<Lit>,
@@ -8899,12 +9076,11 @@ impl<'u> Lowerer<'u> {
                     if types.len() > 1 {
                         return self.ambiguous(k, &types, span);
                     }
+                    let x = self.str_node(span, &crate::address::name_segment(k));
                     return Ok(Res::Ref {
-                        typ: str_term(&types[0]),
-                        addr: func(
-                            crate::address::SCOPED,
-                            vec![inst, str_term(&crate::address::name_segment(k))],
-                        ),
+                        typ: self.str_node(span, &types[0]),
+                        addr: self
+                            .building(rc, span, |b| b.form(crate::address::SCOPED, vec![inst, x])),
                         path: segs,
                     });
                 }
@@ -8915,17 +9091,14 @@ impl<'u> Lowerer<'u> {
                     && !segs.is_empty()
                 {
                     // A typed output: the address it holds, then a reference.
-                    let v = self.read_var(
-                        rc,
-                        (Read::Output, "output"),
-                        vec![inst, str_term(k)],
-                        2,
-                        k,
-                        pre,
-                        span,
-                    );
+                    let read = PlanRead::Output {
+                        copy: inst,
+                        key: k.clone(),
+                        of,
+                    };
+                    let v = self.read_var(rc, (Read::Output, "output"), read, 2, k, pre, span);
                     return Ok(Res::Ref {
-                        typ: str_term(t),
+                        typ: self.str_node(span, t),
                         addr: v,
                         path: segs,
                     });
@@ -8934,7 +9107,8 @@ impl<'u> Lowerer<'u> {
                     inst,
                     key: k.clone(),
                     path: segs,
-                    typ: typed.map(|t| str_term(&t)),
+                    typ: typed,
+                    of,
                 })
             }
             Some(_) => self.error(span, "after a component's resource: `.output`"),
@@ -9025,11 +9199,16 @@ impl<'u> Lowerer<'u> {
                 let mut values = Vec::new();
                 for k in &keys {
                     let (_, t) = entries.iter().find(|(x, _)| x == k).expect("checked");
-                    let v = self.bind(true, |l| l.term(rc, t, Pos::Content, pre))?;
-                    values.push(match v {
-                        Term::Val(Value::Str(s)) => str_term(&crate::stack::escape(&s)),
-                        Term::Val(v) => str_term(&crate::stack::escape(&spell::bare(&v))),
-                        v => v,
+                    let v = self.bind(true, |l| l.part(rc, t, pre))?;
+                    let e = &self.program.exprs[v];
+                    let escaped = match (&e.kind, e.hoisted) {
+                        (ExprKind::Lit(Value::Str(s)), None) => Some(crate::stack::escape(s)),
+                        (ExprKind::Lit(v), None) => Some(crate::stack::escape(&spell::bare(v))),
+                        _ => None,
+                    };
+                    values.push(match escaped {
+                        Some(s) => self.str_node(span, &s),
+                        None => v,
                     });
                 }
                 let text = |vs: Vec<String>| {
@@ -9042,24 +9221,23 @@ impl<'u> Lowerer<'u> {
                 };
                 let constant: Option<Vec<String>> = values
                     .iter()
-                    .map(|v| match v {
-                        Term::Val(Value::Str(s)) => Some(s.clone()),
+                    .map(|v| match &self.program.exprs[*v].kind {
+                        ExprKind::Lit(Value::Str(s)) => Some(s.clone()),
                         _ => None,
                     })
                     .collect();
                 let name = match constant {
-                    Some(vs) => str_term(&text(vs)),
+                    Some(vs) => self.str_node(span, &text(vs)),
                     None => {
                         let holes = text(vec!["%s".to_string(); keys.len()]);
-                        func(
-                            crate::address::FORMAT,
-                            std::iter::once(str_term(&holes)).chain(values).collect(),
-                        )
+                        let holes = self.str_node(span, &holes);
+                        let args = std::iter::once(holes).chain(values).collect();
+                        self.building(rc, span, |b| b.form(crate::address::FORMAT, args))
                     }
                 };
                 (name, &c.ops[1..])
             }
-            Some(Op::Field(_)) if keys.is_empty() => (str_term(&d.name), &c.ops[..]),
+            Some(Op::Field(_)) if keys.is_empty() => (self.str_node(span, &d.name), &c.ops[..]),
             _ if keys.is_empty() => {
                 return self.error(
                     span,
@@ -9095,11 +9273,13 @@ impl<'u> Lowerer<'u> {
         // The keyed read of a copy's output (`network[t].k`), the
         // deployment the instance: `instance_of(PATH, "", NAME), output(NAME,
         // k, V)`, both served from what it published (I-modules section 6).
-        let inst = self.scope_term(rc.scope, self.root(), name);
-        let user = self.scope_term(rc.scope, self.root(), str_term(""));
+        let root = self.root();
+        let inst = self.scoped(rc.scope, root, name, span);
+        let user = self.str_node(span, "");
+        let user = self.scoped(rc.scope, root, user, span);
         pre.push(Lit::Pos(atom_at(
             crate::modules::INSTANCE_OF,
-            vec![str_term(&d.path), user, inst.clone()],
+            vec![str_term(&d.path), self.term_of(user), self.term_of(inst)],
             span,
         )));
         Ok(Res::Output {
@@ -9107,6 +9287,7 @@ impl<'u> Lowerer<'u> {
             key: k.clone(),
             path,
             typ: None,
+            of: Some((d.path.clone(), user)),
         })
     }
 
@@ -9176,7 +9357,7 @@ impl<'u> Lowerer<'u> {
             }
             let mut args = Vec::new();
             for t in ts {
-                args.push(self.bind(true, |l| l.term(rc, t, Pos::Content, pre))?);
+                args.push(self.bind(true, |l| l.part(rc, t, pre))?);
             }
             let path = self.segs(rc, rest, pre)?;
             return Ok(Some(Res::Lookup {
@@ -9192,7 +9373,7 @@ impl<'u> Lowerer<'u> {
         {
             let mut args = Vec::new();
             for t in ts {
-                args.push(self.bind(true, |l| l.term(rc, t, Pos::Content, pre))?);
+                args.push(self.bind(true, |l| l.part(rc, t, pre))?);
             }
             let path = self.segs(rc, rest, pre)?;
             let out = args.len();
@@ -9239,11 +9420,11 @@ impl<'u> Lowerer<'u> {
                 self.diags.push(d);
                 return Err(Skip);
             }
-            let addr = self.bind(true, |l| l.term(rc, &ts[0], Pos::Content, pre))?;
-            self.address_key(&addr, span)?;
+            let addr = self.bind(true, |l| l.part(rc, &ts[0], pre))?;
+            self.address_key(&self.term_of(addr), span)?;
             let path = self.segs(rc, rest, pre)?;
             return Ok(Some(Res::Ref {
-                typ: str_term(&name),
+                typ: self.str_node(span, &name),
                 addr,
                 path,
             }));
@@ -9281,26 +9462,44 @@ impl<'u> Lowerer<'u> {
         Ok(())
     }
 
-    /// Hoist a read `pred(args.., V)` (V at `out`) once per rule; its
-    /// variable.
+    /// Hoist the read `read`, `pred(args.., V)` (V at `out`), once per
+    /// rule: its node, the read into a new variable the first time, its
+    /// literal into `pre`; the variable after.
     #[allow(clippy::too_many_arguments)]
     fn read_var(
         &mut self,
         rc: &mut Rc,
-        (read, pred): (crate::program::Read, &str),
-        mut args: Vec<Term>,
+        (kind, pred): (crate::program::Read, &str),
+        read: PlanRead,
         out: usize,
         hint: &str,
         pre: &mut Vec<Lit>,
         span: Span,
-    ) -> Term {
-        let (name, new) = self.hoist_read(rc, (read, pred), &args, out, hint);
-        let v = var(&name);
-        if new {
-            args.insert(out, v.clone());
-            pre.push(Lit::Pos(atom_at(pred, args, span)));
+    ) -> ExprId {
+        let args = self.read_args(&read);
+        let (name, new) = self.hoist_read(rc, (kind, pred), &args, out, hint);
+        if !new {
+            return self.var_node(rc, span, &name);
         }
-        v
+        let id = self.building(rc, span, |b| b.read_into(read.of(), &name));
+        self.hoisted_into(id, pre);
+        id
+    }
+
+    /// The columns of the read `read` but its value's, as the rule writes
+    /// them: what names it once per rule.
+    fn read_args(&self, read: &PlanRead) -> Vec<Term> {
+        match read {
+            PlanRead::Value(..) => Vec::new(),
+            PlanRead::Attr { typ, addr, attr } => {
+                vec![self.term_of(*typ), self.term_of(*addr), str_term(attr)]
+            }
+            PlanRead::Output { copy, key, .. } => vec![self.term_of(*copy), str_term(key)],
+            PlanRead::World { typ, addr, path } => {
+                vec![str_term(typ), self.term_of(*addr), str_term(path)]
+            }
+            PlanRead::Lookup { args, .. } => args.iter().map(|a| self.term_of(*a)).collect(),
+        }
     }
 
     /// The variable the read `pred(args.., V)` (V at `out`) binds, once
@@ -9342,9 +9541,9 @@ impl<'u> Lowerer<'u> {
 
     /// A resolved chain as its node at `pos` (R-211 step 7): what it reads
     /// in term position its read's node, a path into it the steps, each
-    /// read's variable named once per rule; the reads resolving it hoisted,
-    /// `local`, each the node of the first use of its variable, those no
-    /// node holds into `pre`.
+    /// read's variable named once per rule, over the nodes of what
+    /// resolved it; of the reads resolving it, `local` (the literals the
+    /// resolver made of them), those no node holds into `pre`.
     fn realize_expr(
         &mut self,
         rc: &mut Rc,
@@ -9354,41 +9553,91 @@ impl<'u> Lowerer<'u> {
         span: Span,
     ) -> L<ExprId> {
         let plan = self.plan(rc, res, pos, span)?;
-        let (id, left) = self.building(rc, span, |b| b.reading(&local, |b| plan.build(b)));
+        let (id, left) = self.building(rc, span, |b| {
+            b.reading(&local, |b| {
+                let id = plan.build(b);
+                b.took(id);
+                id
+            })
+        });
         pre.extend(left);
         Ok(id)
+    }
+
+    /// `res` with the reads its parts make left where they were made: each
+    /// part that holds a read is the term it lowered to, its reads'
+    /// variables in their place.
+    fn settled(&mut self, rc: &Rc, res: Res, span: Span) -> Res {
+        let settle = |l: &mut Self, id: ExprId| {
+            let (t, reads) = crate::program::lower_expr(&l.program, id);
+            match reads.is_empty() {
+                true => id,
+                false => l.building(rc, span, |b| b.expr(&t)),
+            }
+        };
+        let segs = |l: &mut Self, path: Vec<Seg>| -> Vec<Seg> {
+            path.into_iter()
+                .map(|s| match s {
+                    Seg::I(i) => Seg::I(settle(l, i)),
+                    Seg::K(k) => Seg::K(settle(l, k)),
+                    f => f,
+                })
+                .collect()
+        };
+        match res {
+            Res::Ref { typ, addr, path } => Res::Ref {
+                typ,
+                addr: settle(self, addr),
+                path: segs(self, path),
+            },
+            Res::Var { var, path } => Res::Var {
+                var: settle(self, var),
+                path: segs(self, path),
+            },
+            Res::Value { decl, via, path } => Res::Value {
+                decl,
+                via,
+                path: segs(self, path),
+            },
+            res => res,
+        }
     }
 
     /// What a resolved chain at `pos` reads and the path into it, each
     /// variable named in the order the reads are made.
     fn plan(&mut self, rc: &mut Rc, res: Res, pos: Pos, span: Span) -> L<Plan> {
         Ok(match res {
-            Res::Val(t) => Plan::Term(t),
-            Res::Type(t) => Plan::Term(str_term(&t)),
-            Res::Var { var: v, path } => self.plan_path(rc, Plan::Term(v), path, None),
-            Res::Ref { typ, addr, path } if path.is_empty() => Plan::Term(match pos {
-                Pos::Value => func(crate::address::REF, vec![typ, addr, str_term("")]),
+            Res::Val(t) => Plan::Node(t),
+            Res::Type(t) => Plan::Node(self.str_node(span, &t)),
+            Res::Var { var: v, path } => self.plan_path(rc, Plan::Node(v), path, None),
+            Res::Ref { typ, addr, path } if path.is_empty() => Plan::Node(match pos {
+                Pos::Value => {
+                    let empty = self.str_node(span, "");
+                    let args = vec![typ, addr, empty];
+                    self.building(rc, span, |b| b.form(crate::address::REF, args))
+                }
                 _ => addr,
             }),
             Res::Ref { typ, addr, path } if pos != Pos::Content => {
-                let Some(p) = path_string(&path) else {
+                let Some(p) = self.path_string(&path) else {
                     return self.error(span, "a reference's path is constant");
                 };
-                Plan::Term(func(crate::address::REF, vec![typ, addr, str_term(&p)]))
+                let p = self.str_node(span, &p);
+                let args = vec![typ, addr, p];
+                Plan::Node(self.building(rc, span, |b| b.form(crate::address::REF, args)))
             }
             Res::Ref { typ, addr, path } => {
                 let Seg::F(first) = &path[0] else {
                     return self.error(span, "a resource's attribute is `r.name`");
                 };
                 let first = crate::address::path_key(first).into_owned();
-                let args = [typ.clone(), addr.clone(), str_term(&first)];
                 let read = PlanRead::Attr {
-                    typ: typ.clone(),
+                    typ,
                     addr,
                     attr: first.clone(),
                 };
-                let base = self.plan_read(rc, (Read::Attr, "attr"), &args, 3, &first, read);
-                let at = (typ, first);
+                let base = self.plan_read(rc, (Read::Attr, "attr"), (3, &first), read, span);
+                let at = (self.leaf_copy(typ), first);
                 self.plan_path(rc, base, path[1..].to_vec(), Some(at))
             }
             Res::Output {
@@ -9396,35 +9645,36 @@ impl<'u> Lowerer<'u> {
                 key,
                 path,
                 typ,
+                of,
             } => {
-                let args = [inst.clone(), str_term(&key)];
                 let read = PlanRead::Output {
                     copy: inst,
                     key: key.clone(),
+                    of,
                 };
-                let base = self.plan_read(rc, (Read::Output, "output"), &args, 2, &key, read);
+                let base = self.plan_read(rc, (Read::Output, "output"), (2, &key), read, span);
                 match typ {
                     // A typed output holds an address: given as a value, it
                     // is the reference (R-43).
-                    Some(Term::Val(Value::Str(typ))) if pos == Pos::Value && path.is_empty() => {
-                        Plan::RefTo {
-                            typ,
-                            addr: Box::new(base),
-                        }
-                    }
+                    Some(typ) if pos == Pos::Value && path.is_empty() => Plan::RefTo {
+                        typ,
+                        addr: Box::new(base),
+                    },
                     _ => self.plan_path(rc, base, path, None),
                 }
             }
             Res::World { typ, addr, path } => {
                 let last = path.rsplit('.').next().unwrap_or(&path).to_string();
-                let args = [str_term(&typ), addr.clone(), str_term(&path)];
                 let read = PlanRead::World { typ, addr, path };
-                self.plan_read(rc, (Read::World, "cloud_attr"), &args, 3, &last, read)
+                self.plan_read(rc, (Read::World, "cloud_attr"), (3, &last), read, span)
             }
             Res::Value { decl, via, path } => {
                 let pred = via.relation(&decl.name);
                 let base = match rc.values.get(&pred) {
-                    Some(v) => Plan::Term(var(v)),
+                    Some(v) => {
+                        let v = v.clone();
+                        Plan::Node(self.var_node(rc, span, &v))
+                    }
                     None => {
                         let base = crate::modules::lexical_name(&pred).unwrap_or(&pred);
                         let name = fresh(rc, &capitalise(base));
@@ -9449,11 +9699,11 @@ impl<'u> Lowerer<'u> {
                 let hint = pred.replace('.', "_");
                 let read = PlanRead::Lookup {
                     rel: pred.clone(),
-                    args: args.clone(),
+                    args,
                     out,
                 };
-                let base =
-                    self.plan_read(rc, (Read::Lookup { out }, &pred), &args, out, &hint, read);
+                let read_of = (Read::Lookup { out }, pred.as_str());
+                let base = self.plan_read(rc, read_of, (out, &hint), read, span);
                 self.plan_path(rc, base, path, None)
             }
         })
@@ -9465,13 +9715,13 @@ impl<'u> Lowerer<'u> {
         &mut self,
         rc: &mut Rc,
         (kind, pred): (crate::program::Read, &str),
-        args: &[Term],
-        out: usize,
-        hint: &str,
+        (out, hint): (usize, &str),
         read: PlanRead,
+        span: Span,
     ) -> Plan {
-        match self.hoist_read(rc, (kind, pred), args, out, hint) {
-            (v, false) => Plan::Term(var(&v)),
+        let args = self.read_args(&read);
+        match self.hoist_read(rc, (kind, pred), &args, out, hint) {
+            (v, false) => Plan::Node(self.var_node(rc, span, &v)),
             (v, true) => Plan::Read { read, var: v },
         }
     }
@@ -9486,7 +9736,7 @@ impl<'u> Lowerer<'u> {
         rc: &mut Rc,
         base: Plan,
         path: Vec<Seg>,
-        mut at: Option<(Term, String)>,
+        mut at: Option<(ExprId, String)>,
     ) -> Plan {
         let mut steps = Vec::new();
         let mut fields: Vec<String> = Vec::new();
@@ -9545,19 +9795,23 @@ impl<'u> Lowerer<'u> {
     }
 
     /// The read of a value, `pred(var)`, hoisted, and what it reads kept
-    /// for the program's builder: the goal is the read's own node.
+    /// for the program's builder: its node, the read into `var_name`.
     fn value_read(
         &mut self,
+        rc: &Rc,
         pred: &str,
         var_name: &str,
-        read: (DeclRef, Reach),
+        (decl, via): (DeclRef, Reach),
         pre: &mut Vec<Lit>,
         span: Span,
-    ) {
+    ) -> ExprId {
         if let Some(g) = &mut self.gather {
-            g.hoisted(pred, var_name, Read::Value(read.0, read.1));
+            g.hoisted(pred, var_name, Read::Value(decl.clone(), via.clone()));
         }
-        pre.push(Lit::Pos(atom_at(pred, vec![var(var_name)], span)));
+        let read = ReadOf::Value(decl, via);
+        let id = self.building(rc, span, |b| b.read_into(read, var_name));
+        self.hoisted_into(id, pre);
+        id
     }
 
     /// The read a resolved chain is, with `value` in its value column: the
@@ -9565,7 +9819,7 @@ impl<'u> Lowerer<'u> {
     /// the program's builder. `None` when the chain is not one read.
     fn read_atom(&mut self, rc: &mut Rc, res: &Res, value: Term, span: Span) -> Option<Atom> {
         let _ = rc;
-        let (a, column, read) = Self::read_with(res, value, span)?;
+        let (a, column, read) = self.read_with(res, value, span)?;
         if let Some(s) = &mut self.gather {
             s.read(column, read);
         }
@@ -9574,15 +9828,16 @@ impl<'u> Lowerer<'u> {
 
     /// The read `res` is with `value` in its value column, that column,
     /// and what it reads.
-    fn read_with(res: &Res, value: Term, span: Span) -> Option<(Atom, usize, Read)> {
+    fn read_with(&self, res: &Res, value: Term, span: Span) -> Option<(Atom, usize, Read)> {
+        let t = |id: &ExprId| self.term_of(*id);
         match res {
             Res::Ref { typ, addr, path } if path.len() == 1 => match &path[0] {
                 Seg::F(p) => Some((
                     atom_at(
                         "attr",
                         vec![
-                            typ.clone(),
-                            addr.clone(),
+                            t(typ),
+                            t(addr),
                             str_term(&crate::address::path_key(p)),
                             value,
                         ],
@@ -9596,14 +9851,14 @@ impl<'u> Lowerer<'u> {
             Res::Output {
                 inst, key, path, ..
             } if path.is_empty() => Some((
-                atom_at("output", vec![inst.clone(), str_term(key), value], span),
+                atom_at("output", vec![t(inst), str_term(key), value], span),
                 2,
                 Read::Output,
             )),
             Res::World { typ, addr, path } => Some((
                 atom_at(
                     "cloud_attr",
-                    vec![str_term(typ), addr.clone(), str_term(path), value],
+                    vec![str_term(typ), t(addr), str_term(path), value],
                     span,
                 ),
                 3,
@@ -9620,12 +9875,60 @@ impl<'u> Lowerer<'u> {
                 out,
                 path,
             } if path.is_empty() => {
-                let mut args = args.clone();
+                let mut args: Vec<Term> = args.iter().map(t).collect();
                 args.insert(*out, value);
                 Some((atom_at(pred, args, span), *out, Read::Lookup { out: *out }))
             }
             _ => None,
         }
+    }
+
+    /// `has r.PATH` of a resource's attribute (a path of fields):
+    /// `__has(T, A, "PATH")`, which the compiler answers from the schema in
+    /// a rule that writes under PATH ([`mark_has`]).
+    fn has_atom(&self, res: &Res, span: Span) -> Option<Atom> {
+        let Res::Ref { typ, addr, path } = res else {
+            return None;
+        };
+        let keys: Vec<String> = path
+            .iter()
+            .map(|s| match s {
+                Seg::F(p) => Some(crate::address::path_key(p).into_owned()),
+                Seg::I(_) | Seg::K(_) => None,
+            })
+            .collect::<Option<_>>()?;
+        (!keys.is_empty()).then(|| {
+            atom_at(
+                crate::partition::HAS,
+                vec![
+                    self.term_of(*typ),
+                    self.term_of(*addr),
+                    str_term(&keys.join(".")),
+                ],
+                span,
+            )
+        })
+    }
+
+    /// A constant path as a stored path: `a.b[0].c`, `a."b.c"`.
+    fn path_string(&self, path: &[Seg]) -> Option<String> {
+        let mut out = String::new();
+        for s in path {
+            match s {
+                Seg::F(f) => {
+                    if !out.is_empty() {
+                        out.push('.');
+                    }
+                    out.push_str(&crate::address::path_key(f));
+                }
+                Seg::I(i) => match (&self.program.exprs[*i].kind, self.program.exprs[*i].hoisted) {
+                    (ExprKind::Lit(Value::Int(i)), None) => out.push_str(&format!("[{i}]")),
+                    _ => return None,
+                },
+                Seg::K(_) => return None,
+            }
+        }
+        Some(out)
     }
 }
 
@@ -9756,29 +10059,6 @@ fn is_identity(path: &[Seg]) -> bool {
     matches!(path.first(), Some(Seg::F(f)) if f == crate::schema::IDENTITY)
 }
 
-/// `has r.PATH` of a resource's attribute (a path of fields):
-/// `__has(T, A, "PATH")`, which the compiler answers from the schema in a
-/// rule that writes under PATH ([`mark_has`]).
-fn has_atom(res: &Res, span: Span) -> Option<Atom> {
-    let Res::Ref { typ, addr, path } = res else {
-        return None;
-    };
-    let keys: Vec<String> = path
-        .iter()
-        .map(|s| match s {
-            Seg::F(p) => Some(crate::address::path_key(p).into_owned()),
-            Seg::I(_) | Seg::K(_) => None,
-        })
-        .collect::<Option<_>>()?;
-    (!keys.is_empty()).then(|| {
-        atom_at(
-            crate::partition::HAS,
-            vec![typ.clone(), addr.clone(), str_term(&keys.join("."))],
-            span,
-        )
-    })
-}
-
 /// The types the built-in provider schemas declare (`type_provider`,
 /// `type_attr`, ... rows): a program names them without a resource header
 /// of its own. Read from the schema text, not resolved.
@@ -9848,24 +10128,6 @@ fn atom_terms(a: &Atom) -> Vec<&Term> {
         .iter()
         .chain(a.record.iter().flat_map(|r| r.values()))
         .collect()
-}
-
-/// A constant path as a stored path: `a.b[0].c`, `a."b.c"`.
-fn path_string(path: &[Seg]) -> Option<String> {
-    let mut out = String::new();
-    for s in path {
-        match s {
-            Seg::F(f) => {
-                if !out.is_empty() {
-                    out.push('.');
-                }
-                out.push_str(&crate::address::path_key(f));
-            }
-            Seg::I(Term::Val(Value::Int(i))) => out.push_str(&format!("[{i}]")),
-            Seg::I(_) | Seg::K(_) => return None,
-        }
-    }
-    Some(out)
 }
 
 /// The variables a body binds: arguments of its positive relation reads

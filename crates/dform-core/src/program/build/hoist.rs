@@ -29,37 +29,41 @@
 //! takes that node, with the reads it holds, rather than remaking it.
 
 use super::Builder;
-use crate::ast::{Atom, Lit, Term, str_term};
+use crate::ast::{Atom, Lit, Term};
 use crate::program::Read;
 use crate::program::node::*;
 use crate::program::scope::{DeclRef, Reach};
 use crate::value::Value;
 use std::collections::BTreeMap;
 
-/// What a read reads, as the front end holds it: its node is built from
-/// it ([`Builder::read_into`]).
+/// What a read reads, as the front end holds it, its parts their nodes:
+/// its node is built from it ([`Builder::read_into`]).
 pub enum ReadOf<'t> {
     /// `k(V)`.
     Value(DeclRef, Reach),
     /// `attr(T, A, "p", V)`.
     Attr {
-        typ: &'t Term,
-        addr: &'t Term,
+        typ: ExprId,
+        addr: ExprId,
         attr: &'t str,
     },
-    /// `output(C, "k", V)`, after the test that `C` exists when it is
-    /// named by its key.
-    Output { copy: &'t Term, key: &'t str },
+    /// `output(C, "k", V)`; `of`, the component and the scope of the test
+    /// that `C` exists, made before it when it is named by its key.
+    Output {
+        copy: ExprId,
+        key: &'t str,
+        of: Option<(Name, ExprId)>,
+    },
     /// `cloud_attr("T", A, "p", V)`.
     World {
         typ: &'t str,
-        addr: &'t Term,
+        addr: ExprId,
         path: &'t str,
     },
     /// `p(a, .., V, ..)`, `V` the `out`th column.
     Lookup {
         rel: &'t str,
-        args: &'t [Term],
+        args: Vec<ExprId>,
         out: usize,
     },
 }
@@ -68,8 +72,8 @@ pub enum ReadOf<'t> {
 /// list `list` declares the key's field, the variables `keys` and
 /// `field` it is read into.
 pub struct Keyed<'t> {
-    pub key: &'t Term,
-    pub typ: &'t Term,
+    pub key: ExprId,
+    pub typ: ExprId,
     pub list: String,
     pub keys: &'t str,
     pub field: &'t str,
@@ -188,7 +192,7 @@ impl Builder<'_> {
 
     /// The node `id`, built where its term is (step 7), holds the reads
     /// its lowering writes: taken from those pending.
-    fn took(&mut self, id: ExprId) {
+    pub fn took(&mut self, id: ExprId) {
         let (_, reads) = crate::program::lower_expr(self.program, id);
         for r in reads {
             let r = written(&r);
@@ -199,38 +203,37 @@ impl Builder<'_> {
     }
 
     /// The read `read` in term position, read into the variable `v`: its
-    /// node, built from what it reads (step 7), its terms' reads those
-    /// pending. Kept for the literals that hold its read
+    /// node, built from what it reads (step 7), its parts the nodes of
+    /// what resolved them. Kept for the literals that hold its read
     /// ([`Builder::pending_read`]).
     pub fn read_into(&mut self, read: ReadOf, v: &str) -> ExprId {
         let span = self.span;
         let kind = match read {
             ReadOf::Value(decl, via) => ExprKind::Value { decl, via },
-            ReadOf::Attr { typ, addr, attr } => match typ {
-                Term::Val(Value::Str(t)) => {
+            ReadOf::Attr { typ, addr, attr } => match self.constant(typ).cloned() {
+                Some(Value::Str(t)) => {
                     let typ = TypeRef {
                         name: t.clone(),
                         span,
                     };
-                    let addr = self.expr(addr);
                     let base = self.expr_node(ExprKind::Resource { typ, addr });
                     let path = vec![Step::Field(attr.to_string(), span)];
                     ExprKind::Field { base, path }
                 }
                 // A resource whose type is a variable: its relation's.
-                typ => ExprKind::Lookup {
+                _ => ExprKind::Lookup {
                     rel: RelRef {
                         name: "attr".to_string(),
                         span,
                     },
-                    args: vec![self.expr(typ), self.expr(addr), self.expr(&str_term(attr))],
+                    args: vec![typ, addr, self.lit(Value::Str(attr.to_string()))],
                     out: 3,
                     path: Vec::new(),
                 },
             },
-            ReadOf::Output { copy, key } => ExprKind::Output {
-                of: self.instance_test(copy),
-                copy: self.expr(copy),
+            ReadOf::Output { copy, key, of } => ExprKind::Output {
+                of,
+                copy,
                 key: key.to_string(),
             },
             ReadOf::World { typ, addr, path } => ExprKind::World {
@@ -238,7 +241,7 @@ impl Builder<'_> {
                     name: typ.to_string(),
                     span,
                 },
-                addr: self.expr(addr),
+                addr,
                 path: self.fields(path),
             },
             ReadOf::Lookup { rel, args, out } => ExprKind::Lookup {
@@ -246,13 +249,56 @@ impl Builder<'_> {
                     name: rel.to_string(),
                     span,
                 },
-                args: args.iter().map(|t| self.expr(t)).collect(),
+                args,
                 out,
                 path: Vec::new(),
             },
         };
         let id = self.expr_node(kind);
         self.hoist_into(id, v)
+    }
+
+    /// The address of the resource of type `typ` the input `rel`, typed
+    /// `ref(T)`, holds (R-101), read into `v`: `rel(__ref("T",
+    /// __scope(V), ""))`.
+    pub fn address_into(&mut self, rel: &str, typ: &str, v: &str) -> ExprId {
+        let span = self.span;
+        let of = self.expr_node(ExprKind::Lookup {
+            rel: RelRef {
+                name: rel.to_string(),
+                span,
+            },
+            args: Vec::new(),
+            out: 0,
+            path: Vec::new(),
+        });
+        let typ = TypeRef {
+            name: typ.to_string(),
+            span,
+        };
+        let id = self.expr_node(ExprKind::Address { of, typ });
+        self.hoist_into(id, v)
+    }
+
+    /// The term `id` read into a variable of its own, `v = t`: `id` itself,
+    /// or, a read already, its own node of the read.
+    pub fn bound_into(&mut self, id: ExprId, v: &str) -> ExprId {
+        let id = match self.program.exprs[id].hoisted {
+            Some(_) => self.expr_node(ExprKind::Alias(id)),
+            None => id,
+        };
+        self.hoist_into(id, v)
+    }
+
+    /// The variable `v`'s node.
+    pub fn variable(&mut self, v: &str) -> ExprId {
+        let v = self.var(v);
+        self.expr_node(ExprKind::Var(v))
+    }
+
+    /// The constant `v`'s node.
+    pub fn lit(&mut self, v: Value) -> ExprId {
+        self.expr_node(ExprKind::Lit(v))
     }
 
     /// A call of a let with parameters, `f(args..)`, read into `v`: the
@@ -275,8 +321,8 @@ impl Builder<'_> {
 
     /// The element `i` of the list `base`, read into `v`: `member(L, i,
     /// V)`.
-    pub fn element_at(&mut self, base: ExprId, i: &Term, v: &str) -> ExprId {
-        let path = vec![Step::Index(self.expr(i))];
+    pub fn element_at(&mut self, base: ExprId, i: ExprId, v: &str) -> ExprId {
+        let path = vec![Step::Index(i)];
         let id = self.expr_node(ExprKind::Field { base, path });
         self.hoist_into(id, v)
     }
@@ -286,8 +332,8 @@ impl Builder<'_> {
     /// into `keys`, `[field]`.
     pub fn keyed_element(&mut self, base: ExprId, k: Keyed, v: &str) -> ExprId {
         let step = Step::Keyed {
-            key: self.expr(k.key),
-            typ: self.expr(k.typ),
+            key: k.key,
+            typ: k.typ,
             list: k.list,
             keys: self.var(k.keys),
             field: self.var(k.field),

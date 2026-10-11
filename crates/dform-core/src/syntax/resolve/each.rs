@@ -117,9 +117,10 @@ impl Lowerer<'_> {
             let mark = body.len();
             let res = self.resolve(rc, &prefix, body)?;
             let of = match &res {
-                Res::Ref { typ, addr, path } => path_string(path)
+                Res::Ref { typ, addr, path } => self
+                    .path_string(path)
                     .filter(|p| !p.is_empty())
-                    .map(|p| (typ.clone(), addr.clone(), p)),
+                    .map(|p| (self.term_of(*typ), self.term_of(*addr), p)),
                 _ => None,
             };
             let Some(of) = of else {

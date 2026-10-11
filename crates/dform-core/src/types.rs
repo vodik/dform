@@ -245,14 +245,6 @@ fn spanned(name: &str, text: &str, span: crate::ast::Span) -> Term {
 /// is the error that lists them.
 pub const AMBIGUOUS_REF: &str = "__resource";
 
-pub fn ambiguous_ref(name: &str, span: crate::ast::Span, candidates: Vec<Term>) -> Term {
-    let Term::Func { name, mut args } = spanned(AMBIGUOUS_REF, name, span) else {
-        unreachable!("spanned is a call")
-    };
-    args.extend(candidates);
-    Term::Func { name, args }
-}
-
 /// The name and the candidate references of an ambiguous resource name.
 fn ambiguous_ref_of(t: &Term) -> Option<(&str, &[Term])> {
     match t {

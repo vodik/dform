@@ -323,9 +323,8 @@ impl Lowerer<'_> {
                         scope,
                         ..Rc::default()
                     };
-                    let t = self.constant(&mut at_def, d)?;
-                    let at = self.span(d);
-                    (self.rebuilt(rc, at, &t, &[], pre), at)
+                    let t = self.constant_node(&mut at_def, d)?;
+                    (t, self.span(d))
                 }
                 (None, None) => {
                     return self.error(
@@ -361,7 +360,7 @@ impl Lowerer<'_> {
             for a in args {
                 self.lowered(a, pre);
             }
-            return Ok(self.rebuilt(rc, span, &var(&v), &[], pre));
+            return Ok(self.var_node(rc, span, &v));
         }
         let v = fresh(rc, &capitalise(&name));
         rc.reads.insert(key, var(&v));

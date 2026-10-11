@@ -400,7 +400,7 @@ impl Lowerer<'_> {
     ) -> L<ExprId> {
         let span = self.span(n);
         let mut local = Vec::new();
-        let args = self.bind(true, |l| l.args(rc, n, Pos::Content, &mut local))?;
+        let args = self.bind(true, |l| l.arg_parts(rc, n, &mut local))?;
         let want = match name {
             ENV_VAR => "one argument: the variable's name",
             crate::externs::TIME_NOW => "no argument",
