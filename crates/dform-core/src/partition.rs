@@ -2217,8 +2217,8 @@ mod tests {
                 crate::schema::fake(),
             ),
             (
-                "examples/pngu/stacks/pngu.df",
-                root().join("examples/pngu/stacks/pngu.df"),
+                "examples/gke-platform/stacks/gke_platform.df",
+                root().join("examples/gke-platform/stacks/gke_platform.df"),
                 crate::schema::gke(),
             ),
             (

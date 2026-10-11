@@ -26,7 +26,7 @@ reader sees every one: =attr(net.vpc, vpc, .cidr, VpcNet)= says there is a
 read, of which type, at which address, of which path, into which variable.
 The cost is that most of those variables exist only to carry a value from
 the line that reads it to the line that uses it: 120 of them in the 13
-programs of the corpus (section 8), 26 in =pngu.df= alone. The proposed
+programs of the corpus (section 8), 26 in =gke_platform.df= alone. The proposed
 surface removes those, and nothing else: *a read is written where its value
 is used*, and the compiler moves it into the body. Recursion, negation over
 relations, aggregates and every relational rule read as before, less the
@@ -502,7 +502,7 @@ Type namespaces become reserved words in a program that uses them: =net=,
 *Context.* The ticket's three cases (a module-local name, =db in
 db.postgres=, =network.main.vpc=) plus the ones the corpus needs.
 *Decision.* Section 3.3's table: a bare unique name; =T.n= for a declared
-name (it reads as the plan prints the address, =gke_cluster.pngu=); =T[e]=
+name (it reads as the plan prints the address, =gke_cluster.gke_platform=); =T[e]=
 for a computed or undeclared address (data sources, =net.vpc[b]=);
 =m.i/n= to reach into an instance (the =/= marks that it pierces the
 module's interface); =x in T= as a generator over =want=; typed address
@@ -519,7 +519,7 @@ legal and mean the output and the resource. The typed output makes
 =Value::Ref= for a configured path, the minted null plus an apply-order edge
 and a dangling-ref deny for a computed one) and =attr(T, A, .p, V)= (the
 value now, no ordering). Both are in the corpus, sometimes for the same
-attribute (=gke_two_phase.df= reads =k8s.namespace.pngu.name= in a body;
+attribute (=gke_two_phase.df= reads =k8s.namespace.gke_platform.name= in a body;
 =k8s_demo.df= references =shop.metadata.name=). The ticket's direction was
 "=vpc.cidr= to the attr join, =vpc.id= to the ref". Three ways to decide:
 by schema (computed: reference; configured: read; E DR-2's intent), by
@@ -535,11 +535,11 @@ program would lose the apply-order edge a reference gives (a configured
 path read now is a string with no dependency). Position gives Terraform's
 default (a reference in a field is a dependency) and keeps both of today's
 choices writable: a read in a field is spelled by binding it in the
-block's clause (=if ns = k8s.namespace.pngu.name= then =namespace = ns=).
+block's clause (=if ns = k8s.namespace.gke_platform.name= then =namespace = ns=).
 *Why not a marker (=&vpc.id=, =ref vpc.id=):* the current corpus has 34
 =ref(...)= terms and 3 reads that end up in a field; a marker would sit on
 the common case.
-*Consequences.* The same text =k8s.namespace.pngu.name= means two things in
+*Consequences.* The same text =k8s.namespace.gke_platform.name= means two things in
 two positions, and the plan shows the difference (a =ref(...)= value
 versus a string). Section 9.3 and the LSP section treat it as the main
 cost of the proposal.
@@ -695,7 +695,7 @@ pattern in the corpus. *Decision.* A settings row is a reference of the
 pseudo-type =settings= (=settings.prod=, =settings[env]=), and a dot on it
 is always a read (=setting/3=, full key, as today). =let a = REF= names a
 reference; it is textual substitution, never a value. *Why =let= at all:*
-=pngu.df= reads =settings[env]= 34 times. *Why only references:* a value
+=gke_platform.df= reads =settings[env]= 34 times. *Why only references:* a value
 =let= would be a value rule under another name. *Consequences.* =cfg.x= in
 a rule is two literals (=env(E)=, =setting(E, .x, V)=); a reader who wants
 the join has to know that =let= is textual.
@@ -811,7 +811,7 @@ that reads it to the place that uses it.
 | iam.df | 18 | 15 (-17%) | 99 | 74 (-25%) | 0 | 0 |
 | baseline.df | 21 | 20 (-5%) | 217 | 140 (-35%) | 0 | 0 |
 | stdlib_net.df | 14 | 10 (-29%) | 122 | 60 (-51%) | 3 | 0 |
-| pngu.df | 148 | 115 (-23%) | 888 | 535 (-40%) | 26 | 0 |
+| gke_platform.df | 148 | 115 (-23%) | 888 | 535 (-40%) | 26 | 0 |
 | dform-advanced.df | 106 | 97 (-9%) | 872 | 726 (-17%) | 7 | 1 |
 | gke_two_phase.df | 86 | 75 (-13%) | 557 | 374 (-33%) | 13 | 2 |
 | bootstrap.df | 58 | 53 (-9%) | 375 | 254 (-32%) | 3 | 0 |
@@ -829,17 +829,17 @@ Where the saving is small it is because the program was already
 relational: =dform-advanced.df= is closures over facts, and =workload.df=
 had no reads to lose and gains lines from a body block and the qualified
 names its three =web= resources force. The saving is largest where
-settings and inputs are read (=pngu.df= -40% tokens, 26 carriers to none),
+settings and inputs are read (=gke_platform.df= -40% tokens, 26 carriers to none),
 which is most real configuration.
 
 * 9. Candid section
 
 ** 9.1 Where the new surface is ambiguous
 
-- *Reference or read.* =k8s.namespace.pngu.name= is a reference as a field
+- *Reference or read.* =k8s.namespace.gke_platform.name= is a reference as a field
   value and a read in a clause (G-6). Both are legal in the same block, and
-  the plan prints them differently (=ref(k8s.namespace,pngu,name)= versus
-  ="pngu"=) when the path is configured. No other ambiguity in this
+  the plan prints them differently (=ref(k8s.namespace,gke_platform,name)= versus
+  ="gke_platform"=) when the path is configured. No other ambiguity in this
   proposal changes a plan.
 - *Variable capture by a value name.* Adding =input t: string= to a file
   makes the =t= in =tenant(t, i)= a read of the input: the rule silently
@@ -917,7 +917,7 @@ These go into the LSP ticket, which is gated on this one:
 3. *Null class on references*: an inlay =?fresh=, =?open=, =?secret= from
    the schema on every reference to a computed path, and a mark on reads
    that are content positions over one ("stuck until
-   =gke_cluster.pngu#zones= resolves").
+   =gke_cluster.gke_platform#zones= resolves").
 4. *Hoisting*: on a resource block, a code lens listing the reads its
    fields hoisted into the shared body ("exists only if: =zone_index[z]=,
    =vpc.cidr=").
@@ -960,7 +960,7 @@ These go into the LSP ticket, which is gated on this one:
 
 Known risks, each to be checked when it lands:
 - A =format= in a head argument where today's rule binds by =X = format(..)=
-  (=pngu.df=, =gke_two_phase.df=): same value; confirm =stuck= placement
+  (=gke_platform.df=, =gke_two_phase.df=): same value; confirm =stuck= placement
   and dangling-ref deny placement (=dangling_ref_deny= inserts =not want=
   "as early as the address is bound") do not reach a plan.
 - A top-level =output k = t= with reads becomes a rule (5.1); inside a
@@ -987,7 +987,7 @@ Known risks, each to be checked when it lands:
    Recommended: bare, with the capture lint; this is the closest call in
    the proposal.
 5. *=let= for reference aliases* (G-19), versus writing =settings[env].x=
-   every time (34 times in =pngu.df=).
+   every time (34 times in =gke_platform.df=).
 6. *=not r.p= means "not true", no implied existence* (G-13), versus
    "the resource exists and ...".
 7. *=for= / =if= clauses inside the block* (G-8), versus in the header,

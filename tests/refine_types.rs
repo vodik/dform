@@ -151,7 +151,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     let r = gke(&s, &["plan"]).success();
     assert!(
         r.stdout
-            .contains("  undetermined  len_ge(3) of google.container_cluster pngu.zones  stacks/refine_gke.df:126"),
+            .contains("  undetermined  len_ge(3) of google.container_cluster gke_platform.zones  stacks/refine_gke.df:126"),
         "{}",
         r.stdout
     );
@@ -161,7 +161,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     assert_eq!(r.stdout.matches("plan: ").count(), 1, "{}", r.stdout);
     assert!(
         r.stderr.contains(
-            "refused  google.container_cluster pngu.zones: \
+            "refused  google.container_cluster gke_platform.zones: \
              [\"us-east1-b\", \"us-east1-c\"] violates len_ge(3)\n"
         ) && r.stderr.contains("^ checked here\n")
             && r.stderr
@@ -180,7 +180,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
         [
             "google.compute_address::static_ip",
             "google.compute_subnetwork::gke_subnet",
-            "google.container_cluster::pngu",
+            "google.container_cluster::gke_platform",
         ]
     );
 }

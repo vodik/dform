@@ -303,7 +303,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            kinds("cfg.gke.\"pngu-grpc\".type f[0].x"),
+            kinds("cfg.gke.\"gke-platform-grpc\".type f[0].x"),
             vec![
                 IDENT, DOT, IDENT, DOT, STRING, DOT, TYPE_KW, IDENT, L_BRACKET, INT, R_BRACKET,
                 DOT, IDENT

@@ -269,7 +269,7 @@ fn the_string_capture_leaves_an_interpolation_to_code() {
 }
 
 /// Proposal G, G-6: a dot in a field's value is a reference, in a rule body
-/// or a clause a read. tour.df, dform.df and pngu.df have both: `backup_days =
+/// or a clause a read. tour.df, dform.df and gke_platform.df have both: `backup_days =
 /// database.backup_days` in a block, `a = network[ia].vpc` in a rule body.
 #[test]
 fn the_reference_capture_is_on_field_values_and_not_on_reads() {
@@ -277,7 +277,7 @@ fn the_reference_capture_is_on_field_values_and_not_on_reads() {
     for file in [
         "examples/tour/stacks/tour.df",
         "examples/demo/stacks/dform.df",
-        "examples/pngu/stacks/pngu.df",
+        "examples/gke-platform/stacks/gke_platform.df",
     ] {
         let src = std::fs::read_to_string(repo().join(file)).unwrap();
         let tree = ts_parse(&src);

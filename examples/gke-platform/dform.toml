@@ -1,10 +1,10 @@
-# The pngu project's root (docs/layout.md).
+# The gke-platform project's root (docs/layout.md).
 
 [project]
-name = "pngu"
+name = "gke-platform"
 edition = "2026"
 
 # Each env deploys into its own project, so a name that does not vary by
 # env does not collide.
-[stacks.pngu]
+[stacks.gke_platform]
 isolated = true

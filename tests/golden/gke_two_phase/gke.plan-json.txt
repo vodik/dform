@@ -15,13 +15,13 @@ exit: ok
       "on": [
         {
           "class": "open",
-          "null": "google.container_cluster[\"pngu\"].zones"
+          "null": "google.container_cluster[\"gke_platform\"].zones"
         }
       ],
       "reason": "reads undetermined aggregate zone_count",
       "site": {
         "at": "stacks/gke_two_phase.df:100",
-        "statement": "deny \"cluster must be in at least two zones\" { cluster: \"pngu\" } where \"pngu\" in google.container_cluster, zone_count(n), n < 2"
+        "statement": "deny \"cluster must be in at least two zones\" { cluster: \"gke_platform\" } where \"gke_platform\" in google.container_cluster, zone_count(n), n < 2"
       },
       "status": "undetermined"
     }
@@ -38,7 +38,7 @@ exit: ok
       "text": "cluster must be in at least two zones",
       "undetermined": [
         {
-          "of": "google.container_cluster pngu",
+          "of": "google.container_cluster gke_platform",
           "until": "until zones is known (tick 2)"
         }
       ]
@@ -48,7 +48,7 @@ exit: ok
       "fails": [],
       "hold": 1,
       "holds": [
-        "google.container_cluster pngu"
+        "google.container_cluster gke_platform"
       ],
       "mark": "holds",
       "text": "cluster must not be deletable",
@@ -183,7 +183,7 @@ exit: ok
           "type": "google.compute_subnetwork"
         },
         {
-          "address": "google.container_cluster[\"pngu\"]",
+          "address": "google.container_cluster[\"gke_platform\"]",
           "because": null,
           "changes": [
             {
@@ -194,7 +194,7 @@ exit: ok
               "site": {
                 "at": "stacks/gke_two_phase.df:62",
                 "entry": "deletion_protection = true",
-                "statement": "resource google.container_cluster pngu { .. deletion_protection = true } where project(id, name, _, net_id)",
+                "statement": "resource google.container_cluster gke_platform { .. deletion_protection = true } where project(id, name, _, net_id)",
                 "with": [
                   "id = \"renfry-dev-973682\"",
                   "name = \"renfry-dev\"",
@@ -232,7 +232,7 @@ exit: ok
               "site": {
                 "at": "stacks/gke_two_phase.df:57",
                 "entry": "name = \"${name}-gke\"",
-                "statement": "resource google.container_cluster pngu { .. name = \"${name}-gke\" .. } where project(id, name, _, net_id)",
+                "statement": "resource google.container_cluster gke_platform { .. name = \"${name}-gke\" .. } where project(id, name, _, net_id)",
                 "with": [
                   "id = \"renfry-dev-973682\"",
                   "name = \"renfry-dev\"",
@@ -248,7 +248,7 @@ exit: ok
               "site": {
                 "at": "stacks/gke_two_phase.df:58",
                 "entry": "network_id = net_id",
-                "statement": "resource google.container_cluster pngu { .. network_id = net_id .. } where project(id, name, _, net_id)",
+                "statement": "resource google.container_cluster gke_platform { .. network_id = net_id .. } where project(id, name, _, net_id)",
                 "with": [
                   "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\"",
                   "id = \"renfry-dev-973682\"",
@@ -264,7 +264,7 @@ exit: ok
               "site": {
                 "at": "stacks/gke_two_phase.df:61",
                 "entry": "node_locations = [ z | zone_at(i, z), i <= zones ]",
-                "statement": "resource google.container_cluster pngu { .. node_locations = [ z | zone_at(i, z), i <= zones ] .. } where project(id, name, _, net_id)",
+                "statement": "resource google.container_cluster gke_platform { .. node_locations = [ z | zone_at(i, z), i <= zones ] .. } where project(id, name, _, net_id)",
                 "with": [
                   "id = \"renfry-dev-973682\"",
                   "name = \"renfry-dev\"",
@@ -280,7 +280,7 @@ exit: ok
               "site": {
                 "at": "stacks/gke_two_phase.df:61",
                 "entry": "node_locations = [ z | zone_at(i, z), i <= zones ]",
-                "statement": "resource google.container_cluster pngu { .. node_locations = [ z | zone_at(i, z), i <= zones ] .. } where project(id, name, _, net_id)",
+                "statement": "resource google.container_cluster gke_platform { .. node_locations = [ z | zone_at(i, z), i <= zones ] .. } where project(id, name, _, net_id)",
                 "with": [
                   "id = \"renfry-dev-973682\"",
                   "name = \"renfry-dev\"",
@@ -296,7 +296,7 @@ exit: ok
               "site": {
                 "at": "stacks/gke_two_phase.df:56",
                 "entry": "project_id = id",
-                "statement": "resource google.container_cluster pngu { .. project_id = id .. } where project(id, name, _, net_id)",
+                "statement": "resource google.container_cluster gke_platform { .. project_id = id .. } where project(id, name, _, net_id)",
                 "with": [
                   "id = \"renfry-dev-973682\"",
                   "name = \"renfry-dev\"",
@@ -315,7 +315,7 @@ exit: ok
               "site": {
                 "at": "stacks/gke_two_phase.df:59",
                 "entry": "subnetwork = gke_subnet",
-                "statement": "resource google.container_cluster pngu { .. subnetwork = gke_subnet .. } where project(id, name, _, net_id)",
+                "statement": "resource google.container_cluster gke_platform { .. subnetwork = gke_subnet .. } where project(id, name, _, net_id)",
                 "with": [
                   "id = \"renfry-dev-973682\"",
                   "name = \"renfry-dev\"",
@@ -325,10 +325,10 @@ exit: ok
             }
           ],
           "kind": "create",
-          "name": "pngu",
+          "name": "gke_platform",
           "site": {
             "at": "stacks/gke_two_phase.df:54",
-            "statement": "resource google.container_cluster pngu { .. } where project(id, name, _, net_id)",
+            "statement": "resource google.container_cluster gke_platform { .. } where project(id, name, _, net_id)",
             "with": [
               "id = \"renfry-dev-973682\"",
               "name = \"renfry-dev\"",
@@ -342,14 +342,14 @@ exit: ok
           "because": null,
           "changes": [
             {
-              "after": "pngu-grpc",
+              "after": "gke-platform-grpc",
               "before": null,
               "op": "set",
               "path": "name",
               "site": {
                 "at": "stacks/gke_two_phase.df:50",
-                "entry": "name = \"pngu-grpc\"",
-                "statement": "resource google.compute_address static_ip { .. name = \"pngu-grpc\" .. } where project(id, _, region, _)",
+                "entry": "name = \"gke-platform-grpc\"",
+                "statement": "resource google.compute_address static_ip { .. name = \"gke-platform-grpc\" .. } where project(id, _, region, _)",
                 "with": [
                   "id = \"renfry-dev-973682\"",
                   "region = \"us-east1\""
@@ -431,16 +431,16 @@ exit: ok
           "because": null,
           "changes": [
             {
-              "after": "pngu",
+              "after": "gke_platform",
               "before": null,
               "op": "set",
               "path": "metadata.namespace",
               "site": {
                 "at": "stacks/gke_two_phase.df:78",
                 "entry": "metadata.namespace = ns",
-                "statement": "resource k8s.deployment api { metadata.namespace = ns .. } where ns = k8s.namespace[\"pngu\"].metadata.name",
+                "statement": "resource k8s.deployment api { metadata.namespace = ns .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
-                  "ns = \"pngu\""
+                  "ns = \"gke_platform\""
                 ]
               }
             },
@@ -452,9 +452,9 @@ exit: ok
               "site": {
                 "at": "stacks/gke_two_phase.df:79",
                 "entry": "spec.replicas = 3",
-                "statement": "resource k8s.deployment api { .. spec.replicas = 3 .. } where ns = k8s.namespace[\"pngu\"].metadata.name",
+                "statement": "resource k8s.deployment api { .. spec.replicas = 3 .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
-                  "ns = \"pngu\""
+                  "ns = \"gke_platform\""
                 ]
               }
             },
@@ -466,9 +466,9 @@ exit: ok
               "site": {
                 "at": "stacks/gke_two_phase.df:80",
                 "entry": "spec.selector.matchLabels = { app: \"api\" }",
-                "statement": "resource k8s.deployment api { .. spec.selector.matchLabels = { app: \"api\" } .. } where ns = k8s.namespace[\"pngu\"].metadata.name",
+                "statement": "resource k8s.deployment api { .. spec.selector.matchLabels = { app: \"api\" } .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
-                  "ns = \"pngu\""
+                  "ns = \"gke_platform\""
                 ]
               }
             },
@@ -480,9 +480,9 @@ exit: ok
               "site": {
                 "at": "stacks/gke_two_phase.df:81",
                 "entry": "spec.template.metadata.labels = { app: \"api\" }",
-                "statement": "resource k8s.deployment api { .. spec.template.metadata.labels = { app: \"api\" } .. } where ns = k8s.namespace[\"pngu\"].metadata.name",
+                "statement": "resource k8s.deployment api { .. spec.template.metadata.labels = { app: \"api\" } .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
-                  "ns = \"pngu\""
+                  "ns = \"gke_platform\""
                 ]
               }
             },
@@ -494,9 +494,9 @@ exit: ok
               "site": {
                 "at": "stacks/gke_two_phase.df:82",
                 "entry": "spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/renfry/api:1.42\" }]",
-                "statement": "resource k8s.deployment api { .. spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/renfry/api:1.42\" }] } where ns = k8s.namespace[\"pngu\"].metadata.name",
+                "statement": "resource k8s.deployment api { .. spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/renfry/api:1.42\" }] } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
-                  "ns = \"pngu\""
+                  "ns = \"gke_platform\""
                 ]
               }
             },
@@ -508,9 +508,9 @@ exit: ok
               "site": {
                 "at": "stacks/gke_two_phase.df:82",
                 "entry": "spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/renfry/api:1.42\" }]",
-                "statement": "resource k8s.deployment api { .. spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/renfry/api:1.42\" }] } where ns = k8s.namespace[\"pngu\"].metadata.name",
+                "statement": "resource k8s.deployment api { .. spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/renfry/api:1.42\" }] } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
-                  "ns = \"pngu\""
+                  "ns = \"gke_platform\""
                 ]
               }
             }
@@ -519,34 +519,34 @@ exit: ok
           "name": "api",
           "site": {
             "at": "stacks/gke_two_phase.df:77",
-            "statement": "resource k8s.deployment api { .. } where ns = k8s.namespace[\"pngu\"].metadata.name",
+            "statement": "resource k8s.deployment api { .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
             "with": [
-              "ns = \"pngu\""
+              "ns = \"gke_platform\""
             ]
           },
           "type": "k8s.deployment"
         },
         {
-          "address": "k8s.namespace[\"pngu\"]",
+          "address": "k8s.namespace[\"gke_platform\"]",
           "because": null,
           "changes": [
             {
-              "after": "pngu",
+              "after": "gke_platform",
               "before": null,
               "op": "set",
               "path": "metadata.name",
               "site": {
                 "at": "stacks/gke_two_phase.df:74",
-                "entry": "metadata.name = \"pngu\"",
-                "statement": "k8s.namespace pngu.metadata = {name: \"pngu\"}"
+                "entry": "metadata.name = \"gke-platform\"",
+                "statement": "k8s.namespace gke_platform.metadata = {name: \"gke-platform\"}"
               }
             }
           ],
           "kind": "create",
-          "name": "pngu",
+          "name": "gke_platform",
           "site": {
             "at": "stacks/gke_two_phase.df:74",
-            "statement": "k8s.namespace pngu"
+            "statement": "k8s.namespace gke_platform"
           },
           "type": "k8s.namespace"
         },
@@ -564,23 +564,23 @@ exit: ok
               "site": {
                 "at": "stacks/gke_two_phase.df:87",
                 "entry": "data = { password: google.secret_manager_secret_version[\"db_pw\"].secret_data }",
-                "statement": "resource k8s.secret db_credentials { .. data = { password: google.secret_manager_secret_version[\"db_pw\"].secret_data } } where ns = k8s.namespace[\"pngu\"].metadata.name",
+                "statement": "resource k8s.secret db_credentials { .. data = { password: google.secret_manager_secret_version[\"db_pw\"].secret_data } } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
-                  "ns = \"pngu\""
+                  "ns = \"gke_platform\""
                 ]
               }
             },
             {
-              "after": "pngu",
+              "after": "gke_platform",
               "before": null,
               "op": "set",
               "path": "metadata.namespace",
               "site": {
                 "at": "stacks/gke_two_phase.df:86",
                 "entry": "metadata.namespace = ns",
-                "statement": "resource k8s.secret db_credentials { metadata.namespace = ns .. } where ns = k8s.namespace[\"pngu\"].metadata.name",
+                "statement": "resource k8s.secret db_credentials { metadata.namespace = ns .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
-                  "ns = \"pngu\""
+                  "ns = \"gke_platform\""
                 ]
               }
             }
@@ -589,9 +589,9 @@ exit: ok
           "name": "db_credentials",
           "site": {
             "at": "stacks/gke_two_phase.df:85",
-            "statement": "resource k8s.secret db_credentials { .. } where ns = k8s.namespace[\"pngu\"].metadata.name",
+            "statement": "resource k8s.secret db_credentials { .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
             "with": [
-              "ns = \"pngu\""
+              "ns = \"gke_platform\""
             ]
           },
           "type": "k8s.secret"
@@ -607,14 +607,14 @@ exit: ok
           "on": [
             {
               "class": "open",
-              "null": "google.container_cluster[\"pngu\"].zones"
+              "null": "google.container_cluster[\"gke_platform\"].zones"
             }
           ],
           "reads": null,
           "reason": "member/2 over a null list",
           "site": {
             "at": "stacks/gke_two_phase.df:91",
-            "statement": "resource google.container_node_pool \"np-${z}\" { .. } where z in google.container_cluster[\"pngu\"].zones"
+            "statement": "resource google.container_node_pool \"np-${z}\" { .. } where z in google.container_cluster[\"gke_platform\"].zones"
           }
         }
       ],
@@ -622,15 +622,15 @@ exit: ok
       "waits_on": [
         {
           "class": "open",
-          "null": "google.container_cluster[\"pngu\"].ca_certificate"
+          "null": "google.container_cluster[\"gke_platform\"].ca_certificate"
         },
         {
           "class": "open",
-          "null": "google.container_cluster[\"pngu\"].endpoint"
+          "null": "google.container_cluster[\"gke_platform\"].endpoint"
         },
         {
           "class": "open",
-          "null": "google.container_cluster[\"pngu\"].zones"
+          "null": "google.container_cluster[\"gke_platform\"].zones"
         }
       ]
     }

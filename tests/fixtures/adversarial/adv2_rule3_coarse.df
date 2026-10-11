@@ -1,16 +1,16 @@
 # adv2: Rule 3 coarseness. One rule with head `want` is stuck (the nodepool,
-# on ?google.container_cluster/pngu#zones). An UNRELATED negation over `want` and an
+# on ?google.container_cluster/gke_platform#zones). An UNRELATED negation over `want` and an
 # UNRELATED aggregate over `want` must not become undetermined.
 # Run with --provider gke --provider k8s.
 
-resource google.container_cluster pngu { name = "pngu-gke" }
+resource google.container_cluster gke_platform { name = "gke-platform-gke" }
 
 resource google.container_node_pool "${np}" {
-  cluster = ref("google.container_cluster", "pngu", "id")
+  cluster = ref("google.container_cluster", "gke_platform", "id")
   zone = z
-} where arg("google.container_cluster", "pngu", "zones", zs), z in zs, np = str.format("np-%s", z)
+} where arg("google.container_cluster", "gke_platform", "zones", zs), z in zs, np = str.format("np-%s", z)
 
-resource k8s.namespace pngu { metadata.name = "pngu" }
+resource k8s.namespace gke_platform { metadata.name = "gke-platform" }
 
 # Unrelated negation over want (different type): decidable now.
 deny "namespace without deployment" { ns: n } where n in k8s.namespace, not n in k8s.deployment
@@ -18,11 +18,11 @@ deny "namespace without deployment" { ns: n } where n in k8s.namespace, not n in
 # Unrelated aggregate over want (different type): decidable now.
 ns_count(l) where l = collect_set(n), n in k8s.namespace
 
-deny "need the pngu namespace" where ns_count(l), not "pngu" in l
+deny "need the gke_platform namespace" where ns_count(l), not "gke_platform" in l
 
 # Related negation (same type as the stuck head): correctly undetermined.
 deny "no nodepool in zone b" where {
-  "pngu" in google.container_cluster
+  "gke_platform" in google.container_cluster
   not "np-us-east1-b" in google.container_node_pool
 }
 

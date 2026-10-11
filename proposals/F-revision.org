@@ -108,19 +108,19 @@ and said "I would ship coarse and measure". Measured, on C's GKE example (E
 
 #+begin_example
    Rule 3 (negations and aggregates):                                       coarse   per-key
-     rule #37 (deny): not arg("gke_cluster", "pngu", "deletion_protection", true)   UNDET    ok
+     rule #37 (deny): not arg("gke_cluster", "gke_platform", "deletion_protection", true)  UNDET    ok
      rule #36 (deny): reads stuck aggregate zone_count(_)                          UNDET    UNDET
-     rule #35 aggregate zone_count over arg("gke_cluster", "pngu", "zones", _)     UNDET    ok
+     rule #35 aggregate zone_count over arg("gke_cluster", "gke_platform", "zones", _)  UNDET    ok
    Rule 3 (attr aggregate groups):                                          coarse   per-key
-     attr group arg("gke_cluster", "pngu", _, _)                                   UNDET    ok
+     attr group arg("gke_cluster", "gke_platform", _, _)                           UNDET    ok
      attr group arg("google_compute_address", "static_ip", _, _)                   UNDET    ok
      attr group arg("google_compute_subnetwork", "gke_subnet", _, _)               UNDET    ok
      attr group arg("k8s.deployment", "api", _, _)                                 UNDET    ok
-     attr group arg("k8s.namespace", "pngu", _, _)                                 UNDET    ok
+     attr group arg("k8s.namespace", "gke_platform", _, _)                         UNDET    ok
      attr group arg("k8s.secret", "db_credentials", _, _)                          UNDET    ok
 #+end_example
 
-The nodepool rule is stuck on =?gke_cluster/pngu#zones=. Its lowered form is
+The nodepool rule is stuck on =?gke_cluster/gke_platform#zones=. Its lowered form is
 five rules: one with head =want= and four with head =arg= (one per field).
 Under coarse Rule 3, "an aggregate over =p= is undetermined while any
 =p=-rule instance is stuck", and =attr= is an aggregate over =arg=. So every
@@ -267,8 +267,8 @@ of every wanted =(T, A)=. In the simulation this shows up as every document
 carrying its own ids:
 
 #+begin_example
- + gke_cluster pngu   carries ?gke_cluster/pngu#ca_certificate ?gke_cluster/pngu#endpoint
-                              ?gke_cluster/pngu#id ?gke_cluster/pngu#zones ?google_compute_subnetwork/gke_subnet#id
+ + gke_cluster gke_platform  carries ?gke_cluster/gke_platform#ca_certificate ?gke_cluster/gke_platform#endpoint
+                              ?gke_cluster/gke_platform#id ?gke_cluster/gke_platform#zones ?google_compute_subnetwork/gke_subnet#id
 #+end_example
 
 Two consequences E does not spell out. First, =assemble(T, A)= in §2.8 must
@@ -396,13 +396,13 @@ pretty-printed text. This is a dependency, not a finding against E; it
 puts the parser rewrite (E §9 item 2) squarely before any diagnostic in
 §2.6 can be what E describes.
 
-** F12 HEAD's =pngu.df= does not parse
+** F12 HEAD's =gke_platform.df= does not parse
 
-The committed =pngu.df= (58f9fde) has object fields without commas inside
+The committed =gke_platform.df= (58f9fde) has object fields without commas inside
 =settings ... { gke = { ... } }= and fails at =57:5 expected add_op or
 mul_op=; the uncommitted working copy has the commas and parses. F used
 the working copy. Housekeeping, but a review that claims to have run
-=pngu.df= should say which one.
+=gke_platform.df= should say which one.
 
 ** F13 =adopt_demo.df= produces zero resources, silently
 
@@ -619,7 +619,7 @@ env=prod= where the program has environments.
 |-----------------------------+--------------+-----------+--------+---------+------------+-----------+----------+----------------+--------------------------|
 | dform.df (+modules,+policy) | REJECTED     | ok        |     11 |       0 |         14 |         0 |        0 |              0 | 14 creates / 11 updates = planner |
 | dform-advanced.df           | ok           | ok        |      6 |       0 |         20 |         0 |        0 |              0 | not run (no fixture)     |
-| pngu.df (working copy)      | ok           | ok        |      4 |       0 |          6 |         0 |        0 |              0 | not run                  |
+| gke_platform.df (working copy)  | ok       | ok        |      4 |       0 |          6 |         0 |        0 |              0 | not run                  |
 | examples/decl_demo.df       | ok           | ok        |      2 |       0 |          0 |         0 |        0 |              0 | n/a (no resources)       |
 | examples/adopt_demo.df      | ok           | ok        |      8 |       0 |          0 |         0 |        0 |              0 | n/a (F13: zero resources)|
 
@@ -665,7 +665,7 @@ happen; "F observed" is what the code did under the revised rules.
 | # | File                                    | Attacks                                              | E predicts                         | F observed                                                                 |
 |---+-----------------------------------------+------------------------------------------------------+------------------------------------+----------------------------------------------------------------------------|
 | 1 | (lattice test =adv1=)                   | same-rank Stuck at a losing rank                     | E: Stuck; E §10: "will wait"       | E =collapse=: Stuck at Default. F =collapse_shadow_aware=: Val at Normal, shadowed Stuck warned. Order-independent. |
-| 2 | =adv2_rule3_coarse.df=                  | Rule 3 coarseness                                    | coarse: undetermined; per-key: not | =not want(k8s.deployment, pngu)=: coarse UNDET / per-key ok. =ns_count= over =want(k8s.namespace)=: coarse UNDET / per-key ok. =not want(gke_nodepool, "np-us-east1-b")=: UNDET / UNDET (correct). |
+| 2 | =adv2_rule3_coarse.df=                  | Rule 3 coarseness                                    | coarse: undetermined; per-key: not | =not want(k8s.deployment, gke_platform)=: coarse UNDET / per-key ok. =ns_count= over =want(k8s.namespace)=: coarse UNDET / per-key ok. =not want(gke_nodepool, "np-us-east1-b")=: UNDET / UNDET (correct). |
 | 3 | =adv3_pack_reads_other_path.df=         | pack reads =attr(iam.policy, .name)=, writes =.statements= | compiles (A's baseline example) | STRATIFIED, 4 strata; =(arg, iam.policy, statements)= above =(attr, iam.policy, name)=. |
 | 3b| =adv3b_pack_reads_same_path.df=         | pack reads the path it writes                        | rejected                           | REJECTED: scc ={(arg, iam.policy, statements), (attr, iam.policy, statements)}=, rule text printed. |
 | 4 | =adv4_variable_path_writer.df=          | =(arg, *, *)= writer that reads =attr(_, cidr)=      | rejected ("reads no attribute")    | REJECTED: scc ={arg, attr, (attr, net.vpc, cidr)}=.                        |
@@ -697,18 +697,18 @@ definite (E §2.8: "a create whose Doc carries a null is still a create").
 
 #+begin_example
    stuck instances: 6
-     - rule #30 head want("gke_nodepool", _) stuck on ?gke_cluster/pngu#zones  [member/2 over a null list]
+     - rule #30 head want("gke_nodepool", _) stuck on ?gke_cluster/gke_platform#zones  [member/2 over a null list]
      - rule #31 head arg("gke_nodepool", _, "cluster", _) ... #32 "zone" ... #33 "min" ... #34 "max"   (same)
-     - rule #35 head zone_count(_) stuck on ?gke_cluster/pngu#zones  [member/2 over a null list]
-   sections under coarse Rule 3: blocking = {?gke_cluster/pngu#zones}
-     definite (3): gke_cluster pngu, google_compute_address static_ip, google_compute_subnetwork gke_subnet
-     pending (3): k8s.deployment api, k8s.namespace pngu, k8s.secret db_credentials   (provider kubernetes carries phase-1 nulls)
-       ? want("gke_nodepool", _)  x unknown, on ?gke_cluster/pngu#zones
+     - rule #35 head zone_count(_) stuck on ?gke_cluster/gke_platform#zones  [member/2 over a null list]
+   sections under coarse Rule 3: blocking = {?gke_cluster/gke_platform#zones}
+     definite (3): gke_cluster gke_platform, google_compute_address static_ip, google_compute_subnetwork gke_subnet
+     pending (3): k8s.deployment api, k8s.namespace gke_platform, k8s.secret db_credentials  (provider kubernetes carries phase-1 nulls)
+       ? want("gke_nodepool", _)  x unknown, on ?gke_cluster/gke_platform#zones
      undetermined (2):
        ? deny "cluster must be in at least two zones"      (reads stuck aggregate zone_count)
        ? deny "cluster must not be deletable"              (SPURIOUS: an unrelated arg rule is stuck)
      [and every attr group UNDET, so under E's desired/3 the definite section is empty]
-   sections under per-key Rule 3: blocking = {?gke_cluster/pngu#zones}
+   sections under per-key Rule 3: blocking = {?gke_cluster/gke_platform#zones}
      definite (3): same three
      pending (3): same three, plus the nodepool group
      undetermined (1):
@@ -901,18 +901,18 @@ what it attacks and what E predicts.
 
 #+begin_src prolog
 # adv2_rule3_coarse.df
-resource gke_cluster pngu { name = "pngu-gke" }.
+resource gke_cluster gke_platform { name = "gke-platform-gke" }.
 resource gke_nodepool Np {
-  cluster = ref(gke_cluster, pngu, id), zone = Z
-} :- arg(gke_cluster, pngu, zones, Zs), member(Zs, Z), Np = format("np-%s", Z).
-resource k8s.namespace pngu { name = "pngu" }.
+  cluster = ref(gke_cluster, gke_platform, id), zone = Z
+} :- arg(gke_cluster, gke_platform, zones, Zs), member(Zs, Z), Np = format("np-%s", Z).
+resource k8s.namespace gke_platform { name = "gke-platform" }.
 # Unrelated negation over want (different type): decidable now.
 deny("namespace without deployment", { ns: N }) :- want(k8s.namespace, N), not want(k8s.deployment, N).
 # Unrelated aggregate over want (different type): decidable now.
 ns_count(collect_set(N)) :- want(k8s.namespace, N).
-deny("need the pngu namespace") :- ns_count(L), not member(L, pngu).
+deny("need the gke_platform namespace") :- ns_count(L), not member(L, gke_platform).
 # Related negation (same type as the stuck head): correctly undetermined.
-deny("no nodepool in zone b") :- want(gke_cluster, pngu), not want(gke_nodepool, "np-us-east1-b").
+deny("no nodepool in zone b") :- want(gke_cluster, gke_platform), not want(gke_nodepool, "np-us-east1-b").
 #+end_src
 
 #+begin_src prolog
@@ -959,15 +959,15 @@ arg_add(T, N, "tags", { team: platform }) :- want(T, N), not arg(T, N, tags, { t
 #+begin_src prolog
 # gke_two_phase.df  (E §7.4 in the current syntax; schema::gke() gives the classes)
 provider_config(kubernetes, {
-  host: ref(gke_cluster, pngu, endpoint), ca: ref(gke_cluster, pngu, ca_certificate),
+  host: ref(gke_cluster, gke_platform, endpoint), ca: ref(gke_cluster, gke_platform, ca_certificate),
   token: ref(google.client_config, current, access_token) }).
-resource k8s.namespace pngu { name = "pngu" }.
-resource k8s.deployment api { namespace = Ns, image = "gcr.io/renfry/api:1.42", replicas = 3 } :- arg(k8s.namespace, pngu, name, Ns).
-resource k8s.secret db_credentials { namespace = Ns, data = { password: ref(google.secret_manager_secret_version, db_pw, secret_data) } } :- arg(k8s.namespace, pngu, name, Ns).
-resource gke_nodepool Np { cluster = ref(gke_cluster, pngu, id), zone = Z, min = 1, max = 3 } :-
-  arg(gke_cluster, pngu, zones, Zs), member(Zs, Z), Np = format("np-%s", Z).
-zone_count(count(Z)) :- arg(gke_cluster, pngu, zones, Zs), member(Zs, Z).
-deny("cluster must be in at least two zones", { cluster: pngu }) :- want(gke_cluster, pngu), zone_count(N), N < 2.
+resource k8s.namespace gke_platform { name = "gke-platform" }.
+resource k8s.deployment api { namespace = Ns, image = "gcr.io/renfry/api:1.42", replicas = 3 } :- arg(k8s.namespace, gke_platform, name, Ns).
+resource k8s.secret db_credentials { namespace = Ns, data = { password: ref(google.secret_manager_secret_version, db_pw, secret_data) } } :- arg(k8s.namespace, gke_platform, name, Ns).
+resource gke_nodepool Np { cluster = ref(gke_cluster, gke_platform, id), zone = Z, min = 1, max = 3 } :-
+  arg(gke_cluster, gke_platform, zones, Zs), member(Zs, Z), Np = format("np-%s", Z).
+zone_count(count(Z)) :- arg(gke_cluster, gke_platform, zones, Zs), member(Zs, Z).
+deny("cluster must be in at least two zones", { cluster: gke_platform }) :- want(gke_cluster, gke_platform), zone_count(N), N < 2.
 deny("cluster must not be deletable", { cluster: C }) :- want(gke_cluster, C), not arg(gke_cluster, C, deletion_protection, true).
 #+end_src
 
@@ -978,7 +978,7 @@ accepts yet and which the lattice tests stand in for:
 # adv1: same-rank Stuck at a losing rank
 module cp { input cidr: inet = ref(alloc.pool, cp, .next) @default. }.     # allocator's open null, @default
 settings E @default { cp.cidr = inet("10.0.0.0/28") } :- env_name(E).       # a second @default that might disagree
-resource gke.cluster pngu { master_control_plane_cidr = inet("172.16.3.96/28") }.   # normal: wins
+resource gke.cluster gke_platform { master_control_plane_cidr = inet("172.16.3.96/28") }.  # normal: wins
 # E: the cluster is Stuck on ?alloc.pool/cp#next. F: definite, warn(attr_shadowed).
 
 # adv6: a refinement on a cell whose only contribution is a secret null

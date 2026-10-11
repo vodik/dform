@@ -850,13 +850,13 @@ mod tests {
         // attr_conflict is derived naming the schema and the contributor.
         let mut c = Circuit::default();
         let base = c.leaf(Leaf::Base {
-            span: "pngu.df:70".into(),
+            span: "gke_platform.df:70".into(),
         });
         let alloc_rule = c.leaf(Leaf::Rule {
-            id: "pngu.df:88".into(),
+            id: "gke_platform.df:88".into(),
         });
         let schema = c.leaf(Leaf::Schema {
-            span: "pngu.df:31 control_plane_cidr: inet where prefix_len = 28".into(),
+            span: "gke_platform.df:31 control_plane_cidr: inet where prefix_len = 28".into(),
         });
         let agg = c.leaf(Leaf::Rule {
             id: "prelude:attr-aggregate".into(),
@@ -867,7 +867,7 @@ mod tests {
             "arg",
             vec![
                 s("gke.cluster"),
-                s("pngu"),
+                s("gke_platform"),
                 s(".master_control_plane_cidr"),
                 open(nu),
                 s("normal"),
@@ -879,7 +879,7 @@ mod tests {
             "attr",
             vec![
                 s("gke.cluster"),
-                s("pngu"),
+                s("gke_platform"),
                 s(".master_control_plane_cidr"),
                 open(nu),
             ],
@@ -893,7 +893,7 @@ mod tests {
             "attr",
             vec![
                 s("google.monitoring_dashboard"),
-                s("pngu"),
+                s("gke_platform"),
                 s(".note"),
                 open(nu),
             ],
@@ -919,7 +919,7 @@ mod tests {
             "attr",
             vec![
                 s("gke.cluster"),
-                s("pngu"),
+                s("gke_platform"),
                 s(".master_control_plane_cidr"),
                 bad.clone(),
             ],
@@ -940,7 +940,7 @@ mod tests {
             "attr",
             vec![
                 s("google.monitoring_dashboard"),
-                s("pngu"),
+                s("gke_platform"),
                 s(".note"),
                 bad.clone(),
             ],
@@ -953,7 +953,7 @@ mod tests {
             "arg",
             vec![
                 s("gke.cluster"),
-                s("pngu"),
+                s("gke_platform"),
                 s(".master_control_plane_cidr"),
                 bad.clone(),
                 s("normal"),
@@ -969,7 +969,7 @@ mod tests {
             "attr_conflict",
             vec![
                 s("gke.cluster"),
-                s("pngu"),
+                s("gke_platform"),
                 s(".master_control_plane_cidr"),
                 Value::Int(a.iter().next().copied().unwrap() as i64),
                 Value::Int(b.iter().next().copied().unwrap() as i64),
@@ -979,10 +979,10 @@ mod tests {
         c.derive(conflict.clone(), vec![agg, schema, resolved_arg_id, wl]);
         let why = leaves(&c.why(&conflict));
         assert!(why.contains(&Leaf::Schema {
-            span: "pngu.df:31 control_plane_cidr: inet where prefix_len = 28".into()
+            span: "gke_platform.df:31 control_plane_cidr: inet where prefix_len = 28".into()
         }));
         assert!(why.contains(&Leaf::Rule {
-            id: "pngu.df:88".into()
+            id: "gke_platform.df:88".into()
         }));
         assert!(why.contains(&world));
         assert!(c.phase(&conflict).is_empty(), "the conflict is definite");

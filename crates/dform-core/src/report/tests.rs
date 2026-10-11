@@ -36,7 +36,7 @@ fn a_refusal_says_its_bindings_never_its_json() {
         r#"image not pinned ctx={"image":"traefik:v3.7","replicas":2}"#.to_string(),
         r#"image not pinned ctx={"image":"nginx","replicas":1}"#.to_string(),
         r#"no owner ctx={"of":"ref(net.vpc,main,)"}"#.to_string(),
-        "need the pngu namespace".to_string(),
+        "need the gke_platform namespace".to_string(),
     ];
     let said: Vec<String> = refusals(&vs, &[], &r)
         .iter()
@@ -49,7 +49,7 @@ fn a_refusal_says_its_bindings_never_its_json() {
              └─ image = \"nginx\", replicas = 1\n\
          refused  no owner\n  \
              of = net.vpc main\n\
-         refused  need the pngu namespace\n"
+         refused  need the gke_platform namespace\n"
     );
 }
 

@@ -1,8 +1,8 @@
-===========================
-tests/syntax/ok/e74_pngu.df
-===========================
+===================================
+tests/syntax/ok/e74_gke_platform.df
+===================================
 
-# pngu.df, direction E. The renfry stack for one GCP project per environment.
+# gke_platform.df, direction E. The renfry stack for one GCP project per environment.
 
 input env: enum("dev", "stg", "prod") = "dev"
 decl peering(env: symbol, name: string, peer_network: string)
@@ -30,7 +30,7 @@ type settings {
   }
 }
 
-set { region = "us-east1", gke.static_ips = { "pngu-grpc": { type: "INTERNAL" } } } @default
+set { region = "us-east1", gke.static_ips = { "gke-platform-grpc": { type: "INTERNAL" } } } @default
 
 env_name("dev")
 env_name("stg")
@@ -148,7 +148,7 @@ resource google.compute_address "${s}" {
 # GKE: phase 1
 ########################################
 
-resource gke.cluster pngu {
+resource gke.cluster gke_platform {
   cluster_type = "autopilot-private"
   env = e
   project_id = id
@@ -165,14 +165,14 @@ resource gke.cluster pngu {
 
 # Prod: deletion protection on, at normal rank, over the block's @default.
 # Two ranks, one value each, no conflict. The lifecycle fact is policeable.
-arg("gke.cluster", "pngu", "deletion_protection", true) where env == "prod"
-lifecycle(gke.cluster["pngu"], "prevent_destroy") where env == "prod"
+arg("gke.cluster", "gke_platform", "deletion_protection", true) where env == "prod"
+lifecycle(gke.cluster["gke_platform"], "prevent_destroy") where env == "prod"
 
 deny(
   "prod_deletion_protection",
   "prod cluster must have deletion protection",
-  { cluster: "pngu" },
-) where env == "prod", not attr("gke.cluster", "pngu", "deletion_protection", true)
+  { cluster: "gke_platform" },
+) where env == "prod", not attr("gke.cluster", "gke_platform", "deletion_protection", true)
 
 ########################################
 # Kubernetes: phase 2. The provider is configured from phase-1 nulls.
@@ -184,16 +184,16 @@ deny(
 provider_config(
   "k8s",
   {
-    host: ref("gke.cluster", "pngu", "endpoint"),
-    ca: ref("gke.cluster", "pngu", "ca_certificate"),
+    host: ref("gke.cluster", "gke_platform", "endpoint"),
+    ca: ref("gke.cluster", "gke_platform", "ca_certificate"),
     token: ref(google.client_config, "current", "access_token"),
   },
 )
 
-resource k8s.namespace pngu { name = "pngu" }
+resource k8s.namespace gke_platform { name = "gke-platform" }
 
 resource k8s.deployment api {
-  namespace = ref(k8s.namespace, "pngu", "name") # configured attribute: rewritten to an attr join
+  namespace = ref(k8s.namespace, "gke_platform", "name") # configured attribute: rewritten to an attr join
   image = "gcr.io/renfry/api:1.42"
   replicas = 3
 }
@@ -201,28 +201,28 @@ resource k8s.deployment api {
 # The secret never appears in the store as bytes: the kubernetes provider
 # resolves ?google.secret_manager_secret_version/db_pw#secret_data inside Apply.
 resource k8s.secret db_credentials {
-  namespace = ref(k8s.namespace, "pngu", "name")
+  namespace = ref(k8s.namespace, "gke_platform", "name")
   data = { password: ref(google.secret_manager_secret_version, "db_pw", "secret_data") }
 }
 
 # One node pool per zone the autopilot cluster actually used. .zones is an
 # open null at plan time; member/2 over it is a content position, so this
-# rule is stuck on ?gke.cluster/pngu#zones and the plan prints one pending
+# rule is stuck on ?gke.cluster/gke_platform#zones and the plan prints one pending
 # group of unknown cardinality. After phase 1 it fires once per zone.
 resource gke.nodepool "${np}" {
-  cluster = ref("gke.cluster", "pngu", "id")
+  cluster = ref("gke.cluster", "gke_platform", "id")
   zone = z
   min = 1
   max = 3
-} where attr("gke.cluster", "pngu", "zones", zs), member(zs, z), np = str.format("np-%s", z)
+} where attr("gke.cluster", "gke_platform", "zones", zs), member(zs, z), np = str.format("np-%s", z)
 
 # A policy that cannot be decided at plan time and says so: the aggregate
 # has a stuck instance, so it is undetermined, and the deny is reported as
 # undetermined until phase 1 resolves .zones.
-zone_count(n) where n = count(z), attr("gke.cluster", "pngu", "zones", zs), member(zs, z)
+zone_count(n) where n = count(z), attr("gke.cluster", "gke_platform", "zones", zs), member(zs, z)
 
-deny("two_zones", "cluster must be in at least two zones", { cluster: "pngu" }) where {
-  want("gke.cluster", "pngu")
+deny("two_zones", "cluster must be in at least two zones", { cluster: "gke_platform" }) where {
+  want("gke.cluster", "gke_platform")
   zone_count(n)
   n < 2
 }
@@ -233,10 +233,10 @@ deny("two_zones", "cluster must be in at least two zones", { cluster: "pngu" }) 
 
 use file
 
-resource google.monitoring_dashboard pngu {
+resource google.monitoring_dashboard gke_platform {
   project = id
   dashboard_json = dash
-} where project(id, _, _, _), file.json("modules/monitoring/dashboard-pngu.json", dash)
+} where project(id, _, _, _), file.json("modules/monitoring/dashboard-gke-platform.json", dash)
 
 output("active_env", e) where e = env
 output("project_id", id) where project(id, _, _, _)

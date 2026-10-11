@@ -2,7 +2,7 @@
 //! program. See tests/golden/README.md for the accept workflow.
 //!
 //! Cases: the example projects' stacks (examples/demo across envs,
-//! examples/advanced, examples/pngu across envs, examples/decl,
+//! examples/advanced, examples/gke-platform across envs, examples/decl,
 //! examples/adopt with the discovery inventory, examples/k8s and
 //! examples/aws and examples/gke's two-phase stack, examples/crud-api), and the eight
 //! tests/fixtures/adversarial/*.df programs.
@@ -69,15 +69,15 @@ const CASES: &[Case] = &[
     ),
     Case {
         keys: &["env=dev"],
-        ..case("pngu", "dev", "examples/pngu/stacks/pngu.df")
+        ..case("gke_platform", "dev", "examples/gke-platform/stacks/gke_platform.df")
     },
     Case {
         keys: &["env=stg"],
-        ..case("pngu", "stg", "examples/pngu/stacks/pngu.df")
+        ..case("gke_platform", "stg", "examples/gke-platform/stacks/gke_platform.df")
     },
     Case {
         keys: &["env=prod"],
-        ..case("pngu", "prod", "examples/pngu/stacks/pngu.df")
+        ..case("gke_platform", "prod", "examples/gke-platform/stacks/gke_platform.df")
     },
     case("decl_demo", "default", "examples/decl/stacks/decl_demo.df"),
     Case {

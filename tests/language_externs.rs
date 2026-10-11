@@ -27,7 +27,7 @@ resource db.user app {
 fn scratch() -> Scratch {
     let s = Scratch::project("lang-externs");
     s.write("p.df", P);
-    s.write("dash.json", r#"{"title": "pngu", "panels": [1, 2]}"#);
+    s.write("dash.json", r#"{"title": "gke-platform", "panels": [1, 2]}"#);
     s.write("note.txt", "hello");
     s.write(
         "providers/fake/schema.df",

@@ -114,8 +114,8 @@ const CASES: &[Case] = &[
         stacks: &[one(&["apply"], Apply::Completes)],
     },
     Case {
-        name: "pngu",
-        stacks: &[one(&["apply", "pngu", "env=dev"], Apply::Completes)],
+        name: "gke-platform",
+        stacks: &[one(&["apply", "gke_platform", "env=dev"], Apply::Completes)],
     },
     // Three zones by default; two break the refinement on them.
     Case {
@@ -124,7 +124,7 @@ const CASES: &[Case] = &[
             one(&["apply"], Apply::Completes),
             one(
                 &["apply", "--set", "zones=2"],
-                Apply::Stops("pngu.zones: [\"us-east1-b\", \"us-east1-c\"] violates len_ge(3)"),
+                Apply::Stops("gke_platform.zones: [\"us-east1-b\", \"us-east1-c\"] violates len_ge(3)"),
             ),
         ],
     },
@@ -320,8 +320,8 @@ fn k8s() {
 }
 
 #[test]
-fn pngu() {
-    check("pngu");
+fn gke_platform() {
+    check("gke-platform");
 }
 
 #[test]

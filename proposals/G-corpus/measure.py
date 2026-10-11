@@ -124,7 +124,7 @@ def corpus(directory):
             if buf is not None: buf.append(line[1:] if line.startswith(',') else line)
     return blocks
 
-ORDER="dform.df network.df database.df kubernetes.df iam.df baseline.df stdlib_net.df pngu.df dform-advanced.df gke_two_phase.df bootstrap.df workload.df crud_api.df".split()
+ORDER="dform.df network.df database.df kubernetes.df iam.df baseline.df stdlib_net.df gke_platform.df dform-advanced.df gke_two_phase.df bootstrap.df workload.df crud_api.df".split()
 
 if __name__=='__main__':
     b=corpus(os.path.dirname(os.path.abspath(__file__)))

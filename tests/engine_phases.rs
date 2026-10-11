@@ -13,7 +13,7 @@ tick 1  3 changes
       network = "projects/renfry-dev-973682/glo…l/networks/renfry-dev-network"
       project = "renfry-dev-973682"
       region = "us-east1"
-  + google.container_cluster pngu                   stacks/gke_two_phase.df:54
+  + google.container_cluster gke_platform                   stacks/gke_two_phase.df:54
       deletion_protection = true
       env = "dev"                                   stacks/gke_two_phase.df:11
       master_control_plane_cidr = "172.16.3.96/28"  stacks/gke_two_phase.df:28
@@ -23,31 +23,31 @@ tick 1  3 changes
       project_id = "renfry-dev-973682"
       subnetwork = gke_subnet
   + google.compute_address static_ip                stacks/gke_two_phase.df:47
-      name = "pngu-grpc"
+      name = "gke-platform-grpc"
       project = "renfry-dev-973682"
       region = "us-east1"
       subnetwork = gke_subnet
 
 tick 2  3+ changes
-  waits on  pngu.ca_certificate
-            pngu.endpoint
-            pngu.zones
+  waits on  gke_platform.ca_certificate
+            gke_platform.endpoint
+            gke_platform.zones
   + k8s.deployment api                              stacks/gke_two_phase.df:77
-      metadata.namespace = "pngu"
+      metadata.namespace = "gke-platform"
       spec.replicas = 3
       spec.selector.matchLabels.app = "api"
       spec.template.metadata.labels.app = "api"
       spec.template.spec.containers[name=api] = { name: "api", image: "gcr.io/renfry/api:1.42" }
-  + k8s.namespace pngu                              stacks/gke_two_phase.df:74
-      metadata.name = "pngu"
+  + k8s.namespace gke_platform                              stacks/gke_two_phase.df:74
+      metadata.name = "gke-platform"
   + k8s.secret db_credentials                       stacks/gke_two_phase.df:85
       data.password = (sensitive)
-      metadata.namespace = "pngu"
-  google.container_node_pool "np-${z}"              stacks/gke_two_phase.df:91  waits on pngu.zones
+      metadata.namespace = "gke-platform"
+  google.container_node_pool "np-${z}"              stacks/gke_two_phase.df:91  waits on gke_platform.zones
 
 policy  2 hold · 1 undetermined
   undetermined  cluster must be in at least two zones  stacks/gke_two_phase.df:100  1 undetermined
-    google.container_cluster pngu                      until zones is known (tick 2)
+    google.container_cluster gke_platform                      until zones is known (tick 2)
 "#;
 
 /// Three definite, three pending on the kubernetes provider's configuration,
@@ -150,11 +150,11 @@ fn gke_two_phase_applies_in_two_ticks() {
         [
             "google.compute_address::static_ip",
             "google.compute_subnetwork::gke_subnet",
-            "google.container_cluster::pngu",
+            "google.container_cluster::gke_platform",
             "google.container_node_pool::np-us-east1-b",
             "google.container_node_pool::np-us-east1-c",
             "k8s.deployment::api",
-            "k8s.namespace::pngu",
+            "k8s.namespace::gke_platform",
             "k8s.secret::db_credentials",
         ]
     );
@@ -182,7 +182,7 @@ fn gke_one_zone_stops_after_tick_one() {
     assert_eq!(said[2]["after"], 1);
     assert_eq!(
         said[2]["lines"],
-        serde_json::json!(["cluster must be in at least two zones  cluster = \"pngu\""])
+        serde_json::json!(["cluster must be in at least two zones  cluster = \"gke_platform\""])
     );
     assert!(
         r.stderr
@@ -195,7 +195,7 @@ fn gke_one_zone_stops_after_tick_one() {
         [
             "google.compute_address::static_ip",
             "google.compute_subnetwork::gke_subnet",
-            "google.container_cluster::pngu",
+            "google.container_cluster::gke_platform",
         ]
     );
 }

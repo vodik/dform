@@ -2,7 +2,7 @@
 crates/dform-mock/schemas/gke.df
 ================================
 
-# C's two-phase GKE / kubernetes stack as E section 7.4 spells it (pngu.df).
+# C's two-phase GKE / kubernetes stack as E section 7.4 spells it (gke_platform.df).
 #
 # The cluster's endpoint, ca and zones are open; ids are fresh; the client
 # token and the secret version's data are secret. k8s.* types belong to the

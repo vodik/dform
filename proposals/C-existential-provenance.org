@@ -40,7 +40,7 @@ the candid section at the end says where that claim is weakest.
   example and the decidability argument.
 - Section 5: every research direction, integrated or rejected.
 - Section 6: decision records for each DECIDE ticket, plus the grammar.
-- Section 7: =dform.df= and part of =pngu.df= rewritten.
+- Section 7: =dform.df= and part of =gke_platform.df= rewritten.
 - Section 8: engine architecture and complexity.
 - Section 9: candid assessment.
 - Section 10: ticket impact table.
@@ -551,7 +551,7 @@ fact store, in line with Soufflé's measured provenance overhead. See §8.
 
 * 3. Worked example: two-phase apply that Terraform cannot plan
 
-The =pngu= stack. Phase 1 creates a GKE cluster. Phase 2 configures Kubernetes
+The =gke_platform= stack. Phase 1 creates a GKE cluster. Phase 2 configures Kubernetes
 objects inside it via the =kubernetes= provider, whose configuration needs the
 cluster's =endpoint= and =ca_certificate=, and creates one node pool per zone
 the cluster was actually placed in (=zones= is computed by Google, unknown until
@@ -566,12 +566,12 @@ provider kubernetes { source = "registry.dform.dev/kubernetes", version = ">=3" 
 % Provider configuration is derived data (board: "Provider configuration as
 % facts"). It may depend on a null. It just makes that provider phase-2.
 provider_config(kubernetes, {
-  host:       ref(gke_cluster, pngu, endpoint),
-  ca:         ref(gke_cluster, pngu, ca_certificate),
+  host:       ref(gke_cluster, gke_platform, endpoint),
+  ca:         ref(gke_cluster, gke_platform, ca_certificate),
   token:      ref(google.client_config, current, access_token)
 }).
 
-resource gke_cluster pngu {
+resource gke_cluster gke_platform {
   cluster_type = "autopilot-private",
   name         = format("%s-gke", ProjectName),
   network_id   = NetId,
@@ -581,30 +581,30 @@ resource gke_cluster pngu {
 % One node pool per zone the cluster actually landed in.
 % ref(..., zones) is an open null of type list(string) at plan time.
 resource gke_nodepool Np {
-  cluster = ref(gke_cluster, pngu, id),
+  cluster = ref(gke_cluster, gke_platform, id),
   zone    = Z,
   min = 1, max = 3
 } :-
-  member(ref(gke_cluster, pngu, zones), Z),
+  member(ref(gke_cluster, gke_platform, zones), Z),
   Np = format("np-%s", Z).
 
 % Kubernetes objects. These need the kubernetes provider, which is phase 2.
-resource k8s.namespace pngu { name = "pngu" }.
+resource k8s.namespace gke_platform { name = "gke-platform" }.
 resource k8s.deployment api {
-  namespace = ref(k8s.namespace, pngu, name),
+  namespace = ref(k8s.namespace, gke_platform, name),
   image     = "gcr.io/renfry/api:1.42",
   replicas  = 3
 }.
 
 % Policy that cannot be decided at plan time and is honest about it:
-deny("cluster must be in at least two zones", { cluster: pngu }) :-
-  want(gke_cluster, pngu),
-  count(Z | member(ref(gke_cluster, pngu, zones), Z)) < 2.
+deny("cluster must be in at least two zones", { cluster: gke_platform }) :-
+  want(gke_cluster, gke_platform),
+  count(Z | member(ref(gke_cluster, gke_platform, zones), Z)) < 2.
 #+end_src
 
 What the chase does at plan time:
 
-1. Schema existentials give =attr(gke_cluster, pngu, endpoint, ⊥ep)=,
+1. Schema existentials give =attr(gke_cluster, gke_platform, endpoint, ⊥ep)=,
    =… ca_certificate, ⊥ca=, =… zones, ⊥zones= (all =open=), =… id, ⊥id=
    (=fresh=).
 2. =provider_config(kubernetes, {host: ⊥ep, ca: ⊥ca, token: ⊥tok})= is derived,
@@ -616,7 +616,7 @@ What the chase does at plan time:
    format("np-%s", ⊥z))= is conditional with a *multiplicity-unknown* marker
    (the count of instances is unknown). The plan prints:
    =pending: gke_nodepool "np-?" × (unknown count) — depends on
-   ?gke_cluster[pngu].zones=.
+   ?gke_cluster[gke_platform].zones=.
 4. =k8s.namespace= and =k8s.deployment= are definite facts, but their
    provider's config has phase ={⊥ep, ⊥ca, ⊥tok}=, so their *actions* are
    phase 2. The plan says so and shows their full diffs now, which Terraform
@@ -625,7 +625,7 @@ What the chase does at plan time:
    =c₁= yields an interval null =⊥n ∈ [0, ∞)=; =⊥n < 2= is unknown; the
    =deny= is derived conditionally on =c₂ := ⊥n < 2=. The plan prints
    =undetermined (1): "cluster must be in at least two zones" — decided
-   after gke_cluster[pngu] is applied=.
+   after gke_cluster[gke_platform] is applied=.
 
 Plan output (sketch, real format per the plan-output ticket):
 
@@ -633,18 +633,18 @@ Plan output (sketch, real format per the plan-output ticket):
 deformation: 3 phases, 6 actions definite, 1 group pending, 1 policy undetermined
 
 phase 1 (definite)
-  + gke_cluster pngu                    name="renfry-prod-gke" ...
-  + google_compute_address static-ip-pngu-grpc
-phase 2 (after gke_cluster[pngu]: resolves ?endpoint ?ca_certificate ?zones ?id)
-  + k8s.namespace pngu                  (provider kubernetes, host=?gke_cluster[pngu].endpoint)
-  + k8s.deployment api                  namespace="pngu" image=... replicas=3
-  ? gke_nodepool np-?  × unknown        one per element of ?gke_cluster[pngu].zones
+  + gke_cluster gke_platform            name="renfry-prod-gke" ...
+  + google_compute_address static-ip-gke-platform-grpc
+phase 2 (after gke_cluster[gke_platform]: resolves ?endpoint ?ca_certificate ?zones ?id)
+  + k8s.namespace gke_platform          (provider kubernetes, host=?gke_cluster[gke_platform].endpoint)
+  + k8s.deployment api                  namespace="gke-platform" image=... replicas=3
+  ? gke_nodepool np-?  × unknown        one per element of ?gke_cluster[gke_platform].zones
   ? deny "cluster must be in at least two zones"   undetermined
 #+end_example
 
 =dform apply=:
 
-- Executes phase 1. Provider returns the world facts for =pngu=; the EGDs
+- Executes phase 1. Provider returns the world facts for =gke_platform=; the EGDs
   =⊥ep = "34.1.2.3"=, =⊥zones = ["us-east1-b", "us-east1-c"]= fire.
 - The incremental engine (§5.3) propagates: =member(["us-east1-b",
   "us-east1-c"], Z)= now enumerates; the conditional nodepool group becomes
@@ -1589,14 +1589,14 @@ The =contributes= header is checked against the =owner= semiring: an
 =arg_add= from this pack to =compute.vm= would be a compile error citing
 this line.
 
-** 7.4 =pngu.df=, representative chunk (network, GKE, phases, adoption)
+** 7.4 =gke_platform.df=, representative chunk (network, GKE, phases, adoption)
 
 #+begin_src prolog
 edition 2026.
 
-#| title: pngu
-#| description: dform representation of ~/src/movableink/pngu/terraform
-stack renfry.pngu { backend = gcs("renfry-tf-state", "pngu") }.
+#| title: gke_platform
+#| description: dform representation of a Terraform stack for a GKE platform
+stack renfry.gke_platform { backend = gcs("renfry-tf-state", "gke_platform") }.
 
 provider google     { source = "registry.dform.dev/google",     version = ">=6" }.
 provider kubernetes { source = "registry.dform.dev/kubernetes", version = ">=3" }.
@@ -1617,7 +1617,7 @@ settings dev {
     subnet_cidr:        inet("10.141.76.0/22"),
     pods_cidr:          inet("10.141.80.0/21"),
     services_cidr:      inet("10.141.88.0/21"),
-    static_ips: { 'pngu-grpc': { type: 'INTERNAL' } }
+    static_ips: { 'gke-platform-grpc': { type: 'INTERNAL' } }
   }
 }.
 % stg, prod elided; identical shape.
@@ -1675,12 +1675,12 @@ resource google_compute_address StaticIp {
   subnetwork_id = ref(google_compute_subnetwork, gke_subnet, id)
 } :-
   project(Id, _, Region, _), env(E),
-  setting(E, gke.static_ips, Ips), IpName = 'pngu-grpc',
-  IpType = Ips.'pngu-grpc'.type,             % field access on a variable
+  setting(E, gke.static_ips, Ips), IpName = 'gke-platform-grpc',
+  IpType = Ips.'gke-platform-grpc'.type,     % field access on a variable
   StaticIp = fn.format("static-ip-%s", IpName).
 
 % ---- GKE: phase 1 --------------------------------------------------------------
-resource gke_cluster pngu {
+resource gke_cluster gke_platform {
   cluster_type = 'autopilot-private'
   project_id = Id, project_name = Name
   name = fn.format("%s-gke", Name)
@@ -1695,19 +1695,19 @@ resource gke_cluster pngu {
   project(Id, Name, _, _), env(E), setting(E, gke.control_plane_cidr, CpCidr),
   Prot = (E = prod).                          % boolean expression term
 
-lifecycle(gke_cluster, pngu, prevent_destroy) :- env(prod).
+lifecycle(gke_cluster, gke_platform, prevent_destroy) :- env(prod).
 
 % ---- Kubernetes: phase 2, provider configured from phase-1 nulls -------------
 provider_config(kubernetes, {
-  host:  ref(gke_cluster, pngu, endpoint),
-  ca:    ref(gke_cluster, pngu, ca_certificate),
+  host:  ref(gke_cluster, gke_platform, endpoint),
+  ca:    ref(gke_cluster, gke_platform, ca_certificate),
   token: ref(google.client_config, current, access_token)      % secret null
 }).
 
-resource k8s.namespace pngu { name = "pngu" }.
+resource k8s.namespace gke_platform { name = "gke-platform" }.
 
 resource k8s.secret db_credentials {
-  namespace = ref(k8s.namespace, pngu, name)
+  namespace = ref(k8s.namespace, gke_platform, name)
   data = { password: ref(google_secret_manager_secret_version, db_pw, secret_data) }
 }.
 % secret_data is a secret null: never printed, never in plan/state; the
@@ -1716,27 +1716,27 @@ resource k8s.secret db_credentials {
 
 % one node pool per zone the autopilot cluster actually used: pending group
 resource gke_nodepool Np {
-  cluster = ref(gke_cluster, pngu, id), zone = Z, min = 1, max = 3
-} :- member(ref(gke_cluster, pngu, zones), Z), Np = fn.format("np-%s", Z).
+  cluster = ref(gke_cluster, gke_platform, id), zone = Z, min = 1, max = 3
+} :- member(ref(gke_cluster, gke_platform, zones), Z), Np = fn.format("np-%s", Z).
 
 % ---- monitoring: the dashboard JSON is a file extern, hashed, with provenance
 extern file.json(+path: string, -value: any).
-resource google_monitoring_dashboard pngu {
+resource google_monitoring_dashboard gke_platform {
   project = Id
   dashboard_json = Dash
-} :- project(Id, _, _, _), file.json("modules/monitoring/dashboard-pngu.json", Dash).
+} :- project(Id, _, _, _), file.json("modules/monitoring/dashboard-gke-platform.json", Dash).
 
 % ---- policy ---------------------------------------------------------------------
 deny("GKE static IPs must be INTERNAL", { ip: Name }) :-
   env(E), setting(E, gke.static_ips, Ips), member_kv(Ips, Name, Spec),
   Spec.type != 'INTERNAL'.
 
-deny("cluster must be in at least two zones", { cluster: pngu }) :-
-  want(gke_cluster, pngu),
-  count(Z | member(ref(gke_cluster, pngu, zones), Z)) < 2.    % undetermined at plan
+deny("cluster must be in at least two zones", { cluster: gke_platform }) :-
+  want(gke_cluster, gke_platform),
+  count(Z | member(ref(gke_cluster, gke_platform, zones), Z)) < 2.  % undetermined at plan
 
-deny("prod cluster must have deletion protection", { cluster: pngu }) :-
-  env(prod), not attr(gke_cluster, pngu, deletion_protection, true).
+deny("prod cluster must have deletion protection", { cluster: gke_platform }) :-
+  env(prod), not attr(gke_cluster, gke_platform, deletion_protection, true).
 
 output(active_env, E) :- env(E).
 output(project_id, Id) :- project(Id, _, _, _).

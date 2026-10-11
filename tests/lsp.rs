@@ -1,4 +1,4 @@
-//! `dform lsp` over stdio, on copies of examples/demo and examples/pngu:
+//! `dform lsp` over stdio, on copies of examples/demo and examples/gke-platform:
 //! the contributors hover and `dform.why`, diagnostics of the selected
 //! environment (`dform.selectEnvironment`), schema completion, quick
 //! fixes, references and rename (a rename with state plans as a move),
@@ -537,19 +537,19 @@ fn definition_and_formatting() {
     c.shutdown();
 }
 
-/// examples/pngu: keyed by env, one deployment per value; selecting
-/// env=prod evaluates pngu[env=prod].
+/// examples/gke-platform: keyed by env, one deployment per value; selecting
+/// env=prod evaluates gke_platform[env=prod].
 #[test]
-fn pngu_selects_its_deployment_by_environment() {
-    let (_s, root) = example("pngu");
-    let stack = root.join("stacks/pngu.df");
+fn gke_platform_selects_its_deployment_by_environment() {
+    let (_s, root) = example("gke-platform");
+    let stack = root.join("stacks/gke_platform.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);
     c.diagnostics(&stack);
     let status = c.command("dform.selectEnvironment", json!(["env=prod"]));
     assert_eq!(
         status["deployments"],
-        json!(["stacks.pngu[env=prod]"]),
+        json!(["stacks.gke_platform[env=prod]"]),
         "{status}"
     );
     let errors: Vec<Value> = c
@@ -557,7 +557,7 @@ fn pngu_selects_its_deployment_by_environment() {
         .into_iter()
         .filter(|d| d["severity"] == 1)
         .collect();
-    assert!(errors.is_empty(), "pngu env=prod plans: {errors:?}");
+    assert!(errors.is_empty(), "gke_platform env=prod plans: {errors:?}");
     c.shutdown();
 }
 

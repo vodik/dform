@@ -491,7 +491,7 @@ pub fn state_path(root: impl AsRef<Path>) -> PathBuf {
 
 /// The stack a program's state belongs to when it has no `stack` statement:
 /// the basename of the program's entry file without its extension,
-/// `dform.df` is `dform`, `pngu.df` is `pngu`.
+/// `dform.df` is `dform`, `gke_platform.df` is `gke_platform`.
 pub fn stack_name(entry: &Path) -> String {
     entry
         .file_stem()

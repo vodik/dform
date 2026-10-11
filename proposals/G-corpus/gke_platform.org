@@ -1,4 +1,4 @@
-#+title: G corpus: pngu.df
+#+title: G corpus: gke_platform.df
 #+startup: showall
 
 Stage 1 of Proposal G (=proposals/G-surface-syntax.org=): the current
@@ -12,28 +12,28 @@ Counts (comments and blank lines excluded; section 8 of the proposal says how th
 
 | file | lines | tokens | read-carrier vars |
 |-
-| pngu.df | 148 → 115 | 888 → 535 | 26 → 0 |
+| gke_platform.df | 148 → 115 | 888 → 535 | 26 → 0 |
 
-* pngu.df
+* gke_platform.df
 
-** current (pngu.df)
+** current (gke_platform.df)
 
-#+name: before/pngu.df
+#+name: before/gke_platform.df
 #+begin_src prolog
-# pngu.df
+# gke_platform.df
 #
-# dform representation of ~/src/movableink/pngu/terraform.
+# dform representation of a Terraform stack for a GKE platform.
 #
 # Usage:
-#   cargo run -- --file pngu.df plan
-#   cargo run -- --file pngu.df plan --set env=stg
-#   cargo run -- --file pngu.df plan --set env=prod
+#   cargo run -- --file gke_platform.df plan
+#   cargo run -- --file gke_platform.df plan --set env=stg
+#   cargo run -- --file gke_platform.df plan --set env=prod
 #
 # Notes:
 # - This file models the intent/config surface area of the Terraform stack.
 # - External Terraform modules are represented as higher-level resources.
 # - The monitoring dashboard JSON is read with the file provider from a stub,
-#   examples/files/dashboard-pngu.json (see terraform/modules/monitoring/dashboard-pngu.json).
+#   examples/files/dashboard-gke-platform.json (see terraform/modules/monitoring/dashboard-gke-platform.json).
 
 edition 2026.
 
@@ -71,7 +71,7 @@ settings dev {
     subnet_cidr: "10.141.76.0/22",
     pods_cidr: "10.141.80.0/21",
     services_cidr: "10.141.88.0/21",
-    static_ips: { "pngu-grpc": { type: "INTERNAL" } }
+    static_ips: { "gke-platform-grpc": { type: "INTERNAL" } }
   }
 }.
 
@@ -88,7 +88,7 @@ settings stg {
     subnet_cidr: "10.141.100.0/22",
     pods_cidr: "10.141.104.0/21",
     services_cidr: "10.141.112.0/21",
-    static_ips: { "pngu-grpc": { type: "INTERNAL" } }
+    static_ips: { "gke-platform-grpc": { type: "INTERNAL" } }
   }
 }.
 
@@ -105,7 +105,7 @@ settings prod {
     subnet_cidr: "10.141.124.0/22",
     pods_cidr: "10.141.128.0/21",
     services_cidr: "10.141.136.0/21",
-    static_ips: { "pngu-grpc": { type: "INTERNAL" } }
+    static_ips: { "gke-platform-grpc": { type: "INTERNAL" } }
   }
 }.
 
@@ -129,7 +129,7 @@ peering{ env: prod, name: "envoy-prod-legacy", peer_network: "projects/coherentp
 
 when env(Env) {
   constraint("GKE static IPs must be INTERNAL") :-
-    setting(Env, .gke.static_ips."pngu-grpc".type, T),
+    setting(Env, .gke.static_ips."gke-platform-grpc".type, T),
     T != "INTERNAL".
 
   ########################################
@@ -198,8 +198,8 @@ when env(Env) {
   } :-
     setting(Env, .project_id, ProjectId),
     setting(Env, .region, Region),
-    IpName = "pngu-grpc",
-    setting(Env, .gke.static_ips."pngu-grpc".type, IpType),
+    IpName = "gke-platform-grpc",
+    setting(Env, .gke.static_ips."gke-platform-grpc".type, IpType),
     StaticIpRes = format("static-ip-%s", IpName).
 
   ########################################
@@ -207,7 +207,7 @@ when env(Env) {
   ########################################
 
   # Represents the external terraform-mi-gke module invocation.
-  resource gke_cluster pngu {
+  resource gke_cluster gke_platform {
     cluster_type = "autopilot-private"
     env = Env
     project_id = ProjectId
@@ -233,15 +233,15 @@ when env(Env) {
   ########################################
 
   # The dashboard JSON is a file, read by the file provider.
-  resource google_monitoring_dashboard pngu {
+  resource google_monitoring_dashboard gke_platform {
     project = ProjectId
     dashboard_json = Dash
   } :-
     setting(Env, .project_id, ProjectId),
-    file.json("examples/files/dashboard-pngu.json", Dash).
+    file.json("examples/files/dashboard-gke-platform.json", Dash).
 
   # Represents terraform-gcp-alert-metrics module invocation.
-  resource alert_metrics_pack pngu {
+  resource alert_metrics_pack gke_platform {
     project_id = ProjectId
     notification_channel_type = "slack"
     notification_channel_display_name = "Slack"
@@ -261,22 +261,22 @@ when env(Env) {
 
 ** proposed
 
-#+name: after/pngu.df
+#+name: after/gke_platform.df
 #+begin_src dform
-# pngu.df
+# gke_platform.df
 #
-# dform representation of ~/src/movableink/pngu/terraform.
+# dform representation of a Terraform stack for a GKE platform.
 #
 # Usage:
-#   cargo run -- --file pngu.df plan
-#   cargo run -- --file pngu.df plan --set env=stg
-#   cargo run -- --file pngu.df plan --set env=prod
+#   cargo run -- --file gke_platform.df plan
+#   cargo run -- --file gke_platform.df plan --set env=stg
+#   cargo run -- --file gke_platform.df plan --set env=prod
 #
 # Notes:
 # - This file models the intent/config surface area of the Terraform stack.
 # - External Terraform modules are represented as higher-level resources.
 # - The monitoring dashboard JSON is read with the file provider from a stub,
-#   examples/files/dashboard-pngu.json (see terraform/modules/monitoring/dashboard-pngu.json).
+#   examples/files/dashboard-gke-platform.json (see terraform/modules/monitoring/dashboard-gke-platform.json).
 
 edition 2027
 
@@ -314,7 +314,7 @@ settings dev {
     subnet_cidr: "10.141.76.0/22",
     pods_cidr: "10.141.80.0/21",
     services_cidr: "10.141.88.0/21",
-    static_ips: { "pngu-grpc": { type: "INTERNAL" } }
+    static_ips: { "gke-platform-grpc": { type: "INTERNAL" } }
   }
 }
 
@@ -331,7 +331,7 @@ settings stg {
     subnet_cidr: "10.141.100.0/22",
     pods_cidr: "10.141.104.0/21",
     services_cidr: "10.141.112.0/21",
-    static_ips: { "pngu-grpc": { type: "INTERNAL" } }
+    static_ips: { "gke-platform-grpc": { type: "INTERNAL" } }
   }
 }
 
@@ -348,7 +348,7 @@ settings prod {
     subnet_cidr: "10.141.124.0/22",
     pods_cidr: "10.141.128.0/21",
     services_cidr: "10.141.136.0/21",
-    static_ips: { "pngu-grpc": { type: "INTERNAL" } }
+    static_ips: { "gke-platform-grpc": { type: "INTERNAL" } }
   }
 }
 
@@ -373,7 +373,7 @@ peering{ env: "prod", name: "envoy-prod-legacy", peer_network: "projects/coheren
 # Validation
 ########################################
 
-constraint "GKE static IPs must be INTERNAL" if cfg.gke.static_ips."pngu-grpc".type != "INTERNAL"
+constraint "GKE static IPs must be INTERNAL" if cfg.gke.static_ips."gke-platform-grpc".type != "INTERNAL"
 
 ########################################
 # Resources (renfry module intent)
@@ -415,11 +415,11 @@ resource google_compute_network_peering "peering-{name}" {
 
 # Static IPs for services
 resource google_compute_address "static-ip-{ip}" {
-  for ip = "pngu-grpc"
+  for ip = "gke-platform-grpc"
   project = cfg.project_id
   region = cfg.region
   name = ip
-  address_type = cfg.gke.static_ips."pngu-grpc".type
+  address_type = cfg.gke.static_ips."gke-platform-grpc".type
   subnetwork_id = gke_subnet.id
 }
 
@@ -428,7 +428,7 @@ resource google_compute_address "static-ip-{ip}" {
 ########################################
 
 # Represents the external terraform-mi-gke module invocation.
-resource gke_cluster pngu {
+resource gke_cluster gke_platform {
   cluster_type = "autopilot-private"
   env = env
   project_id = cfg.project_id
@@ -449,13 +449,13 @@ resource gke_cluster pngu {
 ########################################
 
 # The dashboard JSON is a file, read by the file provider.
-resource google_monitoring_dashboard pngu {
+resource google_monitoring_dashboard gke_platform {
   project = cfg.project_id
-  dashboard_json = file.json["examples/files/dashboard-pngu.json"]
+  dashboard_json = file.json["examples/files/dashboard-gke-platform.json"]
 }
 
 # Represents terraform-gcp-alert-metrics module invocation.
-resource alert_metrics_pack pngu {
+resource alert_metrics_pack gke_platform {
   project_id = cfg.project_id
   notification_channel_type = "slack"
   notification_channel_display_name = "Slack"
@@ -483,9 +483,9 @@ output project_id = cfg.project_id
 - ="projects/{cfg.project_id}/global/networks/{cfg.network_name}"= is a
   =format= term in the field value where today's rule binds =NetId= by an
   equality in the body. Same value, same predicates.
-- =dashboard_json = file.json["examples/files/dashboard-pngu.json"]= is the
+- =dashboard_json = file.json["examples/files/dashboard-gke-platform.json"]= is the
   extern literal =file.json("examples/...", Dash)= in the body.
-- =for ip = "pngu-grpc"= keeps today's =IpName= binding so the name is
+- =for ip = "gke-platform-grpc"= keeps today's =IpName= binding so the name is
   ="static-ip-{ip}"=, a =format= appended last, as today.
 - =output project_id = cfg.project_id= needs a read, so it lowers to the
   rule =output(project_id, V) :- env(E), setting(E, .project_id, V)=, today's

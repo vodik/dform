@@ -1388,7 +1388,7 @@ naming conventions.
 
 *Consequences.*
 - Types are qualified lowercase names: =aws.subnet=, =google.compute_subnetwork=.
-- Values with capitals are strings, as they already are in =pngu.df=.
+- Values with capitals are strings, as they already are in =gke_platform.df=.
 - The grammar spec states the rule in one line and the lexer enforces it
   with two token kinds.
 
@@ -1429,7 +1429,7 @@ more =.df= files exist.
 *Consequences.*
 - Every existing =.df= file breaks: =us-test-1a= becomes a string,
   =setting(Env, db.backup_days, V)= becomes =setting(Env, .db.backup_days, V)=,
-  =gke.static_ips.pngu-grpc.type= becomes =gke.static_ips."pngu-grpc".type=.
+  =gke.static_ips.gke-platform-grpc.type= becomes =gke.static_ips."gke-platform-grpc".type=.
   The editions ticket is the prerequisite, and =dform migrate= handles the
   mechanical cases (a bare symbol containing =-= becomes a string; a
   symbol argument to =setting= / =arg= / =attr= in path position gains a
@@ -1911,15 +1911,15 @@ on the scoping scheme), =setting_add= (a grant plus an =arg= on the
 =settings= type). The =.statements= contribution merges because the fake
 provider's schema declares =statements: keyed([.action, .resource])=.
 
-** pngu.df, the network and GKE chunk
+** gke_platform.df, the network and GKE chunk
 
 #+begin_src prolog
-# pngu.df, direction A. The renfry stack for one GCP project per environment.
+# gke_platform.df, direction A. The renfry stack for one GCP project per environment.
 
 edition 2026.
 
 provider google { source = "registry.dform.dev/google", version = ">=6" }.
-stack renfry.pngu { backend = gcs("renfry-state", "pngu") }.
+stack renfry.gke_platform { backend = gcs("renfry-state", "gke_platform") }.
 
 input env: enum(dev, stg, prod) = dev.
 
@@ -1953,7 +1953,7 @@ settings dev {
     subnet_cidr:        inet("10.141.76.0/22"),
     pods_cidr:          inet("10.141.80.0/21"),
     services_cidr:      inet("10.141.88.0/21"),
-    static_ips:         { "pngu-grpc": { type: "INTERNAL" } }
+    static_ips:         { "gke-platform-grpc": { type: "INTERNAL" } }
   }
 }.
 
@@ -1968,7 +1968,7 @@ settings stg {
     subnet_cidr:        inet("10.141.100.0/22"),
     pods_cidr:          inet("10.141.104.0/21"),
     services_cidr:      inet("10.141.112.0/21"),
-    static_ips:         { "pngu-grpc": { type: "INTERNAL" } }
+    static_ips:         { "gke-platform-grpc": { type: "INTERNAL" } }
   }
 }.
 
@@ -2065,7 +2065,7 @@ deny(static_ip_internal, "GKE static IPs must be INTERNAL", { ip: N }) :-
 # GKE
 ########################################
 
-resource gke.cluster pngu {
+resource gke.cluster gke_platform {
   cluster_type              = "autopilot-private"
   env                       = E
   project_id                = Id
@@ -2083,8 +2083,8 @@ resource gke.cluster pngu {
   setting(E, .gke.control_plane_cidr, CpCidr).
 
 # Prod gets deletion protection, and policy checks it, as facts.
-lifecycle(gke.cluster, pngu, prevent_destroy) :- env(prod).
-arg(gke.cluster, pngu, .deletion_protection, true) :- env(prod).
+lifecycle(gke.cluster, gke_platform, prevent_destroy) :- env(prod).
+arg(gke.cluster, gke_platform, .deletion_protection, true) :- env(prod).
 #+end_src
 
 The last two lines are the interesting ones. =deletion_protection = false=
@@ -2094,7 +2094,7 @@ override, and it is correct: the intent is ambiguous. The fix is to write
 it as data:
 
 #+begin_src prolog
-resource gke.cluster pngu {
+resource gke.cluster gke_platform {
   deletion_protection = Prot
   ...
 } :- ..., deletion_protection(Prot).
@@ -2106,13 +2106,13 @@ deletion_protection(false) :- not env(prod).
 or with a default:
 
 #+begin_src prolog
-arg_default(gke.cluster, pngu, .deletion_protection, false).
-arg(gke.cluster, pngu, .deletion_protection, true) :- env(prod).
+arg_default(gke.cluster, gke_platform, .deletion_protection, false).
+arg(gke.cluster, gke_platform, .deletion_protection, true) :- env(prod).
 #+end_src
 
 The =dashboard_json= stub becomes an extern:
 =extern file.json(+Path, -Value).= and
-=dashboard_json = J :- file.json("modules/monitoring/dashboard-pngu.json", J)=,
+=dashboard_json = J :- file.json("modules/monitoring/dashboard-gke-platform.json", J)=,
 with the file's hash recorded in the plan.
 
 * Implementation order

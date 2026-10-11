@@ -47,11 +47,11 @@ resource google.compute_subnetwork gke_subnet {
 resource google.compute_address static_ip {
   project = id
   region
-  name = "pngu-grpc"
+  name = "gke-platform-grpc"
   subnetwork = gke_subnet
 } where project(id, _, region, _)
 
-resource google.container_cluster pngu {
+resource google.container_cluster gke_platform {
   env
   project_id = id
   name = "${name}-gke"
@@ -66,12 +66,12 @@ resource google.container_cluster pngu {
 # client's token, a secret the data source answers: its objects wait for
 # the tick after the cluster's.
 use k8s {
-  host = google.container_cluster["pngu"].endpoint
-  ca = google.container_cluster["pngu"].ca_certificate
+  host = google.container_cluster["gke_platform"].endpoint
+  ca = google.container_cluster["gke_platform"].ca_certificate
   token = google.client_config[gcp.project_id]
 }
 
-resource k8s.namespace pngu { metadata.name = "pngu" }
+resource k8s.namespace gke_platform { metadata.name = "gke-platform" }
 
 # A read in the clause is an attr join (the value now), not a reference.
 resource k8s.deployment api {
@@ -80,25 +80,25 @@ resource k8s.deployment api {
   spec.selector.matchLabels = { app: "api" }
   spec.template.metadata.labels = { app: "api" }
   spec.template.spec.containers = [{ name: "api", image: "gcr.io/renfry/api:1.42" }]
-} where ns = k8s.namespace["pngu"].metadata.name
+} where ns = k8s.namespace["gke_platform"].metadata.name
 
 resource k8s.secret db_credentials {
   metadata.namespace = ns
   data = { password: google.secret_manager_secret_version["db_pw"].secret_data }
-} where ns = k8s.namespace["pngu"].metadata.name
+} where ns = k8s.namespace["gke_platform"].metadata.name
 
 # One nodepool per zone: member over an open null is a content position.
 resource google.container_node_pool "np-${z}" {
-  cluster = google.container_cluster["pngu"]
+  cluster = google.container_cluster["gke_platform"]
   zone = z
   min = 1
   max = 3
-} where z in google.container_cluster["pngu"].zones
+} where z in google.container_cluster["gke_platform"].zones
 
-zone_count(n) where n = count(z), z in google.container_cluster["pngu"].zones
+zone_count(n) where n = count(z), z in google.container_cluster["gke_platform"].zones
 
-deny "cluster must be in at least two zones" { cluster: "pngu" } where {
-  "pngu" in google.container_cluster
+deny "cluster must be in at least two zones" { cluster: "gke_platform" } where {
+  "gke_platform" in google.container_cluster
   zone_count(n)
   n < 2
 }

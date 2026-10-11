@@ -360,7 +360,7 @@ impl Instance {
     }
 
     /// What `plan` and `apply` print first: the full name, and which key
-    /// values are defaults, `stacks.pngu[env=dev] (env from its default)`.
+    /// values are defaults, `stacks.gke_platform[env=dev] (env from its default)`.
     pub fn describe(&self) -> String {
         match self.defaulted.as_slice() {
             [] => self.full_name(),

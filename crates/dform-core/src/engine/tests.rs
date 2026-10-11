@@ -638,7 +638,7 @@ fn nested_dotted_paths_merge_recursively() {
 }
 
 /// A record atom in a resource body is rewritten to positional form like
-/// any other body, so the resource is derived (pngu.df's peerings).
+/// any other body, so the resource is derived (gke_platform.df's peerings).
 #[test]
 fn a_record_atom_in_a_resource_body_matches() {
     let (r, _) = run("decl peering(env: symbol, name: symbol)\n             peering( env: \"prod\", name: \"legacy\" )\n             resource net.peering \"${name}\" {\n               env = env\n             } where peering( env: env, name: name )")
@@ -925,7 +925,7 @@ fn other_examples_have_no_stuck_instances() {
             crate::schema::fake(),
             &prod,
         ),
-        ("examples/pngu/stacks/pngu.df", crate::schema::gke(), &prod),
+        ("examples/gke-platform/stacks/gke_platform.df", crate::schema::gke(), &prod),
         (
             "examples/decl/stacks/decl_demo.df",
             crate::schema::fake(),
@@ -975,7 +975,7 @@ fn gke_two_phase_sections_per_key() {
         pending,
         [
             "k8s.deployment api",
-            "k8s.namespace pngu",
+            "k8s.namespace gke_platform",
             "k8s.secret db_credentials"
         ]
     );
@@ -983,8 +983,8 @@ fn gke_two_phase_sections_per_key() {
         assert_eq!(
             on.iter().cloned().collect::<Vec<_>>(),
             [
-                "google.container_cluster/pngu#ca_certificate",
-                "google.container_cluster/pngu#endpoint"
+                "google.container_cluster/gke_platform#ca_certificate",
+                "google.container_cluster/gke_platform#endpoint"
             ]
         );
     }
@@ -992,7 +992,7 @@ fn gke_two_phase_sections_per_key() {
     assert_eq!(s.pending_groups.len(), 1, "{:?}", s.pending_groups);
     assert!(
             s.pending_groups[0].starts_with(
-                "want(\"google.container_node_pool\", _) x unknown, on ?google.container_cluster[\"pngu\"].zones"
+                "want(\"google.container_node_pool\", _) x unknown, on ?google.container_cluster[\"gke_platform\"].zones"
             )
         );
     assert_eq!(s.undetermined.len(), 1, "{:?}", s.undetermined);
@@ -1088,12 +1088,12 @@ fn adv2_rule3_per_key() {
             .any(|v| v.starts_with("namespace without deployment")),
         "{violations:?}"
     );
-    // Decided, and it does not hold: ns_count is [pngu].
-    assert_eq!(facts_of(&r, "ns_count"), ["ns_count([\"pngu\"])"]);
+    // Decided, and it does not hold: ns_count is [gke_platform].
+    assert_eq!(facts_of(&r, "ns_count"), ["ns_count([\"gke_platform\"])"]);
     assert!(
         !violations
             .iter()
-            .any(|v| v.contains("need the pngu namespace"))
+            .any(|v| v.contains("need the gke_platform namespace"))
     );
     assert_eq!(s.undetermined.len(), 1, "{:?}", s.undetermined);
     assert!(

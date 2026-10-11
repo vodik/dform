@@ -61,7 +61,7 @@ fn plan_json_has_every_section() {
     assert_eq!(ticks[1]["after"], 1);
     assert_eq!(
         ticks[1]["waits_on"][0],
-        json!({"null": "google.container_cluster[\"pngu\"].ca_certificate", "class": "open"})
+        json!({"null": "google.container_cluster[\"gke_platform\"].ca_certificate", "class": "open"})
     );
     let secret = ticks[1]["changes"]
         .as_array()

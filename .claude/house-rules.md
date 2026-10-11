@@ -4,7 +4,7 @@
   section 3. When a ticket and E/F disagree, the ticket wins; say so in the report.
 - Do not optimize inside a semantics ticket.
 - Keep `cargo run -q -- -C examples/demo plan` and
-  `cargo run -q -- -C examples/pngu plan pngu env=prod` working at every commit.
+  `cargo run -q -- -C examples/gke-platform plan gke_platform env=prod` working at every commit.
   They are gates.
 - `cargo fmt --all --check` is a gate: the tree stays in rustfmt's form, so no
   branch carries another's formatting hunks.

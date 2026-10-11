@@ -293,18 +293,18 @@ fn the_provider_statement_selects_the_schema() {
 }
 
 /// A resource's type is declared by the schema of the provider that
-/// applies it: pngu on `use fake` (which declares only the demo
+/// applies it: gke_platform on `use fake` (which declares only the demo
 /// types) is refused at plan, naming the resource, the provider block and
 /// the schema that declares the type, not handed to the fake at apply. On
 /// `use gke` it plans and applies.
 #[test]
 fn a_type_the_provider_does_not_declare_is_a_plan_error() {
     let s = Scratch::new("lang-stack-undeclared");
-    copy_dir(&repo().join("examples/pngu"), &s.dir);
-    let src = s.read("stacks/pngu.df");
+    copy_dir(&repo().join("examples/gke-platform"), &s.dir);
+    let src = s.read("stacks/gke_platform.df");
     assert!(src.contains("use gke {"), "{src}");
-    s.write("stacks/pngu.df", &src.replace("use gke {", "use fake {"));
-    let r = s.run(&["plan", "pngu"]).failure();
+    s.write("stacks/gke_platform.df", &src.replace("use gke {", "use fake {"));
+    let r = s.run(&["plan", "gke_platform"]).failure();
     assert!(
         r.stderr
             .contains("provider fake does not declare google.compute_subnetwork; declared by: gke"),
@@ -321,16 +321,16 @@ fn a_type_the_provider_does_not_declare_is_a_plan_error() {
     // The provider block is labeled; nothing was planned.
     assert!(r.stderr.contains("use fake {"), "{}", r.stderr);
     assert!(r.stderr.contains("^ provider fake\n"), "{}", r.stderr);
-    assert_eq!(r.stdout, "deployment: stacks.pngu[env=dev]\n");
+    assert_eq!(r.stdout, "deployment: stacks.gke_platform[env=dev]\n");
     // A type no known schema declares says so.
     s.write(
-        "stacks/pngu.df",
+        "stacks/gke_platform.df",
         &src.replace(
-            "resource alert_metrics_pack pngu",
-            "resource mystery_pack pngu",
+            "resource alert_metrics_pack gke_platform",
+            "resource mystery_pack gke_platform",
         ),
     );
-    let r = s.run(&["plan", "pngu"]).failure();
+    let r = s.run(&["plan", "gke_platform"]).failure();
     assert!(
         r.stderr.contains(
             "provider gke does not declare mystery_pack; no known provider schema declares it"
@@ -339,9 +339,9 @@ fn a_type_the_provider_does_not_declare_is_a_plan_error() {
         r.stderr
     );
 
-    s.write("stacks/pngu.df", &src);
-    s.run(&["apply", "pngu"]).success();
-    let r = s.run(&["plan", "pngu"]).success();
+    s.write("stacks/gke_platform.df", &src);
+    s.run(&["apply", "gke_platform"]).success();
+    let r = s.run(&["plan", "gke_platform"]).success();
     assert!(r.stdout.contains("is up to date"), "{}", r.stdout);
 }
 

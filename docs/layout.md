@@ -98,21 +98,21 @@ project module.
 Every example is a project under `examples/<name>/`, with its own
 `dform.toml`:
 
-| project                | what it shows                                             |
-|------------------------|-----------------------------------------------------------|
-| `examples/tour`        | start here: a tutorial, read top to bottom                |
-| `examples/demo`        | the demo: modules, a component, per-env config, matrix   |
-| `examples/pngu`        | a GKE stack, its peerings a CSV table                     |
-| `examples/advanced`    | transitive closure: reachability, routes, group membership|
-| `examples/adopt`       | adopting an existing resource from inventory              |
-| `examples/decl`        | declared relations, record matching, wildcards            |
-| `examples/k8s`         | the mock Kubernetes provider                              |
-| `examples/aws`         | the Terraform-shaped mock AWS provider                    |
-| `examples/refine`      | refinement types                                          |
-| `examples/gke`         | two-phase GKE: `gke_two_phase`, in two zones or one       |
-| `examples/bootstrap`   | two stacks: bootstrap and the controller's workload       |
-| `examples/approvals`   | approvals over a signed plan digest                       |
-| `examples/crud-api`    | a blue/green rollout (proposal G)                         |
+| project                 | what it shows                                             |
+|-------------------------|-----------------------------------------------------------|
+| `examples/tour`         | start here: a tutorial, read top to bottom                |
+| `examples/demo`         | the demo: modules, a component, per-env config, matrix   |
+| `examples/gke-platform` | a GKE stack, its peerings a CSV table                     |
+| `examples/advanced`     | transitive closure: reachability, routes, group membership|
+| `examples/adopt`        | adopting an existing resource from inventory              |
+| `examples/decl`         | declared relations, record matching, wildcards            |
+| `examples/k8s`          | the mock Kubernetes provider                              |
+| `examples/aws`          | the Terraform-shaped mock AWS provider                    |
+| `examples/refine`       | refinement types                                          |
+| `examples/gke`          | two-phase GKE: `gke_two_phase`, in two zones or one       |
+| `examples/bootstrap`    | two stacks: bootstrap and the controller's workload       |
+| `examples/approvals`    | approvals over a signed plan digest                       |
+| `examples/crud-api`     | a blue/green rollout (proposal G)                         |
 
 Test-only programs and fixtures are under `tests/fixtures/` (the
 adversarial stratification cases, world files, the `leaky` schema). The

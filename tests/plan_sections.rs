@@ -43,10 +43,10 @@ fn gke_plan_has_the_summary_ticks_and_later() {
     );
     for want in [
         "\ntick 1  3 changes\n  + google.compute_subnetwork gke_subnet  ",
-        "\ntick 2  3+ changes\n  waits on  pngu.ca_certificate\n            pngu.endpoint\n            pngu.zones\n  + k8s.deployment api  ",
+        "\ntick 2  3+ changes\n  waits on  gke_platform.ca_certificate\n            gke_platform.endpoint\n            gke_platform.zones\n  + k8s.deployment api  ",
         // The rule tick 1 decides is tick 2's (R-156).
         "\n  google.container_node_pool \"np-${z}\"  ",
-        "  waits on pngu.zones\n\npolicy  2 hold · 1 undetermined\n",
+        "  waits on gke_platform.zones\n\npolicy  2 hold · 1 undetermined\n",
         "  undetermined  cluster must be in at least two zones  ",
         "  until zones is known (tick 2)\n",
     ] {
@@ -71,7 +71,7 @@ deny "no nodepool in zone z" {pool: n} where n in google.container_node_pool, ar
     assert!(
         r.stdout.contains(
             "  undetermined  no nodepool in zone z                  p.df:113  1 undetermined\n    \
-             google.container_cluster pngu                      until zones is known (tick 2)\n"
+             google.container_cluster gke_platform                      until zones is known (tick 2)\n"
         ),
         "{}",
         r.stdout
@@ -339,7 +339,7 @@ fn color_is_a_rendering_of_the_same_text() {
         "  \x1b[32m+\x1b[0m \x1b[1;32mgoogle.compute_subnetwork gke_subnet\x1b[0m  ",
         "\x1b[1mtick 1  3 changes\x1b[0m\n",
         "  \x1b[2mstacks/gke_two_phase.df:38\x1b[0m\n",
-        "  waits on  pngu.ca_certificate\n",
+        "  waits on  gke_platform.ca_certificate\n",
         "      data.password = \x1b[2m(sensitive)\x1b[0m\n",
         "  \x1b[33mgoogle.container_node_pool \"np-${z}\"\x1b[0m  ",
     ] {

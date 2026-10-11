@@ -1,24 +1,24 @@
-============================
-examples/pngu/stacks/pngu.df
-============================
+============================================
+examples/gke-platform/stacks/gke_platform.df
+============================================
 
-# pngu.df
+# gke_platform.df
 #
-# dform representation of ~/src/movableink/pngu/terraform.
+# dform representation of a Terraform stack for a GKE platform.
 #
 # To run it, from this directory: README.md.
 #
 # Each env value is its own deployment with its own state:
-# dform.state/pngu/env=prod/ never sees dev's resources. Each env is its own
+# dform.state/gke_platform/env=prod/ never sees dev's resources. Each env is its own
 # GCP project (settings below), so names may repeat across envs: isolated.
 #
 # Notes:
 # - This file models the intent/config surface area of the Terraform stack.
 # - External Terraform modules are represented as higher-level resources.
 # - The monitoring dashboard JSON is read by `json.decode(io.read(path))` from a stub,
-#   files/dashboard-pngu.json (see terraform/modules/monitoring/dashboard-pngu.json).
+#   files/dashboard-gke-platform.json (see terraform/modules/monitoring/dashboard-gke-platform.json).
 
-# The stack's key, typed: `dform plan pngu env=qa` is an error naming it.
+# The stack's key, typed: `dform plan gke_platform env=qa` is an error naming it.
 key env: environment = "dev"
 # The project and its networks, each environment's in a settings block
 # below. A CIDR is text here, made an inet where it is used.
@@ -67,7 +67,7 @@ set {
     subnet_cidr: "10.141.76.0/22",
     pods_cidr: "10.141.80.0/21",
     services_cidr: "10.141.88.0/21",
-    static_ips: { "pngu-grpc": { type: "INTERNAL" } },
+    static_ips: { "gke-platform-grpc": { type: "INTERNAL" } },
   }
 } where env == "dev"
 
@@ -84,7 +84,7 @@ set {
     subnet_cidr: "10.141.100.0/22",
     pods_cidr: "10.141.104.0/21",
     services_cidr: "10.141.112.0/21",
-    static_ips: { "pngu-grpc": { type: "INTERNAL" } },
+    static_ips: { "gke-platform-grpc": { type: "INTERNAL" } },
   }
 } where env == "stg"
 
@@ -101,7 +101,7 @@ set {
     subnet_cidr: "10.141.124.0/22",
     pods_cidr: "10.141.128.0/21",
     services_cidr: "10.141.136.0/21",
-    static_ips: { "pngu-grpc": { type: "INTERNAL" } },
+    static_ips: { "gke-platform-grpc": { type: "INTERNAL" } },
   }
 } where env == "prod"
 
@@ -133,7 +133,7 @@ use gke {
 # Validation
 ########################################
 
-deny "GKE static IPs must be INTERNAL" where gke.static_ips."pngu-grpc".type != "INTERNAL"
+deny "GKE static IPs must be INTERNAL" where gke.static_ips."gke-platform-grpc".type != "INTERNAL"
 
 ########################################
 # Resources (renfry module intent)
@@ -178,16 +178,16 @@ resource google.compute_address "static-ip-${ip}" {
   project = gcp.project_id
   region = gcp.region
   name = ip
-  address_type = gke.static_ips."pngu-grpc".type
+  address_type = gke.static_ips."gke-platform-grpc".type
   subnetwork = gke_subnet
-} where ip = "pngu-grpc"
+} where ip = "gke-platform-grpc"
 
 ########################################
 # Resources (GKE module intent)
 ########################################
 
 # Represents the external terraform-mi-gke module invocation.
-resource google.container_cluster pngu {
+resource google.container_cluster gke_platform {
   cluster_type = "autopilot-private"
   env
   project_id = gcp.project_id
@@ -208,9 +208,9 @@ resource google.container_cluster pngu {
 ########################################
 
 # The dashboard JSON is a file, a document `json.decode(io.read(path))` reads.
-resource google.monitoring_dashboard pngu {
+resource google.monitoring_dashboard gke_platform {
   project = gcp.project_id
-  dashboard_json = json.decode(io.read("files/dashboard-pngu.json"))
+  dashboard_json = json.decode(io.read("files/dashboard-gke-platform.json"))
 }
 
 # Represents terraform-gcp-alert-metrics module invocation. No provider
@@ -224,7 +224,7 @@ type alert_metrics_pack {
   source: string
 }
 
-resource alert_metrics_pack pngu {
+resource alert_metrics_pack gke_platform {
   project_id = gcp.project_id
   notification_channel_type = "slack"
   notification_channel_display_name = "Slack"

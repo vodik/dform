@@ -458,21 +458,21 @@ implemented.
 
 *C's worked example, re-run under these rules* (final syntax in §7.4):
 
-1. =want(gke.cluster, pngu)= is definite. The prelude mints
+1. =want(gke.cluster, gke_platform)= is definite. The prelude mints
    =ν_ep=, =ν_ca=, =ν_zones= (=open=), =ν_id= (=fresh=), and
    =ν_tok= (=secret=, from =google.client_config=).
 2. =provider_config(kubernetes, {host: ν_ep, ca: ν_ca, token: ν_tok})= is a
    definite fact that carries three nulls (Rule 1). Its phase set is
    ={ν_ep, ν_ca, ν_tok}=.
-3. =resource gke.nodepool Np { ... } :- attr(gke.cluster, pngu, .zones, Zs),
+3. =resource gke.nodepool Np { ... } :- attr(gke.cluster, gke_platform, .zones, Zs),
    member(Zs, Z), Np = format("np-%s", Z)=: =member= over an open null is a
    content position; the instance is stuck on ={ν_zones}= (Rule 2). The plan
    prints one pending group "gke.nodepool np-? × unknown, depends on
-   ?gke.cluster/pngu#zones".
+   ?gke.cluster/gke_platform#zones".
 4. =k8s.namespace= and =k8s.deployment= are definite facts, but their provider
    config is pending on three nulls, so their *deformations* are pending on
    the same set. Their full diffs are shown now, which Terraform cannot do.
-5. =zone_count(count(Z)) :- attr(gke.cluster, pngu, .zones, Zs), member(Zs, Z)=
+5. =zone_count(count(Z)) :- attr(gke.cluster, gke_platform, .zones, Zs), member(Zs, Z)=
    has a stuck instance, so the aggregate is undetermined (Rule 3) and
    =deny(two_zones, ...) :- ..., zone_count(N), N < 2= is stuck: the plan
    prints it as *undetermined*.
@@ -707,7 +707,7 @@ program a conflict. Rank-blind nulls are rejected.
 
 *** Case 2: open null and a concrete at the same rank
 
-=endpoint = ref(gke.cluster, pngu, .endpoint)= and =endpoint = "1.2.3.4"=, both
+=endpoint = ref(gke.cluster, gke_platform, .endpoint)= and =endpoint = "1.2.3.4"=, both
 at normal. =eq3= is Unknown, so the rank's element is =Stuck({ν, "1.2.3.4"},
 {ν})= and collapse returns =Stuck=. At resolution =ν := "1.2.3.4"= the cell
 re-normalizes to =Val("1.2.3.4", {1, 2})=, both witnesses; =ν := "9.9.9.9"=
@@ -1701,17 +1701,17 @@ Gone: three =merge_rule= facts (the schema decides), =component_scope=,
 =setting_add=. New: the =@override= line, which is the case A could not
 write.
 
-** 7.4 pngu.df: network, GKE, and the two-phase kubernetes chunk
+** 7.4 gke_platform.df: network, GKE, and the two-phase kubernetes chunk
 
 #+begin_src prolog
-# pngu.df, direction E. The renfry stack for one GCP project per environment.
+# gke_platform.df, direction E. The renfry stack for one GCP project per environment.
 
 edition 2026.
 
 provider google     { source = "registry.dform.dev/google",     version = ">=6" }.
 provider kubernetes { source = "registry.dform.dev/kubernetes", version = ">=3" }.
 provider file       { source = "registry.dform.dev/file" }.
-stack renfry.pngu   { backend = gcs("renfry-state", "pngu") }.
+stack renfry.gke_platform  { backend = gcs("renfry-state", "gke_platform") }.
 
 input env: enum(dev, stg, prod) = dev.
 
@@ -1736,7 +1736,7 @@ type settings {
 
 settings E @default {
   region = "us-east1"
-  gke.static_ips = { "pngu-grpc": { type: "INTERNAL" } }
+  gke.static_ips = { "gke-platform-grpc": { type: "INTERNAL" } }
 } :- env_name(E).
 
 env_name(dev). env_name(stg). env_name(prod).
@@ -1856,7 +1856,7 @@ resource google.compute_address S {
 # GKE: phase 1
 ########################################
 
-resource gke.cluster pngu {
+resource gke.cluster gke_platform {
   cluster_type              = "autopilot-private"
   env                       = E
   project_id                = Id
@@ -1875,11 +1875,11 @@ resource gke.cluster pngu {
 
 # Prod: deletion protection on, at normal rank, over the block's @default.
 # Two ranks, one value each, no conflict. The lifecycle fact is policeable.
-arg(gke.cluster, pngu, .deletion_protection, true) :- env(prod).
-lifecycle(gke.cluster, pngu, prevent_destroy) :- env(prod).
+arg(gke.cluster, gke_platform, .deletion_protection, true) :- env(prod).
+lifecycle(gke.cluster, gke_platform, prevent_destroy) :- env(prod).
 
-deny(prod_deletion_protection, "prod cluster must have deletion protection", { cluster: pngu }) :-
-  env(prod), not attr(gke.cluster, pngu, .deletion_protection, true).
+deny(prod_deletion_protection, "prod cluster must have deletion protection", { cluster: gke_platform }) :-
+  env(prod), not attr(gke.cluster, gke_platform, .deletion_protection, true).
 
 ########################################
 # Kubernetes: phase 2. The provider is configured from phase-1 nulls.
@@ -1889,15 +1889,15 @@ deny(prod_deletion_protection, "prod cluster must have deletion protection", { c
 # computed and sensitive (secret). This fact is definite and carries three
 # nulls, so every kubernetes deformation is pending on them: phase 2.
 provider_config(kubernetes, {
-  host:  ref(gke.cluster, pngu, .endpoint),
-  ca:    ref(gke.cluster, pngu, .ca_certificate),
+  host:  ref(gke.cluster, gke_platform, .endpoint),
+  ca:    ref(gke.cluster, gke_platform, .ca_certificate),
   token: ref(google.client_config, current, .access_token)
 }).
 
-resource k8s.namespace pngu { name = "pngu" }.
+resource k8s.namespace gke_platform { name = "gke-platform" }.
 
 resource k8s.deployment api {
-  namespace = ref(k8s.namespace, pngu, .name)        # configured attribute: rewritten to an attr join
+  namespace = ref(k8s.namespace, gke_platform, .name)  # configured attribute: rewritten to an attr join
   image     = "gcr.io/renfry/api:1.42"
   replicas  = 3
 }.
@@ -1905,30 +1905,30 @@ resource k8s.deployment api {
 # The secret never appears in the store as bytes: the kubernetes provider
 # resolves ?google.secret_manager_secret_version/db_pw#secret_data inside Apply.
 resource k8s.secret db_credentials {
-  namespace = ref(k8s.namespace, pngu, .name)
+  namespace = ref(k8s.namespace, gke_platform, .name)
   data      = { password: ref(google.secret_manager_secret_version, db_pw, .secret_data) }
 }.
 
 # One node pool per zone the autopilot cluster actually used. .zones is an
 # open null at plan time; member/2 over it is a content position, so this
-# rule is stuck on ?gke.cluster/pngu#zones and the plan prints one pending
+# rule is stuck on ?gke.cluster/gke_platform#zones and the plan prints one pending
 # group of unknown cardinality. After phase 1 it fires once per zone.
 resource gke.nodepool Np {
-  cluster = ref(gke.cluster, pngu, .id)
+  cluster = ref(gke.cluster, gke_platform, .id)
   zone    = Z
   min     = 1
   max     = 3
 } :-
-  attr(gke.cluster, pngu, .zones, Zs), member(Zs, Z),
+  attr(gke.cluster, gke_platform, .zones, Zs), member(Zs, Z),
   Np = format("np-%s", Z).
 
 # A policy that cannot be decided at plan time and says so: the aggregate
 # has a stuck instance, so it is undetermined, and the deny is reported as
 # undetermined until phase 1 resolves .zones.
-zone_count(count(Z)) :- attr(gke.cluster, pngu, .zones, Zs), member(Zs, Z).
+zone_count(count(Z)) :- attr(gke.cluster, gke_platform, .zones, Zs), member(Zs, Z).
 
-deny(two_zones, "cluster must be in at least two zones", { cluster: pngu }) :-
-  want(gke.cluster, pngu), zone_count(N), N < 2.
+deny(two_zones, "cluster must be in at least two zones", { cluster: gke_platform }) :-
+  want(gke.cluster, gke_platform), zone_count(N), N < 2.
 
 ########################################
 # Monitoring: the dashboard JSON is a file extern, hashed, with provenance
@@ -1936,10 +1936,10 @@ deny(two_zones, "cluster must be in at least two zones", { cluster: pngu }) :-
 
 extern file.json(+path: string, -value: any).
 
-resource google.monitoring_dashboard pngu {
+resource google.monitoring_dashboard gke_platform {
   project        = Id
   dashboard_json = Dash
-} :- project(Id, _, _, _), file.json("modules/monitoring/dashboard-pngu.json", Dash).
+} :- project(Id, _, _, _), file.json("modules/monitoring/dashboard-gke-platform.json", Dash).
 
 output(active_env, E)  :- env(E).
 output(project_id, Id) :- project(Id, _, _, _).
@@ -1949,28 +1949,28 @@ What the plan prints for a fresh prod stack (format per the plan-output
 ticket; the sections are the point):
 
 #+begin_example
-plan renfry.pngu (env=prod): 9 deformations definite, 1 group pending, 3 deformations pending, 1 policy undetermined
+plan renfry.gke_platform (env=prod): 9 deformations definite, 1 group pending, 3 deformations pending, 1 policy undetermined
 
 definite
   + google.compute_subnetwork gke_subnet           ip_cidr_range=10.141.124.0/22 ...
   + google.compute_subnetwork regional_proxy
   + google.compute_network_peering peering-envoy-prod-legacy
-  + google.compute_address static-ip-pngu-grpc     subnetwork_id=?google.compute_subnetwork/gke_subnet#id
-  + gke.cluster pngu                               deletion_protection=true (normal, pngu.df:131 over @default pngu.df:124)
-  + google.monitoring_dashboard pngu               dashboard_json=<sha256:3f9a...> (file.json, recorded)
+  + google.compute_address static-ip-gke-platform-grpc  subnetwork_id=?google.compute_subnetwork/gke_subnet#id
+  + gke.cluster gke_platform                       deletion_protection=true (normal, gke_platform.df:131 over @default gke_platform.df:124)
+  + google.monitoring_dashboard gke_platform       dashboard_json=<sha256:3f9a...> (file.json, recorded)
   ...
 
-pending on ?gke.cluster/pngu#endpoint ?gke.cluster/pngu#ca_certificate ?google.client_config/current#access_token
+pending on ?gke.cluster/gke_platform#endpoint ?gke.cluster/gke_platform#ca_certificate ?google.client_config/current#access_token
   (provider kubernetes is configured from phase-1 values)
-  + k8s.namespace pngu                             name="pngu"
-  + k8s.deployment api                             namespace="pngu" image="gcr.io/renfry/api:1.42" replicas=3
+  + k8s.namespace gke_platform                     name="gke-platform"
+  + k8s.deployment api                             namespace="gke-platform" image="gcr.io/renfry/api:1.42" replicas=3
   + k8s.secret db_credentials                      data.password=<secret ?google.secret_manager_secret_version/db_pw#secret_data>
 
-pending on ?gke.cluster/pngu#zones
-  ? gke.nodepool np-?  x unknown                   one per element of ?gke.cluster/pngu#zones (pngu.df:158)
+pending on ?gke.cluster/gke_platform#zones
+  ? gke.nodepool np-?  x unknown                   one per element of ?gke.cluster/gke_platform#zones (gke_platform.df:158)
 
 undetermined
-  ? deny two_zones "cluster must be in at least two zones"   decided after gke.cluster pngu is applied
+  ? deny two_zones "cluster must be in at least two zones"   decided after gke.cluster gke_platform is applied
 
 apply will run 2 phases; use --max-ticks to bound it.
 #+end_example
@@ -1980,7 +1980,7 @@ null and it is still definite, because the null is forwarded and the
 executor fills it after the subnet's =Apply= by the dependency edge. The
 kubernetes objects are phase 2 not because their provider config carries
 nulls but because the action that resolves those nulls (creating the
-cluster) also resolves =?gke.cluster/pngu#zones=, on which a rule is stuck
+cluster) also resolves =?gke.cluster/gke_platform#zones=, on which a rule is stuck
 and a policy is undetermined; that action is a re-evaluation boundary and
 everything downstream of it waits. A cluster with no stuck rule over its
 computed attributes would have its kubernetes objects in phase 1.

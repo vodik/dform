@@ -1019,7 +1019,7 @@ extern vault.read(+path: string, -value: secret(string)) ephemeral.
 resource db.postgres db {
   password = Pw,                     # schema: password: sensitive(string). OK.
   tags     = {pw_hint: Pw}           # ERROR: secret flows to tags: map(string), a public sink
-} :- vault.read("kv/pngu/db", Pw).
+} :- vault.read("kv/gke_platform/db", Pw).
 #+end_src
 
 Because labels are lattice components, provenance (§7.1) records the
@@ -1161,16 +1161,16 @@ disambiguated by the first character:
 |----------------------------+----------------+--------------------------------------------|
 | =[A-Z_][A-Za-z0-9_]*=      | variable       | =Env=, =VpcNet=, =_=, =_Ignored=            |
 | =[a-z][a-z0-9_]*=          | identifier     | =prod=, =backup_days=, =us_east1=          |
-| ident (=.= (ident | string))+ | path literal | =net.vpc=, =db.backup_days=, =gke.static_ips."pngu-grpc".type= |
+| ident (=.= (ident | string))+ | path literal | =net.vpc=, =db.backup_days=, =gke.static_ips."gke-platform-grpc".type= |
 | =Var.ident=                | field access   | =Assign.main=, =X.cidr=                    |
 | ="..."=                    | string         | ="us-test-1a"=, ="INTERNAL"=, ="envoy-dev"= |
-| =#= path                   | definition     | =#port=, =#aws.subnet=, =#pngu.env=        |
+| =#= path                   | definition     | =#port=, =#aws.subnet=, =#gke_platform.env=  |
 | =@= ident                  | rank           | =@default=, =@override=                    |
 | =-=                        | always minus   | =IA - 1=                                   |
 
 - Identifiers are lowercase-only. Mixed-case cloud names (=INTERNAL=,
   =REGIONAL_MANAGED_PROXY=) and hyphenated names are strings. This costs
-  quotes in pngu.df and buys =-=, =.=, =/= as operators forever.
+  quotes in gke_platform.df and buys =-=, =.=, =/= as operators forever.
 - A path literal is a *value* of sort =path=, not a string: =db.backup_days=
   and ="db.backup_days"= are different values, and the compiler can check
   paths against schemas. A path segment may be a string to admit any key.
@@ -1230,7 +1230,7 @@ builtin and there will not be one.
 
 #+begin_src prolog
 extern random.id(+seed: string, +bytes: int, -id: string) persisted.
-resource storage.bucket logs { name = format("pngu-logs-%s", Suffix) } :- random.id("logs", 4, Suffix).
+resource storage.bucket logs { name = format("gke-platform-logs-%s", Suffix) } :- random.id("logs", 4, Suffix).
 # state: pinned random.id("logs", 4) = "a8f3". Rename the seed to rotate.
 #+end_src
 
@@ -1522,7 +1522,7 @@ module policy.baseline {
 apply_policy policy.baseline.
 #+end_src
 
-* 11. pngu.df, representative chunk rewritten
+* 11. gke_platform.df, representative chunk rewritten
 
 The environment selection, settings, peerings, and the two subnets. The
 notable differences: settings are one base layer plus per-environment
@@ -1542,7 +1542,7 @@ rel env(e: symbol).
 env(E) :- input(env, E).
 
 # --- Definitions (refinement types over the lattice) ------------------------
-#pngu.gke: {
+#gke_platform.gke: {
   control_plane_cidr: inet & prefix_len = 28,
   subnet_cidr:        inet & prefix_len = 22,
   pods_cidr:          inet & prefix_len = 21,
@@ -1554,7 +1554,7 @@ env(E) :- input(env, E).
 # --- Settings: base layer + overrides ---------------------------------------
 settings E @default {
   region = "us-east1",
-  gke    = #pngu.gke & {static_ips: {"pngu-grpc": {type: "INTERNAL"}}}     # schema joins in at rank default
+  gke    = #gke_platform.gke & {static_ips: {"gke-platform-grpc": {type: "INTERNAL"}}}  # schema joins in at rank default
 } :- E in {dev, stg, prod}.
 
 settings dev {
@@ -1642,7 +1642,7 @@ when env(Env) {
        setting(Env, gke, Gke), map_entry(Gke.static_ips, IpName, Spec),   # IpName is a key: disc read of gke cell
        Res = format("static-ip-%s", IpName).
 
-  resource gke_cluster pngu {
+  resource gke_cluster gke_platform {
     cluster_type              = "autopilot-private",
     env                       = Env,
     project_id                = ProjectId,
@@ -1658,13 +1658,13 @@ when env(Env) {
        net_id(Env, NetId), setting(Env, gke, Gke).
 
   # deletion_protection: prod forces it on, at a rank the module block cannot out-rank.
-  attr(gke_cluster, "pngu", deletion_protection, true @override) :- env(prod).
+  attr(gke_cluster, "gke_platform", deletion_protection, true @override) :- env(prod).
 
   extern file.json(+path: string, -value: struct).
-  resource google_monitoring_dashboard pngu {
+  resource google_monitoring_dashboard gke_platform {
     project        = ProjectId,
     dashboard_json = Dash
-  } :- setting(Env, project_id, ProjectId), file.json("modules/monitoring/dashboard-pngu.json", Dash).
+  } :- setting(Env, project_id, ProjectId), file.json("modules/monitoring/dashboard-gke-platform.json", Dash).
 
   output(active_env, Env).
   output(project_id, P) :- setting(Env, project_id, P).
@@ -1672,7 +1672,7 @@ when env(Env) {
 #+end_src
 
 Notice what the "static IPs must be INTERNAL" change did. In the original
-it is a rule that fires after the fact. Here =#pngu.gke= is joined into the
+it is a rule that fires after the fact. Here =#gke_platform.gke= is joined into the
 =gke= cell at rank default, so a =dev= override writing =type: "EXTERNAL"=
 produces ⊤ at the join with the enum refinement, and the error names the
 settings block line and the definition line. There is no rule, no stratum,

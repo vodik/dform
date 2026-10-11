@@ -333,17 +333,17 @@ resource iam.policy "connect-${host}" {
 # Each project under examples/ has a README that says what it shows and
 # the commands to run:
 #
-#   demo       components and modules in their own files, settings from YAML
-#              files, denies `dform test` runs over every env
-#   pngu       a table read from a CSV file
-#   advanced   more recursion: reachability, routes, group membership
-#   adopt      taking over a resource that already exists
-#   refine     types with conditions (`check`), checked when values are known
-#   gke        a provider configured from values only apply learns
-#   k8s, aws   other fake providers, shaped like Kubernetes and AWS
-#   bootstrap  two stacks, one of them a controller's
-#   approvals  approving a signed plan
-#   crud-api   a blue/green rollout
+#   demo          components and modules in their own files, settings from YAML
+#                 files, denies `dform test` runs over every env
+#   gke-platform  a table read from a CSV file
+#   advanced      more recursion: reachability, routes, group membership
+#   adopt         taking over a resource that already exists
+#   refine        types with conditions (`check`), checked when values are known
+#   gke           a provider configured from values only apply learns
+#   k8s, aws      other fake providers, shaped like Kubernetes and AWS
+#   bootstrap     two stacks, one of them a controller's
+#   approvals     approving a signed plan
+#   crud-api      a blue/green rollout
 #
 # docs/best_practices.md is how to write a program; docs/grammar.md is
 # the language.

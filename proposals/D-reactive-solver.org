@@ -5,7 +5,7 @@
 
 Status: proposal, 2026-09-27. Answers every DECIDE ticket on =DESIGN.org= and
 every entry in its "Research directions" section from one position. Written
-against commit 3e2cf48 plus the working-tree =pngu.df=.
+against commit 3e2cf48 plus the working-tree =gke_platform.df=.
 
 This document makes choices. Where a choice contradicts a recommendation on
 the board, the contradiction is named and argued, not smoothed over.
@@ -74,7 +74,7 @@ at all. The last section is honest about all of that.
 - Section 4: each research direction, integrated or rejected.
 - Section 5: decision records for every DECIDE ticket.
 - Section 6: grammar and relation-kind syntax.
-- Section 7: =dform.df= rewritten, a chunk of =pngu.df=, and a Kubernetes
+- Section 7: =dform.df= rewritten, a chunk of =gke_platform.df=, and a Kubernetes
   operator.
 - Section 8: engine architecture and how existing tickets map.
 - Section 9: what this direction does badly.
@@ -585,8 +585,8 @@ A controller is the driver that decides where tick boundaries fall. That
 is all it is; the circuit does not know it is in a controller.
 
 #+begin_src prolog
-stack pngu.operator {
-  backend = k8s_configmap("pngu-system", "dform-log")
+stack gke_platform.operator {
+  backend = k8s_configmap("gke-platform-system", "dform-log")
   mode = controller {
     debounce = 250ms,          % wait this long after the last input delta
     max_latency = 5s,          % but never longer than this since the first
@@ -1266,7 +1266,7 @@ line per rule doubles their length.
 
 *Consequences.*
 - The hyphen and slash leave symbols; =us-test-1a= becomes ="us-test-1a"=
-  and =pngu-grpc= becomes ="pngu-grpc"=. Every existing =.df= changes;
+  and =gke-platform-grpc= becomes ="gke-platform-grpc"=. Every existing =.df= changes;
   =dform migrate= does it mechanically under the editions ticket.
 - Field access =X.y= on a variable and subtraction =A - B= become
   available. Section 6.1 uses the first for document access.
@@ -1518,7 +1518,7 @@ policy baseline {
 apply_policy baseline.
 
 stack renfry.prod {
-  backend = s3("renfry-state", "pngu/prod"),
+  backend = s3("renfry-state", "gke_platform/prod"),
   mode = batch,
   providers = [aws, random, file]
 }
@@ -1687,7 +1687,7 @@ What the reader should feel: the file is the same length as before, the
 a rule head is declared, IP literals are bare, hyphenated names are
 strings, and the one genuinely new construct (=solve=) is eight lines.
 
-** =pngu.df=, the representative chunk
+** =gke_platform.df=, the representative chunk
 
 Settings, the peering table, the GKE subnet, the static IP, and the
 dashboard, which is no longer stubbed because =file.json= is an extern.
@@ -1695,8 +1695,8 @@ dashboard, which is no longer stubbed because =file.json= is an extern.
 #+begin_src prolog
 edition 2026.
 
-stack pngu {
-  backend = gcs("renfry-dform", "pngu"),
+stack gke_platform {
+  backend = gcs("renfry-dform", "gke_platform"),
   mode = batch,
   providers = [google, file]
 }
@@ -1717,7 +1717,7 @@ settings dev {
     subnet_cidr:   10.141.76.0/22,
     pods_cidr:     10.141.80.0/21,
     services_cidr: 10.141.88.0/21,
-    static_ips: { "pngu-grpc": { type: "INTERNAL" } }
+    static_ips: { "gke-platform-grpc": { type: "INTERNAL" } }
   }
 }
 settings stg {
@@ -1731,7 +1731,7 @@ settings stg {
     subnet_cidr:   10.141.100.0/22,
     pods_cidr:     10.141.104.0/21,
     services_cidr: 10.141.112.0/21,
-    static_ips: { "pngu-grpc": { type: "INTERNAL" } }
+    static_ips: { "gke-platform-grpc": { type: "INTERNAL" } }
   }
 }
 # prod elided; same shape
@@ -1749,7 +1749,7 @@ project(Env, Id, Name, Region, NetId) :-
   NetId = format("projects/%s/global/networks/%s", Id, NetName).
 
 constraint("GKE static IPs must be INTERNAL") :-
-  env(Env), setting(Env, gke, G), G.static_ips."pngu-grpc".type != "INTERNAL".
+  env(Env), setting(Env, gke, G), G.static_ips."gke-platform-grpc".type != "INTERNAL".
 
 resource google.compute.Subnetwork gke_subnet {
   project = Id, region = Region, network = NetId,
@@ -1778,16 +1778,16 @@ resource google.compute.Address Res {
   address_type = Type,
   subnetwork_id = ref(google.compute.Subnetwork, gke_subnet, id)
 } :- project(Env, Id, _, Region, _), setting(Env, gke, G),
-     IpName = "pngu-grpc", Type = G.static_ips."pngu-grpc".type,
+     IpName = "gke-platform-grpc", Type = G.static_ips."gke-platform-grpc".type,
      Res = format("static-ip-%s", IpName).
 
 # The dashboard JSON is a fact with provenance and a hash, read once.
 extern file.json(+path: string, -value: any) from provider file once.
 
-resource google.monitoring.Dashboard pngu {
+resource google.monitoring.Dashboard gke_platform {
   project = Id,
   dashboard_json = Json
-} :- project(_, Id, _, _, _), file.json("terraform/modules/monitoring/dashboard-pngu.json", Json).
+} :- project(_, Id, _, _, _), file.json("terraform/modules/monitoring/dashboard-gke-platform.json", Json).
 
 output(active_env, Env) :- env(Env).
 output(project_id, Id) :- project(_, Id, _, _, _).

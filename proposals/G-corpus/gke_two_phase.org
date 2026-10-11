@@ -65,12 +65,12 @@ resource google_compute_subnetwork gke_subnet {
 resource google_compute_address static_ip {
   project = Id
   region = Region
-  name = "pngu-grpc"
+  name = "gke-platform-grpc"
   subnetwork_id = ref(google_compute_subnetwork, gke_subnet, .id)
 } :-
   project(Id, _, Region, _).
 
-resource gke_cluster pngu {
+resource gke_cluster gke_platform {
   env = E
   project_id = Id
   name = format("%s-gke", Name)
@@ -86,13 +86,13 @@ resource gke_cluster pngu {
 
 # Provider configured from phase-1 nulls (two open, one secret).
 provider_config(kubernetes, {
-  host: ref(gke_cluster, pngu, .endpoint),
-  ca: ref(gke_cluster, pngu, .ca_certificate),
+  host: ref(gke_cluster, gke_platform, .endpoint),
+  ca: ref(gke_cluster, gke_platform, .ca_certificate),
   token: ref(google.client_config, current, .access_token)
 }).
 
-resource k8s.namespace pngu {
-  name = "pngu"
+resource k8s.namespace gke_platform {
+  name = "gke-platform"
 }.
 
 # ref to a configured attribute is an attr join (E: rewritten by the compiler).
@@ -100,30 +100,30 @@ resource k8s.deployment api {
   namespace = Ns
   image = "gcr.io/renfry/api:1.42"
   replicas = 3
-} :- arg(k8s.namespace, pngu, .name, Ns).
+} :- arg(k8s.namespace, gke_platform, .name, Ns).
 
 resource k8s.secret db_credentials {
   namespace = Ns
   data = { password: ref(google.secret_manager_secret_version, db_pw, .secret_data) }
-} :- arg(k8s.namespace, pngu, .name, Ns).
+} :- arg(k8s.namespace, gke_platform, .name, Ns).
 
 # One nodepool per zone: member over an open null is a content position.
 resource gke_nodepool Np {
-  cluster = ref(gke_cluster, pngu, .id)
+  cluster = ref(gke_cluster, gke_platform, .id)
   zone = Z
   min = 1
   max = 3
 } :-
-  arg(gke_cluster, pngu, .zones, Zs),
+  arg(gke_cluster, gke_platform, .zones, Zs),
   member(Zs, Z),
   Np = format("np-%s", Z).
 
 zone_count(count(Z)) :-
-  arg(gke_cluster, pngu, .zones, Zs),
+  arg(gke_cluster, gke_platform, .zones, Zs),
   member(Zs, Z).
 
-deny("cluster must be in at least two zones", { cluster: pngu }) :-
-  want(gke_cluster, pngu),
+deny("cluster must be in at least two zones", { cluster: gke_platform }) :-
+  want(gke_cluster, gke_platform),
   zone_count(N),
   N < 2.
 
@@ -180,11 +180,11 @@ resource google_compute_address static_ip {
   for project(id, _, region, _)
   project = id
   region = region
-  name = "pngu-grpc"
+  name = "gke-platform-grpc"
   subnetwork_id = gke_subnet.id
 }
 
-resource gke_cluster pngu {
+resource gke_cluster gke_platform {
   for project(id, name, _, net_id)
   env = env
   project_id = id
@@ -198,42 +198,42 @@ resource gke_cluster pngu {
 
 # Provider configured from phase-1 nulls (two open, one secret).
 provider_config("kubernetes", {
-  host: gke_cluster.pngu.endpoint,
-  ca: gke_cluster.pngu.ca_certificate,
+  host: gke_cluster.gke_platform.endpoint,
+  ca: gke_cluster.gke_platform.ca_certificate,
   token: google.client_config["current"].access_token
 })
 
-resource k8s.namespace pngu {
-  name = "pngu"
+resource k8s.namespace gke_platform {
+  name = "gke-platform"
 }
 
 # A read in the clause is an attr join (the value now), not a reference.
 resource k8s.deployment api {
-  if ns = k8s.namespace.pngu.name
+  if ns = k8s.namespace.gke_platform.name
   namespace = ns
   image = "gcr.io/renfry/api:1.42"
   replicas = 3
 }
 
 resource k8s.secret db_credentials {
-  if ns = k8s.namespace.pngu.name
+  if ns = k8s.namespace.gke_platform.name
   namespace = ns
   data = { password: google.secret_manager_secret_version["db_pw"].secret_data }
 }
 
 # One nodepool per zone: member over an open null is a content position.
 resource gke_nodepool "np-{z}" {
-  for z in gke_cluster.pngu.zones
-  cluster = gke_cluster.pngu.id
+  for z in gke_cluster.gke_platform.zones
+  cluster = gke_cluster.gke_platform.id
   zone = z
   min = 1
   max = 3
 }
 
-zone_count(count(z)) if z in gke_cluster.pngu.zones
+zone_count(count(z)) if z in gke_cluster.gke_platform.zones
 
-deny "cluster must be in at least two zones" { cluster: "pngu" } if {
-  exists gke_cluster.pngu
+deny "cluster must be in at least two zones" { cluster: "gke_platform" } if {
+  exists gke_cluster.gke_platform
   zone_count(n)
   n < 2
 }
@@ -255,34 +255,34 @@ deny "cluster must not be deletable" { cluster: c } if c in gke_cluster, not c.d
   provider (a data source), so the reference is the null itself, as today.
   =T["current"]= because nothing declares =current=; =T.name= requires a
   declared resource (G-5).
-- =if ns = k8s.namespace.pngu.name= then =namespace = ns=: the current
+- =if ns = k8s.namespace.gke_platform.name= then =namespace = ns=: the current
   program reads the namespace's name in the body (=arg(...)= in a body is
-  =attr=), not by =ref=. =namespace = k8s.namespace.pngu.name= would be a
-  reference and would print =ref(k8s.namespace,pngu,name)= in the plan,
+  =attr=), not by =ref=. =namespace = k8s.namespace.gke_platform.name= would be a
+  reference and would print =ref(k8s.namespace,gke_platform,name)= in the plan,
   because =name= is not computed under the gke schema (a
   =Value::Ref= to a configured attribute). The rewrite keeps the read so
   the plan stays byte-identical, and the difference is the one this
   proposal is most worried about (section 9).
-- A bare =pngu= would be ambiguous (a cluster and a namespace share the
-  name), so every reference says its type: =gke_cluster.pngu.zones=.
-- =for z in gke_cluster.pngu.zones= is =attr(gke_cluster, pngu, zones, Zs),
+- A bare =gke_platform= would be ambiguous (a cluster and a namespace share the
+  name), so every reference says its type: =gke_cluster.gke_platform.zones=.
+- =for z in gke_cluster.gke_platform.zones= is =attr(gke_cluster, gke_platform, zones, Zs),
   member(Zs, Z)=: the content position over an open null that makes the
   node pools a pending group. Nothing in the syntax says so.
-- =zone_count(count(z)) if z in gke_cluster.pngu.zones=: aggregates stay in
+- =zone_count(count(z)) if z in gke_cluster.gke_platform.zones=: aggregates stay in
   heads (G-16).
 
 ** Reads better
 
-- =cluster = gke_cluster.pngu.id=, =host: gke_cluster.pngu.endpoint=: the
-  reference reads as the plan prints the address (=gke_cluster.pngu=).
-- The denies: =exists gke_cluster.pngu, zone_count(n), n < 2=;
+- =cluster = gke_cluster.gke_platform.id=, =host: gke_cluster.gke_platform.endpoint=: the
+  reference reads as the plan prints the address (=gke_cluster.gke_platform=).
+- The denies: =exists gke_cluster.gke_platform, zone_count(n), n < 2=;
   =c in gke_cluster, not c.deletion_protection=.
 
 ** Reads worse
 
 - The phase structure is invisible. In the Prolog form a reader could at
-  least see =ref(gke_cluster, pngu, .endpoint)= and ask what =ref= does; in
-  the new form =gke_cluster.pngu.endpoint= looks like any value. Which
+  least see =ref(gke_cluster, gke_platform, .endpoint)= and ask what =ref= does; in
+  the new form =gke_cluster.gke_platform.endpoint= looks like any value. Which
   references are open nulls is schema knowledge either way; the LSP must
   show it (an inlay =?open= on the reference).
 - The two =if ns = ...= clauses exist only to choose a read over a reference.

@@ -56,7 +56,7 @@ modules from =explore/F-revision= rather than starting over.
 - whether variable instance segments in module paths should be forbidden (E candid 5)
 - Rule 3 aggregate-reader clause in practice (F F2)
 
-** DONE [#A] Fix: committed pngu.df does not parse
+** DONE [#A] Fix: committed gke_platform.df does not parse
 F F12. Verified: HEAD failed to parse, the working copy parses. Working copy
 committed 2026-09-27.
 
@@ -824,7 +824,7 @@ unnecessary; without it, a deep chain of 201 derived facts fails spuriously.
 =src/fakecloud.rs=, =src/state.rs=, =src/main.rs=.
 
 ** TODO [#A] State is not scoped to a program
-All programs share =.dform/state.json=. Verified: =dform --file pngu.df plan=
+All programs share =.dform/state.json=. Verified: =dform --file gke_platform.df plan=
 proposes deleting every resource created by =dform.df=. See stacks ticket.
 
 ** TODO [#A] Apply is not crash-safe
@@ -1143,7 +1143,7 @@ See tooling ticket. Precedent: Soufflé =explain=.
 ** TODO [#A] L6 Stacks and state addressing
 #+begin_src prolog
 stack renfry.prod {
-  backend = s3("renfry-state", "pngu/prod")
+  backend = s3("renfry-state", "gke_platform/prod")
 }.
 #+end_src
 One program owns one stack. Cross-stack values arrive as discovery facts:
@@ -1334,7 +1334,7 @@ where the schema allows it, and empty collections are ordinary values.
 Precedent: Terraform optional/default/null semantics, settled over years.
 
 ** TODO [#B] External files and templates as externs
-=pngu.df= stubs the dashboard JSON because nothing can read a file. A =file=
+=gke_platform.df= stubs the dashboard JSON because nothing can read a file. A =file=
 fact provider (=extern file.json(+path, -value)=, =file.text=, =file.template=)
 so templates are facts with provenance and hashing, not a =file()= builtin.
 

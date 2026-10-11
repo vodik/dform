@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/pngu/stacks/pngu.df: 128 nodes, 251 edges (80 negative), 8 strata
+== examples/gke-platform/stacks/gke_platform.df: 128 nodes, 251 edges (80 negative), 8 strata
 stratum  node
 0        (arg, google.secret_manager_secret_version, secret_data)
 0        (arg, input, env)

@@ -1031,7 +1031,7 @@ it can tell (the mock reports its `account` setting), and a run whose
 provider reports another account, or none, refuses to plan, naming both
 (an expected account a secret reaches, an `env.var`'s, by its label,
 `provider/NAME#expect_account`, never its value)
-(`deployment pngu[env=prod]: refusing to plan: provider google reports
+(`deployment gke_platform[env=prod]: refusing to plan: provider google reports
 account renfry-dev, but the program expects renfry-prod`).
 
 The workspace keeps the engine apart from the transport. `dform-core`
@@ -1093,7 +1093,7 @@ change (a replace when the path is `force_new`); with none kept (an
 object made elsewhere) no change. An `extern_decl` declares a data
 source to the compiler: a program reads it with no `extern` line.
 
-Built-in mock schemas: `fake` (the demo's), `gke` (pngu.df), `k8s` (fifteen
+Built-in mock schemas: `fake` (the demo's), `gke` (gke_platform.df), `k8s` (fifteen
 Kubernetes kinds; try `cargo run -- -C examples/k8s plan`)
 and `aws-mock` (twelve AWS types in the Terraform provider's shape, with its
 Optional+Computed attributes and keyless sets; try
@@ -2035,7 +2035,7 @@ run goes on, the next tick deforming it back:
 
 ```bash
 cargo run -- -C examples/gke dev \
-  --chaos 'mutate=google.container_cluster["pngu"].deletion_protection=false' apply gke_two_phase   # drift, tick 2 undoes it
+  --chaos 'mutate=google.container_cluster["gke_platform"].deletion_protection=false' apply gke_two_phase   # drift, tick 2 undoes it
 ```
 
 Deletes and replacement. Deletes run after every create and update, in
@@ -2329,7 +2329,7 @@ G=examples/gke/stacks/gke_two_phase.df
 cargo run -- dev --world w.json plan $G --out plan.json
 cargo run -- apply plan.json                          # tick 1; tick 2's nodepools it could not name
 # the world moves after tick 1: the apply stops before tick 2, exit 5
-cargo run -- dev --chaos 'mutate=google.container_cluster["pngu"].name="other"' apply plan.json
+cargo run -- dev --chaos 'mutate=google.container_cluster["gke_platform"].name="other"' apply plan.json
 ```
 
 A `sensitive` computed value never leaves the provider: what dform sees, stores

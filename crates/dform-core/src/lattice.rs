@@ -1217,20 +1217,20 @@ mod tests {
     #[test]
     fn case2_open_null_vs_concrete_same_rank_is_stuck_until_resolution() {
         let parts = [
-            Ranked::at(Rank::Normal, 1, open("gke/pngu#endpoint")),
+            Ranked::at(Rank::Normal, 1, open("gke/gke_platform#endpoint")),
             Ranked::at(Rank::Normal, 2, s("1.2.3.4")),
         ];
         let (cell, c) = ranked_all_orders(&parts);
         assert!(
-            matches!(&c, Collapsed::Stuck { rank: Rank::Normal, nulls, .. } if nulls.contains("gke/pngu#endpoint"))
+            matches!(&c, Collapsed::Stuck { rank: Rank::Normal, nulls, .. } if nulls.contains("gke/gke_platform#endpoint"))
         );
 
         // Resolution decides: equal -> the value with both witnesses; unequal -> conflict naming both.
-        let same = cell.resolve("gke/pngu#endpoint", &s("1.2.3.4")).collapse();
+        let same = cell.resolve("gke/gke_platform#endpoint", &s("1.2.3.4")).collapse();
         assert!(
             matches!(&same, Collapsed::Val { value, witnesses, .. } if *value == s("1.2.3.4") && *witnesses == Witnesses::from([1, 2]))
         );
-        let diff = cell.resolve("gke/pngu#endpoint", &s("9.9.9.9")).collapse();
+        let diff = cell.resolve("gke/gke_platform#endpoint", &s("9.9.9.9")).collapse();
         let Collapsed::Conflict { a, b, .. } = diff else {
             panic!("expected conflict, got {diff:?}")
         };
@@ -1257,7 +1257,7 @@ mod tests {
         // The coordinator's rule ("undefined while any rank holds an open null")
         // is replaced: rank decides first. normal: open null ; @override: concrete.
         let (_, c) = ranked_all_orders(&[
-            Ranked::at(Rank::Normal, 1, open("gke/pngu#endpoint")),
+            Ranked::at(Rank::Normal, 1, open("gke/gke_platform#endpoint")),
             Ranked::at(Rank::Override, 2, s("1.2.3.4")),
         ]);
         assert!(
@@ -1267,11 +1267,11 @@ mod tests {
         // And the reverse: the open null wins by rank; the collapsed value *is*
         // the null (forwardable); only content readers are stuck on it.
         let (_, c) = ranked_all_orders(&[
-            Ranked::at(Rank::Override, 1, open("gke/pngu#endpoint")),
+            Ranked::at(Rank::Override, 1, open("gke/gke_platform#endpoint")),
             Ranked::at(Rank::Normal, 2, s("1.2.3.4")),
         ]);
         assert!(
-            matches!(&c, Collapsed::Val { value, rank: Rank::Override, .. } if *value == open("gke/pngu#endpoint"))
+            matches!(&c, Collapsed::Val { value, rank: Rank::Override, .. } if *value == open("gke/gke_platform#endpoint"))
         );
     }
 
