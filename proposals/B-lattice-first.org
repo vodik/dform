@@ -1558,27 +1558,27 @@ settings E @default {
 } :- E in {dev, stg, prod}.
 
 settings dev {
-  project_id          = "renfry-dev-973682",
-  project_name        = "renfry-dev",
-  network_name        = "renfry-dev-network",
+  project_id          = "platform-dev-973682",
+  project_name        = "platform-dev",
+  network_name        = "platform-dev-network",
   regional_proxy_cidr = inet("10.193.0.0/24"),
   gke = {control_plane_cidr: inet("172.16.3.96/28"),  subnet_cidr: inet("10.141.76.0/22"),
          pods_cidr: inet("10.141.80.0/21"),           services_cidr: inet("10.141.88.0/21")}
 }.
 
 settings stg {
-  project_id          = "renfry-stg",
-  project_name        = "renfry-stg",
-  network_name        = "renfry-stg-network",
+  project_id          = "platform-stg",
+  project_name        = "platform-stg",
+  network_name        = "platform-stg-network",
   regional_proxy_cidr = inet("10.193.1.0/24"),
   gke = {control_plane_cidr: inet("172.16.3.112/28"), subnet_cidr: inet("10.141.100.0/22"),
          pods_cidr: inet("10.141.104.0/21"),          services_cidr: inet("10.141.112.0/21")}
 }.
 
 settings prod {
-  project_id          = "renfry-prod",
-  project_name        = "renfry-prod",
-  network_name        = "renfry-prod-network",
+  project_id          = "platform-prod",
+  project_name        = "platform-prod",
+  network_name        = "platform-prod-network",
   regional_proxy_cidr = inet("10.193.2.0/24"),
   gke = {control_plane_cidr: inet("172.16.3.128/28"), subnet_cidr: inet("10.141.124.0/22"),
          pods_cidr: inet("10.141.128.0/21"),          services_cidr: inet("10.141.136.0/21")}
@@ -1588,8 +1588,8 @@ settings prod {
 rel peering(env: symbol, name: string, peer_network: string).
 peering{env: dev,  name: "envoy-dev",         peer_network: "projects/envoy-dev-426188/global/networks/envoy-dev-network"}.
 peering{env: stg,  name: "envoy-stg",         peer_network: "projects/envoy-stg-597462/global/networks/envoy-stg-network"}.
-peering{env: stg,  name: "envoy-stg-legacy",  peer_network: "projects/coherentpath-stg/global/networks/envoy-proxy-stg"}.
-peering{env: prod, name: "envoy-prod-legacy", peer_network: "projects/coherentpath-prod/global/networks/envoy-proxy-prod"}.
+peering{env: stg,  name: "edge-stg",  peer_network: "projects/edge-stg/global/networks/envoy-proxy-stg"}.
+peering{env: prod, name: "edge-prod", peer_network: "projects/edge-prod/global/networks/envoy-proxy-prod"}.
 
 # --- Derived context, once, instead of eight repeated setting/3 joins --------
 lat net_id(env: symbol) : string.

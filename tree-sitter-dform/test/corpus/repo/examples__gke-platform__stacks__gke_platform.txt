@@ -55,10 +55,10 @@ type environment = enum("dev", "stg", "prod")
 ########################################
 
 set {
-  gcp.project_id = "renfry-dev-973682"
-  gcp.project_name = "renfry-dev"
+  gcp.project_id = "platform-dev-973682"
+  gcp.project_name = "platform-dev"
   gcp.region = "us-east1"
-  gcp.network_name = "renfry-dev-network"
+  gcp.network_name = "platform-dev-network"
 
   gcp.regional_proxy_cidr = "10.193.0.0/24"
 
@@ -72,10 +72,10 @@ set {
 } where env == "dev"
 
 set {
-  gcp.project_id = "renfry-stg"
-  gcp.project_name = "renfry-stg"
+  gcp.project_id = "platform-stg"
+  gcp.project_name = "platform-stg"
   gcp.region = "us-east1"
-  gcp.network_name = "renfry-stg-network"
+  gcp.network_name = "platform-stg-network"
 
   gcp.regional_proxy_cidr = "10.193.1.0/24"
 
@@ -89,10 +89,10 @@ set {
 } where env == "stg"
 
 set {
-  gcp.project_id = "renfry-prod"
-  gcp.project_name = "renfry-prod"
+  gcp.project_id = "platform-prod"
+  gcp.project_name = "platform-prod"
   gcp.region = "us-east1"
-  gcp.network_name = "renfry-prod-network"
+  gcp.network_name = "platform-prod-network"
 
   gcp.regional_proxy_cidr = "10.193.2.0/24"
 
@@ -136,7 +136,7 @@ use gke {
 deny "GKE static IPs must be INTERNAL" where gke.static_ips."gke-platform-grpc".type != "INTERNAL"
 
 ########################################
-# Resources (renfry module intent)
+# Resources (platform module intent)
 ########################################
 
 # GKE subnet (terraform-google-modules/network/google//modules/subnets)
@@ -186,7 +186,7 @@ resource google.compute_address "static-ip-${ip}" {
 # Resources (GKE module intent)
 ########################################
 
-# Represents the external terraform-mi-gke module invocation.
+# Represents the external terraform-gke module invocation.
 resource google.container_cluster gke_platform {
   cluster_type = "autopilot-private"
   env
@@ -229,7 +229,7 @@ resource alert_metrics_pack gke_platform {
   notification_channel_type = "slack"
   notification_channel_display_name = "Slack"
   enable_standard_gke_alerts = true
-  source = "git@github.com:coherentpath/terraform-gcp-alert-metrics.git?ref=v1.5.0"
+  source = "git@github.com:example-org/terraform-gcp-alert-metrics.git?ref=v1.5.0"
 }
 
 ########################################

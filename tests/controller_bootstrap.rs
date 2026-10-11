@@ -227,7 +227,7 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
         assert!(keys.iter().any(|x| x == k), "{k} in {keys:?}");
     }
     let world = "dform.state/stacks.workload/remote.json";
-    assert!(s.read(world).contains("gcr.io/renfry/web:1.0"));
+    assert!(s.read(world).contains("gcr.io/platform/web:1.0"));
     assert!(!s.path("dform.state/stacks.workload/state.json").exists());
     // A batch apply of a handed-over stack is refused; plan still reads it.
     let r = b.run(&s, &["apply", "workload"]).failure();
@@ -252,7 +252,7 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
             "stack workload is up to date",
         ]
     );
-    assert!(s.read(world).contains("gcr.io/renfry/web:1.1"));
+    assert!(s.read(world).contains("gcr.io/platform/web:1.1"));
 
     // Someone edits the cluster: replicas and the image.
     edit(&s, world, "\"replicas\": 3", "\"replicas\": 5");
@@ -268,15 +268,15 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
     edit(
         &s,
         world,
-        "gcr.io/renfry/web:1.1",
-        "gcr.io/renfry/web:debug",
+        "gcr.io/platform/web:1.1",
+        "gcr.io/platform/web:debug",
     );
     assert_eq!(
         b.controller(&s),
         [
             &format!("event world {world} changed"),
             "drift k8s.deployment[\"web\"].spec.template.spec.containers[0].image: \
-             \"gcr.io/renfry/web:1.1\" -> \"gcr.io/renfry/web:debug\" \
+             \"gcr.io/platform/web:1.1\" -> \"gcr.io/platform/web:debug\" \
              (held until approve or an input change)",
             "tick 1: plan: 1 change (1 update) over 1 tick",
             "tick 1: proceed: held, drift at spec.template.spec.containers[0].image needs \

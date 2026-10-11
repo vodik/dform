@@ -21,7 +21,7 @@ fn release(s: &Scratch, image: &str) {
 fn events_keep_the_source_registry_bounded() {
     let s = Scratch::project("ctl-memory");
     s.write("stacks/workload.df", WORKLOAD);
-    release(&s, "gcr.io/renfry/web:0");
+    release(&s, "gcr.io/platform/web:0");
     s.write(
         "data/approvals.df",
         "\n\ndecl approve(type, address)\ndecl approval(token)\n",
@@ -62,7 +62,7 @@ fn events_keep_the_source_registry_bounded() {
                 if l.ends_with("is up to date") {
                     done += 1;
                     if done < EVENTS {
-                        release(&s, &format!("gcr.io/renfry/web:{done}"));
+                        release(&s, &format!("gcr.io/platform/web:{done}"));
                     }
                 }
                 lines.push(l);

@@ -26,8 +26,8 @@ Counts (comments and blank lines excluded; section 8 of the proposal says how th
 # ticks, and stays batch: the controller refuses a `role = bootstrap` stack.
 #
 #   cargo run -- --file examples/bootstrap/bootstrap.df apply
-#   cargo run -- --root examples/bootstrap stack handover renfry.workload --to 'k8s("dform-system/workload")'
-#   cargo run -- --file examples/bootstrap/workload.df controller --stack renfry.workload
+#   cargo run -- --root examples/bootstrap stack handover platform.workload --to 'k8s("dform-system/workload")'
+#   cargo run -- --file examples/bootstrap/workload.df controller --stack platform.workload
 #
 # Tick 1: the network, the subnetwork and the cluster. The node pools are a
 # pending group: one per zone, and the zones are the cluster's. Tick 2: the
@@ -37,7 +37,7 @@ Counts (comments and blank lines excluded; section 8 of the proposal says how th
 
 edition 2026.
 
-stack renfry.bootstrap {
+stack platform.bootstrap {
   role = bootstrap
 }.
 
@@ -47,19 +47,19 @@ provider gcp {
 provider k8s {}.
 
 resource google_compute_network vpc {
-  name = "renfry-vpc"
+  name = "platform-vpc"
   auto_create_subnetworks = false
 }.
 
 resource google_compute_subnetwork gke {
-  name = "renfry-gke"
+  name = "platform-gke"
   region = "us-east1"
   network = ref(google_compute_network, vpc, .id)
   ip_cidr_range = "10.141.76.0/22"
 }.
 
-resource gke_cluster renfry {
-  name = "renfry-gke"
+resource gke_cluster platform {
+  name = "platform-gke"
   network = ref(google_compute_network, vpc, .id)
   subnetwork = ref(google_compute_subnetwork, gke, .id)
   node_locations = ["us-east1-b", "us-east1-c"]
@@ -67,17 +67,17 @@ resource gke_cluster renfry {
 
 # One node pool per zone the cluster lands in.
 resource gke_nodepool Np {
-  cluster = ref(gke_cluster, renfry, .id)
+  cluster = ref(gke_cluster, platform, .id)
   zone = Z
   node_count = 1
 } :-
-  arg(gke_cluster, renfry, .zones, Zs),
+  arg(gke_cluster, platform, .zones, Zs),
   member(Zs, Z),
   Np = format("np-%s", Z).
 
 provider_config(kubernetes, {
-  host: ref(gke_cluster, renfry, .endpoint),
-  ca: ref(gke_cluster, renfry, .ca_certificate)
+  host: ref(gke_cluster, platform, .endpoint),
+  ca: ref(gke_cluster, platform, .ca_certificate)
 }).
 
 resource k8s.namespace dform_system {
@@ -100,16 +100,16 @@ resource k8s.deployment dform_controller {
   spec.template.metadata.labels = { app: "dform-controller" }
   spec.template.spec.containers = [{
     name: "dform",
-    image: "ghcr.io/renfry/dform:0.8",
-    args: ["controller", "--stack", "renfry.workload", "--file", "workload.df"]
+    image: "ghcr.io/platform/dform:0.8",
+    args: ["controller", "--stack", "platform.workload", "--file", "workload.df"]
   }]
 } :-
-  arg(gke_cluster, renfry, .zones, Zs),
+  arg(gke_cluster, platform, .zones, Zs),
   member(Zs, 0, Z),
   Pool = format("np-%s", Z),
   node_pool_up(Pool).
 
-output endpoint = ref(gke_cluster, renfry, .endpoint).
+output endpoint = ref(gke_cluster, platform, .endpoint).
 #+end_src
 
 ** proposed
@@ -122,8 +122,8 @@ edition 2027
 # ticks, and stays batch: the controller refuses a `role = bootstrap` stack.
 #
 #   cargo run -- --file examples/bootstrap/bootstrap.df apply
-#   cargo run -- --root examples/bootstrap stack handover renfry.workload --to 'k8s("dform-system/workload")'
-#   cargo run -- --file examples/bootstrap/workload.df controller --stack renfry.workload
+#   cargo run -- --root examples/bootstrap stack handover platform.workload --to 'k8s("dform-system/workload")'
+#   cargo run -- --file examples/bootstrap/workload.df controller --stack platform.workload
 #
 # Tick 1: the network, the subnetwork and the cluster. The node pools are a
 # pending group: one per zone, and the zones are the cluster's. Tick 2: the
@@ -131,7 +131,7 @@ edition 2027
 # the cluster's endpoint and CA). Tick 3: the dform-controller Deployment,
 # which waits for its node pool to be up.
 
-stack renfry.bootstrap {
+stack platform.bootstrap {
   role = "bootstrap"
 }
 
@@ -141,19 +141,19 @@ provider gcp {
 provider k8s {}
 
 resource google_compute_network vpc {
-  name = "renfry-vpc"
+  name = "platform-vpc"
   auto_create_subnetworks = false
 }
 
 resource google_compute_subnetwork gke {
-  name = "renfry-gke"
+  name = "platform-gke"
   region = "us-east1"
   network = vpc.id
   ip_cidr_range = "10.141.76.0/22"
 }
 
-resource gke_cluster renfry {
-  name = "renfry-gke"
+resource gke_cluster platform {
+  name = "platform-gke"
   network = vpc.id
   subnetwork = gke.id
   node_locations = ["us-east1-b", "us-east1-c"]
@@ -161,15 +161,15 @@ resource gke_cluster renfry {
 
 # One node pool per zone the cluster lands in.
 resource gke_nodepool "np-{z}" {
-  for z in renfry.zones
-  cluster = renfry.id
+  for z in platform.zones
+  cluster = platform.id
   zone = z
   node_count = 1
 }
 
 provider_config("kubernetes", {
-  host: renfry.endpoint,
-  ca: renfry.ca_certificate
+  host: platform.endpoint,
+  ca: platform.ca_certificate
 })
 
 resource k8s.namespace dform_system {
@@ -184,7 +184,7 @@ node_pool_up(np) if gke_nodepool[np].instance_group != ""
 # zone's node pool once that pool is up. Until then the rule may derive
 # after the boundary, and the plan holds it as a pending group.
 resource k8s.deployment dform_controller {
-  if pool = "np-{renfry.zones[0]}", node_pool_up(pool)
+  if pool = "np-{platform.zones[0]}", node_pool_up(pool)
   metadata.name = "dform-controller"
   metadata.namespace = dform_system.metadata.name
   metadata.annotations = { "dform.io/node-pool": gke_nodepool[pool].instance_group }
@@ -193,12 +193,12 @@ resource k8s.deployment dform_controller {
   spec.template.metadata.labels = { app: "dform-controller" }
   spec.template.spec.containers = [{
     name: "dform",
-    image: "ghcr.io/renfry/dform:0.8",
-    args: ["controller", "--stack", "renfry.workload", "--file", "workload.df"]
+    image: "ghcr.io/platform/dform:0.8",
+    args: ["controller", "--stack", "platform.workload", "--file", "workload.df"]
   }]
 }
 
-output endpoint = renfry.endpoint
+output endpoint = platform.endpoint
 #+end_src
 
 * workload.df
@@ -212,14 +212,14 @@ output endpoint = renfry.endpoint
 # whose image comes from an input relation. After `dform stack handover`
 # the dform-controller Deployment that bootstrap.df installs runs it:
 #
-#   cargo run -- --file examples/bootstrap/workload.df controller --stack renfry.workload
+#   cargo run -- --file examples/bootstrap/workload.df controller --stack platform.workload
 #
 # Edit release.facts and the controller deploys it; edit the world and
 # the replicas drift is corrected, the image drift is held for approval.
 
 edition 2026.
 
-stack renfry.workload {}.
+stack platform.workload {}.
 
 provider k8s {}.
 
@@ -278,14 +278,14 @@ hold(k8s.deployment, A, "needs approval") :-
 # whose image comes from an input relation. After `dform stack handover`
 # the dform-controller Deployment that bootstrap.df installs runs it:
 #
-#   cargo run -- --file examples/bootstrap/workload.df controller --stack renfry.workload
+#   cargo run -- --file examples/bootstrap/workload.df controller --stack platform.workload
 #
 # Edit release.facts and the controller deploys it; edit the world and
 # the replicas drift is corrected, the image drift is held for approval.
 
 edition 2027
 
-stack renfry.workload {}
+stack platform.workload {}
 
 provider k8s {}
 
@@ -341,8 +341,8 @@ hold(k8s.deployment, a, "needs approval") if {
 
 ** Lowering, where it is not obvious
 
-- =if pool = "np-{renfry.zones[0]}", node_pool_up(pool)= is
-  =attr(gke_cluster, renfry, zones, Zs), member(Zs, 0, Z),
+- =if pool = "np-{platform.zones[0]}", node_pool_up(pool)= is
+  =attr(gke_cluster, platform, zones, Zs), member(Zs, 0, Z),
   Pool = format("np-%s", Z), node_pool_up(Pool)=: an integer index on a
   list read is =member/3=.
 - =node_pool_up(np) if gke_nodepool[np].instance_group != ""=: =T[np]= with
@@ -358,14 +358,14 @@ hold(k8s.deployment, a, "needs approval") if {
 
 ** Reads better
 
-- =network = vpc.id=, =cluster = renfry.id=, =for z in renfry.zones=:
+- =network = vpc.id=, =cluster = platform.id=, =for z in platform.zones=:
   bootstrap.df now reads like the Terraform it replaces.
-- =output endpoint = renfry.endpoint=.
+- =output endpoint = platform.endpoint=.
 
 ** Reads worse
 
 - =workload.df= gets longer: the =hold= body wants a block, and the three
   =web= resources force the qualified form. Its token count barely moves
   (-8%): the file had no read-carrier variables to lose.
-- ="np-{renfry.zones[0]}"= hides two joins and a content position (a
+- ="np-{platform.zones[0]}"= hides two joins and a content position (a
   pending group until the cluster has zones) inside a string.

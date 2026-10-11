@@ -32,10 +32,10 @@ provider gke {}.
 input env: enum(dev, stg, prod) = dev.
 
 settings dev {
-  project_id = "renfry-dev-973682"
-  project_name = "renfry-dev"
+  project_id = "platform-dev-973682"
+  project_name = "platform-dev"
   region = "us-east1"
-  network_name = "renfry-dev-network"
+  network_name = "platform-dev-network"
   gke = {
     control_plane_cidr: inet("172.16.3.96/28"),
     subnet_cidr: inet("10.141.76.0/22")
@@ -98,7 +98,7 @@ resource k8s.namespace gke_platform {
 # ref to a configured attribute is an attr join (E: rewritten by the compiler).
 resource k8s.deployment api {
   namespace = Ns
-  image = "gcr.io/renfry/api:1.42"
+  image = "gcr.io/platform/api:1.42"
   replicas = 3
 } :- arg(k8s.namespace, gke_platform, .name, Ns).
 
@@ -151,10 +151,10 @@ provider gke {}
 input env: enum("dev", "stg", "prod") = "dev"
 
 settings dev {
-  project_id = "renfry-dev-973682"
-  project_name = "renfry-dev"
+  project_id = "platform-dev-973682"
+  project_name = "platform-dev"
   region = "us-east1"
-  network_name = "renfry-dev-network"
+  network_name = "platform-dev-network"
   gke = {
     control_plane_cidr: inet("172.16.3.96/28"),
     subnet_cidr: inet("10.141.76.0/22")
@@ -211,7 +211,7 @@ resource k8s.namespace gke_platform {
 resource k8s.deployment api {
   if ns = k8s.namespace.gke_platform.name
   namespace = ns
-  image = "gcr.io/renfry/api:1.42"
+  image = "gcr.io/platform/api:1.42"
   replicas = 3
 }
 

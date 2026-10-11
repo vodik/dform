@@ -686,7 +686,7 @@ Use the pun consistently in CLI output, docs, and diagnostics.
 
 Example CLI lines:
 - =plan: 3 deformations (2 create, 1 update)=
-- =stack renfry.prod is undeformed=
+- =stack platform.prod is undeformed=
 - =drift: 2 deformations from world changes since last apply=
 
 ** TODO [#C] Use the vocabulary in CLI, docs, and diagnostics
@@ -1142,12 +1142,12 @@ See tooling ticket. Precedent: Soufflé =explain=.
 
 ** TODO [#A] L6 Stacks and state addressing
 #+begin_src prolog
-stack renfry.prod {
-  backend = s3("renfry-state", "gke_platform/prod")
+stack platform.prod {
+  backend = s3("platform-state", "gke_platform/prod")
 }.
 #+end_src
 One program owns one stack. Cross-stack values arrive as discovery facts:
-=stack_output("renfry.shared", vpc_id, V)=. Backend needs locking.
+=stack_output("platform.shared", vpc_id, V)=. Backend needs locking.
 Precedent: none in Datalog; Terraform workspaces, Pulumi stacks.
 
 ** TODO [#B] L7 Lifecycle declarations as facts

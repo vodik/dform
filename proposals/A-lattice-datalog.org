@@ -1914,12 +1914,12 @@ provider's schema declares =statements: keyed([.action, .resource])=.
 ** gke_platform.df, the network and GKE chunk
 
 #+begin_src prolog
-# gke_platform.df, direction A. The renfry stack for one GCP project per environment.
+# gke_platform.df, direction A. The platform stack for one GCP project per environment.
 
 edition 2026.
 
 provider google { source = "registry.dform.dev/google", version = ">=6" }.
-stack renfry.gke_platform { backend = gcs("renfry-state", "gke_platform") }.
+stack platform.gke_platform { backend = gcs("platform-state", "gke_platform") }.
 
 input env: enum(dev, stg, prod) = dev.
 
@@ -1943,10 +1943,10 @@ type settings {
 }.
 
 settings dev {
-  project_id   = "renfry-dev-973682"
-  project_name = "renfry-dev"
+  project_id   = "platform-dev-973682"
+  project_name = "platform-dev"
   region       = "us-east1"
-  network_name = "renfry-dev-network"
+  network_name = "platform-dev-network"
   regional_proxy_cidr = inet("10.193.0.0/24")
   gke = {
     control_plane_cidr: inet("172.16.3.96/28"),
@@ -1958,10 +1958,10 @@ settings dev {
 }.
 
 settings stg {
-  project_id   = "renfry-stg"
-  project_name = "renfry-stg"
+  project_id   = "platform-stg"
+  project_name = "platform-stg"
   region       = "us-east1"
-  network_name = "renfry-stg-network"
+  network_name = "platform-stg-network"
   regional_proxy_cidr = inet("10.193.1.0/24")
   gke = {
     control_plane_cidr: inet("172.16.3.112/28"),
@@ -1982,8 +1982,8 @@ decl peering(Env: symbol, Name: string, PeerNetwork: string).
 
 peering(dev,  "envoy-dev",        "projects/envoy-dev-426188/global/networks/envoy-dev-network").
 peering(stg,  "envoy-stg",        "projects/envoy-stg-597462/global/networks/envoy-stg-network").
-peering(stg,  "envoy-stg-legacy", "projects/coherentpath-stg/global/networks/envoy-proxy-stg").
-peering(prod, "envoy-prod-legacy","projects/coherentpath-prod/global/networks/envoy-proxy-prod").
+peering(stg,  "edge-stg",  "projects/edge-stg/global/networks/envoy-proxy-stg").
+peering(prod, "edge-prod", "projects/edge-prod/global/networks/envoy-proxy-prod").
 
 ########################################
 # Derived project facts for the active env

@@ -55,7 +55,7 @@ type_mint("google.container_cluster", "zones", "{doc:node_locations}")
 type_doc(
   "google.container_cluster",
   "",
-  "A GKE cluster, as the terraform-mi-gke module creates it.",
+  "A GKE cluster, as the terraform-gke module creates it.",
 )
 type_doc(
   "google.container_cluster",

@@ -592,7 +592,7 @@ resource gke_nodepool Np {
 resource k8s.namespace gke_platform { name = "gke-platform" }.
 resource k8s.deployment api {
   namespace = ref(k8s.namespace, gke_platform, name),
-  image     = "gcr.io/renfry/api:1.42",
+  image     = "gcr.io/platform/api:1.42",
   replicas  = 3
 }.
 
@@ -633,7 +633,7 @@ Plan output (sketch, real format per the plan-output ticket):
 deformation: 3 phases, 6 actions definite, 1 group pending, 1 policy undetermined
 
 phase 1 (definite)
-  + gke_cluster gke_platform            name="renfry-prod-gke" ...
+  + gke_cluster gke_platform            name="platform-prod-gke" ...
   + google_compute_address static-ip-gke-platform-grpc
 phase 2 (after gke_cluster[gke_platform]: resolves ?endpoint ?ca_certificate ?zones ?id)
   + k8s.namespace gke_platform          (provider kubernetes, host=?gke_cluster[gke_platform].endpoint)
@@ -1372,9 +1372,9 @@ terminator stays =.=.
 #+begin_src prolog
 edition 2026.
 
-#| title: renfry demo stack
+#| title: platform demo stack
 #| owner: platform
-stack renfry.demo { backend = local(".dform/state") }.
+stack platform.demo { backend = local(".dform/state") }.
 
 provider fake { source = "./providers/fake" }.
 import provider fake "stdlib" as fake.
@@ -1596,7 +1596,7 @@ edition 2026.
 
 #| title: gke_platform
 #| description: dform representation of a Terraform stack for a GKE platform
-stack renfry.gke_platform { backend = gcs("renfry-tf-state", "gke_platform") }.
+stack platform.gke_platform { backend = gcs("platform-tf-state", "gke_platform") }.
 
 provider google     { source = "registry.dform.dev/google",     version = ">=6" }.
 provider kubernetes { source = "registry.dform.dev/kubernetes", version = ">=3" }.
@@ -1607,10 +1607,10 @@ input env: enum(dev, stg, prod) = dev.
 key setting(env, key).
 
 settings dev {
-  project_id   = "renfry-dev-973682"
-  project_name = "renfry-dev"
+  project_id   = "platform-dev-973682"
+  project_name = "platform-dev"
   region       = 'us-east1'
-  network_name = "renfry-dev-network"
+  network_name = "platform-dev-network"
   regional_proxy_cidr = inet("10.193.0.0/24")
   gke = {
     control_plane_cidr: inet("172.16.3.96/28"),
@@ -1625,8 +1625,8 @@ settings dev {
 decl peering(env, name, peer_network).
 peering(dev,  'envoy-dev',        "projects/envoy-dev-426188/global/networks/envoy-dev-network").
 peering(stg,  'envoy-stg',        "projects/envoy-stg-597462/global/networks/envoy-stg-network").
-peering(stg,  'envoy-stg-legacy', "projects/coherentpath-stg/global/networks/envoy-proxy-stg").
-peering(prod, 'envoy-prod-legacy',"projects/coherentpath-prod/global/networks/envoy-proxy-prod").
+peering(stg,  'edge-stg',  "projects/edge-stg/global/networks/envoy-proxy-stg").
+peering(prod, 'edge-prod', "projects/edge-prod/global/networks/envoy-proxy-prod").
 
 % One derived record for the active env; rules join on it instead of six settings.
 project(Id, Name, Region, NetId) :-

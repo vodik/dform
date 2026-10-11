@@ -36,10 +36,10 @@ zone_at(2, "us-east1-c")
 zone_at(3, "us-east1-d")
 
 set {
-  gcp.project_id = "renfry-dev-973682"
-  gcp.project_name = "renfry-dev"
+  gcp.project_id = "platform-dev-973682"
+  gcp.project_name = "platform-dev"
   gcp.region = "us-east1"
-  gcp.network_name = "renfry-dev-network"
+  gcp.network_name = "platform-dev-network"
   gke = { control_plane_cidr: "172.16.3.96/28", subnet_cidr: "10.141.76.0/22" }
 } where env == "dev"
 
@@ -92,7 +92,7 @@ resource k8s.namespace gke_platform { name = "gke-platform" }
 # A read in the clause is an attr join (the value now), not a reference.
 resource k8s.deployment api {
   namespace = ns
-  image = "gcr.io/renfry/api:1.42"
+  image = "gcr.io/platform/api:1.42"
   replicas = 3
 } where ns = k8s.namespace["gke_platform"].name
 

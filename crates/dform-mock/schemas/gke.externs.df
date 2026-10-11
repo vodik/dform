@@ -3,4 +3,4 @@
 # the client's credentials give in a project, which configures the `k8s`
 # provider.
 
-google.client_config("renfry-dev-973682", "ya29.mock-access-token")
+google.client_config("platform-dev-973682", "ya29.mock-access-token")

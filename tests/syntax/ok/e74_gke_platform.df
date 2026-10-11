@@ -1,4 +1,4 @@
-# gke_platform.df, direction E. The renfry stack for one GCP project per environment.
+# gke_platform.df, direction E. The platform stack for one GCP project per environment.
 
 input env: enum("dev", "stg", "prod") = "dev"
 decl peering(env: symbol, name: string, peer_network: string)
@@ -33,9 +33,9 @@ env_name("stg")
 env_name("prod")
 
 set {
-  project_id = "renfry-dev-973682"
-  project_name = "renfry-dev"
-  network_name = "renfry-dev-network"
+  project_id = "platform-dev-973682"
+  project_name = "platform-dev"
+  network_name = "platform-dev-network"
   regional_proxy_cidr = "10.193.0.0/24"
   gke = {
     control_plane_cidr: "172.16.3.96/28",
@@ -46,9 +46,9 @@ set {
 } where env == "dev"
 
 set {
-  project_id = "renfry-stg"
-  project_name = "renfry-stg"
-  network_name = "renfry-stg-network"
+  project_id = "platform-stg"
+  project_name = "platform-stg"
+  network_name = "platform-stg-network"
   regional_proxy_cidr = "10.193.1.0/24"
   gke = {
     control_plane_cidr: "172.16.3.112/28",
@@ -66,8 +66,8 @@ set {
 
 peering("dev", "envoy-dev", "projects/envoy-dev-426188/global/networks/envoy-dev-network")
 peering("stg", "envoy-stg", "projects/envoy-stg-597462/global/networks/envoy-stg-network")
-peering("stg", "envoy-stg-legacy", "projects/coherentpath-stg/global/networks/envoy-proxy-stg")
-peering("prod", "envoy-prod-legacy", "projects/coherentpath-prod/global/networks/envoy-proxy-prod")
+peering("stg", "edge-stg", "projects/edge-stg/global/networks/envoy-proxy-stg")
+peering("prod", "edge-prod", "projects/edge-prod/global/networks/envoy-proxy-prod")
 
 ########################################
 # Derived project facts for the active env
@@ -190,7 +190,7 @@ resource k8s.namespace gke_platform { name = "gke-platform" }
 
 resource k8s.deployment api {
   namespace = ref(k8s.namespace, "gke_platform", "name") # configured attribute: rewritten to an attr join
-  image = "gcr.io/renfry/api:1.42"
+  image = "gcr.io/platform/api:1.42"
   replicas = 3
 }
 

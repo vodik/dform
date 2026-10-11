@@ -1517,8 +1517,8 @@ policy baseline {
 }
 apply_policy baseline.
 
-stack renfry.prod {
-  backend = s3("renfry-state", "gke_platform/prod"),
+stack platform.prod {
+  backend = s3("platform-state", "gke_platform/prod"),
   mode = batch,
   providers = [aws, random, file]
 }
@@ -1696,7 +1696,7 @@ dashboard, which is no longer stubbed because =file.json= is an extern.
 edition 2026.
 
 stack gke_platform {
-  backend = gcs("renfry-dform", "gke_platform"),
+  backend = gcs("platform-dform", "gke_platform"),
   mode = batch,
   providers = [google, file]
 }
@@ -1707,10 +1707,10 @@ relation setting(env: symbol, key: symbol, value: any) key (env, key).
 relation peering(env: symbol, name: string, peer_network: string).
 
 settings dev {
-  project_id   = "renfry-dev-973682"
-  project_name = "renfry-dev"
+  project_id   = "platform-dev-973682"
+  project_name = "platform-dev"
   region       = "us-east1"
-  network_name = "renfry-dev-network"
+  network_name = "platform-dev-network"
   regional_proxy_cidr = 10.193.0.0/24
   gke = {
     control_plane_cidr: 172.16.3.96/28,
@@ -1721,10 +1721,10 @@ settings dev {
   }
 }
 settings stg {
-  project_id   = "renfry-stg"
-  project_name = "renfry-stg"
+  project_id   = "platform-stg"
+  project_name = "platform-stg"
   region       = "us-east1"
-  network_name = "renfry-stg-network"
+  network_name = "platform-stg-network"
   regional_proxy_cidr = 10.193.1.0/24
   gke = {
     control_plane_cidr: 172.16.3.112/28,
@@ -1738,8 +1738,8 @@ settings stg {
 
 peering(dev,  "envoy-dev",        "projects/envoy-dev-426188/global/networks/envoy-dev-network").
 peering(stg,  "envoy-stg",        "projects/envoy-stg-597462/global/networks/envoy-stg-network").
-peering(stg,  "envoy-stg-legacy", "projects/coherentpath-stg/global/networks/envoy-proxy-stg").
-peering(prod, "envoy-prod-legacy","projects/coherentpath-prod/global/networks/envoy-proxy-prod").
+peering(stg,  "edge-stg",  "projects/edge-stg/global/networks/envoy-proxy-stg").
+peering(prod, "edge-prod", "projects/edge-prod/global/networks/envoy-proxy-prod").
 
 # One helper relation instead of the same five setting/3 joins in every rule.
 project(Env, Id, Name, Region, NetId) :-

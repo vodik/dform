@@ -115,7 +115,7 @@ there):
 eval "$(crates/dform-s3/minio.sh start)"
 cargo run -- -C examples/bootstrap apply bootstrap   # 3 ticks
 cargo run -- -C examples/bootstrap stack handover workload \
-  --to 's3("dform-test", "renfry/workload", {endpoint: "http://127.0.0.1:9000"})'
+  --to 's3("dform-test", "platform/workload", {endpoint: "http://127.0.0.1:9000"})'
 cargo run -- -C examples/bootstrap controller run workload
 crates/dform-s3/minio.sh stop
 ```

@@ -21,10 +21,10 @@ zone_at(1, "us-east1-b")
 zone_at(2, "us-east1-c")
 
 set {
-  gcp.project_id = "renfry-dev-973682"
-  gcp.project_name = "renfry-dev"
+  gcp.project_id = "platform-dev-973682"
+  gcp.project_name = "platform-dev"
   gcp.region = "us-east1"
-  gcp.network_name = "renfry-dev-network"
+  gcp.network_name = "platform-dev-network"
   gke = { control_plane_cidr: "172.16.3.96/28", subnet_cidr: "10.141.76.0/22" }
 } where env == "dev"
 
@@ -79,7 +79,7 @@ resource k8s.deployment api {
   spec.replicas = 3
   spec.selector.matchLabels = { app: "api" }
   spec.template.metadata.labels = { app: "api" }
-  spec.template.spec.containers = [{ name: "api", image: "gcr.io/renfry/api:1.42" }]
+  spec.template.spec.containers = [{ name: "api", image: "gcr.io/platform/api:1.42" }]
 } where ns = k8s.namespace["gke_platform"].metadata.name
 
 resource k8s.secret db_credentials {

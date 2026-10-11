@@ -59,10 +59,10 @@ input env: enum(dev, stg, prod) = dev.
 ########################################
 
 settings dev {
-  project_id = "renfry-dev-973682"
-  project_name = "renfry-dev"
+  project_id = "platform-dev-973682"
+  project_name = "platform-dev"
   region = "us-east1"
-  network_name = "renfry-dev-network"
+  network_name = "platform-dev-network"
 
   regional_proxy_cidr = "10.193.0.0/24"
 
@@ -76,10 +76,10 @@ settings dev {
 }.
 
 settings stg {
-  project_id = "renfry-stg"
-  project_name = "renfry-stg"
+  project_id = "platform-stg"
+  project_name = "platform-stg"
   region = "us-east1"
-  network_name = "renfry-stg-network"
+  network_name = "platform-stg-network"
 
   regional_proxy_cidr = "10.193.1.0/24"
 
@@ -93,10 +93,10 @@ settings stg {
 }.
 
 settings prod {
-  project_id = "renfry-prod"
-  project_name = "renfry-prod"
+  project_id = "platform-prod"
+  project_name = "platform-prod"
   region = "us-east1"
-  network_name = "renfry-prod-network"
+  network_name = "platform-prod-network"
 
   regional_proxy_cidr = "10.193.2.0/24"
 
@@ -118,10 +118,10 @@ peering{ env: dev, name: "envoy-dev", peer_network: "projects/envoy-dev-426188/g
 
 # stg
 peering{ env: stg, name: "envoy-stg", peer_network: "projects/envoy-stg-597462/global/networks/envoy-stg-network" }.
-peering{ env: stg, name: "envoy-stg-legacy", peer_network: "projects/coherentpath-stg/global/networks/envoy-proxy-stg" }.
+peering{ env: stg, name: "edge-stg", peer_network: "projects/edge-stg/global/networks/envoy-proxy-stg" }.
 
 # prod
-peering{ env: prod, name: "envoy-prod-legacy", peer_network: "projects/coherentpath-prod/global/networks/envoy-proxy-prod" }.
+peering{ env: prod, name: "edge-prod", peer_network: "projects/edge-prod/global/networks/envoy-proxy-prod" }.
 
 ########################################
 # Env-scoped validation/resources/outputs
@@ -133,7 +133,7 @@ when env(Env) {
     T != "INTERNAL".
 
   ########################################
-  # Resources (renfry module intent)
+  # Resources (platform module intent)
   ########################################
 
   # GKE subnet (terraform-google-modules/network/google//modules/subnets)
@@ -206,7 +206,7 @@ when env(Env) {
   # Resources (GKE module intent)
   ########################################
 
-  # Represents the external terraform-mi-gke module invocation.
+  # Represents the external terraform-gke module invocation.
   resource gke_cluster gke_platform {
     cluster_type = "autopilot-private"
     env = Env
@@ -246,7 +246,7 @@ when env(Env) {
     notification_channel_type = "slack"
     notification_channel_display_name = "Slack"
     enable_standard_gke_alerts = true
-    source = "git@github.com:coherentpath/terraform-gcp-alert-metrics.git?ref=v1.5.0"
+    source = "git@github.com:example-org/terraform-gcp-alert-metrics.git?ref=v1.5.0"
   } :-
     setting(Env, .project_id, ProjectId).
 
@@ -302,10 +302,10 @@ input env: enum("dev", "stg", "prod") = "dev"
 ########################################
 
 settings dev {
-  project_id = "renfry-dev-973682"
-  project_name = "renfry-dev"
+  project_id = "platform-dev-973682"
+  project_name = "platform-dev"
   region = "us-east1"
-  network_name = "renfry-dev-network"
+  network_name = "platform-dev-network"
 
   regional_proxy_cidr = "10.193.0.0/24"
 
@@ -319,10 +319,10 @@ settings dev {
 }
 
 settings stg {
-  project_id = "renfry-stg"
-  project_name = "renfry-stg"
+  project_id = "platform-stg"
+  project_name = "platform-stg"
   region = "us-east1"
-  network_name = "renfry-stg-network"
+  network_name = "platform-stg-network"
 
   regional_proxy_cidr = "10.193.1.0/24"
 
@@ -336,10 +336,10 @@ settings stg {
 }
 
 settings prod {
-  project_id = "renfry-prod"
-  project_name = "renfry-prod"
+  project_id = "platform-prod"
+  project_name = "platform-prod"
   region = "us-east1"
-  network_name = "renfry-prod-network"
+  network_name = "platform-prod-network"
 
   regional_proxy_cidr = "10.193.2.0/24"
 
@@ -364,10 +364,10 @@ peering{ env: "dev", name: "envoy-dev", peer_network: "projects/envoy-dev-426188
 
 # stg
 peering{ env: "stg", name: "envoy-stg", peer_network: "projects/envoy-stg-597462/global/networks/envoy-stg-network" }
-peering{ env: "stg", name: "envoy-stg-legacy", peer_network: "projects/coherentpath-stg/global/networks/envoy-proxy-stg" }
+peering{ env: "stg", name: "edge-stg", peer_network: "projects/edge-stg/global/networks/envoy-proxy-stg" }
 
 # prod
-peering{ env: "prod", name: "envoy-prod-legacy", peer_network: "projects/coherentpath-prod/global/networks/envoy-proxy-prod" }
+peering{ env: "prod", name: "edge-prod", peer_network: "projects/edge-prod/global/networks/envoy-proxy-prod" }
 
 ########################################
 # Validation
@@ -376,7 +376,7 @@ peering{ env: "prod", name: "envoy-prod-legacy", peer_network: "projects/coheren
 constraint "GKE static IPs must be INTERNAL" if cfg.gke.static_ips."gke-platform-grpc".type != "INTERNAL"
 
 ########################################
-# Resources (renfry module intent)
+# Resources (platform module intent)
 ########################################
 
 # GKE subnet (terraform-google-modules/network/google//modules/subnets)
@@ -427,7 +427,7 @@ resource google_compute_address "static-ip-{ip}" {
 # Resources (GKE module intent)
 ########################################
 
-# Represents the external terraform-mi-gke module invocation.
+# Represents the external terraform-gke module invocation.
 resource gke_cluster gke_platform {
   cluster_type = "autopilot-private"
   env = env
@@ -460,7 +460,7 @@ resource alert_metrics_pack gke_platform {
   notification_channel_type = "slack"
   notification_channel_display_name = "Slack"
   enable_standard_gke_alerts = true
-  source = "git@github.com:coherentpath/terraform-gcp-alert-metrics.git?ref=v1.5.0"
+  source = "git@github.com:example-org/terraform-gcp-alert-metrics.git?ref=v1.5.0"
 }
 
 ########################################

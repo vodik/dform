@@ -28,7 +28,7 @@ fn setup(name: &str) -> Scratch {
     let s = Scratch::project(name);
     s.write("dform.toml", MANIFEST);
     s.write("stacks/workload.df", WORKLOAD);
-    release(&s, "gcr.io/renfry/web:1.0");
+    release(&s, "gcr.io/platform/web:1.0");
     approvals(&s, "");
     s
 }
@@ -79,7 +79,7 @@ fn input_changes_deploy_and_world_drift_is_gated_by_policy() {
     );
 
     // A release is an input change: it deploys.
-    release(&s, "gcr.io/renfry/web:1.1");
+    release(&s, "gcr.io/platform/web:1.1");
     assert_eq!(
         once(&s, &[]),
         [
@@ -106,10 +106,10 @@ fn input_changes_deploy_and_world_drift_is_gated_by_policy() {
 
     // Image drift: no auto_reconcile, so it is held, and held again at the
     // next event, until approved.
-    edit_world(&s, "gcr.io/renfry/web:1.1", "evil:latest");
+    edit_world(&s, "gcr.io/platform/web:1.1", "evil:latest");
     let held = [
         "drift k8s.deployment[\"web\"].spec.template.spec.containers[0].image: \
-         \"gcr.io/renfry/web:1.1\" -> \"evil:latest\" (held until approve or an input change)",
+         \"gcr.io/platform/web:1.1\" -> \"evil:latest\" (held until approve or an input change)",
         "tick 1: plan: 1 change (1 update) over 1 tick",
         "tick 1: proceed: held, drift at spec.template.spec.containers[0].image needs approval: \
          k8s.deployment[\"web\"]",
@@ -139,13 +139,13 @@ fn approve_lets_a_world_event_correct_drift() {
             "stack workload is up to date",
         ]
     );
-    edit_world(&s, "gcr.io/renfry/web:1.0", "evil:latest");
+    edit_world(&s, "gcr.io/platform/web:1.0", "evil:latest");
     assert_eq!(
         once(&s, &[]),
         [
             &format!("event world {WORLD} changed"),
             "drift k8s.deployment[\"web\"].spec.template.spec.containers[0].image: \
-             \"gcr.io/renfry/web:1.0\" -> \"evil:latest\" (approved)",
+             \"gcr.io/platform/web:1.0\" -> \"evil:latest\" (approved)",
             "tick 1: plan: 1 change (1 update) over 1 tick",
             "stack workload is up to date",
         ]
@@ -157,17 +157,17 @@ fn approve_lets_a_world_event_correct_drift() {
 fn an_input_change_reconciles_held_drift() {
     let s = setup("ctl-input-releases");
     once(&s, &[]);
-    edit_world(&s, "gcr.io/renfry/web:1.0", "evil:latest");
+    edit_world(&s, "gcr.io/platform/web:1.0", "evil:latest");
     assert_eq!(
         once(&s, &[]).last().unwrap(),
         "stack workload has changes held: k8s.deployment[\"web\"]"
     );
-    release(&s, "gcr.io/renfry/web:1.2");
+    release(&s, "gcr.io/platform/web:1.2");
     let got = once(&s, &[]);
     assert!(
         got.contains(
             &"drift k8s.deployment[\"web\"].spec.template.spec.containers[0].image: \
-              \"gcr.io/renfry/web:1.0\" -> \"evil:latest\" (reconciled with the input change)"
+              \"gcr.io/platform/web:1.0\" -> \"evil:latest\" (reconciled with the input change)"
                 .to_string()
         ),
         "{got:#?}"
@@ -255,7 +255,7 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
     );
     // The next release is another plan: held again, the old token is for
     // another digest.
-    release(&s, "gcr.io/renfry/web:1.1");
+    release(&s, "gcr.io/platform/web:1.1");
     let got = once(&s, &prod);
     assert_eq!(
         got[3],
@@ -290,7 +290,7 @@ fn plan_reads_a_module_of_facts() {
     assert!(
         r.stdout.contains(
             "spec.template.spec.containers[name=web] = {\n        name: \"web\",\n        \
-             image: \"gcr.io/renfry/web:1.0\","
+             image: \"gcr.io/platform/web:1.0\","
         ),
         "{}",
         r.stdout
@@ -324,7 +324,7 @@ fn a_git_source_is_read_at_its_ref() {
         git(&w, &["commit", "-q", "-m", image]);
         git(&w, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
     };
-    commit("gcr.io/renfry/web:2.0");
+    commit("gcr.io/platform/web:2.0");
     s.write(
         "stacks/workload.df",
         &WORKLOAD
@@ -350,7 +350,7 @@ fn a_git_source_is_read_at_its_ref() {
     let got = once(&s, &[]);
     assert_eq!(got.last().unwrap(), "stack workload is up to date");
     assert!(s.read(WORLD).contains("web:2.0"));
-    commit("gcr.io/renfry/web:2.1");
+    commit("gcr.io/platform/web:2.1");
     let got = once(&s, &[]);
     assert_eq!(
         got[0],
@@ -396,7 +396,7 @@ fn the_polling_loop_runs_an_event_per_change() {
                 let done = l.ends_with("is up to date");
                 lines.push(l);
                 if done && !changed {
-                    release(&s, "gcr.io/renfry/web:3.0");
+                    release(&s, "gcr.io/platform/web:3.0");
                     changed = true;
                 }
             }

@@ -1032,7 +1032,7 @@ provider reports another account, or none, refuses to plan, naming both
 (an expected account a secret reaches, an `env.var`'s, by its label,
 `provider/NAME#expect_account`, never its value)
 (`deployment gke_platform[env=prod]: refusing to plan: provider google reports
-account renfry-dev, but the program expects renfry-prod`).
+account platform-dev, but the program expects platform-prod`).
 
 The workspace keeps the engine apart from the transport. `dform-core`
 (`crates/dform-core`: parser, engine, planner, executor, printer) speaks to

@@ -10,23 +10,23 @@
 # the cluster's endpoint and CA). Tick 3: the dform-controller Deployment,
 # which waits for its node pool to be up.
 
-output endpoint = renfry.endpoint
+output endpoint = platform.endpoint
 
 # The mock GCP's schema is the project's own (dform.toml: providers/gcp).
 use google
 use k8s
 
-resource google.compute_network vpc { name = "renfry-vpc", auto_create_subnetworks = false }
+resource google.compute_network vpc { name = "platform-vpc", auto_create_subnetworks = false }
 
 resource google.compute_subnetwork gke {
-  name = "renfry-gke"
+  name = "platform-gke"
   region = "us-east1"
   network = vpc
   ip_cidr_range = "10.141.76.0/22"
 }
 
-resource google.container_cluster renfry {
-  name = "renfry-gke"
+resource google.container_cluster platform {
+  name = "platform-gke"
   network = vpc
   subnetwork = gke
   node_locations = ["us-east1-b", "us-east1-c"]
@@ -34,12 +34,12 @@ resource google.container_cluster renfry {
 
 # One node pool per zone the cluster lands in.
 resource google.container_node_pool "np-${z}" {
-  cluster = renfry
+  cluster = platform
   zone = z
   node_count = 1
-} where z in renfry.zones
+} where z in platform.zones
 
-provider_config("k8s", { host: renfry.endpoint, ca: renfry.ca_certificate })
+provider_config("k8s", { host: platform.endpoint, ca: platform.ca_certificate })
 
 resource k8s.namespace dform_system { metadata.name = "dform-system" }
 
@@ -48,7 +48,7 @@ resource k8s.namespace dform_system { metadata.name = "dform-system" }
 node_pool_up(np) where google.container_node_pool[np].instance_group != ""
 
 # The first zone's node pool.
-let first_pool = "np-${renfry.zones[0]}"
+let first_pool = "np-${platform.zones[0]}"
 
 # dform in the cluster, running the workload stack: it lands on the first
 # zone's node pool once that pool is up. Until then the rule may derive
@@ -64,7 +64,7 @@ resource k8s.deployment dform_controller {
   spec.template.metadata.labels = { app: "dform-controller" }
   spec.template.spec.containers = [{
     name: "dform",
-    image: "ghcr.io/renfry/dform:0.8",
+    image: "ghcr.io/platform/dform:0.8",
     args: ["controller", "run", "workload"],
   }]
 } where node_pool_up(first_pool)
