@@ -60,7 +60,9 @@ When the region gains a zone, the next plan has one more subnet and the
 file does not change, because `aws.availability_zone` is a table backed
 by the provider. Each row says which answer produced it: `with n = 0`. A
 value set from another line carries that line. `policy 1 hold` is the
-deny, checked and holding.
+deny, checked and holding. Type annotations are optional: dform infers
+types from usage, dependencies and order from references, and the number
+of subnets from the table.
 
 ## Describe what should exist
 
