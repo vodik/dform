@@ -36,7 +36,8 @@ From a checkout, `cargo build --workspace` builds the providers and
 `cargo install --path .` the CLI, which finds them in the checkout's
 target directory. A provider `dform.toml` names without a `source` is
 the executable `dform-provider-NAME`, found beside `dform` first, then
-in that target directory, then on `PATH`, then at its `path`;
+in that target directory, then on `PATH`; an entry's own `path` wins
+over all three;
 `dform provider list` says where each was found.
 
 ## Quick start
@@ -139,12 +140,13 @@ isolated = true
 exclude = ["scratch/**"]
 ```
 
-A provider without a `source` is the executable `dform-provider-NAME`,
-looked for in one order: beside dform's own executable (a release's
-bundled providers), in the target directory of the checkout dform was
-built in (`release` and `debug`, its own profile first), on `PATH`, and
-last at its `path` (relative to the root, absolute, or under `~/`),
-until a registry serves it. The mock, `fake`, is dform itself and never
+A provider without a `source` is the executable `dform-provider-NAME`.
+An entry with a `path` (relative to the root, absolute, or under `~/`)
+is that file, the user's word; without one, the executable is looked
+for in one order: beside dform's own executable (a release's bundled
+providers), in the target directory of the checkout dform was built in
+(`release` and `debug`, its own profile first), then on `PATH`, until a
+registry serves it. The mock, `fake`, is dform itself and never
 looked for. A `[providers]` table has a `source` or a `path`, not both.
 
 ### Targets and commands

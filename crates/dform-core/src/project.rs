@@ -754,25 +754,27 @@ impl Manifest {
     }
 
     /// Where the provider `name` comes from, when the manifest says. An
-    /// entry without a `source` is the executable `dform-provider-NAME`
-    /// where `lookup` finds it, else its `path` (spelled as a path whatever
-    /// is there, so a missing executable is not taken for a schema's
-    /// name). The mock, `fake`, is dform itself and never looked up. A
+    /// entry without a `source` is its `path` when it names one (spelled
+    /// as a path whatever is there, so a missing executable is not taken
+    /// for a schema's name), else the executable `dform-provider-NAME`
+    /// where `lookup` finds it. The mock, `fake`, is dform itself and never looked up. A
     /// `source` is a path under the root (an executable, a directory
     /// holding one, else its `schema.df`; a `.df` file), else the source
     /// as written (a built-in schema's name).
     pub fn provider_location(&self, name: &str, lookup: &Lookup) -> Option<Located> {
         let entry = self.providers.get(name)?;
         if !entry.has_source() {
-            if let Some((place, exe)) = lookup.find(name).filter(|_| name != MOCK) {
-                return Some(Located::Found(place, exe));
+            // An explicit `path` is the user's word and wins over the
+            // lookup; without one, the executable is looked for.
+            if let Some(p) = entry.path() {
+                let p = match (p.strip_prefix("~/"), std::env::var_os("HOME")) {
+                    (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
+                    _ => self.root.join(p),
+                };
+                return Some(Located::Path(p));
             }
-            let p = entry.path()?;
-            let p = match (p.strip_prefix("~/"), std::env::var_os("HOME")) {
-                (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
-                _ => self.root.join(p),
-            };
-            return Some(Located::Path(p));
+            let (place, exe) = lookup.find(name).filter(|_| name != MOCK)?;
+            return Some(Located::Found(place, exe));
         }
         let src = entry.source()?;
         let path = self.root.join(src);

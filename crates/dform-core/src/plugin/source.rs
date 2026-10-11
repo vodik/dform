@@ -9,7 +9,7 @@
 //! `dform-provider-NAME`, looked for in one order ([`Lookup`]): beside
 //! dform's own executable (a release archive's), in the target directory
 //! of the checkout dform was built in (`cargo install --path .`), on
-//! `PATH`, and last at the entry's `path`.
+//! `PATH`; an entry's own `path` wins over the lookup.
 
 use std::path::{Path, PathBuf};
 

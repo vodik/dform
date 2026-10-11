@@ -28,7 +28,7 @@ fn row(r: &Run, name: &str) -> (String, String) {
 }
 
 #[test]
-fn a_provider_is_found_beside_dform_then_in_the_checkout_then_on_path_then_at_its_path() {
+fn a_provider_is_found_beside_dform_then_in_the_checkout_then_on_path_unless_its_path_is_given() {
     let s = Scratch::in_target("lookup", "order");
     std::fs::create_dir_all(s.path("bin")).unwrap();
     std::fs::create_dir_all(s.path("on-path")).unwrap();
@@ -47,7 +47,7 @@ fn a_provider_is_found_beside_dform_then_in_the_checkout_then_on_path_then_at_it
     s.write(
         "dform.toml",
         "[project]\nedition = \"2026\"\n\n[providers]\n\
-         lab = { path = \"explicit/dform-provider-lab\" }\novh = {}\naws = { source = \"aws-mock\" }\n",
+         lab = {}\npinned = { path = \"explicit/dform-provider-lab\" }\novh = {}\naws = { source = \"aws-mock\" }\n",
     );
     s.write("main.df", "use lab\n\nresource lab.thing a { n = 1 }\n");
     let on_path = s.path("on-path");
@@ -66,6 +66,13 @@ fn a_provider_is_found_beside_dform_then_in_the_checkout_then_on_path_then_at_it
         row(&r, "aws"),
         ("a schema the mock plays".into(), "aws-mock".into())
     );
+    // An entry's own `path` is the user's word: it wins over every
+    // place the lookup would try.
+    let explicit = s.path("explicit/dform-provider-lab");
+    assert_eq!(
+        row(&r, "pinned"),
+        ("its path".into(), explicit.display().to_string())
+    );
     // The plan starts the one found.
     let r = dform(&s, &on_path, &["plan", "main.df"]).failure();
     assert!(
@@ -79,11 +86,4 @@ fn a_provider_is_found_beside_dform_then_in_the_checkout_then_on_path_then_at_it
     let r = dform(&s, &on_path, &["provider", "list"]).success();
     let found = s.path("on-path/dform-provider-lab");
     assert_eq!(row(&r, "lab"), ("PATH".into(), found.display().to_string()));
-
-    let r = dform(&s, Path::new(""), &["provider", "list"]).success();
-    let explicit = s.path("explicit/dform-provider-lab");
-    assert_eq!(
-        row(&r, "lab"),
-        ("its path".into(), explicit.display().to_string())
-    );
 }
