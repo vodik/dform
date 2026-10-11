@@ -1,0 +1,10 @@
+# The spokes: a network per team, each its slot of the environment's
+# range (config/net/ENV.yaml). Slot 0 is the core's.
+
+[[spokes]]
+team = "shop"
+slot = 1
+
+[[spokes]]
+team = "data"
+slot = 2

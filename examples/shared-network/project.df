@@ -1,0 +1,2 @@
+#| The network in staging and in prod, each in its own range.
+resource stacks.net "${env}" { env } where env in ["staging", "prod"]

@@ -1,0 +1,6 @@
+#| The network team's policy: two networks that route to each other
+#| never share an address.
+
+deny "peered networks overlap" { peering } where
+  peering in aws.vpc_peering_connection,
+  inet.overlaps(peering.vpc.cidr_block, peering.peer_vpc.cidr_block),

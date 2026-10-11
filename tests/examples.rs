@@ -113,6 +113,11 @@ const CASES: &[Case] = &[
         name: "k8s",
         stacks: &[one(&["apply"], Apply::Completes)],
     },
+    // project.df's deployments: staging and prod.
+    Case {
+        name: "shared-network",
+        stacks: &[one(&["apply"], Apply::Completes)],
+    },
     Case {
         name: "shop",
         stacks: &[one(&["apply"], Apply::Completes)],
@@ -328,6 +333,11 @@ fn k8s() {
 #[test]
 fn gke_platform() {
     check("gke-platform");
+}
+
+#[test]
+fn shared_network() {
+    check("shared-network");
 }
 
 #[test]
