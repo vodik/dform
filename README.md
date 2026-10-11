@@ -16,7 +16,6 @@ produced it.
 
 A complete program. It refuses to plan against any other account:
 
-<!-- examples/shop/stacks/shop.df:5-18 -->
 ```dform
 use aws { region = "us-east-1", expect_account = "123456789012" }
 
@@ -34,34 +33,27 @@ resource aws.subnet "private-${availability_zone}" {
 deny "no public subnets" { subnet } where subnet in aws.subnet, subnet.map_public_ip_on_launch
 ```
 
-<!-- run in examples/shop -->
 ```
 $ dform plan
-deployment: stacks.shop[env=staging]
-plan: 12 changes (12 create) over 2 ticks; policy: 4 hold
+plan: 4 changes (4 create) over 1 tick; policy: 1 hold
 
-tick 1  11 changes
-  + aws.vpc main                      stacks/shop.df:7
+tick 1  4 changes
+  + aws.vpc main                   stacks/shop.df:3
       cidr_block = "10.0.0.0/16"
-      tags.team = "shop"              policy.df:5
-...
-  + aws.subnet private-us-east-1a     stacks/shop.df:12  with n = 0
+  + aws.subnet private-us-east-1a  stacks/shop.df:8  with n = 0
       availability_zone = "us-east-1a"
       cidr_block = "10.0.0.0/24"
-      tags.team = "shop"              policy.df:5
       vpc = main
-  + aws.subnet private-us-east-1b     stacks/shop.df:12  with n = 1
+  + aws.subnet private-us-east-1b  stacks/shop.df:8  with n = 1
       availability_zone = "us-east-1b"
       cidr_block = "10.0.1.0/24"
-      tags.team = "shop"              policy.df:5
       vpc = main
-  + aws.subnet private-us-east-1c     stacks/shop.df:12  with n = 2
+  + aws.subnet private-us-east-1c  stacks/shop.df:8  with n = 2
       availability_zone = "us-east-1c"
       cidr_block = "10.0.2.0/24"
-      tags.team = "shop"              policy.df:5
       vpc = main
-...
-policy  4 hold
+
+policy  1 hold
 ```
 
 When the region gains a zone, the next plan has one more subnet and the
@@ -86,13 +78,16 @@ derive and validate the topology from that description. Add a spoke and
 its peering follows; peer two spokes by hand and the policy refuses the
 plan:
 
-<!-- examples/shared-network/stacks/net.df:26-39 -->
 ```dform
-#| The core: the services every team reaches, the hub of the spokes.
-resource aws.vpc core { cidr_block = inet.subnet(supernet, 4, 0), tags = { Name: "core" } }
+use aws { region = "us-east-1" }
+
+resource aws.vpc core { cidr_block = "10.0.0.0/16", tags = { Name: "core" } }
+resource aws.vpc shop { cidr_block = "10.1.0.0/16", tags = { Name: "shop" } }
+resource aws.vpc data { cidr_block = "10.2.0.0/16", tags = { Name: "data" } }
 
 hub(core)
-spoke(vpc) where s in net.spokes, vpc in aws.vpc, vpc == network[s.team].vpc
+spoke(shop)
+spoke(data)
 link(from, to) where hub(from), spoke(to)
 
 resource aws.vpc_peering_connection "${from.tags.Name}-${to.tags.Name}" {
@@ -104,97 +99,81 @@ deny "a spoke peers only the core" { peering }
   where peering in aws.vpc_peering_connection, spoke(peering.vpc), spoke(peering.peer_vpc)
 ```
 
-<!-- run in examples/shared-network -->
 ```
-$ dform plan net
-deployment: stacks.net[env=staging]
-plan: 11 changes (11 create) over 1 tick; policy: 2 hold
+$ dform plan
+plan: 5 changes (5 create) over 1 tick; policy: 1 hold
 ...
-  + aws.vpc_peering_connection core-data  stacks/net.df:33
-      peer_vpc = data.vpc
+  + aws.vpc_peering_connection core-data  stacks/net.df:12
+      peer_vpc = data
       vpc = core
-  + aws.vpc_peering_connection core-shop  stacks/net.df:33
-      peer_vpc = shop.vpc
+  + aws.vpc_peering_connection core-shop  stacks/net.df:12
+      peer_vpc = shop
       vpc = core
 
-policy  2 hold
+policy  1 hold
 ```
 
 For example, a network and its subnets as one unit, stamped twice:
 
-<!-- examples/shared-network/stacks/net.df:8-24 -->
 ```dform
-resource network "${s.team}" {
-  team = s.team
-  cidr = inet.subnet(supernet, 4, s.slot)
-} where s in net.spokes
-
 component network {
-  input team: string
   input cidr: inet
   output vpc: aws.vpc = vpc
 
-  resource aws.vpc vpc { cidr_block = cidr, tags = { Name: team, team } }
+  resource aws.vpc vpc { cidr_block = cidr, tags = { component: "network" } }
   resource aws.subnet "private-${zone}" {
     vpc
     cidr_block = inet.subnet(cidr, 8, n)
     availability_zone = zone
   } where aws.availability_zone("available", zone, n)
 }
+
+resource network blue { cidr = "10.1.0.0/16" }
+resource network green { cidr = "10.2.0.0/16" }
 ```
 
 For example, we may want to keep the networks in a toml list, or an
 environment's inputs in yaml:
 
-<!-- examples/shared-network/stacks/net.df:1-11 -->
 ```dform
 key env: enum("staging", "prod") = "staging"
-input supernet: inet
-use aws { region = "us-east-1", expect_account = "123456789012" }
+input database { backup_days: int = 1 }
+use aws { region = "us-east-1" }
 
-let net = toml.decode(io.read("data/networks.toml"))
-set from yaml.decode(io.read("config/net/${env}.yaml"))
+let net = toml.decode(io.read("data/network.toml"))
+set from yaml.decode(io.read("config/${env}.yaml"))
 
-resource network "${s.team}" {
-  team = s.team
-  cidr = inet.subnet(supernet, 4, s.slot)
-} where s in net.spokes
+resource aws.vpc "${v.name}" { cidr_block = v.cidr } where v in net.vpcs
+
+resource aws.db_instance orders {
+  instance_class = "db.t3.micro"
+  backup_retention_period = database.backup_days
+}
 ```
 
-<!-- run in examples/shared-network -->
 ```
-$ dform plan net env=prod
-deployment: stacks.net[env=prod]
-plan: 11 changes (11 create) over 1 tick; policy: 2 hold
+$ dform plan
+deployment: stacks.app[env=staging]
+plan: 3 changes (3 create) over 1 tick
 
-tick 1  11 changes
-  + aws.vpc core                          stacks/net.df:27
-      cidr_block = "10.0.0.0/16"
-      tags.Name = "core"
-  + network data
-    + aws.vpc data.vpc                    stacks/net.df:18
-        cidr_block = "10.2.0.0/16"        stacks/net.df:10
-        tags = { Name: "data", team: "data" }
-...
+tick 1  3 changes
+  + aws.db_instance orders         stacks/app.df:10
+      backup_retention_period = 7  stacks/app.df:6
+      instance_class = "db.t3.micro"
+  + aws.vpc data                   stacks/app.df:8  with v = {cidr: "10.2.0.0/16", name: "data"}
+      cidr_block = "10.2.0.0/16"
+  + aws.vpc shop                   stacks/app.df:8  with v = {cidr: "10.1.0.0/16", name: "shop"}
+      cidr_block = "10.1.0.0/16"
 ```
 
 We often need a value the cloud has not produced yet, sometimes in a
 resource's name:
 
-<!-- examples/shop/stacks/shop.df:30-49 -->
 ```dform
-resource aws.db_instance orders {
-  identifier = "orders-${env}"
-  instance_class = database.class
-  multi_az = database.multi_az
-  backup_retention_period = database.backup_days
-  publicly_accessible = public
-  password = random.password("orders")
-  vpc_security_groups = [postgres]
-}
+use aws { region = "us-east-1" }
 
-#| The app connects to the database as `app` with its role, not a
-#| password: one policy per database, named for its resource id.
+resource aws.db_instance orders { instance_class = "db.t3.micro" }
+
 resource aws.iam_policy "connect-${id}" {
   policy = json.encode({
     Statement: [{
@@ -205,19 +184,17 @@ resource aws.iam_policy "connect-${id}" {
 } where pg in aws.db_instance, id = pg.resource_id
 ```
 
-<!-- run in examples/shop -->
 ```
 $ dform plan
-deployment: stacks.shop[env=staging]
-plan: 12 changes (12 create) over 2 ticks; policy: 4 hold
-...
-  + aws.db_instance orders            stacks/shop.df:30
-...
-tick 2  1+ changes
+plan: 1 change (1 create) over 2 ticks
+
+tick 1  1 change
+  + aws.db_instance orders        stacks/db.df:3
+      instance_class = "db.t3.micro"
+
+tick 2  ? changes
   waits on  orders.resource_id
-...
-  aws.iam_policy "connect-${id}"      stacks/shop.df:42  waits on orders.resource_id
-...
+  aws.iam_policy "connect-${id}"  stacks/db.df:5  waits on orders.resource_id
 ```
 
 Terraform cannot plan a resource address from a value it learns at
@@ -227,18 +204,12 @@ For example, we want a host, the cluster installed on it and what runs
 in that cluster to be one program and one plan, with the cluster's
 provider configured from the host's address once it exists:
 
-<!-- examples/k3s-platform/stacks/platform.df:22-37 -->
 ```dform
+use aws { region = "us-east-1" }
+
 let k3s_init = "#!/bin/sh\ncurl -sfL https://get.k3s.io | sh -\n"
 
-resource ovh.instance server {
-  name = "k3s-${env}"
-  region = "BHS5"
-  flavor
-  image = "Ubuntu 24.04"
-  ssh_key = admin
-  user_data = k3s_init
-}
+resource aws.instance server { instance_type = "t3.small", user_data = k3s_init }
 
 let raw: secret(string) = io.read("ssh://ubuntu@${server.public_ip}/etc/rancher/k3s/k3s.yaml")
 let kubeconfig = str.replace(raw, "https://127.0.0.1:6443", "https://${server.public_ip}:6443")
@@ -247,39 +218,25 @@ use k8s { kubeconfig }
 resource k8s.namespace apps { metadata.name = "apps" }
 ```
 
-<!-- run in examples/k3s-platform -->
 ```
-$ dform plan platform
-deployment: stacks.platform[env=staging]
-plan: 4 changes (4 create) over 2 ticks; policy: 3 hold
+$ dform plan
+plan: 2 changes (2 create) over 2 ticks
 
-tick 1  2 changes
-  + ovh.ssh_key admin          stacks/platform.df:17
-      name = "k3s-staging-admin"
-      public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NT…q3m7cJ4yQx1aB ops@example.com"
-  + ovh.instance server        stacks/platform.df:24
-      flavor = "b2-7"          stacks/platform.df:4
-      image = "Ubuntu 24.04"
-      name = "k3s-staging"
-      region = "BHS5"
-      ssh_key = admin
-      user_data = (sensitive)  stacks/platform.df:22
+tick 1  1 change
+  + aws.instance server  stacks/cluster.df:5
+      instance_type = "t3.small"
+      user_data = "#!/bin/sh\ncurl -sfL https://get.k3s.io | sh -\n"  stacks/cluster.df:3
 
-tick 2  2 changes
-  waits on  server.public_ip
-            provider k8s  kubeconfig
-  + ovh.domain_record api      stacks/platform.df:40
-...
-  + k8s.namespace apps         stacks/platform.df:37
+tick 2  1 change
+  waits on  provider k8s  kubeconfig
+  + k8s.namespace apps   stacks/cluster.df:11
       metadata.name = "apps"
-...
 ```
 
 For example, we want a blue/green rollout: the Service moves only after
 the schema migration succeeds and every replica of the new colour is
 ready:
 
-<!-- examples/crud-api/stacks/api.df:1-25 -->
 ```dform
 use k8s
 
@@ -289,7 +246,6 @@ let live = world.k8s.service["shop/api"].spec.selector.color
 let live_image = world.k8s.deployment["shop/api-${live}"].spec.template.spec.containers[0].image
 let next = "green" where live == "blue"
 let next = "blue" where live == "green"
-let next = "blue" where not has live
 
 migrated(release.schema) where k8s.job["migrate-v${release.schema}"].status.succeeded == 1
 
@@ -304,7 +260,6 @@ let serving = live where not ready(next)
 resource k8s.service api {
   metadata = { name: "api", namespace: "shop" }
   spec.selector = { app: "api", color: serving }
-  spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
 }
 ```
 
@@ -314,7 +269,6 @@ A provider is facts as well: its types, its tables and its defaults are
 rows the program reads. For example, we want a plan to refuse records
 for a domain the account does not host:
 
-<!-- examples/k3s-platform/stacks/platform.df:8-10 -->
 ```dform
 use ovh { project = "shop" }
 
@@ -329,21 +283,18 @@ resources, and every plan checks them. For example, we want every
 resource to carry its team's tag, inside components too; remembering to
 tag each one by hand is error-prone:
 
-<!-- examples/shop/policy.df:5 -->
 ```dform
 set r.tags = { team: "shop" } where r in resource
 ```
 
-<!-- run in examples/shop -->
 ```
-$ dform query 'aws.instance["web-us-east-1a"].tags'
-{ team: "shop", Name: "shop-web-staging" }
+$ dform query 'blue.vpc.tags'
+{ team: "shop", component: "network" }
 ```
 
 After an apply, we want to ask what the next plan would change. The plan
 is a table as well, `deformation`, one row per change:
 
-<!-- run in examples/shop after dform apply -->
 ```
 $ dform query 'deformation(kind, resource, _)' --set database.backup_days=14
 Kind      Resource
@@ -360,17 +311,14 @@ unknown.
 For a risky change, we want someone to sign off on exactly what will
 apply:
 
-<!-- examples/shop/policy.df:7-8 -->
 ```dform
-requires_approval(r, "${kind} of ${r} in prod")
-  where env == "prod", deformation(kind, r, _), kind in ["replace", "delete"]
+requires_approval(r, "${kind} of ${r} in prod") where env == "prod", deformation(kind, r, _), kind in ["replace", "delete"]
 ```
 
 We never want a prod database deleted, and we want a policy to check
 that every one is protected. Lifecycle is a table, so a rule writes it
 and a policy reads it:
 
-<!-- examples/shop/stacks/shop.df:55-58 -->
 ```dform
 lifecycle(orders, "prevent_destroy") where env == "prod"
 
@@ -384,50 +332,38 @@ without replacing it.
 For example, we want `dform test` to run every policy over every
 combination of enums and bools, staging and prod included:
 
-<!-- examples/shop/stacks/shop.df:1-2,5-6,30-39,51 -->
 ```dform
 key env: enum("staging", "prod") = "staging"
 input public: bool = false
-use aws { region = "us-east-1", expect_account = "123456789012" }
+use aws { region = "us-east-1" }
 
-resource aws.db_instance orders {
-  identifier = "orders-${env}"
-  instance_class = database.class
-  multi_az = database.multi_az
-  backup_retention_period = database.backup_days
-  publicly_accessible = public
-  password = random.password("orders")
-  vpc_security_groups = [postgres]
-}
+resource aws.db_instance orders { instance_class = "db.t3.micro", publicly_accessible = public }
 
 deny "no public database in prod" where env == "prod", public
 ```
 
-<!-- run in examples/shop -->
 ```
 $ dform test
-test shop: 4 combinations of env, public
+test app: 4 combinations of env, public
 env      public  result
 staging  false   ok
 staging  true    ok
 prod     false   ok
 prod     true    denied
-denied  dform plan shop env=prod --set public=true
+denied  dform plan app env=prod --set public=true
   - no public database in prod
-test shop: 4 combinations, 1 failed
+test app: 4 combinations, 1 failed
 ```
 
 We want the compiler to catch a secret leaking into an output, a
 condition or an address, at its line:
 
-<!-- tests/fixtures/readme/leaks.df:1-2,5-8 -->
 ```dform
-output password: string = pw # E0304: not declared secret(string)
-
 let pw = random.password("db")
 
-deny "short password" where pw.len < 12 # E0301: inspecting it leaks it
-resource aws.iam_user "u-${pw}" { name = "x" } # E0305: addresses are printed
+output password: string = pw                           # E0304: not declared secret(string)
+deny "short password" where pw.len < 12                # E0301: inspecting it leaks it
+resource aws.iam_user "u-${pw}" { name = "x" }         # E0305: addresses are printed
 ```
 
 State holds no secret, because a generated one derives from the
@@ -439,11 +375,10 @@ We want to know why a resource does not exist as much as why one does.
 `dform why` names the rule that could have made it and the row it
 lacked:
 
-<!-- run in examples/shop -->
 ```
 $ dform why 'aws.subnet private-us-east-1d'
 aws.subnet private-us-east-1d: no rule derives it
-  stacks/shop.df:12  resource aws.subnet "private-${availability_zone}" { .. } where aws.availability_zone("available", availability_zone, n)
+  stacks/shop.df:8  resource aws.subnet "private-${availability_zone}" { .. } where aws.availability_zone("available", availability_zone, n)
     aws.availability_zone("available", "us-east-1d", n): no row
     nearest: ("us-east-1a", 0), ("us-east-1b", 1), ("us-east-1c", 2)
 ```
@@ -465,14 +400,11 @@ per edge and a directory per environment.
 
 In a pipeline, `status` fails unless everything is healthy:
 
-<!-- run in examples/crud-api after dform apply; k8s.deployment blue.deploy is degraded: CrashLoopBackOff: container api -->
 ```
-$ dform status api
-k8s.deployment blue.deploy  degraded  CrashLoopBackOff: container api
-k8s.job migrate-v42         -
-k8s.namespace shop          -
-k8s.service api             -
-status: 1 degraded, 3 without health
+$ dform status apps env=staging
+k8s.deployment web  degraded  CrashLoopBackOff: container web
+k8s.namespace apps  -
+status: 1 degraded, 1 without health
 ```
 
 `render` prints what apply would send, policy checked, with no
@@ -480,9 +412,13 @@ credentials and no state, as plain manifests for Argo CD or kustomize;
 a tag resolves to its digest at plan, so a moved tag shows up as an
 update:
 
-<!-- run in examples/k3s-platform -->
 ```
 $ dform render apps env=staging
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: apps
 ---
 apiVersion: apps/v1
 kind: Deployment

@@ -1,5 +1,6 @@
-//! Every sample the READMEs show is lifted from an example, so the two
-//! cannot drift: README.md's and each `examples/NAME/README.md`'s. A
+//! Every sample an example's README shows is lifted from the example, so
+//! the two cannot drift (the repository's README is snippets, the user's
+//! own text: nothing there is lifted or run). A
 //! block of a program, and a block that shows a command and what it
 //! prints, carry a comment on the line above the fence that names where
 //! it comes from:
@@ -66,9 +67,8 @@ fn blocks(name: &str, readme: &str) -> Vec<Block> {
     out
 }
 
-/// The READMEs: the repository's and each example's.
+/// The READMEs: each example's.
 fn readmes() -> Vec<String> {
-    let mut out = vec!["README.md".to_string()];
     let mut examples: Vec<String> = std::fs::read_dir(repo().join("examples"))
         .unwrap()
         .flatten()
@@ -76,8 +76,7 @@ fn readmes() -> Vec<String> {
         .filter(|r| repo().join(r).is_file())
         .collect();
     examples.sort();
-    out.extend(examples);
-    out
+    examples
 }
 
 /// The lines `ranges` names of the file `path` (`1-2,5`), in turn.
@@ -233,8 +232,8 @@ fn every_readme_block_is_lifted_from_an_example() {
     }
 }
 
-/// The README's leaks are compile errors, each at its line with the code
-/// its comment names.
+/// The README's secret-leak snippet, kept as a fixture, is compile errors,
+/// each at its line with the code its comment names.
 #[test]
 fn the_readmes_leaks_are_errors() {
     let file = "tests/fixtures/readme/leaks.df";
