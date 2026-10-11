@@ -17,7 +17,9 @@
  * One consequence: where a statement cannot end yet, a newline is
  * whitespace here but an end to the compiler, so a line broken after an
  * operator, before a block's `{`, or after `where` onto a line not indented
- * deeper, is an error only in the compiler's diagnostics.
+ * deeper, is an error only in the compiler's diagnostics; and so is a
+ * literal per line without its comma, where the line below reads as a
+ * fact.
  */
 
 /// <reference types="tree-sitter-cli/dsl" />

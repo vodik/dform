@@ -83,9 +83,8 @@ deny "a spoke peers only the core" { p } where
   p.vpc != core,
 ```
 
-A literal on a line of its own without its comma is an error that says so
-(a line under the clause that starts with a statement keyword is a
-statement). A braced body after `where` is gone: it is an error that
+In a clause of a literal per line, a literal without its comma is an
+error that says so. A braced body after `where` is gone: it is an error that
 prints the clause with its literals separated by commas. A `{` after
 `where` whose `}` does not end the line starts a literal, an object
 pattern: `{ cpu: x } = lim`. There is no

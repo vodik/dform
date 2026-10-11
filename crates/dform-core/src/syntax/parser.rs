@@ -311,11 +311,10 @@ impl<'a> Parser<'a> {
                 .is_some_and(|i| self.column(self.toks[i].start) > self.head_col)
     }
 
-    /// Take a continuation line's newline (`at_continuation`).
-    fn continue_line(&mut self) {
-        if self.at_continuation() {
-            self.eat_nl();
-        }
+    /// Take a continuation line's newline (`at_continuation`); whether
+    /// there was one.
+    fn continue_line(&mut self) -> bool {
+        self.at_continuation() && self.eat_nl()
     }
 
     /// At `where`: on the statement's line, or starting a continuation
@@ -1611,20 +1610,22 @@ impl<'a> Parser<'a> {
             return self.braced_where();
         }
         self.start(BODY);
-        self.continue_line();
+        // A literal per line: one continues on the next line.
+        let mut per_line = self.continue_line();
         loop {
             self.lit()?;
             if !self.eat(COMMA) {
                 break;
             }
-            self.continue_line();
+            per_line |= self.continue_line();
             if matches!(self.nth(0), NEWLINE | EOF | R_BRACE) {
                 break;
             }
         }
         self.finish();
-        // A statement below it is not its literal, however indented.
-        if self.at_continuation() && self.raw(0) != WHERE_KW && !self.raw(0).is_stmt_keyword() {
+        // A literal per line without its comma; under a clause on its
+        // statement's line, an indented line is a statement.
+        if per_line && self.at_continuation() {
             let msg = "expected `,`, found the end of the line: the line below is indented under \
                        the statement, a literal of its clause"
                 .to_string();
@@ -2270,6 +2271,8 @@ mod tests {
             "component m {\n  r(c) where\n    q(c),\n  s(1)\n}\n",
             "use m {\n  p(x) where\n    q(x),\n  n = 1\n}\n",
             "let c = x where { cpu: x } = lim\n",
+            // Under a clause on its statement's line, a statement.
+            "deny \"a\" where q(1)\n   seen(r) where q(r)\n",
         ] {
             assert!(errors(src).is_empty(), "{src}: {:?}", errors(src));
         }
