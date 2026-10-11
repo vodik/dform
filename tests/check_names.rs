@@ -7,7 +7,7 @@
 //! Such a check reads more than the value given, so it is the
 //! evaluation's: a deny (tests/input_check.rs).
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 fn project(name: &str, stack: &str) -> Scratch {

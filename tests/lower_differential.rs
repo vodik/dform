@@ -8,7 +8,7 @@
 //! `lower_stack` of the suite under `DFORM_CHECK_LOWER=1`; both are deleted
 //! with the old path at the migration's end.
 
-mod common;
+use crate::common;
 use common::{corpus, df_files, rel, repo};
 use dform::program::check;
 use std::path::Path;

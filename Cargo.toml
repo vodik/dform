@@ -108,15 +108,9 @@ path = "tests/main.rs"
 [[test]]
 name = "apply_said"
 
-[[test]]
-name = "check_names"
-
 # Raises the process's interrupt flag (`interrupt::request`).
 [[test]]
 name = "interrupt"
-
-[[test]]
-name = "lower_differential"
 
 # Turns the executor's mutant hooks on (`executor::hooks`).
 [[test]]
