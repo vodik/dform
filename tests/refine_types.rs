@@ -125,7 +125,7 @@ resource compute.vm prod {{ pool = {{ min: {min}, max: 3 }} }}
 }
 
 fn gke(s: &Scratch, extra: &[&str]) -> Run {
-    let prog = repo().join("examples/refine/stacks/refine_gke.df");
+    let prog = repo().join("tests/fixtures/refine/stacks/refine_gke.df");
     s.run(&common::on(
         prog.to_str().unwrap(),
         &[
@@ -165,7 +165,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
              [\"us-east1-b\", \"us-east1-c\"] violates len_ge(3)\n"
         ) && r.stderr.contains("^ checked here\n")
             && r.stderr
-                .contains("examples/refine/stacks/refine_gke.df:121  ")
+                .contains("tests/fixtures/refine/stacks/refine_gke.df:121  ")
             && r.stderr.contains("\n  after tick 1\n")
             && !r.stderr.contains("ctx=")
             && r.stderr

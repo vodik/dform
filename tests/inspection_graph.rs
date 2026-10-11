@@ -8,14 +8,14 @@ use inspection_common::{dform, golden};
 
 #[test]
 fn the_resource_dag_follows_refs() {
-    let out = dform("examples/demo/stacks/dform.df env=prod", &["graph"]);
+    let out = dform("tests/fixtures/demo/stacks/dform.df env=prod", &["graph"]);
     assert!(
         out.contains(r#""net.subnet[\"main.private-us-test-1a\"]" -> "net.vpc[\"main.vpc\"]";"#),
         "{out}"
     );
     assert_eq!(
         out,
-        dform("examples/demo/stacks/dform.df env=prod", &["graph"])
+        dform("tests/fixtures/demo/stacks/dform.df env=prod", &["graph"])
     );
     golden("graph_dform_prod_resources", &out);
 }
@@ -55,13 +55,13 @@ fn the_partition_graph_dashes_negative_edges() {
 #[test]
 fn any_binary_relation_is_a_graph() {
     let out = dform(
-        "examples/demo/stacks/dform.df",
+        "tests/fixtures/demo/stacks/dform.df",
         &["graph", "--relation", "vpc_peer/2"],
     );
     assert_eq!(
         out,
         dform(
-            "examples/demo/stacks/dform.df",
+            "tests/fixtures/demo/stacks/dform.df",
             &["graph", "--relation", "vpc_peer"]
         )
     );

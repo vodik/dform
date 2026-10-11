@@ -59,7 +59,7 @@ fn planning_prod_after_applying_staging_proposes_creates() {
 #[test]
 fn dform_df_plans_prod_after_staging_as_creates() {
     let s = Scratch::project("keyed-dform");
-    let file = repo().join("examples/demo/stacks/dform.df");
+    let file = repo().join("tests/fixtures/demo/stacks/dform.df");
     let file = file.to_str().unwrap();
     s.run(&["apply", file, "env=staging"]).success();
     assert!(

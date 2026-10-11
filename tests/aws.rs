@@ -4,7 +4,7 @@ use crate::common;
 use common::{Scratch, repo};
 
 fn demo() -> String {
-    let prog = repo().join("examples/aws/stacks/aws_demo.df");
+    let prog = repo().join("tests/fixtures/aws/stacks/aws_demo.df");
     prog.to_str().unwrap().to_string()
 }
 

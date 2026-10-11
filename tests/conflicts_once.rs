@@ -13,7 +13,7 @@ use common::{Scratch, repo};
 /// component's resource, the `set` the next.
 fn project() -> (Scratch, usize) {
     let s = Scratch::new("conflicts-once");
-    let stack = repo().join("examples/gke/stacks/gke_two_phase.df");
+    let stack = repo().join("tests/fixtures/gke/stacks/gke_two_phase.df");
     let mut text = std::fs::read_to_string(stack).unwrap();
     let at = text.lines().count() + 4;
     text.push_str(

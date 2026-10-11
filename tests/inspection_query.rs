@@ -9,7 +9,7 @@ use inspection_common::{dform, golden};
 #[test]
 fn a_pattern_prints_one_column_per_variable() {
     let out = dform(
-        "examples/demo/stacks/dform.df env=prod",
+        "tests/fixtures/demo/stacks/dform.df env=prod",
         &["query", "attr(net.vpc, N, \"cidr\", C)"],
     );
     assert!(out.starts_with("N "), "{out}");
@@ -21,7 +21,7 @@ fn a_pattern_prints_one_column_per_variable() {
 #[test]
 fn a_conjunction_is_evaluated_against_the_final_fact_store() {
     let out = dform(
-        "examples/demo/stacks/dform.df env=prod",
+        "tests/fixtures/demo/stacks/dform.df env=prod",
         &[
             "query",
             "attr(T, A, \"cidr\", C), want(T, A), T != net.subnet",
@@ -33,7 +33,7 @@ fn a_conjunction_is_evaluated_against_the_final_fact_store() {
         "{out}"
     );
     let ground = dform(
-        "examples/demo/stacks/dform.df",
+        "tests/fixtures/demo/stacks/dform.df",
         &["query", r#"want(net.vpc, "main.vpc")"#],
     );
     assert_eq!(ground, "yes\n");
@@ -43,9 +43,9 @@ fn a_conjunction_is_evaluated_against_the_final_fact_store() {
 /// by its `decl`, a core relation's names, else `a`, `b`, ..
 #[test]
 fn a_predicate_name_lists_its_facts() {
-    let out = dform("examples/demo/stacks/dform.df", &["query", "env"]);
+    let out = dform("tests/fixtures/demo/stacks/dform.df", &["query", "env"]);
     assert_eq!(out, "a\n\"staging\"\n");
-    let out = dform("examples/demo/stacks/dform.df", &["query", "want"]);
+    let out = dform("tests/fixtures/demo/stacks/dform.df", &["query", "want"]);
     assert!(out.starts_with("type "), "{out}");
     assert!(out.ends_with(" rows)\n"), "{out}");
 }
@@ -53,7 +53,7 @@ fn a_predicate_name_lists_its_facts() {
 #[test]
 fn a_query_that_does_not_parse_says_so() {
     let s = Scratch::new("query-parse");
-    let file = repo().join("examples/demo/stacks/dform.df");
+    let file = repo().join("tests/fixtures/demo/stacks/dform.df");
     let r = s
         .run(&[
             "dev",
@@ -138,7 +138,7 @@ fn a_row_prints_a_reference_as_its_address() {
 #[test]
 fn a_path_below_the_top_attribute_is_its_field() {
     for path in [r#"net.vpc["main.vpc"].tags.team"#, "main.vpc.tags.team"] {
-        let out = dform("examples/demo/stacks/dform.df", &["query", path]);
+        let out = dform("tests/fixtures/demo/stacks/dform.df", &["query", path]);
         assert_eq!(out, "\"platform\"\n", "{path}");
     }
 }

@@ -90,7 +90,7 @@ use fake
 fn dform_df_plans_in_every_env() {
     for env in ["dev", "staging", "prod"] {
         let s = Scratch::new(&format!("dangling-ref-{env}"));
-        let file = repo().join("examples/demo/stacks/dform.df");
+        let file = repo().join("tests/fixtures/demo/stacks/dform.df");
         let r = s
             .run(&[
                 "dev",

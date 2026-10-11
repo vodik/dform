@@ -6,7 +6,7 @@ use common::{Scratch, repo};
 use serde_json::{Value, json};
 
 fn gke_json(s: &Scratch) -> Value {
-    let prog = repo().join("examples/gke/stacks/gke_two_phase.df");
+    let prog = repo().join("tests/fixtures/gke/stacks/gke_two_phase.df");
     let r = s
         .run(&[
             "dev",
@@ -273,7 +273,7 @@ fn replace_denied_and_moved_are_in_the_document() {
 #[test]
 fn plan_json_why_explains_each_change() {
     let s = Scratch::new("json-why");
-    let prog = repo().join("examples/gke/stacks/gke_two_phase.df");
+    let prog = repo().join("tests/fixtures/gke/stacks/gke_two_phase.df");
     let run = |extra: &[&str]| -> Value {
         let mut args = vec![
             "dev",

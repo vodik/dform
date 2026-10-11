@@ -56,7 +56,7 @@ policy  2 hold · 1 undetermined
 #[test]
 fn gke_two_phase_plans_in_sections() {
     let s = Scratch::new("gke-sections");
-    let prog = repo().join("examples/gke/stacks/gke_two_phase.df");
+    let prog = repo().join("tests/fixtures/gke/stacks/gke_two_phase.df");
     let r = s
         .run(&[
             "dev",
@@ -79,7 +79,7 @@ fn gke_two_phase_plans_in_sections() {
 #[test]
 fn apply_then_replan_is_undeformed() {
     let s = Scratch::new("undeformed");
-    let prog = repo().join("examples/demo/stacks/dform.df");
+    let prog = repo().join("tests/fixtures/demo/stacks/dform.df");
     let prog = prog.to_str().unwrap();
     let run = |cmd: &str| {
         s.run(&common::on(prog, &["--world", "w.json"], &[cmd]))
@@ -99,7 +99,7 @@ fn apply_then_replan_is_undeformed() {
 }
 
 fn gke(s: &Scratch, file: &str, extra: &[&str]) -> common::Run {
-    let prog = repo().join("examples/gke/stacks").join(file);
+    let prog = repo().join("tests/fixtures/gke/stacks").join(file);
     s.run(&common::on(
         prog.to_str().unwrap(),
         &[

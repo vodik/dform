@@ -220,7 +220,7 @@ fn a_changed_program_is_refused() {
 #[test]
 fn other_inputs_are_refused() {
     let s = Scratch::new("planfile-inputs");
-    let prog = repo().join("examples/demo/stacks/dform.df");
+    let prog = repo().join("tests/fixtures/demo/stacks/dform.df");
     let prog = prog.to_str().unwrap();
     s.run(&[
         "dev",
@@ -277,7 +277,7 @@ fn the_file_never_carries_a_labeled_secret() {
 #[test]
 fn a_two_phase_plan_file_stops_before_the_tick_it_could_not_name() {
     let s = Scratch::new("planfile-gke");
-    let prog = repo().join("examples/gke/stacks/gke_two_phase.df");
+    let prog = repo().join("tests/fixtures/gke/stacks/gke_two_phase.df");
     s.run(&[
         "dev",
         "--provider",

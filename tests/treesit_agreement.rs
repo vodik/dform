@@ -275,8 +275,8 @@ fn the_string_capture_leaves_an_interpolation_to_code() {
 fn the_reference_capture_is_on_field_values_and_not_on_reads() {
     let (mut values, mut reads, mut all) = (0, 0, Vec::new());
     for file in [
-        "examples/tour/stacks/tour.df",
-        "examples/demo/stacks/dform.df",
+        "tests/fixtures/tour/stacks/tour.df",
+        "tests/fixtures/demo/stacks/dform.df",
         "examples/gke-platform/stacks/gke_platform.df",
     ] {
         let src = std::fs::read_to_string(repo().join(file)).unwrap();

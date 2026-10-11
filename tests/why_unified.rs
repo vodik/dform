@@ -96,7 +96,7 @@ fn a_missing_subnet_names_the_zone_row_it_lacks() {
 #[test]
 fn a_guarded_instance_names_the_guard_that_did_not_hold() {
     let s = Scratch::new("whynot-guard");
-    let file = repo().join("examples/demo/stacks/dform.df");
+    let file = repo().join("tests/fixtures/demo/stacks/dform.df");
     let r = s
         .run(
             &common::on(
@@ -113,9 +113,9 @@ fn a_guarded_instance_names_the_guard_that_did_not_hold() {
     assert_eq!(
         out,
         "net.vpc peer.vpc: no rule derives it\n  \
-         examples/demo/network.df:19  resource net.vpc vpc { .. }   (resource network.vpc peer)\n    \
+         tests/fixtures/demo/network.df:19  resource net.vpc vpc { .. }   (resource network.vpc peer)\n    \
          resource network.vpc peer: not made\n      \
-         examples/demo/stacks/dform.df:54  resource network.vpc peer { .. } where env != \"dev\"\n        \
+         tests/fixtures/demo/stacks/dform.df:54  resource network.vpc peer { .. } where env != \"dev\"\n        \
          env != \"dev\": false, with env = \"dev\"\n"
     );
     golden("why_absent_guard", &out);

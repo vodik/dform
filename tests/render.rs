@@ -227,7 +227,7 @@ fn each_listed_deployment_renders_under_its_name() {
 #[test]
 fn the_demo_renders_an_empty_stream() {
     let s = Scratch::new("render-demo");
-    copy_dir(&repo().join("examples/demo"), &s.dir);
+    copy_dir(&repo().join("tests/fixtures/demo"), &s.dir);
     let r = s.run(&["render", "dform", "env=staging"]).success();
     assert!(r.stdout.is_empty(), "{}", r.stdout);
     let lines: Vec<&str> = r.stderr.lines().collect();

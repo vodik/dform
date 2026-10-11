@@ -10,7 +10,7 @@
 # The input's refinements are checked in its cell
 # against the CIDRs the settings give (they hold).
 #
-# The two-phase GKE / kubernetes stack (examples/gke), with
+# The two-phase GKE / kubernetes stack (tests/fixtures/gke), with
 # the gke mock schema, which makes the cluster's zones, endpoint and ca open
 # nulls until the cluster exists, and the k8s mock's, configured from them.
 

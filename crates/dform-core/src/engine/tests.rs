@@ -391,7 +391,7 @@ fn statement_order_does_not_change_attr() {
     }
     let root = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
     let program =
-        crate::loader::load_program(&[root.join("examples/demo/stacks/dform.df")]).unwrap();
+        crate::loader::load_program(&[root.join("tests/fixtures/demo/stacks/dform.df")]).unwrap();
     for env in ["staging", "prod"] {
         let extra = [input("env", Value::Str(env.into()))];
         // The settings document is a table: answered.
@@ -451,7 +451,7 @@ fn eval_tables(program: &Program, extra: &[Atom]) -> Result<(EvalResult, Vec<Str
 #[test]
 fn dform_df_set_from_matches_the_blocks() {
     let root = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
-    let src = std::fs::read_to_string(root.join("examples/demo/stacks/dform.df")).unwrap();
+    let src = std::fs::read_to_string(root.join("tests/fixtures/demo/stacks/dform.df")).unwrap();
     let from = "set from yaml.decode(io.read(\"config/dform/${env}.yaml\"))\n";
     assert!(src.contains(from));
     let blocks = "set {
@@ -471,7 +471,7 @@ fn dform_df_set_from_matches_the_blocks() {
     let old = dir.join("dform.df");
     std::fs::write(&old, src.replace(from, blocks)).unwrap();
     // The modules and components it names by path, beside it.
-    for f in std::fs::read_dir(root.join("examples/demo")).unwrap() {
+    for f in std::fs::read_dir(root.join("tests/fixtures/demo")).unwrap() {
         let f = f.unwrap().path();
         if f.extension().is_some_and(|e| e == "df") {
             std::fs::copy(&f, dir.join(f.file_name().unwrap())).unwrap();
@@ -495,7 +495,7 @@ fn dform_df_set_from_matches_the_blocks() {
         (docs, violations, r.warnings)
     };
     for env in [None, Some("staging"), Some("prod"), Some("dev")] {
-        let new = resources(&root.join("examples/demo/stacks/dform.df"), env);
+        let new = resources(&root.join("tests/fixtures/demo/stacks/dform.df"), env);
         assert!(!new.0.is_empty());
         assert_eq!(new, resources(&old, env), "env={env:?}");
     }
@@ -905,7 +905,7 @@ fn format_over_a_computed_ref_is_stuck() {
 #[test]
 fn dform_df_under_nulls_is_single_phase() {
     let (r, violations, s) = run_file(
-        "examples/demo/stacks/dform.df",
+        "tests/fixtures/demo/stacks/dform.df",
         &crate::schema::fake(),
         &[input("env", Value::Str("prod".into()))],
     );
@@ -921,7 +921,7 @@ fn other_examples_have_no_stuck_instances() {
     let prod = [input("env", Value::Str("prod".into()))];
     let cases: [(&str, crate::schema::Schema, &[Atom]); 4] = [
         (
-            "examples/advanced/stacks/dform-advanced.df",
+            "tests/fixtures/advanced/stacks/dform-advanced.df",
             crate::schema::fake(),
             &prod,
         ),
@@ -931,12 +931,12 @@ fn other_examples_have_no_stuck_instances() {
             &prod,
         ),
         (
-            "examples/decl/stacks/decl_demo.df",
+            "tests/fixtures/decl/stacks/decl_demo.df",
             crate::schema::fake(),
             &[],
         ),
         (
-            "examples/adopt/stacks/adopt_demo.df",
+            "tests/fixtures/adopt/stacks/adopt_demo.df",
             crate::schema::fake(),
             &prod,
         ),
@@ -969,7 +969,7 @@ fn gke_two_phase_sections_per_key() {
         })
         .collect::<Vec<_>>();
     let (r, violations, s) = run_file(
-        "examples/gke/stacks/gke_two_phase.df",
+        "tests/fixtures/gke/stacks/gke_two_phase.df",
         &crate::schema::gke().merge(k8s).unwrap(),
         &answers,
     );
@@ -1128,7 +1128,7 @@ fn why_leaves(r: &EvalResult, fact: &str) -> BTreeSet<Leaf> {
 #[test]
 fn every_fact_has_a_circuit_node() {
     let (r, _, _) = run_file(
-        "examples/demo/stacks/dform.df",
+        "tests/fixtures/demo/stacks/dform.df",
         &crate::schema::fake(),
         &[input("env", Value::Str("prod".into()))],
     );
@@ -1207,7 +1207,8 @@ fn a_given_fact_is_an_input_leaf() {
 /// gke_two_phase with a program appended, on the gke schema.
 fn gke_with(extra: &str) -> Result<(EvalResult, Vec<String>)> {
     let mut program =
-        crate::loader::load_program(&[repo_file("examples/gke/stacks/gke_two_phase.df")]).unwrap();
+        crate::loader::load_program(&[repo_file("tests/fixtures/gke/stacks/gke_two_phase.df")])
+            .unwrap();
     program
         .statements
         .extend(crate::parser::parse_program(extra).unwrap().statements);

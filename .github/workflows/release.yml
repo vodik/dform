@@ -85,7 +85,7 @@ jobs:
           # Outside a project: every provider found, each beside dform.
           "check/$name/dform" provider list | tee providers.txt
           grep -q 'k8s .*beside dform' providers.txt
-          "check/$name/dform" -C examples/tour plan
+          "check/$name/dform" -C examples/shop plan
 
       - uses: actions/upload-artifact@v4
         with:

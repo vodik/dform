@@ -34,7 +34,8 @@ fn dform<S: AsRef<std::ffi::OsStr>>(s: &Scratch, kubeconfig: Option<&str>, args:
 /// The demo with its provider's `use` pointed at the real provider:
 /// `providers/k8s/` beside it holds the executable.
 fn real_demo(s: &Scratch) {
-    let src = std::fs::read_to_string(repo().join("examples/k8s/stacks/k8s_demo.df")).unwrap();
+    let src =
+        std::fs::read_to_string(repo().join("tests/fixtures/k8s/stacks/k8s_demo.df")).unwrap();
     let real = src.replace("use k8s", "use k8s { source = \"./providers/k8s\" }");
     assert_ne!(src, real, "the demo names its provider `provider k8s.`");
     s.write("k8s_demo.df", &real);
@@ -45,7 +46,7 @@ fn real_demo(s: &Scratch) {
 fn mock_demo(s: &Scratch) {
     s.write(
         "k8s_demo.df",
-        &std::fs::read_to_string(repo().join("examples/k8s/stacks/k8s_demo.df")).unwrap(),
+        &std::fs::read_to_string(repo().join("tests/fixtures/k8s/stacks/k8s_demo.df")).unwrap(),
     );
 }
 
@@ -56,7 +57,7 @@ fn planned(s: &Scratch) -> Json {
            "pending_groups": p["pending_groups"], "ticks": p["ticks"]})
 }
 
-/// Acceptance: examples/k8s/stacks/k8s_demo.df plans against the mock unchanged, and
+/// Acceptance: tests/fixtures/k8s/stacks/k8s_demo.df plans against the mock unchanged, and
 /// the same program with `source = "./providers/k8s"` plans against the
 /// real provider offline to the same plan: every leaf of every desired
 /// document (a create's changes are all of them), the same nulls, ticks

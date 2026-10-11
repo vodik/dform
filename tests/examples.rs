@@ -1,6 +1,8 @@
 //! Every example plans and applies from its own project root: a copy of
 //! `examples/NAME/`, and from inside it the commands its `README.md` lists:
-//! plan, apply, and plan again, which finds the stack undeformed.
+//! plan, apply, and plan again, which finds the stack undeformed. The
+//! projects under tests/fixtures/ that were examples before the estates
+//! do the same with the commands their case gives.
 //!
 //! A new example directory needs a case in `CASES`, and a test naming it.
 //! The tour's stack file is also a walkthrough: every command its comments
@@ -50,6 +52,39 @@ const fn one(apply: &'static [&'static str], ends: Apply) -> Stack {
 }
 
 const CASES: &[Case] = &[
+    // The migration Job, then the app's color, then the Service's selector.
+    Case {
+        name: "crud-api",
+        stacks: &[one(&["apply"], Apply::Completes)],
+    },
+    Case {
+        name: "gke-platform",
+        stacks: &[one(&["apply", "gke_platform", "env=dev"], Apply::Completes)],
+    },
+    // The kubeconfig is read over SSH from the server: the mock's
+    // instance answers none.
+    Case {
+        name: "k3s-platform",
+        stacks: &[Stack {
+            plan: &["plan"],
+            apply: &[],
+            ends: Apply::NotRun,
+        }],
+    },
+    // project.df's deployments: staging and prod.
+    Case {
+        name: "shared-network",
+        stacks: &[one(&["apply"], Apply::Completes)],
+    },
+    Case {
+        name: "shop",
+        stacks: &[one(&["apply"], Apply::Completes)],
+    },
+];
+
+/// The projects under tests/fixtures/ that were examples, run the same
+/// way.
+const FIXTURES: &[Case] = &[
     Case {
         name: "adopt",
         stacks: &[one(&["apply"], Apply::Completes)],
@@ -86,7 +121,8 @@ const CASES: &[Case] = &[
             },
         ],
     },
-    // The migration Job, then the app's color, then the Service's selector.
+    // The secrets and the controller's: the migration Job, then the
+    // app's color, then the Service's selector.
     Case {
         name: "crud-api",
         stacks: &[one(&["apply"], Apply::Completes)],
@@ -115,29 +151,6 @@ const CASES: &[Case] = &[
     Case {
         name: "k8s",
         stacks: &[one(&["apply"], Apply::Completes)],
-    },
-    // project.df's deployments: staging and prod.
-    Case {
-        name: "shared-network",
-        stacks: &[one(&["apply"], Apply::Completes)],
-    },
-    // The kubeconfig is read over SSH from the server: the mock's
-    // instance answers none.
-    Case {
-        name: "k3s-platform",
-        stacks: &[Stack {
-            plan: &["plan"],
-            apply: &[],
-            ends: Apply::NotRun,
-        }],
-    },
-    Case {
-        name: "shop",
-        stacks: &[one(&["apply"], Apply::Completes)],
-    },
-    Case {
-        name: "gke-platform",
-        stacks: &[one(&["apply", "gke_platform", "env=dev"], Apply::Completes)],
     },
     // Three zones by default; two break the refinement on them.
     Case {
@@ -208,16 +221,28 @@ fn check(name: &str) {
         .iter()
         .find(|c| c.name == name)
         .unwrap_or_else(|| panic!("add examples/{name} to tests/examples.rs"));
-    let from = repo().join("examples").join(name);
+    let readme = std::fs::read_to_string(repo().join("examples").join(name).join("README.md"))
+        .unwrap_or_else(|e| panic!("examples/{name}/README.md: {e}"));
+    run(&format!("examples/{name}"), case, Some(&readme));
+}
+
+/// The fixture `name`'s case, its commands its own.
+fn check_fixture(name: &str) {
+    let case = FIXTURES.iter().find(|c| c.name == name).unwrap();
+    run(&format!("tests/fixtures/{name}"), case, None);
+}
+
+/// Run `case` in copies of the project at `dir` (from the repository's
+/// root); each command one its `readme` lists, when it has one.
+fn run(dir: &str, case: &Case, readme: Option<&str>) {
+    let from = repo().join(dir);
     let copy = || {
-        let s = Scratch::in_target("examples", name);
+        let s = Scratch::in_target("examples", case.name);
         copy_dir(&from, &s.dir);
         s
     };
     let project = copy();
-    let readme = std::fs::read_to_string(from.join("README.md"))
-        .unwrap_or_else(|e| panic!("examples/{name}/README.md: {e}"));
-    let listed = commands(&readme);
+    let listed = readme.map(commands);
     for st in case.stacks {
         let fresh;
         let s = if matches!(st.ends, Apply::Stops(_)) {
@@ -229,12 +254,14 @@ fn check(name: &str) {
         // The README lists the commands this runs, from the project root.
         for args in [st.plan, st.apply].into_iter().filter(|a| !a.is_empty()) {
             let line = format!("dform {}", args.join(" "));
-            assert!(
-                listed.contains(&line),
-                "examples/{name}/README.md does not list `{line}`:\n{readme}"
-            );
+            if let (Some(listed), Some(readme)) = (&listed, readme) {
+                assert!(
+                    listed.contains(&line),
+                    "{dir}/README.md does not list `{line}`:\n{readme}"
+                );
+            }
         }
-        let at = |what: &str| format!("examples/{name} {what}");
+        let at = |what: &str| format!("{dir} {what}");
         let r = s.run(st.plan);
         assert!(r.ok, "{}\n{}{}", at(&st.plan.join(" ")), r.stdout, r.stderr);
         if let Apply::NotRun = st.ends {
@@ -284,38 +311,63 @@ fn check(name: &str) {
 }
 
 #[test]
-fn adopt() {
-    check("adopt");
-}
-
-#[test]
-fn advanced() {
-    check("advanced");
-}
-
-#[test]
-fn approvals() {
-    check("approvals");
-}
-
-#[test]
-fn aws() {
-    check("aws");
-}
-
-#[test]
-fn bootstrap() {
-    check("bootstrap");
-}
-
-#[test]
 fn crud_api() {
     check("crud-api");
 }
 
 #[test]
-fn decl() {
-    check("decl");
+fn gke_platform() {
+    check("gke-platform");
+}
+
+#[test]
+fn k3s_platform() {
+    check("k3s-platform");
+}
+
+#[test]
+fn shared_network() {
+    check("shared-network");
+}
+
+#[test]
+fn shop() {
+    check("shop");
+}
+
+#[test]
+fn fixture_adopt() {
+    check_fixture("adopt");
+}
+
+#[test]
+fn fixture_advanced() {
+    check_fixture("advanced");
+}
+
+#[test]
+fn fixture_approvals() {
+    check_fixture("approvals");
+}
+
+#[test]
+fn fixture_aws() {
+    check_fixture("aws");
+}
+
+#[test]
+fn fixture_bootstrap() {
+    check_fixture("bootstrap");
+}
+
+#[test]
+fn fixture_crud_api() {
+    check_fixture("crud-api");
+}
+
+#[test]
+fn fixture_decl() {
+    check_fixture("decl");
 }
 
 /// The demo's plan with no target is its project.df's: one tree, a
@@ -323,7 +375,7 @@ fn decl() {
 #[test]
 fn demo_plans_its_matrix() {
     let s = Scratch::in_target("examples", "demo-matrix");
-    copy_dir(&repo().join("examples/demo"), &s.dir);
+    copy_dir(&repo().join("tests/fixtures/demo"), &s.dir);
     let r = s.run(&["plan"]).success();
     common::golden_file(
         &repo().join("tests/golden/dform/matrix.plan.txt"),
@@ -333,49 +385,29 @@ fn demo_plans_its_matrix() {
 }
 
 #[test]
-fn demo() {
-    check("demo");
+fn fixture_demo() {
+    check_fixture("demo");
 }
 
 #[test]
-fn gke() {
-    check("gke");
+fn fixture_gke() {
+    check_fixture("gke");
 }
 
 #[test]
-fn k8s() {
-    check("k8s");
+fn fixture_k8s() {
+    check_fixture("k8s");
 }
 
 #[test]
-fn gke_platform() {
-    check("gke-platform");
+fn fixture_refine() {
+    check_fixture("refine");
 }
 
 #[test]
-fn shared_network() {
-    check("shared-network");
-}
-
-#[test]
-fn k3s_platform() {
-    check("k3s-platform");
-}
-
-#[test]
-fn shop() {
-    check("shop");
-}
-
-#[test]
-fn refine() {
-    check("refine");
-}
-
-#[test]
-fn tour() {
-    check("tour");
-    walkthrough("tour", "stacks/tour.df");
+fn fixture_tour() {
+    check_fixture("tour");
+    walkthrough("tests/fixtures/tour", "stacks/tour.df");
 }
 
 /// A command a stack file's comments tell the reader to run, and the lines
@@ -431,24 +463,15 @@ fn words(line: &str) -> Vec<String> {
     out
 }
 
-/// Run a stack file's steps in order in a fresh copy of its project: each
-/// succeeds and prints every line it quotes (one quoting an `Error:` line
-/// fails and prints it), and every README command is one of them.
-fn walkthrough(name: &str, file: &str) {
-    let from = repo().join("examples").join(name);
+/// Run a stack file's steps in order in a fresh copy of its project
+/// `dir`: each succeeds and prints every line it quotes (one quoting an
+/// `Error:` line fails and prints it).
+fn walkthrough(dir: &str, file: &str) {
+    let from = repo().join(dir);
+    let name = from.file_name().unwrap().to_string_lossy().into_owned();
     let df = std::fs::read_to_string(from.join(file)).unwrap();
     let steps = steps(&df);
-    assert!(
-        !steps.is_empty(),
-        "examples/{name}/{file} has no `#   $ dform` lines"
-    );
-    let readme = std::fs::read_to_string(from.join("README.md")).unwrap();
-    for line in commands(&readme).iter().filter(|l| l.starts_with("dform ")) {
-        assert!(
-            steps.iter().any(|s| s.line == *line),
-            "examples/{name}/README.md lists `{line}`, which {file} does not"
-        );
-    }
+    assert!(!steps.is_empty(), "{dir}/{file} has no `#   $ dform` lines");
     let s = Scratch::in_target("examples", &format!("{name}-walkthrough"));
     copy_dir(&from, &s.dir);
     for step in &steps {
@@ -463,15 +486,11 @@ fn walkthrough(name: &str, file: &str) {
             .quoted
             .iter()
             .any(|q| q.starts_with("error  ") || q.starts_with("refused  "));
-        assert_eq!(
-            !r.ok, fails,
-            "examples/{name}/{file}: `{}`\n{out}",
-            step.line
-        );
+        assert_eq!(!r.ok, fails, "{dir}/{file}: `{}`\n{out}", step.line);
         for q in &step.quoted {
             assert!(
                 out.contains(q.as_str()),
-                "examples/{name}/{file}: `{}` does not print `{q}`\n{out}",
+                "{dir}/{file}: `{}` does not print `{q}`\n{out}",
                 step.line
             );
         }

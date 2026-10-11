@@ -125,7 +125,7 @@ fn levels(example: &str) -> (String, String) {
 
 #[test]
 fn the_demo_plans_at_each_level() {
-    let (line, how) = levels("examples/demo");
+    let (line, how) = levels("tests/fixtures/demo");
     // A copy's resources under it, each by its full address; a value set
     // outside its block by where; a reference by its address.
     assert!(
@@ -167,7 +167,11 @@ fn crud_api_plans_at_each_level() {
         )),
         "{line}"
     );
-    let full = plan(&Scratch::new("why-levels-crud-vv"), "tests/fixtures/crud-api", &["-vv"]);
+    let full = plan(
+        &Scratch::new("why-levels-crud-vv"),
+        "tests/fixtures/crud-api",
+        &["-vv"],
+    );
     assert!(
         full.contains(".image = \"gcr.io/shop/crud-api@sha256:9f2c4d0e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d\"\n"),
         "{full}"

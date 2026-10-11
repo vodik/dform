@@ -139,7 +139,7 @@ fn a_scenario_is_an_error_naming_test() {
 #[test]
 fn the_demo_denies_hold_in_every_env() {
     let s = Scratch::new("test-demo");
-    common::copy_dir(&repo().join("examples/demo"), &s.dir);
+    common::copy_dir(&repo().join("tests/fixtures/demo"), &s.dir);
     let r = s.run(&["test", "dform"]).success();
     assert!(
         r.stdout.contains(

@@ -8,7 +8,7 @@ use common::{Scratch, repo};
 /// The two-phase GKE stack, with the rules of the `extra` files after it
 /// (the stack's copy, `p.df`, in the scratch directory).
 fn gke(s: &Scratch, extra: &[&str], cmd: &str) -> common::Run {
-    let prog = repo().join("examples/gke/stacks/gke_two_phase.df");
+    let prog = repo().join("tests/fixtures/gke/stacks/gke_two_phase.df");
     let mut prog = prog.to_str().unwrap().to_string();
     if !extra.is_empty() {
         let mut text = std::fs::read_to_string(&prog).unwrap();
@@ -79,7 +79,7 @@ deny "no nodepool in zone z" {pool: n} where n in google.container_node_pool, ar
     assert!(r.summary().ends_with(" · 2 undetermined"), "{}", r.stdout);
 }
 
-const AWS: &str = "examples/aws/stacks/aws_demo.df";
+const AWS: &str = "tests/fixtures/aws/stacks/aws_demo.df";
 
 fn aws(s: &Scratch, cmd: &str) -> common::Run {
     let prog = repo().join(AWS);
@@ -318,7 +318,7 @@ fn color_is_a_rendering_of_the_same_text() {
     let colored = |flag: &str| {
         s.run(&common::on(
             repo()
-                .join("examples/gke/stacks/gke_two_phase.df")
+                .join("tests/fixtures/gke/stacks/gke_two_phase.df")
                 .to_str()
                 .unwrap(),
             &[
@@ -353,7 +353,7 @@ fn color_is_a_rendering_of_the_same_text() {
     let json = s
         .run(&common::on(
             repo()
-                .join("examples/gke/stacks/gke_two_phase.df")
+                .join("tests/fixtures/gke/stacks/gke_two_phase.df")
                 .to_str()
                 .unwrap(),
             &[

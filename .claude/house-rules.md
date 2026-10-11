@@ -3,7 +3,7 @@
 - Semantics come from proposals/E-synthesis.org as revised by proposals/F-revision.org
   section 3. When a ticket and E/F disagree, the ticket wins; say so in the report.
 - Do not optimize inside a semantics ticket.
-- Keep `cargo run -q -- -C examples/demo plan` and
+- Keep `cargo run -q -- -C examples/shop plan shop env=prod` and
   `cargo run -q -- -C examples/gke-platform plan gke_platform env=prod` working at every commit.
   They are gates.
 - `cargo fmt --all --check` is a gate: the tree stays in rustfmt's form, so no

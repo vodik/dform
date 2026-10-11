@@ -306,7 +306,7 @@ use fake
 #[test]
 fn dform_df_peers_each_edge_with_its_own_pair() {
     let s = Scratch::new("lang-modules-peering");
-    common::copy_dir(&common::repo().join("examples/demo"), &s.dir);
+    common::copy_dir(&common::repo().join("tests/fixtures/demo"), &s.dir);
     let third = r#"
 resource network.vpc third {
   vpc_net = "10.70.0.0/16"

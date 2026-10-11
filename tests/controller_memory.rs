@@ -8,7 +8,7 @@ use crate::common;
 use common::Scratch;
 use std::io::BufRead;
 
-const WORKLOAD: &str = include_str!("../examples/bootstrap/stacks/workload.df");
+const WORKLOAD: &str = include_str!("../tests/fixtures/bootstrap/stacks/workload.df");
 /// Enough events to see growth: the count is exact, so one source kept
 /// per event shows at the second.
 const EVENTS: usize = 10;

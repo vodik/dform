@@ -326,14 +326,14 @@ fn an_approval_lets_a_held_destroy_through() {
     let s = Scratch::project("destroy-approval");
     s.write(
         "dform.toml",
-        include_str!("../examples/approvals/dform.toml"),
+        include_str!("../tests/fixtures/approvals/dform.toml"),
     );
     s.write(
         "stacks/approvals.df",
         &format!(
             "{}\nrequires_approval(r, \"a delete in prod\") where env == \"prod\", \
              deformation(\"delete\", r, _)\n",
-            include_str!("../examples/approvals/stacks/approvals.df")
+            include_str!("../tests/fixtures/approvals/stacks/approvals.df")
         ),
     );
     let signer = |args: &[&str]| {

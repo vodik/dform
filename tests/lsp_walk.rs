@@ -256,6 +256,16 @@ fn walk(name: &str, root: &Path, every_token: bool) -> Vec<String> {
 /// The examples walked, one test each (they run in parallel); a test
 /// checks the list is every example.
 const EXAMPLES: &[&str] = &[
+    "crud-api",
+    "gke-platform",
+    "k3s-platform",
+    "shared-network",
+    "shop",
+];
+
+/// The projects under tests/fixtures/ walked as well: what the examples
+/// were before they were estates.
+const FIXTURES: &[&str] = &[
     "adopt",
     "advanced",
     "approvals",
@@ -265,50 +275,59 @@ const EXAMPLES: &[&str] = &[
     "decl",
     "demo",
     "gke",
-    "gke-platform",
-    "k3s-platform",
     "k8s",
     "refine",
-    "shared-network",
-    "shop",
     "tour",
 ];
 
 fn walk_example(name: &str) {
     assert!(EXAMPLES.contains(&name));
     let (_s, root) = example(name);
+    let problems = walk(name, &root, false);
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+fn walk_fixture(name: &str) {
+    assert!(FIXTURES.contains(&name));
+    let (_s, root) = example(&format!("tests/fixtures/{name}"));
     let problems = walk(name, &root, name == "demo");
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
 
 macro_rules! walks {
-    ($($test:ident: $name:literal,)*) => {
+    ($walk:ident: $($test:ident: $name:literal,)*) => {
         $(
             #[test]
             fn $test() {
-                walk_example($name);
+                $walk($name);
             }
         )*
     };
 }
 
 walks! {
-    walk_adopt: "adopt",
-    walk_advanced: "advanced",
-    walk_approvals: "approvals",
-    walk_aws: "aws",
-    walk_bootstrap: "bootstrap",
+    walk_example:
     walk_crud_api: "crud-api",
-    walk_decl: "decl",
-    walk_demo: "demo",
-    walk_gke: "gke",
     walk_gke_platform: "gke-platform",
     walk_k3s_platform: "k3s-platform",
-    walk_k8s: "k8s",
-    walk_refine: "refine",
     walk_shared_network: "shared-network",
     walk_shop: "shop",
-    walk_tour: "tour",
+}
+
+walks! {
+    walk_fixture:
+    walk_fixture_adopt: "adopt",
+    walk_fixture_advanced: "advanced",
+    walk_fixture_approvals: "approvals",
+    walk_fixture_aws: "aws",
+    walk_fixture_bootstrap: "bootstrap",
+    walk_fixture_crud_api: "crud-api",
+    walk_fixture_decl: "decl",
+    walk_fixture_demo: "demo",
+    walk_fixture_gke: "gke",
+    walk_fixture_k8s: "k8s",
+    walk_fixture_refine: "refine",
+    walk_fixture_tour: "tour",
 }
 
 #[test]

@@ -2207,13 +2207,13 @@ mod tests {
     fn examples() -> Vec<(&'static str, PathBuf, Schema)> {
         vec![
             (
-                "examples/demo/stacks/dform.df",
-                root().join("examples/demo/stacks/dform.df"),
+                "tests/fixtures/demo/stacks/dform.df",
+                root().join("tests/fixtures/demo/stacks/dform.df"),
                 crate::schema::fake(),
             ),
             (
-                "examples/advanced/stacks/dform-advanced.df",
-                root().join("examples/advanced/stacks/dform-advanced.df"),
+                "tests/fixtures/advanced/stacks/dform-advanced.df",
+                root().join("tests/fixtures/advanced/stacks/dform-advanced.df"),
                 crate::schema::fake(),
             ),
             (
@@ -2222,13 +2222,13 @@ mod tests {
                 crate::schema::gke(),
             ),
             (
-                "examples/decl/stacks/decl_demo.df",
-                root().join("examples/decl/stacks/decl_demo.df"),
+                "tests/fixtures/decl/stacks/decl_demo.df",
+                root().join("tests/fixtures/decl/stacks/decl_demo.df"),
                 crate::schema::fake(),
             ),
             (
-                "examples/adopt/stacks/adopt_demo.df",
-                root().join("examples/adopt/stacks/adopt_demo.df"),
+                "tests/fixtures/adopt/stacks/adopt_demo.df",
+                root().join("tests/fixtures/adopt/stacks/adopt_demo.df"),
                 crate::schema::fake(),
             ),
         ]
@@ -2261,8 +2261,8 @@ mod tests {
         // more: 15. The settings are contributions to the inputs (R-38),
         // read by their names, and `let cfg` is gone: 13.
         let (v, _) = run_file(
-            "examples/demo/stacks/dform.df",
-            &[root().join("examples/demo/stacks/dform.df")],
+            "tests/fixtures/demo/stacks/dform.df",
+            &[root().join("tests/fixtures/demo/stacks/dform.df")],
             &crate::schema::fake(),
         )
         .unwrap();
@@ -2281,7 +2281,8 @@ mod tests {
     #[test]
     fn a_ref_holding_contribution_sits_above_the_attribute_it_reads() {
         let program =
-            crate::loader::load_program(&[root().join("examples/demo/stacks/dform.df")]).unwrap();
+            crate::loader::load_program(&[root().join("tests/fixtures/demo/stacks/dform.df")])
+                .unwrap();
         let g = build(&program, &crate::schema::fake()).unwrap();
         let Verdict::Stratified { strata } = stratify(&g) else {
             panic!()

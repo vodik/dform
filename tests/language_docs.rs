@@ -118,11 +118,11 @@ fn a_policy_can_require_docs() {
     );
 }
 
-/// `dform doc` on examples/demo renders every documented item of every
+/// `dform doc` on tests/fixtures/demo renders every documented item of every
 /// file, and `dform doc STACK` its program's.
 #[test]
 fn dform_doc_renders_every_documented_item() {
-    let demo = repo().join("examples/demo");
+    let demo = repo().join("tests/fixtures/demo");
     let out = common::dform()
         .args(["-C", demo.to_str().unwrap(), "doc"])
         .output()

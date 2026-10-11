@@ -2,14 +2,14 @@
 //! policy pass makes the plan hold the change for an approval and print its
 //! digest, and `apply PLAN --approval FILE` verifies a signed statement
 //! over that digest offline before any Apply call. The tokens come from
-//! the example signer, `dform-approve`, on examples/approvals/stacks/approvals.df.
+//! the example signer, `dform-approve`, on tests/fixtures/approvals/stacks/approvals.df.
 
 use crate::common;
 use common::Scratch;
 use std::process::Command;
 
-const PROGRAM: &str = include_str!("../examples/approvals/stacks/approvals.df");
-const MANIFEST: &str = include_str!("../examples/approvals/dform.toml");
+const PROGRAM: &str = include_str!("../tests/fixtures/approvals/stacks/approvals.df");
+const MANIFEST: &str = include_str!("../tests/fixtures/approvals/dform.toml");
 const PROD: [&str; 1] = ["env=prod"];
 const NEW_CIDR: [&str; 2] = ["--set", "cidr=10.1.0.0/16"];
 

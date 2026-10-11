@@ -12,7 +12,7 @@
 #
 # Each numbered section adds one idea: what it is, the command to run, and
 # what to look for in the output. Run the commands in order, from the
-# directory holding dform.toml (examples/tour). In a checkout of the dform
+# directory holding dform.toml (tests/fixtures/tour). In a checkout of dform
 # repository, `dform` is `cargo run --`. A line starting with `$` is a
 # command; the lines under it are part of what it prints.
 #
@@ -325,20 +325,11 @@ resource iam.policy "connect-${host}" {
 
 # 11. Where to go next
 #
-# Each project under examples/ has a README that says what it shows and
-# the commands to run:
-#
-#   demo          components and modules in their own files, settings from YAML
-#                 files, denies `dform test` runs over every env
-#   gke-platform  a table read from a CSV file
-#   advanced      more recursion: reachability, routes, group membership
-#   adopt         taking over a resource that already exists
-#   refine        types with conditions (`check`), checked when values are known
-#   gke           a provider configured from values only apply learns
-#   k8s, aws      other fake providers, shaped like Kubernetes and AWS
-#   bootstrap     two stacks, one of them a controller's
-#   approvals     approving a signed plan
-#   crud-api      a blue/green rollout
+# This tour is a test's now; each project under examples/ is an estate
+# with a README that walks its commands: shop (a small web shop on AWS),
+# shared-network (a hub-and-spoke network), k3s-platform (k3s on OVH and
+# the apps in it), gke-platform (a GKE platform per environment) and
+# crud-api (a blue/green rollout).
 #
 # docs/best_practices.md is how to write a program; docs/grammar.md is
 # the language.

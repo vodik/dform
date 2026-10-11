@@ -11,7 +11,7 @@ use inspection_common::{dform, golden};
 /// literal; what it beat after. A literal is its place on its line.
 #[test]
 fn why_a_value_prints_its_chain() {
-    let at = "examples/tour/stacks/tour.df env=prod";
+    let at = "tests/fixtures/tour/stacks/tour.df env=prod";
     let out = dform(at, &["why", "orders.backup_days"]);
     assert_eq!(
         out,
@@ -22,7 +22,7 @@ fn why_a_value_prints_its_chain() {
 "
     );
     let out = dform(
-        "examples/demo/stacks/dform.df env=prod",
+        "tests/fixtures/demo/stacks/dform.df env=prod",
         &["why", "main.vpc.tags.team"],
     );
     assert_eq!(
@@ -49,7 +49,7 @@ fn why_a_value_prints_its_chain() {
 #[test]
 fn why_a_tag_exists() {
     let out = dform(
-        "examples/demo/stacks/dform.df env=prod",
+        "tests/fixtures/demo/stacks/dform.df env=prod",
         &[
             "why",
             "--tree",
@@ -65,7 +65,7 @@ fn why_a_tag_exists() {
     );
     assert!(
         out.contains(
-            "examples/demo/baseline.df:10  set r.tags = { team: \"platform\" } where r in \
+            "tests/fixtures/demo/baseline.df:10  set r.tags = { team: \"platform\" } where r in \
              resource   (use baseline)\n"
         ),
         "{out}"
@@ -81,7 +81,7 @@ fn why_a_tag_exists() {
 #[test]
 fn why_core_prints_the_lowered_rules() {
     let out = dform(
-        "examples/demo/stacks/dform.df env=prod",
+        "tests/fixtures/demo/stacks/dform.df env=prod",
         &[
             "why",
             "--core",
@@ -102,7 +102,7 @@ fn why_core_prints_the_lowered_rules() {
 /// want.
 #[test]
 fn why_takes_a_resource_by_its_path() {
-    let at = "examples/demo/stacks/dform.df env=prod";
+    let at = "tests/fixtures/demo/stacks/dform.df env=prod";
     let by_address = dform(at, &["why", r#"net.vpc["main.vpc"]"#]);
     for path in ["main.vpc", "net.vpc main.vpc"] {
         let out = dform(at, &["why", path]);
@@ -119,11 +119,11 @@ fn why_takes_a_resource_by_its_path() {
 /// spelling of an address is refused.
 #[test]
 fn why_and_query_take_an_address_as_plan_prints_it() {
-    let at = "examples/demo/stacks/dform.df env=prod";
+    let at = "tests/fixtures/demo/stacks/dform.df env=prod";
     let want = dform(at, &["why", "--tree", r#"net.vpc["main.vpc"]"#]);
     assert!(
         want.starts_with(
-            "net.vpc main.vpc\n  examples/demo/network.df:19  resource \
+            "net.vpc main.vpc\n  tests/fixtures/demo/network.df:19  resource \
              net.vpc vpc { .. }   (resource network.vpc main)\n"
         ),
         "{want}"
@@ -139,7 +139,7 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
     for arg in ["net.vpc main.vpc", "main.vpc"] {
         let want = dform(at, &["why", "--tree", arg]);
         assert!(
-            want.starts_with("net.vpc main.vpc\n  examples/demo/network.df:19  "),
+            want.starts_with("net.vpc main.vpc\n  tests/fixtures/demo/network.df:19  "),
             "{arg}: {want}"
         );
     }
@@ -154,7 +154,7 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
         "{all}"
     );
     let s = Scratch::new("why-old-address");
-    common::copy_dir(&repo().join("examples/demo"), &s.dir);
+    common::copy_dir(&repo().join("tests/fixtures/demo"), &s.dir);
     let r = s
         .run(&["why", "net.vpc/main/vpc", "dform", "env=prod"])
         .failure();
@@ -182,13 +182,13 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
 #[test]
 fn why_an_attribute_shows_every_contribution() {
     let out = dform(
-        "examples/demo/stacks/dform.df env=prod",
+        "tests/fixtures/demo/stacks/dform.df env=prod",
         &["why", "--tree", r#"attr(net.vpc, "main.vpc", "tags", X)"#],
     );
     assert!(out.contains("  merged from 2 contributions\n"), "{out}");
     assert!(
         out.contains(
-            "examples/demo/network.df:19  resource net.vpc vpc { .. tags = { env, \
+            "tests/fixtures/demo/network.df:19  resource net.vpc vpc { .. tags = { env, \
              component: \"network\" } }   (resource network.vpc main)\n"
         ),
         "{out}"
@@ -197,7 +197,7 @@ fn why_an_attribute_shows_every_contribution() {
     // The input's default is a contribution at its rank, stated where the
     // input is declared; --set's wins.
     assert!(
-        out.contains("├─ \"staging\" @default   examples/demo/stacks/dform.df:9\n"),
+        out.contains("├─ \"staging\" @default   tests/fixtures/demo/stacks/dform.df:9\n"),
         "{out}"
     );
     assert!(out.contains("└─ --set env=prod\n"), "{out}");
@@ -216,18 +216,18 @@ fn why_an_attribute_shows_every_contribution() {
 #[test]
 fn why_a_route_shows_the_statements_that_fired() {
     let out = dform(
-        "examples/tour/stacks/tour.df",
+        "tests/fixtures/tour/stacks/tour.df",
         &["why", "--tree", r#"net.route_table["blue"].routes"#],
     );
     let start = "net.route_table blue.routes = [{destination: 10.0.0.0/16, target: net.vpc main}, {destination: 10.2.0.0/16, target: net.vpc green.vpc}]
   merged from 2 contributions
   ├─ [{destination: 10.2.0.0/16, target: net.vpc green.vpc}]
-       examples/tour/stacks/tour.df:288  set net.route_table[a].routes = [{ destination: dest, target: net.vpc[w] }] where reaches(a, b), a != b, network_of(b, w), dest = net.vpc[w].cidr
+       tests/fixtures/tour/stacks/tour.df:288  set net.route_table[a].routes = [{ destination: dest, target: net.vpc[w] }] where reaches(a, b), a != b, network_of(b, w), dest = net.vpc[w].cidr
        with a = \"blue\", dest = 10.2.0.0/16, w = \"green.vpc\", b = \"green\"
             net.vpc[w] = net.vpc green.vpc
             net.vpc[w].cidr = 10.2.0.0/16
        ├─ reaches(\"blue\", \"green\")
-            examples/tour/stacks/tour.df:281  reaches(a, c) where reaches(a, b), link(b, c)
+            tests/fixtures/tour/stacks/tour.df:281  reaches(a, c) where reaches(a, b), link(b, c)
 ";
     let got: String = out
         .lines()
@@ -236,7 +236,7 @@ fn why_a_route_shows_the_statements_that_fired() {
         .collect();
     assert_eq!(got.replace("  │ ", "    "), start, "{out}");
     assert!(
-        out.contains("├─ spoke(\"green\")   examples/tour/stacks/tour.df:248\n"),
+        out.contains("├─ spoke(\"green\")   tests/fixtures/tour/stacks/tour.df:248\n"),
         "{out}"
     );
     assert!(out.contains("network[t].vpc = \"green.vpc\"\n"), "{out}");
@@ -248,12 +248,12 @@ fn why_a_route_shows_the_statements_that_fired() {
 #[test]
 fn why_a_settings_read_shows_the_read() {
     let out = dform(
-        "examples/tour/stacks/tour.df env=prod",
+        "tests/fixtures/tour/stacks/tour.df env=prod",
         &["why", "--tree", r#"db.postgres["orders"].backup_days"#],
     );
     assert!(
         out.contains(
-            "examples/tour/stacks/tour.df:145  resource db.postgres orders { .. backup_days = \
+            "tests/fixtures/tour/stacks/tour.df:145  resource db.postgres orders { .. backup_days = \
              database.backup_days .. }\n"
         ),
         "{out}"
@@ -262,12 +262,12 @@ fn why_a_settings_read_shows_the_read() {
     // The input's layers (R-38): its default, and the `set` block that
     // holds in prod, where it is written.
     assert!(
-        out.contains("{backup_days: 1} @default   examples/tour/stacks/tour.df:27\n"),
+        out.contains("{backup_days: 1} @default   tests/fixtures/tour/stacks/tour.df:27\n"),
         "{out}"
     );
     assert!(
         out.contains(
-            "examples/tour/stacks/tour.df:139  set { database.backup_days = 14 .. } where \
+            "tests/fixtures/tour/stacks/tour.df:139  set { database.backup_days = 14 .. } where \
              env == \"prod\"\n"
         ),
         "{out}"
@@ -445,12 +445,12 @@ fn why_labels_facts_injected_at_a_tick() {
 #[test]
 fn why_prints_a_braced_clause_on_one_line() {
     let out = dform(
-        "examples/demo/stacks/dform.df env=prod",
+        "tests/fixtures/demo/stacks/dform.df env=prod",
         &["why", "--tree", r#"attr("iam.policy", P, "statements", S)"#],
     );
     assert!(
         out.contains(
-            "examples/demo/baseline.df:15  set p.statements = [{ action: \"org.read\", \
+            "tests/fixtures/demo/baseline.df:15  set p.statements = [{ action: \"org.read\", \
              resource: \"org\" }] where env == \"prod\", p in iam.policy, p.name == \"app\"   \
              (use baseline)\n"
         ),
@@ -470,7 +470,10 @@ fn why_prints_a_braced_clause_on_one_line() {
 /// resource as a whole.
 #[test]
 fn plan_why_explains_each_deformation() {
-    let out = dform("examples/tour/stacks/tour.df env=prod", &["plan", "--why"]);
+    let out = dform(
+        "tests/fixtures/tour/stacks/tour.df env=prod",
+        &["plan", "--why"],
+    );
     assert!(
         out.contains(
             "  + net.subnet private-us-test-1a          stacks/tour.df:104  with z = \"us-test-1a\", n = 1
@@ -495,7 +498,7 @@ fn plan_why_explains_each_deformation() {
     );
     assert!(!out.contains("  by ") && !out.contains("because "), "{out}");
     // At the default level, a line per change and attribute, no chain.
-    let plain = dform("examples/tour/stacks/tour.df env=prod", &["plan"]);
+    let plain = dform("tests/fixtures/tour/stacks/tour.df env=prod", &["plan"]);
     assert!(!plain.contains("\n        = "), "{plain}");
     golden("why_tour_prod_plan", &out);
 }
@@ -574,7 +577,7 @@ fn why_prints_the_statement_of_a_rule_that_reads_nothing() {
 /// prints no core fact (`instance_of(..)`, R-65).
 #[test]
 fn plan_why_follows_a_copys_input() {
-    let out = dform("examples/demo/stacks/dform.df", &["plan", "--why"]);
+    let out = dform("tests/fixtures/demo/stacks/dform.df", &["plan", "--why"]);
     assert!(
         out.contains("          = vpc_net ") && out.contains("          = cidrs.main "),
         "{out}"

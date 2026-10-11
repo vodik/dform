@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/adopt/stacks/adopt_demo.df: 82 nodes, 150 edges (56 negative), 9 strata
+== tests/fixtures/adopt/stacks/adopt_demo.df: 82 nodes, 150 edges (56 negative), 9 strata
 stratum  node
 0        (arg, input, env)
 0        (arg, output, network::vpc)

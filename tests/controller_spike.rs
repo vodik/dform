@@ -7,8 +7,8 @@ use crate::common;
 use common::Scratch;
 use std::process::Command;
 
-const WORKLOAD: &str = include_str!("../examples/bootstrap/stacks/workload.df");
-/// The workload's table of examples/bootstrap/dform.toml.
+const WORKLOAD: &str = include_str!("../tests/fixtures/bootstrap/stacks/workload.df");
+/// The workload's table of tests/fixtures/bootstrap/dform.toml.
 const MANIFEST: &str = "[project]\nedition = \"2026\"\n\n[stacks.workload]\napprovals = 'jwks_file(\"approvers.jwks.json\")'\n";
 const WORLD: &str = "dform.state/stacks.workload/remote.json";
 

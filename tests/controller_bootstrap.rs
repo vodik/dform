@@ -1,4 +1,4 @@
-//! The bootstrap and handover demo (examples/bootstrap/,
+//! The bootstrap and handover demo (tests/fixtures/bootstrap/,
 //! docs/experimental/controller.md "Bootstrap and handover"): a batch
 //! stack creates the cluster and installs dform in it, the workload
 //! stack's state is handed over to a bucket (s3: MinIO when
@@ -15,7 +15,7 @@ const HANDED: &str = "dform.state/stacks.bootstrap/k8s/dform-system/workload";
 /// A copy of the project in a scratch directory.
 fn demo(name: &str) -> Scratch {
     let s = Scratch::new(name);
-    common::copy_dir(&common::repo().join("examples/bootstrap"), &s.dir);
+    common::copy_dir(&common::repo().join("tests/fixtures/bootstrap"), &s.dir);
     s
 }
 

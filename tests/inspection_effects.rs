@@ -11,7 +11,7 @@ use inspection_common::{dform, golden};
 /// (R-38); the reads and the other scopes' are pinned as a golden.
 #[test]
 fn the_demo_pack_writes_the_grants_it_declares() {
-    let out = dform("examples/demo/stacks/dform.df", &["effects"]);
+    let out = dform("tests/fixtures/demo/stacks/dform.df", &["effects"]);
     // A scope's rows, `effect  what`.
     let scope = |name: &str| {
         out.lines()
@@ -30,7 +30,10 @@ fn the_demo_pack_writes_the_grants_it_declares() {
     assert!(stack.contains("writes  input database.multi_az"), "{out}");
     assert!(stack.contains("writes  input baseline.audit"), "{out}");
     // Deterministic: a second run prints the same thing.
-    assert_eq!(out, dform("examples/demo/stacks/dform.df", &["effects"]));
+    assert_eq!(
+        out,
+        dform("tests/fixtures/demo/stacks/dform.df", &["effects"])
+    );
     golden("effects_demo", &out);
 }
 
@@ -39,7 +42,7 @@ fn the_demo_pack_writes_the_grants_it_declares() {
 /// `*` for the type or the path rather than guess.
 #[test]
 fn a_module_instance_writes_its_resource_cells() {
-    let out = dform("examples/demo/stacks/dform.df", &["effects"]);
+    let out = dform("tests/fixtures/demo/stacks/dform.df", &["effects"]);
     assert!(
         out.contains("(net.vpc, cidr)") && out.contains("(net.vpc, tags)"),
         "{out}"
@@ -56,7 +59,7 @@ fn a_module_instance_writes_its_resource_cells() {
 /// the module's output).
 #[test]
 fn cross_instance_wiring_is_the_callers_effect() {
-    let out = dform("examples/demo/stacks/dform.df", &["effects"]);
+    let out = dform("tests/fixtures/demo/stacks/dform.df", &["effects"]);
     assert!(
         out.contains("input database.backup_days"),
         "stack should write database's input cell: {out}"
@@ -70,7 +73,10 @@ fn cross_instance_wiring_is_the_callers_effect() {
 /// `--json` is the same rows, an array of objects keyed by column.
 #[test]
 fn json_is_the_same_information() {
-    let out = dform("examples/demo/stacks/dform.df", &["effects", "--json"]);
+    let out = dform(
+        "tests/fixtures/demo/stacks/dform.df",
+        &["effects", "--json"],
+    );
     let doc: serde_json::Value =
         serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
     let rows = doc.as_array().unwrap();
@@ -82,7 +88,7 @@ fn json_is_the_same_information() {
         })),
         "{out}"
     );
-    let text = dform("examples/demo/stacks/dform.df", &["effects"]);
+    let text = dform("tests/fixtures/demo/stacks/dform.df", &["effects"]);
     assert_eq!(rows.len() + 2, text.lines().count(), "{text}");
 }
 

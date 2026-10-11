@@ -74,18 +74,28 @@ fn check(file: &str, provider: &str, env: Option<&str>, append: &str) {
 
 #[test]
 fn the_policy_pass_resumed_is_the_policy_pass() {
-    check("examples/demo/stacks/dform.df", "fake", Some("prod"), "");
+    check(
+        "tests/fixtures/demo/stacks/dform.df",
+        "fake",
+        Some("prod"),
+        "",
+    );
     check(
         "examples/gke-platform/stacks/gke_platform.df",
         "gke",
         Some("prod"),
         "",
     );
-    check("examples/gke/stacks/gke_two_phase.df", "gke", None, "");
+    check(
+        "tests/fixtures/gke/stacks/gke_two_phase.df",
+        "gke",
+        None,
+        "",
+    );
     // stuck/4 counts the instances of the rules that read the deformation
     // (this one is stuck on the cluster's zones once a deformation names it).
     check(
-        "examples/gke/stacks/gke_two_phase.df",
+        "tests/fixtures/gke/stacks/gke_two_phase.df",
         "gke",
         None,
         "deny \"strict\" { rule: r } where stuck(r, _, _, _)\n         deny \"zone\" { z: z } where\n           deformation(_, google.container_cluster[_], _),\n           arg(\"google.container_cluster\", \"gke_platform\", \"zones\", zs),\n           member(zs, z),\n",

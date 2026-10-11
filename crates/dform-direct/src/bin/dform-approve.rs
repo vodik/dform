@@ -1,6 +1,6 @@
 //! `dform-approve`: the example signer of README "Approvals". The approval
 //! service is not dform's; this signs a plan digest with a local Ed25519
-//! key so the flow runs end to end (examples/approvals/).
+//! key so the flow runs end to end (tests/fixtures/approvals/).
 //!
 //!   dform-approve keygen KEY              a new key (32 bytes, 0600); prints its JWKS
 //!   dform-approve jwks KEY                the key's JWKS: the stack's trust root

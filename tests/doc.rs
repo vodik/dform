@@ -8,7 +8,7 @@ use dform::functions::{SOURCES, registry};
 
 #[test]
 fn dform_doc_renders_the_standard_library() {
-    let demo = repo().join("examples/demo");
+    let demo = repo().join("tests/fixtures/demo");
     let out = common::dform()
         .args(["-C", demo.to_str().unwrap(), "doc"])
         .output()

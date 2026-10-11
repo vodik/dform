@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/advanced/stacks/dform-advanced.df: 85 nodes, 177 edges (59 negative), 6 strata
+== tests/fixtures/advanced/stacks/dform-advanced.df: 85 nodes, 177 edges (59 negative), 6 strata
 stratum  node
 0        (arg, input, env)
 0        (arg, input, mesh)

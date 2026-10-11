@@ -1,10 +1,10 @@
 //! Golden (snapshot) tests: pin `plan` and `strata` output per example
 //! program. See tests/golden/README.md for the accept workflow.
 //!
-//! Cases: the example projects' stacks (examples/demo across envs,
-//! examples/advanced, examples/gke-platform across envs, examples/decl,
-//! examples/adopt with the discovery inventory, examples/k8s and
-//! examples/aws and examples/gke's two-phase stack, tests/fixtures/crud-api), and the eight
+//! Cases: the example projects' stacks (tests/fixtures/demo across envs,
+//! tests/fixtures/advanced, examples/gke-platform across envs, tests/fixtures/decl,
+//! tests/fixtures/adopt with the discovery inventory, tests/fixtures/k8s and
+//! tests/fixtures/aws and tests/fixtures/gke's two-phase stack, tests/fixtures/crud-api), and the eight
 //! tests/fixtures/adversarial/*.df programs.
 //! Each runs against a fresh (empty) world, and the demo additionally
 //! against the tests/fixtures/world/ fixture. A case that errors (a rejected stratification, a blocked
@@ -49,23 +49,23 @@ const fn case(program: &'static str, case: &'static str, file: &'static str) -> 
 }
 
 const CASES: &[Case] = &[
-    case("dform", "staging", "examples/demo/stacks/dform.df"),
+    case("dform", "staging", "tests/fixtures/demo/stacks/dform.df"),
     Case {
         keys: &["env=prod"],
-        ..case("dform", "prod", "examples/demo/stacks/dform.df")
+        ..case("dform", "prod", "tests/fixtures/demo/stacks/dform.df")
     },
     Case {
         keys: &["env=dev"],
-        ..case("dform", "dev", "examples/demo/stacks/dform.df")
+        ..case("dform", "dev", "tests/fixtures/demo/stacks/dform.df")
     },
     Case {
         world_fixture: true,
-        ..case("dform", "world", "examples/demo/stacks/dform.df")
+        ..case("dform", "world", "tests/fixtures/demo/stacks/dform.df")
     },
     case(
         "dform_advanced",
         "default",
-        "examples/advanced/stacks/dform-advanced.df",
+        "tests/fixtures/advanced/stacks/dform-advanced.df",
     ),
     Case {
         keys: &["env=dev"],
@@ -91,11 +91,19 @@ const CASES: &[Case] = &[
             "examples/gke-platform/stacks/gke_platform.df",
         )
     },
-    case("decl_demo", "default", "examples/decl/stacks/decl_demo.df"),
+    case(
+        "decl_demo",
+        "default",
+        "tests/fixtures/decl/stacks/decl_demo.df",
+    ),
     Case {
         sets: &["env=prod"],
         inventory: Some("tests/fixtures/world/inventory.json"),
-        ..case("adopt_demo", "prod", "examples/adopt/stacks/adopt_demo.df")
+        ..case(
+            "adopt_demo",
+            "prod",
+            "tests/fixtures/adopt/stacks/adopt_demo.df",
+        )
     },
     Case {
         providers: &["gke", "k8s"],
@@ -143,11 +151,19 @@ const CASES: &[Case] = &[
     case(
         "gke_two_phase",
         "default",
-        "examples/gke/stacks/gke_two_phase.df",
+        "tests/fixtures/gke/stacks/gke_two_phase.df",
     ),
     // The provider is the program's provider's `use`.
-    case("k8s_demo", "default", "examples/k8s/stacks/k8s_demo.df"),
-    case("aws_demo", "default", "examples/aws/stacks/aws_demo.df"),
+    case(
+        "k8s_demo",
+        "default",
+        "tests/fixtures/k8s/stacks/k8s_demo.df",
+    ),
+    case(
+        "aws_demo",
+        "default",
+        "tests/fixtures/aws/stacks/aws_demo.df",
+    ),
     // The providers are its project's (tests/fixtures/crud-api/dform.toml).
     case(
         "crud_api",
@@ -314,7 +330,7 @@ fn golden_on(backend: Backend, strata: bool, bare: bool) {
 #[test]
 fn golden_gke_plan_json() {
     let scratch = Scratch::new("golden-gke-json");
-    let file = repo().join("examples/gke/stacks/gke_two_phase.df");
+    let file = repo().join("tests/fixtures/gke/stacks/gke_two_phase.df");
     let (ok, out, err) = run(
         &scratch,
         &[

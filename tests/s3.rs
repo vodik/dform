@@ -1,4 +1,4 @@
-//! The s3 state backend end to end: examples/demo planned and applied with
+//! The s3 state backend end to end: tests/fixtures/demo planned and applied with
 //! its state, plan key, audit log and lease in a bucket. Every test runs
 //! against a fake S3 server in the test process (`dform_s3::fake`: S3's
 //! ETag and conditional-write rules, no signatures), and again against a
@@ -62,7 +62,7 @@ fn targets(test: &str) -> Vec<Target> {
     out
 }
 
-/// A copy of examples/demo whose stacks keep their state in `t`'s bucket
+/// A copy of tests/fixtures/demo whose stacks keep their state in `t`'s bucket
 /// under a fresh prefix; the prefix is emptied when dropped.
 struct Project<'a> {
     t: &'a Target,
@@ -73,7 +73,7 @@ struct Project<'a> {
 impl<'a> Project<'a> {
     fn new(t: &'a Target, name: &str) -> Project<'a> {
         Project::of(t, name, |s| {
-            common::copy_dir(&common::repo().join("examples/demo"), &s.dir)
+            common::copy_dir(&common::repo().join("tests/fixtures/demo"), &s.dir)
         })
     }
 

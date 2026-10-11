@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/gke/stacks/gke_two_phase.df: 192 nodes, 1113 edges (298 negative), 8 strata
+== tests/fixtures/gke/stacks/gke_two_phase.df: 192 nodes, 1113 edges (298 negative), 8 strata
 stratum  node
 0        (arg, google.secret_manager_secret_version, secret_data)
 0        (arg, input, env)

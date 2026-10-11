@@ -10,7 +10,7 @@ fn fixture(s: &Scratch) -> (String, String) {
     std::fs::copy(state, s.path("dform.state.json")).unwrap();
     (
         repo()
-            .join("examples/demo/stacks/dform.df")
+            .join("tests/fixtures/demo/stacks/dform.df")
             .to_str()
             .unwrap()
             .to_string(),

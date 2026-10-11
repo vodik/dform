@@ -1,4 +1,4 @@
-//! `dform lsp` over stdio, on copies of examples/demo and examples/gke-platform:
+//! `dform lsp` over stdio, on copies of tests/fixtures/demo and examples/gke-platform:
 //! the contributors hover and `dform.why`, diagnostics of the selected
 //! environment (`dform.selectEnvironment`), schema completion, quick
 //! fixes, references and rename (a rename with state plans as a move),
@@ -33,7 +33,7 @@ fn messages(ds: &[Value]) -> Vec<String> {
 /// policy pack both contribute to.
 #[test]
 fn hover_shows_every_contribution_and_why_prints_the_derivation() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let network = root.join("network.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&network);
@@ -107,7 +107,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
 /// and nothing on whitespace, a comment or a string literal.
 #[test]
 fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let stack = root.join("stacks/dform.df");
     let network = root.join("network.df");
     let mut c = Client::start(&root, json!({}));
@@ -213,7 +213,7 @@ fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
 /// the reference entry; a `where` clause's word is the keyword's.
 #[test]
 fn hover_on_the_clause_and_refinement_words() {
-    let (_s, root) = example("refine");
+    let (_s, root) = example("tests/fixtures/refine");
     let stack = root.join("stacks/refine_gke.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);
@@ -236,7 +236,7 @@ fn hover_on_the_clause_and_refinement_words() {
 /// typed has one too.
 #[test]
 fn signature_help_of_builtins_and_externs() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let stack = root.join("stacks/dform.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);
@@ -286,7 +286,7 @@ fn signature_help_of_builtins_and_externs() {
 /// information; a syntax error is published as the edit is made.
 #[test]
 fn diagnostics_follow_the_selected_environment() {
-    let (s, root) = example("demo");
+    let (s, root) = example("tests/fixtures/demo");
     let stack = root.join("stacks/dform.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);
@@ -379,7 +379,7 @@ fn diagnostics_follow_the_selected_environment() {
 /// after `copy.`.
 #[test]
 fn completion_reads_the_schema_and_the_modules() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let stack = root.join("stacks/dform.df");
     let database = root.join("database.df");
     let mut c = Client::start(&root, json!({}));
@@ -477,7 +477,7 @@ fn completion_reads_the_schema_and_the_modules() {
 /// predicate; formatting by `dform fmt`'s formatter.
 #[test]
 fn definition_and_formatting() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let stack = root.join("stacks/dform.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);
@@ -566,7 +566,7 @@ fn gke_platform_selects_its_deployment_by_environment() {
 /// person to read, not a test's to time).
 #[test]
 fn a_hover_answers_after_each_keystroke() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let stack = root.join("stacks/dform.df");
     let network = root.join("network.df");
     let mut c = Client::start(&root, json!({}));
@@ -674,7 +674,7 @@ fn quick_fix(root: &Path, file: &Path, edited: &str, needle: &str, title: &str) 
 /// An unknown name: quoted.
 #[test]
 fn quick_fix_quotes_an_unknown_name() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let stack = root.join("stacks/dform.df");
     let text = std::fs::read_to_string(&stack).unwrap();
     let edited =
@@ -694,7 +694,7 @@ fn quick_fix_quotes_an_unknown_name() {
 /// the edit is formatted (the file already was).
 #[test]
 fn quick_fix_declares_a_predicate_mixed() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let stack = root.join("stacks/dform.df");
     let text = std::fs::read_to_string(&stack).unwrap();
     let edited = format!("{text}\nq(1)\nq(x) where data(\"zone\", x)\n");
@@ -736,7 +736,7 @@ fn quick_fix_derives_a_colliding_name_from_the_key_or_isolates_the_stack() {
         (stack, edited)
     };
     let needle = "net.vpc fixed.name = \"fixed\"";
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let (stack, edited) = collides(&root);
     let texts = quick_fix(
         &root,
@@ -751,7 +751,7 @@ fn quick_fix_derives_a_colliding_name_from_the_key_or_isolates_the_stack() {
         texts[0]
     );
 
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let (stack, edited) = collides(&root);
     let texts = quick_fix(
         &root,
@@ -771,7 +771,7 @@ fn quick_fix_derives_a_colliding_name_from_the_key_or_isolates_the_stack() {
 /// plan, at the top of the stack's file): set, with a typed placeholder.
 #[test]
 fn quick_fix_sets_a_required_attribute() {
-    let (_s, root) = example("k8s");
+    let (_s, root) = example("tests/fixtures/k8s");
     let stack = root.join("stacks/k8s_demo.df");
     let text = std::fs::read_to_string(&stack).unwrap();
     let edited = format!(
@@ -797,7 +797,7 @@ fn quick_fix_sets_a_required_attribute() {
 /// the block guarded on it.
 #[test]
 fn quick_fix_guards_a_dangling_ref() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let stack = root.join("stacks/dform.df");
     let text = std::fs::read_to_string(&stack).unwrap();
     let edited = format!(
@@ -874,7 +874,7 @@ fn at_places(file: &str, lines: &[u64]) -> Vec<(String, u64)> {
 /// unsaved buffers; on an attribute path, the contributions to its cell.
 #[test]
 fn references_of_every_kind_of_name() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let stack = root.join("stacks/dform.df");
     let network = root.join("network.df");
     let mut c = Client::start(&root, json!({}));
@@ -1043,7 +1043,7 @@ fn refused(c: &mut Client, method: &str, params: Value) -> String {
 /// types and what a provider owns; a rename rewrites every reference.
 #[test]
 fn prepare_rename_refuses_what_is_not_the_programs() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let stack = root.join("stacks/dform.df");
     let network = root.join("network.df");
     let mut c = Client::start(&root, json!({}));
@@ -1110,7 +1110,7 @@ fn prepare_rename_refuses_what_is_not_the_programs() {
 /// a `moved` fact per address in the same edit: the next plan is a move.
 #[test]
 fn rename_of_a_resource_with_state_plans_as_a_move() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let run = |args: &[&str]| {
         let out = common::dform()
             .args(args)
@@ -1175,7 +1175,7 @@ fn rename_of_a_resource_with_state_plans_as_a_move() {
 /// peering (the checked evaluation says so).
 #[test]
 fn a_rename_that_changes_the_plan_is_refused() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let stack = root.join("stacks/dform.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);
@@ -1214,7 +1214,7 @@ fn a_rename_that_changes_the_plan_is_refused() {
 /// rename of one leaves the other.
 #[test]
 fn same_named_private_relations_rename_independently() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let stack = root.join("stacks/dform.df");
     let iam = root.join("identity.df");
     let k8s = root.join("kubernetes.df");
@@ -1858,7 +1858,7 @@ fn inlays(c: &mut Client, file: &Path) -> Vec<(u64, String)> {
 /// (one per copy), a null as the plan prints it.
 #[test]
 fn inlay_hints_show_the_plan_and_values() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let stack = root.join("stacks/dform.df");
     let network = root.join("network.df");
     let mut c = Client::start(&root, json!({}));
@@ -1951,7 +1951,7 @@ fn inlay_hints_show_the_plan_and_values() {
 /// the derivation.
 #[test]
 fn hover_gives_a_reads_value_and_its_provenance() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let stack = root.join("stacks/dform.df");
     let network = root.join("network.df");
     let mut c = Client::start(&root, json!({}));
@@ -1991,7 +1991,7 @@ fn hover_gives_a_reads_value_and_its_provenance() {
 /// which writes the derivation to a file and asks the client to show it.
 #[test]
 fn explain_opens_the_derivation_as_a_document() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let stack = root.join("stacks/dform.df");
     let cache = root.parent().unwrap().join("cache");
     let mut cmd = common::dform();
@@ -2033,7 +2033,7 @@ fn explain_opens_the_derivation_as_a_document() {
 /// row; a type no schema declares is its provider's, said by the hover.
 #[test]
 fn an_attribute_goes_to_its_schema_row() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let network = root.join("network.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&network);
@@ -2068,7 +2068,7 @@ fn an_attribute_goes_to_its_schema_row() {
 /// row that declares it under the provider's name (`vpc_id`).
 #[test]
 fn a_reference_goes_to_its_providers_row() {
-    let (_s, root) = example("aws");
+    let (_s, root) = example("tests/fixtures/aws");
     let stack = root.join("stacks/aws_demo.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);
@@ -2084,7 +2084,7 @@ fn a_reference_goes_to_its_providers_row() {
 /// compiler's error, with its fix, at the `in`.
 #[test]
 fn a_range_is_a_value_the_editor_reads() {
-    let (_s, root) = example("demo");
+    let (_s, root) = example("tests/fixtures/demo");
     let stack = root.join("stacks/dform.df");
     let original = std::fs::read_to_string(&stack).unwrap();
     let ranged = format!(

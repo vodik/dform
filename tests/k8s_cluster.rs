@@ -211,7 +211,7 @@ fn a_removed_resource_is_deleted() {
     assert!(rt.block_on(api.get_opt("web")).unwrap().is_none());
 }
 
-/// examples/k8s's demo, its namespace the test's, against the real
+/// tests/fixtures/k8s's demo, its namespace the test's, against the real
 /// provider: it applies and converges, and a new image is a dry-run-planned
 /// update in place that converges too.
 #[test]
@@ -221,7 +221,8 @@ fn the_k8s_demo_applies_and_converges() {
     };
     let ns = Namespace::new(&kc);
     let s = scratch("k8s-cluster-demo");
-    let src = std::fs::read_to_string(repo().join("examples/k8s/stacks/k8s_demo.df")).unwrap();
+    let src =
+        std::fs::read_to_string(repo().join("tests/fixtures/k8s/stacks/k8s_demo.df")).unwrap();
     let demo = src
         .replace("use k8s", "use k8s { source = \"./providers/k8s\" }")
         .replace(

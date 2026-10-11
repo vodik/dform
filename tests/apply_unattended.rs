@@ -18,7 +18,7 @@ const STOPPED: &str = "apply stopped after tick 1: tick 2 adds 1 change the plan
 #[test]
 fn yes_applies_a_tick_the_plan_could_not_name() {
     let s = Scratch::new("unattended-tour");
-    copy_dir(&repo().join("examples/tour"), &s.dir);
+    copy_dir(&repo().join("tests/fixtures/tour"), &s.dir);
     let r = s.run(&["apply", "tour", "env=prod"]).success();
     let (_, tick2) = r.stdout.split_once("\ntick 2  ").unwrap_or_else(|| {
         panic!("{}", r.stdout);
@@ -39,7 +39,7 @@ fn yes_applies_a_tick_the_plan_could_not_name() {
 #[test]
 fn a_plan_file_stops_before_a_tick_the_plan_could_not_name() {
     let s = Scratch::new("unattended-tour-file");
-    copy_dir(&repo().join("examples/tour"), &s.dir);
+    copy_dir(&repo().join("tests/fixtures/tour"), &s.dir);
     s.run(&["plan", "--out", "plan.json", "tour", "env=prod"])
         .success();
     let r = s.run(&["apply", "plan.json"]).stopped();
