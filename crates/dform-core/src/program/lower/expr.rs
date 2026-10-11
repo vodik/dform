@@ -7,6 +7,7 @@
 
 use crate::ast::{Atom, Lit, Span, Stmt, Term, TypeExpr, str_term};
 use crate::program::node::*;
+use crate::program::scope::Reach;
 use crate::program::{NodeId, Program};
 use std::collections::BTreeMap;
 
@@ -208,6 +209,7 @@ impl<'p> Lowering<'p> {
             }
             ExprKind::Field { base, path } => self.field(*base, path),
             ExprKind::RefOf(r) => self.reference(*r),
+            ExprKind::Scoped { name, via } => self.scoped(*name, via),
             ExprKind::Alias(e) => self.expr(*e),
             // The item's reads are the body's, after its literals.
             ExprKind::Comprehension { item, clause } => {
@@ -341,6 +343,22 @@ impl<'p> Lowering<'p> {
         match path {
             [Step::Len] => func(crate::address::LEN, vec![v]),
             path => func("__path", vec![v, str_term(&stored(path))]),
+        }
+    }
+
+    /// The name `name` as a read reaches it: `__scope(n)`, kept as
+    /// written by expansion, or `__lexical(Body, n)`, the enclosing body's
+    /// instance's.
+    fn scoped(&mut self, name: ExprId, via: &Reach) -> Term {
+        match via {
+            Reach::Lexical(body) => {
+                let Term::Val(crate::value::Value::Str(n)) = self.expr(name) else {
+                    unreachable!("an enclosing body's name is its segment")
+                };
+                crate::modules::lexical_term(body, &n)
+            }
+            Reach::Absolute => func(crate::modules::ABSOLUTE, vec![self.expr(name)]),
+            r => unreachable!("a name {r:?} is written bare"),
         }
     }
 

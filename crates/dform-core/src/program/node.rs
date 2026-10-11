@@ -89,6 +89,12 @@ pub enum ExprKind {
     Resource { typ: TypeRef, addr: ExprId },
     /// `ref(R)` written out (step 3).
     RefOf(ExprId),
+    /// A name of a scope (a resource's address, a copy's name) as a read
+    /// in its scope reaches it, `via` an enclosing body's instance
+    /// (`Lexical`, its segment `name`) or a scope no copy of the body is
+    /// taken from (`Absolute`): `lower` writes the mark expansion reads
+    /// (step 7).
+    Scoped { name: ExprId, via: Reach },
     /// A term read into a variable of its own, read again into another:
     /// `f(x).p` of a loader's call, its value read once (step 6b).
     Alias(ExprId),

@@ -24,6 +24,7 @@
 use super::Builder;
 use crate::ast::{Lit, Term, TypeExpr};
 use crate::program::node::*;
+use crate::program::scope::Reach;
 use crate::value::Value;
 
 impl Builder<'_> {
@@ -132,6 +133,19 @@ impl Builder<'_> {
                 };
                 let text = text.clone();
                 return self.at(span, |b| b.expr_node(ExprKind::Quantity { text }));
+            }
+            (crate::modules::ABSOLUTE, [name]) => ExprKind::Scoped {
+                name: *name,
+                via: Reach::Absolute,
+            },
+            (crate::modules::LEXICAL, [body, seg])
+                if let (Some(Value::Str(body)), Some(Value::Str(_))) =
+                    (self.constant(*body), self.constant(*seg)) =>
+            {
+                ExprKind::Scoped {
+                    name: *seg,
+                    via: Reach::Lexical(body.clone()),
+                }
             }
             (LEN, [v]) => ExprKind::Field {
                 base: *v,
