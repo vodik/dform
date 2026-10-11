@@ -71,7 +71,7 @@ deny "no nodepool in zone z" {pool: n} where n in google.container_node_pool, ar
     assert!(
         r.stdout.contains(
             "  undetermined  no nodepool in zone z                  p.df:113  1 undetermined\n    \
-             google.container_cluster gke_platform                      until zones is known (tick 2)\n"
+             google.container_cluster gke_platform              until zones is known (tick 2)\n"
         ),
         "{}",
         r.stdout
