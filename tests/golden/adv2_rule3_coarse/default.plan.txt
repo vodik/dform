@@ -3,20 +3,20 @@ exit: error
 plan: 2 changes (2 create) over 2 ticks; policy: 1 hold · 1 fails · 1 undetermined
 
 tick 1  2 changes
-  + google.container_cluster gke_platform     adv2_rule3_coarse.df:6
+  + google.container_cluster gke_platform  adv2_rule3_coarse.df:6
       name = "gke-platform-gke"
-  + k8s.namespace gke_platform                adv2_rule3_coarse.df:13
+  + k8s.namespace gke_platform             adv2_rule3_coarse.df:13
       metadata.name = "gke-platform"
 
 tick 2  ? changes
   waits on  gke_platform.zones
-  google.container_node_pool "${np}"  adv2_rule3_coarse.df:8  waits on gke_platform.zones
+  google.container_node_pool "${np}"       adv2_rule3_coarse.df:8  waits on gke_platform.zones
 
 policy  1 hold · 1 fails · 1 undetermined
   fails         namespace without deployment  adv2_rule3_coarse.df:16  1 fails
-    k8s.namespace gke_platform                        ns = "gke_platform"
+    k8s.namespace gke_platform                ns = "gke_platform"
   undetermined  no nodepool in zone b         adv2_rule3_coarse.df:24  1 undetermined
-    google.container_cluster gke_platform             until zones is known (tick 2)
+    google.container_cluster gke_platform     until zones is known (tick 2)
 -- stderr --
 refused  namespace without deployment  tests/fixtures/adversarial/adv2_rule3_coarse.df:16
   └─ ns = "gke_platform"

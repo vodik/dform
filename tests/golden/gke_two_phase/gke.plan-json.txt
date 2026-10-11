@@ -431,7 +431,7 @@ exit: ok
           "because": null,
           "changes": [
             {
-              "after": "gke_platform",
+              "after": "gke-platform",
               "before": null,
               "op": "set",
               "path": "metadata.namespace",
@@ -440,7 +440,7 @@ exit: ok
                 "entry": "metadata.namespace = ns",
                 "statement": "resource k8s.deployment api { metadata.namespace = ns .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
-                  "ns = \"gke_platform\""
+                  "ns = \"gke-platform\""
                 ]
               }
             },
@@ -454,7 +454,7 @@ exit: ok
                 "entry": "spec.replicas = 3",
                 "statement": "resource k8s.deployment api { .. spec.replicas = 3 .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
-                  "ns = \"gke_platform\""
+                  "ns = \"gke-platform\""
                 ]
               }
             },
@@ -468,7 +468,7 @@ exit: ok
                 "entry": "spec.selector.matchLabels = { app: \"api\" }",
                 "statement": "resource k8s.deployment api { .. spec.selector.matchLabels = { app: \"api\" } .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
-                  "ns = \"gke_platform\""
+                  "ns = \"gke-platform\""
                 ]
               }
             },
@@ -482,7 +482,7 @@ exit: ok
                 "entry": "spec.template.metadata.labels = { app: \"api\" }",
                 "statement": "resource k8s.deployment api { .. spec.template.metadata.labels = { app: \"api\" } .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
-                  "ns = \"gke_platform\""
+                  "ns = \"gke-platform\""
                 ]
               }
             },
@@ -496,7 +496,7 @@ exit: ok
                 "entry": "spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/renfry/api:1.42\" }]",
                 "statement": "resource k8s.deployment api { .. spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/renfry/api:1.42\" }] } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
-                  "ns = \"gke_platform\""
+                  "ns = \"gke-platform\""
                 ]
               }
             },
@@ -510,7 +510,7 @@ exit: ok
                 "entry": "spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/renfry/api:1.42\" }]",
                 "statement": "resource k8s.deployment api { .. spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/renfry/api:1.42\" }] } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
-                  "ns = \"gke_platform\""
+                  "ns = \"gke-platform\""
                 ]
               }
             }
@@ -521,7 +521,7 @@ exit: ok
             "at": "stacks/gke_two_phase.df:77",
             "statement": "resource k8s.deployment api { .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
             "with": [
-              "ns = \"gke_platform\""
+              "ns = \"gke-platform\""
             ]
           },
           "type": "k8s.deployment"
@@ -531,7 +531,7 @@ exit: ok
           "because": null,
           "changes": [
             {
-              "after": "gke_platform",
+              "after": "gke-platform",
               "before": null,
               "op": "set",
               "path": "metadata.name",
@@ -566,12 +566,12 @@ exit: ok
                 "entry": "data = { password: google.secret_manager_secret_version[\"db_pw\"].secret_data }",
                 "statement": "resource k8s.secret db_credentials { .. data = { password: google.secret_manager_secret_version[\"db_pw\"].secret_data } } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
-                  "ns = \"gke_platform\""
+                  "ns = \"gke-platform\""
                 ]
               }
             },
             {
-              "after": "gke_platform",
+              "after": "gke-platform",
               "before": null,
               "op": "set",
               "path": "metadata.namespace",
@@ -580,7 +580,7 @@ exit: ok
                 "entry": "metadata.namespace = ns",
                 "statement": "resource k8s.secret db_credentials { metadata.namespace = ns .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
-                  "ns = \"gke_platform\""
+                  "ns = \"gke-platform\""
                 ]
               }
             }
@@ -591,7 +591,7 @@ exit: ok
             "at": "stacks/gke_two_phase.df:85",
             "statement": "resource k8s.secret db_credentials { .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
             "with": [
-              "ns = \"gke_platform\""
+              "ns = \"gke-platform\""
             ]
           },
           "type": "k8s.secret"

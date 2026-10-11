@@ -4,14 +4,14 @@ deployment: stacks.gke_platform[env=stg]
 plan: 7 changes (7 create) over 1 tick; policy: 1 hold
 
 tick 1  7 changes
-  + alert_metrics_pack gke_platform                     stacks/gke_platform.df:223
+  + alert_metrics_pack gke_platform           stacks/gke_platform.df:223
       enable_standard_gke_alerts = true
       notification_channel_display_name = "Slack"
       notification_channel_type = "slack"
-      project_id = "renfry-stg"                 stacks/gke_platform.df:71
+      project_id = "renfry-stg"               stacks/gke_platform.df:71
       source = "git@github.com:coherentpath/te…-alert-metrics.git?ref=v1.5.0"
-  + google.compute_network main                 stacks/gke_platform.df:166
-      name = "renfry-stg-network"               stacks/gke_platform.df:74
+  + google.compute_network main               stacks/gke_platform.df:166
+      name = "renfry-stg-network"             stacks/gke_platform.df:74
       peerings = [
         {
           name: "envoy-stg",
@@ -22,47 +22,47 @@ tick 1  7 changes
           peer_network: "projects/coherentpath-stg/global/networks/envoy-proxy-stg",
         },
       ]
-      project = "renfry-stg"                    stacks/gke_platform.df:71
-  + google.compute_subnetwork gke_subnet        stacks/gke_platform.df:139
-      ip_cidr_range = "10.141.100.0/22"         stacks/gke_platform.df:78
+      project = "renfry-stg"                  stacks/gke_platform.df:71
+  + google.compute_subnetwork gke_subnet      stacks/gke_platform.df:139
+      ip_cidr_range = "10.141.100.0/22"       stacks/gke_platform.df:78
       name = "renfry-stg-gke-subnet"
       network = "projects/renfry-stg/global/networks/renfry-stg-network"
-      project = "renfry-stg"                    stacks/gke_platform.df:71
-      region = "us-east1"                       stacks/gke_platform.df:73
+      project = "renfry-stg"                  stacks/gke_platform.df:71
+      region = "us-east1"                     stacks/gke_platform.df:73
       secondary_ranges = [
         { range_name: "renfry-stg-gke-pods-range", ip_cidr_range: "10.141.104.0/21" },
         { range_name: "renfry-stg-gke-svc-range", ip_cidr_range: "10.141.112.0/21" },
       ]
       subnet_private_access = true
-  + google.compute_subnetwork regional_proxy    stacks/gke_platform.df:153
-      ip_cidr_range = "10.193.1.0/24"           stacks/gke_platform.df:76
+  + google.compute_subnetwork regional_proxy  stacks/gke_platform.df:153
+      ip_cidr_range = "10.193.1.0/24"         stacks/gke_platform.df:76
       name = "renfry-stg-proxy"
       network = "projects/renfry-stg/global/networks/renfry-stg-network"
-      project = "renfry-stg"                    stacks/gke_platform.df:71
+      project = "renfry-stg"                  stacks/gke_platform.df:71
       purpose = "REGIONAL_MANAGED_PROXY"
-      region = "us-east1"                       stacks/gke_platform.df:73
+      region = "us-east1"                     stacks/gke_platform.df:73
       role = "ACTIVE"
-  + google.container_cluster gke_platform               stacks/gke_platform.df:186
+  + google.container_cluster gke_platform     stacks/gke_platform.df:186
       cluster_type = "autopilot-private"
       deletion_protection = false
       enable_secret_manager_addon = true
-      env = "stg"                               --set env=stg
+      env = "stg"                             --set env=stg
       ip_range_pods = "renfry-stg-gke-pods-range"
       ip_range_services = "renfry-stg-gke-svc-range"
       master_control_plane_cidr = "172.16.3.112/28"  stacks/gke_platform.df:78
       name = "renfry-stg-gke"
       network_id = "projects/renfry-stg/global/networks/renfry-stg-network"
-      project_id = "renfry-stg"                 stacks/gke_platform.df:71
-      project_name = "renfry-stg"               stacks/gke_platform.df:72
+      project_id = "renfry-stg"               stacks/gke_platform.df:71
+      project_name = "renfry-stg"             stacks/gke_platform.df:72
       subnetwork = gke_subnet
-  + google.monitoring_dashboard gke_platform            stacks/gke_platform.df:207
-      dashboard_json = files/dashboard-gke-platform.json  (93 B)
-      project = "renfry-stg"                    stacks/gke_platform.df:71
+  + google.monitoring_dashboard gke_platform  stacks/gke_platform.df:207
+      dashboard_json = files/dashboard-gke-platform.json  (109 B)
+      project = "renfry-stg"                  stacks/gke_platform.df:71
   + google.compute_address static-ip-gke-platform-grpc  stacks/gke_platform.df:173
-      address_type = "INTERNAL"                 stacks/gke_platform.df:78
+      address_type = "INTERNAL"               stacks/gke_platform.df:78
       name = "gke-platform-grpc"
-      project = "renfry-stg"                    stacks/gke_platform.df:71
-      region = "us-east1"                       stacks/gke_platform.df:73
+      project = "renfry-stg"                  stacks/gke_platform.df:71
+      region = "us-east1"                     stacks/gke_platform.df:73
       subnetwork = gke_subnet
 
 policy  1 hold

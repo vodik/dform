@@ -4,7 +4,7 @@ deployment: stacks.gke_platform[env=dev]
 plan: 7 changes (7 create) over 1 tick; policy: 1 hold
 
 tick 1  7 changes
-  + alert_metrics_pack gke_platform                         stacks/gke_platform.df:223
+  + alert_metrics_pack gke_platform                 stacks/gke_platform.df:223
       enable_standard_gke_alerts = true
       notification_channel_display_name = "Slack"
       notification_channel_type = "slack"
@@ -36,7 +36,7 @@ tick 1  7 changes
       purpose = "REGIONAL_MANAGED_PROXY"
       region = "us-east1"                           stacks/gke_platform.df:56
       role = "ACTIVE"
-  + google.container_cluster gke_platform                   stacks/gke_platform.df:186
+  + google.container_cluster gke_platform           stacks/gke_platform.df:186
       cluster_type = "autopilot-private"
       deletion_protection = false
       enable_secret_manager_addon = true
@@ -49,10 +49,10 @@ tick 1  7 changes
       project_id = "renfry-dev-973682"              stacks/gke_platform.df:54
       project_name = "renfry-dev"                   stacks/gke_platform.df:55
       subnetwork = gke_subnet
-  + google.monitoring_dashboard gke_platform                stacks/gke_platform.df:207
-      dashboard_json = files/dashboard-gke-platform.json  (93 B)
+  + google.monitoring_dashboard gke_platform        stacks/gke_platform.df:207
+      dashboard_json = files/dashboard-gke-platform.json  (109 B)
       project = "renfry-dev-973682"                 stacks/gke_platform.df:54
-  + google.compute_address static-ip-gke-platform-grpc      stacks/gke_platform.df:173
+  + google.compute_address static-ip-gke-platform-grpc  stacks/gke_platform.df:173
       address_type = "INTERNAL"                     stacks/gke_platform.df:61
       name = "gke-platform-grpc"
       project = "renfry-dev-973682"                 stacks/gke_platform.df:54
