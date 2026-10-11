@@ -1,4 +1,5 @@
 /target
+/dist
 .dform/
 dform.state/
 /session-ses_*.md

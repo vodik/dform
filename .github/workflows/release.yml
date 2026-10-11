@@ -1,0 +1,114 @@
+name: Release
+
+# A tag `vVERSION` (Cargo.toml's version) publishes one archive per
+# target, `dform-VERSION-TARGET.tar.gz` holding `dform` and every
+# `dform-provider-*` beside it (`.github/dist.sh`), and `SHA256SUMS`.
+# The names carry the target triple, which mise's github and ubi
+# backends match to the platform (docs/reference.md "Installing").
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Static: musl, built natively on each architecture's runner.
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+          # macOS links its libSystem; the arm64 runner builds both, the
+          # x86_64 one by the SDK's cross-compiler.
+          - target: aarch64-apple-darwin
+            runner: macos-15
+          - target: x86_64-apple-darwin
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: The tag is Cargo.toml's version
+        id: version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cargo_version=$(cargo metadata --format-version 1 --no-deps |
+            jq -r '.packages[] | select(.name == "dform") | .version')
+          if [ "$version" != "$cargo_version" ]; then
+            echo "tag $GITHUB_REF_NAME is not Cargo.toml's version $cargo_version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install protoc and musl (linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update && sudo apt-get install -y protobuf-compiler musl-tools
+          # ring's C, by the runner's own musl-gcc (cc-rs would look for a
+          # cross-compiler named after the target on aarch64).
+          target="${{ matrix.target }}"
+          echo "CC_${target//-/_}=musl-gcc" >> "$GITHUB_ENV"
+
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
+      - name: Build and pack
+        env:
+          # bsdtar on macOS: no AppleDouble `._` files in the archive.
+          COPYFILE_DISABLE: "1"
+        run: .github/dist.sh "${{ steps.version.outputs.version }}" "${{ matrix.target }}"
+
+      - name: The archive's dform runs
+        if: runner.os == 'Linux' || matrix.target == 'aarch64-apple-darwin'
+        shell: bash
+        run: |
+          name="dform-${{ steps.version.outputs.version }}-${{ matrix.target }}"
+          mkdir -p check && tar -C check -xzf "dist/$name.tar.gz"
+          "check/$name/dform" version
+          # Outside a project: every provider found, each beside dform.
+          "check/$name/dform" provider list | tee providers.txt
+          grep -q 'k8s .*beside dform' providers.txt
+          "check/$name/dform" -C examples/tour plan
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dform-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: SHA256SUMS
+        working-directory: dist
+        run: sha256sum dform-*.tar.gz > SHA256SUMS && cat SHA256SUMS
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
