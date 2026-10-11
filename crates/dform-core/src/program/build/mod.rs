@@ -36,6 +36,7 @@ pub use checks::CheckLowered;
 pub use clause::{Form, Written};
 pub use contributions::{SetFromLowered, SetLowered, TargetLowered, WriteLowered};
 pub use gather::{Gather, Statement};
+pub use hoist::{Keyed, ReadOf};
 pub use inputs::{InputLowered, RelationInputLowered, RelationRows};
 pub use lets::{LetFnLowered, LetLowered};
 pub use modules::{CopyLowered, InputGiven};
@@ -71,9 +72,14 @@ pub struct Builder<'p> {
 }
 
 /// What each read the front end hoisted in a statement reads, by its
-/// relation and the variable it binds: the read's own node is built from
-/// it (`hoist.rs`).
-pub type Reads = BTreeMap<(String, String), Read>;
+/// relation and the variable it binds; and the node of each read built
+/// where its term is (step 7), by the variable it binds: what holds the
+/// read's literal holds that node (`hoist.rs`).
+#[derive(Default)]
+pub struct Reads {
+    kinds: BTreeMap<(String, String), Read>,
+    nodes: BTreeMap<String, Vec<ExprId>>,
+}
 
 impl<'p> Builder<'p> {
     /// A builder into `program` of what is written at `span`.
@@ -85,7 +91,7 @@ impl<'p> Builder<'p> {
             vars: BTreeMap::new(),
             written,
             pending: Vec::new(),
-            reads: Reads::new(),
+            reads: Reads::default(),
         }
     }
 

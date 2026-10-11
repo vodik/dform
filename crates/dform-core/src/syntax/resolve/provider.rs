@@ -399,7 +399,8 @@ impl Lowerer<'_> {
         name: &str,
     ) -> L<Term> {
         let span = self.span(n);
-        let args = self.bind(true, |l| l.args(rc, n, Pos::Content, pre))?;
+        let mut local = Vec::new();
+        let args = self.bind(true, |l| l.args(rc, n, Pos::Content, &mut local))?;
         let want = match name {
             ENV_VAR => "one argument: the variable's name",
             crate::externs::TIME_NOW => "no argument",
@@ -416,7 +417,7 @@ impl Lowerer<'_> {
             out: ins,
             path: Vec::new(),
         };
-        self.realize(rc, res, pos, pre, span)
+        self.realize(rc, res, pos, (local, pre), span)
     }
 
     /// The externs of the built-in fact providers the program's `use`s

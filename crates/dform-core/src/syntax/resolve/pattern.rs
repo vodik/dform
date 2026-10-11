@@ -249,8 +249,10 @@ impl Lowerer<'_> {
         };
         let span = self.span_of(k.text_range());
         self.bind(true, |l| {
+            let mark = pre.len();
             let res = l.resolve(rc, &c, pre)?;
-            l.realize(rc, res, Pos::Content, pre, span)
+            let local = pre.split_off(mark);
+            l.realize(rc, res, Pos::Content, (local, pre), span)
         })
     }
 

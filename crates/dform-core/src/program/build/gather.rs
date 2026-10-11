@@ -72,7 +72,9 @@ impl Gather {
     /// The statement hoisted the read `pred(.., var, ..)`, which reads
     /// `read`.
     pub fn hoisted(&mut self, pred: &str, var: &str, read: Read) {
-        self.reads.insert((pred.to_string(), var.to_string()), read);
+        self.reads
+            .kinds
+            .insert((pred.to_string(), var.to_string()), read);
     }
 
     /// A literal's or a clause's lowering starts.

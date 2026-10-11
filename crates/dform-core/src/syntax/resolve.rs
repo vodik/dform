@@ -60,6 +60,8 @@ use names::{bare_name, dotted_text, path_parts, word_text};
 pub use names::{capitalise, use_parts};
 mod pattern;
 mod provider;
+mod realize;
+use realize::{Plan, PlanRead, PlanStep};
 mod singleton;
 mod spread;
 mod strings;
@@ -6080,11 +6082,13 @@ impl<'u> Lowerer<'u> {
             }
             LIT_TRUTH => {
                 let c = terms(n).next().and_then(|t| Chain::read(&t)).ok_or(Skip)?;
+                let mark = out.len();
                 let res = self.resolve(rc, &c, out)?;
                 match self.read_atom(rc, &res, Term::Val(Value::Bool(true)), span) {
                     Some(a) => out.push(Lit::Pos(a)),
                     None => {
-                        let t = self.realize(rc, res, Pos::Content, out, span)?;
+                        let local = out.split_off(mark);
+                        let t = self.realize(rc, res, Pos::Content, (local, out), span)?;
                         out.push(Lit::Eq(t, Term::Val(Value::Bool(true))));
                     }
                 }
@@ -6133,7 +6137,8 @@ impl<'u> Lowerer<'u> {
                         Res::Ref { .. } | Res::Var { .. } | Res::Value { .. }
                     ) =>
                     {
-                        let t = self.realize(rc, res, Pos::Content, out, span)?;
+                        // The reads resolving it stay before the mark.
+                        let t = self.realize(rc, res, Pos::Content, (Vec::new(), out), span)?;
                         let v = fresh(rc, HAS_VAR);
                         out.push(Lit::Eq(var(&v), t));
                         rc.outer.insert(v);
@@ -6371,8 +6376,10 @@ impl<'u> Lowerer<'u> {
                 let ix = ix[0].clone();
                 let mut list = ch.clone();
                 list.ops.pop();
+                let mark = out.len();
                 let res = self.resolve(rc, &list, out)?;
-                let l = self.realize(rc, res, Pos::Content, out, span)?;
+                let local = out.split_off(mark);
+                let l = self.realize(rc, res, Pos::Content, (local, out), span)?;
                 let i = self.bind(true, |x| x.term(rc, &ix, Pos::Content, out))?;
                 let pat = self.pattern(rc, p, out)?;
                 out.push(Lit::Pos(atom_at("member", vec![l, i, pat], span)));
@@ -7161,6 +7168,7 @@ impl<'u> Lowerer<'u> {
             let (typ, addr) = self.reference(rc, &c, pre, span)?;
             return Ok(func(crate::address::REF, vec![typ, addr, str_term("")]));
         }
+        let mark = pre.len();
         match self.resolve(rc, &c, pre)? {
             Res::Ref { typ, addr, path } if path.is_empty() => {
                 Ok(func(crate::address::REF, vec![typ, addr, str_term("")]))
@@ -7169,7 +7177,8 @@ impl<'u> Lowerer<'u> {
                 if c.is_bare() && matches!(res, Res::Val(Term::Var(_))) {
                     rc.untyped_refs.insert(c.head.clone());
                 }
-                self.realize(rc, res, pos, pre, span)
+                let local = pre.split_off(mark);
+                self.realize(rc, res, pos, (local, pre), span)
             }
         }
     }
@@ -7470,7 +7479,7 @@ impl<'u> Lowerer<'u> {
             RANGE => return self.range(rc, n, pre).map(node),
             SPREAD => return self.misplaced_spread(n),
             TUPLE => return self.tuple_value(n),
-            CHAIN | CALL_CHAIN => self.chain_term(rc, n, pos, &mut reads),
+            CHAIN | CALL_CHAIN => return self.chain_term(rc, n, pos, pre),
             CALL => return self.call(rc, n, pos, pre),
             LIST if !n.children().any(|c| c.kind() == SPREAD) => {
                 return self.list_expr(rc, n, pos, pre).map(node);
@@ -7573,9 +7582,16 @@ impl<'u> Lowerer<'u> {
 
     /// A chain: `x.len` (R-155), a resource by its bare name given as a
     /// value (R-43), a read.
-    fn chain_term(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
+    fn chain_term(
+        &mut self,
+        rc: &mut Rc,
+        n: &SyntaxNode,
+        pos: Pos,
+        pre: &mut Vec<Lit>,
+    ) -> L<Built> {
         let span = self.span(n);
         let mut c = Chain::read(n).ok_or(Skip)?;
+        let mut local = Vec::new();
         // `x.len` (R-155): the length of a list, a string or an
         // object, the one field that is a computation; `x."len"`
         // is an object's key.
@@ -7586,9 +7602,10 @@ impl<'u> Lowerer<'u> {
                 .is_some_and(|t| t.kind() == IDENT);
         if len {
             c.ops.pop();
-            let res = self.resolve(rc, &c, pre)?;
-            let t = self.realize(rc, res, Pos::Content, pre, span)?;
-            return Ok(func(crate::address::LEN, vec![t]));
+            let res = self.resolve(rc, &c, &mut local)?;
+            let base = self.realize_expr(rc, res, Pos::Content, (local, pre), span)?;
+            let path = vec![crate::program::node::Step::Len];
+            return Ok(Built::Node(self.node(span, ExprKind::Field { base, path })));
         }
         // A resource by its bare name, given as a value: the
         // reference, in its module or out of it (R-43).
@@ -7601,18 +7618,20 @@ impl<'u> Lowerer<'u> {
             && self.resource(rc.scope, &c.head).is_some()
         {
             if let Some(t) = self.deferred_ref(rc, &c.head, span) {
-                return Ok(t);
+                return Ok(Built::Lowered(t, local));
             }
-            let (typ, addr) = self.reference(rc, &c, pre, span)?;
-            return Ok(func(crate::address::REF, vec![typ, addr, str_term("")]));
+            let (typ, addr) = self.reference(rc, &c, &mut local, span)?;
+            let t = func(crate::address::REF, vec![typ, addr, str_term("")]);
+            return Ok(Built::Lowered(t, local));
         }
-        let res = self.resolve(rc, &c, pre)?;
+        let res = self.resolve(rc, &c, &mut local)?;
         if let Res::Ref { path, .. } = &res
             && matches!(path.first(), Some(Seg::F(f)) if f == crate::schema::IDENTITY)
         {
             return self.identity_read(n, span);
         }
-        self.realize(rc, res, pos, pre, span)
+        let id = self.realize_expr(rc, res, pos, (local, pre), span)?;
+        Ok(Built::Node(id))
     }
 
     /// A call of a function, with its named arguments; `env.var`, a
@@ -7839,8 +7858,10 @@ impl<'u> Lowerer<'u> {
             range: k.text_range(),
             ops: Vec::new(),
         };
+        let mark = pre.len();
         let res = self.resolve(rc, &c, pre)?;
-        self.realize(rc, res, pos, pre, self.span_of(k.text_range()))
+        let local = pre.split_off(mark);
+        self.realize(rc, res, pos, (local, pre), self.span_of(k.text_range()))
     }
 
     /// Written fields as an object: a key with holes (`{ "${k}": v }`)
@@ -8039,8 +8060,10 @@ impl<'u> Lowerer<'u> {
                         range: k.text_range(),
                         ops: Vec::new(),
                     };
+                    let mark = pre.len();
                     let res = self.resolve(rc, &c, pre)?;
-                    self.realize(rc, res, pos, pre, self.span_of(k.text_range()))?
+                    let local = pre.split_off(mark);
+                    self.realize(rc, res, pos, (local, pre), self.span_of(k.text_range()))?
                 }
             };
             args.extend([key, v]);
@@ -9351,35 +9374,79 @@ impl<'u> Lowerer<'u> {
         pre: &mut Vec<Lit>,
         span: Span,
     ) -> Term {
-        let key = format!("{pred}{args:?}@{out}");
-        if let Some(v) = rc.reads.get(&key) {
-            return v.clone();
-        }
-        let name = fresh(rc, &capitalise(hint));
+        let (name, new) = self.hoist_read(rc, (read, pred), &args, out, hint);
         let v = var(&name);
-        args.insert(out, v.clone());
-        if let Some(g) = &mut self.gather {
-            g.hoisted(pred, &name, read);
+        if new {
+            args.insert(out, v.clone());
+            pre.push(Lit::Pos(atom_at(pred, args, span)));
         }
-        pre.push(Lit::Pos(atom_at(pred, args, span)));
-        rc.reads.insert(key, v.clone());
         v
     }
 
-    /// A resolved chain as a term at `pos`, hoisting what it reads.
+    /// The variable the read `pred(args.., V)` (V at `out`) binds, once
+    /// per rule, and whether it is read here first: what it reads kept
+    /// for the program's builder.
+    fn hoist_read(
+        &mut self,
+        rc: &mut Rc,
+        (read, pred): (crate::program::Read, &str),
+        args: &[Term],
+        out: usize,
+        hint: &str,
+    ) -> (String, bool) {
+        let key = format!("{pred}{args:?}@{out}");
+        if let Some(Term::Var(v)) = rc.reads.get(&key) {
+            return (v.clone(), false);
+        }
+        let name = fresh(rc, &capitalise(hint));
+        if let Some(g) = &mut self.gather {
+            g.hoisted(pred, &name, read);
+        }
+        rc.reads.insert(key, var(&name));
+        (name, true)
+    }
+
+    /// A resolved chain as a term at `pos`, after the reads resolving it
+    /// hoisted, `local`: lowered from its node ([`Lowerer::realize_expr`]).
     fn realize(
         &mut self,
         rc: &mut Rc,
         res: Res,
         pos: Pos,
-        pre: &mut Vec<Lit>,
+        (local, pre): (Vec<Lit>, &mut Vec<Lit>),
         span: Span,
     ) -> L<Term> {
-        match res {
-            Res::Val(t) => Ok(t),
-            Res::Type(t) => Ok(str_term(&t)),
-            Res::Var { var: v, path } => self.path_of(rc, v, path, pre, span),
-            Res::Ref { typ, addr, path } if path.is_empty() => Ok(match pos {
+        let id = self.realize_expr(rc, res, pos, (local, pre), span)?;
+        Ok(self.lowered(id, pre))
+    }
+
+    /// A resolved chain as its node at `pos` (R-211 step 7): what it reads
+    /// in term position its read's node, a path into it the steps, each
+    /// read's variable named once per rule; the reads resolving it hoisted,
+    /// `local`, each the node of the first use of its variable, those no
+    /// node holds into `pre`.
+    fn realize_expr(
+        &mut self,
+        rc: &mut Rc,
+        res: Res,
+        pos: Pos,
+        (local, pre): (Vec<Lit>, &mut Vec<Lit>),
+        span: Span,
+    ) -> L<ExprId> {
+        let plan = self.plan(rc, res, pos, span)?;
+        let (id, left) = self.building(rc, span, |b| b.reading(&local, |b| plan.build(b)));
+        pre.extend(left);
+        Ok(id)
+    }
+
+    /// What a resolved chain at `pos` reads and the path into it, each
+    /// variable named in the order the reads are made.
+    fn plan(&mut self, rc: &mut Rc, res: Res, pos: Pos, span: Span) -> L<Plan> {
+        Ok(match res {
+            Res::Val(t) => Plan::Term(t),
+            Res::Type(t) => Plan::Term(str_term(&t)),
+            Res::Var { var: v, path } => self.plan_path(rc, Plan::Term(v), path, None),
+            Res::Ref { typ, addr, path } if path.is_empty() => Plan::Term(match pos {
                 Pos::Value => func(crate::address::REF, vec![typ, addr, str_term("")]),
                 _ => addr,
             }),
@@ -9387,24 +9454,22 @@ impl<'u> Lowerer<'u> {
                 let Some(p) = path_string(&path) else {
                     return self.error(span, "a reference's path is constant");
                 };
-                Ok(func(crate::address::REF, vec![typ, addr, str_term(&p)]))
+                Plan::Term(func(crate::address::REF, vec![typ, addr, str_term(&p)]))
             }
             Res::Ref { typ, addr, path } => {
                 let Seg::F(first) = &path[0] else {
                     return self.error(span, "a resource's attribute is `r.name`");
                 };
                 let first = crate::address::path_key(first).into_owned();
-                let v = self.read_var(
-                    rc,
-                    (Read::Attr, "attr"),
-                    vec![typ.clone(), addr, str_term(&first)],
-                    3,
-                    &first,
-                    pre,
-                    span,
-                );
-                let at = (typ, first.clone());
-                self.keyed_path_of(rc, v, path[1..].to_vec(), Some(at), pre, span)
+                let args = [typ.clone(), addr.clone(), str_term(&first)];
+                let read = PlanRead::Attr {
+                    typ: typ.clone(),
+                    addr,
+                    attr: first.clone(),
+                };
+                let base = self.plan_read(rc, (Read::Attr, "attr"), &args, 3, &first, read);
+                let at = (typ, first);
+                self.plan_path(rc, base, path[1..].to_vec(), Some(at))
             }
             Res::Output {
                 inst,
@@ -9412,49 +9477,48 @@ impl<'u> Lowerer<'u> {
                 path,
                 typ,
             } => {
-                let v = self.read_var(
-                    rc,
-                    (Read::Output, "output"),
-                    vec![inst, str_term(&key)],
-                    2,
-                    &key,
-                    pre,
-                    span,
-                );
+                let args = [inst.clone(), str_term(&key)];
+                let read = PlanRead::Output {
+                    copy: inst,
+                    key: key.clone(),
+                };
+                let base = self.plan_read(rc, (Read::Output, "output"), &args, 2, &key, read);
                 match typ {
                     // A typed output holds an address: given as a value, it
                     // is the reference (R-43).
-                    Some(typ) if pos == Pos::Value && path.is_empty() => {
-                        Ok(func(crate::address::REF, vec![typ, v, str_term("")]))
+                    Some(Term::Val(Value::Str(typ))) if pos == Pos::Value && path.is_empty() => {
+                        Plan::RefTo {
+                            typ,
+                            addr: Box::new(base),
+                        }
                     }
-                    _ => self.path_of(rc, v, path, pre, span),
+                    _ => self.plan_path(rc, base, path, None),
                 }
             }
             Res::World { typ, addr, path } => {
                 let last = path.rsplit('.').next().unwrap_or(&path).to_string();
-                Ok(self.read_var(
-                    rc,
-                    (Read::World, "cloud_attr"),
-                    vec![str_term(&typ), addr, str_term(&path)],
-                    3,
-                    &last,
-                    pre,
-                    span,
-                ))
+                let args = [str_term(&typ), addr.clone(), str_term(&path)];
+                let read = PlanRead::World { typ, addr, path };
+                self.plan_read(rc, (Read::World, "cloud_attr"), &args, 3, &last, read)
             }
             Res::Value { decl, via, path } => {
                 let pred = via.relation(&decl.name);
-                let v = match rc.values.get(&pred) {
-                    Some(v) => var(v),
+                let base = match rc.values.get(&pred) {
+                    Some(v) => Plan::Term(var(v)),
                     None => {
                         let base = crate::modules::lexical_name(&pred).unwrap_or(&pred);
                         let name = fresh(rc, &capitalise(base));
-                        self.value_read(&pred, &name, (decl, via), pre, span);
+                        if let Some(g) = &mut self.gather {
+                            g.hoisted(&pred, &name, Read::Value(decl.clone(), via.clone()));
+                        }
                         rc.values.insert(pred.clone(), name.clone());
-                        var(&name)
+                        Plan::Read {
+                            read: PlanRead::Value(decl, via),
+                            var: name,
+                        }
                     }
                 };
-                self.path_of(rc, v, path, pre, span)
+                self.plan_path(rc, base, path, None)
             }
             Res::Lookup {
                 pred,
@@ -9462,17 +9526,101 @@ impl<'u> Lowerer<'u> {
                 out,
                 path,
             } => {
-                let v = self.read_var(
-                    rc,
-                    (Read::Lookup { out }, &pred.clone()),
-                    args,
+                let hint = pred.replace('.', "_");
+                let read = PlanRead::Lookup {
+                    rel: pred.clone(),
+                    args: args.clone(),
                     out,
-                    &pred.replace('.', "_"),
-                    pre,
-                    span,
-                );
-                self.path_of(rc, v, path, pre, span)
+                };
+                let base =
+                    self.plan_read(rc, (Read::Lookup { out }, &pred), &args, out, &hint, read);
+                self.plan_path(rc, base, path, None)
             }
+        })
+    }
+
+    /// The read `read`, `pred(args.., V)` (V at `out`): its variable when
+    /// the rule read it already, else the read into a new one.
+    fn plan_read(
+        &mut self,
+        rc: &mut Rc,
+        (kind, pred): (crate::program::Read, &str),
+        args: &[Term],
+        out: usize,
+        hint: &str,
+        read: PlanRead,
+    ) -> Plan {
+        match self.hoist_read(rc, (kind, pred), args, out, hint) {
+            (v, false) => Plan::Term(var(&v)),
+            (v, true) => Plan::Read { read, var: v },
+        }
+    }
+
+    /// Fields and indexes into `base`. From the attribute `at` (the
+    /// resource's type and the attribute's top segment) of a resource, an
+    /// element by its key, `containers["api"]`, is the element of the
+    /// keyed list whose one key field (`type_list_key`) has that value
+    /// (R-35); elsewhere a key is a position.
+    fn plan_path(
+        &mut self,
+        rc: &mut Rc,
+        base: Plan,
+        path: Vec<Seg>,
+        mut at: Option<(Term, String)>,
+    ) -> Plan {
+        let mut steps = Vec::new();
+        let mut fields: Vec<String> = Vec::new();
+        let flush = |steps: &mut Vec<PlanStep>, fields: &mut Vec<String>| {
+            if fields.is_empty() {
+                return;
+            }
+            let p = fields
+                .iter()
+                .map(|f| crate::address::path_key(f))
+                .collect::<Vec<_>>()
+                .join(".");
+            fields.clear();
+            steps.push(PlanStep::Fields(p));
+        };
+        for s in path {
+            match s {
+                Seg::F(f) => {
+                    if let Some((_, list)) = &mut at {
+                        list.push('.');
+                        list.push_str(&crate::address::path_key(&f));
+                    }
+                    fields.push(f)
+                }
+                Seg::K(key) if at.is_some() => {
+                    let (typ, list) = at.take().expect("matched");
+                    flush(&mut steps, &mut fields);
+                    let item = fresh(rc, "Item");
+                    let keys = fresh(rc, "Keys");
+                    let field = fresh(rc, "Key");
+                    steps.push(PlanStep::Keyed {
+                        key,
+                        typ,
+                        list,
+                        item,
+                        keys,
+                        field,
+                    });
+                }
+                Seg::I(i) | Seg::K(i) => {
+                    at = None;
+                    flush(&mut steps, &mut fields);
+                    let item = fresh(rc, "Item");
+                    steps.push(PlanStep::Element { i, item });
+                }
+            }
+        }
+        flush(&mut steps, &mut fields);
+        match steps.is_empty() {
+            true => base,
+            false => Plan::Path {
+                base: Box::new(base),
+                steps,
+            },
         }
     }
 
@@ -9490,84 +9638,6 @@ impl<'u> Lowerer<'u> {
             g.hoisted(pred, var_name, Read::Value(read.0, read.1));
         }
         pre.push(Lit::Pos(atom_at(pred, vec![var(var_name)], span)));
-    }
-
-    /// Fields and indexes into a value: `__path(V, "a.b")`, `member(V, i, W)`.
-    fn path_of(
-        &mut self,
-        rc: &mut Rc,
-        v: Term,
-        path: Vec<Seg>,
-        pre: &mut Vec<Lit>,
-        span: Span,
-    ) -> L<Term> {
-        self.keyed_path_of(rc, v, path, None, pre, span)
-    }
-
-    /// `path_of` from the attribute `at` (the resource's type and the
-    /// attribute's top segment) of a resource: an element by its key,
-    /// `containers["api"]`, is the element of the keyed list whose one key
-    /// field (`type_list_key`) has that value (R-35). Elsewhere a key is a
-    /// position.
-    fn keyed_path_of(
-        &mut self,
-        rc: &mut Rc,
-        mut v: Term,
-        path: Vec<Seg>,
-        mut at: Option<(Term, String)>,
-        pre: &mut Vec<Lit>,
-        span: Span,
-    ) -> L<Term> {
-        let mut fields: Vec<String> = Vec::new();
-        let flush = |v: Term, fields: &mut Vec<String>| {
-            if fields.is_empty() {
-                return v;
-            }
-            let p = fields
-                .iter()
-                .map(|f| crate::address::path_key(f))
-                .collect::<Vec<_>>()
-                .join(".");
-            fields.clear();
-            func("__path", vec![v, str_term(&p)])
-        };
-        for s in path {
-            match s {
-                Seg::F(f) => {
-                    if let Some((_, list)) = &mut at {
-                        list.push('.');
-                        list.push_str(&crate::address::path_key(&f));
-                    }
-                    fields.push(f)
-                }
-                Seg::K(k) if at.is_some() => {
-                    let (typ, list) = at.take().expect("matched");
-                    v = flush(v, &mut fields);
-                    let item = var(&fresh(rc, "Item"));
-                    let keys = var(&fresh(rc, "Keys"));
-                    let key = var(&fresh(rc, "Key"));
-                    pre.extend([
-                        Lit::Pos(atom_at("member", vec![v, item.clone()], span)),
-                        Lit::Pos(atom_at(
-                            "type_list_key",
-                            vec![typ, str_term(&list), keys.clone()],
-                            span,
-                        )),
-                        Lit::Eq(keys, Term::List(vec![key.clone()])),
-                        Lit::Eq(func("__path", vec![item.clone(), key]), k),
-                    ]);
-                    v = item;
-                }
-                Seg::I(i) | Seg::K(i) => {
-                    at = None;
-                    v = flush(v, &mut fields);
-                    let w = var(&fresh(rc, "Item"));
-                    pre.push(Lit::Pos(atom_at("member", vec![v, i, w.clone()], span)));
-                    v = w;
-                }
-            }
-        }
-        Ok(flush(v, &mut fields))
     }
 
     /// The read a resolved chain is, with `value` in its value column: the

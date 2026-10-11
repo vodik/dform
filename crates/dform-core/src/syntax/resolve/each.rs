@@ -114,6 +114,7 @@ impl Lowerer<'_> {
             body.push(Lit::Pos(atom_at("want", vec![typ.clone(), var(&v)], at)));
             rc.types.insert(src.clone(), typ);
         } else {
+            let mark = body.len();
             let res = self.resolve(rc, &prefix, body)?;
             let of = match &res {
                 Res::Ref { typ, addr, path } => path_string(path)
@@ -128,7 +129,8 @@ impl Lowerer<'_> {
                      of a resource's list (`r.l[_]`), and the path before this one is neither",
                 );
             };
-            let list = self.realize(rc, res, Pos::Content, body, span)?;
+            let local = body.split_off(mark);
+            let list = self.realize(rc, res, Pos::Content, (local, body), span)?;
             body.push(Lit::Pos(atom_at("member", vec![list, var(&v)], at)));
             rc.elems.insert(src.clone(), of);
         }
