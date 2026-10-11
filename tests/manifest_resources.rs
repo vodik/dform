@@ -2,8 +2,7 @@
 //! stream is the list of its documents, and `resource T NAME = VALUE
 //! where ..` makes a resource of each, its body the document.
 
-mod common;
-mod tables_common;
+use crate::tables_common;
 use tables_common::{push, repo, scratch};
 
 /// Two CustomResourceDefinitions as Traefik ships them: one `---` stream,

@@ -3,8 +3,6 @@
 //! `r` a reference column's (R-42), when the reference is of another
 //! type. `not x in e` is the same literal.
 
-mod common;
-
 /// The rows of `pred` the program file `src` derives.
 fn facts(src: &str, pred: &str) -> Vec<String> {
     let program = dform_core::parser::parse_file("t.df", src).unwrap_or_else(|e| panic!("{e}"));

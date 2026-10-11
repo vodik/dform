@@ -5,7 +5,7 @@
 //! `DFORM_S3_TEST_ENDPOINT` names one, as tests/s3.rs takes it, else the
 //! fake S3 server), and the controller runs the workload from there.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch, controller_log};
 use dform_core::store::{S3Spec, Store};
 use dform_s3::S3Store;

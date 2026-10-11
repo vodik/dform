@@ -13,7 +13,7 @@
 //! in tick 2 (it waits on the database's endpoint), reads it. The plan
 //! showed `rv = <none> → "115"`; tick 2 plans `"200"`.
 
-mod common;
+use crate::common;
 use common::{Scratch, brief};
 
 const BEFORE: &str = r#"use fake

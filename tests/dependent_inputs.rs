@@ -4,7 +4,7 @@
 //! key is never under a clause; an input declared twice follows the rule
 //! every guarded name does.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const P: &str = r#"

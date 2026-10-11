@@ -3,7 +3,7 @@
 //! every position a `check` is written (an input, an object input's
 //! field, a `type` block's attribute). Each pair plans the same.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 fn plan(s: &Scratch, src: &str, extra: &[&str]) -> Run {

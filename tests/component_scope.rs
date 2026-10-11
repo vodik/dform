@@ -5,7 +5,7 @@
 //! the component where its own `x` shadows it; a module's body has no
 //! scope around it. On the mock.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// A module whose input, let, resource and relation its component reads

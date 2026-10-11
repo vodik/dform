@@ -3,7 +3,7 @@
 //! the same way, and nothing is applied. A read of what may still derive
 //! is not: it is an unknown a later tick fills.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// `other` is wanted only when `peered` is set; the subnet reads it.

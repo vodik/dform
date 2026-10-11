@@ -3,7 +3,7 @@
 //! longer is killed with everything `sh` started; the apply goes on with
 //! a warning, its lock never held by a sink.
 
-mod common;
+use crate::common;
 use common::{Scratch, mock};
 
 const PROG: &str = r#"

@@ -3,7 +3,7 @@
 //! lowers as the rebinding does: a variable bound to the call, then the
 //! read.
 
-mod common;
+use crate::common;
 use common::{error, facts};
 
 #[test]

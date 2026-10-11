@@ -4,7 +4,7 @@
 //! element whose key is `k` (or `c`'s), leaf by leaf at their own rank, and
 //! several authors' lists merge by key. An unkeyed list stays one value.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 const DEPLOYMENT: &str = "\n\nuse k8s\n\n\

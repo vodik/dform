@@ -5,7 +5,7 @@
 //! project's plan: two ticks, a `later` group, and the conflict inside a
 //! component copied twice.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 /// The two-phase GKE stack (a second tick, a `later` group) with a

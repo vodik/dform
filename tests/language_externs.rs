@@ -3,7 +3,7 @@
 //! the mock (`externs.df`), recorded in the plan file; nothing keeps them
 //! (`memo.first` does: tests/memo.rs).
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 const P: &str = r#"

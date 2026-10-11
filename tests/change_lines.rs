@@ -5,7 +5,7 @@
 //! clause that stopped holding, `not in the program`, a rename guess),
 //! its attributes `path = value`, no `was`; a destroy's nothing.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 fn dev(s: &Scratch, args: &[&str]) -> common::Run {

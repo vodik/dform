@@ -3,7 +3,7 @@
 //! drift as facts and the policy gate, driven one event at a time with
 //! `--once`, and the polling loop once with `--max-events`.
 
-mod common;
+use crate::common;
 use common::Scratch;
 use std::process::Command;
 

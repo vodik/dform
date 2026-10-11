@@ -1,6 +1,6 @@
 //! The mock Kubernetes provider: crates/dform-mock/schemas/k8s.df, no cluster.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 /// This plan is pinned as tests/golden/k8s_demo/default.plan.txt (the

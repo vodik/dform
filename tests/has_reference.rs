@@ -4,7 +4,7 @@
 //! `not has old` is a guard that the resource does not exist; `has r.id`
 //! is an error naming `has r`.
 
-mod common;
+use crate::common;
 use common::{Scratch, error};
 
 const PROG: &str = r#"

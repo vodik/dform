@@ -2,7 +2,7 @@
 //! input: rows that agree are one value, rows that disagree at the winning
 //! rank are a conflict naming both, a `@default` row gives way.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 fn plan(src: &str) -> common::Run {

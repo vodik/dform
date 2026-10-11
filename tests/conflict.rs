@@ -4,7 +4,7 @@
 //! does not hide it, and the conflict names the leaf that disagrees and,
 //! for an element of a keyed list, its key.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 fn plan(name: &str, program: &str) -> Run {

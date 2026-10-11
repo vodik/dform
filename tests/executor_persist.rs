@@ -1,7 +1,7 @@
 //! Persist identity after every action: a failure or a crash at action N
 //! leaves the N-1 identities before it in state.
 
-mod common;
+use crate::common;
 use common::{Scratch, identities, mock};
 
 const PROG: &str = r#"

@@ -4,7 +4,7 @@
 //! kept sealed with the stack's key, never in the clear. `time.now()` is
 //! the `time` provider's extern, read again every run.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch, dform, repo, yes};
 
 /// `dform ARGS` in `s` with the environment `env` (`RANDOM_MASTER` unset

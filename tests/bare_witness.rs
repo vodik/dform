@@ -2,7 +2,7 @@
 //! value out, on one line in the order the program wrote it: never the
 //! witness's JSON (`{"component":"edge","team":"ops"}`, by key).
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 #[test]

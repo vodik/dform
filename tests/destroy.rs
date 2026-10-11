@@ -6,7 +6,7 @@
 //! Afterwards the deployment's state is empty and `stack list` omits it;
 //! its audit log stays. `plan --destroy` prints the plan.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 /// The k3s shape on the mock: a server, a provider configured from it,

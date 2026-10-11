@@ -1,6 +1,6 @@
 //! Computed values come only from Apply; secrets travel as labels.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 #[test]

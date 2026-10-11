@@ -4,7 +4,7 @@
 //! one, copied by `instance`, its predicates private per copy, its inputs
 //! and outputs the data boundary; a module writes without a grant.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 fn plan(src: &str) -> common::Run {

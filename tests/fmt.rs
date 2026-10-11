@@ -2,7 +2,7 @@
 //! changes only whitespace and commas, no line break of the author's
 //! survives it (R-52), and the CLI rewrites or checks.
 
-mod common;
+use crate::common;
 use common::{Scratch, corpus, df_files, rel, repo};
 use dform::syntax::SyntaxKind::{COMMA, WHITESPACE};
 use dform::syntax::parser::parse;

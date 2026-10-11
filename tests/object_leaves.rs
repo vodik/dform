@@ -5,7 +5,7 @@
 //! not as one unknown map beside its own keys, which disagreed with it
 //! ("two contributions disagree at status.allocatedResources.cpu").
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 /// A schema of our own: a volume whose computed `status.capacity` is a

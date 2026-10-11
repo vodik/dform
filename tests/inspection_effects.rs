@@ -2,8 +2,8 @@
 //! (DESIGN.org R-11c), a result set of `scope  effect  what`, text and
 //! `--json`.
 
-mod common;
-mod inspection_common;
+use crate::common;
+use crate::inspection_common;
 use inspection_common::{dform, golden};
 
 /// The play example: `baseline` writes `(*, tags)` and `(iam.policy,

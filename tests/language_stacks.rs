@@ -2,7 +2,7 @@
 //! scopes its state; its backend (dform.toml) holds the state and a lock,
 //! other stacks read its outputs, and a provider's `use` picks the mock's schema.
 
-mod common;
+use crate::common;
 use common::{Scratch, copy_dir, repo};
 use std::process::{Command, Stdio};
 

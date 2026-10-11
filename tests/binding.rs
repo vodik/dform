@@ -4,7 +4,7 @@
 //! literal that does not depend on it, in any order; `=` with both sides
 //! bound is an error that says to write `==`.
 
-mod common;
+use crate::common;
 use common::error;
 use dform_core::engine;
 use dform_core::parser::parse_file;

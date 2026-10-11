@@ -14,7 +14,7 @@
 //! diagnostic quotes beside its site. The mock's own chaos log on its stderr says the
 //! address as the plan does too.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch, repo};
 
 /// The stored address forms in `text`, outside backtick-quoted code: each

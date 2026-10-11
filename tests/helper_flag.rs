@@ -7,7 +7,7 @@
 //! too; and none is reported stuck in place of the rule it was written
 //! for. On the mock.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 const PLATFORM: &str = r#"

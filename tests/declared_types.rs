@@ -7,7 +7,7 @@
 //! let fed by an enum and a string is a string, the wider. A value that is
 //! not assignable is an error naming the let once, at its declaration.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 /// A project whose one stack `s` is `src`, after the key `env`.

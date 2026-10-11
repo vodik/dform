@@ -7,7 +7,7 @@
 //! `io.read` (`Host.Read`, R-153, R-155) as dform.toml grants it, a scheme a
 //! provider declares routed to that provider by the host.
 
-mod common;
+use crate::common;
 
 use dform::plugin::credentials::{Secret, provide};
 use dform::plugin::host::{

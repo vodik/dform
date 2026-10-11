@@ -8,7 +8,7 @@
 //! The mock plays the cluster: `crds` in its settings names the schema it
 //! serves for a CRD once its world holds that CRD.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 /// Traefik's CRDs as it ships them, one `---` stream (trimmed).

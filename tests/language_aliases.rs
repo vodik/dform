@@ -2,7 +2,7 @@
 //! transparent, in scope in its file or component, and public: another
 //! module reads it through the module's name, `types.environment` (R-65).
 
-mod common;
+use crate::common;
 use common::Scratch;
 use dform::ast::Stmt;
 

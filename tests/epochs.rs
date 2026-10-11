@@ -6,7 +6,7 @@
 //! keyed with the first epoch's master, carried over, so a write-only
 //! value is still proven unchanged.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch, dform, repo, yes};
 
 const PASS: (&str, &str) = ("DFORM_TEST_PASSPHRASE", "correct horse battery staple");

@@ -4,7 +4,7 @@
 //! `oci.with_registry`, printed canonically, and its text where a string
 //! is wanted.
 
-mod common;
+use crate::common;
 use common::error;
 
 /// A program file's facts (a `let` and a typed position are the

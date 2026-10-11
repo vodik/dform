@@ -3,7 +3,7 @@
 //! the order only where the schema allows either, and is an error on a
 //! destroy_first type.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const NET: &str = r#"

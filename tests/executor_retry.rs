@@ -2,7 +2,7 @@
 //! not drift. Read is retried up to the type's `type_retry` attempts
 //! (default 3), each retry logged on stderr.
 
-mod common;
+use crate::common;
 use common::{Scratch, mock};
 
 const PROG: &str = r#"

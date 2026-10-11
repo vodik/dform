@@ -5,7 +5,7 @@
 //! the object. A field the input does not have, or a value that is no
 //! object, is a violation naming the input (and the field); none panics.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const BACKUPS: &str = r#"

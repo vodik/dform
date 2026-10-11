@@ -6,7 +6,7 @@
 //! another input's value makes) is a deny after evaluation, which prints
 //! in the policy block like any deny, with the word `check`.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const CHECKED: &str = "key env: enum(dev, prod)\n\

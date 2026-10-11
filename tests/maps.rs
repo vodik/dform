@@ -3,8 +3,7 @@
 //! schema attribute. `--set labels.team=x` and `set from` give one key,
 //! `(k, v) in labels` takes each entry.
 
-mod common;
-mod tables_common;
+use crate::tables_common;
 use tables_common::scratch;
 
 /// Whether a query's table has the row `cells`.

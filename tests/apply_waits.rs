@@ -5,7 +5,7 @@
 //! wait`, 10m by default; not its calls' `timeout`), saying so on stderr;
 //! past it the apply stops, saying what it waited on.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// The database's endpoint gates the vpc: until the world has it, the

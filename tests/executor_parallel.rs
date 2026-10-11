@@ -5,7 +5,7 @@
 //! answer them in simulated time (`plugin::queue`), so the schedule is
 //! exact there.
 
-mod common;
+use crate::common;
 use common::{BACKENDS, Backend, Scratch};
 
 const PROG: &str = r#"

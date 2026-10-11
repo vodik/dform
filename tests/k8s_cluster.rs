@@ -6,7 +6,7 @@
 //!   kind create cluster --name dform-test --kubeconfig target/kind.kubeconfig
 //!   DFORM_K8S_TEST_KUBECONFIG=target/kind.kubeconfig cargo test --test k8s_cluster
 
-mod common;
+use crate::common;
 use common::{Run, Scratch, repo};
 use serde_json::{Value as Json, json};
 

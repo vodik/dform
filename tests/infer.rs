@@ -5,7 +5,7 @@
 //! first source of an undeclared table, and the check against the
 //! provider's schema.
 
-mod common;
+use crate::common;
 use common::Scratch;
 use dform::parser::parse_file;
 use dform::spell;

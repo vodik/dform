@@ -5,7 +5,7 @@
 //! merge key inside the value with `(schema default)`; `-vv` expands to leaves; `why` and
 //! `query` print a value the same way.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const SCHEMA: &str = r#"

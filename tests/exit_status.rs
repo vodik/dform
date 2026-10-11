@@ -4,7 +4,7 @@
 //! One run per status on the mock; `plan --json` says the word in
 //! `outcome`.
 
-mod common;
+use crate::common;
 use common::{Scratch, mock};
 
 const PROG: &str = r#"

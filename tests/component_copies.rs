@@ -4,7 +4,7 @@
 //! own resources under it (`agent-0.instance`), read `node["agent-0"].instance` and
 //! `node[_].instance`. A row that goes is a delete of its copy.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// The reviewer's shape: a node is an instance and its volume, which

@@ -2,7 +2,7 @@
 //! command line's definitions; dform(1)'s hand-written sections are
 //! docs/man's fragments, which docs/reference.md carries unchanged.
 
-mod common;
+use crate::common;
 
 /// `cargo xtask man --check`: docs/reference.md's copies of the fragments
 /// are the fragments.

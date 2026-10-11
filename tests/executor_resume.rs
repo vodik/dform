@@ -2,7 +2,7 @@
 //! finishes the remaining actions, or reports what changed underneath them
 //! and stops.
 
-mod common;
+use crate::common;
 use common::{BACKENDS, Backend, Scratch, mock};
 
 const PROG: &str = r#"

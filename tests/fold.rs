@@ -5,7 +5,7 @@
 //! with the same note; a secret inside a value is `(sensitive)` in place;
 //! `-v` lays the value out the same; `why` keeps each leaf's chain.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const SCHEMA: &str = r#"

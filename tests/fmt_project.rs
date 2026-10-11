@@ -2,7 +2,7 @@
 //! `textDocument/formatting`) formats a project's file as `dform fmt`
 //! does, with the project's schemas typing its literals.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 #[test]

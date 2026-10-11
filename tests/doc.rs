@@ -2,7 +2,7 @@
 //! library, every callable function of std/*.df with its signature,
 //! summary and example, from the registry.
 
-mod common;
+use crate::common;
 use common::repo;
 use dform::functions::{SOURCES, registry};
 

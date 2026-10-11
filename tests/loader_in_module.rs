@@ -5,7 +5,7 @@
 //! provider for the deployment, and two that disagree are a conflict
 //! naming both.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// ConfigMaps as a vendored manifest lists them.

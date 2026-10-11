@@ -5,8 +5,7 @@
 //! selection) with its size; `-v` lays the value out; an update says the
 //! leaves that change; `why` points at the row.
 
-mod common;
-mod tables_common;
+use crate::tables_common;
 use tables_common::{push, repo, scratch};
 
 const MAPS: &str = "\

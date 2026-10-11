@@ -1,8 +1,8 @@
 //! `dform query`: patterns and conjunctions over the final fact store,
 //! printed as a table with one column per variable.
 
-mod common;
-mod inspection_common;
+use crate::common;
+use crate::inspection_common;
 use common::{Scratch, repo};
 use inspection_common::{dform, golden};
 

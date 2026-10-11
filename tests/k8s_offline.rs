@@ -4,7 +4,7 @@
 //! (`/openapi/v3`, GET, server-side apply with field managers and dry runs,
 //! DELETE) for the conformance suite and a whole apply.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch, repo};
 use serde_json::{Value as Json, json};
 use std::collections::BTreeMap;

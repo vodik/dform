@@ -4,7 +4,7 @@
 //! replacement. A differing value is kept, and the plan says so under the
 //! resource; a replace for another reason sends the current value.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch, dform, repo, yes};
 
 /// `dform ARGS` in `s`, as alice, at `now`.

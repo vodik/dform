@@ -6,8 +6,8 @@
 //! The server evaluates read only: the copies gain no dform.state/ but by
 //! an explicit apply.
 
-mod common;
-mod lsp_client;
+use crate::common;
+use crate::lsp_client;
 
 use common::{Scratch, repo};
 use lsp_client::{Client, example, find, uri};

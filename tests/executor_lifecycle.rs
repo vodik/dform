@@ -2,7 +2,7 @@
 //! and `ignore_changes(r, Path)` are plain facts the planner reads, `r` a
 //! resource reference (R-42).
 
-mod common;
+use crate::common;
 use common::{Scratch, mock};
 
 const NET: &str = r#"

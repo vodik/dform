@@ -5,7 +5,7 @@
 //! is, the reader plans with the value; a deployment that has published
 //! and lacks the output is no wait.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const PLATFORM: &str = r#"

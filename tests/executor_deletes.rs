@@ -3,7 +3,7 @@
 //! create_first, when the old object stays deposed in state until
 //! what depends on it has moved.
 
-mod common;
+use crate::common;
 use common::{Scratch, mock};
 
 /// net.vpc sorts before its dependents; its delete still comes last.

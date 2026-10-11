@@ -6,8 +6,8 @@
 //! a read of a data source inside it and a call of itself are errors. On
 //! the mock.
 
-mod common;
-mod lsp_client;
+use crate::common;
+use crate::lsp_client;
 
 use common::Scratch;
 

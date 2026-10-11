@@ -11,8 +11,8 @@
 //! - what has no definition is a variable, an attribute path, a key, a
 //!   provider's name, a builtin type or relation, or a word of the syntax.
 
-mod common;
-mod lsp_client;
+use crate::common;
+use crate::lsp_client;
 
 use dform_core::names::{Decls, Parsed, Symbol, What};
 use dform_core::syntax::SyntaxKind;

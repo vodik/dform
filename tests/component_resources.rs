@@ -4,7 +4,7 @@
 //! attributes (`blue.id`), `x in vpc` its copies. A component of another
 //! file is named by its path, as any item is.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// A component, `vpc`, and two resources of it.

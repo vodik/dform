@@ -4,7 +4,7 @@
 //! master state was applied with; `--new-master` takes the new one, every
 //! derived secret changing, and the audit log says so.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch, dform, repo, yes};
 
 /// `dform ARGS` in `s` with the environment `env` (`RANDOM_MASTER` unset

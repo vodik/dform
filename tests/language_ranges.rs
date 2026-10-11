@@ -2,7 +2,7 @@
 //! order, for "once per i"; a range is a value (R-180, tests/range_type.rs),
 //! never a list.
 
-mod common;
+use crate::common;
 use common::{Scratch, error, facts};
 
 #[test]

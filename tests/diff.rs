@@ -3,7 +3,7 @@
 //! apply (read at the commit the audit log recorded), and which inputs and
 //! stated rows changed since the apply before.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 use serde_json::Value;
 

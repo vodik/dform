@@ -2,7 +2,7 @@
 //! interpolation"): a hole runs to its matching `}`, and a string in it is
 //! the hole's own, its own holes nesting to any depth.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// The private project's cloud-init: a `yaml.encode` call in a hole whose

@@ -6,7 +6,7 @@
 //! secrets.decode(io.read(..))`. A plan without the master reads each
 //! value by its stand-in, so a value not set again is proven unchanged.
 
-mod common;
+use crate::common;
 use age::secrecy::ExposeSecret;
 use common::{Run, Scratch, dform, repo, yes};
 use std::io::Write;

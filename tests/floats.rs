@@ -6,7 +6,7 @@
 //! compare by value; a document's `1.5` is a float; `--set` reads by the
 //! declared type; NaN and the infinities are errors where a float is read.
 
-mod common;
+use crate::common;
 use common::facts;
 
 /// The evaluation error of the core-text program `src`.
@@ -105,7 +105,7 @@ most(x) where x = max(v), r(_, v)
     assert_eq!(facts(src, "most"), ["most(2)"]);
 }
 
-mod tables_common;
+use crate::tables_common;
 use tables_common::scratch;
 
 /// A schema attribute typed `number` takes an int or a float and sends a

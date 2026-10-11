@@ -1,6 +1,6 @@
 //! `dform dev --chaos ... apply`: failure and latency injection on the fake provider.
 
-mod common;
+use crate::common;
 use common::{Scratch, mock};
 
 const PROG: &str = r#"

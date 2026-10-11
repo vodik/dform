@@ -4,7 +4,7 @@
 //! resource of the deployment (a cluster's endpoint, its kubeconfig). One
 //! warning per provider, listing the names.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 const NAMES: &str = r#"

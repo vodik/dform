@@ -3,7 +3,7 @@
 //! type; an input of an enum type is a cell, not a type. The errors have a
 //! case in tests/syntax/err/membership.df.
 
-mod common;
+use crate::common;
 use common::Scratch;
 use dform::parser::parse_file;
 use dform::spell;

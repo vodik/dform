@@ -3,7 +3,7 @@
 //! 0..agents`, never `agents`, an input the clause reads and the same on
 //! every row. `-v` says how, the values read included.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const COPIES: &str = r#"input agents: int = 2

@@ -8,7 +8,7 @@
 //! derives is an error at its site, and the module's Secret read bare in
 //! its component is the module's (R-186).
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 /// The module: the Secret, and a component whose CronJob reads its name

@@ -2,7 +2,7 @@
 //! signatures; a secret reaching a comparison, a negation, a counting
 //! aggregate, a public place or a name is a compile error with a span.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 fn run(body: &str) -> common::Run {

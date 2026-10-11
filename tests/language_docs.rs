@@ -2,7 +2,7 @@
 //! an item lower to `doc(Kind, Name, Key, Value)` facts a policy can read
 //! and require; `dform doc` renders a project's as Markdown.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 use dform::ast::{Stmt, Term};
 use dform::value::Value;

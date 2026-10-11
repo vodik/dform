@@ -2,7 +2,7 @@
 //! is declared in `std/*.df`, named by its package, and the engine's
 //! bodies, the resolver and the reference read the same declarations.
 
-mod common;
+use crate::common;
 use common::{error, facts};
 use dform_core::engine;
 use dform_core::parser::parse_program;

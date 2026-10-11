@@ -15,7 +15,7 @@
 
 #![cfg(feature = "wasm")]
 
-mod common;
+use crate::common;
 use common::{Scratch, identities};
 
 const PROG: &str = r#"

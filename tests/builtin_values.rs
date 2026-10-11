@@ -4,7 +4,7 @@
 //! `oci` image, and so is its interpolation, `":" in "${c.image}"` (R-155). A null there is a content position (the literal waits);
 //! an argument with no value is a located error naming it.
 
-mod common;
+use crate::common;
 use common::{Scratch, mock};
 
 /// The facts of `pred` the program file `src` derives.

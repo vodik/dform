@@ -2,7 +2,7 @@
 //! looked up, never searched, and loaded once however often it is named;
 //! `[packages.NAME]` mounts another project under a name.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// The same module named from two files is one file: were it loaded

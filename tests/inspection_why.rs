@@ -1,8 +1,8 @@
 //! `dform why`: a value's chain (R-122), and with `--tree` the
 //! derivation tree read from the provenance circuit.
 
-mod common;
-mod inspection_common;
+use crate::common;
+use crate::inspection_common;
 use common::{Scratch, repo};
 use inspection_common::{dform, golden};
 

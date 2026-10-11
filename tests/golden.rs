@@ -11,7 +11,7 @@
 //! constraint) still gets a snapshot: its stdout+stderr+exit status, pinned
 //! like any other output.
 
-mod common;
+use crate::common;
 use common::{Backend, Scratch, repo};
 use std::path::PathBuf;
 

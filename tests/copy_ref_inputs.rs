@@ -4,7 +4,7 @@
 //! and on a module's `use`. A type need not declare an `id` for its
 //! reference to be given.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// A component whose input is a namespace, reading the namespace's name.

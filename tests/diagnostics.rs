@@ -2,7 +2,7 @@
 //! predicates, negative cycles, and `why`'s owners (ticket "Spans through
 //! lowering to every diagnostic").
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 fn plan(src: &str) -> common::Run {

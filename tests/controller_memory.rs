@@ -4,7 +4,7 @@
 //! length after every event (`DFORM_TEST_SOURCES`), not RSS: exact, and
 //! not at the allocator's mercy.
 
-mod common;
+use crate::common;
 use common::Scratch;
 use std::io::BufRead;
 

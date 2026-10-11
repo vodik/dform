@@ -5,7 +5,7 @@
 //! position, lexically: through the file's own `use`, or by the path from
 //! the root, never through what another file loads.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// The type's home: a module with an input, the type in its header.

@@ -3,7 +3,7 @@
 //! is pointed at. Only an entrypoint is deployed, so only one declares a
 //! `key`; any other file is a module, used, not deployed.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const NET: &str = "use fake\nresource net.vpc shared { cidr = \"10.9.0.0/16\" }\n";

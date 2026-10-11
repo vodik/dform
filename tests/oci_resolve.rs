@@ -9,7 +9,7 @@
 //! reached "not yet", the digest last resolved standing in; a policy that
 //! asks for a digest holds on the resolved value.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Read, Write};

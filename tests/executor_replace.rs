@@ -3,7 +3,7 @@
 //! it is updated after the replacement exists (chaos `fresh-ids`: every
 //! Create mints a new id, as a real cloud does).
 
-mod common;
+use crate::common;
 use common::{Scratch, mock};
 
 const NET: &str = r#"

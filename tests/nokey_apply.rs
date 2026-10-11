@@ -6,7 +6,7 @@
 //! rest (exit 5), listing them; a plan file it writes holds no digest of a
 //! secret and is applied the same way.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch, dform, repo, yes};
 
 const PASS: (&str, &str) = ("DFORM_TEST_PASSPHRASE", "correct horse battery staple");

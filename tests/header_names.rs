@@ -3,7 +3,7 @@
 //! read whose first name means both is the error, at the read. A name from
 //! the clause is a string, `"${t}"`.
 
-mod common;
+use crate::common;
 use common::{Scratch, error, mock};
 
 /// `resource net.vpc env` beside `let env` is the VPC named "env"; a bare

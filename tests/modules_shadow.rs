@@ -2,7 +2,7 @@
 //! over what its user's scope brings in (R-101), and a read through an
 //! input typed `ref(T)` reads the referenced resource's attribute.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// traefik.df's own `resource net.vpc traefik` is what `traefik.cidr`

@@ -5,7 +5,7 @@
 //! the `use` to give it in; the user gives it by name (`use m { env }`)
 //! or `env = env`. On the mock.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// A policy pack that reads the stack's `env` and `region` bare, each

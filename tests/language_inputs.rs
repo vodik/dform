@@ -2,7 +2,7 @@
 //! `--input-file` normal ones; types, required inputs and refinements are
 //! checked.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const P: &str = r#"

@@ -8,7 +8,7 @@
 //! that configures it; a create whose answer was lost is sent again with
 //! its idempotency key then. No message names that key.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 /// The k3s shape on the mock: a server, a provider configured from it,

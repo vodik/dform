@@ -1,6 +1,6 @@
 //! The Terraform-shaped mock AWS provider: Optional+Computed and keyless sets.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 fn demo() -> String {

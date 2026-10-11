@@ -4,7 +4,7 @@
 //! guarded by `has r.metadata` does not read what it writes. Everywhere
 //! else, and for an attribute no schema declares, `has` stays a value test.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 fn project(stack: &str) -> Scratch {

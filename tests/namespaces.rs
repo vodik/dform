@@ -4,7 +4,7 @@
 //! an attribute some type of the namespace lacks has a case in
 //! tests/syntax/err/membership.df.
 
-mod common;
+use crate::common;
 use common::{Scratch, mock};
 
 /// A label on every Kubernetes object, none on the fake cloud's (whose

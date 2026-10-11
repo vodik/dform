@@ -1,7 +1,7 @@
 //! Nulls, stuck instances and phases (E §2.7) at the CLI: plan sections for
 //! C's two-phase GKE stack against the gke mock schema.
 
-mod common;
+use crate::common;
 use common::{Scratch, brief, repo};
 
 const GKE_PLAN: &str = r#"plan: 6 changes (6 create) over 2 ticks; policy: 2 hold · 1 undetermined

@@ -5,7 +5,7 @@
 //! (an instance's `user_data` is never sent again). A provider that
 //! cannot keep it stops the update as before (tests/nokey_apply.rs).
 
-mod common;
+use crate::common;
 use common::{Run, Scratch, dform, repo, yes};
 use dform_provider_ovh::fake::{self, Server};
 

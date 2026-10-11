@@ -1,8 +1,8 @@
 //! `dform dev graph`: DOT for the resource DAG, the partition graph and any
 //! binary relation, with deterministic node and edge order.
 
-mod common;
-mod inspection_common;
+use crate::common;
+use crate::inspection_common;
 use common::Scratch;
 use inspection_common::{dform, golden};
 

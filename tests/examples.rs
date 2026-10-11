@@ -7,7 +7,7 @@
 //! tell the reader to run runs as written, in order, and prints what they
 //! quote (`walkthrough`).
 
-mod common;
+use crate::common;
 use common::{Scratch, copy_dir, repo};
 
 /// What the test adds to each README apply: apply asks for confirmation,

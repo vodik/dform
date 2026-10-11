@@ -4,7 +4,7 @@
 //! are a deny naming both sites, and a read of the name is the one that
 //! holds.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 fn plan(s: &Scratch, args: &[&str]) -> common::Run {

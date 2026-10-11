@@ -7,7 +7,7 @@
 //! says the provider's schema answered it. Here the fake's `net.vpc`,
 //! its schema with the fact added.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 const BOTH: &str = r#"

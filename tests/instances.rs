@@ -1,7 +1,7 @@
 //! A component is a resource type the program defines (R-65, R-67): its
 //! copies are instances, named and printed as resources are.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// A component, `vpc`, copied twice, one copy gated by a clause.

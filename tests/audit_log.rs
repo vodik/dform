@@ -4,7 +4,7 @@
 //! accepts; an edited entry is named; secrets never appear; a sink gets
 //! every entry and its failure is only a warning.
 
-mod common;
+use crate::common;
 use common::{Scratch, mock, repo};
 
 const PROG: &str = r#"

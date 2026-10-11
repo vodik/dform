@@ -4,7 +4,7 @@
 //! over that digest offline before any Apply call. The tokens come from
 //! the example signer, `dform-approve`, on examples/approvals/stacks/approvals.df.
 
-mod common;
+use crate::common;
 use common::Scratch;
 use std::process::Command;
 

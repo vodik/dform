@@ -5,7 +5,7 @@
 //! its `spec` whole, and as one object with `spec` inside. A template
 //! left out is refused by the plan at its site (R-184).
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 /// `dform plan` in `s` with no cluster in reach: the real provider plans

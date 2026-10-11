@@ -4,7 +4,7 @@
 //! over `deformation/4`); a change anywhere else is drift, reported, and
 //! the run goes on.
 
-mod common;
+use crate::common;
 use common::{Scratch, mock};
 
 /// Tick 1 creates the database; the vm's update waits on its endpoint.
