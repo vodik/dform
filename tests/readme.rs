@@ -82,8 +82,7 @@ fn readmes() -> Vec<String> {
 
 /// The lines `ranges` names of the file `path` (`1-2,5`), in turn.
 fn lines_of(path: &str, ranges: &str) -> Vec<String> {
-    let text = std::fs::read_to_string(repo().join(path))
-        .unwrap_or_else(|e| panic!("{path}: {e}"));
+    let text = std::fs::read_to_string(repo().join(path)).unwrap_or_else(|e| panic!("{path}: {e}"));
     let all: Vec<&str> = text.lines().collect();
     let mut out = Vec::new();
     for r in ranges.split(',') {
@@ -181,7 +180,11 @@ fn run(b: &Block, marker: &str) {
     assert!(!commands.is_empty(), "{}: no `$` line", b.at);
     for (c, want) in commands {
         let Some(args) = runnable(c) else {
-            assert!(want.is_empty(), "{}: `{c}` is not run, so shows nothing", b.at);
+            assert!(
+                want.is_empty(),
+                "{}: `{c}` is not run, so shows nothing",
+                b.at
+            );
             continue;
         };
         let r = s.run(&args);
@@ -217,12 +220,7 @@ fn check(readme: &str) {
                     .rsplit_once(':')
                     .unwrap_or_else(|| panic!("{}: `{marker}` is no `PATH:LINES`", b.at));
                 let want = lines_of(path, ranges);
-                assert_eq!(
-                    b.lines,
-                    want,
-                    "{}: the block is not {path}:{ranges}",
-                    b.at
-                );
+                assert_eq!(b.lines, want, "{}: the block is not {path}:{ranges}", b.at);
             }
         }
     }
