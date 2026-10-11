@@ -95,11 +95,8 @@ resource aws.vpc_peering_connection "${from.tags.Name}-${to.tags.Name}" {
   peer_vpc = to
 } where link(from, to)
 
-deny "a spoke peers only the core" { peering } where {
-  peering in aws.vpc_peering_connection
-  spoke(peering.vpc)
-  spoke(peering.peer_vpc)
-}
+deny "a spoke peers only the core" { peering }
+  where peering in aws.vpc_peering_connection, spoke(peering.vpc), spoke(peering.peer_vpc)
 ```
 
 ```
@@ -325,11 +322,8 @@ and a policy reads it:
 ```dform
 lifecycle(orders, "prevent_destroy") where env == "prod"
 
-deny "every prod database is kept" { db } where {
-  env == "prod"
-  db in aws.db_instance
-  not lifecycle(db, "prevent_destroy")
-}
+deny "every prod database is kept" { db }
+  where env == "prod", db in aws.db_instance, not lifecycle(db, "prevent_destroy")
 ```
 
 `moved(aws.vpc, "main", network.vpc)` moves a resource to a new address

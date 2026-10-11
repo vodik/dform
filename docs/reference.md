@@ -3002,11 +3002,8 @@ By)`, for an approval:
 
 ```dform
 use time
-warn "${k} is older than 90 days" where {
-  secrets(k, "random", _, at)
-  now = time.now()
-  now - at > 90d
-}
+warn "${k} is older than 90 days"
+  where secrets(k, "random", _, at), now = time.now(), now - at > 90d
 requires_approval(r, "rotates ${k}") where rotated(k, _, _), deformation(_, r, _)
 ```
 
@@ -3778,8 +3775,12 @@ error  the block opened on line 3 is never closed
 ```
 
 `dform fmt [PATH...]` formats files in place (no PATH: the project's `.df` files):
-each construct in its normal form (a body on one line when it fits in 100
-columns, else `where { .. }`; `{ a }` for `{ a: a }`; `==` between bound
+each construct in its normal form (a `where` clause on the statement's
+line when it fits in 100 columns, else on a line of its own one step
+deeper, else `where` ending the line and a literal per line under it,
+each with a trailing comma, the last's too, as a broken list: a literal
+per line whatever the width past three literals or with a comment among
+them; `{ a }` for `{ a: a }`; `==` between bound
 sides; docs/grammar.md "Formatting"), two-space indentation per open
 bracket, block or body, one space around operators and after commas,
 `{ a: 1 }` inside braces, at most one blank line, and no comma where a
@@ -3807,7 +3808,10 @@ not rewritten.
     the block, is a query (a resource per match), a field's reads hoist
     into the block's body; a name in quotes interpolates
     (`"private-${z}"`).
-  - `head where body`, `head where { lit NL lit }`; `let name = term where
+  - `head where body`: literals separated by commas; a clause too long
+    for its line hangs, `head` then `  where body` on the next line, or
+    is `head where` then a literal per line, indented, each ending with
+    `,` (a braced body is an error that says so); `let name = term where
     body` is a value, read by name.
   - `set r.tags = { team: "platform" } where r in resource`: a contribution.
   - `deny "msg" { key: v } where body`, `warn ...`; the message interpolates.
@@ -4094,10 +4098,8 @@ deployment's state; a plan keeps nothing. `dform secrets rotate
 ```dform
 use time
 let created = memo.first("db-created", time.now())   # observed once
-warn "rotate the database password" where {
-  memo.first("db-created", time.now(), created)
-  created + 30d < time.now()
-}
+warn "rotate the database password"
+  where memo.first("db-created", time.now(), created), created + 30d < time.now()
 ```
 
 ```bash

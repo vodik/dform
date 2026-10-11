@@ -68,14 +68,32 @@ statements, in a component as in a file.
 The first token decides what a statement is (H-2): a statement keyword
 starts its own statement, and a name followed by `(` is a fact or a rule.
 A newline outside every `( )`, `[ ]` and the braces of an object ends a
-statement; inside those, newlines are whitespace. Nothing continues a line:
-a body of several lines is `where { .. }`, one literal per line, and a long
-term wraps inside its brackets. There is no statement terminator: `p(a).`
-is an error that says so, and so is `:-`.
+statement; inside those, newlines are whitespace. Nothing continues a line
+but a `where` clause, and a long term wraps inside its brackets. A clause
+continues on the next line when that line is indented deeper than the
+statement (than a block's row, for a row's clause): after `where` or a
+comma that ends a line, and at a `where` that starts the line. The next
+statement starts in the statement's column, so a clause of several lines
+is a literal per line, each with a comma, the last's too:
+
+```
+deny "a spoke peers only the core" { p } where
+  p in aws.vpc_peering_connection,
+  p.peer_vpc != core,
+  p.vpc != core,
+```
+
+A literal on a line of its own without its comma is an error that says so
+(a line under the clause that starts with a statement keyword is a
+statement). A braced body after `where` is gone: it is an error that
+prints the clause with its literals separated by commas. A `{` after
+`where` whose `}` does not end the line starts a literal, an object
+pattern: `{ cpu: x } = lim`. There is no
+statement terminator: `p(a).` is an error that says so, and so is `:-`.
 
 Two statements on one line are an error ("expected the end of the line").
-A block (`{ }` of a resource, a `set` or a `use`) and a
-body block (`where { }`) separate their entries by a newline or a comma.
+A block (`{ }` of a resource, a `set` or a `use`) and a `not { }` body
+separate their entries by a newline or a comma.
 
 ## Tokens
 
@@ -890,18 +908,20 @@ blockpath  := SEG ("." SEG | "[" INT "]")*
 SEG        := NAME | STRING
 hname      := NAME | STRING                        ; see "Block names"
 columns    := "(" NAME (":" type)? ("," NAME (":" type)?)* ","? ")"
-body       := body1 | "{" lit (SEP lit)* "}"
-body1      := lit ("," lit)*
+body       := lit ("," CONT? lit)* ","?           ; CONT: a newline before a line indented deeper than the statement
+body1      := lit ("," lit)*                       ; a refinement's, on its line
 SEP        := "," | NL
 DOTTED     := NAME ("." NAME)*                     ; no spaces
 ```
 
 Every statement is `head where body`: the clause follows its head,
-on the head's line, and a block is a head. A resource, `set` block
+on the head's line or on the next, indented deeper (`where` may start a
+line under its statement, as `CONT` may follow a comma), and a block is
+a head. A resource, `set` block
 or `use` takes at most one clause, after its block's `}` (and a
 `set` block's rank): `resource T n { .. } where B`, and a body of
-several lines is `} where {`, one literal per line, closed by its own
-`}`. The clause is a query, and the block is one resource (or set of
+several lines is `} where`, then a literal per line, indented, each with
+its comma. The clause is a query, and the block is one resource (or set of
 contributions, or copy) per match. An `input` takes one
 too, and a named statement under a clause may be declared again under
 another ("Guarded declarations"). `if`, the clause word of an earlier surface (H-3), is an
@@ -1724,10 +1744,8 @@ let pw = memo.first("db-pw", random.base64("db-pw", 32))  # made once, kept
 let created = memo.first("db-created", time.now())        # observed once
 
 # The rotation idiom: a creation time kept, compared with the clock.
-warn "rotate the database password" where {
-  memo.first("db-created", time.now(), created)
-  created + 30d < time.now()
-}
+warn "rotate the database password"
+  where memo.first("db-created", time.now(), created), created + 30d < time.now()
 ```
 
 Within a run the first call of a key answers every other one, so two
@@ -1890,9 +1908,8 @@ block, and a value that is no object is an error naming it. A vendored
 manifest is one line, a resource per document:
 
 ```
-resource k8s.custom_resource_definition "${d.metadata.name}" = d where {
-  d in yaml.decode(io.read("vendor/traefik-crds.yml"))
-}
+resource k8s.custom_resource_definition "${d.metadata.name}" = d
+  where d in yaml.decode(io.read("vendor/traefik-crds.yml"))
 ```
 
 The statement types the documents: one statement per kind, a manifest
@@ -1955,7 +1972,7 @@ reaches and checked at compile time ("Types"), which is why `inet` has
 no bare literal: `2001:db8::/32` cannot lex beside keys and annotations.
 
 ```
-lit        := "not" lit1 | "not" "{" body "}" | lit1
+lit        := "not" lit1 | "not" "{" lit (SEP lit)* "}" | lit1
 lit1       := atom
             | "has" read                         ; the attribute has a value
             | read                               ; a truth test: == true
@@ -2708,21 +2725,26 @@ The groups, and how each breaks:
   `not { }` body: one entry per line and no commas, the newline separates;
   on one line, `{ a = 1, b = 2 }`; a block holding an entry with a body
   (a row's `where`) is always an entry per line;
-- a `where` body: on its line, `where a, b`, else in braces, one literal
-  per line; a body of more than three literals is in braces whatever the
-  width. A refinement's `check` body has no braces and stays on its
-  line;
+- a `where` clause, in the first of three layouts that fits: on the
+  statement's line, `where a, b`; on a line of its own one step deeper,
+  `where a, b` (a hanging line); else `where` ends the statement's line
+  and a literal per line follows one step deeper, each with a trailing
+  comma, the last's too, so an insertion, a deletion or a reorder is a
+  one-line diff. A body of more than three literals, or with a comment
+  or an empty line among them, is a literal per line whatever the width;
+  a comment stays with the literal below it. A refinement's `check` body
+  stays on its line;
 - a component's statements: one per line, always, in its interface
   order, like a file's.
 
-Of the groups of one statement, its block breaks before its body, and a
-term's group (a call's arguments, a list) is measured up to the next
-place the statement could break, so the statement's own block or body
-breaks before the terms inside it. A chain, an operator and a string have
+Of one statement, its block breaks before its clause; a term's group (a
+call's arguments, a list, a deny's fields) is measured up to the next
+place the statement could break, and a clause is one: the head stays
+whole and its clause moves to a line of its own, or breaks. A chain, an operator and a string have
 no break in them: a line still too long after every group broke is left
 as it is. A string is printed as written: the lines inside one that spans
 lines keep their indentation, and the groups around it break (but for a
-`where` body, which may stay on its line). Entries, elements and
+`where` clause, which may stay on its line). Entries, elements and
 statements stay in the author's order but for the header's and a
 component's own interface (see "The header").
 
