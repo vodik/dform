@@ -69,7 +69,7 @@ stratum  node
 4        (arg, google.monitoring_dashboard, dashboard_json)
 4        (arg, google.monitoring_dashboard, id)
 4        (arg, google.monitoring_dashboard, project)
-4        (arg, output, project_id)
+4        (arg, output, project)
 4        (want, alert_metrics_pack)
 4        (want, google.compute_address)
 4        (want, google.compute_network)
@@ -123,7 +123,7 @@ stratum  node
 5        (attr, google.monitoring_dashboard, dashboard_json)
 5        (attr, google.monitoring_dashboard, id)
 5        (attr, google.monitoring_dashboard, project)
-5        (attr, output, project_id)
+5        (attr, output, project)
 5        __not_planned
 5        __unanswered
 6        (arg, google.compute_address, subnetwork)

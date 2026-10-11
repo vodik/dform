@@ -17,19 +17,15 @@
 # The stack's key, typed: `dform plan gke_platform env=qa` is an error naming it.
 key env: environment = "dev"
 # The project and its networks, each environment's in a settings block
-# below. A CIDR is text here, made an inet where it is used.
+# below; the address ranges grouped by what they are for.
 input gcp {
-  project_id: string
-  project_name: string
+  project: { id: string, name: string }
   region: string
-  network_name: string
-  regional_proxy_cidr: string
+  network: string
+  ranges: { proxy: inet }
 }
 input gke {
-  control_plane_cidr: string
-  subnet_cidr: string
-  pods_cidr: string
-  services_cidr: string
+  ranges: { control_plane: inet, subnet: inet, pods: inet, services: inet }
   static_ips: any
 }
 # The rows are data/peerings.csv's, typed column by column as `decl peering`
@@ -37,7 +33,7 @@ input gke {
 input peering from csv.decode(io.read("data/peerings.csv"))
 decl peering(env: environment, name: string, peer_network: string)
 output active_env = env
-output project_id = gcp.project_id
+output project = gcp.project.id
 
 ########################################
 # Environment selection
@@ -51,52 +47,55 @@ type environment = enum("dev", "stg", "prod")
 ########################################
 
 set {
-  gcp.project_id = "platform-dev-973682"
-  gcp.project_name = "platform-dev"
+  gcp.project = { id: "platform-dev-973682", name: "platform-dev" }
   gcp.region = "us-east1"
-  gcp.network_name = "platform-dev-network"
+  gcp.network = "platform-dev-network"
 
-  gcp.regional_proxy_cidr = "10.193.0.0/24"
+  gcp.ranges.proxy = "10.193.0.0/24"
 
   gke = {
-    control_plane_cidr: "172.16.3.96/28",
-    subnet_cidr: "10.141.76.0/22",
-    pods_cidr: "10.141.80.0/21",
-    services_cidr: "10.141.88.0/21",
+    ranges: {
+      control_plane: "172.16.3.96/28",
+      subnet: "10.141.76.0/22",
+      pods: "10.141.80.0/21",
+      services: "10.141.88.0/21",
+    },
     static_ips: { "gke-platform-grpc": { type: "INTERNAL" } },
   }
 } where env == "dev"
 
 set {
-  gcp.project_id = "platform-stg"
-  gcp.project_name = "platform-stg"
+  gcp.project = { id: "platform-stg", name: "platform-stg" }
   gcp.region = "us-east1"
-  gcp.network_name = "platform-stg-network"
+  gcp.network = "platform-stg-network"
 
-  gcp.regional_proxy_cidr = "10.193.1.0/24"
+  gcp.ranges.proxy = "10.193.1.0/24"
 
   gke = {
-    control_plane_cidr: "172.16.3.112/28",
-    subnet_cidr: "10.141.100.0/22",
-    pods_cidr: "10.141.104.0/21",
-    services_cidr: "10.141.112.0/21",
+    ranges: {
+      control_plane: "172.16.3.112/28",
+      subnet: "10.141.100.0/22",
+      pods: "10.141.104.0/21",
+      services: "10.141.112.0/21",
+    },
     static_ips: { "gke-platform-grpc": { type: "INTERNAL" } },
   }
 } where env == "stg"
 
 set {
-  gcp.project_id = "platform-prod"
-  gcp.project_name = "platform-prod"
+  gcp.project = { id: "platform-prod", name: "platform-prod" }
   gcp.region = "us-east1"
-  gcp.network_name = "platform-prod-network"
+  gcp.network = "platform-prod-network"
 
-  gcp.regional_proxy_cidr = "10.193.2.0/24"
+  gcp.ranges.proxy = "10.193.2.0/24"
 
   gke = {
-    control_plane_cidr: "172.16.3.128/28",
-    subnet_cidr: "10.141.124.0/22",
-    pods_cidr: "10.141.128.0/21",
-    services_cidr: "10.141.136.0/21",
+    ranges: {
+      control_plane: "172.16.3.128/28",
+      subnet: "10.141.124.0/22",
+      pods: "10.141.128.0/21",
+      services: "10.141.136.0/21",
+    },
     static_ips: { "gke-platform-grpc": { type: "INTERNAL" } },
   }
 } where env == "prod"
@@ -114,10 +113,10 @@ set {
 #   credentials = env.var("GOOGLE_CREDENTIALS_{env}")
 # and the account from the credentials; the mock reports its `account`.
 use gke {
-  project = gcp.project_id
+  project = gcp.project.id
   region = gcp.region
-  account = gcp.project_id
-  expect_account = gcp.project_id
+  account = gcp.project.id
+  expect_account = gcp.project.id
 }
 
 ########################################
@@ -137,41 +136,41 @@ deny "GKE static IPs must be INTERNAL" where gke.static_ips."gke-platform-grpc".
 
 # GKE subnet (terraform-google-modules/network/google//modules/subnets)
 resource google.compute_subnetwork gke_subnet {
-  project = gcp.project_id
+  project = gcp.project.id
   region = gcp.region
-  network = "projects/${gcp.project_id}/global/networks/${gcp.network_name}"
-  name = "${gcp.project_name}-gke-subnet"
-  ip_cidr_range = gke.subnet_cidr
+  network = "projects/${gcp.project.id}/global/networks/${gcp.network}"
+  name = "${gcp.project.name}-gke-subnet"
+  ip_cidr_range = gke.ranges.subnet
   subnet_private_access = true
   secondary_ranges = [
-    { range_name: "${gcp.project_name}-gke-pods-range", ip_cidr_range: gke.pods_cidr },
-    { range_name: "${gcp.project_name}-gke-svc-range", ip_cidr_range: gke.services_cidr },
+    { range_name: "${gcp.project.name}-gke-pods-range", ip_cidr_range: gke.ranges.pods },
+    { range_name: "${gcp.project.name}-gke-svc-range", ip_cidr_range: gke.ranges.services },
   ]
 }
 
 # Regional managed proxy subnet
 resource google.compute_subnetwork regional_proxy {
-  project = gcp.project_id
+  project = gcp.project.id
   region = gcp.region
-  network = "projects/${gcp.project_id}/global/networks/${gcp.network_name}"
-  name = "${gcp.project_name}-proxy"
+  network = "projects/${gcp.project.id}/global/networks/${gcp.network}"
+  name = "${gcp.project.name}-proxy"
   purpose = "REGIONAL_MANAGED_PROXY"
   role = "ACTIVE"
-  ip_cidr_range = gcp.regional_proxy_cidr
+  ip_cidr_range = gcp.ranges.proxy
 }
 
 # The VPC network and its peerings: a peering is the network's, kept on
 # it (GCP's networks.addPeering), so the peerings are its attribute, one
 # element per row of the table, not resources of their own
 resource google.compute_network main {
-  project = gcp.project_id
-  name = gcp.network_name
+  project = gcp.project.id
+  name = gcp.network
   peerings = [ { name: n, peer_network: p } | peering(env, n, p) ]
 }
 
 # Static IPs for services
 resource google.compute_address "static-ip-${ip}" {
-  project = gcp.project_id
+  project = gcp.project.id
   region = gcp.region
   name = ip
   address_type = gke.static_ips."gke-platform-grpc".type
@@ -186,14 +185,14 @@ resource google.compute_address "static-ip-${ip}" {
 resource google.container_cluster gke_platform {
   cluster_type = "autopilot-private"
   env
-  project_id = gcp.project_id
-  project_name = gcp.project_name
-  name = "${gcp.project_name}-gke"
-  network_id = "projects/${gcp.project_id}/global/networks/${gcp.network_name}"
+  project_id = gcp.project.id
+  project_name = gcp.project.name
+  name = "${gcp.project.name}-gke"
+  network_id = "projects/${gcp.project.id}/global/networks/${gcp.network}"
   subnetwork = gke_subnet
-  master_control_plane_cidr = gke.control_plane_cidr
-  ip_range_pods = "${gcp.project_name}-gke-pods-range"
-  ip_range_services = "${gcp.project_name}-gke-svc-range"
+  master_control_plane_cidr = gke.ranges.control_plane
+  ip_range_pods = "${gcp.project.name}-gke-pods-range"
+  ip_range_services = "${gcp.project.name}-gke-svc-range"
 
   enable_secret_manager_addon = true
   deletion_protection = false
@@ -205,7 +204,7 @@ resource google.container_cluster gke_platform {
 
 # The dashboard JSON is a file, a document `json.decode(io.read(path))` reads.
 resource google.monitoring_dashboard gke_platform {
-  project = gcp.project_id
+  project = gcp.project.id
   dashboard_json = json.decode(io.read("files/dashboard-gke-platform.json"))
 }
 
@@ -221,7 +220,7 @@ type alert_metrics_pack {
 }
 
 resource alert_metrics_pack gke_platform {
-  project_id = gcp.project_id
+  project_id = gcp.project.id
   notification_channel_type = "slack"
   notification_channel_display_name = "Slack"
   enable_standard_gke_alerts = true
