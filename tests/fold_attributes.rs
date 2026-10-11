@@ -154,7 +154,7 @@ fn why_and_query_fold_the_same_way() {
 #[test]
 fn a_placeholder_null_is_no_write_beaten() {
     let s = Scratch::new("fold-placeholder");
-    let dir = common::repo().join("examples/crud-api");
+    let dir = common::repo().join("tests/fixtures/crud-api");
     let full = s
         .run(&["-C", dir.to_str().unwrap(), "plan", "-vv"])
         .success()

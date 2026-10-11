@@ -25,11 +25,11 @@ fn run(s: &Scratch, env: &[(&str, &str)], args: &[&str]) -> Run {
     Run::from(c.output().unwrap())
 }
 
-/// examples/crud-api, its master sealed under the passphrase, applied by
+/// tests/fixtures/crud-api, its master sealed under the passphrase, applied by
 /// the operator who has it.
 fn applied(name: &str) -> Scratch {
     let s = Scratch::new(name);
-    common::copy_dir(&repo().join("examples/crud-api"), &s.dir);
+    common::copy_dir(&repo().join("tests/fixtures/crud-api"), &s.dir);
     let _ = std::fs::remove_dir_all(s.path("dform.state"));
     let toml = s.read("dform.toml") + "\n[secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n";
     s.write("dform.toml", &toml);

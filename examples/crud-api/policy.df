@@ -1,0 +1,11 @@
+#| The team's policy for what runs in the cluster: every container runs
+#| an image pinned by its digest, with limits.
+
+container(w, c) where w in k8s.deployment, c in w.spec.template.spec.containers
+container(w, c) where w in k8s.job, c in w.spec.template.spec.containers
+
+deny "an image is not pinned by its digest" { workload: w, image: c.image }
+  where container(w, c), not oci.pinned(c.image)
+
+deny "a container without limits" { workload: w, container: c.name }
+  where container(w, c), not has c.resources.limits

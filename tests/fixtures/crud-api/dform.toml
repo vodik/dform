@@ -1,0 +1,14 @@
+# The crud-api project's root (docs/layout.md).
+
+[project]
+name = "crud-api"
+edition = "2026"
+dform = ">=0.1"
+
+# The mock plays each: the built-in Kubernetes schema, and this project's
+# own schema for the Cloud SQL types (providers/google/schema.df). Against
+# a cluster,
+# k8s = "providers/k8s" (a directory holding dform-provider-k8s).
+[providers]
+k8s = "k8s"
+google = "providers/google"

@@ -234,7 +234,7 @@ deny "plaintext secret in env" { workload: w, container: c.name, env: e.name } w
     assert_eq!(deny.len(), 1, "{deny:?}");
     assert!(deny[0].contains(r#"env: "DB_PASSWORD""#), "{deny:?}");
     let example =
-        std::fs::read_to_string(common::repo().join("examples/crud-api/stacks/crud_api.df"))
+        std::fs::read_to_string(common::repo().join("tests/fixtures/crud-api/stacks/crud_api.df"))
             .unwrap();
     assert!(example.contains("deny \"plaintext secret in env\""));
     assert!(example.contains("(_, e) in c.env"));

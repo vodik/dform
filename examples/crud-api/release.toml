@@ -1,0 +1,3 @@
+# The release: the image CI built and the schema it needs.
+image = "registry.example.com/shop/api@sha256:9f2c4d0e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d"
+schema = 42

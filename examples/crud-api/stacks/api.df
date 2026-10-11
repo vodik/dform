@@ -1,0 +1,69 @@
+use k8s
+
+let release = toml.decode(io.read("release.toml"))
+
+let live = world.k8s.service["shop/api"].spec.selector.color
+let live_image = world.k8s.deployment["shop/api-${live}"].spec.template.spec.containers[0].image
+let next = "green" where live == "blue"
+let next = "blue" where live == "green"
+let next = "blue" where not has live
+
+migrated(release.schema) where k8s.job["migrate-v${release.schema}"].status.succeeded == 1
+
+run(live, live_image)
+run(next, release.image) where migrated(release.schema)
+
+ready(colour) where run(colour, _), app[colour].ready_replicas == app[colour].total_replicas
+
+let serving = next where ready(next)
+let serving = live where not ready(next)
+
+resource k8s.service api {
+  metadata = { name: "api", namespace: "shop" }
+  spec.selector = { app: "api", color: serving }
+  spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
+}
+
+use policy
+
+resource k8s.namespace shop { metadata.name = "shop" }
+
+#| The migration to the release's schema: one Job per version.
+resource k8s.job "migrate-v${release.schema}" {
+  metadata = { name: "api-migrate-v${release.schema}", namespace: shop.metadata.name }
+  spec.backoffLimit = 2
+  spec.template.spec = {
+    restartPolicy: "Never",
+    containers: [{
+      name: "migrate",
+      image: release.image,
+      args: ["migrate", "--to", "${release.schema}"],
+      resources: { limits: { cpu: 500m, memory: 256Mi } },
+    }],
+  }
+}
+
+resource app "${colour}" { colour, image } where run(colour, image)
+
+#| One colour of the API: its Deployment, and how many of its replicas
+#| are ready.
+component app {
+  input colour: enum("blue", "green")
+  input image: string
+  output ready_replicas: int = deploy.status.readyReplicas
+  output total_replicas: int = deploy.status.replicas
+
+  resource k8s.deployment deploy {
+    metadata = { name: "api-${colour}", namespace: "shop" }
+    spec.replicas = 3
+    spec.selector.matchLabels = { app: "api", color: colour }
+    spec.template.metadata.labels = { app: "api", color: colour }
+    spec.template.spec.containers = [{
+      name: "api",
+      image,
+      ports: [{ containerPort: 8080, protocol: "TCP" }],
+      readinessProbe: { httpGet: { path: "/healthz", port: 8080 } },
+      resources: { limits: { cpu: 1, memory: 512Mi } },
+    }]
+  }
+}

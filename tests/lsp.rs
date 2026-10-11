@@ -1408,7 +1408,7 @@ fn an_s3_deployment_is_read_with_credentials() {
 /// (R-66); `500m` shows both readings, the position deciding.
 #[test]
 fn hover_on_a_quantity_shows_its_base_value() {
-    let (_s, root) = example("crud-api");
+    let (_s, root) = example("tests/fixtures/crud-api");
     let stack = root.join("stacks/crud_api.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);

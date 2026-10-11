@@ -20,11 +20,11 @@ fn run(s: &Scratch, env: &[(&str, &str)], args: &[&str]) -> Run {
     Run::from(c.output().unwrap())
 }
 
-/// examples/crud-api, applied: its database password is
+/// tests/fixtures/crud-api, applied: its database password is
 /// `random.password("crud-api-db")`.
 fn applied(name: &str) -> Scratch {
     let s = Scratch::new(name);
-    common::copy_dir(&repo().join("examples/crud-api"), &s.dir);
+    common::copy_dir(&repo().join("tests/fixtures/crud-api"), &s.dir);
     let _ = std::fs::remove_dir_all(s.path("dform.state"));
     run(&s, &[], &["apply"]).success();
     s
@@ -128,11 +128,11 @@ fn another_random_master_is_refused() {
 
 const PASS: (&str, &str) = ("DFORM_TEST_PASSPHRASE", "correct horse battery staple");
 
-/// examples/crud-api whose dform.toml keeps each master sealed under the
+/// tests/fixtures/crud-api whose dform.toml keeps each master sealed under the
 /// passphrase in `DFORM_TEST_PASSPHRASE`.
 fn sealed(name: &str) -> Scratch {
     let s = Scratch::new(name);
-    common::copy_dir(&repo().join("examples/crud-api"), &s.dir);
+    common::copy_dir(&repo().join("tests/fixtures/crud-api"), &s.dir);
     let _ = std::fs::remove_dir_all(s.path("dform.state"));
     passphrase(&s);
     s

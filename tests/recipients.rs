@@ -41,10 +41,10 @@ fn run(s: &Scratch, identity: Option<&Member>, env: &[(&str, &str)], args: &[&st
     Run::from(c.output().unwrap())
 }
 
-/// examples/crud-api, its masters sealed to `members` by name.
+/// tests/fixtures/crud-api, its masters sealed to `members` by name.
 fn team(name: &str, members: &[(&str, &Member)], extra: &str) -> Scratch {
     let s = Scratch::new(name);
-    common::copy_dir(&repo().join("examples/crud-api"), &s.dir);
+    common::copy_dir(&repo().join("tests/fixtures/crud-api"), &s.dir);
     let _ = std::fs::remove_dir_all(s.path("dform.state"));
     recipients(&s, members, extra);
     s

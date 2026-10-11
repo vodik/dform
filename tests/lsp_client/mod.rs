@@ -193,12 +193,18 @@ pub fn uri(p: &Path) -> String {
     format!("file://{}", p.display())
 }
 
-/// A copy of the example project `name`, its path canonical (as the server
-/// names files).
-pub fn example(name: &str) -> (Scratch, PathBuf) {
+/// A copy of the project `at`, an example's name (`examples/NAME`) or a
+/// path from the repository's root (`tests/fixtures/demo`), its path
+/// canonical (as the server names files).
+pub fn example(at: &str) -> (Scratch, PathBuf) {
+    let from = match at.contains('/') {
+        true => repo().join(at),
+        false => repo().join("examples").join(at),
+    };
+    let name = from.file_name().unwrap().to_string_lossy().into_owned();
     let s = Scratch::new(&format!("lsp-{name}"));
-    let root = s.dir.join(name);
-    copy_dir(&repo().join("examples").join(name), &root);
+    let root = s.dir.join(&name);
+    copy_dir(&from, &root);
     let root = std::fs::canonicalize(&root).unwrap();
     (s, root)
 }

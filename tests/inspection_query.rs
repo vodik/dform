@@ -109,7 +109,7 @@ resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }
 /// core's `ref(T, A, p)`.
 #[test]
 fn a_row_prints_a_reference_as_its_address() {
-    let at = "examples/crud-api/stacks/crud_api.df";
+    let at = "tests/fixtures/crud-api/stacks/crud_api.df";
     let out = dform(
         at,
         &[

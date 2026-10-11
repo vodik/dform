@@ -185,11 +185,16 @@ fn walk(name: &str, root: &Path, every_token: bool) -> Vec<String> {
                     What::Name(Symbol::Function(f), _) => {
                         dform_core::functions::FORMS.contains(&f.as_str())
                     }
-                    // A word, or a directory in a path.
+                    // A word, or a directory in a path; or a let's
+                    // parameter where it is declared, which the server
+                    // has no definition of yet (`let cidr(n) = ..`).
                     What::Other => {
                         WORDS.contains(&t.text())
                             || t.parent().is_some_and(|p| {
-                                matches!(p.kind(), SyntaxKind::USE | SyntaxKind::RESOURCE)
+                                matches!(
+                                    p.kind(),
+                                    SyntaxKind::USE | SyntaxKind::RESOURCE | SyntaxKind::PARAM
+                                )
                             })
                     }
                     _ => false,
@@ -261,8 +266,11 @@ const EXAMPLES: &[&str] = &[
     "demo",
     "gke",
     "gke-platform",
+    "k3s-platform",
     "k8s",
     "refine",
+    "shared-network",
+    "shop",
     "tour",
 ];
 
@@ -295,8 +303,11 @@ walks! {
     walk_demo: "demo",
     walk_gke: "gke",
     walk_gke_platform: "gke-platform",
+    walk_k3s_platform: "k3s-platform",
     walk_k8s: "k8s",
     walk_refine: "refine",
+    walk_shared_network: "shared-network",
+    walk_shop: "shop",
     walk_tour: "tour",
 }
 

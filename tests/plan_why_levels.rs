@@ -8,11 +8,12 @@
 use crate::common;
 use common::{Scratch, repo};
 
+/// The plan of the project `example`, a path from the repository's root.
 fn plan(s: &Scratch, example: &str, why: &[&str]) -> String {
-    let dir = repo().join("examples").join(example);
+    let dir = repo().join(example);
     let mut args = vec!["-C", dir.to_str().unwrap(), "plan"];
     // The demo's project module plans every environment (R-114): one.
-    if example == "demo" {
+    if example.ends_with("/demo") {
         args.extend(["dform", "env=staging"]);
     }
     args.extend_from_slice(why);
@@ -50,7 +51,7 @@ fn left(l: &str) -> String {
 }
 
 fn levels(example: &str) -> (String, String) {
-    let s = Scratch::new(&format!("why-levels-{example}"));
+    let s = Scratch::new(&format!("why-levels-{}", example.replace('/', "-")));
     let line = plan(&s, example, &[]);
     assert_eq!(plan(&s, example, &["--why=line"]), line);
     assert!(line.contains("\ntick 1  "), "{line}");
@@ -124,7 +125,7 @@ fn levels(example: &str) -> (String, String) {
 
 #[test]
 fn the_demo_plans_at_each_level() {
-    let (line, how) = levels("demo");
+    let (line, how) = levels("examples/demo");
     // A copy's resources under it, each by its full address; a value set
     // outside its block by where; a reference by its address.
     assert!(
@@ -145,7 +146,7 @@ fn the_demo_plans_at_each_level() {
 
 #[test]
 fn crud_api_plans_at_each_level() {
-    let (line, how) = levels("crud-api");
+    let (line, how) = levels("tests/fixtures/crud-api");
     // A secret is `(sensitive)`, by its label from `-v`; a value another
     // resource of the tick computes is the expression that reads it.
     assert!(
@@ -166,7 +167,7 @@ fn crud_api_plans_at_each_level() {
         )),
         "{line}"
     );
-    let full = plan(&Scratch::new("why-levels-crud-vv"), "crud-api", &["-vv"]);
+    let full = plan(&Scratch::new("why-levels-crud-vv"), "tests/fixtures/crud-api", &["-vv"]);
     assert!(
         full.contains(".image = \"gcr.io/shop/crud-api@sha256:9f2c4d0e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d\"\n"),
         "{full}"

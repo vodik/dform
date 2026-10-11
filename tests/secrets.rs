@@ -623,7 +623,7 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
     }
 }
 
-/// examples/crud-api's password, `random.password("crud-api-db")` (R-60):
+/// tests/fixtures/crud-api's password, `random.password("crud-api-db")` (R-60):
 /// derived from the deployment's master (here the stack's key file), the
 /// same on every run and stored nowhere. Nothing dform keeps or prints
 /// carries it: not state, the in-flight record, the audit log, the
@@ -632,7 +632,7 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
 #[test]
 fn a_derived_password_is_stable_and_never_stored() {
     let s = Scratch::new("secrets-derived");
-    common::copy_dir(&repo().join("examples/crud-api"), &s.dir);
+    common::copy_dir(&repo().join("tests/fixtures/crud-api"), &s.dir);
     let _ = std::fs::remove_dir_all(s.path("dform.state"));
     let mut outputs = Vec::new();
     // A plan file taken before anything exists, applied; an apply that
