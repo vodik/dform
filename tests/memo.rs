@@ -46,10 +46,9 @@ use fake
 extern kv.password(+name, -value)
 resource db.user app {
   password = pw
-} where {
-    kv.password("app", candidate)
-    memo.first("app-pw", candidate, pw)
-  }
+} where
+  kv.password("app", candidate),
+  memo.first("app-pw", candidate, pw),
 "#;
 
 /// A memo survives a re-plan whatever the candidate becomes, and is gone
@@ -237,10 +236,9 @@ use time
 resource db.user app {
   password = "x"
 }
-warn "rotate the password" where {
-  memo.first("db-created", time.now(), created)
-  created + 30d < time.now()
-}
+warn "rotate the password" where
+  memo.first("db-created", time.now(), created),
+  created + 30d < time.now(),
 "#,
     );
     let at = |t: &'static str| [("DFORM_TEST_NOW", t)];

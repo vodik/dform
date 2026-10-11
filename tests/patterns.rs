@@ -223,13 +223,12 @@ container("job", { name: "migrate" })
 secret_word("SECRET")
 secret_word("PASSWORD")
 secret_word("TOKEN")
-deny "plaintext secret in env" { workload: w, container: c.name, env: e.name } where {
-  container(w, c)
-  (_, e) in c.env
-  has e.value
-  secret_word(s)
-  (_, _) = str.split(e.name, s, 1)
-}
+deny "plaintext secret in env" { workload: w, container: c.name, env: e.name } where
+  container(w, c),
+  (_, e) in c.env,
+  has e.value,
+  secret_word(s),
+  (_, _) = str.split(e.name, s, 1),
 "#;
     let deny = facts(src, "deny");
     assert_eq!(deny.len(), 1, "{deny:?}");

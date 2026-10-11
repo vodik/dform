@@ -5,7 +5,7 @@ plan: 2 changes (2 create) over 2 ticks; policy: 1 hold · 1 fails · 1 undeterm
 tick 1  2 changes
   + google.container_cluster gke_platform  adv2_rule3_coarse.df:6
       name = "gke-platform-gke"
-  + k8s.namespace gke_platform             adv2_rule3_coarse.df:17
+  + k8s.namespace gke_platform             adv2_rule3_coarse.df:16
       metadata.name = "gke-platform"
 
 tick 2  ? changes
@@ -13,11 +13,11 @@ tick 2  ? changes
   google.container_node_pool "${np}"       adv2_rule3_coarse.df:8  waits on gke_platform.zones
 
 policy  1 hold · 1 fails · 1 undetermined
-  fails         namespace without deployment  adv2_rule3_coarse.df:20  1 fails
+  fails         namespace without deployment  adv2_rule3_coarse.df:19  1 fails
     k8s.namespace gke_platform                ns = "gke_platform"
-  undetermined  no nodepool in zone b         adv2_rule3_coarse.df:28  1 undetermined
+  undetermined  no nodepool in zone b         adv2_rule3_coarse.df:27  1 undetermined
     google.container_cluster gke_platform     until zones is known (tick 2)
 -- stderr --
-refused  namespace without deployment  tests/fixtures/adversarial/adv2_rule3_coarse.df:20
+refused  namespace without deployment  tests/fixtures/adversarial/adv2_rule3_coarse.df:19
   └─ ns = "gke_platform"
 refused  blocked by constraints

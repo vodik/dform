@@ -37,8 +37,8 @@ fn a_loader_in_a_used_modules_clause() {
     let s = project(
         "loader-module",
         "use k8s\nuse traefik\n",
-        "resource k8s.config_map \"${d.metadata.name}\" = d where {\n  \
-         d in yaml.decode(io.read(\"vendor/maps.yml\"))\n}\n",
+        "resource k8s.config_map \"${d.metadata.name}\" = d where\n  \
+         d in yaml.decode(io.read(\"vendor/maps.yml\")),\n",
     );
     let r = s.run(&["plan", "platform"]);
     let r = r.success();
@@ -63,8 +63,8 @@ fn a_loader_in_a_component_a_copy_and_a_let() {
          seen(n) where d in yaml.decode(io.read(\"vendor/maps.yml\")), n = \"stack.${d.metadata.name}\"\n",
         "let first = yaml.decode(io.read(\"vendor/maps.yml\"))[0].metadata.name\n\n\
          component maps {\n  \
-         resource k8s.config_map \"${d.metadata.name}\" = d where {\n    \
-         d in yaml.decode(io.read(\"vendor/maps.yml\"))\n  }\n}\n",
+         resource k8s.config_map \"${d.metadata.name}\" = d where\n    \
+         d in yaml.decode(io.read(\"vendor/maps.yml\")),\n}\n",
     );
     let r = s.run(&["plan", "platform"]);
     let r = r.success();
@@ -114,8 +114,8 @@ fn a_loaders_errors_in_a_module_name_no_compiler_word() {
 #[test]
 fn a_provider_used_from_a_used_module() {
     let module = "use k8s { namespace = \"edge\" }\n\n\
-                  resource k8s.config_map \"${d.metadata.name}\" = d where {\n  \
-                  d in yaml.decode(io.read(\"vendor/maps.yml\"))\n}\n";
+                  resource k8s.config_map \"${d.metadata.name}\" = d where\n  \
+                  d in yaml.decode(io.read(\"vendor/maps.yml\")),\n";
     for stack in [
         "use traefik\n",
         "use k8s { namespace = \"edge\" }\nuse traefik\n",
@@ -140,8 +140,8 @@ fn two_uses_that_disagree_are_a_conflict() {
         "provider-conflict",
         "use k8s { namespace = \"core\" }\nuse traefik\n",
         "use k8s { namespace = \"edge\" }\n\n\
-         resource k8s.config_map \"${d.metadata.name}\" = d where {\n  \
-         d in yaml.decode(io.read(\"vendor/maps.yml\"))\n}\n",
+         resource k8s.config_map \"${d.metadata.name}\" = d where\n  \
+         d in yaml.decode(io.read(\"vendor/maps.yml\")),\n",
     );
     let r = s.run(&["plan", "platform"]);
     let r = r.failure();

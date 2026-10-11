@@ -188,16 +188,16 @@ fn unanswered_reads(e: &Evaluated, read: Reader) -> Vec<Action> {
             .as_ref()
             .and_then(|c| c.children().find(|b| b.kind() == SyntaxKind::BODY))
         {
+            // A literal per line, each with its comma: one more line.
             Some(body)
                 if body
-                    .first_token()
-                    .is_some_and(|t| t.kind() == SyntaxKind::L_BRACE) =>
+                    .last_token()
+                    .is_some_and(|t| t.kind() == SyntaxKind::COMMA) =>
             {
-                let Some(close) = body.last_token() else {
-                    continue;
-                };
-                let at = usize::from(close.text_range().start());
-                (at, format!("  {lit}\n"))
+                let at = usize::from(body.text_range().end());
+                let line = text[..at].rfind('\n').map_or(0, |i| i + 1);
+                let indent: String = text[line..].chars().take_while(|c| *c == ' ').collect();
+                (at, format!("\n{indent}{lit},"))
             }
             Some(body) => (usize::from(body.text_range().end()), format!(", {lit}")),
             None => match stmt

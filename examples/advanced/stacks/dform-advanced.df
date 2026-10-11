@@ -67,10 +67,8 @@ direct_route(a, b) where reachable(a, b), a != b
 
 resource net.route_table "${a}" { vpc = net.vpc[a] } where direct_route(a, _)
 
-set net.route_table[a].routes = [{ destination: dest, target: net.vpc[b] }] where {
-  direct_route(a, b)
-  dest = net.vpc[b].cidr
-}
+set net.route_table[a].routes = [{ destination: dest, target: net.vpc[b] }]
+  where direct_route(a, b), dest = net.vpc[b].cidr
 
 # Policy: warn if we materialize *direct* routes between non-adjacent nodes in the mesh.
 #
@@ -85,19 +83,15 @@ mesh_node(n) where mesh_vpc(n, _, _)
 mesh_adjacent(a, b) where mesh_peer(a, b)
 mesh_adjacent(b, a) where mesh_peer(a, b)
 
-mesh_non_adjacent_pair(a, b) where {
-  mesh_node(a)
-  mesh_node(b)
-  a != b
-  reachable(a, b)
-  not mesh_adjacent(a, b)
-}
+mesh_non_adjacent_pair(a, b) where
+  mesh_node(a),
+  mesh_node(b),
+  a != b,
+  reachable(a, b),
+  not mesh_adjacent(a, b),
 
-warn "mesh has direct route between non-adjacent nodes" { from: a, to: b } where {
-  mesh_non_adjacent_pair(a, b)
-  direct_route(a, b)
-  not mesh_allow_direct_route(a, b)
-}
+warn "mesh has direct route between non-adjacent nodes" { from: a, to: b }
+  where mesh_non_adjacent_pair(a, b), direct_route(a, b), not mesh_allow_direct_route(a, b)
 
 # mesh_allow_direct_route("core_a", "core_c")
 
@@ -113,12 +107,11 @@ resource net.vpc "${name}" { cidr, tags = { segment: "mesh" } } where mesh_vpc(n
 
 # Derive a sparse base graph: connect consecutive VPCs in the list.
 # The reachability closure will infer core_a -> core_c via core_b.
-mesh_peer(a, b) where {
-  mesh_vpc(a, cidr_a, ia)
-  mesh_vpc(b, cidr_b, ib)
-  ib == ia + 1
-  not inet.overlaps(cidr_a, cidr_b)
-}
+mesh_peer(a, b) where
+  mesh_vpc(a, cidr_a, ia),
+  mesh_vpc(b, cidr_b, ib),
+  ib == ia + 1,
+  not inet.overlaps(cidr_a, cidr_b),
 
 # Feed the derived edges into the global peering/link graph.
 peer(a, b) where mesh_peer(a, b)
@@ -130,20 +123,17 @@ resource net.vpc_peering "mesh-peer-${a}-${b}" {
 } where mesh_peer(a, b)
 
 # Policy 1: peered VPCs must not overlap.
-deny "peered vpcs must not overlap" { a, b } where {
-  peer(a, b)
-  inet.overlaps(net.vpc[a].cidr, net.vpc[b].cidr)
-}
+deny "peered vpcs must not overlap" { a, b }
+  where peer(a, b), inet.overlaps(net.vpc[a].cidr, net.vpc[b].cidr)
 
 # Policy 2: tenant isolation.
 # Only enforced in prod, and depends on the reachability closure.
-deny "tenant isolation violated" { a, b } where {
-  env == "prod"
-  tenant(a, _)
-  tenant(b, _)
-  a != b
-  reachable(a, b)
-}
+deny "tenant isolation violated" { a, b } where
+  env == "prod",
+  tenant(a, _),
+  tenant(b, _),
+  a != b,
+  reachable(a, b),
 
 # Fixpoint 2: nested group membership.
 # This is another common closure problem in real org infra.

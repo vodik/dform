@@ -960,10 +960,10 @@ mod tests {
             (0..n)
                 .map(|i| format!("q(x, {i})"))
                 .collect::<Vec<_>>()
-                .join("\n  ")
+                .join(", ")
         };
         let src = format!(
-            "\n\ndecl q(a, b)\nq(1, 2)\np(x) where {{\n  {}\n}}\nr(x) where {{\n  {}\n}}\n",
+            "\n\ndecl q(a, b)\nq(1, 2)\np(x) where {}\nr(x) where {}\n",
             lits(6),
             lits(5)
         );

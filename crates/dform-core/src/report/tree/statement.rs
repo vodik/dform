@@ -78,7 +78,7 @@ pub(super) fn statement_at(
 }
 
 /// What of a statement is printed: its text, with the block elided but
-/// for the entry that fired and a braced clause as one line, and, in
+/// for the entry that fired and a clause of several lines as one, and, in
 /// source order, the variables and the computed terms in that text.
 #[derive(Default)]
 pub(super) struct Shown {
@@ -133,7 +133,9 @@ impl Shown {
                             }
                         }
                     }
-                    BODY if c.first_token().is_some_and(|t| t.kind() == L_BRACE) => {
+                    BODY if c.first_token().is_some_and(|t| t.kind() == L_BRACE)
+                        || c.text().contains_char('\n') =>
+                    {
                         let lits: Vec<SyntaxNode> = c.children().collect();
                         for (i, l) in lits.iter().enumerate() {
                             if i > 0 {

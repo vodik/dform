@@ -8,12 +8,11 @@ decl vpc_peer(a: net.vpc, b: net.vpc)
 #| Deny if peered VPC CIDRs overlap.
 #|
 #| This is intentionally scoped to only VPCs connected by `vpc_peer/2`.
-deny "peered vpc cidr overlaps" { a, b } where {
-  vpc_peer(a, b)
-  a in net.vpc
-  b in net.vpc
-  inet.overlaps(a.cidr, b.cidr)
-}
+deny "peered vpc cidr overlaps" { a, b } where
+  vpc_peer(a, b),
+  a in net.vpc,
+  b in net.vpc,
+  inet.overlaps(a.cidr, b.cidr),
 
 #| Deny if any VM gets the unspecified IP.
 deny "vm has unspecified ip" { vm } where vm in compute.vm, ip.unspecified(vm.private_ip)

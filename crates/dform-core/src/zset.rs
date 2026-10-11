@@ -641,8 +641,8 @@ pub fn lifecycle_prelude(schema: &Schema) -> Result<Vec<RuleStmt>> {
         };
         src.push_str(&format!(
             "#| {by}: each {t} is {w:?} (type_lifecycle), unless the program writes another\n\
-             lifecycle(r, w) where {{ type_lifecycle(\"{t}\", w), r in {t}, \
-             not {SAID}(\"{t}\", r) }}\n"
+             lifecycle(r, w) where type_lifecycle(\"{t}\", w), r in {t}, \
+             not {SAID}(\"{t}\", r)\n"
         ));
     }
     let lowered = crate::transform::lower(&crate::parser::parse_program(&src)?)?;
@@ -838,35 +838,29 @@ fn provider_assertions(
 /// `remaining`.
 pub const POLICY_RULES: &str = r#"
 #| the lifecycle rule prevent_destroy, against a delete
-deny(m) where {
-  lifecycle(r, "prevent_destroy"), deformation("delete", r, _)
-  m = "lifecycle prevent_destroy: the plan would delete ${r}"
-}
+deny(m) where
+  lifecycle(r, "prevent_destroy"), deformation("delete", r, _),
+  m = "lifecycle prevent_destroy: the plan would delete ${r}",
 #| the lifecycle rule prevent_destroy, against a replace
-deny(m) where {
-  lifecycle(r, "prevent_destroy"), deformation("replace", r, _)
-  m = "lifecycle prevent_destroy: the plan would replace ${r}"
-}
+deny(m) where
+  lifecycle(r, "prevent_destroy"), deformation("replace", r, _),
+  m = "lifecycle prevent_destroy: the plan would replace ${r}",
 #| the lifecycle rule prevent_destroy on a copy, against a delete of one of its resources
-deny(m) where {
-  lifecycle(i, "prevent_destroy"), in_instance(r, i), deformation("delete", r, _)
-  m = "lifecycle prevent_destroy on ${i}: the plan would delete ${r}"
-}
+deny(m) where
+  lifecycle(i, "prevent_destroy"), in_instance(r, i), deformation("delete", r, _),
+  m = "lifecycle prevent_destroy on ${i}: the plan would delete ${r}",
 #| the lifecycle rule prevent_destroy on a copy, against a replace of one of its resources
-deny(m) where {
-  lifecycle(i, "prevent_destroy"), in_instance(r, i), deformation("replace", r, _)
-  m = "lifecycle prevent_destroy on ${i}: the plan would replace ${r}"
-}
+deny(m) where
+  lifecycle(i, "prevent_destroy"), in_instance(r, i), deformation("replace", r, _),
+  m = "lifecycle prevent_destroy on ${i}: the plan would replace ${r}",
 #| the world rule: a held deformation's resource moved since its plan
-deny(m) where {
-  deformation("pending", r, before), world_digest(r, now), before != now
-  m = "the world changed under a pending change: ${r}"
-}
+deny(m) where
+  deformation("pending", r, before), world_digest(r, now), before != now,
+  m = "the world changed under a pending change: ${r}",
 #| the world rule: an interrupted apply's resource moved since its plan
-deny(m) where {
-  deformation("remaining", r, before), world_digest(r, now), before != now
-  m = "the world changed under a remaining action: ${r}"
-}
+deny(m) where
+  deformation("remaining", r, before), world_digest(r, now), before != now,
+  m = "the world changed under a remaining action: ${r}",
 "#;
 
 /// The predicates a policy pass gives the program (`deformation_facts`).

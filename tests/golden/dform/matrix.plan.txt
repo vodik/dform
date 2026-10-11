@@ -2,7 +2,7 @@ plan: 32 changes (32 create); policy: 27 hold
 
 + stacks.dform[env=dev]      project.df:6  never applied, 6 changes (6 create) over 1 tick
   tick 1  6 changes
-    + compute.vm bastion                    stacks/dform.df:93
+    + compute.vm bastion                    stacks/dform.df:90
         private_ip = "10.90.0.21"
         tags.team = "platform"              baseline.df:10
     + module identity
@@ -36,7 +36,7 @@ plan: 32 changes (32 create); policy: 27 hold
 
 + stacks.dform[env=staging]  project.df:7  never applied, 13 changes (13 create) over 1 tick
   tick 1  13 changes
-    + compute.vm bastion                    stacks/dform.df:93
+    + compute.vm bastion                    stacks/dform.df:90
         private_ip = "10.50.0.21"
         tags.team = "platform"              baseline.df:10
     + network.vpc main
@@ -73,7 +73,7 @@ plan: 32 changes (32 create); policy: 27 hold
           visibility = "private"
           vpc = peer.vpc
           zone = "us-test-1b"
-    + net.vpc_peering peer-main-peer        stacks/dform.df:86
+    + net.vpc_peering peer-main-peer        stacks/dform.df:83
         accepter_vpc = peer.vpc
         requester_vpc = main.vpc
         tags.team = "platform"              baseline.df:10
@@ -112,7 +112,7 @@ plan: 32 changes (32 create); policy: 27 hold
 
 + stacks.dform[env=prod]     project.df:8  never applied, 13 changes (13 create) over 1 tick
   tick 1  13 changes
-    + compute.vm bastion                    stacks/dform.df:93
+    + compute.vm bastion                    stacks/dform.df:90
         private_ip = "10.20.0.21"
         tags.team = "platform"              baseline.df:10
     + network.vpc main
@@ -149,7 +149,7 @@ plan: 32 changes (32 create); policy: 27 hold
           visibility = "private"
           vpc = peer.vpc
           zone = "us-test-1b"
-    + net.vpc_peering peer-main-peer        stacks/dform.df:86
+    + net.vpc_peering peer-main-peer        stacks/dform.df:83
         accepter_vpc = peer.vpc
         requester_vpc = main.vpc
         tags.team = "platform"              baseline.df:10

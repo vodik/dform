@@ -8,11 +8,10 @@ resource google.container_cluster gke_platform { name = "gke-platform-gke" }
 resource google.container_node_pool "${np}" {
   cluster = ref("google.container_cluster", "gke_platform", "id")
   zone = z
-} where {
-  arg("google.container_cluster", "gke_platform", "zones", zs)
-  z in zs
-  np = str.format("np-%s", z)
-}
+} where
+  arg("google.container_cluster", "gke_platform", "zones", zs),
+  z in zs,
+  np = str.format("np-%s", z),
 
 resource k8s.namespace gke_platform { metadata.name = "gke-platform" }
 
@@ -25,9 +24,8 @@ ns_count(l) where l = collect_set(n), n in k8s.namespace
 deny "need the gke_platform namespace" where ns_count(l), not "gke_platform" in l
 
 # Related negation (same type as the stuck head): correctly undetermined.
-deny "no nodepool in zone b" where {
-  "gke_platform" in google.container_cluster
-  not "np-us-east1-b" in google.container_node_pool
-}
+deny "no nodepool in zone b" where
+  "gke_platform" in google.container_cluster,
+  not "np-us-east1-b" in google.container_node_pool,
 
 use fake

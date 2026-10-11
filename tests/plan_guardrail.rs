@@ -204,8 +204,8 @@ fn a_deny_reads_what_the_last_apply_derived() {
     s.write(
         "stacks/net.df",
         &format!(
-            "{NET}\ndeny(m) where {{\n  derived_at_last_apply(\"stacks/net.df:13\", n), n > 0\n  \
-             not active(_)\n  m = \"the subnets lost their region\"\n}}\n"
+            "{NET}\ndeny(m) where\n  derived_at_last_apply(\"stacks/net.df:13\", n), n > 0,\n  \
+             not active(_),\n  m = \"the subnets lost their region\",\n"
         ),
     );
     s.run(&["apply", "net", "--yes"]).success();

@@ -128,7 +128,7 @@ tick 1  16 changes
 
 tick 2  ? changes
   waits on  orders.endpoint
-  iam.policy "connect-${host}"             stacks/tour.df:323  waits on orders.endpoint
+  iam.policy "connect-${host}"             stacks/tour.df:322  waits on orders.endpoint
 
 policy  1 hold
   holds  a database must not be public  stacks/tour.df:172  1 hold

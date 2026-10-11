@@ -263,10 +263,9 @@ resource k8s.deployment app {{
   spec.template.metadata.labels = {{ app: "app" }}
   spec.template.spec.containers = [{{ name: "app", image: {image} }}]
 }}
-deny "image not pinned by digest" {{ image: c.image }} where {{
-  c in app.spec.template.spec.containers
-  not oci.pinned(c.image)
-}}
+deny "image not pinned by digest" {{ image: c.image }} where
+  c in app.spec.template.spec.containers,
+  not oci.pinned(c.image),
 "#
     )
 }

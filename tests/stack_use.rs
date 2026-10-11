@@ -22,9 +22,8 @@ output ip = edge.cidr
 const K3S: &str = r#"
 input host: string
 use k8s { namespace = "edge" }
-resource k8s.config_map "${d.metadata.name}" = d where {
-  d in yaml.decode(io.read("vendor/kubeconfig.yml"))
-}
+resource k8s.config_map "${d.metadata.name}" = d where
+  d in yaml.decode(io.read("vendor/kubeconfig.yml")),
 "#;
 
 const APPS: &str = r#"

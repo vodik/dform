@@ -72,8 +72,8 @@ fn a_deny_in_a_used_module_is_decided() {
         "use policy\n",
         &[(
             "policy.df",
-            "deny \"pod may run as root\" { workload: w } where {\n  w in k8s.deployment\n  \
-             p = w.spec.template.spec\n  not p.securityContext.runAsNonRoot == true\n}\n",
+            "deny \"pod may run as root\" { workload: w } where\n  w in k8s.deployment,\n  \
+             p = w.spec.template.spec,\n  not p.securityContext.runAsNonRoot == true,\n",
         )],
     ));
 }
@@ -85,8 +85,8 @@ fn a_deny_through_a_let_with_parameters_is_decided() {
     decided(plan(
         "helper-let-site",
         "let root(p) = true where not { p.securityContext.runAsNonRoot == true }\n\
-         deny \"pod may run as root\" { workload: w } where {\n  w in k8s.deployment\n  \
-         root(w.spec.template.spec) == true\n}\n",
+         deny \"pod may run as root\" { workload: w } where\n  w in k8s.deployment,\n  \
+         root(w.spec.template.spec) == true,\n",
         &[],
     ));
 }

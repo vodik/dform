@@ -883,7 +883,7 @@ fn references_of_every_kind_of_name() {
 
     // A predicate: its rule's head and the bodies that read it.
     let found = references(&mut c, &root, &stack, find(&stack, "vpc_peer_pair(ia", 2));
-    assert_eq!(found, at_places("stacks/dform.df", &[78, 83, 90]));
+    assert_eq!(found, at_places("stacks/dform.df", &[78, 80, 87]));
 
     // An input: the stack's own reads; a component's and a module's
     // `env` are their own inputs, given by the stack (R-205).
@@ -892,7 +892,7 @@ fn references_of_every_kind_of_name() {
         ("stacks/dform.df".to_string(), 9),
         ("stacks/dform.df".into(), 15),
         ("stacks/dform.df".into(), 54),
-        ("stacks/dform.df".into(), 96),
+        ("stacks/dform.df".into(), 93),
     ] {
         assert!(found.contains(&want), "{want:?} in {found:?}");
     }
@@ -915,7 +915,7 @@ fn references_of_every_kind_of_name() {
 
     // An object input read by its fields (R-38), and a type alias.
     let found = references(&mut c, &root, &stack, find(&stack, "input cidrs", 6));
-    assert_eq!(found, at_places("stacks/dform.df", &[10, 51, 54, 93]));
+    assert_eq!(found, at_places("stacks/dform.df", &[10, 51, 54, 90]));
     let found = references(&mut c, &root, &stack, find(&stack, "type environment", 5));
     assert_eq!(found, at_places("stacks/dform.df", &[9, 40]));
 
@@ -928,8 +928,8 @@ fn references_of_every_kind_of_name() {
             ("network.df".into(), 8),
             ("stacks/dform.df".into(), 51),
             ("stacks/dform.df".into(), 54),
-            ("stacks/dform.df".into(), 80),
-            ("stacks/dform.df".into(), 81),
+            ("stacks/dform.df".into(), 79),
+            ("stacks/dform.df".into(), 79),
         ]
     );
     // Its output read in the stack; its resources' addresses from outside
@@ -950,7 +950,7 @@ fn references_of_every_kind_of_name() {
             ("network.df".into(), 19),
             ("network.df".into(), 25),
             ("network.df".into(), 26),
-            ("stacks/dform.df".into(), 109),
+            ("stacks/dform.df".into(), 104),
         ]
     );
 
@@ -962,7 +962,7 @@ fn references_of_every_kind_of_name() {
         &format!("{original}\nextra(x) where vpc_peer_pair(x, _, _, _)\n"),
     );
     let found = references(&mut c, &root, &stack, find(&stack, "vpc_peer_pair(ia", 2));
-    assert_eq!(found, at_places("stacks/dform.df", &[78, 83, 90, 111]));
+    assert_eq!(found, at_places("stacks/dform.df", &[78, 80, 87, 106]));
 
     // An attribute path: every rule contributing to the cell, the
     // component's field and the module's.
@@ -1867,8 +1867,8 @@ fn inlay_hints_show_the_plan_and_values() {
     for want in [
         (15, "= \"staging\""),
         (51, "= \"10.50.0.0/16\""),
-        (93, "+ create"),
-        (93, "= \"10.50.0.0/16\""),
+        (90, "+ create"),
+        (90, "= \"10.50.0.0/16\""),
     ] {
         assert!(
             hints.contains(&(want.0, want.1.to_string())),

@@ -175,10 +175,9 @@ fn policy_reads_lifecycle_facts() {
         r#"
 
 resource db.postgres main { size = 1 }
-deny "databases must be protected" {addr: a} where {
-  a in db.postgres
-  not lifecycle(a, "prevent_destroy")
-}
+deny "databases must be protected" {addr: a} where
+  a in db.postgres,
+  not lifecycle(a, "prevent_destroy"),
 use fake
 "#,
     );

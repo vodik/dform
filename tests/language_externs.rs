@@ -18,10 +18,9 @@ resource mon.dashboard main {
 resource db.user app {
   password = pw
   token = tk
-} where {
-    kv.password("app", pw)
-    kv.token("app", tk)
-  }
+} where
+  kv.password("app", pw),
+  kv.token("app", tk),
 "#;
 
 fn scratch() -> Scratch {

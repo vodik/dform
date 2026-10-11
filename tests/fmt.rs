@@ -102,7 +102,8 @@ fn the_authors_line_breaks_do_not_survive() {
 }
 
 /// `src` without its comments, and without blank lines but between
-/// statements.
+/// statements; each line keeps its indentation, which decides whether it
+/// continues a clause.
 fn plain(src: &str) -> String {
     let tree = parse(src).syntax();
     let mut out = String::new();
@@ -113,9 +114,14 @@ fn plain(src: &str) -> String {
         match t.kind() {
             dform::syntax::SyntaxKind::COMMENT => {}
             WHITESPACE if t.text().contains('\n') && !top(&t) => {
-                if !out.ends_with('\n') {
+                let indent = t.text().rsplit('\n').next().unwrap_or("");
+                let line = out.rfind('\n').map_or(0, |i| i + 1);
+                if out[line..].trim().is_empty() {
+                    out.truncate(line);
+                } else {
                     out.push('\n');
                 }
+                out.push_str(indent);
             }
             _ => out.push_str(t.text()),
         }

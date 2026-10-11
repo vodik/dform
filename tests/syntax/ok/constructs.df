@@ -69,15 +69,14 @@ set { gke.static_ips = { "gke-platform-grpc": { type: "INTERNAL" } } } where env
 set from yaml.decode(io.read("settings.yaml")) @override where env("prod")
 
 env("prod")
-p(x_) where {
-  q(x_)
-  x_ == 1 + 2 * 3 - -4 / (5 % 2)
-  x_ != 0
-  x_ >= 1
-  x_ <= 9
-  x_ > 0
-  x_ < 10
-}
+p(x_) where
+  q(x_),
+  x_ == 1 + 2 * 3 - -4 / (5 % 2),
+  x_ != 0,
+  x_ >= 1,
+  x_ <= 9,
+  x_ > 0,
+  x_ < 10,
 r(v) where v = gke.static_ips."gke-platform-grpc".type
 s(v) where q(x_), o = { a: { b: x_ } }, v = o.a.b
 t(l) where l = [ x_ | q(x_) ], 1 in l, 2 not in l

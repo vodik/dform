@@ -115,9 +115,9 @@ fn a_policy_compares_memory_limits_in_bytes() {
              spec.template.spec.containers = [{{\n    name: \"web\",\n    image: \"web:1\",\n    \
              resources: {{ requests: {{ cpu: 500m, memory: 1Gi }}, limits: {{ cpu: 2000m, memory: {memory} }} }}\n  \
              }}]\n}}\n\n\
-             deny \"memory limit above 2Gi\" {{ container: c.name }} where {{\n  \
-             d in k8s.deployment\n  c in d.spec.template.spec.containers\n  \
-             c.resources.limits.memory > 2Gi\n}}\n"
+             deny \"memory limit above 2Gi\" {{ container: c.name }} where\n  \
+             d in k8s.deployment,\n  c in d.spec.template.spec.containers,\n  \
+             c.resources.limits.memory > 2Gi,\n"
         )
     };
     s.write("main.df", &src("1536Mi"));
@@ -253,9 +253,9 @@ fn dform_test_reads_quantities_as_plan_does() {
          spec.selector.matchLabels = { app: \"web\" }\n  \
          spec.template.spec.containers = [{\n    name: \"web\",\n    image: \"web:1\",\n    \
          resources: { limits: { cpu: 500m, memory: 3Gi } }\n  }]\n}\n\n\
-         deny \"memory limit above 2Gi\" { container: c.name } where {\n  \
-         d in k8s.deployment\n  c in d.spec.template.spec.containers\n  \
-         c.resources.limits.memory > 2Gi\n}\n",
+         deny \"memory limit above 2Gi\" { container: c.name } where\n  \
+         d in k8s.deployment,\n  c in d.spec.template.spec.containers,\n  \
+         c.resources.limits.memory > 2Gi,\n",
     );
     let r = s.run(&["test", "main.df"]).failure();
     assert!(

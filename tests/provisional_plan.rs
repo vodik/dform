@@ -73,8 +73,8 @@ fn unnested(mut r: Run) -> Run {
 fn a_deny_over_written_values_of_held_objects_is_decided() {
     let s = project(
         "provisional-deny-decided",
-        "deny \"pod may run as root\" { workload: w } where {\n  pod(w, p)\n  \
-         not p.securityContext.runAsNonRoot == true\n}\n",
+        "deny \"pod may run as root\" { workload: w } where\n  pod(w, p),\n  \
+         not p.securityContext.runAsNonRoot == true,\n",
     );
     let r = plan(&s).failure();
     let all = format!("{}{}", r.stdout, r.stderr);
@@ -94,9 +94,9 @@ fn a_deny_over_written_values_of_held_objects_is_decided() {
 fn a_deny_under_later_always_says_what_it_waits_on() {
     let s = project(
         "provisional-deny-waits",
-        "deny \"pod keeps the server's defaults\" { workload: w } where {\n  pod(w, p)\n  \
+        "deny \"pod keeps the server's defaults\" { workload: w } where\n  pod(w, p),\n  \
          { a: p.dnsPolicy, b: p.restartPolicy, c: p.serviceAccountName } == \
-         { a: \"x\", b: \"y\", c: \"z\" }\n}\n",
+         { a: \"x\", b: \"y\", c: \"z\" },\n",
     );
     let r = plan(&s).success();
     let (_, policy) = r.stdout.split_once("\npolicy  ").expect(&r.stdout);

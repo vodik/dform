@@ -4,7 +4,7 @@ deployment: stacks.dform[env=staging]
 plan: 13 changes (13 create) over 1 tick; policy: 9 hold
 
 tick 1  13 changes
-  + compute.vm bastion                    stacks/dform.df:93
+  + compute.vm bastion                    stacks/dform.df:90
       private_ip = "10.50.0.21"
       tags.team = "platform"              baseline.df:10
   + network.vpc main
@@ -41,7 +41,7 @@ tick 1  13 changes
         visibility = "private"
         vpc = peer.vpc
         zone = "us-test-1b"
-  + net.vpc_peering peer-main-peer        stacks/dform.df:86
+  + net.vpc_peering peer-main-peer        stacks/dform.df:83
       accepter_vpc = peer.vpc
       requester_vpc = main.vpc
       tags.team = "platform"              baseline.df:10

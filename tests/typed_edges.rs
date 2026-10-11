@@ -284,7 +284,7 @@ fn a_set_reads_its_value_at_the_attribute() {
     let set = |v: &str| {
         format!(
             "{deployment}set d.spec.template.spec.containers[c.name].resources.requests = {v} \
-             where {{ d in k8s.deployment, c in d.spec.template.spec.containers }}\n"
+             where d in k8s.deployment, c in d.spec.template.spec.containers\n"
         )
     };
     plans(&set("{ cpu: 100m }"), &[CPU]);
@@ -301,8 +301,8 @@ fn a_set_reads_its_value_at_the_attribute() {
 #[test]
 fn a_comparison_reads_its_literal_as_the_other_side() {
     let r = plan(&format!(
-        "{}deny \"cpu above 50m\" where {{\n  j in k8s.job\n  \
-         c in j.spec.template.spec.containers\n  c.resources.requests.cpu > 50m\n}}\n",
+        "{}deny \"cpu above 50m\" where\n  j in k8s.job,\n  \
+         c in j.spec.template.spec.containers,\n  c.resources.requests.cpu > 50m,\n",
         requesting("{ cpu: 100m }")
     ));
     assert!(
@@ -418,7 +418,7 @@ fn an_entry_and_a_pattern_are_typed_by_their_use() {
     );
     plans(
         &format!(
-            "let lim = {{ cpu: 100m }}\nlet c = x where {{\n  {{ cpu: x }} = lim\n}}\n{}",
+            "let lim = {{ cpu: 100m }}\nlet c = x where {{ cpu: x }} = lim\n{}",
             requesting("{ cpu: c }")
         ),
         &[CPU],

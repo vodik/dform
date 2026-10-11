@@ -60,10 +60,9 @@ fn a_deny_reads_through_a_relation_of_references() {
         "refs-typed-deny",
         &format!(
             "{WORKLOADS}\n\
-             deny \"pod may run as root\" {{ workload: w }} where {{\n  \
-               workload(w)\n  \
-               not w.spec.template.spec.securityContext.runAsNonRoot == true\n\
-             }}\n"
+             deny \"pod may run as root\" {{ workload: w }} where\n  \
+               workload(w),\n  \
+               not w.spec.template.spec.securityContext.runAsNonRoot == true,\n"
         ),
     );
     let r = mock(&s, &["plan"]).failure();

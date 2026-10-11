@@ -97,16 +97,11 @@ resource google.container_node_pool "np-${z}" {
 
 zone_count(n) where n = count(z), z in google.container_cluster["gke_platform"].zones
 
-deny "cluster must be in at least two zones" { cluster: "gke_platform" } where {
-  "gke_platform" in google.container_cluster
-  zone_count(n)
-  n < 2
-}
+deny "cluster must be in at least two zones" { cluster: "gke_platform" }
+  where "gke_platform" in google.container_cluster, zone_count(n), n < 2
 
 # A policy that has nothing to do with zones. Under coarse Rule 3 it would be
 # undetermined anyway (a `want` rule is stuck), which is the spurious case;
 # per key it is decided now, and holds.
-deny "cluster must not be deletable" { cluster: c } where {
-  c in google.container_cluster
-  not c.deletion_protection
-}
+deny "cluster must not be deletable" { cluster: c }
+  where c in google.container_cluster, not c.deletion_protection

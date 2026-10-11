@@ -240,11 +240,10 @@ fn policy_reads_a_secrets_age_and_its_rotation() {
     let s = project(
         "secrets-policy",
         r#"use time
-deny "${k} is older than 90 days" where {
-  secrets(k, "random", _, at)
-  now = time.now()
-  now - at > 90d
-}
+deny "${k} is older than 90 days" where
+  secrets(k, "random", _, at),
+  now = time.now(),
+  now - at > 90d,
 deny "rotates ${k} to generation ${g} (by ${by}): needs an approval" where rotated(k, g, by)
 "#,
     );

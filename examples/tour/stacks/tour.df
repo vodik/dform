@@ -285,12 +285,11 @@ reaches(a, c) where reaches(a, b), link(b, c)
 # every rule that holds adds to.
 resource net.route_table "${n}" { vpc = net.vpc[v] } where network_of(n, v)
 
-set net.route_table[a].routes = [{ destination: dest, target: net.vpc[w] }] where {
-  reaches(a, b)
-  a != b
-  network_of(b, w)
-  dest = net.vpc[w].cidr
-}
+set net.route_table[a].routes = [{ destination: dest, target: net.vpc[w] }] where
+  reaches(a, b),
+  a != b,
+  network_of(b, w),
+  dest = net.vpc[w].cidr,
 
 # 10. A name only apply learns
 #

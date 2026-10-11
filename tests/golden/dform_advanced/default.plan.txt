@@ -3,13 +3,13 @@ exit: ok
 plan: 13 changes (13 create) over 1 tick; policy: 2 hold
 
 tick 1  13 changes
-  + net.vpc core_a                           stacks/dform-advanced.df:112
+  + net.vpc core_a                           stacks/dform-advanced.df:106
       cidr = "10.210.0.0/16"
       tags.segment = "mesh"
-  + net.vpc core_b                           stacks/dform-advanced.df:112
+  + net.vpc core_b                           stacks/dform-advanced.df:106
       cidr = "10.220.0.0/16"
       tags.segment = "mesh"
-  + net.vpc core_c                           stacks/dform-advanced.df:112
+  + net.vpc core_c                           stacks/dform-advanced.df:106
       cidr = "10.230.0.0/16"
       tags.segment = "mesh"
   + net.vpc shared                           stacks/dform-advanced.df:40
@@ -21,10 +21,10 @@ tick 1  13 changes
   + net.vpc tenant_b                         stacks/dform-advanced.df:43
       cidr = "10.97.0.0/16"
       tags = { segment: "tenant", tenant: "tenant_b" }
-  + net.vpc_peering mesh-peer-core_a-core_b  stacks/dform-advanced.df:127
+  + net.vpc_peering mesh-peer-core_a-core_b  stacks/dform-advanced.df:120
       accepter_vpc = core_b
       requester_vpc = core_a
-  + net.vpc_peering mesh-peer-core_b-core_c  stacks/dform-advanced.df:127
+  + net.vpc_peering mesh-peer-core_b-core_c  stacks/dform-advanced.df:120
       accepter_vpc = core_c
       requester_vpc = core_b
   + net.route_table core_a                   stacks/dform-advanced.df:68
