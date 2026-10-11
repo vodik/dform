@@ -24,7 +24,7 @@ judgment about what's correct.
 ## Accepting a change
 
 ```bash
-UPDATE_GOLDEN=1 cargo test --test golden -- --test-threads=1
+UPDATE_GOLDEN=1 cargo test --test main -- golden:: --test-threads=1
 ```
 
 `--test-threads=1` matters when regenerating: one test writes the
@@ -43,5 +43,5 @@ output (stdout only), written by `tests/inspection_{why,query,graph}.rs`.
 Accept with the same variable:
 
 ```bash
-UPDATE_GOLDEN=1 cargo test --test inspection_why --test inspection_query --test inspection_graph
+UPDATE_GOLDEN=1 cargo test --test main -- inspection_why:: inspection_query:: inspection_graph::
 ```

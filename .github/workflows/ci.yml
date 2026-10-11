@@ -54,7 +54,7 @@ jobs:
         run: |
           rustup target add wasm32-wasip2
           cargo build -p dform-provider-fake --release --target wasm32-wasip2 --features component
-          cargo test --features wasm --test host_wasm
+          cargo test --features wasm --test main -- host_wasm::
 
       - name: plan examples/demo
         run: cargo run -q -- -C examples/demo plan

@@ -4929,6 +4929,10 @@ notification `dform/environment` with `{label, deployments}`
 
 `cargo test` runs the integration tests under `tests/` (one file per
 concern: adoption, chaos, k8s, aws, ...) and every crate's own tests.
+The files are modules of one binary, `tests/main.rs`, so the suite links
+once; `cargo test --test main -- golden::` runs one file's tests. The few
+that change process-wide state are binaries of their own (`--test
+model`, `--test interrupt`; `Cargo.toml` lists them).
 The protocol tests (`tests/protocol_*.rs`, `dform provider check`), the
 executor's parallel and resume tests and every golden `plan` run on more
 than one backend (`tests/common`'s `Backend`): the same cases, the same
@@ -4978,7 +4982,7 @@ example and adversarial programs: `tests/golden.rs`, snapshots under
 reviewing the diff) with:
 
 ```bash
-UPDATE_GOLDEN=1 cargo test --test golden -- --test-threads=1
+UPDATE_GOLDEN=1 cargo test --test main -- golden:: --test-threads=1
 ```
 
 See `tests/golden/README.md` for details.
@@ -5012,7 +5016,7 @@ at the end of `tests/unknowns.rs` are shrunk failures it found.
 The parser's suite is `tests/syntax.rs`: every `.df` file in the repository
 and `tests/syntax/ok/` (E §7's programs among them) parses and prints back
 byte for byte, and each `tests/syntax/err/*.df` fails with the diagnostics
-pinned in its `.txt` (accept with `UPDATE_GOLDEN=1 cargo test --test syntax`).
+pinned in its `.txt` (accept with `UPDATE_GOLDEN=1 cargo test --test main -- syntax::`).
 
 ## Performance
 

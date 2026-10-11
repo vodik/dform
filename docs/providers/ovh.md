@@ -351,8 +351,8 @@ multi-attach volumes are not in this provider yet.
 
 ## Testing
 
-`cargo test --test provider_ovh` runs it against a fake OVH API
+`cargo test --test main -- provider_ovh::` runs it against a fake OVH API
 (`dform_provider_ovh::fake`, with a DNS resolver beside it). `OVH_INTEGRATION=1
-OVH_CLOUD_PROJECT_SERVICE=<project> cargo test --test provider_ovh
-the_real_account` lists the regions of the real account the machine's
+OVH_CLOUD_PROJECT_SERVICE=<project> cargo test --test main --
+provider_ovh::the_real_account` lists the regions of the real account the machine's
 configuration names, and changes nothing.
