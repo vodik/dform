@@ -261,3 +261,34 @@ mod why_scope;
 mod why_unified;
 mod world;
 mod write_only;
+
+/// With `autotests` off a file under `tests/` that is neither a module
+/// here nor a `[[test]]` of its own is never built: each is one or the
+/// other.
+#[test]
+fn every_file_under_tests_is_a_module_or_a_target() {
+    let main = include_str!("main.rs");
+    let manifest = include_str!("../Cargo.toml");
+    let mut lost = Vec::new();
+    for e in std::fs::read_dir("tests").unwrap() {
+        let path = e.unwrap().path();
+        let Some(name) = path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .strip_suffix(".rs")
+        else {
+            continue;
+        };
+        let module = main.lines().any(|l| l == format!("mod {name};"));
+        let target = manifest.contains(&format!("[[test]]\nname = \"{name}\"\n"));
+        if name != "main" && module == target {
+            lost.push(name.to_string());
+        }
+    }
+    assert!(
+        lost.is_empty(),
+        "neither a module of tests/main.rs nor a [[test]] in Cargo.toml, or both: {lost:?}"
+    );
+}
