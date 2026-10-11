@@ -1,0 +1,72 @@
+==============================================
+examples/k3s-platform/providers/ovh/externs.df
+==============================================
+
+# The account's answers to the OVH tables, as the mock gives them: the
+# zone it hosts and the flavors of its region.
+
+ovh.zone("example.com", "example.com", ["dns200.anycast.me", "ns200.anycast.me"])
+
+ovh.flavor("BHS5", "d2-2", 1, 2Gi, 25Gi)
+ovh.flavor("BHS5", "b2-7", 2, 7Gi, 50Gi)
+ovh.flavor("BHS5", "b2-15", 4, 15Gi, 100Gi)
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (fact
+    (call
+      (member_expression
+        (identifier)
+        (identifier))
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (member_expression
+        (identifier)
+        (identifier))
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (integer)
+        (quantity)
+        (quantity))))
+  (fact
+    (call
+      (member_expression
+        (identifier)
+        (identifier))
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (integer)
+        (quantity)
+        (quantity))))
+  (fact
+    (call
+      (member_expression
+        (identifier)
+        (identifier))
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (integer)
+        (quantity)
+        (quantity)))))

@@ -1,0 +1,554 @@
+===============================
+examples/crud-api/stacks/api.df
+===============================
+
+use k8s
+
+let release = toml.decode(io.read("release.toml"))
+
+let live = world.k8s.service["shop/api"].spec.selector.color
+let live_image = world.k8s.deployment["shop/api-${live}"].spec.template.spec.containers[0].image
+let next = "green" where live == "blue"
+let next = "blue" where live == "green"
+let next = "blue" where not has live
+
+migrated(release.schema) where k8s.job["migrate-v${release.schema}"].status.succeeded == 1
+
+run(live, live_image)
+run(next, release.image) where migrated(release.schema)
+
+ready(colour) where run(colour, _), app[colour].ready_replicas == app[colour].total_replicas
+
+let serving = next where ready(next)
+let serving = live where not ready(next)
+
+resource k8s.service api {
+  metadata = { name: "api", namespace: "shop" }
+  spec.selector = { app: "api", color: serving }
+  spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
+}
+
+use policy
+
+resource k8s.namespace shop { metadata.name = "shop" }
+
+#| The migration to the release's schema: one Job per version.
+resource k8s.job "migrate-v${release.schema}" {
+  metadata = { name: "api-migrate-v${release.schema}", namespace: shop.metadata.name }
+  spec.backoffLimit = 2
+  spec.template.spec = {
+    restartPolicy: "Never",
+    containers: [{
+      name: "migrate",
+      image: release.image,
+      args: ["migrate", "--to", "${release.schema}"],
+      resources: { limits: { cpu: 500m, memory: 256Mi } },
+    }],
+  }
+}
+
+resource app "${colour}" { colour, image } where run(colour, image)
+
+#| One colour of the API: its Deployment, and how many of its replicas
+#| are ready.
+component app {
+  input colour: enum("blue", "green")
+  input image: string
+  output ready_replicas: int = deploy.status.readyReplicas
+  output total_replicas: int = deploy.status.replicas
+
+  resource k8s.deployment deploy {
+    metadata = { name: "api-${colour}", namespace: "shop" }
+    spec.replicas = 3
+    spec.selector.matchLabels = { app: "api", color: colour }
+    spec.template.metadata.labels = { app: "api", color: colour }
+    spec.template.spec.containers = [{
+      name: "api",
+      image,
+      ports: [{ containerPort: 8080, protocol: "TCP" }],
+      readinessProbe: { httpGet: { path: "/healthz", port: 8080 } },
+      resources: { limits: { cpu: 1, memory: 512Mi } },
+    }]
+  }
+}
+
+---
+
+(source_file
+  (use
+    (dotted_name
+      (identifier)))
+  (let
+    (identifier)
+    (call
+      (member_expression
+        (identifier)
+        (identifier))
+      (arguments
+        (call
+          (member_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (string
+              (string_content)))))))
+  (let
+    (identifier)
+    (member_expression
+      (member_expression
+        (member_expression
+          (index_expression
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier))
+            (string
+              (string_content)))
+          (identifier))
+        (identifier))
+      (identifier)))
+  (let
+    (identifier)
+    (member_expression
+      (index_expression
+        (member_expression
+          (member_expression
+            (member_expression
+              (member_expression
+                (index_expression
+                  (member_expression
+                    (member_expression
+                      (identifier)
+                      (identifier))
+                    (identifier))
+                  (string
+                    (string_content)
+                    (interpolation
+                      (identifier))))
+                (identifier))
+              (identifier))
+            (identifier))
+          (identifier))
+        (integer))
+      (identifier)))
+  (let
+    (identifier)
+    (string
+      (string_content))
+    (body
+      (comparison
+        (identifier)
+        (string
+          (string_content)))))
+  (let
+    (identifier)
+    (string
+      (string_content))
+    (body
+      (comparison
+        (identifier)
+        (string
+          (string_content)))))
+  (let
+    (identifier)
+    (string
+      (string_content))
+    (body
+      (not_literal
+        (has_literal
+          (identifier)))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))))
+    (body
+      (comparison
+        (member_expression
+          (member_expression
+            (index_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (string
+                (string_content)
+                (interpolation
+                  (member_expression
+                    (identifier)
+                    (identifier)))))
+            (identifier))
+          (identifier))
+        (integer))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier))))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (member_expression
+              (identifier)
+              (identifier)))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))
+      (comparison
+        (member_expression
+          (index_expression
+            (identifier)
+            (identifier))
+          (identifier))
+        (member_expression
+          (index_expression
+            (identifier)
+            (identifier))
+          (identifier)))))
+  (let
+    (identifier)
+    (identifier)
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))))
+  (let
+    (identifier)
+    (identifier)
+    (body
+      (not_literal
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (identifier))))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (list
+          (object
+            (object_field
+              (identifier)
+              (integer))
+            (object_field
+              (identifier)
+              (integer))
+            (object_field
+              (identifier)
+              (string
+                (string_content))))))))
+  (use
+    (dotted_name
+      (identifier)))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (string
+      (string_content)
+      (interpolation
+        (member_expression
+          (identifier)
+          (identifier))))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)
+              (interpolation
+                (member_expression
+                  (identifier)
+                  (identifier)))))
+          (object_field
+            (identifier)
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier)))))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (integer))
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (list
+              (object
+                (object_field
+                  (identifier)
+                  (string
+                    (string_content)))
+                (object_field
+                  (identifier)
+                  (member_expression
+                    (identifier)
+                    (identifier)))
+                (object_field
+                  (identifier)
+                  (list
+                    (string
+                      (string_content))
+                    (string
+                      (string_content))
+                    (string
+                      (interpolation
+                        (member_expression
+                          (identifier)
+                          (identifier))))))
+                (object_field
+                  (identifier)
+                  (object
+                    (object_field
+                      (identifier)
+                      (object
+                        (object_field
+                          (identifier)
+                          (quantity))
+                        (object_field
+                          (identifier)
+                          (quantity)))))))))))))
+  (resource
+    (dotted_name
+      (identifier))
+    (string
+      (interpolation
+        (identifier)))
+    (block
+      (field
+        (block_path
+          (identifier)))
+      (field
+        (block_path
+          (identifier))))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)))))))
+  (comment)
+  (comment)
+  (component
+    (identifier)
+    (statement_block
+      (input
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))
+          (string
+            (string_content))
+          (string
+            (string_content))))
+      (input
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (output
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)))
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (output
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)))
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (resource
+        (dotted_name
+          (identifier)
+          (identifier))
+        (identifier)
+        (block
+          (field
+            (block_path
+              (identifier))
+            (object
+              (object_field
+                (identifier)
+                (string
+                  (string_content)
+                  (interpolation
+                    (identifier))))
+              (object_field
+                (identifier)
+                (string
+                  (string_content)))))
+          (field
+            (block_path
+              (identifier)
+              (identifier))
+            (integer))
+          (field
+            (block_path
+              (identifier)
+              (identifier)
+              (identifier))
+            (object
+              (object_field
+                (identifier)
+                (string
+                  (string_content)))
+              (object_field
+                (identifier)
+                (identifier))))
+          (field
+            (block_path
+              (identifier)
+              (identifier)
+              (identifier)
+              (identifier))
+            (object
+              (object_field
+                (identifier)
+                (string
+                  (string_content)))
+              (object_field
+                (identifier)
+                (identifier))))
+          (field
+            (block_path
+              (identifier)
+              (identifier)
+              (identifier)
+              (identifier))
+            (list
+              (object
+                (object_field
+                  (identifier)
+                  (string
+                    (string_content)))
+                (object_field
+                  (identifier))
+                (object_field
+                  (identifier)
+                  (list
+                    (object
+                      (object_field
+                        (identifier)
+                        (integer))
+                      (object_field
+                        (identifier)
+                        (string
+                          (string_content))))))
+                (object_field
+                  (identifier)
+                  (object
+                    (object_field
+                      (identifier)
+                      (object
+                        (object_field
+                          (identifier)
+                          (string
+                            (string_content)))
+                        (object_field
+                          (identifier)
+                          (integer))))))
+                (object_field
+                  (identifier)
+                  (object
+                    (object_field
+                      (identifier)
+                      (object
+                        (object_field
+                          (identifier)
+                          (integer))
+                        (object_field
+                          (identifier)
+                          (quantity))))))))))))))

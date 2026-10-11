@@ -1,0 +1,22 @@
+=========================================
+tests/fixtures/crud-api/data/approvals.df
+=========================================
+
+# Drift accepted by hand, `approve(Type, Address)`: a module of facts
+# crud_api.df reads with `use data.approvals`.
+
+decl approve(type, address)
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (decl
+    (dotted_name
+      (identifier))
+    (columns
+      (field_declaration
+        (identifier))
+      (field_declaration
+        (identifier)))))

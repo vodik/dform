@@ -1,0 +1,122 @@
+===========================
+examples/crud-api/policy.df
+===========================
+
+#| The team's policy for what runs in the cluster: every container runs
+#| an image pinned by its digest, with limits.
+
+container(w, c) where w in k8s.deployment, c in w.spec.template.spec.containers
+container(w, c) where w in k8s.job, c in w.spec.template.spec.containers
+
+deny "an image is not pinned by its digest" { workload: w, image: c.image }
+  where container(w, c), not oci.pinned(c.image)
+
+deny "a container without limits" { workload: w, container: c.name }
+  where container(w, c), not has c.resources.limits
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
+      (in_literal
+        (identifier)
+        (member_expression
+          (member_expression
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier))
+            (identifier))
+          (identifier)))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
+      (in_literal
+        (identifier)
+        (member_expression
+          (member_expression
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier))
+            (identifier))
+          (identifier)))))
+  (check
+    (string
+      (string_content))
+    (object
+      (object_field
+        (identifier)
+        (identifier))
+      (object_field
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier))))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))
+      (not_literal
+        (atom_literal
+          (call
+            (member_expression
+              (identifier)
+              (identifier))
+            (arguments
+              (member_expression
+                (identifier)
+                (identifier))))))))
+  (check
+    (string
+      (string_content))
+    (object
+      (object_field
+        (identifier)
+        (identifier))
+      (object_field
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier))))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))
+      (not_literal
+        (has_literal
+          (member_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier)))))))

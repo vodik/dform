@@ -1,0 +1,20 @@
+=========================================
+tests/fixtures/bootstrap/data/releases.df
+=========================================
+
+# The release to run, `release(image)`: a module of facts workload.df
+# reads with `use data.releases`. Edit it and the controller deploys it.
+
+release("gcr.io/platform/web:1.0")
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))))))

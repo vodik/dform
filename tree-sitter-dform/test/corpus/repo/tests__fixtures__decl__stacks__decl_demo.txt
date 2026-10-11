@@ -1,0 +1,125 @@
+=======================================
+tests/fixtures/decl/stacks/decl_demo.df
+=======================================
+
+# Demo: schemas + record matching + wildcards. No resources.
+# To run it, from this directory: README.md.
+
+# The names are the record's fields: `project{ network_name: n }`.
+decl project(id: int, name: string, region: string, network_name: string, proxy_cidr: string)
+
+# No resources, but a plan still runs against a provider: the mock's fake.
+use fake
+
+project(1, "alpha", "us-east-1", "net-a", "10.0.0.0/24")
+project(2, "beta", "us-east-1", "net-b", "10.1.0.0/24")
+
+# Match only the fields you care about (missing fields become wildcards in rule bodies).
+proj_basic(id, name, region) where project(id: id, name: name, region: region)
+
+# You can also use anonymous wildcards in positional form.
+proj_ids(id) where project(id, _, _, _, _)
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (decl
+    (dotted_name
+      (identifier))
+    (columns
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))))
+  (comment)
+  (use
+    (dotted_name
+      (identifier)))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (integer)
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (integer)
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (comment)
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (named_argument
+              (identifier)
+              (identifier))
+            (named_argument
+              (identifier)
+              (identifier))
+            (named_argument
+              (identifier)
+              (identifier)))))))
+  (comment)
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier)
+            (identifier)
+            (identifier)
+            (identifier)))))))

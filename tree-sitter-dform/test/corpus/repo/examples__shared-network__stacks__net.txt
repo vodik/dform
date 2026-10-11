@@ -1,0 +1,359 @@
+=====================================
+examples/shared-network/stacks/net.df
+=====================================
+
+key env: enum("staging", "prod") = "staging"
+input supernet: inet
+use aws { region = "us-east-1", expect_account = "123456789012" }
+
+let net = toml.decode(io.read("data/networks.toml"))
+set from yaml.decode(io.read("config/net/${env}.yaml"))
+
+resource network "${s.team}" {
+  team = s.team
+  cidr = inet.subnet(supernet, 4, s.slot)
+} where s in net.spokes
+
+component network {
+  input team: string
+  input cidr: inet
+  output vpc: aws.vpc = vpc
+
+  resource aws.vpc vpc { cidr_block = cidr, tags = { Name: team, team } }
+  resource aws.subnet "private-${zone}" {
+    vpc
+    cidr_block = inet.subnet(cidr, 8, n)
+    availability_zone = zone
+  } where aws.availability_zone("available", zone, n)
+}
+
+#| The core: the services every team reaches, the hub of the spokes.
+resource aws.vpc core { cidr_block = inet.subnet(supernet, 4, 0), tags = { Name: "core" } }
+
+hub(core)
+spoke(vpc) where s in net.spokes, vpc in aws.vpc, vpc == network[s.team].vpc
+link(from, to) where hub(from), spoke(to)
+
+resource aws.vpc_peering_connection "${from.tags.Name}-${to.tags.Name}" {
+  vpc = from
+  peer_vpc = to
+} where link(from, to)
+
+deny "a spoke peers only the core" { peering }
+  where peering in aws.vpc_peering_connection, spoke(peering.vpc), spoke(peering.peer_vpc)
+
+use policy
+
+---
+
+(source_file
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (string
+        (string_content))
+      (string
+        (string_content)))
+    (string
+      (string_content)))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))))
+  (use
+    (dotted_name
+      (identifier))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (let
+    (identifier)
+    (call
+      (member_expression
+        (identifier)
+        (identifier))
+      (arguments
+        (call
+          (member_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (string
+              (string_content)))))))
+  (set
+    (call
+      (member_expression
+        (identifier)
+        (identifier))
+      (arguments
+        (call
+          (member_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (string
+              (string_content)
+              (interpolation
+                (identifier))
+              (string_content)))))))
+  (resource
+    (dotted_name
+      (identifier))
+    (string
+      (interpolation
+        (member_expression
+          (identifier)
+          (identifier))))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (call
+          (member_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (identifier)
+            (integer)
+            (member_expression
+              (identifier)
+              (identifier))))))
+    (clause
+      (body
+        (in_literal
+          (identifier)
+          (member_expression
+            (identifier)
+            (identifier))))))
+  (component
+    (identifier)
+    (statement_block
+      (input
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (input
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (output
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)
+            (identifier)))
+        (identifier))
+      (resource
+        (dotted_name
+          (identifier)
+          (identifier))
+        (identifier)
+        (block
+          (field
+            (block_path
+              (identifier))
+            (identifier))
+          (field
+            (block_path
+              (identifier))
+            (object
+              (object_field
+                (identifier)
+                (identifier))
+              (object_field
+                (identifier))))))
+      (resource
+        (dotted_name
+          (identifier)
+          (identifier))
+        (string
+          (string_content)
+          (interpolation
+            (identifier)))
+        (block
+          (field
+            (block_path
+              (identifier)))
+          (field
+            (block_path
+              (identifier))
+            (call
+              (member_expression
+                (identifier)
+                (identifier))
+              (arguments
+                (identifier)
+                (integer)
+                (identifier))))
+          (field
+            (block_path
+              (identifier))
+            (identifier)))
+        (clause
+          (body
+            (atom_literal
+              (call
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (arguments
+                  (string
+                    (string_content))
+                  (identifier)
+                  (identifier)))))))))
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (call
+          (member_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (identifier)
+            (integer)
+            (integer))))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (identifier))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
+      (comparison
+        (identifier)
+        (member_expression
+          (index_expression
+            (identifier)
+            (member_expression
+              (identifier)
+              (identifier)))
+          (identifier)))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (string
+      (interpolation
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier)))
+      (string_content)
+      (interpolation
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier))))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (identifier)))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)))))))
+  (check
+    (string
+      (string_content))
+    (object
+      (object_field
+        (identifier)))
+    (body
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (member_expression
+              (identifier)
+              (identifier)))))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (member_expression
+              (identifier)
+              (identifier)))))))
+  (use
+    (dotted_name
+      (identifier))))

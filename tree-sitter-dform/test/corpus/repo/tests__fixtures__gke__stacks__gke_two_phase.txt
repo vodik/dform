@@ -1,0 +1,678 @@
+==========================================
+tests/fixtures/gke/stacks/gke_two_phase.df
+==========================================
+
+# A two-phase GKE / kubernetes stack.
+# Run with the gke and k8s mock schemas: the cluster's zones, endpoint and
+# ca are open nulls until the cluster exists. Two ticks.
+#
+# Both branches of a deny at a boundary: the cluster is placed in
+# `zones` zones, two by default. With one (`--set zones=1`) its zones come
+# back with one element, so at the boundary the two-zones deny derives and
+# apply stops after tick 1, before the nodepools and the kubernetes objects.
+# To run it, from this directory: README.md.
+
+input env: enum("dev", "stg", "prod") = "dev"
+# How many zones the cluster is placed in.
+input zones: int = 2 check zones >= 1
+# The project and the cluster's networks, dev's below.
+input gcp { project_id: string, project_name: string, region: string, network_name: string }
+input gke { control_plane_cidr: inet, subnet_cidr: inet }
+
+use gke
+
+zone_at(1, "us-east1-b")
+zone_at(2, "us-east1-c")
+
+set {
+  gcp.project_id = "platform-dev-973682"
+  gcp.project_name = "platform-dev"
+  gcp.region = "us-east1"
+  gcp.network_name = "platform-dev-network"
+  gke = { control_plane_cidr: "172.16.3.96/28", subnet_cidr: "10.141.76.0/22" }
+} where env == "dev"
+
+project(
+  gcp.project_id,
+  gcp.project_name,
+  gcp.region,
+  "projects/${gcp.project_id}/global/networks/${gcp.network_name}",
+)
+
+resource google.compute_subnetwork gke_subnet {
+  project = id
+  region
+  network = net_id
+  name = "${name}-gke-subnet"
+  ip_cidr_range = gke.subnet_cidr
+} where project(id, name, region, net_id)
+
+# Carries a fresh null (subnetwork) and is still definite.
+resource google.compute_address static_ip {
+  project = id
+  region
+  name = "gke-platform-grpc"
+  subnetwork = gke_subnet
+} where project(id, _, region, _)
+
+resource google.container_cluster gke_platform {
+  env
+  project_id = id
+  name = "${name}-gke"
+  network_id = net_id
+  subnetwork = gke_subnet
+  master_control_plane_cidr = gke.control_plane_cidr
+  node_locations = [ z | zone_at(i, z), i <= zones ]
+  deletion_protection = true
+} where project(id, name, _, net_id)
+
+# The k8s provider, configured from phase-1 nulls (two open) and the
+# client's token, a secret the data source answers: its objects wait for
+# the tick after the cluster's.
+use k8s {
+  host = google.container_cluster["gke_platform"].endpoint
+  ca = google.container_cluster["gke_platform"].ca_certificate
+  token = google.client_config[gcp.project_id]
+}
+
+resource k8s.namespace gke_platform { metadata.name = "gke-platform" }
+
+# A read in the clause is an attr join (the value now), not a reference.
+resource k8s.deployment api {
+  metadata.namespace = ns
+  spec.replicas = 3
+  spec.selector.matchLabels = { app: "api" }
+  spec.template.metadata.labels = { app: "api" }
+  spec.template.spec.containers = [{ name: "api", image: "gcr.io/platform/api:1.42" }]
+} where ns = k8s.namespace["gke_platform"].metadata.name
+
+resource k8s.secret db_credentials {
+  metadata.namespace = ns
+  data = { password: google.secret_manager_secret_version["db_pw"].secret_data }
+} where ns = k8s.namespace["gke_platform"].metadata.name
+
+# One nodepool per zone: member over an open null is a content position.
+resource google.container_node_pool "np-${z}" {
+  cluster = google.container_cluster["gke_platform"]
+  zone = z
+  min = 1
+  max = 3
+} where z in google.container_cluster["gke_platform"].zones
+
+zone_count(n) where n = count(z), z in google.container_cluster["gke_platform"].zones
+
+deny "cluster must be in at least two zones" { cluster: "gke_platform" }
+  where "gke_platform" in google.container_cluster, zone_count(n), n < 2
+
+# A policy that has nothing to do with zones. Under coarse Rule 3 it would be
+# undetermined anyway (a `want` rule is stuck), which is the spurious case;
+# per key it is decided now, and holds.
+deny "cluster must not be deletable" { cluster: c }
+  where c in google.container_cluster, not c.deletion_protection
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (string
+        (string_content))
+      (string
+        (string_content))
+      (string
+        (string_content)))
+    (string
+      (string_content)))
+  (comment)
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)))
+    (integer)
+    (refinement
+      (body
+        (comparison
+          (identifier)
+          (integer)))))
+  (comment)
+  (input
+    (identifier)
+    (input_fields
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))))
+  (input
+    (identifier)
+    (input_fields
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))))
+  (use
+    (dotted_name
+      (identifier)))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (integer)
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (integer)
+        (string
+          (string_content)))))
+  (set
+    (set_block
+      (set_entry
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))
+      (set_entry
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))
+      (set_entry
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))
+      (set_entry
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))
+      (set_entry
+        (identifier)
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (string
+              (string_content))))))
+    (body
+      (comparison
+        (identifier)
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)
+          (interpolation
+            (member_expression
+              (identifier)
+              (identifier)))
+          (string_content)
+          (interpolation
+            (member_expression
+              (identifier)
+              (identifier)))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (interpolation
+            (identifier))
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier))))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)
+              (identifier)
+              (identifier)))))))
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (identifier)))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)
+              (identifier)
+              (identifier)))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (interpolation
+            (identifier))
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (comprehension
+          (identifier)
+          (body
+            (atom_literal
+              (call
+                (identifier)
+                (arguments
+                  (identifier)
+                  (identifier))))
+            (comparison
+              (identifier)
+              (identifier)))))
+      (field
+        (block_path
+          (identifier))
+        (true)))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)
+              (identifier)
+              (identifier)))))))
+  (comment)
+  (comment)
+  (comment)
+  (use
+    (dotted_name
+      (identifier))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (index_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (string
+              (string_content)))
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (index_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (string
+              (string_content)))
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (index_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (member_expression
+            (identifier)
+            (identifier))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (integer))
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier)
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier)
+          (identifier))
+        (list
+          (object
+            (object_field
+              (identifier)
+              (string
+                (string_content)))
+            (object_field
+              (identifier)
+              (string
+                (string_content)))))))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (member_expression
+            (member_expression
+              (index_expression
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (string
+                  (string_content)))
+              (identifier))
+            (identifier))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (member_expression
+              (index_expression
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (string
+                  (string_content)))
+              (identifier))))))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (member_expression
+            (member_expression
+              (index_expression
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (string
+                  (string_content)))
+              (identifier))
+            (identifier))))))
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (string
+      (string_content)
+      (interpolation
+        (identifier)))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (index_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (string
+            (string_content))))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (integer))
+      (field
+        (block_path
+          (identifier))
+        (integer)))
+    (clause
+      (body
+        (in_literal
+          (identifier)
+          (member_expression
+            (index_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (string
+                (string_content)))
+            (identifier))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (comparison
+        (identifier)
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (in_literal
+        (identifier)
+        (member_expression
+          (index_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (string
+              (string_content)))
+          (identifier)))))
+  (check
+    (string
+      (string_content))
+    (object
+      (object_field
+        (identifier)
+        (string
+          (string_content))))
+    (body
+      (in_literal
+        (string
+          (string_content))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (comparison
+        (identifier)
+        (integer))))
+  (comment)
+  (comment)
+  (comment)
+  (check
+    (string
+      (string_content))
+    (object
+      (object_field
+        (identifier)
+        (identifier)))
+    (body
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
+      (not_literal
+        (truth_literal
+          (member_expression
+            (identifier)
+            (identifier)))))))

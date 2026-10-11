@@ -48,9 +48,9 @@ one line per event and per tick:
 ```
 
 ```bash
-cargo run -- -C examples/bootstrap controller run workload                   # poll every 500ms
-cargo run -- -C examples/bootstrap controller run workload --poll 100 --max-events 3   # stop after 3 events
-cargo run -- -C examples/bootstrap controller run workload --once            # what changed since the last run
+cargo run -- -C tests/fixtures/bootstrap controller run workload                   # poll every 500ms
+cargo run -- -C tests/fixtures/bootstrap controller run workload --poll 100 --max-events 3   # stop after 3 events
+cargo run -- -C tests/fixtures/bootstrap controller run workload --once            # what changed since the last run
 ```
 
 The target names the stack, and of a keyed stack one deployment
@@ -98,7 +98,7 @@ The controller parses the program once and again only for a file whose
 text changed, and drops what an event registered for diagnostics with the
 event, so a long-running controller does not grow per event.
 
-The rest of the plan still applies. `examples/bootstrap/stacks/workload.df` is the
+The rest of the plan still applies. `tests/fixtures/bootstrap/stacks/workload.df` is the
 demo: replicas are `auto_reconcile`, any other drift waits for `approve`,
 and in prod a rollout waits for an approval of its plan (`approval/1`).
 
@@ -106,17 +106,17 @@ and in prod a rollout waits for an approval of its plan (`approval/1`).
 
 One program creates the cluster and installs dform in it; the workload's
 state then moves where the in-cluster controller reaches it, a bucket, and
-the controller runs it from there. `examples/bootstrap/` is the demo, on
+the controller runs it from there. `tests/fixtures/bootstrap/` is the demo, on
 the mocks and MinIO (`crates/dform-s3/minio.sh`; its test,
 `tests/controller_bootstrap.rs`, takes the fake S3 server when MinIO is not
 there):
 
 ```bash
 eval "$(crates/dform-s3/minio.sh start)"
-cargo run -- -C examples/bootstrap apply bootstrap   # 3 ticks
-cargo run -- -C examples/bootstrap stack handover workload \
+cargo run -- -C tests/fixtures/bootstrap apply bootstrap   # 3 ticks
+cargo run -- -C tests/fixtures/bootstrap stack handover workload \
   --to 's3("dform-test", "platform/workload", {endpoint: "http://127.0.0.1:9000"})'
-cargo run -- -C examples/bootstrap controller run workload
+cargo run -- -C tests/fixtures/bootstrap controller run workload
 crates/dform-s3/minio.sh stop
 ```
 
@@ -176,7 +176,7 @@ facts, `use data.approvals`) or
 as a file in the drop directory `approvals/` beside the state (`event
 approval`); `tick N: approved by WHO: plan digest ...`. A token for another
 plan is ignored, one that fails otherwise is logged (`approval refused:
-...`). `examples/bootstrap/stacks/workload.df` holds a prod rollout this way.
+...`). `tests/fixtures/bootstrap/stacks/workload.df` holds a prod rollout this way.
 
 ## Watching documents and tables
 

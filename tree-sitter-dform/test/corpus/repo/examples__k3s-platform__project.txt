@@ -1,0 +1,52 @@
+================================
+examples/k3s-platform/project.df
+================================
+
+#| The platform and its apps, in staging and in prod.
+resource stacks.platform "${env}" { env } where env in ["staging", "prod"]
+resource stacks.apps "${env}" { env } where env in ["staging", "prod"]
+
+---
+
+(source_file
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (string
+      (interpolation
+        (identifier)))
+    (block
+      (field
+        (block_path
+          (identifier))))
+    (clause
+      (body
+        (in_literal
+          (identifier)
+          (list
+            (string
+              (string_content))
+            (string
+              (string_content)))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (string
+      (interpolation
+        (identifier)))
+    (block
+      (field
+        (block_path
+          (identifier))))
+    (clause
+      (body
+        (in_literal
+          (identifier)
+          (list
+            (string
+              (string_content))
+            (string
+              (string_content))))))))

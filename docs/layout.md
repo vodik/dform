@@ -96,26 +96,22 @@ project module.
 ## This repository
 
 Every example is a project under `examples/<name>/`, with its own
-`dform.toml`:
+`dform.toml`: an estate someone runs, its README saying what it is and
+walking its commands.
 
-| project                 | what it shows                                             |
-|-------------------------|-----------------------------------------------------------|
-| `examples/tour`         | start here: a tutorial, read top to bottom                |
-| `examples/demo`         | the demo: modules, a component, per-env config, matrix   |
-| `examples/gke-platform` | a GKE stack, its peerings a CSV table                     |
-| `examples/advanced`     | transitive closure: reachability, routes, group membership|
-| `examples/adopt`        | adopting an existing resource from inventory              |
-| `examples/decl`         | declared relations, record matching, wildcards            |
-| `examples/k8s`          | the mock Kubernetes provider                              |
-| `examples/aws`          | the Terraform-shaped mock AWS provider                    |
-| `examples/refine`       | refinement types                                          |
-| `examples/gke`          | two-phase GKE: `gke_two_phase`, in two zones or one       |
-| `examples/bootstrap`    | two stacks: bootstrap and the controller's workload       |
-| `examples/approvals`    | approvals over a signed plan digest                       |
-| `examples/crud-api`     | a blue/green rollout (proposal G)                         |
+| project                   | what it is                                                     |
+|---------------------------|----------------------------------------------------------------|
+| `examples/shop`           | a small web shop on AWS, staging and prod: start here          |
+| `examples/shared-network` | a company's hub-and-spoke network, a spoke per team            |
+| `examples/k3s-platform`   | k3s on an OVH instance, and the apps in the cluster            |
+| `examples/gke-platform`   | a GKE platform per environment, its peerings a CSV table       |
+| `examples/crud-api`       | an API's blue/green rollout on Kubernetes                      |
 
 Test-only programs and fixtures are under `tests/fixtures/` (the
-adversarial stratification cases, world files, the `leaky` schema). The
+adversarial stratification cases, world files, the `leaky` schema, and
+the projects that were examples before the estates: `demo`, `tour`,
+`adopt`, `advanced`, `approvals`, `aws`, `bootstrap`, `crud-api`, `decl`,
+`gke`, `k8s`, `refine`). The
 mock's built-in schemas (`fake`, `gke`, `k8s`, `aws-mock`) are
 `crates/dform-mock/schemas/<name>.df`. The root keeps the workspace, docs,
 proposals, editors, `tree-sitter-dform`, `DESIGN.org` and `WORK.org`.

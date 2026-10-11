@@ -1,0 +1,303 @@
+=====================================
+tests/fixtures/aws/stacks/aws_demo.df
+=====================================
+
+# A small web stack planned against the Terraform-shaped mock AWS provider
+# (dform.toml: aws is the built-in aws-mock). No account: the world is a JSON file.
+#
+# To run it, from this directory: README.md.
+#
+# Two shapes to look at:
+#   - Optional+Computed: subnet `a` sets availability_zone, so a ref to it is
+#     the constant; instance `web` leaves its own unset, so a ref to it is the
+#     null ?aws.instance/web#availability_zone until Apply picks one. Instance
+#     `bastion` leaves subnet unset: AWS puts it in a default subnet.
+#   - keyless sets: the security group's ingress rules have no key; the plan
+#     compares them as a set, so their order never matters.
+
+use aws
+
+resource aws.vpc main { cidr_block = "10.0.0.0/16", tags = { "Name": "main" } }
+
+resource aws.subnet a {
+  vpc = main
+  cidr_block = "10.0.1.0/24"
+  availability_zone = "us-east-1a"
+}
+
+resource aws.security_group web {
+  name = "web"
+  vpc = main
+  ingress = [
+    { from_port: 443, to_port: 443, protocol: "tcp", cidr_blocks: ["0.0.0.0/0"] },
+    { from_port: 80, to_port: 80, protocol: "tcp", cidr_blocks: ["0.0.0.0/0"] },
+  ]
+  egress = [{ from_port: 0, to_port: 0, protocol: "-1", cidr_blocks: ["0.0.0.0/0"] }]
+}
+
+resource aws.instance web {
+  ami = "ami-0abcdef1234567890"
+  instance_type = "t3.small"
+  subnet = a
+  vpc_security_groups = [aws.security_group["web"]]
+}
+
+resource aws.instance bastion {
+  instance_type = "t3.micro"
+  tags = { subnet_az: a.availability_zone, web_az: aws.instance["web"].availability_zone }
+}
+
+resource aws.eip web { domain = "vpc", instance = aws.instance["web"] }
+
+resource aws.db_instance app {
+  identifier = "app"
+  instance_class = "db.t3.micro"
+  password = "correct-horse-battery-staple"
+  vpc_security_groups = [aws.security_group["web"]]
+  skip_final_snapshot = true
+}
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (use
+    (dotted_name
+      (identifier)))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (string
+              (string_content))
+            (string
+              (string_content)))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (list
+          (object
+            (object_field
+              (identifier)
+              (integer))
+            (object_field
+              (identifier)
+              (integer))
+            (object_field
+              (identifier)
+              (string
+                (string_content)))
+            (object_field
+              (identifier)
+              (list
+                (string
+                  (string_content)))))
+          (object
+            (object_field
+              (identifier)
+              (integer))
+            (object_field
+              (identifier)
+              (integer))
+            (object_field
+              (identifier)
+              (string
+                (string_content)))
+            (object_field
+              (identifier)
+              (list
+                (string
+                  (string_content)))))))
+      (field
+        (block_path
+          (identifier))
+        (list
+          (object
+            (object_field
+              (identifier)
+              (integer))
+            (object_field
+              (identifier)
+              (integer))
+            (object_field
+              (identifier)
+              (string
+                (string_content)))
+            (object_field
+              (identifier)
+              (list
+                (string
+                  (string_content)))))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (list
+          (index_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (string
+              (string_content)))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (member_expression
+              (identifier)
+              (identifier)))
+          (object_field
+            (identifier)
+            (member_expression
+              (index_expression
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (string
+                  (string_content)))
+              (identifier)))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (index_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (string
+            (string_content))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (list
+          (index_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier))
+        (true)))))

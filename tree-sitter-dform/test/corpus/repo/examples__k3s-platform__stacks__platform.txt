@@ -1,0 +1,278 @@
+========================================
+examples/k3s-platform/stacks/platform.df
+========================================
+
+#| The cluster: one OVH instance with k3s on it, its API's name, and the
+#| namespace the apps run in.
+key env: enum("staging", "prod") = "staging"
+input flavor: string = "b2-7"
+output kubeconfig: secret(string) = kubeconfig
+output ingress: ip = server.public_ip
+
+use ovh { project = "shop" }
+
+deny "the domain is not on this account" where not ovh.zone("example.com", _, _)
+
+use policy
+
+set flavor = "b2-15" where env == "prod"
+
+#| The key the operators log in with.
+resource ovh.ssh_key admin {
+  name = "k3s-${env}-admin"
+  public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGqZ1x3m0pWb5nX0kB7vXq9sQ2y8Tq0q3m7cJ4yQx1aB ops@example.com"
+}
+
+let k3s_init = "#!/bin/sh\ncurl -sfL https://get.k3s.io | sh -\n"
+
+resource ovh.instance server {
+  name = "k3s-${env}"
+  region = "BHS5"
+  flavor
+  image = "Ubuntu 24.04"
+  ssh_key = admin
+  user_data = k3s_init
+}
+
+let raw: secret(string) = io.read("ssh://ubuntu@${server.public_ip}/etc/rancher/k3s/k3s.yaml")
+let kubeconfig = str.replace(raw, "https://127.0.0.1:6443", "https://${server.public_ip}:6443")
+use k8s { kubeconfig }
+
+resource k8s.namespace apps { metadata.name = "apps" }
+
+#| The cluster's API, under the environment's name.
+resource ovh.domain_record api {
+  zone = "example.com"
+  subdomain = "api.${env}"
+  type = "A"
+  target = server.public_ip
+  ttl = 300
+}
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (string
+        (string_content))
+      (string
+        (string_content)))
+    (string
+      (string_content)))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)))
+    (string
+      (string_content)))
+  (output
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (type
+        (dotted_name
+          (identifier))))
+    (identifier))
+  (output
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)))
+    (member_expression
+      (identifier)
+      (identifier)))
+  (use
+    (dotted_name
+      (identifier))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (check
+    (string
+      (string_content))
+    (body
+      (not_literal
+        (atom_literal
+          (call
+            (member_expression
+              (identifier)
+              (identifier))
+            (arguments
+              (string
+                (string_content))
+              (identifier)
+              (identifier)))))))
+  (use
+    (dotted_name
+      (identifier)))
+  (set
+    (identifier)
+    (string
+      (string_content))
+    (body
+      (comparison
+        (identifier)
+        (string
+          (string_content)))))
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)
+          (interpolation
+            (identifier))
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (let
+    (identifier)
+    (string
+      (string_content)
+      (escape_sequence)
+      (string_content)
+      (escape_sequence)))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)
+          (interpolation
+            (identifier))))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (identifier))))
+  (let
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (type
+        (dotted_name
+          (identifier))))
+    (call
+      (member_expression
+        (identifier)
+        (identifier))
+      (arguments
+        (string
+          (string_content)
+          (interpolation
+            (member_expression
+              (identifier)
+              (identifier)))
+          (string_content)))))
+  (let
+    (identifier)
+    (call
+      (member_expression
+        (identifier)
+        (identifier))
+      (arguments
+        (identifier)
+        (string
+          (string_content))
+        (string
+          (string_content)
+          (interpolation
+            (member_expression
+              (identifier)
+              (identifier)))
+          (string_content)))))
+  (use
+    (dotted_name
+      (identifier))
+    (block
+      (field
+        (block_path
+          (identifier)))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)
+          (interpolation
+            (identifier))))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (integer)))))

@@ -1,0 +1,71 @@
+=======================
+examples/shop/policy.df
+=======================
+
+#| The shop's policy: every resource carries the team's tag, and a
+#| replace or a delete in prod is signed off before it applies.
+input env: enum("staging", "prod")
+
+set r.tags = { team: "shop" } where r in resource
+
+requires_approval(r, "${kind} of ${r} in prod")
+  where env == "prod", deformation(kind, r, _), kind in ["replace", "delete"]
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (string
+        (string_content))
+      (string
+        (string_content))))
+  (set
+    (member_expression
+      (identifier)
+      (identifier))
+    (object
+      (object_field
+        (identifier)
+        (string
+          (string_content))))
+    (body
+      (in_literal
+        (identifier)
+        (any_resource))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (string
+          (interpolation
+            (identifier))
+          (string_content)
+          (interpolation
+            (identifier))
+          (string_content))))
+    (body
+      (comparison
+        (identifier)
+        (string
+          (string_content)))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier)
+            (identifier))))
+      (in_literal
+        (identifier)
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content)))))))

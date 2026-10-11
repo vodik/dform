@@ -1,0 +1,1136 @@
+==================================
+tests/fixtures/tour/stacks/tour.df
+==================================
+
+# A tour of dform, top to bottom.
+#
+# dform does what Terraform does: you write what should exist, dform plans
+# the change, and apply makes it. The difference is the language. A dform
+# program is facts and rules, closer to a database query than to a
+# template, and dform evaluates all of it at once: every rule can read
+# everything the program says should exist, components included. The first
+# sections are the parts you know from Terraform. The later ones build on
+# them to do what Terraform cannot express: policy that adds as well as
+# forbids, an answer to "why is this here", rules that recurse, and
+# resources whose names only apply learns.
+#
+# Each numbered section adds one idea: what it is, the command to run, and
+# what to look for in the output. Run the commands in order, from the
+# directory holding dform.toml (tests/fixtures/tour). In a checkout of dform
+# repository, `dform` is `cargo run --`. A line starting with `$` is a
+# command; the lines under it are part of what it prints.
+#
+# The resources are on a fake cloud built into dform: nothing to sign up
+# for, no credentials, and nothing real is made.
+
+# A file begins with what it takes, its header (section 4 says more): the
+# stack is this file, `tour`, the `key` makes one deployment per value of
+# `env`, and an `input` is a value given from outside or by `settings`.
+key env: enum("dev", "prod") = "dev"
+input public_db: bool = false
+input database { backup_days: int = 1, multi_az: bool = false }
+use fake
+
+# 1. One resource
+#
+# A resource block says something should exist, with these attributes.
+# This one is a network (a VPC) with an address range.
+#
+#   $ dform plan
+#   plan: 16 changes (16 create) over 2 ticks
+#   + net.vpc main
+#     cidr = "10.0.0.0/16"
+#
+# The plan lists everything in this file, so it is long; this section is
+# its `net.vpc main` (section 10 is the pending one). `+` is a create: the fake cloud is empty, so
+# everything is new. As in Terraform, the program says what should exist
+# and the plan is the difference between that and the world. (The plan's
+# first line, `deployment: stacks.tour[env=dev]`, is section 4.)
+
+resource net.vpc main { cidr = "10.0.0.0/16" }
+
+# 2. A resource that points at another
+#
+# A subnet lives in a network, so it takes the network: `vpc = main`. The
+# network does not exist until it is made. Terraform prints `(known after
+# apply)`; dform prints the resource the subnet reads:
+#
+#   + net.subnet public
+#     vpc = main
+#
+# Because the subnet refers to the network, apply makes the network
+# first, and gives the cloud its id. Apply prints the
+# plan and asks before it changes anything:
+#
+#   $ dform apply
+#   tick 2  done
+#
+# (It ran in two ticks, two rounds of changes, asking before each;
+# section 10 is why.) The unknown is now the network, which exists:
+#
+#   $ dform query 'net.subnet["public"].vpc'
+#   net.vpc main
+#
+# Plan again, and there is nothing to do:
+#
+#   $ dform plan
+#   stack tour is up to date
+#
+# Up to date means the world matches the program.
+
+resource net.subnet public { vpc = main, cidr = "10.0.0.0/24", visibility = "public" }
+
+# 3. Many resources from one rule
+#
+# A line like `zone("us-test-1a", 1)` is a fact: a row in a table named
+# `zone`. The block below has a `where` clause, which makes it a rule: one
+# subnet for every row that matches, named by `"private-${z}"`. It is
+# Terraform's `for_each`, over a table instead of a map, and the
+# condition can join several tables, as later sections do.
+# `inet.subnet(main.cidr, 8, n)` cuts the network's range into /24s and
+# takes the n-th.
+#
+# Every attribute is a row too, in a table named `attr`, and `dform query`
+# asks the tables anything. Lower-case names are blanks to fill in, one
+# row per answer:
+#
+#   $ dform query 'attr(net.subnet, s, "zone", z)'
+#   "private-us-test-1a"        "us-test-1a"
+#   "private-us-test-1b"        "us-test-1b"
+#
+# The `blue/` and `green/` rows are section 7's networks, which read
+# `zone` too: a third zone is one more line here, and every rule that
+# reads `zone` follows it.
+
+zone("us-test-1a", 1)
+zone("us-test-1b", 2)
+
+resource net.subnet "private-${z}" {
+  vpc = main
+  cidr = inet.subnet(main.cidr, 8, n)
+  zone = z
+  visibility = "private"
+} where zone(z, n)
+
+# 4. Settings per environment, and a deployment per environment
+#
+# The stack is named `tour`, after its file, and keyed by `env`, the `key`
+# at the top of the file: each value of `env` is a deployment of its own,
+# with its own state, where Terraform would use a workspace or a directory
+# per environment, and the command names it. `dform plan` plans the
+# default, `dev`. The values that differ per environment are inputs: dev's
+# are `input database`'s defaults, and a settings block gives prod's. The
+# database reads them by name, and its subnets from a list of every
+# private subnet in the program.
+#
+# dev is applied. prod has never been, so for prod the same program is
+# all creates, with prod's settings:
+#
+#   $ dform plan tour env=prod
+#   deployment: stacks.tour[env=prod]
+#   + db.postgres orders
+#     backup_days = 14
+#     multi_az = true
+#
+# The database also reads `public_db`, the `input` at the top: a value to
+# give on the command line. It defaults to false, and section 5 keeps it so.
+
+# A block applies where its clause holds, at the normal rank: over the
+# defaults, and under `--set database.backup_days=7` on the command line.
+# Two blocks that both hold and disagree are a conflict naming both, so
+# a block meant as a fallback says `@default`.
+
+set { database.backup_days = 14, database.multi_az = true } where env == "prod"
+
+# The database reads each by its name; `why database.backup_days` shows
+# which layer gave it.
+resource db.postgres orders {
+  subnets = [ s | s in net.subnet, s.visibility == "private" ]
+  backup_days = database.backup_days
+  multi_az = database.multi_az
+  public = public_db
+}
+
+# 5. Policy is more rules
+#
+# Terraform's policy lives elsewhere: Sentinel or OPA, a second language
+# run over the plan's JSON as a separate step, able to forbid but not to
+# add. Here policy is two more rules in the program. The first reads every
+# resource (`r in resource`) and adds a tag to it, so every create in the
+# plans above has `tags.team = "shop"`. The second is a `deny`: a rule
+# whose matches stop the plan. Nothing matches now. Ask for a public
+# database, and it does:
+#
+#   $ dform plan --set public_db=true
+#   ~ db.postgres orders
+#     public = false → true
+#   refused  a database must not be public  stacks/tour.df:172
+#     └─ database = "orders"
+#
+# The plan shows the change it refuses (`~` is an update) and the rule
+# that refused it. There is no separate step: every plan and every apply
+# checks every deny.
+
+set r.tags = { team: "shop" } where r in resource
+
+deny "a database must not be public" { database: pg } where pg in db.postgres, pg.public
+
+# 6. Why
+#
+# Any value dform works out can be asked where it came from. The network
+# has a tag its block does not write:
+#
+#   $ dform why 'net.vpc main.tags.team'
+#   net.vpc main.tags.team = "shop"  stacks/tour.df:170
+#
+# The statement at line 170 of this file (section 5's) wrote it. A value
+# passed along says each expression it went through, to the literal:
+#
+#   $ dform why orders.backup_days
+#   db.postgres orders.backup_days = 1
+#     = database.backup_days  stacks/tour.df:145
+#     = 1 @default            stacks/tour.df:27
+#
+# The address is the one the plan printed, pasted: whatever it shows.
+
+# 7. A component, used twice
+#
+# A component is a block of resources with named inputs, made once per
+# `instance`, as Terraform's modules are. Below, a network like sections 1
+# to 3's is made twice, blue and green; a copy's resources are named for
+# their instance (`net.vpc blue.vpc`).
+#
+# Two things differ from Terraform. A copy's resources are not hidden
+# behind its outputs: section 5's tag rule reached them, and section 4's
+# database would take their subnets if they were private. And an
+# attribute can have several authors: the component's vpc writes one tag,
+# the policy another, and the vpc has both:
+#
+#   $ dform query 'net.vpc["blue.vpc"].tags'
+#   { team: "shop", component: "network" }
+#
+# In Terraform an attribute has one author, and a policy's tag has to be
+# threaded into every module as a variable and merged by hand (the AWS
+# provider's `default_tags` covers tags alone). In a larger project a
+# component is a file of its own, network.df, and `resource network blue`
+# names it by its path from the project root (docs/layout.md).
+
+component network {
+  input cidr: inet
+  output vpc: net.vpc = vpc
+
+  resource net.vpc vpc { cidr, tags = { component: "network" } }
+
+  resource net.subnet "private-${z}" {
+    vpc
+    cidr = inet.subnet(cidr, 8, n)
+    zone = z
+  } where zone(z, n)
+}
+
+resource network blue { cidr = "10.1.0.0/16" }
+
+resource network green { cidr = "10.2.0.0/16" }
+
+# 8. Rules over rules: a hub and its spokes
+#
+# `main` is the hub, and each copy of network is a spoke peered to it.
+# `spoke` lists them, and `network[t].vpc` reads instance `t`'s output,
+# its vpc's address. `network_of` names every network, the hub's and the
+# spokes'. The peering rule joins them: one peering per spoke, between two
+# networks not made yet:
+#
+#   $ dform plan tour env=prod
+#   + net.vpc_peering main-blue
+#     accepter_vpc = blue.vpc
+#     requester_vpc = main
+#
+# A third spoke is an instance and a `spoke` line: its peering, and the
+# routes of section 9, follow.
+
+spoke("blue")
+spoke("green")
+
+hub("main")
+
+network_of(h, h) where hub(h)
+network_of(t, v) where spoke(t), v = network[t].vpc
+
+resource net.vpc_peering "main-${t}" {
+  requester_vpc = main
+  accepter_vpc = net.vpc[v]
+} where spoke(t), v = network[t].vpc
+
+# 9. Rules that recurse
+#
+# Traffic goes through the hub, so blue can reach green, and every
+# network that can reach another needs a route to it. Which pairs those
+# are is a question about paths: `link` is one hop, and `reaches` is the
+# rule that calls itself, a path of any length. Terraform has no
+# recursion, so it would have these routes written out by hand, and kept
+# in step by hand as networks come and go. Here the routes are a rule
+# over `reaches`, and the answer can be asked directly:
+#
+#   $ dform query 'reaches("blue", x)'
+#   "green"
+#   "main"
+#
+# (`"blue"` is in it too: blue to main and back.) The routes follow,
+# blue's to green among them.
+
+link(h, t) where hub(h), spoke(t)
+link(t, h) where hub(h), spoke(t)
+
+reaches(a, b) where link(a, b)
+reaches(a, c) where reaches(a, b), link(b, c)
+
+# A route is not a resource: the cloud keeps a network's routes on its
+# route table, so each one is an element of the table's `routes`, a set
+# every rule that holds adds to.
+resource net.route_table "${n}" { vpc = net.vpc[v] } where network_of(n, v)
+
+set net.route_table[a].routes = [{ destination: dest, target: net.vpc[w] }] where
+  reaches(a, b),
+  a != b,
+  network_of(b, w),
+  dest = net.vpc[w].cidr,
+
+# 10. A name only apply learns
+#
+# The database's endpoint is made by the cloud when the database is. The
+# policy below is named for it, one per database. In Terraform this is
+# the error "Invalid for_each argument ... cannot be determined until
+# apply", and the answer is `-target` and a second run by hand. dform
+# plans it in the tick after the database's, and says what it waits for:
+#
+#   $ dform plan tour env=prod
+#   tick 2  ? changes
+#     waits on  orders.endpoint
+#     iam.policy "connect-${host}"
+#
+# Apply runs in ticks: the first makes everything it can, then dform
+# plans again with what it learned, prints the second tick's plan with
+# the policy's real name, and asks again before making it:
+#
+#   $ dform apply tour env=prod
+#   tick 2  1 change
+#   + iam.policy "connect-orders.db.fake"
+#
+# Nobody approves a count of "unknown". `--yes` answers the question at
+# each tick; a plan file stops before what it did not show, and the next
+# apply makes the policy from a plan that names it.
+#
+#   $ dform plan tour env=prod
+#   stack tour is up to date
+
+resource iam.policy "connect-${host}" {
+  statements = [{ action: "db.connect", resource: host }]
+} where pg in db.postgres, host = pg.endpoint
+
+# 11. Where to go next
+#
+# This tour is a test's now; each project under examples/ is an estate
+# with a README that walks its commands: shop (a small web shop on AWS),
+# shared-network (a hub-and-spoke network), k3s-platform (k3s on OVH and
+# the apps in it), gke-platform (a GKE platform per environment) and
+# crud-api (a blue/green rollout).
+#
+# docs/best_practices.md is how to write a program; docs/grammar.md is
+# the language.
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (string
+        (string_content))
+      (string
+        (string_content)))
+    (string
+      (string_content)))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)))
+    (false))
+  (input
+    (identifier)
+    (input_fields
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier)))
+        (integer))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier)))
+        (false))))
+  (use
+    (dotted_name
+      (identifier)))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (integer))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (integer))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (string
+      (string_content)
+      (interpolation
+        (identifier)))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (call
+          (member_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (member_expression
+              (identifier)
+              (identifier))
+            (integer)
+            (identifier))))
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content))))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)))))))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (set
+    (set_block
+      (set_entry
+        (member_expression
+          (identifier)
+          (identifier))
+        (integer))
+      (set_entry
+        (member_expression
+          (identifier)
+          (identifier))
+        (true)))
+    (body
+      (comparison
+        (identifier)
+        (string
+          (string_content)))))
+  (comment)
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (comprehension
+          (identifier)
+          (body
+            (in_literal
+              (identifier)
+              (member_expression
+                (identifier)
+                (identifier)))
+            (comparison
+              (member_expression
+                (identifier)
+                (identifier))
+              (string
+                (string_content))))))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (identifier))))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (set
+    (member_expression
+      (identifier)
+      (identifier))
+    (object
+      (object_field
+        (identifier)
+        (string
+          (string_content))))
+    (body
+      (in_literal
+        (identifier)
+        (any_resource))))
+  (check
+    (string
+      (string_content))
+    (object
+      (object_field
+        (identifier)
+        (identifier)))
+    (body
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
+      (truth_literal
+        (member_expression
+          (identifier)
+          (identifier)))))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (component
+    (identifier)
+    (statement_block
+      (input
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (output
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)
+            (identifier)))
+        (identifier))
+      (resource
+        (dotted_name
+          (identifier)
+          (identifier))
+        (identifier)
+        (block
+          (field
+            (block_path
+              (identifier)))
+          (field
+            (block_path
+              (identifier))
+            (object
+              (object_field
+                (identifier)
+                (string
+                  (string_content)))))))
+      (resource
+        (dotted_name
+          (identifier)
+          (identifier))
+        (string
+          (string_content)
+          (interpolation
+            (identifier)))
+        (block
+          (field
+            (block_path
+              (identifier)))
+          (field
+            (block_path
+              (identifier))
+            (call
+              (member_expression
+                (identifier)
+                (identifier))
+              (arguments
+                (identifier)
+                (integer)
+                (identifier))))
+          (field
+            (block_path
+              (identifier))
+            (identifier)))
+        (clause
+          (body
+            (atom_literal
+              (call
+                (identifier)
+                (arguments
+                  (identifier)
+                  (identifier)))))))))
+  (resource
+    (dotted_name
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (resource
+    (dotted_name
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (comparison
+        (identifier)
+        (member_expression
+          (index_expression
+            (identifier)
+            (identifier))
+          (identifier)))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (string
+      (string_content)
+      (interpolation
+        (identifier)))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (identifier))
+      (field
+        (block_path
+          (identifier))
+        (index_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier))))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier))))
+        (comparison
+          (identifier)
+          (member_expression
+            (index_expression
+              (identifier)
+              (identifier))
+            (identifier))))))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))))
+  (comment)
+  (comment)
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (string
+      (interpolation
+        (identifier)))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (index_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier))))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)))))))
+  (set
+    (member_expression
+      (index_expression
+        (member_expression
+          (identifier)
+          (identifier))
+        (identifier))
+      (identifier))
+    (list
+      (object
+        (object_field
+          (identifier)
+          (identifier))
+        (object_field
+          (identifier)
+          (index_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier)))))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))
+      (comparison
+        (identifier)
+        (identifier))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))
+      (comparison
+        (identifier)
+        (member_expression
+          (index_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier))
+          (identifier)))))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (string
+      (string_content)
+      (interpolation
+        (identifier)))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (list
+          (object
+            (object_field
+              (identifier)
+              (string
+                (string_content)))
+            (object_field
+              (identifier)
+              (identifier))))))
+    (clause
+      (body
+        (in_literal
+          (identifier)
+          (member_expression
+            (identifier)
+            (identifier)))
+        (comparison
+          (identifier)
+          (member_expression
+            (identifier)
+            (identifier))))))
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (comment))

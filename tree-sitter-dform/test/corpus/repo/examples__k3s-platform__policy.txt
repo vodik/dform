@@ -1,0 +1,93 @@
+===============================
+examples/k3s-platform/policy.df
+===============================
+
+#| The platform's policy: k3s needs 4 GB of memory on its server, and
+#| every image runs as the digest the plan saw.
+
+deny "k3s needs 4 GB of memory" { server: s, flavor: s.flavor }
+  where s in ovh.instance, ovh.flavor(s.region, s.flavor, _, ram, _), ram < 4Gi
+
+deny "an image is not pinned by its digest" { workload: w, image: c.image }
+  where w in k8s.deployment, c in w.spec.template.spec.containers, not oci.pinned(c.image)
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (check
+    (string
+      (string_content))
+    (object
+      (object_field
+        (identifier)
+        (identifier))
+      (object_field
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier))))
+    (body
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
+      (atom_literal
+        (call
+          (member_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (member_expression
+              (identifier)
+              (identifier))
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier)
+            (identifier)
+            (identifier))))
+      (comparison
+        (identifier)
+        (quantity))))
+  (check
+    (string
+      (string_content))
+    (object
+      (object_field
+        (identifier)
+        (identifier))
+      (object_field
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier))))
+    (body
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
+      (in_literal
+        (identifier)
+        (member_expression
+          (member_expression
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier))
+            (identifier))
+          (identifier)))
+      (not_literal
+        (atom_literal
+          (call
+            (member_expression
+              (identifier)
+              (identifier))
+            (arguments
+              (member_expression
+                (identifier)
+                (identifier)))))))))

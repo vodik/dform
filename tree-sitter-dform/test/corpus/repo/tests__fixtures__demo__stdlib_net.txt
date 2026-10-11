@@ -1,0 +1,109 @@
+=================================
+tests/fixtures/demo/stdlib_net.df
+=================================
+
+# Minimal networking stdlib demo rules/policies: a module of denies.
+
+#| The peered VPCs: a relation the module takes, its rows the user's
+#| `use` gives (a module reads only what it declares).
+input vpc_peer
+decl vpc_peer(a: net.vpc, b: net.vpc)
+
+#| Deny if peered VPC CIDRs overlap.
+#|
+#| This is intentionally scoped to only VPCs connected by `vpc_peer/2`.
+deny "peered vpc cidr overlaps" { a, b } where
+  vpc_peer(a, b),
+  a in net.vpc,
+  b in net.vpc,
+  inet.overlaps(a.cidr, b.cidr),
+
+#| Deny if any VM gets the unspecified IP.
+deny "vm has unspecified ip" { vm } where vm in compute.vm, ip.unspecified(vm.private_ip)
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (input_relation
+    (identifier))
+  (decl
+    (dotted_name
+      (identifier))
+    (columns
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)
+            (identifier))))
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)
+            (identifier))))))
+  (comment)
+  (comment)
+  (comment)
+  (check
+    (string
+      (string_content))
+    (object
+      (object_field
+        (identifier))
+      (object_field
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
+      (atom_literal
+        (call
+          (member_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (member_expression
+              (identifier)
+              (identifier))
+            (member_expression
+              (identifier)
+              (identifier)))))))
+  (comment)
+  (check
+    (string
+      (string_content))
+    (object
+      (object_field
+        (identifier)))
+    (body
+      (in_literal
+        (identifier)
+        (member_expression
+          (identifier)
+          (identifier)))
+      (atom_literal
+        (call
+          (member_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (member_expression
+              (identifier)
+              (identifier))))))))

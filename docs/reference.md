@@ -15,12 +15,12 @@ Three providers are real: Kubernetes, OVH and Postgres (`docs/providers/`;
 examples run on the fake cloud and the AWS- and Google-shaped mocks built
 into dform, with no credentials.
 
-New here? Start with the tour: `examples/tour/stacks/tour.df` is a tutorial
-read top to bottom, from what Terraform does to what it cannot express,
-each section a command to run and what it prints.
+New here? Start with the shop: `examples/shop/README.md` walks a small
+web shop's plan, its deployments, its policy and `why`, each a command
+to run and what it prints.
 
 ```bash
-cd examples/tour && cargo run -- plan
+cd examples/shop && cargo run -- plan
 ```
 
 Authoring guidance: `docs/best_practices.md`.
@@ -43,24 +43,24 @@ over all three;
 ## Quick start
 
 Every example is a project under `examples/<name>/` (see "Project layout"
-below). The demo, `examples/demo/`, is the stack `stacks/dform.df`, which
-uses the modules beside it (`baseline.df`, `database.df`, ...) by their
-paths from the project root.
+below), an estate someone runs. The shop, `examples/shop/`, is the stack
+`stacks/shop.df`, which uses the module beside it (`policy.df`) by its
+path from the project root.
 
 ```bash
-cargo run -- -C examples/demo plan                  # its one stack, dform, in env's default
-cargo run -- -C examples/demo apply dform env=staging
-cargo run -- -C examples/demo plan dform env=prod   # or 'dform[env=prod]'
-cargo run -- -C examples/demo test                  # the program's denies, over every env
-cargo run -- -C examples/demo dev strata            # evaluation order: the partition graph's strata
-cargo run -- -C examples/demo dev effects           # per scope: what it reads, writes, offers
-cargo run -- -C examples/demo fmt                   # format the project's .df files in place
+cargo run -- -C examples/shop plan                  # its one stack, shop, in env's default
+cargo run -- -C examples/shop apply shop env=staging
+cargo run -- -C examples/shop plan shop env=prod    # or 'shop[env=prod]'
+cargo run -- -C examples/shop test                  # the program's denies, over every env
+cargo run -- -C examples/shop dev strata            # evaluation order: the partition graph's strata
+cargo run -- -C examples/shop dev effects           # per scope: what it reads, writes, offers
+cargo run -- -C examples/shop fmt                   # format the project's .df files in place
 cargo run -- fmt --check $(git ls-files '*.df' ':!tests/syntax/err' ':!editors')   # CI: list unformatted files, fail
 ```
 
 `-C DIR` runs as if dform started in DIR; from inside a project the same
-commands need no `-C`: `cd examples/demo/stacks && cargo run -- plan`.
-`apply` names a keyed stack's deployment (`dform env=staging`), and the
+commands need no `-C`: `cd examples/shop/stacks && cargo run -- plan`.
+`apply` names a keyed stack's deployment (`shop env=staging`), and the
 stack when the project has several.
 
 ### Project layout
@@ -88,9 +88,11 @@ resource of a stack anywhere but in the project module, `project.df`,
 which lists the deployments (below). `docs/layout.md` has the convention; every
 example under `examples/` follows it, and test-only programs are under
 `tests/fixtures/`.
-Each example's `README.md` says what it shows and lists the commands to
+Each example's `README.md` says what it is and lists the commands to
 run from its directory (`dform` there is `cargo run --` in a checkout);
-`tests/examples.rs` runs them: plan, apply, and plan again, up to date.
+`tests/examples.rs` runs them: plan, apply, and plan again, up to date,
+and `tests/readme.rs` holds every sample a README shows to the file or
+the output it is lifted from.
 
 `dform.toml` is small; programs stay in `.df` files. It holds
 the project's name and the dform versions it takes, each provider's source
@@ -787,9 +789,9 @@ environment`, so `plan dform env=prod` plans prod against prod's state,
 not staging's.
 
 ```bash
-cargo run -- -C examples/demo apply dform env=staging   # dform[env=staging]: dform.state/stacks.dform/env=staging/
-cargo run -- -C examples/demo plan dform env=prod       # dform[env=prod]: creates, beside staging
-cargo run -- -C examples/demo stack rekey dform env=staging env=stg   # move a deployment's state
+cargo run -- -C tests/fixtures/demo apply dform env=staging   # dform[env=staging]: dform.state/stacks.dform/env=staging/
+cargo run -- -C tests/fixtures/demo plan dform env=prod       # dform[env=prod]: creates, beside staging
+cargo run -- -C tests/fixtures/demo stack rekey dform env=staging env=stg   # move a deployment's state
 ```
 
 `dform stack rekey STACK K=V... K=V...` moves one deployment's state (and
@@ -901,10 +903,10 @@ The mock's flags go after `dev`, before the command. `dform dev --inventory
 PATH` points at the discovery inventory file directly (see "Discovery facts"
 below). Default: `<world dir>/inventory.json` when `--world` is given and that
 file exists there, else `dform.state/inventory.json`. This is how
-`examples/adopt` runs from a clean clone with no `dform.state/` setup:
+`tests/fixtures/adopt` runs from a clean clone with no `dform.state/` setup:
 
 ```bash
-cargo run -- -C examples/adopt dev --inventory ../../tests/fixtures/world/inventory.json plan --set env=prod
+cargo run -- -C tests/fixtures/adopt dev --inventory ../world/inventory.json plan --set env=prod
 ```
 
 `dform dev --world PATH` (plan and apply) points the fake backend at a world file
@@ -914,7 +916,7 @@ state sits beside it as `<stem>.state.json`. Edit the world file and re-plan to
 see drift:
 
 ```bash
-cargo run -- -C examples/demo dev --world ../../tests/fixtures/world/dform.json plan   # steady state: no changes
+cargo run -- -C tests/fixtures/demo dev --world ../world/dform.json plan   # steady state: no changes
 ```
 
 Only what state maps is the stack's: an object in the world file that state
@@ -1094,10 +1096,10 @@ object made elsewhere) no change. An `extern_decl` declares a data
 source to the compiler: a program reads it with no `extern` line.
 
 Built-in mock schemas: `fake` (the demo's), `gke` (gke_platform.df), `k8s` (fifteen
-Kubernetes kinds; try `cargo run -- -C examples/k8s plan`)
+Kubernetes kinds; try `cargo run -- -C tests/fixtures/k8s plan`)
 and `aws-mock` (twelve AWS types in the Terraform provider's shape, with its
 Optional+Computed attributes and keyless sets; try
-`cargo run -- -C examples/aws plan`). Each example names its
+`cargo run -- -C tests/fixtures/aws plan`). Each example names its
 provider with a `use`.
 A `required` attribute the program does not set is a plan error. Lists with
 `type_list_key` are diffed by key (`spec.template.spec.containers[name=web].image`),
@@ -1166,7 +1168,7 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   kind in snake_case (`k8s.apps.v1.deployment`, `k8s.core.v1.config_map`,
   `k8s.networking.k8s.io.v1.ingress`): a type name is a lowercase qualified
   name. The mock's short names (`k8s.deployment`) are aliases of them
-  (`type_alias` in `crates/dform-mock/schemas/k8s.df`), so `examples/k8s/stacks/k8s_demo.df`
+  (`type_alias` in `crates/dform-mock/schemas/k8s.df`), so `tests/fixtures/k8s/stacks/k8s_demo.df`
   plans the same against either; so is `k8s.<kind>` for every other kind
   of the static schema whose kind no other group has (`k8s.storage_class`,
   `k8s.ingress_class`). A cluster's own kind (a group the static schema
@@ -1332,7 +1334,7 @@ identity mapping), so a steady-state stack shows no nulls. Apply mints ids,
 endpoints and secrets per the schema and fills the nulls in dependency order.
 
 ```bash
-cargo run -- -C examples/demo plan
+cargo run -- -C tests/fixtures/demo plan
 # + net.subnet main.private-us-test-1a        network.df:24
 #     vpc = main.vpc
 ```
@@ -1838,8 +1840,8 @@ default (`--wait-timeout DURATION`; see "Timeouts, retries and waiting"). `--max
 that never settles, not a way to stop early:
 
 ```bash
-cargo run -- -C examples/gke apply                  # asks again at tick 2
-cargo run -- -C examples/gke apply --set zones=1   # one zone: stops after tick 1
+cargo run -- -C tests/fixtures/gke apply                  # asks again at tick 2
+cargo run -- -C tests/fixtures/gke apply --set zones=1   # one zone: stops after tick 1
 ```
 
 Once a tick is approved its block fills in on stderr,
@@ -2034,7 +2036,7 @@ change anywhere else is reported as `drift after tick N:` and the
 run goes on, the next tick deforming it back:
 
 ```bash
-cargo run -- -C examples/gke dev \
+cargo run -- -C tests/fixtures/gke dev \
   --chaos 'mutate=google.container_cluster["gke_platform"].deletion_protection=false' apply gke_two_phase   # drift, tick 2 undoes it
 ```
 
@@ -2091,8 +2093,8 @@ reads one is created after it in the same tick. `dev --chaos fresh-ids` makes
 the mock mint a new id on every create, so the difference shows:
 
 ```bash
-cargo run -- -C examples/demo dev --chaos fresh-ids apply dform env=staging
-cargo run -- -C examples/demo dev --chaos fresh-ids apply dform env=prod   # tick 1 replaces vpcs and subnets; tick 2 updates their readers
+cargo run -- -C tests/fixtures/demo dev --chaos fresh-ids apply dform env=staging
+cargo run -- -C tests/fixtures/demo dev --chaos fresh-ids apply dform env=prod   # tick 1 replaces vpcs and subnets; tick 2 updates their readers
 ```
 
 Lifecycle is plain facts the planner reads (and policy can read too). Each
@@ -2229,7 +2231,7 @@ deny "the core network stays" where deformation(_, r, _), r == main, env == "pro
 ```
 
 ```bash
-cargo run -- -C examples/demo why 'deny(m)'    # the deny, the lifecycle fact and the deformation it read
+cargo run -- -C tests/fixtures/demo why 'deny(m)'    # the deny, the lifecycle fact and the deformation it read
 ```
 
 Only policy may read the deformation: a resource rule over it would make the
@@ -2243,7 +2245,7 @@ clock from the time its provider says it took; on the mock (chaos `latency`)
 the difference shows there:
 
 ```bash
-cargo run -- -C examples/demo dev --chaos 'latency=net.vpc["main.vpc"]:100' \
+cargo run -- -C tests/fixtures/demo dev --chaos 'latency=net.vpc["main.vpc"]:100' \
   --chaos 'latency=net.vpc["peer.vpc"]:100' apply dform env=staging --parallel 4   # the two vpcs overlap: 100ms, not 200ms
 ```
 
@@ -2325,7 +2327,7 @@ that changed
 between plan and apply is refused and the file never carries the bytes:
 
 ```bash
-G=examples/gke/stacks/gke_two_phase.df
+G=tests/fixtures/gke/stacks/gke_two_phase.df
 cargo run -- dev --world w.json plan $G --out plan.json
 cargo run -- apply plan.json                          # tick 1; tick 2's nodepools it could not name
 # the world moves after tick 1: the apply stops before tick 2, exit 5
@@ -2487,7 +2489,7 @@ The approval service is not dform's. `dform-approve` (built with dform,
 `crates/dform-direct`) is the example signer, a local Ed25519 key:
 
 ```bash
-cd examples/approvals
+cd tests/fixtures/approvals
 A="cargo run -q -p dform-direct --bin dform-approve --"
 $A keygen approver.key > approvers.jwks.json      # the trust root: jwks_file("approvers.jwks.json")
 cargo run -- apply approvals env=prod
@@ -2497,7 +2499,7 @@ $A sign approver.key --digest sha256:... --stack approvals --key env=prod \
 cargo run -- apply plan.json --approval approval.json
 ```
 
-`examples/approvals/stacks/approvals.df` is that program.
+`tests/fixtures/approvals/stacks/approvals.df` is that program.
 
 ## Secrets
 
@@ -3214,9 +3216,9 @@ redacted form, where a sensitive leaf is already the stack's HMAC of it.
 Nothing in plan or apply reads the log as truth.
 
 ```bash
-cargo run -- -C examples/demo log dform env=staging                     # SEQ TIME KIND field=value ...
-cargo run -- -C examples/demo log dform env=staging --since 2026-09-28  # or --since SEQ; --json for one JSON array
-cargo run -- -C examples/demo log verify dform env=staging              # the chain holds, or the first broken link
+cargo run -- -C tests/fixtures/demo log dform env=staging                     # SEQ TIME KIND field=value ...
+cargo run -- -C tests/fixtures/demo log dform env=staging --since 2026-09-28  # or --since SEQ; --json for one JSON array
+cargo run -- -C tests/fixtures/demo log verify dform env=staging              # the chain holds, or the first broken link
 ```
 
 `log verify` checks that every entry's hash is its content's, that its
@@ -3277,16 +3279,16 @@ the final fact store and prints a result set, one column per variable (a
 SELECT of the goal's variables):
 
 ```bash
-cargo run -- -C examples/demo query 'attr(net.vpc, n, "cidr", c)' dform env=prod
+cargo run -- -C tests/fixtures/demo query 'attr(net.vpc, n, "cidr", c)' dform env=prod
 # N           C
 # "main.vpc"  10.20.0.0/16
 # "peer.vpc"  10.21.0.0/16
-cargo run -- -C examples/demo query 'attr(t, a, "cidr", c), want(t, a), t != net.subnet'
-cargo run -- -C examples/demo query 'want(net.vpc, "main.vpc")'    # yes / no
-cargo run -- -C examples/demo query want                                    # every want fact
-cargo run -- -C examples/demo query 'net.vpc["main.vpc"]'          # its attributes: path, value
-cargo run -- -C examples/demo query 'net.vpc["main.vpc"].cidr'     # one attribute's value, laid out
-cargo run -- -C examples/demo query main.vpc.cidr                   # the same, as the plan prints it
+cargo run -- -C tests/fixtures/demo query 'attr(t, a, "cidr", c), want(t, a), t != net.subnet'
+cargo run -- -C tests/fixtures/demo query 'want(net.vpc, "main.vpc")'    # yes / no
+cargo run -- -C tests/fixtures/demo query want                                    # every want fact
+cargo run -- -C tests/fixtures/demo query 'net.vpc["main.vpc"]'          # its attributes: path, value
+cargo run -- -C tests/fixtures/demo query 'net.vpc["main.vpc"].cidr'     # one attribute's value, laid out
+cargo run -- -C tests/fixtures/demo query main.vpc.cidr                   # the same, as the plan prints it
 dform query synapse.agent_init                                     # a cell by its path: value
 ```
 
@@ -3339,12 +3341,12 @@ SITE` with the statement's bindings, then each attribute and its chain;
 nothing else of the resource:
 
 ```bash
-cargo run -- -C examples/tour why orders.backup_days tour env=prod
+cargo run -- -C tests/fixtures/tour why orders.backup_days tour env=prod
 # db.postgres orders.backup_days = 14
 #   = database.backup_days  stacks/tour.df:145
 #   = 14                    stacks/tour.df:139
 #   over 1 @default         stacks/tour.df:27
-cargo run -- -C examples/demo why main.vpc.tags.team dform env=prod
+cargo run -- -C tests/fixtures/demo why main.vpc.tags.team dform env=prod
 # net.vpc main.vpc.tags.team = "platform"  baseline.df:10
 ```
 
@@ -3412,7 +3414,7 @@ pattern may name part of an object attribute, by dotted path or by
 object value, and then shows only the contributions that hold it:
 
 ```bash
-cargo run -- -C examples/demo why --tree 'attr(net.vpc, "main.vpc", "tags.team", "platform")' dform env=prod
+cargo run -- -C tests/fixtures/demo why --tree 'attr(net.vpc, "main.vpc", "tags.team", "platform")' dform env=prod
 # net.vpc main.vpc.tags = {component: "network", env: "prod", team: "platform"}
 #   merged from 2 contributions
 #   ├─ {team: "platform"}
@@ -3470,7 +3472,7 @@ no deny says, the nearest one that does. (`why-not`, its own command
 before, is gone.)
 
 ```bash
-cargo run -- -C examples/demo why 'net.vpc["peer.vpc"]' dform env=dev
+cargo run -- -C tests/fixtures/demo why 'net.vpc["peer.vpc"]' dform env=dev
 # net.vpc peer.vpc: no rule derives it
 #   network.df:19  resource net.vpc vpc { .. }   (resource network.vpc peer)
 #     resource network.vpc peer: not made
@@ -3522,9 +3524,9 @@ component's own (`super.tag` reads the module's).
 `dform dev graph` prints Graphviz DOT, nodes and edges sorted:
 
 ```bash
-cargo run -- -C examples/demo dev graph | dot -Tsvg > resources.svg   # resource DAG: A -> B when A reads B (a ref, a null)
-cargo run -- -C examples/demo dev graph --strata                     # partition graph, a cluster per stratum, negative edges dashed
-cargo run -- -C examples/demo dev graph --relation vpc_peer/2        # any binary relation of the fact store
+cargo run -- -C tests/fixtures/demo dev graph | dot -Tsvg > resources.svg   # resource DAG: A -> B when A reads B (a ref, a null)
+cargo run -- -C tests/fixtures/demo dev graph --strata                     # partition graph, a cluster per stratum, negative edges dashed
+cargo run -- -C tests/fixtures/demo dev graph --relation vpc_peer/2        # any binary relation of the fact store
 ```
 
 `dform dev effects` prints a result set of `scope  effect  what`: per
@@ -3546,8 +3548,8 @@ lowered program's rule heads and bodies and the partition graph; no
 evaluation.
 
 ```bash
-cargo run -- -C examples/demo dev effects                  # every scope, a row per effect
-cargo run -- -C examples/demo dev effects --json           # the rows, an array of objects
+cargo run -- -C tests/fixtures/demo dev effects                  # every scope, a row per effect
+cargo run -- -C tests/fixtures/demo dev effects --json           # the rows, an array of objects
 ```
 
 ## Timeouts, retries and waiting
@@ -3682,8 +3684,8 @@ file keeps a `tick` counter; every `apply` is one tick.
 | `not-yet=PRED:K` | the first `K` Query calls of the extern `PRED` in a run answer "not yet": an open null in every output column |
 
 ```bash
-cargo run -- -C examples/demo dev --chaos 'fail=net.subnet["main.private-us-test-1a"]' apply dform env=staging
-cargo run -- -C examples/demo dev --chaos 'mutate=net.vpc["main.vpc"].cidr="10.9.0.0/16"' apply dform env=staging
+cargo run -- -C tests/fixtures/demo dev --chaos 'fail=net.subnet["main.private-us-test-1a"]' apply dform env=staging
+cargo run -- -C tests/fixtures/demo dev --chaos 'mutate=net.vpc["main.vpc"].cidr="10.9.0.0/16"' apply dform env=staging
 ```
 
 Refresh reads every object state maps; a Read that returns nothing is retried
@@ -4449,7 +4451,7 @@ and the plan lists it with the conflicts; a literal that violates one is a
 compile error naming both places. A value that carries a null is checked
 when the null resolves: the plan prints `? refinement on ?T["A"].p deferred`
 in its undetermined section, and a violation found at the boundary stops
-apply like any deny between ticks (`examples/refine`: `dform apply --set zones=2`
+apply like any deny between ticks (`tests/fixtures/refine`: `dform apply --set zones=2`
 there stops after tick 1; its default, three zones, applies). On a path the
 schema marks `sensitive` the engine never checks the value: the refinement
 goes to the provider as an Apply assertion, checked once the secret is
@@ -4645,8 +4647,8 @@ test p: 4 combinations, 1 failed
 run. A what-if plan is `plan --set k=v`.
 
 ```bash
-cargo run -- -C examples/demo test dform
-cargo run -- -C examples/demo test dform env=prod
+cargo run -- -C tests/fixtures/demo test dform
+cargo run -- -C tests/fixtures/demo test dform env=prod
 ```
 
 ## Rendering for another tool
@@ -4684,7 +4686,7 @@ another way, an operator that reads a secret store). The render refuses
 naming each, exit 1:
 
 ```
-$ dform -C examples/k8s render k8s_demo
+$ dform -C tests/fixtures/k8s render k8s_demo
 error  render stacks.k8s_demo: 1 of what its documents need is not known to a render, and a rendered document has no holes:
   hole: k8s.deployment web spec.template.spec.containers[0].envFrom[0].configMapRef.name = k8s.config_map web_config.metadata.name, known after apply
   help: apply the deployment first, so a value an apply makes is known; or render the documents with none with `--partial`
@@ -4815,7 +4817,7 @@ without, the deployment is evaluated as if nothing were deployed there,
 with a warning. The providers are the mock linked into
 the server; a real provider process is started only when the client
 sets the initialization option `"dform.lsp.real_providers": true`. On
-examples/demo an evaluation takes about 30 ms in a release build.
+tests/fixtures/demo an evaluation takes about 30 ms in a release build.
 
 - *Diagnostics of the selected environment*: parse and compile errors at
   their spans; each `deny` and `warn` at the rule that derived it (a
@@ -4941,7 +4943,7 @@ than one backend (`tests/common`'s `Backend`): the same cases, the same
 output. `--parallel` schedules are exact on the direct backend, which
 answers in simulated time.
 
-`tests/s3.rs` plans and applies examples/demo with an s3 backend: two
+`tests/s3.rs` plans and applies tests/fixtures/demo with an s3 backend: two
 concurrent applies, a killed holder taken over and resumed, a stale
 holder fenced off. It runs against a fake S3 server in the test process
 (`dform-s3`'s `fake`), and again against a real one when
