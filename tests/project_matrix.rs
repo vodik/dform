@@ -6,7 +6,7 @@
 //! apply of the module made that it lists no more is destroyed by the
 //! next; one it never listed is a target of its own.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const PLATFORM: &str = r#"

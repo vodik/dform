@@ -2,7 +2,7 @@
 //! mock listen on a socket in the temporary directory and name it in its
 //! handshake; dform dials it, and the socket is gone after the run.
 
-mod common;
+use crate::common;
 use common::Scratch;
 use std::io::BufRead;
 use std::process::{Command, Stdio};

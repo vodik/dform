@@ -4,7 +4,7 @@
 //! or a schema's `ref(T)` attribute's, and the error listing them
 //! anywhere else.
 
-mod common;
+use crate::common;
 use common::{Scratch, error, mock};
 use dform::parser::parse_file;
 use dform::transform;

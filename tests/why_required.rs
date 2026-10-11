@@ -7,7 +7,7 @@
 //! `spec.jobTemplate.spec` is written) and on the mock (whose CronJob
 //! requires the template's containers).
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 /// The module: a component whose CronJob writes its job's spec but not

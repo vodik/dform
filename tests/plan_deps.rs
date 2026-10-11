@@ -4,7 +4,7 @@
 //! outputs, one tree; a dependency up to date is one line; the chain stops
 //! where the apply would.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// Its address it knows before an apply (`cidr`); its endpoint the

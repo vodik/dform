@@ -5,7 +5,7 @@
 //! value carries a null, and deferred to the provider on a sensitive path.
 //! Everything else lowers to a deny.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch, repo};
 
 fn plan(s: &Scratch, src: &str) -> Run {

@@ -6,7 +6,7 @@
 //! field order, a default no write of the program made with its note
 //! (R-217).
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const SCHEMA: &str = r#"

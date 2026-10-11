@@ -1,7 +1,7 @@
 //! `plan --json` and `query --json`: one stable JSON document each, the
 //! thing CI and editors consume.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 use serde_json::{Value, json};
 

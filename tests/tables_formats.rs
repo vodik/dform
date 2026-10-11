@@ -2,8 +2,7 @@
 //! `decl p(col: type, ...)` from CSV, JSON, YAML and TOML; a row that is
 //! not its columns' types is an error naming its line.
 
-mod common;
-mod tables_common;
+use crate::tables_common;
 use tables_common::scratch;
 
 /// A table of peerings in `format`, and a vpc per dev row.

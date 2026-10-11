@@ -2,7 +2,7 @@
 //! is printed (`report::refusals`): a deny's message and its site, then
 //! its bindings as `key = value`, never the context's JSON.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const PROG: &str = r#"

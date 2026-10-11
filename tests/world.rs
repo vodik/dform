@@ -1,6 +1,6 @@
 //! A world file is the mock cloud: `--world PATH` on plan and apply.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 fn fixture(s: &Scratch) -> (String, String) {

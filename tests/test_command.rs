@@ -6,7 +6,7 @@
 //! result; a failure then as the command that plans it. `scenario` is
 //! gone.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 const P: &str = r#"

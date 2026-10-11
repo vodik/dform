@@ -8,7 +8,7 @@
 //! reads another's master, the plan prints the grant, and the audit logs
 //! record the seal and the read.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch, dform, yes};
 
 const PASS: (&str, &str) = ("DFORM_TEST_PASSPHRASE", "sealed outputs");

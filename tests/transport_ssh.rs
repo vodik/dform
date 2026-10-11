@@ -17,7 +17,7 @@
 //! The one shell-out allowed in tests: the `sshd` binary. With none
 //! installed, each test says so and passes.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch, dform, repo, yes};
 use russh::keys::ssh_key::LineEnding;
 use russh::keys::ssh_key::private::Ed25519Keypair;

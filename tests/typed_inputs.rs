@@ -2,7 +2,7 @@
 //! reference to a resource of it: it is `ref(T)`, as a provider's type is
 //! written anywhere else a type is (docs/grammar.md "Inputs and outputs").
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 fn program(ty: &str, given: &str) -> String {

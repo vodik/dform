@@ -9,7 +9,7 @@
 //! shows a device's health. The provider's credential is an OAuth client
 //! by Tailscale's own names.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 use dform_provider_tailscale::fake::{self, Server};
 use serde_json::json;

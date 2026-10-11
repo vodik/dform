@@ -4,7 +4,7 @@
 //! a `set` through a resource of any type reads a quantity at the
 //! attribute it writes.
 
-mod common;
+use crate::common;
 use common::{Scratch, mock};
 
 /// A program under the fake provider.

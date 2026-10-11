@@ -3,7 +3,7 @@
 //! `where` binding, an interpolation compared, a field of a secret object.
 //! Each is refused at compile time unless `secret.declassify` says why.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 fn run(body: &str) -> common::Run {

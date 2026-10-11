@@ -5,7 +5,7 @@
 //! by the next apply, with an audit entry, and `secrets list` says who
 //! opens each epoch and who could (the offboarding list).
 
-mod common;
+use crate::common;
 use age::secrecy::ExposeSecret;
 use common::{Run, Scratch, dform, repo, yes};
 

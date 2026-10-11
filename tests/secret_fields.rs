@@ -6,7 +6,7 @@
 //! still E0304, naming the field and its type. The same for an input of an
 //! object type, a component's output and another stack's.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 fn schema() -> String {

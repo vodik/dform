@@ -5,7 +5,7 @@
 //! `later` holds, both; `why 'deny "MESSAGE"'`, whether the deny holds and
 //! if not which clause failed on what. `why-not` is gone.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 /// The README's program, on the fake cloud: a subnet in every zone the

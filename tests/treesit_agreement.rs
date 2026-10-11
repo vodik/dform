@@ -5,7 +5,7 @@
 //! file has a tree-sitter error exactly when it has a syntax error. The
 //! highlight query's reference capture fires on field values, not reads.
 
-mod common;
+use crate::common;
 use common::{corpus, df_files, rel, repo};
 use dform::syntax::SyntaxKind::{self, *};
 use dform::syntax::parser::parse;

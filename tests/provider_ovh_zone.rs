@@ -4,7 +4,7 @@
 //! a record takes its zone from it; the plan file records the read, so
 //! apply asks the API nothing plan asked.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 use dform_provider_ovh::fake::{NAMESERVERS, Server};
 

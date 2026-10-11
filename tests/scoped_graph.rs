@@ -5,7 +5,7 @@
 //! shadows its module's, or an output named as its user's, is no cycle.
 //! On the mock.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// The plan's lines `ATTR = ...`, in order.

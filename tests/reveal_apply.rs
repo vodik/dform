@@ -11,7 +11,7 @@
 //! happen is the call's error, naming the attribute; a `bootstrap`
 //! attribute (R-198) is not revealed after the object is made.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 use std::path::Path;
 

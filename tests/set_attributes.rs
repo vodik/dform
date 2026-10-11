@@ -5,7 +5,7 @@
 //! apply per contribution; the provider receives the whole set, in one
 //! order; removing a module removes its element, an update of the set.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// Three modules, each with its policy, each adding it to the role the

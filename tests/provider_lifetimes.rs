@@ -4,7 +4,7 @@
 //! address nobody listens on is killed and reaped when the dial fails; one
 //! that never answers its `Manifest` fails startup within the budget.
 
-mod common;
+use crate::common;
 use common::Scratch;
 use dform::plugin::backend::CallError;
 use dform::plugin::pb;

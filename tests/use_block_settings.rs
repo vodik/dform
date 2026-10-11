@@ -11,7 +11,7 @@
 //! Through the command line on every backend, and through the engine's API
 //! (`deployment::load`, `locate`, `evaluate`) over the linked mock.
 
-mod common;
+use crate::common;
 use common::{BACKENDS, Scratch};
 
 const USE: &str = r#"

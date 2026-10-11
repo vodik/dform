@@ -3,7 +3,7 @@
 //! nothing wants drops the field silently") nor a deny listed after a plan
 //! that shows the resource without it.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 const MSG: &str = "answered nothing";

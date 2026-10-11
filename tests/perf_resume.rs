@@ -2,7 +2,7 @@
 //! facts instead of repeating it (`engine::Resumable`): its result must be
 //! the fresh evaluation's with those facts given.
 
-mod common;
+use crate::common;
 use common::repo;
 use dform::ast::{Atom, Term};
 use dform::value::Value;

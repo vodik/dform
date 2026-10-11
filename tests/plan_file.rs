@@ -2,7 +2,7 @@
 //! stated for Z-sets. `apply PLAN` refreshes, re-evaluates and refuses
 //! unless the delta it computes is the file's.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 const WORLD: &str = r#"{"resources": {"compute.vm::app": {"typ": "compute.vm", "name": "app",

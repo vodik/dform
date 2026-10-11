@@ -6,7 +6,7 @@
 //! where it lives. Policy reads `secrets/4` (its age, through the clock)
 //! and `rotated/3`.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch, dform, repo, yes};
 
 /// `dform ARGS` in `s`, as alice, at `now`.

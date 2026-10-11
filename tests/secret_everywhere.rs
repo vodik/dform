@@ -10,7 +10,7 @@
 //! boundary marks no path, so only the taint could, and a secret never
 //! reaches it.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 /// What every printer of `program` in `s` says, the run's flags

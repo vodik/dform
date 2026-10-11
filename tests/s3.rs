@@ -11,7 +11,7 @@
 //!
 //!   eval "$(crates/dform-s3/minio.sh start)" && cargo test --test s3
 
-mod common;
+use crate::common;
 use common::{Run, Scratch, controller_log};
 use dform_core::store::{LOCK, S3Spec, STATE, Store};
 use dform_s3::S3Store;

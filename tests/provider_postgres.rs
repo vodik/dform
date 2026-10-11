@@ -6,7 +6,7 @@
 //! clean again; the provider's own role refused with its location; a
 //! connection in the clear warned of.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 use dform_provider_postgres::fake::{ADMIN, ADMIN_PASSWORD, Server};
 

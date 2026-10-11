@@ -2,7 +2,7 @@
 //! deployment, with its own state, lock, registry entry and controller.
 //! Inputs outside the key are parameters of a deployment.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 /// A vpc whose cidr (force_new) and name depend on the key, and whose

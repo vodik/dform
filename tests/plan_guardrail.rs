@@ -5,7 +5,7 @@
 //! `--allow-empty` (or the stack's `allow_empty`) names it. A deny reads
 //! the last apply's record as `derived_at_last_apply(rule, n)`.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// Subnets joined through a table of active regions: one row of

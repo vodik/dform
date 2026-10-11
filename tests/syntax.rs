@@ -5,7 +5,7 @@
 //! `stacks/main.df` is loaded with the modules its paths name.
 //! Accept a changed `.txt` with `UPDATE_GOLDEN=1 cargo test --test syntax`.
 
-mod common;
+use crate::common;
 use common::{corpus, df_files, rel, repo};
 use dform::syntax::parser::parse;
 use std::path::{Path, PathBuf};

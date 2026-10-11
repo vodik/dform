@@ -4,7 +4,7 @@
 //! of a component), each line keeping its full name; a short name is legal
 //! where it is unique.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const K3S: &str = r#"

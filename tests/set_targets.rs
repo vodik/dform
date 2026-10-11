@@ -5,7 +5,7 @@
 //! that starts with no name in scope is the error at the target, in the
 //! program's words.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 /// Two deployments, one named in its block and one by its clause.

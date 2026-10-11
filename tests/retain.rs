@@ -5,7 +5,7 @@
 //! retain)`. It names an address no rule wants any more, and a destroy
 //! honours it. With `prevent_destroy` on the same object it is an error.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 const BOTH: &str = r#"

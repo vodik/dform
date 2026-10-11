@@ -4,7 +4,7 @@
 //! in its cell; a secret as its size; `--json` an array of objects keyed
 //! by column. `dform output STACK NAME` prints a value's bare bytes.
 
-mod common;
+use crate::common;
 use common::Scratch;
 use serde_json::json;
 

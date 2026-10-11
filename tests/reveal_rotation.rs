@@ -7,7 +7,7 @@
 //! (R-198) is kept, and the plan says why: the key was replaced, or the
 //! template changed. Nothing replaced, nothing differs.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 /// The vault's token, its `scope` given at creation only by the API: a

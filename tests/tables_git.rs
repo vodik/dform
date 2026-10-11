@@ -3,8 +3,8 @@
 //! branch moves; state keeps the commit last applied, and plan says when
 //! the ref moved; the controller takes a moved ref as an input event.
 
-mod common;
-mod tables_common;
+use crate::common;
+use crate::tables_common;
 use common::Scratch;
 use tables_common::{push, repo, scratch};
 

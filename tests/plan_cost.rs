@@ -5,7 +5,7 @@
 //! deployment's objects over one connection and writes none; its
 //! provider calls go out together, not one after another.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 use dform_provider_ovh::fake::{self, Server};
 use std::time::{Duration, Instant};

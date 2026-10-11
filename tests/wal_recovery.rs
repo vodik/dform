@@ -7,7 +7,7 @@
 //! recovers to the state an uninterrupted apply leaves. The fake S3
 //! store's case is in tests/s3.rs.
 
-mod common;
+use crate::common;
 use common::{Scratch, mock};
 
 const PROG: &str = r#"

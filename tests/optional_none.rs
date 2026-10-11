@@ -4,7 +4,7 @@
 //! the attribute or `let` it was to give (R-119), directly, inside an
 //! object, or through a `let`; never "non-ground head" with no place.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const CALL: &str = "regex.capture(\"16.0.4\", \"^v(.+)$\", 1) answered nothing";

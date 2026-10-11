@@ -6,7 +6,7 @@
 //! which logs one entry: `renamed storage platform[env=lab] →
 //! stacks.platform[env=lab]`.
 
-mod common;
+use crate::common;
 use common::Scratch;
 use dform_core::store::Store;
 

@@ -4,7 +4,7 @@
 //! A tuple needs the exact arity, an object pattern binds the fields it
 //! names and ignores the rest, `_` matches anything.
 
-mod common;
+use crate::common;
 use common::{Scratch, error, facts};
 use dform_core::engine;
 use dform_core::parser::{parse_file, parse_program};

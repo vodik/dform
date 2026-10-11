@@ -3,7 +3,7 @@
 //! held normalized, its parts fields, `with_*` per part; `url`, the
 //! browser's word, is an error naming `uri`.
 
-mod common;
+use crate::common;
 use common::{error, facts};
 
 /// Two spellings of one uri are equal, a uri never equals its string,

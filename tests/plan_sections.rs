@@ -2,7 +2,7 @@
 //! R-79): set-aware diffs, the ticks and what each waits on, `later`,
 //! shadowed and conflicts, the summary line and what apply does.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 /// The two-phase GKE stack, with the rules of the `extra` files after it

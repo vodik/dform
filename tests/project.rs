@@ -3,7 +3,7 @@
 //! or as a deployment with its key, and the manifest's providers, defaults
 //! and discovery settings apply.
 
-mod common;
+use crate::common;
 use common::Scratch;
 use std::path::PathBuf;
 

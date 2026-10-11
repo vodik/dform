@@ -9,7 +9,7 @@
 //! machine's own configuration names: it lists the regions, and changes
 //! nothing.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 use dform_provider_ovh::fake::{self, Server};
 use serde_json::Value as Json;

@@ -5,7 +5,7 @@
 //! conformance suite, which the mock passes on every backend (a process
 //! over gRPC, linked in, linked in across prost).
 
-mod common;
+use crate::common;
 use common::{BACKENDS, Backend, Scratch, identities, mock};
 use dform::plugin::link::Link;
 use dform::plugin::{Config, Launch, Providers};

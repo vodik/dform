@@ -4,7 +4,7 @@
 //! when, `(after stacks.platform[env=lab] is applied)`. Two deployments on
 //! the mock; `apps` reads an output of `platform` its plan cannot know.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const PLATFORM: &str = r#"

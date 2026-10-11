@@ -2,7 +2,7 @@
 //! deployments are found under the backend's directory by its template,
 //! whether or not the registry knows them.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const APP: &str = r#"

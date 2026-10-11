@@ -4,8 +4,7 @@
 //! name, through a selector (`.name`, `[_]`), out of a read, a `let` or an
 //! input.
 
-mod common;
-mod tables_common;
+use crate::tables_common;
 use tables_common::{push, repo, scratch};
 
 /// One TOML document holds several relations: the whole document takes

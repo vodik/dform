@@ -1,7 +1,7 @@
 //! State is scoped to the program: two programs against one `dform.state/` do not
 //! see each other's resources.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const NET: &str = r#"

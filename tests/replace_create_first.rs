@@ -8,7 +8,7 @@
 //! the program's name, state records it, and a reference to the name
 //! answers it. Elsewhere it is refused at plan.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// A name-keyed type whose provider generates names (`app.config`), a

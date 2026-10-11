@@ -3,7 +3,7 @@
 //! printed canonically and sent to each provider in its schema's render
 //! form. The compile-time errors are tests/syntax/err/quantities.df's.
 
-mod common;
+use crate::common;
 use common::{Scratch, query};
 
 fn program(body: &str) -> String {

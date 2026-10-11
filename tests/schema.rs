@@ -1,6 +1,6 @@
 //! Provider schemas are facts loaded from `providers/<name>/schema.df`.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 #[test]

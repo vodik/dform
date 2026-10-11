@@ -6,7 +6,7 @@
 //! `x in T` ranges over its own resources, so its line counts only
 //! those. On the mock.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const STACK: &str = r#"

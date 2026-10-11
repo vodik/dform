@@ -2,7 +2,7 @@
 //! that is not a string template reaches the world as the engine writes
 //! it in JSON (`spell::value_to_json`), a quantity as its canonical text.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 #[test]

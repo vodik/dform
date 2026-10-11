@@ -3,7 +3,7 @@
 //! account its credentials reach, and `expect_account` refuses a plan
 //! that would reach another deployment's.
 
-mod common;
+use crate::common;
 use common::{Backend, Run, Scratch};
 
 /// The mock (`fake`) configured per env: its account from the

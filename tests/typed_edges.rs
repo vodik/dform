@@ -10,7 +10,7 @@
 //! schema (a container's `resources.requests.cpu` is a cpu, `memory`
 //! bytes) and fake's (`routes.destination` an inet).
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 /// Plan `src` (its inputs, then `use fake`, `use k8s`, then the rest) in

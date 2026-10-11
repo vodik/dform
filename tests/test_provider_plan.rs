@@ -6,7 +6,7 @@
 //! whose Plan needs its credentials is not asked, and the test says so
 //! once.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 use dform_provider_ovh::fake::{self, Server};
 

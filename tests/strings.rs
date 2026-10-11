@@ -1,7 +1,7 @@
 //! String literals (docs/grammar.md "Strings and interpolation"): a string
 //! spans lines (R-61), and `\` at a line end joins the line with the next.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// `\` before a newline is no character: the lines join, the next line's

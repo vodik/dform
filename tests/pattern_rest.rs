@@ -3,7 +3,7 @@
 //! spreads with, so `{ metadata: m, ..body } = doc` takes a document apart
 //! and `{ ..body, metadata: m2 }` puts it back together.
 
-mod common;
+use crate::common;
 use common::{Scratch, error, facts};
 
 const DOC: &str = "doc({metadata: {name: \"a\"}, kind: \"Pod\", spec: {replicas: 1}})\n";

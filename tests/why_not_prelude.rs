@@ -6,7 +6,7 @@
 //! address in every line, a `not` among them; a `not` whose row exists
 //! names the row and where it comes from.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 /// `dform dev --world w.json [--provider ..] why PATTERN p.df` in `s`.

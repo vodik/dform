@@ -3,7 +3,7 @@
 //! facts (`type_extern`), so a program reads `ovh.image(..)` with no
 //! `extern` line. A program's own `extern` line still works and wins.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 use dform_provider_ovh::fake::Server;
 

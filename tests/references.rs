@@ -3,7 +3,7 @@
 //! interpolates as its address, `T["A"]`, typed by `in` or not; a scoped
 //! address is left alone by `modules::scoped_term`.
 
-mod common;
+use crate::common;
 use common::{Scratch, mock};
 
 /// Applies two VPCs and a namespace, then plans a program with none of

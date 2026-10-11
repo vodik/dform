@@ -4,8 +4,7 @@
 //! gives every leaf of a document to the input at its path; `--set` is
 //! `@override`. Overlapping blocks resolve by rank, never by specificity.
 
-mod common;
-mod tables_common;
+use crate::tables_common;
 use tables_common::scratch;
 
 const PROGRAM: &str = r#"

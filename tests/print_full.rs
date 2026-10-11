@@ -4,7 +4,7 @@
 //! carries it whole, and `query PATH` reads a `let` by its path, a used
 //! module's too, `--json` whole.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// A rendered cloud-init document of more than 2 KB, in a used module.

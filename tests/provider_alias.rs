@@ -4,7 +4,7 @@
 //! the name (its world holds `aws.vpc`), state and the plan carry it, and
 //! `x in aws.vpc` ranges over both.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// A project whose dform.toml names the aws mock `aws`.

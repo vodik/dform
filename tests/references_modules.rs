@@ -4,7 +4,7 @@
 //! the reader reads through them with no `x in T` to type them again; a
 //! stack's `output p` cannot carry one out of its deployment.
 
-mod common;
+use crate::common;
 use common::{Scratch, mock};
 
 /// A program under the fake provider.

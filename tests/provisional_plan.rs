@@ -3,7 +3,7 @@
 //! yet holds its objects under `later`, and a deny over them is decided
 //! where it reads what the program wrote, or prints what it waits on.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 const PLATFORM: &str = r#"

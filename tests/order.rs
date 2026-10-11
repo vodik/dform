@@ -3,7 +3,7 @@
 //! read may come before what it names, as `dform fmt` writes a file
 //! (outputs first, R-11a).
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// A module named like its component, as a k3s cluster's is written.

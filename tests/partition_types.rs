@@ -4,7 +4,7 @@
 //! is one rule per type the variable can be, so the ConfigMap's
 //! `metadata` reads the Namespace's and nothing of its own.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// The shape of ~/src/ovh-infra's baseline and traefik.df, on the mock.

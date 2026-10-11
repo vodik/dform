@@ -7,7 +7,7 @@
 //! beside the provider holds the same (its link's `hosting`); the third
 //! gets none, not what the others left behind.
 
-mod common;
+use crate::common;
 use common::Scratch;
 use dform::plugin::Launch;
 use dform::plugin::host::Grants;

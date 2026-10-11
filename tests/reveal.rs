@@ -8,7 +8,7 @@
 //! (`use fake { source = "prov", .. }`), its `account` the secret, which
 //! `expect_account` checks.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 use std::path::Path;
 

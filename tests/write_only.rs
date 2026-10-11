@@ -4,7 +4,7 @@
 //! the value; Plan compares the program's value with it: the same is no
 //! change, another replaces or updates as the schema says.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 fn project(user_data: &str, token: &str) -> Scratch {

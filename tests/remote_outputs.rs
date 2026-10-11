@@ -5,7 +5,7 @@
 //! read and `apply PLAN` refuses once one moved; a secret output crosses as
 //! its label only.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const CLUSTER: &str = r#"

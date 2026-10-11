@@ -4,7 +4,7 @@
 //! lists, managed or not. A policy over `w in k8s.deployment` never ranges
 //! over what else the cluster runs, though the provider lists it.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 #[test]

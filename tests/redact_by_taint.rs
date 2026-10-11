@@ -11,7 +11,7 @@
 //! flows into. The last line holds too: a secret's bytes, as a whole
 //! value, never print.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// A Secret whose `data` is sensitive as a whole, and a public config.

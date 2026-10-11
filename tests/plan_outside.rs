@@ -4,7 +4,7 @@
 //! named from was taken for the root, the sites were under no root and
 //! printed absolute, too wide for the column, so none printed.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 #[test]

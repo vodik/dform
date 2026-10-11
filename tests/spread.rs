@@ -4,7 +4,7 @@
 //! enumerates a discrete range. No deep merge: depth is written, `{ ..b,
 //! spec: { ..b.spec, replicas: 3 } }`.
 
-mod common;
+use crate::common;
 use common::{Scratch, error, facts};
 
 const BASE: &str = "base({a: 1, b: 2, spec: {replicas: 1, image: \"x\"}})\n";

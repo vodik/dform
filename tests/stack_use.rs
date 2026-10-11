@@ -5,7 +5,7 @@
 //! *module's* provider use and reads do run in its user: R-129,
 //! tests/loader_in_module.rs.)
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// The platform: its own resource, and a module that configures a

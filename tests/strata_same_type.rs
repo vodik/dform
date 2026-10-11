@@ -5,7 +5,7 @@
 //! server's attribute only; a true cycle (a resource reading itself, two
 //! reading each other) is still an error, and names the addresses.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// The k3s shape of ~/src/ovh-infra: a module with one server and

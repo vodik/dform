@@ -3,7 +3,7 @@
 //! nothing defines. A provider the test leaves unconfigured answers "not
 //! yet", so a deny over its rows is undetermined, said once.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 use dform_provider_ovh::fake::Server;
 

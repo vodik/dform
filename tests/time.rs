@@ -2,7 +2,7 @@
 //! model through jiff, zones from the tzdb bundled into dform. The
 //! compile-time errors are tests/syntax/err/durations.df's.
 
-mod common;
+use crate::common;
 use common::{Scratch, query};
 
 fn one(s: &Scratch, goal: &str) -> String {

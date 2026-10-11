@@ -3,7 +3,7 @@
 //! round 0, then the Z-set), on every backend: a process over gRPC, linked
 //! in, linked in across prost.
 
-mod common;
+use crate::common;
 use common::repo;
 
 use dform::ast::{Atom, Program, Term};

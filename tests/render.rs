@@ -6,7 +6,7 @@
 //! their order are `dform_core::render`'s unit tests; the kinds and the
 //! edges `src/cli/render.rs`'s.
 
-mod common;
+use crate::common;
 use common::{Scratch, copy_dir, repo};
 use serde_json::Value as Json;
 

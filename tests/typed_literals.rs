@@ -3,7 +3,7 @@
 //! tests/syntax/err (references.df, typed_literals.df); these are the
 //! positive cases and the checks that need the provider's schema.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 fn plan(s: &Scratch) -> common::Run {

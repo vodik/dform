@@ -2,7 +2,7 @@
 //! that is not an object is an error, never a literal that does not hold,
 //! so a deny cannot pass without checking.
 
-mod common;
+use crate::common;
 use common::{Scratch, mock};
 
 /// A program under the fake provider.

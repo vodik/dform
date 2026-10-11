@@ -3,7 +3,7 @@
 //! printed with its bounds as values (`range(10Gi, 4Ti)`), and a bound
 //! of another type than the value's is an error at the check.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 fn plan(s: &Scratch, src: &str, extra: &[&str]) -> Run {

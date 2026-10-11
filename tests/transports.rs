@@ -7,7 +7,7 @@
 //! tests/transport_ssh.rs's, a provider's scheme and its grants
 //! tests/host_grpc.rs's.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch, dform, yes};
 use dform_core::store::{Cond, S3Spec, Store};
 use std::path::Path;

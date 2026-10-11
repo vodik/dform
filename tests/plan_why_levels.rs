@@ -5,7 +5,7 @@
 //! attribute the chain of expressions its value passed through (R-122); `-q` (`--why=none`) is the bare diff as it was laid
 //! out before (tests/golden/*.plan-bare.txt pins it byte for byte).
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 fn plan(s: &Scratch, example: &str, why: &[&str]) -> String {

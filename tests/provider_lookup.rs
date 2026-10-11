@@ -4,7 +4,7 @@
 //! `PATH`, else at its `path`. Only a process proves it: the first place
 //! is the running executable's directory.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 use std::path::Path;
 

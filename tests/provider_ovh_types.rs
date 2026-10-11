@@ -9,7 +9,7 @@
 //! The provider is configured with the fake's environment and no
 //! configuration file, so no real `ovh.conf` is read.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 use dform_core::plugin::backend::{Call, CallError, Handler, Reply};
 use dform_core::plugin::{pb, wire};

@@ -8,7 +8,7 @@
 //! is `managed`, at its version. The token is a credential by name the
 //! host applies; AppRole logs in.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 use dform_provider_vault::fake::{ROLE_ID, SECRET_ID, Server, TOKEN};
 use serde_json::json;

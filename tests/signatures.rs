@@ -3,7 +3,7 @@
 //! `component pg_aws: database { .. }` is checked against it, so the
 //! guarded copies of one name are interchangeable by their output shape.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const SIG: &str = r#"

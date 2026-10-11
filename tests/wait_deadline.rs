@@ -5,7 +5,7 @@
 //! naming the value and the setting; what was applied stays applied, and
 //! the wait is the next apply's.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// The database's endpoint gates the vpc: until the world has it, tick 2

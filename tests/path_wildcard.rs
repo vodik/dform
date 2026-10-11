@@ -4,7 +4,7 @@
 //! per `[_]`, a read enumerates, `v in PATH` binds each value, and a
 //! document's selector takes the same step; `[*]` is an error naming it.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 const WORKLOADS: &str = "use k8s\n\n\

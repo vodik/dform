@@ -7,7 +7,7 @@
 //! any string, and a key is a name printed wherever the object is, so a
 //! secret one is E0301; a secret value under a computed key is carried.
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 fn run(body: &str) -> common::Run {

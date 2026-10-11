@@ -13,7 +13,7 @@
 //! them) and nothing else: no file under the project (state, its audit
 //! log, the worlds, the cache, a plan file), no line of output.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 use std::path::Path;
 

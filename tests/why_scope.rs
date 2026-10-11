@@ -4,8 +4,8 @@
 //! what reads it. On the mock, a module with a Secret and a component
 //! whose copy the stack makes.
 
-mod common;
-mod lsp_client;
+use crate::common;
+use crate::lsp_client;
 use common::Scratch;
 
 const BACKUPS: &str = r#"input namespace: k8s.namespace

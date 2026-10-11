@@ -4,7 +4,7 @@
 //! back (ticket "A resource whose field read finds no value vanishes
 //! silently").
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const MSG: &str = "a field read found no value: the resource is not derived";

@@ -4,7 +4,7 @@
 //! one namespace. `provider`, the earlier statement, is an error naming
 //! `use`.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// A `use` of a provider plans against it and configures it with its

@@ -6,7 +6,7 @@
 //! over a fixed list of events); that a signal is what asks is
 //! interrupt.rs's.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const PROG: &str = r#"

@@ -24,7 +24,7 @@
 //! resource's attribute (ticket "show and query print secrets
 //! unredacted").
 
-mod common;
+use crate::common;
 use common::{Scratch, repo};
 
 const VAULT_SECRET: &str = "VAULT-SECRET-DO-NOT-PRINT";

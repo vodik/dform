@@ -5,7 +5,7 @@
 //! the fix; `r.start`, `r.end`, and a discrete range's `r.len`; the
 //! canonical print `a..=b`, which a `range(T)` position parses back.
 
-mod common;
+use crate::common;
 use common::{error, facts};
 use dform_core::{engine, parser::parse_program};
 

@@ -3,7 +3,7 @@
 //! an input that changed, a guard that stopped holding. A delete says
 //! where the last apply derived it. No apply, no `because`.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const NET: &str = r#"

@@ -7,7 +7,7 @@
 //! a cluster (its static schema), so they are typed there; a kind only a
 //! cluster serves (a CRD) waits on the provider for its schema.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 /// The k3s shape of ~/src/ovh-infra: the kubeconfig is read from the

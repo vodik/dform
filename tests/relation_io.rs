@@ -4,7 +4,7 @@
 //! gives in its `use` or `instance` block, by rows or `p from TERM`; and
 //! `output p` exports a relation.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 fn plan(s: &Scratch, file: &str) -> common::Run {

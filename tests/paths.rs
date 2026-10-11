@@ -4,7 +4,7 @@
 //! `why`). The plan file's round trip is in
 //! tests/plan_file.rs.
 
-mod common;
+use crate::common;
 use common::{Scratch, mock};
 
 const KEY: &str = "traefik.ingress.kubernetes.io/router.tls.certresolver";

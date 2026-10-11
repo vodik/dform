@@ -4,7 +4,7 @@
 //! alone is an error whose help writes it out or puns at the last object,
 //! `spec.selector = { color }`.
 
-mod common;
+use crate::common;
 use common::error;
 use dform_core::engine;
 use dform_core::parser::parse_file;

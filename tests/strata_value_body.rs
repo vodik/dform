@@ -6,7 +6,7 @@
 //! R-126, as R-116 writes a variable type once per type), so the rule is
 //! no cycle; a rule reading and writing the same attribute still is.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 /// Two ConfigMaps as a manifest ships them.

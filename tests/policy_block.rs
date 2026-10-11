@@ -4,7 +4,7 @@
 //! as `N hold`; holding policies collapse into the block's count, `-v`
 //! lists everything; the headline carries the count.
 
-mod common;
+use crate::common;
 use common::Scratch;
 
 const STACK: &str = r#"

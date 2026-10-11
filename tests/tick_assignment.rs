@@ -9,7 +9,7 @@
 //! Traefik CRDs among them) in tick 2, a Middleware of a kind a CRD of
 //! tick 2 defines in tick 3.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 
 const CRDS: &str = "\

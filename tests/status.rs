@@ -5,7 +5,7 @@
 //! module lists. Health is a call of its own: nothing of it reaches the
 //! plan, the apply or state.
 
-mod common;
+use crate::common;
 use common::{Run, Scratch};
 use dform_provider_ovh::fake::{self, Server};
 use serde_json::Value as Json;
