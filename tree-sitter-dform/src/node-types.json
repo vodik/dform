@@ -533,10 +533,6 @@
           {
             "type": "body",
             "named": true
-          },
-          {
-            "type": "body_block",
-            "named": true
           }
         ]
       },
@@ -586,10 +582,6 @@
         "types": [
           {
             "type": "body",
-            "named": true
-          },
-          {
-            "type": "body_block",
             "named": true
           }
         ]
@@ -1099,10 +1091,6 @@
           {
             "type": "body",
             "named": true
-          },
-          {
-            "type": "body_block",
-            "named": true
           }
         ]
       },
@@ -1164,10 +1152,6 @@
         "types": [
           {
             "type": "body",
-            "named": true
-          },
-          {
-            "type": "body_block",
             "named": true
           }
         ]
@@ -1455,10 +1439,6 @@
           {
             "type": "body",
             "named": true
-          },
-          {
-            "type": "body_block",
-            "named": true
           }
         ]
       },
@@ -1743,10 +1723,6 @@
           {
             "type": "body",
             "named": true
-          },
-          {
-            "type": "body_block",
-            "named": true
           }
         ]
       },
@@ -1811,10 +1787,6 @@
         "types": [
           {
             "type": "body",
-            "named": true
-          },
-          {
-            "type": "body_block",
             "named": true
           }
         ]

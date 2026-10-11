@@ -77,14 +77,13 @@ peering("prod", "edge-prod", "projects/edge-prod/global/networks/envoy-proxy-pro
 # Derived project facts for the active env
 ########################################
 
-project(id, name, region, net_id) where {
-  e = env
-  setting(e, "project_id", id)
-  setting(e, "project_name", name)
-  setting(e, "region", region)
-  setting(e, "network_name", net_name)
-  net_id = str.format("projects/%s/global/networks/%s", id, net_name)
-}
+project(id, name, region, net_id) where
+  e = env,
+  setting(e, "project_id", id),
+  setting(e, "project_name", name),
+  setting(e, "region", region),
+  setting(e, "network_name", net_name),
+  net_id = str.format("projects/%s/global/networks/%s", id, net_name),
 
 ########################################
 # Network
@@ -101,13 +100,12 @@ resource google.compute_subnetwork gke_subnet {
     { range_name: str.format("%s-gke-pods-range", name), ip_cidr_range: pods_cidr },
     { range_name: str.format("%s-gke-svc-range", name), ip_cidr_range: svc_cidr },
   ] # Keyed on .range_name per the google schema
-} where {
-  project(id, name, region, net_id)
-  e = env
-  setting(e, "gke.subnet_cidr", subnet_cidr)
-  setting(e, "gke.pods_cidr", pods_cidr)
-  setting(e, "gke.services_cidr", svc_cidr)
-}
+} where
+  project(id, name, region, net_id),
+  e = env,
+  setting(e, "gke.subnet_cidr", subnet_cidr),
+  setting(e, "gke.pods_cidr", pods_cidr),
+  setting(e, "gke.services_cidr", svc_cidr),
 
 resource google.compute_subnetwork regional_proxy {
   project = id
@@ -126,11 +124,10 @@ resource google.compute_network main {
 } where project(id, _, _, net_id), e = env
 
 # One static address per declared static IP; the map explodes into rows.
-static_ip(ip_name, type_) where {
-  e = env
-  setting(e, "gke.static_ips", ips)
-  member_kv(ips, ip_name, { type: type_ })
-}
+static_ip(ip_name, type_) where
+  e = env,
+  setting(e, "gke.static_ips", ips),
+  member_kv(ips, ip_name, { type: type_ }),
 
 resource google.compute_address "${s}" {
   project = id
@@ -138,11 +135,10 @@ resource google.compute_address "${s}" {
   name = ip_name
   address_type = type_
   subnetwork = ref(google.compute_subnetwork, "gke_subnet", "id")
-} where {
-  project(id, _, region, _)
-  static_ip(ip_name, type_)
-  s = str.format("static-ip-%s", ip_name)
-}
+} where
+  project(id, _, region, _),
+  static_ip(ip_name, type_),
+  s = str.format("static-ip-%s", ip_name),
 
 ########################################
 # GKE: phase 1
@@ -221,11 +217,10 @@ resource gke.nodepool "${np}" {
 # undetermined until phase 1 resolves .zones.
 zone_count(n) where n = count(z), attr("gke.cluster", "gke_platform", "zones", zs), member(zs, z)
 
-deny("two_zones", "cluster must be in at least two zones", { cluster: "gke_platform" }) where {
-  want("gke.cluster", "gke_platform")
-  zone_count(n)
-  n < 2
-}
+deny("two_zones", "cluster must be in at least two zones", { cluster: "gke_platform" }) where
+  want("gke.cluster", "gke_platform"),
+  zone_count(n),
+  n < 2,
 
 ########################################
 # Monitoring: the dashboard JSON is a file extern, hashed, with provenance
@@ -600,7 +595,7 @@ output("project_id", id) where project(id, _, _, _)
         (identifier)
         (identifier)
         (identifier)))
-    (body_block
+    (body
       (comparison
         (identifier)
         (identifier))
@@ -720,7 +715,7 @@ output("project_id", id) where project(id, _, _, _)
               (identifier)))))
       (comment))
     (clause
-      (body_block
+      (body
         (atom_literal
           (call
             (identifier)
@@ -872,7 +867,7 @@ output("project_id", id) where project(id, _, _, _)
       (arguments
         (identifier)
         (identifier)))
-    (body_block
+    (body
       (comparison
         (identifier)
         (identifier))
@@ -931,7 +926,7 @@ output("project_id", id) where project(id, _, _, _)
             (string
               (string_content))))))
     (clause
-      (body_block
+      (body
         (atom_literal
           (call
             (identifier)
@@ -1365,7 +1360,7 @@ output("project_id", id) where project(id, _, _, _)
             (identifier)
             (string
               (string_content))))))
-    (body_block
+    (body
       (atom_literal
         (call
           (identifier)

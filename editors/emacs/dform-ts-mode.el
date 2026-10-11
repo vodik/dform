@@ -315,7 +315,9 @@ text: indenting them would change the string."
            "object" "record_type" "list" "comprehension"
            "arguments" "parenthesized" "tuple" "index_expression")))
       parent-bol dform-ts-mode-indent-offset)
-     ;; A block's clause (`where', after the block) or a one-line body.
+     ;; A clause's lines: a `where' that starts one, and a literal per
+     ;; line, after a block's `} where' or a statement's head.
+     ((node-is "clause") parent-bol dform-ts-mode-indent-offset)
      ((parent-is "clause") parent-bol dform-ts-mode-indent-offset)
      ((parent-is ,(regexp-opt '("rule" "check" "let" "set" "output")))
       parent-bol dform-ts-mode-indent-offset)

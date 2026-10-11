@@ -4,10 +4,8 @@ tests/fixtures/adversarial/packs/other_path.df
 
 # The pack adv3_pack_reads_other_path.df uses: a module, `use packs.other_path`.
 type_lattice("iam.policy", "statements", "set")
-set p.statements = [{ action: "org.read", resource: "org" }] where {
-  p in iam.policy
-  arg("iam.policy", p, "name", "app")
-}
+set p.statements = [{ action: "org.read", resource: "org" }]
+  where p in iam.policy, arg("iam.policy", p, "name", "app")
 
 ---
 
@@ -37,7 +35,7 @@ set p.statements = [{ action: "org.read", resource: "org" }] where {
           (identifier)
           (string
             (string_content)))))
-    (body_block
+    (body
       (in_literal
         (identifier)
         (member_expression

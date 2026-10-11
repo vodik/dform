@@ -339,11 +339,20 @@ fn the_reference_capture_is_on_field_values_and_not_on_reads() {
 #[test]
 fn edge_cases_agree() {
     let snippets = [
-        // A newline ends a statement; nothing continues a line. (A line
-        // broken after an operator, after `where` or before a block's `{` is
-        // an error only to the compiler: grammar.js's header says why.)
+        // A newline ends a statement; nothing continues a line but a
+        // clause, on a line indented deeper than its statement. (A line
+        // broken after an operator or before a block's `{` is an error
+        // only to the compiler: grammar.js's header says why.)
         "let x = 1\n  + 2\n",
         "p(a) where {\n  q(a)\n  r(a)\n}\n",
+        "p(a) where\n  q(a),\n  # c\n  r(a),\ns(a)\n",
+        "p(a) where q(a),\nr(a)\n",
+        "p(a) where q(a), r(a),\n",
+        "p(a) where\n  q(a)\n  r(a) > 1\n",
+        "component m {\n  p(x) where\n    q(x),\n  r(1)\n}\n",
+        "use m {\n  p(x) where\n    q(x),\n  n = 1\n}\n",
+        "deny \"m\" { a }\n  where q(a), r(a)\n",
+        "let c = x where { cpu: x } = lim\n",
         "p(a)\n  @override\n",
         "p(a) @override\n",
         "p(a) where q(a) # c\nr(a)\n",
@@ -367,7 +376,8 @@ fn edge_cases_agree() {
         "resource net.vpc a { cidr = \"x\" name = \"a\" }\n",
         "resource net.vpc a { cidr = \"x\"\n  where q(x) }\n",
         "resource net.vpc a {\n  if q(x)\n  cidr = \"x\"\n}\n",
-        "resource net.vpc a {\n  cidr = x\n} where {\n  q(x)\n  r(x)\n}\n",
+        "resource net.vpc a {\n  cidr = x\n} where\n  q(x),\n  r(x),\n",
+        "resource net.vpc a { cidr = x }\n  where q(x)\n",
         "resource net.vpc a {\n  cidr = x\n}\nwhere q(x)\n",
         "resource m i {} where p(1)\n",
         "use p { a = 1 } where q(1)\n",

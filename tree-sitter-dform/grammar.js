@@ -6,14 +6,18 @@
  * tests/treesit_agreement.rs holds the two to the same corpus. A
  * statement's first token decides what it is (proposal H, H-2). A newline
  * outside `( )`, `[ ]` and an object's braces ends a statement, a block
- * entry or a literal of a `{ }` body, and nothing continues a line: the
- * external scanner (src/scanner.c) emits a newline only where the grammar
- * can take one, so everywhere else it is whitespace, as in the compiler.
+ * entry or a literal of a `not { }` body, and nothing continues a line but
+ * a clause: the external scanner (src/scanner.c) emits a newline only where
+ * the grammar can take one, so everywhere else it is whitespace, as in the
+ * compiler. A clause continues on a line indented deeper than its
+ * statement after a comma (`_clause_line`), and a `where` may start such a
+ * line (`_hang`): the scanner keeps the indentation of the line each
+ * newline it emits leads to, the statement's.
  *
  * One consequence: where a statement cannot end yet, a newline is
  * whitespace here but an end to the compiler, so a line broken after an
- * operator, a comma or `where`, or before a block's `{`, is an error only in
- * the compiler's diagnostics.
+ * operator, before a block's `{`, or after `where` onto a line not indented
+ * deeper, is an error only in the compiler's diagnostics.
  */
 
 /// <reference types="tree-sitter-cli/dsl" />
@@ -85,6 +89,8 @@ export default grammar({
     $._newline,
     $.string_content,
     $._error_sentinel,
+    $._clause_line,
+    $._hang,
   ],
 
   extras: $ => [/\s/, $.comment],
@@ -136,7 +142,7 @@ export default grammar({
         optional(seq('=', field('default', $._term))),
         optional($.refinement),
         // `input k: T where B`: a dependent input (R-104).
-        optional($.clause),
+        optional(seq(optional($._hang), $.clause)),
       ),
       seq('input', field('name', $._word), field('body', $.input_fields)),
     ),
@@ -174,7 +180,7 @@ export default grammar({
         'from',
         field('source', $._term),
         optional(field('selector', $.selector)),
-        optional(seq('where', field('condition', $._body))),
+        optional(seq(optional($._hang), 'where', field('condition', $.body))),
       )),
     ),
 
@@ -186,13 +192,13 @@ export default grammar({
         field('name', $._word),
         optional(seq(':', field('type', $._type))),
         optional(seq('=', field('value', $._term))),
-        optional(seq('where', field('condition', $._body))),
+        optional(seq(optional($._hang), 'where', field('condition', $.body))),
       ),
       seq(
         'output',
         field('name', $._word),
         field('body', $.output_fields),
-        optional(seq('where', field('condition', $._body))),
+        optional(seq(optional($._hang), 'where', field('condition', $.body))),
       ),
     ),
 
@@ -223,7 +229,7 @@ export default grammar({
       optional(seq(':', field('type', $._type))),
       '=',
       field('value', $._term),
-      optional(seq('where', field('condition', $._body))),
+      optional(seq(optional($._hang), 'where', field('condition', $.body))),
     ),
 
     // `set r.p = t [@rank] [where B]`: a contribution; `set { r.p = t .. }`
@@ -241,7 +247,7 @@ export default grammar({
         seq('from', field('source', $._term), optional(field('selector', $.selector))),
       ),
       optional(field('rank', $.rank)),
-      optional(seq('where', field('condition', $._body))),
+      optional(seq(optional($._hang), 'where', field('condition', $.body))),
     ),
 
     set_block: $ => seq(
@@ -359,7 +365,7 @@ export default grammar({
       field('path', $.dotted_name),
       optional(seq('as', field('name', $._word))),
       optional(field('body', alias($.copy_block, $.block))),
-      optional($.clause),
+      optional(seq(optional($._hang), $.clause)),
     ),
 
     // A `use`'s or a resource's block: its inputs, and the rows of the
@@ -382,7 +388,7 @@ export default grammar({
       'from',
       field('source', $._term),
       optional(field('selector', $.selector)),
-      optional(seq('where', field('condition', $._body))),
+      optional(seq(optional($._hang), 'where', field('condition', $.body))),
     ),
 
     statement_block: $ => seq(
@@ -406,7 +412,7 @@ export default grammar({
         field('body', alias($.copy_block, $.block)),
         seq('=', field('value', $._term)),
       ),
-      optional($.clause),
+      optional(seq(optional($._hang), $.clause)),
     ),
 
     // A resource's entries,
@@ -426,7 +432,7 @@ export default grammar({
     _separator: $ => choice(seq(',', repeat($._newline)), repeat1($._newline)),
 
     // `where B` after a block: the block is the head (R-1).
-    clause: $ => seq('where', field('condition', $._body)),
+    clause: $ => seq('where', field('condition', $.body)),
 
     // `path = t`, or the path alone: `zone` is `zone = zone` (R-33).
     field: $ => seq(
@@ -451,14 +457,15 @@ export default grammar({
       field('kind', choice('deny', 'warn')),
       field('message', $.string),
       optional(field('details', $.object)),
-      optional(seq('where', field('condition', $._body))),
+      optional(seq(optional($._hang), 'where', field('condition', $.body))),
     ),
 
     rule: $ => seq(
       field('head', $.call),
       optional(field('rank', $.rank)),
+      optional($._hang),
       'where',
-      field('body', $._body),
+      field('body', $.body),
     ),
 
     fact: $ => seq(
@@ -471,9 +478,15 @@ export default grammar({
 
     // --- bodies and literals -------------------------------------------------
 
-    _body: $ => choice($.body, $.body_block),
-
-    body: $ => prec.right(commaSep1($._literal)),
+    // A clause's literals, separated by commas, a comma after the last
+    // too. A line ending in a comma (or `where`) continues on the next when
+    // that is indented deeper than the statement (`_clause_line`, the
+    // scanner's).
+    body: $ => prec.right(seq(
+      $._literal,
+      repeat(seq(',', optional($._clause_line), $._literal)),
+      optional(','),
+    )),
 
     // A comprehension's literals: a comma after the last too (R-52).
     comprehension_body: $ => seq(commaSep1($._literal), optional(',')),

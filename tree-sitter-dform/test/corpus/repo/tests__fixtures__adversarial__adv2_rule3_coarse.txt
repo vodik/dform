@@ -5,16 +5,19 @@ tests/fixtures/adversarial/adv2_rule3_coarse.df
 # adv2: Rule 3 coarseness. One rule with head `want` is stuck (the nodepool,
 # on ?google.container_cluster/gke_platform#zones). An UNRELATED negation over `want` and an
 # UNRELATED aggregate over `want` must not become undetermined.
-# Run with --provider gke.
+# Run with --provider gke --provider k8s.
 
 resource google.container_cluster gke_platform { name = "gke-platform-gke" }
 
 resource google.container_node_pool "${np}" {
   cluster = ref("google.container_cluster", "gke_platform", "id")
   zone = z
-} where arg("google.container_cluster", "gke_platform", "zones", zs), z in zs, np = str.format("np-%s", z)
+} where
+  arg("google.container_cluster", "gke_platform", "zones", zs),
+  z in zs,
+  np = str.format("np-%s", z),
 
-resource k8s.namespace gke_platform { name = "gke-platform" }
+resource k8s.namespace gke_platform { metadata.name = "gke-platform" }
 
 # Unrelated negation over want (different type): decidable now.
 deny "namespace without deployment" { ns: n } where n in k8s.namespace, not n in k8s.deployment
@@ -25,10 +28,9 @@ ns_count(l) where l = collect_set(n), n in k8s.namespace
 deny "need the gke_platform namespace" where ns_count(l), not "gke_platform" in l
 
 # Related negation (same type as the stuck head): correctly undetermined.
-deny "no nodepool in zone b" where {
-  "gke_platform" in google.container_cluster
-  not "np-us-east1-b" in google.container_node_pool
-}
+deny "no nodepool in zone b" where
+  "gke_platform" in google.container_cluster,
+  not "np-us-east1-b" in google.container_node_pool,
 
 use fake
 
@@ -108,6 +110,7 @@ use fake
     (block
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))))
@@ -167,7 +170,7 @@ use fake
   (check
     (string
       (string_content))
-    (body_block
+    (body
       (in_literal
         (string
           (string_content))

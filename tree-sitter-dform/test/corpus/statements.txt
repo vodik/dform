@@ -864,10 +864,9 @@ A block's clause follows the block
 
 resource net.subnet "s-${z}" {
   zone = z
-} where {
-  zone(z)
-  z != "x"
-}
+} where
+  zone(z),
+  z != "x",
 resource network main {} where env == "prod"
 
 --------------------------------------------------------------------------------
@@ -887,7 +886,7 @@ resource network main {} where env == "prod"
           (identifier))
         (identifier)))
     (clause
-      (body_block
+      (body
         (atom_literal
           (call
             (identifier)

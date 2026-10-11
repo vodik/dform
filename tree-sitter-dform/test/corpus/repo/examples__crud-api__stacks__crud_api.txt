@@ -112,7 +112,7 @@ resource k8s.network_policy default_deny {
   metadata.name = "default-deny"
   metadata.namespace = shop.metadata.name
   # Every pod in the namespace: {} at an object path with no required
-  # field is a value, not absent (E DR-6 as amended).
+  # field is a value, not absent.
   spec.podSelector = {}
   spec.policyTypes = ["Ingress", "Egress"]
 }
@@ -213,10 +213,10 @@ component app {
 
   resource k8s.deployment deploy {
     metadata.name = "crud-api-${color}"
-    metadata.namespace
+    metadata.namespace = namespace
     metadata.labels = { app: "crud-api", color, schema: "${schema}" }
     spec.selector.matchLabels = labels
-    spec.template.metadata.labels
+    spec.template.metadata.labels = labels
     spec.template.spec.containers = [{
       name: "api",
       image,
@@ -258,23 +258,14 @@ component app {
 # Rollout invariants
 ########################################
 
-deny "migration failed; the rollout is held" { job: "migrate-v${schema}" } where {
-  c in k8s.job["migrate-v${schema}"].status.conditions
-  c.type == "Failed"
-  c.status == "True"
-}
+deny "migration failed; the rollout is held" { job: "migrate-v${schema}" }
+  where c in k8s.job["migrate-v${schema}"].status.conditions, c.type == "Failed", c.status == "True"
 
-deny "a rollout runs a schema the migration has not reached" { color: c, schema: v } where {
-  run(c, _, v)
-  c == rollout
-  not migrated(v)
-}
+deny "a rollout runs a schema the migration has not reached" { color: c, schema: v }
+  where run(c, _, v), c == rollout, not migrated(v)
 
-deny "cutover to a color with unready pods" { color: c } where {
-  c = api.spec.selector.color
-  c != active
-  not ready(c)
-}
+deny "cutover to a color with unready pods" { color: c }
+  where c = api.spec.selector.color, c != active, not ready(c)
 
 ########################################
 # Best practice
@@ -282,42 +273,30 @@ deny "cutover to a color with unready pods" { color: c } where {
 
 # Every container has limits: these unless it sets its own. A container
 # is written by its key, `name`, so the write lands in the one the block
-# wrote (R-35, R-69); `@default` gives way to the container's own.
-set c.resources.limits = { cpu: 500m, memory: 256Mi } @default where {
-  w in k8s.deployment
-  c in w.spec.template.spec.containers
-}
-set c.resources.limits = { cpu: 500m, memory: 256Mi } @default where {
-  w in k8s.job
-  c in w.spec.template.spec.containers
-}
+# wrote; `@default` gives way to the container's own.
+set c.resources.limits = { cpu: 500m, memory: 256Mi } @default
+  where w in k8s.deployment, c in w.spec.template.spec.containers
+set c.resources.limits = { cpu: 500m, memory: 256Mi } @default
+  where w in k8s.job, c in w.spec.template.spec.containers
 
 container(w, c) where w in k8s.deployment, c in w.spec.template.spec.containers
 container(w, c) where w in k8s.job, c in w.spec.template.spec.containers
 
-deny "container without resource limits" { workload: w, container: c.name } where {
-  container(w, c)
-  not has c.resources.limits
-}
+deny "container without resource limits" { workload: w, container: c.name }
+  where container(w, c), not has c.resources.limits
 
 # Resource limits: the schema types a container's memory `bytes` and its
-# cpu `cpu` (R-66), so `512Mi` above is a quantity and these compare in
+# cpu `cpu`, so `512Mi` above is a quantity and these compare in
 # bytes whatever unit each side is written in (`500m` is millicores there
 # because the attribute is a cpu).
-deny "container memory limit above 2Gi" { workload: w, container: c.name } where {
-  container(w, c)
-  c.resources.limits.memory > 2Gi
-}
+deny "container memory limit above 2Gi" { workload: w, container: c.name }
+  where container(w, c), c.resources.limits.memory > 2Gi
 
-deny "container requests more memory than its limit" { workload: w, container: c.name } where {
-  container(w, c)
-  c.resources.requests.memory > c.resources.limits.memory
-}
+deny "container requests more memory than its limit" { workload: w, container: c.name }
+  where container(w, c), c.resources.requests.memory > c.resources.limits.memory
 
-deny "image not pinned by digest" { workload: w, image: c.image } where {
-  container(w, c)
-  not oci.pinned(c.image)
-}
+deny "image not pinned by digest" { workload: w, image: c.image }
+  where container(w, c), not oci.pinned(c.image)
 
 # A secret's value belongs in a Secret (envFrom, valueFrom); a plain
 # `value` under a name that says it is one is a leak. `(_, e) in c.env`
@@ -327,43 +306,33 @@ secret_word("SECRET")
 secret_word("PASSWORD")
 secret_word("TOKEN")
 
-deny "plaintext secret in env" { workload: w, container: c.name, env: e.name } where {
-  container(w, c)
-  (_, e) in c.env
-  has e.value
-  secret_word(s)
-  (_, _) = str.split(e.name, s, 1)
-}
+deny "plaintext secret in env" { workload: w, container: c.name, env: e.name } where
+  container(w, c),
+  (_, e) in c.env,
+  has e.value,
+  secret_word(s),
+  (_, _) = str.split(e.name, s, 1),
 
-deny "prod database must be regional" { db: d } where {
-  env == "prod"
-  d in google.sql_database_instance
-  not d.settings.availability_type == "REGIONAL"
-}
+deny "prod database must be regional" { db: d } where
+  env == "prod",
+  d in google.sql_database_instance,
+  not d.settings.availability_type == "REGIONAL",
 
 # Absent is public: Cloud SQL's default for ipv4_enabled is true.
-deny "database has a public IP" { db: d } where {
-  d in google.sql_database_instance
-  not d.settings.ip_configuration.ipv4_enabled == false
-}
+deny "database has a public IP" { db: d }
+  where d in google.sql_database_instance, not d.settings.ip_configuration.ipv4_enabled == false
 
-default_deny(ns) where {
-  p in k8s.network_policy
-  ns = p.metadata.namespace
-  not has p.spec.podSelector.matchLabels
-  "Ingress" in p.spec.policyTypes
-}
+default_deny(ns) where
+  p in k8s.network_policy,
+  ns = p.metadata.namespace,
+  not has p.spec.podSelector.matchLabels,
+  "Ingress" in p.spec.policyTypes,
 
-deny "namespace without a default-deny network policy" { namespace: n } where {
-  n in k8s.namespace
-  not default_deny(n.metadata.name)
-}
+deny "namespace without a default-deny network policy" { namespace: n }
+  where n in k8s.namespace, not default_deny(n.metadata.name)
 
-deny "prod workload runs a single replica" { hpa: h } where {
-  env == "prod"
-  h in k8s.horizontal_pod_autoscaler
-  h.spec.minReplicas < 2
-}
+deny "prod workload runs a single replica" { hpa: h }
+  where env == "prod", h in k8s.horizontal_pod_autoscaler, h.spec.minReplicas < 2
 
 ########################################
 # Controller mode
@@ -1344,7 +1313,8 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
           (field
             (block_path
               (identifier)
-              (identifier)))
+              (identifier))
+            (identifier))
           (field
             (block_path
               (identifier)
@@ -1372,7 +1342,8 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
               (identifier)
               (identifier)
               (identifier)
-              (identifier)))
+              (identifier))
+            (identifier))
           (field
             (block_path
               (identifier)
@@ -1597,7 +1568,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
           (string_content)
           (interpolation
             (identifier)))))
-    (body_block
+    (body
       (in_literal
         (identifier)
         (member_expression
@@ -1634,7 +1605,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
       (object_field
         (identifier)
         (identifier)))
-    (body_block
+    (body
       (atom_literal
         (call
           (identifier)
@@ -1658,7 +1629,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
       (object_field
         (identifier)
         (identifier)))
-    (body_block
+    (body
       (comparison
         (identifier)
         (member_expression
@@ -1697,7 +1668,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
         (identifier)
         (quantity)))
     (rank)
-    (body_block
+    (body
       (in_literal
         (identifier)
         (member_expression
@@ -1728,7 +1699,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
         (identifier)
         (quantity)))
     (rank)
-    (body_block
+    (body
       (in_literal
         (identifier)
         (member_expression
@@ -1803,7 +1774,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
         (member_expression
           (identifier)
           (identifier))))
-    (body_block
+    (body
       (atom_literal
         (call
           (identifier)
@@ -1833,7 +1804,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
         (member_expression
           (identifier)
           (identifier))))
-    (body_block
+    (body
       (atom_literal
         (call
           (identifier)
@@ -1861,7 +1832,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
         (member_expression
           (identifier)
           (identifier))))
-    (body_block
+    (body
       (atom_literal
         (call
           (identifier)
@@ -1895,7 +1866,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
         (member_expression
           (identifier)
           (identifier))))
-    (body_block
+    (body
       (atom_literal
         (call
           (identifier)
@@ -1951,7 +1922,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
         (member_expression
           (identifier)
           (identifier))))
-    (body_block
+    (body
       (atom_literal
         (call
           (identifier)
@@ -1995,7 +1966,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
       (object_field
         (identifier)
         (identifier)))
-    (body_block
+    (body
       (comparison
         (identifier)
         (string
@@ -2022,7 +1993,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
       (object_field
         (identifier)
         (identifier)))
-    (body_block
+    (body
       (in_literal
         (identifier)
         (member_expression
@@ -2043,7 +2014,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
       (identifier)
       (arguments
         (identifier)))
-    (body_block
+    (body
       (in_literal
         (identifier)
         (member_expression
@@ -2080,7 +2051,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
       (object_field
         (identifier)
         (identifier)))
-    (body_block
+    (body
       (in_literal
         (identifier)
         (member_expression
@@ -2103,7 +2074,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
       (object_field
         (identifier)
         (identifier)))
-    (body_block
+    (body
       (comparison
         (identifier)
         (string

@@ -2,7 +2,7 @@
 examples/refine/stacks/refine_gke.df
 ====================================
 
-# gke_two_phase.df with refinements (E §4.1 case 4, DR-13): the cluster's
+# gke_two_phase.df with refinements: the cluster's
 # zones are an open null until the cluster exists, so the refinement on
 # them is deferred at plan time ("refinement on ?google.container_cluster/gke_platform#zones
 # deferred"). Tick 1 creates the cluster in the zones its node_locations
@@ -11,12 +11,12 @@ examples/refine/stacks/refine_gke.df
 # and apply stops after tick 1, before the nodepools and the kubernetes
 # objects. To run it, from this directory: README.md.
 #
-# The input's refinements (E §7.4's settings type) are checked in its cell
+# The input's refinements are checked in its cell
 # against the CIDRs the settings give (they hold).
 #
-# C's two-phase GKE / kubernetes stack (E §7.4), in the current syntax, with
+# The two-phase GKE / kubernetes stack (examples/gke), with
 # the gke mock schema, which makes the cluster's zones, endpoint and ca open
-# nulls until the cluster exists.
+# nulls until the cluster exists, and the k8s mock's, configured from them.
 
 input env: enum("dev", "stg", "prod") = "dev"
 # How many zones the cluster is placed in: two is fewer than the
@@ -77,29 +77,30 @@ resource google.container_cluster gke_platform {
   deletion_protection = true
 } where project(id, name, _, net_id)
 
-# Provider configured from phase-1 nulls (two open, one secret).
-provider_config(
-  "k8s",
-  {
-    host: google.container_cluster["gke_platform"].endpoint,
-    ca: google.container_cluster["gke_platform"].ca_certificate,
-    token: google.client_config["current"].access_token,
-  },
-)
+# The k8s provider, configured from phase-1 nulls (two open) and the
+# client's token, a secret the data source answers: its objects wait for
+# the tick after the cluster's.
+use k8s {
+  host = google.container_cluster["gke_platform"].endpoint
+  ca = google.container_cluster["gke_platform"].ca_certificate
+  token = google.client_config[gcp.project_id]
+}
 
-resource k8s.namespace gke_platform { name = "gke-platform" }
+resource k8s.namespace gke_platform { metadata.name = "gke-platform" }
 
 # A read in the clause is an attr join (the value now), not a reference.
 resource k8s.deployment api {
-  namespace = ns
-  image = "gcr.io/platform/api:1.42"
-  replicas = 3
-} where ns = k8s.namespace["gke_platform"].name
+  metadata.namespace = ns
+  spec.replicas = 3
+  spec.selector.matchLabels = { app: "api" }
+  spec.template.metadata.labels = { app: "api" }
+  spec.template.spec.containers = [{ name: "api", image: "gcr.io/platform/api:1.42" }]
+} where ns = k8s.namespace["gke_platform"].metadata.name
 
 resource k8s.secret db_credentials {
-  namespace = ns
+  metadata.namespace = ns
   data = { password: google.secret_manager_secret_version["db_pw"].secret_data }
-} where ns = k8s.namespace["gke_platform"].name
+} where ns = k8s.namespace["gke_platform"].metadata.name
 
 # One nodepool per zone: member over an open null is a content position.
 resource google.container_node_pool "np-${z}" {
@@ -111,19 +112,14 @@ resource google.container_node_pool "np-${z}" {
 
 zone_count(n) where n = count(z), z in google.container_cluster["gke_platform"].zones
 
-deny "cluster must be in at least two zones" { cluster: "gke_platform" } where {
-  "gke_platform" in google.container_cluster
-  zone_count(n)
-  n < 2
-}
+deny "cluster must be in at least two zones" { cluster: "gke_platform" }
+  where "gke_platform" in google.container_cluster, zone_count(n), n < 2
 
 # A policy that has nothing to do with zones. Under coarse Rule 3 it would be
 # undetermined anyway (a `want` rule is stuck), which is the spurious case;
 # per key it is decided now, and holds.
-deny "cluster must not be deletable" { cluster: c } where {
-  c in google.container_cluster
-  not c.deletion_protection
-}
+deny "cluster must not be deletable" { cluster: c }
+  where c in google.container_cluster, not c.deletion_protection
 
 # A refinement the cluster meets only in three zones.
 type google.container_cluster { zones: list(string) check zones.len >= 3 }
@@ -456,43 +452,44 @@ type google.container_cluster { zones: list(string) check zones.len >= 3 }
               (identifier)
               (identifier)))))))
   (comment)
-  (fact
-    (call
-      (identifier)
-      (arguments
-        (string
-          (string_content))
-        (object
-          (object_field
-            (identifier)
+  (comment)
+  (comment)
+  (use
+    (dotted_name
+      (identifier))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (index_expression
             (member_expression
-              (index_expression
-                (member_expression
-                  (identifier)
-                  (identifier))
-                (string
-                  (string_content)))
-              (identifier)))
-          (object_field
-            (identifier)
+              (identifier)
+              (identifier))
+            (string
+              (string_content)))
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (index_expression
             (member_expression
-              (index_expression
-                (member_expression
-                  (identifier)
-                  (identifier))
-                (string
-                  (string_content)))
-              (identifier)))
-          (object_field
+              (identifier)
+              (identifier))
+            (string
+              (string_content)))
+          (identifier)))
+      (field
+        (block_path
+          (identifier))
+        (index_expression
+          (member_expression
             (identifier)
-            (member_expression
-              (index_expression
-                (member_expression
-                  (identifier)
-                  (identifier))
-                (string
-                  (string_content)))
-              (identifier)))))))
+            (identifier))
+          (member_expression
+            (identifier)
+            (identifier))))))
   (resource
     (dotted_name
       (identifier)
@@ -501,6 +498,7 @@ type google.container_cluster { zones: list(string) check zones.len >= 3 }
     (block
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))))
@@ -513,28 +511,64 @@ type google.container_cluster { zones: list(string) check zones.len >= 3 }
     (block
       (field
         (block_path
+          (identifier)
           (identifier))
         (identifier))
       (field
         (block_path
+          (identifier)
           (identifier))
-        (string
-          (string_content)))
+        (integer))
       (field
         (block_path
+          (identifier)
+          (identifier)
           (identifier))
-        (integer)))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier)
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier)
+          (identifier)
+          (identifier)
+          (identifier))
+        (list
+          (object
+            (object_field
+              (identifier)
+              (string
+                (string_content)))
+            (object_field
+              (identifier)
+              (string
+                (string_content)))))))
     (clause
       (body
         (comparison
           (identifier)
           (member_expression
-            (index_expression
-              (member_expression
-                (identifier)
-                (identifier))
-              (string
-                (string_content)))
+            (member_expression
+              (index_expression
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (string
+                  (string_content)))
+              (identifier))
             (identifier))))))
   (resource
     (dotted_name
@@ -544,6 +578,7 @@ type google.container_cluster { zones: list(string) check zones.len >= 3 }
     (block
       (field
         (block_path
+          (identifier)
           (identifier))
         (identifier))
       (field
@@ -565,12 +600,14 @@ type google.container_cluster { zones: list(string) check zones.len >= 3 }
         (comparison
           (identifier)
           (member_expression
-            (index_expression
-              (member_expression
-                (identifier)
-                (identifier))
-              (string
-                (string_content)))
+            (member_expression
+              (index_expression
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (string
+                  (string_content)))
+              (identifier))
             (identifier))))))
   (comment)
   (resource
@@ -645,7 +682,7 @@ type google.container_cluster { zones: list(string) check zones.len >= 3 }
         (identifier)
         (string
           (string_content))))
-    (body_block
+    (body
       (in_literal
         (string
           (string_content))
@@ -670,7 +707,7 @@ type google.container_cluster { zones: list(string) check zones.len >= 3 }
       (object_field
         (identifier)
         (identifier)))
-    (body_block
+    (body
       (in_literal
         (identifier)
         (member_expression

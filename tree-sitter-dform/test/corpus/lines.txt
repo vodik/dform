@@ -76,13 +76,14 @@ let o = { a: 1,
         (identifier)))))
 
 ================================================================================
-A body block separates literals by newlines or commas
+A clause of several lines: a literal per line, each with its comma
 ================================================================================
 
-deny "m" where {
-  env == "prod", vpc in net.vpc
-  not vpc.private
-}
+deny "m" where
+  env == "prod", vpc in net.vpc,
+  # its own
+  not vpc.private,
+p(a)
 
 --------------------------------------------------------------------------------
 
@@ -90,7 +91,7 @@ deny "m" where {
   (check
     (string
       (string_content))
-    (body_block
+    (body
       (comparison
         (identifier)
         (string
@@ -100,11 +101,17 @@ deny "m" where {
         (member_expression
           (identifier)
           (identifier)))
+      (comment)
       (not_literal
         (truth_literal
           (member_expression
             (identifier)
-            (identifier)))))))
+            (identifier))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (identifier)))))
 
 ================================================================================
 Blocks: one clause first, then fields, by newline or comma
@@ -202,12 +209,58 @@ q(x) :- p(x)
 
 
 ================================================================================
-A where on the next line does not attach
+A where on a line indented under its statement continues it
+================================================================================
+
+p(a)
+  where q(a), r(a)
+s(a)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (identifier)))))
+
+================================================================================
+A where in the statement's column does not attach
 :error
 ================================================================================
 
 p(a)
-  where q(a)
+where q(a)
+
+--------------------------------------------------------------------------------
+
+
+
+================================================================================
+A literal in the statement's column does not continue a clause
+:error
+================================================================================
+
+p(a) where
+  q(a),
+r(a) > 1
 
 --------------------------------------------------------------------------------
 

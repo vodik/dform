@@ -18,30 +18,23 @@ set { network.vpc_net = "10.20.0.0/16" } where env == "prod"
 
 # network.df, imported once, its input the settings': its VPC is
 # `network/vpc`.
-use network
+use network { env }
 
 # Adopt the VPC from inventory, but manage it under the local name `network/vpc`.
-adopt(net.vpc["network.vpc"], "existing-prod-vpc") where {
-  env == "prod"
-  "existing-prod-vpc" in world.net.vpc
-}
+adopt(net.vpc["network.vpc"], "existing-prod-vpc")
+  where env == "prod", "existing-prod-vpc" in world.net.vpc
 
 # Example: use discovered inventory values directly in config.
-set net.vpc["network.vpc"].adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", "id") where {
-  env == "prod"
-}
+set net.vpc["network.vpc"].adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", "id")
+  where env == "prod"
 
 # Keep the existing owner tag stable (avoids a "remove tag" diff on adopt).
-set net.vpc["network.vpc"].tags.owner = cloud_ref(
-  net.vpc,
-  "existing-prod-vpc",
-  "tags.owner",
-) where env == "prod"
+set net.vpc["network.vpc"].tags.owner = cloud_ref(net.vpc, "existing-prod-vpc", "tags.owner")
+  where env == "prod"
 
 # Also copy it into a separate attribute to demonstrate dotted path lookup.
-set net.vpc["network.vpc"].owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", "tags.owner") where {
-  env == "prod"
-}
+set net.vpc["network.vpc"].owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", "tags.owner")
+  where env == "prod"
 
 ---
 
@@ -96,7 +89,11 @@ set net.vpc["network.vpc"].owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", "
   (comment)
   (use
     (dotted_name
-      (identifier)))
+      (identifier))
+    (block
+      (field
+        (block_path
+          (identifier)))))
   (comment)
   (rule
     (call
@@ -110,7 +107,7 @@ set net.vpc["network.vpc"].owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", "
             (string_content)))
         (string
           (string_content))))
-    (body_block
+    (body
       (comparison
         (identifier)
         (string
@@ -143,7 +140,7 @@ set net.vpc["network.vpc"].owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", "
           (string_content))
         (string
           (string_content))))
-    (body_block
+    (body
       (comparison
         (identifier)
         (string
@@ -195,7 +192,7 @@ set net.vpc["network.vpc"].owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", "
           (string_content))
         (string
           (string_content))))
-    (body_block
+    (body
       (comparison
         (identifier)
         (string

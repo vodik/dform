@@ -8,10 +8,8 @@ tests/fixtures/adversarial/adv9_default_tag_unless_present.df
 
 resource net.vpc main { cidr = "10.0.0.0/16", tags = { env: "dev" } }
 
-arg_add(t, n, "tags", { team: "platform" }) where {
-  want(t, n)
-  not arg(t, n, "tags", { team: "platform" })
-}
+arg_add(t, n, "tags", { team: "platform" })
+  where want(t, n), not arg(t, n, "tags", { team: "platform" })
 
 use fake
 
@@ -53,7 +51,7 @@ use fake
             (identifier)
             (string
               (string_content))))))
-    (body_block
+    (body
       (atom_literal
         (call
           (identifier)

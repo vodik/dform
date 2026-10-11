@@ -19,13 +19,17 @@
   (index_expression)
 ] @indent.begin
 
-; A body of one line (a `{ }` body indents itself).
+; A clause's lines, a `where` that starts one and a literal per line, are
+; one step deeper than the statement. A statement with a clause after its
+; block begins on the block's line, so the two count once.
 (rule body: (body)) @indent.begin
 (check condition: (body)) @indent.begin
 (let condition: (body)) @indent.begin
 (set condition: (body)) @indent.begin
 (output condition: (body)) @indent.begin
-(clause) @indent.begin
+(resource (clause)) @indent.begin
+(use (clause)) @indent.begin
+(input (clause)) @indent.begin
 
 [
   "}"

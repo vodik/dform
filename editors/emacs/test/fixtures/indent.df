@@ -13,8 +13,14 @@ resource net.subnet "s-${z}" {
   tags = {
     zone: z
   }
-} where {
-  zone(z, n)
-  z != "excluded"
-  z not in ["a zone list long enough", "that the body does not fit on its line"]
-}
+} where
+  zone(z, n),
+  # a comment between literals
+  z != "excluded",
+  z not in ["a zone list long enough", "that the body does not fit on its line"],
+
+deny "a spoke peers only the core" { p }
+  where p in aws.vpc_peering_connection, p.peer_vpc != core_vpc_main
+
+resource net.vpc edge { cidr = "10.1.0.0/16", tags = { team: "edge", owner: "platform" } }
+  where zone in zones
