@@ -120,10 +120,8 @@ resource google.compute_network main {
 } where project(id, _, _, net_id), e = env
 
 # One static address per declared static IP; the map explodes into rows.
-static_ip(ip_name, type_) where
-  e = env,
-  setting(e, "gke.static_ips", ips),
-  member_kv(ips, ip_name, { type: type_ }),
+static_ip(ip_name, type_)
+  where e = env, setting(e, "gke.static_ips", ips), member_kv(ips, ip_name, { type: type_ })
 
 resource google.compute_address "${s}" {
   project = id
@@ -213,10 +211,8 @@ resource gke.nodepool "${np}" {
 # undetermined until phase 1 resolves .zones.
 zone_count(n) where n = count(z), attr("gke.cluster", "gke_platform", "zones", zs), member(zs, z)
 
-deny("two_zones", "cluster must be in at least two zones", { cluster: "gke_platform" }) where
-  want("gke.cluster", "gke_platform"),
-  zone_count(n),
-  n < 2,
+deny("two_zones", "cluster must be in at least two zones", { cluster: "gke_platform" })
+  where want("gke.cluster", "gke_platform"), zone_count(n), n < 2
 
 ########################################
 # Monitoring: the dashboard JSON is a file extern, hashed, with provenance

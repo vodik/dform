@@ -75,10 +75,8 @@ use identity
 # Peering between network instances. Each instance exports its vpc address.
 vpc_peer_inst("main", "peer")
 
-vpc_peer(a_, b) where
-  vpc_peer_inst(i_a, i_b),
-  output(network[i_a], "vpc", a_),
-  output(network[i_b], "vpc", b),
+vpc_peer(a_, b)
+  where vpc_peer_inst(i_a, i_b), output(network[i_a], "vpc", a_), output(network[i_b], "vpc", b)
 
 # requester_vpc_id and accepter_vpc_id are fresh nulls at plan time. They are
 # forwarded, never inspected, so this resource is definite and single-phase.
@@ -95,12 +93,8 @@ resource compute.vm bastion {
 } where e = env, setting(e, "network.main.vpc_net", net_)
 
 # Stack-level policy. Ids are stable; messages are free text.
-deny("prod_db_multi_az", "prod db must be multi_az", { db: db_ }) where
-  env == "prod",
-  want("db.postgres", db_),
-  not attr("db.postgres", db_, "multi_az", true),
+deny("prod_db_multi_az", "prod db must be multi_az", { db: db_ })
+  where env == "prod", want("db.postgres", db_), not attr("db.postgres", db_, "multi_az", true)
 
-deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) where
-  env == "prod",
-  want(k8s.cluster, c),
-  not attr(k8s.cluster, c, "private_api", true),
+deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c })
+  where env == "prod", want(k8s.cluster, c), not attr(k8s.cluster, c, "private_api", true)
