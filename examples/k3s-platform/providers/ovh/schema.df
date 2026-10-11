@@ -1,0 +1,41 @@
+# The OVH provider's types this project uses, as dform-provider-ovh's
+# schema declares them, for the mock to play: an instance, its SSH key,
+# a DNS record, and the tables of the account's zones and flavors.
+
+extern_decl("ovh.flavor", "+region, -name, -vcpus: int, -ram: bytes, -disk: bytes")
+extern_decl("ovh.zone", "+name, -id, -nameservers")
+
+type_provider("ovh.instance", "ovh")
+type_attr("ovh.instance", "id", "string", ["computed", "id"])
+type_mint("ovh.instance", "id", "{hash}")
+type_attr("ovh.instance", "name", "string", ["required"])
+type_attr("ovh.instance", "region", "string", ["required", "force_new"])
+type_attr("ovh.instance", "flavor", "string", ["required"])
+type_attr("ovh.instance", "image", "string", ["required", "force_new"])
+type_attr("ovh.instance", "ssh_key", "ref(ovh.ssh_key)", ["force_new"])
+type_attr("ovh.instance", "user_data", "string", ["sensitive", "force_new", "write_only"])
+type_attr("ovh.instance", "public_ip", "ip", ["computed"])
+type_mint("ovh.instance", "public_ip", "203.0.113.{n}")
+type_attr("ovh.instance", "status", "string", ["computed"])
+type_mint("ovh.instance", "status", "ACTIVE")
+
+type_provider("ovh.ssh_key", "ovh")
+type_attr("ovh.ssh_key", "id", "string", ["computed", "id"])
+type_mint("ovh.ssh_key", "id", "{hash}")
+type_attr("ovh.ssh_key", "name", "string", ["required", "force_new"])
+type_attr("ovh.ssh_key", "public_key", "string", ["required", "force_new"])
+
+type_provider("ovh.domain_record", "ovh")
+type_attr("ovh.domain_record", "id", "string", ["computed", "id"])
+type_mint("ovh.domain_record", "id", "{n}")
+type_attr("ovh.domain_record", "zone", "string", ["required", "force_new"])
+type_attr("ovh.domain_record", "subdomain", "string", [])
+type_attr(
+  "ovh.domain_record",
+  "type",
+  "enum(A, AAAA, CNAME, TXT, SRV, MX)",
+  ["required", "force_new"],
+)
+type_attr("ovh.domain_record", "target", "string", ["required"])
+type_attr("ovh.domain_record", "ttl", "int", ["optional_computed"])
+type_mint("ovh.domain_record", "ttl", 3600)

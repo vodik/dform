@@ -1,0 +1,3 @@
+#| The platform and its apps, in staging and in prod.
+resource stacks.platform "${env}" { env } where env in ["staging", "prod"]
+resource stacks.apps "${env}" { env } where env in ["staging", "prod"]

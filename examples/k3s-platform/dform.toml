@@ -1,0 +1,12 @@
+# The k3s platform's root (docs/layout.md).
+
+[project]
+name = "k3s-platform"
+edition = "2026"
+
+# The mock plays OVH's types (providers/ovh: the provider's schema, and
+# the account's answers to its tables) and Kubernetes'. Against the real
+# ones, `ovh = {}` and `k8s = {}` find the installed providers.
+[providers]
+ovh = "providers/ovh"
+k8s = "k8s"

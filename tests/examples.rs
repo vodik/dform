@@ -22,6 +22,9 @@ enum Apply {
     /// It stops after tick 1 on a deny (on purpose: the example shows
     /// one), with this in the error. It runs in a copy of its own.
     Stops(&'static str),
+    /// It is not run: the mock cannot play what it needs (the case says
+    /// what). The plan still runs.
+    NotRun,
 }
 
 /// A stack of an example: the plan and apply commands the README lists
@@ -117,6 +120,16 @@ const CASES: &[Case] = &[
     Case {
         name: "shared-network",
         stacks: &[one(&["apply"], Apply::Completes)],
+    },
+    // The kubeconfig is read over SSH from the server: the mock's
+    // instance answers none.
+    Case {
+        name: "k3s-platform",
+        stacks: &[Stack {
+            plan: &["plan"],
+            apply: &[],
+            ends: Apply::NotRun,
+        }],
     },
     Case {
         name: "shop",
@@ -214,7 +227,7 @@ fn check(name: &str) {
             &project
         };
         // The README lists the commands this runs, from the project root.
-        for args in [st.plan, st.apply] {
+        for args in [st.plan, st.apply].into_iter().filter(|a| !a.is_empty()) {
             let line = format!("dform {}", args.join(" "));
             assert!(
                 listed.contains(&line),
@@ -224,6 +237,9 @@ fn check(name: &str) {
         let at = |what: &str| format!("examples/{name} {what}");
         let r = s.run(st.plan);
         assert!(r.ok, "{}\n{}{}", at(&st.plan.join(" ")), r.stdout, r.stderr);
+        if let Apply::NotRun = st.ends {
+            continue;
+        }
         let r = s.run(&[st.apply, APPLY_FLAGS].concat());
         match st.ends {
             Apply::Completes => {
@@ -250,6 +266,7 @@ fn check(name: &str) {
                     r.stderr
                 );
             }
+            Apply::NotRun => unreachable!(),
             Apply::Stops(why) => {
                 assert!(
                     !r.ok
@@ -338,6 +355,11 @@ fn gke_platform() {
 #[test]
 fn shared_network() {
     check("shared-network");
+}
+
+#[test]
+fn k3s_platform() {
+    check("k3s-platform");
 }
 
 #[test]
