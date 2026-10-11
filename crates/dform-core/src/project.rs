@@ -25,6 +25,7 @@
 //! (R-65); one with a `key` is an error.
 
 use crate::ast::{Atom, Term};
+use crate::plugin::source::{Lookup, Place};
 use crate::value::Value;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
@@ -467,11 +468,44 @@ pub struct ProviderTable {
     pub reads: Option<Vec<String>>,
 }
 
+/// Where a provider comes from ([`Manifest::provider_location`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Located {
+    /// Its executable, `dform-provider-NAME`, where the lookup found it.
+    Found(Place, PathBuf),
+    /// dform.toml's `path`, the lookup having found no executable.
+    Path(PathBuf),
+    /// dform.toml's `source`: a path under the root, or a built-in
+    /// schema's name.
+    Source(String),
+}
+
+impl Located {
+    /// The source as `--provider` takes it.
+    pub fn spec(&self) -> String {
+        match self {
+            Located::Found(_, p) | Located::Path(p) => p.display().to_string(),
+            Located::Source(s) => s.clone(),
+        }
+    }
+}
+
+/// The mock's name: dform serves it itself (`dform __provider fake`).
+const MOCK: &str = "fake";
+
 impl ProviderEntry {
+    /// Whether it names a `source` (a bare string is one).
+    fn has_source(&self) -> bool {
+        match self {
+            ProviderEntry::Source(_) => true,
+            ProviderEntry::Table(t) => t.source.is_some(),
+        }
+    }
+
     fn source(&self) -> Option<&str> {
         match self {
             ProviderEntry::Source(s) => Some(s),
-            ProviderEntry::Table(t) => t.source.as_deref().or(t.path.as_deref()),
+            ProviderEntry::Table(t) => t.source.as_deref(),
         }
     }
 
@@ -712,24 +746,38 @@ impl Manifest {
     }
 
     /// The provider `name`'s source as `--provider` takes it, when the
-    /// manifest has one: a path under the root (an executable, a directory
+    /// manifest has one ([`Manifest::provider_location`], this process's
+    /// [`Lookup`]).
+    pub fn provider_source(&self, name: &str) -> Option<String> {
+        self.provider_location(name, &Lookup::here())
+            .map(|l| l.spec())
+    }
+
+    /// Where the provider `name` comes from, when the manifest says. An
+    /// entry without a `source` is the executable `dform-provider-NAME`
+    /// where `lookup` finds it, else its `path` (spelled as a path whatever
+    /// is there, so a missing executable is not taken for a schema's
+    /// name). The mock, `fake`, is dform itself and never looked up. A
+    /// `source` is a path under the root (an executable, a directory
     /// holding one, else its `schema.df`; a `.df` file), else the source
     /// as written (a built-in schema's name).
-    pub fn provider_source(&self, name: &str) -> Option<String> {
+    pub fn provider_location(&self, name: &str, lookup: &Lookup) -> Option<Located> {
         let entry = self.providers.get(name)?;
-        if let Some(p) = entry.path() {
-            // Spelled as a path whatever it is, so a missing executable is
-            // not taken for a schema's name.
+        if !entry.has_source() {
+            if let Some((place, exe)) = lookup.find(name).filter(|_| name != MOCK) {
+                return Some(Located::Found(place, exe));
+            }
+            let p = entry.path()?;
             let p = match (p.strip_prefix("~/"), std::env::var_os("HOME")) {
                 (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
                 _ => self.root.join(p),
             };
-            return Some(p.display().to_string());
+            return Some(Located::Path(p));
         }
         let src = entry.source()?;
         let path = self.root.join(src);
         if !path.exists() {
-            return Some(src.to_string());
+            return Some(Located::Source(src.to_string()));
         }
         let path = if path.is_dir() {
             let component = path.join(crate::plugin::source::COMPONENT);
@@ -743,7 +791,7 @@ impl Manifest {
         } else {
             path
         };
-        Some(path.display().to_string())
+        Some(Located::Source(path.display().to_string()))
     }
 
     /// Each provider's call policy, by the source `--provider` takes
@@ -1599,31 +1647,71 @@ mod tests {
     /// is there, never taken for a built-in schema's name.
     #[test]
     fn a_provider_by_path() {
+        let lookup = Lookup::default();
         let m = manifest(
-            "[providers]\novh = { path = \"bin/dform-provider-ovh\", timeout = \"10m\" }\n\
+            "[providers]\nlab = { path = \"bin/dform-provider-lab\", timeout = \"10m\" }\n\
              abs = { path = \"/opt/dform/dform-provider-x\" }\n\
              home = { path = \"~/dform/dform-provider-y\" }\nk8s = { path = \"k8s\" }\n",
         )
         .unwrap();
-        let ovh = m.provider_source("ovh").unwrap();
+        let lab = m.provider_location("lab", &lookup).unwrap().spec();
         assert_eq!(
-            ovh,
-            m.root.join("bin/dform-provider-ovh").display().to_string()
+            lab,
+            m.root.join("bin/dform-provider-lab").display().to_string()
         );
         assert_eq!(
-            m.provider_source("abs").as_deref(),
+            m.provider_location("abs", &lookup)
+                .map(|l| l.spec())
+                .as_deref(),
             Some("/opt/dform/dform-provider-x")
         );
         let home = std::env::var("HOME").unwrap();
         assert_eq!(
-            m.provider_source("home"),
+            m.provider_location("home", &lookup).map(|l| l.spec()),
             Some(format!("{home}/dform/dform-provider-y"))
         );
         assert_eq!(
-            m.provider_source("k8s"),
+            m.provider_location("k8s", &lookup).map(|l| l.spec()),
             Some(m.root.join("k8s").display().to_string())
         );
-        assert!(m.policies().contains_key(&ovh));
+        assert!(m.policies().contains_key(&lab));
+    }
+
+    /// A provider without a `source` is its executable where the lookup
+    /// finds it, before its `path`; one with a `source` is never looked
+    /// up, nor is the mock, which is dform itself.
+    #[cfg(unix)]
+    #[test]
+    fn a_provider_without_a_source_is_looked_up_before_its_path() {
+        use crate::plugin::source::Place;
+        use std::os::unix::fs::PermissionsExt;
+        let m = manifest(
+            "[providers]\nlab = { path = \"bin/dform-provider-lab\" }\nnet = { timeout = \"1m\" }\n\
+             k8s = \"k8s\"\nfake = {}\n",
+        )
+        .unwrap();
+        let dir = std::env::temp_dir().join(format!("dform-located-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in ["lab", "net", "k8s", "fake"] {
+            let exe = dir.join(format!("dform-provider-{n}"));
+            std::fs::write(&exe, "").unwrap();
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let lookup = Lookup::default().with(Place::Bundled, dir.clone());
+        let at = |n: &str| m.provider_location(n, &lookup);
+        let found =
+            |n: &str| Located::Found(Place::Bundled, dir.join(format!("dform-provider-{n}")));
+        assert_eq!(at("lab"), Some(found("lab")));
+        assert_eq!(at("net"), Some(found("net")));
+        assert_eq!(at("k8s"), Some(Located::Source("k8s".into())));
+        assert_eq!(at("fake"), None);
+        let none = Lookup::default();
+        assert_eq!(
+            m.provider_location("lab", &none),
+            Some(Located::Path(m.root.join("bin/dform-provider-lab")))
+        );
+        assert_eq!(m.provider_location("net", &none), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// `[providers.NAME]` sets a provider's call policy, by its source;

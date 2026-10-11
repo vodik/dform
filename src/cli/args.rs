@@ -7,7 +7,7 @@ use super::controller_cmd::Controller;
 use super::dev::{Effects, Eval, Graph, Show, Strata};
 use super::explain::{Diff, Explain, Query, Why};
 use super::plan::Plan;
-use super::provider_cmd::{ProviderCheck, ProviderSchema};
+use super::provider_cmd::{ProviderCheck, ProviderList, ProviderSchema};
 use super::render::Render;
 use super::secrets::Secrets;
 use super::source::{Doc, Fmt, Init};
@@ -182,7 +182,7 @@ pub(super) enum Command {
         #[command(subcommand)]
         cmd: SecretsCommand,
     },
-    /// Check a provider, or print its schema.
+    /// List the providers and where each was found, check one, or print its schema.
     Provider {
         #[command(subcommand)]
         cmd: ProviderCommand,
@@ -554,6 +554,8 @@ pub(super) enum SecretsCommand {
 
 #[derive(Subcommand, Debug, Clone)]
 pub(super) enum ProviderCommand {
+    /// List the project's providers and where each was found.
+    List,
     /// Run the conformance suite against a provider.
     Check { path: String },
     /// Print a provider's schema facts.
@@ -755,6 +757,7 @@ impl TryFrom<Command> for Typed {
                 Typed::of(Cmd::Secrets(secrets), Some(target))
             }
             Command::Provider { cmd } => match cmd {
+                ProviderCommand::List => Typed::of(Cmd::ProviderList(ProviderList), None),
                 ProviderCommand::Check { path } => {
                     Typed::of(Cmd::ProviderCheck(ProviderCheck { path }), None)
                 }

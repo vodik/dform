@@ -7,7 +7,7 @@ use super::controller_cmd::Controller;
 use super::dev::{Effects, Eval, Graph, Show, Strata};
 use super::explain::{Diff, Explain, Query, Why};
 use super::plan::Plan;
-use super::provider_cmd::{ProviderCheck, ProviderSchema};
+use super::provider_cmd::{ProviderCheck, ProviderList, ProviderSchema};
 use super::render::Render;
 use super::secrets::Secrets;
 use super::source::{Doc, Fmt, Init};
@@ -49,6 +49,7 @@ pub(super) enum Cmd {
     Output(Output),
     StateMv(StateMv),
     Status(Status),
+    ProviderList(ProviderList),
     ProviderCheck(ProviderCheck),
     ProviderSchema(ProviderSchema),
     Init(Init),
@@ -80,6 +81,7 @@ impl Cmd {
             | Cmd::Init(_)
             | Cmd::Completions(_)
             | Cmd::Complete(_)
+            | Cmd::ProviderList(_)
             | Cmd::ProviderCheck(_)
             | Cmd::ProviderSchema(_)
             | Cmd::Fmt(_)
@@ -284,6 +286,7 @@ impl Cmd {
             Cmd::Init(c) => c.run(),
             Cmd::Completions(c) => c.run(),
             Cmd::Complete(c) => c.run(),
+            Cmd::ProviderList(c) => c.run(&cli),
             Cmd::ProviderCheck(c) => c.run(),
             Cmd::ProviderSchema(c) => c.run(),
             Cmd::Fmt(c) => c.run(),

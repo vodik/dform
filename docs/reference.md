@@ -25,6 +25,20 @@ cd examples/tour && cargo run -- plan
 
 Authoring guidance: `docs/best_practices.md`.
 
+## Installing
+
+A release is one archive per platform, `dform-VERSION-TARGET.tar.gz`
+(x86_64 and aarch64, `unknown-linux-musl` static and `apple-darwin`),
+holding `dform` and every `dform-provider-*` beside it, with
+`SHA256SUMS`. mise installs the whole archive: `mise use -g
+github:vodik/dform@latest` (or `ubi:vodik/dform[extract_all=true]`).
+From a checkout, `cargo build --workspace` builds the providers and
+`cargo install --path .` the CLI, which finds them in the checkout's
+target directory. A provider `dform.toml` names without a `source` is
+the executable `dform-provider-NAME`, found beside `dform` first, then
+in that target directory, then on `PATH`, then at its `path`;
+`dform provider list` says where each was found.
+
 ## Quick start
 
 Every example is a project under `examples/<name>/` (see "Project layout"
@@ -103,7 +117,8 @@ dform = ">=0.1"
 aws = { source = "aws-mock", version = "2.1" }   # `use aws` in a program
 google = { source = "providers/gcp" }            # a path under the root
 k8s = { source = "k8s", timeout = "2m" }         # each call's timeout (60s by default); `wait`, a tick's on "not yet" (10m)
-ovh = { path = "~/src/dform/target/debug/dform-provider-ovh" }  # the executable itself
+ovh = { timeout = "10m" }                        # dform-provider-ovh, as "Installing" finds it
+lab = { path = "~/src/lab/target/debug/dform-provider-lab" }   # else at its path
 
 [apply]
 wait = "10m"                         # how long a tick waits on a value not reached yet (the default)
@@ -124,9 +139,13 @@ isolated = true
 exclude = ["scratch/**"]
 ```
 
-A provider's `path` names its executable, relative to the root, absolute,
-or under `~/`, until a registry serves it; a `[providers]` table
-has a `source` or a `path`, not both.
+A provider without a `source` is the executable `dform-provider-NAME`,
+looked for in one order: beside dform's own executable (a release's
+bundled providers), in the target directory of the checkout dform was
+built in (`release` and `debug`, its own profile first), on `PATH`, and
+last at its `path` (relative to the root, absolute, or under `~/`),
+until a registry serves it. The mock, `fake`, is dform itself and never
+looked for. A `[providers]` table has a `source` or a `path`, not both.
 
 ### Targets and commands
 
@@ -386,7 +405,7 @@ prints the same plan and applies nothing.
 | `stack list`, `stack rekey`, `stack unlock` | the project's stacks |
 | `state show`, `state forget-host`, `state mv` | a deployment's state |
 | `secrets list`, `secrets rotate`, `secrets cycle`, `secrets set`, `secrets unset` | a deployment's secrets |
-| `provider check`, `provider schema` | providers |
+| `provider list`, `provider check`, `provider schema` | providers: where each dform.toml names was found (outside a project, every one found), the conformance suite, a schema's facts |
 | `dev strata`, `dev graph`, `dev effects`, `dev eval`, `dev show ADDR`, `dev --world W --inventory I --provider P --chaos C COMMAND` | the mock and the evaluator: the strata, a graph as Graphviz DOT, what each scope reads, writes and offers, the evaluation's size and resources, a resource's desired document; `dev effects` with no target on project.df's stacks |
 | `doc [TARGET]` | the doc comments as Markdown, on stdout |
 | `init [NAME]` | make the working directory a project |
