@@ -100,7 +100,7 @@ exit: ok
               }
             },
             {
-              "after": "renfry-dev-gke-subnet",
+              "after": "platform-dev-gke-subnet",
               "before": null,
               "op": "set",
               "path": "name",
@@ -109,15 +109,15 @@ exit: ok
                 "entry": "name = \"${name}-gke-subnet\"",
                 "statement": "resource google.compute_subnetwork gke_subnet { .. name = \"${name}-gke-subnet\" .. } where project(id, name, region, net_id)",
                 "with": [
-                  "id = \"renfry-dev-973682\"",
-                  "name = \"renfry-dev\"",
+                  "id = \"platform-dev-973682\"",
+                  "name = \"platform-dev\"",
                   "region = \"us-east1\"",
-                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+                  "net_id = \"projects/platform-dev-973682/global/networks/platform-dev-network\""
                 ]
               }
             },
             {
-              "after": "projects/renfry-dev-973682/global/networks/renfry-dev-network",
+              "after": "projects/platform-dev-973682/global/networks/platform-dev-network",
               "before": null,
               "op": "set",
               "path": "network",
@@ -126,15 +126,15 @@ exit: ok
                 "entry": "network = net_id",
                 "statement": "resource google.compute_subnetwork gke_subnet { .. network = net_id .. } where project(id, name, region, net_id)",
                 "with": [
-                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\"",
-                  "id = \"renfry-dev-973682\"",
-                  "name = \"renfry-dev\"",
+                  "net_id = \"projects/platform-dev-973682/global/networks/platform-dev-network\"",
+                  "id = \"platform-dev-973682\"",
+                  "name = \"platform-dev\"",
                   "region = \"us-east1\""
                 ]
               }
             },
             {
-              "after": "renfry-dev-973682",
+              "after": "platform-dev-973682",
               "before": null,
               "op": "set",
               "path": "project",
@@ -143,10 +143,10 @@ exit: ok
                 "entry": "project = id",
                 "statement": "resource google.compute_subnetwork gke_subnet { project = id .. } where project(id, name, region, net_id)",
                 "with": [
-                  "id = \"renfry-dev-973682\"",
-                  "name = \"renfry-dev\"",
+                  "id = \"platform-dev-973682\"",
+                  "name = \"platform-dev\"",
                   "region = \"us-east1\"",
-                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+                  "net_id = \"projects/platform-dev-973682/global/networks/platform-dev-network\""
                 ]
               }
             },
@@ -161,9 +161,9 @@ exit: ok
                 "statement": "resource google.compute_subnetwork gke_subnet { .. region .. } where project(id, name, region, net_id)",
                 "with": [
                   "region = \"us-east1\"",
-                  "id = \"renfry-dev-973682\"",
-                  "name = \"renfry-dev\"",
-                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+                  "id = \"platform-dev-973682\"",
+                  "name = \"platform-dev\"",
+                  "net_id = \"projects/platform-dev-973682/global/networks/platform-dev-network\""
                 ]
               }
             }
@@ -174,10 +174,10 @@ exit: ok
             "at": "stacks/gke_two_phase.df:38",
             "statement": "resource google.compute_subnetwork gke_subnet { .. } where project(id, name, region, net_id)",
             "with": [
-              "id = \"renfry-dev-973682\"",
-              "name = \"renfry-dev\"",
+              "id = \"platform-dev-973682\"",
+              "name = \"platform-dev\"",
               "region = \"us-east1\"",
-              "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+              "net_id = \"projects/platform-dev-973682/global/networks/platform-dev-network\""
             ]
           },
           "type": "google.compute_subnetwork"
@@ -196,9 +196,9 @@ exit: ok
                 "entry": "deletion_protection = true",
                 "statement": "resource google.container_cluster gke_platform { .. deletion_protection = true } where project(id, name, _, net_id)",
                 "with": [
-                  "id = \"renfry-dev-973682\"",
-                  "name = \"renfry-dev\"",
-                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+                  "id = \"platform-dev-973682\"",
+                  "name = \"platform-dev\"",
+                  "net_id = \"projects/platform-dev-973682/global/networks/platform-dev-network\""
                 ]
               }
             },
@@ -225,7 +225,7 @@ exit: ok
               }
             },
             {
-              "after": "renfry-dev-gke",
+              "after": "platform-dev-gke",
               "before": null,
               "op": "set",
               "path": "name",
@@ -234,14 +234,14 @@ exit: ok
                 "entry": "name = \"${name}-gke\"",
                 "statement": "resource google.container_cluster gke_platform { .. name = \"${name}-gke\" .. } where project(id, name, _, net_id)",
                 "with": [
-                  "id = \"renfry-dev-973682\"",
-                  "name = \"renfry-dev\"",
-                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+                  "id = \"platform-dev-973682\"",
+                  "name = \"platform-dev\"",
+                  "net_id = \"projects/platform-dev-973682/global/networks/platform-dev-network\""
                 ]
               }
             },
             {
-              "after": "projects/renfry-dev-973682/global/networks/renfry-dev-network",
+              "after": "projects/platform-dev-973682/global/networks/platform-dev-network",
               "before": null,
               "op": "set",
               "path": "network_id",
@@ -250,9 +250,9 @@ exit: ok
                 "entry": "network_id = net_id",
                 "statement": "resource google.container_cluster gke_platform { .. network_id = net_id .. } where project(id, name, _, net_id)",
                 "with": [
-                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\"",
-                  "id = \"renfry-dev-973682\"",
-                  "name = \"renfry-dev\""
+                  "net_id = \"projects/platform-dev-973682/global/networks/platform-dev-network\"",
+                  "id = \"platform-dev-973682\"",
+                  "name = \"platform-dev\""
                 ]
               }
             },
@@ -266,9 +266,9 @@ exit: ok
                 "entry": "node_locations = [ z | zone_at(i, z), i <= zones ]",
                 "statement": "resource google.container_cluster gke_platform { .. node_locations = [ z | zone_at(i, z), i <= zones ] .. } where project(id, name, _, net_id)",
                 "with": [
-                  "id = \"renfry-dev-973682\"",
-                  "name = \"renfry-dev\"",
-                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+                  "id = \"platform-dev-973682\"",
+                  "name = \"platform-dev\"",
+                  "net_id = \"projects/platform-dev-973682/global/networks/platform-dev-network\""
                 ]
               }
             },
@@ -282,14 +282,14 @@ exit: ok
                 "entry": "node_locations = [ z | zone_at(i, z), i <= zones ]",
                 "statement": "resource google.container_cluster gke_platform { .. node_locations = [ z | zone_at(i, z), i <= zones ] .. } where project(id, name, _, net_id)",
                 "with": [
-                  "id = \"renfry-dev-973682\"",
-                  "name = \"renfry-dev\"",
-                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+                  "id = \"platform-dev-973682\"",
+                  "name = \"platform-dev\"",
+                  "net_id = \"projects/platform-dev-973682/global/networks/platform-dev-network\""
                 ]
               }
             },
             {
-              "after": "renfry-dev-973682",
+              "after": "platform-dev-973682",
               "before": null,
               "op": "set",
               "path": "project_id",
@@ -298,9 +298,9 @@ exit: ok
                 "entry": "project_id = id",
                 "statement": "resource google.container_cluster gke_platform { .. project_id = id .. } where project(id, name, _, net_id)",
                 "with": [
-                  "id = \"renfry-dev-973682\"",
-                  "name = \"renfry-dev\"",
-                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+                  "id = \"platform-dev-973682\"",
+                  "name = \"platform-dev\"",
+                  "net_id = \"projects/platform-dev-973682/global/networks/platform-dev-network\""
                 ]
               }
             },
@@ -317,9 +317,9 @@ exit: ok
                 "entry": "subnetwork = gke_subnet",
                 "statement": "resource google.container_cluster gke_platform { .. subnetwork = gke_subnet .. } where project(id, name, _, net_id)",
                 "with": [
-                  "id = \"renfry-dev-973682\"",
-                  "name = \"renfry-dev\"",
-                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+                  "id = \"platform-dev-973682\"",
+                  "name = \"platform-dev\"",
+                  "net_id = \"projects/platform-dev-973682/global/networks/platform-dev-network\""
                 ]
               }
             }
@@ -330,9 +330,9 @@ exit: ok
             "at": "stacks/gke_two_phase.df:54",
             "statement": "resource google.container_cluster gke_platform { .. } where project(id, name, _, net_id)",
             "with": [
-              "id = \"renfry-dev-973682\"",
-              "name = \"renfry-dev\"",
-              "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+              "id = \"platform-dev-973682\"",
+              "name = \"platform-dev\"",
+              "net_id = \"projects/platform-dev-973682/global/networks/platform-dev-network\""
             ]
           },
           "type": "google.container_cluster"
@@ -351,13 +351,13 @@ exit: ok
                 "entry": "name = \"gke-platform-grpc\"",
                 "statement": "resource google.compute_address static_ip { .. name = \"gke-platform-grpc\" .. } where project(id, _, region, _)",
                 "with": [
-                  "id = \"renfry-dev-973682\"",
+                  "id = \"platform-dev-973682\"",
                   "region = \"us-east1\""
                 ]
               }
             },
             {
-              "after": "renfry-dev-973682",
+              "after": "platform-dev-973682",
               "before": null,
               "op": "set",
               "path": "project",
@@ -366,7 +366,7 @@ exit: ok
                 "entry": "project = id",
                 "statement": "resource google.compute_address static_ip { project = id .. } where project(id, _, region, _)",
                 "with": [
-                  "id = \"renfry-dev-973682\"",
+                  "id = \"platform-dev-973682\"",
                   "region = \"us-east1\""
                 ]
               }
@@ -382,7 +382,7 @@ exit: ok
                 "statement": "resource google.compute_address static_ip { .. region .. } where project(id, _, region, _)",
                 "with": [
                   "region = \"us-east1\"",
-                  "id = \"renfry-dev-973682\""
+                  "id = \"platform-dev-973682\""
                 ]
               }
             },
@@ -399,7 +399,7 @@ exit: ok
                 "entry": "subnetwork = gke_subnet",
                 "statement": "resource google.compute_address static_ip { .. subnetwork = gke_subnet } where project(id, _, region, _)",
                 "with": [
-                  "id = \"renfry-dev-973682\"",
+                  "id = \"platform-dev-973682\"",
                   "region = \"us-east1\""
                 ]
               }
@@ -411,7 +411,7 @@ exit: ok
             "at": "stacks/gke_two_phase.df:47",
             "statement": "resource google.compute_address static_ip { .. } where project(id, _, region, _)",
             "with": [
-              "id = \"renfry-dev-973682\"",
+              "id = \"platform-dev-973682\"",
               "region = \"us-east1\""
             ]
           },
@@ -487,14 +487,14 @@ exit: ok
               }
             },
             {
-              "after": "gcr.io/renfry/api:1.42",
+              "after": "gcr.io/platform/api:1.42",
               "before": null,
               "op": "set",
               "path": "spec.template.spec.containers[name=api].image",
               "site": {
                 "at": "stacks/gke_two_phase.df:82",
-                "entry": "spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/renfry/api:1.42\" }]",
-                "statement": "resource k8s.deployment api { .. spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/renfry/api:1.42\" }] } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
+                "entry": "spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/platform/api:1.42\" }]",
+                "statement": "resource k8s.deployment api { .. spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/platform/api:1.42\" }] } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
                   "ns = \"gke-platform\""
                 ]
@@ -507,8 +507,8 @@ exit: ok
               "path": "spec.template.spec.containers[name=api].name",
               "site": {
                 "at": "stacks/gke_two_phase.df:82",
-                "entry": "spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/renfry/api:1.42\" }]",
-                "statement": "resource k8s.deployment api { .. spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/renfry/api:1.42\" }] } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
+                "entry": "spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/platform/api:1.42\" }]",
+                "statement": "resource k8s.deployment api { .. spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/platform/api:1.42\" }] } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
                   "ns = \"gke-platform\""
                 ]

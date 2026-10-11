@@ -9,22 +9,22 @@ const GKE_PLAN: &str = r#"plan: 6 changes (6 create) over 2 ticks; policy: 2 hol
 tick 1  3 changes
   + google.compute_subnetwork gke_subnet            stacks/gke_two_phase.df:38
       ip_cidr_range = "10.141.76.0/22"              stacks/gke_two_phase.df:28
-      name = "renfry-dev-gke-subnet"
-      network = "projects/renfry-dev-973682/glo…l/networks/renfry-dev-network"
-      project = "renfry-dev-973682"
+      name = "platform-dev-gke-subnet"
+      network = "projects/platform-dev-973682/g…networks/platform-dev-network"
+      project = "platform-dev-973682"
       region = "us-east1"
   + google.container_cluster gke_platform           stacks/gke_two_phase.df:54
       deletion_protection = true
       env = "dev"                                   stacks/gke_two_phase.df:11
       master_control_plane_cidr = "172.16.3.96/28"  stacks/gke_two_phase.df:28
-      name = "renfry-dev-gke"
-      network_id = "projects/renfry-dev-973682/glo…l/networks/renfry-dev-network"
+      name = "platform-dev-gke"
+      network_id = "projects/platform-dev-973682/g…networks/platform-dev-network"
       node_locations = ["us-east1-b", "us-east1-c"]
-      project_id = "renfry-dev-973682"
+      project_id = "platform-dev-973682"
       subnetwork = gke_subnet
   + google.compute_address static_ip                stacks/gke_two_phase.df:47
       name = "gke-platform-grpc"
-      project = "renfry-dev-973682"
+      project = "platform-dev-973682"
       region = "us-east1"
       subnetwork = gke_subnet
 
@@ -37,7 +37,7 @@ tick 2  3+ changes
       spec.replicas = 3
       spec.selector.matchLabels.app = "api"
       spec.template.metadata.labels.app = "api"
-      spec.template.spec.containers[name=api] = { name: "api", image: "gcr.io/renfry/api:1.42" }
+      spec.template.spec.containers[name=api] = { name: "api", image: "gcr.io/platform/api:1.42" }
   + k8s.namespace gke_platform                      stacks/gke_two_phase.df:74
       metadata.name = "gke-platform"
   + k8s.secret db_credentials                       stacks/gke_two_phase.df:85

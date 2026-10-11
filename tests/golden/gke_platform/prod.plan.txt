@@ -8,31 +8,31 @@ tick 1  7 changes
       enable_standard_gke_alerts = true
       notification_channel_display_name = "Slack"
       notification_channel_type = "slack"
-      project_id = "renfry-prod"              stacks/gke_platform.df:88
-      source = "git@github.com:coherentpath/te…-alert-metrics.git?ref=v1.5.0"
+      project_id = "platform-prod"            stacks/gke_platform.df:88
+      source = "git@github.com:example-org/ter…-alert-metrics.git?ref=v1.5.0"
   + google.compute_network main               stacks/gke_platform.df:166
-      name = "renfry-prod-network"            stacks/gke_platform.df:91
+      name = "platform-prod-network"          stacks/gke_platform.df:91
       peerings = [{
-        name: "envoy-prod-legacy",
-        peer_network: "projects/coherentpath-prod/global/networks/envoy-proxy-prod",
+        name: "edge-prod",
+        peer_network: "projects/edge-prod/global/networks/envoy-proxy-prod",
       }]
-      project = "renfry-prod"                 stacks/gke_platform.df:88
+      project = "platform-prod"               stacks/gke_platform.df:88
   + google.compute_subnetwork gke_subnet      stacks/gke_platform.df:139
       ip_cidr_range = "10.141.124.0/22"       stacks/gke_platform.df:95
-      name = "renfry-prod-gke-subnet"
-      network = "projects/renfry-prod/global/networks/renfry-prod-network"
-      project = "renfry-prod"                 stacks/gke_platform.df:88
+      name = "platform-prod-gke-subnet"
+      network = "projects/platform-prod/global/networks/platform-prod-network"
+      project = "platform-prod"               stacks/gke_platform.df:88
       region = "us-east1"                     stacks/gke_platform.df:90
       secondary_ranges = [
-        { range_name: "renfry-prod-gke-pods-range", ip_cidr_range: "10.141.128.0/21" },
-        { range_name: "renfry-prod-gke-svc-range", ip_cidr_range: "10.141.136.0/21" },
+        { range_name: "platform-prod-gke-pods-range", ip_cidr_range: "10.141.128.0/21" },
+        { range_name: "platform-prod-gke-svc-range", ip_cidr_range: "10.141.136.0/21" },
       ]
       subnet_private_access = true
   + google.compute_subnetwork regional_proxy  stacks/gke_platform.df:153
       ip_cidr_range = "10.193.2.0/24"         stacks/gke_platform.df:93
-      name = "renfry-prod-proxy"
-      network = "projects/renfry-prod/global/networks/renfry-prod-network"
-      project = "renfry-prod"                 stacks/gke_platform.df:88
+      name = "platform-prod-proxy"
+      network = "projects/platform-prod/global/networks/platform-prod-network"
+      project = "platform-prod"               stacks/gke_platform.df:88
       purpose = "REGIONAL_MANAGED_PROXY"
       region = "us-east1"                     stacks/gke_platform.df:90
       role = "ACTIVE"
@@ -41,21 +41,21 @@ tick 1  7 changes
       deletion_protection = false
       enable_secret_manager_addon = true
       env = "prod"                            --set env=prod
-      ip_range_pods = "renfry-prod-gke-pods-range"
-      ip_range_services = "renfry-prod-gke-svc-range"
+      ip_range_pods = "platform-prod-gke-pods-range"
+      ip_range_services = "platform-prod-gke-svc-range"
       master_control_plane_cidr = "172.16.3.128/28"  stacks/gke_platform.df:95
-      name = "renfry-prod-gke"
-      network_id = "projects/renfry-prod/global/networks/renfry-prod-network"
-      project_id = "renfry-prod"              stacks/gke_platform.df:88
-      project_name = "renfry-prod"            stacks/gke_platform.df:89
+      name = "platform-prod-gke"
+      network_id = "projects/platform-prod/global/networks/platform-prod-network"
+      project_id = "platform-prod"            stacks/gke_platform.df:88
+      project_name = "platform-prod"          stacks/gke_platform.df:89
       subnetwork = gke_subnet
   + google.monitoring_dashboard gke_platform  stacks/gke_platform.df:207
       dashboard_json = files/dashboard-gke-platform.json  (109 B)
-      project = "renfry-prod"                 stacks/gke_platform.df:88
+      project = "platform-prod"               stacks/gke_platform.df:88
   + google.compute_address static-ip-gke-platform-grpc  stacks/gke_platform.df:173
       address_type = "INTERNAL"               stacks/gke_platform.df:95
       name = "gke-platform-grpc"
-      project = "renfry-prod"                 stacks/gke_platform.df:88
+      project = "platform-prod"               stacks/gke_platform.df:88
       region = "us-east1"                     stacks/gke_platform.df:90
       subnetwork = gke_subnet
 
