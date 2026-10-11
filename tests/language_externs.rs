@@ -54,7 +54,7 @@ fn externs_answer_on_demand() {
     let s = scratch();
     let r = s.run(&["plan", "p.df"]).success();
     for line in [
-        "json = dash.json  (31 B)",
+        "json = dash.json  (39 B)",
         "note = \"hello\"",
         "password = \"pw-first\"",
         "token = \"tk-first\"",

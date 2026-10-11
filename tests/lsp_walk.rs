@@ -260,8 +260,8 @@ const EXAMPLES: &[&str] = &[
     "decl",
     "demo",
     "gke",
-    "k8s",
     "gke-platform",
+    "k8s",
     "refine",
     "tour",
 ];
@@ -294,8 +294,8 @@ walks! {
     walk_decl: "decl",
     walk_demo: "demo",
     walk_gke: "gke",
-    walk_k8s: "k8s",
     walk_gke_platform: "gke-platform",
+    walk_k8s: "k8s",
     walk_refine: "refine",
     walk_tour: "tour",
 }
