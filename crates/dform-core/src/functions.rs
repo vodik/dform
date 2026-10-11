@@ -211,14 +211,15 @@ pub fn get(name: &str) -> Option<&'static Function> {
 /// A call's arguments with its named ones (`random.password("db",
 /// generation: 1)`) put where `f` declares them: each names a parameter
 /// the positional ones do not give, and a parameter left out before it
-/// takes its declared default; an error says which is wrong.
-pub fn with_named(
+/// takes its declared default, as `default` makes it an argument; an
+/// error says which is wrong.
+pub fn with_named<T>(
     f: &Function,
-    positional: Vec<crate::ast::Term>,
-    named: Vec<(String, crate::ast::Term)>,
-) -> Result<Vec<crate::ast::Term>, String> {
-    use crate::ast::Term;
-    let mut at: Vec<Option<Term>> = positional.into_iter().map(Some).collect();
+    positional: Vec<T>,
+    named: Vec<(String, T)>,
+    mut default: impl FnMut(Value) -> T,
+) -> Result<Vec<T>, String> {
+    let mut at: Vec<Option<T>> = positional.into_iter().map(Some).collect();
     for (k, t) in named {
         let Some(i) = f.params.iter().position(|p| p.name == k) else {
             let names: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
@@ -228,8 +229,8 @@ pub fn with_named(
                 names.join(", ")
             ));
         };
-        if at.len() <= i {
-            at.resize(i + 1, None);
+        while at.len() <= i {
+            at.push(None);
         }
         if at[i].is_some() {
             return Err(format!("`{}`'s `{k}` is given twice", f.name));
@@ -240,7 +241,7 @@ pub fn with_named(
         .zip(&f.params)
         .map(|(t, p)| match t {
             Some(t) => Ok(t),
-            None => p.default_value().map(Term::Val).ok_or_else(|| {
+            None => p.default_value().map(&mut default).ok_or_else(|| {
                 format!(
                     "`{}`'s `{}` is left out before a named argument, and has no default: give \
                      it (`{}`)",
@@ -2931,6 +2932,7 @@ mod named_tests {
             f,
             vec![key.clone()],
             vec![("generation".into(), v(Value::Int(1)))],
+            Term::Val,
         )
         .unwrap();
         assert_eq!(
@@ -2946,6 +2948,7 @@ mod named_tests {
             f,
             vec![key.clone()],
             vec![("nope".into(), v(Value::Int(1)))],
+            Term::Val,
         )
         .unwrap_err();
         assert!(
@@ -2956,12 +2959,18 @@ mod named_tests {
             f,
             vec![key.clone(), v(Value::Int(8))],
             vec![("length".into(), v(Value::Int(1)))],
+            Term::Val,
         )
         .unwrap_err();
         assert!(e.contains("`length` is given twice"), "{e}");
         let b = super::get("random.base64").unwrap();
-        let e = super::with_named(b, vec![key], vec![("generation".into(), v(Value::Int(1)))])
-            .unwrap_err();
+        let e = super::with_named(
+            b,
+            vec![key],
+            vec![("generation".into(), v(Value::Int(1)))],
+            Term::Val,
+        )
+        .unwrap_err();
         assert!(e.contains("`random.base64`'s `length` is left out"), "{e}");
     }
 }

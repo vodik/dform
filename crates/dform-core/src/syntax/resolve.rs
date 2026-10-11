@@ -33,7 +33,7 @@ use crate::ast::{
 };
 use crate::diag::Diagnostic;
 use crate::program::node::CopyKind;
-use crate::program::node::{BinOp, ExprKind};
+use crate::program::node::{Arg, BinOp, Callee, ExprKind};
 use crate::program::scope::{self as scopes, DeclKind, DeclRef, Names, Reach};
 use crate::program::{ExprId, ItemId, Read, ScopeId};
 use crate::spell;
@@ -7471,7 +7471,7 @@ impl<'u> Lowerer<'u> {
             SPREAD => return self.misplaced_spread(n),
             TUPLE => return self.tuple_value(n),
             CHAIN | CALL_CHAIN => self.chain_term(rc, n, pos, &mut reads),
-            CALL => self.call(rc, n, pos, &mut reads),
+            CALL => return self.call(rc, n, pos, pre),
             LIST => self.list(rc, n, pos, &mut reads),
             OBJECT => self.object(rc, n, pos, &mut reads),
             COMPREHENSION => self.comprehension(rc, n, pos),
@@ -7613,18 +7613,22 @@ impl<'u> Lowerer<'u> {
     }
 
     /// A call of a function, with its named arguments; `env.var`, a
-    /// loader, `ref`.
-    fn call(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
+    /// loader, `ref`. A call of a function is its node, its arguments'
+    /// nodes; a call the lowering writes as a form of its own (an
+    /// operator's function, `ref`, `__path`, ..) and the others are still
+    /// built from what they lower to.
+    fn call(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Built> {
         let span = self.span(n);
-        if let Some(t) = self.env_var_call(rc, n, pos, pre) {
-            return t;
+        let mut reads = Vec::new();
+        if let Some(t) = self.env_var_call(rc, n, pos, &mut reads) {
+            return t.map(|t| Built::Lowered(t, reads));
         }
-        if let Some(t) = self.loader_call(rc, n, pre) {
-            return t;
+        if let Some(t) = self.loader_call(rc, n, &mut reads) {
+            return t.map(|t| Built::Lowered(t, reads));
         }
         // A let with parameters (R-187).
-        if let Some(t) = self.function_call(rc, n, pre) {
-            return t;
+        if let Some(t) = self.function_call(rc, n, &mut reads) {
+            return t.map(|t| Built::Lowered(t, reads));
         }
         let name = self.callee(n);
         let Some(name) = name else {
@@ -7634,7 +7638,8 @@ impl<'u> Lowerer<'u> {
             && let Some(list) = node(n, ARG_LIST)
             && terms(&list).count() == 1
         {
-            return self.ref_call(rc, &list, pre, span);
+            let t = self.ref_call(rc, &list, &mut reads, span)?;
+            return Ok(Built::Lowered(t, reads));
         }
         let named: Vec<(String, SyntaxNode)> = node(n, ARG_LIST)
             .into_iter()
@@ -7659,18 +7664,39 @@ impl<'u> Lowerer<'u> {
             self.near_function(rc.scope, &name, at)?;
         }
         self.check_function(&name, span);
-        let mut args = self.bind(false, |l| l.args(rc, n, Pos::Content, pre))?;
+        let mut args = self.bind(false, |l| l.arg_exprs(rc, n, pre))?;
+        let mut defaults = Vec::new();
         if let (false, Some(f)) = (named.is_empty(), declared) {
             let mut given = Vec::new();
             for (k, t) in named {
-                given.push((k, self.bind(false, |l| l.term(rc, &t, Pos::Content, pre))?));
+                given.push((
+                    k,
+                    Some(self.bind(false, |l| l.expr(rc, &t, Pos::Content, pre))?),
+                ));
             }
-            args = match crate::functions::with_named(f, args, given) {
+            let placed = crate::functions::with_named(f, args, given, |v| {
+                defaults.push(v);
+                None
+            });
+            args = match placed {
                 Ok(a) => a,
                 Err(why) => return self.error(span, why),
             };
         }
-        self.check_aggregated(&name, &args, span);
+        // A parameter left out before a named one is its default.
+        let mut defaults = defaults.into_iter();
+        let args: Vec<ExprId> = args
+            .into_iter()
+            .map(|a| match a {
+                Some(a) => a,
+                None => {
+                    let v = defaults.next().expect("a default per argument left out");
+                    self.node(span, ExprKind::Lit(v))
+                }
+            })
+            .collect();
+        let was: Vec<Term> = args.iter().map(|&a| self.term_of(a)).collect();
+        self.check_aggregated(&name, &was, span);
         // `cloud_ref(T, name, path)`, a form of the language, is
         // the lowering's `__cloud_ref` (R-155).
         let name = match name.as_str() {
@@ -7678,8 +7704,47 @@ impl<'u> Lowerer<'u> {
             "ref" => crate::address::REF.to_string(),
             _ => name,
         };
-        let args = self.typed_args(&name, args, span)?;
-        Ok(Term::Func { name, args })
+        let now = self.typed_args(&name, was.clone(), span)?;
+        let args: Vec<ExprId> = args
+            .into_iter()
+            .zip(was.iter().zip(now))
+            .map(|(a, (was, now))| self.read_as(a, was, now))
+            .collect();
+        if crate::program::Builder::is_form(&name) {
+            let args = args
+                .into_iter()
+                .map(|a| self.lowered(a, &mut reads))
+                .collect();
+            return Ok(Built::Lowered(Term::Func { name, args }, reads));
+        }
+        let callee = match crate::functions::get(&name) {
+            Some(f) => Callee::Std(f),
+            None => Callee::Data(name),
+        };
+        let args = args
+            .into_iter()
+            .map(|value| Arg { name: None, value })
+            .collect();
+        Ok(Built::Node(
+            self.node(span, ExprKind::Call { callee, args }),
+        ))
+    }
+
+    /// A call's positional arguments, each its node.
+    fn arg_exprs(
+        &mut self,
+        rc: &mut Rc,
+        n: &SyntaxNode,
+        pre: &mut Vec<Lit>,
+    ) -> L<Vec<Option<ExprId>>> {
+        let Some(list) = node(n, ARG_LIST) else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for t in terms(&list) {
+            out.push(Some(self.expr(rc, &t, Pos::Content, pre)?));
+        }
+        Ok(out)
     }
 
     /// An object, its keys given or computed (`{ "${k}": v }`), its

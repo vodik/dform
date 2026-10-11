@@ -141,6 +141,29 @@ impl Builder<'_> {
         self.expr_node(kind)
     }
 
+    /// Whether a call of `name` is built as a form of its own (an
+    /// operator, an interpolation, a spread, a range, a typing, a path, a
+    /// reference) rather than as a call: [`Builder::func`]'s forms.
+    pub fn is_form(name: &str) -> bool {
+        use crate::address::{FORMAT, LEN, REF};
+        use crate::functions::{CONCAT, MERGE, OBJECT};
+        BinOp::try_from(name).is_ok()
+            || [
+                "sub",
+                "__path",
+                FORMAT,
+                MERGE,
+                CONCAT,
+                OBJECT,
+                crate::range::LOWERED,
+                crate::types::AS,
+                crate::types::AMBIGUOUS,
+                LEN,
+                REF,
+            ]
+            .contains(&name)
+    }
+
     /// `f(args)`: a function the standard library or the lowering
     /// declares, else a name read as data.
     fn call(&mut self, name: &str, args: &[Term]) -> ExprKind {
