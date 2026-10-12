@@ -20,11 +20,11 @@ pub struct CheckLowered<'a> {
     pub clause: Option<ClauseId>,
     /// `deny(m[, detail])`, as the resolver wrote it.
     pub head: &'a Atom,
-    /// B's literals, then from `seed` the message's reads and from `mid`
-    /// the detail's.
+    /// B's literals, then the reads its message and its detail hoisted.
     pub body: &'a [Lit],
-    pub seed: usize,
-    pub mid: usize,
+    /// The message's node and the detail's, as the resolver built them.
+    pub message: ExprId,
+    pub detail: Option<ExprId>,
     /// The helper statements the message's terms made, and the detail's.
     pub made: (&'a [Stmt], &'a [Stmt]),
     /// The statement's aggregate values.
@@ -34,12 +34,8 @@ pub struct CheckLowered<'a> {
 impl Builder<'_> {
     /// The `Check` item of `c`.
     pub fn check_item(&mut self, c: CheckLowered) -> ItemId {
-        let message = self.made(&c.head.args[0], &c.body[c.seed..c.mid], c.made.0);
-        let detail = c
-            .head
-            .args
-            .get(1)
-            .map(|d| self.made(d, &c.body[c.mid..], c.made.1));
+        let message = self.holding(c.message, c.made.0);
+        let detail = c.detail.map(|d| self.holding(d, c.made.1));
         if let Some(cl) = c.clause
             && !c.results.is_empty()
             && grouped(c.head, c.body, c.results)
@@ -59,10 +55,32 @@ impl Builder<'_> {
         })
     }
 
+    /// `made`, but the helper statements lowering the nodes `nodes` makes
+    /// itself (a comprehension's `not { }` rule).
+    pub(super) fn made_but(&self, made: &[Stmt], nodes: &[ExprId]) -> Vec<Stmt> {
+        let own: Vec<String> = nodes
+            .iter()
+            .flat_map(|&e| crate::program::lower::expr_helpers(self.program, e))
+            .map(|s| format!("{s:?}"))
+            .collect();
+        made.iter()
+            .filter(|s| !own.contains(&format!("{s:?}")))
+            .cloned()
+            .collect()
+    }
+
     /// The term `t` after the reads it hoisted, the helper statements its
     /// terms made its own.
     pub(super) fn made(&mut self, t: &crate::ast::Term, reads: &[Lit], made: &[Stmt]) -> ExprId {
         let e = self.hoisted(t, reads);
+        self.holding(e, made)
+    }
+
+    /// The node `e` the resolver built, the helper statements its terms
+    /// made its own, but those its lowering makes itself (a
+    /// comprehension's `not { }` rule).
+    pub(super) fn holding(&mut self, e: ExprId, made: &[Stmt]) -> ExprId {
+        let made = self.made_but(made, &[e]);
         if !made.is_empty() {
             self.program
                 .terms_made

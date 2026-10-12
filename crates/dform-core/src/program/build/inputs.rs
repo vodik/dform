@@ -66,9 +66,10 @@ pub struct RelationRows<'a> {
     pub externs: Vec<Stmt>,
     /// `p(columns)`, as the resolver wrote it.
     pub head: &'a Atom,
-    /// B's literals, then from `seed` the document's reads.
+    /// B's literals, then the document's reads.
     pub body: &'a [Lit],
-    pub seed: usize,
+    /// The goal reading the document's rows.
+    pub rows: crate::program::node::GoalId,
     /// The helper statements the document's terms made.
     pub made: &'a [Stmt],
     pub results: &'a [String],
@@ -79,7 +80,7 @@ impl Builder<'_> {
     pub fn relation_input_item(&mut self, r: RelationInputLowered) -> ItemId {
         let (source, columns, clause) = match r.from {
             Some(rows) => {
-                let source = self.source(rows.externs, &rows.body[rows.seed..], rows.made);
+                let source = self.source(rows.externs, rows.rows, rows.made);
                 let columns = rows
                     .head
                     .args

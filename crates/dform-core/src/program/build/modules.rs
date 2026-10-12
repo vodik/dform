@@ -7,8 +7,8 @@
 //! inputs are), its clause B's goals as gathered.
 
 use super::Builder;
-use crate::ast::{self, Lit, Span, Stmt, Term};
-use crate::program::node::{ClauseId, CopyKind, Item, ItemId, ItemKind};
+use crate::ast::{self, Span, Stmt};
+use crate::program::node::{ClauseId, CopyKind, ExprId, Item, ItemId, ItemKind};
 use crate::program::scope::ScopeId;
 
 /// A copy as the resolver lowered it.
@@ -20,34 +20,31 @@ pub struct CopyLowered<'a> {
     pub name: String,
     /// A name from the clause: its variable, the reads its holes hoisted
     /// and the binding of its segment, the helpers its terms made.
-    pub named: Option<(&'a Term, &'a [Lit], &'a [Stmt])>,
+    pub named: Option<(ExprId, &'a [Stmt])>,
     pub inputs: Vec<InputGiven<'a>>,
     pub rows: Vec<ItemId>,
     pub clause: Option<ClauseId>,
     pub via: Option<ast::Via>,
 }
 
-/// An input a copy's block gives: its value, the reads it hoisted, the
-/// helpers its terms made.
+/// An input a copy's block gives: its value's node, the helpers its
+/// terms made.
 pub struct InputGiven<'a> {
     pub key: String,
     pub span: Span,
-    pub value: &'a Term,
-    pub reads: &'a [Lit],
+    pub value: ExprId,
     pub made: &'a [Stmt],
 }
 
 impl Builder<'_> {
     /// The `Copy` item of `c`.
     pub fn copy_item(&mut self, c: CopyLowered) -> ItemId {
-        let named = c
-            .named
-            .map(|(value, reads, made)| self.made(value, reads, made));
+        let named = c.named.map(|(value, made)| self.holding(value, made));
         let inputs = c
             .inputs
             .iter()
             .map(|i| {
-                let value = self.at(i.span, |b| b.made(i.value, i.reads, i.made));
+                let value = self.holding(i.value, i.made);
                 (i.key.clone(), i.span, value)
             })
             .collect();

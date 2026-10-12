@@ -18,6 +18,14 @@ pub fn lower_expr(program: &Program, id: ExprId) -> (Term, Vec<Lit>) {
     (t, l.reads)
 }
 
+/// The helper statements lowering the term `id` makes (a comprehension's
+/// `not { }` rule).
+pub fn expr_helpers(program: &Program, id: ExprId) -> Vec<Stmt> {
+    let mut l = Lowering::new(program);
+    l.expr(id);
+    l.helpers
+}
+
 /// A lowering in progress: the reads the term being lowered hoisted so
 /// far, and the helper statements written so far (a `not { }`'s rule, the
 /// facts a membership states), in order.

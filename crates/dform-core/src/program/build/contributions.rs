@@ -11,7 +11,9 @@
 use super::{Builder, fold_numbers, grouped};
 use crate::ast::{Atom, FieldOp, Lit, Rank, Span, Stmt, Term};
 use crate::program::NodeId;
-use crate::program::node::{ClauseId, Item, ItemId, ItemKind, Source, Target, VarId, Write};
+use crate::program::node::{
+    ClauseId, GoalId, Item, ItemId, ItemKind, Source, Target, VarId, Write,
+};
 use crate::program::scope::ScopeId;
 
 /// A `set` as the resolver lowered it: its lines, under one clause.
@@ -69,30 +71,21 @@ pub struct SetFromLowered<'a> {
     /// The leaf's path and value variables.
     pub path: &'a str,
     pub value: &'a str,
-    /// The externs reading the document, and the rule's body: B's
-    /// literals, then from `seed` the document's reads.
+    /// The externs reading the document, the rule's body (B's literals,
+    /// then the document's reads) and the goal reading its rows.
     pub externs: Vec<Stmt>,
     pub head: &'a Atom,
     pub body: &'a [Lit],
-    pub seed: usize,
+    pub rows: GoalId,
     /// The helper statements the document's terms made.
     pub made: &'a [Stmt],
     pub results: &'a [String],
 }
 
 impl Builder<'_> {
-    /// The rows of a document: the externs reading it, and its reads
-    /// `reads`, the table's extern last, the document's term (`Path = t`)
-    /// and its reads before it; the helpers its terms made the rows'.
-    pub(super) fn source(&mut self, externs: Vec<Stmt>, reads: &[Lit], made: &[Stmt]) -> Source {
-        let Some((Lit::Pos(table), before)) = reads.split_last() else {
-            unreachable!("a document's rows are read by its table's extern: {reads:?}")
-        };
-        let (rows, left) = self.reading(before, |b| b.rel(table));
-        assert!(
-            left.is_empty(),
-            "a table's extern reads its document: {table:?} after {left:?}"
-        );
+    /// The rows of a document: the externs reading it, and the goal of
+    /// its table's extern, `rows`; the helpers its terms made the rows'.
+    pub(super) fn source(&mut self, externs: Vec<Stmt>, rows: GoalId, made: &[Stmt]) -> Source {
         if !made.is_empty() {
             self.program
                 .terms_made
@@ -184,7 +177,7 @@ impl Builder<'_> {
 
     /// The `SetFrom` item of `s`.
     pub fn set_from_item(&mut self, s: SetFromLowered) -> ItemId {
-        let source = self.source(s.externs, &s.body[s.seed..], s.made);
+        let source = self.source(s.externs, s.rows, s.made);
         let (path, value): (VarId, VarId) = (self.var(s.path), self.var(s.value));
         if let Some(c) = s.clause
             && !s.results.is_empty()

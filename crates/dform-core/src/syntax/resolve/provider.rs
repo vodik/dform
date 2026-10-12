@@ -156,7 +156,7 @@ impl Lowerer<'_> {
                             }
                         };
                         let (seed, made) = (body.len(), self.helpers.len());
-                        let v = self.entry_value(&mut rc, &a, Pos::Content, &mut body)?;
+                        let (v, _) = self.entry_value(&mut rc, &a, Pos::Content, &mut body)?;
                         let head = atom_at(
                             crate::plugin::providers::EXPECT_ACCOUNT,
                             vec![str_term(&name), v.clone()],
@@ -170,7 +170,7 @@ impl Lowerer<'_> {
                     }
                     _ => {
                         let seed = body.len();
-                        let v = self.entry_value(&mut rc, &a, Pos::Content, &mut body)?;
+                        let (v, _) = self.entry_value(&mut rc, &a, Pos::Content, &mut body)?;
                         if settings.insert(key.clone(), v.clone()).is_some() {
                             return self.error(at, format!("provider {name}: {key} is set twice"));
                         }

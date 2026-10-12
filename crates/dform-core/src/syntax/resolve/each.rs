@@ -109,10 +109,13 @@ impl Lowerer<'_> {
         };
         let src = format!("_[_]@{}", u32::from(r.start()));
         let v = each_var(u32::from(r.start()));
-        if let Some(t) = self.chain_type(rc, &prefix) {
+        // The read that binds it: kept for the builders.
+        let read = if let Some(t) = self.chain_type(rc, &prefix) {
             let typ = self.each_type(rc, &t, body, at);
             body.push(Lit::Pos(atom_at("want", vec![typ.clone(), var(&v)], at)));
+            let id = self.name_node(rc, at, &typ);
             rc.types.insert(src.clone(), typ);
+            ("want", id)
         } else {
             let mark = body.len();
             let res = self.resolve(rc, &prefix, body)?;
@@ -131,14 +134,19 @@ impl Lowerer<'_> {
                 );
             };
             let local = body.split_off(mark);
-            let list = self.realize(rc, res, Pos::Content, (local, body), span)?;
+            let id = self.realize_expr(rc, res, Pos::Content, (local, body), span)?;
+            let list = self.lowered(id, body);
             body.push(Lit::Pos(atom_at("member", vec![list, var(&v)], at)));
             rc.elems.insert(src.clone(), of);
-        }
+            ("member", id)
+        };
         rc.reserved.insert(v.clone());
         rc.vars.insert(src.clone(), v);
         rc.first.insert(src.clone(), at);
         rc.binders.insert(src.clone());
+        let (rel, of) = read;
+        let v = &rc.vars[&src];
+        self.building(rc, at, |b| b.call_into(rel, vec![of], v));
         Ok(src)
     }
 

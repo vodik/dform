@@ -7,15 +7,19 @@
 use super::{Builder, grouped, number_folds};
 use crate::ast::{Atom, Lit, Rank, Span, Stmt};
 use crate::program::NodeId;
-use crate::program::node::{ClauseId, Head, Item, ItemId, ItemKind, RelRef};
+use crate::program::node::{
+    ClauseId, ExprId, Head, Item, ItemId, ItemKind, PatternId, PatternKind, RelArgs, RelRef,
+};
 use crate::program::scope::ScopeId;
 
 /// A rule as the resolver lowered it.
 pub struct RuleLowered<'a> {
     pub span: Span,
     pub scope: ScopeId,
-    /// The head, its rank not among its arguments.
+    /// The head, its rank not among its arguments; its arguments'
+    /// patterns where the resolver built them of its nodes.
     pub head: &'a Atom,
+    pub args: Option<RelArgs>,
     pub rank: Option<Rank>,
     /// The clause of B, gathered; none for a fact.
     pub clause: Option<ClauseId>,
@@ -33,7 +37,16 @@ pub struct RuleLowered<'a> {
 impl Builder<'_> {
     /// The `rule` item of `r`.
     pub fn rule_item(&mut self, r: RuleLowered) -> ItemId {
-        let head = self.head(r.head, &r.body[r.seed..]);
+        let head = match r.args {
+            Some(args) => Head {
+                rel: RelRef {
+                    name: r.head.pred.clone(),
+                    span: r.head.span,
+                },
+                args,
+            },
+            None => self.head(r.head, &r.body[r.seed..]),
+        };
         if let Some(c) = r.clause
             && !r.results.is_empty()
             && grouped(r.ranked, r.body, r.results)
@@ -50,12 +63,33 @@ impl Builder<'_> {
             scope: r.scope,
             kind,
         });
-        if !r.made.is_empty() {
-            self.program
-                .terms_made
-                .insert(NodeId::Item(item), r.made.to_vec());
+        let nodes = self.head_nodes(item);
+        let made = self.made_but(r.made, &nodes);
+        if !made.is_empty() {
+            self.program.terms_made.insert(NodeId::Item(item), made);
         }
         item
+    }
+
+    /// The terms of rule `item`'s head.
+    fn head_nodes(&self, item: ItemId) -> Vec<ExprId> {
+        let ItemKind::Rule { head, .. } = &self.program.items[item].kind else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut walk: Vec<PatternId> = match &head.args {
+            RelArgs::Positional(ps) => ps.clone(),
+            RelArgs::Record(ps) => ps.iter().map(|(_, p)| *p).collect(),
+        };
+        while let Some(p) = walk.pop() {
+            match &self.program.patterns[p].kind {
+                PatternKind::Expr(e) => out.push(*e),
+                PatternKind::Tuple { elems, .. } => walk.extend(elems),
+                PatternKind::Object { fields, .. } => walk.extend(fields.iter().map(|f| f.2)),
+                PatternKind::Hole | PatternKind::Bind(_) => {}
+            }
+        }
+        out
     }
 
     /// The head `a`, after the reads `reads` its arguments hoisted.

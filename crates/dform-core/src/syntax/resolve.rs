@@ -684,8 +684,10 @@ struct RuleParts {
     /// It has `where`, and the clause gathered of it.
     has_body: bool,
     clause: Option<crate::program::ClauseId>,
-    /// Its head, and with its rank the last argument.
+    /// Its head, its arguments' patterns where the resolver built them,
+    /// and with its rank the last argument.
     head: Atom,
+    args: Option<crate::program::node::RelArgs>,
     ranked: Atom,
     rank: Option<Rank>,
     /// Its clause's literals, then from `seed` the reads the head hoisted,
@@ -2975,7 +2977,7 @@ impl<'u> Lowerer<'u> {
                 externs: rows.externs.clone(),
                 head: &rows.head,
                 body: &rows.body,
-                seed: rows.seed,
+                rows: rows.rows,
                 made: &self.helpers[rows.made..],
                 results: &results,
             }),
@@ -3340,14 +3342,14 @@ impl<'u> Lowerer<'u> {
             .iter()
             .map(|c| var(&fresh(rc, &capitalise(&c.name))))
             .collect();
-        let (seed, made) = (body.len(), self.helpers.len());
-        let externs = self.doc_source(rc, n, pred, cols, vars.clone(), &mut body)?;
+        let made = self.helpers.len();
+        let (externs, rows) = self.doc_source(rc, n, pred, cols, vars.clone(), &mut body)?;
         self.check_bound(rc, &body, &[])?;
         Ok(TableRows {
             externs,
             head: atom_at(pred, vars, span),
             body,
-            seed,
+            rows,
             made,
         })
     }
@@ -3453,7 +3455,7 @@ impl<'u> Lowerer<'u> {
         cols: Vec<BindArg>,
         outs: Vec<Term>,
         body: &mut Vec<Lit>,
-    ) -> L<Vec<Stmt>> {
+    ) -> L<(Vec<Stmt>, GoalId)> {
         let src = terms(n).next().ok_or(Skip)?;
         let selector = node(n, SELECTOR)
             .map(|sel| self.selector(&sel))
@@ -3469,15 +3471,19 @@ impl<'u> Lowerer<'u> {
         {
             return self.table_body(rc, &src, &name, cols, outs, body);
         }
-        let doc = self.term(rc, &src, Pos::Content, body)?;
-        let d = var(&fresh(rc, "Doc"));
-        body.push(Lit::Eq(d.clone(), doc));
-        let at = var(&fresh(rc, "At"));
-        let mut args = vec![d, at];
-        args.extend(outs);
+        let location = self.expr(rc, &src, Pos::Content, body)?;
+        let path = fresh(rc, "Doc");
+        let at = fresh(rc, "At");
         let ext = crate::tables::extern_name(crate::tables::VALUE, &name);
         let span = self.span(&src);
-        body.push(Lit::Pos(atom_at(&ext, args, span)));
+        let read = DocRead {
+            location,
+            path,
+            at,
+            name: ext.clone(),
+            span,
+        };
+        let rows = self.rows_goal(rc, &read, &outs, body);
         let mut ins = vec![
             BindArg {
                 input: true,
@@ -3491,11 +3497,12 @@ impl<'u> Lowerer<'u> {
             },
         ];
         ins.extend(cols);
-        Ok(vec![Stmt::ExternFn(ExternFn {
+        let decl = Stmt::ExternFn(ExternFn {
             name: ext,
             args: ins,
             span,
-        })])
+        });
+        Ok((vec![decl], rows))
     }
 
     /// A read as a term (R-39, R-155): `io.read(LOCATION)` (the whole of
@@ -3652,14 +3659,36 @@ impl<'u> Lowerer<'u> {
         cols: Vec<BindArg>,
         outs: Vec<Term>,
         body: &mut Vec<Lit>,
-    ) -> L<Vec<Stmt>> {
+    ) -> L<(Vec<Stmt>, GoalId)> {
         let (stmts, read) = self.doc_read(rc, src, table, cols, body)?;
+        let rows = self.rows_goal(rc, &read, &outs, body);
+        Ok((stmts, rows))
+    }
+
+    /// The rows of a document `read` reads into `outs`, `name(Path, At,
+    /// outs..)` after `Path = LOCATION`, into `body`: their goal.
+    fn rows_goal(&mut self, rc: &Rc, read: &DocRead, outs: &[Term], body: &mut Vec<Lit>) -> GoalId {
         let t = self.lowered(read.location, body);
         body.push(Lit::Eq(var(&read.path), t));
         let mut args = vec![var(&read.path), var(&read.at)];
-        args.extend(outs);
+        args.extend(outs.iter().cloned());
         body.push(Lit::Pos(atom_at(&read.name, args, read.span)));
-        Ok(stmts)
+        let rel = RelRef {
+            name: read.name.clone(),
+            span: read.span,
+        };
+        self.building(rc, read.span, |b| {
+            let path = b.bound_into(read.location, &read.path);
+            let mut args = vec![path, b.variable(&read.at)];
+            for o in outs {
+                let Term::Var(v) = o else {
+                    unreachable!("a document's column is read into a variable")
+                };
+                args.push(b.variable(v));
+            }
+            let args = RelArgs::Positional(args.into_iter().map(|a| b.pattern_of(a)).collect());
+            b.goal_node(read.span, GoalKind::Rel { rel, args })
+        })
     }
 
     /// The read of a document's rows [`Self::table_body`] makes: the
@@ -3807,44 +3836,44 @@ impl<'u> Lowerer<'u> {
         let mut rc = self.rc(n, scope, outer);
         let mut pre = self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
-        let (seed, made) = (pre.len(), self.helpers.len());
+        let made = self.helpers.len();
         // An output typed by a resource type holds its address (`scoped` by
         // the module); any other output is a value, a resource in it the
         // reference (R-43).
-        let value = match Chain::of(&t) {
+        let (value, id) = match Chain::of(&t) {
             Some(c)
                 if addr_typed
                     && c.is_bare()
                     && !rc.vars.contains_key(&c.head)
                     && self.resource(scope, &c.head).is_some() =>
             {
-                str_term(&c.head)
+                (str_term(&c.head), self.str_node(self.span(&t), &c.head))
             }
-            _ if addr_typed => self.term(&mut rc, &t, Pos::Whole, &mut pre)?,
-            _ => self.term(&mut rc, &t, Pos::Value, &mut pre)?,
+            _ if addr_typed => self.arg_node(&mut rc, &t, Pos::Whole, &mut pre)?,
+            _ => self.arg_node(&mut rc, &t, Pos::Value, &mut pre)?,
         };
         let head = atom_at("output", vec![str_term(&name), value], span);
         match pre.is_empty() && clause.is_none() {
             true => self.check_bound(&rc, &[], &[&head.args[1]])?,
             false => self.check_bound(&rc, &pre, &head.args.iter().collect::<Vec<_>>())?,
         }
-        let parts = (name, declared, clause, seed, made);
+        let parts = (name, declared, clause, id, made);
         self.output_item(n, &rc, parts, head, pre)
     }
 
     /// An output row's item, of what it lowered to: its name, its type
-    /// where it declares the output, its clause, its value `head.args[1]`
-    /// after `pre[..seed]`, made the statement's helpers from `made`.
+    /// where it declares the output, its clause, its value's node, made
+    /// the statement's helpers from `made`.
     #[allow(clippy::type_complexity)]
     fn output_item(
         &mut self,
         n: &SyntaxNode,
         rc: &Rc,
-        (name, declared, clause, seed, made): (
+        (name, declared, clause, value, made): (
             String,
             Option<TypeExpr>,
             Option<crate::program::ClauseId>,
-            usize,
+            ExprId,
             usize,
         ),
         head: Atom,
@@ -3880,7 +3909,7 @@ impl<'u> Lowerer<'u> {
             clause,
             head: &head,
             body: &pre,
-            seed,
+            value,
             made: &self.helpers[made..],
             results: &results,
         };
@@ -3908,12 +3937,12 @@ impl<'u> Lowerer<'u> {
         let mut rc = self.rc(n, scope, outer);
         let mut pre = self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
-        let (seed, made) = (pre.len(), self.helpers.len());
-        let (value, ty) = self.output_fields(&mut rc, n, &mut pre)?;
+        let made = self.helpers.len();
+        let (value, id, ty) = self.output_fields(&mut rc, n, &mut pre)?;
         let declared = self.outputs.insert((scope, name.clone())).then_some(ty);
         let head = atom_at("output", vec![str_term(&name), value], span);
         self.check_bound(&rc, &pre, &head.args.iter().collect::<Vec<_>>())?;
-        let parts = (name, declared, clause, seed, made);
+        let parts = (name, declared, clause, id, made);
         self.output_item(n, &rc, parts, head, pre)
     }
 
@@ -3923,8 +3952,9 @@ impl<'u> Lowerer<'u> {
         rc: &mut Rc,
         n: &SyntaxNode,
         pre: &mut Vec<Lit>,
-    ) -> L<(Term, TypeExpr)> {
+    ) -> L<(Term, ExprId, TypeExpr)> {
         let mut value = BTreeMap::new();
+        let mut parts = Vec::new();
         let mut types = Vec::new();
         for a in n.children().filter(|c| c.kind() == ATTR_DECL) {
             let span = self.span(&a);
@@ -3935,22 +3965,29 @@ impl<'u> Lowerer<'u> {
                     format!("field {field}: a field is a name, given once"),
                 );
             }
-            let (v, t) = if node(&a, ATTR_DECL).is_some() {
+            let (v, id, t) = if node(&a, ATTR_DECL).is_some() {
                 self.output_fields(rc, &a, pre)?
             } else {
                 let Some(t) = terms(&a).next() else {
                     return self.error(span, format!("field {field} has no value: `{field} = t`"));
                 };
-                let v = self.term(rc, &t, Pos::Value, pre)?;
+                let (v, id) = self.arg_node(rc, &t, Pos::Value, pre)?;
                 let ty = node(&a, TYPE_EXPR)
                     .map(|t| self.type_expr(&t))
                     .unwrap_or_else(|| TypeExpr::Name("any".into()));
-                (v, ty)
+                (v, id, ty)
             };
             types.push((field.clone(), t));
+            parts.push(ObjPart::Field {
+                key: field.clone(),
+                key_span: span,
+                value: id,
+                pun: false,
+            });
             value.insert(field, v);
         }
-        Ok((Term::Obj(value), TypeExpr::Object(types)))
+        let id = self.node(self.span(n), ExprKind::Object { parts });
+        Ok((Term::Obj(value), id, TypeExpr::Object(types)))
     }
 
     /// The clause of a block statement: the `where` body after its block.
@@ -3969,7 +4006,7 @@ impl<'u> Lowerer<'u> {
         rc: &mut Rc,
         block: &SyntaxNode,
         reads: &mut Vec<Lit>,
-    ) -> L<Vec<(FieldAssign, (usize, usize))>> {
+    ) -> L<Vec<(FieldAssign, ExprId, (usize, usize))>> {
         let mut out = Vec::new();
         let mut failed = false;
         for a in block.children().filter(|c| c.kind() == ASSIGN) {
@@ -3980,7 +4017,7 @@ impl<'u> Lowerer<'u> {
                 } else {
                     FieldOp::Assign
                 };
-                let value = self.entry_value(rc, &a, Pos::Value, reads)?;
+                let (value, id) = self.entry_value(rc, &a, Pos::Value, reads)?;
                 let f = FieldAssign {
                     key,
                     op,
@@ -3988,7 +4025,7 @@ impl<'u> Lowerer<'u> {
                     rank: self.rank_tok(&a)?,
                     span: self.span(&a),
                 };
-                Ok((f, (reads.len(), self.helpers.len())))
+                Ok((f, id, (reads.len(), self.helpers.len())))
             })();
             match r {
                 Ok(f) => out.push(f),
@@ -4410,9 +4447,12 @@ impl<'u> Lowerer<'u> {
         let named_at = (body.len(), self.helpers.len());
         // A name from the clause (R-191): each row a copy, named as a
         // provider type's resource is.
-        let named = match header_name(n).filter(|_| named_by_clause(n)) {
-            Some(t) => Some(self.name_from_clause(&mut rc, &t, &mut body)?),
-            None => None,
+        let (named, named_id) = match header_name(n).filter(|_| named_by_clause(n)) {
+            Some(t) => {
+                let (t, id) = self.name_from_clause(&mut rc, &t, &mut body)?;
+                (Some(t), Some(id))
+            }
+            None => (None, None),
         };
         let clause = body.clone();
         let made = self.helpers.len();
@@ -4425,7 +4465,7 @@ impl<'u> Lowerer<'u> {
         body.extend(reads);
         let mut inputs = Vec::new();
         let mut from = (base, made);
-        for (f, (r, h)) in fields {
+        for (f, id, (r, h)) in fields {
             if matches!(f.op, FieldOp::Add) {
                 return self.error(f.span, "an input of a copy is set with `=`, not `+=`");
             }
@@ -4433,12 +4473,12 @@ impl<'u> Lowerer<'u> {
                 return self.error(f.span, "an input of a copy takes no rank");
             }
             let to = (base + r, h);
-            inputs.push((f.key, f.value, f.span, (from.0..to.0, from.1..to.1)));
+            inputs.push((f.key, f.value, f.span, id, from.1..to.1));
             from = to;
         }
         let values: Vec<&Term> = inputs
             .iter()
-            .map(|(_, v, _, _)| v)
+            .map(|(_, v, _, _, _)| v)
             .chain(named.as_ref())
             .collect();
         self.check_bound(&rc, &body, &values)?;
@@ -4455,7 +4495,7 @@ impl<'u> Lowerer<'u> {
                 named: named.clone(),
                 inputs: inputs
                     .iter()
-                    .map(|(k, v, at, _)| (k.clone(), v.clone(), *at))
+                    .map(|(k, v, at, _, _)| (k.clone(), v.clone(), *at))
                     .collect(),
                 rows: written_rows,
                 body: (!body.is_empty()).then(|| body.clone()),
@@ -4475,21 +4515,15 @@ impl<'u> Lowerer<'u> {
             kind,
             module,
             name,
-            named: named.as_ref().map(|t| {
-                let (r, h) = named_at;
-                (t, &body[r..base], &self.helpers[h..made])
-            }),
+            named: named_id.map(|id| (id, &self.helpers[named_at.1..made])),
             inputs: inputs
                 .iter()
-                .map(
-                    |(key, value, at, (r, h))| crate::program::build::InputGiven {
-                        key: key.clone(),
-                        span: *at,
-                        value,
-                        reads: &body[r.clone()],
-                        made: &self.helpers[h.clone()],
-                    },
-                )
+                .map(|(key, _, at, id, h)| crate::program::build::InputGiven {
+                    key: key.clone(),
+                    span: *at,
+                    value: *id,
+                    made: &self.helpers[h.clone()],
+                })
                 .collect(),
             rows,
             clause: gathered,
@@ -4614,16 +4648,22 @@ impl<'u> Lowerer<'u> {
         rc: &mut Rc,
         header: &SyntaxToken,
         body: &mut Vec<Lit>,
-    ) -> L<Term> {
+    ) -> L<(Term, ExprId)> {
         let mut pre = Vec::new();
-        let t = self.string_term(rc, header, &mut pre)?;
+        let s = self.string_expr(rc, header, &mut pre)?;
+        let t = self.lowered(s, &mut pre);
         body.extend(pre);
         let v = fresh(rc, "Addr");
         body.push(Lit::Eq(
             var(&v),
             func(crate::address::NAME_SEGMENT, vec![t]),
         ));
-        Ok(var(&v))
+        let span = self.span_of(header.text_range());
+        let id = self.building(rc, span, |b| {
+            let segment = b.form(crate::address::NAME_SEGMENT, vec![s]);
+            b.bound_into(segment, &v)
+        });
+        Ok((var(&v), id))
     }
 
     /// `resource T n { f = t ... } where B`, `T` a provider's type or one
@@ -4660,15 +4700,20 @@ impl<'u> Lowerer<'u> {
             Some(block) => {
                 let fields =
                     self.wanting(Want::Schema, |l| l.fields(&mut rc, block, &mut reads))?;
-                let (fields, ends) = fields.into_iter().unzip();
+                let (fields, ends): (Vec<_>, Vec<_>) = fields
+                    .into_iter()
+                    .map(|(f, id, end)| ((f, id), end))
+                    .unzip();
                 (fields, ends, None)
             }
             None => {
-                let (value, fields) = self.value_body(&mut rc, n, &mut reads)?;
+                let (_, value, fields) = self.value_body(&mut rc, n, &mut reads)?;
                 let end = (reads.len(), self.helpers.len());
+                let fields = fields.into_iter().map(|f| (f, value)).collect();
                 (fields, vec![end], Some(value))
             }
         };
+        let (fields, ids): (Vec<FieldAssign>, Vec<ExprId>) = fields.into_iter().unzip();
         let reads_at = body.len()..body.len() + reads.len();
         body.extend(reads);
         let named_at = (body.len(), self.helpers.len());
@@ -4676,8 +4721,11 @@ impl<'u> Lowerer<'u> {
         // bare name is the literal name, always (R-76). The name is one
         // segment of the address, quoted when it holds a dot (R-112).
         let interp = header.kind() == STRING && has_hole(header.text());
+        let mut named = None;
         let name = if interp {
-            self.name_from_clause(&mut rc, &header, &mut body)?
+            let (t, id) = self.name_from_clause(&mut rc, &header, &mut body)?;
+            named = Some(id);
+            t
         } else if header.kind() == STRING {
             str_term(&crate::address::name_segment(&self.string(&header)?))
         } else {
@@ -4741,33 +4789,30 @@ impl<'u> Lowerer<'u> {
             .zip(&ends)
             .map(|((r0, h0), &(r1, h1))| (r0..reads_at.start + r1, h0..h1))
             .collect();
-        let body_lowered = match &value {
+        let body_lowered = match value {
             Some(v) => BodyLowered::Value {
-                span: fields.first().map_or(span, |f| f.span),
                 value: v,
-                reads: &body[spans[0].0.clone()],
                 made: &self.helpers[spans[0].1.clone()],
             },
             None => BodyLowered::Block(
                 fields
                     .iter()
+                    .zip(&ids)
                     .zip(&spans)
-                    .map(|(f, (r, h))| EntryLowered {
+                    .map(|((f, id), (_, h))| EntryLowered {
                         path: &f.key,
                         op: f.op,
-                        value: &f.value,
+                        value: *id,
                         rank: f.rank,
                         span: f.span,
-                        reads: &body[r.clone()],
                         made: &self.helpers[h.clone()],
                     })
                     .collect(),
             ),
         };
-        let header_lowered = if interp {
+        let header_lowered = if let Some(value) = named {
             HeaderLowered::Interp {
-                value: &name,
-                reads: &body[named_at.0..],
+                value,
                 made: &self.helpers[named_at.1..],
             }
         } else if let Some(text) = literal {
@@ -4810,12 +4855,12 @@ impl<'u> Lowerer<'u> {
         rc: &mut Rc,
         n: &SyntaxNode,
         reads: &mut Vec<Lit>,
-    ) -> L<(Term, Vec<FieldAssign>)> {
+    ) -> L<(Term, ExprId, Vec<FieldAssign>)> {
         let t = terms(n).next().ok_or(Skip)?;
         let span = self.span(&t);
-        let value = self.wanting(Want::Schema, |l| l.term(rc, &t, Pos::Value, reads))?;
+        let (value, id) = self.wanting(Want::Schema, |l| l.arg_node(rc, &t, Pos::Value, reads))?;
         match crate::program::lower::value_entries(value.clone(), span) {
-            Some(entries) => Ok((value, entries)),
+            Some(entries) => Ok((value, id, entries)),
             None => self.error(
                 span,
                 format!(
@@ -4845,8 +4890,8 @@ impl<'u> Lowerer<'u> {
                 ty: Some(TypeExpr::Name(ty.into())),
             })
             .to_vec();
-        let (seed, made) = (body.len(), self.helpers.len());
-        let externs = self.doc_source(
+        let made = self.helpers.len();
+        let (externs, rows) = self.doc_source(
             &mut rc,
             n,
             crate::tables::SET_DOC,
@@ -4882,7 +4927,7 @@ impl<'u> Lowerer<'u> {
             externs,
             head: &head,
             body: &body,
-            seed,
+            rows,
             made: &self.helpers[made..],
             results: &results,
         };
@@ -4923,6 +4968,7 @@ impl<'u> Lowerer<'u> {
             span: self.span(n),
             scope: self.item_scope,
             head: &r.head,
+            args: r.args,
             rank: r.rank,
             clause: r.clause,
             body: &r.body,
@@ -4974,9 +5020,10 @@ impl<'u> Lowerer<'u> {
             );
         }
         let (seed, made) = (body.len(), self.helpers.len());
-        let head = self.calls(calls, |l| {
-            l.atom(&mut rc, &head_node, Pos::Whole, &mut body)
+        let (head, args) = self.calls(calls, |l| {
+            l.atom_args(&mut rc, &head_node, Pos::Whole, &mut body)
         })?;
+        let args = args.map(|args| self.rel_args(&rc, head.span, args));
         let rank = self.rank_tok(n)?;
         let mut ranked = head.clone();
         if let Some(rank) = rank {
@@ -4998,6 +5045,7 @@ impl<'u> Lowerer<'u> {
             has_body,
             clause,
             head,
+            args,
             ranked,
             rank,
             body,
@@ -5052,7 +5100,7 @@ impl<'u> Lowerer<'u> {
         let (seed, made) = (body.len(), self.helpers.len());
         let t = terms(n).next().ok_or(Skip)?;
         let aggregate = t.kind() == CALL && self.aggregate_name(&t).is_some();
-        let value = if aggregate {
+        let (value, id) = if aggregate {
             // `let n = count(x) where B`: one group (R-59).
             let call = self.aggregate_call(&mut rc, &t, &mut body)?;
             let v = fresh(&mut rc, &capitalise(&name));
@@ -5062,13 +5110,18 @@ impl<'u> Lowerer<'u> {
                 span: self.span(&t),
             });
             body.push(Lit::Eq(var(&v), call));
-            var(&v)
+            (var(&v), None)
         } else {
-            self.wanting(want, |l| l.let_value(&mut rc, &t, &mut body))?
+            let (value, id) = self.wanting(want, |l| l.let_value(&mut rc, &t, &mut body))?;
+            (value, Some(id))
         };
-        let value = match (&ty, &declared) {
-            (Some(ty), Some(d)) => self.let_typed(scope, &name, (ty, d), &t, value)?,
-            _ => value,
+        let (value, id) = match (&ty, &declared) {
+            (Some(ty), Some(d)) => {
+                let typed = self.let_typed(scope, &name, (ty, d), &t, value.clone())?;
+                let id = id.map(|id| self.retyped(&rc, id, &value, typed.clone()));
+                (typed, id)
+            }
+            _ => (value, id),
         };
         let rank = self.rank_tok(n)?;
         let head = Atom {
@@ -5118,6 +5171,7 @@ impl<'u> Lowerer<'u> {
             head: &head,
             body: &body,
             seed,
+            value: id,
             aggregate,
             made: &self.helpers[made..],
             results: &results,
@@ -5297,7 +5351,7 @@ impl<'u> Lowerer<'u> {
 
     /// A `let`'s value: a reference is its key (a resource's address, a
     /// live object's name); anything else the term.
-    fn let_value(&mut self, rc: &mut Rc, t: &SyntaxNode, body: &mut Vec<Lit>) -> L<Term> {
+    fn let_value(&mut self, rc: &mut Rc, t: &SyntaxNode, body: &mut Vec<Lit>) -> L<(Term, ExprId)> {
         if let Some(c) = Chain::of(t) {
             // A resource by its bare name.
             if c.is_bare()
@@ -5307,7 +5361,7 @@ impl<'u> Lowerer<'u> {
             {
                 let span = self.span(t);
                 let (_, addr) = self.reference(rc, &c, body, span)?;
-                return Ok(self.term_of(addr));
+                return Ok((self.term_of(addr), addr));
             }
             let mut pre = Vec::new();
             let mut rc2 = rc.clone();
@@ -5320,11 +5374,11 @@ impl<'u> Lowerer<'u> {
                 if let Some(k) = key {
                     *rc = rc2;
                     body.extend(pre);
-                    return Ok(self.term_of(k));
+                    return Ok((self.term_of(k), k));
                 }
             }
         }
-        self.term(rc, t, Pos::Value, body)
+        self.arg_node(rc, t, Pos::Value, body)
     }
 
     /// `set chain (=|+=) t [@rank] [where B]` (H-5): a contribution to a
@@ -5870,14 +5924,17 @@ impl<'u> Lowerer<'u> {
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
-        let (seed, made) = (body.len(), self.helpers.len());
+        let made = self.helpers.len();
         // The message is a string like any other: `${e}` reads the body's
         // variables (H-13).
-        let message = self.string_term(&mut rc, &msg, &mut body)?;
-        let (mid, made_mid) = (body.len(), self.helpers.len());
-        let mut args = vec![message];
+        let message = self.string_expr(&mut rc, &msg, &mut body)?;
+        let mut args = vec![self.lowered(message, &mut body)];
+        let made_mid = self.helpers.len();
+        let mut detail = None;
         if let Some(o) = node(n, OBJECT) {
-            args.push(self.term(&mut rc, &o, Pos::Whole, &mut body)?);
+            let (t, id) = self.arg_node(&mut rc, &o, Pos::Whole, &mut body)?;
+            args.push(t);
+            detail = Some(id);
         }
         let head = Atom {
             pred: kw.text().to_string(),
@@ -5902,8 +5959,8 @@ impl<'u> Lowerer<'u> {
             clause,
             head: &head,
             body: &body,
-            seed,
-            mid,
+            message,
+            detail,
             made: (&self.helpers[made..made_mid], &self.helpers[made_mid..]),
             results: &results,
         };
@@ -7137,12 +7194,8 @@ impl<'u> Lowerer<'u> {
     }
 
     /// A relation atom, its arguments lowered at `pos`: positional, or
-    /// named by the relation's columns (`p(a: x)`, H-12).
-    fn atom(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Atom> {
-        Ok(self.atom_args(rc, n, pos, pre)?.0)
-    }
-
-    /// [`Self::atom`], and its arguments' nodes where each is one.
+    /// named by the relation's columns (`p(a: x)`, H-12); and its
+    /// arguments' nodes where each is one.
     fn atom_args(
         &mut self,
         rc: &mut Rc,
@@ -7361,16 +7414,19 @@ impl<'u> Lowerer<'u> {
             name: a.pred.clone(),
             span,
         };
-        self.building(rc, span, |b| {
-            let args = match args {
-                AtomArgs::Positional(xs) => {
-                    RelArgs::Positional(xs.into_iter().map(|x| b.pattern_of(x)).collect())
-                }
-                AtomArgs::Record(xs) => {
-                    RelArgs::Record(xs.into_iter().map(|(k, x)| (k, b.pattern_of(x))).collect())
-                }
-            };
-            b.goal_node(span, GoalKind::Rel { rel, args })
+        let args = self.rel_args(rc, span, args);
+        self.goal(rc, span, GoalKind::Rel { rel, args })
+    }
+
+    /// The atom's arguments `args` at `span`, each in a binding position.
+    fn rel_args(&mut self, rc: &Rc, span: Span, args: AtomArgs) -> RelArgs {
+        self.building(rc, span, |b| match args {
+            AtomArgs::Positional(xs) => {
+                RelArgs::Positional(xs.into_iter().map(|x| b.pattern_of(x)).collect())
+            }
+            AtomArgs::Record(xs) => {
+                RelArgs::Record(xs.into_iter().map(|(k, x)| (k, b.pattern_of(x))).collect())
+            }
         })
     }
 
@@ -8078,6 +8134,74 @@ impl<'u> Lowerer<'u> {
         self.node(span, ExprKind::Lit(v))
     }
 
+    /// `id`, whose term is `was`, as a declared type reads it, `now`: a
+    /// constant read as the type ([`Self::read_as`]), the value read `as`
+    /// it (`__as(v, "T")`), a written list's or object's parts each read
+    /// so.
+    fn retyped(&mut self, rc: &Rc, id: ExprId, was: &Term, now: Term) -> ExprId {
+        if *was == now {
+            return id;
+        }
+        let e = self.program.exprs[id].clone();
+        match (&now, was, e.kind) {
+            (Term::Func { name, args }, _, _) if name == crate::types::AS => {
+                match args.as_slice() {
+                    [v, Term::Val(Value::Str(ty))] if v == was => {
+                        let ty = TypeExpr::Name(ty.clone());
+                        self.node(e.span, ExprKind::As { value: id, ty })
+                    }
+                    _ => self.building(rc, Span::default(), |b| b.expr(&now)),
+                }
+            }
+            (Term::List(ns), Term::List(ws), ExprKind::List { parts })
+                if e.hoisted.is_none()
+                    && ns.len() == parts.len()
+                    && ws.len() == parts.len()
+                    && parts.iter().all(|p| matches!(p, ListPart::Elem(_))) =>
+            {
+                let parts = parts
+                    .into_iter()
+                    .zip(ws.iter().zip(ns))
+                    .map(|(p, (w, n))| match p {
+                        ListPart::Elem(x) => ListPart::Elem(self.retyped(rc, x, w, n.clone())),
+                        p => p,
+                    })
+                    .collect();
+                self.node(e.span, ExprKind::List { parts })
+            }
+            (Term::Obj(ns), Term::Obj(ws), ExprKind::Object { parts })
+                if e.hoisted.is_none()
+                    && parts.iter().all(|p| {
+                        matches!(p, ObjPart::Field { key, .. }
+                            if ws.contains_key(key) && ns.contains_key(key))
+                    }) =>
+            {
+                let parts = parts
+                    .into_iter()
+                    .map(|p| match p {
+                        ObjPart::Field {
+                            key,
+                            key_span,
+                            value,
+                            pun,
+                        } => {
+                            let value = self.retyped(rc, value, &ws[&key], ns[&key].clone());
+                            ObjPart::Field {
+                                key,
+                                key_span,
+                                value,
+                                pun,
+                            }
+                        }
+                        p => p,
+                    })
+                    .collect();
+                self.node(e.span, ExprKind::Object { parts })
+            }
+            _ => self.read_as(id, was, now),
+        }
+    }
+
     /// A literal: an int, a quantity (R-66), a string, a bool.
     fn literal(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<ExprId> {
         match tokens(n).next() {
@@ -8538,15 +8662,7 @@ impl<'u> Lowerer<'u> {
         Ok(self.node(span, ExprKind::Range { lo, hi, inclusive }))
     }
 
-    /// A string literal: `"a${e}b"` is `str.format("a%sb", e)` (H-13), `$${`
-    /// is a literal `${`, and a brace is itself.
-    fn string_term(&mut self, rc: &mut Rc, t: &SyntaxToken, pre: &mut Vec<Lit>) -> L<Term> {
-        let id = self.string_expr(rc, t, pre)?;
-        Ok(self.lowered(id, pre))
-    }
-
-    /// [`Lowerer::string_term`] as its node: its text, or its pieces of
-    /// text and holes.
+    /// A string's node: its text, or its pieces of text and holes.
     fn string_expr(&mut self, rc: &mut Rc, t: &SyntaxToken, pre: &mut Vec<Lit>) -> L<ExprId> {
         use crate::program::node::Piece as Part;
         let text = t.text();
@@ -8624,9 +8740,9 @@ impl<'u> Lowerer<'u> {
         a: &SyntaxNode,
         pos: Pos,
         reads: &mut Vec<Lit>,
-    ) -> L<Term> {
+    ) -> L<(Term, ExprId)> {
         if let Some(t) = terms(a).next() {
-            return self.term(rc, &t, pos, reads);
+            return self.arg_node(rc, &t, pos, reads);
         }
         let path = node(a, BLOCK_PATH).ok_or(Skip)?;
         let seg = tokens(&path).last().ok_or(Skip)?;
@@ -8659,23 +8775,11 @@ impl<'u> Lowerer<'u> {
             return Err(Skip);
         }
         let at: u32 = seg.text_range().start().into();
-        self.text_term(rc, seg.text(), at, pos, reads)
+        let id = self.text_expr(rc, seg.text(), at, pos, reads)?;
+        Ok((self.lowered(id, reads), id))
     }
 
-    /// The term `src`, written at byte `at`, lowered as a term in `pos`.
-    fn text_term(
-        &mut self,
-        rc: &mut Rc,
-        src: &str,
-        at: u32,
-        pos: Pos,
-        pre: &mut Vec<Lit>,
-    ) -> L<Term> {
-        let id = self.text_expr(rc, src, at, pos, pre)?;
-        Ok(self.lowered(id, pre))
-    }
-
-    /// [`Lowerer::text_term`] as its node.
+    /// The term `src`, written at byte `at`, as its node in `pos`.
     fn text_expr(
         &mut self,
         rc: &mut Rc,
@@ -10434,7 +10538,8 @@ struct TableRows {
     externs: Vec<Stmt>,
     head: Atom,
     body: Vec<Lit>,
-    seed: usize,
+    /// The goal reading the document's rows.
+    rows: GoalId,
     made: usize,
 }
 

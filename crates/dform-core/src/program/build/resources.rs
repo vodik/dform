@@ -7,9 +7,9 @@
 //! the term's node; the clause B's goals as gathered.
 
 use super::Builder;
-use crate::ast::{FieldOp, Lit, Rank, Span, Stmt, Term};
+use crate::ast::{FieldOp, Rank, Span, Stmt};
 use crate::program::node::{
-    ClauseId, Entry, Header, Item, ItemId, ItemKind, ResourceBody, TypeRef,
+    ClauseId, Entry, ExprId, Header, Item, ItemId, ItemKind, ResourceBody, TypeRef,
 };
 use crate::program::scope::ScopeId;
 
@@ -29,11 +29,10 @@ pub struct ResourceLowered<'a> {
 pub enum HeaderLowered<'a> {
     Bare(&'a str),
     Literal(String),
-    /// From the clause: its variable, the reads its holes hoisted and the
-    /// binding of its segment, and the helpers its terms made.
+    /// From the clause: the binding of its segment's node, and the
+    /// helpers its terms made.
     Interp {
-        value: &'a Term,
-        reads: &'a [Lit],
+        value: ExprId,
         made: &'a [Stmt],
     },
 }
@@ -41,25 +40,21 @@ pub enum HeaderLowered<'a> {
 /// A body as the resolver lowered it.
 pub enum BodyLowered<'a> {
     Block(Vec<EntryLowered<'a>>),
-    /// `= v` at `span`: its value, the reads it hoisted, the helpers its
-    /// terms made.
+    /// `= v`: its value's node, the helpers its terms made.
     Value {
-        span: Span,
-        value: &'a Term,
-        reads: &'a [Lit],
+        value: ExprId,
         made: &'a [Stmt],
     },
 }
 
-/// One entry: its path, value and rank, the reads its value hoisted and
-/// the helpers its terms made.
+/// One entry: its path, its value's node and its rank, the helpers its
+/// terms made.
 pub struct EntryLowered<'a> {
     pub path: &'a str,
     pub op: FieldOp,
-    pub value: &'a Term,
+    pub value: ExprId,
     pub rank: Option<Rank>,
     pub span: Span,
-    pub reads: &'a [Lit],
     pub made: &'a [Stmt],
 }
 
@@ -73,25 +68,18 @@ impl Builder<'_> {
                     .map(|e| Entry {
                         path: e.path.to_string(),
                         op: e.op,
-                        value: self.at(e.span, |b| b.made(e.value, e.reads, e.made)),
+                        value: self.holding(e.value, e.made),
                         rank: e.rank,
                         span: e.span,
                     })
                     .collect(),
             ),
-            BodyLowered::Value {
-                span,
-                value,
-                reads,
-                made,
-            } => ResourceBody::Value(self.at(span, |b| b.made(value, reads, made))),
+            BodyLowered::Value { value, made } => ResourceBody::Value(self.holding(value, made)),
         };
         let name = match r.name {
             HeaderLowered::Bare(n) => Header::Bare(n.to_string()),
             HeaderLowered::Literal(s) => Header::Literal(s),
-            HeaderLowered::Interp { value, reads, made } => {
-                Header::Interp(self.made(value, reads, made))
-            }
+            HeaderLowered::Interp { value, made } => Header::Interp(self.holding(value, made)),
         };
         let kind = ItemKind::Resource {
             typ: r.typ,

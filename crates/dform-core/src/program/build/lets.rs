@@ -12,7 +12,7 @@
 use super::{Builder, Form, Written, grouped, number_folds};
 use crate::ast::{Atom, Lit, Rank, Span, Stmt, TypeExpr};
 use crate::program::NodeId;
-use crate::program::node::{ClauseId, Item, ItemId, ItemKind, Param};
+use crate::program::node::{ClauseId, ExprId, Item, ItemId, ItemKind, Param};
 use crate::program::scope::ScopeId;
 
 /// A `let` as the resolver lowered it.
@@ -33,6 +33,9 @@ pub struct LetLowered<'a> {
     /// aggregate's binding after the reads its call hoisted.
     pub body: &'a [Lit],
     pub seed: usize,
+    /// The value's node, as the resolver built it; none for an
+    /// aggregate's, its variable.
+    pub value: Option<ExprId>,
     pub aggregate: bool,
     /// The helper statements the value's terms made.
     pub made: &'a [Stmt],
@@ -46,7 +49,7 @@ impl Builder<'_> {
     pub fn let_item(&mut self, l: LetLowered) -> Option<ItemId> {
         let value = &l.head.args[1];
         let mut clause = l.clause;
-        let (value, made_by) = match l.aggregate {
+        let value = match l.aggregate {
             true => {
                 let form = Form::Compare {
                     bind: true,
@@ -65,16 +68,14 @@ impl Builder<'_> {
                 };
                 let fold = self.literal(&w)?;
                 clause = Some(self.ending(clause, fold));
-                (self.expr(value), NodeId::Goal(fold))
+                if !l.made.is_empty() {
+                    let made = l.made.to_vec();
+                    self.program.terms_made.insert(NodeId::Goal(fold), made);
+                }
+                self.expr(value)
             }
-            false => {
-                let e = self.hoisted(value, &l.body[l.seed..]);
-                (e, NodeId::Expr(e))
-            }
+            false => self.holding(l.value.expect("a value's node"), l.made),
         };
-        if !l.made.is_empty() {
-            self.program.terms_made.insert(made_by, l.made.to_vec());
-        }
         if let Some(c) = clause
             && !l.results.is_empty()
             && grouped(l.head, l.body, l.results)
@@ -107,9 +108,10 @@ pub struct LetFnLowered<'a> {
     pub clause: Option<ClauseId>,
     /// `f(params, v)`, as the resolver wrote it.
     pub head: &'a Atom,
-    /// The demand, B's literals, then from `seed` the value's reads.
+    /// The demand, B's literals, then the value's reads.
     pub body: &'a [Lit],
-    pub seed: usize,
+    /// The value's node, as the resolver built it.
+    pub value: ExprId,
     /// The helper statements the value's terms made.
     pub made: &'a [Stmt],
     pub results: &'a [String],
@@ -119,7 +121,7 @@ impl Builder<'_> {
     /// The `LetFn` item of `l`: its parameters the head's leading
     /// variables, its value the last column's node after its reads.
     pub fn let_fn_item(&mut self, l: LetFnLowered) -> ItemId {
-        let (value, params) = l.head.args.split_last().expect("a value column");
+        let (_, params) = l.head.args.split_last().expect("a value column");
         let params = params
             .iter()
             .map(|t| match t {
@@ -131,7 +133,7 @@ impl Builder<'_> {
                 t => unreachable!("a parameter is a variable: {t:?}"),
             })
             .collect();
-        let value = self.made(value, &l.body[l.seed..], l.made);
+        let value = self.holding(l.value, l.made);
         if let Some(c) = l.clause
             && !l.results.is_empty()
             && grouped(l.head, l.body, l.results)

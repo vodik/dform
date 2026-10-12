@@ -7,7 +7,7 @@
 
 use super::{Builder, grouped, number_folds};
 use crate::ast::{Atom, Lit, Span, Stmt, TypeExpr};
-use crate::program::node::{ClauseId, Item, ItemId, ItemKind};
+use crate::program::node::{ClauseId, ExprId, Item, ItemId, ItemKind};
 use crate::program::scope::ScopeId;
 
 /// An output row as the resolver lowered it.
@@ -21,9 +21,10 @@ pub struct OutputLowered<'a> {
     pub clause: Option<ClauseId>,
     /// `output(k, v)`, as the resolver wrote it.
     pub head: &'a Atom,
-    /// B's literals, then from `seed` the value's reads.
+    /// B's literals, then the value's reads.
     pub body: &'a [Lit],
-    pub seed: usize,
+    /// The value's node, as the resolver built it.
+    pub value: ExprId,
     /// The helper statements the value's terms made.
     pub made: &'a [Stmt],
     /// The statement's aggregate values.
@@ -33,7 +34,7 @@ pub struct OutputLowered<'a> {
 impl Builder<'_> {
     /// The `Output` item of `o`.
     pub fn output_item(&mut self, o: OutputLowered) -> ItemId {
-        let value = self.made(&o.head.args[1], &o.body[o.seed..], o.made);
+        let value = self.holding(o.value, o.made);
         if let Some(c) = o.clause
             && !o.results.is_empty()
             && grouped(o.head, o.body, o.results)

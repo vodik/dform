@@ -138,13 +138,18 @@ impl Lowerer<'_> {
             None => vec![demand],
         };
         let clause = self.body_clause(n);
-        let (seed, made) = (body.len(), self.helpers.len());
+        let made = self.helpers.len();
         let t = terms(n).next().ok_or(Skip)?;
         let declared = node(n, TYPE_EXPR).map(|t| self.type_expr(&t));
-        let value = self.let_value(&mut rc, &t, &mut body)?;
-        let value = match &declared {
-            Some(d) => self.let_typed(scope, &name, (&crate::types::of_expr(d), d), &t, value)?,
-            None => value,
+        let (value, id) = self.let_value(&mut rc, &t, &mut body)?;
+        let (value, id) = match &declared {
+            Some(d) => {
+                let ty = (&crate::types::of_expr(d), d);
+                let typed = self.let_typed(scope, &name, ty, &t, value.clone())?;
+                let id = self.retyped(&rc, id, &value, typed.clone());
+                (typed, id)
+            }
+            None => (value, id),
         };
         let mut args = vars;
         args.push(value);
@@ -177,7 +182,7 @@ impl Lowerer<'_> {
             clause,
             head: &head,
             body: &body,
-            seed,
+            value: id,
             made: &self.helpers[made..],
             results: &results,
         };
