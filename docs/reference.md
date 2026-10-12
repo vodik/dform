@@ -921,6 +921,17 @@ see drift:
 cargo run -- -C tests/fixtures/demo dev --world ../world/dform.json plan   # steady state: no changes
 ```
 
+A run reads each object state maps once between two of its writes: round
+0, the plan and the executor's comparison see the same Read, and a
+provider configured mid-plan (from a kubeconfig read off a server) adds
+its own objects' Reads, not every object's again. A Read that failed is
+asked again; a provider configured again with other settings reads its
+own objects again; what the run writes it reads again. A run reads each
+of its state objects in a bucket (the state, the audit log, the master)
+once too, until it writes one; a lease, published outputs and approvals
+are read every time, since another process may change them while it
+waits.
+
 Only what state maps is the stack's: an object in the world file that state
 does not name is someone else's, never refreshed, updated or deleted, and a
 resource of the same name is a create until an `adopt` names it (see "Adopt
@@ -943,6 +954,16 @@ controller`, the event that started it. Schema returns the schema as facts, Plan
 and a sensitive computed value only ever crosses as its label. dform owns
 ordering, parallelism, state and crash safety: a provider that dies during an
 Apply is a failed action naming the resource, and the next `apply` resumes.
+dform paces the HTTP requests a provider sends through the host
+(`dform:host/http`) by what the server answers, a window of requests in
+flight per bucket: the bucket is
+the provider's word on a request (`Request::bucket("ec2.describe")`,
+`"route53.change:ZONE"` for a limit an object has; none, the provider's
+default), and nobody declares a rate. A window starts at two, grows while
+the server answers, halves on a 429, a 503 or a timeout, and a
+`Retry-After` pauses its bucket that long; the throttled request is
+answered to the provider as the server answered it, and its retry waits
+its turn. At most 64 of a bucket's requests are in flight.
 A provider built on `dform-grpc`'s `transport::serve`, the mock included, listens
 on TCP unless `DFORM_PROVIDER_TRANSPORT=unix` is in its environment (which it
 inherits from dform): then on a socket in the temporary directory, removed
@@ -3899,6 +3920,20 @@ nothing before it binds is a compile error. Evaluation is by rounds: every
 call the rules demand is asked once, then the program is evaluated again,
 until no call is new.
 
+One run fetches each call once: an extern and its inputs are asked of
+their provider once, however many files write the call and however many
+rounds ask it, and `apply PLAN` asks nothing the plan answered; so a run
+sees one snapshot of the outside world, and no tag moves between two
+reads of it. A "not yet" (an open null) is no answer, and is asked again
+when the run waits on it. The calls of a round are independent (each
+reads only the rounds before it), so they are asked together: an
+image's digest and a document's read on threads of their own, a
+provider's calls sent before any answer is taken; the round waits on its
+slowest call. A call that answers one row whatever it is asked
+(`oci.resolve`, `io.read`) does not hold back a later call in the same
+body that does not read its answer: the images of a list are one round.
+That changes when a call is asked, never how many are.
+
 `env` and `time` are built-in fact providers, declared like any
 provider and needing no `dform.toml` source; a file is read by
 `io.read(LOCATION)`, the one read, a std function with no provider
@@ -5077,6 +5112,7 @@ fails says its trace id after the error. The spans:
 | `io.call` | a request dform makes itself (a client span) | `kind` (`s3.get`, `s3.put`, `s3.list`, `io.read`, `oci.resolve`), `addr` (the location, without its userinfo, query or fragment) |
 | `tick` | an apply tick | `tick` |
 | `apply.wait` | a tick waiting on values the world has not reached (R-81) | `tick`, `kind` (`world`, `extern`), `count` |
+| `ratelimit.wait` | a provider's request waiting on its bucket's window in the host | `provider`, `bucket`, `queued` (the requests before it), `window` |
 
 Every span has `seq`, its number in the run, and `waited_on`, the `seq`
 of the span that ended last before it began. The run sends its calls
