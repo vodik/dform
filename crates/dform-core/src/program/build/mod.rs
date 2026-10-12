@@ -4,15 +4,14 @@
 //! name, a helper's number) is picked here and kept on the node, so
 //! `lower` picks nothing.
 //!
-//! Step 3 builds a term from what the resolver lowered it to, its
-//! `ast::Term` and the reads it hoisted ([`Builder::hoisted`]): every
-//! form a term takes there has its node, a read in term position its own
-//! (`hoist.rs`), and `lower` gives the term back. The statement builders
-//! read the tree (step 5), and the resolver builds each term it reads
-//! off the tree as its node (step 7), lowering it for the rules it still
-//! writes; a statement's items hold the nodes built from what that
-//! lowered to (`program::check` holds the two equal under
-//! `DFORM_CHECK_LOWER=1`).
+//! The resolver builds each term it reads off the tree as its node
+//! (step 7), each literal's goal of those nodes and each statement's item
+//! of them (step 7c), lowering them for the rules it still writes
+//! (`program::check` holds the two equal under `DFORM_CHECK_LOWER=1`).
+//! A term is built here from what the resolver lowered it to, its
+//! `ast::Term` and the reads it hoisted ([`Builder::hoisted`]), only for
+//! what the resolver writes as a term: a comprehension outside a
+//! statement, and what that comparison builds.
 
 mod aggregate;
 mod checks;
@@ -26,7 +25,6 @@ mod inputs;
 mod lets;
 mod membership;
 mod modules;
-mod negation;
 mod outputs;
 mod pattern;
 mod providers;
@@ -36,7 +34,7 @@ mod spread;
 
 pub use aggregate::{fold_numbers, grouped, number_folds};
 pub use checks::CheckLowered;
-pub use clause::{Form, Written};
+pub use clause::Written;
 pub use contributions::{SetFromLowered, SetLowered, TargetLowered, WriteLowered};
 pub use gather::{Gather, Statement};
 pub use hoist::{Keyed, ReadOf};
@@ -48,8 +46,8 @@ pub use providers::{ProviderLowered, SettingKind, SettingLowered};
 pub use resources::{BodyLowered, EntryLowered, HeaderLowered, ResourceLowered};
 pub use rules::RuleLowered;
 
-use super::node::{Expr, ExprId, ExprKind, ItemId, Var, VarId};
-use super::{Program, Read};
+use super::Program;
+use super::node::{Expr, ExprId, ExprKind, Var, VarId};
 use crate::ast::Span;
 use std::collections::BTreeMap;
 
@@ -59,8 +57,6 @@ pub struct Builder<'p> {
     /// Where what is built from a lowered term stands: the term's span
     /// (its parts have none of their own there), or an atom's.
     span: Span,
-    /// The item the variables belong to.
-    item: Option<ItemId>,
     /// Each variable built, by the name it lowers to: two uses of one
     /// variable are one `VarId`.
     vars: BTreeMap<String, VarId>,
@@ -70,17 +66,15 @@ pub struct Builder<'p> {
     /// The reads hoisted before what is being built that no node holds
     /// yet, in order, each by the variable it binds (`hoist.rs`).
     pending: Vec<hoist::Pending>,
-    /// What each read the front end hoisted in the statement reads.
+    /// The reads the resolver kept of the statement, and its tests.
     reads: Reads,
 }
 
-/// What each read the front end hoisted in a statement reads, by its
-/// relation and the variable it binds; and the node of each read built
-/// where its term is (step 7), by the variable it binds: what holds the
-/// read's literal holds that node (`hoist.rs`).
+/// The node of each read the resolver built where its term is (step 7),
+/// by the variable it binds: what holds the read's literal holds that
+/// node (`hoist.rs`).
 #[derive(Default)]
 pub struct Reads {
-    kinds: BTreeMap<(String, String), Read>,
     nodes: BTreeMap<String, Vec<ExprId>>,
     /// The tests the resolver made before what holds them (a copy named
     /// by its key, `instance_of`), each by its literal as written: its
@@ -94,7 +88,6 @@ impl<'p> Builder<'p> {
         Builder {
             program,
             span,
-            item: None,
             vars: BTreeMap::new(),
             written,
             pending: Vec::new(),
@@ -116,12 +109,6 @@ impl<'p> Builder<'p> {
         (self.vars, self.reads)
     }
 
-    /// The variables built belong to `item`.
-    pub fn in_item(mut self, item: ItemId) -> Self {
-        self.item = Some(item);
-        self
-    }
-
     pub(super) fn expr_node(&mut self, kind: ExprKind) -> ExprId {
         self.program.exprs.insert(Expr {
             span: self.span,
@@ -139,7 +126,7 @@ impl<'p> Builder<'p> {
             name: crate::syntax::resolve::source_name(lowered),
             lowered: lowered.to_string(),
             first: self.span,
-            item: self.item,
+            item: None,
             implicit: !(self.written)(lowered),
         });
         self.vars.insert(lowered.to_string(), v);

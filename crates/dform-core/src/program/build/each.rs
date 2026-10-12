@@ -13,6 +13,6 @@ use crate::program::node::GoalId;
 impl Builder<'_> {
     /// The membership a `set` target's `[_]` binds its variable by.
     pub fn each(&mut self, w: &Written) -> Option<GoalId> {
-        self.at(w.span, |b| b.membership(w, false, false))
+        self.at(w.span, |b| b.membership(w))
     }
 }

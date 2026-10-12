@@ -10,10 +10,10 @@
 //! { }` rule, a loader's extern) no node of the term lowers to yet: they
 //! are the goal's, [`Program::terms_made`], lowered before its own.
 
-use super::{Builder, Form, Reads, Written};
+use super::{Builder, Reads, Written};
 use crate::ast::{Lit, Span, Stmt};
 use crate::program::node::{ClauseId, GoalId, VarId};
-use crate::program::{NodeId, Program, Read, check};
+use crate::program::{NodeId, Program, check};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
@@ -24,7 +24,7 @@ pub struct Gather {
     frames: Vec<Frame>,
     /// The statement's variables, by the name each lowers to.
     vars: BTreeMap<String, VarId>,
-    /// What each read the statement hoisted reads.
+    /// The reads the statement's resolver kept, and its tests.
     reads: Reads,
     /// The clause of the statement's body, once it is lowered whole.
     clause: Option<ClauseId>,
@@ -48,9 +48,6 @@ struct Frame {
     goals: Vec<(GoalId, BTreeSet<usize>)>,
     /// Whether each literal lowered inside it was built.
     failed: bool,
-    /// The value column of the read the literal tests in place, and what
-    /// it reads.
-    read: Option<(usize, Read)>,
     /// The `__neg_N` it took, the statement's aggregate values then, and
     /// where in `goals` its body starts.
     negation: Option<(u32, Vec<String>, usize)>,
@@ -71,25 +68,9 @@ impl Gather {
         }
     }
 
-    /// The statement hoisted the read `pred(.., var, ..)`, which reads
-    /// `read`.
-    pub fn hoisted(&mut self, pred: &str, var: &str, read: Read) {
-        self.reads
-            .kinds
-            .insert((pred.to_string(), var.to_string()), read);
-    }
-
     /// A literal's or a clause's lowering starts.
     pub fn open(&mut self) {
         self.frames.push(Frame::default());
-    }
-
-    /// The literal being lowered tests or binds the read `read` in
-    /// place, its value in `column`.
-    pub fn read(&mut self, column: usize, read: Read) {
-        if let Some(f) = self.frames.last_mut() {
-            f.read = Some((column, read));
-        }
     }
 
     /// The resolver made the test `lit` before what holds it as the goal
@@ -242,98 +223,69 @@ impl Gather {
         self.clause = outer.clause;
     }
 
-    /// The written literal being lowered, `form` at `span`, lowered to
-    /// `out[start..mid]` (`out[mid..]` the field reads after it) after the
-    /// clause's `out[..start]`, and making `helpers[made..]`: built as a
-    /// goal in `program`, one of the frame around it, the helpers its
-    /// terms made the goal's.
-    #[allow(clippy::too_many_arguments)]
+    /// The written literal being lowered at `span`, lowered to
+    /// `out[start..]` after the clause's `out[..start]`, and making
+    /// `helpers[made..]`: the goal the resolver built of it, one of the
+    /// frame around it, the helpers its terms made the goal's. The
+    /// literals the resolver made before it that no node of it holds are
+    /// made of what the statement kept ([`Builder::made_goal`]); a literal
+    /// the goal does not lower to is not built.
     pub fn literal(
         &mut self,
         program: &mut Program,
-        form: Option<&Form>,
         span: Span,
         out: &[Lit],
-        (start, mid): (usize, usize),
+        start: usize,
         (helpers, made): (&[Stmt], usize),
         written: &dyn Fn(&str) -> bool,
     ) {
         let frame = self.frames.pop().expect("a literal's frame");
-        let built = form.and_then(|form| {
-            let own = frame.own(helpers, made);
-            let negation = frame.negation.as_ref();
-            let body: Vec<GoalId> = negation.map_or(Vec::new(), |(_, _, from)| {
-                frame.goals[*from..].iter().map(|(g, _)| *g).collect()
-            });
-            let w = Written {
-                form,
-                span,
-                lits: &out[start..mid],
-                after: &out[mid..],
-                helpers: &own,
-                body: &body,
-                read: frame.read.clone(),
-                negation: negation.map(|(n, folded, _)| (*n, folded.as_slice())),
-            };
-            let context = &out[..start];
-            let built = frame.built.and_then(|g| {
-                let helpers = (&own[..], &helpers[made..]);
-                if check::lowers_as(program, g, &out[start..], helpers, context) {
-                    return Some(g);
-                }
-                // The literals before what it lowers to, each made of
-                // what the statement kept.
-                let (lits, _) = crate::program::lower_goal(program, g, context);
-                let n = out[start..].len().checked_sub(lits.len())?;
-                let mut b = self.builder(program, span, written);
-                let left: Option<Vec<GoalId>> = out[start..start + n]
-                    .iter()
-                    .map(|l| b.made_goal(l))
-                    .collect();
-                let group = left.map(|mut goals| {
-                    goals.push(g);
-                    let kind = crate::program::node::GoalKind::Group {
-                        goals,
-                        after: Vec::new(),
-                    };
-                    b.goal_node(span, kind)
-                });
-                self.done(b);
-                group.filter(|&g| check::lowers_as(program, g, &out[start..], helpers, context))
-            });
-            let goal = match built {
-                Some(g) => Some(g),
-                None => {
-                    let mut b = self.builder(program, span, written);
-                    let goal = b.literal(&w);
-                    self.done(b);
-                    goal
-                }
-            };
-            if let Some(g) = goal {
-                // What its terms made that no node of it makes.
-                let (_, makes) = crate::program::lower_goal(program, g, &out[..start]);
-                let makes: Vec<String> = makes.iter().map(|s| format!("{s:?}")).collect();
-                let made_by_terms: Vec<Stmt> = frame
-                    .attached(helpers)
-                    .into_iter()
-                    .filter(|s| !makes.contains(&format!("{s:?}")))
-                    .collect();
-                if !made_by_terms.is_empty() {
-                    program.terms_made.insert(NodeId::Goal(g), made_by_terms);
-                }
+        let own = frame.own(helpers, made);
+        let context = &out[..start];
+        let both = (&own[..], &helpers[made..]);
+        let goal = frame.built.and_then(|g| {
+            if check::lowers_as(program, g, &out[start..], both, context) {
+                return Some(g);
             }
-            if self.compare {
-                let context = &out[..start];
-                let lowered: Vec<Lit> = out[start..].to_vec();
-                check::literal(program, goal, &lowered, &helpers[made..], context, || {
-                    format!("the literal at {}: {form:?}", check::place(span))
-                });
-            }
-            goal
+            let (lits, _) = crate::program::lower_goal(program, g, context);
+            let n = out[start..].len().checked_sub(lits.len())?;
+            let mut b = self.builder(program, span, written);
+            let left: Option<Vec<GoalId>> = out[start..start + n]
+                .iter()
+                .map(|l| b.made_goal(l))
+                .collect();
+            let group = left.map(|mut goals| {
+                goals.push(g);
+                let kind = crate::program::node::GoalKind::Group {
+                    goals,
+                    after: Vec::new(),
+                };
+                b.goal_node(span, kind)
+            });
+            self.done(b);
+            group.filter(|&g| check::lowers_as(program, g, &out[start..], both, context))
         });
+        if let Some(g) = goal {
+            // What its terms made that no node of it makes.
+            let (_, makes) = crate::program::lower_goal(program, g, context);
+            let makes: Vec<String> = makes.iter().map(|s| format!("{s:?}")).collect();
+            let made_by_terms: Vec<Stmt> = frame
+                .attached(helpers)
+                .into_iter()
+                .filter(|s| !makes.contains(&format!("{s:?}")))
+                .collect();
+            if !made_by_terms.is_empty() {
+                program.terms_made.insert(NodeId::Goal(g), made_by_terms);
+            }
+        }
+        if self.compare {
+            let lowered: Vec<Lit> = out[start..].to_vec();
+            check::literal(program, goal, &lowered, &helpers[made..], context, || {
+                format!("the literal at {}", check::place(span))
+            });
+        }
         if let Some(f) = self.frames.last_mut() {
-            match built {
+            match goal {
                 Some(g) => f.goals.push((g, frame.terms)),
                 None => f.failed = true,
             }
@@ -353,16 +305,10 @@ impl Gather {
     ) {
         let frame = self.frames.pop().expect("a `[_]`'s frame");
         let own = frame.own(helpers, made);
-        let form = Form::In { each: false };
         let w = Written {
-            form: &form,
             span,
             lits: &body[start..],
-            after: &[],
             helpers: &own,
-            body: &[],
-            read: None,
-            negation: None,
         };
         let implicit = |v: &str| !v.starts_with("Each_");
         let mut b = self.builder(program, span, &implicit);

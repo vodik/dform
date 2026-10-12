@@ -1,5 +1,7 @@
-//! `x in e` and `x not in e` as a `Member` goal (R-211 step 4), its
-//! collection the form the resolver's `membership` lowered it to:
+//! `x in e` as a `Member` goal (R-211 step 4), its collection the form
+//! the resolver's `membership` lowers it to; the resolver builds it of
+//! its nodes (step 7c), and only a `set` target's `[_]` is built here of
+//! what it lowered to, under `DFORM_CHECK_LOWER=1` (`Gather::each`):
 //!
 //! | written                    | lowered                                         | `Coll`         |
 //! |----------------------------|-------------------------------------------------|----------------|
@@ -12,11 +14,6 @@
 //! | `n in network` (R-67)      | `instance_of("network", S, N)`                  | `Copies`       |
 //! | `v in T[_].p` (R-162)      | `V = e'`                                        | `Each`         |
 //! | `r in T`, `r` a column's   | `Type = "T"`                                    | `TypeOf`       |
-//!
-//! `x not in e` is `not` around it: its last literal negated (`Type !=
-//! "T"` for a reference column's, R-219), the test a namespace or a
-//! renamed type makes before it as it is; `v not in PATH[_]` is the
-//! helper `not { v in PATH[_] }` lowers through.
 
 use super::Builder;
 use super::clause::Written;
@@ -48,34 +45,24 @@ const NAMESPACE: &str = "__namespace";
 const PROVIDER_TYPE: &str = "__provider_type";
 
 impl Builder<'_> {
-    /// `x in e` (`negated`, `x not in e`): the membership, after the reads
-    /// it hoisted.
-    pub(super) fn membership(&mut self, w: &Written, each: bool, negated: bool) -> Option<GoalId> {
+    /// `x in e`: the membership, after the reads it hoisted.
+    pub(super) fn membership(&mut self, w: &Written) -> Option<GoalId> {
         let (last, rest) = w.lits.split_last()?;
-        let last = match negated {
-            true => negate(last),
-            false => last.clone(),
-        };
-        let reads = match tested(&last, rest) {
+        let reads = match tested(last, rest) {
             Some(_) => &rest[..rest.len() - 1],
             None => rest,
         };
-        let (member, left) = self.reading(reads, |b| b.member(&last, rest, w, each));
-        let member = member?;
-        let goal = match negated {
-            true => self.not_one(member),
-            false => member,
-        };
-        Some(self.group(&left, vec![goal], w.after))
+        let (member, left) = self.reading(reads, |b| b.member(last, rest, w));
+        Some(self.group(&left, vec![member?], &[]))
     }
 
     /// The membership `last` is (after `before`, the literals before it).
-    fn member(&mut self, last: &Lit, before: &[Lit], w: &Written, each: bool) -> Option<GoalId> {
+    fn member(&mut self, last: &Lit, before: &[Lit], w: &Written) -> Option<GoalId> {
         let a = match last {
             Lit::Eq(x, e) => {
                 let pat = self.pattern(x);
                 let e = self.expr(e);
-                let coll = if each { Coll::Each(e) } else { Coll::TypeOf(e) };
+                let coll = Coll::TypeOf(e);
                 return Some(self.goal_node(self.span, GoalKind::Member { pat, coll }));
             }
             Lit::Pos(a) => a,
@@ -227,16 +214,4 @@ fn facts<'h>(helpers: &'h [Stmt], pred: &'h str) -> impl Iterator<Item = &'h Ato
 
 fn fact<'h>(helpers: &'h [Stmt], pred: &'h str) -> Option<&'h Atom> {
     facts(helpers, pred).next()
-}
-
-/// `not l` as the resolver writes it: a read negated, a negation read, a
-/// type test the type that differs (R-219).
-pub(super) fn negate(l: &Lit) -> Lit {
-    match l {
-        Lit::Pos(a) => Lit::Not(a.clone()),
-        Lit::Not(a) => Lit::Pos(a.clone()),
-        Lit::Eq(a, b) => Lit::Neq(a.clone(), b.clone()),
-        Lit::Neq(a, b) => Lit::Eq(a.clone(), b.clone()),
-        other => other.clone(),
-    }
 }

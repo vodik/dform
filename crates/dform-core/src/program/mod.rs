@@ -62,24 +62,6 @@ pub struct Program {
     pub terms_made: std::collections::BTreeMap<NodeId, Vec<Stmt>>,
 }
 
-/// What a read the front end makes, `p(.., V, ..)`, reads: hoisted, its
-/// node binds `V`; in place, the literal holding it fills `V`'s column.
-#[derive(Debug, Clone)]
-pub enum Read {
-    /// `k(V)`: a value, `Value`.
-    Value(scope::DeclRef, scope::Reach),
-    /// `attr("T", A, "p", V)`: a resource's attribute, `Field` of a
-    /// `Resource`.
-    Attr,
-    /// `output(C, "k", V)`: a copy's output, `Output`.
-    Output,
-    /// `cloud_attr("T", A, "p", V)`: what the provider reports, `World`.
-    World,
-    /// `p(a, .., V, ..)`: a relation or an extern by its other columns,
-    /// `V` its `out`th, `Lookup`.
-    Lookup { out: usize },
-}
-
 /// How many of each numbered helper the build has taken: the one counter
 /// the resolver and the builders take numbers from, in the order the
 /// statements are walked: a `not { }` or an aggregate's number is stamped

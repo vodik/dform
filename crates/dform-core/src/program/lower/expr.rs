@@ -438,8 +438,7 @@ mod tests {
     /// The forms the corpus seldom writes lower back as the resolver wrote
     /// them: an empty spread part, a computed key, holes at a string's
     /// ends, a quantity's span, a path into a path, a reference's path, a
-    /// comprehension's body and a record's columns in it, a term's reads
-    /// in term position, each read at its span.
+    /// comprehension's body and a record's columns in it.
     #[test]
     fn a_term_lowers_back_to_what_it_was_built_from() {
         let int = |i| Term::Val(Value::Int(i));
@@ -524,16 +523,6 @@ mod tests {
                     ],
                 },
                 vec![],
-            ),
-            (
-                var("V"),
-                vec![
-                    Lit::Pos(at("zone", vec![str_term("a"), var("N")], 9)),
-                    Lit::Eq(
-                        var("V"),
-                        f("add", vec![var("N"), f("sub", vec![int(0), int(1)])]),
-                    ),
-                ],
             ),
         ];
         for (t, reads) in cases {

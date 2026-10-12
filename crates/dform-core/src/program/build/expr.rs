@@ -393,7 +393,7 @@ fn interp(f: &str, holes: &[ExprId]) -> ExprKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Atom, Span, str_term, var};
+    use crate::ast::{Span, str_term, var};
     use crate::program::Program;
 
     fn f(name: &str, args: Vec<Term>) -> Term {
@@ -404,7 +404,7 @@ mod tests {
     }
 
     /// Each internal function the resolver writes is built as the node of
-    /// the form it lowers, and a term's read as its node in term position.
+    /// the form it lowers.
     #[test]
     fn a_lowered_term_is_the_node_of_its_form() {
         let mut p = Program::new();
@@ -461,29 +461,5 @@ mod tests {
             panic!("not a field");
         };
         assert_eq!(path.len(), 2, "a quoted segment is one step");
-
-        let read = Lit::Pos(Atom {
-            pred: "attr".into(),
-            args: vec![
-                str_term("net.vpc"),
-                str_term("vpc"),
-                str_term("cidr"),
-                var("Cidr"),
-            ],
-            record: None,
-            span: Span::default(),
-        });
-        let id = b.hoisted(&var("Cidr"), &[read]);
-        let e = &b.program.exprs[id];
-        assert!(
-            matches!(e.kind, ExprKind::Lookup { out: 3, .. }),
-            "{:?}",
-            e.kind
-        );
-        let v = &b.program.vars[e.hoisted.expect("read into its variable")];
-        assert!(
-            v.implicit && v.lowered == "Cidr" && v.name == "cidr",
-            "{v:?}"
-        );
     }
 }

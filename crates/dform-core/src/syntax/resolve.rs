@@ -38,7 +38,7 @@ use crate::program::node::{
     RelRef,
 };
 use crate::program::scope::{self as scopes, DeclKind, DeclRef, Names, Reach};
-use crate::program::{ExprId, ItemId, Read, ScopeId};
+use crate::program::{ExprId, ItemId, ScopeId};
 use crate::spell;
 use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -6176,18 +6176,16 @@ impl<'u> Lowerer<'u> {
 
     /// One literal, with the reads it hoists before it, into `out`.
     fn lit(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<()> {
-        let form = self.gather.is_some().then(|| self.written_form(rc, n));
-        self.lit_as(rc, n, out, form, Self::lit1)
+        self.lit_as(rc, n, out, Self::lit1)
     }
 
-    /// [`Self::lit`] of `n` lowered by `lower`: gathered, built as the
-    /// literal of `form`.
+    /// [`Self::lit`] of `n` lowered by `lower`: gathered, the goal it
+    /// builds the literal's (R-211 step 7c).
     fn lit_as(
         &mut self,
         rc: &mut Rc,
         n: &SyntaxNode,
         out: &mut Vec<Lit>,
-        form: Option<Option<crate::program::build::Form>>,
         lower: impl FnOnce(&mut Self, &mut Rc, &SyntaxNode, &mut Vec<Lit>) -> L<()>,
     ) -> L<()> {
         let saved = std::mem::take(&mut self.after);
@@ -6197,7 +6195,6 @@ impl<'u> Lowerer<'u> {
             s.open();
         }
         let r = self.bind(true, |l| lower(l, rc, n, out));
-        let mid = out.len();
         out.append(&mut self.after);
         self.after = saved;
         let after = std::mem::replace(&mut self.after_goals, saved_goals);
@@ -6213,74 +6210,35 @@ impl<'u> Lowerer<'u> {
             let g = self.goal(rc, span, kind);
             self.built(g);
         }
-        match (form, &mut self.gather) {
-            (Some(form), _) if r.is_ok() => {
-                self.built_literal(rc, n, form, out, (start, mid, made))
-            }
-            (Some(_), Some(s)) => s.failed(),
+        match (r.is_ok(), &mut self.gather) {
+            (true, Some(_)) => self.built_literal(rc, n, out, (start, made)),
+            (false, Some(s)) => s.failed(),
             _ => {}
         }
         r
     }
 
-    /// The written literal `n` lowered to `out[start..]` (`out[mid..]`
-    /// the field reads after it), making `self.helpers[made..]`, also
-    /// built as a goal (R-211 step 4).
+    /// The written literal `n` lowered to `out[start..]`, making
+    /// `self.helpers[made..]`: the goal built of it gathered (R-211 step
+    /// 4).
     fn built_literal(
         &mut self,
         rc: &Rc,
         n: &SyntaxNode,
-        form: Option<crate::program::build::Form>,
         out: &[Lit],
-        (start, mid, made): (usize, usize, usize),
+        (start, made): (usize, usize),
     ) {
         let span = self.span(n);
         let Some(s) = &mut self.gather else { return };
         let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
         s.literal(
             &mut self.program,
-            form.as_ref(),
             span,
             out,
-            (start, mid),
+            start,
             (&self.helpers, made),
             &|v| written.contains(v),
         );
-    }
-
-    /// What written literal `n` is, read off the tree, for its builder
-    /// (R-211 step 4); `None` for a form no builder knows yet.
-    fn written_form(&self, rc: &Rc, n: &SyntaxNode) -> Option<crate::program::build::Form> {
-        use crate::program::build::Form;
-        Some(match n.kind() {
-            LIT_ATOM => Form::Atom,
-            LIT_TRUTH => Form::Truth,
-            LIT_HAS => Form::Has,
-            LIT_CMP => {
-                let ts: Vec<SyntaxNode> = terms(n).collect();
-                let ops: Vec<SyntaxKind> = tokens(n).map(|t| t.kind()).collect();
-                let aggregate = ts.len() == 2
-                    && ops == [EQ]
-                    && ts
-                        .iter()
-                        .any(|t| t.kind() == CALL && self.aggregate_name(t).is_some());
-                Form::Compare {
-                    bind: ops.first() == Some(&EQ),
-                    ops: ops.len(),
-                    aggregate,
-                }
-            }
-            LIT_IN | LIT_NOT_IN => {
-                let each = self.each_membership(rc, n);
-                match n.kind() {
-                    LIT_IN => Form::In { each },
-                    _ => Form::NotIn { each },
-                }
-            }
-            LIT_NOT => Form::Not(Box::new(self.written_form(rc, &n.children().next()?)?)),
-            LIT_NOT_BLOCK => Form::NotBlock,
-            _ => return None,
-        })
     }
 
     /// `v in PATH`, PATH with a `[_]` past its type's (R-162): `v` is
@@ -6320,7 +6278,7 @@ impl<'u> Lowerer<'u> {
                 let c = terms(n).next().and_then(|t| Chain::read(&t)).ok_or(Skip)?;
                 let mark = out.len();
                 let res = self.resolve(rc, &c, out)?;
-                let e = match self.read_atom(rc, &res, Term::Val(Value::Bool(true)), span) {
+                let e = match self.read_atom(&res, Term::Val(Value::Bool(true)), span) {
                     Some(a) => {
                         out.push(Lit::Pos(a));
                         self.in_place(rc, &res, span).ok_or(Skip)?
@@ -6383,7 +6341,7 @@ impl<'u> Lowerer<'u> {
                 // schema answers it they are gone (R-106), so nothing
                 // after it reads through them (R-204).
                 let reads = marked.as_ref().map(|_| rc.reads.clone());
-                let test = match self.read_atom(rc, &res, Term::Wildcard, span) {
+                let test = match self.read_atom(&res, Term::Wildcard, span) {
                     Some(a) => {
                         out.push(Lit::Pos(a));
                         // A marked read's resource is the mark's.
@@ -6497,7 +6455,7 @@ impl<'u> Lowerer<'u> {
                 let marked = (n.kind() == LIT_HAS)
                     .then(|| self.has_atom(&res, span))
                     .flatten();
-                if let Some(a) = self.read_atom(rc, &res, value, span) {
+                if let Some(a) = self.read_atom(&res, value, span) {
                     out.extend(pre);
                     let start = out.len();
                     out.push(Lit::Not(a));
@@ -6563,7 +6521,7 @@ impl<'u> Lowerer<'u> {
                         if !vpre.is_empty() {
                             continue;
                         }
-                        if let Some(a) = self.read_atom(&mut rc2, &res, value, span) {
+                        if let Some(a) = self.read_atom(&res, value, span) {
                             *rc = rc2;
                             out.extend(pre);
                             out.push(Lit::Not(a));
@@ -6596,11 +6554,7 @@ impl<'u> Lowerer<'u> {
         let lowered = match n.kind() {
             BODY => self.body(&mut rc2, n).map(|b| inner = b),
             // `v not in PATH[_]`: the helper's body is the membership.
-            LIT_NOT_IN => {
-                let each = crate::program::build::Form::In { each: true };
-                let form = self.gather.is_some().then_some(Some(each));
-                self.lit_as(&mut rc2, n, &mut inner, form, Self::member_lit)
-            }
+            LIT_NOT_IN => self.lit_as(&mut rc2, n, &mut inner, Self::member_lit),
             _ => self.lit(&mut rc2, n, &mut inner),
         };
         self.nested -= 1;
@@ -6751,7 +6705,7 @@ impl<'u> Lowerer<'u> {
                 if !vpre.is_empty() {
                     continue;
                 }
-                if let Some(a) = self.read_atom(&mut rc2, &res, value, span) {
+                if let Some(a) = self.read_atom(&res, value, span) {
                     *rc = rc2;
                     out.extend(pre);
                     out.push(Lit::Pos(a));
@@ -7558,7 +7512,7 @@ impl<'u> Lowerer<'u> {
                 key,
                 of,
             };
-            let rows = self.read_var(rc, (Read::Output, "output"), read, 2, &p, pre, span);
+            let rows = self.read_var(rc, "output", read, 2, &p, pre, span);
             let (cols, nodes) = self.args(rc, n, pos, pre)?;
             let parts = nodes.into_iter().map(ListPart::Elem).collect();
             let list = self.node(span, ExprKind::List { parts });
@@ -8112,7 +8066,7 @@ impl<'u> Lowerer<'u> {
     }
 
     /// What `res` reads when it is one read, its parts as resolved: the
-    /// forms a literal tests or binds in place ([`Self::read_with`]).
+    /// forms a literal tests or binds in place ([`Self::read_atom`]).
     fn in_place_read(res: &Res) -> Option<PlanRead> {
         Some(match res {
             Res::Ref { typ, addr, path } if path.len() == 1 => match &path[0] {
@@ -9210,7 +9164,7 @@ impl<'u> Lowerer<'u> {
             }
             None => {
                 let v = fresh(rc, &capitalise(&name));
-                let key = self.value_read(rc, &pred, &v, (decl, via), pre, span);
+                let key = self.value_read(rc, &v, (decl, via), pre, span);
                 rc.values.insert(pred.clone(), v.clone());
                 key
             }
@@ -9715,7 +9669,7 @@ impl<'u> Lowerer<'u> {
                         key: k.clone(),
                         of,
                     };
-                    let v = self.read_var(rc, (Read::Output, "output"), read, 2, k, pre, span);
+                    let v = self.read_var(rc, "output", read, 2, k, pre, span);
                     return Ok(Res::Ref {
                         typ: self.str_node(span, t),
                         addr: v,
@@ -10084,7 +10038,7 @@ impl<'u> Lowerer<'u> {
     fn read_var(
         &mut self,
         rc: &mut Rc,
-        (kind, pred): (crate::program::Read, &str),
+        pred: &str,
         read: PlanRead,
         out: usize,
         hint: &str,
@@ -10092,7 +10046,7 @@ impl<'u> Lowerer<'u> {
         span: Span,
     ) -> ExprId {
         let args = self.read_args(&read);
-        let (name, new) = self.hoist_read(rc, (kind, pred), &args, out, hint);
+        let (name, new) = self.hoist_read(rc, pred, &args, out, hint);
         if !new {
             return self.var_node(rc, span, &name);
         }
@@ -10123,7 +10077,7 @@ impl<'u> Lowerer<'u> {
     fn hoist_read(
         &mut self,
         rc: &mut Rc,
-        (read, pred): (crate::program::Read, &str),
+        pred: &str,
         args: &[Term],
         out: usize,
         hint: &str,
@@ -10133,9 +10087,6 @@ impl<'u> Lowerer<'u> {
             return (v.clone(), false);
         }
         let name = fresh(rc, &capitalise(hint));
-        if let Some(g) = &mut self.gather {
-            g.hoisted(pred, &name, read);
-        }
         rc.reads.insert(key, var(&name));
         (name, true)
     }
@@ -10231,7 +10182,7 @@ impl<'u> Lowerer<'u> {
                     addr,
                     attr: first.clone(),
                 };
-                let base = self.plan_read(rc, (Read::Attr, "attr"), (3, &first), read, span);
+                let base = self.plan_read(rc, "attr", (3, &first), read, span);
                 let at = (self.leaf_copy(typ), first);
                 self.plan_path(rc, base, path[1..].to_vec(), Some(at))
             }
@@ -10247,7 +10198,7 @@ impl<'u> Lowerer<'u> {
                     key: key.clone(),
                     of,
                 };
-                let base = self.plan_read(rc, (Read::Output, "output"), (2, &key), read, span);
+                let base = self.plan_read(rc, "output", (2, &key), read, span);
                 match typ {
                     // A typed output holds an address: given as a value, it
                     // is the reference (R-43).
@@ -10261,7 +10212,7 @@ impl<'u> Lowerer<'u> {
             Res::World { typ, addr, path } => {
                 let last = path.rsplit('.').next().unwrap_or(&path).to_string();
                 let read = PlanRead::World { typ, addr, path };
-                self.plan_read(rc, (Read::World, "cloud_attr"), (3, &last), read, span)
+                self.plan_read(rc, "cloud_attr", (3, &last), read, span)
             }
             Res::Value { decl, via, path } => {
                 let pred = via.relation(&decl.name);
@@ -10273,9 +10224,6 @@ impl<'u> Lowerer<'u> {
                     None => {
                         let base = crate::modules::lexical_name(&pred).unwrap_or(&pred);
                         let name = fresh(rc, &capitalise(base));
-                        if let Some(g) = &mut self.gather {
-                            g.hoisted(&pred, &name, Read::Value(decl.clone(), via.clone()));
-                        }
                         rc.values.insert(pred.clone(), name.clone());
                         Plan::Read {
                             read: PlanRead::Value(decl, via),
@@ -10297,8 +10245,7 @@ impl<'u> Lowerer<'u> {
                     args,
                     out,
                 };
-                let read_of = (Read::Lookup { out }, pred.as_str());
-                let base = self.plan_read(rc, read_of, (out, &hint), read, span);
+                let base = self.plan_read(rc, &pred, (out, &hint), read, span);
                 self.plan_path(rc, base, path, None)
             }
         })
@@ -10309,13 +10256,13 @@ impl<'u> Lowerer<'u> {
     fn plan_read(
         &mut self,
         rc: &mut Rc,
-        (kind, pred): (crate::program::Read, &str),
+        pred: &str,
         (out, hint): (usize, &str),
         read: PlanRead,
         span: Span,
     ) -> Plan {
         let args = self.read_args(&read);
-        match self.hoist_read(rc, (kind, pred), &args, out, hint) {
+        match self.hoist_read(rc, pred, &args, out, hint) {
             (v, false) => Plan::Node(self.var_node(rc, span, &v)),
             (v, true) => Plan::Read { read, var: v },
         }
@@ -10389,20 +10336,16 @@ impl<'u> Lowerer<'u> {
         }
     }
 
-    /// The read of a value, `pred(var)`, hoisted, and what it reads kept
-    /// for the program's builder: its node, the read into `var_name`.
+    /// The read of a value hoisted, `k(V)`: its node, the read into
+    /// `var_name`, its literal into `pre`.
     fn value_read(
         &mut self,
         rc: &Rc,
-        pred: &str,
         var_name: &str,
         (decl, via): (DeclRef, Reach),
         pre: &mut Vec<Lit>,
         span: Span,
     ) -> ExprId {
-        if let Some(g) = &mut self.gather {
-            g.hoisted(pred, var_name, Read::Value(decl.clone(), via.clone()));
-        }
         let read = ReadOf::Value(decl, via);
         let id = self.building(rc, span, |b| b.read_into(read, var_name));
         self.hoisted_into(id, pre);
@@ -10410,60 +10353,37 @@ impl<'u> Lowerer<'u> {
     }
 
     /// The read a resolved chain is, with `value` in its value column: the
-    /// direct forms `R.p == c`, `k == c`, `not R.p`, and what it reads for
-    /// the program's builder. `None` when the chain is not one read.
-    fn read_atom(&mut self, rc: &mut Rc, res: &Res, value: Term, span: Span) -> Option<Atom> {
-        let _ = rc;
-        let (a, column, read) = self.read_with(res, value, span)?;
-        if let Some(s) = &mut self.gather {
-            s.read(column, read);
-        }
-        Some(a)
-    }
-
-    /// The read `res` is with `value` in its value column, that column,
-    /// and what it reads.
-    fn read_with(&self, res: &Res, value: Term, span: Span) -> Option<(Atom, usize, Read)> {
+    /// direct forms `R.p == c`, `k == c`, `not R.p`. `None` when the chain
+    /// is not one read.
+    fn read_atom(&self, res: &Res, value: Term, span: Span) -> Option<Atom> {
         let t = |id: &ExprId| self.term_of(*id);
         match res {
             Res::Ref { typ, addr, path } if path.len() == 1 => match &path[0] {
-                Seg::F(p) => Some((
-                    atom_at(
-                        "attr",
-                        vec![
-                            t(typ),
-                            t(addr),
-                            str_term(&crate::address::path_key(p)),
-                            value,
-                        ],
-                        span,
-                    ),
-                    3,
-                    Read::Attr,
+                Seg::F(p) => Some(atom_at(
+                    "attr",
+                    vec![
+                        t(typ),
+                        t(addr),
+                        str_term(&crate::address::path_key(p)),
+                        value,
+                    ],
+                    span,
                 )),
                 Seg::I(_) | Seg::K(_) => None,
             },
             Res::Output {
                 inst, key, path, ..
-            } if path.is_empty() => Some((
-                atom_at("output", vec![t(inst), str_term(key), value], span),
-                2,
-                Read::Output,
+            } if path.is_empty() => {
+                Some(atom_at("output", vec![t(inst), str_term(key), value], span))
+            }
+            Res::World { typ, addr, path } => Some(atom_at(
+                "cloud_attr",
+                vec![str_term(typ), t(addr), str_term(path), value],
+                span,
             )),
-            Res::World { typ, addr, path } => Some((
-                atom_at(
-                    "cloud_attr",
-                    vec![str_term(typ), t(addr), str_term(path), value],
-                    span,
-                ),
-                3,
-                Read::World,
-            )),
-            Res::Value { decl, via, path } if path.is_empty() => Some((
-                atom_at(&via.relation(&decl.name), vec![value], span),
-                0,
-                Read::Value(decl.clone(), via.clone()),
-            )),
+            Res::Value { decl, via, path } if path.is_empty() => {
+                Some(atom_at(&via.relation(&decl.name), vec![value], span))
+            }
             Res::Lookup {
                 pred,
                 args,
@@ -10472,7 +10392,7 @@ impl<'u> Lowerer<'u> {
             } if path.is_empty() => {
                 let mut args: Vec<Term> = args.iter().map(t).collect();
                 args.insert(*out, value);
-                Some((atom_at(pred, args, span), *out, Read::Lookup { out: *out }))
+                Some(atom_at(pred, args, span))
             }
             _ => None,
         }
