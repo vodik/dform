@@ -264,10 +264,24 @@ pub fn io<T>(
     what: impl FnOnce() -> String,
     f: impl FnOnce() -> T,
 ) -> T {
+    let io = io_begin(kind, addr);
+    let out = f();
+    io.end(what);
+    out
+}
+
+/// A request dform makes itself, begun ([`io_begin`]) and not yet
+/// answered: one made beside others (a round's reads on threads) begins
+/// with them, so they wait on one span, and ends when the run takes its
+/// answer.
+pub struct Io {
+    call: Option<Call>,
+    from: Option<Instant>,
+}
+
+/// The request `kind` of `addr` begins (`io`'s, made in parts).
+pub fn io_begin(kind: &str, addr: impl FnOnce() -> String) -> Io {
     let (lines, traced) = (enabled(), tracing());
-    if !lines && !traced {
-        return f();
-    }
     let call = traced.then(|| {
         let (seq, waited_on) = next();
         let addr = addr();
@@ -284,11 +298,20 @@ pub fn io<T>(
         );
         Call { seq, _span: span }
     });
-    let t = Instant::now();
-    let out = f();
-    line(&what(), t.elapsed());
-    drop(call);
-    out
+    Io {
+        call,
+        from: (lines || traced).then(Instant::now),
+    }
+}
+
+impl Io {
+    /// Its answer is taken; its line, `what`, under `DFORM_LOG`.
+    pub fn end(self, what: impl FnOnce() -> String) {
+        if let Some(from) = self.from {
+            line(&what(), from.elapsed());
+        }
+        drop(self.call);
+    }
 }
 
 /// Apply tick `tick` waiting on `count` values not reached yet, of

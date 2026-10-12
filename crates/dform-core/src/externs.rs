@@ -278,13 +278,85 @@ fn defined_here(a: &Atom, f: &ExternFn) -> Diagnostic {
     .with_label(f.span, "declared here")
 }
 
+/// Whether a call of `pred` answers one row whatever it is asked: an
+/// image's digest, a document's read (each its value, or "not yet").
+fn one_row(pred: &str) -> bool {
+    pred == crate::files::oci::RESOLVE || crate::tables::is_document(pred)
+}
+
+/// The variables of `l`, into `out`.
+fn lit_vars(l: &Lit, out: &mut BTreeSet<String>) {
+    match l {
+        Lit::Pos(a) | Lit::Not(a) => a.args.iter().for_each(|t| vars(t, out)),
+        Lit::Eq(x, y)
+        | Lit::Neq(x, y)
+        | Lit::Gt(x, y)
+        | Lit::Ge(x, y)
+        | Lit::Lt(x, y)
+        | Lit::Le(x, y) => {
+            vars(x, out);
+            vars(y, out);
+        }
+    }
+}
+
+/// The body before the extern literal `site` (of `f`), as its demand
+/// reads it: without an earlier call that answers one row whatever it is
+/// asked ([`one_row`]) whose answer nothing else there, nor the site's
+/// inputs, reads. Such a call narrows nothing, so leaving it out demands
+/// the same calls, and the independent calls of one body (the images of
+/// a list) are asked in one round, together, not one round each.
+fn demand_prefix(
+    prefix: &[Lit],
+    site: &Atom,
+    f: &ExternFn,
+    fns: &BTreeMap<&str, &ExternFn>,
+) -> Vec<Lit> {
+    let mut read = BTreeSet::new();
+    for (t, b) in site.args.iter().zip(&f.args) {
+        if b.input {
+            vars(t, &mut read);
+        }
+    }
+    let unread = |j: usize| {
+        let Lit::Pos(a) = &prefix[j] else {
+            return false;
+        };
+        let Some(g) = fns.get(a.pred.as_str()).filter(|_| one_row(&a.pred)) else {
+            return false;
+        };
+        let mut answers = BTreeSet::new();
+        for (t, b) in a.args.iter().zip(&g.args) {
+            if !b.input {
+                vars(t, &mut answers);
+            }
+        }
+        let mut elsewhere = read.clone();
+        for (k, l) in prefix.iter().enumerate() {
+            if k != j {
+                lit_vars(l, &mut elsewhere);
+            }
+        }
+        answers.is_disjoint(&elsewhere)
+    };
+    (0..prefix.len())
+        .filter(|&j| !unread(j))
+        .map(|j| prefix[j].clone())
+        .collect()
+}
+
 /// Is column `b` secret-typed (`-value: secret(T)`)?
 pub fn is_secret(b: &BindArg) -> bool {
     matches!(&b.ty, Some(TypeExpr::Apply(n, _)) if n == "secret")
 }
 
-/// How a call is asked of its provider: the extern and its inputs, to rows.
-type Ask<'a> = dyn Fn(&ExternFn, &[Value]) -> Result<Vec<Vec<Value>>> + 'a;
+/// One call as it is asked: the extern and its inputs.
+pub type Asking<'c> = (&'c ExternFn, &'c [Value]);
+
+/// How the calls of a round are asked of their providers: each to its
+/// rows, in the order given. They are independent (each needs only the
+/// rounds before), so they may be asked at once.
+type Ask<'a> = dyn Fn(&[Asking]) -> Vec<Result<Vec<Vec<Value>>>> + 'a;
 
 /// Where the answers of one run come from, in order: the plan file's, then
 /// the provider (or dform, for a built-in in-process extern).
@@ -305,19 +377,32 @@ pub struct Externs<'a> {
 }
 
 impl<'a> Externs<'a> {
+    /// The externs of `lowered`, each call asked by `ask`, one at a time.
     pub fn new(
         lowered: &Program,
         fns: &[ExternFn],
         ask: impl Fn(&ExternFn, &[Value]) -> Result<Vec<Vec<Value>>> + 'a,
     ) -> Self {
-        let names: BTreeSet<&str> = fns.iter().map(|f| f.name.as_str()).collect();
+        Externs::together(lowered, fns, move |calls: &[Asking]| {
+            calls.iter().map(|(f, ins)| ask(f, ins)).collect()
+        })
+    }
+
+    /// The externs of `lowered`, the calls of each round asked together
+    /// by `ask`.
+    pub fn together(
+        lowered: &Program,
+        fns: &[ExternFn],
+        ask: impl Fn(&[Asking]) -> Vec<Result<Vec<Vec<Value>>>> + 'a,
+    ) -> Self {
+        let by: BTreeMap<&str, &ExternFn> = fns.iter().map(|f| (f.name.as_str(), f)).collect();
         let mut sites = Vec::new();
         for (_, body, _) in bodies(lowered) {
             for (i, l) in body.iter().enumerate() {
                 if let Lit::Pos(a) | Lit::Not(a) = l
-                    && names.contains(a.pred.as_str())
+                    && let Some(f) = by.get(a.pred.as_str())
                 {
-                    sites.push((body[..i].to_vec(), a.clone()));
+                    sites.push((demand_prefix(&body[..i], a, f, &by), a.clone()));
                 }
             }
         }
@@ -491,9 +576,17 @@ impl<'a> Externs<'a> {
                 *self.demanded.borrow_mut() = demand;
                 return Ok((res, violations, t));
             }
-            for c in new {
+            // The round's calls asked together, their answers taken in
+            // the round's order.
+            let asking: Vec<Asking> = new
+                .iter()
+                .map(|c| (&self.fns[&c.pred], c.inputs.as_slice()))
+                .collect();
+            let answers = (self.ask)(&asking);
+            assert_eq!(answers.len(), asking.len(), "an answer for each call");
+            for (c, answer) in new.into_iter().zip(answers) {
                 let f = &self.fns[&c.pred];
-                let rows = (self.ask)(f, &c.inputs).map_err(|e| {
+                let rows = answer.map_err(|e| {
                     if e.is::<crate::interrupt::Interrupted>() {
                         return e;
                     }

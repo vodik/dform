@@ -145,3 +145,116 @@ output theirs = zones.id
     );
     assert_eq!(calls(&spans, "fakecloud Query"), ["ovh.zone"]);
 }
+
+/// A registry that answers a manifest's HEAD only once `n` are asked at
+/// once (within `budget`; else 503): each tag's digest is `sha256:` and
+/// its first letter, 64 times.
+fn registry_answering_together(n: usize, budget: std::time::Duration) -> u16 {
+    use std::io::{BufRead, BufReader, Write};
+    use std::sync::{Arc, Condvar, Mutex};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let open = Arc::new((Mutex::new(0usize), Condvar::new()));
+    std::thread::spawn(move || {
+        for conn in l.incoming().flatten() {
+            let open = open.clone();
+            std::thread::spawn(move || {
+                let mut r = BufReader::new(conn.try_clone().unwrap());
+                let mut first = String::new();
+                r.read_line(&mut first).unwrap_or(0);
+                loop {
+                    let mut line = String::new();
+                    if r.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                let tag = first
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|t| t.rsplit_once("/manifests/"))
+                    .map(|(_, t)| t.to_string())
+                    .unwrap_or_default();
+                let (count, cv) = &*open;
+                let mut count = count.lock().unwrap();
+                *count += 1;
+                cv.notify_all();
+                let (count, _) = cv.wait_timeout_while(count, budget, |c| *c < n).unwrap();
+                let together = *count >= n;
+                drop(count);
+                let c = tag.chars().next().unwrap_or('0');
+                let reply = match together {
+                    true => format!(
+                        "HTTP/1.1 200 OK\r\ndocker-content-digest: sha256:{}\r\n\
+                         content-length: 0\r\nconnection: close\r\n\r\n",
+                        c.to_string().repeat(64)
+                    ),
+                    false => "HTTP/1.1 503 alone\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                        .to_string(),
+                };
+                let mut conn = conn;
+                let _ = conn.write_all(reply.as_bytes());
+            });
+        }
+    });
+    port
+}
+
+/// The calls of one round are independent, so they are asked together:
+/// four image tags resolved at a registry that answers only when all four
+/// are asked at once. In the trace they are one block (one `waited_on`),
+/// each asked once.
+#[test]
+fn a_rounds_calls_are_asked_together() {
+    let port = registry_answering_together(4, std::time::Duration::from_secs(5));
+    let s = Scratch::project("fetch-together");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[providers]\nk8s = \"k8s\"\n",
+    );
+    let containers: Vec<String> = ["a1", "b2", "c3", "d4"]
+        .iter()
+        .map(|t| {
+            format!(r#"{{ name: "c{t}", image: oci.resolve("127.0.0.1:{port}/acme/app:{t}") }}"#)
+        })
+        .collect();
+    s.write(
+        "p.df",
+        &format!(
+            r#"use k8s
+resource k8s.deployment app {{
+  metadata.name = "app"
+  metadata.namespace = "default"
+  spec.selector.matchLabels = {{ app: "app" }}
+  spec.template.metadata.labels = {{ app: "app" }}
+  spec.template.spec.containers = [{}]
+}}
+"#,
+            containers.join(", ")
+        ),
+    );
+    std::fs::create_dir_all(s.path("cache")).unwrap();
+    let out = common::dform()
+        .args(["plan", "p.df", "--trace", "trace.jsonl"])
+        .env("NO_COLOR", "1")
+        .env("XDG_CACHE_HOME", s.path("cache"))
+        .env_remove("DFORM_TRACE")
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .current_dir(&s.dir)
+        .output()
+        .unwrap();
+    let r = Run::from(out).success();
+    for t in ["a1", "b2", "c3", "d4"] {
+        let c = t.chars().next().unwrap().to_string().repeat(64);
+        let pinned = format!("127.0.0.1:{port}/acme/app:{t}@sha256:{c}");
+        assert!(r.stdout.contains(&pinned), "{pinned}\n{}", r.stdout);
+    }
+    let spans = spans(&s.path("trace.jsonl"));
+    let resolves: Vec<&Value> = spans
+        .iter()
+        .filter(|s| s["name"] == "oci.resolve")
+        .collect();
+    assert_eq!(resolves.len(), 4, "each tag asked once");
+    let waited: std::collections::BTreeSet<Option<String>> =
+        resolves.iter().map(|s| attr(s, "waited_on")).collect();
+    assert_eq!(waited.len(), 1, "one block: {waited:?}");
+}

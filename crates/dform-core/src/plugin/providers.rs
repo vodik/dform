@@ -170,6 +170,13 @@ pub const INVENTORY: [(&str, usize); 3] = [
     ("cloud_computed", 4),
 ];
 
+/// An extern's call sent to a provider, its answer not taken yet
+/// ([`Providers::submit_extern`]).
+pub struct Asked {
+    link: usize,
+    ticket: Ticket,
+}
+
 pub struct Providers {
     links: Vec<RefCell<Link>>,
     /// Each provider's name, as its handshake gave it.
@@ -1922,23 +1929,86 @@ impl Providers {
         f: &crate::ast::ExternFn,
         inputs: &[Value],
     ) -> Result<Vec<Vec<Value>>> {
-        let plus: Vec<bool> = f.args.iter().map(|b| b.input).collect();
-        let secret: Vec<bool> = f.args.iter().map(crate::externs::is_secret).collect();
-        if !secret.contains(&true) {
-            return self.query(&f.name, &plus, inputs);
-        }
+        let asked = self.submit_extern(f, inputs)?;
+        self.flush();
+        self.answer_extern(f, inputs, asked)
+    }
+
+    /// An extern's call ([`Providers::query_extern`]) sent to its provider,
+    /// its answer taken later by [`Providers::answer_extern`]: a round's
+    /// calls are all sent before any answer is taken, so a provider that
+    /// can answers them at once. Sent once [`Providers::flush`] is called.
+    pub fn submit_extern(&self, f: &crate::ast::ExternFn, inputs: &[Value]) -> Result<Asked> {
         let i = self
             .loaded()
             .externs
             .get(&f.name)
             .copied()
             .unwrap_or(self.fallback);
-        let rows: Vec<pb::Row> = self.link(i)?.borrow_mut().call(pb::QueryRequest {
+        let ticket = self
+            .link(i)?
+            .borrow_mut()
+            .submit(Self::extern_request(f, inputs));
+        Ok(Asked { link: i, ticket })
+    }
+
+    /// The Query an extern's call is: its `+` columns the inputs, its
+    /// secret columns marked (none marked when it has none).
+    fn extern_request(f: &crate::ast::ExternFn, inputs: &[Value]) -> pb::QueryRequest {
+        let secret: Vec<bool> = f.args.iter().map(crate::externs::is_secret).collect();
+        pb::QueryRequest {
             pred: f.name.clone(),
-            input: plus,
+            input: f.args.iter().map(|b| b.input).collect(),
             inputs: inputs.iter().map(pb::Value::from).collect(),
-            secret: secret.clone(),
-        })?;
+            secret: match secret.contains(&true) {
+                true => secret,
+                false => Vec::new(),
+            },
+        }
+    }
+
+    /// Send every call submitted so far, to every provider.
+    pub fn flush(&self) {
+        for l in &self.links {
+            l.borrow_mut().flush();
+        }
+    }
+
+    /// The answer to the call `asked` ([`Providers::submit_extern`]) of `f`
+    /// with `inputs`. One that failed is asked again alone, under its
+    /// provider's retry policy.
+    pub fn answer_extern(
+        &self,
+        f: &crate::ast::ExternFn,
+        inputs: &[Value],
+        asked: Asked,
+    ) -> Result<Vec<Vec<Value>>> {
+        let i = asked.link;
+        let answer = {
+            let mut link = self.links[i].borrow_mut();
+            link.wait(asked.ticket)
+                .and_then(|r| link.expect::<Vec<pb::Row>>("Query", r))
+        };
+        let rows = match answer {
+            Ok(rows) => rows,
+            Err(_) => self
+                .link(i)?
+                .borrow_mut()
+                .call(Self::extern_request(f, inputs))?,
+        };
+        self.extern_rows(i, f, inputs, rows)
+    }
+
+    /// The rows a provider answered an extern's call with, as values: a
+    /// secret column ([`Providers::query_extern`]) as where it is held.
+    fn extern_rows(
+        &self,
+        i: usize,
+        f: &crate::ast::ExternFn,
+        inputs: &[Value],
+        rows: Vec<pb::Row>,
+    ) -> Result<Vec<Vec<Value>>> {
+        let secret: Vec<bool> = f.args.iter().map(crate::externs::is_secret).collect();
         let mut out = Vec::new();
         for r in &rows {
             let mut row = Vec::new();

@@ -275,6 +275,18 @@ fn base(span: Span) -> PathBuf {
         .unwrap_or_default()
 }
 
+/// A table extern's source: its one input, a location (a path or a uri).
+fn location_of(f: &ExternFn, inputs: &[Value]) -> Result<String> {
+    match inputs {
+        [Value::Str(s)] => Ok(s.clone()),
+        [Value::Uri(u)] => Ok(u.to_string()),
+        _ => Err(anyhow!(
+            "{}: the source is a location, a string (a path or a uri)",
+            f.name
+        )),
+    }
+}
+
 impl Tables {
     /// A run's tables, read with `files` (its known hosts, its mirrors,
     /// the schemes its providers declare).
@@ -292,29 +304,50 @@ impl Tables {
             return Some(self.value_rows(f, table, inputs));
         }
         let base = base(f.span);
-        let location = match inputs {
-            [Value::Str(s)] => s.clone(),
-            [Value::Uri(u)] => u.to_string(),
-            _ => {
-                return Some(Err(anyhow!(
-                    "{}: the source is a location, a string (a path or a uri)",
-                    f.name
-                )));
-            }
+        let location = match location_of(f, inputs) {
+            Ok(l) => l,
+            Err(e) => return Some(Err(e)),
         };
         if format == SECRETS
             && let Some(no) = self.given_first(table, &location, &base)
         {
             return Some(no);
         }
-        let read = match self.files.read(&location, &base) {
+        Some(self.answer_read(f, inputs, &location, self.files.read(&location, &base)))
+    }
+
+    /// The read a table extern's call makes, for making it beside other
+    /// requests: its location and the root it resolves from. `None` when
+    /// the call makes none, or may answer first without it (a value's
+    /// table, a file of given secrets): [`Tables::answer`] answers those.
+    pub fn source(f: &ExternFn, inputs: &[Value]) -> Option<(String, PathBuf)> {
+        let (format, _) = parse_name(&f.name)?;
+        if format == VALUE || format == SECRETS {
+            return None;
+        }
+        Some((location_of(f, inputs).ok()?, base(f.span)))
+    }
+
+    /// The answer to a table extern's call whose source at `location` was
+    /// read as `read` ([`Tables::source`]).
+    pub fn answer_read(
+        &self,
+        f: &ExternFn,
+        inputs: &[Value],
+        location: &str,
+        read: Result<Outcome>,
+    ) -> Result<Vec<Vec<Value>>> {
+        let Some((format, table)) = parse_name(&f.name) else {
+            bail!("{} is not a table", f.name);
+        };
+        let read = match read {
             Ok(r) => r,
             Err(e) => {
                 let what = describe(&f.name).unwrap_or_else(|| format!("table {table}"));
-                return Some(Err(e.context(what)));
+                return Err(e.context(what));
             }
         };
-        Some(match read {
+        match read {
             Outcome::Read(r) => self.rows(f, format, table, inputs, || {
                 let text = String::from_utf8(r.bytes)
                     .map_err(|_| anyhow!("table {table}: {} is not UTF-8 text", r.shown))?;
@@ -330,9 +363,9 @@ impl Tables {
                         f,
                         inputs,
                         vec![
-                            Value::Str(location.clone()),
+                            Value::Str(location.to_string()),
                             Value::Null {
-                                label: crate::value::null_label(crate::files::READ, &location, "1"),
+                                label: crate::value::null_label(crate::files::READ, location, "1"),
                                 class: crate::value::NullClass::Open,
                                 ty: String::new(),
                             },
@@ -344,7 +377,7 @@ impl Tables {
                     )),
                 }
             }
-        })
+        }
     }
 
     /// The rows of a table, read by `read` (its text, how rows name the

@@ -1757,7 +1757,8 @@ impl Located {
 }
 
 /// The run's externs: a table's of its file, an environment variable, the
-/// time, an image's digest, a memo, else the providers'.
+/// time, an image's digest, a memo, else the providers'. The calls of a
+/// round are asked together ([`ask_round`]).
 fn run_externs(
     lowered: Option<&transform::Lowered>,
     tables: &Rc<tables::Tables>,
@@ -1767,47 +1768,126 @@ fn run_externs(
 ) -> Externs<'static> {
     let (no_program, no_fns) = (Program::default(), vec![]);
     let (tables, backend, files) = (tables.clone(), backend.clone(), files.clone());
-    Externs::new(
+    Externs::together(
         lowered.map_or(&no_program, |l| &l.program),
         lowered.map_or(&no_fns, |l| &l.extern_fns),
-        move |f, inputs| {
-            // A table's or a document's source read, an image's digest
-            // asked of its registry: a request dform makes itself.
-            let at = || {
-                inputs
-                    .iter()
-                    .map(|v| match v {
-                        Value::Str(s) | Value::Oci(s) => crate::timing::location(s),
-                        Value::Uri(u) => crate::timing::location(&u.to_string()),
-                        _ => "..".into(),
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
-            let what = || format!("{}({})", f.name, at());
-            if crate::tables::describe(&f.name).is_some()
-                && let Some(r) = crate::timing::io("io.read", at, what, || tables.answer(f, inputs))
-            {
-                return r;
-            }
-            if let Some(r) = externs::env(f, inputs) {
-                return r;
-            }
-            if let Some(r) = externs::time(f) {
-                return r;
-            }
-            let oci = || crate::files::oci::answer(f, inputs, &files);
-            if f.name == crate::files::oci::RESOLVE
-                && let Some(r) = crate::timing::io(crate::files::oci::RESOLVE, at, what, oci)
-            {
-                return r;
-            }
-            if let Some(r) = memos.answer(f, inputs) {
-                return r;
-            }
-            backend.query_extern(f, inputs)
-        },
+        move |calls| ask_round(calls, &tables, &files, &memos, &backend),
     )
+}
+
+/// The rows of a round's calls, in their order, asked together: a request
+/// dform makes itself (a document's source read, an image's digest asked
+/// of its registry) on a thread of its own, a provider's call sent over
+/// its link before any answer is taken; an environment variable, the time
+/// and a memo answered here. So a round waits on its slowest call, not on
+/// the sum of them.
+fn ask_round(
+    calls: &[externs::Asking],
+    tables: &tables::Tables,
+    files: &crate::files::Files,
+    memos: &crate::memo::Memos,
+    backend: &Providers,
+) -> Vec<Result<Vec<Vec<Value>>>> {
+    /// A request dform makes itself, made on a thread.
+    enum Fetch {
+        /// A table's source, at its location from its root.
+        Read(String, PathBuf),
+        /// An image's digest.
+        Digest,
+    }
+    /// What it brought: a source's read, at its location; rows.
+    enum Fetched {
+        Read(String, Result<crate::files::Outcome>),
+        Rows(Result<Vec<Vec<Value>>>),
+    }
+    let mut answers: Vec<Option<Result<Vec<Vec<Value>>>>> = calls.iter().map(|_| None).collect();
+    let mut fetches = Vec::new();
+    let mut asked = Vec::new();
+    for (n, &(f, inputs)) in calls.iter().enumerate() {
+        let at = || extern_location(inputs);
+        let what = || format!("{}({})", f.name, extern_location(inputs));
+        if tables::describe(&f.name).is_some() {
+            if let Some((location, base)) = tables::Tables::source(f, inputs) {
+                let io = crate::timing::io_begin("io.read", at);
+                fetches.push((n, Fetch::Read(location, base), io));
+                continue;
+            }
+            if let Some(r) = crate::timing::io("io.read", at, what, || tables.answer(f, inputs)) {
+                answers[n] = Some(r);
+                continue;
+            }
+        }
+        if let Some(r) = externs::env(f, inputs).or_else(|| externs::time(f)) {
+            answers[n] = Some(r);
+            continue;
+        }
+        if f.name == crate::files::oci::RESOLVE {
+            let io = crate::timing::io_begin(crate::files::oci::RESOLVE, at);
+            fetches.push((n, Fetch::Digest, io));
+            continue;
+        }
+        if let Some(r) = memos.answer(f, inputs) {
+            answers[n] = Some(r);
+            continue;
+        }
+        match backend.submit_extern(f, inputs) {
+            Ok(a) => asked.push((n, a)),
+            Err(e) => answers[n] = Some(Err(e)),
+        }
+    }
+    backend.flush();
+    std::thread::scope(|scope| {
+        let running: Vec<_> = fetches
+            .into_iter()
+            .map(|(n, fetch, io)| {
+                let (f, inputs) = calls[n];
+                let made = scope.spawn(move || match fetch {
+                    Fetch::Read(location, base) => {
+                        let read = files.read(&location, &base);
+                        Fetched::Read(location, read)
+                    }
+                    Fetch::Digest => Fetched::Rows(
+                        crate::files::oci::answer(f, inputs, files)
+                            .expect("oci.resolve is answered by dform"),
+                    ),
+                });
+                (n, io, made)
+            })
+            .collect();
+        for (n, a) in asked {
+            let (f, inputs) = calls[n];
+            answers[n] = Some(backend.answer_extern(f, inputs, a));
+        }
+        for (n, io, made) in running {
+            let (f, inputs) = calls[n];
+            let made = made.join().unwrap_or_else(|_| {
+                Fetched::Rows(Err(anyhow::anyhow!("{}: the request panicked", f.name)))
+            });
+            io.end(|| format!("{}({})", f.name, extern_location(inputs)));
+            answers[n] = Some(match made {
+                Fetched::Read(location, read) => tables.answer_read(f, inputs, &location, read),
+                Fetched::Rows(rows) => rows,
+            });
+        }
+    });
+    answers
+        .into_iter()
+        .map(|a| a.expect("every call answered"))
+        .collect()
+}
+
+/// An extern call's inputs as a span names them: each location without
+/// its credentials.
+fn extern_location(inputs: &[Value]) -> String {
+    inputs
+        .iter()
+        .map(|v| match v {
+            Value::Str(s) | Value::Oci(s) => crate::timing::location(s),
+            Value::Uri(u) => crate::timing::location(&u.to_string()),
+            _ => "..".into(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The static secret pass and the refinement checks (a literal that
