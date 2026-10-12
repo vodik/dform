@@ -39,7 +39,7 @@ impl Ovh {
     fn refresh_zone(&self, a: &Account, at: &str, zone: &str, notes: &mut Vec<String>) {
         if let Err(e) = a.client.post(
             &format!("/domain/zone/{}/refresh", escape(zone)),
-            &json!({}),
+            None,
         ) {
             notes.push(format!("{at}: the zone {zone} is not refreshed: {e}"));
         }
@@ -114,7 +114,7 @@ impl Ovh {
         }
         let o = a
             .client
-            .post(&format!("/domain/zone/{}/record", escape(zone)), &body)
+            .post(&format!("/domain/zone/{}/record", escape(zone)), Some(&body))
             .map_err(|e| match not_hosted(&a, zone, &e) {
                 Some(m) => refused(at, m),
                 None => failed(at, e),

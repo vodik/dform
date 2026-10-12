@@ -236,8 +236,8 @@ impl Client {
         }
     }
 
-    pub fn post(&self, path: &str, body: &Json) -> Result<Json> {
-        self.send("POST", path, Some(body), true)
+    pub fn post(&self, path: &str, body: Option<&Json>) -> Result<Json> {
+        self.send("POST", path, body, true)
     }
 
     pub fn put(&self, path: &str, body: &Json) -> Result<Json> {
@@ -329,7 +329,7 @@ impl Client {
             ("Accept", "application/json".to_string()),
         ];
         let body = "grant_type=client_credentials&scope=all";
-        let (status, text) = self.exchange("POST", token_url, token_url, &headers, body)?;
+        let (status, text) = self.exchange("POST", token_url, token_url, &headers, Some(body))?;
         let answer = serde_json::from_str::<Json>(&text).unwrap_or(Json::Null);
         let refused = |message: String| Error::Status {
             method: "POST".into(),
@@ -362,7 +362,7 @@ impl Client {
         path: &str,
         url: &str,
         headers: &[(&str, String)],
-        body: &str,
+        body: Option<&str>,
     ) -> Result<(u16, String)> {
         let unreachable = |why: String| Error::Unreachable {
             method: method.into(),
@@ -388,7 +388,10 @@ impl Client {
                 for (k, v) in headers {
                     req = req.header(*k, v);
                 }
-                req.send(body.as_bytes())
+                match body {
+                    Some(body) => req.send(body.as_bytes()),
+                    None => req.send_empty(),
+                }
             }
         };
         let mut resp = resp.map_err(|e| unreachable(e.to_string()))?;
@@ -402,8 +405,11 @@ impl Client {
 
     fn send_once(&self, method: &str, path: &str, body: Option<&Json>, by: By) -> Result<Json> {
         let url = format!("{}{path}", self.creds.url);
-        let body = body.map(Json::to_string).unwrap_or_default();
-        let mut headers = vec![("Content-Type", "application/json".to_string())];
+        let body = body.map(Json::to_string);
+        let mut headers = Vec::new();
+        if body.is_some() {
+            headers.push(("Content-Type", "application/json".to_string()));
+        }
         match (&self.creds.auth, by) {
             (_, By::Bearer(token)) => headers.push(("Authorization", format!("Bearer {token}"))),
             (
@@ -421,13 +427,20 @@ impl Client {
                     headers.push(("X-Ovh-Consumer", consumer_key.clone()));
                     headers.push((
                         "X-Ovh-Signature",
-                        signature(application_secret, consumer_key, method, &url, &body, ts),
+                        signature(
+                            application_secret,
+                            consumer_key,
+                            method,
+                            &url,
+                            body.as_deref().unwrap_or(""),
+                            ts,
+                        ),
                     ));
                 }
             }
             (Auth::OAuth2 { .. } | Auth::Token { .. }, _) => {}
         }
-        let (status, text) = self.exchange(method, path, &url, &headers, &body)?;
+        let (status, text) = self.exchange(method, path, &url, &headers, body.as_deref())?;
         if !(200..300).contains(&status) {
             return Err(Error::Status {
                 method: method.into(),

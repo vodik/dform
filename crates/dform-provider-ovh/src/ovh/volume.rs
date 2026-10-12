@@ -62,7 +62,7 @@ impl Ovh {
         }
         let o = a
             .client
-            .post(&format!("/cloud/project/{p}/volume"), &body)
+            .post(&format!("/cloud/project/{p}/volume"), Some(&body))
             .map_err(|e| failed(at, e))?;
         let id = s(&o, "id").unwrap_or_default().to_string();
         let path = volume_path(&p, &id);
@@ -120,7 +120,7 @@ impl Ovh {
         if want > was {
             let o = a
                 .client
-                .post(&format!("{path}/upsize"), &json!({"size": want}))
+                .post(&format!("{path}/upsize"), Some(&json!({"size": want})))
                 .map_err(|e| failed(at, e))?;
             self.settle(
                 &a,
@@ -181,7 +181,7 @@ impl Ovh {
     ) -> std::result::Result<Json, Failed> {
         let o = a
             .client
-            .post(&format!("{path}/attach"), &json!({"instanceId": instance}))
+            .post(&format!("{path}/attach"), Some(&json!({"instanceId": instance})))
             .map_err(|e| failed(&format!("{at}: attach to instance {instance}"), e))?;
         self.settle(
             a,
@@ -207,7 +207,7 @@ impl Ovh {
     ) -> std::result::Result<Json, Failed> {
         let o = a
             .client
-            .post(&format!("{path}/detach"), &json!({"instanceId": instance}))
+            .post(&format!("{path}/detach"), Some(&json!({"instanceId": instance})))
             .map_err(|e| failed(&format!("{at}: detach from instance {instance}"), e))?;
         self.settle(
             a,

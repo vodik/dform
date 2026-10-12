@@ -122,7 +122,7 @@ impl Ovh {
         }
         let o = a
             .client
-            .post(&format!("/cloud/project/{p}/instance"), &body)
+            .post(&format!("/cloud/project/{p}/instance"), Some(&body))
             .map_err(|e| failed(at, e))?;
         let id = s(&o, "id").unwrap_or_default().to_string();
         let last = wait_active(&a, &p, at, &id, o, notes, say)?;
@@ -168,7 +168,7 @@ impl Ovh {
         let path = format!("/cloud/project/{p}/instance/{}", escape(remote));
         let o = a
             .client
-            .post(&format!("{path}/resize"), &json!({"flavorId": id}))
+            .post(&format!("{path}/resize"), Some(&json!({"flavorId": id})))
             .map_err(|e| failed(at, e))?;
         // The instance's flavor is its `flavorId`, or its `flavor`'s id
         // where the API embeds the flavor.

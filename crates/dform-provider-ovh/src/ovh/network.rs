@@ -73,7 +73,7 @@ impl Ovh {
         }
         let o = a
             .client
-            .post(&format!("/cloud/project/{p}/network/private"), &body)
+            .post(&format!("/cloud/project/{p}/network/private"), Some(&body))
             .map_err(|e| match e.status() {
                 // The API's refusal of a project with no vRack is said as
                 // what it is.
@@ -135,7 +135,7 @@ impl Ovh {
             if !has.contains(&r.as_str()) {
                 last = Some(
                     a.client
-                        .post(&format!("{path}/region"), &json!({"region": r}))
+                        .post(&format!("{path}/region"), Some(&json!({"region": r})))
                         .map_err(|e| failed(at, e))?,
                 );
             }
@@ -312,7 +312,7 @@ impl Ovh {
         });
         let o = a
             .client
-            .post(&format!("{}/subnet", network_path(&p, network)), &body)
+            .post(&format!("{}/subnet", network_path(&p, network)), Some(&body))
             .map_err(|e| failed(at, e))?;
         let (attrs, computed) = map::subnet(network, &o);
         let id = map::subnet_remote(network, s(&o, "id").unwrap_or_default());
@@ -501,7 +501,7 @@ impl Ovh {
         for id in added {
             let os = self.private_network_in(&a, &p, at, region, id)?;
             a.client
-                .post(&path, &json!({"networkId": os}))
+                .post(&path, Some(&json!({"networkId": os})))
                 .map_err(|e| failed(at, e))?;
             notes.push(format!("{at}: an interface on network {id} is attached"));
         }

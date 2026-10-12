@@ -48,7 +48,7 @@ impl Ovh {
         });
         let o = a
             .client
-            .post(&format!("/cloud/project/{p}/user"), &body)
+            .post(&format!("/cloud/project/{p}/user"), Some(&body))
             .map_err(|e| failed(at, e))?;
         let id = o.get("id").and_then(Json::as_i64).unwrap_or(0).to_string();
         let path = format!("/cloud/project/{p}/user/{id}");
@@ -116,7 +116,7 @@ impl Ovh {
     /// answer is dropped: Reveal reads it from the API.
     fn s3_credential(&self, a: &Account, at: &str, path: &str) -> std::result::Result<(), Failed> {
         a.client
-            .post(&format!("{path}/s3Credentials"), &json!({}))
+            .post(&format!("{path}/s3Credentials"), None)
             .map_err(|e| failed(at, e))?;
         Ok(())
     }
@@ -152,7 +152,7 @@ impl Ovh {
             .client
             .post(
                 &format!("{path}/s3Credentials/{}/secret", escape(&access)),
-                &json!({}),
+                None,
             )
             .map_err(|e| CallError::Refused(format!("{at}: {e}")))?;
         let secret = s(&secret, "secret")

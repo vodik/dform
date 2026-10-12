@@ -42,7 +42,7 @@ impl Ovh {
         });
         let o = a
             .client
-            .post(&format!("/cloud/project/{p}/sshkey"), &body)
+            .post(&format!("/cloud/project/{p}/sshkey"), Some(&body))
             .map_err(|e| failed(at, e))?;
         let (attrs, computed) = map::ssh_key(&o);
         Ok((s(&o, "id").unwrap_or_default().to_string(), attrs, computed))

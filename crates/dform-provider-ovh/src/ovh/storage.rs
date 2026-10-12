@@ -37,7 +37,7 @@ impl Ovh {
             .client
             .post(
                 &format!("/cloud/project/{p}/region/{}/storage", escape(region)),
-                &body,
+                Some(&body),
             )
             .map_err(|e| failed(at, e))?;
         let (attrs, computed) = map::container(&o);
