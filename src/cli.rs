@@ -475,6 +475,8 @@ impl std::error::Error for Refused {}
 /// log, and then its lock is released; what the outcome says, if
 /// anything, is said last.
 fn run(cli: Cli, hook: Option<&mut crate::controller::Hook>) -> Result<Outcome> {
+    // The run reads each of its state objects once (`dform_s3::Reads`).
+    let _reads = dform_s3::remember_reads();
     let mut session = None;
     // What resumes an interrupted run: the command that was interrupted.
     let verb = cli.cmd.verb();

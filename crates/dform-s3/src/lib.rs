@@ -21,13 +21,15 @@
 //! no profile file, no instance metadata.
 
 use anyhow::{Context, Result, anyhow, bail};
-use dform_core::store::{Cond, Object, S3Spec, Store};
+use dform_core::store::{self, Cond, Object, S3Spec, Store};
 use dform_core::timing;
 use rusty_s3::actions::{
     CreateBucket, DeleteObject, GetObject, ListObjectsV2, PutObject, S3Action,
 };
 use rusty_s3::{Bucket, Credentials, UrlStyle};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(any(test, feature = "fake"))]
@@ -48,6 +50,87 @@ pub struct S3Store {
     /// The deployment's prefix, without a trailing `/`.
     prefix: String,
     agent: ureq::Agent,
+    /// What the run that opened it read ([`remember_reads`]).
+    reads: Option<Arc<Reads>>,
+}
+
+/// What one run read of its buckets: each of a deployment's state objects
+/// (its state, its audit log, its master and key) once, and its audit
+/// log's listing, by where they are, kept until the run writes or deletes
+/// them (what it writes is what it then reads) or a write conditional on
+/// them is refused (someone else wrote; it is read again). So a run reads
+/// one snapshot of its state, however many of its parts ask for it, as it
+/// reads the world once (docs/reference.md, "One fetch per call"). A
+/// lease, published outputs and approvals are read every time: another
+/// process may change them while the run waits on them.
+#[derive(Default)]
+struct Reads {
+    objects: Mutex<BTreeMap<String, Option<Object>>>,
+    lists: Mutex<BTreeMap<String, Vec<String>>>,
+}
+
+/// The run's reads, while one is remembering them.
+static RUN: Mutex<Option<Arc<Reads>>> = Mutex::new(None);
+
+/// A run remembering what it reads of its buckets, until it is dropped:
+/// every store opened meanwhile reads each state object once. Dropped,
+/// the run around it (a controller's, whose cycles are runs) remembers
+/// its own again.
+pub struct Remembering(Option<Arc<Reads>>);
+
+impl Drop for Remembering {
+    fn drop(&mut self) {
+        *RUN.lock().unwrap_or_else(|e| e.into_inner()) = self.0.take();
+    }
+}
+
+/// Remember what this run reads of its buckets ([`Reads`]), until the
+/// returned guard is dropped: one run of a deployment, never a process
+/// that serves many (a language server).
+pub fn remember_reads() -> Remembering {
+    let mut run = RUN.lock().unwrap_or_else(|e| e.into_inner());
+    Remembering(run.replace(Arc::default()))
+}
+
+/// Whether a run reads `key` once ([`Reads`]).
+fn kept(key: &str) -> bool {
+    [store::STATE, store::AUDIT, store::MASTER, store::KEY].contains(&key)
+        || key.starts_with(store::AUDIT_SEGMENTS)
+}
+
+impl Reads {
+    fn get(&self, at: &str) -> Option<Option<Object>> {
+        self.objects.lock().unwrap().get(at).cloned()
+    }
+
+    fn got(&self, at: &str, o: &Option<Object>) {
+        self.objects
+            .lock()
+            .unwrap()
+            .insert(at.to_string(), o.clone());
+    }
+
+    fn listed(&self, at: &str) -> Option<Vec<String>> {
+        self.lists.lock().unwrap().get(at).cloned()
+    }
+
+    fn list(&self, at: &str, keys: &[String]) {
+        self.lists
+            .lock()
+            .unwrap()
+            .insert(at.to_string(), keys.to_vec());
+    }
+
+    /// The object at `at` is now `o` (written), or not known (deleted, a
+    /// write refused); a listing it is in is not known either.
+    fn wrote(&self, at: &str, o: Option<Object>) {
+        let mut objects = self.objects.lock().unwrap();
+        match o {
+            Some(o) => objects.insert(at.to_string(), Some(o)),
+            None => objects.remove(at),
+        };
+        self.lists.lock().unwrap().retain(|p, _| !at.starts_with(p));
+    }
 }
 
 /// The process's one HTTP agent: every store of a run shares its pool of
@@ -138,7 +221,22 @@ impl S3Store {
             creds,
             prefix,
             agent: agent(),
+            reads: RUN.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         })
+    }
+
+    /// The run's reads, where `key` is one it reads once.
+    fn reads(&self, key: &str) -> Option<&Reads> {
+        self.reads.as_deref().filter(|_| kept(key))
+    }
+
+    /// Where `key` is, as the run's reads know it: endpoint and object.
+    fn at(&self, key: &str) -> String {
+        format!(
+            "{} {}",
+            self.endpoint.as_deref().unwrap_or("aws"),
+            self.locate(key)
+        )
     }
 
     /// Does the server keep the conditions of a write, `If-None-Match: *`
@@ -278,9 +376,17 @@ impl Store for S3Store {
     }
 
     fn get(&self, key: &str) -> Result<Option<Object>> {
+        let reads = self.reads(key);
+        if let Some(o) = reads.and_then(|r| r.get(&self.at(key))) {
+            return Ok(o);
+        }
         let at = || self.locate(key);
         let what = || format!("s3 get {}", self.locate(key));
-        timing::io("s3.get", at, what, || self.get_now(key))
+        let o = timing::io("s3.get", at, what, || self.get_now(key))?;
+        if let Some(r) = reads {
+            r.got(&self.at(key), &o);
+        }
+        Ok(o)
     }
 
     fn put(&self, key: &str, bytes: &[u8], cond: &Cond) -> Result<Option<String>> {
@@ -292,19 +398,46 @@ impl Store for S3Store {
                 bytes.len()
             )
         };
-        timing::io("s3.put", at, what, || self.put_now(key, bytes, cond))
+        let written = timing::io("s3.put", at, what, || self.put_now(key, bytes, cond));
+        if let Some(r) = self.reads(key) {
+            let o = written
+                .as_ref()
+                .ok()
+                .and_then(Option::as_ref)
+                .map(|etag| Object {
+                    bytes: bytes.to_vec(),
+                    etag: etag.clone(),
+                });
+            r.wrote(&self.at(key), o);
+        }
+        written
     }
 
     fn list(&self, prefix: &str) -> Result<Vec<String>> {
+        let reads = self
+            .reads
+            .as_deref()
+            .filter(|_| prefix == store::AUDIT_SEGMENTS);
+        if let Some(keys) = reads.and_then(|r| r.listed(&self.at(prefix))) {
+            return Ok(keys);
+        }
         let at = || self.locate(prefix);
         let what = || format!("s3 list {}", self.locate(prefix));
-        timing::io("s3.list", at, what, || self.list_now(prefix))
+        let keys = timing::io("s3.list", at, what, || self.list_now(prefix))?;
+        if let Some(r) = reads {
+            r.list(&self.at(prefix), &keys);
+        }
+        Ok(keys)
     }
 
     fn delete(&self, key: &str) -> Result<()> {
         let at = || self.locate(key);
         let what = || format!("s3 delete {}", self.locate(key));
-        timing::io("s3.delete", at, what, || self.delete_now(key))
+        let deleted = timing::io("s3.delete", at, what, || self.delete_now(key));
+        if let Some(r) = self.reads(key) {
+            r.wrote(&self.at(key), None);
+        }
+        deleted
     }
 }
 

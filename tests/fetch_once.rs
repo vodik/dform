@@ -258,3 +258,49 @@ resource k8s.deployment app {{
         resolves.iter().map(|s| attr(s, "waited_on")).collect();
     assert_eq!(waited.len(), 1, "one block: {waited:?}");
 }
+
+/// A plan reads each of its state objects in the bucket once (the state,
+/// the audit log and its segments, the master), however many parts of
+/// the run ask for them.
+#[test]
+fn a_plan_reads_each_state_object_once() {
+    let server = dform_s3::fake::Server::start();
+    let s = Scratch::project("fetch-once-s3");
+    common::copy_dir(&common::repo().join("tests/fixtures/demo"), &s.dir);
+    let mut toml = std::fs::read_to_string(s.path("dform.toml")).unwrap();
+    toml.push_str(&format!(
+        "\n[defaults]\nbackend = 's3(\"dform-test\", \"once/{{stack}}\", \
+         {{endpoint: \"{}\", region: \"us-east-1\"}})'\n\n\
+         [secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n",
+        server.endpoint
+    ));
+    s.write("dform.toml", &toml);
+    let run = |args: &[&str]| {
+        let out = common::dform()
+            .args(common::yes(args))
+            .current_dir(&s.dir)
+            .env("NO_COLOR", "1")
+            .env("DFORM_S3_ACCESS_KEY_ID", "fake")
+            .env("DFORM_S3_SECRET_ACCESS_KEY", "fake")
+            .env("DFORM_TEST_PASSPHRASE", "fetch once")
+            .output()
+            .unwrap();
+        Run::from(out)
+    };
+    run(&["apply", "dform", "env=staging"]).success();
+    let before = server.requests().len();
+    let r = run(&["plan", "dform", "env=staging"]).success();
+    assert!(r.stdout.contains("is up to date"), "{}", r.stdout);
+    let gets: Vec<String> = server.requests()[before..]
+        .iter()
+        .filter_map(|q| q.strip_prefix("GET /dform-test/once/"))
+        .map(str::to_string)
+        .collect();
+    let mut once = gets.clone();
+    once.sort();
+    once.dedup();
+    assert_eq!(gets.len(), once.len(), "an object read twice: {gets:?}");
+    for k in ["state.json", "state.master", "state.audit/000001.jsonl"] {
+        assert!(gets.iter().any(|g| g.ends_with(k)), "{k} in {gets:?}");
+    }
+}
