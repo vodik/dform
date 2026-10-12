@@ -170,3 +170,9 @@ opt-level = 3
 
 [profile.dev.package.salsa20]
 opt-level = 3
+
+# Linking is the cost of a dev build (lld is already the linker): full
+# debug info made a relink of `dform` 11 s and the one test binary 800 MB.
+# Line tables keep file and line in backtraces and cut the relink to 4 s.
+[profile.dev]
+debug = "line-tables-only"
