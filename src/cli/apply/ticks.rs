@@ -79,6 +79,24 @@ pub(super) struct Ticks<'a, 'h> {
     teller: Teller,
 }
 
+/// A tick planned ([`Ticks::plan`]): its plan, and the adoptions and the
+/// lifecycle its calls are made with.
+pub(super) struct TickPlan {
+    pub(super) tick: Tick,
+    adopts: Vec<resources::Adopt>,
+    lifecycle: zset::Lifecycle,
+}
+
+/// What a tick's calls did ([`Ticks::apply`]): what the executor saw of
+/// the world, what the tick held, whether it changed anything, and what
+/// it left for a run that holds the master.
+pub(super) struct Ran {
+    seen: executor::Seen,
+    pending: BTreeSet<address::Address>,
+    pub(super) changed: bool,
+    needing: BTreeMap<address::Address, Vec<String>>,
+}
+
 /// One tick's plan, and what the tick made of it.
 pub(super) struct Tick {
     pub(super) planned: Planned,
@@ -313,6 +331,22 @@ impl<'a, 'h> Ticks<'a, 'h> {
         // Between ticks, a signal stops the apply here.
         crate::interrupt::check()?;
         let _tick = crate::timing::tick(self.tick);
+        let mut p = self.plan(wanted)?;
+        if let Some(o) = self.show(&p.tick)? {
+            return Ok(Next::Done(o));
+        }
+        self.approve(&p.tick)?;
+        if self.tick == 1 {
+            self.log_start()?;
+        }
+        let ran = self.apply(&mut p)?;
+        self.after(p, ran)
+    }
+
+    /// The tick planned from what the last boundary derived (`wanted`):
+    /// its plan, checked against a plan file at tick 1, and what it needs,
+    /// holds and is followed by.
+    pub(super) fn plan(&mut self, wanted: Wanted) -> Result<TickPlan> {
         let Wanted {
             res,
             violations,
@@ -329,17 +363,20 @@ impl<'a, 'h> Ticks<'a, 'h> {
         }
         self.say_configured(&planned.res)?;
         self.policy_after(&planned);
-        let mut t = self.decide(planned)?;
-        if let Some(o) = self.show(&t)? {
-            return Ok(Next::Done(o));
-        }
-        self.approve(&t)?;
-        if self.tick == 1 {
-            self.log_start()?;
-        }
-        // A run that does not hold the master (R-164) makes no change that
-        // needs it, nor one that depends on one: they wait for an apply
-        // with it, and this one stops after the tick.
+        Ok(TickPlan {
+            tick: self.decide(planned)?,
+            adopts,
+            lifecycle,
+        })
+    }
+
+    /// The tick's calls: what needs the master this run does not hold
+    /// (R-164) left for an apply with it, the rest made.
+    pub(super) fn apply(&mut self, p: &mut TickPlan) -> Result<Ran> {
+        // A run that does not hold the master makes no change that needs
+        // it, nor one that depends on one: they wait for an apply with it,
+        // and this one stops after the tick.
+        let t = &mut p.tick;
         let needing = needing_master(
             &t.planned.plan,
             &t.planned.resources,
@@ -350,15 +387,28 @@ impl<'a, 'h> Ticks<'a, 'h> {
             .plan
             .actions
             .retain(|a| !needing.contains_key(&a.addr));
-        let (seen, pending, changed) = self.call(&mut t, &adopts, &lifecycle)?;
-        if !needing.is_empty() {
+        let (seen, pending, changed) = self.call(t, &p.adopts, &p.lifecycle)?;
+        Ok(Ran {
+            seen,
+            pending,
+            changed,
+            needing,
+        })
+    }
+
+    /// After a tick's calls: the apply's end, or the boundary the next
+    /// tick plans from, a tick that changed nothing waiting first for what
+    /// it waits on.
+    pub(super) fn after(&mut self, p: TickPlan, ran: Ran) -> Result<Next> {
+        let t = p.tick;
+        if !ran.needing.is_empty() {
             self.st.in_flight = None;
             self.persist()?;
             return Ok(Next::Done(Outcome::Stopped {
                 tick: self.tick,
                 why: needing_text(
                     self.deployment(),
-                    &needing,
+                    &ran.needing,
                     self.cx.master.without.as_deref(),
                 ),
             }));
@@ -369,7 +419,9 @@ impl<'a, 'h> Ticks<'a, 'h> {
         if !t.boundary {
             return self.finish(&t.planned.res, t.undeformed).map(Next::Done);
         }
-        if !changed && let Some(h) = self.hook.as_deref_mut() {
+        if !ran.changed
+            && let Some(h) = self.hook.as_deref_mut()
+        {
             // Everything definite is held: wait for the next event.
             self.st.in_flight = None;
             self.cx.dep.save_state(&self.st)?;
@@ -381,7 +433,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
             )?;
             return Ok(Next::Done(Outcome::Done));
         }
-        if !changed {
+        if !ran.changed {
             self.wait(&t)?;
         }
         if self.tick == self.args.max_ticks {
@@ -390,7 +442,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 self.args.max_ticks
             );
         }
-        let wanted = self.boundary(&seen, &pending)?;
+        let wanted = self.boundary(&ran.seen, &ran.pending)?;
         self.tick += 1;
         Ok(Next::Tick(Box::new(wanted)))
     }

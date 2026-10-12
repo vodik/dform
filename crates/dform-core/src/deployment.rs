@@ -601,91 +601,121 @@ impl Evaluator {
         more: &[Atom],
         tick: Option<usize>,
     ) -> Result<(EvalResult, Vec<String>)> {
-        let backend = &self.backend;
-        let externs = &self.externs;
-        let program = &self.program;
-        let mut extra = self.base_extra.clone();
-        // The types a provider configured in this run serves beyond the
-        // schema the run loaded (a cluster's CRDs): their catalog too.
-        extra.extend(backend.learned());
-        extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
-        let (res, mut violations) = if more.is_empty() {
-            let (mut res, mut violations, mut resumable) = crate::timing::time(
-                || "evaluated".into(),
-                || externs.eval_resumable(program, &extra, zset::POLICY_INPUTS),
-            )?;
-            // A provider the program configures, its settings now known,
-            // is configured, and what it serves read again.
-            let mut configured = backend.configure_from(agreed(&res.facts))?;
-            // A kind a CRD the program made defines, served now (R-126).
-            let mut learned = self.learn_made_kinds(&res, st)?;
-            // Again while that configures another: a provider whose
-            // settings one configured just now reads (a password Vault
-            // keeps configuring Postgres, R-172), a round per link of the
-            // chain at most.
-            let mut rounds = 0;
-            while (!configured.is_empty() || learned) && rounds <= backend.names().len() {
-                rounds += 1;
-                self.configured.borrow_mut().extend(configured);
-                // An extern of a provider that was waiting on its settings
-                // answered "not yet": ask it again.
-                externs.forget_not_yet();
-                extra = self.base_extra.clone();
-                extra.extend(backend.learned());
-                extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
-                (res, violations, resumable) = crate::timing::time(
-                    || "evaluated".into(),
-                    || externs.eval_resumable(program, &extra, zset::POLICY_INPUTS),
-                )?;
-                configured = backend.configure_from(agreed(&res.facts))?;
-                learned = false;
-            }
-            // Each provider reaches the account the program expects of it
-            // (`expect_account`), or nothing is planned.
-            backend
-                .check_accounts(&res.facts, &self.secret_accounts, &self.secret_settings)
-                .with_context(|| format!("deployment {}", self.deployment))?;
-            *self.last.borrow_mut() = Some((extra, resumable));
-            (res, violations)
-        } else {
-            let resumed = match &*self.last.borrow() {
-                Some((seen, resumable)) if *seen == extra => Some(resumable.with_at(more, tick)?),
-                _ => None,
-            };
-            let (res, violations) = match resumed {
-                Some((res, violations)) if externs.settle(&res.facts)? => (res, violations),
-                _ => {
-                    // A new extern call: the answers the resumable was
-                    // taken with are not all of them any more.
-                    *self.last.borrow_mut() = None;
-                    extra.extend(more.iter().cloned());
-                    crate::timing::time(
-                        || "evaluated".into(),
-                        || externs.eval_at(program, &extra, tick),
-                    )?
-                }
-            };
-            // At a boundary too: a provider whose settings the last tick
-            // made known (a kubeconfig read from the server it created) is
-            // configured now, and the program evaluated again over what it
-            // serves (R-45).
-            let configured = backend.configure_from(agreed(&res.facts))?;
-            // So is a kind the CRD the last tick made defines (R-126).
-            let learned = self.learn_made_kinds(&res, st)?;
-            if !configured.is_empty() || learned {
-                self.configured.borrow_mut().extend(configured);
-                externs.forget_not_yet();
-                *self.last.borrow_mut() = None;
-                let (res, violations) = self.evaluate_with(st, withheld, more, tick)?;
-                backend
-                    .check_accounts(&res.facts, &self.secret_accounts, &self.secret_settings)
-                    .with_context(|| format!("deployment {}", self.deployment))?;
-                return Ok((res, violations));
-            }
-            (res, violations)
+        let (res, mut violations) = match more.is_empty() {
+            true => self.evaluate_afresh(st, withheld)?,
+            false => self.evaluate_on(st, withheld, more, tick)?,
         };
         violations.extend(inputs::violations(&res.facts, &self.declared));
         violations.extend(disagreements(&res.facts).into_values());
+        Ok((res, violations))
+    }
+
+    /// The facts an evaluation adds to the program: the run's own, the
+    /// catalog of what a provider configured in this run serves beyond
+    /// the schema the run loaded (a cluster's CRDs), and the world as `st`
+    /// has it, but `withheld`'s.
+    fn extra(&self, st: &State, withheld: &BTreeSet<Address>) -> Result<Vec<Atom>> {
+        let backend = &self.backend;
+        let mut extra = self.base_extra.clone();
+        extra.extend(backend.learned());
+        extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
+        Ok(extra)
+    }
+
+    /// The program evaluated from the start; each provider whose settings
+    /// it makes known configured, and the program evaluated again over
+    /// what that serves, as often as that configures another.
+    fn evaluate_afresh(
+        &self,
+        st: &State,
+        withheld: &BTreeSet<Address>,
+    ) -> Result<(EvalResult, Vec<String>)> {
+        let (backend, externs, program) = (&self.backend, &self.externs, &self.program);
+        let mut extra = self.extra(st, withheld)?;
+        let (mut res, mut violations, mut resumable) = crate::timing::time(
+            || "evaluated".into(),
+            || externs.eval_resumable(program, &extra, zset::POLICY_INPUTS),
+        )?;
+        // A provider the program configures, its settings now known,
+        // is configured, and what it serves read again.
+        let mut configured = backend.configure_from(agreed(&res.facts))?;
+        // A kind a CRD the program made defines, served now (R-126).
+        let mut learned = self.learn_made_kinds(&res, st)?;
+        // Again while that configures another: a provider whose settings
+        // one configured just now reads (a password Vault keeps
+        // configuring Postgres, R-172), a round per link of the chain at
+        // most.
+        let mut rounds = 0;
+        while (!configured.is_empty() || learned) && rounds <= backend.names().len() {
+            rounds += 1;
+            self.configured.borrow_mut().extend(configured);
+            // An extern of a provider that was waiting on its settings
+            // answered "not yet": ask it again.
+            externs.forget_not_yet();
+            extra = self.extra(st, withheld)?;
+            (res, violations, resumable) = crate::timing::time(
+                || "evaluated".into(),
+                || externs.eval_resumable(program, &extra, zset::POLICY_INPUTS),
+            )?;
+            configured = backend.configure_from(agreed(&res.facts))?;
+            learned = false;
+        }
+        // Each provider reaches the account the program expects of it
+        // (`expect_account`), or nothing is planned.
+        backend
+            .check_accounts(&res.facts, &self.secret_accounts, &self.secret_settings)
+            .with_context(|| format!("deployment {}", self.deployment))?;
+        *self.last.borrow_mut() = Some((extra, resumable));
+        Ok((res, violations))
+    }
+
+    /// The last evaluation continued over `more` (a policy pass's
+    /// deformation facts, of apply tick `tick`) from the first stratum
+    /// that reads them, else evaluated again with them; a provider whose
+    /// settings that makes known configured, and evaluated again over it.
+    fn evaluate_on(
+        &self,
+        st: &State,
+        withheld: &BTreeSet<Address>,
+        more: &[Atom],
+        tick: Option<usize>,
+    ) -> Result<(EvalResult, Vec<String>)> {
+        let (backend, externs, program) = (&self.backend, &self.externs, &self.program);
+        let mut extra = self.extra(st, withheld)?;
+        let resumed = match &*self.last.borrow() {
+            Some((seen, resumable)) if *seen == extra => Some(resumable.with_at(more, tick)?),
+            _ => None,
+        };
+        let (res, violations) = match resumed {
+            Some((res, violations)) if externs.settle(&res.facts)? => (res, violations),
+            _ => {
+                // A new extern call: the answers the resumable was taken
+                // with are not all of them any more.
+                *self.last.borrow_mut() = None;
+                extra.extend(more.iter().cloned());
+                crate::timing::time(
+                    || "evaluated".into(),
+                    || externs.eval_at(program, &extra, tick),
+                )?
+            }
+        };
+        // At a boundary too: a provider whose settings the last tick made
+        // known (a kubeconfig read from the server it created) is
+        // configured now, and the program evaluated again over what it
+        // serves (R-45).
+        let configured = backend.configure_from(agreed(&res.facts))?;
+        // So is a kind the CRD the last tick made defines (R-126).
+        let learned = self.learn_made_kinds(&res, st)?;
+        if !configured.is_empty() || learned {
+            self.configured.borrow_mut().extend(configured);
+            externs.forget_not_yet();
+            *self.last.borrow_mut() = None;
+            let (res, violations) = self.evaluate_on(st, withheld, more, tick)?;
+            backend
+                .check_accounts(&res.facts, &self.secret_accounts, &self.secret_settings)
+                .with_context(|| format!("deployment {}", self.deployment))?;
+            return Ok((res, violations));
+        }
         Ok((res, violations))
     }
 
@@ -1409,6 +1439,16 @@ pub fn waitable(on: &BTreeSet<String>, state: &State, not_yet: &BTreeSet<String>
         .collect()
 }
 
+/// What a deployment's evaluation starts from ([`Located::evaluate`]):
+/// its providers, the run's reader of locations and its tables, and its
+/// state.
+struct Started {
+    backend: Rc<Providers>,
+    files: std::sync::Arc<crate::files::Files>,
+    tables: Rc<tables::Tables>,
+    st: State,
+}
+
 /// An evaluation of a deployment.
 pub struct Evaluation {
     pub located: Located,
@@ -1466,101 +1506,14 @@ impl Located {
         opts: &Options,
         obs: &mut dyn Observer,
     ) -> Result<Evaluation> {
-        let l = &self.loaded;
-        let secret_outputs = stack::secret_outputs(&outputs);
-        // State is read while the providers start: one is a round trip to
-        // the backend, the other processes coming up (and a schema read).
-        let dep = self.dep.clone();
-        let within = tracing::Span::current();
-        let reading = std::thread::spawn(move || {
-            let _within = within.enter();
-            let _read = crate::timing::traced(|| "state read".into());
-            dep.load_state()
-        });
-        // The run's reader of locations (R-153): the program's loaders and
-        // the providers' host read through it, one mirror cache and one
-        // known-hosts store (state's, once read).
-        let files = std::sync::Arc::new(crate::files::Files::new(
-            crate::files::Settings::of(l.manifest.as_ref()),
-            Default::default(),
-        ));
-        let backend = Rc::new(self.start_providers(&outputs, opts, &files)?);
-        // Externs are asked on demand: a table's of its file, else of the
-        // file provider, else of the providers.
-        let tables = Rc::new(tables::Tables::with_files(files.clone()));
-        let mut st = reading
-            .join()
-            .map_err(|_| anyhow::anyhow!("internal: the state read panicked"))??;
-        self.derive_with(opts, &st)?;
-        // `memo.first`: what state keeps, a sealed one opened with the
-        // deployment's key.
-        let memos = Rc::new(crate::memo::Memos::new(&st, &opts.master));
-        // The SSH host keys state knows.
-        files.know(&st.known_hosts);
-        let mut base_extra = self.base_facts(&outputs, opts);
-        let (discovered, scope) = self.load_schema(&backend, &base_extra, &st, opts)?;
-        // The data sources the providers' schemas declare that the program
-        // reads with no `extern` line of its own (R-106): declared as if it
-        // had one.
-        let with_externs = l
-            .lowered
-            .as_ref()
-            .map(|l| with_schema_externs(l, backend.schema()));
-        let lowered = with_externs.as_ref();
-        let externs = run_externs(lowered, &tables, &files, memos, &backend);
-        // What the plan file read, before asking.
-        externs.preload(opts.recorded.clone());
-        // What a run plans, its providers declare: a type none does would
-        // be handed to one that knows nothing of it.
-        if opts.check_types {
-            backend.check_types(&self.program, &l.providers)?;
-        }
-        // A provider configured from what it serves itself is a cycle.
-        if let Some(l) = lowered {
-            backend.check_configuration(&l.program, &l.extern_fns, |p| {
-                externs::in_process(p) || tables::describe(p).is_some()
-            })?;
-        }
-        // Apply calls whose answer was lost, resolved before anything is
-        // planned: a plan sees what they did (`apply` writes it down).
-        // Those of a provider the program configures wait for the
-        // evaluation to configure it (R-177).
-        let waiting = executor::uncertain_waiting(&backend, &st);
-        for line in executor::resolve_uncertain(&backend, &mut st, |_| true)? {
-            obs.note(Note::Resolved(line));
-        }
-        if let Some(l) = lowered {
-            check(l, backend.schema(), &secret_outputs, &externs, obs)?;
-            // Where the pass found secrets, for the redactor (R-128).
-            base_extra.extend(crate::secrets::taint(l, backend.schema(), &secret_outputs));
-        }
-        // An `expect_account` a secret reaches is named by its label.
-        let secret_accounts = lowered
-            .map(|l| crate::secrets::secret_expected_accounts(l, backend.schema(), &secret_outputs))
-            .unwrap_or_default();
-        let secret_settings = lowered
-            .map(|l| crate::secrets::secret_settings(l, backend.schema(), &secret_outputs))
-            .unwrap_or_default();
-        base_extra.extend(backend.catalog(scope.as_ref())?);
-        base_extra.extend(discovered);
-        base_extra.extend(obs.facts(&backend, &st)?);
-        let program = self.typed_program(lowered, backend.schema())?;
-        let evaluator = Evaluator {
-            backend: backend.clone(),
-            externs,
-            files,
-            tables: tables.clone(),
-            program,
-            base_extra,
-            declared: l.declared.clone(),
-            secret_accounts,
-            deployment: self.deployment.clone(),
-            last_apply: opts.last_apply.clone(),
-            last: RefCell::new(None),
-            configured: RefCell::new(Vec::new()),
-            secret_settings,
-            destroy: opts.destroy,
-        };
+        let mut started = self.start(&outputs, opts)?;
+        let (evaluator, waiting) = self.evaluator(&outputs, opts, obs, &mut started)?;
+        let Started {
+            backend,
+            tables,
+            mut st,
+            ..
+        } = started;
         let (res, violations, moves) = evaluator.settle(&mut st, &waiting, obs)?;
         // The tables' sources; a git table whose ref has moved since the
         // deployment was last applied says so.
@@ -1594,6 +1547,143 @@ impl Located {
             policy,
             evaluator,
         })
+    }
+
+    /// The evaluation's start: its state read while its providers start
+    /// (one is a round trip to the backend, the other processes coming
+    /// up), and the run's reader of locations and its tables.
+    fn start(&self, outputs: &[stack::Read], opts: &Options) -> Result<Started> {
+        let l = &self.loaded;
+        let dep = self.dep.clone();
+        let within = tracing::Span::current();
+        let reading = std::thread::spawn(move || {
+            let _within = within.enter();
+            let _read = crate::timing::traced(|| "state read".into());
+            dep.load_state()
+        });
+        // The run's reader of locations (R-153): the program's loaders and
+        // the providers' host read through it, one mirror cache and one
+        // known-hosts store (state's, once read).
+        let files = std::sync::Arc::new(crate::files::Files::new(
+            crate::files::Settings::of(l.manifest.as_ref()),
+            Default::default(),
+        ));
+        let backend = Rc::new(self.start_providers(outputs, opts, &files)?);
+        // Externs are asked on demand: a table's of its file, else of the
+        // file provider, else of the providers.
+        let tables = Rc::new(tables::Tables::with_files(files.clone()));
+        let st = reading
+            .join()
+            .map_err(|_| anyhow::anyhow!("internal: the state read panicked"))??;
+        self.derive_with(opts, &st)?;
+        // The SSH host keys state knows.
+        files.know(&st.known_hosts);
+        Ok(Started {
+            backend,
+            files,
+            tables,
+            st,
+        })
+    }
+
+    /// The deployment's evaluator, over what `started` started: the
+    /// schema loaded, the externs it asks, the program checked against the
+    /// providers, and the calls whose answer was lost resolved (`st`
+    /// changes); and the uncertain calls that wait on a provider the
+    /// program configures (R-177).
+    fn evaluator(
+        &self,
+        outputs: &[stack::Read],
+        opts: &Options,
+        obs: &mut dyn Observer,
+        started: &mut Started,
+    ) -> Result<(Evaluator, BTreeSet<String>)> {
+        let l = &self.loaded;
+        let Started {
+            backend,
+            files,
+            tables,
+            st,
+        } = started;
+        let secret_outputs = stack::secret_outputs(outputs);
+        // `memo.first`: what state keeps, a sealed one opened with the
+        // deployment's key.
+        let memos = Rc::new(crate::memo::Memos::new(st, &opts.master));
+        let mut base_extra = self.base_facts(outputs, opts);
+        let (discovered, scope) = self.load_schema(backend, &base_extra, st, opts)?;
+        // The data sources the providers' schemas declare that the program
+        // reads with no `extern` line of its own (R-106): declared as if it
+        // had one.
+        let with_externs = l
+            .lowered
+            .as_ref()
+            .map(|l| with_schema_externs(l, backend.schema()));
+        let lowered = with_externs.as_ref();
+        let externs = run_externs(lowered, tables, files, memos, backend);
+        // What the plan file read, before asking.
+        externs.preload(opts.recorded.clone());
+        self.check_providers(backend, lowered, opts)?;
+        // Apply calls whose answer was lost, resolved before anything is
+        // planned: a plan sees what they did (`apply` writes it down).
+        // Those of a provider the program configures wait for the
+        // evaluation to configure it (R-177).
+        let waiting = executor::uncertain_waiting(backend, st);
+        for line in executor::resolve_uncertain(backend, st, |_| true)? {
+            obs.note(Note::Resolved(line));
+        }
+        if let Some(l) = lowered {
+            check(l, backend.schema(), &secret_outputs, &externs, obs)?;
+            // Where the pass found secrets, for the redactor (R-128).
+            base_extra.extend(crate::secrets::taint(l, backend.schema(), &secret_outputs));
+        }
+        // An `expect_account` a secret reaches is named by its label.
+        let secret_accounts = lowered
+            .map(|l| crate::secrets::secret_expected_accounts(l, backend.schema(), &secret_outputs))
+            .unwrap_or_default();
+        let secret_settings = lowered
+            .map(|l| crate::secrets::secret_settings(l, backend.schema(), &secret_outputs))
+            .unwrap_or_default();
+        base_extra.extend(backend.catalog(scope.as_ref())?);
+        base_extra.extend(discovered);
+        base_extra.extend(obs.facts(backend, st)?);
+        let program = self.typed_program(lowered, backend.schema())?;
+        let evaluator = Evaluator {
+            backend: backend.clone(),
+            externs,
+            files: files.clone(),
+            tables: tables.clone(),
+            program,
+            base_extra,
+            declared: l.declared.clone(),
+            secret_accounts,
+            deployment: self.deployment.clone(),
+            last_apply: opts.last_apply.clone(),
+            last: RefCell::new(None),
+            configured: RefCell::new(Vec::new()),
+            secret_settings,
+            destroy: opts.destroy,
+        };
+        Ok((evaluator, waiting))
+    }
+
+    /// What a run plans, its providers declare: a type none does would be
+    /// handed to one that knows nothing of it. A provider configured from
+    /// what it serves itself is a cycle.
+    fn check_providers(
+        &self,
+        backend: &Providers,
+        lowered: Option<&transform::Lowered>,
+        opts: &Options,
+    ) -> Result<()> {
+        if opts.check_types {
+            backend.check_types(&self.program, &self.loaded.providers)?;
+        }
+        if let Some(l) = lowered {
+            backend.check_configuration(&l.program, &l.extern_fns, |p| {
+                externs::in_process(p) || tables::describe(p).is_some()
+            })?;
+        }
+        Ok(())
     }
 
     /// The schema, asked for once the run knows the types it names: what
