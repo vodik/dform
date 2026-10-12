@@ -123,7 +123,11 @@ impl Lowerer<'_> {
                 Res::Ref { typ, addr, path } => self
                     .path_string(path)
                     .filter(|p| !p.is_empty())
-                    .map(|p| (self.term_of(*typ), self.term_of(*addr), p)),
+                    .map(|list| Elem {
+                        typ: (self.term_of(*typ), *typ),
+                        addr: (self.term_of(*addr), *addr),
+                        list,
+                    }),
                 _ => None,
             };
             let Some(of) = of else {
@@ -145,8 +149,9 @@ impl Lowerer<'_> {
         rc.first.insert(src.clone(), at);
         rc.binders.insert(src.clone());
         let (rel, of) = read;
-        let v = &rc.vars[&src];
-        self.building(rc, at, |b| b.call_into(rel, vec![of], v));
+        let v = rc.vars[&src].clone();
+        let read = self.building(rc, at, |b| b.call_into(rel, vec![of], &v));
+        rc.each_reads.insert(v, read);
         Ok(src)
     }
 

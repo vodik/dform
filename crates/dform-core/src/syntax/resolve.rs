@@ -672,11 +672,26 @@ struct Rc {
     untyped_refs: BTreeSet<String>,
     /// Source variable -> the resource list its `in` ranges over, `(T, A,
     /// path)`: `set c.p` writes that element (R-69).
-    elems: BTreeMap<String, (Term, Term, String)>,
+    elems: BTreeMap<String, Elem>,
+    /// Lowered variable -> the read a `set` target's `[_]` binds it by,
+    /// for the target's first use of it (`each_binding`).
+    each_reads: BTreeMap<String, ExprId>,
     /// Source variables a reference column types and no `in` does
     /// (R-204): the resource the row holds, its address its own, never a
     /// copy's (`modules::ABSOLUTE`).
     row_refs: BTreeSet<String>,
+}
+
+/// A term and its node.
+type Termed = (Term, ExprId);
+
+/// The resource list `in` ranges a variable over (R-69): its resource's
+/// type and address and the list's path.
+#[derive(Clone)]
+struct Elem {
+    typ: Termed,
+    addr: Termed,
+    list: String,
 }
 
 /// A rule as the resolver lowered it (`Lowerer::rule_parts`).
@@ -5493,7 +5508,7 @@ impl<'u> Lowerer<'u> {
         if add && rank.is_some() {
             return self.error(span, "a rank applies to `=`, not `+=`");
         }
-        let (seed, made) = (body.len(), self.helpers.len());
+        let made = self.helpers.len();
         let target = self.set_target(rc, &c, &mut body, span)?;
         match &target {
             Target::Element(_, _, list, _, _, block) => {
@@ -5558,15 +5573,21 @@ impl<'u> Lowerer<'u> {
         // A contribution to an input's cell is normal unless ranked (R-38),
         // written to the cell itself, so that its condition may read
         // another input.
-        let value = match &target {
-            Target::Input(_) => self.term(rc, rhs, Pos::Value, &mut body)?,
-            _ => self.wanting(Want::Schema, |l| l.term(rc, rhs, Pos::Value, &mut body))?,
+        let (value, value_node) = match &target {
+            Target::Input(_) => self.arg_node(rc, rhs, Pos::Value, &mut body)?,
+            _ => self.wanting(Want::Schema, |l| l.arg_node(rc, rhs, Pos::Value, &mut body))?,
         };
         let ranked = || str_term(rank.unwrap_or(Rank::Normal).name());
         let (pred, args) = match &target {
             Target::Element(typ, addr, list, key, rest, _) => {
-                let elem = crate::program::lower::element_write(key.clone(), rest, value.clone());
-                let args = vec![typ.clone(), addr.clone(), str_term(list), elem, ranked()];
+                let elem = crate::program::lower::element_write(key.0.clone(), rest, value.clone());
+                let args = vec![
+                    typ.0.clone(),
+                    addr.0.clone(),
+                    str_term(list),
+                    elem,
+                    ranked(),
+                ];
                 ("arg", args)
             }
             Target::Input(k) => {
@@ -5577,7 +5598,7 @@ impl<'u> Lowerer<'u> {
                 )
             }
             Target::Cell(typ, addr, path, _) => {
-                let mut args = vec![typ.clone(), addr.clone(), str_term(path), value.clone()];
+                let mut args = vec![typ.0.clone(), addr.0.clone(), str_term(path), value.clone()];
                 args.extend(rank.map(|r| str_term(r.name())));
                 (if add { "arg_add" } else { "arg" }, args)
             }
@@ -5589,11 +5610,9 @@ impl<'u> Lowerer<'u> {
             target,
             add,
             rank,
-            value,
+            value: value_node,
             head,
             body,
-            seed,
-            mid: mid.0,
             made: (made, mid.1, self.helpers.len()),
             written: rc.vars.values().cloned().collect(),
         })
@@ -5635,15 +5654,15 @@ impl<'u> Lowerer<'u> {
         {
             let own = at == self.decl_scope(scope);
             return Ok(Target::Cell(
-                str_term(crate::modules::INPUT),
-                self.scope_term(scope, at, str_term(&c.head)),
+                self.termed_str(span, crate::modules::INPUT),
+                self.scoped_name(scope, at, &c.head, span),
                 c.fields()[1..].join("."),
                 own.then(|| format!("use {}", c.head)),
             ));
         }
         // An element of a keyed list a variable ranges over: `set c.p = v
         // where c in w.containers` writes `w.containers[c].p` (R-69).
-        if let Some((typ, addr, list)) = rc.elems.get(&c.head).cloned()
+        if let Some(Elem { typ, addr, list }) = rc.elems.get(&c.head).cloned()
             && (!c.ops.is_empty() || c.head.starts_with("_[_]"))
         {
             let mut rest = Vec::new();
@@ -5662,8 +5681,14 @@ impl<'u> Lowerer<'u> {
                     }
                 }
             }
-            let key = var(&self.var_named(rc, &c.head, span));
-            let block = self.owning_block(scope, &typ, &addr);
+            let key = self.var_named(rc, &c.head, span);
+            let key = (var(&key), self.var_node(rc, span, &key));
+            let block = self.owning_block(scope, &typ.0, &addr.0);
+            let (typ, addr) = (
+                self.settled_part(rc, typ, span),
+                self.settled_part(rc, addr, span),
+            );
+            let (addr, key) = (self.each_read(rc, addr), self.each_read(rc, key));
             return Ok(Target::Element(typ, addr, list, key, rest, block));
         }
         // An instance's input: `n.k`.
@@ -5672,8 +5697,8 @@ impl<'u> Lowerer<'u> {
         {
             let own = at == self.decl_scope(scope);
             return Ok(Target::Cell(
-                str_term(crate::modules::INPUT),
-                self.scope_term(scope, at, str_term(&c.head)),
+                self.termed_str(span, crate::modules::INPUT),
+                self.scoped_name(scope, at, &c.head, span),
                 k.clone(),
                 own.then(|| format!("resource {path} {}", c.head)),
             ));
@@ -5684,7 +5709,8 @@ impl<'u> Lowerer<'u> {
         body.extend(pre);
         let (typ, addr, path) = match res {
             Res::Ref { typ, addr, path } if !path.is_empty() => {
-                (self.term_of(typ), self.term_of(addr), path)
+                let addr = self.each_read(rc, (self.term_of(addr), addr));
+                ((self.term_of(typ), typ), addr, path)
             }
             _ => {
                 return self.error(
@@ -5701,12 +5727,12 @@ impl<'u> Lowerer<'u> {
             Seg::F(_) => false,
         });
         if let Some(i) = keyed
-            && !matches!(&typ, Term::Val(Value::Str(t)) if t == "settings")
+            && !matches!(&typ.0, Term::Val(Value::Str(t)) if t == "settings")
         {
             let (Seg::I(key) | Seg::K(key)) = path[i].clone() else {
                 unreachable!("found above")
             };
-            let key = self.term_of(key);
+            let key = (self.term_of(key), key);
             let Some(list) = self.path_string(&path[..i]).filter(|l| !l.is_empty()) else {
                 return self.error(span, "a contribution's path is constant");
             };
@@ -5725,14 +5751,43 @@ impl<'u> Lowerer<'u> {
                     }
                 }
             }
-            let block = self.owning_block(scope, &typ, &addr);
+            let block = self.owning_block(scope, &typ.0, &addr.0);
             return Ok(Target::Element(typ, addr, list, key, rest, block));
         }
         let Some(path) = self.path_string(&path) else {
             return self.error(span, "a contribution's path is constant");
         };
-        let block = self.owning_block(scope, &typ, &addr);
+        let block = self.owning_block(scope, &typ.0, &addr.0);
         Ok(Target::Cell(typ, addr, path, block))
+    }
+
+    /// The string `s`, its term and its node at `span`.
+    fn termed_str(&mut self, span: Span, s: &str) -> Termed {
+        (str_term(s), self.str_node(span, s))
+    }
+
+    /// The name `name` of a scope declared in `declared`, as read in
+    /// `scope` ([`Self::scoped`]): its term and its node.
+    fn scoped_name(&mut self, scope: ScopeId, declared: ScopeId, name: &str, span: Span) -> Termed {
+        let n = self.str_node(span, name);
+        let id = self.scoped(scope, declared, n, span);
+        (self.term_of(id), id)
+    }
+
+    /// `part`, resolved elsewhere, where a target writes it: a copy whose
+    /// reads are made already.
+    fn settled_part(&mut self, rc: &Rc, (t, id): Termed, span: Span) -> Termed {
+        (t, self.building(rc, span, |b| b.settled(id)))
+    }
+
+    /// A `set` target's part: the read of the `[_]` that binds it, at its
+    /// first use ([`Rc::each_reads`]), else itself.
+    fn each_read(&mut self, rc: &mut Rc, (t, id): Termed) -> Termed {
+        let read = match &self.program.exprs[id].kind {
+            ExprKind::Var(v) => rc.each_reads.remove(&self.program.vars[*v].lowered),
+            _ => None,
+        };
+        (t, read.unwrap_or(id))
     }
 
     /// A `set`'s path starts with what it writes: a name in scope (a
@@ -7161,7 +7216,7 @@ impl<'u> Lowerer<'u> {
     /// The resource attribute `t` names, `(T, A, path)`, when it is one
     /// at a constant path (`w.spec.template.spec.containers`). Resolved on
     /// the side: the caller lowers `t` itself.
-    fn resource_list(&mut self, rc: &Rc, t: &SyntaxNode) -> Option<(Term, Term, String)> {
+    fn resource_list(&mut self, rc: &Rc, t: &SyntaxNode) -> Option<Elem> {
         let c = Chain::of(t).filter(|c| !c.is_bare())?;
         let (diags, helpers, negs) = (
             self.diags.len(),
@@ -7174,10 +7229,14 @@ impl<'u> Lowerer<'u> {
         self.helpers.truncate(helpers);
         self.program.helpers.negs = negs;
         match res {
-            Ok(Res::Ref { typ, addr, path }) => self
-                .path_string(&path)
-                .filter(|p| !p.is_empty())
-                .map(|p| (self.term_of(typ), self.term_of(addr), p)),
+            Ok(Res::Ref { typ, addr, path }) => {
+                let list = self.path_string(&path).filter(|p| !p.is_empty())?;
+                Some(Elem {
+                    typ: (self.term_of(typ), typ),
+                    addr: (self.term_of(addr), addr),
+                    list,
+                })
+            }
             _ => None,
         }
     }
@@ -7966,13 +8025,6 @@ impl<'u> Lowerer<'u> {
             s.term(made..self.helpers.len());
         }
         id
-    }
-
-    /// A term as a rule holds it, the reads it makes into `pre`: lowered
-    /// from its node.
-    fn term(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
-        let id = self.expr(rc, n, pos, pre)?;
-        Ok(self.lowered(id, pre))
     }
 
     /// The term the node `id` lowers to, the reads it makes into `pre`.
@@ -10484,10 +10536,10 @@ impl<'u> Lowerer<'u> {
 enum Target {
     /// `(T, A, path)`, and the block that owns the cell when it is
     /// declared in the same scope.
-    Cell(Term, Term, String, Option<String>),
+    Cell(Termed, Termed, String, Option<String>),
     /// One element of the keyed list at `(T, A, path)` (R-35, R-69): the
     /// key, the fields below the element, and the owning block.
-    Element(Term, Term, String, Term, Vec<String>, Option<String>),
+    Element(Termed, Termed, String, Termed, Vec<String>, Option<String>),
     /// A stack input.
     Input(String),
 }
@@ -10501,11 +10553,9 @@ struct Contribution {
     target: Target,
     add: bool,
     rank: Option<Rank>,
-    value: Term,
+    value: ExprId,
     head: Atom,
     body: Vec<Lit>,
-    seed: usize,
-    mid: usize,
     made: (usize, usize, usize),
     /// The variables the program wrote, by the name each lowers to.
     written: BTreeSet<String>,
@@ -10525,12 +10575,16 @@ impl Contribution {
     fn lowered<'a>(&'a self, helpers: &'a [Stmt]) -> crate::program::build::WriteLowered<'a> {
         use crate::program::build::TargetLowered;
         let target = match &self.target {
-            Target::Cell(typ, addr, path, _) => TargetLowered::Attr { typ, addr, path },
+            Target::Cell(typ, addr, path, _) => TargetLowered::Attr {
+                typ: typ.1,
+                addr: addr.1,
+                path,
+            },
             Target::Element(typ, addr, list, key, rest, _) => TargetLowered::Element {
-                typ,
-                addr,
+                typ: typ.1,
+                addr: addr.1,
                 list,
-                key,
+                key: key.1,
                 rest,
             },
             Target::Input(k) => TargetLowered::Input(k),
@@ -10541,11 +10595,9 @@ impl Contribution {
             target,
             add: self.add,
             rank: self.rank,
-            value: &self.value,
+            value: self.value,
             head: &self.head,
             body: &self.body,
-            seed: self.seed,
-            mid: self.mid,
             made: (&helpers[a..b], &helpers[b..c]),
         }
     }
