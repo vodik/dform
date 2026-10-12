@@ -77,6 +77,7 @@ mod executor_resume;
 mod executor_retry;
 mod exit_status;
 mod extern_not;
+mod fetch_once;
 mod floats;
 mod fmt;
 mod fmt_project;

@@ -179,12 +179,15 @@ pub struct Providers {
     loaded: OnceCell<Loaded>,
     /// The provider for a type nobody declares: the mock, else the first.
     fallback: usize,
-    /// The last refresh and the objects state mapped for it: one run reads
-    /// the world once between two writes, so every consumer of a refresh
-    /// (round 0, the plan, the executor's comparison) sees the same Reads.
-    refreshed: RefCell<Option<(BTreeSet<String>, World)>>,
-    /// Import answers since the last write.
-    imported: RefCell<BTreeMap<String, Option<Object>>>,
+    /// What each object's Read answered since the last write, by object,
+    /// with the link that answered it: one run reads an object once
+    /// between two writes, so every consumer of a refresh (round 0, the
+    /// plan, the executor's comparison) sees the same Reads, and a
+    /// provider configured mid-plan adds its own objects' Reads, not
+    /// every object's again. A Read that failed is not kept.
+    refreshed: RefCell<BTreeMap<String, (usize, Option<Object>)>>,
+    /// Import answers since the last write, with the link that answered.
+    imported: RefCell<BTreeMap<String, (usize, Option<Object>)>>,
     /// What the providers said during the last apply, for the CLI to print.
     notes: RefCell<Vec<String>>,
     /// Each link's Configure document, as the engine first sent it.
@@ -639,7 +642,7 @@ impl Providers {
     /// another stack's held output, an extern's secret column) is revealed
     /// by that provider into this call (R-45, the `Reveal` call): once the
     /// object that holds it exists. The providers configured, by the name
-    /// the program gives them: then what was read is read again. The
+    /// the program gives them: then what they read is read again. The
     /// settings go to the provider in that call and are kept here only to
     /// tell a change, a revealed secret as its label and where it is held
     /// (never written, printed or digested: a kubeconfig may be among
@@ -709,14 +712,12 @@ impl Providers {
             drop(accounts);
             self.settings.borrow_mut().insert(i, kept);
             self.awaiting.borrow_mut().remove(&i);
+            self.forget(i);
             if self.loaded.get().is_some() {
                 self.learn(i)
                     .with_context(|| format!("the schema of provider {name}, configured"))?;
             }
             changed.push(name.clone());
-        }
-        if !changed.is_empty() {
-            self.invalidate();
         }
         Ok(changed)
     }
@@ -1034,10 +1035,11 @@ impl Providers {
                 self.learn(i)
                     .with_context(|| format!("the schema of provider {}", self.names[i]))?;
             }
-            grew |= kinds.iter().any(|t| self.schema().knows_type(t));
-        }
-        if grew {
-            self.invalidate();
+            let learned = kinds.iter().any(|t| self.schema().knows_type(t));
+            if learned {
+                self.forget(i);
+            }
+            grew |= learned;
         }
         Ok(grew)
     }
@@ -1059,7 +1061,7 @@ impl Providers {
             links: links.into_iter().map(RefCell::new).collect(),
             loaded: OnceCell::new(),
             fallback: 0,
-            refreshed: RefCell::new(None),
+            refreshed: RefCell::new(BTreeMap::new()),
             imported: RefCell::new(BTreeMap::new()),
             notes: RefCell::new(Vec::new()),
             bases: Vec::new(),
@@ -1862,8 +1864,15 @@ impl Providers {
 
     /// A write happened: the next refresh Reads again.
     fn invalidate(&self) {
-        self.refreshed.take();
+        self.refreshed.borrow_mut().clear();
         self.imported.borrow_mut().clear();
+    }
+
+    /// Link `i` was configured again: what it answered may differ now, so
+    /// its objects are read again; every other link's Reads stand.
+    fn forget(&self, i: usize) {
+        self.refreshed.borrow_mut().retain(|_, (j, _)| *j != i);
+        self.imported.borrow_mut().retain(|_, (j, _)| *j != i);
     }
 
     /// State's entries some provider of this stack serves (one awaiting
@@ -2479,25 +2488,29 @@ impl Providers {
     /// Import: an object by remote id, whether dform manages it or not.
     fn import(&self, typ: &str, remote: &str) -> Result<Option<Object>> {
         let k = key(typ, remote);
-        if let Some(o) = self.imported.borrow().get(&k) {
+        let i = self.route(typ);
+        if let Some((j, o)) = self.imported.borrow().get(&k)
+            && *j == i
+        {
             return Ok(o.clone());
         }
         let req = pb::ImportRequest {
             r#type: typ.to_string(),
             remote: remote.to_string(),
         };
-        let r: pb::ImportResponse = self.link(self.route(typ))?.borrow_mut().call(req)?;
+        let r: pb::ImportResponse = self.link(i)?.borrow_mut().call(req)?;
         let o = match r.found {
             true => Some(Self::object(r.attrs.as_ref(), r.computed.as_ref())?),
             false => None,
         };
-        self.imported.borrow_mut().insert(k, o.clone());
+        self.imported.borrow_mut().insert(k, (i, o.clone()));
         Ok(o)
     }
 
     /// Refresh: every object state maps (deposed ones included), as Read
     /// returns it. An object Read does not return is gone; one state does
-    /// not map is not read.
+    /// not map is not read. Each object is read once between two writes
+    /// ([`Providers::refreshed`]): only those not read yet are asked.
     fn refresh(&self, state: &State) -> Result<World> {
         let mut mapped: BTreeMap<String, (Address, String, usize)> = BTreeMap::new();
         for (a, e) in self
@@ -2509,31 +2522,44 @@ impl Providers {
                 .expect("entries are served");
             mapped.insert(key(&a.typ, &e.remote), (a, e.remote.clone(), i));
         }
-        let keys: BTreeSet<String> = mapped.keys().cloned().collect();
-        if let Some((m, w)) = &*self.refreshed.borrow()
-            && *m == keys
-        {
-            return Ok(w.clone());
+        let unread: Vec<(&String, &(Address, String, usize))> = {
+            let read = self.refreshed.borrow();
+            mapped
+                .iter()
+                .filter(|(k, (_, _, i))| read.get(*k).is_none_or(|(j, _)| j != i))
+                .collect()
+        };
+        if !unread.is_empty() {
+            self.read_all(unread)?;
         }
-        let _refresh = crate::timing::traced(|| format!("refresh, {} objects", mapped.len()));
-        // Every Read is sent before any answer is taken, to every provider,
-        // so a provider that can answers them at once: a plan waits one
-        // round trip to its API, not one per object. A Read that fails is
-        // sent again alone, under the provider's retry policy.
+        let read = self.refreshed.borrow();
+        Ok(mapped
+            .keys()
+            .filter_map(|k| Some((k.clone(), read.get(k)?.1.clone()?)))
+            .collect())
+    }
+
+    /// Read `objects`, each `(key, (address, remote, link))`, into
+    /// [`Providers::refreshed`]. Every Read is sent before any answer is
+    /// taken, to every provider, so a provider that can answers them at
+    /// once: a plan waits one round trip to its API, not one per object.
+    /// A Read that fails is sent again alone, under the provider's retry
+    /// policy; one that fails then is the refresh's error, and not kept.
+    fn read_all(&self, objects: Vec<(&String, &(Address, String, usize))>) -> Result<()> {
+        let _refresh = crate::timing::traced(|| format!("refresh, {} objects", objects.len()));
         let mut sent = Vec::new();
-        for (k, (addr, remote, i)) in mapped {
+        for (k, (addr, remote, i)) in objects {
             let req = pb::ReadRequest {
                 r#type: addr.typ.clone(),
                 remote: remote.clone(),
                 name: addr.name.clone(),
             };
-            let t = self.link(i)?.borrow_mut().submit(req);
-            sent.push((k, addr, remote, i, t));
+            let t = self.link(*i)?.borrow_mut().submit(req);
+            sent.push((k, addr, remote, *i, t));
         }
         for l in &self.links {
             l.borrow_mut().flush();
         }
-        let mut world = World::new();
         for (k, addr, remote, i, t) in sent {
             let answer = {
                 let mut link = self.links[i].borrow_mut();
@@ -2543,14 +2569,11 @@ impl Providers {
             let found = match answer {
                 Ok(r) if !r.found => None,
                 Ok(r) => Some(Self::object(r.attrs.as_ref(), r.computed.as_ref())?),
-                Err(_) => self.read(i, &addr, &remote)?,
+                Err(_) => self.read(i, addr, remote)?,
             };
-            if let Some(o) = found {
-                world.insert(k, o);
-            }
+            self.refreshed.borrow_mut().insert(k.clone(), (i, found));
         }
-        self.refreshed.replace(Some((keys, world.clone())));
-        Ok(world)
+        Ok(())
     }
 
     /// Health (R-203): each object state maps (deposed ones not) whose
