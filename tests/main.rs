@@ -93,6 +93,7 @@ mod header_names;
 mod held_reads;
 mod helper_flag;
 mod host_grpc;
+mod host_pace;
 mod host_wasm;
 mod infer;
 mod input_check;

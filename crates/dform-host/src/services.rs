@@ -2,7 +2,7 @@
 //! with that provider's grants. Both transports serve it: the gRPC `Host`
 //! service (`grpc`) and the component imports (`wasm`).
 
-use crate::{git, http, ssh};
+use crate::{git, http, ratelimit, ssh};
 use dform_core::plugin::credentials::{self, Credential};
 use dform_core::plugin::host::{
     Calls, Endpoint, Error, Failure, GitFile, Grants, Handle, HttpRequest, HttpResponse, Level,
@@ -19,6 +19,8 @@ use std::sync::{Arc, Mutex};
 pub struct Services {
     grants: Grants,
     opened: Mutex<Held>,
+    /// The pace of its requests, a window per bucket (`ratelimit`).
+    limiter: ratelimit::Limiter,
     ssh: Box<dyn ssh::Ssh>,
     git: git::Git,
 }
@@ -42,6 +44,7 @@ impl Services {
     /// The host of the provider `grants` names.
     pub fn new(grants: Grants) -> Services {
         Services {
+            limiter: ratelimit::Limiter::new(&grants.provider),
             grants,
             opened: Mutex::new(Held {
                 credentials: BTreeMap::new(),
@@ -113,7 +116,10 @@ impl Calls for Services {
             };
             (cred, via)
         };
-        http::send(req, cred.as_deref(), via)
+        let admitted = self.limiter.acquire(req.bucket.as_deref());
+        let r = http::send(req, cred.as_deref(), via);
+        admitted.answered(&r);
+        r
     }
 
     fn io_read(&self, location: &str) -> Result<Vec<u8>, Failure> {

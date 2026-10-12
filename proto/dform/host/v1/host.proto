@@ -120,6 +120,9 @@ message SendRequest {
   optional uint64 auth = 6;
   // A handle from Forward.
   optional uint64 via = 7;
+  // The limit it counts against, in the provider's word: the host paces
+  // each bucket by what the server answers it. Unset: the default one.
+  optional string bucket = 8;
 }
 
 message SendResponse {

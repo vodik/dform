@@ -90,6 +90,7 @@ pub fn request(r: h::SendRequest) -> (HttpRequest, Option<u64>, Option<u64>) {
             headers: headers(r.headers),
             body: r.body,
             timeout: r.timeout_ms.map(|ms| Duration::from_millis(ms.into())),
+            bucket: r.bucket,
         },
         r.auth,
         r.via,
@@ -107,6 +108,7 @@ pub fn from_request(r: HttpRequest, auth: Option<u64>, via: Option<u64>) -> h::S
             .map(|t| u32::try_from(t.as_millis()).unwrap_or(u32::MAX)),
         auth,
         via,
+        bucket: r.bucket,
     }
 }
 

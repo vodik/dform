@@ -242,6 +242,7 @@ impl wh::http::Host for State {
                     headers: req.headers,
                     body: req.body,
                     timeout: req.timeout_ms.map(|ms| Duration::from_millis(ms.into())),
+                    bucket: req.bucket,
                 },
                 auth,
                 via,

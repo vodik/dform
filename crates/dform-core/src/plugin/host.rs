@@ -123,6 +123,11 @@ pub struct HttpRequest {
     pub body: Vec<u8>,
     /// At most this long, else the host's default.
     pub timeout: Option<Duration>,
+    /// The limit it counts against, in the provider's word (an API's
+    /// action, method, or verb and resource; `route53.change:ZONE` for
+    /// one an object has): the host paces each bucket by what the server
+    /// answers it. None: the provider's default bucket.
+    pub bucket: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

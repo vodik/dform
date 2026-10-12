@@ -15,6 +15,7 @@ pub mod grpc;
 /// The host's HTTP is dform's one client (`dform_core::http`, R-103).
 pub use dform_core::http;
 pub mod launch;
+pub mod ratelimit;
 pub mod services;
 pub mod ssh;
 #[cfg(feature = "wasm")]

@@ -28,7 +28,10 @@
 //!   location, without its userinfo, query or fragment);
 //! - `tick`: one apply tick, with `tick` (from 1);
 //! - `apply.wait`: a tick waiting on values the world has not reached
-//!   (R-81), with `tick`, `kind` (`world`, `extern`) and `count`.
+//!   (R-81), with `tick`, `kind` (`world`, `extern`) and `count`;
+//! - `ratelimit.wait`: a provider's request waiting on its bucket's
+//!   window in the host (`dform_host::ratelimit`), with `provider`,
+//!   `bucket`, `queued` and `window`.
 //!
 //! Every span carries `seq`, its number in the run, and `waited_on`, the
 //! `seq` of the span that last ended before it began. The run drives its
@@ -330,6 +333,35 @@ pub fn wait(tick: usize, kind: &str, count: usize) -> Option<Span> {
         tick,
         kind,
         count,
+        seq,
+        waited_on,
+    );
+    Some(Span {
+        what: None,
+        from: Instant::now(),
+        seq,
+        _span: span.entered(),
+    })
+}
+
+/// A request of the provider `provider` waiting on its bucket's window
+/// (`dform_host::ratelimit`): a `ratelimit.wait` span, entered until it
+/// is dropped, with `bucket` (empty: the default), `queued` (the requests
+/// before it) and `window` (how many may be in flight).
+pub fn ratelimit_wait(provider: &str, bucket: &str, queued: usize, window: usize) -> Option<Span> {
+    if !tracing() {
+        return None;
+    }
+    let (seq, waited_on) = next();
+    let span = tracing::info_span!(
+        target: TARGET,
+        parent: parent(),
+        "ratelimit.wait",
+        otel.name = %format_args!("{provider} waits on its window"),
+        provider,
+        bucket,
+        queued,
+        window,
         seq,
         waited_on,
     );

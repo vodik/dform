@@ -222,6 +222,7 @@ impl Calls for Imports {
                 timeout_ms: req
                     .timeout
                     .map(|d| u32::try_from(d.as_millis()).unwrap_or(u32::MAX)),
+                bucket: req.bucket,
             },
             auth,
             via,

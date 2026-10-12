@@ -247,6 +247,17 @@ impl Request {
         self.req.timeout = Some(d);
         self
     }
+
+    /// The limit it counts against, in the API's terms: an action
+    /// (`"ec2.describe"`), a method, a verb and resource, or one an
+    /// object has (`"route53.change:ZONE"`). dform paces each bucket by
+    /// what the server answers it (a 429, `Retry-After`, a timeout), so a
+    /// provider names its limits and declares no rates. None: the
+    /// provider's default bucket.
+    pub fn bucket(mut self, label: impl Into<String>) -> Request {
+        self.req.bucket = Some(label.into());
+        self
+    }
 }
 
 /// `dform:host/http`.

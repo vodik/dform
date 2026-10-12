@@ -104,6 +104,9 @@ interface http {
     // At most this long, else the host's default; a request that timed
     // out after it was sent is `maybe-applied`.
     timeout-ms: option<u32>,
+    // The limit it counts against, in the provider's word: the host
+    // paces each bucket by what the server answers it. None: the default.
+    bucket: option<string>,
   }
 
   record response {
