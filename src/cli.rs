@@ -8,7 +8,7 @@ use crate::report;
 use crate::store;
 use crate::zset;
 use anyhow::{Result, bail};
-use clap::Parser;
+use clap::{FromArgMatches, Parser};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -183,20 +183,37 @@ pub fn main(
         panic!("internal: cli::main runs once per process");
     }
     crate::timing::begin();
-    let args = Args::parse_from(args);
+    let matches = command().get_matches_from(args);
+    let args = Args::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     let color = args.inputs.color;
     // Ctrl-C and SIGTERM ask the run to stop and unwind (`interrupt`):
     // dform's own, not a provider's or the language server's.
     let _signals = (!matches!(args.cmd, Command::ServeProvider { .. } | Command::Lsp))
         .then(crate::interrupt::install);
-    let result = match &args.cmd {
-        Command::ServeProvider { name } => serve_provider(name).map(|()| Outcome::Done),
-        Command::Lsp => dform_lsp::serve_stdio(dform_lsp::Options {
+    // The run's trace (`--trace`, OTLP): dform's own runs, not a
+    // provider's (which inherits the environment) or the language
+    // server's.
+    let traced = match &args.cmd {
+        Command::ServeProvider { .. } | Command::Lsp => Ok(None),
+        _ => crate::trace::install(
+            args.trace.clone(),
+            matches.subcommand_name().unwrap_or_default(),
+        ),
+    };
+    let trace_id = traced
+        .as_ref()
+        .ok()
+        .and_then(Option::as_ref)
+        .map(|r| r.trace_id().to_string());
+    let result = match (traced, &args.cmd) {
+        (Err(e), _) => Err(e),
+        (Ok(_), Command::ServeProvider { name }) => serve_provider(name).map(|()| Outcome::Done),
+        (Ok(_), Command::Lsp) => dform_lsp::serve_stdio(dform_lsp::Options {
             version: env!("CARGO_PKG_VERSION"),
             real: launch,
         })
         .map(|()| Outcome::Done),
-        Command::Version => {
+        (Ok(_), Command::Version) => {
             println!("dform {}", env!("CARGO_PKG_VERSION"));
             println!("tzdb {}", crate::time::tzdb_version());
             println!(
@@ -209,8 +226,13 @@ pub fn main(
             );
             Ok(Outcome::Done)
         }
-        _ => args.resolve().and_then(run_command),
+        (Ok(run), _) => {
+            let result = args.resolve().and_then(run_command);
+            drop(run);
+            result
+        }
     };
+    crate::trace::finish();
     crate::timing::finish();
     // Every exit goes through `Outcome::code`: a signal's 128 + its number
     // once every destructor of the run has run; a decline or a stop said
@@ -221,6 +243,10 @@ pub fn main(
             use std::io::IsTerminal;
             let color = color.style(std::io::stderr().is_terminal()).color;
             eprint!("{}", Refused::report(&e, color));
+            // Where it is in the run's trace.
+            if let Some(id) = &trace_id {
+                eprintln!("trace {id}");
+            }
             Outcome::of_error(&e)
         }
     };

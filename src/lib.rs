@@ -7,3 +7,4 @@ pub mod cli;
 pub mod man;
 pub mod progress;
 pub mod said;
+pub mod trace;

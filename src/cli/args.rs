@@ -39,6 +39,12 @@ pub(super) struct Args {
     #[arg(short = 'C', value_name = "DIR", global = true)]
     pub(super) dir: Option<PathBuf>,
 
+    /// Write the run's trace to FILE: each phase, provider call, request
+    /// and tick a span, as OTLP JSON lines (Jaeger and OpenTelemetry's
+    /// tools read them). Also `DFORM_TRACE=FILE`.
+    #[arg(long, value_name = "FILE", global = true)]
+    pub(super) trace: Option<PathBuf>,
+
     #[command(flatten)]
     pub(super) inputs: Inputs,
 
