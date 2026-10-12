@@ -269,15 +269,8 @@ pub fn conflicted(res: &EvalResult) -> BTreeSet<Address> {
 pub fn report(i: &Input) -> Report {
     let r = Redactor::new(&i.res.facts, i.schema);
     let refs = Refs::new(&i.res.facts);
-    let mut conflicts = diags(i.res, &r, "deny", CONFLICT);
-    conflicts.extend(diags(i.res, &r, "deny", crate::refine::VIOLATED));
-    let conflicted: BTreeSet<&Address> = conflicts.iter().map(|d| &d.addr).collect();
-    let (held, definite): (Vec<&Action>, Vec<&Action>) = i
-        .plan
-        .actions
-        .iter()
-        .filter(|a| !conflicted.contains(&a.addr))
-        .partition(|a| waits_on(a, i.sections).is_some());
+    let conflicts = conflicts(i.res, &r);
+    let (held, definite) = held_and_definite(i, &conflicts);
     let noops = definite
         .iter()
         .filter(|a| matches!(a.kind, ActionKind::Noop))
@@ -287,17 +280,7 @@ pub fn report(i: &Input) -> Report {
     // `boundary_owners` says; one nothing in this plan makes is `later`'s.
     let made_by = boundary_owners(i, &held);
     let resolves = |on: &[String], tick_of: &BTreeMap<(String, String), usize>| {
-        on.iter()
-            .map(|n| match made_by.get(n) {
-                Some(owners) => owners
-                    .iter()
-                    .map(|o| tick_of.get(o).copied())
-                    .collect::<Option<Vec<usize>>>()
-                    .and_then(|ts| ts.into_iter().max()),
-                None => null_owner(n).and_then(|o| tick_of.get(&o).copied()),
-            })
-            .collect::<Option<Vec<usize>>>()
-            .and_then(|ts| ts.into_iter().max())
+        resolved_after(on, &made_by, tick_of)
     };
     let tick_of = schedule(i, &definite, &held, &resolves);
     let follow = Follow::new(i, &held, &tick_of);
@@ -322,13 +305,7 @@ pub fn report(i: &Input) -> Report {
         && i.sections.undetermined.is_empty()
         && i.sections.pending_groups.is_empty()
         && not_planned.is_empty();
-    let classes = pending
-        .iter()
-        .flat_map(|b| b.on.iter())
-        .chain(groups.iter().flat_map(|g| g.on.iter()))
-        .chain(policies.iter().flat_map(|p| p.on.iter()))
-        .map(|l| (l.clone(), null_class(l, i.schema)))
-        .collect();
+    let classes = classes(i, &pending, &groups, &policies);
     Report {
         stack: i.stack.to_string(),
         show_noop: i.show_noop,
@@ -341,12 +318,7 @@ pub fn report(i: &Input) -> Report {
         pending,
         groups,
         policies,
-        shadowed: diags(
-            i.res,
-            &r,
-            "warn",
-            "attr_shadowed: contributions at a losing rank disagree and are overridden",
-        ),
+        shadowed: diags(i.res, &r, "warn", SHADOWED),
         conflicts,
         ticks: ticks.into_iter().collect(),
         unscheduled,
@@ -361,28 +333,99 @@ pub fn report(i: &Input) -> Report {
         resumed: false,
         removing: false,
         every_site: true,
-        approvals: crate::approval::needs(&i.res.facts)
-            .into_iter()
-            .map(|(addr, reason)| Approval {
-                addr,
-                reason,
-                site: None,
-            })
-            .collect(),
+        approvals: approvals(i.res),
         instances: crate::zset::Instances::from_facts(&i.res.facts).with(i.kept),
         warnings: Vec::new(),
         not_planned,
-        // Said once, by the plan an apply shows first, not again at each
-        // boundary.
-        kept: definite
-            .iter()
-            .filter(|_| i.tick == 1 && !i.show_noop)
-            .filter(|a| matches!(a.kind, ActionKind::Noop) && !a.kept().is_empty())
-            .map(|a| deformation(a, i.schema, &r, &refs))
-            .collect(),
+        kept: kept(i, &definite, (&r, &refs)),
         policy,
         nested: false,
     }
+}
+
+/// What a contribution at a losing rank that disagrees says (a warning).
+const SHADOWED: &str = "attr_shadowed: contributions at a losing rank disagree and are overridden";
+
+/// The plan's changes, but those of a resource whose attribute conflicts:
+/// those held at a boundary or on a null, and the definite ones.
+fn held_and_definite<'p>(i: &Input<'p>, conflicts: &[Diag]) -> (Vec<&'p Action>, Vec<&'p Action>) {
+    let conflicted: BTreeSet<&Address> = conflicts.iter().map(|d| &d.addr).collect();
+    i.plan
+        .actions
+        .iter()
+        .filter(|a| !conflicted.contains(&a.addr))
+        .partition(|a| waits_on(a, i.sections).is_some())
+}
+
+/// The conflicts the report shows in place of a deformation: an
+/// attribute's, and a refinement's violated.
+fn conflicts(res: &EvalResult, r: &Redactor) -> Vec<Diag> {
+    let mut conflicts = diags(res, r, "deny", CONFLICT);
+    conflicts.extend(diags(res, r, "deny", crate::refine::VIOLATED));
+    conflicts
+}
+
+/// The tick after which every wait of `on` is resolved, by the owners of
+/// what makes it (`made_by`, [`boundary_owners`]) or its null's owner,
+/// each at its tick (`tick_of`); `None` when one is made by nothing this
+/// plan schedules.
+fn resolved_after(
+    on: &[String],
+    made_by: &BTreeMap<String, Vec<(String, String)>>,
+    tick_of: &BTreeMap<(String, String), usize>,
+) -> Option<usize> {
+    on.iter()
+        .map(|n| match made_by.get(n) {
+            Some(owners) => owners
+                .iter()
+                .map(|o| tick_of.get(o).copied())
+                .collect::<Option<Vec<usize>>>()
+                .and_then(|ts| ts.into_iter().max()),
+            None => null_owner(n).and_then(|o| tick_of.get(&o).copied()),
+        })
+        .collect::<Option<Vec<usize>>>()
+        .and_then(|ts| ts.into_iter().max())
+}
+
+/// Each null a pending block, a group or a policy waits on, with its
+/// class.
+fn classes(
+    i: &Input,
+    pending: &[PendingBlock],
+    groups: &[Group],
+    policies: &[Policy],
+) -> BTreeMap<String, String> {
+    pending
+        .iter()
+        .flat_map(|b| b.on.iter())
+        .chain(groups.iter().flat_map(|g| g.on.iter()))
+        .chain(policies.iter().flat_map(|p| p.on.iter()))
+        .map(|l| (l.clone(), null_class(l, i.schema)))
+        .collect()
+}
+
+/// The changes the policy pass says need an approval.
+fn approvals(res: &EvalResult) -> Vec<Approval> {
+    crate::approval::needs(&res.facts)
+        .into_iter()
+        .map(|(addr, reason)| Approval {
+            addr,
+            reason,
+            site: None,
+        })
+        .collect()
+}
+
+/// What the plan leaves as it is but for a value given at creation only
+/// (R-198): said once, by the plan an apply shows first, not again at
+/// each boundary.
+fn kept(i: &Input, definite: &[&Action], (r, refs): (&Redactor, &Refs)) -> Vec<Deformation> {
+    definite
+        .iter()
+        .filter(|_| i.tick == 1 && !i.show_noop)
+        .filter(|a| matches!(a.kind, ActionKind::Noop) && !a.kept().is_empty())
+        .map(|a| deformation(a, i.schema, r, refs))
+        .collect()
 }
 
 /// The schedule, by the dependency graph alone (R-156): definite
