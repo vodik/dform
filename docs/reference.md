@@ -557,6 +557,8 @@ not end done, the deployments after it not run.
 | Variable | Meaning |
 |---|---|
 | `DFORM_LOG` | `debug`: a line on stderr for each phase of a run and each call it makes over the network, with its wall time |
+| `DFORM_TRACE` | a file to write the run's trace to, as `--trace FILE` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | where to send the run's trace over OTLP/HTTP, with the exporter's other `OTEL_EXPORTER_OTLP_*` variables (a build with the `otel` feature; else ignored) |
 | `DFORM_ACTOR` | who acts, as the audit log records it (a CI job's OIDC subject); else `USER@HOST`, from `USER` or `LOGNAME` |
 | `AGE_IDENTITY` | an age identity (`AGE-SECRET-KEY-1..`), or the path of a file of them, that opens a master sealed to `[secrets] recipients` (see "Secrets") |
 | `DFORM_CREDENTIALS` | the directory of the operator's credential files, instead of `$XDG_CONFIG_HOME/dform/credentials` |
@@ -5051,6 +5053,41 @@ read, deterministic), and per backend the plan's wall time with
 /proc/loadavg and instructions (when `perf` is installed; over gRPC the
 provider process's included), and on the direct backend the provider's
 share: the time spent in the mock's calls.
+
+### A run's trace
+
+Where a plan's time goes is read off its trace: `dform plan shop
+env=prod --trace run.jsonl` (or `DFORM_TRACE=run.jsonl`) writes every
+phase, provider call, request and tick of the run as a span, in
+OpenTelemetry's file format (OTLP JSON, a line a batch), which Jaeger and
+OpenTelemetry's tools load; with `OTEL_EXPORTER_OTLP_ENDPOINT` set the
+spans go to that collector over OTLP/HTTP too. dform prints nothing of
+them: a viewer reads them. The file is every build's; the endpoint a
+build's with the `otel` feature (`cargo build --release --features
+otel`), which a build without it ignores. With no trace asked for, the
+run is the same run.
+
+A run is one trace, under its `dform.run` span (`dform plan`); a run that
+fails says its trace id after the error. The spans:
+
+| Span | What | Attributes |
+|---|---|---|
+| `plan.phase` | a step: loaded and compiled, located the deployment, providers started and configured, evaluated, each extern round, refresh, Plan calls, the policy pass, each deployment of a project's plan | |
+| `provider.call` | one call to a provider, from its submit to its answer (a client span) | `provider`, `kind` (`Configure`, `Read`, `Plan`, `Apply`, `Query`, ..), `addr` (the resource's address or the extern's name) |
+| `io.call` | a request dform makes itself (a client span) | `kind` (`s3.get`, `s3.put`, `s3.list`, `io.read`, `oci.resolve`), `addr` (the location, without its userinfo, query or fragment) |
+| `tick` | an apply tick | `tick` |
+| `apply.wait` | a tick waiting on values the world has not reached (R-81) | `tick`, `kind` (`world`, `extern`), `count` |
+
+Every span has `seq`, its number in the run, and `waited_on`, the `seq`
+of the span that ended last before it began. The run sends its calls
+from one thread and takes each answer in turn, so `waited_on` is what a
+span came after: calls sent one after another chain, a batch sent
+together shares one. It is the order the run took, not proof that the
+later call needed the earlier's answer. A call ends when the run takes
+its answer: while the run waits on one provider, another's answer waits
+for it, so a batch to two providers shows the quicker one's calls as
+long as the slower one's. A span names things (addresses, kinds,
+locations) and counts them; it never holds a value.
 
 ## Status
 
