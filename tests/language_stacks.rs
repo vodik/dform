@@ -193,18 +193,18 @@ resource net.subnet a {
 }
 "#,
     );
-    // Before net is applied, a plan of app plans net first (R-200): the
-    // output its plan knows flows, its computed one waits on its apply
-    // (R-121).
+    // Before net is applied, a plan of app plans net with it, one plan
+    // (R-200): the output its plan knows flows, its computed one waits on
+    // the tick that makes it.
     let r = s.run(&["plan", "app.df"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 1 change (1 create); 1 create after stacks.net is applied",
+        "plan: 2 changes (2 create) over 2 ticks",
         "{}",
         r.stdout
     );
     assert!(
-        r.stdout.contains("    waits on  stack stacks.net\n"),
+        r.stdout.contains("    waits on  stacks.net.vpc_id\n"),
         "{}",
         r.stdout
     );
@@ -258,7 +258,7 @@ resource net.subnet a {
     let r = s.run_in("elsewhere", &["plan", "app.df"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 1 change (1 create); 1 create after stacks.net is applied",
+        "plan: 2 changes (2 create) over 2 ticks",
         "{}",
         r.stdout
     );

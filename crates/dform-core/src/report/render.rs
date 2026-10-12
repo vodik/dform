@@ -13,7 +13,7 @@ use super::policy;
 use super::style::{Paint, Style};
 use super::tally::{by_kind, count};
 use super::tree::Site;
-use super::waits::{owners, provisional_text, waited};
+use super::waits::{owners, provisional_text, waited, waited_in_tick};
 use super::{Report, Why};
 use crate::address::Address;
 use crate::provider::ActionKind;
@@ -276,7 +276,7 @@ impl Report {
             (false, false, _) => format!("tick {t}  {n}+ changes"),
         };
         rows.push(Row::new(&head, bold(&head)));
-        for (i, w) in waited(&s.waits).into_iter().enumerate() {
+        for (i, w) in waited_in_tick(&s.waits).into_iter().enumerate() {
             let lead = if i == 0 {
                 "  waits on  "
             } else {

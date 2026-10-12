@@ -250,6 +250,8 @@ pub(super) fn boundary_owners(
 /// its settings' rules read (a kubeconfig read from the server a tick
 /// creates). `None` when they wait on something no resource makes (a
 /// read that said "not yet", a stand-in) or on nothing this run can see.
+/// A null of another deployment of the tree that this plan's tree
+/// resolves ([`Input::outside`]) is owned by itself ([`outside_owner`]).
 fn settings_owners(i: &Input, name: &str) -> Option<BTreeSet<(String, String)>> {
     let named = |a: &Atom| matches!(a.args.first(), Some(Term::Val(Value::Str(n))) if n == name);
     let mut nulls: BTreeSet<String> = BTreeSet::new();
@@ -265,54 +267,72 @@ fn settings_owners(i: &Input, name: &str) -> Option<BTreeSet<(String, String)>> 
         }
     }
     if rows.is_empty() {
-        let rules: Vec<&RuleStmt> = crate::modules::reached(i.program)
-            .into_iter()
-            .filter_map(|s| match s {
-                crate::ast::Stmt::Rule(r) => Some(r),
-                _ => None,
-            })
-            .collect();
-        let body = |r: &RuleStmt| -> Vec<Atom> {
-            r.body
-                .iter()
-                .filter_map(|l| match l {
-                    crate::ast::Lit::Pos(a) | crate::ast::Lit::Not(a) => Some(a.clone()),
-                    _ => None,
-                })
-                .collect()
-        };
-        // The atoms the settings read, through the rules that derive them.
-        let mut read: Vec<Atom> = rules
-            .iter()
-            .filter(|r| r.head.pred == "provider_config" && named(&r.head))
-            .flat_map(|r| body(r))
-            .collect();
-        let mut used: BTreeSet<usize> = BTreeSet::new();
-        let mut next = 0;
-        while next < read.len() {
-            let a = read[next].clone();
-            next += 1;
-            for (k, r) in rules.iter().enumerate() {
-                if !used.contains(&k) && crate::stuck::patterns_unify(&r.head, &a) {
-                    used.insert(k);
-                    read.extend(body(r));
-                }
-            }
-        }
-        for s in &i.res.stuck {
-            if read
-                .iter()
-                .any(|a| crate::stuck::patterns_unify(a, &s.head))
-            {
-                nulls.extend(s.nulls.iter().cloned());
-            }
-        }
+        nulls = stuck_nulls(i, |h| h.pred == "provider_config" && named(h));
     }
     let owners = nulls
         .iter()
-        .map(|l| null_owner(l).filter(|o| !crate::externs::in_process(&o.0)))
+        .map(|l| match i.outside.contains_key(l) {
+            true => Some(outside_owner(l)),
+            false => null_owner(l).filter(|o| !crate::externs::in_process(&o.0)),
+        })
         .collect::<Option<BTreeSet<_>>>()?;
     (!owners.is_empty()).then_some(owners)
+}
+
+/// The owner a schedule gives a wait of another deployment of the tree
+/// ([`Input::outside`]): the wait itself, under no type.
+pub(super) fn outside_owner(label: &str) -> (String, String) {
+    (String::new(), label.to_string())
+}
+
+/// The nulls the stuck instances hold that what the rules whose head
+/// `heads` matches read, through any chain of rules, waits on: what a
+/// value no row derives yet waits on.
+pub(super) fn stuck_nulls(i: &Input, heads: impl Fn(&Atom) -> bool) -> BTreeSet<String> {
+    let rules: Vec<&RuleStmt> = crate::modules::reached(i.program)
+        .into_iter()
+        .filter_map(|s| match s {
+            crate::ast::Stmt::Rule(r) => Some(r),
+            _ => None,
+        })
+        .collect();
+    let body = |r: &RuleStmt| -> Vec<Atom> {
+        r.body
+            .iter()
+            .filter_map(|l| match l {
+                crate::ast::Lit::Pos(a) | crate::ast::Lit::Not(a) => Some(a.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    // The atoms the heads read, through the rules that derive them.
+    let mut read: Vec<Atom> = rules
+        .iter()
+        .filter(|r| heads(&r.head))
+        .flat_map(|r| body(r))
+        .collect();
+    let mut used: BTreeSet<usize> = BTreeSet::new();
+    let mut next = 0;
+    while next < read.len() {
+        let a = read[next].clone();
+        next += 1;
+        for (k, r) in rules.iter().enumerate() {
+            if !used.contains(&k) && crate::stuck::patterns_unify(&r.head, &a) {
+                used.insert(k);
+                read.extend(body(r));
+            }
+        }
+    }
+    let mut nulls = BTreeSet::new();
+    for s in &i.res.stuck {
+        if read
+            .iter()
+            .any(|a| crate::stuck::patterns_unify(a, &s.head))
+        {
+            nulls.extend(s.nulls.iter().cloned());
+        }
+    }
+    nulls
 }
 
 pub(super) fn nulls(s: &Stuck) -> Vec<String> {
@@ -333,6 +353,22 @@ pub(crate) fn waited(on: &BTreeSet<String>) -> Vec<String> {
         // A deployment not applied yet once, whatever of it is read.
         if !out.contains(&w) {
             out.push(w);
+        }
+    }
+    out
+}
+
+/// The values a tick waits on, as [`waited`] says them; an output of
+/// another deployment of the tree, which the tick before makes known, as
+/// the reference it is, `stacks.platform[env=lab].ingress`.
+pub(super) fn waited_in_tick(on: &BTreeSet<String>) -> Vec<String> {
+    let (outputs, rest): (BTreeSet<String>, BTreeSet<String>) = on.iter().cloned().partition(|l| {
+        crate::value::null_parts(l).is_some_and(|(t, _, _)| t == crate::stack::UNAPPLIED)
+    });
+    let mut out = waited(&rest);
+    for l in outputs {
+        if let Some((_, name, k)) = crate::value::null_parts(&l) {
+            out.push(format!("{name}.{k}"));
         }
     }
     out
@@ -359,4 +395,90 @@ pub(super) fn owners(on: &BTreeSet<String>) -> Vec<String> {
         }
     }
     out
+}
+
+/// The tick after which each output of the stack this plan does not know
+/// yet is known (`resolved`: the tick after which waits are resolved):
+/// what its value's nulls and the resources it names are made from, or,
+/// for one no row derives yet, what the stuck rules it reads wait on. An
+/// output known now, and one waiting on what no tick of this plan makes,
+/// is not here.
+pub(super) fn outputs_after(
+    i: &Input,
+    resolved: &dyn Fn(&[String]) -> Option<usize>,
+) -> BTreeMap<String, usize> {
+    let output = crate::transform::OUTPUT;
+    let mut rows: BTreeMap<String, &Value> = BTreeMap::new();
+    for a in i.res.facts.iter().filter(|a| a.pred == "attr") {
+        if let [
+            Term::Val(Value::Str(t)),
+            Term::Val(Value::Str(scope)),
+            Term::Val(Value::Str(k)),
+            Term::Val(v),
+        ] = a.args.as_slice()
+            && t == output
+            && scope.is_empty()
+        {
+            rows.insert(k.clone(), v);
+        }
+    }
+    let declared = i.program.statements.iter().filter_map(|s| match s {
+        crate::ast::Stmt::Output(o) if o.relation.is_none() => Some(o.name.clone()),
+        _ => None,
+    });
+    let keys: BTreeSet<String> = rows.keys().cloned().chain(declared).collect();
+    let mut out = BTreeMap::new();
+    for k in keys {
+        let on: Vec<String> = match rows.get(&k) {
+            Some(v) => waited_in(v),
+            None => stuck_nulls(i, |h| is_output_row(h, &k))
+                .into_iter()
+                .collect(),
+        };
+        if on.is_empty() {
+            continue;
+        }
+        if let Some(t) = resolved(&on) {
+            out.insert(k, t);
+        }
+    }
+    out
+}
+
+/// What a value waits on: its nulls, and each resource it names, as the
+/// null of its attribute (the resource's tick is the owner's).
+fn waited_in(v: &Value) -> Vec<String> {
+    let mut out: Vec<String> = crate::lattice::nulls_in(v).into_iter().collect();
+    let mut refs = Vec::new();
+    refs_in(v, &mut refs);
+    out.extend(refs);
+    out
+}
+
+fn refs_in(v: &Value, out: &mut Vec<String>) {
+    match v {
+        Value::Ref { typ, name, attr } => {
+            out.push(crate::value::null_label(typ, name, attr));
+        }
+        Value::List(xs) => xs.iter().for_each(|x| refs_in(x, out)),
+        Value::Obj(m) => m.values().for_each(|x| refs_in(x, out)),
+        _ => {}
+    }
+}
+
+/// Whether `h` is the head of a rule deriving the stack's output `k`:
+/// `output(k, _)` as the program writes it, `attr(output, "", k, _)` as
+/// it lowers.
+fn is_output_row(h: &Atom, k: &str) -> bool {
+    let key = |t: &Term| matches!(t, Term::Val(Value::Str(x)) if x == k);
+    match h.args.as_slice() {
+        [name, _] => h.pred == crate::transform::OUTPUT && key(name),
+        [
+            Term::Val(Value::Str(t)),
+            Term::Val(Value::Str(scope)),
+            name,
+            _,
+        ] => h.pred == "attr" && t == crate::transform::OUTPUT && scope.is_empty() && key(name),
+        _ => false,
+    }
 }

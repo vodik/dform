@@ -51,7 +51,7 @@ fn a_deployment_a_module_and_a_copy_nest() {
     let r = s.run(&["plan"]).success();
     assert!(
         r.stdout.starts_with(
-            "plan: 5 changes (5 create)\n\n\
+            "plan: 5 changes (5 create) over 1 tick\n\n\
              + stacks.platform[env=lab]  project.df:1  never applied, 4 changes (4 create) over 1 tick\n  \
              tick 1  4 changes\n    \
              + module k3s\n      \
@@ -72,7 +72,7 @@ fn a_deployment_a_module_and_a_copy_nest() {
     assert!(
         r.stdout.contains(
             "\n+ stacks.apps[env=lab]      project.df:2  never applied, 1 change (1 create) over 1 \
-             tick  after stacks.platform[env=lab]\n  tick 1  1 change\n    + net.vpc rec  \
+             tick\n  tick 1  1 change\n    + net.vpc rec  \
              stacks/apps.df:5\n        cidr = \"10.1.0.0/16\"\n        name = \"10.9.0.0/24\"\n"
         ),
         "{}",

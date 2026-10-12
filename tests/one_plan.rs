@@ -122,3 +122,148 @@ fn a_tag_both_deployments_name_is_resolved_once() {
         .count();
     assert_eq!(resolves, 1, "the tag asked once for the tree");
 }
+
+/// The ticks are the tree's: an apps change reading only what platform
+/// knows now is in tick 1 beside platform's; one reading what platform
+/// makes at tick 1, and the namespace behind the kubeconfig, in tick 2.
+#[test]
+fn an_apps_change_is_in_the_tick_after_what_it_reads() {
+    let s = project("one-plan-ticks");
+    let (r, _) = plan(&s, &["plan", "apps"]);
+    let r = r.success();
+    assert_eq!(
+        r.summary(),
+        "plan: 5 changes (5 create) over 2 ticks",
+        "{}",
+        r.stdout
+    );
+    let apps = r.stdout.split("stacks.apps[env=lab]").nth(1).unwrap();
+    let tick1 = apps.split("  tick 2").next().unwrap();
+    assert!(
+        tick1.contains("  tick 1  1 change\n    + net.subnet named"),
+        "{}",
+        r.stdout
+    );
+    let tick2 = apps.split("  tick 2").nth(1).unwrap();
+    for x in [
+        "+ k8s.namespace apps",
+        "+ net.subnet inside",
+        "stacks.platform[env=lab].vpc",
+    ] {
+        assert!(tick2.contains(x), "{x}\n{}", r.stdout);
+    }
+    assert!(!r.stdout.contains("later"), "{}", r.stdout);
+}
+
+/// One refresh per object: a plan of the tree reads each object of the
+/// deployments' states once.
+#[test]
+fn a_trees_plan_reads_each_object_once() {
+    let s = project("one-plan-refresh");
+    // The fake cloud's endpoint is no kubeconfig: apps without the cluster.
+    let apps: String = APPS
+        .lines()
+        .filter(|l| !l.contains("k8s"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    s.write("stacks/apps.df", &apps);
+    let (r, _) = plan(&s, &["apply", "--yes", "platform"]);
+    r.success();
+    let (r, spans) = plan(&s, &["plan", "apps"]);
+    r.success();
+    assert_eq!(
+        calls(&spans, "fakecloud Read"),
+        ["db.postgres server", "net.vpc main"]
+    );
+}
+
+/// The tree's plan file: one file, each deployment's section with its own
+/// digest and its changes under the tree's ticks.
+#[test]
+fn a_trees_plan_file_has_a_section_per_deployment() {
+    let s = project("one-plan-file");
+    let (r, _) = plan(&s, &["plan", "apps", "--out", "plan.json"]);
+    let r = r.success();
+    assert!(
+        r.stderr.contains("plan digests: stacks.platform[env=lab] "),
+        "{}",
+        r.stderr
+    );
+    let f = s.json("plan.json");
+    let sections = f["deployments"].as_array().unwrap();
+    let names: Vec<&str> = sections
+        .iter()
+        .map(|d| d["deployment"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["stacks.platform[env=lab]", "stacks.apps[env=lab]"]);
+    assert!(sections.iter().all(|d| d["digest"].is_string()), "{f}");
+    let ticks = &sections[1]["ticks"];
+    let at = |n: u64| {
+        ticks
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["tick"] == n)
+            .map(|t| t.to_string())
+            .unwrap_or_default()
+    };
+    assert!(at(1).contains("net.subnet[\\\"named\\\"]"), "{ticks}");
+    assert!(at(2).contains("net.subnet[\\\"inside\\\"]"), "{ticks}");
+}
+
+/// A reader in the tree needs no master to read a sealed output of a
+/// deployment in it: the value is the producer's plan's, in memory
+/// (never printed, never written). Without any master the reader's
+/// provider is configured from the kubeconfig the producer read, and its
+/// objects plan in tick 1; what only the producer's master derives (a
+/// `random.password`) stays the producer's stand-in, and what reads it
+/// waits.
+#[test]
+fn a_reader_in_the_tree_reads_a_sealed_output_without_its_master() {
+    let s = Scratch::project("one-plan-masters");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[providers]\nfake = \"fake\"\nk8s = \"k8s\"\n\n\
+         [secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n",
+    );
+    s.write(
+        "stacks/platform.df",
+        r#"key env: enum("lab", "prod") = "lab"
+use fake
+resource net.vpc main { cidr_block = "10.0.0.0/16" }
+let raw: secret(string) = io.read("kubeconfig-${env}.yaml")
+output kubeconfig: secret(string) = raw
+"#,
+    );
+    s.write(
+        "stacks/apps.df",
+        r#"key env: enum("lab", "prod") = "lab"
+use stacks.platform
+use k8s { kubeconfig = platform[env].kubeconfig }
+resource k8s.namespace apps { metadata.name = "apps" }
+"#,
+    );
+    s.write(
+        "kubeconfig-lab.yaml",
+        "apiVersion: v1 # KUBECONFIG-SECRET-LAB",
+    );
+    let out = common::dform()
+        .args(["plan", "apps"])
+        .current_dir(&s.dir)
+        .env("NO_COLOR", "1")
+        .env_remove("DFORM_TEST_PASSPHRASE")
+        .env_remove("RANDOM_MASTER")
+        .output()
+        .unwrap();
+    let r = Run::from(out).success();
+    let apps = r.stdout.split("stacks.apps[env=lab]").nth(1).unwrap();
+    assert!(
+        apps.contains("  tick 1  1 change\n    + k8s.namespace apps"),
+        "{}",
+        r.stdout
+    );
+    assert!(!r.stderr.contains("needs its master"), "{}", r.stderr);
+    for out in [&r.stdout, &r.stderr] {
+        assert!(!out.contains("KUBECONFIG-SECRET"), "{out}");
+    }
+}

@@ -311,6 +311,7 @@ impl Why {
             moved: &[],
             denies: &p.denies,
             kept: &Default::default(),
+            outside: &Default::default(),
         });
         r.explain(
             report::Why::Line,

@@ -462,15 +462,9 @@ impl Tree<'_> {
         // Its plan feeds the plans that read it (R-200): what it will
         // publish once applied (an apply with no change publishes too).
         if let (None, Some(outputs)) = (&error, held.outputs) {
-            g.outputs.insert(
-                d.name.clone(),
-                crate::stack::Planned {
-                    full: d.full.clone(),
-                    outputs,
-                },
-            );
+            g.outputs.insert(d.name.clone(), outputs);
         }
-        node.state = self.with_after(state, order, d, gone, &node.kind);
+        node.state = self.listed(state, d, gone);
         if !matches!(node.kind, ActionKind::Noop) {
             node.body = held.text;
         }
@@ -531,30 +525,14 @@ impl Tree<'_> {
         }
     }
 
-    /// `state`, with what `d` is applied after: what it reads (R-30),
-    /// less what its state says it already waits on (`.. after X is
-    /// applied`); and, in a project module's tree, why one it does not
-    /// list is in it.
-    fn with_after(
-        &self,
-        state: String,
-        order: &[Dependency],
-        d: &Dependency,
-        gone: bool,
-        kind: &ActionKind,
-    ) -> String {
-        let mut state = match d.root || gone || self.label.is_none() {
+    /// `state`, with, in a project module's tree, why a deployment it
+    /// does not list is in it. What it reads orders nothing of it: its
+    /// changes are in the tree's ticks.
+    fn listed(&self, state: String, d: &Dependency, gone: bool) -> String {
+        match d.root || gone || self.label.is_none() {
             true => state,
             false => format!("{state}  (not listed: a listed deployment reads it)"),
-        };
-        let after: Vec<String> = reads_of(order, d)
-            .into_iter()
-            .filter(|full| !state.contains(&format!("after {full} is applied")))
-            .collect();
-        if !after.is_empty() && !gone && !matches!(kind, ActionKind::Noop) {
-            state.push_str(&format!("  after {}", after.join(", ")));
         }
-        state
     }
 
     /// The tree as text: its headline and each deployment's line and

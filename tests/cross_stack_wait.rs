@@ -46,7 +46,12 @@ fn a_read_of_a_deployment_not_applied_waits_on_it() {
     // A plan of the reader plans what it reads first and reads what that
     // will publish (R-200): a value its plan knows flows.
     let r = s.run(&["plan", "apps"]).success();
-    assert_eq!(r.summary(), "plan: 2 changes (2 create)", "{}", r.stdout);
+    assert_eq!(
+        r.summary(),
+        "plan: 2 changes (2 create) over 1 tick",
+        "{}",
+        r.stdout
+    );
     assert!(
         r.stdout
             .contains("      cidr = \"10.1.0.0/16\"\n        name = \"10.0.0.0/16\"\n"),
@@ -58,7 +63,12 @@ fn a_read_of_a_deployment_not_applied_waits_on_it() {
     // value.
     s.run(&["apply", "platform"]).success();
     let r = s.run(&["plan", "apps"]).success();
-    assert_eq!(r.summary(), "plan: 1 change (1 create)", "{}", r.stdout);
+    assert_eq!(
+        r.summary(),
+        "plan: 1 change (1 create) over 1 tick",
+        "{}",
+        r.stdout
+    );
     assert!(
         r.stdout
             .contains("\n= stacks.platform[env=lab]  stacks/platform.df  up to date\n\n+ "),

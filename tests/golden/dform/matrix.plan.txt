@@ -1,4 +1,4 @@
-plan: 32 changes (32 create); policy: 27 hold
+plan: 32 changes (32 create) over 1 tick; policy: 27 hold
 
 + stacks.dform[env=dev]      project.df:6  never applied, 6 changes (6 create) over 1 tick
   tick 1  6 changes

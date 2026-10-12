@@ -1,8 +1,8 @@
 //! A targeted plan covers the target's dependencies, as a targeted apply
 //! does (R-200, R-30): `dform plan apps env=lab` plans
-//! stacks.platform[env=lab] first, then apps against platform's planned
-//! outputs, one tree; a dependency up to date is one line; the chain stops
-//! where the apply would.
+//! stacks.platform[env=lab] and apps as one plan, apps against platform's
+//! planned outputs, its ticks the tree's; a dependency up to date is one
+//! line; the chain stops where the apply would.
 
 use crate::common;
 use common::Scratch;
@@ -48,7 +48,7 @@ fn a_dependency_never_applied_is_planned_first_and_its_known_outputs_flow() {
     let r = s.run(&["plan", "apps", "env=lab"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 3 changes (3 create); 1 create after stacks.platform[env=lab] is applied",
+        "plan: 4 changes (4 create) over 2 ticks",
         "{}",
         r.stdout
     );
@@ -56,13 +56,13 @@ fn a_dependency_never_applied_is_planned_first_and_its_known_outputs_flow() {
         headers(&r.stdout),
         [
             "+ stacks.platform[env=lab] stacks/platform.df never applied, 2 changes (2 create) over 1 tick",
-            "+ stacks.apps[env=lab] stacks/apps.df never applied, 1 change (1 create) over 1 tick; 1 create after stacks.platform[env=lab] is applied",
+            "+ stacks.apps[env=lab] stacks/apps.df never applied, 2 changes (2 create) over 2 ticks",
         ],
         "{}",
         r.stdout
     );
-    // The value platform's plan knows flows; the one its apply computes
-    // waits on that apply.
+    // The value platform's plan knows flows; the one its tick 1 computes
+    // waits on that tick.
     assert!(
         r.stdout.contains(
             "    + net.vpc known  stacks/apps.df:5\n        cidr = \"10.1.0.0/16\"\n        name = \"10.0.0.0/16\"\n"
@@ -72,7 +72,7 @@ fn a_dependency_never_applied_is_planned_first_and_its_known_outputs_flow() {
     );
     assert!(
         r.stdout.contains(
-            "  later\n    waits on  stack stacks.platform[env=lab]\n    + net.vpc later  "
+            "  tick 2  1 change\n    waits on  stacks.platform[env=lab].endpoint\n    + net.vpc later  "
         ),
         "{}",
         r.stdout
@@ -86,10 +86,15 @@ fn a_dependency_up_to_date_is_one_line() {
     let s = project("deps-up-to-date");
     s.run(&["apply", "platform", "env=lab"]).success();
     let r = s.run(&["plan", "apps", "env=lab"]).success();
-    assert_eq!(r.summary(), "plan: 2 changes (2 create)", "{}", r.stdout);
+    assert_eq!(
+        r.summary(),
+        "plan: 2 changes (2 create) over 1 tick",
+        "{}",
+        r.stdout
+    );
     assert!(
         r.stdout.starts_with(
-            "plan: 2 changes (2 create)\n\n\
+            "plan: 2 changes (2 create) over 1 tick\n\n\
              = stacks.platform[env=lab]  stacks/platform.df  up to date\n\n\
              + stacks.apps[env=lab]"
         ),
@@ -190,8 +195,7 @@ fn json_nests_each_deployment_s_plan() {
     let r = s.run(&["plan", "apps", "env=lab", "--json"]).success();
     let j: serde_json::Value = serde_json::from_str(&r.stdout).expect(&r.stdout);
     assert_eq!(
-        j["summary"],
-        "plan: 3 changes (3 create); 1 create after stacks.platform[env=lab] is applied",
+        j["summary"], "plan: 4 changes (4 create) over 2 ticks",
         "{j:#}"
     );
     let names: Vec<&str> = j["deployments"]

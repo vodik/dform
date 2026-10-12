@@ -188,12 +188,10 @@ fn a_location_read_secret_output_configures_the_reading_stacks_provider() {
         before,
         "the published outputs moved"
     );
-    // Without the master the reader cannot open it, and says so.
+    // Without the master the reader in the tree opens no seal: it reads
+    // the kubeconfig from the platform's run, and plans its cluster's
+    // objects against it.
     let r = run(&s, &[], &["plan", "apps", "env=lab"]).success();
-    assert!(
-        r.stderr
-            .contains("platform[env=lab].kubeconfig is sealed to it: opening it needs its master"),
-        "{}",
-        r.stderr
-    );
+    assert!(!r.stderr.contains("needs its master"), "{}", r.stderr);
+    assert!(!r.stdout.contains("waits on  provider k8s"), "{}", r.stdout);
 }

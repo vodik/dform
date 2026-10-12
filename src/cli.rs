@@ -109,7 +109,7 @@ struct Held(Option<Arc<std::sync::Mutex<HeldPlan>>>);
 struct HeldPlan {
     text: String,
     tally: Option<report::Tally>,
-    outputs: Option<crate::stack::Outputs>,
+    outputs: Option<crate::stack::Planned>,
     /// `plan --json`'s document.
     json: Option<serde_json::Value>,
     /// Its plan file's (`plan --out`), written once for the tree.
@@ -155,7 +155,7 @@ impl Held {
     }
 
     /// The plan's outputs, for the plans that read them (R-200).
-    fn outputs(&self, outputs: crate::stack::Outputs) {
+    fn outputs(&self, outputs: crate::stack::Planned) {
         self.with(|h| h.outputs = Some(outputs));
     }
 

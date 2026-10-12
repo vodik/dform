@@ -15,9 +15,9 @@ use std::collections::BTreeMap;
 pub struct Tally {
     /// The definite changes, by kind in [`KINDS`] order.
     pub kinds: Vec<(&'static str, usize)>,
-    /// The ticks with a change; none for a tree of deployments, each of
-    /// which has its own.
-    pub ticks: usize,
+    /// The ticks with a change, by number: a tree's are its deployments'
+    /// together, one count of ticks for the tree.
+    pub ticks: std::collections::BTreeSet<usize>,
     /// `--show-noop`'s count.
     pub noops: Option<usize>,
     pub denied: usize,
@@ -61,7 +61,7 @@ impl Tally {
             a.sort_by_key(|(k, _)| KINDS.iter().position(|x| x == k));
         };
         sum(&mut self.kinds, &other.kinds);
-        self.ticks = 0;
+        self.ticks.extend(other.ticks.iter().copied());
         self.noops = match (self.noops, other.noops) {
             (None, None) => None,
             (a, b) => Some(a.unwrap_or(0) + b.unwrap_or(0)),
@@ -92,8 +92,8 @@ impl Tally {
         let mut head = Vec::new();
         if self.changes() > 0 || later.is_empty() {
             let mut out = changes_text(self.changes(), &self.kinds);
-            if self.ticks > 0 {
-                out.push_str(&format!(" over {}", count(self.ticks, "tick")));
+            if !self.ticks.is_empty() {
+                out.push_str(&format!(" over {}", count(self.ticks.len(), "tick")));
             }
             head.push(out.trim_start_matches("plan: ").to_string());
         }
@@ -160,15 +160,16 @@ impl Report {
     pub fn tally(&self) -> Tally {
         let ticks = self
             .sections()
-            .values()
-            .filter(|s| {
+            .into_iter()
+            .filter(|(_, s)| {
                 !s.deposed.is_empty()
                     || !s.groups.is_empty()
                     || s.changes
                         .iter()
                         .any(|d| !matches!(d.kind, ActionKind::Noop))
             })
-            .count();
+            .map(|(t, _)| t)
+            .collect();
         let later = self.later_changes();
         // Held objects `later` lists as state has them, no change of
         // theirs known yet (R-177): after the clauses when there are.

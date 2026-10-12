@@ -206,6 +206,9 @@ pub struct Report {
     /// headline and the deployment's header line say what its own
     /// headline and `up to date` line would.
     pub nested: bool,
+    /// The outputs this plan knows only after a tick, by key: that tick
+    /// (what the plans that read them in a tree wait on).
+    pub outputs_after: BTreeMap<String, usize>,
 }
 
 impl Report {
@@ -253,6 +256,10 @@ pub struct Input<'a> {
     /// The copies state remembers (`state::State::instances`): a removed
     /// copy's deletes print under it.
     pub kept: &'a BTreeMap<String, String>,
+    /// The outputs of the other deployments of a tree planned as one
+    /// (`stack/FULL#k`) that their plans know only after a tick: by
+    /// label, that tick. What waits on one runs the tick after.
+    pub outside: &'a BTreeMap<String, usize>,
 }
 
 /// The resources an attribute of which conflicts: the report shows their
@@ -296,6 +303,7 @@ pub fn report(i: &Input) -> Report {
     let policy = policy::lines(i.program, i.res, &policies, &r);
 
     let (ticks, unscheduled) = ticks(i, &definite, &held, &groups, &tick_of);
+    let outputs_after = waits::outputs_after(i, &|on: &[String]| resolves(on, &tick_of));
 
     // E §2.7: undeformed is the zero Z-set, nothing stuck, no cell stuck.
     let undeformed = noops == definite.len()
@@ -340,6 +348,7 @@ pub fn report(i: &Input) -> Report {
         kept: kept(i, &definite, (&r, &refs)),
         policy,
         nested: false,
+        outputs_after,
     }
 }
 
@@ -381,7 +390,10 @@ fn resolved_after(
                 .map(|o| tick_of.get(o).copied())
                 .collect::<Option<Vec<usize>>>()
                 .and_then(|ts| ts.into_iter().max()),
-            None => null_owner(n).and_then(|o| tick_of.get(&o).copied()),
+            None => null_owner(n)
+                .and_then(|o| tick_of.get(&o))
+                .or_else(|| tick_of.get(&waits::outside_owner(n)))
+                .copied(),
         })
         .collect::<Option<Vec<usize>>>()
         .and_then(|ts| ts.into_iter().max())
@@ -442,6 +454,9 @@ fn schedule(
         .filter(|a| !matches!(a.kind, ActionKind::Noop))
         .map(|a| ((a.addr.typ.clone(), a.addr.name.clone()), i.tick))
         .collect();
+    // What another deployment of the tree makes known after a tick is
+    // made then, as a resource of this plan would be.
+    tick_of.extend(i.outside.iter().map(|(l, t)| (waits::outside_owner(l), *t)));
     loop {
         let mut changed = false;
         for a in held {

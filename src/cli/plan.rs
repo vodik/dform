@@ -61,7 +61,7 @@ impl Plan {
         if cx.cli.held.is_held() {
             cx.cli
                 .held
-                .outputs(planned_outputs(&cx, &planned, &st, &evaluator)?);
+                .outputs(r.outputs_of(&planned.res, &st, &report.outputs_after)?);
             cx.cli.held.tally(report.tally());
         }
         let file = self.file(&cx, &located, &r, &planned, &st)?;
@@ -275,27 +275,4 @@ impl Plan {
         }
         Ok(())
     }
-}
-
-/// The deployment's outputs as its plan has them (R-200), for the plans of
-/// the deployments that read it in the same run: a value the plan knows,
-/// else pending until the apply.
-fn planned_outputs(
-    cx: &Context,
-    planned: &Planned,
-    st: &crate::state::State,
-    evaluator: &deployment::Evaluator,
-) -> Result<crate::stack::Outputs> {
-    if !crate::stack::has_outputs(&planned.res.facts) {
-        return Ok(Default::default());
-    }
-    Ok(crate::stack::outputs(
-        &planned.res.facts,
-        &crate::stack::secret_output_types(&evaluator.program),
-        &evaluator.backend.observe(st)?,
-        st,
-        &cx.deployment,
-        &|_| None,
-        &|_, _| Default::default(),
-    ))
 }

@@ -29,6 +29,24 @@ pub(super) struct Reporter<'a> {
     /// What the plan may empty (R-80): the apply's `--allow-empty` and the
     /// stack's `allow_empty`.
     allow_empty: Vec<String>,
+    /// The outputs of the deployments of the tree before this one that
+    /// their plans know only after a tick ([`report::Input::outside`]).
+    outside: BTreeMap<String, usize>,
+}
+
+/// What the deployments planned before this one in the tree know only
+/// after a tick, by the label of the null this one reads in each one's
+/// place (`stack/FULL#k`): that tick.
+fn outside(planned: &BTreeMap<String, crate::stack::Planned>) -> BTreeMap<String, usize> {
+    planned
+        .values()
+        .flat_map(|p| {
+            p.after.iter().map(|(k, t)| {
+                let label = crate::value::null_label(crate::stack::UNAPPLIED, &p.full, k);
+                (label, *t)
+            })
+        })
+        .collect()
 }
 
 impl<'a> Reporter<'a> {
@@ -59,11 +77,52 @@ impl<'a> Reporter<'a> {
             drift_said: Cell::new(false),
             top: site_root(&cx.cli.files),
             allow_empty,
+            outside: outside(&cx.cli.planned),
         }
     }
 
     fn schema(&self) -> &'a crate::schema::Schema {
         self.evaluator.schema()
+    }
+
+    /// The deployment's outputs as the evaluation `res` has them (R-200),
+    /// for the deployments that read it in the same tree: a value it knows
+    /// (a secret one in memory), else pending until the tick `after` says
+    /// it is known after (a plan's report's); every output it declares,
+    /// one no row derives yet pending too.
+    pub(super) fn outputs_of(
+        &self,
+        res: &engine::EvalResult,
+        st: &state::State,
+        after: &BTreeMap<String, usize>,
+    ) -> Result<crate::stack::Planned> {
+        let evaluator = self.evaluator;
+        let secret = crate::stack::secret_output_types(&evaluator.program);
+        let mut outputs = match crate::stack::has_outputs(&res.facts) {
+            false => crate::stack::Outputs::default(),
+            true => crate::stack::outputs(
+                &res.facts,
+                &secret,
+                &evaluator.backend.observe(st)?,
+                st,
+                &self.cx.deployment,
+                // Keyed as its apply would publish it: a reader in the tree
+                // knows it as the seal would say it (`outputs::open_sealed`).
+                &|b| self.cx.master.digest.as_ref().map(|k| k.digest(b)),
+                &|_, _| Default::default(),
+            ),
+        };
+        for k in crate::stack::declared_outputs(&evaluator.program) {
+            if !outputs.known.contains_key(&k) && !outputs.secret.contains_key(&k) {
+                outputs.pending.insert(k);
+            }
+        }
+        Ok(crate::stack::Planned {
+            full: self.cx.stored.clone(),
+            values: crate::stack::secret_values(&res.facts, &secret),
+            after: after.clone(),
+            outputs,
+        })
     }
 
     /// How much each printed change says of why (R-79).
@@ -94,6 +153,7 @@ impl<'a> Reporter<'a> {
             moved,
             denies,
             kept: &self.kept,
+            outside: &self.outside,
         });
         report.resumed = self.resuming.get() && tick == 1;
         // A destroy's deletes say no reason; a plan's say why they are

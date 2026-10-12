@@ -1,7 +1,8 @@
-//! A plan whose every change waits on another deployment says what it
-//! knows (R-193): the k8s provider configured from a stack not applied
-//! yet holds its objects under `later`, and a deny over them is decided
-//! where it reads what the program wrote, or prints what it waits on.
+//! A plan whose every change waits on another deployment of its tree
+//! says what it knows (R-193): the k8s provider configured from a stack
+//! the tree's tick 1 makes holds its objects to tick 2, planned against
+//! its offline schema, and a deny over them is decided where it reads
+//! what the program wrote, or prints what it waits on.
 
 use crate::common;
 use common::{Run, Scratch};
@@ -133,8 +134,7 @@ fn the_summary_counts_what_later_holds_by_what_it_waits_on() {
     let r = plan(&s).success();
     assert_eq!(
         r.summary(),
-        "plan: 1 change (1 create); 3 creates after stacks.platform[env=lab] is applied; policy: 1 \
-         undetermined",
+        "plan: 4 changes (4 create) over 2 ticks; policy: 1 undetermined",
         "{}",
         r.stdout
     );
@@ -153,8 +153,7 @@ fn the_summary_counts_what_later_holds_by_what_it_waits_on() {
     let r = plan(&s).success();
     assert_eq!(
         r.summary(),
-        "plan: 2 changes (2 create); 3 creates after stacks.platform[env=lab] is applied; 1 \
-         create after stacks.dns[env=lab] is applied; policy: 1 undetermined",
+        "plan: 6 changes (6 create) over 2 ticks; policy: 1 undetermined",
         "{}",
         r.stdout
     );
@@ -187,9 +186,6 @@ fn why_a_deny_that_waits_says_what_it_waits_on() {
 const MIDDLEWARE: &str = "resource k8s.traefik.middleware mw {\n  metadata = { name: \"mw\", \
                           namespace: apps.metadata.name }\n  spec.headers.stsSeconds = 3\n}\n";
 
-const PROVISIONAL: &str = "  waits on  provider k8s  kubeconfig = platform[env].kubeconfig\n  \
-     provisional: planned against the offline schema; planned again once kubeconfig is known\n";
-
 /// The k8s provider held by its connection alone (the mock flags
 /// `kubeconfig` so, as the real one does) planned its objects against
 /// its offline schema: the group says it is provisional, each create
@@ -202,25 +198,25 @@ fn a_provider_held_by_its_connection_plans_provisionally() {
     let r = plan(&s).success();
     assert_eq!(
         r.summary(),
-        "plan: 1 change (1 create); 4 creates after stacks.platform[env=lab] is applied",
+        "plan: 5 changes (5 create) over 2 ticks",
         "{}",
         r.stdout
     );
-    let (_, later) = r.stdout.split_once("\nlater\n").expect(&r.stdout);
-    let (provisional, schema) = later
-        .split_once("  waits on  provider k8s  schema\n")
-        .expect(later);
+    // The tick the kubeconfig is known after: the provider's objects
+    // planned against its snapshot, the Middleware once its cluster
+    // serves the kind.
+    let (_, tick2) = r
+        .stdout
+        .split_once("\ntick 2  4 changes\n")
+        .expect(&r.stdout);
     assert!(
-        provisional.starts_with(PROVISIONAL)
-            && provisional.contains(
-                "  + k8s.deployment web         stacks/apps.df:6\n      \
-                 metadata = { name: \"web\", namespace: \"apps\" }\n"
-            ),
-        "{}",
-        r.stdout
-    );
-    assert!(
-        schema.starts_with("  + k8s.traefik.middleware mw") && !schema.contains("provisional"),
+        tick2.starts_with(
+            "  waits on  provider k8s  kubeconfig = platform[env].kubeconfig\n            \
+             provider k8s  schema\n  provisional:"
+        ) && tick2.contains(
+            "  + k8s.deployment web         stacks/apps.df:6\n      \
+             metadata = { name: \"web\", namespace: \"apps\" }\n"
+        ) && tick2.contains("  + k8s.traefik.middleware mw"),
         "{}",
         r.stdout
     );
@@ -249,14 +245,13 @@ fn a_provider_held_by_its_connection_plans_provisionally() {
         serde_json::from_str(&s.run(&["plan", "apps", "--json"]).success().stdout).unwrap();
     // apps's own document, under its line in the tree (R-200).
     let j = &tree["deployments"][1]["plan"];
-    let held: Vec<bool> = j["later"]
+    let tick2 = j["ticks"]
         .as_array()
         .unwrap()
         .iter()
-        .filter(|l| l["kind"] == "held")
-        .map(|l| l["provisional"].as_bool().unwrap())
-        .collect();
-    assert_eq!(held, [true, false], "{j:#}");
+        .find(|t| t["tick"] == 2)
+        .expect("tick 2");
+    assert_eq!(tick2["provisional"], true, "{j:#}");
 }
 
 /// A provider that also waits on a setting that says what it makes (the
@@ -276,7 +271,7 @@ fn a_provider_held_by_more_than_its_connection_is_not_provisional() {
     let r = plan(&s).success();
     assert!(
         r.stdout
-            .contains("\nlater\n  waits on  provider k8s  kubeconfig = ")
+            .contains("\ntick 2  3 changes\n  waits on  provider k8s  kubeconfig = ")
             && !r.stdout.contains("provisional"),
         "{}",
         r.stdout
@@ -307,11 +302,14 @@ fn the_k8s_provider_plans_provisionally_against_its_snapshot() {
         .env_remove("KUBERNETES_SERVICE_PORT")
         .env("DFORM_K8S_OFFLINE", "1");
     let r = unnested(Run::from(c.output().unwrap()).success());
-    let (_, later) = r.stdout.split_once("\nlater\n").expect(&r.stdout);
+    let (_, tick2) = r
+        .stdout
+        .split_once("\ntick 2  4 changes\n")
+        .expect(&r.stdout);
     assert!(
-        later.starts_with(PROVISIONAL)
-            && later.contains("      spec.selector.matchLabels.app = \"web\"\n")
-            && later.contains("  waits on  provider k8s  schema\n  + k8s.traefik.middleware mw"),
+        tick2.contains("  provisional: planned against the offline schema")
+            && tick2.contains("      spec.selector.matchLabels.app = \"web\"\n")
+            && tick2.contains("  + k8s.traefik.middleware mw"),
         "{}",
         r.stdout
     );

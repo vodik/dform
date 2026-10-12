@@ -1,8 +1,9 @@
-//! A deny that waits on another deployment's apply is about what it
+//! A deny that waits on another deployment's output is about what it
 //! ranges over (R-200, R-214): each resource whose instance of it waits
 //! is undetermined, never counted as holding, and its line says until
-//! when, `(after stacks.platform[env=lab] is applied)`. Two deployments on
-//! the mock; `apps` reads an output of `platform` its plan cannot know.
+//! when, the tree's tick that makes the output known, `(tick 2)`. Two
+//! deployments on the mock; `apps` reads an output of `platform` its plan
+//! knows only once platform's tick 1 made its database.
 
 use crate::common;
 use common::Scratch;
@@ -36,7 +37,7 @@ deny "the endpoint is somewhere" { vpc: v } where v in net.vpc, platform[env].en
 /// resource undetermined with until when.
 type Policy = (String, Vec<String>, Vec<(String, String)>);
 
-const AFTER: &str = "(after stacks.platform[env=lab] is applied)";
+const AFTER: &str = "(tick 2)";
 
 #[test]
 fn a_deny_waiting_on_another_deployment_is_about_what_it_ranges_over() {

@@ -61,7 +61,8 @@ fn plan_with_no_target_is_one_tree_of_the_deployments_in_apply_order() {
     // plan nested under it; a reader planned against what its dependency
     // will publish (R-200).
     assert!(
-        r.stdout.starts_with("plan: 4 changes (4 create)\n\n"),
+        r.stdout
+            .starts_with("plan: 4 changes (4 create) over 1 tick\n\n"),
         "{}",
         r.stdout
     );
@@ -69,9 +70,9 @@ fn plan_with_no_target_is_one_tree_of_the_deployments_in_apply_order() {
         states(&r.stdout),
         [
             "+ stacks.platform[env=lab] project.df:4 never applied, 1 change (1 create) over 1 tick",
-            "+ stacks.apps[env=lab] project.df:2 never applied, 1 change (1 create) over 1 tick after stacks.platform[env=lab]",
+            "+ stacks.apps[env=lab] project.df:2 never applied, 1 change (1 create) over 1 tick",
             "+ stacks.platform[env=prod] project.df:5 never applied, 1 change (1 create) over 1 tick",
-            "+ stacks.apps[env=prod] project.df:3 never applied, 1 change (1 create) over 1 tick after stacks.platform[env=prod]",
+            "+ stacks.apps[env=prod] project.df:3 never applied, 1 change (1 create) over 1 tick",
         ],
         "{}",
         r.stdout
@@ -91,7 +92,7 @@ fn plan_with_no_target_is_one_tree_of_the_deployments_in_apply_order() {
         states(&r.stdout)[..2],
         [
             "= stacks.platform[env=lab] project.df:4 up to date",
-            "+ stacks.apps[env=lab] project.df:2 never applied, 1 change (1 create) over 1 tick after stacks.platform[env=lab]",
+            "+ stacks.apps[env=lab] project.df:2 never applied, 1 change (1 create) over 1 tick",
         ],
         "{}",
         r.stdout
@@ -167,7 +168,7 @@ fn each_deployment_is_confirmed_on_its_own() {
         states(&r.stdout),
         [
             "= stacks.platform[env=lab] project.df:2 up to date",
-            "+ stacks.apps[env=lab] project.df:1 never applied, 1 change (1 create) over 1 tick after stacks.platform[env=lab]"
+            "+ stacks.apps[env=lab] project.df:1 never applied, 1 change (1 create) over 1 tick"
         ],
         "{}",
         r.stdout
@@ -267,7 +268,7 @@ fn a_deployment_the_matrix_does_not_list_is_a_target_of_its_own() {
         states(&r.stdout),
         [
             "+ stacks.platform[env=lab] stacks/platform.df never applied, 1 change (1 create) over 1 tick (not listed: a listed deployment reads it)",
-            "+ stacks.apps[env=lab] project.df:1 never applied, 1 change (1 create) over 1 tick after stacks.platform[env=lab]",
+            "+ stacks.apps[env=lab] project.df:1 never applied, 1 change (1 create) over 1 tick",
         ],
         "{}",
         r.stdout

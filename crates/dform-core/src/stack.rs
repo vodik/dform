@@ -1364,22 +1364,29 @@ impl Outputs {
 }
 
 /// A deployment's outputs as its plan has them (R-200): what the plans of
-/// the deployments that read it, later in the same run, read in place of
-/// what it published, so a value the plan knows flows and one known only
-/// after its apply waits on that apply.
+/// the deployments that read it in the same tree read in place of what it
+/// published, so a value the plan knows flows and one known only after a
+/// tick waits on that tick.
 #[derive(Debug, Clone)]
 pub struct Planned {
     /// The deployment's full name, `stacks.platform[env=lab]`.
     pub full: String,
     pub outputs: Outputs,
+    /// The secret outputs whose value the plan knows: what a reader in the
+    /// tree reads, in memory (never printed or written; the seal is for
+    /// readers outside the tree).
+    pub values: BTreeMap<String, Value>,
+    /// The outputs the plan knows only after a tick, by key: that tick.
+    pub after: BTreeMap<String, usize>,
 }
 
 impl Planned {
     /// What a reader reads of the deployment it names `name`: `read`,
     /// what it published if anything, with the plan's outputs over it. A
     /// public output the plan knows is its planned value; one it does not
-    /// waits on the apply; a secret output is as published (its value is
-    /// never shown), else it waits too.
+    /// waits on the tick it is known after; a secret output the plan knows
+    /// is its value, opened (its value never shown), one held by a
+    /// provider is where it is held, else it waits too.
     pub fn over(&self, name: &str, read: Option<Read>) -> Read {
         let mut read = read.unwrap_or_else(|| Read {
             name: name.to_string(),
@@ -1392,12 +1399,17 @@ impl Planned {
         let was = read.published.take().unwrap_or_default();
         let mut secret = BTreeMap::new();
         let mut pending = self.outputs.pending.clone();
-        for k in self.outputs.secret.keys() {
-            match was.secret.get(k) {
-                Some(o) => {
+        for (k, o) in &self.outputs.secret {
+            match (&o.held, self.values.get(k)) {
+                // Where a provider holds it: read there, as published.
+                (Some(_), _) => {
                     secret.insert(k.clone(), o.clone());
                 }
-                None => {
+                (None, Some(v)) => {
+                    read.opened.insert(k.clone(), v.clone());
+                    secret.insert(k.clone(), o.clone());
+                }
+                (None, None) => {
                     pending.insert(k.clone());
                 }
             }
@@ -1802,6 +1814,62 @@ pub fn secret_output_types(program: &Program) -> BTreeMap<String, String> {
                 })
         })
         .collect()
+}
+
+/// The outputs the stack declares at its top (`output k`), not a
+/// relation's.
+pub fn declared_outputs(program: &Program) -> BTreeSet<String> {
+    program
+        .statements
+        .iter()
+        .filter_map(|s| match s {
+            Stmt::Output(o) if o.relation.is_none() => Some(o.name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The values of the secret outputs (`secret`: key -> T's name) an
+/// evaluation (`facts`) knows: no null in them, no reference, no
+/// stand-in (a value only the master derives). What a reader in the same
+/// tree reads in memory (`Planned::over`).
+pub fn secret_values(
+    facts: &BTreeSet<Atom>,
+    secret: &BTreeMap<String, String>,
+) -> BTreeMap<String, Value> {
+    let mut out = BTreeMap::new();
+    for a in facts.iter().filter(|a| a.pred == "attr") {
+        let [
+            Term::Val(Value::Str(t)),
+            Term::Val(Value::Str(scope)),
+            Term::Val(Value::Str(k)),
+            Term::Val(v),
+        ] = a.args.as_slice()
+        else {
+            continue;
+        };
+        if t != crate::transform::OUTPUT || !scope.is_empty() || !secret.contains_key(k) {
+            continue;
+        }
+        let json = serde_json::to_value(v).unwrap_or_default();
+        if crate::lattice::nulls_in(v).is_empty()
+            && !has_ref(v)
+            && !crate::secrets::standin::carries(&json)
+        {
+            out.insert(k.clone(), v.clone());
+        }
+    }
+    out
+}
+
+/// Whether `v` names a resource (a ref).
+fn has_ref(v: &Value) -> bool {
+    match v {
+        Value::Ref { .. } | Value::CloudRef { .. } => true,
+        Value::List(xs) => xs.iter().any(has_ref),
+        Value::Obj(m) => m.values().any(has_ref),
+        _ => false,
+    }
 }
 
 /// One deployment's outputs as a run read them.

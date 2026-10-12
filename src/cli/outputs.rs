@@ -111,6 +111,16 @@ pub(super) fn grants_text(unheld: &[String], readers: &[(String, Option<[u8; 32]
 /// What was opened, by the deployment and output, and what no provider
 /// holds and is not sealed to it (said: its producer's next apply seals
 /// to it); a run without the master opens none and says so.
+/// The stand-in of a sealed output (R-164): a function of its label and
+/// keyed digest, which stays while the value does; what a run without
+/// the master reads in its place.
+fn standin_of(label: &str, digest: &str) -> String {
+    format!(
+        "sealed-{}",
+        &crate::approval::sha256_hex(format!("{label}\0{digest}").as_bytes())[..32]
+    )
+}
+
 pub(super) fn open_sealed(
     read: &mut [crate::stack::Read],
     deployment: &str,
@@ -125,6 +135,23 @@ pub(super) fn open_sealed(
         // to.
         let short = crate::stack::short_of(deployment);
         for (k, o) in &p.secret {
+            let sealed_to_it = o.sealed.contains_key(deployment) || o.sealed.contains_key(&short);
+            // One the tree's run knows in memory (`stack::Planned`): no
+            // seal is opened; one not sealed to it yet is, for the runs
+            // outside the tree, once its apply registers it.
+            if let Some(v) = r.opened.get(k) {
+                if !sealed_to_it && o.held.is_none() {
+                    unsealed.push(format!("{}.{k}", r.name));
+                }
+                // Derived as its seal would be: the same value, the same
+                // stand-in, whichever way it was read. A run without the
+                // master has the value itself, no stand-in.
+                if let (Value::Str(text), Some(_)) = (v, &master.key) {
+                    let label = sealed_label(&p.deployment, k, deployment);
+                    crate::secrets::standin::register(text, &label, &standin_of(&label, &o.digest));
+                }
+                continue;
+            }
             let Some((to, sealed)) = o
                 .sealed
                 .get_key_value(deployment)
@@ -145,10 +172,7 @@ pub(super) fn open_sealed(
             // stays while the value does; what a run without the master
             // reads in its place.
             let label = sealed_label(&p.deployment, k, to);
-            let standin = format!(
-                "sealed-{}",
-                &crate::approval::sha256_hex(format!("{label}\0{}", o.digest).as_bytes())[..32]
-            );
+            let standin = standin_of(&label, &o.digest);
             let Some(key) = &master.key else {
                 eprintln!(
                     "{deployment}: {}.{k} is sealed to it: opening it needs its master ({})",
