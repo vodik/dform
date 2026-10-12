@@ -12,6 +12,7 @@ pub mod credentials;
 pub mod host;
 pub mod link;
 pub mod policy;
+pub mod pool;
 pub mod providers;
 pub mod queue;
 pub mod source;

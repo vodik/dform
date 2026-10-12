@@ -284,6 +284,23 @@ struct Planned {
     json: Option<serde_json::Value>,
 }
 
+/// A tree's deployments planned or applied as one run while this lives:
+/// each provider started, and its schema asked, once for the tree
+/// (`plugin::pool`); each state object read once (`dform_s3::Reads`).
+pub(super) struct OneRun {
+    _reads: dform_s3::Remembering,
+    _providers: crate::plugin::pool::Shared,
+}
+
+impl OneRun {
+    pub(super) fn begin(order: &[Dependency]) -> OneRun {
+        OneRun {
+            _reads: dform_s3::remember_reads(),
+            _providers: crate::plugin::pool::share(super::order::types_of(order)),
+        }
+    }
+}
+
 /// What a tree's plan has gathered, deployment by deployment.
 #[derive(Default)]
 struct Gathered {
@@ -358,6 +375,7 @@ impl Tree<'_> {
             destroy: true,
             ..p.clone()
         });
+        let _run = OneRun::begin(order);
         let mut g = Gathered::default();
         let runs = order
             .iter()

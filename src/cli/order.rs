@@ -25,6 +25,31 @@ pub(super) struct Dependency {
     /// One of the roots the order was asked for, not a deployment one of
     /// them reads.
     pub(super) root: bool,
+    /// The types its program names (`None`: one it computes): what a
+    /// tree's providers are asked the schema of, once for all its
+    /// deployments (`plugin::pool`).
+    pub(super) types: Option<BTreeSet<String>>,
+}
+
+/// The types the deployments of `order` name, for the tree's providers
+/// (`plugin::pool`); `None` when one computes a type.
+pub(super) fn types_of(order: &[Dependency]) -> Option<BTreeSet<String>> {
+    let mut out = BTreeSet::new();
+    for d in order {
+        out.extend(d.types.clone()?);
+    }
+    Some(out)
+}
+
+/// What a stack's program says of a deployment of it ([`Order::reads`]).
+struct Reading {
+    instance: crate::stack::Instance,
+    /// Its inputs, not its key.
+    inputs: BTreeSet<String>,
+    /// The deployments of this project it reads.
+    deps: Vec<Dependency>,
+    /// The types it names.
+    types: Option<BTreeSet<String>>,
 }
 
 impl Cli {
@@ -114,7 +139,12 @@ pub(super) fn order_of(roots: &[(PathBuf, Vec<(String, String)>)]) -> Result<Vec
         path: Vec::new(),
     };
     for (file, keys) in roots {
-        let (instance, inputs, _) = order.reads(file, keys)?;
+        let Reading {
+            instance,
+            inputs,
+            types,
+            ..
+        } = order.reads(file, keys)?;
         let target = Dependency {
             name: instance.name(),
             full: instance.full_name(),
@@ -124,6 +154,7 @@ pub(super) fn order_of(roots: &[(PathBuf, Vec<(String, String)>)]) -> Result<Vec
             inputs,
             key: instance.key,
             root: true,
+            types,
         };
         // A root another root read first is a root still.
         if let Some(d) = order.order.iter_mut().find(|d| d.name == target.name) {
@@ -161,8 +192,14 @@ impl Order {
                 d.name
             );
         }
-        let (_, inputs, deps) = self.reads(&d.file, &d.keys)?;
+        let Reading {
+            inputs,
+            deps,
+            types,
+            ..
+        } = self.reads(&d.file, &d.keys)?;
         d.inputs = inputs;
+        d.types = types;
         d.reads = deps.iter().map(|x| x.name.clone()).collect();
         self.path.push(d.name.clone());
         for dep in deps {
@@ -173,13 +210,10 @@ impl Order {
         Ok(())
     }
 
-    /// The stack in `file` keyed by `keys`: its name, its inputs (not its
-    /// key), and the deployments it reads that are this project's.
-    fn reads(
-        &self,
-        file: &Path,
-        keys: &[(String, String)],
-    ) -> Result<(crate::stack::Instance, BTreeSet<String>, Vec<Dependency>)> {
+    /// The stack in `file` keyed by `keys`: its name, its inputs, the
+    /// deployments it reads that are this project's, and the types it
+    /// names.
+    fn reads(&self, file: &Path, keys: &[(String, String)]) -> Result<Reading> {
         let t = deployment::Target {
             files: vec![file.to_path_buf()],
             input_files: Vec::new(),
@@ -239,7 +273,16 @@ impl Order {
                 _ => None,
             })
             .collect();
-        Ok((instance, inputs, deps))
+        let types = loaded
+            .lowered
+            .as_ref()
+            .and_then(|l| crate::schema::named_types(&l.program, &[]));
+        Ok(Reading {
+            instance,
+            inputs,
+            deps,
+            types,
+        })
     }
 
     /// The deployment `name` (`app[env=prod]`) read, when it is of a stack
@@ -271,6 +314,7 @@ impl Order {
             name,
             inputs: BTreeSet::new(),
             root: false,
+            types: None,
         }))
     }
 }

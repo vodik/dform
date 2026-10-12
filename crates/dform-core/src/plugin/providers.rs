@@ -46,6 +46,7 @@ use serde_json::{Value as Json, json};
 use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 /// `provider_expect_account(Name, Account)`: a provider's `use` block's
 /// `expect_account`, what [`Providers::check_accounts`] reads.
@@ -178,7 +179,20 @@ pub struct Asked {
 }
 
 pub struct Providers {
-    links: Vec<RefCell<Link>>,
+    /// Each link: its own, or the tree's pool's ([`super::pool`]).
+    links: Vec<Rc<RefCell<Link>>>,
+    /// Of each link the pool shares, its entry: a link another
+    /// deployment's providers configured since is configured back
+    /// ([`Providers::link`]).
+    pooled: Vec<Option<Rc<super::pool::Entry>>>,
+    /// The pool, when the run is a tree's.
+    pool: Option<Rc<super::pool::Pool>>,
+    /// These providers, as a pooled link's owner names them.
+    id: u64,
+    /// The Configure each link was last sent by these providers: what
+    /// configures a pooled link back. Held in memory only, as the call
+    /// was (a revealed setting among it is never written or printed).
+    sent: RefCell<BTreeMap<usize, Json>>,
     /// Each provider's name, as its handshake gave it.
     names: Vec<String>,
     /// The providers' Schema answers: loaded at start, or, for a run that
@@ -303,7 +317,12 @@ struct Starting<'a> {
     mocks: Vec<String>,
     /// The configuration every link starts from.
     base: Json,
-    links: Vec<Link>,
+    links: Vec<Rc<RefCell<Link>>>,
+    pooled: Vec<Option<Rc<super::pool::Entry>>>,
+    pool: Option<Rc<super::pool::Pool>>,
+    /// The providers' id ([`Providers::id`]), and each link's Configure.
+    id: u64,
+    sent: BTreeMap<usize, Json>,
     bases: Vec<Json>,
     awaiting: BTreeSet<usize>,
     accounts: BTreeMap<usize, String>,
@@ -329,6 +348,10 @@ impl<'a> Starting<'a> {
             mocks,
             base: base_config(cfg),
             links: Vec::new(),
+            pooled: Vec::new(),
+            pool: super::pool::current(),
+            id: super::pool::next_id(),
+            sent: BTreeMap::new(),
             bases: Vec::new(),
             awaiting: BTreeSet::new(),
             accounts: BTreeMap::new(),
@@ -381,7 +404,10 @@ impl<'a> Starting<'a> {
     /// configured by none of them ([`Providers::link_for`]).
     fn start_mock(&mut self) -> Result<()> {
         let launch = self.launch;
-        let mut link = crate::timing::time(|| "provider mock started".into(), || launch.mock())?;
+        let link = self.started(super::pool::Key::Mock, || {
+            crate::timing::time(|| "provider mock started".into(), || launch.mock())
+        })?;
+        let mut link = link.borrow_mut();
         if let Some(p) = self
             .starts
             .iter()
@@ -403,10 +429,31 @@ impl<'a> Starting<'a> {
         }
         self.accounts
             .extend(configure(&mut link, config.clone())?.map(|a| (0, a)));
-        self.links.push(link);
+        drop(link);
+        self.sent.insert(self.links.len() - 1, config.clone());
         self.bases.push(config);
         self.shares.push(None);
         Ok(())
+    }
+
+    /// The link `key` names, kept: the pool's when the run is a tree's
+    /// (started now if it is not there yet), else started now.
+    fn started(
+        &mut self,
+        key: super::pool::Key,
+        start: impl FnOnce() -> Result<Link>,
+    ) -> Result<Rc<RefCell<Link>>> {
+        let (link, entry) = match &self.pool {
+            Some(pool) => {
+                let e = pool.link(key, start)?;
+                e.owner.set(self.id);
+                (e.link.clone(), Some(e))
+            }
+            None => (Rc::new(RefCell::new(start()?)), None),
+        };
+        self.links.push(link.clone());
+        self.pooled.push(entry);
+        Ok(link)
     }
 
     /// A link of its own: a plugin, or a mock under a `use .. as`.
@@ -421,9 +468,14 @@ impl<'a> Starting<'a> {
             Source::Plugin(p) => p.display().to_string(),
             Source::Mock(m) => m,
         };
-        let mut link = match (&mock, source::resolve(&st.spec)) {
+        let i = self.links.len();
+        let key = super::pool::Key::Spec {
+            spec: st.spec.clone(),
+            rename: st.rename.as_ref().map(|b| b.name.clone()),
+        };
+        let link = self.started(key, || match (&mock, source::resolve(&st.spec)) {
             (Some(_), _) => {
-                crate::timing::time(|| "provider mock started".into(), || launch.mock())?
+                crate::timing::time(|| "provider mock started".into(), || launch.mock())
             }
             (None, Source::Plugin(p)) => crate::timing::time(
                 || format!("provider {} started (spawn and handshake)", p.display()),
@@ -432,9 +484,10 @@ impl<'a> Starting<'a> {
                     none.files = crate::files::Shared(Some(cfg.files.clone()));
                     launch.plugin(&p, cfg.grants.get(&st.spec).unwrap_or(&none))
                 },
-            )?,
+            ),
             (None, Source::Mock(_)) => unreachable!("a plugin"),
-        };
+        })?;
+        let mut link = link.borrow_mut();
         if let Some(policy) = self.policy_of(&st.spec) {
             link.set_policy(policy);
         }
@@ -444,7 +497,6 @@ impl<'a> Starting<'a> {
             link.rename(wire::Rename::new(b.name.clone(), b.provider.clone()));
         }
         let mut base = self.base.clone();
-        let i = self.links.len();
         // A world file is one process's: the mock keeps its world in memory
         // and writes it whole. A second process (the mock as a plugin
         // beside it, a provider under a second name) keeps its own, as a
@@ -463,8 +515,9 @@ impl<'a> Starting<'a> {
         }
         let account = configure(&mut link, config.clone())
             .with_context(|| format!("configure provider {shown}"))?;
+        drop(link);
+        self.sent.insert(i, config.clone());
         self.accounts.extend(account.map(|a| (i, a)));
-        self.links.push(link);
         self.bases
             .push(if mock.is_some() { config } else { base.clone() });
         // Its schema is the provider's, under the name: asked once of the
@@ -485,6 +538,7 @@ impl<'a> Starting<'a> {
             bail!("no providers");
         }
         for link in &self.links {
+            let link = link.borrow();
             if let Some(r) = &link.reader {
                 for s in &link.schemes {
                     cfg.files.declare(s, &link.name, r.clone());
@@ -493,6 +547,10 @@ impl<'a> Starting<'a> {
         }
         let p = Providers::deferred(self.links);
         Ok(Providers {
+            pooled: self.pooled,
+            pool: self.pool,
+            id: self.id,
+            sent: RefCell::new(self.sent),
             bases: self.bases,
             shares: self.shares,
             by_program: self.awaiting.clone(),
@@ -698,7 +756,8 @@ impl Providers {
                 .with_context(|| format!("configure provider {name}"))?;
             let mut config = self.bases.get(i).cloned().unwrap_or_else(|| json!({}));
             config["settings"] = settings;
-            let account = configure(&mut self.links[i].borrow_mut(), config)
+            let account = self
+                .configure_link(i, config)
                 .with_context(|| format!("configure provider {name} from provider_config"))?;
             // An account that is a revealed secret prints as its label.
             let secret = account.as_ref().and_then(|a| {
@@ -1004,7 +1063,7 @@ impl Providers {
             }),
             lease: format!("{} pid {}", crate::audit::who(), std::process::id()),
         };
-        let r: pb::RevealResponse = self.links[i].borrow_mut().call(req).with_context(|| {
+        let r: pb::RevealResponse = self.link(i)?.borrow_mut().call(req).with_context(|| {
             format!(
                 "provider {} reveals the secret {}",
                 held.provider,
@@ -1044,7 +1103,7 @@ impl Providers {
                 config["settings"] = settings.clone();
             }
             config["kinds"] = json!(kinds);
-            configure(&mut self.links[i].borrow_mut(), config)
+            self.configure_link(i, config)
                 .with_context(|| format!("configure provider {} again", self.names[i]))?;
             if self.loaded.get().is_some() {
                 self.learn(i)
@@ -1070,10 +1129,14 @@ impl Providers {
             && self.reached(typ).is_some()
     }
 
-    fn deferred(links: Vec<Link>) -> Providers {
+    fn deferred(links: Vec<Rc<RefCell<Link>>>) -> Providers {
         Providers {
-            names: links.iter().map(|l| l.name.clone()).collect(),
-            links: links.into_iter().map(RefCell::new).collect(),
+            names: links.iter().map(|l| l.borrow().name.clone()).collect(),
+            pooled: links.iter().map(|_| None).collect(),
+            pool: None,
+            id: super::pool::next_id(),
+            sent: RefCell::new(BTreeMap::new()),
+            links,
             loaded: OnceCell::new(),
             fallback: 0,
             refreshed: RefCell::new(BTreeMap::new()),
@@ -1595,8 +1658,20 @@ impl Providers {
             t.names.sort();
             t.names.dedup();
         }
-        let req = pb::SchemaRequest { types };
-        let resp: pb::SchemaResponse = self.links[i].borrow_mut().call(req)?;
+        let ask = |names: Option<Vec<String>>| -> Result<pb::SchemaResponse> {
+            let types = names.map(|names| pb::TypeFilter { names });
+            self.link(i)?.borrow_mut().call(pb::SchemaRequest { types })
+        };
+        // A link of the tree's pool is asked once for what the tree's
+        // deployments name.
+        let resp = match (self.pooled.get(i).and_then(Option::as_ref), &self.pool) {
+            (Some(e), Some(pool)) => {
+                let named: Option<BTreeSet<String>> = types.map(|t| t.names.into_iter().collect());
+                let basis = super::pool::basis(self.sent.borrow().get(&i));
+                e.schema(pool, basis, named.as_ref(), ask)?
+            }
+            _ => ask(types.map(|t| t.names))?,
+        };
         if let Some(s) = share {
             asked.insert(&s.spec, (resp.clone(), &s.namespace));
         }
@@ -1729,7 +1804,7 @@ impl Providers {
         let req = pb::SchemaRequest {
             types: missing.clone().map(|names| pb::TypeFilter { names }),
         };
-        let resp: pb::SchemaResponse = self.links[i].borrow_mut().call(req)?;
+        let resp: pb::SchemaResponse = self.link(i)?.borrow_mut().call(req)?;
         let new = |t: &str| {
             !known.knows_type(t) && missing.as_ref().is_none_or(|m| m.iter().any(|x| x == t))
         };
@@ -1802,12 +1877,47 @@ impl Providers {
             .collect()
     }
 
-    /// The link `i`; none when the run started no provider (a program
-    /// naming only built-in providers, R-26): nothing to ask.
+    /// The link `i`, to call; none when the run started no provider (a
+    /// program naming only built-in providers, R-26): nothing to ask. A
+    /// link of the tree's pool another deployment's providers configured
+    /// since is configured back first ([`Providers::claim`]).
     fn link(&self, i: usize) -> Result<&RefCell<Link>> {
-        self.links
+        let link = self
+            .links
             .get(i)
-            .ok_or_else(|| anyhow!(crate::deployment::NO_PROVIDER))
+            .ok_or_else(|| anyhow!(crate::deployment::NO_PROVIDER))?;
+        self.claim(i)?;
+        Ok(link)
+    }
+
+    /// Link `i` of the tree's pool, configured back with what these
+    /// providers last sent it when another deployment's configured it
+    /// since: Configure is a deployment's session on a link.
+    fn claim(&self, i: usize) -> Result<()> {
+        let Some(Some(e)) = self.pooled.get(i) else {
+            return Ok(());
+        };
+        if e.owner.get() == self.id {
+            return Ok(());
+        }
+        if let Some(config) = self.sent.borrow().get(&i) {
+            let config = Some(wire::doc(config));
+            let _: pb::ConfigureResponse = e
+                .link
+                .borrow_mut()
+                .call(pb::ConfigureRequest { config })
+                .with_context(|| format!("configure provider {} again", self.names[i]))?;
+        }
+        e.owner.set(self.id);
+        Ok(())
+    }
+
+    /// Configure link `i` with `config`, kept as what configures it back
+    /// ([`Providers::claim`]).
+    fn configure_link(&self, i: usize, config: Json) -> Result<Option<String>> {
+        let account = configure(&mut self.link(i)?.borrow_mut(), config.clone())?;
+        self.sent.borrow_mut().insert(i, config);
+        Ok(account)
     }
 
     /// Whether the provider serving `typ` leaves a path an Apply update
@@ -2714,7 +2824,8 @@ impl Providers {
         }
         for (i, objects) in objects {
             let n = objects.len();
-            let r: pb::HealthResponse = self.links[i]
+            let r: pb::HealthResponse = self
+                .link(i)?
                 .borrow_mut()
                 .call(pb::HealthRequest { objects })
                 .with_context(|| format!("provider {}: Health", self.block_name(i)))?;
@@ -3402,6 +3513,11 @@ impl Providers {
         adopts: &[Adopt],
         lifecycle: &'a Lifecycle,
     ) -> Result<Tick<'a>> {
+        // A tick's calls are these providers' alone: each link of the
+        // tree's pool is configured for them first.
+        for i in 0..self.links.len() {
+            self.claim(i)?;
+        }
         Ok(Tick {
             lifecycle,
             cloud: self,

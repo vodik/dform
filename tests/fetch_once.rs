@@ -6,60 +6,8 @@
 //! per call it made.
 
 use crate::common;
-use common::{Run, Scratch};
+use common::{Run, Scratch, attr, calls, spans, traced};
 use serde_json::Value;
-
-/// The spans of the trace file at `path`: each one's name and attributes.
-fn spans(path: &std::path::Path) -> Vec<Value> {
-    let text = std::fs::read_to_string(path).unwrap();
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let req: Value = serde_json::from_str(line).unwrap();
-        for rs in req["resourceSpans"].as_array().unwrap() {
-            for ss in rs["scopeSpans"].as_array().unwrap() {
-                out.extend(ss["spans"].as_array().unwrap().iter().cloned());
-            }
-        }
-    }
-    out
-}
-
-/// The span's attribute `k`, as text.
-fn attr(s: &Value, k: &str) -> Option<String> {
-    s["attributes"]
-        .as_array()?
-        .iter()
-        .find(|a| a["key"] == k)
-        .and_then(|a| a["value"].as_object()?.values().next().cloned())
-        .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_string))
-}
-
-/// The spans named `name`, by their `addr`, sorted.
-fn calls(spans: &[Value], name: &str) -> Vec<String> {
-    let mut out: Vec<String> = spans
-        .iter()
-        .filter(|s| s["name"] == name)
-        .map(|s| attr(s, "addr").unwrap_or_default())
-        .collect();
-    out.sort();
-    out
-}
-
-/// `dform ARGS` in `dir` of `s`, its trace to `trace.jsonl` there.
-fn traced(s: &Scratch, args: &[&str]) -> (Run, Vec<Value>) {
-    let out = common::dform()
-        .args(args)
-        .args(["--trace", "trace.jsonl"])
-        .env("NO_COLOR", "1")
-        .env_remove("DFORM_TRACE")
-        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
-        .current_dir(&s.dir)
-        .output()
-        .unwrap();
-    let run = Run::from(out);
-    let spans = spans(&s.path("trace.jsonl"));
-    (run, spans)
-}
 
 /// The k3s shape on the mock (tests/deferred_refresh.rs): two servers of
 /// a provider plugin, and a provider configured mid-plan from one of
