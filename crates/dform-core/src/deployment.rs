@@ -1787,93 +1787,136 @@ fn ask_round(
     files: &crate::files::Files,
     memos: &crate::memo::Memos,
     backend: &Providers,
-) -> Vec<Result<Vec<Vec<Value>>>> {
-    /// A request dform makes itself, made on a thread.
-    enum Fetch {
-        /// A table's source, at its location from its root.
-        Read(String, PathBuf),
-        /// An image's digest.
-        Digest,
+) -> Vec<Result<Rows>> {
+    let mut round = Round {
+        calls,
+        answers: calls.iter().map(|_| None).collect(),
+        fetches: Vec::new(),
+        asked: Vec::new(),
+    };
+    for n in 0..calls.len() {
+        round.sort(n, tables, memos, backend);
     }
-    /// What it brought: a source's read, at its location; rows.
-    enum Fetched {
-        Read(String, Result<crate::files::Outcome>),
-        Rows(Result<Vec<Vec<Value>>>),
-    }
-    let mut answers: Vec<Option<Result<Vec<Vec<Value>>>>> = calls.iter().map(|_| None).collect();
-    let mut fetches = Vec::new();
-    let mut asked = Vec::new();
-    for (n, &(f, inputs)) in calls.iter().enumerate() {
+    backend.flush();
+    round.answer(tables, files, backend)
+}
+
+/// An extern's rows.
+type Rows = Vec<Vec<Value>>;
+
+/// A request dform makes itself, made on a thread.
+enum Fetch {
+    /// A table's source, at its location from its root.
+    Read(String, PathBuf),
+    /// An image's digest.
+    Digest,
+}
+
+/// What a [`Fetch`] brought: a source's read, at its location; rows.
+enum Fetched {
+    Read(String, Result<crate::files::Outcome>),
+    Rows(Result<Rows>),
+}
+
+/// A round's calls ([`ask_round`]), sorted by how each is answered: here,
+/// by a request dform makes on a thread, or by a provider's call sent.
+struct Round<'c> {
+    calls: &'c [externs::Asking<'c>],
+    answers: Vec<Option<Result<Rows>>>,
+    fetches: Vec<(usize, Fetch, crate::timing::Io)>,
+    asked: Vec<(usize, plugin::providers::Asked)>,
+}
+
+impl Round<'_> {
+    /// Call `n`: answered now, or sorted to be fetched or asked.
+    fn sort(
+        &mut self,
+        n: usize,
+        tables: &tables::Tables,
+        memos: &crate::memo::Memos,
+        backend: &Providers,
+    ) {
+        let (f, inputs) = self.calls[n];
         let at = || extern_location(inputs);
         let what = || format!("{}({})", f.name, extern_location(inputs));
         if tables::describe(&f.name).is_some() {
             if let Some((location, base)) = tables::Tables::source(f, inputs) {
                 let io = crate::timing::io_begin("io.read", at);
-                fetches.push((n, Fetch::Read(location, base), io));
-                continue;
+                self.fetches.push((n, Fetch::Read(location, base), io));
+                return;
             }
             if let Some(r) = crate::timing::io("io.read", at, what, || tables.answer(f, inputs)) {
-                answers[n] = Some(r);
-                continue;
+                self.answers[n] = Some(r);
+                return;
             }
         }
         if let Some(r) = externs::env(f, inputs).or_else(|| externs::time(f)) {
-            answers[n] = Some(r);
-            continue;
+            self.answers[n] = Some(r);
+            return;
         }
         if f.name == crate::files::oci::RESOLVE {
             let io = crate::timing::io_begin(crate::files::oci::RESOLVE, at);
-            fetches.push((n, Fetch::Digest, io));
-            continue;
+            self.fetches.push((n, Fetch::Digest, io));
+            return;
         }
         if let Some(r) = memos.answer(f, inputs) {
-            answers[n] = Some(r);
-            continue;
+            self.answers[n] = Some(r);
+            return;
         }
         match backend.submit_extern(f, inputs) {
-            Ok(a) => asked.push((n, a)),
-            Err(e) => answers[n] = Some(Err(e)),
+            Ok(a) => self.asked.push((n, a)),
+            Err(e) => self.answers[n] = Some(Err(e)),
         }
     }
-    backend.flush();
-    std::thread::scope(|scope| {
-        let running: Vec<_> = fetches
-            .into_iter()
-            .map(|(n, fetch, io)| {
+
+    /// Every call's rows, in order: the requests made on threads while
+    /// the providers' answers are taken.
+    fn answer(
+        mut self,
+        tables: &tables::Tables,
+        files: &crate::files::Files,
+        backend: &Providers,
+    ) -> Vec<Result<Rows>> {
+        let calls = self.calls;
+        std::thread::scope(|scope| {
+            let running: Vec<_> = std::mem::take(&mut self.fetches)
+                .into_iter()
+                .map(|(n, fetch, io)| {
+                    let (f, inputs) = calls[n];
+                    let made = scope.spawn(move || match fetch {
+                        Fetch::Read(location, base) => {
+                            let read = files.read(&location, &base);
+                            Fetched::Read(location, read)
+                        }
+                        Fetch::Digest => Fetched::Rows(
+                            crate::files::oci::answer(f, inputs, files)
+                                .expect("oci.resolve is answered by dform"),
+                        ),
+                    });
+                    (n, io, made)
+                })
+                .collect();
+            for (n, a) in std::mem::take(&mut self.asked) {
                 let (f, inputs) = calls[n];
-                let made = scope.spawn(move || match fetch {
-                    Fetch::Read(location, base) => {
-                        let read = files.read(&location, &base);
-                        Fetched::Read(location, read)
-                    }
-                    Fetch::Digest => Fetched::Rows(
-                        crate::files::oci::answer(f, inputs, files)
-                            .expect("oci.resolve is answered by dform"),
-                    ),
+                self.answers[n] = Some(backend.answer_extern(f, inputs, a));
+            }
+            for (n, io, made) in running {
+                let (f, inputs) = calls[n];
+                let made = made.join().unwrap_or_else(|_| {
+                    Fetched::Rows(Err(anyhow::anyhow!("{}: the request panicked", f.name)))
                 });
-                (n, io, made)
-            })
-            .collect();
-        for (n, a) in asked {
-            let (f, inputs) = calls[n];
-            answers[n] = Some(backend.answer_extern(f, inputs, a));
-        }
-        for (n, io, made) in running {
-            let (f, inputs) = calls[n];
-            let made = made.join().unwrap_or_else(|_| {
-                Fetched::Rows(Err(anyhow::anyhow!("{}: the request panicked", f.name)))
-            });
-            io.end(|| format!("{}({})", f.name, extern_location(inputs)));
-            answers[n] = Some(match made {
-                Fetched::Read(location, read) => tables.answer_read(f, inputs, &location, read),
-                Fetched::Rows(rows) => rows,
-            });
-        }
-    });
-    answers
-        .into_iter()
-        .map(|a| a.expect("every call answered"))
-        .collect()
+                io.end(|| format!("{}({})", f.name, extern_location(inputs)));
+                self.answers[n] = Some(match made {
+                    Fetched::Read(location, read) => tables.answer_read(f, inputs, &location, read),
+                    Fetched::Rows(rows) => rows,
+                });
+            }
+        });
+        self.answers
+            .into_iter()
+            .map(|a| a.expect("every call answered"))
+            .collect()
+    }
 }
 
 /// An extern call's inputs as a span names them: each location without
