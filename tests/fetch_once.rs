@@ -6,7 +6,7 @@
 //! per call it made.
 
 use crate::common;
-use common::{Run, Scratch, attr, calls, spans, traced};
+use common::{Run, Scratch, attr, calls, registry_answering_together, spans, traced};
 use serde_json::Value;
 
 /// The k3s shape on the mock (tests/deferred_refresh.rs): two servers of
@@ -92,59 +92,6 @@ output theirs = zones.id
         "a second round asks it again"
     );
     assert_eq!(calls(&spans, "fakecloud Query"), ["ovh.zone"]);
-}
-
-/// A registry that answers a manifest's HEAD only once `n` are asked at
-/// once (within `budget`; else 503): each tag's digest is `sha256:` and
-/// its first letter, 64 times.
-fn registry_answering_together(n: usize, budget: std::time::Duration) -> u16 {
-    use std::io::{BufRead, BufReader, Write};
-    use std::sync::{Arc, Condvar, Mutex};
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = l.local_addr().unwrap().port();
-    let open = Arc::new((Mutex::new(0usize), Condvar::new()));
-    std::thread::spawn(move || {
-        for conn in l.incoming().flatten() {
-            let open = open.clone();
-            std::thread::spawn(move || {
-                let mut r = BufReader::new(conn.try_clone().unwrap());
-                let mut first = String::new();
-                r.read_line(&mut first).unwrap_or(0);
-                loop {
-                    let mut line = String::new();
-                    if r.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
-                        break;
-                    }
-                }
-                let tag = first
-                    .split_whitespace()
-                    .nth(1)
-                    .and_then(|t| t.rsplit_once("/manifests/"))
-                    .map(|(_, t)| t.to_string())
-                    .unwrap_or_default();
-                let (count, cv) = &*open;
-                let mut count = count.lock().unwrap();
-                *count += 1;
-                cv.notify_all();
-                let (count, _) = cv.wait_timeout_while(count, budget, |c| *c < n).unwrap();
-                let together = *count >= n;
-                drop(count);
-                let c = tag.chars().next().unwrap_or('0');
-                let reply = match together {
-                    true => format!(
-                        "HTTP/1.1 200 OK\r\ndocker-content-digest: sha256:{}\r\n\
-                         content-length: 0\r\nconnection: close\r\n\r\n",
-                        c.to_string().repeat(64)
-                    ),
-                    false => "HTTP/1.1 503 alone\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
-                        .to_string(),
-                };
-                let mut conn = conn;
-                let _ = conn.write_all(reply.as_bytes());
-            });
-        }
-    });
-    port
 }
 
 /// The calls of one round are independent, so they are asked together:

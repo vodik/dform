@@ -43,6 +43,19 @@ pub fn answer(
     answer_by(f, inputs, |r| resolve(r, files))
 }
 
+/// `oci.resolve`'s answer when the run is a tree's that resolved the
+/// reference already for another of its deployments
+/// ([`Resolved::for_the_run`]): the registry is asked once a tag.
+pub fn resolved(f: &ExternFn, inputs: &[Value]) -> Option<Result<Vec<Vec<Value>>>> {
+    let ([Value::Oci(text)] | [Value::Str(text)]) = inputs else {
+        return None;
+    };
+    let mut r = OciRef::parse(text).ok().filter(|r| r.digest.is_none())?;
+    r.tag.get_or_insert_with(|| "latest".to_string());
+    r.digest = Some(Resolved::get(&r.to_string())?);
+    answer_by(f, inputs, |_| Ok(r))
+}
+
 /// `oci.resolve`'s answer where no registry is asked (`dform test`): the
 /// digest this machine last resolved, else a stand-in derived from the
 /// reference, so a policy that wants a digest holds offline.
@@ -128,6 +141,7 @@ pub fn resolve(r: &OciRef, files: &super::Files) -> Result<OciRef, Missing> {
     match asked {
         Ok(digest) => {
             remember(&key, &digest);
+            Resolved::put(&key, &digest);
             r.digest = Some(digest);
             Ok(r)
         }
@@ -139,6 +153,44 @@ pub fn resolve(r: &OciRef, files: &super::Files) -> Result<OciRef, Missing> {
             None => Err(Missing::NotYet(why)),
         },
         Err(e) => Err(e),
+    }
+}
+
+/// The digests a tree's run resolved, by reference, while its guard
+/// lives ([`Resolved::for_the_run`]): one plan over several deployments
+/// asks the registry once for each tag. A tag that is not there yet is
+/// asked again.
+pub struct Resolved(());
+
+static RESOLVED: std::sync::Mutex<Option<std::collections::BTreeMap<String, String>>> =
+    std::sync::Mutex::new(None);
+
+impl Resolved {
+    /// Remember what the run resolves until the guard is dropped.
+    pub fn for_the_run() -> Resolved {
+        *Self::held() = Some(Default::default());
+        Resolved(())
+    }
+
+    fn held() -> std::sync::MutexGuard<'static, Option<std::collections::BTreeMap<String, String>>>
+    {
+        RESOLVED.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn get(key: &str) -> Option<String> {
+        Self::held().as_ref()?.get(key).cloned()
+    }
+
+    fn put(key: &str, digest: &str) {
+        if let Some(m) = Self::held().as_mut() {
+            m.insert(key.to_string(), digest.to_string());
+        }
+    }
+}
+
+impl Drop for Resolved {
+    fn drop(&mut self) {
+        *Self::held() = None;
     }
 }
 

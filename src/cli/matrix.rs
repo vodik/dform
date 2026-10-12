@@ -286,10 +286,12 @@ struct Planned {
 
 /// A tree's deployments planned or applied as one run while this lives:
 /// each provider started, and its schema asked, once for the tree
-/// (`plugin::pool`); each state object read once (`dform_s3::Reads`).
+/// (`plugin::pool`); each state object read once (`dform_s3::Reads`);
+/// each image's tag resolved once (`files::oci::Resolved`).
 pub(super) struct OneRun {
     _reads: dform_s3::Remembering,
     _providers: crate::plugin::pool::Shared,
+    _digests: crate::files::oci::Resolved,
 }
 
 impl OneRun {
@@ -297,6 +299,7 @@ impl OneRun {
         OneRun {
             _reads: dform_s3::remember_reads(),
             _providers: crate::plugin::pool::share(super::order::types_of(order)),
+            _digests: crate::files::oci::Resolved::for_the_run(),
         }
     }
 }

@@ -85,3 +85,40 @@ fn a_trees_providers_start_once() {
     assert_eq!(calls(&spans, "fakecloud Schema").len(), 1);
     assert_eq!(calls(&spans, "k8s Schema").len(), 1);
 }
+
+/// An image both deployments name is resolved at its registry once for
+/// the tree.
+#[test]
+fn a_tag_both_deployments_name_is_resolved_once() {
+    let port = common::registry_answering_together(1, std::time::Duration::from_secs(5));
+    let image = format!("127.0.0.1:{port}/acme/app:a1");
+    let s = project("one-plan-tag");
+    s.write(
+        "stacks/platform.df",
+        &format!("{PLATFORM}resource compute.vm build {{ image = oci.resolve(\"{image}\") }}\n"),
+    );
+    s.write(
+        "stacks/apps.df",
+        &format!("{APPS}resource compute.vm web {{ image = oci.resolve(\"{image}\") }}\n"),
+    );
+    std::fs::create_dir_all(s.path("cache")).unwrap();
+    let out = common::dform()
+        .args(["plan", "apps", "--trace", "trace.jsonl"])
+        .current_dir(&s.dir)
+        .env("NO_COLOR", "1")
+        .env("DFORM_K8S_OFFLINE", "1")
+        .env("XDG_CACHE_HOME", s.path("cache"))
+        .env_remove("DFORM_TRACE")
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .output()
+        .unwrap();
+    let r = Run::from(out).success();
+    // Pinned in both (the plan elides the digest's middle).
+    let pinned = format!("{image}@sh");
+    assert_eq!(r.stdout.matches(&pinned).count(), 2, "{}", r.stdout);
+    let resolves = spans(&s.path("trace.jsonl"))
+        .into_iter()
+        .filter(|x| x["name"] == "oci.resolve")
+        .count();
+    assert_eq!(resolves, 1, "the tag asked once for the tree");
+}

@@ -1854,6 +1854,10 @@ impl Round<'_> {
             self.answers[n] = Some(r);
             return;
         }
+        if let Some(r) = crate::files::oci::resolved(f, inputs) {
+            self.answers[n] = Some(r);
+            return;
+        }
         if f.name == crate::files::oci::RESOLVE {
             let io = crate::timing::io_begin(crate::files::oci::RESOLVE, at);
             self.fetches.push((n, Fetch::Digest, io));
