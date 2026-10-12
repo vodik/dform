@@ -284,6 +284,64 @@ struct Planned {
     json: Option<serde_json::Value>,
 }
 
+/// What a tree's plan has gathered, deployment by deployment.
+#[derive(Default)]
+struct Gathered {
+    /// The outputs of those planned, as their plans have them (R-200).
+    outputs: std::collections::BTreeMap<String, crate::stack::Planned>,
+    /// The plan file's deployments (`--out`), in apply order.
+    steps: Vec<zset::file::Step>,
+    /// The deployments not planned, and why: their plan failed, or one
+    /// they read did.
+    stopped: std::collections::BTreeMap<String, String>,
+    planned: Vec<Planned>,
+}
+
+/// The full names of the deployments of `order` that `d` reads.
+fn reads_of(order: &[Dependency], d: &Dependency) -> Vec<String> {
+    order
+        .iter()
+        .filter(|o| d.reads.contains(&o.name))
+        .map(|o| o.full.clone())
+        .collect()
+}
+
+/// The worse of a tree's outcome so far and that of `e`, a deployment's
+/// error: a failure, else the first refusal.
+fn worst(outcome: Outcome, e: &anyhow::Error) -> Outcome {
+    match (outcome, Outcome::of_error(e)) {
+        (Outcome::Failed, _) | (_, Outcome::Failed) => Outcome::Failed,
+        (Outcome::Done, o) => o,
+        (o, _) => o,
+    }
+}
+
+/// The tree's plan file at `out`: every deployment's plan, once each
+/// planned.
+fn save_file(out: &Path, steps: Vec<zset::file::Step>) -> Result<()> {
+    let digests: Vec<String> = steps
+        .iter()
+        .map(|s| {
+            format!(
+                "{} {}",
+                s.deployment,
+                s.plan.digest.as_deref().unwrap_or_default()
+            )
+        })
+        .collect();
+    zset::file::Sequence {
+        version: zset::file::VERSION,
+        deployments: steps,
+    }
+    .save(out)?;
+    eprintln!(
+        "plan file: {} (plan digests: {})",
+        out.display(),
+        digests.join(", ")
+    );
+    Ok(())
+}
+
 impl Tree<'_> {
     /// Plan `order`, then the destroy of each of `removed`, each a run of
     /// its own (`of`), and print the tree.
@@ -293,193 +351,207 @@ impl Tree<'_> {
         removed: &[Dependency],
         of: &For,
     ) -> Result<Outcome> {
-        let cli = self.cli;
-        let Cmd::Plan(p) = &cli.cmd else {
+        let Cmd::Plan(p) = &self.cli.cmd else {
             bail!("internal: a plan");
         };
         let destroy = Cmd::Plan(Plan {
             destroy: true,
             ..p.clone()
         });
-        let mut planned_outputs = std::collections::BTreeMap::new();
-        // The plan file's deployments (`--out`), in apply order.
-        let mut steps = Vec::new();
-        // The deployments not planned, and why: their plan failed, or one
-        // they read did.
-        let mut stopped: std::collections::BTreeMap<String, String> = Default::default();
-        let mut planned = Vec::new();
+        let mut g = Gathered::default();
         let runs = order
             .iter()
-            .map(|d| (d, cli.cmd.clone(), false))
+            .map(|d| (d, self.cli.cmd.clone(), false))
             .chain(removed.iter().map(|d| (d, destroy.clone(), true)));
         for (d, cmd, gone) in runs {
-            let applied = applied(cli, d);
-            let kind = match (gone, applied) {
-                (true, _) => ActionKind::Delete,
-                (false, true) => ActionKind::Update,
-                (false, false) => ActionKind::Create,
-            };
-            let mut node = report::deployments::Deployed {
-                kind,
-                name: d.full.clone(),
-                site: self.site(d),
-                state: String::new(),
-                body: String::new(),
-            };
-            if let Some(why) = d.reads.iter().find_map(|r| stopped.get(r)) {
-                node.state = format!("not planned: {why}");
-                stopped.insert(d.name.clone(), why.clone());
-                planned.push(Planned {
-                    node,
-                    tally: None,
-                    error: None,
-                    json: None,
-                });
-                continue;
-            }
-            let mut dep = of(d, cmd);
-            dep.held = Held::new();
-            dep.planned = planned_outputs.clone();
-            let result = {
-                let _d = crate::timing::traced(|| format!("deployment {}", d.full));
-                super::run(dep.clone(), None)
-            };
-            let mut held = dep.held.take();
-            // Its plan file's part (`--out`): after what it reads.
-            if let Some(plan) = held.file.take() {
-                let after = order
-                    .iter()
-                    .filter(|o| d.reads.contains(&o.name))
-                    .map(|o| o.full.clone())
-                    .collect();
-                steps.push(zset::file::Step {
-                    deployment: d.full.clone(),
-                    after,
-                    plan,
-                });
-            }
-            let (state, error) = match (result, &held.tally) {
-                (Err(e), _) => {
-                    let word = match Outcome::of_error(&e) {
-                        Outcome::Refused { .. } => "refused",
-                        _ => "failed",
-                    };
-                    stopped.insert(d.name.clone(), format!("{} {word}", d.full));
-                    (word.to_string(), Some(e))
-                }
-                (Ok(_), None) => ("planned".to_string(), None),
-                (Ok(_), Some(t)) => {
-                    // Its changes; the policies are the tree's headline's.
-                    let rest = report::Tally {
-                        policy: Default::default(),
-                        ..t.clone()
-                    }
-                    .text();
-                    let rest = rest.strip_prefix("plan: ").unwrap_or(&rest).to_string();
-                    let state = match (gone, t.is_quiet()) {
-                        (true, true) => self.removed("nothing is left to destroy"),
-                        (true, false) => {
-                            self.removed(&format!("the next apply destroys it, {rest}"))
-                        }
-                        (false, _) if !applied => format!("never applied, {rest}"),
-                        (false, true) => {
-                            node.kind = ActionKind::Noop;
-                            "up to date".to_string()
-                        }
-                        (false, false) => rest,
-                    };
-                    (state, None)
-                }
-            };
-            // Its plan feeds the plans that read it (R-200): what it will
-            // publish once applied (an apply with no change publishes too).
-            if let (None, Some(outputs)) = (&error, held.outputs) {
-                planned_outputs.insert(
-                    d.name.clone(),
-                    crate::stack::Planned {
-                        full: d.full.clone(),
-                        outputs,
-                    },
-                );
-            }
-            let mut state = match d.root || gone || self.label.is_none() {
-                true => state,
-                false => format!("{state}  (not listed: a listed deployment reads it)"),
-            };
-            // What it is applied after: what it reads (R-30), less what
-            // its state says it already waits on (`.. after X is applied`).
-            let after: Vec<&str> = order
-                .iter()
-                .filter(|o| d.reads.contains(&o.name))
-                .map(|o| o.full.as_str())
-                .filter(|full| !state.contains(&format!("after {full} is applied")))
-                .collect();
-            if !after.is_empty() && !gone && !matches!(node.kind, ActionKind::Noop) {
-                state.push_str(&format!("  after {}", after.join(", ")));
-            }
-            node.state = state;
-            if !matches!(node.kind, ActionKind::Noop) {
-                node.body = held.text;
-            }
-            planned.push(Planned {
-                node,
-                tally: held.tally,
-                error,
-                json: held.json,
-            });
+            self.plan_one(&mut g, order, d, of(d, cmd), gone);
         }
         let mut tally = report::Tally::default();
-        for p in &planned {
+        for p in &g.planned {
             if let Some(t) = &p.tally {
                 tally.add(t);
             }
         }
-        let nodes: Vec<_> = planned.iter().map(|p| p.node.clone()).collect();
-        // The plan file: every deployment's plan, once each planned.
         if let Some(out) = &p.out
-            && steps.len() == order.len()
-            && planned.iter().all(|p| p.error.is_none())
+            && g.steps.len() == order.len()
+            && g.planned.iter().all(|p| p.error.is_none())
         {
-            let digests: Vec<String> = steps
-                .iter()
-                .map(|s| {
-                    format!(
-                        "{} {}",
-                        s.deployment,
-                        s.plan.digest.as_deref().unwrap_or_default()
-                    )
-                })
-                .collect();
-            zset::file::Sequence {
-                version: zset::file::VERSION,
-                deployments: steps,
-            }
-            .save(out)?;
-            eprintln!(
-                "plan file: {} (plan digests: {})",
-                out.display(),
-                digests.join(", ")
-            );
+            save_file(out, g.steps)?;
         }
         if p.json {
-            return self.print_json(&tally, planned);
+            return self.print_json(&tally, g.planned);
         }
+        self.print_text(&tally, g.planned)
+    }
+
+    /// Plan the deployment `d` (`gone`: its destroy, removed from the
+    /// project module) as the run `dep`, after what `g` gathered of those
+    /// before it, and gather it.
+    fn plan_one(
+        &self,
+        g: &mut Gathered,
+        order: &[Dependency],
+        d: &Dependency,
+        mut dep: Cli,
+        gone: bool,
+    ) {
+        let applied = applied(self.cli, d);
+        let mut node = self.node(d, gone, applied);
+        if let Some(why) = d.reads.iter().find_map(|r| g.stopped.get(r)) {
+            node.state = format!("not planned: {why}");
+            g.stopped.insert(d.name.clone(), why.clone());
+            g.planned.push(Planned {
+                node,
+                tally: None,
+                error: None,
+                json: None,
+            });
+            return;
+        }
+        dep.held = Held::new();
+        dep.planned = g.outputs.clone();
+        let result = {
+            let _d = crate::timing::traced(|| format!("deployment {}", d.full));
+            super::run(dep.clone(), None)
+        };
+        let mut held = dep.held.take();
+        // Its plan file's part (`--out`): after what it reads.
+        if let Some(plan) = held.file.take() {
+            g.steps.push(zset::file::Step {
+                deployment: d.full.clone(),
+                after: reads_of(order, d),
+                plan,
+            });
+        }
+        let (state, error) = match result {
+            Err(e) => {
+                let word = match Outcome::of_error(&e) {
+                    Outcome::Refused { .. } => "refused",
+                    _ => "failed",
+                };
+                g.stopped
+                    .insert(d.name.clone(), format!("{} {word}", d.full));
+                (word.to_string(), Some(e))
+            }
+            Ok(_) => (
+                self.state_of(&mut node, held.tally.as_ref(), gone, applied),
+                None,
+            ),
+        };
+        // Its plan feeds the plans that read it (R-200): what it will
+        // publish once applied (an apply with no change publishes too).
+        if let (None, Some(outputs)) = (&error, held.outputs) {
+            g.outputs.insert(
+                d.name.clone(),
+                crate::stack::Planned {
+                    full: d.full.clone(),
+                    outputs,
+                },
+            );
+        }
+        node.state = self.with_after(state, order, d, gone, &node.kind);
+        if !matches!(node.kind, ActionKind::Noop) {
+            node.body = held.text;
+        }
+        g.planned.push(Planned {
+            node,
+            tally: held.tally,
+            error,
+            json: held.json,
+        });
+    }
+
+    /// The tree's node of `d`, its state not said yet: its destroy
+    /// (`gone`), else its first apply or another.
+    fn node(&self, d: &Dependency, gone: bool, applied: bool) -> report::deployments::Deployed {
+        let kind = match (gone, applied) {
+            (true, _) => ActionKind::Delete,
+            (false, true) => ActionKind::Update,
+            (false, false) => ActionKind::Create,
+        };
+        report::deployments::Deployed {
+            kind,
+            name: d.full.clone(),
+            site: self.site(d),
+            state: String::new(),
+            body: String::new(),
+        }
+    }
+
+    /// The state line of a deployment planned (`tally`: its headline's
+    /// counts, `None` when it made no plan): its changes, `up to date`
+    /// (`node` then marked unchanged), or its destroy's (`gone`).
+    fn state_of(
+        &self,
+        node: &mut report::deployments::Deployed,
+        tally: Option<&report::Tally>,
+        gone: bool,
+        applied: bool,
+    ) -> String {
+        let Some(t) = tally else {
+            return "planned".to_string();
+        };
+        // Its changes; the policies are the tree's headline's.
+        let rest = report::Tally {
+            policy: Default::default(),
+            ..t.clone()
+        }
+        .text();
+        let rest = rest.strip_prefix("plan: ").unwrap_or(&rest).to_string();
+        match (gone, t.is_quiet()) {
+            (true, true) => self.removed("nothing is left to destroy"),
+            (true, false) => self.removed(&format!("the next apply destroys it, {rest}")),
+            (false, _) if !applied => format!("never applied, {rest}"),
+            (false, true) => {
+                node.kind = ActionKind::Noop;
+                "up to date".to_string()
+            }
+            (false, false) => rest,
+        }
+    }
+
+    /// `state`, with what `d` is applied after: what it reads (R-30),
+    /// less what its state says it already waits on (`.. after X is
+    /// applied`); and, in a project module's tree, why one it does not
+    /// list is in it.
+    fn with_after(
+        &self,
+        state: String,
+        order: &[Dependency],
+        d: &Dependency,
+        gone: bool,
+        kind: &ActionKind,
+    ) -> String {
+        let mut state = match d.root || gone || self.label.is_none() {
+            true => state,
+            false => format!("{state}  (not listed: a listed deployment reads it)"),
+        };
+        let after: Vec<String> = reads_of(order, d)
+            .into_iter()
+            .filter(|full| !state.contains(&format!("after {full} is applied")))
+            .collect();
+        if !after.is_empty() && !gone && !matches!(kind, ActionKind::Noop) {
+            state.push_str(&format!("  after {}", after.join(", ")));
+        }
+        state
+    }
+
+    /// The tree as text: its headline and each deployment's line and
+    /// plan; the outcome the worst of theirs, each error said on stderr.
+    fn print_text(&self, tally: &report::Tally, planned: Vec<Planned>) -> Result<Outcome> {
+        let cli = self.cli;
+        let nodes: Vec<_> = planned.iter().map(|p| p.node.clone()).collect();
         match nodes.is_empty() {
             true => println!(
                 "stacks: {} lists no deployment",
                 self.label.unwrap_or(crate::project::PROJECT_MODULE)
             ),
-            false => print!("{}", report::deployments::render(&tally, &nodes, cli.style)),
+            false => print!("{}", report::deployments::render(tally, &nodes, cli.style)),
         }
         let mut outcome = Outcome::Done;
         for e in planned.into_iter().filter_map(|p| p.error) {
             say(cli, &e);
-            // The worst of them: a failure, else the first refusal.
-            outcome = match (outcome, Outcome::of_error(&e)) {
-                (Outcome::Failed, _) | (_, Outcome::Failed) => Outcome::Failed,
-                (Outcome::Done, o) => o,
-                (o, _) => o,
-            };
+            outcome = worst(outcome, &e);
         }
         Ok(outcome)
     }
@@ -501,11 +573,7 @@ impl Tree<'_> {
             if let Some(e) = &p.error {
                 j["error"] = format!("{e:#}").into();
                 say(self.cli, e);
-                outcome = match (outcome, Outcome::of_error(e)) {
-                    (Outcome::Failed, _) | (_, Outcome::Failed) => Outcome::Failed,
-                    (Outcome::Done, o) => o,
-                    (o, _) => o,
-                };
+                outcome = worst(outcome, e);
             }
             deployments.push(j);
         }

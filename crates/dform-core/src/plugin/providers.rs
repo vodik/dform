@@ -1541,101 +1541,14 @@ impl Providers {
         // Each spec's answer and the namespace it is in: a provider's
         // other names take it renamed rather than ask again (R-115).
         let mut asked: BTreeMap<&str, (pb::SchemaResponse, &str)> = BTreeMap::new();
-        for (i, link) in self.links.iter().enumerate() {
-            let share = self.shares.get(i).and_then(Option::as_ref);
-            let resp = match share.and_then(|s| asked.get(s.spec.as_str())) {
-                Some((resp, ns)) => {
-                    let mut resp = resp.clone();
-                    let to = share.map_or(*ns, |s| s.namespace.as_str());
-                    wire::Rename::new(*ns, to).schema(&mut resp);
-                    resp
-                }
-                None => {
-                    // The types each name of the provider is asked for,
-                    // under this one's.
-                    let mut types = types.clone();
-                    if let (Some(t), Some(s)) = (&mut types, share) {
-                        let others = self.shares.iter().flatten();
-                        for o in others.filter(|o| o.spec == s.spec && o.namespace != s.namespace) {
-                            let r = wire::Rename::new(o.namespace.as_str(), s.namespace.as_str());
-                            let more: Vec<String> = t.names.iter().map(|n| r.name(n)).collect();
-                            t.names.extend(more);
-                        }
-                        t.names.sort();
-                        t.names.dedup();
-                    }
-                    let req = pb::SchemaRequest { types };
-                    let resp: pb::SchemaResponse = link.borrow_mut().call(req)?;
-                    if let Some(s) = share {
-                        asked.insert(&s.spec, (resp.clone(), &s.namespace));
-                    }
-                    resp
-                }
-            };
-            let facts = resp
-                .facts
-                .iter()
-                .map(Atom::try_from)
-                .collect::<Result<Vec<Atom>>>()?;
-            let mut s = Schema::from_facts(&facts)
-                .and_then(Schema::imported)
-                .with_context(|| format!("the schema of provider {}", self.names[i]))?;
-            // A provider takes another name only when its types are under
-            // its own (`ovh.instance`): one it names otherwise (the fake
-            // cloud's `net.vpc`) stays as it is under every name.
-            if let Some(Share {
-                namespace,
-                of: Some(of),
-                ..
-            }) = share
-                && let Some(t) = s
-                    .provider_of
-                    .keys()
-                    .chain(s.attrs.keys().map(|(t, _)| t))
-                    .find(|t| !t.starts_with(&format!("{namespace}.")))
-            {
-                bail!(
-                    "`use {of} as {namespace}`: provider {of} serves {t}, a type not named \
-                     under it, which no other name renames: only a provider whose types are \
-                     `{of}.T` takes another name"
-                );
-            }
-            if resp.checks_refinements {
-                s.checks_refinements = s
-                    .provider_of
-                    .keys()
-                    .chain(s.attrs.keys().map(|(t, _)| t))
-                    .cloned()
-                    .collect();
-            }
+        for i in 0..self.links.len() {
+            let resp = self.schema_answer(i, types.as_ref(), &mut asked)?;
+            let s = self.link_schema(i, &resp)?;
             for t in s.provider_of.keys().chain(s.attrs.keys().map(|(t, _)| t)) {
                 owner.entry(t.clone()).or_insert(i);
             }
             for e in resp.externs.iter().map(|e| &e.pred).chain(s.externs.keys()) {
                 externs.entry(e.clone()).or_insert(i);
-            }
-            // The settings its handshake declares, under each name the
-            // program gives it; so its connection (R-193), which its
-            // schema flags.
-            let declared = &link.borrow().settings;
-            let connection: BTreeSet<String> = s.connection.values().flatten().cloned().collect();
-            if !declared.is_empty() {
-                let names = self
-                    .blocks
-                    .iter()
-                    .filter(|&(_, &j)| j == i)
-                    .map(|(b, _)| b.clone())
-                    .chain([self.names[i].clone()]);
-                for n in names {
-                    s.settings
-                        .entry(n.clone())
-                        .or_default()
-                        .extend(declared.iter().cloned());
-                    s.connection
-                        .entry(n)
-                        .or_default()
-                        .extend(connection.iter().cloned());
-                }
             }
             schema = schema.merge(s)?;
         }
@@ -1651,6 +1564,115 @@ impl Providers {
             bail!("internal: the providers' schema is loaded once");
         }
         Ok(())
+    }
+
+    /// Link `i`'s Schema answer for `types`: another name's of its
+    /// provider, renamed, when one was asked (`asked`, R-115); else asked
+    /// for the types under each of its names, and kept in `asked`.
+    fn schema_answer<'s>(
+        &'s self,
+        i: usize,
+        types: Option<&pb::TypeFilter>,
+        asked: &mut BTreeMap<&'s str, (pb::SchemaResponse, &'s str)>,
+    ) -> Result<pb::SchemaResponse> {
+        let share = self.shares.get(i).and_then(Option::as_ref);
+        if let Some((resp, ns)) = share.and_then(|s| asked.get(s.spec.as_str())) {
+            let mut resp = resp.clone();
+            let to = share.map_or(*ns, |s| s.namespace.as_str());
+            wire::Rename::new(*ns, to).schema(&mut resp);
+            return Ok(resp);
+        }
+        // The types each name of the provider is asked for, under this
+        // one's.
+        let mut types = types.cloned();
+        if let (Some(t), Some(s)) = (&mut types, share) {
+            let others = self.shares.iter().flatten();
+            for o in others.filter(|o| o.spec == s.spec && o.namespace != s.namespace) {
+                let r = wire::Rename::new(o.namespace.as_str(), s.namespace.as_str());
+                let more: Vec<String> = t.names.iter().map(|n| r.name(n)).collect();
+                t.names.extend(more);
+            }
+            t.names.sort();
+            t.names.dedup();
+        }
+        let req = pb::SchemaRequest { types };
+        let resp: pb::SchemaResponse = self.links[i].borrow_mut().call(req)?;
+        if let Some(s) = share {
+            asked.insert(&s.spec, (resp.clone(), &s.namespace));
+        }
+        Ok(resp)
+    }
+
+    /// Link `i`'s schema, from its Schema answer `resp`: its types under
+    /// the name the program gives it, which refinements it checks, and
+    /// the settings its handshake declares.
+    fn link_schema(&self, i: usize, resp: &pb::SchemaResponse) -> Result<Schema> {
+        let share = self.shares.get(i).and_then(Option::as_ref);
+        let facts = resp
+            .facts
+            .iter()
+            .map(Atom::try_from)
+            .collect::<Result<Vec<Atom>>>()?;
+        let mut s = Schema::from_facts(&facts)
+            .and_then(Schema::imported)
+            .with_context(|| format!("the schema of provider {}", self.names[i]))?;
+        // A provider takes another name only when its types are under its
+        // own (`ovh.instance`): one it names otherwise (the fake cloud's
+        // `net.vpc`) stays as it is under every name.
+        if let Some(Share {
+            namespace,
+            of: Some(of),
+            ..
+        }) = share
+            && let Some(t) = s
+                .provider_of
+                .keys()
+                .chain(s.attrs.keys().map(|(t, _)| t))
+                .find(|t| !t.starts_with(&format!("{namespace}.")))
+        {
+            bail!(
+                "`use {of} as {namespace}`: provider {of} serves {t}, a type not named under \
+                 it, which no other name renames: only a provider whose types are `{of}.T` \
+                 takes another name"
+            );
+        }
+        if resp.checks_refinements {
+            s.checks_refinements = s
+                .provider_of
+                .keys()
+                .chain(s.attrs.keys().map(|(t, _)| t))
+                .cloned()
+                .collect();
+        }
+        self.declare_settings(i, &mut s);
+        Ok(s)
+    }
+
+    /// The settings link `i`'s handshake declares, in its schema `s`
+    /// under each name the program gives it; so its connection (R-193),
+    /// which its schema flags.
+    fn declare_settings(&self, i: usize, s: &mut Schema) {
+        let declared = &self.links[i].borrow().settings;
+        if declared.is_empty() {
+            return;
+        }
+        let connection: BTreeSet<String> = s.connection.values().flatten().cloned().collect();
+        let names = self
+            .blocks
+            .iter()
+            .filter(|&(_, &j)| j == i)
+            .map(|(b, _)| b.clone())
+            .chain([self.names[i].clone()]);
+        for n in names {
+            s.settings
+                .entry(n.clone())
+                .or_default()
+                .extend(declared.iter().cloned());
+            s.connection
+                .entry(n)
+                .or_default()
+                .extend(connection.iter().cloned());
+        }
     }
 
     /// Each link sends the provider its own names of the attributes the
