@@ -278,11 +278,13 @@ impl Store for S3Store {
     }
 
     fn get(&self, key: &str) -> Result<Option<Object>> {
+        let at = || self.locate(key);
         let what = || format!("s3 get {}", self.locate(key));
-        timing::time(what, || self.get_now(key))
+        timing::io("s3.get", at, what, || self.get_now(key))
     }
 
     fn put(&self, key: &str, bytes: &[u8], cond: &Cond) -> Result<Option<String>> {
+        let at = || self.locate(key);
         let what = || {
             format!(
                 "s3 put {} ({} bytes, {cond:?})",
@@ -290,17 +292,19 @@ impl Store for S3Store {
                 bytes.len()
             )
         };
-        timing::time(what, || self.put_now(key, bytes, cond))
+        timing::io("s3.put", at, what, || self.put_now(key, bytes, cond))
     }
 
     fn list(&self, prefix: &str) -> Result<Vec<String>> {
+        let at = || self.locate(prefix);
         let what = || format!("s3 list {}", self.locate(prefix));
-        timing::time(what, || self.list_now(prefix))
+        timing::io("s3.list", at, what, || self.list_now(prefix))
     }
 
     fn delete(&self, key: &str) -> Result<()> {
+        let at = || self.locate(key);
         let what = || format!("s3 delete {}", self.locate(key));
-        timing::time(what, || self.delete_now(key))
+        timing::io("s3.delete", at, what, || self.delete_now(key))
     }
 }
 

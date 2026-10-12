@@ -89,6 +89,10 @@ hmac = "0.12"
 # variables.
 slotmap = "1.1"
 ena = "0.14"
+# Where a run's time goes (src/timing.rs): each phase, provider call and
+# tick a span, for the `dform` crate's exporters (its `otel` feature). No
+# subscriber, no cost but a callsite check.
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 
 # The built-in `ssh` provider (src/plugin/ssh.rs): an SSH client in
 # process, never the `ssh` binary; exec and SFTP. `ring` for its crypto

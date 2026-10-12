@@ -340,7 +340,10 @@ impl Tree<'_> {
             let mut dep = of(d, cmd);
             dep.held = Held::new();
             dep.planned = planned_outputs.clone();
-            let result = super::run(dep.clone(), None);
+            let result = {
+                let _d = crate::timing::traced(|| format!("deployment {}", d.full));
+                super::run(dep.clone(), None)
+            };
             let mut held = dep.held.take();
             // Its plan file's part (`--out`): after what it reads.
             if let Some(plan) = held.file.take() {

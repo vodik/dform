@@ -1091,7 +1091,9 @@ impl Evaluator {
         facts.extend(may_derive);
         facts.extend(self.last_apply.iter().cloned());
         facts.extend(crate::secrets::rotation_facts(st));
+        let policy = crate::timing::traced(|| "policy pass".into());
         let (res, all) = self.evaluate_with(st, &replaced, &facts, None)?;
+        drop(policy);
         unchanged_by_policy(&res, program_docs.as_ref().unwrap_or(&resources), schema)?;
         let denies = all
             .into_iter()
@@ -1469,7 +1471,12 @@ impl Located {
         // State is read while the providers start: one is a round trip to
         // the backend, the other processes coming up (and a schema read).
         let dep = self.dep.clone();
-        let reading = std::thread::spawn(move || dep.load_state());
+        let within = tracing::Span::current();
+        let reading = std::thread::spawn(move || {
+            let _within = within.enter();
+            let _read = crate::timing::traced(|| "state read".into());
+            dep.load_state()
+        });
         // The run's reader of locations (R-153): the program's loaders and
         // the providers' host read through it, one mirror cache and one
         // known-hosts store (state's, once read).
@@ -1764,7 +1771,23 @@ fn run_externs(
         lowered.map_or(&no_program, |l| &l.program),
         lowered.map_or(&no_fns, |l| &l.extern_fns),
         move |f, inputs| {
-            if let Some(r) = tables.answer(f, inputs) {
+            // A table's or a document's source read, an image's digest
+            // asked of its registry: a request dform makes itself.
+            let at = || {
+                inputs
+                    .iter()
+                    .map(|v| match v {
+                        Value::Str(s) | Value::Oci(s) => crate::timing::location(s),
+                        Value::Uri(u) => crate::timing::location(&u.to_string()),
+                        _ => "..".into(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let what = || format!("{}({})", f.name, at());
+            if crate::tables::describe(&f.name).is_some()
+                && let Some(r) = crate::timing::io("io.read", at, what, || tables.answer(f, inputs))
+            {
                 return r;
             }
             if let Some(r) = externs::env(f, inputs) {
@@ -1773,7 +1796,10 @@ fn run_externs(
             if let Some(r) = externs::time(f) {
                 return r;
             }
-            if let Some(r) = crate::files::oci::answer(f, inputs, &files) {
+            let oci = || crate::files::oci::answer(f, inputs, &files);
+            if f.name == crate::files::oci::RESOLVE
+                && let Some(r) = crate::timing::io(crate::files::oci::RESOLVE, at, what, oci)
+            {
                 return r;
             }
             if let Some(r) = memos.answer(f, inputs) {

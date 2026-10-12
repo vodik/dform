@@ -312,6 +312,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
     pub(super) fn tick(&mut self, wanted: Wanted) -> Result<Next> {
         // Between ticks, a signal stops the apply here.
         crate::interrupt::check()?;
+        let _tick = crate::timing::tick(self.tick);
         let Wanted {
             res,
             violations,
@@ -1566,6 +1567,19 @@ impl<'a, 'h> Ticks<'a, 'h> {
         }
         let labels: Vec<String> = on.iter().map(|l| address::label(l)).collect();
         let (budget, setting) = self.wait_budget(&on);
+        let kinds: BTreeSet<&str> = on
+            .iter()
+            .map(|l| {
+                let (typ, rest) = l.split_once('/').unwrap_or((l, ""));
+                let path = rest.rsplit_once('#').map_or("", |(_, p)| p);
+                match crate::externs::is_call_label(typ, path) {
+                    true => "extern",
+                    false => "world",
+                }
+            })
+            .collect();
+        let kind = kinds.into_iter().collect::<Vec<_>>().join(",");
+        let _wait = crate::timing::wait(tick, &kind, on.len());
         let mut w = crate::progress::Wait::new();
         // On a terminal, the wait is one line counting up (R-127);
         // elsewhere its lines say it every 10s.

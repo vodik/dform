@@ -2515,6 +2515,7 @@ impl Providers {
         {
             return Ok(w.clone());
         }
+        let _refresh = crate::timing::traced(|| format!("refresh, {} objects", mapped.len()));
         // Every Read is sent before any answer is taken, to every provider,
         // so a provider that can answers them at once: a plan waits one
         // round trip to its API, not one per object. A Read that fails is
@@ -2701,6 +2702,7 @@ impl Providers {
     /// before any answer is taken, so a backend that can runs them at once;
     /// the first failure, in order, is the error.
     fn plan_many(&self, asks: Vec<Ask>) -> Result<Vec<Planned>> {
+        let _calls = crate::timing::traced(|| format!("Plan calls, {} asked", asks.len()));
         let mut out: Vec<Option<Result<Planned>>> = Vec::new();
         let mut submitted: Vec<(usize, usize, Ticket, Address)> = Vec::new();
         for (i, (addr, remote, prior, desired)) in asks.into_iter().enumerate() {

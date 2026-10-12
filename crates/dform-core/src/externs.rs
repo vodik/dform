@@ -468,10 +468,13 @@ impl<'a> Externs<'a> {
         extra: &[Atom],
         mut eval_round: impl FnMut(&[Atom]) -> Result<(EvalResult, Vec<String>, T)>,
     ) -> Result<(EvalResult, Vec<String>, T)> {
-        for _ in 0..64 {
+        for round in 1..=64 {
             let mut given = extra.to_vec();
             given.extend(self.facts());
-            let (res, violations, t) = eval_round(&given)?;
+            let (res, violations, t) = {
+                let _round = crate::timing::traced(|| format!("evaluation, round {round}"));
+                eval_round(&given)?
+            };
             if self.is_empty() {
                 return Ok((res, violations, t));
             }
