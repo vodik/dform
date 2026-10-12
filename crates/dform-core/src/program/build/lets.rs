@@ -9,10 +9,10 @@
 //! parameters' variables, its value, its clause after the demand that
 //! binds them.
 
-use super::{Builder, Form, Written, grouped, number_folds};
+use super::{Builder, grouped, number_folds};
 use crate::ast::{Atom, Lit, Rank, Span, Stmt, TypeExpr};
 use crate::program::NodeId;
-use crate::program::node::{ClauseId, ExprId, Item, ItemId, ItemKind, Param};
+use crate::program::node::{ClauseId, ExprId, GoalId, Item, ItemId, ItemKind, Param};
 use crate::program::scope::ScopeId;
 
 /// A `let` as the resolver lowered it.
@@ -29,14 +29,13 @@ pub struct LetLowered<'a> {
     /// `let(k, v, rank)`, as the resolver wrote it (an aggregate's value
     /// its variable).
     pub head: &'a Atom,
-    /// B's literals, then from `seed` the value's reads, or the
-    /// aggregate's binding after the reads its call hoisted.
+    /// B's literals, then the value's reads, or the aggregate's binding
+    /// after the reads its call hoisted.
     pub body: &'a [Lit],
-    pub seed: usize,
-    /// The value's node, as the resolver built it; none for an
-    /// aggregate's, its variable.
+    /// The value's node, as the resolver built it: an aggregate's its
+    /// variable, bound by its fold `fold`, the clause's last goal.
     pub value: Option<ExprId>,
-    pub aggregate: bool,
+    pub fold: Option<GoalId>,
     /// The helper statements the value's terms made.
     pub made: &'a [Stmt],
     /// The statement's aggregate values.
@@ -47,34 +46,18 @@ impl Builder<'_> {
     /// The `let` item of `l`; `None` when its aggregate binding is not one
     /// a builder knows.
     pub fn let_item(&mut self, l: LetLowered) -> Option<ItemId> {
-        let value = &l.head.args[1];
         let mut clause = l.clause;
-        let value = match l.aggregate {
-            true => {
-                let form = Form::Compare {
-                    bind: true,
-                    ops: 1,
-                    aggregate: true,
-                };
-                let w = Written {
-                    form: &form,
-                    span: self.span,
-                    lits: &l.body[l.seed..],
-                    after: &[],
-                    helpers: &[],
-                    body: &[],
-                    read: None,
-                    negation: None,
-                };
-                let fold = self.literal(&w)?;
+        let value = l.value?;
+        let value = match l.fold {
+            Some(fold) => {
                 clause = Some(self.ending(clause, fold));
                 if !l.made.is_empty() {
                     let made = l.made.to_vec();
                     self.program.terms_made.insert(NodeId::Goal(fold), made);
                 }
-                self.expr(value)
+                value
             }
-            false => self.holding(l.value.expect("a value's node"), l.made),
+            None => self.holding(value, l.made),
         };
         if let Some(c) = clause
             && !l.results.is_empty()

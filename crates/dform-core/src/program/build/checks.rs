@@ -69,13 +69,6 @@ impl Builder<'_> {
             .collect()
     }
 
-    /// The term `t` after the reads it hoisted, the helper statements its
-    /// terms made its own.
-    pub(super) fn made(&mut self, t: &crate::ast::Term, reads: &[Lit], made: &[Stmt]) -> ExprId {
-        let e = self.hoisted(t, reads);
-        self.holding(e, made)
-    }
-
     /// The node `e` the resolver built, the helper statements its terms
     /// made its own, but those its lowering makes itself (a
     /// comprehension's `not { }` rule).

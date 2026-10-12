@@ -365,6 +365,12 @@ impl Builder<'_> {
         self.hoist_into(id, v)
     }
 
+    /// The element `i` of the list `base`, in place: `member(L, i, P)`.
+    pub fn element_in_place(&mut self, base: ExprId, i: ExprId) -> ExprId {
+        let path = vec![Step::Index(i)];
+        self.expr_node(ExprKind::Field { base, path })
+    }
+
     /// The element of the keyed list `base` whose key is `key` (R-35), read
     /// into `v`: its key's field read off the type `typ`'s list `list`
     /// into `keys`, `[field]`.

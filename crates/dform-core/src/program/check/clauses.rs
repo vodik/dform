@@ -176,17 +176,23 @@ fn kinds_of(p: &Program, g: GoalId, out: &mut Vec<String>) {
     out.push(kind.to_string());
 }
 
-/// Whether goal `goal` lowers after `context` to `lowered` and makes
-/// `helpers`: what the resolver wrote of the literal it built it of.
+/// Whether goal `goal` lowers after `context` to `lowered`, making the
+/// helper statements `own` and of `made` no other: what the resolver
+/// wrote of the literal it built it of (its terms' helpers some node of
+/// it makes, some the literal's goal holds).
 pub fn lowers_as(
     program: &Program,
     goal: GoalId,
     lowered: &[Lit],
-    helpers: &[Stmt],
+    (own, made): (&[Stmt], &[Stmt]),
     context: &[Lit],
 ) -> bool {
-    let (lits, made) = lower_goal(program, goal, context);
-    text(&lits, &made) == text(lowered, helpers)
+    let (lits, got) = lower_goal(program, goal, context);
+    let texts = |ss: &[Stmt]| -> Vec<String> { ss.iter().map(|s| format!("{s:?}")).collect() };
+    let (got, own, made) = (texts(&got), texts(own), texts(made));
+    text(&lits, &[]) == text(lowered, &[])
+        && own.iter().all(|s| got.contains(s))
+        && got.iter().all(|s| made.contains(s))
 }
 
 /// Literals and the statements made beside them, as one text: each

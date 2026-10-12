@@ -187,16 +187,16 @@ impl Lowerer<'_> {
         let of = self.str_node(span, &name);
         let read = self.building(rc, span, |b| b.call_into(ENUM, vec![of], &v));
         self.hoisted_into(read, out);
-        if lhs.kind() == TUPLE {
-            return Ok((self.pattern_in(rc, lhs, list, out, span)?, None));
-        }
-        let (item, i) = self.arg_node(rc, lhs, Pos::Content, out)?;
         let coll = Coll::Enum {
             name,
             values: members,
             def,
             list: read,
         };
+        if lhs.kind() == TUPLE {
+            return self.pattern_in(rc, lhs, (list, coll), out, span);
+        }
+        let (item, i) = self.arg_node(rc, lhs, Pos::Content, out)?;
         let g = self.building(rc, span, |b| {
             let pat = b.element_of(i);
             b.goal_node(span, GoalKind::Member { pat, coll })

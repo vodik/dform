@@ -71,8 +71,9 @@ impl Lowerer<'_> {
                 ),
             );
         }
-        let value = self.aggregate_call(rc, call, out)?;
-        let Term::Var(var) = self.bind(true, |l| l.term(rc, name, Pos::Content, out))? else {
+        let (value, agg) = self.aggregate_call(rc, call, out)?;
+        let (named, _) = self.bind(true, |l| l.arg_node(rc, name, Pos::Content, out))?;
+        let Term::Var(var) = named else {
             return self.error(
                 self.span(name),
                 format!(
@@ -86,8 +87,24 @@ impl Lowerer<'_> {
             text: call.text().to_string(),
             span,
         });
-        out.push(Lit::Eq(Term::Var(var), value));
+        out.push(Lit::Eq(Term::Var(var.clone()), value));
+        let at = self.span(name.parent().as_ref().unwrap_or(name));
+        let g = self.fold_goal(rc, at, &var, agg);
+        self.built(g);
         Ok(())
+    }
+
+    /// `v = agg(x)` at `span`, `agg` the aggregate's node: its fold.
+    pub(super) fn fold_goal(&mut self, rc: &Rc, span: Span, v: &str, agg: ExprId) -> GoalId {
+        self.building(rc, span, |b| {
+            let var = b.var(v);
+            let kind = GoalKind::Fold {
+                var,
+                agg,
+                helper: None,
+            };
+            b.goal_node(span, kind)
+        })
     }
 
     /// The aggregate `n` calls, if it is one.
@@ -104,7 +121,7 @@ impl Lowerer<'_> {
         rc: &mut Rc,
         call: &SyntaxNode,
         out: &mut Vec<Lit>,
-    ) -> L<Term> {
+    ) -> L<(Term, ExprId)> {
         let span = self.span(call);
         let name = self.aggregate_name(call).ok_or(Skip)?;
         let list = node(call, ARG_LIST);
@@ -115,12 +132,15 @@ impl Lowerer<'_> {
         if !is_term(arg.kind()) {
             return self.error(span, format!("`{name}` aggregates one value: `{name}(x)`"));
         }
-        let x = self.bind(false, |l| l.term(rc, arg, Pos::Content, out))?;
+        let (x, item) = self.bind(false, |l| l.arg_node(rc, arg, Pos::Content, out))?;
         self.check_aggregated(&name, std::slice::from_ref(&x), span);
-        Ok(Term::Func {
+        let kind = crate::program::node::aggregate_kind(&name).ok_or(Skip)?;
+        let agg = self.node(span, ExprKind::Aggregate { kind, item });
+        let t = Term::Func {
             name,
             args: vec![x],
-        })
+        };
+        Ok((t, agg))
     }
 
     /// The aggregate bindings of `body`: what each binds and its call.

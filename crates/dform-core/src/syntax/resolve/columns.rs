@@ -397,8 +397,9 @@ impl Lowerer<'_> {
                     Some(id)
                 }
                 _ if pos == Pos::Content && t.kind() == TUPLE => {
-                    args.push(self.pattern(rc, t, pre)?);
-                    None
+                    let (t, id) = self.pattern(rc, t, pre)?;
+                    args.push(t);
+                    Some(id)
                 }
                 _ => {
                     let (t, id) = self.arg_node(rc, t, pos, pre)?;

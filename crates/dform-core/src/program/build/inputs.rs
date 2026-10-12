@@ -8,15 +8,16 @@
 
 use super::{Builder, grouped, number_folds};
 use crate::ast::{Atom, Lit, Span, Stmt, Term, TypeExpr};
-use crate::program::node::{ClauseId, Item, ItemId, ItemKind, RelRef};
+use crate::program::node::{ClauseId, ExprId, Item, ItemId, ItemKind, RelRef};
 use crate::program::scope::ScopeId;
 
 /// An input as the resolver read it.
-pub struct InputLowered<'a> {
+pub struct InputLowered {
     pub name: String,
     pub key: bool,
     pub ty: TypeExpr,
-    pub default: Option<&'a Term>,
+    /// The default's node, read as the type.
+    pub default: Option<ExprId>,
     pub refinement: Option<ClauseId>,
     pub guard: Option<ClauseId>,
     pub fields: Vec<ItemId>,
@@ -28,12 +29,11 @@ pub struct InputLowered<'a> {
 impl Builder<'_> {
     /// The `Input` item of `i`.
     pub fn input_item(&mut self, i: InputLowered) -> ItemId {
-        let default = i.default.map(|d| self.expr(d));
         let kind = ItemKind::Input {
             name: i.name,
             key: i.key,
             ty: i.ty,
-            default,
+            default: i.default,
             refinement: i.refinement,
             guard: i.guard,
             fields: i.fields,

@@ -32,30 +32,44 @@ impl Lowerer<'_> {
         matches!(n.kind(), TUPLE | OBJECT)
     }
 
-    /// Lower pattern `n`: the term that unifies, the reads its values make
-    /// into `pre`, and an object pattern's field reads into `self.after`
-    /// (appended after the literal that binds it).
-    pub(super) fn pattern(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<Term> {
+    /// Lower pattern `n`: the term that unifies and its node (a tuple a
+    /// list of its parts', an object pattern its variable's), the reads
+    /// its values make into `pre`, and an object pattern's field reads into
+    /// `self.after` (appended after the literal that binds it), their goals
+    /// into `self.after_goals`.
+    pub(super) fn pattern(
+        &mut self,
+        rc: &mut Rc,
+        n: &SyntaxNode,
+        pre: &mut Vec<Lit>,
+    ) -> L<(Term, ExprId)> {
         self.bind(true, |l| l.pattern1(rc, n, pre))
     }
 
-    fn pattern1(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<Term> {
+    fn pattern1(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<(Term, ExprId)> {
+        let span = self.span(n);
         match n.kind() {
             TUPLE => {
                 let mut out = Vec::new();
+                let mut parts = Vec::new();
                 for t in terms(n) {
                     if t.kind() == SPREAD {
                         return self.tuple_rest(&t);
                     }
-                    out.push(self.pattern1(rc, &t, pre)?);
+                    let (t, id) = self.pattern1(rc, &t, pre)?;
+                    out.push(t);
+                    parts.push(ListPart::Elem(id));
                 }
-                Ok(Term::List(out))
+                Ok((Term::List(out), self.node(span, ExprKind::List { parts })))
             }
             OBJECT => {
                 let at = self.span(n);
-                let whole = var(&fresh(rc, "Obj"));
+                let obj = fresh(rc, "Obj");
+                let whole = var(&obj);
                 let mut after = Vec::new();
+                let mut goals = Vec::new();
                 let mut keys = vec![whole.clone()];
+                let mut key_nodes = vec![self.var_node(rc, at, &obj)];
                 let mut rest = None;
                 for f in n
                     .children()
@@ -80,28 +94,46 @@ impl Lowerer<'_> {
                             format!("an object pattern names a field, and `{key}` is a path"),
                         );
                     }
-                    let field = match terms(&f).next() {
+                    let (field, id) = match terms(&f).next() {
                         Some(p) => self.pattern1(rc, &p, pre)?,
                         // `{ a }` binds `a` to the field `a`.
                         None => self.pun(rc, &k, pre)?,
                     };
                     // A nested object's reads follow its own binding.
                     let nested = std::mem::take(&mut self.after);
+                    let nested_goals = std::mem::take(&mut self.after_goals);
                     after.push(Lit::Eq(
                         field,
                         func("__path", vec![whole.clone(), str_term(&key)]),
                     ));
+                    let fspan = self.span(&f);
+                    let g = self.building(rc, fspan, |b| {
+                        let base = b.variable(&obj);
+                        let value = b.path(base, &key);
+                        let pat = b.pattern_of(id);
+                        b.goal_node(fspan, GoalKind::Bind { pat, value })
+                    });
+                    goals.push(g);
                     after.extend(nested);
+                    goals.extend(nested_goals);
                     keys.push(str_term(&key));
+                    key_nodes.push(self.str_node(fspan, &key));
                 }
-                if let Some(rest) = rest {
+                if let Some((rest, id)) = rest {
                     after.push(Lit::Eq(rest, func(crate::functions::REST, keys)));
+                    let g = self.building(rc, at, |b| {
+                        let value = b.form(crate::functions::REST, key_nodes);
+                        let pat = b.pattern_of(id);
+                        b.goal_node(at, GoalKind::Bind { pat, value })
+                    });
+                    goals.push(g);
                 }
                 if after.is_empty() {
                     return self.error(at, "an object pattern names at least one field");
                 }
                 self.after.extend(after);
-                Ok(whole)
+                self.after_goals.extend(goals);
+                Ok((whole, self.var_node(rc, at, &obj)))
             }
             SPREAD => self.misplaced_spread(n),
             LIST => {
@@ -120,16 +152,16 @@ impl Lowerer<'_> {
                 Err(Skip)
             }
             CHAIN if Chain::of(n).is_some_and(|c| c.is_bare() && c.head == "_") => {
-                Ok(Term::Wildcard)
+                Ok((Term::Wildcard, self.node(span, ExprKind::Hole)))
             }
-            _ => self.term(rc, n, Pos::Content, pre),
+            _ => self.arg_node(rc, n, Pos::Content, pre),
         }
     }
 
     /// `..name` ending an object pattern (R-199): the name the rest binds.
     /// `..` alone is an error: an object pattern ignores what it does not
     /// name already.
-    fn rest(&mut self, rc: &mut Rc, f: &SyntaxNode, pre: &mut Vec<Lit>) -> L<Term> {
+    fn rest(&mut self, rc: &mut Rc, f: &SyntaxNode, pre: &mut Vec<Lit>) -> L<(Term, ExprId)> {
         let pattern = f.parent().map(|p| p.text().to_string()).unwrap_or_default();
         let Some(name) = terms(f).next() else {
             let without = pattern
@@ -216,8 +248,9 @@ impl Lowerer<'_> {
         rc: &mut Rc,
         o: &SyntaxNode,
         pre: &mut Vec<Lit>,
-    ) -> L<BTreeMap<String, Term>> {
+    ) -> L<(BTreeMap<String, Term>, Vec<(String, ExprId)>)> {
         let mut fields = BTreeMap::new();
+        let mut nodes = Vec::new();
         for f in o.children().filter(|c| c.kind() == OBJECT_FIELD) {
             let k = tokens(&f).next().ok_or(Skip)?;
             let key = k.text().to_string();
@@ -227,19 +260,20 @@ impl Lowerer<'_> {
                     format!("a column is named by a name, not a string: `{}`", k.text()),
                 );
             }
-            let value = match terms(&f).next() {
+            let (value, id) = match terms(&f).next() {
                 Some(p) => self.pattern(rc, &p, pre)?,
                 None => self.pun(rc, &k, pre)?,
             };
             if fields.insert(key.clone(), value).is_some() {
                 return self.error(self.span(&f), format!("column `{key}` given twice"));
             }
+            nodes.push((key, id));
         }
-        Ok(fields)
+        Ok((fields, nodes))
     }
 
     /// `{ a }`: the name `a`, binding (or, a name already, comparing).
-    fn pun(&mut self, rc: &mut Rc, k: &SyntaxToken, pre: &mut Vec<Lit>) -> L<Term> {
+    fn pun(&mut self, rc: &mut Rc, k: &SyntaxToken, pre: &mut Vec<Lit>) -> L<(Term, ExprId)> {
         let c = Chain {
             head: k.text().to_string(),
             head_kind: k.kind(),
@@ -252,7 +286,8 @@ impl Lowerer<'_> {
             let mark = pre.len();
             let res = l.resolve(rc, &c, pre)?;
             let local = pre.split_off(mark);
-            l.realize(rc, res, Pos::Content, (local, pre), span)
+            let id = l.realize_expr(rc, res, Pos::Content, (local, pre), span)?;
+            Ok((l.lowered(id, pre), id))
         })
     }
 
@@ -281,9 +316,15 @@ impl Lowerer<'_> {
         e: &SyntaxNode,
         out: &mut Vec<Lit>,
     ) -> L<()> {
-        let value = self.bind(false, |l| l.term(rc, e, Pos::Content, out))?;
-        let pat = self.pattern(rc, p, out)?;
+        let (value, v) = self.bind(false, |l| l.arg_node(rc, e, Pos::Content, out))?;
+        let (pat, p) = self.pattern(rc, p, out)?;
         out.push(Lit::Eq(pat, value));
+        let span = self.span(e);
+        let g = self.building(rc, span, |b| {
+            let pat = b.pattern_of(p);
+            b.goal_node(span, GoalKind::Bind { pat, value: v })
+        });
+        self.built(g);
         Ok(())
     }
 
@@ -293,10 +334,10 @@ impl Lowerer<'_> {
         &mut self,
         rc: &mut Rc,
         lhs: &SyntaxNode,
-        list: Term,
+        (list, coll): (Term, Coll),
         out: &mut Vec<Lit>,
         span: Span,
-    ) -> L<Lit> {
+    ) -> L<(Lit, Option<GoalId>)> {
         let parts: Vec<SyntaxNode> = terms(lhs).collect();
         let [k, v] = parts.as_slice() else {
             return self.error(
@@ -309,8 +350,11 @@ impl Lowerer<'_> {
                 ),
             );
         };
-        let k = self.pattern(rc, k, out)?;
-        let v = self.pattern(rc, v, out)?;
-        Ok(Lit::Pos(atom_at("member", vec![list, k, v], span)))
+        let (k, kid) = self.pattern(rc, k, out)?;
+        let (v, vid) = self.pattern(rc, v, out)?;
+        let parts = vec![ListPart::Elem(kid), ListPart::Elem(vid)];
+        let tuple = self.node(span, ExprKind::List { parts });
+        let g = self.member_goal(rc, span, tuple, coll);
+        Ok((Lit::Pos(atom_at("member", vec![list, k, v], span)), Some(g)))
     }
 }

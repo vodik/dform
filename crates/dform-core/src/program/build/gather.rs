@@ -106,6 +106,11 @@ impl Gather {
         }
     }
 
+    /// The goal the resolver built of the literal being lowered, taken.
+    pub fn take_built(&mut self) -> Option<GoalId> {
+        self.frames.last_mut().and_then(|f| f.built.take())
+    }
+
     /// How many goals the literal being lowered holds so far: where a
     /// `not`'s body starts.
     pub fn goals(&self) -> usize {
@@ -120,6 +125,34 @@ impl Gather {
             let number = u32::try_from(number).expect("a helper number fits");
             f.negation = Some((number, folded, from));
         }
+    }
+
+    /// The literal being lowered is `not __neg_{number}(args)` at `span`,
+    /// its helper's body the goals its body's literals were built as
+    /// ([`Gather::negation`]): built as that goal.
+    pub fn negated(&mut self, program: &mut Program, args: &[String], span: Span) {
+        let Some(f) = self.frames.last() else { return };
+        let Some((number, folded, from)) = f.negation.clone() else {
+            return;
+        };
+        if f.failed {
+            return;
+        }
+        let body: Vec<GoalId> = f.goals[from..].iter().map(|(g, _)| *g).collect();
+        let mut b = self.builder(program, span, &|_| true);
+        let helper = crate::program::node::NegHelper {
+            number,
+            args: args.iter().map(|v| b.var(v)).collect(),
+            folded: folded.iter().map(|v| b.var(v)).collect(),
+        };
+        let clause = b.clause_of(body);
+        let kind = crate::program::node::GoalKind::Not {
+            clause,
+            helper: Some(helper),
+        };
+        let g = b.goal_node(span, kind);
+        self.done(b);
+        self.built(g);
     }
 
     /// A term made the helper statements `made`: no literal around it
@@ -244,7 +277,8 @@ impl Gather {
             };
             let context = &out[..start];
             let built = frame.built.and_then(|g| {
-                if check::lowers_as(program, g, &out[start..], &own, context) {
+                let helpers = (&own[..], &helpers[made..]);
+                if check::lowers_as(program, g, &out[start..], helpers, context) {
                     return Some(g);
                 }
                 // The literals before what it lowers to, each made of
@@ -265,7 +299,7 @@ impl Gather {
                     b.goal_node(span, kind)
                 });
                 self.done(b);
-                group.filter(|&g| check::lowers_as(program, g, &out[start..], &own, context))
+                group.filter(|&g| check::lowers_as(program, g, &out[start..], helpers, context))
             });
             let goal = match built {
                 Some(g) => Some(g),
@@ -277,7 +311,14 @@ impl Gather {
                 }
             };
             if let Some(g) = goal {
-                let made_by_terms = frame.attached(helpers);
+                // What its terms made that no node of it makes.
+                let (_, makes) = crate::program::lower_goal(program, g, &out[..start]);
+                let makes: Vec<String> = makes.iter().map(|s| format!("{s:?}")).collect();
+                let made_by_terms: Vec<Stmt> = frame
+                    .attached(helpers)
+                    .into_iter()
+                    .filter(|s| !makes.contains(&format!("{s:?}")))
+                    .collect();
                 if !made_by_terms.is_empty() {
                     program.terms_made.insert(NodeId::Goal(g), made_by_terms);
                 }

@@ -775,8 +775,9 @@ pub struct Lowerer<'u> {
     /// How deep in `not { }` bodies and comprehensions the lowering is.
     nested: usize,
     /// An object pattern's field reads, appended after the literal that
-    /// binds it (`pattern`).
+    /// binds it (`pattern`), and their goals.
     after: Vec<Lit>,
+    after_goals: Vec<GoalId>,
     /// The columns of a relation with no `decl`, read from its first
     /// source (R-34).
     read_columns: BTreeMap<String, Vec<BindArg>>,
@@ -841,6 +842,7 @@ impl<'u> Lowerer<'u> {
             aggs: Vec::new(),
             nested: 0,
             after: Vec::new(),
+            after_goals: Vec::new(),
             read_columns: BTreeMap::new(),
             want: Want::Nothing,
             given: None,
@@ -2537,10 +2539,7 @@ impl<'u> Lowerer<'u> {
         let mut rc = self.rc(n, scope, outer);
         let default = match terms(n).next() {
             // A literal default is read as the declared type (R-31).
-            Some(t) => match crate::types::literal(
-                &crate::types::of_expr(&ty),
-                self.constant(&mut rc, &t)?,
-            ) {
+            Some(t) => match self.typed_constant(&mut rc, &t, &ty)? {
                 Ok(d) => Some(d),
                 Err(why) => {
                     return self.error(self.span(&t), format!("input {name} {why}"));
@@ -2548,6 +2547,7 @@ impl<'u> Lowerer<'u> {
             },
             None => None,
         };
+        let (default, default_node) = default.unzip();
         let refinement = self.refinement(n, scope, Some(&name))?;
         let refined = self.clause_at(node(n, REFINEMENT).and_then(|r| node(&r, BODY)));
         // `input k: T where B` (R-104): declared where `B` holds. A
@@ -2617,7 +2617,7 @@ impl<'u> Lowerer<'u> {
             name,
             key,
             ty,
-            default: default.as_ref(),
+            default: default_node,
             refinement: refined,
             guard: guarded,
             fields,
@@ -2729,10 +2729,7 @@ impl<'u> Lowerer<'u> {
                 };
                 let mut rc = self.rc(&a, scope, outer);
                 let default = match terms(&a).next() {
-                    Some(t) => match crate::types::literal(
-                        &crate::types::of_expr(&ty),
-                        self.constant(&mut rc, &t)?,
-                    ) {
+                    Some(t) => match self.typed_constant(&mut rc, &t, &ty)? {
                         Ok(d) => Some(d),
                         Err(why) => {
                             return self.error(self.span(&t), format!("field {name} {why}"));
@@ -2740,13 +2737,14 @@ impl<'u> Lowerer<'u> {
                     },
                     None => None,
                 };
+                let default = default.map(|(_, id)| id);
                 self.refinement(&a, scope, Some(&name))?;
                 let refinement = self.clause_at(node(&a, REFINEMENT).and_then(|r| node(&r, BODY)));
                 let i = crate::program::build::InputLowered {
                     name: name.clone(),
                     key: false,
                     ty,
-                    default: default.as_ref(),
+                    default,
                     refinement,
                     guard: None,
                     fields,
@@ -3307,6 +3305,24 @@ impl<'u> Lowerer<'u> {
     fn constant(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<Term> {
         let id = self.constant_node(rc, n)?;
         Ok(self.term_of(id))
+    }
+
+    /// The constant `t` read as the type `ty` (R-31): its term and its
+    /// node, or why it is not one.
+    fn typed_constant(
+        &mut self,
+        rc: &mut Rc,
+        t: &SyntaxNode,
+        ty: &TypeExpr,
+    ) -> L<Result<(Term, ExprId), String>> {
+        let id = self.constant_node(rc, t)?;
+        let was = self.term_of(id);
+        Ok(
+            crate::types::literal(&crate::types::of_expr(ty), was.clone()).map(|now| {
+                let id = self.retyped(rc, id, &was, now.clone());
+                (now, id)
+            }),
+        )
     }
 
     /// [`Self::constant`] as its node.
@@ -5097,12 +5113,13 @@ impl<'u> Lowerer<'u> {
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
-        let (seed, made) = (body.len(), self.helpers.len());
+        let made = self.helpers.len();
         let t = terms(n).next().ok_or(Skip)?;
         let aggregate = t.kind() == CALL && self.aggregate_name(&t).is_some();
+        let mut fold = None;
         let (value, id) = if aggregate {
             // `let n = count(x) where B`: one group (R-59).
-            let call = self.aggregate_call(&mut rc, &t, &mut body)?;
+            let (call, agg) = self.aggregate_call(&mut rc, &t, &mut body)?;
             let v = fresh(&mut rc, &capitalise(&name));
             self.aggs.push(aggregate::Agg {
                 var: v.clone(),
@@ -5110,7 +5127,9 @@ impl<'u> Lowerer<'u> {
                 span: self.span(&t),
             });
             body.push(Lit::Eq(var(&v), call));
-            (var(&v), None)
+            let at = self.span(&t);
+            fold = Some(self.fold_goal(&rc, at, &v, agg));
+            (var(&v), Some(self.var_node(&rc, at, &v)))
         } else {
             let (value, id) = self.wanting(want, |l| l.let_value(&mut rc, &t, &mut body))?;
             (value, Some(id))
@@ -5170,9 +5189,8 @@ impl<'u> Lowerer<'u> {
             clause,
             head: &head,
             body: &body,
-            seed,
             value: id,
-            aggregate,
+            fold,
             made: &self.helpers[made..],
             results: &results,
         };
@@ -6118,6 +6136,7 @@ impl<'u> Lowerer<'u> {
         lower: impl FnOnce(&mut Self, &mut Rc, &SyntaxNode, &mut Vec<Lit>) -> L<()>,
     ) -> L<()> {
         let saved = std::mem::take(&mut self.after);
+        let saved_goals = std::mem::take(&mut self.after_goals);
         let (start, made) = (out.len(), self.helpers.len());
         if let Some(s) = &mut self.gather {
             s.open();
@@ -6126,6 +6145,19 @@ impl<'u> Lowerer<'u> {
         let mid = out.len();
         out.append(&mut self.after);
         self.after = saved;
+        let after = std::mem::replace(&mut self.after_goals, saved_goals);
+        if !after.is_empty()
+            && let Some(s) = &mut self.gather
+            && let Some(g) = s.take_built()
+        {
+            let span = self.span(n);
+            let kind = GoalKind::Group {
+                goals: vec![g],
+                after,
+            };
+            let g = self.goal(rc, span, kind);
+            self.built(g);
+        }
         match (form, &mut self.gather) {
             (Some(form), _) if r.is_ok() => {
                 self.built_literal(rc, n, form, out, (start, mid, made))
@@ -6438,6 +6470,17 @@ impl<'u> Lowerer<'u> {
                     let start = out.len();
                     self.neg_helper(rc, n, out, span)?;
                     mark_has(out, start, marked, true);
+                    let mark = self.has_mark(&res).map(|m| {
+                        let (typ, addr) =
+                            self.building(rc, span, |b| (b.settled(m.typ), b.settled(m.addr)));
+                        HasMark { typ, addr, ..m }
+                    });
+                    if let (Some(mark), Some(s)) = (mark, &mut self.gather)
+                        && let Some(g) = s.take_built()
+                    {
+                        let g = self.goal(rc, span, GoalKind::Marked { mark, goal: g });
+                        self.built(g);
+                    }
                     return Ok(());
                 }
             }
@@ -6560,6 +6603,7 @@ impl<'u> Lowerer<'u> {
                 results.iter().map(|v| v.to_string()).collect(),
                 from,
             );
+            s.negated(&mut self.program, &shared, span);
         }
         // The helper's own variables are bound in the helper.
         for v in used.difference(&outer_bound) {
@@ -6597,10 +6641,17 @@ impl<'u> Lowerer<'u> {
                 let mark = out.len();
                 let res = self.resolve(rc, &list, out)?;
                 let local = out.split_off(mark);
-                let l = self.realize(rc, res, Pos::Content, (local, out), span)?;
-                let i = self.bind(true, |x| x.term(rc, &ix, Pos::Content, out))?;
-                let pat = self.pattern(rc, p, out)?;
+                let lid = self.realize_expr(rc, res, Pos::Content, (local, out), span)?;
+                let l = self.lowered(lid, out);
+                let (i, iid) = self.bind(true, |x| x.arg_node(rc, &ix, Pos::Content, out))?;
+                let (pat, pid) = self.pattern(rc, p, out)?;
                 out.push(Lit::Pos(atom_at("member", vec![l, i, pat], span)));
+                let g = self.building(rc, span, |b| {
+                    let value = b.element_in_place(lid, iid);
+                    let pat = b.pattern_of(pid);
+                    b.goal_node(span, GoalKind::Bind { pat, value })
+                });
+                self.built(g);
                 return Ok(());
             }
             if pattern(&ts[0]) {
@@ -7059,7 +7110,7 @@ impl<'u> Lowerer<'u> {
             rc.elems.insert(c.head, of);
         }
         if lhs_node.kind() == TUPLE {
-            return Ok((self.pattern_in(rc, lhs_node, list, out, span)?, None));
+            return self.pattern_in(rc, lhs_node, (list, Coll::Expr(list_id)), out, span);
         }
         let (item, i) = self.arg_node(rc, lhs_node, Pos::Content, out)?;
         let g = self.element_goal(rc, span, i, list_id);
@@ -7280,7 +7331,7 @@ impl<'u> Lowerer<'u> {
             };
             return Ok((a, Some(AtomArgs::Record(nodes))));
         }
-        let args = match crate::zset::REF_RELATIONS.iter().find(|(p, ..)| *p == pred) {
+        match crate::zset::REF_RELATIONS.iter().find(|(p, ..)| *p == pred) {
             Some(_) => {
                 let list: Vec<SyntaxNode> = list
                     .as_ref()
@@ -7337,49 +7388,33 @@ impl<'u> Lowerer<'u> {
                     && o.kind() == OBJECT
                     && self.named_columns(rc.scope, &pred)
                 {
-                    let record = self.record_pattern(rc, o, pre)?;
+                    let (record, nodes) = self.record_pattern(rc, o, pre)?;
                     let a = Atom {
                         pred,
                         args: Vec::new(),
                         record: Some(record),
                         span,
                     };
-                    return Ok((a, None));
+                    return Ok((a, Some(AtomArgs::Record(nodes))));
                 }
-                if list.iter().any(|t| t.kind() == TUPLE) {
-                    let mut args = Vec::new();
-                    for t in &list {
-                        args.push(if t.kind() == TUPLE {
-                            self.pattern(rc, t, pre)?
-                        } else {
-                            self.term(rc, t, pos, pre)?
-                        });
-                    }
-                    args
-                } else {
-                    let mut args = Vec::new();
-                    for t in &list {
-                        args.push(self.arg_node(rc, t, pos, pre)?);
-                    }
-                    return Ok(Self::positional(pred, args, span));
+                let mut args = Vec::new();
+                for t in &list {
+                    args.push(match t.kind() {
+                        TUPLE => self.pattern(rc, t, pre)?,
+                        _ => self.arg_node(rc, t, pos, pre)?,
+                    });
                 }
+                return Ok(Self::positional(pred, args, span));
             }
             None => {
                 let (args, nodes) = self.args(rc, n, pos, pre)?;
-                return Ok(Self::positional(
+                Ok(Self::positional(
                     pred,
                     args.into_iter().zip(nodes).collect(),
                     span,
-                ));
+                ))
             }
-        };
-        let a = Atom {
-            pred,
-            args,
-            record: None,
-            span,
-        };
-        Ok((a, None))
+        }
     }
 
     /// The atom `pred(args)` at `span`, each argument its term and node.
@@ -10051,20 +10086,6 @@ impl<'u> Lowerer<'u> {
         }
         rc.reads.insert(key, var(&name));
         (name, true)
-    }
-
-    /// A resolved chain as a term at `pos`, after the reads resolving it
-    /// hoisted, `local`: lowered from its node ([`Lowerer::realize_expr`]).
-    fn realize(
-        &mut self,
-        rc: &mut Rc,
-        res: Res,
-        pos: Pos,
-        (local, pre): (Vec<Lit>, &mut Vec<Lit>),
-        span: Span,
-    ) -> L<Term> {
-        let id = self.realize_expr(rc, res, pos, (local, pre), span)?;
-        Ok(self.lowered(id, pre))
     }
 
     /// A resolved chain as its node at `pos` (R-211 step 7): what it reads

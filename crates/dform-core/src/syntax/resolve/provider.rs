@@ -36,17 +36,13 @@ const TERM_CALLS: [&str; 4] = [
     crate::files::oci::RESOLVE,
 ];
 
-/// Where a setting's reads (of its body) and the helpers it made are.
-type Ranges = (std::ops::Range<usize>, std::ops::Range<usize>);
-
-/// A setting as lowered: its kind and span, its value, an account's own
-/// body, and its [`Ranges`].
+/// A setting as lowered: its kind and span, its value's node, and where
+/// the helpers it made are.
 type Part = (
     crate::program::build::SettingKind,
     Span,
-    Term,
-    Option<Vec<Lit>>,
-    Ranges,
+    ExprId,
+    std::ops::Range<usize>,
 );
 
 /// A provider's `use` block's setting that is checked, not sent.
@@ -135,15 +131,10 @@ impl Lowerer<'_> {
                             return self
                                 .error(at, format!("provider {name}: source is a path string"));
                         };
-                        let v = self.constant(&mut rc, &t)?;
+                        let id = self.constant_node(&mut rc, &t)?;
+                        let v = self.term_of(id);
                         let made = made..self.helpers.len();
-                        parts.push((
-                            SettingKind::Source(key.clone()),
-                            at,
-                            v.clone(),
-                            None,
-                            (0..0, made),
-                        ));
+                        parts.push((SettingKind::Source(key.clone()), at, id, made));
                         source.push((key, v, at))
                     }
                     EXPECT_ACCOUNT => {
@@ -155,8 +146,8 @@ impl Lowerer<'_> {
                                 (body, self.gather.as_mut().and_then(|g| g.take_clause()))
                             }
                         };
-                        let (seed, made) = (body.len(), self.helpers.len());
-                        let (v, _) = self.entry_value(&mut rc, &a, Pos::Content, &mut body)?;
+                        let made = self.helpers.len();
+                        let (v, id) = self.entry_value(&mut rc, &a, Pos::Content, &mut body)?;
                         let head = atom_at(
                             crate::plugin::providers::EXPECT_ACCOUNT,
                             vec![str_term(&name), v.clone()],
@@ -164,24 +155,16 @@ impl Lowerer<'_> {
                         );
                         out.push(self.rule_or_fact(&rc, head, body.clone())?);
                         written.extend(rc.vars.values().cloned());
-                        let reads = seed..body.len();
                         let made = made..self.helpers.len();
-                        parts.push((SettingKind::Account(own), at, v, Some(body), (reads, made)));
+                        parts.push((SettingKind::Account(own), at, id, made));
                     }
                     _ => {
-                        let seed = body.len();
-                        let (v, _) = self.entry_value(&mut rc, &a, Pos::Content, &mut body)?;
-                        if settings.insert(key.clone(), v.clone()).is_some() {
+                        let (v, id) = self.entry_value(&mut rc, &a, Pos::Content, &mut body)?;
+                        if settings.insert(key.clone(), v).is_some() {
                             return self.error(at, format!("provider {name}: {key} is set twice"));
                         }
                         let made = made..self.helpers.len();
-                        parts.push((
-                            SettingKind::Value(key),
-                            at,
-                            v,
-                            None,
-                            (seed..body.len(), made),
-                        ));
+                        parts.push((SettingKind::Value(key), at, id, made));
                     }
                 }
             }
@@ -271,15 +254,14 @@ impl Lowerer<'_> {
             crate::program::check::enabled().then(|| self.resolved_with(out.clone(), span));
         let settings = parts
             .iter()
-            .map(|(kind, at, v, own, (reads, made))| SettingLowered {
+            .map(|(kind, at, v, made)| SettingLowered {
                 kind: match kind {
                     SettingKind::Source(k) => SettingKind::Source(k.clone()),
                     SettingKind::Value(k) => SettingKind::Value(k.clone()),
                     SettingKind::Account(c) => SettingKind::Account(*c),
                 },
                 span: *at,
-                value: v,
-                reads: &own.as_ref().unwrap_or(&body)[reads.clone()],
+                value: *v,
                 made: &self.helpers[made.clone()],
             })
             .collect();

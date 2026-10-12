@@ -7,8 +7,8 @@
 //! (R-104).
 
 use super::Builder;
-use crate::ast::{Lit, Span, Stmt, Term};
-use crate::program::node::{ClauseId, Item, ItemId, ItemKind, Setting};
+use crate::ast::{Span, Stmt};
+use crate::program::node::{ClauseId, ExprId, Item, ItemId, ItemKind, Setting};
 use crate::program::scope::ScopeId;
 
 /// A provider's `use` as the resolver lowered it.
@@ -24,13 +24,12 @@ pub struct ProviderLowered<'a> {
     pub denies: Vec<Span>,
 }
 
-/// A setting as the resolver lowered it: its value, the reads it
-/// hoisted, the helpers its terms made.
+/// A setting as the resolver lowered it: its value's node, the helpers
+/// its terms made.
 pub struct SettingLowered<'a> {
     pub kind: SettingKind,
     pub span: Span,
-    pub value: &'a Term,
-    pub reads: &'a [Lit],
+    pub value: ExprId,
     pub made: &'a [Stmt],
 }
 
@@ -49,7 +48,7 @@ impl Builder<'_> {
             .settings
             .into_iter()
             .map(|s| {
-                let value = self.at(s.span, |b| b.made(s.value, s.reads, s.made));
+                let value = self.holding(s.value, s.made);
                 let span = s.span;
                 match s.kind {
                     SettingKind::Source(key) => Setting::Source { key, span, value },
