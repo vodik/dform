@@ -243,6 +243,7 @@ mod test_provider_plan;
 mod test_tables;
 mod tick_assignment;
 mod time;
+mod timing;
 mod transport_ssh;
 mod transports;
 mod treesit_agreement;
