@@ -20,12 +20,15 @@ impl Ovh {
         else {
             return Ok(None);
         };
-        Ok(self.instance_doc(a, p, &o))
+        self.instance_doc(a, p, &o)
     }
 
-    fn instance_doc(&self, a: &Account, p: &str, o: &Json) -> Option<(Json, Json)> {
+    /// An instance's document; a call that fails fails it, rather than
+    /// leave out what Plan would read as changed (an image left out
+    /// would replace the instance, a network attach it again).
+    fn instance_doc(&self, a: &Account, p: &str, o: &Json) -> api::Result<Option<(Json, Json)>> {
         if matches!(s(o, "status"), Some("DELETED" | "SOFT_DELETED")) {
-            return None;
+            return Ok(None);
         }
         let region = s(o, "region").unwrap_or_default();
         if ["flavor", "image"]
@@ -34,16 +37,28 @@ impl Ovh {
         {
             self.list_region(a, p, region);
         }
-        let named = |what: &str, embedded: &str, id: &str| {
-            o.get(embedded)
-                .and_then(|x| s(x, "name"))
-                .map(str::to_string)
-                .or_else(|| self.name_of(a, p, what, region, s(o, id).unwrap_or_default()))
+        let named = |what: &str, embedded: &str, id: &str| match o
+            .get(embedded)
+            .and_then(|x| s(x, "name"))
+        {
+            Some(n) => Ok(Some(n.to_string())),
+            None => match s(o, id) {
+                Some(id) => self.name_of(a, p, what, region, id),
+                None => Ok(None),
+            },
         };
-        let flavor = named("flavor", "flavor", "flavorId");
-        let image = named("image", "image", "imageId");
-        let nets = self.private_networks(a, p, o);
-        Some(map::instance(o, flavor.as_deref(), image.as_deref(), &nets))
+        let flavor = named("flavor", "flavor", "flavorId")?;
+        let image = named("image", "image", "imageId")?;
+        let private = match s(o, "id") {
+            Some(id) => self.private_networks(a, p, id)?,
+            None => BTreeMap::new(),
+        };
+        Ok(Some(map::instance(
+            o,
+            flavor.as_deref(),
+            image.as_deref(),
+            &private,
+        )))
     }
 
     /// Whether an instance's flavor changes from `prior`'s to a smaller
@@ -128,6 +143,7 @@ impl Ovh {
         let last = wait_active(&a, &p, at, &id, o, notes, say)?;
         let (attrs, computed) = self
             .instance_doc(&a, &p, &last)
+            .map_err(|e| Failed::MaybeApplied(format!("{at}: instance {id} is made: {e}")))?
             .ok_or_else(|| Failed::MaybeApplied(format!("{at}: instance {id} was deleted")))?;
         Ok((id, attrs, computed))
     }

@@ -75,7 +75,8 @@ impl Ovh {
     }
 
     /// A flavor's or an image's name by id, from the region's list, else
-    /// asked.
+    /// asked. `None` only when the API says it has none (an image retired
+    /// from the region); a failed call is an error, not an unknown name.
     pub(super) fn name_of(
         &self,
         a: &Account,
@@ -83,7 +84,7 @@ impl Ovh {
         what: &str,
         region: &str,
         id: &str,
-    ) -> Option<String> {
+    ) -> api::Result<Option<String>> {
         let by_id = |list: &Json| {
             list.as_array()?
                 .iter()
@@ -91,16 +92,13 @@ impl Ovh {
                 .and_then(|x| s(x, "name"))
                 .map(str::to_string)
         };
-        if let Ok(list) = self.list(a, p, what, region)
-            && let Some(n) = by_id(&list)
-        {
-            return Some(n);
+        if let Some(n) = by_id(&self.list(a, p, what, region)?) {
+            return Ok(Some(n));
         }
         let one = a
             .client
-            .get_opt(&format!("/cloud/project/{p}/{what}/{}", escape(id)))
-            .ok()??;
-        s(&one, "name").map(str::to_string)
+            .get_opt(&format!("/cloud/project/{p}/{what}/{}", escape(id)))?;
+        Ok(one.and_then(|o| s(&o, "name").map(str::to_string)))
     }
 
     /// Whether flavor `now` is smaller than `was` in `region` (fewer

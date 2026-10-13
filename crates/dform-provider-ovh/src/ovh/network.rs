@@ -498,59 +498,75 @@ impl Ovh {
         let (a, p) = self.project_for(at)?;
         let region = need(at, config, "region")?;
         let path = format!("/cloud/project/{p}/instance/{}/interface", escape(remote));
+        // The interfaces as they are, not as `now` says: a port on a
+        // network added already is not attached twice.
+        let interfaces = a.client.get(&path).map_err(|e| failed(at, e))?;
+        let on = |os: &str| {
+            interfaces
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|i| s(i, "networkId") == Some(os))
+        };
         for id in added {
             let os = self.private_network_in(&a, &p, at, region, id)?;
+            if on(&os) {
+                notes.push(format!(
+                    "{at}: it has an interface on network {id} already"
+                ));
+                continue;
+            }
             a.client
                 .post(&path, Some(&json!({"networkId": os})))
                 .map_err(|e| failed(at, e))?;
             notes.push(format!("{at}: an interface on network {id} is attached"));
         }
-        if left.is_empty() {
-            return Ok(());
-        }
-        let interfaces = a.client.get(&path).map_err(|e| failed(at, e))?;
         for id in left {
             let os = self.private_network_in(&a, &p, at, region, id)?;
-            let Some(nic) = interfaces
+            // Each port on it: one is the network's as much as another.
+            for nic in interfaces
                 .as_array()
                 .into_iter()
                 .flatten()
-                .find(|i| s(i, "networkId") == Some(os.as_str()))
-                .and_then(|i| s(i, "id"))
-            else {
-                continue;
-            };
-            match a.client.delete(&format!("{path}/{}", escape(nic))) {
-                Ok(_) => {}
-                Err(e) if e.is_not_found() => {}
-                Err(e) => return Err(failed(at, e)),
+                .filter(|i| s(i, "networkId") == Some(os.as_str()))
+                .filter_map(|i| s(i, "id"))
+            {
+                match a.client.delete(&format!("{path}/{}", escape(nic))) {
+                    Ok(_) => {}
+                    Err(e) if e.is_not_found() => {}
+                    Err(e) => return Err(failed(at, e)),
+                }
+                notes.push(format!(
+                    "{at}: its interface {nic} on network {id} is detached"
+                ));
             }
-            notes.push(format!("{at}: its interface on network {id} is detached"));
         }
         Ok(())
     }
 
-    /// The project's private networks by the OpenStack ids of their
-    /// regions, when the instance `o` has a private address (else none is
-    /// asked for).
+    /// The private networks instance `id` has an interface on, each with
+    /// its address there (`map::interfaces`). A failed call fails the
+    /// read: a network left out would be attached again.
     pub(super) fn private_networks(
         &self,
         a: &Account,
         p: &str,
-        o: &Json,
-    ) -> BTreeMap<String, String> {
-        let private = o
-            .get("ipAddresses")
-            .and_then(Json::as_array)
-            .into_iter()
-            .flatten()
-            .any(|x| s(x, "type") == Some("private"));
-        if !private {
-            return BTreeMap::new();
+        id: &str,
+    ) -> api::Result<BTreeMap<String, Option<String>>> {
+        let ifaces = a.client.get(&format!(
+            "/cloud/project/{p}/instance/{}/interface",
+            escape(id)
+        ))?;
+        if ifaces.as_array().is_none_or(Vec::is_empty) {
+            return Ok(BTreeMap::new());
         }
-        let Ok(list) = a.client.get(&format!("/cloud/project/{p}/network/private")) else {
-            return BTreeMap::new();
-        };
+        Ok(map::interfaces(&ifaces, &self.openstack_ids(a, p)?))
+    }
+
+    /// The project's private networks by the OpenStack ids of their
+    /// regions.
+    fn openstack_ids(&self, a: &Account, p: &str) -> api::Result<BTreeMap<String, String>> {
+        let list = a.client.get(&format!("/cloud/project/{p}/network/private"))?;
         let mut out = BTreeMap::new();
         for net in list.as_array().into_iter().flatten() {
             let Some(id) = s(net, "id") else { continue };
@@ -565,6 +581,6 @@ impl Ovh {
                 }
             }
         }
-        out
+        Ok(out)
     }
 }

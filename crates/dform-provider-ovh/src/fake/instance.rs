@@ -143,7 +143,7 @@ impl World {
                     .get(*id)
                     .cloned()
                     .unwrap_or_else(|| vec![format!("ext-{region}")]);
-                let all: Vec<Json> = nics.iter().map(|nic| interface(nic)).collect();
+                let all: Vec<Json> = nics.iter().map(|nic| self.interface(id, nic)).collect();
                 (200, json!(all))
             }
             ("POST", ["cloud", "project", _, "instance", id, "interface"]) => {
@@ -172,7 +172,7 @@ impl World {
                 if let Some(ips) = o["ipAddresses"].as_array_mut() {
                     ips.push(ip);
                 }
-                (200, interface(&nic))
+                (200, self.interface(&id, &nic))
             }
             ("DELETE", ["cloud", "project", _, "instance", id, "interface", nic]) => {
                 let Some(nic) = nic.strip_prefix("if-") else {
@@ -286,6 +286,27 @@ impl World {
                "networkId": nic, "gatewayIp": null})
     }
 
+    /// Instance `id`'s interface on the network `nic` (an OpenStack id),
+    /// with the IPv4 address it has there
+    /// (`cloud.instanceInterface.Interface`).
+    fn interface(&self, id: &str, nic: &str) -> Json {
+        let (typ, on) = match nic.starts_with("ext-") {
+            true => ("public", "ext"),
+            false => ("private", nic),
+        };
+        let fixed: Vec<Json> = self
+            .instances
+            .get(id)
+            .and_then(|o| o["ipAddresses"].as_array())
+            .into_iter()
+            .flatten()
+            .filter(|a| a["networkId"] == on && a["version"] == 4)
+            .map(|a| json!({"ip": a["ip"], "subnetId": format!("sub-{nic}")}))
+            .collect();
+        json!({"id": format!("if-{nic}"), "networkId": nic, "type": typ, "state": "ACTIVE",
+               "macAddress": "fa:16:3e:00:00:01", "fixedIps": fixed})
+    }
+
     /// Why `nic` (an OpenStack network id) cannot be an interface of an
     /// instance in `region`: not a network there, or a private one with
     /// no subnet there.
@@ -319,18 +340,6 @@ impl World {
         let n = |k: &str| f[k].as_i64().unwrap_or(0);
         Some([n("vcpus"), n("ram"), n("disk")])
     }
-}
-
-/// An instance's interface on the network `nic` (an OpenStack id)
-/// (`cloud.instanceInterface.Interface`).
-fn interface(nic: &str) -> Json {
-    let typ = if nic.starts_with("ext-") {
-        "public"
-    } else {
-        "private"
-    };
-    json!({"id": format!("if-{nic}"), "networkId": nic, "type": typ, "state": "ACTIVE",
-           "macAddress": "fa:16:3e:00:00:01", "fixedIps": []})
 }
 
 /// A public IPv6 and IPv4 address, the `n`th.

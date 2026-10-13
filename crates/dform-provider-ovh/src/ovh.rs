@@ -597,6 +597,26 @@ impl Ovh {
             self.image_id(&a, &p, region, image)
                 .map_err(|e| anyhow!("{at}: image: {e:#}"))?;
         }
+        // An instance's flavor or image the API no longer names (an image
+        // retired from the region) is unknown, not changed: it does not
+        // replace the instance. Read fails rather than leave one out on a
+        // failed call.
+        let known;
+        let prior = match prior {
+            Some(p) if typ == INSTANCE => {
+                let mut p = p.clone();
+                for k in ["flavor", "image"] {
+                    if p.get(k).is_none()
+                        && let Some(v) = d.get(k)
+                    {
+                        p[k] = v.clone();
+                    }
+                }
+                known = p;
+                Some(&known)
+            }
+            p => p,
+        };
         // An instance's user data is write-only (R-106): the API never
         // answers it, and dform compares it with the digest state keeps,
         // giving the program's value in `prior` when it is the same.
