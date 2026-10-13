@@ -157,6 +157,8 @@ impl StateShow {
 pub(super) struct Output {
     pub(super) name: Option<String>,
     pub(super) json: bool,
+    /// `--reveal`: the secret output NAME's value printed.
+    pub(super) reveal: bool,
 }
 
 impl Output {
@@ -182,6 +184,73 @@ impl Output {
             Some(name) => outputs.print_one(deployment, name, self.json)?,
         }
         Ok(Outcome::Done)
+    }
+
+    /// `dform output TARGET NAME --reveal`: the output NAME's value with
+    /// each secret in it revealed, the program evaluated with the
+    /// deployment's master and its providers; the one way dform prints a
+    /// secret, and only one the program chose to output. The reveal is in
+    /// the audit log.
+    pub(super) fn reveal(&self, run: &super::evaluated::Evaluated) -> Result<Outcome> {
+        let deployment = run.cx.deployment.as_str();
+        let name = self.name.as_deref().expect("--reveal names its output");
+        let (st, backend) = (&run.ev.st, &run.ev.evaluator.backend);
+        let secret = crate::stack::secret_output_types(&run.ev.evaluator.program);
+        let world = backend.observe(st)?;
+        let Some(v) = crate::stack::own_output(&run.ev.res.facts, &world, name) else {
+            let mut names = crate::stack::own_output_names(&run.ev.res.facts);
+            names.extend(secret.into_keys());
+            names.sort();
+            names.dedup();
+            bail!(
+                "stack {deployment} has no output {name} (its outputs: {})",
+                match names.is_empty() {
+                    true => "none".to_string(),
+                    false => names.join(", "),
+                }
+            );
+        };
+        if let Some(label) = open_null(&v) {
+            bail!(
+                "output {name} of stack {deployment} is not known yet: {} is not (apply first)",
+                crate::address::label(label)
+            );
+        }
+        if let Some(why) = &run.cx.master.without
+            && crate::secrets::standin::carries(&serde_json::to_value(&v)?)
+        {
+            bail!("output {name} of stack {deployment}: revealing it needs its master ({why})");
+        }
+        let j = backend
+            .reveal_output(&v, st)
+            .map_err(|e| anyhow::anyhow!("output {name} of stack {deployment}: {e:#}"))?;
+        run.cx.audit.append(
+            "reveal",
+            serde_json::json!({ "output": name, "who": crate::audit::who() }),
+        )?;
+        if self.json {
+            println!("{}", serde_json::to_string_pretty(&j)?);
+        } else if let serde_json::Value::String(s) = &j {
+            use std::io::Write;
+            std::io::stdout().write_all(s.as_bytes())?;
+        } else {
+            println!("{}", crate::approval::canonical_json(&j));
+        }
+        Ok(Outcome::Done)
+    }
+}
+
+/// The label of an open null in `v`: a part of it not known yet.
+fn open_null(v: &Value) -> Option<&str> {
+    match v {
+        Value::Null {
+            label,
+            class: crate::value::NullClass::Open,
+            ..
+        } => Some(label),
+        Value::List(xs) => xs.iter().find_map(open_null),
+        Value::Obj(m) => m.values().find_map(open_null),
+        _ => None,
     }
 }
 
@@ -291,7 +360,7 @@ impl<'a> Outputs<'a> {
         if st.secret_outputs.contains_key(name) {
             bail!(
                 "output {name} of stack {deployment} is secret: its state keeps no bytes of it, \
-                 only its label and digest"
+                 only its label and digest (`--reveal` prints its value)"
             );
         }
         let Some(v) = st.outputs.get(name) else {

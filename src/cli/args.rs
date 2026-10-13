@@ -170,6 +170,11 @@ pub(super) enum Command {
         target: Target,
         #[arg(long)]
         json: bool,
+        /// Print the secret output NAME's value: the program is evaluated
+        /// with the deployment's master and its providers, and each secret
+        /// in it revealed. The only way dform prints a secret.
+        #[arg(long)]
+        reveal: bool,
     },
     /// Show each object's health, as its provider judges it now.
     Status {
@@ -725,7 +730,11 @@ impl TryFrom<Command> for Typed {
                 }
                 StackCommand::Unlock { target } => Typed::of(Cmd::Unlock(Unlock), Some(target)),
             },
-            Command::Output { mut target, json } => {
+            Command::Output {
+                mut target,
+                json,
+                reveal,
+            } => {
                 // The output's NAME is the one word after the target that
                 // is not a key value.
                 let mut names: Vec<String> = Vec::new();
@@ -740,7 +749,13 @@ impl TryFrom<Command> for Typed {
                     bail!("output: one NAME at most, got {}", names.join(" "));
                 }
                 let name = names.pop();
-                Typed::of(Cmd::Output(Output { name, json }), Some(target))
+                if reveal && name.is_none() {
+                    bail!("output --reveal: name the one output to reveal");
+                }
+                Typed::of(
+                    Cmd::Output(Output { name, json, reveal }),
+                    Some(target),
+                )
             }
             Command::Status { target, json } => {
                 Typed::of(Cmd::Status(Status { json }), Some(target))

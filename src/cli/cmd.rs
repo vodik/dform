@@ -88,6 +88,7 @@ impl Cmd {
             | Cmd::Doc(_) => Stage::Alone,
             Cmd::Test(_) | Cmd::Render(_) | Cmd::Strata(_) | Cmd::Effects(_) => Stage::Program,
             Cmd::Graph(g) if g.strata() => Stage::Program,
+            Cmd::Output(o) if o.reveal => Stage::Evaluated,
             Cmd::Log(_)
             | Cmd::Unlock(_)
             | Cmd::StateShow(_)
@@ -176,7 +177,12 @@ impl Cmd {
                 | Cmd::Show(_)
                 | Cmd::Controller(_)
                 | Cmd::Secrets(_)
-        )
+        ) || self.reveals()
+    }
+
+    /// `output NAME --reveal`: the one run that prints a secret's value.
+    pub(super) fn reveals(&self) -> bool {
+        matches!(self, Cmd::Output(o) if o.reveal)
     }
 
     /// A run that writes the deployment's objects checks first that a
@@ -194,7 +200,7 @@ impl Cmd {
         matches!(
             self,
             Cmd::StateShow(_) | Cmd::Output(_) | Cmd::StateMv(_) | Cmd::Log(_) | Cmd::Unlock(_)
-        )
+        ) && !self.reveals()
     }
 
     /// What the deployment's master is read for: a plan, an apply, and what
@@ -205,7 +211,7 @@ impl Cmd {
 
     /// What only reads the deployment's secrets: a query, a why, `secrets`.
     pub(super) fn only_reads_secrets(&self) -> bool {
-        matches!(self, Cmd::Query(_) | Cmd::Why(_) | Cmd::Secrets(_))
+        matches!(self, Cmd::Query(_) | Cmd::Why(_) | Cmd::Secrets(_)) || self.reveals()
     }
 
     /// query and why read the policy pass, so a deny over the plan can be
@@ -244,6 +250,7 @@ impl Cmd {
             self,
             Cmd::Plan(_) | Cmd::Query(_) | Cmd::Why(_) | Cmd::Rekey(_) | Cmd::Status(_)
         ) && !matches!(self, Cmd::Secrets(Secrets::Set { .. }))
+            && !self.reveals()
     }
 
     /// Whether the run makes the plan's policy pass.

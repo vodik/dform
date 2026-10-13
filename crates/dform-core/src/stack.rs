@@ -1438,19 +1438,7 @@ pub fn outputs(
     seal: &dyn Fn(&str, &serde_json::Value) -> BTreeMap<String, String>,
 ) -> Outputs {
     let unproven = std::cell::RefCell::new(Vec::new());
-    let attrs: BTreeMap<(&str, &str, &str), &Value> = facts
-        .iter()
-        .filter(|a| a.pred == "attr")
-        .filter_map(|a| match a.args.as_slice() {
-            [
-                Term::Val(Value::Str(t)),
-                Term::Val(Value::Str(n)),
-                Term::Val(Value::Str(p)),
-                Term::Val(v),
-            ] => Some(((t.as_str(), n.as_str(), p.as_str()), v)),
-            _ => None,
-        })
-        .collect();
+    let attrs = attrs_of(facts);
     let resolver = Resolver {
         attrs: &attrs,
         world,
@@ -1645,51 +1633,127 @@ fn put_field(v: &mut Value, path: &str, x: Value) -> bool {
     }
 }
 
-/// A value with its refs to configured attributes resolved: `None` while
-/// any part of it is unknown.
+/// An evaluation's `attr(T, N, P, V)` facts, by `(T, N, P)`.
+fn attrs_of(facts: &BTreeSet<Atom>) -> BTreeMap<(&str, &str, &str), &Value> {
+    facts
+        .iter()
+        .filter(|a| a.pred == "attr")
+        .filter_map(|a| match a.args.as_slice() {
+            [
+                Term::Val(Value::Str(t)),
+                Term::Val(Value::Str(n)),
+                Term::Val(Value::Str(p)),
+                Term::Val(v),
+            ] => Some(((t.as_str(), n.as_str(), p.as_str()), v)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The names of the stack's own outputs in an evaluation (`facts`).
+pub fn own_output_names(facts: &BTreeSet<Atom>) -> Vec<String> {
+    attrs_of(facts)
+        .into_keys()
+        .filter(|(t, scope, _)| *t == crate::transform::OUTPUT && scope.is_empty())
+        .map(|(_, _, k)| k.to_string())
+        .collect()
+}
+
+/// The stack's own output at `path` (`password`, or a field of one,
+/// `conn.password`) in an evaluation (`facts`), for `output --reveal`:
+/// each ref resolved to the program's value, else the world's. What
+/// neither knows is a null: secret where the world has a provider's
+/// marker (`T/A#P`, for the provider that holds it to reveal), open where
+/// the value is not known yet. `None`: the evaluation has no such output.
+pub fn own_output(
+    facts: &BTreeSet<Atom>,
+    world: &BTreeMap<crate::address::Address, serde_json::Value>,
+    path: &str,
+) -> Option<Value> {
+    let attrs = attrs_of(facts);
+    let (top, rest) = match path.split_once('.') {
+        Some((t, r)) => (t, Some(r)),
+        None => (path, None),
+    };
+    let mut v = (*attrs.get(&(crate::transform::OUTPUT, "", top))?).clone();
+    if let Some(rest) = rest {
+        v = take_field(&mut v, rest)?;
+    }
+    let resolver = Resolver {
+        attrs: &attrs,
+        world,
+    };
+    Some(resolver.walk(&v, 0))
+}
+
+/// A value with its refs to configured attributes resolved.
 struct Resolver<'a> {
     attrs: &'a BTreeMap<(&'a str, &'a str, &'a str), &'a Value>,
     world: &'a BTreeMap<crate::address::Address, serde_json::Value>,
 }
 
 impl Resolver<'_> {
+    /// `v` resolved: `None` while any part of it is unknown.
     fn resolve(&self, v: &Value, depth: usize) -> Option<Value> {
-        // A chain of refs longer than this is a cycle.
-        if depth > 32 {
-            return None;
-        }
+        let v = self.walk(v, depth);
+        (!has_null(&v)).then_some(v)
+    }
+
+    /// `v` with each ref resolved to the program's value, else the
+    /// world's; one neither knows is the null of the attribute it names,
+    /// secret where the world has a provider's marker, else open.
+    fn walk(&self, v: &Value, depth: usize) -> Value {
         match v {
-            Value::Null { .. } => None,
-            Value::List(xs) => xs
-                .iter()
-                .map(|x| self.resolve(x, depth))
-                .collect::<Option<_>>()
-                .map(Value::List),
-            Value::Obj(m) => m
-                .iter()
-                .map(|(k, x)| Some((k.clone(), self.resolve(x, depth)?)))
-                .collect::<Option<_>>()
-                .map(Value::Obj),
+            Value::List(xs) => Value::List(xs.iter().map(|x| self.walk(x, depth)).collect()),
+            Value::Obj(m) => Value::Obj(
+                m.iter()
+                    .map(|(k, x)| (k.clone(), self.walk(x, depth)))
+                    .collect(),
+            ),
             Value::Ref { typ, name, attr } => {
-                match self
+                let null = |class| Value::Null {
+                    label: crate::value::null_label(typ, name, attr),
+                    class,
+                    ty: String::new(),
+                };
+                // A chain of refs longer than this is a cycle.
+                if depth > 32 {
+                    return null(crate::value::NullClass::Open);
+                }
+                if let Some(x) = self
                     .attrs
                     .get(&(typ.as_str(), name.as_str(), attr.as_str()))
                 {
-                    Some(v) => self.resolve(v, depth + 1),
-                    None => {
-                        let addr = crate::address::Address {
-                            typ: typ.clone(),
-                            name: name.clone(),
-                        };
-                        let v = crate::provider::get_path(self.world.get(&addr)?, attr)?;
-                        crate::provider::marker(v)
-                            .is_none()
-                            .then(|| crate::provider::json_to_value(v))
+                    return self.walk(x, depth + 1);
+                }
+                let addr = crate::address::Address {
+                    typ: typ.clone(),
+                    name: name.clone(),
+                };
+                match self
+                    .world
+                    .get(&addr)
+                    .and_then(|w| crate::provider::get_path(w, attr))
+                {
+                    Some(w) if crate::provider::marker(w).is_some() => {
+                        null(crate::value::NullClass::Secret)
                     }
+                    Some(w) => crate::provider::json_to_value(w),
+                    None => null(crate::value::NullClass::Open),
                 }
             }
-            v => Some(v.clone()),
+            v => v.clone(),
         }
+    }
+}
+
+/// Whether any part of `v` is a null.
+fn has_null(v: &Value) -> bool {
+    match v {
+        Value::Null { .. } => true,
+        Value::List(xs) => xs.iter().any(has_null),
+        Value::Obj(m) => m.values().any(has_null),
+        _ => false,
     }
 }
 

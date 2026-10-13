@@ -856,6 +856,14 @@ impl Providers {
         Ok(text)
     }
 
+    /// `v`, one of the stack's own outputs, as JSON with each secret in it
+    /// revealed by the provider that holds it, under this run's lease: what
+    /// `output NAME --reveal` prints, and nothing else asks for. An open
+    /// null is an error: the value is not known yet.
+    pub fn reveal_output(&self, v: &Value, state: &State) -> Result<Json> {
+        self.revealed(v, &self.identities(state), &mut Vec::new())
+    }
+
     /// The object each address of `state` maps to, for a secret its
     /// attribute holds ([`Providers::holder`]).
     fn identities(&self, state: &State) -> BTreeMap<(String, String), String> {

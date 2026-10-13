@@ -346,6 +346,9 @@ impl<'h> Evaluated<'h> {
         if self.cx.cli.cmd.explains() {
             return super::explain::run(&mut self);
         }
+        if let Cmd::Output(c) = &self.cx.cli.cmd {
+            return c.reveal(&self);
+        }
         let compiled = self.compiled()?;
         match self.cx.cli.cmd.clone() {
             Cmd::Eval(c) => c.run(&self, &compiled),
