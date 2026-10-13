@@ -501,16 +501,21 @@ impl Ovh {
         // The interfaces as they are, not as `now` says: a port on a
         // network added already is not attached twice.
         let interfaces = a.client.get(&path).map_err(|e| failed(at, e))?;
-        let on = |os: &str| {
+        // An interface names its private network by the network's id
+        // (`pn-…`), though an attach sends the OpenStack id: either is it.
+        let of = |id: &str, os: &str| {
             interfaces
                 .as_array()
                 .into_iter()
                 .flatten()
-                .any(|i| s(i, "networkId") == Some(os))
+                .filter(|i| matches!(s(i, "networkId"), Some(n) if n == id || n == os))
+                .filter_map(|i| s(i, "id"))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
         };
         for id in added {
             let os = self.private_network_in(&a, &p, at, region, id)?;
-            if on(&os) {
+            if !of(id, &os).is_empty() {
                 notes.push(format!(
                     "{at}: it has an interface on network {id} already"
                 ));
@@ -524,14 +529,8 @@ impl Ovh {
         for id in left {
             let os = self.private_network_in(&a, &p, at, region, id)?;
             // Each port on it: one is the network's as much as another.
-            for nic in interfaces
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|i| s(i, "networkId") == Some(os.as_str()))
-                .filter_map(|i| s(i, "id"))
-            {
-                match a.client.delete(&format!("{path}/{}", escape(nic))) {
+            for nic in of(id, &os) {
+                match a.client.delete(&format!("{path}/{}", escape(&nic))) {
                     Ok(_) => {}
                     Err(e) if e.is_not_found() => {}
                     Err(e) => return Err(failed(at, e)),
@@ -563,13 +562,16 @@ impl Ovh {
         Ok(map::interfaces(&ifaces, &self.openstack_ids(a, p)?))
     }
 
-    /// The project's private networks by the OpenStack ids of their
-    /// regions.
+    /// The project's private networks by each id an interface's
+    /// `networkId` may be: the network's own (`pn-…`, what the API
+    /// answers) and the OpenStack ids of its regions (what an attach
+    /// sends).
     fn openstack_ids(&self, a: &Account, p: &str) -> api::Result<BTreeMap<String, String>> {
         let list = a.client.get(&format!("/cloud/project/{p}/network/private"))?;
         let mut out = BTreeMap::new();
         for net in list.as_array().into_iter().flatten() {
             let Some(id) = s(net, "id") else { continue };
+            out.insert(id.to_string(), id.to_string());
             for r in net
                 .get("regions")
                 .and_then(Json::as_array)

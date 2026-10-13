@@ -538,13 +538,17 @@ mod tests {
     fn an_instance_is_on_each_network_it_has_a_port_on() {
         let nets = [
             ("os-lab".to_string(), "pn-1_42".to_string()),
+            ("pn-1_42".to_string(), "pn-1_42".to_string()),
             ("os-db".to_string(), "pn-1_43".to_string()),
+            ("pn-1_43".to_string(), "pn-1_43".to_string()),
         ]
         .into();
+        // The API names a private interface's network by its `pn-…` id
+        // (as seen on OVH), or by its OpenStack id.
         let ifaces = json!([
             {"id": "i0", "networkId": "os-ext", "type": "public",
              "fixedIps": [{"ip": "51.79.10.20", "subnetId": "s0"}]},
-            {"id": "i1", "networkId": "os-lab", "type": "private",
+            {"id": "i1", "networkId": "pn-1_42", "type": "private",
              "fixedIps": [{"ip": "fd00::5", "subnetId": "s6"}, {"ip": "10.0.0.5", "subnetId": "s1"}]},
             // A port with no address yet is still a port on the network.
             {"id": "i2", "networkId": "os-db", "type": "private", "fixedIps": []},

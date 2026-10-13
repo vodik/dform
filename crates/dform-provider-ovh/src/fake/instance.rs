@@ -303,7 +303,21 @@ impl World {
             .filter(|a| a["networkId"] == on && a["version"] == 4)
             .map(|a| json!({"ip": a["ip"], "subnetId": format!("sub-{nic}")}))
             .collect();
-        json!({"id": format!("if-{nic}"), "networkId": nic, "type": typ, "state": "ACTIVE",
+        // A private interface names its network by the network's id
+        // (`pn-…`), not the OpenStack id it was attached by, as OVH does.
+        let network = self
+            .networks
+            .values()
+            .find(|net| {
+                net["regions"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|r| r["openstackId"] == nic)
+            })
+            .and_then(|net| net["id"].as_str())
+            .unwrap_or(nic);
+        json!({"id": format!("if-{nic}"), "networkId": network, "type": typ, "state": "ACTIVE",
                "macAddress": "fa:16:3e:00:00:01", "fixedIps": fixed})
     }
 
