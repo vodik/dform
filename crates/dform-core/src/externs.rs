@@ -120,19 +120,49 @@ pub fn check(program: &Program, fns: &[ExternFn]) -> Result<()> {
     if fns.is_empty() {
         return Ok(());
     }
-    let by: BTreeMap<&str, &ExternFn> = fns.iter().map(|f| (f.name.as_str(), f)).collect();
-    let mut diags = Vec::new();
-    // The predicate graph: body predicate -> heads of the rules reading it.
-    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for (head, body, _) in bodies(program) {
-        let Some(h) = head else { continue };
-        for l in body {
-            if let Lit::Pos(a) | Lit::Not(a) = l {
-                edges.entry(node(a)).or_default().insert(node(h));
-            }
+    let mut c = Checker::new(program, fns);
+    for s in &program.statements {
+        if let Stmt::Fact(a) = s
+            && let Some(f) = c.by.get(a.pred.as_str())
+        {
+            c.diags.push(defined_here(a, f));
         }
     }
-    let reaches = |from: &Atom, to: &Atom| {
+    for (head, body, _) in bodies(program) {
+        c.rule(head, body);
+    }
+    c.into_result()
+}
+
+/// The compile-time rules of the externs `by` name ([`check`]): the
+/// predicate graph (a body predicate to the heads of the rules reading
+/// it) and the errors found.
+struct Checker<'p> {
+    by: BTreeMap<&'p str, &'p ExternFn>,
+    edges: BTreeMap<String, BTreeSet<String>>,
+    diags: Vec<Diagnostic>,
+}
+
+impl<'p> Checker<'p> {
+    fn new(program: &Program, fns: &'p [ExternFn]) -> Checker<'p> {
+        let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for (head, body, _) in bodies(program) {
+            let Some(h) = head else { continue };
+            for l in body {
+                if let Lit::Pos(a) | Lit::Not(a) = l {
+                    edges.entry(node(a)).or_default().insert(node(h));
+                }
+            }
+        }
+        Checker {
+            by: fns.iter().map(|f| (f.name.as_str(), f)).collect(),
+            edges,
+            diags: Vec::new(),
+        }
+    }
+
+    /// Whether `to` is reached from `from` in the predicate graph.
+    fn reaches(&self, from: &Atom, to: &Atom) -> bool {
         let to = node(to);
         let mut seen = BTreeSet::new();
         let mut stack = vec![node(from)];
@@ -140,91 +170,31 @@ pub fn check(program: &Program, fns: &[ExternFn]) -> Result<()> {
             if p == to {
                 return true;
             }
-            if let Some(next) = edges.get(&p)
+            if let Some(next) = self.edges.get(&p)
                 && seen.insert(p)
             {
                 stack.extend(next.iter().cloned());
             }
         }
         false
-    };
-    for s in &program.statements {
-        if let Stmt::Fact(a) = s
-            && let Some(f) = by.get(a.pred.as_str())
-        {
-            diags.push(defined_here(a, f));
-        }
     }
-    for (head, body, span) in bodies(program) {
+
+    /// The rule `head :- body`: its head is no extern, and each extern
+    /// call in its body is checked against what the literals before it
+    /// bind.
+    fn rule(&mut self, head: Option<&Atom>, body: &[Lit]) {
         if let Some(h) = head
-            && let Some(f) = by.get(h.pred.as_str())
+            && let Some(f) = self.by.get(h.pred.as_str())
         {
-            diags.push(defined_here(h, f));
+            self.diags.push(defined_here(h, f));
         }
         let mut bound: BTreeSet<String> = BTreeSet::new();
         for l in body {
             match l {
-                Lit::Pos(a) | Lit::Not(a) if by.contains_key(a.pred.as_str()) => {
-                    let f = by[a.pred.as_str()];
-                    if a.args.len() != f.args.len() {
-                        diags.push(Diagnostic::error(
-                            a.span,
-                            format!(
-                                "{} takes {} arguments, not {}",
-                                called(&f.name),
-                                f.args.len(),
-                                a.args.len()
-                            ),
-                        ));
+                Lit::Pos(a) | Lit::Not(a) if self.by.contains_key(a.pred.as_str()) => {
+                    let f = self.by[a.pred.as_str()];
+                    if !self.call(head, body, a, f, &bound) {
                         continue;
-                    }
-                    for (t, b) in a.args.iter().zip(&f.args) {
-                        let mut vs = BTreeSet::new();
-                        vars(t, &mut vs);
-                        if b.input
-                            && let Some(v) = vs.iter().find(|v| !bound.contains(*v))
-                        {
-                            diags.push(
-                                Diagnostic::error(
-                                    a.span,
-                                    format!(
-                                        "{}: +{} is not bound ({v} is unbound before it)",
-                                        called(&f.name),
-                                        b.name
-                                    ),
-                                )
-                                .with_help(format!(
-                                    "bind it with a literal before {}",
-                                    called(&f.name)
-                                )),
-                            );
-                        }
-                    }
-                    if let Some(h) = head
-                        && let Some(p) = body.iter().find_map(|l| match l {
-                            Lit::Pos(b) | Lit::Not(b)
-                                if !by.contains_key(b.pred.as_str()) && reaches(h, b) =>
-                            {
-                                Some(b.pred.as_str())
-                            }
-                            _ => None,
-                        })
-                    {
-                        let (msg, asked) = match crate::tables::describe(&f.name) {
-                            Some(t) => (
-                                format!("{t}: its source reads its own rows"),
-                                "a source is read once it is known",
-                            ),
-                            None => (
-                                format!("{} in a recursive rule", f.name),
-                                "a data source is asked once its inputs are complete",
-                            ),
-                        };
-                        diags.push(Diagnostic::error(a.span, msg).with_note(format!(
-                            "{} depends on itself through {}; {asked}",
-                            program_name(&h.pred),
-                            program_name(p)
-                        )));
                     }
                     // Under `not` it binds nothing.
                     if let Lit::Pos(_) = l {
@@ -232,25 +202,109 @@ pub fn check(program: &Program, fns: &[ExternFn]) -> Result<()> {
                     }
                 }
                 Lit::Pos(a) => a.args.iter().for_each(|t| vars(t, &mut bound)),
-                Lit::Eq(x, y) => {
-                    let (mut vx, mut vy) = (BTreeSet::new(), BTreeSet::new());
-                    vars(x, &mut vx);
-                    vars(y, &mut vy);
-                    if vy.is_subset(&bound) {
-                        bound.extend(vx);
-                    } else if vx.is_subset(&bound) {
-                        bound.extend(vy);
-                    }
-                }
+                Lit::Eq(x, y) => bind_eq(x, y, &mut bound),
                 _ => {}
             }
         }
-        let _ = span;
     }
-    if diags.is_empty() {
-        Ok(())
-    } else {
-        Err(Diagnostics(diags).into())
+
+    /// The call `a` of the extern `f` in the rule `head :- body`, `bound`
+    /// the variables the literals before it bind: called with its arity,
+    /// its `+` arguments bound, in no recursive rule. False when its
+    /// arity is wrong (nothing more is checked of it).
+    fn call(
+        &mut self,
+        head: Option<&Atom>,
+        body: &[Lit],
+        a: &Atom,
+        f: &ExternFn,
+        bound: &BTreeSet<String>,
+    ) -> bool {
+        if a.args.len() != f.args.len() {
+            self.diags.push(Diagnostic::error(
+                a.span,
+                format!(
+                    "{} takes {} arguments, not {}",
+                    called(&f.name),
+                    f.args.len(),
+                    a.args.len()
+                ),
+            ));
+            return false;
+        }
+        for (t, b) in a.args.iter().zip(&f.args) {
+            let mut vs = BTreeSet::new();
+            vars(t, &mut vs);
+            if b.input
+                && let Some(v) = vs.iter().find(|v| !bound.contains(*v))
+            {
+                self.diags.push(
+                    Diagnostic::error(
+                        a.span,
+                        format!(
+                            "{}: +{} is not bound ({v} is unbound before it)",
+                            called(&f.name),
+                            b.name
+                        ),
+                    )
+                    .with_help(format!("bind it with a literal before {}", called(&f.name))),
+                );
+            }
+        }
+        if let Some(h) = head
+            && let Some(p) = body.iter().find_map(|l| match l {
+                Lit::Pos(b) | Lit::Not(b)
+                    if !self.by.contains_key(b.pred.as_str()) && self.reaches(h, b) =>
+                {
+                    Some(b.pred.as_str())
+                }
+                _ => None,
+            })
+        {
+            self.diags.push(recursive(a, f, h, p));
+        }
+        true
+    }
+
+    fn into_result(self) -> Result<()> {
+        if self.diags.is_empty() {
+            Ok(())
+        } else {
+            Err(Diagnostics(self.diags).into())
+        }
+    }
+}
+
+/// The error of the call `a` of `f` in a rule of `head` that depends on
+/// itself through `through`.
+fn recursive(a: &Atom, f: &ExternFn, head: &Atom, through: &str) -> Diagnostic {
+    let (msg, asked) = match crate::tables::describe(&f.name) {
+        Some(t) => (
+            format!("{t}: its source reads its own rows"),
+            "a source is read once it is known",
+        ),
+        None => (
+            format!("{} in a recursive rule", f.name),
+            "a data source is asked once its inputs are complete",
+        ),
+    };
+    Diagnostic::error(a.span, msg).with_note(format!(
+        "{} depends on itself through {}; {asked}",
+        program_name(&head.pred),
+        program_name(through)
+    ))
+}
+
+/// What `x = y` binds, `bound` the variables bound before it: one side's
+/// variables once the other's are all bound.
+fn bind_eq(x: &Term, y: &Term, bound: &mut BTreeSet<String>) {
+    let (mut vx, mut vy) = (BTreeSet::new(), BTreeSet::new());
+    vars(x, &mut vx);
+    vars(y, &mut vy);
+    if vy.is_subset(bound) {
+        bound.extend(vx);
+    } else if vx.is_subset(bound) {
+        bound.extend(vy);
     }
 }
 
@@ -582,53 +636,60 @@ impl<'a> Externs<'a> {
             let answers = (self.ask)(&asking);
             assert_eq!(answers.len(), asking.len(), "an answer for each call");
             for (c, answer) in new.into_iter().zip(answers) {
-                let f = &self.fns[&c.pred];
-                let rows = answer.map_err(|e| {
-                    if e.is::<crate::interrupt::Interrupted>() {
-                        return e;
-                    }
-                    // In one shape (R-109): the call as a plan line says
-                    // it (R-129 amendment), a document's as its read
-                    // (`io.read("note.txt")`, R-155); why; where it is
-                    // written.
-                    let site = self
-                        .sites
-                        .iter()
-                        .find(|(_, a)| a.pred == c.pred)
-                        .and_then(|(_, a)| crate::diag::location(a.span))
-                        .map(|(f, l, _)| format!("{f}:{l}"));
-                    let what = match (&c.inputs[..], crate::tables::describe(&c.pred)) {
-                        ([Value::Str(l)], Some(_)) if crate::tables::is_document(&c.pred) => {
-                            call_text(&c.pred, l)
-                        }
-                        (_, Some(t)) => format!("{t} from {}", show(&c.inputs)),
-                        (_, None) => format!("{}({})", c.pred, show(&c.inputs)),
-                    };
-                    crate::report::Failure {
-                        what: format!("{what} failed"),
-                        message: format!("{e:#}"),
-                        site,
-                        addr: None,
-                        located: false,
-                    }
-                    .into()
-                })?;
-                for r in &rows {
-                    if r.len() != f.args.len() {
-                        bail!(
-                            "{}: an answer has {} columns, the declaration {}",
-                            called(&c.pred),
-                            r.len(),
-                            f.args.len()
-                        );
-                    }
-                }
-                self.known.borrow_mut().insert(c, rows);
+                let rows = answer.map_err(|e| self.failed(&c, e))?;
+                self.keep(c, rows)?;
             }
         }
         bail!(
             "data sources: calls did not settle after 64 rounds (a call's output feeding its own input?)"
         )
+    }
+
+    /// The call `c` failed with `e`, said in one shape (R-109): the call as
+    /// a plan line says it (R-129 amendment), a document's as its read
+    /// (`io.read("note.txt")`, R-155); why; where it is written. An
+    /// interrupt is as it is.
+    fn failed(&self, c: &Call, e: anyhow::Error) -> anyhow::Error {
+        if e.is::<crate::interrupt::Interrupted>() {
+            return e;
+        }
+        let site = self
+            .sites
+            .iter()
+            .find(|(_, a)| a.pred == c.pred)
+            .and_then(|(_, a)| crate::diag::location(a.span))
+            .map(|(f, l, _)| format!("{f}:{l}"));
+        let what = match (&c.inputs[..], crate::tables::describe(&c.pred)) {
+            ([Value::Str(l)], Some(_)) if crate::tables::is_document(&c.pred) => {
+                call_text(&c.pred, l)
+            }
+            (_, Some(t)) => format!("{t} from {}", show(&c.inputs)),
+            (_, None) => format!("{}({})", c.pred, show(&c.inputs)),
+        };
+        crate::report::Failure {
+            what: format!("{what} failed"),
+            message: format!("{e:#}"),
+            site,
+            addr: None,
+            located: false,
+        }
+        .into()
+    }
+
+    /// The call `c` answered `rows`, kept: each row has its declaration's
+    /// columns.
+    fn keep(&self, c: Call, rows: Vec<Vec<Value>>) -> Result<()> {
+        let f = &self.fns[&c.pred];
+        if let Some(r) = rows.iter().find(|r| r.len() != f.args.len()) {
+            bail!(
+                "{}: an answer has {} columns, the declaration {}",
+                called(&c.pred),
+                r.len(),
+                f.args.len()
+            );
+        }
+        self.known.borrow_mut().insert(c, rows);
+        Ok(())
     }
 
     /// The labels of the open nulls the last evaluation's answers hold:
