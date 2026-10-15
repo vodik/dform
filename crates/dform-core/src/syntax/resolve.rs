@@ -7971,7 +7971,8 @@ impl<'u> Lowerer<'u> {
         }
     }
 
-    /// A literal: an int, a quantity (R-66), a string, a bool.
+    /// A literal: an int, a quantity (R-66), a string, an IPv6 address, a
+    /// bool.
     fn literal(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<ExprId> {
         match tokens(n).next() {
             Some(t) if t.kind() == STRING => self.string_expr(rc, &t, pre),
@@ -7986,10 +7987,13 @@ impl<'u> Lowerer<'u> {
         let span = self.span(n);
         let t = tokens(n).next().ok_or(Skip)?;
         let kind = match t.kind() {
-            INT => match t.text().parse::<i64>() {
-                Ok(i) => ExprKind::Lit(Value::Int(i)),
-                Err(_) => return self.error(span, "integer out of range"),
+            INT => match crate::lexer::int_value(t.text()) {
+                Some(i) => ExprKind::Lit(Value::Int(i)),
+                None => return self.error(span, "integer out of range"),
             },
+            // A bare IPv6 address is its text, as its quoted spelling is:
+            // its position reads it.
+            INET => ExprKind::Lit(Value::Str(t.text().to_string())),
             QUANTITY => match crate::quantity::literal(t.text()) {
                 Ok(crate::quantity::Literal::Known(q)) => ExprKind::Lit(Value::Quantity(q)),
                 Ok(crate::quantity::Literal::Ambiguous) => ExprKind::Quantity {
