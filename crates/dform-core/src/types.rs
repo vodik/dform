@@ -1726,9 +1726,11 @@ pub fn readings(program: &prog::Program, schema: &Schema) -> (Readings, Vec<Diag
 /// `program`, whose first statements are what its nodes lower to and the
 /// rest what the run adds (an input file's facts, the policy rules,
 /// declared externs), with its nodes lowered as read ([`readings`]) in
-/// their place: no statement is rewritten. A program with no nodes has
-/// none to read. Then a quantity literal no position read (`500m` where
-/// nothing gives a type) is an error naming both readings.
+/// their place: no statement is rewritten. The program read carries its
+/// nodes with their readings, what its copies are instanced from. A
+/// program with no nodes has none to read. Then a quantity literal no
+/// position read (`500m` where nothing gives a type) is an error naming
+/// both readings.
 pub fn read(program: &Program, schema: &Schema) -> Result<Program> {
     let mut nodes = program.nodes.as_deref().cloned().unwrap_or_default();
     let (readings, mut diags) = readings(&nodes, schema);
@@ -1739,6 +1741,7 @@ pub fn read(program: &Program, schema: &Schema) -> Result<Program> {
     let mut out = program.clone();
     let n = read.statements.len();
     out.statements.splice(..n, read.statements);
+    out.nodes = program.nodes.as_ref().map(|_| std::rc::Rc::new(nodes));
     left_unread(&out, &mut diags);
     if diags.is_empty() {
         Ok(out)
