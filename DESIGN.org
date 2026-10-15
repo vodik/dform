@@ -1471,8 +1471,14 @@ Full attribute copies in state bred drift, corruption, and state surgery.
 Secrets sat in plaintext for a decade. CloudFormation, ARM/Bicep, Crossplane
 have the platform own state; System Initiative has no state file at all.
 Applies to: stacks ticket, refresh ticket. Keep =state.json= as identity
-mapping only; compare attributes from refresh; encrypt at rest (OpenTofu did,
-Terraform never).
+mapping plus what is never truth: compare attributes from refresh, never from
+state; encrypt at rest (OpenTofu did, Terraform never). Amended 2026-10-15:
+state also keeps an object's computed values as the last apply or read
+returned them (the four-source design's base, and the prior a Read is told
+so a provider remembers what it made below an object, e.g. the port it
+attached); nothing compares desired with them, a remembered element that is
+gone reads as absent, secrets are labels. The lesson stands: state is a
+cache of what the world said, never a substitute for asking it.
 
 ** Monolithic state, then Terragrunt
 No native stack splitting or cross-stack wiring for a decade; Terraform Stacks
