@@ -20,6 +20,9 @@ wasm = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:wasmtime-wasi-http", "dep:dfor
 [dependencies]
 anyhow = "1.0"
 dform-core = { path = "../dform-core" }
+# A request's wait on its window, a `ratelimit.wait` span
+# (`dform_core::timing`).
+tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
 dform-grpc = { path = "../dform-grpc" }
 dform-wire = { path = "../dform-wire" }
 serde_json = "1.0"

@@ -181,29 +181,6 @@ pub fn wait(tick: usize, kind: &str, count: usize) -> Option<Span> {
     })
 }
 
-/// A request of the provider `provider` waiting on its bucket's window
-/// (`dform_host::ratelimit`): a `ratelimit.wait` span, entered until it
-/// is dropped, with `bucket` (empty: the default), `queued` (the requests
-/// before it) and `window` (how many may be in flight).
-pub fn ratelimit_wait(provider: &str, bucket: &str, queued: usize, window: usize) -> Option<Span> {
-    if !kept(tracing::Level::TRACE) {
-        return None;
-    }
-    let span = tracing::trace_span!(
-        target: TARGET,
-        parent: parent(),
-        "ratelimit.wait",
-        otel.name = %format_args!("{provider} waits on its window"),
-        provider,
-        bucket,
-        queued,
-        window,
-    );
-    Some(Span {
-        _span: span.entered(),
-    })
-}
-
 /// A location as a span names it: a URI without its userinfo, query or
 /// fragment, where a credential could be written; anything else as it is.
 pub fn location(text: &str) -> String {

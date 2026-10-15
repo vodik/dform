@@ -17,7 +17,7 @@
 
 use dform_core::plugin::host::{Class, Error, HttpResponse};
 use std::collections::BTreeMap;
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 /// The most requests of one bucket in flight at once.
@@ -28,6 +28,9 @@ const FIRST: f64 = 2.0;
 
 /// The longest pause a `Retry-After` is taken for.
 const LONGEST_PAUSE: Duration = Duration::from_secs(300);
+
+/// The buckets, locked.
+type Buckets<'a> = MutexGuard<'a, BTreeMap<String, Bucket>>;
 
 /// One provider's buckets.
 pub struct Limiter {
@@ -65,6 +68,34 @@ impl Bucket {
     /// How many may be in flight now.
     fn size(&self) -> usize {
         (self.window as usize).clamp(1, CEILING)
+    }
+
+    /// A new request's place in the queue.
+    fn queue(&mut self) -> u64 {
+        self.next += 1;
+        self.next - 1
+    }
+
+    /// The requests queued before `place`.
+    fn before(&self, place: u64) -> usize {
+        (place - self.admitted) as usize
+    }
+
+    /// Until when it is paused, as of `now`.
+    fn paused_at(&self, now: Instant) -> Option<Instant> {
+        self.paused.filter(|&until| until > now)
+    }
+
+    /// Admit `place` at `now`, if it may be sent: its turn in the queue,
+    /// a place in the window, the bucket not paused.
+    fn admit(&mut self, place: u64, now: Instant) -> bool {
+        let admits =
+            self.paused_at(now).is_none() && place == self.admitted && self.in_flight < self.size();
+        if admits {
+            self.admitted += 1;
+            self.in_flight += 1;
+        }
+        admits
     }
 
     /// The server answered `r`: the window learns from it.
@@ -120,7 +151,7 @@ impl Limiter {
         }
     }
 
-    fn buckets(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Bucket>> {
+    fn buckets(&self) -> Buckets<'_> {
         self.buckets.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -129,27 +160,46 @@ impl Limiter {
     pub fn acquire(&self, bucket: Option<&str>) -> Permit<'_> {
         let name = bucket.unwrap_or_default().to_string();
         let mut buckets = self.buckets();
-        let place = {
-            let b = buckets.entry(name.clone()).or_insert_with(Bucket::new);
-            b.next += 1;
-            b.next - 1
-        };
-        let mut waiting = None;
+        let b = buckets.entry(name.clone()).or_insert_with(Bucket::new);
+        let place = b.queue();
+        if !b.admit(place, Instant::now()) {
+            buckets = self.wait(buckets, &name, place);
+        }
+        drop(buckets);
+        // The next in the queue may fit too.
+        self.turn.notify_all();
+        Permit {
+            limiter: self,
+            bucket: name,
+        }
+    }
+
+    /// Wait until `place` in the queue of the bucket `name` is admitted:
+    /// a `ratelimit.wait` span, with `queued` (the requests before it) and
+    /// `window` (how many may be in flight). A thread of the host's has no
+    /// span of its own: the wait is the run's.
+    #[tracing::instrument(
+        parent = dform_core::timing::parent(),
+        target = "dform",
+        level = "trace",
+        name = "ratelimit.wait",
+        skip_all,
+        fields(
+            otel.name = %format_args!("{} waits on its window", self.provider),
+            provider = self.provider.as_str(),
+            bucket = name,
+            queued = buckets[name].before(place),
+            window = buckets[name].size(),
+        )
+    )]
+    fn wait<'a>(&'a self, mut buckets: Buckets<'a>, name: &str, place: u64) -> Buckets<'a> {
         loop {
             let now = Instant::now();
-            let b = buckets.get_mut(&name).expect("made above");
-            let paused = b.paused.filter(|&until| until > now);
-            if paused.is_none() && place == b.admitted && b.in_flight < b.size() {
-                b.admitted += 1;
-                b.in_flight += 1;
-                break;
+            let b = buckets.get_mut(name).expect("queued before it waits");
+            if b.admit(place, now) {
+                return buckets;
             }
-            if waiting.is_none() {
-                let queued = (place - b.admitted) as usize;
-                waiting =
-                    dform_core::timing::ratelimit_wait(&self.provider, &name, queued, b.size());
-            }
-            buckets = match paused {
+            buckets = match b.paused_at(now) {
                 Some(until) => {
                     self.turn
                         .wait_timeout(buckets, until - now)
@@ -158,14 +208,6 @@ impl Limiter {
                 }
                 None => self.turn.wait(buckets).unwrap_or_else(|e| e.into_inner()),
             };
-        }
-        drop(buckets);
-        // The next in the queue may fit too.
-        self.turn.notify_all();
-        drop(waiting);
-        Permit {
-            limiter: self,
-            bucket: name,
         }
     }
 
