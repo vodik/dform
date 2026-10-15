@@ -507,43 +507,21 @@ fn declassified(mut program: Program) -> Program {
     program
 }
 
+/// Each record atom's fields in their columns (H-11): the program's
+/// own statements' by its `decl`s and the core's, a module's or a
+/// component's body lowered again from the program's nodes, each record
+/// by the `decl`s of the scope it is written in (`program::Records`).
+/// The program's `decl`s are dropped: their columns are placed.
 fn apply_decls(program: &Program) -> Result<Program> {
-    // Built-in schemas for record atoms.
-    let mut schemas: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    schemas.insert("want".to_string(), vec!["type".into(), "name".into()]);
-    schemas.insert(
-        "arg".to_string(),
-        vec!["type".into(), "name".into(), "path".into(), "value".into()],
-    );
-    schemas.insert(
-        "arg_add".to_string(),
-        vec!["type".into(), "name".into(), "path".into(), "value".into()],
-    );
-    schemas.insert(
-        "output".to_string(),
-        vec!["scope".into(), "key".into(), "value".into()],
-    );
-    schemas.insert("input".to_string(), vec!["key".into(), "value".into()]);
-    schemas.insert("data".to_string(), vec!["key".into(), "value".into()]);
-    schemas.insert(
-        "merge_rule".to_string(),
-        vec!["type".into(), "path".into(), "op".into()],
-    );
-    schemas.insert("warn".to_string(), vec!["msg".into(), "ctx".into()]);
-    schemas.insert("deny".to_string(), vec!["msg".into(), "ctx".into()]);
-
-    for s in &program.statements {
-        if let Stmt::Decl(d) = s {
-            schemas.insert(d.pred.clone(), d.fields.clone());
-        }
-    }
-
+    let records = crate::program::Records::core().with(&program.statements);
+    let definitions = Definitions::of(program);
     let mut out = Vec::new();
     for s in &program.statements {
-        if matches!(s, Stmt::Decl(_)) {
-            continue;
+        match s {
+            Stmt::Decl(_) => continue,
+            Stmt::Module(m) => out.push(definitions.lowered(m, &records)?),
+            s => out.push(records_placed(s.clone(), &records)?),
         }
-        out.push(rewrite_stmt_records(s.clone(), &schemas)?);
     }
     Ok(Program {
         statements: out,
@@ -552,139 +530,81 @@ fn apply_decls(program: &Program) -> Result<Program> {
     })
 }
 
-#[derive(Copy, Clone)]
-enum Ctx {
-    Fact,
-    Head,
-    Body,
+/// The program's definitions as its nodes have them, by path.
+struct Definitions<'p> {
+    nodes: Option<&'p crate::program::Program>,
+    by_path: BTreeMap<&'p str, crate::program::ItemId>,
 }
 
-fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>) -> Result<Stmt> {
+impl<'p> Definitions<'p> {
+    fn of(program: &'p Program) -> Definitions<'p> {
+        let nodes = program.nodes.as_deref();
+        let by_path = nodes
+            .into_iter()
+            .flat_map(|n| n.roots.iter().map(move |&i| (i, &n.items[i].kind)))
+            .filter_map(|(i, k)| match k {
+                crate::program::ItemKind::Module { path, .. } => Some((path.as_str(), i)),
+                _ => None,
+            })
+            .collect();
+        Definitions { nodes, by_path }
+    }
+
+    /// The definition `m` lowered from its nodes, each record placed by
+    /// its scope's `decl`s over `records`.
+    fn lowered(&self, m: &crate::ast::Module, records: &crate::program::Records) -> Result<Stmt> {
+        let (Some(nodes), Some(&item)) = (self.nodes, self.by_path.get(m.name.as_str())) else {
+            bail!("internal: no nodes of the definition {}", m.name);
+        };
+        let mut stmts = crate::program::lower::lower_placed(nodes, item, records)
+            .map_err(|d| anyhow::Error::from(Diagnostics(d)))?;
+        Ok(stmts.remove(0))
+    }
+}
+
+/// `stmt` with each record atom's fields in their columns by `records`:
+/// a fact's, a rule's head and body, a copy's clause and body, a
+/// resource's body.
+fn records_placed(stmt: Stmt, records: &crate::program::Records) -> Result<Stmt> {
+    let place = |a: Atom, complete: bool| {
+        records
+            .resolve(a, complete)
+            .map_err(|d| anyhow::Error::from(Diagnostics(vec![*d])))
+    };
+    let lits = |lits: Vec<Lit>| -> Result<Vec<Lit>> {
+        lits.into_iter()
+            .map(|l| {
+                Ok(match l {
+                    Lit::Pos(a) => Lit::Pos(place(a, false)?),
+                    Lit::Not(a) => Lit::Not(place(a, false)?),
+                    other => other,
+                })
+            })
+            .collect()
+    };
     Ok(match stmt {
-        Stmt::Fact(a) => Stmt::Fact(rewrite_atom_records(a, schemas, Ctx::Fact)?),
-        Stmt::Rule(r) => {
-            let head = rewrite_atom_records(r.head, schemas, Ctx::Head)?;
-            let body = rewrite_lits_records(r.body, schemas)?;
-            Stmt::Rule(RuleStmt { head, body, ..r })
-        }
-        // A module's or component's own `decl`s name its relations'
-        // fields inside it, over any outer one of the same name.
-        Stmt::Module(mut c) => {
-            let mut inner = schemas.clone();
-            for s in &c.body {
-                if let Stmt::Decl(d) = s {
-                    inner.insert(d.pred.clone(), d.fields.clone());
-                }
-            }
-            c.body = c
-                .body
-                .into_iter()
-                .map(|s| rewrite_stmt_records(s, &inner))
-                .collect::<Result<Vec<_>>>()?;
-            Stmt::Module(c)
-        }
+        Stmt::Fact(a) => Stmt::Fact(place(a, true)?),
+        Stmt::Rule(r) => Stmt::Rule(RuleStmt {
+            head: place(r.head, true)?,
+            body: lits(r.body)?,
+            ..r
+        }),
         Stmt::Instance(mut u) => {
-            if let Some(b) = u.body {
-                u.body = Some(rewrite_lits_records(b, schemas)?);
-            }
-            if let Some(b) = u.clause {
-                u.clause = Some(rewrite_lits_records(b, schemas)?);
-            }
+            u.body = u.body.map(lits).transpose()?;
+            u.clause = u.clause.map(lits).transpose()?;
             Stmt::Instance(u)
         }
         Stmt::Use(mut u) => {
-            if let Some(b) = u.body {
-                u.body = Some(rewrite_lits_records(b, schemas)?);
-            }
-            if let Some(b) = u.clause {
-                u.clause = Some(rewrite_lits_records(b, schemas)?);
-            }
+            u.body = u.body.map(lits).transpose()?;
+            u.clause = u.clause.map(lits).transpose()?;
             Stmt::Use(u)
         }
         Stmt::Resource(mut r) => {
-            if let Some(b) = r.body {
-                r.body = Some(rewrite_lits_records(b, schemas)?);
-            }
+            r.body = r.body.map(lits).transpose()?;
             Stmt::Resource(r)
         }
         other => other,
     })
-}
-
-fn rewrite_lits_records(
-    lits: Vec<Lit>,
-    schemas: &BTreeMap<String, Vec<String>>,
-) -> Result<Vec<Lit>> {
-    lits.into_iter()
-        .map(|l| rewrite_lit_records(l, schemas))
-        .collect()
-}
-
-fn rewrite_lit_records(lit: Lit, schemas: &BTreeMap<String, Vec<String>>) -> Result<Lit> {
-    Ok(match lit {
-        Lit::Pos(a) => Lit::Pos(rewrite_atom_records(a, schemas, Ctx::Body)?),
-        Lit::Not(a) => Lit::Not(rewrite_atom_records(a, schemas, Ctx::Body)?),
-        other => other,
-    })
-}
-
-fn rewrite_atom_records(
-    mut atom: Atom,
-    schemas: &BTreeMap<String, Vec<String>>,
-    ctx: Ctx,
-) -> Result<Atom> {
-    let Some(fields) = atom.record.take() else {
-        return Ok(atom);
-    };
-    let Some(order) = schemas.get(&atom.pred) else {
-        return Err(spanned(
-            atom.span,
-            format!(
-                "no record fields declared for predicate '{}' (declare them with decl {}(Field: type, ...))",
-                atom.pred, atom.pred
-            ),
-        ));
-    };
-
-    // No extra fields.
-    for k in fields.keys() {
-        if !order.iter().any(|x| x == k) {
-            return Err(spanned(
-                atom.span,
-                format!("unknown field '{k}' for predicate '{}'", atom.pred),
-            ));
-        }
-    }
-
-    let require_complete = matches!(ctx, Ctx::Fact | Ctx::Head);
-    let mut args = Vec::with_capacity(order.len());
-    for f in order {
-        match fields.get(f) {
-            Some(t) => args.push(t.clone()),
-            None => {
-                if require_complete {
-                    return Err(spanned(
-                        atom.span,
-                        format!("missing field '{f}' for predicate '{}'", atom.pred),
-                    ));
-                }
-                args.push(Term::Wildcard);
-            }
-        }
-    }
-    if require_complete && args.iter().any(|t| matches!(t, Term::Wildcard)) {
-        return Err(spanned(
-            atom.span,
-            format!(
-                "`_` is no value: not in a fact, nor left of `where`, of '{}'",
-                atom.pred
-            ),
-        ));
-    }
-
-    atom.args = args;
-    atom.record = None;
-    Ok(atom)
 }
 
 /// A head with no body and no variables is a fact; anything else a rule.

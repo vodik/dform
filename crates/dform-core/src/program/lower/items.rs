@@ -25,6 +25,7 @@
 //! Then the helper statements its clause and terms made, in the order
 //! they made them.
 
+use super::Env;
 use super::clause::folded;
 use super::expr::Lowering;
 use crate::ast::{self, Atom, Decl, Rank, RuleStmt, Span, Stmt, TypeExpr, str_term};
@@ -37,18 +38,20 @@ use crate::value::Value;
 use std::collections::BTreeMap;
 
 /// The statements of the item `id`, onto `out`, one origin each.
-pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<Origin>) {
-    if let ItemKind::Module { .. } = &program.items[id].kind {
-        return module(program, id, out, origins);
+pub(super) fn item(env: Env, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<Origin>) {
+    if let ItemKind::Module { .. } = &env.program.items[id].kind {
+        return module(env, id, out, origins);
     }
-    let stmts = statements(program, id);
+    let stmts = statements(env, id);
     origins.extend(stmts.iter().map(|_| Origin::of(id)));
     out.extend(stmts);
 }
 
 /// A module's file or a component: `Stmt::Module` around its items'
-/// statements, its own origin before theirs.
-fn module(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<Origin>) {
+/// statements, its own origin before theirs; its own `decl`s name its
+/// relations' fields inside it.
+fn module(env: Env, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<Origin>) {
+    let program = env.program;
     let it = &program.items[id];
     let ItemKind::Module {
         path,
@@ -60,9 +63,14 @@ fn module(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<
         unreachable!("a module")
     };
     origins.push(Origin::of(id));
+    let records = env.records.map(|r| r.with_items(program, items));
+    let env = Env {
+        records: records.as_ref(),
+        ..env
+    };
     let mut body = Vec::new();
     for &i in items {
-        item(program, i, &mut body, origins);
+        item(env, i, &mut body, origins);
     }
     out.push(Stmt::Module(ast::Module {
         name: path.clone(),
@@ -73,37 +81,37 @@ fn module(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<
 }
 
 /// The statements of the item `id`, which is not a module.
-fn statements(program: &Program, id: ItemId) -> Vec<Stmt> {
-    let it = &program.items[id];
+fn statements(env: Env, id: ItemId) -> Vec<Stmt> {
+    let it = &env.program.items[id];
     match &it.kind {
         ItemKind::Module { .. } => unreachable!("a module is its items' statements"),
-        ItemKind::Let { .. } => Let::of(&it.kind).statements(program, it.span),
+        ItemKind::Let { .. } => Let::of(&it.kind).statements(env, it.span),
         ItemKind::LetFn {
             name,
             params,
             value,
             clause,
-        } => let_fn(program, name, params, *value, *clause, it.span),
+        } => let_fn(env, name, params, *value, *clause, it.span),
         ItemKind::Rule { .. } | ItemKind::RelationInput { .. } => {
-            let mut l = Lowering::new(program);
+            let mut l = Lowering::new(env);
             let mut out = own(&mut l, id);
             out.append(&mut l.helpers);
             out
         }
-        ItemKind::Copy { .. } => copy(program, id),
+        ItemKind::Copy { .. } => copy(env, id),
         ItemKind::Check {
             kind,
             message,
             detail,
             clause,
-        } => check(program, *kind, (*message, *detail), *clause, it.span),
-        ItemKind::Input { name, rows, .. } => input_item(program, id, name, rows.as_ref()),
+        } => check(env, *kind, (*message, *detail), *clause, it.span),
+        ItemKind::Input { name, rows, .. } => input_item(env, id, name, rows.as_ref()),
         ItemKind::Output {
             name,
             ty,
             value,
             clause,
-        } => output(program, (name, ty.as_ref()), *value, *clause, it.span),
+        } => output(env, (name, ty.as_ref()), *value, *clause, it.span),
         ItemKind::OutputRelation { rel, ref_columns } => vec![Stmt::Output(ast::OutputDecl {
             name: rel.name.clone(),
             ty: None,
@@ -111,7 +119,7 @@ fn statements(program: &Program, id: ItemId) -> Vec<Stmt> {
             relation: Some(ref_columns.clone()),
             span: it.span,
         })],
-        ItemKind::Provider { .. } => provider(program, id),
+        ItemKind::Provider { .. } => provider(env, id),
         ItemKind::Decl {
             rel,
             columns,
@@ -123,22 +131,22 @@ fn statements(program: &Program, id: ItemId) -> Vec<Stmt> {
             args: args.clone(),
             span: it.span,
         })],
-        ItemKind::TypeBlock { name, attrs } => type_block(program, id, name, attrs),
+        ItemKind::TypeBlock { name, attrs } => type_block(env.program, id, name, attrs),
         ItemKind::Resource {
             typ,
             name,
             rank,
             body,
             clause,
-        } => resource(program, (typ, name, *rank), body, *clause, it.span),
-        ItemKind::Set { writes, clause } => set(program, writes, *clause, it.span),
+        } => resource(env, (typ, name, *rank), body, *clause, it.span),
+        ItemKind::Set { writes, clause } => set(env, writes, *clause, it.span),
         ItemKind::SetFrom {
             source,
             path,
             value,
             rank,
             clause,
-        } => set_from(program, source, (*path, *value), *rank, *clause, it.span),
+        } => set_from(env, source, (*path, *value), *rank, *clause, it.span),
         ItemKind::Doc { kind, name, pairs } => doc(kind, name, pairs, it.span),
     }
 }
@@ -146,14 +154,9 @@ fn statements(program: &Program, id: ItemId) -> Vec<Stmt> {
 /// `input k: T ..` (the item `id`): itself; declared under clauses
 /// (R-104), where each holds and, the first, a deny where two do; then
 /// the helpers its parts made.
-fn input_item(
-    program: &Program,
-    id: ItemId,
-    name: &str,
-    rows: Option<&(usize, Vec<Span>)>,
-) -> Vec<Stmt> {
-    let span = program.items[id].span;
-    let (decl, helpers) = input(program, id);
+fn input_item(env: Env, id: ItemId, name: &str, rows: Option<&(usize, Vec<Span>)>) -> Vec<Stmt> {
+    let span = env.program.items[id].span;
+    let (decl, helpers) = input(env, id);
     let mut out = vec![Stmt::Input(decl.clone())];
     if let Some((i, sites)) = rows {
         let group = format!("input {name}");
@@ -202,7 +205,7 @@ fn doc(kind: &str, name: &str, pairs: &[(String, String)], span: Span) -> Vec<St
 /// The statements of the item `id` alone: what it lowers to.
 pub fn lower_item(program: &Program, id: ItemId) -> Vec<Stmt> {
     let mut out = Vec::new();
-    item(program, id, &mut out, &mut Vec::new());
+    item(Env::plain(program), id, &mut out, &mut Vec::new());
     out
 }
 
@@ -216,7 +219,7 @@ fn rule(
     clause: Option<ClauseId>,
     span: Span,
 ) -> Vec<Stmt> {
-    let mut atom = l.atom(&head.rel, &head.args);
+    let mut atom = l.head(&head.rel, &head.args);
     atom.args.extend(rank.map(|r| str_term(r.name())));
     // The head's reads, after the clause.
     let reads = std::mem::take(&mut l.reads);
@@ -253,7 +256,8 @@ fn own(l: &mut Lowering, id: ItemId) -> Vec<Stmt> {
 /// B]`: the copy, its clause B's literals and a name from the clause's
 /// binding (`clause`), those and the inputs' reads (`body`), its rows'
 /// own statements; then the helpers, in the order its parts made them.
-fn copy(program: &Program, id: ItemId) -> Vec<Stmt> {
+fn copy(env: Env, id: ItemId) -> Vec<Stmt> {
+    let program = env.program;
     let it = &program.items[id];
     let ItemKind::Copy {
         kind,
@@ -268,7 +272,7 @@ fn copy(program: &Program, id: ItemId) -> Vec<Stmt> {
     else {
         unreachable!("a copy")
     };
-    let mut l = Lowering::new(program);
+    let mut l = Lowering::new(env);
     let mut lits = Vec::new();
     if let Some(c) = clause {
         l.clause(*c, &mut lits);
@@ -312,13 +316,13 @@ fn copy(program: &Program, id: ItemId) -> Vec<Stmt> {
 /// or a rule over B's literals and the reads the message and the detail
 /// hoisted, its aggregates folded.
 fn check(
-    program: &Program,
+    env: Env,
     kind: CheckKind,
     (message, detail): (ExprId, Option<ExprId>),
     clause: Option<ClauseId>,
     span: Span,
 ) -> Vec<Stmt> {
-    let mut l = Lowering::new(program);
+    let mut l = Lowering::new(env);
     let (mut body, folds) = match clause {
         Some(c) => l.unfolded(c),
         None => Default::default(),
@@ -348,7 +352,7 @@ fn check(
 /// row), then its value: as it is when nothing is read, else the rule
 /// `output("k", v) :- B', reads`, folded over B's aggregates.
 fn output(
-    program: &Program,
+    env: Env,
     (name, ty): (&str, Option<&TypeExpr>),
     value: Option<ExprId>,
     clause: Option<ClauseId>,
@@ -370,7 +374,7 @@ fn output(
     let Some(value) = value else {
         return out;
     };
-    let mut l = Lowering::new(program);
+    let mut l = Lowering::new(env);
     let (mut body, folds) = match clause {
         Some(c) => l.unfolded(c),
         None => Default::default(),
@@ -397,13 +401,13 @@ fn output(
 /// name from the clause (none when nothing is read or written after
 /// `where`); then the helpers.
 fn resource(
-    program: &Program,
+    env: Env,
     (typ, name, rank): (&TypeRef, &Header, Option<Rank>),
     body: &ResourceBody,
     clause: Option<ClauseId>,
     span: Span,
 ) -> Vec<Stmt> {
-    let mut l = Lowering::new(program);
+    let mut l = Lowering::new(env);
     let mut lits = Vec::new();
     if let Some(c) = clause {
         l.clause(c, &mut lits);
@@ -427,7 +431,7 @@ fn resource(
         ResourceBody::Value(v) => {
             let value = l.expr(*v);
             lits.append(&mut l.reads);
-            value_entries(value, program.exprs[*v].span).expect("a value body is an object")
+            value_entries(value, env.program.exprs[*v].span).expect("a value body is an object")
         }
     };
     let reads = start..lits.len();
@@ -528,14 +532,14 @@ fn relation_input(
 /// declared `extern`, so a module's copy names it its own with the let;
 /// the relation's mode; then the helpers.
 fn let_fn(
-    program: &Program,
+    env: Env,
     name: &str,
     params: &[Param],
     value: ExprId,
     clause: Option<ClauseId>,
     span: Span,
 ) -> Vec<Stmt> {
-    let mut l = Lowering::new(program);
+    let mut l = Lowering::new(env);
     let mut args: Vec<ast::Term> = params.iter().map(|p| l.var(p.var)).collect();
     let demand = crate::demand::of(name);
     let seed = vec![ast::Lit::Pos(Atom {
@@ -573,7 +577,8 @@ fn let_fn(
 /// several clauses (R-104), where this one holds and, the first, the
 /// denies where two do; then the helpers, in the order its parts made
 /// them.
-fn provider(program: &Program, id: ItemId) -> Vec<Stmt> {
+fn provider(env: Env, id: ItemId) -> Vec<Stmt> {
+    let program = env.program;
     let it = &program.items[id];
     let ItemKind::Provider {
         name,
@@ -588,7 +593,7 @@ fn provider(program: &Program, id: ItemId) -> Vec<Stmt> {
         unreachable!("a provider")
     };
     let span = it.span;
-    let mut l = Lowering::new(program);
+    let mut l = Lowering::new(env);
     let mut lits = Vec::new();
     if let Some(c) = clause {
         l.clause(*c, &mut lits);
@@ -664,8 +669,8 @@ fn provider(program: &Program, id: ItemId) -> Vec<Stmt> {
 /// lowered once, its helpers once) and the line's reads, folded over B's
 /// aggregates by the line's own numbers (their helpers at the
 /// statement's `span`); then the helpers.
-fn set(program: &Program, writes: &[Write], clause: Option<ClauseId>, span: Span) -> Vec<Stmt> {
-    let mut l = Lowering::new(program);
+fn set(env: Env, writes: &[Write], clause: Option<ClauseId>, span: Span) -> Vec<Stmt> {
+    let mut l = Lowering::new(env);
     let (lits, folds) = match clause {
         Some(c) => l.unfolded(c),
         None => Default::default(),
@@ -761,14 +766,14 @@ pub fn element_write(key: ast::Term, rest: &[String], value: ast::Term) -> ast::
 /// then `arg("input", "", Path, Value, "rank") :- B', reads`, folded over
 /// B's aggregates.
 fn set_from(
-    program: &Program,
+    env: Env,
     source: &Source,
     (path, value): (VarId, VarId),
     rank: Option<Rank>,
     clause: Option<ClauseId>,
     span: Span,
 ) -> Vec<Stmt> {
-    let mut l = Lowering::new(program);
+    let mut l = Lowering::new(env);
     let (mut body, folds) = match clause {
         Some(c) => l.unfolded(c),
         None => Default::default(),
@@ -795,7 +800,8 @@ fn set_from(
 
 /// The input `id` declared, and the helper statements its fields', its
 /// refinement's and its clause's bodies made, in that order.
-fn input(program: &Program, id: ItemId) -> (ast::InputDecl, Vec<Stmt>) {
+fn input(env: Env, id: ItemId) -> (ast::InputDecl, Vec<Stmt>) {
+    let program = env.program;
     let it = &program.items[id];
     let ItemKind::Input {
         name,
@@ -814,15 +820,15 @@ fn input(program: &Program, id: ItemId) -> (ast::InputDecl, Vec<Stmt>) {
     let fields = fields
         .iter()
         .map(|&f| {
-            let (decl, made) = input(program, f);
+            let (decl, made) = input(env, f);
             helpers.extend(made);
             decl
         })
         .collect();
-    let default = default.map(|d| super::lower_expr(program, d).0);
+    let default = default.map(|d| Lowering::new(env).expr(d));
     let mut body = |c: &Option<ClauseId>| match c {
         Some(c) => {
-            let (lits, made) = super::lower_clause(program, *c, &[]);
+            let (lits, made) = super::clause::lower_clause_in(env, *c, &[]);
             helpers.extend(made);
             lits
         }
@@ -928,8 +934,8 @@ impl<'p> Let<'p> {
     /// the value's reads, its aggregates folded; the cell's secret paths
     /// (R-153); its type `decl k(k: T)`, as R-34 types a relation, at the
     /// first typed row.
-    fn statements(&self, program: &Program, span: Span) -> Vec<Stmt> {
-        let mut l = Lowering::new(program);
+    fn statements(&self, env: Env, span: Span) -> Vec<Stmt> {
+        let mut l = Lowering::new(env);
         let (mut body, folds) = match self.clause {
             Some(c) => l.unfolded(c),
             None => Default::default(),

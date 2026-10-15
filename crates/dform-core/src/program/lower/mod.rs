@@ -11,14 +11,56 @@
 mod clause;
 mod expr;
 mod items;
+mod records;
 pub use clause::{lower_clause, lower_goal};
 pub(crate) use expr::stored;
 pub use expr::{expr_helpers, lower_expr, read_expr};
 pub use items::{element_write, lower_item, value_entries};
+pub use records::Records;
 
 use super::{Origin, Program};
 use crate::ast;
 use crate::diag::Diagnostic;
+use std::cell::RefCell;
+
+/// What the nodes are lowered under: the program's own, or, for the
+/// evaluation, each record atom's fields in their columns by its scope's
+/// `decl`s ([`Records`]), what is wrong with one said in `errors`.
+#[derive(Clone, Copy)]
+pub(crate) struct Env<'p> {
+    pub program: &'p Program,
+    pub records: Option<&'p Records>,
+    pub errors: Option<&'p RefCell<Vec<Diagnostic>>>,
+}
+
+impl<'p> Env<'p> {
+    /// The program's nodes as written.
+    pub fn plain(program: &'p Program) -> Env<'p> {
+        Env {
+            program,
+            records: None,
+            errors: None,
+        }
+    }
+
+    /// `atom` with its record's fields in their columns when this
+    /// environment says them (`complete`: a head's); a field it cannot
+    /// place is said, and the atom left as written.
+    fn columns(&self, atom: ast::Atom, complete: bool) -> ast::Atom {
+        let (Some(records), true) = (self.records, atom.record.is_some()) else {
+            return atom;
+        };
+        match records.resolve(atom.clone(), complete) {
+            Ok(a) => a,
+            Err(d) => {
+                if let Some(errors) = self.errors {
+                    errors.borrow_mut().push(*d);
+                }
+                atom
+            }
+        }
+    }
+}
 
 /// What the program lowers to: the resolver's output, and where each
 /// statement came from, one origin per statement in the order a walk
@@ -45,7 +87,7 @@ pub fn lower(program: &Program) -> LoweredStack {
     let mut origins = Vec::new();
     let mut statements = Vec::new();
     for &id in &program.roots {
-        items::item(program, id, &mut statements, &mut origins);
+        items::item(Env::plain(program), id, &mut statements, &mut origins);
     }
     LoweredStack {
         rules: Ok(ast::Program {
@@ -54,6 +96,29 @@ pub fn lower(program: &Program) -> LoweredStack {
             nodes: None,
         }),
         origins,
+    }
+}
+
+/// The statements of the item `id` as the evaluation lowers them: each
+/// record atom's fields in their columns by the `decl`s of the scope it
+/// is written in, `records` those around the item; or the first record
+/// the walk meets that is wrong.
+pub fn lower_placed(
+    program: &Program,
+    id: super::ItemId,
+    records: &Records,
+) -> Result<Vec<ast::Stmt>, Vec<Diagnostic>> {
+    let errors = RefCell::new(Vec::new());
+    let env = Env {
+        program,
+        records: Some(records),
+        errors: Some(&errors),
+    };
+    let mut out = Vec::new();
+    items::item(env, id, &mut out, &mut Vec::new());
+    match errors.into_inner().into_iter().next() {
+        None => Ok(out),
+        Some(e) => Err(vec![e]),
     }
 }
 

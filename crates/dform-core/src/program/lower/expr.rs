@@ -5,6 +5,7 @@
 //! them (step 6b). `lower_expr` gives back what the resolver's `term`
 //! gave for the same term, byte for byte.
 
+use super::Env;
 use crate::ast::{Atom, Lit, Span, Stmt, Term, TypeExpr, str_term};
 use crate::program::node::*;
 use crate::program::scope::Reach;
@@ -13,7 +14,7 @@ use std::collections::BTreeMap;
 
 /// The term `id` is, and the reads it hoists, in order.
 pub fn lower_expr(program: &Program, id: ExprId) -> (Term, Vec<Lit>) {
-    let mut l = Lowering::new(program);
+    let mut l = Lowering::new(Env::plain(program));
     let t = l.expr(id);
     (t, l.reads)
 }
@@ -23,7 +24,7 @@ pub fn lower_expr(program: &Program, id: ExprId) -> (Term, Vec<Lit>) {
 pub fn read_expr(program: &Program, readings: &Readings, id: ExprId) -> Term {
     let mut l = Lowering {
         readings,
-        ..Lowering::new(program)
+        ..Lowering::new(Env::plain(program))
     };
     l.expr(id)
 }
@@ -31,7 +32,7 @@ pub fn read_expr(program: &Program, readings: &Readings, id: ExprId) -> Term {
 /// The helper statements lowering the term `id` makes (a comprehension's
 /// `not { }` rule).
 pub fn expr_helpers(program: &Program, id: ExprId) -> Vec<Stmt> {
-    let mut l = Lowering::new(program);
+    let mut l = Lowering::new(Env::plain(program));
     l.expr(id);
     l.helpers
 }
@@ -41,6 +42,8 @@ pub fn expr_helpers(program: &Program, id: ExprId) -> Vec<Stmt> {
 /// facts a membership states), in order.
 pub(super) struct Lowering<'p> {
     pub(super) program: &'p Program,
+    /// What the nodes are lowered under ([`Env`]).
+    pub(super) env: Env<'p>,
     /// What each node is read as, the program's own unless a reading is
     /// being decided ([`read_expr`]).
     readings: &'p Readings,
@@ -49,10 +52,11 @@ pub(super) struct Lowering<'p> {
 }
 
 impl<'p> Lowering<'p> {
-    pub(super) fn new(program: &'p Program) -> Self {
+    pub(super) fn new(env: Env<'p>) -> Self {
         Lowering {
-            program,
-            readings: &program.readings,
+            program: env.program,
+            env,
+            readings: &env.program.readings,
             reads: Vec::new(),
             helpers: Vec::new(),
         }

@@ -8,6 +8,7 @@
 //! helper takes the positive ones before it as its P, as the resolver's
 //! `neg_helper` does.
 
+use super::Env;
 use super::expr::Lowering;
 use crate::ast::{Atom, Helper, Lit, RuleStmt, Span, Stmt, Term, str_term};
 use crate::program::node::*;
@@ -19,7 +20,12 @@ use std::collections::BTreeSet;
 /// statement holds before it: a let's parameters' binding, R-187), and
 /// the helper statements it makes, in order.
 pub fn lower_clause(program: &Program, id: ClauseId, context: &[Lit]) -> (Vec<Lit>, Vec<Stmt>) {
-    let mut l = Lowering::new(program);
+    lower_clause_in(Env::plain(program), id, context)
+}
+
+/// [`lower_clause`] under `env`.
+pub(super) fn lower_clause_in(env: Env, id: ClauseId, context: &[Lit]) -> (Vec<Lit>, Vec<Stmt>) {
+    let mut l = Lowering::new(env);
     let mut out = context.to_vec();
     l.clause(id, &mut out);
     out.drain(..context.len());
@@ -29,7 +35,7 @@ pub fn lower_clause(program: &Program, id: ClauseId, context: &[Lit]) -> (Vec<Li
 /// The literals goal `id` lowers to after `context`, its clause's
 /// literals before it, and the helper statements it makes.
 pub fn lower_goal(program: &Program, id: GoalId, context: &[Lit]) -> (Vec<Lit>, Vec<Stmt>) {
-    let mut l = Lowering::new(program);
+    let mut l = Lowering::new(Env::plain(program));
     let mut out = context.to_vec();
     l.goal(id, &mut out);
     out.drain(..context.len());
@@ -420,7 +426,22 @@ impl Lowering<'_> {
         Lit::Pos(self.read_holding(e, span, value).expect("a read"))
     }
 
+    /// The atom of `rel` over `args` a goal reads: a record's fields in
+    /// their columns, under an environment that says them
+    /// ([`Env::records`]).
     pub(super) fn atom(&mut self, rel: &RelRef, args: &RelArgs) -> Atom {
+        let atom = self.written(rel, args);
+        self.env.columns(atom, false)
+    }
+
+    /// The atom of `rel` over `args` a head writes: every field given.
+    pub(super) fn head(&mut self, rel: &RelRef, args: &RelArgs) -> Atom {
+        let atom = self.written(rel, args);
+        self.env.columns(atom, true)
+    }
+
+    /// The atom as written: a record's fields by name.
+    fn written(&mut self, rel: &RelRef, args: &RelArgs) -> Atom {
         let (args, record) = match args {
             RelArgs::Positional(ps) => (ps.iter().map(|p| self.pattern(*p)).collect(), None),
             RelArgs::Record(fs) => {
