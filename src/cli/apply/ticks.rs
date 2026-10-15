@@ -390,10 +390,16 @@ impl<'a, 'h> Ticks<'a, 'h> {
 
     /// One tick: planned, shown, asked for, approved, its calls made; then
     /// the apply's end, or the boundary the next tick plans from.
+    #[tracing::instrument(
+        target = "dform",
+        level = "trace",
+        name = "tick",
+        skip_all,
+        fields(otel.name = %format_args!("tick {}", self.tick), tick = self.tick)
+    )]
     pub(super) fn tick(&mut self, wanted: Wanted) -> Result<Next> {
         // Between ticks, a signal stops the apply here.
         crate::interrupt::check()?;
-        let _tick = crate::timing::tick(self.tick);
         let mut p = self.plan(wanted)?;
         if let Some(o) = self.show(&p.tick)? {
             return Ok(Next::Done(o));
@@ -1696,49 +1702,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
         }
         let labels: Vec<String> = on.iter().map(|l| address::label(l)).collect();
         let (budget, setting) = self.wait_budget(&on);
-        let kinds: BTreeSet<&str> = on
-            .iter()
-            .map(|l| {
-                let (typ, rest) = l.split_once('/').unwrap_or((l, ""));
-                let path = rest.rsplit_once('#').map_or("", |(_, p)| p);
-                match crate::externs::is_call_label(typ, path) {
-                    true => "extern",
-                    false => "world",
-                }
-            })
-            .collect();
-        let kind = kinds.into_iter().collect::<Vec<_>>().join(",");
-        let _wait = crate::timing::wait(tick, &kind, on.len());
-        let mut w = crate::progress::Wait::new();
-        // On a terminal, the wait is one line counting up (R-127);
-        // elsewhere its lines say it every 10s.
-        let mode = crate::progress::Mode::of_stderr(self.r.why() == report::Why::None);
-        let live = (mode == crate::progress::Mode::Terminal)
-            .then(|| crate::progress::Progress::wait(tick, names.clone(), mode, self.cx.cli.style));
-        let resolved = loop {
-            if live.is_none() {
-                w.tick(&names);
-            }
-            if w.elapsed() >= budget {
-                break false;
-            }
-            if crate::interrupt::sleep(w.next_poll(budget)) {
-                break false;
-            }
-            backend.reread();
-            externs.forget_not_yet();
-            let (next, _) =
-                self.evaluator
-                    .evaluate_with(&self.st, &BTreeSet::new(), &[], Some(tick))?;
-            let docs = resources::compile_resources(next.facts.iter().cloned(), backend.schema())?;
-            let now = deployment::sections(&next, &docs, backend.schema());
-            if waiting_on(&now, &self.st, externs) != on {
-                break true;
-            }
-        };
-        if let Some(l) = live {
-            l.done();
-        }
+        let (resolved, w) = self.wait_until_moved(&on, &names, budget)?;
         let redact = query::Redactor::new(&t.planned.res.facts, backend.schema());
         log_retries(&self.cx.audit, &redact, backend, tick)?;
         let result = match (resolved, crate::interrupt::requested()) {
@@ -1765,6 +1729,62 @@ impl<'a, 'h> Ticks<'a, 'h> {
             names.join(", "),
             crate::plugin::policy::show(budget),
         );
+    }
+
+    /// Wait on the nulls `on` (said as `names`) until what they wait on
+    /// moves, at most `budget`: an `apply.wait` span. Whether it moved, and
+    /// the wait.
+    #[tracing::instrument(
+        target = "dform",
+        level = "trace",
+        name = "apply.wait",
+        skip_all,
+        fields(
+            otel.name = %format_args!("wait, tick {}", self.tick),
+            tick = self.tick,
+            kind = wait_kinds(on),
+            count = on.len(),
+        )
+    )]
+    fn wait_until_moved(
+        &self,
+        on: &[String],
+        names: &[String],
+        budget: std::time::Duration,
+    ) -> Result<(bool, crate::progress::Wait)> {
+        let (tick, backend, externs) = (self.tick, self.backend(), &self.evaluator.externs);
+        let mut w = crate::progress::Wait::new();
+        // On a terminal, the wait is one line counting up (R-127);
+        // elsewhere its lines say it every 10s.
+        let mode = crate::progress::Mode::of_stderr(self.r.why() == report::Why::None);
+        let live = (mode == crate::progress::Mode::Terminal).then(|| {
+            crate::progress::Progress::wait(tick, names.to_vec(), mode, self.cx.cli.style)
+        });
+        let resolved = loop {
+            if live.is_none() {
+                w.tick(names);
+            }
+            if w.elapsed() >= budget {
+                break false;
+            }
+            if crate::interrupt::sleep(w.next_poll(budget)) {
+                break false;
+            }
+            backend.reread();
+            externs.forget_not_yet();
+            let (next, _) =
+                self.evaluator
+                    .evaluate_with(&self.st, &BTreeSet::new(), &[], Some(tick))?;
+            let docs = resources::compile_resources(next.facts.iter().cloned(), backend.schema())?;
+            let now = deployment::sections(&next, &docs, backend.schema());
+            if waiting_on(&now, &self.st, externs) != on {
+                break true;
+            }
+        };
+        if let Some(l) = live {
+            l.done();
+        }
+        Ok((resolved, w))
     }
 
     /// How long a tick waits on the nulls `on` (R-122, R-201), and the
@@ -1917,6 +1937,23 @@ fn waiting_on(
         .cloned()
         .collect();
     deployment::waitable(&on, st, &externs.not_yet())
+}
+
+/// What the nulls `on` a tick waits on are of, joined: `world` (an
+/// object's attribute), `extern` (a call's "not yet"), or both.
+fn wait_kinds(on: &[String]) -> String {
+    let kinds: BTreeSet<&str> = on
+        .iter()
+        .map(|l| {
+            let (typ, rest) = l.split_once('/').unwrap_or((l, ""));
+            let path = rest.rsplit_once('#').map_or("", |(_, p)| p);
+            match crate::externs::is_call_label(typ, path) {
+                true => "extern",
+                false => "world",
+            }
+        })
+        .collect();
+    kinds.into_iter().collect::<Vec<_>>().join(",")
 }
 
 /// Every provider call sent again since the last time (R-81) to the audit

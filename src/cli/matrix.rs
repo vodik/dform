@@ -454,10 +454,7 @@ impl Tree<'_> {
         }
         dep.held = Held::new();
         dep.planned = g.outputs.clone();
-        let result = {
-            let _d = crate::timing::traced(|| format!("deployment {}", d.full));
-            super::run(dep.clone(), None)
-        };
+        let result = run_deployment(dep.clone(), &d.full);
         let mut held = dep.held.take();
         // Its plan file's part (`--out`): after what it reads.
         if let Some(plan) = held.file.take() {
@@ -773,4 +770,17 @@ pub(super) fn listed(
         }
     }
     (out, label)
+}
+
+/// The run `dep` of the tree's deployment `full`: a step of the tree's
+/// run.
+#[tracing::instrument(
+    target = "dform",
+    level = "trace",
+    name = "plan.phase",
+    skip_all,
+    fields(otel.name = %format_args!("deployment {full}"))
+)]
+fn run_deployment(dep: Cli, full: &str) -> Result<Outcome> {
+    super::run(dep, None)
 }

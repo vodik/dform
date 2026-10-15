@@ -70,10 +70,53 @@ impl deployment::Observer for Watch<'_> {
 }
 
 impl Cli {
+    /// The deployment of `loaded` the run selects (rekey's old one,
+    /// `rekey`), and where its objects are.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "plan.phase",
+        skip_all,
+        fields(otel.name = "located the deployment")
+    )]
+    fn locate(
+        &self,
+        loaded: deployment::Loaded,
+        rekey: Option<&Rekeying>,
+        hook: Option<&mut controller::Hook>,
+    ) -> Result<deployment::Located> {
+        let set = self
+            .set
+            .iter()
+            .map(|kv| split_kv(kv).map(|(k, v)| (k.to_string(), v)))
+            .collect::<Result<Vec<_>>>()?;
+        let writes = hook.is_some() || self.cmd.writes_objects();
+        loaded.locate(
+            &deployment::Selection {
+                root: self.root.clone(),
+                set,
+                instance: rekey.map(|r| r.from.clone()),
+                world: self.world.clone(),
+                inventory: self.inventory.clone(),
+                objects_only: self.cmd.objects_only(),
+                migrate: hook.is_some() || matches!(self.cmd, Cmd::Apply(_)),
+            },
+            &open_s3(&self.root, writes),
+            &mut Watch::new(hook, &self.cmd),
+        )
+    }
+
     /// The run's program, as `deployment::load` reads it: the input files'
     /// facts added; `stack` statements and providers' `use`s over the
     /// manifest's defaults, `--provider` over the latter. A key's value is
     /// the target's, else its input's default.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "plan.phase",
+        skip_all,
+        fields(otel.name = "loaded and compiled")
+    )]
     pub(super) fn load(
         &mut self,
         hook: Option<&mut controller::Hook>,
@@ -86,16 +129,11 @@ impl Cli {
             input_files: self.input_files.clone(),
             providers: self.providers.clone(),
         };
-        let loaded = crate::timing::time(
-            || "loaded and compiled".into(),
-            || {
-                deployment::load(
-                    &target,
-                    env!("CARGO_PKG_VERSION"),
-                    &|p: &Path| std::fs::read_to_string(p),
-                    &mut Watch::new(hook, &self.cmd),
-                )
-            },
+        let loaded = deployment::load(
+            &target,
+            env!("CARGO_PKG_VERSION"),
+            &|p: &Path| std::fs::read_to_string(p),
+            &mut Watch::new(hook, &self.cmd),
         )?;
         self.manifest = loaded.manifest.clone();
         self.check_keys(&loaded.cfg, &loaded.stack)?;
@@ -122,28 +160,7 @@ impl Objects {
         rekey: Option<&Rekeying>,
         mut hook: Option<&mut controller::Hook>,
     ) -> Result<Objects> {
-        let root = cli.root.clone();
-        let set = cli
-            .set
-            .iter()
-            .map(|kv| split_kv(kv).map(|(k, v)| (k.to_string(), v)))
-            .collect::<Result<Vec<_>>>()?;
-        let writes = hook.is_some() || cli.cmd.writes_objects();
-        let locating = crate::timing::span(|| "located the deployment".into());
-        let located = loaded.locate(
-            &deployment::Selection {
-                root: root.clone(),
-                set,
-                instance: rekey.map(|r| r.from.clone()),
-                world: cli.world.clone(),
-                inventory: cli.inventory.clone(),
-                objects_only: cli.cmd.objects_only(),
-                migrate: hook.is_some() || matches!(cli.cmd, Cmd::Apply(_)),
-            },
-            &open_s3(&root, writes),
-            &mut Watch::new(hook.as_deref_mut(), &cli.cmd),
-        )?;
-        drop(locating);
+        let located = cli.locate(loaded, rekey, hook.as_deref_mut())?;
         let text_plan = matches!(&cli.cmd, Cmd::Plan(p) if !p.json);
         // A tree's header line names the deployment (R-200).
         if !located.instance.key.is_empty()

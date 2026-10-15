@@ -222,14 +222,8 @@ impl<'a> Reporter<'a> {
         ) else {
             return;
         };
-        let then = crate::timing::time(
-            || "evaluated the last apply's program, for why".into(),
-            || {
-                crate::diff::last_apply(
-                    entries, &cli.files, &rerun, &cli.set, &cli.data, &addresses,
-                )
-            },
-        );
+        let then =
+            crate::diff::last_apply(entries, &cli.files, &rerun, &cli.set, &cli.data, &addresses);
         let Some(then) = then else {
             return;
         };

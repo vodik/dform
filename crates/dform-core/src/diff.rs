@@ -453,6 +453,13 @@ fn explain_in(r: &Rerun, dir: &Path, apply: &Apply, addresses: &[Address]) -> Re
 /// ended well, when that apply ran the program now with the inputs now
 /// (`set`, `data`: there is nothing to compare), or when its program
 /// cannot be read or evaluated.
+#[tracing::instrument(
+    target = "dform",
+    level = "debug",
+    name = "plan.phase",
+    skip_all,
+    fields(otel.name = "evaluated the last apply's program, for why")
+)]
 pub fn last_apply(
     entries: &[Json],
     files: &[PathBuf],
