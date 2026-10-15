@@ -8,15 +8,14 @@
 //! The migration builds it one statement kind at a time (WORK.org R-211,
 //! "War game"). The resolver pushes an item per statement as it walks,
 //! in order, each of its kind, a module's or a component's statements a
-//! [`ItemKind::Module`] item's; `lower` gives the resolver's output back,
-//! and [`check`] compares the two.
+//! [`ItemKind::Module`] item's; `lower` gives the resolver's output back.
 
 use crate::ast::{self, Span, Stmt};
 use crate::diag::Diagnostic;
 use slotmap::SlotMap;
 
 pub mod build;
-pub mod check;
+pub mod dump;
 pub mod lower;
 pub mod node;
 pub mod origin;

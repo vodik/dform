@@ -8,10 +8,12 @@
 //! are the goal's, [`Program::terms_made`], lowered before its own.
 
 use super::{Builder, Reads};
-use crate::ast::{Lit, Span, Stmt};
+use crate::ast::{self, Lit, Span, Stmt};
+use crate::program::dump::{Spans, dump};
 use crate::program::node::{ClauseId, GoalId, VarId};
-use crate::program::{NodeId, Program, check};
+use crate::program::{NodeId, Program, lower_goal};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::ops::Range;
 
 /// The builders' state while the resolver lowers a statement: a frame
@@ -230,10 +232,10 @@ impl Gather {
         let context = &out[..start];
         let both = (&own[..], &helpers[made..]);
         let goal = frame.built.and_then(|g| {
-            if check::lowers_as(program, g, &out[start..], both, context) {
+            if lowers_as(program, g, &out[start..], both, context) {
                 return Some(g);
             }
-            let (lits, _) = crate::program::lower_goal(program, g, context);
+            let (lits, _) = lower_goal(program, g, context);
             let n = out[start..].len().checked_sub(lits.len())?;
             let mut b = self.builder(program, span, written);
             let left: Option<Vec<GoalId>> = out[start..start + n]
@@ -249,11 +251,11 @@ impl Gather {
                 b.goal_node(span, kind)
             });
             self.done(b);
-            group.filter(|&g| check::lowers_as(program, g, &out[start..], both, context))
+            group.filter(|&g| lowers_as(program, g, &out[start..], both, context))
         });
         if let Some(g) = goal {
             // What its terms made that no node of it makes.
-            let (_, makes) = crate::program::lower_goal(program, g, context);
+            let (_, makes) = lower_goal(program, g, context);
             let makes: Vec<String> = makes.iter().map(|s| format!("{s:?}")).collect();
             let made_by_terms: Vec<Stmt> = frame
                 .attached(helpers)
@@ -311,4 +313,39 @@ impl Frame {
             .map(|&i| helpers[i].clone())
             .collect()
     }
+}
+
+/// Whether goal `goal` lowers after `context` to `lowered`, making the
+/// helper statements `own` and of `made` no other: what the resolver
+/// wrote of the literal it built it of (its terms' helpers some node of
+/// it makes, some the literal's goal holds).
+fn lowers_as(
+    program: &Program,
+    goal: GoalId,
+    lowered: &[Lit],
+    (own, made): (&[Stmt], &[Stmt]),
+    context: &[Lit],
+) -> bool {
+    let (lits, got) = lower_goal(program, goal, context);
+    let texts = |ss: &[Stmt]| -> Vec<String> { ss.iter().map(|s| format!("{s:?}")).collect() };
+    let (got, own, made) = (texts(&got), texts(own), texts(made));
+    text(&lits, &[]) == text(lowered, &[])
+        && own.iter().all(|s| got.contains(s))
+        && got.iter().all(|s| made.contains(s))
+}
+
+/// Literals and the statements made beside them, as one text: each
+/// literal with the spans in it, then the statements as a lowering's.
+fn text(lits: &[Lit], helpers: &[Stmt]) -> String {
+    let mut out = String::new();
+    for l in lits {
+        let mut spans = Spans::default();
+        spans.lits(std::slice::from_ref(l));
+        let _ = writeln!(out, "lit {l:?}\n  spans {}", spans.text());
+    }
+    out.push_str(&dump(&Ok(ast::Program {
+        statements: helpers.to_vec(),
+        stack: None,
+    })));
+    out
 }

@@ -6,12 +6,11 @@
 //!
 //! The resolver builds each term it reads off the tree as its node
 //! (step 7), each literal's goal of those nodes and each statement's item
-//! of them (step 7c), lowering them for the rules it still writes
-//! (`program::check` holds the two equal under `DFORM_CHECK_LOWER=1`).
-//! A term is built here from what the resolver lowered it to, its
-//! `ast::Term` and the reads it hoisted ([`Builder::hoisted`]), only for
-//! what the resolver writes as a term: a comprehension outside a
-//! statement, and what that comparison builds.
+//! of them (step 7c), lowering them for the literals its own analyses
+//! still read. A term is built here from what the resolver lowered it to,
+//! its `ast::Term` and the reads it hoisted ([`Builder::hoisted`]), only
+//! for what the resolver writes as a term: a comprehension outside a
+//! statement.
 
 mod aggregate;
 mod checks;

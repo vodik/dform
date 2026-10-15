@@ -58,7 +58,7 @@ pub fn lower(program: &Program) -> LoweredStack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::program::check;
+    use crate::program::dump::dump;
 
     /// A program the build found wrong lowers to its diagnostics.
     #[test]
@@ -68,6 +68,6 @@ mod tests {
             diags: err.clone(),
             ..Program::new()
         };
-        assert_eq!(check::dump(&lower(&program).rules), check::dump(&Err(err)));
+        assert_eq!(dump(&lower(&program).rules), dump(&Err(err)));
     }
 }
