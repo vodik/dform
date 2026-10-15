@@ -48,10 +48,10 @@ fn templates(at: &str) -> [String; 3] {
     [
         format!(
             "  {at}.template.spec.restartPolicy = \"OnFailure\"\n  \
-             {at}.template.spec.containers = [{{ name: \"b\", image: \"busybox\" }}]\n"
+             {at}.template.spec.containers = [{{ name = \"b\", image = \"busybox\" }}]\n"
         ),
         format!("  {at}.template.spec = {POD}\n"),
-        format!("  {at}.template = {{ spec: {POD} }}\n"),
+        format!("  {at}.template = {{ spec = {POD} }}\n"),
     ]
 }
 

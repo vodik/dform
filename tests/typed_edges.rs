@@ -160,7 +160,7 @@ fn a_let_through_a_let_is_typed_by_its_use() {
 fn a_let_with_parameters_is_typed_by_its_call() {
     plans(
         &format!(
-            "let restic(tag) = {{\n  name: \"a\",\n  image: \"restic\",\n  \
+            "let restic(tag) = {{\n  name = \"a\",\n  image = \"restic\",\n  \
              env = [{{ name = \"TAG\", value = tag }}],\n  \
              resources = {{ requests = {{ cpu = 100m, memory = 128Mi }} }},\n}}\n{}",
             job("restic(\"x\")")

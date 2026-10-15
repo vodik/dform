@@ -21,7 +21,8 @@ use crate::syntax::SyntaxNode;
 
 /// Format a file's source; a file with syntax errors is not formatted, but
 /// for a header statement after the body began, which is moved (R-27),
-/// and an `edition` line, which is dropped (R-68).
+/// an object's `key: value`, written `key = value`, and an `edition`
+/// line, which is dropped (R-68).
 pub fn format_source(name: &str, src: &str) -> anyhow::Result<String> {
     format_source_in(name, src, None)
 }
@@ -47,7 +48,7 @@ pub fn format_source_in(name: &str, src: &str, typing: Option<&Typing>) -> anyho
     if parse
         .errors
         .iter()
-        .any(|e| !e.misplaced && !in_edition(e.start))
+        .any(|e| !e.fmt_fixes && !in_edition(e.start))
     {
         return Err(crate::parser::syntax_diagnostics(name, src, &parse).into());
     }
@@ -166,7 +167,7 @@ pub fn format(root: &SyntaxNode) -> String {
 pub fn format_in(root: &SyntaxNode, typing: Option<&Typing>) -> String {
     let placed = header::reorder_all(root, &root.to_string())
         .map(|src| crate::syntax::parser::parse(&src))
-        .filter(|p| p.errors.is_empty());
+        .filter(|p| p.errors.iter().all(|e| e.fmt_fixes));
     let root = placed.as_ref().map_or(root.clone(), |p| p.syntax());
     let mut out = print(&root);
     // A normal form can make another one apply (a body joined onto its

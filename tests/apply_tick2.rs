@@ -209,7 +209,7 @@ fn a_kind_served_after_the_boundary_is_planned_with_its_schema() {
             "{}resource k8s.example.io.v1.token t {{\n  metadata.name = \"t\"\n  \
              metadata.namespace = ns.metadata.name\n  spec.value = \"TOKEN-VALUE\"\n}}\n\
              resource k8s.config_map c {{\n  metadata.name = \"c\"\n  \
-             metadata.namespace = ns.metadata.name\n  data = {{ uid: t.metadata.uid }}\n}}\n",
+             metadata.namespace = ns.metadata.name\n  data = {{ uid = t.metadata.uid }}\n}}\n",
             PROG.replace(
                 "use k8s { kubeconfig = kc }",
                 "use k8s { kubeconfig = kc, schemas = [\"crd.df\"] }"

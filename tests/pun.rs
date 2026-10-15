@@ -67,7 +67,7 @@ fn the_written_forms_derive_the_same() {
         "{explicit:?}"
     );
     assert_eq!(one("spec.selector = { color }"), explicit);
-    assert_eq!(one("spec.selector = { color: color }"), explicit);
+    assert_eq!(one("spec.selector = { color = color }"), explicit);
     let bare = one("color");
     assert!(
         bare.iter()
@@ -91,7 +91,7 @@ fn a_single_name_puns_in_every_position() {
     };
     assert_eq!(
         resource("zone\n  tags @default\n  meta = { zone }"),
-        resource("zone = zone\n  tags = tags @default\n  meta = { zone: zone }")
+        resource("zone = zone\n  tags = tags @default\n  meta = { zone = zone }")
     );
     let copy = |entries: &str| {
         derived(&format!(

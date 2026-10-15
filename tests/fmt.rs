@@ -213,6 +213,29 @@ fn fmt_refuses_a_file_that_does_not_parse() {
     assert_eq!(s.read("bad.df"), bad);
 }
 
+/// An object written `key: value` (the spelling before `=`) is the parse
+/// error `fmt` mends: it writes every field `key = value`, nested and in
+/// a string's holes too, in one pass, with a misplaced header moved in the
+/// same run; a type's fields and a named argument keep their `:`.
+#[test]
+fn fmt_writes_an_objects_colon_as_equals() {
+    let src = "p(x) where q(a: x)\nlet o: { a: int } = { a: 1 }\n\
+               resource t n { tags = {team: \"x\", nested: { b : 2 }, env}, data = \"${f({ k:1 })}\" }\n\
+               input k: string\n";
+    let want = "input k: string\n\np(x) where q(a: x)\nlet o: { a: int } = { a = 1 }\n\
+                resource t n { tags = { team = \"x\", nested = { b = 2 }, env }, \
+                data = \"${f({ k = 1 })}\" }\n";
+    let got = dform::fmt::format_source("p.df", src).unwrap();
+    assert_eq!(got, want);
+    assert_eq!(dform::fmt::format_source("p.df", &got).unwrap(), got);
+    let s = Scratch::new("fmt-colon");
+    s.write("old.df", "let o = { a: 1 }\nuse fake\n");
+    let r = s.run(&["fmt", "--check", "old.df"]).failure();
+    assert_eq!(r.stdout, "old.df\n");
+    s.run(&["fmt", "old.df"]).success();
+    assert_eq!(s.read("old.df"), "let o = { a = 1 }\nuse fake\n");
+}
+
 /// A file's header is `key` and `input` lines (value
 /// inputs, then relation inputs), then `decl` and `output` (R-11a), then
 /// the body; `use` is a body statement (R-65): `fmt` moves a header

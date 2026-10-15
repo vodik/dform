@@ -567,7 +567,7 @@ fn a_world_read_answers_from_a_live_object() {
             "\nuse k8s {{ source = \"./providers/k8s\" }}\n\
              color = world.k8s.config_map[\"{0}/release\"].data.COLOR\n\
              resource k8s.config_map serving {{\n  metadata.name = \"serving\"\n  \
-             metadata.namespace = \"{0}\"\n  data = {{ \"COLOR\": color }}\n}}\n",
+             metadata.namespace = \"{0}\"\n  data = {{ \"COLOR\" = color }}\n}}\n",
             ns.name
         ),
     );

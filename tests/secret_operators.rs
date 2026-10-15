@@ -14,7 +14,7 @@ fn run(body: &str) -> common::Run {
         &format!(
             "\ninput pw: secret(string) check pw.len >= 3\n\
              input conn: {{ host: string, password: secret(string) }} = \
-             {{ host: \"h\", password: \"opensesame\" }}\n{body}\nuse fake\n"
+             {{ host = \"h\", password = \"opensesame\" }}\n{body}\nuse fake\n"
         ),
     );
     s.run(&[

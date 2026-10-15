@@ -672,9 +672,11 @@ export default grammar({
 
     object: $ => seq('{', commaSepTrailing(choice($.object_field, $.spread)), '}'),
 
+    // `key = value`; `key: value` parses to the same tree, as the
+    // compiler's does, an error `dform fmt` mends.
     object_field: $ => seq(
       field('key', choice($._word, $.string)),
-      optional(seq('=', field('value', $._term))),
+      optional(seq(choice('=', ':'), field('value', $._term))),
     ),
 
     // --- types ---------------------------------------------------------------

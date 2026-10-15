@@ -76,7 +76,7 @@ use fake
     s.write(
         "p.df",
         &format!(
-            "{first}resource iam.role reader {{ name = \"reader\", assume = {{ principals: [\"y\"] }}, policies = [app_policy] }}\n"
+            "{first}resource iam.role reader {{ name = \"reader\", assume = {{ principals = [\"y\"] }}, policies = [app_policy] }}\n"
         ),
     );
     mock(&s, &["apply"]).success();

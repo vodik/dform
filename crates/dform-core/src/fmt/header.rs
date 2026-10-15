@@ -194,7 +194,7 @@ pub fn reorder_all(root: &SyntaxNode, src: &str) -> Option<String> {
     let (root, src, changed) = match reorder(root, src) {
         Some(next) => {
             let p = crate::syntax::parser::parse(&next);
-            if p.errors.is_empty() {
+            if p.errors.iter().all(|e| e.fmt_fixes) {
                 (p.syntax(), next, true)
             } else {
                 (root.clone(), src.to_string(), false)

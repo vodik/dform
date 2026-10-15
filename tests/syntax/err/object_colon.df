@@ -1,0 +1,13 @@
+# An object's field is `key = value`, as a block's entry is: `key: value`
+# is an error at its first `:`, the help the object written with `=`, one
+# per outermost object, nested ones included; `dform fmt` mends them.
+# An object input's fields keep `:`.
+input db { size: int = 1 }
+let a = { team: "shop", Name: name }
+let b = { team = "shop", tags: { app: "web" } }
+deny "public" { resource: r } where r in resource, has r.public
+p(x) where q(x), { cpu: x } = { cpu: 1 }
+let c = { image: "a-registry.example.com/team/an-image-name-long-enough:1.0", tag: "v1" }
+# A type's fields and a named argument keep `:`.
+let d: { a: int } = { a = 1 }
+q(x) where r(a: x)

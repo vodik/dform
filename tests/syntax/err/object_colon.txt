@@ -1,0 +1,30 @@
+error  an object's field is written `key = value`, not `key: value`
+  tests/syntax/err/object_colon.df:6  let a = { team: "shop", Name: name }
+                                                    ^
+  help: `{ team = "shop", Name = name }`
+
+error  an object's field is written `key = value`, not `key: value`
+  tests/syntax/err/object_colon.df:7  let b = { team = "shop", tags: { app: "web" } }
+                                                                   ^
+  help: `{ team = "shop", tags = { app = "web" } }`
+
+error  an object's field is written `key = value`, not `key: value`
+  tests/syntax/err/object_colon.df:8  deny "public" { resource: r } where r in resource, has r.public
+                                                              ^
+  help: `{ resource = r }`
+
+error  an object's field is written `key = value`, not `key: value`
+  tests/syntax/err/object_colon.df:9  p(x) where q(x), { cpu: x } = { cpu: 1 }
+                                                            ^
+  help: `{ cpu = x }`
+
+error  an object's field is written `key = value`, not `key: value`
+  tests/syntax/err/object_colon.df:9  p(x) where q(x), { cpu: x } = { cpu: 1 }
+                                                                         ^
+  help: `{ cpu = 1 }`
+
+error  an object's field is written `key = value`, not `key: value`
+  tests/syntax/err/object_colon.df:10  let c = { image: "a-registry.example.com/team/an-image-name-long-enough:1.0", tag: "v1" }
+                                                      ^
+  help: `image = "a-registry.example.com/team/an-image-name-long-enough:1.0"`, and so each field; `dform fmt` writes them all
+6 errors

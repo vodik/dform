@@ -21,8 +21,8 @@ use k8s
 resource k8s.namespace traefik {{ metadata.name = "traefik" }}
 
 resource k8s.config_map settings {{
-  metadata = {{ name: "traefik", namespace: traefik.metadata.name }}
-  data = {{ MODE: "lab" }}
+  metadata = {{ name = "traefik", namespace = traefik.metadata.name }}
+  data = {{ MODE = "lab" }}
 }}
 "#
         ),

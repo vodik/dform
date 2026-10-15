@@ -188,9 +188,10 @@ fn syntax_errors_agree() {
     for f in errs() {
         let file = f.file_name().unwrap().to_str().unwrap();
         let src = std::fs::read_to_string(&f).unwrap();
-        // A header statement out of place (R-27) parses: tree-sitter reads
-        // the file as the compiler's tree has it, and `fmt` moves it.
-        let compiler = parse(&src).errors.iter().any(|e| !e.misplaced);
+        // A header statement out of place (R-27) and an object's `key:
+        // value` parse: tree-sitter reads the file as the compiler's tree
+        // has it, and `fmt` mends it.
+        let compiler = parse(&src).errors.iter().any(|e| !e.fmt_fixes);
         let in_string = STRING_ERRORS.contains(&file);
         assert!(
             !(compiler && in_string),

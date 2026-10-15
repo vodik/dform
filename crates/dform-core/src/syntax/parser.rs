@@ -24,9 +24,10 @@ pub struct ParseError {
     pub hint: Option<String>,
     /// What the caret under its end says (`expected `}` by here`).
     pub label: Option<String>,
-    /// A header statement written after the body began (R-27): the
-    /// statement parsed, and `fmt` moves it.
-    pub misplaced: bool,
+    /// What `fmt` mends, the tree as if written right: a header
+    /// statement written after the body began (R-27), which it moves; an
+    /// object's `key: value`, which it writes `key = value`.
+    pub fmt_fixes: bool,
 }
 
 pub struct Parse {
@@ -183,6 +184,17 @@ struct Parser<'a> {
     each_ends: bool,
     /// Byte offset of each `{` not yet closed, the innermost last.
     opened: Vec<usize>,
+    /// The fields written `key: value` of the outermost object being
+    /// parsed and those inside it (`object`).
+    colons: Option<Vec<ColonField>>,
+}
+
+/// A field written `key: value`: its key's start, its `:`, its end.
+#[derive(Clone, Copy)]
+struct ColonField {
+    key: usize,
+    colon: usize,
+    end: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -201,6 +213,7 @@ impl<'a> Parser<'a> {
             selector: false,
             each_ends: false,
             opened: Vec::new(),
+            colons: None,
         }
     }
 
@@ -452,7 +465,7 @@ impl<'a> Parser<'a> {
                 message: format!("the block opened on line {line} is never closed"),
                 hint: Some("close it: a `}` after its last line".into()),
                 label: Some("expected `}` by here".into()),
-                misplaced: false,
+                fmt_fixes: false,
             });
             return;
         }
@@ -462,7 +475,7 @@ impl<'a> Parser<'a> {
             message,
             hint,
             label: None,
-            misplaced: false,
+            fmt_fixes: false,
         });
     }
 
@@ -687,7 +700,7 @@ impl<'a> Parser<'a> {
                  line {line}"
             )),
             label: None,
-            misplaced: true,
+            fmt_fixes: true,
         }
     }
 
@@ -740,7 +753,7 @@ impl<'a> Parser<'a> {
             ),
             hint: Some("delete the line; `dform fmt` does".to_string()),
             label: None,
-            misplaced: false,
+            fmt_fixes: false,
         });
         Ok(())
     }
@@ -1691,7 +1704,7 @@ impl<'a> Parser<'a> {
                  literal per line, indented, each with a trailing comma"
             )),
             label: None,
-            misplaced: false,
+            fmt_fixes: false,
         });
         Ok(())
     }
@@ -2155,7 +2168,36 @@ impl<'a> Parser<'a> {
     }
 
     /// `{ key = term, name, ..term, ... }`: a name alone is `name = name`.
+    /// `key: term` parses as `key = term` and is an error `fmt` mends, one
+    /// per outermost object, its help the object written with `=`.
     fn object(&mut self) -> P<SyntaxKind> {
+        let outer = self.colons.is_none();
+        if outer {
+            self.colons = Some(Vec::new());
+        }
+        let start = self
+            .nth_index(0)
+            .map_or(self.src.len(), |i| self.toks[i].start);
+        let r = self.object_fields();
+        if outer && let Some(mut fields) = self.colons.take().filter(|f| !f.is_empty()) {
+            // An inner object's fields end before the field holding it.
+            fields.sort_by_key(|f| f.colon);
+            let end = self.last_end();
+            self.errors.push(colon_error(self.src, start, end, &fields));
+        }
+        r
+    }
+
+    /// The end of the last token parsed, trivia aside.
+    fn last_end(&self) -> usize {
+        self.toks[..self.pos.min(self.toks.len())]
+            .iter()
+            .rev()
+            .find(|t| !t.kind.is_trivia())
+            .map_or(0, |t| t.end)
+    }
+
+    fn object_fields(&mut self) -> P<SyntaxKind> {
         self.start(OBJECT);
         self.bump();
         self.with_nl(false, |p| {
@@ -2168,13 +2210,23 @@ impl<'a> Parser<'a> {
                     continue;
                 }
                 p.start(OBJECT_FIELD);
+                let key = p.nth_index(0).map_or(p.src.len(), |i| p.toks[i].start);
                 if p.nth(0).is_word() || p.at(STRING) {
                     p.bump();
                 } else {
                     return p.err_expected("an object key (a name or a string)");
                 }
+                let colon = p.at(COLON).then(|| p.nth_index(0)).flatten();
                 if p.eat(EQ) || p.eat(COLON) {
                     p.term()?;
+                }
+                if let Some(i) = colon {
+                    let field = ColonField {
+                        key,
+                        colon: p.toks[i].start,
+                        end: p.last_end(),
+                    };
+                    p.colons.get_or_insert_with(Vec::new).push(field);
                 }
                 p.finish();
                 if !p.eat(COMMA) {
@@ -2186,6 +2238,41 @@ impl<'a> Parser<'a> {
         self.finish();
         Ok(OBJECT)
     }
+}
+
+/// The error of an object written with `key: value` fields (`fields`,
+/// its own and its inner objects'), at its first `:`: the object written
+/// with `=` is the help, or, too long for a line, its first such field.
+fn colon_error(src: &str, start: usize, end: usize, fields: &[ColonField]) -> ParseError {
+    let first = fields[0];
+    let help = match rewritten(src, start, end, fields) {
+        whole if whole.len() <= 60 => format!("`{whole}`"),
+        _ => format!(
+            "`{}`, and so each field; `dform fmt` writes them all",
+            rewritten(src, first.key, first.end, fields)
+        ),
+    };
+    ParseError {
+        start: first.colon,
+        end: first.colon + 1,
+        message: "an object's field is written `key = value`, not `key: value`".into(),
+        hint: Some(help),
+        label: None,
+        fmt_fixes: true,
+    }
+}
+
+/// `src[start..end]` on one line, each of `fields`' `:` written ` = `.
+fn rewritten(src: &str, start: usize, end: usize, fields: &[ColonField]) -> String {
+    let mut out = String::new();
+    let mut at = start;
+    for f in fields.iter().filter(|f| (start..end).contains(&f.colon)) {
+        out.push_str(&src[at..f.colon]);
+        out.push_str(" = ");
+        at = f.colon + 1;
+    }
+    out.push_str(&src[at..end]);
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]
@@ -2530,7 +2617,7 @@ mod tests {
         let e = parse(src).errors;
         let got: Vec<(&str, bool)> = e
             .iter()
-            .map(|e| (e.message.as_str(), e.misplaced))
+            .map(|e| (e.message.as_str(), e.fmt_fixes))
             .collect();
         assert_eq!(
             got,
@@ -2547,6 +2634,45 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    /// An object's field is `key = value`; `key: value` parses to the
+    /// same tree and is one error per outermost object, at its first `:`,
+    /// which `fmt` mends; a type's fields and a named argument keep `:`.
+    #[test]
+    fn an_objects_colon_is_an_error_fmt_mends() {
+        let src = "let o = { team = \"shop\", Name = name, env }\n";
+        assert!(errors(src).is_empty(), "{:?}", errors(src));
+        let src = "let o = { team: \"shop\", tags: { a: 1 }, env }\n";
+        let p = parse(src);
+        let got: Vec<_> = p
+            .errors
+            .iter()
+            .map(|e| (&src[e.start..e.end], e.hint.as_deref(), e.fmt_fixes))
+            .collect();
+        assert_eq!(
+            got,
+            [(
+                ":",
+                Some("`{ team = \"shop\", tags = { a = 1 }, env }`"),
+                true
+            )]
+        );
+        assert_eq!(
+            kinds(src, &[OBJECT, OBJECT_FIELD]),
+            kinds(&src.replace(':', " ="), &[OBJECT, OBJECT_FIELD])
+        );
+        let long = format!("let o = {{ a: \"{}\", b: 2 }}\n", "x".repeat(60));
+        assert_eq!(
+            hints(&long),
+            [format!(
+                "`a = \"{}\"`, and so each field; `dform fmt` writes them all",
+                "x".repeat(60)
+            )]
+        );
+        let typed =
+            "input db { size: int = 1 }\nlet o: { a: int } = { a = 1 }\np(x) where q(a: x)\n";
+        assert!(errors(typed).is_empty(), "{:?}", errors(typed));
     }
 
     #[test]

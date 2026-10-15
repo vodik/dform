@@ -32,8 +32,8 @@ resource k8s.deployment api {
   metadata = { name = "api", namespace = apps.metadata.name }
   spec.selector.matchLabels = { app = "api" }
   spec.template.spec = {
-    securityContext: { runAsNonRoot = true },
-    containers: [{ name = "api", image = "api" }],
+    securityContext = { runAsNonRoot = true },
+    containers = [{ name = "api", image = "api" }],
   }
 }
 RULES
