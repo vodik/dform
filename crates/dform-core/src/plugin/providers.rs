@@ -4368,7 +4368,7 @@ impl Tick<'_> {
             Some(k) => {
                 let f = &self.in_flight[k];
                 let r = cloud.links[f.link].borrow_mut().take_answer(f.ticket);
-                (k, r.expect("held"))
+                (k, r.expect("the link has the answer it holds"))
             }
             None => {
                 let l = self.in_flight[0].link;

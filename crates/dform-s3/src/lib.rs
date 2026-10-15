@@ -98,37 +98,43 @@ fn kept(key: &str) -> bool {
 }
 
 impl Reads {
+    fn objects(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Option<Object>>> {
+        self.objects
+            .lock()
+            .expect("the reads are never poisoned: nothing panics holding them")
+    }
+
+    fn lists(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Vec<String>>> {
+        self.lists
+            .lock()
+            .expect("the listings are never poisoned: nothing panics holding them")
+    }
+
     fn get(&self, at: &str) -> Option<Option<Object>> {
-        self.objects.lock().unwrap().get(at).cloned()
+        self.objects().get(at).cloned()
     }
 
     fn got(&self, at: &str, o: &Option<Object>) {
-        self.objects
-            .lock()
-            .unwrap()
-            .insert(at.to_string(), o.clone());
+        self.objects().insert(at.to_string(), o.clone());
     }
 
     fn listed(&self, at: &str) -> Option<Vec<String>> {
-        self.lists.lock().unwrap().get(at).cloned()
+        self.lists().get(at).cloned()
     }
 
     fn list(&self, at: &str, keys: &[String]) {
-        self.lists
-            .lock()
-            .unwrap()
-            .insert(at.to_string(), keys.to_vec());
+        self.lists().insert(at.to_string(), keys.to_vec());
     }
 
     /// The object at `at` is now `o` (written), or not known (deleted, a
     /// write refused); a listing it is in is not known either.
     fn wrote(&self, at: &str, o: Option<Object>) {
-        let mut objects = self.objects.lock().unwrap();
+        let mut objects = self.objects();
         match o {
             Some(o) => objects.insert(at.to_string(), Some(o)),
             None => objects.remove(at),
         };
-        self.lists.lock().unwrap().retain(|p, _| !at.starts_with(p));
+        self.lists().retain(|p, _| !at.starts_with(p));
     }
 }
 

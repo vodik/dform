@@ -283,7 +283,7 @@ impl Provider for Timed {
                     return (t, r);
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    let live = self.live.remove(&first).expect("live");
+                    let live = self.live.remove(&first).expect("the first due is live");
                     self.behind.remove(&first);
                     self.abandoned.insert(first);
                     let r = Err(CallError::MaybeApplied(format!(
@@ -296,7 +296,7 @@ impl Provider for Timed {
                     return (first, r);
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    let live = self.live.remove(&first).expect("live");
+                    let live = self.live.remove(&first).expect("the first due is live");
                     let r = Err(CallError::Crashed(format!(
                         "the provider {} is gone: its {} call has no answer",
                         self.what, live.what
