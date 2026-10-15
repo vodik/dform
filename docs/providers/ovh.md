@@ -153,7 +153,7 @@ schema's `type_lookup`, see "What a Create that does not answer does").
 | `networks`   | set(ref(ovh.network)) | `networks = [lab]`; changes in place |
 | `id`         | computed          |                                     |
 | `public_ip`  | ip, computed      | once the instance has one           |
-| `private_ip` | ip, computed, nullable | its first private address      |
+| `private_ip` | ip, computed, nullable | its address on the first of its private networks, by id, as `private_ips` has it |
 | `private_ips`| map(ip), computed | its address on each private network, by the network's id: its own port's, else the first port's |
 | `ports`      | map, computed     | its own port on each private network, by the network's id: `id` and `ipv4` |
 | `status`     | string, computed  | `ACTIVE` once it runs               |
@@ -388,9 +388,9 @@ the provider to it.
 - An instance's `ipAddresses` lags an attach: the new port's address is
   missing from `GET /cloud/project/{p}/instance/{id}` for a while, while
   `GET …/interface` lists the port at once. Seen 2026-10-12..14. The
-  provider reads an instance's `networks` and `private_ips` from its
-  ports, never from `ipAddresses`; its `public_ip` and `private_ip` still
-  come from `ipAddresses`.
+  provider reads an instance's `networks`, `private_ips`, `private_ip`
+  and `public_ip` from its ports, and from `ipAddresses` only where
+  the ports carry no address.
 - An attach on a network the instance has a port on already makes
   another port: the lab's instance has three on one network, from the
   attach loop the first two fixes ended. Seen by 2026-10-15. The provider lists the ports before it attaches and

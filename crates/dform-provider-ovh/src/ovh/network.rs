@@ -495,10 +495,8 @@ impl Ovh {
         owned: &map::Owned,
     ) -> std::result::Result<PortSteps, Failed> {
         let want = networks_of(at, config)?;
-        let ports = self
-            .private_networks(a, p, remote)
-            .map_err(|e| failed(at, e))?;
-        let steps = PortSteps::new(&want, &ports, owned);
+        let nics = self.interfaces(a, p, remote).map_err(|e| failed(at, e))?;
+        let steps = PortSteps::new(&want, &nics.private, owned);
         match steps.refusal(at, &interface_path(p, remote)) {
             Some(e) => Err(e),
             None => Ok(steps),
@@ -566,21 +564,19 @@ impl Ovh {
         Ok(own)
     }
 
-    /// Instance `id`'s ports on its private networks, by network, each
-    /// with its address (`map::interfaces`). A failed call fails the read:
-    /// a network left out would be attached again.
-    pub(super) fn private_networks(
+    /// Instance `id`'s ports: the public one's address, and those on its
+    /// private networks, by network, each with its address
+    /// (`map::interfaces`). A failed call fails the read: a network left
+    /// out would be attached again.
+    pub(super) fn interfaces(
         &self,
         a: &Account,
         p: &str,
         id: &str,
-    ) -> api::Result<map::Ports> {
-        let ifaces = a.client.get(&format!(
-            "/cloud/project/{p}/instance/{}/interface",
-            escape(id)
-        ))?;
+    ) -> api::Result<map::Interfaces> {
+        let ifaces = a.client.get(&interface_path(p, id))?;
         if ifaces.as_array().is_none_or(Vec::is_empty) {
-            return Ok(BTreeMap::new());
+            return Ok(map::Interfaces::default());
         }
         Ok(map::interfaces(&ifaces, &self.openstack_ids(a, p)?))
     }

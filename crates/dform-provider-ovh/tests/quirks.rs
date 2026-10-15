@@ -229,8 +229,8 @@ fn the_provider_sends_no_body_where_the_api_takes_none() {
 
 /// A port attached is in GET /interface at once, with its address; the
 /// instance's `ipAddresses` has the address only some reads later. The
-/// provider's networks and `private_ips` come from the ports, so they are
-/// right at once.
+/// provider's networks, `private_ips` and `private_ip` come from the
+/// ports, so they are right at once.
 #[test]
 fn ip_addresses_lag_an_attach_and_the_ports_do_not() {
     let (server, c) = world();
@@ -259,6 +259,7 @@ fn ip_addresses_lag_an_attach_and_the_ports_do_not() {
         .unwrap();
     assert_eq!(attrs["networks"], json!([id]));
     assert_eq!(computed["private_ips"], json!({id.clone(): ip}));
+    assert_eq!(computed["private_ip"], ip);
     // The read was the first of the three that lack it.
     assert_eq!(private(&instance()), 0);
     assert_eq!(private(&instance()), 0);

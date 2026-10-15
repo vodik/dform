@@ -14,17 +14,20 @@ fn str_of<'a>(o: &'a Json, k: &str) -> Option<&'a str> {
 /// given (the API answers ids; it embeds the objects when it can).
 /// `user_data` is not in the answer: the API keeps it write-only, so it is
 /// left out here (`Ovh::plan` compares it with what the provider sent).
-/// `private` is its ports on the private networks it has an interface on
-/// (`interfaces`), `owned` which of them are its own: its `networks` are
-/// those networks, sorted; `private_ips` the address on each, its own
-/// port's or else the first port's that has one; and `ports` its own port
-/// on each, by id with its address (`ports[NET].id`, `.ipv4`), on none
-/// where it owns none.
+/// `nics` is its ports (`interfaces`), `owned` which of them are its own:
+/// its `networks` are the private networks it has a port on, sorted;
+/// `private_ips` the address on each, its own port's or else the first
+/// port's that has one; `ports` its own port on each, by id with its
+/// address (`ports[NET].id`, `.ipv4`), on none where it owns none. Its
+/// `public_ip` is the public port's, and `private_ip` its address on the
+/// first of its networks, as `private_ips` has it: from the ports, which
+/// the API lists at once, not from `ipAddresses`, which lags an attach;
+/// `ipAddresses` only where the ports carry none.
 pub fn instance(
     o: &Json,
     flavor: Option<&str>,
     image: Option<&str>,
-    private: &Ports,
+    nics: &Interfaces,
     owned: &Owned,
 ) -> (Json, Json) {
     let mut attrs = Map::new();
@@ -61,18 +64,20 @@ pub fn instance(
     };
     // No address yet (BUILD): an open value, which a tick that reads it
     // waits on (R-81).
-    if let Some(ip) = addr("public") {
+    if let Some(ip) = nics.public_ip.as_deref().or_else(|| addr("public")) {
         computed.insert("public_ip".into(), json!(ip));
     }
-    computed.insert(
-        "private_ip".into(),
-        addr("private").map_or(Json::Null, |ip| json!(ip)),
-    );
-    if !private.is_empty() {
-        let networks: Vec<&String> = private.keys().collect();
+    if !nics.private.is_empty() {
+        let networks: Vec<&String> = nics.private.keys().collect();
         attrs.insert("networks".into(), json!(networks));
     }
-    let (private_ips, ports) = by_network(private, owned);
+    let (private_ips, ports) = by_network(&nics.private, owned);
+    let first = private_ips.as_object().and_then(|m| m.values().next());
+    let private_ip = match first {
+        Some(ip) => ip.clone(),
+        None => addr("private").map_or(Json::Null, |ip| json!(ip)),
+    };
+    computed.insert("private_ip".into(), private_ip);
     computed.insert("private_ips".into(), private_ips);
     computed.insert("ports".into(), ports);
     (Json::Object(attrs), Json::Object(computed))
@@ -123,6 +128,15 @@ impl From<&Port> for Json {
 /// the API lists them.
 pub type Ports = std::collections::BTreeMap<String, Vec<Port>>;
 
+/// An instance's ports as its interfaces list them (`interfaces`): the
+/// public network's address, and its ports on the private networks.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Interfaces {
+    /// The public port's IPv4 address, once it has one.
+    pub public_ip: Option<String>,
+    pub private: Ports,
+}
+
 /// Which of an instance's ports are its own: the API marks none, and an
 /// attach repeated makes another port on the same network.
 #[derive(Debug, Clone, PartialEq)]
@@ -171,32 +185,41 @@ pub fn own_port(prior: &mut Json, net: &str, port: &str) {
     prior["ports"][net] = json!({"id": port});
 }
 
-/// An instance's ports on its private networks from its interfaces
+/// An instance's ports from its interfaces
 /// (`cloud.instanceInterface.Interface[]`), `nets` naming each private
-/// network by the OpenStack id an interface's `networkId` is: each port,
-/// with its first IPv4 address when it has one, under its network. The
-/// interfaces, not the instance's `ipAddresses`, which the API fills in
-/// late: an interface just attached is there at once.
-pub fn interfaces(ifaces: &Json, nets: &std::collections::BTreeMap<String, String>) -> Ports {
-    let mut out = Ports::new();
+/// network by the OpenStack id an interface's `networkId` is: the public
+/// port's IPv4 address, and each private port, with its first IPv4
+/// address when it has one, under its network. The interfaces, not the
+/// instance's `ipAddresses`, which the API fills in late: an interface
+/// just attached is there at once.
+pub fn interfaces(ifaces: &Json, nets: &std::collections::BTreeMap<String, String>) -> Interfaces {
+    let mut out = Interfaces::default();
     for i in ifaces.as_array().into_iter().flatten() {
+        let ipv4 = first_ipv4(i);
+        if str_of(i, "type") == Some("public") {
+            out.public_ip = out.public_ip.or(ipv4);
+            continue;
+        }
         let Some(net) = str_of(i, "networkId").and_then(|n| nets.get(n)) else {
             continue;
         };
-        let ipv4 = i
-            .get("fixedIps")
-            .and_then(Json::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|f| str_of(f, "ip"))
-            .find(|ip| ip.parse::<std::net::Ipv4Addr>().is_ok())
-            .map(str::to_string);
-        out.entry(net.clone()).or_default().push(Port {
+        out.private.entry(net.clone()).or_default().push(Port {
             id: str_of(i, "id").unwrap_or_default().to_string(),
             ipv4,
         });
     }
     out
+}
+
+/// An interface's first IPv4 address.
+fn first_ipv4(i: &Json) -> Option<String> {
+    i.get("fixedIps")
+        .and_then(Json::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|f| str_of(f, "ip"))
+        .find(|ip| ip.parse::<std::net::Ipv4Addr>().is_ok())
+        .map(str::to_string)
 }
 
 /// An SSH key (`cloud.sshkey.SshKeyDetail`).
@@ -616,21 +639,28 @@ mod tests {
                    "private_ips": {}, "ports": {}})
         );
         // An interface on a network the project has: the network, by its
-        // id, and the address on it.
-        let private = [(
-            "pn-1000123_42".to_string(),
-            vec![Port {
-                id: "i1".into(),
-                ipv4: Some("10.0.0.12".into()),
-            }],
-        )]
-        .into();
-        let (attrs, computed) = instance(&o, None, None, &private, &Owned::from(None));
+        // id, and the address on it, which is its `private_ip` too; the
+        // public port's address its `public_ip`, whatever `ipAddresses`
+        // says.
+        let nics = Interfaces {
+            public_ip: Some("51.79.10.99".into()),
+            private: [(
+                "pn-1000123_42".to_string(),
+                vec![Port {
+                    id: "i1".into(),
+                    ipv4: Some("10.0.0.13".into()),
+                }],
+            )]
+            .into(),
+        };
+        let (attrs, computed) = instance(&o, None, None, &nics, &Owned::from(None));
         assert_eq!(attrs["networks"], json!(["pn-1000123_42"]));
         assert_eq!(
             computed["private_ips"],
-            json!({"pn-1000123_42": "10.0.0.12"})
+            json!({"pn-1000123_42": "10.0.0.13"})
         );
+        assert_eq!(computed["private_ip"], "10.0.0.13");
+        assert_eq!(computed["public_ip"], "51.79.10.99");
     }
 
     #[test]
@@ -655,13 +685,14 @@ mod tests {
             {"id": "i3", "networkId": "os-lab", "type": "private",
              "fixedIps": [{"ip": "10.0.0.9", "subnetId": "s1"}]}
         ]);
-        let private = interfaces(&ifaces, &nets);
+        let nics = interfaces(&ifaces, &nets);
         let port = |id: &str, ipv4: Option<&str>| Port {
             id: id.into(),
             ipv4: ipv4.map(String::from),
         };
+        assert_eq!(nics.public_ip.as_deref(), Some("51.79.10.20"));
         assert_eq!(
-            private,
+            nics.private,
             [
                 (
                     "pn-1_42".to_string(),
@@ -672,21 +703,22 @@ mod tests {
             .into()
         );
         let o = fixture("instance.json");
-        let (attrs, computed) = instance(&o, None, None, &private, &Owned::from(None));
+        let (attrs, computed) = instance(&o, None, None, &nics, &Owned::from(None));
         assert_eq!(attrs["networks"], json!(["pn-1_42", "pn-1_43"]));
         assert_eq!(computed["private_ips"], json!({"pn-1_42": "10.0.0.5"}));
         assert_eq!(computed["ports"], json!({}));
         // Its own port on a network, as its prior names it: that port's
         // address, and the port; one named that is gone is none.
         let prior = json!({"ports": {"pn-1_42": {"id": "i3"}, "pn-1_43": {"id": "gone"}}});
-        let (_, computed) = instance(&o, None, None, &private, &Owned::from(Some(&prior)));
+        let (_, computed) = instance(&o, None, None, &nics, &Owned::from(Some(&prior)));
         assert_eq!(computed["private_ips"], json!({"pn-1_42": "10.0.0.9"}));
+        assert_eq!(computed["private_ip"], "10.0.0.9");
         assert_eq!(
             computed["ports"],
             json!({"pn-1_42": {"id": "i3", "ipv4": "10.0.0.9"}})
         );
         // Made with its networks: the port on each is its own.
-        let (_, computed) = instance(&o, None, None, &private, &Owned::Made);
+        let (_, computed) = instance(&o, None, None, &nics, &Owned::Made);
         assert_eq!(
             computed["ports"],
             json!({"pn-1_42": {"id": "i1", "ipv4": "10.0.0.5"}, "pn-1_43": {"id": "i2"}})

@@ -219,7 +219,11 @@ type_doc(
   "networks",
   "The private networks it is on (`networks = [lab]`), each in its region and with a subnet there; the public network too. Changed in place: an interface attached on a network added, detached from one left.",
 )
-type_doc("ovh.instance", "private_ip", "Its address on a private network, if it is on one.")
+type_doc(
+  "ovh.instance",
+  "private_ip",
+  "Its address on the first of its private networks by id, as `private_ips` has it, if it is on one.",
+)
 type_doc(
   "ovh.instance",
   "private_ips",

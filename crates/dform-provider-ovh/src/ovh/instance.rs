@@ -56,15 +56,15 @@ impl Ovh {
             };
         let flavor = named("flavor", "flavor", "flavorId")?;
         let image = named("image", "image", "imageId")?;
-        let private = match s(o, "id") {
-            Some(id) => self.private_networks(a, p, id)?,
-            None => BTreeMap::new(),
+        let nics = match s(o, "id") {
+            Some(id) => self.interfaces(a, p, id)?,
+            None => map::Interfaces::default(),
         };
         Ok(Some(map::instance(
             o,
             flavor.as_deref(),
             image.as_deref(),
-            &private,
+            &nics,
             owned,
         )))
     }
