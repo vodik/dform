@@ -554,3 +554,37 @@ fn a_field_with_no_default_is_required() {
         r.stderr
     );
 }
+
+/// A `set .. where` at `@default` gives a used module's input as any
+/// `set .. where` does (R-38), so it is no axis of `dform test`; a
+/// declaration's own default gives nothing, to its input or to another
+/// declaration of the same name (R-104). (A default-ranked `set` was read
+/// as a declaration's while two spans compared equal wherever they stood.)
+#[test]
+fn a_default_ranked_set_gives_a_used_modules_input() {
+    let s = Scratch::project("in-default-set");
+    s.write(
+        "m.df",
+        "input on: bool = true\ninput off: bool = false\n\
+         input region: string = \"eu\" where off == false\n\
+         input region: string = \"us\" where off == true\n\
+         output o = on\n",
+    );
+    s.write(
+        "a.df",
+        "use m\nset m.on = false @default where 1 == 1\noutput x = m.o\n",
+    );
+    let program =
+        dform::loader::load_program(&[s.path("a.df")]).unwrap_or_else(|e| panic!("{e:#}"));
+    let lowered = dform_core::transform::lower(&program).unwrap_or_else(|e| panic!("{e:#}"));
+    let given = |name: &str| -> Vec<bool> {
+        let of = lowered
+            .inputs
+            .iter()
+            .filter(|d| d.scope == "m" && d.decl.name == name);
+        of.map(|d| d.given).collect()
+    };
+    assert_eq!(given("on"), [true], "a `set` at @default gives m.on");
+    assert_eq!(given("off"), [false], "its own default gives m.off nothing");
+    assert_eq!(given("region"), [false], "nor m.region's, declared twice");
+}

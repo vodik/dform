@@ -172,3 +172,20 @@ fn a_content_read_of_a_computed_path_is_a_note() {
         r.stderr
     );
 }
+
+/// An undefined relation is said once per literal that reads it: a
+/// resource's clause, lowered into each of its attributes' rules, once;
+/// two literals, twice.
+#[test]
+fn an_undefined_relation_is_said_once_per_literal() {
+    let said = |src: &str| {
+        let program = dform_core::parser::parse_program(src).unwrap_or_else(|e| panic!("{e:#}"));
+        let e = format!("{:#}", dform_core::engine::eval(&program, &[]).unwrap_err());
+        e.matches("undefined predicate qq/1").count()
+    };
+    assert_eq!(
+        said("resource net.vpc a { cidr = c, name = c } where qq(c)\n"),
+        1
+    );
+    assert_eq!(said("p(x) where qq(x)\nr(x) where qq(x)\n"), 2);
+}

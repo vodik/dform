@@ -1070,8 +1070,7 @@ pub fn check(program: &Program, schema: &Schema) -> Result<()> {
         if !schema.is_sensitive(&r.typ, &r.path) || schema.checks_refinements.contains(&r.typ) {
             continue;
         }
-        let site = r.span.map(|s| (s.file, s.start, s.end));
-        if !e0306.insert((r.typ.clone(), r.path.clone(), site)) {
+        if !e0306.insert((r.typ.clone(), r.path.clone(), r.span)) {
             continue;
         }
         let provider = schema

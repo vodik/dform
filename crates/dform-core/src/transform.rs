@@ -1650,10 +1650,7 @@ pub fn computed_reads(statements: &[Stmt], schema: &Schema) -> Vec<(Span, String
                 _ => None,
             })
             .collect();
-        let key: Vec<(u32, u32, u32)> = reads
-            .iter()
-            .map(|a| (a.span.file, a.span.start, a.span.end))
-            .collect();
+        let key: Vec<Span> = reads.iter().map(|a| a.span).collect();
         if !blocks.insert(key) {
             continue;
         }

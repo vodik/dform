@@ -295,8 +295,10 @@ pub enum Stmt {
 }
 
 /// Where a statement came from: a byte range in a source file registered
-/// with `diag::add_source`. Comparison and hashing ignore it, so two facts
-/// written in two places are still one fact.
+/// with `diag::add_source`. Two spans are equal when they are the same
+/// bytes of the same source, whatever they were lowered out of; an atom
+/// or a declaration compares without its span, so two facts written in
+/// two places are still one fact.
 #[derive(Clone, Copy, Default)]
 pub struct Span {
     /// `diag` source id; 0 for code the compiler wrote.
@@ -313,13 +315,6 @@ impl Span {
         self.file == 0
     }
 
-    /// The two spans are the same place: the same bytes of the same
-    /// source. (`==` holds of any two spans, so that facts compare by
-    /// content.)
-    pub fn same_place(&self, other: &Span) -> bool {
-        (self.file, self.start, self.end) == (other.file, other.start, other.end)
-    }
-
     /// This span, lowered out of `origin` unless it already was.
     pub fn within(self, origin: u32) -> Span {
         if self.origin == 0 {
@@ -328,11 +323,16 @@ impl Span {
             self
         }
     }
+
+    /// The bytes it names: its file and range, not its origin.
+    fn place(&self) -> (u32, u32, u32) {
+        (self.file, self.start, self.end)
+    }
 }
 
 impl PartialEq for Span {
-    fn eq(&self, _: &Self) -> bool {
-        true
+    fn eq(&self, other: &Self) -> bool {
+        self.place() == other.place()
     }
 }
 
@@ -345,13 +345,15 @@ impl PartialOrd for Span {
 }
 
 impl Ord for Span {
-    fn cmp(&self, _: &Self) -> Ordering {
-        Ordering::Equal
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.place().cmp(&other.place())
     }
 }
 
 impl Hash for Span {
-    fn hash<H: Hasher>(&self, _: &mut H) {}
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.place().hash(state)
+    }
 }
 
 impl std::fmt::Debug for Span {
@@ -362,11 +364,32 @@ impl std::fmt::Debug for Span {
 
 /// `decl p(..)` of a relation no rule defines: `p/N` is defined by a provider, not
 /// by the program.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone)]
 pub struct Extern {
     pub pred: String,
     pub arity: usize,
     pub span: Span,
+}
+
+/// An extern is its relation: one declared twice is declared once.
+impl PartialEq for Extern {
+    fn eq(&self, other: &Self) -> bool {
+        (&self.pred, self.arity) == (&other.pred, other.arity)
+    }
+}
+
+impl Eq for Extern {}
+
+impl PartialOrd for Extern {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Extern {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (&self.pred, self.arity).cmp(&(&other.pred, other.arity))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -648,12 +671,45 @@ impl Helper {
 /// A predicate applied to terms. `span` is where it was written (or the
 /// statement it was lowered from); two atoms equal but for their spans are
 /// one fact.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone)]
 pub struct Atom {
     pub pred: String,
     pub args: Vec<Term>,
     pub record: Option<BTreeMap<String, Term>>,
     pub span: Span,
+}
+
+impl Atom {
+    /// What an atom is as a fact: everything but where it was written.
+    fn content(&self) -> (&str, &[Term], &Option<BTreeMap<String, Term>>) {
+        (&self.pred, &self.args, &self.record)
+    }
+}
+
+impl PartialEq for Atom {
+    fn eq(&self, other: &Self) -> bool {
+        self.content() == other.content()
+    }
+}
+
+impl Eq for Atom {}
+
+impl PartialOrd for Atom {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Atom {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.content().cmp(&other.content())
+    }
+}
+
+impl Hash for Atom {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.content().hash(state)
+    }
 }
 
 /// As derived before spans: a span is not part of an atom's printed form.
@@ -806,5 +862,31 @@ mod tests {
             Lit::Le(var("x"), var("y")).map_terms(up),
             Lit::Le(Term::Var(x), Term::Var(y)) if x == "X" && y == "Y"
         ));
+    }
+
+    /// Two spans are equal when they name the same bytes of the same
+    /// source, whatever they were lowered out of; an atom and an extern
+    /// compare without theirs.
+    #[test]
+    fn a_span_is_its_place_and_a_fact_is_not() {
+        let at = |file, start, end| Span {
+            file,
+            start,
+            end,
+            origin: 0,
+        };
+        assert_ne!(at(1, 0, 4), at(1, 5, 9));
+        assert_ne!(at(1, 0, 4), at(2, 0, 4));
+        assert_eq!(at(1, 0, 4), at(1, 0, 4).within(7));
+        assert_eq!(
+            atom("p", vec![var("a")], at(1, 0, 4)),
+            atom("p", vec![var("a")], at(2, 5, 9))
+        );
+        let ext = |span| Extern {
+            pred: "p".into(),
+            arity: 1,
+            span,
+        };
+        assert_eq!(ext(at(1, 0, 4)), ext(at(2, 5, 9)));
     }
 }

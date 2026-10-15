@@ -2529,7 +2529,7 @@ pub enum At {
 impl PartialEq for At {
     fn eq(&self, other: &At) -> bool {
         match (self, other) {
-            (At::Span(a), At::Span(b)) => a.same_place(b),
+            (At::Span(a), At::Span(b)) => a == b,
             (At::Place(a), At::Place(b)) => a == b,
             (At::Top, At::Top) => true,
             _ => false,

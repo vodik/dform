@@ -735,7 +735,7 @@ pub fn check_literals(program: &Program, declared: &[Declared]) -> Result<()> {
     let mistyped: Vec<Diagnostic> = declared
         .iter()
         .flat_map(|d| leaves(&d.decl))
-        .filter(|l| spans.insert((l.span.file, l.span.start, l.span.end)))
+        .filter(|l| spans.insert(l.span))
         .filter_map(|l| {
             let who = format!("input {}", l.name);
             let (msg, help) =

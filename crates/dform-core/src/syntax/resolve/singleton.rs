@@ -12,14 +12,11 @@ use super::*;
 /// name lowered twice from one place (a probe, then the lowering) counts
 /// once.
 #[derive(Default, Clone)]
-pub(super) struct Uses(BTreeMap<String, BTreeMap<(u32, u32, u32), Span>>);
+pub(super) struct Uses(BTreeMap<String, BTreeSet<Span>>);
 
 impl Uses {
     pub(super) fn add(&mut self, name: &str, span: Span) {
-        self.0
-            .entry(name.to_string())
-            .or_default()
-            .insert((span.file, span.start, span.end), span);
+        self.0.entry(name.to_string()).or_default().insert(span);
     }
 }
 
@@ -40,7 +37,7 @@ impl Lowerer<'_> {
             if !rc.first.contains_key(src) {
                 continue;
             }
-            let span = *places.values().next().expect("one place");
+            let span = *places.first().expect("one place");
             failed = true;
             let d = Diagnostic::error(
                 span,

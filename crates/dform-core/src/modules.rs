@@ -463,6 +463,10 @@ pub(crate) struct Book {
     /// The inputs each body being expanded declares, the stack's first:
     /// what a `use` in it may give by the pun (R-208).
     pub inputs_here: Vec<BTreeSet<String>>,
+    /// Where each input is declared, each leaf of an object one and each
+    /// declaration of a name declared twice (R-104): a default written
+    /// there is the declaration's own.
+    pub declared_at: BTreeSet<Span>,
 }
 
 /// One copy as its checks read it: the copy as its user writes it,
@@ -663,6 +667,7 @@ impl<'a> Cx<'a> {
         out.extend(given_rules("", "", i, &same));
         for leaf in crate::inputs::leaves(i) {
             out.extend(refinement(&leaf, &leaf, "", &same));
+            self.book.declared_at.insert(leaf.span);
             let address = Some(leaf.name.clone());
             self.book
                 .declared
@@ -729,6 +734,14 @@ impl Book {
         }
     }
 
+    /// `h` is a declaration's own default: it gives nothing, to its input
+    /// or to another declaration of the same name.
+    fn own_default(&self, h: &Atom) -> bool {
+        let rank = h.args.get(4);
+        self.declared_at.contains(&h.span)
+            && matches!(rank, Some(Term::Val(Value::Str(r))) if r == "default")
+    }
+
     /// `set k = t where B`, alone or in a block, gives an input the stack
     /// addresses (R-54, R-38): its own, a field of an object one, a used
     /// module's (its cell `(input, m, k)`).
@@ -768,17 +781,13 @@ impl Book {
             self.diags.push(d);
             return;
         }
+        if self.own_default(h) {
+            return;
+        }
         let under =
             |a: &str, b: &str| a == b || a.strip_prefix(b).is_some_and(|r| r.starts_with('.'));
         for d in self.declared.iter_mut() {
             if d.scope != *scope || !(under(&d.decl.name, k) || under(k, &d.decl.name)) {
-                continue;
-            }
-            // The declaration's own default is no giving.
-            let rank = h.args.get(4);
-            if h.span == d.decl.span
-                && matches!(rank, Some(Term::Val(Value::Str(r))) if r == "default")
-            {
                 continue;
             }
             if d.decl.key {
@@ -849,6 +858,7 @@ impl Book {
             for leaf in crate::inputs::leaves(i) {
                 let address = c.flat.then(|| crate::types::dotted(&c.abs, &leaf.name));
                 let bound = c.u.inputs.iter().any(|(k, _, _)| covers(k, &leaf.name));
+                self.declared_at.insert(leaf.span);
                 // A name declared twice (R-104) declares its inputs once.
                 if self
                     .declared

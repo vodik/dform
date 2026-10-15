@@ -88,9 +88,7 @@ impl<'p> Instancer<'p> {
     pub(crate) fn top(&mut self, book: &mut Book, u: &ast::Instance, used: bool) -> Vec<Stmt> {
         let found = self.nodes.roots.iter().copied().find(|&i| {
             let it = &self.nodes.items[i];
-            // A span's `==` holds of any two: its place is compared.
-            let at = |s: Span| (s.file, s.start, s.end);
-            matches!(it.kind, ItemKind::Copy { .. }) && at(it.span) == at(u.span)
+            matches!(it.kind, ItemKind::Copy { .. }) && it.span == u.span
         });
         let Some(item) = found else {
             unreachable!("a copy the program writes is an item of its nodes")

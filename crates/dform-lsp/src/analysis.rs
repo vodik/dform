@@ -53,7 +53,7 @@ pub enum Where {
 impl PartialEq for Where {
     fn eq(&self, other: &Where) -> bool {
         match (self, other) {
-            (Where::Span(a), Where::Span(b)) => a.same_place(b),
+            (Where::Span(a), Where::Span(b)) => a == b,
             (Where::Place(a), Where::Place(b)) => a == b,
             (Where::Top, Where::Top) => true,
             (Where::Bytes(f, a, b), Where::Bytes(g, c, d)) => (f, a, b) == (g, c, d),
