@@ -278,7 +278,13 @@ under the project selector, the queue tagged with estates, runs per
 estate, and lane headers without the key.
 
 What v9 changed: no arrows anywhere (the drawing rule above); ovh-infra
-opens on lab, where its plan is.
+opens on lab, where its plan is; a watched source is always a card,
+never folded, in every estate it feeds, and the one that woke the last
+run is lit as its origin, a solid outline and a "woke run 41" line. The
+oci.resolve card had gone because v7 shows a source only in the estates
+it feeds and v7 and v8 opened ovh-infra on prod, which lab's tag does not
+feed; and a quiet source (releases' build and tested rows, a kubeconfig
+read that answered) folded into its cell's count like any quiet object.
 
 What v8 changed: the document rule, the selection rule, the copy rule
 and the wider spacing above; k3s-platform's server carries only the
@@ -478,6 +484,8 @@ details.blk2 summary{cursor:pointer}
 .n.ch .box{stroke-width:2.2}.chg-c .box{fill:var(--create-soft);stroke:var(--create)}.chg-u .box{fill:var(--update-soft);stroke:var(--update)}.chg-d .box{fill:var(--delete-soft);stroke:var(--delete)}.chg-e .box{fill:var(--sunk);stroke:var(--dim)}
 .n.rc .box{fill:var(--reach-soft);stroke:var(--update);stroke-width:1;stroke-opacity:.55}
 .wv{font:600 10px var(--mono);fill:var(--update)}
+.wv-o{font:600 11px var(--mono);fill:var(--because)}
+.n.src.origin .box{stroke:var(--because);stroke-width:2;stroke-dasharray:none}
 .n.sel .box{stroke:var(--accent);stroke-width:3}
 .gty{font:10px var(--mono);fill:var(--muted)}
 .gs,.h-ok,.h-bad,.h-unk,.h-wait,.r-drift,.r-owner,.ovr{font:11px var(--mono)}
@@ -1191,7 +1199,7 @@ MODEL.shop = (() => {
     "prod/subnets": {label: "private-${availability_zone}", site: "stacks/shop.df:12", word: "rows of one rule"},
     "prod/web": {label: "web-${s.availability_zone}", site: "stacks/shop.df:74", word: "rows of one rule"},
   });
-  m.N("src/az", {lane: "sources", region: "aws", kind: "source", type: "provider table", name: "aws.availability_zone", health: "", reading: "gained (\"available\", \"us-east-1d\", 3) at 09:38:12", word: "1 new row", news: true});
+  m.N("src/az", {lane: "sources", region: "aws", kind: "source", type: "provider table", name: "aws.availability_zone", health: "", reading: "gained (\"available\", \"us-east-1d\", 3) at 09:38:12", word: "1 new row", news: true, woke: 218});
   for (const e of ["staging", "prod"]) {
     const P = e === "prod";
     m.N(`${e}/vpc`, {lane: e, region: "aws", type: "aws.vpc", name: "main", site: "stacks/shop.df:7"});
@@ -1270,7 +1278,7 @@ MODEL.gke = (() => {
     ...Object.entries(envs).map(([e, pr]) => ({id: "gke-" + e, label: `gke · ${pr}`, settings: `use gke { project = "${pr}", region = "us-east1" }`, state: `configured · expect_account ${pr} matches · ${e === "prod" ? "9 calls last run" : "6 calls last run"}`,
       why: [N("each env configures its own instance: three regions of one family", "stacks/gke_platform.df:115"), N(`expect_account = "${pr}" holds`, "", "ok")]})),
   ]);
-  m.N("src/csv", {lane: "sources", region: "io", kind: "source", type: "document", name: "data/peerings.csv", health: "", reading: "gained line 6 at 08:02:40 (a8f3e10)", word: "1 new line", news: true});
+  m.N("src/csv", {lane: "sources", region: "io", kind: "source", type: "document", name: "data/peerings.csv", health: "", reading: "gained line 6 at 08:02:40 (a8f3e10)", word: "1 new line", news: true, woke: 64});
   m.N("src/dash", {lane: "sources", region: "io", kind: "source", type: "document", name: "files/dashboard-gke-platform.json", health: "", reading: "unchanged"});
   for (const e of Object.keys(envs)) {
     const r = "gke-" + e;
@@ -1296,7 +1304,7 @@ MODEL.rel = (() => {
   ]);
   m.N("src/build", {lane: "sources", region: "sql", kind: "source", type: "sql.table", name: "build", health: "", reading: "3 rows · 1.5.0 by ci/shop#4812, 10-08", news: false});
   m.N("src/tested", {lane: "sources", region: "sql", kind: "source", type: "sql.table", name: "tested", health: "", reading: "3 rows · 1.5.0 by testgrid/shop-e2e, 10-09", news: false});
-  m.N("src/time", {lane: "sources", region: "clock", kind: "source", type: "time.now()", name: "2026-10-15T09:52Z", health: "", reading: "1.4.1 eligible since 10-14 16:20", word: "1.4.1 eligible", news: true});
+  m.N("src/time", {lane: "sources", region: "clock", kind: "source", type: "time.now()", name: "2026-10-15T09:52Z", health: "", reading: "1.4.1 eligible since 10-14 16:20", word: "1.4.1 eligible", news: true, woke: 12});
   m.N("releases/eu1", {lane: "releases", region: "fake", type: "deploy.cell", name: "eu-1", site: "stacks/releases.df:14", lines: ["eu1"], reading: "in sync at shop 1.4.0"});
   m.N("releases/us1", {lane: "releases", region: "fake", type: "deploy.cell", name: "us-1", site: "stacks/releases.df:14", reading: "in sync at shop 1.4.1 · applied 10-14 16:20:03"});
   for (const c of ["eu1", "us1"]) {
@@ -1432,7 +1440,7 @@ function estateHTML(p) {
   const visibleNode = (n) => !n.planned || o.changed.has(n.id);
   const nodes = m.nodes.filter(visibleNode);
   const tagsOf = Object.fromEntries(nodes.map(n => [n.id, nodeTags(n)]));
-  const news = (n) => n.news || o.changed.has(n.id) || o.reached.has(n.id) || ["h-bad", "h-unk", "h-wait"].includes(healthCls(n.health)) || readingCls(n.reading) || tagsOf[n.id].length || sel === n.id;
+  const news = (n) => n.kind === "source" || n.news || o.changed.has(n.id) || o.reached.has(n.id) || ["h-bad", "h-unk", "h-wait"].includes(healthCls(n.health)) || readingCls(n.reading) || tagsOf[n.id].length || sel === n.id;
   const laneIds = m.lanes, laneInfo = (l) => l === "sources" ? SRC_LANE : (p.deps.find(d => d.id === l) || {name: l, st: "", mark: ""});
   const cellKey = (l, r) => l + "|" + r;
   const cellNodes = {};
@@ -1552,8 +1560,9 @@ function estateHTML(p) {
     if (showSt) out.push(["ov " + gMark(st.mark), wrap(`${st.mark} ${st.text}`, chars, 2)]);
     if (ch) cls = "ch chg-" + ({"+": "c", "~": "u", "-": "d", "±": "d", "=": "e"}[ch[0].l.mark] || "e");
     else if (o.reached.has(n.id)) { cls = "rc"; wave = o.depth.get(n.id) || 1; }
-    if (n.kind === "source") cls += " src";
-    return {out, cls, wave};
+    if (n.kind === "source") cls += " src" + (n.woke ? " origin" : "");
+    if (n.woke) out.push(["wv-o", [`woke run ${n.woke}`]]);
+    return {out, cls, wave, woke: n.woke};
   }
   const itemH = (c) => 2 * SP[2] + c.out.reduce((a, [, ls]) => a + ls.length * LH, 0) - 2;
 
@@ -1958,7 +1967,7 @@ MODEL.ovh = (() => {
       why: [N("output kubeconfig = str.replace(…)", "k3s.df:27"), N("apps reads it as platform[env].kubeconfig", "stacks/apps.df:25")]},
   ], {});
   const G = (id, label, site, word) => { m.groups[id] = {label, site, word: word || "objects of one copy"}; return id; };
-  m.N("src/oci-fj", {lane: "sources", region: "io", kind: "source", type: "oci.resolve", name: "forgejo image, lab's tag", health: "", reading: `moved: ${OLD} → ${NEW} at 09:20:14`, word: "moved", news: true});
+  m.N("src/oci-fj", {lane: "sources", region: "io", kind: "source", type: "oci.resolve", name: "forgejo image, lab's tag", health: "", reading: `moved: ${OLD} → ${NEW} at 09:20:14`, word: "moved", news: true, woke: 41});
   for (const e of ["lab", "prod"]) {
     const pl = `platform[${e}]`, ap = `apps[${e}]`, K = "k8s-" + e, D = dom[e], PR = e === "prod";
     // platform, ovh
