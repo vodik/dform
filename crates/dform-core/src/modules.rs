@@ -22,13 +22,15 @@
 //!   enumerates; with a clause `B`, the body's own gate `n::__instance(c)
 //!   :- B` holds every rule and resource of it.
 //!
-//! A body is expanded inside out: its own `use`s and `instance`s are
-//! expanded first, their names relative to it, and the body's scope is put
-//! in front of them (`n/inner/x`, `output("n.inner", k, V)`); a name the
-//! resolver wrote as its user's, `__scope(t)`, is left as it is. What a
-//! module or a copy writes is not granted: ranks are the ownership model,
-//! and the stratifier partitions a write by its head's constant type and
-//! path.
+//! Each copy is its definition's items lowered again from the program's
+//! nodes under it, outside in (`program::lower::instances`). This module
+//! writes the stack's own inputs, outputs and `let`s as their cells,
+//! checks each copy's interface (its block's inputs, its definition's
+//! inputs and outputs, the relations it takes), and says the errors of
+//! reading a copy's private name and of a `set` of an input the stack does
+//! not address. What a module or a copy writes is not granted: ranks are
+//! the ownership model, and the stratifier partitions a write by its
+//! head's constant type and path.
 
 use crate::ast::{
     Atom, FieldAssign, Helper, InputDecl, Lit, OutputDecl, Program, Resource, RuleStmt, Span, Stmt,
@@ -43,7 +45,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod lexical;
 mod named;
 
-pub use lexical::{LEXICAL, LEXICAL_OF, lexical_name, lexical_pred, lexical_term};
+pub use lexical::{LEXICAL, LEXICAL_OF, lexical_name, lexical_parts, lexical_pred, lexical_term};
 
 /// The attribute aggregate's pseudo-type for inputs: `(input, Scope, key)`,
 /// scope `""` for the stack's own.
@@ -56,7 +58,7 @@ pub const INPUT: &str = "input";
 pub const LET: &str = "let";
 
 /// A head with no body and no variables is a fact; anything else a rule.
-fn fact_or_rule(head: Atom, body: Vec<Lit>) -> Stmt {
+pub(crate) fn fact_or_rule(head: Atom, body: Vec<Lit>) -> Stmt {
     if body.is_empty() && head.args.iter().all(is_ground) {
         Stmt::Fact(head)
     } else {
@@ -76,19 +78,19 @@ fn is_ground(t: &Term) -> bool {
 
 /// A component's interface: what its top-level statements declare.
 #[derive(Default)]
-struct Interface {
-    inputs: Vec<InputDecl>,
+pub(crate) struct Interface {
+    pub inputs: Vec<InputDecl>,
     /// `input p`: relations the user gives the rows of (R-55).
-    relations: Vec<crate::ast::Extern>,
+    pub relations: Vec<crate::ast::Extern>,
     /// `output p`: relations the copy exports.
-    relation_outputs: Vec<OutputDecl>,
-    outputs: BTreeMap<String, OutputDecl>,
-    output_values: Vec<OutputDecl>,
+    pub relation_outputs: Vec<OutputDecl>,
+    pub outputs: BTreeMap<String, OutputDecl>,
+    pub output_values: Vec<OutputDecl>,
 }
 
 /// Split a module's or component's body into its interface and its
 /// statements; the definitions nested in it are left out.
-fn interface(body: &[Stmt]) -> (Interface, Vec<Stmt>) {
+pub(crate) fn interface(body: &[Stmt]) -> (Interface, Vec<Stmt>) {
     let mut i = Interface::default();
     let mut rest = Vec::new();
     for s in body {
@@ -109,7 +111,7 @@ fn interface(body: &[Stmt]) -> (Interface, Vec<Stmt>) {
 
 /// Every predicate the statements define (heads and facts), by name, with
 /// the arity and span of its first definition.
-fn defined_preds(stmts: &[Stmt], out: &mut BTreeMap<String, (usize, Span)>) {
+pub(crate) fn defined_preds(stmts: &[Stmt], out: &mut BTreeMap<String, (usize, Span)>) {
     for s in stmts {
         match s {
             Stmt::Fact(a) | Stmt::Rule(RuleStmt { head: a, .. }) => {
@@ -147,7 +149,14 @@ fn let_key(a: &Atom) -> Option<&str> {
 /// (`""` all of it), which [`lets`] makes the scope's `secret_cell`.
 pub const SECRET_LET: &str = "__secret_let";
 
-fn lets(stmts: Vec<Stmt>, scope: &str, names: Option<&Names>) -> Vec<Stmt> {
+/// A copy's lets are its cells (`scope` its name, `name` its reader of a
+/// key), each new atom as the copy writes it (`finish`).
+pub(crate) fn lets(
+    stmts: Vec<Stmt>,
+    scope: &str,
+    name: Option<&dyn Fn(&str) -> String>,
+    finish: &dyn Fn(Atom) -> Atom,
+) -> Vec<Stmt> {
     let mut out = Vec::with_capacity(stmts.len());
     let mut keys: BTreeMap<String, Span> = BTreeMap::new();
     // A `let` declared `secret(T)`, or of an object type with a secret
@@ -178,31 +187,28 @@ fn lets(stmts: Vec<Stmt>, scope: &str, names: Option<&Names>) -> Vec<Stmt> {
             args: vec![str_term(LET), str_term(scope), k, v, rank],
             ..head
         };
-        out.push(fact_or_rule(arg, body));
+        out.push(fact_or_rule(finish(arg), body));
     }
     for (k, span) in &secret {
         let root = k.split('.').next().unwrap_or(k);
         if keys.contains_key(root) {
-            out.push(Stmt::Fact(atom(
+            out.push(Stmt::Fact(finish(atom(
                 crate::transform::SECRET_CELL,
                 vec![str_term(LET), str_term(scope), str_term(k)],
                 *span,
-            )));
+            ))));
         }
     }
     for (k, span) in keys {
-        let pred = names
-            .and_then(|n| n.get(&k))
-            .cloned()
-            .unwrap_or_else(|| k.clone());
+        let pred = name.map_or_else(|| k.clone(), |n| n(&k));
         let v = Term::Var("V".into());
         out.push(Stmt::Rule(RuleStmt::new(
-            atom(&pred, vec![v.clone()], span),
-            vec![Lit::Pos(atom(
+            finish(atom(&pred, vec![v.clone()], span)),
+            vec![Lit::Pos(finish(atom(
                 "attr",
                 vec![str_term(LET), str_term(scope), str_term(&k), v],
                 span,
-            ))],
+            )))],
         )));
     }
     out
@@ -226,22 +232,43 @@ pub const DECLARED: &str = "__declared";
 /// evaluation does. Each declaration's clause derives `__declared(name,
 /// i)`, and two that both hold are a deny naming both sites.
 pub fn exclusive(name: &str, alts: &[Alternative]) -> Vec<Stmt> {
+    exclusive_with(name, alts, &|a| a)
+}
+
+/// [`exclusive`], each new atom as the scope writes it (`finish`).
+pub fn exclusive_with(
+    name: &str,
+    alts: &[Alternative],
+    finish: &dyn Fn(Atom) -> Atom,
+) -> Vec<Stmt> {
     let mut out: Vec<Stmt> = alts
         .iter()
         .enumerate()
-        .map(|(i, a)| declared(name, i, a.clause.clone(), a.span))
+        .map(|(i, a)| declared_with(name, i, a.clause.clone(), a.span, finish))
         .collect();
     let sites: Vec<(String, Span)> = alts.iter().map(|a| (a.what.clone(), a.span)).collect();
-    out.extend(denies(name, &sites));
+    out.extend(denies_with(name, &sites, finish));
     out
 }
 
 /// The `i`th declaration of `name` holds while its clause does:
 /// `__declared(name, i) :- clause`.
 pub fn declared(name: &str, i: usize, clause: Vec<Lit>, span: Span) -> Stmt {
+    declared_with(name, i, clause, span, &|a| a)
+}
+
+/// [`declared`], its head as the scope writes it (`finish`).
+pub fn declared_with(
+    name: &str,
+    i: usize,
+    clause: Vec<Lit>,
+    span: Span,
+    finish: &dyn Fn(Atom) -> Atom,
+) -> Stmt {
+    let head = finish(held(name, i, span));
     match clause.is_empty() {
-        true => Stmt::Fact(held(name, i, span)),
-        false => Stmt::Rule(RuleStmt::helper(Helper::Check, held(name, i, span), clause)),
+        true => Stmt::Fact(head),
+        false => Stmt::Rule(RuleStmt::helper(Helper::Check, head, clause)),
     }
 }
 
@@ -256,6 +283,15 @@ fn held(name: &str, i: usize, span: Span) -> Atom {
 /// A deny for each pair of the declarations of `name` (what each is, and
 /// where) that both hold, naming both.
 pub fn denies(name: &str, sites: &[(String, Span)]) -> Vec<Stmt> {
+    denies_with(name, sites, &|a| a)
+}
+
+/// [`denies`], each atom as the scope writes it (`finish`).
+pub fn denies_with(
+    name: &str,
+    sites: &[(String, Span)],
+    finish: &dyn Fn(Atom) -> Atom,
+) -> Vec<Stmt> {
     let site = |(what, span): &(String, Span)| match diag::at(*span) {
         Some(at) => format!("`{what}` at {at}"),
         None => format!("`{what}`"),
@@ -269,8 +305,11 @@ pub fn denies(name: &str, sites: &[(String, Span)]) -> Vec<Stmt> {
                 site(b)
             );
             out.push(Stmt::Rule(RuleStmt::new(
-                atom("deny", vec![str_term(&msg)], b.1),
-                vec![Lit::Pos(held(name, i, a.1)), Lit::Pos(held(name, j, b.1))],
+                finish(atom("deny", vec![str_term(&msg)], b.1)),
+                vec![
+                    Lit::Pos(finish(held(name, i, a.1))),
+                    Lit::Pos(finish(held(name, j, b.1))),
+                ],
             )));
         }
     }
@@ -334,61 +373,6 @@ pub const ABSOLUTE: &str = "__scope";
 /// every relation but the shared ones and the records of copies.
 pub fn is_private(pred: &str) -> bool {
     !is_shared(pred) && pred != INSTANCE_OF && pred != ROWS && pred != LEXICAL_OF
-}
-
-/// How predicate names are renamed in one copy or activation.
-struct Names {
-    /// Predicate name -> its private name (`n::p`; `n.inner::p` for the
-    /// private `inner::p` of a copy inside it).
-    map: BTreeMap<String, String>,
-}
-
-impl Names {
-    fn get(&self, pred: &str) -> Option<&String> {
-        self.map.get(pred)
-    }
-
-    /// Every predicate `defined` names but the shared ones, private to
-    /// `scope`. `instance_of` is the program's: a copy's copies are told
-    /// apart by their user's scope, its second column.
-    fn private(scope: &str, defined: BTreeMap<String, (usize, Span)>) -> Names {
-        let map = defined
-            .into_keys()
-            .filter(|p| is_private(p))
-            .map(|p| {
-                let n = private_name(scope, &p);
-                (p, n)
-            })
-            .collect();
-        Names { map }
-    }
-
-    /// The names a copy keeps private: every relation its statements
-    /// define, its inputs and their refinements, and the relations it
-    /// takes (their rows are its user's).
-    fn of_copy(scope: &str, iface: &Interface, stmts: &[Stmt]) -> Names {
-        let mut defined = BTreeMap::new();
-        defined_preds(stmts, &mut defined);
-        for i in &iface.inputs {
-            defined.insert(i.name.clone(), (1, i.span));
-            for l in crate::inputs::leaves(i) {
-                defined.insert(refine_pred(&l.name), (1, i.span));
-            }
-        }
-        for e in &iface.relations {
-            defined.insert(e.pred.clone(), (e.arity, e.span));
-        }
-        Names::private(scope, defined)
-    }
-}
-
-/// `p` private to `scope`: `scope::p`, or `scope.inner::p` for a name
-/// already private to a copy inside it.
-fn private_name(scope: &str, p: &str) -> String {
-    match p.contains("::") {
-        true => format!("{scope}.{p}"),
-        false => format!("{scope}::{p}"),
-    }
 }
 
 /// A program with its modules and components expanded, and the interface
@@ -459,33 +443,57 @@ pub fn reached(program: &Program) -> Vec<&Stmt> {
     out
 }
 
-/// The expansion's state.
-struct Cx<'a> {
-    defs: BTreeMap<&'a str, &'a crate::ast::Module>,
-    diags: Vec<Diagnostic>,
-    declared: Vec<Declared>,
-    secret_outputs: Vec<(String, String)>,
-    output_types: BTreeMap<(String, String), TypeExpr>,
+/// What an expansion finds as it goes: the interface the later passes
+/// check (every typed input, the secret outputs, the outputs' types),
+/// what is wrong, and what the checks of later copies read.
+#[derive(Default)]
+pub(crate) struct Book {
+    pub diags: Vec<Diagnostic>,
+    pub declared: Vec<Declared>,
+    pub secret_outputs: Vec<(String, String)>,
+    pub output_types: BTreeMap<(String, String), TypeExpr>,
     /// Private names by plain name, for the error when the program reads
     /// one.
-    private: BTreeMap<String, (String, Option<String>)>,
-    /// The definitions being expanded, outermost first: a component that
-    /// reaches itself is an error, not a loop.
-    expanding: Vec<String>,
+    pub private: BTreeMap<String, (String, Option<String>)>,
     /// The definitions whose interface was checked.
-    checked: BTreeSet<String>,
+    pub checked: BTreeSet<String>,
     /// The scopes the stack reaches by `use` alone, `""` first: their
     /// inputs are the stack's to give (R-55).
-    flat: BTreeSet<String>,
-    /// The copies named by their clause so far: each one's variable for
-    /// its name inside it is its own (R-191).
-    named: usize,
+    pub flat: BTreeSet<String>,
     /// The inputs each body being expanded declares, the stack's first:
     /// what a `use` in it may give by the pun (R-208).
-    inputs_here: Vec<BTreeSet<String>>,
+    pub inputs_here: Vec<BTreeSet<String>>,
 }
 
-fn check_types(who: &str, inputs: &[InputDecl], diags: &mut Vec<Diagnostic>) {
+/// One copy as its checks read it: the copy as its user writes it,
+/// whether it is a module's or a component's, whether the stack reaches
+/// it by `use` alone, its scope's absolute name and its statement.
+pub(crate) struct Copy<'u> {
+    pub u: &'u crate::ast::Instance,
+    /// `module` or `component`, as messages name the definition.
+    pub kind: &'static str,
+    /// A used module the stack reaches by `use` alone: its inputs are the
+    /// stack's to give, `m.k` (R-55).
+    pub flat: bool,
+    pub abs: String,
+    /// The statement as the program writes it (`use m as n`).
+    pub origin: String,
+}
+
+impl Copy<'_> {
+    /// Its name in its user's scope.
+    fn scope(&self) -> &str {
+        &self.u.name
+    }
+}
+
+/// The expansion of the program's own statements: what it finds, and the
+/// instancing of its copies.
+struct Cx<'a> {
+    book: Book,
+    copies: crate::program::lower::instances::Instancer<'a>,
+}
+pub(crate) fn check_types(who: &str, inputs: &[InputDecl], diags: &mut Vec<Diagnostic>) {
     for i in inputs.iter().flat_map(crate::inputs::leaves) {
         let i = &i;
         if let Err(e) = crate::inputs::check_type(&i.ty) {
@@ -499,27 +507,24 @@ fn check_types(who: &str, inputs: &[InputDecl], diags: &mut Vec<Diagnostic>) {
     }
 }
 
+/// The program with its copies instanced (`program::lower::instances`,
+/// from the program's nodes), its own inputs, outputs and `let`s as their
+/// cells, and its interface checked.
 pub fn expand(program: &Program) -> Result<Expanded> {
-    let mut cx = Cx::new(program);
+    let none = crate::program::Program::default();
+    let nodes = program.nodes.as_deref().unwrap_or(&none);
+    let mut cx = Cx::new(program, nodes);
     let out = cx.stack(&program.statements);
-    // The program's own `let`s; what a component reads of the program's
-    // values and relations (R-186).
-    let stack = lexical::Lexical {
-        body: "",
-        via: None,
-    };
-    let mut expanded: Vec<Stmt> = lets(out, "", None)
-        .into_iter()
-        .map(|s| stack.stmt(s))
-        .collect();
+    // The program's own `let`s.
+    let mut expanded = lets(out, "", None, &|a| a);
     expanded.extend(mixed(&expanded));
-    cx.private_reads(&expanded);
-    cx.givings(&expanded);
+    cx.book.private_reads(&expanded);
+    cx.book.givings(&expanded);
     // What a `set`, a `use` block or a copy gives a typed input is read as
     // its type (R-31, R-134): a literal now, a computed value at run time.
     for s in &mut expanded {
         if let Stmt::Fact(h) | Stmt::Rule(RuleStmt { head: h, .. }) = s {
-            read_input(h, &cx.declared);
+            read_input(h, &cx.book.declared);
         }
     }
     let expanded = expanded.into_iter().map(unmark_stmt).collect::<Vec<_>>();
@@ -600,7 +605,7 @@ impl Settable {
 }
 
 impl<'a> Cx<'a> {
-    fn new(program: &'a Program) -> Cx<'a> {
+    fn new(program: &Program, nodes: &'a crate::program::Program) -> Cx<'a> {
         let inputs = program
             .statements
             .iter()
@@ -609,18 +614,14 @@ impl<'a> Cx<'a> {
                 _ => None,
             })
             .collect();
+        let records = crate::program::Records::core().with_items(nodes, &nodes.roots);
         Cx {
-            defs: definitions(&program.statements),
-            diags: Vec::new(),
-            declared: Vec::new(),
-            secret_outputs: Vec::new(),
-            output_types: BTreeMap::new(),
-            private: BTreeMap::new(),
-            expanding: Vec::new(),
-            checked: BTreeSet::new(),
-            flat: BTreeSet::from([String::new()]),
-            named: 0,
-            inputs_here: vec![inputs],
+            book: Book {
+                flat: BTreeSet::from([String::new()]),
+                inputs_here: vec![inputs],
+                ..Book::default()
+            },
+            copies: crate::program::lower::instances::Instancer::new(nodes, &records),
         }
     }
 
@@ -644,8 +645,8 @@ impl<'a> Cx<'a> {
                     ),
                     Vec::new(),
                 )),
-                Stmt::Use(u) => out.extend(self.instance(u, "", true)),
-                Stmt::Instance(u) => out.extend(self.instance(u, "", false)),
+                Stmt::Use(u) => out.extend(self.copies.top(&mut self.book, u, true)),
+                Stmt::Instance(u) => out.extend(self.copies.top(&mut self.book, u, false)),
                 Stmt::Module(_) => {}
                 other => out.push(other.clone()),
             }
@@ -656,27 +657,48 @@ impl<'a> Cx<'a> {
     /// The stack's own input `i`: its reader, what `--set` gives it, its
     /// refinements, and its leaves declared.
     fn stack_input(&mut self, i: &InputDecl) -> Vec<Stmt> {
-        check_types("stack", std::slice::from_ref(i), &mut self.diags);
-        let mut out = input_reader("", i, &|p: &str| p.to_string());
-        out.extend(given_rules("", "", i));
+        check_types("stack", std::slice::from_ref(i), &mut self.book.diags);
+        let same = |a: Atom| a;
+        let mut out = input_reader("", i, &|p: &str| p.to_string(), &same);
+        out.extend(given_rules("", "", i, &same));
         for leaf in crate::inputs::leaves(i) {
-            out.extend(refinement(&leaf, ""));
+            out.extend(refinement(&leaf, &leaf, "", &same));
             let address = Some(leaf.name.clone());
-            self.declared.push(Declared::new("", leaf, address, false));
+            self.book
+                .declared
+                .push(Declared::new("", leaf, address, false));
         }
         out
     }
 
     /// The stack's own declared output `o`: its secret cells and its type.
     fn stack_output(&mut self, o: &OutputDecl) {
-        self.secret_outputs
+        self.book
+            .secret_outputs
             .extend(secret_paths(o).into_iter().map(|k| (String::new(), k)));
         if let Some(t) = &o.ty {
-            self.output_types
+            self.book
+                .output_types
                 .insert((String::new(), o.name.clone()), t.clone());
         }
     }
 
+    /// The expansion's result: the program, or what was found wrong.
+    fn finish(self, program: Program) -> Result<Expanded> {
+        let book = self.book;
+        if !book.diags.is_empty() {
+            return Err(Diagnostics(book.diags).into());
+        }
+        Ok(Expanded {
+            program,
+            inputs: book.declared,
+            secret_outputs: book.secret_outputs,
+            output_types: book.output_types,
+        })
+    }
+}
+
+impl Book {
     /// A read of a name only a module or a component defines: say it is
     /// private.
     fn private_reads(&mut self, stmts: &[Stmt]) {
@@ -774,17 +796,74 @@ impl<'a> Cx<'a> {
         }
     }
 
-    /// The expansion's result: the program, or what was found wrong.
-    fn finish(self, program: Program) -> Result<Expanded> {
-        if !self.diags.is_empty() {
-            return Err(Diagnostics(self.diags).into());
+    /// The checks on the interface of the definition `c` copies, once per
+    /// definition (`written`: its statements as written).
+    pub fn check_once(&mut self, c: &Copy, iface: &Interface, written: &[Stmt]) {
+        let path = &c.u.module;
+        if self.checked.insert(path.clone()) {
+            check_component(c.kind, path, iface, written, &mut self.diags);
+            check_types(
+                &format!("{} {path}", c.kind),
+                &iface.inputs,
+                &mut self.diags,
+            );
         }
-        Ok(Expanded {
-            program,
-            inputs: self.declared,
-            secret_outputs: self.secret_outputs,
-            output_types: self.output_types,
-        })
+    }
+
+    /// The names the copy `c` keeps private (`keys`), each with the error
+    /// a read of it from outside says.
+    pub fn privates(&mut self, c: &Copy, keys: &BTreeSet<String>) {
+        let (scope, module) = (c.scope(), &c.u.module);
+        let used = c.kind == "module";
+        for p in keys {
+            let help = match used {
+                true => format!("read it as {scope}.{p}, after `use {module}`"),
+                false => format!(
+                    "pass the value through an output of component {module}, `output {p} = ...`, \
+                     and read it as INSTANCE.{p}",
+                ),
+            };
+            self.private
+                .insert(p.clone(), (format!("{} {module}", c.kind), Some(help)));
+        }
+    }
+
+    /// The secret cells and the types of the outputs the copy `c`
+    /// declares.
+    pub fn outputs(&mut self, c: &Copy, iface: &Interface) {
+        for o in iface.outputs.values() {
+            self.secret_outputs
+                .extend(secret_paths(o).into_iter().map(|k| (c.abs.clone(), k)));
+            if let Some(t) = &o.ty {
+                self.output_types
+                    .insert((c.abs.clone(), o.name.clone()), t.clone());
+            }
+        }
+    }
+
+    /// The typed inputs of the copy `c`, each leaf once: whether its block
+    /// gives it, and for a used module's where the stack addresses it and
+    /// whether its user gives it by the pun (`user_inputs`, R-208).
+    pub fn declare_inputs(&mut self, c: &Copy, iface: &Interface, user_inputs: &BTreeSet<String>) {
+        for i in &iface.inputs {
+            for leaf in crate::inputs::leaves(i) {
+                let address = c.flat.then(|| crate::types::dotted(&c.abs, &leaf.name));
+                let bound = c.u.inputs.iter().any(|(k, _, _)| covers(k, &leaf.name));
+                // A name declared twice (R-104) declares its inputs once.
+                if self
+                    .declared
+                    .iter()
+                    .any(|d| d.scope == c.abs && d.decl.name == leaf.name)
+                {
+                    continue;
+                }
+                let pun = user_inputs.contains(&leaf.name);
+                let mut d = Declared::new(&c.abs, leaf, address, bound);
+                d.used_at = c.flat.then_some(c.u.span);
+                d.used_by = c.flat.then(|| (c.origin.clone(), pun));
+                self.declared.push(d);
+            }
+        }
     }
 }
 
@@ -800,7 +879,7 @@ fn read_input(h: &mut Atom, declared: &[Declared]) {
 }
 
 /// [`read_input`] by the declarations `declared` of its scope.
-fn read_input_of<'d>(h: &mut Atom, declared: impl Iterator<Item = &'d Declared>) {
+pub(crate) fn read_input_of<'d>(h: &mut Atom, declared: impl Iterator<Item = &'d Declared>) {
     if h.pred != "arg" || h.args.len() < 4 || h.args[0] != str_term(INPUT) {
         return;
     }
@@ -869,434 +948,6 @@ fn read_typed_at(t: &mut Term, path: &str, ty: &TypeExpr) {
     }
 }
 
-/// One `use` or copy being expanded: its statement, whether it uses a
-/// module, and where it stands.
-struct Copying<'u> {
-    u: &'u crate::ast::Instance,
-    used: bool,
-    /// `module` or `component`, as messages name the definition.
-    kind: &'static str,
-    /// Its scope's absolute name.
-    abs: String,
-    /// A used module the stack reaches by `use` alone: its inputs are the
-    /// stack's to give, `m.k` (R-55).
-    flat: bool,
-    /// The statement as the program writes it, what its rules are lowered
-    /// out of (`diag::origin_id`).
-    origin: String,
-}
-
-impl<'u> Copying<'u> {
-    /// `u` made in the scope `at`, which the stack reaches by `use` alone
-    /// when `reached`.
-    fn new(u: &'u crate::ast::Instance, at: &str, used: bool, reached: bool) -> Copying<'u> {
-        let scope = u.name.as_str();
-        let origin = match used {
-            true if u.module.rsplit('.').next() == Some(scope) => format!("use {}", u.module),
-            true => format!("use {} as {scope}", u.module),
-            false if u.named.is_some() && !u.name.starts_with('"') => {
-                format!("resource {} \"{}\"", u.module, u.name)
-            }
-            false => format!("resource {} {}", u.module, u.name),
-        };
-        Copying {
-            u,
-            used,
-            kind: if used { "module" } else { "component" },
-            abs: crate::types::dotted(at, scope),
-            flat: used && reached,
-            origin,
-        }
-    }
-
-    /// Its name in its user's scope.
-    fn scope(&self) -> &'u str {
-        &self.u.name
-    }
-}
-
-/// The statements of the copy `c`, scoped: lowered out of its statement,
-/// its private names renamed, its resources and outputs its own, its
-/// `let`s and inputs read as its cells.
-fn scoped_copy(c: &Copying, iface: &Interface, names: &Names, mut stmts: Vec<Stmt>) -> Vec<Stmt> {
-    let scope = c.scope();
-    set_origin(&mut stmts, diag::origin_id(&c.origin));
-    let sc = Sc {
-        name: scope,
-        vars: !c.used,
-    };
-    let stmts = stmts
-        .into_iter()
-        .map(|st| rewrite_stmt(rename_stmt(st, names), sc))
-        .collect();
-    let mut copy = lets(stmts, scope, Some(names));
-    copy.extend(input_readers(scope, &iface.inputs, names));
-    copy
-}
-
-impl Cx<'_> {
-    /// The `use`s and `instance`s of a body expanded, every name relative
-    /// to the body's scope; `at` is that scope's absolute name.
-    fn body(&mut self, stmts: &[Stmt], at: &str) -> Vec<Stmt> {
-        let mut out = exclusive_copies(stmts);
-        for s in stmts {
-            match s {
-                Stmt::Use(u) => out.extend(self.instance(u, at, true)),
-                Stmt::Instance(u) => out.extend(self.instance(u, at, false)),
-                other => out.push(other.clone()),
-            }
-        }
-        out
-    }
-
-    /// `def`, or `None` (reported) when it is being expanded already.
-    fn enter(&mut self, path: &str, span: Span) -> Option<&crate::ast::Module> {
-        let def = *self.defs.get(path)?;
-        if self.expanding.iter().any(|p| p == path) {
-            let mut cycle = self.expanding.clone();
-            cycle.push(path.to_string());
-            self.diags.push(Diagnostic::error(
-                span,
-                format!("{path} reaches itself: {}", cycle.join(" -> ")),
-            ));
-            return None;
-        }
-        self.expanding.push(path.to_string());
-        Some(def)
-    }
-
-    /// `resource c n { k = V } where B`, a component's body under the
-    /// scope `n`, recorded in `instance_of`; or `use m [as n] { k = V }
-    /// where B`, a module's (`used`): one mechanism (R-65).
-    fn instance(&mut self, u: &crate::ast::Instance, at: &str, used: bool) -> Vec<Stmt> {
-        let site = self.expanding.last().cloned();
-        let user_inputs = self.inputs_here.last().cloned().unwrap_or_default();
-        let Some(def) = self.enter(&u.module, u.span) else {
-            return Vec::new();
-        };
-        let (iface, body) = interface(&def.body);
-        // A used module's inputs are the stack's to give, `m.k` (R-55); a
-        // copy's are its instance block's.
-        let c = Copying::new(u, at, used, self.flat.contains(at));
-        self.check_once(&c, &iface, &body);
-        if c.flat {
-            self.flat.insert(c.abs.clone());
-        }
-        let mut out = Vec::new();
-        instance_inputs(&c, &iface, &mut out, &mut self.diags);
-        let body = self.inner(&c, &iface, &body);
-        let stmts = module_stmts(c.scope(), &iface, body);
-        let names = Names::of_copy(c.scope(), &iface, &stmts);
-        out.extend(instance_rows(u, c.scope(), &iface));
-        self.privates(&c, &names);
-        let mut copy = scoped_copy(&c, &iface, &names, stmts);
-        if !used {
-            self.reached(u, site.as_deref(), &mut copy);
-        }
-        self.outputs(&c, &iface);
-        if c.flat {
-            for i in &iface.inputs {
-                out.extend(given_rules(c.scope(), &c.abs, i));
-            }
-        }
-        self.declare_inputs(&c, &iface, &user_inputs);
-        let scope = c.scope();
-        let Some(name) = &u.named else {
-            out.extend(gate(
-                copy,
-                &u.module,
-                scope,
-                u.clause.as_deref(),
-                !used,
-                u.span,
-            ));
-            return out;
-        };
-        copy.extend(self.secret_cells(scope, &c.abs, u.span));
-        let copy = gate(copy, &u.module, scope, u.clause.as_deref(), true, u.span);
-        self.by_clause(scope, &c.abs, name, out, copy)
-    }
-
-    /// The checks on the interface of the definition `c` copies, once per
-    /// definition.
-    fn check_once(&mut self, c: &Copying, iface: &Interface, body: &[Stmt]) {
-        let path = &c.u.module;
-        if self.checked.insert(path.clone()) {
-            check_component(c.kind, path, iface, body, &mut self.diags);
-            check_types(
-                &format!("{} {path}", c.kind),
-                &iface.inputs,
-                &mut self.diags,
-            );
-        }
-    }
-
-    /// The body of the definition `c` copies, its own `use`s and copies
-    /// expanded; what the components inside read of the definition's
-    /// items is this instance's own (R-186).
-    fn inner(&mut self, c: &Copying, iface: &Interface, body: &[Stmt]) -> Vec<Stmt> {
-        self.inputs_here
-            .push(iface.inputs.iter().map(|i| i.name.clone()).collect());
-        let body = self.body(body, &c.abs);
-        self.inputs_here.pop();
-        self.expanding.pop();
-        let own = lexical::Lexical {
-            body: &c.u.module,
-            via: None,
-        };
-        body.into_iter().map(|s| own.stmt(s)).collect()
-    }
-
-    /// The names the copy `c` keeps private, each with the error a read
-    /// of it from outside says.
-    fn privates(&mut self, c: &Copying, names: &Names) {
-        let (scope, module) = (c.scope(), &c.u.module);
-        for p in names.map.keys() {
-            let help = match c.used {
-                true => format!("read it as {scope}.{p}, after `use {module}`"),
-                false => format!(
-                    "pass the value through an output of component {module}, `output {p} = ...`, \
-                     and read it as INSTANCE.{p}",
-                ),
-            };
-            self.private
-                .insert(p.clone(), (format!("{} {module}", c.kind), Some(help)));
-        }
-    }
-
-    /// The secret cells and the types of the outputs the copy `c`
-    /// declares.
-    fn outputs(&mut self, c: &Copying, iface: &Interface) {
-        for o in iface.outputs.values() {
-            self.secret_outputs
-                .extend(secret_paths(o).into_iter().map(|k| (c.abs.clone(), k)));
-            if let Some(t) = &o.ty {
-                self.output_types
-                    .insert((c.abs.clone(), o.name.clone()), t.clone());
-            }
-        }
-    }
-
-    /// The typed inputs of the copy `c`, each leaf once: whether its block
-    /// gives it, and for a used module's where the stack addresses it and
-    /// whether its user gives it by the pun (`user_inputs`, R-208).
-    fn declare_inputs(&mut self, c: &Copying, iface: &Interface, user_inputs: &BTreeSet<String>) {
-        for i in &iface.inputs {
-            for leaf in crate::inputs::leaves(i) {
-                let address = c.flat.then(|| crate::types::dotted(&c.abs, &leaf.name));
-                let bound = c.u.inputs.iter().any(|(k, _, _)| covers(k, &leaf.name));
-                // A name declared twice (R-104) declares its inputs once.
-                if self
-                    .declared
-                    .iter()
-                    .any(|d| d.scope == c.abs && d.decl.name == leaf.name)
-                {
-                    continue;
-                }
-                let pun = user_inputs.contains(&leaf.name);
-                let mut d = Declared::new(&c.abs, leaf, address, bound);
-                d.used_at = c.flat.then_some(c.u.span);
-                d.used_by = c.flat.then(|| (c.origin.clone(), pun));
-                self.declared.push(d);
-            }
-        }
-    }
-
-    /// The copy `u`'s reads of its module's items, or an enclosing
-    /// component's, as the instance it was taken from has them (R-186):
-    /// the one a `use` binds (`a.volume`), or the one it is expanded
-    /// inside (`site`), recorded in `__lexical_of` for `why`. A read no
-    /// instance holds (a copy by its path with no `use`) is an error at
-    /// the read.
-    fn reached(&mut self, u: &crate::ast::Instance, site: Option<&str>, copy: &mut Vec<Stmt>) {
-        let parent = u.module.rsplit_once('.').map(|(p, _)| p);
-        let scope = match &u.via {
-            Some(via) => {
-                let by = lexical::Lexical {
-                    body: &via.module,
-                    via: Some(via),
-                };
-                *copy = std::mem::take(copy)
-                    .into_iter()
-                    .map(|s| by.stmt(s))
-                    .collect();
-                Some(via.scope.clone())
-            }
-            None if parent.is_some() && parent == site => Some(str_term("")),
-            None => None,
-        };
-        if let Some(scope) = scope {
-            copy.push(Stmt::Fact(atom(
-                LEXICAL_OF,
-                vec![str_term(""), str_term(&u.name), scope],
-                u.span,
-            )));
-        }
-        let expanding = &self.expanding;
-        let open = |b: &str| b.is_empty() || expanding.iter().any(|p| p == b);
-        if let Some((body, name, span)) = lexical::unreached(copy, &open) {
-            let kind = match self.defs.get(body.as_str()).is_some_and(|d| d.component) {
-                true => "component",
-                false => "module",
-            };
-            let help = match kind {
-                "module" => format!(
-                    "`use {body}` beside the copy: `resource {} {}` then reads that instance's \
-                     `{name}`",
-                    u.module, u.name
-                ),
-                _ => {
-                    format!("make the copy inside component {body}'s body, whose `{name}` it reads")
-                }
-            };
-            let d = Diagnostic::error(
-                span,
-                format!(
-                    "`{name}` is an item of {kind} {body}, and the copy {} of {} is made outside \
-                     every instance of {body}: a component reads the items of the instance it is \
-                     taken from",
-                    u.name, u.module
-                ),
-            )
-            .with_label(u.span, format!("the copy {}", u.name))
-            .with_help(help);
-            self.diags.push(d);
-        }
-    }
-
-    /// A copy named by its clause (R-191), expanded under the scope its
-    /// header writes, given its name per row: on the user's side (its
-    /// inputs, its rows and its gate) the clause's variable, inside it
-    /// the gate's, `scope::__instance(Name, path)`.
-    fn by_clause(
-        &mut self,
-        scope: &str,
-        abs: &str,
-        name: &Term,
-        user: Vec<Stmt>,
-        copy: Vec<Stmt>,
-    ) -> Vec<Stmt> {
-        self.named += 1;
-        let by_row = named::Named {
-            scope,
-            copy: name.clone(),
-        };
-        let inside = named::Named {
-            scope,
-            copy: Term::Var(format!("__copy{}", self.named)),
-        };
-        let gate = format!("{scope}::{GATE}");
-        let mut out = Vec::with_capacity(user.len() + copy.len());
-        for mut s in user {
-            // Its inputs' values are read as their types here, by the
-            // scope's declarations, before the scope is a term.
-            if let Stmt::Fact(h) | Stmt::Rule(RuleStmt { head: h, .. }) = &mut s {
-                read_input_of(h, self.declared.iter().filter(|d| d.scope == abs));
-            }
-            out.push(by_row.stmt(s));
-        }
-        for s in copy {
-            out.push(match &s {
-                Stmt::Rule(r) if r.head.pred == gate => by_row.stmt(s),
-                _ => inside.stmt(s),
-            });
-        }
-        out
-    }
-
-    /// The secret cells of a copy named by its clause (R-191): those its
-    /// scope and the scopes inside it declare (its secret inputs and
-    /// outputs, stated by the scope as written) are each copy's,
-    /// `secret_cell(T, scope, K) :- secret_cell(T, __scope(abs), K)`.
-    fn secret_cells(&self, scope: &str, abs: &str, span: Span) -> Vec<Stmt> {
-        let under = |s: &str| {
-            s.strip_prefix(abs)
-                .filter(|r| r.is_empty() || r.starts_with('.'))
-                .map(str::to_string)
-        };
-        let scopes: BTreeSet<String> = self
-            .declared
-            .iter()
-            .map(|d| d.scope.as_str())
-            .chain(self.secret_outputs.iter().map(|(s, _)| s.as_str()))
-            .filter_map(under)
-            .collect();
-        let (t, k) = (Term::Var("T".into()), Term::Var("K".into()));
-        scopes
-            .into_iter()
-            .map(|rest| {
-                let cell = |at: Term| {
-                    atom(
-                        crate::transform::SECRET_CELL,
-                        vec![t.clone(), at, k.clone()],
-                        span,
-                    )
-                };
-                let stated = Term::Func {
-                    name: ABSOLUTE.into(),
-                    args: vec![str_term(&format!("{abs}{rest}"))],
-                };
-                Stmt::Rule(RuleStmt::new(
-                    cell(str_term(&format!("{scope}{rest}"))),
-                    vec![Lit::Pos(cell(stated))],
-                ))
-            })
-            .collect()
-    }
-}
-
-/// The statements of the copy or activation `scope`, and for a copy
-/// (`record`) the fact `instance_of(path, scope)`. With a clause `B` they
-/// exist only while it holds: the copy's own `scope::__instance(path) :-
-/// B` gates each of its rules and resources, and `instance_of(path,
-/// scope)` is derived from it. The gate is the copy's own relation, so
-/// that one copy's clause reading another's outputs is no cycle through
-/// every copy.
-fn gate(
-    stmts: Vec<Stmt>,
-    path: &str,
-    scope: &str,
-    clause: Option<&[Lit]>,
-    record: bool,
-    span: Span,
-) -> Vec<Stmt> {
-    let fact = atom(
-        INSTANCE_OF,
-        vec![str_term(path), str_term(""), str_term(scope)],
-        span,
-    );
-    let Some(b) = clause.filter(|b| !b.is_empty()) else {
-        let mut out = stmts;
-        if record {
-            out.push(Stmt::Fact(fact));
-        }
-        return out;
-    };
-    let own = atom(&format!("{scope}::{GATE}"), vec![str_term(path)], span);
-    let on = Lit::Pos(own.clone());
-    let mut out: Vec<Stmt> = stmts
-        .into_iter()
-        .map(|s| match s {
-            Stmt::Fact(a) => Stmt::Rule(RuleStmt::new(a, vec![on.clone()])),
-            Stmt::Rule(mut r) => {
-                r.body.insert(0, on.clone());
-                Stmt::Rule(r)
-            }
-            Stmt::Resource(mut r) => {
-                r.body.get_or_insert_with(Vec::new).insert(0, on.clone());
-                r.reads = r.reads.start + 1..r.reads.end + 1;
-                Stmt::Resource(r)
-            }
-            other => other,
-        })
-        .collect();
-    out.push(Stmt::Rule(RuleStmt::new(own, b.to_vec())));
-    if record {
-        out.push(Stmt::Rule(RuleStmt::new(fact, vec![on])));
-    }
-    out
-}
-
 /// A gated copy's own relation (`gate`): `n::__instance(path)` while the
 /// copy `n` of the component at `path` exists.
 pub const GATE: &str = "__instance";
@@ -1349,11 +1000,12 @@ pub fn private_text(a: &Atom, fmt: &dyn Fn(&Atom) -> String, gap: &str) -> Optio
 /// object, which gives each leaf the field it has (R-54). An input nothing
 /// gives is an error here, but a used module's (`flat`): the stack may
 /// give that one with `--set m.k=v` (`inputs::check_required`).
-fn instance_inputs(
-    c: &Copying,
+pub(crate) fn instance_inputs(
+    c: &Copy,
     iface: &Interface,
     out: &mut Vec<Stmt>,
     diags: &mut Vec<Diagnostic>,
+    finish: &dyn Fn(Atom) -> Atom,
 ) {
     let leaves: Vec<InputDecl> = iface
         .inputs
@@ -1392,7 +1044,7 @@ fn instance_inputs(
             ],
             *span,
         );
-        out.push(fact_or_rule(head, body.clone()));
+        out.push(fact_or_rule(finish(head), body.clone()));
     }
     // An input nothing gives a value is a stack input's error (R-65),
     // fixed the same ways: a default, or a value given.
@@ -1421,13 +1073,7 @@ fn entry_type<'i>(iface: &'i Interface, k: &str) -> Option<&'i TypeExpr> {
 
 /// The error of an entry `k` that gives no input of the copy `c`: the
 /// object input it names has no such field, or there is no such input.
-fn no_input(
-    c: &Copying,
-    iface: &Interface,
-    leaves: &[InputDecl],
-    k: &str,
-    span: Span,
-) -> Diagnostic {
+fn no_input(c: &Copy, iface: &Interface, leaves: &[InputDecl], k: &str, span: Span) -> Diagnostic {
     let (kind, module) = (c.kind, &c.u.module);
     let object = k
         .match_indices('.')
@@ -1459,7 +1105,7 @@ fn no_input(
 /// The errors of the copy `c`'s inputs that nothing gives a value: each
 /// with no default and no clause (a dependent input is required where
 /// its clause holds: a deny).
-fn required(c: &Copying, leaves: &[InputDecl]) -> Vec<Diagnostic> {
+fn required(c: &Copy, leaves: &[InputDecl]) -> Vec<Diagnostic> {
     let given = |i: &InputDecl| c.u.inputs.iter().any(|(k, _, _)| covers(k, &i.name));
     leaves
         .iter()
@@ -1488,43 +1134,10 @@ fn required(c: &Copying, leaves: &[InputDecl]) -> Vec<Diagnostic> {
         .collect()
 }
 
-/// The rows a `use` or `instance` block gives the relations its module
-/// takes (R-55), written in the user's scope: each head is the copy's own
-/// relation, `scope::p`, and with a clause each row holds only while it
-/// does, as the copy does.
-fn instance_rows(u: &crate::ast::Instance, scope: &str, iface: &Interface) -> Vec<Stmt> {
-    let takes: BTreeSet<&str> = iface.relations.iter().map(|e| e.pred.as_str()).collect();
-    let clause = u.clause.clone().unwrap_or_default();
-    // Rows written as facts and as rules are one relation.
-    let mixed = iface.relations.iter().map(|e| {
-        Stmt::Mixed(crate::ast::Extern {
-            pred: private_name(scope, &e.pred),
-            ..e.clone()
-        })
-    });
-    u.rows
-        .iter()
-        .cloned()
-        .map(|st| match st {
-            Stmt::Fact(mut a) if takes.contains(a.pred.as_str()) => {
-                a.pred = private_name(scope, &a.pred);
-                fact_or_rule(a, clause.clone())
-            }
-            Stmt::Rule(mut r) if takes.contains(r.head.pred.as_str()) => {
-                r.head.pred = private_name(scope, &r.head.pred);
-                r.body.splice(0..0, clause.iter().cloned());
-                Stmt::Rule(r)
-            }
-            other => other,
-        })
-        .chain(mixed)
-        .collect()
-}
-
 /// The checks on a component's interface, once per component: an input
 /// or an output is declared once, an input is not also defined, and every
 /// output it gives a value is declared.
-fn check_component(
+pub(crate) fn check_component(
     kind: &str,
     path: &str,
     iface: &Interface,
@@ -1580,51 +1193,21 @@ fn check_component(
     }
 }
 
-/// The component's statements for one copy, before scoping: its body,
-/// the output values and each input's refinement.
-fn module_stmts(scope: &str, iface: &Interface, body: Vec<Stmt>) -> Vec<Stmt> {
-    let mut out = body;
-    for o in &iface.output_values {
-        // An undeclared output is reported once, by `check_component`.
-        let Some(decl) = iface.outputs.get(&o.name) else {
-            continue;
-        };
-        let mut value = o.value.clone().expect("an output value");
-        // An `addr` output names one of this copy's resources: scoped by
-        // the copy itself (`""`), which scoping makes its own name.
-        if matches!(&decl.ty, Some(TypeExpr::Name(t)) if t == "addr") {
-            value = Term::Func {
-                name: crate::address::SCOPED.into(),
-                args: vec![str_term(""), value],
-            };
-        }
-        out.push(fact_or_rule(
-            atom("output", vec![str_term(&o.name), value], o.span),
-            Vec::new(),
-        ));
-    }
-    for i in iface.inputs.iter().flat_map(crate::inputs::leaves) {
-        out.extend(refinement(&i, scope));
-    }
-    out.extend(iface.relation_outputs.iter().map(rows_of));
-    out
-}
-
 /// `output p` of a copy: its rows `__rows(p, [X1, ..]) :- p(X1, ..)`, the
 /// copy's scope put in front by scoping. A column of the copy's resources
 /// holds the references themselves (R-204), whose addresses scoping made
 /// the copy's: the reader has the resource, not its address.
-fn rows_of(o: &OutputDecl) -> Stmt {
+pub(crate) fn rows_of(o: &OutputDecl, finish: &dyn Fn(Atom) -> Atom) -> Stmt {
     let arity = o.relation.as_ref().map_or(0, Vec::len);
     let vars: Vec<Term> = (0..arity).map(|i| Term::Var(format!("X{i}"))).collect();
     Stmt::Rule(RuleStmt::helper(
         Helper::Check,
-        atom(
+        finish(atom(
             ROWS,
             vec![str_term(&o.name), Term::List(vars.clone())],
             o.span,
-        ),
-        vec![Lit::Pos(atom(&o.name, vars, o.span))],
+        )),
+        vec![Lit::Pos(finish(atom(&o.name, vars, o.span)))],
     ))
 }
 
@@ -1651,7 +1234,7 @@ fn published_rows(o: &OutputDecl) -> Stmt {
     )
 }
 
-fn refine_pred(input: &str) -> String {
+pub(crate) fn refine_pred(input: &str) -> String {
     format!("__refine_{input}")
 }
 
@@ -1660,7 +1243,14 @@ fn refine_pred(input: &str) -> String {
 /// rest is a deny unless it holds of the input's value: `__refine_k(V) :-
 /// k(V), R[k := V]` and `deny(...) :- k(V), not __refine_k(V)`. The input
 /// is written by its name in `R`.
-pub fn refinement(i: &InputDecl, scope: &str) -> Vec<Stmt> {
+/// `written` is the input as its definition writes it, which the check's
+/// message spells; each new atom is as the scope writes it (`finish`).
+pub(crate) fn refinement(
+    i: &InputDecl,
+    written: &InputDecl,
+    scope: &str,
+    finish: &dyn Fn(Atom) -> Atom,
+) -> Vec<Stmt> {
     let (_, rest) = crate::refine::split_input(i);
     if rest.is_empty() {
         return Vec::new();
@@ -1668,11 +1258,11 @@ pub fn refinement(i: &InputDecl, scope: &str) -> Vec<Stmt> {
     let v = Term::Var("__Input".into());
     // A leaf of an object input is read in its object (R-54).
     let read = match i.name.split_once('.') {
-        None => vec![Lit::Pos(atom(&i.name, vec![v.clone()], i.span))],
+        None => vec![Lit::Pos(finish(atom(&i.name, vec![v.clone()], i.span)))],
         Some((top, rest)) => {
             let o = Term::Var("__Object".into());
             vec![
-                Lit::Pos(atom(top, vec![o.clone()], i.span)),
+                Lit::Pos(finish(atom(top, vec![o.clone()], i.span))),
                 Lit::Eq(
                     v.clone(),
                     Term::Func {
@@ -1686,7 +1276,7 @@ pub fn refinement(i: &InputDecl, scope: &str) -> Vec<Stmt> {
     let mut body = read.clone();
     let names = |v: &Term| BTreeMap::from([(i.name.clone(), v.clone())]);
     body.extend(rest.iter().map(|l| l.replace_names(&names(&v))));
-    let ok = atom(&refine_pred(&i.name), vec![v.clone()], i.span);
+    let ok = finish(atom(&refine_pred(&i.name), vec![v.clone()], i.span));
     // The check as the program writes it, one policy wherever the scope
     // that declares it is copied; the copy is the deny's context, and a
     // secret input's value is not said.
@@ -1697,11 +1287,14 @@ pub fn refinement(i: &InputDecl, scope: &str) -> Vec<Stmt> {
     if !scope.is_empty() {
         ctx.insert("of".to_string(), str_term(scope));
     }
-    let deny = atom(
+    let deny = finish(atom(
         "deny",
-        vec![str_term(&crate::inputs::check_message(i)), Term::Obj(ctx)],
+        vec![
+            str_term(&crate::inputs::check_message(written)),
+            Term::Obj(ctx),
+        ],
         i.span,
-    );
+    ));
     vec![
         Stmt::Rule(RuleStmt::helper(Helper::Check, ok.clone(), body)),
         Stmt::Rule(RuleStmt::new(
@@ -1711,32 +1304,23 @@ pub fn refinement(i: &InputDecl, scope: &str) -> Vec<Stmt> {
     ]
 }
 
-/// `k(V) :- attr(input, Scope, k, V)` per input, and its `@default`
-/// contribution. Written after scoping: the scope is already in the terms.
-fn input_readers(scope: &str, inputs: &[InputDecl], names: &Names) -> Vec<Stmt> {
-    let pred = |p: &str| names.get(p).cloned().unwrap_or_else(|| p.to_string());
-    inputs
-        .iter()
-        .flat_map(|i| {
-            // A dependent input's clause reads the copy's own names.
-            let mut i = i.clone();
-            i.guard = i.guard.into_iter().map(|l| rename_lit(l, names)).collect();
-            input_reader(scope, &i, &pred)
-        })
-        .collect()
-}
-
 /// One input's reader, named by `pred` of its name, `k(V) :- attr(input,
 /// Scope, k, V)`, and its `@default` contributions and checkable
 /// refinements. An object input (R-54) is one cell per leaf: each leaf's
 /// default and check is the leaf's (`arg(input, Scope, "nodes.count", 1,
 /// @default)`, which the aggregate merges into the object `nodes` leaf by
 /// leaf), and the object is read whole.
-fn input_reader(scope: &str, i: &InputDecl, pred: &dyn Fn(&str) -> String) -> Vec<Stmt> {
+/// Each new atom is as the scope writes it (`finish`).
+pub(crate) fn input_reader(
+    scope: &str,
+    i: &InputDecl,
+    pred: &dyn Fn(&str) -> String,
+    finish: &dyn Fn(Atom) -> Atom,
+) -> Vec<Stmt> {
     let v = Term::Var("V".into());
     // A dependent input (R-104) is read, and defaults, where its clause
     // holds; where it holds with no value, it is required.
-    let mut body = vec![Lit::Pos(atom(
+    let mut body = vec![Lit::Pos(finish(atom(
         "attr",
         vec![
             str_term(INPUT),
@@ -1745,10 +1329,10 @@ fn input_reader(scope: &str, i: &InputDecl, pred: &dyn Fn(&str) -> String) -> Ve
             v.clone(),
         ],
         i.span,
-    ))];
+    )))];
     body.extend(i.guard.iter().cloned());
     let mut out = vec![Stmt::Rule(RuleStmt::new(
-        atom(&pred(&i.name), vec![v], i.span),
+        finish(atom(&pred(&i.name), vec![v], i.span)),
         body,
     ))];
     if !i.guard.is_empty() && i.default.is_none() && i.fields.is_empty() {
@@ -1757,32 +1341,35 @@ fn input_reader(scope: &str, i: &InputDecl, pred: &dyn Fn(&str) -> String) -> Ve
             s => format!("input {} of {s}", i.name),
         };
         let mut body = i.guard.clone();
-        body.push(Lit::Not(atom(&pred(&i.name), vec![Term::Wildcard], i.span)));
+        body.push(Lit::Not(finish(atom(
+            &pred(&i.name),
+            vec![Term::Wildcard],
+            i.span,
+        ))));
         out.push(Stmt::Rule(RuleStmt::new(
-            atom(
+            finish(atom(
                 "deny",
                 vec![str_term(&format!(
                     "{who} is required and has no value: its clause holds in this deployment"
                 ))],
                 i.span,
-            ),
+            )),
             body,
         )));
     }
     for l in crate::inputs::leaves(i) {
         let (checkable, _) = crate::refine::split_input(&l);
         for c in checkable {
-            out.push(crate::refine::refine_fact(
-                INPUT,
-                Some(scope),
-                &l.name,
-                &c,
-                l.span,
-            ));
+            let Stmt::Fact(fact) =
+                crate::refine::refine_fact(INPUT, Some(scope), &l.name, &c, l.span)
+            else {
+                unreachable!("a refinement is a fact")
+            };
+            out.push(Stmt::Fact(finish(fact)));
         }
         if let Some(d) = &l.default {
             out.push(fact_or_rule(
-                atom(
+                finish(atom(
                     "arg",
                     vec![
                         str_term(INPUT),
@@ -1792,7 +1379,7 @@ fn input_reader(scope: &str, i: &InputDecl, pred: &dyn Fn(&str) -> String) -> Ve
                         str_term(crate::ast::Rank::Default.name()),
                     ],
                     l.span,
-                ),
+                )),
                 i.guard.clone(),
             ));
         }
@@ -1822,7 +1409,13 @@ fn input_paths(i: &InputDecl) -> Vec<String> {
 /// fact names (`input("nodes.count", 2)`), so it wins over the default and
 /// over every `set` of the program (R-38). A key's value is the target's, the
 /// normal rank: nothing else gives a key.
-fn given_rules(scope: &str, address: &str, i: &InputDecl) -> Vec<Stmt> {
+/// Each new atom is as the scope writes it (`finish`).
+pub(crate) fn given_rules(
+    scope: &str,
+    address: &str,
+    i: &InputDecl,
+    finish: &dyn Fn(Atom) -> Atom,
+) -> Vec<Stmt> {
     let leaves = crate::inputs::leaves(i);
     let rank = match i.key {
         true => crate::transform::NORMAL,
@@ -1848,20 +1441,31 @@ fn given_rules(scope: &str, address: &str, i: &InputDecl) -> Vec<Stmt> {
             )
         };
         out.push(Stmt::Rule(RuleStmt::new(
-            head(v.clone()),
-            vec![Lit::Pos(atom(
+            finish(head(v.clone())),
+            vec![Lit::Pos(finish(atom(
                 "input",
                 vec![str_term(&crate::types::dotted(address, &p)), v.clone()],
                 span,
-            ))],
+            )))],
         )));
         // A map's key, `input("labels.team", V)`: the entry `{team: V}`.
         if leaf.is_some_and(|l| crate::inputs::is_map(&l.ty)) {
             let k = Term::Var("K".into());
-            let mut body = vec![Lit::Pos(atom("input", vec![k.clone(), v.clone()], span))];
+            let mut body = vec![Lit::Pos(finish(atom(
+                "input",
+                vec![k.clone(), v.clone()],
+                span,
+            )))];
             let prefix = crate::types::dotted(address, &p);
-            body.extend(crate::inputs::map_entry_lits(&k, &prefix, v, "E"));
-            out.push(Stmt::Rule(RuleStmt::new(head(Term::Var("E".into())), body)));
+            body.extend(
+                crate::inputs::map_entry_lits(&k, &prefix, v, "E")
+                    .into_iter()
+                    .map(|l| l.map(finish, |t| t)),
+            );
+            out.push(Stmt::Rule(RuleStmt::new(
+                finish(head(Term::Var("E".into()))),
+                body,
+            )));
         }
     }
     out
@@ -1934,248 +1538,6 @@ fn body_atoms(s: &Stmt, out: &mut Vec<Atom>) {
 // ---------------------------------------------------------------------------
 // Renaming predicates and scoping resource names.
 // ---------------------------------------------------------------------------
-
-fn rename_stmt(stmt: Stmt, names: &Names) -> Stmt {
-    let lits = |ls: Vec<Lit>| ls.into_iter().map(|l| rename_lit(l, names)).collect();
-    match stmt {
-        Stmt::Fact(a) => Stmt::Fact(rename_atom(a, names)),
-        Stmt::Rule(r) => Stmt::Rule(RuleStmt {
-            head: rename_atom(r.head, names),
-            body: lits(r.body),
-            ..r
-        }),
-        Stmt::Resource(r) => Stmt::Resource(Resource {
-            fields: rename_fields(r.fields, names),
-            body: r.body.map(lits),
-            ..r
-        }),
-        Stmt::Extern(mut e) => {
-            if let Some(n) = names.get(&e.pred) {
-                e.pred = n.clone();
-            }
-            Stmt::Extern(e)
-        }
-        Stmt::Mixed(mut e) => {
-            if let Some(n) = names.get(&e.pred) {
-                e.pred = n.clone();
-            }
-            Stmt::Mixed(e)
-        }
-        Stmt::Mode(mut e) => {
-            if let Some(n) = names.get(&e.pred) {
-                e.pred = n.clone();
-            }
-            Stmt::Mode(e)
-        }
-        other => other,
-    }
-}
-
-fn rename_fields(fs: Vec<FieldAssign>, names: &Names) -> Vec<FieldAssign> {
-    fs.into_iter()
-        .map(|f| FieldAssign {
-            value: rename_term(f.value, names),
-            ..f
-        })
-        .collect()
-}
-
-fn rename_lit(l: Lit, names: &Names) -> Lit {
-    l.map(|a| rename_atom(a, names), |t| rename_term(t, names))
-}
-
-fn rename_atom(mut a: Atom, names: &Names) -> Atom {
-    if let Some(n) = names.get(&a.pred) {
-        a.pred = n.clone();
-    }
-    a.args = a.args.into_iter().map(|t| rename_term(t, names)).collect();
-    a
-}
-
-fn rename_term(t: Term, names: &Names) -> Term {
-    match t {
-        Term::ListComp { item, body } => Term::ListComp {
-            item: Box::new(rename_term(*item, names)),
-            body: body.into_iter().map(|l| rename_lit(l, names)).collect(),
-        },
-        Term::Func { name, args } => Term::Func {
-            name,
-            args: args.into_iter().map(|t| rename_term(t, names)).collect(),
-        },
-        Term::List(xs) => Term::List(xs.into_iter().map(|t| rename_term(t, names)).collect()),
-        Term::Obj(m) => Term::Obj(
-            m.into_iter()
-                .map(|(k, v)| (k, rename_term(v, names)))
-                .collect(),
-        ),
-        other => other,
-    }
-}
-
-/// How a copy's statements are scoped: its name, and whether a resource
-/// written as a variable is its own (a component's copy) or any its user
-/// sees (a module's, whose rules merge into the user's scope).
-#[derive(Clone, Copy)]
-struct Sc<'a> {
-    name: &'a str,
-    vars: bool,
-}
-
-/// Scope one statement of an instance: resource names in `want`, `arg`,
-/// `attr`, `adopt` and `ref` become `scoped(Scope, Name)`, and `output(k, V)` is
-/// `output(Scope, k, V)`.
-fn rewrite_stmt(stmt: Stmt, sc: Sc) -> Stmt {
-    let lits = |ls: Vec<Lit>| ls.into_iter().map(|l| rewrite_lit(l, sc)).collect();
-    let fields = |fs: Vec<FieldAssign>| {
-        fs.into_iter()
-            .map(|f| FieldAssign {
-                value: rewrite_term(f.value, sc),
-                ..f
-            })
-            .collect()
-    };
-    match stmt {
-        Stmt::Fact(a) => Stmt::Fact(rewrite_atom(a, sc)),
-        Stmt::Rule(r) => Stmt::Rule(RuleStmt {
-            head: rewrite_atom(r.head, sc),
-            body: lits(r.body),
-            ..r
-        }),
-        Stmt::Resource(r) => Stmt::Resource(Resource {
-            typ: rewrite_term(r.typ, sc),
-            name: scoped_term(Sc { vars: true, ..sc }, r.name),
-            fields: fields(r.fields),
-            body: r.body.map(lits),
-            ..r
-        }),
-        other => other,
-    }
-}
-
-fn rewrite_lit(lit: Lit, sc: Sc) -> Lit {
-    lit.map(|a| rewrite_atom(a, sc), |t| rewrite_term(t, sc))
-}
-
-fn rewrite_atom(mut atom: Atom, sc: Sc) -> Atom {
-    let t = |x: Term| rewrite_term(x, sc);
-    let pseudo =
-        |a: &Term| matches!(a, Term::Val(Value::Str(s)) if s == INPUT || s == LET || s == "output");
-    match (atom.pred.as_str(), atom.args.len()) {
-        // A cell of a copy inside this one, `(input, inner, k)`, or a read
-        // of its output: its scope is relative.
-        ("arg" | "attr", 4 | 5) | (crate::refine::ATTR_REFINE, 4) if pseudo(&atom.args[0]) => {
-            let mut args: Vec<Term> = atom.args.into_iter().map(t).collect();
-            args[1] = prefix_scope(sc.name, args[1].clone());
-            atom.args = args;
-        }
-        ("want", 2) | ("arg" | "attr", 4) | ("arg", 5) | ("arg_add", 4) => {
-            atom.args = atom
-                .args
-                .into_iter()
-                .enumerate()
-                .map(|(i, a)| match i {
-                    1 => scoped_term(sc, a),
-                    _ => t(a),
-                })
-                .collect();
-        }
-        ("output", 2) | (ROWS, 2) => {
-            let mut args = atom.args.into_iter().map(t);
-            let (k, v) = (args.next().unwrap(), args.next().unwrap());
-            atom.args = vec![str_term(sc.name), k, v];
-        }
-        // A copy inside this one's lexical instance (R-186): its user's
-        // scope and the instance's are relative.
-        (LEXICAL_OF, 3) => {
-            let mut args: Vec<Term> = atom.args.into_iter().map(t).collect();
-            args[0] = prefix_scope(sc.name, args[0].clone());
-            args[2] = prefix_scope(sc.name, args[2].clone());
-            atom.args = args;
-        }
-        // A copy inside this one's record, or a secret cell of its scope:
-        // its user's scope is relative.
-        (INSTANCE_OF, 3) | (crate::transform::SECRET_CELL, 3) => {
-            let mut args: Vec<Term> = atom.args.into_iter().map(t).collect();
-            args[1] = prefix_scope(sc.name, args[1].clone());
-            atom.args = args;
-        }
-        // A copy inside this one's output, or its rows.
-        ("output", 3) | (ROWS, 3) => {
-            let mut args: Vec<Term> = atom.args.into_iter().map(t).collect();
-            args[0] = prefix_scope(sc.name, args[0].clone());
-            atom.args = args;
-        }
-        _ => atom.args = atom.args.into_iter().map(t).collect(),
-    }
-    atom
-}
-
-/// A scope relative to this copy, made absolute: `n.inner`, `n` for the
-/// copy's own `""`.
-fn prefix_scope(scope: &str, inner: Term) -> Term {
-    match inner {
-        Term::Val(Value::Str(s)) => str_term(&crate::types::dotted(scope, &s)),
-        Term::Func { ref name, .. } if name == ABSOLUTE => inner,
-        t => Term::Func {
-            name: crate::address::FORMAT.into(),
-            args: vec![str_term(&format!("{scope}.%s")), t],
-        },
-    }
-}
-
-fn rewrite_term(term: Term, sc: Sc) -> Term {
-    match term {
-        Term::Func { ref name, .. } if name == ABSOLUTE || lexical::is_mark(&term) => term,
-        Term::List(xs) => Term::List(xs.into_iter().map(|t| rewrite_term(t, sc)).collect()),
-        Term::Obj(m) => Term::Obj(
-            m.into_iter()
-                .map(|(k, v)| (k, rewrite_term(v, sc)))
-                .collect::<BTreeMap<_, _>>(),
-        ),
-        Term::ListComp { item, body } => Term::ListComp {
-            item: Box::new(rewrite_term(*item, sc)),
-            body: body.into_iter().map(|l| rewrite_lit(l, sc)).collect(),
-        },
-        // A name a copy inside this one scoped: its scope is relative.
-        Term::Func { name, mut args } if name == crate::address::SCOPED && args.len() == 2 => {
-            args[0] = prefix_scope(sc.name, args[0].clone());
-            args[1] = rewrite_term(args[1].clone(), sc);
-            Term::Func { name, args }
-        }
-        Term::Func { name, args } => {
-            let is_ref = name == crate::address::REF && args.len() == 3;
-            let args = args
-                .into_iter()
-                .enumerate()
-                .map(|(i, a)| match i {
-                    1 if is_ref => scoped_term(sc, a),
-                    _ => rewrite_term(a, sc),
-                })
-                .collect();
-            Term::Func { name, args }
-        }
-        other => other,
-    }
-}
-
-/// `scoped(Scope, Name)`; a name a copy inside this one scoped,
-/// `scoped(inner, Name)`, is `scoped(Scope.inner, Name)`; and a name that
-/// is already an address (`"blue.vpc"` names another copy's resource) is
-/// itself. In a module's (`!sc.vars`), only a name the module writes out is
-/// its own: a variable ranges over every resource its user sees.
-fn scoped_term(sc: Sc, name: Term) -> Term {
-    match name {
-        Term::Func { name: ref f, .. } if f == crate::address::SCOPED => rewrite_term(name, sc),
-        Term::Func { name: ref f, .. } if f == ABSOLUTE => name,
-        _ if lexical::is_mark(&name) => name,
-        Term::Val(Value::Str(s)) if crate::address::is_scoped(&s) => Term::Val(Value::Str(s)),
-        name if !sc.vars && !matches!(name, Term::Val(_)) => rewrite_term(name, sc),
-        name => Term::Func {
-            name: crate::address::SCOPED.to_string(),
-            args: vec![str_term(sc.name), rewrite_term(name, sc)],
-        },
-    }
-}
 
 /// A statement with the marks of `ABSOLUTE` taken off: `__scope(t)` is
 /// `t`.
@@ -2256,26 +1618,6 @@ pub fn set_origin(stmts: &mut [Stmt], origin: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A name that is already an address (`"m.i.n"`, another copy's
-    /// resource) is left alone; a local one is scoped, a quoted segment
-    /// too (After R-42, R-112).
-    #[test]
-    fn scoped_term_leaves_an_already_scoped_address_alone() {
-        for vars in [true, false] {
-            let sc = Sc { name: "m", vars };
-            assert_eq!(scoped_term(sc, str_term("m.i.n")), str_term("m.i.n"));
-            for local in ["n", r#""a.b""#] {
-                assert_eq!(
-                    scoped_term(sc, str_term(local)),
-                    Term::Func {
-                        name: crate::address::SCOPED.to_string(),
-                        args: vec![str_term("m"), str_term(local)],
-                    }
-                );
-            }
-        }
-    }
 
     /// `nested` walks every definition's body, `definitions` names them by
     /// path wherever they stand, and `reached` keeps the bodies a `use`

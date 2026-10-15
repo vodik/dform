@@ -6,11 +6,12 @@
 //! gave for the same term, byte for byte.
 
 use super::Env;
+use super::instances::From;
 use crate::ast::{Atom, Lit, Span, Stmt, Term, TypeExpr, str_term};
 use crate::program::node::*;
 use crate::program::scope::Reach;
 use crate::program::{NodeId, Program, Readings};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The term `id` is, and the reads it hoists, in order.
 pub fn lower_expr(program: &Program, id: ExprId) -> (Term, Vec<Lit>) {
@@ -49,6 +50,9 @@ pub(super) struct Lowering<'p> {
     readings: &'p Readings,
     pub(super) reads: Vec<Lit>,
     pub(super) helpers: Vec<Stmt>,
+    /// The relations a copy's block gives rows of (R-55), under the
+    /// copy's scope: each such head is the copy's own relation.
+    pub(super) taken: Option<(&'p str, &'p BTreeSet<String>)>,
 }
 
 impl<'p> Lowering<'p> {
@@ -59,6 +63,83 @@ impl<'p> Lowering<'p> {
             readings: &env.program.readings,
             reads: Vec::new(),
             helpers: Vec::new(),
+            taken: None,
+        }
+    }
+
+    /// `atom` as the copies being instanced write it (`Chain::atom`):
+    /// each part from where this lowering starts.
+    pub(super) fn put(&self, atom: Atom) -> Atom {
+        match self.env.chain {
+            None => atom,
+            Some(c) => c.atom_from(atom, self.env.from),
+        }
+    }
+
+    /// [`Self::put`], the relation's name from `pred` and each column from
+    /// its own start.
+    pub(super) fn put_at(&self, atom: Atom, pred: Option<From>, args: &[Option<From>]) -> Atom {
+        match self.env.chain {
+            None => atom,
+            Some(c) => c.atom(atom, pred, args),
+        }
+    }
+
+    /// A statement no node lowers to (a resolver's helper) as the copies
+    /// write it.
+    pub(super) fn put_raw(&self, s: Stmt) -> Stmt {
+        match self.env.chain {
+            None => s,
+            Some(c) => super::instances::raw_stmt(c, s, self.env.from),
+        }
+    }
+
+    /// The relation `name` as written, read at `span`: an enclosing
+    /// definition's (the resolver's `__lexical:B:p`, R-186) the relation
+    /// of the instance it is taken from; and where the copies' parts start
+    /// for it.
+    pub(super) fn relation(&self, name: &str, span: Span) -> (String, Option<From>) {
+        match (self.env.chain, crate::modules::lexical_parts(name)) {
+            (Some(c), Some((body, n))) => c.lexical_pred(body, n, span),
+            _ => (name.to_string(), self.env.from),
+        }
+    }
+
+    /// Where the copies' parts start for the term `e` in an atom's
+    /// column: a name its scope reaches it by (`Reach::Absolute`, an
+    /// enclosing definition's) its own, any other this lowering's.
+    pub(super) fn start_of(&self, e: ExprId) -> Option<From> {
+        let c = self.env.chain?;
+        let x = &self.program.exprs[e];
+        if self.readings.contains_key(e) {
+            return self.env.from;
+        }
+        match &x.kind {
+            ExprKind::Scoped {
+                via: Reach::Absolute,
+                ..
+            } => None,
+            ExprKind::Scoped {
+                name,
+                via: Reach::Lexical(body),
+            } => {
+                let Term::Val(crate::value::Value::Str(n)) =
+                    Lowering::new(Env::plain(self.program)).expr(*name)
+                else {
+                    unreachable!("an enclosing body's name is its segment")
+                };
+                c.lexical_term(body, &n, x.span).1
+            }
+            _ => self.env.from,
+        }
+    }
+
+    /// [`Self::start_of`] a pattern's: an expression's, else this
+    /// lowering's.
+    pub(super) fn pattern_from(&self, p: PatternId) -> Option<From> {
+        match &self.program.patterns[p].kind {
+            PatternKind::Expr(e) => self.start_of(*e),
+            _ => self.env.from,
         }
     }
 
@@ -70,9 +151,10 @@ impl<'p> Lowering<'p> {
             Some(v) => self.hoist(id, v),
             None => self.kind(id),
         };
-        match self.readings.get(id) {
-            Some(read) => read.clone(),
-            None => t,
+        match (self.readings.get(id), self.env.chain) {
+            (Some(read), Some(c)) => c.raw_term(read.clone(), self.env.from),
+            (Some(read), None) => read.clone(),
+            (None, _) => t,
         }
     }
 
@@ -114,12 +196,12 @@ impl<'p> Lowering<'p> {
         let (base, key, typ) = (self.expr(base), self.expr(*key), self.expr(*typ));
         let (item, keys, field) = (self.var(v), self.var(*keys), self.var(*field));
         let atom = |pred: &str, args| {
-            Lit::Pos(Atom {
+            Lit::Pos(self.put(Atom {
                 pred: pred.to_string(),
                 args,
                 record: None,
                 span,
-            })
+            }))
         };
         self.reads.extend([
             atom("member", vec![base, item.clone()]),
@@ -141,64 +223,112 @@ impl<'p> Lowering<'p> {
         span: Span,
         value_of: impl FnOnce(&mut Self) -> Term,
     ) -> Option<Atom> {
-        let (pred, args, at) = match &self.program.exprs[value].kind {
-            ExprKind::Value { decl, via } => (via.relation(&decl.name), Vec::new(), 0),
-            ExprKind::Field { base, path } => match (&self.program.exprs[*base].kind, &path[..]) {
-                (ExprKind::Resource { typ, addr }, [Step::Field(p, _)]) => {
-                    let args = vec![str_term(&typ.name), self.expr(*addr), str_term(p)];
-                    ("attr".to_string(), args, 3)
-                }
-                (_, [Step::Index(i)]) => {
-                    let args = vec![self.expr(*base), self.expr(*i)];
-                    ("member".to_string(), args, 2)
-                }
-                _ => return None,
-            },
-            ExprKind::Output { copy, key, of } => {
-                let copy = self.expr(*copy);
-                if let Some((of, scope)) = of {
-                    // At the test's own place, its scope's.
-                    let at = self.program.exprs[*scope].span;
-                    let args = vec![str_term(of), self.expr(*scope), copy.clone()];
-                    let test = Atom {
-                        pred: crate::modules::INSTANCE_OF.to_string(),
-                        args,
-                        record: None,
-                        span: at,
-                    };
-                    self.reads.push(Lit::Pos(test));
-                }
-                ("output".to_string(), vec![copy, str_term(key)], 2)
+        let all = self.env.from;
+        let ((pred, pred_at), args, at) = match &self.program.exprs[value].kind {
+            ExprKind::Value { decl, via } => {
+                (self.value_relation(&decl.name, via, span), Vec::new(), 0)
             }
+            ExprKind::Field { base, path } => self.field_read(*base, path)?,
+            ExprKind::Output { copy, key, of } => self.output_read(*copy, key, of.as_ref()),
             ExprKind::World { typ, addr, path } => {
                 let path = stored(path);
-                let args = vec![str_term(&typ.name), self.expr(*addr), str_term(&path)];
-                ("cloud_attr".to_string(), args, 3)
+                let args = vec![
+                    (str_term(&typ.name), all),
+                    (self.expr(*addr), self.start_of(*addr)),
+                    (str_term(&path), all),
+                ];
+                (("cloud_attr".to_string(), all), args, 3)
             }
             ExprKind::Lookup { rel, args, out, .. } => {
-                let args = args.iter().map(|a| self.expr(*a)).collect();
-                (rel.name.clone(), args, *out)
+                let args = args
+                    .iter()
+                    .map(|a| (self.expr(*a), self.start_of(*a)))
+                    .collect();
+                (self.relation(&rel.name, rel.span), args, *out)
             }
             ExprKind::Address { of, typ } => {
                 let v = value_of(self);
-                let mark = func(crate::modules::ABSOLUTE, vec![v]);
+                let v = match self.env.chain {
+                    Some(_) => v,
+                    None => func(crate::modules::ABSOLUTE, vec![v]),
+                };
                 let r = func(
                     crate::address::REF,
-                    vec![str_term(&typ.name), mark, str_term("")],
+                    vec![str_term(&typ.name), v, str_term("")],
                 );
                 let at = self.program.exprs[*of].span;
                 return self.read_holding(*of, at, r);
             }
             _ => return None,
         };
-        let mut args = args;
+        let (mut args, mut froms): (Vec<Term>, Vec<Option<From>>) = args.into_iter().unzip();
         args.insert(at, value_of(self));
-        Some(Atom {
+        froms.insert(at, all);
+        let atom = Atom {
             pred,
             args,
             record: None,
             span,
+        };
+        Some(self.put_at(atom, pred_at, &froms))
+    }
+
+    /// A field read: a resource's attribute's `attr("T", A, "p", V)`, an
+    /// element's `member(L, i, V)`.
+    fn field_read(&mut self, base: ExprId, path: &[Step]) -> Option<ReadParts> {
+        let all = self.env.from;
+        Some(match (&self.program.exprs[base].kind, path) {
+            (ExprKind::Resource { typ, addr }, [Step::Field(p, _)]) => {
+                let args = vec![
+                    (str_term(&typ.name), all),
+                    (self.expr(*addr), self.start_of(*addr)),
+                    (str_term(p), all),
+                ];
+                (("attr".to_string(), all), args, 3)
+            }
+            (_, [Step::Index(i)]) => {
+                let args = vec![(self.expr(base), all), (self.expr(*i), all)];
+                (("member".to_string(), all), args, 2)
+            }
+            _ => return None,
         })
+    }
+
+    /// A copy's output's read, `output(C, "k", V)`, after the test that
+    /// `C` is a copy of the component `of` in its scope, at the test's own
+    /// place.
+    fn output_read(&mut self, copy: ExprId, key: &str, of: Option<&(String, ExprId)>) -> ReadParts {
+        let all = self.env.from;
+        let copy_at = self.start_of(copy);
+        let copy = self.expr(copy);
+        if let Some((of, scope)) = of {
+            let at = self.program.exprs[*scope].span;
+            let scope_at = self.start_of(*scope);
+            let args = vec![str_term(of), self.expr(*scope), copy.clone()];
+            let test = Atom {
+                pred: crate::modules::INSTANCE_OF.to_string(),
+                args,
+                record: None,
+                span: at,
+            };
+            let test = self.put_at(test, all, &[all, scope_at, copy_at]);
+            self.reads.push(Lit::Pos(test));
+        }
+        (
+            ("output".to_string(), all),
+            vec![(copy, copy_at), (str_term(key), all)],
+            2,
+        )
+    }
+
+    /// The relation a value read `via` reads `name` by, and where the
+    /// copies' parts start for it: an enclosing definition's (R-186), the
+    /// instance's it is taken from.
+    fn value_relation(&self, name: &str, via: &Reach, span: Span) -> (String, Option<From>) {
+        match (self.env.chain, via) {
+            (Some(c), Reach::Lexical(body)) => c.lexical_pred(body, name, span),
+            _ => (via.relation(name), self.env.from),
+        }
     }
 
     /// The read `value` is with `held` in its value column, at `span`
@@ -276,7 +406,8 @@ impl<'p> Lowering<'p> {
     /// its own.
     pub(super) fn terms_made(&mut self, node: NodeId) {
         if let Some(made) = self.program.terms_made.get(&node) {
-            self.helpers.extend(made.iter().cloned());
+            let made: Vec<Stmt> = made.iter().map(|s| self.put_raw(s.clone())).collect();
+            self.helpers.extend(made);
         }
     }
 
@@ -382,15 +513,23 @@ impl<'p> Lowering<'p> {
     /// written by expansion, or `__lexical(Body, n)`, the enclosing body's
     /// instance's.
     fn scoped(&mut self, name: ExprId, via: &Reach) -> Term {
-        match via {
-            Reach::Lexical(body) => {
+        let span = self.program.exprs[name].span;
+        match (self.env.chain, via) {
+            (Some(c), Reach::Lexical(body)) => {
+                let Term::Val(crate::value::Value::Str(n)) = self.expr(name) else {
+                    unreachable!("an enclosing body's name is its segment")
+                };
+                c.lexical_term(body, &n, span).0
+            }
+            (Some(_), Reach::Absolute) => self.expr(name),
+            (None, Reach::Lexical(body)) => {
                 let Term::Val(crate::value::Value::Str(n)) = self.expr(name) else {
                     unreachable!("an enclosing body's name is its segment")
                 };
                 crate::modules::lexical_term(body, &n)
             }
-            Reach::Absolute => func(crate::modules::ABSOLUTE, vec![self.expr(name)]),
-            r => unreachable!("a name {r:?} is written bare"),
+            (None, Reach::Absolute) => func(crate::modules::ABSOLUTE, vec![self.expr(name)]),
+            (_, r) => unreachable!("a name {r:?} is written bare"),
         }
     }
 
@@ -404,13 +543,22 @@ impl<'p> Lowering<'p> {
         let ExprKind::Resource { typ, addr } = &self.program.exprs[res].kind else {
             unreachable!("a reference is to a resource")
         };
+        let at = self.start_of(*addr);
         let addr = self.expr(*addr);
-        func(
-            crate::address::REF,
-            vec![str_term(&typ.name), addr, str_term(&path)],
-        )
+        match self.env.chain {
+            Some(c) => c.reference(str_term(&typ.name), addr, at, str_term(&path)),
+            None => func(
+                crate::address::REF,
+                vec![str_term(&typ.name), addr, str_term(&path)],
+            ),
+        }
     }
 }
+
+/// A read's relation and where the copies' parts start for it, its
+/// columns but the value's each with its own start, and the value's
+/// column.
+type ReadParts = ((String, Option<From>), Vec<(Term, Option<From>)>, usize);
 
 /// A path of field steps as stored: its segments joined by `.`.
 pub(crate) fn stored(path: &[Step]) -> String {

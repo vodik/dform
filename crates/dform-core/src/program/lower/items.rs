@@ -35,7 +35,7 @@ use crate::program::node::{
 };
 use crate::program::{NodeId, Origin, Program};
 use crate::value::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The statements of the item `id`, onto `out`, one origin each.
 pub(super) fn item(env: Env, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<Origin>) {
@@ -125,7 +125,11 @@ fn statements(env: Env, id: ItemId) -> Vec<Stmt> {
             columns,
             mixed,
             fed,
-        } => decl(rel, columns, *mixed, *fed, it.span),
+        } => {
+            let l = Lowering::new(env);
+            let out = decl(rel, columns, *mixed, *fed, it.span);
+            out.into_iter().map(|s| l.put_raw(s)).collect()
+        }
         ItemKind::Extern { name, args } => vec![Stmt::ExternFn(ast::ExternFn {
             name: name.clone(),
             args: args.clone(),
@@ -147,7 +151,13 @@ fn statements(env: Env, id: ItemId) -> Vec<Stmt> {
             rank,
             clause,
         } => set_from(env, source, (*path, *value), *rank, *clause, it.span),
-        ItemKind::Doc { kind, name, pairs } => doc(kind, name, pairs, it.span),
+        ItemKind::Doc { kind, name, pairs } => {
+            let l = Lowering::new(env);
+            doc(kind, name, pairs, it.span)
+                .into_iter()
+                .map(|s| l.put_raw(s))
+                .collect()
+        }
     }
 }
 
@@ -157,13 +167,17 @@ fn statements(env: Env, id: ItemId) -> Vec<Stmt> {
 fn input_item(env: Env, id: ItemId, name: &str, rows: Option<&(usize, Vec<Span>)>) -> Vec<Stmt> {
     let span = env.program.items[id].span;
     let (decl, helpers) = input(env, id);
+    let l = Lowering::new(env);
+    let finish = |a: Atom| l.put(a);
     let mut out = vec![Stmt::Input(decl.clone())];
     if let Some((i, sites)) = rows {
         let group = format!("input {name}");
-        out.push(crate::modules::declared(&group, *i, decl.guard, span));
+        out.push(crate::modules::declared_with(
+            &group, *i, decl.guard, span, &finish,
+        ));
         if *i == 0 {
             let sites: Vec<(String, Span)> = sites.iter().map(|s| (group.clone(), *s)).collect();
-            out.extend(crate::modules::denies(&group, &sites));
+            out.extend(crate::modules::denies_with(&group, &sites, &finish));
         }
     }
     out.extend(helpers);
@@ -229,7 +243,7 @@ fn rule(
     };
     body.extend(reads);
     l.terms_made(NodeId::Item(id));
-    clause_rule(atom, body, folds, clause.is_some(), span)
+    clause_rule(l, atom, body, folds, clause.is_some(), span)
 }
 
 /// A rule's or a relation input's own statements, the helpers they make
@@ -257,10 +271,38 @@ fn own(l: &mut Lowering, id: ItemId) -> Vec<Stmt> {
 /// binding (`clause`), those and the inputs' reads (`body`), its rows'
 /// own statements; then the helpers, in the order its parts made them.
 fn copy(env: Env, id: ItemId) -> Vec<Stmt> {
+    let (copy, rows, helpers) = copy_parts(env, id, None);
+    let copy = ast::Instance {
+        rows: rows.into_iter().map(|(s, _)| s).collect(),
+        ..copy
+    };
+    let used = matches!(
+        &env.program.items[id].kind,
+        ItemKind::Copy {
+            kind: CopyKind::Use,
+            ..
+        }
+    );
+    let mut out = vec![match used {
+        true => Stmt::Use(copy),
+        false => Stmt::Instance(copy),
+    }];
+    out.extend(helpers);
+    out
+}
+
+/// The copy `id` as its user writes it: the copy (its rows apart), each
+/// row's statements, `true` for a relation `taken` names the copy's own
+/// (its scope, the relations its definition takes, R-55), and the
+/// helpers its parts made.
+pub(super) fn copy_parts(
+    env: Env,
+    id: ItemId,
+    taken: Option<(&str, &BTreeSet<String>)>,
+) -> (ast::Instance, Vec<(Stmt, bool)>, Vec<Stmt>) {
     let program = env.program;
     let it = &program.items[id];
     let ItemKind::Copy {
-        kind,
         module,
         name,
         named,
@@ -268,6 +310,7 @@ fn copy(env: Env, id: ItemId) -> Vec<Stmt> {
         rows,
         clause,
         via,
+        ..
     } = &it.kind
     else {
         unreachable!("a copy")
@@ -292,24 +335,75 @@ fn copy(env: Env, id: ItemId) -> Vec<Stmt> {
             (k.clone(), v, *span)
         })
         .collect();
-    let rows = rows.iter().flat_map(|&r| own(&mut l, r)).collect();
+    l.taken = taken;
+    let mut out = Vec::new();
+    for &r in rows {
+        let takes = taken.is_some_and(|(_, t)| t.contains(&row_relation(program, r)));
+        let stmts = own(&mut l, r);
+        out.extend(stmts.into_iter().map(|s| {
+            let taken = takes && matches!(s, Stmt::Fact(_) | Stmt::Rule(_));
+            (s, taken)
+        }));
+    }
+    l.taken = None;
     let copy = ast::Instance {
         module: module.clone(),
         name: name.clone(),
         named,
         inputs,
-        rows,
+        rows: Vec::new(),
         body: (!body.is_empty()).then_some(body),
         clause,
         via: via.clone(),
         span: it.span,
     };
-    let mut out = vec![match kind {
-        CopyKind::Use => Stmt::Use(copy),
-        CopyKind::Component => Stmt::Instance(copy),
-    }];
-    out.append(&mut l.helpers);
-    out
+    (copy, out, std::mem::take(&mut l.helpers))
+}
+
+/// The relation a copy block's row `r` gives rows of.
+fn row_relation(program: &Program, r: ItemId) -> String {
+    match &program.items[r].kind {
+        ItemKind::Rule { head, .. } => head.rel.name.clone(),
+        ItemKind::RelationInput { rel, .. } => rel.name.clone(),
+        k => unreachable!("{} is no row", super::super::spell::kind(k)),
+    }
+}
+
+/// The name the copy `id` binds and its clause, as a check of a name
+/// bound more than once (R-104) names it.
+pub(super) fn alternative(env: Env, id: ItemId) -> crate::modules::Alternative {
+    let it = &env.program.items[id];
+    let ItemKind::Copy {
+        kind,
+        module,
+        name,
+        clause,
+        ..
+    } = &it.kind
+    else {
+        unreachable!("a copy")
+    };
+    let what = match kind {
+        CopyKind::Use if module.rsplit('.').next() == Some(name.as_str()) => {
+            format!("use {module}")
+        }
+        CopyKind::Use => format!("use {module} as {name}"),
+        CopyKind::Component => format!("resource {module} {name}"),
+    };
+    let mut lits = Vec::new();
+    if let Some(c) = clause {
+        Lowering::new(env).clause(*c, &mut lits);
+    }
+    crate::modules::Alternative {
+        what,
+        clause: lits,
+        span: it.span,
+    }
+}
+
+/// The statements of the item `id` under `env`, which is not a module.
+pub(super) fn statements_in(env: Env, id: ItemId) -> Vec<Stmt> {
+    statements(env, id)
 }
 
 /// `deny "m" [{ .. }] [where B]`, `warn ..`: `deny(m[, detail])`, a fact
@@ -337,13 +431,13 @@ fn check(
         CheckKind::Deny => "deny",
         CheckKind::Warn => "warn",
     };
-    let head = Atom {
+    let head = l.put(Atom {
         pred: pred.to_string(),
         args,
         record: None,
         span,
-    };
-    let mut out = clause_rule(head, body, folds, clause.is_some(), span);
+    });
+    let mut out = clause_rule(&l, head, body, folds, clause.is_some(), span);
     out.append(&mut l.helpers);
     out
 }
@@ -384,13 +478,13 @@ fn output(
     if body.is_empty() && clause.is_none() {
         out.push(decl(None, Some(v)));
     } else {
-        let head = Atom {
+        let head = l.put(Atom {
             pred: "output".into(),
             args: vec![str_term(name), v],
             record: None,
             span,
-        };
-        out.extend(clause_rule(head, body, folds, true, span));
+        });
+        out.extend(clause_rule(&l, head, body, folds, true, span));
     }
     out.append(&mut l.helpers);
     out
@@ -435,16 +529,17 @@ fn resource(
         }
     };
     let reads = start..lits.len();
-    let name = match name {
-        Header::Bare(n) => str_term(n),
-        Header::Literal(s) => str_term(&crate::address::name_segment(s)),
+    let (name, name_at) = match name {
+        Header::Bare(n) => (str_term(n), env.from),
+        Header::Literal(s) => (str_term(&crate::address::name_segment(s)), env.from),
         Header::Interp(e) => {
+            let at = l.start_of(*e);
             let t = l.expr(*e);
             lits.append(&mut l.reads);
-            t
+            (t, at)
         }
     };
-    let mut out = vec![Stmt::Resource(ast::Resource {
+    let r = ast::Resource {
         typ: str_term(&typ.name),
         name,
         rank,
@@ -452,7 +547,12 @@ fn resource(
         body: (!lits.is_empty()).then_some(lits),
         reads,
         span,
-    })];
+    };
+    let r = match env.chain {
+        Some(c) => c.resource(r, name_at),
+        None => r,
+    };
+    let mut out = vec![Stmt::Resource(r)];
     out.append(&mut l.helpers);
     out
 }
@@ -512,16 +612,26 @@ fn relation_input(
         None => Default::default(),
     };
     l.goal(source.rows, &mut body);
-    let head = Atom {
+    let mut head = Atom {
         pred: rel.name.clone(),
         args: columns.iter().map(|v| l.var(*v)).collect(),
         record: None,
         span: rel.span,
     };
-    let mut out = source.externs.clone();
-    out.extend(clause_rule(head, body, folds, true, rel.span));
+    if let Some((scope, takes)) = l.taken
+        && takes.contains(&head.pred)
+    {
+        head.pred = super::instances::private_name(scope, &head.pred);
+    }
+    let head = l.put(head);
+    let mut out: Vec<Stmt> = source
+        .externs
+        .iter()
+        .map(|s| l.put_raw(s.clone()))
+        .collect();
+    out.extend(clause_rule(l, head, body, folds, true, rel.span));
     if mixed {
-        out.push(Stmt::Mixed(e));
+        out.push(l.put_raw(Stmt::Mixed(e)));
     }
     out
 }
@@ -542,12 +652,12 @@ fn let_fn(
     let mut l = Lowering::new(env);
     let mut args: Vec<ast::Term> = params.iter().map(|p| l.var(p.var)).collect();
     let demand = crate::demand::of(name);
-    let seed = vec![ast::Lit::Pos(Atom {
+    let seed = vec![ast::Lit::Pos(l.put(Atom {
         pred: demand.clone(),
         args: args.clone(),
         record: None,
         span,
-    })];
+    }))];
     let (mut body, folds) = match clause {
         Some(c) => l.unfolded_after(c, seed),
         None => (seed, Vec::new()),
@@ -555,16 +665,16 @@ fn let_fn(
     args.push(l.expr(value));
     body.append(&mut l.reads);
     let arity = args.len();
-    let head = Atom {
+    let head = l.put(Atom {
         pred: name.to_string(),
         args,
         record: None,
         span,
-    };
-    let mut out = clause_rule(head, body, folds, true, span);
+    });
+    let mut out = clause_rule(&l, head, body, folds, true, span);
     let relation = |pred: String, arity| ast::Extern { pred, arity, span };
-    out.push(Stmt::Extern(relation(demand, arity - 1)));
-    out.push(Stmt::Mode(relation(name.to_string(), arity)));
+    out.push(l.put_raw(Stmt::Extern(relation(demand, arity - 1))));
+    out.push(l.put_raw(Stmt::Mode(relation(name.to_string(), arity))));
     out.append(&mut l.helpers);
     out
 }
@@ -614,24 +724,27 @@ fn provider(env: Env, id: ItemId) -> Vec<Stmt> {
         }));
     }
     if !config.is_empty() || clause.is_some() {
-        let head = Atom {
+        let head = l.put(Atom {
             pred: "provider_config".into(),
             args: vec![str_term(name), ast::Term::Obj(config)],
             record: None,
             span,
-        };
-        out.extend(clause_rule(head, body, Vec::new(), false, span));
+        });
+        out.extend(clause_rule(&l, head, body, Vec::new(), false, span));
     }
     for (head, b) in accounts {
-        out.extend(clause_rule(head, b, Vec::new(), false, span));
+        out.extend(clause_rule(&l, head, b, Vec::new(), false, span));
     }
     let group = format!("use {name}");
+    let finish = |a: Atom| l.put(a);
     if let Some(i) = declared {
-        out.push(crate::modules::declared(&group, *i, lits, span));
+        out.push(crate::modules::declared_with(
+            &group, *i, lits, span, &finish,
+        ));
     }
     if !denies.is_empty() {
         let sites: Vec<(String, Span)> = denies.iter().map(|s| (group.clone(), *s)).collect();
-        out.extend(crate::modules::denies(&group, &sites));
+        out.extend(crate::modules::denies_with(&group, &sites, &finish));
     }
     out.append(&mut l.helpers);
     out
@@ -680,12 +793,13 @@ impl Settings {
                     if let Some(c) = clause {
                         l.clause(*c, &mut b);
                     }
-                    let head = Atom {
+                    let args = vec![str_term(name), l.expr(*value)];
+                    let head = l.put(Atom {
                         pred: crate::plugin::providers::EXPECT_ACCOUNT.into(),
-                        args: vec![str_term(name), l.expr(*value)],
+                        args,
                         record: None,
                         span: *span,
-                    };
+                    });
                     b.append(&mut l.reads);
                     out.accounts.push((head, b));
                 }
@@ -708,16 +822,21 @@ fn set(env: Env, writes: &[Write], clause: Option<ClauseId>, span: Span) -> Vec<
     let mut out = Vec::new();
     for w in writes {
         let mut body = lits.clone();
+        let at = cell_from(&l, &w.target);
         let cell = cell(&mut l, &w.target);
         body.append(&mut l.reads);
         let value = l.expr(w.value);
         body.append(&mut l.reads);
         let head = write_head(w, cell, value);
+        let all = l.env.from;
+        let mut froms = vec![all; head.args.len()];
+        froms[1] = at;
+        let head = l.put_at(head, all, &froms);
         let mut folds = folds.clone();
         for (f, n) in folds.iter_mut().zip(&w.folds) {
             f.2 = Some(*n);
         }
-        out.extend(clause_rule(head, body, folds, clause.is_some(), span));
+        out.extend(clause_rule(&l, head, body, folds, clause.is_some(), span));
     }
     out.append(&mut l.helpers);
     out
@@ -730,6 +849,15 @@ fn cell(l: &mut Lowering, target: &Target) -> Vec<ast::Term> {
         Target::Attr { typ, addr, .. } => vec![l.expr(*typ), l.expr(*addr)],
         Target::Element { typ, addr, key, .. } => vec![l.expr(*typ), l.expr(*addr), l.expr(*key)],
         Target::Input { .. } => Vec::new(),
+    }
+}
+
+/// Where the copies' parts start for the address of the cell a line's
+/// target is: its own, when the scope reaches it by its name.
+fn cell_from(l: &Lowering, target: &Target) -> Option<super::instances::From> {
+    match target {
+        Target::Attr { addr, .. } | Target::Element { addr, .. } => l.start_of(*addr),
+        Target::Input { .. } => l.env.from,
     }
 }
 
@@ -816,14 +944,18 @@ fn set_from(
         l.var(value),
         str_term(rank.unwrap_or(Rank::Normal).name()),
     ];
-    let head = Atom {
+    let head = l.put(Atom {
         pred: "arg".into(),
         args,
         record: None,
         span,
-    };
-    let mut out = source.externs.clone();
-    out.extend(clause_rule(head, body, folds, true, span));
+    });
+    let mut out: Vec<Stmt> = source
+        .externs
+        .iter()
+        .map(|s| l.put_raw(s.clone()))
+        .collect();
+    out.extend(clause_rule(&l, head, body, folds, true, span));
     out.append(&mut l.helpers);
     out
 }
@@ -831,7 +963,42 @@ fn set_from(
 /// The input `id` declared, and the helper statements its fields', its
 /// refinement's and its clause's bodies made, in that order.
 fn input(env: Env, id: ItemId) -> (ast::InputDecl, Vec<Stmt>) {
-    let program = env.program;
+    input_in(id, Reading::of(env))
+}
+
+/// What an input's parts are lowered under: its refinement, its clause
+/// and its default.
+#[derive(Clone, Copy)]
+struct Reading<'p> {
+    refinement: Env<'p>,
+    guard: Env<'p>,
+    default: Env<'p>,
+}
+
+impl<'p> Reading<'p> {
+    fn of(env: Env<'p>) -> Reading<'p> {
+        Reading {
+            refinement: env,
+            guard: env,
+            default: env,
+        }
+    }
+}
+
+/// The input `id` as a copy reads it: its refinement under `full`, its
+/// clause under `guard`, its default under `default`.
+pub(super) fn input_read(id: ItemId, full: Env, guard: Env, default: Env) -> ast::InputDecl {
+    let reading = Reading {
+        refinement: full,
+        guard,
+        default,
+    };
+    input_in(id, reading).0
+}
+
+/// [`input`], each part under its own environment.
+fn input_in(id: ItemId, envs: Reading) -> (ast::InputDecl, Vec<Stmt>) {
+    let program = envs.refinement.program;
     let it = &program.items[id];
     let ItemKind::Input {
         name,
@@ -850,13 +1017,13 @@ fn input(env: Env, id: ItemId) -> (ast::InputDecl, Vec<Stmt>) {
     let fields = fields
         .iter()
         .map(|&f| {
-            let (decl, made) = input(env, f);
+            let (decl, made) = input_in(f, envs);
             helpers.extend(made);
             decl
         })
         .collect();
-    let default = default.map(|d| Lowering::new(env).expr(d));
-    let mut body = |c: &Option<ClauseId>| match c {
+    let default = default.map(|d| Lowering::new(envs.default).expr(d));
+    let mut body = |env: Env, c: &Option<ClauseId>| match c {
         Some(c) => {
             let (lits, made) = super::clause::lower_clause_in(env, *c, &[]);
             helpers.extend(made);
@@ -864,8 +1031,8 @@ fn input(env: Env, id: ItemId) -> (ast::InputDecl, Vec<Stmt>) {
         }
         None => Vec::new(),
     };
-    let refinement = body(refinement);
-    let guard = body(guard);
+    let refinement = body(envs.refinement, refinement);
+    let guard = body(envs.guard, guard);
     let decl = ast::InputDecl {
         name: name.clone(),
         ty: ty.clone(),
@@ -882,6 +1049,7 @@ fn input(env: Env, id: ItemId) -> (ast::InputDecl, Vec<Stmt>) {
 /// `head` over `body`: a fact when nothing is written after `where` and
 /// nothing read, else a rule, folded over `folds`.
 fn clause_rule(
+    l: &Lowering,
     head: Atom,
     body: Vec<ast::Lit>,
     folds: Vec<super::clause::Fold>,
@@ -889,7 +1057,7 @@ fn clause_rule(
     span: Span,
 ) -> Vec<Stmt> {
     match (folds.is_empty(), has_clause) {
-        (false, _) => folded(head, body, folds, span),
+        (false, _) => folded(head, body, folds, span, &|a| l.put(a)),
         (true, false) if body.is_empty() => vec![Stmt::Fact(head)],
         (true, _) => vec![Stmt::Rule(RuleStmt::new(head, body))],
     }
@@ -972,20 +1140,20 @@ impl<'p> Let<'p> {
         };
         let value = l.expr(self.value);
         body.append(&mut l.reads);
-        let head = Atom {
+        let head = l.put(Atom {
             pred: crate::modules::LET.to_string(),
             args: vec![str_term(self.name), value, str_term(self.rank.name())],
             record: None,
             span,
-        };
-        let mut out = clause_rule(head, body, folds, self.clause.is_some(), span);
+        });
+        let mut out = clause_rule(&l, head, body, folds, self.clause.is_some(), span);
         for (q, _) in self.ty.iter().flat_map(|d| crate::types::secret_fields(d)) {
-            out.push(Stmt::Fact(Atom {
+            out.push(Stmt::Fact(l.put(Atom {
                 pred: crate::modules::SECRET_LET.into(),
                 args: vec![str_term(self.name), str_term(&q)],
                 record: None,
                 span,
-            }));
+            })));
         }
         if let (true, Some(d)) = (self.declares, self.ty) {
             out.push(Stmt::Decl(Decl {

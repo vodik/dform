@@ -10,6 +10,7 @@
 
 mod clause;
 mod expr;
+pub mod instances;
 mod items;
 mod records;
 pub use clause::{lower_clause, lower_goal};
@@ -25,12 +26,16 @@ use std::cell::RefCell;
 
 /// What the nodes are lowered under: the program's own, or, for the
 /// evaluation, each record atom's fields in their columns by its scope's
-/// `decl`s ([`Records`]), what is wrong with one said in `errors`.
+/// `decl`s ([`Records`]), what is wrong with one said in `errors`; and
+/// the copies being instanced (`chain`), each part of what is written
+/// final from `from` ([`instances::From`]).
 #[derive(Clone, Copy)]
 pub(crate) struct Env<'p> {
     pub program: &'p Program,
     pub records: Option<&'p Records>,
     pub errors: Option<&'p RefCell<Vec<Diagnostic>>>,
+    pub chain: Option<&'p instances::Chain>,
+    pub from: Option<instances::From>,
 }
 
 impl<'p> Env<'p> {
@@ -40,6 +45,8 @@ impl<'p> Env<'p> {
             program,
             records: None,
             errors: None,
+            chain: None,
+            from: None,
         }
     }
 
@@ -110,9 +117,9 @@ pub fn lower_placed(
 ) -> Result<Vec<ast::Stmt>, Vec<Diagnostic>> {
     let errors = RefCell::new(Vec::new());
     let env = Env {
-        program,
         records: Some(records),
         errors: Some(&errors),
+        ..Env::plain(program)
     };
     let mut out = Vec::new();
     items::item(env, id, &mut out, &mut Vec::new());

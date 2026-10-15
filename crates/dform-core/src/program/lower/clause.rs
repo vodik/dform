@@ -53,7 +53,13 @@ pub(super) type Fold = (Term, Term, Option<u32>);
 /// other variables and what the literals after the fold read, as B binds
 /// them), the literals that read a fold's value after it, then each
 /// helper.
-pub(super) fn folded(mut head: Atom, lits: Vec<Lit>, folds: Vec<Fold>, span: Span) -> Vec<Stmt> {
+pub(super) fn folded(
+    mut head: Atom,
+    lits: Vec<Lit>,
+    folds: Vec<Fold>,
+    span: Span,
+    finish: &dyn Fn(Atom) -> Atom,
+) -> Vec<Stmt> {
     let results: BTreeSet<&str> = folds
         .iter()
         .filter_map(|(v, ..)| match v {
@@ -94,11 +100,12 @@ pub(super) fn folded(mut head: Atom, lits: Vec<Lit>, folds: Vec<Fold>, span: Spa
         let pred = format!("__agg_{}", n.expect("a grouped fold's helper number"));
         let mut args = group.clone();
         args.push(call);
-        let rule = RuleStmt::helper(Helper::Aggregate, atom_at(&pred, args, span), base.clone());
+        let head = finish(atom_at(&pred, args, span));
+        let rule = RuleStmt::helper(Helper::Aggregate, head, base.clone());
         helpers.push(Stmt::Rule(rule));
         let mut args = group.clone();
         args.push(v);
-        body.push(Lit::Pos(atom_at(&pred, args, span)));
+        body.push(Lit::Pos(finish(atom_at(&pred, args, span))));
     }
     body.extend(post);
     let mut out = vec![Stmt::Rule(RuleStmt::new(head, body))];
@@ -175,7 +182,7 @@ impl Lowering<'_> {
                 let start = out.len();
                 self.goal(*goal, out);
                 let covered = (out.len() - start) as i64;
-                let mark = atom_at(
+                let mark = self.put(atom_at(
                     crate::partition::HAS,
                     vec![
                         typ,
@@ -184,7 +191,7 @@ impl Lowering<'_> {
                         Term::Val(Value::Int(covered)),
                     ],
                     g.span,
-                );
+                ));
                 let negated = matches!(self.program.goals[*goal].kind, GoalKind::Not { .. });
                 out.insert(
                     start,
@@ -233,7 +240,7 @@ impl Lowering<'_> {
         let mut inner = Vec::new();
         self.clause(clause, &mut inner);
         let args = h.args.iter().map(|v| self.var(*v)).collect();
-        let head = atom_at(&format!("__neg_{}", h.number), args, span);
+        let head = self.put(atom_at(&format!("__neg_{}", h.number), args, span));
         let folded: BTreeSet<&str> = h
             .folded
             .iter()
@@ -296,7 +303,11 @@ impl Lowering<'_> {
             }
             GoalKind::Has(Has::Resource { typ, addr }) => {
                 let args = vec![self.expr(*typ), self.expr(*addr)];
-                vec![Lit::Pos(atom_at(crate::partition::IDENTITY, args, span))]
+                vec![Lit::Pos(self.put(atom_at(
+                    crate::partition::IDENTITY,
+                    args,
+                    span,
+                )))]
             }
             GoalKind::Has(Has::Read(e)) => vec![self.in_place_read(*e, Term::Wildcard)],
             GoalKind::Has(Has::Walk { var, value }) => {
@@ -312,16 +323,12 @@ impl Lowering<'_> {
 
     /// `x in c`: the literals, the facts it states onto the helpers.
     fn member(&mut self, pat: PatternId, coll: &Coll, span: crate::ast::Span) -> Vec<Lit> {
-        let fact = |l: &mut Self, pred: &str, args: Vec<Term>, at| {
-            let a = atom_at(pred, args, at);
-            l.helpers.push(Stmt::Fact(a));
-        };
         match coll {
             Coll::Expr(e) => {
                 let e = self.expr(*e);
                 let mut args = vec![e];
                 args.extend(self.columns(pat));
-                vec![Lit::Pos(atom_at("member", args, span))]
+                vec![Lit::Pos(self.put(atom_at("member", args, span)))]
             }
             Coll::Enum {
                 name,
@@ -330,60 +337,73 @@ impl Lowering<'_> {
                 list,
             } => {
                 let values = values.iter().cloned().map(Value::Str).collect();
-                fact(
-                    self,
+                self.state(
                     ENUM,
                     vec![str_term(name), Term::Val(Value::List(values))],
                     *def,
                 );
                 let mut args = vec![self.expr(*list)];
                 args.extend(self.columns(pat));
-                vec![Lit::Pos(atom_at("member", args, span))]
+                vec![Lit::Pos(self.put(atom_at("member", args, span)))]
             }
             Coll::Type(t) => {
+                let all = self.env.from;
+                let at = [all, self.pattern_from(pat)];
                 let args = vec![self.expr(*t), self.pattern(pat)];
-                vec![Lit::Pos(atom_at("want", args, span))]
+                vec![Lit::Pos(self.put_at(atom_at("want", args, span), all, &at))]
             }
             Coll::Namespace {
                 ns,
                 types,
                 typ,
                 enumerate,
-            } => {
-                for t in types {
-                    fact(self, NAMESPACE, vec![str_term(ns), str_term(t)], span);
-                }
-                let typ = self.expr(*typ);
-                let test = atom_at(NAMESPACE, vec![str_term(ns), typ.clone()], span);
-                self.enumerate(test, typ, pat, *enumerate, span)
-            }
+            } => self.tested((NAMESPACE, ns, types), *typ, pat, *enumerate, span),
             Coll::ProviderType {
                 typ,
                 names,
                 var,
                 enumerate,
-            } => {
-                for n in names {
-                    fact(self, PROVIDER_TYPE, vec![str_term(typ), str_term(n)], span);
-                }
-                let var = self.expr(*var);
-                let test = atom_at(PROVIDER_TYPE, vec![str_term(typ), var.clone()], span);
-                self.enumerate(test, var, pat, *enumerate, span)
-            }
+            } => self.tested((PROVIDER_TYPE, typ, names), *var, pat, *enumerate, span),
             Coll::World(t) => {
                 let args = vec![str_term(t), self.pattern(pat)];
-                vec![Lit::Pos(atom_at("cloud_exists", args, span))]
+                vec![Lit::Pos(self.put(atom_at("cloud_exists", args, span)))]
             }
             Coll::Copies { component, scope } => {
+                let all = self.env.from;
+                let at = [all, self.start_of(*scope), self.pattern_from(pat)];
                 let args = vec![str_term(component), self.expr(*scope), self.pattern(pat)];
                 let pred = crate::modules::INSTANCE_OF;
-                vec![Lit::Pos(atom_at(pred, args, span))]
+                vec![Lit::Pos(self.put_at(atom_at(pred, args, span), all, &at))]
             }
             Coll::Each(e) | Coll::TypeOf(e) => {
                 let p = self.pattern(pat);
                 vec![Lit::Eq(p, self.expr(*e))]
             }
         }
+    }
+
+    /// The fact `pred(args)` a membership states, onto the helpers.
+    fn state(&mut self, pred: &str, args: Vec<Term>, at: crate::ast::Span) {
+        let a = self.put(atom_at(pred, args, at));
+        self.helpers.push(Stmt::Fact(a));
+    }
+
+    /// A membership of a set `pred` states the rows of, `pred(key, x)` for
+    /// each of `rows`: the test of `term`, then its enumeration.
+    fn tested(
+        &mut self,
+        (pred, key, rows): (&str, &str, &[String]),
+        term: ExprId,
+        pat: PatternId,
+        enumerate: bool,
+        span: crate::ast::Span,
+    ) -> Vec<Lit> {
+        for r in rows {
+            self.state(pred, vec![str_term(key), str_term(r)], span);
+        }
+        let t = self.expr(term);
+        let test = self.put(atom_at(pred, vec![str_term(key), t.clone()], span));
+        self.enumerate(test, t, pat, enumerate, span)
     }
 
     /// A type's test, then `want(typ, x)` when the membership enumerates.
@@ -397,8 +417,14 @@ impl Lowering<'_> {
     ) -> Vec<Lit> {
         let mut lits = vec![Lit::Pos(test)];
         if enumerate {
+            let all = self.env.from;
+            let at = [all, self.pattern_from(pat)];
             let x = self.pattern(pat);
-            lits.push(Lit::Pos(atom_at("want", vec![typ, x], span)));
+            lits.push(Lit::Pos(self.put_at(
+                atom_at("want", vec![typ, x], span),
+                all,
+                &at,
+            )));
         }
         lits
     }
@@ -431,13 +457,39 @@ impl Lowering<'_> {
     /// ([`Env::records`]).
     pub(super) fn atom(&mut self, rel: &RelRef, args: &RelArgs) -> Atom {
         let atom = self.written(rel, args);
-        self.env.columns(atom, false)
+        let atom = self.env.columns(atom, false);
+        self.put_rel(atom, rel, args)
     }
 
-    /// The atom of `rel` over `args` a head writes: every field given.
+    /// The atom of `rel` over `args` a head writes: every field given; a
+    /// relation a copy's block gives the rows of the copy's own (R-55).
     pub(super) fn head(&mut self, rel: &RelRef, args: &RelArgs) -> Atom {
         let atom = self.written(rel, args);
-        self.env.columns(atom, true)
+        let mut atom = self.env.columns(atom, true);
+        if let Some((scope, takes)) = self.taken
+            && takes.contains(&atom.pred)
+        {
+            atom.pred = super::instances::private_name(scope, &atom.pred);
+        }
+        self.put_rel(atom, rel, args)
+    }
+
+    /// The atom of `rel` written over `args` as the copies write it: the
+    /// relation's name read as written, each column from its pattern's
+    /// start.
+    fn put_rel(&self, mut atom: Atom, rel: &RelRef, args: &RelArgs) -> Atom {
+        if self.env.chain.is_none() {
+            return atom;
+        }
+        let (pred, pred_at) = self.relation(&atom.pred, rel.span);
+        atom.pred = pred;
+        let at: Vec<Option<super::instances::From>> = match args {
+            RelArgs::Positional(ps) if atom.args.len() == ps.len() => {
+                ps.iter().map(|p| self.pattern_from(*p)).collect()
+            }
+            _ => vec![self.env.from; atom.args.len()],
+        };
+        self.put_at(atom, pred_at, &at)
     }
 
     /// The atom as written: a record's fields by name.
