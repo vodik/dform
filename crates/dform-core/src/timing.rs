@@ -56,7 +56,7 @@ pub fn set_root(id: Option<tracing::Id>) {
 }
 
 /// A new span's parent: the span it is made in, else the run's.
-fn parent() -> Option<tracing::Id> {
+pub fn parent() -> Option<tracing::Id> {
     tracing::Span::current()
         .id()
         .or_else(|| ROOT.get().cloned())
@@ -116,28 +116,6 @@ pub struct Call {
 impl Call {
     /// Its answer is in.
     pub fn end(self) {}
-}
-
-/// A call to the provider `provider` begins: `kind` the method, `addr`
-/// what it is about. `None` unless a subscriber keeps it.
-pub fn provider_call(provider: &str, kind: &str, addr: &str) -> Option<Call> {
-    if !kept(tracing::Level::DEBUG) {
-        return None;
-    }
-    let addr = (!addr.is_empty()).then_some(addr);
-    // A provider not yet named by its handshake, by its executable's name.
-    let provider = provider.rsplit('/').next().unwrap_or(provider);
-    let span = tracing::debug_span!(
-        target: TARGET,
-        parent: parent(),
-        "provider.call",
-        otel.name = %format_args!("{provider} {kind}"),
-        otel.kind = "client",
-        provider,
-        kind,
-        addr,
-    );
-    Some(Call { _span: span })
 }
 
 /// A request dform makes itself, `kind` of `addr`, for `f`.

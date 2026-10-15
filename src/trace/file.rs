@@ -4,7 +4,8 @@
 //! as OpenTelemetry's file exporter writes them and Jaeger loads them.
 //! Written here from the span data, with no OpenTelemetry crate: a span's
 //! name is its `otel.name`, its kind its `otel.kind` (`client` for a
-//! call, else internal), every other field an attribute.
+//! call, else internal), its status its `otel.status_code` (a call's
+//! answer, `ok` or `error`), every other field an attribute.
 //!
 //! [`Layer`] feeds it, a layer of the run's subscriber beside the
 //! exporter and `DFORM_LOG`'s lines. A span ends when it is last exited,
@@ -52,6 +53,8 @@ struct Open {
     start: u128,
     /// When it was last exited, if it was ever entered.
     exited: Option<u128>,
+    /// Its status, from `otel.status_code`: OTLP's code (1 ok, 2 error).
+    status: Option<u8>,
     attributes: Vec<Value>,
 }
 
@@ -109,6 +112,7 @@ impl Spans {
             client: false,
             start: now(),
             exited: None,
+            status: None,
             attributes: Vec::new(),
         };
         attrs.record(&mut Fields(&mut open));
@@ -149,7 +153,10 @@ impl Spans {
             "startTimeUnixNano": o.start.to_string(),
             "endTimeUnixNano": end.to_string(),
             "attributes": o.attributes,
-            "status": {},
+            "status": match o.status {
+                Some(code) => json!({ "code": code }),
+                None => json!({}),
+            },
         });
         s.ended.push(span);
         if s.ended.len() >= LINE {
@@ -208,6 +215,12 @@ impl Visit for Fields<'_> {
         match field.name() {
             "otel.name" => self.0.name = value.to_string(),
             "otel.kind" => self.0.client = value == "client",
+            "otel.status_code" => {
+                self.0.status = match value {
+                    "ok" => Some(1),
+                    _ => Some(2),
+                }
+            }
             _ => self.put(field, json!({ "stringValue": value })),
         }
     }

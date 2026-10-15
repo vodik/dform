@@ -65,6 +65,52 @@ enum Cmd {
     IsDead(Sender<bool>),
 }
 
+/// A call with no answer yet: when it times out, what it is, and its
+/// `provider.call` span, which ends when the `Live` is dropped: when its
+/// answer is taken ([`Live::finish`]), or when it is given up on.
+struct Live {
+    due: Instant,
+    what: String,
+    span: tracing::Span,
+}
+
+impl Live {
+    /// `call`, submitted now to the provider `provider`, due at `due`.
+    fn new(provider: &str, call: &Call, due: Instant) -> Live {
+        let what = describe(call);
+        let span = Live::span(provider, call.method(), &what);
+        Live { due, what, span }
+    }
+
+    /// The span of a call of `kind` to `provider`, `what` its description
+    /// (the kind, then the resource's address or the extern's name).
+    fn span(provider: &str, kind: &str, what: &str) -> tracing::Span {
+        let addr = what.strip_prefix(kind).unwrap_or(what).trim_start();
+        // A provider not yet named by its handshake, by its executable's name.
+        let provider = provider.rsplit('/').next().unwrap_or(provider);
+        tracing::debug_span!(
+            target: crate::timing::TARGET,
+            parent: crate::timing::parent(),
+            "provider.call",
+            otel.name = %format_args!("{provider} {kind}"),
+            otel.kind = "client",
+            otel.status_code = tracing::field::Empty,
+            provider,
+            kind,
+            addr = (!addr.is_empty()).then_some(addr),
+        )
+    }
+
+    /// Its answer, `r`, is taken: its status recorded, its span ended.
+    fn finish(self, r: &Result<Reply, CallError>) {
+        let status = match r {
+            Ok(_) => "ok",
+            Err(_) => "error",
+        };
+        self.span.record("otel.status_code", status);
+    }
+}
+
 pub struct Timed {
     /// What the backend is, for messages.
     what: String,
@@ -75,9 +121,8 @@ pub struct Timed {
     next: u64,
     /// Submitted, not yet passed on.
     batch: Vec<(Ticket, Call)>,
-    /// Calls with no answer yet: when each times out, what it is, and
-    /// when it was submitted.
-    live: BTreeMap<Ticket, (Instant, String, Instant, Option<crate::timing::Call>)>,
+    /// Calls with no answer yet.
+    live: BTreeMap<Ticket, Live>,
     /// Calls that timed out; their answers are dropped.
     abandoned: BTreeSet<Ticket>,
     /// Calls submitted while one that timed out had no answer: they wait
@@ -185,15 +230,8 @@ impl Provider for Timed {
     fn submit(&mut self, call: Call) -> Ticket {
         let t = Ticket(self.next);
         self.next += 1;
-        let now = Instant::now();
-        let what = describe(&call);
-        let kind = call.method();
-        let span = crate::timing::provider_call(
-            &self.what,
-            kind,
-            what.strip_prefix(kind).unwrap_or(&what).trim_start(),
-        );
-        self.live.insert(t, (now + self.timeout, what, now, span));
+        let live = Live::new(&self.what, &call, Instant::now() + self.timeout);
+        self.live.insert(t, live);
         if !self.abandoned.is_empty() {
             self.behind.insert(t);
         }
@@ -211,10 +249,11 @@ impl Provider for Timed {
             if self.asked == 0 && self.send(Cmd::Next) {
                 self.asked += 1;
             }
-            let (&first, (due, ..)) = self
+            let (&first, due) = self
                 .live
                 .iter()
-                .min_by_key(|(t, (due, ..))| (*due, **t))
+                .map(|(t, l)| (t, l.due))
+                .min_by_key(|&(t, due)| (due, *t))
                 .expect("a call is live");
             let wait = due.saturating_duration_since(Instant::now());
             match self.answers.recv_timeout(wait) {
@@ -231,40 +270,39 @@ impl Provider for Timed {
                             let due = Instant::now() + self.timeout;
                             for b in std::mem::take(&mut self.behind) {
                                 if let Some(l) = self.live.get_mut(&b) {
-                                    l.0 = due;
+                                    l.due = due;
                                 }
                             }
                         }
                         continue;
                     }
-                    if let Some((.., Some(span))) = self.live.remove(&t) {
-                        span.end();
+                    if let Some(live) = self.live.remove(&t) {
+                        live.finish(&r);
                     }
                     self.behind.remove(&t);
                     return (t, r);
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    let (_, what, ..) = self.live.remove(&first).expect("live");
+                    let live = self.live.remove(&first).expect("live");
                     self.behind.remove(&first);
                     self.abandoned.insert(first);
-                    return (
-                        first,
-                        Err(CallError::MaybeApplied(format!(
-                            "the provider {} did not answer the {what} {PAST} {} {ITS_TIMEOUT}",
-                            self.what,
-                            show(self.timeout)
-                        ))),
-                    );
+                    let r = Err(CallError::MaybeApplied(format!(
+                        "the provider {} did not answer the {} {PAST} {} {ITS_TIMEOUT}",
+                        self.what,
+                        live.what,
+                        show(self.timeout)
+                    )));
+                    live.finish(&r);
+                    return (first, r);
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    let (_, what, ..) = self.live.remove(&first).expect("live");
-                    return (
-                        first,
-                        Err(CallError::Crashed(format!(
-                            "the provider {} is gone: its {what} call has no answer",
-                            self.what
-                        ))),
-                    );
+                    let live = self.live.remove(&first).expect("live");
+                    let r = Err(CallError::Crashed(format!(
+                        "the provider {} is gone: its {} call has no answer",
+                        self.what, live.what
+                    )));
+                    live.finish(&r);
+                    return (first, r);
                 }
             }
         }

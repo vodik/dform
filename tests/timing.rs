@@ -96,8 +96,8 @@ fn a_plan_sends_its_spans_to_the_endpoint() {
 }
 
 /// The trace file: OTLP JSON lines, one trace under `dform plan`; the
-/// phases, each provider call a client span with its provider, kind and
-/// address; the Plan calls sent together a block; and
+/// phases, each provider call a client span with its provider, kind,
+/// address and status; the Plan calls sent together a block; and
 /// no attribute but the names, kinds and counts the spans are made of.
 /// The plan printed is the plan without a trace.
 #[test]
@@ -178,6 +178,7 @@ fn a_plan_writes_its_spans_to_the_trace_file() {
         .expect("the Plan calls' phase");
     for p in &plans {
         assert_eq!(p["kind"], 3, "a client span");
+        assert_eq!(p["status"]["code"], 1, "answered");
         assert_eq!(attr(p, "provider").as_deref(), Some("fakecloud"));
         assert_eq!(attr(p, "kind").as_deref(), Some("Plan"));
         assert!(attr(p, "addr").is_some_and(|a| a.starts_with("aws.")));

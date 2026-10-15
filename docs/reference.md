@@ -5145,7 +5145,7 @@ fails says its trace id after the error. The spans:
 | Span | What | Attributes |
 |---|---|---|
 | `plan.phase` | a step: loaded and compiled, located the deployment, providers started and configured, evaluated, each extern round, refresh, Plan calls, the policy pass, each deployment of a project's plan | |
-| `provider.call` | one call to a provider, from its submit to its answer (a client span) | `provider`, `kind` (`Configure`, `Read`, `Plan`, `Apply`, `Query`, ..), `addr` (the resource's address or the extern's name) |
+| `provider.call` | one call to a provider, from its submit to its answer (a client span, its status `ok` or `error`) | `provider`, `kind` (`Configure`, `Read`, `Plan`, `Apply`, `Query`, ..), `addr` (the resource's address or the extern's name) |
 | `io.call` | a request dform makes itself (a client span) | `kind` (`s3.get`, `s3.put`, `s3.list`, `io.read`, `oci.resolve`), `addr` (the location, without its userinfo, query or fragment) |
 | `tick` | an apply tick | `tick` |
 | `apply.wait` | a tick waiting on values the world has not reached (R-81) | `tick`, `kind` (`world`, `extern`), `count` |
