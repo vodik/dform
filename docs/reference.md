@@ -514,7 +514,8 @@ object at the address `FROM` the address `TO`; `dform stack unlock TARGET` remov
 an apply lock no process holds (breaks an s3 backend's lease). `dform provider schema NAME` prints a
 provider's schema facts. `dform doc` prints the project's doc comments
 (`#|` lines above an item, docs/grammar.md "Doc comments") as Markdown: per
-file, each documented item's kind and name, its first line, its
+file, the module's own (its first `#|` lines, a blank line below them),
+then each documented item's kind and name, its first line, its
 description and its other keys (`owner`, `since`, `deprecated`, ...);
 `dform doc TARGET` only its program's files (the stack's and every file
 it imports); either ends with the standard library, each std/*.df
@@ -3848,9 +3849,13 @@ bracket, block or body, one space around operators and after commas,
 `{ a = 1 }` inside braces, at most one blank line, and no comma where a
 newline already separates block entries. A list or a call whose only
 element is an object or a list hugs it when it breaks, `[{` .. `}]`,
-`json.encode({` .. `})`, the closers on one line. A formatted file
+`json.encode({` .. `})`, the closers on one line. A number keeps the
+base it is written in (`0o600`). A formatted file
 prints back byte for byte, and a file with a syntax error is reported,
-not rewritten.
+not rewritten, but for two errors it mends: a header statement below
+the body, which it moves, and an object's `key: value` (the spelling
+before `=`), which it writes `key = value`, in a string's holes too, so
+one run rewrites a file of the old spelling.
 `--check` rewrites nothing and fails listing the files that would change.
 
 - Core intent IR (what the surface lowers to; `why --core` and `strata` print it):
@@ -4903,7 +4908,9 @@ tests/fixtures/demo an evaluation takes about 30 ms in a release build.
   prints a folded value), the provider's description of its path
   (`type_doc`), the winning rank and every contribution with its rank and
   owner (rule, `file:line:col`, the module used or the copy), then the
-  derivation as `dform why --core` prints it.
+  derivation as `dform why --core` prints it. On a `use` of a project
+  file: the statement, the module's doc comment, then its inputs and
+  outputs with theirs.
 - *Values at point*: on a read or the declaration of an input, a
   `let`, an output (`n.k`, `c[e].k`, `m.k`), an object input's field
   (`cidrs.main`) or a resource's attribute (`vpc.cidr`): its value for

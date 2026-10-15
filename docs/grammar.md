@@ -100,13 +100,26 @@ separate their entries by a newline or a comma.
 IDENT    := [A-Za-z_][A-Za-z0-9_]*       ; case decides nothing; "_" alone is the placeholder
 STRING   := "\"" ... "\""                ; may span lines; escapes \" \\ \n \t \u{hex}, \ at a line end joins; ${e} interpolates, holes nest
 INT      := [0-9]+                       ; -1 is unary minus applied to 1
+          | "0x" [0-9a-fA-F]+ | "0o" [0-7]+ | "0b" [01]+   ; another base, Rust's prefixes
 QUANTITY := [0-9]+ ("." [0-9]+)? [A-Za-z][A-Za-z0-9]*   ; 1Gi 500m 1h30m 1.5Gi
           | [0-9]+ "." [0-9]+                           ; 0.5: a float; cores in a cpu position
+INET     := H (":" H){7} PREFIX?                        ; 2001:db8:0:0:0:0:0:1
+          | (H (":" H){0,6})? "::" (H (":" H){0,6})? PREFIX?   ; fe80::1/64 ::1 2001:db8::/32
+            where H := [0-9a-fA-F]{1,4}, PREFIX := "/" [0-9]{1,3}
 RANK     := "@default" | "@override"
 COMMENT  := "#" to end of line
 ```
 
 Punctuation: `( ) { } [ ] , . .. ..= : = == += != < <= > >= + - * / % |`.
+
+`:` gives a name its type and nothing else: an input's, a column's, a
+let's or a parameter's (`input x: inet`, `decl p(a: int)`), a field of a
+type or of an object input (`{ a: int }`, `input db { size: int = 1 }`),
+and a named argument, a column by its name (`p(a: x)`). A value is given
+with `=` everywhere: a block's entry, an object's field (`{ team =
+"shop" }`), a `use` block's input. So `:` is no operator in a term, and
+an IPv6 address is bare: `::1`, `fe80::1/64`, one INET token whose value
+is its text, as `"::1"` is, read by the position it reaches.
 
 `.` is always member access, `..` and `..=` between two terms a range's, `..` leading a field or an element a spread's, and `/`
 always division. A number with a letter adjacent is one QUANTITY token
@@ -207,7 +220,12 @@ DOCLINE  := "#|" to end of line          ; a COMMENT to the lexer and to tree-si
 
 `#|` lines directly above a statement, with no blank line between them
 and it, document it; a `#|` after code on its line is that line's
-comment. Each line is `key: value` when it starts with a lowercase name
+comment. A file's first `#|` lines (only comments and blank lines above
+them) with a blank line below them document the module itself, as
+Rust's `//!` does beside `///`: the blank line is what binds them up,
+and without it they are the first statement's. `dform doc` says the
+module's doc under its file's heading, the language server on a `use`
+of the file. Each line is `key: value` when it starts with a lowercase name
 (letters, digits, `_`, `-`) and a colon; any other line (`#|` alone is an
 empty one) is a line of the item's description, and `description:` adds
 to it. Keys are free-form; these are documented:
@@ -220,6 +238,9 @@ to it. Keys are free-form; these are documented:
 | `deprecated`  | why not to use it, and what to use instead    |
 
 ```dform
+#| The deployment's networks: one VPC per environment, peered.
+#| owner: platform
+
 #| The deployment's environment, the stack's key.
 #| owner: platform
 key env: environment = "staging"
@@ -636,7 +657,12 @@ role.name` read it, and `r == role` compares addresses.
 
 A number is an `int` (a whole `i64`) or a `float` (an `f64`).
 An integer literal is an int, `2`; a decimal literal is a float, `0.5`,
-`2.0`. A float is finite: NaN and the infinities are errors where a
+`2.0`. An integer is written in another base by Rust's prefixes,
+`0x1f`, `0o600`, `0b1010`, for a file mode or a mask as a manifest
+writes it (`defaultMode = 0o600`); its value is the number, which the
+plan prints in decimal (`384`), and `dform fmt` keeps the base it is
+written in. A leading zero is no octal (`0600` is an error naming
+`0o600` and `600`), as in Rust. A float is finite: NaN and the infinities are errors where a
 float is read (`--set`, a document, `"nan"` at a `float` position, a division by
 zero), never values. It prints as the shortest decimal that reads back
 as the same float, with a fraction always (`0.1`, `2.0`), in the plan,
@@ -1967,8 +1993,9 @@ error, a typo or a placeholder that should say so; `_x` opts out.
 Numbers and quantities (a duration is one) have their own syntax; every
 other typed value (an `inet`, an `ip`, a `uri`, an `oci`, a `semver`, a
 `time`, a range of them) is a string read by the position its value
-reaches and checked at compile time ("Types"), which is why `inet` has
-no bare literal: `2001:db8::/32` cannot lex beside keys and annotations.
+reaches and checked at compile time ("Types"). An IPv6 address may be
+bare, `2001:db8::/32`, since `:` is no operator in a term: it is the
+string its quoted spelling gives.
 
 ```
 lit        := "not" lit1 | "not" "{" lit (SEP lit)* "}" | lit1
@@ -1989,7 +2016,7 @@ term       := add ((".." | "..=") add)?        ; a range
 add        := mul (("+" | "-") mul)*
 mul        := unary (("*" | "/" | "%") unary)*
 unary      := "-" unary | primary
-primary    := INT | QUANTITY | STRING | "true" | "false"
+primary    := INT | QUANTITY | INET | STRING | "true" | "false"
             | read | call | list | object | comprehension | "(" term ")"
 chain      := NAME ("." SEG | "[" term ("," term)* "]")*
 call       := chain "(" args ")"
@@ -2005,6 +2032,12 @@ type       := DOTTED ("(" type ("," type)* ")")? | "{" NAME ":" type ("," NAME "
 
 In a literal position a chain applied to arguments is an atom, unless an
 operator follows it (`f(x) == 3` compares a call).
+
+An object's field is `key = value`, as a block's entry is, so one
+assignment spelling holds everywhere and `:` keeps one meaning, a type.
+`key: value`, the spelling before, is an error at its `:` whose help
+writes the object with `=` (one per outermost object), and one `dform
+fmt` mends: it reads the file to the tree `=` gives and writes it so.
 
 A spread `..x` leads a field of an object or an element of a
 list and gives what `x` holds there, in order with what is written: `{
@@ -2749,6 +2782,8 @@ component's own interface (see "The header").
 
 The normal forms:
 
+- an object's `key: value` is `key = value`, in a string's holes too
+  (the one parse error fmt mends besides a misplaced header);
 - `{ a = a }` is `{ a }`, and a block's entry `k = k` is `k`; a dotted
   path is never punned (`spec.selector.color = color` stays), and an entry
   that is only a dotted path, an earlier pun, is written out:
