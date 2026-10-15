@@ -20,11 +20,14 @@
 //!   window in the host (`dform_host::ratelimit`), with `provider`,
 //!   `bucket`, `queued` and `window`.
 //!
-//! A call ends when the run takes its answer (`plugin::timed`), which for
-//! a provider the run is not waiting on then is after it came. The order
-//! the run took is a reader's to compute, from the spans' times and
-//! parents. A phase `DFORM_LOG=debug` says is a `debug` span; one only a
-//! trace showed, `trace`.
+//! Each is the function that does the work, `#[tracing::instrument]`ed
+//! under [`TARGET`]; a call, whose answer may come after others', is a
+//! span held by what tracks it and ended when that is dropped
+//! (`plugin::timed`'s `Live`, a round's `Fetching`), when the run takes
+//! its answer, which for a provider the run is not waiting on then is
+//! after it came. The order the run took is a reader's to compute, from
+//! the spans' times and parents. A phase `DFORM_LOG=debug` says is a
+//! `debug` span; one only a trace showed, `trace`.
 //!
 //! With no subscriber (no trace asked for) and no `DFORM_LOG`, a span
 //! costs its callsite's check.
@@ -35,17 +38,10 @@ use std::sync::OnceLock;
 /// and drops the libraries' own.
 pub const TARGET: &str = "dform";
 
-/// Whether a subscriber keeps dform's spans of `level`.
-fn kept(level: tracing::Level) -> bool {
-    match level {
-        tracing::Level::TRACE => tracing::enabled!(target: TARGET, tracing::Level::TRACE),
-        _ => tracing::enabled!(target: TARGET, tracing::Level::DEBUG),
-    }
-}
-
 /// The run's span, set by whoever exports the spans: a span made on a
-/// thread with no span of its own (a state read beside the providers'
-/// start, a git fetch) is under it, in the run's trace.
+/// thread with no span of its own (the lease's renewer, a host thread
+/// pacing a provider's requests) names it its parent ([`parent`]), so it
+/// is in the run's trace.
 static ROOT: OnceLock<tracing::Id> = OnceLock::new();
 
 /// The run's span is `id`.
@@ -62,125 +58,6 @@ pub fn parent() -> Option<tracing::Id> {
         .or_else(|| ROOT.get().cloned())
 }
 
-/// What `f` took, as a phase; `what` is only made when someone reads it.
-pub fn time<T>(what: impl FnOnce() -> String, f: impl FnOnce() -> T) -> T {
-    let _phase = span(what);
-    f()
-}
-
-/// A phase, a `plan.phase` span entered until it is dropped (what is
-/// done meanwhile is in it).
-pub struct Span {
-    _span: tracing::span::EnteredSpan,
-}
-
-/// The phase `what`, until the returned span is dropped.
-pub fn span(what: impl FnOnce() -> String) -> Option<Span> {
-    if !kept(tracing::Level::DEBUG) {
-        return None;
-    }
-    let span = tracing::debug_span!(
-        target: TARGET,
-        parent: parent(),
-        "plan.phase",
-        otel.name = %what(),
-    );
-    Some(Span {
-        _span: span.entered(),
-    })
-}
-
-/// The phase `what` at `trace`: a step `DFORM_LOG=debug` does not say.
-pub fn traced(what: impl FnOnce() -> String) -> Option<Span> {
-    if !kept(tracing::Level::TRACE) {
-        return None;
-    }
-    let span = tracing::trace_span!(
-        target: TARGET,
-        parent: parent(),
-        "plan.phase",
-        otel.name = %what(),
-    );
-    Some(Span {
-        _span: span.entered(),
-    })
-}
-
-/// A call in flight: a `provider.call` or `io.call` span, not entered
-/// (its answer may come after others'), ended by [`Call::end`] or by
-/// being dropped.
-pub struct Call {
-    _span: tracing::Span,
-}
-
-impl Call {
-    /// Its answer is in.
-    pub fn end(self) {}
-}
-
-/// A request dform makes itself, `kind` of `addr`, for `f`.
-pub fn io<T>(
-    kind: &str,
-    addr: impl FnOnce() -> String,
-    _what: impl FnOnce() -> String,
-    f: impl FnOnce() -> T,
-) -> T {
-    let io = io_begin(kind, addr);
-    let out = f();
-    drop(io);
-    out
-}
-
-/// A request dform makes itself, begun ([`io_begin`]) and not yet
-/// answered: one made beside others (a round's reads on threads) begins
-/// with them, and ends when the run takes its answer.
-pub struct Io {
-    _call: Option<Call>,
-}
-
-/// The request `kind` of `addr` begins (`io`'s, made in parts).
-pub fn io_begin(kind: &str, addr: impl FnOnce() -> String) -> Io {
-    let call = kept(tracing::Level::DEBUG).then(|| {
-        let span = tracing::debug_span!(
-            target: TARGET,
-            parent: parent(),
-            "io.call",
-            otel.name = kind,
-            otel.kind = "client",
-            kind,
-            addr = addr(),
-        );
-        Call { _span: span }
-    });
-    Io { _call: call }
-}
-
-impl Io {
-    /// Its answer is taken.
-    pub fn end(self, _what: impl FnOnce() -> String) {}
-}
-
-/// Apply tick `tick` waiting on `count` values not reached yet, of
-/// `kind` (`world`: an object's attribute; `extern`: a call's "not
-/// yet"; both, joined): an `apply.wait` span entered until it is dropped.
-pub fn wait(tick: usize, kind: &str, count: usize) -> Option<Span> {
-    if !kept(tracing::Level::TRACE) {
-        return None;
-    }
-    let span = tracing::trace_span!(
-        target: TARGET,
-        parent: parent(),
-        "apply.wait",
-        otel.name = %format_args!("wait, tick {tick}"),
-        tick,
-        kind,
-        count,
-    );
-    Some(Span {
-        _span: span.entered(),
-    })
-}
-
 /// A location as a span names it: a URI without its userinfo, query or
 /// fragment, where a credential could be written; anything else as it is.
 pub fn location(text: &str) -> String {
@@ -191,23 +68,6 @@ pub fn location(text: &str) -> String {
     let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
     let host = authority.rsplit('@').next().unwrap_or(authority);
     format!("{scheme}://{host}{path}")
-}
-
-/// Apply tick `tick`, a `tick` span entered until it is dropped.
-pub fn tick(tick: usize) -> Option<Span> {
-    if !kept(tracing::Level::TRACE) {
-        return None;
-    }
-    let span = tracing::trace_span!(
-        target: TARGET,
-        parent: parent(),
-        "tick",
-        otel.name = %format_args!("tick {tick}"),
-        tick,
-    );
-    Some(Span {
-        _span: span.entered(),
-    })
 }
 
 #[cfg(test)]
