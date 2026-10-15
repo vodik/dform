@@ -1702,10 +1702,9 @@ fn object_parts(parts: &[ObjPart]) -> Vec<Result<BTreeMap<&str, ExprId>, ExprId>
 /// is known (R-66, R-62, R-134, R-192): each node's reading, and the
 /// errors but those of what no position reads ([`read`]).
 pub fn readings(program: &prog::Program, schema: &Schema) -> (Readings, Vec<Diagnostic>) {
-    let unread = match crate::program::lower(program).rules {
-        Ok(p) => p,
-        Err(d) => return (Readings::new(), d),
-    };
+    if !program.diags.is_empty() {
+        return (Readings::new(), program.diags.clone());
+    }
     let mut r = Reader {
         p: program,
         schema,
@@ -1713,7 +1712,7 @@ pub fn readings(program: &prog::Program, schema: &Schema) -> (Readings, Vec<Diag
         diags: Vec::new(),
     };
     r.items(&program.roots);
-    let (edges, diags, _) = crate::edges::read_nodes(program, &unread, schema);
+    let (edges, diags) = crate::edges::read_nodes(program, schema);
     r.read.extend(edges);
     r.diags.extend(diags);
     (r.read, r.diags)

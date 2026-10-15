@@ -32,7 +32,7 @@
 //! range): a `string` position takes any of them as its text (R-133).
 
 use crate::address::Address;
-use crate::ast::{Atom, Program, Span, Stmt, Term, TypeExpr};
+use crate::ast::{Atom, Span, Stmt, Term, TypeExpr};
 use crate::diag::Diagnostic;
 use crate::schema::Schema;
 use crate::types::{self, Ty};
@@ -250,13 +250,31 @@ struct Scopes {
 }
 
 impl Scopes {
-    fn of(program: &Program) -> Scopes {
+    fn of(program: &prog::Program) -> Scopes {
         let mut s = Scopes::default();
-        s.collect("", &program.statements);
+        s.collect(program, "", &program.roots);
         s
     }
 
-    fn collect(&mut self, scope: &str, stmts: &[Stmt]) {
+    /// What `items` define in `scope`, their statements' heads; a module's
+    /// items in a scope of its own inside it.
+    fn collect(&mut self, p: &prog::Program, scope: &str, items: &[ItemId]) {
+        let mut stmts = Vec::new();
+        let mut modules = Vec::new();
+        for &id in items {
+            match &p.items[id].kind {
+                ItemKind::Module { path, items, .. } => modules.push((path, items)),
+                _ => stmts.extend(prog::lower_item(p, id)),
+            }
+        }
+        self.define(scope, &stmts);
+        for (path, items) in modules {
+            self.parent.insert(path.clone(), scope.to_string());
+            self.collect(p, path, items);
+        }
+    }
+
+    fn define(&mut self, scope: &str, stmts: &[Stmt]) {
         let defs = self.defines.entry(scope.to_string()).or_default();
         for st in stmts {
             match st {
@@ -279,12 +297,6 @@ impl Scopes {
                     defs.insert(e.pred.clone());
                 }
                 _ => {}
-            }
-        }
-        for st in stmts {
-            if let Stmt::Module(m) = st {
-                self.parent.insert(m.name.clone(), scope.to_string());
-                self.collect(&m.name, &m.body);
             }
         }
     }
@@ -372,7 +384,7 @@ struct At {
 }
 
 impl<'a> Graph<'a> {
-    fn new(schema: &'a Schema, program: &Program) -> Graph<'a> {
+    fn new(schema: &'a Schema, program: &prog::Program) -> Graph<'a> {
         Graph {
             schema,
             scopes: Scopes::of(program),
@@ -877,9 +889,6 @@ struct Walk<'a, 'p> {
     p: &'p prog::Program,
     /// The second pass: each node's literal as read.
     read: Readings,
-    /// The terms with no node of their own a reading changed: none can be
-    /// kept, as no node holds them.
-    unkeyed: usize,
 }
 
 impl<'a, 'p> Walk<'a, 'p> {
@@ -888,7 +897,6 @@ impl<'a, 'p> Walk<'a, 'p> {
             g,
             p,
             read: Readings::new(),
-            unkeyed: 0,
         }
     }
 
@@ -2059,13 +2067,8 @@ impl<'a, 'p> Walk<'a, 'p> {
                     self.place(n, q, value, at);
                 }
             }
-            Part::Term(mut t) => {
-                let before = self.g.readings.is_some().then(|| t.clone());
-                self.g.place(n, path, &mut t, at);
-                if before.is_some_and(|b| b != t) {
-                    self.unkeyed += 1;
-                }
-            }
+            // No node holds it: its reading, if any, is no node's.
+            Part::Term(mut t) => self.g.place(n, path, &mut t, at),
         }
     }
 
@@ -2439,19 +2442,13 @@ pub(crate) fn set_rule(
 }
 
 /// Read every literal of the program's nodes at the type of the edges it
-/// reaches (R-192), as [`read`] reads the program they lower to (`unread`):
-/// each node's reading, the errors, and how many terms with no node a
-/// reading changed.
-pub fn read_nodes(
-    program: &prog::Program,
-    unread: &Program,
-    schema: &Schema,
-) -> (Readings, Vec<Diagnostic>, usize) {
-    let mut w = Walk::new(Graph::new(schema, unread), program);
+/// reaches (R-192): each node's reading, and the errors.
+pub fn read_nodes(program: &prog::Program, schema: &Schema) -> (Readings, Vec<Diagnostic>) {
+    let mut w = Walk::new(Graph::new(schema, program), program);
     w.items(&program.roots, "");
     let readings = w.g.readings();
-    let mut w = Walk::new(Graph::new(schema, unread), program);
+    let mut w = Walk::new(Graph::new(schema, program), program);
     w.g.readings = Some(readings);
     w.items(&program.roots, "");
-    (w.read, w.g.diags, w.unkeyed)
+    (w.read, w.g.diags)
 }
