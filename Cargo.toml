@@ -95,7 +95,7 @@ dform-lsp = { path = "crates/dform-lsp" }
 clap_mangen = "0.3"
 # The run's span and the trace file's subscriber (src/trace.rs), over
 # dform-core's spans.
-tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
 tracing-core = { version = "0.1", default-features = false, features = ["std"] }
 # The run's subscriber (src/trace.rs): the registry, the trace file, the
 # exporter and `DFORM_LOG`'s lines its layers.

@@ -92,7 +92,7 @@ ena = "0.14"
 # Where a run's time goes (src/timing.rs): each phase, provider call and
 # tick a span, for the `dform` crate's exporters (its `otel` feature). No
 # subscriber, no cost but a callsite check.
-tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
 # `DFORM_LOG` (src/log.rs): the same spans and events as lines, through
 # `fmt` with an `EnvFilter`; the registry the `dform` crate's trace file
 # and exporter are layers of.

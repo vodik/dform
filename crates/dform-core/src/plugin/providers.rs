@@ -136,6 +136,33 @@ pub trait Launch {
     fn plugin(&self, exe: &Path, grants: &super::host::Grants) -> Result<Link>;
 }
 
+impl dyn Launch + '_ {
+    /// The mock provider, started: a phase of the run.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "plan.phase",
+        skip_all,
+        fields(otel.name = "provider mock started")
+    )]
+    fn start_mock(&self) -> Result<Link> {
+        self.mock()
+    }
+
+    /// The provider executable at `exe` started, spawned and its
+    /// handshake answered: a phase of the run.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "plan.phase",
+        skip_all,
+        fields(otel.name = %format_args!("provider {} started (spawn and handshake)", exe.display()))
+    )]
+    fn start_plugin(&self, exe: &Path, grants: &super::host::Grants) -> Result<Link> {
+        self.plugin(exe, grants)
+    }
+}
+
 /// An object as Read, Apply or Import returns it: its configured
 /// attributes and its computed values (a secret one as its label).
 #[derive(Debug, Clone, PartialEq)]
@@ -404,9 +431,7 @@ impl<'a> Starting<'a> {
     /// configured by none of them ([`Providers::link_for`]).
     fn start_mock(&mut self) -> Result<()> {
         let launch = self.launch;
-        let link = self.started(super::pool::Key::Mock, || {
-            crate::timing::time(|| "provider mock started".into(), || launch.mock())
-        })?;
+        let link = self.started(super::pool::Key::Mock, || launch.start_mock())?;
         let mut link = link.borrow_mut();
         if let Some(p) = self
             .starts
@@ -474,17 +499,12 @@ impl<'a> Starting<'a> {
             rename: st.rename.as_ref().map(|b| b.name.clone()),
         };
         let link = self.started(key, || match (&mock, source::resolve(&st.spec)) {
-            (Some(_), _) => {
-                crate::timing::time(|| "provider mock started".into(), || launch.mock())
+            (Some(_), _) => launch.start_mock(),
+            (None, Source::Plugin(p)) => {
+                let mut none = super::host::Grants::none_for(&p);
+                none.files = crate::files::Shared(Some(cfg.files.clone()));
+                launch.start_plugin(&p, cfg.grants.get(&st.spec).unwrap_or(&none))
             }
-            (None, Source::Plugin(p)) => crate::timing::time(
-                || format!("provider {} started (spawn and handshake)", p.display()),
-                || {
-                    let mut none = super::host::Grants::none_for(&p);
-                    none.files = crate::files::Shared(Some(cfg.files.clone()));
-                    launch.plugin(&p, cfg.grants.get(&st.spec).unwrap_or(&none))
-                },
-            ),
             (None, Source::Mock(_)) => unreachable!("a plugin"),
         })?;
         let mut link = link.borrow_mut();
@@ -2761,8 +2781,14 @@ impl Providers {
     /// once: a plan waits one round trip to its API, not one per object.
     /// A Read that fails is sent again alone, under the provider's retry
     /// policy; one that fails then is the refresh's error, and not kept.
+    #[tracing::instrument(
+        target = "dform",
+        level = "trace",
+        name = "plan.phase",
+        skip_all,
+        fields(otel.name = "refresh", count = objects.len())
+    )]
     fn read_all(&self, objects: Vec<(&String, &(Address, String, usize))>) -> Result<()> {
-        let _refresh = crate::timing::traced(|| format!("refresh, {} objects", objects.len()));
         let mut sent = Vec::new();
         for (k, (addr, remote, i)) in objects {
             let req = pb::ReadRequest {
@@ -2941,8 +2967,14 @@ impl Providers {
     /// its changes, and whether they replace it. Every call is submitted
     /// before any answer is taken, so a backend that can runs them at once;
     /// the first failure, in order, is the error.
+    #[tracing::instrument(
+        target = "dform",
+        level = "trace",
+        name = "plan.phase",
+        skip_all,
+        fields(otel.name = "Plan calls", count = asks.len())
+    )]
     fn plan_many(&self, asks: Vec<Ask>) -> Result<Vec<Planned>> {
-        let _calls = crate::timing::traced(|| format!("Plan calls, {} asked", asks.len()));
         let mut out: Vec<Option<Result<Planned>>> = Vec::new();
         let mut submitted: Vec<(usize, usize, Ticket, Address)> = Vec::new();
         for (i, (addr, remote, prior, desired)) in asks.into_iter().enumerate() {
