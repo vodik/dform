@@ -15,7 +15,7 @@
 //! `strata`), [`Loaded::locate`] (`state show`, `log`, ...).
 
 use crate::address::{self, Address};
-use crate::ast::{Atom, Lit, Program, Span, Stmt, Term};
+use crate::ast::{Atom, ExternFn, Lit, Program, Span, Stmt, Term};
 use crate::circuit::{Leaf, NodeId, View};
 use crate::diag::{Diagnostic, Diagnostics, Fix};
 use crate::engine::{self, EvalResult};
@@ -624,6 +624,37 @@ impl Evaluator {
         Ok(extra)
     }
 
+    /// The program evaluated over `extra`, its last round resumable with
+    /// the policy pass's facts.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "plan.phase",
+        skip_all,
+        fields(otel.name = "evaluated")
+    )]
+    fn evaluated(&self, extra: &[Atom]) -> Result<(EvalResult, Vec<String>, engine::Resumable)> {
+        self.externs
+            .eval_resumable(&self.program, extra, zset::POLICY_INPUTS)
+    }
+
+    /// The program evaluated over `extra`, the planner's facts in it given
+    /// at apply tick `tick`.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "plan.phase",
+        skip_all,
+        fields(otel.name = "evaluated")
+    )]
+    fn evaluated_at(
+        &self,
+        extra: &[Atom],
+        tick: Option<usize>,
+    ) -> Result<(EvalResult, Vec<String>)> {
+        self.externs.eval_at(&self.program, extra, tick)
+    }
+
     /// The program evaluated from the start; each provider whose settings
     /// it makes known configured, and the program evaluated again over
     /// what that serves, as often as that configures another.
@@ -632,12 +663,9 @@ impl Evaluator {
         st: &State,
         withheld: &BTreeSet<Address>,
     ) -> Result<(EvalResult, Vec<String>)> {
-        let (backend, externs, program) = (&self.backend, &self.externs, &self.program);
+        let (backend, externs) = (&self.backend, &self.externs);
         let mut extra = self.extra(st, withheld)?;
-        let (mut res, mut violations, mut resumable) = crate::timing::time(
-            || "evaluated".into(),
-            || externs.eval_resumable(program, &extra, zset::POLICY_INPUTS),
-        )?;
+        let (mut res, mut violations, mut resumable) = self.evaluated(&extra)?;
         // A provider the program configures, its settings now known,
         // is configured, and what it serves read again.
         let mut configured = backend.configure_from(agreed(&res.facts))?;
@@ -655,10 +683,7 @@ impl Evaluator {
             // answered "not yet": ask it again.
             externs.forget_not_yet();
             extra = self.extra(st, withheld)?;
-            (res, violations, resumable) = crate::timing::time(
-                || "evaluated".into(),
-                || externs.eval_resumable(program, &extra, zset::POLICY_INPUTS),
-            )?;
+            (res, violations, resumable) = self.evaluated(&extra)?;
             configured = backend.configure_from(agreed(&res.facts))?;
             learned = false;
         }
@@ -682,7 +707,7 @@ impl Evaluator {
         more: &[Atom],
         tick: Option<usize>,
     ) -> Result<(EvalResult, Vec<String>)> {
-        let (backend, externs, program) = (&self.backend, &self.externs, &self.program);
+        let (backend, externs) = (&self.backend, &self.externs);
         let mut extra = self.extra(st, withheld)?;
         let resumed = match &*self.last.borrow() {
             Some((seen, resumable)) if *seen == extra => Some(resumable.with_at(more, tick)?),
@@ -695,10 +720,7 @@ impl Evaluator {
                 // with are not all of them any more.
                 *self.last.borrow_mut() = None;
                 extra.extend(more.iter().cloned());
-                crate::timing::time(
-                    || "evaluated".into(),
-                    || externs.eval_at(program, &extra, tick),
-                )?
+                self.evaluated_at(&extra, tick)?
             }
         };
         // At a boundary too: a provider whose settings the last tick made
@@ -1143,9 +1165,7 @@ impl Evaluator {
         facts.extend(may_derive);
         facts.extend(self.last_apply.iter().cloned());
         facts.extend(crate::secrets::rotation_facts(st));
-        let policy = crate::timing::traced(|| "policy pass".into());
-        let (res, all) = self.evaluate_with(st, &replaced, &facts, None)?;
-        drop(policy);
+        let (res, all) = self.policy_pass(st, &replaced, &facts)?;
         unchanged_by_policy(&res, program_docs.as_ref().unwrap_or(&resources), schema)?;
         let denies = all
             .into_iter()
@@ -1159,6 +1179,24 @@ impl Evaluator {
             denies,
             unreachable,
         })
+    }
+
+    /// The policy pass (E §2.8): the program evaluated again over the
+    /// plan's deformation `facts`, `replaced`'s objects withheld.
+    #[tracing::instrument(
+        target = "dform",
+        level = "trace",
+        name = "plan.phase",
+        skip_all,
+        fields(otel.name = "policy pass")
+    )]
+    fn policy_pass(
+        &self,
+        st: &State,
+        replaced: &BTreeSet<Address>,
+        facts: &[Atom],
+    ) -> Result<(EvalResult, Vec<String>)> {
+        self.evaluate_with(st, replaced, facts, None)
     }
 
     /// A destroy's objects whose provider could not be configured have no
@@ -1578,11 +1616,7 @@ impl Located {
         let l = &self.loaded;
         let dep = self.dep.clone();
         let within = tracing::Span::current();
-        let reading = std::thread::spawn(move || {
-            let _within = within.enter();
-            let _read = crate::timing::traced(|| "state read".into());
-            dep.load_state()
-        });
+        let reading = std::thread::spawn(move || within.in_scope(|| dep.load_state()));
         // The run's reader of locations (R-153): the program's loaders and
         // the providers' host read through it, one mirror cache and one
         // known-hosts store (state's, once read).
@@ -1710,6 +1744,13 @@ impl Located {
 
     /// The schema, asked for once the run knows the types it names: what
     /// discovery answers, and the catalog's scope (`None`: the whole one).
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "plan.phase",
+        skip_all,
+        fields(otel.name = "providers' schema loaded")
+    )]
     fn load_schema(
         &self,
         backend: &Providers,
@@ -1721,7 +1762,6 @@ impl Located {
             true => None,
             false => world_types(self.loaded.lowered.as_ref()),
         };
-        let _schema = crate::timing::span(|| "providers' schema loaded".into());
         let discovered = backend.discover(types.as_ref())?;
         let scope = match opts.whole_schema {
             true => None,
@@ -1734,6 +1774,13 @@ impl Located {
     /// The program's providers started, each configured as far as the run
     /// knows its settings (`Providers::start_deferred`); none when the
     /// program names only built-in ones.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "plan.phase",
+        skip_all,
+        fields(otel.name = "providers started and configured")
+    )]
     fn start_providers(
         &self,
         outputs: &[stack::Read],
@@ -1741,7 +1788,6 @@ impl Located {
         files: &std::sync::Arc<crate::files::Files>,
     ) -> Result<Providers> {
         let l = &self.loaded;
-        let _started = crate::timing::span(|| "providers started and configured".into());
         if l.starts_none() {
             return Ok(Providers::none());
         }
@@ -1930,12 +1976,37 @@ enum Fetched {
     Rows(Result<Rows>),
 }
 
+/// Call `n`'s request, to be made on a thread: its `io.call` span, begun
+/// beside the round's others, ends when it is dropped, once the run has
+/// taken its answer.
+struct Fetching {
+    n: usize,
+    fetch: Fetch,
+    span: tracing::Span,
+}
+
+impl Fetching {
+    /// Call `n`'s request `fetch`, a request of `kind`, begun now.
+    fn new(n: usize, fetch: Fetch, kind: &str, inputs: &[Value]) -> Fetching {
+        let span = tracing::debug_span!(
+            target: crate::timing::TARGET,
+            parent: crate::timing::parent(),
+            "io.call",
+            otel.name = kind,
+            otel.kind = "client",
+            kind,
+            addr = extern_location(inputs),
+        );
+        Fetching { n, fetch, span }
+    }
+}
+
 /// A round's calls ([`ask_round`]), sorted by how each is answered: here,
 /// by a request dform makes on a thread, or by a provider's call sent.
 struct Round<'c> {
     calls: &'c [externs::Asking<'c>],
     answers: Vec<Option<Result<Rows>>>,
-    fetches: Vec<(usize, Fetch, crate::timing::Io)>,
+    fetches: Vec<Fetching>,
     asked: Vec<(usize, plugin::providers::Asked)>,
 }
 
@@ -1949,15 +2020,13 @@ impl Round<'_> {
         backend: &Providers,
     ) {
         let (f, inputs) = self.calls[n];
-        let at = || extern_location(inputs);
-        let what = || format!("{}({})", f.name, extern_location(inputs));
         if tables::describe(&f.name).is_some() {
             if let Some((location, base)) = tables::Tables::source(f, inputs) {
-                let io = crate::timing::io_begin("io.read", at);
-                self.fetches.push((n, Fetch::Read(location, base), io));
+                let read = Fetch::Read(location, base);
+                self.fetches.push(Fetching::new(n, read, "io.read", inputs));
                 return;
             }
-            if let Some(r) = crate::timing::io("io.read", at, what, || tables.answer(f, inputs)) {
+            if let Some(r) = read_here(tables, f, inputs) {
                 self.answers[n] = Some(r);
                 return;
             }
@@ -1971,8 +2040,9 @@ impl Round<'_> {
             return;
         }
         if f.name == crate::files::oci::RESOLVE {
-            let io = crate::timing::io_begin(crate::files::oci::RESOLVE, at);
-            self.fetches.push((n, Fetch::Digest, io));
+            let resolve = crate::files::oci::RESOLVE;
+            self.fetches
+                .push(Fetching::new(n, Fetch::Digest, resolve, inputs));
             return;
         }
         if let Some(r) = memos.answer(f, inputs) {
@@ -1997,7 +2067,7 @@ impl Round<'_> {
         std::thread::scope(|scope| {
             let running: Vec<_> = std::mem::take(&mut self.fetches)
                 .into_iter()
-                .map(|(n, fetch, io)| {
+                .map(|Fetching { n, fetch, span }| {
                     let (f, inputs) = calls[n];
                     let made = scope.spawn(move || match fetch {
                         Fetch::Read(location, base) => {
@@ -2009,19 +2079,19 @@ impl Round<'_> {
                                 .expect("oci.resolve is answered by dform"),
                         ),
                     });
-                    (n, io, made)
+                    (n, span, made)
                 })
                 .collect();
             for (n, a) in std::mem::take(&mut self.asked) {
                 let (f, inputs) = calls[n];
                 self.answers[n] = Some(backend.answer_extern(f, inputs, a));
             }
-            for (n, io, made) in running {
+            for (n, span, made) in running {
                 let (f, inputs) = calls[n];
                 let made = made.join().unwrap_or_else(|_| {
                     Fetched::Rows(Err(anyhow::anyhow!("{}: the request panicked", f.name)))
                 });
-                io.end(|| format!("{}({})", f.name, extern_location(inputs)));
+                drop(span);
                 self.answers[n] = Some(match made {
                     Fetched::Read(location, read) => tables.answer_read(f, inputs, &location, read),
                     Fetched::Rows(rows) => rows,
@@ -2033,6 +2103,24 @@ impl Round<'_> {
             .map(|a| a.expect("every call answered"))
             .collect()
     }
+}
+
+/// A table's read answered here, without a thread (a document already
+/// read, a cached source): an `io.call` of its own.
+#[tracing::instrument(
+    target = "dform",
+    level = "debug",
+    name = "io.call",
+    skip_all,
+    fields(
+        otel.name = "io.read",
+        otel.kind = "client",
+        kind = "io.read",
+        addr = extern_location(inputs)
+    )
+)]
+fn read_here(tables: &tables::Tables, f: &ExternFn, inputs: &[Value]) -> Option<Result<Rows>> {
+    tables.answer(f, inputs)
 }
 
 /// An extern call's inputs as a span names them: each location without
@@ -2053,6 +2141,13 @@ fn extern_location(inputs: &[Value]) -> String {
 /// violates one, E0306), against the provider's schema; a memo of a secret
 /// is kept sealed and recorded nowhere, and of a document read into a
 /// secret `let` (R-153) only its digest.
+#[tracing::instrument(
+    target = "dform",
+    level = "debug",
+    name = "plan.phase",
+    skip_all,
+    fields(otel.name = "checked against the schema")
+)]
 fn check(
     l: &transform::Lowered,
     schema: &crate::schema::Schema,
@@ -2060,7 +2155,6 @@ fn check(
     externs: &Externs,
     obs: &mut dyn Observer,
 ) -> Result<()> {
-    let _checks = crate::timing::span(|| "checked against the schema".into());
     crate::secrets::check(l, schema, secret_outputs)?;
     externs.mark_secret(&crate::secrets::secret_memos(l, schema, secret_outputs));
     externs.mark_secret(&crate::secrets::secret_reads(l, schema, secret_outputs));
@@ -2139,23 +2233,40 @@ impl Evaluator {
         }
         let schema = self.backend.schema();
         let compiled = Compiled::of(res, schema);
-        let plan = |c: &Compiled| {
-            let _t = crate::timing::span(|| "planned (refresh, Plan calls, policy)".into());
-            self.plan(
-                res.clone(),
-                violations,
-                c.resources.clone(),
-                &c.adopts,
-                &c.lifecycle,
-                st,
-            )
-        };
         let policy = match (&compiled, opts.policy) {
-            (Ok(c), true) => Some(plan(c)),
-            (Err(_), true) => Some(Compiled::of(res, schema).and_then(|c| plan(&c))),
+            (Ok(c), true) => Some(self.planned(c, res, violations, st)),
+            (Err(_), true) => {
+                Some(Compiled::of(res, schema).and_then(|c| self.planned(&c, res, violations, st)))
+            }
             (_, false) => None,
         };
         (compiled, policy)
+    }
+
+    /// The plan of `c`, the resources `res` compiled to, and its policy
+    /// pass: the refresh, the Plan calls and the policy.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "plan.phase",
+        skip_all,
+        fields(otel.name = "planned (refresh, Plan calls, policy)")
+    )]
+    fn planned(
+        &self,
+        c: &Compiled,
+        res: &EvalResult,
+        violations: &[String],
+        st: &State,
+    ) -> Result<Planned> {
+        self.plan(
+            res.clone(),
+            violations,
+            c.resources.clone(),
+            &c.adopts,
+            &c.lifecycle,
+            st,
+        )
     }
 }
 

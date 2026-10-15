@@ -147,8 +147,8 @@ fn a_plan_reads_over_one_connection_writes_nothing_and_calls_its_provider_at_onc
         "started (spawn and handshake)",
         "provider.call{otel.name=ovh Configure",
         "addr=\"ovh.instance lab-0\"",
-        "plan.phase{otel.name=evaluated}: close",
-        "plan.phase{otel.name=planned",
+        "evaluated",
+        "planned (refresh, Plan calls, policy)",
         "dform.run{otel.name=dform plan command=\"plan\"}: close",
     ] {
         assert!(

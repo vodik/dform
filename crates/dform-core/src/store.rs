@@ -1258,6 +1258,13 @@ impl Deployment {
 
     /// The deployment's state, empty when there is none: its checkpoint
     /// with the log's `state` entries after it replayed (`wal`).
+    #[tracing::instrument(
+        target = "dform",
+        level = "trace",
+        name = "plan.phase",
+        skip_all,
+        fields(otel.name = "state read")
+    )]
     pub fn load_state(&self) -> Result<State> {
         let read = self.read()?;
         let st = serde_json::from_value(read.state.clone()).context("parse state")?;
