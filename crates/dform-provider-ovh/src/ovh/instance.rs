@@ -13,6 +13,7 @@ impl Ovh {
         a: &Account,
         p: &str,
         id: &str,
+        owned: &map::Owned,
     ) -> api::Result<Option<(Json, Json)>> {
         let Some(o) = a
             .client
@@ -20,13 +21,20 @@ impl Ovh {
         else {
             return Ok(None);
         };
-        self.instance_doc(a, p, &o)
+        self.instance_doc(a, p, &o, owned)
     }
 
-    /// An instance's document; a call that fails fails it, rather than
-    /// leave out what Plan would read as changed (an image left out
-    /// would replace the instance, a network attach it again).
-    fn instance_doc(&self, a: &Account, p: &str, o: &Json) -> api::Result<Option<(Json, Json)>> {
+    /// An instance's document, `owned` which of its ports are its own; a
+    /// call that fails fails it, rather than leave out what Plan would
+    /// read as changed (an image left out would replace the instance, a
+    /// network attach it again).
+    fn instance_doc(
+        &self,
+        a: &Account,
+        p: &str,
+        o: &Json,
+        owned: &map::Owned,
+    ) -> api::Result<Option<(Json, Json)>> {
         if matches!(s(o, "status"), Some("DELETED" | "SOFT_DELETED")) {
             return Ok(None);
         }
@@ -57,6 +65,7 @@ impl Ovh {
             flavor.as_deref(),
             image.as_deref(),
             &private,
+            owned,
         )))
     }
 
@@ -141,7 +150,7 @@ impl Ovh {
         let id = s(&o, "id").unwrap_or_default().to_string();
         let last = wait_active(&a, &p, at, &id, o, notes, say)?;
         let (attrs, computed) = self
-            .instance_doc(&a, &p, &last)
+            .instance_doc(&a, &p, &last, &map::Owned::Made)
             .map_err(|e| Failed::MaybeApplied(format!("{at}: instance {id} is made: {e}")))?
             .ok_or_else(|| Failed::MaybeApplied(format!("{at}: instance {id} was deleted")))?;
         Ok((id, attrs, computed))
@@ -227,7 +236,7 @@ impl Ovh {
     }
 
     /// An instance renamed, resized and its networks brought to `config`;
-    /// `now` its document as read.
+    /// `now` its document as read. The ports it attached, by network.
     pub(super) fn update_instance(
         &self,
         at: &str,
@@ -236,7 +245,7 @@ impl Ovh {
         config: &Json,
         notes: &mut Vec<String>,
         say: Say,
-    ) -> std::result::Result<(), Failed> {
+    ) -> std::result::Result<Vec<(String, String)>, Failed> {
         let (a, p) = self
             .project(at)
             .map_err(|e| refused(at, format!("{e:#}")))?;

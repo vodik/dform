@@ -154,7 +154,8 @@ schema's `type_lookup`, see "What a Create that does not answer does").
 | `id`         | computed          |                                     |
 | `public_ip`  | ip, computed      | once the instance has one           |
 | `private_ip` | ip, computed, nullable | its first private address      |
-| `private_ips`| map(ip), computed | its address on each private network, by the network's id |
+| `private_ips`| map(ip), computed | its address on each private network, by the network's id: its own port's, else the first port's |
+| `ports`      | map, computed     | its own port on each private network, by the network's id: `id` and `ipv4` |
 | `status`     | string, computed  | `ACTIVE` once it runs               |
 
 The API changes an instance's name on its id (`PUT`), and its flavor
@@ -176,6 +177,19 @@ on private networks is made with an interface on the public network and
 one on each of them, in its region (each needs a subnet there); a
 network not in its region is refused naming the regions it is in.
 `server.private_ips[lab.id]` is its address on `lab`.
+
+The API marks no port as the instance's, and an attach repeated makes
+another port on the same network (below). The provider keeps the port
+it made under `ports`: the one on each network an instance is made
+with, and the one an Apply attached, by id (`server.ports[lab.id].id`).
+dform keeps the computed values in state and tells the provider's Read
+and Apply what it kept (docs/reference.md, "Providers are processes"),
+so a Read finds that port by its id among the others on the network,
+and its address is the instance's there. A port it kept that is gone
+(detached outside dform) is absent from `ports`, never carried over; a
+network whose port it did not make (an instance adopted, or made
+before ports were kept) has none in `ports`, and its address there is
+the first port's.
 
 The API never answers an instance's user data: the schema marks it
 `write_only`, so dform keeps the digest of what it applied (never
@@ -380,7 +394,8 @@ the provider to it.
 - An attach on a network the instance has a port on already makes
   another port: the lab's instance has three on one network, from the
   attach loop the first two fixes ended. Seen by 2026-10-15. The provider lists the ports before it attaches and
-  attaches only on a network it has none on.
+  attaches only on a network it has none on, and keeps the port it
+  attached by id (`ports`); it removes none of the others yet.
 
 ## Shapes not yet observed
 
@@ -405,8 +420,9 @@ replace the cassettes' answers:
   `errorCode` and `httpCode`;
 - a void call's answer (`PUT`, `DELETE`, the refresh): `null`;
 - `…/interface`: the public port's `networkId`, whether the `POST`'s
-  answer names the network as the `GET` does, and whether a new port's
-  `fixedIps` is filled at once;
+  answer names the network as the `GET` does and carries the port's
+  `id` (the provider keeps it as the instance's own port), and whether a
+  new port's `fixedIps` is filled at once;
 - `…/instance`: whether the list embeds `flavor`, `image` and `sshKey`,
   an address's `networkId` in `ipAddresses`, `ipAddresses` empty while
   `BUILD`, a resize confirmed by OVH (`RESIZE` then `ACTIVE`, never

@@ -60,6 +60,10 @@ type_attr("ovh.instance", "networks", "set(ref(ovh.network))", [])
 type_attr("ovh.instance", "public_ip", "ip", ["computed"])
 type_attr("ovh.instance", "private_ip", "ip", ["computed", "nullable"])
 type_attr("ovh.instance", "private_ips", "map(ip)", ["computed"])
+# Its own port on each private network, `{id, ipv4}` by the network's id:
+# the API marks no port as the instance's and an attach repeated makes
+# another, so the provider keeps the one it made, and Read finds it by id.
+type_attr("ovh.instance", "ports", "map", ["computed"])
 type_attr("ovh.instance", "status", "string", ["computed"])
 type_replace("ovh.instance", "either")
 type_remote_name("ovh.instance", "name")
@@ -219,7 +223,12 @@ type_doc("ovh.instance", "private_ip", "Its address on a private network, if it 
 type_doc(
   "ovh.instance",
   "private_ips",
-  "Its address on each private network, by the network's id (`server.private_ips[lab.id]`).",
+  "Its address on each private network, by the network's id (`server.private_ips[lab.id]`): its own port's there, else the first port's.",
+)
+type_doc(
+  "ovh.instance",
+  "ports",
+  "The port it was made with or attached on each private network, by the network's id: `id` and its `ipv4` address (`server.ports[lab.id].id`). None on a network whose port it did not make, or whose port is gone.",
 )
 type_doc("ovh.instance", "status", "ACTIVE once it runs; BUILD while it is made.")
 type_doc("ovh.ssh_key", "", "An SSH public key of the project, for its instances.")

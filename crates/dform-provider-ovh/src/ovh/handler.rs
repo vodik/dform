@@ -99,8 +99,12 @@ impl Ovh {
     }
 
     fn read_reply(&self, r: &pb::ReadRequest) -> std::result::Result<pb::ReadResponse, CallError> {
+        let prior = doc_of(r.prior.as_ref())?;
         Ok(
-            match self.read(&r.r#type, &r.remote, &r.name).map_err(invalid)? {
+            match self
+                .read(&r.r#type, &r.remote, &r.name, prior.as_ref())
+                .map_err(invalid)?
+            {
                 Some((attrs, computed)) => pb::ReadResponse {
                     found: true,
                     attrs: Some(wire::doc(&attrs)),
@@ -134,7 +138,7 @@ impl Ovh {
         r: pb::ImportRequest,
     ) -> std::result::Result<pb::ImportResponse, CallError> {
         Ok(
-            match self.read(&r.r#type, &r.remote, "").map_err(invalid)? {
+            match self.read(&r.r#type, &r.remote, "", None).map_err(invalid)? {
                 Some((attrs, computed)) => pb::ImportResponse {
                     found: true,
                     name: s(&attrs, "name").unwrap_or(&r.remote).to_string(),

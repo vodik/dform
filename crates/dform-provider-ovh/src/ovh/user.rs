@@ -68,7 +68,7 @@ impl Ovh {
             say,
         )?;
         self.s3_credential(&a, at, &path)?;
-        let (attrs, computed) = self.read_made(USER, at, &id)?;
+        let (attrs, computed) = self.read_made(USER, at, &id, None)?;
         Ok((id, attrs, computed))
     }
 

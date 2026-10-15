@@ -517,12 +517,21 @@ impl Ovh {
 
     // Read.
 
-    pub fn read(&self, typ: &str, remote: &str, name: &str) -> Result<Option<(Json, Json)>> {
+    /// The object `remote` of type `typ`, if it is there, `prior` its
+    /// computed values as dform last kept them: an instance's own ports
+    /// (`map::Owned`).
+    pub fn read(
+        &self,
+        typ: &str,
+        remote: &str,
+        name: &str,
+        prior: Option<&Json>,
+    ) -> Result<Option<(Json, Json)>> {
         let at = format!("read {}", address(typ, name));
         Ok(match typ {
             INSTANCE => {
                 let (a, p) = self.project(&at)?;
-                self.read_instance(&a, &p, remote)?
+                self.read_instance(&a, &p, remote, &prior.into())?
             }
             SSH_KEY => {
                 let (a, p) = self.project(&at)?;
@@ -724,7 +733,9 @@ impl Ovh {
                         format!("keep {p}: only a write-only attribute is left as it is"),
                     ));
                 }
-                self.update(typ, &at, &r.remote, &config, &mut notes, &say)?
+                let prior = r.prior.as_ref().map(wire::from_doc).transpose();
+                let prior = prior.map_err(|e| refused(&at, format!("{e:#}")))?;
+                self.update(typ, &at, &r.remote, &config, prior, &mut notes, &say)?
             }
             pb::Op::Delete => {
                 self.delete(typ, &at, &r.remote, &mut notes, &say)?;
@@ -761,7 +772,7 @@ impl Ovh {
         // The key is the name: the old object goes first unless the
         // replacement has another key.
         let old = self
-            .read(typ, &r.remote, &r.name)
+            .read(typ, &r.remote, &r.name, None)
             .map_err(|e| refused(at, format!("{e:#}")))?;
         let same = old
             .as_ref()
@@ -862,7 +873,7 @@ impl Ovh {
             // The same Create again: what it made, brought to the
             // document (a user's S3 credential, a volume's attachment).
             if ours {
-                return self.update(typ, at, &remote, config, notes, say);
+                return self.update(typ, at, &remote, config, None, notes, say);
             }
             return Err(refused(
                 at,
@@ -890,33 +901,45 @@ impl Ovh {
         }
     }
 
-    /// The object a Create made, read.
+    /// The object a Create or an Update made, read, `prior` what it owns
+    /// below it.
     fn read_made(
         &self,
         typ: &str,
         at: &str,
         remote: &str,
+        prior: Option<&Json>,
     ) -> std::result::Result<(Json, Json), Failed> {
-        self.read(typ, remote, "")
+        self.read(typ, remote, "", prior)
             .map_err(|e| refused(at, format!("{e:#}")))?
             .ok_or_else(|| Failed::MaybeApplied(format!("{at}: {typ} {remote} is gone again")))
     }
 
+    /// `remote` brought to `config`, `prior` its computed values as dform
+    /// keeps them; what it now is, read with what it owns below it (the
+    /// ports an instance had, and the ones attached here).
+    #[allow(clippy::too_many_arguments)]
     fn update(
         &self,
         typ: &str,
         at: &str,
         remote: &str,
         config: &Json,
+        prior: Option<Json>,
         notes: &mut Vec<String>,
         say: Say,
     ) -> std::result::Result<(String, Json, Json), Failed> {
+        let mut prior = prior.unwrap_or(Json::Null);
         let now = self
-            .read(typ, remote, "")
+            .read(typ, remote, "", Some(&prior))
             .map_err(|e| refused(at, format!("{e:#}")))?
             .ok_or_else(|| refused(at, format!("{typ} {remote} is not there")))?;
         match typ {
-            INSTANCE => self.update_instance(at, remote, &now.0, config, notes, say)?,
+            INSTANCE => {
+                for (net, port) in self.update_instance(at, remote, &now.0, config, notes, say)? {
+                    map::own_port(&mut prior, &net, &port);
+                }
+            }
             RECORD => self.update_record(at, remote, &now, config)?,
             CONTAINER => self.update_container(at, remote, &now.1, config)?,
             USER => self.update_user(at, remote, &now, config)?,
@@ -925,7 +948,7 @@ impl Ovh {
             // Nothing of an SSH key changes in place (the schema replaces it).
             _ => {}
         }
-        let (attrs, computed) = self.read_made(typ, at, remote)?;
+        let (attrs, computed) = self.read_made(typ, at, remote, Some(&prior))?;
         Ok((remote.to_string(), attrs, computed))
     }
 

@@ -480,7 +480,8 @@ impl Ovh {
     /// The instance `remote` brought onto the program's private networks
     /// (`config`) from those it is on (`now`, as Read answered it): an
     /// interface attached on each network added, and the one on each
-    /// network left detached, each said.
+    /// network left detached, each said. The ports it attached, by
+    /// network: the instance's own (`map::Owned`).
     pub(super) fn update_instance_networks(
         &self,
         at: &str,
@@ -488,15 +489,16 @@ impl Ovh {
         now: &Json,
         config: &Json,
         notes: &mut Vec<String>,
-    ) -> std::result::Result<(), Failed> {
+    ) -> std::result::Result<Vec<(String, String)>, Failed> {
         let want = networks_of(at, config)?;
         let has = networks_of(at, now)?;
         let (added, left): (Vec<&str>, Vec<&str>) = (
             want.iter().copied().filter(|n| !has.contains(n)).collect(),
             has.iter().copied().filter(|n| !want.contains(n)).collect(),
         );
+        let mut attached = Vec::new();
         if added.is_empty() && left.is_empty() {
-            return Ok(());
+            return Ok(attached);
         }
         let (a, p) = self.project_for(at)?;
         let region = need(at, config, "region")?;
@@ -522,9 +524,13 @@ impl Ovh {
                 notes.push(format!("{at}: it has an interface on network {id} already"));
                 continue;
             }
-            a.client
+            let port = a
+                .client
                 .post(&path, Some(&json!({"networkId": os})))
                 .map_err(|e| failed(at, e))?;
+            if let Some(port) = s(&port, "id") {
+                attached.push((id.to_string(), port.to_string()));
+            }
             notes.push(format!("{at}: an interface on network {id} is attached"));
         }
         for id in left {
@@ -541,18 +547,18 @@ impl Ovh {
                 ));
             }
         }
-        Ok(())
+        Ok(attached)
     }
 
-    /// The private networks instance `id` has an interface on, each with
-    /// its address there (`map::interfaces`). A failed call fails the
-    /// read: a network left out would be attached again.
+    /// Instance `id`'s ports on its private networks, by network, each
+    /// with its address (`map::interfaces`). A failed call fails the read:
+    /// a network left out would be attached again.
     pub(super) fn private_networks(
         &self,
         a: &Account,
         p: &str,
         id: &str,
-    ) -> api::Result<BTreeMap<String, Option<String>>> {
+    ) -> api::Result<map::Ports> {
         let ifaces = a.client.get(&format!(
             "/cloud/project/{p}/instance/{}/interface",
             escape(id)

@@ -12,7 +12,7 @@
   "guessed": [
     "the public port's `networkId` (the OpenStack id of the region's Ext-Net here)",
     "the POST's answer names the network as the GET does (`pn-…`)",
-    "a port's `id` and `macAddress`, and `state` ACTIVE at once",
+    "a port's `id` and `macAddress`, and `state` ACTIVE at once; that the POST's answer carries the `id` the GET lists the port by (the provider keeps it as the instance's own port, `ports[NET].id`)",
     "a private port's `fixedIps` filled at once (the provider reads its address there)"
   ],
   "answer": [

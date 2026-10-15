@@ -21,7 +21,7 @@ impl Ovh {
         objects
             .iter()
             .map(|o| {
-                let read = self.read(&o.r#type, &o.remote, &o.name)?;
+                let read = self.read(&o.r#type, &o.remote, &o.name, None)?;
                 Ok(judge(
                     &o.r#type,
                     read.as_ref().map(|(_, computed)| computed),

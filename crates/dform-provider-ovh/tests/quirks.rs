@@ -139,7 +139,7 @@ fn the_provider_reads_a_port_by_the_ovh_id_and_attaches_once() {
     let a = apply(&ovh, pb::Op::Update, "ovh.instance", &vm, &config);
     let attrs = wire::from_doc(a.attrs.as_ref().unwrap()).unwrap();
     assert_eq!(attrs["networks"], json!([id]));
-    let (attrs, _) = ovh.read("ovh.instance", &vm, "vm").unwrap().unwrap();
+    let (attrs, _) = ovh.read("ovh.instance", &vm, "vm", None).unwrap().unwrap();
     assert_eq!(attrs["networks"], json!([id]));
     let a = apply(&ovh, pb::Op::Update, "ovh.instance", &vm, &config);
     assert!(a.notes.is_empty(), "{:?}", a.notes);
@@ -250,7 +250,7 @@ fn ip_addresses_lag_an_attach_and_the_ports_do_not() {
     let ip = private_ports(&c, &vm)[0]["fixedIps"][0]["ip"].clone();
     assert!(ip.is_string(), "{ip}");
     let (attrs, computed) = provider(&server)
-        .read("ovh.instance", &vm, "vm")
+        .read("ovh.instance", &vm, "vm", None)
         .unwrap()
         .unwrap();
     assert_eq!(attrs["networks"], json!([id]));
@@ -259,4 +259,157 @@ fn ip_addresses_lag_an_attach_and_the_ports_do_not() {
     assert_eq!(private(&instance()), 0);
     assert_eq!(private(&instance()), 0);
     assert_eq!(private(&instance()), 1);
+}
+
+// An attach repeated makes another port, and the API marks none as the
+// instance's: the provider keeps the port it attached under the
+// instance's computed values (`ports[NET].id`), and dform tells its Read
+// and Apply what it kept (their `prior`).
+
+/// A Read of `vm`, told `prior`: its computed values.
+fn read(ovh: &Ovh, vm: &str, prior: Option<&Json>) -> Json {
+    let r = pb::ReadRequest {
+        r#type: "ovh.instance".into(),
+        remote: vm.into(),
+        name: "vm".into(),
+        prior: prior.map(wire::doc),
+    };
+    match ovh.handle(Call::Read(r), &backend::silent) {
+        Ok(Reply::Read(r)) if r.found => wire::from_doc(r.computed.as_ref().unwrap()).unwrap(),
+        other => panic!("read: {other:?}"),
+    }
+}
+
+/// An Update of `vm` with `config`, told `prior`: its computed values.
+fn update(ovh: &Ovh, vm: &str, config: &Json, prior: Option<&Json>) -> Json {
+    let r = pb::ApplyRequest {
+        op: pb::Op::Update as i32,
+        r#type: "ovh.instance".into(),
+        name: "vm".into(),
+        remote: vm.into(),
+        config: Some(wire::doc(config)),
+        prior: prior.map(wire::doc),
+        ..Default::default()
+    };
+    match ovh.handle(Call::Apply(r), &backend::silent) {
+        Ok(Reply::Apply(a)) => wire::from_doc(a.computed.as_ref().unwrap()).unwrap(),
+        other => panic!("update: {other:?}"),
+    }
+}
+
+/// The port the provider attached is its own: the Update answers it by
+/// id, and a Read told so finds it by that id among the ports on the
+/// network, its address the instance's there; told nothing, the Read
+/// answers as it did before ports were kept, with none of its own.
+#[test]
+fn an_attach_keeps_its_port_and_a_read_finds_it_by_id() {
+    let (server, c) = world();
+    let (id, os) = lab(&c);
+    let vm = server.add_instance("vm", "BHS5");
+    let ovh = provider(&server);
+    let config = json!({"name": "vm", "region": "BHS5", "flavor": "b2-7",
+                        "image": "Ubuntu 24.04", "networks": [id]});
+    let made = update(&ovh, &vm, &config, None);
+    let ports = private_ports(&c, &vm);
+    let (own, ip) = (&ports[0]["id"], &ports[0]["fixedIps"][0]["ip"]);
+    assert_eq!(made["ports"], json!({id.clone(): {"id": own, "ipv4": ip}}));
+    // Another port on the network (the attach loop's), listed after.
+    c.post(
+        &project(&format!("/instance/{vm}/interface")),
+        Some(&json!({"networkId": os})),
+    )
+    .unwrap();
+    let other = private_ports(&c, &vm)[1].clone();
+    let (theirs, their_ip) = (&other["id"], &other["fixedIps"][0]["ip"]);
+    let again = read(&ovh, &vm, Some(&made));
+    assert_eq!(again["ports"], made["ports"]);
+    assert_eq!(again["private_ips"], json!({id.clone(): ip}));
+    // Told the second is its own, the second it is: by id, not by place.
+    let second = json!({"ports": {id.clone(): {"id": theirs}}});
+    let read2 = read(&ovh, &vm, Some(&second));
+    assert_eq!(
+        read2["ports"],
+        json!({id.clone(): {"id": theirs, "ipv4": their_ip}})
+    );
+    assert_eq!(read2["private_ips"], json!({id.clone(): their_ip}));
+    // Told nothing: as before, the first port's address, and no port its own.
+    let bare = read(&ovh, &vm, None);
+    assert_eq!(bare["ports"], json!({}));
+    let mut without = again.clone();
+    without["ports"] = json!({});
+    assert_eq!(bare, without);
+}
+
+/// A port the prior remembers that is gone (detached outside dform) is
+/// absent from the Read, never carried over: the network is still the
+/// instance's while another port is on it, its address that port's.
+#[test]
+fn a_remembered_port_that_is_gone_reads_as_absent() {
+    let (server, c) = world();
+    let (id, os) = lab(&c);
+    let vm = server.add_instance("vm", "BHS5");
+    let ovh = provider(&server);
+    let config = json!({"name": "vm", "region": "BHS5", "flavor": "b2-7",
+                        "image": "Ubuntu 24.04", "networks": [id]});
+    let made = update(&ovh, &vm, &config, None);
+    let path = project(&format!("/instance/{vm}/interface"));
+    c.post(&path, Some(&json!({"networkId": os}))).unwrap();
+    let own = made["ports"][&id]["id"].as_str().unwrap().to_string();
+    c.delete(&format!("{path}/{own}")).unwrap();
+    let left = private_ports(&c, &vm);
+    assert_eq!(left.len(), 1, "{left:?}");
+    let now = read(&ovh, &vm, Some(&made));
+    assert_eq!(now["ports"], json!({}));
+    assert_eq!(
+        now["private_ips"],
+        json!({id.clone(): left[0]["fixedIps"][0]["ip"]})
+    );
+    let (attrs, _) = ovh
+        .read("ovh.instance", &vm, "vm", Some(&made))
+        .unwrap()
+        .unwrap();
+    assert_eq!(attrs["networks"], json!([id]));
+}
+
+/// An Update told what the instance owns answers it again beside what it
+/// attaches: a rename keeps the port, where an Update told nothing
+/// answers none.
+#[test]
+fn an_update_told_its_ports_keeps_them() {
+    let (server, c) = world();
+    let (id, _) = lab(&c);
+    let vm = server.add_instance("vm", "BHS5");
+    let ovh = provider(&server);
+    let config = json!({"name": "vm", "region": "BHS5", "flavor": "b2-7",
+                        "image": "Ubuntu 24.04", "networks": [id]});
+    let made = update(&ovh, &vm, &config, None);
+    let mut renamed = config.clone();
+    renamed["name"] = json!("vm-2");
+    assert_eq!(
+        update(&ovh, &vm, &renamed, Some(&made))["ports"],
+        made["ports"]
+    );
+    assert_eq!(update(&ovh, &vm, &renamed, None)["ports"], json!({}));
+}
+
+/// An instance made on a network owns the port it was made with.
+#[test]
+fn an_instance_made_on_a_network_owns_its_port() {
+    let (server, c) = world();
+    let (id, _) = lab(&c);
+    let ovh = provider(&server);
+    let made = apply(
+        &ovh,
+        pb::Op::Create,
+        "ovh.instance",
+        "",
+        &json!({"name": "vm", "region": "BHS5", "flavor": "b2-7",
+                "image": "Ubuntu 24.04", "networks": [id]}),
+    );
+    let computed = wire::from_doc(made.computed.as_ref().unwrap()).unwrap();
+    let port = &private_ports(&c, &made.remote)[0];
+    assert_eq!(
+        computed["ports"],
+        json!({id.clone(): {"id": port["id"], "ipv4": port["fixedIps"][0]["ip"]}})
+    );
 }
