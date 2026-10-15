@@ -349,10 +349,96 @@ Managed Kubernetes, databases, load balancers, floating IPs, volume
 snapshots and backups, fixed private addresses for an instance, and
 multi-attach volumes are not in this provider yet.
 
+## API behaviour observed
+
+What the live API was seen to do that its schema does not say, each with
+the call, when it was seen, and what the provider does about it. The
+fake plays each, and `crates/dform-provider-ovh/tests/quirks.rs` holds
+the provider to it.
+
+- A private port names its network by the network's OVH id, not the
+  OpenStack id it was attached by. `GET
+  /cloud/project/{p}/instance/{id}/interface` answers `networkId:
+  "pn-…_0"` for a port that `POST …/interface {networkId}` made with the
+  network's OpenStack id in the region (the instance create's
+  `networks[].networkId` takes the OpenStack id too). Seen 2026-10-12.
+  The provider maps both ids to the network when it reads an instance's
+  ports, and matches either when it looks for a port before attaching or
+  detaching one.
+- A call the API takes no body for refuses one, `{}` included: `POST
+  /cloud/project/{p}/user/{id}/s3Credentials`, `POST
+  …/s3Credentials/{access}/secret` and `POST
+  /domain/zone/{zone}/refresh` answer 400 "You provided an input body
+  while none was expected". Seen 2026-10-12. The provider sends no body
+  there: no `Content-Type`, and the empty body signed.
+- An instance's `ipAddresses` lags an attach: the new port's address is
+  missing from `GET /cloud/project/{p}/instance/{id}` for a while, while
+  `GET …/interface` lists the port at once. Seen 2026-10-12..14. The
+  provider reads an instance's `networks` and `private_ips` from its
+  ports, never from `ipAddresses`; its `public_ip` and `private_ip` still
+  come from `ipAddresses`.
+- An attach on a network the instance has a port on already makes
+  another port: the lab's instance has three on one network, from the
+  attach loop the first two fixes ended. Seen by 2026-10-15. The provider lists the ports before it attaches and
+  attaches only on a network it has none on.
+
+## Shapes not yet observed
+
+The fake answers from recordings in
+`crates/dform-provider-ovh/src/fake/cassettes/`, one per answer model,
+each naming the calls that answer it. Every success answer has the
+fields of the API's published model (eu.api.ovh.com/1.0, read
+2026-10-15), with made-up, redacted values; none is yet a recorded live
+answer. A session on the real API should record these, redact them, and
+replace the cassettes' answers:
+
+- the OAuth2 token answer (`POST /auth/oauth2/token`), which is not in
+  the 1.0 schema: its fields are RFC 6749's;
+- every refusal's body but the one above: the fake answers `{"message":
+  ...}` with texts of its own (a 404's "X does not exist", a 400 for a
+  wrong flavor or image, a smaller flavor, a network not in the region
+  or without a subnet there, a used VLAN (409), no vRack, a subnet
+  without `start` or `end`, a network that still has subnets, a user not
+  ready, a container not empty (409), a volume in the wrong status), and
+  the signed-call refusals ("Invalid signature", "Query out of time",
+  `INVALID_CREDENTIAL`, a 401 "Invalid token"); OVH's may carry `class`,
+  `errorCode` and `httpCode`;
+- a void call's answer (`PUT`, `DELETE`, the refresh): `null`;
+- `…/interface`: the public port's `networkId`, whether the `POST`'s
+  answer names the network as the `GET` does, and whether a new port's
+  `fixedIps` is filled at once;
+- `…/instance`: whether the list embeds `flavor`, `image` and `sshKey`,
+  an address's `networkId` in `ipAddresses`, `ipAddresses` empty while
+  `BUILD`, a resize confirmed by OVH (`RESIZE` then `ACTIVE`, never
+  `VERIFY_RESIZE`), how long `ipAddresses` lags (the fake counts reads,
+  `Server::ip_lag`), and a deleted instance answering 404 at once;
+- `…/network/public`: its id, name and `vlanId`, and its regions'
+  OpenStack ids;
+- `…/network/private`: `BUILDING` then `ACTIVE` on a create, every region
+  when no `regions` is given, a region added `ACTIVE` at once, a delete
+  `DELETING` then gone;
+- `…/subnet`: the gateway at the range's first host, `start` and `end`
+  required, a region where the network is not `ACTIVE` refused;
+- `…/volume`: the statuses on the way (`creating`, `attaching`, `in-use`,
+  `detaching`, `extending`, `deleting`), an attach refused unless
+  `available`, a delete refused while `in-use`, a volume detached when
+  its instance is deleted;
+- `…/user`: `creating` then `ok`, an S3 credential refused until `ok`,
+  the role ids, `PUT …/role` answering the password as the create does;
+- `…/region/{r}/storage`: the owner when none is given, versioning that
+  cannot go back to `disabled`, a container with objects not deleted;
+- `/domain/zone/{zone}/record`: a record made without a ttl answering 0,
+  `PUT` taking `subDomain`, `target` and `ttl` only; a zone the account
+  does not host answering 404;
+- `/cloud/project/{p}/vrack`: a project without one answering 404.
+
 ## Testing
 
 `cargo test --test main -- provider_ovh::` runs it against a fake OVH API
-(`dform_provider_ovh::fake`, with a DNS resolver beside it). `OVH_INTEGRATION=1
+(`dform_provider_ovh::fake`, with a DNS resolver beside it), which
+answers from the recordings above and plays what the live API was seen
+to do; `cargo test -p dform-provider-ovh --test quirks` checks each of
+those. `OVH_INTEGRATION=1
 OVH_CLOUD_PROJECT_SERVICE=<project> cargo test --test main --
 provider_ovh::the_real_account` lists the regions of the real account the machine's
 configuration names, and changes nothing.
