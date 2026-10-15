@@ -4,7 +4,7 @@
 //! hoisted (the helper statements the value's terms made the value's);
 //! `let n = count(x) where B` the clause with the binding a `Fold` last,
 //! its value the variable. A clause whose aggregates fold through helpers
-//! takes their numbers here, as a rule's does (`folded_rule`). A `let`
+//! takes their numbers here, as a rule's does. A `let`
 //! with parameters ([`LetFnLowered`], R-187) is a `LetFn` item: its
 //! parameters' variables, its value, its clause after the demand that
 //! binds them.

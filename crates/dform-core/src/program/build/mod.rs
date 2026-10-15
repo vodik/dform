@@ -17,7 +17,6 @@ mod aggregate;
 mod checks;
 mod clause;
 mod contributions;
-mod each;
 mod expr;
 mod gather;
 mod hoist;
@@ -34,7 +33,6 @@ mod spread;
 
 pub use aggregate::{fold_numbers, grouped, number_folds};
 pub use checks::CheckLowered;
-pub use clause::Written;
 pub use contributions::{SetFromLowered, SetLowered, TargetLowered, WriteLowered};
 pub use gather::{Gather, Statement};
 pub use hoist::{Keyed, ReadOf};

@@ -2,7 +2,7 @@
 //! the resolver lowered it to ([`RuleLowered`]): its head the relation and
 //! its arguments' patterns, the reads they hoisted the head's; its clause
 //! B's goals as gathered; a fact has none. A clause whose aggregates fold
-//! through helpers takes their numbers here (`folded_rule`'s rule).
+//! through helpers takes their numbers here.
 
 use super::{Builder, grouped, number_folds};
 use crate::ast::{Atom, Lit, Rank, Span, Stmt};

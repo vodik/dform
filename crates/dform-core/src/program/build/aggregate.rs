@@ -9,77 +9,10 @@
 //! variables and what is read after the fold), N stamped on its `Fold`
 //! from the program's counter.
 
-use super::Builder;
-use crate::ast::{Atom, Lit, Span, Term};
+use crate::ast::{Atom, Lit, Term};
+use crate::program::Program;
 use crate::program::node::*;
-use crate::program::{Counters, Program};
 use std::collections::BTreeSet;
-
-impl Builder<'_> {
-    /// `n = agg(x)`: the binding of `n` to the fold.
-    pub(super) fn fold(&mut self, l: &Lit) -> Option<GoalId> {
-        let Lit::Eq(Term::Var(v), Term::Func { name, args }) = l else {
-            return None;
-        };
-        let ([x], Some(kind)) = (args.as_slice(), aggregate_kind(name)) else {
-            return None;
-        };
-        let item = self.expr(x);
-        let agg = self.expr_node(ExprKind::Aggregate { kind, item });
-        let var = self.var(v);
-        let kind = GoalKind::Fold {
-            var,
-            agg,
-            helper: None,
-        };
-        Some(self.goal_node(self.span, kind))
-    }
-
-    /// The rule `head :- body` a statement lowered to, at `span`, its
-    /// aggregate bindings those binding `results`: a `Rule` item, each
-    /// fold's `__agg_N` taken from `helpers` when the head does not apply
-    /// it.
-    pub fn folded_rule(
-        &mut self,
-        (head, body): (&Atom, &[Lit]),
-        results: &[String],
-        helpers: &mut Counters,
-        span: Span,
-        scope: crate::program::ScopeId,
-    ) -> ItemId {
-        let found = |l: &Lit| {
-            matches!(l, Lit::Eq(Term::Var(v), Term::Func { name, .. })
-            if results.contains(v) && aggregate_kind(name).is_some())
-        };
-        let grouped = grouped(head, body, results);
-        let goals = body
-            .iter()
-            .map(|l| match found(l) {
-                true => {
-                    let g = self.fold(l).expect("an aggregate's binding");
-                    if grouped
-                        && let GoalKind::Fold { helper, .. } = &mut self.program.goals[g].kind
-                    {
-                        *helper = Some(u32::try_from(helpers.agg()).expect("a helper number"));
-                    }
-                    g
-                }
-                false => self.goal(l),
-            })
-            .collect();
-        let clause = self.clause_of(goals);
-        let head = self.head(head, &[]);
-        self.program.items.insert(Item {
-            span,
-            scope,
-            kind: ItemKind::Rule {
-                head,
-                clause: Some(clause),
-                rank: None,
-            },
-        })
-    }
-}
 
 /// Whether the aggregate bindings of `body` (those binding `results`)
 /// fold through a helper each: not one alone whose value is a column of

@@ -19,11 +19,11 @@
 //!
 //! The resolver keeps each read's node by the variable it binds
 //! ([`Reads`]): a builder given a literal the resolver lowered (a
-//! comprehension's body outside a statement, what `DFORM_CHECK_LOWER=1`
-//! compares) takes the node of each read it holds rather than remaking
-//! it ([`Builder::reading`]), and the literals the resolver made before
-//! a goal it built that no node of the goal holds are made of the nodes
-//! and the tests it kept ([`Builder::made_goal`]).
+//! comprehension's body outside a statement) takes the node of each read
+//! it holds rather than remaking it ([`Builder::reading`]), and the
+//! literals the resolver made before a goal it built that no node of the
+//! goal holds are made of the nodes and the tests it kept
+//! ([`Builder::made_goal`]).
 
 use super::Builder;
 use crate::ast::{Lit, Term};

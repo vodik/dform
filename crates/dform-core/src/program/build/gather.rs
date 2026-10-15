@@ -1,16 +1,13 @@
-//! The goals of the statement being lowered (R-211 steps 4-5): while the
-//! resolver lowers a statement's body, each written literal it lowers is
-//! built as a goal ([`Builder::literal`]) from what it lowered to, and
-//! the body as a clause of those goals, in the program. A ported
-//! statement's item holds that clause; under `DFORM_CHECK_LOWER=1` every
-//! statement's is built, each goal and clause lowered back and compared
-//! (`program::check`).
+//! The goals of the statement being lowered (R-211 steps 4-5, 7c): while
+//! the resolver lowers a statement's body, it builds each written
+//! literal's goal of the nodes of its terms, and the body as a clause of
+//! those goals, in the program. The statement's item holds that clause.
 //!
 //! The helper statements a literal's terms make (a comprehension's `not
 //! { }` rule, a loader's extern) no node of the term lowers to yet: they
 //! are the goal's, [`Program::terms_made`], lowered before its own.
 
-use super::{Builder, Reads, Written};
+use super::{Builder, Reads};
 use crate::ast::{Lit, Span, Stmt};
 use crate::program::node::{ClauseId, GoalId, VarId};
 use crate::program::{NodeId, Program, check};
@@ -28,8 +25,6 @@ pub struct Gather {
     reads: Reads,
     /// The clause of the statement's body, once it is lowered whole.
     clause: Option<ClauseId>,
-    /// Whether each goal and clause built is lowered back and compared.
-    compare: bool,
 }
 
 /// What a statement gathered: its variables, its reads and its clause.
@@ -59,15 +54,6 @@ struct Frame {
 }
 
 impl Gather {
-    /// A gathering; `compare`, each goal and clause is lowered back and
-    /// compared with what the resolver lowered it to.
-    pub fn new(compare: bool) -> Self {
-        Gather {
-            compare,
-            ..Gather::default()
-        }
-    }
-
     /// A literal's or a clause's lowering starts.
     pub fn open(&mut self) {
         self.frames.push(Frame::default());
@@ -278,12 +264,6 @@ impl Gather {
                 program.terms_made.insert(NodeId::Goal(g), made_by_terms);
             }
         }
-        if self.compare {
-            let lowered: Vec<Lit> = out[start..].to_vec();
-            check::literal(program, goal, &lowered, &helpers[made..], context, || {
-                format!("the literal at {}", check::place(span))
-            });
-        }
         if let Some(f) = self.frames.last_mut() {
             match goal {
                 Some(g) => f.goals.push((g, frame.terms)),
@@ -292,46 +272,9 @@ impl Gather {
         }
     }
 
-    /// A `set` target's `[_]` at `span` bound by `body[start..]` after the
-    /// statement's `body[..start]`, making `helpers[made..]`: built as the
-    /// membership goal it is.
-    pub fn each(
-        &mut self,
-        program: &mut Program,
-        span: Span,
-        body: &[Lit],
-        start: usize,
-        (helpers, made): (&[Stmt], usize),
-    ) {
-        let frame = self.frames.pop().expect("a `[_]`'s frame");
-        let own = frame.own(helpers, made);
-        let w = Written {
-            span,
-            lits: &body[start..],
-            helpers: &own,
-        };
-        let implicit = |v: &str| !v.starts_with("Each_");
-        let mut b = self.builder(program, span, &implicit);
-        let goal = b.each(&w);
-        self.done(b);
-        if self.compare {
-            check::literal(program, goal, &body[start..], &own, &body[..start], || {
-                format!("the `[_]` at {}", check::place(span))
-            });
-        }
-    }
-
-    /// The clause being lowered, `out[seed..]` after the literals its
-    /// statement holds before it, `out[..seed]`, making `helpers[made..]`:
-    /// its literals' goals one clause, the statement's.
-    pub fn clause(
-        &mut self,
-        program: &mut Program,
-        span: Span,
-        out: &[Lit],
-        seed: usize,
-        (helpers, made): (&[Stmt], usize),
-    ) {
+    /// The clause being lowered, at `span`: its literals' goals one
+    /// clause, the statement's.
+    pub fn clause(&mut self, program: &mut Program, span: Span) {
         let frame = self.frames.pop().expect("a clause's frame");
         if frame.failed {
             return;
@@ -341,16 +284,6 @@ impl Gather {
         let clause = b.clause_of(goals);
         self.done(b);
         self.clause = Some(clause);
-        if self.compare {
-            check::clause(
-                program,
-                clause,
-                span,
-                &out[..seed],
-                &out[seed..],
-                &helpers[made..],
-            );
-        }
     }
 }
 

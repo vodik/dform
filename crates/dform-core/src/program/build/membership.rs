@@ -1,7 +1,7 @@
 //! `x in e` as a `Member` goal (R-211 step 4), its collection the form
 //! the resolver's `membership` lowers it to; the resolver builds it of
-//! its nodes (step 7c), and only a `set` target's `[_]` is built here of
-//! what it lowered to, under `DFORM_CHECK_LOWER=1` (`Gather::each`):
+//! its nodes (step 7c), with the element's pattern and a negation built
+//! here:
 //!
 //! | written                    | lowered                                         | `Coll`         |
 //! |----------------------------|-------------------------------------------------|----------------|
@@ -16,160 +16,11 @@
 //! | `r in T`, `r` a column's   | `Type = "T"`                                    | `TypeOf`       |
 
 use super::Builder;
-use super::clause::Written;
-use crate::ast::{Atom, Lit, Stmt, Term};
 use crate::program::node::*;
-use crate::value::Value;
-
-/// The namespace's or renamed type's test before `last`, `want(T, x)`
-/// of the type it tests, which enumerates it.
-fn tested<'l>(last: &Lit, before: &'l [Lit]) -> Option<&'l Atom> {
-    let Lit::Pos(a) = last else { return None };
-    let ("want", [typ, _]) = (a.pred.as_str(), a.args.as_slice()) else {
-        return None;
-    };
-    match before.last() {
-        Some(Lit::Pos(t))
-            if matches!(t.pred.as_str(), NAMESPACE | PROVIDER_TYPE)
-                && t.args.get(1) == Some(typ) =>
-        {
-            Some(t)
-        }
-        _ => None,
-    }
-}
-
-/// The relations a membership states facts of beside it.
-const ENUM: &str = "__enum";
-const NAMESPACE: &str = "__namespace";
-const PROVIDER_TYPE: &str = "__provider_type";
 
 impl Builder<'_> {
-    /// `x in e`: the membership, after the reads it hoisted.
-    pub(super) fn membership(&mut self, w: &Written) -> Option<GoalId> {
-        let (last, rest) = w.lits.split_last()?;
-        let reads = match tested(last, rest) {
-            Some(_) => &rest[..rest.len() - 1],
-            None => rest,
-        };
-        let (member, left) = self.reading(reads, |b| b.member(last, rest, w));
-        Some(self.group(&left, vec![member?], &[]))
-    }
-
-    /// The membership `last` is (after `before`, the literals before it).
-    fn member(&mut self, last: &Lit, before: &[Lit], w: &Written) -> Option<GoalId> {
-        let a = match last {
-            Lit::Eq(x, e) => {
-                let pat = self.pattern(x);
-                let e = self.expr(e);
-                let coll = Coll::TypeOf(e);
-                return Some(self.goal_node(self.span, GoalKind::Member { pat, coll }));
-            }
-            Lit::Pos(a) => a,
-            _ => return None,
-        };
-        let (pat, coll) = match (a.pred.as_str(), a.args.as_slice()) {
-            ("want", [typ, x]) => match tested(last, before) {
-                Some(t) => {
-                    let coll = self.tested(t, w.helpers, true)?;
-                    (self.pattern(x), coll)
-                }
-                None => (self.pattern(x), Coll::Type(self.expr(typ))),
-            },
-            (NAMESPACE | PROVIDER_TYPE, [_, _]) => {
-                let coll = self.tested(a, w.helpers, false)?;
-                (self.hole(), coll)
-            }
-            ("cloud_exists", [Term::Val(Value::Str(t)), x]) => {
-                (self.pattern(x), Coll::World(t.clone()))
-            }
-            (crate::modules::INSTANCE_OF, [Term::Val(Value::Str(c)), scope, x]) => {
-                let coll = Coll::Copies {
-                    component: c.clone(),
-                    scope: self.expr(scope),
-                };
-                (self.pattern(x), coll)
-            }
-            ("member", [list, elem @ ..]) if !elem.is_empty() && elem.len() <= 2 => {
-                let pat = match elem {
-                    [x] => self.element(x),
-                    _ => self.tuple(elem),
-                };
-                let list = self.expr(list);
-                let coll = match fact(w.helpers, ENUM) {
-                    Some(f) => self.enum_values(f, list)?,
-                    None => Coll::Expr(list),
-                };
-                (pat, coll)
-            }
-            _ => return None,
-        };
-        Some(self.goal_node(a.span, GoalKind::Member { pat, coll }))
-    }
-
-    /// The namespace's or renamed type's test `t`, its facts among
-    /// `helpers`: enumerated by a `want` after it, or a test alone.
-    fn tested(&mut self, t: &Atom, helpers: &[Stmt], enumerate: bool) -> Option<Coll> {
-        let [Term::Val(Value::Str(of)), typ] = t.args.as_slice() else {
-            return None;
-        };
-        let names = facts(helpers, &t.pred)
-            .map(|f| match f.args.as_slice() {
-                [Term::Val(Value::Str(o)), Term::Val(Value::Str(n))] if o == of => Some(n.clone()),
-                _ => None,
-            })
-            .collect::<Option<Vec<_>>>()?;
-        let typ = self.expr(typ);
-        Some(match t.pred.as_str() {
-            NAMESPACE => Coll::Namespace {
-                ns: of.clone(),
-                types: names,
-                typ,
-                enumerate,
-            },
-            _ => Coll::ProviderType {
-                typ: of.clone(),
-                names,
-                var: typ,
-                enumerate,
-            },
-        })
-    }
-
-    /// An enum type's values, from its fact `__enum(name, values)`, over
-    /// the list read from it.
-    fn enum_values(&mut self, f: &Atom, list: ExprId) -> Option<Coll> {
-        let [Term::Val(Value::Str(name)), Term::Val(Value::List(vs))] = f.args.as_slice() else {
-            return None;
-        };
-        let values = vs
-            .iter()
-            .map(|v| match v {
-                Value::Str(s) => Some(s.clone()),
-                _ => None,
-            })
-            .collect::<Option<_>>()?;
-        Some(Coll::Enum {
-            name: name.clone(),
-            values,
-            def: f.span,
-            list,
-        })
-    }
-
-    /// `x in xs`'s element: a list written there is a value, not a tuple
-    /// (a tuple is a key and a value, `member/3`).
-    fn element(&mut self, x: &Term) -> PatternId {
-        match x {
-            Term::List(_) => {
-                let e = self.expr(x);
-                self.pattern_node(PatternKind::Expr(e))
-            }
-            x => self.pattern(x),
-        }
-    }
-
-    /// [`Self::element`] of the node `x`.
+    /// `x in xs`'s element `x`: a list written there is a value, not a
+    /// tuple (a tuple is a key and a value, `member/3`).
     pub fn element_of(&mut self, x: ExprId) -> PatternId {
         let e = &self.program.exprs[x];
         match (&e.kind, e.hoisted) {
@@ -182,16 +33,6 @@ impl Builder<'_> {
         }
     }
 
-    /// `(k, v)`.
-    fn tuple(&mut self, elems: &[Term]) -> PatternId {
-        let elems = elems.iter().map(|t| self.pattern(t)).collect();
-        self.pattern_node(PatternKind::Tuple { elems, rest: None })
-    }
-
-    fn hole(&mut self) -> PatternId {
-        self.pattern_node(PatternKind::Hole)
-    }
-
     /// `not g`, `g` one goal whose last literal is negated.
     pub fn not_one(&mut self, g: GoalId) -> GoalId {
         let span = self.program.goals[g].span;
@@ -202,16 +43,4 @@ impl Builder<'_> {
         };
         self.goal_node(span, kind)
     }
-}
-
-/// The facts of `pred` among `helpers`.
-fn facts<'h>(helpers: &'h [Stmt], pred: &'h str) -> impl Iterator<Item = &'h Atom> {
-    helpers.iter().filter_map(move |s| match s {
-        Stmt::Fact(a) if a.pred == pred => Some(a),
-        _ => None,
-    })
-}
-
-fn fact<'h>(helpers: &'h [Stmt], pred: &'h str) -> Option<&'h Atom> {
-    facts(helpers, pred).next()
 }

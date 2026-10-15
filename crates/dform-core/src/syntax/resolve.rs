@@ -768,9 +768,7 @@ pub struct Lowerer<'u> {
     /// `DFORM_CHECK_LOWER=1` (`program::check`).
     resolved: crate::program::check::Resolved,
     /// Each written literal and clause built as goals (R-211 steps 4-5,
-    /// `program::build::Gather`): while a ported statement is lowered,
-    /// and, lowered back and compared, for every statement under
-    /// `DFORM_CHECK_LOWER=1`.
+    /// `program::build::Gather`), while a ported statement is lowered.
     gather: Option<Box<crate::program::build::Gather>>,
     /// Helper rules of the statement being lowered.
     helpers: Vec<Stmt>,
@@ -848,8 +846,7 @@ impl<'u> Lowerer<'u> {
             program: crate::program::Program::new(),
             item_scope: Default::default(),
             resolved: Default::default(),
-            gather: crate::program::check::enabled()
-                .then(|| Box::new(crate::program::build::Gather::new(true))),
+            gather: None,
             helpers: Vec::new(),
             binding: false,
             text: false,
@@ -2184,7 +2181,7 @@ impl<'u> Lowerer<'u> {
         let aggs = std::mem::take(&mut self.aggs);
         let own = self.gather.is_none();
         if own {
-            self.gather = Some(Box::new(crate::program::build::Gather::new(false)));
+            self.gather = Some(Box::default());
         }
         let item = build(self);
         if own {
@@ -6142,9 +6139,8 @@ impl<'u> Lowerer<'u> {
         lits: &[SyntaxNode],
         mut out: Vec<Lit>,
     ) -> L<Vec<Lit>> {
-        // A statement's clause is compared whole (R-211 step 4); a body
+        // A statement's clause is gathered whole (R-211 step 4); a body
         // nested in a literal, with the literal.
-        let (seed, made) = (out.len(), self.helpers.len());
         let whole = self.nested == 0 && self.gather.is_some() && !lits.is_empty();
         if self.nested == 0
             && let Some(s) = &mut self.gather
@@ -6166,7 +6162,7 @@ impl<'u> Lowerer<'u> {
             if let Some(s) = &mut self.gather {
                 match failed {
                     true => s.failed(),
-                    false => s.clause(&mut self.program, span, &out, seed, (&self.helpers, made)),
+                    false => s.clause(&mut self.program, span),
                 }
             }
         }
@@ -11248,91 +11244,6 @@ mod tests {
         ] {
             assert!(lowered.iter().any(|l| l.contains(s)), "{s}: {lowered:#?}");
         }
-    }
-
-    /// Every form a written literal takes is built as a goal (R-211 step
-    /// 4) and lowers as the resolver lowers it, its clause and its
-    /// statement's folded rule too: the forms the corpus seldom writes
-    /// included (a `not { }` after a negated literal, a chain, a read
-    /// tested in place, `has` marked, each kind of membership).
-    #[test]
-    fn every_written_literal_is_built_as_the_resolver_lowers_it() {
-        let src = "resource db.postgres pg { public = false, tags = { a: 1 } }\n\
-             type environment = enum(\"staging\", \"prod\")\n\
-             let xs = [1, 2]\n\
-             let o = { a: 1 }\n\
-             p(1)\n\
-             a(x) where p(x)\n\
-             t(1) where pg.public\n\
-             t2(1) where o.a\n\
-             h(1) where has pg\n\
-             h2(1) where has pg.public\n\
-             h3(1) where has pg.tags.a\n\
-             h4(1) where has o.a\n\
-             c(x) where x = 1\n\
-             c2(x) where p(x), x == 1\n\
-             c3(x) where p(x), 0 <= x <= 3\n\
-             c4(y, z) where (y, z) = xs[0]\n\
-             c5(x) where x = pg.public\n\
-             c6(1) where pg.public == false\n\
-             c7(1) where pg == pg\n\
-             m(x) where x in xs\n\
-             m2(k, v) where (k, v) in o\n\
-             m3(r) where r in db.postgres\n\
-             m4(r) where r in resource\n\
-             m5(n) where n in world.net.vpc\n\
-             m6(e) where e in environment\n\
-             m7(v) where v in db.postgres[_].public\n\
-             m8(x) where p(x), x not in xs\n\
-             n(x) where p(x), not a(x)\n\
-             n2(1) where not pg.public\n\
-             n3(1) where not has pg.public\n\
-             n4(1) where not pg.public == true\n\
-             n5(x) where p(x), not a(x), not { a(x), x > 1 }\n\
-             n6(x) where p(x), not x in xs\n\
-             n7(1) where not has pg.tags.a\n\
-             n8(v) where p(v), v not in xs[_]\n\
-             n9(r) where lifecycle(r, _), r not in db.postgres\n\
-             m9(r) where lifecycle(r, _), r in db.postgres\n\
-             g(k, n) where p(k), n = count(x), a(x)\n\
-             g2(n) where n = count(x), p(x), n > 1\n\
-             set db.postgres[_].public = true\n";
-        let (_, seen) = crate::program::check::collect(|| lower(src));
-        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
-        let missing: Vec<&str> = [
-            "Rel",
-            "Truth",
-            "Truth/Read",
-            "Has/Resource",
-            "Has/Read",
-            "Has/Walk",
-            "Marked",
-            "Bind",
-            "Bind/Field",
-            "Bind/Read",
-            "Compare",
-            "Compare/chain",
-            "Compare/Read",
-            "Member/Expr",
-            "Member/Type",
-            "Member/World",
-            "Member/Enum",
-            "Member/Each",
-            "Member/TypeOf",
-            "Not",
-            "Not/helper",
-            "Fold",
-            "Rule/head",
-            "Rule/grouped",
-        ]
-        .into_iter()
-        .filter(|k| !seen.built.contains(*k))
-        .collect();
-        assert!(
-            missing.is_empty(),
-            "not built: {missing:?} of {:?}",
-            seen.built
-        );
     }
 
     #[test]

@@ -1,40 +1,14 @@
 //! A clause's goals (R-211 steps 4, 7c). The resolver builds each written
 //! literal's goal of the nodes of its terms (`syntax::resolve`); built
 //! here of what it lowered to are only the goals of literals it wrote
-//! itself: a comprehension's body outside a statement, a `[_]`'s
-//! membership and a folded rule under `DFORM_CHECK_LOWER=1`
+//! itself, a comprehension's body outside a statement
 //! ([`Builder::goal`]), and the clauses of goals.
 
 use super::Builder;
-use crate::ast::{Atom, Lit, Span, Stmt, Term};
+use crate::ast::{Atom, Lit, Span, Term};
 use crate::program::node::*;
 
-/// A `set` target's `[_]` as the resolver lowered it, the membership
-/// that binds its variable: what its builder reads, under
-/// `DFORM_CHECK_LOWER=1` (`Gather::each`).
-pub struct Written<'a> {
-    pub span: Span,
-    /// The literals it lowered to, the reads it hoisted first.
-    pub lits: &'a [Lit],
-    /// The statements it made beside its clause (the facts a membership
-    /// states).
-    pub helpers: &'a [Stmt],
-}
-
 impl Builder<'_> {
-    /// `goals` after the reads `left` no term of theirs holds (each its
-    /// goal) and before `after`, one goal.
-    pub(super) fn group(&mut self, left: &[Lit], goals: Vec<GoalId>, after: &[Lit]) -> GoalId {
-        if left.is_empty() && after.is_empty() && goals.len() == 1 {
-            return goals[0];
-        }
-        let mut all: Vec<GoalId> = left.iter().map(|l| self.goal(l)).collect();
-        all.extend(goals);
-        let after = after.iter().map(|l| self.goal(l)).collect();
-        let kind = GoalKind::Group { goals: all, after };
-        self.goal_node(self.span, kind)
-    }
-
     /// The lowered body `lits`.
     pub(super) fn clause(&mut self, lits: &[Lit]) -> ClauseId {
         let goals = lits.iter().map(|l| self.goal(l)).collect();
