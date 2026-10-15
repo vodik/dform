@@ -204,6 +204,10 @@ impl Elem {
 /// A contribution list: each value with the witnesses that contributed it.
 type Contributions = Vec<(Value, Witnesses)>;
 
+/// A keyed list's elements by their merge-key projection, the
+/// contributions to each.
+type KeyGroups = Vec<(Vec<Value>, Contributions)>;
+
 /// Merge contributions that are definitely equal; sort for canonical order.
 fn dedup_equal(mut items: Vec<(Value, Witnesses)>) -> Vec<(Value, Witnesses)> {
     let mut merged: Vec<(Value, Witnesses)> = Vec::new();
@@ -229,8 +233,9 @@ fn flat_normalize(path: &str, items: Vec<(Value, Witnesses)>) -> Elem {
     if merged.is_empty() {
         return Elem::Bottom;
     }
-    if merged.len() == 1 {
-        let (v, w) = merged.pop().unwrap();
+    if merged.len() == 1
+        && let Some((v, w)) = merged.pop()
+    {
         return Elem::Val(v, w);
     }
     let mut unknown = false;
@@ -365,8 +370,9 @@ fn null_collection(items: &[(Value, Witnesses)]) -> Option<Elem> {
         return None;
     }
     let mut merged = dedup_equal(items.to_vec());
-    if merged.len() == 1 {
-        let (v, w) = merged.pop().unwrap();
+    if merged.len() == 1
+        && let Some((v, w)) = merged.pop()
+    {
         return Some(Elem::Val(v, w));
     }
     let nulls = merged.iter().flat_map(|(v, _)| nulls_in(v)).collect();
@@ -394,51 +400,10 @@ fn keyed_normalize(
         .map(|(v, w)| (key_defaults(v, defaults), w))
         .collect();
     let items = dedup_equal(items);
-    let mut ws = Witnesses::new();
-    let mut groups: Vec<(Vec<Value>, Contributions)> = Vec::new();
-    for (v, w) in &items {
-        ws = union(&ws, w);
-        let Value::List(xs) = v else {
-            return Elem::Conflict {
-                path: path.into(),
-                a: (v.clone(), w.clone()),
-                b: (Value::Str("<not a list>".into()), Witnesses::new()),
-                vals: items.clone(),
-                reason: "keyed contribution is not a list".into(),
-            };
-        };
-        for x in xs {
-            let Value::Obj(m) = x else {
-                return Elem::Conflict {
-                    path: path.into(),
-                    a: (x.clone(), w.clone()),
-                    b: (Value::Str("<not an object>".into()), Witnesses::new()),
-                    vals: items.clone(),
-                    reason: "keyed list element is not an object".into(),
-                };
-            };
-            let Some(k): Option<Vec<Value>> = keys.iter().map(|k| m.get(k).cloned()).collect()
-            else {
-                return Elem::Conflict {
-                    path: path.into(),
-                    a: (x.clone(), w.clone()),
-                    b: (
-                        Value::Str("<element lacks merge key>".into()),
-                        Witnesses::new(),
-                    ),
-                    vals: items.clone(),
-                    reason: "keyed list element lacks its merge key".into(),
-                };
-            };
-            match groups
-                .iter()
-                .position(|(gk, _)| gk.iter().zip(&k).all(|(p, q)| eq3(p, q) == Truth::True))
-            {
-                Some(i) => groups[i].1.push((x.clone(), w.clone())),
-                None => groups.push((k, vec![(x.clone(), w.clone())])),
-            }
-        }
-    }
+    let (mut groups, ws) = match keyed_groups(keys, path, &items) {
+        Ok(grouped) => grouped,
+        Err(conflict) => return *conflict,
+    };
     groups.sort_by(|a, b| a.0.cmp(&b.0));
     let mut out = Vec::new();
     let mut stuck: BTreeSet<String> = BTreeSet::new();
@@ -468,6 +433,63 @@ fn keyed_normalize(
         };
     }
     Elem::Val(Value::List(out), ws)
+}
+
+/// The elements of the keyed lists `items` at `path` grouped by their
+/// merge-key projection (`eq3`), in the order first met, and every
+/// contribution's witnesses; a contribution not a list, an element not an
+/// object or without its keys is the conflict.
+fn keyed_groups(
+    keys: &[String],
+    path: &str,
+    items: &Contributions,
+) -> Result<(KeyGroups, Witnesses), Box<Elem>> {
+    let conflict = |a: (&Value, &Witnesses), b: &str, reason: &str| {
+        Box::new(Elem::Conflict {
+            path: path.into(),
+            a: (a.0.clone(), a.1.clone()),
+            b: (Value::Str(b.into()), Witnesses::new()),
+            vals: items.clone(),
+            reason: reason.into(),
+        })
+    };
+    let mut ws = Witnesses::new();
+    let mut groups: KeyGroups = Vec::new();
+    for (v, w) in items {
+        ws = union(&ws, w);
+        let Value::List(xs) = v else {
+            return Err(conflict(
+                (v, w),
+                "<not a list>",
+                "keyed contribution is not a list",
+            ));
+        };
+        for x in xs {
+            let Value::Obj(m) = x else {
+                return Err(conflict(
+                    (x, w),
+                    "<not an object>",
+                    "keyed list element is not an object",
+                ));
+            };
+            let Some(k): Option<Vec<Value>> = keys.iter().map(|k| m.get(k).cloned()).collect()
+            else {
+                return Err(conflict(
+                    (x, w),
+                    "<element lacks merge key>",
+                    "keyed list element lacks its merge key",
+                ));
+            };
+            match groups
+                .iter()
+                .position(|(gk, _)| gk.iter().zip(&k).all(|(p, q)| eq3(p, q) == Truth::True))
+            {
+                Some(i) => groups[i].1.push((x.clone(), w.clone())),
+                None => groups.push((k, vec![(x.clone(), w.clone())])),
+            }
+        }
+    }
+    Ok((groups, ws))
 }
 
 /// A keyed list's elements with each key they leave out at its default
@@ -1984,9 +2006,60 @@ fn lub_ranked_map(
     refinements: &[Refinement],
     nested: Below,
 ) -> Collapsed {
+    let mut out = BTreeMap::new();
+    let mut g = Gathered::default();
+    for (k, cs) in per_key(path, contribs, nested) {
+        // Nested objects merge per key too: a dotted path `a.b.c` is the
+        // contribution `{b: {c: V}}` to `a`, so two dotted paths under one
+        // attribute meet here and must not conflict on `b`.
+        let key_path = crate::address::path_join(path, &k);
+        let map = Lattice::Map(Box::new(elem.clone()));
+        let lat = if let Some(l) = nested.lattice(&key_path) {
+            l
+        } else if cs.iter().all(|(_, _, v)| matches!(v, Value::Obj(_))) {
+            &map
+        } else {
+            elem
+        };
+        let refs = refinements_below(refinements, &key_path);
+        match g.take(lub_ranked_refined(lat, &key_path, &cs, &refs, nested)) {
+            Ok(Some(value)) => {
+                out.insert(k, value);
+            }
+            Ok(None) => {}
+            Err(c) => return in_map(*c, &key_path, g.shadowed),
+        }
+    }
+    if out.is_empty() {
+        // Only empty objects: the value is `{}`, from every contributor.
+        g.witnesses = contribs.iter().map(|(w, _, _)| *w).collect();
+    }
+    g.into_result(Value::Obj(out), max_rank(contribs))
+}
+
+/// The refinements of `refinements` at `path` or below it.
+fn refinements_below(refinements: &[Refinement], path: &str) -> Vec<Refinement> {
+    refinements
+        .iter()
+        .filter(|r| {
+            r.path == path
+                || r.path
+                    .strip_prefix(path)
+                    .is_some_and(|p| p.starts_with('.'))
+        })
+        .cloned()
+        .collect()
+}
+
+/// A map's contributions `contribs` at `path` by key. A key an element
+/// write below it reaches (`nested`) is a key of the map even when no
+/// contribution names it: the write makes the list, and its element.
+fn per_key(
+    path: &str,
+    contribs: &[RankedContribution],
+    nested: Below,
+) -> BTreeMap<String, Vec<RankedContribution>> {
     let mut per_key: BTreeMap<String, Vec<RankedContribution>> = BTreeMap::new();
-    // A key an element write reaches is a key of the map even when no
-    // contribution names it: the write makes the list, and its element.
     let here = crate::provider::norm_path(path);
     for e in nested.elems {
         if let Some(k) = e
@@ -2011,118 +2084,71 @@ fn lub_ranked_map(
                 .push((*w, *r, x.clone()));
         }
     }
-    let mut out = BTreeMap::new();
-    let mut witnesses = Witnesses::new();
-    let mut deferred = Vec::new();
-    let mut shadowed = Vec::new();
-    let mut stuck: Option<(Rank, BTreeSet<String>)> = None;
-    for (k, cs) in per_key {
-        // Nested objects merge per key too: a dotted path `a.b.c` is the
-        // contribution `{b: {c: V}}` to `a`, so two dotted paths under one
-        // attribute meet here and must not conflict on `b`.
-        let key_path = crate::address::path_join(path, &k);
-        let map = Lattice::Map(Box::new(elem.clone()));
-        let lat = if let Some(l) = nested.lattice(&key_path) {
-            l
-        } else if cs.iter().all(|(_, _, v)| matches!(v, Value::Obj(_))) {
-            &map
-        } else {
-            elem
-        };
-        let refs: Vec<Refinement> = refinements
-            .iter()
-            .filter(|r| {
-                r.path == key_path
-                    || r.path
-                        .strip_prefix(&key_path)
-                        .is_some_and(|p| p.starts_with('.'))
-            })
-            .cloned()
-            .collect();
-        match lub_ranked_refined(lat, &key_path, &cs, &refs, nested) {
-            Collapsed::Bottom => {}
+    per_key
+}
+
+/// What the collapses of a map's keys or a keyed list's elements gather
+/// ([`lub_ranked_map`], [`keyed_overlay`]): their values' witnesses and
+/// deferred refinements, what they shadowed, and the nulls one of them is
+/// stuck on, at the highest rank stuck.
+#[derive(Default)]
+struct Gathered {
+    witnesses: Witnesses,
+    deferred: Vec<Deferred>,
+    shadowed: Vec<Shadowed>,
+    stuck: Option<(Rank, BTreeSet<String>)>,
+}
+
+impl Gathered {
+    /// A part's collapse `c` gathered: its value, if it has one. A
+    /// conflict or a violation is the caller's to say, as it came.
+    fn take(&mut self, c: Collapsed) -> Result<Option<Value>, Box<Collapsed>> {
+        match c {
+            Collapsed::Bottom => Ok(None),
             Collapsed::Val {
                 value,
-                witnesses: w,
-                deferred: d,
-                shadowed: sh,
+                witnesses,
+                deferred,
+                shadowed,
                 ..
             } => {
-                out.insert(k, value);
-                witnesses = union(&witnesses, &w);
-                deferred.extend(d);
-                shadowed.extend(sh);
+                self.witnesses = union(&self.witnesses, &witnesses);
+                self.deferred.extend(deferred);
+                self.shadowed.extend(shadowed);
+                Ok(Some(value))
             }
             Collapsed::Stuck {
                 rank,
                 nulls,
-                shadowed: sh,
+                shadowed,
             } => {
-                shadowed.extend(sh);
-                let st = stuck.get_or_insert((rank, BTreeSet::new()));
+                self.shadowed.extend(shadowed);
+                let st = self.stuck.get_or_insert((rank, BTreeSet::new()));
                 st.0 = st.0.max(rank);
                 st.1.extend(nulls);
+                Ok(None)
             }
-            Collapsed::Conflict {
-                rank,
-                a,
-                b,
-                reason,
-                witnesses,
-                shadowed: sh,
-            } => {
-                shadowed.extend(sh);
-                // Named at the leaf: the innermost key that disagrees.
-                let reason = match reason.contains(" at ") {
-                    true => reason,
-                    false => format!("{reason} at {key_path}"),
-                };
-                return Collapsed::Conflict {
-                    rank,
-                    a,
-                    b,
-                    reason,
-                    witnesses,
-                    shadowed,
-                };
-            }
-            Collapsed::Violated {
-                path,
-                constraint,
-                value,
-                witnesses,
-                refinement,
-                shadowed: sh,
-            } => {
-                shadowed.extend(sh);
-                return Collapsed::Violated {
-                    path,
-                    constraint,
-                    value,
-                    witnesses,
-                    refinement,
-                    shadowed,
-                };
-            }
+            other => Err(Box::new(other)),
         }
     }
-    if let Some((rank, nulls)) = stuck {
-        return Collapsed::Stuck {
-            rank,
-            nulls,
-            shadowed,
-        };
-    }
-    if out.is_empty() {
-        // Only empty objects: the value is `{}`, from every contributor.
-        witnesses = contribs.iter().map(|(w, _, _)| *w).collect();
-    }
-    Collapsed::Val {
-        value: Value::Obj(out),
-        rank: max_rank(contribs),
-        witnesses,
-        deferred,
-        shadowed,
+
+    /// The whole's collapse, of value `value` at `rank`: stuck when a part
+    /// is.
+    fn into_result(self, value: Value, rank: Rank) -> Collapsed {
+        match self.stuck {
+            Some((rank, nulls)) => Collapsed::Stuck {
+                rank,
+                nulls,
+                shadowed: self.shadowed,
+            },
+            None => Collapsed::Val {
+                value,
+                rank,
+                witnesses: self.witnesses,
+                deferred: self.deferred,
+                shadowed: self.shadowed,
+            },
+        }
     }
 }
 
@@ -2143,85 +2169,150 @@ fn keyed_overlay(
     writes: &[&ElemWrite],
     nested: Below,
 ) -> Collapsed {
+    let contribs: Vec<RankedContribution> = contribs
+        .iter()
+        .map(|(w, r, v)| (*w, *r, key_defaults(v.clone(), defaults)))
+        .collect();
+    let (top, shadowed) = match winning_lists(keys, defaults, elem, path, &contribs) {
+        Ok(won) => won,
+        Err(c) => return *c,
+    };
+    let mut elements = Elements {
+        keys,
+        defaults,
+        path,
+        groups: Vec::new(),
+    };
+    if let Some(top) = top {
+        elements.of_lists(&contribs, top);
+    }
+    for w in writes {
+        if let Err(c) = elements.write(w) {
+            return *c;
+        }
+    }
+    elements.groups.sort_by(|a, b| a.0.cmp(&b.0));
+    let inner = Below {
+        elems: &[],
+        ..nested
+    };
+    let mut out = Vec::new();
+    let mut g = Gathered {
+        shadowed,
+        ..Gathered::default()
+    };
+    let mut rank = top.unwrap_or(Rank::Default);
+    for (k, cs) in elements.groups {
+        rank = rank.max(max_rank(&cs));
+        let at = format!("{path}[{}]", key_label(keys, &k));
+        match g.take(lub_ranked_refined(elem, &at, &cs, &[], inner)) {
+            Ok(Some(value)) => out.push(value),
+            Ok(None) => {}
+            Err(c) => return in_list(*c, &at, g.shadowed),
+        }
+    }
+    g.into_result(Value::List(out), rank)
+}
+
+/// The keyed lists `contribs` at `path` collapsed by shelves, as they are
+/// without element writes: the winning rank and what it shadowed; `None`
+/// when no list is written. Anything but a list (a computed one, whose
+/// elements are unknown until it resolves, is stuck: the writes into it
+/// wait) is the collapse.
+fn winning_lists(
+    keys: &[String],
+    defaults: &BTreeMap<String, Value>,
+    elem: &Lattice,
+    path: &str,
+    contribs: &[RankedContribution],
+) -> Result<(Option<Rank>, Vec<Shadowed>), Box<Collapsed>> {
     let lat = Lattice::Keyed {
         keys: keys.to_vec(),
         defaults: defaults.clone(),
         elem: Box::new(elem.clone()),
     };
-    let contribs: Vec<RankedContribution> = contribs
-        .iter()
-        .map(|(w, r, v)| (*w, *r, key_defaults(v.clone(), defaults)))
-        .collect();
     let cell = contribs.iter().fold(Ranked::default(), |acc, (w, r, v)| {
         acc.join_in(&lat, &Ranked::at(*r, *w, v.clone()), path)
     });
-    let conflict = |w: &ElemWrite, b: &str, reason: String| Collapsed::Conflict {
-        rank: Some(w.rank),
-        a: (w.value.clone(), Witnesses::from([w.witness])),
-        b: (Value::Str(b.into()), Witnesses::new()),
-        reason,
-        witnesses: Witnesses::from([w.witness]),
-        shadowed: vec![],
-    };
-    let (top, mut shadowed) = match cell.collapse_at(path) {
-        Collapsed::Bottom => (None, vec![]),
+    match cell.collapse_at(path) {
+        Collapsed::Bottom => Ok((None, vec![])),
         Collapsed::Val {
             value: Value::List(_),
             rank,
             shadowed,
             ..
-        } => (Some(rank), shadowed),
-        // A computed list: which elements it has is unknown until it
-        // resolves, so the writes into it wait.
+        } => Ok((Some(rank), shadowed)),
         Collapsed::Val {
             value: v @ Value::Null { .. },
             rank,
             shadowed,
             ..
-        } => {
-            return Collapsed::Stuck {
-                rank,
-                nulls: nulls_in(&v),
-                shadowed,
+        } => Err(Box::new(Collapsed::Stuck {
+            rank,
+            nulls: nulls_in(&v),
+            shadowed,
+        })),
+        other => Err(Box::new(other)),
+    }
+}
+
+/// A keyed list's elements as they are gathered ([`keyed_overlay`]): by
+/// key, the contributions to each, in the order first met.
+struct Elements<'a> {
+    keys: &'a [String],
+    defaults: &'a BTreeMap<String, Value>,
+    path: &'a str,
+    groups: Vec<(Vec<Value>, Vec<RankedContribution>)>,
+}
+
+impl Elements<'_> {
+    /// `c`, a contribution to the element of key `k`.
+    fn add(&mut self, k: Vec<Value>, c: RankedContribution) {
+        match self
+            .groups
+            .iter()
+            .position(|(gk, _)| gk.iter().zip(&k).all(|(p, q)| eq3(p, q) == Truth::True))
+        {
+            Some(i) => self.groups[i].1.push(c),
+            None => self.groups.push((k, vec![c])),
+        }
+    }
+
+    /// Each element of the lists of `contribs` at the winning rank `top`.
+    fn of_lists(&mut self, contribs: &[RankedContribution], top: Rank) {
+        for (w, r, v) in contribs {
+            let Value::List(xs) = v else {
+                continue;
             };
-        }
-        other => return other,
-    };
-    let mut groups: Vec<(Vec<Value>, Vec<RankedContribution>)> = Vec::new();
-    let mut add = |k: Vec<Value>, c: RankedContribution| match groups
-        .iter()
-        .position(|(gk, _)| gk.iter().zip(&k).all(|(p, q)| eq3(p, q) == Truth::True))
-    {
-        Some(i) => groups[i].1.push(c),
-        None => groups.push((k, vec![c])),
-    };
-    for (w, r, v) in &contribs {
-        let (Some(top), Value::List(xs)) = (top, v) else {
-            continue;
-        };
-        if *r != top {
-            continue;
-        }
-        for x in xs {
-            // The shelf's normal form checked each is an object with its keys.
-            if let Value::Obj(m) = x
-                && let Some(k) = keys.iter().map(|k| m.get(k).cloned()).collect()
-            {
-                add(k, (*w, *r, x.clone()));
+            if *r != top {
+                continue;
+            }
+            for x in xs {
+                // The shelf's normal form checked each is an object with its keys.
+                if let Value::Obj(m) = x
+                    && let Some(k) = self.keys.iter().map(|k| m.get(k).cloned()).collect()
+                {
+                    self.add(k, (*w, *r, x.clone()));
+                }
             }
         }
     }
-    for w in writes {
+
+    /// The element write `w`, to the element its key names; a key that
+    /// names none, a value not an object, or an element with another key
+    /// is its conflict.
+    fn write(&mut self, w: &ElemWrite) -> Result<(), Box<Collapsed>> {
+        let (keys, path) = (self.keys, self.path);
         let k: Option<Vec<Value>> = match &w.key {
             Value::Obj(m) => keys
                 .iter()
-                .map(|k| m.get(k).or_else(|| defaults.get(k)).cloned())
+                .map(|k| m.get(k).or_else(|| self.defaults.get(k)).cloned())
                 .collect(),
             k if keys.len() == 1 => Some(vec![k.clone()]),
             _ => None,
         };
         let Some(k) = k else {
-            return conflict(
+            return Err(write_conflict(
                 w,
                 "<not a key>",
                 format!(
@@ -2229,19 +2320,19 @@ fn keyed_overlay(
                     keys.join(", "),
                     spell::value(&w.key)
                 ),
-            );
+            ));
         };
         let Value::Obj(mut m) = w.value.clone() else {
-            return conflict(
+            return Err(write_conflict(
                 w,
                 "<not an object>",
                 format!("{path}: an element of a keyed list is an object"),
-            );
+            ));
         };
         for (f, kv) in keys.iter().zip(&k) {
             match m.get(f) {
                 Some(x) if eq3(x, kv) != Truth::True => {
-                    return conflict(
+                    return Err(write_conflict(
                         w,
                         "<another key>",
                         format!(
@@ -2249,91 +2340,107 @@ fn keyed_overlay(
                             key_label(keys, &k),
                             spell::value(x)
                         ),
-                    );
+                    ));
                 }
                 _ => {
                     m.insert(f.clone(), kv.clone());
                 }
             }
         }
-        add(k, (w.witness, w.rank, Value::Obj(m)));
+        self.add(k, (w.witness, w.rank, Value::Obj(m)));
+        Ok(())
     }
-    groups.sort_by(|a, b| a.0.cmp(&b.0));
-    let inner = Below {
-        elems: &[],
-        ..nested
-    };
-    let mut out = Vec::new();
-    let mut witnesses = Witnesses::new();
-    let mut deferred = Vec::new();
-    let mut stuck: Option<(Rank, BTreeSet<String>)> = None;
-    let mut rank = top.unwrap_or(Rank::Default);
-    for (k, cs) in groups {
-        rank = rank.max(max_rank(&cs));
-        let at = format!("{path}[{}]", key_label(keys, &k));
-        match lub_ranked_refined(elem, &at, &cs, &[], inner) {
-            Collapsed::Bottom => {}
-            Collapsed::Val {
-                value,
-                witnesses: w,
-                deferred: d,
-                shadowed: sh,
-                ..
-            } => {
-                out.push(value);
-                witnesses = union(&witnesses, &w);
-                deferred.extend(d);
-                shadowed.extend(sh);
-            }
-            Collapsed::Stuck {
-                rank,
-                nulls,
-                shadowed: sh,
-            } => {
-                shadowed.extend(sh);
-                let st = stuck.get_or_insert((rank, BTreeSet::new()));
-                st.0 = st.0.max(rank);
-                st.1.extend(nulls);
-            }
+}
+
+/// The element write `w` conflicts with what its key names (`b`), for
+/// `reason`.
+fn write_conflict(w: &ElemWrite, b: &str, reason: String) -> Box<Collapsed> {
+    Box::new(Collapsed::Conflict {
+        rank: Some(w.rank),
+        a: (w.value.clone(), Witnesses::from([w.witness])),
+        b: (Value::Str(b.into()), Witnesses::new()),
+        reason,
+        witnesses: Witnesses::from([w.witness]),
+        shadowed: vec![],
+    })
+}
+
+/// A key's conflict or violation `c` as its map's, at `key_path`: named
+/// at the leaf (the innermost key that disagrees), with what the map's
+/// keys before it `shadowed`.
+fn in_map(c: Collapsed, key_path: &str, mut shadowed: Vec<Shadowed>) -> Collapsed {
+    match c {
+        Collapsed::Conflict {
+            rank,
+            a,
+            b,
+            reason,
+            witnesses,
+            shadowed: sh,
+        } => {
+            shadowed.extend(sh);
+            let reason = match reason.contains(" at ") {
+                true => reason,
+                false => format!("{reason} at {key_path}"),
+            };
             Collapsed::Conflict {
                 rank,
                 a,
                 b,
                 reason,
                 witnesses,
-                shadowed: sh,
-            } => {
-                shadowed.extend(sh);
-                return Collapsed::Conflict {
-                    rank,
-                    a,
-                    b,
-                    // Named at its leaf already when the element's own
-                    // collapse found it below the element.
-                    reason: match reason.contains(&format!(" at {at}")) {
-                        true => reason,
-                        false => format!("{reason} at {at}"),
-                    },
-                    witnesses,
-                    shadowed,
-                };
+                shadowed,
             }
-            v @ Collapsed::Violated { .. } => return v,
         }
+        Collapsed::Violated {
+            path,
+            constraint,
+            value,
+            witnesses,
+            refinement,
+            shadowed: sh,
+        } => {
+            shadowed.extend(sh);
+            Collapsed::Violated {
+                path,
+                constraint,
+                value,
+                witnesses,
+                refinement,
+                shadowed,
+            }
+        }
+        other => other,
     }
-    if let Some((rank, nulls)) = stuck {
-        return Collapsed::Stuck {
+}
+
+/// An element's conflict `c` as its keyed list's, at `at`: named there
+/// unless the element's own collapse named it below, with what the
+/// elements before it `shadowed`. A violation is the element's.
+fn in_list(c: Collapsed, at: &str, mut shadowed: Vec<Shadowed>) -> Collapsed {
+    match c {
+        Collapsed::Conflict {
             rank,
-            nulls,
-            shadowed,
-        };
-    }
-    Collapsed::Val {
-        value: Value::List(out),
-        rank,
-        witnesses,
-        deferred,
-        shadowed,
+            a,
+            b,
+            reason,
+            witnesses,
+            shadowed: sh,
+        } => {
+            shadowed.extend(sh);
+            Collapsed::Conflict {
+                rank,
+                a,
+                b,
+                reason: match reason.contains(&format!(" at {at}")) {
+                    true => reason,
+                    false => format!("{reason} at {at}"),
+                },
+                witnesses,
+                shadowed,
+            }
+        }
+        other => other,
     }
 }
 
