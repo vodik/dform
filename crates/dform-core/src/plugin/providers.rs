@@ -32,7 +32,7 @@ use super::source::{self, Source};
 use super::timed::timed_out;
 use super::wire;
 use crate::address::Address;
-use crate::ast::{Atom, Term};
+use crate::ast::{Atom, Lit, Term};
 use crate::provider::{self, Action, ActionKind, Change, Plan, get_path, remove_path, set_path};
 use crate::resources::{Adopt, Resource};
 use crate::schema::Schema;
@@ -1241,7 +1241,7 @@ impl Providers {
         externs: &[crate::ast::ExternFn],
         local: impl Fn(&str) -> bool,
     ) -> Result<()> {
-        use crate::ast::{Lit, Stmt};
+        use crate::ast::Stmt;
         let rules: Vec<(&Atom, &[Lit])> = program
             .statements
             .iter()
@@ -1252,10 +1252,6 @@ impl Providers {
             })
             .collect();
         let declared: BTreeSet<&str> = externs.iter().map(|f| f.name.as_str()).collect();
-        let text = |t: &Term| match t {
-            Term::Val(Value::Str(s)) => Some(s.clone()),
-            _ => None,
-        };
         let mut diags = Vec::new();
         for (head, body) in rules.iter().filter(|(h, _)| h.pred == "provider_config") {
             let Some(name) = head.args.first().and_then(text) else {
@@ -1265,133 +1261,16 @@ impl Providers {
                 continue;
             };
             let (types, answers) = self.served(&name, i)?;
-            // What a body atom reads that the provider serves, if it does.
-            let served = |a: &Atom| -> Option<String> {
-                if declared.contains(a.pred.as_str()) && !local(&a.pred) {
-                    return answers
-                        .contains(&a.pred)
-                        .then(|| format!("extern {}", a.pred));
-                }
-                let typed = matches!(
-                    a.pred.as_str(),
-                    "attr" | "cloud_attr" | "cloud_computed" | "cloud_exists"
-                );
-                let t = a.args.first().and_then(text).filter(|_| typed)?;
-                let what = match (a.args.get(1).and_then(text), a.args.get(2).and_then(text)) {
-                    (Some(n), Some(p)) if a.pred != "cloud_exists" => Address {
-                        typ: t.clone(),
-                        name: n,
-                    }
-                    .attr(p.trim_start_matches('.')),
-                    (Some(n), _) => Address {
-                        typ: t.clone(),
-                        name: n,
-                    }
-                    .to_string(),
-                    _ => t.clone(),
-                };
-                types.contains(&t).then_some(what)
+            let serving = Serving {
+                rules: &rules,
+                declared: &declared,
+                local: &local,
+                types,
+                answers,
             };
-            // A reference in a head: `ref(T, N, P)` of a type it serves.
-            fn reference(t: &Term, types: &BTreeSet<String>) -> Option<String> {
-                match t {
-                    Term::Val(Value::Ref { typ, name, attr }) if types.contains(typ) => Some(
-                        Address {
-                            typ: typ.clone(),
-                            name: name.clone(),
-                        }
-                        .attr(attr),
-                    ),
-                    Term::Func { name, args } if name == crate::address::REF => {
-                        match args.as_slice() {
-                            [Term::Val(Value::Str(t)), Term::Val(Value::Str(n)), p]
-                                if types.contains(t) =>
-                            {
-                                let a = Address {
-                                    typ: t.clone(),
-                                    name: n.clone(),
-                                };
-                                Some(match p {
-                                    Term::Val(Value::Str(p)) => a.attr(p.trim_start_matches('.')),
-                                    _ => format!("{a}.."),
-                                })
-                            }
-                            _ => None,
-                        }
-                    }
-                    Term::Func { args, .. } | Term::List(args) => {
-                        args.iter().find_map(|a| reference(a, types))
-                    }
-                    Term::Obj(m) => m.values().find_map(|a| reference(a, types)),
-                    _ => None,
-                }
+            if let Some((path, what)) = serving.first_read(head, body) {
+                diags.push(cycle(&name, head.span, &path, &what));
             }
-            // Depth first from the rule: the chain of predicates to the
-            // first thing it reads that the provider serves.
-            let mut seen = BTreeSet::new();
-            let mut cells = BTreeSet::new();
-            let mut stack: Vec<(&Atom, &[Lit], Vec<String>)> = vec![(head, body, Vec::new())];
-            let mut found = None;
-            'search: while let Some((h, b, path)) = stack.pop() {
-                if let Some(what) = h.args.iter().find_map(|t| reference(t, &types)) {
-                    found = Some((path.clone(), what));
-                    break 'search;
-                }
-                for l in b {
-                    let (Lit::Pos(a) | Lit::Not(a)) = l else {
-                        continue;
-                    };
-                    if let Some(what) = served(a) {
-                        found = Some((path.clone(), what));
-                        break 'search;
-                    }
-                    // A cell that is not a resource's (a `let`, an input):
-                    // what contributes to it.
-                    if a.pred == "attr"
-                        && let [t, scope, k, _] = a.args.as_slice()
-                        && text(t).is_some_and(|t| crate::transform::is_pseudo_type(&t))
-                        && cells.insert((t, scope, k))
-                    {
-                        // The cell is named by the reader that reads it.
-                        for (h2, b2) in &rules {
-                            if h2.pred == "arg"
-                                && h2.args.len() == 5
-                                && (&h2.args[0], &h2.args[1], &h2.args[2]) == (t, scope, k)
-                            {
-                                stack.push((h2, b2, path.clone()));
-                            }
-                        }
-                        continue;
-                    }
-                    if seen.insert(a.pred.as_str()) {
-                        let mut p = path.clone();
-                        p.push(a.pred.clone());
-                        for (h2, b2) in &rules {
-                            if h2.pred == a.pred {
-                                stack.push((h2, b2, p.clone()));
-                            }
-                        }
-                    }
-                }
-            }
-            let Some((path, what)) = found else { continue };
-            let mut cycle = vec![format!("provider {name}'s configuration")];
-            cycle.extend(path.iter().map(|p| format!("reads {p}")));
-            cycle.push(format!("reads {what}"));
-            cycle.push(format!("which provider {name} serves"));
-            diags.push(
-                crate::diag::Diagnostic::error(
-                    head.span,
-                    format!(
-                        "provider {name} is configured from {what}, which it serves itself: a cycle"
-                    ),
-                )
-                .with_note(format!("the cycle: {}", cycle.join(" -> ")))
-                .with_help(
-                    "a provider's configuration is evaluated before anything it serves: read \
-                     inputs, settings, tables, env_var, or another provider's values",
-                ),
-            );
         }
         if diags.is_empty() {
             Ok(())
@@ -1426,99 +1305,32 @@ impl Providers {
         } else {
             specs.to_vec()
         };
-        let who = match names.as_slice() {
-            [one] => format!("provider {one} does not declare"),
-            many => format!("none of the providers {} declares", many.join(", ")),
-        };
-        // The types the program declares itself (a `type` block, a
-        // `type_*` row), in any module: the mock plays them with the
-        // program's shape.
-        let own: BTreeSet<&str> = crate::modules::nested(&program.statements)
+        let own = own_types(program);
+        // The program's resources and those of each module it uses and
+        // each component it makes a resource of (R-113), once each.
+        let diags: Vec<crate::diag::Diagnostic> = crate::modules::reached(program)
             .into_iter()
             .filter_map(|s| match s {
-                Stmt::Pending(p) => {
-                    let crate::ast::PendingKind::TypeDecl { name, .. } = &p.kind;
-                    Some(name.as_str())
-                }
-                Stmt::Fact(a) if a.pred.starts_with("type_") => match a.args.first() {
-                    Some(Term::Val(Value::Str(t))) => Some(t.as_str()),
+                Stmt::Resource(r) => match &r.typ {
+                    Term::Val(Value::Str(typ)) => Some((r, typ)),
                     _ => None,
                 },
                 _ => None,
             })
-            .collect();
-        let mut diags = Vec::new();
-        // The program's resources and those of each module it uses and
-        // each component it makes a resource of (R-113), once each.
-        let reached = crate::modules::reached(program);
-        for r in reached.into_iter().filter_map(|s| match s {
-            Stmt::Resource(r) => Some(r),
-            _ => None,
-        }) {
-            let Term::Val(Value::Str(typ)) = &r.typ else {
-                continue;
-            };
             // A kind of a provider the program configures is known once
             // the provider is (R-110): the plan lists it under `later`.
             // Nor is a kind its namespace's cluster may serve once a CRD
             // is made, however the provider is configured (R-126): the
             // plan waits on the CRD the program makes, or names the one it
             // lacks.
-            if owner.contains_key(typ)
-                || own.contains(typ.as_str())
-                || self.waits(typ).is_some()
-                || self.reached(typ).is_some()
-            {
-                continue;
-            }
-            let by = crate::schema::declaring(typ);
-            let known = match by.as_slice() {
-                [] => "no known provider schema declares it".to_string(),
-                by => format!("declared by: {}", by.join(", ")),
-            };
-            // A relationship that is an attribute of one side (R-158).
-            if let Some((t, p)) = crate::schema::instead(typ) {
-                diags.push(
-                    crate::diag::Diagnostic::error(
-                        r.span,
-                        format!("{typ} is no resource: it is {t}'s attribute {p}"),
-                    )
-                    .with_help(format!(
-                        "write `{p} = [..]` in the {t}'s block, or add to it from \
-                         anywhere with `set R.{p} = [..] where ..`: each write adds its \
-                         elements"
-                    )),
-                );
-                continue;
-            }
-            let mut d = crate::diag::Diagnostic::error(r.span, format!("{who} {typ}; {known}"));
-            for c in &blocks {
-                d = d.with_label(c.span, format!("provider {}", c.name));
-            }
-            // A provider's types are named under it (R-36): `aws.vpc` is
-            // provider aws's. The fake cloud's namespaces (`net`, `iam`)
-            // name no provider, so where a known schema gives the type to
-            // another provider, that schema is the one to configure.
-            let ns = typ.split_once('.').map(|(ns, _)| ns).filter(|ns| {
-                by.is_empty()
-                    || by.iter().any(|n| {
-                        crate::schema::load_provider(n)
-                            .is_ok_and(|s| s.provider_of.get(typ).is_some_and(|p| p == ns))
-                    })
-            });
-            match (ns, by.first()) {
-                (Some(ns), _) if !names.iter().any(|n| n == ns) => {
-                    d = d.with_help(format!(
-                        "{typ} is provider {ns}'s type: add `use {ns}` to the stack"
-                    ));
-                }
-                (None, Some(first)) => {
-                    d = d.with_help(format!("configure the provider that does: `use {first}`"));
-                }
-                _ => {}
-            }
-            diags.push(d);
-        }
+            .filter(|(_, typ)| {
+                !(owner.contains_key(*typ)
+                    || own.contains(typ.as_str())
+                    || self.waits(typ).is_some()
+                    || self.reached(typ).is_some())
+            })
+            .map(|(r, typ)| undeclared(r.span, typ, &blocks, &names))
+            .collect();
         if diags.is_empty() {
             Ok(())
         } else {
@@ -3286,201 +3098,19 @@ impl Providers {
         state: &State,
         retracted: &BTreeSet<Address>,
     ) -> Result<Plan> {
-        let world = self.refresh(state)?;
-        let adopt_map = state::adopt_map(adopts);
-        self.proven.borrow_mut().clear();
-        // The objects a held secret is read from; a replaced one is made
-        // anew, so what was sent with its secret differs.
-        let holders = Holders::of(state, Some(&world)).without(retracted);
-
-        // desired: the assembled documents, refs and nulls resolved as far
-        // as the world allows.
-        let mut resolved: BTreeMap<Address, Json> = BTreeMap::new();
-        let mut order = Vec::new();
-        let renaming: BTreeSet<Address> = retracted
-            .iter()
-            .filter(|a| {
-                self.schema().remote_name_of(&a.typ).is_some()
-                    && lifecycle.create_first(self.schema(), a)
-            })
-            .cloned()
-            .collect();
-        for r in topo_sort(desired)? {
-            let ctx = Ctx {
-                cloud: self,
-                world: &world,
-                state,
-                adopts: &adopt_map,
-                resolved: &resolved,
-                strict: None,
-                retracted,
-                renaming: &renaming,
-            };
-            self.check_held("plan", &r.addr, "", &r.attrs)?;
-            let doc = self.desired_doc(&ctx, &r)?;
-            self.check_required(&r.addr, &doc)?;
-            order.push(r.addr.clone());
-            resolved.insert(r.addr.clone(), doc);
-        }
-
-        // world: through the identity mapping. A state entry whose object
-        // is gone is no row (a desired one is created again); one no longer
-        // desired is deleted from state with nothing to delete.
-        let mut before: BTreeMap<Address, Json> = BTreeMap::new();
-        let mut kept: BTreeMap<Address, Vec<Change>> = BTreeMap::new();
-        for (addr, entry) in self.entries(&state.resources) {
-            if let Some(cur) = world.get(&key(&addr.typ, &entry.remote)) {
-                let mut doc = match resolved.get(&addr) {
-                    Some(d) => self.world_doc(&addr.typ, cur, d),
-                    None => cur.attrs.clone(),
-                };
-                let mut notes = BTreeMap::new();
-                if let Some(want) = resolved.get(&addr) {
-                    notes = self.written_before(&addr.typ, entry, want, &mut doc, &holders);
-                    self.derived_before(&addr, entry, want, &mut doc);
-                }
-                if let Some(want) = resolved.get_mut(&addr) {
-                    let k = self.at_create(&addr, lifecycle, want, &mut doc, &notes);
-                    if !k.is_empty() {
-                        kept.insert(addr.clone(), k);
-                    }
-                }
-                before.insert(addr, doc);
-            }
-        }
-
-        let flat = |docs: &BTreeMap<Address, Json>| {
-            docs.iter()
-                .map(|(a, d)| (a.clone(), self.flat_value(&a.typ, d)))
-                .collect::<BTreeMap<Address, Value>>()
-        };
-        let deformations: BTreeMap<Address, zset::Deformation> =
-            zset::deformation(&flat(&resolved), &flat(&before))
-                .into_iter()
-                .map(|d| (d.addr.clone(), d))
-                .collect();
-
-        // What each action asks its provider to Plan: every desired
-        // document against the world's (an adopt's against the object
-        // Import finds; the provider validates every desired document,
-        // undeformed ones too), then every delete.
-        let mut asks = Vec::new();
-        let mut adopting = BTreeSet::new();
-        for addr in &order {
-            let (remote, prior) = match (deformations[addr].kind, adopt_map.get(addr)) {
-                (zset::Kind::Create, Some(remote_name)) if state.get(addr).is_none() => {
-                    let Some(found) = self.import(&addr.typ, remote_name)? else {
-                        bail!(
-                            "adopt requested but inventory missing {}",
-                            key(&addr.typ, remote_name)
-                        );
-                    };
-                    adopting.insert(addr.clone());
-                    (remote_name.clone(), Some(found.attrs))
-                }
-                (zset::Kind::Create, _) => (String::new(), None),
-                _ => (
-                    state
-                        .get(addr)
-                        .map(|e| e.remote.clone())
-                        .unwrap_or_default(),
-                    before.get(addr).cloned(),
-                ),
-            };
-            asks.push((addr.clone(), remote, prior, resolved.get(addr).cloned()));
-        }
-        // Deletes: what is no longer desired, what state maps to a vanished
-        // object (no world document: nothing to show), and deposed objects.
-        let mut deleting: Vec<(ActionKind, Address, &[String])> = Vec::new();
-        for (addr, entry) in self.entries(&state.resources) {
-            if resolved.contains_key(&addr) {
-                continue;
-            }
-            asks.push((
-                addr.clone(),
-                entry.remote.clone(),
-                before.get(&addr).cloned(),
-                None,
-            ));
-            deleting.push((ActionKind::Delete, addr, &entry.deps));
-        }
-        for (addr, entry) in self.entries(&state.deposed) {
-            let prior = world.get(&key(&addr.typ, &entry.remote));
-            asks.push((
-                addr.clone(),
-                entry.remote.clone(),
-                prior.map(|o| o.attrs.clone()),
-                None,
-            ));
-            deleting.push((ActionKind::DeleteDeposed, addr, &entry.deps));
-        }
+        let mut p = Planning::new(self, lifecycle, state, adopts)?;
+        p.resolve(desired, retracted)?;
+        p.read_before(retracted);
+        let deformations = p.deformations();
+        let mut asks = p.asks(&deformations)?;
+        let deleting = p.deleting(&mut asks);
         let mut answers = self.plan_many(asks)?.into_iter();
-
         let mut actions = Vec::new();
-        for (addr, (changes, replaces)) in order.iter().cloned().zip(answers.by_ref()) {
+        for (addr, answer) in p.order.clone().into_iter().zip(answers.by_ref()) {
             let d = &deformations[&addr];
-            let kind = match d.kind {
-                zset::Kind::Create if adopting.contains(&addr) => ActionKind::Adopt,
-                zset::Kind::Create => ActionKind::Create,
-                zset::Kind::Delete => unreachable!("a desired address is never deleted"),
-                zset::Kind::Update | zset::Kind::Drift if replaces => ActionKind::Replace {
-                    create_first: lifecycle.create_first(self.schema(), &addr),
-                },
-                zset::Kind::Drift => ActionKind::Drift,
-                // The provider's Plan finds nothing to change: the world
-                // document differs only where the provider compares for
-                // itself (a write-only attribute its API never answers,
-                // such as an OVH instance's user data).
-                zset::Kind::Update if changes.is_empty() => ActionKind::Noop,
-                zset::Kind::Update => ActionKind::Update,
-                zset::Kind::Pending => ActionKind::Pending,
-                zset::Kind::Undeformed => ActionKind::Noop,
-            };
-            let (changes, on) = match d.kind {
-                zset::Kind::Pending => (changes, d.unresolved.clone()),
-                zset::Kind::Undeformed => (Vec::new(), BTreeSet::new()),
-                _ => (changes, BTreeSet::new()),
-            };
-            let renamed = match kind {
-                ActionKind::Replace { create_first: true } => {
-                    if let Some(why) = zset::create_first_refused(self.schema(), &addr) {
-                        return Err(crate::report::Failure::located(&addr, why).into());
-                    }
-                    let want = resolved.get(&addr).expect("a desired address");
-                    self.renamed(&addr, want, before.get(&addr), state.get(&addr))
-                }
-                _ => None,
-            };
-            actions.push(Action {
-                kind,
-                addr: addr.clone(),
-                changes,
-                on,
-                kept: kept.remove(&addr).unwrap_or_default(),
-                renamed,
-            });
+            actions.push(p.action(addr, d, answer)?);
         }
-
-        // One delete goes before the deletes of what it depends on.
-        let mut deletes: Vec<(Action, &[String])> = deleting
-            .into_iter()
-            .zip(answers)
-            .map(|((kind, addr, deps), (changes, _))| {
-                (
-                    Action {
-                        kind,
-                        addr,
-                        changes,
-                        on: BTreeSet::new(),
-                        kept: Vec::new(),
-                        renamed: None,
-                    },
-                    deps,
-                )
-            })
-            .collect();
-        deletes.sort_by(|a, b| a.0.addr.cmp(&b.0.addr));
-        actions.extend(reverse_dependency_order(deletes));
+        actions.extend(deletes(deleting, answers));
         Ok(Plan { actions })
     }
 
@@ -3783,6 +3413,598 @@ impl<'a> WrittenDigest<'a> {
     }
 }
 
+/// A term's text, when it is a string.
+fn text(t: &Term) -> Option<String> {
+    match t {
+        Term::Val(Value::Str(s)) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+/// What a provider serves, for the search of its configuration's rules
+/// for a read of it ([`Providers::check_configuration`]): the program's
+/// `rules`, the externs it `declared` and those the engine answers
+/// itself (`local`), and the provider's `types` and the externs it
+/// `answers`.
+struct Serving<'p, F> {
+    rules: &'p [(&'p Atom, &'p [Lit])],
+    declared: &'p BTreeSet<&'p str>,
+    local: &'p F,
+    types: BTreeSet<String>,
+    answers: BTreeSet<String>,
+}
+
+impl<F: Fn(&str) -> bool> Serving<'_, F> {
+    /// What the body atom `a` reads that the provider serves, if it does.
+    fn read_by(&self, a: &Atom) -> Option<String> {
+        if self.declared.contains(a.pred.as_str()) && !(self.local)(&a.pred) {
+            return self
+                .answers
+                .contains(&a.pred)
+                .then(|| format!("extern {}", a.pred));
+        }
+        let typed = matches!(
+            a.pred.as_str(),
+            "attr" | "cloud_attr" | "cloud_computed" | "cloud_exists"
+        );
+        let t = a.args.first().and_then(text).filter(|_| typed)?;
+        let what = match (a.args.get(1).and_then(text), a.args.get(2).and_then(text)) {
+            (Some(n), Some(p)) if a.pred != "cloud_exists" => Address {
+                typ: t.clone(),
+                name: n,
+            }
+            .attr(p.trim_start_matches('.')),
+            (Some(n), _) => Address {
+                typ: t.clone(),
+                name: n,
+            }
+            .to_string(),
+            _ => t.clone(),
+        };
+        self.types.contains(&t).then_some(what)
+    }
+
+    /// Depth first from the rule `head :- body`: the chain of predicates
+    /// to the first thing it reads that the provider serves, and that.
+    fn first_read(&self, head: &Atom, body: &[Lit]) -> Option<(Vec<String>, String)> {
+        let mut seen = BTreeSet::new();
+        let mut cells = BTreeSet::new();
+        let mut stack: Vec<(&Atom, &[Lit], Vec<String>)> = vec![(head, body, Vec::new())];
+        while let Some((h, b, path)) = stack.pop() {
+            if let Some(what) = h.args.iter().find_map(|t| reference(t, &self.types)) {
+                return Some((path, what));
+            }
+            for l in b {
+                let (Lit::Pos(a) | Lit::Not(a)) = l else {
+                    continue;
+                };
+                if let Some(what) = self.read_by(a) {
+                    return Some((path, what));
+                }
+                // A cell that is not a resource's (a `let`, an input):
+                // what contributes to it.
+                if a.pred == "attr"
+                    && let [t, scope, k, _] = a.args.as_slice()
+                    && text(t).is_some_and(|t| crate::transform::is_pseudo_type(&t))
+                    && cells.insert((t, scope, k))
+                {
+                    // The cell is named by the reader that reads it.
+                    for (h2, b2) in self.rules {
+                        if h2.pred == "arg"
+                            && h2.args.len() == 5
+                            && (&h2.args[0], &h2.args[1], &h2.args[2]) == (t, scope, k)
+                        {
+                            stack.push((h2, b2, path.clone()));
+                        }
+                    }
+                    continue;
+                }
+                if seen.insert(a.pred.as_str()) {
+                    let mut p = path.clone();
+                    p.push(a.pred.clone());
+                    for (h2, b2) in self.rules {
+                        if h2.pred == a.pred {
+                            stack.push((h2, b2, p.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
+/// A reference in a head: `ref(T, N, P)` of one of `types`.
+fn reference(t: &Term, types: &BTreeSet<String>) -> Option<String> {
+    match t {
+        Term::Val(Value::Ref { typ, name, attr }) if types.contains(typ) => Some(
+            Address {
+                typ: typ.clone(),
+                name: name.clone(),
+            }
+            .attr(attr),
+        ),
+        Term::Func { name, args } if name == crate::address::REF => match args.as_slice() {
+            [Term::Val(Value::Str(t)), Term::Val(Value::Str(n)), p] if types.contains(t) => {
+                let a = Address {
+                    typ: t.clone(),
+                    name: n.clone(),
+                };
+                Some(match p {
+                    Term::Val(Value::Str(p)) => a.attr(p.trim_start_matches('.')),
+                    _ => format!("{a}.."),
+                })
+            }
+            _ => None,
+        },
+        Term::Func { args, .. } | Term::List(args) => args.iter().find_map(|a| reference(a, types)),
+        Term::Obj(m) => m.values().find_map(|a| reference(a, types)),
+        _ => None,
+    }
+}
+
+/// The error of provider `name`'s configuration (its rule at `span`)
+/// reading `what`, which it serves, through the predicates `path`.
+fn cycle(
+    name: &str,
+    span: crate::ast::Span,
+    path: &[String],
+    what: &str,
+) -> crate::diag::Diagnostic {
+    let mut cycle = vec![format!("provider {name}'s configuration")];
+    cycle.extend(path.iter().map(|p| format!("reads {p}")));
+    cycle.push(format!("reads {what}"));
+    cycle.push(format!("which provider {name} serves"));
+    crate::diag::Diagnostic::error(
+        span,
+        format!("provider {name} is configured from {what}, which it serves itself: a cycle"),
+    )
+    .with_note(format!("the cycle: {}", cycle.join(" -> ")))
+    .with_help(
+        "a provider's configuration is evaluated before anything it serves: read \
+         inputs, settings, tables, env_var, or another provider's values",
+    )
+}
+
+/// The types `program` declares itself (a `type` block, a `type_*` row),
+/// in any module: the mock plays them with the program's shape.
+fn own_types(program: &crate::ast::Program) -> BTreeSet<&str> {
+    use crate::ast::Stmt;
+    crate::modules::nested(&program.statements)
+        .into_iter()
+        .filter_map(|s| match s {
+            Stmt::Pending(p) => {
+                let crate::ast::PendingKind::TypeDecl { name, .. } = &p.kind;
+                Some(name.as_str())
+            }
+            Stmt::Fact(a) if a.pred.starts_with("type_") => match a.args.first() {
+                Some(Term::Val(Value::Str(t))) => Some(t.as_str()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// The error of a resource at `span` of the type `typ`, which none of the
+/// providers `names` (configured by `blocks`, when the program has them)
+/// declares: the known schemas that do, and the `use` that adds one.
+fn undeclared(
+    span: crate::ast::Span,
+    typ: &str,
+    blocks: &[&crate::ast::Config],
+    names: &[String],
+) -> crate::diag::Diagnostic {
+    let by = crate::schema::declaring(typ);
+    // A relationship that is an attribute of one side (R-158).
+    if let Some((t, p)) = crate::schema::instead(typ) {
+        return crate::diag::Diagnostic::error(
+            span,
+            format!("{typ} is no resource: it is {t}'s attribute {p}"),
+        )
+        .with_help(format!(
+            "write `{p} = [..]` in the {t}'s block, or add to it from \
+             anywhere with `set R.{p} = [..] where ..`: each write adds its \
+             elements"
+        ));
+    }
+    let who = match names {
+        [one] => format!("provider {one} does not declare"),
+        many => format!("none of the providers {} declares", many.join(", ")),
+    };
+    let known = match by.as_slice() {
+        [] => "no known provider schema declares it".to_string(),
+        by => format!("declared by: {}", by.join(", ")),
+    };
+    let mut d = crate::diag::Diagnostic::error(span, format!("{who} {typ}; {known}"));
+    for c in blocks {
+        d = d.with_label(c.span, format!("provider {}", c.name));
+    }
+    // A provider's types are named under it (R-36): `aws.vpc` is
+    // provider aws's. The fake cloud's namespaces (`net`, `iam`) name no
+    // provider, so where a known schema gives the type to another
+    // provider, that schema is the one to configure.
+    let ns = typ.split_once('.').map(|(ns, _)| ns).filter(|ns| {
+        by.is_empty()
+            || by.iter().any(|n| {
+                crate::schema::load_provider(n)
+                    .is_ok_and(|s| s.provider_of.get(typ).is_some_and(|p| p == ns))
+            })
+    });
+    match (ns, by.first()) {
+        (Some(ns), _) if !names.iter().any(|n| n == ns) => d.with_help(format!(
+            "{typ} is provider {ns}'s type: add `use {ns}` to the stack"
+        )),
+        (None, Some(first)) => {
+            d.with_help(format!("configure the provider that does: `use {first}`"))
+        }
+        _ => d,
+    }
+}
+
+/// A plan being made ([`Providers::plan_retracting`]): the refresh it is
+/// made against, every desired document resolved and their dependency
+/// order, the world's document of each object state maps (`before`),
+/// what an update keeps as it was created, and the creates that adopt.
+struct Planning<'a> {
+    cloud: &'a Providers,
+    lifecycle: &'a Lifecycle,
+    state: &'a State,
+    world: World,
+    adopt_map: BTreeMap<Address, String>,
+    resolved: BTreeMap<Address, Json>,
+    order: Vec<Address>,
+    before: BTreeMap<Address, Json>,
+    kept: BTreeMap<Address, Vec<Change>>,
+    adopting: BTreeSet<Address>,
+}
+
+/// A delete a plan asks for: its kind, the address, and what it depends
+/// on as state recorded it.
+type Deleting<'a> = (ActionKind, Address, &'a [String]);
+
+impl<'a> Planning<'a> {
+    /// A plan of `cloud` against its refresh of `state`, `adopts` the
+    /// objects the program adopts.
+    fn new(
+        cloud: &'a Providers,
+        lifecycle: &'a Lifecycle,
+        state: &'a State,
+        adopts: &[Adopt],
+    ) -> Result<Planning<'a>> {
+        let world = cloud.refresh(state)?;
+        let adopt_map = state::adopt_map(adopts);
+        cloud.proven.borrow_mut().clear();
+        Ok(Planning {
+            cloud,
+            lifecycle,
+            state,
+            world,
+            adopt_map,
+            resolved: BTreeMap::new(),
+            order: Vec::new(),
+            before: BTreeMap::new(),
+            kept: BTreeMap::new(),
+            adopting: BTreeSet::new(),
+        })
+    }
+
+    /// The desired documents, in dependency order: refs and nulls
+    /// resolved as far as the world allows, a `retracted` address's nulls
+    /// left unresolved (the create-first ones among them renamed).
+    fn resolve(&mut self, desired: &[Resource], retracted: &BTreeSet<Address>) -> Result<()> {
+        let schema = self.cloud.schema();
+        let renaming: BTreeSet<Address> = retracted
+            .iter()
+            .filter(|a| {
+                schema.remote_name_of(&a.typ).is_some() && self.lifecycle.create_first(schema, a)
+            })
+            .cloned()
+            .collect();
+        for r in topo_sort(desired)? {
+            let ctx = Ctx {
+                cloud: self.cloud,
+                world: &self.world,
+                state: self.state,
+                adopts: &self.adopt_map,
+                resolved: &self.resolved,
+                strict: None,
+                retracted,
+                renaming: &renaming,
+            };
+            self.cloud.check_held("plan", &r.addr, "", &r.attrs)?;
+            let doc = self.cloud.desired_doc(&ctx, &r)?;
+            self.cloud.check_required(&r.addr, &doc)?;
+            self.order.push(r.addr.clone());
+            self.resolved.insert(r.addr.clone(), doc);
+        }
+        Ok(())
+    }
+
+    /// The world's document of each object state maps, through the
+    /// identity mapping, as it compares with the desired one. A state
+    /// entry whose object is gone is no row (a desired one is created
+    /// again); one no longer desired is deleted from state with nothing
+    /// to delete. A held secret's holders: a `retracted` object is made
+    /// anew, so what was sent with its secret differs.
+    fn read_before(&mut self, retracted: &BTreeSet<Address>) {
+        let cloud = self.cloud;
+        let holders = Holders::of(self.state, Some(&self.world)).without(retracted);
+        for (addr, entry) in cloud.entries(&self.state.resources) {
+            let Some(cur) = self.world.get(&key(&addr.typ, &entry.remote)) else {
+                continue;
+            };
+            let mut doc = match self.resolved.get(&addr) {
+                Some(d) => cloud.world_doc(&addr.typ, cur, d),
+                None => cur.attrs.clone(),
+            };
+            let mut notes = BTreeMap::new();
+            if let Some(want) = self.resolved.get(&addr) {
+                notes = cloud.written_before(&addr.typ, entry, want, &mut doc, &holders);
+                cloud.derived_before(&addr, entry, want, &mut doc);
+            }
+            if let Some(want) = self.resolved.get_mut(&addr) {
+                let k = cloud.at_create(&addr, self.lifecycle, want, &mut doc, &notes);
+                if !k.is_empty() {
+                    self.kept.insert(addr.clone(), k);
+                }
+            }
+            self.before.insert(addr, doc);
+        }
+    }
+
+    /// The Z-set `desired − world` (`zset::deformation`), by address.
+    fn deformations(&self) -> BTreeMap<Address, zset::Deformation> {
+        let flat = |docs: &BTreeMap<Address, Json>| {
+            docs.iter()
+                .map(|(a, d)| (a.clone(), self.cloud.flat_value(&a.typ, d)))
+                .collect::<BTreeMap<Address, Value>>()
+        };
+        zset::deformation(&flat(&self.resolved), &flat(&self.before))
+            .into_iter()
+            .map(|d| (d.addr.clone(), d))
+            .collect()
+    }
+
+    /// What each desired document asks its provider to Plan, in order:
+    /// against the world's (an adopt's against the object Import finds;
+    /// the provider validates every desired document, undeformed ones
+    /// too).
+    fn asks(&mut self, deformations: &BTreeMap<Address, zset::Deformation>) -> Result<Vec<Ask>> {
+        let mut asks = Vec::new();
+        for addr in &self.order {
+            let (remote, prior) = match (deformations[addr].kind, self.adopt_map.get(addr)) {
+                (zset::Kind::Create, Some(remote_name)) if self.state.get(addr).is_none() => {
+                    let Some(found) = self.cloud.import(&addr.typ, remote_name)? else {
+                        bail!(
+                            "adopt requested but inventory missing {}",
+                            key(&addr.typ, remote_name)
+                        );
+                    };
+                    self.adopting.insert(addr.clone());
+                    (remote_name.clone(), Some(found.attrs))
+                }
+                (zset::Kind::Create, _) => (String::new(), None),
+                _ => (
+                    self.state
+                        .get(addr)
+                        .map(|e| e.remote.clone())
+                        .unwrap_or_default(),
+                    self.before.get(addr).cloned(),
+                ),
+            };
+            asks.push((
+                addr.clone(),
+                remote,
+                prior,
+                self.resolved.get(addr).cloned(),
+            ));
+        }
+        Ok(asks)
+    }
+
+    /// The deletes, each asked of its provider after `asks`: what is no
+    /// longer desired, what state maps to a vanished object (no world
+    /// document: nothing to show), and deposed objects.
+    fn deleting(&self, asks: &mut Vec<Ask>) -> Vec<Deleting<'a>> {
+        let (cloud, state) = (self.cloud, self.state);
+        let mut deleting = Vec::new();
+        for (addr, entry) in cloud.entries(&state.resources) {
+            if self.resolved.contains_key(&addr) {
+                continue;
+            }
+            asks.push((
+                addr.clone(),
+                entry.remote.clone(),
+                self.before.get(&addr).cloned(),
+                None,
+            ));
+            deleting.push((ActionKind::Delete, addr, entry.deps.as_slice()));
+        }
+        for (addr, entry) in cloud.entries(&state.deposed) {
+            let prior = self.world.get(&key(&addr.typ, &entry.remote));
+            asks.push((
+                addr.clone(),
+                entry.remote.clone(),
+                prior.map(|o| o.attrs.clone()),
+                None,
+            ));
+            deleting.push((ActionKind::DeleteDeposed, addr, entry.deps.as_slice()));
+        }
+        deleting
+    }
+
+    /// The action of the desired `addr`, deformed as `d`, its provider's
+    /// Plan answered `changes` and whether they replace it.
+    fn action(
+        &mut self,
+        addr: Address,
+        d: &zset::Deformation,
+        (changes, replaces): Planned,
+    ) -> Result<Action> {
+        let kind = self.kind(&addr, d, &changes, replaces);
+        let (changes, on) = match d.kind {
+            zset::Kind::Pending => (changes, d.unresolved.clone()),
+            zset::Kind::Undeformed => (Vec::new(), BTreeSet::new()),
+            _ => (changes, BTreeSet::new()),
+        };
+        let renamed = match kind {
+            ActionKind::Replace { create_first: true } => {
+                if let Some(why) = zset::create_first_refused(self.cloud.schema(), &addr) {
+                    return Err(crate::report::Failure::located(&addr, why).into());
+                }
+                let want = self.resolved.get(&addr).expect("a desired address");
+                self.cloud
+                    .renamed(&addr, want, self.before.get(&addr), self.state.get(&addr))
+            }
+            _ => None,
+        };
+        let kept = self.kept.remove(&addr).unwrap_or_default();
+        Ok(Action {
+            kind,
+            addr,
+            changes,
+            on,
+            kept,
+            renamed,
+        })
+    }
+
+    /// The kind of the action of the desired `addr`, deformed as `d`.
+    fn kind(
+        &self,
+        addr: &Address,
+        d: &zset::Deformation,
+        changes: &[Change],
+        replaces: bool,
+    ) -> ActionKind {
+        match d.kind {
+            zset::Kind::Create if self.adopting.contains(addr) => ActionKind::Adopt,
+            zset::Kind::Create => ActionKind::Create,
+            zset::Kind::Delete => unreachable!("a desired address is never deleted"),
+            zset::Kind::Update | zset::Kind::Drift if replaces => ActionKind::Replace {
+                create_first: self.lifecycle.create_first(self.cloud.schema(), addr),
+            },
+            zset::Kind::Drift => ActionKind::Drift,
+            // The provider's Plan finds nothing to change: the world
+            // document differs only where the provider compares for
+            // itself (a write-only attribute its API never answers,
+            // such as an OVH instance's user data).
+            zset::Kind::Update if changes.is_empty() => ActionKind::Noop,
+            zset::Kind::Update => ActionKind::Update,
+            zset::Kind::Pending => ActionKind::Pending,
+            zset::Kind::Undeformed => ActionKind::Noop,
+        }
+    }
+}
+
+/// The delete actions of `deleting`, their Plans `answers`: one goes
+/// before the deletes of what it depends on.
+fn deletes(deleting: Vec<Deleting<'_>>, answers: impl Iterator<Item = Planned>) -> Vec<Action> {
+    let mut deletes: Vec<(Action, &[String])> = deleting
+        .into_iter()
+        .zip(answers)
+        .map(|((kind, addr, deps), (changes, _))| {
+            let delete = Action {
+                kind,
+                addr,
+                changes,
+                on: BTreeSet::new(),
+                kept: Vec::new(),
+                renamed: None,
+            };
+            (delete, deps)
+        })
+        .collect();
+    deletes.sort_by(|a, b| a.0.addr.cmp(&b.0.addr));
+    reverse_dependency_order(deletes)
+}
+
+/// What an Apply call sends ([`Tick::submit`]): its op, the object's
+/// remote id, its document, whether a replacement is made first, and the
+/// paths an update asks its provider to leave as they are.
+struct Sending {
+    op: pb::Op,
+    remote: String,
+    config: Option<Json>,
+    create_first: bool,
+    keep: Vec<String>,
+}
+
+/// An update's document as it is made ready ([`Tick::update`]), the paths
+/// it asks its provider to leave as the object has them beside it; its
+/// provider `keeps` (it can leave a path as it is).
+struct Updating {
+    doc: Json,
+    keep: Vec<String>,
+    keeps: bool,
+}
+
+impl Updating {
+    /// What is given at creation only (its `paths`): the world's value
+    /// (`cur`), or its absence; a write-only one, which the world never
+    /// answers, its provider leaves as the object has it when it can
+    /// (R-198).
+    fn at_create<'p>(
+        &mut self,
+        paths: impl Iterator<Item = &'p String>,
+        cur: &Object,
+        write_only: &[&str],
+    ) {
+        for p in paths {
+            match get_path(&cur.attrs, p) {
+                Some(v) => set_path(&mut self.doc, p, v.clone()),
+                None if self.keeps
+                    && write_only.contains(&p.as_str())
+                    && get_path(&self.doc, p).is_some() =>
+                {
+                    self.leave(p)
+                }
+                None => remove_path(&mut self.doc, p),
+            }
+        }
+    }
+
+    /// A run that does not hold the master (R-164): a leaf of `derived` it
+    /// proved unchanged holds a stand-in; the world's own value (`cur`'s)
+    /// goes in its place, as if only the changes were sent. One the world
+    /// does not answer (a write-only one) is kept by a provider that can
+    /// leave it as it is, else the call is not sent.
+    fn standins<'p>(
+        &mut self,
+        addr: &Address,
+        derived: impl Iterator<Item = &'p String>,
+        cur: Option<&Object>,
+    ) -> Result<()> {
+        for p in derived {
+            if !get_path(&self.doc, p).is_some_and(crate::secrets::standin::carries) {
+                continue;
+            }
+            match cur.and_then(|c| get_path(&c.attrs, p)) {
+                Some(v) if provider::marker(v).is_none() => set_path(&mut self.doc, p, v.clone()),
+                _ if self.keeps => self.leave(p),
+                _ => {
+                    return Err(not_sent(
+                        addr,
+                        &format!(
+                            "{} holds a value only the deployment's master derives, and the \
+                             world does not answer it",
+                            crate::report::attribute(addr, p)
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The path `p` left as the object has it.
+    fn leave(&mut self, p: &str) {
+        remove_path(&mut self.doc, p);
+        self.keep.push(p.to_string());
+    }
+}
+
 /// An Apply call not sent because the secret `label` at `path` of its
 /// document was not revealed (R-218): why, as the holder said it.
 fn unrevealed(addr: &Address, path: &str, label: &str, e: &anyhow::Error) -> anyhow::Error {
@@ -3806,177 +4028,26 @@ impl Tick<'_> {
     /// whether a call is in flight; an action that needs none (the delete
     /// of an object state no longer maps) is answered at once.
     pub fn submit(&mut self, id: usize, a: &Action, state: &mut State) -> Result<bool> {
-        let cloud = self.cloud;
         let addr = &a.addr;
         if matches!(a.kind, ActionKind::Noop | ActionKind::Pending) {
             return Ok(false);
         }
         if self.world.is_none() {
-            self.world = Some(cloud.refresh(state)?);
+            self.world = Some(self.cloud.refresh(state)?);
         }
-        // The remote name dform gives a create-first replacement.
-        let mut generated = None;
-        let doc = match a.kind {
-            ActionKind::Delete | ActionKind::DeleteDeposed => Json::Null,
-            _ => {
-                let r = self
-                    .desired
-                    .get(addr)
-                    .ok_or_else(|| not_sent(addr, "no desired resource"))?;
-                let ctx = Ctx {
-                    cloud,
-                    world: self.world.as_ref().expect("read above"),
-                    state,
-                    adopts: &self.adopt_map,
-                    resolved: &self.resolved,
-                    strict: Some(addr),
-                    retracted: &BTreeSet::new(),
-                    renaming: &BTreeSet::new(),
-                };
-                let mut doc = cloud.desired_doc(&ctx, r)?;
-                if let ActionKind::Replace { create_first: true } = a.kind {
-                    generated = self.name_replacement(addr, &mut doc, state);
-                }
-                self.resolved.insert(addr.clone(), doc.clone());
-                doc
-            }
+        let (doc, generated) = self.desired_doc(a, state)?;
+        let named = self.named(a, &doc, generated, state);
+        let Some(sending) = self.sending(a, doc, state)? else {
+            return Ok(false);
         };
-        // The name dform gave the object this call makes, which state
-        // records (`StateEntry::name`).
-        let named = match a.kind {
-            ActionKind::Create | ActionKind::Replace { .. } => {
-                generated.or_else(|| cloud.kept_name(addr, &doc, state))
-            }
-            ActionKind::Update | ActionKind::Drift => cloud.kept_name(addr, &doc, state),
-            _ => None,
-        };
-        let world = self.world.as_ref().expect("read above");
-        // The paths an update asks its provider to leave as they are.
-        let mut keep = Vec::new();
-        let (op, remote, config, create_first) = match a.kind {
-            ActionKind::Noop | ActionKind::Pending | ActionKind::Forget => {
-                unreachable!("returned above")
-            }
-            ActionKind::Delete => match state.get(addr) {
-                None => {
-                    self.answered(a.kind.clone(), addr, &Ok(None), state)?;
-                    return Ok(false);
-                }
-                Some(e) => (pb::Op::Delete, e.remote.clone(), None, false),
-            },
-            ActionKind::DeleteDeposed => match state.deposed.get(&state::key(addr)) {
-                None => {
-                    self.answered(a.kind.clone(), addr, &Ok(None), state)?;
-                    return Ok(false);
-                }
-                Some(e) => (pb::Op::Delete, e.remote.clone(), None, false),
-            },
-            ActionKind::Create => (pb::Op::Create, String::new(), Some(doc), false),
-            ActionKind::Replace { create_first } => {
-                let Some(old) = state.get(addr).map(|e| e.remote.clone()) else {
-                    return Err(not_sent(addr, "replace without a state entry"));
-                };
-                (pb::Op::Replace, old, Some(doc), create_first)
-            }
-            ActionKind::Adopt => {
-                let Some(remote_name) = self.adopt_map.get(addr).cloned() else {
-                    return Err(not_sent(addr, "adopt action missing adopt mapping"));
-                };
-                (pb::Op::Adopt, remote_name, Some(doc), false)
-            }
-            ActionKind::Update | ActionKind::Drift => {
-                let Some(remote) = state.get(addr).map(|e| e.remote.clone()) else {
-                    return Err(not_sent(addr, "update without a state entry"));
-                };
-                let mut doc = doc;
-                // What is given at creation only: the world keeps its
-                // value, or its absence; a write-only one, which the world
-                // never answers, its provider leaves as the object has it
-                // when it can (R-198).
-                if let Some(cur) = world.get(&key(&addr.typ, &remote)) {
-                    let (keeps, wo) = (
-                        cloud.keeps(&addr.typ),
-                        cloud.schema().write_only_of(&addr.typ),
-                    );
-                    for (p, _) in self.lifecycle.at_create_of(addr) {
-                        match get_path(&cur.attrs, p) {
-                            Some(v) => set_path(&mut doc, p, v.clone()),
-                            None if keeps
-                                && wo.contains(&p.as_str())
-                                && get_path(&doc, p).is_some() =>
-                            {
-                                remove_path(&mut doc, p);
-                                keep.push(p.clone());
-                            }
-                            None => remove_path(&mut doc, p),
-                        }
-                    }
-                }
-                // A run that does not hold the master (R-164): a leaf it
-                // proved unchanged holds a stand-in; the world's own value
-                // goes in its place, as if only the changes were sent. One
-                // the world does not answer (a write-only one) is kept by a
-                // provider that can leave it as it is.
-                if crate::secrets::standin::active()
-                    && let Some(e) = state.get(addr)
-                {
-                    let cur = world.get(&key(&addr.typ, &remote));
-                    let keeps = cloud.keeps(&addr.typ);
-                    for p in e.derived.keys() {
-                        if !get_path(&doc, p).is_some_and(crate::secrets::standin::carries) {
-                            continue;
-                        }
-                        match cur.and_then(|c| get_path(&c.attrs, p)) {
-                            Some(v) if provider::marker(v).is_none() => {
-                                set_path(&mut doc, p, v.clone())
-                            }
-                            _ if keeps => {
-                                remove_path(&mut doc, p);
-                                keep.push(p.clone());
-                            }
-                            _ => {
-                                return Err(not_sent(
-                                    addr,
-                                    &format!(
-                                        "{} holds a value only the deployment's master \
-                                         derives, and the world does not answer it",
-                                        crate::report::attribute(addr, p)
-                                    ),
-                                ));
-                            }
-                        }
-                    }
-                }
-                (pb::Op::Update, remote, Some(doc), false)
-            }
-        };
-        // Refinements on sensitive paths: the provider checks each after
-        // materializing the secret (F DR-13 revised).
-        let assertions: Vec<pb::Assertion> = match config {
+        let assertions = match sending.config {
             None => Vec::new(),
-            Some(_) => self
-                .lifecycle
-                .assertions
-                .get(addr)
-                .into_iter()
-                .flatten()
-                .map(|(path, c)| {
-                    let (op, value) = crate::refine::to_assertion(c);
-                    pb::Assertion {
-                        path: path.clone(),
-                        op,
-                        value: Some(wire::doc(&value)),
-                        message: format!(
-                            "{} fails its refinement {c}",
-                            crate::report::attribute(addr, path)
-                        ),
-                    }
-                })
-                .collect(),
+            Some(_) => self.assertions(addr),
         };
         // A stand-in never leaves the process (R-164): the executor is not
         // given an action that would send one ([`Providers::needs_master`]).
-        if config
+        if sending
+            .config
             .as_ref()
             .is_some_and(crate::secrets::standin::carries)
         {
@@ -3986,9 +4057,16 @@ impl Tick<'_> {
                  run does not hold",
             ));
         }
+        let Sending {
+            op,
+            remote,
+            config,
+            create_first,
+            keep,
+        } = sending;
         let config = match config {
             Some(mut doc) => {
-                cloud.reveal_into(addr, &mut doc, state)?;
+                self.cloud.reveal_into(addr, &mut doc, state)?;
                 Some(doc)
             }
             None => None,
@@ -4006,9 +4084,9 @@ impl Tick<'_> {
             idempotency_key,
             keep,
         };
-        let link = cloud.route(&addr.typ);
-        let ticket = cloud.links[link].borrow_mut().submit(req.clone());
-        cloud.invalidate();
+        let link = self.cloud.route(&addr.typ);
+        let ticket = self.cloud.links[link].borrow_mut().submit(req.clone());
+        self.cloud.invalidate();
         self.in_flight.push(InFlight {
             id,
             link,
@@ -4023,15 +4101,182 @@ impl Tick<'_> {
         Ok(true)
     }
 
+    /// The world the tick's calls are made against: read at its first.
+    fn world(&self) -> &World {
+        self.world
+            .as_ref()
+            .expect("the world is read at the tick's first call")
+    }
+
+    /// The world, as the tick's calls change it.
+    fn world_mut(&mut self) -> &mut World {
+        self.world
+            .as_mut()
+            .expect("the world is read at the tick's first call")
+    }
+
+    /// The document `a` sends (none for a delete), resolved, and the
+    /// remote name dform gives it when it is a create-first replacement.
+    fn desired_doc(&mut self, a: &Action, state: &State) -> Result<(Json, Option<String>)> {
+        let addr = &a.addr;
+        if matches!(a.kind, ActionKind::Delete | ActionKind::DeleteDeposed) {
+            return Ok((Json::Null, None));
+        }
+        let r = self
+            .desired
+            .get(addr)
+            .ok_or_else(|| not_sent(addr, "no desired resource"))?;
+        let ctx = Ctx {
+            cloud: self.cloud,
+            world: self.world(),
+            state,
+            adopts: &self.adopt_map,
+            resolved: &self.resolved,
+            strict: Some(addr),
+            retracted: &BTreeSet::new(),
+            renaming: &BTreeSet::new(),
+        };
+        let mut doc = self.cloud.desired_doc(&ctx, r)?;
+        let generated = match a.kind {
+            ActionKind::Replace { create_first: true } => {
+                self.name_replacement(addr, &mut doc, state)
+            }
+            _ => None,
+        };
+        self.resolved.insert(addr.clone(), doc.clone());
+        Ok((doc, generated))
+    }
+
+    /// The name dform gave the object the call of `a` makes, which state
+    /// records (`StateEntry::name`): `generated` for a create-first
+    /// replacement, else the one `doc` keeps.
+    fn named(
+        &self,
+        a: &Action,
+        doc: &Json,
+        generated: Option<String>,
+        state: &State,
+    ) -> Option<String> {
+        match a.kind {
+            ActionKind::Create | ActionKind::Replace { .. } => {
+                generated.or_else(|| self.cloud.kept_name(&a.addr, doc, state))
+            }
+            ActionKind::Update | ActionKind::Drift => self.cloud.kept_name(&a.addr, doc, state),
+            _ => None,
+        }
+    }
+
+    /// What the call of `a` sends, `doc` its document; `None` when `a`
+    /// needs no call (a delete of what state no longer maps), answered at
+    /// once.
+    fn sending(&mut self, a: &Action, doc: Json, state: &mut State) -> Result<Option<Sending>> {
+        let addr = &a.addr;
+        let sent = |op, remote: &String, config| Sending {
+            op,
+            remote: remote.clone(),
+            config,
+            create_first: false,
+            keep: Vec::new(),
+        };
+        Ok(Some(match a.kind {
+            ActionKind::Noop | ActionKind::Pending | ActionKind::Forget => {
+                unreachable!("not submitted")
+            }
+            ActionKind::Delete | ActionKind::DeleteDeposed => {
+                let entry = match a.kind {
+                    ActionKind::Delete => state.get(addr),
+                    _ => state.deposed.get(&state::key(addr)),
+                };
+                match entry {
+                    Some(e) => sent(pb::Op::Delete, &e.remote, None),
+                    None => {
+                        self.answered(a.kind.clone(), addr, &Ok(None), state)?;
+                        return Ok(None);
+                    }
+                }
+            }
+            ActionKind::Create => sent(pb::Op::Create, &String::new(), Some(doc)),
+            ActionKind::Replace { create_first } => {
+                let Some(old) = state.get(addr).map(|e| &e.remote) else {
+                    return Err(not_sent(addr, "replace without a state entry"));
+                };
+                Sending {
+                    create_first,
+                    ..sent(pb::Op::Replace, old, Some(doc))
+                }
+            }
+            ActionKind::Adopt => {
+                let Some(remote_name) = self.adopt_map.get(addr) else {
+                    return Err(not_sent(addr, "adopt action missing adopt mapping"));
+                };
+                sent(pb::Op::Adopt, remote_name, Some(doc))
+            }
+            ActionKind::Update | ActionKind::Drift => self.update(addr, doc, state)?,
+        }))
+    }
+
+    /// The update of `addr` to `doc`, of its object as the world has it:
+    /// what is given at creation only, and what a run without the master
+    /// holds a stand-in for, as the object has it.
+    fn update(&self, addr: &Address, doc: Json, state: &State) -> Result<Sending> {
+        let Some(e) = state.get(addr) else {
+            return Err(not_sent(addr, "update without a state entry"));
+        };
+        let cur = self.world().get(&key(&addr.typ, &e.remote));
+        let mut updating = Updating {
+            doc,
+            keep: Vec::new(),
+            keeps: self.cloud.keeps(&addr.typ),
+        };
+        if let Some(cur) = cur {
+            let write_only = self.cloud.schema().write_only_of(&addr.typ);
+            let at_create = self.lifecycle.at_create_of(addr).map(|(p, _)| p);
+            updating.at_create(at_create, cur, &write_only);
+        }
+        // A run that does not hold the master (R-164).
+        if crate::secrets::standin::active() {
+            updating.standins(addr, e.derived.keys(), cur)?;
+        }
+        Ok(Sending {
+            op: pb::Op::Update,
+            remote: e.remote.clone(),
+            config: Some(updating.doc),
+            create_first: false,
+            keep: updating.keep,
+        })
+    }
+
+    /// The refinements on `addr`'s sensitive paths: the provider checks
+    /// each after materializing the secret (F DR-13 revised).
+    fn assertions(&self, addr: &Address) -> Vec<pb::Assertion> {
+        self.lifecycle
+            .assertions
+            .get(addr)
+            .into_iter()
+            .flatten()
+            .map(|(path, c)| {
+                let (op, value) = crate::refine::to_assertion(c);
+                pb::Assertion {
+                    path: path.clone(),
+                    op,
+                    value: Some(wire::doc(&value)),
+                    message: format!(
+                        "{} fails its refinement {c}",
+                        crate::report::attribute(addr, path)
+                    ),
+                }
+            })
+            .collect()
+    }
+
     /// Give a create-first replacement of `addr` the next generation of
     /// its remote name in `doc`, where the program's would be the old
     /// object's (`Providers::renamed`): the two exist at once until the
     /// old one is deleted, a tick later. Returns the name given.
     fn name_replacement(&self, addr: &Address, doc: &mut Json, state: &State) -> Option<String> {
-        let world = self.world.as_ref().expect("read at submit");
         let entry = state.get(addr);
         let was = entry
-            .and_then(|e| world.get(&key(&addr.typ, &e.remote)))
+            .and_then(|e| self.world().get(&key(&addr.typ, &e.remote)))
             .map(|o| &o.attrs);
         let (_, new) = self.cloud.renamed(addr, doc, was, entry)?;
         let path = self.cloud.schema().remote_name_of(&addr.typ)?;
@@ -4265,13 +4510,13 @@ impl Tick<'_> {
         let addr = &f.addr;
         let cloud = self.cloud;
         let provider = &cloud.names[f.link];
-        let world = self.world.as_mut().expect("read at submit");
+        let world = self.world_mut();
         match f.kind {
             ActionKind::Create | ActionKind::Adopt | ActionKind::Replace { .. } => {
                 if let ActionKind::Replace { .. } = f.kind {
                     self.forget_old(f, state);
                 }
-                let world = self.world.as_mut().expect("read at submit");
+                let world = self.world_mut();
                 world.insert(
                     key(&addr.typ, &resp.remote),
                     Providers::object(resp.attrs.as_ref(), resp.computed.as_ref())?,
@@ -4356,7 +4601,7 @@ impl Tick<'_> {
         }
         match f.kind {
             ActionKind::Delete | ActionKind::DeleteDeposed => {
-                let world = self.world.as_mut().expect("read at submit");
+                let world = self.world_mut();
                 world.remove(&key(&f.addr.typ, &f.remote));
             }
             ActionKind::Replace { .. } => self.forget_old(f, state),
@@ -4374,7 +4619,7 @@ impl Tick<'_> {
         if create_first {
             state.depose(&f.addr);
         } else {
-            let world = self.world.as_mut().expect("read at submit");
+            let world = self.world_mut();
             world.remove(&key(&f.addr.typ, &f.remote));
             state.remove(&f.addr);
         }
@@ -4401,7 +4646,7 @@ impl Tick<'_> {
             state.set_deps(addr, deps);
         }
         if result.is_ok() && !matches!(kind, ActionKind::DeleteDeposed) {
-            let world = self.world.as_ref().expect("read at submit");
+            let world = self.world();
             let now = state
                 .get(addr)
                 .and_then(|e| world.get(&key(&addr.typ, &e.remote)))
@@ -4604,7 +4849,9 @@ fn topo_sort(desired: &[Resource]) -> Result<Vec<Resource>> {
         let mut progressed = false;
         let snapshot: Vec<Address> = pending.iter().cloned().collect();
         for a in snapshot {
-            let r = by_addr.get(&a).unwrap();
+            let r = by_addr
+                .get(&a)
+                .expect("pending holds the desired addresses");
             if r.deps
                 .iter()
                 .all(|d| done.contains(d) || !by_addr.contains_key(d))
