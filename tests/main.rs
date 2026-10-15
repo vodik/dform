@@ -126,7 +126,6 @@ mod lifecycle_seed;
 mod lint_isolated;
 mod loader_in_module;
 mod local_lock;
-mod lower_differential;
 mod lsp;
 mod lsp_walk;
 mod man;
