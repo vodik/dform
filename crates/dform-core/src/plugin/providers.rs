@@ -1868,6 +1868,12 @@ impl Providers {
         self.notes.take()
     }
 
+    /// Where more secrets the run reads are held, by label (another
+    /// deployment's outputs a tree's boundary made known).
+    pub fn hold(&self, more: BTreeMap<String, provider::Held>) {
+        self.held.borrow_mut().extend(more);
+    }
+
     /// The calls sent again since the last time they were taken (R-81),
     /// for the audit log.
     pub fn take_retries(&self) -> Vec<Retry> {

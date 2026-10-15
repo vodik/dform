@@ -322,6 +322,35 @@ struct Session {
     lock: crate::store::Guard,
 }
 
+impl Session {
+    /// The apply's end, `r`, in the audit log, then the lock released:
+    /// whether each was done.
+    fn end(self, r: &Result<Outcome>) -> (Result<()>, Result<()>) {
+        let end = match r {
+            Ok(Outcome::Done) => serde_json::json!({ "result": "ok" }),
+            Ok(Outcome::Declined { tick, .. }) => {
+                serde_json::json!({ "result": "declined", "tick": tick })
+            }
+            Ok(Outcome::Stopped { tick, .. }) => {
+                serde_json::json!({ "result": "stopped", "tick": tick })
+            }
+            Ok(Outcome::Interrupted { signal }) => serde_json::json!({
+                "result": "stopped",
+                "why": "interrupted",
+                "signal": crate::interrupt::name(*signal),
+            }),
+            Ok(o) => serde_json::json!({ "result": o.word() }),
+            Err(e) => {
+                let mut end = serde_json::json!({ "result": "failed" });
+                crate::audit::error(&mut end, &e.to_string());
+                end
+            }
+        };
+        let logged = self.log.append("apply_end", end).map(|_| ());
+        (logged, self.lock.release())
+    }
+}
+
 /// How a run ended: what the exit status says ([`Outcome::code`], R-147;
 /// docs/reference.md "Exit status"). A decline and a stop are outcomes a
 /// person chose or a plan file bounds, not errors: nothing is said as an
@@ -488,28 +517,7 @@ fn run(cli: Cli, hook: Option<&mut crate::controller::Hook>) -> Result<Outcome> 
         }
         return r;
     };
-    let end = match &r {
-        Ok(Outcome::Done) => serde_json::json!({ "result": "ok" }),
-        Ok(Outcome::Declined { tick, .. }) => {
-            serde_json::json!({ "result": "declined", "tick": tick })
-        }
-        Ok(Outcome::Stopped { tick, .. }) => {
-            serde_json::json!({ "result": "stopped", "tick": tick })
-        }
-        Ok(Outcome::Interrupted { signal }) => serde_json::json!({
-            "result": "stopped",
-            "why": "interrupted",
-            "signal": crate::interrupt::name(*signal),
-        }),
-        Ok(o) => serde_json::json!({ "result": o.word() }),
-        Err(e) => {
-            let mut end = serde_json::json!({ "result": "failed" });
-            crate::audit::error(&mut end, &e.to_string());
-            end
-        }
-    };
-    let logged = s.log.append("apply_end", end);
-    let released = s.lock.release();
+    let (logged, released) = s.end(&r);
     let outcome = match r {
         Ok(o) => o,
         Err(e) => {

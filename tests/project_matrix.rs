@@ -105,9 +105,9 @@ fn apply_with_no_target_applies_each_in_dependency_order() {
     let r = s.run(&["apply"]).success();
     assert!(
         r.stdout.starts_with(
-            "stacks: project.df's deployments, in apply order: platform[env=lab], then \
-             apps[env=lab], then platform[env=prod], then apps[env=prod]; each is planned, \
-             confirmed and applied in turn\n== stacks.platform[env=lab]\n"
+            "stacks: project.df's deployments, platform[env=lab], apps[env=lab], \
+             platform[env=prod], apps[env=prod]: one apply, its ticks the tree's\n\
+             == stacks.platform[env=lab]\n"
         ),
         "{}",
         r.stdout
@@ -139,46 +139,39 @@ fn answers(s: &Scratch, answers: &[&str]) -> (Vec<String>, i32) {
     common::answering(&s.dir, cmd, answers)
 }
 
+/// The tree is confirmed once: each deployment's plan under its name,
+/// one question; a no applies nothing, and the project made none.
 #[test]
-fn each_deployment_is_confirmed_on_its_own() {
+fn the_tree_is_confirmed_once() {
     let one = "resource stacks.apps lab { env = \"lab\" }\n\
                resource stacks.platform lab { env = \"lab\" }\n";
     let s = project("matrix-confirm", one);
-    let (said, code) = answers(&s, &["y", "y"]);
+    let (said, code) = answers(&s, &["y"]);
     assert_eq!(code, 0, "{said:?}");
     assert!(
-        said[0].ends_with("Apply this change to platform[env=lab]? [y/N] "),
+        said[0].contains("== stacks.platform[env=lab]")
+            && said[0].contains("== stacks.apps[env=lab]")
+            && said[0].ends_with(
+                "Apply these 2 changes to stacks.platform[env=lab], stacks.apps[env=lab]? [y/N] "
+            ),
         "{}",
         said[0]
     );
-    assert!(
-        said[1].contains("== stacks.apps[env=lab]")
-            && said[1].ends_with("Apply this change to apps[env=lab]? [y/N] "),
-        "{}",
-        said[1]
-    );
 
-    // A no to the second ends the run there: the first is applied, the
-    // project made it, and the second is not.
     let s = project("matrix-decline", one);
-    let (said, code) = answers(&s, &["y", "n"]);
+    let (said, code) = answers(&s, &["n"]);
     assert_eq!(code, 3, "{said:?}");
     let r = s.run(&["plan"]).success();
     assert_eq!(
         states(&r.stdout),
         [
-            "= stacks.platform[env=lab] project.df:2 up to date",
+            "+ stacks.platform[env=lab] project.df:2 never applied, 1 change (1 create) over 1 tick",
             "+ stacks.apps[env=lab] project.df:1 never applied, 1 change (1 create) over 1 tick"
         ],
         "{}",
         r.stdout
     );
-    let made = s.json("dform.state/project.json");
-    assert!(
-        made["project.df"]["platform[env=lab]"].is_object(),
-        "{made}"
-    );
-    assert!(made["project.df"]["apps[env=lab]"].is_null(), "{made}");
+    assert!(!s.path("dform.state/project.json").exists());
 }
 
 #[test]
@@ -206,7 +199,7 @@ fn a_deployment_removed_from_the_matrix_is_destroyed_by_the_next_apply() {
     let r = s.run(&["apply"]).success();
     assert!(
         r.stdout.contains(
-            "; then, removed from it, destroyed: apps[env=prod], then platform[env=prod]; each"
+            "; then, removed from it, destroyed: apps[env=prod], then platform[env=prod]\n"
         ) && r
             .stdout
             .contains("== stacks.apps[env=prod]  removed from project.df\n"),

@@ -30,8 +30,9 @@ pub(super) struct Reporter<'a> {
     /// stack's `allow_empty`.
     allow_empty: Vec<String>,
     /// The outputs of the deployments of the tree before this one that
-    /// their plans know only after a tick ([`report::Input::outside`]).
-    outside: BTreeMap<String, usize>,
+    /// their plans know only after a tick ([`report::Input::outside`]):
+    /// a tree's apply says them again at each tick ([`Reporter::outside_of`]).
+    outside: std::cell::RefCell<BTreeMap<String, usize>>,
 }
 
 /// What the deployments planned before this one in the tree know only
@@ -77,7 +78,7 @@ impl<'a> Reporter<'a> {
             drift_said: Cell::new(false),
             top: site_root(&cx.cli.files),
             allow_empty,
-            outside: outside(&cx.cli.planned),
+            outside: std::cell::RefCell::new(outside(&cx.cli.planned)),
         }
     }
 
@@ -125,6 +126,19 @@ impl<'a> Reporter<'a> {
         })
     }
 
+    /// The outputs of the deployment `full` of the tree that its plan of
+    /// this tick knows only after a tick (`after`, by key), in place of
+    /// what its last plan said.
+    pub(super) fn outside_of(&self, full: &str, after: &BTreeMap<String, usize>) {
+        let mut outside = self.outside.borrow_mut();
+        let prefix = crate::value::null_label(crate::stack::UNAPPLIED, full, "");
+        outside.retain(|l, _| !l.starts_with(&prefix));
+        outside.extend(after.iter().map(|(k, t)| {
+            let label = crate::value::null_label(crate::stack::UNAPPLIED, full, k);
+            (label, *t)
+        }));
+    }
+
     /// How much each printed change says of why (R-79).
     pub(super) fn why(&self) -> report::Why {
         self.cx.cli.cmd.why()
@@ -153,7 +167,7 @@ impl<'a> Reporter<'a> {
             moved,
             denies,
             kept: &self.kept,
-            outside: &self.outside,
+            outside: &self.outside.borrow(),
         });
         report.resumed = self.resuming.get() && tick == 1;
         // A destroy's deletes say no reason; a plan's say why they are

@@ -633,8 +633,8 @@ fn apply(
     let mut line = match named.is_empty() {
         true => format!("stacks: {label} lists no deployment"),
         false => format!(
-            "stacks: {label}'s deployments, in apply order: {}",
-            named.join(", then ")
+            "stacks: {label}'s deployments, {}: one apply, its ticks the tree's",
+            named.join(", ")
         ),
     };
     if !removed.is_empty() {
@@ -644,21 +644,20 @@ fn apply(
             gone.join(", then ")
         ));
     }
-    println!("{line}; each is planned, confirmed and applied in turn");
-    for d in order {
-        head(cli, &d.full, "");
-        match super::run(of(d, cli.cmd.clone()), None)? {
+    println!("{line}");
+    if !order.is_empty() {
+        match super::apply::tree(cli, order, &|d| of(d, cli.cmd.clone()))? {
             Outcome::Done => {}
             o => return Ok(o),
         }
-        if d.root {
-            let stack = crate::state::stack_name(&d.file);
-            let kept = Kept {
-                stack,
-                key: d.key.clone(),
-            };
-            Made::record(&cli.root, label, &d.name, Some(kept))?;
-        }
+    }
+    for d in order.iter().filter(|d| d.root) {
+        let stack = crate::state::stack_name(&d.file);
+        let kept = Kept {
+            stack,
+            key: d.key.clone(),
+        };
+        Made::record(&cli.root, label, &d.name, Some(kept))?;
     }
     for d in removed {
         head(cli, &d.full, &format!("removed from {label}"));

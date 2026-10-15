@@ -1,8 +1,7 @@
 //! The stacks `apply X` applies first: the deployments X reads, each
 //! before its readers (R-30, R-73).
 
-use super::{Cli, Cmd, Outcome, run};
-use crate::report;
+use super::{Cli, Cmd, Outcome};
 use crate::{deployment, zset};
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 /// One deployment `apply` applies, of the stack in `file`, and the
 /// stack's inputs (not its key).
+#[derive(Debug, Clone)]
 pub(super) struct Dependency {
     /// As a reader names it, `platform[env=lab]`.
     pub(super) name: String,
@@ -332,28 +332,21 @@ impl InOrder {
         InOrder { cli, order }
     }
 
+    /// The tree's apply (`apply::tree`): the target and what it reads, or
+    /// the project's stacks, one apply whose ticks are the tree's.
     pub(super) fn run(self) -> Result<Outcome> {
         self.say();
         self.check_sets()?;
-        let (last, deps) = self
-            .order
-            .split_last()
-            .ok_or_else(|| anyhow::anyhow!("internal: an apply order with no deployment"))?;
-        for d in deps {
-            self.header(&d.full);
-            let mut cli = self.of(d);
-            cli.input_files = Vec::new();
-            match run(cli, None)? {
-                Outcome::Done => {}
-                o => return Ok(o),
+        let of = |d: &Dependency| match (d.root, self.cli.every_stack.is_empty()) {
+            (true, true) => self.target(d),
+            (true, false) => self.of(d),
+            (false, _) => {
+                let mut cli = self.of(d);
+                cli.input_files = Vec::new();
+                cli
             }
-        }
-        self.header(&last.full);
-        if !self.cli.every_stack.is_empty() {
-            // The project's last stack: run as a dependency is, by its file.
-            return run(self.of(last), None);
-        }
-        run(self.target(last), None)
+        };
+        super::apply::tree(&self.cli, &self.order, &of)
     }
 
     /// The target's plan of what it reads, then its own (R-200): one
@@ -393,30 +386,22 @@ impl InOrder {
         cli
     }
 
-    /// The `stacks:` line (R-79): the deployments in apply order. Each is
-    /// planned, confirmed and applied in turn, so its ticks are its own
-    /// plan's, printed under its name.
+    /// The `stacks:` line (R-79): the deployments of the tree, one apply
+    /// whose ticks are the tree's.
     fn say(&self) {
         let named: Vec<String> = self.order.iter().map(|d| d.full.clone()).collect();
         let target = named.last().cloned().unwrap_or_default();
         let deps = &named[..named.len() - 1];
         if self.cli.every_stack.is_empty() {
             println!(
-                "stacks: {}, then {target} below, in apply order: {target} reads {}; each is \
-                 planned, confirmed and applied in turn",
-                deps.join(", then "),
-                if deps.len() == 1 {
-                    "its outputs"
-                } else {
-                    "their outputs"
-                }
+                "stacks: {target} and what it reads, {}: one apply, its ticks the tree's",
+                deps.join(", ")
             );
         } else {
             println!(
-                "stacks: the project's {}, in apply order: {}; each is planned, confirmed and \
-                 applied in turn",
+                "stacks: the project's {}, {}: one apply, its ticks the tree's",
                 named.len(),
-                named.join(", then ")
+                named.join(", ")
             );
         }
     }
@@ -441,15 +426,6 @@ impl InOrder {
         Ok(())
     }
 
-    /// `== NAME` above a deployment's run.
-    fn header(&self, name: &str) {
-        println!(
-            "{}",
-            self.cli
-                .style
-                .paint(report::Paint::Bold, &format!("== {name}"))
-        );
-    }
 
     /// The run of the deployment `d`, by its file and key: a `--set` goes
     /// to each stack of the run that declares the input; one none declares
@@ -510,31 +486,32 @@ impl Sequenced {
             .map(|s| s.deployment.as_str())
             .collect();
         println!(
-            "stacks: {}, in apply order as {} planned them; each is confirmed and applied in turn",
-            named.join(", then "),
+            "stacks: {}, as {} planned them: one apply, its ticks the tree's",
+            named.join(", "),
             self.path.display()
         );
-        let mut applied = BTreeMap::new();
-        for (i, step) in self.file.deployments.iter().enumerate() {
-            println!(
-                "{}",
-                self.cli
-                    .style
-                    .paint(report::Paint::Bold, &format!("== {}", step.deployment))
-            );
-            match run(self.of(i, step, &applied), None)? {
-                Outcome::Done => {}
-                o => return Ok(o),
-            }
-            // What it published, for those after it that read it.
-            let reader = crate::stack::short_of(&step.deployment);
-            let s3 = super::open_s3(&self.cli.root, false);
-            if let Some(d) = crate::stack::published_digest(&self.cli.root, &step.deployment, &s3)?
-            {
-                applied.insert(reader, d);
-            }
-        }
-        Ok(Outcome::Done)
+        // Each section a deployment of the tree, reading what it reads.
+        let order: Vec<Dependency> = self
+            .file
+            .deployments
+            .iter()
+            .map(|step| Dependency {
+                name: crate::stack::short_of(&step.deployment),
+                full: step.deployment.clone(),
+                reads: step.after.iter().map(|a| crate::stack::short_of(a)).collect(),
+                file: PathBuf::new(),
+                keys: Vec::new(),
+                inputs: BTreeSet::new(),
+                key: Vec::new(),
+                root: false,
+                types: None,
+            })
+            .collect();
+        let of = |d: &Dependency| {
+            let i = order.iter().position(|o| o.full == d.full).unwrap_or_default();
+            self.of(i, &self.file.deployments[i], &BTreeMap::new())
+        };
+        super::apply::tree(&self.cli, &order, &of)
     }
 
     /// The run of the file's deployment `i`: its program and inputs the

@@ -216,11 +216,11 @@ fn json_nests_each_deployment_s_plan() {
     assert_eq!(j["outcome"], "done", "{j:#}");
 }
 
-/// `plan X --out F` writes the closure in apply order (R-200 after, the
-/// user's decision of 2026-10-09): each deployment by its full name, its
-/// plan and digest, what it is applied after and what it read; `apply F`
-/// applies them in turn, the reader's plan, made against its dependency's
-/// planned outputs, valid once that dependency's apply produced them.
+/// `plan X --out F` writes the tree, a section per deployment (R-200
+/// after, the user's decision of 2026-10-09): each by its full name, its
+/// plan and digest, what it reads and what it read; `apply F` applies the
+/// tree as one apply, the reader's plan, made against its dependency's
+/// planned outputs, valid as the run applies that dependency.
 #[test]
 fn a_plan_file_carries_the_closure_and_apply_applies_it_in_order() {
     let s = project("deps-plan-file");
@@ -267,9 +267,8 @@ fn a_plan_file_carries_the_closure_and_apply_applies_it_in_order() {
     let r = s.run(&["apply", "p.json", "--yes"]).success();
     assert!(
         r.stdout.starts_with(
-            "stacks: stacks.platform[env=lab], then stacks.apps[env=lab], in apply order as \
-             p.json planned them; each is confirmed and applied in turn\n== \
-             stacks.platform[env=lab]\n"
+            "stacks: stacks.platform[env=lab], stacks.apps[env=lab], as p.json planned them: \
+             one apply, its ticks the tree's\n== stacks.platform[env=lab]\n"
         ),
         "{}",
         r.stdout
@@ -289,9 +288,9 @@ fn a_plan_file_carries_the_closure_and_apply_applies_it_in_order() {
     assert_eq!(r.summary(), "plan: 0 changes", "{}", r.stdout);
 }
 
-/// One confirmation per deployment: answered no for the reader, the
-/// dependency is applied and the reader is not, exit 3; a deployment
-/// that reads none writes a file of one, applied as before, unasked.
+/// One confirmation for the tree: answered no, nothing is applied, exit
+/// 3; a deployment that reads none writes a file of one, applied as
+/// before, unasked.
 #[test]
 fn a_plan_file_s_deployments_are_each_confirmed() {
     let s = project("deps-plan-file-ask");
@@ -299,20 +298,17 @@ fn a_plan_file_s_deployments_are_each_confirmed() {
         .success();
     let mut cmd = common::dform();
     cmd.args(["apply", "p.json"]).current_dir(s.path(""));
-    let (said, code) = common::answering(&s.dir, cmd, &["y", "n"]);
+    let (said, code) = common::answering(&s.dir, cmd, &["n"]);
     assert_eq!(code, 3, "{}", said[0]);
     assert!(
-        said[0].contains("Apply these 2 changes to platform[env=lab]?"),
+        said[0].contains(
+            "Apply these 4 changes to stacks.platform[env=lab], stacks.apps[env=lab]?"
+        ),
         "{}",
         said[0]
     );
     assert!(
-        said[1].contains("Apply these 2 changes to apps[env=lab]?"),
-        "{}",
-        said[1]
-    );
-    assert!(
-        s.path("dform.state/stacks.platform/env=lab/state.json")
+        !s.path("dform.state/stacks.platform/env=lab/state.json")
             .exists()
     );
     assert!(

@@ -97,17 +97,12 @@ fn files(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
 fn a_location_read_secret_output_configures_the_reading_stacks_provider() {
     let s = project("sealed-outputs");
     run(&s, &[PASS], &["apply", "other"]).success();
-    // The first apply of the reader: the platform is applied first and
-    // seals to no one yet; the reader says so, and is one from now.
-    let r = run(&s, &[PASS], &["apply", "apps", "env=lab"]).failure();
-    assert!(
-        r.stderr.contains(
-            "apps[env=lab]: platform[env=lab].kubeconfig is held by no provider and not sealed \
-             to it yet: apply platform[env=lab] again"
-        ),
-        "{}",
-        r.stderr
-    );
+    // The first apply of the reader is one apply of the tree: the reader
+    // reads what the platform read, from the run, and is registered, so
+    // the platform's apply in the same run seals to it, for the runs
+    // outside the tree.
+    let r = run(&s, &[PASS], &["apply", "apps", "env=lab"]).success();
+    assert!(r.stdout.contains("+ k8s.namespace apps"), "{}", r.stdout);
     // The platform's plan prints the grant.
     let r = run(&s, &[PASS], &["plan", "platform", "env=lab"]).success();
     assert!(
@@ -117,10 +112,6 @@ fn a_location_read_secret_output_configures_the_reading_stacks_provider() {
         "{}",
         r.stdout
     );
-    // The next applies the platform (which seals) and then the reader,
-    // whose k8s provider is configured from the opened kubeconfig.
-    let r = run(&s, &[PASS], &["apply", "apps", "env=lab"]).success();
-    assert!(r.stdout.contains("+ k8s.namespace apps"), "{}", r.stdout);
     let world = s.read("dform.state/stacks.apps/env=lab/remote.json");
     assert!(world.contains("\"apps\""), "{world}");
     // A derived secret crosses the same way: the reader's Secret holds
@@ -154,12 +145,8 @@ fn a_location_read_secret_output_configures_the_reading_stacks_provider() {
         serde_json::json!(["stacks.apps[env=lab]"]),
         "{grants:?}"
     );
-    let reads = audit(&s, "stacks.apps/env=lab", "opened");
-    assert!(
-        reads.last().is_some_and(|e| e["outputs"]
-            == serde_json::json!(["platform[env=lab].kubeconfig", "platform[env=lab].token"])),
-        "{reads:?}"
-    );
+    // The reader in the tree opened no seal: it read the run's.
+    assert!(audit(&s, "stacks.apps/env=lab", "opened").is_empty());
     // Neither value is in any file dform keeps (the mock's own worlds
     // aside, the provider's storage).
     let mut all = Vec::new();

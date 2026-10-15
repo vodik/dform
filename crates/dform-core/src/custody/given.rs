@@ -897,6 +897,23 @@ pub struct Read {
     pub file: Option<File>,
 }
 
+/// What one deployment's run set here, taken while another's runs in the
+/// same process (a tree's apply, `secrets::Scope`).
+pub struct Saved(Option<Key>, Vec<Read>);
+
+/// What the run set, taken: as no deployment's run has set it.
+pub fn save() -> Saved {
+    let key = KEY.lock().unwrap_or_else(|e| e.into_inner()).take();
+    let read = std::mem::take(&mut *READ.lock().unwrap_or_else(|e| e.into_inner()));
+    Saved(key, read)
+}
+
+/// `saved` set again: its deployment's run goes on.
+pub fn restore(saved: Saved) {
+    *KEY.lock().unwrap_or_else(|e| e.into_inner()) = saved.0;
+    *READ.lock().unwrap_or_else(|e| e.into_inner()) = saved.1;
+}
+
 /// Before an evaluation: the master's digest key (`custody::Master::digest`)
 /// when the run holds it; the files read are forgotten.
 pub fn set_key(k: Option<Key>) {

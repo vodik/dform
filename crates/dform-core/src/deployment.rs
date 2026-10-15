@@ -564,7 +564,9 @@ pub struct Evaluator {
     pub tables: Rc<tables::Tables>,
     /// The program with the policy rules.
     pub program: Program,
-    base_extra: Vec<Atom>,
+    /// The facts the run adds to the program; the outputs of a deployment
+    /// of its tree read again at each tick ([`Evaluator::read_again`]).
+    base_extra: RefCell<Vec<Atom>>,
     declared: Vec<Declared>,
     secret_accounts: BTreeSet<String>,
     deployment: String,
@@ -616,7 +618,7 @@ impl Evaluator {
     /// has it, but `withheld`'s.
     fn extra(&self, st: &State, withheld: &BTreeSet<Address>) -> Result<Vec<Atom>> {
         let backend = &self.backend;
-        let mut extra = self.base_extra.clone();
+        let mut extra = self.base_extra.borrow().clone();
         extra.extend(backend.learned());
         extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
         Ok(extra)
@@ -1002,6 +1004,26 @@ impl Evaluator {
             [] => format!("provider {name}"),
             from => format!("provider {name}  {}", from.join(", ")),
         }
+    }
+
+    /// What the run reads of the deployment `name` (as the program names
+    /// it) is `facts` from now on ([`stack::output_facts`]): a tree's
+    /// boundary made more of its outputs known. The next evaluation is
+    /// from the start.
+    pub fn read_again(&self, name: &str, facts: Vec<Atom>) {
+        let of = |a: &Atom| match a.pred.as_str() {
+            crate::modules::INSTANCE_OF => {
+                matches!(a.args.as_slice(), [_, Term::Val(Value::Str(s)), Term::Val(Value::Str(n))] if s.is_empty() && n == name)
+            }
+            "arg" => {
+                matches!(a.args.as_slice(), [Term::Val(Value::Str(t)), Term::Val(Value::Str(n)), ..] if t == crate::transform::OUTPUT && n == name)
+            }
+            _ => false,
+        };
+        let mut extra = self.base_extra.borrow_mut();
+        extra.retain(|a| !of(a));
+        extra.extend(facts);
+        *self.last.borrow_mut() = None;
     }
 
     /// The program over the world as `st` has it.
@@ -1653,7 +1675,7 @@ impl Located {
             files: files.clone(),
             tables: tables.clone(),
             program,
-            base_extra,
+            base_extra: RefCell::new(base_extra),
             declared: l.declared.clone(),
             secret_accounts,
             deployment: self.deployment.clone(),

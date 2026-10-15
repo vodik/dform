@@ -4,6 +4,9 @@
 mod approvals;
 mod prompt;
 mod ticks;
+mod tree;
+
+pub(super) use self::tree::apply as tree;
 
 use self::ticks::Ticks;
 use super::evaluated::Evaluated;

@@ -212,11 +212,11 @@ fn declining_at_a_later_tick_keeps_what_ran() {
     assert_eq!(end["tick"], 2);
 }
 
-/// `n` to a stack the target reads ends the command there, exit 3: the
-/// reader is neither planned nor applied, and the declined stack is
-/// unlocked.
+/// `n` to the tree's one question ends the command there, exit 3: nothing
+/// of either deployment is applied, each apply's end says `declined`, and
+/// neither is left locked.
 #[test]
-fn declining_a_dependency_stops_before_its_reader() {
+fn declining_the_tree_applies_nothing() {
     let s = Scratch::project("confirm-dependency");
     s.write(
         "stacks/platform.df",
@@ -230,14 +230,18 @@ fn declining_a_dependency_stops_before_its_reader() {
     cmd.args(["apply", "apps"]).current_dir(s.path(""));
     let (said, code) = common::answering(&s.dir, cmd, &["n"]);
     assert!(
-        said[0].contains("== stacks.platform[env=lab]"),
+        said[0].contains("== stacks.platform[env=lab]")
+            && said[0].contains("== stacks.apps[env=lab]")
+            && said[0].contains("Apply these 2 changes to stacks.platform[env=lab], stacks.apps[env=lab]?"),
         "{}",
         said[0]
     );
-    assert_eq!(said[1].trim(), "", "{}", said[1]);
     assert_eq!(code, 3, "a decline exits 3 (R-147)");
-    let dir = s.path("dform.state/stacks.platform/env=lab");
-    assert!(dir.join("state.audit.jsonl").exists(), "{}", dir.display());
-    assert!(!dir.join("state.lock").exists(), "platform is still locked");
-    assert!(!s.path("dform.state/stacks.apps").exists(), "apps ran");
+    for d in ["platform", "apps"] {
+        let dir = s.path(&format!("dform.state/stacks.{d}/env=lab"));
+        let log = std::fs::read_to_string(dir.join("state.audit.jsonl")).unwrap();
+        assert!(log.contains("\"result\":\"declined\""), "{d}: {log}");
+        assert!(!dir.join("state.lock").exists(), "{d} is still locked");
+        assert!(!dir.join("state.json").exists(), "{d} applied");
+    }
 }

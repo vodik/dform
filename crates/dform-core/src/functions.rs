@@ -2351,6 +2351,46 @@ pub mod random {
             const { RefCell::new(std::collections::BTreeMap::new()) };
     }
 
+    /// What one deployment's run set here, taken while another's runs in
+    /// the same thread (a tree's apply, `secrets::Scope`).
+    pub struct Saved {
+        master: Option<Masters>,
+        standin: bool,
+        derived: std::collections::BTreeMap<Value, String>,
+        records: std::collections::BTreeMap<String, crate::state::Secret>,
+        born: Option<String>,
+        generation: u32,
+        epoch: u32,
+        calls: std::collections::BTreeMap<String, Called>,
+    }
+
+    /// What this thread's deployment set, taken: the thread as no
+    /// deployment's run has set it.
+    pub fn save() -> Saved {
+        Saved {
+            master: MASTER.with(|m| m.take()),
+            standin: STANDIN.with(|s| s.replace(false)),
+            derived: DERIVED.with(|d| d.take()),
+            records: RECORDS.with(|r| r.take()),
+            born: BORN.with(|b| b.take()),
+            generation: GENERATION.with(|g| g.replace(1)),
+            epoch: EPOCH.with(|e| e.replace(0)),
+            calls: CALLS.with(|c| c.take()),
+        }
+    }
+
+    /// `saved` set again: its deployment's run goes on.
+    pub fn restore(saved: Saved) {
+        MASTER.with(|m| *m.borrow_mut() = saved.master);
+        STANDIN.with(|s| s.set(saved.standin));
+        DERIVED.with(|d| *d.borrow_mut() = saved.derived);
+        RECORDS.with(|r| *r.borrow_mut() = saved.records);
+        BORN.with(|b| *b.borrow_mut() = saved.born);
+        GENERATION.with(|g| g.set(saved.generation));
+        EPOCH.with(|e| e.set(saved.epoch));
+        CALLS.with(|c| *c.borrow_mut() = saved.calls);
+    }
+
     /// What a rotated secret's label says after its call: `generation N,
     /// rotated DAY by WHO` follows it (R-161), and the plan prints it at
     /// every level.

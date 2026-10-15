@@ -39,8 +39,8 @@ fn apply_with_no_target_applies_every_stack_in_dependency_order() {
     let r = s.run(&["apply"]).success();
     assert!(
         r.stdout.starts_with(
-            "stacks: the project's 3, in apply order: stacks.net, then stacks.app, then \
-             stacks.solo; each is planned, confirmed and applied in turn\n== stacks.net\n"
+            "stacks: the project's 3, stacks.net, stacks.app, stacks.solo: one apply, its ticks \
+             the tree's\n== stacks.net\n"
         ),
         "{}",
         r.stdout

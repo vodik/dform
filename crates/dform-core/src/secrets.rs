@@ -1702,6 +1702,34 @@ mod held_tests {
 /// recorded is unchanged, any other change of it needs the master. A
 /// stand-in never leaves the process but as such a digest: an action that
 /// would send one is not sent ([`carries`]).
+/// What a deployment's run sets for its secrets that the process keeps
+/// (its master's derivations, its stand-ins, its given secrets' key):
+/// taken while another deployment's run of the same tree goes on in the
+/// same process, set again when its own does.
+pub struct Scope {
+    random: crate::functions::random::Saved,
+    given: crate::custody::given::Saved,
+    standin: standin::Saved,
+}
+
+impl Scope {
+    /// The run's, taken: the process as no deployment's run has set it.
+    pub fn save() -> Scope {
+        Scope {
+            random: crate::functions::random::save(),
+            given: crate::custody::given::save(),
+            standin: standin::save(),
+        }
+    }
+
+    /// Set again: its deployment's run goes on.
+    pub fn restore(self) {
+        crate::functions::random::restore(self.random);
+        crate::custody::given::restore(self.given);
+        standin::restore(self.standin);
+    }
+}
+
 pub mod standin {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Mutex;
@@ -1727,6 +1755,25 @@ pub mod standin {
 
     fn registry() -> std::sync::MutexGuard<'static, Registry> {
         REGISTRY.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// What one deployment's run registered, taken while another's runs
+    /// in the same process (a tree's apply, `secrets::Scope`).
+    pub struct Saved(Registry);
+
+    /// What the run registered, taken: as no deployment's run has.
+    pub fn save() -> Saved {
+        let mut r = registry();
+        Saved(Registry {
+            derived: std::mem::take(&mut r.derived),
+            sources: std::mem::take(&mut r.sources),
+            active: std::mem::replace(&mut r.active, false),
+        })
+    }
+
+    /// `saved` registered again: its deployment's run goes on.
+    pub fn restore(saved: Saved) {
+        *registry() = saved.0;
     }
 
     /// The run holds no master (`true`): what it derives are stand-ins.

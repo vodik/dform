@@ -55,6 +55,8 @@ pub(super) struct Ticks<'a, 'h> {
     /// pending groups: what it could not name.
     listed: BTreeSet<address::Address>,
     unnamed: Vec<String>,
+    /// One deployment of a tree's apply: the tree asks for tick 1, once.
+    tree: bool,
     /// What the last tick's plan held under `later` waiting on a
     /// provider's settings (R-110): listed, but planned only once the
     /// provider is configured, so asked for again (R-45).
@@ -175,6 +177,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
             stop_after: cx.chaos.stop_after.map(std::cell::Cell::new),
             waits,
             shown: cx.saved.is_some() || args.approval.is_some(),
+            tree: false,
             listed: BTreeSet::new(),
             unnamed: Vec::new(),
             on_provider: BTreeSet::new(),
@@ -193,6 +196,66 @@ impl<'a, 'h> Ticks<'a, 'h> {
     /// `s` said on stdout.
     pub(super) fn say(&self, s: Said) {
         self.teller.say(s);
+    }
+
+    /// The ticks are one deployment's of a tree's apply, which asks for
+    /// tick 1 once for the tree.
+    pub(super) fn in_tree(&mut self) {
+        self.tree = true;
+    }
+
+    /// The changes tick `t` makes, as its question counts them.
+    pub(super) fn changes(&self, t: &Tick) -> usize {
+        let p = &t.planned;
+        self.r
+            .report(&p.plan, &p.res, &p.sections, self.tick, &[], &p.denies)
+            .changes()
+    }
+
+    /// Whether tick `t` holds what waiting can resolve (R-81): a value the
+    /// world has not reached, an extern's "not yet"; not another
+    /// deployment's output, which a tree's tick makes known.
+    pub(super) fn can_wait(&self, t: &Tick) -> bool {
+        !waiting_on(&t.planned.sections, &self.st, &self.evaluator.externs).is_empty()
+    }
+
+    /// The outputs tick `t`'s plan knows only after a tick, by key: that
+    /// tick (what the deployments that read them in a tree wait on).
+    pub(super) fn outputs_after(&self, t: &Tick) -> BTreeMap<String, usize> {
+        let p = &t.planned;
+        self.r
+            .report(&p.plan, &p.res, &p.sections, self.tick, &[], &p.denies)
+            .outputs_after
+    }
+
+    /// The deployment's outputs as the evaluation `res` has them (a
+    /// boundary's), else as its state now does: what the deployments that
+    /// read it in a tree read.
+    pub(super) fn outputs_now(
+        &self,
+        res: Option<&engine::EvalResult>,
+    ) -> Result<crate::stack::Planned> {
+        let evaluated;
+        let res = match res {
+            Some(r) => r,
+            None => {
+                evaluated = self.evaluator.evaluate(&self.st)?.0;
+                &evaluated
+            }
+        };
+        self.r.outputs_of(res, &self.st, &BTreeMap::new())
+    }
+
+    /// The apply's end, `r`, in the audit log, and its lease released, at
+    /// once: a deployment of a tree's apply that is done, or the tree's
+    /// end. An error beside it is said as a warning.
+    pub(super) fn end(&mut self, r: &Result<Outcome>) {
+        if let Some(s) = self.session.take() {
+            let (logged, released) = s.end(r);
+            for e in [logged.err(), released.err()].into_iter().flatten() {
+                eprintln!("warning: {e:#}");
+            }
+        }
     }
 
     /// Chaos names only resources of this stack.
@@ -340,7 +403,8 @@ impl<'a, 'h> Ticks<'a, 'h> {
             self.log_start()?;
         }
         let ran = self.apply(&mut p)?;
-        self.after(p, ran)
+        let waits = !ran.changed;
+        self.after(p, ran, waits)
     }
 
     /// The tick planned from what the last boundary derived (`wanted`):
@@ -357,6 +421,18 @@ impl<'a, 'h> Ticks<'a, 'h> {
         let planned =
             self.evaluator
                 .plan(res, &violations, resources, &adopts, &lifecycle, &self.st)?;
+        self.planned(planned, adopts, lifecycle)
+    }
+
+    /// The tick's plan `planned` (made from the adoptions `adopts` and
+    /// `lifecycle`): checked against a plan file at tick 1, and what it
+    /// needs, holds and is followed by.
+    pub(super) fn planned(
+        &mut self,
+        planned: Planned,
+        adopts: Vec<resources::Adopt>,
+        lifecycle: zset::Lifecycle,
+    ) -> Result<TickPlan> {
         if self.tick == 1 {
             self.r
                 .check_saved(&planned.plan, &planned.res, &planned.sections)?;
@@ -397,9 +473,9 @@ impl<'a, 'h> Ticks<'a, 'h> {
     }
 
     /// After a tick's calls: the apply's end, or the boundary the next
-    /// tick plans from, a tick that changed nothing waiting first for what
-    /// it waits on.
-    pub(super) fn after(&mut self, p: TickPlan, ran: Ran) -> Result<Next> {
+    /// tick plans from, waiting first for what it waits on (`waits`: the
+    /// tick changed nothing; in a tree, nothing of the tree's).
+    pub(super) fn after(&mut self, p: TickPlan, ran: Ran, waits: bool) -> Result<Next> {
         let t = p.tick;
         if !ran.needing.is_empty() {
             self.st.in_flight = None;
@@ -433,7 +509,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
             )?;
             return Ok(Next::Done(Outcome::Done));
         }
-        if !ran.changed {
+        if waits {
             self.wait(&t)?;
         }
         if self.tick == self.args.max_ticks {
@@ -644,7 +720,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
     /// them: seen before it runs, After R-206), a deny over it refused, tick 1 confirmed (and what it empties, R-80), a
     /// later tick that adds what no plan listed asked for again or, of a
     /// plan file or an approval, stopped before. `Some`: the apply ends.
-    fn show(&mut self, t: &Tick) -> Result<Option<Outcome>> {
+    pub(super) fn show(&mut self, t: &Tick) -> Result<Option<Outcome>> {
         let tick = self.tick;
         let p = &t.planned;
         if self.hook.is_none() {
@@ -817,8 +893,9 @@ impl<'a, 'h> Ticks<'a, 'h> {
         if !carried.is_empty() {
             self.say(Said::Carried(carried));
         }
-        // A plan file of several deployments asks before each (R-200).
-        let asks = self.cx.saved.is_none() || self.cx.cli.sequence.is_some();
+        // A plan file of several deployments asks before each (R-200); a
+        // tree's apply asks once for the tree.
+        let asks = (self.cx.saved.is_none() || self.cx.cli.sequence.is_some()) && !self.tree;
         if !self.args.yes && asks {
             let report = self
                 .r
@@ -978,7 +1055,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
     }
 
     /// A batch apply's approval, before its Apply calls.
-    fn approve(&mut self, t: &Tick) -> Result<()> {
+    pub(super) fn approve(&mut self, t: &Tick) -> Result<()> {
         if self.hook.is_some() {
             return Ok(());
         }
@@ -1000,7 +1077,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
     /// commit, the providers, a dirty tree's modified files), the secret
     /// outputs it opened, a new master and who could open it, and the
     /// master sealed again as dform.toml says (R-164).
-    fn log_start(&mut self) -> Result<()> {
+    pub(super) fn log_start(&mut self) -> Result<()> {
         let (cx, audit) = (self.cx, &self.cx.audit);
         let dir = cx.cli.files[0]
             .parent()
@@ -1717,7 +1794,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
     /// What tick `t` waits on, as printed (R-111): the values waiting can
     /// resolve, else every null its held changes wait on, by its label, a
     /// provider's settings as `later` names them (R-110).
-    fn waited_on(&self, t: &Tick) -> Vec<String> {
+    pub(super) fn waited_on(&self, t: &Tick) -> Vec<String> {
         let sections = &t.planned.sections;
         let on = waiting_on(sections, &self.st, &self.evaluator.externs);
         if !on.is_empty() {
@@ -1726,9 +1803,11 @@ impl<'a, 'h> Ticks<'a, 'h> {
         let waits: BTreeSet<&String> = sections.blocking.iter().chain(&t.held).collect();
         waits
             .into_iter()
-            .map(|n| match n.starts_with("provider ") {
-                true => n.clone(),
-                false => report::attribute_label(n),
+            .map(|n| match crate::value::null_parts(n) {
+                _ if n.starts_with("provider ") => n.clone(),
+                // Another deployment's output, as the reference it is.
+                Some((typ, full, k)) if typ == crate::stack::UNAPPLIED => format!("{full}.{k}"),
+                _ => report::attribute_label(n),
             })
             .collect()
     }

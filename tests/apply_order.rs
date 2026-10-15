@@ -45,9 +45,8 @@ fn apply_applies_what_the_stack_reads_first() {
     let r = s.run(&["apply", "app", "env=prod"]).success();
     assert!(
         r.stdout.starts_with(
-            "stacks: stacks.net[env=prod], then stacks.app[env=prod] below, in apply order: stacks.app[env=prod] \
-             reads its outputs; each is planned, confirmed and applied in turn\n\
-             == stacks.net[env=prod]\ndeployment: stacks.net[env=prod]\n"
+            "stacks: stacks.app[env=prod] and what it reads, stacks.net[env=prod]: one apply, \
+             its ticks the tree's\n== stacks.net[env=prod]\n"
         ),
         "{}",
         r.stdout
@@ -79,7 +78,7 @@ fn apply_applies_what_the_stack_reads_first() {
     let r = s.run(&["apply", "web"]).success();
     assert!(
         r.stdout.starts_with(
-            "stacks: stacks.net[env=prod], then stacks.app[env=prod], then stacks.web below"
+            "stacks: stacks.web and what it reads, stacks.net[env=prod], stacks.app[env=prod]: "
         ),
         "{}",
         r.stdout
@@ -195,7 +194,7 @@ fn a_keyed_read_takes_the_pun() {
     let r = s.run(&["apply", "app", "env=dev"]).success();
     assert!(
         r.stdout
-            .starts_with("stacks: stacks.net[env=dev], then stacks.app[env=dev] below"),
+            .starts_with("stacks: stacks.app[env=dev] and what it reads, stacks.net[env=dev]:"),
         "{}",
         r.stdout
     );
@@ -209,7 +208,7 @@ fn a_defaulted_key_orders_the_deployment_it_names() {
     let r = s.run(&["apply", "app"]).success();
     assert!(
         r.stdout
-            .starts_with("stacks: stacks.net[env=dev], then stacks.app[env=dev] below"),
+            .starts_with("stacks: stacks.app[env=dev] and what it reads, stacks.net[env=dev]:"),
         "{}",
         r.stdout
     );
@@ -232,7 +231,7 @@ fn a_computed_key_orders_every_deployment_of_the_stack() {
     let r = s.run(&["apply", "app", "env=prod"]).success();
     assert!(
         r.stdout
-            .starts_with("stacks: stacks.net[env=stg], then stacks.app[env=prod] below"),
+            .starts_with("stacks: stacks.app[env=prod] and what it reads, stacks.net[env=stg]:"),
         "{}",
         r.stdout
     );
