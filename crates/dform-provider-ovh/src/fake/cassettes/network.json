@@ -1,0 +1,30 @@
+{
+  "model": "cloud.network.Network",
+  "calls": [
+    "GET /cloud/project/{serviceName}/network/public",
+    "GET /cloud/project/{serviceName}/network/private",
+    "POST /cloud/project/{serviceName}/network/private",
+    "GET /cloud/project/{serviceName}/network/private/{networkId}",
+    "POST /cloud/project/{serviceName}/network/private/{networkId}/region"
+  ],
+  "shape": "schema",
+  "observed": [
+    "2026-10-12, the user's lab: a private network's `id` is `pn-` and the vRack's number, `_` and the VLAN (`pn-…_0`)"
+  ],
+  "guessed": [
+    "the public network's `id`, `name` and `vlanId`, and the OpenStack ids of its regions",
+    "a create answers `BUILDING`, each region `BUILDING`, then `ACTIVE`",
+    "a create with no `regions` is in every region of the project",
+    "a region added answers `ACTIVE` at once"
+  ],
+  "answer": {
+    "id": "pn-1000123_42",
+    "name": "lab",
+    "vlanId": 42,
+    "type": "private",
+    "status": "ACTIVE",
+    "regions": [
+      {"region": "ca-east-tor", "status": "ACTIVE", "openstackId": "4c1d2e3f-5a6b-4c7d-8e9f-0a1b2c3d4e5f"}
+    ]
+  }
+}

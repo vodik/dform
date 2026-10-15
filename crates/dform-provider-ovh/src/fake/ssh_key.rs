@@ -12,13 +12,24 @@ impl World {
         body: &Json,
     ) -> (u16, Json) {
         match (method, segs) {
-            ("GET", ["cloud", "project", _, "sshkey"]) => {
-                (200, json!(self.keys.values().cloned().collect::<Vec<_>>()))
-            }
+            // The list answers each key without its fingerprint
+            // (`cloud.sshkey.SshKey`).
+            ("GET", ["cloud", "project", _, "sshkey"]) => (
+                200,
+                json!(
+                    self.keys
+                        .values()
+                        .map(|k| cassette::fitted("sshkey-list", k))
+                        .collect::<Vec<_>>()
+                ),
+            ),
             ("POST", ["cloud", "project", _, "sshkey"]) => {
                 let id = self.id("key");
-                let o = json!({"id": id, "name": body["name"], "publicKey": body["publicKey"],
-                               "fingerPrint": "00:11", "regions": REGIONS});
+                let o = shaped(
+                    "sshkey",
+                    json!({"id": id, "name": body["name"], "publicKey": body["publicKey"],
+                           "fingerPrint": "00:11", "regions": REGIONS}),
+                );
                 self.keys.insert(id, o.clone());
                 (200, o)
             }

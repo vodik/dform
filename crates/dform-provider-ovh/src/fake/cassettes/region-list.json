@@ -1,0 +1,6 @@
+{
+  "model": "string[]",
+  "calls": ["GET /cloud/project/{serviceName}/region"],
+  "shape": "schema",
+  "answer": ["BHS5", "ca-east-tor"]
+}

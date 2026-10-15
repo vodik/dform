@@ -16,10 +16,7 @@ impl World {
             // vRack and networks.
             ("GET", ["cloud", "project", _, "vrack"]) => match self.no_vrack {
                 true => not_found("This vRack"),
-                false => (
-                    200,
-                    json!({"id": VRACK, "name": "vrack", "description": ""}),
-                ),
+                false => (200, shaped("vrack", json!({"id": VRACK}))),
             },
             ("GET", ["cloud", "project", _, "network", "public"]) => {
                 (200, json!([public_network()]))
@@ -54,14 +51,14 @@ impl World {
                     return (400, json!({"message": format!("Invalid region {r}")}));
                 }
                 let id = format!("{VRACK}_{vlan}");
-                let region = |r: &String, status: &str| {
-                    json!({"region": r, "status": status,
-                           "openstackId": format!("net-{vlan}-{r}")})
-                };
-                let o = json!({"id": id, "name": body["name"], "vlanId": vlan,
-                               "type": "private", "status": "BUILDING",
-                               "regions": regions.iter().map(|r| region(r, "BUILDING"))
-                                                 .collect::<Vec<_>>()});
+                let region = |r: &String, status: &str| network_region(r, status, vlan);
+                let o = shaped(
+                    "network",
+                    json!({"id": id, "name": body["name"], "vlanId": vlan,
+                           "type": "private", "status": "BUILDING",
+                           "regions": regions.iter().map(|r| region(r, "BUILDING"))
+                                             .collect::<Vec<_>>()}),
+                );
                 self.networks.insert(id.clone(), o.clone());
                 let active: Vec<Json> = regions.iter().map(|r| region(r, "ACTIVE")).collect();
                 self.settle(
@@ -96,8 +93,7 @@ impl World {
                 };
                 let vlan = o["vlanId"].as_i64().unwrap_or(0);
                 if let Some(rs) = o["regions"].as_array_mut() {
-                    rs.push(json!({"region": r, "status": "ACTIVE",
-                                   "openstackId": format!("net-{vlan}-{r}")}));
+                    rs.push(network_region(&r, "ACTIVE", vlan));
                 }
                 (200, o.clone())
             }
@@ -153,12 +149,18 @@ impl World {
                     .unwrap_or(false);
                 let gw = if no_gw { None } else { host_of(cidr, 1) };
                 let sid = self.id("subnet");
-                let o = json!({"id": sid, "cidr": cidr,
-                               "dhcpEnabled": body.get("dhcp").and_then(Json::as_bool).unwrap_or(false),
-                               "gatewayIp": gw,
-                               "ipPools": [{"dhcp": body["dhcp"], "start": body["start"],
-                                            "end": body["end"], "network": cidr,
-                                            "region": region}]});
+                let dhcp = body.get("dhcp").and_then(Json::as_bool).unwrap_or(false);
+                let pool = shaped_at(
+                    "subnet",
+                    "/ipPools/0",
+                    json!({"dhcp": body["dhcp"], "start": body["start"], "end": body["end"],
+                           "network": cidr, "region": region}),
+                );
+                let o = shaped(
+                    "subnet",
+                    json!({"id": sid, "cidr": cidr, "dhcpEnabled": dhcp, "gatewayIp": gw,
+                           "ipPools": [pool]}),
+                );
                 self.subnets
                     .entry(id.to_string())
                     .or_default()
@@ -194,11 +196,28 @@ impl World {
 
 /// The public network, in every region (`cloud.network.Network`).
 fn public_network() -> Json {
-    json!({"id": "ext-net", "name": "Ext-Net", "type": "public", "vlanId": null,
-           "status": "ACTIVE",
-           "regions": REGIONS.iter().map(|r| json!({"region": r, "status": "ACTIVE",
-                                                    "openstackId": format!("ext-{r}")}))
-                             .collect::<Vec<_>>()})
+    let region = |r: &str| {
+        shaped_at(
+            "network",
+            "/regions/0",
+            json!({"region": r, "status": "ACTIVE", "openstackId": format!("ext-{r}")}),
+        )
+    };
+    shaped(
+        "network",
+        json!({"id": "ext-net", "name": "Ext-Net", "type": "public", "vlanId": null,
+               "status": "ACTIVE", "regions": REGIONS.iter().map(|r| region(r)).collect::<Vec<_>>()}),
+    )
+}
+
+/// A private network's region `r` (`cloud.network.NetworkRegion`), its
+/// OpenStack id made of the VLAN and the region.
+fn network_region(r: &str, status: &str, vlan: i64) -> Json {
+    shaped_at(
+        "network",
+        "/regions/0",
+        json!({"region": r, "status": status, "openstackId": format!("net-{vlan}-{r}")}),
+    )
 }
 
 /// The vRack the project is on.

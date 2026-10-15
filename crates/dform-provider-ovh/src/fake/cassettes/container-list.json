@@ -1,0 +1,10 @@
+{
+  "model": "cloud.StorageContainerList[]",
+  "calls": ["GET /cloud/project/{serviceName}/region/{regionName}/storage"],
+  "shape": "schema",
+  "answer": [
+    {"name": "lab-backups", "region": "BHS", "ownerId": 482913, "objectsCount": 0, "objectsSize": 0,
+     "createdAt": "2026-10-05T18:40:02Z", "arn": "arn:aws:s3:::lab-backups",
+     "virtualHost": "lab-backups.s3.bhs.io.cloud.ovh.net", "objects": []}
+  ]
+}

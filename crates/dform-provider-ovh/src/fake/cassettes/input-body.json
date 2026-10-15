@@ -1,0 +1,15 @@
+{
+  "model": null,
+  "calls": [
+    "POST /cloud/project/{serviceName}/user/{userId}/s3Credentials",
+    "POST /cloud/project/{serviceName}/user/{userId}/s3Credentials/{access}/secret",
+    "POST /domain/zone/{zoneName}/refresh"
+  ],
+  "shape": "observed",
+  "observed": [
+    "2026-10-12, the user's lab (commit 4259b46b): a call the schema gives no body parameter refuses any body, `{}` included, with this 400; the provider sends none (no Content-Type, an empty signed body)"
+  ],
+  "guessed": ["the refusal's fields other than `message` (OVH errors may carry `class`, `errorCode` and `httpCode`: not recorded)"],
+  "status": 400,
+  "answer": {"message": "You provided an input body while none was expected"}
+}

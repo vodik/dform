@@ -1,0 +1,7 @@
+{
+  "model": "cloud.Vrack",
+  "calls": ["GET /cloud/project/{serviceName}/vrack"],
+  "shape": "schema",
+  "guessed": ["a project with no vRack is a 404 here"],
+  "answer": {"id": "pn-1000123", "name": "vrack", "description": ""}
+}

@@ -14,11 +14,13 @@ impl World {
         match (method, segs) {
             // S3 containers.
             ("GET", ["cloud", "project", _, "region", r, "storage"]) => {
+                // Each without its versioning, encryption and the rest
+                // (`cloud.StorageContainerList`).
                 let all: Vec<Json> = self
                     .containers
                     .iter()
                     .filter(|((cr, _), _)| cr == r)
-                    .map(|(_, c)| c.clone())
+                    .map(|(_, c)| cassette::fitted("container-list", c))
                     .collect();
                 (200, json!(all))
             }
@@ -87,11 +89,11 @@ impl World {
 /// An S3 container (`cloud.StorageContainer`), empty.
 pub(super) fn container(region: &str, name: &str, owner: Option<i64>, versioning: &str) -> Json {
     let host = format!("{name}.s3.{}.io.cloud.ovh.net", region.to_lowercase());
-    json!({"name": name, "region": region, "ownerId": owner,
-           "objectsCount": 0, "objectsSize": 0,
-           "createdAt": "2026-10-07T00:00:00Z",
-           "arn": format!("arn:aws:s3:::{name}"), "virtualHost": host,
-           "versioning": {"status": versioning},
-           "encryption": {"sseAlgorithm": "plaintext"}, "tags": {},
-           "objectLock": {"status": "disabled"}, "objects": []})
+    shaped(
+        "container",
+        json!({"name": name, "region": region, "ownerId": owner,
+               "createdAt": "2026-10-07T00:00:00Z",
+               "arn": format!("arn:aws:s3:::{name}"), "virtualHost": host,
+               "versioning": {"status": versioning}}),
+    )
 }

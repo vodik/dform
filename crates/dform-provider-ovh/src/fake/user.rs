@@ -15,18 +15,17 @@ impl World {
             // Users and their S3 credentials.
             ("GET", ["cloud", "project", _, "role"]) => (
                 200,
-                json!({"roles": ROLES.iter().map(|r| role(r)).collect::<Vec<_>>(),
-                       "services": []}),
+                shaped(
+                    "roles",
+                    json!({"roles": ROLES.iter().map(|r| role(r)).collect::<Vec<_>>()}),
+                ),
             ),
+            // A user is answered without its password (`cloud.user.User`).
             ("GET", ["cloud", "project", _, "user"]) => {
                 let all: Vec<Json> = self
                     .users
                     .values()
-                    .map(|u| {
-                        let mut u = u.clone();
-                        u.as_object_mut().map(|m| m.remove("password"));
-                        u
-                    })
+                    .map(|u| cassette::fitted("user", u))
                     .collect();
                 (200, json!(all))
             }
@@ -44,12 +43,15 @@ impl World {
                 }
                 self.next += 1;
                 let id = 100_000 + self.next as i64;
-                let o = json!({"id": id, "username": format!("user-{id:x}"),
-                               "description": body["description"], "status": "creating",
-                               "creationDate": "2026-10-07T00:00:00Z",
-                               "openstackId": format!("os-{id}"),
-                               "roles": names.iter().map(|r| role(r)).collect::<Vec<_>>(),
-                               "password": format!("pw-{id}")});
+                let o = shaped(
+                    "user-detail",
+                    json!({"id": id, "username": format!("user-{id:x}"),
+                           "description": body["description"], "status": "creating",
+                           "creationDate": "2026-10-07T00:00:00Z",
+                           "openstackId": format!("os-{id}"),
+                           "roles": names.iter().map(|r| role(r)).collect::<Vec<_>>(),
+                           "password": format!("pw-{id}")}),
+                );
                 self.users.insert(id, o.clone());
                 self.settle(format!("user/{id}"), json!({"status": "ok"}));
                 (200, o)
@@ -66,11 +68,7 @@ impl World {
                 };
                 let ready = u["status"] == "ok";
                 match (m, rest) {
-                    ("GET", []) => {
-                        let mut u = u.clone();
-                        u.as_object_mut().map(|m| m.remove("password"));
-                        (200, u)
-                    }
+                    ("GET", []) => (200, cassette::fitted("user", u)),
                     ("DELETE", []) => {
                         self.users.remove(&id);
                         self.s3.remove(&id);
@@ -106,8 +104,11 @@ impl World {
                                 .get(&id)
                                 .into_iter()
                                 .flatten()
-                                .map(|(a, _)| json!({"access": a, "userId": format!("os-{id}"),
-                                                 "tenantId": PROJECT}))
+                                .map(|(a, _)| shaped(
+                                    "s3-credentials",
+                                    json!({"access": a, "userId": format!("os-{id}"),
+                                           "tenantId": PROJECT})
+                                ))
                                 .collect::<Vec<_>>()
                         ),
                     ),
@@ -124,8 +125,11 @@ impl World {
                             .push((access.clone(), secret.clone()));
                         (
                             200,
-                            json!({"access": access, "secret": secret,
-                                   "userId": format!("os-{id}"), "tenantId": PROJECT}),
+                            shaped(
+                                "s3-credential-made",
+                                json!({"access": access, "secret": secret,
+                                       "userId": format!("os-{id}"), "tenantId": PROJECT}),
+                            ),
                         )
                     }
                     (m, ["s3Credentials", access, tail @ ..]) => {
@@ -134,7 +138,9 @@ impl World {
                             return not_found("Credential");
                         };
                         match (m, tail) {
-                            ("POST", ["secret"]) => (200, json!({"secret": creds[i].1})),
+                            ("POST", ["secret"]) => {
+                                (200, shaped("s3-secret", json!({"secret": creds[i].1})))
+                            }
                             ("DELETE", []) => {
                                 creds.remove(i);
                                 (200, Json::Null)
@@ -162,6 +168,10 @@ const ROLES: [&str; 6] = [
 
 /// A role (`cloud.role.Role`).
 pub(super) fn role(name: &str) -> Json {
-    json!({"id": format!("role-{name}"), "name": name,
-           "description": format!("{name} role"), "permissions": []})
+    shaped_at(
+        "roles",
+        "/roles/0",
+        json!({"id": format!("role-{name}"), "name": name,
+               "description": format!("{name} role"), "permissions": []}),
+    )
 }

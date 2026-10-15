@@ -1,0 +1,21 @@
+{
+  "model": "cloud.network.Subnet",
+  "calls": [
+    "GET /cloud/project/{serviceName}/network/private/{networkId}/subnet",
+    "POST /cloud/project/{serviceName}/network/private/{networkId}/subnet"
+  ],
+  "shape": "schema",
+  "guessed": [
+    "the gateway is the range's first host unless `noGateway`",
+    "`start` and `end` are refused when missing, and a region where the network is not ACTIVE is refused"
+  ],
+  "answer": {
+    "id": "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
+    "cidr": "10.0.0.0/24",
+    "dhcpEnabled": true,
+    "gatewayIp": "10.0.0.1",
+    "ipPools": [
+      {"network": "10.0.0.0/24", "region": "BHS5", "dhcp": true, "start": "10.0.0.10", "end": "10.0.0.200"}
+    ]
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "model": "cloud.volume.Volume",
+  "calls": [
+    "GET /cloud/project/{serviceName}/volume",
+    "POST /cloud/project/{serviceName}/volume",
+    "GET /cloud/project/{serviceName}/volume/{volumeId}",
+    "PUT /cloud/project/{serviceName}/volume/{volumeId}",
+    "POST /cloud/project/{serviceName}/volume/{volumeId}/attach",
+    "POST /cloud/project/{serviceName}/volume/{volumeId}/detach",
+    "POST /cloud/project/{serviceName}/volume/{volumeId}/upsize"
+  ],
+  "shape": "schema",
+  "guessed": [
+    "the statuses on the way: `creating` then `available`, `attaching` then `in-use`, `detaching`, `extending`, `deleting`",
+    "an attach is refused unless `available`, and a delete while `in-use`",
+    "a volume attached to a deleted instance is detached as it goes"
+  ],
+  "answer": {
+    "id": "0d9e8f7a-6b5c-4d3e-2f1a-0b9c8d7e6f5a",
+    "name": "lab-data",
+    "description": "",
+    "region": "ca-east-tor",
+    "size": 50,
+    "type": "classic",
+    "status": "available",
+    "attachedTo": [],
+    "bootable": false,
+    "availabilityZone": "nova",
+    "creationDate": "2026-10-05T18:51:47Z",
+    "planCode": "volume.classic.consumption"
+  }
+}

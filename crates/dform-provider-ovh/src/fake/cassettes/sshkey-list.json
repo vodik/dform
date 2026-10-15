@@ -1,0 +1,10 @@
+{
+  "model": "cloud.sshkey.SshKey[]",
+  "calls": ["GET /cloud/project/{serviceName}/sshkey"],
+  "shape": "schema",
+  "answer": [
+    {"id": "Wkdabc123", "name": "k8s-lab-admin",
+     "publicKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExample admin@lab",
+     "regions": ["BHS5", "ca-east-tor"]}
+  ]
+}

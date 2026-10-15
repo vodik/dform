@@ -1,0 +1,15 @@
+{
+  "model": "domain.ZoneWithIAM",
+  "calls": ["GET /domain/zone/{zoneName}"],
+  "shape": "schema",
+  "guessed": ["a zone the account does not host is a 404 (`This service does not exist`)"],
+  "answer": {
+    "name": "example.com",
+    "dnssecSupported": true,
+    "dnssecActivated": false,
+    "hasDnsAnycast": false,
+    "lastUpdate": "2026-10-05T18:00:00+02:00",
+    "nameServers": ["dns200.anycast.me", "ns200.anycast.me"],
+    "iam": null
+  }
+}

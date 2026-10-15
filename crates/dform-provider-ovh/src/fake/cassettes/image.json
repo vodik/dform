@@ -1,0 +1,24 @@
+{
+  "model": "cloud.image.Image",
+  "calls": [
+    "GET /cloud/project/{serviceName}/image",
+    "GET /cloud/project/{serviceName}/image/{imageId}"
+  ],
+  "shape": "schema",
+  "answer": {
+    "id": "9a8b7c6d-5e4f-4a3b-2c1d-0e9f8a7b6c5d",
+    "name": "Ubuntu 24.04",
+    "region": "ca-east-tor",
+    "visibility": "public",
+    "type": "linux",
+    "minDisk": 0,
+    "size": 2.5,
+    "minRam": 0,
+    "status": "active",
+    "user": "ubuntu",
+    "creationDate": "2026-04-25T10:11:12Z",
+    "flavorType": null,
+    "tags": [],
+    "planCode": null
+  }
+}

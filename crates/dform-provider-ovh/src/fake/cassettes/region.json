@@ -1,0 +1,18 @@
+{
+  "model": "cloud.Region",
+  "calls": ["GET /cloud/project/{serviceName}/region/{regionName}"],
+  "shape": "schema",
+  "answer": {
+    "name": "ca-east-tor",
+    "type": "region",
+    "status": "UP",
+    "continentCode": "NA",
+    "countryCode": "ca",
+    "datacenterLocation": "TOR",
+    "availabilityZones": [],
+    "ipCountries": ["ca"],
+    "services": [
+      {"name": "instance", "status": "UP", "endpoint": "https://compute.ca-east-tor.cloud.ovh.net/"}
+    ]
+  }
+}

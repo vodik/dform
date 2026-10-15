@@ -3,6 +3,42 @@
 
 use super::*;
 
+/// A port of an instance (`cloud.instanceInterface.Interface`): its id,
+/// its network's OpenStack id (`ext-REGION` for the public network), and
+/// the address an attach gave it (one made with the instance has the
+/// instance's address on its network).
+#[derive(Debug, Clone)]
+pub(super) struct Port {
+    id: String,
+    network: String,
+    ip: Option<Json>,
+}
+
+impl Port {
+    /// A port on `network`, `ports` the instance's others: the first on a
+    /// network is `if-` and the network's id, another is numbered.
+    fn new(ports: &[Port], network: &str, ip: Option<Json>) -> Port {
+        let on = ports.iter().filter(|p| p.network == network).count();
+        let id = match on {
+            0 => format!("if-{network}"),
+            n => format!("if-{network}-{}", n + 1),
+        };
+        Port {
+            id,
+            network: network.to_string(),
+            ip,
+        }
+    }
+
+    fn public(region: &str) -> Port {
+        Port::new(&[], &format!("ext-{region}"), None)
+    }
+
+    fn is_public(&self) -> bool {
+        self.network.starts_with("ext-")
+    }
+}
+
 impl World {
     /// A call under the instance routes.
     pub(super) fn instance_api(
@@ -61,7 +97,12 @@ impl World {
                 }
                 let id = self.id("instance");
                 if let Some(nics) = nics {
-                    self.nics.insert(id.clone(), nics);
+                    let mut ports = Vec::new();
+                    for nic in nics {
+                        let port = Port::new(&ports, &nic, None);
+                        ports.push(port);
+                    }
+                    self.nics.insert(id.clone(), ports);
                 }
                 let active = self.build_polls == 0;
                 let o = self.instance(&id, s("name"), region, &flavor, &image, key, active);
@@ -74,6 +115,7 @@ impl World {
             ("GET", ["cloud", "project", _, "instance", id]) => {
                 let id = id.to_string();
                 self.read_settling(&format!("instance/{id}"));
+                self.read_lagging(&id);
                 if let Some(left) = self.building.get_mut(&id) {
                     *left = left.saturating_sub(1);
                     if *left == 0 {
@@ -138,14 +180,17 @@ impl World {
                     return not_found("Instance");
                 };
                 let region = o["region"].as_str().unwrap_or_default();
-                let nics = self
+                let ports = self
                     .nics
                     .get(*id)
                     .cloned()
-                    .unwrap_or_else(|| vec![format!("ext-{region}")]);
-                let all: Vec<Json> = nics.iter().map(|nic| self.interface(id, nic)).collect();
+                    .unwrap_or_else(|| vec![Port::public(region)]);
+                let all: Vec<Json> = ports.iter().map(|p| self.interface(id, p)).collect();
                 (200, json!(all))
             }
+            // An attach makes a port, on a network the instance is on
+            // already as well (OVH does); its address is the port's at
+            // once and the instance's `ipAddresses` only later.
             ("POST", ["cloud", "project", _, "instance", id, "interface"]) => {
                 let id = id.to_string();
                 let Some(region) = self.instances.get(&id).map(|o| o["region"].clone()) else {
@@ -156,41 +201,50 @@ impl World {
                 if let Some(why) = self.nic_refused(region, &nic) {
                     return (400, json!({"message": why}));
                 }
-                let nics = self
+                // Another port on a network has another address.
+                let on = self.nics.get(&id).into_iter().flatten();
+                let n = self.instances.len() + 10 + on.filter(|p| p.network == nic).count();
+                let ip = self.private_address(&nic, n);
+                let ports = self
                     .nics
                     .entry(id.clone())
-                    .or_insert_with(|| vec![format!("ext-{region}")]);
-                if nics.contains(&nic) {
-                    return (
-                        400,
-                        json!({"message": format!("Network {nic} is attached already")}),
-                    );
+                    .or_insert_with(|| vec![Port::public(region)]);
+                let port = Port::new(ports, &nic, Some(ip.clone()));
+                ports.push(port.clone());
+                match self.ip_lag {
+                    0 => self.address_settled(&id, ip),
+                    reads => self
+                        .lagging
+                        .entry(id.clone())
+                        .or_default()
+                        .push((reads, ip)),
                 }
-                nics.push(nic.clone());
-                let ip = self.private_address(&nic, self.instances.len() + 10);
-                let o = self.instances.get_mut(&id).expect("looked up");
-                if let Some(ips) = o["ipAddresses"].as_array_mut() {
-                    ips.push(ip);
-                }
-                (200, self.interface(&id, &nic))
+                (200, self.interface(&id, &port))
             }
-            ("DELETE", ["cloud", "project", _, "instance", id, "interface", nic]) => {
-                let Some(nic) = nic.strip_prefix("if-") else {
+            ("DELETE", ["cloud", "project", _, "instance", id, "interface", port]) => {
+                let Some(ports) = self.nics.get_mut(*id) else {
                     return not_found("Interface");
                 };
-                let Some(nics) = self.nics.get_mut(*id) else {
+                let Some(i) = ports.iter().position(|p| p.id == *port && !p.is_public()) else {
                     return not_found("Interface");
                 };
-                if nic.starts_with("ext-") || !nics.iter().any(|n| n == nic) {
-                    return not_found("Interface");
-                }
-                nics.retain(|n| n != nic);
+                let gone = ports.remove(i);
+                let last = !ports.iter().any(|p| p.network == gone.network);
+                // Its address goes with it: an attached port's own, or
+                // the instance's on the network when no port is left there.
+                let its = |a: &Json| match &gone.ip {
+                    Some(ip) => a["ip"] == ip["ip"],
+                    None => last && a["networkId"] == gone.network,
+                };
                 if let Some(ips) = self
                     .instances
                     .get_mut(*id)
                     .and_then(|o| o["ipAddresses"].as_array_mut())
                 {
-                    ips.retain(|a| a["networkId"] != nic);
+                    ips.retain(|a| !its(a));
+                }
+                if let Some(lagging) = self.lagging.get_mut(*id) {
+                    lagging.retain(|(_, a)| !its(a));
                 }
                 (200, Json::Null)
             }
@@ -210,6 +264,7 @@ impl World {
                             }
                         }
                         self.nics.remove(*id);
+                        self.lagging.remove(*id);
                         (200, Json::Null)
                     }
                     None => not_found("Instance"),
@@ -235,30 +290,66 @@ impl World {
         } else {
             json!([])
         };
-        json!({
-            "id": id, "name": name, "region": region,
-            "flavorId": format!("flavor-{flavor_name}-{region}"),
-            "imageId": format!("image-{}-{region}", image_name.to_lowercase().replace(' ', "-")),
-            "sshKeyId": key, "status": if active { "ACTIVE" } else { "BUILD" },
-            "ipAddresses": ips, "created": "2026-10-06T00:00:00Z",
-            "monthlyBilling": null, "planCode": format!("{flavor_name}.consumption"),
-            "operationIds": [], "flavor": null, "image": null, "sshKey": null,
-        })
+        shaped(
+            "instance",
+            json!({
+                "id": id, "name": name, "region": region,
+                "flavorId": format!("flavor-{flavor_name}-{region}"),
+                "imageId": format!("image-{}-{region}", image_name.to_lowercase().replace(' ', "-")),
+                "sshKeyId": key, "status": if active { "ACTIVE" } else { "BUILD" },
+                "ipAddresses": ips, "created": "2026-10-06T00:00:00Z",
+                "planCode": format!("{flavor_name}.consumption"),
+            }),
+        )
+    }
+
+    /// A read of instance `id`: each lagging address with no reads left
+    /// is in its `ipAddresses` from this one on, each other one read
+    /// nearer.
+    fn read_lagging(&mut self, id: &str) {
+        let Some(lagging) = self.lagging.get_mut(id) else {
+            return;
+        };
+        let mut due = Vec::new();
+        lagging.retain_mut(|(left, ip)| match left {
+            0 => {
+                due.push(ip.clone());
+                false
+            }
+            _ => {
+                *left -= 1;
+                true
+            }
+        });
+        for ip in due {
+            self.address_settled(id, ip);
+        }
+    }
+
+    /// Instance `id`'s `ipAddresses` has `ip`.
+    fn address_settled(&mut self, id: &str, ip: Json) {
+        if let Some(ips) = self
+            .instances
+            .get_mut(id)
+            .and_then(|o| o["ipAddresses"].as_array_mut())
+        {
+            ips.push(ip);
+        }
     }
 
     /// An instance's addresses, the `n`th: the public network's, and one
     /// on each private network it was made on, in its subnet's pool.
     fn addresses(&self, id: &str, n: usize) -> Json {
-        let Some(nics) = self.nics.get(id) else {
+        let Some(ports) = self.nics.get(id) else {
             return ips(n);
         };
         let mut out = Vec::new();
-        for nic in nics {
-            if nic.starts_with("ext-") {
+        for port in ports {
+            if port.is_public() {
                 out.extend(ips(n).as_array().cloned().unwrap_or_default());
                 continue;
             }
-            out.push(self.private_address(nic, n));
+            out.push(self.private_address(&port.network, n));
         }
         json!(out)
     }
@@ -282,27 +373,42 @@ impl World {
         let ip = pool
             .and_then(|start| host_of(&start, n as u32))
             .unwrap_or_else(|| format!("10.0.0.{n}"));
-        json!({"ip": ip, "type": "private", "version": 4,
-               "networkId": nic, "gatewayIp": null})
+        shaped_at(
+            "instance",
+            "/ipAddresses/0",
+            json!({"ip": ip, "type": "private", "version": 4,
+                   "networkId": nic, "gatewayIp": null}),
+        )
     }
 
-    /// Instance `id`'s interface on the network `nic` (an OpenStack id),
-    /// with the IPv4 address it has there
-    /// (`cloud.instanceInterface.Interface`).
-    fn interface(&self, id: &str, nic: &str) -> Json {
-        let (typ, on) = match nic.starts_with("ext-") {
+    /// Instance `id`'s port `port`, with the IPv4 address it has
+    /// (`cloud.instanceInterface.Interface`): an attached port's own, one
+    /// made with the instance the instance's on the network.
+    fn interface(&self, id: &str, port: &Port) -> Json {
+        let nic = port.network.as_str();
+        let (typ, on) = match port.is_public() {
             true => ("public", "ext"),
             false => ("private", nic),
         };
-        let fixed: Vec<Json> = self
-            .instances
-            .get(id)
-            .and_then(|o| o["ipAddresses"].as_array())
-            .into_iter()
-            .flatten()
-            .filter(|a| a["networkId"] == on && a["version"] == 4)
-            .map(|a| json!({"ip": a["ip"], "subnetId": format!("sub-{nic}")}))
-            .collect();
+        let fixed_ip = |a: &Json| {
+            shaped_at(
+                "interface",
+                "/fixedIps/0",
+                json!({"ip": a["ip"], "subnetId": format!("sub-{nic}")}),
+            )
+        };
+        let fixed: Vec<Json> = match &port.ip {
+            Some(a) => vec![fixed_ip(a)],
+            None => self
+                .instances
+                .get(id)
+                .and_then(|o| o["ipAddresses"].as_array())
+                .into_iter()
+                .flatten()
+                .filter(|a| a["networkId"] == on && a["version"] == 4)
+                .map(fixed_ip)
+                .collect(),
+        };
         // A private interface names its network by the network's id
         // (`pn-…`), not the OpenStack id it was attached by, as OVH does.
         let network = self
@@ -317,8 +423,10 @@ impl World {
             })
             .and_then(|net| net["id"].as_str())
             .unwrap_or(nic);
-        json!({"id": format!("if-{nic}"), "networkId": network, "type": typ, "state": "ACTIVE",
-               "macAddress": "fa:16:3e:00:00:01", "fixedIps": fixed})
+        shaped(
+            "interface",
+            json!({"id": port.id, "networkId": network, "type": typ, "fixedIps": fixed}),
+        )
     }
 
     /// Why `nic` (an OpenStack network id) cannot be an interface of an
@@ -358,10 +466,15 @@ impl World {
 
 /// A public IPv6 and IPv4 address, the `n`th.
 fn ips(n: usize) -> Json {
+    let ip = |fields: Json| shaped_at("instance", "/ipAddresses/0", fields);
     json!([
-        {"ip": format!("2607:5300::{n}"), "type": "public", "version": 6,
-         "networkId": "ext", "gatewayIp": null},
-        {"ip": format!("51.79.0.{n}"), "type": "public", "version": 4,
-         "networkId": "ext", "gatewayIp": "51.79.0.1"}
+        ip(
+            json!({"ip": format!("2607:5300::{n}"), "type": "public", "version": 6,
+                  "networkId": "ext", "gatewayIp": null})
+        ),
+        ip(
+            json!({"ip": format!("51.79.0.{n}"), "type": "public", "version": 4,
+                  "networkId": "ext", "gatewayIp": "51.79.0.1"})
+        )
     ])
 }

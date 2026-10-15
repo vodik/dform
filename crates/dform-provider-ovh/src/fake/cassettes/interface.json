@@ -1,0 +1,24 @@
+{
+  "model": "cloud.instanceInterface.Interface",
+  "calls": [
+    "GET /cloud/project/{serviceName}/instance/{instanceId}/interface",
+    "POST /cloud/project/{serviceName}/instance/{instanceId}/interface"
+  ],
+  "shape": "schema",
+  "observed": [
+    "2026-10-12, the user's lab (commits 6d9a8109, ab951bf6): a private port's `networkId` is the network's OVH id (`pn-…`), not the OpenStack id the attach (`POST /interface {networkId}`) and the instance create (`networks[].networkId`) take",
+    "2026-10-12..14, the user's lab: an attach answers at once and the port is listed at once; an attach repeated for a network the instance is on already makes another port (the lab instance has three on one network)"
+  ],
+  "guessed": [
+    "the public port's `networkId` (the OpenStack id of the region's Ext-Net here)",
+    "the POST's answer names the network as the GET does (`pn-…`)",
+    "a port's `id` and `macAddress`, and `state` ACTIVE at once",
+    "a private port's `fixedIps` filled at once (the provider reads its address there)"
+  ],
+  "answer": [
+    {"id": "1a2b3c4d-0000-4e5f-8a9b-0c1d2e3f4a5b", "networkId": "5f0c7e2a9d1b4c3e8f6a7b0d1e2c3f4a", "type": "public", "state": "ACTIVE",
+     "macAddress": "fa:16:3e:00:00:01", "fixedIps": [{"ip": "51.79.10.20", "subnetId": "2b3c4d5e-0000-4f6a-8b9c-1d2e3f4a5b6c"}]},
+    {"id": "3c4d5e6f-0000-4a7b-8c9d-2e3f4a5b6c7d", "networkId": "pn-1000123_0", "type": "private", "state": "ACTIVE",
+     "macAddress": "fa:16:3e:00:00:02", "fixedIps": [{"ip": "10.0.0.12", "subnetId": "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d"}]}
+  ]
+}

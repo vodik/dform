@@ -181,9 +181,11 @@ pub(super) fn volume(
     desc: &str,
     boot: bool,
 ) -> Json {
-    json!({"id": id, "name": name, "region": region, "size": gib, "type": typ,
-           "description": desc, "status": "available", "attachedTo": [],
-           "bootable": boot, "availabilityZone": "nova",
-           "creationDate": "2026-10-07T00:00:00Z",
-           "planCode": format!("volume.{typ}.consumption")})
+    shaped(
+        "volume",
+        json!({"id": id, "name": name, "region": region, "size": gib, "type": typ,
+               "description": desc, "status": "available", "attachedTo": [],
+               "bootable": boot, "creationDate": "2026-10-07T00:00:00Z",
+               "planCode": format!("volume.{typ}.consumption")}),
+    )
 }

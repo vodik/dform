@@ -2,8 +2,9 @@
 //! (`PROJECT`, described as `DESCRIPTION`), the regions `BHS5` and
 //! `ca-east-tor` with three flavors and two images each, and the instance,
 //! SSH key, DNS record, S3 container, user, volume and private network
-//! endpoints the provider calls, answering as the API's models are
-//! shaped. It checks every signed call's signature against
+//! endpoints the provider calls, each answer of a recorded shape
+//! (`cassette`: the API's published models, and what was seen on the live
+//! API, with what is still a guess named). It checks every signed call's signature against
 //! `APPLICATION_SECRET` and `CONSUMER_KEY`, and every other call's bearer
 //! token against those it minted at `/auth/oauth2/token` for `CLIENT_ID`
 //! and `CLIENT_SECRET`; `/auth/currentCredential` describes the consumer
@@ -17,6 +18,7 @@
 //! [`NAMESERVERS`]; beside it, a DNS
 //! resolver over UDP answers the NS records [`Server::delegated`] gives.
 
+pub mod cassette;
 mod http;
 mod instance;
 mod network;
@@ -26,7 +28,9 @@ mod storage;
 mod user;
 mod volume;
 
+use cassette::{shaped, shaped_at};
 use http::{resolve, serve};
+use instance::Port;
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{TcpListener, TcpStream, UdpSocket};
@@ -64,11 +68,16 @@ pub struct World {
     nameservers: BTreeMap<String, Vec<String>>,
     /// Reads left before each BUILD instance is ACTIVE.
     building: BTreeMap<String, u32>,
-    /// Each instance's interfaces: the networks' OpenStack ids, the
-    /// public one's included; none for the public network alone. One is
-    /// attached (`POST /interface`) and detached (`DELETE
-    /// /interface/{id}`, its id `if-` and the network's).
-    nics: BTreeMap<String, Vec<String>>,
+    /// Each instance's ports, the public network's included; none for
+    /// the public network alone. One is attached (`POST /interface`, a
+    /// network it is on already given another port, as OVH does) and
+    /// detached (`DELETE /interface/{id}`).
+    nics: BTreeMap<String, Vec<Port>>,
+    /// Addresses of ports attached that an instance's `ipAddresses` does
+    /// not have yet, by instance: each with the reads of the instance
+    /// left before it does (`ip_lag`), as OVH fills it in late.
+    lagging: BTreeMap<String, Vec<(u32, Json)>>,
+    ip_lag: u32,
     /// S3 containers by region and name.
     pub containers: BTreeMap<(String, String), Json>,
     /// Users by id, and each one's S3 credentials (access, secret).
@@ -129,20 +138,20 @@ pub struct Server {
 }
 
 fn flavor(region: &str, name: &str, vcpus: i64, ram: i64, disk: i64) -> Json {
-    json!({"id": format!("flavor-{name}-{region}"), "name": name, "region": region,
-           "vcpus": vcpus, "ram": ram, "disk": disk, "osType": "linux",
-           "type": "ovh.ssd.cpu", "available": true, "quota": 20,
-           "planCodes": {"monthly": null, "hourly": format!("{name}.consumption")},
-           "capabilities": []})
+    shaped(
+        "flavor",
+        json!({"id": format!("flavor-{name}-{region}"), "name": name, "region": region,
+               "vcpus": vcpus, "ram": ram, "disk": disk,
+               "planCodes": {"monthly": null, "hourly": format!("{name}.consumption")}}),
+    )
 }
 
 fn image(region: &str, name: &str) -> Json {
     let slug = name.to_lowercase().replace(' ', "-");
-    json!({"id": format!("image-{slug}-{region}"), "name": name, "region": region,
-           "type": "linux", "status": "active", "visibility": "public", "minDisk": 0,
-           "minRam": 0, "size": 2.5, "user": "ubuntu",
-           "creationDate": "2026-04-25T10:11:12Z", "flavorType": null, "tags": [],
-           "planCode": null})
+    shaped(
+        "image",
+        json!({"id": format!("image-{slug}-{region}"), "name": name, "region": region}),
+    )
 }
 
 const REGIONS: [&str; 2] = ["BHS5", "ca-east-tor"];
@@ -160,6 +169,7 @@ impl Server {
         let endpoint = format!("http://{}/1.0", listener.local_addr().expect("its address"));
         let world = Arc::new(Mutex::new(World {
             build_polls: 1,
+            ip_lag: 1,
             next: 1,
             token_life: 3600,
             ..World::default()
@@ -280,6 +290,12 @@ impl Server {
         self.world().key_asked
     }
 
+    /// How many reads of an instance its `ipAddresses` lacks a port
+    /// attached for (0: none), while `/interface` has the port at once.
+    pub fn ip_lag(&self, reads: u32) {
+        self.world().ip_lag = reads;
+    }
+
     /// How many reads a new instance stays BUILD for.
     pub fn build_polls(&self, n: u32) {
         self.world().build_polls = n;
@@ -361,9 +377,12 @@ impl Server {
         let id = 100_000 + w.next as i64;
         w.users.insert(
             id,
-            json!({"id": id, "username": format!("user-{id:x}"), "description": description,
-                   "status": "ok", "creationDate": "2026-10-07T00:00:00Z",
-                   "openstackId": format!("os-{id}"), "roles": [role("objectstore_operator")]}),
+            shaped(
+                "user",
+                json!({"id": id, "username": format!("user-{id:x}"), "description": description,
+                       "status": "ok", "creationDate": "2026-10-07T00:00:00Z",
+                       "openstackId": format!("os-{id}"), "roles": [role("objectstore_operator")]}),
+            ),
         );
         w.s3.insert(id, vec![(format!("AK{id}"), format!("sk-{id}"))]);
         id
@@ -376,8 +395,11 @@ impl Server {
         let id = 5_000_000_000 + w.next as i64;
         w.records.insert(
             id,
-            json!({"id": id, "zone": zone, "subDomain": subdomain, "fieldType": typ,
-                   "target": target, "ttl": 0}),
+            shaped(
+                "record",
+                json!({"id": id, "zone": zone, "subDomain": subdomain, "fieldType": typ,
+                       "target": target, "ttl": 0}),
+            ),
         );
         id
     }
@@ -475,10 +497,10 @@ impl World {
             };
             return (
                 200,
-                json!({"credentialId": 1, "applicationId": 1, "status": "validated",
-                       "creation": "2026-10-01T00:00:00Z", "expiration": self.key_expires,
-                       "lastUse": null, "ovhSupport": false, "allowedIPs": null,
-                       "rules": rules}),
+                shaped(
+                    "credential",
+                    json!({"expiration": self.key_expires, "rules": rules}),
+                ),
             );
         }
         self.seen.push(Seen {
@@ -513,8 +535,10 @@ impl World {
         self.tokens.insert(token.clone());
         (
             200,
-            json!({"access_token": token, "token_type": "Bearer",
-                   "expires_in": self.token_life, "scope": "all"}),
+            shaped(
+                "token",
+                json!({"access_token": token, "expires_in": self.token_life}),
+            ),
         )
     }
 
@@ -599,6 +623,9 @@ impl World {
     ) -> (u16, Json) {
         let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
         let q = |k: &str| query.get(k).map(String::as_str);
+        if !body.is_null() && takes_no_body(method, &segs) {
+            return cassette::replay("input-body");
+        }
         match (method, segs.as_slice()) {
             ("GET", ["cloud", "project"]) => (200, json!([PROJECT])),
             (_, ["domain", "zone", z, ..])
@@ -608,17 +635,20 @@ impl World {
             }
             ("GET", ["domain", "zone", z]) => (
                 200,
-                json!({"name": z, "dnssecSupported": true, "nameServers": NAMESERVERS}),
+                shaped("zone", json!({"name": z, "nameServers": NAMESERVERS})),
             ),
             (_, ["cloud", "project", p, ..]) if *p != PROJECT => not_found("This service"),
             ("GET", ["cloud", "project", _]) => (
                 200,
-                json!({"project_id": PROJECT, "description": DESCRIPTION,
-                       "projectName": DESCRIPTION, "status": "ok"}),
+                shaped(
+                    "project",
+                    json!({"project_id": PROJECT, "description": DESCRIPTION,
+                           "projectName": DESCRIPTION}),
+                ),
             ),
             ("GET", ["cloud", "project", _, "region"]) => (200, json!(REGIONS)),
             ("GET", ["cloud", "project", _, "region", r]) if REGIONS.contains(r) => {
-                (200, json!({"name": r, "status": "UP", "type": "region"}))
+                (200, shaped("region", json!({"name": r})))
             }
             ("GET", ["cloud", "project", _, "flavor"]) => match q("region") {
                 Some(r) => (200, Self::flavors(r)),
@@ -663,6 +693,29 @@ impl World {
             _ => (404, json!({"message": format!("no route {method} {path}")})),
         }
     }
+}
+
+/// Whether the API takes no body for this call, and refuses one, `{}`
+/// included (seen on OVH, `cassettes/input-body.json`).
+fn takes_no_body(method: &str, segs: &[&str]) -> bool {
+    matches!(
+        (method, segs),
+        ("POST", ["cloud", "project", _, "user", _, "s3Credentials"])
+            | (
+                "POST",
+                [
+                    "cloud",
+                    "project",
+                    _,
+                    "user",
+                    _,
+                    "s3Credentials",
+                    _,
+                    "secret"
+                ]
+            )
+            | ("POST", ["domain", "zone", _, "refresh"])
+    )
 }
 
 /// The API's 404 for `what`.

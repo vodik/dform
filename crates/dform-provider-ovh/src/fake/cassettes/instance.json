@@ -1,0 +1,40 @@
+{
+  "model": "cloud.instance.Instance",
+  "calls": [
+    "GET /cloud/project/{serviceName}/instance",
+    "POST /cloud/project/{serviceName}/instance",
+    "GET /cloud/project/{serviceName}/instance/{instanceId}",
+    "POST /cloud/project/{serviceName}/instance/{instanceId}/resize"
+  ],
+  "shape": "schema",
+  "observed": [
+    "2026-10-12..14, the user's lab: `ipAddresses` lags an interface attach: the new port's address is missing from it for a while, though GET .../interface has the port at once"
+  ],
+  "guessed": [
+    "the list (GET /instance) embeds `flavor`, `image` and `sshKey` as null, as the create does",
+    "a create answers `ipAddresses` empty while BUILD",
+    "the `networkId` of an address in `ipAddresses` is the OpenStack id of the network (public: its region's Ext-Net)"
+  ],
+  "answer": {
+    "id": "6f8b2c1e-4a1d-4f7e-9d3c-2b1a0e9f8c7d",
+    "name": "k8s-lab-server",
+    "ipAddresses": [
+      {"ip": "51.79.10.20", "type": "public", "version": 4, "networkId": "5f0c7e2a9d1b4c3e8f6a7b0d1e2c3f4a", "gatewayIp": "51.79.10.1"}
+    ],
+    "flavorId": "3b4c5d6e-7f80-4a1b-8c2d-3e4f5a6b7c8d",
+    "imageId": "9a8b7c6d-5e4f-4a3b-2c1d-0e9f8a7b6c5d",
+    "sshKeyId": null,
+    "created": "2026-10-05T18:22:31Z",
+    "region": "ca-east-tor",
+    "monthlyBilling": null,
+    "status": "ACTIVE",
+    "planCode": "b2-7.consumption",
+    "operationIds": [],
+    "currentMonthOutgoingTraffic": null,
+    "rescuePassword": null,
+    "availabilityZone": null,
+    "flavor": null,
+    "image": null,
+    "sshKey": null
+  }
+}

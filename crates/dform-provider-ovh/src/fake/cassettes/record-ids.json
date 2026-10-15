@@ -1,0 +1,6 @@
+{
+  "model": "long[]",
+  "calls": ["GET /domain/zone/{zoneName}/record"],
+  "shape": "schema",
+  "answer": [5123456789]
+}

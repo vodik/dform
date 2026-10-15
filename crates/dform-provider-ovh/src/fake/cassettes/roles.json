@@ -1,0 +1,12 @@
+{
+  "model": "cloud.role.Roles",
+  "calls": ["GET /cloud/project/{serviceName}/role"],
+  "shape": "schema",
+  "guessed": ["a role's `id` and `description`, and its `permissions`"],
+  "answer": {
+    "roles": [
+      {"id": "4a5b6c7d8e", "name": "objectstore_operator", "description": "ObjectStore operator", "permissions": ["objectstore:all"]}
+    ],
+    "services": []
+  }
+}

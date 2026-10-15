@@ -29,9 +29,12 @@ impl World {
             ("POST", ["domain", "zone", z, "record"]) => {
                 self.next += 1;
                 let id = 5_000_000_000 + self.next as i64;
-                let o = json!({"id": id, "zone": z, "subDomain": body["subDomain"],
-                               "fieldType": body["fieldType"], "target": body["target"],
-                               "ttl": body.get("ttl").cloned().unwrap_or(json!(0))});
+                let o = shaped(
+                    "record",
+                    json!({"id": id, "zone": z, "subDomain": body["subDomain"],
+                           "fieldType": body["fieldType"], "target": body["target"],
+                           "ttl": body.get("ttl").cloned().unwrap_or(json!(0))}),
+                );
                 self.records.insert(id, o.clone());
                 (200, o)
             }

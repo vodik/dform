@@ -1,0 +1,31 @@
+{
+  "model": "cloud.StorageContainer",
+  "calls": [
+    "POST /cloud/project/{serviceName}/region/{regionName}/storage",
+    "GET /cloud/project/{serviceName}/region/{regionName}/storage/{name}",
+    "PUT /cloud/project/{serviceName}/region/{regionName}/storage/{name}"
+  ],
+  "shape": "schema",
+  "guessed": [
+    "a create without `ownerId` is owned by the project's first S3 user, and refused with none",
+    "versioning cannot go back to `disabled` once enabled",
+    "a container with objects is refused deletion (409)"
+  ],
+  "answer": {
+    "name": "lab-backups",
+    "region": "BHS",
+    "ownerId": 482913,
+    "objectsCount": 0,
+    "objectsSize": 0,
+    "createdAt": "2026-10-05T18:40:02Z",
+    "arn": "arn:aws:s3:::lab-backups",
+    "virtualHost": "lab-backups.s3.bhs.io.cloud.ovh.net",
+    "versioning": {"status": "disabled"},
+    "encryption": {"sseAlgorithm": "plaintext"},
+    "objectLock": {"status": "disabled"},
+    "replication": null,
+    "lifecycle": null,
+    "tags": {},
+    "objects": []
+  }
+}
