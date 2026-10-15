@@ -733,18 +733,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
             self.print(t);
         }
         if !p.denies.is_empty() {
-            let redact = query::Redactor::new(&p.res.facts, self.backend().schema());
-            self.say(Said::Violations {
-                after: None,
-                refusals: report::refusals(&p.denies, &p.res.rules, &redact),
-            });
-            let at = (tick > 1).then(|| {
-                format!(
-                    "stopped at tick {tick}; ticks 1 to {} were applied",
-                    tick - 1
-                )
-            });
-            return Err(Refused::apply(self.cx.cli.cmd.verb(), 0, p.denies.len(), at).into());
+            return Err(self.denied(p));
         }
         if tick == 1
             && let Some(o) = self.confirm_first(t)?
@@ -768,6 +757,32 @@ impl<'a, 'h> Ticks<'a, 'h> {
         {
             return Ok(Some(o));
         }
+        self.shown(p, addresses);
+        Ok(None)
+    }
+
+    /// The tick's plan `p` refused by its denies, which are said.
+    fn denied(&self, p: &Planned) -> anyhow::Error {
+        let tick = self.tick;
+        let redact = query::Redactor::new(&p.res.facts, self.backend().schema());
+        self.say(Said::Violations {
+            after: None,
+            refusals: report::refusals(&p.denies, &p.res.rules, &redact),
+        });
+        let at = (tick > 1).then(|| {
+            format!(
+                "stopped at tick {tick}; ticks 1 to {} were applied",
+                tick - 1
+            )
+        });
+        Refused::apply(self.cx.cli.cmd.verb(), 0, p.denies.len(), at).into()
+    }
+
+    /// What the tick's plan `p`, of the `addresses` it changes, showed:
+    /// what a later tick's boundary compares with, what it listed, what
+    /// waits on a provider, and the groups it could not name yet.
+    fn shown(&mut self, p: &Planned, addresses: BTreeSet<&address::Address>) {
+        let tick = self.tick;
         if tick == 1 {
             self.scheduled = self
                 .r
@@ -803,7 +818,6 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 })
                 .collect();
         }
-        Ok(None)
     }
 
     /// The policy block under the tick before (R-206): the policies as
@@ -957,74 +971,12 @@ impl<'a, 'h> Ticks<'a, 'h> {
         // A change gone from the tick is said, not asked for: the tick does
         // less than was shown.
         let more = differs.iter().any(|d| d.mark != '-');
-        if new > 0 && self.shown {
-            let unnamed = std::mem::take(&mut self.unnamed);
-            return self
-                .stop(Stopped {
-                    tick: tick - 1,
-                    new,
-                    unnamed,
-                    on_provider: false,
-                    differs: Vec::new(),
-                })
-                .map(Some);
-        }
-        if planned > 0 && self.shown {
-            return self
-                .stop(Stopped {
-                    tick: tick - 1,
-                    new: planned,
-                    unnamed: Vec::new(),
-                    on_provider: true,
-                    differs: Vec::new(),
-                })
-                .map(Some);
-        }
-        if !differs.is_empty() {
-            self.say(Said::Differs {
-                tick,
-                differences: differs.clone(),
-            });
-        }
-        if more && self.shown {
-            let mut names: Vec<String> = Vec::new();
-            for n in differs.iter().map(|d| d.name()) {
-                if !names.contains(&n) {
-                    names.push(n);
-                }
-            }
-            return self
-                .stop(Stopped {
-                    tick: tick - 1,
-                    new: differs.len(),
-                    unnamed: Vec::new(),
-                    on_provider: false,
-                    differs: names,
-                })
-                .map(Some);
+        if let Some(stopped) = self.stopped_before(new, planned, &differs, more) {
+            return self.stop(stopped).map(Some);
         }
         let asked = new + planned > 0 || more;
-        if asked && !self.args.yes {
-            self.still_held()?;
-            // Asked on the tick's header line, `tick 2  1 change   apply?`:
-            // its block's header takes its place.
-            let n = p
-                .plan
-                .actions
-                .iter()
-                .filter(|a| report::progress::is_call(a) && waits_on(a, &p.sections).is_none())
-                .count();
-            if !confirm(
-                &self.teller,
-                n,
-                true,
-                self.args.destroy,
-                self.deployment(),
-                tick,
-            )? {
-                return Ok(Some(declined(self.deployment(), tick)));
-            }
-            self.asked.set(1);
+        if asked && !self.args.yes && !self.asked_again(p)? {
+            return Ok(Some(declined(self.deployment(), tick)));
         }
         // What was asked for (or `--yes` applied) is what the next boundary
         // compares with.
@@ -1035,6 +987,86 @@ impl<'a, 'h> Ticks<'a, 'h> {
             self.shown_delta = by.into_values().collect();
         }
         Ok(None)
+    }
+
+    /// Where a plan file or an approval was shown, the stop before a later
+    /// tick with `new` changes no earlier tick listed, `planned` against a
+    /// provider `later` showed waiting, or changes that `differ` from the
+    /// plan shown (`more`: some the shown plan did not have). What
+    /// differs is said either way.
+    fn stopped_before(
+        &mut self,
+        new: usize,
+        planned: usize,
+        differs: &[zset::file::Difference],
+        more: bool,
+    ) -> Option<Stopped> {
+        let tick = self.tick - 1;
+        if new > 0 && self.shown {
+            return Some(Stopped {
+                tick,
+                new,
+                unnamed: std::mem::take(&mut self.unnamed),
+                on_provider: false,
+                differs: Vec::new(),
+            });
+        }
+        if planned > 0 && self.shown {
+            return Some(Stopped {
+                tick,
+                new: planned,
+                unnamed: Vec::new(),
+                on_provider: true,
+                differs: Vec::new(),
+            });
+        }
+        if !differs.is_empty() {
+            self.say(Said::Differs {
+                tick: self.tick,
+                differences: differs.to_vec(),
+            });
+        }
+        if !(more && self.shown) {
+            return None;
+        }
+        let mut names: Vec<String> = Vec::new();
+        for n in differs.iter().map(|d| d.name()) {
+            if !names.contains(&n) {
+                names.push(n);
+            }
+        }
+        Some(Stopped {
+            tick,
+            new: differs.len(),
+            unnamed: Vec::new(),
+            on_provider: false,
+            differs: names,
+        })
+    }
+
+    /// The later tick `p` asked for again, on its header line, `tick 2  1
+    /// change   apply?` (its block's header takes its place): whether it
+    /// is applied.
+    fn asked_again(&self, p: &Planned) -> Result<bool> {
+        self.still_held()?;
+        let n = p
+            .plan
+            .actions
+            .iter()
+            .filter(|a| report::progress::is_call(a) && waits_on(a, &p.sections).is_none())
+            .count();
+        let yes = confirm(
+            &self.teller,
+            n,
+            true,
+            self.args.destroy,
+            self.deployment(),
+            self.tick,
+        )?;
+        if yes {
+            self.asked.set(1);
+        }
+        Ok(yes)
     }
 
     /// The tick as its boundary re-plans it (`now`), against the tick as
@@ -1282,19 +1314,13 @@ impl<'a, 'h> Ticks<'a, 'h> {
     ) -> Result<executor::Seen> {
         let tick = self.tick;
         let (backend, audit) = (self.backend(), &self.cx.audit);
-        let (plan, res) = (&p.plan, &p.res);
-        let redact = query::Redactor::new(&res.facts, backend.schema());
+        let redact = query::Redactor::new(&p.res.facts, backend.schema());
         let log = ActionLog {
             tick,
             audit,
             redact: &redact,
             diffs: self.diffs(p),
-            forgotten: plan
-                .actions
-                .iter()
-                .filter(|a| matches!(a.kind, ActionKind::Forget))
-                .filter_map(|a| Some((a.addr.clone(), self.st.get(&a.addr)?.remote.clone())))
-                .collect(),
+            forgotten: forgotten(&p.plan, &self.st),
             failed: std::cell::RefCell::new(None),
         };
         let on_action = |a: &crate::provider::Action,
@@ -1333,16 +1359,47 @@ impl<'a, 'h> Ticks<'a, 'h> {
             adopts,
             lifecycle,
             &mut self.st,
-            plan,
+            &p.plan,
             &opts,
         );
         let failed = progress.map(|p| p.finish()).unwrap_or_default();
-        // A failure the block said in full below it is not said again: the
-        // run ends naming what failed (R-109).
-        let applied = match applied {
+        let applied = self.said_below(applied, &failed);
+        for note in backend.take_notes() {
+            self.say(Said::Chaos(note));
+        }
+        if let Some(e) = log.failed.into_inner() {
+            return Err(e);
+        }
+        let checkpoint = self.checkpoint();
+        log_retries(audit, &redact, backend, tick)?;
+        let seen = applied?;
+        checkpoint?;
+        Ok(seen)
+    }
+
+    /// The tick's checkpoint, also of a tick that failed; not of one chaos
+    /// `stop-after` stopped as if dform were killed: its calls' answers
+    /// are in the log alone, and the next run replays them.
+    fn checkpoint(&mut self) -> Result<()> {
+        match self.stop_after.as_ref().is_some_and(|left| left.get() == 0) {
+            true => Ok(()),
+            false => self.persist(),
+        }
+    }
+
+    /// The tick's calls' outcome, `applied`: a failure the block said in
+    /// full below it (the calls that `failed`) is not said again, the run
+    /// ends naming what failed (R-109).
+    fn said_below(
+        &self,
+        applied: Result<executor::Seen>,
+        failed: &[address::Address],
+    ) -> Result<executor::Seen> {
+        match applied {
             Err(e) if !failed.is_empty() && e.is::<report::Failure>() => Err(anyhow::anyhow!(
-                "apply {}: tick {tick} failed: {}",
+                "apply {}: tick {} failed: {}",
                 self.cx.deployment,
+                self.tick,
                 failed
                     .iter()
                     .map(report::address)
@@ -1350,25 +1407,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
                     .join(", ")
             )),
             applied => applied,
-        };
-        for note in backend.take_notes() {
-            self.say(Said::Chaos(note));
         }
-        if let Some(e) = log.failed.into_inner() {
-            return Err(e);
-        }
-        // The tick's checkpoint, also of a tick that failed; not of one
-        // chaos `stop-after` stopped as if dform were killed: its calls'
-        // answers are in the log alone, and the next run replays them.
-        let killed = self.stop_after.as_ref().is_some_and(|left| left.get() == 0);
-        let checkpoint = match killed {
-            true => Ok(()),
-            false => self.persist(),
-        };
-        log_retries(audit, &redact, backend, tick)?;
-        let seen = applied?;
-        checkpoint?;
-        Ok(seen)
     }
 
     /// A digest of each action's redacted diff, as the plan file records
@@ -1937,6 +1976,19 @@ fn waiting_on(
         .cloned()
         .collect();
     deployment::waitable(&on, st, &externs.not_yet())
+}
+
+/// What each forget of `plan` drops from state `st`: its remote id, which
+/// the log keeps.
+fn forgotten(
+    plan: &crate::provider::Plan,
+    st: &state::State,
+) -> BTreeMap<address::Address, String> {
+    plan.actions
+        .iter()
+        .filter(|a| matches!(a.kind, ActionKind::Forget))
+        .filter_map(|a| Some((a.addr.clone(), st.get(&a.addr)?.remote.clone())))
+        .collect()
 }
 
 /// What the nulls `on` a tick waits on are of, joined: `world` (an
