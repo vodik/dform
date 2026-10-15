@@ -366,133 +366,133 @@ pub fn reference(addr: &Address) -> Value {
     }
 }
 
-impl Lifecycle {
-    /// The lifecycle facts, checked against the schema: a `create_first`
-    /// on a `type_replace(T, destroy_first)` type, or on one whose name is
-    /// its identity and whose provider cannot generate one, is an error
-    /// naming the resource. A flag on a copy (R-67) is on each of its
-    /// resources.
-    pub fn from_facts<'a>(
-        facts: impl IntoIterator<Item = &'a Atom>,
-        schema: &Schema,
-    ) -> Result<Lifecycle> {
-        let facts: Vec<&Atom> = facts.into_iter().collect();
-        let mut out = Lifecycle {
-            assertions: provider_assertions(&facts, schema)?,
-            ..Lifecycle::default()
-        };
-        let text = |t: &Term| match t {
-            Term::Val(Value::Str(s)) => Some(s.clone()),
-            _ => None,
-        };
-        let instances = Instances::from_facts(facts.iter().copied());
-        let wants: Vec<Address> = facts
-            .iter()
-            .filter_map(|f| match (f.pred.as_str(), f.args.as_slice()) {
-                ("want", [t, a]) => Some(Address {
-                    typ: text(t)?,
-                    name: text(a)?,
-                }),
-                _ => None,
-            })
-            .collect();
-        // A copy's resources, or the resource itself.
-        let each = |addr: Address| match instances.is_instance(&addr) {
-            true => instances.members(&addr, &wants),
+/// A term's text, when it is a string.
+fn text(t: &Term) -> Option<String> {
+    match t {
+        Term::Val(Value::Str(s)) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+/// The lifecycle facts being read ([`Lifecycle::from_facts`]): the
+/// lifecycle so far, the copies (`instances`) and the resources the
+/// program wants, and what each object's removal means, by the rows that
+/// say it.
+struct Reading<'s> {
+    out: Lifecycle,
+    schema: &'s Schema,
+    instances: Instances,
+    wants: Vec<Address>,
+    removal: BTreeMap<Address, BTreeSet<String>>,
+}
+
+impl Reading<'_> {
+    /// A copy's resources, or the resource itself.
+    fn each(&self, addr: Address) -> Vec<Address> {
+        match self.instances.is_instance(&addr) {
+            true => self.instances.members(&addr, &self.wants),
             false => vec![addr],
-        };
-        // What each object's removal means, by the rows that say it.
-        let mut removal: BTreeMap<Address, BTreeSet<String>> = BTreeMap::new();
-        for f in facts {
-            match (f.pred.as_str(), f.args.as_slice()) {
-                ("lifecycle", [r, what, path]) => {
-                    let Some(addr) = referenced(r) else {
-                        bail!(
-                            "{}: lifecycle takes the resource first, as its name in scope, \
-                             `T[\"a\"]` or a variable (R-42)",
-                            crate::spell::atom(f)
-                        );
-                    };
-                    let (Some(what), Some(path)) = (text(what), text(path)) else {
-                        bail!(
-                            "{}: an attribute's lifecycle is a word and its path, \
-                             lifecycle({addr}, \"bootstrap\", \"user_data\")",
-                            crate::spell::atom(f)
-                        );
-                    };
-                    let how = match what.as_str() {
-                        "bootstrap" => AtCreate::Bootstrap,
-                        other => bail!(
-                            "lifecycle({addr}, {other:?}, {path:?}): unknown word for an \
-                             attribute (expected bootstrap)"
-                        ),
-                    };
-                    for addr in each(addr) {
-                        out.given_at_create(addr, &path, how)?;
-                    }
-                }
-                ("lifecycle", [r, what]) => {
-                    let (Some(addr), Some(what)) = (referenced(r), text(what)) else {
-                        bail!("lifecycle expects a resource and a flag, got {f:?}");
-                    };
-                    match what.as_str() {
-                        // `prevent_destroy` a deny the evaluator derives
-                        // (`POLICY_RULES`); a copy's: each of its
-                        // resources it still has; an address the program
-                        // no longer makes, itself.
-                        w if REMOVAL.contains(&w) => {
-                            for addr in each(addr) {
-                                removal.entry(addr).or_default().insert(what.clone());
-                            }
-                        }
-                        "create_first" => {
-                            // On a copy: each of its resources whose type
-                            // allows it.
-                            let copy = instances.is_instance(&addr);
-                            for addr in each(addr) {
-                                let refused = create_first_refused(schema, &addr);
-                                if copy && refused.is_some() {
-                                    continue;
-                                }
-                                if let Some(why) = refused {
-                                    bail!("{why}");
-                                }
-                                out.created_first.insert(addr);
-                            }
-                        }
-                        "bootstrap" => bail!(
-                            "lifecycle({addr}, \"bootstrap\"): bootstrap is said of an \
-                             attribute; name it, lifecycle({addr}, \"bootstrap\", \"user_data\")"
-                        ),
-                        other => bail!(
-                            "lifecycle({addr}, {other}): unknown flag \
-                             (expected prevent_destroy, create_first, retain or destroy)"
-                        ),
-                    }
-                }
-                ("moved", [typ, old, new]) => {
-                    let (Some(typ), Some(old), Some(new)) = (text(typ), text(old), referenced(new))
-                    else {
-                        bail!("moved expects a type, the old address and a resource, got {f:?}");
-                    };
-                    if new.typ != typ {
-                        bail!("moved({typ}, {old:?}, {new}): {new} is not a {typ}");
-                    }
-                    out.moved.push((Address { typ, name: old }, new));
-                }
-                ("ignore_changes", [r, path]) => {
-                    let (Some(addr), Some(path)) = (referenced(r), text(path)) else {
-                        bail!("ignore_changes expects a resource and a path, got {f:?}");
-                    };
-                    for addr in each(addr) {
-                        out.given_at_create(addr, &path, AtCreate::Ignored)?;
-                    }
-                }
-                _ => {}
-            }
         }
-        out.seeded = schema.lifecycle.clone();
-        for (addr, words) in removal {
+    }
+
+    /// `lifecycle(r, what, path)`, the row `f`: an attribute's lifecycle.
+    fn attribute(&mut self, f: &Atom, r: &Term, what: &Term, path: &Term) -> Result<()> {
+        let Some(addr) = referenced(r) else {
+            bail!(
+                "{}: lifecycle takes the resource first, as its name in scope, \
+                 `T[\"a\"]` or a variable (R-42)",
+                crate::spell::atom(f)
+            );
+        };
+        let (Some(what), Some(path)) = (text(what), text(path)) else {
+            bail!(
+                "{}: an attribute's lifecycle is a word and its path, \
+                 lifecycle({addr}, \"bootstrap\", \"user_data\")",
+                crate::spell::atom(f)
+            );
+        };
+        let how = match what.as_str() {
+            "bootstrap" => AtCreate::Bootstrap,
+            other => bail!(
+                "lifecycle({addr}, {other:?}, {path:?}): unknown word for an \
+                 attribute (expected bootstrap)"
+            ),
+        };
+        for addr in self.each(addr) {
+            self.out.given_at_create(addr, &path, how)?;
+        }
+        Ok(())
+    }
+
+    /// `lifecycle(r, what)`, the row `f`: a resource's flag.
+    fn flag(&mut self, f: &Atom, r: &Term, what: &Term) -> Result<()> {
+        let (Some(addr), Some(what)) = (referenced(r), text(what)) else {
+            bail!("lifecycle expects a resource and a flag, got {f:?}");
+        };
+        match what.as_str() {
+            // `prevent_destroy` a deny the evaluator derives
+            // (`POLICY_RULES`); a copy's: each of its resources it still
+            // has; an address the program no longer makes, itself.
+            w if REMOVAL.contains(&w) => {
+                for addr in self.each(addr) {
+                    self.removal.entry(addr).or_default().insert(what.clone());
+                }
+            }
+            "create_first" => {
+                // On a copy: each of its resources whose type allows it.
+                let copy = self.instances.is_instance(&addr);
+                for addr in self.each(addr) {
+                    let refused = create_first_refused(self.schema, &addr);
+                    if copy && refused.is_some() {
+                        continue;
+                    }
+                    if let Some(why) = refused {
+                        bail!("{why}");
+                    }
+                    self.out.created_first.insert(addr);
+                }
+            }
+            "bootstrap" => bail!(
+                "lifecycle({addr}, \"bootstrap\"): bootstrap is said of an \
+                 attribute; name it, lifecycle({addr}, \"bootstrap\", \"user_data\")"
+            ),
+            other => bail!(
+                "lifecycle({addr}, {other}): unknown flag \
+                 (expected prevent_destroy, create_first, retain or destroy)"
+            ),
+        }
+        Ok(())
+    }
+
+    /// `moved(typ, old, new)`, the row `f`.
+    fn moved(&mut self, f: &Atom, typ: &Term, old: &Term, new: &Term) -> Result<()> {
+        let (Some(typ), Some(old), Some(new)) = (text(typ), text(old), referenced(new)) else {
+            bail!("moved expects a type, the old address and a resource, got {f:?}");
+        };
+        if new.typ != typ {
+            bail!("moved({typ}, {old:?}, {new}): {new} is not a {typ}");
+        }
+        self.out.moved.push((Address { typ, name: old }, new));
+        Ok(())
+    }
+
+    /// `ignore_changes(r, path)`, the row `f`.
+    fn ignored(&mut self, f: &Atom, r: &Term, path: &Term) -> Result<()> {
+        let (Some(addr), Some(path)) = (referenced(r), text(path)) else {
+            bail!("ignore_changes expects a resource and a path, got {f:?}");
+        };
+        for addr in self.each(addr) {
+            self.out.given_at_create(addr, &path, AtCreate::Ignored)?;
+        }
+        Ok(())
+    }
+
+    /// The lifecycle read: the schema's seeded lifecycles, and what each
+    /// object's removal means, one word each.
+    fn into_result(self) -> Result<Lifecycle> {
+        let mut out = self.out;
+        out.seeded = self.schema.lifecycle.clone();
+        for (addr, words) in self.removal {
             // A delete of it would be two things at once: which is meant
             // is the program's to say.
             if let [a, b, ..] = words.iter().collect::<Vec<_>>().as_slice() {
@@ -509,6 +509,49 @@ impl Lifecycle {
             out.said.insert(addr);
         }
         Ok(out)
+    }
+}
+
+impl Lifecycle {
+    /// The lifecycle facts, checked against the schema: a `create_first`
+    /// on a `type_replace(T, destroy_first)` type, or on one whose name is
+    /// its identity and whose provider cannot generate one, is an error
+    /// naming the resource. A flag on a copy (R-67) is on each of its
+    /// resources.
+    pub fn from_facts<'a>(
+        facts: impl IntoIterator<Item = &'a Atom>,
+        schema: &Schema,
+    ) -> Result<Lifecycle> {
+        let facts: Vec<&Atom> = facts.into_iter().collect();
+        let mut r = Reading {
+            out: Lifecycle {
+                assertions: provider_assertions(&facts, schema)?,
+                ..Lifecycle::default()
+            },
+            schema,
+            instances: Instances::from_facts(facts.iter().copied()),
+            wants: facts
+                .iter()
+                .filter_map(|f| match (f.pred.as_str(), f.args.as_slice()) {
+                    ("want", [t, a]) => Some(Address {
+                        typ: text(t)?,
+                        name: text(a)?,
+                    }),
+                    _ => None,
+                })
+                .collect(),
+            removal: BTreeMap::new(),
+        };
+        for f in facts {
+            match (f.pred.as_str(), f.args.as_slice()) {
+                ("lifecycle", [res, what, path]) => r.attribute(f, res, what, path)?,
+                ("lifecycle", [res, what]) => r.flag(f, res, what)?,
+                ("moved", [typ, old, new]) => r.moved(f, typ, old, new)?,
+                ("ignore_changes", [res, path]) => r.ignored(f, res, path)?,
+                _ => {}
+            }
+        }
+        r.into_result()
     }
 
     /// Whether a delete of `addr` forgets it (R-154): a row says `retain`,
@@ -1714,6 +1757,124 @@ pub mod file {
         pub stack_outputs: Vec<OutputsDigest>,
     }
 
+    impl Inputs {
+        /// The program's files and the `--input-file`s that differ from
+        /// `now`'s.
+        fn files_differ(&self, now: &Inputs) -> Vec<String> {
+            let digests = |fs: &[FileDigest]| -> BTreeMap<String, String> {
+                fs.iter()
+                    .map(|f| (f.path.clone(), f.fnv64.clone()))
+                    .collect()
+            };
+            let keyed = |fs: &[KeyedDigest]| -> BTreeMap<String, String> {
+                fs.iter()
+                    .map(|f| (f.path.clone(), f.digest.clone()))
+                    .collect()
+            };
+            let mut out = Vec::new();
+            for (what, a, b) in [
+                ("program", digests(&self.files), digests(&now.files)),
+                (
+                    "--input-file",
+                    keyed(&self.input_files),
+                    keyed(&now.input_files),
+                ),
+            ] {
+                for (p, h) in &a {
+                    match b.get(p) {
+                        None => out.push(format!("{what} {p}: in the plan file, not given now")),
+                        Some(h2) if h2 != h => {
+                            out.push(format!("{what} {p}: changed since the plan"))
+                        }
+                        _ => {}
+                    }
+                }
+                for p in b.keys().filter(|p| !a.contains_key(*p)) {
+                    out.push(format!("{what} {p}: given now, not in the plan file"));
+                }
+            }
+            out
+        }
+
+        /// The flags (`--set`, `--data`, `--provider`, `--world`,
+        /// `--inventory`) that differ from `now`'s.
+        fn flags_differ(&self, now: &Inputs) -> Vec<String> {
+            let set = |xs: &[Json]| -> String {
+                xs.iter()
+                    .map(|x| match x {
+                        Json::String(s) => s.clone(),
+                        x => x.to_string(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            let opt = |o: &Option<String>| o.clone().unwrap_or_default();
+            [
+                ("set", set(&self.set), set(&now.set)),
+                ("data", self.data.join(" "), now.data.join(" ")),
+                (
+                    "provider",
+                    self.providers.join(" "),
+                    now.providers.join(" "),
+                ),
+                ("world", opt(&self.world), opt(&now.world)),
+                ("inventory", opt(&self.inventory), opt(&now.inventory)),
+            ]
+            .into_iter()
+            .filter(|(_, x, y)| x != y)
+            .map(|(name, x, y)| format!("--{name}: the plan file has [{x}], now [{y}]"))
+            .collect()
+        }
+
+        /// The `env_var`s the plan read, by label and keyed digest, that
+        /// differ from `now`'s.
+        fn env_differs(&self, now: &Inputs) -> Vec<String> {
+            let env = |xs: &[Json]| -> BTreeMap<String, Json> {
+                xs.iter()
+                    .filter_map(|x| {
+                        Some((
+                            x.get("sensitive")?.as_str()?.to_string(),
+                            x["digest"].clone(),
+                        ))
+                    })
+                    .collect()
+            };
+            let now_env = env(&now.env);
+            env(&self.env)
+                .into_iter()
+                .filter_map(|(label, digest)| match now_env.get(&label) {
+                    None => Some(format!("{label}: in the plan file, not set now")),
+                    Some(d) if *d != digest => Some(format!("{label}: changed since the plan")),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// The other deployments' outputs the plan read that differ from
+        /// what `now` read.
+        fn outputs_differ(&self, now: &Inputs) -> Vec<String> {
+            let outputs = |xs: &[OutputsDigest]| -> BTreeMap<String, String> {
+                xs.iter()
+                    .map(|o| (o.deployment.clone(), o.digest.clone()))
+                    .collect()
+            };
+            let now_outputs = outputs(&now.stack_outputs);
+            outputs(&self.stack_outputs)
+                .into_iter()
+                .filter_map(|(d, digest)| match now_outputs.get(&d) {
+                    None => Some(format!(
+                        "the outputs of {d}: the plan read them, this run does not"
+                    )),
+                    Some(n) if *n != digest => Some(format!(
+                        "the outputs of {d}: published again with other values since the plan \
+                         ({digest} -> {n})"
+                    )),
+                    _ => None,
+                })
+                .collect()
+        }
+    }
+
     /// A deployment's published outputs as a plan read them.
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub struct OutputsDigest {
@@ -1988,96 +2149,13 @@ pub mod file {
         /// What differs between the inputs the file records and `now`.
         pub fn input_differences(&self, now: &Inputs) -> Vec<String> {
             let was = &self.inputs;
-            let mut out = Vec::new();
-            let digests = |fs: &[FileDigest]| -> BTreeMap<String, String> {
-                fs.iter()
-                    .map(|f| (f.path.clone(), f.fnv64.clone()))
-                    .collect()
-            };
-            let keyed = |fs: &[KeyedDigest]| -> BTreeMap<String, String> {
-                fs.iter()
-                    .map(|f| (f.path.clone(), f.digest.clone()))
-                    .collect()
-            };
-            for (what, a, b) in [
-                ("program", digests(&was.files), digests(&now.files)),
-                (
-                    "--input-file",
-                    keyed(&was.input_files),
-                    keyed(&now.input_files),
-                ),
-            ] {
-                for (p, h) in &a {
-                    match b.get(p) {
-                        None => out.push(format!("{what} {p}: in the plan file, not given now")),
-                        Some(h2) if h2 != h => {
-                            out.push(format!("{what} {p}: changed since the plan"))
-                        }
-                        _ => {}
-                    }
-                }
-                for p in b.keys().filter(|p| !a.contains_key(*p)) {
-                    out.push(format!("{what} {p}: given now, not in the plan file"));
-                }
-            }
-            let mut flag = |name: &str, x: String, y: String| {
-                if x != y {
-                    out.push(format!("--{name}: the plan file has [{x}], now [{y}]"));
-                }
-            };
-            let set = |xs: &[Json]| -> String {
-                xs.iter()
-                    .map(|x| match x {
-                        Json::String(s) => s.clone(),
-                        x => x.to_string(),
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            };
-            flag("set", set(&was.set), set(&now.set));
-            flag("data", was.data.join(" "), now.data.join(" "));
-            flag("provider", was.providers.join(" "), now.providers.join(" "));
-            let opt = |o: &Option<String>| o.clone().unwrap_or_default();
-            flag("world", opt(&was.world), opt(&now.world));
-            flag("inventory", opt(&was.inventory), opt(&now.inventory));
-            // An `env_var` the plan read, by its label and keyed digest.
-            let env = |xs: &[Json]| -> BTreeMap<String, Json> {
-                xs.iter()
-                    .filter_map(|x| {
-                        Some((
-                            x.get("sensitive")?.as_str()?.to_string(),
-                            x["digest"].clone(),
-                        ))
-                    })
-                    .collect()
-            };
-            let now_env = env(&now.env);
-            for (label, digest) in env(&was.env) {
-                match now_env.get(&label) {
-                    None => out.push(format!("{label}: in the plan file, not set now")),
-                    Some(d) if *d != digest => out.push(format!("{label}: changed since the plan")),
-                    _ => {}
-                }
-            }
-            let outputs = |xs: &[OutputsDigest]| -> BTreeMap<String, String> {
-                xs.iter()
-                    .map(|o| (o.deployment.clone(), o.digest.clone()))
-                    .collect()
-            };
-            let now_outputs = outputs(&now.stack_outputs);
-            for (d, digest) in outputs(&was.stack_outputs) {
-                match now_outputs.get(&d) {
-                    None => out.push(format!(
-                        "the outputs of {d}: the plan read them, this run does not"
-                    )),
-                    Some(n) if *n != digest => out.push(format!(
-                        "the outputs of {d}: published again with other values since the plan \
-                         ({digest} -> {n})"
-                    )),
-                    _ => {}
-                }
-            }
-            out
+            [
+                was.files_differ(now),
+                was.flags_differ(now),
+                was.env_differs(now),
+                was.outputs_differ(now),
+            ]
+            .concat()
         }
 
         /// The plan digest: sha256 over the canonical JSON (sorted keys,
@@ -2201,119 +2279,148 @@ pub mod file {
         ran: &std::collections::BTreeSet<(String, String)>,
         key: Option<&Key>,
     ) -> Vec<Difference> {
-        let digest = |v: &Json| key.map(|k| k.digest(&serde_json::to_vec(v).unwrap_or_default()));
-        let held = |v: &Json| v.get("digest").and_then(Json::as_str).map(str::to_string);
-        let same = |was: &Json, is: &Json| {
-            was == is
-                || match (sensitive(was), sensitive(is)) {
-                    (false, true) => held(is).is_some_and(|d| digest(was) == Some(d)),
-                    (true, false) => held(was).is_some_and(|d| digest(is) == Some(d)),
-                    _ => false,
-                }
-        };
-        // Either side a secret: both said as one.
-        let pair = |was: &Json, is: &Json| match sensitive(was) || sensitive(is) {
-            true => (sensitive_text(was), sensitive_text(is)),
-            false => (leaf_text(was), leaf_text(is)),
-        };
-        let key = |e: &Entry| (e.typ.clone(), e.name.clone());
-        let shown: BTreeMap<(String, String), &Entry> = shown.iter().map(|e| (key(e), e)).collect();
-        let now: BTreeMap<(String, String), &Entry> = now.iter().map(|e| (key(e), e)).collect();
-        let address = |k: &(String, String)| crate::address::Address {
-            typ: k.0.clone(),
-            name: k.1.clone(),
-        };
-        let mut out = Vec::new();
-        let mut push = |mark: char, k: &(String, String), path: Option<String>, what: String| {
-            out.push(Difference {
-                mark,
-                addr: address(k),
-                path,
-                what,
-            })
+        let (shown, now) = (by_address(shown), by_address(now));
+        let mut d = Differences {
+            key,
+            out: Vec::new(),
         };
         for (k, c) in now.iter().filter(|(_, c)| c.tick == Some(tick)) {
-            let s = shown.get(k);
-            // The object a create-first replacement deposed is
-            // deleted the tick after; the plan showed it so.
-            if c.action == "delete_deposed" && s.is_some_and(|s| s.action == "replace_create_first")
-            {
-                continue;
-            }
-            let Some(s) = s else {
-                push('+', k, None, format!("{}, not in the plan shown", c.action));
-                continue;
-            };
-            if ran.contains(k) {
-                let when = match s.tick {
-                    Some(t) => format!("tick {t}"),
-                    None => "an earlier tick".into(),
-                };
-                push(
-                    '+',
-                    k,
-                    None,
-                    format!("{} again; it ran in {when}", c.action),
-                );
-                continue;
-            }
-            if s.action != c.action {
-                push(
-                    '~',
-                    k,
-                    None,
-                    format!("{}, the plan shown has {}", c.action, s.action),
-                );
-                continue;
-            }
-            let was: BTreeMap<&str, &Leaf> =
-                s.changes.iter().map(|l| (l.path.as_str(), l)).collect();
-            let is: BTreeMap<&str, &Leaf> =
-                c.changes.iter().map(|l| (l.path.as_str(), l)).collect();
-            for (p, l) in &is {
-                let leaf = Some(p.to_string());
-                match was.get(p) {
-                    None if is_null(&l.after) => {}
-                    None => push(
-                        '~',
-                        k,
-                        leaf,
-                        format!("{p} = {}  (not in the plan shown)", leaf_text(&l.after)),
-                    ),
-                    Some(w) if !is_null(&w.after) && !same(&w.after, &l.after) => {
-                        let (a, b) = pair(&w.after, &l.after);
-                        push('~', k, leaf, format!("{p} = {a} → {b}"))
-                    }
-                    Some(w) if !same(&w.before, &l.before) => {
-                        let (a, b) = pair(&w.before, &l.before);
-                        push(
-                            '~',
-                            k,
-                            leaf,
-                            format!("{p} was {a} in the plan shown, is {b} now"),
-                        )
-                    }
-                    Some(_) => {}
-                }
-            }
-            for (p, w) in was.iter().filter(|(p, _)| !is.contains_key(*p)) {
-                push(
-                    '~',
-                    k,
-                    Some(p.to_string()),
-                    format!("{p} = {}  (no longer changed)", leaf_text(&w.after)),
-                );
-            }
+            d.entry(k, shown.get(k).copied(), c, ran);
         }
         // A change still to come, in a later tick or `later`, waits on
         // what this boundary did not make known yet: a wait, not a
         // difference.
         for (k, s) in shown.iter().filter(|(_, s)| s.tick == Some(tick)) {
             if !ran.contains(k) && !now.contains_key(k) {
-                push('-', k, None, format!("{}, no longer a change", s.action));
+                d.push('-', k, None, format!("{}, no longer a change", s.action));
             }
         }
-        out
+        d.out
+    }
+
+    /// The differences of a tick from the plan shown, as they are found
+    /// ([`tick_differences`]); `key` digests a value to compare with a
+    /// secret's digest.
+    struct Differences<'k> {
+        key: Option<&'k Key>,
+        out: Vec<Difference>,
+    }
+
+    impl Differences<'_> {
+        fn push(&mut self, mark: char, k: &(String, String), path: Option<String>, what: String) {
+            self.out.push(Difference {
+                mark,
+                addr: crate::address::Address {
+                    typ: k.0.clone(),
+                    name: k.1.clone(),
+                },
+                path,
+                what,
+            })
+        }
+
+        /// Whether a leaf's value `was` is `is`: equal, or a secret's
+        /// digest of the other.
+        fn same(&self, was: &Json, is: &Json) -> bool {
+            let digest = |v: &Json| {
+                self.key
+                    .map(|k| k.digest(&serde_json::to_vec(v).unwrap_or_default()))
+            };
+            was == is
+                || match (sensitive(was), sensitive(is)) {
+                    (false, true) => held(is).is_some_and(|d| digest(was) == Some(d)),
+                    (true, false) => held(was).is_some_and(|d| digest(is) == Some(d)),
+                    _ => false,
+                }
+        }
+
+        /// The change `c` of the address `k` the tick has now, against
+        /// the one the plan shown had (`s`), `ran` the changes earlier
+        /// ticks ran.
+        fn entry(
+            &mut self,
+            k: &(String, String),
+            s: Option<&Entry>,
+            c: &Entry,
+            ran: &std::collections::BTreeSet<(String, String)>,
+        ) {
+            // The object a create-first replacement deposed is
+            // deleted the tick after; the plan showed it so.
+            if c.action == "delete_deposed" && s.is_some_and(|s| s.action == "replace_create_first")
+            {
+                return;
+            }
+            let Some(s) = s else {
+                self.push('+', k, None, format!("{}, not in the plan shown", c.action));
+                return;
+            };
+            if ran.contains(k) {
+                let when = match s.tick {
+                    Some(t) => format!("tick {t}"),
+                    None => "an earlier tick".into(),
+                };
+                let what = format!("{} again; it ran in {when}", c.action);
+                self.push('+', k, None, what);
+                return;
+            }
+            if s.action != c.action {
+                let what = format!("{}, the plan shown has {}", c.action, s.action);
+                self.push('~', k, None, what);
+                return;
+            }
+            self.leaves(k, s, c);
+        }
+
+        /// The leaves of the change `c` of `k` against the plan shown's,
+        /// `s`, the same action.
+        fn leaves(&mut self, k: &(String, String), s: &Entry, c: &Entry) {
+            let was: BTreeMap<&str, &Leaf> =
+                s.changes.iter().map(|l| (l.path.as_str(), l)).collect();
+            let is: BTreeMap<&str, &Leaf> =
+                c.changes.iter().map(|l| (l.path.as_str(), l)).collect();
+            for (p, l) in &is {
+                let leaf = Some(p.to_string());
+                let what = match was.get(p) {
+                    None if is_null(&l.after) => continue,
+                    None => format!("{p} = {}  (not in the plan shown)", leaf_text(&l.after)),
+                    Some(w) if !is_null(&w.after) && !self.same(&w.after, &l.after) => {
+                        let (a, b) = pair(&w.after, &l.after);
+                        format!("{p} = {a} → {b}")
+                    }
+                    Some(w) if !self.same(&w.before, &l.before) => {
+                        let (a, b) = pair(&w.before, &l.before);
+                        format!("{p} was {a} in the plan shown, is {b} now")
+                    }
+                    Some(_) => continue,
+                };
+                self.push('~', k, leaf, what);
+            }
+            for (p, w) in was.iter().filter(|(p, _)| !is.contains_key(*p)) {
+                let what = format!("{p} = {}  (no longer changed)", leaf_text(&w.after));
+                self.push('~', k, Some(p.to_string()), what);
+            }
+        }
+    }
+
+    /// The entries `es` by their address.
+    fn by_address(es: &[Entry]) -> BTreeMap<(String, String), &Entry> {
+        es.iter()
+            .map(|e| ((e.typ.clone(), e.name.clone()), e))
+            .collect()
+    }
+
+    /// The digest a secret's leaf holds.
+    fn held(v: &Json) -> Option<String> {
+        v.get("digest").and_then(Json::as_str).map(str::to_string)
+    }
+
+    /// A leaf's two values as a difference says them: either side a
+    /// secret, both said as one.
+    fn pair(was: &Json, is: &Json) -> (String, String) {
+        match sensitive(was) || sensitive(is) {
+            true => (sensitive_text(was), sensitive_text(is)),
+            false => (leaf_text(was), leaf_text(is)),
+        }
     }
 
     fn sensitive(v: &Json) -> bool {
