@@ -362,6 +362,24 @@ impl Names {
             .collect();
         Names { map }
     }
+
+    /// The names a copy keeps private: every relation its statements
+    /// define, its inputs and their refinements, and the relations it
+    /// takes (their rows are its user's).
+    fn of_copy(scope: &str, iface: &Interface, stmts: &[Stmt]) -> Names {
+        let mut defined = BTreeMap::new();
+        defined_preds(stmts, &mut defined);
+        for i in &iface.inputs {
+            defined.insert(i.name.clone(), (1, i.span));
+            for l in crate::inputs::leaves(i) {
+                defined.insert(refine_pred(&l.name), (1, i.span));
+            }
+        }
+        for e in &iface.relations {
+            defined.insert(e.pred.clone(), (e.arity, e.span));
+        }
+        Names::private(scope, defined)
+    }
 }
 
 /// `p` private to `scope`: `scope::p`, or `scope.inner::p` for a name
@@ -482,68 +500,8 @@ fn check_types(who: &str, inputs: &[InputDecl], diags: &mut Vec<Diagnostic>) {
 }
 
 pub fn expand(program: &Program) -> Result<Expanded> {
-    let mut cx = Cx {
-        defs: definitions(&program.statements),
-        diags: Vec::new(),
-        declared: Vec::new(),
-        secret_outputs: Vec::new(),
-        output_types: BTreeMap::new(),
-        private: BTreeMap::new(),
-        expanding: Vec::new(),
-        checked: BTreeSet::new(),
-        flat: BTreeSet::from([String::new()]),
-        named: 0,
-        inputs_here: vec![
-            program
-                .statements
-                .iter()
-                .filter_map(|s| match s {
-                    Stmt::Input(i) => Some(i.name.clone()),
-                    _ => None,
-                })
-                .collect(),
-        ],
-    };
-    let mut out = exclusive_copies(&program.statements);
-    for s in &program.statements {
-        match s {
-            // The stack's own input: read as `k(V)`, given by `--set` (an
-            // `input(k, V)` fact) at the normal rank.
-            Stmt::Input(i) => {
-                check_types("stack", std::slice::from_ref(i), &mut cx.diags);
-                out.extend(input_reader("", i, &|p: &str| p.to_string()));
-                out.extend(given_rules("", "", i));
-                for leaf in crate::inputs::leaves(i) {
-                    out.extend(refinement(&leaf, ""));
-                    let address = Some(leaf.name.clone());
-                    cx.declared.push(Declared::new("", leaf, address, false));
-                }
-            }
-            // The stack's own relation, exported: published as its rows.
-            Stmt::Output(o) if o.relation.is_some() => out.push(published_rows(o)),
-            // The stack's own output: `output(k, V)` in the root scope.
-            Stmt::Output(o) if o.value.is_none() => {
-                cx.secret_outputs
-                    .extend(secret_paths(o).into_iter().map(|k| (String::new(), k)));
-                if let Some(t) = &o.ty {
-                    cx.output_types
-                        .insert((String::new(), o.name.clone()), t.clone());
-                }
-            }
-            Stmt::Output(o) => out.push(fact_or_rule(
-                atom(
-                    "output",
-                    vec![str_term(&o.name), o.value.clone().unwrap()],
-                    o.span,
-                ),
-                Vec::new(),
-            )),
-            Stmt::Use(u) => out.extend(cx.instance(u, "", true)),
-            Stmt::Instance(u) => out.extend(cx.instance(u, "", false)),
-            Stmt::Module(_) => {}
-            other => out.push(other.clone()),
-        }
-    }
+    let mut cx = Cx::new(program);
+    let out = cx.stack(&program.statements);
     // The program's own `let`s; what a component reads of the program's
     // values and relations (R-186).
     let stack = lexical::Lexical {
@@ -554,12 +512,30 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         .into_iter()
         .map(|s| stack.stmt(s))
         .collect();
-    // `instance_of` (and a copy's private one) is a fact for a copy with
-    // no clause and a rule for one with, and `secret_cell` a fact of a
-    // secret `let` and a rule of a copy named by its clause (R-191),
-    // which takes its scope's: both, by design.
+    expanded.extend(mixed(&expanded));
+    cx.private_reads(&expanded);
+    cx.givings(&expanded);
+    // What a `set`, a `use` block or a copy gives a typed input is read as
+    // its type (R-31, R-134): a literal now, a computed value at run time.
+    for s in &mut expanded {
+        if let Stmt::Fact(h) | Stmt::Rule(RuleStmt { head: h, .. }) = s {
+            read_input(h, &cx.declared);
+        }
+    }
+    let expanded = expanded.into_iter().map(unmark_stmt).collect::<Vec<_>>();
+    cx.finish(Program {
+        statements: expanded,
+        stack: program.stack.clone(),
+    })
+}
+
+/// `instance_of` (and a copy's private one) is a fact for a copy with no
+/// clause and a rule for one with, and `secret_cell` a fact of a secret
+/// `let` and a rule of a copy named by its clause (R-191), which takes
+/// its scope's: both, by design.
+fn mixed(stmts: &[Stmt]) -> Vec<Stmt> {
     let mut mixed = BTreeMap::new();
-    for s in &expanded {
+    for s in stmts {
         match s {
             Stmt::Fact(a) | Stmt::Rule(RuleStmt { head: a, .. }) if a.pred == INSTANCE_OF => {
                 mixed.entry(a.pred.clone()).or_insert(a.span);
@@ -570,61 +546,183 @@ pub fn expand(program: &Program) -> Result<Expanded> {
             _ => {}
         }
     }
-    expanded.extend(mixed.into_iter().map(|(pred, span)| {
-        Stmt::Mixed(crate::ast::Extern {
-            pred,
-            arity: 3,
-            span,
+    mixed
+        .into_iter()
+        .map(|(pred, span)| {
+            Stmt::Mixed(crate::ast::Extern {
+                pred,
+                arity: 3,
+                span,
+            })
         })
-    }));
+        .collect()
+}
 
-    // A read of a name only a module or a component defines: say it is
-    // private.
-    let mut defined = BTreeMap::new();
-    defined_preds(&expanded, &mut defined);
-    let externs: BTreeSet<&str> = expanded
-        .iter()
-        .filter_map(|s| match s {
-            Stmt::Extern(e) => Some(e.pred.as_str()),
-            _ => None,
-        })
-        .collect();
-    let mut reads = Vec::new();
-    for s in &expanded {
-        body_atoms(s, &mut reads);
+/// The addresses a `set` may give (R-54, R-38): every input the stack
+/// addresses, each object an object input holds, and the scopes they are
+/// declared in.
+struct Settable {
+    paths: BTreeSet<String>,
+    scopes: BTreeSet<String>,
+}
+
+impl Settable {
+    fn of(declared: &[Declared]) -> Settable {
+        let mut paths = BTreeSet::new();
+        let mut scopes = BTreeSet::new();
+        for d in declared {
+            let Some(a) = &d.address else { continue };
+            let base = &a[..a.len() - d.decl.name.len()];
+            paths.insert(a.clone());
+            scopes.insert(d.scope.clone());
+            for (i, _) in d.decl.name.match_indices('.') {
+                paths.insert(format!("{base}{}", &d.decl.name[..i]));
+            }
+        }
+        Settable { paths, scopes }
     }
-    for a in reads {
-        if let Some((owner, help)) = cx.private.get(&a.pred)
-            && !defined.contains_key(&a.pred)
-            && !externs.contains(a.pred.as_str())
+
+    /// The error of a `set` of `address` the stack does not address.
+    fn unknown(&self, what: &str, address: &str, span: Span) -> Option<Diagnostic> {
+        if self.paths.is_empty() || self.paths.contains(address) {
+            return None;
+        }
+        let msg = match address
+            .rsplit_once('.')
+            .filter(|(o, _)| self.paths.contains(*o))
         {
-            let d = Diagnostic::error(a.span, format!("{} is private to {owner}", a.pred));
-            cx.diags.push(match help {
-                Some(h) => d.with_help(h.clone()),
-                None => d,
-            });
+            Some((o, f)) => format!("{what}: input {o} has no field {f}"),
+            None => format!("{what}: the program declares no input {address}"),
+        };
+        Some(Diagnostic::error(span, msg))
+    }
+}
+
+impl<'a> Cx<'a> {
+    fn new(program: &'a Program) -> Cx<'a> {
+        let inputs = program
+            .statements
+            .iter()
+            .filter_map(|s| match s {
+                Stmt::Input(i) => Some(i.name.clone()),
+                _ => None,
+            })
+            .collect();
+        Cx {
+            defs: definitions(&program.statements),
+            diags: Vec::new(),
+            declared: Vec::new(),
+            secret_outputs: Vec::new(),
+            output_types: BTreeMap::new(),
+            private: BTreeMap::new(),
+            expanding: Vec::new(),
+            checked: BTreeSet::new(),
+            flat: BTreeSet::from([String::new()]),
+            named: 0,
+            inputs_here: vec![inputs],
         }
     }
 
-    // `set k = t where B`, alone or in a block, gives an input the stack
-    // addresses (R-54, R-38): its own, a field of an object one, a used
-    // module's (its cell `(input, m, k)`).
-    let mut paths = BTreeSet::new();
-    let mut flat = BTreeSet::new();
-    for d in &cx.declared {
-        let Some(a) = &d.address else { continue };
-        let base = &a[..a.len() - d.decl.name.len()];
-        paths.insert(a.clone());
-        flat.insert(d.scope.clone());
-        for (i, _) in d.decl.name.match_indices('.') {
-            paths.insert(format!("{base}{}", &d.decl.name[..i]));
+    /// The program's own statements, its `use`s and copies expanded.
+    fn stack(&mut self, stmts: &[Stmt]) -> Vec<Stmt> {
+        let mut out = exclusive_copies(stmts);
+        for s in stmts {
+            match s {
+                // The stack's own input: read as `k(V)`, given by `--set`
+                // (an `input(k, V)` fact) at the normal rank.
+                Stmt::Input(i) => out.extend(self.stack_input(i)),
+                // The stack's own relation, exported: published as its rows.
+                Stmt::Output(o) if o.relation.is_some() => out.push(published_rows(o)),
+                // The stack's own output: `output(k, V)` in the root scope.
+                Stmt::Output(o) if o.value.is_none() => self.stack_output(o),
+                Stmt::Output(o) => out.push(fact_or_rule(
+                    atom(
+                        "output",
+                        vec![str_term(&o.name), o.value.clone().unwrap()],
+                        o.span,
+                    ),
+                    Vec::new(),
+                )),
+                Stmt::Use(u) => out.extend(self.instance(u, "", true)),
+                Stmt::Instance(u) => out.extend(self.instance(u, "", false)),
+                Stmt::Module(_) => {}
+                other => out.push(other.clone()),
+            }
+        }
+        out
+    }
+
+    /// The stack's own input `i`: its reader, what `--set` gives it, its
+    /// refinements, and its leaves declared.
+    fn stack_input(&mut self, i: &InputDecl) -> Vec<Stmt> {
+        check_types("stack", std::slice::from_ref(i), &mut self.diags);
+        let mut out = input_reader("", i, &|p: &str| p.to_string());
+        out.extend(given_rules("", "", i));
+        for leaf in crate::inputs::leaves(i) {
+            out.extend(refinement(&leaf, ""));
+            let address = Some(leaf.name.clone());
+            self.declared.push(Declared::new("", leaf, address, false));
+        }
+        out
+    }
+
+    /// The stack's own declared output `o`: its secret cells and its type.
+    fn stack_output(&mut self, o: &OutputDecl) {
+        self.secret_outputs
+            .extend(secret_paths(o).into_iter().map(|k| (String::new(), k)));
+        if let Some(t) = &o.ty {
+            self.output_types
+                .insert((String::new(), o.name.clone()), t.clone());
         }
     }
-    let mut heads = Vec::new();
-    for s in &expanded {
-        head_rules(s, &mut heads);
+
+    /// A read of a name only a module or a component defines: say it is
+    /// private.
+    fn private_reads(&mut self, stmts: &[Stmt]) {
+        let mut defined = BTreeMap::new();
+        defined_preds(stmts, &mut defined);
+        let externs: BTreeSet<&str> = stmts
+            .iter()
+            .filter_map(|s| match s {
+                Stmt::Extern(e) => Some(e.pred.as_str()),
+                _ => None,
+            })
+            .collect();
+        let mut reads = Vec::new();
+        for s in stmts {
+            body_atoms(s, &mut reads);
+        }
+        for a in reads {
+            if let Some((owner, help)) = self.private.get(&a.pred)
+                && !defined.contains_key(&a.pred)
+                && !externs.contains(a.pred.as_str())
+            {
+                let d = Diagnostic::error(a.span, format!("{} is private to {owner}", a.pred));
+                self.diags.push(match help {
+                    Some(h) => d.with_help(h.clone()),
+                    None => d,
+                });
+            }
+        }
     }
-    for (h, body) in heads {
+
+    /// `set k = t where B`, alone or in a block, gives an input the stack
+    /// addresses (R-54, R-38): its own, a field of an object one, a used
+    /// module's (its cell `(input, m, k)`).
+    fn givings(&mut self, stmts: &[Stmt]) {
+        let settable = Settable::of(&self.declared);
+        let mut heads = Vec::new();
+        for s in stmts {
+            head_rules(s, &mut heads);
+        }
+        for (h, body) in heads {
+            self.giving(h, body, &settable);
+        }
+    }
+
+    /// The `set` whose head is `h`: an error when the stack addresses no
+    /// such input or it is a key, else the inputs it reaches given.
+    fn giving(&mut self, h: &Atom, body: &[Lit], settable: &Settable) {
         let [
             Term::Val(Value::Str(t)),
             Term::Val(Value::Str(scope)),
@@ -632,28 +730,24 @@ pub fn expand(program: &Program) -> Result<Expanded> {
             ..,
         ] = h.args.as_slice()
         else {
-            continue;
+            return;
         };
-        if h.pred != "arg" || t != INPUT || !(scope.is_empty() || flat.contains(scope)) {
-            continue;
+        if h.pred != "arg" || t != INPUT || !(scope.is_empty() || settable.scopes.contains(scope)) {
+            return;
         }
         // `--set` (`input(k, V)`) is checked where it is given.
         if matches!(body, [Lit::Pos(a)] if a.pred == INPUT) {
-            continue;
+            return;
         }
         let address = crate::types::dotted(scope, k);
         let what = format!("`set {address}`");
-        if !paths.is_empty() && !paths.contains(&address) {
-            let msg = match address.rsplit_once('.').filter(|(o, _)| paths.contains(*o)) {
-                Some((o, f)) => format!("{what}: input {o} has no field {f}"),
-                None => format!("{what}: the program declares no input {address}"),
-            };
-            cx.diags.push(Diagnostic::error(h.span, msg));
-            continue;
+        if let Some(d) = settable.unknown(&what, &address, h.span) {
+            self.diags.push(d);
+            return;
         }
         let under =
             |a: &str, b: &str| a == b || a.strip_prefix(b).is_some_and(|r| r.starts_with('.'));
-        for d in cx.declared.iter_mut() {
+        for d in self.declared.iter_mut() {
             if d.scope != *scope || !(under(&d.decl.name, k) || under(k, &d.decl.name)) {
                 continue;
             }
@@ -665,7 +759,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
                 continue;
             }
             if d.decl.key {
-                cx.diags.push(
+                self.diags.push(
                     Diagnostic::error(h.span, format!("{what}: {address} is a key")).with_help(
                         format!(
                             "a key is given by the target, `STACK {}=..`, and names the deployment",
@@ -679,26 +773,17 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         }
     }
 
-    // What a `set`, a `use` block or a copy gives a typed input is read as
-    // its type (R-31, R-134): a literal now, a computed value at run time.
-    for s in &mut expanded {
-        if let Stmt::Fact(h) | Stmt::Rule(RuleStmt { head: h, .. }) = s {
-            read_input(h, &cx.declared);
+    /// The expansion's result: the program, or what was found wrong.
+    fn finish(self, program: Program) -> Result<Expanded> {
+        if !self.diags.is_empty() {
+            return Err(Diagnostics(self.diags).into());
         }
-    }
-    let expanded = expanded.into_iter().map(unmark_stmt).collect::<Vec<_>>();
-    if cx.diags.is_empty() {
         Ok(Expanded {
-            program: Program {
-                statements: expanded,
-                stack: program.stack.clone(),
-            },
-            inputs: cx.declared,
-            secret_outputs: cx.secret_outputs,
-            output_types: cx.output_types,
+            program,
+            inputs: self.declared,
+            secret_outputs: self.secret_outputs,
+            output_types: self.output_types,
         })
-    } else {
-        Err(Diagnostics(cx.diags).into())
     }
 }
 
@@ -783,6 +868,71 @@ fn read_typed_at(t: &mut Term, path: &str, ty: &TypeExpr) {
     }
 }
 
+/// One `use` or copy being expanded: its statement, whether it uses a
+/// module, and where it stands.
+struct Copying<'u> {
+    u: &'u crate::ast::Instance,
+    used: bool,
+    /// `module` or `component`, as messages name the definition.
+    kind: &'static str,
+    /// Its scope's absolute name.
+    abs: String,
+    /// A used module the stack reaches by `use` alone: its inputs are the
+    /// stack's to give, `m.k` (R-55).
+    flat: bool,
+    /// The statement as the program writes it, what its rules are lowered
+    /// out of (`diag::origin_id`).
+    origin: String,
+}
+
+impl<'u> Copying<'u> {
+    /// `u` made in the scope `at`, which the stack reaches by `use` alone
+    /// when `reached`.
+    fn new(u: &'u crate::ast::Instance, at: &str, used: bool, reached: bool) -> Copying<'u> {
+        let scope = u.name.as_str();
+        let origin = match used {
+            true if u.module.rsplit('.').next() == Some(scope) => format!("use {}", u.module),
+            true => format!("use {} as {scope}", u.module),
+            false if u.named.is_some() && !u.name.starts_with('"') => {
+                format!("resource {} \"{}\"", u.module, u.name)
+            }
+            false => format!("resource {} {}", u.module, u.name),
+        };
+        Copying {
+            u,
+            used,
+            kind: if used { "module" } else { "component" },
+            abs: crate::types::dotted(at, scope),
+            flat: used && reached,
+            origin,
+        }
+    }
+
+    /// Its name in its user's scope.
+    fn scope(&self) -> &'u str {
+        &self.u.name
+    }
+}
+
+/// The statements of the copy `c`, scoped: lowered out of its statement,
+/// its private names renamed, its resources and outputs its own, its
+/// `let`s and inputs read as its cells.
+fn scoped_copy(c: &Copying, iface: &Interface, names: &Names, mut stmts: Vec<Stmt>) -> Vec<Stmt> {
+    let scope = c.scope();
+    set_origin(&mut stmts, diag::origin_id(&c.origin));
+    let sc = Sc {
+        name: scope,
+        vars: !c.used,
+    };
+    let stmts = stmts
+        .into_iter()
+        .map(|st| rewrite_stmt(rename_stmt(st, names), sc))
+        .collect();
+    let mut copy = lets(stmts, scope, Some(names));
+    copy.extend(input_readers(scope, &iface.inputs, names));
+    copy
+}
+
 impl Cx<'_> {
     /// The `use`s and `instance`s of a body expanded, every name relative
     /// to the body's scope; `at` is that scope's absolute name.
@@ -823,128 +973,33 @@ impl Cx<'_> {
         let Some(def) = self.enter(&u.module, u.span) else {
             return Vec::new();
         };
-        let kind = if used { "module" } else { "component" };
         let (iface, body) = interface(&def.body);
-        if self.checked.insert(u.module.clone()) {
-            check_component(kind, &u.module, &iface, &body, &mut self.diags);
-            check_types(
-                &format!("{kind} {}", u.module),
-                &iface.inputs,
-                &mut self.diags,
-            );
-        }
-        let scope = u.name.as_str();
-        let abs = crate::types::dotted(at, scope);
-        let mut out = Vec::new();
         // A used module's inputs are the stack's to give, `m.k` (R-55); a
         // copy's are its instance block's.
-        let flat = used && self.flat.contains(at);
-        if flat {
-            self.flat.insert(abs.clone());
+        let c = Copying::new(u, at, used, self.flat.contains(at));
+        self.check_once(&c, &iface, &body);
+        if c.flat {
+            self.flat.insert(c.abs.clone());
         }
-        instance_inputs(kind, u, scope, &iface, flat, &mut out, &mut self.diags);
-        self.inputs_here
-            .push(iface.inputs.iter().map(|i| i.name.clone()).collect());
-        let body = self.body(&body, &abs);
-        self.inputs_here.pop();
-        self.expanding.pop();
-        // What the components inside read of this definition's items is
-        // this instance's own (R-186).
-        let own = lexical::Lexical {
-            body: &u.module,
-            via: None,
-        };
-        let body = body.into_iter().map(|s| own.stmt(s)).collect();
-        let stmts = module_stmts(scope, &iface, body);
-        let mut defined = BTreeMap::new();
-        defined_preds(&stmts, &mut defined);
-        for i in &iface.inputs {
-            defined.insert(i.name.clone(), (1, i.span));
-            for l in crate::inputs::leaves(i) {
-                defined.insert(refine_pred(&l.name), (1, i.span));
-            }
-        }
-        // A relation the copy takes is its own, its rows its user's.
-        for e in &iface.relations {
-            defined.insert(e.pred.clone(), (e.arity, e.span));
-        }
-        out.extend(instance_rows(u, scope, &iface));
-        let names = Names::private(scope, defined);
-        for p in names.map.keys() {
-            let help = match used {
-                true => format!("read it as {scope}.{p}, after `use {}`", u.module),
-                false => format!(
-                    "pass the value through an output of component {}, `output {p} = ...`, \
-                     and read it as INSTANCE.{p}",
-                    u.module
-                ),
-            };
-            self.private
-                .insert(p.clone(), (format!("{kind} {}", u.module), Some(help)));
-        }
-        let mut stmts = stmts;
-        let origin = match used {
-            true if u.module.rsplit('.').next() == Some(scope) => format!("use {}", u.module),
-            true => format!("use {} as {scope}", u.module),
-            false if u.named.is_some() && !u.name.starts_with('"') => {
-                format!("resource {} \"{}\"", u.module, u.name)
-            }
-            false => format!("resource {} {}", u.module, u.name),
-        };
-        set_origin(&mut stmts, diag::origin_id(&origin));
-        let stmts = stmts
-            .into_iter()
-            .map(|st| {
-                let sc = Sc {
-                    name: scope,
-                    vars: !used,
-                };
-                rewrite_stmt(rename_stmt(st, &names), sc)
-            })
-            .collect();
-        let mut copy = lets(stmts, scope, Some(&names));
-        copy.extend(input_readers(scope, &iface.inputs, &names));
+        let mut out = Vec::new();
+        instance_inputs(&c, &iface, &mut out, &mut self.diags);
+        let body = self.inner(&c, &iface, &body);
+        let stmts = module_stmts(c.scope(), &iface, body);
+        let names = Names::of_copy(c.scope(), &iface, &stmts);
+        out.extend(instance_rows(u, c.scope(), &iface));
+        self.privates(&c, &names);
+        let mut copy = scoped_copy(&c, &iface, &names, stmts);
         if !used {
             self.reached(u, site.as_deref(), &mut copy);
         }
-        for o in iface.outputs.values() {
-            self.secret_outputs
-                .extend(secret_paths(o).into_iter().map(|k| (abs.clone(), k)));
-            if let Some(t) = &o.ty {
-                self.output_types
-                    .insert((abs.clone(), o.name.clone()), t.clone());
-            }
-        }
-        if flat {
+        self.outputs(&c, &iface);
+        if c.flat {
             for i in &iface.inputs {
-                out.extend(given_rules(scope, &abs, i));
+                out.extend(given_rules(c.scope(), &c.abs, i));
             }
         }
-        for i in &iface.inputs {
-            for leaf in crate::inputs::leaves(i) {
-                let address = flat.then(|| crate::types::dotted(&abs, &leaf.name));
-                let bound = u.inputs.iter().any(|(k, _, _)| {
-                    *k == leaf.name
-                        || leaf
-                            .name
-                            .strip_prefix(k.as_str())
-                            .is_some_and(|r| r.starts_with('.'))
-                });
-                // A name declared twice (R-104) declares its inputs once.
-                if self
-                    .declared
-                    .iter()
-                    .any(|d| d.scope == abs && d.decl.name == leaf.name)
-                {
-                    continue;
-                }
-                let pun = user_inputs.contains(&leaf.name);
-                let mut d = Declared::new(&abs, leaf, address, bound);
-                d.used_at = flat.then_some(u.span);
-                d.used_by = flat.then(|| (origin.clone(), pun));
-                self.declared.push(d);
-            }
-        }
+        self.declare_inputs(&c, &iface, &user_inputs);
+        let scope = c.scope();
         let Some(name) = &u.named else {
             out.extend(gate(
                 copy,
@@ -956,9 +1011,94 @@ impl Cx<'_> {
             ));
             return out;
         };
-        copy.extend(self.secret_cells(scope, &abs, u.span));
+        copy.extend(self.secret_cells(scope, &c.abs, u.span));
         let copy = gate(copy, &u.module, scope, u.clause.as_deref(), true, u.span);
-        self.by_clause(scope, &abs, name, out, copy)
+        self.by_clause(scope, &c.abs, name, out, copy)
+    }
+
+    /// The checks on the interface of the definition `c` copies, once per
+    /// definition.
+    fn check_once(&mut self, c: &Copying, iface: &Interface, body: &[Stmt]) {
+        let path = &c.u.module;
+        if self.checked.insert(path.clone()) {
+            check_component(c.kind, path, iface, body, &mut self.diags);
+            check_types(
+                &format!("{} {path}", c.kind),
+                &iface.inputs,
+                &mut self.diags,
+            );
+        }
+    }
+
+    /// The body of the definition `c` copies, its own `use`s and copies
+    /// expanded; what the components inside read of the definition's
+    /// items is this instance's own (R-186).
+    fn inner(&mut self, c: &Copying, iface: &Interface, body: &[Stmt]) -> Vec<Stmt> {
+        self.inputs_here
+            .push(iface.inputs.iter().map(|i| i.name.clone()).collect());
+        let body = self.body(body, &c.abs);
+        self.inputs_here.pop();
+        self.expanding.pop();
+        let own = lexical::Lexical {
+            body: &c.u.module,
+            via: None,
+        };
+        body.into_iter().map(|s| own.stmt(s)).collect()
+    }
+
+    /// The names the copy `c` keeps private, each with the error a read
+    /// of it from outside says.
+    fn privates(&mut self, c: &Copying, names: &Names) {
+        let (scope, module) = (c.scope(), &c.u.module);
+        for p in names.map.keys() {
+            let help = match c.used {
+                true => format!("read it as {scope}.{p}, after `use {module}`"),
+                false => format!(
+                    "pass the value through an output of component {module}, `output {p} = ...`, \
+                     and read it as INSTANCE.{p}",
+                ),
+            };
+            self.private
+                .insert(p.clone(), (format!("{} {module}", c.kind), Some(help)));
+        }
+    }
+
+    /// The secret cells and the types of the outputs the copy `c`
+    /// declares.
+    fn outputs(&mut self, c: &Copying, iface: &Interface) {
+        for o in iface.outputs.values() {
+            self.secret_outputs
+                .extend(secret_paths(o).into_iter().map(|k| (c.abs.clone(), k)));
+            if let Some(t) = &o.ty {
+                self.output_types
+                    .insert((c.abs.clone(), o.name.clone()), t.clone());
+            }
+        }
+    }
+
+    /// The typed inputs of the copy `c`, each leaf once: whether its block
+    /// gives it, and for a used module's where the stack addresses it and
+    /// whether its user gives it by the pun (`user_inputs`, R-208).
+    fn declare_inputs(&mut self, c: &Copying, iface: &Interface, user_inputs: &BTreeSet<String>) {
+        for i in &iface.inputs {
+            for leaf in crate::inputs::leaves(i) {
+                let address = c.flat.then(|| crate::types::dotted(&c.abs, &leaf.name));
+                let bound = c.u.inputs.iter().any(|(k, _, _)| covers(k, &leaf.name));
+                // A name declared twice (R-104) declares its inputs once.
+                if self
+                    .declared
+                    .iter()
+                    .any(|d| d.scope == c.abs && d.decl.name == leaf.name)
+                {
+                    continue;
+                }
+                let pun = user_inputs.contains(&leaf.name);
+                let mut d = Declared::new(&c.abs, leaf, address, bound);
+                d.used_at = c.flat.then_some(c.u.span);
+                d.used_by = c.flat.then(|| (c.origin.clone(), pun));
+                self.declared.push(d);
+            }
+        }
     }
 
     /// The copy `u`'s reads of its module's items, or an enclosing
@@ -1209,11 +1349,8 @@ pub fn private_text(a: &Atom, fmt: &dyn Fn(&Atom) -> String, gap: &str) -> Optio
 /// gives is an error here, but a used module's (`flat`): the stack may
 /// give that one with `--set m.k=v` (`inputs::check_required`).
 fn instance_inputs(
-    kind: &str,
-    u: &crate::ast::Instance,
-    scope: &str,
+    c: &Copying,
     iface: &Interface,
-    flat: bool,
     out: &mut Vec<Stmt>,
     diags: &mut Vec<Diagnostic>,
 ) {
@@ -1222,61 +1359,17 @@ fn instance_inputs(
         .iter()
         .flat_map(crate::inputs::leaves)
         .collect();
-    let covers =
-        |k: &str, leaf: &str| leaf == k || leaf.strip_prefix(k).is_some_and(|r| r.starts_with('.'));
+    let (u, kind) = (c.u, c.kind);
     let body = u.body.clone().unwrap_or_default();
     for (k, v, span) in &u.inputs {
         if !leaves.iter().any(|l| covers(k, &l.name)) {
-            let declared: Vec<&str> = iface.inputs.iter().map(|i| i.name.as_str()).collect();
-            let object = k
-                .match_indices('.')
-                .map(|(n, _)| &k[..n])
-                .rfind(|o| leaves.iter().any(|l| l.name.starts_with(&format!("{o}."))));
-            let d = match object {
-                Some(o) => {
-                    let fields: Vec<&str> = leaves
-                        .iter()
-                        .filter_map(|l| l.name.strip_prefix(o)?.strip_prefix('.'))
-                        .collect();
-                    Diagnostic::error(
-                        *span,
-                        format!(
-                            "input {o} of {kind} {} has no field {}",
-                            u.module,
-                            &k[o.len() + 1..]
-                        ),
-                    )
-                    .with_note(format!("its fields: {}", fields.join(", ")))
-                }
-                None => {
-                    let d =
-                        Diagnostic::error(*span, format!("{kind} {} has no input {k}", u.module));
-                    if declared.is_empty() {
-                        d.with_note(format!("{kind} {} declares no inputs", u.module))
-                    } else {
-                        d.with_note(format!("its inputs: {}", declared.join(", ")))
-                    }
-                }
-            };
-            diags.push(d);
+            diags.push(no_input(c, iface, &leaves, k, *span));
             continue;
         }
-        // The entry's type: the leaf's, or the object's it names.
-        let ty = iface
-            .inputs
-            .iter()
-            .find(|i| covers(&i.name, k))
-            .and_then(|i| {
-                k[i.name.len()..]
-                    .split('.')
-                    .skip(1)
-                    .try_fold(&i.ty, |t, seg| match t {
-                        TypeExpr::Object(fs) => fs.iter().find(|(f, _)| f == seg).map(|(_, t)| t),
-                        _ => None,
-                    })
-            });
         // A literal is read as the input's declared type (R-31).
-        let v = match ty.map(|t| crate::types::literal(&crate::types::of_expr(t), v.clone())) {
+        let read = entry_type(iface, k)
+            .map(|t| crate::types::literal(&crate::types::of_expr(t), v.clone()));
+        let v = match read {
             Some(Ok(v)) => v,
             Some(Err(why)) => {
                 diags.push(Diagnostic::error(
@@ -1291,7 +1384,7 @@ fn instance_inputs(
             "arg",
             vec![
                 str_term(INPUT),
-                str_term(scope),
+                str_term(c.scope()),
                 str_term(k),
                 v,
                 str_term(crate::transform::NORMAL),
@@ -1302,38 +1395,96 @@ fn instance_inputs(
     }
     // An input nothing gives a value is a stack input's error (R-65),
     // fixed the same ways: a default, or a value given.
-    if flat {
-        return;
+    if !c.flat {
+        diags.extend(required(c, &leaves));
     }
-    for i in &leaves {
-        // A dependent input is required where its clause holds: a deny.
-        if i.default.is_none()
-            && i.guard.is_empty()
-            && !u.inputs.iter().any(|(k, _, _)| covers(k, &i.name))
-        {
-            diags.push(
-                Diagnostic::error(
-                    u.span,
-                    format!(
-                        "input {} is required and has no value",
-                        crate::types::dotted(scope, &i.name)
-                    ),
-                )
-                .with_label(
-                    i.span,
-                    format!(
-                        "{}: {} declared here",
-                        i.name,
-                        crate::inputs::type_text(&i.ty)
-                    ),
-                )
-                .with_help(format!(
-                    "give it in the block, `{{ {} = ... }}`, or give it a default",
-                    i.name
-                )),
-            );
-        }
+}
+
+/// Whether an entry `k` gives the input `leaf`: the leaf itself or an
+/// object holding it.
+fn covers(k: &str, leaf: &str) -> bool {
+    leaf == k || leaf.strip_prefix(k).is_some_and(|r| r.starts_with('.'))
+}
+
+/// The entry `k`'s type: the leaf's, or the object's it names.
+fn entry_type<'i>(iface: &'i Interface, k: &str) -> Option<&'i TypeExpr> {
+    let i = iface.inputs.iter().find(|i| covers(&i.name, k))?;
+    k[i.name.len()..]
+        .split('.')
+        .skip(1)
+        .try_fold(&i.ty, |t, seg| match t {
+            TypeExpr::Object(fs) => fs.iter().find(|(f, _)| f == seg).map(|(_, t)| t),
+            _ => None,
+        })
+}
+
+/// The error of an entry `k` that gives no input of the copy `c`: the
+/// object input it names has no such field, or there is no such input.
+fn no_input(
+    c: &Copying,
+    iface: &Interface,
+    leaves: &[InputDecl],
+    k: &str,
+    span: Span,
+) -> Diagnostic {
+    let (kind, module) = (c.kind, &c.u.module);
+    let object = k
+        .match_indices('.')
+        .map(|(n, _)| &k[..n])
+        .rfind(|o| leaves.iter().any(|l| l.name.starts_with(&format!("{o}."))));
+    if let Some(o) = object {
+        let fields: Vec<&str> = leaves
+            .iter()
+            .filter_map(|l| l.name.strip_prefix(o)?.strip_prefix('.'))
+            .collect();
+        return Diagnostic::error(
+            span,
+            format!(
+                "input {o} of {kind} {module} has no field {}",
+                &k[o.len() + 1..]
+            ),
+        )
+        .with_note(format!("its fields: {}", fields.join(", ")));
     }
+    let declared: Vec<&str> = iface.inputs.iter().map(|i| i.name.as_str()).collect();
+    let d = Diagnostic::error(span, format!("{kind} {module} has no input {k}"));
+    if declared.is_empty() {
+        d.with_note(format!("{kind} {module} declares no inputs"))
+    } else {
+        d.with_note(format!("its inputs: {}", declared.join(", ")))
+    }
+}
+
+/// The errors of the copy `c`'s inputs that nothing gives a value: each
+/// with no default and no clause (a dependent input is required where
+/// its clause holds: a deny).
+fn required(c: &Copying, leaves: &[InputDecl]) -> Vec<Diagnostic> {
+    let given = |i: &InputDecl| c.u.inputs.iter().any(|(k, _, _)| covers(k, &i.name));
+    leaves
+        .iter()
+        .filter(|i| i.default.is_none() && i.guard.is_empty() && !given(i))
+        .map(|i| {
+            Diagnostic::error(
+                c.u.span,
+                format!(
+                    "input {} is required and has no value",
+                    crate::types::dotted(c.scope(), &i.name)
+                ),
+            )
+            .with_label(
+                i.span,
+                format!(
+                    "{}: {} declared here",
+                    i.name,
+                    crate::inputs::type_text(&i.ty)
+                ),
+            )
+            .with_help(format!(
+                "give it in the block, `{{ {} = ... }}`, or give it a default",
+                i.name
+            ))
+        })
+        .collect()
 }
 
 /// The rows a `use` or `instance` block gives the relations its module
