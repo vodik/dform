@@ -1,0 +1,2010 @@
+<title>dform controller</title>
+<!--
+DESIGN NOTE: a mock of dform's controller UI, to start from, not to adopt.
+
+The primary screen is the estate, not the plan. A controller spends most of
+its life with nothing to apply: it health-checks and watches the estate
+evolve. So the graph is the model at rest: one node per resource across
+every deployment of the project, an edge for every relationship the model
+knows (a reference, a read of another stack's output, rows from a source,
+a provider instance configured from a resource's value). Lanes are the
+deployments, horizontal bands. Provider instances are columns crossing
+them, because an instance is identified by what it reaches (an account and
+region, a cluster) and several deployments of the tree share one (platform
+and apps both reach the k3s-staging cluster), and because instances depend
+on each other left to right (ovh makes the server whose kubeconfig
+configures k8s). A node sits where its deployment meets its instance. Each
+node carries its state at rest in words: health from `status`, its reading
+from the four sources, a hold. The plan is an overlay on the same graph,
+on when a plan exists: changed nodes lit with their mark and their state,
+what they reach drawn along the edges. This is not Argo's graph. Argo draws
+ownership, Application > Deployment > Pod, so it answers "where does it
+live" and makes you drill. This graph draws dependency and configuration,
+so it answers "what depends on what, what is wrong, and where would a
+change go", with the labels on.
+
+Collapse rule, at every level: what has nothing to report folds. A rule's
+rows (aws.subnet private-* ×4), a component copy or a namespace fold to
+one node with a count; a deployment lane folds to a band; a provider
+instance folds to a narrow column; a lane-by-instance cell folds to "N
+objects"; in a cell that opened for one node, the quiet rest is one card,
+"33 more, nothing to report", and a copy that opened for one member shows
+that member in its frame, not its quiet siblings. A fold of one object is
+that object.
+Anything with news unfolds itself: changed or reached by the plan, health
+not ready, a reading other than in sync or a provider default, a hold or
+an approval, a fresh source. A click opens a fold; a lane header closes
+what was opened by hand. A few hundred resources at rest read as the
+handful that need attention plus counts.
+
+Drawing rule: at rest there are no lines at all. Position is dependency:
+within a region a node sits right of, or below, what it reads; a region
+sits right of the region that configures it; a lane sits below the lanes
+it reads. That is the whole account of lanes reading lanes, so no arc
+says it again. A node pointed at draws its own edges, what it reads and
+what reads it (a provider instance's configuring value included), over
+the faded rest, and outlines everything downstream of it. The plan
+overlay draws only its propagation. Containment is the box, never a line:
+no edge for a copy's members, a namespace's objects or a Service
+selecting its pods.
+
+Disclosure rule: a card says its state in as few words as the state
+needs, and the answer in the right column says the rest. A card is its
+type (without the provider prefix its column already says), its name
+(without the copy's prefix its frame already says), its health and its
+reading as a word each ("ready · drift"; "in sync" is said by saying
+nothing), and with the plan on its state: "pending", "applying", "applied
+09:15 (run 77)", "waiting on kubeconfig", "held: signature". A hold shows
+at rest too: it waits on a person. The `because`, a drift's who and when,
+the reach, the policy verdict and the site are the node's answer, on
+hover. A region header is the instance and its state in a word; its
+settings and calls are its answer. A lane header is the deployment and
+its state in a word.
+
+Time rule: the controller's clock is events and runs, never ticks. A run
+is one reconcile woken by an event (a row in a watched source, a tag
+moved under oci.resolve, drift read, a signature, time.now() crossing a
+rule's boundary, a commit); ticks exist only inside a run, as its order.
+Over an estate's life runs number in the thousands, and a tick number
+restarts every run, so the graph and the cards never show one. The plan
+text view keeps "tick 1", "tick 2": it is the CLI's text for one run. The
+Run tab is the timeline of runs, newest first: what woke it, what it did,
+how long, its longest chain, its trace, its audit entries in order.
+
+Spacing scale, 4 8 12 16 24 32 px (--s1..--s6, SP in the graph): each
+step is one kind of distance, so a gap says what it separates. 4 inside a
+line and around a header's box; 8 inside a card and between a frame and
+its cards; 12 between cards in a column, and a card's gutter from its
+column's edge (24 between two cards side by side); 16 above a lane's
+first card; 24 between the page's blocks. A card is no wider than 300px
+and no narrower than 176; the last column takes what is left, so the
+graph draws at one scale on every project.
+
+The plan as text, and the tabs (the first version's primary screen, kept
+behind the estate). The controller's job is to turn the program plus the
+world plus the rows that arrived into changes, and to stop where policy
+says stop; the question an operator brings is "what is about to change,
+why, and who has to decide what". Argo answers "is the cluster what git
+says" with a tree of objects and a sync button, because it has no model.
+dform has one, so the screen is built from it:
+
+1. A plan is readable: the plan text view is one run's plan as the CLI
+   prints it, grouped by its ticks (toggle to group by deployment),
+   `waits on` on the tick header, `later` as its own block, a `because`
+   under every change that has one. Nothing is restated as a badge.
+2. `why` on anything: every line, verdict, wait and row opens its
+   explanation tree in the right column, each node with the FILE:LINE that
+   made it. The right column is the inspector and it is always `why`.
+3. Policy is queries: a hold, an approval, a drift, an ownership loss are
+   cards in "waiting on a person", first on the page; their reason and site
+   are their answer. An undetermined verdict and a wait on a read are not
+   a person's: they are states on the graph. A hold has no "override" button: it is the program's. You lift it
+   by changing the rule or the facts (a PR, a row). The only levers in the
+   page are the ones the controller already has: a signature over a plan's
+   digest, and `approve(T, A)` for drift.
+4. The unit is the project. The left rail is project.df's deployments, the
+   plan is the tree's, a deployment's line says its state and its lease.
+5. Four sources: the World tab is desired | base | live | provider default
+   per path, and the reading (change, drift, conflict, ownership lost,
+   provider default) is a word, not a colour.
+6. The Run tab is the timeline of runs; each has its trace (the waterfall,
+   the longest chain, calls per provider) and its audit entries (seq, who,
+   lease fence, digest).
+7. The controller watches data: the Data tab is the relations the program
+   declares, where their rows come from (a provider table, a csv, an SQL
+   table), the rows that arrived and who wrote them, and what the rules
+   derived from them, the plan itself included as `deformation`.
+8. Magnitude: each change carries its reach (replaces, deletes, what reads
+   it, what a provider configured from it reaches), and the plan's head says
+   the shape against the last apply (aws.subnet 3 -> 4).
+
+Rejected: the object graph as home (it answers what exists, not what will
+change; references show up inside `why`); a Sync / Force button (the
+controller applies what policy lets through; a person signs or writes a
+row); health as the frame (health is not in the plan; `status` is a column);
+red/amber/green verdicts (a verdict is text, a site and a tally); editing
+values in forms (the program is code, reviewed; data rows go through the
+store the program declares); a live log as the main view (today's log is
+the controller's only interface; the page replaces it with state).
+
+Open questions the mock ran into, marked "open" where they show:
+- does a signature hold its whole tick (it signs the plan's digest) or only
+  its deformation (docs/experimental/controller.md)? The mock holds the tick.
+- a rule over time.now() (terry.org's eligibility) needs the controller to
+  wake at the boundary it computes; the mock shows that as an event.
+- the k3s replace shows a gap: objects read through a provider configured
+  from a replaced server are "as state has them" until the read answers.
+
+Data is from examples/shop, examples/k3s-platform, examples/gke-platform and
+terry.org (on `use fake`). Times are 2026-10-15 UTC. Actions are mock.
+
+CRITIQUE OF v5, by a second reader who did not build it (2026-10-15). Read
+at 1440px, every project, at rest and with the plan, light and dark.
+
+What works. The frame is right: lanes are deployments, columns are the
+provider instances they reach, position is dependency, and what has
+nothing to report folds. ovh-infra's ~120 objects come down to a drifted
+Deployment and some counts; k3s-platform's story (a replaced server, a
+kubeconfig nobody can read yet, three objects behind it) can be read off
+the k8s-staging column alone. The reading is a word, the levers are the
+controller's two (sign a digest, write an approve row), there is no sync
+button, and the inspector is `why` plus what depends on the thing.
+
+What fights the frame. (1) Lines at rest. The note says no edges at
+rest and then draws three kinds: arcs in the left margin between lanes
+(on gke-platform three of them leave one point and their arrowheads
+strike the "s" of every "stacks."), arcs over the region headers
+("dform io.read, oci.resolve reads 2 of ovh" printed on top of the
+headers), and a dashed provider line from a platform lane's io cell up
+to its k8s header, through every lane between (k3s-prod's crosses
+apps[staging]'s cards). Each says what position already says. (2) Ticks.
+The overlay steps "tick 1 / to tick 2 / to later", a changed card says
+"~ tick 1", a reached one "reached in tick 1 ← …", a region header
+"reached in tick 1". A tick is the order inside one run; a controller
+runs for years, so a tick number is a counter that restarts every event
+and tells a person nothing. What a node can say is its state: pending,
+applying, applied (when, in which run), waiting on a value, held for a
+person. Order is the graph's. (3) "Waiting on a person" holds "Waiting
+on a read" (k3s) and "Undetermined" (shop), whose own text says "Nothing
+to do": not a person's. (4) The note has two "primary screen"
+paragraphs that contradict each other.
+
+What is noise. Every quiet card says "in sync · health -", every folded
+copy "all in sync · health not judged · stacks/apps.df:81 · open": the
+word that should be silence is printed twenty times on ovh-infra. A copy
+that opens because one member has news unfolds all of them: apps[prod]
+shows forgejo's claim, two Services and a network policy, all quiet, to
+reach the one drifted Deployment, and the copy splits across two
+columns under two frames both labelled "forgejo: use forgejo { env,…".
+Types repeat the column ("k8s.deployment" in the k8s column), names
+repeat the frame ("forgejo.server" inside forgejo). Cards carry the
+`because`, the cross-lane read, "→ 8 downstream" and the held reason in a
+boxed tag; ovh-infra's drift tag overflows its card and most `because`
+lines end in "…", which helps no one. Lane headers run to "reads 3 of
+platform[env=lab] · reads 1 of watched sources 1 change · applies next ·
+32 objects, nothing to report · open". The "held for approval" block
+under the graph repeats the signature card; the legend is three lines.
+
+Where the eye has nowhere to rest. Cards sit 8px apart with 6px inside,
+frames touch them. Column widths follow rank count, so k3s's ovh column
+gets three columns and k8s-staging a strip where "unknown: provider
+cannot answer / not read since the replace" wraps to six lines; header
+heights equalise to the tallest wrapped header (110px on ovh-infra, for a
+truncated "slow: Read k3s.server.vm 4.1s of a 6.2s run…"). The SVG
+stretches to the pane, so gke-platform and releases draw at 1.6× the type
+size of ovh-infra: the same card is two sizes across projects. Two
+toggles sit on two rows (graph | text, then plan off | tick 1).
+
+What a person running this estate wants first: what waits on me, what is
+broken, what is moving. On ovh-infra the one card that waits on a person
+is under 1500px of graph, below the fold, and k3s prod's degraded
+Deployment is one coloured line among many grey ones.
+
+What v6 changed, each small: no lines at rest (the lane arcs, the region
+arcs and the at-rest provider lines are gone; a provider line draws when
+its value or instance is pointed at, or when the plan reaches it); no tick
+on the graph, the cards, the lane headers, the controller's status line or
+the `why` trees (a change's state instead, and run numbers); the Run tab
+is the timeline of runs; "Waiting on a person" is first on the page, a
+word and an address per card, and holds only what a person decides; one
+switch, estate | estate + plan | plan text; the cards lose the provider
+prefix, the copy's prefix, "in sync", "health -", the `because`, the
+cross-lane read, the downstream count and the boxed tag, which all moved
+to the answer in the right column (now headed by the node's health,
+reading, plan state, because, hold, reach and site); a cell that opens for
+one node folds its quiet rest into one card; the spacing scale above;
+the graph draws at one scale on every project; the "held for approval"
+block, the duplicate primary-screen paragraph and two of the legend's
+three lines are gone.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&display=swap">
+<style>
+:root{
+  --bg:#F2F3EF; --surface:#FBFBF8; --sunk:#E9EBE5; --ink:#18201D; --muted:#56625D; --dim:#7E8883; --rule:#D4D9D2;
+  --accent:#255A7A; --accent-soft:#DCE7EE;
+  --create:#2B7448; --update:#86600C; --delete:#AE372B; --approval:#8A3483; --because:#17717C; --wait:#5D58A0;
+  --create-soft:#E1EEE5; --update-soft:#F3EAD4; --delete-soft:#F5E0DC; --approval-soft:#F1E1EF; --wait-soft:#E6E5F3;
+  --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --cond:"IBM Plex Sans Condensed","IBM Plex Sans",system-ui,sans-serif;
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#111513; --surface:#171C1A; --sunk:#1E2421; --ink:#E1E6E2; --muted:#9BA6A0; --dim:#6F7A75; --rule:#2B3330;
+    --accent:#86B7D6; --accent-soft:#1D2D37;
+    --create:#6DBF8B; --update:#D8AE52; --delete:#E5806F; --approval:#D691CF; --because:#5EC3CE; --wait:#A9A4E8;
+    --create-soft:#1A2B21; --update-soft:#2D2617; --delete-soft:#33201C; --approval-soft:#2D1D2B; --wait-soft:#23223A;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#111513; --surface:#171C1A; --sunk:#1E2421; --ink:#E1E6E2; --muted:#9BA6A0; --dim:#6F7A75; --rule:#2B3330;
+  --accent:#86B7D6; --accent-soft:#1D2D37;
+  --create:#6DBF8B; --update:#D8AE52; --delete:#E5806F; --approval:#D691CF; --because:#5EC3CE; --wait:#A9A4E8;
+  --create-soft:#1A2B21; --update-soft:#2D2617; --delete-soft:#33201C; --approval-soft:#2D1D2B; --wait-soft:#23223A;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--sans);padding:0 16px 32px}
+button{font:inherit;color:inherit}
+button:focus-visible,summary:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mono{font-family:var(--mono);font-size:12.5px}
+.lab{font:600 11px/1.2 var(--cond);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.dimt{color:var(--dim)}
+/* header */
+header.top{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding:14px 0 12px;border-bottom:1px solid var(--rule)}
+.brand{font:600 15px var(--mono);letter-spacing:-.01em}
+.brand span{color:var(--muted);font-weight:400}
+.projects{display:flex;gap:4px;flex-wrap:wrap}
+.projects button{border:1px solid var(--rule);background:var(--surface);padding:5px 10px;border-radius:4px;cursor:pointer;font:500 13px var(--mono)}
+.projects button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.projects small{font:400 11px var(--sans);opacity:.75;margin-left:6px}
+.ctl{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:12px;color:var(--muted)}
+.ctl b{color:var(--ink);font-weight:500}
+.pulse{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--create);margin-right:6px;vertical-align:1px}
+@media (prefers-reduced-motion:no-preference){.pulse{animation:pl 2.4s ease-in-out infinite}@keyframes pl{50%{opacity:.35}}}
+/* frame */
+.frame{display:grid;grid-template-columns:250px minmax(0,1fr) 400px;gap:var(--s5);padding-top:16px;align-items:start}
+@media (max-width:1180px){.frame{grid-template-columns:230px minmax(0,1fr)}.insp{grid-column:1 / -1}}
+@media (max-width:760px){.frame{grid-template-columns:minmax(0,1fr)}}
+/* rail */
+.rail{display:flex;flex-direction:column;gap:14px}
+.deps{display:flex;flex-direction:column;gap:2px}
+.dep{display:grid;grid-template-columns:16px 1fr;gap:2px 6px;padding:7px 8px;border-radius:4px;cursor:pointer;border:1px solid transparent;background:none;text-align:left;width:100%}
+.dep:hover{background:var(--sunk)}
+.dep[aria-pressed="true"]{border-color:var(--rule);background:var(--surface)}
+.dep .mk{font:600 13px var(--mono)}
+.dep .nm{font:500 12.5px var(--mono);word-break:break-all}
+.dep .st{grid-column:2;font-size:12px;color:var(--muted)}
+.dep .edge{grid-column:2;font:11.5px var(--mono);color:var(--dim)}
+.srcs{display:flex;flex-direction:column;gap:6px;font-size:12px}
+.srcs .s{display:flex;flex-direction:column;padding-left:10px;border-left:2px solid var(--rule)}
+.srcs .s.new{border-left-color:var(--because)}
+.srcs .s code{font:12px var(--mono);word-break:break-all}
+.srcs .s span{color:var(--muted)}
+/* tabs */
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--rule);margin-bottom:14px;flex-wrap:wrap}
+.tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:8px 12px 7px;cursor:pointer;font:500 13px var(--sans);color:var(--muted)}
+.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink)}
+.tabs .n{font:500 11px var(--mono);margin-left:6px;color:var(--approval)}
+section.pane{display:flex;flex-direction:column;gap:var(--s5)}
+/* headline */
+.headline{font:500 13px/1.5 var(--mono);padding:10px 12px;background:var(--surface);border:1px solid var(--rule);border-radius:4px;overflow-x:auto;white-space:pre}
+.shape{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:12.5px}
+.shape .k{font:600 12.5px var(--mono)}
+.shape .d{font:12.5px var(--mono);color:var(--muted)}
+.shape .d b{color:var(--ink);font-weight:600}
+/* decisions */
+.queue{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:var(--s2)}
+.dec{display:flex;flex-direction:column;gap:var(--s1);text-align:left;padding:var(--s2) var(--s3) var(--s2) var(--s4);border-radius:4px;border:1px solid var(--rule);background:var(--surface);cursor:pointer;position:relative}
+.dec::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:4px 0 0 4px;background:var(--c)}
+.dec:hover{border-color:var(--muted)}
+.dec[aria-pressed="true"]{outline:2px solid var(--accent);outline-offset:-1px}
+.dec .w{font:600 11px var(--cond);letter-spacing:.08em;text-transform:uppercase;color:var(--c)}
+.dec .t{font:500 12.5px var(--mono);word-break:break-word}
+.dec .r{font-size:12.5px;color:var(--muted)}
+.dec.done{opacity:.6}.dec.done .w::after{content:"  · resolved";color:var(--muted)}
+.c-approval{--c:var(--approval)}.c-hold{--c:var(--update)}.c-drift{--c:var(--delete)}.c-owner{--c:var(--wait)}.c-undet{--c:var(--dim)}
+/* plan */
+.plan-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.seg{display:inline-flex;border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+.seg button{border:0;background:var(--surface);padding:4px 10px;cursor:pointer;font-size:12px}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.plan{background:var(--surface);border:1px solid var(--rule);border-radius:4px;overflow-x:auto}
+.blk{padding:8px 0;border-top:1px solid var(--rule)}
+.blk:first-child{border-top:0}
+.bh{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;padding:4px 12px;font:600 12.5px var(--mono)}
+.bh .wo{font-weight:400;color:var(--wait)}
+.bh .stt{margin-left:auto;font:500 11px var(--cond);letter-spacing:.07em;text-transform:uppercase;padding:2px 7px;border-radius:3px;background:var(--sunk);color:var(--muted)}
+.stt.applied{background:var(--create-soft);color:var(--create)}
+.stt.held{background:var(--approval-soft);color:var(--approval)}
+.stt.waiting{background:var(--wait-soft);color:var(--wait)}
+.prov{padding:0 12px 4px 26px;font:12px var(--mono);color:var(--dim)}
+.ln{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 16px;padding:3px 12px 4px 26px;cursor:pointer;border-left:3px solid transparent}
+.ln:hover{background:var(--sunk)}
+.ln[aria-pressed="true"]{background:var(--accent-soft);border-left-color:var(--accent)}
+.ln.applied .main{opacity:.55}
+.ln .main{font:12.5px/1.55 var(--mono);white-space:pre-wrap;word-break:break-word;min-width:0}
+.m-c{color:var(--create);font-weight:600}.m-u{color:var(--update);font-weight:600}.m-d{color:var(--delete);font-weight:600}.m-r{color:var(--delete);font-weight:600}.m-e{color:var(--dim);font-weight:600}
+.addr{font-weight:500}
+.site{color:var(--dim)}
+.depc{display:inline-block;font:500 10.5px var(--mono);padding:0 5px;border-radius:3px;background:var(--sunk);color:var(--muted);margin-right:6px;vertical-align:1px}
+.attr{color:var(--ink);padding-left:2ch}
+.attr .site{padding-left:2ch}
+.bec{color:var(--because);padding-left:2ch}
+.heldl{color:var(--approval);padding-left:2ch}
+.heldl.hold{color:var(--update)}.heldl.drift{color:var(--delete)}.heldl.owner{color:var(--wait)}
+.mag{font:11.5px/1.5 var(--mono);color:var(--muted);text-align:right;max-width:240px}
+.mag b{color:var(--delete);font-weight:600}
+@media (max-width:760px){.ln{grid-template-columns:1fr}.mag{text-align:left;max-width:none}}
+.pol .ln .main{white-space:pre-wrap}
+.v-holds{color:var(--create)}.v-fails{color:var(--delete)}.v-und{color:var(--dim)}
+/* tables */
+.tw{overflow-x:auto;border:1px solid var(--rule);border-radius:4px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font:12.5px/1.45 var(--mono);font-variant-numeric:tabular-nums}
+th{font:600 11px var(--cond);letter-spacing:.07em;text-transform:uppercase;color:var(--muted);text-align:left;padding:7px 10px;border-bottom:1px solid var(--rule);white-space:nowrap}
+td{padding:6px 10px;border-top:1px solid var(--rule);vertical-align:top}
+tr.click{cursor:pointer}tr.click:hover td{background:var(--sunk)}
+tr.sel td{background:var(--accent-soft)}
+tr.newrow td:first-child{box-shadow:inset 3px 0 0 var(--because)}
+.word{font:600 11px var(--cond);letter-spacing:.06em;text-transform:uppercase;padding:2px 6px;border-radius:3px;white-space:nowrap}
+.w-drift{background:var(--delete-soft);color:var(--delete)}.w-owner{background:var(--wait-soft);color:var(--wait)}
+.w-default{background:var(--sunk);color:var(--muted)}.w-change{background:var(--update-soft);color:var(--update)}
+.w-sync{background:var(--create-soft);color:var(--create)}.w-unread{background:var(--sunk);color:var(--dim)}
+.legend{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:6px 18px;font-size:12.5px;color:var(--muted)}
+.legend div{display:flex;gap:8px;align-items:baseline}
+/* data */
+.rel{display:flex;flex-direction:column;gap:6px}
+.rel h3{margin:0;font:600 13px var(--mono)}
+.rel .from{font:12px var(--mono);color:var(--muted)}
+.relgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px}
+p.note{margin:0;font-size:13px;color:var(--muted);max-width:70ch}
+/* trace */
+.wf{display:flex;flex-direction:column;gap:3px;font:12px var(--mono)}
+.wf .row{display:grid;grid-template-columns:260px 1fr 64px;gap:10px;align-items:center}
+.wf .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wf .nm.ch{font-weight:600}
+.wf .tr{position:relative;height:14px;background:var(--sunk);border-radius:2px}
+.wf .bar{position:absolute;top:2px;height:10px;border-radius:2px;background:var(--accent);opacity:.55}
+.wf .bar.ch{opacity:1}
+.wf .bar.open{background:repeating-linear-gradient(90deg,var(--wait) 0 6px,transparent 6px 9px);opacity:1}
+.wf .d{text-align:right;color:var(--muted)}
+.wf .axis{display:grid;grid-template-columns:260px 1fr 64px;gap:10px;color:var(--dim);font-size:11px}
+.wf .axis div:nth-child(2){display:flex;justify-content:space-between}
+@media (max-width:760px){.wf .row,.wf .axis{grid-template-columns:120px 1fr 52px}}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:12.5px}
+.kv dt{color:var(--muted)}.kv dd{margin:0;font-family:var(--mono);overflow-wrap:anywhere;min-width:0}
+/* graph */
+.frame.gm .rail{display:none}
+@media (min-width:1181px){.frame.gm{grid-template-columns:minmax(0,1fr) 320px;gap:var(--s5)}}
+@media (max-width:1180px){.frame.gm{grid-template-columns:minmax(0,1fr)}}
+.gbar{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.rg-bg{fill:var(--surface)}.rg-bg.alt{fill:var(--bg)}.rg-line{stroke:var(--rule)}
+.rh{cursor:pointer}.rh rect{fill:var(--sunk);stroke:var(--rule)}.rh.lit rect{fill:var(--update-soft);stroke:var(--update);stroke-width:2}.rh.sel rect{stroke:var(--accent);stroke-width:2.5}
+.rh-l{font:600 11.5px var(--mono);fill:var(--ink)}.rh-s{font:10.5px var(--mono);fill:var(--muted)}.rh-t{font:11px var(--sans);fill:var(--muted)}.rh-w{font:11px var(--sans);fill:var(--wait)}.rh-lit{font:600 11px var(--mono);fill:var(--update)}
+.ln-strip{fill:var(--sunk);opacity:.9}.lanehdr{cursor:pointer}
+.n{cursor:pointer}.n .box{fill:var(--surface);stroke:var(--rule)}.n:hover .box,.n:focus .box{stroke:var(--accent)}.n:focus,.rh:focus,.band:focus{outline:none}
+.n.src .box{fill:var(--bg);stroke:var(--because);stroke-dasharray:3 2}
+.n.sum .box{fill:var(--sunk);stroke:var(--muted);stroke-dasharray:4 3}
+.n.ch .box{stroke-width:2.2}.chg-c .box{fill:var(--create-soft);stroke:var(--create)}.chg-u .box{fill:var(--update-soft);stroke:var(--update)}.chg-d .box{fill:var(--delete-soft);stroke:var(--delete)}.chg-e .box{fill:var(--sunk);stroke:var(--dim)}
+.n.rc .box{stroke:var(--update);stroke-dasharray:5 3;stroke-width:1.8}
+.n.sel .box{stroke:var(--accent);stroke-width:3}
+.gty{font:10px var(--mono);fill:var(--muted)}
+.gs,.h-ok,.h-bad,.h-unk,.h-wait,.r-drift,.r-owner,.ovr{font:11px var(--mono)}
+.gs{fill:var(--muted)}.h-ok{fill:var(--create)}.h-bad{fill:var(--delete)}.h-unk{fill:var(--dim)}.h-wait{fill:var(--wait)}.r-drift{fill:var(--delete)}.r-owner{fill:var(--wait)}
+.ov{font:600 11px var(--mono)}.ovr{fill:var(--update);font-weight:500}
+.gframe{cursor:pointer}.gframe rect{fill:none;stroke:var(--muted);stroke-dasharray:2 3}.gframe text{font:10px var(--mono);fill:var(--muted)}
+.band{cursor:pointer}.band rect{fill:var(--sunk);stroke:var(--rule)}.band text{font:10.5px var(--mono);fill:var(--muted)}
+.e-output{stroke:var(--wait);stroke-width:2}.e-provider{stroke:var(--ink);stroke-dasharray:6 3;stroke-width:1.6}.e-rows{stroke:var(--because);stroke-dasharray:2 3;stroke-width:1.6}
+.e.lit{stroke:var(--update);stroke-width:2.6;opacity:1}.e.soft{opacity:.5}.e.on{stroke-width:2.2}
+.bundle{fill:none;stroke:var(--muted);stroke-width:1.5;opacity:.6}.ar-bundle{fill:var(--muted)}
+.rbl{font:10.5px var(--mono);fill:var(--muted)}.g-lb{font:11px var(--mono);fill:var(--accent)}
+.n.fade{opacity:.42}.n.nb .box{stroke:var(--accent);stroke-width:1.8}.n.dn .box{stroke:var(--accent);stroke-dasharray:3 2;stroke-width:1.8}
+.rh.dn rect{stroke:var(--accent);stroke-dasharray:3 2}
+.band.dn rect{stroke:var(--accent);stroke-dasharray:3 2;stroke-width:1.6}.band.sel rect{stroke:var(--accent);stroke-width:2.4}
+.ar-output{fill:var(--wait)}.ar-provider{fill:var(--ink)}.ar-rows{fill:var(--because)}.ar-lit{fill:var(--update)}
+.gwrap{background:var(--surface);border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+.gwrap{overflow-x:auto}.gwrap svg{display:block;max-width:none}
+.run{display:flex;flex-direction:column;gap:var(--s3);padding:var(--s3) var(--s4) var(--s4);background:var(--surface);border:1px solid var(--rule);border-radius:4px}
+.run.cur{border-color:var(--muted)}
+.run-h{display:flex;flex-wrap:wrap;gap:var(--s2) var(--s3);align-items:baseline;font:500 13px var(--mono)}
+.run-h .stt{font:500 11px var(--cond);letter-spacing:.07em;text-transform:uppercase;padding:2px 7px;border-radius:3px;background:var(--sunk);color:var(--muted)}
+.run-t{margin-left:auto;font-size:12px}
+.run details{display:flex;flex-direction:column;gap:var(--s2)}.run summary{cursor:pointer;margin-bottom:var(--s2)}
+.g-colbg{fill:var(--bg);opacity:.5}
+.g-colline{stroke:var(--rule);stroke-width:1}
+.g-lanebg{fill:var(--sunk)}
+.g-h{font:600 11px var(--cond);letter-spacing:.08em;text-transform:uppercase;fill:var(--ink)}
+.g-hs{font:11px var(--mono);fill:var(--wait)}
+.g-hst{font:500 10.5px var(--cond);letter-spacing:.06em;text-transform:uppercase;fill:var(--muted)}
+.g-l{font:600 11.5px var(--mono);fill:var(--ink)}
+.g-ls{font:11px var(--sans);fill:var(--muted)}
+.g-node{cursor:pointer}
+.g-node .box{fill:var(--surface);stroke:var(--rule);stroke-width:1}
+.g-node.w2 .box{stroke:var(--muted);stroke-width:1.5}
+.g-node.w3 .box{stroke:var(--delete);stroke-width:2.6}
+.g-node:hover .box,.g-node:focus .box{stroke:var(--accent)}
+.g-node:focus{outline:none}
+.g-node.sel .box{stroke:var(--accent);stroke-width:2.8;fill:var(--accent-soft)}
+.g-node.applied > .body{opacity:.55}
+.gt{font:600 11px var(--mono);fill:var(--ink)}
+.gb{font:11px var(--mono);fill:var(--because)}
+.gw{font:11px var(--mono);fill:var(--wait)}
+.gr{font:11px var(--mono);fill:var(--accent)}
+.gm{font:11px var(--mono);fill:var(--muted)}
+.gok{font:600 10.5px var(--cond);letter-spacing:.06em;text-transform:uppercase;fill:var(--create)}
+.gk-c{fill:var(--create)}.gk-u{fill:var(--update)}.gk-d,.gk-r{fill:var(--delete)}.gk-e{fill:var(--dim)}
+.gk{font:700 11px var(--mono)}
+.tg rect{stroke-width:1}
+.tg text{font:500 10.5px var(--mono)}
+.tg-approval rect{fill:var(--approval-soft);stroke:var(--approval)}.tg-approval text{fill:var(--approval)}
+.tg-hold rect{fill:var(--update-soft);stroke:var(--update)}.tg-hold text{fill:var(--update)}
+.tg-drift rect{fill:var(--delete-soft);stroke:var(--delete)}.tg-drift text{fill:var(--delete)}
+.tg-owner rect{fill:var(--wait-soft);stroke:var(--wait)}.tg-owner text{fill:var(--wait)}
+.tg-undet rect{fill:var(--sunk);stroke:var(--dim)}.tg-undet text{fill:var(--muted)}
+.e{fill:none;stroke-width:1.4}
+.e-ref{stroke:var(--accent)}
+.e-wait{stroke:var(--wait);stroke-dasharray:5 3}
+.e.cross{stroke-width:2.2}
+.e.hi{stroke-width:2.8}
+.ar-ref{fill:var(--accent)}.ar-wait{fill:var(--wait)}
+.el{font:10.5px var(--mono);fill:var(--wait);paint-order:stroke;stroke:var(--surface);stroke-width:4px;stroke-linejoin:round}
+.el.ref{fill:var(--accent)}
+.glegend{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s5);font-size:12px;color:var(--muted);padding:var(--s2) var(--s3);border-top:1px solid var(--rule)}
+.glegend b{font:600 12px var(--mono)}
+/* inspector */
+.insp{position:sticky;top:calc(env(safe-area-inset-top,0px) + 12px);display:flex;flex-direction:column;gap:12px;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:14px 14px 16px;max-height:calc(100vh - 24px);overflow:auto}
+@media (max-width:1180px){.insp{position:static;max-height:none}}
+.insp p{overflow-wrap:anywhere}
+.insp h2{margin:0;font:600 13.5px/1.4 var(--mono);word-break:break-word;text-wrap:balance}
+.insp .cmd{font:12px var(--mono);color:var(--muted);background:var(--sunk);padding:5px 8px;border-radius:3px;overflow-x:auto;white-space:pre}
+.tree{font:12.5px/1.55 var(--mono);overflow-wrap:anywhere}
+.tree ul{list-style:none;margin:0;padding-left:14px;border-left:1px solid var(--rule)}
+.tree>ul{padding-left:0;border-left:0}
+.tree li{padding:1px 0 1px 8px;position:relative}
+.tree details>summary{cursor:pointer;list-style:none}
+.tree details>summary::-webkit-details-marker{display:none}
+.tree details>summary::before{content:"▸ ";color:var(--dim)}
+.tree details[open]>summary::before{content:"▾ "}
+.tree .leaf::before{content:"· ";color:var(--dim)}
+.tree .s{color:var(--dim)}
+.tree .k-because{color:var(--because)}.tree .k-no{color:var(--delete)}.tree .k-wait{color:var(--wait)}.tree .k-held{color:var(--approval)}.tree .k-ok{color:var(--create)}
+.acts{display:flex;flex-direction:column;gap:8px;padding-top:10px;border-top:1px solid var(--rule)}
+.acts p{margin:0;font-size:12.5px;color:var(--muted)}
+.btn{border:1px solid var(--ink);background:var(--ink);color:var(--bg);padding:8px 12px;border-radius:4px;cursor:pointer;font:500 13px var(--sans);min-height:40px;text-align:left}
+.btn.ghost{background:none;color:var(--ink);border-color:var(--rule)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.open{font:600 10.5px var(--cond);letter-spacing:.08em;text-transform:uppercase;color:var(--wait);border:1px solid var(--wait);border-radius:3px;padding:0 4px;margin-left:6px}
+.toast{position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:9px 14px;border-radius:4px;font:12.5px var(--mono);max-width:min(460px,calc(100vw - 32px))}
+.audit td:nth-child(1),.audit td:nth-child(2){white-space:nowrap;color:var(--muted)}.audit td:last-child{overflow-wrap:anywhere}
+.audit tr.fresh td{background:var(--create-soft)}
+.k-plan{color:var(--accent)}.k-approval{color:var(--approval)}.k-controller{color:var(--wait)}.k-action{color:var(--create)}.k-lease{color:var(--update)}
+</style>
+
+<header class="top">
+  <div class="brand">dform controller <span>· mock, 2026-10-15</span></div>
+  <nav class="projects" id="projects" aria-label="Projects"></nav>
+  <div class="ctl" id="ctl"></div>
+</header>
+
+<div class="frame" id="frame">
+  <aside class="rail" id="rail"></aside>
+  <main>
+    <div class="tabs" role="tablist" id="tabs"></div>
+    <div id="pane"></div>
+  </main>
+  <aside class="insp" id="insp" aria-live="polite"></aside>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+"use strict";
+/* ---------- why trees: [text, site, kind, children] ---------- */
+const N = (t, s, k, c) => ({t, s: s || "", k: k || "", c: c || []});
+
+/* ---------- the four projects ---------- */
+const P = {};
+
+P.shop = {
+  title: "shop", sub: "aws (mock)",
+  ctl: {state: "watching", since: "09:38:12", detail: "run 218 · event table aws.availability_zone"},
+  sources: [
+    {k: "git", v: "main a41c9e2", d: "shop: the orders database's security group is named for it · 09:31"},
+    {k: "table", v: "aws.availability_zone", d: "gained 1 row · 09:38:12", fresh: true},
+    {k: "world", v: "dform.state/stacks.shop/env=prod", d: "refreshed 09:38:12"},
+    {k: "approvals", v: "approvals/ (drop dir)", d: "none for sha256:4f1c9e07"},
+  ],
+  deps: [
+    {id: "staging", name: "stacks.shop[env=staging]", mark: "=", st: "up to date · applied 09:02 (run 216)"},
+    {id: "prod", name: "stacks.shop[env=prod]", mark: "~", st: "held · 7 changes"},
+  ],
+  headline: "plan: 7 changes (2 create, 3 update, 1 replace, 1 delete) over 2 ticks, 1 approval; policy: 3 hold · 1 undetermined",
+  shape: [["aws.subnet", "3", "4"], ["aws.instance", "3", "4"], ["aws.security_group", "2", "2", "1 replaced"]],
+  reach: "touches 7 objects in 1 deployment · 1 replace, 1 delete (deposed) · reaches the prod orders database",
+  ticks: [
+    {n: 1, head: "tick 1  6 changes", st: "held", on: "the signature", lines: [
+      {id: "pg", dep: "prod", mark: "±", addr: "aws.security_group postgres", site: "stacks/shop.df:93", note: "name forces replace, create first",
+        attrs: [["name = \"shop-db-prod\" → \"shop-orders-prod\"", ""]], because: "because stacks/shop.df:94 changed in a41c9e2 (was \"shop-db-${env}\")",
+        held: ["approval", "held for approval  replace of aws.security_group postgres in prod  policy.df:7"],
+        mag: "<b>replace</b> · read by 1: aws.db_instance orders (prod, prevent_destroy)"},
+      {id: "orders", dep: "prod", mark: "~", addr: "aws.db_instance orders", site: "stacks/shop.df:30",
+        attrs: [["vpc_security_groups = [postgres]", "the replacement's id, made earlier in the tick"]],
+        held: ["approval", "held with aws.security_group postgres: reads it"],
+        mag: "update · prod database · no downtime on the mock"},
+      {id: "sub1d", dep: "prod", mark: "+", addr: "aws.subnet private-us-east-1d", site: "stacks/shop.df:12  with n = 3",
+        attrs: [["availability_zone = \"us-east-1d\"", ""], ["cidr_block = \"10.0.3.0/24\"", ""], ["tags.team = \"shop\"", "policy.df:5"], ["vpc = main", ""]],
+        because: "because aws.availability_zone gained the row (\"available\", \"us-east-1d\", 3)",
+        mag: "create · read by 2: web-us-east-1d, storefront"},
+      {id: "web1d", dep: "prod", mark: "+", addr: "aws.instance web-us-east-1d", site: "stacks/shop.df:74  with s = private-us-east-1d",
+        attrs: [["instance_type = \"m6g.large\"", "stacks/shop.df:27"], ["subnet = private-us-east-1d", ""], ["tags = { Name = \"shop-web-prod\", team = \"shop\" }", ""], ["vpc_security_groups = [https]", ""]],
+        because: "because aws.availability_zone gained the row (\"available\", \"us-east-1d\", 3)", mag: "create"},
+      {id: "lb", dep: "prod", mark: "~", addr: "aws.lb storefront", site: "stacks/shop.df:81",
+        attrs: [["subnets  + private-us-east-1d", ""]], mag: "update · public endpoint, same name"},
+      {id: "https", dep: "prod", mark: "~", addr: "aws.security_group https", site: "stacks/shop.df:87",
+        attrs: [["ingress  - { from_port = 22, to_port = 22, protocol = \"tcp\", cidr_blocks = [\"0.0.0.0/0\"] }", "(drift)"]],
+        held: ["drift", "held  drift at ingress needs approval (no auto_reconcile, no approve)"],
+        mag: "revert drift · read by 2 instances + 1 more planned"},
+    ]},
+    {n: 2, head: "tick 2  1 change", waits: "waits on  tick 1: aws.security_group postgres", st: "next", lines: [
+      {id: "pgdep", dep: "prod", mark: "-", addr: "aws.security_group postgres  (deposed)", site: "replaced in tick 1",
+        attrs: [["name = \"shop-db-prod\"", ""]], mag: "<b>delete</b> · nothing reads it once orders moves"},
+    ]},
+  ],
+  policy: {head: "policy  3 hold · 1 undetermined", lines: [
+    {id: "pol-pub", mark: "undetermined", text: "no public subnets", site: "stacks/shop.df:18", tally: "3 hold · 1 undetermined",
+      under: "aws.subnet private-us-east-1d  until map_public_ip_on_launch is known, once the subnet is made"},
+    {id: "pol-hold", mark: "holds", text: "3 hold", site: "", tally: "", under: ""},
+  ]},
+  approvals: [["aws.security_group postgres", "replace of aws.security_group postgres in prod", "policy.df:7"]],
+  decisions: [
+    {id: "d-appr", kind: "approval", word: "Needs a signature", t: "stacks.shop[env=prod]  aws.security_group postgres", r: "replace of aws.security_group postgres in prod  ·  policy.df:7", line: "pg"},
+    {id: "d-drift", kind: "drift", word: "Drift held", t: "stacks.shop[env=prod]  aws.security_group https", r: "ingress gained port 22 from 0.0.0.0/0, outside dform", line: "https"},
+  ],
+};
+
+P.k3s = {
+  title: "k3s-platform", sub: "ovh, k8s (mock)",
+  ctl: {state: "applying", since: "09:12:30", detail: "run 77 · waiting on the ssh read, 2m14s of 10m"},
+  sources: [
+    {k: "git", v: "main 5d02b7e", d: "platform: try Ubuntu 26.04 on staging · 09:12", fresh: true},
+    {k: "read", v: "ssh://ubuntu@51.79.104.37/etc/rancher/k3s/k3s.yaml", d: "not answered · since 09:15:52"},
+    {k: "outputs", v: "platform[staging].ingress", d: "51.79.104.37, planned → published at apply_end"},
+    {k: "table", v: "ovh.flavor, ovh.zone", d: "unchanged"},
+  ],
+  deps: [
+    {id: "platform[staging]", name: "stacks.platform[env=staging]", mark: "~", st: "applying · lease fence 31", edge: ""},
+    {id: "apps[staging]", name: "stacks.apps[env=staging]", mark: "~", st: "applying · lease fence 27", edge: "reads platform[staging].kubeconfig, .ingress"},
+    {id: "platform[prod]", name: "stacks.platform[env=prod]", mark: "=", st: "up to date", edge: ""},
+    {id: "apps[prod]", name: "stacks.apps[env=prod]", mark: "~", st: "held · ownership lost", edge: "reads platform[prod].kubeconfig, .ingress"},
+  ],
+  headline: "plan: 4 changes (1 replace, 3 update) over 2 ticks, 3 later waiting on ssh://ubuntu@51.79.104.37/etc/rancher/k3s/k3s.yaml; policy: 3 hold",
+  shape: [["ovh.instance", "2", "2", "1 replaced"], ["k8s objects readable", "6", "3", "staging's 3 behind the read"]],
+  reach: "the replaced server configures provider k8s: 3 objects in 2 deployments are read through it · 2 DNS records follow its address",
+  ticks: [
+    {n: 1, head: "tick 1  1 change", st: "applied", stNote: "applied 09:14:02 → 09:15:40", lines: [
+      {id: "srv", dep: "platform[staging]", mark: "±", addr: "ovh.instance server", site: "stacks/platform.df:24", note: "image forces replace", applied: true, at: "09:15 (run 77)",
+        attrs: [["image = \"Ubuntu 24.04\" → \"Ubuntu 26.04\"", "stacks/platform.df:15"]],
+        because: "because stacks/platform.df:15 set image = \"Ubuntu 26.04\" where env == \"staging\" was added in 5d02b7e",
+        mag: "<b>replace</b> · provider k8s configured from it: reaches 3 objects in 2 deployments · its address feeds 2 records"},
+    ]},
+    {n: 2, head: "tick 2  2 changes", waits: "waits on  server.public_ip", st: "applied", stNote: "applied 09:15:52", lines: [
+      {id: "api", dep: "platform[staging]", mark: "~", addr: "ovh.domain_record api", site: "stacks/platform.df:40", applied: true, at: "09:15 (run 77)",
+        attrs: [["target = \"51.79.98.12\" → \"51.79.104.37\"", ""]], mag: "update · api.staging.example.com"},
+      {id: "www", dep: "apps[staging]", mark: "~", addr: "ovh.domain_record www", site: "stacks/apps.df:31", applied: true, at: "09:15 (run 77)",
+        attrs: [["target = \"51.79.98.12\" → \"51.79.104.37\"", "platform[env].ingress"]], mag: "update · www.staging.example.com"},
+    ]},
+  ],
+  later: {head: "later", on: "kubeconfig", waits: "waits on  provider k8s  kubeconfig = raw, ssh://ubuntu@51.79.104.37/etc/rancher/k3s/k3s.yaml",
+    prov: "provisional: planned against the offline schema; planned again once kubeconfig is known", st: "waiting", stNote: "waiting 2m14s of 10m",
+    lines: [
+      {id: "ns", dep: "platform[staging]", mark: "=", addr: "k8s.namespace apps", site: "stacks/platform.df:37", attrs: [["as state has them; the new cluster is not read yet", ""]], mag: "expect create: the cluster is new"},
+      {id: "dep", dep: "apps[staging]", mark: "=", addr: "k8s.deployment web", site: "stacks/apps.df:12", attrs: [["as state has them", ""]], mag: "expect create"},
+      {id: "svc", dep: "apps[staging]", mark: "=", addr: "k8s.service web", site: "stacks/apps.df:24", attrs: [["as state has them", ""]], mag: "expect create"},
+    ]},
+  extraTicks: [
+    {n: "·", head: "held, outside the ticks", st: "held", lines: [
+      {id: "repl", dep: "apps[prod]", mark: "~", addr: "k8s.deployment web", site: "stacks/apps.df:12",
+        attrs: [["spec.replicas = 5 → 3", "stacks/apps.df:10"]],
+        held: ["owner", "held  ownership lost: kubectl owns spec.replicas since 08:12:40"],
+        mag: "update · prod, 5 pods → 3"},
+    ]},
+  ],
+  policy: {head: "policy  3 hold", lines: [
+    {id: "pol-k3s", mark: "holds", text: "3 hold", site: "", tally: "", under: "k3s needs 4 GB of memory · an image is not pinned by its digest · the domain is not on this account"},
+  ]},
+  approvals: [],
+  decisions: [
+    {id: "d-own", kind: "owner", word: "Ownership lost", t: "stacks.apps[env=prod]  k8s.deployment web", r: "spec.replicas: kubectl (Update) owns it since 08:12:40; live 5, program 3", line: "repl"},
+  ],
+};
+
+P.gke = {
+  title: "gke-platform", sub: "google (mock)",
+  ctl: {state: "watching", since: "08:02:44", detail: "run 64 · event input data/peerings.csv"},
+  sources: [
+    {k: "git", v: "main a8f3e10", d: "peerings: envoy-prod · 08:01"},
+    {k: "document", v: "data/peerings.csv", d: "gained line 6 · 08:02:40", fresh: true},
+    {k: "document", v: "files/dashboard-gke-platform.json", d: "unchanged"},
+  ],
+  deps: [
+    {id: "dev", name: "stacks.gke_platform[env=dev]", mark: "=", st: "up to date · isolated"},
+    {id: "stg", name: "stacks.gke_platform[env=stg]", mark: "=", st: "up to date · isolated"},
+    {id: "prod", name: "stacks.gke_platform[env=prod]", mark: "=", st: "up to date · applied 08:02 (run 64)"},
+  ],
+  headline: "plan: 0 changes; policy: 1 hold",
+  shape: [["google.compute_network main.peerings (prod)", "1", "2"]],
+  reach: "the last apply touched 1 object in 1 deployment · no replace, no delete",
+  ticks: [],
+  upToDate: [
+    "= stacks.gke_platform[env=dev]    stacks/gke_platform.df  up to date",
+    "= stacks.gke_platform[env=stg]    stacks/gke_platform.df  up to date",
+    "= stacks.gke_platform[env=prod]   stacks/gke_platform.df  up to date",
+  ],
+  lastApply: {head: "last apply  08:02:44 → 08:02:51  by dform-controller", lines: [
+    {id: "peer", dep: "prod", mark: "~", addr: "google.compute_network main", site: "stacks/gke_platform.df:165", applied: true,
+      attrs: [["peerings  + { name = \"envoy-prod\", peer_network = \"projects/envoy-prod-318204/global/networks/envoy-prod-network\" }", ""]],
+      because: "because data/peerings.csv:6 gained the row peering(\"prod\", \"envoy-prod\", \"projects/envoy-prod-318204/…\")",
+      mag: "update · 1 peering added"},
+  ]},
+  policy: {head: "policy  1 hold", lines: [{id: "pol-gke", mark: "holds", text: "1 hold", site: "", tally: "", under: "GKE static IPs must be INTERNAL"}]},
+  approvals: [], decisions: [],
+};
+
+P.rel = {
+  title: "releases", sub: "fake · terry.org",
+  ctl: {state: "watching", since: "2026-10-14 16:20:00", detail: "run 12 · event time: eligible(\"shop\", \"1.4.1\")"},
+  sources: [
+    {k: "sql", v: "sql.table(\"build\")", d: "LISTEN build · last commit 2026-10-08 09:31"},
+    {k: "sql", v: "sql.table(\"tested\")", d: "LISTEN tested · last commit 2026-10-09 11:00"},
+    {k: "time", v: "next boundary 2026-10-16T11:00Z", d: "eligible(\"shop\", \"1.5.0\") becomes true", fresh: true},
+  ],
+  deps: [{id: "releases", name: "stacks.releases", mark: "~", st: "held · 1 change"}],
+  headline: "plan: 1 change (1 update) over 1 tick, 1 held; policy: 0 hold",
+  shape: [["deploy.cell at shop 1.4.1", "0", "1", "us-1 shipped yesterday"]],
+  reach: "touches 1 cell of 2 · eu-1 serves shop",
+  ticks: [
+    {n: 1, head: "tick 1  1 change", st: "held", lines: [
+      {id: "eu1", dep: "releases", mark: "~", addr: "deploy.cell eu-1", site: "stacks/releases.df:14",
+        attrs: [["apps = [{ app = \"shop\", version = \"1.4.0\" }] → [{ app = \"shop\", version = \"1.4.1\" }]", ""]],
+        because: "because eligible(\"shop\", \"1.4.1\") holds since 2026-10-14T16:20Z (tested 2026-10-07T16:20Z, 7d)",
+        held: ["hold", "held  one release a week per cell: eu-1 released 2026-10-12, lifts 2026-10-19T00:00Z  stacks/releases.df:20"],
+        mag: "update · 1 app"},
+    ]},
+  ],
+  policy: {head: "policy  0 hold", lines: []},
+  approvals: [],
+  decisions: [
+    {id: "d-cad", kind: "hold", word: "Held by a rule", t: "deploy.cell eu-1", r: "one release a week per cell · lifts 2026-10-19T00:00Z", line: "eu1"},
+  ],
+};
+
+/* ---------- why trees, keyed by line or decision ---------- */
+const WHY = {
+  pg: {title: "± aws.security_group postgres", cmd: "dform why 'aws.security_group postgres' shop env=prod", tree: [
+    N("aws.security_group postgres  stacks/shop.df:93", "", "", [
+      N("name = \"shop-orders-prod\"  forces replace", "", "", [
+        N("= \"shop-orders-${env}\"", "stacks/shop.df:94"), N("input env = \"prod\"", "key of the deployment")]),
+      N("because stacks/shop.df:94 was \"shop-db-${env}\" at the last apply (seq 39, a8c0d51)", "", "because"),
+      N("vpc = main", "stacks/shop.df:95")]),
+    N("create first: the replacement is made, orders moved to it, then the old one deleted", "", "wait"),
+    N("held for approval: replace of aws.security_group postgres in prod", "policy.df:7", "held", [
+      N("requires_approval(r, \"${kind} of ${r} in prod\")", "policy.df:7", "", [
+        N("with kind = \"replace\", r = aws.security_group postgres"),
+        N("env == \"prod\": true", "key"),
+        N("deformation(\"replace\", aws.security_group postgres, _)", "the plan"),
+        N("kind in [\"replace\", \"delete\"]: true")])]),
+    N("reach: read by aws.db_instance orders.vpc_security_groups  stacks/shop.df:37", "", "", [
+      N("lifecycle(orders, \"prevent_destroy\")", "stacks/shop.df:55"), N("orders is updated in place, not replaced", "", "ok")]),
+  ]},
+  orders: {title: "~ aws.db_instance orders", cmd: "dform why orders.vpc_security_groups shop env=prod", tree: [
+    N("aws.db_instance orders.vpc_security_groups = [postgres]", "stacks/shop.df:37", "", [
+      N("postgres is replaced first; the update carries the new id", "", "wait")]),
+    N("held with aws.security_group postgres: it reads it", "", "held"),
+    N("every prod database is kept: holds", "stacks/shop.df:57", "ok", [N("lifecycle(orders, \"prevent_destroy\")", "stacks/shop.df:55")]),
+  ]},
+  sub1d: {title: "+ aws.subnet private-us-east-1d", cmd: "dform why 'aws.subnet private-us-east-1d' shop env=prod", tree: [
+    N("aws.subnet private-us-east-1d  stacks/shop.df:12  with availability_zone = \"us-east-1d\", n = 3", "", "", [
+      N("aws.availability_zone(\"available\", \"us-east-1d\", 3)", "provider table, read 09:38:12", "because"),
+      N("cidr_block = \"10.0.3.0/24\"", "", "", [N("= cidr(n)", "stacks/shop.df:15"), N("= inet.subnet(main.cidr_block, 8, n)", "stacks/shop.df:9"), N("main.cidr_block = \"10.0.0.0/16\"", "stacks/shop.df:7")]),
+      N("tags.team = \"shop\"", "policy.df:5", "", [N("set r.tags = { team = \"shop\" } where r in resource", "policy.df:5")])]),
+    N("because the table gained a row; the file did not change", "", "because"),
+    N("no public subnets: undetermined until map_public_ip_on_launch is known, once the subnet is made", "stacks/shop.df:18", "wait"),
+  ]},
+  web1d: {title: "+ aws.instance web-us-east-1d", cmd: "dform why 'aws.instance web-us-east-1d' shop env=prod", tree: [
+    N("aws.instance web-us-east-1d  stacks/shop.df:74  with s = aws.subnet private-us-east-1d", "", "", [
+      N("s in aws.subnet: the subnet planned beside it", "stacks/shop.df:12"),
+      N("instance_type = \"m6g.large\"", "", "", [N("= web.type", "stacks/shop.df:75"), N("= \"m6g.large\"", "stacks/shop.df:27"), N("over 1 @default  \"t3.small\"", "stacks/shop.df:4")])]),
+  ]},
+  lb: {title: "~ aws.lb storefront", cmd: "dform why storefront.subnets shop env=prod", tree: [
+    N("aws.lb storefront.subnets = [ ref(s) | s in aws.subnet ]", "stacks/shop.df:83", "", [N("+ private-us-east-1d", "with s = aws.subnet private-us-east-1d", "because")])]},
+  https: {title: "~ aws.security_group https", cmd: "dform why 'aws.security_group https' shop env=prod", tree: [
+    N("ingress as written: [{ from_port = 443, to_port = 443, protocol = \"tcp\", cidr_blocks = [\"0.0.0.0/0\"] }]", "stacks/shop.df:90"),
+    N("drift(\"aws.security_group\", \"https\", \"ingress[1]\", absent, {from_port = 22, …})", "controller, event world 09:38:12", "no", [
+      N("live gained it 07:58:21 by ops@example.com (AuthorizeSecurityGroupIngress)", "provider: who, when it can tell")]),
+    N("held: drift at ingress needs approval", "", "held", [
+      N("auto_reconcile(\"aws.security_group\", \"https\", \"ingress\"): no row", "", "no"),
+      N("approve(\"aws.security_group\", \"https\"): no row", "", "no")]),
+    N("reach: read by aws.instance web-us-east-1a/b/c, web-us-east-1d (planned), aws.lb storefront"),
+  ]},
+  pgdep: {title: "- aws.security_group postgres (deposed)", cmd: "", tree: [N("the object the replace deposes; nothing reads it once orders is moved", "", "")]},
+  "pol-pub": {title: "deny \"no public subnets\"", cmd: "dform why 'deny \"no public subnets\"' shop env=prod", tree: [
+    N("deny \"no public subnets\" { subnet } where subnet in aws.subnet, subnet.map_public_ip_on_launch", "stacks/shop.df:18", "", [
+      N("aws.subnet private-us-east-1a/b/c: map_public_ip_on_launch = false", "world", "ok"),
+      N("aws.subnet private-us-east-1d: map_public_ip_on_launch = ?", "provider computes it at create", "wait", [
+        N("decided once the subnet is made"),
+        N("in staging it decided holds at 09:40:51 (false)", "", "ok")])]),
+    N("an undetermined deny does not stop the create (R-95); --hold-until-decided would", "", "dimt"),
+  ]},
+  "pol-hold": {title: "3 policies hold", cmd: "dform plan -v shop env=prod", tree: [
+    N("no public database in prod", "stacks/shop.df:51", "ok"), N("a prod database survives a zone", "stacks/shop.df:53", "ok"), N("every prod database is kept", "stacks/shop.df:57", "ok")]},
+  srv: {title: "± ovh.instance server", cmd: "dform why 'ovh.instance server' platform env=staging", tree: [
+    N("ovh.instance server  stacks/platform.df:24", "", "", [
+      N("image = \"Ubuntu 26.04\"  forces replace", "stacks/platform.df:15", "", [N("set image = \"Ubuntu 26.04\" where env == \"staging\"", "stacks/platform.df:15"), N("over 1 @default \"Ubuntu 24.04\"", "stacks/platform.df:4")]),
+      N("because the set was added in 5d02b7e", "", "because")]),
+    N("reach through provider configuration", "", "", [
+      N("let raw = io.read(\"ssh://ubuntu@${server.public_ip}/etc/rancher/k3s/k3s.yaml\")", "stacks/platform.df:33"),
+      N("use k8s { kubeconfig }", "stacks/platform.df:35"),
+      N("output kubeconfig", "stacks/platform.df:5", "", [N("use k8s { kubeconfig = platform[env].kubeconfig }", "stacks/apps.df:7")]),
+      N("3 k8s objects in 2 deployments are read through it", "", "no")]),
+    N("applied 09:14:02 → 09:15:40 in run 77 (delete 21.4s, create 74.2s)", "", "ok"),
+  ]},
+  api: {title: "~ ovh.domain_record api", cmd: "", tree: [N("target = server.public_ip", "stacks/platform.df:44", "", [N("ovh.instance server.public_ip = \"51.79.104.37\"", "made by the replace, run 77", "because")]), N("applied 09:15:52, run 77", "", "ok")]},
+  www: {title: "~ ovh.domain_record www", cmd: "dform why www.target apps env=staging", tree: [
+    N("target = platform[env].ingress", "stacks/apps.df:35", "", [N("stacks.platform[env=staging].ingress = server.public_ip", "stacks/platform.df:6", "", [N("= \"51.79.104.37\"", "made by the replace, run 77", "because")])]),
+    N("one tree, one plan: apps' record applied beside platform's, not after it", "", "dimt"), N("applied 09:15:52, run 77", "", "ok")]},
+  ns: {title: "later: k8s.namespace apps", cmd: "dform why 'k8s.namespace apps' platform env=staging", tree: [
+    N("later  waits on  provider k8s  kubeconfig = raw, ssh://ubuntu@51.79.104.37/etc/rancher/k3s/k3s.yaml", "", "wait", [
+      N("io.read: connection refused (sshd up, k3s.yaml absent)", "retry 7, every 15s"),
+      N("wait = \"10m\" (the default), 2m14s spent", "dform.toml")]),
+    N("provisional: planned against the offline k8s schema", "", "dimt"),
+    N("state has it on the replaced server; expect a create once the cluster answers", "", "no"),
+  ]},
+  dep: {title: "later: k8s.deployment web", cmd: "", tree: [N("later  waits on  provider k8s  kubeconfig = platform[env].kubeconfig", "stacks/apps.df:7", "wait", [N("stacks.platform[env=staging].kubeconfig  ← the same read", "stacks/platform.df:5")]), N("an image is not pinned by its digest: holds (decided without the cluster)", "k3s-platform/policy.df:7", "ok")]},
+  svc: {title: "later: k8s.service web", cmd: "", tree: [N("later  waits on  provider k8s  kubeconfig = platform[env].kubeconfig", "stacks/apps.df:7", "wait")]},
+  repl: {title: "~ k8s.deployment web (apps[prod])", cmd: "dform why web.spec.replicas apps env=prod", tree: [
+    N("spec.replicas = 3", "", "", [N("= replicas", "stacks/apps.df:14"), N("= 3", "stacks/apps.df:10"), N("over 1 @default 2", "stacks/apps.df:3")]),
+    N("live 5; managedFields: kubectl (Update) owns f:spec.f:replicas since 08:12:40", "provider k8s", "no"),
+    N("ownership lost is not drift: the field is someone else's now; a server-side apply conflicts unless forced", "", "dimt"),
+    N("the controller does not force", "", "held"),
+  ]},
+  "pol-k3s": {title: "3 policies hold", cmd: "", tree: [N("k3s needs 4 GB of memory", "policy.df:4", "ok", [N("ovh.flavor(\"BHS5\", \"b2-15\", _, 15Gi, _)", "provider table")]), N("an image is not pinned by its digest", "policy.df:7", "ok"), N("the domain is not on this account", "stacks/platform.df:10", "ok", [N("ovh.zone(\"example.com\", _, _)", "provider table")])]},
+  peer: {title: "~ google.compute_network main (prod)", cmd: "dform diff --since 14 gke_platform env=prod", tree: [
+    N("peerings = [ { name = n, peer_network = p } | peering(env, n, p) ]", "stacks/gke_platform.df:168", "", [
+      N("peering(\"prod\", \"edge-prod\", …)", "data/peerings.csv:5"),
+      N("peering(\"prod\", \"envoy-prod\", …)", "data/peerings.csv:6", "because")]),
+    N("input peering from csv.decode(io.read(\"data/peerings.csv\"))", "stacks/gke_platform.df:33"),
+    N("applied 08:02:51 by dform-controller, commit a8f3e10", "", "ok")]},
+  "pol-gke": {title: "1 policy holds", cmd: "", tree: [N("GKE static IPs must be INTERNAL", "stacks/gke_platform.df:131", "ok")]},
+  eu1: {title: "~ deploy.cell eu-1", cmd: "dform why 'deploy.cell eu-1.apps' releases", tree: [
+    N("apps = [{ app, version } | candidate(cell, app, version)]", "stacks/releases.df:15", "", [
+      N("candidate(\"eu-1\", \"shop\", \"1.4.1\")", "stacks/releases.df:12", "", [
+        N("eligible(\"shop\", \"1.4.1\")", "stacks/releases.df:8", "", [
+          N("tested(\"shop\", \"1.4.1\", 2026-10-07T16:20Z)", "sql.table(\"tested\"), written_by testgrid/shop-e2e", "because"),
+          N("time.now() - since >= 7d: true (7d 17h)")]),
+        N("not newer(\"shop\", \"1.4.1\"): 1.5.0 is not eligible", "", "", [N("eligible(\"shop\", \"1.5.0\"): no row; 6d 22h of 7d, true from 2026-10-16T11:00Z", "", "no")])])]),
+    N("hold(\"deploy.cell\", \"eu-1\", \"one release a week per cell\")", "stacks/releases.df:20", "held", [
+      N("deformation(\"update\", deploy.cell eu-1, _)", "the plan"),
+      N("released(\"eu-1\", 2026-10-12T00:00Z)", "controller's record"),
+      N("time.now() - at < 7d: true (3d 9h)"), N("lifts 2026-10-19T00:00Z; the controller wakes then", "", "wait")]),
+    N("us-1 got 1.4.1 at 2026-10-14T16:20:03 (released 2026-10-06, the rule held no row)", "", "ok"),
+  ]},
+};
+WHY["d-appr"] = WHY.pg; WHY["d-drift"] = WHY.https; WHY["d-und"] = WHY["pol-pub"]; WHY["d-own"] = WHY.repl; WHY["d-wait"] = WHY.ns; WHY["d-cad"] = WHY.eu1;
+
+/* ---------- actions per decision ---------- */
+const ACTS = {
+  "d-appr": () => DONE["d-appr"] ? `<p>Signed by simon@framework over sha256:4f1c9e07…. Run 219 applies it.</p>` : `
+    <p>The signature is over the plan's digest, <span class="mono">sha256:4f1c9e07…b31a</span>, not over the change: a new event that changes the plan needs a new one. Signers: any key of the trust root (dform.toml <span class="mono">[approvals]</span>).</p>
+    <p class="mono">dform approve sha256:4f1c9e07 shop env=prod</p>
+    <button class="btn" id="sign">Sign the plan as simon@framework</button>
+    <p>Open: the mock holds everything ordered with the signed change; docs/experimental/controller.md holds only the deformation.</p>`,
+  "d-drift": () => DONE["d-drift"] ? `<p>approve("aws.security_group", "https") written by simon@framework. The revert applied.</p>` : `
+    <p>Three ways out, two of them are code. Revert now: write the row the controller reads. Keep the rule: add it to stacks/shop.df (a PR). Let it drift: <span class="mono">auto_reconcile</span> or <span class="mono">ignore_changes</span> on the path (a PR).</p>
+    <button class="btn" id="revert">Revert the drift: approve("aws.security_group", "https")</button>`,
+  "d-und": () => DONE["d-und"] ? `<p>Decided: holds. map_public_ip_on_launch = false once the subnet was made.</p>` : `<p>Nothing to do. It decides once the subnet is made, which waits on the signature. A stack where an irreversible create matters more than progress would set <span class="mono">--hold-until-decided</span> (R-95).</p>`,
+  "d-own": () => `<p>No button: taking a field back is a decision about who runs replicas. Give it up: <span class="mono">ignore_changes(web, "spec.replicas")</span>, or an HPA the program declares. Take it back: <span class="mono">force_ownership(web, "spec.replicas")</span> (does not exist; open).</p>`,
+  "d-wait": () => `<p>Nothing to do. The apply waits up to <span class="mono">wait = "10m"</span>, then stops with state consistent and the next event resumes.</p>`,
+  "d-cad": () => `<p>A hold is the program's. The page cannot lift it: change the rule, or the <span class="mono">released</span> row, by a PR. In controller mode the cadence is a hold, not a deny: a deny refuses the whole plan, a hold keeps eu-1 waiting while us-1 ships.</p>
+    <button class="btn ghost" disabled title="the program declares no freeze relation">Freeze the project (needs decl freeze)</button>`,
+};
+const DONE = {};
+
+/* ---------- world: four sources ---------- */
+const WORLD = {
+  shop: [
+    {d: "prod", p: "aws.security_group https.ingress[1]", des: "absent", base: "absent", live: "{ from_port = 22, cidr_blocks = [\"0.0.0.0/0\"] }", def: "", w: "drift", wn: "drift", who: "ops@example.com · 07:58:21", line: "https"},
+    {d: "prod", p: "aws.security_group postgres.name", des: "\"shop-orders-prod\"", base: "\"shop-db-prod\"", live: "\"shop-db-prod\"", def: "", w: "change", wn: "change", who: "a41c9e2", line: "pg"},
+    {d: "prod", p: "aws.db_instance orders.backup_retention_period", des: "14", base: "14", live: "14", def: "1", w: "sync", wn: "in sync", who: ""},
+    {d: "prod", p: "aws.db_instance orders.engine_version", des: "", base: "\"16.4\"", live: "\"16.4\"", def: "\"16.4\" @internal", w: "default", wn: "provider default", who: "dform declines to own it"},
+    {d: "prod", p: "aws.subnet private-us-east-1d.map_public_ip_on_launch", des: "", base: "", live: "", def: "? (computed)", w: "unread", wn: "not yet", who: "known once the subnet is made", line: "pol-pub"},
+  ],
+  k3s: [
+    {d: "apps[prod]", p: "k8s.deployment web.spec.replicas", des: "3", base: "3", live: "5", def: "", w: "owner", wn: "ownership lost", who: "kubectl (Update) · 08:12:40", line: "repl"},
+    {d: "apps[prod]", p: "k8s.deployment web.spec.revisionHistoryLimit", des: "", base: "", live: "10", def: "10 @internal", w: "default", wn: "provider default", who: "dform declines to own it"},
+    {d: "apps[prod]", p: "k8s.service web.spec.ports[port=80].protocol", des: "\"TCP\"", base: "\"TCP\"", live: "\"TCP\"", def: "\"TCP\" (schema default)", w: "sync", wn: "in sync", who: ""},
+    {d: "apps[staging]", p: "k8s.deployment web", des: "{ .. }", base: "{ .. } (old server)", live: "unreadable", def: "", w: "unread", wn: "live unreadable", who: "provider k8s waits on kubeconfig", line: "dep"},
+    {d: "platform[staging]", p: "ovh.instance server.image", des: "\"Ubuntu 26.04\"", base: "\"Ubuntu 26.04\"", live: "\"Ubuntu 26.04\"", def: "", w: "sync", wn: "in sync", who: "applied 09:15:40", line: "srv"},
+  ],
+  gke: [
+    {d: "prod", p: "google.container_cluster gke_platform.release_channel", des: "", base: "\"REGULAR\"", live: "\"REGULAR\"", def: "\"REGULAR\" @internal", w: "default", wn: "provider default", who: "dform declines to own it"},
+    {d: "prod", p: "google.compute_network main.peerings", des: "2 elements", base: "2 elements", live: "2 elements", def: "", w: "sync", wn: "in sync", who: "applied 08:02:51", line: "peer"},
+  ],
+  rel: [
+    {d: "releases", p: "deploy.cell eu-1.apps", des: "[shop 1.4.1]", base: "[shop 1.4.0]", live: "[shop 1.4.0]", def: "", w: "change", wn: "change (held)", who: "", line: "eu1"},
+    {d: "releases", p: "deploy.cell us-1.apps", des: "[shop 1.4.1]", base: "[shop 1.4.1]", live: "[shop 1.4.1]", def: "", w: "sync", wn: "in sync", who: "applied 2026-10-14 16:20:03"},
+  ],
+};
+
+/* ---------- data: relations and rows ---------- */
+const DATA = {
+  shop: [
+    {name: "aws.availability_zone(state, name, n)", from: "provider table · read at refresh", cols: ["state", "name", "n", "seen"], rows: [
+      ["\"available\"", "\"us-east-1a\"", "0", "before"], ["\"available\"", "\"us-east-1b\"", "1", "before"], ["\"available\"", "\"us-east-1c\"", "2", "before"],
+      {new: true, r: ["\"available\"", "\"us-east-1d\"", "3", "09:38:12"], line: "sub1d"}]},
+    {name: "deformation(kind, resource, _)", from: "the plan, a table the policy reads · shop[env=prod]", cols: ["kind", "resource"], rows: [
+      {r: ["\"replace\"", "aws.security_group postgres"], line: "pg"}, {r: ["\"update\"", "aws.db_instance orders"], line: "orders"}, {r: ["\"create\"", "aws.subnet private-us-east-1d"], line: "sub1d"},
+      {r: ["\"create\"", "aws.instance web-us-east-1d"], line: "web1d"}, {r: ["\"update\"", "aws.lb storefront"], line: "lb"}, {r: ["\"update\"", "aws.security_group https"], line: "https"}]},
+    {name: "requires_approval(r, reason)", from: "derived · policy.df:7", cols: ["r", "reason"], rows: [{r: ["aws.security_group postgres", "\"replace of aws.security_group postgres in prod\""], line: "pg"}]},
+    {name: "drift(T, A, path, before, after)", from: "handed in by the controller · event world 09:38:12", cols: ["T", "A", "path", "before", "after"], rows: [
+      {new: true, r: ["\"aws.security_group\"", "\"https\"", "\"ingress[1]\"", "absent", "{from_port = 22, …}"], line: "https"}]},
+  ],
+  k3s: [
+    {name: "stacks.platform[env=staging] outputs", from: "read inside the tree: what platform's plan says it will publish", cols: ["output", "value", "known"], rows: [
+      {r: ["ingress", "\"51.79.104.37\"", "run 77, 09:15"], line: "www"}, {r: ["kubeconfig", "(sensitive)", "later: the ssh read"], line: "ns"}]},
+    {name: "io.read locations", from: "documents the run reads", cols: ["location", "state"], rows: [
+      {r: ["ssh://ubuntu@51.79.104.37/etc/rancher/k3s/k3s.yaml", "not answered, 2m14s"], line: "ns"}, ["ssh://ubuntu@51.79.88.4/etc/rancher/k3s/k3s.yaml (prod)", "read 09:12:31"]]},
+    {name: "ovh.flavor(region, name, vcpus, ram, disk)", from: "provider table", cols: ["region", "name", "ram"], rows: [["\"BHS5\"", "\"b2-7\"", "7Gi"], ["\"BHS5\"", "\"b2-15\"", "15Gi"]]},
+  ],
+  gke: [
+    {name: "peering(env, name, peer_network)", from: "input peering from csv.decode(io.read(\"data/peerings.csv\"))", cols: ["env", "name", "peer_network", "line"], rows: [
+      ["\"dev\"", "\"envoy-dev\"", "projects/envoy-dev-426188/…/envoy-dev-network", "2"], ["\"stg\"", "\"envoy-stg\"", "projects/envoy-stg-597462/…/envoy-stg-network", "3"],
+      ["\"stg\"", "\"edge-stg\"", "projects/edge-stg/…/envoy-proxy-stg", "4"], ["\"prod\"", "\"edge-prod\"", "projects/edge-prod/…/envoy-proxy-prod", "5"],
+      {new: true, r: ["\"prod\"", "\"envoy-prod\"", "projects/envoy-prod-318204/…/envoy-prod-network", "6"], line: "peer"}]},
+  ],
+  rel: [
+    {name: "build(app, version, built_at)", from: "decl … from sql.table(\"build\") · Postgres, LISTEN", cols: ["app", "version", "built_at", "written_by"], rows: [
+      ["\"shop\"", "1.4.0", "2026-10-01 10:00", "ci/shop#4701"], ["\"shop\"", "1.4.1", "2026-10-05 13:10", "ci/shop#4766"], {new: true, r: ["\"shop\"", "1.5.0", "2026-10-08 09:30", "ci/shop#4812"]}]},
+    {name: "tested(app, version, since)", from: "decl … from sql.table(\"tested\")", cols: ["app", "version", "since", "written_by"], rows: [
+      ["\"shop\"", "1.4.0", "2026-10-02 08:00", "testgrid/shop-e2e"], {r: ["\"shop\"", "1.4.1", "2026-10-07 16:20", "testgrid/shop-e2e"], line: "eu1"}, {new: true, r: ["\"shop\"", "1.5.0", "2026-10-09 11:00", "testgrid/shop-e2e"]}]},
+    {name: "eligible(app, version)", from: "derived · stacks/releases.df:8 · tested for 7d", cols: ["app", "version", "since"], rows: [
+      ["\"shop\"", "1.4.0", "2026-10-09 08:00"], {r: ["\"shop\"", "1.4.1", "2026-10-14 16:20"], line: "eu1"}, ["\"shop\"", "1.5.0", "no row · true from 2026-10-16 11:00"]]},
+    {name: "candidate(cell, app, version)", from: "derived · stacks/releases.df:12", cols: ["cell", "app", "version"], rows: [{r: ["\"eu-1\"", "\"shop\"", "1.4.1"], line: "eu1"}, ["\"us-1\"", "\"shop\"", "1.4.1"]]},
+    {name: "released(cell, at)", from: "the controller's record of what each plan applied", cols: ["cell", "at"], rows: [{r: ["\"eu-1\"", "2026-10-12 00:00"], line: "eu1"}, ["\"us-1\"", "2026-10-14 16:20"]]},
+  ],
+};
+const DATA_NOTE = {
+  shop: "The program declares no table of its own here; the rows that arrived are the provider's. One row in aws.availability_zone is a subnet, a web server and an LB update, and the file did not change.",
+  k3s: "One tree: apps reads what platform's plan says it will publish, inside the run. A value platform knows only after an apply is a wait, not a second plan.",
+  gke: "The csv is a relation typed by decl peering: a row whose env is not dev, stg or prod is an error naming its line.",
+  rel: "terry.org's sketch: builds and test results are rows CI and the test system write into tables the program declares. The program decides what a row means; a row it cannot use is ignored, and why says so.",
+};
+
+/* ---------- run: trace and audit ---------- */
+const TRACE = {
+  k3s: {title: "controller run 09:12:30, stacks.platform[env=staging] and what reads it", total: 340, now: 337, spans: [
+    ["plan.phase  loaded and compiled", 0, .004, 0], ["provider.call  ovh Handshake, Schema", 0, .31, 1], ["provider.call  k8s Handshake, Schema", 0, .28, 0],
+    ["plan.phase  refresh  (ovh Read ×5, k8s Read ×3)", .31, 1.3, 1], ["plan.phase  policy pass", 1.61, .01, 0],
+    ["provider.call  ovh Apply  ovh.instance server (delete)", 92, 21.4, 1], ["provider.call  ovh Apply  ovh.instance server (create)", 113.4, 74.2, 1],
+    ["apply.wait  world  server.public_ip", 187.6, 3.1, 1], ["provider.call  ovh Apply  ovh.domain_record api", 202, 1.2, 0], ["provider.call  ovh Apply  ovh.domain_record www", 202, 1.1, 0],
+    ["io.call  io.read  ssh://ubuntu@51.79.104.37/…/k3s.yaml", 203.2, 134, 1, true]],
+    calls: "ovh 13 (Configure 1, Read 5, Plan 3, Apply 4) · k8s 4 (Configure 1, Read 3) · io 1 open · 0 retries",
+    chain: "ovh Configure → Read server → Apply delete → Apply create → wait public_ip → io.read k3s.yaml (open)",
+    gap: "the 90s before the first Apply is the confirmation the controller does not ask: here, the event's debounce. Open."},
+  shop: {title: "controller run 09:38:12, shop[env=prod] plan (held)", total: 2.4, spans: [
+    ["plan.phase  loaded and compiled", 0, .004, 0], ["provider.call  aws Handshake, Schema", 0, .21, 1], ["provider.call  aws Query  aws.availability_zone", .21, .38, 1],
+    ["plan.phase  refresh  (aws Read ×14)", .59, 1.12, 1], ["provider.call  aws Plan ×7", 1.71, .52, 1], ["plan.phase  policy pass", 2.23, .02, 1]],
+    calls: "aws 23 (Configure 1, Query 1, Read 14, Plan 7) · 0 retries", chain: "Handshake → Query aws.availability_zone → Read ×14 serial → Plan ×7", gap: "the 14 reads run one after another; 1.1s of the 2.4."},
+  gke: {title: "controller run 08:02:44, gke_platform[env=prod]", total: 7.1, spans: [
+    ["plan.phase  loaded, csv read", 0, .01, 0], ["provider.call  gke Handshake, Schema", 0, .2, 1], ["plan.phase  refresh  (gke Read ×6)", .2, .9, 1], ["provider.call  gke Apply  google.compute_network main", 1.3, 5.6, 1], ["plan.phase  policy pass", 1.1, .01, 0]],
+    calls: "gke 9 · 0 retries", chain: "Read ×6 → Apply compute_network main", gap: ""},
+  rel: {title: "controller run 2026-10-14 16:20:00 (time event)", total: .9, spans: [
+    ["io.call  sql read build, tested", 0, .04, 1], ["plan.phase  evaluated", .04, .006, 1], ["provider.call  fake Apply  deploy.cell us-1", .1, .8, 1]],
+    calls: "fake 3 · sql 2", chain: "time boundary → sql read → Apply us-1", gap: ""},
+};
+const AUDIT = {
+  shop: [
+    [39, "09:02:10", "apply_end", "staging", "ok  tick 2"],
+    [41, "09:31:41", "controller", "prod", "event input stacks.shop (git main a41c9e2)"],
+    [42, "09:31:41", "plan", "prod", "digest sha256:9b20e1… · needs approval: aws.security_group postgres · who dform-controller"],
+    [43, "09:38:12", "controller", "prod", "event table aws.availability_zone; event world (drift ingress[1])"],
+    [44, "09:38:13", "plan", "prod", "digest sha256:4f1c9e07… supersedes 9b20e1… · a new plan needs a new signature"],
+    [45, "09:38:13", "controller", "prod", "tick 1: proceed: held, needs approval (replace of aws.security_group postgres in prod)"],
+    [46, "09:38:13", "controller", "prod", "tick 1: proceed: held, drift at ingress needs approval: aws.security_group[\"https\"]"],
+  ],
+  k3s: [
+    [31, "09:12:30", "controller", "platform[staging]", "event input stacks.platform (git main 5d02b7e)"],
+    [32, "09:12:31", "plan", "platform[staging]", "digest sha256:e07d3a… · tree with apps[staging] · approval not required"],
+    [33, "09:12:31", "lease", "platform[staging]", "fence 31 · holder dform-controller@k3s-staging"],
+    [34, "09:12:31", "apply_start", "platform[staging]", "dform 0.9.0-dev · git 5d02b7e · providers ovh, k8s"],
+    [35, "09:14:02", "action", "platform[staging]", "delete ovh.instance server ok"],
+    [36, "09:15:40", "action", "platform[staging]", "create ovh.instance server ok · id 7f3a…"],
+    [37, "09:15:52", "action", "platform[staging]", "update ovh.domain_record api ok"],
+    [22, "09:15:52", "action", "apps[staging]", "update ovh.domain_record www ok"],
+    [38, "09:15:52", "wait", "platform[staging]", "tick 2 waits on ssh://ubuntu@51.79.104.37/etc/rancher/k3s/k3s.yaml · since 09:15:52"],
+    [19, "08:12:41", "controller", "apps[prod]", "event world · drift spec.replicas 3 -> 5 · ownership lost (kubectl)"],
+  ],
+  gke: [
+    [14, "08:02:44", "controller", "prod", "event input data/peerings.csv (git a8f3e10)"],
+    [15, "08:02:44", "plan", "prod", "digest sha256:51ca0b… · approval not required"],
+    [16, "08:02:44", "apply_start", "prod", "who dform-controller · git a8f3e10"],
+    [17, "08:02:51", "action", "prod", "update google.compute_network main ok"],
+    [18, "08:02:51", "apply_end", "prod", "ok  tick 1"],
+  ],
+  rel: [
+    [8, "10-14 16:20:00", "controller", "releases", "event time: eligible(\"shop\", \"1.4.1\")"],
+    [9, "10-14 16:20:00", "plan", "releases", "digest sha256:c2e81f… · rows build 1.4.1 by ci/shop#4766, tested by testgrid/shop-e2e"],
+    [10, "10-14 16:20:03", "action", "releases", "update deploy.cell us-1 ok · shop 1.4.0 → 1.4.1"],
+    [11, "10-14 16:20:03", "controller", "releases", "tick 1: proceed: held, one release a week per cell: deploy.cell[\"eu-1\"]"],
+  ],
+};
+
+/* ---------- the plan's graph: edges (reads, waits on) and tags, by line ---------- */
+const EDGES = {
+  orders: [["pg", "ref", "vpc_security_groups"]],
+  web1d: [["sub1d", "ref", "subnet"], ["https", "ref", "vpc_security_groups"]],
+  lb: [["sub1d", "ref", "subnets"]],
+  pgdep: [["pg", "wait", "deposed by the replace"], ["orders", "wait", "orders moved off it"]],
+  api: [["srv", "wait", "server.public_ip"]],
+  www: [["srv", "wait", "platform[env].ingress"]],
+  ns: [["srv", "wait", "provider k8s  kubeconfig"]],
+  dep: [["srv", "wait", "platform[env].kubeconfig"]],
+  svc: [["srv", "wait", "platform[env].kubeconfig"]],
+};
+const TAGS = {
+  sub1d: () => DONE["d-und"] ? null : ["undet", "undetermined  no public subnets  until map_public_ip_on_launch is known, once the subnet is made"],
+  ns: () => ["undet", "waiting  ssh read of k3s.yaml not answered, 2m14s of 10m"],
+};
+
+/* ---------- state ---------- */
+let cur = "ovh", tab = "plan", group = "tick", view = "graph", sel = null, fresh = new Set();
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const markCls = (m) => ({"+": "m-c", "~": "m-u", "-": "m-d", "±": "m-r", "=": "m-e"}[m] || "");
+function toast(t) { const el = $("toast"); el.textContent = t; el.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => el.hidden = true, 3200); }
+
+function render() { $("frame").classList.toggle("gm", tab === "plan" && view === "graph"); renderTop(); renderRail(); renderTabs(); renderPane(); renderInsp(); }
+
+function renderTop() {
+  $("projects").innerHTML = ["ovh", "shop", "k3s", "gke", "rel"].map(k => [k, P[k]]).map(([k, p]) =>
+    `<button aria-pressed="${k === cur}" data-p="${k}">${esc(p.title)}<small>${esc(p.sub)}</small></button>`).join("");
+  const c = P[cur].ctl;
+  $("ctl").innerHTML = `<div><span class="pulse" aria-hidden="true"></span><b>${esc(c.state)}</b> since ${esc(c.since)}</div><div>${esc(c.detail)}</div>`;
+}
+
+function renderRail() {
+  const p = P[cur];
+  $("rail").innerHTML = `
+    <div class="lab">Deployments · one plan</div>
+    <div class="deps">${p.deps.map(d => `<button class="dep" data-dep="${esc(d.id)}" aria-pressed="false">
+      <span class="mk ${markCls(d.mark)}">${esc(d.mark)}</span><span class="nm">${esc(d.name)}</span>
+      <span class="st">${esc(d.st)}</span>${d.edge ? `<span class="edge">${esc(d.edge)}</span>` : ""}</button>`).join("")}</div>
+    <div class="lab">Watching</div>
+    <div class="srcs">${p.sources.map(s => `<div class="s ${s.fresh ? "new" : ""}"><span>${esc(s.k)}</span><code>${esc(s.v)}</code><span>${esc(s.d)}</span></div>`).join("")}</div>`;
+}
+
+function openCount(p) { return p.decisions.filter(d => !DONE[d.id]).length; }
+function renderTabs() {
+  const p = P[cur], n = openCount(p);
+  const tabs = [["plan", "Estate", n ? `<span class="n">${n} waiting</span>` : ""], ["world", "World", ""], ["data", "Data", ""], ["run", "Run", ""]];
+  $("tabs").innerHTML = tabs.map(([k, l, x]) => `<button role="tab" aria-selected="${k === tab}" data-tab="${k}">${l}${x}</button>`).join("");
+}
+
+function lineHTML(l, showDep) {
+  const held = l.held && !(l.heldDone) ? `<div class="heldl ${l.held[0]}">${esc(l.held[1])}</div>` : "";
+  return `<div class="ln ${l.applied ? "applied" : ""}" data-line="${l.id}" tabindex="0" aria-pressed="${sel === l.id}">
+    <div class="main">${showDep ? `<span class="depc">${esc(l.dep)}</span>` : ""}<span class="${markCls(l.mark)}">${esc(l.mark)}</span> <span class="addr">${esc(l.addr)}</span>  <span class="site">${esc(l.site)}</span>${l.note ? `  <span class="site">${esc(l.note)}</span>` : ""}${l.applied ? `  <span class="v-holds">applied</span>` : ""}
+${l.attrs.map(a => `<div class="attr">${esc(a[0])}${a[1] ? `<span class="site">${esc(a[1])}</span>` : ""}</div>`).join("")}${l.because ? `<div class="bec">${esc(l.because)}</div>` : ""}${held}</div>
+    <div class="mag">${l.mag || ""}</div></div>`;
+}
+function blockHTML(b, showDep) {
+  const st = b.st ? `<span class="stt ${b.st}">${esc(b.stNote || b.st)}</span>` : "";
+  return `<div class="blk"><div class="bh">${esc(b.head)}${b.waits ? `<span class="wo">${esc(b.waits)}</span>` : ""}${st}</div>
+    ${b.prov ? `<div class="prov">${esc(b.prov)}</div>` : ""}${b.lines.map(l => lineHTML(l, showDep)).join("")}</div>`;
+}
+
+function renderPlan() {
+  const p = P[cur];
+  const multi = p.deps.length > 1;
+  let body = "";
+  const blocks = [...p.ticks, ...(p.later ? [p.later] : []), ...(p.extraTicks || [])];
+  if (group === "tick") {
+    body = blocks.map(b => blockHTML(b, multi)).join("");
+  } else {
+    body = p.deps.map(d => {
+      const mine = blocks.map(b => ({...b, lines: b.lines.filter(l => l.dep === d.id)})).filter(b => b.lines.length);
+      return `<div class="blk"><div class="bh"><span class="${markCls(d.mark)}">${esc(d.mark)}</span> ${esc(d.name)}<span class="wo">${esc(d.st)}</span></div>
+        ${mine.length ? mine.map(b => blockHTML(b, false)).join("") : `<div class="prov">nothing to change</div>`}</div>`;
+    }).join("");
+  }
+  if (p.upToDate) body = `<div class="blk">${p.upToDate.map(t => `<div class="prov" style="padding-left:12px">${esc(t)}</div>`).join("")}</div>` + (p.lastApply ? blockHTML(p.lastApply, false) : "");
+  const pol = p.policy.lines.length ? `<div class="blk pol"><div class="bh">${esc(p.policy.head)}</div>${p.policy.lines.map(v => `
+    <div class="ln" data-line="${v.id}" tabindex="0" aria-pressed="${sel === v.id}"><div class="main"><span class="${v.mark === "holds" ? "v-holds" : v.mark === "fails" ? "v-fails" : "v-und"}">${esc(v.mark)}</span>  ${esc(v.text)}  <span class="site">${esc(v.site)}  ${esc(v.tally)}</span>${v.under ? `<div class="attr">${esc(v.under)}</div>` : ""}</div><div class="mag"></div></div>`).join("")}</div>` : "";
+  const appr = p.approvals.length ? `<div class="blk"><div class="bh" style="color:var(--approval)">held for approval</div>${p.approvals.map(a => `<div class="prov" style="color:var(--approval)">${esc(a[0])}    ${esc(a[1])}    ${esc(a[2])}</div>`).join("")}</div>` : "";
+  const queue = p.decisions.length ? `<div class="queue">${p.decisions.map(d => `
+    <button class="dec c-${d.kind} ${DONE[d.id] ? "done" : ""}" data-dec="${d.id}" aria-pressed="${sel === d.id}"><span class="w">${esc(d.word)}</span><span class="t">${esc(d.t)}</span></button>`).join("")}</div>`
+    : `<p class="note">Nothing waits on a person.</p>`;
+  const plan = hasPlan(p), mode = view === "text" ? "text" : plan && ov !== 0 ? "plan" : "rest";
+  const modeSeg = `<span class="seg" role="group" aria-label="View">${[["rest", "estate"], ...(plan ? [["plan", "estate + plan"]] : []), ["text", "plan text"]].map(([k, l]) => `<button data-mode="${k}" aria-pressed="${mode === k}">${l}</button>`).join("")}</span>`;
+  const headline = view === "graph" ? p.headline.replace(/ over \d+ ticks?/, "") : p.headline;
+  return `<section class="pane">
+    <div class="rel"><div class="lab">Waiting on a person</div>${queue}</div>
+    <div class="rel"><div class="headline">${esc(headline)}</div>
+    <div class="shape"><span class="lab">Against the last apply</span>${p.shape.map(s => `<span class="d"><span class="k">${esc(s[0])}</span> ${esc(s[1])} → <b>${esc(s[2])}</b>${s[3] ? ` (${esc(s[3])})` : ""}</span>`).join("")}<span class="d">${esc(p.reach)}</span></div></div>
+    ${view === "graph" ? `<div class="plan-head"><span class="lab">The estate · lanes are deployments, columns the provider instances they reach</span>${modeSeg}</div>` + estateHTML(p) + (pol ? `<div class="plan">${pol}</div>` : "") : `
+    <div class="plan-head"><span class="lab">The plan of one run · its ticks are the order inside it</span>
+      <span style="display:flex;gap:8px;flex-wrap:wrap">${modeSeg}
+      <span class="seg" role="group" aria-label="Group by"><button data-g="tick" aria-pressed="${group === "tick"}">by tick</button><button data-g="dep" aria-pressed="${group === "dep"}">by deployment</button></span></span></div>
+    <div class="plan">${body}${pol}${appr}</div>`}
+  </section>`;
+}
+
+function wrap(text, n, max) {
+  const words = String(text).split(/(\s+)/), out = [];
+  let cur = "";
+  for (const w of words) {
+    if ((cur + w).length > n && cur.trim()) { out.push(cur.trimEnd()); cur = w.trimStart(); }
+    else cur += w;
+    while (cur.length > n) { out.push(cur.slice(0, n)); cur = cur.slice(n); }
+  }
+  if (cur.trim()) out.push(cur.trimEnd());
+  if (out.length > max) { out.length = max; out[max - 1] = out[max - 1].slice(0, Math.max(0, n - 1)) + "…"; }
+  return out;
+}
+const stripTags = (h) => String(h || "").replace(/<[^>]+>/g, "");
+const gMark = (m) => ({"+": "gk-c", "~": "gk-u", "-": "gk-d", "±": "gk-r", "=": "gk-e"}[m] || "gk-e");
+/* ---------- the estate's model: resources, relationships, provider instances ---------- */
+/* node: {id, lane, region, type, name, site, health, reading, group, lines, planned, kind}
+   edge: [from, to, kind, label]; kind ref | output | rows | provider (to a region "R:id") */
+const MODEL = {};
+function model(lanes, regions, groups) {
+  const m = {lanes, regions, groups: groups || {}, nodes: [], edges: []};
+  m.N = (id, o) => m.nodes.push({id: "n:" + id, health: "-", reading: "in sync", lines: [], ...o});
+  m.E = (a, b, kind, label) => m.edges.push([a.startsWith("R:") ? a : "n:" + a, b.startsWith("R:") ? b : "n:" + b, kind, label || ""]);
+  return m;
+}
+const SRC_LANE = {name: "watched sources", st: "", mark: "·"};
+
+MODEL.shop = (() => {
+  const m = model(["sources", "staging", "prod"], [
+    {id: "aws", label: "aws · us-east-1", settings: "use aws { region = \"us-east-1\", expect_account = \"123456789012\" }", state: "configured · account 123456789012 · 23 calls last run: Query 1, Read 14, Plan 7 · no throttling",
+      why: [N("both deployments configure it alike, so it is one instance", "stacks/shop.df:5"), N("expect_account = \"123456789012\": the account the provider reports matches", "", "ok")]},
+  ], {
+    "staging/subnets": {label: "private-${availability_zone}", site: "stacks/shop.df:12", word: "rows of one rule"},
+    "staging/web": {label: "web-${s.availability_zone}", site: "stacks/shop.df:74", word: "rows of one rule"},
+    "prod/subnets": {label: "private-${availability_zone}", site: "stacks/shop.df:12", word: "rows of one rule"},
+    "prod/web": {label: "web-${s.availability_zone}", site: "stacks/shop.df:74", word: "rows of one rule"},
+  });
+  m.N("src/az", {lane: "sources", region: "aws", kind: "source", type: "provider table", name: "aws.availability_zone", health: "", reading: "gained (\"available\", \"us-east-1d\", 3) at 09:38:12", word: "1 new row", news: true});
+  for (const e of ["staging", "prod"]) {
+    const P = e === "prod";
+    m.N(`${e}/vpc`, {lane: e, region: "aws", type: "aws.vpc", name: "main", site: "stacks/shop.df:7"});
+    m.N(`${e}/https`, {lane: e, region: "aws", type: "aws.security_group", name: "https", site: "stacks/shop.df:87", lines: P ? ["https"] : [],
+      reading: P ? "drift: ingress[1] gained 22/tcp from 0.0.0.0/0, ops@example.com 07:58:21" : "in sync"});
+    m.N(`${e}/pg`, {lane: e, region: "aws", type: "aws.security_group", name: "postgres", site: "stacks/shop.df:93", lines: P ? ["pg", "pgdep"] : []});
+    ["1a", "1b", "1c", "1d"].forEach(z => {
+      const planned = P && z === "1d";
+      m.N(`${e}/sub-${z}`, {lane: e, region: "aws", type: "aws.subnet", name: `private-us-east-${z}`, site: "stacks/shop.df:12", group: `${e}/subnets`, planned, lines: planned ? ["sub1d"] : []});
+      m.N(`${e}/web-${z}`, {lane: e, region: "aws", type: "aws.instance", name: `web-us-east-${z}`, site: "stacks/shop.df:74", group: `${e}/web`, planned, lines: planned ? ["web1d"] : []});
+      m.E("src/az", `${e}/sub-${z}`, "rows", "a row of aws.availability_zone");
+      m.E(`${e}/vpc`, `${e}/sub-${z}`, "ref", "vpc");
+      m.E(`${e}/sub-${z}`, `${e}/web-${z}`, "ref", "subnet");
+      m.E(`${e}/https`, `${e}/web-${z}`, "ref", "vpc_security_groups");
+      m.E(`${e}/sub-${z}`, `${e}/lb`, "ref", "subnets");
+    });
+    m.N(`${e}/lb`, {lane: e, region: "aws", type: "aws.lb", name: "storefront", site: "stacks/shop.df:81", lines: P ? ["lb"] : []});
+    m.N(`${e}/orders`, {lane: e, region: "aws", type: "aws.db_instance", name: "orders", site: "stacks/shop.df:30", lines: P ? ["orders"] : [], reading: P ? "in sync · prevent_destroy" : "in sync"});
+    m.N(`${e}/connect`, {lane: e, region: "aws", type: "aws.iam_policy", name: P ? "connect-db-X4M9QZ" : "connect-db-7KQ2PL", site: "stacks/shop.df:42"});
+    m.N(`${e}/role`, {lane: e, region: "aws", type: "aws.iam_role", name: "app", site: "stacks/shop.df:61"});
+    m.E(`${e}/vpc`, `${e}/https`, "ref", "vpc"); m.E(`${e}/vpc`, `${e}/pg`, "ref", "vpc");
+    m.E(`${e}/https`, `${e}/pg`, "ref", "ingress security_groups"); m.E(`${e}/https`, `${e}/lb`, "ref", "security_groups");
+    m.E(`${e}/pg`, `${e}/orders`, "ref", "vpc_security_groups");
+    m.E(`${e}/orders`, `${e}/connect`, "ref", "resource_id, in its name");
+    m.E(`${e}/connect`, `${e}/role`, "ref", "managed_policy_arns");
+  }
+  return m;
+})();
+
+MODEL.k3s = (() => {
+  const m = model(["platform[staging]", "apps[staging]", "platform[prod]", "apps[prod]"], [
+    {id: "ovh", label: "ovh · project shop", settings: "use ovh { project = \"shop\" }  (platform and apps, all envs)", state: "configured · 13 calls this run: Read 5, Plan 3, Apply 4 · window 20/s, never full",
+      why: [N("one instance: every deployment gives it the same settings", "stacks/platform.df:8, stacks/apps.df:6")]},
+    {id: "io", label: "dform io.read", settings: "documents dform reads itself", state: "1 answered, 1 open (2m14s)",
+      why: [N("the reads a provider's settings come from; dform's own, not a provider's")]},
+    {id: "k8s-st", label: "k8s · k3s-staging", settings: "platform: use k8s { kubeconfig }  ·  apps: use k8s { kubeconfig = platform[env].kubeconfig }", state: "waiting on kubeconfig: the ssh read has not answered, 2m14s of 10m · 0 calls since the replace", from: "n:platform[staging]/read", waiting: true,
+      why: [N("configured from let kubeconfig = str.replace(raw, …)", "stacks/platform.df:34", "", [N("let raw = io.read(\"ssh://ubuntu@${server.public_ip}/etc/rancher/k3s/k3s.yaml\")", "stacks/platform.df:33", "", [N("ovh.instance server.public_ip = \"51.79.104.37\"", "replaced in run 77", "because")])]),
+        N("apps reads the same value as platform[env].kubeconfig", "stacks/apps.df:7"), N("one region: both instances reach one cluster", "", "dimt"),
+        N("not answered: connection refused (sshd up, k3s.yaml absent)", "retry 7, every 15s", "wait")]},
+    {id: "k8s-pr", label: "k8s · k3s-prod", settings: "platform: use k8s { kubeconfig }  ·  apps: use k8s { kubeconfig = platform[env].kubeconfig }", state: "configured · https://51.79.88.4:6443 · 4 calls last run: Read 3", from: "n:platform[prod]/read",
+      why: [N("configured from the ssh read of 51.79.88.4, answered 09:12:31", "stacks/platform.df:33", "ok")]},
+  ], {
+    "apps[staging]/ns-apps": {label: "namespace apps", site: "stacks/apps.df", word: "objects in one namespace"},
+    "apps[prod]/ns-apps": {label: "namespace apps", site: "stacks/apps.df", word: "objects in one namespace"},
+  });
+  for (const e of ["staging", "prod"]) {
+    const S = e === "staging", pl = `platform[${e}]`, ap = `apps[${e}]`, kr = S ? "k8s-st" : "k8s-pr";
+    const ip = S ? "51.79.104.37" : "51.79.88.4";
+    m.N(`${pl}/admin`, {lane: pl, region: "ovh", type: "ovh.ssh_key", name: "admin", site: "stacks/platform.df:17"});
+    m.N(`${pl}/server`, {lane: pl, region: "ovh", type: "ovh.instance", name: "server", site: "stacks/platform.df:24", lines: S ? ["srv"] : [],
+      health: S ? "ready: ACTIVE since 09:15:40" : "ready: ACTIVE", reading: S ? "in sync (just replaced)" : "in sync"});
+    m.N(`${pl}/api`, {lane: pl, region: "ovh", type: "ovh.domain_record", name: "api", site: "stacks/platform.df:40", lines: S ? ["api"] : []});
+    m.N(`${pl}/read`, {lane: pl, region: "io", kind: "source", type: "io.read", name: `ssh://ubuntu@${ip}/…/k3s.yaml`, site: "stacks/platform.df:33", health: "",
+      reading: S ? "not answered, 2m14s of 10m" : "answered 09:12:31", news: S});
+    m.N(`${pl}/ns`, {lane: pl, region: kr, type: "k8s.namespace", name: "apps", site: "stacks/platform.df:37", lines: S ? ["ns"] : [],
+      health: S ? "unknown: provider cannot answer" : "-", reading: S ? "not read since the replace" : "in sync"});
+    m.N(`${ap}/web`, {lane: ap, region: kr, type: "k8s.deployment", name: "web", site: "stacks/apps.df:12", group: `${ap}/ns-apps`, lines: S ? ["dep"] : ["repl"],
+      health: S ? "unknown: provider cannot answer" : "degraded: 4 of 5 available, CrashLoopBackOff: container web",
+      reading: S ? "not read since the replace" : "ownership lost: spec.replicas to kubectl 08:12:40 · revisionHistoryLimit 10 is a provider default"});
+    m.N(`${ap}/svc`, {lane: ap, region: kr, type: "k8s.service", name: "web", site: "stacks/apps.df:24", group: `${ap}/ns-apps`, lines: S ? ["svc"] : [],
+      health: S ? "unknown: provider cannot answer" : "-", reading: S ? "not read since the replace" : "in sync"});
+    m.N(`${ap}/www`, {lane: ap, region: "ovh", type: "ovh.domain_record", name: "www", site: "stacks/apps.df:31", lines: S ? ["www"] : []});
+    m.E(`${pl}/admin`, `${pl}/server`, "ref", "ssh_key");
+    m.E(`${pl}/server`, `${pl}/api`, "ref", "target");
+    m.E(`${pl}/server`, `${ap}/www`, "output", "target = platform[env].ingress");
+    m.E(`${pl}/server`, `${pl}/read`, "ref", "public_ip, in the location");
+    m.E(`${pl}/read`, "R:" + kr, "provider", "kubeconfig");
+  }
+  return m;
+})();
+
+MODEL.gke = (() => {
+  const envs = {dev: "platform-dev-973682", stg: "platform-stg", prod: "platform-prod"};
+  const m = model(["sources", "dev", "stg", "prod"], [
+    {id: "io", label: "dform io.read", settings: "documents the program reads", state: "2 documents · data/peerings.csv changed 08:02:40", why: [N("input peering from csv.decode(io.read(\"data/peerings.csv\"))", "stacks/gke_platform.df:33")]},
+    ...Object.entries(envs).map(([e, pr]) => ({id: "gke-" + e, label: `gke · ${pr}`, settings: `use gke { project = "${pr}", region = "us-east1" }`, state: `configured · expect_account ${pr} matches · ${e === "prod" ? "9 calls last run" : "6 calls last run"}`,
+      why: [N("each env configures its own instance: three regions of one family", "stacks/gke_platform.df:115"), N(`expect_account = "${pr}" holds`, "", "ok")]})),
+  ]);
+  m.N("src/csv", {lane: "sources", region: "io", kind: "source", type: "document", name: "data/peerings.csv", health: "", reading: "gained line 6 at 08:02:40 (a8f3e10)", word: "1 new line", news: true});
+  m.N("src/dash", {lane: "sources", region: "io", kind: "source", type: "document", name: "files/dashboard-gke-platform.json", health: "", reading: "unchanged"});
+  for (const e of Object.keys(envs)) {
+    const r = "gke-" + e;
+    m.N(`${e}/net`, {lane: e, region: r, type: "google.compute_network", name: "main", site: "stacks/gke_platform.df:165", reading: e === "prod" ? "in sync · applied 08:02:51" : "in sync"});
+    m.N(`${e}/sub`, {lane: e, region: r, type: "google.compute_subnetwork", name: "gke_subnet", site: "stacks/gke_platform.df:138"});
+    m.N(`${e}/proxy`, {lane: e, region: r, type: "google.compute_subnetwork", name: "regional_proxy", site: "stacks/gke_platform.df:152"});
+    m.N(`${e}/ip`, {lane: e, region: r, type: "google.compute_address", name: "static-ip-gke-platform-grpc", site: "stacks/gke_platform.df:172"});
+    m.N(`${e}/gke`, {lane: e, region: r, type: "google.container_cluster", name: "gke_platform", site: "stacks/gke_platform.df:185", reading: "in sync · release_channel \"REGULAR\" is a provider default"});
+    m.N(`${e}/dash`, {lane: e, region: r, type: "google.monitoring_dashboard", name: "gke_platform", site: "stacks/gke_platform.df:206"});
+    m.N(`${e}/alerts`, {lane: e, region: r, type: "alert_metrics_pack", name: "gke_platform", site: "stacks/gke_platform.df:222"});
+    m.E("src/csv", `${e}/net`, "rows", "peering(env, …)");
+    m.E("src/dash", `${e}/dash`, "rows", "dashboard_json");
+    m.E(`${e}/sub`, `${e}/ip`, "ref", "subnetwork"); m.E(`${e}/sub`, `${e}/gke`, "ref", "subnetwork");
+  }
+  return m;
+})();
+
+MODEL.rel = (() => {
+  const m = model(["sources", "releases"], [
+    {id: "sql", label: "sql · postgres", settings: "use sql { url = secrets.database_url }", state: "LISTEN build, tested · last commit 2026-10-09 11:00 · 2 reads last run", why: [N("decl build(…) from sql.table(\"build\")", "terry.org"), N("a signal as the hint, a read as the truth, a slow poll as the fallback", "", "dimt")]},
+    {id: "clock", label: "dform time", settings: "time.now()", state: "next boundary 2026-10-16T11:00Z: eligible(\"shop\", \"1.5.0\")", why: [N("the controller wakes at the next time a rule over time.now() changes (open)", "", "wait")]},
+    {id: "fake", label: "fake", settings: "use fake", state: "configured · 3 calls last run", why: [N("terry.org's sketch runs on the built-in fake cloud")]},
+  ]);
+  m.N("src/build", {lane: "sources", region: "sql", kind: "source", type: "sql.table", name: "build", health: "", reading: "3 rows · 1.5.0 by ci/shop#4812, 10-08", news: false});
+  m.N("src/tested", {lane: "sources", region: "sql", kind: "source", type: "sql.table", name: "tested", health: "", reading: "3 rows · 1.5.0 by testgrid/shop-e2e, 10-09", news: false});
+  m.N("src/time", {lane: "sources", region: "clock", kind: "source", type: "time.now()", name: "2026-10-15T09:52Z", health: "", reading: "1.4.1 eligible since 10-14 16:20", word: "1.4.1 eligible", news: true});
+  m.N("releases/eu1", {lane: "releases", region: "fake", type: "deploy.cell", name: "eu-1", site: "stacks/releases.df:14", lines: ["eu1"], reading: "in sync at shop 1.4.0"});
+  m.N("releases/us1", {lane: "releases", region: "fake", type: "deploy.cell", name: "us-1", site: "stacks/releases.df:14", reading: "in sync at shop 1.4.1 · applied 10-14 16:20:03"});
+  for (const c of ["eu1", "us1"]) {
+    m.E("src/build", `releases/${c}`, "rows", "candidate(cell, app, version)");
+    m.E("src/tested", `releases/${c}`, "rows", "eligible(app, version)");
+    m.E("src/time", `releases/${c}`, "rows", "time.now() - since >= 7d");
+  }
+  return m;
+})();
+
+/* ---------- graph state ---------- */
+let ov = null, NARROW = new Set();                      // the plan over the estate: 0 off, otherwise on
+const OPEN = {lane: {}, region: {}, cell: {}, group: {}};
+/* the spacing scale, in px: one step for each kind of distance, so a gap says what it separates.
+   1 inside a line · 2 inside a card · 3 between cards · 4 a card's column gutter · 5 between lanes and columns */
+const SP = {1: 4, 2: 8, 3: 12, 4: 16, 5: 24, 6: 32};
+const HELD_WORD = {approval: "signature", drift: "drift", owner: "ownership", hold: "a rule", undet: "undetermined"};
+
+function lineIndex(p) {
+  const idx = {};
+  p.ticks.forEach(b => b.lines.forEach(l => idx[l.id] = {l, b}));
+  if (p.later) p.later.lines.forEach(l => idx[l.id] = {l, b: p.later});
+  (p.extraTicks || []).forEach(b => b.lines.forEach(l => idx[l.id] = {l, b}));
+  return idx;
+}
+function hasPlan(p) { return Object.keys(lineIndex(p)).length > 0; }
+function nodeTags(n) {
+  const p = P[cur], idx = lineIndex(p), out = [];
+  n.lines.forEach(id => {
+    const x = idx[id]; if (!x) return;
+    if (x.l.held && !x.l.heldDone) out.push([x.l.held[0], x.l.held[1].replace(/^held  /, "")]);
+    else if (TAGS[id]) { const t = TAGS[id](); if (t) out.push(t); }
+  });
+  return out;
+}
+/* a change's state in a controller that does not stop: never a tick, which is only the order inside one run */
+function lineState(p, x) {
+  const {l, b} = x;
+  if (l.applied) return "applied" + (l.at ? " " + l.at : "");
+  if (l.held && !l.heldDone) return "held: " + HELD_WORD[l.held[0]];
+  if (b.applying) return "applying";
+  if (b.on) return "waiting on " + b.on;
+  return "pending";
+}
+function nodeState(p, n) {
+  const idx = lineIndex(p), x = n.lines.map(id => idx[id]).find(Boolean);
+  return x ? {mark: x.l.mark, text: lineState(p, x), l: x.l} : null;
+}
+const healthCls = (h) => !h || h === "-" ? "" : h.startsWith("ready") || h === "connected" ? "h-ok" : h.startsWith("degraded") ? "h-bad" : h.startsWith("waiting") ? "h-wait" : "h-unk";
+const readingCls = (r) => r.startsWith("drift") ? "r-drift" : r.startsWith("ownership") ? "r-owner" : r.startsWith("not") ? "h-unk" : "";
+const healthWord = (h) => !h || h === "-" ? "" : h.split(":")[0];
+function readingWord(n) {
+  if (n.word !== undefined) return n.word;
+  const r = n.reading || "";
+  if (!r || r.startsWith("in sync") || r.startsWith("answered") || r === "unchanged") return "";
+  if (r.startsWith("not read")) return "not read";
+  if (r.startsWith("not answered")) return "not answered";
+  return r.split(/:| · |\(/)[0].trim();
+}
+
+/* adjacency over nodes and regions: a provider edge enters a region, a region reaches everything in it */
+function adjacency(m) {
+  const adj = {};
+  const add = (a, b) => (adj[a] = adj[a] || []).push(b);
+  m.edges.forEach(([a, b]) => add(a, b));
+  m.nodes.forEach(n => add("R:" + n.region, n.id));
+  return adj;
+}
+function closure(m, start, skipPlanned) {
+  const adj = adjacency(m), seen = new Map(), q = [start];
+  const byId = Object.fromEntries(m.nodes.map(n => [n.id, n]));
+  while (q.length) {
+    const a = q.shift();
+    for (const b of adj[a] || []) {
+      if (seen.has(b) || b === start) continue;
+      if (skipPlanned && byId[b] && byId[b].planned) continue;
+      seen.set(b, a); q.push(b);
+    }
+  }
+  return seen; // id -> parent
+}
+
+function overlayState(p, m) {
+  const on = ov !== 0 && hasPlan(p);
+  const idx = lineIndex(p), changed = new Map(), reached = new Map(), litRegions = new Map(), chParent = new Map();
+  if (on) {
+    m.nodes.forEach(n => { const xs = n.lines.map(id => idx[id]).filter(Boolean); if (xs.length) changed.set(n.id, xs); });
+    changed.forEach((xs, id) => {
+      closure(m, id, false).forEach((parent, b) => {
+        if (b.startsWith("R:")) { if (!litRegions.has(b)) litRegions.set(b, {from: id, parent}); return; }
+        if (changed.has(b)) { if (!chParent.has(b)) chParent.set(b, parent); return; }
+        if (!reached.has(b)) reached.set(b, {from: id, parent});
+      });
+    });
+  }
+  return {W: on, changed, reached, litRegions, chParent};
+}
+
+function estateHTML(p) {
+  const m = MODEL[cur], o = overlayState(p, m);
+  const byId = Object.fromEntries(m.nodes.map(n => [n.id, n]));
+  const visibleNode = (n) => !n.planned || o.changed.has(n.id);
+  const nodes = m.nodes.filter(visibleNode);
+  const tagsOf = Object.fromEntries(nodes.map(n => [n.id, nodeTags(n)]));
+  const news = (n) => n.news || o.changed.has(n.id) || o.reached.has(n.id) || ["h-bad", "h-unk", "h-wait"].includes(healthCls(n.health)) || readingCls(n.reading) || tagsOf[n.id].length || sel === n.id;
+  const laneIds = m.lanes, laneInfo = (l) => l === "sources" ? SRC_LANE : (p.deps.find(d => d.id === l) || {name: l, st: "", mark: ""});
+  const cellKey = (l, r) => l + "|" + r;
+  const cellNodes = {};
+  nodes.forEach(n => (cellNodes[cellKey(n.lane, n.region)] = cellNodes[cellKey(n.lane, n.region)] || []).push(n));
+  const byHand = (l, r) => OPEN.lane[l] || OPEN.region[r] || OPEN.cell[cellKey(l, r)];
+  const cellOpen = (l, r) => { const ns = cellNodes[cellKey(l, r)] || []; return ns.length && (ns.some(news) || byHand(l, r)); };
+  const laneOpen = (l) => m.regions.some(r => cellOpen(l, r.id));
+  const regionOpen = (r) => laneIds.some(l => cellOpen(l, r));
+  const groupOpen = (g) => nodes.filter(n => n.group === g).some(news) || OPEN.group[g];
+
+  // representatives: a folded cell, the quiet rest of an open cell, a folded group, or the node itself
+  const rep0 = (id) => {
+    if (id.startsWith("R:")) return id;
+    const n = byId[id]; if (!n || !visibleNode(n)) return null;
+    const k = cellKey(n.lane, n.region);
+    if (!cellOpen(n.lane, n.region)) return "C:" + k;
+    if (!news(n) && !byHand(n.lane, n.region) && !(n.group && OPEN.group[n.group])) return "Q:" + k;
+    if (n.group && !groupOpen(n.group)) return "G:" + n.group;
+    return n.id;
+  };
+  // a fold of one object in an open lane and column is that object: its card is no bigger than the fold's
+  const foldN = {}; nodes.forEach(n => { const r = rep0(n.id); if (r) foldN[r] = (foldN[r] || 0) + 1; });
+  const rep = (id) => {
+    const r = rep0(id); if (!r || !/^[CQ]:/.test(r) || foldN[r] > 1) return r;
+    const n = byId[id];
+    return laneOpen(n.lane) && regionOpen(n.region) ? n.id : r;
+  };
+
+  // ranks: longest path over node edges
+  const rank = {}; nodes.forEach(n => rank[n.id] = 0);
+  for (let i = 0; i < nodes.length; i++) m.edges.forEach(([a, b]) => { if (rank[a] !== undefined && rank[b] !== undefined && rank[b] < rank[a] + 1) rank[b] = rank[a] + 1; });
+
+  const items = {};
+  nodes.forEach(n => {
+    const r = rep(n.id); if (!r) return;
+    if (!items[r]) items[r] = {id: r, lane: n.lane, region: n.region, members: [], rank: rank[n.id], order: r.startsWith("Q:") ? 1e6 : nodes.indexOf(n)};
+    items[r].members.push(n); items[r].rank = Math.min(items[r].rank, rank[n.id]);
+  });
+  // the quiet rest sits in its cell's first column, last
+  Object.values(items).forEach(it => { if (it.id.startsWith("Q:")) it.rank = -1; });
+
+  const W = Math.max(380, ($("pane").clientWidth || 800) - 2);
+  const narrowW = 132, minCol = 176, maxCol = 300;
+  const openRegions = m.regions.filter(r => regionOpen(r.id));
+  const subRanks = {};
+  m.regions.forEach(r => {
+    const rs = new Set(Object.values(items).filter(it => it.region === r.id && laneOpen(it.lane) && regionOpen(r.id)).map(it => Math.max(0, it.rank)));
+    subRanks[r.id] = [...rs].sort((a, b) => a - b);
+  });
+  const narrowCount = m.regions.length - openRegions.length;
+  const subN = {}; openRegions.forEach(r => subN[r.id] = Math.max(1, subRanks[r.id].length));
+  const maxSub = Math.max(openRegions.length, Math.floor((W - narrowCount * narrowW) / minCol));
+  const sumSub = () => Object.values(subN).reduce((a, b) => a + b, 0);
+  while (sumSub() > maxSub) { const big = Object.keys(subN).reduce((a, b) => subN[b] > subN[a] ? b : a); if (subN[big] <= 1) break; subN[big]--; }
+  const colW = Math.max(minCol, Math.min(maxCol, (W - narrowCount * narrowW) / Math.max(1, sumSub())));
+  const RX = {}; let x = 0;
+  m.regions.forEach(r => { const w = regionOpen(r.id) ? subN[r.id] * colW : narrowW; RX[r.id] = {x, w}; x += w; });
+  // the last column takes what is left, so the graph is drawn at one scale on every project
+  if (x < W) { RX[m.regions[m.regions.length - 1].id].w += W - x; x = W; }
+  const totalW = x;
+  NARROW = new Set(m.regions.filter(r => !regionOpen(r.id)).map(r => "R:" + r.id));
+
+  // what is selected, what it reads and what reads it, and everything downstream of it
+  const selMembers = new Set(), cellOf = (k) => nodes.filter(n => cellKey(n.lane, n.region) === k);
+  if (sel && sel.startsWith("n:")) selMembers.add(sel);
+  else if (sel && sel.startsWith("G:")) nodes.filter(n => n.group === sel.slice(2)).forEach(n => selMembers.add(n.id));
+  else if (sel && sel.startsWith("C:")) cellOf(sel.slice(2)).forEach(n => selMembers.add(n.id));
+  else if (sel && sel.startsWith("Q:")) cellOf(sel.slice(2)).filter(n => rep(n.id) === sel).forEach(n => selMembers.add(n.id));
+  else if (sel) { const d = p.decisions.find(d => d.id === sel); nodes.filter(n => n.lines.includes(sel) || (d && n.lines.includes(d.line))).forEach(n => selMembers.add(n.id)); }
+  const nbSet = new Set(), dnSet = new Set();
+  if (selMembers.size) {
+    m.edges.forEach(([a, b]) => { if (selMembers.has(a)) nbSet.add(b); if (selMembers.has(b)) nbSet.add(a); });
+    selMembers.forEach(id => closure(m, id, false).forEach((_, k) => dnSet.add(k)));
+  }
+  if (sel && sel.startsWith("R:")) nodes.filter(n => "R:" + n.region === sel).forEach(n => dnSet.add(n.id));
+  const repSet = (xs) => new Set([...xs].filter(k => !k.startsWith("R:")).map(rep).filter(Boolean));
+  const selR = repSet(selMembers), nbR = repSet(nbSet), dnR = repSet(dnSet);
+  const gut = SP[3], nodeW = colW - 2 * gut, CH = 6.62, chars = Math.max(12, Math.floor((nodeW - 2 * SP[2]) / CH)), tchars = Math.max(10, Math.floor((nodeW - 2 * SP[2]) / 6.1));
+
+  // region headers: the instance and its state in a word; its settings and calls are its answer
+  let headH = 0;
+  const heads = m.regions.map(r => {
+    const open = regionOpen(r.id), wch = Math.floor((RX[r.id].w - 2 * SP[3]) / 6.4);
+    const lit = o.litRegions.get("R:" + r.id);
+    const count = nodes.filter(n => n.region === r.id).length;
+    const word = r.word || r.state.split(/ · |: /)[0];
+    const lines = [["rh-l", wrap(r.label, wch, 2)], [r.waiting ? "rh-w" : "rh-t", wrap(word, wch, open ? 2 : 1)]];
+    if (!open) lines.push(["rh-t", [`${count} objects`]]);
+    const h = SP[2] + lines.reduce((a, [, ls]) => a + ls.length * 14, 0) + SP[3];
+    headH = Math.max(headH, h);
+    return {r, open, lines, lit};
+  });
+
+  // a card: the address, the health and reading as words, and the plan's state; the rest is its answer
+  const LH = 15;
+  const famOf = (rid) => { const r = m.regions.find(r => r.id === rid); return r ? r.label.split(/[\s·]/)[0] + "." : ""; };
+  const frameName = (g) => { const gi = m.groups[g]; return gi ? gi.label.split(":")[0].trim() : ""; };
+  function content(it) {
+    const out = [];
+    const k = it.members.length, objs = `${k} object${k === 1 ? "" : "s"}`;
+    if (it.id.startsWith("Q:")) return {out: [["gs", wrap(`${k} more, nothing to report`, chars, 2)]], cls: "sum"};
+    if (it.id.startsWith("C:")) return {out: [["gs", wrap(`${objs}, nothing to report`, chars, 2)]], cls: "sum"};
+    if (it.id.startsWith("G:")) {
+      const g = m.groups[it.id.slice(2)] || {label: it.id};
+      return {out: [["gty", [objs]], ["gt", wrap(frameName(it.id.slice(2)) || g.label, chars, 2)]], cls: "sum"};
+    }
+    const n = it.members[0];
+    let cls = "";
+    const fam = famOf(n.region), type = n.type.startsWith(fam) ? n.type.slice(fam.length) : n.type;
+    const fr = n.group && groupOpen(n.group) ? frameName(n.group) + "." : "", name = fr.length > 1 && n.name.startsWith(fr) ? n.name.slice(fr.length) : n.name;
+    out.push(["gty", wrap(type, tchars, 1)]); out.push(["gt", wrap(name, chars, 2)]);
+    const st = nodeState(p, n), ch = o.changed.get(n.id), showSt = st && (ch || st.text.startsWith("held"));
+    const hw = healthWord(n.health), rw0 = readingWord(n), rw = showSt && st.text.endsWith(rw0) ? "" : rw0;
+    const words = [hw && `<tspan class="${healthCls(n.health) || "gs"}">${esc(hw)}</tspan>`, rw && `<tspan class="${readingCls(n.reading) || "gs"}">${esc(rw)}</tspan>`].filter(Boolean);
+    if (words.length === 2 && hw.length + rw.length + 3 > chars) words.forEach(w => out.push(["raw", [w]]));
+    else if (words.length) out.push(["raw", [words.join(`<tspan class="gs"> · </tspan>`)]]);
+    if (showSt) out.push(["ov " + gMark(st.mark), wrap(`${st.mark} ${st.text}`, chars, 2)]);
+    if (ch) cls = "ch chg-" + ({"+": "c", "~": "u", "-": "d", "±": "d", "=": "e"}[ch[0].l.mark] || "e");
+    else if (o.reached.has(n.id)) cls = "rc";
+    if (n.kind === "source") cls += " src";
+    return {out, cls};
+  }
+  const itemH = (c) => 2 * SP[2] + c.out.reduce((a, [, ls]) => a + ls.length * LH, 0) - 2;
+
+  // lanes
+  const STRIP = 26;
+  let y = headH + SP[2], svgLanes = "", svgNodes = "", svgFrames = "";
+  const pos = {};
+  laneIds.forEach((l) => {
+    const info = laneInfo(l), open = laneOpen(l), top = y;
+    const st = (info.st || "").split(" · ")[0];
+    svgLanes += `<g class="lanehdr" data-lanehdr="${esc(l)}"><rect class="ln-strip" x="0" y="${top}" width="${totalW}" height="${STRIP}"></rect>
+      <text class="g-l" x="${SP[3]}" y="${top + 17}"><tspan class="${gMark(info.mark)}">${esc(info.mark || "")}</tspan> ${esc(info.name)}<tspan class="g-ls" dx="${SP[3]}">${esc(st)}</tspan></text></g>`;
+    if (!open) {
+      m.regions.forEach(r => { if ((cellNodes[cellKey(l, r.id)] || []).length) pos["C:" + cellKey(l, r.id)] = {x: RX[r.id].x + gut, y: top + STRIP + SP[2], w: RX[r.id].w - 2 * gut, h: 18, band: true}; });
+      y = top + STRIP + SP[2] + 18 + SP[3]; return;
+    }
+    let laneH = STRIP + SP[3];
+    m.regions.forEach(r => {
+      const cellItems = Object.values(items).filter(it => it.lane === l && it.region === r.id).sort((a, b) => a.order - b.order);
+      if (!regionOpen(r.id)) {
+        if (cellItems.length) pos["C:" + cellKey(l, r.id)] = {x: RX[r.id].x + gut, y: top + STRIP + SP[3], w: narrowW - 2 * gut, h: 18, band: true};
+        laneH = Math.max(laneH, STRIP + SP[3] + 18 + SP[4]); return;
+      }
+      const gfirst = {};
+      cellItems.forEach(it => { const g = it.members[0].group || it.id; if (!(g in gfirst)) gfirst[g] = it.order; });
+      const gkey = (it) => /^[GCQ]:/.test(it.id) ? it.order : (gfirst[it.members[0].group || it.id] ?? it.order);
+      for (let si = 0; si < subN[r.id]; si++) {
+        let ny = top + STRIP + SP[4], lastGroup = null, frame = null;
+        const last = si === subN[r.id] - 1;
+        const col = cellItems.filter(it => { const ix = subRanks[r.id].indexOf(Math.max(0, it.rank)); return last ? ix >= si : ix === si; })
+          .sort((a, b) => gkey(a) - gkey(b) || a.rank - b.rank || a.order - b.order);
+        col.forEach(it => {
+          const c = content(it), h = itemH(c), nx = RX[r.id].x + si * colW + gut;
+          const g = /^[GCQ]:/.test(it.id) ? null : it.members[0].group;
+          if (g && g !== lastGroup) {
+            if (frame) { svgFrames += frameSVG(frame); ny += SP[2]; }
+            frame = {x: nx - SP[2], y: ny, w: nodeW + 2 * SP[2], label: frameName(g), gid: g}; ny += 18;
+          } else if (!g && frame) { svgFrames += frameSVG(frame); frame = null; ny += SP[2]; }
+          lastGroup = g;
+          const lit = /\b(ch|rc)\b/.test(c.cls);
+          const selCls = isSel(it) ? "sel" : selR.size ? (dnR.has(it.id) ? "dn" : nbR.has(it.id) ? "nb" : lit ? "" : "fade") : "";
+          let body = "", ty = ny + SP[2] - 2;
+          c.out.forEach(([k, ls]) => ls.forEach(t => { ty += LH; body += `<text class="${k === "raw" ? "gs" : k}" x="${nx + SP[2] + 1}" y="${ty - 3}">${k === "raw" ? t : esc(t)}</text>`; }));
+          svgNodes += `<g class="n ${c.cls} ${selCls}" data-node="${esc(it.id)}" tabindex="0" role="button" aria-label="${esc(it.id)}"><rect class="box" x="${nx}" y="${ny}" width="${nodeW}" height="${h}" rx="3"></rect>${body}</g>`;
+          pos[it.id] = {x: nx, y: ny, w: nodeW, h};
+          if (frame) frame.bottom = ny + h;
+          ny += h + SP[3];
+        });
+        if (frame) { svgFrames += frameSVG(frame); frame = null; ny += SP[2]; }
+        laneH = Math.max(laneH, ny - top + SP[1]);
+      }
+    });
+    y = top + laneH;
+  });
+  function frameSVG(f) { return `<g class="gframe" data-group="${esc(f.gid)}"><rect x="${f.x}" y="${f.y}" width="${f.w}" height="${(f.bottom || f.y + 20) - f.y + SP[2]}" rx="4"></rect><text x="${f.x + SP[2]}" y="${f.y + 13}">${esc(wrap(f.label, Math.floor(f.w / 6.2) - 2, 1)[0])}</text></g>`; }
+  function isSel(it) {
+    if (sel === it.id) return true;
+    if (/^[GCQ]:/.test(it.id)) return false;
+    const d = P[cur].decisions.find(d => d.id === sel);
+    return it.members.some(n => n.id === sel || n.lines.includes(sel) || (d && n.lines.includes(d.line)));
+  }
+  const H = y;
+
+  // bands for folded cells
+  let svgBands = "";
+  Object.entries(pos).filter(([, q]) => q.band).forEach(([id, q]) => {
+    const [l, r] = id.slice(2).split("|"), c = (cellNodes[cellKey(l, r)] || []).length;
+    svgBands += `<g class="band ${sel === id ? "sel" : dnR.has(id) ? "dn" : ""}" data-node="${esc(id)}" tabindex="0" role="button"><rect x="${q.x}" y="${q.y}" width="${q.w}" height="${q.h}" rx="2"></rect><text x="${q.x + 6}" y="${q.y + 13}">${c} object${c === 1 ? "" : "s"}</text></g>`;
+  });
+
+  // lines: none at rest; a node's own edges when it is pointed at; the plan's propagation when the plan is on
+  const anchorOut = (id) => { const q = pos[id]; return q && (q.band ? [q.x + q.w, q.y + q.h / 2] : [q.x + q.w, q.y + Math.min(q.h / 2, 20)]); };
+  const anchorIn = (id) => { const q = pos[id]; return q && (q.band ? [q.x, q.y + q.h / 2] : [q.x - 2, q.y + Math.min(q.h / 2, 20)]); };
+  function curve(ra, rb) {
+    const p1 = anchorOut(ra); if (!p1) return null;
+    if (rb.startsWith("R:")) {
+      const R = RX[rb.slice(2)], x2 = R.x + 18, y2 = headH;
+      return `M${p1[0]},${p1[1]} C${p1[0] + 50},${p1[1]} ${x2},${y2 + 60} ${x2},${y2 + 2}`;
+    }
+    const p2 = anchorIn(rb); if (!p2) return null;
+    if (p2[0] > p1[0] + 6) { const mx = (p1[0] + p2[0]) / 2; return `M${p1[0]},${p1[1]} C${mx},${p1[1]} ${mx},${p2[1]} ${p2[0]},${p2[1]}`; }
+    const q = pos[ra], x1 = q.x, y1 = q.y + 12, bl = 10 + Math.abs(p2[1] - y1) / 40;
+    return `M${x1},${y1} C${x1 - bl * 2},${y1} ${p2[0] - bl * 2},${p2[1]} ${p2[0]},${p2[1]}`;
+  }
+  const seen = new Set(); let svgEdges = "";
+  const draw = (a, b, kind, cls) => {
+    const ra = rep(a), rb = rep(b); if (!ra || !rb || ra === rb) return;
+    const key = ra + ">" + rb + ">" + cls; if (seen.has(key)) return; seen.add(key);
+    const d = curve(ra, rb); if (d) svgEdges += `<path class="e e-${kind} ${cls}" d="${d}" marker-end="url(#ar-${cls === "lit" ? "lit" : kind})"></path>`;
+  };
+  m.edges.filter(e => e[2] === "provider").forEach(([a, b]) => { if (o.litRegions.has(b)) draw(a, b, "provider", "lit"); else if (selMembers.has(a) || sel === b) draw(a, b, "provider", "on"); });
+  if (o.W) {
+    o.reached.forEach((v, b) => { if (v.parent && !v.parent.startsWith("R:")) draw(v.parent, b, "ref", "lit"); });
+    o.chParent.forEach((par, b) => { if (!par.startsWith("R:")) draw(par, b, "ref", "lit"); });
+    m.edges.forEach(([a, b, kind]) => { if (kind === "rows" && o.changed.has(b) && byId[a] && byId[a].news) draw(a, b, "rows", "lit"); });
+  }
+  m.edges.forEach(([a, b, kind]) => { if (kind !== "provider" && (selMembers.has(a) || selMembers.has(b))) draw(a, b, kind, "on"); });
+
+  // region columns and headers
+  let svgRegions = "", svgHeads = "";
+  heads.forEach(({r, lines, lit}, i) => {
+    const R = RX[r.id];
+    svgRegions += `<rect class="rg-bg ${i % 2 ? "alt" : ""}" x="${R.x}" y="0" width="${R.w}" height="${H}"></rect>${i ? `<line class="rg-line" x1="${R.x}" y1="0" x2="${R.x}" y2="${H}"></line>` : ""}`;
+    let ty = SP[2] + 2, t = "";
+    lines.forEach(([k, ls]) => ls.forEach(s => { ty += 14; t += `<text class="${k}" x="${R.x + SP[3]}" y="${ty}">${esc(s)}</text>`; }));
+    svgHeads += `<g class="rh ${lit ? "lit" : ""} ${sel === "R:" + r.id ? "sel" : dnSet.has("R:" + r.id) ? "dn" : ""}" data-node="R:${esc(r.id)}" tabindex="0" role="button"><rect x="${R.x + SP[1]}" y="${SP[1]}" width="${R.w - 2 * SP[1]}" height="${headH - 2 * SP[1]}" rx="3"></rect>${t}</g>`;
+  });
+
+  return `<div class="gwrap"><svg viewBox="0 0 ${totalW} ${H}" width="${totalW}" height="${H}" role="img" aria-label="The estate as a graph">
+    <defs>${["ref", "output", "rows", "provider", "lit"].map(k => `<marker id="ar-${k}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="ar-${k}" d="M0,0 L8,4 L0,8 z"></path></marker>`).join("")}</defs>
+    ${svgRegions}${svgLanes}${svgFrames}${svgBands}${svgNodes}${svgHeads}${svgEdges}</svg>
+    <div class="glegend"><span>a node sits right of, or below, what it reads; point at it for its edges and its answer</span><span>a card with no word under its name is in sync</span>${o.W ? `<span><b style="color:var(--update)">——</b> where the plan goes · <b>- - -</b> reached by it</span>` : ""}</div></div>`;
+}
+
+/* ---------- inspector for the estate ---------- */
+function estateInsp(el) {
+  const m = MODEL[cur], p = P[cur];
+  const byId = Object.fromEntries(m.nodes.map(n => [n.id, n]));
+  let title = sel, tree = [], cmd = "", members = [], facts = [];
+  if (sel.startsWith("R:")) {
+    const r = m.regions.find(r => "R:" + r.id === sel);
+    title = "provider instance " + r.label; tree = [N(r.settings, "", ""), N(r.state, "", r.waiting ? "wait" : "ok"), ...(r.why || [])];
+    members = m.nodes.filter(n => n.region === r.id);
+  } else if (/^[GCQ]:/.test(sel)) {
+    const k = sel.slice(2);
+    members = sel.startsWith("G:") ? m.nodes.filter(n => n.group === k) : m.nodes.filter(n => n.lane + "|" + n.region === k);
+    const g = m.groups[k];
+    title = sel.startsWith("G:") ? `${g.label}` : `${members.length} objects with nothing to report`;
+    if (g) facts.push(["site", g.site]);
+    tree = members.map(n => N(`${n.type} ${n.name}`, n.site, "", [N(`health ${n.health || "-"} · ${n.reading}`)]));
+  } else {
+    const n = byId[sel]; if (!n) return false;
+    const w = n.lines.map(id => WHY[id]).find(Boolean), st = nodeState(p, n);
+    title = `${n.type} ${n.name}`;
+    if (n.planned) facts.push(["exists", "not yet: the plan makes it"]);
+    else facts.push(["health", n.health && n.health !== "-" ? n.health : "not judged"], ["reading", n.reading || "-"]);
+    if (st) {
+      facts.push(["plan", `${st.mark} ${st.text}`]);
+      if (st.l.because) facts.push(["because", st.l.because.replace(/^because /, "")]);
+      if (st.l.held && !st.l.heldDone) facts.push(["held", st.l.held[1].replace(/^held\s+/, "")]);
+      if (st.l.mag) facts.push(["reach", stripTags(st.l.mag)]);
+    }
+    nodeTags(n).filter(t => t[0] === "undet").forEach(t => facts.push(["policy", t[1]]));
+    if (n.site) facts.push(["site", n.site]);
+    if (w) { tree = w.tree; cmd = w.cmd; }
+    else {
+      cmd = n.kind === "source" ? "" : `dform why '${n.type} ${n.name}'`;
+      const ins = m.edges.filter(([, b]) => b === n.id).map(([a, , k, label]) => byId[a] ? N(`${label} ← ${byId[a].type} ${byId[a].name}`, k === "output" ? "another deployment's output" : k === "rows" ? "rows" : "", k === "rows" ? "because" : "") : null).filter(Boolean);
+      tree = ins.length ? [N(`${n.type} ${n.name}`, n.site, "", ins)] : [];
+      const r = m.regions.find(r => r.id === n.region); tree.push(N(`held by provider instance ${r.label}`, r.settings));
+    }
+    members = [n];
+  }
+  // what depends on this: the downstream closure
+  const down = new Map();
+  members.forEach(n => closure(m, n.id, false).forEach((par, k) => { if (!k.startsWith("R:") && !members.includes(byId[k])) down.set(k, par); }));
+  if (sel.startsWith("R:")) members.forEach(n => down.set(n.id, sel));
+  const byLane = {};
+  down.forEach((par, k) => { const n = byId[k]; if (n) (byLane[n.lane] = byLane[n.lane] || []).push(n); });
+  const laneName = (l) => l === "sources" ? SRC_LANE.name : ((p.deps.find(d => d.id === l) || {}).name || l);
+  const depTree = Object.entries(byLane).map(([l, ns]) => N(laneName(l), `${ns.length}`, "", ns.map(n => N(`${n.type} ${n.name}${n.planned ? " (planned)" : ""}`, (m.regions.find(r => r.id === n.region) || {}).label))));
+  const d = p.decisions.find(d => members.some(n => n.lines && n.lines.includes(d.line)));
+  el.innerHTML = `<div class="lab">Why</div><h2>${esc(title)}</h2>
+    ${facts.length ? `<dl class="kv">${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>` : ""}
+    ${cmd ? `<div class="cmd">$ ${esc(cmd)}</div>` : ""}
+    <div class="tree">${treeHTML(tree)}</div>
+    <div class="acts"><div class="lab">What depends on this · ${down.size}</div>
+      ${down.size ? `<div class="tree">${treeHTML(depTree)}</div>` : `<p>Nothing reads it.</p>`}</div>
+    ${d && ACTS[d.id] ? `<div class="acts"><div class="lab">${esc(d.word)}</div>${ACTS[d.id]()}</div>` : ""}`;
+  return true;
+}
+
+function expandRep(id) {
+  if (id.startsWith("G:")) OPEN.group[id.slice(2)] = true;
+  else if (/^[CQ]:/.test(id)) OPEN.cell[id.slice(2)] = true;
+}
+
+/* ---------- ovh-infra: the user's own project, from its program files ---------- */
+const OLD = "sha256:7c1e0b5a…e2d4", NEW = "sha256:a94d31f8…09bc";
+P.ovh = {
+  title: "ovh-infra", sub: "ovh, k8s",
+  ctl: {state: "watching", since: "09:20:14", detail: "run 41 · event oci.resolve: forgejo's lab tag moved"},
+  sources: [
+    {k: "oci", v: "oci.resolve forgejo image (lab)", d: `digest ${OLD} → ${NEW} · 09:20:14`, fresh: true},
+    {k: "world", v: "apps[env=prod] refresh", d: "drift on forgejo.server env · 08:40:30"},
+    {k: "git", v: "main", d: "unchanged since lab was brought up"},
+    {k: "state", v: "Object Storage bucket (dform.toml)", d: "4 deployments, leases free"},
+  ],
+  deps: [
+    {id: "platform[lab]", name: "stacks.platform[env=lab]", mark: "=", st: "up to date · brought up today, applied 07:58 (run 39)"},
+    {id: "apps[lab]", name: "stacks.apps[env=lab]", mark: "~", st: "1 change · applies next", edge: "reads platform[lab].kubeconfig, .ingress_ip"},
+    {id: "platform[prod]", name: "stacks.platform[env=prod]", mark: "=", st: "up to date"},
+    {id: "apps[prod]", name: "stacks.apps[env=prod]", mark: "~", st: "held · 1 drift", edge: "reads platform[prod].kubeconfig, .ingress_ip, .backup"},
+  ],
+  headline: "plan: 2 changes (2 update) over 1 tick, 1 held (drift); policy: 15 hold",
+  shape: [["forgejo image digest (lab)", "7c1e…", "a94d…"]],
+  reach: "touches 1 object in apps[lab] · nothing reads it · no replace, no delete",
+  ticks: [
+    {n: 1, head: "tick 1  2 changes", st: "next", lines: [
+      {id: "fj", dep: "apps[lab]", mark: "~", addr: "k8s.deployment forgejo.server", site: "forgejo.df:43",
+        attrs: [[`spec.template.spec.containers[0].image = "…/forgejo@${OLD}" → "…/forgejo@${NEW}"`, "oci.resolve"]],
+        because: "because oci.resolve answered a new digest for lab's tag at 09:20:14 (the tag moved)",
+        mag: "update · Recreate: the pod restarts on its volume"},
+      {id: "fjdrift", dep: "apps[prod]", mark: "~", addr: "k8s.deployment forgejo.server", site: "forgejo.df:43",
+        attrs: [["spec.template.spec.containers[0].env  - FORGEJO__service__ENABLE_INTERNAL_SIGNIN = \"true\"", "(drift)"]],
+        held: ["drift", "held  drift at spec.template.spec.containers[0].env needs approval"],
+        mag: "revert drift · prod · the password form turns off again"},
+    ]},
+  ],
+  policy: {head: "policy  15 hold", lines: [
+    {id: "pol-ovh", mark: "holds", text: "15 hold", site: "", tally: "", under: "image not pinned · prod image tag is not a release · a Deployment on a volume rolls instead of recreating · prod keeps its data · prod data is backed up · a record outside the zone's layout · no deletes in prod · …"},
+  ]},
+  approvals: [],
+  decisions: [
+    {id: "d-fjdrift", kind: "drift", word: "Drift held", t: "stacks.apps[env=prod]  k8s.deployment forgejo.server", r: "env FORGEJO__service__ENABLE_INTERNAL_SIGNIN=true, kubectl-set 08:40:12; forgejo.df:19 says to apply afterwards", line: "fjdrift"},
+  ],
+};
+WHY.fj = {title: "~ k8s.deployment forgejo.server (lab)", cmd: "dform why forgejo.server apps env=lab", tree: [
+  N("k8s.deployment forgejo.server  forgejo.df:43  (use forgejo stacks/apps.df:82)", "", "", [
+    N(`containers[0].image = "…/forgejo@${NEW}"`, "", "", [N("= oci.resolve(the image's tag)", "forgejo.df", "", [N(`the registry answered ${NEW} at 09:20:14; ${OLD} at the last apply`, "oci.resolve", "because")])])]),
+  N("image not pinned: holds, the image carries its digest", "policy.df:110", "ok"),
+  N("a Deployment on a volume rolls instead of recreating: holds (Recreate)", "policy.df:144", "ok"),
+  N("prod image tag is not a release: not in lab", "policy.df:115", "dimt"),
+  N("reach: nothing reads it; its Services select its pods by label, which is the copy's box, not an edge", "", "dimt"),
+]};
+WHY.fjdrift = {title: "~ k8s.deployment forgejo.server (prod)", cmd: "dform why forgejo.server apps env=prod", tree: [
+  N("env as written: no FORGEJO__service__ENABLE_INTERNAL_SIGNIN", "forgejo.df:43"),
+  N("drift(\"k8s.deployment\", \"forgejo.server\", \"spec.template.spec.containers[0].env[…]\", absent, \"true\")", "controller, event world 08:40:30", "no", [
+    N("managedFields: kubectl-set (Update) 08:40:12", "provider k8s")]),
+  N("forgejo.df:17-20: the outage procedure sets it by hand and says to apply afterwards", "forgejo.df:19", "because"),
+  N("held: drift at …env needs approval", "", "held", [N("approve(\"k8s.deployment\", \"forgejo.server\"): no row", "", "no")]),
+]};
+WHY["pol-ovh"] = {title: "15 policies hold", cmd: "dform plan -v", tree: [
+  N("container without resource limits", "policy.df:102", "ok"), N("container without resource requests", "policy.df:105", "ok"), N("image not pinned", "policy.df:110", "ok"),
+  N("prod image tag is not a release", "policy.df:115", "ok"), N("pod may run as root", "policy.df:120", "ok"), N("container may gain privilege", "policy.df:123", "ok"),
+  N("hostNetwork", "policy.df:129", "ok"), N("a host port outside the ingress", "policy.df:131", "ok"), N("a host port on the node's SSH", "policy.df:139", "ok"),
+  N("a Deployment on a volume rolls instead of recreating", "policy.df:144", "ok"), N("a Service reachable from outside the cluster", "policy.df:154", "ok"),
+  N("no deletes in prod", "policy.df:175", "ok"), N("a record outside the zone's layout", "policy.df:191", "ok"),
+  N("prod keeps its data", "stacks/apps.df:118", "ok"), N("prod data is backed up", "stacks/apps.df:124", "ok")]};
+WHY["d-fjdrift"] = WHY.fjdrift;
+ACTS["d-fjdrift"] = () => DONE["d-fjdrift"] ? `<p>approve("k8s.deployment", "forgejo.server") written by simon@framework. The revert applied; the password form is off.</p>` : `
+  <p>forgejo.df:17-20 is the outage procedure: the password form turned on by hand, "and apply afterwards, which turns it off again". If Pocket ID is back, revert. If not, leave it held; nothing else of prod waits on it.</p>
+  <button class="btn" id="revert-fj">Revert the drift: approve("k8s.deployment", "forgejo.server")</button>`;
+function revertFj() {
+  const p = P.ovh; DONE["d-fjdrift"] = true;
+  const l = findLine(p, "fjdrift"); l.heldDone = true; l.applied = true;
+  const r = newRun("ovh", "09:53:10", "an approve row for forgejo.server by simon@framework", "reverted env on forgejo.server in prod"); r.took = "4s"; r.state = "";
+  l.at = `09:53 (run ${r.n})`;
+  addAudit("ovh", [90, "09:53:10", "controller", "apps[prod]", "approve(\"k8s.deployment\", \"forgejo.server\") by simon@framework"], r);
+  addAudit("ovh", [91, "09:53:14", "action", "apps[prod]", "update k8s.deployment forgejo.server ok · env reverted"], r);
+  p.deps[3].mark = "="; p.deps[3].st = `up to date · applied 09:53 (run ${r.n})`;
+  p.headline = "plan: 1 change (1 update) over 1 tick; policy: 15 hold";
+  const n = MODEL.ovh.nodes.find(n => n.id === "n:apps[prod]/forgejo.server"); n.reading = "in sync · reverted 09:53:14";
+  toast("approve row written. The revert applied."); render();
+}
+
+MODEL.ovh = (() => {
+  const dom = {lab: "lab.vodik.xyz", prod: "vodik.xyz"};
+  const m = model(["sources", "platform[lab]", "apps[lab]", "platform[prod]", "apps[prod]"], [
+    {id: "ovh", label: "ovh · Public Cloud project", settings: "use ovh { .. }  stacks/platform.df:30, stacks/apps.df:20 · credentials from the environment", state: "slow: Read k3s.server.vm 4.1s of a 6.2s run (trace) · 26 calls", word: "slow Read, 4.1s", waiting: false,
+      why: [N("one instance: every deployment gives it the same project", "stacks/platform.df:30"), N("Read ovh.instance k3s.server.vm 4.1s: the longest call, and first on the chain", "trace 09:20:14", "wait")]},
+    {id: "io", label: "dform io.read, oci.resolve", settings: "what dform reads itself: the kubeconfig over SSH, image tags", state: "2 ssh reads answered · 6 tags resolved, 1 moved"},
+    {id: "k8s-lab", label: "k8s · k3s lab", settings: "platform: use k8s { kubeconfig = k3s.kubeconfig }  ·  apps: platform[env].kubeconfig", state: "configured · 81 calls last run (Read 38 refresh, Plan 1)", from: "n:platform[lab]/read",
+      why: [N("output kubeconfig = str.replace(…)", "k3s.df:27", "", [N("read back from the server over SSH once it is up", "k3s.df:3")]), N("apps reads it as platform[env].kubeconfig", "stacks/apps.df:25")]},
+    {id: "k8s-prod", label: "k8s · k3s prod", settings: "platform: use k8s { kubeconfig = k3s.kubeconfig }  ·  apps: platform[env].kubeconfig", state: "configured · 96 calls last run", from: "n:platform[prod]/read",
+      why: [N("output kubeconfig = str.replace(…)", "k3s.df:27"), N("apps reads it as platform[env].kubeconfig", "stacks/apps.df:25")]},
+  ], {});
+  const G = (id, label, site, word) => { m.groups[id] = {label, site, word: word || "objects of one copy"}; return id; };
+  m.N("src/oci-fj", {lane: "sources", region: "io", kind: "source", type: "oci.resolve", name: "forgejo image, lab's tag", health: "", reading: `moved: ${OLD} → ${NEW} at 09:20:14`, word: "moved", news: true});
+  for (const e of ["lab", "prod"]) {
+    const pl = `platform[${e}]`, ap = `apps[${e}]`, K = "k8s-" + e, D = dom[e], PR = e === "prod";
+    // platform, ovh
+    const k3 = G(`${pl}/k3s@ovh`, "k3s: use k3s { .. }", "stacks/platform.df:36");
+    const ok = (n, o) => m.N(`${pl}/${n}`, {lane: pl, region: "ovh", ...o});
+    ok("k3s.admin", {type: "ovh.ssh_key", name: "k3s.admin", site: "k3s.df:38", group: k3});
+    ok("k3s.net", {type: "ovh.network", name: "k3s.net", site: "k3s.df:42", group: k3});
+    ok("k3s.subnet", {type: "ovh.subnet", name: "k3s.subnet", site: "k3s.df:44", group: k3});
+    ok("k3s.server.vm", {type: "ovh.instance", name: "k3s.server.vm", site: "k3s.df:133", group: k3, health: "ready: ACTIVE", reading: e === "lab" ? "in sync · its Read took 4.1s, the run's slowest call" : "in sync"});
+    ok("k3s.server.data", {type: "ovh.volume", name: "k3s.server.data", site: "k3s.df:143", group: k3, health: "ready: in-use"});
+    if (PR) {
+      ok("k3s.agent-0.vm", {type: "ovh.instance", name: "k3s.agent-0.vm", site: "k3s.df:173", group: k3, health: "ready: ACTIVE"});
+      ok("k3s.agent-0.data", {type: "ovh.volume", name: "k3s.agent-0.data", site: "k3s.df:143", group: k3, health: "ready: in-use"});
+      m.E(`${pl}/k3s.subnet`, `${pl}/k3s.agent-0.vm`, "ref", "subnet"); m.E(`${pl}/k3s.agent-0.vm`, `${pl}/k3s.agent-0.data`, "ref", "attached to");
+      m.E(`${pl}/k3s.server.vm`, `${pl}/k3s.agent-0.vm`, "ref", "joins the server");
+    }
+    ok("k3s.api", {type: "ovh.domain_record", name: `k3s."api.${D}"`, site: "k3s.df:185", group: k3});
+    ok("apex", {type: "ovh.domain_record", name: `"${D}"`, site: "stacks/platform.df:77"});
+    ok("backup", {type: "ovh.cloud_project_user", name: "backup", site: "stacks/platform.df:52"});
+    ok("backups", {type: "ovh.storage_container", name: "backups", site: "stacks/platform.df:57"});
+    m.E(`${pl}/k3s.admin`, `${pl}/k3s.server.vm`, "ref", "ssh_key"); m.E(`${pl}/k3s.net`, `${pl}/k3s.subnet`, "ref", "network");
+    m.E(`${pl}/k3s.subnet`, `${pl}/k3s.server.vm`, "ref", "subnet"); m.E(`${pl}/k3s.server.vm`, `${pl}/k3s.server.data`, "ref", "attached to");
+    m.E(`${pl}/k3s.server.vm`, `${pl}/k3s.api`, "ref", "target"); m.E(`${pl}/k3s.server.vm`, `${pl}/apex`, "ref", "target = k3s.ingress_ip");
+    m.E(`${pl}/backup`, `${pl}/backups`, "ref", "may write");
+    m.N(`${pl}/read`, {lane: pl, region: "io", kind: "source", type: "io.read", name: "ssh://…/etc/rancher/k3s/k3s.yaml", site: "k3s.df:27", health: "", reading: "answered 0.4s"});
+    m.E(`${pl}/k3s.server.vm`, `${pl}/read`, "ref", "public_ip, in the location");
+    m.E(`${pl}/read`, "R:" + K, "provider", "kubeconfig");
+    // platform, k8s
+    const tr = G(`${pl}/traefik`, "traefik: use traefik { .. }", "stacks/platform.df:73");
+    const pk = (n, o) => m.N(`${pl}/${n}`, {lane: pl, region: K, ...o});
+    pk("block", {type: "k8s.storage_class", name: "block", site: "stacks/platform.df:85"});
+    pk("traefik.traefik", {type: "k8s.namespace", name: "traefik.traefik", site: "traefik.df:21", group: tr});
+    pk("traefik.acme", {type: "k8s.persistent_volume_claim", name: "traefik.acme", site: "traefik.df:29", group: tr, health: "ready: Bound"});
+    pk("traefik.server", {type: "k8s.deployment", name: "traefik.server", site: "traefik.df:36", group: tr, health: "ready: 1 of 1 available"});
+    pk("traefik.class", {type: "k8s.ingress_class", name: "traefik.class", site: "traefik.df:101", group: tr});
+    pk("traefik.account", {type: "k8s.service_account", name: "traefik.account", site: "traefik.df:107", group: tr});
+    pk("traefik.role", {type: "k8s.cluster_role", name: "traefik.role", site: "traefik.df:111", group: tr});
+    pk("traefik.binding", {type: "k8s.cluster_role_binding", name: "traefik.binding", site: "traefik.df:126", group: tr});
+    pk("traefik.crds", {type: "k8s.custom_resource_definition", name: "traefik.\"*.traefik.io\" (one per vendored document)", site: "traefik.df:139", group: tr});
+    m.E(`${pl}/traefik.acme`, `${pl}/traefik.server`, "ref", "claim"); m.E(`${pl}/traefik.account`, `${pl}/traefik.server`, "ref", "serviceAccountName");
+    m.E(`${pl}/traefik.role`, `${pl}/traefik.binding`, "ref", "roleRef"); m.E(`${pl}/traefik.account`, `${pl}/traefik.binding`, "ref", "subject");
+    // apps, k8s
+    const ak = (n, o) => m.N(`${ap}/${n}`, {lane: ap, region: K, ...o});
+    const ns = G(`${ap}/ns`, "namespace apps: stacks/apps.df:29-67", "stacks/apps.df", "objects of the namespace");
+    ak("apps", {type: "k8s.namespace", name: "apps", site: "stacks/apps.df:29", group: ns});
+    ak("no_metadata", {type: "k8s.network_policy", name: "no_metadata", site: "stacks/apps.df:39", group: ns});
+    ak("deny_ingress", {type: "k8s.network_policy", name: "deny_ingress", site: "stacks/apps.df:50", group: ns});
+    ak("security_headers", {type: "k8s.traefik.middleware", name: "security_headers", site: "stacks/apps.df:57", group: ns});
+    ak("large_upload", {type: "k8s.traefik.middleware", name: "large_upload", site: "stacks/apps.df:67", group: ns});
+    m.E(`${pl}/traefik.crds`, `${ap}/security_headers`, "output", "its kind, from the CRD");
+    const db = G(`${ap}/synapse_db`, "databases.postgres synapse_db", "stacks/apps.df:73");
+    ak("synapse_db.creds", {type: "k8s.secret", name: "synapse_db.creds", site: "databases.df:32", group: db});
+    ak("synapse_db.db", {type: "k8s.stateful_set", name: "synapse_db.db", site: "databases.df:37", group: db, health: "ready: 1 of 1"});
+    ak("synapse_db.svc", {type: "k8s.service", name: "synapse_db.svc", site: "databases.df:74", group: db});
+    ak("synapse_db.from_clients", {type: "k8s.network_policy", name: "synapse_db.from_clients", site: "databases.df:79", group: db});
+    m.E(`${ap}/synapse_db.creds`, `${ap}/synapse_db.db`, "ref", "password");
+    const sy = G(`${ap}/synapse`, "synapse: use synapse { env, apps, db = synapse_db.conn, .. }", "stacks/apps.df:81");
+    ak("synapse.homeserver", {type: "k8s.secret", name: "synapse.homeserver", site: "synapse.df:52", group: sy});
+    ak("synapse.media", {type: "k8s.persistent_volume_claim", name: "synapse.media", site: "synapse.df:60", group: sy, health: "ready: Bound"});
+    ak("synapse.server", {type: "k8s.deployment", name: "synapse.server", site: "synapse.df:69", group: sy, health: "ready: 1 of 1 available"});
+    ak("synapse.svc", {type: "k8s.service", name: "synapse.server", site: "synapse.df:108", group: sy});
+    ak("synapse.web", {type: "k8s.ingress", name: "synapse.web", site: "synapse.df:118", group: sy});
+    ak("synapse.well_known", {type: "k8s.ingress", name: "synapse.well_known", site: "synapse.df:141", group: sy});
+    ak("synapse.from_ingress", {type: "k8s.network_policy", name: "synapse.from_ingress", site: "synapse.df:161", group: sy});
+    m.E(`${ap}/synapse_db.svc`, `${ap}/synapse.homeserver`, "ref", "db.host"); m.E(`${ap}/synapse_db.creds`, `${ap}/synapse.homeserver`, "ref", "db.password");
+    m.E(`${ap}/synapse.homeserver`, `${ap}/synapse.server`, "ref", "mounted"); m.E(`${ap}/synapse.media`, `${ap}/synapse.server`, "ref", "claim"); m.E(`${ap}/synapse.svc`, `${ap}/synapse.web`, "ref", "backend"); m.E(`${ap}/synapse.svc`, `${ap}/synapse.well_known`, "ref", "backend");
+    const fj = G(`${ap}/forgejo`, "forgejo: use forgejo { env, apps, storage = sizes.forgejo }", "stacks/apps.df:82");
+    const lab = e === "lab";
+    ak("forgejo.data", {type: "k8s.persistent_volume_claim", name: "forgejo.data", site: "forgejo.df:36", group: fj, health: "ready: Bound"});
+    ak("forgejo.server", {type: "k8s.deployment", name: "forgejo.server", site: "forgejo.df:43", group: fj, lines: lab ? ["fj"] : ["fjdrift"], health: "ready: 1 of 1 available",
+      reading: lab ? "in sync" : "drift: env FORGEJO__service__ENABLE_INTERNAL_SIGNIN=true, kubectl-set 08:40:12"});
+    ak("forgejo.http", {type: "k8s.service", name: "forgejo.http", site: "forgejo.df:99", group: fj});
+    ak("forgejo.ssh", {type: "k8s.service", name: "forgejo.ssh", site: "forgejo.df:104", group: fj});
+    ak("forgejo.web", {type: "k8s.ingress", name: "forgejo.web", site: "forgejo.df:113", group: fj});
+    ak("forgejo.ssh_route", {type: "k8s.traefik.io.v1alpha1.ingress_route_tcp", name: "forgejo.ssh", site: "forgejo.df:136", group: fj});
+    ak("forgejo.from_ingress", {type: "k8s.network_policy", name: "forgejo.from_ingress", site: "forgejo.df:146", group: fj});
+    m.E(`${ap}/forgejo.data`, `${ap}/forgejo.server`, "ref", "claim");
+    m.E(`${ap}/forgejo.http`, `${ap}/forgejo.web`, "ref", "backend"); m.E(`${ap}/forgejo.ssh`, `${ap}/forgejo.ssh_route`, "ref", "services");
+    m.E(`${pl}/traefik.crds`, `${ap}/forgejo.ssh_route`, "output", "its kind, from the CRD");
+    if (lab) m.E("src/oci-fj", `${ap}/forgejo.server`, "rows", "image digest");
+    const pi = G(`${ap}/pocket_id`, "pocket_id: use pocket_id { env, apps, storage = sizes.pocket_id }", "stacks/apps.df:83");
+    ak("pocket_id.keys", {type: "k8s.secret", name: "pocket_id.keys", site: "pocket_id.df:30", group: pi});
+    ak("pocket_id.data", {type: "k8s.persistent_volume_claim", name: "pocket_id.data", site: "pocket_id.df:35", group: pi, health: "ready: Bound"});
+    ak("pocket_id.server", {type: "k8s.deployment", name: "pocket_id.server", site: "pocket_id.df:45", group: pi, health: "ready: 1 of 1 available"});
+    ak("pocket_id.http", {type: "k8s.service", name: "pocket_id.http", site: "pocket_id.df:100", group: pi});
+    ak("pocket_id.web", {type: "k8s.ingress", name: "pocket_id.web", site: "pocket_id.df:105", group: pi});
+    ak("pocket_id.from_ingress", {type: "k8s.network_policy", name: "pocket_id.from_ingress", site: "pocket_id.df:133", group: pi});
+    m.E(`${ap}/pocket_id.keys`, `${ap}/pocket_id.server`, "ref", "mounted"); m.E(`${ap}/pocket_id.data`, `${ap}/pocket_id.server`, "ref", "claim"); m.E(`${ap}/pocket_id.http`, `${ap}/pocket_id.web`, "ref", "backend");
+    ["synapse.web", "forgejo.web", "pocket_id.web"].forEach(i => m.E(`${pl}/traefik.class`, `${ap}/${i}`, "output", "ingressClassName"));
+    if (PR) {
+      const bk = G(`${ap}/backups`, "backups: use backups { namespace = apps, destination = platform[env].backup, .. } where backup", "stacks/apps.df:86");
+      ak("backups.repository", {type: "k8s.secret", name: "backups.repository", site: "backups.df:37", group: bk});
+      [["synapse_db_backup", "synapse_db.creds", "credentials"], ["synapse_media_backup", "synapse.media", "claim, read-only"], ["forgejo_backup", "forgejo.data", "claim, read-only"], ["pocket_id_backup", "pocket_id.data", "claim, read-only"]].forEach(([b, from, label]) => {
+        ak(`${b}.job`, {type: "k8s.cron_job", name: `${b}.job`, site: "backups.df:81", group: bk, health: "ready: last run 03:00 succeeded"});
+        m.E(`${ap}/backups.repository`, `${ap}/${b}.job`, "ref", "repository");
+        m.E(`${ap}/${from}`, `${ap}/${b}.job`, "ref", label);
+      });
+      m.E(`${pl}/backup`, `${ap}/backups.repository`, "output", "platform[env].backup");
+      m.E(`${pl}/backups`, `${ap}/backups.repository`, "output", "platform[env].backup");
+    }
+    // apps, ovh: one record per app, a CNAME to the env's apex
+    const rec = G(`${ap}/records`, "records: a CNAME to the apex per app", "config.df:6", "records of the zone's layout");
+    [["forgejo", "git"], ["synapse", "matrix"], ["pocket_id", "id"]].forEach(([mod, h]) => {
+      m.N(`${ap}/${mod}.record`, {lane: ap, region: "ovh", type: "ovh.domain_record", name: `${mod}."${h}.${D}"`, site: `${mod}.df`, group: rec});
+      m.E(`${pl}/apex`, `${ap}/${mod}.record`, "output", "CNAME to the apex");
+    });
+  }
+  return m;
+})();
+WORLD.ovh = [
+  {d: "apps[prod]", p: "k8s.deployment forgejo.server.spec.template.spec.containers[0].env", des: "no ENABLE_INTERNAL_SIGNIN", base: "the same", live: "FORGEJO__service__ENABLE_INTERNAL_SIGNIN = \"true\"", def: "", w: "drift", wn: "drift", who: "kubectl-set · 08:40:12", line: "fjdrift"},
+  {d: "apps[lab]", p: "k8s.deployment forgejo.server.spec.template.spec.containers[0].image", des: `…@${NEW}`, base: `…@${OLD}`, live: `…@${OLD}`, def: "", w: "change", wn: "change", who: "oci.resolve 09:20:14", line: "fj"},
+  {d: "apps[prod]", p: "k8s.deployment forgejo.server.spec.revisionHistoryLimit", des: "history", base: "the same", live: "the same", def: "10 @internal", w: "sync", wn: "in sync", who: "policy.df:166 sets it over the default"},
+  {d: "apps[prod]", p: "k8s.service forgejo.http.spec.sessionAffinity", des: "", base: "\"None\"", live: "\"None\"", def: "\"None\" @internal", w: "default", wn: "provider default", who: "dform declines to own it"},
+  {d: "platform[lab]", p: "ovh.instance k3s.server.vm", des: "{ .. }", base: "{ .. }", live: "{ .. }", def: "", w: "sync", wn: "in sync", who: "Read took 4.1s"},
+];
+DATA.ovh = [
+  {name: "oci.resolve(image)", from: "a tag pinned to its digest at plan; a moved tag is an update", cols: ["image", "digest", "resolved"], rows: [
+    {new: true, r: ["forgejo (lab's tag)", `${NEW}`, "09:20:14 (was 7c1e…)"], line: "fj"}, ["5 other tags", "unchanged", "09:20:14"]]},
+  {name: "deformation(kind, resource, _)", from: "the plan, a table the policy reads", cols: ["deployment", "kind", "resource"], rows: [
+    {r: ["apps[lab]", "\"update\"", "k8s.deployment forgejo.server"], line: "fj"}, {r: ["apps[prod]", "\"update\"", "k8s.deployment forgejo.server (held)"], line: "fjdrift"}]},
+  {name: "drift(T, A, path, before, after)", from: "handed in by the controller · event world 08:40:30", cols: ["T", "A", "path", "after"], rows: [
+    {new: true, r: ["\"k8s.deployment\"", "\"forgejo.server\"", "\"spec.template.spec.containers[0].env[…]\"", "\"true\""], line: "fjdrift"}]},
+];
+DATA_NOTE.ovh = "The user's project, from its program files: two stacks, each once per env, the apps as module copies. The row that arrived is the registry's answer to a tag, not a file.";
+TRACE.ovh = {title: "controller run 09:20:14, the tree of 4 deployments (plan)", total: 6.2, spans: [
+  ["plan.phase  loaded and compiled", 0, .006, 0], ["provider.call  ovh Handshake, Configure", 0, .35, 1],
+  ["provider.call  ovh Read  k3s.server.vm (lab)", .35, 4.1, 1], ["provider.call  ovh Read ×25 others", .35, 1.3, 0],
+  ["io.call  oci.resolve ×6", .4, .7, 0], ["io.call  io.read  ssh …/k3s.yaml (lab)", 4.45, .42, 1],
+  ["provider.call  k8s Configure, Read ×38 (lab)", 4.87, .74, 1], ["provider.call  k8s Plan ×2", 5.61, .48, 1], ["plan.phase  policy pass", 6.09, .08, 1]],
+  calls: "ovh 26 · k8s 177 (lab 81, prod 96) · io 2 ssh, 6 oci · 0 retries",
+  chain: "ovh Configure → Read k3s.server.vm (4.1s) → ssh read of k3s.yaml → k8s Configure → Read ×38 → Plan",
+  gap: "the instance read is two thirds of the run, and first on the chain: the kubeconfig's address comes from it, so every k8s call waits for it."};
+AUDIT.ovh = [
+  [52, "07:41:02", "apply_start", "platform[lab]", "who simon@framework · the first apply of lab"],
+  [61, "07:58:40", "apply_end", "platform[lab]", "ok  tick 2"],
+  [23, "07:59:10", "apply_end", "apps[lab]", "ok  tick 1"],
+  [88, "08:40:30", "controller", "apps[prod]", "event world · drift spec.template.spec.containers[0].env (kubectl-set)"],
+  [89, "08:40:30", "controller", "apps[prod]", "tick 1: proceed: held, drift at …env needs approval: k8s.deployment[\"forgejo.server\"]"],
+  [24, "09:20:14", "controller", "apps[lab]", "event input oci.resolve (forgejo's lab tag moved)"],
+  [25, "09:20:20", "plan", "apps[lab]", "digest sha256:3be07c… · approval not required"],
+];
+
+/* ---------- runs: the controller's clock is events and runs, newest first; a tick is the order inside one run ---------- */
+const run = (n, at, event, did, took, rows, o) => ({n, at, event, did, took, rows, ...(o || {})});
+const RUNS = {
+  shop: [
+    run(218, "09:38:12", "table aws.availability_zone gained us-east-1d · world: ingress[1] of https drifted", "planned 7 changes in prod; holds for a signature and a drift; nothing applied", "2.4s", AUDIT.shop.slice(3), {trace: true, state: "held"}),
+    run(217, "09:31:41", "program commit a41c9e2: the orders database's security group is named for it", "planned the rename; held for a signature; superseded by run 218", "2.1s", AUDIT.shop.slice(1, 3)),
+    run(216, "09:01:48", "program commit on main", "applied staging", "22s", AUDIT.shop.slice(0, 1)),
+  ],
+  k3s: [
+    run(77, "09:12:30", "program commit 5d02b7e: platform: try Ubuntu 26.04 on staging", "replaced ovh.instance server, moved records api and www; 3 objects wait on kubeconfig", "5m40s so far", AUDIT.k3s.slice(0, 9), {trace: true, state: "running"}),
+    run(76, "08:12:41", "world: spec.replicas of apps[prod] web 3 → 5, by kubectl", "nothing applied: held, ownership lost", "1.2s", AUDIT.k3s.slice(9)),
+  ],
+  gke: [run(64, "08:02:44", "input data/peerings.csv gained line 6 (a8f3e10)", "added 1 peering to google.compute_network main in prod", "7.1s", AUDIT.gke, {trace: true})],
+  rel: [run(12, "10-14 16:20:00", "time: eligible(\"shop\", \"1.4.1\") became true", "us-1 to shop 1.4.1; eu-1 held by a rule until 10-19", "0.9s", AUDIT.rel, {trace: true})],
+  ovh: [
+    run(41, "09:20:14", "oci.resolve: forgejo's lab tag moved", "planned 1 update in apps[lab], pending; prod's drift still held", "6.2s", AUDIT.ovh.slice(5), {trace: true, state: "pending"}),
+    run(40, "08:40:30", "world: env of forgejo.server in prod, by kubectl-set", "nothing applied: drift held for approval", "0.9s", AUDIT.ovh.slice(3, 5)),
+    run(39, "07:41:02", "dform apply by simon@framework, the first of lab", "brought up platform[lab] and apps[lab]", "18m08s", AUDIT.ovh.slice(0, 3)),
+  ],
+};
+function newRun(proj, at, event, did) { const r = run(RUNS[proj][0].n + 1, at, event, did, "", [], {state: "running"}); RUNS[proj].unshift(r); return r; }
+
+function renderWorld() {
+  const rows = WORLD[cur] || [];
+  return `<section class="pane">
+    <p class="note">Four sources of a value: what the program says, what dform last applied, what the provider reads now, and the provider's own default. The reading is a word; a colour only repeats it.</p>
+    <div class="tw"><table><thead><tr><th>Deployment</th><th>Path</th><th>Desired</th><th>Base</th><th>Live</th><th>Provider default</th><th>Reading</th><th>Who / note</th></tr></thead><tbody>
+    ${rows.map((r, i) => `<tr class="${r.line ? "click" : ""} ${sel === r.line && r.line ? "sel" : ""}" ${r.line ? `data-line="${r.line}" tabindex="0"` : ""}><td>${esc(r.d)}</td><td>${esc(r.p)}</td><td>${esc(r.des || "·")}</td><td>${esc(r.base || "·")}</td><td>${esc(r.live || "·")}</td><td>${esc(r.def || "·")}</td><td><span class="word w-${r.w}">${esc(r.wn)}</span></td><td class="dimt">${esc(r.who)}</td></tr>`).join("")}
+    </tbody></table></div>
+    <div class="legend">
+      <div><span class="word w-change">change</span>desired ≠ base, live = base</div>
+      <div><span class="word w-drift">drift</span>desired = base, live ≠ base; who, when the provider can tell</div>
+      <div><span class="word w-change">conflict</span>both moved; none in these estates now</div>
+      <div><span class="word w-owner">ownership lost</span>someone else's field manager holds the path</div>
+      <div><span class="word w-default">provider default</span>@internal: dform declines to own it</div>
+      <div><span class="word w-unread">not yet</span>live unreadable, or computed at apply</div>
+    </div></section>`;
+}
+
+function cell(row) { return Array.isArray(row) ? {r: row} : row; }
+function renderData() {
+  const rels = DATA[cur] || [];
+  return `<section class="pane"><p class="note">${esc(DATA_NOTE[cur])}</p><div class="relgrid">
+    ${rels.map(rel => `<div class="rel"><h3>${esc(rel.name)}</h3><div class="from">${esc(rel.from)}</div>
+      <div class="tw"><table><thead><tr>${rel.cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>
+      ${rel.rows.map(cell).map(r => `<tr class="${r.new ? "newrow" : ""} ${r.line ? "click" : ""} ${r.line && sel === r.line ? "sel" : ""}" ${r.line ? `data-line="${r.line}" tabindex="0"` : ""}>${r.r.map(v => `<td>${esc(v)}</td>`).join("")}</tr>`).join("")}
+      </tbody></table></div></div>`).join("")}
+  </div><p class="note">A row with a bar at its left arrived since the last apply. Click a row for what it made.</p></section>`;
+}
+
+function renderRun() {
+  const t = TRACE[cur];
+  const sc = (x) => (x / t.total * 100).toFixed(2) + "%";
+  const wf = () => `<div class="tw" style="padding:var(--s3)"><div class="wf" role="img" aria-label="Span waterfall of the run">
+        <div class="axis"><div>span</div><div><span>0s</span><span>${(t.total / 2).toFixed(t.total < 10 ? 1 : 0)}s</span><span>${t.total}s</span></div><div></div></div>
+        ${t.spans.map(s => `<div class="row"><div class="nm ${s[3] ? "ch" : ""}" title="${esc(s[0])}">${esc(s[0])}</div><div class="tr"><div class="bar ${s[3] ? "ch" : ""} ${s[4] ? "open" : ""}" style="left:${sc(s[1])};width:max(2px,${sc(s[2])})"></div></div><div class="d">${s[4] ? "open" : s[2] < 1 ? Math.round(s[2] * 1000) + "ms" : s[2].toFixed(1) + "s"}</div></div>`).join("")}
+      </div></div><p class="note">Bold spans are the longest chain. ${esc(t.calls)}.${t.gap ? " " + esc(t.gap) : ""}</p>`;
+  const table = (rows) => `<div class="tw"><table class="audit"><thead><tr><th>seq</th><th>time</th><th>kind</th><th>deployment</th><th>entry</th></tr></thead><tbody>
+      ${rows.map(r => `<tr class="${fresh.has(r) ? "fresh" : ""}"><td>${r[0]}</td><td>${esc(r[1])}</td><td class="k-${r[2]}">${esc(r[2])}</td><td>${esc(r[3])}</td><td>${esc(r[4])}</td></tr>`).join("")}
+      </tbody></table></div>`;
+  return `<section class="pane">
+    <p class="note">One run is one reconcile, woken by an event: a row, a moved tag, drift read, a signature, a time boundary, a commit. Newest first; each run's audit entries read forward. Ticks are the order inside a run; the plan text shows them.</p>
+    ${RUNS[cur].map((r, i) => `<article class="run ${i ? "" : "cur"}">
+      <div class="run-h"><b>run ${r.n}</b><span class="dimt">${esc(r.at)}</span>${r.state ? `<span class="stt ${r.state === "held" ? "held" : "waiting"}">${esc(r.state)}</span>` : ""}<span class="dimt run-t">${esc(r.took)}</span></div>
+      <dl class="kv"><dt>woken by</dt><dd>${esc(r.event)}</dd><dt>did</dt><dd>${esc(r.did)}</dd>${r.trace ? `<dt>longest chain</dt><dd>${esc(t.chain)}</dd>` : ""}</dl>
+      ${r.trace ? `<details ${i ? "" : "open"}><summary class="lab">Trace</summary>${wf()}</details>` : ""}
+      ${r.rows.length ? `<details ${i ? "" : "open"}><summary class="lab">Audit · ${r.rows.length} entr${r.rows.length === 1 ? "y" : "ies"}</summary>${table(r.rows)}</details>` : ""}
+    </article>`).join("")}
+    <p class="note">dform log verify checks the chain. Each deployment keeps its own hash-chained log; a run's entries are merged by time.</p>
+  </section>`;
+}
+
+function renderPane() {
+  $("pane").innerHTML = {plan: renderPlan, world: renderWorld, data: renderData, run: renderRun}[tab]();
+}
+
+function treeHTML(nodes) {
+  return `<ul>${nodes.map(n => {
+    const label = `<span class="k-${n.k}">${esc(n.t)}</span>${n.s ? `  <span class="s">${esc(n.s)}</span>` : ""}`;
+    return n.c.length ? `<li><details open><summary>${label}</summary>${treeHTML(n.c)}</details></li>` : `<li class="leaf">${label}</li>`;
+  }).join("")}</ul>`;
+}
+function renderInsp() {
+  const el = $("insp");
+  if (sel && /^(n:|R:|G:|C:|Q:)/.test(sel) && estateInsp(el)) return;
+  if (!sel || !WHY[sel]) {
+    el.innerHTML = `<div class="lab">Why</div><h2>Point at anything</h2>
+      <p class="note">Its state, its reasons and what depends on it: <span class="mono">dform why</span>, the answer the CLI gets.</p>`;
+    return;
+  }
+  const w = WHY[sel];
+  const dec = P[cur].decisions.find(d => d.id === sel || d.line === sel);
+  el.innerHTML = `<div class="lab">Why</div><h2>${esc(w.title)}</h2>${dec && dec.id === sel ? `<p class="note">${esc(dec.r)}</p>` : ""}${w.cmd ? `<div class="cmd">$ ${esc(w.cmd)}</div>` : ""}
+    <div class="tree">${treeHTML(w.tree)}</div>
+    ${dec && ACTS[dec.id] ? `<div class="acts"><div class="lab">${esc(dec.word)}</div>${ACTS[dec.id]()}</div>` : ""}`;
+}
+
+/* ---------- mutations: the two levers ---------- */
+function findLine(p, id) { for (const b of [...p.ticks, ...(p.extraTicks || [])]) for (const l of b.lines) if (l.id === id) return l; }
+function addAudit(proj, row, r) { (r || RUNS[proj][0]).rows.push(row); fresh.add(row); }
+function nextSeq(proj) { return Math.max(...RUNS[proj].flatMap(r => r.rows).filter(r => typeof r[0] === "number" && r[3] === "prod").map(r => r[0])) + 1; }
+
+function sign() {
+  const p = P.shop; DONE["d-appr"] = true;
+  const r = newRun("shop", "09:52:07", "a signature over sha256:4f1c9e07… by simon@framework", "applying 6 changes in prod");
+  addAudit("shop", [nextSeq("shop"), "09:52:07", "approval", "prod", "verified: simon@framework signed sha256:4f1c9e07… (age1q8…f3k)"], r);
+  p.ctl = {state: "applying", since: "09:52:07", detail: `run ${r.n} · lease fence 12`};
+  p.deps[1].st = "applying · lease fence 12"; p.approvals = [];
+  p.ticks[0].st = "waiting"; p.ticks[0].stNote = "applying"; p.ticks[0].applying = true; p.ticks[0].on = null;
+  ["pg", "orders"].forEach(id => { findLine(p, id).heldDone = true; });
+  toast(`Signed. Run ${r.n} applies.`); render();
+  setTimeout(() => {
+    addAudit("shop", [nextSeq("shop"), "09:52:08", "lease", "prod", "fence 12 · holder dform-controller@shop"], r);
+    addAudit("shop", [nextSeq("shop"), "09:52:08", "apply_start", "prod", "who dform-controller · git a41c9e2 · approval seq " + (nextSeq("shop") - 2)], r);
+    p.ticks[0].lines.forEach(l => { if (l.id !== "https" || DONE["d-drift"]) { l.applied = true; l.at = `09:52 (run ${r.n})`; } });
+    p.ticks[0].st = "applied"; p.ticks[0].stNote = DONE["d-drift"] ? "applied 09:52:31" : "applied 09:52:31 · https held"; p.ticks[0].applying = false;
+    p.ticks[1].applying = true;
+    addAudit("shop", [nextSeq("shop"), "09:52:31", "action", "prod", "create aws.security_group postgres, update orders, create subnet 1d, web-us-east-1d, update storefront: ok"], r);
+    DONE["d-und"] = true;
+    p.policy = {head: "policy  4 hold", lines: [{id: "pol-pub", mark: "holds", text: "no public subnets", site: "stacks/shop.df:18", tally: "4 hold", under: "aws.subnet private-us-east-1d  map_public_ip_on_launch = false, decided once the subnet was made"}, ...p.policy.lines.slice(1)]};
+    p.headline = "plan: 1 change (1 delete) over 1 tick" + (DONE["d-drift"] ? "" : ", 1 held (drift)") + "; policy: 4 hold";
+    render();
+    setTimeout(() => {
+      const l = p.ticks[1].lines[0]; l.applied = true; l.at = `09:52 (run ${r.n})`; p.ticks[1].st = "applied"; p.ticks[1].stNote = "applied 09:52:40"; p.ticks[1].applying = false;
+      addAudit("shop", [nextSeq("shop"), "09:52:40", "action", "prod", "delete aws.security_group postgres (deposed) ok"], r);
+      addAudit("shop", [nextSeq("shop"), "09:52:40", "apply_end", "prod", DONE["d-drift"] ? "ok  tick 2" : "ok  tick 2 · 1 held: aws.security_group https"], r);
+      r.state = DONE["d-drift"] ? "" : "held"; r.took = "33s";
+      r.did = DONE["d-drift"] ? "applied 7 changes in prod" : "applied 6 changes in prod; https still held for its drift";
+      p.deps[1].st = DONE["d-drift"] ? `up to date · applied 09:52 (run ${r.n})` : "held · 1 drift";
+      p.deps[1].mark = DONE["d-drift"] ? "=" : "~";
+      p.headline = DONE["d-drift"] ? "plan: 0 changes; policy: 4 hold" : "plan: 1 change (1 update), held: drift at ingress needs approval; policy: 4 hold";
+      p.ctl = {state: "watching", since: "09:52:40", detail: `run ${r.n} · applied sha256:4f1c9e07…`};
+      toast(`Run ${r.n} applied. no public subnets: holds.`); render();
+    }, 1600);
+  }, 1300);
+}
+function revert() {
+  const p = P.shop; DONE["d-drift"] = true;
+  const l = findLine(p, "https"); l.heldDone = true;
+  const r = newRun("shop", "09:53:02", "an approve row for https by simon@framework", "");
+  addAudit("shop", [nextSeq("shop"), "09:53:02", "controller", "prod", "approve(\"aws.security_group\", \"https\") by simon@framework"], r);
+  if (DONE["d-appr"]) {
+    l.applied = true; l.at = `09:53 (run ${r.n})`;
+    addAudit("shop", [nextSeq("shop"), "09:53:04", "action", "prod", "update aws.security_group https ok · ingress[1] removed"], r);
+    r.did = "reverted ingress[1] on https"; r.took = "2s"; r.state = "";
+    p.headline = "plan: 0 changes; policy: 4 hold"; p.deps[1].mark = "="; p.deps[1].st = `up to date · applied 09:53 (run ${r.n})`;
+    p.ticks[0].stNote = "applied";
+  } else {
+    r.did = "the revert joins the plan, which still waits on the signature"; r.took = "2.3s"; r.state = "held";
+  }
+  toast("approve row written. The revert " + (DONE["d-appr"] ? "applied." : "waits on the signature with the rest.")); render();
+}
+
+/* ---------- events ---------- */
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("[data-node],[data-lanehdr],[data-group],[data-mode],[data-p],[data-tab],[data-g],[data-v],[data-line],[data-dec],[data-dep],#sign,#revert,#revert-fj");
+  if (!t) return;
+  if (t.id === "sign") return sign();
+  if (t.id === "revert") return revert();
+  if (t.id === "revert-fj") return revertFj();
+  if (t.dataset.node) { sel = t.dataset.node; if (/^[GCQ]:/.test(sel)) expandRep(sel); if (NARROW.has(sel)) OPEN.region[sel.slice(2)] = true; }
+  else if (t.dataset.lanehdr) { const l = t.dataset.lanehdr; if (OPEN.lane[l]) { delete OPEN.lane[l]; Object.keys(OPEN.cell).filter(k => k.startsWith(l + "|")).forEach(k => delete OPEN.cell[k]); Object.keys(OPEN.group).filter(k => k.startsWith(l + "/")).forEach(k => delete OPEN.group[k]); } else OPEN.lane[l] = true; }
+  else if (t.dataset.group) { delete OPEN.group[t.dataset.group]; }
+  else if (t.dataset.mode) { const k = t.dataset.mode; view = k === "text" ? "text" : "graph"; if (k !== "text") ov = k === "plan" ? null : 0; }
+  else if (t.dataset.p) { cur = t.dataset.p; sel = null; ov = null; fresh.clear(); }
+  else if (t.dataset.tab) tab = t.dataset.tab;
+  else if (t.dataset.g) group = t.dataset.g;
+  else if (t.dataset.dec) { sel = t.dataset.dec; }
+  else if (t.dataset.line) { sel = t.dataset.line; }
+  else if (t.dataset.dep) { group = "dep"; tab = "plan"; }
+  render();
+});
+document.addEventListener("keydown", (e) => {
+  if ((e.key === "Enter" || e.key === " ") && e.target.matches("[data-line][tabindex],[data-node][tabindex]")) { e.preventDefault(); e.target.dispatchEvent(new MouseEvent("click", {bubbles: true})); }
+});
+document.addEventListener("mouseover", (e) => {
+  const g = e.target.closest && e.target.closest("g[data-node]");
+  if (!g || g.dataset.node === sel) return;
+  sel = g.dataset.node;
+  renderPane(); renderInsp();
+});
+let rz;
+window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { if (tab === "plan" && view === "graph") renderPane(); }, 120); });
+sel = null;
+render();
+</script>
