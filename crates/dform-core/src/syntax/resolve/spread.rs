@@ -229,7 +229,7 @@ impl Lowerer<'_> {
         let span = self.span(n);
         let Some(inner) = terms(n).next() else {
             let example = match into {
-                Target::Object => "{ ..base, replicas: 3 }",
+                Target::Object => "{ ..base, replicas = 3 }",
                 Target::List => "[..xs, x]",
             };
             return self.error_help(
@@ -265,7 +265,7 @@ impl Lowerer<'_> {
         }
         let help = match (into, kind.as_str()) {
             (Target::Object, "list") => format!("a list spreads into a list, `[..{src}]`"),
-            (Target::Object, _) => format!("a field gives a value a key, `{{ name: {src} }}`"),
+            (Target::Object, _) => format!("a field gives a value a key, `{{ name = {src} }}`"),
             (Target::List, "object") => {
                 format!("an object spreads into an object, `{{ ..{src} }}`")
             }

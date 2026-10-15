@@ -415,7 +415,7 @@ impl Speller<'_> {
                     .iter()
                     .map(|(n, _, p)| match &self.p.patterns[*p].kind {
                         PatternKind::Bind(v) if self.p.vars[*v].name == *n => n.clone(),
-                        _ => format!("{n}: {}", self.pattern(*p)),
+                        _ => format!("{n} = {}", self.pattern(*p)),
                     })
                     .collect();
                 parts.extend(rest.map(|r| format!("..{}", self.var(r))));
@@ -519,9 +519,9 @@ impl Speller<'_> {
                     {
                         key.clone()
                     }
-                    ObjPart::Field { key, value, .. } => format!("{key}: {}", self.expr(*value)),
+                    ObjPart::Field { key, value, .. } => format!("{key} = {}", self.expr(*value)),
                     ObjPart::Computed { key, value } => {
-                        format!("{}: {}", self.expr(*key), self.expr(*value))
+                        format!("{} = {}", self.expr(*key), self.expr(*value))
                     }
                     ObjPart::Spread(e) => format!("..{}", self.expr(*e)),
                 });

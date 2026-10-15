@@ -10599,7 +10599,7 @@ mod tests {
              let b = x + 1 where p(x), x > 1\n\
              let c = a * 2\n\
              let s: secret(string) = \"pw\"\n\
-             let o: { host: string, password: secret(string) } = { host: \"h\", password: \"p\" }\n\
+             let o: { host: string, password: secret(string) } = { host = \"h\", password = \"p\" }\n\
              let r = x where p(x), not { q(x) }\n\
              let l = [y | p(y), not { q(y) }]\n\
              let n = count(x) where p(x)\n\
@@ -10626,7 +10626,7 @@ mod tests {
              p(2)\n\
              zone(name: \"a\", index: 1)\n\
              arg(\"net.vpc\", \"a\", \"cidr\", \"x\") @override\n\
-             let o = { a: 1 }\n\
+             let o = { a = 1 }\n\
              r(o.a, x) where p(x)\n\
              l([y | p(y), not { q(y) }]) where p(1)\n\
              q(2)\n\
@@ -10687,22 +10687,22 @@ mod tests {
              resource db.postgres pg { public = false }\n\
              let k = 1\n\
              p(1)\np(2)\n\
-             set pg.tags = { a: 1 } where p(1)\n\
-             set pg.tags += { b: 2 } where p(2)\n\
+             set pg.tags = { a = 1 } where p(1)\n\
+             set pg.tags += { b = 2 } where p(2)\n\
              set pg.public = true @override where p(2)\n\
              set db.postgres[_].public = true where p(1)\n\
-             set db.postgres[_].tags = { a: k } where p(1)\n\
+             set db.postgres[_].tags = { a = k } where p(1)\n\
              set c.owner = \"o\" where c in pg.databases\n\
              set pg.databases[\"a\"].owner = \"o\" where p(1)\n\
              set size = 2 where p(2)\n\
-             set { pg.public = false @default, pg.tags = { c: n } } where n = count(x), p(x), n > 1\n\
+             set { pg.public = false @default, pg.tags = { c = n } } where n = count(x), p(x), n > 1\n\
              set from yaml.decode(io.read(\"c.yaml\")) where p(1)\n";
         let lowered = parse_as(src, true);
         let lowered = lowered
             .map(|p| show(&p.statements))
             .unwrap_or_else(|e| panic!("{e:#}"));
         for s in [
-            "arg_add(\"db.postgres\", \"pg\", \"tags\", {b: 2}) :- p(2)",
+            "arg_add(\"db.postgres\", \"pg\", \"tags\", {b = 2}) :- p(2)",
             "\"override\") :- p(2)",
             "__agg_0(count(X))",
             "__agg_1(count(X))",
@@ -10719,18 +10719,18 @@ mod tests {
     /// after the entries' reads, a value body written out and one read.
     #[test]
     fn every_resource_is_built_as_a_resource_item() {
-        let src = "let o = { public: true }\n\
+        let src = "let o = { public = true }\n\
              let k = 1\n\
              p(1)\np(2)\nq(2)\n\
-             resource db.postgres a @default { public = false, tags += { a: k } @override }\n\
-             resource db.postgres \"b.c\" { tags = { l: [x | p(x), not { q(x) }] } }\n\
-             resource db.postgres \"d-${n}\" { tags = { n: k } } where p(n)\n\
-             resource db.postgres e = { public: true }\n\
+             resource db.postgres a @default { public = false, tags += { a = k } @override }\n\
+             resource db.postgres \"b.c\" { tags = { l = [x | p(x), not { q(x) }] } }\n\
+             resource db.postgres \"d-${n}\" { tags = { n = k } } where p(n)\n\
+             resource db.postgres e = { public = true }\n\
              resource db.postgres f = o\n\
              resource db.postgres g { databases[0].owner = \"o\" }\n";
         let lowered = lower(src);
         for s in [
-            "resource \"db.postgres\" Addr { tags = {n: K} } :- p(N), k(K), Addr = __segment(str.format(\"d-%s\", N))",
+            "resource \"db.postgres\" Addr { tags = {n = K} } :- p(N), k(K), Addr = __segment(str.format(\"d-%s\", N))",
             "resource \"db.postgres\" \"\\\"b.c\\\"\"",
             "__neg_0(X) :- p(X), q(X)",
             "resource \"db.postgres\" \"f\" {  = O } :- o(O)",
@@ -10739,7 +10739,7 @@ mod tests {
         }
         // A block binds no aggregate: a `let` does.
         let e =
-            error("p(1)\nresource db.postgres h { tags = { n: n } } where n = count(x), p(x)\n");
+            error("p(1)\nresource db.postgres h { tags = { n = n } } where n = count(x), p(x)\n");
         assert!(
             e.contains("an aggregate is bound in the body of a rule"),
             "{e}"
@@ -10802,7 +10802,7 @@ mod tests {
             .map(|p| show(&p.statements))
             .unwrap_or_else(|e| panic!("{e:#}"));
         for s in [
-            "provider_config(\"p1\", {region: K}) :- z(1), not __neg_0(), k(K)",
+            "provider_config(\"p1\", {region = K}) :- z(1), not __neg_0(), k(K)",
             "provider_expect_account(\"p1\", \"a\") :- z(1), not __neg_1()",
             "__declared(\"use p2\", 1) :- q(2)",
         ] {
@@ -10939,7 +10939,7 @@ mod tests {
     #[test]
     fn a_bare_entry_is_its_name() {
         let got = lower(
-            "let tags = { team: \"x\" }\n\
+            "let tags = { team = \"x\" }\n\
              resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n\
              resource net.subnet \"s-${zone}\" {\n\
                zone\n\
@@ -11052,22 +11052,22 @@ mod tests {
     fn membership_indexing_and_negation() {
         let got = lower(
             "resource db.postgres pg { public = false }\n\
-             deny \"public\" { resource: p } where p in db.postgres, not p.public == false\n\
-             set r.tags = { team: \"x\" } where r in resource\n\
+             deny \"public\" { resource = p } where p in db.postgres, not p.public == false\n\
+             set r.tags = { team = \"x\" } where r in resource\n\
              let xs = [1, 2]\n\
-             let ys = [{ name: \"a\", net: 1 }]\n\
+             let ys = [{ name = \"a\", net = 1 }]\n\
              q(x) where x = xs[i], i >= 0, x not in [3]\n\
              ok(1) where pg in db.postgres, has pg.public, not \"other\" in db.postgres\n\
              big(n) where n in world.net.vpc, world.net.vpc[n].size > 3\n\
-             pair(n, c) where ys[_] = { name: n, net: c }\n",
+             pair(n, c) where ys[_] = { name = n, net = c }\n",
         );
         assert_eq!(
             &got[1..],
             [
-                "deny(\"public\", {resource: P}) :- want(\"db.postgres\", P), not attr(\"db.postgres\", P, \"public\", false)",
-                "arg(Type, R, \"tags\", {team: \"x\"}) :- want(Type, R)",
+                "deny(\"public\", {resource = P}) :- want(\"db.postgres\", P), not attr(\"db.postgres\", P, \"public\", false)",
+                "arg(Type, R, \"tags\", {team = \"x\"}) :- want(Type, R)",
                 "let(\"xs\", [1, 2], \"normal\")",
-                "let(\"ys\", [{name: \"a\", net: 1}], \"normal\")",
+                "let(\"ys\", [{name = \"a\", net = 1}], \"normal\")",
                 "q(X) :- xs(Xs), member(Xs, I, Item), X = Item, I >= 0, not member([3], X)",
                 // `has` of a resource's attribute is marked for the
                 // compiler, which answers it from the schema or the value.
@@ -11138,7 +11138,7 @@ mod tests {
     #[test]
     fn a_nested_path_is_walked_and_its_negation_is_a_helper() {
         let got = lower(
-            "resource db.pg d { s = { a: 1 } }\n\
+            "resource db.pg d { s = { a = 1 } }\n\
              c(x) where q(x), has x.limits\n\
              n(x) where q(x), not has x.limits\n\
              r(1) where not d.s.a == 2\n",
