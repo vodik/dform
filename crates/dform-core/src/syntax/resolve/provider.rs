@@ -250,8 +250,6 @@ impl Lowerer<'_> {
                 }
             }
         }
-        let resolved =
-            crate::program::check::enabled().then(|| self.resolved_with(out.clone(), span));
         let settings = parts
             .iter()
             .map(|(kind, at, v, made)| SettingLowered {
@@ -284,9 +282,6 @@ impl Lowerer<'_> {
         let mut b = gather.builder(&mut self.program, span, &written);
         let item = b.provider_item(p);
         gather.done(b);
-        if let Some(stmts) = resolved {
-            self.resolved.insert(item, stmts);
-        }
         Ok(item)
     }
 
@@ -436,11 +431,7 @@ impl Lowerer<'_> {
                     name: f.name.clone(),
                     args: f.args.clone(),
                 };
-                let item = self.program.item(f.span, self.item_scope, kind);
-                if crate::program::check::enabled() {
-                    self.resolved.insert(item, vec![Stmt::ExternFn(f)]);
-                }
-                out.push(item);
+                out.push(self.program.item(f.span, self.item_scope, kind));
             }
         }
         out

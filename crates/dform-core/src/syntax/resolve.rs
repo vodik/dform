@@ -27,9 +27,8 @@ use super::SyntaxKind::{self, *};
 use super::parser as parse;
 use super::{SyntaxNode, SyntaxToken, tokens};
 use crate::ast::{
-    Atom, AttrDecl, BindArg, Config, Decl, Extern, ExternFn, FieldAssign, FieldOp, Helper,
-    InputDecl, Instance, Lit, OutputDecl, Program, Rank, Resource, RuleStmt, Span, Stmt, Term,
-    TypeExpr, Via, str_term, var,
+    Atom, AttrDecl, BindArg, Config, ExternFn, FieldAssign, FieldOp, Helper, Lit, Program, Rank,
+    RuleStmt, Span, Stmt, Term, TypeExpr, Via, str_term, var,
 };
 use crate::diag::Diagnostic;
 use crate::program::node::CopyKind;
@@ -190,18 +189,12 @@ pub fn lower_stack(
     }
     let settings = stack.and_then(|st| l.stack_settings(st, entries));
     // The program (R-211), built as the walk went, is what the stack
-    // lowers to. `DFORM_CHECK_LOWER=1` compares it with what the resolver
-    // lowered each statement to; it is deleted with the old path at the
-    // migration's end.
+    // lowers to.
     let mut program = std::mem::take(&mut l.program);
     program.roots = roots;
     program.stack = settings;
     program.diags = std::mem::take(&mut l.diags);
-    let new = crate::program::lower(&program);
-    if crate::program::check::enabled() {
-        crate::program::check::program(&program, &l.resolved, &new.rules);
-    }
-    new.into_result()
+    crate::program::lower(&program).into_result()
 }
 
 /// Remember the order `root` writes objects' fields in
@@ -700,8 +693,7 @@ struct Elem {
 
 /// A rule as the resolver lowered it (`Lowerer::rule_parts`).
 struct RuleParts {
-    /// It has `where`, and the clause gathered of it.
-    has_body: bool,
+    /// The clause gathered of its body.
     clause: Option<crate::program::ClauseId>,
     /// Its head, its arguments' patterns where the resolver built them,
     /// and with its rank the last argument.
@@ -764,9 +756,6 @@ pub struct Lowerer<'u> {
     /// The scope the statements being lowered are in: an entry file's,
     /// a module file's or a component's.
     item_scope: ScopeId,
-    /// What the resolver lowers each ported statement to, kept for
-    /// `DFORM_CHECK_LOWER=1` (`program::check`).
-    resolved: crate::program::check::Resolved,
     /// Each written literal and clause built as goals (R-211 steps 4-5,
     /// `program::build::Gather`), while a ported statement is lowered.
     gather: Option<Box<crate::program::build::Gather>>,
@@ -845,7 +834,6 @@ impl<'u> Lowerer<'u> {
             objects: Vec::new(),
             program: crate::program::Program::new(),
             item_scope: Default::default(),
-            resolved: Default::default(),
             gather: None,
             helpers: Vec::new(),
             binding: false,
@@ -2124,7 +2112,7 @@ impl<'u> Lowerer<'u> {
     /// their own.
     fn stmt_item(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> Option<ItemId> {
         if let Some(value) = self.literal_let(n) {
-            return self.let_literal(n, scope, outer, &value);
+            return self.let_literal(n, scope, &value);
         }
         match n.kind() {
             LET if node(n, PARAMS).is_none() => self.ported(n, |l| l.let_stmt(n, scope, outer)),
@@ -2563,8 +2551,8 @@ impl<'u> Lowerer<'u> {
             },
             None => None,
         };
-        let (default, default_node) = default.unzip();
-        let refinement = self.refinement(n, scope, Some(&name))?;
+        let default_node = default.map(|(_, id)| id);
+        self.refinement(n, scope, Some(&name))?;
         let refined = self.clause_at(node(n, REFINEMENT).and_then(|r| node(&r, BODY)));
         // `input k: T where B` (R-104): declared where `B` holds. A
         // clause that reads the input itself is a check misspelled.
@@ -2606,29 +2594,6 @@ impl<'u> Lowerer<'u> {
             );
         }
         let rows = self.inputs_named(n, &name, span)?;
-        let resolved = crate::program::check::enabled().then(|| {
-            let decl = InputDecl {
-                name: name.clone(),
-                ty: ty.clone(),
-                default: default.clone(),
-                refinement,
-                key,
-                guard: guard.clone(),
-                fields: fields.iter().map(|&f| self.field_decl(f)).collect(),
-                span,
-            };
-            let mut stmts = vec![Stmt::Input(decl)];
-            if let Some((i, sites)) = &rows {
-                let group = format!("input {name}");
-                stmts.push(crate::modules::declared(&group, *i, guard.clone(), span));
-                if *i == 0 {
-                    let sites: Vec<(String, Span)> =
-                        sites.iter().map(|s| (group.clone(), *s)).collect();
-                    stmts.extend(crate::modules::denies(&group, &sites));
-                }
-            }
-            self.resolved_with(stmts, span)
-        });
         let i = crate::program::build::InputLowered {
             name,
             key,
@@ -2648,9 +2613,6 @@ impl<'u> Lowerer<'u> {
         let mut b = gather.builder(&mut self.program, span, &|_| true);
         let item = b.input_item(i);
         gather.done(b);
-        if let Some(stmts) = resolved {
-            self.resolved.insert(item, stmts);
-        }
         Ok(item)
     }
 
@@ -2661,18 +2623,6 @@ impl<'u> Lowerer<'u> {
             _ => unreachable!("a field is an input"),
         };
         TypeExpr::Object(fields.iter().map(field).collect())
-    }
-
-    /// The field `f` declared, as the resolver wrote it, for
-    /// `DFORM_CHECK_LOWER=1` (deleted with the switch).
-    fn field_decl(&self, f: ItemId) -> InputDecl {
-        match crate::program::lower_item(&self.program, f)
-            .into_iter()
-            .next()
-        {
-            Some(Stmt::Input(d)) => d,
-            _ => unreachable!("a field lowers to its declaration"),
-        }
     }
 
     /// The clause of the body `at` just lowered, gathered (empty when no
@@ -2896,11 +2846,6 @@ impl<'u> Lowerer<'u> {
             let arity = self
                 .relation_decl(scope, &pred)
                 .map_or(0, |d| d.children().filter(|c| c.kind() == BIND_ARG).count());
-            let stmt = Stmt::RelationInput(Extern {
-                pred: pred.clone(),
-                arity,
-                span,
-            });
             let r = crate::program::build::RelationInputLowered {
                 span,
                 scope: self.item_scope,
@@ -2910,12 +2855,7 @@ impl<'u> Lowerer<'u> {
                 from: None,
             };
             let mut b = crate::program::Builder::new(&mut self.program, span, &|_| true);
-            let item = b.relation_input_item(r);
-            if crate::program::check::enabled() {
-                let resolved = self.resolved_with(vec![stmt], span);
-                self.resolved.insert(item, resolved);
-            }
-            return Ok(item);
+            return Ok(b.relation_input_item(r));
         };
         if module {
             return self.error(
@@ -2968,17 +2908,6 @@ impl<'u> Lowerer<'u> {
         let body = self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
         let rows = self.table(&mut rc, &pred, cols, n, body, span)?;
-        let resolved = crate::program::check::enabled().then(|| {
-            let mut out = rows.stmts();
-            if mixed {
-                out.push(Stmt::Mixed(Extern {
-                    pred: pred.clone(),
-                    arity,
-                    span,
-                }));
-            }
-            self.resolved_with(out, span)
-        });
         let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
         let r = crate::program::build::RelationInputLowered {
             span,
@@ -3005,9 +2934,6 @@ impl<'u> Lowerer<'u> {
         let mut b = gather.builder(&mut self.program, span, &written);
         let item = b.relation_input_item(r);
         gather.done(b);
-        if let Some(stmts) = resolved {
-            self.resolved.insert(item, stmts);
-        }
         Ok(item)
     }
 
@@ -3912,26 +3838,6 @@ impl<'u> Lowerer<'u> {
         pre: Vec<Lit>,
     ) -> L<ItemId> {
         let span = self.span(n);
-        let resolved = crate::program::check::enabled().then(|| {
-            let decl = |ty, value| {
-                Stmt::Output(OutputDecl {
-                    name: name.clone(),
-                    ty,
-                    value,
-                    relation: None,
-                    span,
-                })
-            };
-            let mut stmts: Vec<Stmt> = declared
-                .iter()
-                .map(|t| decl(Some(t.clone()), None))
-                .collect();
-            stmts.push(match pre.is_empty() && clause.is_none() {
-                true => decl(None, Some(head.args[1].clone())),
-                false => Stmt::Rule(RuleStmt::new(head.clone(), pre.clone())),
-            });
-            self.resolved_with(stmts, span)
-        });
         let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
         let o = crate::program::build::OutputLowered {
             name,
@@ -3954,9 +3860,6 @@ impl<'u> Lowerer<'u> {
         let mut b = gather.builder(&mut self.program, span, &written);
         let item = b.output_item(o);
         gather.done(b);
-        if let Some(stmts) = resolved {
-            self.resolved.insert(item, stmts);
-        }
         Ok(item)
     }
 
@@ -4481,7 +4384,6 @@ impl<'u> Lowerer<'u> {
             }
             None => (None, None),
         };
-        let clause = body.clone();
         let made = self.helpers.len();
         let mut reads = Vec::new();
         let fields = match node(n, BLOCK) {
@@ -4509,33 +4411,12 @@ impl<'u> Lowerer<'u> {
             .chain(named.as_ref())
             .collect();
         self.check_bound(&rc, &body, &values)?;
-        let (rows, written_rows) = match node(n, BLOCK) {
+        let rows = match node(n, BLOCK) {
             Some(block) => self.block_rows(&block, &module, scope, outer)?,
             None => Default::default(),
         };
         // A copy binds no aggregate: its rows do, each folding its own.
         self.aggregate_in(&body, span)?;
-        let resolved = crate::program::check::enabled().then(|| {
-            let copy = Instance {
-                module: module.clone(),
-                name: name.clone(),
-                named: named.clone(),
-                inputs: inputs
-                    .iter()
-                    .map(|(k, v, at, _, _)| (k.clone(), v.clone(), *at))
-                    .collect(),
-                rows: written_rows,
-                body: (!body.is_empty()).then(|| body.clone()),
-                clause: (!clause.is_empty()).then(|| clause.clone()),
-                via: via.clone(),
-                span,
-            };
-            let st = match kind {
-                CopyKind::Use => Stmt::Use(copy),
-                CopyKind::Component => Stmt::Instance(copy),
-            };
-            self.resolved_with(vec![st], span)
-        });
         let c = crate::program::build::CopyLowered {
             span,
             scope: self.item_scope,
@@ -4565,9 +4446,6 @@ impl<'u> Lowerer<'u> {
         let mut b = gather.builder(&mut self.program, span, &written);
         let item = b.copy_item(c);
         gather.done(b);
-        if let Some(stmts) = resolved {
-            self.resolved.insert(item, stmts);
-        }
         Ok(item)
     }
 
@@ -4575,15 +4453,14 @@ impl<'u> Lowerer<'u> {
     /// module takes, `input p` (R-55): `p(t, ..) [where B]`, a rule in
     /// this scope, and `p from FORMAT(..) [where B]`, a table, its columns
     /// the module's `decl p`. Each head is the module's own `p`, made the
-    /// copy's by `modules`. Their items, and under `DFORM_CHECK_LOWER=1`
-    /// what the resolver wrote of them.
+    /// copy's by `modules`. Their items.
     fn block_rows(
         &mut self,
         block: &SyntaxNode,
         module: &str,
         scope: ScopeId,
         outer: &Rc,
-    ) -> L<(Vec<ItemId>, Vec<Stmt>)> {
+    ) -> L<Vec<ItemId>> {
         let Some(inner) = self.module_at(module).map(|m| m.0) else {
             return Ok(Default::default());
         };
@@ -4650,20 +4527,7 @@ impl<'u> Lowerer<'u> {
         if failed {
             return Err(Skip);
         }
-        // What the resolver wrote of each, the statement's helpers so far
-        // after it (`resolved_with`) dropped. Deleted with the switch.
-        let written = match crate::program::check::enabled() {
-            true => out
-                .iter()
-                .flat_map(|&r| {
-                    let mut v = self.resolved.remove(r).unwrap_or_default();
-                    v.truncate(v.len().saturating_sub(self.helpers.len()));
-                    v
-                })
-                .collect(),
-            false => Vec::new(),
-        };
-        Ok((out, written))
+        Ok(out)
     }
 
     /// A header name with holes, `"agent-${i}"`, of a resource of any
@@ -4795,18 +4659,6 @@ impl<'u> Lowerer<'u> {
         let rank = self.rank_tok(n)?;
         self.aggregate_in(&body, span)?;
         let typ = dotted_text(n, 1);
-        let resolved = crate::program::check::enabled().then(|| {
-            let st = Stmt::Resource(Resource {
-                typ: str_term(&typ),
-                name: name.clone(),
-                rank,
-                fields: fields.clone(),
-                body: (!body.is_empty()).then(|| body.clone()),
-                reads: reads_at.clone(),
-                span,
-            });
-            self.resolved_with(vec![st], span)
-        });
         let literal =
             (header.kind() == STRING && !interp).then(|| self.string(&header).unwrap_or_default());
         // Each entry's reads and helpers, from where the one before ended.
@@ -4865,9 +4717,6 @@ impl<'u> Lowerer<'u> {
         let mut b = gather.builder(&mut self.program, span, &written);
         let item = b.resource_item(r);
         gather.done(b);
-        if let Some(stmts) = resolved {
-            self.resolved.insert(item, stmts);
-        }
         Ok(item)
     }
 
@@ -4938,11 +4787,6 @@ impl<'u> Lowerer<'u> {
             ],
             span,
         );
-        let resolved = crate::program::check::enabled().then(|| {
-            let mut out = externs.clone();
-            out.push(Stmt::Rule(RuleStmt::new(head.clone(), body.clone())));
-            self.resolved_with(out, span)
-        });
         let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
         let s = crate::program::build::SetFromLowered {
             span,
@@ -4967,9 +4811,6 @@ impl<'u> Lowerer<'u> {
         let mut b = gather.builder(&mut self.program, span, &written);
         let item = b.set_from_item(s);
         gather.done(b);
-        if let Some(stmts) = resolved {
-            self.resolved.insert(item, stmts);
-        }
         Ok(item)
     }
 
@@ -4986,10 +4827,6 @@ impl<'u> Lowerer<'u> {
     /// `lower` writes it.
     fn rule(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
         let r = self.rule_parts(n, scope, outer)?;
-        let resolved = crate::program::check::enabled().then(|| {
-            let rule = (r.ranked.clone(), r.body.clone(), r.has_body);
-            self.rule_resolved(rule, Vec::new(), self.span(n))
-        });
         let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
         let l = crate::program::build::RuleLowered {
             span: self.span(n),
@@ -5013,9 +4850,6 @@ impl<'u> Lowerer<'u> {
         let mut b = gather.builder(&mut self.program, r.head.span, &written);
         let item = b.rule_item(l);
         gather.done(b);
-        if let Some(stmts) = resolved {
-            self.resolved.insert(item, stmts);
-        }
         Ok(item)
     }
 
@@ -5069,7 +4903,6 @@ impl<'u> Lowerer<'u> {
         self.core_head(&head_node, &ranked, has_body)?;
         self.check_bound(&rc, &body, &atom_terms(&ranked))?;
         Ok(RuleParts {
-            has_body,
             clause,
             head,
             args,
@@ -5170,25 +5003,6 @@ impl<'u> Lowerer<'u> {
         // type is the reference's own (`value_type`).
         let declares = matches!(&ty, Some(t) if !matches!(t, crate::types::Ty::Ref(_)))
             && typed_rows.first().and_then(|t| t.parent()).as_ref() == Some(n);
-        let resolved = crate::program::check::enabled().then(|| {
-            let secret = declared.iter().flat_map(crate::types::secret_fields);
-            let mut then: Vec<Stmt> = secret
-                .map(|(q, _)| {
-                    let args = vec![str_term(&name), str_term(&q)];
-                    Stmt::Fact(atom_at(crate::modules::SECRET_LET, args, span))
-                })
-                .collect();
-            if let (true, Some(d)) = (declares, &declared) {
-                then.push(Stmt::Decl(Decl {
-                    pred: name.clone(),
-                    fields: vec![name.clone()],
-                    types: vec![Some(d.clone())],
-                    span,
-                }));
-            }
-            let rule = (head.clone(), body.clone(), node(n, BODY).is_some());
-            self.rule_resolved(rule, then, span)
-        });
         let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
         let l = crate::program::build::LetLowered {
             name,
@@ -5216,9 +5030,6 @@ impl<'u> Lowerer<'u> {
         let item = b.let_item(l);
         gather.done(b);
         let item = item.ok_or(Skip)?;
-        if let Some(stmts) = resolved {
-            self.resolved.insert(item, stmts);
-        }
         Ok(item)
     }
 
@@ -5227,41 +5038,6 @@ impl<'u> Lowerer<'u> {
     /// nothing gathers.
     fn body_clause(&mut self, n: &SyntaxNode) -> Option<crate::program::ClauseId> {
         self.clause_at(node(n, BODY))
-    }
-
-    /// What the resolver lowered a statement at `span` to, `stmts`, for
-    /// `DFORM_CHECK_LOWER=1`: folded over its aggregates (the numbers they
-    /// take given back for the item's), then the statement's helpers.
-    /// Deleted with the switch.
-    fn resolved_with(&mut self, stmts: Vec<Stmt>, span: Span) -> Vec<Stmt> {
-        let mut out = stmts;
-        if !self.aggs.is_empty() {
-            let counters = self.program.helpers;
-            out = self.fold_aggregates(out, span).unwrap_or_default();
-            self.program.helpers = counters;
-        }
-        out.extend(self.helpers.iter().cloned());
-        out
-    }
-
-    /// What the resolver lowered a rule (a `let`'s too) at `span` to, for
-    /// `DFORM_CHECK_LOWER=1` (`program::check`): the fact or the rule
-    /// (folded over its aggregates, the numbers they take given back for
-    /// the item's), the statements after it, `then`, and the statement's
-    /// helpers. Deleted with the switch.
-    fn rule_resolved(
-        &mut self,
-        (head, body, has_body): (Atom, Vec<Lit>, bool),
-        then: Vec<Stmt>,
-        span: Span,
-    ) -> Vec<Stmt> {
-        let mut out = vec![if body.is_empty() && !has_body {
-            Stmt::Fact(head)
-        } else {
-            Stmt::Rule(RuleStmt::new(head, body))
-        }];
-        out.extend(then);
-        self.resolved_with(out, span)
     }
 
     /// The literal of `let NAME = LITERAL [@rank]` (R-211's first port): no
@@ -5282,34 +5058,9 @@ impl<'u> Lowerer<'u> {
 
     /// `let NAME = LITERAL [@rank]` built as a `let` item of the literal's
     /// node, read from the tree; `lower` writes it `let("NAME", v,
-    /// "rank")`. Under `DFORM_CHECK_LOWER=1` it is also built as any `let`
-    /// is (`let_stmt`), from what the resolver lowered it to, and that
-    /// kept for `program::check`.
-    fn let_literal(
-        &mut self,
-        n: &SyntaxNode,
-        scope: ScopeId,
-        outer: &Rc,
-        t: &SyntaxNode,
-    ) -> Option<ItemId> {
-        let resolved = crate::program::check::enabled().then(|| {
-            let before = self.diags.len();
-            let out = match self.ported(n, |l| l.let_stmt(n, scope, outer)) {
-                Some(id) => self.resolved.remove(id).unwrap_or_default(),
-                None => Vec::new(),
-            };
-            (out, self.diags.split_off(before))
-        });
-        let before = self.diags.len();
-        let item = self.let_item(n, scope, t).ok();
-        if let Some((out, diags)) = resolved {
-            let ours = self.diags[before..].to_vec();
-            crate::program::check::same_diagnostics(&diags, &ours, self.span(n));
-            if let Some(id) = item {
-                self.resolved.insert(id, out);
-            }
-        }
-        item
+    /// "rank")`.
+    fn let_literal(&mut self, n: &SyntaxNode, scope: ScopeId, t: &SyntaxNode) -> Option<ItemId> {
+        self.let_item(n, scope, t).ok()
     }
 
     fn let_item(&mut self, n: &SyntaxNode, scope: ScopeId, t: &SyntaxNode) -> L<ItemId> {
@@ -5461,10 +5212,6 @@ impl<'u> Lowerer<'u> {
         if failed {
             return Err(Skip);
         }
-        let resolved = crate::program::check::enabled().then(|| {
-            let stmts = writes.iter().map(|w| w.stmt(has_body)).collect();
-            self.resolved_with(stmts, span)
-        });
         let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
         let written: BTreeSet<&str> = writes
             .iter()
@@ -5485,9 +5232,6 @@ impl<'u> Lowerer<'u> {
         let mut b = gather.builder(&mut self.program, span, &written);
         let item = b.set_item(s);
         gather.done(b);
-        if let Some(stmts) = resolved {
-            self.resolved.insert(item, stmts);
-        }
         Ok(item)
     }
 
@@ -6012,10 +5756,6 @@ impl<'u> Lowerer<'u> {
             span,
         };
         self.check_bound(&rc, &body, &atom_terms(&head))?;
-        let resolved = crate::program::check::enabled().then(|| {
-            let rule = (head.clone(), body.clone(), clause.is_some());
-            self.rule_resolved(rule, Vec::new(), span)
-        });
         let kind = match kw.kind() {
             WARN_KW => crate::program::node::CheckKind::Warn,
             _ => crate::program::node::CheckKind::Deny,
@@ -6042,9 +5782,6 @@ impl<'u> Lowerer<'u> {
         let mut b = gather.builder(&mut self.program, span, &written);
         let item = b.check_item(c);
         gather.done(b);
-        if let Some(stmts) = resolved {
-            self.resolved.insert(item, stmts);
-        }
         Ok(item)
     }
 
@@ -10477,15 +10214,6 @@ struct Contribution {
 }
 
 impl Contribution {
-    /// What the resolver wrote of it: a fact, or a rule. For
-    /// `DFORM_CHECK_LOWER=1`; deleted with the switch.
-    fn stmt(&self, has_body: bool) -> Stmt {
-        match self.body.is_empty() && !has_body {
-            true => Stmt::Fact(self.head.clone()),
-            false => Stmt::Rule(RuleStmt::new(self.head.clone(), self.body.clone())),
-        }
-    }
-
     /// Its parts for the builder, `helpers` the statement's.
     fn lowered<'a>(&'a self, helpers: &'a [Stmt]) -> crate::program::build::WriteLowered<'a> {
         use crate::program::build::TargetLowered;
@@ -10529,18 +10257,6 @@ struct TableRows {
     /// The goal reading the document's rows.
     rows: GoalId,
     made: usize,
-}
-
-impl TableRows {
-    /// What the resolver writes of them.
-    fn stmts(&self) -> Vec<Stmt> {
-        let mut out = self.externs.clone();
-        out.push(Stmt::Rule(RuleStmt::new(
-            self.head.clone(),
-            self.body.clone(),
-        )));
-        out
-    }
 }
 
 /// Mark the literals `out[start..]` that test `has r.PATH` by its value
@@ -10856,14 +10572,12 @@ mod tests {
     }
 
     /// `let NAME = LITERAL [@rank]` is built as a `let` item (R-211): it
-    /// lowers as the resolver lowers it, its errors the resolver's, each
-    /// compared under `program::check`.
+    /// lowers to its `let` fact, its errors the resolver's.
     #[test]
     fn a_literal_let_is_built_as_the_resolver_lowers_it() {
-        let (lowered, seen) = crate::program::check::collect(|| {
-            lower("let a = 1\nlet b = \"x\" @default\nlet c = 500m\nlet d = true\np(v) where v = a")
-        });
-        assert!(seen.differences.is_empty(), "{:?}", seen.differences);
+        let lowered = lower(
+            "let a = 1\nlet b = \"x\" @default\nlet c = 500m\nlet d = true\np(v) where v = a",
+        );
         assert!(
             lowered.contains(&"let(\"b\", \"x\", \"default\")".to_string()),
             "{lowered:?}"
@@ -10872,14 +10586,13 @@ mod tests {
             ("let a = 99999999999999999999", "integer out of range"),
             ("let a = 1 @later", "unknown rank `@later`"),
         ] {
-            let (e, seen) = crate::program::check::collect(|| error(src));
-            assert!(seen.differences.is_empty(), "{src}: {:?}", seen.differences);
+            let e = error(src);
             assert!(e.contains(msg), "{src}: {e}");
         }
     }
 
     /// Every form of `let` is built as a `let` item (R-211 step 5) and
-    /// lowers as the resolver lowers it: typed (its `decl`), secret (its
+    /// lowers to its rules: typed (its `decl`), secret (its
     /// `__secret_let` paths), reading, with a clause, a `not { }` in it, a
     /// comprehension's helper in its value, an aggregate folded by its
     /// head or through a helper.
@@ -10895,9 +10608,7 @@ mod tests {
              let l = [y | p(y), not { q(y) }]\n\
              let n = count(x) where p(x)\n\
              let m = k where k = count(x), p(x), k > 1\n";
-        let (lowered, seen) = crate::program::check::collect(|| lower(src));
-        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
-        assert_eq!(seen.items.get("a let"), Some(&9), "{:?}", seen.items);
+        let lowered = lower(src);
         for s in [
             "let(\"n\", count(X), \"normal\") :- p(X)",
             "__secret_let(\"o\", \"password\")",
@@ -10908,7 +10619,7 @@ mod tests {
     }
 
     /// Every form of rule and fact is built as a `rule` item (R-211 step
-    /// 5) and lowers as the resolver lowers it: a fact, a record fact, a
+    /// 5) and lowers to its rules: a fact, a record fact, a
     /// ranked write, a head that reads (its reads after the clause), a
     /// helper its head's terms make, a constraint read as data, an
     /// aggregate folded by the head or through helpers.
@@ -10926,9 +10637,7 @@ mod tests {
              type_refine(\"t\", regex(\"^a$\"))\n\
              c(n) where n = count(x), p(x)\n\
              g(n) where n = count(x), p(x), n > 1\n";
-        let (lowered, seen) = crate::program::check::collect(|| lower(src));
-        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
-        assert_eq!(seen.items.get("a rule"), Some(&10), "{:?}", seen.items);
+        let lowered = lower(src);
         for s in [
             "arg(\"net.vpc\", \"a\", \"cidr\", \"x\", \"override\")",
             "r(__path(O, \"a\"), X) :- p(X), o(O)",
@@ -10941,7 +10650,7 @@ mod tests {
     }
 
     /// Every form of check, output and input is built as an item (R-211
-    /// step 5) and lowers as the resolver lowers it: a deny with a detail
+    /// step 5) and lowers to its rules: a deny with a detail
     /// and an aggregate, a warn, an output declared at its first row with a
     /// value or a rule, an object output, an exported relation, an input
     /// with a default, a refinement, a clause and object fields, one
@@ -10960,28 +10669,10 @@ mod tests {
              output each = 9\n\
              output obj { a = 1, b: { c = \"d\" } }\n\
              output p\n";
-        let (lowered, seen) = crate::program::check::collect(|| parse_as(src, true));
+        let lowered = parse_as(src, true);
         let lowered = lowered
             .map(|p| show(&p.statements))
             .unwrap_or_else(|e| panic!("{e:#}"));
-        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
-        let items = |k: &str| seen.items.get(k).copied().unwrap_or_default();
-        assert_eq!(
-            (
-                items("a deny"),
-                items("a warn"),
-                items("an output"),
-                items("an input")
-            ),
-            (1, 1, 5, 4),
-            "{:?}",
-            seen.items
-        );
-        assert!(
-            !seen.items.keys().any(|k| k.starts_with("a statement")),
-            "{:?}",
-            seen.items
-        );
         assert!(
             lowered.iter().any(|l| l.contains("__agg_0")),
             "{lowered:#?}"
@@ -10989,7 +10680,7 @@ mod tests {
     }
 
     /// Every form of `set` is built as a `Set` item (R-211 step 5) and
-    /// lowers as the resolver lowers it: an attribute, `+=`, ranked, a
+    /// lowers to its rules: an attribute, `+=`, ranked, a
     /// `[_]` target (its reads before the value's), an element of a keyed
     /// list by its variable (R-69) and by its key (R-35), an input, a
     /// block whose lines share one clause (its aggregates folded per line,
@@ -11010,20 +10701,10 @@ mod tests {
              set size = 2 where p(2)\n\
              set { pg.public = false @default, pg.tags = { c: n } } where n = count(x), p(x), n > 1\n\
              set from yaml.decode(io.read(\"c.yaml\")) where p(1)\n";
-        let (lowered, seen) = crate::program::check::collect(|| parse_as(src, true));
+        let lowered = parse_as(src, true);
         let lowered = lowered
             .map(|p| show(&p.statements))
             .unwrap_or_else(|e| panic!("{e:#}"));
-        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
-        assert_eq!(seen.items.get("a set"), Some(&10), "{:?}", seen.items);
-        assert!(
-            !seen
-                .items
-                .keys()
-                .any(|k| k.contains("(Rule)") || k.contains("ExternFn")),
-            "{:?}",
-            seen.items
-        );
         for s in [
             "arg_add(\"db.postgres\", \"pg\", \"tags\", {b: 2}) :- p(2)",
             "\"override\") :- p(2)",
@@ -11036,7 +10717,7 @@ mod tests {
     }
 
     /// Every form of resource block is built as a `Resource` item (R-211
-    /// step 5) and lowers as the resolver lowers it: entries that read
+    /// step 5) and lowers to its rules: entries that read
     /// (`+=`, ranked, an indexed path, a comprehension's helper), a
     /// bare, a quoted and a dotted header, a name from the clause bound
     /// after the entries' reads, a value body written out and one read.
@@ -11051,14 +10732,7 @@ mod tests {
              resource db.postgres e = { public: true }\n\
              resource db.postgres f = o\n\
              resource db.postgres g { databases[0].owner = \"o\" }\n";
-        let (lowered, seen) = crate::program::check::collect(|| lower(src));
-        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
-        assert_eq!(seen.items.get("a resource"), Some(&6), "{:?}", seen.items);
-        assert!(
-            !seen.items.keys().any(|k| k.contains("(Resource)")),
-            "{:?}",
-            seen.items
-        );
+        let lowered = lower(src);
         for s in [
             "resource \"db.postgres\" Addr { tags = {n: K} } :- p(N), k(K), Addr = __segment(str.format(\"d-%s\", N))",
             "resource \"db.postgres\" \"\\\"b.c\\\"\"",
@@ -11077,7 +10751,7 @@ mod tests {
     }
 
     /// Every form of relation input is built as a `RelationInput` item
-    /// (R-211 step 5) and lowers as the resolver lowers it: a stack's
+    /// (R-211 step 5) and lowers to its rules: a stack's
     /// rows from a document under a clause, a component's relation its
     /// user gives.
     #[test]
@@ -11086,23 +10760,16 @@ mod tests {
              decl p(a: int, b: string)\n\
              z(1)\n\
              component c {\n  input q\n  decl q(a: int)\n}\n";
-        let (lowered, seen) = crate::program::check::collect(|| parse_as(src, true));
+        let lowered = parse_as(src, true);
         let lowered = lowered
             .map(|p| show(&p.statements))
             .unwrap_or_else(|e| panic!("{e:#}"));
-        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
-        assert_eq!(seen.items.get("an input"), Some(&2), "{:?}", seen.items);
-        assert!(
-            !seen.items.keys().any(|k| k.contains("(RelationInput)")),
-            "{:?}",
-            seen.items
-        );
         let s = "p(A, B) :- z(1), Path = \"p.csv\", table.csv.p(Path, At, A, B)";
         assert!(lowered.iter().any(|l| l.contains(s)), "{s}: {lowered:#?}");
     }
 
     /// Every form of `let` with parameters is built as a `LetFn` item
-    /// (R-211 step 5) and lowers as the resolver lowers it: no clause, a
+    /// (R-211 step 5) and lowers to its rules: no clause, a
     /// clause whose `not { }` takes the demand among its positive
     /// literals, a value that reads, an aggregate folded by the head.
     #[test]
@@ -11112,14 +10779,7 @@ mod tests {
              let g(a, b) = x where p(a, x), not { q(b) }\n\
              let h(a) = n where n = count(x), p(x, a)\n\
              r(f(1), g(1, 2), h(2))\n";
-        let (lowered, seen) = crate::program::check::collect(|| lower(src));
-        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
-        assert_eq!(seen.items.get("a let"), Some(&4), "{:?}", seen.items);
-        assert!(
-            !seen.items.keys().any(|k| k.starts_with("a statement")),
-            "{:?}",
-            seen.items
-        );
+        let lowered = lower(src);
         for s in [
             "f(A, add(A, K)) :- f?(A), k(K)",
             "__neg_0(B) :- g?(A, B), p(A, X), q(B)",
@@ -11130,7 +10790,7 @@ mod tests {
     }
 
     /// Every form of a provider's `use` is built as a `Provider` item
-    /// (R-211 step 5) and lowers as the resolver lowers it: its source and
+    /// (R-211 step 5) and lowers to its rules: its source and
     /// settings, renamed (R-115), an `expect_account` under the clause
     /// again (its `not { }` a helper of its own), declared twice under
     /// clauses (R-104).
@@ -11141,17 +10801,10 @@ mod tests {
              use p2 { source = \"./p2\", r = 1 } where z(1)\n\
              use p2 { r = 2 } where q(2)\n\
              use p3 as c { source = \"./p3\" }\n";
-        let (lowered, seen) = crate::program::check::collect(|| parse_as(src, true));
+        let lowered = parse_as(src, true);
         let lowered = lowered
             .map(|p| show(&p.statements))
             .unwrap_or_else(|e| panic!("{e:#}"));
-        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
-        assert_eq!(seen.items.get("a provider"), Some(&4), "{:?}", seen.items);
-        assert!(
-            !seen.items.keys().any(|k| k.starts_with("a statement")),
-            "{:?}",
-            seen.items
-        );
         for s in [
             "provider_config(\"p1\", {region: K}) :- z(1), not __neg_0(), k(K)",
             "provider_expect_account(\"p1\", \"a\") :- z(1), not __neg_1()",
@@ -11215,7 +10868,7 @@ mod tests {
     }
 
     /// Every form of copy is built as a `Copy` item (R-211 step 5) and
-    /// lowers as the resolver lowers it: inputs that read, a name from
+    /// lowers to its rules: inputs that read, a name from
     /// the clause (R-191) bound before the inputs' reads, rows its block
     /// gives (a rule whose `not { }` helper follows the copy, a table),
     /// under a clause.
@@ -11226,17 +10879,10 @@ mod tests {
              resource c one {\n  size = k\n  p(x) where z(x), not { q(x) }\n\
                t from csv.decode(io.read(\"t.csv\"))\n}\n\
              resource c \"n-${i}\" { size = i } where z(i)\n";
-        let (lowered, seen) = crate::program::check::collect(|| parse_as(src, true));
+        let lowered = parse_as(src, true);
         let lowered = lowered
             .map(|p| show(&p.statements))
             .unwrap_or_else(|e| panic!("{e:#}"));
-        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
-        assert_eq!(seen.items.get("a copy"), Some(&2), "{:?}", seen.items);
-        assert!(
-            !seen.items.keys().any(|k| k.starts_with("a statement")),
-            "{:?}",
-            seen.items
-        );
         for s in [
             "instance c one { size = K } :- k(K)",
             "__neg_0(X) :- z(X), q(X)",

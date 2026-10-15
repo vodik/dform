@@ -155,25 +155,6 @@ impl Lowerer<'_> {
         args.push(value);
         let head = atom_at(&name, args, span);
         self.check_bound(&rc, &body, &atom_terms(&head))?;
-        let resolved = crate::program::check::enabled().then(|| {
-            let arity = head.args.len();
-            let demand = Extern {
-                pred: crate::demand::of(&name),
-                arity: arity - 1,
-                span,
-            };
-            let mode = Extern {
-                pred: name.clone(),
-                arity,
-                span,
-            };
-            let out = vec![
-                Stmt::Rule(RuleStmt::new(head.clone(), body.clone())),
-                Stmt::Extern(demand),
-                Stmt::Mode(mode),
-            ];
-            self.resolved_with(out, span)
-        });
         let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
         let l = crate::program::build::LetFnLowered {
             name,
@@ -195,9 +176,6 @@ impl Lowerer<'_> {
         let mut b = gather.builder(&mut self.program, span, &written);
         let item = b.let_fn_item(l);
         gather.done(b);
-        if let Some(stmts) = resolved {
-            self.resolved.insert(item, stmts);
-        }
         Ok(item)
     }
 
