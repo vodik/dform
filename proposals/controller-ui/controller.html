@@ -114,26 +114,31 @@ background is clicked, or Escape; clicking another node switches it.
 Edges, fades and outlines follow the selection only. Estate cards, tabs
 and attribute lines switch on click.
 
-Document rule: a selected node opens with the resource itself. Under a
-short header (health word, reading word, plan state, hold, reach) comes
-its desired document as the plan prints a resource: attribute lines,
-nested paths (spec.replicas = 1), lists keyed as the plan keys them
-(containers[name=forgejo], env[FORGEJO__...], networks[k3s.net]), secrets
-as their labels (#user_data), each with its site, and where several
-statements wrote one key, its sources ("the module's own write, over the
-policy's @default"). A reading other than in sync sits on the attribute's
-own line (drift with the live value and who and when, change, provider
-default). Then what the world returned (ids, addresses, status fields),
-marked world, then the provider's status words. An attribute's `why`
-opens under it on click (the marker turns); the resource's whole `why` is
-a closed block below. ovh-infra's documents come from its program files
-(k3s.df, forgejo.df, stacks/platform.df, config.df, policy.df); shop's
-and gke-platform's from examples/. Invented, being world values the files
-cannot hold: instance, volume and record ids, public and private
-addresses, created_at, the Deployment's uid and generation, prod's image
-digest, the PVC's volume name, the RDS endpoint and resource ids, the GKE
-endpoint. gke-platform's cluster is autopilot-private, so the example has
-no node pool; the cluster stands in for it.
+Document rule: every node opens on the same panel, the resource itself.
+Under a short header (health word, reading word, plan state, hold,
+reach) comes its desired document as the plan prints a resource:
+attribute lines, nested paths (spec.replicas = 1), lists keyed as the
+plan keys them (containers[name=forgejo], env[FORGEJO__...],
+networks[k3s.net]), secrets as their labels (#user_data), each with its
+site, and where several statements wrote one key, its sources. A reading
+other than in sync sits on the attribute's own line. Then World (the
+values the provider returns), then Status (the node's health as the
+model holds it). A watched source opens the same way, its document the
+read expression. Values come from the program files: ovh-infra's own
+(k3s.df, forgejo.df, synapse.df, pocket_id.df, stacks/platform.df,
+config.df, policy.df) and examples/shop, examples/k3s-platform and
+examples/gke-platform. A value the files cannot hold (an id, an
+address, a uid, a digest the registry would return, an attribute of a
+resource whose lines the mock does not carry) is the placeholder …,
+shaded, with one key line at the top of every document; no value is
+invented. An attribute's `why` opens under it on click; the resource's
+whole `why` is a closed block below. gke-platform's cluster is
+autopilot-private, so the example has no node pool.
+
+Fact rule: the right column, the estate cards, the legend and the queue
+show only what the model holds: addresses, attributes, sites, readings,
+states, counts, the provider's words, and `why` trees whose nodes are
+rules and lines. No explanation, advice, reassurance or summary.
 
 The plan as text, and the tabs (the first version's primary screen, kept
 behind the estate). The controller's job is to turn the program plus the
@@ -285,6 +290,10 @@ oci.resolve card had gone because v7 shows a source only in the estates
 it feeds and v7 and v8 opened ovh-infra on prod, which lab's tag does not
 feed; and a quiet source (releases' build and tested rows, a kubeconfig
 read that answered) folded into its cell's count like any quiet object.
+
+What v11 changed: the document and fact rules above; invented world
+values and status lines are gone, replaced by the placeholder or by the
+model's health; commentary is gone from the sidebar.
 
 What v8 changed: the document rule, the selection rule, the copy rule
 and the wider spacing above; k3s-platform's server carries only the
@@ -460,6 +469,8 @@ details.blk2 summary{cursor:pointer}
 .at-b.static{cursor:default}
 .at-b:hover .at-p{text-decoration:underline;text-decoration-color:var(--rule)}
 .at-m{color:var(--dim)}
+.ph{color:var(--dim);background:var(--sunk);border-radius:2px;padding:0 3px;font-style:normal}
+.ph-key{font:11.5px var(--mono);color:var(--dim)}
 .at-g{font:12px/1.55 var(--mono);color:var(--muted);padding:var(--s2) 0 0 22px}
 .at.in{margin-left:var(--s4)}
 .at-l{overflow-wrap:anywhere;min-width:0}.at-p{color:var(--muted)}.at-v{color:var(--ink)}
@@ -640,7 +651,7 @@ P.shop = {
       {id: "orders", dep: "prod", mark: "~", addr: "aws.db_instance orders", site: "stacks/shop.df:30",
         attrs: [["vpc_security_groups = [postgres]", "the replacement's id, made earlier in the tick"]],
         held: ["approval", "held with aws.security_group postgres: reads it"],
-        mag: "update · prod database · no downtime on the mock"},
+        mag: "update"},
       {id: "sub1d", dep: "prod", mark: "+", addr: "aws.subnet private-us-east-1d", site: "stacks/shop.df:12  with n = 3",
         attrs: [["availability_zone = \"us-east-1d\"", ""], ["cidr_block = \"10.0.3.0/24\"", ""], ["tags.team = \"shop\"", "policy.df:5"], ["vpc = main", ""]],
         because: "because aws.availability_zone gained the row (\"available\", \"us-east-1d\", 3)",
@@ -649,7 +660,7 @@ P.shop = {
         attrs: [["instance_type = \"m6g.large\"", "stacks/shop.df:27"], ["subnet = private-us-east-1d", ""], ["tags = { Name = \"shop-web-prod\", team = \"shop\" }", ""], ["vpc_security_groups = [https]", ""]],
         because: "because aws.availability_zone gained the row (\"available\", \"us-east-1d\", 3)", mag: "create"},
       {id: "lb", dep: "prod", mark: "~", addr: "aws.lb storefront", site: "stacks/shop.df:81",
-        attrs: [["subnets  + private-us-east-1d", ""]], mag: "update · public endpoint, same name"},
+        attrs: [["subnets  + private-us-east-1d", ""]], mag: "update"},
       {id: "https", dep: "prod", mark: "~", addr: "aws.security_group https", site: "stacks/shop.df:87",
         attrs: [["ingress  - { from_port = 22, to_port = 22, protocol = \"tcp\", cidr_blocks = [\"0.0.0.0/0\"] }", "(drift)"]],
         held: ["drift", "held  drift at ingress needs approval (no auto_reconcile, no approve)"],
@@ -657,18 +668,18 @@ P.shop = {
     ]},
     {n: 2, head: "tick 2  1 change", waits: "waits on  tick 1: aws.security_group postgres", st: "next", lines: [
       {id: "pgdep", dep: "prod", mark: "-", addr: "aws.security_group postgres  (deposed)", site: "replaced in tick 1",
-        attrs: [["name = \"shop-db-prod\"", ""]], mag: "<b>delete</b> · nothing reads it once orders moves"},
+        attrs: [["name = \"shop-db-prod\"", ""]], mag: "<b>delete</b>"},
     ]},
   ],
   policy: {head: "policy  3 hold · 1 undetermined", lines: [
     {id: "pol-pub", mark: "undetermined", text: "no public subnets", site: "stacks/shop.df:18", tally: "3 hold · 1 undetermined",
-      under: "aws.subnet private-us-east-1d  until map_public_ip_on_launch is known, once the subnet is made"},
+      under: "aws.subnet private-us-east-1d  until map_public_ip_on_launch is known"},
     {id: "pol-hold", mark: "holds", text: "3 hold", site: "", tally: "", under: ""},
   ]},
   approvals: [["aws.security_group postgres", "replace of aws.security_group postgres in prod", "policy.df:7"]],
   decisions: [
     {id: "d-appr", kind: "approval", word: "Needs a signature", t: "stacks.shop[env=prod]  aws.security_group postgres", r: "replace of aws.security_group postgres in prod  ·  policy.df:7", line: "pg"},
-    {id: "d-drift", kind: "drift", word: "Drift held", t: "stacks.shop[env=prod]  aws.security_group https", r: "ingress gained port 22 from 0.0.0.0/0, outside dform", line: "https"},
+    {id: "d-drift", kind: "drift", word: "Drift held", t: "stacks.shop[env=prod]  aws.security_group https", r: "ingress[1] 22/tcp from 0.0.0.0/0 · ops@example.com 07:58:21", line: "https"},
   ],
 };
 
@@ -707,9 +718,9 @@ P.k3s = {
   later: {head: "later", on: "kubeconfig", waits: "waits on  provider k8s  kubeconfig = raw, ssh://ubuntu@51.79.104.37/etc/rancher/k3s/k3s.yaml",
     prov: "provisional: planned against the offline schema; planned again once kubeconfig is known", st: "waiting", stNote: "waiting 2m14s of 10m",
     lines: [
-      {id: "ns", dep: "platform[staging]", mark: "=", addr: "k8s.namespace apps", site: "stacks/platform.df:37", attrs: [["as state has them; the new cluster is not read yet", ""]], mag: "expect create: the cluster is new"},
-      {id: "dep", dep: "apps[staging]", mark: "=", addr: "k8s.deployment web", site: "stacks/apps.df:12", attrs: [["as state has them", ""]], mag: "expect create"},
-      {id: "svc", dep: "apps[staging]", mark: "=", addr: "k8s.service web", site: "stacks/apps.df:24", attrs: [["as state has them", ""]], mag: "expect create"},
+      {id: "ns", dep: "platform[staging]", mark: "=", addr: "k8s.namespace apps", site: "stacks/platform.df:37", attrs: [["as state has them; the new cluster is not read yet", ""]], mag: "create (expected)"},
+      {id: "dep", dep: "apps[staging]", mark: "=", addr: "k8s.deployment web", site: "stacks/apps.df:12", attrs: [["as state has them", ""]], mag: "create (expected)"},
+      {id: "svc", dep: "apps[staging]", mark: "=", addr: "k8s.service web", site: "stacks/apps.df:24", attrs: [["as state has them", ""]], mag: "create (expected)"},
     ]},
   extraTicks: [
     {n: "·", head: "held, outside the ticks", st: "held", lines: [
@@ -796,7 +807,7 @@ const WHY = {
         N("= \"shop-orders-${env}\"", "stacks/shop.df:94"), N("input env = \"prod\"", "key of the deployment")]),
       N("because stacks/shop.df:94 was \"shop-db-${env}\" at the last apply (seq 39, a8c0d51)", "", "because"),
       N("vpc = main", "stacks/shop.df:95")]),
-    N("create first: the replacement is made, orders moved to it, then the old one deleted", "", "wait"),
+    N("name forces replace, create first", "the plan", "wait"),
     N("held for approval: replace of aws.security_group postgres in prod", "policy.df:7", "held", [
       N("requires_approval(r, \"${kind} of ${r} in prod\")", "policy.df:7", "", [
         N("with kind = \"replace\", r = aws.security_group postgres"),
@@ -804,11 +815,11 @@ const WHY = {
         N("deformation(\"replace\", aws.security_group postgres, _)", "the plan"),
         N("kind in [\"replace\", \"delete\"]: true")])]),
     N("reach: read by aws.db_instance orders.vpc_security_groups  stacks/shop.df:37", "", "", [
-      N("lifecycle(orders, \"prevent_destroy\")", "stacks/shop.df:55"), N("orders is updated in place, not replaced", "", "ok")]),
+      N("lifecycle(orders, \"prevent_destroy\")", "stacks/shop.df:55"), N("aws.db_instance orders: ~ update", "the plan", "ok")]),
   ]},
   orders: {title: "~ aws.db_instance orders", cmd: "dform why orders.vpc_security_groups shop env=prod", tree: [
     N("aws.db_instance orders.vpc_security_groups = [postgres]", "stacks/shop.df:37", "", [
-      N("postgres is replaced first; the update carries the new id", "", "wait")]),
+      N("postgres: ± replace, create first", "the plan", "wait")]),
     N("held with aws.security_group postgres: it reads it", "", "held"),
     N("every prod database is kept: holds", "stacks/shop.df:57", "ok", [N("lifecycle(orders, \"prevent_destroy\")", "stacks/shop.df:55")]),
   ]},
@@ -817,12 +828,11 @@ const WHY = {
       N("aws.availability_zone(\"available\", \"us-east-1d\", 3)", "provider table, read 09:38:12", "because"),
       N("cidr_block = \"10.0.3.0/24\"", "", "", [N("= cidr(n)", "stacks/shop.df:15"), N("= inet.subnet(main.cidr_block, 8, n)", "stacks/shop.df:9"), N("main.cidr_block = \"10.0.0.0/16\"", "stacks/shop.df:7")]),
       N("tags.team = \"shop\"", "policy.df:5", "", [N("set r.tags = { team = \"shop\" } where r in resource", "policy.df:5")])]),
-    N("because the table gained a row; the file did not change", "", "because"),
-    N("no public subnets: undetermined until map_public_ip_on_launch is known, once the subnet is made", "stacks/shop.df:18", "wait"),
+    N("no public subnets: undetermined until map_public_ip_on_launch is known", "stacks/shop.df:18", "wait"),
   ]},
   web1d: {title: "+ aws.instance web-us-east-1d", cmd: "dform why 'aws.instance web-us-east-1d' shop env=prod", tree: [
     N("aws.instance web-us-east-1d  stacks/shop.df:74  with s = aws.subnet private-us-east-1d", "", "", [
-      N("s in aws.subnet: the subnet planned beside it", "stacks/shop.df:12"),
+      N("s = aws.subnet private-us-east-1d (planned)", "stacks/shop.df:12"),
       N("instance_type = \"m6g.large\"", "", "", [N("= web.type", "stacks/shop.df:75"), N("= \"m6g.large\"", "stacks/shop.df:27"), N("over 1 @default  \"t3.small\"", "stacks/shop.df:4")])]),
   ]},
   lb: {title: "~ aws.lb storefront", cmd: "dform why storefront.subnets shop env=prod", tree: [
@@ -830,7 +840,7 @@ const WHY = {
   https: {title: "~ aws.security_group https", cmd: "dform why 'aws.security_group https' shop env=prod", tree: [
     N("ingress as written: [{ from_port = 443, to_port = 443, protocol = \"tcp\", cidr_blocks = [\"0.0.0.0/0\"] }]", "stacks/shop.df:90"),
     N("drift(\"aws.security_group\", \"https\", \"ingress[1]\", absent, {from_port = 22, …})", "controller, event world 09:38:12", "no", [
-      N("live gained it 07:58:21 by ops@example.com (AuthorizeSecurityGroupIngress)", "provider: who, when it can tell")]),
+      N("live gained it 07:58:21 by ops@example.com (AuthorizeSecurityGroupIngress)", "provider")]),
     N("held: drift at ingress needs approval", "", "held", [
       N("auto_reconcile(\"aws.security_group\", \"https\", \"ingress\"): no row", "", "no"),
       N("approve(\"aws.security_group\", \"https\"): no row", "", "no")]),
@@ -841,9 +851,8 @@ const WHY = {
     N("deny \"no public subnets\" { subnet } where subnet in aws.subnet, subnet.map_public_ip_on_launch", "stacks/shop.df:18", "", [
       N("aws.subnet private-us-east-1a/b/c: map_public_ip_on_launch = false", "world", "ok"),
       N("aws.subnet private-us-east-1d: map_public_ip_on_launch = ?", "provider computes it at create", "wait", [
-        N("decided once the subnet is made"),
+        N("decided at create"),
         N("in staging it decided holds at 09:40:51 (false)", "", "ok")])]),
-    N("an undetermined deny does not stop the create (R-95); --hold-until-decided would", "", "dimt"),
   ]},
   "pol-hold": {title: "3 policies hold", cmd: "dform plan -v shop env=prod", tree: [
     N("no public database in prod", "stacks/shop.df:51", "ok"), N("a prod database survives a zone", "stacks/shop.df:53", "ok"), N("every prod database is kept", "stacks/shop.df:57", "ok")]},
@@ -861,21 +870,18 @@ const WHY = {
   api: {title: "~ ovh.domain_record api", cmd: "", tree: [N("target = server.public_ip", "stacks/platform.df:44", "", [N("ovh.instance server.public_ip = \"51.79.104.37\"", "made by the replace, run 77", "because")]), N("applied 09:15:52, run 77", "", "ok")]},
   www: {title: "~ ovh.domain_record www", cmd: "dform why www.target apps env=staging", tree: [
     N("target = platform[env].ingress", "stacks/apps.df:35", "", [N("stacks.platform[env=staging].ingress = server.public_ip", "stacks/platform.df:6", "", [N("= \"51.79.104.37\"", "made by the replace, run 77", "because")])]),
-    N("one tree, one plan: apps' record applied beside platform's, not after it", "", "dimt"), N("applied 09:15:52, run 77", "", "ok")]},
+    N("applied 09:15:52, run 77", "", "ok")]},
   ns: {title: "later: k8s.namespace apps", cmd: "dform why 'k8s.namespace apps' platform env=staging", tree: [
     N("later  waits on  provider k8s  kubeconfig = raw, ssh://ubuntu@51.79.104.37/etc/rancher/k3s/k3s.yaml", "", "wait", [
       N("io.read: connection refused (sshd up, k3s.yaml absent)", "retry 7, every 15s"),
       N("wait = \"10m\" (the default), 2m14s spent", "dform.toml")]),
     N("provisional: planned against the offline k8s schema", "", "dimt"),
-    N("state has it on the replaced server; expect a create once the cluster answers", "", "no"),
   ]},
-  dep: {title: "later: k8s.deployment web", cmd: "", tree: [N("later  waits on  provider k8s  kubeconfig = platform[env].kubeconfig", "stacks/apps.df:7", "wait", [N("stacks.platform[env=staging].kubeconfig  ← the same read", "stacks/platform.df:5")]), N("an image is not pinned by its digest: holds (decided without the cluster)", "k3s-platform/policy.df:7", "ok")]},
+  dep: {title: "later: k8s.deployment web", cmd: "", tree: [N("later  waits on  provider k8s  kubeconfig = platform[env].kubeconfig", "stacks/apps.df:7", "wait", [N("stacks.platform[env=staging].kubeconfig  ← the same read", "stacks/platform.df:5")]), N("an image is not pinned by its digest: holds", "k3s-platform/policy.df:7", "ok")]},
   svc: {title: "later: k8s.service web", cmd: "", tree: [N("later  waits on  provider k8s  kubeconfig = platform[env].kubeconfig", "stacks/apps.df:7", "wait")]},
   repl: {title: "~ k8s.deployment web (apps[prod])", cmd: "dform why web.spec.replicas apps env=prod", tree: [
     N("spec.replicas = 3", "", "", [N("= replicas", "stacks/apps.df:14"), N("= 3", "stacks/apps.df:10"), N("over 1 @default 2", "stacks/apps.df:3")]),
     N("live 5; managedFields: kubectl (Update) owns f:spec.f:replicas since 08:12:40", "provider k8s", "no"),
-    N("ownership lost is not drift: the field is someone else's now; a server-side apply conflicts unless forced", "", "dimt"),
-    N("the controller does not force", "", "held"),
   ]},
   "pol-k3s": {title: "3 policies hold", cmd: "", tree: [N("k3s needs 4 GB of memory", "policy.df:4", "ok", [N("ovh.flavor(\"BHS5\", \"b2-15\", _, 15Gi, _)", "provider table")]), N("an image is not pinned by its digest", "policy.df:7", "ok"), N("the domain is not on this account", "stacks/platform.df:10", "ok", [N("ovh.zone(\"example.com\", _, _)", "provider table")])]},
   peer: {title: "~ google.compute_network main (prod)", cmd: "dform diff --since 14 gke_platform env=prod", tree: [
@@ -895,27 +901,19 @@ const WHY = {
     N("hold(\"deploy.cell\", \"eu-1\", \"one release a week per cell\")", "stacks/releases.df:20", "held", [
       N("deformation(\"update\", deploy.cell eu-1, _)", "the plan"),
       N("released(\"eu-1\", 2026-10-12T00:00Z)", "controller's record"),
-      N("time.now() - at < 7d: true (3d 9h)"), N("lifts 2026-10-19T00:00Z; the controller wakes then", "", "wait")]),
-    N("us-1 got 1.4.1 at 2026-10-14T16:20:03 (released 2026-10-06, the rule held no row)", "", "ok"),
+      N("time.now() - at < 7d: true (3d 9h)"), N("lifts 2026-10-19T00:00Z", "", "wait")]),
+    N("deploy.cell us-1: 1.4.1 applied 2026-10-14T16:20:03", "", "ok"),
   ]},
 };
 WHY["d-appr"] = WHY.pg; WHY["d-drift"] = WHY.https; WHY["d-und"] = WHY["pol-pub"]; WHY["d-own"] = WHY.repl; WHY["d-wait"] = WHY.ns; WHY["d-cad"] = WHY.eu1;
 
 /* ---------- actions per decision ---------- */
 const ACTS = {
-  "d-appr": () => DONE["d-appr"] ? `<p>Signed by simon@framework over sha256:4f1c9e07…. Run 219 applies it.</p>` : `
-    <p>The signature is over the plan's digest, <span class="mono">sha256:4f1c9e07…b31a</span>, not over the change: a new event that changes the plan needs a new one. Signers: any key of the trust root (dform.toml <span class="mono">[approvals]</span>).</p>
+  "d-appr": () => DONE["d-appr"] ? `<p class="mono">signed by simon@framework · sha256:4f1c9e07…</p>` : `
     <p class="mono">dform approve sha256:4f1c9e07 shop env=prod</p>
-    <button class="btn" id="sign">Sign the plan as simon@framework</button>
-    <p>Open: the mock holds everything ordered with the signed change; docs/experimental/controller.md holds only the deformation.</p>`,
-  "d-drift": () => DONE["d-drift"] ? `<p>approve("aws.security_group", "https") written by simon@framework. The revert applied.</p>` : `
-    <p>Three ways out, two of them are code. Revert now: write the row the controller reads. Keep the rule: add it to stacks/shop.df (a PR). Let it drift: <span class="mono">auto_reconcile</span> or <span class="mono">ignore_changes</span> on the path (a PR).</p>
+    <button class="btn" id="sign">Sign the plan as simon@framework</button>`,
+  "d-drift": () => DONE["d-drift"] ? `<p class="mono">approve("aws.security_group", "https") · simon@framework</p>` : `
     <button class="btn" id="revert">Revert the drift: approve("aws.security_group", "https")</button>`,
-  "d-und": () => DONE["d-und"] ? `<p>Decided: holds. map_public_ip_on_launch = false once the subnet was made.</p>` : `<p>Nothing to do. It decides once the subnet is made, which waits on the signature. A stack where an irreversible create matters more than progress would set <span class="mono">--hold-until-decided</span> (R-95).</p>`,
-  "d-own": () => `<p>No button: taking a field back is a decision about who runs replicas. Give it up: <span class="mono">ignore_changes(web, "spec.replicas")</span>, or an HPA the program declares. Take it back: <span class="mono">force_ownership(web, "spec.replicas")</span> (does not exist; open).</p>`,
-  "d-wait": () => `<p>Nothing to do. The apply waits up to <span class="mono">wait = "10m"</span>, then stops with state consistent and the next event resumes.</p>`,
-  "d-cad": () => `<p>A hold is the program's. The page cannot lift it: change the rule, or the <span class="mono">released</span> row, by a PR. In controller mode the cadence is a hold, not a deny: a deny refuses the whole plan, a hold keeps eu-1 waiting while us-1 ships.</p>
-    <button class="btn ghost" disabled title="the program declares no freeze relation">Freeze the project (needs decl freeze)</button>`,
 };
 const DONE = {};
 
@@ -1061,7 +1059,7 @@ const EDGES = {
   svc: [["srv", "wait", "platform[env].kubeconfig"]],
 };
 const TAGS = {
-  sub1d: () => DONE["d-und"] ? null : ["undet", "undetermined  no public subnets  until map_public_ip_on_launch is known, once the subnet is made"],
+  sub1d: () => DONE["d-und"] ? null : ["undet", "undetermined  no public subnets  until map_public_ip_on_launch is known"],
   ns: () => ["undet", "waiting  ssh read of k3s.yaml not answered, 2m14s of 10m"],
 };
 
@@ -1077,7 +1075,7 @@ function render() { $("frame").classList.toggle("gm", tab === "plan" && view ===
 /* the project level: one card per estate, which is also the estate selector */
 function renderEstates() {
   const E = ESTATES[cur];
-  $("estates").innerHTML = `<div class="lab">${E.key ? `Estates · one per ${esc(E.key)}` : "One estate · the project has no key"}</div><div class="est-row" role="group" aria-label="Estates">${E.list.map(e => {
+  $("estates").innerHTML = `<div class="lab">${E.key ? `Estates · one per ${esc(E.key)}` : "One estate"}</div><div class="est-row" role="group" aria-label="Estates">${E.list.map(e => {
     const m = estModel(cur, e.k), objs = m.nodes.filter(n => n.lane !== "sources");
     const hc = (c) => objs.filter(n => healthCls(n.health) === c).length, ok = hc("h-ok"), bad = hc("h-bad"), unk = hc("h-unk");
     const st = {}; estLines(cur, e.k).forEach(x => { const w = lineState(P[cur], x).split(/[ :]/)[0]; st[w] = (st[w] || 0) + 1; });
@@ -1192,7 +1190,7 @@ const SRC_LANE = {name: "watched sources", st: "", mark: "·"};
 MODEL.shop = (() => {
   const m = model(["sources", "staging", "prod"], [
     {id: "aws", label: "aws · us-east-1", settings: "use aws { region = \"us-east-1\", expect_account = \"123456789012\" }", state: "configured · account 123456789012 · 23 calls last run: Query 1, Read 14, Plan 7 · no throttling",
-      why: [N("both deployments configure it alike, so it is one instance", "stacks/shop.df:5"), N("expect_account = \"123456789012\": the account the provider reports matches", "", "ok")]},
+      why: [N("expect_account = \"123456789012\": matches", "stacks/shop.df:5", "ok")]},
   ], {
     "staging/subnets": {label: "private-${availability_zone}", site: "stacks/shop.df:12", word: "rows of one rule"},
     "staging/web": {label: "web-${s.availability_zone}", site: "stacks/shop.df:74", word: "rows of one rule"},
@@ -1232,12 +1230,11 @@ MODEL.shop = (() => {
 MODEL.k3s = (() => {
   const m = model(["platform[staging]", "apps[staging]", "platform[prod]", "apps[prod]"], [
     {id: "ovh", label: "ovh · project shop", settings: "use ovh { project = \"shop\" }  (platform and apps, all envs)", state: "configured · 13 calls this run: Read 5, Plan 3, Apply 4 · window 20/s, never full",
-      why: [N("one instance: every deployment gives it the same settings", "stacks/platform.df:8, stacks/apps.df:6")]},
-    {id: "io", label: "dform io.read", settings: "documents dform reads itself", state: "1 answered, 1 open (2m14s)",
-      why: [N("the reads a provider's settings come from; dform's own, not a provider's")]},
+      why: []},
+    {id: "io", label: "dform io.read", settings: "io.read", state: "1 answered, 1 open (2m14s)", why: []},
     {id: "k8s-st", label: "k8s · k3s-staging", settings: "platform: use k8s { kubeconfig }  ·  apps: use k8s { kubeconfig = platform[env].kubeconfig }", state: "waiting on kubeconfig: the ssh read has not answered, 2m14s of 10m · 0 calls since the replace", from: "n:platform[staging]/read", waiting: true,
       why: [N("configured from let kubeconfig = str.replace(raw, …)", "stacks/platform.df:34", "", [N("let raw = io.read(\"ssh://ubuntu@${server.public_ip}/etc/rancher/k3s/k3s.yaml\")", "stacks/platform.df:33", "", [N("ovh.instance server.public_ip = \"51.79.104.37\"", "replaced in run 77", "because")])]),
-        N("apps reads the same value as platform[env].kubeconfig", "stacks/apps.df:7"), N("one region: both instances reach one cluster", "", "dimt"),
+        N("apps: use k8s { kubeconfig = platform[env].kubeconfig }", "stacks/apps.df:7"),
         N("not answered: connection refused (sshd up, k3s.yaml absent)", "retry 7, every 15s", "wait")]},
     {id: "k8s-pr", label: "k8s · k3s-prod", settings: "platform: use k8s { kubeconfig }  ·  apps: use k8s { kubeconfig = platform[env].kubeconfig }", state: "configured · https://51.79.88.4:6443 · 4 calls last run: Read 3", from: "n:platform[prod]/read",
       why: [N("configured from the ssh read of 51.79.88.4, answered 09:12:31", "stacks/platform.df:33", "ok")]},
@@ -1274,9 +1271,9 @@ MODEL.k3s = (() => {
 MODEL.gke = (() => {
   const envs = {dev: "platform-dev-973682", stg: "platform-stg", prod: "platform-prod"};
   const m = model(["sources", "dev", "stg", "prod"], [
-    {id: "io", label: "dform io.read", settings: "documents the program reads", state: "2 documents · data/peerings.csv changed 08:02:40", why: [N("input peering from csv.decode(io.read(\"data/peerings.csv\"))", "stacks/gke_platform.df:33")]},
+    {id: "io", label: "dform io.read", settings: "io.read", state: "2 documents · data/peerings.csv changed 08:02:40", why: [N("input peering from csv.decode(io.read(\"data/peerings.csv\"))", "stacks/gke_platform.df:33")]},
     ...Object.entries(envs).map(([e, pr]) => ({id: "gke-" + e, label: `gke · ${pr}`, settings: `use gke { project = "${pr}", region = "us-east1" }`, state: `configured · expect_account ${pr} matches · ${e === "prod" ? "9 calls last run" : "6 calls last run"}`,
-      why: [N("each env configures its own instance: three regions of one family", "stacks/gke_platform.df:115"), N(`expect_account = "${pr}" holds`, "", "ok")]})),
+      why: [N(`expect_account = "${pr}": matches`, "stacks/gke_platform.df:115", "ok")]})),
   ]);
   m.N("src/csv", {lane: "sources", region: "io", kind: "source", type: "document", name: "data/peerings.csv", health: "", reading: "gained line 6 at 08:02:40 (a8f3e10)", word: "1 new line", news: true, woke: 64});
   m.N("src/dash", {lane: "sources", region: "io", kind: "source", type: "document", name: "files/dashboard-gke-platform.json", health: "", reading: "unchanged"});
@@ -1298,9 +1295,9 @@ MODEL.gke = (() => {
 
 MODEL.rel = (() => {
   const m = model(["sources", "releases"], [
-    {id: "sql", label: "sql · postgres", settings: "use sql { url = secrets.database_url }", state: "LISTEN build, tested · last commit 2026-10-09 11:00 · 2 reads last run", why: [N("decl build(…) from sql.table(\"build\")", "terry.org"), N("a signal as the hint, a read as the truth, a slow poll as the fallback", "", "dimt")]},
-    {id: "clock", label: "dform time", settings: "time.now()", state: "next boundary 2026-10-16T11:00Z: eligible(\"shop\", \"1.5.0\")", why: [N("the controller wakes at the next time a rule over time.now() changes (open)", "", "wait")]},
-    {id: "fake", label: "fake", settings: "use fake", state: "configured · 3 calls last run", why: [N("terry.org's sketch runs on the built-in fake cloud")]},
+    {id: "sql", label: "sql · postgres", settings: "use sql { url = secrets.database_url }", state: "LISTEN build, tested · last commit 2026-10-09 11:00 · 2 reads last run", why: [N("decl build(…) from sql.table(\"build\")", "terry.org")]},
+    {id: "clock", label: "dform time", settings: "time.now()", state: "next boundary 2026-10-16T11:00Z: eligible(\"shop\", \"1.5.0\")", why: [N("next boundary 2026-10-16T11:00Z: eligible(\"shop\", \"1.5.0\")", "", "wait")]},
+    {id: "fake", label: "fake", settings: "use fake", state: "configured · 3 calls last run", why: []},
   ]);
   m.N("src/build", {lane: "sources", region: "sql", kind: "source", type: "sql.table", name: "build", health: "", reading: "3 rows · 1.5.0 by ci/shop#4812, 10-08", news: false});
   m.N("src/tested", {lane: "sources", region: "sql", kind: "source", type: "sql.table", name: "tested", health: "", reading: "3 rows · 1.5.0 by testgrid/shop-e2e, 10-09", news: false});
@@ -1671,131 +1668,220 @@ function estateHTML(p) {
 
   return `<div class="gwrap"><svg viewBox="0 0 ${totalW} ${H}" width="${totalW}" height="${H}" role="img" aria-label="The estate as a graph">
     ${svgRegions}${svgLanes}${svgFrames}${svgBands}${svgNodes}${svgHeads}${svgEdges}</svg>
-    <div class="glegend"><span>a node sits right of, or below, what it reads; click it for its direct edges and the resource itself; Esc lets go</span><span>a card with no word under its name is in sync</span>${o.W ? `<span>lit: changed · tinted, with how many hops away: reached by the change</span>` : ""}</div></div>`;
+    <div class="glegend"><span>position: right of, or below, what it reads</span><span>no word: in sync</span>${o.W ? `<span>lit: changed · tinted, n: reached, n hops</span>` : ""}</div></div>`;
 }
 
-/* ---------- the resource itself: its desired document, what the world returned, the provider's status ----------
-   a: [path, value, site, {src, r: [word, text], why}]; values the plan prints, secrets as their labels. */
+/* ---------- the resource itself: its desired document, what the world returned, its status ----------
+   Every node gets one. Values come from the program files; a value the files cannot hold is PH, printed as … */
+const PH = "§PH§";
 const A = (p, v, s, o) => ({p, v, s, ...(o || {})});
+const W = (k) => [k, PH];
+const K8S = {
+  "k8s.namespace": ["metadata.name"],
+  "k8s.network_policy": ["metadata.name", "metadata.namespace", "spec.podSelector", "spec.policyTypes", "spec.ingress"],
+  "k8s.traefik.middleware": ["metadata.name", "metadata.namespace", "spec"],
+  "k8s.secret": ["metadata.name", "metadata.namespace", "data"],
+  "k8s.stateful_set": ["metadata.name", "metadata.namespace", "spec.replicas", "spec.serviceName", "spec.template.spec.containers", "spec.volumeClaimTemplates"],
+  "k8s.service": ["metadata.name", "metadata.namespace", "spec.selector", "spec.ports"],
+  "k8s.ingress": ["metadata.name", "metadata.namespace", "spec.ingressClassName", "spec.rules", "spec.tls"],
+  "k8s.persistent_volume_claim": ["metadata.name", "metadata.namespace", "spec.accessModes", "spec.storageClassName", "spec.resources.requests.storage"],
+  "k8s.deployment": ["metadata.name", "metadata.namespace", "spec.replicas", "spec.selector.matchLabels", "spec.template.spec.containers"],
+  "k8s.cron_job": ["metadata.name", "metadata.namespace", "spec.schedule", "spec.jobTemplate.spec.template.spec.containers"],
+  "k8s.ingress_class": ["metadata.name", "spec.controller"],
+  "k8s.service_account": ["metadata.name", "metadata.namespace"],
+  "k8s.cluster_role": ["metadata.name", "rules"],
+  "k8s.cluster_role_binding": ["metadata.name", "roleRef", "subjects"],
+  "k8s.custom_resource_definition": ["metadata.name", "spec.group", "spec.names", "spec.versions"],
+  "k8s.traefik.io.v1alpha1.ingress_route_tcp": ["metadata.name", "metadata.namespace", "spec.entryPoints", "spec.routes"],
+};
+/* a resource the mock has no file lines for: the schema's attributes, every value a placeholder; references from the model's edges */
+function genericDoc(m, n) {
+  const refs = m.edges.filter(([, b, k, l]) => b === n.id && (k === "ref" || k === "output") && /^[a-zA-Z_.]+$/.test(l))
+    .map(([a, , , label]) => [label, (m.nodes.find(x => x.id === a) || {}).name]);
+  const names = K8S[n.type] || [];
+  return {site: n.site || "", a: [...names.filter(p => !refs.some(([l]) => l === p)).map(p => A(p, PH, n.site || "")), ...refs.map(([l, v]) => A(l, v, n.site || ""))],
+    world: n.type.startsWith("k8s.") ? [W("metadata.uid"), W("metadata.resourceVersion")] : [W("id")]};
+}
+function sourceDoc(expr, site, n) { return {site, a: [A("read", expr, site)], world: [["last read", n.reading || PH]], source: true}; }
 function docOf(proj, n) {
+  const m = MODEL[proj];
+  const d = docOf1(proj, n);
+  return d || (n.kind === "source" ? sourceDoc(`${n.type} ${n.name}`, n.site || "", n) : genericDoc(m, n));
+}
+function docOf1(proj, n) {
   const id = n.id.slice(2), [lane, key] = id.split("/"), e = (lane.match(/\[(\w+)\]/) || [, lane])[1], PR = e === "prod";
   if (proj === "ovh") {
-    const nm = `k8s-${e}`, sfx = PR ? "" : `.${e}`, base = PR ? "vodik.xyz" : `${e}.vodik.xyz`, ip = PR ? "148.113.5.21" : "51.79.98.20";
-    const flavor = PR ? A("flavor", "\"b2-15\"", "k3s.df:136", {src: "set { flavor = \"b2-15\" } where env == \"prod\"  stacks/platform.df:23, over the input's \"b2-7\"  stacks/platform.df:6"})
-      : A("flavor", "\"b2-7\"", "k3s.df:136", {src: "input flavor = \"b2-7\"  stacks/platform.df:6, given as use k3s { flavor }  stacks/platform.df:40"});
-    if (key === "k3s.server.vm") return {site: "k3s.df:133, node server  k3s.df:154", a: [
-      A("name", `"${nm}-server"`, "k3s.df:134", {src: `hostname = "\${name}-server"  k3s.df:154; name = "k8s-\${env}"  stacks/platform.df:38`}),
-      A("region", "\"BHS5\"", "k3s.df:135", {src: "config.region  config.df:33, given  stacks/platform.df:39"}),
+    const nm = `k8s-${e}`, sfx = PR ? "" : `.${e}`, base = PR ? "vodik.xyz" : `${e}.vodik.xyz`;
+    const flavor = PR ? A("flavor", "\"b2-15\"", "k3s.df:136", {src: "set { flavor = \"b2-15\" } where env == \"prod\"  stacks/platform.df:23, over input flavor = \"b2-7\"  stacks/platform.df:6"})
+      : A("flavor", "\"b2-7\"", "k3s.df:136", {src: "input flavor = \"b2-7\"  stacks/platform.df:6; use k3s { flavor }  stacks/platform.df:40"});
+    const vm = (host, init, site) => ({site, a: [
+      A("name", `"${nm}-${host}"`, "k3s.df:134", {src: `hostname = "\${name}-${host}"  ${site}; name = "k8s-\${env}"  stacks/platform.df:38`}),
+      A("region", "\"BHS5\"", "k3s.df:135", {src: "config.region  config.df:33; stacks/platform.df:39"}),
       flavor,
-      A("image", "\"Ubuntu 26.04\"", "k3s.df:137", {src: "input image = \"Ubuntu 26.04\"  k3s.df:20 (the default; the stack gives none)"}),
-      A("ssh_key", "admin", "k3s.df:138"),
-      A("networks[k3s.net]", "net", "k3s.df:139"),
-      A("user_data", "(sensitive) #user_data", "k3s.df:140", {why: [N("user_data = server_init: cloud-config with the derived token", "k3s.df:154"), N("lifecycle(vm, \"bootstrap\", \"user_data\"): read at first boot only; a change is said, not a replace", "k3s.df:151", "dimt")]}),
-      ...(PR ? [A("lifecycle", "prevent_destroy", "k3s.df:158", {src: "set k3s.protect = true where env == \"prod\"  stacks/platform.df:48"})] : [])],
-      world: [["id", PR ? "\"c41f9a07-…-55e2\"" : "\"7d0c2a1e-…-0b93\""], ["public_ip", `"${ip}"`], ["networks[k3s.net].ip", "\"10.0.0.2\""], ["created_at", PR ? "\"2026-09-02T10:14:51Z\"" : "\"2026-10-15T07:44:30Z\""]],
-      status: ["ACTIVE", ...(PR ? [] : ["its Read took 4.1s, the run's slowest call"])], invented: "id, public_ip, private ip, created_at"};
-    if (key === "k3s.server.data") return {site: "k3s.df:143", a: [
-      A("name", `"${nm}-server-data"`, "k3s.df:144"), A("region", "\"BHS5\"", "k3s.df:145"),
+      A("image", "\"Ubuntu 26.04\"", "k3s.df:137", {src: "input image = \"Ubuntu 26.04\"  k3s.df:20"}),
+      A("ssh_key", "admin", "k3s.df:138"), A("networks[k3s.net]", "net", "k3s.df:139"),
+      A("user_data", `(sensitive) #${init}`, "k3s.df:140", {why: [N(`user_data = ${init}`, site), N("lifecycle(vm, \"bootstrap\", \"user_data\")", "k3s.df:151")]}),
+      ...(PR && host === "server" ? [A("lifecycle", "prevent_destroy", "k3s.df:158", {src: "set k3s.protect = true where env == \"prod\"  stacks/platform.df:48"})] : [])],
+      world: [W("id"), W("public_ip"), W("networks[k3s.net].ip")]});
+    if (key === "k3s.server.vm") return vm("server", "server_init", "k3s.df:154");
+    if (key === "k3s.agent-0.vm") return vm("agent-0", "agent_init", "k3s.df:173");
+    if (key === "k3s.server.data" || key === "k3s.agent-0.data") { const h = key.split(".")[1]; return {site: "k3s.df:143", a: [
+      A("name", `"${nm}-${h}-data"`, "k3s.df:144"), A("region", "\"BHS5\"", "k3s.df:145"),
       A("size", PR ? "250Gi" : "50Gi", "k3s.df:146", {src: PR ? "set { disk = 250Gi } where env == \"prod\"  stacks/platform.df:23" : "input disk = 50Gi  stacks/platform.df:7"}),
-      A("type", "\"high-speed\"", "k3s.df:147"), A("instance", "server.vm", "k3s.df:148")],
-      world: [["id", "\"vol-…-91c4\""], ["device", "\"/dev/sdb\""]], status: ["in-use, attached to " + nm + "-server"], invented: "id, device"};
-    if (key === "k3s.api" || key === "apex" || key === "forgejo.record") {
-      const apex = key === "apex", git = key === "forgejo.record";
-      const f = git ? "forgejo.df" : apex ? "stacks/platform.df" : "k3s.df", l0 = git ? 158 : apex ? 77 : 185;
-      return {site: `${f}:${l0}`, a: [
-        A("zone", "\"vodik.xyz\"", `${f}:${l0 + 1}`, {src: "config.zone  config.df:14"}),
-        A("subdomain", git ? `"git${sfx}"` : apex ? `"${PR ? "" : e}"` : `"api${sfx}"`, `${f}:${l0 + 2}`, {src: apex ? "config.apex_subdomain  config.df:25-26" : "config.dns_suffix  config.df:23-24"}),
-        A("type", git ? "\"CNAME\"" : "\"A\"", `${f}:${l0 + 3}`),
-        A("target", git ? `"${base}."` : apex ? `k3s.ingress_ip  ("${ip}")` : `server.public_ip  ("${ip}")`, `${f}:${l0 + 4}`, {src: git ? "config.apex_target  config.df:28" : "the instance's public_ip, read from the world"}),
-        A("ttl", "300", `${f}:${l0 + 5}`)],
-        world: [["id", git ? "5294117" : apex ? "5294102" : "5294113"], ["fieldType", git ? "\"CNAME\"" : "\"A\""]],
-        status: ["in the zone; answered by OVH's DNS"], invented: "record ids"};
-    }
+      A("type", "\"high-speed\"", "k3s.df:147"), A("instance", `${h}.vm`, "k3s.df:148")], world: [W("id")]}; }
+    if (key === "k3s.admin") return {site: "k3s.df:38", a: [A("name", `"${nm}-admin"`, "k3s.df:38"),
+      A("public_key", "\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINU78xKkoqZBoXjckkmHwe+AXwnkNI5kv8rBQDIK2DK7 simon@framework\"", "k3s.df:38", {src: "config.ssh_public_key  config.df:43; stacks/platform.df:43"})], world: [W("id"), W("fingerprint")]};
+    if (key === "k3s.net") return {site: "k3s.df:42", a: [A("name", `"${nm}"`, "k3s.df:42"), A("regions", "[\"BHS5\"]", "k3s.df:42")], world: [W("id"), W("vlan_id")]};
+    if (key === "k3s.subnet") return {site: "k3s.df:44", a: [A("network", "net", "k3s.df:44"), A("region", "\"BHS5\"", "k3s.df:44"),
+      A("range", "\"10.0.0.0/24\"", "k3s.df:44", {src: "input range = \"10.0.0.0/24\"  k3s.df:24"}), A("dhcp", "true", "k3s.df:44")], world: [W("id")]};
+    if (key === "backup") return {site: "stacks/platform.df:52", a: [A("description", `"${nm}-backup"`, "stacks/platform.df:53"), A("roles", "[\"objectstore_operator\"]", "stacks/platform.df:54")], world: [W("id"), W("username")]};
+    if (key === "backups") return {site: "stacks/platform.df:57", a: [A("region", "\"CA-EAST-TOR\"", "stacks/platform.df:58", {src: "config.storage_region  config.df:37"}),
+      A("name", `"${nm}-backups"`, "stacks/platform.df:59"), A("versioning", "true", "stacks/platform.df:60"), A("owner", "backup", "stacks/platform.df:61")], world: [W("id")]};
+    if (key === "block") return {site: "stacks/platform.df:85", a: [A("metadata.name", "\"block\"", "stacks/platform.df:86"), A("provisioner", "\"rancher.io/local-path\"", "stacks/platform.df:87"),
+      A("reclaimPolicy", "\"Retain\"", "stacks/platform.df:88"), A("volumeBindingMode", "\"WaitForFirstConsumer\"", "stacks/platform.df:89")], world: [W("metadata.uid")]};
+    if (key === "read") return sourceDoc("io.read(\"ssh://ubuntu@${server.public_ip}/etc/rancher/k3s/k3s.yaml\")", "k3s.df:181", n);
+    if (key === "oci-fj") return sourceDoc("oci.resolve(oci.with_tag(\"codeberg.org/forgejo/forgejo\", \"16.0.4-rootless\"))", "forgejo.df:59", n);
+    const rec = {"k3s.api": ["k3s.df", 185, `"api${sfx}"`, "\"A\"", "server.public_ip", "config.dns_suffix  config.df:23-24"],
+      "apex": ["stacks/platform.df", 77, `"${PR ? "" : e}"`, "\"A\"", "k3s.ingress_ip", "config.apex_subdomain  config.df:25-26"],
+      "forgejo.record": ["forgejo.df", 158, `"git${sfx}"`, "\"CNAME\"", `"${base}."`, "config.dns_suffix  config.df:23-24"],
+      "synapse.record": ["synapse.df", 176, `"matrix${sfx}"`, "\"CNAME\"", `"${base}."`, "config.dns_suffix  config.df:23-24"],
+      "pocket_id.record": ["pocket_id.df", 145, `"id${sfx}"`, "\"CNAME\"", `"${base}."`, "config.dns_suffix  config.df:23-24"]}[key];
+    if (rec) { const [f, l0, sub, type, target, ssrc] = rec; return {site: `${f}:${l0}`, a: [
+      A("zone", "\"vodik.xyz\"", `${f}:${l0 + 1}`, {src: "config.zone  config.df:14"}), A("subdomain", sub, `${f}:${l0 + 2}`, {src: ssrc}),
+      A("type", type, `${f}:${l0 + 3}`), A("target", target, `${f}:${l0 + 4}`, type === "\"CNAME\"" ? {src: "config.apex_target  config.df:28"} : {}), A("ttl", "300", `${f}:${l0 + 5}`)],
+      world: [W("id")]}; }
     if (key === "forgejo.data") return {site: "forgejo.df:36", a: [
       A("metadata.name", "\"forgejo-data\"", "forgejo.df:37"), A("metadata.namespace", "apps", "forgejo.df:37"),
-      A("metadata.labels.owner", "\"simon\"", "policy.df:6", {src: "@default, every resource with metadata"}),
+      A("metadata.labels.owner", "\"simon\"", "policy.df:6", {src: "@default  policy.df:6"}),
       A("spec.accessModes", "[\"ReadWriteOnce\"]", "forgejo.df:38"), A("spec.storageClassName", "\"block\"", "forgejo.df:39"),
       A("spec.resources.requests.storage", PR ? "50Gi" : "20Gi", "forgejo.df:40", {src: PR ? "set { sizes.forgejo = 50Gi } where env == \"prod\"  stacks/apps.df:13" : "input sizes.forgejo = 20Gi  stacks/apps.df:6"})],
-      world: [["spec.volumeName", "\"pvc-3f1e…\""], ["status.capacity.storage", PR ? "50Gi" : "20Gi"]], status: ["Bound"], invented: "volumeName"};
+      world: [W("spec.volumeName"), W("status.capacity.storage")]};
     if (key === "forgejo.server") {
-      const host = `git.${base}`, img = PR ? "sha256:5b0e44c2…71fd" : NEW;
+      const host = `git.${base}`;
       const envs = [["FORGEJO__database__DB_TYPE", "sqlite3", 61], ["FORGEJO__server__DOMAIN", host, 62], ["FORGEJO__server__ROOT_URL", `https://${host}/`, 63], ["FORGEJO__server__SSH_DOMAIN", host, 64],
         ["FORGEJO__server__SSH_PORT", "2222", 65], ["FORGEJO__server__SSH_LISTEN_PORT", "2222", 66], ["FORGEJO__security__INSTALL_LOCK", "true", 67], ["FORGEJO__service__DISABLE_REGISTRATION", "false", 70],
         ["FORGEJO__service__ALLOW_ONLY_EXTERNAL_REGISTRATION", "true", 71], ["FORGEJO__service__SHOW_REGISTRATION_BUTTON", "false", 72], ["FORGEJO__service__ENABLE_INTERNAL_SIGNIN", "false", 74],
         ["FORGEJO__service__ENABLE_BASIC_AUTHENTICATION", "false", 75], ["FORGEJO__oauth2_client__ENABLE_AUTO_REGISTRATION", "true", 78], ["FORGEJO__oauth2_client__UPDATE_AVATAR", "true", 81], ["FORGEJO__picture__DISABLE_GRAVATAR", "true", 82]];
       const c = "spec.template.spec.containers[name=forgejo]";
-      return {site: "forgejo.df:43, use forgejo  stacks/apps.df:82", a: [
+      return {site: "forgejo.df:43; use forgejo  stacks/apps.df:82", a: [
         A("metadata.name", "\"forgejo\"", "forgejo.df:44"), A("metadata.namespace", "apps", "forgejo.df:44"),
-        A("metadata.labels.owner", "\"simon\"", "policy.df:6", {src: "@default, every resource with metadata"}),
+        A("metadata.labels.owner", "\"simon\"", "policy.df:6", {src: "@default  policy.df:6"}),
         A("spec.replicas", "1", "forgejo.df:45"), A("spec.strategy.type", "\"Recreate\"", "forgejo.df:46"),
-        A("spec.revisionHistoryLimit", PR ? "3" : "1", "policy.df:166", {src: `history = ${PR ? 3 : 1} where env ${PR ? "==" : "!="} "prod"  policy.df:${PR ? 164 : 165}`, r: ["provider default", "the cluster's own is 10; the policy sets it over it"]}),
+        A("spec.revisionHistoryLimit", PR ? "3" : "1", "policy.df:166", {src: `history = ${PR ? 3 : 1} where env ${PR ? "==" : "!="} "prod"  policy.df:${PR ? 164 : 165}`, r: ["provider default", "10, overridden"]}),
         A("spec.selector.matchLabels", "{ app = \"forgejo\" }", "forgejo.df:47"),
         A("spec.template.spec.securityContext", "{ runAsNonRoot = true, runAsUser = 1000, runAsGroup = 1000, fsGroup = 1000, seccompProfile.type = \"RuntimeDefault\" }", "forgejo.df:50"),
-        A("spec.template.spec.automountServiceAccountToken", "false", "policy.df:171", {src: "@default, every Deployment"}),
-        A(`${c}.image`, `"codeberg.org/forgejo/forgejo@${img}"`, "forgejo.df:59", PR ? {src: "oci.resolve(\"…:16.0.4-rootless\")"} : {src: "oci.resolve(\"…:16.0.4-rootless\"), the lab tag", r: ["change", `base and live …@${OLD}; the tag moved at 09:20:14`],
-          why: WHY.fj.tree}),
-        ...envs.map(([k, v, ln]) => A(`${c}.env[${k}]`, `"${v}"`, `forgejo.df:${ln}`, k.endsWith("ENABLE_INTERNAL_SIGNIN") && PR && !DONE["d-fjdrift"] ? {r: ["drift", "live \"true\", kubectl-set 08:40:12 (managedFields)"], why: WHY.fjdrift.tree} : {})),
+        A("spec.template.spec.automountServiceAccountToken", "false", "policy.df:171", {src: "@default  policy.df:171"}),
+        A(`${c}.image`, PR ? `"codeberg.org/forgejo/forgejo@${PH}"` : `"codeberg.org/forgejo/forgejo@${NEW}"`, "forgejo.df:59", PR ? {src: "oci.resolve(\"codeberg.org/forgejo/forgejo:16.0.4-rootless\")"} : {src: "oci.resolve(\"codeberg.org/forgejo/forgejo:16.0.4-rootless\")", r: ["change", `base, live …@${OLD}`], why: WHY.fj.tree}),
+        ...envs.map(([k, v, ln]) => A(`${c}.env[${k}]`, `"${v}"`, `forgejo.df:${ln}`, k.endsWith("ENABLE_INTERNAL_SIGNIN") && PR && !DONE["d-fjdrift"] ? {r: ["drift", "live \"true\", kubectl-set 08:40:12"], why: WHY.fjdrift.tree} : {})),
         A(`${c}.ports[name=http]`, "{ containerPort = 3000, protocol = \"TCP\" }", "forgejo.df:85"), A(`${c}.ports[name=ssh]`, "{ containerPort = 2222, protocol = \"TCP\" }", "forgejo.df:86"),
         A(`${c}.volumeMounts[name=data]`, "{ mountPath = \"/var/lib/gitea\", subPath = \"data\" }", "forgejo.df:90"),
         A(`${c}.readinessProbe`, "{ httpGet = { path = \"/api/healthz\", port = \"http\" }, periodSeconds = 10 }", "forgejo.df:91"),
-        A(`${c}.resources`, "{ requests = { cpu = 100m, memory = 256Mi }, limits = { cpu = 1, memory = 1Gi } }", "forgejo.df:93", {src: "the module's own write, over the policy's @default requests 100m/128Mi and limits 500m/256Mi  policy.df:23, 33"}),
-        A(`${c}.securityContext`, "{ allowPrivilegeEscalation = false, capabilities.drop = [\"ALL\"] }", "policy.df:43", {src: "@default, every container of every Deployment"}),
-        A("spec.template.spec.volumes[name=data].persistentVolumeClaim.claimName", "data  (\"forgejo-data\")", "forgejo.df:95")].map(a => a.p.startsWith(c + ".") ? {...a, g: c, p: a.p.slice(c.length + 1)} : a),
-        world: [["metadata.uid", "\"8c2d…-a1f0\""], ["metadata.generation", PR ? "12" : "4"], ["status.observedGeneration", PR ? "12" : "4"], ["status.replicas", "1"], ["status.availableReplicas", "1"]],
-        status: ["Available True: MinimumReplicasAvailable", "Progressing True: NewReplicaSetAvailable", "Ready 1/1"], invented: "uid, generation" + (PR ? ", prod's digest" : "")};
+        A(`${c}.resources`, "{ requests = { cpu = 100m, memory = 256Mi }, limits = { cpu = 1, memory = 1Gi } }", "forgejo.df:93", {src: "forgejo.df:93, over @default  policy.df:23, 33"}),
+        A(`${c}.securityContext`, "{ allowPrivilegeEscalation = false, capabilities.drop = [\"ALL\"] }", "policy.df:43", {src: "@default  policy.df:43"}),
+        A("spec.template.spec.volumes[name=data].persistentVolumeClaim.claimName", "data", "forgejo.df:95")].map(a => a.p.startsWith(c + ".") ? {...a, g: c, p: a.p.slice(c.length + 1)} : a),
+        world: [W("metadata.uid"), W("metadata.generation"), ["status.availableReplicas", "1"]]};
     }
   }
   if (proj === "shop") {
-    if (key === "pg") return {site: "stacks/shop.df:93", a: [
-      PR ? A("name", "\"shop-orders-prod\"", "stacks/shop.df:94", {r: ["change", "base and live \"shop-db-prod\"; the name forces a replace"], why: WHY.pg.tree}) : A("name", "\"shop-db-staging\"", "stacks/shop.df:94"),
-      A("vpc", "main", "stacks/shop.df:95"),
-      A("ingress[0]", "{ from_port = 5432, to_port = 5432, protocol = \"tcp\", security_groups = [https] }", "stacks/shop.df:96"),
-      A("tags.team", "\"shop\"", "policy.df:5", {src: "set r.tags = { team = \"shop\" } where r in resource"}),
-      A("egress", "[{ from_port = 0, to_port = 0, protocol = \"-1\", cidr_blocks = [\"0.0.0.0/0\"] }]", "", {r: ["provider default", "@internal: AWS adds it; dform declines to own it"]})],
-      world: [["id", PR ? "\"sg-0e5c1a7d2b9f3c812\"" : "\"sg-04b7e19a6c3d2f5e0\""], ["arn", "\"arn:aws:ec2:us-east-1:123456789012:security-group/…\""], ["owner_id", "\"123456789012\""]],
-      status: ["a security group has no health: status says -"], invented: "ids"};
-    if (key === "https") return {site: "stacks/shop.df:87", a: [
-      A("name", `"shop-web-${e}"`, "stacks/shop.df:88"), A("vpc", "main", "stacks/shop.df:89"),
-      A("ingress[0]", "{ from_port = 443, to_port = 443, protocol = \"tcp\", cidr_blocks = [\"0.0.0.0/0\"] }", "stacks/shop.df:90"),
-      ...(PR && !DONE["d-drift"] ? [A("ingress[1]", "absent", "stacks/shop.df:90", {r: ["drift", "live { from_port = 22, to_port = 22, protocol = \"tcp\", cidr_blocks = [\"0.0.0.0/0\"] }, ops@example.com 07:58:21"], why: WHY.https.tree})] : []),
-      A("tags.team", "\"shop\"", "policy.df:5")],
-      world: [["id", "\"sg-0a93c4e7b1d2f6058\""]], status: ["a security group has no health: status says -"], invented: "ids"};
-    if (key === "orders") return {site: "stacks/shop.df:30", a: [
-      A("identifier", `"orders-${e}"`, "stacks/shop.df:31"),
-      A("instance_class", PR ? "\"db.m6g.large\"" : "\"db.t3.micro\"", "stacks/shop.df:32", {src: PR ? "set database.class  stacks/shop.df:23, over the input's \"db.t3.micro\"  :3" : "input database.class  stacks/shop.df:3"}),
-      A("multi_az", PR ? "true" : "false", "stacks/shop.df:33", {src: PR ? "stacks/shop.df:22" : "stacks/shop.df:3"}),
-      A("backup_retention_period", PR ? "14" : "1", "stacks/shop.df:34", {src: PR ? "stacks/shop.df:24" : "stacks/shop.df:3"}),
-      A("publicly_accessible", "false", "stacks/shop.df:35", {src: "input public = false  stacks/shop.df:2"}),
-      A("password", "(sensitive) #orders", "stacks/shop.df:36", {src: "random.password(\"orders\"), derived from the deployment's master"}),
-      A("vpc_security_groups", PR ? "[postgres]  (the replacement's id, once made)" : "[postgres]", "stacks/shop.df:37", PR ? {r: ["change", "follows the postgres replace"], why: WHY.orders.tree} : {}),
-      ...(PR ? [A("lifecycle", "prevent_destroy", "stacks/shop.df:55")] : []),
-      A("engine_version", "\"16.4\"", "", {r: ["provider default", "@internal: dform declines to own it"]})],
-      world: [["resource_id", PR ? "\"db-X4M9QZ…\"" : "\"db-7KQ2PL…\""], ["endpoint", `"orders-${e}.c9x1k2.us-east-1.rds.amazonaws.com:5432"`]],
-      status: ["available"], invented: "endpoint"};
+    const f = "stacks/shop.df", zones = ["1a", "1b", "1c", "1d"];
+    if (key === "src/az" || id === "src/az") return sourceDoc("aws.availability_zone(\"available\", availability_zone, n)", `${f}:15`, n);
+    if (key === "vpc") return {site: `${f}:7`, a: [A("cidr_block", "\"10.0.0.0/16\"", `${f}:7`), A("tags.team", "\"shop\"", "policy.df:5")], world: [W("id")]};
+    if (key && key.startsWith("sub-")) { const z = key.slice(4), i = zones.indexOf(z); return {site: `${f}:12`, a: [A("vpc", "main", `${f}:13`),
+      A("cidr_block", `"10.0.${i}.0/24"`, `${f}:14`, {src: `cidr(${i}) = inet.subnet(main.cidr_block, 8, n)  ${f}:9; n = ${i}, a row of aws.availability_zone`}),
+      A("availability_zone", `"us-east-${z}"`, `${f}:15`), A("tags.team", "\"shop\"", "policy.df:5")], world: [W("id"), W("map_public_ip_on_launch")]}; }
+    if (key && key.startsWith("web-")) { const z = key.slice(4); return {site: `${f}:74`, a: [
+      A("instance_type", PR ? "\"m6g.large\"" : "\"t3.small\"", `${f}:75`, {src: PR ? `set web.type = "m6g.large" where env == "prod"  ${f}:26` : `input web.type  ${f}:4`}),
+      A("subnet", `private-us-east-${z}`, `${f}:76`), A("vpc_security_groups", "[https]", `${f}:77`), A("tags", `{ Name = "shop-web-${e}", team = "shop" }`, `${f}:78`, {src: `${f}:78; team: policy.df:5`})],
+      world: [W("id"), W("private_ip")]}; }
+    if (key === "lb") return {site: `${f}:81`, a: [A("name", `"shop-${e}"`, `${f}:82`),
+      A("subnets", PR ? "[private-us-east-1a, private-us-east-1b, private-us-east-1c, private-us-east-1d]" : "[private-us-east-1a, private-us-east-1b, private-us-east-1c]", `${f}:83`, PR ? {r: ["change", "+ private-us-east-1d"]} : {}),
+      A("security_groups", "[https]", `${f}:84`), A("tags.team", "\"shop\"", "policy.df:5")], world: [W("arn"), W("dns_name")]};
+    if (key === "connect") return {site: `${f}:42`, a: [A("policy", "json.encode({ Statement = [{ Action = \"rds-db:connect\", Resource = \"arn:aws:rds-db:us-east-1:*:dbuser:${id}/app\" }] })", `${f}:43`, {src: `id = orders.resource_id  ${f}:49`}), A("tags.team", "\"shop\"", "policy.df:5")], world: [W("arn")]};
+    if (key === "role") return {site: `${f}:61`, a: [A("name", `"shop-app-${e}"`, `${f}:62`),
+      A("assume_role_policy", "json.encode({ Statement = [{ Effect = \"Allow\", Action = \"sts:AssumeRole\", Principal = { Service = \"ec2.amazonaws.com\" } }] })", `${f}:63`),
+      A("managed_policy_arns", PR ? "[connect-db-X4M9QZ]" : "[connect-db-7KQ2PL]", `${f}:70`, {src: `[ ref(p) | p in aws.iam_policy ]  ${f}:70`}), A("tags.team", "\"shop\"", "policy.df:5")], world: [W("arn")]};
+    if (key === "pg") return {site: `${f}:93`, a: [
+      PR ? A("name", "\"shop-orders-prod\"", `${f}:94`, {r: ["change", "base, live \"shop-db-prod\" · forces replace"], why: WHY.pg.tree}) : A("name", "\"shop-db-staging\"", `${f}:94`),
+      A("vpc", "main", `${f}:95`),
+      A("ingress[0]", "{ from_port = 5432, to_port = 5432, protocol = \"tcp\", security_groups = [https] }", `${f}:96`),
+      A("tags.team", "\"shop\"", "policy.df:5", {src: "set r.tags = { team = \"shop\" } where r in resource  policy.df:5"}),
+      A("egress", PH, "", {r: ["provider default", "@internal"]})],
+      world: [W("id"), W("arn")]};
+    if (key === "https") return {site: `${f}:87`, a: [
+      A("name", `"shop-web-${e}"`, `${f}:88`), A("vpc", "main", `${f}:89`),
+      A("ingress[0]", "{ from_port = 443, to_port = 443, protocol = \"tcp\", cidr_blocks = [\"0.0.0.0/0\"] }", `${f}:90`),
+      ...(PR && !DONE["d-drift"] ? [A("ingress[1]", "absent", `${f}:90`, {r: ["drift", "live { from_port = 22, to_port = 22, protocol = \"tcp\", cidr_blocks = [\"0.0.0.0/0\"] }, ops@example.com 07:58:21"], why: WHY.https.tree})] : []),
+      A("tags.team", "\"shop\"", "policy.df:5")], world: [W("id")]};
+    if (key === "orders") return {site: `${f}:30`, a: [
+      A("identifier", `"orders-${e}"`, `${f}:31`),
+      A("instance_class", PR ? "\"db.m6g.large\"" : "\"db.t3.micro\"", `${f}:32`, {src: PR ? `set database.class  ${f}:23, over input  ${f}:3` : `input database.class  ${f}:3`}),
+      A("multi_az", PR ? "true" : "false", `${f}:33`, {src: PR ? `${f}:22` : `${f}:3`}),
+      A("backup_retention_period", PR ? "14" : "1", `${f}:34`, {src: PR ? `${f}:24` : `${f}:3`}),
+      A("publicly_accessible", "false", `${f}:35`, {src: `input public = false  ${f}:2`}),
+      A("password", "(sensitive) #orders", `${f}:36`, {src: "random.password(\"orders\")"}),
+      A("vpc_security_groups", "[postgres]", `${f}:37`, PR ? {r: ["change", "postgres's id, after its replace"], why: WHY.orders.tree} : {}),
+      ...(PR ? [A("lifecycle", "prevent_destroy", `${f}:55`)] : []),
+      A("engine_version", PH, "", {r: ["provider default", "@internal"]})],
+      world: [W("resource_id"), W("endpoint")]};
   }
   if (proj === "gke") {
-    const pr = {dev: ["platform-dev-973682", "platform-dev", "172.16.3.96/28"], stg: ["platform-stg", "platform-stg", "172.16.3.112/28"], prod: ["platform-prod", "platform-prod", "172.16.3.128/28"]}[e];
+    const pr = {dev: ["platform-dev-973682", "platform-dev", "172.16.3.96/28", "10.141.76.0/22", "10.193.0.0/24"], stg: ["platform-stg", "platform-stg", "172.16.3.112/28", "10.141.100.0/22", "10.193.1.0/24"], prod: ["platform-prod", "platform-prod", "172.16.3.128/28", "10.141.124.0/22", "10.193.2.0/24"]}[e];
     const f = "stacks/gke_platform.df", set = {dev: 49, stg: 67, prod: 85}[e];
+    if (id === "src/csv") return sourceDoc("csv.decode(io.read(\"data/peerings.csv\"))", `${f}:33`, n);
+    if (id === "src/dash") return sourceDoc("json.decode(io.read(\"files/dashboard-gke-platform.json\"))", `${f}:208`, n);
+    const proj_ = A("project", `"${pr[0]}"`, "", {src: `gcp.project.id  ${f}:${set + 1}`});
     if (key === "gke") return {site: `${f}:185`, a: [
-      A("cluster_type", "\"autopilot-private\"", `${f}:186`), A("env", `"${e}"`, `${f}:187`, {src: "the deployment's key"}),
-      A("project_id", `"${pr[0]}"`, `${f}:188`, {src: `gcp.project  ${f}:${set}`}), A("project_name", `"${pr[1]}"`, `${f}:189`),
+      A("cluster_type", "\"autopilot-private\"", `${f}:186`), A("env", `"${e}"`, `${f}:187`),
+      A("project_id", `"${pr[0]}"`, `${f}:188`, {src: `gcp.project  ${f}:${set + 1}`}), A("project_name", `"${pr[1]}"`, `${f}:189`),
       A("name", `"${pr[1]}-gke"`, `${f}:190`), A("network_id", `"projects/${pr[0]}/global/networks/${pr[1]}-network"`, `${f}:191`),
       A("subnetwork", "gke_subnet", `${f}:192`), A("master_control_plane_cidr", `"${pr[2]}"`, `${f}:193`, {src: `gke.ranges.control_plane  ${f}:${set + 9}`}),
       A("ip_range_pods", `"${pr[1]}-gke-pods-range"`, `${f}:194`), A("ip_range_services", `"${pr[1]}-gke-svc-range"`, `${f}:195`),
       A("enable_secret_manager_addon", "true", `${f}:197`), A("deletion_protection", "false", `${f}:198`),
-      A("release_channel", "\"REGULAR\"", "", {r: ["provider default", "@internal: dform declines to own it"]})],
-      world: [["id", `"projects/${pr[0]}/locations/us-east1/clusters/${pr[1]}-gke"`], ["endpoint", "\"10.141.124.2\""], ["node_pools", "autopilot: managed by GKE, none declared"]],
-      status: ["RUNNING"], invented: "endpoint"};
+      A("release_channel", "\"REGULAR\"", "", {r: ["provider default", "@internal"]})],
+      world: [W("id"), W("endpoint")]};
     if (key === "net") {
-      const rows = {dev: [["envoy-dev", "projects/envoy-dev-426188/…/envoy-dev-network", 2]], stg: [["envoy-stg", "projects/envoy-stg-597462/…/envoy-stg-network", 3], ["edge-stg", "projects/edge-stg/…/envoy-proxy-stg", 4]], prod: [["edge-prod", "projects/edge-prod/…/envoy-proxy-prod", 5], ["envoy-prod", "projects/envoy-prod-318204/…/envoy-prod-network", 6]]}[e];
+      const rows = {dev: [["envoy-dev", "projects/envoy-dev-426188/global/networks/envoy-dev-network", 2]], stg: [["envoy-stg", "projects/envoy-stg-597462/global/networks/envoy-stg-network", 3], ["edge-stg", "projects/edge-stg/global/networks/envoy-proxy-stg", 4]], prod: [["edge-prod", "projects/edge-prod/global/networks/envoy-proxy-prod", 5], ["envoy-prod", "projects/envoy-prod-318204/global/networks/envoy-prod-network", 6]]}[e];
       return {site: `${f}:165`, a: [A("project", `"${pr[0]}"`, `${f}:166`), A("name", `"${pr[1]}-network"`, `${f}:167`),
-        ...rows.map(([nm, p, ln]) => A(`peerings[name=${nm}]`, `{ peer_network = "${p}" }`, `${f}:168`, {src: `peering("${e}", "${nm}", …)  data/peerings.csv:${ln}`}))],
-        world: [["id", `"projects/${pr[0]}/global/networks/${pr[1]}-network"`]], status: ["no health: status says -"]};
+        ...rows.map(([nm, p, ln]) => A(`peerings[name=${nm}]`, `{ peer_network = "${p}" }`, `${f}:168`, {src: `peering("${e}", "${nm}", _)  data/peerings.csv:${ln}`}))], world: [W("id")]};
     }
+    if (key === "sub") return {site: `${f}:138`, a: [{...proj_, s: `${f}:139`}, A("region", "\"us-east1\"", `${f}:140`), A("network", `"projects/${pr[0]}/global/networks/${pr[1]}-network"`, `${f}:141`),
+      A("name", `"${pr[1]}-gke-subnet"`, `${f}:142`), A("ip_cidr_range", `"${pr[3]}"`, `${f}:143`, {src: `gke.ranges.subnet  ${f}:${set + 10}`}), A("subnet_private_access", "true", `${f}:144`),
+      A("secondary_ranges[range_name=" + pr[1] + "-gke-pods-range]", "{ … }", `${f}:146`), A("secondary_ranges[range_name=" + pr[1] + "-gke-svc-range]", "{ … }", `${f}:147`)].map(a => a.v === "{ … }" ? {...a, v: PH} : a), world: [W("id"), W("gateway_address")]};
+    if (key === "proxy") return {site: `${f}:152`, a: [{...proj_, s: `${f}:153`}, A("region", "\"us-east1\"", `${f}:154`), A("network", `"projects/${pr[0]}/global/networks/${pr[1]}-network"`, `${f}:155`),
+      A("name", `"${pr[1]}-proxy"`, `${f}:156`), A("purpose", "\"REGIONAL_MANAGED_PROXY\"", `${f}:157`), A("role", "\"ACTIVE\"", `${f}:158`), A("ip_cidr_range", `"${pr[4]}"`, `${f}:159`, {src: `gcp.ranges.proxy  ${f}:${set + 5}`})], world: [W("id")]};
+    if (key === "ip") return {site: `${f}:172`, a: [{...proj_, s: `${f}:173`}, A("region", "\"us-east1\"", `${f}:174`), A("name", "\"gke-platform-grpc\"", `${f}:175`),
+      A("address_type", "\"INTERNAL\"", `${f}:176`, {src: `gke.static_ips  ${f}:${set + 14}`}), A("subnetwork", "gke_subnet", `${f}:177`)], world: [W("id"), W("address")]};
+    if (key === "dash") return {site: `${f}:206`, a: [{...proj_, s: `${f}:207`}, A("dashboard_json", "json.decode(io.read(\"files/dashboard-gke-platform.json\"))", `${f}:208`)], world: [W("id")]};
+    if (key === "alerts") return {site: `${f}:222`, a: [A("project_id", `"${pr[0]}"`, `${f}:223`), A("notification_channel_type", "\"slack\"", `${f}:224`),
+      A("notification_channel_display_name", "\"Slack\"", `${f}:225`), A("enable_standard_gke_alerts", "true", `${f}:226`), A("source", "\"git@github.com:example-org/terraform-gcp-alert-metrics.git?ref=v1.5.0\"", `${f}:227`)], world: [W("id")]};
   }
-  if (proj === "k3s" && key === "server") return {site: "stacks/platform.df:24", a: [
-    A("image", PR ? "\"Ubuntu 24.04\"" : "\"Ubuntu 26.04\"", "stacks/platform.df:15", PR ? {src: "the @default  stacks/platform.df:4"} : {src: "set image = \"Ubuntu 26.04\" where env == \"staging\"  stacks/platform.df:15, over the @default \"Ubuntu 24.04\"  :4"})],
-    world: [["public_ip", PR ? "\"51.79.88.4\"" : "\"51.79.104.37\""]], status: [PR ? "ACTIVE" : "ACTIVE since 09:15:40"], partial: true};
+  if (proj === "k3s") {
+    const p = "stacks/platform.df", a = "stacks/apps.df", S = e === "staging";
+    if (key === "admin") return {site: `${p}:17`, a: [A("name", `"k3s-${e}-admin"`, `${p}:18`), A("public_key", "\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGqZ1x3m0pWb5nX0kB7vXq9sQ2y8Tq0q3m7cJ4yQx1aB ops@example.com\"", `${p}:19`)], world: [W("id")]};
+    if (key === "server") return {site: `${p}:24`, a: [A("name", `"k3s-${e}"`, `${p}:25`), A("region", "\"BHS5\"", `${p}:26`),
+      A("flavor", S ? "\"b2-7\"" : "\"b2-15\"", `${p}:27`, {src: S ? `input flavor  ${p}:4` : `set flavor = "b2-15" where env == "prod"  ${p}:14`}),
+      A("image", S ? "\"Ubuntu 26.04\"" : "\"Ubuntu 24.04\"", `${p}:28`, S ? {src: "set image = \"Ubuntu 26.04\" where env == \"staging\"  stacks/platform.df:15 (5d02b7e)"} : {}),
+      A("ssh_key", "admin", `${p}:29`), A("user_data", "\"#!/bin/sh\\ncurl -sfL https://get.k3s.io | sh -\\n\"", `${p}:30`, {src: `k3s_init  ${p}:22`})],
+      world: [["public_ip", S ? "\"51.79.104.37\"" : "\"51.79.88.4\""], W("id")]};
+    if (key === "read") return sourceDoc("io.read(\"ssh://ubuntu@${server.public_ip}/etc/rancher/k3s/k3s.yaml\")", `${p}:33`, n);
+    if (key === "ns") return {site: `${p}:37`, a: [A("metadata.name", "\"apps\"", `${p}:37`)], world: [W("metadata.uid")]};
+    if (key === "api" || key === "www") { const www = key === "www", f = www ? a : p, l0 = www ? 31 : 40; return {site: `${f}:${l0}`, a: [A("zone", "\"example.com\"", `${f}:${l0 + 1}`),
+      A("subdomain", `"${www ? "www" : "api"}.${e}"`, `${f}:${l0 + 2}`), A("type", "\"A\"", `${f}:${l0 + 3}`), A("target", www ? "platform[env].ingress" : "server.public_ip", `${f}:${l0 + 4}`), A("ttl", "300", `${f}:${l0 + 5}`)], world: [W("id")]}; }
+    if (key === "web") return {site: `${a}:12`, a: [A("metadata", "{ name = \"web\", namespace = \"apps\" }", `${a}:13`),
+      A("spec.replicas", S ? "2" : "3", `${a}:14`, S ? {src: `input replicas = 2  ${a}:3`} : {src: `set replicas = 3 where env == "prod"  ${a}:10`, r: ["ownership lost", "live 5, kubectl (Update) 08:12:40"], why: WHY.repl.tree}),
+      A("spec.selector.matchLabels", "{ app = \"web\" }", `${a}:15`), A("spec.template.metadata.labels", "{ app = \"web\" }", `${a}:16`),
+      A("spec.template.spec.containers[name=web].image", "\"nginx:1.27@sha256:c4ab9b7d9cdbba02d12e91035d6350386d1c05daa28b1f5c816f3d3f34c75147\"", `${a}:19`),
+      A("spec.template.spec.containers[name=web].ports", "[{ containerPort = 80, protocol = \"TCP\" }]", `${a}:20`)], world: [W("metadata.uid"), ["status.availableReplicas", S ? PH : "4"]]};
+    if (key === "svc") return {site: `${a}:24`, a: [A("metadata", "{ name = \"web\", namespace = \"apps\" }", `${a}:25`), A("spec.selector", "{ app = \"web\" }", `${a}:26`),
+      A("spec.ports", "[{ port = 80, targetPort = 80, protocol = \"TCP\" }]", `${a}:27`)], world: [W("spec.clusterIP")]};
+  }
+  if (proj === "rel") {
+    if (id === "src/build" || id === "src/tested") return sourceDoc(`sql.table("${n.name}")`, "terry.org", n);
+    if (id === "src/time") return sourceDoc("time.now()", "terry.org", n);
+    if (key === "eu1" || key === "us1") return {site: "stacks/releases.df:14", a: [A("name", `"${n.name}"`, "stacks/releases.df:14"),
+      A("apps", "[{ app = \"shop\", version = \"1.4.1\" }]", "stacks/releases.df:15", key === "eu1" ? {src: "candidate(cell, app, version)  stacks/releases.df:12", r: ["change", "base, live [{ app = \"shop\", version = \"1.4.0\" }]"], why: WHY.eu1.tree} : {src: "candidate(cell, app, version)  stacks/releases.df:12"})],
+      world: [W("id")]};
+  }
   return null;
 }
 
@@ -1820,8 +1906,8 @@ function estateInsp(el) {
     const w = n.lines.map(id => WHY[id]).find(Boolean), st = nodeState(p, n);
     title = `${n.type} ${n.name}`;
     doc = docOf(cur, n);
-    if (n.planned) facts.push(["exists", "not yet: the plan makes it"]);
-    else facts.push(["health", healthWord(n.health) || "not judged"]);
+    if (n.planned) facts.push(["exists", "no: planned"]);
+    else if (n.kind !== "source") facts.push(["health", healthWord(n.health) || "not judged"]);
     if (!n.planned && readingWord(n)) facts.push(["reading", readingWord(n)]);
     if (st) {
       facts.push(["plan", `${st.mark} ${st.text}`]);
@@ -1849,21 +1935,23 @@ function estateInsp(el) {
   const laneName = (l) => l === "sources" ? SRC_LANE.name : ((p.deps.find(d => d.id === l) || {}).name || l);
   const depTree = Object.entries(byLane).map(([l, ns]) => N(laneName(l), `${ns.length}`, "", ns.map(n => N(`${n.type} ${n.name}${n.planned ? " (planned)" : ""}`, (m.regions.find(r => r.id === n.region) || {}).label))));
   const d = p.decisions.find(d => members.some(n => n.lines && n.lines.includes(d.line)));
-  const docHTML = !doc ? "" : `<div class="blk2"><div class="lab">Desired · as the plan prints it</div><div class="at-src" style="padding-left:0">${esc(doc.site)}</div>
+  const phx = (t) => esc(t).split(PH).join(`<span class="ph">…</span>`);
+  const docHTML = !doc ? "" : `<div class="blk2"><div class="lab">${doc.source ? "Source" : "Desired"}</div><div class="at-src" style="padding-left:0">${esc(doc.site)}</div>
+      <div class="ph-key">values not in the program files are shown as <span class="ph">…</span></div>
       <div class="doc">${doc.a.map((a, i) => {
         const head = a.g && (i === 0 || doc.a[i - 1].g !== a.g) ? `<div class="at-g">${esc(a.g)}</div>` : "";
         const open = ATTR_OPEN.has(i), why = a.why || [N(`${a.p} = ${a.v}`, a.s || "provider", "", a.src ? [N(a.src)] : [])];
-        return `${head}<div class="at ${a.g ? "in" : ""} ${a.r ? "rd-" + a.r[0].split(" ")[0] : ""}"><button class="at-b" data-attr="${i}" aria-expanded="${open}"><span class="at-m" aria-hidden="true">${open ? "▾" : "▸"}</span><span class="at-l"><span class="at-p">${esc(a.p)}</span> = <span class="at-v">${esc(a.v)}</span></span><span class="at-s">${esc(a.s || "provider")}</span></button>
-          ${a.src ? `<div class="at-src">from ${esc(a.src)}</div>` : ""}${a.r ? `<div class="at-r"><span class="word w-${({drift: "drift", change: "change", "provider default": "default", "ownership lost": "owner"})[a.r[0]] || "unread"}">${esc(a.r[0])}</span> ${esc(a.r[1])}</div>` : ""}
+        return `${head}<div class="at ${a.g ? "in" : ""} ${a.r ? "rd-" + a.r[0].split(" ")[0] : ""}"><button class="at-b" data-attr="${i}" aria-expanded="${open}"><span class="at-m" aria-hidden="true">${open ? "▾" : "▸"}</span><span class="at-l"><span class="at-p">${esc(a.p)}</span> = <span class="at-v">${phx(a.v)}</span></span><span class="at-s">${esc(a.s || "provider")}</span></button>
+          ${a.src ? `<div class="at-src">${esc(a.src)}</div>` : ""}${a.r ? `<div class="at-r"><span class="word w-${({drift: "drift", change: "change", "provider default": "default", "ownership lost": "owner"})[a.r[0]] || "unread"}">${esc(a.r[0])}</span> ${esc(a.r[1])}</div>` : ""}
           ${open ? `<div class="tree at-why">${treeHTML(why)}</div>` : ""}</div>`;
-      }).join("")}</div>${doc.partial ? `<p class="note">The mock carries only the attribute the plan changes; the rest prints with dform show.</p>` : ""}</div>
-    <div class="blk2"><div class="lab">From the world · computed at apply, read at refresh</div>
-      <div class="doc">${doc.world.map(([k, v]) => `<div class="at"><div class="at-b static"><span class="at-m"></span><span class="at-l"><span class="at-p">${esc(k)}</span> = <span class="at-v">${esc(v)}</span></span><span class="at-s">world</span></div></div>`).join("")}</div></div>
-    <div class="blk2"><div class="lab">Status · the provider's words</div><div class="doc">${doc.status.map(t => `<div class="st-l ${healthCls(n0.health)}t">${esc(t)}</div>`).join("")}</div></div>`;
-  el.innerHTML = `<div class="lab">${doc ? "The resource" : "Why"}</div><h2>${esc(title)}</h2>
+      }).join("")}</div></div>
+    <div class="blk2"><div class="lab">World</div>
+      <div class="doc">${doc.world.map(([k, v]) => `<div class="at"><div class="at-b static"><span class="at-m"></span><span class="at-l"><span class="at-p">${esc(k)}</span> = <span class="at-v">${phx(v)}</span></span><span class="at-s">world</span></div></div>`).join("")}</div></div>
+    ${doc.source ? "" : `<div class="blk2"><div class="lab">Status</div><div class="doc"><div class="st-l ${healthCls(n0.health)}t">${esc(n0.health && n0.health !== "-" ? n0.health : "-")}</div></div></div>`}`;
+  el.innerHTML = `<div class="lab">${doc ? (doc.source ? "Watched source" : "The resource") : "Why"}</div><h2>${esc(title)}</h2>
     ${facts.length ? `<dl class="kv">${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>` : ""}
     ${docHTML}
-    ${doc ? (tree.length ? `<details class="blk2"><summary class="lab">Why the resource · dform why</summary>${cmd ? `<div class="cmd">$ ${esc(cmd)}</div>` : ""}<div class="tree">${treeHTML(tree)}</div></details>` : "") : `${cmd ? `<div class="cmd">$ ${esc(cmd)}</div>` : ""}
+    ${doc ? (tree.length ? `<details class="blk2"><summary class="lab">dform why</summary>${cmd ? `<div class="cmd">$ ${esc(cmd)}</div>` : ""}<div class="tree">${treeHTML(tree)}</div></details>` : "") : `${cmd ? `<div class="cmd">$ ${esc(cmd)}</div>` : ""}
     <div class="tree">${treeHTML(tree)}</div>`}
     <div class="acts"><div class="lab">What depends on this · ${down.size}</div>
       ${down.size ? `<div class="tree">${treeHTML(depTree)}</div>` : `<p>Nothing reads it.</p>`}</div>
@@ -1901,11 +1989,11 @@ P.ovh = {
       {id: "fj", dep: "apps[lab]", mark: "~", addr: "k8s.deployment forgejo.server", site: "forgejo.df:43",
         attrs: [[`spec.template.spec.containers[0].image = "…/forgejo@${OLD}" → "…/forgejo@${NEW}"`, "oci.resolve"]],
         because: "because oci.resolve answered a new digest for lab's tag at 09:20:14 (the tag moved)",
-        mag: "update · Recreate: the pod restarts on its volume"},
+        mag: "update · strategy Recreate"},
       {id: "fjdrift", dep: "apps[prod]", mark: "~", addr: "k8s.deployment forgejo.server", site: "forgejo.df:43",
         attrs: [["spec.template.spec.containers[0].env  - FORGEJO__service__ENABLE_INTERNAL_SIGNIN = \"true\"", "(drift)"]],
         held: ["drift", "held  drift at spec.template.spec.containers[0].env needs approval"],
-        mag: "revert drift · prod · the password form turns off again"},
+        mag: "revert drift"},
     ]},
   ],
   policy: {head: "policy  15 hold", lines: [
@@ -1913,7 +2001,7 @@ P.ovh = {
   ]},
   approvals: [],
   decisions: [
-    {id: "d-fjdrift", kind: "drift", word: "Drift held", t: "stacks.apps[env=prod]  k8s.deployment forgejo.server", r: "env FORGEJO__service__ENABLE_INTERNAL_SIGNIN=true, kubectl-set 08:40:12; forgejo.df:19 says to apply afterwards", line: "fjdrift"},
+    {id: "d-fjdrift", kind: "drift", word: "Drift held", t: "stacks.apps[env=prod]  k8s.deployment forgejo.server", r: "env FORGEJO__service__ENABLE_INTERNAL_SIGNIN=true · kubectl-set 08:40:12", line: "fjdrift"},
   ],
 };
 WHY.fj = {title: "~ k8s.deployment forgejo.server (lab)", cmd: "dform why forgejo.server apps env=lab", tree: [
@@ -1921,14 +2009,14 @@ WHY.fj = {title: "~ k8s.deployment forgejo.server (lab)", cmd: "dform why forgej
     N(`containers[0].image = "…/forgejo@${NEW}"`, "", "", [N("= oci.resolve(the image's tag)", "forgejo.df", "", [N(`the registry answered ${NEW} at 09:20:14; ${OLD} at the last apply`, "oci.resolve", "because")])])]),
   N("image not pinned: holds, the image carries its digest", "policy.df:110", "ok"),
   N("a Deployment on a volume rolls instead of recreating: holds (Recreate)", "policy.df:144", "ok"),
-  N("prod image tag is not a release: not in lab", "policy.df:115", "dimt"),
-  N("reach: nothing reads it; its Services select its pods by label, which is the copy's box, not an edge", "", "dimt"),
+  N("prod image tag is not a release: env != \"prod\"", "policy.df:115", "dimt"),
+  N("reach: nothing reads it", "", "dimt"),
 ]};
 WHY.fjdrift = {title: "~ k8s.deployment forgejo.server (prod)", cmd: "dform why forgejo.server apps env=prod", tree: [
   N("env as written: no FORGEJO__service__ENABLE_INTERNAL_SIGNIN", "forgejo.df:43"),
   N("drift(\"k8s.deployment\", \"forgejo.server\", \"spec.template.spec.containers[0].env[…]\", absent, \"true\")", "controller, event world 08:40:30", "no", [
     N("managedFields: kubectl-set (Update) 08:40:12", "provider k8s")]),
-  N("forgejo.df:17-20: the outage procedure sets it by hand and says to apply afterwards", "forgejo.df:19", "because"),
+  N("kubectl -n apps set env deploy/forgejo FORGEJO__service__ENABLE_INTERNAL_SIGNIN=true", "forgejo.df:19", "because"),
   N("held: drift at …env needs approval", "", "held", [N("approve(\"k8s.deployment\", \"forgejo.server\"): no row", "", "no")]),
 ]};
 WHY["pol-ovh"] = {title: "15 policies hold", cmd: "dform plan -v", tree: [
@@ -1939,8 +2027,7 @@ WHY["pol-ovh"] = {title: "15 policies hold", cmd: "dform plan -v", tree: [
   N("no deletes in prod", "policy.df:175", "ok"), N("a record outside the zone's layout", "policy.df:191", "ok"),
   N("prod keeps its data", "stacks/apps.df:118", "ok"), N("prod data is backed up", "stacks/apps.df:124", "ok")]};
 WHY["d-fjdrift"] = WHY.fjdrift;
-ACTS["d-fjdrift"] = () => DONE["d-fjdrift"] ? `<p>approve("k8s.deployment", "forgejo.server") written by simon@framework. The revert applied; the password form is off.</p>` : `
-  <p>forgejo.df:17-20 is the outage procedure: the password form turned on by hand, "and apply afterwards, which turns it off again". If Pocket ID is back, revert. If not, leave it held; nothing else of prod waits on it.</p>
+ACTS["d-fjdrift"] = () => DONE["d-fjdrift"] ? `<p class="mono">approve("k8s.deployment", "forgejo.server") · simon@framework</p>` : `
   <button class="btn" id="revert-fj">Revert the drift: approve("k8s.deployment", "forgejo.server")</button>`;
 function revertFj() {
   const p = P.ovh; DONE["d-fjdrift"] = true;
@@ -1958,11 +2045,11 @@ function revertFj() {
 MODEL.ovh = (() => {
   const dom = {lab: "lab.vodik.xyz", prod: "vodik.xyz"};
   const m = model(["sources", "platform[lab]", "apps[lab]", "platform[prod]", "apps[prod]"], [
-    {id: "ovh", label: "ovh · Public Cloud project", settings: "use ovh { .. }  stacks/platform.df:30, stacks/apps.df:20 · credentials from the environment", state: "slow: Read k3s.server.vm 4.1s of a 6.2s run (trace) · 26 calls", word: "slow Read, 4.1s", waiting: false,
-      why: [N("one instance: every deployment gives it the same project", "stacks/platform.df:30"), N("Read ovh.instance k3s.server.vm 4.1s: the longest call, and first on the chain", "trace 09:20:14", "wait")]},
-    {id: "io", label: "dform io.read, oci.resolve", settings: "what dform reads itself: the kubeconfig over SSH, image tags", state: "2 ssh reads answered · 6 tags resolved, 1 moved"},
+    {id: "ovh", label: "ovh · Public Cloud project", settings: "use ovh { .. }  stacks/platform.df:30, stacks/apps.df:20", state: "slow: Read k3s.server.vm 4.1s of a 6.2s run (trace) · 26 calls", word: "slow Read, 4.1s", waiting: false,
+      why: [N("Read ovh.instance k3s.server.vm 4.1s", "trace 09:20:14", "wait")]},
+    {id: "io", label: "dform io.read, oci.resolve", settings: "io.read, oci.resolve", state: "2 ssh reads answered · 6 tags resolved, 1 moved"},
     {id: "k8s-lab", label: "k8s · k3s lab", settings: "platform: use k8s { kubeconfig = k3s.kubeconfig }  ·  apps: platform[env].kubeconfig", state: "configured · 81 calls last run (Read 38 refresh, Plan 1)", from: "n:platform[lab]/read",
-      why: [N("output kubeconfig = str.replace(…)", "k3s.df:27", "", [N("read back from the server over SSH once it is up", "k3s.df:3")]), N("apps reads it as platform[env].kubeconfig", "stacks/apps.df:25")]},
+      why: [N("output kubeconfig = str.replace(…)", "k3s.df:27", "", [N("io.read(\"ssh://ubuntu@${server.public_ip}/etc/rancher/k3s/k3s.yaml\")", "k3s.df:181")]), N("apps reads it as platform[env].kubeconfig", "stacks/apps.df:25")]},
     {id: "k8s-prod", label: "k8s · k3s prod", settings: "platform: use k8s { kubeconfig = k3s.kubeconfig }  ·  apps: platform[env].kubeconfig", state: "configured · 96 calls last run", from: "n:platform[prod]/read",
       why: [N("output kubeconfig = str.replace(…)", "k3s.df:27"), N("apps reads it as platform[env].kubeconfig", "stacks/apps.df:25")]},
   ], {});
@@ -2191,7 +2278,7 @@ function renderPane() {
 
 function treeHTML(nodes) {
   return `<ul>${nodes.map(n => {
-    const label = `<span class="k-${n.k}">${esc(n.t)}</span>${n.s ? `  <span class="s">${esc(n.s)}</span>` : ""}`;
+    const label = `<span class="k-${n.k}">${esc(n.t).split(PH).join('<span class="ph">…</span>')}</span>${n.s ? `  <span class="s">${esc(n.s)}</span>` : ""}`;
     return n.c.length ? `<li><details open><summary>${label}</summary>${treeHTML(n.c)}</details></li>` : `<li class="leaf">${label}</li>`;
   }).join("")}</ul>`;
 }
@@ -2199,8 +2286,7 @@ function renderInsp() {
   const el = $("insp");
   if (sel && /^(n:|R:|G:|C:|Q:)/.test(sel) && estateInsp(el)) return;
   if (!sel || !WHY[sel]) {
-    el.innerHTML = `<div class="lab">Why</div><h2>Click a node</h2>
-      <p class="note">The resource itself: what the program says, what the world returned, the provider's status, and each attribute's reason on its own line.</p>`;
+    el.innerHTML = `<div class="lab">Why</div><h2>Nothing selected</h2>`;
     return;
   }
   const w = WHY[sel];
@@ -2261,7 +2347,7 @@ function revert() {
     p.headline = "plan: 0 changes; policy: 4 hold"; p.deps[1].mark = "="; p.deps[1].st = `up to date · applied 09:53 (run ${r.n})`;
     p.ticks[0].stNote = "applied";
   } else {
-    r.did = "the revert joins the plan, which still waits on the signature"; r.took = "2.3s"; r.state = "held";
+    r.did = "held: waits on the signature"; r.took = "2.3s"; r.state = "held";
   }
   toast("approve row written. The revert " + (DONE["d-appr"] ? "applied." : "waits on the signature with the rest.")); render();
 }
