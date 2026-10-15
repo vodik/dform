@@ -156,6 +156,21 @@ impl Ovh {
         Ok((id, attrs, computed))
     }
 
+    /// The computed values of instance `remote`, which a Create made, as
+    /// its prior: the port on each network it was made on is its own
+    /// (`map::Owned::Made`), for the Create sent again that finds it.
+    pub(super) fn made_instance(
+        &self,
+        at: &str,
+        remote: &str,
+    ) -> std::result::Result<Option<Json>, Failed> {
+        let (a, p) = self.project_for(at)?;
+        let made = self
+            .read_instance(&a, &p, remote, &map::Owned::Made)
+            .map_err(|e| failed(at, e))?;
+        Ok(made.map(|(_, computed)| computed))
+    }
+
     /// An instance's flavor changed in place to a larger one (`POST
     /// /instance/{id}/resize`): the instance reboots into it, and is waited
     /// for until it is ACTIVE on it. A smaller one is refused: the API

@@ -609,3 +609,30 @@ fn a_network_left_detaches_its_own_port() {
     update_noted(&ovh, &vm, &off, None);
     assert!(private_ports(&c, &vm).is_empty());
 }
+
+/// A Create sent again (its answer lost) finds the instance it made and
+/// owns the port it was made with on each network, as the Create would
+/// have answered: one attached beside it since is detached, where told
+/// nothing the two would be refused.
+#[test]
+fn a_create_sent_again_owns_the_port_it_was_made_with() {
+    let (server, c) = world();
+    let (id, os) = lab(&c);
+    let ovh = provider(&server);
+    let made = apply(&ovh, pb::Op::Create, "ovh.instance", "", &on_lab(&id));
+    let vm = made.remote.clone();
+    let first = private_ports(&c, &vm)[0]["id"].clone();
+    c.post(
+        &project(&format!("/instance/{vm}/interface")),
+        Some(&json!({"networkId": os})),
+    )
+    .unwrap();
+    let again = apply(&ovh, pb::Op::Create, "ovh.instance", "", &on_lab(&id));
+    assert_eq!(again.remote, vm);
+    let computed = wire::from_doc(again.computed.as_ref().unwrap()).unwrap();
+    assert_eq!(computed["ports"][&id]["id"], first);
+    let left = private_ports(&c, &vm);
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert_eq!(left[0]["id"], first);
+    assert_eq!(server.instances().len(), 1);
+}

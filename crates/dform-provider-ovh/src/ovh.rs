@@ -871,9 +871,14 @@ impl Ovh {
             .map_err(|e| refused(at, format!("{e:#}")))?
         {
             // The same Create again: what it made, brought to the
-            // document (a user's S3 credential, a volume's attachment).
+            // document (a user's S3 credential, a volume's attachment),
+            // owning what it was made with (an instance's ports).
             if ours {
-                return self.update(typ, at, &remote, config, None, notes, say);
+                let prior = match typ {
+                    INSTANCE => self.made_instance(at, &remote)?,
+                    _ => None,
+                };
+                return self.update(typ, at, &remote, config, prior, notes, say);
             }
             return Err(refused(
                 at,
