@@ -556,10 +556,7 @@ impl<'a> Externs<'a> {
         for round in 1..=64 {
             let mut given = extra.to_vec();
             given.extend(self.facts());
-            let (res, violations, t) = {
-                let _round = crate::timing::traced(|| format!("evaluation, round {round}"));
-                eval_round(&given)?
-            };
+            let (res, violations, t) = evaluate_round(round, &given, &mut eval_round)?;
             if self.is_empty() {
                 return Ok((res, violations, t));
             }
@@ -811,6 +808,23 @@ impl<'a> Externs<'a> {
             })
             .collect()
     }
+}
+
+/// Round `round` of an evaluation with its externs (`Externs::rounds`):
+/// the program evaluated over `given`, the answers known so far in it.
+#[tracing::instrument(
+    target = "dform",
+    level = "trace",
+    name = "plan.phase",
+    skip_all,
+    fields(otel.name = %format_args!("evaluation, round {round}"))
+)]
+fn evaluate_round<T>(
+    round: usize,
+    given: &[Atom],
+    eval_round: &mut impl FnMut(&[Atom]) -> Result<(EvalResult, Vec<String>, T)>,
+) -> Result<(EvalResult, Vec<String>, T)> {
+    eval_round(given)
 }
 
 fn show(vs: &[Value]) -> String {
