@@ -50,7 +50,7 @@ pub(super) struct Explain {
 /// so a deny over the plan can be asked for and explained.
 pub(super) fn run(run: &mut Evaluated) -> Result<Outcome> {
     let schedule = match &run.cx.cli.cmd {
-        Cmd::Why(_) => Why::schedule(&run.ev),
+        Cmd::Why(_) => Why::schedule(&run.ev, &super::planning::outside(&run.cx.cli.planned)),
         _ => None,
     };
     let x = run.ev.explained();
@@ -295,7 +295,10 @@ impl Why {
     /// When each change the plan holds runs (After R-156): `why` says its
     /// tick, `later` only for what no tick of the plan makes. A group by
     /// the address its statement names, as the plan prints it.
-    fn schedule(ev: &deployment::Evaluation) -> Option<report::Report> {
+    fn schedule(
+        ev: &deployment::Evaluation,
+        outside: &std::collections::BTreeMap<String, usize>,
+    ) -> Option<report::Report> {
         let Some(Ok(p)) = &ev.policy else {
             return None;
         };
@@ -311,7 +314,7 @@ impl Why {
             moved: &[],
             denies: &p.denies,
             kept: &Default::default(),
-            outside: &Default::default(),
+            outside,
         });
         r.explain(
             report::Why::Line,

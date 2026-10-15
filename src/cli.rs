@@ -295,6 +295,10 @@ fn run_command(cli: Cli) -> Result<Outcome> {
     if !order.is_empty() {
         return InOrder::new(cli, order).plan();
     }
+    let order = cli.read_order()?;
+    if !order.is_empty() {
+        return InOrder::new(cli, order).read();
+    }
     // A plan file of several deployments: each applied in turn.
     if let Cmd::Apply(apply::Apply {
         plan_file: Some(path),

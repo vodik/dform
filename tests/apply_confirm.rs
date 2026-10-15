@@ -232,7 +232,9 @@ fn declining_the_tree_applies_nothing() {
     assert!(
         said[0].contains("== stacks.platform[env=lab]")
             && said[0].contains("== stacks.apps[env=lab]")
-            && said[0].contains("Apply these 2 changes to stacks.platform[env=lab], stacks.apps[env=lab]?"),
+            && said[0].contains(
+                "Apply these 2 changes to stacks.platform[env=lab], stacks.apps[env=lab]?"
+            ),
         "{}",
         said[0]
     );

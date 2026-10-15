@@ -405,6 +405,29 @@ impl Tree<'_> {
         self.print_text(&tally, g.planned)
     }
 
+    /// What the deployments of `order` will publish as their plans say,
+    /// each planned (unprinted) over those before it: what a run of a
+    /// deployment that reads them reads (`why`, `query`). One whose plan
+    /// fails is left out: its reader reads what it published.
+    pub(super) fn outputs(
+        &self,
+        order: &[Dependency],
+        of: &For,
+    ) -> std::collections::BTreeMap<String, crate::stack::Planned> {
+        let plan = Cmd::Plan(Plan {
+            out: None,
+            json: false,
+            destroy: false,
+            why: report::Why::Line,
+            new_master: false,
+        });
+        let mut g = Gathered::default();
+        for d in order {
+            self.plan_one(&mut g, order, d, of(d, plan.clone()), false);
+        }
+        g.outputs
+    }
+
     /// Plan the deployment `d` (`gone`: its destroy, removed from the
     /// project module) as the run `dep`, after what `g` gathered of those
     /// before it, and gather it.

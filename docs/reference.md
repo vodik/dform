@@ -239,24 +239,40 @@ tick 1, by name. There is no strict mode, no resource-level target and no
 flag for how long to wait: a plan that needs a second tick applies tick
 by tick, and a program that wants to apply part of itself is two stacks.
 
-`plan X` in a project plans what `apply X` applies: the
-deployments X reads and theirs, in apply order, then X, one tree. Each
-is planned against the outputs of those planned before it as they will
-be once applied: a value its plan knows flows (`name = "10.0.0.0/16"`),
-one its apply computes waits on it, `waits on  stack
-stacks.platform[env=lab]` under `later`, counted in the headline as
-`1 create after stacks.platform[env=lab] is applied`. A dependency that
-is up to date is one line; one whose plan fails or is refused stops the
-chain there, what reads it `not planned`, and the run exits with its
-status. `--json` nests the same: `summary`, `outcome`, and per deployment
-its `deployment`, `mark`, `site`, `state` and its own document under
-`plan`. `--out` writes the closure to one plan file, in apply order
-("The plan file"). A stack that reads none plans alone, as before; so do
-`-q` and `--destroy`, which plan the one deployment named:
+`plan X` in a project plans what `apply X` applies: X and the
+deployments it reads and theirs (`use stacks.platform`, then
+`platform[env="prod"].x`, a key written out or X's own,
+`platform[env=env].x`), each whole, as one plan. The tree is one
+program set and the plan its one model: one run, each provider one
+process for the tree (its handshake and schema asked once, each
+deployment's providers configuring it with their own settings), each
+object read once, each image's tag resolved once. A read of another
+deployment of the tree is an edge like a reference between resources:
+the reader reads what the upstream's plan says it will publish, a value
+its plan knows flowing (`name = "10.0.0.0/16"`), a secret one in memory
+(never printed or written, and no master needed to read it: the seal of
+`outputs.json` is for readers outside the tree), and one the upstream
+knows only after a tick waiting on that tick, so what reads it runs the
+tick after, `waits on  stacks.platform[env=lab].endpoint`. The ticks are
+the tree's, not a deployment's: an apps change that reads only what
+platform knows now is in tick 1 beside platform's own, and only what is
+behind a value platform's tick 1 makes (its server's address, the
+kubeconfig read off it) waits for tick 2. The headline counts the
+tree's ticks. A deployment up to date is one line; one whose plan fails
+or is refused stops what reads it, `not planned`, and the run exits
+with its status. `--json` nests the same: `summary`, `outcome`, and per
+deployment its `deployment`, `mark`, `site`, `state` and its own
+document under `plan`. `--out` writes the tree to one plan file, a
+section per deployment, each with its own digest ("The plan file"). A
+stack that reads none plans alone, as before; so do `-q` and
+`--destroy`, which plan the one deployment named. `why` and `query` of a
+deployment that reads others read them as its plan does: each upstream
+planned in the run (unprinted), its outputs what its plan says it will
+publish, a wait on one said at the tick that makes it known:
 
 ```
 $ dform plan apps env=lab
-plan: 3 changes (3 create); 1 create after stacks.platform[env=lab] is applied
+plan: 4 changes (4 create) over 2 ticks
 
 + stacks.platform[env=lab]  stacks/platform.df  never applied, 2 changes (2 create) over 1 tick
   tick 1  2 changes
@@ -265,39 +281,50 @@ plan: 3 changes (3 create); 1 create after stacks.platform[env=lab] is applied
     + net.vpc edge    stacks/platform.df:4
         cidr = "10.0.0.0/16"
 
-+ stacks.apps[env=lab]      stacks/apps.df  never applied, 1 change (1 create) over 1 tick; 1 create after stacks.platform[env=lab] is applied
++ stacks.apps[env=lab]      stacks/apps.df  never applied, 2 changes (2 create) over 2 ticks
   tick 1  1 change
     + net.vpc known  stacks/apps.df:5
         cidr = "10.1.0.0/16"
         name = "10.0.0.0/16"
 
-  later
-    waits on  stack stacks.platform[env=lab]
+  tick 2  1 change
+    waits on  stacks.platform[env=lab].endpoint
     + net.vpc later  stacks/apps.df:6
         cidr = "10.2.0.0/16"
         name = stacks.platform[env=lab].endpoint
 ```
 
-The stack is the unit of partial work. `apply X` in a project applies the
-deployments X reads (`use stacks.platform`, then `platform[env="prod"].x`,
-a key written out or X's own, `platform[env=env].x`) first,
-and theirs before them, each a run of its own with its own plan,
-confirmation and state, then X; nothing that reads X. The first line
-is the `stacks:` line, the deployments in apply order: `stacks:
-platform[env=prod], then shop[env=prod] below, in apply order:
-shop[env=prod] reads its outputs; each is planned, confirmed and applied
-in turn`, and each run is headed `== NAME` and prints its own plan, its
-own ticks counted there (a later stack's plan reads what the earlier
-ones applied, so it cannot be counted before they run). A dependency whose apply fails, is declined or stops ends the
-run before its reader; stacks that read each other are an error naming
-the cycle. A `--set` goes to each stack of the run that declares the
-input (one none declares is the target's error); `--input-file` is the
-target's. A plan file applies the deployments it planned, in its order
-("The plan file"); a `--world` fixture and a program outside a project
-apply only themselves. `apply` with no target, in a project of several stacks under
-the working directory and no project module, applies every one of them
-(each with its default key) in dependency order, each run headed and
-confirmed on its own; a `--set` no stack declares is an error.
+A stack is a namespace, not a step: its own state, its own lease, its
+own audit log and its own published outputs, and nothing about
+ordering. `apply X` in a project applies the tree `plan X` plans, as
+one apply: the `stacks:` line names it (`stacks: stacks.apps[env=lab]
+and what it reads, stacks.platform[env=lab]: one apply, its ticks the
+tree's`), every
+deployment's plan is printed under its `== NAME` line and the tree's
+changes confirmed once, every lease is taken before the first call,
+and each tick applies what every deployment has ready, deployment by
+deployment, then evaluates each over what the tick made known, a
+reader over its upstreams'. Each deployment's state is written as its
+objects complete, its audit log's `tick` is the tree's; one whose plan
+holds nothing more is done there: its outputs published, its
+`apply_end` logged and its lease released. A tick waits on what the
+world has not reached yet only when nothing in the tree changed in it.
+A deployment whose apply fails, is declined or stops ends the tree's
+apply after the tick: each other deployment's `apply_end` says
+`stopped` at that tick, its state consistent, and the next `apply X`
+plans the tree again from where each stopped. An interrupt stops it
+the same way: no new call, the calls in flight awaited, each
+deployment's in-flight record kept, each `apply_end` `stopped
+(interrupted)`, every lease released; the next apply resumes each
+deployment from its own record. Stacks that read each other are an
+error naming the cycle. A `--set` goes to each stack of the tree that
+declares the input (one none declares is the target's error);
+`--input-file` is the target's. A plan file applies the tree it
+planned ("The plan file"); a `--world` fixture and a program outside a
+project apply only themselves. `apply` with no target, in a project of
+several stacks under the working directory and no project module,
+applies every one of them (each with its default key) as one tree; a
+`--set` no stack declares is an error.
 
 Which deployments a project has is code: the project module,
 `project.df` at the root, makes each a resource of its stack's type, its
@@ -313,21 +340,21 @@ With no target, `plan`, `apply` and `test` run on it; a file that is no
 stack and makes resources of stacks, named as the target (`dform plan
 envs/lab.df`), is one too. Each deployment it lists, and each one those
 read that it does not (said `(not listed: a listed deployment reads
-it)`), runs in dependency order as `apply X` runs X's: its own
-plan, question, state, lock and `[secrets]`, a `--set` going to each
-whose stack declares the input. `plan` prints them as one tree, as `plan
-X` does: one headline across it, then a header line per
-deployment (its mark: `+` never applied, `~` changed, `=` up to date, `-`
-removed; its full name; where the module lists it; its state; what it is
-applied after), its plan nested under it, each planned against what
-those before it will publish:
+it)`), is one tree, as `apply X`'s is: one plan, one apply, its ticks
+the tree's, each deployment its own state, lease, audit log and
+`[secrets]`, a `--set` going to each whose stack declares the input.
+`plan` prints the tree as `plan X` does: one headline across it, then a
+header line per deployment (its mark: `+` never applied, `~` changed,
+`=` up to date, `-` removed; its full name; where the module lists it;
+its state), its plan nested under it, a reader planned against what
+those it reads will publish:
 
 ```
-plan: 5 changes (4 create, 1 update); policy: 6 hold
+plan: 5 changes (4 create, 1 update) over 1 tick; policy: 6 hold
 
 = stacks.platform[env=lab]   project.df:1  up to date
 
-~ stacks.apps[env=lab]       project.df:3  1 change (1 update) over 1 tick  after stacks.platform[env=lab]
+~ stacks.apps[env=lab]       project.df:3  1 change (1 update) over 1 tick
   tick 1  1 change
     ~ k8s.deployment synapse.server  synapse.df:52
         spec.replicas = 1 → 2        stacks/apps.df:14
@@ -340,9 +367,10 @@ plan: 5 changes (4 create, 1 update); policy: 6 hold
 
 (`plan --out` and `--destroy` plan one deployment: name it; `--json`
 nests as `plan X`'s does.)
-`apply` applies them in that order, each headed `== NAME` and asked for on its own (`--yes`
-answers every question); a dependency declined, stopped or failed ends
-the run before its readers, with its exit status, and a refused plan
+`apply` applies the tree as `apply X` does, each deployment's plan under
+its `== NAME` and the tree's changes asked for once (`--yes` answers
+every question); a deployment declined, stopped or failed ends the
+tree's apply after the tick, with its exit status, and a refused plan
 exits 4 as any. What the module's applies made is kept in
 `dform.state/project.json`: a deployment an apply of the module made
 that the module no longer lists is removed, and the next apply, after
@@ -547,8 +575,9 @@ too):
 
 `plan --json` says the same word in `outcome`: `done` or `refused`. A
 command of several deployments (`apply X` with what X reads, a plan file
-of several, the project's) exits with the status of the first that did
-not end done, the deployments after it not run.
+of several, the project's) is one apply over the tree: it exits with the
+status of the deployment that ended it (failed, declined, stopped or
+refused), the others stopped after that tick.
 <!-- /man:exit-status -->
 
 ### Environment
@@ -1455,13 +1484,14 @@ made; the plan itself says what it is.
   plan, followed through what that is made from (a provider's settings,
   the CRD a resource waits on, a value of a held object), one clause per
   wait in `later`'s order, then the policy block's count:
-  `plan: 21 creates after stacks.platform[env=lab] is applied; policy:
-  12 hold · 2 undetermined`, or `plan: 3 changes (3 create) over 1 tick;
+  `plan: 21 creates after platform.stacks.cluster[env=lab] is applied;
+  policy: 12 hold · 2 undetermined` (a deployment of another project not
+  applied yet), or `plan: 3 changes (3 create) over 1 tick;
   1 create waiting on ssh://ubuntu@10.0.0.5/etc/rancher/k3s/k3s.yaml`. A
   plan whose every change is `later`'s never says `0 changes`; objects
   `later` lists as state has them are `N later` (`plan: 0 changes, 3
   later`). A tree of deployments has one summary across it, its ticks
-  each deployment's own.
+  the tree's.
 - The policy block follows the ticks, before `later`: each
   policy (a `deny`, a check a value waits on) is one line, as a change
   is: its mark in the first column, `holds` (green), `fails` (red) or
@@ -1474,9 +1504,10 @@ made; the plan itself says what it is.
   with why: a failure's resource and context (`net.vpc c  vpc = "c"`;
   a deny with no context names each resource it fired for, one that
   ranges over none `(no subject)`), an undetermined one's resource and the cell and tick that decide it
-  (`until spec.storageClassName is known (tick 2)`), or the deployment
-  whose apply does (`net.vpc a  until stacks.platform[env=lab].endpoint
-  is known (after stacks.platform[env=lab] is applied)`): the resource is
+  (`until spec.storageClassName is known (tick 2)`; another deployment's
+  output in the tree the same, `net.vpc a  until
+  stacks.platform[env=lab].endpoint is known (tick 2)`), or the
+  deployment outside the tree whose apply does: the resource is
   the one the deny ranges over, never the deployment; the rest are one `N
   hold` line. The block is headed by how many policies hold, fail and
   are undetermined, `policy  12 hold · 1 fails · 2 undetermined`, and a
@@ -1663,8 +1694,9 @@ made; the plan itself says what it is.
   schema has yet (a cluster's CRD) under `waits on  provider k8s
   schema`, its attributes as written, or under the CRD the program makes
   for it, `waits on  k8s.custom_resource_definition
-  "middlewares.traefik.io"`; one reading a deployment not
-  applied yet under `waits on  stack platform[env=lab]`. When a tick of
+  "middlewares.traefik.io"`; one reading a deployment outside the tree
+  not applied yet under `waits on  stack platform.stacks.cluster[env=lab]`.
+  When a tick of
   the plan makes what they wait on, they are that tick's instead. The summary
   counts them by what they wait on (above), and `why` names what such a resource
   waits on. A deny or check `later` holds always says what it waits on:
@@ -2291,7 +2323,8 @@ deployments the plan covers in apply order, `deployments`, the target's
 dependencies first and the target last (`plan apps env=lab --out
 p.json` writes `stacks.platform[env=lab]`, then `stacks.apps[env=lab]`;
 a deployment that reads none is a file of one), each by its full name,
-`deployment`, with what it is applied after, `after`, and its plan. A
+`deployment`, with the deployments of the file it reads, `after`, and
+its plan, its ticks the tree's, with its own digest. A
 deployment's plan is: the inputs (each program file with a
 digest of its content, each `--input-file` with its digest keyed like a
 sensitive value's, since an input file may hold a secret, `--set`,
@@ -2311,18 +2344,20 @@ other deployment's outputs it read, what it was planned against
 (`inputs.stack_outputs`); and the plan's digest, with what needs an
 approval (see "Approvals"). A file of an earlier format is refused,
 naming its version: plan again. `apply PLAN.json` applies the file's
-deployments in its order, each a run of its own headed `== NAME` under a
-`stacks:` line; a file of several asks before each deployment, `Apply
-these N changes to platform[env=lab]?` (or `--yes`), a file of one asks
-nothing, as before; the first that fails, is declined, stops or is
-refused ends the command there, with its status, before the
-deployments after it. Each is checked against its own plan at its turn,
-as below: a dependency's plan made against its state as it was, a
-reader's against its dependency's planned outputs, which hold once the
-dependency's apply in this run published them (a dependency whose
-outputs moved otherwise since the plan refuses the reader, `the outputs
-of platform[env=lab]: published again with other values since the
-plan`). `--approval FILE` goes to the deployment whose plan needs one.
+tree as one apply under a `stacks:` line, its ticks the tree's, each
+deployment's plan under its `== NAME`; a file of several asks once for
+the tree, `Apply these N changes to stacks.platform[env=lab],
+stacks.apps[env=lab]?` (or `--yes`), a file of one asks nothing, as
+before; one that fails, is declined, stops or is refused ends the tree's
+apply after its tick, with its status. Each section is checked against
+its own plan, as below: a dependency's plan made against its state as it
+was, a reader's against its dependency's planned outputs, which the run
+reads from the dependency as it applies it (a dependency whose published
+outputs moved since the plan refuses the reader, `the outputs of
+platform[env=lab]: published again with other values since the plan`).
+One section is not applied alone: a reader's was planned against what
+its dependency's ticks make. `--approval FILE` goes to the deployment
+whose plan needs one.
 A deployment's run takes its inputs from the
 file (flags given on the command line must match them), refreshes and re-evaluates at
 every tick, and refuses unless the delta it computes is the file's:
@@ -2917,10 +2952,17 @@ the keyed digest. A seal's ephemeral key and nonce derive from the
 producer's master, the reader's key, the output and the value, so the
 same value sealed to the same reader is the same bytes: an apply of the
 producer that changes no output publishes the same `outputs.json`, and a
-reader's plan file of it stays fresh. The reader's run opens its seal with its own master and
-reads the value as it reads a secret input: in a provider's settings
-(`use k8s { kubeconfig = platform[env].kubeconfig }`) or a sensitive
-field. No stack reads another's master, and no provider holds the value.
+reader's plan file of it stays fresh. A reader outside the producer's
+tree (another project, the controller, a run of the reader alone) opens
+its seal with its own master and reads the value as it reads a secret
+input: in a provider's settings (`use k8s { kubeconfig =
+platform[env].kubeconfig }`) or a sensitive field. No stack reads
+another's master, and no provider holds the value. A reader in the
+producer's tree (`plan apps`, `apply apps`, the project's) needs no
+seal: the producer's run in the same tree read the value, and the
+reader reads it from that run, in memory, never printed or written,
+with or without its own master; a value only the producer's master
+derives is the producer's stand-in, and what reads it waits.
 
 The producer's plan prints the grant after its changes, and an apply
 whose grants changed writes a `sealed` audit entry:
@@ -2929,20 +2971,13 @@ whose grants changed writes a `sealed` audit entry:
 output kubeconfig  sealed to apps[env=lab]
 ```
 
-A reader is one from its first apply: the producer's apply before it
-seals to no one yet, so that apply says so (`apps[env=lab]:
-platform[env=lab].kubeconfig is held by no provider and not sealed to it
-yet: apply platform[env=lab] again ..`), registers the reader and makes
-its master; the next `dform apply apps env=lab` applies the platform
-first, which seals to it, and then the reader. That one extra run per new
-reader deployment stays: the value exists only in the producer's run,
-under its master, and the reader's key only from its first confirmed
-apply (making it at the reader's plan would be a write before any
-confirmation). Each apply that opens a
-seal writes an `opened` entry to the reader's log. A reader without its
-master cannot open its seal: it says so, the value is a stand-in, and a
-provider configured from it waits. A producer without its master
-publishes a seal only of a value it can prove unchanged.
+A reader is one from its first apply, which registers it and makes its
+master; the producer's next apply seals to it, for the runs outside the
+tree. Each apply that opens a seal writes an `opened` entry to the
+reader's log. A reader outside the tree without its master cannot open
+its seal: it says so, the value is a stand-in, and a provider configured
+from it waits. A producer without its master publishes a seal only of a
+value it can prove unchanged.
 
 `RANDOM_MASTER` in the environment is the `random.*` input key material
 itself, for tests and the editor. It is taken where state was applied

@@ -90,6 +90,28 @@ impl Cli {
         Ok(order)
     }
 
+    /// `why` or `query` of a deployment in a project: the deployments it
+    /// reads and theirs, then it, as `plan` of it plans them (R-200), so
+    /// it reads what their plans say they will publish. Empty when it
+    /// reads none, and for a world fixture or a program outside a
+    /// project.
+    pub(super) fn read_order(&self) -> Result<Vec<Dependency>> {
+        if !matches!(self.cmd, Cmd::Why(_) | Cmd::Query(_))
+            || !self.in_project
+            || self.world.is_some()
+        {
+            return Ok(Vec::new());
+        }
+        let [one] = self.files.as_slice() else {
+            return Ok(Vec::new());
+        };
+        let mut order = order_of(&[(one.clone(), self.keys.clone())])?;
+        if order.len() == 1 {
+            order.clear();
+        }
+        Ok(order)
+    }
+
     pub(super) fn apply_order(&self) -> Result<Vec<Dependency>> {
         let Cmd::Apply(super::apply::Apply {
             plan_file: None,
@@ -349,6 +371,31 @@ impl InOrder {
         super::apply::tree(&self.cli, &self.order, &of)
     }
 
+    /// `why` or `query` of the target against the tree's plan: what it
+    /// reads of the deployments of the tree is what their plans say they
+    /// will publish, each planned in this run (unprinted) first.
+    pub(super) fn read(self) -> Result<Outcome> {
+        let (last, deps) = self
+            .order
+            .split_last()
+            .ok_or_else(|| anyhow::anyhow!("internal: a tree with no deployment"))?;
+        let of = |d: &Dependency, cmd: Cmd| {
+            let mut cli = self.of(d);
+            cli.input_files = Vec::new();
+            cli.cmd = cmd;
+            cli
+        };
+        let _run = super::matrix::OneRun::begin(&self.order);
+        let tree = super::matrix::Tree {
+            cli: &self.cli,
+            label: None,
+            sites: Default::default(),
+        };
+        let mut cli = self.target(last);
+        cli.planned = tree.outputs(deps, &of);
+        super::run(cli, None)
+    }
+
     /// The target's plan of what it reads, then its own (R-200): one
     /// tree, each planned against the outputs of those before it.
     pub(super) fn plan(self) -> Result<Outcome> {
@@ -426,7 +473,6 @@ impl InOrder {
         Ok(())
     }
 
-
     /// The run of the deployment `d`, by its file and key: a `--set` goes
     /// to each stack of the run that declares the input; one none declares
     /// stays the target's, which names the error.
@@ -498,7 +544,11 @@ impl Sequenced {
             .map(|step| Dependency {
                 name: crate::stack::short_of(&step.deployment),
                 full: step.deployment.clone(),
-                reads: step.after.iter().map(|a| crate::stack::short_of(a)).collect(),
+                reads: step
+                    .after
+                    .iter()
+                    .map(|a| crate::stack::short_of(a))
+                    .collect(),
                 file: PathBuf::new(),
                 keys: Vec::new(),
                 inputs: BTreeSet::new(),
@@ -508,7 +558,10 @@ impl Sequenced {
             })
             .collect();
         let of = |d: &Dependency| {
-            let i = order.iter().position(|o| o.full == d.full).unwrap_or_default();
+            let i = order
+                .iter()
+                .position(|o| o.full == d.full)
+                .unwrap_or_default();
             self.of(i, &self.file.deployments[i], &BTreeMap::new())
         };
         super::apply::tree(&self.cli, &order, &of)

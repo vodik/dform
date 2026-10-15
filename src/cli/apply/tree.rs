@@ -349,7 +349,14 @@ impl<'a> Tree<'a> {
             {
                 let name = &self.members[i].d.full;
                 let line = format!("== {name}");
-                println!("{}", self.members[i].cx.cli.style.paint(report::Paint::Bold, &line));
+                println!(
+                    "{}",
+                    self.members[i]
+                        .cx
+                        .cli
+                        .style
+                        .paint(report::Paint::Bold, &line)
+                );
             }
             if let Some(o) = self.ticks[i].show(&p.tick)? {
                 self.ticks[i].end(&Ok(o.clone()));
@@ -419,9 +426,12 @@ impl<'a> Tree<'a> {
         for j in readers {
             let m = &self.members[j];
             let read = outputs.over(name, None);
-            let facts = stack::output_facts(std::slice::from_ref(&read), &m.located.loaded.deployed);
+            let facts =
+                stack::output_facts(std::slice::from_ref(&read), &m.located.loaded.deployed);
             m.evaluator.read_again(name, facts);
-            m.evaluator.backend.hold(stack::held(std::slice::from_ref(&read)));
+            m.evaluator
+                .backend
+                .hold(stack::held(std::slice::from_ref(&read)));
         }
         Ok(())
     }

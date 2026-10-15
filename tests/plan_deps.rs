@@ -301,9 +301,8 @@ fn a_plan_file_s_deployments_are_each_confirmed() {
     let (said, code) = common::answering(&s.dir, cmd, &["n"]);
     assert_eq!(code, 3, "{}", said[0]);
     assert!(
-        said[0].contains(
-            "Apply these 4 changes to stacks.platform[env=lab], stacks.apps[env=lab]?"
-        ),
+        said[0]
+            .contains("Apply these 4 changes to stacks.platform[env=lab], stacks.apps[env=lab]?"),
         "{}",
         said[0]
     );

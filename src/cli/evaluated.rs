@@ -572,9 +572,13 @@ impl Context {
     /// so the producer's next apply seals to it.
     fn read_outputs(&mut self, located: &deployment::Located) -> Result<Vec<crate::stack::Read>> {
         let mut read = located.read_outputs(&open_s3(&self.root, false))?;
-        // A plan or an apply of a tree reads what the deployments before
+        // A run in a tree (a plan, an apply, `why` and `query` of a
+        // deployment that reads others) reads what the deployments before
         // it in the tree will publish (R-200), over what they have.
-        if matches!(&self.cli.cmd, Cmd::Plan(_) | Cmd::Apply(_)) {
+        if matches!(
+            &self.cli.cmd,
+            Cmd::Plan(_) | Cmd::Apply(_) | Cmd::Why(_) | Cmd::Query(_)
+        ) {
             for (name, p) in &self.cli.planned {
                 let was = read
                     .iter()

@@ -14,5 +14,6 @@ too):
 
 `plan --json` says the same word in `outcome`: `done` or `refused`. A
 command of several deployments (`apply X` with what X reads, a plan file
-of several, the project's) exits with the status of the first that did
-not end done, the deployments after it not run.
+of several, the project's) is one apply over the tree: it exits with the
+status of the deployment that ended it (failed, declined, stopped or
+refused), the others stopped after that tick.

@@ -38,7 +38,9 @@ pub(super) struct Reporter<'a> {
 /// What the deployments planned before this one in the tree know only
 /// after a tick, by the label of the null this one reads in each one's
 /// place (`stack/FULL#k`): that tick.
-fn outside(planned: &BTreeMap<String, crate::stack::Planned>) -> BTreeMap<String, usize> {
+pub(super) fn outside(
+    planned: &BTreeMap<String, crate::stack::Planned>,
+) -> BTreeMap<String, usize> {
     planned
         .values()
         .flat_map(|p| {

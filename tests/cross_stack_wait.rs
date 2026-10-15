@@ -1,9 +1,8 @@
 //! A read of another stack's output before that deployment is applied
-//! (`platform[env].ingress_ip`) waits on it (R-121): the reader lists under
-//! `later` as `waits on  stack stacks.platform[env=lab]`, its attributes as
-//! written, and `why` says the deployment has not been applied. Once it
-//! is, the reader plans with the value; a deployment that has published
-//! and lacks the output is no wait.
+//! (`platform[env].ingress_ip`) reads what the tree's plan says it will
+//! publish (R-121, R-200): a value its plan knows flows, in the plan and
+//! in `why`. Once it is applied, the reader plans with the value; a
+//! deployment that has published and lacks the output is no wait.
 
 use crate::common;
 use common::Scratch;
@@ -35,11 +34,12 @@ fn project(name: &str) -> Scratch {
 #[test]
 fn a_read_of_a_deployment_not_applied_waits_on_it() {
     let s = project("cross-wait");
-    // `why` reads what was published: nothing yet, so the read waits.
+    // `why` reads what the tree's plan says platform will publish: a
+    // value its plan knows flows, though platform was never applied.
     let r = s.run(&["why", "net.vpc rec", "apps"]).success();
     assert!(
         r.stdout
-            .ends_with("\nlater  waits on  stack stacks.platform[env=lab]\n"),
+            .contains("  name = \"10.0.0.0/16\"\n    = platform[env].ingress_ip"),
         "{}",
         r.stdout
     );

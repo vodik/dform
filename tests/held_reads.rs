@@ -119,7 +119,7 @@ fn a_held_resources_written_attribute_reads_inside_a_literal() {
         let r = run(&s, &["why", TEMPLATE, "apps"]).success();
         assert!(
             r.stdout.contains("secretRef: { name: \"restic\" }")
-                && r.stdout.contains("later  waits on  "),
+                && r.stdout.contains("tick 2  waits on  provider k8s"),
             "real: {real}\n{}",
             r.stdout
         );
