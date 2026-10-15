@@ -1,10 +1,10 @@
 //! Aggregates (R-211 step 4, docs/grammar.md "Aggregates"): `n =
 //! count(x)` in a body is a `Fold` goal, its call an `Aggregate`; a rule
-//! whose body holds folds is a `Rule` item whose lowering folds it as the
-//! resolver's `fold_rule` does. Which of the two shapes it takes is
-//! decided here, so `lower` decides nothing: one aggregate whose value is
-//! a column of the head and read by nothing else is applied by the head
-//! (its `Fold` has no helper); otherwise each fold is a rule
+//! whose body holds folds is a `Rule` item whose lowering folds it (the
+//! table in syntax/resolve/aggregate.rs). Which of the two shapes it
+//! takes is decided here, so `lower` decides nothing: one aggregate whose
+//! value is a column of the head and read by nothing else is applied by
+//! the head (its `Fold` has no helper); otherwise each fold is a rule
 //! `__agg_N(group, agg(x)) :- B` over the group (the head's other
 //! variables and what is read after the fold), N stamped on its `Fold`
 //! from the program's counter.

@@ -2541,7 +2541,7 @@ impl<'u> Lowerer<'u> {
             return Err(Skip);
         }
         let mut rc = self.rc(n, scope, outer);
-        let default = match terms(n).next() {
+        let default_node = match terms(n).next() {
             // A literal default is read as the declared type (R-31).
             Some(t) => match self.typed_constant(&mut rc, &t, &ty)? {
                 Ok(d) => Some(d),
@@ -2551,7 +2551,6 @@ impl<'u> Lowerer<'u> {
             },
             None => None,
         };
-        let default_node = default.map(|(_, id)| id);
         self.refinement(n, scope, Some(&name))?;
         let refined = self.clause_at(node(n, REFINEMENT).and_then(|r| node(&r, BODY)));
         // `input k: T where B` (R-104): declared where `B` holds. A
@@ -2703,7 +2702,6 @@ impl<'u> Lowerer<'u> {
                     },
                     None => None,
                 };
-                let default = default.map(|(_, id)| id);
                 self.refinement(&a, scope, Some(&name))?;
                 let refinement = self.clause_at(node(&a, REFINEMENT).and_then(|r| node(&r, BODY)));
                 let i = crate::program::build::InputLowered {
@@ -3249,21 +3247,19 @@ impl<'u> Lowerer<'u> {
         Ok(self.term_of(id))
     }
 
-    /// The constant `t` read as the type `ty` (R-31): its term and its
-    /// node, or why it is not one.
+    /// The constant `t` read as the type `ty` (R-31): its node, or why it
+    /// is not one.
     fn typed_constant(
         &mut self,
         rc: &mut Rc,
         t: &SyntaxNode,
         ty: &TypeExpr,
-    ) -> L<Result<(Term, ExprId), String>> {
+    ) -> L<Result<ExprId, String>> {
         let id = self.constant_node(rc, t)?;
         let was = self.term_of(id);
         Ok(
-            crate::types::literal(&crate::types::of_expr(ty), was.clone()).map(|now| {
-                let id = self.retyped(rc, id, &was, now.clone());
-                (now, id)
-            }),
+            crate::types::literal(&crate::types::of_expr(ty), was.clone())
+                .map(|now| self.retyped(rc, id, &was, now)),
         )
     }
 
