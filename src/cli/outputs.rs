@@ -121,6 +121,28 @@ fn standin_of(label: &str, digest: &str) -> String {
     )
 }
 
+/// A secret output `k` of the producer `of` (as published, `o`) that a
+/// reader in the tree read in memory (`v`), the reader named `to` (its
+/// full and its short name): derived as its seal would be (the same
+/// value, the same stand-in, whichever way it was read; a run without
+/// the master has the value itself, no stand-in). Whether it is sealed
+/// to it not yet, so its apply registers it, for the runs outside the
+/// tree.
+fn in_memory(
+    of: &str,
+    k: &str,
+    o: &crate::stack::SecretOutput,
+    v: &Value,
+    (to, short): (&str, &str),
+    master: &crate::custody::Master,
+) -> bool {
+    if let (Value::Str(text), Some(_)) = (v, &master.key) {
+        let label = sealed_label(of, k, to);
+        crate::secrets::standin::register(text, &label, &standin_of(&label, &o.digest));
+    }
+    !(o.sealed.contains_key(to) || o.sealed.contains_key(short)) && o.held.is_none()
+}
+
 pub(super) fn open_sealed(
     read: &mut [crate::stack::Read],
     deployment: &str,
@@ -135,20 +157,12 @@ pub(super) fn open_sealed(
         // to.
         let short = crate::stack::short_of(deployment);
         for (k, o) in &p.secret {
-            let sealed_to_it = o.sealed.contains_key(deployment) || o.sealed.contains_key(&short);
             // One the tree's run knows in memory (`stack::Planned`): no
-            // seal is opened; one not sealed to it yet is, for the runs
-            // outside the tree, once its apply registers it.
+            // seal is opened.
             if let Some(v) = r.opened.get(k) {
-                if !sealed_to_it && o.held.is_none() {
+                let to = (deployment, short.as_str());
+                if in_memory(&p.deployment, k, o, v, to, master) {
                     unsealed.push(format!("{}.{k}", r.name));
-                }
-                // Derived as its seal would be: the same value, the same
-                // stand-in, whichever way it was read. A run without the
-                // master has the value itself, no stand-in.
-                if let (Value::Str(text), Some(_)) = (v, &master.key) {
-                    let label = sealed_label(&p.deployment, k, deployment);
-                    crate::secrets::standin::register(text, &label, &standin_of(&label, &o.digest));
                 }
                 continue;
             }
