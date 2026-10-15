@@ -40,21 +40,34 @@ pub fn load_program_with(
     entry_files: &[PathBuf],
     read: &dyn Fn(&Path) -> std::io::Result<String>,
 ) -> Result<Program> {
-    load_program_files_with(entry_files, read).map(|(p, _, _)| p)
+    load_program_files_with(entry_files, read).map(|l| l.program)
 }
 
-/// [`load_program_with`], the files it read, in the order they load (the
-/// sources a controller watches, R-39), and the stacks its `use`s name.
+/// A program loaded ([`load_program_files_with`]).
+pub struct LoadedProgram {
+    pub program: Program,
+    /// The files it read, in the order they load (the sources a
+    /// controller watches, R-39).
+    pub files: Vec<PathBuf>,
+    /// The stacks its `use`s name.
+    pub deployed: Vec<crate::syntax::resolve::Deployed>,
+    /// Its nodes, which an evaluation lowers again once the schema has
+    /// read its literals (R-192).
+    pub nodes: crate::program::Program,
+}
+
+/// [`load_program_with`], the files it read, the stacks its `use`s name
+/// and its nodes.
 pub fn load_program_files_with(
     entry_files: &[PathBuf],
     read: &dyn Fn(&Path) -> std::io::Result<String>,
-) -> Result<(Program, Vec<PathBuf>, Vec<crate::syntax::resolve::Deployed>)> {
+) -> Result<LoadedProgram> {
     let loaded = load_units(entry_files, read)?;
     let stack = match entry_files.first() {
         Some(f) => stack_source(f, read)?,
         None => None,
     };
-    crate::syntax::resolve::lower_stack(
+    crate::syntax::resolve::lower_stack_nodes(
         &loaded.units,
         &loaded.entries,
         true,
@@ -62,7 +75,12 @@ pub fn load_program_files_with(
         stack.as_ref(),
         &loaded.deployed,
     )
-    .map(|p| (p, loaded.files.clone(), loaded.deployed.clone()))
+    .map(|(program, nodes)| LoadedProgram {
+        program,
+        files: loaded.files.clone(),
+        deployed: loaded.deployed.clone(),
+        nodes,
+    })
     .map_err(|d| diag::Diagnostics(d).into())
 }
 

@@ -168,6 +168,20 @@ pub fn lower_stack(
     stack: Option<&StackSource>,
     deployed: &[Deployed],
 ) -> Result<Program, Vec<Diagnostic>> {
+    lower_stack_nodes(units, entries, file, mode, stack, deployed).map(|(p, _)| p)
+}
+
+/// [`lower_stack`], and the program's nodes it lowered: what an
+/// evaluation lowers again once the schema has read its literals (R-192,
+/// [`crate::types::read_program`]).
+pub fn lower_stack_nodes(
+    units: &[Unit],
+    entries: &[usize],
+    file: bool,
+    mode: Mode,
+    stack: Option<&StackSource>,
+    deployed: &[Deployed],
+) -> Result<(Program, crate::program::Program), Vec<Diagnostic>> {
     if mode == Mode::Program {
         units.iter().for_each(|u| field_orders(&u.root));
     }
@@ -194,7 +208,8 @@ pub fn lower_stack(
     program.roots = roots;
     program.stack = settings;
     program.diags = std::mem::take(&mut l.diags);
-    crate::program::lower(&program).into_result()
+    let result = crate::program::lower(&program).into_result();
+    result.map(|p| (p, program))
 }
 
 /// Remember the order `root` writes objects' fields in

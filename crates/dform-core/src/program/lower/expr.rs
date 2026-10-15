@@ -8,7 +8,7 @@
 use crate::ast::{Atom, Lit, Span, Stmt, Term, TypeExpr, str_term};
 use crate::program::node::*;
 use crate::program::scope::Reach;
-use crate::program::{NodeId, Program};
+use crate::program::{NodeId, Program, Readings};
 use std::collections::BTreeMap;
 
 /// The term `id` is, and the reads it hoists, in order.
@@ -16,6 +16,16 @@ pub fn lower_expr(program: &Program, id: ExprId) -> (Term, Vec<Lit>) {
     let mut l = Lowering::new(program);
     let t = l.expr(id);
     (t, l.reads)
+}
+
+/// The term `id` is, its nodes read as `readings` reads them (over the
+/// program's own): what a reading being decided makes of it.
+pub fn read_expr(program: &Program, readings: &Readings, id: ExprId) -> Term {
+    let mut l = Lowering {
+        readings,
+        ..Lowering::new(program)
+    };
+    l.expr(id)
 }
 
 /// The helper statements lowering the term `id` makes (a comprehension's
@@ -31,6 +41,9 @@ pub fn expr_helpers(program: &Program, id: ExprId) -> Vec<Stmt> {
 /// facts a membership states), in order.
 pub(super) struct Lowering<'p> {
     pub(super) program: &'p Program,
+    /// What each node is read as, the program's own unless a reading is
+    /// being decided ([`read_expr`]).
+    readings: &'p Readings,
     pub(super) reads: Vec<Lit>,
     pub(super) helpers: Vec<Stmt>,
 }
@@ -39,16 +52,23 @@ impl<'p> Lowering<'p> {
     pub(super) fn new(program: &'p Program) -> Self {
         Lowering {
             program,
+            readings: &program.readings,
             reads: Vec::new(),
             helpers: Vec::new(),
         }
     }
 
+    /// The term `id` is, as its position reads it (its reading, R-192):
+    /// its reads hoisted and its helpers made either way.
     pub(super) fn expr(&mut self, id: ExprId) -> Term {
         self.terms_made(NodeId::Expr(id));
-        match self.program.exprs[id].hoisted {
+        let t = match self.program.exprs[id].hoisted {
             Some(v) => self.hoist(id, v),
             None => self.kind(id),
+        };
+        match self.readings.get(id) {
+            Some(read) => read.clone(),
+            None => t,
         }
     }
 
@@ -389,7 +409,7 @@ impl<'p> Lowering<'p> {
 }
 
 /// A path of field steps as stored: its segments joined by `.`.
-pub(super) fn stored(path: &[Step]) -> String {
+pub(crate) fn stored(path: &[Step]) -> String {
     let segs: Vec<&str> = path
         .iter()
         .map(|s| match s {

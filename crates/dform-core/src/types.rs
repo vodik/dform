@@ -25,13 +25,19 @@
 //! checked when it has one, at evaluation.
 
 use crate::address::Address;
+use crate::ast::str_term;
 use crate::ast::{Lit, Program, Stmt, Term, TypeExpr};
 use crate::diag::{Diagnostic, Diagnostics};
+use crate::program::node::{
+    ExprId, ExprKind, Header, ItemId, ItemKind, ListPart, ObjPart, ResourceBody, Target, Write,
+};
+use crate::program::{self as prog, ClauseId, Readings};
 use crate::quantity::{self, Dim};
 use crate::schema::Schema;
 use crate::spell;
 use crate::value::Value;
 use anyhow::Result;
+use std::collections::BTreeMap;
 
 /// The internal function a quantity literal with no reading of its own
 /// lowers to (`500m`, `2.5m`): the position's type reads it.
@@ -866,6 +872,17 @@ pub fn read(program: &mut Program, schema: &Schema) -> Result<()> {
     }
     // Every other literal at the edges its value reaches (R-192).
     diags.extend(crate::edges::read(program, schema));
+    left_unread(program, &mut diags);
+    if diags.is_empty() {
+        Ok(())
+    } else {
+        Err(Diagnostics(diags).into())
+    }
+}
+
+/// The errors of what no position read: a quantity literal no type reads
+/// (`500m`), a name two resources share no `ref(T)` picks (R-74).
+fn left_unread(program: &Program, diags: &mut Vec<Diagnostic>) {
     for s in &program.statements {
         stmt_terms(s, &mut |t, span| {
             visit(t, &mut |t| {
@@ -882,11 +899,6 @@ pub fn read(program: &mut Program, schema: &Schema) -> Result<()> {
                 }
             })
         });
-    }
-    if diags.is_empty() {
-        Ok(())
-    } else {
-        Err(Diagnostics(diags).into())
     }
 }
 
@@ -1358,6 +1370,572 @@ fn visit(t: &Term, f: &mut dyn FnMut(&Term)) {
     }
 }
 
+/// TEMPORARY (R-211, the readings' first commit): [`read`] of `program`,
+/// checked (in a debug build) to be [`read_program`] of its nodes.
+pub fn read_checked(
+    nodes: &prog::Program,
+    mut program: Program,
+    schema: &Schema,
+) -> Result<Program> {
+    #[cfg(debug_assertions)]
+    let by_node = read_program(nodes, &program, schema);
+    #[cfg(not(debug_assertions))]
+    let _ = nodes;
+    let typed = read(&mut program, schema).map(|()| program);
+    #[cfg(debug_assertions)]
+    same_reading(&typed, &by_node);
+    typed
+}
+
+/// The program read in place and its nodes lowered as read are one
+/// program, its errors the same: every rewrite the pass made in place is
+/// a reading by node.
+#[cfg(debug_assertions)]
+fn same_reading(typed: &Result<Program>, read: &Result<Program>) {
+    let dumped = |r: &Result<Program>| {
+        let r = match r {
+            Ok(p) => Ok(p.clone()),
+            Err(e) => Err(e
+                .downcast_ref::<Diagnostics>()
+                .map(|d| d.0.clone())
+                .unwrap_or_else(|| vec![Diagnostic::error(Default::default(), e.to_string())])),
+        };
+        crate::program::dump::dump(&r)
+    };
+    let (a, b) = (dumped(typed), dumped(read));
+    if a != b {
+        let first = a
+            .lines()
+            .zip(b.lines())
+            .find(|(x, y)| x != y)
+            .map(|(x, y)| format!("in place: {x}\nby node:  {y}"))
+            .unwrap_or_else(|| "one is longer".into());
+        panic!("the readings by node differ from the rewrite in place:\n{first}");
+    }
+}
+
+// --- over the program's nodes -------------------------------------------
+
+/// What a line of a `set` writes: a node, or an element's content
+/// (`items::element_write`: its key, the path under the element, the
+/// value).
+#[derive(Clone, Copy)]
+enum Written<'p> {
+    Node(ExprId),
+    Elem {
+        key: ExprId,
+        rest: &'p [String],
+        value: ExprId,
+    },
+}
+
+/// The readings of a program's attributes (the half of [`read`] that reads
+/// a resource's entries and a `set`'s values at their schema paths), by
+/// node.
+struct Reader<'p> {
+    p: &'p prog::Program,
+    schema: &'p Schema,
+    read: Readings,
+    diags: Vec<Diagnostic>,
+}
+
+impl<'p> Reader<'p> {
+    fn items(&mut self, ids: &[ItemId]) {
+        let p = self.p;
+        for &id in ids {
+            let it = &p.items[id];
+            match &it.kind {
+                ItemKind::Module { items, .. } => self.items(items),
+                ItemKind::Resource {
+                    typ, name, body, ..
+                } => self.resource(&typ.name, name, body),
+                ItemKind::Set { writes, clause } => {
+                    for w in writes {
+                        self.write(w, *clause);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Each entry at its attribute's path.
+    fn resource(&mut self, typ: &str, name: &Header, body: &ResourceBody) {
+        let p = self.p;
+        let name = crate::edges::header_term(name);
+        // A constant object's keys, each read and folded back.
+        if let ResourceBody::Value(v) = body
+            && p.exprs[*v].hoisted.is_none()
+            && let ExprKind::Lit(Value::Obj(m)) = &p.exprs[*v].kind
+        {
+            let span = p.exprs[*v].span;
+            let mut read = m.clone();
+            for (k, x) in &mut read {
+                let key = crate::address::path_join("", k);
+                let mut t = Term::Val(x.clone());
+                if let Err((path, why)) = read_at(self.schema, typ, &key, &mut t) {
+                    let at = crate::edges::shown_attr(typ, &name, &path);
+                    self.diags
+                        .push(Diagnostic::error(span, format!("{at} {why}")));
+                }
+                *x = constant(t);
+            }
+            if read != *m {
+                self.read.insert(*v, Term::Val(Value::Obj(read)));
+            }
+            return;
+        }
+        for (key, part, span) in crate::edges::entries(p, body) {
+            let crate::edges::Part::Node(e) = part else {
+                unreachable!("a value's entries are its nodes")
+            };
+            let mut out = std::mem::take(&mut self.read);
+            let r = self.at(typ, &key, e, &mut out);
+            self.read = out;
+            if let Err((path, why)) = r {
+                let at = crate::edges::shown_attr(typ, &name, &path);
+                self.diags
+                    .push(Diagnostic::error(span, format!("{at} {why}")));
+            }
+        }
+    }
+
+    /// `arg(T, A, P, V, ..)`: `V` at `T`'s `P`; through a variable of
+    /// several types (R-185) as each, which must agree.
+    fn write(&mut self, w: &'p Write, clause: Option<ClauseId>) {
+        if !matches!(w.op, crate::ast::FieldOp::Assign) {
+            return;
+        }
+        let (typ, addr, path, written, cell) = match &w.target {
+            Target::Attr { typ, addr, path } => {
+                let typ = prog::lower_expr(self.p, *typ).0;
+                (
+                    typ,
+                    Some(*addr),
+                    path.as_str(),
+                    Written::Node(w.value),
+                    vec![],
+                )
+            }
+            Target::Element {
+                typ,
+                addr,
+                list,
+                key,
+                rest,
+            } => {
+                let typ = prog::lower_expr(self.p, *typ).0;
+                let elem = Written::Elem {
+                    key: *key,
+                    rest,
+                    value: w.value,
+                };
+                (typ, Some(*addr), list.as_str(), elem, vec![*key])
+            }
+            Target::Input { path } => (
+                str_term(crate::modules::INPUT),
+                None,
+                path.as_str(),
+                Written::Node(w.value),
+                vec![],
+            ),
+        };
+        match &typ {
+            Term::Var(_) => {
+                let reads = cell
+                    .iter()
+                    .chain(addr.iter())
+                    .chain([&w.value])
+                    .any(|e| !prog::lower_expr(self.p, *e).1.is_empty());
+                if clause.is_some() || reads {
+                    self.through_var(w, typ, path, written, clause);
+                }
+            }
+            Term::Val(Value::Str(t)) => {
+                let mut out = std::mem::take(&mut self.read);
+                let r = self.written(t, path, written, &mut out);
+                self.read = out;
+                if let Err((path, why)) = r {
+                    let name = match addr {
+                        Some(a) => prog::lower_expr(self.p, a).0,
+                        None => str_term(""),
+                    };
+                    let at = crate::edges::shown_attr(t, &name, &path);
+                    self.diags
+                        .push(Diagnostic::error(w.span, format!("{at} {why}")));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A `set` through a variable of several types (R-185: `set
+    /// w.spec.x = v where workload(w)`): read as each, which must agree;
+    /// through any type (`x in resource`), a quantity only a position's
+    /// type reads at the attribute's edge ([`at_edge`]).
+    fn through_var(
+        &mut self,
+        w: &Write,
+        typ: Term,
+        path: &str,
+        written: Written,
+        clause: Option<ClauseId>,
+    ) {
+        let r = crate::edges::set_rule(self.p, typ, clause);
+        let types = row_types(&r.head.args[0], &r.body);
+        if types.is_empty() {
+            if let Some(read) = self.at_edge(&r, path, written) {
+                self.read.extend(read);
+            }
+            return;
+        }
+        let mut read: Option<(Term, Readings)> = None;
+        for typ in &types {
+            let mut tmp = Readings::new();
+            if let Err((path, why)) = self.written(typ, path, written, &mut tmp) {
+                self.diags
+                    .push(Diagnostic::error(w.span, format!("{typ}.{path} {why}")));
+                return;
+            }
+            let v = self.term(written, &tmp);
+            match &read {
+                Some((first, _)) if *first != v => {
+                    self.diags.push(Diagnostic::error(
+                        w.span,
+                        format!(
+                            "{path} is read one way for {} and another for {typ}: write \
+                             it once per type",
+                            types[0]
+                        ),
+                    ));
+                    return;
+                }
+                Some(_) => {}
+                None => read = Some((v, tmp)),
+            }
+        }
+        if let Some((_, tmp)) = read {
+            self.read.extend(tmp);
+        }
+    }
+
+    /// [`at_edge`] of a written value: the readings of the types that
+    /// read it alike.
+    fn at_edge(&self, r: &crate::ast::RuleStmt, path: &str, written: Written) -> Option<Readings> {
+        if !holds_ambiguous(&self.term(written, &Readings::new())) {
+            return None;
+        }
+        let mut read: Option<(Term, Readings)> = None;
+        for typ in &any_types(self.schema, r, path) {
+            let mut tmp = Readings::new();
+            if self.written(typ, path, written, &mut tmp).is_err() {
+                continue;
+            }
+            let v = self.term(written, &tmp);
+            if holds_ambiguous(&v) {
+                continue;
+            }
+            match &read {
+                Some((first, _)) if *first != v => return None,
+                Some(_) => {}
+                None => read = Some((v, tmp)),
+            }
+        }
+        read.map(|(_, tmp)| tmp)
+    }
+
+    /// The term a line writes, its nodes read as `readings` reads them.
+    fn term(&self, written: Written, readings: &Readings) -> Term {
+        match written {
+            Written::Node(e) => prog::read_expr(self.p, readings, e),
+            Written::Elem { key, rest, value } => prog::lower::element_write(
+                prog::read_expr(self.p, readings, key),
+                rest,
+                prog::read_expr(self.p, readings, value),
+            ),
+        }
+    }
+
+    /// [`read_at`] of what a line writes at `typ`'s `path`, its readings
+    /// onto `out`.
+    fn written(
+        &self,
+        typ: &str,
+        path: &str,
+        written: Written,
+        out: &mut Readings,
+    ) -> Result<(), (String, String)> {
+        match written {
+            Written::Node(e) => self.at(typ, path, e, out),
+            // `{"[key]": k, p: {q: v}}` at the list's path: the content's
+            // paths under it (`l.p.q`); its key and a value held whole
+            // under `[value]` no path of the schema's.
+            Written::Elem { rest, value, .. } => {
+                if !rest.is_empty() {
+                    let mut at = path.to_string();
+                    for k in rest {
+                        at = format!("{at}.{k}");
+                    }
+                    return self.at(typ, &at, value, out);
+                }
+                let p = self.p;
+                if p.exprs[value].hoisted.is_some() {
+                    return Ok(());
+                }
+                match &p.exprs[value].kind {
+                    ExprKind::Object { parts } if !object_spreads(parts) => {
+                        for (k, v) in fields(parts) {
+                            self.at(typ, &format!("{path}.{k}"), v, out)?;
+                        }
+                        Ok(())
+                    }
+                    ExprKind::Lit(Value::Obj(m)) => {
+                        let mut read = m.clone();
+                        let mut r = Ok(());
+                        for (k, x) in &mut read {
+                            let mut t = Term::Val(x.clone());
+                            if r.is_ok() {
+                                r = read_at(self.schema, typ, &format!("{path}.{k}"), &mut t);
+                            }
+                            *x = constant(t);
+                        }
+                        if read != *m {
+                            out.insert(value, Term::Val(Value::Obj(read)));
+                        }
+                        r
+                    }
+                    _ => Ok(()),
+                }
+            }
+        }
+    }
+
+    /// [`read_at`] over the nodes: the node `e` at `typ`'s `path`, its
+    /// readings onto `out`.
+    fn at(
+        &self,
+        typ: &str,
+        path: &str,
+        e: ExprId,
+        out: &mut Readings,
+    ) -> Result<(), (String, String)> {
+        let p = self.p;
+        let x = &p.exprs[e];
+        let leaf = matches!(
+            x.kind,
+            ExprKind::Lit(_) | ExprKind::Quantity { .. } | ExprKind::Range { .. }
+        );
+        // A literal: its term, read.
+        if x.hoisted.is_none() && leaf {
+            let mut t = prog::lower_expr(p, e).0;
+            let before = t.clone();
+            let r = read_at(self.schema, typ, path, &mut t);
+            if t != before {
+                out.insert(e, t);
+            }
+            return r;
+        }
+        if let Some(spec) = self.schema.attr(typ, path)
+            && let Some(r) = self.at_attr(&Ty::parse(&spec.ty), path, e, out)
+        {
+            return r;
+        }
+        if x.hoisted.is_some() {
+            return Ok(());
+        }
+        match &x.kind {
+            ExprKind::Object { parts } if !object_computes(parts) => {
+                // `{ ..a, k: v }`: what is written beside a spread is the
+                // value's (R-192).
+                for part in object_parts(parts) {
+                    match part {
+                        Ok(fields) => {
+                            for (k, v) in fields {
+                                self.at(typ, &format!("{path}.{k}"), v, out)?;
+                            }
+                        }
+                        Err(s) => self.at(typ, path, s, out)?,
+                    }
+                }
+                Ok(())
+            }
+            ExprKind::List { parts } => {
+                for part in parts {
+                    match part {
+                        ListPart::Elem(v) | ListPart::Spread(v) => self.at(typ, path, *v, out)?,
+                    }
+                }
+                Ok(())
+            }
+            ExprKind::Alias(a) => self.at(typ, path, *a, out),
+            _ => Ok(()),
+        }
+    }
+
+    /// The node `e` at an attribute of type `ty`: a name two resources
+    /// share picked by a `ref(T)` (R-74); a quantity's or a time's
+    /// position read as one, a value type's as one (R-134), now or at run
+    /// time. `None` where the type reads it as its parts.
+    fn at_attr(
+        &self,
+        ty: &Ty,
+        path: &str,
+        e: ExprId,
+        out: &mut Readings,
+    ) -> Option<Result<(), (String, String)>> {
+        let p = self.p;
+        self.pick(ty, e, out);
+        let unread = prog::lower_expr(p, e).0;
+        let t = if ty.measured() {
+            let t = prog::read_expr(p, out, e);
+            if let Some(why) = mismatch(ty, &t) {
+                return Some(Err((path.to_string(), why)));
+            }
+            read_as(ty, t)
+        } else if let Ty::Scalar(s) = ty
+            && crate::value::is_value_type(s)
+        {
+            let t = prog::read_expr(p, out, e);
+            match &t {
+                Term::Func { name, .. } if name == crate::range::LOWERED => read_as(ty, t),
+                Term::Var(_) | Term::Func { .. } => at_run_time(ty, t),
+                _ => read_as(ty, t),
+            }
+        } else {
+            return None;
+        };
+        if t != unread {
+            out.insert(e, t);
+        }
+        Some(Ok(()))
+    }
+
+    /// [`pick_refs`] over the nodes.
+    fn pick(&self, ty: &Ty, e: ExprId, out: &mut Readings) {
+        let p = self.p;
+        match ty {
+            Ty::Secret(inner) => self.pick(inner, e, out),
+            Ty::List(inner) => {
+                if p.exprs[e].hoisted.is_none()
+                    && let ExprKind::List { parts } = &p.exprs[e].kind
+                    && !parts.iter().any(|x| matches!(x, ListPart::Spread(_)))
+                {
+                    for part in parts {
+                        if let ListPart::Elem(x) = part {
+                            self.pick(inner, *x, out);
+                        }
+                    }
+                }
+            }
+            Ty::Ref(want) => {
+                let t = prog::read_expr(p, out, e);
+                let picked = ambiguous_ref_of(&t).and_then(|(_, cs)| {
+                    let mut of = cs
+                        .iter()
+                        .filter(|c| reference(c).is_some_and(|(typ, _)| typ == want));
+                    of.next().filter(|_| of.next().is_none()).cloned()
+                });
+                if let Some(c) = picked {
+                    out.insert(e, c);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Whether an object's parts compute a key (`__object`).
+fn object_computes(parts: &[ObjPart]) -> bool {
+    parts.iter().any(|p| matches!(p, ObjPart::Computed { .. }))
+}
+
+/// Whether an object's parts spread one (`__merge`).
+fn object_spreads(parts: &[ObjPart]) -> bool {
+    parts.iter().any(|p| matches!(p, ObjPart::Spread(_)))
+}
+
+/// An object's written fields as `lower` writes them: by key, the last
+/// written of a key its value.
+fn fields(parts: &[ObjPart]) -> BTreeMap<&str, ExprId> {
+    parts
+        .iter()
+        .filter_map(|p| match p {
+            ObjPart::Field { key, value, .. } => Some((key.as_str(), *value)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// An object's parts as `lower` writes them: each run of written fields
+/// one object (`Ok`), each spread its source (`Err`).
+fn object_parts(parts: &[ObjPart]) -> Vec<Result<BTreeMap<&str, ExprId>, ExprId>> {
+    let mut out = Vec::new();
+    let mut run: Option<BTreeMap<&str, ExprId>> = None;
+    for p in parts {
+        match p {
+            ObjPart::Field { key, value, .. } => {
+                run.get_or_insert_default().insert(key.as_str(), *value);
+            }
+            ObjPart::Spread(s) => {
+                out.extend(run.take().map(Ok));
+                out.push(Err(*s));
+            }
+            ObjPart::Computed { .. } => {}
+        }
+    }
+    let spread = object_spreads(parts);
+    match (spread, run) {
+        (false, run) => out.push(Ok(run.unwrap_or_default())),
+        (true, run) => out.extend(run.map(Ok)),
+    }
+    out
+}
+
+/// What every literal of the program's nodes is read as, now the schema
+/// is known (R-66, R-62, R-134, R-192), as [`read`] reads the program they
+/// lower to: each node's reading and the errors, those of what no
+/// position reads aside ([`read_program`]).
+pub fn readings(program: &prog::Program, schema: &Schema) -> (Readings, Vec<Diagnostic>) {
+    let unread = match crate::program::lower(program).rules {
+        Ok(p) => p,
+        Err(d) => return (Readings::new(), d),
+    };
+    let mut r = Reader {
+        p: program,
+        schema,
+        read: Readings::new(),
+        diags: Vec::new(),
+    };
+    r.items(&program.roots);
+    let (edges, diags, _) = crate::edges::read_nodes(program, &unread, schema);
+    r.read.extend(edges);
+    r.diags.extend(diags);
+    (r.read, r.diags)
+}
+
+/// The program evaluated: `program`, whose first statements are what
+/// `nodes` lower to and the rest what the run adds (an input file's
+/// facts, the policy rules, declared externs), with `nodes` lowered as
+/// read ([`readings`]) in their place; the errors of a literal no position
+/// reads.
+pub fn read_program(nodes: &prog::Program, program: &Program, schema: &Schema) -> Result<Program> {
+    let mut nodes = nodes.clone();
+    let (readings, mut diags) = readings(&nodes, schema);
+    nodes.readings = readings;
+    let read = crate::program::lower(&nodes)
+        .into_result()
+        .map_err(Diagnostics)?;
+    let mut out = program.clone();
+    let n = read.statements.len();
+    out.statements.splice(..n, read.statements);
+    left_unread(&out, &mut diags);
+    if diags.is_empty() {
+        Ok(out)
+    } else {
+        Err(Diagnostics(diags).into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1421,6 +1999,60 @@ mod tests {
             "`vpc_id` is `vpc` here: a reference is the resource"
         );
         assert_eq!(d.help.as_deref(), Some("write `vpc`"));
+    }
+
+    /// The nodes `src` builds to, as a stack's file.
+    fn nodes(src: &str) -> prog::Program {
+        use crate::syntax::resolve::{Mode, Unit, lower_stack_nodes};
+        let file = crate::diag::add_source("readings.df", src);
+        let parse = crate::syntax::parser::parse(src);
+        assert!(parse.errors.is_empty(), "{:?}", parse.errors);
+        let units = [Unit {
+            file,
+            root: parse.syntax(),
+            path: None,
+            project: false,
+        }];
+        lower_stack_nodes(&units, &[0], true, Mode::Program, None, &[])
+            .unwrap()
+            .1
+    }
+
+    /// A component's literals are read by node, its body as written
+    /// (R-211): the attribute's own (`cidr = "10.0.0.0/8"`), one a let
+    /// gives the attribute, and the let's value the attribute reads at run
+    /// time (`__as(C, "inet")`), each a reading `lower` writes in its
+    /// place; the program lowered without them is unread.
+    #[test]
+    fn a_components_literals_are_read_by_node_its_body_as_written() {
+        let schema = Schema::parse("type_attr(\"t.r\", \"cidr\", \"inet\", [])\n", "test")
+            .and_then(Schema::imported)
+            .unwrap();
+        let mut nodes = nodes(
+            "component lan {\n  let c = \"10.1.0.0/16\"\n  \
+             resource t.r a { cidr = \"10.0.0.0/8\" }\n  \
+             resource t.r b { cidr = c }\n}\nresource lan n {}\n",
+        );
+        let (readings, diags) = readings(&nodes, &schema);
+        assert!(diags.is_empty(), "{diags:?}");
+        let read: Vec<String> = readings.values().map(|t| format!("{t:?}")).collect();
+        let networks = read.iter().filter(|t| t.contains("IpNet")).count();
+        let at_run_time = read.iter().filter(|t| t.contains("__as")).count();
+        assert_eq!((networks, at_run_time, read.len()), (2, 1, 3), "{read:?}");
+        let body = |p: &Program| {
+            p.statements
+                .iter()
+                .find_map(|s| match s {
+                    Stmt::Module(m) => Some(format!("{:?}", m.body)),
+                    _ => None,
+                })
+                .expect("the component")
+        };
+        let unread = body(&crate::program::lower(&nodes).into_result().unwrap());
+        assert!(unread.contains("Str(\"10.0.0.0/8\")") && !unread.contains("IpNet"));
+        nodes.readings = readings;
+        let read = body(&crate::program::lower(&nodes).into_result().unwrap());
+        assert!(!read.contains("Str(\"10.0.0.0/8\")") && !read.contains("Str(\"10.1.0.0/16\")"));
     }
 
     #[test]

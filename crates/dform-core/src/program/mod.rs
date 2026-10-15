@@ -24,7 +24,7 @@ pub mod spell;
 pub mod types;
 
 pub use build::Builder;
-pub use lower::{LoweredStack, lower, lower_clause, lower_expr, lower_goal, lower_item};
+pub use lower::{LoweredStack, lower, lower_clause, lower_expr, lower_goal, lower_item, read_expr};
 pub use node::{
     Clause, ClauseId, Expr, ExprId, ExprKind, Goal, GoalId, Item, ItemId, ItemKind, Pattern,
     PatternId, Var, VarId,
@@ -34,7 +34,7 @@ pub use scope::{Scope, ScopeId, ScopeKind, Scopes};
 pub use spell::spell;
 
 /// A program of one stack (or one text read on its own).
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Program {
     pub items: SlotMap<ItemId, Item>,
     pub exprs: SlotMap<ExprId, Expr>,
@@ -59,7 +59,19 @@ pub struct Program {
     /// loader's extern): lowered before the node's own (step 5; gone when
     /// terms are built from the tree).
     pub terms_made: std::collections::BTreeMap<NodeId, Vec<Stmt>>,
+    /// What each literal is read as once the providers' schemas are known
+    /// (R-192, [`crate::types::readings`]): empty until then, and what
+    /// `lower` writes in each node's place.
+    pub readings: Readings,
 }
+
+/// The typed readings (R-66, R-134, R-192): the term a node lowers to as
+/// its position reads it, by node. A literal read as its type (`"10.0.0.0/8"`
+/// at an `inet` edge a network, `500m` at a cpu one millicores), a
+/// computed value read at run time (`__as(V, "inet")`), a candidate picked
+/// for a name two resources share (R-74). No pass rewrites a node: `lower`
+/// writes the reading where the node's own term would be.
+pub type Readings = slotmap::SecondaryMap<ExprId, ast::Term>;
 
 /// How many of each numbered helper the build has taken: the one counter
 /// the resolver and the builders take numbers from, in the order the

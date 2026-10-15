@@ -105,6 +105,10 @@ pub struct Loaded {
     pub manifest: Option<Manifest>,
     /// The program, the input files' facts added.
     pub program: Program,
+    /// The program's nodes (R-211), which [`Located::typed_program`]
+    /// lowers again once the schema has read its literals: the stack's
+    /// statements `program` begins with.
+    pub nodes: std::rc::Rc<crate::program::Program>,
     /// The program's files, as sources.
     pub relations: Vec<Relation>,
     /// The stack's settings (dform.toml's) and its providers' `use`s.
@@ -138,7 +142,12 @@ pub fn load(t: &Target, version: &str, read: Reader, obs: &mut dyn Observer) -> 
         Some(root) => Some(Manifest::load(&root.join(project::MANIFEST), version)?),
         None => None,
     };
-    let (mut program, loaded, deployed) = loader::load_program_files_with(&files, read)?;
+    let loader::LoadedProgram {
+        mut program,
+        files: loaded,
+        deployed,
+        nodes,
+    } = loader::load_program_files_with(&files, read)?;
     // The program's files, each a source the controller watches (R-39).
     let relations = crate::watch::program_sources(&loaded);
     obs.relations(&relations);
@@ -178,6 +187,7 @@ pub fn load(t: &Target, version: &str, read: Reader, obs: &mut dyn Observer) -> 
         files,
         manifest,
         program,
+        nodes: std::rc::Rc::new(nodes),
         relations,
         cfg,
         stack,
@@ -2070,8 +2080,7 @@ impl Located {
         if let Some(l) = lowered {
             declare_externs(&mut program, l);
         }
-        crate::types::read(&mut program, schema)?;
-        Ok(program)
+        crate::types::read_checked(&self.loaded.nodes, program, schema)
     }
 
     /// The collision lint of a keyed stack: a name every deployment writes

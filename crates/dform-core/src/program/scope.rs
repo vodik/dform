@@ -50,7 +50,7 @@ pub enum ScopeKind {
 
 /// The program's scopes: the tree, and its indexes by where a scope is
 /// written.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Scopes {
     tree: SlotMap<ScopeId, Scope>,
     /// What each scope declares.
