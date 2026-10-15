@@ -685,6 +685,10 @@ struct Rc {
 /// A term and its node.
 type Termed = (Term, ExprId);
 
+/// A block's entries as lowered: each, its value's node, and where its
+/// reads and helpers end.
+type Entries = Vec<(FieldAssign, ExprId, (usize, usize))>;
+
 /// The resource list `in` ranges a variable over (R-69): its resource's
 /// type and address and the list's path.
 #[derive(Clone)]
@@ -4032,12 +4036,7 @@ impl<'u> Lowerer<'u> {
 
     /// The assignments of a block, their reads appended to `reads`; with
     /// each, where its reads and the statement's helpers it made end.
-    fn fields(
-        &mut self,
-        rc: &mut Rc,
-        block: &SyntaxNode,
-        reads: &mut Vec<Lit>,
-    ) -> L<Vec<(FieldAssign, ExprId, (usize, usize))>> {
+    fn fields(&mut self, rc: &mut Rc, block: &SyntaxNode, reads: &mut Vec<Lit>) -> L<Entries> {
         let mut out = Vec::new();
         let mut failed = false;
         for a in block.children().filter(|c| c.kind() == ASSIGN) {
@@ -7368,7 +7367,7 @@ impl<'u> Lowerer<'u> {
                 if pred == "moved" {
                     self.address_key(&args[1].0, span)?;
                 }
-                return Ok(Self::positional(pred, args, span));
+                Ok(Self::positional(pred, args, span))
             }
             // A program relation's reference column (R-185): a resource
             // there is the reference, as in the plan's relations.
@@ -7387,7 +7386,7 @@ impl<'u> Lowerer<'u> {
                     record: None,
                     span,
                 };
-                return Ok((a, nodes.map(AtomArgs::Positional)));
+                Ok((a, nodes.map(AtomArgs::Positional)))
             }
             // In a body an argument is a pattern (R-58): `pair((a, b))`;
             // a relation of several named columns takes one object
@@ -7408,7 +7407,7 @@ impl<'u> Lowerer<'u> {
                         record: Some(record),
                         span,
                     };
-                    return Ok((a, Some(AtomArgs::Record(nodes))));
+                    return Ok((a, Some(nodes)));
                 }
                 let mut args = Vec::new();
                 for t in &list {
@@ -7417,7 +7416,7 @@ impl<'u> Lowerer<'u> {
                         _ => self.arg_node(rc, t, pos, pre)?,
                     });
                 }
-                return Ok(Self::positional(pred, args, span));
+                Ok(Self::positional(pred, args, span))
             }
             None => {
                 let (args, nodes) = self.args(rc, n, pos, pre)?;
@@ -7948,7 +7947,7 @@ impl<'u> Lowerer<'u> {
         pre: &mut Vec<Lit>,
     ) -> L<(Vec<Term>, Vec<ExprId>)> {
         let mut out = Vec::new();
-        for t in node(n, ARG_LIST).iter().flat_map(|l| terms(l)) {
+        for t in node(n, ARG_LIST).iter().flat_map(terms) {
             out.push(self.arg_node(rc, &t, pos, pre)?);
         }
         Ok(out.into_iter().unzip())

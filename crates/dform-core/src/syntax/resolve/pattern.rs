@@ -248,7 +248,7 @@ impl Lowerer<'_> {
         rc: &mut Rc,
         o: &SyntaxNode,
         pre: &mut Vec<Lit>,
-    ) -> L<(BTreeMap<String, Term>, Vec<(String, ExprId)>)> {
+    ) -> L<(BTreeMap<String, Term>, AtomArgs)> {
         let mut fields = BTreeMap::new();
         let mut nodes = Vec::new();
         for f in o.children().filter(|c| c.kind() == OBJECT_FIELD) {
@@ -269,7 +269,7 @@ impl Lowerer<'_> {
             }
             nodes.push((key, id));
         }
-        Ok((fields, nodes))
+        Ok((fields, AtomArgs::Record(nodes)))
     }
 
     /// `{ a }`: the name `a`, binding (or, a name already, comparing).
