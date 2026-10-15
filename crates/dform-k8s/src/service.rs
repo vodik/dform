@@ -74,9 +74,7 @@ pub struct K8s {
 /// being told nothing of the run's `-v`.
 fn say(line: &str, e: &anyhow::Error) {
     eprintln!("{line}");
-    if dform_core::timing::enabled() {
-        eprintln!("k8s: {e:#}");
-    }
+    tracing::debug!(target: dform_core::timing::TARGET, "k8s: {e:#}");
 }
 
 impl K8s {
@@ -1218,8 +1216,9 @@ impl pb::provider_server::Provider for Service {
 }
 
 /// Serve as a provider (`dform_grpc::transport`: TCP on the loopback, or a unix
-/// socket), and exit when stdin closes.
+/// socket), and exit when stdin closes; `DFORM_LOG`'s lines on stderr.
 pub fn serve() -> Result<()> {
+    dform_core::log::install();
     dform_grpc::transport::serve(
         tonic::transport::Server::builder().add_service(
             pb::provider_server::ProviderServer::new(Service::default())

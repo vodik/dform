@@ -585,7 +585,7 @@ refused), the others stopped after that tick.
 <!-- man:environment: docs/man/environment.md, copied by `cargo xtask man` -->
 | Variable | Meaning |
 |---|---|
-| `DFORM_LOG` | `debug`: a line on stderr for each phase of a run and each call it makes over the network, with its wall time |
+| `DFORM_LOG` | `debug`: a line on stderr for each phase of a run and each call it makes, as it ends, with its time; `trace` adds each step a trace shows (an `EnvFilter`'s directives over dform's spans) |
 | `DFORM_TRACE` | a file to write the run's trace to, as `--trace FILE` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | where to send the run's trace over OTLP/HTTP, with the exporter's other `OTEL_EXPORTER_OTLP_*` variables (a build with the `otel` feature; else ignored) |
 | `DFORM_ACTOR` | who acts, as the audit log records it (a CI job's OIDC subject); else `USER@HOST`, from `USER` or `LOGNAME` |
@@ -789,13 +789,15 @@ document prints the document's row and finds the sites of only the lines
 it prints; the Kubernetes provider reads a kind's schema from its cache
 when a run first asks for it. `DFORM_LOG=debug` prints a line
 on stderr for each phase of a run and each backend request and provider
-call, with the time since the run began and how long it took:
+call as it ends, with the time since the run began and how long it took
+(`time.busy`, or `time.idle` for a call waited on), under the spans it
+is in (`tracing`'s format; the spans are the trace's, "A run's trace"):
 
 ```text
-dform:    0.022s       2.2ms  s3 get s3://dform/stacks.app/state.master
-dform:    0.969s     606.7ms  provider ovh: Configure
-dform:    1.575s     605.8ms  provider ovh: Read ovh.instance lab-0
-dform:    1.612s    1611.8ms  finished
+0.022s DEBUG dform.run{..}:plan.phase{otel.name=located the deployment}:io.call{otel.name=s3.get otel.kind="client" kind="s3.get" addr="s3://dform/stacks.app/state.master"}: close time.busy=0.00ns time.idle=2.20ms
+0.969s DEBUG dform.run{..}:plan.phase{otel.name=providers started and configured}:provider.call{otel.name=ovh Configure ..}: close time.busy=0.00ns time.idle=607ms
+1.575s DEBUG dform.run{..}:plan.phase{otel.name=planned (refresh, Plan calls, policy)}:provider.call{otel.name=ovh Read .. addr="ovh.instance lab-0"}: close time.busy=0.00ns time.idle=606ms
+1.612s DEBUG dform.run{otel.name=dform plan command="plan"}: close time.busy=1.61s time.idle=24.6µs
 ```
 
 ### Keyed stacks: one deployment per key value

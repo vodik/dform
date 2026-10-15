@@ -237,14 +237,8 @@ impl Provider for Timed {
                         }
                         continue;
                     }
-                    if let Some((_, what, from, span)) = self.live.remove(&t) {
-                        crate::timing::line(
-                            &format!("provider {}: {what}", self.what),
-                            from.elapsed(),
-                        );
-                        if let Some(span) = span {
-                            span.end();
-                        }
+                    if let Some((.., Some(span))) = self.live.remove(&t) {
+                        span.end();
                     }
                     self.behind.remove(&t);
                     return (t, r);

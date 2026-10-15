@@ -93,6 +93,10 @@ ena = "0.14"
 # tick a span, for the `dform` crate's exporters (its `otel` feature). No
 # subscriber, no cost but a callsite check.
 tracing = { version = "0.1", default-features = false, features = ["std"] }
+# `DFORM_LOG` (src/log.rs): the same spans and events as lines, through
+# `fmt` with an `EnvFilter`; the registry the `dform` crate's trace file
+# and exporter are layers of.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "registry", "fmt", "env-filter"] }
 
 # The built-in `ssh` provider (src/plugin/ssh.rs): an SSH client in
 # process, never the `ssh` binary; exec and SFTP. `ring` for its crypto

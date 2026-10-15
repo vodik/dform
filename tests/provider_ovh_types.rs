@@ -1138,7 +1138,7 @@ fn a_program_with_every_type_plans_applies_and_plans_clean() {
             applied
                 .stderr
                 .lines()
-                .any(|l| l.contains(&format!("  apply {change}: {status}"))),
+                .any(|l| l.contains(&format!(" apply {change}: {status}"))),
             "{change} {status}\n{}",
             applied.stderr
         );

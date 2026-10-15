@@ -1,20 +1,7 @@
-//! Where a run's time goes, read two ways.
-//!
-//! `DFORM_LOG=debug`: a line on stderr for each phase of a run and each
-//! call it makes over the network, with its wall time, so where a slow
-//! plan spends its time is read off the run rather than an strace (while
-//! an apply's block is drawn, above it, as any progress line):
-//!
-//!   dform:   0.412s    61.3ms  s3 get s3://bucket/app/state.json (200)
-//!
-//! The first column is the time since the run began (when the line is
-//! printed, at the end of what it times), the second how long that took.
-//! A gap between one line's end and the next one's start is time spent in
-//! nothing listed.
-//!
-//! `tracing` spans, for a trace file (`--trace FILE`) or a collector
-//! (`OTEL_EXPORTER_OTLP_ENDPOINT`, the `dform` crate's `otel` feature),
-//! both src/trace.rs. Each is named for what it is, the same in
+//! Where a run's time goes: `tracing` spans, for a trace file (`--trace
+//! FILE`) or a collector (`OTEL_EXPORTER_OTLP_ENDPOINT`, the `dform`
+//! crate's `otel` feature), both src/trace.rs, and for `DFORM_LOG`'s
+//! lines ([`crate::log`]). Each is named for what it is, the same in
 //! every run, and carries names, kinds and counts, never a value:
 //!
 //! - `plan.phase`: a step of the run (loaded and compiled, located the
@@ -36,70 +23,24 @@
 //! A call ends when the run takes its answer (`plugin::timed`), which for
 //! a provider the run is not waiting on then is after it came. The order
 //! the run took is a reader's to compute, from the spans' times and
-//! parents.
+//! parents. A phase `DFORM_LOG=debug` says is a `debug` span; one only a
+//! trace showed, `trace`.
 //!
 //! With no subscriber (no trace asked for) and no `DFORM_LOG`, a span
 //! costs its callsite's check.
 
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
 
 /// The target every span of dform's is under: a subscriber keeps these
 /// and drops the libraries' own.
 pub const TARGET: &str = "dform";
 
-/// When the run began, and whether the lines are on.
-static START: OnceLock<(Instant, bool)> = OnceLock::new();
-
-fn start() -> &'static (Instant, bool) {
-    START.get_or_init(|| {
-        let on = std::env::var("DFORM_LOG")
-            .is_ok_and(|v| v.split(',').any(|w| matches!(w.trim(), "debug" | "trace")));
-        (Instant::now(), on)
-    })
-}
-
-/// Start the clock: the run's first act, so the first column counts from it.
-pub fn begin() {
-    start();
-}
-
-/// How long since the run began.
-pub fn elapsed() -> Duration {
-    start().0.elapsed()
-}
-
-/// The run's last line: all of it.
-pub fn finish() {
-    line("finished", elapsed());
-}
-
-/// Whether `DFORM_LOG=debug` asks for the lines.
-pub fn enabled() -> bool {
-    start().1
-}
-
-/// Whether a subscriber keeps dform's spans (a trace file, OTLP).
-pub fn tracing() -> bool {
-    tracing::enabled!(target: TARGET, tracing::Level::INFO)
-}
-
-/// One line: `what` took `took`, and ended now.
-pub fn line(what: &str, took: Duration) {
-    if enabled() {
-        say(what, took);
+/// Whether a subscriber keeps dform's spans of `level`.
+fn kept(level: tracing::Level) -> bool {
+    match level {
+        tracing::Level::TRACE => tracing::enabled!(target: TARGET, tracing::Level::TRACE),
+        _ => tracing::enabled!(target: TARGET, tracing::Level::DEBUG),
     }
-}
-
-/// The line of `what`, which took `took`, said as a progress line is:
-/// on stderr, or above the apply's block while one is drawn
-/// (`progress::route`), never through it.
-pub(crate) fn say(what: &str, took: Duration) {
-    crate::progress::line(&format!(
-        "dform: {:>8.3}s {:>9.1}ms  {what}",
-        elapsed().as_secs_f64(),
-        took.as_secs_f64() * 1000.0
-    ));
 }
 
 /// The run's span, set by whoever exports the spans: a span made on a
@@ -128,62 +69,41 @@ pub fn time<T>(what: impl FnOnce() -> String, f: impl FnOnce() -> T) -> T {
 }
 
 /// A phase, a `plan.phase` span entered until it is dropped (what is
-/// done meanwhile is in it), and a line then.
+/// done meanwhile is in it).
 pub struct Span {
-    /// The line's text, when the lines are on.
-    what: Option<String>,
-    from: Instant,
     _span: tracing::span::EnteredSpan,
 }
 
 /// The phase `what`, until the returned span is dropped.
 pub fn span(what: impl FnOnce() -> String) -> Option<Span> {
-    let (lines, traced) = (enabled(), tracing());
-    if !lines && !traced {
+    if !kept(tracing::Level::DEBUG) {
         return None;
     }
-    let what = what();
-    let span = match traced {
-        true => tracing::info_span!(
-            target: TARGET,
-            parent: parent(),
-            "plan.phase",
-            otel.name = %what,
-        ),
-        false => tracing::Span::none(),
-    };
-    Some(Span {
-        what: lines.then_some(what),
-        from: Instant::now(),
-        _span: span.entered(),
-    })
-}
-
-/// The phase `what` for a subscriber only, no line: a step the lines do
-/// not say.
-pub fn traced(what: impl FnOnce() -> String) -> Option<Span> {
-    if !tracing() {
-        return None;
-    }
-    let span = tracing::info_span!(
+    let span = tracing::debug_span!(
         target: TARGET,
         parent: parent(),
         "plan.phase",
         otel.name = %what(),
     );
     Some(Span {
-        what: None,
-        from: Instant::now(),
         _span: span.entered(),
     })
 }
 
-impl Drop for Span {
-    fn drop(&mut self) {
-        if let Some(what) = &self.what {
-            say(what, self.from.elapsed());
-        }
+/// The phase `what` at `trace`: a step `DFORM_LOG=debug` does not say.
+pub fn traced(what: impl FnOnce() -> String) -> Option<Span> {
+    if !kept(tracing::Level::TRACE) {
+        return None;
     }
+    let span = tracing::trace_span!(
+        target: TARGET,
+        parent: parent(),
+        "plan.phase",
+        otel.name = %what(),
+    );
+    Some(Span {
+        _span: span.entered(),
+    })
 }
 
 /// A call in flight: a `provider.call` or `io.call` span, not entered
@@ -194,20 +114,20 @@ pub struct Call {
 }
 
 impl Call {
-    /// Its answer is in: what is asked next waited on it.
+    /// Its answer is in.
     pub fn end(self) {}
 }
 
 /// A call to the provider `provider` begins: `kind` the method, `addr`
 /// what it is about. `None` unless a subscriber keeps it.
 pub fn provider_call(provider: &str, kind: &str, addr: &str) -> Option<Call> {
-    if !tracing() {
+    if !kept(tracing::Level::DEBUG) {
         return None;
     }
     let addr = (!addr.is_empty()).then_some(addr);
     // A provider not yet named by its handshake, by its executable's name.
     let provider = provider.rsplit('/').next().unwrap_or(provider);
-    let span = tracing::info_span!(
+    let span = tracing::debug_span!(
         target: TARGET,
         parent: parent(),
         "provider.call",
@@ -220,69 +140,56 @@ pub fn provider_call(provider: &str, kind: &str, addr: &str) -> Option<Call> {
     Some(Call { _span: span })
 }
 
-/// A request dform makes itself, `kind` of `addr`, for `f`; its line,
-/// `what`, under `DFORM_LOG`.
+/// A request dform makes itself, `kind` of `addr`, for `f`.
 pub fn io<T>(
     kind: &str,
     addr: impl FnOnce() -> String,
-    what: impl FnOnce() -> String,
+    _what: impl FnOnce() -> String,
     f: impl FnOnce() -> T,
 ) -> T {
     let io = io_begin(kind, addr);
     let out = f();
-    io.end(what);
+    drop(io);
     out
 }
 
 /// A request dform makes itself, begun ([`io_begin`]) and not yet
 /// answered: one made beside others (a round's reads on threads) begins
-/// with them, so they wait on one span, and ends when the run takes its
-/// answer.
+/// with them, and ends when the run takes its answer.
 pub struct Io {
-    call: Option<Call>,
-    from: Option<Instant>,
+    _call: Option<Call>,
 }
 
 /// The request `kind` of `addr` begins (`io`'s, made in parts).
 pub fn io_begin(kind: &str, addr: impl FnOnce() -> String) -> Io {
-    let (lines, traced) = (enabled(), tracing());
-    let call = traced.then(|| {
-        let addr = addr();
-        let span = tracing::info_span!(
+    let call = kept(tracing::Level::DEBUG).then(|| {
+        let span = tracing::debug_span!(
             target: TARGET,
             parent: parent(),
             "io.call",
             otel.name = kind,
             otel.kind = "client",
             kind,
-            addr,
+            addr = addr(),
         );
         Call { _span: span }
     });
-    Io {
-        call,
-        from: (lines || traced).then(Instant::now),
-    }
+    Io { _call: call }
 }
 
 impl Io {
-    /// Its answer is taken; its line, `what`, under `DFORM_LOG`.
-    pub fn end(self, what: impl FnOnce() -> String) {
-        if let Some(from) = self.from {
-            line(&what(), from.elapsed());
-        }
-        drop(self.call);
-    }
+    /// Its answer is taken.
+    pub fn end(self, _what: impl FnOnce() -> String) {}
 }
 
 /// Apply tick `tick` waiting on `count` values not reached yet, of
 /// `kind` (`world`: an object's attribute; `extern`: a call's "not
 /// yet"; both, joined): an `apply.wait` span entered until it is dropped.
 pub fn wait(tick: usize, kind: &str, count: usize) -> Option<Span> {
-    if !tracing() {
+    if !kept(tracing::Level::TRACE) {
         return None;
     }
-    let span = tracing::info_span!(
+    let span = tracing::trace_span!(
         target: TARGET,
         parent: parent(),
         "apply.wait",
@@ -292,8 +199,6 @@ pub fn wait(tick: usize, kind: &str, count: usize) -> Option<Span> {
         count,
     );
     Some(Span {
-        what: None,
-        from: Instant::now(),
         _span: span.entered(),
     })
 }
@@ -303,10 +208,10 @@ pub fn wait(tick: usize, kind: &str, count: usize) -> Option<Span> {
 /// is dropped, with `bucket` (empty: the default), `queued` (the requests
 /// before it) and `window` (how many may be in flight).
 pub fn ratelimit_wait(provider: &str, bucket: &str, queued: usize, window: usize) -> Option<Span> {
-    if !tracing() {
+    if !kept(tracing::Level::TRACE) {
         return None;
     }
-    let span = tracing::info_span!(
+    let span = tracing::trace_span!(
         target: TARGET,
         parent: parent(),
         "ratelimit.wait",
@@ -317,8 +222,6 @@ pub fn ratelimit_wait(provider: &str, bucket: &str, queued: usize, window: usize
         window,
     );
     Some(Span {
-        what: None,
-        from: Instant::now(),
         _span: span.entered(),
     })
 }
@@ -337,10 +240,10 @@ pub fn location(text: &str) -> String {
 
 /// Apply tick `tick`, a `tick` span entered until it is dropped.
 pub fn tick(tick: usize) -> Option<Span> {
-    if !tracing() {
+    if !kept(tracing::Level::TRACE) {
         return None;
     }
-    let span = tracing::info_span!(
+    let span = tracing::trace_span!(
         target: TARGET,
         parent: parent(),
         "tick",
@@ -348,8 +251,6 @@ pub fn tick(tick: usize) -> Option<Span> {
         tick,
     );
     Some(Span {
-        what: None,
-        from: Instant::now(),
         _span: span.entered(),
     })
 }

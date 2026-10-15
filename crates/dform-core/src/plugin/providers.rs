@@ -4067,21 +4067,12 @@ impl Tick<'_> {
         let mut tell = |l: usize, t: Ticket, e: pb::Event| {
             if let Some(f) = in_flight.iter().find(|f| f.link == l && f.ticket == t) {
                 // Its link is in a call: named by the address alone.
-                if crate::timing::enabled() {
-                    let says: Vec<&str> = [&e.status, &e.message]
-                        .into_iter()
-                        .flatten()
-                        .map(String::as_str)
-                        .collect();
-                    crate::timing::line(
-                        &format!(
-                            "apply {}: {}",
-                            crate::report::address(&f.addr),
-                            says.join(": ")
-                        ),
-                        std::time::Duration::ZERO,
-                    );
-                }
+                tracing::debug!(
+                    target: crate::timing::TARGET,
+                    "apply {}: {}",
+                    crate::report::address(&f.addr),
+                    says(&e)
+                );
                 events(f.id, e);
             }
         };
@@ -4453,6 +4444,17 @@ enum Looked {
     NotMade,
     /// Nobody can say; why.
     Unknown(String),
+}
+
+/// What a provider's event of a call in flight says: its status and its
+/// message, joined.
+fn says(e: &pb::Event) -> String {
+    [&e.status, &e.message]
+        .into_iter()
+        .flatten()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(": ")
 }
 
 /// `State::uncertain`'s key for a call of `kind` on `addr`.

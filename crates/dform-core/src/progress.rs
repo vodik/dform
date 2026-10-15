@@ -1,7 +1,7 @@
 //! Progress lines (R-81): what a run that takes a while is doing, on
 //! stderr, one line each, so stdout stays the report (R-63). A retry
 //! (`plugin::link::Retry::line`), a tick waiting on open nulls ([`Wait`])
-//! and a `DFORM_LOG=debug` line (`timing`) say so here.
+//! and a `DFORM_LOG=debug` line (`log`) say so here.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -129,14 +129,20 @@ mod tests {
         })));
         line("retry net.vpc main apply (2/5)");
         // A `DFORM_LOG=debug` line too: it is said as a progress line.
-        crate::timing::say("apply net.vpc main: made", Duration::ZERO);
+        let lines = {
+            use tracing_subscriber::layer::SubscriberExt;
+            tracing_subscriber::registry().with(crate::log::layer_for("debug"))
+        };
+        tracing::subscriber::with_default(lines, || {
+            tracing::debug!(target: crate::timing::TARGET, "apply net.vpc main: made");
+        });
         route(None);
         line("after the block");
         let said = said.lock().unwrap();
         assert!(said.contains(&"retry net.vpc main apply (2/5)".to_string()));
         assert!(
             said.iter()
-                .any(|l| l.starts_with("dform: ") && l.ends_with("  apply net.vpc main: made")),
+                .any(|l| l.contains(" DEBUG ") && l.ends_with(" apply net.vpc main: made")),
             "{said:?}"
         );
         assert!(!said.contains(&"after the block".to_string()));

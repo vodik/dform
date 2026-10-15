@@ -141,15 +141,15 @@ fn a_plan_reads_over_one_connection_writes_nothing_and_calls_its_provider_at_onc
     assert_eq!(c.s3_connections, 1, "{:?}", c.s3);
     // The five objects' reads go out together.
     assert!(server.most_at_once() >= 5, "{:?}", c.ovh);
-    // Every line of the log is there.
+    // Every line of the log is there: each phase and call as it ends.
     for phase in [
-        "s3 get",
+        "kind=\"s3.get\"",
         "started (spawn and handshake)",
-        "provider ovh: Configure",
-        "provider ovh: Read ovh.instance lab-0",
-        "evaluated",
-        "planned",
-        "finished",
+        "provider.call{otel.name=ovh Configure",
+        "addr=\"ovh.instance lab-0\"",
+        "plan.phase{otel.name=evaluated}: close",
+        "plan.phase{otel.name=planned",
+        "dform.run{otel.name=dform plan command=\"plan\"}: close",
     ] {
         assert!(
             out.stderr.contains(phase),

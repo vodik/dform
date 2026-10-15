@@ -16,3 +16,6 @@ kube = "4.2"
 k8s-openapi = { version = "0.28", features = ["latest"] }
 dform-core = { path = "../dform-core" }
 dform-grpc = { path = "../dform-grpc" }
+# The chain of errors behind an offline line, under `DFORM_LOG=debug`
+# (`dform_core::log`).
+tracing = { version = "0.1", default-features = false, features = ["std"] }

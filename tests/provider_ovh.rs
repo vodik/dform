@@ -632,7 +632,7 @@ fn an_instance_create_says_build_then_active() {
     let mut words: Vec<&str> = r
         .stderr
         .lines()
-        .filter_map(|l| l.split_once("  apply ovh.instance server: "))
+        .filter_map(|l| l.split_once(" apply ovh.instance server: "))
         .filter_map(|(_, says)| says.split(": ").next())
         .collect();
     // A word said again is the same word.

@@ -182,7 +182,6 @@ pub fn main(
     if LAUNCH.set(launch).is_err() {
         panic!("internal: cli::main runs once per process");
     }
-    crate::timing::begin();
     let matches = command().get_matches_from(args);
     let args = Args::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     let color = args.inputs.color;
@@ -204,7 +203,8 @@ pub fn main(
         .as_ref()
         .ok()
         .and_then(Option::as_ref)
-        .map(|r| r.trace_id().to_string());
+        .and_then(|r| r.trace_id())
+        .map(String::from);
     let result = match (traced, &args.cmd) {
         (Err(e), _) => Err(e),
         (Ok(_), Command::ServeProvider { name }) => serve_provider(name).map(|()| Outcome::Done),
@@ -233,7 +233,6 @@ pub fn main(
         }
     };
     crate::trace::finish();
-    crate::timing::finish();
     // Every exit goes through `Outcome::code`: a signal's 128 + its number
     // once every destructor of the run has run; a decline or a stop said
     // what it had to (`run`).

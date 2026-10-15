@@ -6,24 +6,22 @@
 //! name is its `otel.name`, its kind its `otel.kind` (`client` for a
 //! call, else internal), every other field an attribute.
 //!
-//! [`Writer`] is the subscriber that feeds it; with the `otel` feature
-//! and an endpoint, [`Layer`] feeds it from the same subscriber as the
-//! exporter.
+//! [`Layer`] feeds it, a layer of the run's subscriber beside the
+//! exporter and `DFORM_LOG`'s lines. A span ends when it is last exited,
+//! if it was ever entered (a phase, its function's body), else when it
+//! closes (a call, ended when its answer is taken): a span the registry
+//! keeps open for a child that outlives it ends where its work did.
 
 use serde_json::{Value, json};
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
-use tracing::subscriber::Interest;
-use tracing::{Event, Metadata};
 
 /// The spans ended this many at a time make a line.
 const LINE: usize = 512;
@@ -52,6 +50,8 @@ struct Open {
     name: String,
     client: bool,
     start: u128,
+    /// When it was last exited, if it was ever entered.
+    exited: Option<u128>,
     attributes: Vec<Value>,
 }
 
@@ -108,6 +108,7 @@ impl Spans {
             name: attrs.metadata().name().to_string(),
             client: false,
             start: now(),
+            exited: None,
             attributes: Vec::new(),
         };
         attrs.record(&mut Fields(&mut open));
@@ -127,10 +128,18 @@ impl Spans {
         }
     }
 
-    /// Span `key` ends.
+    /// Span `key` is exited.
+    fn exit(&self, key: u64) {
+        if let Some(open) = self.state().open.get_mut(&key) {
+            open.exited = Some(now());
+        }
+    }
+
+    /// Span `key` closes: it ended when it was last exited, else now.
     fn close(&self, key: u64) {
         let mut s = self.state();
         let Some(o) = s.open.remove(&key) else { return };
+        let end = o.exited.unwrap_or_else(now);
         let span = json!({
             "traceId": s.trace_id,
             "spanId": o.span_id,
@@ -138,7 +147,7 @@ impl Spans {
             "name": o.name,
             "kind": if o.client { 3 } else { 1 },
             "startTimeUnixNano": o.start.to_string(),
-            "endTimeUnixNano": now().to_string(),
+            "endTimeUnixNano": end.to_string(),
             "attributes": o.attributes,
             "status": {},
         });
@@ -208,128 +217,9 @@ impl Visit for Fields<'_> {
     }
 }
 
-thread_local! {
-    /// The spans this thread is in, innermost last.
-    static ENTERED: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
-}
-
-/// The subscriber when the trace file is all there is: dform's spans
-/// (target "dform"), every other dropped.
-pub struct Writer {
-    spans: std::sync::Arc<Spans>,
-    next: AtomicU64,
-    /// Each open span's metadata and how many handles it has.
-    live: Mutex<HashMap<u64, (&'static Metadata<'static>, usize)>>,
-}
-
-impl Writer {
-    pub fn new(spans: std::sync::Arc<Spans>) -> Writer {
-        Writer {
-            spans,
-            next: AtomicU64::new(1),
-            live: Mutex::new(HashMap::new()),
-        }
-    }
-
-    fn live(&self) -> std::sync::MutexGuard<'_, HashMap<u64, (&'static Metadata<'static>, usize)>> {
-        self.live.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    fn current(&self) -> Option<u64> {
-        ENTERED.with(|e| e.borrow().last().copied())
-    }
-}
-
-impl tracing::Subscriber for Writer {
-    fn register_callsite(&self, metadata: &'static Metadata<'static>) -> Interest {
-        match metadata.target() == crate::timing::TARGET {
-            true => Interest::always(),
-            false => Interest::never(),
-        }
-    }
-
-    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        metadata.target() == crate::timing::TARGET
-    }
-
-    fn new_span(&self, attrs: &Attributes<'_>) -> Id {
-        let key = self.next.fetch_add(1, Ordering::Relaxed);
-        let parent = match (attrs.is_root(), attrs.parent()) {
-            (true, _) => None,
-            (false, Some(p)) => Some(p.into_u64()),
-            (false, None) => self.current(),
-        };
-        self.live().insert(key, (attrs.metadata(), 1));
-        self.spans.open(key, parent, attrs);
-        Id::from_u64(key)
-    }
-
-    fn record(&self, span: &Id, values: &Record<'_>) {
-        self.spans.record(span.into_u64(), values);
-    }
-
-    fn record_follows_from(&self, _: &Id, _: &Id) {}
-
-    fn event(&self, _: &Event<'_>) {}
-
-    fn enter(&self, span: &Id) {
-        ENTERED.with(|e| e.borrow_mut().push(span.into_u64()));
-    }
-
-    fn exit(&self, span: &Id) {
-        ENTERED.with(|e| {
-            let mut e = e.borrow_mut();
-            if let Some(i) = e.iter().rposition(|k| *k == span.into_u64()) {
-                e.remove(i);
-            }
-        });
-    }
-
-    fn clone_span(&self, id: &Id) -> Id {
-        if let Some((_, n)) = self.live().get_mut(&id.into_u64()) {
-            *n += 1;
-        }
-        id.clone()
-    }
-
-    fn try_close(&self, id: Id) -> bool {
-        let key = id.into_u64();
-        let closed = {
-            let mut live = self.live();
-            match live.get_mut(&key) {
-                Some((_, n)) if *n > 1 => {
-                    *n -= 1;
-                    false
-                }
-                Some(_) => {
-                    live.remove(&key);
-                    true
-                }
-                None => false,
-            }
-        };
-        if closed {
-            self.spans.close(key);
-        }
-        closed
-    }
-
-    fn current_span(&self) -> tracing_core::span::Current {
-        let Some(key) = self.current() else {
-            return tracing_core::span::Current::none();
-        };
-        match self.live().get(&key) {
-            Some((meta, _)) => tracing_core::span::Current::new(Id::from_u64(key), meta),
-            None => tracing_core::span::Current::none(),
-        }
-    }
-}
-
-/// The trace file as a layer, beside the OTLP exporter.
-#[cfg(feature = "otel")]
+/// The trace file as a layer of the run's subscriber.
 pub struct Layer(pub std::sync::Arc<Spans>);
 
-#[cfg(feature = "otel")]
 impl<S> tracing_subscriber::Layer<S> for Layer
 where
     S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
@@ -354,6 +244,10 @@ where
         _: tracing_subscriber::layer::Context<'_, S>,
     ) {
         self.0.record(id.into_u64(), values);
+    }
+
+    fn on_exit(&self, id: &Id, _: tracing_subscriber::layer::Context<'_, S>) {
+        self.0.exit(id.into_u64());
     }
 
     fn on_close(&self, id: Id, _: tracing_subscriber::layer::Context<'_, S>) {
