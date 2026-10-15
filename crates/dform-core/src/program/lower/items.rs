@@ -599,39 +599,11 @@ fn provider(env: Env, id: ItemId) -> Vec<Stmt> {
         l.clause(*c, &mut lits);
     }
     let mut body = lits.clone();
-    let mut source = Vec::new();
-    let mut config = BTreeMap::new();
-    let mut accounts = Vec::new();
-    for s in settings {
-        match s {
-            Setting::Source { key, span, value } => {
-                source.push((key.clone(), l.expr(*value), *span));
-            }
-            Setting::Value { key, value, .. } => {
-                let v = l.expr(*value);
-                body.append(&mut l.reads);
-                config.insert(key.clone(), v);
-            }
-            Setting::Account {
-                value,
-                clause,
-                span,
-            } => {
-                let mut b = Vec::new();
-                if let Some(c) = clause {
-                    l.clause(*c, &mut b);
-                }
-                let head = Atom {
-                    pred: crate::plugin::providers::EXPECT_ACCOUNT.into(),
-                    args: vec![str_term(name), l.expr(*value)],
-                    record: None,
-                    span: *span,
-                };
-                b.append(&mut l.reads);
-                accounts.push((head, b));
-            }
-        }
-    }
+    let Settings {
+        source,
+        config,
+        accounts,
+    } = Settings::of(&mut l, name, settings, &mut body);
     let mut out = Vec::new();
     if *starts {
         out.push(Stmt::Provider(ast::Config {
@@ -663,6 +635,64 @@ fn provider(env: Env, id: ItemId) -> Vec<Stmt> {
     }
     out.append(&mut l.helpers);
     out
+}
+
+/// A provider's settings as its `use` block lowers them.
+struct Settings {
+    /// `source = v`, how the provider is started.
+    source: Vec<(String, ast::Term, Span)>,
+    /// Every other setting, its configuration.
+    config: BTreeMap<String, ast::Term>,
+    /// Each `expect_account`'s head and clause.
+    accounts: Vec<(Atom, Vec<ast::Lit>)>,
+}
+
+impl Settings {
+    /// The settings of the provider `name`, the reads a value hoists onto
+    /// `body`.
+    fn of(
+        l: &mut Lowering,
+        name: &str,
+        settings: &[Setting],
+        body: &mut Vec<ast::Lit>,
+    ) -> Settings {
+        let mut out = Settings {
+            source: Vec::new(),
+            config: BTreeMap::new(),
+            accounts: Vec::new(),
+        };
+        for s in settings {
+            match s {
+                Setting::Source { key, span, value } => {
+                    out.source.push((key.clone(), l.expr(*value), *span));
+                }
+                Setting::Value { key, value, .. } => {
+                    let v = l.expr(*value);
+                    body.append(&mut l.reads);
+                    out.config.insert(key.clone(), v);
+                }
+                Setting::Account {
+                    value,
+                    clause,
+                    span,
+                } => {
+                    let mut b = Vec::new();
+                    if let Some(c) = clause {
+                        l.clause(*c, &mut b);
+                    }
+                    let head = Atom {
+                        pred: crate::plugin::providers::EXPECT_ACCOUNT.into(),
+                        args: vec![str_term(name), l.expr(*value)],
+                        record: None,
+                        span: *span,
+                    };
+                    b.append(&mut l.reads);
+                    out.accounts.push((head, b));
+                }
+            }
+        }
+        out
+    }
 }
 
 /// `set ..`: each line's write, a fact or a rule over B's literals (B
