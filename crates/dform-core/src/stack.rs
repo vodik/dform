@@ -823,29 +823,7 @@ fn transfer(
 ) -> Result<()> {
     use crate::store::{Cond, LOCK, own_key};
     let (src, dst) = (from.location.open(s3)?, to.location.open(s3)?);
-    let lease_free = |k: &str, store: &dyn Store| -> Result<bool> {
-        // A released lease is no deployment's.
-        if k != LOCK || !store.fenced() {
-            return Ok(false);
-        }
-        let Some(o) = store.get(k)? else {
-            return Ok(true);
-        };
-        Ok(
-            serde_json::from_slice::<crate::store::LeaseRecord>(&o.bytes)
-                .is_ok_and(|r| r.holder.is_empty()),
-        )
-    };
-    let mut there = Vec::new();
-    for k in dst.list("")? {
-        if own_key(&k) && !lease_free(&k, dst.as_ref())? {
-            there.push(k);
-        }
-    }
-    if to.world != from.world && to.world.exists() {
-        there.push(to.world.display().to_string());
-    }
-    if let Some(k) = there.first() {
+    if let Some(k) = to.holding(from, dst.as_ref())?.first() {
         bail!("{what}: {} is not empty: it holds {k}", to.location);
     }
     let lock = Deployment::new(src.clone(), what, times).lock()?;
@@ -867,13 +845,7 @@ fn transfer(
     if let Location::Local(dir) = &to.location {
         fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
     }
-    if to.world != from.world && from.world.exists() {
-        if let Some(parent) = to.world.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
-        }
-        fs::rename(&from.world, &to.world)
-            .with_context(|| format!("move {} to {}", from.world.display(), to.world.display()))?;
-    }
+    from.move_world_to(to)?;
     commit()?;
     for k in &keys {
         src.delete(k)?;
@@ -882,19 +854,67 @@ fn transfer(
     if src.fenced() {
         src.delete(LOCK)?;
     }
-    // A directory left empty goes (its drop directory first).
-    for dir in [&from.location, &Location::Local(from.world.clone())] {
-        if let Location::Local(d) = dir {
-            let d = if d.ends_with(crate::state::WORLD) {
-                d.parent().unwrap_or(Path::new("")).to_path_buf()
-            } else {
-                d.clone()
-            };
-            let _ = fs::remove_dir(d.join(crate::store::DROPS));
-            let _ = fs::remove_dir(&d);
+    from.remove_emptied();
+    Ok(())
+}
+
+impl Place {
+    /// What of a deployment's this place holds (its store `dst`): its
+    /// objects but a released lease, and its world file where `from`'s is
+    /// elsewhere.
+    fn holding(&self, from: &Place, dst: &dyn Store) -> Result<Vec<String>> {
+        let mut there = Vec::new();
+        for k in dst.list("")? {
+            if crate::store::own_key(&k) && !lease_free(&k, dst)? {
+                there.push(k);
+            }
+        }
+        if self.world != from.world && self.world.exists() {
+            there.push(self.world.display().to_string());
+        }
+        Ok(there)
+    }
+
+    /// Its world file moved to `to`'s, when that is elsewhere.
+    fn move_world_to(&self, to: &Place) -> Result<()> {
+        if to.world == self.world || !self.world.exists() {
+            return Ok(());
+        }
+        if let Some(parent) = to.world.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
+        }
+        fs::rename(&self.world, &to.world)
+            .with_context(|| format!("move {} to {}", self.world.display(), to.world.display()))
+    }
+
+    /// A directory of it left empty goes (its drop directory first).
+    fn remove_emptied(&self) {
+        for dir in [&self.location, &Location::Local(self.world.clone())] {
+            if let Location::Local(d) = dir {
+                let d = if d.ends_with(crate::state::WORLD) {
+                    d.parent().unwrap_or(Path::new("")).to_path_buf()
+                } else {
+                    d.clone()
+                };
+                let _ = fs::remove_dir(d.join(crate::store::DROPS));
+                let _ = fs::remove_dir(&d);
+            }
         }
     }
-    Ok(())
+}
+
+/// Whether the key `k` of `store` is a released lease: no deployment's.
+fn lease_free(k: &str, store: &dyn Store) -> Result<bool> {
+    if k != crate::store::LOCK || !store.fenced() {
+        return Ok(false);
+    }
+    let Some(o) = store.get(k)? else {
+        return Ok(true);
+    };
+    Ok(
+        serde_json::from_slice::<crate::store::LeaseRecord>(&o.bytes)
+            .is_ok_and(|r| r.holder.is_empty()),
+    )
 }
 
 /// `dform stack handover NAME --to BACKEND`: move the deployment's objects
@@ -1449,84 +1469,84 @@ pub fn outputs(
     digest: &dyn Fn(&[u8]) -> Option<String>,
     seal: &dyn Fn(&str, &serde_json::Value) -> BTreeMap<String, String>,
 ) -> Outputs {
-    let unproven = std::cell::RefCell::new(Vec::new());
     let attrs = attrs_of(facts);
-    let resolver = Resolver {
-        attrs: &attrs,
-        world,
+    let mut o = Outputting {
+        resolver: Resolver {
+            attrs: &attrs,
+            world,
+        },
+        state,
+        deployment,
+        digest,
+        seal,
+        out: Outputs::default(),
     };
-    // A secret output, or a field of one its type declares secret
-    // (`conn.password`, R-118), at `path`: its label, digest and where it
-    // is held, never its value.
-    let secret_output = |path: &str, v: &Value, ty: &str| {
-        let known = resolver.resolve(v, 0);
-        let at = match v {
-            Value::Ref { typ, name, attr } => Some((typ.clone(), name.clone(), attr.clone())),
-            Value::Null {
-                label,
-                class: crate::value::NullClass::Secret,
-                ..
-            } => crate::value::null_parts(label),
-            _ => None,
-        };
-        let held = at.and_then(|(typ, name, path)| {
-            let addr = crate::address::Address {
-                typ: typ.clone(),
-                name: name.clone(),
+    for ((t, scope, k), v) in &attrs {
+        if *t == crate::transform::OUTPUT && scope.is_empty() {
+            o.output(k, v, secret);
+        }
+    }
+    o.out
+}
+
+/// The stack's outputs as they are read ([`outputs`]): how a value is
+/// resolved, the state and deployment a secret one is held in, how its
+/// value is digested and sealed, and the outputs so far.
+struct Outputting<'a> {
+    resolver: Resolver<'a>,
+    state: &'a crate::state::State,
+    deployment: &'a str,
+    digest: &'a dyn Fn(&[u8]) -> Option<String>,
+    seal: &'a dyn Fn(&str, &serde_json::Value) -> BTreeMap<String, String>,
+    out: Outputs,
+}
+
+impl Outputting<'_> {
+    /// The output `k`, of value `v`: known, pending, or secret (`secret`:
+    /// key -> T's name), the fields its type declares secret taken out
+    /// of it.
+    fn output(&mut self, k: &str, v: &Value, secret: &BTreeMap<String, String>) {
+        if let Some(ty) = secret.get(k) {
+            let s = self.secret_output(k, v, ty);
+            self.out.secret.insert(k.to_string(), s);
+            return;
+        }
+        let mut v = v.clone();
+        let prefix = format!("{k}.");
+        for (path, ty) in secret.range(prefix.clone()..) {
+            let Some(rest) = path.strip_prefix(&prefix) else {
+                break;
             };
-            // A provider's label names the object by its remote id.
-            let e = state.get(&addr).or_else(|| {
-                state.resources.iter().find_map(|(k, e)| {
-                    let a = crate::state::parse_key(k)?;
-                    (a.typ == typ && e.remote == name).then_some(e)
-                })
-            })?;
-            Some(crate::provider::Held {
-                provider: e.provider.clone(),
-                deployment: deployment.to_string(),
-                typ,
-                remote: e.remote.clone(),
-                path,
-                digest: String::new(),
-            })
-        });
-        let j = known.map(|v| serde_json::to_value(&v).expect("a value serializes"));
+            if let Some(x) = take_field(&mut v, rest) {
+                let s = self.secret_output(path, &x, ty);
+                self.out.secret.insert(path.clone(), s);
+            }
+        }
+        match self.resolver.resolve(&v, 0) {
+            Some(v) => {
+                self.out.known.insert(k.to_string(), v);
+            }
+            None => {
+                self.out.pending.insert(k.to_string());
+            }
+        }
+    }
+
+    /// A secret output, or a field of one its type declares secret
+    /// (`conn.password`, R-118), at `path`, of value `v` and type `ty`:
+    /// its label, digest and where it is held, never its value.
+    fn secret_output(&mut self, path: &str, v: &Value, ty: &str) -> SecretOutput {
+        let j = self
+            .resolver
+            .resolve(v, 0)
+            .map(|v| serde_json::to_value(&v).expect("a value serializes"));
+        let held = self.held(v);
         let derived = j
             .as_ref()
             .and_then(crate::secrets::standin::digest)
             .unwrap_or_default();
-        let digest = match &j {
-            None => String::new(),
-            Some(j) => match digest(crate::approval::canonical_json(j).as_bytes()) {
-                Some(d) => format!("hmac-sha256:{d}"),
-                // A run without the master keeps what it can prove is
-                // still the value (R-164).
-                None => match state
-                    .secret_outputs
-                    .get(path)
-                    .filter(|p| !derived.is_empty() && p.derived == derived)
-                {
-                    Some(p) => p.digest.clone(),
-                    None => {
-                        unproven.borrow_mut().push(path.to_string());
-                        String::new()
-                    }
-                },
-            },
-        };
-        // Held nowhere: sealed to each reader (R-166), never a stand-in; a
-        // run without the master keeps the seals of a value it proved
-        // the same.
-        let sealed = match (&j, &held) {
-            (Some(j), None) if !crate::secrets::standin::carries(j) => seal(path, j),
-            (Some(_), None) => state
-                .secret_outputs
-                .get(path)
-                .filter(|p| !derived.is_empty() && p.derived == derived)
-                .map(|p| p.sealed.clone())
-                .unwrap_or_default(),
-            _ => BTreeMap::new(),
-        };
+        let digest = self.digest_of(path, j.as_ref(), &derived);
+        let sealed = self.sealed(path, j.as_ref(), held.is_some(), &derived);
         SecretOutput {
             label: crate::value::null_label(crate::transform::OUTPUT, "", path),
             ty: ty.to_string(),
@@ -1535,38 +1555,91 @@ pub fn outputs(
             derived,
             sealed,
         }
-    };
-    let mut out = Outputs::default();
-    for ((t, scope, k), v) in &attrs {
-        if *t != crate::transform::OUTPUT || !scope.is_empty() {
-            continue;
+    }
+
+    /// Where a provider holds the secret `v`, when it is a resource's
+    /// attribute (a ref, or a sensitive computed value's null): the object
+    /// state maps, managed for the deployment.
+    fn held(&self, v: &Value) -> Option<crate::provider::Held> {
+        let (typ, name, path) = match v {
+            Value::Ref { typ, name, attr } => (typ.clone(), name.clone(), attr.clone()),
+            Value::Null {
+                label,
+                class: crate::value::NullClass::Secret,
+                ..
+            } => crate::value::null_parts(label)?,
+            _ => return None,
+        };
+        let addr = crate::address::Address {
+            typ: typ.clone(),
+            name: name.clone(),
+        };
+        // A provider's label names the object by its remote id.
+        let e = self.state.get(&addr).or_else(|| {
+            self.state.resources.iter().find_map(|(k, e)| {
+                let a = crate::state::parse_key(k)?;
+                (a.typ == typ && e.remote == name).then_some(e)
+            })
+        })?;
+        Some(crate::provider::Held {
+            provider: e.provider.clone(),
+            deployment: self.deployment.to_string(),
+            typ,
+            remote: e.remote.clone(),
+            path,
+            digest: String::new(),
+        })
+    }
+
+    /// The keyed digest of the secret at `path`, of value `j` when the run
+    /// knows it (`derived` its stand-in's digest). A run without the
+    /// master keeps what it can prove is still the value (R-164); one it
+    /// cannot is unproven.
+    fn digest_of(&mut self, path: &str, j: Option<&serde_json::Value>, derived: &str) -> String {
+        let Some(j) = j else {
+            return String::new();
+        };
+        if let Some(d) = (self.digest)(crate::approval::canonical_json(j).as_bytes()) {
+            return format!("hmac-sha256:{d}");
         }
-        if let Some(ty) = secret.get(*k) {
-            out.secret.insert(k.to_string(), secret_output(k, v, ty));
-            continue;
-        }
-        // The fields its type declares secret are taken out of it.
-        let mut v = (*v).clone();
-        let prefix = format!("{k}.");
-        for (path, ty) in secret.range(prefix.clone()..) {
-            let Some(rest) = path.strip_prefix(&prefix) else {
-                break;
-            };
-            if let Some(x) = take_field(&mut v, rest) {
-                out.secret.insert(path.clone(), secret_output(path, &x, ty));
-            }
-        }
-        match resolver.resolve(&v, 0) {
-            Some(v) => {
-                out.known.insert(k.to_string(), v);
-            }
+        match self.proven(path, derived) {
+            Some(p) => p.digest.clone(),
             None => {
-                out.pending.insert(k.to_string());
+                self.out.unproven.push(path.to_string());
+                String::new()
             }
         }
     }
-    out.unproven = unproven.into_inner();
-    out
+
+    /// The seals of the secret at `path`, of value `j`: held nowhere
+    /// (`held` false), sealed to each reader (R-166), never a stand-in; a
+    /// run without the master keeps the seals of a value it proved the
+    /// same.
+    fn sealed(
+        &self,
+        path: &str,
+        j: Option<&serde_json::Value>,
+        held: bool,
+        derived: &str,
+    ) -> BTreeMap<String, String> {
+        match j {
+            Some(j) if !held && !crate::secrets::standin::carries(j) => (self.seal)(path, j),
+            Some(_) if !held => self
+                .proven(path, derived)
+                .map(|p| p.sealed.clone())
+                .unwrap_or_default(),
+            _ => BTreeMap::new(),
+        }
+    }
+
+    /// What state recorded of the secret output at `path`, when its
+    /// stand-in's digest `derived` proves the value the same.
+    fn proven(&self, path: &str, derived: &str) -> Option<&SecretOutput> {
+        self.state
+            .secret_outputs
+            .get(path)
+            .filter(|p| !derived.is_empty() && p.derived == derived)
+    }
 }
 
 /// The secret outputs (`secret`: path -> T's name) whose value in an
