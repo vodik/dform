@@ -457,7 +457,7 @@ still open), signing, and the schema beside the artifact.
 named in =dform.toml= with the same term as a backend:
 #+begin_example
 [registries]
-acme = { backend = 's3("acme-dform", "providers", {endpoint: "..", region: ".."})', keys = 'jwks_file("acme.jwks.json")' }
+acme = { backend = 's3("acme-dform", "providers", {endpoint = "..", region = ".."})', keys = 'jwks_file("acme.jwks.json")' }
 dev  = { backend = 'local("../registry")' }
 
 [providers]
