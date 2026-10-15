@@ -33,21 +33,15 @@
 //!   window in the host (`dform_host::ratelimit`), with `provider`,
 //!   `bucket`, `queued` and `window`.
 //!
-//! Every span carries `seq`, its number in the run, and `waited_on`, the
-//! `seq` of the span that last ended before it began. The run drives its
-//! calls from one thread and waits on each answer, so that is what it
-//! came after: a chain of calls sent one after another is a chain of
-//! `waited_on`, and a batch sent together shares one. It says the order
-//! the run took, not that the later call needs the earlier's answer. A
-//! call ends when the run takes its answer (`plugin::timed`), which for
-//! a provider the run is not waiting on then is after it came.
+//! A call ends when the run takes its answer (`plugin::timed`), which for
+//! a provider the run is not waiting on then is after it came. The order
+//! the run took is a reader's to compute, from the spans' times and
+//! parents.
 //!
 //! With no subscriber (no trace asked for) and no `DFORM_LOG`, a span
 //! costs its callsite's check.
 
-use std::cell::Cell;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// The target every span of dform's is under: a subscriber keeps these
@@ -56,14 +50,6 @@ pub const TARGET: &str = "dform";
 
 /// When the run began, and whether the lines are on.
 static START: OnceLock<(Instant, bool)> = OnceLock::new();
-
-/// The next span's `seq`.
-static SEQ: AtomicU64 = AtomicU64::new(1);
-
-thread_local! {
-    /// The `seq` of the span that ended last on this thread.
-    static LAST: Cell<Option<u64>> = const { Cell::new(None) };
-}
 
 fn start() -> &'static (Instant, bool) {
     START.get_or_init(|| {
@@ -135,11 +121,6 @@ fn parent() -> Option<tracing::Id> {
         .or_else(|| ROOT.get().cloned())
 }
 
-/// A new span's `seq` and what it waited on.
-fn next() -> (u64, Option<u64>) {
-    (SEQ.fetch_add(1, Ordering::Relaxed), LAST.get())
-}
-
 /// What `f` took, as a phase; `what` is only made when someone reads it.
 pub fn time<T>(what: impl FnOnce() -> String, f: impl FnOnce() -> T) -> T {
     let _phase = span(what);
@@ -152,7 +133,6 @@ pub struct Span {
     /// The line's text, when the lines are on.
     what: Option<String>,
     from: Instant,
-    seq: u64,
     _span: tracing::span::EnteredSpan,
 }
 
@@ -163,22 +143,18 @@ pub fn span(what: impl FnOnce() -> String) -> Option<Span> {
         return None;
     }
     let what = what();
-    let (seq, waited_on) = next();
     let span = match traced {
         true => tracing::info_span!(
             target: TARGET,
             parent: parent(),
             "plan.phase",
             otel.name = %what,
-            seq,
-            waited_on,
         ),
         false => tracing::Span::none(),
     };
     Some(Span {
         what: lines.then_some(what),
         from: Instant::now(),
-        seq,
         _span: span.entered(),
     })
 }
@@ -189,19 +165,15 @@ pub fn traced(what: impl FnOnce() -> String) -> Option<Span> {
     if !tracing() {
         return None;
     }
-    let (seq, waited_on) = next();
     let span = tracing::info_span!(
         target: TARGET,
         parent: parent(),
         "plan.phase",
         otel.name = %what(),
-        seq,
-        waited_on,
     );
     Some(Span {
         what: None,
         from: Instant::now(),
-        seq,
         _span: span.entered(),
     })
 }
@@ -211,7 +183,6 @@ impl Drop for Span {
         if let Some(what) = &self.what {
             say(what, self.from.elapsed());
         }
-        LAST.set(Some(self.seq));
     }
 }
 
@@ -219,7 +190,6 @@ impl Drop for Span {
 /// (its answer may come after others'), ended by [`Call::end`] or by
 /// being dropped.
 pub struct Call {
-    seq: u64,
     _span: tracing::Span,
 }
 
@@ -228,19 +198,12 @@ impl Call {
     pub fn end(self) {}
 }
 
-impl Drop for Call {
-    fn drop(&mut self) {
-        LAST.set(Some(self.seq));
-    }
-}
-
 /// A call to the provider `provider` begins: `kind` the method, `addr`
 /// what it is about. `None` unless a subscriber keeps it.
 pub fn provider_call(provider: &str, kind: &str, addr: &str) -> Option<Call> {
     if !tracing() {
         return None;
     }
-    let (seq, waited_on) = next();
     let addr = (!addr.is_empty()).then_some(addr);
     // A provider not yet named by its handshake, by its executable's name.
     let provider = provider.rsplit('/').next().unwrap_or(provider);
@@ -253,10 +216,8 @@ pub fn provider_call(provider: &str, kind: &str, addr: &str) -> Option<Call> {
         provider,
         kind,
         addr,
-        seq,
-        waited_on,
     );
-    Some(Call { seq, _span: span })
+    Some(Call { _span: span })
 }
 
 /// A request dform makes itself, `kind` of `addr`, for `f`; its line,
@@ -286,7 +247,6 @@ pub struct Io {
 pub fn io_begin(kind: &str, addr: impl FnOnce() -> String) -> Io {
     let (lines, traced) = (enabled(), tracing());
     let call = traced.then(|| {
-        let (seq, waited_on) = next();
         let addr = addr();
         let span = tracing::info_span!(
             target: TARGET,
@@ -296,10 +256,8 @@ pub fn io_begin(kind: &str, addr: impl FnOnce() -> String) -> Io {
             otel.kind = "client",
             kind,
             addr,
-            seq,
-            waited_on,
         );
-        Call { seq, _span: span }
+        Call { _span: span }
     });
     Io {
         call,
@@ -324,7 +282,6 @@ pub fn wait(tick: usize, kind: &str, count: usize) -> Option<Span> {
     if !tracing() {
         return None;
     }
-    let (seq, waited_on) = next();
     let span = tracing::info_span!(
         target: TARGET,
         parent: parent(),
@@ -333,13 +290,10 @@ pub fn wait(tick: usize, kind: &str, count: usize) -> Option<Span> {
         tick,
         kind,
         count,
-        seq,
-        waited_on,
     );
     Some(Span {
         what: None,
         from: Instant::now(),
-        seq,
         _span: span.entered(),
     })
 }
@@ -352,7 +306,6 @@ pub fn ratelimit_wait(provider: &str, bucket: &str, queued: usize, window: usize
     if !tracing() {
         return None;
     }
-    let (seq, waited_on) = next();
     let span = tracing::info_span!(
         target: TARGET,
         parent: parent(),
@@ -362,13 +315,10 @@ pub fn ratelimit_wait(provider: &str, bucket: &str, queued: usize, window: usize
         bucket,
         queued,
         window,
-        seq,
-        waited_on,
     );
     Some(Span {
         what: None,
         from: Instant::now(),
-        seq,
         _span: span.entered(),
     })
 }
@@ -390,20 +340,16 @@ pub fn tick(tick: usize) -> Option<Span> {
     if !tracing() {
         return None;
     }
-    let (seq, waited_on) = next();
     let span = tracing::info_span!(
         target: TARGET,
         parent: parent(),
         "tick",
         otel.name = %format_args!("tick {tick}"),
         tick,
-        seq,
-        waited_on,
     );
     Some(Span {
         what: None,
         from: Instant::now(),
-        seq,
         _span: span.entered(),
     })
 }

@@ -5149,12 +5149,9 @@ fails says its trace id after the error. The spans:
 | `apply.wait` | a tick waiting on values the world has not reached (R-81) | `tick`, `kind` (`world`, `extern`), `count` |
 | `ratelimit.wait` | a provider's request waiting on its bucket's window in the host | `provider`, `bucket`, `queued` (the requests before it), `window` |
 
-Every span has `seq`, its number in the run, and `waited_on`, the `seq`
-of the span that ended last before it began. The run sends its calls
-from one thread and takes each answer in turn, so `waited_on` is what a
-span came after: calls sent one after another chain, a batch sent
-together shares one. It is the order the run took, not proof that the
-later call needed the earlier's answer. A call ends when the run takes
+The order the run took is the viewer's, from each span's times and
+parent: calls sent one after another follow each other, a batch sent
+together begins before any of it ends. A call ends when the run takes
 its answer: while the run waits on one provider, another's answer waits
 for it, so a batch to two providers shows the quicker one's calls as
 long as the slower one's. A span names things (addresses, kinds,

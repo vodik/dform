@@ -97,13 +97,13 @@ fn a_plan_sends_its_spans_to_the_endpoint() {
 
 /// The trace file: OTLP JSON lines, one trace under `dform plan`; the
 /// phases, each provider call a client span with its provider, kind and
-/// address; the Plan calls sent together wait on one span, a block; and
+/// address; the Plan calls sent together a block; and
 /// no attribute but the names, kinds and counts the spans are made of.
 /// The plan printed is the plan without a trace.
 #[test]
 fn a_plan_writes_its_spans_to_the_trace_file() {
     use serde_json::Value;
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeSet;
 
     let s = shop();
     let plain = plan(&s, &[]).success();
@@ -152,52 +152,38 @@ fn a_plan_writes_its_spans_to_the_trace_file() {
         assert!(names.contains(want), "no span {want:?} in {names:?}");
     }
     // The attributes a span may carry: names, kinds, counts.
-    let allowed: BTreeSet<&str> = [
-        "seq",
-        "waited_on",
-        "provider",
-        "kind",
-        "addr",
-        "tick",
-        "count",
-        "command",
-    ]
-    .into();
+    let allowed: BTreeSet<&str> = ["provider", "kind", "addr", "tick", "count", "command"].into();
     for sp in &spans {
         for a in sp["attributes"].as_array().unwrap() {
             let k = a["key"].as_str().unwrap();
             assert!(allowed.contains(k), "attribute {k} on {}", sp["name"]);
         }
     }
-    // Each Plan call a client span (3) of its provider, kind and address;
-    // sent together, they wait on one span.
+    // Each Plan call a client span (3) of its provider, kind and address,
+    // under the Plan calls' phase; sent together, a block: each began
+    // before any ended (the order is a reader's, from times and parents).
     let plans: Vec<&Value> = spans
         .iter()
         .filter(|s| s["name"] == "fakecloud Plan")
         .collect();
     assert_eq!(plans.len(), 12);
-    let mut waited: BTreeMap<String, usize> = BTreeMap::new();
+    let time = |s: &Value, k: &str| -> u128 { s[k].as_str().unwrap().parse().unwrap() };
+    let phase = spans
+        .iter()
+        .find(|s| {
+            s["name"]
+                .as_str()
+                .is_some_and(|n| n.starts_with("Plan calls"))
+        })
+        .expect("the Plan calls' phase");
     for p in &plans {
         assert_eq!(p["kind"], 3, "a client span");
         assert_eq!(attr(p, "provider").as_deref(), Some("fakecloud"));
         assert_eq!(attr(p, "kind").as_deref(), Some("Plan"));
         assert!(attr(p, "addr").is_some_and(|a| a.starts_with("aws.")));
-        *waited.entry(attr(p, "waited_on").unwrap()).or_default() += 1;
+        assert_eq!(p["parentSpanId"], phase["spanId"], "under the Plan calls");
     }
-    assert_eq!(waited.len(), 1, "the Plan calls are a block: {waited:?}");
-    // What they waited on is a span of the run, ended before they began.
-    let (w, _) = waited.into_iter().next().unwrap();
-    let before = spans
-        .iter()
-        .find(|s| attr(s, "seq").as_deref() == Some(w.as_str()))
-        .expect("the span waited on");
-    let end: u128 = before["endTimeUnixNano"].as_str().unwrap().parse().unwrap();
-    for p in &plans {
-        let start: u128 = p["startTimeUnixNano"].as_str().unwrap().parse().unwrap();
-        assert!(
-            end <= start,
-            "{} ended after a Plan call began",
-            before["name"]
-        );
-    }
+    let last_begun = plans.iter().map(|p| time(p, "startTimeUnixNano")).max();
+    let first_ended = plans.iter().map(|p| time(p, "endTimeUnixNano")).min();
+    assert!(last_begun <= first_ended, "the Plan calls are a block");
 }
