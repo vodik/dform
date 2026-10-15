@@ -752,10 +752,7 @@ impl TryFrom<Command> for Typed {
                 if reveal && name.is_none() {
                     bail!("output --reveal: name the one output to reveal");
                 }
-                Typed::of(
-                    Cmd::Output(Output { name, json, reveal }),
-                    Some(target),
-                )
+                Typed::of(Cmd::Output(Output { name, json, reveal }), Some(target))
             }
             Command::Status { target, json } => {
                 Typed::of(Cmd::Status(Status { json }), Some(target))

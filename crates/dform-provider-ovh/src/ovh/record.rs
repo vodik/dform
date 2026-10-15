@@ -37,10 +37,10 @@ impl Ovh {
     /// A zone's changes are served once it is refreshed; a refresh that
     /// fails is a note, the record is written.
     fn refresh_zone(&self, a: &Account, at: &str, zone: &str, notes: &mut Vec<String>) {
-        if let Err(e) = a.client.post(
-            &format!("/domain/zone/{}/refresh", escape(zone)),
-            None,
-        ) {
+        if let Err(e) = a
+            .client
+            .post(&format!("/domain/zone/{}/refresh", escape(zone)), None)
+        {
             notes.push(format!("{at}: the zone {zone} is not refreshed: {e}"));
         }
     }
@@ -114,7 +114,10 @@ impl Ovh {
         }
         let o = a
             .client
-            .post(&format!("/domain/zone/{}/record", escape(zone)), Some(&body))
+            .post(
+                &format!("/domain/zone/{}/record", escape(zone)),
+                Some(&body),
+            )
             .map_err(|e| match not_hosted(&a, zone, &e) {
                 Some(m) => refused(at, m),
                 None => failed(at, e),

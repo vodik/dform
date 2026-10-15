@@ -312,7 +312,10 @@ impl Ovh {
         });
         let o = a
             .client
-            .post(&format!("{}/subnet", network_path(&p, network)), Some(&body))
+            .post(
+                &format!("{}/subnet", network_path(&p, network)),
+                Some(&body),
+            )
             .map_err(|e| failed(at, e))?;
         let (attrs, computed) = map::subnet(network, &o);
         let id = map::subnet_remote(network, s(&o, "id").unwrap_or_default());
@@ -516,9 +519,7 @@ impl Ovh {
         for id in added {
             let os = self.private_network_in(&a, &p, at, region, id)?;
             if !of(id, &os).is_empty() {
-                notes.push(format!(
-                    "{at}: it has an interface on network {id} already"
-                ));
+                notes.push(format!("{at}: it has an interface on network {id} already"));
                 continue;
             }
             a.client
@@ -567,7 +568,9 @@ impl Ovh {
     /// answers) and the OpenStack ids of its regions (what an attach
     /// sends).
     fn openstack_ids(&self, a: &Account, p: &str) -> api::Result<BTreeMap<String, String>> {
-        let list = a.client.get(&format!("/cloud/project/{p}/network/private"))?;
+        let list = a
+            .client
+            .get(&format!("/cloud/project/{p}/network/private"))?;
         let mut out = BTreeMap::new();
         for net in list.as_array().into_iter().flatten() {
             let Some(id) = s(net, "id") else { continue };

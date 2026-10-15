@@ -181,7 +181,10 @@ impl Ovh {
     ) -> std::result::Result<Json, Failed> {
         let o = a
             .client
-            .post(&format!("{path}/attach"), Some(&json!({"instanceId": instance})))
+            .post(
+                &format!("{path}/attach"),
+                Some(&json!({"instanceId": instance})),
+            )
             .map_err(|e| failed(&format!("{at}: attach to instance {instance}"), e))?;
         self.settle(
             a,
@@ -207,7 +210,10 @@ impl Ovh {
     ) -> std::result::Result<Json, Failed> {
         let o = a
             .client
-            .post(&format!("{path}/detach"), Some(&json!({"instanceId": instance})))
+            .post(
+                &format!("{path}/detach"),
+                Some(&json!({"instanceId": instance})),
+            )
             .map_err(|e| failed(&format!("{at}: detach from instance {instance}"), e))?;
         self.settle(
             a,

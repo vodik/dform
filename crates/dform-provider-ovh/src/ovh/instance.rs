@@ -37,16 +37,15 @@ impl Ovh {
         {
             self.list_region(a, p, region);
         }
-        let named = |what: &str, embedded: &str, id: &str| match o
-            .get(embedded)
-            .and_then(|x| s(x, "name"))
-        {
-            Some(n) => Ok(Some(n.to_string())),
-            None => match s(o, id) {
-                Some(id) => self.name_of(a, p, what, region, id),
-                None => Ok(None),
-            },
-        };
+        let named =
+            |what: &str, embedded: &str, id: &str| match o.get(embedded).and_then(|x| s(x, "name"))
+            {
+                Some(n) => Ok(Some(n.to_string())),
+                None => match s(o, id) {
+                    Some(id) => self.name_of(a, p, what, region, id),
+                    None => Ok(None),
+                },
+            };
         let flavor = named("flavor", "flavor", "flavorId")?;
         let image = named("image", "image", "imageId")?;
         let private = match s(o, "id") {
