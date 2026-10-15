@@ -462,6 +462,55 @@ fn a_volume_is_attached_moved_grown_and_deleted() {
     assert!(lab.server.volumes().is_empty());
 }
 
+/// A volume's attachment converges against the volume as it is: caught
+/// on its way to the program's instance (an attach sent before this
+/// Update, a Create that timed out), it is waited for, not attached again
+/// (the API refuses an attach unless it is `available`); attached there,
+/// an Update attaches nothing; cleared, it is detached once, and cleared
+/// again nothing is sent.
+#[test]
+fn a_volumes_attachment_converges_against_the_volume_as_it_is() {
+    let lab = Lab::new();
+    let one = lab.server.add_instance("one", "BHS5");
+    let doc = |instance: Option<&str>| {
+        let mut d = json!({"name": "data", "region": "BHS5", "size": 10});
+        if let Some(i) = instance {
+            d["instance"] = json!(i);
+        }
+        d
+    };
+    let v = lab.create(VOLUME, "data", doc(None));
+    let env = lab.server.env();
+    let get = |k: &str| env.iter().find(|(n, _)| *n == k).map(|(_, v)| v.clone());
+    let client = dform_provider_ovh::api::Client::new(
+        dform_provider_ovh::config::resolve(Some(&lab.server.endpoint), &get, &[]).unwrap(),
+    );
+    lab.server.build_polls(5);
+    client
+        .post(
+            &format!(
+                "/cloud/project/{}/volume/{}/attach",
+                fake::PROJECT,
+                v.remote
+            ),
+            Some(&json!({"instanceId": one})),
+        )
+        .unwrap();
+    let caught = lab.update(VOLUME, "data", &v.remote, doc(Some(&one)));
+    assert_eq!(caught.said, ["attaching", "in-use"]);
+    assert_eq!(caught.attrs["instance"], one.as_str());
+    assert_eq!(lab.calls("POST", "/attach"), 1);
+    let again = lab.update(VOLUME, "data", &v.remote, doc(Some(&one)));
+    assert!(again.said.is_empty(), "{:?}", again.said);
+    assert_eq!(lab.calls("POST", "/attach"), 1);
+    assert_eq!(lab.calls("POST", "/detach"), 0);
+    lab.server.build_polls(0);
+    let cleared = lab.update(VOLUME, "data", &v.remote, doc(None));
+    assert_eq!(cleared.attrs.get("instance"), None);
+    lab.update(VOLUME, "data", &v.remote, doc(None));
+    assert_eq!(lab.calls("POST", "/detach"), 1);
+}
+
 /// A bootable volume's image is sent as the region's image id; one the
 /// region does not have is refused at plan, naming what it has.
 #[test]

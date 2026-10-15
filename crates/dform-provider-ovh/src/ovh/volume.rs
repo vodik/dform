@@ -18,6 +18,9 @@ const ATTACH_WAIT: Duration = Duration::from_secs(5 * 60);
 /// The statuses a volume stops in when a change fails.
 const FAILED: [&str; 3] = ["error", "error_extending", "error_deleting"];
 
+/// The statuses of a volume on its way to `available` or `in-use`.
+const ON_ITS_WAY: [&str; 4] = ["attaching", "detaching", "creating", "extending"];
+
 impl Ovh {
     /// The volume as the API answers it, unless it is gone.
     pub(super) fn read_volume(
@@ -135,17 +138,61 @@ impl Ovh {
             )?;
         }
         let want = instance(at, config)?;
+        self.converge_attachment(&a, at, &path, now, want, notes, say)
+    }
+
+    /// The volume at `path` attached to `want` alone (to none: detached),
+    /// against `now`, the volume as just read: settled first when it is
+    /// on its way (the API attaches and detaches only an `available` or
+    /// `in-use` volume), then detached from each instance but `want`, and
+    /// attached to `want` unless it is already. Repeated, it does nothing.
+    #[allow(clippy::too_many_arguments)]
+    fn converge_attachment(
+        &self,
+        a: &Account,
+        at: &str,
+        path: &str,
+        now: Json,
+        want: Option<&str>,
+        notes: &mut Vec<String>,
+        say: Say,
+    ) -> std::result::Result<(), Failed> {
+        let now = self.settled(a, at, path, now, notes, say)?;
         let on = map::attached_to(&now);
-        if on.iter().map(String::as_str).eq(want) {
-            return Ok(());
+        for i in on.iter().filter(|i| Some(i.as_str()) != want) {
+            self.detach(a, at, path, i, notes, say)?;
         }
-        for i in &on {
-            self.detach(&a, at, &path, i, notes, say)?;
-        }
-        if let Some(i) = want {
-            self.attach(&a, at, &path, i, notes, say)?;
+        if let Some(i) = want.filter(|w| !on.iter().any(|o| o == w)) {
+            self.attach(a, at, path, i, notes, say)?;
         }
         Ok(())
+    }
+
+    /// The volume `now` once it is not on its way (`attaching`,
+    /// `detaching`, `creating`, `extending`): as it is when it is not.
+    fn settled(
+        &self,
+        a: &Account,
+        at: &str,
+        path: &str,
+        now: Json,
+        notes: &mut Vec<String>,
+        say: Say,
+    ) -> std::result::Result<Json, Failed> {
+        if !ON_ITS_WAY.contains(&status(&now).as_str()) {
+            return Ok(now);
+        }
+        self.settle(
+            a,
+            at,
+            path,
+            now,
+            &["available", "in-use"],
+            &FAILED,
+            ATTACH_WAIT,
+            notes,
+            say,
+        )
     }
 
     /// Detached from every instance it is on first: the API refuses to
@@ -163,9 +210,7 @@ impl Ovh {
             .read_volume(&a, &p, remote)
             .map_err(|e| refused(at, e))?
         {
-            for i in map::attached_to(&now) {
-                self.detach(&a, at, &path, &i, notes, say)?;
-            }
+            self.converge_attachment(&a, at, &path, now, None, notes, say)?;
         }
         self.delete_at(&a, at, &path, true, notes, say)
     }
