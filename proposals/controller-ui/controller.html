@@ -5,7 +5,7 @@ DESIGN NOTE: a mock of dform's controller UI, to start from, not to adopt.
 The primary screen is the estate, not the plan. A controller spends most of
 its life with nothing to apply: it health-checks and watches the estate
 evolve. So the graph is the model at rest: one node per resource across
-every deployment of the project, an edge for every relationship the model
+the deployments of one estate (one key value, below), an edge for every relationship the model
 knows (a reference, a read of another stack's output, rows from a source,
 a provider instance configured from a resource's value). Lanes are the
 deployments, horizontal bands. Provider instances are columns crossing
@@ -47,6 +47,22 @@ the faded rest, and outlines everything downstream of it. The plan
 overlay draws only its propagation. Containment is the box, never a line:
 no edge for a copy's members, a namespace's objects or a Service
 selecting its pods.
+
+Estate rule: the page goes project, then estate, then graph. A deployment
+is a stack at a key value, so an estate is one key value (env=lab) and its
+lanes are the stacks at that key (platform, apps; the lane header drops
+the key the estate already says). A project is the set of its estates.
+Under the project selector, one card per estate is both the project's
+overview and the estate selector: its objects and health counts, its
+plan's states in words, and how many of its decisions need a person. The
+graph, its columns (only the instances that estate reaches), the plan
+overlay and the Run tab's timeline are the estate's; "Waiting on a
+person" stays project-wide, each card naming its estate, and choosing one
+moves to its estate. The plan text and the World and Data tabs stay the
+project's, as the CLI prints them. A watched source shows in every estate
+it feeds. A relationship across estates would draw as an edge to the
+other estate's card; none of these projects has one: every edge stays
+inside one key value.
 
 Disclosure rule: a card says its state in as few words as the state
 needs, and the answer in the right column says the rest. A card is its
@@ -216,6 +232,11 @@ one node folds its quiet rest into one card; the spacing scale above;
 the graph draws at one scale on every project; the "held for approval"
 block, the duplicate primary-screen paragraph and two of the legend's
 three lines are gone.
+
+What v7 changed: estates (the estate rule above). The page went from one
+graph of every deployment to one graph per key value, an estate strip
+under the project selector, the queue tagged with estates, runs per
+estate, and lane headers without the key.
 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -407,6 +428,17 @@ p.note{margin:0;font-size:13px;color:var(--muted);max-width:70ch}
 .band.dn rect{stroke:var(--accent);stroke-dasharray:3 2;stroke-width:1.6}.band.sel rect{stroke:var(--accent);stroke-width:2.4}
 .ar-output{fill:var(--wait)}.ar-provider{fill:var(--ink)}.ar-rows{fill:var(--because)}.ar-lit{fill:var(--update)}
 .gwrap{background:var(--surface);border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+.estates{display:flex;flex-direction:column;gap:var(--s2);padding-top:var(--s4)}
+.est-row{display:flex;flex-wrap:wrap;gap:var(--s2)}
+.est{display:flex;flex-direction:column;gap:2px;min-width:200px;flex:0 1 260px;text-align:left;padding:var(--s2) var(--s3);border:1px solid var(--rule);border-radius:4px;background:var(--surface);cursor:pointer;font-size:12px;color:var(--muted)}
+.est:hover{border-color:var(--muted)}
+.est[aria-pressed="true"]{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
+.est-k{font:600 13px var(--mono);color:var(--ink)}
+.est-l{font:12px var(--mono)}
+.est-w{font:600 11px var(--cond);letter-spacing:.06em;text-transform:uppercase;color:var(--approval)}
+.h-okt{color:var(--create)}.h-badt{color:var(--delete)}
+.ew-held{color:var(--approval)}.ew-waiting{color:var(--wait)}.ew-pending,.ew-applying{color:var(--update)}.ew-applied{color:var(--create)}
+.dest{margin-left:var(--s2);font:500 11px var(--mono);letter-spacing:0;text-transform:none;color:var(--muted)}
 .gwrap{overflow-x:auto}.gwrap svg{display:block;max-width:none}
 .run{display:flex;flex-direction:column;gap:var(--s3);padding:var(--s3) var(--s4) var(--s4);background:var(--surface);border:1px solid var(--rule);border-radius:4px}
 .run.cur{border-color:var(--muted)}
@@ -490,6 +522,7 @@ p.note{margin:0;font-size:13px;color:var(--muted);max-width:70ch}
   <div class="ctl" id="ctl"></div>
 </header>
 
+<section class="estates" id="estates" aria-label="Estates"></section>
 <div class="frame" id="frame">
   <aside class="rail" id="rail"></aside>
   <main>
@@ -966,7 +999,21 @@ const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 const markCls = (m) => ({"+": "m-c", "~": "m-u", "-": "m-d", "±": "m-r", "=": "m-e"}[m] || "");
 function toast(t) { const el = $("toast"); el.textContent = t; el.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => el.hidden = true, 3200); }
 
-function render() { $("frame").classList.toggle("gm", tab === "plan" && view === "graph"); renderTop(); renderRail(); renderTabs(); renderPane(); renderInsp(); }
+function render() { $("frame").classList.toggle("gm", tab === "plan" && view === "graph"); renderTop(); renderEstates(); renderRail(); renderTabs(); renderPane(); renderInsp(); }
+/* the project level: one card per estate, which is also the estate selector */
+function renderEstates() {
+  const E = ESTATES[cur];
+  $("estates").innerHTML = `<div class="lab">${E.key ? `Estates · one per ${esc(E.key)}` : "One estate · the project has no key"}</div><div class="est-row" role="group" aria-label="Estates">${E.list.map(e => {
+    const m = estModel(cur, e.k), objs = m.nodes.filter(n => n.lane !== "sources");
+    const hc = (c) => objs.filter(n => healthCls(n.health) === c).length, ok = hc("h-ok"), bad = hc("h-bad"), unk = hc("h-unk");
+    const st = {}; estLines(cur, e.k).forEach(x => { const w = lineState(P[cur], x).split(/[ :]/)[0]; st[w] = (st[w] || 0) + 1; });
+    const plan = Object.entries(st).map(([w, c]) => `<span class="ew-${w}">${c} ${w}</span>`).join(" · ") || `<span class="dimt">nothing planned</span>`;
+    const wait = P[cur].decisions.filter(d => !DONE[d.id] && decEst(cur, d) === e.k).length;
+    return `<button class="est" data-est="${esc(e.k)}" aria-pressed="${EST[cur] === e.k}"><span class="est-k">${esc(estLabel(cur, e.k))}</span>
+      <span class="est-l">${objs.length} objects${ok ? ` · <span class="h-okt">${ok} ready</span>` : ""}${bad ? ` · <span class="h-badt">${bad} degraded</span>` : ""}${unk ? ` · <span class="dimt">${unk} unknown</span>` : ""}</span>
+      <span class="est-l">${plan}</span>${wait ? `<span class="est-w">${wait} need${wait === 1 ? "s" : ""} a person</span>` : ""}</button>`;
+  }).join("")}</div>`;
+}
 
 function renderTop() {
   $("projects").innerHTML = ["ovh", "shop", "k3s", "gke", "rel"].map(k => [k, P[k]]).map(([k, p]) =>
@@ -1025,16 +1072,16 @@ function renderPlan() {
     <div class="ln" data-line="${v.id}" tabindex="0" aria-pressed="${sel === v.id}"><div class="main"><span class="${v.mark === "holds" ? "v-holds" : v.mark === "fails" ? "v-fails" : "v-und"}">${esc(v.mark)}</span>  ${esc(v.text)}  <span class="site">${esc(v.site)}  ${esc(v.tally)}</span>${v.under ? `<div class="attr">${esc(v.under)}</div>` : ""}</div><div class="mag"></div></div>`).join("")}</div>` : "";
   const appr = p.approvals.length ? `<div class="blk"><div class="bh" style="color:var(--approval)">held for approval</div>${p.approvals.map(a => `<div class="prov" style="color:var(--approval)">${esc(a[0])}    ${esc(a[1])}    ${esc(a[2])}</div>`).join("")}</div>` : "";
   const queue = p.decisions.length ? `<div class="queue">${p.decisions.map(d => `
-    <button class="dec c-${d.kind} ${DONE[d.id] ? "done" : ""}" data-dec="${d.id}" aria-pressed="${sel === d.id}"><span class="w">${esc(d.word)}</span><span class="t">${esc(d.t)}</span></button>`).join("")}</div>`
+    <button class="dec c-${d.kind} ${DONE[d.id] ? "done" : ""}" data-dec="${d.id}" aria-pressed="${sel === d.id}"><span class="w">${esc(d.word)}<span class="dest">${esc(estLabel(cur, decEst(cur, d)))}</span></span><span class="t">${esc(d.t)}</span></button>`).join("")}</div>`
     : `<p class="note">Nothing waits on a person.</p>`;
-  const plan = hasPlan(p), mode = view === "text" ? "text" : plan && ov !== 0 ? "plan" : "rest";
+  const plan = estLines(cur).length > 0, mode = view === "text" ? "text" : plan && ov !== 0 ? "plan" : "rest";
   const modeSeg = `<span class="seg" role="group" aria-label="View">${[["rest", "estate"], ...(plan ? [["plan", "estate + plan"]] : []), ["text", "plan text"]].map(([k, l]) => `<button data-mode="${k}" aria-pressed="${mode === k}">${l}</button>`).join("")}</span>`;
   const headline = view === "graph" ? p.headline.replace(/ over \d+ ticks?/, "") : p.headline;
   return `<section class="pane">
     <div class="rel"><div class="lab">Waiting on a person</div>${queue}</div>
     <div class="rel"><div class="headline">${esc(headline)}</div>
     <div class="shape"><span class="lab">Against the last apply</span>${p.shape.map(s => `<span class="d"><span class="k">${esc(s[0])}</span> ${esc(s[1])} → <b>${esc(s[2])}</b>${s[3] ? ` (${esc(s[3])})` : ""}</span>`).join("")}<span class="d">${esc(p.reach)}</span></div></div>
-    ${view === "graph" ? `<div class="plan-head"><span class="lab">The estate · lanes are deployments, columns the provider instances they reach</span>${modeSeg}</div>` + estateHTML(p) + (pol ? `<div class="plan">${pol}</div>` : "") : `
+    ${view === "graph" ? `<div class="plan-head"><span class="lab">${esc(estLabel(cur, EST[cur]))} · lanes are its stacks, columns the instances they reach</span>${modeSeg}</div>` + estateHTML(p) + (pol ? `<div class="plan">${pol}</div>` : "") : `
     <div class="plan-head"><span class="lab">The plan of one run · its ticks are the order inside it</span>
       <span style="display:flex;gap:8px;flex-wrap:wrap">${modeSeg}
       <span class="seg" role="group" aria-label="Group by"><button data-g="tick" aria-pressed="${group === "tick"}">by tick</button><button data-g="dep" aria-pressed="${group === "dep"}">by deployment</button></span></span></div>
@@ -1194,6 +1241,32 @@ MODEL.rel = (() => {
   return m;
 })();
 
+/* ---------- estates: a project is the set of its estates; an estate is one key value, its lanes the stacks at that key ---------- */
+const ESTATES = {
+  ovh: {key: "env", list: [{k: "lab", lanes: ["platform[lab]", "apps[lab]"]}, {k: "prod", lanes: ["platform[prod]", "apps[prod]"]}]},
+  shop: {key: "env", list: [{k: "staging", lanes: ["staging"]}, {k: "prod", lanes: ["prod"]}]},
+  k3s: {key: "env", list: [{k: "staging", lanes: ["platform[staging]", "apps[staging]"]}, {k: "prod", lanes: ["platform[prod]", "apps[prod]"]}]},
+  gke: {key: "env", list: [{k: "dev", lanes: ["dev"]}, {k: "stg", lanes: ["stg"]}, {k: "prod", lanes: ["prod"]}]},
+  rel: {key: "", list: [{k: "releases", lanes: ["releases"]}]},
+};
+const EST = {ovh: "prod", shop: "prod", k3s: "staging", gke: "prod", rel: "releases"};
+const estLabel = (proj, k) => ESTATES[proj].key ? `${ESTATES[proj].key}=${k}` : k;
+const estOf = (proj, k) => ESTATES[proj].list.find(e => e.k === (k || EST[proj]));
+const estOfLane = (proj, lane) => (ESTATES[proj].list.find(e => e.lanes.includes(lane)) || {}).k;
+function decEst(proj, d) { const x = lineIndex(P[proj])[d.line]; return x ? estOfLane(proj, x.l.dep) : (d.est || ESTATES[proj].list[0].k); }
+/* one estate of the model: its lanes, the watched sources that feed it, the instances it reaches.
+   A relationship across estates would draw as an edge to the other estate's header; none of these projects has one. */
+function estModel(proj, k) {
+  const m = MODEL[proj], e = estOf(proj, k), inE = new Set(e.lanes);
+  const own = m.nodes.filter(n => inE.has(n.lane)), ids = new Set(own.map(n => n.id));
+  const srcs = m.nodes.filter(n => n.lane === "sources" && m.edges.some(([a, b]) => a === n.id && ids.has(b)));
+  const nodes = [...srcs, ...own], all = new Set(nodes.map(n => n.id));
+  return {...m, lanes: [...(srcs.length ? ["sources"] : []), ...e.lanes], nodes,
+    edges: m.edges.filter(([a, b]) => all.has(a) && (all.has(b) || b.startsWith("R:"))),
+    regions: m.regions.filter(r => nodes.some(n => n.region === r.id))};
+}
+function estLines(proj, k) { const lanes = estOf(proj, k).lanes; return Object.values(lineIndex(P[proj])).filter(x => lanes.includes(x.l.dep)); }
+
 /* ---------- graph state ---------- */
 let ov = null, NARROW = new Set();                      // the plan over the estate: 0 off, otherwise on
 const OPEN = {lane: {}, region: {}, cell: {}, group: {}};
@@ -1267,7 +1340,7 @@ function closure(m, start, skipPlanned) {
 }
 
 function overlayState(p, m) {
-  const on = ov !== 0 && hasPlan(p);
+  const on = ov !== 0 && estLines(cur).length > 0;
   const idx = lineIndex(p), changed = new Map(), reached = new Map(), litRegions = new Map(), chParent = new Map();
   if (on) {
     m.nodes.forEach(n => { const xs = n.lines.map(id => idx[id]).filter(Boolean); if (xs.length) changed.set(n.id, xs); });
@@ -1283,7 +1356,7 @@ function overlayState(p, m) {
 }
 
 function estateHTML(p) {
-  const m = MODEL[cur], o = overlayState(p, m);
+  const m = estModel(cur), o = overlayState(p, m);
   const byId = Object.fromEntries(m.nodes.map(n => [n.id, n]));
   const visibleNode = (n) => !n.planned || o.changed.has(n.id);
   const nodes = m.nodes.filter(visibleNode);
@@ -1421,7 +1494,7 @@ function estateHTML(p) {
     const info = laneInfo(l), open = laneOpen(l), top = y;
     const st = (info.st || "").split(" · ")[0];
     svgLanes += `<g class="lanehdr" data-lanehdr="${esc(l)}"><rect class="ln-strip" x="0" y="${top}" width="${totalW}" height="${STRIP}"></rect>
-      <text class="g-l" x="${SP[3]}" y="${top + 17}"><tspan class="${gMark(info.mark)}">${esc(info.mark || "")}</tspan> ${esc(info.name)}<tspan class="g-ls" dx="${SP[3]}">${esc(st)}</tspan></text></g>`;
+      <text class="g-l" x="${SP[3]}" y="${top + 17}"><tspan class="${gMark(info.mark)}">${esc(info.mark || "")}</tspan> ${esc(info.name.replace(`[${estLabel(cur, EST[cur])}]`, ""))}<tspan class="g-ls" dx="${SP[3]}">${esc(st)}</tspan></text></g>`;
     if (!open) {
       m.regions.forEach(r => { if ((cellNodes[cellKey(l, r.id)] || []).length) pos["C:" + cellKey(l, r.id)] = {x: RX[r.id].x + gut, y: top + STRIP + SP[2], w: RX[r.id].w - 2 * gut, h: 18, band: true}; });
       y = top + STRIP + SP[2] + 18 + SP[3]; return;
@@ -1526,7 +1599,7 @@ function estateHTML(p) {
 
 /* ---------- inspector for the estate ---------- */
 function estateInsp(el) {
-  const m = MODEL[cur], p = P[cur];
+  const m = estModel(cur), p = P[cur];
   const byId = Object.fromEntries(m.nodes.map(n => [n.id, n]));
   let title = sel, tree = [], cmd = "", members = [], facts = [];
   if (sel.startsWith("R:")) {
@@ -1656,7 +1729,7 @@ ACTS["d-fjdrift"] = () => DONE["d-fjdrift"] ? `<p>approve("k8s.deployment", "for
 function revertFj() {
   const p = P.ovh; DONE["d-fjdrift"] = true;
   const l = findLine(p, "fjdrift"); l.heldDone = true; l.applied = true;
-  const r = newRun("ovh", "09:53:10", "an approve row for forgejo.server by simon@framework", "reverted env on forgejo.server in prod"); r.took = "4s"; r.state = "";
+  const r = newRun("ovh", "09:53:10", "an approve row for forgejo.server by simon@framework", "reverted env on forgejo.server", "prod"); RUNS.ovh[1].state = ""; r.took = "4s"; r.state = "";
   l.at = `09:53 (run ${r.n})`;
   addAudit("ovh", [90, "09:53:10", "controller", "apps[prod]", "approve(\"k8s.deployment\", \"forgejo.server\") by simon@framework"], r);
   addAudit("ovh", [91, "09:53:14", "action", "apps[prod]", "update k8s.deployment forgejo.server ok · env reverted"], r);
@@ -1804,12 +1877,12 @@ DATA.ovh = [
     {new: true, r: ["\"k8s.deployment\"", "\"forgejo.server\"", "\"spec.template.spec.containers[0].env[…]\"", "\"true\""], line: "fjdrift"}]},
 ];
 DATA_NOTE.ovh = "The user's project, from its program files: two stacks, each once per env, the apps as module copies. The row that arrived is the registry's answer to a tag, not a file.";
-TRACE.ovh = {title: "controller run 09:20:14, the tree of 4 deployments (plan)", total: 6.2, spans: [
+TRACE.ovh = {title: "controller run 09:20:14, env=lab (plan)", total: 6.2, spans: [
   ["plan.phase  loaded and compiled", 0, .006, 0], ["provider.call  ovh Handshake, Configure", 0, .35, 1],
   ["provider.call  ovh Read  k3s.server.vm (lab)", .35, 4.1, 1], ["provider.call  ovh Read ×25 others", .35, 1.3, 0],
   ["io.call  oci.resolve ×6", .4, .7, 0], ["io.call  io.read  ssh …/k3s.yaml (lab)", 4.45, .42, 1],
   ["provider.call  k8s Configure, Read ×38 (lab)", 4.87, .74, 1], ["provider.call  k8s Plan ×2", 5.61, .48, 1], ["plan.phase  policy pass", 6.09, .08, 1]],
-  calls: "ovh 26 · k8s 177 (lab 81, prod 96) · io 2 ssh, 6 oci · 0 retries",
+  calls: "ovh 26 · k8s 81 · io 1 ssh, 6 oci · 0 retries",
   chain: "ovh Configure → Read k3s.server.vm (4.1s) → ssh read of k3s.yaml → k8s Configure → Read ×38 → Plan",
   gap: "the instance read is two thirds of the run, and first on the chain: the kubeconfig's address comes from it, so every k8s call waits for it."};
 AUDIT.ovh = [
@@ -1826,23 +1899,23 @@ AUDIT.ovh = [
 const run = (n, at, event, did, took, rows, o) => ({n, at, event, did, took, rows, ...(o || {})});
 const RUNS = {
   shop: [
-    run(218, "09:38:12", "table aws.availability_zone gained us-east-1d · world: ingress[1] of https drifted", "planned 7 changes in prod; holds for a signature and a drift; nothing applied", "2.4s", AUDIT.shop.slice(3), {trace: true, state: "held"}),
-    run(217, "09:31:41", "program commit a41c9e2: the orders database's security group is named for it", "planned the rename; held for a signature; superseded by run 218", "2.1s", AUDIT.shop.slice(1, 3)),
-    run(216, "09:01:48", "program commit on main", "applied staging", "22s", AUDIT.shop.slice(0, 1)),
+    run(218, "09:38:12", "table aws.availability_zone gained us-east-1d · world: ingress[1] of https drifted", "planned 7 changes in prod; holds for a signature and a drift; nothing applied", "2.4s", AUDIT.shop.slice(3), {trace: true, state: "held", est: "prod"}),
+    run(217, "09:31:41", "program commit a41c9e2: the orders database's security group is named for it", "planned the rename; held for a signature; superseded by run 218", "2.1s", AUDIT.shop.slice(1, 3), {est: "prod"}),
+    run(216, "09:01:48", "program commit on main", "applied staging", "22s", AUDIT.shop.slice(0, 1), {est: "staging"}),
   ],
   k3s: [
-    run(77, "09:12:30", "program commit 5d02b7e: platform: try Ubuntu 26.04 on staging", "replaced ovh.instance server, moved records api and www; 3 objects wait on kubeconfig", "5m40s so far", AUDIT.k3s.slice(0, 9), {trace: true, state: "running"}),
-    run(76, "08:12:41", "world: spec.replicas of apps[prod] web 3 → 5, by kubectl", "nothing applied: held, ownership lost", "1.2s", AUDIT.k3s.slice(9)),
+    run(77, "09:12:30", "program commit 5d02b7e: platform: try Ubuntu 26.04 on staging", "replaced ovh.instance server, moved records api and www; 3 objects wait on kubeconfig", "5m40s so far", AUDIT.k3s.slice(0, 9), {trace: true, state: "running", est: "staging"}),
+    run(76, "08:12:41", "world: spec.replicas of apps[prod] web 3 → 5, by kubectl", "nothing applied: held, ownership lost", "1.2s", AUDIT.k3s.slice(9), {est: "prod"}),
   ],
-  gke: [run(64, "08:02:44", "input data/peerings.csv gained line 6 (a8f3e10)", "added 1 peering to google.compute_network main in prod", "7.1s", AUDIT.gke, {trace: true})],
-  rel: [run(12, "10-14 16:20:00", "time: eligible(\"shop\", \"1.4.1\") became true", "us-1 to shop 1.4.1; eu-1 held by a rule until 10-19", "0.9s", AUDIT.rel, {trace: true})],
+  gke: [run(64, "08:02:44", "input data/peerings.csv gained line 6 (a8f3e10)", "added 1 peering to google.compute_network main in prod", "7.1s", AUDIT.gke, {trace: true, est: "prod"})],
+  rel: [run(12, "10-14 16:20:00", "time: eligible(\"shop\", \"1.4.1\") became true", "us-1 to shop 1.4.1; eu-1 held by a rule until 10-19", "0.9s", AUDIT.rel, {trace: true, est: "releases"})],
   ovh: [
-    run(41, "09:20:14", "oci.resolve: forgejo's lab tag moved", "planned 1 update in apps[lab], pending; prod's drift still held", "6.2s", AUDIT.ovh.slice(5), {trace: true, state: "pending"}),
-    run(40, "08:40:30", "world: env of forgejo.server in prod, by kubectl-set", "nothing applied: drift held for approval", "0.9s", AUDIT.ovh.slice(3, 5)),
-    run(39, "07:41:02", "dform apply by simon@framework, the first of lab", "brought up platform[lab] and apps[lab]", "18m08s", AUDIT.ovh.slice(0, 3)),
+    run(41, "09:20:14", "oci.resolve: forgejo's lab tag moved", "planned 1 update in apps, pending", "6.2s", AUDIT.ovh.slice(5), {trace: true, state: "pending", est: "lab"}),
+    run(40, "08:40:30", "world: env of forgejo.server in prod, by kubectl-set", "nothing applied: drift held for approval", "0.9s", AUDIT.ovh.slice(3, 5), {state: "held", est: "prod"}),
+    run(39, "07:41:02", "dform apply by simon@framework, the first of lab", "brought up platform and apps", "18m08s", AUDIT.ovh.slice(0, 3), {est: "lab"}),
   ],
 };
-function newRun(proj, at, event, did) { const r = run(RUNS[proj][0].n + 1, at, event, did, "", [], {state: "running"}); RUNS[proj].unshift(r); return r; }
+function newRun(proj, at, event, did, est) { const r = run(RUNS[proj][0].n + 1, at, event, did, "", [], {state: "running", est}); RUNS[proj].unshift(r); return r; }
 
 function renderWorld() {
   const rows = WORLD[cur] || [];
@@ -1884,12 +1957,14 @@ function renderRun() {
       </tbody></table></div>`;
   return `<section class="pane">
     <p class="note">One run is one reconcile, woken by an event: a row, a moved tag, drift read, a signature, a time boundary, a commit. Newest first; each run's audit entries read forward. Ticks are the order inside a run; the plan text shows them.</p>
-    ${RUNS[cur].map((r, i) => `<article class="run ${i ? "" : "cur"}">
+    <div class="lab">Runs of ${esc(estLabel(cur, EST[cur]))}</div>
+    ${RUNS[cur].filter(r => r.est === EST[cur]).map((r, i) => `<article class="run ${i ? "" : "cur"}">
       <div class="run-h"><b>run ${r.n}</b><span class="dimt">${esc(r.at)}</span>${r.state ? `<span class="stt ${r.state === "held" ? "held" : "waiting"}">${esc(r.state)}</span>` : ""}<span class="dimt run-t">${esc(r.took)}</span></div>
       <dl class="kv"><dt>woken by</dt><dd>${esc(r.event)}</dd><dt>did</dt><dd>${esc(r.did)}</dd>${r.trace ? `<dt>longest chain</dt><dd>${esc(t.chain)}</dd>` : ""}</dl>
       ${r.trace ? `<details ${i ? "" : "open"}><summary class="lab">Trace</summary>${wf()}</details>` : ""}
       ${r.rows.length ? `<details ${i ? "" : "open"}><summary class="lab">Audit · ${r.rows.length} entr${r.rows.length === 1 ? "y" : "ies"}</summary>${table(r.rows)}</details>` : ""}
     </article>`).join("")}
+    ${RUNS[cur].some(r => r.est === EST[cur]) ? "" : `<p class="note">No run has touched ${esc(estLabel(cur, EST[cur]))} since the controller started.</p>`}
     <p class="note">dform log verify checks the chain. Each deployment keeps its own hash-chained log; a run's entries are merged by time.</p>
   </section>`;
 }
@@ -1926,7 +2001,7 @@ function nextSeq(proj) { return Math.max(...RUNS[proj].flatMap(r => r.rows).filt
 
 function sign() {
   const p = P.shop; DONE["d-appr"] = true;
-  const r = newRun("shop", "09:52:07", "a signature over sha256:4f1c9e07… by simon@framework", "applying 6 changes in prod");
+  const r = newRun("shop", "09:52:07", "a signature over sha256:4f1c9e07… by simon@framework", "applying 6 changes", "prod");
   addAudit("shop", [nextSeq("shop"), "09:52:07", "approval", "prod", "verified: simon@framework signed sha256:4f1c9e07… (age1q8…f3k)"], r);
   p.ctl = {state: "applying", since: "09:52:07", detail: `run ${r.n} · lease fence 12`};
   p.deps[1].st = "applying · lease fence 12"; p.approvals = [];
@@ -1961,7 +2036,7 @@ function sign() {
 function revert() {
   const p = P.shop; DONE["d-drift"] = true;
   const l = findLine(p, "https"); l.heldDone = true;
-  const r = newRun("shop", "09:53:02", "an approve row for https by simon@framework", "");
+  const r = newRun("shop", "09:53:02", "an approve row for https by simon@framework", "", "prod");
   addAudit("shop", [nextSeq("shop"), "09:53:02", "controller", "prod", "approve(\"aws.security_group\", \"https\") by simon@framework"], r);
   if (DONE["d-appr"]) {
     l.applied = true; l.at = `09:53 (run ${r.n})`;
@@ -1977,7 +2052,7 @@ function revert() {
 
 /* ---------- events ---------- */
 document.addEventListener("click", (e) => {
-  const t = e.target.closest("[data-node],[data-lanehdr],[data-group],[data-mode],[data-p],[data-tab],[data-g],[data-v],[data-line],[data-dec],[data-dep],#sign,#revert,#revert-fj");
+  const t = e.target.closest("[data-est],[data-node],[data-lanehdr],[data-group],[data-mode],[data-p],[data-tab],[data-g],[data-v],[data-line],[data-dec],[data-dep],#sign,#revert,#revert-fj");
   if (!t) return;
   if (t.id === "sign") return sign();
   if (t.id === "revert") return revert();
@@ -1989,7 +2064,8 @@ document.addEventListener("click", (e) => {
   else if (t.dataset.p) { cur = t.dataset.p; sel = null; ov = null; fresh.clear(); }
   else if (t.dataset.tab) tab = t.dataset.tab;
   else if (t.dataset.g) group = t.dataset.g;
-  else if (t.dataset.dec) { sel = t.dataset.dec; }
+  else if (t.dataset.dec) { sel = t.dataset.dec; const d = P[cur].decisions.find(d => d.id === sel); if (d) EST[cur] = decEst(cur, d); }
+  else if (t.dataset.est) { EST[cur] = t.dataset.est; sel = null; }
   else if (t.dataset.line) { sel = t.dataset.line; }
   else if (t.dataset.dep) { group = "dep"; tab = "plan"; }
   render();
