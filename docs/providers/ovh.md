@@ -191,6 +191,30 @@ network whose port it did not make (an instance adopted, or made
 before ports were kept) has none in `ports`, and its address there is
 the first port's.
 
+An Apply that changes the instance brings its networks to one port
+each, against its ports as the API lists them then, not as the plan
+read them:
+
+- a network it has no port on: one attached, and kept as its own;
+- its own port there: kept, and any other port on the network detached,
+  each a note naming its own;
+- no port known as its own (no `ports` kept, or the one kept is gone)
+  and one port there: that one taken as its own, said;
+- no port known as its own and several there: the Apply is refused
+  before anything changes, naming each port and its address, so a
+  person chooses which to keep; it never keeps one at random;
+- a network left: its own port detached, and a port that is not its
+  own left as it is, said; with none known, its one port detached, and
+  several refused as above.
+
+```
+apply ovh.instance["vm"]: network pn-1000123_42 has 3 ports and none is known as its own: if-a (10.0.0.21), if-b (10.0.0.22), if-c (10.0.0.23); it keeps one port on a network, and which one is not dform's to guess: detach the others (`DELETE /cloud/project/0123.../instance/6f8b.../interface/PORT`, or in the OVH control panel), keeping the one in use, and apply again: the one left is taken as its own
+```
+
+Ports beside its own are found only by an Apply of the instance: the
+plan reads its networks as a set, so a second port on a network is no
+change to plan.
+
 The API never answers an instance's user data: the schema marks it
 `write_only`, so dform keeps the digest of what it applied (never
 the text) in state beside the instance, and Plan compares the program's
@@ -218,7 +242,10 @@ replaces it (the API has no update for a key); `id` computed.
 The attachment is the volume's: set, the volume is attached once it is
 `available`; cleared, detached; changed, detached and attached to the new
 one; the reference orders the volume after the instance, and a volume
-attached when it is deleted is detached first. One instance at a time
+attached when it is deleted is detached first. Each is against the
+volume as the API answers it then: one on its way (`attaching`,
+`detaching`) is waited for first, an attachment already as asked sends
+nothing, and only an instance it is attached to is detached from. One instance at a time
 (multi-attach volumes are not served). The API never answers the image or
 the snapshot, so dform keeps their digests, as an instance's user data.
 
@@ -351,7 +378,9 @@ of its content, what the table above says it is found by (the schema's
 `type_lookup`; not its identity, and not what replaces it): one
 this provider process made for the
 same idempotency key is the answer, brought to the document (a user's S3
-credential made, a volume attached); another is refused, to be adopted
+credential made, a volume attached; an instance owns the port on each
+network it was made with, as its Create would have answered); another
+is refused, to be adopted
 (`adopt(r, ID)`) or renamed. `provider.created` answers by the same key,
 so a Create dform gave up waiting for is adopted, not made twice. A 429 or
 5xx answer is sent again with backoff (`[providers.ovh] retries`,
@@ -393,9 +422,11 @@ the provider to it.
   the ports carry no address.
 - An attach on a network the instance has a port on already makes
   another port: the lab's instance has three on one network, from the
-  attach loop the first two fixes ended. Seen by 2026-10-15. The provider lists the ports before it attaches and
-  attaches only on a network it has none on, and keeps the port it
-  attached by id (`ports`); it removes none of the others yet.
+  attach loop the first two fixes ended. Seen by 2026-10-15. The
+  provider lists the ports before it attaches and attaches only on a
+  network it has none on, keeps the port it attached by id (`ports`),
+  and detaches the others on a network only where it knows its own
+  (above, the instance's networks).
 
 ## Shapes not yet observed
 
