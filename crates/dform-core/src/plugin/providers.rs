@@ -185,6 +185,32 @@ fn key(typ: &str, remote: &str) -> String {
     format!("{typ}::{remote}")
 }
 
+/// An object state maps, as Refresh reads it: its address, its entry and
+/// the link that serves it.
+struct Mapped<'a> {
+    addr: Address,
+    entry: &'a StateEntry,
+    link: usize,
+}
+
+impl Mapped<'_> {
+    /// What state remembers of it, for its Read.
+    fn prior(&self) -> Option<&Json> {
+        Some(&self.entry.computed).filter(|c| !c.is_null())
+    }
+}
+
+/// The Read of `remote`, the object at `addr`, told what state remembers
+/// of it (`prior`, absent when state holds nothing).
+fn read_request(addr: &Address, remote: &str, prior: Option<&Json>) -> pb::ReadRequest {
+    pb::ReadRequest {
+        r#type: addr.typ.clone(),
+        remote: remote.to_string(),
+        name: addr.name.clone(),
+        prior: prior.map(wire::doc),
+    }
+}
+
 /// The Query predicate a provider with the `managed` capability answers
 /// with Type, Name and Key bound: `(Type, Name, Key, RemoteId)` for the
 /// object an Apply Create or Replace of address Name with idempotency key
@@ -2508,7 +2534,9 @@ impl Providers {
 
     /// Whether the object `remote` of `addr`'s type is there: one Read.
     pub fn exists(&self, addr: &Address, remote: &str) -> Result<bool> {
-        Ok(self.read(self.route(&addr.typ), addr, remote)?.is_some())
+        Ok(self
+            .read(self.route(&addr.typ), addr, remote, None)?
+            .is_some())
     }
 
     fn object(attrs: Option<&pb::Value>, computed: Option<&pb::Value>) -> Result<Object> {
@@ -2518,14 +2546,17 @@ impl Providers {
         })
     }
 
-    /// Read one object; `None` when Read returns nothing (the provider
+    /// Read one object, told what state remembers of it (`prior`, its
+    /// computed values); `None` when Read returns nothing (the provider
     /// retries a type's `type_retry` attempts before it says so).
-    fn read(&self, i: usize, addr: &Address, remote: &str) -> Result<Option<Object>> {
-        let req = pb::ReadRequest {
-            r#type: addr.typ.clone(),
-            remote: remote.to_string(),
-            name: addr.name.clone(),
-        };
+    fn read(
+        &self,
+        i: usize,
+        addr: &Address,
+        remote: &str,
+        prior: Option<&Json>,
+    ) -> Result<Option<Object>> {
+        let req = read_request(addr, remote, prior);
         let r: pb::ReadResponse = self.link(i)?.borrow_mut().call(req)?;
         if !r.found {
             return Ok(None);
@@ -2560,21 +2591,28 @@ impl Providers {
     /// not map is not read. Each object is read once between two writes
     /// ([`Providers::refreshed`]): only those not read yet are asked.
     fn refresh(&self, state: &State) -> Result<World> {
-        let mut mapped: BTreeMap<String, (Address, String, usize)> = BTreeMap::new();
-        for (a, e) in self
+        let mut mapped: BTreeMap<String, Mapped> = BTreeMap::new();
+        for (addr, e) in self
             .entries(&state.resources)
             .chain(self.entries(&state.deposed))
         {
-            let i = self
-                .link_serving(&a.typ, &e.provider)
+            let link = self
+                .link_serving(&addr.typ, &e.provider)
                 .expect("entries are served");
-            mapped.insert(key(&a.typ, &e.remote), (a, e.remote.clone(), i));
+            mapped.insert(
+                key(&addr.typ, &e.remote),
+                Mapped {
+                    addr,
+                    entry: e,
+                    link,
+                },
+            );
         }
-        let unread: Vec<(&String, &(Address, String, usize))> = {
+        let unread: Vec<(&String, &Mapped)> = {
             let read = self.refreshed.borrow();
             mapped
                 .iter()
-                .filter(|(k, (_, _, i))| read.get(*k).is_none_or(|(j, _)| j != i))
+                .filter(|(k, m)| read.get(*k).is_none_or(|(j, _)| *j != m.link))
                 .collect()
         };
         if !unread.is_empty() {
@@ -2587,7 +2625,23 @@ impl Providers {
             .collect())
     }
 
-    /// Read `objects`, each `(key, (address, remote, link))`, into
+    /// What Read answered of each object state maps that `world` holds,
+    /// its computed values, kept in state for its next Read
+    /// (`StateEntry::computed`).
+    fn remember(&self, world: &World, state: &mut State) {
+        let read: Vec<(Address, Json)> = self
+            .entries(&state.resources)
+            .filter_map(|(addr, e)| {
+                let o = world.get(&key(&addr.typ, &e.remote))?;
+                Some((addr, o.computed.clone()))
+            })
+            .collect();
+        for (addr, computed) in read {
+            state.set_computed(&addr, computed);
+        }
+    }
+
+    /// Read `objects`, each its key and what state maps, into
     /// [`Providers::refreshed`]. Every Read is sent before any answer is
     /// taken, to every provider, so a provider that can answers them at
     /// once: a plan waits one round trip to its API, not one per object.
@@ -2600,32 +2654,30 @@ impl Providers {
         skip_all,
         fields(otel.name = "refresh", count = objects.len())
     )]
-    fn read_all(&self, objects: Vec<(&String, &(Address, String, usize))>) -> Result<()> {
+    fn read_all(&self, objects: Vec<(&String, &Mapped)>) -> Result<()> {
         let mut sent = Vec::new();
-        for (k, (addr, remote, i)) in objects {
-            let req = pb::ReadRequest {
-                r#type: addr.typ.clone(),
-                remote: remote.clone(),
-                name: addr.name.clone(),
-            };
-            let t = self.link(*i)?.borrow_mut().submit(req);
-            sent.push((k, addr, remote, *i, t));
+        for (k, m) in objects {
+            let req = read_request(&m.addr, &m.entry.remote, m.prior());
+            let t = self.link(m.link)?.borrow_mut().submit(req);
+            sent.push((k, m, t));
         }
         for l in &self.links {
             l.borrow_mut().flush();
         }
-        for (k, addr, remote, i, t) in sent {
+        for (k, m, t) in sent {
             let answer = {
-                let mut link = self.links[i].borrow_mut();
+                let mut link = self.links[m.link].borrow_mut();
                 link.wait(t)
                     .and_then(|r| link.expect::<pb::ReadResponse>("Read", r))
             };
             let found = match answer {
                 Ok(r) if !r.found => None,
                 Ok(r) => Some(Self::object(r.attrs.as_ref(), r.computed.as_ref())?),
-                Err(_) => self.read(i, addr, remote)?,
+                Err(_) => self.read(m.link, &m.addr, &m.entry.remote, m.prior())?,
             };
-            self.refreshed.borrow_mut().insert(k.clone(), (i, found));
+            self.refreshed
+                .borrow_mut()
+                .insert(k.clone(), (m.link, found));
         }
         Ok(())
     }
@@ -4033,7 +4085,9 @@ impl Tick<'_> {
             return Ok(false);
         }
         if self.world.is_none() {
-            self.world = Some(self.cloud.refresh(state)?);
+            let world = self.cloud.refresh(state)?;
+            self.cloud.remember(&world, state);
+            self.world = Some(world);
         }
         let (doc, generated) = self.desired_doc(a, state)?;
         let named = self.named(a, &doc, generated, state);
@@ -4459,7 +4513,7 @@ impl Tick<'_> {
                     Ok(None) => return Looked::NotMade,
                     Err(e) => return Looked::Unknown(format!("looking it up failed: {e:#}")),
                 };
-                match cloud.read(f.link, at, &remote) {
+                match cloud.read(f.link, at, &remote, None) {
                     Ok(Some(o)) => {
                         crate::progress::line(&format!(
                             "apply {}: the Create that timed out made {remote}; it is \
@@ -4478,7 +4532,7 @@ impl Tick<'_> {
                 }
             }
             ActionKind::Delete | ActionKind::DeleteDeposed => {
-                match cloud.read(f.link, at, &f.remote) {
+                match cloud.read(f.link, at, &f.remote, None) {
                     Ok(None) => {
                         crate::progress::line(&format!(
                             "apply {}: the Delete that timed out took effect; {} is gone",
@@ -4516,22 +4570,19 @@ impl Tick<'_> {
                 if let ActionKind::Replace { .. } = f.kind {
                     self.forget_old(f, state);
                 }
-                let world = self.world_mut();
-                world.insert(
-                    key(&addr.typ, &resp.remote),
-                    Providers::object(resp.attrs.as_ref(), resp.computed.as_ref())?,
-                );
+                let o = Providers::object(resp.attrs.as_ref(), resp.computed.as_ref())?;
                 state.set(addr, provider.clone(), resp.remote.clone());
                 state.set_name(addr, f.named.clone());
+                state.set_computed(addr, o.computed.clone());
+                self.world_mut().insert(key(&addr.typ, &resp.remote), o);
                 self.record_written(addr, state, true);
             }
             ActionKind::Update | ActionKind::Drift => {
-                world.insert(
-                    key(&addr.typ, &f.remote),
-                    Providers::object(resp.attrs.as_ref(), resp.computed.as_ref())?,
-                );
+                let o = Providers::object(resp.attrs.as_ref(), resp.computed.as_ref())?;
                 // A program that names it another way now: the name is its.
                 state.set_name(addr, f.named.clone());
+                state.set_computed(addr, o.computed.clone());
+                world.insert(key(&addr.typ, &f.remote), o);
                 self.record_written(addr, state, false);
             }
             ActionKind::Delete => {

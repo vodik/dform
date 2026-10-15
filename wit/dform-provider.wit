@@ -294,6 +294,13 @@ interface types {
     remote: string,
     // The address state maps to this object, for messages.
     name: string,
+    // The object's computed values as the last apply or read returned
+    // them, from state (a sensitive one as its secret null, never its
+    // value); absent when state holds none. A hint of what the provider
+    // made below the object (the port it attached), never truth: an
+    // element remembered here that is gone reads as absent. A provider
+    // that needs none ignores it.
+    prior: option<tree>,
   }
 
   record read-response {

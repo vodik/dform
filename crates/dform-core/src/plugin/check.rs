@@ -449,6 +449,7 @@ fn read(conn: &Conn, typ: &str, remote: &str) -> Result<Option<(Json, Json)>> {
         r#type: typ.into(),
         remote: remote.into(),
         name: "a".into(),
+        prior: None,
     };
     let resp: pb::ReadResponse = call(conn, req)?;
     if !resp.found {

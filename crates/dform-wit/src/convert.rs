@@ -395,6 +395,7 @@ macro_rules! convert {
                     type_: r.r#type.clone(),
                     remote: r.remote.clone(),
                     name: r.name.clone(),
+                    prior: r.prior.as_ref().map(to_tree),
                 }
             }
 
@@ -403,6 +404,7 @@ macro_rules! convert {
                     r#type: r.type_.clone(),
                     remote: r.remote.clone(),
                     name: r.name.clone(),
+                    prior: r.prior.as_ref().map(from_tree).transpose()?,
                 })
             }
 

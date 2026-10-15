@@ -271,6 +271,13 @@ message ReadRequest {
   string remote = 2;
   // The address state maps to this object, for messages.
   string name = 3;
+  // The object's computed values as the last apply or read returned
+  // them, from state (a sensitive one as its SECRET null, never its
+  // value); absent when state holds none. A hint of what the provider
+  // made below the object (the port it attached), never truth: an
+  // element remembered here that is gone reads as absent. A provider
+  // that needs none ignores it.
+  optional Value prior = 4;
 }
 
 message ReadResponse {

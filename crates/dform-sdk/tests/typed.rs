@@ -209,6 +209,7 @@ fn plan_comes_from_the_schema_and_apply_from_the_lifecycle() {
             r#type: "acme.bucket".into(),
             remote: "b-logs".into(),
             name: "logs".into(),
+            prior: None,
         },
     );
     assert!(r.found);
@@ -228,6 +229,7 @@ fn plan_comes_from_the_schema_and_apply_from_the_lifecycle() {
             r#type: "acme.bucket".into(),
             remote: "b-logs".into(),
             name: "logs".into(),
+            prior: None,
         },
     );
     assert!(!r.found);
@@ -354,6 +356,7 @@ fn write_only_optional_computed_examples_and_check() {
             r#type: "acme.key".into(),
             remote: "a".into(),
             name: "a".into(),
+            prior: None,
         },
     );
     let attrs = wire::from_doc(r.attrs.as_ref().unwrap()).unwrap();
@@ -553,6 +556,7 @@ fn keep_is_the_providers_promise() {
             r#type: "vault.token".into(),
             remote: "t".into(),
             name: "t".into(),
+            prior: None,
         },
     );
     assert_eq!(
@@ -764,4 +768,110 @@ fn a_sensitive_computed_value_is_held_and_revealed() {
 
 fn call_on<P: Provider, R: TryFrom<Reply, Error = Reply>>(h: &Typed<P>, c: impl Into<Call>) -> R {
     R::try_from(h.handle(c.into(), &silent).unwrap()).unwrap()
+}
+
+/// A mount that remembers the port its create attached under computed:
+/// its Read keeps the one the prior names while the API still has it.
+#[derive(Resource, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[dform(type = "acme.mount")]
+struct Mount {
+    #[dform(required)]
+    name: String,
+    #[dform(computed)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    port: Option<String>,
+}
+
+/// The ports the API has: `p-1` only.
+const PORTS: [&str; 1] = ["p-1"];
+
+impl Lifecycle<Acme> for Mount {
+    fn read(_: &Acme, remote: &str) -> Result<Option<Mount>> {
+        Ok(Some(Mount {
+            name: remote.into(),
+            port: None,
+        }))
+    }
+    fn read_with_prior(p: &Acme, remote: &str, prior: Option<&Json>) -> Result<Option<Mount>> {
+        let port = prior
+            .and_then(|c| c["port"].as_str())
+            .filter(|id| PORTS.contains(id));
+        Ok(Mount::read(p, remote)?.map(|m| Mount {
+            port: port.map(String::from),
+            ..m
+        }))
+    }
+    fn create(_: &Acme, d: Mount, _: &str, _: &Progress) -> Result<(String, Mount)> {
+        Ok((d.name.clone(), d))
+    }
+    fn update(_: &Acme, _: &str, _: Mount, d: Mount, _: &Progress) -> Result<Mount> {
+        Ok(d)
+    }
+    fn delete(_: &Acme, _: &str, _: &Progress) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Read is told the prior computed values: a lifecycle that reads them
+/// keeps what it made while it is there, and reads one gone as absent; one
+/// that does not (`Lifecycle::read` alone) answers the same with or
+/// without them.
+#[test]
+fn read_is_told_the_prior_computed_values() {
+    let h = Typed::<Acme>::new()
+        .resource::<Bucket>()
+        .resource::<Mount>();
+    let _: pb::ConfigureResponse = call(
+        &h,
+        pb::ConfigureRequest {
+            config: Some(wire::doc(&json!({"settings": {}}))),
+        },
+    );
+    let read = |typ: &str, prior: Option<Json>| -> Option<Json> {
+        let r: pb::ReadResponse = call(
+            &h,
+            pb::ReadRequest {
+                r#type: typ.into(),
+                remote: "m".into(),
+                name: "m".into(),
+                prior: prior.as_ref().map(wire::doc),
+            },
+        );
+        r.computed.map(|c| wire::from_doc(&c).unwrap())
+    };
+    assert_eq!(
+        read("acme.mount", Some(json!({"port": "p-1"}))),
+        Some(json!({"port": "p-1"}))
+    );
+    assert_eq!(
+        read("acme.mount", Some(json!({"port": "p-9"}))),
+        Some(json!({}))
+    );
+    assert_eq!(read("acme.mount", None), Some(json!({})));
+    // A bucket is read by `read`: the prior changes nothing.
+    let made: pb::ApplyResponse = call(
+        &h,
+        pb::ApplyRequest {
+            op: pb::Op::Create as i32,
+            r#type: "acme.bucket".into(),
+            name: "m".into(),
+            config: Some(wire::doc(&json!({"name": "m"}))),
+            ..Default::default()
+        },
+    );
+    assert_eq!(made.remote, "b-m");
+    let read_bucket = |prior: Option<Json>| -> pb::ReadResponse {
+        call(
+            &h,
+            pb::ReadRequest {
+                r#type: "acme.bucket".into(),
+                remote: "b-m".into(),
+                name: "m".into(),
+                prior: prior.as_ref().map(wire::doc),
+            },
+        )
+    };
+    let plain = read_bucket(None);
+    assert!(plain.found);
+    assert_eq!(read_bucket(Some(json!({"id": "other"}))), plain);
 }

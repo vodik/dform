@@ -214,6 +214,14 @@ fn main() -> std::process::ExitCode {
   answers with no credentials as it would with them (from a schema it
   holds, or a fake of its API); one that does not is not asked under
   test, which says so.
+- Read is told the object's prior computed values, as the last apply
+  or read returned them (docs/reference.md, "Providers are
+  processes"): `Lifecycle::read_with_prior(p, remote, prior)`, which
+  is `read` unless a type overrides it. A type that makes something
+  below its object that the API does not mark as its own (a port on an
+  instance) answers its id under computed when it makes it, and finds
+  it again by that id here; one the prior names that is gone is
+  absent from what it answers.
 - Health is a call of its own, beside Read, and `dform status`
   is the only one that asks it: an object's state now, one of
   `healthy`, `progressing`, `degraded`, `suspended` and `unknown`, and a

@@ -2,6 +2,7 @@ use crate::address::Address;
 use crate::resources::Adopt;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as Json;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -234,6 +235,14 @@ pub struct StateEntry {
     /// older than the key's.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub made_with: BTreeMap<String, BTreeMap<String, u32>>,
+    /// The object's computed values as the last Apply answered them, or
+    /// the last Read an apply made (a secret one as its label, never its
+    /// value): what the provider's next Read and Apply of it are told
+    /// (`prior`), so a provider remembers what it made below the object
+    /// (the port it attached). A hint for the provider, never compared:
+    /// the world is what Read answers.
+    #[serde(default, skip_serializing_if = "Json::is_null")]
+    pub computed: Json,
 }
 
 impl State {
@@ -329,8 +338,17 @@ impl State {
                 written: BTreeMap::new(),
                 derived: BTreeMap::new(),
                 made_with: BTreeMap::new(),
+                computed: Json::Null,
             },
         );
+    }
+
+    /// Record `addr`'s computed values as the provider last answered them
+    /// (`StateEntry::computed`; no-op without an identity).
+    pub fn set_computed(&mut self, addr: &Address, computed: Json) {
+        if let Some(e) = self.resources.get_mut(&key(addr)) {
+            e.computed = computed;
+        }
     }
 
     /// Record the generations of the secrets `addr`'s attributes given at

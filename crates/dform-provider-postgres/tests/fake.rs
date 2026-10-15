@@ -72,6 +72,7 @@ fn read(h: &Typed<Postgres>, typ: &str, remote: &str) -> Option<(Json, Json)> {
             r#type: typ.into(),
             remote: remote.into(),
             name: "it".into(),
+            prior: None,
         },
     );
     r.found.then(|| {
@@ -497,6 +498,7 @@ fn tls_as_sslmode_says() {
                 r#type: "postgres.role".into(),
                 remote: ADMIN.into(),
                 name: "it".into(),
+                prior: None,
             }
             .into(),
             &silent,
@@ -529,7 +531,8 @@ fn tls_as_sslmode_says() {
             pb::ReadRequest {
                 r#type: "postgres.role".into(),
                 remote: ADMIN.into(),
-                name: "it".into()
+                name: "it".into(),
+                prior: None,
             }
             .into(),
             &silent
@@ -599,6 +602,7 @@ fn the_fake_logs_in_with_a_verifier_the_provider_computed() {
                 r#type: "postgres.role".into(),
                 remote: "x".into(),
                 name: "it".into(),
+                prior: None,
             }
             .into(),
             &silent,

@@ -925,7 +925,8 @@ root, so the project's stacks share it wherever in the project dform runs
 from. It is gitignored: it holds each deployment's master (a key file, or
 sealed).
 
-- Core state (Terraform-style address -> remote mapping, outputs): `dform.state/<stack>/state.json`,
+- Core state (Terraform-style address -> remote mapping, each object's
+  computed values as its provider last answered them, outputs): `dform.state/<stack>/state.json`,
   `<stack>` the stack's full name (`stacks.shop`)
   (a keyed stack's deployment: `dform.state/<stack>/<k>=<v>/state.json`), and
   beside it the published outputs `outputs.json`.
@@ -1000,6 +1001,23 @@ A provider built on `dform-grpc`'s `transport::serve`, the mock included, listen
 on TCP unless `DFORM_PROVIDER_TRANSPORT=unix` is in its environment (which it
 inherits from dform): then on a socket in the temporary directory, removed
 when it exits.
+
+Read is told the object's prior: its computed values as the last Apply
+answered them, or the last Read an apply made, as state keeps them
+beside its remote id (`computed`); absent when state holds none (an
+object not applied since). It is how a provider remembers what it made
+below an object where the API does not say who made it: the OVH
+provider keeps the port it attached on each network
+(`ports[NET].id`), and its Read finds that port among others on the
+network. The rules:
+
+- The prior is a hint of ownership, never truth. Read answers what the
+  API has: an element the prior remembers that is gone is absent from
+  the answer, never carried over, and dform compares nothing with it.
+- A secret crosses as its label, never its value, as in every answer.
+- A provider keeps under computed only what `why` can show: values its
+  schema declares (an id, an address), never an opaque blob for itself.
+- A provider that needs none ignores it and reads as it would without.
 
 The mock provider (`crates/dform-mock`) is dform itself: dform starts it as
 `dform __provider fake` (a hidden command), a process of its own over gRPC

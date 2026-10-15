@@ -25,6 +25,24 @@ fn a_value_round_trips_through_its_tree() {
         ..Default::default()
     };
     assert_eq!(c::from_apply_request(&c::to_apply_request(&r)).unwrap(), r);
+    // A read's prior is a tree when there is one, and absent when not.
+    let mut read = pb::ReadRequest {
+        r#type: "ovh.instance".into(),
+        remote: "i-1".into(),
+        name: "vm".into(),
+        prior: Some(wire::doc(
+            &serde_json::json!({"ports": {"pn-1": {"id": "p-1"}}}),
+        )),
+    };
+    assert_eq!(
+        c::from_read_request(&c::to_read_request(&read)).unwrap(),
+        read
+    );
+    read.prior = None;
+    assert_eq!(
+        c::from_read_request(&c::to_read_request(&read)).unwrap(),
+        read
+    );
     // A read with no documents answers the empty obj for each.
     let read = c::from_read_response(&c::to_read_response(&pb::ReadResponse::default())).unwrap();
     assert_eq!(read.attrs, Some(wire::doc(&serde_json::json!({}))));

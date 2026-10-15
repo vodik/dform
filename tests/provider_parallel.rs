@@ -92,6 +92,7 @@ fn an_sdk_provider_answers_two_reads_at_once() {
                 r#type: "web.page".into(),
                 remote: name.into(),
                 name: name.into(),
+                prior: None,
             };
             async move { c.read(req).await.map(|r| r.into_inner().found) }
         };

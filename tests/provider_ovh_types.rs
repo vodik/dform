@@ -116,6 +116,7 @@ impl Lab {
             r#type: typ.into(),
             name: name.into(),
             remote: remote.into(),
+            prior: None,
         };
         match self.call(Call::Read(r), &Mutex::default()).unwrap() {
             Reply::Read(r) if r.found => Some((

@@ -217,6 +217,15 @@ pub trait Lifecycle<P: Provider>: Resource {
     const NOT_CREATED: Option<&'static str> = None;
     /// The object `remote`, if it exists.
     fn read(p: &P, remote: &str) -> Result<Option<Self>>;
+    /// The object `remote` as a Read finds it, told its computed values as
+    /// the last apply or read returned them (`prior`, a secret one as its
+    /// label; `None` when dform holds none): a hint of what the provider
+    /// made below it, never truth, so an element remembered there that is
+    /// gone reads as absent. By default [`Lifecycle::read`].
+    fn read_with_prior(p: &P, remote: &str, prior: Option<&Json>) -> Result<Option<Self>> {
+        let _ = prior;
+        Self::read(p, remote)
+    }
     /// The remote id of the object a program adopts by `given`
     /// (`adopt(r, "web-1")`): what state keeps and every later call is
     /// sent. By default `given` is the id; a type adopted by a name that
@@ -261,6 +270,7 @@ type Object = (Json, Json);
 trait Kind<P>: Send + Sync {
     fn not_created(&self) -> Option<&'static str>;
     fn read(&self, p: &P, remote: &str) -> Result<Option<Json>>;
+    fn read_with_prior(&self, p: &P, remote: &str, prior: Option<&Json>) -> Result<Option<Json>>;
     fn adopt(&self, p: &P, given: &str) -> Result<String>;
     fn create(
         &self,
@@ -300,6 +310,12 @@ impl<P: Provider, R: Lifecycle<P> + 'static> Kind<P> for K<R> {
 
     fn read(&self, p: &P, remote: &str) -> Result<Option<Json>> {
         R::read(p, remote)?.map(|r| to_json(&r)).transpose()
+    }
+
+    fn read_with_prior(&self, p: &P, remote: &str, prior: Option<&Json>) -> Result<Option<Json>> {
+        R::read_with_prior(p, remote, prior)?
+            .map(|r| to_json(&r))
+            .transpose()
     }
 
     fn adopt(&self, p: &P, given: &str) -> Result<String> {
@@ -676,17 +692,20 @@ impl<P: Provider> Typed<P> {
 
     fn read(&self, r: pb::ReadRequest) -> Result<pb::ReadResponse> {
         let k = self.kind(&r.r#type)?;
-        Ok(match self.with(|p| k.read(p, &r.remote))? {
-            Some(j) => {
-                let (attrs, computed) = self.split(&r.r#type, &r.name, j);
-                pb::ReadResponse {
-                    found: true,
-                    attrs: Some(wire::doc(&attrs)),
-                    computed: Some(wire::doc(&computed)),
+        let prior = r.prior.as_ref().map(wire::from_doc).transpose()?;
+        Ok(
+            match self.with(|p| k.read_with_prior(p, &r.remote, prior.as_ref()))? {
+                Some(j) => {
+                    let (attrs, computed) = self.split(&r.r#type, &r.name, j);
+                    pb::ReadResponse {
+                        found: true,
+                        attrs: Some(wire::doc(&attrs)),
+                        computed: Some(wire::doc(&computed)),
+                    }
                 }
-            }
-            None => pb::ReadResponse::default(),
-        })
+                None => pb::ReadResponse::default(),
+            },
+        )
     }
 
     fn import(&self, r: pb::ImportRequest) -> Result<pb::ImportResponse> {
