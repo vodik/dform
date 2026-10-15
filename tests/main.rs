@@ -103,6 +103,7 @@ mod inspection_graph;
 mod inspection_query;
 mod inspection_why;
 mod instances;
+mod instancing;
 mod k8s;
 mod k8s_cluster;
 mod k8s_cronjob;

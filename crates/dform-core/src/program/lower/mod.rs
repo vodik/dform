@@ -106,15 +106,15 @@ pub fn lower(program: &Program) -> LoweredStack {
     }
 }
 
-/// The statements of the item `id` as the evaluation lowers them: each
-/// record atom's fields in their columns by the `decl`s of the scope it
-/// is written in, `records` those around the item; or the first record
-/// the walk meets that is wrong.
-pub fn lower_placed(
+/// Whether every record atom of the item `id` (a definition's body,
+/// itself) has its fields placed by the `decl`s of the scope it is
+/// written in, `records` those around the item: the first record the
+/// walk meets that is wrong, if any.
+pub fn records_checked(
     program: &Program,
     id: super::ItemId,
     records: &Records,
-) -> Result<Vec<ast::Stmt>, Vec<Diagnostic>> {
+) -> Result<(), Vec<Diagnostic>> {
     let errors = RefCell::new(Vec::new());
     let env = Env {
         records: Some(records),
@@ -124,7 +124,7 @@ pub fn lower_placed(
     let mut out = Vec::new();
     items::item(env, id, &mut out, &mut Vec::new());
     match errors.into_inner().into_iter().next() {
-        None => Ok(out),
+        None => Ok(()),
         Some(e) => Err(vec![e]),
     }
 }

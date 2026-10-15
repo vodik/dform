@@ -240,10 +240,11 @@ impl<'p> Instancer<'p> {
         let body = self.body(book, def, chain, f, &c.abs);
         book.inputs_here.pop();
         self.expanding.pop();
-        let mut copy = self.statements(chain, f, def, &iface, body);
+        let inputs = self.inputs(chain, f, def);
+        let mut copy = self.statements(chain, f, (&iface, &inputs), body);
         out.extend(self.rows(chain, f, &u, rows, &iface));
         book.privates(&c.checked(&u), &chain.frames[f].keys);
-        self.scoped(chain, f, def, &c, &mut copy);
+        self.scoped(chain, f, &inputs, &c, &mut copy);
         if !used {
             self.reached(book, chain, f, &c, site.as_deref(), &mut copy);
         }
@@ -468,15 +469,15 @@ impl<'p> Instancer<'p> {
         out
     }
 
-    /// The copy `f`'s statements of its definition `def`: its body, then
-    /// its outputs' values (an `addr` output's the copy's resource), each
-    /// input's refinement and each relation it exports.
+    /// The copy `f`'s statements of its definition: its body, then its
+    /// outputs' values (an `addr` output's the copy's resource), each
+    /// input's refinement (`inputs`, as the copy reads them) and each
+    /// relation it exports.
     fn statements(
         &self,
         chain: &Chain,
         f: usize,
-        def: ItemId,
-        iface: &Interface,
+        (iface, inputs): (&Interface, &[InputDecl]),
         (body, values): (Vec<Stmt>, Vec<ast::OutputDecl>),
     ) -> Vec<Stmt> {
         let all = chain.all();
@@ -495,7 +496,6 @@ impl<'p> Instancer<'p> {
             let head = chain.atom(head, all, &[all, None]);
             out.push(modules::fact_or_rule(head, Vec::new()));
         }
-        let inputs = self.inputs(chain, f, def);
         let written: Vec<InputDecl> = iface
             .inputs
             .iter()
@@ -515,8 +515,15 @@ impl<'p> Instancer<'p> {
     }
 
     /// The copy `f`'s statements made its own: lowered out of its
-    /// statement, its `let`s read as its cells, its inputs read.
-    fn scoped(&self, chain: &Chain, f: usize, def: ItemId, c: &Copying, copy: &mut Vec<Stmt>) {
+    /// statement, its `let`s read as its cells, its `inputs` read.
+    fn scoped(
+        &self,
+        chain: &Chain,
+        f: usize,
+        inputs: &[InputDecl],
+        c: &Copying,
+        copy: &mut Vec<Stmt>,
+    ) {
         modules::set_origin(copy, diag::origin_id(&c.origin));
         let frame = &chain.frames[f];
         let after = Some(From::at(f, Stage::Named));
@@ -524,8 +531,8 @@ impl<'p> Instancer<'p> {
         let name = |k: &str| frame.rename(k);
         let stmts = std::mem::take(copy);
         *copy = modules::lets(stmts, &frame.scope, Some(&name), &finish);
-        for i in self.inputs(chain, f, def) {
-            copy.extend(modules::input_reader(&frame.scope, &i, &name, &finish));
+        for i in inputs {
+            copy.extend(modules::input_reader(&frame.scope, i, &name, &finish));
         }
     }
 

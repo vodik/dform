@@ -508,9 +508,11 @@ fn declassified(mut program: Program) -> Program {
 }
 
 /// Each record atom's fields in their columns (H-11): the program's
-/// own statements' by its `decl`s and the core's, a module's or a
-/// component's body lowered again from the program's nodes, each record
-/// by the `decl`s of the scope it is written in (`program::Records`).
+/// own statements' by its `decl`s and the core's. A module's or a
+/// component's records are placed as each copy is instanced, by the
+/// `decl`s of the scope each is written in (`program::Records`); every
+/// definition's are checked here, a copied one's or not, and the
+/// definitions dropped: each copy is lowered from the program's nodes.
 /// The program's `decl`s are dropped: their columns are placed.
 fn apply_decls(program: &Program) -> Result<Program> {
     let records = crate::program::Records::core().with(&program.statements);
@@ -519,7 +521,7 @@ fn apply_decls(program: &Program) -> Result<Program> {
     for s in &program.statements {
         match s {
             Stmt::Decl(_) => continue,
-            Stmt::Module(m) => out.push(definitions.lowered(m, &records)?),
+            Stmt::Module(m) => definitions.check(m, &records)?,
             s => out.push(records_placed(s.clone(), &records)?),
         }
     }
@@ -550,15 +552,14 @@ impl<'p> Definitions<'p> {
         Definitions { nodes, by_path }
     }
 
-    /// The definition `m` lowered from its nodes, each record placed by
-    /// its scope's `decl`s over `records`.
-    fn lowered(&self, m: &crate::ast::Module, records: &crate::program::Records) -> Result<Stmt> {
+    /// The first record of the definition `m` that its scope's `decl`s
+    /// over `records` cannot place, as an error.
+    fn check(&self, m: &crate::ast::Module, records: &crate::program::Records) -> Result<()> {
         let (Some(nodes), Some(&item)) = (self.nodes, self.by_path.get(m.name.as_str())) else {
             bail!("internal: no nodes of the definition {}", m.name);
         };
-        let mut stmts = crate::program::lower::lower_placed(nodes, item, records)
-            .map_err(|d| anyhow::Error::from(Diagnostics(d)))?;
-        Ok(stmts.remove(0))
+        crate::program::lower::records_checked(nodes, item, records)
+            .map_err(|d| anyhow::Error::from(Diagnostics(d)))
     }
 }
 
