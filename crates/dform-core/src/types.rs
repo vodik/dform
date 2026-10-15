@@ -1723,14 +1723,14 @@ pub fn readings(program: &prog::Program, schema: &Schema) -> (Readings, Vec<Diag
 /// an attribute the schema types, at its own path or nested in an object
 /// or list value, `containers.resources.limits.memory`), and every other
 /// at the edges its value reaches (R-192). The program evaluated is
-/// `program`, whose first statements are what `nodes` lower to and the
+/// `program`, whose first statements are what its nodes lower to and the
 /// rest what the run adds (an input file's facts, the policy rules,
-/// declared externs), with `nodes` lowered as read ([`readings`]) in their
-/// place: no statement is rewritten. Then a quantity literal no position
-/// read (`500m` where nothing gives a type) is an error naming both
-/// readings.
-pub fn read(nodes: &prog::Program, program: &Program, schema: &Schema) -> Result<Program> {
-    let mut nodes = nodes.clone();
+/// declared externs), with its nodes lowered as read ([`readings`]) in
+/// their place: no statement is rewritten. A program with no nodes has
+/// none to read. Then a quantity literal no position read (`500m` where
+/// nothing gives a type) is an error naming both readings.
+pub fn read(program: &Program, schema: &Schema) -> Result<Program> {
+    let mut nodes = program.nodes.as_deref().cloned().unwrap_or_default();
     let (readings, mut diags) = readings(&nodes, schema);
     nodes.readings = readings;
     let read = crate::program::lower(&nodes)
@@ -1814,7 +1814,7 @@ mod tests {
 
     /// The nodes `src` builds to, as a stack's file.
     fn nodes(src: &str) -> prog::Program {
-        use crate::syntax::resolve::{Mode, Unit, lower_stack_nodes};
+        use crate::syntax::resolve::{Mode, Unit, lower_stack};
         let file = crate::diag::add_source("readings.df", src);
         let parse = crate::syntax::parser::parse(src);
         assert!(parse.errors.is_empty(), "{:?}", parse.errors);
@@ -1824,9 +1824,8 @@ mod tests {
             path: None,
             project: false,
         }];
-        lower_stack_nodes(&units, &[0], true, Mode::Program, None, &[])
-            .unwrap()
-            .1
+        let program = lower_stack(&units, &[0], true, Mode::Program, None, &[]).unwrap();
+        prog::Program::clone(program.nodes.as_ref().unwrap())
     }
 
     /// A component's literals are read by node, its body as written

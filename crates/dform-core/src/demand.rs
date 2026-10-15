@@ -236,6 +236,7 @@ impl Lets {
         Program {
             statements: kept,
             stack: program.stack,
+            nodes: None,
         }
     }
 

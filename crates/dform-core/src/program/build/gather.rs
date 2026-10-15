@@ -346,6 +346,7 @@ fn text(lits: &[Lit], helpers: &[Stmt]) -> String {
     out.push_str(&dump(&Ok(ast::Program {
         statements: helpers.to_vec(),
         stack: None,
+        nodes: None,
     })));
     out
 }

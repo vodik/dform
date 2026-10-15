@@ -81,9 +81,6 @@ impl Test {
 pub(super) struct Space<'a> {
     cli: &'a Cli,
     program: &'a crate::ast::Program,
-    /// The program's nodes, lowered again once the schema has read their
-    /// literals (R-192).
-    nodes: &'a crate::program::Program,
     stack: &'a str,
     lowered: crate::transform::Lowered,
     pub(super) backend: Providers,
@@ -163,7 +160,6 @@ impl<'a> Space<'a> {
         Ok(Space {
             cli,
             program,
-            nodes: &loaded.nodes,
             stack: &loaded.stack,
             lowered,
             backend,
@@ -288,7 +284,7 @@ impl<'a> Space<'a> {
         let mut p = zset::with_policy_rules(program.clone())?;
         deployment::declare_externs(&mut p, lowered);
         // Quantity and time literals read as their attributes' types (R-66).
-        let p = crate::types::read(self.nodes, &p, backend.schema())?;
+        let p = crate::types::read(&p, backend.schema())?;
         let (res, mut violations) = externs.eval(&p, &extra)?;
         // A read of what nothing derives (R-194).
         report::Unanswered::check(&res.facts)?;

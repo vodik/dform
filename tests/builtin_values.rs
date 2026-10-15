@@ -177,6 +177,7 @@ fn an_unbound_argument_is_a_located_error() {
             )),
         ],
         stack: None,
+        nodes: None,
     };
     let e = dform_core::engine::eval(&program, &[])
         .unwrap_err()

@@ -51,6 +51,7 @@ pub fn lower(program: &Program) -> LoweredStack {
         rules: Ok(ast::Program {
             statements,
             stack: program.stack.clone(),
+            nodes: None,
         }),
         origins,
     }

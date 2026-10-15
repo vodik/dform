@@ -12,6 +12,11 @@ pub struct Program {
     /// written in a program (`stack::config`). `None` for a program that
     /// is not a stack's.
     pub stack: Option<Config>,
+    /// The program's nodes (R-211), when the resolver made it: its first
+    /// statements are what they lower to, the rest what a run added after
+    /// them (an input file's facts, the policy rules, declared externs).
+    /// `None` for a program written as statements, or made by a pass.
+    pub nodes: Option<std::rc::Rc<crate::program::Program>>,
 }
 
 #[derive(Debug, Clone)]

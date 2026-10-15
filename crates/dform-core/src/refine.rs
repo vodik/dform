@@ -785,6 +785,7 @@ pub fn lower_types(program: &Program) -> Result<Program> {
         Ok(Program {
             statements: out,
             stack: program.stack.clone(),
+            nodes: program.nodes.clone(),
         })
     } else {
         Err(Diagnostics(diags).into())

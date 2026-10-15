@@ -51,13 +51,10 @@ pub struct LoadedProgram {
     pub files: Vec<PathBuf>,
     /// The stacks its `use`s name.
     pub deployed: Vec<crate::syntax::resolve::Deployed>,
-    /// Its nodes, which an evaluation lowers again once the schema has
-    /// read its literals (R-192).
-    pub nodes: crate::program::Program,
 }
 
-/// [`load_program_with`], the files it read, the stacks its `use`s name
-/// and its nodes.
+/// [`load_program_with`], the files it read and the stacks its `use`s
+/// name.
 pub fn load_program_files_with(
     entry_files: &[PathBuf],
     read: &dyn Fn(&Path) -> std::io::Result<String>,
@@ -67,7 +64,7 @@ pub fn load_program_files_with(
         Some(f) => stack_source(f, read)?,
         None => None,
     };
-    crate::syntax::resolve::lower_stack_nodes(
+    crate::syntax::resolve::lower_stack(
         &loaded.units,
         &loaded.entries,
         true,
@@ -75,11 +72,10 @@ pub fn load_program_files_with(
         stack.as_ref(),
         &loaded.deployed,
     )
-    .map(|(program, nodes)| LoadedProgram {
+    .map(|program| LoadedProgram {
         program,
         files: loaded.files.clone(),
         deployed: loaded.deployed.clone(),
-        nodes,
     })
     .map_err(|d| diag::Diagnostics(d).into())
 }

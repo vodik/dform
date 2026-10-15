@@ -1412,6 +1412,7 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
     Program {
         statements: out,
         stack,
+        nodes: None,
     }
 }
 

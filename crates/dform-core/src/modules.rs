@@ -526,6 +526,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
     cx.finish(Program {
         statements: expanded,
         stack: program.stack.clone(),
+        nodes: None,
     })
 }
 
@@ -2312,6 +2313,7 @@ mod tests {
                 using("a.b"),
             ],
             stack: None,
+            nodes: None,
         };
         let preds = |stmts: Vec<&Stmt>| -> Vec<String> {
             stmts
