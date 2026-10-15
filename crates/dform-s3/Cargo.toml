@@ -12,6 +12,8 @@ fake = []
 [dependencies]
 anyhow = "1.0"
 dform-core = { path = "../dform-core" }
+# Each request an `io.call` span (`dform_core::timing`).
+tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
 # SigV4 request signing, no I/O of its own; `xml` parses ListObjectsV2.
 rusty-s3 = { version = "0.10", default-features = false, features = ["rustcrypto", "xml"] }
 # Blocking HTTP over rustls: no async runtime.

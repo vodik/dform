@@ -1520,6 +1520,7 @@ dependencies = [
  "anyhow",
  "dform-core",
  "rusty-s3",
+ "tracing",
  "ureq",
 ]
 

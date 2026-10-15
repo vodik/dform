@@ -22,7 +22,6 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use dform_core::store::{self, Cond, Object, S3Spec, Store};
-use dform_core::timing;
 use rusty_s3::actions::{
     CreateBucket, DeleteObject, GetObject, ListObjectsV2, PutObject, S3Action,
 };
@@ -380,9 +379,7 @@ impl Store for S3Store {
         if let Some(o) = reads.and_then(|r| r.get(&self.at(key))) {
             return Ok(o);
         }
-        let at = || self.locate(key);
-        let what = || format!("s3 get {}", self.locate(key));
-        let o = timing::io("s3.get", at, what, || self.get_now(key))?;
+        let o = self.get_now(key)?;
         if let Some(r) = reads {
             r.got(&self.at(key), &o);
         }
@@ -390,15 +387,7 @@ impl Store for S3Store {
     }
 
     fn put(&self, key: &str, bytes: &[u8], cond: &Cond) -> Result<Option<String>> {
-        let at = || self.locate(key);
-        let what = || {
-            format!(
-                "s3 put {} ({} bytes, {cond:?})",
-                self.locate(key),
-                bytes.len()
-            )
-        };
-        let written = timing::io("s3.put", at, what, || self.put_now(key, bytes, cond));
+        let written = self.put_now(key, bytes, cond);
         if let Some(r) = self.reads(key) {
             let o = written
                 .as_ref()
@@ -421,9 +410,7 @@ impl Store for S3Store {
         if let Some(keys) = reads.and_then(|r| r.listed(&self.at(prefix))) {
             return Ok(keys);
         }
-        let at = || self.locate(prefix);
-        let what = || format!("s3 list {}", self.locate(prefix));
-        let keys = timing::io("s3.list", at, what, || self.list_now(prefix))?;
+        let keys = self.list_now(prefix)?;
         if let Some(r) = reads {
             r.list(&self.at(prefix), &keys);
         }
@@ -431,9 +418,7 @@ impl Store for S3Store {
     }
 
     fn delete(&self, key: &str) -> Result<()> {
-        let at = || self.locate(key);
-        let what = || format!("s3 delete {}", self.locate(key));
-        let deleted = timing::io("s3.delete", at, what, || self.delete_now(key));
+        let deleted = self.delete_now(key);
         if let Some(r) = self.reads(key) {
             r.wrote(&self.at(key), None);
         }
@@ -441,8 +426,24 @@ impl Store for S3Store {
     }
 }
 
-/// The calls, each one HTTP request (a list, one a page).
+/// The calls, each one HTTP request (a list, one a page), each an
+/// `io.call` span; one made on a thread with no span of its own (the
+/// lease's renewer) is the run's. (`parent` comes before `target`:
+/// tracing-attributes 0.1.31 refuses one after it.)
 impl S3Store {
+    #[tracing::instrument(
+        parent = dform_core::timing::parent(),
+        target = "dform",
+        level = "debug",
+        name = "io.call",
+        skip_all,
+        fields(
+            otel.name = "s3.get",
+            otel.kind = "client",
+            kind = "s3.get",
+            addr = self.locate(key)
+        )
+    )]
     fn get_now(&self, key: &str) -> Result<Option<Object>> {
         let (obj, at) = (self.object(key), self.locate(key));
         let url = GetObject::new(&self.bucket, Some(&self.creds), &obj).sign(SIGNED_FOR);
@@ -470,6 +471,19 @@ impl S3Store {
         }
     }
 
+    #[tracing::instrument(
+        parent = dform_core::timing::parent(),
+        target = "dform",
+        level = "debug",
+        name = "io.call",
+        skip_all,
+        fields(
+            otel.name = "s3.put",
+            otel.kind = "client",
+            kind = "s3.put",
+            addr = self.locate(key)
+        )
+    )]
     fn put_now(&self, key: &str, bytes: &[u8], cond: &Cond) -> Result<Option<String>> {
         let (obj, at) = (self.object(key), self.locate(key));
         let header = match cond {
@@ -502,6 +516,19 @@ impl S3Store {
         }
     }
 
+    #[tracing::instrument(
+        parent = dform_core::timing::parent(),
+        target = "dform",
+        level = "debug",
+        name = "io.call",
+        skip_all,
+        fields(
+            otel.name = "s3.list",
+            otel.kind = "client",
+            kind = "s3.list",
+            addr = self.locate(prefix)
+        )
+    )]
     fn list_now(&self, prefix: &str) -> Result<Vec<String>> {
         let full = self.object(prefix);
         let strip = match self.prefix.as_str() {
@@ -546,6 +573,19 @@ impl S3Store {
         Ok(out)
     }
 
+    #[tracing::instrument(
+        parent = dform_core::timing::parent(),
+        target = "dform",
+        level = "debug",
+        name = "io.call",
+        skip_all,
+        fields(
+            otel.name = "s3.delete",
+            otel.kind = "client",
+            kind = "s3.delete",
+            addr = self.locate(key)
+        )
+    )]
     fn delete_now(&self, key: &str) -> Result<()> {
         let (obj, at) = (self.object(key), self.locate(key));
         let url = DeleteObject::new(&self.bucket, Some(&self.creds), &obj).sign(SIGNED_FOR);
