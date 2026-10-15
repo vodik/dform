@@ -38,45 +38,46 @@ use std::collections::BTreeMap;
 
 /// The statements of the item `id`, onto `out`, one origin each.
 pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<Origin>) {
+    if let ItemKind::Module { .. } = &program.items[id].kind {
+        return module(program, id, out, origins);
+    }
+    let stmts = statements(program, id);
+    origins.extend(stmts.iter().map(|_| Origin::of(id)));
+    out.extend(stmts);
+}
+
+/// A module's file or a component: `Stmt::Module` around its items'
+/// statements, its own origin before theirs.
+fn module(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<Origin>) {
     let it = &program.items[id];
-    let stmts = match &it.kind {
-        ItemKind::Module {
-            path,
-            component,
-            items,
-            ..
-        } => {
-            origins.push(Origin::of(id));
-            let mut body = Vec::new();
-            for &i in items {
-                item(program, i, &mut body, origins);
-            }
-            out.push(Stmt::Module(ast::Module {
-                name: path.clone(),
-                component: *component,
-                body,
-                span: it.span,
-            }));
-            return;
-        }
-        ItemKind::Let {
-            name,
-            ty,
-            value,
-            clause,
-            rank,
-            declares,
-        } => {
-            let l = Let {
-                name,
-                ty: ty.as_ref(),
-                value: *value,
-                clause: *clause,
-                rank: rank.unwrap_or(Rank::Normal),
-                declares: *declares,
-            };
-            l.statements(program, it.span)
-        }
+    let ItemKind::Module {
+        path,
+        component,
+        items,
+        ..
+    } = &it.kind
+    else {
+        unreachable!("a module")
+    };
+    origins.push(Origin::of(id));
+    let mut body = Vec::new();
+    for &i in items {
+        item(program, i, &mut body, origins);
+    }
+    out.push(Stmt::Module(ast::Module {
+        name: path.clone(),
+        component: *component,
+        body,
+        span: it.span,
+    }));
+}
+
+/// The statements of the item `id`, which is not a module.
+fn statements(program: &Program, id: ItemId) -> Vec<Stmt> {
+    let it = &program.items[id];
+    match &it.kind {
+        ItemKind::Module { .. } => unreachable!("a module is its items' statements"),
+        ItemKind::Let { .. } => Let::of(&it.kind).statements(program, it.span),
         ItemKind::LetFn {
             name,
             params,
@@ -96,23 +97,7 @@ pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: 
             detail,
             clause,
         } => check(program, *kind, (*message, *detail), *clause, it.span),
-        ItemKind::Input { name, rows, .. } => {
-            let (decl, helpers) = input(program, id);
-            let mut out = vec![Stmt::Input(decl.clone())];
-            if let Some((i, sites)) = rows {
-                // Declared under clauses (R-104): where each holds, and a
-                // deny where two do.
-                let group = format!("input {name}");
-                out.push(crate::modules::declared(&group, *i, decl.guard, it.span));
-                if *i == 0 {
-                    let sites: Vec<(String, Span)> =
-                        sites.iter().map(|s| (group.clone(), *s)).collect();
-                    out.extend(crate::modules::denies(&group, &sites));
-                }
-            }
-            out.extend(helpers);
-            out
-        }
+        ItemKind::Input { name, rows, .. } => input_item(program, id, name, rows.as_ref()),
         ItemKind::Output {
             name,
             ty,
@@ -138,19 +123,7 @@ pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: 
             args: args.clone(),
             span: it.span,
         })],
-        ItemKind::TypeBlock { name, attrs } => {
-            let pending = Stmt::Pending(ast::Pending {
-                kind: ast::PendingKind::TypeDecl {
-                    name: name.clone(),
-                    attrs: attrs.clone(),
-                },
-                span: it.span,
-            });
-            let made = program.terms_made.get(&NodeId::Item(id));
-            std::iter::once(pending)
-                .chain(made.into_iter().flatten().cloned())
-                .collect()
-        }
+        ItemKind::TypeBlock { name, attrs } => type_block(program, id, name, attrs),
         ItemKind::Resource {
             typ,
             name,
@@ -166,21 +139,64 @@ pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: 
             rank,
             clause,
         } => set_from(program, source, (*path, *value), *rank, *clause, it.span),
-        ItemKind::Doc { kind, name, pairs } => pairs
-            .iter()
-            .map(|(k, v)| {
-                let args = [*kind, name, k, v].map(str_term).to_vec();
-                Stmt::Fact(Atom {
-                    pred: "doc".into(),
-                    args,
-                    record: None,
-                    span: it.span,
-                })
+        ItemKind::Doc { kind, name, pairs } => doc(kind, name, pairs, it.span),
+    }
+}
+
+/// `input k: T ..` (the item `id`): itself; declared under clauses
+/// (R-104), where each holds and, the first, a deny where two do; then
+/// the helpers its parts made.
+fn input_item(
+    program: &Program,
+    id: ItemId,
+    name: &str,
+    rows: Option<&(usize, Vec<Span>)>,
+) -> Vec<Stmt> {
+    let span = program.items[id].span;
+    let (decl, helpers) = input(program, id);
+    let mut out = vec![Stmt::Input(decl.clone())];
+    if let Some((i, sites)) = rows {
+        let group = format!("input {name}");
+        out.push(crate::modules::declared(&group, *i, decl.guard, span));
+        if *i == 0 {
+            let sites: Vec<(String, Span)> = sites.iter().map(|s| (group.clone(), *s)).collect();
+            out.extend(crate::modules::denies(&group, &sites));
+        }
+    }
+    out.extend(helpers);
+    out
+}
+
+/// `type T { .. }` (the item `id`): pending, then the helpers its
+/// refinements made.
+fn type_block(program: &Program, id: ItemId, name: &str, attrs: &[ast::AttrDecl]) -> Vec<Stmt> {
+    let pending = Stmt::Pending(ast::Pending {
+        kind: ast::PendingKind::TypeDecl {
+            name: name.to_string(),
+            attrs: attrs.to_vec(),
+        },
+        span: program.items[id].span,
+    });
+    let made = program.terms_made.get(&NodeId::Item(id));
+    std::iter::once(pending)
+        .chain(made.into_iter().flatten().cloned())
+        .collect()
+}
+
+/// A doc comment's pairs: `doc(kind, name, key, value)` each.
+fn doc(kind: &str, name: &str, pairs: &[(String, String)], span: Span) -> Vec<Stmt> {
+    pairs
+        .iter()
+        .map(|(k, v)| {
+            let args = [kind, name, k, v].map(str_term).to_vec();
+            Stmt::Fact(Atom {
+                pred: "doc".into(),
+                args,
+                record: None,
+                span,
             })
-            .collect(),
-    };
-    origins.extend(stmts.iter().map(|_| Origin::of(id)));
-    out.extend(stmts);
+        })
+        .collect()
 }
 
 /// The statements of the item `id` alone: what it lowers to.
@@ -883,7 +899,30 @@ struct Let<'p> {
     declares: bool,
 }
 
-impl Let<'_> {
+impl<'p> Let<'p> {
+    /// The parts of a `let` item's kind.
+    fn of(kind: &'p ItemKind) -> Let<'p> {
+        let ItemKind::Let {
+            name,
+            ty,
+            value,
+            clause,
+            rank,
+            declares,
+        } = kind
+        else {
+            unreachable!("a let")
+        };
+        Let {
+            name,
+            ty: ty.as_ref(),
+            value: *value,
+            clause: *clause,
+            rank: rank.unwrap_or(Rank::Normal),
+            declares: *declares,
+        }
+    }
+
     /// `let k = v [@rank] [where B]`: the contribution `let("k", v,
     /// "rank")` to the cell `k`, which `modules` scopes, a rule over B and
     /// the value's reads, its aggregates folded; the cell's secret paths
