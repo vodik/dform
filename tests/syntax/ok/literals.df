@@ -1,0 +1,8 @@
+# Integers in another base (Rust's prefixes) and bare IPv6 addresses.
+let mode = 0o600
+let mask = 0x1f
+let flags = 0b1010
+let everywhere = ::/0
+let loopback = ::1
+let link = fe80::1/64
+let docs = { net = 2001:db8::/32, hosts = [2001:db8::1, 2001:db8::2] }

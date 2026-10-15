@@ -20,6 +20,7 @@
   "}" @punctuation.special)
 (integer) @number
 (quantity) @number
+(inet) @number
 [(true) (false)] @boolean
 (rank) @attribute
 (flag) @attribute

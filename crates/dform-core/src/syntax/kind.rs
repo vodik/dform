@@ -15,6 +15,8 @@ pub enum SyntaxKind {
     INT,
     /// A number with a unit, or with a fraction (R-66): `1Gi`, `500m`, `0.5`.
     QUANTITY,
+    /// An IPv6 address or network, bare: `fe80::1/64`, `::1`.
+    INET,
     RANK,
     // Punctuation.
     L_PAREN,
@@ -211,6 +213,7 @@ impl SyntaxKind {
             STRING => "a string",
             INT => "an integer",
             QUANTITY => "a quantity",
+            INET => "an IPv6 address",
             RANK => "a rank",
             L_PAREN => "`(`",
             R_PAREN => "`)`",

@@ -21,7 +21,13 @@ enum Tok {
     /// `}`, whose strings are lexed the same way (R-175): `string_end`.
     #[token("\"", string)]
     String,
+    /// An integer: decimal, or in another base by Rust's prefixes,
+    /// `0x1f`, `0o600`, `0b1010` (one regex each, above a quantity's of
+    /// the same length: `0x1f` is no number with the unit `x1f`).
     #[regex(r"[0-9]+")]
+    #[regex(r"0x[0-9a-fA-F]+", priority = 10)]
+    #[regex(r"0o[0-7]+", priority = 10)]
+    #[regex(r"0b[01]+", priority = 10)]
     Int,
     /// A quantity (R-66, R-62): a number with a unit adjacent (`1Gi`,
     /// `500m`, `1h30m`, `1.5Gi`), or a number with a fraction (`0.5`): a
@@ -30,6 +36,12 @@ enum Tok {
     #[regex(r"[0-9]+(\.[0-9]+)?[A-Za-z][A-Za-z0-9]*")]
     #[regex(r"[0-9]+\.[0-9]+")]
     Quantity,
+    /// An IPv6 address or network, bare (`fe80::1/64`, `::1`,
+    /// `2001:db8::/32`): eight groups, or fewer with one `::`, and a
+    /// prefix. `:` is no operator in a term, so nothing else reads `::`.
+    #[regex(r"([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}(/[0-9]{1,3})?")]
+    #[regex(r"([0-9a-fA-F]{1,4}(:[0-9a-fA-F]{1,4}){0,6})?::([0-9a-fA-F]{1,4}(:[0-9a-fA-F]{1,4}){0,6})?(/[0-9]{1,3})?")]
+    Inet,
     #[regex(r"@[a-z_]+")]
     Rank,
 
@@ -168,6 +180,7 @@ fn kind(t: Tok) -> SyntaxKind {
         Tok::String => STRING,
         Tok::Int => INT,
         Tok::Quantity => QUANTITY,
+        Tok::Inet => INET,
         Tok::Rank => RANK,
         Tok::LParen => L_PAREN,
         Tok::RParen => R_PAREN,
@@ -243,6 +256,24 @@ pub fn keyword(text: &str) -> Option<SyntaxKind> {
         return Some(IF_KW);
     }
     KEYWORDS.iter().find(|(w, _)| *w == text).map(|(_, k)| *k)
+}
+
+/// The value of an integer literal's text (an `INT` token): decimal, or
+/// hexadecimal, octal or binary by its prefix; `None` past an `i64`.
+pub fn int_value(text: &str) -> Option<i64> {
+    let (digits, radix) = match text.get(..2) {
+        Some("0x") => (&text[2..], 16),
+        Some("0o") => (&text[2..], 8),
+        Some("0b") => (&text[2..], 2),
+        _ => (text, 10),
+    };
+    i64::from_str_radix(digits, radix).ok()
+}
+
+/// An integer literal's text with a leading zero and no base (`0600`):
+/// no octal, as in Rust; `0` alone is zero.
+pub fn leading_zero(text: &str) -> bool {
+    text.len() > 1 && text.starts_with('0') && text.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// One token: its kind and its byte range in the source.
@@ -349,6 +380,37 @@ mod tests {
                 IDENT, QUANTITY
             ]
         );
+    }
+
+    #[test]
+    fn an_integer_is_decimal_or_in_another_base_by_its_prefix() {
+        assert_eq!(
+            kinds("0x1f 0o600 0b1010 0600 0 0xffGi 0o9"),
+            vec![INT, INT, INT, INT, INT, QUANTITY, QUANTITY]
+        );
+        let values: Vec<Option<i64>> = ["0x1f", "0o600", "0b1010", "600", "0x8000000000000000"]
+            .into_iter()
+            .map(int_value)
+            .collect();
+        assert_eq!(values, [Some(31), Some(384), Some(10), Some(600), None]);
+        assert!(leading_zero("0600") && leading_zero("00"));
+        assert!(!leading_zero("0") && !leading_zero("600") && !leading_zero("0o600"));
+    }
+
+    /// `:` is no operator in a term, so an IPv6 address is one token;
+    /// a single `:` (a type's, a named argument's) is not one.
+    #[test]
+    fn an_ipv6_address_is_one_token() {
+        assert_eq!(
+            kinds("fe80::1/64 ::1 2001:db8::/32 :: 1:2:3:4:5:6:7:8 2001:db8::1:0:0:1"),
+            vec![INET, INET, INET, INET, INET, INET]
+        );
+        assert_eq!(
+            kinds("f(a: x)"),
+            vec![IDENT, L_PAREN, IDENT, COLON, IDENT, R_PAREN]
+        );
+        assert_eq!(kinds("x: inet"), vec![IDENT, COLON, IDENT]);
+        assert_eq!(kinds("a:b:c"), vec![IDENT, COLON, IDENT, COLON, IDENT]);
     }
 
     #[test]

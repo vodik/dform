@@ -213,6 +213,15 @@ fn fmt_refuses_a_file_that_does_not_parse() {
     assert_eq!(s.read("bad.df"), bad);
 }
 
+/// A number keeps the base it is written in, and a bare IPv6 address
+/// its text: `fmt` writes them as given.
+#[test]
+fn fmt_keeps_a_numbers_base_and_an_addresss_text() {
+    let src = "let m = { mode = 0o600, mask = 0x1F, bits = 0b1010, n = 10 }\n\
+               let nets = [::/0, fe80::1/64, 2001:DB8::1]\n";
+    assert_eq!(fmt(src), src);
+}
+
 /// An object written `key: value` (the spelling before `=`) is the parse
 /// error `fmt` mends: it writes every field `key = value`, nested and in
 /// a string's holes too, in one pass, with a misplaced header moved in the

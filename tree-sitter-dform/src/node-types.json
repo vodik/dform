@@ -132,6 +132,10 @@
         "named": true
       },
       {
+        "type": "inet",
+        "named": true
+      },
+      {
         "type": "integer",
         "named": true
       },
@@ -2400,6 +2404,10 @@
   {
     "type": "in",
     "named": false
+  },
+  {
+    "type": "inet",
+    "named": true
   },
   {
     "type": "input",

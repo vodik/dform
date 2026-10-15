@@ -454,7 +454,8 @@ impl Cx<'_> {
                     .filter_map(NodeOrToken::into_token)
                     .find(|t| !t.kind().is_trivia())?;
                 match t.kind() {
-                    INT => t.text().parse().ok().map(Value::Int),
+                    INT => crate::lexer::int_value(t.text()).map(Value::Int),
+                    INET => Some(Value::Str(t.text().to_string())),
                     // A decimal, `0.5`, is a float (R-75).
                     QUANTITY if t.text().bytes().all(|b| b.is_ascii_digit() || b == b'.') => {
                         crate::value::Float::parse(t.text()).ok().map(Value::Float)

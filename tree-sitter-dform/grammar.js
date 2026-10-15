@@ -569,6 +569,7 @@ export default grammar({
     _primary: $ => choice(
       $.integer,
       $.quantity,
+      $.inet,
       $.string,
       $.true,
       $.false,
@@ -711,7 +712,21 @@ export default grammar({
 
     identifier: _ => IDENT,
 
-    integer: _ => /[0-9]+/,
+    // Decimal, or in another base by Rust's prefixes: `0x1f`, `0o600`,
+    // `0b1010` (over a quantity's `0x1f`, a number and a unit).
+    integer: _ => token(choice(
+      /[0-9]+/,
+      prec(1, /0x[0-9a-fA-F]+/),
+      prec(1, /0o[0-7]+/),
+      prec(1, /0b[01]+/),
+    )),
+
+    // A bare IPv6 address or network: eight groups, or fewer with one
+    // `::`, and a prefix (`fe80::1/64`, `::1`, `2001:db8::/32`).
+    inet: _ => token(choice(
+      /([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}(\/[0-9]{1,3})?/,
+      /([0-9a-fA-F]{1,4}(:[0-9a-fA-F]{1,4}){0,6})?::([0-9a-fA-F]{1,4}(:[0-9a-fA-F]{1,4}){0,6})?(\/[0-9]{1,3})?/,
+    )),
 
     // A number with a unit adjacent, or with a fraction (R-66, R-62):
     // `1Gi`, `500m`, `1h30m`, `1.5Gi`; `0.5` is a float (R-75), which a

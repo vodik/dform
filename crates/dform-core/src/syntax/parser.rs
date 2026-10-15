@@ -431,7 +431,7 @@ impl<'a> Parser<'a> {
             ERROR_TOKEN => format!("unknown character `{}`", self.nth_text(0)),
             k if k.is_keyword() => format!("keyword `{}`", self.nth_text(0)),
             IDENT => format!("`{}`", self.nth_text(0)),
-            STRING | INT | QUANTITY | RANK => {
+            STRING | INT | QUANTITY | INET | RANK => {
                 format!("{} `{}`", self.nth(0).describe(), self.nth_text(0))
             }
             k => k.describe().to_string(),
@@ -1920,7 +1920,11 @@ impl<'a> Parser<'a> {
     fn primary(&mut self) -> P<SyntaxKind> {
         let k = self.nth(0);
         match k {
-            INT | QUANTITY | STRING | TRUE_KW | FALSE_KW => self.leaf(LITERAL),
+            INT => {
+                self.leading_zero();
+                self.leaf(LITERAL)
+            }
+            QUANTITY | INET | STRING | TRUE_KW | FALSE_KW => self.leaf(LITERAL),
             L_PAREN => {
                 // `(t)` groups; `(a, b, ..)` is a tuple pattern (R-58).
                 let cp = self.checkpoint();
@@ -1954,6 +1958,21 @@ impl<'a> Parser<'a> {
             DOT2 => self.spread(),
             _ if term_name(k) => self.chain_term(),
             _ => self.err_expected("a term"),
+        }
+    }
+
+    /// At an integer written with a leading zero (`0600`): an error, as in
+    /// Rust; a base is a prefix, `0o600`. The literal parses on.
+    fn leading_zero(&mut self) {
+        let text = self.nth_text(0);
+        if lexer::leading_zero(text) {
+            let digits = text.trim_start_matches('0');
+            let decimal = if digits.is_empty() { "0" } else { digits };
+            let msg = format!("`{text}` has a leading zero, and a number's base is a prefix");
+            self.error_here(
+                msg,
+                Some(format!("`0o{decimal}` in octal, `{decimal}` in decimal")),
+            );
         }
     }
 

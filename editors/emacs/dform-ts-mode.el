@@ -169,7 +169,7 @@ apply-order edge, not its content read now (`docs/grammar.md'
 
    :language 'dform
    :feature 'number
-   '([(integer) (quantity)] @font-lock-number-face)
+   '([(integer) (quantity) (inet)] @font-lock-number-face)
 
    :language 'dform
    :feature 'constant
