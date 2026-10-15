@@ -858,28 +858,6 @@ pub fn check(program: &Program, schema: &Schema) -> Result<()> {
     }
 }
 
-/// Read every literal in a quantity's or a time's position as its type
-/// (R-66, R-62): an attribute the schema types `bytes`, `cpu`, `duration`
-/// or `time`, at its own path or nested in an object or list value
-/// (`containers.resources.limits.memory`). Then a quantity literal that no
-/// position read (`500m` where nothing gives a type) is an error naming
-/// both readings. Runs on the program before it is evaluated, once the
-/// providers' schemas are known.
-pub fn read(program: &mut Program, schema: &Schema) -> Result<()> {
-    let mut diags = Vec::new();
-    for s in &mut program.statements {
-        read_stmt(s, schema, &mut diags);
-    }
-    // Every other literal at the edges its value reaches (R-192).
-    diags.extend(crate::edges::read(program, schema));
-    left_unread(program, &mut diags);
-    if diags.is_empty() {
-        Ok(())
-    } else {
-        Err(Diagnostics(diags).into())
-    }
-}
-
 /// The errors of what no position read: a quantity literal no type reads
 /// (`500m`), a name two resources share no `ref(T)` picks (R-74).
 fn left_unread(program: &Program, diags: &mut Vec<Diagnostic>) {
@@ -900,133 +878,6 @@ fn left_unread(program: &Program, diags: &mut Vec<Diagnostic>) {
             })
         });
     }
-}
-
-fn read_stmt(s: &mut Stmt, schema: &Schema, diags: &mut Vec<Diagnostic>) {
-    let at = |typ: &str, name: &Term, path: &str| match name {
-        Term::Val(Value::Str(a)) => Address {
-            typ: typ.to_string(),
-            name: a.clone(),
-        }
-        .attr(path),
-        _ => format!("{typ}.{path}"),
-    };
-    match s {
-        Stmt::Resource(r) => {
-            let Term::Val(Value::Str(typ)) = &r.typ else {
-                return;
-            };
-            for f in &mut r.fields {
-                if let Err((path, why)) = read_at(schema, typ, &f.key, &mut f.value) {
-                    diags.push(Diagnostic::error(
-                        f.span,
-                        format!("{} {why}", at(typ, &r.name, &path)),
-                    ));
-                }
-            }
-        }
-        Stmt::Module(m) => {
-            for s in &mut m.body {
-                read_stmt(s, schema, diags);
-            }
-        }
-        // A `set` through a variable of several types (R-185: `set
-        // w.spec.x = v where workload(w)`, `workload` of deployments and
-        // stateful sets): read as each, which must agree.
-        Stmt::Rule(r)
-            if r.head.pred == "arg"
-                && matches!(r.head.args.len(), 4 | 5)
-                && matches!(r.head.args[0], Term::Var(_)) =>
-        {
-            let types = row_types(&r.head.args[0], &r.body);
-            let Term::Val(Value::Str(path)) = &r.head.args[2] else {
-                return;
-            };
-            // `set x.spec..requests = { cpu: 100m } where x in resource`:
-            // the attribute's edge reads the quantity.
-            if types.is_empty() {
-                if let Some(v) = at_edge(schema, r, path) {
-                    r.head.args[3] = v;
-                }
-                return;
-            }
-            let mut read: Option<Term> = None;
-            for typ in &types {
-                let mut v = r.head.args[3].clone();
-                if let Err((path, why)) = read_at(schema, typ, path, &mut v) {
-                    diags.push(Diagnostic::error(
-                        r.head.span,
-                        format!("{typ}.{path} {why}"),
-                    ));
-                    return;
-                }
-                match &read {
-                    Some(first) if *first != v => {
-                        diags.push(Diagnostic::error(
-                            r.head.span,
-                            format!(
-                                "{path} is read one way for {} and another for {typ}: write \
-                                 it once per type",
-                                types[0]
-                            ),
-                        ));
-                        return;
-                    }
-                    Some(_) => {}
-                    None => read = Some(v),
-                }
-            }
-            if let Some(v) = read {
-                r.head.args[3] = v;
-            }
-        }
-        // `arg(T, A, P, V, R)`, or `arg(T, A, P, V)` of a `set` with no
-        // rank until the transform gives it one.
-        Stmt::Fact(head) | Stmt::Rule(crate::ast::RuleStmt { head, .. })
-            if head.pred == "arg" && matches!(head.args.len(), 4 | 5) =>
-        {
-            let (Term::Val(Value::Str(typ)), Term::Val(Value::Str(path))) =
-                (&head.args[0], &head.args[2])
-            else {
-                return;
-            };
-            let (typ, path, name) = (typ.clone(), path.clone(), head.args[1].clone());
-            if let Err((path, why)) = read_at(schema, &typ, &path, &mut head.args[3]) {
-                diags.push(Diagnostic::error(
-                    head.span,
-                    format!("{} {why}", at(&typ, &name, &path)),
-                ));
-            }
-        }
-        _ => {}
-    }
-}
-
-/// The value of a `set` through a variable of any type (`x in resource`,
-/// `x in k8s`) with a quantity only a position's type reads (`100m`), read
-/// at the attribute's edge: as every type of the schema (of the namespace,
-/// where the rule names one) that declares the attribute reads it, when
-/// those that read it agree. `None` where no type reads it, or they read
-/// it differently: the literal stays the error that says so.
-fn at_edge(schema: &Schema, r: &crate::ast::RuleStmt, path: &str) -> Option<Term> {
-    let value = &r.head.args[3];
-    if !holds_ambiguous(value) {
-        return None;
-    }
-    let types = any_types(schema, r, path);
-    let mut read: Option<Term> = None;
-    for typ in &types {
-        let mut v = value.clone();
-        if read_at(schema, typ, path, &mut v).is_err() || holds_ambiguous(&v) {
-            continue;
-        }
-        match &read {
-            Some(first) if *first != v => return None,
-            Some(_) => {}
-            None => read = Some(v),
-        }
-    }
-    read
 }
 
 /// The types a `set` through a variable (`r`, its head `arg(X, A, path,
@@ -1367,50 +1218,6 @@ fn visit(t: &Term, f: &mut dyn FnMut(&Term)) {
             }
         }
         _ => {}
-    }
-}
-
-/// TEMPORARY (R-211, the readings' first commit): [`read`] of `program`,
-/// checked (in a debug build) to be [`read_program`] of its nodes.
-pub fn read_checked(
-    nodes: &prog::Program,
-    mut program: Program,
-    schema: &Schema,
-) -> Result<Program> {
-    #[cfg(debug_assertions)]
-    let by_node = read_program(nodes, &program, schema);
-    #[cfg(not(debug_assertions))]
-    let _ = nodes;
-    let typed = read(&mut program, schema).map(|()| program);
-    #[cfg(debug_assertions)]
-    same_reading(&typed, &by_node);
-    typed
-}
-
-/// The program read in place and its nodes lowered as read are one
-/// program, its errors the same: every rewrite the pass made in place is
-/// a reading by node.
-#[cfg(debug_assertions)]
-fn same_reading(typed: &Result<Program>, read: &Result<Program>) {
-    let dumped = |r: &Result<Program>| {
-        let r = match r {
-            Ok(p) => Ok(p.clone()),
-            Err(e) => Err(e
-                .downcast_ref::<Diagnostics>()
-                .map(|d| d.0.clone())
-                .unwrap_or_else(|| vec![Diagnostic::error(Default::default(), e.to_string())])),
-        };
-        crate::program::dump::dump(&r)
-    };
-    let (a, b) = (dumped(typed), dumped(read));
-    if a != b {
-        let first = a
-            .lines()
-            .zip(b.lines())
-            .find(|(x, y)| x != y)
-            .map(|(x, y)| format!("in place: {x}\nby node:  {y}"))
-            .unwrap_or_else(|| "one is longer".into());
-        panic!("the readings by node differ from the rewrite in place:\n{first}");
     }
 }
 
@@ -1892,9 +1699,8 @@ fn object_parts(parts: &[ObjPart]) -> Vec<Result<BTreeMap<&str, ExprId>, ExprId>
 }
 
 /// What every literal of the program's nodes is read as, now the schema
-/// is known (R-66, R-62, R-134, R-192), as [`read`] reads the program they
-/// lower to: each node's reading and the errors, those of what no
-/// position reads aside ([`read_program`]).
+/// is known (R-66, R-62, R-134, R-192): each node's reading, and the
+/// errors but those of what no position reads ([`read`]).
 pub fn readings(program: &prog::Program, schema: &Schema) -> (Readings, Vec<Diagnostic>) {
     let unread = match crate::program::lower(program).rules {
         Ok(p) => p,
@@ -1913,12 +1719,18 @@ pub fn readings(program: &prog::Program, schema: &Schema) -> (Readings, Vec<Diag
     (r.read, r.diags)
 }
 
-/// The program evaluated: `program`, whose first statements are what
-/// `nodes` lower to and the rest what the run adds (an input file's
-/// facts, the policy rules, declared externs), with `nodes` lowered as
-/// read ([`readings`]) in their place; the errors of a literal no position
-/// reads.
-pub fn read_program(nodes: &prog::Program, program: &Program, schema: &Schema) -> Result<Program> {
+/// Read every literal as its position's type, once the providers' schemas
+/// are known: a quantity's or a time's (R-66, R-62), a value type's (R-134;
+/// an attribute the schema types, at its own path or nested in an object
+/// or list value, `containers.resources.limits.memory`), and every other
+/// at the edges its value reaches (R-192). The program evaluated is
+/// `program`, whose first statements are what `nodes` lower to and the
+/// rest what the run adds (an input file's facts, the policy rules,
+/// declared externs), with `nodes` lowered as read ([`readings`]) in their
+/// place: no statement is rewritten. Then a quantity literal no position
+/// read (`500m` where nothing gives a type) is an error naming both
+/// readings.
+pub fn read(nodes: &prog::Program, program: &Program, schema: &Schema) -> Result<Program> {
     let mut nodes = nodes.clone();
     let (readings, mut diags) = readings(&nodes, schema);
     nodes.readings = readings;

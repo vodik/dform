@@ -105,7 +105,7 @@ pub struct Loaded {
     pub manifest: Option<Manifest>,
     /// The program, the input files' facts added.
     pub program: Program,
-    /// The program's nodes (R-211), which [`Located::typed_program`]
+    /// The program's nodes (R-211), which the evaluation
     /// lowers again once the schema has read its literals: the stack's
     /// statements `program` begins with.
     pub nodes: std::rc::Rc<crate::program::Program>,
@@ -2080,7 +2080,7 @@ impl Located {
         if let Some(l) = lowered {
             declare_externs(&mut program, l);
         }
-        crate::types::read_checked(&self.loaded.nodes, program, schema)
+        crate::types::read(&self.loaded.nodes, &program, schema)
     }
 
     /// The collision lint of a keyed stack: a name every deployment writes

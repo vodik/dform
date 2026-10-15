@@ -12,8 +12,9 @@
 //! output or an input flows into it one way (R-213), and a literal's type
 //! is what the edges its path reaches agree on.
 //!
-//! One pass over the program before it is evaluated, once the providers'
-//! schemas are known ([`crate::types::read`]):
+//! One pass over the program's nodes before it is evaluated, once the
+//! providers' schemas are known ([`crate::types::read`]), each item walked
+//! as the statements `lower` writes for it:
 //!
 //! 1. Collect: union-find nodes for each relation's columns (a let's
 //!    cell is its relation's one column) and each statement's variables,
@@ -21,16 +22,17 @@
 //!    give a node a type, and every literal (a site) at its node and path.
 //! 2. Ask, for each site, the types the edges its node reaches give its
 //!    path, through the links both ways.
-//! 3. Read the literal at the one type they agree on; two types are an
-//!    error naming both edges; a quantity no edge types (`100m`) in a let
-//!    is an error naming the let and what would type it.
+//! 3. Read the literal at the one type they agree on, the reading its
+//!    node's (no statement is rewritten: `lower` writes it); two types are
+//!    an error naming both edges; a quantity no edge types (`100m`) in a
+//!    let is an error naming the let and what would type it.
 //!
 //! Only the types read from a literal take part (a quantity, a time, a
 //! value type read from a string: `inet`, `ip`, `uri`, `oci`, `semver`, a
 //! range): a `string` position takes any of them as its text (R-133).
 
 use crate::address::Address;
-use crate::ast::{Atom, Lit, Program, Span, Stmt, Term, TypeExpr};
+use crate::ast::{Atom, Program, Span, Stmt, Term, TypeExpr};
 use crate::diag::Diagnostic;
 use crate::schema::Schema;
 use crate::types::{self, Ty};
@@ -445,263 +447,6 @@ impl<'a> Graph<'a> {
         n
     }
 
-    fn program(&mut self, stmts: &mut [Stmt], scope: &str) {
-        for s in stmts {
-            self.vars.clear();
-            self.stmt(s, scope);
-        }
-    }
-
-    fn stmt(&mut self, s: &mut Stmt, scope: &str) {
-        let kind = match s {
-            Stmt::Use(_) => "module",
-            _ => "component",
-        };
-        let at = |span: Span| At {
-            scope: scope.to_string(),
-            span,
-            holder: None,
-            sites: true,
-        };
-        match s {
-            Stmt::Fact(a) => self.head(a, &at(a.span)),
-            // `set x.p = v where x in resource`: `v` is the attribute of
-            // each type `x` may be.
-            Stmt::Rule(r)
-                if r.head.pred == "arg"
-                    && r.head.args.len() >= 4
-                    && matches!(r.head.args[0], Term::Var(_)) =>
-            {
-                let a = at(r.head.span);
-                if let Term::Val(Value::Str(path)) = &r.head.args[2] {
-                    let n = self.node();
-                    for typ in types::set_types(self.schema, r, path) {
-                        let what = format!("{typ}.{path}");
-                        self.edge(n, Shape::Attr(typ, keys(path)), what, r.head.span);
-                    }
-                    let at = At {
-                        sites: false,
-                        ..a.clone()
-                    };
-                    self.place(n, Vec::new(), &mut r.head.args[3], &at);
-                }
-                self.body(&mut r.body, &a);
-            }
-            Stmt::Rule(r) => {
-                let a = at(r.head.span);
-                self.head(&mut r.head, &a);
-                self.body(&mut r.body, &a);
-            }
-            Stmt::Module(m) => {
-                let name = m.name.clone();
-                self.program(&mut m.body, &name);
-            }
-            Stmt::Resource(r) => {
-                let Term::Val(Value::Str(typ)) = &r.typ else {
-                    return;
-                };
-                let typ = typ.clone();
-                let name = r.name.clone();
-                let a = At {
-                    sites: false,
-                    ..at(r.span)
-                };
-                for f in &mut r.fields {
-                    let n = self.node();
-                    let what = shown_attr(&typ, &name, &f.key);
-                    self.edge(n, Shape::Attr(typ.clone(), keys(&f.key)), what, f.span);
-                    self.place(
-                        n,
-                        Vec::new(),
-                        &mut f.value,
-                        &At {
-                            span: f.span,
-                            ..a.clone()
-                        },
-                    );
-                }
-                if let Some(b) = &mut r.body {
-                    self.body(b, &at(r.span));
-                }
-            }
-            Stmt::Input(i) => {
-                let n = self.column(scope, &i.name, 1, 0);
-                let what = format!("input {}", i.name);
-                self.edge(n, Shape::Declared(i.ty.clone()), what, i.span);
-                if let Some(d) = &mut i.default {
-                    self.place(n, Vec::new(), d, &at(i.span));
-                }
-            }
-            // An output's declaration and its value are two statements:
-            // its cell is one.
-            Stmt::Output(o) => {
-                let n = self.column(scope, &format!("{OUTPUT}{}", o.name), 1, 0);
-                if let Some(ty) = &o.ty {
-                    let what = format!("output {}", o.name);
-                    self.edge(n, Shape::Declared(ty.clone()), what, o.span);
-                }
-                if let Some(v) = &mut o.value {
-                    self.give(n, v, &at(o.span));
-                }
-            }
-            Stmt::Decl(d) => {
-                let arity = d.fields.len();
-                for (i, t) in d.types.iter().enumerate() {
-                    let Some(t) = t else { continue };
-                    let n = self.column(scope, &d.pred, arity, i);
-                    let what = format!("decl {}", d.pred);
-                    self.edge(n, Shape::Declared(t.clone()), what, d.span);
-                }
-            }
-            // `resource C name { k = v }`, `use M { k = v }`: each `k = v`
-            // is the module's input `k`.
-            Stmt::Instance(u) | Stmt::Use(u) => {
-                let a = at(u.span);
-                if let Some(b) = &mut u.body {
-                    self.body(b, &a);
-                }
-                let module = u.module.clone();
-                for (k, t, span) in &mut u.inputs {
-                    // `cfg.cidr = ..` gives a field of the input `cfg`.
-                    let mut path = keys(k);
-                    let Some(Seg::Key(input)) = (!path.is_empty()).then(|| path.remove(0)) else {
-                        continue;
-                    };
-                    let n = self.column(&module, &input, 1, 0);
-                    let holder = Holder::Named(format!("input {k} of {kind} {module}"));
-                    let at = At {
-                        span: *span,
-                        holder: Some(holder),
-                        ..a.clone()
-                    };
-                    if path.is_empty() {
-                        self.give(n, t, &at);
-                    } else {
-                        self.place(n, path, t, &at);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// A rule's head: a let's cell, an attribute's contribution, or a
-    /// relation's row.
-    fn head(&mut self, a: &mut Atom, at: &At) {
-        if let Some(k) = let_key(a).map(str::to_string) {
-            let n = self.column(&at.scope, &k, 1, 0);
-            let at = At {
-                holder: Some(Holder::Let(k)),
-                ..at.clone()
-            };
-            self.give(n, &mut a.args[1], &at);
-            return;
-        }
-        // `output(k, V) :- B`: the value of `output k`.
-        if let ("output", [Term::Val(Value::Str(k)), _]) = (a.pred.as_str(), a.args.as_slice()) {
-            let n = self.column(&at.scope, &format!("{OUTPUT}{k}"), 1, 0);
-            self.give(n, &mut a.args[1], at);
-            return;
-        }
-        // `arg(T, A, P, V, ..)`: a `set` (R-38); its literals the
-        // attribute's own reading reads.
-        if a.pred == "arg"
-            && a.args.len() >= 4
-            && let (Term::Val(Value::Str(typ)), Term::Val(Value::Str(path))) =
-                (&a.args[0], &a.args[2])
-        {
-            let (typ, path) = (typ.clone(), path.clone());
-            let n = self.node();
-            let what = shown_attr(&typ, &a.args[1], &path);
-            self.edge(n, Shape::Attr(typ, keys(&path)), what, a.span);
-            let at = At {
-                sites: false,
-                ..at.clone()
-            };
-            self.place(n, Vec::new(), &mut a.args[3], &at);
-            return;
-        }
-        self.relation(a, at);
-    }
-
-    /// A relation's atom: each argument is its column's.
-    fn relation(&mut self, a: &mut Atom, at: &At) {
-        let arity = a.args.len();
-        let pred = a.pred.clone();
-        for (i, t) in a.args.iter_mut().enumerate() {
-            let n = self.column(&at.scope, &pred, arity, i);
-            self.place(n, Vec::new(), t, at);
-        }
-    }
-
-    fn body(&mut self, body: &mut [Lit], at: &At) {
-        for l in body {
-            self.lit(l, at);
-        }
-    }
-
-    fn lit(&mut self, l: &mut Lit, at: &At) {
-        match l {
-            Lit::Pos(a) | Lit::Not(a) => self.atom(a, at),
-            // Both sides of a comparison are one type.
-            Lit::Eq(x, y)
-            | Lit::Neq(x, y)
-            | Lit::Gt(x, y)
-            | Lit::Ge(x, y)
-            | Lit::Lt(x, y)
-            | Lit::Le(x, y) => {
-                let a = self.term_node(x, at);
-                let b = self.term_node(y, at);
-                self.union(a, b);
-            }
-        }
-    }
-
-    fn atom(&mut self, a: &mut Atom, at: &At) {
-        if let Some(f) = crate::functions::get(&a.pred) {
-            let span = a.span;
-            self.params(f, &mut a.args, &At { span, ..at.clone() });
-            return;
-        }
-        match (a.pred.as_str(), a.args.as_mut_slice()) {
-            // `attr(T, A, P, V)`: `V` is the attribute's.
-            (
-                "attr",
-                [
-                    Term::Val(Value::Str(typ)),
-                    addr,
-                    Term::Val(Value::Str(path)),
-                    v,
-                ],
-            ) => {
-                let n = self.node();
-                let what = shown_attr(typ, addr, path);
-                let shape = Shape::Attr(typ.clone(), keys(path));
-                self.edge(n, shape, what, a.span);
-                self.place(n, Vec::new(), v, at);
-            }
-            // `x in l`: `x` is an element of `l`.
-            ("member", [list, item]) => {
-                let l = self.term_node(list, at);
-                let x = self.term_node(item, at);
-                self.link(l, vec![Seg::Elem], x);
-            }
-            // `(k, v) in o`: `v` is `o`'s at `k`; `l[i]`, an element.
-            ("member", [object, key, value]) => {
-                let seg = match key {
-                    Term::Val(Value::Str(k)) => Seg::Key(k.clone()),
-                    Term::Val(Value::Int(_)) => Seg::Elem,
-                    _ => Seg::Any,
-                };
-                let o = self.term_node(object, at);
-                let v = self.term_node(value, at);
-                self.link(o, vec![seg], v);
-            }
-            ("want", _) => {}
-            _ => self.relation(a, at),
-        }
-    }
-
     /// A function's arguments: each its parameter's type (a `string`
     /// parameter takes a value as its text, R-133); a coeffect's none.
     fn params(&mut self, f: &crate::functions::Function, args: &mut [Term], at: &At) {
@@ -734,27 +479,6 @@ impl<'a> Graph<'a> {
                 self.place(n, Vec::new(), t, at);
                 n
             }
-        }
-    }
-
-    /// `t` is one of the values of the cell `n` (a let's, an output's,
-    /// an input's): a variable flows into it, one way; anything else is
-    /// placed in it.
-    fn give(&mut self, n: usize, t: &mut Term, at: &At) {
-        let var = match t {
-            Term::Var(v) => Some(v.clone()),
-            Term::Func { name, args } if name == types::AS => match args.as_slice() {
-                [Term::Var(v), _] => Some(v.clone()),
-                _ => None,
-            },
-            _ => None,
-        };
-        match var {
-            Some(v) => {
-                let x = self.var(&v);
-                self.flows.push((x, n));
-            }
-            None => self.place(n, Vec::new(), t, at),
         }
     }
 
@@ -828,13 +552,7 @@ impl<'a> Graph<'a> {
                     }
                 }
             },
-            // `[x | B]`: each `x` is an element.
-            Term::ListComp { item, body } => {
-                self.body(body, at);
-                let mut p = path;
-                p.push(Seg::Elem);
-                self.place(n, p, item, at);
-            }
+            Term::ListComp { .. } => unreachable!("a literal holds no comprehension"),
         }
     }
 
@@ -1118,19 +836,6 @@ fn untyped(text: &str, site: &Site) -> Diagnostic {
     .with_help(format!(
         "give the let a type, `let {k}: {ty}`, or use it where a cpu or a duration is wanted"
     ))
-}
-
-/// Read every literal at the type of the edges it reaches (R-192): the
-/// program's lets, rows, arguments, inputs and outputs; the errors where
-/// its edges disagree or a let's ambiguous quantity reaches none.
-pub fn read(program: &mut Program, schema: &Schema) -> Vec<Diagnostic> {
-    let mut g = Graph::new(schema, program);
-    g.program(&mut program.statements, "");
-    let readings = g.readings();
-    let mut g = Graph::new(schema, program);
-    g.readings = Some(readings);
-    g.program(&mut program.statements, "");
-    g.diags
 }
 
 // --- over the program's nodes ---------------------------------------------

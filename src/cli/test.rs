@@ -288,7 +288,7 @@ impl<'a> Space<'a> {
         let mut p = zset::with_policy_rules(program.clone())?;
         deployment::declare_externs(&mut p, lowered);
         // Quantity and time literals read as their attributes' types (R-66).
-        let p = crate::types::read_checked(self.nodes, p, backend.schema())?;
+        let p = crate::types::read(self.nodes, &p, backend.schema())?;
         let (res, mut violations) = externs.eval(&p, &extra)?;
         // A read of what nothing derives (R-194).
         report::Unanswered::check(&res.facts)?;
