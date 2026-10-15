@@ -346,53 +346,176 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
     // The token at point, a name in an interpolation hole included.
     let named = d.at(&files, path, at)?;
     let t = named.token.clone();
+    if let Some(md) = word_md(&t) {
+        return md;
+    }
+    let h = Hovered {
+        p,
+        files: &files,
+        d: &d,
+        path,
+        at,
+        in_hole: named.range != t.text_range(),
+        declaration: named.is_declaration(),
+        t,
+    };
+    let what = match named.what {
+        // Of a name several resources share, the first's.
+        What::Names(syms) => syms
+            .into_iter()
+            .next()
+            .map_or(What::Other, |s| What::Name(s, false)),
+        w => w,
+    };
+    let out = match what {
+        What::Name(sym, _) => {
+            let decls = h.declarations(&sym);
+            if decls.is_empty()
+                && let Some(r) = builtin(&h.t)
+            {
+                return Some(reference_md(r));
+            }
+            h.name_md(sym, &decls)
+        }
+        What::Path => h
+            .values(&What::Path)
+            .or_else(|| h.contributors())
+            .or_else(|| field_doc(p, &h.t)),
+        What::Type(typ) => type_md(p, &h.t).or_else(|| run_time_type(&files, &typ)),
+        What::Names(_) | What::Provider | What::Variable | What::Key | What::Other => builtin(&h.t)
+            .map(reference_md)
+            .or_else(|| output_md(&files, &h.t)),
+    };
+    joined(h.in_copies(), out)
+}
+
+/// The hover of a token that is no name: a keyword (`check` where it opens
+/// a refinement), a quantity; `Some(None)` for any other but a name.
+fn word_md(t: &SyntaxToken) -> Option<Option<String>> {
     // `check` is a word only where it opens a refinement.
     let refinement = t.kind() == SyntaxKind::IDENT
         && t.parent().is_some_and(|n| {
-            n.kind() == SyntaxKind::REFINEMENT && n.first_token().as_ref() == Some(&t)
+            n.kind() == SyntaxKind::REFINEMENT && n.first_token().as_ref() == Some(t)
         });
     if t.kind().is_keyword() || refinement {
         // A keyword where a name is expected is that name.
         let as_name = t
             .parent()
             .is_some_and(|n| matches!(n.kind(), SyntaxKind::CHAIN | SyntaxKind::BLOCK_PATH));
-        return (!as_name)
-            .then(|| reference::reference(t.text(), false))
-            .flatten()
-            .map(reference_md);
+        return Some(
+            (!as_name)
+                .then(|| reference::reference(t.text(), false))
+                .flatten()
+                .map(reference_md),
+        );
     }
-    if t.kind() == SyntaxKind::QUANTITY {
-        return Some(quantity_md(t.text()));
+    match t.kind() {
+        SyntaxKind::QUANTITY => Some(Some(quantity_md(t.text()))),
+        SyntaxKind::IDENT => None,
+        _ => Some(None),
     }
-    if t.kind() != SyntaxKind::IDENT {
-        return None;
-    }
-    let contributors = || -> Option<String> {
-        p.evaluated.iter().find_map(|e| {
-            let in_file = |id: u32| e.files.get(&id).is_some_and(|f| f == path);
-            let facts = targets(e, &in_file, at);
-            (!facts.is_empty()).then(|| hover(e, &facts))
-        })
-    };
-    let joined = |a: Option<String>, b: Option<String>| match (a, b) {
+}
+
+/// Two parts of a hover, a rule between them.
+fn joined(a: Option<String>, b: Option<String>) -> Option<String> {
+    match (a, b) {
         (Some(a), Some(b)) => Some(format!("{a}\n---\n\n{b}")),
         (a, b) => a.or(b),
-    };
-    // The values the selected deployment gives what is read here (R-20):
-    // the cell's value, its winning rank, every contribution with its
-    // owner and the derivation, per evaluation.
-    let in_hole = named.range != t.text_range();
-    let declaration = named.is_declaration();
-    let values = |w: &What| -> Option<String> {
+    }
+}
+
+/// A name hovered: where it is and what the project says of it.
+struct Hovered<'a> {
+    p: &'a refs::Project<'a>,
+    files: &'a [Parsed],
+    d: &'a names::Decls,
+    path: &'a Path,
+    at: usize,
+    t: SyntaxToken,
+    /// The name is in a string's `${..}` hole.
+    in_hole: bool,
+    /// The name is where what it names is declared.
+    declaration: bool,
+}
+
+impl Hovered<'_> {
+    /// The statements that declare `sym`.
+    fn declarations(&self, sym: &Symbol) -> Vec<SyntaxNode> {
+        self.d
+            .occurrences(self.files, sym)
+            .into_iter()
+            .filter(names::Named::is_declaration)
+            .filter_map(|n| statement(&n.token))
+            .collect()
+    }
+
+    /// A declared name: its declaration and doc comment (a relation's
+    /// signature, a module's interface), then what the deployment gives
+    /// it, a value's cells or a relation's and a resource's contributors.
+    fn name_md(&self, sym: Symbol, decls: &[SyntaxNode]) -> Option<String> {
+        let documented = decls
+            .iter()
+            .find(|n| doc::comment(n).is_some())
+            .or(decls.first());
+        let own = self.declared_md(&sym, documented);
+        match sym {
+            Symbol::Value(..) | Symbol::Let(..) | Symbol::Field(..) | Symbol::Output(..) => {
+                let w = What::Name(sym, self.declaration);
+                joined(own, self.values(&w).or_else(|| self.contributors()))
+            }
+            Symbol::Predicate(..) | Symbol::Resource(..) => joined(own, self.contributors()),
+            _ => own,
+        }
+    }
+
+    /// What declares `sym`: its `documented` statement, and for a relation
+    /// its signature, for a module its interface.
+    fn declared_md(&self, sym: &Symbol, documented: Option<&SyntaxNode>) -> Option<String> {
+        let (p, files) = (self.p, self.files);
+        match sym {
+            // A relation a copy exports, read through it (`n.p(..)`): the
+            // output's declaration too.
+            Symbol::Predicate(_, name) => joined(
+                output_md(files, &self.t),
+                joined(signature_md(p, name), documented.map(item_md)),
+            ),
+            // A let with parameters (R-187): its columns as inferred.
+            Symbol::Let(_, name)
+                if documented
+                    .is_some_and(|n| n.children().any(|c| c.kind() == SyntaxKind::PARAMS)) =>
+            {
+                joined(documented.map(item_md), signature_md(p, name))
+            }
+            Symbol::Module(m) => module_md(files, m),
+            Symbol::Instance(m, _) => joined(documented.map(item_md), module_md(files, m)),
+            _ => documented.map(item_md),
+        }
+    }
+
+    /// The contributions to what is at point, from the first evaluation
+    /// with any.
+    fn contributors(&self) -> Option<String> {
+        self.p.evaluated.iter().find_map(|e| {
+            let in_file = |id: u32| e.files.get(&id).is_some_and(|f| f == self.path);
+            let facts = targets(e, &in_file, self.at);
+            (!facts.is_empty()).then(|| hover(e, &facts))
+        })
+    }
+
+    /// The values the selected deployment gives what is read here (R-20):
+    /// the cell's value, its winning rank, every contribution with its
+    /// owner and the derivation, per evaluation.
+    fn values(&self, w: &What) -> Option<String> {
+        let t = &self.t;
         let (sym, path) = match t.parent() {
-            _ if in_hole => return None,
-            Some(c) if c.kind() == SyntaxKind::CHAIN => cells::read_at(&d, &c, &t)?,
+            _ if self.in_hole => return None,
+            Some(c) if c.kind() == SyntaxKind::CHAIN => cells::read_at(self.d, &c, t)?,
             _ => match w {
                 What::Name(s, true) => (s.clone(), String::new()),
                 _ => return None,
             },
         };
-        let found = cells::cells(&p.evaluated, &d, &files, &sym, &path);
+        let found = cells::cells(&self.p.evaluated, self.d, self.files, &sym, &path);
         let label = cells::label(&found)?;
         let read: String = t
             .parent()
@@ -415,95 +538,36 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
             out.push_str(&hover(e, &nodes));
         }
         Some(out)
-    };
-    // A name read bare in a component's body: what it denotes in each
-    // copy the deployment makes, as `why COPY.NAME` says it (R-184).
-    let component = t
-        .parent()
-        .filter(|c| c.kind() == SyntaxKind::CHAIN && c.first_token().as_ref() == Some(&t))
-        .filter(|_| !declaration && !in_hole)
-        .and_then(|c| c.ancestors().find(|a| a.kind() == SyntaxKind::COMPONENT))
-        .and_then(|c| names::declared_name(&c));
-    let in_copies = || -> Option<String> {
-        let c = component.as_ref()?;
-        let lines: Vec<String> = p
+    }
+
+    /// A name read bare in a component's body: what it denotes in each
+    /// copy the deployment makes, as `why COPY.NAME` says it (R-184).
+    fn in_copies(&self) -> Option<String> {
+        let t = &self.t;
+        let component = t
+            .parent()
+            .filter(|c| c.kind() == SyntaxKind::CHAIN && c.first_token().as_ref() == Some(t))
+            .filter(|_| !self.declaration && !self.in_hole)
+            .and_then(|c| c.ancestors().find(|a| a.kind() == SyntaxKind::COMPONENT))
+            .and_then(|c| names::declared_name(&c))?;
+        let lines: Vec<String> = self
+            .p
             .evaluated
             .iter()
             .flat_map(|e| {
                 dform_core::why::in_component(
-                    c.text(),
+                    component.text(),
                     t.text(),
                     &e.res,
                     &e.redact,
                     &e.keys,
-                    Some(&p.dir),
+                    Some(&self.p.dir),
                 )
             })
             .map(|l| format!("`{l}`\n\n"))
             .collect();
         (!lines.is_empty()).then(|| lines.concat())
-    };
-    let what = match named.what {
-        // Of a name several resources share, the first's.
-        What::Names(syms) => syms
-            .into_iter()
-            .next()
-            .map_or(What::Other, |s| What::Name(s, false)),
-        w => w,
-    };
-    let out = match what {
-        What::Name(sym, _) => {
-            let decls: Vec<SyntaxNode> = d
-                .occurrences(&files, &sym)
-                .into_iter()
-                .filter(names::Named::is_declaration)
-                .filter_map(|n| statement(&n.token))
-                .collect();
-            if decls.is_empty()
-                && let Some(r) = builtin(&t)
-            {
-                return Some(reference_md(r));
-            }
-            let documented = decls
-                .iter()
-                .find(|n| doc::comment(n).is_some())
-                .or(decls.first());
-            let own = match &sym {
-                // A relation a copy exports, read through it (`n.p(..)`):
-                // the output's declaration too.
-                Symbol::Predicate(_, name) => joined(
-                    output_md(&files, &t),
-                    joined(signature_md(p, name), documented.map(item_md)),
-                ),
-                // A let with parameters (R-187): its columns as inferred.
-                Symbol::Let(_, name)
-                    if documented
-                        .is_some_and(|n| n.children().any(|c| c.kind() == SyntaxKind::PARAMS)) =>
-                {
-                    joined(documented.map(item_md), signature_md(p, name))
-                }
-                Symbol::Module(m) => module_md(&files, m),
-                Symbol::Instance(m, _) => joined(documented.map(item_md), module_md(&files, m)),
-                _ => documented.map(item_md),
-            };
-            let w = What::Name(sym.clone(), declaration);
-            match sym {
-                Symbol::Value(..) | Symbol::Let(..) | Symbol::Field(..) | Symbol::Output(..) => {
-                    joined(own, values(&w).or_else(contributors))
-                }
-                Symbol::Predicate(..) | Symbol::Resource(..) => joined(own, contributors()),
-                _ => own,
-            }
-        }
-        What::Path => values(&What::Path)
-            .or_else(contributors)
-            .or_else(|| field_doc(p, &t)),
-        What::Type(typ) => type_md(p, &t).or_else(|| run_time_type(&files, &typ)),
-        What::Names(_) | What::Provider | What::Variable | What::Key | What::Other => builtin(&t)
-            .map(reference_md)
-            .or_else(|| output_md(&files, &t)),
-    };
-    joined(in_copies(), out)
+    }
 }
 
 /// A relation's columns as declared or inferred (R-34): `az(name:
