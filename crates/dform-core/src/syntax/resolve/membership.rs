@@ -85,7 +85,346 @@ fn builtin_types() -> &'static BTreeMap<String, Known> {
     })
 }
 
+/// A membership being lowered, `x in e` at `span`: its sides as written,
+/// the chain its right side is, and whether it is `x in resource`.
+struct Member {
+    n: SyntaxNode,
+    span: Span,
+    lhs: SyntaxNode,
+    rhs: Option<SyntaxNode>,
+    chain: Option<Chain>,
+    any_type: bool,
+}
+
+impl Member {
+    /// `x in world.T`: the chain of the world's type.
+    fn world(&self) -> Option<&Chain> {
+        self.chain
+            .as_ref()
+            .filter(|c| c.head == "world" && !c.ops.is_empty())
+    }
+}
+
+/// A membership's literal, and the goal it is built as.
+type Membership = L<(Lit, Option<GoalId>)>;
+
+/// The type `x in T` ranges `x` over, and for a provider's type a `use ..
+/// as` also names (R-115), the test of the type's names and its
+/// collection.
+type Typed = (Option<Term>, Option<(Lit, Coll)>);
+
 impl Lowerer<'_> {
+    /// `x in T` (a generator over `want`), `x in resource`, `x in world.T`,
+    /// or `x in list`.
+    pub(super) fn membership(
+        &mut self,
+        rc: &mut Rc,
+        n: &SyntaxNode,
+        out: &mut Vec<Lit>,
+    ) -> Membership {
+        let span = self.span(n);
+        let ts: Vec<SyntaxNode> = terms(n).collect();
+        let lhs = ts.first().ok_or(Skip)?.clone();
+        let any_type = tokens(n).any(|t| t.kind() == RESOURCE_KW);
+        let chain = ts.get(1).and_then(Chain::of).map(|c| self.type_each(rc, c));
+        let m = Member {
+            n: n.clone(),
+            span,
+            lhs,
+            rhs: ts.get(1).cloned(),
+            chain,
+            any_type,
+        };
+        // `x in f`, `f` a let with parameters (R-187): nothing enumerates it.
+        if let Some(c) = m
+            .chain
+            .as_ref()
+            .filter(|c| c.is_bare() && !rc.vars.contains_key(&c.head))
+            && let Some((_, def)) = self.function_def(rc.scope, &c.head)
+        {
+            let at = self.span_of(c.range);
+            return self
+                .in_function(at, &c.head.clone(), &def)
+                .map(|l| (l, None));
+        }
+        if let (Some(c), Some(rhs)) = (&m.chain, &m.rhs)
+            && c.ops.iter().any(each::is_each)
+        {
+            return self.each_member(rc, &m, rhs, out);
+        }
+        if !m.any_type
+            && let Some(named) = self.named_member(rc, &m, out)?
+        {
+            return Ok(named);
+        }
+        let (typ, renamed) = self.member_type(rc, &m);
+        if typ.is_some() || m.world().is_some() {
+            return self.typed_member(rc, &m, (typ, renamed), out);
+        }
+        self.list_member(rc, &m, out)
+    }
+
+    /// `v in PATH` with a `[_]` in it binds `v` to each value the path
+    /// reaches (R-162): the steps enumerate.
+    fn each_member(
+        &mut self,
+        rc: &mut Rc,
+        m: &Member,
+        rhs: &SyntaxNode,
+        out: &mut Vec<Lit>,
+    ) -> Membership {
+        if m.lhs.kind() == TUPLE {
+            return self.error(
+                m.span,
+                format!(
+                    "`{}` binds each value of a path with `[_]`, one name: `v in {}`",
+                    m.lhs.text(),
+                    rhs.text()
+                ),
+            );
+        }
+        let (value, v) = self.bind(false, |l| l.arg_node(rc, rhs, Pos::Content, out))?;
+        let (item, i) = self.arg_node(rc, &m.lhs, Pos::Content, out)?;
+        let g = self.member_goal(rc, m.span, i, Coll::Each(v));
+        Ok((Lit::Eq(item, value), Some(g)))
+    }
+
+    /// `x in T` of a named type: an enum type's values (R-70), a
+    /// provider's namespace's resources (R-49), a component's copies
+    /// (R-67); none for any other.
+    fn named_member(
+        &mut self,
+        rc: &mut Rc,
+        m: &Member,
+        out: &mut Vec<Lit>,
+    ) -> L<Option<(Lit, Option<GoalId>)>> {
+        let (Some(c), Some(rhs)) = (&m.chain, &m.rhs) else {
+            return Ok(None);
+        };
+        // `x in T`, `T` an enum type (R-70): each of its values, in
+        // order, as a range is enumerated.
+        if let Some(e) = self.enum_type(rc, c, rhs)? {
+            return self.enum_member(rc, &m.lhs, e, out, m.span).map(Some);
+        }
+        // `r in NS`, a provider's namespace (R-49): a resource of any of
+        // its types.
+        if let Some(ns) = self.namespace_of(rc, c) {
+            return self
+                .namespace_member(rc, &m.lhs, &ns, out, m.span)
+                .map(Some);
+        }
+        match self.component_of(rc, c) {
+            Some(path) => self.copies_member(rc, m, path, out).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// `x in network`, a component (R-67): each of its copies; `blue in
+    /// network`, a copy in scope by its name (R-113), is the test that it
+    /// is one of them.
+    fn copies_member(
+        &mut self,
+        rc: &mut Rc,
+        m: &Member,
+        path: String,
+        out: &mut Vec<Lit>,
+    ) -> Membership {
+        let span = m.span;
+        let copy = Chain::of(&m.lhs)
+            .filter(|l| l.is_bare() && !rc.vars.contains_key(&l.head))
+            .filter(|l| self.instance_in(rc.scope, &l.head).is_some())
+            .map(|l| str_term(&l.head));
+        let (x, xid) = match copy {
+            Some(name) => {
+                let id = self.name_node(rc, span, &name);
+                (name, id)
+            }
+            None => self.arg_node(rc, &m.lhs, Pos::Content, out)?,
+        };
+        let parent = self.copies_scope(rc, &path, span);
+        let lit = Lit::Pos(atom_at(
+            crate::modules::INSTANCE_OF,
+            vec![str_term(&path), self.term_of(parent), x],
+            span,
+        ));
+        let coll = Coll::Copies {
+            component: path,
+            scope: parent,
+        };
+        let g = self.member_goal(rc, span, xid, coll);
+        Ok((lit, Some(g)))
+    }
+
+    /// The type `x in T` ranges over: `T`, a variable for `x in resource`;
+    /// for `x in ovh.instance` with the provider also used as `ca`
+    /// (R-115), a resource of `ovh.instance` or `ca.instance`,
+    /// `__provider_type("ovh.instance", Type), want(Type, x)`.
+    fn member_type(&mut self, rc: &mut Rc, m: &Member) -> Typed {
+        let span = m.span;
+        let mut typ = if m.any_type {
+            let lhs = Chain::of(&m.lhs).map(|c| c.head).unwrap_or_default();
+            Some(match rc.types.get(&lhs) {
+                Some(t) => t.clone(),
+                None => var(&fresh(rc, "Type")),
+            })
+        } else {
+            m.chain
+                .as_ref()
+                .and_then(|c| self.chain_type(rc, c))
+                .map(|t| str_term(&t))
+        };
+        let mut renamed = None;
+        if let Some(Term::Val(Value::Str(t))) = typ.clone()
+            && m.world().is_none()
+            && self.covering(&t).len() > 1
+        {
+            let lhs = Chain::of(&m.lhs).filter(Chain::is_bare).map(|c| c.head);
+            let tv = match lhs.as_ref().and_then(|h| rc.types.get(h)) {
+                Some(v @ Term::Var(_)) => v.clone(),
+                _ => var(&fresh(rc, "Type")),
+            };
+            for each in self.covering(&t) {
+                self.helpers.push(Stmt::Fact(atom_at(
+                    PROVIDER_TYPE,
+                    vec![str_term(&t), str_term(&each)],
+                    span,
+                )));
+            }
+            let test = Lit::Pos(atom_at(PROVIDER_TYPE, vec![str_term(&t), tv.clone()], span));
+            let coll = Coll::ProviderType {
+                typ: t.clone(),
+                names: self.covering(&t),
+                var: self.name_node(rc, span, &tv),
+                enumerate: false,
+            };
+            renamed = Some((test, coll));
+            typ = Some(tv);
+        }
+        (typ, renamed)
+    }
+
+    /// `x in T`, `x in resource`, `x in world.T`: the element, bound or
+    /// checked (a bare resource name is its address, a computed name is
+    /// bound first), then the type's test.
+    fn typed_member(
+        &mut self,
+        rc: &mut Rc,
+        m: &Member,
+        (typ, renamed): Typed,
+        out: &mut Vec<Lit>,
+    ) -> Membership {
+        let span = m.span;
+        if m.lhs.kind() == TUPLE {
+            return self.error(
+                span,
+                format!(
+                    "`{}` is a pattern: a resource is enumerated by a name, `r in {}`",
+                    m.lhs.text(),
+                    m.rhs
+                        .as_ref()
+                        .map(|t| t.text().to_string())
+                        .unwrap_or_default()
+                ),
+            );
+        }
+        let lhs_id = self.member_element(rc, m, &typ, out)?;
+        let lhs = self.term_of(lhs_id);
+        // `r in T` with `r` a reference column's (`deformation(k, r, _)`):
+        // the column's `ref(T, R, "")` tests the type, so a row of a
+        // deleted resource passes (R-42).
+        if let (Some(t), Some(c)) = (&typ, Chain::of(&m.lhs))
+            && m.world().is_none()
+            && c.is_bare()
+            && Self::ref_bound(&m.n, &c.head)
+        {
+            if let Some((test, coll)) = renamed {
+                let hole = self.node(span, ExprKind::Hole);
+                let coll = Self::tested(coll, false);
+                let g = self.member_goal(rc, span, hole, coll);
+                return Ok((test, Some(g)));
+            }
+            let have = rc.types.get(&c.head).cloned().unwrap_or_else(|| t.clone());
+            let (h, ty) = (self.name_node(rc, span, &have), self.name_node(rc, span, t));
+            let g = self.member_goal(rc, span, h, Coll::TypeOf(ty));
+            return Ok((Lit::Eq(have, t.clone()), Some(g)));
+        }
+        if let Some(w) = m.world() {
+            let typ = w.fields()[1..].join(".");
+            let lit = Lit::Pos(atom_at("cloud_exists", vec![str_term(&typ), lhs], span));
+            let g = self.member_goal(rc, span, lhs_id, Coll::World(typ));
+            return Ok((lit, Some(g)));
+        }
+        self.address_key(&lhs, span)?;
+        let typ = typ.expect("a type or the world");
+        let coll = match renamed {
+            Some((test, coll)) => {
+                out.push(test);
+                Self::tested(coll, true)
+            }
+            None => Coll::Type(self.name_node(rc, span, &typ)),
+        };
+        let g = self.member_goal(rc, span, lhs_id, coll);
+        Ok((Lit::Pos(atom_at("want", vec![typ, lhs], span)), Some(g)))
+    }
+
+    /// The element of `x in T`: a bare resource name its address (the
+    /// type on the right picks among resources of one name), a computed
+    /// name bound first, else the term.
+    fn member_element(
+        &mut self,
+        rc: &mut Rc,
+        m: &Member,
+        typ: &Option<Term>,
+        out: &mut Vec<Lit>,
+    ) -> L<ExprId> {
+        let span = m.span;
+        Ok(match Chain::of(&m.lhs) {
+            Some(c) if c.is_bare() && self.resource(rc.scope, &c.head).is_some() => {
+                let named = self.resource(rc.scope, &c.head).unwrap_or_default();
+                match typ {
+                    Some(Term::Val(Value::Str(t))) if named.contains(t) => {
+                        self.resource_addr(rc.scope, &c.head, span)
+                    }
+                    _ => self.reference(rc, &c, out, span)?.1,
+                }
+            }
+            _ => {
+                let (t, id) = self.arg_node(rc, &m.lhs, Pos::Content, out)?;
+                if matches!(t, Term::Func { .. }) {
+                    let v = fresh(rc, "Name");
+                    out.push(Lit::Eq(var(&v), t));
+                    self.building(rc, span, |b| b.bound_into(id, &v))
+                } else {
+                    id
+                }
+            }
+        })
+    }
+
+    /// `x in list`, `(k, v) in o`: `member`.
+    fn list_member(&mut self, rc: &mut Rc, m: &Member, out: &mut Vec<Lit>) -> Membership {
+        let (span, lhs) = (m.span, &m.lhs);
+        let rhs = m.rhs.as_ref().ok_or(Skip)?;
+        let of = self.resource_list(rc, rhs);
+        let (list, list_id) = self.bind(false, |l| l.arg_node(rc, rhs, Pos::Content, out))?;
+        // The element's name, for `set c.p` (R-69): `c in L`, `(i, c) in L`.
+        let elem = match lhs.kind() {
+            TUPLE => terms(lhs).nth(1),
+            _ => Some(lhs.clone()),
+        };
+        if let (Some(of), Some(c)) = (of, elem.as_ref().and_then(Chain::of))
+            && c.is_bare()
+        {
+            rc.elems.insert(c.head, of);
+        }
+        if lhs.kind() == TUPLE {
+            return self.pattern_in(rc, lhs, (list, Coll::Expr(list_id)), out, span);
+        }
+        let (item, i) = self.arg_node(rc, lhs, Pos::Content, out)?;
+        let g = self.element_goal(rc, span, i, list_id);
+        Ok((Lit::Pos(atom_at("member", vec![list, item], span)), Some(g)))
+    }
+
     /// The enum type a membership's right side names, its values; `None`
     /// when it names no type alias. An input of an enum type is an error:
     /// a cell holds one value.
