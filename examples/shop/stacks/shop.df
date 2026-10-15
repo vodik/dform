@@ -41,9 +41,9 @@ resource aws.db_instance orders {
 #| password: one policy per database, named for its resource id.
 resource aws.iam_policy "connect-${id}" {
   policy = json.encode({
-    Statement: [{
-      Action: "rds-db:connect",
-      Resource: "arn:aws:rds-db:us-east-1:*:dbuser:${id}/app",
+    Statement = [{
+      Action = "rds-db:connect",
+      Resource = "arn:aws:rds-db:us-east-1:*:dbuser:${id}/app",
     }],
   })
 } where pg in aws.db_instance, id = pg.resource_id
@@ -61,10 +61,10 @@ deny "every prod database is kept" { db }
 resource aws.iam_role app {
   name = "shop-app-${env}"
   assume_role_policy = json.encode({
-    Statement: [{
-      Effect: "Allow",
-      Action: "sts:AssumeRole",
-      Principal: { Service: "ec2.amazonaws.com" },
+    Statement = [{
+      Effect = "Allow",
+      Action = "sts:AssumeRole",
+      Principal = { Service = "ec2.amazonaws.com" },
     }],
   })
   managed_policy_arns = [ ref(p) | p in aws.iam_policy ]
@@ -75,7 +75,7 @@ resource aws.instance "web-${s.availability_zone}" {
   instance_type = web.type
   subnet = s
   vpc_security_groups = [https]
-  tags = { Name: "shop-web-${env}" }
+  tags = { Name = "shop-web-${env}" }
 } where s in aws.subnet
 
 resource aws.lb storefront {
@@ -87,11 +87,11 @@ resource aws.lb storefront {
 resource aws.security_group https {
   name = "shop-web-${env}"
   vpc = main
-  ingress = [{ from_port: 443, to_port: 443, protocol: "tcp", cidr_blocks: ["0.0.0.0/0"] }]
+  ingress = [{ from_port = 443, to_port = 443, protocol = "tcp", cidr_blocks = ["0.0.0.0/0"] }]
 }
 
 resource aws.security_group postgres {
   name = "shop-db-${env}"
   vpc = main
-  ingress = [{ from_port: 5432, to_port: 5432, protocol: "tcp", security_groups: [ref(https)] }]
+  ingress = [{ from_port = 5432, to_port = 5432, protocol = "tcp", security_groups = [ref(https)] }]
 }

@@ -8,7 +8,7 @@ tests/fixtures/adversarial/adv3_pack_reads_other_path.df
 
 resource iam.policy app_policy {
   name = "app"
-  statements = [{ action: "db.connect", resource: "db" }]
+  statements = [{ action = "db.connect", resource = "db" }]
 }
 
 use packs.other_path

@@ -109,7 +109,7 @@ fn a_rounds_calls_are_asked_together() {
     let containers: Vec<String> = ["a1", "b2", "c3", "d4"]
         .iter()
         .map(|t| {
-            format!(r#"{{ name: "c{t}", image: oci.resolve("127.0.0.1:{port}/acme/app:{t}") }}"#)
+            format!(r#"{{ name = "c{t}", image = oci.resolve("127.0.0.1:{port}/acme/app:{t}") }}"#)
         })
         .collect();
     s.write(
@@ -119,8 +119,8 @@ fn a_rounds_calls_are_asked_together() {
 resource k8s.deployment app {{
   metadata.name = "app"
   metadata.namespace = "default"
-  spec.selector.matchLabels = {{ app: "app" }}
-  spec.template.metadata.labels = {{ app: "app" }}
+  spec.selector.matchLabels = {{ app = "app" }}
+  spec.template.metadata.labels = {{ app = "app" }}
   spec.template.spec.containers = [{}]
 }}
 "#,
@@ -165,7 +165,7 @@ fn a_plan_reads_each_state_object_once() {
     let mut toml = std::fs::read_to_string(s.path("dform.toml")).unwrap();
     toml.push_str(&format!(
         "\n[defaults]\nbackend = 's3(\"dform-test\", \"once/{{stack}}\", \
-         {{endpoint: \"{}\", region: \"us-east-1\"}})'\n\n\
+         {{endpoint = \"{}\", region = \"us-east-1\"}})'\n\n\
          [secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n",
         server.endpoint
     ));

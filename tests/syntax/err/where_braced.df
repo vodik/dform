@@ -15,7 +15,7 @@ resource net.vpc w {
   z != "c"
   z != "d"
 }
-let k = x where { cpu: x } = { cpu: 1 }
+let k = x where { cpu = x } = { cpu = 1 }
 r(x) where
   zone(x),
   # a comment between literals is its own line's

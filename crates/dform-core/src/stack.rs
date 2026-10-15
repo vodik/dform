@@ -85,7 +85,7 @@ pub struct Stack {
 pub enum Backend {
     /// `local("DIR")`: DIR relative to the project root.
     Local(PathBuf),
-    /// `s3("BUCKET", "PREFIX", {endpoint: URL, region: R})`.
+    /// `s3("BUCKET", "PREFIX", {endpoint = URL, region = R})`.
     S3(crate::store::S3Spec),
 }
 
@@ -103,7 +103,7 @@ impl TryFrom<&Term> for Backend {
                 None => Err("backend local(DIR) takes a directory string".into()),
             },
             ("s3", [bucket, prefix, rest @ ..]) if rest.len() <= 1 => {
-                let usage = "backend s3(\"BUCKET\", \"PREFIX\", {endpoint: \"URL\", region: \"R\"}) \
+                let usage = "backend s3(\"BUCKET\", \"PREFIX\", {endpoint = \"URL\", region = \"R\"}) \
                              takes a bucket and a prefix string, and optionally a record of \
                              endpoint and region strings";
                 let (Some(bucket), Some(prefix)) = (bucket.as_str(), prefix.as_str()) else {
@@ -140,7 +140,7 @@ impl TryFrom<&Term> for Backend {
                 Ok(Backend::S3(spec))
             }
             ("s3", _) => Err(
-                "backend s3(\"BUCKET\", \"PREFIX\", {endpoint: \"URL\", region: \"R\"}) takes a \
+                "backend s3(\"BUCKET\", \"PREFIX\", {endpoint = \"URL\", region = \"R\"}) takes a \
                  bucket, a prefix and optionally a record of options"
                     .into(),
             ),
@@ -514,7 +514,7 @@ fn stack_config(c: &Config, out: &mut Stack, diags: &mut Vec<Diagnostic>) {
                 Err(e) if e == "unknown backend" => {
                     diags.push(Diagnostic::error(*span, e).with_help(
                         "the backends are `local(\"DIR\")` and \
-                     `s3(\"BUCKET\", \"PREFIX\", {endpoint: \"URL\", region: \"R\"})`",
+                     `s3(\"BUCKET\", \"PREFIX\", {endpoint = \"URL\", region = \"R\"})`",
                     ))
                 }
                 Err(e) => diags.push(Diagnostic::error(*span, e)),
@@ -1115,7 +1115,7 @@ fn parse_target(to: &str) -> Result<Target> {
     let bad = || {
         anyhow::anyhow!(
             "unknown backend {to}: the backends are local(\"DIR\"), k8s(\"ns/name\") and \
-             s3(\"BUCKET\", \"PREFIX\", {{endpoint: \"URL\", region: \"R\"}})"
+             s3(\"BUCKET\", \"PREFIX\", {{endpoint = \"URL\", region = \"R\"}})"
         )
     };
     let (kind, rest) = to.split_once('(').ok_or_else(bad)?;

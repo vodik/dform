@@ -19,7 +19,7 @@ resource db.postgres db { name = "db" }
 
 /// A policy pack: one deny fails, one holds, one reads a computed cell.
 const POLICY: &str = r#"
-deny "a network is no bigger than a /16" { vpc: v } where v in net.vpc, v.cidr == "10.2.0.0/8"
+deny "a network is no bigger than a /16" { vpc = v } where v in net.vpc, v.cidr == "10.2.0.0/8"
 deny "networks are named" where v in net.vpc, v.name == "unnamed"
 deny "the database has no endpoint yet" where d in db.postgres, d.endpoint == "nowhere"
 "#;

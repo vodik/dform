@@ -1,7 +1,7 @@
 # Demo: schemas + record matching + wildcards. No resources.
 # To run it, from this directory: README.md.
 
-# The names are the record's fields: `project{ network_name: n }`.
+# The names are the record's fields: `project(network_name: n)`.
 decl project(id: int, name: string, region: string, network_name: string, proxy_cidr: string)
 
 # No resources, but a plan still runs against a provider: the mock's fake.

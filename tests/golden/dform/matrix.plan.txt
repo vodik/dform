@@ -17,7 +17,7 @@ plan: 32 changes (32 create) over 1 tick; policy: 27 hold
     + network.vpc main
       + net.vpc main.vpc                    network.df:19
           cidr = "10.90.0.0/16"             stacks/dform.df:25
-          tags = { env: "dev", component: "network" }
+          tags = { env = "dev", component = "network" }
           tags.team = "platform"            baseline.df:10
       + net.subnet main.private-us-test-1a  network.df:24
           cidr = "10.90.0.0/20"
@@ -42,7 +42,7 @@ plan: 32 changes (32 create) over 1 tick; policy: 27 hold
     + network.vpc main
       + net.vpc main.vpc                    network.df:19
           cidr = "10.50.0.0/16"             stacks/dform.df:10
-          tags = { env: "staging", component: "network" }
+          tags = { env = "staging", component = "network" }
           tags.team = "platform"            baseline.df:10
       + net.subnet main.private-us-test-1a  network.df:24
           cidr = "10.50.0.0/20"
@@ -59,7 +59,7 @@ plan: 32 changes (32 create) over 1 tick; policy: 27 hold
     + network.vpc peer
       + net.vpc peer.vpc                    network.df:19
           cidr = "10.60.0.0/16"             stacks/dform.df:10
-          tags = { env: "staging", component: "network" }
+          tags = { env = "staging", component = "network" }
           tags.team = "platform"            baseline.df:10
       + net.subnet peer.private-us-test-1a  network.df:24
           cidr = "10.60.0.0/20"
@@ -98,8 +98,8 @@ plan: 32 changes (32 create) over 1 tick; policy: 27 hold
       + iam.policy identity.app_policy      identity.df:14
           name = "app"
           statements = [
-            { action: "db.connect", resource: database.db },
-            { action: "k8s.describe_cluster", resource: kubernetes.cluster },
+            { action = "db.connect", resource = database.db },
+            { action = "k8s.describe_cluster", resource = kubernetes.cluster },
           ]
           tags.team = "platform"            baseline.df:10
       + iam.role identity.app_role          identity.df:8
@@ -118,7 +118,7 @@ plan: 32 changes (32 create) over 1 tick; policy: 27 hold
     + network.vpc main
       + net.vpc main.vpc                    network.df:19
           cidr = "10.20.0.0/16"             stacks/dform.df:25
-          tags = { env: "prod", component: "network" }
+          tags = { env = "prod", component = "network" }
           tags.team = "platform"            baseline.df:10
       + net.subnet main.private-us-test-1a  network.df:24
           cidr = "10.20.0.0/20"
@@ -135,7 +135,7 @@ plan: 32 changes (32 create) over 1 tick; policy: 27 hold
     + network.vpc peer
       + net.vpc peer.vpc                    network.df:19
           cidr = "10.21.0.0/16"             stacks/dform.df:25
-          tags = { env: "prod", component: "network" }
+          tags = { env = "prod", component = "network" }
           tags.team = "platform"            baseline.df:10
       + net.subnet peer.private-us-test-1a  network.df:24
           cidr = "10.21.0.0/20"
@@ -173,10 +173,10 @@ plan: 32 changes (32 create) over 1 tick; policy: 27 hold
     + module identity
       + iam.policy identity.app_policy      identity.df:14
           name = "app"
-          statements[0] = { action: "audit.write", resource: "audit-log" }
-          statements[1] = { action: "db.connect", resource: database.db }
-          statements[2] = { action: "k8s.describe_cluster", resource: kubernetes.cluster }
-          statements[3] = { action: "org.read", resource: "org" }  baseline.df:15
+          statements[0] = { action = "audit.write", resource = "audit-log" }
+          statements[1] = { action = "db.connect", resource = database.db }
+          statements[2] = { action = "k8s.describe_cluster", resource = kubernetes.cluster }
+          statements[3] = { action = "org.read", resource = "org" }  baseline.df:15
           tags.team = "platform"            baseline.df:10
       + iam.role identity.app_role          identity.df:8
           assume.principals = ["k8s.serviceaccount.app"]

@@ -258,7 +258,7 @@ resource net.vpc main {
     s.write("db.toml", "size = 4\nnet = \"10.2.0.0/16\"\nzones = []\n");
     s.write(
         "db.df",
-        "db({ size: 5, net: \"10.3.0.0/16\", zones: [\"d\"] })\n",
+        "db({ size = 5, net = \"10.3.0.0/16\", zones = [\"d\"] })\n",
     );
     for (file, cidr) in [
         ("db.yaml", "10.0.2.0/24"),
@@ -484,7 +484,7 @@ fn the_alias_form_and_the_block_form_plan_identically() {
         "p.df",
         &(OBJECT.replace(
             "input nodes {\n  flavor: string = \"b3-8\"\n  count: int = 1 check 1 <= count, count <= 3\n  pool: {\n    size: int = 4\n  }\n}\n",
-            "input nodes: node_pool = { flavor: \"b3-8\", count: 1, pool: { size: 4 } }\n",
+            "input nodes: node_pool = { flavor = \"b3-8\", count = 1, pool = { size = 4 } }\n",
         ) + "type node_pool = { flavor: string, count: int, pool: { size: int } }\n"),
     );
     let alias = object_plan(&s, &["--set", "nodes.count=2"])
@@ -522,7 +522,7 @@ fn a_field_with_no_default_is_required() {
         "p.df",
         "\ncomponent m {\n  input db {\n    size: int\n    zone: string = \"a\"\n  }\n\
          resource net.vpc v {\n    size = db.size\n    zone = db.zone\n  }\n}\n\
-         resource m a { db.size = 2 }\nresource m b { db = { size: 5, zone: \"b\" } }\n\
+         resource m a { db.size = 2 }\nresource m b { db = { size = 5, zone = \"b\" } }\n\
          use fake\n",
     );
     let r = object_plan(&s, &[]).success();

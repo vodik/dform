@@ -14,21 +14,21 @@ use policy
 set replicas = 3 where env == "prod"
 
 resource k8s.deployment web {
-  metadata = { name: "web", namespace: "apps" }
+  metadata = { name = "web", namespace = "apps" }
   spec.replicas = replicas
-  spec.selector.matchLabels = { app: "web" }
-  spec.template.metadata.labels = { app: "web" }
+  spec.selector.matchLabels = { app = "web" }
+  spec.template.metadata.labels = { app = "web" }
   spec.template.spec.containers = [{
-    name: "web",
-    image: "nginx:1.27@sha256:c4ab9b7d9cdbba02d12e91035d6350386d1c05daa28b1f5c816f3d3f34c75147",
-    ports: [{ containerPort: 80, protocol: "TCP" }],
+    name = "web",
+    image = "nginx:1.27@sha256:c4ab9b7d9cdbba02d12e91035d6350386d1c05daa28b1f5c816f3d3f34c75147",
+    ports = [{ containerPort = 80, protocol = "TCP" }],
   }]
 }
 
 resource k8s.service web {
-  metadata = { name: "web", namespace: "apps" }
-  spec.selector = { app: "web" }
-  spec.ports = [{ port: 80, targetPort: 80, protocol: "TCP" }]
+  metadata = { name = "web", namespace = "apps" }
+  spec.selector = { app = "web" }
+  spec.ports = [{ port = 80, targetPort = 80, protocol = "TCP" }]
 }
 
 #| The site's name, the cluster's address.

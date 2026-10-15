@@ -35,14 +35,14 @@ fn a_field_of_a_string_is_an_error_at_run_time() {
 const WORKLOADS: &str = r#"
 resource k8s.deployment web {
   metadata.name = "web"
-  spec.selector.matchLabels = { app: "web" }
-  spec.template.spec.containers = [{ name: "web", image: "nginx:1" }]
+  spec.selector.matchLabels = { app = "web" }
+  spec.template.spec.containers = [{ name = "web", image = "nginx:1" }]
 }
 resource k8s.stateful_set db {
   metadata.name = "db"
-  spec.selector.matchLabels = { app: "db" }
+  spec.selector.matchLabels = { app = "db" }
   spec.serviceName = "db"
-  spec.template.spec.containers = [{ name: "db", image: "postgres:18" }]
+  spec.template.spec.containers = [{ name = "db", image = "postgres:18" }]
   spec.template.spec.securityContext.runAsNonRoot = true
 }
 
@@ -60,7 +60,7 @@ fn a_deny_reads_through_a_relation_of_references() {
         "refs-typed-deny",
         &format!(
             "{WORKLOADS}\n\
-             deny \"pod may run as root\" {{ workload: w }} where\n  \
+             deny \"pod may run as root\" {{ workload = w }} where\n  \
                workload(w),\n  \
                not w.spec.template.spec.securityContext.runAsNonRoot == true,\n"
         ),
@@ -89,18 +89,20 @@ fn a_set_writes_through_a_relation_of_references() {
         &format!(
             "{WORKLOADS}\n\
              set w.spec.template.spec.containers[_].resources.requests = {{\n  \
-               cpu: 100m,\n  \
-               memory: 128Mi,\n\
+               cpu = 100m,\n  \
+               memory = 128Mi,\n\
              }} @default where workload(w)\n"
         ),
     );
     let r = mock(&s, &["plan"]).success();
-    for c in ["web", "db"] {
-        let line = format!(
-            "spec.template.spec.containers[name={c}].resources.requests = \
-             {{ cpu: \"100m\", memory: \"128Mi\" }}"
-        );
-        assert!(r.stdout.contains(&line), "{c}: {}", r.stdout);
+    // The web's line is too wide for the page, the db's is not.
+    for line in [
+        "spec.template.spec.containers[name=web].resources.requests = {  p.df:22\n        \
+         cpu = \"100m\",\n        memory = \"128Mi\",\n      }",
+        "spec.template.spec.containers[name=db].resources.requests = \
+         { cpu = \"100m\", memory = \"128Mi\" }",
+    ] {
+        assert!(r.stdout.contains(line), "{line}: {}", r.stdout);
     }
 }
 
@@ -125,7 +127,7 @@ fn a_field_of_a_string_column_is_a_compile_error() {
     let s = scratch(
         "refs-typed-compile",
         "name(\"web\")\n\
-         deny \"root\" { workload: w } where name(w), not w.spec.template.spec.securityContext.runAsNonRoot == true\n",
+         deny \"root\" { workload = w } where name(w), not w.spec.template.spec.securityContext.runAsNonRoot == true\n",
     );
     let r = mock(&s, &["plan"]).failure();
     assert!(

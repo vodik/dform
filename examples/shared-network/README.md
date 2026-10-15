@@ -35,7 +35,7 @@ tick 1  11 changes
   + network data
     + aws.vpc data.vpc                    stacks/net.df:18
         cidr_block = "10.18.0.0/16"       stacks/net.df:10
-        tags = { Name: "data", team: "data" }
+        tags = { Name = "data", team = "data" }
 ...
   + aws.vpc_peering_connection core-data  stacks/net.df:33
       peer_vpc = data.vpc

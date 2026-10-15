@@ -19,7 +19,7 @@ component network {
   input cidr: inet
   output vpc: aws.vpc = vpc
 
-  resource aws.vpc vpc { cidr_block = cidr, tags = { Name: team, team } }
+  resource aws.vpc vpc { cidr_block = cidr, tags = { Name = team, team } }
   resource aws.subnet "private-${zone}" {
     vpc
     cidr_block = inet.subnet(cidr, 8, n)
@@ -28,7 +28,7 @@ component network {
 }
 
 #| The core: the services every team reaches, the hub of the spokes.
-resource aws.vpc core { cidr_block = inet.subnet(supernet, 4, 0), tags = { Name: "core" } }
+resource aws.vpc core { cidr_block = inet.subnet(supernet, 4, 0), tags = { Name = "core" } }
 
 hub(core)
 spoke(vpc) where s in net.spokes, vpc in aws.vpc, vpc == network[s.team].vpc

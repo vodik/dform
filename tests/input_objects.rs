@@ -18,7 +18,7 @@ const PLATFORM: &str = r#"
 key env: enum("lab", "prod") = "lab"
 use fake
 resource net.vpc edge { cidr = "10.0.0.0/16" }
-output backup = { bucket: "b", region: "gra", endpoint: "e", prefix: "p" }
+output backup = { bucket = "b", region = "gra", endpoint = "e", prefix = "p" }
 "#;
 
 fn project(name: &str, apps: &str) -> Scratch {
@@ -80,7 +80,7 @@ fn a_use_gives_an_object_input_another_stacks_object_output() {
 /// the same plan.
 #[test]
 fn an_object_input_is_given_whole_or_leaf_by_leaf() {
-    let obj = "{ bucket: \"b\", region: \"gra\", endpoint: \"e\", prefix: \"p\" }";
+    let obj = "{ bucket = \"b\", region = \"gra\", endpoint = \"e\", prefix = \"p\" }";
     for apps in [
         format!("use fake\nuse backups {{ namespace = \"a\", destination = {obj} }}\n"),
         format!("use fake\nlet d = {obj}\nuse backups {{ namespace = \"a\", destination = d }}\n"),
@@ -100,8 +100,8 @@ fn an_object_input_is_given_whole_or_leaf_by_leaf() {
 fn an_object_input_given_whole_with_an_unknown_field_or_no_object_is_a_violation() {
     let s = project(
         "input-obj-unknown",
-        "use fake\nlet d = { bucket: \"b\", region: \"gra\", endpoint: \"e\", prefix: \"p\", \
-         regoin: \"x\" }\nuse backups { namespace = \"a\", destination = d }\n",
+        "use fake\nlet d = { bucket = \"b\", region = \"gra\", endpoint = \"e\", prefix = \"p\", \
+         regoin = \"x\" }\nuse backups { namespace = \"a\", destination = d }\n",
     );
     let r = s.run(&["plan", "apps"]).failure();
     assert!(

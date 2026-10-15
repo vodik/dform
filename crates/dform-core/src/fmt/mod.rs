@@ -232,8 +232,8 @@ mod tests {
     #[test]
     fn spaces_and_indentation_are_normalised() {
         assert_eq!(
-            fmt("p( a ,b )where q(x),x>1\nresource  net.vpc  main{cidr=\"x\",tags={a:1}}\n"),
-            "p(a, b) where q(x), x > 1\nresource net.vpc main { cidr = \"x\", tags = { a: 1 } }\n"
+            fmt("p( a ,b )where q(x),x>1\nresource  net.vpc  main{cidr=\"x\",tags={a = 1}}\n"),
+            "p(a, b) where q(x), x > 1\nresource net.vpc main { cidr = \"x\", tags = { a = 1 } }\n"
         );
         assert_eq!(
             fmt("component m {\np(x) where q(x)\n}\n"),
@@ -307,12 +307,12 @@ mod tests {
             "resource t n { a = 1, b = [1, 2] }\n"
         );
         assert_eq!(
-            fmt("p(x) where q(\n  x,\n  {\n    a: 1\n  }\n)\n"),
-            "p(x) where q(x, { a: 1 })\n"
+            fmt("p(x) where q(\n  x,\n  {\n    a = 1\n  }\n)\n"),
+            "p(x) where q(x, { a = 1 })\n"
         );
         assert_eq!(
-            fmt("component m {\n  input n: int = 1\n}\nf(\"k\", {\n  a: 1\n})\n"),
-            "component m {\n  input n: int = 1\n}\nf(\"k\", { a: 1 })\n"
+            fmt("component m {\n  input n: int = 1\n}\nf(\"k\", {\n  a = 1\n})\n"),
+            "component m {\n  input n: int = 1\n}\nf(\"k\", { a = 1 })\n"
         );
     }
 
@@ -322,13 +322,13 @@ mod tests {
     fn a_long_term_breaks_from_the_outside_in() {
         let wide = "x".repeat(48);
         let src = format!(
-            "resource t n {{ tags = {{ a: \"{wide}\", b: {{ c: 1, d: [1, 2] }}, e: \"{wide}\" }} }}\n"
+            "resource t n {{ tags = {{ a = \"{wide}\", b = {{ c = 1, d = [1, 2] }}, e = \"{wide}\" }} }}\n"
         );
         assert_eq!(
             fmt(&src),
             format!(
-                "resource t n {{\n  tags = {{\n    a: \"{wide}\",\n    b: {{ c: 1, d: [1, 2] }},\n    \
-                 e: \"{wide}\",\n  }}\n}}\n"
+                "resource t n {{\n  tags = {{\n    a = \"{wide}\",\n    b = {{ c = 1, d = [1, 2] }},\n    \
+                 e = \"{wide}\",\n  }}\n}}\n"
             )
         );
         // A call breaks its arguments.
@@ -355,17 +355,17 @@ mod tests {
     #[test]
     fn a_list_of_one_object_hugs_it() {
         let wide = "x".repeat(50);
-        let src = format!("resource t n {{ c = [{{ a: \"{wide}\", b: \"{wide}\" }}] }}\n");
+        let src = format!("resource t n {{ c = [{{ a = \"{wide}\", b = \"{wide}\" }}] }}\n");
         assert_eq!(
             fmt(&src),
             format!(
-                "resource t n {{\n  c = [{{\n    a: \"{wide}\",\n    b: \"{wide}\",\n  }}]\n}}\n"
+                "resource t n {{\n  c = [{{\n    a = \"{wide}\",\n    b = \"{wide}\",\n  }}]\n}}\n"
             )
         );
-        let src = format!("let o = {{ k: [\"{wide}\", \"{wide}\"] }}\n");
+        let src = format!("let o = {{ k = [\"{wide}\", \"{wide}\"] }}\n");
         assert_eq!(
             fmt(&src),
-            format!("let o = {{\n  k: [\n    \"{wide}\",\n    \"{wide}\",\n  ],\n}}\n")
+            format!("let o = {{\n  k = [\n    \"{wide}\",\n    \"{wide}\",\n  ],\n}}\n")
         );
     }
 
@@ -378,10 +378,10 @@ mod tests {
     fn a_call_of_one_composite_hugs_it() {
         let wide = "x".repeat(50);
         let src = format!(
-            "resource t n {{ p = json.encode({{ S: [{{ a: \"{wide}\", b: \"{wide}\" }}] }}) }}\n"
+            "resource t n {{ p = json.encode({{ S = [{{ a = \"{wide}\", b = \"{wide}\" }}] }}) }}\n"
         );
         let want = format!(
-            "resource t n {{\n  p = json.encode({{\n    S: [{{\n      a: \"{wide}\",\n      b: \"{wide}\",\n    }}],\n  }})\n}}\n"
+            "resource t n {{\n  p = json.encode({{\n    S = [{{\n      a = \"{wide}\",\n      b = \"{wide}\",\n    }}],\n  }})\n}}\n"
         );
         assert_eq!(fmt(&src), want);
         assert_eq!(fmt(&want), want);
@@ -467,12 +467,12 @@ mod tests {
                 "resource t n {\n  metadata.name = \"a\"\n  spec.replicas = 1\n  \
                  metadata.namespace\n  metadata.\"x-y\" = [1]\n}\n"
             ),
-            "resource t n { metadata = { name: \"a\", namespace, \"x-y\": [1] }, spec.replicas = 1 }\n"
+            "resource t n { metadata = { name = \"a\", namespace, \"x-y\" = [1] }, spec.replicas = 1 }\n"
         );
         // An object under the parent, a path below it, `+=`, two ranks, one
         // leaf: dotted.
         for src in [
-            "resource t n { metadata.name = \"a\", metadata.labels = { a: 1 } }\n",
+            "resource t n { metadata.name = \"a\", metadata.labels = { a = 1 } }\n",
             "resource t n { metadata.name = \"a\", metadata.labels.a = 1 }\n",
             "resource t n { tags.a = 1, tags.b += [2] }\n",
             "resource t n { tags.a = 1 @default, tags.b = 2 }\n",
@@ -483,7 +483,7 @@ mod tests {
         }
         assert_eq!(
             fmt("resource t n { tags.a = 1 @default, tags.b = 2 @default }\n"),
-            "resource t n { tags = { a: 1, b: 2 } @default }\n"
+            "resource t n { tags = { a = 1, b = 2 } @default }\n"
         );
     }
 

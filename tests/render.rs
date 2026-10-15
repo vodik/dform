@@ -18,18 +18,18 @@ use k8s
 resource net.vpc main { cidr = \"10.0.0.0/16\" }
 resource k8s.namespace shop { metadata.name = \"shop\" }
 resource k8s.config_map cfg {
-  metadata = { name: \"cfg\", namespace: \"shop\" }
-  data = { mode: env }
+  metadata = { name = \"cfg\", namespace = \"shop\" }
+  data = { mode = env }
 }
 resource k8s.deployment web {
-  metadata = { name: \"web\", namespace: shop.metadata.name }
-  spec.selector.matchLabels = { app: \"web\" }
-  spec.template.metadata.labels = { app: \"web\" }
+  metadata = { name = \"web\", namespace = shop.metadata.name }
+  spec.selector.matchLabels = { app = \"web\" }
+  spec.template.metadata.labels = { app = \"web\" }
   spec.template.spec.containers = [{
-    name: \"web\",
-    image: \"nginx:1.27\",
-    resources: { limits: { memory: 512Mi } },
-    envFrom: [{ configMapRef: { name: cfg.metadata.name } }],
+    name = \"web\",
+    image = \"nginx:1.27\",
+    resources = { limits = { memory = 512Mi } },
+    envFrom = [{ configMapRef = { name = cfg.metadata.name } }],
   }]
 }
 deny \"prod is not rendered here\" where env == \"prod\"
@@ -108,12 +108,12 @@ fn a_hole_refuses_the_render_unless_partial() {
         "use k8s\n\
          resource k8s.namespace shop { metadata.name = \"shop\" }\n\
          resource k8s.config_map cfg {\n  \
-           metadata = { generateName: \"cfg-\", namespace: \"shop\" }\n  data = { a: \"1\" }\n}\n\
+           metadata = { generateName = \"cfg-\", namespace = \"shop\" }\n  data = { a = \"1\" }\n}\n\
          resource k8s.secret pw {\n  \
-           metadata = { name: \"pw\", namespace: \"shop\" }\n  \
-           stringData = { password: random.password(\"pw\", 16) }\n}\n\
+           metadata = { name = \"pw\", namespace = \"shop\" }\n  \
+           stringData = { password = random.password(\"pw\", 16) }\n}\n\
          resource k8s.service_account sa {\n  \
-           metadata = { name: cfg.metadata.name, namespace: \"shop\" }\n}\n",
+           metadata = { name = cfg.metadata.name, namespace = \"shop\" }\n}\n",
     );
     let r = s.run(&["render", "p.df"]).failure();
     assert_eq!(r.code, Some(1));
@@ -159,15 +159,15 @@ fn the_k8s_provider_names_each_kind() {
         "use k8s { source = \"./providers/k8s\" }\n\
          resource k8s.custom_resource_definition widgets {\n  \
            metadata.name = \"widgets.acme.example.com\"\n  \
-           spec = {\n    group: \"acme.example.com\",\n    \
-             names: { kind: \"Widget\", plural: \"widgets\" },\n    \
-             scope: \"Namespaced\",\n    \
-             versions: [{ name: \"v1alpha1\", served: true, storage: true }],\n  }\n}\n\
+           spec = {\n    group = \"acme.example.com\",\n    \
+             names = { kind = \"Widget\", plural = \"widgets\" },\n    \
+             scope = \"Namespaced\",\n    \
+             versions = [{ name = \"v1alpha1\", served = true, storage = true }],\n  }\n}\n\
          resource k8s.csi_driver d {\n  \
-           metadata.name = \"d.example.com\"\n  spec = { attachRequired: true }\n}\n\
+           metadata.name = \"d.example.com\"\n  spec = { attachRequired = true }\n}\n\
          resource k8s.acme.widget a {\n  \
-           metadata = { name: \"a\", namespace: \"web\" }\n  \
-           spec = { size: 3 }\n}\n",
+           metadata = { name = \"a\", namespace = \"web\" }\n  \
+           spec = { size = 3 }\n}\n",
     );
     let mut c = common::dform();
     c.args(["render", "p.df", "--json"])

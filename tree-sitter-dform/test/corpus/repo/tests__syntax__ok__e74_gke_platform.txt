@@ -30,7 +30,10 @@ type settings {
   }
 }
 
-set { region = "us-east1", gke.static_ips = { "gke-platform-grpc": { type: "INTERNAL" } } } @default
+set {
+  region = "us-east1"
+  gke.static_ips = { "gke-platform-grpc" = { type = "INTERNAL" } }
+} @default
 
 env_name("dev")
 env_name("stg")
@@ -42,10 +45,10 @@ set {
   network_name = "platform-dev-network"
   regional_proxy_cidr = "10.193.0.0/24"
   gke = {
-    control_plane_cidr: "172.16.3.96/28",
-    subnet_cidr: "10.141.76.0/22",
-    pods_cidr: "10.141.80.0/21",
-    services_cidr: "10.141.88.0/21",
+    control_plane_cidr = "172.16.3.96/28",
+    subnet_cidr = "10.141.76.0/22",
+    pods_cidr = "10.141.80.0/21",
+    services_cidr = "10.141.88.0/21",
   }
 } where env == "dev"
 
@@ -55,10 +58,10 @@ set {
   network_name = "platform-stg-network"
   regional_proxy_cidr = "10.193.1.0/24"
   gke = {
-    control_plane_cidr: "172.16.3.112/28",
-    subnet_cidr: "10.141.100.0/22",
-    pods_cidr: "10.141.104.0/21",
-    services_cidr: "10.141.112.0/21",
+    control_plane_cidr = "172.16.3.112/28",
+    subnet_cidr = "10.141.100.0/22",
+    pods_cidr = "10.141.104.0/21",
+    services_cidr = "10.141.112.0/21",
   }
 } where env == "stg"
 
@@ -97,8 +100,8 @@ resource google.compute_subnetwork gke_subnet {
   ip_cidr_range = subnet_cidr
   subnet_private_access = true
   secondary_ranges = [
-    { range_name: str.format("%s-gke-pods-range", name), ip_cidr_range: pods_cidr },
-    { range_name: str.format("%s-gke-svc-range", name), ip_cidr_range: svc_cidr },
+    { range_name = str.format("%s-gke-pods-range", name), ip_cidr_range = pods_cidr },
+    { range_name = str.format("%s-gke-svc-range", name), ip_cidr_range = svc_cidr },
   ] # Keyed on .range_name per the google schema
 } where
   project(id, name, region, net_id),
@@ -120,12 +123,12 @@ resource google.compute_subnetwork regional_proxy {
 resource google.compute_network main {
   project = id
   name = net_id
-  peerings = [ { name: n, peer_network: pn } | peering(e, n, pn) ]
+  peerings = [ { name = n, peer_network = pn } | peering(e, n, pn) ]
 } where project(id, _, _, net_id), e = env
 
 # One static address per declared static IP; the map explodes into rows.
 static_ip(ip_name, type_)
-  where e = env, setting(e, "gke.static_ips", ips), member_kv(ips, ip_name, { type: type_ })
+  where e = env, setting(e, "gke.static_ips", ips), member_kv(ips, ip_name, { type = type_ })
 
 resource google.compute_address "${s}" {
   project = id
@@ -165,7 +168,7 @@ lifecycle(gke.cluster["gke_platform"], "prevent_destroy") where env == "prod"
 deny(
   "prod_deletion_protection",
   "prod cluster must have deletion protection",
-  { cluster: "gke_platform" },
+  { cluster = "gke_platform" },
 ) where env == "prod", not attr("gke.cluster", "gke_platform", "deletion_protection", true)
 
 ########################################
@@ -178,9 +181,9 @@ deny(
 provider_config(
   "k8s",
   {
-    host: ref("gke.cluster", "gke_platform", "endpoint"),
-    ca: ref("gke.cluster", "gke_platform", "ca_certificate"),
-    token: ref(google.client_config, "current", "access_token"),
+    host = ref("gke.cluster", "gke_platform", "endpoint"),
+    ca = ref("gke.cluster", "gke_platform", "ca_certificate"),
+    token = ref(google.client_config, "current", "access_token"),
   },
 )
 
@@ -196,7 +199,7 @@ resource k8s.deployment api {
 # resolves ?google.secret_manager_secret_version/db_pw#secret_data inside Apply.
 resource k8s.secret db_credentials {
   namespace = ref(k8s.namespace, "gke_platform", "name")
-  data = { password: ref(google.secret_manager_secret_version, "db_pw", "secret_data") }
+  data = { password = ref(google.secret_manager_secret_version, "db_pw", "secret_data") }
 }
 
 # One node pool per zone the autopilot cluster actually used. .zones is an
@@ -215,7 +218,7 @@ resource gke.nodepool "${np}" {
 # undetermined until phase 1 resolves .zones.
 zone_count(n) where n = count(z), attr("gke.cluster", "gke_platform", "zones", zs), member(zs, z)
 
-deny("two_zones", "cluster must be in at least two zones", { cluster: "gke_platform" })
+deny("two_zones", "cluster must be in at least two zones", { cluster = "gke_platform" })
   where want("gke.cluster", "gke_platform"), zone_count(n), n < 2
 
 ########################################

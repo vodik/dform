@@ -301,7 +301,7 @@ fn a_conflicts_object_value_is_the_programs_text() {
     assert_eq!(
         out,
         "  ! k8s.deployment web.spec: two contributions disagree\n      \
-         { name: web_config.metadata.name }  main.df:5\n      \
-         { name: \"other\" }  main.df:9\n"
+         { name = web_config.metadata.name }  main.df:5\n      \
+         { name = \"other\" }  main.df:9\n"
     );
 }

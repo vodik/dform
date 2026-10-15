@@ -14,7 +14,7 @@ component pg {
   input name: string
   output host = "${name}.${namespace.metadata.name}.svc"
   resource k8s.secret creds {
-    metadata = { name: "${name}-creds", namespace: namespace.metadata.name }
+    metadata = { name = "${name}-creds", namespace = namespace.metadata.name }
   }
 }
 "#;
@@ -24,8 +24,8 @@ use k8s
 resource k8s.namespace apps { metadata.name = "apps" }
 resource databases.pg one { namespace = apps, name = "one" }
 resource k8s.config_map cm {
-  metadata = { name: "cm", namespace: apps.metadata.name }
-  data = { host: one.host }
+  metadata = { name = "cm", namespace = apps.metadata.name }
+  data = { host = one.host }
 }
 "#;
 
@@ -33,7 +33,7 @@ fn copies(r: &common::Run) {
     assert!(
         r.stdout.contains(
             "  + databases.pg one\n    + k8s.secret one.creds  databases.df:6\n\
-             \x20       metadata = { name: \"one-creds\", namespace: \"apps\" }\n"
+             \x20       metadata = { name = \"one-creds\", namespace = \"apps\" }\n"
         ) && r.stdout.contains("      data.host = \"one.apps.svc\"\n"),
         "{}",
         r.stdout
@@ -66,7 +66,7 @@ fn a_module_input_binds_a_reference() {
     s.write(
         "tenant.df",
         "input namespace: k8s.namespace\n\
-         resource k8s.config_map cfg { metadata = { name: \"cfg\", namespace: namespace.metadata.name } }\n",
+         resource k8s.config_map cfg { metadata = { name = \"cfg\", namespace = namespace.metadata.name } }\n",
     );
     s.write(
         "main.df",
@@ -76,7 +76,7 @@ fn a_module_input_binds_a_reference() {
     assert!(
         r.stdout.contains(
             "  + k8s.config_map tenant.cfg  tenant.df:2\n\
-             \x20     metadata = { name: \"cfg\", namespace: \"apps\" }\n"
+             \x20     metadata = { name = \"cfg\", namespace = \"apps\" }\n"
         ),
         "{}",
         r.stdout
@@ -96,9 +96,9 @@ fn a_statement_that_derives_nothing_is_listed_with_why() {
         "main.df",
         "use k8s\nnames(2, \"b\")\nresource k8s.namespace apps { metadata.name = \"apps\" }\n\
          resource databases.pg one { namespace = apps, name = names[1] }\n\
-         resource k8s.config_map cm { metadata = { name: \"cm\", namespace: \"apps\" }, \
-         data = { host: one.host } }\n\
-         resource k8s.config_map quiet { metadata = { name: \"q\", namespace: \"apps\" } } \
+         resource k8s.config_map cm { metadata = { name = \"cm\", namespace = \"apps\" }, \
+         data = { host = one.host } }\n\
+         resource k8s.config_map quiet { metadata = { name = \"q\", namespace = \"apps\" } } \
          where names[1] == \"x\"\n",
     );
     let r = s.run(&["plan", "main.df"]).success();
@@ -122,9 +122,9 @@ fn a_statement_that_derives_nothing_is_listed_with_why() {
     // What reads a statement that derives nothing is refused by naming it.
     s.write(
         "main.df",
-        "use k8s\nnames(2, \"b\")\nresource k8s.secret ghost { metadata = { name: \"g-${names[1]}\", namespace: \"a\" } }\n\
-         resource k8s.config_map cm { metadata = { name: \"cm\", namespace: \"a\" }, \
-         data = { x: ghost.metadata.name } }\n",
+        "use k8s\nnames(2, \"b\")\nresource k8s.secret ghost { metadata = { name = \"g-${names[1]}\", namespace = \"a\" } }\n\
+         resource k8s.config_map cm { metadata = { name = \"cm\", namespace = \"a\" }, \
+         data = { x = ghost.metadata.name } }\n",
     );
     let r = s.run(&["plan", "main.df"]).failure();
     assert!(

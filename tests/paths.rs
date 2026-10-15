@@ -88,7 +88,7 @@ fn a_quoted_segment_reads_one_key() {
     // An object's key read through a quoted segment, not a walk of `a`, `b`.
     s.write(
         "p.df",
-        "\n\nuse k8s\n\nlet anns = { \"a.b/c\": \"one\" }\n\
+        "\n\nuse k8s\n\nlet anns = { \"a.b/c\" = \"one\" }\n\
          resource k8s.namespace ns {\n  metadata.name = \"ns\"\n  \
          metadata.labels.x = anns.\"a.b/c\"\n}\n",
     );
@@ -120,12 +120,12 @@ fn why_takes_a_quoted_segment() {
     .success();
     assert!(
         r.stdout.contains(&format!(
-            "{{annotations: {{{KEY}: \"letsencrypt\"}}}}   p.df:7"
+            "{{annotations = {{{KEY} = \"letsencrypt\"}}}}   p.df:7"
         )),
         "{}",
         r.stdout
     );
-    assert!(!r.stdout.contains("{name: \"ns\"}"), "{}", r.stdout);
+    assert!(!r.stdout.contains("{name = \"ns\"}"), "{}", r.stdout);
 }
 
 /// fmt keeps the quoted segment, and folds siblings into the object form
@@ -159,7 +159,7 @@ fn fmt_keeps_a_quoted_segment() {
     s.run(&["fmt", "p.df"]).success();
     assert!(
         s.read("p.df")
-            .contains("  metadata.annotations = { \"a.b/c\": \"1\", \"d.e/f\": \"2\" }\n"),
+            .contains("  metadata.annotations = { \"a.b/c\" = \"1\", \"d.e/f\" = \"2\" }\n"),
         "{}",
         s.read("p.df")
     );

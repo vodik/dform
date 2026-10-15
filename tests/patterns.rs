@@ -11,7 +11,7 @@ use dform_core::parser::{parse_file, parse_program};
 
 #[test]
 fn a_tuple_in_an_object_binds_each_key_and_value() {
-    let src = r#"labels({ app: "web", team: "core" })
+    let src = r#"labels({ app = "web", team = "core" })
 label(k, v) where labels(l), (k, v) in l
 team(v) where labels(l), ("team", v) in l
 keys(k) where labels(l), (k, _) in l
@@ -37,9 +37,9 @@ zone(i, z) where zones(zs), (i, z) in zs
 fn patterns_nest() {
     let src = r#"pairs([[1, "a"], [2, "b"]])
 second(i, x) where pairs(ps), (i, (n, x)) in ps, n > 1
-nets({ prod: { cidr: "10.0.0.0/16", zone: "a" }, dev: { cidr: "10.1.0.0/16" } })
-cidr(e, c) where nets(m), (e, { cidr: c }) in m
-zoned(e, z) where nets(m), (e, { zone: z }) in m
+nets({ prod = { cidr = "10.0.0.0/16", zone = "a" }, dev = { cidr = "10.1.0.0/16" } })
+cidr(e, c) where nets(m), (e, { cidr = c }) in m
+zoned(e, z) where nets(m), (e, { zone = z }) in m
 "#;
     assert_eq!(facts(src, "second"), [r#"second(1, "b")"#]);
     assert_eq!(
@@ -55,11 +55,11 @@ zoned(e, z) where nets(m), (e, { zone: z }) in m
 
 #[test]
 fn not_a_tuple_in_means_no_entry_matches() {
-    let src = r#"labels({ app: "web" })
-labels({ app: "db", tier: "data" })
+    let src = r#"labels({ app = "web" })
+labels({ app = "db", tier = "data" })
 untiered(l) where labels(l), not ("tier", _) in l
 "#;
-    assert_eq!(facts(src, "untiered"), [r#"untiered({app: "web"})"#]);
+    assert_eq!(facts(src, "untiered"), [r#"untiered({app = "web"})"#]);
 }
 
 /// What lowering a program file reports.
@@ -76,23 +76,26 @@ fn lower_error(src: &str) -> String {
 /// type is enumerated by a name.
 #[test]
 fn an_object_is_entered_by_a_pattern() {
-    let e = lower_error("labels({ app: \"web\" })\nbad(x) where labels(l), x in l\n");
+    let e = lower_error("labels({ app = \"web\" })\nbad(x) where labels(l), x in l\n");
     assert!(
         e.contains("`x in l`: `l` is an object, and an object's entries are matched by a pattern"),
         "{e}"
     );
     assert!(e.contains("`(k, v) in l` takes each key and value"), "{e}");
-    let e = lower_error("bad(x) where x in { a: 1 }\n");
+    let e = lower_error("bad(x) where x in { a = 1 }\n");
     assert!(e.contains("`{..}` is an object"), "{e}");
-    let e = lower_error("bad(x) where o = { a: 1 }, x in o\n");
+    let e = lower_error("bad(x) where o = { a = 1 }, x in o\n");
     assert!(e.contains("`o` is an object"), "{e}");
     // A column of lists and objects is decided row by row, as before.
     let program = parse_program(
-        "labels({ app: \"web\" })\nlabels([\"a\"])\nbad(x) where labels(l), x in l\n",
+        "labels({ app = \"web\" })\nlabels([\"a\"])\nbad(x) where labels(l), x in l\n",
     )
     .unwrap();
     let e = format!("{:#}", engine::eval(&program, &[]).unwrap_err());
-    assert!(e.contains("`x in e` over an object, {app: \"web\"}"), "{e}");
+    assert!(
+        e.contains("`x in e` over an object, {app = \"web\"}"),
+        "{e}"
+    );
     assert!(e.contains("`(key, value) in e`"), "{e}");
     let e = error("pairs([1])\nbad(a) where pairs(ps), (a, b, c) in ps\n");
     assert!(
@@ -117,9 +120,9 @@ two(a, b) where pair(p), (a, b) = p
 
 #[test]
 fn an_object_pattern_binds_the_named_fields_and_ignores_the_rest() {
-    let src = r#"conn({ host: "db", port: 5432, user: "app" })
-conn({ host: "cache" })
-hp(h, p) where conn(c), { host: h, port: p } = c
+    let src = r#"conn({ host = "db", port = 5432, user = "app" })
+conn({ host = "cache" })
+hp(h, p) where conn(c), { host = h, port = p } = c
 host(host) where conn(c), { host } = c
 "#;
     assert_eq!(facts(src, "hp"), [r#"hp("db", 5432)"#]);
@@ -159,7 +162,7 @@ zone("a", 0)
 zone("b", 1)
 names(name) where zone({ name })
 late(name, index) where zone({ name, index }), index > 0
-at(n) where zone({ name: n, index: 1 })
+at(n) where zone({ name = n, index = 1 })
 pair([1, "x"])
 pair([2, "y"])
 second(s) where pair((2, s))
@@ -169,7 +172,7 @@ second(s) where pair((2, s))
     assert_eq!(facts(src, "at"), [r#"at("b")"#]);
     assert_eq!(facts(src, "second"), [r#"second("y")"#]);
     let program =
-        parse_program("decl zone(name, index)\nz(n) where zone({ name: n, size: 1 })\n").unwrap();
+        parse_program("decl zone(name, index)\nz(n) where zone({ name = n, size = 1 })\n").unwrap();
     let e = format!("{:#}", engine::eval(&program, &[]).unwrap_err());
     assert!(
         e.contains("unknown field 'size' for predicate 'zone'"),
@@ -185,7 +188,7 @@ fn a_components_decl_names_its_record_pattern() {
   decl zone(name: string, index: int)
   zone("a", 0)
   zone("b", 1)
-  output first = n where zone({ name: n, index: 0 })
+  output first = n where zone({ name = n, index = 0 })
   output second = n where zone(name: n, index: 1)
 }
 resource c x {}
@@ -218,12 +221,12 @@ fn a_tuple_is_not_a_value() {
 /// name in a container's env.
 #[test]
 fn a_plaintext_secret_in_env_is_denied() {
-    let src = r#"container("web", { name: "api", env: [{ name: "DB_PASSWORD", value: "hunter2" }, { name: "API_TOKEN", valueFrom: { secretKeyRef: { name: "t" } } }, { name: "PORT", value: "80" }] })
-container("job", { name: "migrate" })
+    let src = r#"container("web", { name = "api", env = [{ name = "DB_PASSWORD", value = "hunter2" }, { name = "API_TOKEN", valueFrom = { secretKeyRef = { name = "t" } } }, { name = "PORT", value = "80" }] })
+container("job", { name = "migrate" })
 secret_word("SECRET")
 secret_word("PASSWORD")
 secret_word("TOKEN")
-deny "plaintext secret in env" { workload: w, container: c.name, env: e.name } where
+deny "plaintext secret in env" { workload = w, container = c.name, env = e.name } where
   container(w, c),
   (_, e) in c.env,
   has e.value,
@@ -232,7 +235,7 @@ deny "plaintext secret in env" { workload: w, container: c.name, env: e.name } w
 "#;
     let deny = facts(src, "deny");
     assert_eq!(deny.len(), 1, "{deny:?}");
-    assert!(deny[0].contains(r#"env: "DB_PASSWORD""#), "{deny:?}");
+    assert!(deny[0].contains(r#"env = "DB_PASSWORD""#), "{deny:?}");
     let example =
         std::fs::read_to_string(common::repo().join("tests/fixtures/crud-api/stacks/crud_api.df"))
             .unwrap();
@@ -246,7 +249,7 @@ fn why_shows_the_pattern_as_written() {
     let s = Scratch::project("lang-patterns");
     s.write(
         "p.df",
-        "\nuse fake\n\nlabels({ app: \"web\" })\n\nlabel(k, v) where labels(l), (k, v) in l\n",
+        "\nuse fake\n\nlabels({ app = \"web\" })\n\nlabel(k, v) where labels(l), (k, v) in l\n",
     );
     let r = s.run(&["why", "label(_, _)", "p.df"]).success();
     assert!(

@@ -396,7 +396,7 @@ key env: string = "staging"
 use fake
 resource net.vpc logs {
   bucket = "company-logs"
-  tags = { env: env }
+  tags = { env = env }
 } where env != "dev"
 resource net.vpc main {
   name = "main-${env}"

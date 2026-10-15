@@ -155,7 +155,7 @@ A string in a hole nests (R-175)
 ================================================================================
 
 let agent_init = "#cloud-config
-${yaml.encode({ runcmd: ["${install} sh -s - ${"server"}", "echo }"] })}"
+${yaml.encode({ runcmd = ["${install} sh -s - ${"server"}", "echo }"] })}"
 
 --------------------------------------------------------------------------------
 

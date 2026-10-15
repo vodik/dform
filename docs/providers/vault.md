@@ -51,7 +51,7 @@ Configure and kept in its memory, as is the token the login answers:
 input vault_secret_id: secret(string)
 use vault {
   address = "https://vault.example:8200"
-  approle = { role_id: "4b2e..", secret_id: vault_secret_id }   # mount: "approle" unless written
+  approle = { role_id = "4b2e..", secret_id = vault_secret_id }   # mount: "approle" unless written
 }
 ```
 

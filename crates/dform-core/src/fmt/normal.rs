@@ -451,7 +451,7 @@ impl Ctx {
                     .map(|e| {
                         let k = e.path.last().map_or("", String::as_str);
                         match &e.value {
-                            Some(v) if v != k || !is_name(k) => format!("{}: {v}", key_text(k)),
+                            Some(v) if v != k || !is_name(k) => format!("{} = {v}", key_text(k)),
                             _ => k.to_string(),
                         }
                     })

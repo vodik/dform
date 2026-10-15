@@ -54,8 +54,8 @@ fn a_resource_the_k8s_provider_refuses_fails_the_test() {
         "test-plan-k8s",
         "input named: bool = false\n",
         "resource k8s.config_map cm {\n  \
-           metadata = { namespace: \"apps\" }\n  \
-           data = { image: oci.resolve(\"registry.invalid/acme/app:v1\") }\n\
+           metadata = { namespace = \"apps\" }\n  \
+           data = { image = oci.resolve(\"registry.invalid/acme/app:v1\") }\n\
          }\n\
          set cm.metadata.name = \"cm\" where named\n",
     );

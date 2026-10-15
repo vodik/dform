@@ -374,7 +374,7 @@ mod tests {
             kinds("\"a${f(\"b${\"c\"}\", \"}\")}d\" x"),
             vec![STRING, IDENT]
         );
-        assert_eq!(kinds("\"${ {a: \"x\"}.a }\n\" y"), vec![STRING, IDENT]);
+        assert_eq!(kinds("\"${ {a = \"x\"}.a }\n\" y"), vec![STRING, IDENT]);
         // A hole never closed: the string ends at the next quote, as
         // before holes nested, for the lowering to name the `${`.
         assert_eq!(kinds("\"${f(\" x"), vec![STRING, IDENT]);

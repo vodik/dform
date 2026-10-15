@@ -5,13 +5,13 @@ tests/fixtures/adversarial/adv4b_variable_path_writer_no_read.df
 # adv4b: the variable-path writer that reads no attribute. Lands at
 # (arg, *, *), above every attr reader, and stratifies.
 
-override(net.vpc, "main", "tags", { team: "x" })
+override(net.vpc, "main", "tags", { team = "x" })
 
-resource net.vpc main { cidr = "10.0.0.0/16", tags = { env: "dev" } }
+resource net.vpc main { cidr = "10.0.0.0/16", tags = { env = "dev" } }
 
 arg(t, n, p, v) where override(t, n, p, v), want(t, n)
 
-deny "vpc without cidr" { vpc: n } where n in net.vpc, not arg(net.vpc, n, "cidr", "10.0.0.0/16")
+deny "vpc without cidr" { vpc = n } where n in net.vpc, not arg(net.vpc, n, "cidr", "10.0.0.0/16")
 
 use fake
 

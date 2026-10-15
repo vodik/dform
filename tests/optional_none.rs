@@ -36,7 +36,7 @@ fn a_none_inside_an_object_is_located() {
     let r = plan(
         "none-object",
         "use fake\nlet release = \"16.0.4\"\nresource net.vpc a {\n  cidr = \"10.0.0.0/16\"\n  \
-         tags = { image: regex.capture(release, \"^v(.+)$\", 1) }\n}\n",
+         tags = { image = regex.capture(release, \"^v(.+)$\", 1) }\n}\n",
     );
     assert!(
         r.stderr

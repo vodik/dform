@@ -1,7 +1,7 @@
-net.vpc main.vpc.tags = {component: "network", env: "prod", team: "platform"}
+net.vpc main.vpc.tags = {component = "network", env = "prod", team = "platform"}
   merged from 2 contributions
-  ├─ {team: "platform"}
-  │    tests/fixtures/demo/baseline.df:10  set r.tags = { team: "platform" } where r in resource   (use baseline)
+  ├─ {team = "platform"}
+  │    tests/fixtures/demo/baseline.df:10  set r.tags = { team = "platform" } where r in resource   (use baseline)
   │    with r = net.vpc main.vpc
   │    └─ net.vpc main.vpc
   │         tests/fixtures/demo/network.df:19  resource net.vpc vpc { .. }   (resource network.vpc main)
@@ -10,11 +10,11 @@ net.vpc main.vpc.tags = {component: "network", env: "prod", team: "platform"}
   │         │    └─ 10.20.0.0/16
   │         │         tests/fixtures/demo/stacks/dform.df:51  resource network.vpc main { vpc_net = cidrs.main .. }
   │         │         with cidrs.main = 10.20.0.0/16
-  │         │         ├─ input cidrs = {main: 10.20.0.0/16, peer: 10.21.0.0/16}
+  │         │         ├─ input cidrs = {main = 10.20.0.0/16, peer = 10.21.0.0/16}
   │         │         │    merged from 4 contributions
-  │         │         │    ├─ {main: 10.50.0.0/16} @default   tests/fixtures/demo/stacks/dform.df:10
-  │         │         │    ├─ {peer: 10.60.0.0/16} @default   tests/fixtures/demo/stacks/dform.df:10
-  │         │         │    ├─ {main: 10.20.0.0/16}
+  │         │         │    ├─ {main = 10.50.0.0/16} @default   tests/fixtures/demo/stacks/dform.df:10
+  │         │         │    ├─ {peer = 10.60.0.0/16} @default   tests/fixtures/demo/stacks/dform.df:10
+  │         │         │    ├─ {main = 10.20.0.0/16}
   │         │         │    │    tests/fixtures/demo/stacks/dform.df:25  set from yaml.decode(io.read("config/dform/${env}.yaml"))
   │         │         │    │    with "config/dform/${env}.yaml" = "config/dform/prod.yaml"
   │         │         │    │    ├─ input env = "prod"
@@ -24,7 +24,7 @@ net.vpc main.vpc.tags = {component: "network", env: "prod", team: "platform"}
   │         │         │    │    │         tests/fixtures/demo/stacks/dform.df:9  key env: environment = "staging"
   │         │         │    │    │         └─ --set env=prod
   │         │         │    │    └─ table.yaml.set("config/dform/prod.yaml", "config/dform/prod.yaml:5", "cidrs.main", "10.20.0.0/16")   config/dform/prod.yaml:5
-  │         │         │    └─ {peer: 10.21.0.0/16}
+  │         │         │    └─ {peer = 10.21.0.0/16}
   │         │         │         tests/fixtures/demo/stacks/dform.df:25  set from yaml.decode(io.read("config/dform/${env}.yaml"))
   │         │         │         with "config/dform/${env}.yaml" = "config/dform/prod.yaml"
   │         │         │         ├─ input env = "prod"   (see above)
@@ -35,6 +35,6 @@ net.vpc main.vpc.tags = {component: "network", env: "prod", team: "platform"}
   │              └─ "prod"
   │                   tests/fixtures/demo/stacks/dform.df:51  resource network.vpc main { .. env }
   │                   with env = "prod"
-  │                   ├─ input cidrs = {main: 10.20.0.0/16, peer: 10.21.0.0/16}   (see above)
+  │                   ├─ input cidrs = {main = 10.20.0.0/16, peer = 10.21.0.0/16}   (see above)
   │                   └─ input env = "prod"   (see above)
   └─ ... 1 other contribution (--all)

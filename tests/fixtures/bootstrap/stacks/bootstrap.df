@@ -39,7 +39,7 @@ resource google.container_node_pool "np-${z}" {
   node_count = 1
 } where z in platform.zones
 
-provider_config("k8s", { host: platform.endpoint, ca: platform.ca_certificate })
+provider_config("k8s", { host = platform.endpoint, ca = platform.ca_certificate })
 
 resource k8s.namespace dform_system { metadata.name = "dform-system" }
 
@@ -57,14 +57,14 @@ resource k8s.deployment dform_controller {
   metadata.name = "dform-controller"
   metadata.namespace = dform_system.metadata.name
   metadata.annotations = {
-    "dform.io/node-pool": google.container_node_pool[first_pool].instance_group,
+    "dform.io/node-pool" = google.container_node_pool[first_pool].instance_group,
   }
   spec.replicas = 1
-  spec.selector.matchLabels = { app: "dform-controller" }
-  spec.template.metadata.labels = { app: "dform-controller" }
+  spec.selector.matchLabels = { app = "dform-controller" }
+  spec.template.metadata.labels = { app = "dform-controller" }
   spec.template.spec.containers = [{
-    name: "dform",
-    image: "ghcr.io/platform/dform:0.8",
-    args: ["controller", "run", "workload"],
+    name = "dform",
+    image = "ghcr.io/platform/dform:0.8",
+    args = ["controller", "run", "workload"],
   }]
 } where node_pool_up(first_pool)

@@ -29,9 +29,9 @@ use k8s
 resource k8s.deployment api {
   metadata.name = "api"
   metadata.namespace = "apps"
-  spec.selector.matchLabels = {app: "api"}
-  spec.template.metadata.labels = {app: "api"}
-  spec.template.spec.containers = [{name: "app", image: "api:1"}]
+  spec.selector.matchLabels = {app = "api"}
+  spec.template.metadata.labels = {app = "api"}
+  spec.template.spec.containers = [{name = "app", image = "api:1"}]
 }
 
 deny "the program runs ${w.metadata.name}" where w in k8s.deployment

@@ -13,7 +13,7 @@ resource net.vpc a { cidr = "10.0.0.0/16" }
 resource net.vpc b { cidr = "10.1.0.0/16" }
 resource net.vpc c { cidr = "10.2.0.0/8" }
 resource db.postgres db { name = "db" }
-deny "a network is no bigger than a /16" { vpc: v } where v in net.vpc, v.cidr == "10.2.0.0/8"
+deny "a network is no bigger than a /16" { vpc = v } where v in net.vpc, v.cidr == "10.2.0.0/8"
 deny "networks are named" where v in net.vpc, v.name == "unnamed"
 deny "the database has no endpoint yet" where d in db.postgres, d.endpoint == "nowhere"
 "#;

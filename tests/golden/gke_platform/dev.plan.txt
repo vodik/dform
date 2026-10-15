@@ -13,8 +13,8 @@ tick 1  7 changes
   + google.compute_network main                     stacks/gke_platform.df:165
       name = "platform-dev-network"                 stacks/gke_platform.df:52
       peerings = [{
-        name: "envoy-dev",
-        peer_network: "projects/envoy-dev-426188/global/networks/envoy-dev-network",
+        name = "envoy-dev",
+        peer_network = "projects/envoy-dev-426188/global/networks/envoy-dev-network",
       }]
       project = "platform-dev-973682"               stacks/gke_platform.df:50
   + google.compute_subnetwork gke_subnet            stacks/gke_platform.df:138
@@ -24,8 +24,8 @@ tick 1  7 changes
       project = "platform-dev-973682"               stacks/gke_platform.df:50
       region = "us-east1"                           stacks/gke_platform.df:51
       secondary_ranges = [
-        { range_name: "platform-dev-gke-pods-range", ip_cidr_range: "10.141.80.0/21" },
-        { range_name: "platform-dev-gke-svc-range", ip_cidr_range: "10.141.88.0/21" },
+        { range_name = "platform-dev-gke-pods-range", ip_cidr_range = "10.141.80.0/21" },
+        { range_name = "platform-dev-gke-svc-range", ip_cidr_range = "10.141.88.0/21" },
       ]
       subnet_private_access = true
   + google.compute_subnetwork regional_proxy        stacks/gke_platform.df:152

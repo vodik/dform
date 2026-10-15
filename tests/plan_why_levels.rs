@@ -132,7 +132,7 @@ fn the_demo_plans_at_each_level() {
         line.contains(
             "  + network.vpc main\n    + net.vpc main.vpc                    network.df:19\n        \
              cidr = \"10.50.0.0/16\"             stacks/dform.df:10\n        \
-             tags = { env: \"staging\", component: \"network\" }\n"
+             tags = { env = \"staging\", component = \"network\" }\n"
         ) && line.contains("        vpc = main.vpc\n"),
         "{line}"
     );
@@ -151,7 +151,7 @@ fn crud_api_plans_at_each_level() {
     // resource of the tick computes is the expression that reads it.
     assert!(
         line.contains("      password = (sensitive)\n")
-            && line.contains("        PGHOST: db.private_ip_address,\n"),
+            && line.contains("        PGHOST = db.private_ip_address,\n"),
         "{line}"
     );
     assert!(
@@ -163,7 +163,7 @@ fn crud_api_plans_at_each_level() {
     let digest = "sha256:9f2c4d0e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d";
     assert!(
         line.contains(&format!(
-            "          image: \"gcr.io/shop/crud-api@{digest}\",\n"
+            "          image = \"gcr.io/shop/crud-api@{digest}\",\n"
         )),
         "{line}"
     );

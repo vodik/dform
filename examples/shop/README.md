@@ -123,7 +123,7 @@ have two authors:
 <!-- run in examples/shop -->
 ```
 $ dform query 'aws.instance["web-us-east-1a"].tags'
-{ team: "shop", Name: "shop-web-staging" }
+{ team = "shop", Name = "shop-web-staging" }
 ```
 
 After an apply, the next plan is a table too, `deformation`:

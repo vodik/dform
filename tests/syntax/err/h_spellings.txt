@@ -1,5 +1,5 @@
 error  `set main.tags` with no condition is an entry of `resource net.vpc main`, declared in the same scope
-  tests/syntax/err/h_spellings.df:9  set main.tags = { team: "x" }
+  tests/syntax/err/h_spellings.df:9  set main.tags = { team = "x" }
                                          ^^^^^^^^^
   help: write `tags = ...` in the block `resource net.vpc main { .. }`
 

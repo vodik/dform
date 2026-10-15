@@ -6,7 +6,7 @@ resource net.vpc main { cidr = "10.0.0.0/16" }
 
 # H-5: a contribution with no condition to a block of the same scope is
 # that block's entry; a program's own input takes a default or --set.
-set main.tags = { team: "x" }
+set main.tags = { team = "x" }
 # `set k = t where B` gives an input too; with no condition, see below.
 set env = "prod"
 

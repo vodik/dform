@@ -25,7 +25,7 @@ set {
   gcp.project_name = "platform-dev"
   gcp.region = "us-east1"
   gcp.network_name = "platform-dev-network"
-  gke = { control_plane_cidr: "172.16.3.96/28", subnet_cidr: "10.141.76.0/22" }
+  gke = { control_plane_cidr = "172.16.3.96/28", subnet_cidr = "10.141.76.0/22" }
 } where env == "dev"
 
 project(
@@ -77,14 +77,14 @@ resource k8s.namespace gke_platform { metadata.name = "gke-platform" }
 resource k8s.deployment api {
   metadata.namespace = ns
   spec.replicas = 3
-  spec.selector.matchLabels = { app: "api" }
-  spec.template.metadata.labels = { app: "api" }
-  spec.template.spec.containers = [{ name: "api", image: "gcr.io/platform/api:1.42" }]
+  spec.selector.matchLabels = { app = "api" }
+  spec.template.metadata.labels = { app = "api" }
+  spec.template.spec.containers = [{ name = "api", image = "gcr.io/platform/api:1.42" }]
 } where ns = k8s.namespace["gke_platform"].metadata.name
 
 resource k8s.secret db_credentials {
   metadata.namespace = ns
-  data = { password: google.secret_manager_secret_version["db_pw"].secret_data }
+  data = { password = google.secret_manager_secret_version["db_pw"].secret_data }
 } where ns = k8s.namespace["gke_platform"].metadata.name
 
 # One nodepool per zone: member over an open null is a content position.
@@ -97,11 +97,11 @@ resource google.container_node_pool "np-${z}" {
 
 zone_count(n) where n = count(z), z in google.container_cluster["gke_platform"].zones
 
-deny "cluster must be in at least two zones" { cluster: "gke_platform" }
+deny "cluster must be in at least two zones" { cluster = "gke_platform" }
   where "gke_platform" in google.container_cluster, zone_count(n), n < 2
 
 # A policy that has nothing to do with zones. Under coarse Rule 3 it would be
 # undetermined anyway (a `want` rule is stuck), which is the spurious case;
 # per key it is decided now, and holds.
-deny "cluster must not be deletable" { cluster: c }
+deny "cluster must not be deletable" { cluster = c }
   where c in google.container_cluster, not c.deletion_protection

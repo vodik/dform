@@ -121,7 +121,7 @@ fn why_names_the_activation_and_the_copy() {
     let s = Scratch::new("diag-why");
     s.write(
         "tags.df",
-        "\n\n\n\n\n\narg(t, a, \"tags\", { team: \"x\" }) where want(t, a)\n",
+        "\n\n\n\n\n\narg(t, a, \"tags\", { team = \"x\" }) where want(t, a)\n",
     );
     s.write(
         "p.df",
@@ -145,7 +145,7 @@ fn why_names_the_activation_and_the_copy() {
     );
     assert!(
         out.contains(
-            "tags.df:7  arg(t, a, \"tags\", { team: \"x\" }) where want(t, a)   (use tags)\n"
+            "tags.df:7  arg(t, a, \"tags\", { team = \"x\" }) where want(t, a)   (use tags)\n"
         ),
         "{out}"
     );

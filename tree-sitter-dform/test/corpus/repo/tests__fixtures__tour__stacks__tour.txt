@@ -171,9 +171,9 @@ resource db.postgres orders {
 # that refused it. There is no separate step: every plan and every apply
 # checks every deny.
 
-set r.tags = { team: "shop" } where r in resource
+set r.tags = { team = "shop" } where r in resource
 
-deny "a database must not be public" { database: pg } where pg in db.postgres, pg.public
+deny "a database must not be public" { database = pg } where pg in db.postgres, pg.public
 
 # 6. Why
 #
@@ -207,7 +207,7 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 # the policy another, and the vpc has both:
 #
 #   $ dform query 'net.vpc["blue.vpc"].tags'
-#   { team: "shop", component: "network" }
+#   { team = "shop", component = "network" }
 #
 # In Terraform an attribute has one author, and a policy's tag has to be
 # threaded into every module as a variable and merged by hand (the AWS
@@ -219,7 +219,7 @@ component network {
   input cidr: inet
   output vpc: net.vpc = vpc
 
-  resource net.vpc vpc { cidr, tags = { component: "network" } }
+  resource net.vpc vpc { cidr, tags = { component = "network" } }
 
   resource net.subnet "private-${z}" {
     vpc
@@ -289,7 +289,7 @@ reaches(a, c) where reaches(a, b), link(b, c)
 # every rule that holds adds to.
 resource net.route_table "${n}" { vpc = net.vpc[v] } where network_of(n, v)
 
-set net.route_table[a].routes = [{ destination: dest, target: net.vpc[w] }] where
+set net.route_table[a].routes = [{ destination = dest, target = net.vpc[w] }] where
   reaches(a, b),
   a != b,
   network_of(b, w),
@@ -324,7 +324,7 @@ set net.route_table[a].routes = [{ destination: dest, target: net.vpc[w] }] wher
 #   stack tour is up to date
 
 resource iam.policy "connect-${host}" {
-  statements = [{ action: "db.connect", resource: host }]
+  statements = [{ action = "db.connect", resource = host }]
 } where pg in db.postgres, host = pg.endpoint
 
 # 11. Where to go next

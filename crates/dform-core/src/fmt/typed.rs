@@ -667,20 +667,20 @@ mod tests {
     #[test]
     fn a_quantity_string_in_a_quantity_position_loses_its_quotes() {
         let src = "resource k8s.deployment d {\n  metadata.name = \"2Gi\"\n  \
-                   spec.template.spec.containers = [{\n    name: \"a\",\n    \
-                   resources: { limits: { memory: \"2Gi\", cpu: \"500m\" }, requests: { cpu: \"lots\" } },\n  }]\n}\n";
+                   spec.template.spec.containers = [{\n    name = \"a\",\n    \
+                   resources = { limits = { memory = \"2Gi\", cpu = \"500m\" }, requests = { cpu = \"lots\" } },\n  }]\n}\n";
         let want = "resource k8s.deployment d {\n  metadata.name = \"2Gi\"\n  \
-                    spec.template.spec.containers = [{\n    name: \"a\",\n    \
-                    resources: { limits: { memory: 2Gi, cpu: 500m }, requests: { cpu: \"lots\" } },\n  }]\n}\n";
+                    spec.template.spec.containers = [{\n    name = \"a\",\n    \
+                    resources = { limits = { memory = 2Gi, cpu = 500m }, requests = { cpu = \"lots\" } },\n  }]\n}\n";
         assert_eq!(fmt(src), want);
     }
 
     /// Through a variable bound over a keyed list's elements (R-69).
     #[test]
     fn a_set_through_an_element_is_typed() {
-        let src = "set c.resources.limits = { memory: \"1Gi\" } @default\n  \
+        let src = "set c.resources.limits = { memory = \"1Gi\" } @default\n  \
                    where w in k8s.deployment, c in w.spec.template.spec.containers\n";
-        let want = "set c.resources.limits = { memory: 1Gi } @default\n  \
+        let want = "set c.resources.limits = { memory = 1Gi } @default\n  \
                     where w in k8s.deployment, c in w.spec.template.spec.containers\n";
         assert_eq!(fmt(src), want);
     }

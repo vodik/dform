@@ -6,7 +6,7 @@ decl private_subnet(subnet: net.subnet)
 output vpc: net.vpc = vpc
 output private_subnet
 
-resource net.vpc vpc { cidr = vpc_net, tags = { env, component: "network" } }
+resource net.vpc vpc { cidr = vpc_net, tags = { env, component = "network" } }
 
 zone_index("us-test-1a", 0)
 zone_index("us-test-1b", 1)

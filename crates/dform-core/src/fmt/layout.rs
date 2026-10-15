@@ -32,6 +32,7 @@ use super::doc::{
 };
 use crate::syntax::SyntaxKind::{self, *};
 use crate::syntax::{SyntaxElement, SyntaxNode, SyntaxToken};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 /// The width `fmt` prints in.
@@ -224,6 +225,59 @@ fn parent_kind(t: &SyntaxToken) -> Option<SyntaxKind> {
     t.parent().map(|p| p.kind())
 }
 
+/// An object's `key: value`, the spelling `=` replaced: printed `=`.
+fn object_colon(t: &SyntaxToken) -> bool {
+    t.kind() == COLON
+        && t.parent().is_some_and(|f| {
+            f.kind() == OBJECT_FIELD && f.parent().is_some_and(|o| o.kind() == OBJECT)
+        })
+}
+
+/// A token as `fmt` writes it: an object's `:` is `=`, in a string's
+/// holes too.
+fn written(t: &SyntaxToken) -> Cow<'_, str> {
+    match t.kind() {
+        _ if object_colon(t) => Cow::Borrowed("="),
+        STRING if t.text().contains("${") => holes_written(t),
+        _ => Cow::Borrowed(t.text()),
+    }
+}
+
+/// A string whose holes write an object's `key: value`, with `key = value`.
+fn holes_written(t: &SyntaxToken) -> Cow<'_, str> {
+    let base = usize::from(t.text_range().start());
+    let mut colons: Vec<usize> = crate::names::holes(t)
+        .into_iter()
+        .flat_map(|(at, tree)| {
+            tree.descendants_with_tokens()
+                .filter_map(|e| e.into_token())
+                .filter(object_colon)
+                .map(move |c| usize::from(at + c.text_range().start()) - base)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    if colons.is_empty() {
+        return Cow::Borrowed(t.text());
+    }
+    colons.sort_unstable();
+    let text = t.text();
+    let mut out = String::with_capacity(text.len() + 2 * colons.len());
+    let mut from = 0;
+    for at in colons {
+        out.push_str(&text[from..at]);
+        if !out.ends_with(char::is_whitespace) {
+            out.push(' ');
+        }
+        out.push('=');
+        if !text[at + 1..].starts_with(char::is_whitespace) {
+            out.push(' ');
+        }
+        from = at + 1;
+    }
+    out.push_str(&text[from..]);
+    Cow::Owned(out)
+}
+
 fn is_open(k: SyntaxKind) -> bool {
     matches!(k, L_PAREN | L_BRACKET | L_BRACE)
 }
@@ -251,7 +305,7 @@ fn space(prev: &SyntaxToken, cur: &SyntaxToken) -> &'static str {
     if matches!(p, PLUS | MINUS) && matches!(pp, Some(UNARY_EXPR | BIND_ARG)) {
         return "";
     }
-    if matches!(c, COMMA | R_PAREN | COLON) {
+    if matches!(c, COMMA | R_PAREN) || c == COLON && !object_colon(cur) {
         return "";
     }
     // Calls, atoms, type applications, declarations, a let's parameters
@@ -320,7 +374,7 @@ impl Layout {
             v.push(text(c.text));
             v.push(hard(false));
         }
-        v.push(text(t.text()));
+        v.push(text(written(t).into_owned()));
         for c in self.take_trailing(t) {
             v.push(Doc::Suffix(format!(" {c}")));
             v.push(Doc::BreakParent);

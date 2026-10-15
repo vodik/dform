@@ -1525,24 +1525,30 @@ fn setting_text(span: Span, key: &str) -> Option<String> {
     // those inside a call or a string (`str.format("kc@%s", server.ip)`).
     let (mut depth, mut quoted, mut from) = (0i32, false, 0);
     let mut entries = Vec::new();
+    let mut end = body.len();
     for (i, c) in body.char_indices() {
         match c {
             '"' => quoted = !quoted,
             '(' | '[' | '{' if !quoted => depth += 1,
+            // The settings' own `}`: `provider_config("k", { k = v })`'s.
+            ')' | ']' | '}' if !quoted && depth == 0 => {
+                end = i;
+                break;
+            }
             ')' | ']' | '}' if !quoted => depth -= 1,
-            '\n' | ',' if !quoted && depth <= 0 => {
+            '\n' | ',' if !quoted && depth == 0 => {
                 entries.push(&body[from..i]);
                 from = i + 1;
             }
             _ => {}
         }
     }
-    entries.push(&body[from..]);
+    entries.push(&body[from..end]);
     entries
         .into_iter()
         .filter_map(|e| e.split_once('='))
         .find(|(k, _)| k.trim() == key)
-        .map(|(_, v)| v.trim().trim_end_matches('}').trim().to_string())
+        .map(|(_, v)| v.trim().to_string())
         .filter(|v| !v.is_empty())
 }
 

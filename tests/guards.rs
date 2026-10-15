@@ -199,10 +199,10 @@ fn a_guarded_provider_is_configured_where_its_clause_holds() {
             .stdout
     };
     let aws = config("cloud=aws");
-    assert!(aws.contains("\"fake\"  {region: \"eu-west-1\"}"), "{aws}");
+    assert!(aws.contains("\"fake\"  {region = \"eu-west-1\"}"), "{aws}");
     assert!(!aws.contains("us-east-1") && !aws.contains("gke"), "{aws}");
     let gcp = config("cloud=gcp");
-    assert!(gcp.contains("\"fake\"  {region: \"us-east-1\"}"), "{gcp}");
+    assert!(gcp.contains("\"fake\"  {region = \"us-east-1\"}"), "{gcp}");
     assert!(gcp.contains("\"gke\"   {}"), "{gcp}");
     let r = s.run(&["dev", "effects", "p.df"]).success();
     for want in [

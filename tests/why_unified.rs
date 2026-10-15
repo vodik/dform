@@ -28,7 +28,7 @@ resource net.subnet "private-${availability_zone}" {
   zone = availability_zone
 } where availability_zone("available", availability_zone, n)
 
-set s.tags = { tier: "edge" } where s in net.subnet, s.zone == "us-east-1c"
+set s.tags = { tier = "edge" } where s in net.subnet, s.zone == "us-east-1c"
 "#;
 
 fn shop(name: &str) -> Scratch {
@@ -136,7 +136,7 @@ fn an_attribute_names_the_condition_and_the_value_there() {
     assert_eq!(
         r.stdout,
         "net.subnet private-us-east-1a.tags.tier: no rule derives it\n  \
-         stacks/shop.df:19  set s.tags = { tier: \"edge\" } where s in net.subnet, s.zone == \
+         stacks/shop.df:19  set s.tags = { tier = \"edge\" } where s in net.subnet, s.zone == \
          \"us-east-1c\"\n    \
          net.subnet private-us-east-1a.zone = \"us-east-1c\": no row\n    \
          nearest: net.subnet private-us-east-1a.zone = \"us-east-1a\"\n"
@@ -261,7 +261,7 @@ fn a_group_says_its_tick_as_a_lower_bound() {
         r#"
 resource db.postgres orders { size = 1 }
 resource iam.policy "connect-${host}" {
-  statements = [{ action: "db.connect", resource: host }]
+  statements = [{ action = "db.connect", resource = host }]
 } where pg in db.postgres, host = pg.endpoint
 use fake
 "#,
@@ -291,7 +291,7 @@ fn a_deny_by_its_message_says_whether_it_holds() {
     assert_eq!(
         r.stdout,
         "deny \"no vpcs\": holds\n\
-         deny \"no vpcs\" {v: \"main\"}\n  \
+         deny \"no vpcs\" {v = \"main\"}\n  \
          p.df:3  deny \"no vpcs\" { v } where v in net.vpc\n  \
          with v = net.vpc main\n  \
          └─ net.vpc main   p.df:2\n"

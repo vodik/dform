@@ -14,7 +14,7 @@ output private_subnet_ids = [ ref(net.subnet, sn, "id") |
 
 resource net.vpc vpc {
   cidr = net_
-  tags = { env: e, component: "network" }
+  tags = { env = e, component = "network" }
 } where env(e), net_ = vpc_net
 
 zone_index(z, i) where zs = zones, member(zs, i, z)

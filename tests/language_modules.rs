@@ -221,7 +221,7 @@ fn a_module_writes_without_a_grant_and_its_relations_are_its_own() {
         r#"
 
 team("x")
-arg(t, a, "tags", { team: v }) where want(t, a), team(v)
+arg(t, a, "tags", { team = v }) where want(t, a), team(v)
 set a.cidr = "10.9.0.0/16" @override where a in net.vpc
 "#,
     );
@@ -355,7 +355,7 @@ component vpc {
   input range: cidr
   resource net.vpc vpc {
     cidr = range
-    tags = { region: config.region }
+    tags = { region = config.region }
   }
   output vpc: net.vpc = vpc
 }
@@ -390,7 +390,7 @@ use postgres
 tiers(t) where config.tier(t)
 vpcs(n, v) where n in ["main", "spare"], v = lan.vpc[n].vpc
 resource compute.vm bastion {
-  tags = { region: config.region, tier: t }
+  tags = { region = config.region, tier = t }
 } where tiers(t)
 "#,
     );
@@ -493,7 +493,7 @@ fn a_clause_gates_a_copy_and_an_activation() {
     let s = Scratch::new("lang-modules-gates");
     s.write(
         "tagged.df",
-        "\n\nset r.tags = { audited: true } where r in resource\n",
+        "\n\nset r.tags = { audited = true } where r in resource\n",
     );
     s.write(
         "p.df",
@@ -574,7 +574,7 @@ fn a_module_used_from_two_stacks_fires_in_both() {
     let s = Scratch::project("lang-modules-two-stacks");
     s.write(
         "baseline.df",
-        "\n\nset r.tags = { team: \"platform\" } where r in resource\n\
+        "\n\nset r.tags = { team = \"platform\" } where r in resource\n\
          deny \"no public vm\" where v in compute.vm, v.public == true\n",
     );
     s.write(
@@ -764,7 +764,7 @@ fn a_module_writes_through_an_input_that_is_a_reference() {
     let s = Scratch::project("lang-modules-ref-input");
     s.write(
         "m.df",
-        "\ninput role: iam.role\nset role.tags = { team: \"x\" }\n\
+        "\ninput role: iam.role\nset role.tags = { team = \"x\" }\n\
          resource iam.policy \"eq-${n}\" { name = n } where r in iam.role, r == role, n = r.name\n\
          resource iam.policy \"ne-${n}\" { name = n } where r in iam.role, r != role, n = r.name\n\
          resource iam.policy has { name = role.name } where has role.name\n",

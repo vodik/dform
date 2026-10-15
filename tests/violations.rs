@@ -8,7 +8,7 @@ use common::Scratch;
 const PROG: &str = r#"
 use fake
 resource db.postgres main { size = 1 }
-deny "image not pinned" { image: "traefik:v3.7", size: s } where d in db.postgres, s = d.size
+deny "image not pinned" { image = "traefik:v3.7", size = s } where d in db.postgres, s = d.size
 "#;
 
 /// The plan's refusal names the deny and its bindings, as a program

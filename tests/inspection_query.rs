@@ -152,7 +152,7 @@ fn a_resources_table_says_a_value_in_program_order() {
     s.write(
         "p.df",
         "use fake\n\
-         resource net.vpc main { cidr = \"10.0.0.0/16\", tags = { team: \"shop\", component: \"network\" } }\n",
+         resource net.vpc main { cidr = \"10.0.0.0/16\", tags = { team = \"shop\", component = \"network\" } }\n",
     );
     let out = s
         .run(&["dev", "--world", "w.json", "query", "main", "p.df"])
@@ -160,7 +160,7 @@ fn a_resources_table_says_a_value_in_program_order() {
         .stdout;
     assert!(
         out.lines()
-            .any(|l| l == "\"tags\"  { team: \"shop\", component: \"network\" }"),
+            .any(|l| l == "\"tags\"  { team = \"shop\", component = \"network\" }"),
         "{out}"
     );
 }

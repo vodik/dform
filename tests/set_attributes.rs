@@ -233,8 +233,8 @@ fn a_networks_peerings_are_a_set_of_objects() {
     s.write(
         "p.df",
         "resource google.compute_network main {\n  name = \"main\"\n  \
-         peerings = [{ name: \"a\", peer_network: \"projects/a/global/networks/a\" }]\n}\n\
-         set n.peerings = [{ name: \"b\", peer_network: \"projects/b/global/networks/b\" }] \
+         peerings = [{ name = \"a\", peer_network = \"projects/a/global/networks/a\" }]\n}\n\
+         set n.peerings = [{ name = \"b\", peer_network = \"projects/b/global/networks/b\" }] \
          where n in google.compute_network\n",
     );
     let out = s
@@ -243,7 +243,7 @@ fn a_networks_peerings_are_a_set_of_objects() {
         .stdout;
     assert!(
         out.contains(
-            "      peerings[1] = { name: \"b\", peer_network: \"projects/b/global/networks/b\" }  p.df:5\n"
+            "      peerings[1] = { name = \"b\", peer_network = \"projects/b/global/networks/b\" }  p.df:5\n"
         ),
         "{out}"
     );

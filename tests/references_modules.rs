@@ -74,7 +74,7 @@ fn every_copys_relation_carries_references() {
          az(\"a\", 0)\naz(\"b\", 1)\n\
          resource vnet blue { cidr = \"10.0.0.0/16\" }\n\
          resource vnet green { cidr = \"10.1.0.0/16\" }\n\
-         deny \"zone\" { copy: t, cidr: c } where vnet[t].subnet(s), s.zone == \"b\", c = s.cidr\n",
+         deny \"zone\" { copy = t, cidr = c } where vnet[t].subnet(s), s.zone == \"b\", c = s.cidr\n",
     );
     let r = mock(&s, &["plan"]).failure();
     let fired = common::refused_for(&r.stderr, "zone");

@@ -53,8 +53,8 @@ const STACK: &str = "stacks/crud_api.df";
 /// The Secret labelled: a change that sends no secret.
 fn label(s: &Scratch) {
     let text = s.read(STACK).replace(
-        r#"metadata = { name: "crud-api-db", namespace: shop.metadata.name }"#,
-        r#"metadata = { name: "crud-api-db", namespace: shop.metadata.name, labels: { team: "shop" } }"#,
+        r#"metadata = { name = "crud-api-db", namespace = shop.metadata.name }"#,
+        r#"metadata = { name = "crud-api-db", namespace = shop.metadata.name, labels = { team = "shop" } }"#,
     );
     s.write(STACK, &text);
 }
@@ -62,8 +62,8 @@ fn label(s: &Scratch) {
 /// The namespace labelled: a change of a resource that holds no secret.
 fn namespace(s: &Scratch) {
     let text = s.read(STACK).replace(
-        r#"metadata.labels = { "pod-security.kubernetes.io/enforce": "restricted" }"#,
-        r#"metadata.labels = { "pod-security.kubernetes.io/enforce": "restricted", team: "shop" }"#,
+        r#"metadata.labels = { "pod-security.kubernetes.io/enforce" = "restricted" }"#,
+        r#"metadata.labels = { "pod-security.kubernetes.io/enforce" = "restricted", team = "shop" }"#,
     );
     s.write(STACK, &text);
 }

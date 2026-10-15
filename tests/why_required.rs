@@ -17,7 +17,7 @@ let ns = namespace.metadata.name
 component volume {
   input name: string
   resource k8s.cron_job job {
-    metadata = { name: "backup-${name}", namespace: backups.ns }
+    metadata = { name = "backup-${name}", namespace = backups.ns }
     spec.schedule = "0 3 * * *"
     spec.jobTemplate.spec.backoffLimit = 1
   }
@@ -123,8 +123,8 @@ fn a_required_attribute_written_is_not_listed() {
         &BACKUPS.replace(
             "    spec.jobTemplate.spec.backoffLimit = 1\n",
             "    spec.jobTemplate.spec.backoffLimit = 1\n    \
-             spec.jobTemplate.spec.template.spec = { restartPolicy: \"Never\", \
-             containers: [{ name: \"restic\", image: \"restic\" }] }\n",
+             spec.jobTemplate.spec.template.spec = { restartPolicy = \"Never\", \
+             containers = [{ name = \"restic\", image = \"restic\" }] }\n",
         ),
     );
     let r = run(&s, &["plan", "apps"]).success();

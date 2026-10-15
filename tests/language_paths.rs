@@ -56,7 +56,7 @@ fn a_package_mounts_another_project() {
     );
     s.write(
         "app/stacks/web.df",
-        "\nuse fake\nuse infra.config\nresource compute.vm web {\n  tags = { domain: config.domain }\n}\n",
+        "\nuse fake\nuse infra.config\nresource compute.vm web {\n  tags = { domain = config.domain }\n}\n",
     );
     let r = s.run_in("app", &["plan", "web"]).success();
     assert!(

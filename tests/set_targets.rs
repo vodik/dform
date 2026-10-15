@@ -12,13 +12,13 @@ use common::{Run, Scratch};
 const DEPLOYMENTS: &str = "\nuse k8s\non(1)\n\
     resource k8s.deployment web {\n  \
     metadata.name = \"web\"\n  \
-    spec.selector.matchLabels = { app: \"web\" }\n  \
-    spec.template.spec.containers = [{ name: \"web\", image: \"web:1\" }]\n\
+    spec.selector.matchLabels = { app = \"web\" }\n  \
+    spec.template.spec.containers = [{ name = \"web\", image = \"web:1\" }]\n\
     }\n\
     resource k8s.deployment \"${n}\" {\n  \
     metadata.name = n\n  \
-    spec.selector.matchLabels = { app: n }\n  \
-    spec.template.spec.containers = [{ name: n, image: \"api:1\" }]\n\
+    spec.selector.matchLabels = { app = n }\n  \
+    spec.template.spec.containers = [{ name = n, image = \"api:1\" }]\n\
     } where n in [\"api\"]\n";
 
 fn plan(name: &str, sets: &str) -> Run {

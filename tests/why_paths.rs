@@ -23,7 +23,7 @@ const MAIN: &str = r#"use kube
 
 resource kube.service pg {
   metadata.name = "pg"
-  spec = { selector: { app: "pg" }, ports: [{ port: 5432, targetPort: 5432 }] }
+  spec = { selector = { app = "pg" }, ports = [{ port = 5432, targetPort = 5432 }] }
   spec.aliases = ["db", "postgres"]
 }
 "#;
@@ -73,7 +73,7 @@ fn why_takes_each_path_the_plan_prints() {
         );
     }
     let field = "kube.service pg.spec.ports[port=5432,protocol=TCP].targetPort = 5432\n  \
-                 = [{ port: 5432, targetPort: 5432 }]  main.df:5\n";
+                 = [{ port = 5432, targetPort = 5432 }]  main.df:5\n";
     for p in [
         "pg.spec.ports[port=5432,protocol=TCP].targetPort",
         "kube.service pg.spec.ports[port=5432,protocol=TCP].targetPort",
@@ -126,11 +126,11 @@ fn why_says_a_value_as_the_plan_does() {
     let s = project("why-paths-fold");
     let plan = run(&s, &["plan", "main.df"]).success().stdout;
     let value = r#"spec = {
-  selector: { app: "pg" },
-  ports: [{
-    port: 5432,
-    targetPort: 5432,
-    protocol: "TCP" (schema default),
+  selector = { app = "pg" },
+  ports = [{
+    port = 5432,
+    targetPort = 5432,
+    protocol = "TCP" (schema default),
   }],
 }
 "#;
@@ -140,7 +140,7 @@ fn why_says_a_value_as_the_plan_does() {
     assert!(
         why.starts_with(&format!(
             "kube.service pg.{value}  \
-             = {{ selector: {{ app: \"pg\" }}, ports: [{{ port: 5432, targetPort: 5432 }}] }}  \
+             = {{ selector = {{ app = \"pg\" }}, ports = [{{ port = 5432, targetPort = 5432 }}] }}  \
              main.df:5\n"
         )),
         "{why}"
@@ -153,9 +153,9 @@ fn why_says_a_value_as_the_plan_does() {
     .stdout;
     assert_eq!(
         why,
-        "kube.service pg.spec.ports[port=5432,protocol=TCP] = {\n  port: 5432,\n  \
-         targetPort: 5432,\n  protocol: \"TCP\" (schema default),\n}\n  \
-         = [{ port: 5432, targetPort: 5432 }]  main.df:5\n"
+        "kube.service pg.spec.ports[port=5432,protocol=TCP] = {\n  port = 5432,\n  \
+         targetPort = 5432,\n  protocol = \"TCP\" (schema default),\n}\n  \
+         = [{ port = 5432, targetPort = 5432 }]  main.df:5\n"
     );
 }
 
@@ -233,9 +233,9 @@ fn the_full_address_takes_a_keyed_element() {
 fn query_takes_each_path_the_plan_prints() {
     let s = project("query-paths");
     let element =
-        "{\n  port: 5432,\n  targetPort: 5432,\n  protocol: \"TCP\" (schema default),\n}\n";
+        "{\n  port = 5432,\n  targetPort = 5432,\n  protocol = \"TCP\" (schema default),\n}\n";
     let list =
-        "[{\n  port: 5432,\n  targetPort: 5432,\n  protocol: \"TCP\" (schema default),\n}]\n";
+        "[{\n  port = 5432,\n  targetPort = 5432,\n  protocol = \"TCP\" (schema default),\n}]\n";
     for (p, want) in [
         ("pg.spec.ports", list),
         ("kube.service pg.spec.ports", list),
@@ -290,7 +290,7 @@ fn plan_why_and_query_say_a_value_alike() {
     );
     // In the plan, the value `spec` holds, under its key, a comma after.
     let plan = run(&s, &["plan", "main.df"]).success().stdout;
-    let held: String = format!("ports: {}", query.trim_end())
+    let held: String = format!("ports = {}", query.trim_end())
         .lines()
         .map(|l| format!("        {l}\n"))
         .collect();
@@ -359,9 +359,9 @@ fn a_query_path_that_reaches_nothing_says_the_nearest() {
 fn query_orders_a_value_several_writes_made() {
     let s = project("query-paths-writers");
     let q = run(&s, &["query", "pg.spec", "main.df"]).success().stdout;
-    assert!(q.starts_with("{\n  selector: "), "{q}");
+    assert!(q.starts_with("{\n  selector = "), "{q}");
     assert!(
-        q.ends_with("  aliases: [\"db\", \"postgres\"],\n}\n"),
+        q.ends_with("  aliases = [\"db\", \"postgres\"],\n}\n"),
         "{q}"
     );
     // The aliases written first: first.
@@ -372,7 +372,7 @@ fn query_orders_a_value_several_writes_made() {
     );
     let q = run(&s, &["query", "pg.spec", "main.df"]).success().stdout;
     assert!(
-        q.starts_with("{\n  aliases: [\"db\", \"postgres\"],\n  selector: "),
+        q.starts_with("{\n  aliases = [\"db\", \"postgres\"],\n  selector = "),
         "{q}"
     );
 }

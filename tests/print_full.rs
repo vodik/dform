@@ -12,10 +12,10 @@ fn project(name: &str) -> Scratch {
     let s = Scratch::project(name);
     s.write(
         "synapse.df",
-        "let files = [{ path: \"/etc/f${i}.conf\", content: \"line ${i} of a config file that is long enough\" } \
+        "let files = [{ path = \"/etc/f${i}.conf\", content = \"line ${i} of a config file that is long enough\" } \
          | i in 0..30]\n\
-         let agent_init = \"#cloud-config\\n${yaml.encode({ package_update: true, write_files: files, \
-         runcmd: [\"systemctl enable nftables\"] })}\"\n\
+         let agent_init = \"#cloud-config\\n${yaml.encode({ package_update = true, write_files = files, \
+         runcmd = [\"systemctl enable nftables\"] })}\"\n\
          let token: secret(string) = \"${agent_init}# sealed\"\n",
     );
     s.write(

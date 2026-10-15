@@ -126,7 +126,7 @@ indenting leaves its lines as written."
 the string's text and quotes are a string, on every line (R-174)."
   (dform-ts-mode-test--ensure-grammar)
   (with-temp-buffer
-    (insert "let init = \"#cloud-config\n${yaml.encode({ foo: true, size: 500m })} b\"\n")
+    (insert "let init = \"#cloud-config\n${yaml.encode({ foo = true, size = 500m })} b\"\n")
     (let ((treesit-font-lock-level 4))
       (dform-ts-mode))
     (font-lock-ensure)

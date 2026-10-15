@@ -89,7 +89,7 @@ impl<'a> Project<'a> {
         let mut toml = std::fs::read_to_string(s.path("dform.toml")).unwrap();
         toml.push_str(&format!(
             "\n[defaults]\nbackend = 's3(\"{}\", \"{prefix}/{{stack}}\", \
-             {{endpoint: \"{}\", region: \"us-east-1\"}})'\n\
+             {{endpoint = \"{}\", region = \"us-east-1\"}})'\n\
              lease_duration = \"{}ms\"\nlease_renewal = \"500ms\"\n\n\
              [secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n",
             t.bucket,
@@ -126,7 +126,7 @@ impl<'a> Project<'a> {
     /// `s3(...)` of `rel` in the project's prefix, as a backend term.
     fn term(&self, rel: &str) -> String {
         format!(
-            "s3(\"{}\", \"{}/{rel}\", {{endpoint: \"{}\", region: \"us-east-1\"}})",
+            "s3(\"{}\", \"{}/{rel}\", {{endpoint = \"{}\", region = \"us-east-1\"}})",
             self.t.bucket, self.prefix, self.t.endpoint
         )
     }

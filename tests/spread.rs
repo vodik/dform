@@ -7,32 +7,32 @@
 use crate::common;
 use common::{Scratch, error, facts};
 
-const BASE: &str = "base({a: 1, b: 2, spec: {replicas: 1, image: \"x\"}})\n";
+const BASE: &str = "base({a = 1, b = 2, spec = {replicas = 1, image = \"x\"}})\n";
 
 #[test]
 fn an_object_takes_the_fields_then_the_written_ones_last_wins() {
     let p = |body: &str| facts(&format!("{BASE}p(x) where base(b), x = {body}\n"), "p");
     assert_eq!(
-        p("{ ..b, b: 3, c: 4 }"),
-        ["p({a: 1, b: 3, c: 4, spec: {image: \"x\", replicas: 1}})"]
+        p("{ ..b, b = 3, c = 4 }"),
+        ["p({a = 1, b = 3, c = 4, spec = {image = \"x\", replicas = 1}})"]
     );
     // Before the spread, a written key is a default the spread replaces.
     assert_eq!(
-        p("{ b: 3, z: 0, ..b }"),
-        ["p({a: 1, b: 2, spec: {image: \"x\", replicas: 1}, z: 0})"]
+        p("{ b = 3, z = 0, ..b }"),
+        ["p({a = 1, b = 2, spec = {image = \"x\", replicas = 1}, z = 0})"]
     );
     // No deep merge: a nested object written replaces, depth is spelled.
     assert_eq!(
-        p("{ ..b, spec: { replicas: 3 } }"),
-        ["p({a: 1, b: 2, spec: {replicas: 3}})"]
+        p("{ ..b, spec = { replicas = 3 } }"),
+        ["p({a = 1, b = 2, spec = {replicas = 3}})"]
     );
     assert_eq!(
-        p("{ ..b, spec: { ..b.spec, replicas: 3 } }"),
-        ["p({a: 1, b: 2, spec: {image: \"x\", replicas: 3}})"]
+        p("{ ..b, spec = { ..b.spec, replicas = 3 } }"),
+        ["p({a = 1, b = 2, spec = {image = \"x\", replicas = 3}})"]
     );
     assert_eq!(
-        facts("p(x) where x = { ..{a: 1}, b: 2 }\n", "p"),
-        ["p({a: 1, b: 2})"]
+        facts("p(x) where x = { ..{a = 1}, b = 2 }\n", "p"),
+        ["p({a = 1, b = 2})"]
     );
 }
 
@@ -62,7 +62,7 @@ fn a_list_concatenates_and_a_discrete_range_enumerates() {
 
 #[test]
 fn a_spread_of_the_wrong_kind_is_an_error_where_it_is_known() {
-    let e = error("p(x) where x = { ..[1], b: 2 }\n");
+    let e = error("p(x) where x = { ..[1], b = 2 }\n");
     assert!(
         e.contains(
             "t.df:2:18: `..[1]` spreads a list into an object, which takes an object's fields\n  \
@@ -70,11 +70,11 @@ fn a_spread_of_the_wrong_kind_is_an_error_where_it_is_known() {
         ),
         "{e}"
     );
-    let e = error("p(x) where x = [..{a: 1}]\n");
+    let e = error("p(x) where x = [..{a = 1}]\n");
     assert!(
         e.contains(
-            "`..{a: 1}` spreads an object into a list, which takes a list's elements\n  \
-             help: an object spreads into an object, `{ ..{a: 1} }`"
+            "`..{a = 1}` spreads an object into a list, which takes a list's elements\n  \
+             help: an object spreads into an object, `{ ..{a = 1} }`"
         ),
         "{e}"
     );
@@ -110,9 +110,9 @@ fn a_spread_of_the_wrong_kind_is_an_error_where_it_is_known() {
 /// after a spread is its override, not a second write.
 #[test]
 fn a_key_written_twice_names_both() {
-    let e = error("p(x) where x = { a: 1, ..{b: 1}, a: 2 }\n");
+    let e = error("p(x) where x = { a = 1, ..{b = 1}, a = 2 }\n");
     assert!(
-        e.contains("t.df:2:34: key `a` given twice\n  t.df:2:18: `a` is first given here"),
+        e.contains("t.df:2:36: key `a` given twice\n  t.df:2:18: `a` is first given here"),
         "{e}"
     );
 }
@@ -124,7 +124,7 @@ fn a_spread_of_the_wrong_kind_at_run_time_is_located() {
     let s = Scratch::project("spread-runtime");
     s.write(
         "stacks/lab.df",
-        "use fake\nlet base = [\"web\"]\nresource compute.vm a {\n  size = \"small\"\n  labels = { ..base, tier: \"back\" }\n}\n",
+        "use fake\nlet base = [\"web\"]\nresource compute.vm a {\n  size = \"small\"\n  labels = { ..base, tier = \"back\" }\n}\n",
     );
     let r = s.run(&["plan", "lab"]).failure();
     assert!(
@@ -144,12 +144,12 @@ fn why_shows_the_spread_and_its_source() {
     let s = Scratch::project("spread-why");
     s.write(
         "stacks/lab.df",
-        "use fake\n\nlet base = { team: \"web\", tier: \"front\" }\n\nresource compute.vm a {\n  size = \"small\"\n  labels = { ..base, tier: \"back\" }\n}\n",
+        "use fake\n\nlet base = { team = \"web\", tier = \"front\" }\n\nresource compute.vm a {\n  size = \"small\"\n  labels = { ..base, tier = \"back\" }\n}\n",
     );
     let r = s.run(&["plan", "lab"]).success();
     assert!(
         r.stdout
-            .contains("labels = { team: \"web\", tier: \"back\" }"),
+            .contains("labels = { team = \"web\", tier = \"back\" }"),
         "{}",
         r.stdout
     );
@@ -157,9 +157,9 @@ fn why_shows_the_spread_and_its_source() {
         .run(&["why", "--tree", "compute.vm a.labels", "lab"])
         .success();
     for line in [
-        "stacks/lab.df:7  resource compute.vm a { .. labels = { ..base, tier: \"back\" } }",
-        "with base = {team: \"web\", tier: \"front\"}",
-        "└─ let base = {team: \"web\", tier: \"front\"}",
+        "stacks/lab.df:7  resource compute.vm a { .. labels = { ..base, tier = \"back\" } }",
+        "with base = {team = \"web\", tier = \"front\"}",
+        "└─ let base = {team = \"web\", tier = \"front\"}",
         "stacks/lab.df:3",
     ] {
         assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
@@ -183,7 +183,7 @@ fn an_unknown_source_waits() {
     );
     s.write(
         "stacks/lab.df",
-        "use fake\nresource db.volume v { size = 1 }\nresource compute.vm a {\n  size = \"small\"\n  labels = { ..v.status, tier: \"back\" }\n}\n",
+        "use fake\nresource db.volume v { size = 1 }\nresource compute.vm a {\n  size = \"small\"\n  labels = { ..v.status, tier = \"back\" }\n}\n",
     );
     let r = s.run(&["plan", "lab"]).success();
     assert!(
@@ -204,7 +204,7 @@ fn a_spread_of_what_it_writes_is_the_cycle_with_its_fix() {
     let s = Scratch::project("spread-cycle");
     s.write(
         "stacks/lab.df",
-        "use fake\nresource compute.vm a {\n  size = \"small\"\n  labels = { x: \"1\" }\n}\nset a.labels = { ..a.labels, tier: \"back\" } where a.size == \"small\"\n",
+        "use fake\nresource compute.vm a {\n  size = \"small\"\n  labels = { x = \"1\" }\n}\nset a.labels = { ..a.labels, tier = \"back\" } where a.size == \"small\"\n",
     );
     let r = s.run(&["plan", "lab"]).failure();
     assert!(

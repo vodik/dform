@@ -10,24 +10,24 @@ use common::{Run, Scratch};
 const WORKLOADS: &str = "use k8s\n\n\
     resource k8s.stateful_set db {\n  \
     metadata.name = \"db\"\n  \
-    metadata.labels = { tier: \"data\" }\n  \
+    metadata.labels = { tier = \"data\" }\n  \
     spec.serviceName = \"db\"\n  \
-    spec.selector.matchLabels = { app: \"db\" }\n  \
+    spec.selector.matchLabels = { app = \"db\" }\n  \
     spec.template.spec.containers = [\n    \
-    { name: \"pg\", image: \"postgres:16\" },\n    \
-    { name: \"exporter\", image: \"exporter:1\", resources: { limits: { cpu: 1, memory: 1Gi } } }\n  \
+    { name = \"pg\", image = \"postgres:16\" },\n    \
+    { name = \"exporter\", image = \"exporter:1\", resources = { limits = { cpu = 1, memory = 1Gi } } }\n  \
     ]\n\
     }\n\n\
     resource k8s.stateful_set cache {\n  \
     metadata.name = \"cache\"\n  \
     spec.serviceName = \"cache\"\n  \
-    spec.selector.matchLabels = { app: \"cache\" }\n  \
-    spec.template.spec.containers = [{ name: \"redis\", image: \"redis:7\" }]\n\
+    spec.selector.matchLabels = { app = \"cache\" }\n  \
+    spec.template.spec.containers = [{ name = \"redis\", image = \"redis:7\" }]\n\
     }\n\n\
     resource k8s.deployment web {\n  \
     metadata.name = \"web\"\n  \
-    spec.selector.matchLabels = { app: \"web\" }\n  \
-    spec.template.spec.containers = [{ name: \"api\", image: \"api:latest\" }]\n\
+    spec.selector.matchLabels = { app = \"web\" }\n  \
+    spec.template.spec.containers = [{ name = \"api\", image = \"api:latest\" }]\n\
     }\n\n";
 
 fn project(name: &str, policy: &str) -> Scratch {
@@ -59,7 +59,7 @@ fn a_set_through_two_wildcards_writes_every_element() {
     let s = project(
         "wild-sts",
         "set k8s.stateful_set[_].spec.template.spec.containers[_].resources.limits = \
-         { cpu: 500m, memory: 256Mi } @default",
+         { cpu = 500m, memory = 256Mi } @default",
     );
     let r = plan(&s).success();
     has(
@@ -93,7 +93,7 @@ fn a_set_through_two_wildcards_writes_every_element() {
     assert!(
         w.stdout.contains(
             "with k8s.stateful_set[_] = k8s.stateful_set cache, containers[_] = \
-             {image: \"redis:7\", name: \"redis\"}"
+             {image = \"redis:7\", name = \"redis\"}"
         ),
         "{}",
         w.stdout
@@ -113,7 +113,7 @@ fn a_set_through_two_wildcards_writes_every_element() {
 /// c in w.l`.
 #[test]
 fn a_wildcard_set_is_the_clause_form() {
-    let limits = "{ cpu: 500m, memory: 256Mi } @default";
+    let limits = "{ cpu = 500m, memory = 256Mi } @default";
     let a = project(
         "wild-a",
         &format!(

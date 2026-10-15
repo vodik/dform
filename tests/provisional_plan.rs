@@ -22,16 +22,16 @@ use stacks.platform
 use k8s { kubeconfig = platform[env].kubeconfig }
 resource k8s.namespace apps { metadata.name = "apps" }
 resource k8s.deployment web {
-  metadata = { name: "web", namespace: apps.metadata.name }
-  spec.selector.matchLabels = { app: "web" }
-  spec.template.spec.containers = [{ name: "web", image: "nginx" }]
+  metadata = { name = "web", namespace = apps.metadata.name }
+  spec.selector.matchLabels = { app = "web" }
+  spec.template.spec.containers = [{ name = "web", image = "nginx" }]
 }
 resource k8s.deployment api {
-  metadata = { name: "api", namespace: apps.metadata.name }
-  spec.selector.matchLabels = { app: "api" }
+  metadata = { name = "api", namespace = apps.metadata.name }
+  spec.selector.matchLabels = { app = "api" }
   spec.template.spec = {
-    securityContext: { runAsNonRoot: true },
-    containers: [{ name: "api", image: "api" }],
+    securityContext: { runAsNonRoot = true },
+    containers: [{ name = "api", image = "api" }],
   }
 }
 pod(w, p) where w in k8s.deployment, p = w.spec.template.spec
@@ -74,7 +74,7 @@ fn unnested(mut r: Run) -> Run {
 fn a_deny_over_written_values_of_held_objects_is_decided() {
     let s = project(
         "provisional-deny-decided",
-        "deny \"pod may run as root\" { workload: w } where\n  pod(w, p),\n  \
+        "deny \"pod may run as root\" { workload = w } where\n  pod(w, p),\n  \
          not p.securityContext.runAsNonRoot == true,\n",
     );
     let r = plan(&s).failure();
@@ -95,9 +95,9 @@ fn a_deny_over_written_values_of_held_objects_is_decided() {
 fn a_deny_under_later_always_says_what_it_waits_on() {
     let s = project(
         "provisional-deny-waits",
-        "deny \"pod keeps the server's defaults\" { workload: w } where\n  pod(w, p),\n  \
-         { a: p.dnsPolicy, b: p.restartPolicy, c: p.serviceAccountName } == \
-         { a: \"x\", b: \"y\", c: \"z\" },\n",
+        "deny \"pod keeps the server's defaults\" { workload = w } where\n  pod(w, p),\n  \
+         { a = p.dnsPolicy, b = p.restartPolicy, c = p.serviceAccountName } == \
+         { a = \"x\", b = \"y\", c = \"z\" },\n",
     );
     let r = plan(&s).success();
     let (_, policy) = r.stdout.split_once("\npolicy  ").expect(&r.stdout);
@@ -128,7 +128,7 @@ fn a_deny_under_later_always_says_what_it_waits_on() {
 fn the_summary_counts_what_later_holds_by_what_it_waits_on() {
     let s = project(
         "provisional-summary",
-        "deny \"pod without cluster dns\" { workload: w } where pod(w, p), \
+        "deny \"pod without cluster dns\" { workload = w } where pod(w, p), \
          p.dnsPolicy == \"None\"\n",
     );
     let r = plan(&s).success();
@@ -166,7 +166,7 @@ fn the_summary_counts_what_later_holds_by_what_it_waits_on() {
 fn why_a_deny_that_waits_says_what_it_waits_on() {
     let s = project(
         "provisional-why-deny",
-        "deny \"pod without cluster dns\" { workload: w } where pod(w, p), \
+        "deny \"pod without cluster dns\" { workload = w } where pod(w, p), \
          p.dnsPolicy == \"None\"\n",
     );
     let r = s
@@ -183,8 +183,8 @@ fn why_a_deny_that_waits_says_what_it_waits_on() {
     );
 }
 
-const MIDDLEWARE: &str = "resource k8s.traefik.middleware mw {\n  metadata = { name: \"mw\", \
-                          namespace: apps.metadata.name }\n  spec.headers.stsSeconds = 3\n}\n";
+const MIDDLEWARE: &str = "resource k8s.traefik.middleware mw {\n  metadata = { name = \"mw\", \
+                          namespace = apps.metadata.name }\n  spec.headers.stsSeconds = 3\n}\n";
 
 /// The k8s provider held by its connection alone (the mock flags
 /// `kubeconfig` so, as the real one does) planned its objects against
@@ -215,7 +215,7 @@ fn a_provider_held_by_its_connection_plans_provisionally() {
              provider k8s  schema\n  provisional:"
         ) && tick2.contains(
             "  + k8s.deployment web         stacks/apps.df:6\n      \
-             metadata = { name: \"web\", namespace: \"apps\" }\n"
+             metadata = { name = \"web\", namespace = \"apps\" }\n"
         ) && tick2.contains("  + k8s.traefik.middleware mw"),
         "{}",
         r.stdout

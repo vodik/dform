@@ -1696,7 +1696,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// At a `{` that braces a body, not one that starts a literal (`{ cpu:
+    /// At a `{` that braces a body, not one that starts a literal (`{ cpu =
     /// x } = lim`): its `}` ends the line, or the block it is in.
     fn at_braced_body(&self) -> bool {
         let Some(open) = self.nth_index(0).filter(|_| self.at(L_BRACE)) else {
@@ -1991,11 +1991,11 @@ impl<'a> Parser<'a> {
         if kind != CHAIN {
             return Ok(kind);
         }
-        if self.at(L_BRACE) && self.raw(1).is_word() && self.raw(2) == COLON {
+        if self.at(L_BRACE) && self.raw(1).is_word() && matches!(self.raw(2), EQ | COLON) {
             let msg = format!("expected the end of the term, found {}", self.found());
             self.error_here(
                 msg,
-                Some("a relation's named columns are written `p(a: x)`, not `p{a: x}`".into()),
+                Some("a relation's named columns are written `p(a: x)`, not `p{a = x}`".into()),
             );
             return Err(Bail);
         }
@@ -2154,7 +2154,7 @@ impl<'a> Parser<'a> {
         Ok(SPREAD)
     }
 
-    /// `{ key: term, name, ..term, ... }`: a name alone is `name: name`.
+    /// `{ key = term, name, ..term, ... }`: a name alone is `name = name`.
     fn object(&mut self) -> P<SyntaxKind> {
         self.start(OBJECT);
         self.bump();
@@ -2173,7 +2173,7 @@ impl<'a> Parser<'a> {
                 } else {
                     return p.err_expected("an object key (a name or a string)");
                 }
-                if p.eat(COLON) {
+                if p.eat(EQ) || p.eat(COLON) {
                     p.term()?;
                 }
                 p.finish();
@@ -2270,7 +2270,7 @@ mod tests {
             "resource t a { b = 1 }\n  where q(1)\n",
             "component m {\n  r(c) where\n    q(c),\n  s(1)\n}\n",
             "use m {\n  p(x) where\n    q(x),\n  n = 1\n}\n",
-            "let c = x where { cpu: x } = lim\n",
+            "let c = x where { cpu = x } = lim\n",
             // Under a clause on its statement's line, a statement.
             "deny \"a\" where q(1)\n   seen(r) where q(r)\n",
         ] {
@@ -2361,7 +2361,7 @@ mod tests {
             ("p(x) where exists x\n", "`R in T`"),
             ("p(x) where some x in [1]\n", "`x in e`"),
             ("p(x) where q(x), x == .cidr\n", "is a string"),
-            ("p(x) where q{a: x}\n", "`p(a: x)`"),
+            ("p(x) where q{a = x}\n", "`p(a: x)`"),
             (
                 "resource t a {\n  for q(x)\n  b = x\n}\n",
                 "`resource t a { .. } where q(x)`",

@@ -21,7 +21,7 @@ exit: ok
       "reason": "reads undetermined aggregate zone_count",
       "site": {
         "at": "stacks/gke_two_phase.df:100",
-        "statement": "deny \"cluster must be in at least two zones\" { cluster: \"gke_platform\" } where \"gke_platform\" in google.container_cluster, zone_count(n), n < 2"
+        "statement": "deny \"cluster must be in at least two zones\" { cluster = \"gke_platform\" } where \"gke_platform\" in google.container_cluster, zone_count(n), n < 2"
       },
       "status": "undetermined"
     }
@@ -95,8 +95,8 @@ exit: ok
               "path": "ip_cidr_range",
               "site": {
                 "at": "stacks/gke_two_phase.df:28",
-                "entry": "gke = { control_plane_cidr: \"172.16.3.96/28\", subnet_cidr: \"10.141.76.0/22\" }",
-                "statement": "set { .. gke = { control_plane_cidr: \"172.16.3.96/28\", subnet_cidr: \"10.141.76.0/22\" } } where env == \"dev\""
+                "entry": "gke = { control_plane_cidr = \"172.16.3.96/28\", subnet_cidr = \"10.141.76.0/22\" }",
+                "statement": "set { .. gke = { control_plane_cidr = \"172.16.3.96/28\", subnet_cidr = \"10.141.76.0/22\" } } where env == \"dev\""
               }
             },
             {
@@ -220,8 +220,8 @@ exit: ok
               "path": "master_control_plane_cidr",
               "site": {
                 "at": "stacks/gke_two_phase.df:28",
-                "entry": "gke = { control_plane_cidr: \"172.16.3.96/28\", subnet_cidr: \"10.141.76.0/22\" }",
-                "statement": "set { .. gke = { control_plane_cidr: \"172.16.3.96/28\", subnet_cidr: \"10.141.76.0/22\" } } where env == \"dev\""
+                "entry": "gke = { control_plane_cidr = \"172.16.3.96/28\", subnet_cidr = \"10.141.76.0/22\" }",
+                "statement": "set { .. gke = { control_plane_cidr = \"172.16.3.96/28\", subnet_cidr = \"10.141.76.0/22\" } } where env == \"dev\""
               }
             },
             {
@@ -465,8 +465,8 @@ exit: ok
               "path": "spec.selector.matchLabels.app",
               "site": {
                 "at": "stacks/gke_two_phase.df:80",
-                "entry": "spec.selector.matchLabels = { app: \"api\" }",
-                "statement": "resource k8s.deployment api { .. spec.selector.matchLabels = { app: \"api\" } .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
+                "entry": "spec.selector.matchLabels = { app = \"api\" }",
+                "statement": "resource k8s.deployment api { .. spec.selector.matchLabels = { app = \"api\" } .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
                   "ns = \"gke-platform\""
                 ]
@@ -479,8 +479,8 @@ exit: ok
               "path": "spec.template.metadata.labels.app",
               "site": {
                 "at": "stacks/gke_two_phase.df:81",
-                "entry": "spec.template.metadata.labels = { app: \"api\" }",
-                "statement": "resource k8s.deployment api { .. spec.template.metadata.labels = { app: \"api\" } .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
+                "entry": "spec.template.metadata.labels = { app = \"api\" }",
+                "statement": "resource k8s.deployment api { .. spec.template.metadata.labels = { app = \"api\" } .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
                   "ns = \"gke-platform\""
                 ]
@@ -493,8 +493,8 @@ exit: ok
               "path": "spec.template.spec.containers[name=api].image",
               "site": {
                 "at": "stacks/gke_two_phase.df:82",
-                "entry": "spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/platform/api:1.42\" }]",
-                "statement": "resource k8s.deployment api { .. spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/platform/api:1.42\" }] } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
+                "entry": "spec.template.spec.containers = [{ name = \"api\", image = \"gcr.io/platform/api:1.42\" }]",
+                "statement": "resource k8s.deployment api { .. spec.template.spec.containers = [{ name = \"api\", image = \"gcr.io/platform/api:1.42\" }] } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
                   "ns = \"gke-platform\""
                 ]
@@ -507,8 +507,8 @@ exit: ok
               "path": "spec.template.spec.containers[name=api].name",
               "site": {
                 "at": "stacks/gke_two_phase.df:82",
-                "entry": "spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/platform/api:1.42\" }]",
-                "statement": "resource k8s.deployment api { .. spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/platform/api:1.42\" }] } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
+                "entry": "spec.template.spec.containers = [{ name = \"api\", image = \"gcr.io/platform/api:1.42\" }]",
+                "statement": "resource k8s.deployment api { .. spec.template.spec.containers = [{ name = \"api\", image = \"gcr.io/platform/api:1.42\" }] } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
                   "ns = \"gke-platform\""
                 ]
@@ -538,7 +538,7 @@ exit: ok
               "site": {
                 "at": "stacks/gke_two_phase.df:74",
                 "entry": "metadata.name = \"gke-platform\"",
-                "statement": "k8s.namespace gke_platform.metadata = {name: \"gke-platform\"}"
+                "statement": "k8s.namespace gke_platform.metadata = {name = \"gke-platform\"}"
               }
             }
           ],
@@ -563,8 +563,8 @@ exit: ok
               "path": "data.password",
               "site": {
                 "at": "stacks/gke_two_phase.df:87",
-                "entry": "data = { password: google.secret_manager_secret_version[\"db_pw\"].secret_data }",
-                "statement": "resource k8s.secret db_credentials { .. data = { password: google.secret_manager_secret_version[\"db_pw\"].secret_data } } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
+                "entry": "data = { password = google.secret_manager_secret_version[\"db_pw\"].secret_data }",
+                "statement": "resource k8s.secret db_credentials { .. data = { password = google.secret_manager_secret_version[\"db_pw\"].secret_data } } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
                   "ns = \"gke-platform\""
                 ]

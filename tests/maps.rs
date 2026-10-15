@@ -21,7 +21,7 @@ fn a_map_input_takes_a_key_by_set_and_iterates() {
     let s = scratch("map-input");
     s.write(
         "p.df",
-        "\ninput labels: map(string) = { team: \"core\" }\n\
+        "\ninput labels: map(string) = { team = \"core\" }\n\
          input sizes: map(int) = {}\nuse fake\n\
          label(k, v) where (k, v) in labels\n\
          size(k, v) where (k, v) in sizes\n",
@@ -68,7 +68,7 @@ fn a_map_attribute_and_column_check_their_values() {
     let s = scratch("map-attr");
     s.write(
         "p.df",
-        "\nuse fake\nresource compute.vm a { labels = { team: \"core\", tier: 1 } }\n",
+        "\nuse fake\nresource compute.vm a { labels = { team = \"core\", tier = 1 } }\n",
     );
     let r = s.run(&["plan", "--why=none", "p.df"]).failure();
     assert!(
@@ -89,7 +89,7 @@ fn a_map_attribute_and_column_check_their_values() {
     );
     let r = s.run(&["plan", "--why=none", "p.df"]).failure();
     assert!(
-        r.stderr.contains("column tags: {x: 2} is not map(string)"),
+        r.stderr.contains("column tags: {x = 2} is not map(string)"),
         "{}",
         r.stderr
     );
@@ -118,7 +118,7 @@ fn a_map_field_and_a_map_column() {
     assert!(row(&r.stdout, &["\"team\"", "\"core\""]), "{}", r.stdout);
     s.write(
         "p.df",
-        "\ndecl p(n: string, sizes: map(int))\nuse fake\np(\"a\", { x: \"big\" })\n",
+        "\ndecl p(n: string, sizes: map(int))\nuse fake\np(\"a\", { x = \"big\" })\n",
     );
     let r = s.run(&["plan", "--why=none", "p.df"]).failure();
     assert!(
@@ -148,7 +148,7 @@ fn set_from_gives_a_map_input_its_keys() {
         s.write(
             "p.df",
             &format!(
-                "\ninput labels: map(string) = {{ team: \"core\" }}\n\
+                "\ninput labels: map(string) = {{ team = \"core\" }}\n\
                  input sizes: map(int) = {{}}\nuse fake\n\
                  set from {format}.decode(io.read(\"c.{format}\"))\n\
                  label(k, v) where (k, v) in labels\n\

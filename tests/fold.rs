@@ -50,18 +50,18 @@ fn a_default_inside_a_written_value_is_folded_in() {
 
 resource kube.service pg {
   metadata.name = "pg"
-  spec = { selector: { app: "pg" }, ports: [{ port: 5432, targetPort: 5432 }] }
+  spec = { selector = { app = "pg" }, ports = [{ port = 5432, targetPort = 5432 }] }
 }
 "#,
     );
     let want = r#"  + kube.service pg  main.df:3
       metadata.name = "pg"
       spec = {
-        selector: { app: "pg" },
-        ports: [{
-          port: 5432,
-          targetPort: 5432,
-          protocol: "TCP" (schema default),
+        selector = { app = "pg" },
+        ports = [{
+          port = 5432,
+          targetPort = 5432,
+          protocol = "TCP" (schema default),
         }],
       }
 "#;
@@ -79,7 +79,7 @@ resource kube.service pg {
     // The note is dim, as every note is.
     let color = run(&s, &["plan", "--color", "always", "main.df"]);
     assert!(
-        color.contains("protocol: \"TCP\" \x1b[2m(schema default)\x1b[0m,"),
+        color.contains("protocol = \"TCP\" \x1b[2m(schema default)\x1b[0m,"),
         "{color}"
     );
 }
@@ -95,23 +95,23 @@ fn a_default_no_written_value_holds_keeps_its_line() {
         r#"use kube
 
 resource kube.service pg {
-  metadata = { name: "pg", labels: { app: "pg", tier: "db" } }
-  spec.ports = [{ port: 5432 }]
+  metadata = { name = "pg", labels = { app = "pg", tier = "db" } }
+  spec.ports = [{ port = 5432 }]
 }
 
 resource kube.service wide {
-  metadata = { name: "wide", labels: { app: "a-long-application-name", team: "a-long-team-name", tier: "db" } }
-  spec.ports = [{ port: 1, protocol: "UDP" }]
+  metadata = { name = "wide", labels = { app = "a-long-application-name", team = "a-long-team-name", tier = "db" } }
+  spec.ports = [{ port = 1, protocol = "UDP" }]
 }
 "#,
     );
     let plan = run(&s, &["plan", "main.df"]);
     for l in [
-        "      metadata = { name: \"pg\", labels: { app: \"pg\", tier: \"db\" } }\n",
+        "      metadata = { name = \"pg\", labels = { app = \"pg\", tier = \"db\" } }\n",
         "      spec.ports[port=5432,protocol=TCP].port = 5432\n      \
          spec.ports[port=5432,protocol=TCP].protocol = \"TCP\" (schema default)\n",
-        "      metadata = {\n        name: \"wide\",\n        labels: { app: \"a-long-application-name\", \
-         team: \"a-long-team-name\", tier: \"db\" },\n      }\n",
+        "      metadata = {\n        name = \"wide\",\n        labels = { app = \"a-long-application-name\", \
+         team = \"a-long-team-name\", tier = \"db\" },\n      }\n",
     ] {
         assert!(plan.contains(l), "{l}\n{plan}");
     }
@@ -129,22 +129,22 @@ fn a_sensitive_field_inside_a_value_says_no_value() {
 
 resource kube.service pg {
   metadata.name = "pg"
-  spec = { token: "hunter2", selector: { app: "pg" } }
-  spec.ports = [{ port: 1 }, { port: 2, protocol: "UDP" }]
+  spec = { token = "hunter2", selector = { app = "pg" } }
+  spec.ports = [{ port = 1 }, { port = 2, protocol = "UDP" }]
 }
 "#,
     );
     let plan = run(&s, &["plan", "main.df"]);
     assert!(!plan.contains("hunter2"), "{plan}");
     assert!(
-        plan.contains("      spec = { token: (sensitive), selector: { app: \"pg\" } }\n"),
+        plan.contains("      spec = { token = (sensitive), selector = { app = \"pg\" } }\n"),
         "{plan}"
     );
     assert!(
         plan.contains(
-            "      spec.ports = [\n        {\n          port: 1,\n          \
-             protocol: \"TCP\" (schema default),\n        },\n        \
-             { port: 2, protocol: \"UDP\" },\n      ]\n"
+            "      spec.ports = [\n        {\n          port = 1,\n          \
+             protocol = \"TCP\" (schema default),\n        },\n        \
+             { port = 2, protocol = \"UDP\" },\n      ]\n"
         ),
         "{plan}"
     );
@@ -152,9 +152,9 @@ resource kube.service pg {
     let why = run(&s, &["why", "pg.spec.ports", "main.df"]);
     assert!(
         why.contains(
-            "kube.service pg.spec.ports = [\n  {\n    port: 1,\n    \
-             protocol: \"TCP\" (schema default),\n  },\n  { port: 2, protocol: \"UDP\" },\n]\n  \
-             = [{port: 1}, {port: 2, protocol: \"UDP\"}]  main.df:6\n"
+            "kube.service pg.spec.ports = [\n  {\n    port = 1,\n    \
+             protocol = \"TCP\" (schema default),\n  },\n  { port = 2, protocol = \"UDP\" },\n]\n  \
+             = [{port = 1}, {port = 2, protocol = \"UDP\"}]  main.df:6\n"
         ),
         "{why}"
     );

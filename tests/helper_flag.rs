@@ -24,16 +24,16 @@ use stacks.platform
 use k8s { kubeconfig = platform[env].kubeconfig }
 resource k8s.namespace apps { metadata.name = "apps" }
 resource k8s.deployment web {
-  metadata = { name: "web", namespace: apps.metadata.name }
-  spec.selector.matchLabels = { app: "web" }
-  spec.template.spec.containers = [{ name: "web", image: "nginx" }]
+  metadata = { name = "web", namespace = apps.metadata.name }
+  spec.selector.matchLabels = { app = "web" }
+  spec.template.spec.containers = [{ name = "web", image = "nginx" }]
 }
 resource k8s.deployment api {
-  metadata = { name: "api", namespace: apps.metadata.name }
-  spec.selector.matchLabels = { app: "api" }
+  metadata = { name = "api", namespace = apps.metadata.name }
+  spec.selector.matchLabels = { app = "api" }
   spec.template.spec = {
-    securityContext: { runAsNonRoot: true },
-    containers: [{ name: "api", image: "api" }],
+    securityContext: { runAsNonRoot = true },
+    containers: [{ name = "api", image = "api" }],
   }
 }
 RULES
@@ -72,7 +72,7 @@ fn a_deny_in_a_used_module_is_decided() {
         "use policy\n",
         &[(
             "policy.df",
-            "deny \"pod may run as root\" { workload: w } where\n  w in k8s.deployment,\n  \
+            "deny \"pod may run as root\" { workload = w } where\n  w in k8s.deployment,\n  \
              p = w.spec.template.spec,\n  not p.securityContext.runAsNonRoot == true,\n",
         )],
     ));
@@ -85,7 +85,7 @@ fn a_deny_through_a_let_with_parameters_is_decided() {
     decided(plan(
         "helper-let-site",
         "let root(p) = true where not { p.securityContext.runAsNonRoot == true }\n\
-         deny \"pod may run as root\" { workload: w } where\n  w in k8s.deployment,\n  \
+         deny \"pod may run as root\" { workload = w } where\n  w in k8s.deployment,\n  \
          root(w.spec.template.spec) == true,\n",
         &[],
     ));
@@ -102,11 +102,11 @@ type_attr(x.box, "status", "object", ["computed"])
 /// object, a `not { }` over it, a count, and a `not { }` of a relation
 /// that waits on it.
 const BOX_POLICY: &str = r#"
-deny "not ready" { box: r } where r in x.box, not has r.status.ready
-deny "odd" { box: r } where r in x.box, not { r.status.phase == "x" }
+deny "not ready" { box = r } where r in x.box, not has r.status.ready
+deny "odd" { box = r } where r in x.box, not { r.status.phase == "x" }
 ready(r) where r in x.box, r.status.ready == true
-deny "few" { n: n } where n = count(r), ready(r), n < 1
-deny "none ready" { box: r } where r in x.box, not { ready(r) }
+deny "few" { n = n } where n = count(r), ready(r), n < 1
+deny "none ready" { box = r } where r in x.box, not { ready(r) }
 "#;
 
 /// `p.df` holding `src`, beside the box's schema and `policy.df`.
@@ -164,7 +164,7 @@ fn a_modules_helper_is_never_stuck_in_its_rules_place() {
         let r = dev(&s, &["query", relation]).success();
         assert!(
             r.stdout
-                .contains("deny(\\\"none ready\\\", {box: \\\"b\\\"})")
+                .contains("deny(\\\"none ready\\\", {box = \\\"b\\\"})")
                 && r.stdout.contains("policy::ready(")
                 && !r.stdout.contains("__"),
             "{relation}\n{}",

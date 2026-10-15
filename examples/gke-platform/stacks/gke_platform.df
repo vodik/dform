@@ -47,56 +47,56 @@ type environment = enum("dev", "stg", "prod")
 ########################################
 
 set {
-  gcp.project = { id: "platform-dev-973682", name: "platform-dev" }
+  gcp.project = { id = "platform-dev-973682", name = "platform-dev" }
   gcp.region = "us-east1"
   gcp.network = "platform-dev-network"
 
   gcp.ranges.proxy = "10.193.0.0/24"
 
   gke = {
-    ranges: {
-      control_plane: "172.16.3.96/28",
-      subnet: "10.141.76.0/22",
-      pods: "10.141.80.0/21",
-      services: "10.141.88.0/21",
+    ranges = {
+      control_plane = "172.16.3.96/28",
+      subnet = "10.141.76.0/22",
+      pods = "10.141.80.0/21",
+      services = "10.141.88.0/21",
     },
-    static_ips: { "gke-platform-grpc": { type: "INTERNAL" } },
+    static_ips = { "gke-platform-grpc" = { type = "INTERNAL" } },
   }
 } where env == "dev"
 
 set {
-  gcp.project = { id: "platform-stg", name: "platform-stg" }
+  gcp.project = { id = "platform-stg", name = "platform-stg" }
   gcp.region = "us-east1"
   gcp.network = "platform-stg-network"
 
   gcp.ranges.proxy = "10.193.1.0/24"
 
   gke = {
-    ranges: {
-      control_plane: "172.16.3.112/28",
-      subnet: "10.141.100.0/22",
-      pods: "10.141.104.0/21",
-      services: "10.141.112.0/21",
+    ranges = {
+      control_plane = "172.16.3.112/28",
+      subnet = "10.141.100.0/22",
+      pods = "10.141.104.0/21",
+      services = "10.141.112.0/21",
     },
-    static_ips: { "gke-platform-grpc": { type: "INTERNAL" } },
+    static_ips = { "gke-platform-grpc" = { type = "INTERNAL" } },
   }
 } where env == "stg"
 
 set {
-  gcp.project = { id: "platform-prod", name: "platform-prod" }
+  gcp.project = { id = "platform-prod", name = "platform-prod" }
   gcp.region = "us-east1"
   gcp.network = "platform-prod-network"
 
   gcp.ranges.proxy = "10.193.2.0/24"
 
   gke = {
-    ranges: {
-      control_plane: "172.16.3.128/28",
-      subnet: "10.141.124.0/22",
-      pods: "10.141.128.0/21",
-      services: "10.141.136.0/21",
+    ranges = {
+      control_plane = "172.16.3.128/28",
+      subnet = "10.141.124.0/22",
+      pods = "10.141.128.0/21",
+      services = "10.141.136.0/21",
     },
-    static_ips: { "gke-platform-grpc": { type: "INTERNAL" } },
+    static_ips = { "gke-platform-grpc" = { type = "INTERNAL" } },
   }
 } where env == "prod"
 
@@ -143,8 +143,8 @@ resource google.compute_subnetwork gke_subnet {
   ip_cidr_range = gke.ranges.subnet
   subnet_private_access = true
   secondary_ranges = [
-    { range_name: "${gcp.project.name}-gke-pods-range", ip_cidr_range: gke.ranges.pods },
-    { range_name: "${gcp.project.name}-gke-svc-range", ip_cidr_range: gke.ranges.services },
+    { range_name = "${gcp.project.name}-gke-pods-range", ip_cidr_range = gke.ranges.pods },
+    { range_name = "${gcp.project.name}-gke-svc-range", ip_cidr_range = gke.ranges.services },
   ]
 }
 
@@ -165,7 +165,7 @@ resource google.compute_subnetwork regional_proxy {
 resource google.compute_network main {
   project = gcp.project.id
   name = gcp.network
-  peerings = [ { name: n, peer_network: p } | peering(env, n, p) ]
+  peerings = [ { name = n, peer_network = p } | peering(env, n, p) ]
 }
 
 # Static IPs for services

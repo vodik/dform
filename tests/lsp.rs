@@ -58,8 +58,8 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     // each value's chain.
     assert!(
         text.contains(
-            "net.vpc main.vpc.tags = { env: \"staging\", component: \"network\" }\n  \
-             = { env, component: \"network\" }        network.df:19\n  \
+            "net.vpc main.vpc.tags = { env = \"staging\", component = \"network\" }\n  \
+             = { env, component = \"network\" }       network.df:19\n  \
              = env                                  stacks/dform.df:51\n\
              net.vpc main.vpc.tags.team = \"platform\"  baseline.df:10\n"
         ),
@@ -74,8 +74,8 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     let why = why.as_str().unwrap();
     assert!(
         why.starts_with(
-            "net.vpc main.vpc.tags = { env: \"staging\", component: \"network\" }\n  \
-             = { env, component: \"network\" }        network.df:19\n"
+            "net.vpc main.vpc.tags = { env = \"staging\", component = \"network\" }\n  \
+             = { env, component = \"network\" }       network.df:19\n"
         ),
         "{why}"
     );
@@ -1311,7 +1311,7 @@ fn an_s3_deployment_is_read_with_credentials() {
         "dform.toml",
         &format!(
             "[project]\nedition = \"2026\"\n\n[defaults]\nbackend = 's3(\"dform-test\", \"lsp/{{stack}}\", \
-             {{endpoint: \"{}\", region: \"us-east-1\"}})'\n\n[secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n",
+             {{endpoint = \"{}\", region = \"us-east-1\"}})'\n\n[secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n",
             server.endpoint
         ),
     );
@@ -1471,7 +1471,7 @@ fn completion_after_a_spread_offers_names_of_the_literals_kind() {
     let file = s.write(
         "stacks/app.df",
         "\ninput nodes { flavor: string = \"b2\" }\ninput zones: list(string) = [\"a\"]\n\
-         let base = { team: \"web\" }\nlet ports = [80]\nlet name = \"x\"\nuse fake\n",
+         let base = { team = \"web\" }\nlet ports = [80]\nlet name = \"x\"\nuse fake\n",
     );
     let root = std::fs::canonicalize(&s.dir).unwrap();
     let file = std::fs::canonicalize(&file).unwrap();
@@ -1495,7 +1495,7 @@ fn hover_on_a_typed_let_shows_its_type() {
     let file = s.write(
         "stacks/app.df",
         "\nuse fake\nlet block: inet = \"10.0.0.0/16\"\n\
-         resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  tags = { b: block }\n}\n",
+         resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  tags = { b = block }\n}\n",
     );
     let root = std::fs::canonicalize(&s.dir).unwrap();
     let file = std::fs::canonicalize(&file).unwrap();
@@ -1629,7 +1629,7 @@ fn formatting_reads_the_projects_schemas() {
     let file = s.write(
         "stacks/app.df",
         "use k8s\n\nresource k8s.deployment d {\n  spec.template.spec.containers = \
-         [{ name: \"a\", resources: { limits: { memory: \"2Gi\" } } }]\n}\n",
+         [{ name = \"a\", resources = { limits = { memory = \"2Gi\" } } }]\n}\n",
     );
     let root = std::fs::canonicalize(&s.dir).unwrap();
     let file = std::fs::canonicalize(&file).unwrap();
@@ -1640,7 +1640,7 @@ fn formatting_reads_the_projects_schemas() {
         json!({ "textDocument": { "uri": uri(&file) }, "options": { "tabSize": 2, "insertSpaces": true } }),
     );
     let text = edits[0]["newText"].as_str().unwrap_or_default();
-    assert!(text.contains("memory: 2Gi"), "{edits}");
+    assert!(text.contains("memory = 2Gi"), "{edits}");
     c.shutdown();
 }
 
@@ -1967,9 +1967,9 @@ fn hover_gives_a_reads_value_and_its_provenance() {
     for want in [
         "**cidrs.main** = `\"10.50.0.0/16\"`",
         // In the formatter's layout, as plan, why and query print it.
-        "**input cidrs** = `{ main: 10.50.0.0/16, peer: 10.60.0.0/16 }`",
+        "**input cidrs** = `{ main = 10.50.0.0/16, peer = 10.60.0.0/16 }`",
         "winning rank: default",
-        "- rank default: `{main: 10.50.0.0/16}` by stacks/dform.df:10:15",
+        "- rank default: `{main = 10.50.0.0/16}` by stacks/dform.df:10:15",
         "input cidrs.main = 10.50.0.0/16  stacks/dform.df:10\n",
     ] {
         assert!(text.contains(want), "{want} in {text}");

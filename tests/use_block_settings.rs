@@ -24,7 +24,7 @@ resource k8s.namespace ns { metadata.name = "app" }
 const CORE: &str = r#"
 use fake
 use k8s
-provider_config("k8s", { kubeconfig: server.endpoint })
+provider_config("k8s", { kubeconfig = server.endpoint })
 resource db.postgres server { name = "server" }
 resource k8s.namespace ns { metadata.name = "app" }
 "#;
@@ -46,7 +46,8 @@ tick 2  1 change
 
 const TICK2_CORE: &str = "\
 tick 2  1 change
-  waits on  provider k8s  kubeconfig
+  waits on  provider k8s  kubeconfig = server.endpoint
+  provisional: planned against the offline schema; planned again once kubeconfig is known
   + k8s.namespace ns    p.df:6
 ";
 
@@ -168,7 +169,10 @@ fn the_engine_api_holds_them_as_the_command_line_does() {
         engine_wait(USE),
         held("provider k8s  kubeconfig = server.endpoint")
     );
-    assert_eq!(engine_wait(CORE), held("provider k8s  kubeconfig"));
+    assert_eq!(
+        engine_wait(CORE),
+        held("provider k8s  kubeconfig = server.endpoint")
+    );
     assert_eq!(
         engine_wait(ABSENT),
         held("provider k8s  kubeconfig = db.postgres[\"absent\"].endpoint")

@@ -71,8 +71,8 @@ reads); two given is an error naming each:
 ```dform
 resource tailscale.acl policy {
   policy = json.encode({
-    tagOwners: { "tag:k8s": ["autogroup:admin"], "tag:admin": ["autogroup:admin"] },
-    acls: [{ action: "accept", src: ["tag:admin"], dst: ["tag:k8s:22,6443"] }],
+    tagOwners = { "tag:k8s" = ["autogroup:admin"], "tag:admin" = ["autogroup:admin"] },
+    acls = [{ action = "accept", src = ["tag:admin"], dst = ["tag:k8s:22,6443"] }],
   })
 }
 ```
@@ -148,7 +148,7 @@ attribute.
 resource tailscale.dns dns {
   nameservers = ["1.1.1.1"]
   search_paths = ["home.vodik.xyz"]
-  split = { "home.vodik.xyz": ["192.168.1.1"] }
+  split = { "home.vodik.xyz" = ["192.168.1.1"] }
 }
 ```
 

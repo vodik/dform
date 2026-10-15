@@ -582,7 +582,7 @@ fn attr_texts(d: &Deformation, l: &Line, s: &Site, why: Why) -> Vec<String> {
 }
 
 /// Whether expression `e` reads anything: a name that is not an object's
-/// key (a variable, a function), or an interpolation. `{ team: "a" }`
+/// key (a variable, a function), or an interpolation. `{ team = "a" }`
 /// reads nothing; `db.name`, `io.read("f.json")` and `"shop-${env}"` do.
 pub(super) fn reads(e: &str) -> bool {
     let mut cs = e.chars().peekable();
@@ -613,7 +613,8 @@ pub(super) fn reads(e: &str) -> bool {
             while cs.peek().is_some_and(|n| n.is_whitespace()) {
                 cs.next();
             }
-            let key = cs.peek() == Some(&':');
+            let mut ahead = cs.clone();
+            let key = ahead.next() == Some('=') && ahead.next() != Some('=');
             if !key && !matches!(word.as_str(), "true" | "false" | "null") {
                 return true;
             }

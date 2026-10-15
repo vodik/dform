@@ -98,7 +98,7 @@ fn a_relation_is_read_from_an_input_or_a_let() {
     );
     s.write(
         "p.df",
-        "\ninput vlans: list(any) = [{ id: 10, cidr: \"10.0.10.0/24\" }]\n\
+        "\ninput vlans: list(any) = [{ id = 10, cidr = \"10.0.10.0/24\" }]\n\
          input vlan from vlans\ninput team from teams.teams\n\
          decl vlan(id: int, cidr: inet)\ndecl team(name: string, port: int)\nuse fake\n\
          let teams = json.decode(io.read(\"teams.json\"))\n\

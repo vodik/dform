@@ -544,7 +544,7 @@ impl ProviderEntry {
 #[serde(deny_unknown_fields)]
 pub struct Defaults {
     /// `local("DIR")`, DIR relative to the project root, or
-    /// `s3("BUCKET", "PREFIX", {endpoint: "URL", region: "R"})`; `{stack}`
+    /// `s3("BUCKET", "PREFIX", {endpoint = "URL", region = "R"})`; `{stack}`
     /// the stack's name.
     pub backend: Option<Spanned<String>>,
     pub role: Option<Spanned<String>>,
@@ -1210,8 +1210,8 @@ impl Checking<'_> {
             {
                 bail!(
                     "{} = {:?}: {e}; the backends are `local(\"DIR\")`, DIR relative to \
-                 the project root, and `s3(\"BUCKET\", \"PREFIX\", {{endpoint: \"URL\", \
-                 region: \"R\"}})`; `{{stack}}` is the stack's name, `{{k}}` its key k's \
+                 the project root, and `s3(\"BUCKET\", \"PREFIX\", {{endpoint = \"URL\", \
+                 region = \"R\"}})`; `{{stack}}` is the stack's name, `{{k}}` its key k's \
                  value",
                     at(&format!("{table} backend")),
                     b.get_ref()
@@ -1615,7 +1615,7 @@ mod tests {
     fn a_manifest_takes_an_s3_backend_and_its_lease_times() {
         let m = manifest(
             "[defaults]\nbackend = 's3(\"bucket\", \"dform/{stack}\", \
-             {endpoint: \"http://127.0.0.1:9000\", region: \"gra\"})'\n\
+             {endpoint = \"http://127.0.0.1:9000\", region = \"gra\"})'\n\
              lease_duration = \"2s\"\nlease_renewal = \"500ms\"\n",
         )
         .unwrap();
@@ -1857,8 +1857,8 @@ mod tests {
         let m = manifest(
             "[io]\ncredentials = { \"ssh://10.0.0.*\" = \"ssh:k3s-admin\" }\n\
              [providers]\ngcp = { source = \"gcp\", reads = [\"https://github.com/*\"] }\n\
-             [defaults]\nbackend = 's3(\"state\", \"dform/{stack}\", {endpoint: \"http://h\", \
-             region: \"gra\"})'\n",
+             [defaults]\nbackend = 's3(\"state\", \"dform/{stack}\", {endpoint = \"http://h\", \
+             region = \"gra\"})'\n",
         )
         .unwrap();
         assert_eq!(m.io.credentials["ssh://10.0.0.*"], "ssh:k3s-admin");

@@ -10,7 +10,7 @@ output note = "a long line, \
 # A string in a hole is the hole's own (R-175): holes nest to any depth,
 # and a brace in an inner string is a character of it.
 output init = "#cloud-config
-${yaml.encode({ packages: ["nftables"], runcmd: ["${install} sh -s - ${"server"}", "echo }"] })}"
+${yaml.encode({ packages = ["nftables"], runcmd = ["${install} sh -s - ${"server"}", "echo }"] })}"
 
 let install = "curl -sfL https://get.k3s.io |"
 

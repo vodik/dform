@@ -76,7 +76,7 @@ fn the_controller_still_runs_two_ticks() {
 resource db.postgres orders { size = 1 }
 
 resource iam.policy "connect-${host}" {
-  statements = [{ action: "db.connect", resource: host }]
+  statements = [{ action = "db.connect", resource = host }]
 } where pg in db.postgres, host = pg.endpoint
 use fake
 "#,

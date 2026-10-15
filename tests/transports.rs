@@ -196,7 +196,7 @@ fn an_s3_object_is_read_with_the_backends_endpoint() {
         "dform.toml",
         &format!(
             "[project]\nedition = \"2026\"\n\n[stacks.p]\nbackend = 's3(\"docs\", \
-             \"state\", {{endpoint: \"{}\", region: \"us-east-1\"}})'\n",
+             \"state\", {{endpoint = \"{}\", region = \"us-east-1\"}})'\n",
             fake_s3().endpoint
         ),
     );

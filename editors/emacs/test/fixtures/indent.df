@@ -22,5 +22,5 @@ resource net.subnet "s-${z}" {
 deny "a spoke peers only the core" { p }
   where p in aws.vpc_peering_connection, p.peer_vpc != core_vpc_main
 
-resource net.vpc edge { cidr = "10.1.0.0/16", tags = { team: "edge", owner: "platform" } }
+resource net.vpc edge { cidr = "10.1.0.0/16", tags = { team = "edge", owner = "platform" } }
   where zone in zones

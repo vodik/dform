@@ -3,12 +3,14 @@ tests/fixtures/adopt/network.df
 ===============================
 
 input vpc_net: inet
+#| The deployment's environment: a tag on the VPC.
+input env: enum("staging", "prod")
 #| The private subnets, one row each.
 decl private_subnet(subnet: net.subnet)
 output vpc: net.vpc = vpc
 output private_subnet
 
-resource net.vpc vpc { cidr = vpc_net, tags = { env, component: "network" } }
+resource net.vpc vpc { cidr = vpc_net, tags = { env, component = "network" } }
 
 zone_index("us-test-1a", 0)
 zone_index("us-test-1b", 1)
@@ -30,6 +32,16 @@ private_subnet(s) where s in net.subnet, s.visibility == "private"
     (type
       (dotted_name
         (identifier))))
+  (comment)
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (string
+        (string_content))
+      (string
+        (string_content))))
   (comment)
   (decl
     (dotted_name

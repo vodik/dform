@@ -99,8 +99,8 @@ fn a_policy_can_require_docs() {
          component orphan {}\n\
          #| deprecated: use owned\n\
          component old {}\n\
-         deny \"a component has no owner\" { component: m } where doc(\"component\", m, \"description\", _), not doc(\"component\", m, \"owner\", _)\n\
-         warn \"deprecated\" { item: n, why } where doc(_, n, \"deprecated\", why)\n\
+         deny \"a component has no owner\" { component = m } where doc(\"component\", m, \"description\", _), not doc(\"component\", m, \"owner\", _)\n\
+         warn \"deprecated\" { item = n, why } where doc(_, n, \"deprecated\", why)\n\
          use fake\n",
     );
     let r = s

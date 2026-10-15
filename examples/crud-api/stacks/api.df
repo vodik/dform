@@ -19,9 +19,9 @@ let serving = next where ready(next)
 let serving = live where not ready(next)
 
 resource k8s.service api {
-  metadata = { name: "api", namespace: "shop" }
-  spec.selector = { app: "api", color: serving }
-  spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
+  metadata = { name = "api", namespace = "shop" }
+  spec.selector = { app = "api", color = serving }
+  spec.ports = [{ port = 80, targetPort = 8080, protocol = "TCP" }]
 }
 
 use policy
@@ -30,15 +30,15 @@ resource k8s.namespace shop { metadata.name = "shop" }
 
 #| The migration to the release's schema: one Job per version.
 resource k8s.job "migrate-v${release.schema}" {
-  metadata = { name: "api-migrate-v${release.schema}", namespace: shop.metadata.name }
+  metadata = { name = "api-migrate-v${release.schema}", namespace = shop.metadata.name }
   spec.backoffLimit = 2
   spec.template.spec = {
-    restartPolicy: "Never",
-    containers: [{
-      name: "migrate",
-      image: release.image,
-      args: ["migrate", "--to", "${release.schema}"],
-      resources: { limits: { cpu: 500m, memory: 256Mi } },
+    restartPolicy = "Never",
+    containers = [{
+      name = "migrate",
+      image = release.image,
+      args = ["migrate", "--to", "${release.schema}"],
+      resources = { limits = { cpu = 500m, memory = 256Mi } },
     }],
   }
 }
@@ -54,16 +54,16 @@ component app {
   output total_replicas: int = deploy.status.replicas
 
   resource k8s.deployment deploy {
-    metadata = { name: "api-${colour}", namespace: "shop" }
+    metadata = { name = "api-${colour}", namespace = "shop" }
     spec.replicas = 3
-    spec.selector.matchLabels = { app: "api", color: colour }
-    spec.template.metadata.labels = { app: "api", color: colour }
+    spec.selector.matchLabels = { app = "api", color = colour }
+    spec.template.metadata.labels = { app = "api", color = colour }
     spec.template.spec.containers = [{
-      name: "api",
+      name = "api",
       image,
-      ports: [{ containerPort: 8080, protocol: "TCP" }],
-      readinessProbe: { httpGet: { path: "/healthz", port: 8080 } },
-      resources: { limits: { cpu: 1, memory: 512Mi } },
+      ports = [{ containerPort = 8080, protocol = "TCP" }],
+      readinessProbe = { httpGet = { path = "/healthz", port = 8080 } },
+      resources = { limits = { cpu = 1, memory = 512Mi } },
     }]
   }
 }

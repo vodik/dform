@@ -64,7 +64,7 @@ fn a_deny_reading_a_stuck_predicate_may_derive_after_the_tick() {
     s.write(
         "extra.df",
         r#"
-deny "no nodepool in zone z" {pool: n} where n in google.container_node_pool, arg(google.container_node_pool, n, "zone", "us-east1-z")
+deny "no nodepool in zone z" {pool = n} where n in google.container_node_pool, arg(google.container_node_pool, n, "zone", "us-east1-z")
 "#,
     );
     let r = gke(&s, &["extra.df"], "plan").success();
@@ -124,8 +124,8 @@ fn a_keyed_list_diffs_by_element() {
 
 resource k8s.deployment api {
   metadata.name = "api",
-  spec.selector.matchLabels = {app: "api"},
-  spec.template.spec.containers = [ {name: "app", image: "api:1"} ]
+  spec.selector.matchLabels = {app = "api"},
+  spec.template.spec.containers = [ {name = "app", image = "api:1"} ]
 }
 use fake
 "#;
@@ -139,8 +139,8 @@ use fake
     s.write(
         "p.df",
         &one.replace(
-            r#"{name: "app", image: "api:1"} ]"#,
-            r#"{name: "app", image: "api:1"}, {name: "sidecar", image: "envoy:1"} ]"#,
+            r#"{name = "app", image = "api:1"} ]"#,
+            r#"{name = "app", image = "api:1"}, {name = "sidecar", image = "envoy:1"} ]"#,
         ),
     );
     let r = s

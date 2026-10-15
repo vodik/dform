@@ -67,7 +67,7 @@ use fake
 fn a_reference_to_an_object_an_earlier_apply_made_orders_its_delete() {
     let s = Scratch::new("delete-order-later");
     let first = r#"
-resource iam.role app_role { name = "app", assume = { principals: ["x"] } }
+resource iam.role app_role { name = "app", assume = { principals = ["x"] } }
 resource iam.policy app_policy { name = "p", document = "{}" }
 use fake
 "#;

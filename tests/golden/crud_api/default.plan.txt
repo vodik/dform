@@ -12,10 +12,10 @@ tick 1  8 changes
       name = "crud-api-dev"
       region = "us-east1"            stacks/crud_api.df:22
       settings = {
-        tier: "db-f1-micro",
-        availability_type: "ZONAL",
-        backup_configuration: { enabled: true, point_in_time_recovery_enabled: true },
-        ip_configuration: { ipv4_enabled: false, private_network: vpc },
+        tier = "db-f1-micro",
+        availability_type = "ZONAL",
+        backup_configuration = { enabled = true, point_in_time_recovery_enabled = true },
+        ip_configuration = { ipv4_enabled = false, private_network = vpc },
       }
   + google.sql_user crud_user        stacks/crud_api.df:92
       instance = "crud-api-dev"
@@ -33,28 +33,28 @@ tick 1  8 changes
       instance = "crud-api-dev"
       name = "crud_api"
   + k8s.secret db_conn               stacks/crud_api.df:120
-      metadata = { name: "crud-api-db", namespace: "shop" }
+      metadata = { name = "crud-api-db", namespace = "shop" }
       stringData = {
-        PGHOST: db.private_ip_address,
-        PGUSER: (sensitive),
-        PGDATABASE: (sensitive),
-        PGPASSWORD: (sensitive),
+        PGHOST = db.private_ip_address,
+        PGUSER = (sensitive),
+        PGDATABASE = (sensitive),
+        PGPASSWORD = (sensitive),
       }
   + k8s.job migrate-v42              stacks/crud_api.df:134
-      metadata.labels = { app: "crud-api", schema: "42" }
+      metadata.labels = { app = "crud-api", schema = "42" }
       metadata.name = "crud-api-migrate-v42"
       metadata.namespace = "shop"
       spec.backoffLimit = 2
       spec.template.spec = {
-        restartPolicy: "Never",
-        containers: [{
-          name: "migrate",
-          image: "gcr.io/shop/crud-api@sha256:9f2c4d0e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d",
-          args: ["migrate", "--to", "42"],
-          envFrom: [{ secretRef: { name: "crud-api-db" } }],
-          resources: {
-            requests: { cpu: "100m", memory: "128Mi" },
-            limits: { cpu: "500m", memory: "256Mi" },
+        restartPolicy = "Never",
+        containers = [{
+          name = "migrate",
+          image = "gcr.io/shop/crud-api@sha256:9f2c4d0e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d",
+          args = ["migrate", "--to", "42"],
+          envFrom = [{ secretRef = { name = "crud-api-db" } }],
+          resources = {
+            requests = { cpu = "100m", memory = "128Mi" },
+            limits = { cpu = "500m", memory = "256Mi" },
           },
         }],
       }
@@ -71,23 +71,23 @@ tick 2  ? changes
     k8s.horizontal_pod_autoscaler green.hpa
     k8s.pod_disruption_budget green.pdb
     k8s.network_policy green.allow_http
-  k8s.service api                    stacks/crud_api.df:190  if serving(_)
+  k8s.service api                    stacks/crud_api.df:193  if serving(_)
 
 policy  5 hold · 8 undetermined
-  undetermined  a rollout runs a schema the migration has not reached  stacks/crud_api.df:260
+  undetermined  a rollout runs a schema the migration has not reached  stacks/crud_api.df:270
     k8s.job migrate-v42                            until status.succeeded is known (tick 2)
-  undetermined  container memory limit above 2Gi   stacks/crud_api.df:288  1 undetermined
+  undetermined  container memory limit above 2Gi   stacks/crud_api.df:298  1 undetermined
     k8s.job migrate-v42                            until status.succeeded is known (tick 2)
-  undetermined  container requests more memory than its limit  stacks/crud_api.df:291
+  undetermined  container requests more memory than its limit  stacks/crud_api.df:301
     k8s.job migrate-v42                            until status.succeeded is known (tick 2)
-  undetermined  container without resource limits  stacks/crud_api.df:281  1 undetermined
+  undetermined  container without resource limits  stacks/crud_api.df:291  1 undetermined
     k8s.job migrate-v42                            until status.succeeded is known (tick 2)
-  undetermined  cutover to a color with unready pods  stacks/crud_api.df:263  1 undetermined
+  undetermined  cutover to a color with unready pods  stacks/crud_api.df:273  1 undetermined
     k8s.job migrate-v42                            until status.succeeded is known (tick 2)
-  undetermined  image not pinned by digest         stacks/crud_api.df:294  1 undetermined
+  undetermined  image not pinned by digest         stacks/crud_api.df:304  1 undetermined
     k8s.job migrate-v42                            until status.succeeded is known (tick 2)
-  undetermined  migration failed; the rollout is held  stacks/crud_api.df:257  1 undetermined
+  undetermined  migration failed; the rollout is held  stacks/crud_api.df:267  1 undetermined
     k8s.job migrate-v42                            until status.conditions is known (tick 2)
-  undetermined  plaintext secret in env            stacks/crud_api.df:305  1 undetermined
+  undetermined  plaintext secret in env            stacks/crud_api.df:315  1 undetermined
     k8s.job migrate-v42                            until status.succeeded is known (tick 2)
 -- stderr --

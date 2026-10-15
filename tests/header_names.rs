@@ -79,7 +79,7 @@ fn a_module_item_reads_the_module_and_another_read_is_ambiguous() {
         "p.df",
         "\n\nuse fake\n\
          use config\n\
-         resource net.vpc config { cidr = \"10.0.0.0/16\", tags = { d: config.base_domain } }\n\
+         resource net.vpc config { cidr = \"10.0.0.0/16\", tags = { d = config.base_domain } }\n\
          resource net.subnet s { vpc = net.vpc[\"config\"], cidr = net.vpc[\"config\"].cidr }\n",
     );
     let r = mock(&s, &["plan"]).success();
@@ -118,7 +118,7 @@ fn a_module_item_reads_the_module_and_another_read_is_ambiguous() {
 fn an_instance_output_reads_the_copy() {
     let src = "component c {\n  output size: int = 3\n}\n\
                resource c main {}\n\
-               resource net.vpc main { cidr = \"10.0.0.0/16\", tags = { n: \"${main.size}\" } }\n";
+               resource net.vpc main { cidr = \"10.0.0.0/16\", tags = { n = \"${main.size}\" } }\n";
     let e = error(&format!(
         "{src}resource net.subnet s {{ vpc = net.vpc[\"main\"], cidr = main.cidr }}\n"
     ));

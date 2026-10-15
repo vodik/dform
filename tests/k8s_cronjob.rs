@@ -40,7 +40,7 @@ fn project(name: &str, real: bool, body: &str) -> Scratch {
 }
 
 const POD: &str =
-    "{ restartPolicy: \"OnFailure\", containers: [{ name: \"b\", image: \"busybox\" }] }";
+    "{ restartPolicy = \"OnFailure\", containers = [{ name = \"b\", image = \"busybox\" }] }";
 
 /// The template's three spellings under `at` (`spec.jobTemplate.spec` or
 /// `spec`).

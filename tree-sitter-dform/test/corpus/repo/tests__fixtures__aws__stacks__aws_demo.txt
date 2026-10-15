@@ -17,22 +17,18 @@ tests/fixtures/aws/stacks/aws_demo.df
 
 use aws
 
-resource aws.vpc main { cidr_block = "10.0.0.0/16", tags = { "Name": "main" } }
+resource aws.vpc main { cidr_block = "10.0.0.0/16", tags = { "Name" = "main" } }
 
-resource aws.subnet a {
-  vpc = main
-  cidr_block = "10.0.1.0/24"
-  availability_zone = "us-east-1a"
-}
+resource aws.subnet a { vpc = main, cidr_block = "10.0.1.0/24", availability_zone = "us-east-1a" }
 
 resource aws.security_group web {
   name = "web"
   vpc = main
   ingress = [
-    { from_port: 443, to_port: 443, protocol: "tcp", cidr_blocks: ["0.0.0.0/0"] },
-    { from_port: 80, to_port: 80, protocol: "tcp", cidr_blocks: ["0.0.0.0/0"] },
+    { from_port = 443, to_port = 443, protocol = "tcp", cidr_blocks = ["0.0.0.0/0"] },
+    { from_port = 80, to_port = 80, protocol = "tcp", cidr_blocks = ["0.0.0.0/0"] },
   ]
-  egress = [{ from_port: 0, to_port: 0, protocol: "-1", cidr_blocks: ["0.0.0.0/0"] }]
+  egress = [{ from_port = 0, to_port = 0, protocol = "-1", cidr_blocks = ["0.0.0.0/0"] }]
 }
 
 resource aws.instance web {
@@ -44,7 +40,7 @@ resource aws.instance web {
 
 resource aws.instance bastion {
   instance_type = "t3.micro"
-  tags = { subnet_az: a.availability_zone, web_az: aws.instance["web"].availability_zone }
+  tags = { subnet_az = a.availability_zone, web_az = aws.instance["web"].availability_zone }
 }
 
 resource aws.eip web { domain = "vpc", instance = aws.instance["web"] }

@@ -55,7 +55,7 @@ fn a_join_on_a_secret_is_e0301() {
     );
     // A pattern's field is a join too.
     refused(
-        "known({ v: \"hunter2\" })\ndeny \"x\" where pw(p), known({ v: p })\n",
+        "known({ v = \"hunter2\" })\ndeny \"x\" where pw(p), known({ v = p })\n",
         "E0301: a join over a secret",
     );
 }
@@ -78,11 +78,11 @@ fn a_declassified_join_and_a_forward_stay_allowed() {
 #[test]
 fn a_computed_key_interpolates() {
     let r = run("resource leaky.vault v {\n  \
-         tags = { \"${k}-a\": \"1\", b: \"2\", k }\n  \
-         backup = { \"${k}\": pw }\n}\n")
+         tags = { \"${k}-a\" = \"1\", b = \"2\", k }\n  \
+         backup = { \"${k}\" = pw }\n}\n")
     .success();
     for want in [
-        "tags = { b: \"2\", k: \"team\", team-a: \"1\" }",
+        "tags = { b = \"2\", k = \"team\", team-a = \"1\" }",
         "backup.team = (sensitive)",
     ] {
         assert!(r.stdout.contains(want), "{want}\n{}", r.stdout);
@@ -93,18 +93,18 @@ fn a_computed_key_interpolates() {
 #[test]
 fn a_secret_key_is_e0301() {
     refused(
-        "resource leaky.vault v { backup = { \"${pw}\": \"1\" } }\n",
+        "resource leaky.vault v { backup = { \"${pw}\" = \"1\" } }\n",
         "E0301: an object's key over a secret",
     );
     refused(
-        "deny \"x\" { at: { \"x-${pw}\": 1 } } where k == \"team\"\n",
+        "deny \"x\" { at = { \"x-${pw}\" = 1 } } where k == \"team\"\n",
         "E0301: an object's key over a secret",
     );
 }
 
 #[test]
 fn two_keys_alike_have_no_value() {
-    let r = run("resource leaky.vault v { tags = { \"${k}\": \"1\", team: \"2\" } }\n").failure();
+    let r = run("resource leaky.vault v { tags = { \"${k}\" = \"1\", team = \"2\" } }\n").failure();
     assert!(
         r.stderr.contains("leaky.vault v.tags has no value"),
         "{}",

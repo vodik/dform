@@ -11,5 +11,5 @@ component network {
 
 component tags {
   contributes t.tags
-  set r.tags = { team: "x" } where r in resource
+  set r.tags = { team = "x" } where r in resource
 }

@@ -81,9 +81,9 @@ plan:
 ```dform
 use aws { region = "us-east-1" }
 
-resource aws.vpc core { cidr_block = "10.0.0.0/16", tags = { Name: "core" } }
-resource aws.vpc shop { cidr_block = "10.1.0.0/16", tags = { Name: "shop" } }
-resource aws.vpc data { cidr_block = "10.2.0.0/16", tags = { Name: "data" } }
+resource aws.vpc core { cidr_block = "10.0.0.0/16", tags = { Name = "core" } }
+resource aws.vpc shop { cidr_block = "10.1.0.0/16", tags = { Name = "shop" } }
+resource aws.vpc data { cidr_block = "10.2.0.0/16", tags = { Name = "data" } }
 
 hub(core)
 spoke(shop)
@@ -120,7 +120,7 @@ component network {
   input cidr: inet
   output vpc: aws.vpc = vpc
 
-  resource aws.vpc vpc { cidr_block = cidr, tags = { component: "network" } }
+  resource aws.vpc vpc { cidr_block = cidr, tags = { component = "network" } }
   resource aws.subnet "private-${zone}" {
     vpc
     cidr_block = inet.subnet(cidr, 8, n)
@@ -160,9 +160,9 @@ tick 1  3 changes
   + aws.db_instance orders         stacks/app.df:10
       backup_retention_period = 7  stacks/app.df:6
       instance_class = "db.t3.micro"
-  + aws.vpc data                   stacks/app.df:8  with v = {cidr: "10.2.0.0/16", name: "data"}
+  + aws.vpc data                   stacks/app.df:8  with v = {cidr = "10.2.0.0/16", name = "data"}
       cidr_block = "10.2.0.0/16"
-  + aws.vpc shop                   stacks/app.df:8  with v = {cidr: "10.1.0.0/16", name: "shop"}
+  + aws.vpc shop                   stacks/app.df:8  with v = {cidr = "10.1.0.0/16", name = "shop"}
       cidr_block = "10.1.0.0/16"
 ```
 
@@ -176,9 +176,9 @@ resource aws.db_instance orders { instance_class = "db.t3.micro" }
 
 resource aws.iam_policy "connect-${id}" {
   policy = json.encode({
-    Statement: [{
-      Action: "rds-db:connect",
-      Resource: "arn:aws:rds-db:us-east-1:*:dbuser:${id}/app",
+    Statement = [{
+      Action = "rds-db:connect",
+      Resource = "arn:aws:rds-db:us-east-1:*:dbuser:${id}/app",
     }],
   })
 } where pg in aws.db_instance, id = pg.resource_id
@@ -258,8 +258,8 @@ let serving = next where ready(next)
 let serving = live where not ready(next)
 
 resource k8s.service api {
-  metadata = { name: "api", namespace: "shop" }
-  spec.selector = { app: "api", color: serving }
+  metadata = { name = "api", namespace = "shop" }
+  spec.selector = { app = "api", color = serving }
 }
 ```
 
@@ -284,12 +284,12 @@ resource to carry its team's tag, inside components too; remembering to
 tag each one by hand is error-prone:
 
 ```dform
-set r.tags = { team: "shop" } where r in resource
+set r.tags = { team = "shop" } where r in resource
 ```
 
 ```
 $ dform query 'blue.vpc.tags'
-{ team: "shop", component: "network" }
+{ team = "shop", component = "network" }
 ```
 
 After an apply, we want to ask what the next plan would change. The plan

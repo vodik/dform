@@ -32,7 +32,7 @@ resource west.vpc b {
 resource west.subnet s {
   vpc = b
   cidr_block = "10.1.1.0/24"
-  tags = { peer: ref(a), peer_cidr: a.cidr_block }
+  tags = { peer = ref(a), peer_cidr = a.cidr_block }
 }
 
 vpcs(n) where v in aws.vpc, n = v.cidr_block
@@ -51,7 +51,7 @@ fn two_names_of_one_provider_apply_each_its_own() {
         "+ east.vpc a ",
         "+ west.vpc b ",
         "+ west.subnet s ",
-        "tags = { peer: a, peer_cidr: \"10.0.0.0/16\" }",
+        "tags = { peer = a, peer_cidr = \"10.0.0.0/16\" }",
     ] {
         assert!(plan.contains(want), "{want}\n{plan}");
     }
@@ -112,8 +112,8 @@ fn membership_and_settings_follow_the_name() {
         .success()
         .stdout;
     assert!(
-        config.contains("\"east\"  {region: \"us-east-1\"}")
-            && config.contains("\"west\"  {region: \"us-west-2\"}"),
+        config.contains("\"east\"  {region = \"us-east-1\"}")
+            && config.contains("\"west\"  {region = \"us-west-2\"}"),
         "{config}"
     );
 }
@@ -245,7 +245,7 @@ fn one_use_of_a_provider_is_as_before() {
         .success()
         .stdout;
     assert!(
-        config.contains("\"aws\"  {region: \"us-east-1\"}"),
+        config.contains("\"aws\"  {region = \"us-east-1\"}"),
         "{config}"
     );
     let vpcs = s.run(&["dev", "query", "vpcs", "main.df"]).success().stdout;

@@ -19,7 +19,7 @@ same() where shouting == plain
 text() where plain == "https://example.com/"
 parts(s, u, w, h, p, a, q, y, f) where s = full.scheme, u = full.user, w = full.password, h = full.host, p = full.port, a = full.path, q = full.query.x, y = full.query.y, f = full.fragment
 noport(p) where p = bare.port
-enc(j) where j = json.encode({ u: home })
+enc(j) where j = json.encode({ u = home })
 "#;
     assert_eq!(facts(src, "same"), ["same()"]);
     assert!(facts(src, "text").is_empty());
@@ -81,7 +81,7 @@ mh(x) where x = uri.with_host("mailto:ops@example.com", "mx.example")
 po(x) where x = uri.with_port("http://h/p", 8080)
 dp(x) where x = uri.with_port("http://h/p", 80)
 pa(x) where x = uri.with_path("http://h/p", "/q")
-qu(x) where x = uri.with_query("http://h/p", { a: "1", b: "x y" })
+qu(x) where x = uri.with_query("http://h/p", { a = "1", b = "x y" })
 fr(x) where x = uri.with_fragment("http://h/p", "top")
 en(x) where x = uri.escape("a b/c")
 "#;
@@ -257,8 +257,8 @@ fn a_confusable_host_is_a_warning_at_every_level() {
         "p.df",
         "\ninput host: string = \"example.com\"\ninput site from csv.decode(io.read(\"hosts.csv\"))\nuse fake\n\
          resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  tags = { host }\n}\n\
-         resource net.vpc shop {\n  cidr = \"10.1.0.0/16\"\n  tags = { host: h }\n} where site(_, h)\n\
-         resource net.vpc books {\n  cidr = \"10.2.0.0/16\"\n  tags = { host: \"bücher.example\" }\n}\n",
+         resource net.vpc shop {\n  cidr = \"10.1.0.0/16\"\n  tags = { host = h }\n} where site(_, h)\n\
+         resource net.vpc books {\n  cidr = \"10.2.0.0/16\"\n  tags = { host = \"bücher.example\" }\n}\n",
     );
     let cyrillic_a = "ex\u{430}mple.com";
     let set = format!("host={cyrillic_a}");

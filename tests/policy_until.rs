@@ -30,7 +30,7 @@ resource net.vpc d {
   name = platform[env].endpoint
 }
 deny "networks are not named nowhere" where v in net.vpc, v.name == "nowhere"
-deny "the endpoint is somewhere" { vpc: v } where v in net.vpc, platform[env].endpoint == "nowhere"
+deny "the endpoint is somewhere" { vpc = v } where v in net.vpc, platform[env].endpoint == "nowhere"
 "#;
 
 /// A policy line as `--json` says it: its text, what holds, and each
@@ -148,7 +148,7 @@ use stacks.platform
 component node {
   input ep: string
   resource net.vpc v { cidr = "10.1.0.0/16" }
-  deny "a node's endpoint is somewhere" { vpc: w } where w in net.vpc, ep == "nowhere"
+  deny "a node's endpoint is somewhere" { vpc = w } where w in net.vpc, ep == "nowhere"
 }
 resource node n0 { ep = platform[env].endpoint }
 resource node n1 { ep = "x" }

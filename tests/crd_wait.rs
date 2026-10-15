@@ -57,12 +57,12 @@ type_attr(k8s.traefik.middleware, \"spec.buffering.maxRequestBodyBytes\", \"int\
 /// The shape of ~/src/ovh-infra's traefik.df: the CRDs from the vendored
 /// manifest, and a Middleware the forge's Ingress names.
 const PROG: &str = r#"
-use k8s { kubeconfig = "kc", crds = { "middlewares.traefik.io": "mw.df" } }
+use k8s { kubeconfig = "kc", crds = { "middlewares.traefik.io" = "mw.df" } }
 
 resource k8s.custom_resource_definition "${d.metadata.name}" = d where d in yaml.decode(io.read("crds.yml"))
 
 resource k8s.traefik.middleware large_upload {
-  metadata = { name: "large-upload", namespace: "apps" }
+  metadata = { name = "large-upload", namespace = "apps" }
   spec.buffering.maxRequestBodyBytes = 536870912
 }
 "#;
@@ -178,7 +178,7 @@ use k8s { source = "./providers/k8s", kubeconfig = raw }
 resource k8s.custom_resource_definition "${d.metadata.name}" = d where d in yaml.decode(io.read("crds.yml"))
 
 resource k8s.traefik.middleware large_upload {
-  metadata = { name: "large-upload", namespace: "apps" }
+  metadata = { name = "large-upload", namespace = "apps" }
   spec.buffering.maxRequestBodyBytes = 536870912
 }
 "#,
@@ -251,7 +251,7 @@ use k8s { source = "./providers/k8s" }
 resource k8s.custom_resource_definition "${d.metadata.name}" = d where d in yaml.decode(io.read("crds.yml"))
 
 resource k8s.traefik.middleware large_upload {
-  metadata = { name: "large-upload", namespace: "apps" }
+  metadata = { name = "large-upload", namespace = "apps" }
   spec.buffering.maxRequestBodyBytes = 536870912
 }
 "#;

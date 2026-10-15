@@ -87,7 +87,7 @@ In a clause of a literal per line, a literal without its comma is an
 error that says so. A braced body after `where` is gone: it is an error that
 prints the clause with its literals separated by commas. A `{` after
 `where` whose `}` does not end the line starts a literal, an object
-pattern: `{ cpu: x } = lim`. There is no
+pattern: `{ cpu = x } = lim`. There is no
 statement terminator: `p(a).` is an error that says so, and so is `:-`.
 
 Two statements on one line are an error ("expected the end of the line").
@@ -155,10 +155,10 @@ A string is a string constant: every constant is quoted (`"prod"`,
 itself. A hole runs to the `}` that matches its `${` and holds a term
 like any other, strings included: a string in a hole is lexed
 as its own, so its braces are its text and its holes nest to any depth,
-`"#cloud-config\n${yaml.encode({ runcmd: ["${install} sh -s - server"] })}"`.
+`"#cloud-config\n${yaml.encode({ runcmd = ["${install} sh -s - server"] })}"`.
 A hole never closed is an error at its `${`. A hole is a content
 position: a dot in it reads now (see "Reference or read"). An object's
-key interpolates too, `{ "${name}-a": v }`: the object is built when its
+key interpolates too, `{ "${name}-a" = v }`: the object is built when its
 keys are known, two keys alike give it no value, and a secret key is a
 read of the secret (E0301). A reference in
 a hole is its address, `T["A"]`, whether `in` types its variable or a
@@ -195,8 +195,8 @@ a Kubernetes annotation is written and read as one leaf,
 = "letsencrypt"`. A stored path is a list of segments: a segment holding
 `.`, `[`, `]`, `/` or `"` is kept quoted, so the plan, `why`, a null's
 label and the plan file print it as written, and `why` takes it back. `dform fmt` keeps the quoted segment, or folds it with its
-siblings into the object form (`metadata.annotations = { "a.b/c": "1",
-"d.e/f": "2" }`, "Formatting"). A selector's quoted step (`input p from
+siblings into the object form (`metadata.annotations = { "a.b/c" = "1",
+"d.e/f" = "2" }`, "Formatting"). A selector's quoted step (`input p from
 json.decode(io.read(..))."k"`) may still not hold `.`, `[` or `]`.
 
 ### Doc comments
@@ -425,7 +425,7 @@ label). In a body or a value the path is a read that enumerates
 end not walked again. A `set` is the clause form with a variable per
 `[_]`, so it fires per binding: `set
 k8s.stateful_set[_].spec.template.spec.containers[_].resources.limits =
-{ cpu: 500m, memory: 256Mi } @default` is `set c.resources.limits = ..
+{ cpu = 500m, memory = 256Mi } @default` is `set c.resources.limits = ..
 where w in k8s.stateful_set, c in w.spec.template.spec.containers`, and
 over a list it writes the elements there are, by their key: one
 `[_]` per list, below it fields. `[k]` takes one element by its key as
@@ -507,7 +507,7 @@ Inference unifies every edge a value flows through: a variable joins
 the columns it is written in, and a field read (`x.cpu`), an element (`x
 in l`, `l[i]`, a comprehension's), an entry (`(k, v) in o`) and a
 pattern's field link a value to the one it is part of, so `let limits =
-{ cpu: 100m }` read at `resources.requests` is millicores, and a field of
+{ cpu = 100m }` read at `resources.requests` is millicores, and a field of
 it read at `requests.cpu` is too. Two edges that read one literal as two
 types are an error naming both (`100m` in `let t` is duration where it
 reaches output d and cpu where it reaches `..requests.cpu`); a `100m` no
@@ -694,7 +694,7 @@ where `c` is a cpu); a `set` through a resource of any type (`x in
 resource`, `x in k8s`) reads it as every type of the schema (of the
 namespace) that declares the attribute does, when they agree (`cpu:
 100m` under `resources.requests` is cpu); written in a `let`, it is read where
-the let's value reaches (`let limits = { cpu: 100m }` given to
+the let's value reaches (`let limits = { cpu = 100m }` given to
 `resources.requests`). Where nothing gives it a type the literal
 is an error naming both readings, and a typed `let` says which, `let
 limit: cpu = 500m`. A bare
@@ -934,7 +934,7 @@ element, and `set from DOC` a document's leaves. A value written with `from`, or
 with `=` (`input p = [..]`), is an error that says so; rows written in
 the program are facts, `p("a", 1)`.
 
-An entry that is only a name is its pun, as `{ a }` is `{ a: a }`
+An entry that is only a name is its pun, as `{ a }` is `{ a = a }`
 in an object: `availability_zone` alone is `availability_zone =
 availability_zone`, and a rank may follow (`tags @default`). The name is
 resolved where the value would be, as a clause variable, a value name or
@@ -970,7 +970,7 @@ with no key is one value: writing an element of it is an error naming the
 `type_list_key` to declare. One index per written path: below the element
 the path is fields. A variable an `in` binds to an element of a
 resource's list (`c in w.spec.template.spec.containers`, or `(i, c) in`)
-is that element: `set c.resources.limits = { cpu: 500m, memory:
+is that element: `set c.resources.limits = { cpu = 500m, memory =
 256Mi } @default where w in k8s.deployment, c in
 w.spec.template.spec.containers` writes `w`'s container `c` by its key,
 as `containers[c.name]` would; over a list with no key it is the error
@@ -1006,14 +1006,14 @@ enum("eu", "us") = "ca"` is an error at `"ca"`, `let n: inet =
 resource type (`let v: net.vpc = main`, also written `ref(net.vpc)`),
 and a bare name two resources share is the one of type `T`. An object
 type reads each field as its type and a list type each element (`let
-hosts: { a: ip, b: uri } = { a: "10.0.0.1", b: "https://x" }`; `"10.0"`
+hosts: { a: ip, b: uri } = { a = "10.0.0.1", b = "https://x" }`; `"10.0"`
 there is an error at `hosts.a`), as an input's and an attribute's do.
 Every row of a typed `let` declares the same `T`. The type is the column
 of `k`'s reads, so hover and the inferred signatures show it. An
 untyped `let k = t` is typed by its uses ("Types"): every place
 its value reaches (an attribute, a typed input, a parameter, another
 typed `let`) gives the paths it reaches their types, and its literal is
-read at them, `let limits = { cpu: 100m, memory: 128Mi }` given to
+read at them, `let limits = { cpu = 100m, memory = 128Mi }` given to
 `resources.requests`; uses that disagree are an error naming both, and
 a `100m` no use types is the error at the let, whose help is `give the
 let a type, `let limits: { cpu: cpu }`, or use it where a cpu or a
@@ -1120,11 +1120,11 @@ nodes.count=2` (read as the leaf's type; a path that names no field is an
 error listing the object's fields), `--set nodes=@nodes.yaml` (each field
 the document has; one the object has not is an error), `set nodes.count = 2
 where env == "prod"`, a copy's block's `nodes.count = 2` or `nodes = {
-.. }`, an input file's `nodes({ count: 2 })`. A field with no default is
+.. }`, an input file's `nodes({ count = 2 })`. A field with no default is
 required like an input, by its path. `why nodes.count` shows the leaf's
 layers. A `key` is a scalar and takes no block.
 
-An input typed `map(T)` (`input labels: map(string) = { team: "core" }`)
+An input typed `map(T)` (`input labels: map(string) = { team = "core" }`)
 is an object with open keys, each value a `T`: one cell, read whole
 (`labels`), by a key (`labels.team`) or entry by entry (`(k, v) in
 labels`). `--set labels.owner=ops` gives one key, read as `T` (a
@@ -1415,7 +1415,7 @@ that holds:
 ```dform
 resource postgres_aws db { name = "shop" } where cloud == "aws"
 resource cloudsql db { name = "shop" } where cloud == "gcp"
-resource k8s.secret conn { data = { url: db.conn } }
+resource k8s.secret conn { data = { url = db.conn } }
 ```
 
 Both copies are scoped `db` (`T["db.x"]`, `db.conn`), each gated by its
@@ -1672,7 +1672,7 @@ other is E0304, the help naming those it may go to. Each is a term, read like a 
 rule for them all, plus one for `expect_account`:
 
 ```
-use p { k1 = t1, k2 = t2 }    provider_config("p", { k1: t1', k2: t2' }) :- reads
+use p { k1 = t1, k2 = t2 }    provider_config("p", { k1 = t1', k2 = t2' }) :- reads
 expect_account = t            provider_expect_account("p", t') :- reads
 ```
 
@@ -1899,7 +1899,7 @@ documents read, and every program file; a location read over a transport
 
 A document becomes a resource by `resource T NAME = VALUE [where B]`: the body is a value of the type, an object, in place of the
 block. An object written out is the block of its entries, checked as a
-block's are (`resource k8s.namespace apps = { metadata: { name: "apps" }
+block's are (`resource k8s.namespace apps = { metadata = { name = "apps" }
 }`); any other value is one contribution at the root of the resource, an
 entry per key of the object it is when the rule runs, so `set`, a
 baseline's `@default` and an `@override` contribute over it as over a
@@ -1997,7 +1997,7 @@ read       := chain | call ("." SEG | "[" term "]")+   ; a call's result, read
 list       := "[" (item ("," item)* ","?)? "]"
 item       := term | ".." term                    ; a spread
 object     := "{" (field ("," field)* ","?)? "}"
-field      := key (":" term)? | ".." term          ; `{ a }` is `{ a: a }`; a spread
+field      := key ("=" term)? | ".." term          ; `{ a }` is `{ a = a }`; a spread
 key        := NAME | STRING
 comprehension := "[" term "|" body1 ","? "]"
 type       := DOTTED ("(" type ("," type)* ")")? | "{" NAME ":" type ("," NAME ":" type)* "}" | STRING
@@ -2008,14 +2008,14 @@ operator follows it (`f(x) == 3` compares a call).
 
 A spread `..x` leads a field of an object or an element of a
 list and gives what `x` holds there, in order with what is written: `{
-..base, replicas: 3 }` is base's fields then `replicas`, a key written
+..base, replicas = 3 }` is base's fields then `replicas`, a key written
 after a spread replacing the spread's and one written before it a default
 the spread replaces; `[..a, x, ..b]` is a's elements, `x`, then b's; and
 `[..0..3]` is `[0, 1, 2]`, a discrete range's members (a dense range's is
 an error). A range sits between two terms and a spread leads an
 entry, so position decides. There is no deep merge: an object written
 after a spread replaces the spread's whole, and depth is written where it
-is wanted, `{ ..base, spec: { ..base.spec, replicas: 3 } }`. A spread of
+is wanted, `{ ..base, spec = { ..base.spec, replicas = 3 } }`. A spread of
 what is not the literal's kind (a list in an object, an object or a
 string in a list) is an error at the spread where its kind is known (a
 literal, a list, a call's declared result) and at the statement once it
@@ -2023,7 +2023,7 @@ has a value otherwise; a source not known yet leaves the literal's fields
 unknown, so the resource waits for the tick that gives it (an unknown
 inside the source is carried, as one inside a literal is). A key one
 literal writes twice is an error naming both. A contribution that
-spreads the attribute it writes, `set r.spec = { ..r.spec, x: 1 }`, makes
+spreads the attribute it writes, `set r.spec = { ..r.spec, x = 1 }`, makes
 a value from itself: the cycle error, whose help is `set r.spec.x = 1`.
 
 The same `..` is an object pattern's rest ("Patterns"). It is not
@@ -2236,7 +2236,7 @@ statement and the rows of its group.
 ```
 pattern    := "_" | NAME | literal | tuple | "{" pfield ("," pfield)* ("," ".." NAME)? ","? "}"
 tuple      := "(" pattern "," pattern ("," pattern)* ","? ")"
-pfield     := key (":" pattern)?                ; `{ a }` is `{ a: a }`
+pfield     := key ("=" pattern)?                ; `{ a }` is `{ a = a }`
 ```
 
 One production, in three places: on the left of `in`, on the left
@@ -2245,22 +2245,22 @@ relation's argument. A name binds, or compares when it is bound
 already; `_` matches anything; a literal compares. A tuple needs the
 exact arity: `(a, b) = pair` matches a list of two elements and fails
 the match otherwise. An object pattern binds the fields it names and
-ignores the rest: `{ host, port } = conn` matches `{host: "db", port:
-5432, user: "app"}`, and an object without `port` does not match. Its
+ignores the rest: `{ host, port } = conn` matches `{host = "db", port =
+5432, user = "app"}`, and an object without `port` does not match. Its
 last entry may be `..name`, which binds the rest: the object
-without the keys the pattern names, `{ metadata: m, ..body } = doc`, and
-`{ ..body, metadata: m2 }` puts it back together, the spread and the rest
+without the keys the pattern names, `{ metadata = m, ..body } = doc`, and
+`{ ..body, metadata = m2 }` puts it back together, the spread and the rest
 being one notation. `..` alone is an error, since a pattern ignores what
 it does not name already, and so is `..` in a tuple: a tuple matches a
 list of exactly its arity. Patterns nest: `(i, (n, x)) in pairs`, `(env,
-{ cidr: c }) in nets`.
+{ cidr = c }) in nets`.
 
 - After `in`, a tuple is `(key, value)` of an object or `(index,
   element)` of a list: `(k, v) in labels` once per label, `(i, x) in xs`
   once per element. `x in obj` is an error naming the pattern: an
   object's entries are `(key, value)`. `not (k, _) in obj` holds when no
   entry matches. An object on the left of `in` is a value, as before:
-  `{ a: 1 } in xs` looks for that object.
+  `{ a = 1 } in xs` looks for that object.
 - Against a function's result, a pattern is a test as well as a
   binding: `(repo, tag) = str.split(image, ":", 1)` binds both when the
   image has a tag and fails otherwise, so `not (_, _) = str.split(image,
@@ -2382,8 +2382,8 @@ what writes it `writes to input k3s.name`.
 
 A write whose type is a variable is grouped by each concrete type it can
 be: `set r.metadata.labels.owner = "simon" @default where r in
-k8s` beside `resource k8s.deployment server { metadata = { name:
-"traefik", namespace: traefik.metadata.name } }`. Grouped as one, the
+k8s` beside `resource k8s.deployment server { metadata = { name =
+"traefik", namespace = traefik.metadata.name } }`. Grouped as one, the
 policy's `metadata` of any type would be one cell, and the Deployment's
 `metadata` would wait on it through the Namespace's, its own included.
 So when such a write is on a cycle, it is a rule per type: the types of
@@ -2598,7 +2598,7 @@ as it is.
 | `f(x, y)` (`f` a let with parameters)     | `V`, reading `f(x', y', V)`: per call site `S`, `S::f?(x', y') :- the body before it` and `S::f`, the rule's copy, read there |
 | `type a = T`                              | nothing: each use of `a` is `T`                        |
 | `#\| k: v` above an item (Doc comments)  | `doc(Kind, Name, "k", "v")`                            |
-| `use p { k = t, expect_account = a }` | `provider_config("p", {k: t'}) :- reads`, `provider_expect_account("p", a') :- reads` ("Providers") |
+| `use p { k = t, expect_account = a }` | `provider_config("p", {k = t'}) :- reads`, `provider_expect_account("p", a') :- reads` ("Providers") |
 | `env.var(t)`                              | `V`, reading `env.var(t', V)`                          |
 | `resource T n { f = t } where B`          | `resource T n { f = t' } :- B, reads`                  |
 | `resource T "a-${e}" { .. }`              | name `Addr`, `Addr = str.format("a-%s", e')` last          |
@@ -2612,13 +2612,13 @@ as it is.
 | `deny "m" {o} where B`                    | `deny("m", {o}) :- B` (`warn` the same)                |
 | `deny "a ${x}" where B`                   | `deny(M, ..) :- B, M = str.format("a %s", X)`              |
 | `set R.p = t @r where B` (`+=`: `arg_add`) | `arg(T, A, "p", t', r) :- B, reads`                   |
-| `set R.l[k].p = t @r where B` (`l` keyed) | `arg(T, A, "l[]", [k', {p: t'}], r) :- B, reads`, the body's reads of `R`'s attribute `attr_base(..)` |
+| `set R.l[k].p = t @r where B` (`l` keyed) | `arg(T, A, "l[]", [k', {p = t'}], r) :- B, reads`, the body's reads of `R`'s attribute `attr_base(..)` |
 | `set c.p = t where .., c in R.l`          | `set R.l[c].p = t`: the key is `c`'s key fields        |
 | `set T[_].l[_].p = t`                     | `set c.p = t where r in T, c in r.l`           |
 | `output k: T = t` (`T` a resource type)   | `output k: addr`, and its value                        |
 | `output k = t` (no reads)                 | `output k = t'`                                        |
 | `output k = t where B` (reads, or a body) | `output(k, t') :- B, reads`                            |
-| `output k { f = t }`                      | `output k = { f: t }`, typed by its fields             |
+| `output k { f = t }`                      | `output k = { f = t }`, typed by its fields             |
 | `output p` (a copy's relation)            | `__rows(Scope, "p", [X, ..]) :- p(X, ..)`, read by `n.p(x, ..)` and `c[t].p(x, ..)` |
 | `output p` (a stack's relation)           | `output p = [ [X, ..] \| p(X, ..) ]`, read by `s[k=v].p(x, ..)` as `member(Rows, [x, ..])` |
 | `input k { f: T = d }`             | the leaf `k.f`'s `arg("input", S, "k.f", d, default)`, its check `k.f`'s refinement |
@@ -2658,9 +2658,9 @@ as it is.
 | `x in e`                                  | `member(e', x)`                                        |
 | `(k, v) in e`                             | `member(e', K, V)`: an object's keys, a list's indexes |
 | `(a, b) = e`                              | `[A, B] = e'`: a list of exactly two                   |
-| `{ a, b: p } = e`                         | `O = e', A = __path(O, "a"), P = __path(O, "b")`       |
+| `{ a, b = p } = e`                         | `O = e', A = __path(O, "a"), P = __path(O, "b")`       |
 | `{ a, ..r } = e`                          | `O = e', A = __path(O, "a"), R = __rest(O, "a")`       |
-| `{ ..b, k: t }`, `[..xs, t]`              | `__merge(b', {k: t'})`, `__concat(xs', [t'])`; folded when every part is written, a discrete range's members when its ends are known |
+| `{ ..b, k = t }`, `[..xs, t]`              | `__merge(b', {k = t'})`, `__concat(xs', [t'])`; folded when every part is written, a discrete range's members when its ends are known |
 | `zone({ name })` (columns `name, index`)  | `zone{name: Name}`, a record pattern                   |
 | `i in lo..hi`, `i in lo..=hi`             | `member(lo'..hi', i)`, `member(lo'..=hi', i)`, the range a value when its ends are known, else `__range(lo', hi', inclusive)` |
 | `x not in e`, `not x in T`                | `not member(e', x)`, `not want(T, x)`                  |
@@ -2712,7 +2712,7 @@ The groups, and how each breaks:
 
 - a list, an object, an argument list, a tuple, an object type and a
   declaration's columns: one element per line, each with a trailing
-  comma; on one line, none (`[1, 2]`, `{ a: 1 }`, `f(x)`);
+  comma; on one line, none (`[1, 2]`, `{ a = 1 }`, `f(x)`);
 - a list or an argument list whose only element is an object or a
   list hugs it, `[{` and `}]`, `json.encode({` and `})` on the outer
   lines: the only closers not on their own line; a keyed element (an
@@ -2749,13 +2749,13 @@ component's own interface (see "The header").
 
 The normal forms:
 
-- `{ a: a }` is `{ a }`, and a block's entry `k = k` is `k`; a dotted
+- `{ a = a }` is `{ a }`, and a block's entry `k = k` is `k`; a dotted
   path is never punned (`spec.selector.color = color` stays), and an entry
   that is only a dotted path, an earlier pun, is written out:
   `spec.selector.color` is `spec.selector.color = color`;
 - a resource block's leaves under one parent path are one entry:
   `metadata.name = "a"` and `metadata.namespace = n` are `metadata = {
-  name: "a", namespace: n }` when the parent has two or more entries, each
+  name = "a", namespace = n }` when the parent has two or more entries, each
   a leaf (a value that is not an object) set with `=` at one rank, and
   nothing sets a path below them, in source order at the first one's
   place; a parent with an object under it (`metadata.labels = { .. }`) or

@@ -17,7 +17,7 @@ fn a_string_in_a_hole_is_the_holes() {
                let install = \"curl -sfL https://get.k3s.io |\"\n\
                let packages = [\"nftables\", \"curl\"]\n\
                let agent_init = \"#cloud-config\n\
-               ${yaml.encode({ package_update: true, packages, runcmd: [\"systemctl enable nftables\", \"${install} sh -s - server\"] })}\"\n\
+               ${yaml.encode({ package_update = true, packages, runcmd = [\"systemctl enable nftables\", \"${install} sh -s - server\"] })}\"\n\
                use fake\n";
     s.write("main.df", src);
     let r = s

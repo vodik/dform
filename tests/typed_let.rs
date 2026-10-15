@@ -164,7 +164,7 @@ fn an_untyped_position_keeps_the_error() {
     for rest in [
         "resource net.vpc other {\n  cidr = \"10.2.0.0/16\"\n  peer = main\n}\n",
         "resource net.vpc other { cidr = main }\n",
-        "resource net.vpc other {\n  cidr = \"10.2.0.0/16\"\n  tags = { m: main }\n}\n",
+        "resource net.vpc other {\n  cidr = \"10.2.0.0/16\"\n  tags = { m = main }\n}\n",
     ] {
         let r = plan("ambiguous-ref-untyped", &two_mains(rest)).failure();
         assert!(r.stderr.contains(listed), "{rest}\n{}", r.stderr);

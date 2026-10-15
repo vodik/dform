@@ -577,7 +577,7 @@ type_attr(k8s.job, "spec.selector.matchLabels", "map", ["optional_computed"])
 type_attr(k8s.job, "status.succeeded", "int", ["computed"])
 type_mint(k8s.job, "status.succeeded", 1)
 type_attr(k8s.job, "status.conditions", "list", ["computed"])
-type_mint(k8s.job, "status.conditions", [{ type: "Complete", status: "True" }])
+type_mint(k8s.job, "status.conditions", [{ type = "Complete", status = "True" }])
 type_attr(k8s.job, "status.failed", "int", ["computed"])
 type_mint(k8s.job, "status.failed", 0)
 type_attr(k8s.job, "status.startTime", "string", ["computed"])
@@ -816,7 +816,7 @@ type_attr(k8s.ingress, "spec.defaultBackend", "map", [])
 type_attr(k8s.ingress, "spec.rules", "list", [])
 type_attr(k8s.ingress, "spec.tls", "list", [])
 type_attr(k8s.ingress, "status.loadBalancer.ingress", "list", ["computed"])
-type_mint(k8s.ingress, "status.loadBalancer.ingress", [{ ip: "203.0.113.10" }])
+type_mint(k8s.ingress, "status.loadBalancer.ingress", [{ ip = "203.0.113.10" }])
 
 # CustomResourceDefinition (apiextensions.k8s.io/v1): a kind the cluster
 # serves once it has the definition (R-126). A world settings' `crds`

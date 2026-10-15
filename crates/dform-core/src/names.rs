@@ -754,11 +754,11 @@ impl Decls {
             }
             SyntaxKind::BLOCK_PATH => self.block_path(&parent, t),
             SyntaxKind::CHAIN => self.chain(&parent, t, &here),
-            // `{ env }`: the field's value is the name's; `{ k: v }`, a key.
+            // `{ env }`: the field's value is the name's; `{ k = v }`, a key.
             SyntaxKind::OBJECT_FIELD
                 if !own_tokens(&parent)
                     .iter()
-                    .any(|x| x.kind() == SyntaxKind::COLON) =>
+                    .any(|x| matches!(x.kind(), SyntaxKind::EQ | SyntaxKind::COLON)) =>
             {
                 match self.let_(&here, &name).or_else(|| self.value(&here, &name)) {
                     Some(s) => What::Name(s, false),
@@ -1803,13 +1803,13 @@ mod tests {
 
     const SRC: &str = r#"
 input env: string = "staging"
-let cfg = { a: env }
+let cfg = { a = env }
 component network {
   input vpc_net: inet
   # its interface: an input, a resource and an output
   resource net.vpc vpc {
     cidr = vpc_net
-    tags = { env: env }
+    tags = { env = env }
   }
   output vpc: net.vpc = vpc
   q(x) where zone_index[x] = 1, vpc.cidr == x

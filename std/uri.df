@@ -42,7 +42,7 @@ fn with_port(u: uri, port: int) -> uri forwards
 fn with_path(u: uri, path: string) -> uri forwards
 
 #| The uri with its query set to the object's pairs, each escaped, replacing any it had.
-#| example: let paged = uri.with_query(u, { page: "2" })
+#| example: let paged = uri.with_query(u, { page = "2" })
 fn with_query(u: uri, query: object) -> uri forwards
 
 #| The uri with its fragment set.

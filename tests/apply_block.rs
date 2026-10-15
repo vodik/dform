@@ -132,7 +132,7 @@ fn a_later_tick_asks_on_its_header_line() {
 use fake
 resource db.postgres orders { size = 1 }
 resource iam.policy "connect-${host}" {
-  statements = [{ action: "db.connect", resource: host }]
+  statements = [{ action = "db.connect", resource = host }]
 } where pg in db.postgres, host = pg.endpoint
 "#,
     );

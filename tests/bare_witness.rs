@@ -12,8 +12,8 @@ fn a_bare_conflict_says_an_object_as_the_program_writes_it() {
         "p.df",
         "use fake\n\
          ok(1)\n\
-         resource net.vpc main { cidr = \"10.0.0.0/16\", tags = { team: \"shop\", component: \"network\" } }\n\
-         set main.tags = { team: \"ops\", component: \"edge\" } where ok(1)\n",
+         resource net.vpc main { cidr = \"10.0.0.0/16\", tags = { team = \"shop\", component = \"network\" } }\n\
+         set main.tags = { team = \"ops\", component = \"edge\" } where ok(1)\n",
     );
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "-q", "p.df"])
@@ -27,8 +27,8 @@ fn a_bare_conflict_says_an_object_as_the_program_writes_it() {
     assert_eq!(
         witnesses,
         [
-            "    normal { team: \"ops\", component: \"edge\" }",
-            "    normal { team: \"shop\", component: \"network\" }",
+            "    normal { team = \"ops\", component = \"edge\" }",
+            "    normal { team = \"shop\", component = \"network\" }",
         ],
         "{}",
         r.stdout

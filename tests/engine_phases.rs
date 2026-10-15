@@ -37,7 +37,7 @@ tick 2  3+ changes
       spec.replicas = 3
       spec.selector.matchLabels.app = "api"
       spec.template.metadata.labels.app = "api"
-      spec.template.spec.containers[name=api] = { name: "api", image: "gcr.io/platform/api:1.42" }
+      spec.template.spec.containers[name=api] = { name = "api", image = "gcr.io/platform/api:1.42" }
   + k8s.namespace gke_platform                      stacks/gke_two_phase.df:74
       metadata.name = "gke-platform"
   + k8s.secret db_credentials                       stacks/gke_two_phase.df:85

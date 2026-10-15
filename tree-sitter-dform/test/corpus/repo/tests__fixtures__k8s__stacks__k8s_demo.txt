@@ -15,30 +15,30 @@ use k8s
 
 app("web", "nginx:1.27", 3)
 
-resource k8s.namespace shop { metadata.name = "shop", metadata.labels = { team: "storefront" } }
+resource k8s.namespace shop { metadata.name = "shop", metadata.labels = { team = "storefront" } }
 
 resource k8s.config_map web_config {
-  metadata = { generateName: "web-config-", namespace: shop.metadata.name }
-  data = { "MODE": "production", "LOG_LEVEL": "info" }
+  metadata = { generateName = "web-config-", namespace = shop.metadata.name }
+  data = { "MODE" = "production", "LOG_LEVEL" = "info" }
 }
 
 resource k8s.deployment "${name}" {
-  metadata = { name, namespace: shop.metadata.name }
-  spec.replicas
-  spec.selector.matchLabels = { app: name }
-  spec.template.metadata.labels = { app: name }
+  metadata = { name, namespace = shop.metadata.name }
+  spec.replicas = replicas
+  spec.selector.matchLabels = { app = name }
+  spec.template.metadata.labels = { app = name }
   spec.template.spec.containers = [{
     name,
     image,
-    ports: [{ containerPort: 8080, protocol: "TCP" }],
-    envFrom: [{ configMapRef: { name: web_config.metadata.name } }],
+    ports = [{ containerPort = 8080, protocol = "TCP" }],
+    envFrom = [{ configMapRef = { name = web_config.metadata.name } }],
   }]
 } where app(name, image, replicas)
 
 resource k8s.service "${name}" {
-  metadata = { name, namespace: shop.metadata.name }
-  spec.selector = { app: name }
-  spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
+  metadata = { name, namespace = shop.metadata.name }
+  spec.selector = { app = name }
+  spec.ports = [{ port = 80, targetPort = 8080, protocol = "TCP" }]
 } where app(name, _, _)
 
 ---
@@ -144,7 +144,8 @@ resource k8s.service "${name}" {
       (field
         (block_path
           (identifier)
-          (identifier)))
+          (identifier))
+        (identifier))
       (field
         (block_path
           (identifier)

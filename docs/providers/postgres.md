@@ -86,9 +86,9 @@ let admin_password = random.password("${name}-admin-password")
 let password = random.password("${name}-password")
 
 resource k8s.secret creds {
-  metadata = { name: "${name}-creds", namespace: namespace.metadata.name }
+  metadata = { name = "${name}-creds", namespace = namespace.metadata.name }
   # Read by the image once, when it makes the data directory.
-  stringData = { POSTGRES_USER: "dform_admin", POSTGRES_PASSWORD: admin_password }
+  stringData = { POSTGRES_USER = "dform_admin", POSTGRES_PASSWORD = admin_password }
 }
 ```
 

@@ -58,14 +58,14 @@ fn why_a_tag_exists() {
     );
     assert!(
         out.starts_with(
-            "net.vpc main.vpc.tags = {component: \"network\", env: \"prod\", \
-             team: \"platform\"}\n  merged from 2 contributions\n  ├─ {team: \"platform\"}\n"
+            "net.vpc main.vpc.tags = {component = \"network\", env = \"prod\", \
+             team = \"platform\"}\n  merged from 2 contributions\n  ├─ {team = \"platform\"}\n"
         ),
         "{out}"
     );
     assert!(
         out.contains(
-            "tests/fixtures/demo/baseline.df:10  set r.tags = { team: \"platform\" } where r in \
+            "tests/fixtures/demo/baseline.df:10  set r.tags = { team = \"platform\" } where r in \
              resource   (use baseline)\n"
         ),
         "{out}"
@@ -89,7 +89,7 @@ fn why_core_prints_the_lowered_rules() {
         ],
     );
     assert!(
-        out.contains(r#"arg(Type, R, "tags", {team: "platform"}, "normal") :- want(Type, R)"#),
+        out.contains(r#"arg(Type, R, "tags", {team = "platform"}, "normal") :- want(Type, R)"#),
         "{out}"
     );
     assert!(out.contains("by Σattr: attribute aggregate"), "{out}");
@@ -130,7 +130,7 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
     );
     let tag = dform(at, &["why", "--tree", r#"net.vpc["main.vpc"].tags.team"#]);
     assert!(
-        tag.contains(r#"set r.tags = { team: "platform" } where r in resource"#),
+        tag.contains(r#"set r.tags = { team = "platform" } where r in resource"#),
         "{tag}"
     );
     let cidr = dform(at, &["query", r#"net.vpc["main.vpc"].cidr"#]);
@@ -145,7 +145,7 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
     }
     let tag = dform(at, &["why", "--tree", "main.vpc.tags.team"]);
     assert!(
-        tag.contains(r#"set r.tags = { team: "platform" } where r in resource"#),
+        tag.contains(r#"set r.tags = { team = "platform" } where r in resource"#),
         "{tag}"
     );
     let all = dform(at, &["query", r#"net.vpc["main.vpc"]"#]);
@@ -189,7 +189,7 @@ fn why_an_attribute_shows_every_contribution() {
     assert!(
         out.contains(
             "tests/fixtures/demo/network.df:19  resource net.vpc vpc { .. tags = { env, \
-             component: \"network\" } }   (resource network.vpc main)\n"
+             component = \"network\" } }   (resource network.vpc main)\n"
         ),
         "{out}"
     );
@@ -219,10 +219,10 @@ fn why_a_route_shows_the_statements_that_fired() {
         "tests/fixtures/tour/stacks/tour.df",
         &["why", "--tree", r#"net.route_table["blue"].routes"#],
     );
-    let start = "net.route_table blue.routes = [{destination: 10.0.0.0/16, target: net.vpc main}, {destination: 10.2.0.0/16, target: net.vpc green.vpc}]
+    let start = "net.route_table blue.routes = [{destination = 10.0.0.0/16, target = net.vpc main}, {destination = 10.2.0.0/16, target = net.vpc green.vpc}]
   merged from 2 contributions
-  ├─ [{destination: 10.2.0.0/16, target: net.vpc green.vpc}]
-       tests/fixtures/tour/stacks/tour.df:288  set net.route_table[a].routes = [{ destination: dest, target: net.vpc[w] }] where reaches(a, b), a != b, network_of(b, w), dest = net.vpc[w].cidr
+  ├─ [{destination = 10.2.0.0/16, target = net.vpc green.vpc}]
+       tests/fixtures/tour/stacks/tour.df:288  set net.route_table[a].routes = [{ destination = dest, target = net.vpc[w] }] where reaches(a, b), a != b, network_of(b, w), dest = net.vpc[w].cidr
        with a = \"blue\", dest = 10.2.0.0/16, w = \"green.vpc\", b = \"green\"
             net.vpc[w] = net.vpc green.vpc
             net.vpc[w].cidr = 10.2.0.0/16
@@ -262,7 +262,7 @@ fn why_a_settings_read_shows_the_read() {
     // The input's layers (R-38): its default, and the `set` block that
     // holds in prod, where it is written.
     assert!(
-        out.contains("{backup_days: 1} @default   tests/fixtures/tour/stacks/tour.df:27\n"),
+        out.contains("{backup_days = 1} @default   tests/fixtures/tour/stacks/tour.df:27\n"),
         "{out}"
     );
     assert!(
@@ -450,8 +450,8 @@ fn why_prints_a_braced_clause_on_one_line() {
     );
     assert!(
         out.contains(
-            "tests/fixtures/demo/baseline.df:15  set p.statements = [{ action: \"org.read\", \
-             resource: \"org\" }] where env == \"prod\", p in iam.policy, p.name == \"app\"   \
+            "tests/fixtures/demo/baseline.df:15  set p.statements = [{ action = \"org.read\", \
+             resource = \"org\" }] where env == \"prod\", p in iam.policy, p.name == \"app\"   \
              (use baseline)\n"
         ),
         "{out}"

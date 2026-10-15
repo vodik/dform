@@ -187,7 +187,7 @@ fn check_lists_unformatted_files_and_fmt_rewrites_them() {
     s.write("ok.df", "p(\"a\")\nuse fake\n");
     s.write(
         "messy.df",
-        "resource net.vpc main {\n    cidr = \"10.0.0.0/16\",\n    tags = {team:\"x\"},\n}\nuse fake\n",
+        "resource net.vpc main {\n    cidr = \"10.0.0.0/16\",\n    tags = {team = \"x\"},\n}\nuse fake\n",
     );
     let r = s.run(&["fmt", "--check", "ok.df", "messy.df"]).failure();
     assert_eq!(r.stdout, "messy.df\n");
@@ -197,7 +197,7 @@ fn check_lists_unformatted_files_and_fmt_rewrites_them() {
     s.run(&["fmt", "ok.df", "messy.df"]).success();
     assert_eq!(
         s.read("messy.df"),
-        "resource net.vpc main { cidr = \"10.0.0.0/16\", tags = { team: \"x\" } }\nuse fake\n"
+        "resource net.vpc main { cidr = \"10.0.0.0/16\", tags = { team = \"x\" } }\nuse fake\n"
     );
     s.run(&["fmt", "--check", "ok.df", "messy.df"]).success();
 }
@@ -307,10 +307,10 @@ fn fmt_writes_out_a_bare_dotted_path() {
 #[test]
 fn fmt_writes_a_typed_literal_in_its_shortest_spelling() {
     let src = "use k8s\n\nresource k8s.deployment d {\n  spec.replicas = 1\n  \
-               spec.template.spec.containers = [{ name: \"a\", resources: { limits: { memory: \"2Gi\" } } }]\n}\n\
+               spec.template.spec.containers = [{ name = \"a\", resources = { limits = { memory = \"2Gi\" } } }]\n}\n\
                component c {\n  input cidr: inet\n}\nresource c a { cidr = \"10.1.0.0/16\" }\n";
     let want = "use k8s\n\nresource k8s.deployment d {\n  spec.replicas = 1\n  \
-                spec.template.spec.containers = [{ name: \"a\", resources: { limits: { memory: 2Gi } } }]\n}\n\
+                spec.template.spec.containers = [{ name = \"a\", resources = { limits = { memory = 2Gi } } }]\n}\n\
                 component c {\n  input cidr: inet\n}\nresource c a { cidr = \"10.1.0.0/16\" }\n";
     let p = Scratch::project("fmt-typed");
     p.write("stacks/app.df", src);
@@ -326,12 +326,12 @@ fn fmt_writes_a_typed_literal_in_its_shortest_spelling() {
 /// rest is the same.
 #[test]
 fn a_spread_is_spaced_as_its_literal() {
-    let src = "let o = {..base,tier:\"back\", spec: { .. base.spec, replicas: 3 }}\n\
+    let src = "let o = {..base,tier = \"back\", spec = { .. base.spec, replicas = 3 }}\n\
                let l = [ .. xs ,1,  ..0..3]\n\
-               p(x) where doc(d), {metadata: m,  ..x} = d, m == 1\n";
-    let want = "let o = { ..base, tier: \"back\", spec: { ..base.spec, replicas: 3 } }\n\
+               p(x) where doc(d), {metadata = m,  ..x} = d, m == 1\n";
+    let want = "let o = { ..base, tier = \"back\", spec = { ..base.spec, replicas = 3 } }\n\
                 let l = [..xs, 1, ..0..3]\n\
-                p(x) where doc(d), { metadata: m, ..x } = d, m == 1\n";
+                p(x) where doc(d), { metadata = m, ..x } = d, m == 1\n";
     assert_eq!(fmt(src), want);
     assert_eq!(fmt(want), want);
     assert_eq!(fmt("let o = { ..[1] }\n"), "let o = { ..[1] }\n");

@@ -23,7 +23,7 @@ fn a_baseline_over_every_resource_guarded_by_has_stratifies() {
 use fake
 use k8s
 resource k8s.namespace ns { metadata.name = "traefik" }
-resource k8s.config_map cm { metadata.name = "cm", data = { a: "1" } }
+resource k8s.config_map cm { metadata.name = "cm", data = { a = "1" } }
 resource db.postgres db { name = "db" }
 set r.metadata.labels.owner = "simon" @default where r in resource, has r.metadata
 "#,
@@ -49,9 +49,9 @@ fn has_of_an_undeclared_attribute_is_a_value_test() {
     let s = project(
         r#"
 use fake
-resource db.postgres tagged { name = "a", tags = { team: "x" } }
+resource db.postgres tagged { name = "a", tags = { team = "x" } }
 resource db.postgres bare { name = "b" }
-deny "tagged" { r: r } where r in db.postgres, has r.tags.team
+deny "tagged" { r = r } where r in db.postgres, has r.tags.team
 "#,
     );
     let r = s.run(&["plan", "p"]).failure();
@@ -74,7 +74,7 @@ use fake
 use k8s
 resource k8s.namespace ns { metadata.name = "traefik" }
 resource db.postgres db { name = "db" }
-deny "no metadata" { r: r } where r in resource, not has r.metadata
+deny "no metadata" { r = r } where r in resource, not has r.metadata
 "#,
     );
     let r = s.run(&["plan", "p"]).failure();

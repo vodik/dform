@@ -59,8 +59,8 @@ use stacks.platform
 use k8s { kubeconfig = platform[env].kubeconfig }
 resource k8s.namespace apps { metadata.name = "apps" }
 resource k8s.secret token {
-  metadata = { name: "token", namespace: "apps" }
-  stringData = { token: platform[env].token }
+  metadata = { name = "token", namespace = "apps" }
+  stringData = { token = platform[env].token }
 }
 "#,
     );

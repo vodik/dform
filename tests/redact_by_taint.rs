@@ -31,7 +31,7 @@ component postgres {
   input database: string
   resource kube.secret creds {
     name = "${database}-creds"
-    data = { user: database, password: random.password("${database}-pw") }
+    data = { user = database, password = random.password("${database}-pw") }
   }
 }
 "#;
@@ -43,7 +43,7 @@ resource kube.config synapse { name = "synapse-config", key = "synapse" }
 let signing = random.signing_key("synapse")
 resource kube.secret homeserver {
   name = "synapse-config"
-  data = { "homeserver.yaml": "signing: ${signing}" }
+  data = { "homeserver.yaml" = "signing: ${signing}" }
 }
 signed(s) where s = str.format("key=%s", signing)
 "#;
@@ -124,7 +124,7 @@ fn query_and_why_redact_by_taint() {
         out.contains("\"synapse_db.creds\"  \"data\"      secret("),
         "{out}"
     );
-    assert!(!out.contains("{password: secret"), "{out}");
+    assert!(!out.contains("{password = secret"), "{out}");
     assert!(out.contains("\"synapse-config\""), "{out}");
     assert!(
         out.contains("\"synapse_db\"        \"database\"  \"synapse\""),

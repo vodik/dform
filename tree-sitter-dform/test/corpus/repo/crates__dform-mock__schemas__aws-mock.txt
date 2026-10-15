@@ -3,7 +3,7 @@ crates/dform-mock/schemas/aws-mock.df
 =====================================
 
 # Mock AWS provider in the shape of the Terraform AWS provider (v5 schema),
-# twelve resource types, written by hand from the provider's schema. A type is
+# thirteen resource types, written by hand from the provider's schema. A type is
 # Terraform's under the provider's name (`aws_vpc` is `aws.vpc`, R-36); the
 # data source aws.availability_zone, declared below (`extern_decl`, R-106),
 # is answered from aws-mock.externs.df. It
@@ -25,8 +25,9 @@ crates/dform-mock/schemas/aws-mock.df
 # Every type has tags (optional) and tags_all (computed: tags merged with the
 # provider's default_tags). ids and arns are computed; ids are fresh. An
 # attribute that holds another object's id keeps the Terraform name and is
-# typed `ref(T)`: the program gives it the resource (`vpc_id = main`), and
-# the provider its id (R-43).
+# typed `ref(T)`: a program names it for the resource and gives it the
+# resource (`vpc = main`), and the provider is sent its id as `vpc_id`
+# (R-43).
 
 # The data source: a program reads it with no `extern` line (R-106). Its
 # index is a stable ordinal of the names the provider defines.
@@ -78,6 +79,18 @@ type_mint("aws.subnet", "availability_zone_id", "use1-az1")
 type_attr("aws.subnet", "map_public_ip_on_launch", "bool", [])
 type_attr("aws.subnet", "owner_id", "string", ["computed"])
 type_mint("aws.subnet", "owner_id", "123456789012")
+
+# aws.vpc_peering_connection
+type_provider("aws.vpc_peering_connection", "aws")
+type_attr("aws.vpc_peering_connection", "id", "string", ["computed", "id"])
+type_mint("aws.vpc_peering_connection", "id", "pcx-{hash}")
+type_attr("aws.vpc_peering_connection", "tags", "map", [])
+type_attr("aws.vpc_peering_connection", "tags_all", "map", ["computed"])
+type_attr("aws.vpc_peering_connection", "vpc_id", "ref(aws.vpc)", ["required", "force_new"])
+type_attr("aws.vpc_peering_connection", "peer_vpc_id", "ref(aws.vpc)", ["required", "force_new"])
+type_attr("aws.vpc_peering_connection", "auto_accept", "bool", [])
+type_attr("aws.vpc_peering_connection", "accept_status", "string", ["computed"])
+type_mint("aws.vpc_peering_connection", "accept_status", "active")
 
 # aws.security_group
 type_provider("aws.security_group", "aws")
@@ -471,6 +484,7 @@ type_doc(
 ---
 
 (source_file
+  (comment)
   (comment)
   (comment)
   (comment)
@@ -971,6 +985,128 @@ type_doc(
           (string_content))
         (string
           (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
   (fact
     (call
       (identifier)

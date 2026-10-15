@@ -92,7 +92,7 @@ fn a_backend_is_checked() {
         ("gcs(\"b\")", "unknown backend"),
         ("s3(\"b\")", "takes a bucket, a prefix"),
         (
-            "s3(\"b\", \"p\", {endpont: \"http://x\"})",
+            "s3(\"b\", \"p\", {endpont = \"http://x\"})",
             "backend s3 has no option endpont",
         ),
     ] {

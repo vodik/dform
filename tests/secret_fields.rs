@@ -26,11 +26,11 @@ component postgres {
   input name: string
   type conn = { host: string, port: int, database: string, user: string, password: secret(string) }
   output conn: conn = {
-    host: "${name}.databases.svc",
-    port: 5432,
-    database: name,
-    user: name,
-    password: random.password("${name}-password"),
+    host = "${name}.databases.svc",
+    port = 5432,
+    database = name,
+    user = name,
+    password = random.password("${name}-password"),
   }
 }
 "#;
@@ -54,7 +54,7 @@ resource synapse.synapse matrix {
 resource leaky.vault direct { password = synapse_db.conn.password }
 resource leaky.oops plain { password = "${synapse_db.conn.host}:${synapse_db.conn.port}" }
 let db = synapse_db.conn
-resource leaky.vault rendered { password = yaml.encode({ host: db.host, password: db.password }) }
+resource leaky.vault rendered { password = yaml.encode({ host = db.host, password = db.password }) }
 resource leaky.oops via_let { password = db.user }
 "#;
 
@@ -123,7 +123,7 @@ fn a_secret_in_a_public_field_is_still_refused() {
     let s = project("secret-fields-public", APPS);
     s.write(
         "databases.df",
-        &DATABASES.replace("user: name,", "user: random.password(\"${name}-user\"),"),
+        &DATABASES.replace("user = name,", "user = random.password(\"${name}-user\"),"),
     );
     let r = plan(&s).failure();
     assert!(
@@ -220,7 +220,7 @@ fn another_stacks_output_with_a_secret_field() {
         "stacks/prod.df",
         "\ninput pw: secret(string)\nuse fake\n\
          resource leaky.vault v { password = pw }\n\
-         output conn: { host: string, pass: secret(string) } = { host: \"db.example\", pass: v.password }\n",
+         output conn: { host: string, pass: secret(string) } = { host = \"db.example\", pass = v.password }\n",
     );
     s.write(
         "stacks/app.df",

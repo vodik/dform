@@ -10,7 +10,7 @@ tick 1  13 changes
   + network.vpc main
     + net.vpc main.vpc                    network.df:19
         cidr = "10.50.0.0/16"             stacks/dform.df:10
-        tags = { env: "staging", component: "network" }
+        tags = { env = "staging", component = "network" }
         tags.team = "platform"            baseline.df:10
     + net.subnet main.private-us-test-1a  network.df:24
         cidr = "10.50.0.0/20"
@@ -27,7 +27,7 @@ tick 1  13 changes
   + network.vpc peer
     + net.vpc peer.vpc                    network.df:19
         cidr = "10.60.0.0/16"             stacks/dform.df:10
-        tags = { env: "staging", component: "network" }
+        tags = { env = "staging", component = "network" }
         tags.team = "platform"            baseline.df:10
     + net.subnet peer.private-us-test-1a  network.df:24
         cidr = "10.60.0.0/20"
@@ -66,8 +66,8 @@ tick 1  13 changes
     + iam.policy identity.app_policy      identity.df:14
         name = "app"
         statements = [
-          { action: "db.connect", resource: database.db },
-          { action: "k8s.describe_cluster", resource: kubernetes.cluster },
+          { action = "db.connect", resource = database.db },
+          { action = "k8s.describe_cluster", resource = kubernetes.cluster },
         ]
         tags.team = "platform"            baseline.df:10
     + iam.role identity.app_role          identity.df:8

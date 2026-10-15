@@ -87,11 +87,11 @@ fn a_call_after_a_call_is_not_a_function() {
 #[test]
 fn has_of_a_call_with_no_answer_is_false() {
     let src = r#"list([])
-list([{ "x": 1 }])
+list([{ "x" = 1 }])
 some(l) where list(l), has list.first(l).x
 none(l) where list(l), not has list.first(l).x
 "#;
-    assert_eq!(facts(src, "some"), [r#"some([{x: 1}])"#]);
+    assert_eq!(facts(src, "some"), [r#"some([{x = 1}])"#]);
     assert_eq!(facts(src, "none"), ["none([])"]);
     let program = dform_core::parser::parse_program(
         "img(\"nginx\")\np(i) where img(i), not has oci.with_tag(i, \"no tag!\").digest\n",

@@ -874,7 +874,7 @@ impl Redactor {
             Value::Obj(m) => format!(
                 "{{{}}}",
                 m.iter()
-                    .map(|(k, x)| format!("{k}: {}", self.spell(x, how)))
+                    .map(|(k, x)| format!("{k} = {}", self.spell(x, how)))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
@@ -1155,7 +1155,7 @@ arg("v", "a", "pw", "hunter22", "normal")
              type_attr(\"k.config\", \"name\", \"string\", [])",
         );
         let (_, r) = tainted(
-            r#"arg("k.secret", "synapse_db.creds", "data", {user: "synapse", pw: "hunter22"}, "normal")
+            r#"arg("k.secret", "synapse_db.creds", "data", {user = "synapse", pw = "hunter22"}, "normal")
 arg("k.config", "synapse", "name", "synapse-config", "normal")
 arg("k.config", "other", "name", "synapse", "normal")"#,
             &schema,
@@ -1171,7 +1171,7 @@ arg("k.config", "other", "name", "synapse", "normal")"#,
             r.surface(&creds),
             "(sensitive k.secret synapse_db.creds.data)"
         );
-        assert_eq!(r.cell(&creds), "secret(33 B)");
+        assert_eq!(r.cell(&creds), "secret(35 B)");
         for plain in ["synapse", "synapse-config", "hunter22"] {
             let v = Value::Str(plain.into());
             assert!(!r.is_secret(&v), "{plain}");

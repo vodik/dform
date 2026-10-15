@@ -37,8 +37,8 @@ fn a_deny_reads_through_a_reference_attribute() {
         "refs-through-deny",
         &format!(
             "{NETS}\n\
-             deny \"in a /16\" {{ subnet: s }} where s in net.subnet, s.vpc.cidr == \"10.0.0.0/16\"\n\
-             deny \"in other\" {{ subnet: s }} where s in net.subnet, s.vpc.cidr == \"10.1.0.0/16\"\n"
+             deny \"in a /16\" {{ subnet = s }} where s in net.subnet, s.vpc.cidr == \"10.0.0.0/16\"\n\
+             deny \"in other\" {{ subnet = s }} where s in net.subnet, s.vpc.cidr == \"10.1.0.0/16\"\n"
         ),
     );
     let r = mock(&s, &["plan"]).failure();
@@ -66,9 +66,9 @@ fn a_chain_of_references_is_read_through() {
             "{NETS}\n\
              resource k8s.cluster c {{\n  subnets = [a]\n}}\n\
              resource k8s.nodepool pool {{\n  cluster = c\n}}\n\
-             deny \"wide\" {{ pool: p }} where p in k8s.nodepool, s in p.cluster.subnets, \
+             deny \"wide\" {{ pool = p }} where p in k8s.nodepool, s in p.cluster.subnets, \
              s.vpc.cidr == \"10.0.0.0/16\"\n\
-             deny \"narrow\" {{ pool: p }} where p in k8s.nodepool, \
+             deny \"narrow\" {{ pool = p }} where p in k8s.nodepool, \
              p.cluster.subnets[0].vpc.cidr == \"10.1.0.0/16\"\n"
         ),
     );
@@ -90,7 +90,7 @@ fn a_reference_to_a_resource_not_wanted_is_located() {
         "refs-through-unwanted",
         "resource net.vpc gone {\n  cidr = \"10.0.0.0/16\"\n} where 1 == 2\n\
          resource net.subnet a {\n  vpc = gone\n  cidr = \"10.0.1.0/24\"\n}\n\
-         deny \"wide\" { subnet: s } where s in net.subnet, s.vpc.cidr == \"10.0.0.0/16\"\n",
+         deny \"wide\" { subnet = s } where s in net.subnet, s.vpc.cidr == \"10.0.0.0/16\"\n",
     );
     let r = mock(&s, &["plan"]).failure();
     assert!(
@@ -108,7 +108,7 @@ fn a_reference_to_a_resource_not_wanted_is_located() {
 fn a_read_through_a_reference_is_typed_by_the_schema() {
     let s = scratch(
         "refs-through-typed",
-        &format!("{NETS}\ndeny \"odd\" {{ subnet: s }} where s in net.subnet, s.vpc.cidr != 5\n"),
+        &format!("{NETS}\ndeny \"odd\" {{ subnet = s }} where s in net.subnet, s.vpc.cidr != 5\n"),
     );
     let r = mock(&s, &["plan"]).failure();
     assert!(
@@ -142,9 +142,9 @@ fn references_compare_as_references() {
              same(s, v) where s in net.subnet, v in net.vpc, s.vpc == v\n\
              other(s, v) where s in net.subnet, v in net.vpc, s.vpc != v\n\
              held(s, v) where s in net.subnet, v in net.vpc, v in [s.vpc]\n\
-             deny \"same\" {{ v: v }} where same(_, v)\n\
-             deny \"other\" {{ v: v }} where other(_, v)\n\
-             deny \"held\" {{ v: v }} where held(_, v)\n"
+             deny \"same\" {{ v = v }} where same(_, v)\n\
+             deny \"other\" {{ v = v }} where other(_, v)\n\
+             deny \"held\" {{ v = v }} where held(_, v)\n"
         ),
     );
     let r = mock(&s, &["plan"]).failure();
@@ -166,7 +166,7 @@ fn a_reference_compared_with_a_string_is_a_compile_error() {
     let s = scratch(
         "refs-through-string",
         &format!(
-            "{NETS}\ndeny \"main\" {{ subnet: s }} where s in net.subnet, s.vpc == \"main\"\n"
+            "{NETS}\ndeny \"main\" {{ subnet = s }} where s in net.subnet, s.vpc == \"main\"\n"
         ),
     );
     let r = mock(&s, &["plan"]).failure();
@@ -210,7 +210,7 @@ fn a_reference_compared_with_a_string_at_run_time_is_an_error() {
         let s = scratch(
             "refs-through-run-time",
             &format!(
-                "{NETS}\ndeny \"main\" {{ r: x }} where x in resource, has x.vpc, y = x.vpc, {body}\n"
+                "{NETS}\ndeny \"main\" {{ r = x }} where x in resource, has x.vpc, y = x.vpc, {body}\n"
             ),
         );
         let r = mock(&s, &["plan"]).failure();
@@ -233,7 +233,7 @@ fn a_reference_compared_with_a_string_at_run_time_is_an_error() {
 fn a_direct_join_with_a_string_at_run_time_is_an_error() {
     let s = scratch(
         "refs-through-join",
-        &format!("{NETS}\ndeny \"main\" {{ r: x }} where x in resource, x.vpc == \"main\"\n"),
+        &format!("{NETS}\ndeny \"main\" {{ r = x }} where x in resource, x.vpc == \"main\"\n"),
     );
     let r = mock(&s, &["plan"]).failure();
     assert!(
@@ -247,7 +247,7 @@ fn a_direct_join_with_a_string_at_run_time_is_an_error() {
         "p.df",
         &(s.read("p.df")
             .replace("x.vpc == \"main\"", "has x.vpc, not x.vpc == \"main\"")
-            + "deny \"cidr\" { r: x } where x in resource, x.cidr == \"10.1.0.0/16\"\n"),
+            + "deny \"cidr\" { r = x } where x in resource, x.cidr == \"10.1.0.0/16\"\n"),
     );
     let r = mock(&s, &["plan"]).failure();
     assert_eq!(
@@ -274,16 +274,16 @@ fn a_set_through_any_resource_reads_a_quantity_at_its_edge() {
         "p.df",
         "\nuse fake\nuse k8s\n\n\
          resource k8s.deployment web {\n  metadata.name = \"web\"\n  \
-         spec.selector.matchLabels = { app: \"web\" }\n  \
-         spec.template.spec.containers = [{ name: \"web\", image: \"nginx:1\" }]\n}\n\
+         spec.selector.matchLabels = { app = \"web\" }\n  \
+         spec.template.spec.containers = [{ name = \"web\", image = \"nginx:1\" }]\n}\n\
          set x.spec.template.spec.containers[_].resources.requests = {\n  \
-         cpu: 100m,\n  memory: 128Mi,\n} @default where x in resource\n",
+         cpu = 100m,\n  memory = 128Mi,\n} @default where x in resource\n",
     );
     let r = mock(&s, &["plan"]).success();
     assert!(
         r.stdout.contains(
-            "spec.template.spec.containers[name=web].resources.requests = \
-             { cpu: \"100m\", memory: \"128Mi\" }"
+            "spec.template.spec.containers[name=web].resources.requests = {  p.df:10\n        \
+             cpu = \"100m\",\n        memory = \"128Mi\",\n      }"
         ),
         "{}",
         r.stdout
@@ -312,15 +312,15 @@ fn a_set_through_any_resource_under_a_has_guard_walks_the_list() {
     s.write(
         "baseline.df",
         "\nset x.spec.template.spec.containers[_].resources.requests = {\n  \
-         cpu: 100m,\n  memory: 128Mi,\n} @default where x in resource, \
+         cpu = 100m,\n  memory = 128Mi,\n} @default where x in resource, \
          has x.spec.template.spec.containers\n",
     );
     s.write(
         "p.df",
         "\nuse fake\nuse k8s\nuse baseline\n\n\
          resource k8s.deployment web {\n  metadata.name = \"web\"\n  \
-         spec.selector.matchLabels = { app: \"web\" }\n  \
-         spec.template.spec.containers = [{ name: \"web\", image: \"nginx:1\" }]\n}\n\
+         spec.selector.matchLabels = { app = \"web\" }\n  \
+         spec.template.spec.containers = [{ name = \"web\", image = \"nginx:1\" }]\n}\n\
          resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n}\n",
     );
     let r = mock(&s, &["plan", "--why=none"]).success();
@@ -352,7 +352,7 @@ fn an_exported_relation_carries_references() {
          zone = z\n  } where az(z, i)\n  \
          subnet(s) where s in net.subnet\n  output subnet\n}\n\
          az(\"a\", 0)\nresource vnet blue { cidr = \"10.0.0.0/16\" }\n\
-         deny \"zone\" { subnet: s } where blue.subnet(s), s.zone == \"a\"\n",
+         deny \"zone\" { subnet = s } where blue.subnet(s), s.zone == \"a\"\n",
     );
     let r = mock(&s, &["plan"]).failure();
     assert!(

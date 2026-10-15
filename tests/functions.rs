@@ -276,8 +276,8 @@ la(n) where n = list.last([1, 2, 3])
     assert_eq!(facts(src, "co"), ["co()"]);
     assert_eq!(facts(src, "fi"), ["fi(1)"]);
     assert_eq!(facts(src, "la"), ["la(3)"]);
-    let src2 = "so(l) where l = list.sort_by([{name: \"b\"}, {name: \"a\"}], \"name\")\n";
-    assert_eq!(facts(src2, "so"), [r#"so([{name: "a"}, {name: "b"}])"#]);
+    let src2 = "so(l) where l = list.sort_by([{name = \"b\"}, {name = \"a\"}], \"name\")\n";
+    assert_eq!(facts(src2, "so"), [r#"so([{name = "a"}, {name = "b"}])"#]);
 }
 
 /// `hash.sha256`, and a short digest as a slice of it.
@@ -330,11 +330,11 @@ cl(s) where s = path.clean("a/../a/./b.yaml")
 #[test]
 fn document_decode_and_encode_evaluate() {
     let src = r#"j(n) where v = json.decode("{\"a\": 1}"), n = v.a
-je(s) where s = json.encode({ a: 1 })
+je(s) where s = json.encode({ a = 1 })
 y(n) where v = yaml.decode("a: 1\n"), n = v.a
-ye(s) where s = yaml.encode({ a: 1 })
+ye(s) where s = yaml.encode({ a = 1 })
 t(n) where v = toml.decode("a = 1\n"), n = v.a
-te(s) where s = toml.encode({ a: 1 })
+te(s) where s = toml.encode({ a = 1 })
 "#;
     assert_eq!(facts(src, "j"), ["j(1)"]);
     assert_eq!(facts(src, "je"), [r#"je("{\"a\":1}")"#]);
@@ -351,8 +351,8 @@ te(s) where s = toml.encode({ a: 1 })
 /// MiB) gets it from `quantity.to` in a string the program writes.
 #[test]
 fn a_quantity_encodes_as_dform_prints_it() {
-    let src = r#"ye(s) where s = yaml.encode({ max_upload_size: 50Mi })
-yt(s) where s = yaml.encode({ max_upload_size: "${quantity.to(50Mi, "Mi")}M" })
+    let src = r#"ye(s) where s = yaml.encode({ max_upload_size = 50Mi })
+yt(s) where s = yaml.encode({ max_upload_size = "${quantity.to(50Mi, "Mi")}M" })
 "#;
     assert_eq!(facts(src, "ye"), [r#"ye("max_upload_size: 50Mi\n")"#]);
     assert_eq!(facts(src, "yt"), [r#"yt("max_upload_size: 50M\n")"#]);
@@ -440,7 +440,7 @@ fn a_constructor_is_an_error_naming_the_typed_position() {
 /// `let`.
 #[test]
 fn a_typed_let_reads_a_computed_string_at_run_time() {
-    let src = r#"let cfg = { net: "10.5.0.0/16", image: "ghcr.io/o/app:1.2", v: "1.2.3", bad: "x" }
+    let src = r#"let cfg = { net = "10.5.0.0/16", image = "ghcr.io/o/app:1.2", v = "1.2.3", bad = "x" }
 let net: inet = cfg.net
 let image: oci = cfg.image
 let v: semver = cfg.v
@@ -448,7 +448,7 @@ p(b, t, m) where b = net.bits, t = image.tag, m = v.minor
 "#;
     assert_eq!(facts(src, "p"), [r#"p(16, "1.2", 2)"#]);
     let program =
-        parse_program("let cfg = { bad: \"x\" }\nlet net: inet = cfg.bad\nq(n) where n = net\n")
+        parse_program("let cfg = { bad = \"x\" }\nlet net: inet = cfg.bad\nq(n) where n = net\n")
             .unwrap();
     let err = engine::eval(&program, &[]).unwrap_err().to_string();
     assert!(
@@ -491,7 +491,7 @@ let millis: cpu = 1500m
 g(n) where n = quantity.to(3Gi, "Gi")
 h(n) where n = quantity.to(ttl, "h")
 m(n) where n = quantity.to(millis, "m")
-l(a, b, c) where xs = [1], s = "ab", o = { x: 1 }, a = xs.len, b = s.len, c = o.len
+l(a, b, c) where xs = [1], s = "ab", o = { x = 1 }, a = xs.len, b = s.len, c = o.len
 f(s) where s = str.format("%s:%s", "a", 1)
 "#;
     assert_eq!(facts(src, "g"), ["g(3)"]);
@@ -499,7 +499,7 @@ f(s) where s = str.format("%s:%s", "a", 1)
     assert_eq!(facts(src, "m"), ["m(1500)"]);
     assert_eq!(facts(src, "l"), ["l(1, 2, 1)"]);
     // `.len` is the count; a key named `len` is `o."len"` (R-155).
-    let keyed = "let o = { len: 7, a: 1 }\nk(n, v) where n = o.len, v = o.\"len\"\n";
+    let keyed = "let o = { len = 7, a = 1 }\nk(n, v) where n = o.len, v = o.\"len\"\n";
     assert_eq!(facts(keyed, "k"), ["k(2, 7)"]);
     assert_eq!(facts(src, "f"), [r#"f("a:1")"#]);
     for (call, help) in [

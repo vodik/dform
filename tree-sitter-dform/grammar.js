@@ -104,6 +104,9 @@ export default grammar({
     [$._primary, $.member_expression],
     [$._primary, $.index_expression],
     [$._primary, $._call_access],
+    [$._word, $.true],
+    [$._primary, $.object_field],
+    [$._word, $.false],
   ],
 
   rules: {
@@ -671,7 +674,7 @@ export default grammar({
 
     object_field: $ => seq(
       field('key', choice($._word, $.string)),
-      optional(seq(':', field('value', $._term))),
+      optional(seq('=', field('value', $._term))),
     ),
 
     // --- types ---------------------------------------------------------------

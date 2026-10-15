@@ -1,6 +1,6 @@
 //! `tailscale.acl`: the tailnet's policy file, one per tailnet, its remote
 //! id the tailnet. The program renders the policy (`policy =
-//! json.encode({ acls: [..], tagOwners: {..} })`); Read answers the file
+//! json.encode({ acls = [..], tagOwners = {..} })`); Read answers the file
 //! the API has, in the same canonical form (`hujson`), so a console edit of
 //! a rule is drift and a comment or a reordering is not. HuJSON on the
 //! wire, written with `If-Match` on the ETag the write read, so an edit
@@ -152,7 +152,7 @@ impl Lifecycle<Tailscale> for Acl {
         if canonical != policy {
             return Err(Error::Refused(
                 "policy is not in the form the provider compares (JSON, keys sorted, no space): \
-                 render it with `policy = json.encode({ acls: [..], .. })`, or the plan would \
+                 render it with `policy = json.encode({ acls = [..], .. })`, or the plan would \
                  show it changed at every run"
                     .into(),
             ));

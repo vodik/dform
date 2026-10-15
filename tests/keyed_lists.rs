@@ -10,12 +10,12 @@ use common::{Run, Scratch};
 const DEPLOYMENT: &str = "\n\nuse k8s\n\n\
     resource k8s.deployment web {\n  \
     metadata.name = \"web\"\n  \
-    spec.selector.matchLabels = { app: \"web\" }\n  \
+    spec.selector.matchLabels = { app = \"web\" }\n  \
     spec.template.spec.containers = [\n    \
-    { name: \"api\", image: \"api:1\" },\n    \
-    { name: \"side\", image: \"side:1\", resources: { limits: { cpu: 2, memory: 1Gi } } }\n  \
+    { name = \"api\", image = \"api:1\" },\n    \
+    { name = \"side\", image = \"side:1\", resources = { limits = { cpu = 2, memory = 1Gi } } }\n  \
     ]\n  \
-    spec.template.spec.tolerations = [{ key: \"spot\", operator: \"Exists\" }]\n\
+    spec.template.spec.tolerations = [{ key = \"spot\", operator = \"Exists\" }]\n\
     }\n\n";
 
 fn project(name: &str, policy: &str) -> Scratch {
@@ -46,7 +46,7 @@ fn an_indexed_default_writes_every_element_and_yields_to_its_own() {
     let s = project(
         "kl-index",
         "set w.spec.template.spec.containers[c.name].resources.limits = \
-         { cpu: \"500m\", memory: \"256Mi\" } @default \
+         { cpu = \"500m\", memory = \"256Mi\" } @default \
          where w in k8s.deployment, c in w.spec.template.spec.containers",
     );
     let r = plan(&s).success();
@@ -73,8 +73,8 @@ fn an_indexed_default_writes_every_element_and_yields_to_its_own() {
         ])
         .success();
     for l in [
-        "spec.template.spec.containers[name=api] = {resources: {limits: {cpu: 500m, memory: 256Mi}}} @default",
-        "spec.template.spec.containers[name=side] = {resources: {limits: {cpu: 500m, memory: 256Mi}}} @default",
+        "spec.template.spec.containers[name=api] = {resources = {limits = {cpu = 500m, memory = 256Mi}}} @default",
+        "spec.template.spec.containers[name=side] = {resources = {limits = {cpu = 500m, memory = 256Mi}}} @default",
     ] {
         assert!(w.stdout.contains(l), "{l}:\n{}{}", w.stdout, w.stderr);
     }
@@ -86,9 +86,9 @@ fn an_indexed_default_writes_every_element_and_yields_to_its_own() {
 fn set_writes_through_a_bound_element() {
     let s = project(
         "kl-bound",
-        "set c.resources.limits = { cpu: 500m, memory: 256Mi } @default \
+        "set c.resources.limits = { cpu = 500m, memory = 256Mi } @default \
          where w in k8s.deployment, c in w.spec.template.spec.containers\n\
-         set c.env = [{ name: \"POS\", value: \"${i}\" }] \
+         set c.env = [{ name = \"POS\", value = \"${i}\" }] \
          where w in k8s.deployment, (i, c) in w.spec.template.spec.containers",
     );
     let r = plan(&s).success();
@@ -133,9 +133,9 @@ fn a_literal_key_and_a_second_list_merge_by_key() {
         "kl-literal",
         "set w.spec.template.spec.containers[\"api\"].image = \"api:2\" @override \
          where w in k8s.deployment\n\
-         set w.spec.template.spec.containers[\"log\"] = { image: \"log:1\" } \
+         set w.spec.template.spec.containers[\"log\"] = { image = \"log:1\" } \
          where w in k8s.deployment\n\
-         set w.spec.template.spec.containers = [{ name: \"proxy\", image: \"proxy:1\" }] \
+         set w.spec.template.spec.containers = [{ name = \"proxy\", image = \"proxy:1\" }] \
          where w in k8s.deployment",
     );
     let r = plan(&s).success();
@@ -223,16 +223,16 @@ fn a_quantity_in_an_unranked_set_is_read_by_its_attribute() {
         "main.df",
         "\ninput on: bool = true\n\nuse k8s\n\n\
          resource k8s.deployment job {\n  metadata.name = \"job\"\n  \
-         spec.selector.matchLabels = { app: \"job\" }\n}\n\n\
+         spec.selector.matchLabels = { app = \"job\" }\n}\n\n\
          set job.spec.template.spec.containers = [\n  \
-         { name: \"x\", image: \"x:1\", resources: { limits: { cpu: 500m } } }\n] where on\n",
+         { name = \"x\", image = \"x:1\", resources = { limits = { cpu = 500m } } }\n] where on\n",
     );
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "main.df"])
         .success();
     assert!(
         r.stdout
-            .contains("resources: { limits: { cpu: \"500m\" } },"),
+            .contains("resources = { limits = { cpu = \"500m\" } },"),
         "{}",
         r.stdout
     );
@@ -285,10 +285,10 @@ use k8s
 
 resource k8s.service web {
   metadata.name = "web"
-  spec.ports = [{ port: 80, targetPort: 8080 }]
+  spec.ports = [{ port = 80, targetPort = 8080 }]
 }
 
-set s.spec.ports = [{ port: 80, protocol: "TCP", name: "http" }] where s in k8s.service
+set s.spec.ports = [{ port = 80, protocol = "TCP", name = "http" }] where s in k8s.service
 "#,
     );
     let r = plan(&s).success();

@@ -63,7 +63,7 @@ fn the_written_forms_derive_the_same() {
     assert!(
         explicit
             .iter()
-            .any(|f| f == "attr(\"k8s.service\", \"s\", \"spec\", {selector: {color: \"blue\"}})"),
+            .any(|f| f == "attr(\"k8s.service\", \"s\", \"spec\", {selector = {color = \"blue\"}})"),
         "{explicit:?}"
     );
     assert_eq!(one("spec.selector = { color }"), explicit);
@@ -85,7 +85,7 @@ fn the_written_forms_derive_the_same() {
 fn a_single_name_puns_in_every_position() {
     let resource = |entries: &str| {
         derived(&format!(
-            "let zone = \"a\"\nlet tags = {{ team: \"x\" }}\n\
+            "let zone = \"a\"\nlet tags = {{ team = \"x\" }}\n\
              resource net.subnet s {{\n  {entries}\n}}\n"
         ))
     };

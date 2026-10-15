@@ -54,7 +54,7 @@ For authoring, prefer:
 - reads where the value is used (`cidr = vpc.cidr`, `cfg.region`) over a
   variable bound in one line and used in another
 - named arguments (`peering(env: env, name: n)`) over positional arguments
-- object/list literals (`{k: v}`, `[a, b]`) over lots of `tags.foo` entries
+- object/list literals (`{k = v}`, `[a, b]`) over lots of `tags.foo` entries
 - list comprehensions (`[x | ...]`) over hand-written `collect(...)` rules
 - a resource of a component with a `where` clause to gate a group of
   resources on one guard
@@ -101,8 +101,8 @@ How a path merges is its lattice:
 - a scalar or a list is one value (Flat): two sources with different values
   are a conflict;
 - an object is a map, merged per key (nested objects too, so the dotted
-  paths `spec.replicas` and `spec.template.spec.containers` both land in `spec`): `tags = { env: dev }` in a resource and
-  `set r.tags = { team: "platform" } where r in resource` in a policy pack give both tags;
+  paths `spec.replicas` and `spec.template.spec.containers` both land in `spec`): `tags = { env = dev }` in a resource and
+  `set r.tags = { team = "platform" } where r in resource` in a policy pack give both tags;
   two sources disagreeing on one key are a conflict;
 - a list declared a set is the union of every source at the highest rank
   present; a `@default` set is replaced wholesale by a normal one:
@@ -113,7 +113,7 @@ type_lattice(iam.policy, "statements", "set")
 
 `+=` is a plain contribution, the same as `=`;
 the lattice, not the operator, decides how they merge. A dotted path
-`tags.team` contributes `{ team: V }` to `tags`.
+`tags.team` contributes `{ team = V }` to `tags`.
 
 A conflict is a `deny("conflicting attribute contributions", ...)` naming the
 resource, the path, and every contributing rule with its value. It is resolved
@@ -136,7 +136,7 @@ set { database.backup_days = 14, database.multi_az = true } where env == "prod"
 ```
 
 The same shape gives org-wide defaults from a policy pack without reading the
-attribute it defaults: `set r.tags = { team: "platform" } @default where r in resource`.
+attribute it defaults: `set r.tags = { team = "platform" } @default where r in resource`.
 
 Because the engine lowers these to the same small core, you keep composition and
 predictability without paying the verbosity tax.

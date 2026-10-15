@@ -55,7 +55,7 @@ impl Tree {
     }
 
     /// The tree on one line whatever its width, a note after its leaf
-    /// (`{ port: 5432, protocol: "TCP" (schema default) }`): what a cell
+    /// (`{ port = 5432, protocol = "TCP" (schema default) }`): what a cell
     /// of a table and a line of the bare plan print, where [`layout`]
     /// would break it.
     pub fn line(&self) -> String {
@@ -66,7 +66,7 @@ impl Tree {
             Tree::Obj(fs) => {
                 let fs: Vec<String> = fs
                     .iter()
-                    .map(|(k, t)| format!("{k}: {}", t.line()))
+                    .map(|(k, t)| format!("{k} = {}", t.line()))
                     .collect();
                 format!("{{ {} }}", fs.join(", "))
             }
@@ -98,7 +98,7 @@ impl Tree {
                 "}",
                 " ",
                 fs.iter()
-                    .map(|(k, t)| concat(vec![text(format!("{k}: ")), t.doc()]))
+                    .map(|(k, t)| concat(vec![text(format!("{k} = ")), t.doc()]))
                     .collect(),
             ),
             // `[{` .. `}]`, `[[` .. `]]`
@@ -241,7 +241,7 @@ mod tests {
         ]);
         assert_eq!(
             layout("c = ", &t, 100),
-            ["c = { name: \"web\", args: [\"a\", \"b\"] }"]
+            ["c = { name = \"web\", args = [\"a\", \"b\"] }"]
         );
     }
 
@@ -267,7 +267,7 @@ mod tests {
             "protocol".into(),
             Tree::Noted("\"TCP\"".into(), "(schema default)".into()),
         )]);
-        assert_eq!(noted.line(), "{ protocol: \"TCP\" (schema default) }");
+        assert_eq!(noted.line(), "{ protocol = \"TCP\" (schema default) }");
     }
 
     #[test]
@@ -288,12 +288,12 @@ mod tests {
             layout("c = ", &t, 60),
             [
                 "c = {",
-                "  name: \"traefik\",",
-                "  args: [",
+                "  name = \"traefik\",",
+                "  args = [",
                 format!("    {long},").as_str(),
                 "    \"--api\",",
                 "  ],",
-                "  ports: [{ name: \"web\" }],",
+                "  ports = [{ name = \"web\" }],",
                 "}",
             ]
         );
@@ -309,8 +309,8 @@ mod tests {
             layout("containers = ", &t, 30),
             [
                 "containers = [{",
-                "  name: \"migrate\",",
-                "  image: \"gcr.io/shop/crud-api\",",
+                "  name = \"migrate\",",
+                "  image = \"gcr.io/shop/crud-api\",",
                 "}]",
             ]
         );
@@ -334,9 +334,9 @@ mod tests {
             layout("policy = ", &t, 94),
             [
                 "policy = {",
-                "  Statement: [{",
-                "    Action: \"rds-db:connect\",",
-                "    Resource: \"orders.cx3k.us-east-1.rds.amazonaws.com\",",
+                "  Statement = [{",
+                "    Action = \"rds-db:connect\",",
+                "    Resource = \"orders.cx3k.us-east-1.rds.amazonaws.com\",",
                 "  }],",
                 "}",
             ]
@@ -368,11 +368,11 @@ mod tests {
             layout("spec = ", &t, 100),
             [
                 "spec = {",
-                "  selector: { app: \"pg\" },",
-                "  ports: [{",
-                "    port: 5432,",
-                "    target: 5432,",
-                "    protocol: \"TCP\" (schema default),",
+                "  selector = { app = \"pg\" },",
+                "  ports = [{",
+                "    port = 5432,",
+                "    target = 5432,",
+                "    protocol = \"TCP\" (schema default),",
                 "  }],",
                 "}",
             ]
@@ -402,7 +402,7 @@ mod tests {
         });
         assert_eq!(
             layout("m = ", &t, 100),
-            ["m = { zz_of_name: \"a\", zz_of_labels: {} }"]
+            ["m = { zz_of_name = \"a\", zz_of_labels = {} }"]
         );
     }
 

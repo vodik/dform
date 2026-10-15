@@ -55,10 +55,10 @@ const TWO: &str = r#"
 
 resource k8s.deployment api {
   metadata.name = "api",
-  spec.selector.matchLabels = {app: "api"},
+  spec.selector.matchLabels = {app = "api"},
   spec.template.spec.containers = [
-    {name: "app", image: "api:1"},
-    {name: "sidecar", image: "envoy:1"}
+    {name = "app", image = "api:1"},
+    {name = "sidecar", image = "envoy:1"}
   ]
 }
 "#;
@@ -98,7 +98,7 @@ fn a_missing_required_attribute_names_resource_and_path() {
     s.write(
         "p.df",
         r#"
-resource k8s.deployment api { spec.template.spec.containers = [{name: "a", image: "b"}] }"#,
+resource k8s.deployment api { spec.template.spec.containers = [{name = "a", image = "b"}] }"#,
     );
     let r = s
         .run(&["dev", "--provider", "k8s", "plan", "p.df"])

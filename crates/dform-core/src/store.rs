@@ -1106,7 +1106,7 @@ impl Store for MemoryStore {
     }
 }
 
-/// `s3("BUCKET", "PREFIX", {endpoint: URL, region: R})`: a stack's objects
+/// `s3("BUCKET", "PREFIX", {endpoint = URL, region = R})`: a stack's objects
 /// in BUCKET under PREFIX (a deployment of a keyed stack's under
 /// `PREFIX/<k>=<v>`).
 #[derive(Debug, Clone, PartialEq, Eq)]

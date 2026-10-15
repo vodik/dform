@@ -244,7 +244,7 @@ component postgres {
 
   input name: string
   input subnet: ref(net.subnet)
-  output conn: conn = { host: "${name}.svc", port: 5432 }
+  output conn: conn = { host = "${name}.svc", port = 5432 }
 
   resource db.postgres db { subnets = [subnet] }
 }
@@ -289,7 +289,7 @@ resource databases.postgres app_db {
 
 resource compute.vm web {
   private_ip = inet.host("10.0.0.0/24", 10)
-  tags = { host: app_db.conn.host, domain: config.base_domain }
+  tags = { host = app_db.conn.host, domain = config.base_domain }
 }
 "#,
     ),
@@ -298,11 +298,11 @@ resource compute.vm web {
         r#"use fake
 
 #| Machines as a manifest lists them: a resource per document (R-126).
-let manifest = [{ tags: { host: "a" } }, { tags: { host: "b" } }]
+let manifest = [{ tags = { host = "a" } }, { tags = { host = "b" } }]
 
 resource compute.vm "${d.tags.host}" = d where d in manifest
 
-resource compute.vm pinned = { tags: { host: "pinned" } }
+resource compute.vm pinned = { tags = { host = "pinned" } }
 "#,
     ),
 ];

@@ -51,7 +51,7 @@ noreg() where not has short.registry
 notag() where not has local.tag
 port(g) where g = local.registry
 interp(s) where s = "${{short}}"
-enc(j) where j = json.encode({{ i: short }})
+enc(j) where j = json.encode({{ i = short }})
 "#
     );
     assert_eq!(facts(&src, "same"), ["same()"]);

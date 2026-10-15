@@ -27,14 +27,14 @@ project(1, "net-a")
 names(n) where project(network_name: n)
 
 label(k, v) where labels(l), (k, v) in l
-host_of(h) where labels(l), { host: h } = l
+host_of(h) where labels(l), { host = h } = l
 tagged(repo, tag) where images(i), (repo, tag) = str.split(i, ":", 1)
 untagged(i) where images(i), not (_, _) = str.split(i, ":", 1)
-ids(i) where project({ id: i })
+ids(i) where project({ id = i })
 # Spread (R-199): a literal's fields or elements, and an object pattern's rest.
-spread(x) where labels(l), x = { ..l, team: "web", spec: { ..l.spec, replicas: 3 } }
+spread(x) where labels(l), x = { ..l, team = "web", spec = { ..l.spec, replicas = 3 } }
 spread_list(x) where images(i), x = [..0..3, ..[i], 9]
-rest(h, body) where labels(l), { host: h, ..body } = l
+rest(h, body) where labels(l), { host = h, ..body } = l
 
 # A module, checks.df beside this file, by its path; and a component.
 use checks {
@@ -48,7 +48,7 @@ component m {
 
   resource net.vpc vpc @default {
     cidr = "10.0.0.0/16"
-    tags = { team: "x", "k-v": 1 }
+    tags = { team = "x", "k-v" = 1 }
     size = 2 @override
     list[0].name = "a"
     audit.sinks += ["s3"]
@@ -61,7 +61,7 @@ component m {
 resource m main { on = true }
 
 component tagging {
-  arg(t, a_, "tags", { owner: "ops" }) @override where want(t, a_)
+  arg(t, a_, "tags", { owner = "ops" }) @override where want(t, a_)
 }
 
 resource tagging tags {}
@@ -69,7 +69,7 @@ resource tagging tags {}
 q(1) where env("prod")
 
 set { store.backup_days = 3 } @default where env("prod")
-set { gke.static_ips = { "gke-platform-grpc": { type: "INTERNAL" } } } where env("prod")
+set { gke.static_ips = { "gke-platform-grpc" = { type = "INTERNAL" } } } where env("prod")
 set from yaml.decode(io.read("settings.yaml")) @override where env("prod")
 
 env("prod")
@@ -82,7 +82,7 @@ p(x_) where
   x_ > 0,
   x_ < 10,
 r(v) where v = gke.static_ips."gke-platform-grpc".type
-s(v) where q(x_), o = { a: { b: x_ } }, v = o.a.b
+s(v) where q(x_), o = { a = { b = x_ } }, v = o.a.b
 t(l) where l = [ x_ | q(x_) ], 1 in l, 2 not in l
 u(a_) where ref(net.vpc, "main.vpc", "id") = a_
 adopt(net.vpc["main.vpc"], "vpc-123")

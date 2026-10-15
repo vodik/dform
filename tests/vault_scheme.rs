@@ -212,7 +212,7 @@ fn approle_logs_in() {
             r#"input secret_id: secret(string) = "{SECRET_ID}"
 use vault {{
   address = "{}"
-  approle = {{ role_id: "{ROLE_ID}", secret_id: secret_id }}
+  approle = {{ role_id = "{ROLE_ID}", secret_id = secret_id }}
 }}
 use fake
 let config: secret(string) = io.read("vault://kv/app/config")

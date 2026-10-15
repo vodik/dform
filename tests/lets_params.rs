@@ -33,32 +33,32 @@ const BACKUPS: &str = r#"input namespace: string
 let image = "docker.io/restic/restic:0.18.0"
 let run = "restic backup --tag $TAG $SOURCE"
 let restic(tag, source, mount) = {
-  name: "restic",
+  name = "restic",
   image,
-  command: ["sh", "-c", run],
-  env: [{ name: "TAG", value: tag }, { name: "SOURCE", value: source }],
-  volumeMounts: [{ name: mount, mountPath: source, readOnly: true }],
+  command = ["sh", "-c", run],
+  env = [{ name = "TAG", value = tag }, { name = "SOURCE", value = source }],
+  volumeMounts = [{ name = mount, mountPath = source, readOnly = true }],
 }
 component volume {
   input name: string
   resource k8s.cron_job job {
-    metadata = { name: "backup-${name}", namespace }
+    metadata = { name = "backup-${name}", namespace }
     spec.schedule = "0 3 * * *"
     spec.jobTemplate.spec.template.spec = {
-      restartPolicy: "Never",
-      containers: [restic(name, "/data", "data")],
+      restartPolicy = "Never",
+      containers = [restic(name, "/data", "data")],
     }
   }
 }
 component database {
   input name: string
   resource k8s.cron_job job {
-    metadata = { name: "backup-${name}", namespace }
+    metadata = { name = "backup-${name}", namespace }
     spec.schedule = "0 4 * * *"
     spec.jobTemplate.spec.template.spec = {
-      restartPolicy: "Never",
-      initContainers: [{ name: "dump", image: "postgres" }],
-      containers: [restic(tag: name, source: "/dump", mount: "dump")],
+      restartPolicy = "Never",
+      initContainers = [{ name = "dump", image = "postgres" }],
+      containers = [restic(tag: name, source: "/dump", mount: "dump")],
     }
   }
 }
@@ -257,7 +257,7 @@ fn a_reader_inside_is_an_error() {
         (r#"env.var("HOME")"#, "`env.var`"),
     ] {
         let r = plan(&format!(
-            "use fake\nuse env\nlet f(n) = {{ n, v: {reads} }}\n\
+            "use fake\nuse env\nlet f(n) = {{ n, v = {reads} }}\n\
              resource net.vpc u {{ cidr = \"10.0.0.0/16\", tags = f(1) }}\n"
         ))
         .failure();
@@ -301,7 +301,7 @@ resource net.vpc u { cidr = f(1) }
 fn each_call_is_answered_at_its_site() {
     let r = plan(
         r#"use fake
-let labels(app) = { app, team: "x" }
+let labels(app) = { app, team = "x" }
 resource net.vpc a { cidr = "10.0.0.0/16", tags = labels("web") }
 resource db.postgres b { name = "b", tags = labels(a.cidr) }
 "#,

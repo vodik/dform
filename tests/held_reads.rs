@@ -17,20 +17,20 @@ const BACKUPS: &str = r#"
 input namespace: k8s.namespace
 let ns = namespace.metadata.name
 resource k8s.secret repository {
-  metadata = { name: "restic", namespace: ns }
+  metadata = { name = "restic", namespace = ns }
 }
 component volume {
   input name: string
   resource k8s.cron_job job {
-    metadata = { name: "backup-${name}", namespace: backups.ns }
+    metadata = { name = "backup-${name}", namespace = backups.ns }
     spec.schedule = "0 3 * * *"
     spec.jobTemplate.spec.template.spec = {
-      restartPolicy: "Never",
-      containers: [{
-        name: "restic",
-        image: "restic",
-        env: [{ name: "TAG", value: name }],
-        envFrom: [{ secretRef: { name: READ } }],
+      restartPolicy = "Never",
+      containers = [{
+        name = "restic",
+        image = "restic",
+        env = [{ name = "TAG", value = name }],
+        envFrom = [{ secretRef = { name = READ } }],
       }],
     }
   }
@@ -112,13 +112,13 @@ fn a_held_resources_written_attribute_reads_inside_a_literal() {
                 .contains("waits on  provider k8s  kubeconfig = platform[env].kubeconfig")
                 && r.stdout.contains("+ k8s.cron_job forgejo_backup.job")
                 && r.stdout
-                    .contains("envFrom: [{ secretRef: { name: \"restic\" } }]"),
+                    .contains("envFrom = [{ secretRef = { name = \"restic\" } }]"),
             "real: {real}\n{}",
             r.stdout
         );
         let r = run(&s, &["why", TEMPLATE, "apps"]).success();
         assert!(
-            r.stdout.contains("secretRef: { name: \"restic\" }")
+            r.stdout.contains("secretRef = { name = \"restic\" }")
                 && r.stdout.contains("tick 2  waits on  provider k8s"),
             "real: {real}\n{}",
             r.stdout
@@ -146,14 +146,14 @@ fn a_held_resources_computed_attribute_is_one_unknown_leaf_of_the_literal() {
         );
         assert!(
             r.stdout
-                .contains("envFrom: [{ secretRef: { name: backups.repository.metadata.uid } }]"),
+                .contains("envFrom = [{ secretRef = { name = backups.repository.metadata.uid } }]"),
             "real: {real}\n{}",
             r.stdout
         );
         let r = run(&s, &["why", TEMPLATE, "apps"]).success();
         assert!(
             r.stdout
-                .contains("secretRef: { name: ?k8s.secret backups.repository.metadata.uid }"),
+                .contains("secretRef = { name = ?k8s.secret backups.repository.metadata.uid }"),
             "real: {real}\n{}",
             r.stdout
         );
@@ -206,7 +206,7 @@ fn a_modules_resource_read_bare_in_its_component_is_the_modules() {
         assert!(
             r.stdout.contains("+ k8s.cron_job forgejo_backup.job")
                 && r.stdout
-                    .contains("envFrom: [{ secretRef: { name: \"restic\" } }]"),
+                    .contains("envFrom = [{ secretRef = { name = \"restic\" } }]"),
             "real: {real}\n{}",
             r.stdout
         );
@@ -231,7 +231,7 @@ fn a_component_reads_its_module_by_its_name_under_an_alias() {
     assert!(
         r.ok && r
             .stdout
-            .contains("envFrom: [{ secretRef: { name: \"restic\" } }]"),
+            .contains("envFrom = [{ secretRef = { name = \"restic\" } }]"),
         "{}\n{}",
         r.stdout,
         r.stderr

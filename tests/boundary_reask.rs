@@ -18,13 +18,13 @@ use common::{Scratch, brief};
 
 const BEFORE: &str = r#"use fake
 use k8s
-resource k8s.namespace ns { metadata.name = "app", metadata.labels = { v: "1" } }
+resource k8s.namespace ns { metadata.name = "app", metadata.labels = { v = "1" } }
 resource compute.vm app { db_host = "old.db.fake" }
 "#;
 
 const PROG: &str = r#"use fake
 use k8s
-resource k8s.namespace ns { metadata.name = "app", metadata.labels = { v: "2" } }
+resource k8s.namespace ns { metadata.name = "app", metadata.labels = { v = "2" } }
 resource db.postgres main { size = 1 }
 resource compute.vm app { db_host = main.endpoint, rv = ns.metadata.resourceVersion }
 "#;

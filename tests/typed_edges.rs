@@ -26,15 +26,15 @@ fn plan(src: &str) -> Run {
 /// A job whose one container is `container`.
 fn job(container: &str) -> String {
     format!(
-        "resource k8s.job j {{\n  metadata = {{ name: \"j\", namespace: \"a\" }}\n  \
-         spec.template.spec = {{ restartPolicy: \"Never\", containers: [{container}] }}\n}}\n"
+        "resource k8s.job j {{\n  metadata = {{ name = \"j\", namespace = \"a\" }}\n  \
+         spec.template.spec = {{ restartPolicy = \"Never\", containers = [{container}] }}\n}}\n"
     )
 }
 
 /// The container `a` requesting `requests`.
 fn requesting(requests: &str) -> String {
     job(&format!(
-        "{{ name: \"a\", image: \"x\", resources: {{ requests: {requests} }} }}"
+        "{{ name = \"a\", image = \"x\", resources = {{ requests = {requests} }} }}"
     ))
 }
 
@@ -62,14 +62,17 @@ fn fails(src: &str, parts: &[&str]) {
 /// The attribute itself: the schema's type reads the literal (R-66).
 #[test]
 fn an_attribute_reads_its_literal() {
-    plans(&requesting("{ cpu: 100m, memory: 128Mi }"), &[CPU, MEMORY]);
+    plans(
+        &requesting("{ cpu = 100m, memory = 128Mi }"),
+        &[CPU, MEMORY],
+    );
 }
 
 /// A let with a declared scalar type (R-74).
 #[test]
 fn a_typed_let_reads_its_literal() {
     plans(
-        &format!("let c: cpu = 100m\n{}", requesting("{ cpu: c }")),
+        &format!("let c: cpu = 100m\n{}", requesting("{ cpu = c }")),
         &[CPU],
     );
 }
@@ -79,7 +82,7 @@ fn a_typed_let_reads_its_literal() {
 fn a_typed_object_let_reads_its_fields() {
     plans(
         &format!(
-            "let r: {{ cpu: cpu, memory: bytes }} = {{ cpu: 100m, memory: 128Mi }}\n{}",
+            "let r: {{ cpu: cpu, memory: bytes }} = {{ cpu = 100m, memory = 128Mi }}\n{}",
             requesting("r")
         ),
         &[CPU, MEMORY],
@@ -90,7 +93,7 @@ fn a_typed_object_let_reads_its_fields() {
 /// the let, for a value type read from a string too.
 #[test]
 fn a_typed_object_let_checks_its_fields() {
-    let e = common::error("let hosts: { a: ip, b: uri } = { a: \"10.0.0\", b: \"https://x\" }\n");
+    let e = common::error("let hosts: { a: ip, b: uri } = { a = \"10.0.0\", b = \"https://x\" }\n");
     assert!(
         e.contains("let hosts.a is an ip: \"10.0.0\" is not an address"),
         "{e}"
@@ -104,7 +107,7 @@ fn a_typed_list_let_reads_its_elements() {
     assert!(e.contains("\"10.1\" is not a network"), "{e}");
     plans(
         &format!(
-            "let reqs: list({{ cpu: cpu }}) = [{{ cpu: 100m }}]\nlet req = r where r in reqs\n{}",
+            "let reqs: list({{ cpu: cpu }}) = [{{ cpu = 100m }}]\nlet req = r where r in reqs\n{}",
             requesting("req")
         ),
         &[CPU],
@@ -116,7 +119,7 @@ fn a_typed_list_let_reads_its_elements() {
 fn an_untyped_let_is_typed_by_its_use() {
     plans(
         &format!(
-            "let limits = {{ cpu: 100m, memory: 128Mi }}\n{}",
+            "let limits = {{ cpu = 100m, memory = 128Mi }}\n{}",
             requesting("limits")
         ),
         &[CPU, MEMORY],
@@ -127,13 +130,13 @@ fn an_untyped_let_is_typed_by_its_use() {
 #[test]
 fn a_let_read_by_a_field_is_typed_by_its_use() {
     plans(
-        &format!("let c = 100m\n{}", requesting("{ cpu: c }")),
+        &format!("let c = 100m\n{}", requesting("{ cpu = c }")),
         &[CPU],
     );
     plans(
         &format!(
-            "let limits = {{ cpu: 100m }}\n{}",
-            requesting("{ cpu: limits.cpu }")
+            "let limits = {{ cpu = 100m }}\n{}",
+            requesting("{ cpu = limits.cpu }")
         ),
         &[CPU],
     );
@@ -144,7 +147,7 @@ fn a_let_read_by_a_field_is_typed_by_its_use() {
 fn a_let_through_a_let_is_typed_by_its_use() {
     plans(
         &format!(
-            "let c = 100m\nlet limits = {{ cpu: c }}\n{}",
+            "let c = 100m\nlet limits = {{ cpu = c }}\n{}",
             requesting("limits")
         ),
         &[CPU],
@@ -158,8 +161,8 @@ fn a_let_with_parameters_is_typed_by_its_call() {
     plans(
         &format!(
             "let restic(tag) = {{\n  name: \"a\",\n  image: \"restic\",\n  \
-             env: [{{ name: \"TAG\", value: tag }}],\n  \
-             resources: {{ requests: {{ cpu: 100m, memory: 128Mi }} }},\n}}\n{}",
+             env = [{{ name = \"TAG\", value = tag }}],\n  \
+             resources = {{ requests = {{ cpu = 100m, memory = 128Mi }} }},\n}}\n{}",
             job("restic(\"x\")")
         ),
         &[CPU, MEMORY],
@@ -171,7 +174,7 @@ fn a_let_with_parameters_is_typed_by_its_call() {
 #[test]
 fn an_argument_is_typed_by_its_parameters_use() {
     plans(
-        &format!("let box(c) = {{ cpu: c }}\n{}", requesting("box(100m)")),
+        &format!("let box(c) = {{ cpu = c }}\n{}", requesting("box(100m)")),
         &[CPU],
     );
 }
@@ -187,8 +190,8 @@ fn a_let_in_a_component_is_typed_by_its_use() {
             requesting("small")
         )
     };
-    plans(&src("", "  let small = { cpu: 100m }\n"), &[CPU]);
-    plans(&src("let small = { cpu: 100m }\n", ""), &[CPU]);
+    plans(&src("", "  let small = { cpu = 100m }\n"), &[CPU]);
+    plans(&src("let small = { cpu = 100m }\n", ""), &[CPU]);
 }
 
 /// A component's typed input takes the literal its instance gives it, and
@@ -197,7 +200,7 @@ fn a_let_in_a_component_is_typed_by_its_use() {
 fn a_typed_input_reads_what_its_instance_gives() {
     let component = format!(
         "component box {{\n  input c: cpu\n{}}}\n",
-        requesting("{ cpu: c }")
+        requesting("{ cpu = c }")
     );
     plans(
         &format!("{component}resource box b {{ c = 100m }}\n"),
@@ -216,7 +219,7 @@ fn an_object_input_reads_its_fields() {
     plans(
         &format!(
             "component box {{\n  input cfg: {{ cpu: cpu }}\n{}}}\n\
-             resource box b {{ cfg = {{ cpu: 100m }} }}\n",
+             resource box b {{ cfg = {{ cpu = 100m }} }}\n",
             requesting("cfg")
         ),
         &[CPU],
@@ -227,7 +230,7 @@ fn an_object_input_reads_its_fields() {
 #[test]
 fn an_input_default_reads_its_literal() {
     plans(
-        &format!("input c: cpu = 100m\n{}", requesting("{ cpu: c }")),
+        &format!("input c: cpu = 100m\n{}", requesting("{ cpu = c }")),
         &[CPU],
     );
 }
@@ -243,7 +246,7 @@ fn a_typed_output_reads_its_literal() {
 fn a_let_read_by_a_typed_let_is_typed_by_it() {
     plans(
         &format!(
-            "let a = {{ cpu: 100m }}\nlet b: {{ cpu: cpu }} = a\n{}",
+            "let a = {{ cpu = 100m }}\nlet b: {{ cpu: cpu }} = a\n{}",
             requesting("b")
         ),
         &[CPU],
@@ -256,7 +259,7 @@ fn a_relations_row_is_typed_by_its_columns_use() {
     plans(
         &format!(
             "size(\"a\", 100m)\nlet c = x where size(\"a\", x)\n{}",
-            requesting("{ cpu: c }")
+            requesting("{ cpu = c }")
         ),
         &[CPU],
     );
@@ -269,7 +272,7 @@ fn a_declared_column_reads_its_rows() {
         &format!(
             "decl size(k: string, c: cpu)\nsize(\"a\", 100m)\n\
              let c = x where size(\"a\", x)\n{}",
-            requesting("{ cpu: c }")
+            requesting("{ cpu = c }")
         ),
         &[CPU],
     );
@@ -279,22 +282,22 @@ fn a_declared_column_reads_its_rows() {
 #[test]
 fn a_set_reads_its_value_at_the_attribute() {
     let deployment = "resource k8s.deployment web {\n  metadata.name = \"web\"\n  \
-                      spec.selector.matchLabels = { app: \"web\" }\n  \
-                      spec.template.spec.containers = [{ name: \"a\", image: \"x\" }]\n}\n";
+                      spec.selector.matchLabels = { app = \"web\" }\n  \
+                      spec.template.spec.containers = [{ name = \"a\", image = \"x\" }]\n}\n";
     let set = |v: &str| {
         format!(
             "{deployment}set d.spec.template.spec.containers[c.name].resources.requests = {v} \
              where d in k8s.deployment, c in d.spec.template.spec.containers\n"
         )
     };
-    plans(&set("{ cpu: 100m }"), &[CPU]);
+    plans(&set("{ cpu = 100m }"), &[CPU]);
     plans(
-        &format!("let lim = {{ cpu: 100m }}\n{}", set("lim")),
+        &format!("let lim = {{ cpu = 100m }}\n{}", set("lim")),
         &[CPU],
     );
     // Through a variable of any type: each type that declares the path.
     let any = set("lim").replace("d in k8s.deployment", "d in resource");
-    plans(&format!("let lim = {{ cpu: 100m }}\n{any}"), &[CPU]);
+    plans(&format!("let lim = {{ cpu = 100m }}\n{any}"), &[CPU]);
 }
 
 /// A comparison: the other side's type reads the literal.
@@ -303,7 +306,7 @@ fn a_comparison_reads_its_literal_as_the_other_side() {
     let r = plan(&format!(
         "{}deny \"cpu above 50m\" where\n  j in k8s.job,\n  \
          c in j.spec.template.spec.containers,\n  c.resources.requests.cpu > 50m,\n",
-        requesting("{ cpu: 100m }")
+        requesting("{ cpu = 100m }")
     ));
     assert!(
         r.stdout.contains("cpu above 50m") || r.stderr.contains("cpu above 50m"),
@@ -329,7 +332,7 @@ fn a_string_in_a_let_is_read_at_its_edge() {
     let src = |cidr: &str| {
         format!(
             "resource net.vpc v {{ cidr = \"10.0.0.0/16\" }}\n\
-             let route = {{ destination: \"{cidr}\", target: v }}\n\
+             let route = {{ destination = \"{cidr}\", target = v }}\n\
              resource net.route_table t {{\n  vpc = v\n  routes = [route]\n}}\n"
         )
     };
@@ -346,7 +349,7 @@ fn uses_that_disagree_are_an_error_naming_both() {
     fails(
         &format!(
             "let t = 100m\noutput d: duration = t\n{}",
-            requesting("{ cpu: t }")
+            requesting("{ cpu = t }")
         ),
         &["`100m` in `let t`", "cpu", "duration"],
     );
@@ -357,7 +360,7 @@ fn uses_that_disagree_are_an_error_naming_both() {
 #[test]
 fn a_literal_no_use_types_names_the_let() {
     fails(
-        "let limits = { cpu: 100m }\n",
+        "let limits = { cpu = 100m }\n",
         &["`100m` in `let limits`", "give the let a type"],
     );
 }
@@ -365,7 +368,7 @@ fn a_literal_no_use_types_names_the_let() {
 /// An unambiguous literal needs no edge.
 #[test]
 fn an_unambiguous_literal_needs_no_edge() {
-    plans("let m = { memory: 128Mi, name: \"x\" }\n", &[]);
+    plans("let m = { memory = 128Mi, name = \"x\" }\n", &[]);
 }
 
 /// A literal with a spread (R-199): the written fields keep the edge's
@@ -375,10 +378,10 @@ fn an_unambiguous_literal_needs_no_edge() {
 fn a_spread_keeps_the_edges_type() {
     plans(
         &format!(
-            "let base = {{ cpu: 100m }}\n\
-             let restic(tag) = {{ name: \"a\", image: \"x\", env: [{{ name: \"TAG\", value: tag }}] }}\n{}",
+            "let base = {{ cpu = 100m }}\n\
+             let restic(tag) = {{ name = \"a\", image = \"x\", env = [{{ name = \"TAG\", value = tag }}] }}\n{}",
             job(
-                "{ ..restic(\"t\"), resources: { requests: { ..base, memory: 128Mi }, limits: { cpu: 100m } } }"
+                "{ ..restic(\"t\"), resources = { requests = { ..base, memory = 128Mi }, limits = { cpu = 100m } } }"
             )
         ),
         &[
@@ -394,12 +397,12 @@ fn a_spread_keeps_the_edges_type() {
 #[test]
 fn an_element_is_typed_by_its_use() {
     plans(
-        &format!("let c = x where x in [100m]\n{}", requesting("{ cpu: c }")),
+        &format!("let c = x where x in [100m]\n{}", requesting("{ cpu = c }")),
         &[CPU],
     );
     plans(
         &format!(
-            "let cs = [{{ cpu: 100m }}]\nlet reqs = [r | r in cs]\n{}",
+            "let cs = [{{ cpu = 100m }}]\nlet reqs = [r | r in cs]\n{}",
             requesting("reqs[0]")
         ),
         &[CPU],
@@ -411,15 +414,15 @@ fn an_element_is_typed_by_its_use() {
 fn an_entry_and_a_pattern_are_typed_by_their_use() {
     plans(
         &format!(
-            "let lim = {{ cpu: 100m }}\nlet c = v where (_, v) in lim\n{}",
-            requesting("{ cpu: c }")
+            "let lim = {{ cpu = 100m }}\nlet c = v where (_, v) in lim\n{}",
+            requesting("{ cpu = c }")
         ),
         &[CPU],
     );
     plans(
         &format!(
-            "let lim = {{ cpu: 100m }}\nlet c = x where {{ cpu: x }} = lim\n{}",
-            requesting("{ cpu: c }")
+            "let lim = {{ cpu = 100m }}\nlet c = x where {{ cpu = x }} = lim\n{}",
+            requesting("{ cpu = c }")
         ),
         &[CPU],
     );
@@ -431,12 +434,12 @@ fn a_sums_sides_are_typed_by_each_other() {
     plans(
         &format!(
             "let base: cpu = 50m\nlet c = base + 50m\n{}",
-            requesting("{ cpu: c }")
+            requesting("{ cpu = c }")
         ),
         &[CPU],
     );
     plans(
-        &format!("let c = 50m + 50m\n{}", requesting("{ cpu: c }")),
+        &format!("let c = 50m + 50m\n{}", requesting("{ cpu = c }")),
         &[CPU],
     );
 }
@@ -488,7 +491,7 @@ fn the_plan_says_where_a_literals_type_came_from() {
     s.write(
         "main.df",
         &format!(
-            "use fake\nuse k8s\nlet limits = {{ cpu: 100m }}\n{}",
+            "use fake\nuse k8s\nlet limits = {{ cpu = 100m }}\n{}",
             requesting("limits")
         ),
     );
@@ -521,7 +524,7 @@ fn another_deployments_output_types_its_readers_literal() {
 #[ignore = "a coeffect's row is keyed by its argument as written: read at compile time, the evaluated call's key differs from the one the host answered (files/oci.rs), so its arguments take no edge yet"]
 fn a_coeffects_argument_is_checked_at_compile_time() {
     fails(
-        &job("{ name: \"a\", image: oci.resolve(\"Not An Image\") }"),
+        &job("{ name = \"a\", image = oci.resolve(\"Not An Image\") }"),
         &["is an oci"],
     );
 }

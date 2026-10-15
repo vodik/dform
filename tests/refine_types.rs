@@ -40,7 +40,7 @@ fn an_override_that_violates_a_refinement_is_a_deny() {
     // Each witness by where it was written (R-111), and said once.
     assert!(
         r.stdout.contains(
-            "\n      override { backup_days: 40 }  p.df:9\n      check range(1, 35)  p.df:3\n"
+            "\n      override { backup_days = 40 }  p.df:9\n      check range(1, 35)  p.df:3\n"
         ),
         "{}",
         r.stdout
@@ -64,7 +64,7 @@ fn a_literal_that_violates_a_refinement_is_a_compile_error() {
     let s = Scratch::new("refine-literal");
     let r = plan(
         &s,
-        "\ninput db {\n  backup_days: int = 3 check 1 <= backup_days <= 35\n}\non(1)\nset db = { backup_days: 40 } where on(1)\nuse fake\n",
+        "\ninput db {\n  backup_days: int = 3 check 1 <= backup_days <= 35\n}\non(1)\nset db = { backup_days = 40 } where on(1)\nuse fake\n",
     )
     .failure();
     assert!(
@@ -109,7 +109,7 @@ type compute.vm {{
   pool.min: int
   pool.max: int check pool.min <= pool.max
 }}
-resource compute.vm prod {{ pool = {{ min: {min}, max: 3 }} }}
+resource compute.vm prod {{ pool = {{ min = {min}, max = 3 }} }}
 \nuse fake\n"
         )
     };
@@ -238,7 +238,7 @@ fn e0306_a_refinement_on_a_sensitive_path_the_provider_cannot_check() {
     .unwrap();
     s.write(
         "p.df",
-        "\nuse k8s { source = \"./providers/k8s\" }\ntype k8s.secret {\n  data.password: string check data.password.len >= 16\n}\nresource k8s.secret db { metadata.name = \"db\", data = { password: \"x\" } }\n",
+        "\nuse k8s { source = \"./providers/k8s\" }\ntype k8s.secret {\n  data.password: string check data.password.len >= 16\n}\nresource k8s.secret db { metadata.name = \"db\", data = { password = \"x\" } }\n",
     );
     let out = common::dform()
         .args(["plan", "p.df"])

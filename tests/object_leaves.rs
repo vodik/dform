@@ -65,7 +65,7 @@ use k8s { source = "./providers/k8s" }
 resource k8s.namespace traefik { metadata.name = "traefik" }
 
 resource k8s.persistent_volume_claim acme {
-  metadata = { name: "traefik-acme", namespace: traefik.metadata.name }
+  metadata = { name = "traefik-acme", namespace = traefik.metadata.name }
   spec.accessModes = ["ReadWriteOnce"]
   spec.resources.requests.storage = "1Gi"
 }

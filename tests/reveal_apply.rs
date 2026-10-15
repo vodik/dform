@@ -248,7 +248,7 @@ fn a_function_over_a_held_secret_is_an_error_not_a_wait() {
     let s = project(
         "reveal-encode",
         "use vault\nuse fake { source = \"prov\" }\nresource vault.token t { name = \"t\" }\n\
-         resource compute.vm vm {\n  name = \"vm\"\n  user_data = json.encode({ token: t.value \
+         resource compute.vm vm {\n  name = \"vm\"\n  user_data = json.encode({ token = t.value \
          })\n}\n",
     );
     let r = dform(&s, &["plan", "p"]).failure();

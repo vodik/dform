@@ -31,7 +31,7 @@ fn project(name: &str, server: &Server) -> Scratch {
         &format!(
             "[project]\nedition = \"2026\"\n\n[providers]\novh = {{ path = \"{}\" }}\n\n\
              [defaults]\nbackend = 's3(\"dform\", \"{prefix}/{{stack}}\", \
-             {{endpoint: \"{}\", region: \"us-east-1\"}})'\n\n\
+             {{endpoint = \"{}\", region = \"us-east-1\"}})'\n\n\
              [secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n\n[stacks.main]\n",
             ovh(),
             s3().endpoint
@@ -190,7 +190,7 @@ fn a_large_documents_leaves_are_all_explained() {
     let r = s.run(&["plan", "-v", "main.df"]).success();
     assert!(
         r.stdout
-            .contains("key1499: \"value number 1499 of document 3"),
+            .contains("key1499 = \"value number 1499 of document 3"),
         "{}",
         &r.stdout[..r.stdout.len().min(2000)]
     );

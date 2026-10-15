@@ -411,10 +411,10 @@ Rules, facts, checks and contributions
 
 zone("a")
 names(n) where project(name: n)
-arg(t, a, "tags", { owner: "ops" }) @override where want(t, a)
+arg(t, a, "tags", { owner = "ops" }) @override where want(t, a)
 set settings["prod"].audit.sinks += ["s3"]
 input("env", v) where q(v)
-deny("m", "t", { a: b }) where q(b)
+deny("m", "t", { a = b }) where q(b)
 deny "m" { a } where q(a)
 warn "w"
 deny "c ${x}" where not q(x)
@@ -613,7 +613,7 @@ p(x) where q(x), x.a, x.b == 1, x in net.vpc, has x.c, not x.d, v = xs[i], x not
 Terms
 ================================================================================
 
-p(x) where y = 1 + 2 * 3 - -4 / (5 % 2), z = a / b, v = m.i.p, u = t[x].p, s = f[0].x, q("tags.a.b[0]", "id"), r = [x | q(x)], o = { a, "b-c": 1, type: 2 }, b = true
+p(x) where y = 1 + 2 * 3 - -4 / (5 % 2), z = a / b, v = m.i.p, u = t[x].p, s = f[0].x, q("tags.a.b[0]", "id"), r = [x | q(x)], o = { a, "b-c" = 1, type = 2 }, b = true
 
 --------------------------------------------------------------------------------
 
@@ -948,7 +948,7 @@ Patterns: tuples after in, on the left of =, as an argument
 label(k, v) where labels(l), (k, v) in l
 tagged(r, t) where image(i), (r, t) = str.split(i, ":", 1)
 untagged(i) where image(i), not (_, _) = str.split(i, ":", 1)
-host(h) where conn(c), { host: h } = c
+host(h) where conn(c), { host = h } = c
 names(name) where zone({ name })
 
 --------------------------------------------------------------------------------
@@ -1194,7 +1194,7 @@ let l = [ x |
 A path binds each anonymously (R-162)
 ================================================================================
 
-set k8s.stateful_set[_].spec.template.spec.containers[_].resources.limits = { cpu: 500m } @default
+set k8s.stateful_set[_].spec.template.spec.containers[_].resources.limits = { cpu = 500m } @default
 warn "${img}" where img in k8s.deployment[_].spec.template.spec.containers[_].image
 
 --------------------------------------------------------------------------------
@@ -1258,7 +1258,7 @@ let cidr(a, b: int = 7) = "10.${a}.${b}.0/24"
 let restic(
   tag,
   source: string
-): object = { name: tag, path: source } where tag != ""
+): object = { name = tag, path = source } where tag != ""
 
 --------------------------------------------------------------------------------
 

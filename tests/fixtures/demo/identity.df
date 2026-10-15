@@ -7,12 +7,12 @@ decl iam_need(role: string, action: string, resource: string)
 #| attribute, a set any module may add to (`set r.policies = [p] where ..`).
 resource iam.role app_role {
   name = "app"
-  assume = { principals: ["k8s.serviceaccount.app"] }
+  assume = { principals = ["k8s.serviceaccount.app"] }
   policies = [app_policy]
 }
 
 resource iam.policy app_policy {
   name = "app"
   # List comprehension sugar for collect_list(...)
-  statements = [ { action: a, resource: r } | iam_need("app", a, r) ]
+  statements = [ { action = a, resource = r } | iam_need("app", a, r) ]
 }

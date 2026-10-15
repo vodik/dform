@@ -543,14 +543,17 @@ pub(super) fn field_of(e: &str, keys: &[String]) -> Option<String> {
         .children()
         .filter(|n| n.kind() == SyntaxKind::OBJECT_FIELD)
         .find_map(|f| {
-            let text = f.text().to_string();
-            let (key, value) = text.split_once(':')?;
-            let key = key.trim();
+            let key = f
+                .children_with_tokens()
+                .filter_map(|e| e.into_token())
+                .find(|t| !t.kind().is_trivia())?;
+            let key = key.text();
             let key = key
                 .strip_prefix('"')
                 .and_then(|k| k.strip_suffix('"'))
                 .unwrap_or(key);
-            (key == k).then(|| value.trim().to_string())
+            let value = f.children().next()?;
+            (key == k).then(|| value.text().to_string())
         })?;
     field_of(&value, rest)
 }

@@ -141,7 +141,7 @@ fn an_s3_deployment_stored_by_its_short_name_moves_in_the_bucket() {
         "dform.toml",
         &format!(
             "[project]\nedition = \"2026\"\n\n[defaults]\nbackend = 's3(\"names\", \"state/{{stack}}\", \
-             {{endpoint: \"{}\", region: \"us-east-1\"}})'\n\n[secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n",
+             {{endpoint = \"{}\", region = \"us-east-1\"}})'\n\n[secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n",
             server.endpoint
         ),
     );

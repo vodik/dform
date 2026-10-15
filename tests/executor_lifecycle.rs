@@ -131,7 +131,7 @@ fn ignore_changes_drops_the_path_from_both_sides() {
     let s = Scratch::new("ignore-changes");
     let prog = |team: &str| {
         format!(
-            "\nresource net.vpc main {{ cidr = \"10.0.0.0/16\", tags = {{ team: \"{team}\" }} }}\n\
+            "\nresource net.vpc main {{ cidr = \"10.0.0.0/16\", tags = {{ team = \"{team}\" }} }}\n\
              ignore_changes(main, \"tags.owner\")\nuse fake\n"
         )
     };
@@ -175,7 +175,7 @@ fn policy_reads_lifecycle_facts() {
         r#"
 
 resource db.postgres main { size = 1 }
-deny "databases must be protected" {addr: a} where
+deny "databases must be protected" {addr = a} where
   a in db.postgres,
   not lifecycle(a, "prevent_destroy"),
 use fake
@@ -207,7 +207,7 @@ fn ignore_changes_still_sets_the_path_on_create() {
     let s = Scratch::new("ignore-changes-create");
     let prog = |owner: &str| {
         format!(
-            "\nresource net.vpc main {{ cidr = \"10.0.0.0/16\", tags = {{ owner: \"{owner}\" }} }}\n\
+            "\nresource net.vpc main {{ cidr = \"10.0.0.0/16\", tags = {{ owner = \"{owner}\" }} }}\n\
              ignore_changes(main, \"tags.owner\")\nuse fake\n"
         )
     };
@@ -240,7 +240,7 @@ fn ignore_changes_update_leaves_an_absent_path_absent() {
     mock(&s, &["apply"]).success();
     s.write(
         "p.df",
-        "\nresource net.vpc main { cidr = \"10.0.0.0/16\", size = 2, tags = { owner: \"ops\" } }\nignore_changes(main, \"tags.owner\")\nuse fake\n",
+        "\nresource net.vpc main { cidr = \"10.0.0.0/16\", size = 2, tags = { owner = \"ops\" } }\nignore_changes(main, \"tags.owner\")\nuse fake\n",
     );
     let r = mock(&s, &["apply", "--why=none"]).success();
     assert!(

@@ -249,7 +249,7 @@ fn inside(n: Node, kinds: &[&str]) -> bool {
 /// first capture of a span too (Emacs's treesit).
 #[test]
 fn the_string_capture_leaves_an_interpolation_to_code() {
-    let src = "let init = \"a ${yaml.encode({ foo: true, size: 500m })} b\"\n\
+    let src = "let init = \"a ${yaml.encode({ foo = true, size = 500m })} b\"\n\
                let doc = \"#cloud-config\n${str.upper(\"x\")} ${n}Gi\"\n";
     let tree = ts_parse(src);
     let strings = captures(&tree, src, "string");
@@ -352,7 +352,7 @@ fn edge_cases_agree() {
         "component m {\n  p(x) where\n    q(x),\n  r(1)\n}\n",
         "use m {\n  p(x) where\n    q(x),\n  n = 1\n}\n",
         "deny \"m\" { a }\n  where q(a), r(a)\n",
-        "let c = x where { cpu: x } = lim\n",
+        "let c = x where { cpu = x } = lim\n",
         "p(a)\n  @override\n",
         "p(a) @override\n",
         "p(a) where q(a) # c\nr(a)\n",
@@ -367,7 +367,7 @@ fn edge_cases_agree() {
         "p(a) where { q(a), }\n",
         "p(\n  a,\n  b,\n)\n",
         "let k = [\n  1,\n  2\n]\n",
-        "let k = { a: 1,\n  b }\n",
+        "let k = { a = 1,\n  b }\n",
         "let k = [x | q(x), r(x)]\n",
         "k = 1\n",
         "r.p = 1\n",
@@ -397,11 +397,11 @@ fn edge_cases_agree() {
         "p(x) where y = a / b, z = x / 2, w = m.i.p\n",
         "p(x) where y = t[x].p, z = f[0].x, q(\"tags.a.b[0]\", \"id\")\n",
         "names(n) where project(network_name: n)\n",
-        "names(n) where project { network_name: n }\n",
+        "names(n) where project { network_name = n }\n",
         "p(x) where x.\"a-b\".type == \"c\"\n",
         // Keywords as names.
         "input(\"env\", v) where q(v)\n",
-        "deny(\"m\", \"t\", { a: b }) where q(b)\n",
+        "deny(\"m\", \"t\", { a = b }) where q(b)\n",
         "output(\"k\", v) where q(v)\n",
         "settings.x(1)\n",
         "deny \"m\" { a } where q(a)\n",
@@ -410,7 +410,7 @@ fn edge_cases_agree() {
         "key env: enum(\"a\", \"b\") = \"a\" check env != \"b\"\nkey(\"x\")\n",
         "stack app[env] {}\n",
         "input seen from facts(\"seen.facts\")\n",
-        "p(x) where x = { type: \"a\", input: 1 }\n",
+        "p(x) where x = { type = \"a\", input = 1 }\n",
         "p(x) where not { q(x) }, not r(x), x not in xs, not x in net.vpc\n",
         "p(x) where v = xs[i], has x.a, 1 <= x <= 3\n",
         "p(x) where exists x\n",

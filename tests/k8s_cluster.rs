@@ -92,19 +92,19 @@ resource k8s.namespace test {{
 resource k8s.config_map settings {{
   metadata.generateName = "settings-"
   metadata.namespace = test.metadata.name
-  data = {{ "MODE": "test" }}
+  data = {{ "MODE" = "test" }}
 }}
 
 resource k8s.deployment web {{
   metadata.name = "web"
   metadata.namespace = test.metadata.name
   spec.replicas = 1
-  spec.selector.matchLabels = {{ app: "web" }}
-  spec.template.metadata.labels = {{ app: "web" }}
+  spec.selector.matchLabels = {{ app = "web" }}
+  spec.template.metadata.labels = {{ app = "web" }}
   spec.template.spec.containers = [{{
-    name: "web",
-    image: "{image}",
-    envFrom: [{{ configMapRef: {{ name: settings.metadata.name }} }}]
+    name = "web",
+    image = "{image}",
+    envFrom = [{{ configMapRef = {{ name = settings.metadata.name }} }}]
   }}]
 }}
 "#
@@ -406,7 +406,7 @@ fn a_secrets_string_data_reads_back() {
             "\nuse k8s {{ source = \"./providers/k8s\" }}\n\
              resource k8s.namespace test {{\n  metadata.name = \"{}\"\n}}\n\
              resource k8s.secret token {{\n  metadata.name = \"token\"\n  \
-             metadata.namespace = test.metadata.name\n  stringData = {{ password: \"{pw}\" }}\n}}\n",
+             metadata.namespace = test.metadata.name\n  stringData = {{ password = \"{pw}\" }}\n}}\n",
             ns.name
         )
     };
@@ -487,7 +487,7 @@ fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
         &format!(
             "\ninput kubeconfig: secret(string)\n\
              use k8s {{ source = \"./providers/k8s\" }}\n\
-             provider_config(\"k8s\", {{ kubeconfig: k }}) where kubeconfig(k)\n\
+             provider_config(\"k8s\", {{ kubeconfig = k }}) where kubeconfig(k)\n\
              resource k8s.namespace test {{\n  metadata.name = \"{}\"\n}}\n",
             ns.name
         ),

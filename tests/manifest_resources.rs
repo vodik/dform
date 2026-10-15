@@ -66,7 +66,7 @@ fn a_stream_of_documents_is_their_list() {
     let r = s
         .run(&[
             "why",
-            "crd(_, _, {name: \"tlsoptions.traefik.io\"}, _)",
+            "crd(_, _, {name = \"tlsoptions.traefik.io\"}, _)",
             "p.df",
         ])
         .success();
@@ -107,7 +107,7 @@ fn a_resource_made_of_a_document_says_its_row() {
         v.stdout.contains(
             "      kind = \"CustomResourceDefinition\"\n      \
              metadata.name = \"tlsoptions.traefik.io\"\n      spec = {\n        \
-             group: \"traefik.io\",\n        names: { kind: \"TLSOption\", plural: \"tlsoptions\" },\n"
+             group = \"traefik.io\",\n        names = { kind = \"TLSOption\", plural = \"tlsoptions\" },\n"
         ),
         "{}",
         v.stdout
@@ -187,7 +187,7 @@ fn a_resource_per_document_of_a_manifest() {
         "  + k8s.config_map \"flags.v2\"  p.df:3  with d = cms.yml:8  (72 B)\n      \
          data.beta = \"on\"\n      \
          data.size = \"large\"      p.df:5\n      \
-         metadata = { name: \"flags.v2\", namespace: \"apps\" }\n      \
+         metadata = { name = \"flags.v2\", namespace = \"apps\" }\n      \
          metadata.labels.owner = \"ops\"\n",
         "  + k8s.config_map settings    p.df:3  with d = cms.yml:1  (89 B)\n      \
          data.mode = \"fast\"\n      data.size = \"large\"      p.df:5\n",
@@ -208,8 +208,8 @@ fn a_value_body_is_an_object_of_the_type() {
     s.write(
         "p.df",
         "\nuse k8s\n\
-         resource k8s.persistent_volume_claim c = { metadata: { name: \"c\" }, \
-         spec: { resources: { requests: { storage: \"lots\" } } } }\n",
+         resource k8s.persistent_volume_claim c = { metadata = { name = \"c\" }, \
+         spec = { resources = { requests = { storage = \"lots\" } } } }\n",
     );
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(

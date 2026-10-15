@@ -11,13 +11,13 @@ use common::Scratch;
 const BACKUPS: &str = r#"input namespace: k8s.namespace
 let ns = namespace.metadata.name
 resource k8s.secret repository {
-  metadata = { name: "restic", namespace: ns }
+  metadata = { name = "restic", namespace = ns }
 }
 component volume {
   input name: string
   let tag = "backup-${name}"
   resource k8s.config_map job {
-    metadata = { name: tag, namespace: backups.ns }
+    metadata = { name = tag, namespace = backups.ns }
   }
 }
 "#;
@@ -162,7 +162,7 @@ fn hover_on_a_shadowed_name_says_what_it_is_here() {
                 "  let tag = \"backup-${name}\"\n",
                 "  let tag = \"backup-${name}\"\n  let ns = \"own\"\n",
             )
-            .replace("namespace: backups.ns }", "namespace: ns }"),
+            .replace("namespace = backups.ns }", "namespace = ns }"),
     );
     let root = std::fs::canonicalize(&s.dir).unwrap();
     let file = root.join("backups.df");
@@ -171,7 +171,7 @@ fn hover_on_a_shadowed_name_says_what_it_is_here() {
     let hover = c.at(
         "textDocument/hover",
         &file,
-        lsp_client::find(&file, "tag, namespace: ns", 17),
+        lsp_client::find(&file, "tag, namespace = ns", 17),
     );
     let text = hover["contents"]["value"].as_str().unwrap_or_default();
     assert!(

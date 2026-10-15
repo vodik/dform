@@ -87,7 +87,7 @@ fn e0304_a_public_place() {
         "p.df:5:3: E0304: a secret reaches leaky.oops .password, not marked sensitive in the schema",
     );
     refused(
-        "warn \"pw\" { p: p } where pw(p)\n",
+        "warn \"pw\" { p = p } where pw(p)\n",
         "E0304: a secret reaches a warn message or context",
     );
     refused(
@@ -232,7 +232,7 @@ fn a_secret_setting_is_configured_and_never_printed() {
             "p.df",
         ])
         .success();
-    assert!(r.stdout.contains("{token: secret(7 B)}"), "{}", r.stdout);
+    assert!(r.stdout.contains("{token = secret(7 B)}"), "{}", r.stdout);
     assert!(!r.stdout.contains("hunter2"), "{}", r.stdout);
 }
 

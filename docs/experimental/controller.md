@@ -115,7 +115,7 @@ there):
 eval "$(crates/dform-s3/minio.sh start)"
 cargo run -- -C tests/fixtures/bootstrap apply bootstrap   # 3 ticks
 cargo run -- -C tests/fixtures/bootstrap stack handover workload \
-  --to 's3("dform-test", "platform/workload", {endpoint: "http://127.0.0.1:9000"})'
+  --to 's3("dform-test", "platform/workload", {endpoint = "http://127.0.0.1:9000"})'
 cargo run -- -C tests/fixtures/bootstrap controller run workload
 crates/dform-s3/minio.sh stop
 ```
@@ -151,7 +151,7 @@ of a deployment's objects, and the stack not be locked. Backends:
 
 - `local("DIR")`: a directory, relative to the project root, as a stack's
   `backend` is.
-- `s3("BUCKET", "PREFIX", {endpoint: "URL", region: "R"})`: the
+- `s3("BUCKET", "PREFIX", {endpoint = "URL", region = "R"})`: the
   deployment's own prefix of a bucket (a handover between prefixes, or
   between buckets, works alike). A bucket never holds a key file
   (reference.md "Custody"): a deployment whose master is a local

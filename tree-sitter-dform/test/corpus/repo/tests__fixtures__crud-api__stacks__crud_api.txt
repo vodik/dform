@@ -84,10 +84,10 @@ resource google.sql_database_instance db {
   database_version = "POSTGRES_16"
   deletion_protection = true
   settings = {
-    tier: database.tier,
-    availability_type: database.availability,
-    backup_configuration: { enabled: true, point_in_time_recovery_enabled: true },
-    ip_configuration: { ipv4_enabled: false, private_network: vpc },
+    tier = database.tier,
+    availability_type = database.availability,
+    backup_configuration = { enabled = true, point_in_time_recovery_enabled = true },
+    ip_configuration = { ipv4_enabled = false, private_network = vpc },
   }
 }
 
@@ -105,7 +105,7 @@ resource google.sql_user crud_user {
 
 resource k8s.namespace shop {
   metadata.name = "shop"
-  metadata.labels = { "pod-security.kubernetes.io/enforce": "restricted" }
+  metadata.labels = { "pod-security.kubernetes.io/enforce" = "restricted" }
 }
 
 resource k8s.network_policy default_deny {
@@ -122,12 +122,12 @@ resource k8s.network_policy default_deny {
 # "postgres://...@{db.private_ip_address}" would need the content, and a
 # read in any field holds the whole Secret until the instance exists.
 resource k8s.secret db_conn {
-  metadata = { name: "crud-api-db", namespace: shop.metadata.name }
+  metadata = { name = "crud-api-db", namespace = shop.metadata.name }
   stringData = {
-    PGHOST: db.private_ip_address,
-    PGUSER: crud_user.name,
-    PGDATABASE: crud_db.name,
-    PGPASSWORD: random.password("crud-api-db"),
+    PGHOST = db.private_ip_address,
+    PGUSER = crud_user.name,
+    PGDATABASE = crud_db.name,
+    PGPASSWORD = random.password("crud-api-db"),
   }
 }
 
@@ -138,16 +138,19 @@ resource k8s.secret db_conn {
 resource k8s.job "migrate-v${schema}" {
   metadata.name = "crud-api-migrate-v${schema}"
   metadata.namespace = shop.metadata.name
-  metadata.labels = { app: "crud-api", schema: "${schema}" }
+  metadata.labels = { app = "crud-api", schema = "${schema}" }
   spec.backoffLimit = 2
   spec.template.spec = {
-    restartPolicy: "Never",
-    containers: [{
-      name: "migrate",
-      image: released_image,
-      args: ["migrate", "--to", "${schema}"],
-      envFrom: [{ secretRef: { name: db_conn.metadata.name } }],
-      resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: 500m, memory: 256Mi } },
+    restartPolicy = "Never",
+    containers = [{
+      name = "migrate",
+      image = released_image,
+      args = ["migrate", "--to", "${schema}"],
+      envFrom = [{ secretRef = { name = db_conn.metadata.name } }],
+      resources = {
+        requests = { cpu = 100m, memory = 128Mi },
+        limits = { cpu = 500m, memory = 256Mi },
+      },
     }],
   }
 }
@@ -192,9 +195,9 @@ let serving = cutover
 let serving = active where not has cutover
 
 resource k8s.service api {
-  metadata = { name: "crud-api", namespace: shop.metadata.name }
-  spec.selector = { app: "crud-api", color: serving }
-  spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
+  metadata = { name = "crud-api", namespace = shop.metadata.name }
+  spec.selector = { app = "crud-api", color = serving }
+  spec.ports = [{ port = 80, targetPort = 8080, protocol = "TCP" }]
 }
 
 component app {
@@ -209,47 +212,54 @@ component app {
   output ready_replicas: int = n where has color, n = deploy.status.readyReplicas
   output total_replicas: int = n where has color, n = deploy.status.replicas
 
-  let labels = { app: "crud-api", color }
+  let labels = { app = "crud-api", color }
 
   resource k8s.deployment deploy {
     metadata.name = "crud-api-${color}"
     metadata.namespace = namespace
-    metadata.labels = { app: "crud-api", color, schema: "${schema}" }
+    metadata.labels = { app = "crud-api", color, schema = "${schema}" }
     spec.selector.matchLabels = labels
     spec.template.metadata.labels = labels
     spec.template.spec.containers = [{
-      name: "api",
+      name = "api",
       image,
-      ports: [{ containerPort: 8080, protocol: "TCP" }],
-      envFrom: [{ secretRef: { name: db_secret } }],
-      readinessProbe: { httpGet: { path: "/healthz", port: 8080 } },
-      resources: { requests: { cpu: 250m, memory: 256Mi }, limits: { cpu: 1, memory: 512Mi } },
+      ports = [{ containerPort = 8080, protocol = "TCP" }],
+      envFrom = [{ secretRef = { name = db_secret } }],
+      readinessProbe = { httpGet = { path = "/healthz", port = 8080 } },
+      resources = {
+        requests = { cpu = 250m, memory = 256Mi },
+        limits = { cpu = 1, memory = 512Mi },
+      },
     }]
   }
 
   # The autoscaler owns spec.replicas; the Deployment does not set it.
   resource k8s.horizontal_pod_autoscaler hpa {
-    metadata = { name: "crud-api-${color}", namespace }
-    spec.scaleTargetRef = { apiVersion: "apps/v1", kind: "Deployment", name: deploy.metadata.name }
+    metadata = { name = "crud-api-${color}", namespace }
+    spec.scaleTargetRef = {
+      apiVersion = "apps/v1",
+      kind = "Deployment",
+      name = deploy.metadata.name,
+    }
     spec.minReplicas = replicas
     spec.maxReplicas = 10
   }
 
   resource k8s.pod_disruption_budget pdb {
-    metadata = { name: "crud-api-${color}", namespace }
+    metadata = { name = "crud-api-${color}", namespace }
     spec.minAvailable = 1
     spec.selector.matchLabels = labels
   }
 
   resource k8s.network_policy allow_http {
-    metadata = { name: "crud-api-${color}-http", namespace }
+    metadata = { name = "crud-api-${color}-http", namespace }
     spec.podSelector.matchLabels = labels
     spec.policyTypes = ["Ingress"]
     spec.ingress = [{
-      from: [{
-        namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "ingress-nginx" } },
+      from = [{
+        namespaceSelector = { matchLabels = { "kubernetes.io/metadata.name" = "ingress-nginx" } },
       }],
-      ports: [{ port: 8080, protocol: "TCP" }],
+      ports = [{ port = 8080, protocol = "TCP" }],
     }]
   }
 }
@@ -258,13 +268,13 @@ component app {
 # Rollout invariants
 ########################################
 
-deny "migration failed; the rollout is held" { job: "migrate-v${schema}" }
+deny "migration failed; the rollout is held" { job = "migrate-v${schema}" }
   where c in k8s.job["migrate-v${schema}"].status.conditions, c.type == "Failed", c.status == "True"
 
-deny "a rollout runs a schema the migration has not reached" { color: c, schema: v }
+deny "a rollout runs a schema the migration has not reached" { color = c, schema = v }
   where run(c, _, v), c == rollout, not migrated(v)
 
-deny "cutover to a color with unready pods" { color: c }
+deny "cutover to a color with unready pods" { color = c }
   where c = api.spec.selector.color, c != active, not ready(c)
 
 ########################################
@@ -274,28 +284,28 @@ deny "cutover to a color with unready pods" { color: c }
 # Every container has limits: these unless it sets its own. A container
 # is written by its key, `name`, so the write lands in the one the block
 # wrote; `@default` gives way to the container's own.
-set c.resources.limits = { cpu: 500m, memory: 256Mi } @default
+set c.resources.limits = { cpu = 500m, memory = 256Mi } @default
   where w in k8s.deployment, c in w.spec.template.spec.containers
-set c.resources.limits = { cpu: 500m, memory: 256Mi } @default
+set c.resources.limits = { cpu = 500m, memory = 256Mi } @default
   where w in k8s.job, c in w.spec.template.spec.containers
 
 container(w, c) where w in k8s.deployment, c in w.spec.template.spec.containers
 container(w, c) where w in k8s.job, c in w.spec.template.spec.containers
 
-deny "container without resource limits" { workload: w, container: c.name }
+deny "container without resource limits" { workload = w, container = c.name }
   where container(w, c), not has c.resources.limits
 
 # Resource limits: the schema types a container's memory `bytes` and its
 # cpu `cpu`, so `512Mi` above is a quantity and these compare in
 # bytes whatever unit each side is written in (`500m` is millicores there
 # because the attribute is a cpu).
-deny "container memory limit above 2Gi" { workload: w, container: c.name }
+deny "container memory limit above 2Gi" { workload = w, container = c.name }
   where container(w, c), c.resources.limits.memory > 2Gi
 
-deny "container requests more memory than its limit" { workload: w, container: c.name }
+deny "container requests more memory than its limit" { workload = w, container = c.name }
   where container(w, c), c.resources.requests.memory > c.resources.limits.memory
 
-deny "image not pinned by digest" { workload: w, image: c.image }
+deny "image not pinned by digest" { workload = w, image = c.image }
   where container(w, c), not oci.pinned(c.image)
 
 # A secret's value belongs in a Secret (envFrom, valueFrom); a plain
@@ -306,20 +316,20 @@ secret_word("SECRET")
 secret_word("PASSWORD")
 secret_word("TOKEN")
 
-deny "plaintext secret in env" { workload: w, container: c.name, env: e.name } where
+deny "plaintext secret in env" { workload = w, container = c.name, env = e.name } where
   container(w, c),
   (_, e) in c.env,
   has e.value,
   secret_word(s),
   (_, _) = str.split(e.name, s, 1),
 
-deny "prod database must be regional" { db: d } where
+deny "prod database must be regional" { db = d } where
   env == "prod",
   d in google.sql_database_instance,
   not d.settings.availability_type == "REGIONAL",
 
 # Absent is public: Cloud SQL's default for ipv4_enabled is true.
-deny "database has a public IP" { db: d }
+deny "database has a public IP" { db = d }
   where d in google.sql_database_instance, not d.settings.ip_configuration.ipv4_enabled == false
 
 default_deny(ns) where
@@ -328,10 +338,10 @@ default_deny(ns) where
   not has p.spec.podSelector.matchLabels,
   "Ingress" in p.spec.policyTypes,
 
-deny "namespace without a default-deny network policy" { namespace: n }
+deny "namespace without a default-deny network policy" { namespace = n }
   where n in k8s.namespace, not default_deny(n.metadata.name)
 
-deny "prod workload runs a single replica" { hpa: h }
+deny "prod workload runs a single replica" { hpa = h }
   where env == "prod", h in k8s.horizontal_pod_autoscaler, h.spec.minReplicas < 2
 
 ########################################

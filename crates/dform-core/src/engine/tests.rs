@@ -203,7 +203,7 @@ fn a_wildcard_in_a_negation_matches_anything() {
 /// a walk to a missing path is no value, not an error.
 #[test]
 fn a_walk_to_a_missing_path_is_no_value() {
-    let (r, _) = run("p({a: {b: 1}})
+    let (r, _) = run("p({a = {b = 1}})
              deep(x) where p(x), has x.a.b
              open(x) where p(x), not has x.a.c
              shallow(x) where p(x), has x.c")
@@ -211,7 +211,7 @@ fn a_walk_to_a_missing_path_is_no_value() {
     assert_eq!(facts_of(&r, "deep").len(), 1);
     assert_eq!(facts_of(&r, "open").len(), 1);
     assert!(facts_of(&r, "shallow").is_empty());
-    let (r, _) = run("p({a: {b: [1]}})\n             elem(e) where p(x), e in x.a.b\n             none(e) where p(x), e in x.a.c")
+    let (r, _) = run("p({a = {b = [1]}})\n             elem(e) where p(x), e in x.a.b\n             none(e) where p(x), e in x.a.c")
         .unwrap();
     assert_eq!(facts_of(&r, "elem"), vec!["elem(1)".to_string()]);
     assert!(facts_of(&r, "none").is_empty());
@@ -317,13 +317,14 @@ fn input_and_output_readers_read_the_collapsed_value() {
 /// `tags`, which is a Map, so it meets the block's other tags per leaf.
 #[test]
 fn dotted_path_contributes_to_its_top_level_attribute() {
-    let (r, _) = run("resource net.vpc main { tags = { env: \"dev\" } }
+    let (r, _) = run("resource net.vpc main { tags = { env = \"dev\" } }
              arg(net.vpc, \"main\", \"tags.team\", \"platform\") where want(net.vpc, \"main\")")
     .unwrap();
     assert_eq!(
         facts_of(&r, "attr"),
         vec![
-            "attr(\"net.vpc\", \"main\", \"tags\", {env: \"dev\", team: \"platform\"})".to_string()
+            "attr(\"net.vpc\", \"main\", \"tags\", {env = \"dev\", team = \"platform\"})"
+                .to_string()
         ]
     );
 }
@@ -415,7 +416,7 @@ fn statement_order_does_not_change_attr() {
 /// `set` block's (R-38).
 #[test]
 fn ranks_in_blocks() {
-    let (r, violations) = run("input days: int = 1\n             input zones: list(string)\n             resource net.vpc main @default {\n               cidr = \"10.0.0.0/16\"\n               tags = { env: \"dev\", team: \"net\" }\n               public = true @override\n             }\n             resource net.vpc main {\n               cidr = \"10.1.0.0/16\"\n               tags = { team: \"platform\" }\n               public = false\n             }\n             set {\n               days = 3\n               zones = [\"a\"]\n             } @default where on(1)\n             set { days = 14 } where on(1)\n             on(1)\n             got(d, z) where d = days, z = zones")
+    let (r, violations) = run("input days: int = 1\n             input zones: list(string)\n             resource net.vpc main @default {\n               cidr = \"10.0.0.0/16\"\n               tags = { env = \"dev\", team = \"net\" }\n               public = true @override\n             }\n             resource net.vpc main {\n               cidr = \"10.1.0.0/16\"\n               tags = { team = \"platform\" }\n               public = false\n             }\n             set {\n               days = 3\n               zones = [\"a\"]\n             } @default where on(1)\n             set { days = 14 } where on(1)\n             on(1)\n             got(d, z) where d = days, z = zones")
         .unwrap();
     assert!(violations.is_empty(), "{violations:?}");
     assert_eq!(
@@ -426,7 +427,8 @@ fn ranks_in_blocks() {
         vec![
             "attr(\"net.vpc\", \"main\", \"cidr\", \"10.1.0.0/16\")".to_string(),
             "attr(\"net.vpc\", \"main\", \"public\", true)".to_string(),
-            "attr(\"net.vpc\", \"main\", \"tags\", {env: \"dev\", team: \"platform\"})".to_string(),
+            "attr(\"net.vpc\", \"main\", \"tags\", {env = \"dev\", team = \"platform\"})"
+                .to_string(),
         ]
     );
     assert_eq!(facts_of(&r, "got"), vec!["got(14, [\"a\"])".to_string()]);
@@ -565,7 +567,7 @@ fn coercion_is_explicit() {
              let n: int = ten
              explicit(x) where x = n + 1
              text(t) where t = \"${14}\"
-             sizes(a, b, c) where xs = [\"x\", \"y\"], s = \"héllo\", o = {k: 1}, a = xs.len, b = s.len, c = o.len
+             sizes(a, b, c) where xs = [\"x\", \"y\"], s = \"héllo\", o = {k = 1}, a = xs.len, b = s.len, c = o.len
              cases(l, u) where l = str.lower(\"AbC\"), u = str.upper(\"AbC\")
              parts(p) where p = str.split(\"a,b,c\", \",\")
              joined(j) where j = list.join([\"a\", 1, true], \"-\")")
@@ -623,15 +625,15 @@ fn a_300_deep_chain_converges() {
 fn nested_dotted_paths_merge_recursively() {
     let (r, violations) = run("resource k8s.deployment web {
                spec.replicas = 3,
-               spec.template.metadata.labels = {app: \"web\"},
-               spec.template.spec.containers = [{name: \"web\"}]
+               spec.template.metadata.labels = {app = \"web\"},
+               spec.template.spec.containers = [{name = \"web\"}]
              }")
     .unwrap();
     assert!(violations.is_empty(), "{violations:?}");
     assert_eq!(
             facts_of(&r, "attr"),
             vec![
-                "attr(\"k8s.deployment\", \"web\", \"spec\", {replicas: 3, template: {metadata: {labels: {app: \"web\"}}, spec: {containers: [{name: \"web\"}]}}})"
+                "attr(\"k8s.deployment\", \"web\", \"spec\", {replicas = 3, template = {metadata = {labels = {app = \"web\"}}, spec = {containers = [{name = \"web\"}]}}})"
                     .to_string()
             ]
         );
@@ -703,8 +705,8 @@ fn optional_computed_mints_a_default_null() {
         let d = docs.iter().find(|d| d.addr.name == n).unwrap();
         spell::value(&d.attrs)
     };
-    assert_eq!(doc("a"), "{size: 1}");
-    assert_eq!(doc("b"), "{zone: \"z1\"}");
+    assert_eq!(doc("a"), "{size = 1}");
+    assert_eq!(doc("b"), "{zone = \"z1\"}");
 }
 
 /// The mock Kubernetes schema: `metadata.name` is Optional+Computed, so
@@ -737,15 +739,15 @@ fn k8s_metadata_name_is_a_default_null_until_set() {
     };
     assert!(
         get("k8s.deployment api", "metadata")
-            .contains("name: ?k8s.deployment/api#metadata.name:Fresh")
+            .contains("name = ?k8s.deployment/api#metadata.name:Fresh")
     );
-    assert!(get("k8s.deployment web", "metadata").contains("name: \"web\""));
+    assert!(get("k8s.deployment web", "metadata").contains("name = \"web\""));
     let svc = get("k8s.service api", "spec");
     assert!(
-        svc.contains("app: ?k8s.deployment/api#metadata.name:Fresh"),
+        svc.contains("app = ?k8s.deployment/api#metadata.name:Fresh"),
         "{svc}"
     );
-    assert!(svc.contains("web: \"web\""), "{svc}");
+    assert!(svc.contains("web = \"web\""), "{svc}");
 }
 
 /// aws-mock's Optional+Computed attributes, the Terraform shape.
@@ -1177,11 +1179,11 @@ fn a_firing_records_its_rule_body_facts_and_negations() {
 fn an_attribute_carries_every_contribution() {
     let src = r#"
             want("t", "a")
-            arg("t", "a", "tags", {x: 1}, "normal")
-            arg("t", "a", "tags", {y: 2}, "normal") where want("t", "a")
+            arg("t", "a", "tags", {x = 1}, "normal")
+            arg("t", "a", "tags", {y = 2}, "normal") where want("t", "a")
         "#;
     let (r, _) = run(src).unwrap();
-    let why = why_leaves(&r, r#"attr("t", "a", "tags", {x: 1, y: 2})"#);
+    let why = why_leaves(&r, r#"attr("t", "a", "tags", {x = 1, y = 2})"#);
     assert!(why.contains(&Leaf::Rule {
         id: ATTR_SIGMA.into()
     }));
@@ -1222,7 +1224,7 @@ fn gke_with(extra: &str) -> Result<(EvalResult, Vec<String>)> {
 #[test]
 fn a_policy_denies_on_any_stuck_instance() {
     let (r, violations) = gke_with(
-        r#"deny "stuck" { rule: r, on: n } where stuck(r, _, _, n)
+        r#"deny "stuck" { rule = r, on = n } where stuck(r, _, _, n)
                seen(r, h) where stuck(r, h, _, _)"#,
     )
     .unwrap();

@@ -183,15 +183,15 @@ fn a_kind_no_schema_has_prints_what_no_secret_reached() {
     let s = learned(
         "everywhere-learned",
         "resource k8s.traefik.middleware security_headers {\n\
-           metadata = { name: \"security-headers\", namespace: apps.metadata.name }\n\
+           metadata = { name = \"security-headers\", namespace = apps.metadata.name }\n\
            spec.headers = {\n\
-             stsSeconds: 31536000,\n\
-             contentTypeNosniff: true,\n\
-             referrerPolicy: \"strict-origin-when-cross-origin\",\n\
+             stsSeconds = 31536000,\n\
+             contentTypeNosniff = true,\n\
+             referrerPolicy = \"strict-origin-when-cross-origin\",\n\
            }\n\
          }\n\
          resource k8s.traefik.middleware large_upload {\n\
-           metadata = { name: \"large-upload\", namespace: apps.metadata.name }\n\
+           metadata = { name = \"large-upload\", namespace = apps.metadata.name }\n\
            spec.buffering.maxRequestBodyBytes = 536870912\n\
          }\n\
          warn \"headers: ${security_headers.spec.headers.referrerPolicy}\"\n\
@@ -220,10 +220,10 @@ fn a_kind_no_schema_has_prints_what_no_secret_reached() {
     let plan = &before[1].1.stdout;
     for line in [
         "  + k8s.traefik.middleware large_upload      p.df:",
-        "      metadata = { name: \"large-upload\", namespace: \"apps\" }\n",
+        "      metadata = { name = \"large-upload\", namespace = \"apps\" }\n",
         "      spec.buffering.maxRequestBodyBytes = 536870912\n",
-        "      metadata = { name: \"security-headers\", namespace: \"apps\" }\n",
-        "        referrerPolicy: \"strict-origin-when-cross-origin\",\n",
+        "      metadata = { name = \"security-headers\", namespace = \"apps\" }\n",
+        "        referrerPolicy = \"strict-origin-when-cross-origin\",\n",
         "      spec.value = \"TOKEN-VALUE\"\n",
     ] {
         assert!(plan.contains(line), "{line}\n{plan}");

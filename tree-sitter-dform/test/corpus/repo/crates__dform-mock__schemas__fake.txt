@@ -19,6 +19,7 @@ crates/dform-mock/schemas/fake.df
 type_provider(net.vpc, "fakecloud")
 type_provider(net.subnet, "fakecloud")
 type_provider(net.vpc_peering, "fakecloud")
+type_provider(net.peering, "fakecloud")
 type_provider(net.route_table, "fakecloud")
 type_provider(compute.vm, "fakecloud")
 type_provider("db.postgres", "fakecloud")
@@ -30,6 +31,7 @@ type_provider("iam.policy", "fakecloud")
 type_attr(net.vpc, "id", "string", ["computed", "id"])
 type_attr(net.subnet, "id", "string", ["computed", "id"])
 type_attr(net.vpc_peering, "id", "string", ["computed", "id"])
+type_attr(net.peering, "id", "string", ["computed", "id"])
 type_attr(net.route_table, "id", "string", ["computed", "id"])
 type_attr(compute.vm, "id", "string", ["computed", "id"])
 type_attr("db.postgres", "id", "string", ["computed", "id"])
@@ -52,6 +54,8 @@ type_attr(compute.vm, "labels", "map(string)", [])
 type_attr(net.subnet, "vpc", "ref(net.vpc)", [])
 type_attr(net.vpc_peering, "requester_vpc", "ref(net.vpc)", [])
 type_attr(net.vpc_peering, "accepter_vpc", "ref(net.vpc)", [])
+type_attr(net.peering, "from", "ref(net.vpc)", [])
+type_attr(net.peering, "to", "ref(net.vpc)", [])
 type_attr("db.postgres", "subnets", "list(ref(net.subnet))", [])
 type_attr(k8s.cluster, "subnets", "list(ref(net.subnet))", [])
 type_attr(k8s.nodepool, "cluster", "ref(k8s.cluster)", [])
@@ -116,6 +120,9 @@ type_doc(
 type_doc(net.vpc_peering, "", "A peering connection between two networks.")
 type_doc(net.vpc_peering, "requester_vpc", "The network that requests the peering.")
 type_doc(net.vpc_peering, "accepter_vpc", "The network that accepts the peering.")
+type_doc(net.peering, "", "A peering between two networks, named by its ends.")
+type_doc(net.peering, "from", "The network the peering starts from.")
+type_doc(net.peering, "to", "The network the peering reaches.")
 type_doc(net.route_table, "", "A network's routes: where traffic leaving it goes.")
 type_doc(net.route_table, "vpc", "The network whose traffic the table routes.")
 type_doc(
@@ -152,7 +159,7 @@ type_doc(k8s.nodepool, "min", "The fewest nodes the pool scales down to.")
 type_doc(k8s.nodepool, "max", "The most nodes the pool scales up to.")
 type_doc("iam.role", "", "An identity workloads assume.")
 type_doc("iam.role", "name", "The role's name, unique in the account.")
-type_doc("iam.role", "assume", "Who may assume the role: `{ principals: [...] }`.")
+type_doc("iam.role", "assume", "Who may assume the role: `{ principals = [...] }`.")
 type_doc("iam.role", "policies", "The policies whose permissions the role has.")
 type_doc("iam.policy", "", "A set of permissions.")
 type_doc("iam.policy", "name", "The policy's name, unique in the account.")
@@ -227,6 +234,15 @@ type_doc(
     (call
       (identifier)
       (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
         (string
           (string_content))
         (string
@@ -265,6 +281,22 @@ type_doc(
           (string_content))
         (string
           (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list
+          (string
+            (string_content))
+          (string
+            (string_content))))))
   (fact
     (call
       (identifier)
@@ -479,6 +511,30 @@ type_doc(
   (comment)
   (comment)
   (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
   (fact
     (call
       (identifier)
@@ -855,6 +911,38 @@ type_doc(
           (escape_sequence)
           (string_content)
           (escape_sequence)
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string)
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
           (string_content)))))
   (fact
     (call

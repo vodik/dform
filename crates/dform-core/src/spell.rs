@@ -25,7 +25,7 @@ pub fn term(t: &Term) -> String {
         Term::Obj(m) => format!(
             "{{{}}}",
             m.iter()
-                .map(|(k, v)| format!("{k}: {}", term(v)))
+                .map(|(k, v)| format!("{k} = {}", term(v)))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -74,7 +74,7 @@ pub fn value(v: &Value) -> String {
         Value::Obj(m) => format!(
             "{{{}}}",
             m.iter()
-                .map(|(k, v)| format!("{k}: {}", value(v)))
+                .map(|(k, v)| format!("{k} = {}", value(v)))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),

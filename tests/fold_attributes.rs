@@ -26,11 +26,11 @@ const MAIN: &str = r#"input acme_email: string = "admin@example.com"
 use kube
 
 resource kube.deployment traefik {
-  metadata = { name: "traefik", labels: { app: "traefik" } }
+  metadata = { name = "traefik", labels = { app = "traefik" } }
   spec.template.spec.containers = [{
-    name: "traefik",
-    image: "traefik:v3.1",
-    args: [
+    name = "traefik",
+    image = "traefik:v3.1",
+    args = [
       "--entrypoints.web.address=:80",
       "--entrypoints.websecure.address=:443",
       "--providers.kubernetescrd",
@@ -45,7 +45,7 @@ resource kube.deployment traefik {
 
 resource kube.service traefik {
   metadata.name = "traefik"
-  spec.ports = [{ name: "web", port: 80, targetPort: 8000 }, { name: "websecure", port: 443, targetPort: 8443 }]
+  spec.ports = [{ name = "web", port = 80, targetPort = 8000 }, { name = "websecure", port = 443, targetPort = 8443 }]
 }
 
 set d.metadata.labels.owner = "simon" where d in kube.deployment
@@ -77,12 +77,12 @@ fn a_value_one_write_made_is_one_laid_out_line() {
     let s = project("fold-traefik");
     let plan = run(&s, &["plan", "main.df"]);
     let want = r#"  + kube.deployment traefik            main.df:5
-      metadata = { name: "traefik", labels: { app: "traefik" } }
+      metadata = { name = "traefik", labels = { app = "traefik" } }
       metadata.labels.owner = "simon"  main.df:28
       spec.template.spec.containers[name=traefik] = {
-        name: "traefik",
-        image: "traefik:v3.1",
-        args: [
+        name = "traefik",
+        image = "traefik:v3.1",
+        args = [
           "--entrypoints.web.address=:80",
           "--entrypoints.websecure.address=:443",
           "--providers.kubernetescrd",
@@ -97,10 +97,10 @@ fn a_value_one_write_made_is_one_laid_out_line() {
     assert!(plan.contains(want), "{plan}");
     assert!(
         plan.contains(
-            "      spec.ports = [\n        {\n          name: \"web\",\n          port: 80,\n          \
-             targetPort: 8000,\n          protocol: \"TCP\" (schema default),\n        },\n        \
-             {\n          name: \"websecure\",\n          port: 443,\n          targetPort: 8443,\n          \
-             protocol: \"TCP\" (schema default),\n        },\n      ]\n"
+            "      spec.ports = [\n        {\n          name = \"web\",\n          port = 80,\n          \
+             targetPort = 8000,\n          protocol = \"TCP\" (schema default),\n        },\n        \
+             {\n          name = \"websecure\",\n          port = 443,\n          targetPort = 8443,\n          \
+             protocol = \"TCP\" (schema default),\n        },\n      ]\n"
         ),
         "{plan}"
     );
@@ -131,10 +131,10 @@ fn why_and_query_fold_the_same_way() {
     let why = run(&s, &["why", "kube.deployment traefik", "main.df"]);
     assert!(
         why.contains(
-            "  metadata = { name: \"traefik\", labels: { app: \"traefik\" } }\n    \
-             = { name: \"traefik\", labels: { app: \"traefik\" } }  main.df:6\n  \
+            "  metadata = { name = \"traefik\", labels = { app = \"traefik\" } }\n    \
+             = { name = \"traefik\", labels = { app = \"traefik\" } }  main.df:6\n  \
              metadata.labels.owner = \"simon\"     main.df:28\n  \
-             spec.template.spec.containers = [{  main.df:7\n    name: \"traefik\",\n"
+             spec.template.spec.containers = [{  main.df:7\n    name = \"traefik\",\n"
         ),
         "{why}"
     );
@@ -144,7 +144,7 @@ fn why_and_query_fold_the_same_way() {
     );
     assert_eq!(
         q,
-        "{ name: \"traefik\", labels: { app: \"traefik\", owner: \"simon\" } }\n"
+        "{ name = \"traefik\", labels = { app = \"traefik\", owner = \"simon\" } }\n"
     );
 }
 
@@ -180,7 +180,7 @@ fn a_plain_leaf_of_a_secret_object_is_sensitive() {
     s.write(
         "main.df",
         "use k8s\n\nresource k8s.secret creds {\n  metadata.name = \"creds\"\n  \
-         stringData = { user: \"synapse\", password: random.password(\"db\") }\n}\n",
+         stringData = { user = \"synapse\", password = random.password(\"db\") }\n}\n",
     );
     let full = run(&s, &["plan", "-vv", "main.df"]);
     let why = run(&s, &["why", "k8s.secret creds", "main.df"]);
@@ -189,11 +189,11 @@ fn a_plain_leaf_of_a_secret_object_is_sensitive() {
         assert!(!out.contains("synapse"), "{out}");
     }
     assert!(
-        why.contains("  stringData = { user: (sensitive), password: (sensitive k8s.secret creds.stringData.password) }\n"),
+        why.contains("  stringData = { user = (sensitive), password = (sensitive k8s.secret creds.stringData.password) }\n"),
         "{why}"
     );
     assert!(
-        full.contains("{ user: (sensitive), password: random.password(\"db\") }"),
+        full.contains("{ user = (sensitive), password = random.password(\"db\") }"),
         "{full}"
     );
     assert_eq!(

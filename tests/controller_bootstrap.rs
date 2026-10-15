@@ -90,7 +90,7 @@ impl Bucket {
     /// `s3(...)` of `rel` under the prefix.
     fn term(&self, rel: &str) -> String {
         format!(
-            "s3(\"{}\", \"{}/{rel}\", {{endpoint: \"{}\", region: \"us-east-1\"}})",
+            "s3(\"{}\", \"{}/{rel}\", {{endpoint = \"{}\", region = \"us-east-1\"}})",
             self.bucket, self.prefix, self.endpoint
         )
     }
@@ -319,7 +319,7 @@ fn handover_needs_one_bootstrap_stack_and_an_empty_target() {
         .failure();
     assert!(
         r.stderr
-            .contains("s3(\"x\"): backend s3(\"BUCKET\", \"PREFIX\", {endpoint: \"URL\", region: \"R\"}) takes a bucket, a prefix"),
+            .contains("s3(\"x\"): backend s3(\"BUCKET\", \"PREFIX\", {endpoint = \"URL\", region = \"R\"}) takes a bucket, a prefix"),
         "{}",
         r.stderr
     );

@@ -58,13 +58,13 @@ resource db.postgres server { name = "server" }
 resource net.vpc edge { cidr = "10.0.0.0/16" }
 resource iam.policy admin { name = "admin" }
 let kubeconfig = str.format("%s@%s", env.var("TICKS_KUBECONFIG"), server.endpoint)
-use k8s { kubeconfig = kubeconfig, crds = { "middlewares.traefik.io": "mw.df" } }
+use k8s { kubeconfig = kubeconfig, crds = { "middlewares.traefik.io" = "mw.df" } }
 
 resource k8s.custom_resource_definition "${d.metadata.name}" = d where d in yaml.decode(io.read("crds.yml"))
 resource k8s.namespace traefik { metadata.name = "traefik" }
 
 resource k8s.traefik.middleware large_upload {
-  metadata = { name: "large-upload", namespace: traefik.metadata.name }
+  metadata = { name = "large-upload", namespace = traefik.metadata.name }
   spec.buffering.maxRequestBodyBytes = 536870912
 }
 "#;

@@ -636,7 +636,7 @@ them under `share/man/man1/`.
 `backend = 'local("DIR")'` (the default, `dform.state/<stack>`, the
 stack's full name: `dform.state/stacks.shop`) keeps a deployment's files
 in a directory. `backend = 's3("BUCKET", "PREFIX",
-{endpoint: "URL", region: "R"})'` keeps them in an S3 bucket under PREFIX
+{endpoint = "URL", region = "R"})'` keeps them in an S3 bucket under PREFIX
 (a keyed stack's deployment under `PREFIX/<k>=<v>`, unless the backend
 names the key, `s3("acme", "shop/{env}")`, and each deployment is where it
 says): the state (identity,
@@ -709,7 +709,7 @@ addresses (`main/vpc`), is pre-release and is not migrated.
 
 ```toml
 [stacks.net]
-backend = 's3("acme-dform", "prod/net", {endpoint: "https://s3.gra.io.cloud.ovh.net", region: "gra"})'
+backend = 's3("acme-dform", "prod/net", {endpoint = "https://s3.gra.io.cloud.ovh.net", region = "gra"})'
 ```
 
 Credentials come from `DFORM_S3_ACCESS_KEY_ID` and
@@ -1022,7 +1022,7 @@ provider: add `use NAME` (dform.toml names its source) or run under
 `dev --provider`". A `use` with no entries is written
 without braces (`use fake`); `fmt` drops a
 `{}`. In any block an entry that is only a name takes the value of that
-name, `region` for `region = region`, as `{ a }` is `{ a: a }`; `fmt`
+name, `region` for `region = region`, as `{ a }` is `{ a = a }`; `fmt`
 prints that form. A dotted path is never a pun: `spec.selector.color =
 color`, or `spec.selector = { color }`. `--provider path/to/schema.df` loads a file directly. A
 `providers/<name>/schema.df` in the working directory wins over the schemas
@@ -1067,7 +1067,7 @@ use google {
 }
 ```
 
-The block lowers to `provider_config("google", { project: .., credentials:
+The block lowers to `provider_config("google", { project = .., credentials =
 .. })`, which reaches the provider at a second Configure as `settings` once
 the evaluation knows it (the provider serves nothing until then; see "The
 Kubernetes provider"). `env.var("NAME")` is the built-in `env` provider's
@@ -1206,8 +1206,8 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
 ```
 
 - A program may name the cluster itself, as a managed cluster's kubeconfig
-  arrives: `provider_config("k8s", { kubeconfig: K })` with `K` the
-  text of a kubeconfig (its current context), or `{ host: H, ca: C, token:
+  arrives: `provider_config("k8s", { kubeconfig = K })` with `K` the
+  text of a kubeconfig (its current context), or `{ host = H, ca = C, token =
   T }` (`client_certificate` and `client_key` instead of `token`; `ca` and
   those as PEM or base64 of it; optionally `namespace`). The value may be a
   secret (an input declared `secret(string)`): the provider receives it at
@@ -1574,29 +1574,29 @@ made; the plan itself says what it is.
 
   ```
   + k8s.deployment traefik                     traefik.df:4
-      metadata = { labels: { app: "traefik" }, name: "traefik" }
+      metadata = { labels = { app = "traefik" }, name = "traefik" }
       metadata.labels.owner = "simon"          baseline.df:2
       spec.template.spec.containers[name=traefik] = {
-        args: [
+        args = [
           "--entrypoints.web.address=:80",
           "--certificatesresolvers.letsencrypt.acme.email=admin@vodik.xyz",
         ],
-        image: "traefik:v3.1",
-        name: "traefik",
-        ports: [{
-          containerPort: 80,
-          name: "web",
-          protocol: "TCP" (schema default),
+        image = "traefik:v3.1",
+        name = "traefik",
+        ports = [{
+          containerPort = 80,
+          name = "web",
+          protocol = "TCP" (schema default),
         }],
       }
   + k8s.service traefik                        traefik.df:30
       metadata.name = "traefik"
       spec = {
-        selector: { app: "traefik" },
-        ports: [{
-          port: 80,
-          targetPort: 80,
-          protocol: "TCP" (schema default),
+        selector = { app = "traefik" },
+        ports = [{
+          port = 80,
+          targetPort = 80,
+          protocol = "TCP" (schema default),
         }],
       }
   ```
@@ -1881,7 +1881,7 @@ LABEL, "class": CLASS}` and a secret `{"sensitive": LABEL}`.
 `dform query stuck` lists the stuck rule instances. A rule can read
 them too, `stuck(RuleId, HeadPattern, Bindings, Nulls)`, and
 `may_derive(RuleId, HeadPattern, Nulls)` (a resource rule that may derive
-after a boundary): a policy such as `deny "one tick" { rule: r, on: n }
+after a boundary): a policy such as `deny "one tick" { rule = r, on = n }
 where stuck(r, _, _, n)` refuses any plan with a stuck instance. `stuck/4` is derived above every rule that can stick,
 so a reader must not itself be able to stick (read it into fresh variables
 only) and nothing it derives may feed such a rule; otherwise the program is
@@ -2411,7 +2411,7 @@ a `let` or a relation's column the secret pass found a secret reaches
 signed#0)`), an attribute's part a rule writes a secret into, or a secret
 an extern, `env.var` or `random.*` gave. A secret object is one secret
 and prints once (`secret(63 B)` in a result set); a plain value inside it
-(`stringData = { user: database, .. }` with `database = "synapse"`) is
+(`stringData = { user = database, .. }` with `database = "synapse"`) is
 not a secret anywhere else: the literal `"synapse-config"`, the resource
 `synapse`, the address `synapse_db` and `random.signing_key("synapse")`
 print as written. The last line holds: a secret value, whole, never
@@ -2437,7 +2437,7 @@ is a compile error with a span, before anything is evaluated:
 A field an object type declares `secret(T)` is declared the same way,
 through a `type` alias as well as inline: with `type conn = { host:
 string, port: int, password: secret(string) }`, `output conn: conn = {
-host: .., port: 5432, password: random.password("db") }` passes, and a
+host = .., port = 5432, password = random.password("db") }` passes, and a
 reader's `db.conn.password` is a secret while `db.conn.host` is a public
 value. The pass labels each value with the paths inside it that are
 secret, so a secret in any other field (`user: random.password(..)`
@@ -3475,10 +3475,10 @@ object value, and then shows only the contributions that hold it:
 
 ```bash
 cargo run -- -C tests/fixtures/demo why --tree 'attr(net.vpc, "main.vpc", "tags.team", "platform")' dform env=prod
-# net.vpc main.vpc.tags = {component: "network", env: "prod", team: "platform"}
+# net.vpc main.vpc.tags = {component = "network", env = "prod", team = "platform"}
 #   merged from 2 contributions
-#   ├─ {team: "platform"}
-#   │    baseline.df:10  set r.tags = { team: "platform" } where r in resource   (use baseline)
+#   ├─ {team = "platform"}
+#   │    baseline.df:10  set r.tags = { team = "platform" } where r in resource   (use baseline)
 #   │    with r = net.vpc main.vpc
 #   ...
 #   └─ ... 1 other contribution (--all)
@@ -3842,10 +3842,10 @@ line when it fits in 100 columns, else on a line of its own one step
 deeper, else `where` ending the line and a literal per line under it,
 each with a trailing comma, the last's too, as a broken list: a literal
 per line whatever the width past three literals or with a comment among
-them; `{ a }` for `{ a: a }`; `==` between bound
+them; `{ a }` for `{ a = a }`; `==` between bound
 sides; docs/grammar.md "Formatting"), two-space indentation per open
 bracket, block or body, one space around operators and after commas,
-`{ a: 1 }` inside braces, at most one blank line, and no comma where a
+`{ a = 1 }` inside braces, at most one blank line, and no comma where a
 newline already separates block entries. A list or a call whose only
 element is an object or a list hugs it when it breaks, `[{` .. `}]`,
 `json.encode({` .. `})`, the closers on one line. A formatted file
@@ -3875,8 +3875,8 @@ not rewritten.
     is `head where` then a literal per line, indented, each ending with
     `,` (a braced body is an error that says so); `let name = term where
     body` is a value, read by name.
-  - `set r.tags = { team: "platform" } where r in resource`: a contribution.
-  - `deny "msg" { key: v } where body`, `warn ...`; the message interpolates.
+  - `set r.tags = { team = "platform" } where r in resource`: a contribution.
+  - `deny "msg" { key = v } where body`, `warn ...`; the message interpolates.
   - `x in net.vpc` ranges over the wanted resources of a type (with `x`
     a plan row's reference, `deformation(k, x, _)`, it tests the type, so
     a delete passes); `r in T`,
@@ -3892,7 +3892,7 @@ not rewritten.
   - patterns: `(a, b) = pair`, `{ host, port } = conn` (the named fields,
     the rest ignored), `(repo, tag) = str.split(image, ":", 1)` (it fails
     when there is no tag), `zone({ name })` for named columns.
-  - literals: lists `[a, b]` and objects `{ k: v }` (`{ a, b }` is `{ a: a, b: b }`);
+  - literals: lists `[a, b]` and objects `{ k = v }` (`{ a, b }` is `{ a = a, b = b }`);
     a string may span lines, kept as written (`str.dedent(s)` removes the
     indentation its lines share).
   - list comprehensions: `[x | pred(x), pred2(x)]` (lowers to a `collect_list` rule).
@@ -4416,7 +4416,7 @@ with an offset where a time is wanted (there are no constructors: a
 string is read as the type its position gives it, `let t: time = ".."`), compared by its instant; adding a duration is
 calendar-aware in its zone (`t + 1mo`, `t + 1d` across a DST change is
 a calendar day), `b - a` is the duration between two, and `a < b`
-compares them. The rotation idiom: `deny "rotate the key" { key: k }
+compares them. The rotation idiom: `deny "rotate the key" { key = k }
 where k in tls.key, k.issued + 90d < now`,
 `now` an extern's answer, never a function's. `type NAME = TYPE` names a type anywhere a type is written;
 another module's alias is read through its name, `network.subnets`
@@ -4556,7 +4556,7 @@ input backup_days: int
 input subnet                                 # a relation its user gives
 decl subnet(s: net.subnet)
 resource db.postgres db { backup_days, subnets = [s | subnet(s), s in net.subnet] }
-output iam_need = { action: "db.connect", resource: db }
+output iam_need = { action = "db.connect", resource = db }
 
 # network.df: a component, copied once per network.
 component vpc {
@@ -4633,9 +4633,9 @@ where the head has a variable).
 
 ```dform
 # baseline.df
-set r.tags = { team: "platform" } where r in resource
-deny "db must be private" { resource: pg } where ...
-warn "prod should enable audit logging" { env: "prod" } where ...
+set r.tags = { team = "platform" } where r in resource
+deny "db must be private" { resource = pg } where ...
+warn "prod should enable audit logging" { env = "prod" } where ...
 
 # stacks/dform.df
 use baseline

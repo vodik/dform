@@ -5,10 +5,10 @@ examples/k3s-platform/policy.df
 #| The platform's policy: k3s needs 4 GB of memory on its server, and
 #| every image runs as the digest the plan saw.
 
-deny "k3s needs 4 GB of memory" { server: s, flavor: s.flavor }
+deny "k3s needs 4 GB of memory" { server = s, flavor = s.flavor }
   where s in ovh.instance, ovh.flavor(s.region, s.flavor, _, ram, _), ram < 4Gi
 
-deny "an image is not pinned by its digest" { workload: w, image: c.image }
+deny "an image is not pinned by its digest" { workload = w, image = c.image }
   where w in k8s.deployment, c in w.spec.template.spec.containers, not oci.pinned(c.image)
 
 ---

@@ -17,11 +17,11 @@ use fake { source = "prov" }
 resource db.postgres server { name = "server" }
 use k8s { kubeconfig = str.format("kc@%s", server.endpoint) }
 resource k8s.namespace ns { metadata.name = "app" }
-resource iam.role app_role { name = "app", assume = { principals: ["x"] } }
+resource iam.role app_role { name = "app", assume = { principals = ["x"] } }
 resource iam.policy app_policy { name = "p", document = "{}" }
 "#;
 
-const ATTACH: &str = "resource iam.role reader { name = \"reader\", assume = { principals: [\"y\"] }, \
+const ATTACH: &str = "resource iam.role reader { name = \"reader\", assume = { principals = [\"y\"] }, \
      policies = [app_policy] }\n";
 
 fn scratch(name: &str) -> Scratch {

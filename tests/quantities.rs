@@ -111,11 +111,11 @@ fn a_policy_compares_memory_limits_in_bytes() {
         format!(
             "\n\nuse k8s\n\n\
              resource k8s.deployment web {{\n  metadata.name = \"web\"\n  \
-             spec.selector.matchLabels = {{ app: \"web\" }}\n  \
-             spec.template.spec.containers = [{{\n    name: \"web\",\n    image: \"web:1\",\n    \
-             resources: {{ requests: {{ cpu: 500m, memory: 1Gi }}, limits: {{ cpu: 2000m, memory: {memory} }} }}\n  \
+             spec.selector.matchLabels = {{ app = \"web\" }}\n  \
+             spec.template.spec.containers = [{{\n    name = \"web\",\n    image = \"web:1\",\n    \
+             resources = {{ requests = {{ cpu = 500m, memory = 1Gi }}, limits = {{ cpu = 2000m, memory = {memory} }} }}\n  \
              }}]\n}}\n\n\
-             deny \"memory limit above 2Gi\" {{ container: c.name }} where\n  \
+             deny \"memory limit above 2Gi\" {{ container = c.name }} where\n  \
              d in k8s.deployment,\n  c in d.spec.template.spec.containers,\n  \
              c.resources.limits.memory > 2Gi,\n"
         )
@@ -250,10 +250,10 @@ fn dform_test_reads_quantities_as_plan_does() {
         "main.df",
         "\n\nuse k8s\n\n\
          resource k8s.deployment web {\n  metadata.name = \"web\"\n  \
-         spec.selector.matchLabels = { app: \"web\" }\n  \
-         spec.template.spec.containers = [{\n    name: \"web\",\n    image: \"web:1\",\n    \
-         resources: { limits: { cpu: 500m, memory: 3Gi } }\n  }]\n}\n\n\
-         deny \"memory limit above 2Gi\" { container: c.name } where\n  \
+         spec.selector.matchLabels = { app = \"web\" }\n  \
+         spec.template.spec.containers = [{\n    name = \"web\",\n    image = \"web:1\",\n    \
+         resources = { limits = { cpu = 500m, memory = 3Gi } }\n  }]\n}\n\n\
+         deny \"memory limit above 2Gi\" { container = c.name } where\n  \
          d in k8s.deployment,\n  c in d.spec.template.spec.containers,\n  \
          c.resources.limits.memory > 2Gi,\n",
     );

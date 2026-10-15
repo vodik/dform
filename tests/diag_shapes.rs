@@ -107,7 +107,7 @@ fn a_conflict_is_said_at_both_writes() {
 
 #[test]
 fn a_deny_that_refuses_is_its_line_with_what_it_fired_for_under_it() {
-    let src = "use fake\ndeny \"no big networks\" { vpc: v } where v in net.vpc, v.cidr == \"x\"\n\
+    let src = "use fake\ndeny \"no big networks\" { vpc = v } where v in net.vpc, v.cidr == \"x\"\n\
                deny \"never\" where 1 == 1\n";
     let rules = rules("shapes/deny.df", src);
     let vs = [

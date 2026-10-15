@@ -74,20 +74,20 @@ fn the_demo_plans_the_same_against_the_real_provider_offline() {
     assert_eq!(planned(&real), planned(&mock));
     assert!(
         r.stdout
-            .contains("configMapRef: { name: web_config.metadata.name }"),
+            .contains("configMapRef = { name = web_config.metadata.name }"),
         "{}",
         r.stdout
     );
     // The long names are the same types.
     real.write(
         "long.df",
-        "\nuse k8s { source = \"./providers/k8s\" }\nresource k8s.apps.v1.deployment api {\n  metadata.name = \"api\"\n  spec.selector.matchLabels = {app: \"api\"}\n  spec.template.spec.containers = [{name: \"api\", image: \"api:1\"}]\n}\n",
+        "\nuse k8s { source = \"./providers/k8s\" }\nresource k8s.apps.v1.deployment api {\n  metadata.name = \"api\"\n  spec.selector.matchLabels = {app = \"api\"}\n  spec.template.spec.containers = [{name = \"api\", image = \"api:1\"}]\n}\n",
     );
     let r = dform(&real, None, &["plan", "long.df"]).success();
     assert!(
         r.stdout.contains("+ k8s.apps.v1.deployment api")
             && r.stdout.contains(
-                "spec.template.spec.containers[name=api] = { name: \"api\", image: \"api:1\" }"
+                "spec.template.spec.containers[name=api] = { name = \"api\", image = \"api:1\" }"
             ),
         "{}",
         r.stdout
@@ -149,7 +149,7 @@ fn offline_plan_validates_and_hides_secrets() {
     real_demo(&s);
     s.write(
         "p.df",
-        "\nuse k8s { source = \"./providers/k8s\" }\nresource k8s.secret token {\n  metadata.name = \"token\"\n  stringData = {password: \"hunter2\"}\n}\n",
+        "\nuse k8s { source = \"./providers/k8s\" }\nresource k8s.secret token {\n  metadata.name = \"token\"\n  stringData = {password = \"hunter2\"}\n}\n",
     );
     let r = dform(&s, None, &["plan", "p.df"]).success();
     assert!(!r.stdout.contains("hunter2"), "{}", r.stdout);
@@ -161,7 +161,7 @@ fn offline_plan_validates_and_hides_secrets() {
 
     s.write(
         "p.df",
-        "\nuse k8s { source = \"./providers/k8s\" }\nresource k8s.deployment api {\n  metadata.name = \"api\"\n  spec.template.spec.containers = [{name: \"api\", image: \"api:1\"}]\n}\n",
+        "\nuse k8s { source = \"./providers/k8s\" }\nresource k8s.deployment api {\n  metadata.name = \"api\"\n  spec.template.spec.containers = [{name = \"api\", image = \"api:1\"}]\n}\n",
     );
     let r = dform(&s, None, &["plan", "p.df"]).failure();
     assert!(
@@ -872,7 +872,7 @@ fn a_ref_to_a_server_defaulted_field_resolves_from_the_cluster() {
         &format!(
             "{}\nresource k8s.config_map endpoints {{\n  metadata.name = \"endpoints\"\n  \
              metadata.namespace = shop.metadata.name\n  \
-             data = {{ \"WEB\": k8s.service[\"web\"].spec.clusterIP }}\n}}\n",
+             data = {{ \"WEB\" = k8s.service[\"web\"].spec.clusterIP }}\n}}\n",
             s.read("k8s_demo.df")
         ),
     );
@@ -926,7 +926,7 @@ fn an_update_leaves_server_defaulted_fields_to_the_server() {
 
     s.write(
         "k8s_demo.df",
-        &s.read("k8s_demo.df").replace("port: 80,", "port: 8080,"),
+        &s.read("k8s_demo.df").replace("port = 80,", "port = 8080,"),
     );
     let r = run(&["plan"]).success();
     assert!(r.stdout.contains("~ k8s.service web"), "{}", r.stdout);
@@ -954,7 +954,7 @@ fn an_update_leaves_server_defaulted_fields_to_the_server() {
     s.write(
         "k8s_demo.df",
         &s.read("k8s_demo.df")
-            .replace("\"LOG_LEVEL\": \"info\"", "\"LOG_LEVEL\": \"debug\""),
+            .replace("\"LOG_LEVEL\" = \"info\"", "\"LOG_LEVEL\" = \"debug\""),
     );
     let dry = api.count(
         "PATCH /api/v1/namespaces/shop/configmaps/web-config-",
@@ -1057,7 +1057,7 @@ fn a_type_built_at_runtime_gets_the_whole_schema() {
     .success();
     assert!(
         r.stdout
-            .contains("uid: ?k8s.batch.v1.job batch.metadata.uid"),
+            .contains("uid = ?k8s.batch.v1.job batch.metadata.uid"),
         "{}",
         r.stdout
     );
@@ -1234,10 +1234,10 @@ fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
              use k8s {{ source = \"./providers/k8s\" }}\n\
              provider_config(\"k8s\", {settings}) where kubeconfig(k)\n\
              resource k8s.config_map settings {{\n  metadata.name = \"settings\"\n  \
-             data = {{ \"MODE\": \"test\" }}\n}}\n"
+             data = {{ \"MODE\" = \"test\" }}\n}}\n"
         )
     };
-    s.write("p.df", &program("{ kubeconfig: k }"));
+    s.write("p.df", &program("{ kubeconfig = k }"));
     // The environment names no cluster dform may use.
     let env_kc = s.path("no-such-kubeconfig").display().to_string();
     let set = format!("kubeconfig={kc}");
@@ -1288,7 +1288,7 @@ fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
     let (api, url) = Api::start();
     s.write(
         "p.df",
-        &program(&format!("{{ host: \"{url}\", token: k }}")),
+        &program(&format!("{{ host = \"{url}\", token = k }}")),
     );
     let set = format!("kubeconfig={TOKEN}");
     let mut args = common::on("p.df", &[], &["apply"]);
@@ -1321,7 +1321,7 @@ fn a_create_whose_answer_was_lost_is_found_by_its_label_and_key() {
     std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();
     let head = "\nuse k8s { source = \"./providers/k8s\" }\n";
     let cm = "resource k8s.config_map settings {\n  metadata.generateName = \"settings-\"\n  \
-              data = { \"MODE\": \"test\" }\n}\n";
+              data = { \"MODE\" = \"test\" }\n}\n";
     s.write("p.df", &format!("{head}{cm}"));
     let (api, url) = Api::start();
     let kc = kubeconfig(&s, &url);
@@ -1436,7 +1436,7 @@ fn a_world_read_is_answered_from_the_live_object() {
          let active = world.k8s.service[\"shop/web\"].spec.selector.color\n\
          resource k8s.config_map serving {\n\
            metadata.name = \"serving\"\n\
-           data = { \"COLOR\": active }\n\
+           data = { \"COLOR\" = active }\n\
          }\n\
          ",
     );
@@ -1533,7 +1533,7 @@ fn a_held_secret_is_read_from_the_cluster() {
          use k8s { source = \"./providers/k8s\" }\n\
          resource k8s.secret creds {\n\
            metadata.name = \"creds\"\n\
-           stringData = { pw: p }\n\
+           stringData = { pw = p }\n\
          } where pw(p)\n\
          output pw: secret(string) = creds.stringData.pw\n\
          ",
@@ -1545,7 +1545,7 @@ fn a_held_secret_is_read_from_the_cluster() {
          use a\n\
          resource k8s.secret copy {\n\
            metadata.name = \"copy\"\n\
-           stringData = { pw: a.pw }\n\
+           stringData = { pw = a.pw }\n\
          }\n\
          ",
     );

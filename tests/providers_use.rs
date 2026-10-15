@@ -24,7 +24,7 @@ fn a_provider_is_used_and_configured_by_its_block() {
         .success()
         .stdout;
     assert!(
-        config.contains("\"fake\"  {region: \"eu-west-1\"}"),
+        config.contains("\"fake\"  {region = \"eu-west-1\"}"),
         "{config}"
     );
     s.write(
@@ -59,12 +59,12 @@ fn a_guarded_use_configures_the_provider_where_it_holds() {
     };
     let aws = config("cloud=aws");
     assert!(
-        aws.contains("{region: \"eu-west-1\"}") && !aws.contains("us-east"),
+        aws.contains("{region = \"eu-west-1\"}") && !aws.contains("us-east"),
         "{aws}"
     );
     let gcp = config("cloud=gcp");
     assert!(
-        gcp.contains("{region: \"us-east-1\"}") && !gcp.contains("eu-west"),
+        gcp.contains("{region = \"us-east-1\"}") && !gcp.contains("eu-west"),
         "{gcp}"
     );
 }
