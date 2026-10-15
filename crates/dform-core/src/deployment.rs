@@ -302,64 +302,15 @@ impl Loaded {
         let root = sel.root.clone();
         // Its storage by its full name (R-200): `dform.state/stacks.app/`.
         let base = stack_location(&root, &self.path, self.cfg.backend.as_ref());
-        let keyed = deployment_location(
-            &root,
-            &self.path,
-            self.cfg.backend.as_ref(),
-            instance.segment().as_deref(),
-        );
-        // The deployment's own directory under the state root: its world's
-        // when its state is in a bucket (the world is the provider's).
-        let mut home = instance.dir(&root.join(&self.path));
-        let handed = match &sel.world {
-            None => stack::handed_over(&root, &stored, &deployment)?,
-            Some(_) => None,
-        };
-        let mut location = match &handed {
-            Some((_, loc)) => loc.clone(),
-            None => keyed,
-        };
-        // Storage under its short name, before R-200: an apply moves it,
-        // anything else reads it where it is.
-        let mut legacy = match &sel.world {
-            None => self.legacy(&root, &instance, &location, s3)?,
-            Some(_) => None,
-        };
-        let mut renamed = None;
-        if let Some(l) = legacy.take_if(|_| sel.migrate) {
-            let to = stack::Place {
-                world: stack::world_file(&location, &home),
-                location: location.clone(),
-            };
-            let times = self
-                .manifest
-                .as_ref()
-                .map(|m| m.lease_times())
-                .unwrap_or_default();
-            stack::rename_storage(&root, &l, (&stored, &to), s3, times)?;
-            renamed = Some(l.name);
-        }
-        if let Some(l) = &legacy {
-            location = l.place.location.clone();
-            home = instance.dir(&root.join(&self.stack));
-        }
-        let mut paths = match &sel.world {
-            Some(w) => state::world_paths(&root, w),
-            None => state::StackPaths {
-                state: match &location {
-                    Location::Local(dir) => state::state_path(dir),
-                    Location::S3(_) => state::state_path(&home),
-                },
-                world: stack::world_file(&location, &home),
-                inventory: root.join("inventory.json"),
-            },
-        };
-        paths.inventory = inventory(&sel.inventory, &sel.world, &paths.inventory);
-        let times = self
-            .manifest
-            .as_ref()
-            .map(|m| m.lease_times())
-            .unwrap_or_default();
+        let Storage {
+            location,
+            home,
+            handed,
+            legacy,
+            renamed,
+        } = self.storage(sel, &instance, s3)?;
+        let paths = sel.paths(&location, &home);
+        let times = self.lease_times();
         let dep = match &sel.world {
             Some(_) => store::Deployment::local(&paths.state, &stored),
             None => store::Deployment::new(location.open(s3)?, &stored, times),
@@ -384,9 +335,124 @@ impl Loaded {
             world: sel.world.clone(),
         })
     }
+
+    /// The lease times the manifest sets, else the defaults.
+    fn lease_times(&self) -> store::LeaseTimes {
+        self.manifest
+            .as_ref()
+            .map(|m| m.lease_times())
+            .unwrap_or_default()
+    }
+
+    /// Where the deployment `instance` of `sel`'s objects are: by its full
+    /// name (R-200), where it was handed over to, or under its short name
+    /// as before R-200, which an apply moves (`sel.migrate`) and anything
+    /// else reads where it is.
+    fn storage(&self, sel: &Selection, instance: &Instance, s3: OpenS3) -> Result<Storage> {
+        let root = &sel.root;
+        let (deployment, stored) = (instance.name(), instance.full_name());
+        let keyed = deployment_location(
+            root,
+            &self.path,
+            self.cfg.backend.as_ref(),
+            instance.segment().as_deref(),
+        );
+        // The deployment's own directory under the state root: its world's
+        // when its state is in a bucket (the world is the provider's).
+        let mut home = instance.dir(&root.join(&self.path));
+        let handed = match &sel.world {
+            None => stack::handed_over(root, &stored, &deployment)?,
+            Some(_) => None,
+        };
+        let mut location = match &handed {
+            Some((_, loc)) => loc.clone(),
+            None => keyed,
+        };
+        let mut legacy = match &sel.world {
+            None => self.legacy(root, instance, &location, s3)?,
+            Some(_) => None,
+        };
+        let mut renamed = None;
+        if let Some(l) = legacy.take_if(|_| sel.migrate) {
+            let to = stack::Place {
+                world: stack::world_file(&location, &home),
+                location: location.clone(),
+            };
+            stack::rename_storage(root, &l, (&stored, &to), s3, self.lease_times())?;
+            renamed = Some(l.name);
+        }
+        if let Some(l) = &legacy {
+            location = l.place.location.clone();
+            home = instance.dir(&root.join(&self.stack));
+        }
+        Ok(Storage {
+            location,
+            home,
+            handed,
+            legacy,
+            renamed,
+        })
+    }
+}
+
+/// Where a deployment's objects are ([`Loaded::storage`]): their
+/// location, the deployment's own directory under the state root, where
+/// it was handed over to and whom, its storage under its short name
+/// before R-200, and the name this run moved it from.
+struct Storage {
+    location: Location,
+    home: PathBuf,
+    handed: Option<(String, Location)>,
+    legacy: Option<stack::Legacy>,
+    renamed: Option<String>,
+}
+
+impl Selection {
+    /// The state, world and inventory files of a deployment at `location`
+    /// (`home` its own directory): beside the world fixture, when the
+    /// selection names one.
+    fn paths(&self, location: &Location, home: &Path) -> state::StackPaths {
+        let mut paths = match &self.world {
+            Some(w) => state::world_paths(&self.root, w),
+            None => state::StackPaths {
+                state: match location {
+                    Location::Local(dir) => state::state_path(dir),
+                    Location::S3(_) => state::state_path(home),
+                },
+                world: stack::world_file(location, home),
+                inventory: self.root.join("inventory.json"),
+            },
+        };
+        paths.inventory = inventory(&self.inventory, &self.world, &paths.inventory);
+        paths
+    }
+}
+
+/// Whether there is a deployment's state or audit log at `loc`.
+fn has_state(loc: &Location, s3: OpenS3) -> Result<bool> {
+    let st = loc.open(s3)?;
+    Ok(st.get(store::STATE)?.is_some() || st.get(store::AUDIT)?.is_some())
 }
 
 impl Loaded {
+    /// Where its backend put the deployment `instance` by its short name,
+    /// before R-200: the manifest's backend of that name, else the
+    /// stack's.
+    fn short_location(&self, root: &Path, instance: &Instance) -> Location {
+        let backend = match &self.manifest {
+            Some(m) if self.cfg.backend.is_some() => m
+                .legacy_backend(&self.stack)
+                .or_else(|| self.cfg.backend.clone()),
+            _ => self.cfg.backend.clone(),
+        };
+        deployment_location(
+            root,
+            &self.stack,
+            backend.as_ref(),
+            instance.segment().as_deref(),
+        )
+    }
+
     /// The deployment `instance`'s storage under its short name, before
     /// R-200's full names (`dform.state/platform/env=lab`, the registry's
     /// `platform[env=lab]`), when its full name has none: where it is.
@@ -407,36 +473,19 @@ impl Loaded {
         if reg.contains_key(&new) {
             return Ok(None);
         }
-        let has_state = |loc: &Location| -> Result<bool> {
-            let st = loc.open(s3)?;
-            Ok(st.get(store::STATE)?.is_some() || st.get(store::AUDIT)?.is_some())
-        };
         // Where the registry has it (a handed-over one too), else where
         // its backend put it by its short name.
         let registered = reg.get(&old).map(|e| e.state.clone());
         let place = match &registered {
             Some(state) => state.clone(),
-            None => {
-                let backend = match &self.manifest {
-                    Some(m) if self.cfg.backend.is_some() => m
-                        .legacy_backend(&self.stack)
-                        .or_else(|| self.cfg.backend.clone()),
-                    _ => self.cfg.backend.clone(),
-                };
-                deployment_location(
-                    root,
-                    &self.stack,
-                    backend.as_ref(),
-                    instance.segment().as_deref(),
-                )
-            }
+            None => self.short_location(root, instance),
         };
         // Only the registry's entry is renamed where the place is the
         // same; else its objects move, when there are some and none are
         // at its full name's place yet.
         let moves = match place == *location {
             true => registered.is_some(),
-            false => has_state(&place)? && !has_state(location)?,
+            false => has_state(&place, s3)? && !has_state(location, s3)?,
         };
         if !moves {
             return Ok(None);
@@ -776,30 +825,15 @@ impl Evaluator {
         unset: &BTreeMap<String, BTreeSet<String>>,
     ) -> Result<()> {
         let crds = crds_made(resources);
-        let unset_of = |typ: &str| {
-            let p = self.schema().provider_of.get(typ)?;
-            unset.contains_key(p).then(|| self.settings_label(p))
-        };
-        let provisional = |typ: &str| {
-            let p = match self.backend.waits(typ) {
-                Some(ProviderWait::Settings(p)) => p,
-                Some(ProviderWait::Schema(_)) => return false,
-                None => match self.schema().provider_of.get(typ) {
-                    Some(p) => p.clone(),
-                    None => return false,
-                },
-            };
-            unset
-                .get(&p)
-                .is_some_and(|keys| self.schema().connects(&p, keys))
-        };
         for r in resources {
             let typ = &r.addr.typ;
             // A kind no schema has: its provider's cluster serves it once
             // reached (R-110), or does not, reached (R-126).
             let schema_wait = matches!(self.backend.waits(typ), Some(ProviderWait::Schema(_)))
                 || self.backend.unserved(typ);
-            let waits = self.provider_wait(typ).or_else(|| unset_of(typ));
+            let waits = self
+                .provider_wait(typ)
+                .or_else(|| self.unset_label(typ, unset));
             let label = match (waits, crd_of(&crds, typ)) {
                 (_, Some(crd)) if schema_wait => report::address(crd),
                 (Some(label), _) => label,
@@ -807,28 +841,10 @@ impl Evaluator {
                 (None, _) => continue,
             };
             if schema_wait {
-                // No schema marks a path of it sensitive until the
-                // boundary learns it: a value prints as the redactor says,
-                // by what reached it (a secret cannot: E0304).
-                let doc = crate::spell::value_to_json(&r.attrs);
-                let (kind, changes) = match st.get(&r.addr) {
-                    Some(_) => (provider::ActionKind::Pending, Vec::new()),
-                    None => (
-                        provider::ActionKind::Create,
-                        provider::diff(self.schema(), &r.addr.typ, None, Some(&doc)),
-                    ),
-                };
-                plan.actions.push(provider::Action {
-                    kind,
-                    addr: r.addr.clone(),
-                    changes,
-                    on: BTreeSet::from([label.clone()]),
-                    kept: Vec::new(),
-                    renamed: None,
-                });
+                plan.actions.push(self.awaiting_schema(r, &label, st));
             } else if let Some(a) = plan.actions.iter_mut().find(|a| a.addr == r.addr) {
                 a.on.insert(label.clone());
-                if provisional(typ) {
+                if self.provisional(typ, unset) {
                     sections.provisional.insert(label.clone());
                 }
                 // An object state holds whose provider waits on its
@@ -840,21 +856,61 @@ impl Evaluator {
                     a.changes.clear();
                 }
             }
-            // One waiting on what dform's own read has not answered (the
-            // kubeconfig `io.read("ssh://..")` reads from a host still booting) waits
-            // on it through the provider: said as both.
-            let waits = sections
-                .pending
-                .entry((r.addr.typ.clone(), r.addr.name.clone()))
-                .or_default();
-            let read = |l: &String| {
-                crate::value::null_owner(l).is_some_and(|(t, _)| crate::externs::in_process(&t))
-            };
-            if waits.is_empty() || waits.iter().any(read) {
-                waits.insert(label);
-            }
+            pending_on(sections, &r.addr, label);
         }
         Ok(())
+    }
+
+    /// The label of the settings of `typ`'s provider, when the program
+    /// leaves some of them `unset`.
+    fn unset_label(&self, typ: &str, unset: &BTreeMap<String, BTreeSet<String>>) -> Option<String> {
+        let p = self.schema().provider_of.get(typ)?;
+        unset.contains_key(p).then(|| self.settings_label(p))
+    }
+
+    /// Whether `typ`'s provider waits on settings the program leaves
+    /// `unset` that say where it connects: what it plans is provisional.
+    fn provisional(&self, typ: &str, unset: &BTreeMap<String, BTreeSet<String>>) -> bool {
+        let p = match self.backend.waits(typ) {
+            Some(ProviderWait::Settings(p)) => p,
+            Some(ProviderWait::Schema(_)) => return false,
+            None => match self.schema().provider_of.get(typ) {
+                Some(p) => p.clone(),
+                None => return false,
+            },
+        };
+        unset
+            .get(&p)
+            .is_some_and(|keys| self.schema().connects(&p, keys))
+    }
+
+    /// The action of `r`, of a kind no schema has yet, waiting on `label`:
+    /// a create of its document (pending, when state holds it). No schema
+    /// marks a path of it sensitive until the boundary learns it: a value
+    /// prints as the redactor says, by what reached it (a secret cannot:
+    /// E0304).
+    fn awaiting_schema(
+        &self,
+        r: &resources::Resource,
+        label: &str,
+        st: &State,
+    ) -> provider::Action {
+        let doc = crate::spell::value_to_json(&r.attrs);
+        let (kind, changes) = match st.get(&r.addr) {
+            Some(_) => (provider::ActionKind::Pending, Vec::new()),
+            None => (
+                provider::ActionKind::Create,
+                provider::diff(self.schema(), &r.addr.typ, None, Some(&doc)),
+            ),
+        };
+        provider::Action {
+            kind,
+            addr: r.addr.clone(),
+            changes,
+            on: BTreeSet::from([label.to_string()]),
+            kept: Vec::new(),
+            renamed: None,
+        }
     }
 
     /// The error of a resource whose kind its provider's cluster does not
@@ -1072,23 +1128,9 @@ impl Evaluator {
         lifecycle: &zset::Lifecycle,
         st: &State,
     ) -> Result<Planned> {
-        let backend = &self.backend;
         let schema = self.schema();
-        // An object depends on what its provider's settings are made from
-        // as on what it references: a delete of the server a kubeconfig
-        // is read from waits for the deletes of the cluster's objects.
         let reads = settings_reads(&res);
-        let configured_from = |docs: &mut [resources::Resource]| {
-            for r in docs {
-                for (p, from) in &reads {
-                    if backend.serves(p, &r.addr.typ) {
-                        r.deps
-                            .extend(from.iter().filter(|a| **a != r.addr).cloned());
-                    }
-                }
-            }
-        };
-        configured_from(&mut resources);
+        self.depend_on_settings(&reads, &mut resources);
         // A destroy (R-149) evaluates the program as ever: its providers
         // are configured from the world, its denies run over the plan. It
         // wants nothing, so every object state holds is a delete, in the
@@ -1098,40 +1140,30 @@ impl Evaluator {
             true => &[][..],
             false => adopts,
         };
-        // A resource with a conflicting attribute is not planned: the
-        // report shows the conflict, and the deny blocks an apply. Nor is
-        // one whose provider has no schema of its type yet (R-110).
-        // Nor one of a kind its provider's cluster does not serve (R-126):
-        // it waits on the CRD the program makes, or is an error.
-        let crds = crds_made(&resources);
-        if let Some(r) = resources
-            .iter()
-            .find(|r| backend.unserved(&r.addr.typ) && crd_of(&crds, &r.addr.typ).is_none())
-        {
-            bail!(self.no_crd(&r.addr));
-        }
-        unrevealable(backend, &res).map_err(|e| with_site(e, &res))?;
-        let asked = |res: &EvalResult, docs: &[resources::Resource]| asked(backend, res, docs);
+        self.check_served(&resources)?;
+        unrevealable(&self.backend, &res).map_err(|e| with_site(e, &res))?;
         // The run's secrets that are not derived: a leaf holding one has no
         // derivation digest (`secrets::standin`, R-164).
         crate::secrets::standin::set_sources(
             crate::query::Redactor::new(&res.facts, schema).sources(),
         );
-        let mut plan = backend
-            .plan(&asked(&res, &resources), adopts, lifecycle, st)
-            .map_err(|e| with_site(e, &res))?;
-        let replaced = executor::replaced(&plan);
-        let (res, violations, resources) = if replaced.is_empty() {
-            (res, violations.to_vec(), resources)
-        } else {
-            let (again, violations) = self.evaluate_with(st, &replaced, &[], None)?;
-            let mut docs = resources::compile_resources(again.facts.iter().cloned(), schema)?;
-            configured_from(&mut docs);
-            plan =
-                backend.plan_retracting(&asked(&again, &docs), adopts, lifecycle, st, &replaced)?;
-            executor::hold_dependents(&mut plan, &docs, &replaced);
-            (again, violations, docs)
-        };
+        let Provided {
+            res,
+            violations,
+            resources,
+            mut plan,
+            replaced,
+        } = self.provided(
+            res,
+            violations,
+            resources,
+            &PlanWith {
+                adopts,
+                lifecycle,
+                st,
+                reads: &reads,
+            },
+        )?;
         let mut sections = match self.destroy {
             true => stuck::Sections::default(),
             false => sections(&res, &resources, schema),
@@ -1140,31 +1172,11 @@ impl Evaluator {
             true => self.unreachable(&mut plan, lifecycle, st),
             false => Vec::new(),
         };
-        // `lifecycle(r, "retain")` (R-154), or its type's: a delete of r
-        // forgets it.
-        for a in &mut plan.actions {
-            if matches!(a.kind, provider::ActionKind::Delete) && lifecycle.retains(&a.addr) {
-                a.kind = provider::ActionKind::Forget;
-                a.changes.clear();
-            }
-        }
+        forget_retained(&mut plan, lifecycle);
         let unset = unconfigured(&self.program, &res.facts, &resources, st);
         self.wait_on_providers(&mut plan, &resources, &mut sections, st, &unset)?;
         executor::hold_deposed(&mut plan, &resources, &sections);
-        // The resource rules that may derive after a boundary (pending
-        // groups), for the plan's policy pass.
-        let may_derive: Vec<Atom> = res
-            .may_derive
-            .iter()
-            .filter(|m| m.head.pred == "want")
-            .map(|m| m.fact())
-            .collect();
-        let instances = zset::Instances::from_facts(&res.facts).with(&st.instances);
-        drop(res);
-        let mut facts = self.deformation_facts(&plan, &sections, &instances, st)?;
-        facts.extend(may_derive);
-        facts.extend(self.last_apply.iter().cloned());
-        facts.extend(crate::secrets::rotation_facts(st));
+        let facts = self.policy_facts(res, &plan, &sections, st)?;
         let (res, all) = self.policy_pass(st, &replaced, &facts)?;
         unchanged_by_policy(&res, program_docs.as_ref().unwrap_or(&resources), schema)?;
         let denies = all
@@ -1179,6 +1191,120 @@ impl Evaluator {
             denies,
             unreachable,
         })
+    }
+
+    /// An object depends on what its provider's settings are made from
+    /// (`reads`, by provider) as on what it references: a delete of the
+    /// server a kubeconfig is read from waits for the deletes of the
+    /// cluster's objects.
+    fn depend_on_settings(
+        &self,
+        reads: &BTreeMap<String, BTreeSet<Address>>,
+        docs: &mut [resources::Resource],
+    ) {
+        for r in docs {
+            for (p, from) in reads {
+                if self.backend.serves(p, &r.addr.typ) {
+                    r.deps
+                        .extend(from.iter().filter(|a| **a != r.addr).cloned());
+                }
+            }
+        }
+    }
+
+    /// A resource with a conflicting attribute is not planned: the
+    /// report shows the conflict, and the deny blocks an apply. Nor is
+    /// one whose provider has no schema of its type yet (R-110). Nor one
+    /// of a kind its provider's cluster does not serve (R-126): it waits
+    /// on the CRD the program makes, or is an error.
+    fn check_served(&self, resources: &[resources::Resource]) -> Result<()> {
+        let crds = crds_made(resources);
+        match resources
+            .iter()
+            .find(|r| self.backend.unserved(&r.addr.typ) && crd_of(&crds, &r.addr.typ).is_none())
+        {
+            Some(r) => bail!(self.no_crd(&r.addr)),
+            None => Ok(()),
+        }
+    }
+
+    /// The providers' plan of the evaluation `res` (its `violations`, its
+    /// `resources`), made `with` what it plans with. A replace makes a new
+    /// object, so the nulls that named the old one are retracted
+    /// (`executor`): the program is evaluated again without the replaced
+    /// identities, and what reads them is held until the replacement
+    /// exists; the plan is of that evaluation then.
+    fn provided(
+        &self,
+        res: EvalResult,
+        violations: &[String],
+        resources: Vec<resources::Resource>,
+        with: &PlanWith,
+    ) -> Result<Provided> {
+        let PlanWith {
+            adopts,
+            lifecycle,
+            st,
+            reads,
+        } = *with;
+        let backend = &self.backend;
+        let plan = backend
+            .plan(&asked(backend, &res, &resources), adopts, lifecycle, st)
+            .map_err(|e| with_site(e, &res))?;
+        let replaced = executor::replaced(&plan);
+        if replaced.is_empty() {
+            return Ok(Provided {
+                res,
+                violations: violations.to_vec(),
+                resources,
+                plan,
+                replaced,
+            });
+        }
+        let (again, violations) = self.evaluate_with(st, &replaced, &[], None)?;
+        let mut docs = resources::compile_resources(again.facts.iter().cloned(), self.schema())?;
+        self.depend_on_settings(reads, &mut docs);
+        let mut plan = backend.plan_retracting(
+            &asked(backend, &again, &docs),
+            adopts,
+            lifecycle,
+            st,
+            &replaced,
+        )?;
+        executor::hold_dependents(&mut plan, &docs, &replaced);
+        Ok(Provided {
+            res: again,
+            violations,
+            resources: docs,
+            plan,
+            replaced,
+        })
+    }
+
+    /// The facts the policy pass over `plan` adds to the program: its
+    /// deformations, the resource rules of `res` that may derive after a
+    /// boundary (pending groups), what the last apply derived, and the
+    /// rotations state records. `res` is let go before they are made.
+    fn policy_facts(
+        &self,
+        res: EvalResult,
+        plan: &provider::Plan,
+        sections: &stuck::Sections,
+        st: &State,
+    ) -> Result<Vec<Atom>> {
+        let may_derive: Vec<Atom> = res
+            .may_derive
+            .iter()
+            .filter(|m| m.head.pred == "want")
+            .map(|m| m.fact())
+            .collect();
+        let instances = zset::Instances::from_facts(&res.facts).with(&st.instances);
+        drop(res);
+        let mut facts = self.deformation_facts(plan, sections, &instances, st)?;
+        facts.extend(may_derive);
+        facts.extend(self.last_apply.iter().cloned());
+        facts.extend(crate::secrets::rotation_facts(st));
+        Ok(facts)
     }
 
     /// The policy pass (E §2.8): the program evaluated again over the
@@ -1281,6 +1407,55 @@ fn unchanged_by_policy(
         );
     }
     Ok(())
+}
+
+/// What a plan is made with beside the evaluation
+/// ([`Evaluator::provided`]): the objects the program adopts, its
+/// lifecycle, state, and what each provider's settings are read from.
+#[derive(Clone, Copy)]
+struct PlanWith<'a> {
+    adopts: &'a [resources::Adopt],
+    lifecycle: &'a zset::Lifecycle,
+    st: &'a State,
+    reads: &'a BTreeMap<String, BTreeSet<Address>>,
+}
+
+/// An evaluation, its violations and resources, and the providers' plan
+/// of them ([`Evaluator::provided`]), with the objects it replaces.
+struct Provided {
+    res: EvalResult,
+    violations: Vec<String>,
+    resources: Vec<resources::Resource>,
+    plan: provider::Plan,
+    replaced: BTreeSet<Address>,
+}
+
+/// `addr` waits on `label` in `sections`: when it waits on nothing else,
+/// or on what dform's own read has not answered (the kubeconfig
+/// `io.read("ssh://..")` reads from a host still booting), which it waits
+/// on through the provider: said as both.
+fn pending_on(sections: &mut stuck::Sections, addr: &Address, label: String) {
+    let waits = sections
+        .pending
+        .entry((addr.typ.clone(), addr.name.clone()))
+        .or_default();
+    let read = |l: &String| {
+        crate::value::null_owner(l).is_some_and(|(t, _)| crate::externs::in_process(&t))
+    };
+    if waits.is_empty() || waits.iter().any(read) {
+        waits.insert(label);
+    }
+}
+
+/// `lifecycle(r, "retain")` (R-154), or its type's: a delete of r in
+/// `plan` forgets it.
+fn forget_retained(plan: &mut provider::Plan, lifecycle: &zset::Lifecycle) {
+    for a in &mut plan.actions {
+        if matches!(a.kind, provider::ActionKind::Delete) && lifecycle.retains(&a.addr) {
+            a.kind = provider::ActionKind::Forget;
+            a.changes.clear();
+        }
+    }
 }
 
 /// The resources each provider's settings are made from, by the
