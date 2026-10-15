@@ -406,8 +406,10 @@ pub(super) fn check_subnet(at: &str, d: &Json) -> Result<Option<String>> {
 /// An instance's private networks (`networks = [lab]` on `ovh.instance`):
 /// made on them, its interfaces are the public network's and one on each,
 /// as the API takes them, by the networks' OpenStack ids in its region.
-/// A network added later is an interface attached (`POST
-/// /instance/{id}/interface`), one left an interface detached (`DELETE
+/// An Update brings its ports to one on each network against them as
+/// they are (`PortSteps`): a network added is an interface attached
+/// (`POST /instance/{id}/interface`), a port beside its own or on a
+/// network left an interface detached (`DELETE
 /// /instance/{id}/interface/{interface}`), on the instance's id.
 impl Ovh {
     /// The `networks` an instance's Create sends: none when the program
@@ -477,77 +479,91 @@ impl Ovh {
         })
     }
 
-    /// The instance `remote` brought onto the program's private networks
-    /// (`config`) from those it is on (`now`, as Read answered it): an
-    /// interface attached on each network added, and the one on each
-    /// network left detached, each said. The ports it attached, by
-    /// network: the instance's own (`map::Owned`).
-    pub(super) fn update_instance_networks(
+    /// The steps that bring instance `remote` to one port on each of the
+    /// program's private networks (`config`) and none on another, from
+    /// its ports as they are (a fresh read, not Read's answer), `owned`
+    /// which are its own (its prior's `ports`). Refused, before anything
+    /// changes, where a network has several ports and none is known as
+    /// its own: which to keep is a person's choice.
+    pub(super) fn instance_ports(
         &self,
+        a: &Account,
+        p: &str,
         at: &str,
         remote: &str,
-        now: &Json,
         config: &Json,
+        owned: &map::Owned,
+    ) -> std::result::Result<PortSteps, Failed> {
+        let want = networks_of(at, config)?;
+        let ports = self
+            .private_networks(a, p, remote)
+            .map_err(|e| failed(at, e))?;
+        let steps = PortSteps::new(&want, &ports, owned);
+        match steps.refusal(at, &interface_path(p, remote)) {
+            Some(e) => Err(e),
+            None => Ok(steps),
+        }
+    }
+
+    /// `steps` taken on instance `remote`, each said: an interface
+    /// attached on each network it has none on, the others beside its own
+    /// and the ones on a network left detached. Its own port on each
+    /// network now, by network: the one it had, the one taken as its own,
+    /// or the one attached (`map::Owned`).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn converge_ports(
+        &self,
+        a: &Account,
+        p: &str,
+        at: &str,
+        remote: &str,
+        config: &Json,
+        steps: PortSteps,
         notes: &mut Vec<String>,
     ) -> std::result::Result<Vec<(String, String)>, Failed> {
-        let want = networks_of(at, config)?;
-        let has = networks_of(at, now)?;
-        let (added, left): (Vec<&str>, Vec<&str>) = (
-            want.iter().copied().filter(|n| !has.contains(n)).collect(),
-            has.iter().copied().filter(|n| !want.contains(n)).collect(),
-        );
-        let mut attached = Vec::new();
-        if added.is_empty() && left.is_empty() {
-            return Ok(attached);
+        let path = interface_path(p, remote);
+        let mut own: Vec<(String, String)> = steps
+            .keep
+            .into_iter()
+            .map(|(net, port)| (net, port.id))
+            .collect();
+        for (net, port) in steps.adopt {
+            notes.push(format!(
+                "{at}: its one interface on network {net}, {}, is taken as its own",
+                port.id
+            ));
+            own.push((net, port.id));
         }
-        let (a, p) = self.project_for(at)?;
-        let region = need(at, config, "region")?;
-        let path = format!("/cloud/project/{p}/instance/{}/interface", escape(remote));
-        // The interfaces as they are, not as `now` says: a port on a
-        // network added already is not attached twice.
-        let interfaces = a.client.get(&path).map_err(|e| failed(at, e))?;
-        // An interface names its private network by the network's id
-        // (`pn-…`), though an attach sends the OpenStack id: either is it.
-        let of = |id: &str, os: &str| {
-            interfaces
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|i| matches!(s(i, "networkId"), Some(n) if n == id || n == os))
-                .filter_map(|i| s(i, "id"))
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        };
-        for id in added {
-            let os = self.private_network_in(&a, &p, at, region, id)?;
-            if !of(id, &os).is_empty() {
-                notes.push(format!("{at}: it has an interface on network {id} already"));
-                continue;
-            }
+        for net in steps.attach {
+            let region = need(at, config, "region")?;
+            let os = self.private_network_in(a, p, at, region, &net)?;
             let port = a
                 .client
                 .post(&path, Some(&json!({"networkId": os})))
                 .map_err(|e| failed(at, e))?;
+            notes.push(format!("{at}: an interface on network {net} is attached"));
             if let Some(port) = s(&port, "id") {
-                attached.push((id.to_string(), port.to_string()));
-            }
-            notes.push(format!("{at}: an interface on network {id} is attached"));
-        }
-        for id in left {
-            let os = self.private_network_in(&a, &p, at, region, id)?;
-            // Each port on it: one is the network's as much as another.
-            for nic in of(id, &os) {
-                match a.client.delete(&format!("{path}/{}", escape(&nic))) {
-                    Ok(_) => {}
-                    Err(e) if e.is_not_found() => {}
-                    Err(e) => return Err(failed(at, e)),
-                }
-                notes.push(format!(
-                    "{at}: its interface {nic} on network {id} is detached"
-                ));
+                own.push((net, port.to_string()));
             }
         }
-        Ok(attached)
+        for (net, port, why) in steps.detach {
+            match a.client.delete(&format!("{path}/{}", escape(&port.id))) {
+                Ok(_) => {}
+                Err(e) if e.is_not_found() => {}
+                Err(e) => return Err(failed(at, e)),
+            }
+            notes.push(format!(
+                "{at}: its interface {} on network {net} is detached{why}",
+                port.id
+            ));
+        }
+        for (net, port) in steps.foreign {
+            notes.push(format!(
+                "{at}: interface {} on network {net} is not its own, and is left",
+                port.id
+            ));
+        }
+        Ok(own)
     }
 
     /// Instance `id`'s ports on its private networks, by network, each
@@ -593,5 +609,230 @@ impl Ovh {
             }
         }
         Ok(out)
+    }
+}
+
+/// `/instance/{remote}/interface` of project `p`.
+fn interface_path(p: &str, remote: &str) -> String {
+    format!("/cloud/project/{p}/instance/{}/interface", escape(remote))
+}
+
+/// What brings an instance to one port on each of its private networks
+/// and none on a network it left, against its ports as they are, by
+/// network id. A port is the instance's own when its prior names it
+/// (`map::Owned`); only a network whose own port is known has the others
+/// beside it detached, and a network with one port and none known takes
+/// that one as its own. A network with several and none known is
+/// `unknown`, refused: never "all but one" chosen blindly.
+#[derive(Debug, Default, PartialEq)]
+pub(super) struct PortSteps {
+    /// Networks it has no port on: one attached on each.
+    attach: Vec<String>,
+    /// Its own port on each network it keeps, known.
+    keep: Vec<(String, map::Port)>,
+    /// The one port on a network it keeps, none known as its own: taken
+    /// as its own.
+    adopt: Vec<(String, map::Port)>,
+    /// Ports detached, each with why: another beside its own, or its own
+    /// (or the one port) on a network left.
+    detach: Vec<(String, map::Port, String)>,
+    /// Ports on a network left that are not its own while its own is
+    /// known: someone's, left as they are.
+    foreign: Vec<(String, map::Port)>,
+    /// Networks with several ports and none known as its own.
+    unknown: Vec<(String, Vec<map::Port>)>,
+}
+
+impl PortSteps {
+    /// The steps from `ports` (the instance's, by network) to one on each
+    /// network of `want`, `owned` its own.
+    pub(super) fn new(want: &[&str], ports: &map::Ports, owned: &map::Owned) -> PortSteps {
+        let mut steps = PortSteps::default();
+        for net in want {
+            match ports.get(*net).map(Vec::as_slice).unwrap_or_default() {
+                [] => steps.attach.push(net.to_string()),
+                on => steps.kept(net, on, owned.on(net, on)),
+            }
+        }
+        for (net, on) in ports.iter().filter(|(n, _)| !want.contains(&n.as_str())) {
+            steps.left(net, on, owned.on(net, on));
+        }
+        steps
+    }
+
+    /// Network `net` kept, `on` its ports there, `own` its own among them.
+    fn kept(&mut self, net: &str, on: &[map::Port], own: Option<&map::Port>) {
+        match (own, on) {
+            (Some(own), _) => {
+                self.keep.push((net.to_string(), own.clone()));
+                let why = format!(", a second port beside its own ({})", own.id);
+                self.detach
+                    .extend(others(on, own).map(|p| (net.to_string(), p.clone(), why.clone())));
+            }
+            (None, [only]) => self.adopt.push((net.to_string(), only.clone())),
+            (None, _) => self.unknown.push((net.to_string(), on.to_vec())),
+        }
+    }
+
+    /// Network `net` left, `on` its ports there, `own` its own among them.
+    fn left(&mut self, net: &str, on: &[map::Port], own: Option<&map::Port>) {
+        match (own, on) {
+            (Some(own), _) => {
+                self.detach
+                    .push((net.to_string(), own.clone(), String::new()));
+                self.foreign
+                    .extend(others(on, own).map(|p| (net.to_string(), p.clone())));
+            }
+            (None, [only]) => self
+                .detach
+                .push((net.to_string(), only.clone(), String::new())),
+            (None, _) => self.unknown.push((net.to_string(), on.to_vec())),
+        }
+    }
+
+    /// The refusal of the networks whose ports none is known as the
+    /// instance's own, each port named with its address, so a person
+    /// chooses which to keep; `path` the instance's interfaces.
+    fn refusal(&self, at: &str, path: &str) -> Option<Failed> {
+        if self.unknown.is_empty() {
+            return None;
+        }
+        let nets: Vec<String> = self
+            .unknown
+            .iter()
+            .map(|(net, on)| {
+                let ports: Vec<String> = on.iter().map(port_text).collect();
+                format!(
+                    "network {net} has {} ports and none is known as its own: {}",
+                    on.len(),
+                    ports.join(", ")
+                )
+            })
+            .collect();
+        Some(refused(
+            at,
+            format!(
+                "{}; it keeps one port on a network, and which one is not dform's to guess: \
+                 detach the others (`DELETE {path}/PORT`, or in the OVH control panel), keeping \
+                 the one in use, and apply again: the one left is taken as its own",
+                nets.join("; ")
+            ),
+        ))
+    }
+}
+
+/// The ports of `on` other than `own`.
+fn others<'a>(on: &'a [map::Port], own: &'a map::Port) -> impl Iterator<Item = &'a map::Port> {
+    on.iter().filter(move |p| p.id != own.id)
+}
+
+/// A port as a refusal names it: its id and its address.
+fn port_text(p: &map::Port) -> String {
+    match &p.ipv4 {
+        Some(ip) => format!("{} ({ip})", p.id),
+        None => format!("{} (no address)", p.id),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn port(id: &str, ip: &str) -> map::Port {
+        map::Port {
+            id: id.into(),
+            ipv4: Some(ip.into()),
+        }
+    }
+
+    /// The loop's state on network `lab`: three ports.
+    fn three() -> map::Ports {
+        [(
+            "lab".to_string(),
+            vec![
+                port("if-1", "10.0.0.11"),
+                port("if-2", "10.0.0.12"),
+                port("if-3", "10.0.0.13"),
+            ],
+        )]
+        .into()
+    }
+
+    fn owning(net: &str, id: &str) -> map::Owned {
+        map::Owned::Named([(net.to_string(), id.to_string())].into())
+    }
+
+    fn none() -> map::Owned {
+        map::Owned::from(None)
+    }
+
+    /// A network with no port is attached; one whose own port is there is
+    /// left as it is.
+    #[test]
+    fn a_network_without_a_port_attaches_and_one_with_its_own_is_kept() {
+        let ports = [("lab".to_string(), vec![port("if-1", "10.0.0.11")])].into();
+        let steps = PortSteps::new(&["lab", "db"], &ports, &owning("lab", "if-1"));
+        assert_eq!(steps.attach, ["db"]);
+        assert_eq!(steps.keep, [("lab".to_string(), port("if-1", "10.0.0.11"))]);
+        assert!(steps.detach.is_empty() && steps.adopt.is_empty() && steps.unknown.is_empty());
+    }
+
+    /// Its own port known among the loop's three: the two others are
+    /// detached, its own kept, whichever place it has in the list.
+    #[test]
+    fn the_others_beside_its_own_port_are_detached() {
+        let steps = PortSteps::new(&["lab"], &three(), &owning("lab", "if-2"));
+        assert_eq!(steps.keep, [("lab".to_string(), port("if-2", "10.0.0.12"))]);
+        let gone: Vec<&str> = steps.detach.iter().map(|(_, p, _)| p.id.as_str()).collect();
+        assert_eq!(gone, ["if-1", "if-3"]);
+        assert!(steps.detach[0].2.contains("beside its own (if-2)"));
+        assert!(steps.refusal("at", "/i").is_none());
+    }
+
+    /// None known as its own: the one port there is taken as its own; of
+    /// several, none is chosen, and the refusal names each with its
+    /// address. The prior's port gone is none known.
+    #[test]
+    fn with_none_known_one_port_is_taken_and_several_are_refused() {
+        let one = [("lab".to_string(), vec![port("if-1", "10.0.0.11")])].into();
+        let steps = PortSteps::new(&["lab"], &one, &none());
+        assert_eq!(
+            steps.adopt,
+            [("lab".to_string(), port("if-1", "10.0.0.11"))]
+        );
+        assert!(steps.detach.is_empty());
+        for owned in [none(), owning("lab", "if-gone")] {
+            let steps = PortSteps::new(&["lab"], &three(), &owned);
+            assert!(steps.detach.is_empty() && steps.keep.is_empty() && steps.adopt.is_empty());
+            let Some(Failed::Refused(m)) = steps.refusal("apply x", "/i/vm/interface") else {
+                panic!("not refused");
+            };
+            assert!(
+                m.starts_with(
+                    "apply x: network lab has 3 ports and none is known as its own: \
+                     if-1 (10.0.0.11), if-2 (10.0.0.12), if-3 (10.0.0.13); "
+                ),
+                "{m}"
+            );
+            assert!(m.contains("`DELETE /i/vm/interface/PORT`"), "{m}");
+        }
+    }
+
+    /// A network left: its own port detached and the others left (they
+    /// are someone's); none known, the one port there detached, several
+    /// refused.
+    #[test]
+    fn a_network_left_detaches_its_own_port_only() {
+        let steps = PortSteps::new(&[], &three(), &owning("lab", "if-3"));
+        let gone: Vec<&str> = steps.detach.iter().map(|(_, p, _)| p.id.as_str()).collect();
+        assert_eq!(gone, ["if-3"]);
+        let left: Vec<&str> = steps.foreign.iter().map(|(_, p)| p.id.as_str()).collect();
+        assert_eq!(left, ["if-1", "if-2"]);
+        let one = [("lab".to_string(), vec![port("if-1", "10.0.0.11")])].into();
+        let steps = PortSteps::new(&[], &one, &none());
+        assert_eq!(steps.detach.len(), 1);
+        let steps = PortSteps::new(&[], &three(), &none());
+        assert!(steps.detach.is_empty());
+        assert!(steps.refusal("at", "/i").is_some());
     }
 }

@@ -236,19 +236,24 @@ impl Ovh {
     }
 
     /// An instance renamed, resized and its networks brought to `config`;
-    /// `now` its document as read. The ports it attached, by network.
+    /// `now` its document as read, `owned` which of its ports are its own.
+    /// Its own port on each network now, by network. A network whose ports
+    /// none is known as its own refuses it before anything changes.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn update_instance(
         &self,
         at: &str,
         remote: &str,
         now: &Json,
         config: &Json,
+        owned: &map::Owned,
         notes: &mut Vec<String>,
         say: Say,
     ) -> std::result::Result<Vec<(String, String)>, Failed> {
         let (a, p) = self
             .project(at)
             .map_err(|e| refused(at, format!("{e:#}")))?;
+        let ports = self.instance_ports(&a, &p, at, remote, config, owned)?;
         let name = need(at, config, "name")?;
         if s(now, "name") != Some(name) {
             a.client
@@ -259,7 +264,7 @@ impl Ovh {
                 .map_err(|e| failed(at, e))?;
         }
         self.resize(&a, &p, at, remote, now, config, notes, say)?;
-        self.update_instance_networks(at, remote, now, config, notes)
+        self.converge_ports(&a, &p, at, remote, config, ports, notes)
     }
 
     /// An instance deleted (gone already is done), and waited for until the

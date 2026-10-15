@@ -936,7 +936,9 @@ impl Ovh {
             .ok_or_else(|| refused(at, format!("{typ} {remote} is not there")))?;
         match typ {
             INSTANCE => {
-                for (net, port) in self.update_instance(at, remote, &now.0, config, notes, say)? {
+                let owned = map::Owned::from(Some(&prior));
+                let own = self.update_instance(at, remote, &now.0, config, &owned, notes, say)?;
+                for (net, port) in own {
                     map::own_port(&mut prior, &net, &port);
                 }
             }

@@ -142,7 +142,11 @@ fn the_provider_reads_a_port_by_the_ovh_id_and_attaches_once() {
     let (attrs, _) = ovh.read("ovh.instance", &vm, "vm", None).unwrap().unwrap();
     assert_eq!(attrs["networks"], json!([id]));
     let a = apply(&ovh, pb::Op::Update, "ovh.instance", &vm, &config);
-    assert!(a.notes.is_empty(), "{:?}", a.notes);
+    assert!(
+        !a.notes.iter().any(|n| n.ends_with("is attached")),
+        "{:?}",
+        a.notes
+    );
     assert_eq!(private_ports(&c, &vm).len(), 1);
 }
 
@@ -372,8 +376,8 @@ fn a_remembered_port_that_is_gone_reads_as_absent() {
 }
 
 /// An Update told what the instance owns answers it again beside what it
-/// attaches: a rename keeps the port, where an Update told nothing
-/// answers none.
+/// attaches: a rename keeps the port; an Update told nothing takes the
+/// one port on the network as its own.
 #[test]
 fn an_update_told_its_ports_keeps_them() {
     let (server, c) = world();
@@ -389,7 +393,7 @@ fn an_update_told_its_ports_keeps_them() {
         update(&ovh, &vm, &renamed, Some(&made))["ports"],
         made["ports"]
     );
-    assert_eq!(update(&ovh, &vm, &renamed, None)["ports"], json!({}));
+    assert_eq!(update(&ovh, &vm, &renamed, None)["ports"], made["ports"]);
 }
 
 /// An instance made on a network owns the port it was made with.
@@ -412,4 +416,195 @@ fn an_instance_made_on_a_network_owns_its_port() {
         computed["ports"],
         json!({id.clone(): {"id": port["id"], "ipv4": port["fixedIps"][0]["ip"]}})
     );
+}
+
+// One port per network, converged against the ports as they are
+// (docs/providers/ovh.md, "An instance's networks"): the others beside
+// its own detached only when its own is known, the one port taken as its
+// own when none is, and several with none known refused.
+
+/// An Update of `vm`, told `prior`: the refusal.
+fn update_refused(ovh: &Ovh, vm: &str, config: &Json, prior: Option<&Json>) -> String {
+    let r = pb::ApplyRequest {
+        op: pb::Op::Update as i32,
+        r#type: "ovh.instance".into(),
+        name: "vm".into(),
+        remote: vm.into(),
+        config: Some(wire::doc(config)),
+        prior: prior.map(wire::doc),
+        ..Default::default()
+    };
+    match ovh.handle(Call::Apply(r), &backend::silent) {
+        Err(backend::CallError::Refused(m)) => m,
+        other => panic!("update not refused: {other:?}"),
+    }
+}
+
+/// An Update of `vm` with `config`, told `prior`: its computed values
+/// and its notes.
+fn update_noted(ovh: &Ovh, vm: &str, config: &Json, prior: Option<&Json>) -> (Json, Vec<String>) {
+    let r = pb::ApplyRequest {
+        op: pb::Op::Update as i32,
+        r#type: "ovh.instance".into(),
+        name: "vm".into(),
+        remote: vm.into(),
+        config: Some(wire::doc(config)),
+        prior: prior.map(wire::doc),
+        ..Default::default()
+    };
+    match ovh.handle(Call::Apply(r), &backend::silent) {
+        Ok(Reply::Apply(a)) => (
+            wire::from_doc(a.computed.as_ref().unwrap()).unwrap(),
+            a.notes,
+        ),
+        other => panic!("update: {other:?}"),
+    }
+}
+
+/// The lab's state: instance `vm` with three ports on network `lab`, as
+/// the attach loop left it. The network's id, and the instance's.
+fn three_ports(server: &Server, c: &Client) -> (String, String) {
+    let (id, os) = lab(c);
+    let vm = server.add_instance("vm", "BHS5");
+    let path = project(&format!("/instance/{vm}/interface"));
+    for _ in 0..3 {
+        c.post(&path, Some(&json!({"networkId": os}))).unwrap();
+    }
+    (id, vm)
+}
+
+fn on_lab(id: &str) -> Json {
+    json!({"name": "vm", "region": "BHS5", "flavor": "b2-7",
+           "image": "Ubuntu 24.04", "networks": [id]})
+}
+
+/// The instance's own port known (the second of the three): an Update
+/// detaches the two others, each said, and keeps its own and its
+/// address; the next Update changes nothing.
+#[test]
+fn the_ports_beside_its_own_are_detached() {
+    let (server, c) = world();
+    let (id, vm) = three_ports(&server, &c);
+    let ports = private_ports(&c, &vm);
+    let own = ports[1]["id"].as_str().unwrap().to_string();
+    let ip = ports[1]["fixedIps"][0]["ip"].clone();
+    let ovh = provider(&server);
+    let prior = json!({"ports": {id.clone(): {"id": own}}});
+    let (computed, notes) = update_noted(&ovh, &vm, &on_lab(&id), Some(&prior));
+    let left = private_ports(&c, &vm);
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert_eq!(left[0]["id"], json!(own));
+    assert_eq!(
+        computed["ports"],
+        json!({id.clone(): {"id": own, "ipv4": ip}})
+    );
+    assert_eq!(computed["private_ips"], json!({id.clone(): ip}));
+    let said: Vec<_> = notes.iter().filter(|n| n.contains("detached")).collect();
+    assert_eq!(said.len(), 2, "{notes:?}");
+    assert!(
+        said[0].ends_with(&format!("a second port beside its own ({own})")),
+        "{said:?}"
+    );
+    let (_, notes) = update_noted(&ovh, &vm, &on_lab(&id), Some(&computed));
+    assert!(notes.is_empty(), "{notes:?}");
+    assert_eq!(private_ports(&c, &vm).len(), 1);
+}
+
+/// None of the three known as its own (state kept before ports were, or
+/// an instance adopted): the Update is refused naming each port and its
+/// address, and nothing changes, the rename it also asked included.
+#[test]
+fn several_ports_none_known_refuse_and_change_nothing() {
+    let (server, c) = world();
+    let (id, vm) = three_ports(&server, &c);
+    let ports = private_ports(&c, &vm);
+    let ovh = provider(&server);
+    let mut renamed = on_lab(&id);
+    renamed["name"] = json!("vm-2");
+    let before = server.calls().len();
+    let m = update_refused(&ovh, &vm, &renamed, None);
+    let named: Vec<String> = ports
+        .iter()
+        .map(|p| {
+            format!(
+                "{} ({})",
+                p["id"].as_str().unwrap(),
+                p["fixedIps"][0]["ip"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert!(
+        m.contains(&format!(
+            "network {id} has 3 ports and none is known as its own: {}",
+            named.join(", ")
+        )),
+        "{m}"
+    );
+    assert!(
+        m.contains(&format!(
+            "`DELETE /cloud/project/{}/instance/{vm}/interface/PORT`",
+            fake::PROJECT
+        )),
+        "{m}"
+    );
+    let changed: Vec<String> = server.calls()[before..]
+        .iter()
+        .filter(|c| !c.starts_with("GET "))
+        .cloned()
+        .collect();
+    assert!(changed.is_empty(), "{changed:?}");
+    assert_eq!(server.instances()[0]["name"], "vm");
+    // A prior whose port is gone is none known.
+    let gone = json!({"ports": {id.clone(): {"id": "if-gone"}}});
+    update_refused(&ovh, &vm, &on_lab(&id), Some(&gone));
+    assert_eq!(private_ports(&c, &vm).len(), 3);
+    // A person detaches two; the one left is taken as its own.
+    for p in &ports[1..] {
+        c.delete(&project(&format!(
+            "/instance/{vm}/interface/{}",
+            p["id"].as_str().unwrap()
+        )))
+        .unwrap();
+    }
+    let (computed, notes) = update_noted(&ovh, &vm, &on_lab(&id), None);
+    assert_eq!(computed["ports"][&id]["id"], ports[0]["id"]);
+    assert!(
+        notes.iter().any(|n| n.contains("is taken as its own")),
+        "{notes:?}"
+    );
+}
+
+/// A network left: its own port is detached and the one that is not its
+/// own is left, said; with none known, its one port is detached.
+#[test]
+fn a_network_left_detaches_its_own_port() {
+    let (server, c) = world();
+    let (id, os) = lab(&c);
+    let vm = server.add_instance("vm", "BHS5");
+    let ovh = provider(&server);
+    let made = update(&ovh, &vm, &on_lab(&id), None);
+    let own = made["ports"][&id]["id"].clone();
+    let path = project(&format!("/instance/{vm}/interface"));
+    c.post(&path, Some(&json!({"networkId": os}))).unwrap();
+    let theirs = private_ports(&c, &vm)[1]["id"].clone();
+    let off = json!({"name": "vm", "region": "BHS5", "flavor": "b2-7", "image": "Ubuntu 24.04"});
+    let (_, notes) = update_noted(&ovh, &vm, &off, Some(&made));
+    let left = private_ports(&c, &vm);
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert_eq!(left[0]["id"], theirs);
+    assert!(
+        notes.iter().any(|n| n.contains(&format!(
+            "its interface {} on network {id} is detached",
+            own.as_str().unwrap()
+        ))),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.ends_with("is not its own, and is left")),
+        "{notes:?}"
+    );
+    update_noted(&ovh, &vm, &off, None);
+    assert!(private_ports(&c, &vm).is_empty());
 }

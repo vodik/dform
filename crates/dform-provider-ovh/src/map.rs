@@ -137,7 +137,7 @@ pub enum Owned {
 impl Owned {
     /// Its own port among `ports`, those on network `net`: none when it
     /// names one that is gone.
-    fn on<'a>(&self, net: &str, ports: &'a [Port]) -> Option<&'a Port> {
+    pub fn on<'a>(&self, net: &str, ports: &'a [Port]) -> Option<&'a Port> {
         match self {
             Owned::Made => ports.first(),
             Owned::Named(ids) => {
