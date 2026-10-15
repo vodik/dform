@@ -736,32 +736,24 @@ fn desugar_comprehensions(program: &Program) -> Result<Program> {
 }
 
 fn rewrite_rule_listcomps(mut r: RuleStmt, counter: &mut usize) -> Result<(Vec<Stmt>, RuleStmt)> {
-    let counts_all = {
-        let mut m = count_vars_in_term(&Term::Func {
-            name: "__head".to_string(),
-            args: r.head.args.clone(),
-        });
-        merge_counts(&mut m, &count_vars_in_lits(&r.body));
-        m
+    let mut counts_all = count_vars_in_term(&Term::Func {
+        name: "__head".to_string(),
+        args: r.head.args.clone(),
+    });
+    merge_counts(&mut counts_all, &count_vars_in_lits(&r.body));
+    let mut c = Comprehensions {
+        counts_all,
+        counter,
+        helpers: Vec::new(),
     };
-
-    let mut helpers = Vec::new();
-
     // Rewrite body first (so binding order stays intuitive).
-    r.body = rewrite_lits_listcomps(&r.body, &counts_all, counter, &mut helpers)?;
-
+    r.body = c.lits(&r.body)?;
     // Rewrite head terms; any joins needed for head terms are appended to the rule body.
-    let mut head_prefix = Vec::new();
-    let mut new_args = Vec::new();
-    for a in r.head.args {
-        let (t2, prefix) = rewrite_term_listcomps(a, &counts_all, counter, &mut helpers)?;
-        head_prefix.extend(prefix);
-        new_args.push(t2);
-    }
-    r.head.args = new_args;
+    let (args, head_prefix) = c.terms(std::mem::take(&mut r.head.args))?;
+    r.head.args = args;
     r.body.extend(head_prefix);
+    let mut helpers = c.helpers;
     locate(&mut helpers, r.head.span);
-
     Ok((helpers, r))
 }
 
@@ -774,193 +766,155 @@ fn locate(helpers: &mut [Stmt], span: Span) {
     }
 }
 
-fn rewrite_lits_listcomps(
-    lits: &[Lit],
-    counts_all: &BTreeMap<String, usize>,
-    counter: &mut usize,
-    helpers: &mut Vec<Stmt>,
-) -> Result<Vec<Lit>> {
-    let mut out = Vec::new();
-    for lit in lits {
-        let parts = rewrite_lit_listcomps(lit.clone(), counts_all, counter, helpers)?;
-        out.extend(parts);
-    }
-    Ok(out)
+/// A rule's comprehensions as they are lowered ([`rewrite_rule_listcomps`]):
+/// how often each variable occurs in the rule, the run's count of helper
+/// rules, and the helper rules made.
+struct Comprehensions<'c> {
+    counts_all: BTreeMap<String, usize>,
+    counter: &'c mut usize,
+    helpers: Vec<Stmt>,
 }
 
-fn rewrite_lit_listcomps(
-    lit: Lit,
-    counts_all: &BTreeMap<String, usize>,
-    counter: &mut usize,
-    helpers: &mut Vec<Stmt>,
-) -> Result<Vec<Lit>> {
-    match lit {
-        Lit::Pos(mut a) => {
-            let mut prefix = Vec::new();
-            let mut args2 = Vec::new();
-            for t in a.args {
-                let (t2, p) = rewrite_term_listcomps(t, counts_all, counter, helpers)?;
-                prefix.extend(p);
-                args2.push(t2);
+impl Comprehensions<'_> {
+    fn lits(&mut self, lits: &[Lit]) -> Result<Vec<Lit>> {
+        let mut out = Vec::new();
+        for lit in lits {
+            out.extend(self.lit(lit.clone())?);
+        }
+        Ok(out)
+    }
+
+    /// The literal `lit` without comprehensions: the joins its terms need,
+    /// then it.
+    fn lit(&mut self, lit: Lit) -> Result<Vec<Lit>> {
+        match lit {
+            Lit::Pos(mut a) => {
+                let (args, mut prefix) = self.terms(a.args)?;
+                a.args = args;
+                prefix.push(Lit::Pos(a));
+                Ok(prefix)
             }
-            a.args = args2;
-            prefix.push(Lit::Pos(a));
-            Ok(prefix)
-        }
-        Lit::Not(mut a) => {
-            let mut prefix = Vec::new();
-            let mut args2 = Vec::new();
-            for t in a.args {
-                let (t2, p) = rewrite_term_listcomps(t, counts_all, counter, helpers)?;
-                prefix.extend(p);
-                args2.push(t2);
+            Lit::Not(mut a) => {
+                let (args, mut prefix) = self.terms(a.args)?;
+                a.args = args;
+                prefix.push(Lit::Not(a));
+                Ok(prefix)
             }
-            a.args = args2;
-            prefix.push(Lit::Not(a));
-            Ok(prefix)
-        }
-        Lit::Eq(a, b) => {
-            let (a2, mut pa) = rewrite_term_listcomps(a, counts_all, counter, helpers)?;
-            let (b2, pb) = rewrite_term_listcomps(b, counts_all, counter, helpers)?;
-            pa.extend(pb);
-            pa.push(Lit::Eq(a2, b2));
-            Ok(pa)
-        }
-        Lit::Neq(a, b) => {
-            let (a2, mut pa) = rewrite_term_listcomps(a, counts_all, counter, helpers)?;
-            let (b2, pb) = rewrite_term_listcomps(b, counts_all, counter, helpers)?;
-            pa.extend(pb);
-            pa.push(Lit::Neq(a2, b2));
-            Ok(pa)
-        }
-        Lit::Gt(a, b) => {
-            let (a2, mut pa) = rewrite_term_listcomps(a, counts_all, counter, helpers)?;
-            let (b2, pb) = rewrite_term_listcomps(b, counts_all, counter, helpers)?;
-            pa.extend(pb);
-            pa.push(Lit::Gt(a2, b2));
-            Ok(pa)
-        }
-        Lit::Ge(a, b) => {
-            let (a2, mut pa) = rewrite_term_listcomps(a, counts_all, counter, helpers)?;
-            let (b2, pb) = rewrite_term_listcomps(b, counts_all, counter, helpers)?;
-            pa.extend(pb);
-            pa.push(Lit::Ge(a2, b2));
-            Ok(pa)
-        }
-        Lit::Lt(a, b) => {
-            let (a2, mut pa) = rewrite_term_listcomps(a, counts_all, counter, helpers)?;
-            let (b2, pb) = rewrite_term_listcomps(b, counts_all, counter, helpers)?;
-            pa.extend(pb);
-            pa.push(Lit::Lt(a2, b2));
-            Ok(pa)
-        }
-        Lit::Le(a, b) => {
-            let (a2, mut pa) = rewrite_term_listcomps(a, counts_all, counter, helpers)?;
-            let (b2, pb) = rewrite_term_listcomps(b, counts_all, counter, helpers)?;
-            pa.extend(pb);
-            pa.push(Lit::Le(a2, b2));
-            Ok(pa)
+            Lit::Eq(a, b) => self.binary(a, b, Lit::Eq),
+            Lit::Neq(a, b) => self.binary(a, b, Lit::Neq),
+            Lit::Gt(a, b) => self.binary(a, b, Lit::Gt),
+            Lit::Ge(a, b) => self.binary(a, b, Lit::Ge),
+            Lit::Lt(a, b) => self.binary(a, b, Lit::Lt),
+            Lit::Le(a, b) => self.binary(a, b, Lit::Le),
         }
     }
-}
 
-fn rewrite_term_listcomps(
-    term: Term,
-    counts_all: &BTreeMap<String, usize>,
-    counter: &mut usize,
-    helpers: &mut Vec<Stmt>,
-) -> Result<(Term, Vec<Lit>)> {
-    Ok(match term {
-        Term::ListComp { item, body } => {
-            *counter += 1;
-            let lc_pred = format!("__lc_{counter}");
-            let list_var = Term::Var(format!("__lc_val_{counter}"));
+    /// The comparison `lit(a, b)` without comprehensions.
+    fn binary(&mut self, a: Term, b: Term, lit: fn(Term, Term) -> Lit) -> Result<Vec<Lit>> {
+        let (a2, mut prefix) = self.term(a)?;
+        let (b2, pb) = self.term(b)?;
+        prefix.extend(pb);
+        prefix.push(lit(a2, b2));
+        Ok(prefix)
+    }
 
-            let comp_counts = count_vars_in_listcomp(&item, &body);
-            let body_vars = count_vars_in_lits(&body);
+    /// The terms `ts` without comprehensions, and the joins they need.
+    fn terms(&mut self, ts: Vec<Term>) -> Result<(Vec<Term>, Vec<Lit>)> {
+        let mut prefix = Vec::new();
+        let mut out = Vec::new();
+        for t in ts {
+            let (t2, p) = self.term(t)?;
+            prefix.extend(p);
+            out.push(t2);
+        }
+        Ok((out, prefix))
+    }
 
-            let mut key_vars = Vec::new();
-            for (v, c) in &comp_counts {
-                let total = counts_all.get(v).copied().unwrap_or(0);
-                if total > *c {
-                    // Var appears outside this comprehension.
-                    if !body_vars.contains_key(v) {
-                        bail!(
-                            "`{v}` in a comprehension is given its values inside it, after its `|`"
-                        );
-                    }
-                    key_vars.push(v.clone());
+    /// The term `term` without comprehensions, and the joins it needs.
+    fn term(&mut self, term: Term) -> Result<(Term, Vec<Lit>)> {
+        Ok(match term {
+            Term::ListComp { item, body } => self.comprehension(*item, body)?,
+            Term::Func { name, args } => {
+                let (args, prefix) = self.terms(args)?;
+                (Term::Func { name, args }, prefix)
+            }
+            Term::List(xs) => {
+                let (xs, prefix) = self.terms(xs)?;
+                (Term::List(xs), prefix)
+            }
+            Term::Obj(m) => {
+                let mut prefix = Vec::new();
+                let mut m2 = BTreeMap::new();
+                for (k, v) in m {
+                    let (v2, p) = self.term(v)?;
+                    prefix.extend(p);
+                    m2.insert(k, v2);
                 }
+                (Term::Obj(m2), prefix)
             }
-            key_vars.sort();
-            key_vars.dedup();
+            other => (other, Vec::new()),
+        })
+    }
 
-            let helper_head_args: Vec<Term> = key_vars
-                .iter()
-                .cloned()
-                .map(Term::Var)
-                .chain(std::iter::once(Term::Func {
-                    name: "collect_list".to_string(),
-                    args: vec![*item],
-                }))
-                .collect();
+    /// The comprehension `[item | body]`: a helper rule collecting
+    /// `item` by the variables it shares with the rest of the rule (its
+    /// keys), and the join that reads the list.
+    fn comprehension(&mut self, item: Term, body: Vec<Lit>) -> Result<(Term, Vec<Lit>)> {
+        *self.counter += 1;
+        let counter = *self.counter;
+        let lc_pred = format!("__lc_{counter}");
+        let list_var = Term::Var(format!("__lc_val_{counter}"));
+        let key_vars = self.keys(&item, &body)?;
+        let helper_head_args: Vec<Term> = key_vars
+            .iter()
+            .cloned()
+            .map(Term::Var)
+            .chain(std::iter::once(Term::Func {
+                name: "collect_list".to_string(),
+                args: vec![item],
+            }))
+            .collect();
+        self.helpers.push(Stmt::Rule(RuleStmt::helper(
+            Helper::Comprehension,
+            Atom {
+                pred: lc_pred.clone(),
+                args: helper_head_args,
+                record: None,
+                span: Default::default(),
+            },
+            body,
+        )));
+        let mut join_args: Vec<Term> = key_vars.into_iter().map(Term::Var).collect();
+        join_args.push(list_var.clone());
+        let join = Lit::Pos(Atom {
+            pred: lc_pred,
+            args: join_args,
+            record: None,
+            span: Default::default(),
+        });
+        Ok((list_var, vec![join]))
+    }
 
-            helpers.push(Stmt::Rule(RuleStmt::helper(
-                Helper::Comprehension,
-                Atom {
-                    pred: lc_pred.clone(),
-                    args: helper_head_args,
-                    record: None,
-                    span: Default::default(),
-                },
-                body,
-            )));
-
-            let mut join_args: Vec<Term> = key_vars.iter().cloned().map(Term::Var).collect();
-            join_args.push(list_var.clone());
-
-            (
-                list_var,
-                vec![Lit::Pos(Atom {
-                    pred: lc_pred,
-                    args: join_args,
-                    record: None,
-                    span: Default::default(),
-                })],
-            )
-        }
-        Term::Func { name, args } => {
-            let mut prefix = Vec::new();
-            let mut args2 = Vec::new();
-            for a in args {
-                let (a2, p) = rewrite_term_listcomps(a, counts_all, counter, helpers)?;
-                prefix.extend(p);
-                args2.push(a2);
+    /// The comprehension `[item | body]`'s keys: the variables it shares
+    /// with the rest of the rule, each given its values in `body`.
+    fn keys(&self, item: &Term, body: &[Lit]) -> Result<Vec<String>> {
+        let comp_counts = count_vars_in_listcomp(item, body);
+        let body_vars = count_vars_in_lits(body);
+        let mut key_vars = Vec::new();
+        for (v, c) in &comp_counts {
+            let total = self.counts_all.get(v).copied().unwrap_or(0);
+            if total > *c {
+                // Var appears outside this comprehension.
+                if !body_vars.contains_key(v) {
+                    bail!("`{v}` in a comprehension is given its values inside it, after its `|`");
+                }
+                key_vars.push(v.clone());
             }
-            (Term::Func { name, args: args2 }, prefix)
         }
-        Term::List(xs) => {
-            let mut prefix = Vec::new();
-            let mut xs2 = Vec::new();
-            for x in xs {
-                let (x2, p) = rewrite_term_listcomps(x, counts_all, counter, helpers)?;
-                prefix.extend(p);
-                xs2.push(x2);
-            }
-            (Term::List(xs2), prefix)
-        }
-        Term::Obj(m) => {
-            let mut prefix = Vec::new();
-            let mut m2 = BTreeMap::new();
-            for (k, v) in m {
-                let (v2, p) = rewrite_term_listcomps(v, counts_all, counter, helpers)?;
-                prefix.extend(p);
-                m2.insert(k, v2);
-            }
-            (Term::Obj(m2), prefix)
-        }
-        other => (other, Vec::new()),
-    })
+        key_vars.sort();
+        key_vars.dedup();
+        Ok(key_vars)
+    }
 }
 
 fn has_listcomp_rule(r: &RuleStmt) -> bool {
@@ -1256,86 +1210,121 @@ fn unread_field_reports(r: &Resource, n: &mut usize) -> Vec<Stmt> {
         let Lit::Pos(read) = &body[i] else {
             continue;
         };
-        let exists = match (read.pred.as_str(), read.args.as_slice()) {
-            ("attr", [t, a, _, _]) => atom("want", vec![t.clone(), a.clone()]),
-            ("cloud_attr", [t, a, _, _]) => atom(
-                "cloud_attr",
-                vec![t.clone(), a.clone(), Term::Wildcard, Term::Wildcard],
-            ),
-            _ => continue,
+        let Some(exists) = read_exists(read) else {
+            continue;
         };
-        let mut dropped: BTreeSet<usize> = reads[k..].iter().copied().collect();
-        let bound = loop {
-            let rest: Vec<&Lit> = (0..body.len())
-                .filter(|j| !dropped.contains(j))
-                .map(|j| &body[j])
-                .collect();
-            let bound = bound_by(&rest);
-            let unbound: Vec<usize> = (0..body.len())
-                .filter(|j| !dropped.contains(j))
-                .filter(|&j| {
-                    count_vars_in_lit(&body[j])
-                        .keys()
-                        .any(|v| !bound.contains(v))
-                })
-                .collect();
-            if unbound.is_empty() {
-                break bound;
-            }
-            dropped.extend(unbound);
-        };
-        let rest: Vec<Lit> = (0..body.len())
-            .filter(|j| !dropped.contains(j))
-            .map(|j| body[j].clone())
-            .collect();
-        let xs: Vec<Term> = count_vars_in_term(&Term::List(read.args.clone()))
-            .into_keys()
-            .filter(|v| bound.contains(v))
-            .map(|v| var(&v))
-            .collect();
-        let helper = atom(&format!("__field_read_{n}"), xs);
-        *n += 1;
-        let names_bound = count_vars_in_term(&Term::List(vec![r.typ.clone(), r.name.clone()]))
-            .keys()
-            .all(|v| bound.contains(v));
-        let resource = if names_bound {
-            Term::Func {
-                name: crate::address::FORMAT.into(),
-                args: vec![str_term("%s.%s"), r.typ.clone(), r.name.clone()],
-            }
-        } else {
-            str_term(&format!(
-                "{}.{}",
-                spell::term(&r.typ).trim_matches('"'),
-                spell::term(&r.name).trim_matches('"')
-            ))
-        };
-        let mut ctx = BTreeMap::from([
-            ("resource".to_string(), resource),
-            ("read".to_string(), str_term(&spell::atom(read))),
-        ]);
-        if let Some(at) = diag::place(read.span) {
-            ctx.insert("at".to_string(), str_term(&at));
-        }
-        let mut with_read = rest.clone();
-        with_read.push(Lit::Pos(read.clone()));
-        out.push(Stmt::Rule(RuleStmt::helper(
-            Helper::FieldRead,
-            helper.clone(),
-            with_read,
-        )));
-        let mut body = rest;
-        body.push(Lit::Pos(exists));
-        body.push(Lit::Not(helper));
-        out.push(Stmt::Rule(RuleStmt::new(
-            Atom {
-                span: read.span,
-                ..atom("warn", vec![str_term(UNREAD_FIELD), Term::Obj(ctx)])
-            },
-            body,
-        )));
+        let (rest, bound) = binding_rest(body, reads[k..].iter().copied().collect());
+        out.extend(unread_field_report(r, read, exists, rest, &bound, n));
     }
     out
+}
+
+/// What a field read `read` finds nothing without: the resource's `want`
+/// row, a live object's `cloud_attr`; `None` for any other read.
+fn read_exists(read: &Atom) -> Option<Atom> {
+    match (read.pred.as_str(), read.args.as_slice()) {
+        ("attr", [t, a, _, _]) => Some(atom("want", vec![t.clone(), a.clone()])),
+        ("cloud_attr", [t, a, _, _]) => Some(atom(
+            "cloud_attr",
+            vec![t.clone(), a.clone(), Term::Wildcard, Term::Wildcard],
+        )),
+        _ => None,
+    }
+}
+
+/// The literals of `body` but those `dropped` and what only they bind,
+/// and the variables they bind.
+fn binding_rest(body: &[Lit], mut dropped: BTreeSet<usize>) -> (Vec<Lit>, BTreeSet<String>) {
+    let bound = loop {
+        let rest: Vec<&Lit> = (0..body.len())
+            .filter(|j| !dropped.contains(j))
+            .map(|j| &body[j])
+            .collect();
+        let bound = bound_by(&rest);
+        let unbound: Vec<usize> = (0..body.len())
+            .filter(|j| !dropped.contains(j))
+            .filter(|&j| {
+                count_vars_in_lit(&body[j])
+                    .keys()
+                    .any(|v| !bound.contains(v))
+            })
+            .collect();
+        if unbound.is_empty() {
+            break bound;
+        }
+        dropped.extend(unbound);
+    };
+    let rest = (0..body.len())
+        .filter(|j| !dropped.contains(j))
+        .map(|j| body[j].clone())
+        .collect();
+    (rest, bound)
+}
+
+/// The two rules that report the field read `read` of `r` finding
+/// nothing where `exists` holds: `__field_read_N(Xs)` over `rest` and
+/// the read, and the warning over `rest`, `exists` and its negation.
+/// `bound`: what `rest` binds; `n` numbers the helper.
+fn unread_field_report(
+    r: &Resource,
+    read: &Atom,
+    exists: Atom,
+    rest: Vec<Lit>,
+    bound: &BTreeSet<String>,
+    n: &mut usize,
+) -> [Stmt; 2] {
+    let xs: Vec<Term> = count_vars_in_term(&Term::List(read.args.clone()))
+        .into_keys()
+        .filter(|v| bound.contains(v))
+        .map(|v| var(&v))
+        .collect();
+    let helper = atom(&format!("__field_read_{n}"), xs);
+    *n += 1;
+    let mut ctx = BTreeMap::from([
+        ("resource".to_string(), resource_named(r, bound)),
+        ("read".to_string(), str_term(&spell::atom(read))),
+    ]);
+    if let Some(at) = diag::place(read.span) {
+        ctx.insert("at".to_string(), str_term(&at));
+    }
+    let mut with_read = rest.clone();
+    with_read.push(Lit::Pos(read.clone()));
+    let found = Stmt::Rule(RuleStmt::helper(
+        Helper::FieldRead,
+        helper.clone(),
+        with_read,
+    ));
+    let mut body = rest;
+    body.push(Lit::Pos(exists));
+    body.push(Lit::Not(helper));
+    let warn = Stmt::Rule(RuleStmt::new(
+        Atom {
+            span: read.span,
+            ..atom("warn", vec![str_term(UNREAD_FIELD), Term::Obj(ctx)])
+        },
+        body,
+    ));
+    [found, warn]
+}
+
+/// The resource `r` as a warning names it: its address formatted from
+/// its type and name when `bound` binds them, else as written.
+fn resource_named(r: &Resource, bound: &BTreeSet<String>) -> Term {
+    let names_bound = count_vars_in_term(&Term::List(vec![r.typ.clone(), r.name.clone()]))
+        .keys()
+        .all(|v| bound.contains(v));
+    if names_bound {
+        Term::Func {
+            name: crate::address::FORMAT.into(),
+            args: vec![str_term("%s.%s"), r.typ.clone(), r.name.clone()],
+        }
+    } else {
+        str_term(&format!(
+            "{}.{}",
+            spell::term(&r.typ).trim_matches('"'),
+            spell::term(&r.name).trim_matches('"')
+        ))
+    }
 }
 
 /// `__not_planned(T, A)`: a resource statement whose own clause holds
@@ -1482,6 +1471,35 @@ pub fn minted_paths(schema: &Schema) -> Vec<(String, String, NullClass, &'static
     out
 }
 
+/// `resolve(__label(T, A, P), V)`, the world's value of a minted path of
+/// an object state maps, and `resolved(L)`, the labels it gives a value.
+fn resolve_rules() -> [RuleStmt; 2] {
+    let resolve = RuleStmt::new(
+        atom(
+            "resolve",
+            vec![
+                Term::Func {
+                    name: "__label".into(),
+                    args: vec![var("__T"), var("__A"), var("__P")],
+                },
+                var("__V"),
+            ],
+        ),
+        vec![
+            Lit::Pos(atom("identity", vec![var("__T"), var("__A"), var("__Rid")])),
+            Lit::Pos(atom(
+                "world_attr",
+                vec![var("__T"), var("__Rid"), var("__P"), var("__V")],
+            )),
+        ],
+    );
+    let resolved = RuleStmt::new(
+        atom("resolved", vec![var("__L")]),
+        vec![Lit::Pos(atom("resolve", vec![var("__L"), Term::Wildcard]))],
+    );
+    [resolve, resolved]
+}
+
 /// The compiler-generated prelude, expanded per schema row (E §2.5, §4.3):
 ///
 /// ```text
@@ -1502,31 +1520,7 @@ pub fn computed_prelude(schema: &Schema) -> Vec<RuleStmt> {
         name: "__label".into(),
         args: vec![t.clone(), var("__A"), p.clone()],
     };
-    let mut out = vec![
-        RuleStmt::new(
-            atom(
-                "resolve",
-                vec![
-                    Term::Func {
-                        name: "__label".into(),
-                        args: vec![var("__T"), var("__A"), var("__P")],
-                    },
-                    var("__V"),
-                ],
-            ),
-            vec![
-                Lit::Pos(atom("identity", vec![var("__T"), var("__A"), var("__Rid")])),
-                Lit::Pos(atom(
-                    "world_attr",
-                    vec![var("__T"), var("__Rid"), var("__P"), var("__V")],
-                )),
-            ],
-        ),
-        RuleStmt::new(
-            atom("resolved", vec![var("__L")]),
-            vec![Lit::Pos(atom("resolve", vec![var("__L"), Term::Wildcard]))],
-        ),
-    ];
+    let mut out = resolve_rules().to_vec();
     for (t, p, class, rank) in rows {
         let (tt, pt) = (str_term(&t), str_term(&p));
         let want = Lit::Pos(atom("want", vec![tt.clone(), var("__A")]));
@@ -1851,7 +1845,7 @@ pub fn rewrite_computed_refs(
     facts: Vec<Atom>,
     schema: &Schema,
 ) -> (Vec<RuleStmt>, Vec<Atom>) {
-    let mut n = 0usize;
+    let mut refs = RefReads { schema, n: 0 };
     let mut out_rules = Vec::new();
     let mut out_facts = Vec::new();
     // After every rule, so a rule's index (its id in `why`) does not move.
@@ -1862,26 +1856,13 @@ pub fn rewrite_computed_refs(
         .chain(rules);
     for r in rules {
         let mut head_reads = Vec::new();
-        let head = rewrite_atom_refs(&r.head, schema, &mut n, &mut head_reads);
-        // A contribution that holds a reference (`vpc = main`, R-43) joins
-        // the resource's identity as a read of it would, so it holds once
-        // the resource is wanted and is pending while that may derive; the
-        // value stays the reference (`resources::compile_resources` gives the
-        // provider the id). To an address no rule wants it is the same
-        // error.
-        let mut wants = Vec::new();
-        if head.pred == "arg" && head.args.len() == 5 {
-            let mut to = Vec::new();
-            references(&head.args[3], &mut to);
-            for (typ, addr) in to {
-                wants.push(identity_read(typ, addr, schema));
-            }
-        }
+        let head = refs.atom(&r.head, &mut head_reads);
+        let wants = reference_wants(&head, schema);
         if r.body.is_empty() && head_reads.is_empty() && wants.is_empty() {
             out_facts.push(head);
             continue;
         }
-        let body_only = rewrite_body_refs(r.body, schema, &mut n);
+        let body_only = refs.body(r.body);
         for read in &wants {
             unanswered.push(unanswered_read(&head, read, "", body_only.clone()));
         }
@@ -1893,26 +1874,7 @@ pub fn rewrite_computed_refs(
         let mut body = body_only;
         body.extend(head_reads.iter().map(|(read, _)| Lit::Pos(read.clone())));
         body.extend(wants.into_iter().map(Lit::Pos));
-        // The value is read now, but the order of Apply still follows the
-        // ref: a contribution that reads another resource's attribute
-        // depends on it (`resources::compile_resources` reads `__ref_dep`).
-        if head.pred == "arg" && head.args.len() == 5 {
-            for (read, _) in &head_reads {
-                out_rules.push(RuleStmt::helper(
-                    Helper::RefDep,
-                    atom(
-                        REF_DEP,
-                        vec![
-                            head.args[0].clone(),
-                            head.args[1].clone(),
-                            read.args[0].clone(),
-                            read.args[1].clone(),
-                        ],
-                    ),
-                    body.clone(),
-                ));
-            }
-        }
+        out_rules.extend(ref_deps(&head, &head_reads, &body));
         out_rules.push(RuleStmt {
             head,
             body,
@@ -1921,6 +1883,52 @@ pub fn rewrite_computed_refs(
     }
     out_rules.extend(unanswered);
     (out_rules, out_facts)
+}
+
+/// A contribution `head` that holds a reference (`vpc = main`, R-43)
+/// joins the resource's identity as a read of it would, so it holds once
+/// the resource is wanted and is pending while that may derive; the value
+/// stays the reference (`resources::compile_resources` gives the provider
+/// the id). To an address no rule wants it is the same error. The reads
+/// it joins.
+fn reference_wants(head: &Atom, schema: &Schema) -> Vec<Atom> {
+    if head.pred != "arg" || head.args.len() != 5 {
+        return Vec::new();
+    }
+    let mut to = Vec::new();
+    references(&head.args[3], &mut to);
+    to.into_iter()
+        .map(|(typ, addr)| identity_read(typ, addr, schema))
+        .collect()
+}
+
+/// The value a contribution `head` reads (`head_reads`) is read now, but
+/// the order of Apply still follows the ref: a contribution that reads
+/// another resource's attribute depends on it
+/// (`resources::compile_resources` reads `__ref_dep`), a rule over its
+/// `body` each.
+fn ref_deps(head: &Atom, head_reads: &[(Atom, String)], body: &[Lit]) -> Vec<RuleStmt> {
+    if head.pred != "arg" || head.args.len() != 5 {
+        return Vec::new();
+    }
+    head_reads
+        .iter()
+        .map(|(read, _)| {
+            RuleStmt::helper(
+                Helper::RefDep,
+                atom(
+                    REF_DEP,
+                    vec![
+                        head.args[0].clone(),
+                        head.args[1].clone(),
+                        read.args[0].clone(),
+                        read.args[1].clone(),
+                    ],
+                ),
+                body.to_vec(),
+            )
+        })
+        .collect()
 }
 
 /// The read a reference to the resource `(typ, addr)` joins: its identity
@@ -2008,8 +2016,8 @@ fn unanswered_read(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -> 
             let mut v = &head.args[3];
             while let Term::Obj(m) = v
                 && m.len() == 1
+                && let Some((k, x)) = m.first_key_value()
             {
-                let (k, x) = m.iter().next().unwrap();
                 attr = format!("{attr}.{k}");
                 v = x;
             }
@@ -2050,116 +2058,114 @@ fn references(t: &Term, out: &mut Vec<(Term, Term)>) {
 /// wants ([`unanswered_read`]).
 pub const UNANSWERED: &str = "__unanswered";
 
-fn rewrite_body_refs(body: Vec<Lit>, schema: &Schema, n: &mut usize) -> Vec<Lit> {
-    let mut out = Vec::new();
-    for l in body {
-        let mut reads = Vec::new();
-        let l = l
-            .map(|a| Atom { record: None, ..a }, |t| t)
-            .map_terms(|t| rewrite_term_refs(&t, schema, n, &mut reads));
-        out.extend(reads.into_iter().map(|(read, _)| Lit::Pos(read)));
-        out.push(l);
-    }
-    out
+/// A computed attribute's references rewritten as reads
+/// ([`rewrite_computed_refs`]): the schema they are of, and the count of
+/// the variables the reads bind (`__refN`).
+struct RefReads<'s> {
+    schema: &'s Schema,
+    n: usize,
 }
 
-fn rewrite_atom_refs(
-    a: &Atom,
-    schema: &Schema,
-    n: &mut usize,
-    reads: &mut Vec<(Atom, String)>,
-) -> Atom {
-    Atom {
-        pred: a.pred.clone(),
-        args: a
-            .args
-            .iter()
-            .map(|t| rewrite_term_refs(t, schema, n, reads))
-            .collect(),
-        record: a.record.clone(),
-        span: a.span,
+impl RefReads<'_> {
+    /// A body, each literal after the reads its references make.
+    fn body(&mut self, body: Vec<Lit>) -> Vec<Lit> {
+        let mut out = Vec::new();
+        for l in body {
+            let mut reads = Vec::new();
+            let l = l
+                .map(|a| Atom { record: None, ..a }, |t| t)
+                .map_terms(|t| self.term(&t, &mut reads));
+            out.extend(reads.into_iter().map(|(read, _)| Lit::Pos(read)));
+            out.push(l);
+        }
+        out
     }
-}
 
-fn rewrite_term_refs(
-    t: &Term,
-    schema: &Schema,
-    n: &mut usize,
-    reads: &mut Vec<(Atom, String)>,
-) -> Term {
-    match t {
-        Term::Func { name, args } if name == crate::address::REF && args.len() == 3 => {
-            if let (Term::Val(Value::Str(typ)), Term::Val(Value::Str(path))) = (&args[0], &args[2])
-            {
-                let class = schema
-                    .class_of(typ, path)
-                    .or_else(|| schema.optional_computed_class(typ, path));
-                if let Some(class) = class {
-                    let addr = rewrite_term_refs(&args[1], schema, n, reads);
-                    if !schema.provider_of.contains_key(typ) {
-                        let ty = schema
-                            .attr(typ, path)
-                            .map(|a| a.ty.clone())
-                            .unwrap_or_default();
-                        return Term::Func {
-                            name: "__null".into(),
-                            args: vec![
-                                args[0].clone(),
-                                addr,
-                                args[2].clone(),
-                                str_term(class.name()),
-                                str_term(&ty),
-                            ],
-                        };
-                    }
-                    *n += 1;
-                    let v = var(&format!("__ref{n}"));
-                    let (top, rest) = match crate::address::path_split_first(path) {
-                        Some((top, rest)) => (top, Some(rest)),
-                        None => (path.as_str(), None),
-                    };
-                    reads.push((
-                        atom(
-                            "attr",
-                            vec![args[0].clone(), addr, str_term(top), v.clone()],
-                        ),
-                        path.clone(),
-                    ));
-                    return match rest {
-                        None => v,
-                        Some(rest) => Term::Func {
-                            name: "__path".into(),
-                            args: vec![v, str_term(rest)],
-                        },
-                    };
+    /// The atom `a`, its references' reads added to `reads`.
+    fn atom(&mut self, a: &Atom, reads: &mut Vec<(Atom, String)>) -> Atom {
+        Atom {
+            pred: a.pred.clone(),
+            args: a.args.iter().map(|t| self.term(t, reads)).collect(),
+            record: a.record.clone(),
+            span: a.span,
+        }
+    }
+
+    /// The term `t`, its references' reads added to `reads`.
+    fn term(&mut self, t: &Term, reads: &mut Vec<(Atom, String)>) -> Term {
+        match t {
+            Term::Func { name, args } if name == crate::address::REF && args.len() == 3 => {
+                if let Some(read) = self.reference(args, reads) {
+                    return read;
+                }
+                Term::Func {
+                    name: name.clone(),
+                    args: args.iter().map(|x| self.term(x, reads)).collect(),
                 }
             }
-            Term::Func {
+            Term::Func { name, args } => Term::Func {
                 name: name.clone(),
-                args: args
-                    .iter()
-                    .map(|x| rewrite_term_refs(x, schema, n, reads))
+                args: args.iter().map(|x| self.term(x, reads)).collect(),
+            },
+            Term::List(xs) => Term::List(xs.iter().map(|x| self.term(x, reads)).collect()),
+            Term::Obj(m) => Term::Obj(
+                m.iter()
+                    .map(|(k, x)| (k.clone(), self.term(x, reads)))
                     .collect(),
-            }
+            ),
+            other => other.clone(),
         }
-        Term::Func { name, args } => Term::Func {
-            name: name.clone(),
-            args: args
-                .iter()
-                .map(|x| rewrite_term_refs(x, schema, n, reads))
-                .collect(),
-        },
-        Term::List(xs) => Term::List(
-            xs.iter()
-                .map(|x| rewrite_term_refs(x, schema, n, reads))
-                .collect(),
-        ),
-        Term::Obj(m) => Term::Obj(
-            m.iter()
-                .map(|(k, x)| (k.clone(), rewrite_term_refs(x, schema, n, reads)))
-                .collect(),
-        ),
-        other => other.clone(),
+    }
+
+    /// The reference `ref(T, A, P)` (its `args`) to a computed attribute
+    /// of the schema's: the variable its read binds (the read added to
+    /// `reads`), a path into it when `P` goes deeper; a type no provider
+    /// serves, its null. `None` for any other reference.
+    fn reference(&mut self, args: &[Term], reads: &mut Vec<(Atom, String)>) -> Option<Term> {
+        let (Term::Val(Value::Str(typ)), Term::Val(Value::Str(path))) = (&args[0], &args[2]) else {
+            return None;
+        };
+        let schema = self.schema;
+        let class = schema
+            .class_of(typ, path)
+            .or_else(|| schema.optional_computed_class(typ, path))?;
+        let addr = self.term(&args[1], reads);
+        if !schema.provider_of.contains_key(typ) {
+            let ty = schema
+                .attr(typ, path)
+                .map(|a| a.ty.clone())
+                .unwrap_or_default();
+            return Some(Term::Func {
+                name: "__null".into(),
+                args: vec![
+                    args[0].clone(),
+                    addr,
+                    args[2].clone(),
+                    str_term(class.name()),
+                    str_term(&ty),
+                ],
+            });
+        }
+        self.n += 1;
+        let v = var(&format!("__ref{}", self.n));
+        let (top, rest) = match crate::address::path_split_first(path) {
+            Some((top, rest)) => (top, Some(rest)),
+            None => (path.as_str(), None),
+        };
+        reads.push((
+            atom(
+                "attr",
+                vec![args[0].clone(), addr, str_term(top), v.clone()],
+            ),
+            path.clone(),
+        ));
+        Some(match rest {
+            None => v,
+            Some(rest) => Term::Func {
+                name: "__path".into(),
+                args: vec![v, str_term(rest)],
+            },
+        })
     }
 }
 
