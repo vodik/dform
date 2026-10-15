@@ -603,105 +603,121 @@ impl<P: Provider> Typed<P> {
 
     fn answer(&self, call: Call, progress: backend::Progress) -> Result<Reply> {
         Ok(match call {
-            Call::Handshake(_) => Reply::Handshake(pb::HandshakeResponse {
-                protocol_version: VERSION,
-                name: P::NAME.to_string(),
-                // `offline`: its Plan with no credentials is its schema's,
-                // as with them but for `Lifecycle::check` (R-188).
-                capabilities: match P::KEEP {
-                    true => vec!["resource", "keep", "offline"],
-                    false => vec!["resource", "offline"],
-                }
-                .into_iter()
-                .map(String::from)
-                .collect(),
-                version: P::VERSION.to_string(),
-                settings: Vec::new(),
-                health: self
-                    .kinds
-                    .iter()
-                    .filter(|(_, k)| k.answers_health())
-                    .map(|(t, _)| t.to_string())
-                    .collect(),
-            }),
-            Call::Configure(r) => {
-                let config = wire::from_doc_or_empty(r.config.as_ref()).map_err(Error::from)?;
-                // The engine's first Configure of a provider a program
-                // configures says so; the settings come at the second.
-                if config.get("deferred") == Some(&Json::Bool(true)) {
-                    return Ok(Reply::Configure(pb::ConfigureResponse::default()));
-                }
-                let settings = config.get("settings").cloned().unwrap_or_else(|| json!({}));
-                let (p, account) = P::configure(&settings)?;
-                *self.provider.lock().unwrap_or_else(|e| e.into_inner()) = Some(p);
-                Reply::Configure(pb::ConfigureResponse {
-                    account,
-                    notes: Vec::new(),
-                })
-            }
-            Call::Schema(r) => Reply::Schema(pb::SchemaResponse {
-                facts: wire::schema_facts(&self.schema, &r).map_err(Error::from)?,
-                externs: self
-                    .schema
-                    .externs
-                    .values()
-                    .map(|e| pb::ExternDecl {
-                        pred: e.name.clone(),
-                        arity: e.args.len() as u32,
-                        input: e.args.iter().map(|a| a.input).collect(),
-                    })
-                    .collect(),
-                examples: self.examples.clone(),
-                ..pb::SchemaResponse::default()
-            }),
+            Call::Handshake(_) => Reply::Handshake(self.handshake()),
+            Call::Configure(r) => Reply::Configure(self.configure(r)?),
+            Call::Schema(r) => Reply::Schema(self.schema_reply(r)?),
             Call::Query(r) => Reply::Query(self.query(r)?),
-            Call::Read(r) => {
-                let k = self.kind(&r.r#type)?;
-                Reply::Read(match self.with(|p| k.read(p, &r.remote))? {
-                    Some(j) => {
-                        let (attrs, computed) = self.split(&r.r#type, &r.name, j);
-                        pb::ReadResponse {
-                            found: true,
-                            attrs: Some(wire::doc(&attrs)),
-                            computed: Some(wire::doc(&computed)),
-                        }
-                    }
-                    None => pb::ReadResponse::default(),
-                })
-            }
+            Call::Read(r) => Reply::Read(self.read(r)?),
             Call::Plan(r) => Reply::Plan(self.plan(r)?),
             Call::Apply(r) => Reply::Apply(self.apply(r, progress)?),
-            Call::Import(r) => {
-                let k = self.kind(&r.r#type)?;
-                Reply::Import(match self.with(|p| k.read(p, &r.remote))? {
-                    Some(j) => {
-                        let (attrs, computed) = self.split(&r.r#type, &r.remote, j);
-                        pb::ImportResponse {
-                            found: true,
-                            r#type: r.r#type,
-                            name: r.remote,
-                            attrs: Some(wire::doc(&attrs)),
-                            computed: Some(wire::doc(&computed)),
-                        }
-                    }
-                    None => pb::ImportResponse::default(),
-                })
-            }
-            // The engine's call alone, under the deployment's lease.
-            Call::Reveal(r) => {
-                let h = r.held.unwrap_or_default();
-                if r.lease.is_empty() {
-                    return Err(Error::Refused(format!(
-                        "reveal {} {}#{}: refused without the deployment's lease (a reveal \
-                         is the engine's call)",
-                        h.r#type, h.remote, h.path
-                    )));
-                }
-                Reply::Reveal(pb::RevealResponse {
-                    value: self.with(|p| p.reveal(&h))?,
-                })
-            }
+            Call::Import(r) => Reply::Import(self.import(r)?),
+            Call::Reveal(r) => Reply::Reveal(self.reveal(r)?),
             Call::Health(r) => Reply::Health(self.health(r)?),
+        })
+    }
+
+    fn handshake(&self) -> pb::HandshakeResponse {
+        pb::HandshakeResponse {
+            protocol_version: VERSION,
+            name: P::NAME.to_string(),
+            // `offline`: its Plan with no credentials is its schema's,
+            // as with them but for `Lifecycle::check` (R-188).
+            capabilities: match P::KEEP {
+                true => vec!["resource", "keep", "offline"],
+                false => vec!["resource", "offline"],
+            }
+            .into_iter()
+            .map(String::from)
+            .collect(),
+            version: P::VERSION.to_string(),
+            settings: Vec::new(),
+            health: self
+                .kinds
+                .iter()
+                .filter(|(_, k)| k.answers_health())
+                .map(|(t, _)| t.to_string())
+                .collect(),
+        }
+    }
+
+    fn configure(&self, r: pb::ConfigureRequest) -> Result<pb::ConfigureResponse> {
+        let config = wire::from_doc_or_empty(r.config.as_ref()).map_err(Error::from)?;
+        // The engine's first Configure of a provider a program
+        // configures says so; the settings come at the second.
+        if config.get("deferred") == Some(&Json::Bool(true)) {
+            return Ok(pb::ConfigureResponse::default());
+        }
+        let settings = config.get("settings").cloned().unwrap_or_else(|| json!({}));
+        let (p, account) = P::configure(&settings)?;
+        *self.provider.lock().unwrap_or_else(|e| e.into_inner()) = Some(p);
+        Ok(pb::ConfigureResponse {
+            account,
+            notes: Vec::new(),
+        })
+    }
+
+    fn schema_reply(&self, r: pb::SchemaRequest) -> Result<pb::SchemaResponse> {
+        Ok(pb::SchemaResponse {
+            facts: wire::schema_facts(&self.schema, &r).map_err(Error::from)?,
+            externs: self
+                .schema
+                .externs
+                .values()
+                .map(|e| pb::ExternDecl {
+                    pred: e.name.clone(),
+                    arity: e.args.len() as u32,
+                    input: e.args.iter().map(|a| a.input).collect(),
+                })
+                .collect(),
+            examples: self.examples.clone(),
+            ..pb::SchemaResponse::default()
+        })
+    }
+
+    fn read(&self, r: pb::ReadRequest) -> Result<pb::ReadResponse> {
+        let k = self.kind(&r.r#type)?;
+        Ok(match self.with(|p| k.read(p, &r.remote))? {
+            Some(j) => {
+                let (attrs, computed) = self.split(&r.r#type, &r.name, j);
+                pb::ReadResponse {
+                    found: true,
+                    attrs: Some(wire::doc(&attrs)),
+                    computed: Some(wire::doc(&computed)),
+                }
+            }
+            None => pb::ReadResponse::default(),
+        })
+    }
+
+    fn import(&self, r: pb::ImportRequest) -> Result<pb::ImportResponse> {
+        let k = self.kind(&r.r#type)?;
+        Ok(match self.with(|p| k.read(p, &r.remote))? {
+            Some(j) => {
+                let (attrs, computed) = self.split(&r.r#type, &r.remote, j);
+                pb::ImportResponse {
+                    found: true,
+                    r#type: r.r#type,
+                    name: r.remote,
+                    attrs: Some(wire::doc(&attrs)),
+                    computed: Some(wire::doc(&computed)),
+                }
+            }
+            None => pb::ImportResponse::default(),
+        })
+    }
+
+    /// The engine's call alone, under the deployment's lease.
+    fn reveal(&self, r: pb::RevealRequest) -> Result<pb::RevealResponse> {
+        let h = r.held.unwrap_or_default();
+        if r.lease.is_empty() {
+            return Err(Error::Refused(format!(
+                "reveal {} {}#{}: refused without the deployment's lease (a reveal \
+                 is the engine's call)",
+                h.r#type, h.remote, h.path
+            )));
+        }
+        Ok(pb::RevealResponse {
+            value: self.with(|p| p.reveal(&h))?,
         })
     }
 
