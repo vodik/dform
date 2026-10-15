@@ -358,110 +358,134 @@ pub fn is_function_name(name: &str) -> bool {
 /// What a program writes for a function std no longer has (R-133,
 /// R-134): there are no constructors, a type's parts are its fields.
 fn gone(name: &str) -> Option<String> {
-    // The type, a name for a value of it, an example and its fields.
-    let typed = |ty: &str, x: &str, example: &str, fields: &[&str]| {
-        let fields = if fields.is_empty() {
-            String::new()
-        } else {
-            let fs: Vec<String> = fields.iter().map(|f| format!("`{x}.{f}`")).collect();
-            format!("; its parts are fields, {}", fs.join(", "))
-        };
-        format!(
-            "there are no constructors: a string where {} is wanted is read as one, a \
-             parameter, an attribute or an input typed `{ty}`, or a typed `let`, `let {x}: \
-             {ty} = {example}`{fields}",
-            article(ty)
-        )
-    };
+    constructor(name)
+        .or_else(|| renamed(name).map(str::to_string))
+        .or_else(|| url(name))
+}
+
+/// The help for a constructor std no longer has: a type's values are
+/// strings read as one where it is wanted, its parts are fields.
+fn constructor(name: &str) -> Option<String> {
     Some(match name {
-        "inet" => typed("inet", "n", "\"10.0.0.0/16\"", &["addr", "bits"]),
-        "ip" => typed("ip", "a", "\"10.0.0.1\"", &[]),
-        "iprange" => typed(
+        "inet" => no_constructor("inet", "n", "\"10.0.0.0/16\"", &["addr", "bits"]),
+        "ip" => no_constructor("ip", "a", "\"10.0.0.1\"", &[]),
+        "iprange" => no_constructor(
             "range(ip)",
             "r",
             "\"10.0.0.10..=10.0.0.99\"",
             &["start", "end", "len"],
         ),
-        "time" | "time.parse" => typed("time", "t", "\"2026-10-02T09:00[Europe/Paris]\"", &[]),
-        "duration" | "duration.parse" => typed("duration", "d", "30m", &[]),
-        "bytes" => typed("bytes", "b", "\"512Mi\"", &[]),
-        "cpu" => typed("cpu", "c", "500m", &[]),
-        "uri.parse" => typed(
+        "time" | "time.parse" => {
+            no_constructor("time", "t", "\"2026-10-02T09:00[Europe/Paris]\"", &[])
+        }
+        "duration" | "duration.parse" => no_constructor("duration", "d", "30m", &[]),
+        "bytes" => no_constructor("bytes", "b", "\"512Mi\"", &[]),
+        "cpu" => no_constructor("cpu", "c", "500m", &[]),
+        "uri.parse" => no_constructor(
             "uri",
             "u",
             "\"https://example.com\"",
             &["scheme", "host", "port", "path", "query", "fragment"],
         ),
-        "oci" | "oci.parse" => typed(
+        "oci" | "oci.parse" => no_constructor(
             "oci",
             "r",
             "\"ghcr.io/o/app:1\"",
             &["registry", "repository", "tag", "digest"],
         ),
-        "semver" | "semver.parse" => typed(
+        "semver" | "semver.parse" => no_constructor(
             "semver",
             "v",
             "\"1.2.3\"",
             &["major", "minor", "patch", "pre"],
         ),
-        "inet.prefix_len" => "a network's prefix length is its field `n.bits`".to_string(),
+        _ => return None,
+    })
+}
+
+/// There are no constructors: the type `ty`, a name `x` for a value of
+/// it, an example, and its fields.
+fn no_constructor(ty: &str, x: &str, example: &str, fields: &[&str]) -> String {
+    let fields = if fields.is_empty() {
+        String::new()
+    } else {
+        let fs: Vec<String> = fields.iter().map(|f| format!("`{x}.{f}`")).collect();
+        format!("; its parts are fields, {}", fs.join(", "))
+    };
+    format!(
+        "there are no constructors: a string where {} is wanted is read as one, a \
+         parameter, an attribute or an input typed `{ty}`, or a typed `let`, `let {x}: \
+         {ty} = {example}`{fields}",
+        article(ty)
+    )
+}
+
+/// What a function std renamed or made an operator is written as now.
+fn renamed(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "inet.prefix_len" => "a network's prefix length is its field `n.bits`",
         // No prelude (R-155): every function is named by its package.
-        "int" => "an int from a float is named by how it rounds, `int.trunc(f)`, \
-                  `int.round(f)`, `int.floor(f)`, `int.ceil(f)`; from a string's text, a typed \
-                  position reads it, `let n: int = s`"
-            .to_string(),
-        "float" => "an int is a float where one is wanted, `let f: float = n`; a string's text \
-                    likewise, `let f: float = s`"
-            .to_string(),
-        "format" => "a template is `str.format(\"%s-%s\", a, b)`, or an interpolation, \
-                     `\"${a}-${b}\"`"
-            .to_string(),
-        "to" => "a quantity in a unit is `quantity.to(q, unit)`".to_string(),
-        "declassify" => "a secret leaves on purpose by `secret.declassify(v, reason)`".to_string(),
-        "scoped" => "a name in a used module or a copy is `m.x`, `copy.x`".to_string(),
+        "int" => {
+            "an int from a float is named by how it rounds, `int.trunc(f)`, \
+             `int.round(f)`, `int.floor(f)`, `int.ceil(f)`; from a string's text, a typed \
+             position reads it, `let n: int = s`"
+        }
+        "float" => {
+            "an int is a float where one is wanted, `let f: float = n`; a string's text \
+             likewise, `let f: float = s`"
+        }
+        "format" => {
+            "a template is `str.format(\"%s-%s\", a, b)`, or an interpolation, \
+             `\"${a}-${b}\"`"
+        }
+        "to" => "a quantity in a unit is `quantity.to(q, unit)`",
+        "declassify" => "a secret leaves on purpose by `secret.declassify(v, reason)`",
+        "scoped" => "a name in a used module or a copy is `m.x`, `copy.x`",
         // Membership is the operator `in` (R-155).
-        "inet.contains" => "an address in a network is `a in net`".to_string(),
-        "list.contains" => "a value in a list is `v in xs`".to_string(),
-        "str.contains" => "a substring of a string is `\"x\" in s`".to_string(),
+        "inet.contains" => "an address in a network is `a in net`",
+        "list.contains" => "a value in a list is `v in xs`",
+        "str.contains" => "a substring of a string is `\"x\" in s`",
         // Operators where a type has them (R-134).
-        "time.add" => "a time moves by a duration with `t + d` (and `t - d`)".to_string(),
-        "time.until" => "the duration from `a` to `b` is `b - a`".to_string(),
-        "time.before" => "a time before another is `a < b`".to_string(),
-        "semver.compare" => "versions compare with `<`, `==` and `>`: `a < b`".to_string(),
+        "time.add" => "a time moves by a duration with `t + d` (and `t - d`)",
+        "time.until" => "the duration from `a` to `b` is `b - a`",
+        "time.before" => "a time before another is `a < b`",
+        "semver.compare" => "versions compare with `<`, `==` and `>`: `a < b`",
         // One name per idea (R-134).
         "len" | "list.len" | "str.len" => {
-            "the length of a list, an object or a string is its field `x.len`".to_string()
+            "the length of a list, an object or a string is its field `x.len`"
         }
         "bytes.to" | "cpu.to" | "duration.total" => {
             "a quantity in a unit is `quantity.to(q, unit)`, the unit as its literals write it \
              (`\"Gi\"`, `\"m\"`, `\"h\"`)"
-                .to_string()
         }
-        "inet.addr" => "a network's `n`th usable host is `inet.host(net, n)`, its base address \
-                        the field `net.addr`"
-            .to_string(),
-        "hash.short" => "a short digest is `str.slice(hash.sha256(s), 0, n)`".to_string(),
-        "random.bytes" => {
-            "base64 text of derived bytes is `random.base64(key, length)`".to_string()
+        "inet.addr" => {
+            "a network's `n`th usable host is `inet.host(net, n)`, its base address \
+             the field `net.addr`"
         }
+        "hash.short" => "a short digest is `str.slice(hash.sha256(s), 0, n)`",
+        "random.bytes" => "base64 text of derived bytes is `random.base64(key, length)`",
         "string" | "str" => {
-            "a value's text is an interpolation, `\"${x}\"`; there are no constructors".to_string()
-        }
-        // R-134: a uri is RFC 3986's, not a browser's url.
-        n if n == "url" || n.starts_with("url.") => {
-            let f = n.strip_prefix("url.").unwrap_or("");
-            format!(
-                "the type and its package are `uri` (RFC 3986's generic syntax){}; a string \
-                 where a uri is wanted is read as one, `let u: uri = \"https://example.com\"`",
-                match f {
-                    "" | "parse" => String::new(),
-                    "encode" => ": `uri.escape`".to_string(),
-                    f => format!(": `uri.{f}`"),
-                }
-            )
+            "a value's text is an interpolation, `\"${x}\"`; there are no constructors"
         }
         _ => return None,
     })
+}
+
+/// A `url` or `url.*` (R-134): a uri is RFC 3986's, not a browser's url.
+fn url(name: &str) -> Option<String> {
+    let f = match name {
+        "url" => "",
+        n => n.strip_prefix("url.")?,
+    };
+    Some(format!(
+        "the type and its package are `uri` (RFC 3986's generic syntax){}; a string \
+         where a uri is wanted is read as one, `let u: uri = \"https://example.com\"`",
+        match f {
+            "" | "parse" => String::new(),
+            "encode" => ": `uri.escape`".to_string(),
+            f => format!(": `uri.{f}`"),
+        }
+    ))
 }
 
 /// `an inet`, `a time`.
@@ -595,52 +619,63 @@ pub fn parse(file: &str, text: &str) -> Result<Vec<Function>, String> {
         }
         // A wrapped list's last parameter keeps its comma.
         let sig = sig.replace(", )", ")");
-        let mut f = function(&sig).map_err(err)?;
-        f.internal = internal;
-        // The lowering's own are bare and written by no program; every
-        // other function is named by its package (R-155).
-        if package == LOWERING && !internal {
-            return Err(err(format!(
-                "{} is the lowering's: a function a program calls is named by its \
-                 package, in std/*.df",
-                f.name
-            )));
-        }
-        f.name = if package == LOWERING {
-            f.name
-        } else {
-            format!("{package}.{}", f.name)
-        };
-        f.package = package.clone();
+        let mut f = declared(&sig, internal, package).map_err(err)?;
         f.file = file.to_string();
         f.line = line;
-        let mut summary = Vec::new();
-        for d in doc.drain(..) {
-            match d.strip_prefix("example:") {
-                Some(e) => f.example = e.trim().to_string(),
-                None => summary.push(d),
-            }
-        }
-        f.summary = summary.join(" ");
-        let params: Vec<String> = f
-            .params
-            .iter()
-            .map(Param::text)
-            .chain(f.variadic.then(|| "...".to_string()))
-            .collect();
-        f.signature = format!(
-            "{}({}) -> {}{}",
-            f.name,
-            params.join(", "),
-            f.ret,
-            if f.partial { "?" } else { "" }
-        );
+        f.document(doc.drain(..));
         out.push(f);
     }
     if package.is_none() {
         return Err(format!("{file}: no `package` line"));
     }
     Ok(out)
+}
+
+/// The function the signature `sig` declares in `package` (`internal`:
+/// written by no program): the lowering's own are bare and internal;
+/// every other function is named by its package (R-155).
+fn declared(sig: &str, internal: bool, package: &str) -> Result<Function, String> {
+    let mut f = function(sig)?;
+    f.internal = internal;
+    if package == LOWERING && !internal {
+        return Err(format!(
+            "{} is the lowering's: a function a program calls is named by its \
+             package, in std/*.df",
+            f.name
+        ));
+    }
+    if package != LOWERING {
+        f.name = format!("{package}.{}", f.name);
+    }
+    f.package = package.to_string();
+    let params: Vec<String> = f
+        .params
+        .iter()
+        .map(Param::text)
+        .chain(f.variadic.then(|| "...".to_string()))
+        .collect();
+    f.signature = format!(
+        "{}({}) -> {}{}",
+        f.name,
+        params.join(", "),
+        f.ret,
+        if f.partial { "?" } else { "" }
+    );
+    Ok(f)
+}
+
+impl Function {
+    /// Its doc comment's lines, `doc`: its summary, and its example.
+    fn document<'d>(&mut self, doc: impl Iterator<Item = &'d str>) {
+        let mut summary = Vec::new();
+        for d in doc {
+            match d.strip_prefix("example:") {
+                Some(e) => self.example = e.trim().to_string(),
+                None => summary.push(d),
+            }
+        }
+        self.summary = summary.join(" ");
+    }
 }
 
 /// `name(p: T, ...) -> T[?] [flag, ...]`, the part after `fn `. Shared
@@ -665,36 +700,11 @@ pub(crate) fn function(sig: &str) -> Result<Function, String> {
             variadic = true;
             continue;
         }
-        let (n, t) = p
-            .split_once(':')
-            .ok_or_else(|| format!("parameter `{p}` has no type"))?;
-        let (n, t) = (n.trim(), t.trim());
-        let (n, optional) = match n.strip_suffix('?') {
-            Some(n) => (n, true),
-            None => (n, false),
-        };
-        let (t, default) = match t.split_once('=') {
-            Some((t, d)) if optional => (t.trim(), Some(d.trim().to_string())),
-            Some(_) => return Err(format!("`{n}` has a default: only an optional one may")),
-            None => (t, None),
-        };
-        if !crate::lexer::is_word(n) || t.is_empty() {
-            return Err(format!("`{p}` is not `name: type`"));
-        }
-        if !optional && params.iter().any(|p: &Param| p.optional) {
+        let param = Param::parse(p)?;
+        if !param.optional && params.iter().any(|p: &Param| p.optional) {
             return Err(format!(
-                "`{n}` follows an optional parameter: only the last ones may be left out"
-            ));
-        }
-        let param = Param {
-            name: n.to_string(),
-            ty: t.to_string(),
-            optional,
-            default,
-        };
-        if param.default.is_some() && param.default_value().is_none() {
-            return Err(format!(
-                "`{n}`'s default is an int, a bool or a quoted string"
+                "`{}` follows an optional parameter: only the last ones may be left out",
+                param.name
             ));
         }
         params.push(param);
@@ -715,36 +725,80 @@ pub(crate) fn function(sig: &str) -> Result<Function, String> {
     if partial {
         rest = rest[1..].trim();
     }
-    let (mut forwards, mut forwards_nulls, mut coeffect) = (false, false, false);
-    for flag in rest.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-        match flag.split_whitespace().collect::<Vec<_>>().as_slice() {
-            ["forwards"] => forwards = true,
-            ["forwards", "nulls"] => forwards_nulls = true,
-            ["reads"] => coeffect = true,
-            _ => {
-                return Err(format!(
-                    "unknown flag `{flag}` (`forwards`, `forwards nulls`, `reads`)"
-                ));
-            }
-        }
-    }
-    Ok(Function {
+    let mut f = Function {
         name: name.to_string(),
         package: String::new(),
         params,
         variadic,
         ret,
         partial,
-        forwards,
-        forwards_nulls,
+        forwards: false,
+        forwards_nulls: false,
         internal: false,
-        coeffect,
+        coeffect: false,
         summary: String::new(),
         example: String::new(),
         signature: String::new(),
         file: String::new(),
         line: 0,
-    })
+    };
+    for flag in rest.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        f.flag(flag)?;
+    }
+    Ok(f)
+}
+
+impl Function {
+    /// The flag `flag` after its result type: `forwards`, `forwards
+    /// nulls` or `reads`.
+    fn flag(&mut self, flag: &str) -> Result<(), String> {
+        match flag.split_whitespace().collect::<Vec<_>>().as_slice() {
+            ["forwards"] => self.forwards = true,
+            ["forwards", "nulls"] => self.forwards_nulls = true,
+            ["reads"] => self.coeffect = true,
+            _ => {
+                return Err(format!(
+                    "unknown flag `{flag}` (`forwards`, `forwards nulls`, `reads`)"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Param {
+    /// The parameter `p`, `name[?]: type[ = default]`: only an optional
+    /// one has a default, an int, a bool or a quoted string.
+    fn parse(p: &str) -> Result<Param, String> {
+        let (n, t) = p
+            .split_once(':')
+            .ok_or_else(|| format!("parameter `{p}` has no type"))?;
+        let (n, t) = (n.trim(), t.trim());
+        let (n, optional) = match n.strip_suffix('?') {
+            Some(n) => (n, true),
+            None => (n, false),
+        };
+        let (t, default) = match t.split_once('=') {
+            Some((t, d)) if optional => (t.trim(), Some(d.trim().to_string())),
+            Some(_) => return Err(format!("`{n}` has a default: only an optional one may")),
+            None => (t, None),
+        };
+        if !crate::lexer::is_word(n) || t.is_empty() {
+            return Err(format!("`{p}` is not `name: type`"));
+        }
+        let param = Param {
+            name: n.to_string(),
+            ty: t.to_string(),
+            optional,
+            default,
+        };
+        if param.default.is_some() && param.default_value().is_none() {
+            return Err(format!(
+                "`{n}`'s default is an int, a bool or a quoted string"
+            ));
+        }
+        Ok(param)
+    }
 }
 
 fn matching(s: &str, open: usize) -> Option<usize> {
