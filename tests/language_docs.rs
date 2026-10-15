@@ -170,3 +170,29 @@ fn dform_doc_renders_every_documented_item() {
     assert!(md.contains("\n## network.df\n"), "{md}");
     assert!(md.contains("### input `vpc.vpc_net`"), "{md}");
 }
+
+/// A file's first `#|` lines with a blank line below them document the
+/// module, not its first statement: `dform doc` says them under the
+/// file's heading, and the statement keeps its own.
+#[test]
+fn dform_doc_renders_a_modules_own_doc() {
+    let s = Scratch::project("docs-module");
+    s.write(
+        "backups.df",
+        "#| Backups by restic, one job per volume.\n#| owner: ops\n\n\
+         #| Where the jobs run.\ninput namespace: string\n",
+    );
+    s.write(
+        "stacks/main.df",
+        "use fake\nuse backups { namespace = \"apps\" }\n",
+    );
+    let r = s.run(&["doc"]).success();
+    assert!(
+        r.stdout.contains(
+            "\n## backups.df\n\nBackups by restic, one job per volume.\n\n- **owner**: ops\n\n\
+             ### input `namespace`\n\n```dform\ninput namespace: string\n```\n\nWhere the jobs run.\n"
+        ),
+        "{}",
+        r.stdout
+    );
+}

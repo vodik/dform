@@ -486,7 +486,7 @@ impl Hovered<'_> {
             {
                 joined(documented.map(item_md), signature_md(p, name))
             }
-            Symbol::Module(m) => module_md(files, m),
+            Symbol::Module(m) => module_md(files, m).or_else(|| used_md(self.d, files, &self.t)),
             Symbol::Instance(m, _) => joined(documented.map(item_md), module_md(files, m)),
             _ => documented.map(item_md),
         }
@@ -647,32 +647,12 @@ fn statement(t: &SyntaxToken) -> Option<SyntaxNode> {
         .find(|n| doc::item(n).is_some() || n.kind() == LET)
 }
 
-/// A doc comment's description and pairs.
-fn pairs_md(pairs: &[(String, String)]) -> String {
-    let mut out = String::new();
-    for (k, v) in pairs {
-        if k == "description" {
-            out.push_str(&format!("\n{v}\n"));
-        }
-    }
-    let rest: Vec<String> = pairs
-        .iter()
-        .filter(|(k, _)| k != "description")
-        .map(|(k, v)| format!("- **{k}**: {v}\n"))
-        .collect();
-    if !rest.is_empty() {
-        out.push('\n');
-        out.push_str(&rest.concat());
-    }
-    out
-}
-
 /// A statement's first line (an alias: its definition), and its doc
 /// comment.
 fn item_md(n: &SyntaxNode) -> String {
     let mut out = format!("```dform\n{}\n```\n", doc::header(n));
     if let Some((_, pairs)) = doc::comment(n) {
-        out.push_str(&pairs_md(&pairs));
+        out.push_str(&doc::pairs_text(&pairs));
     }
     out
 }
@@ -685,17 +665,19 @@ fn module_node(files: &[Parsed], m: &str) -> Option<SyntaxNode> {
     })
 }
 
-/// A module's statements of `kind` (`INPUT`, `OUTPUT_DECL`) by name, in
-/// order: an output declared (`output k: T`) and defined (`output k = t`)
-/// is one, its typed line shown, its doc comment from either.
-fn members(module: &SyntaxNode, kind: SyntaxKind) -> Vec<(String, String, Option<String>)> {
-    let mut out: Vec<(String, String, Option<String>)> = Vec::new();
-    let Some(block) = module
+/// A component's `{ }` block, its statements.
+fn component_block(component: &SyntaxNode) -> Option<SyntaxNode> {
+    component
         .children()
         .find(|c| c.kind() == SyntaxKind::STMT_BLOCK)
-    else {
-        return out;
-    };
+}
+
+/// A module's statements of `kind` (`INPUT`, `OUTPUT_DECL`) by name, in
+/// order, from `block` (a component's block, or a file's tree): an output
+/// declared (`output k: T`) and defined (`output k = t`) is one, its typed
+/// line shown, its doc comment from either.
+fn members(block: &SyntaxNode, kind: SyntaxKind) -> Vec<(String, String, Option<String>)> {
+    let mut out: Vec<(String, String, Option<String>)> = Vec::new();
     for n in block.children().filter(|n| n.kind() == kind) {
         let Some((_, name)) = doc::item(&n) else {
             continue;
@@ -727,11 +709,40 @@ fn members(module: &SyntaxNode, kind: SyntaxKind) -> Vec<(String, String, Option
 fn module_md(files: &[Parsed], m: &str) -> Option<String> {
     let module = module_node(files, m)?;
     let mut out = item_md(&module);
+    out.push_str(&interface_md(component_block(&module).as_ref()));
+    Some(out)
+}
+
+/// The file module a `use` at `t` names (`use backups`): the statement,
+/// the file's own doc comment (its first `#|` lines, a blank line below
+/// them), then its inputs and outputs.
+fn used_md(d: &names::Decls, files: &[Parsed], t: &SyntaxToken) -> Option<String> {
+    let stmt = t
+        .parent()?
+        .ancestors()
+        .find(|n| n.kind() == SyntaxKind::USE)?;
+    let path = d.used_file(&stmt)?;
+    let file = files.iter().find(|f| f.path == path)?;
+    let mut out = format!("```dform\n{}\n```\n", doc::header(&stmt));
+    if let Some((_, pairs)) = doc::module(&file.tree) {
+        out.push_str(&doc::pairs_text(&pairs));
+    }
+    out.push_str(&interface_md(Some(&file.tree)));
+    Some(out)
+}
+
+/// A module's inputs and outputs, each with its description, from
+/// `block`, its statements.
+fn interface_md(block: Option<&SyntaxNode>) -> String {
+    let mut out = String::new();
+    let Some(block) = block else {
+        return out;
+    };
     for (kind, title) in [
         (SyntaxKind::INPUT, "inputs"),
         (SyntaxKind::OUTPUT_DECL, "outputs"),
     ] {
-        let ms = members(&module, kind);
+        let ms = members(block, kind);
         if ms.is_empty() {
             continue;
         }
@@ -743,7 +754,7 @@ fn module_md(files: &[Parsed], m: &str) -> Option<String> {
             }
         }
     }
-    Some(out)
+    out
 }
 
 /// An output read through its instance, `n.k` or `c[e].k`: the output's
@@ -773,7 +784,8 @@ fn output_md(files: &[Parsed], t: &SyntaxToken) -> Option<String> {
         return None;
     }
     let module = module_node(files, &m)?;
-    let (_, header, description) = members(&module, SyntaxKind::OUTPUT_DECL)
+    let block = component_block(&module)?;
+    let (_, header, description) = members(&block, SyntaxKind::OUTPUT_DECL)
         .into_iter()
         .find(|(n, _, _)| n == k)?;
     let mut out = format!("```dform\n{header}\n```\n\noutput of component `{m}`\n");

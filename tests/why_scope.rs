@@ -218,3 +218,37 @@ fn hover_on_a_modules_input_follows_it_into_the_use() {
     assert!(text.contains("stacks/apps.df:4"), "{text}");
     c.shutdown();
 }
+
+/// A module's own doc comment, its file's first `#|` lines with a blank
+/// line below them, is what a hover on its `use` shows, then its inputs
+/// with theirs; the `#|` line directly above the first input stays the
+/// input's.
+#[test]
+fn hover_on_a_use_shows_the_modules_doc() {
+    let s = project();
+    s.write(
+        "backups.df",
+        &format!(
+            "#| Backups by restic, one job per volume.\n#| owner: ops\n\n#| Where the jobs \
+             run.\n{BACKUPS}"
+        ),
+    );
+    let root = std::fs::canonicalize(&s.dir).unwrap();
+    let file = root.join("stacks/apps.df");
+    let mut c = lsp_client::Client::start(&root, serde_json::json!({}));
+    c.open(&file);
+    let hover = c.at(
+        "textDocument/hover",
+        &file,
+        lsp_client::find(&file, "use backups", 5),
+    );
+    let text = hover["contents"]["value"].as_str().unwrap_or_default();
+    assert!(
+        text.contains("use backups { namespace = apps }")
+            && text.contains("\nBackups by restic, one job per volume.\n")
+            && text.contains("- **owner**: ops\n")
+            && text.contains("- `input namespace: k8s.namespace`: Where the jobs run.\n"),
+        "{text}"
+    );
+    c.shutdown();
+}

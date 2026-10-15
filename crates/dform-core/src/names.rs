@@ -221,6 +221,14 @@ fn module_path(root: &Path, file: &Path) -> Option<String> {
 impl Decls {
     /// The declarations of a project's files under `root`, a module
     /// file's its own (R-65).
+    /// The project file a `use` statement names, by its module path
+    /// (`use backups` is backups.df); `None` for std, a provider, a
+    /// package's module.
+    pub fn used_file(&self, use_stmt: &SyntaxNode) -> Option<&Path> {
+        let (path, _) = crate::syntax::resolve::use_parts(use_stmt);
+        self.files.get(&path).map(PathBuf::as_path)
+    }
+
     pub fn of_files(root: &Path, files: &[Parsed]) -> Decls {
         let mut d = Decls::default();
         let named = std::fs::read_to_string(root.join(crate::project::MANIFEST))

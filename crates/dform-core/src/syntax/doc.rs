@@ -3,7 +3,8 @@
 //! resource. `#| key: value` is a pair, any other `#|` line is
 //! part of the item's `description`. They lower to `doc(Kind, Name, Key,
 //! Value)` facts; the language server shows them and `dform doc` renders
-//! them.
+//! them. The first `#|` lines of a file, a blank line below them, are
+//! the module's own ([`module`]).
 
 use super::SyntaxKind::*;
 use super::{SyntaxNode, SyntaxToken, tokens};
@@ -68,6 +69,30 @@ pub fn comment(n: &SyntaxNode) -> Option<(TextRange, Vec<(String, String)>)> {
     let (first, last) = (lines.last()?, lines.first()?);
     let range = TextRange::new(first.text_range().start(), last.text_range().end());
     lines.reverse();
+    Some((range, pairs(lines.iter().map(|t| t.text()))))
+}
+
+/// The module's doc comment: the first `#|` lines of the file, before its
+/// first statement with only comments and blank lines above them, and a
+/// blank line (or the file's end) below them, which keeps them from the
+/// statement under them (`//!` to a statement's `///`).
+pub fn module(root: &SyntaxNode) -> Option<(TextRange, Vec<(String, String)>)> {
+    let mut lines: Vec<SyntaxToken> = Vec::new();
+    let mut t = root.first_token();
+    while let Some(tok) = t {
+        match tok.kind() {
+            WHITESPACE if !lines.is_empty() && tok.text().matches('\n').count() > 1 => break,
+            WHITESPACE => {}
+            COMMENT if tok.text().starts_with("#|") => lines.push(tok.clone()),
+            // A plain comment above the block; below it, the block is not
+            // the file's first.
+            COMMENT if lines.is_empty() => {}
+            _ => return None,
+        }
+        t = tok.next_token();
+    }
+    let (first, last) = (lines.first()?, lines.last()?);
+    let range = TextRange::new(first.text_range().start(), last.text_range().end());
     Some((range, pairs(lines.iter().map(|t| t.text()))))
 }
 
@@ -250,10 +275,14 @@ pub fn markdown(title: &str, files: &[(String, SyntaxNode)]) -> String {
     let mut out = format!("# {title}\n");
     for (name, root) in files {
         let docs = collect(root);
-        if docs.is_empty() {
+        let own = module(root).map(|(_, pairs)| pairs);
+        if docs.is_empty() && own.is_none() {
             continue;
         }
         out.push_str(&format!("\n## {name}\n"));
+        if let Some(pairs) = own {
+            out.push_str(&pairs_text(&pairs));
+        }
         for d in docs {
             out.push_str(&format!(
                 "\n### {} `{}`\n\n```dform\n{}\n```\n",
@@ -261,17 +290,24 @@ pub fn markdown(title: &str, files: &[(String, SyntaxNode)]) -> String {
                 d.name,
                 header(&d.node)
             ));
-            if let Some(text) = d.get("description") {
-                out.push_str(&format!("\n{text}\n"));
-            }
-            let rest: Vec<&(String, String)> =
-                d.pairs.iter().filter(|(k, _)| k != "description").collect();
-            if !rest.is_empty() {
-                out.push('\n');
-                for (k, v) in rest {
-                    out.push_str(&format!("- **{k}**: {v}\n"));
-                }
-            }
+            out.push_str(&pairs_text(&d.pairs));
+        }
+    }
+    out
+}
+
+/// A doc comment's pairs as Markdown: its description, then each other
+/// pair as an item.
+pub fn pairs_text(pairs: &[(String, String)]) -> String {
+    let mut out = String::new();
+    if let Some((_, text)) = pairs.iter().find(|(k, _)| k == "description") {
+        out.push_str(&format!("\n{text}\n"));
+    }
+    let rest: Vec<&(String, String)> = pairs.iter().filter(|(k, _)| k != "description").collect();
+    if !rest.is_empty() {
+        out.push('\n');
+        for (k, v) in rest {
+            out.push_str(&format!("- **{k}**: {v}\n"));
         }
     }
     out
@@ -371,6 +407,42 @@ mod tests {
                     kv(&[("description", "An extern.")])
                 ),
             ]
+        );
+    }
+
+    /// The file's first `#|` lines with a blank line below them are the
+    /// module's; without it they are the first statement's, as before.
+    #[test]
+    fn a_doc_comment_above_a_blank_line_at_the_top_is_the_modules() {
+        let module_of = |src: &str| {
+            let root = super::super::parser::parse(src).syntax();
+            module(&root).map(|(_, pairs)| pairs)
+        };
+        let src = "# license\n\n#| Backups by restic.\n#| owner: ops\n\n#| The namespace.\ninput ns: string\n";
+        assert_eq!(
+            module_of(src),
+            Some(kv(&[
+                ("description", "Backups by restic."),
+                ("owner", "ops")
+            ]))
+        );
+        assert_eq!(
+            docs(src),
+            vec![(
+                "input".into(),
+                "ns".into(),
+                kv(&[("description", "The namespace.")])
+            )]
+        );
+        // No blank line: the statement's, and no module's.
+        let src = "#| The namespace.\ninput ns: string\n";
+        assert_eq!(module_of(src), None);
+        assert_eq!(docs(src).len(), 1);
+        // A file of its doc alone; a `#|` block below a statement is none.
+        assert!(module_of("#| Nothing yet.\n").is_some());
+        assert_eq!(
+            module_of("input ns: string\n\n#| Late.\n\nlet x = 1\n"),
+            None
         );
     }
 
