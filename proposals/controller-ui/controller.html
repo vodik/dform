@@ -17,7 +17,7 @@ configures k8s). A node sits where its deployment meets its instance. Each
 node carries its state at rest in words: health from `status`, its reading
 from the four sources, a hold. The plan is an overlay on the same graph,
 on when a plan exists: changed nodes lit with their mark and their state,
-what they reach drawn along the edges. This is not Argo's graph. Argo draws
+what they reach tinted with its distance in hops; no lines. This is not Argo's graph. Argo draws
 ownership, Application > Deployment > Pod, so it answers "where does it
 live" and makes you drill. This graph draws dependency and configuration,
 so it answers "what depends on what, what is wrong, and where would a
@@ -41,10 +41,13 @@ Drawing rule: at rest there are no lines at all. Position is dependency:
 within a region a node sits right of, or below, what it reads; a region
 sits right of the region that configures it; a lane sits below the lanes
 it reads. That is the whole account of lanes reading lanes, so no arc
-says it again. A node pointed at draws its own edges, what it reads and
-what reads it (a provider instance's configuring value included), over
-the faded rest, and outlines everything downstream of it. The plan
-overlay draws only its propagation. Containment is the box, never a line:
+says it again. A node clicked draws its direct edges, one hop each way,
+thin, in one muted colour, with no arrowheads (direction is position);
+a provider line only when its value or its region is the one clicked;
+everything further downstream is tinted, not lined. The plan overlay
+draws no lines: a changed node is lit with its mark, a reached node gets
+a lighter tint and its distance in hops in its corner, the region a
+change configures has its header lit. Nothing else is ever a line. Containment is the box, never a line:
 no edge for a copy's members, a namespace's objects or a Service
 selecting its pods.
 
@@ -73,7 +76,7 @@ nothing), and with the plan on its state: "pending", "applying", "applied
 09:15 (run 77)", "waiting on kubeconfig", "held: signature". A hold shows
 at rest too: it waits on a person. The `because`, a drift's who and when,
 the reach, the policy verdict and the site are the node's answer, on
-hover. A region header is the instance and its state in a word; its
+click. A region header is the instance and its state in a word; its
 settings and calls are its answer. A lane header is the deployment and
 its state in a word.
 
@@ -89,12 +92,48 @@ how long, its longest chain, its trace, its audit entries in order.
 
 Spacing scale, 4 8 12 16 24 32 px (--s1..--s6, SP in the graph): each
 step is one kind of distance, so a gap says what it separates. 4 inside a
-line and around a header's box; 8 inside a card and between a frame and
-its cards; 12 between cards in a column, and a card's gutter from its
-column's edge (24 between two cards side by side); 16 above a lane's
-first card; 24 between the page's blocks. A card is no wider than 300px
-and no narrower than 176; the last column takes what is left, so the
-graph draws at one scale on every project.
+line; 8 inside a card and between a copy's box and its cards; 16 between
+cards in a column, a card's gutter from its column's edge (32 between two
+cards side by side) and between the right column's blocks; 24 above a
+lane's first card and between the page's blocks; 32 between the graph and
+the right column. A card is 200 to 320px wide; the last column takes what
+is left, so the graph draws at one scale on every project, and grows
+taller rather than denser. The right column widens to 460px when it
+shows a resource.
+
+Copy rule: a copy (a module copy, a component copy, a namespace's
+objects) is one box, drawn once with its name once at its top left,
+spanning the rank columns its members occupy, its members in rank order
+inside it; several copies in one cell stack vertically below the cell's
+loose cards. Folded, a copy is one card. A copy is never split into two
+frames with one name (v7 drew one frame per column).
+
+Selection rule: hover does nothing. A click selects a node and the
+selection holds until the same node is clicked again, the graph's empty
+background is clicked, or Escape; clicking another node switches it.
+Edges, fades and outlines follow the selection only. Estate cards, tabs
+and attribute lines switch on click.
+
+Document rule: a selected node opens with the resource itself. Under a
+short header (health word, reading word, plan state, hold, reach) comes
+its desired document as the plan prints a resource: attribute lines,
+nested paths (spec.replicas = 1), lists keyed as the plan keys them
+(containers[name=forgejo], env[FORGEJO__...], networks[k3s.net]), secrets
+as their labels (#user_data), each with its site, and where several
+statements wrote one key, its sources ("the module's own write, over the
+policy's @default"). A reading other than in sync sits on the attribute's
+own line (drift with the live value and who and when, change, provider
+default). Then what the world returned (ids, addresses, status fields),
+marked world, then the provider's status words. An attribute's `why`
+opens under it on click (the marker turns); the resource's whole `why` is
+a closed block below. ovh-infra's documents come from its program files
+(k3s.df, forgejo.df, stacks/platform.df, config.df, policy.df); shop's
+and gke-platform's from examples/. Invented, being world values the files
+cannot hold: instance, volume and record ids, public and private
+addresses, created_at, the Deployment's uid and generation, prod's image
+digest, the PVC's volume name, the RDS endpoint and resource ids, the GKE
+endpoint. gke-platform's cluster is autopilot-private, so the example has
+no node pool; the cluster stands in for it.
 
 The plan as text, and the tabs (the first version's primary screen, kept
 behind the estate). The controller's job is to turn the program plus the
@@ -237,6 +276,14 @@ What v7 changed: estates (the estate rule above). The page went from one
 graph of every deployment to one graph per key value, an estate strip
 under the project selector, the queue tagged with estates, runs per
 estate, and lane headers without the key.
+
+What v9 changed: no arrows anywhere (the drawing rule above); ovh-infra
+opens on lab, where its plan is.
+
+What v8 changed: the document rule, the selection rule, the copy rule
+and the wider spacing above; k3s-platform's server carries only the
+attribute its plan changes, and releases and the rest of the nodes keep
+v7's answer (no document in the mock).
 -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -250,6 +297,7 @@ estate, and lane headers without the key.
   --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
   --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
   --cond:"IBM Plex Sans Condensed","IBM Plex Sans",system-ui,sans-serif;
+  --reach-soft:#F9F4E8;
   --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px;
 }
 @media (prefers-color-scheme: dark){
@@ -258,7 +306,7 @@ estate, and lane headers without the key.
     --bg:#111513; --surface:#171C1A; --sunk:#1E2421; --ink:#E1E6E2; --muted:#9BA6A0; --dim:#6F7A75; --rule:#2B3330;
     --accent:#86B7D6; --accent-soft:#1D2D37;
     --create:#6DBF8B; --update:#D8AE52; --delete:#E5806F; --approval:#D691CF; --because:#5EC3CE; --wait:#A9A4E8;
-    --create-soft:#1A2B21; --update-soft:#2D2617; --delete-soft:#33201C; --approval-soft:#2D1D2B; --wait-soft:#23223A;
+    --create-soft:#1A2B21; --reach-soft:#211D15; --update-soft:#2D2617; --delete-soft:#33201C; --approval-soft:#2D1D2B; --wait-soft:#23223A;
   }
 }
 :root[data-theme="dark"]{
@@ -266,7 +314,7 @@ estate, and lane headers without the key.
   --bg:#111513; --surface:#171C1A; --sunk:#1E2421; --ink:#E1E6E2; --muted:#9BA6A0; --dim:#6F7A75; --rule:#2B3330;
   --accent:#86B7D6; --accent-soft:#1D2D37;
   --create:#6DBF8B; --update:#D8AE52; --delete:#E5806F; --approval:#D691CF; --because:#5EC3CE; --wait:#A9A4E8;
-  --create-soft:#1A2B21; --update-soft:#2D2617; --delete-soft:#33201C; --approval-soft:#2D1D2B; --wait-soft:#23223A;
+  --create-soft:#1A2B21; --reach-soft:#211D15; --update-soft:#2D2617; --delete-soft:#33201C; --approval-soft:#2D1D2B; --wait-soft:#23223A;
 }
 *{box-sizing:border-box}
 body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--sans);padding:0 16px 32px}
@@ -396,22 +444,40 @@ p.note{margin:0;font-size:13px;color:var(--muted);max-width:70ch}
 .wf .axis{display:grid;grid-template-columns:260px 1fr 64px;gap:10px;color:var(--dim);font-size:11px}
 .wf .axis div:nth-child(2){display:flex;justify-content:space-between}
 @media (max-width:760px){.wf .row,.wf .axis{grid-template-columns:120px 1fr 52px}}
-.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:12.5px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:var(--s2) var(--s4);font-size:12.5px}
+.blk2{display:flex;flex-direction:column;gap:var(--s2);padding-top:var(--s3);border-top:1px solid var(--rule)}
+details.blk2 summary{cursor:pointer}
+.doc{display:flex;flex-direction:column;gap:2px;font:12px/1.55 var(--mono)}
+.at{display:flex;flex-direction:column;border-left:2px solid transparent;padding-left:var(--s1)}
+.at.rd-drift{border-left-color:var(--delete)}.at.rd-change{border-left-color:var(--update)}.at.rd-provider{border-left-color:var(--dim)}.at.rd-ownership{border-left-color:var(--wait)}
+.at-b{display:grid;grid-template-columns:14px minmax(0,1fr) auto;gap:var(--s2);align-items:baseline;text-align:left;background:none;border:0;padding:3px 0;cursor:pointer;font:inherit;color:var(--ink)}
+.at-b.static{cursor:default}
+.at-b:hover .at-p{text-decoration:underline;text-decoration-color:var(--rule)}
+.at-m{color:var(--dim)}
+.at-g{font:12px/1.55 var(--mono);color:var(--muted);padding:var(--s2) 0 0 22px}
+.at.in{margin-left:var(--s4)}
+.at-l{overflow-wrap:anywhere;min-width:0}.at-p{color:var(--muted)}.at-v{color:var(--ink)}
+.at-s{color:var(--dim);font-size:11px;white-space:nowrap}
+.at-src,.at-r{padding-left:22px;font-size:11.5px;color:var(--dim);overflow-wrap:anywhere}
+.at-r{color:var(--muted)}.at-r .word{margin-right:var(--s1)}
+.at-why{padding:var(--s1) 0 var(--s2) 22px;font-size:12px}
+.st-l{font:12px var(--mono);color:var(--muted)}.st-l.h-okt{color:var(--create)}.st-l.h-badt{color:var(--delete)}
 .kv dt{color:var(--muted)}.kv dd{margin:0;font-family:var(--mono);overflow-wrap:anywhere;min-width:0}
 /* graph */
 .frame.gm .rail{display:none}
-@media (min-width:1181px){.frame.gm{grid-template-columns:minmax(0,1fr) 320px;gap:var(--s5)}}
+@media (min-width:1181px){.frame.gm{grid-template-columns:minmax(0,1fr) 340px;gap:var(--s6)}.frame.gm.wide{grid-template-columns:minmax(0,1fr) 460px}}
 @media (max-width:1180px){.frame.gm{grid-template-columns:minmax(0,1fr)}}
 .gbar{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
 .rg-bg{fill:var(--surface)}.rg-bg.alt{fill:var(--bg)}.rg-line{stroke:var(--rule)}
 .rh{cursor:pointer}.rh rect{fill:var(--sunk);stroke:var(--rule)}.rh.lit rect{fill:var(--update-soft);stroke:var(--update);stroke-width:2}.rh.sel rect{stroke:var(--accent);stroke-width:2.5}
 .rh-l{font:600 11.5px var(--mono);fill:var(--ink)}.rh-s{font:10.5px var(--mono);fill:var(--muted)}.rh-t{font:11px var(--sans);fill:var(--muted)}.rh-w{font:11px var(--sans);fill:var(--wait)}.rh-lit{font:600 11px var(--mono);fill:var(--update)}
 .ln-strip{fill:var(--sunk);opacity:.9}.lanehdr{cursor:pointer}
-.n{cursor:pointer}.n .box{fill:var(--surface);stroke:var(--rule)}.n:hover .box,.n:focus .box{stroke:var(--accent)}.n:focus,.rh:focus,.band:focus{outline:none}
+.n{cursor:pointer}.n .box{fill:var(--surface);stroke:var(--rule)}.n:focus-visible .box{stroke:var(--accent)}.n:focus,.rh:focus,.band:focus{outline:none}
 .n.src .box{fill:var(--bg);stroke:var(--because);stroke-dasharray:3 2}
 .n.sum .box{fill:var(--sunk);stroke:var(--muted);stroke-dasharray:4 3}
 .n.ch .box{stroke-width:2.2}.chg-c .box{fill:var(--create-soft);stroke:var(--create)}.chg-u .box{fill:var(--update-soft);stroke:var(--update)}.chg-d .box{fill:var(--delete-soft);stroke:var(--delete)}.chg-e .box{fill:var(--sunk);stroke:var(--dim)}
-.n.rc .box{stroke:var(--update);stroke-dasharray:5 3;stroke-width:1.8}
+.n.rc .box{fill:var(--reach-soft);stroke:var(--update);stroke-width:1;stroke-opacity:.55}
+.wv{font:600 10px var(--mono);fill:var(--update)}
 .n.sel .box{stroke:var(--accent);stroke-width:3}
 .gty{font:10px var(--mono);fill:var(--muted)}
 .gs,.h-ok,.h-bad,.h-unk,.h-wait,.r-drift,.r-owner,.ovr{font:11px var(--mono)}
@@ -420,10 +486,10 @@ p.note{margin:0;font-size:13px;color:var(--muted);max-width:70ch}
 .gframe{cursor:pointer}.gframe rect{fill:none;stroke:var(--muted);stroke-dasharray:2 3}.gframe text{font:10px var(--mono);fill:var(--muted)}
 .band{cursor:pointer}.band rect{fill:var(--sunk);stroke:var(--rule)}.band text{font:10.5px var(--mono);fill:var(--muted)}
 .e-output{stroke:var(--wait);stroke-width:2}.e-provider{stroke:var(--ink);stroke-dasharray:6 3;stroke-width:1.6}.e-rows{stroke:var(--because);stroke-dasharray:2 3;stroke-width:1.6}
-.e.lit{stroke:var(--update);stroke-width:2.6;opacity:1}.e.soft{opacity:.5}.e.on{stroke-width:2.2}
+.e.on{stroke:var(--muted);stroke-width:1.1;opacity:.8}
 .bundle{fill:none;stroke:var(--muted);stroke-width:1.5;opacity:.6}.ar-bundle{fill:var(--muted)}
 .rbl{font:10.5px var(--mono);fill:var(--muted)}.g-lb{font:11px var(--mono);fill:var(--accent)}
-.n.fade{opacity:.42}.n.nb .box{stroke:var(--accent);stroke-width:1.8}.n.dn .box{stroke:var(--accent);stroke-dasharray:3 2;stroke-width:1.8}
+.n.fade{opacity:.42}.n.nb .box{stroke:var(--accent);stroke-width:1.8}.n.dn .box{fill:var(--accent-soft);stroke:var(--rule)}
 .rh.dn rect{stroke:var(--accent);stroke-dasharray:3 2}
 .band.dn rect{stroke:var(--accent);stroke-dasharray:3 2;stroke-width:1.6}.band.sel rect{stroke:var(--accent);stroke-width:2.4}
 .ar-output{fill:var(--wait)}.ar-provider{fill:var(--ink)}.ar-rows{fill:var(--because)}.ar-lit{fill:var(--update)}
@@ -488,12 +554,12 @@ p.note{margin:0;font-size:13px;color:var(--muted);max-width:70ch}
 .glegend{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s5);font-size:12px;color:var(--muted);padding:var(--s2) var(--s3);border-top:1px solid var(--rule)}
 .glegend b{font:600 12px var(--mono)}
 /* inspector */
-.insp{position:sticky;top:calc(env(safe-area-inset-top,0px) + 12px);display:flex;flex-direction:column;gap:12px;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:14px 14px 16px;max-height:calc(100vh - 24px);overflow:auto}
+.insp{position:sticky;top:calc(env(safe-area-inset-top,0px) + 12px);display:flex;flex-direction:column;gap:var(--s4);background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:var(--s4) var(--s4) var(--s5);max-height:calc(100vh - 24px);overflow:auto}
 @media (max-width:1180px){.insp{position:static;max-height:none}}
 .insp p{overflow-wrap:anywhere}
 .insp h2{margin:0;font:600 13.5px/1.4 var(--mono);word-break:break-word;text-wrap:balance}
 .insp .cmd{font:12px var(--mono);color:var(--muted);background:var(--sunk);padding:5px 8px;border-radius:3px;overflow-x:auto;white-space:pre}
-.tree{font:12.5px/1.55 var(--mono);overflow-wrap:anywhere}
+.tree{font:12.5px/1.6 var(--mono);overflow-wrap:anywhere}
 .tree ul{list-style:none;margin:0;padding-left:14px;border-left:1px solid var(--rule)}
 .tree>ul{padding-left:0;border-left:0}
 .tree li{padding:1px 0 1px 8px;position:relative}
@@ -999,7 +1065,7 @@ const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 const markCls = (m) => ({"+": "m-c", "~": "m-u", "-": "m-d", "±": "m-r", "=": "m-e"}[m] || "");
 function toast(t) { const el = $("toast"); el.textContent = t; el.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => el.hidden = true, 3200); }
 
-function render() { $("frame").classList.toggle("gm", tab === "plan" && view === "graph"); renderTop(); renderEstates(); renderRail(); renderTabs(); renderPane(); renderInsp(); }
+function render() { $("frame").classList.toggle("gm", tab === "plan" && view === "graph"); $("frame").classList.toggle("wide", !!(sel && sel.startsWith("n:"))); renderTop(); renderEstates(); renderRail(); renderTabs(); renderPane(); renderInsp(); }
 /* the project level: one card per estate, which is also the estate selector */
 function renderEstates() {
   const E = ESTATES[cur];
@@ -1249,7 +1315,7 @@ const ESTATES = {
   gke: {key: "env", list: [{k: "dev", lanes: ["dev"]}, {k: "stg", lanes: ["stg"]}, {k: "prod", lanes: ["prod"]}]},
   rel: {key: "", list: [{k: "releases", lanes: ["releases"]}]},
 };
-const EST = {ovh: "prod", shop: "prod", k3s: "staging", gke: "prod", rel: "releases"};
+const EST = {ovh: "lab", shop: "prod", k3s: "staging", gke: "prod", rel: "releases"};
 const estLabel = (proj, k) => ESTATES[proj].key ? `${ESTATES[proj].key}=${k}` : k;
 const estOf = (proj, k) => ESTATES[proj].list.find(e => e.k === (k || EST[proj]));
 const estOfLane = (proj, lane) => (ESTATES[proj].list.find(e => e.lanes.includes(lane)) || {}).k;
@@ -1273,6 +1339,7 @@ const OPEN = {lane: {}, region: {}, cell: {}, group: {}};
 /* the spacing scale, in px: one step for each kind of distance, so a gap says what it separates.
    1 inside a line · 2 inside a card · 3 between cards · 4 a card's column gutter · 5 between lanes and columns */
 const SP = {1: 4, 2: 8, 3: 12, 4: 16, 5: 24, 6: 32};
+const ATTR_OPEN = new Set();
 const HELD_WORD = {approval: "signature", drift: "drift", owner: "ownership", hold: "a rule", undet: "undetermined"};
 
 function lineIndex(p) {
@@ -1352,7 +1419,11 @@ function overlayState(p, m) {
       });
     });
   }
-  return {W: on, changed, reached, litRegions, chParent};
+  // how far each reached node is from a change, in hops: the lighting's wave number
+  const depth = new Map(), adj = adjacency(m), q = [...changed.keys()];
+  q.forEach(id => depth.set(id, 0));
+  while (q.length) { const a = q.shift(); (adj[a] || []).forEach(b => { if (!depth.has(b)) { depth.set(b, depth.get(a) + (a.startsWith("R:") ? 0 : 1)); q.push(b); } }); }
+  return {W: on, changed, reached, litRegions, chParent, depth};
 }
 
 function estateHTML(p) {
@@ -1404,7 +1475,7 @@ function estateHTML(p) {
   Object.values(items).forEach(it => { if (it.id.startsWith("Q:")) it.rank = -1; });
 
   const W = Math.max(380, ($("pane").clientWidth || 800) - 2);
-  const narrowW = 132, minCol = 176, maxCol = 300;
+  const narrowW = 140, minCol = 200, maxCol = 320;
   const openRegions = m.regions.filter(r => regionOpen(r.id));
   const subRanks = {};
   m.regions.forEach(r => {
@@ -1439,7 +1510,7 @@ function estateHTML(p) {
   if (sel && sel.startsWith("R:")) nodes.filter(n => "R:" + n.region === sel).forEach(n => dnSet.add(n.id));
   const repSet = (xs) => new Set([...xs].filter(k => !k.startsWith("R:")).map(rep).filter(Boolean));
   const selR = repSet(selMembers), nbR = repSet(nbSet), dnR = repSet(dnSet);
-  const gut = SP[3], nodeW = colW - 2 * gut, CH = 6.62, chars = Math.max(12, Math.floor((nodeW - 2 * SP[2]) / CH)), tchars = Math.max(10, Math.floor((nodeW - 2 * SP[2]) / 6.1));
+  const gut = SP[4], nodeW = colW - 2 * gut, CH = 6.62, chars = Math.max(12, Math.floor((nodeW - 2 * SP[2]) / CH)), tchars = Math.max(10, Math.floor((nodeW - 2 * SP[2]) / 6.1));
 
   // region headers: the instance and its state in a word; its settings and calls are its answer
   let headH = 0;
@@ -1469,7 +1540,7 @@ function estateHTML(p) {
       return {out: [["gty", [objs]], ["gt", wrap(frameName(it.id.slice(2)) || g.label, chars, 2)]], cls: "sum"};
     }
     const n = it.members[0];
-    let cls = "";
+    let cls = "", wave = 0;
     const fam = famOf(n.region), type = n.type.startsWith(fam) ? n.type.slice(fam.length) : n.type;
     const fr = n.group && groupOpen(n.group) ? frameName(n.group) + "." : "", name = fr.length > 1 && n.name.startsWith(fr) ? n.name.slice(fr.length) : n.name;
     out.push(["gty", wrap(type, tchars, 1)]); out.push(["gt", wrap(name, chars, 2)]);
@@ -1480,9 +1551,9 @@ function estateHTML(p) {
     else if (words.length) out.push(["raw", [words.join(`<tspan class="gs"> · </tspan>`)]]);
     if (showSt) out.push(["ov " + gMark(st.mark), wrap(`${st.mark} ${st.text}`, chars, 2)]);
     if (ch) cls = "ch chg-" + ({"+": "c", "~": "u", "-": "d", "±": "d", "=": "e"}[ch[0].l.mark] || "e");
-    else if (o.reached.has(n.id)) cls = "rc";
+    else if (o.reached.has(n.id)) { cls = "rc"; wave = o.depth.get(n.id) || 1; }
     if (n.kind === "source") cls += " src";
-    return {out, cls};
+    return {out, cls, wave};
   }
   const itemH = (c) => 2 * SP[2] + c.out.reduce((a, [, ls]) => a + ls.length * LH, 0) - 2;
 
@@ -1496,8 +1567,8 @@ function estateHTML(p) {
     svgLanes += `<g class="lanehdr" data-lanehdr="${esc(l)}"><rect class="ln-strip" x="0" y="${top}" width="${totalW}" height="${STRIP}"></rect>
       <text class="g-l" x="${SP[3]}" y="${top + 17}"><tspan class="${gMark(info.mark)}">${esc(info.mark || "")}</tspan> ${esc(info.name.replace(`[${estLabel(cur, EST[cur])}]`, ""))}<tspan class="g-ls" dx="${SP[3]}">${esc(st)}</tspan></text></g>`;
     if (!open) {
-      m.regions.forEach(r => { if ((cellNodes[cellKey(l, r.id)] || []).length) pos["C:" + cellKey(l, r.id)] = {x: RX[r.id].x + gut, y: top + STRIP + SP[2], w: RX[r.id].w - 2 * gut, h: 18, band: true}; });
-      y = top + STRIP + SP[2] + 18 + SP[3]; return;
+      m.regions.forEach(r => { if ((cellNodes[cellKey(l, r.id)] || []).length) pos["C:" + cellKey(l, r.id)] = {x: RX[r.id].x + gut, y: top + STRIP + SP[3], w: RX[r.id].w - 2 * gut, h: 18, band: true}; });
+      y = top + STRIP + SP[3] + 18 + SP[4]; return;
     }
     let laneH = STRIP + SP[3];
     m.regions.forEach(r => {
@@ -1506,34 +1577,36 @@ function estateHTML(p) {
         if (cellItems.length) pos["C:" + cellKey(l, r.id)] = {x: RX[r.id].x + gut, y: top + STRIP + SP[3], w: narrowW - 2 * gut, h: 18, band: true};
         laneH = Math.max(laneH, STRIP + SP[3] + 18 + SP[4]); return;
       }
-      const gfirst = {};
-      cellItems.forEach(it => { const g = it.members[0].group || it.id; if (!(g in gfirst)) gfirst[g] = it.order; });
-      const gkey = (it) => /^[GCQ]:/.test(it.id) ? it.order : (gfirst[it.members[0].group || it.id] ?? it.order);
-      for (let si = 0; si < subN[r.id]; si++) {
-        let ny = top + STRIP + SP[4], lastGroup = null, frame = null;
-        const last = si === subN[r.id] - 1;
-        const col = cellItems.filter(it => { const ix = subRanks[r.id].indexOf(Math.max(0, it.rank)); return last ? ix >= si : ix === si; })
-          .sort((a, b) => gkey(a) - gkey(b) || a.rank - b.rank || a.order - b.order);
-        col.forEach(it => {
-          const c = content(it), h = itemH(c), nx = RX[r.id].x + si * colW + gut;
-          const g = /^[GCQ]:/.test(it.id) ? null : it.members[0].group;
-          if (g && g !== lastGroup) {
-            if (frame) { svgFrames += frameSVG(frame); ny += SP[2]; }
-            frame = {x: nx - SP[2], y: ny, w: nodeW + 2 * SP[2], label: frameName(g), gid: g}; ny += 18;
-          } else if (!g && frame) { svgFrames += frameSVG(frame); frame = null; ny += SP[2]; }
-          lastGroup = g;
-          const lit = /\b(ch|rc)\b/.test(c.cls);
-          const selCls = isSel(it) ? "sel" : selR.size ? (dnR.has(it.id) ? "dn" : nbR.has(it.id) ? "nb" : lit ? "" : "fade") : "";
-          let body = "", ty = ny + SP[2] - 2;
-          c.out.forEach(([k, ls]) => ls.forEach(t => { ty += LH; body += `<text class="${k === "raw" ? "gs" : k}" x="${nx + SP[2] + 1}" y="${ty - 3}">${k === "raw" ? t : esc(t)}</text>`; }));
-          svgNodes += `<g class="n ${c.cls} ${selCls}" data-node="${esc(it.id)}" tabindex="0" role="button" aria-label="${esc(it.id)}"><rect class="box" x="${nx}" y="${ny}" width="${nodeW}" height="${h}" rx="3"></rect>${body}</g>`;
-          pos[it.id] = {x: nx, y: ny, w: nodeW, h};
-          if (frame) frame.bottom = ny + h;
-          ny += h + SP[3];
+      // a cell is a stack of blocks: its loose items, then one box per copy; inside a block, columns by rank
+      const drawItem = (it, nx, ny) => {
+        const c = content(it), h = itemH(c), lit = /\b(ch|rc)\b/.test(c.cls);
+        const selCls = isSel(it) ? "sel" : selR.size ? (lit ? (nbR.has(it.id) ? "nb" : "") : dnR.has(it.id) ? "dn" : nbR.has(it.id) ? "nb" : "fade") : "";
+        let body = "", ty = ny + SP[2] - 2;
+        c.out.forEach(([k, ls]) => ls.forEach(t => { ty += LH; body += `<text class="${k === "raw" ? "gs" : k}" x="${nx + SP[2] + 1}" y="${ty - 3}">${k === "raw" ? t : esc(t)}</text>`; }));
+        svgNodes += `<g class="n ${c.cls} ${selCls}" data-node="${esc(it.id)}" tabindex="0" role="button" aria-label="${esc(it.id)}"><rect class="box" x="${nx}" y="${ny}" width="${nodeW}" height="${h}" rx="3"></rect>${body}${c.wave ? `<text class="wv" x="${nx + nodeW - SP[2]}" y="${ny + 14}" text-anchor="end">${c.wave}</text>` : ""}</g>`;
+        pos[it.id] = {x: nx, y: ny, w: nodeW, h};
+        return h;
+      };
+      const placeCols = (list, y0) => {
+        const n = subN[r.id], colY = Array(n).fill(y0); let lo = n, hi = 0;
+        list.slice().sort((a, b) => a.rank - b.rank || a.order - b.order).forEach(it => {
+          const ci = Math.min(Math.max(0, subRanks[r.id].indexOf(Math.max(0, it.rank))), n - 1); lo = Math.min(lo, ci); hi = Math.max(hi, ci);
+          colY[ci] += drawItem(it, RX[r.id].x + ci * colW + gut, colY[ci]) + SP[4];
         });
-        if (frame) { svgFrames += frameSVG(frame); frame = null; ny += SP[2]; }
-        laneH = Math.max(laneH, ny - top + SP[1]);
-      }
+        return {bottom: Math.max(y0, ...colY.map(v => v === y0 ? y0 : v - SP[4])), lo, hi};
+      };
+      const loose = cellItems.filter(it => /^[GCQ]:/.test(it.id) || !it.members[0].group), byG = {};
+      cellItems.filter(it => !loose.includes(it)).forEach(it => (byG[it.members[0].group] = byG[it.members[0].group] || []).push(it));
+      const minOf = (xs) => Math.min(...xs.map(it => it.rank * 1e7 + it.order));
+      const blocks = [...(loose.length ? [{list: loose}] : []), ...Object.entries(byG).map(([g, list]) => ({g, list}))].sort((a, b) => minOf(a.list) - minOf(b.list));
+      let ny = top + STRIP + SP[5];
+      blocks.forEach(bk => {
+        if (!bk.g) { ny = placeCols(bk.list, ny).bottom + SP[4]; return; }
+        const fy = ny, res = placeCols(bk.list, ny + 20);
+        svgFrames += frameSVG({x: RX[r.id].x + res.lo * colW + gut - SP[2], y: fy, w: (res.hi - res.lo) * colW + nodeW + 2 * SP[2], label: frameName(bk.g), gid: bk.g, bottom: res.bottom});
+        ny = res.bottom + SP[2] + SP[4];
+      });
+      laneH = Math.max(laneH, ny - top + SP[2]);
     });
     y = top + laneH;
   });
@@ -1571,15 +1644,11 @@ function estateHTML(p) {
   const draw = (a, b, kind, cls) => {
     const ra = rep(a), rb = rep(b); if (!ra || !rb || ra === rb) return;
     const key = ra + ">" + rb + ">" + cls; if (seen.has(key)) return; seen.add(key);
-    const d = curve(ra, rb); if (d) svgEdges += `<path class="e e-${kind} ${cls}" d="${d}" marker-end="url(#ar-${cls === "lit" ? "lit" : kind})"></path>`;
+    const d = curve(ra, rb); if (d) svgEdges += `<path class="e on" d="${d}"></path>`;
   };
-  m.edges.filter(e => e[2] === "provider").forEach(([a, b]) => { if (o.litRegions.has(b)) draw(a, b, "provider", "lit"); else if (selMembers.has(a) || sel === b) draw(a, b, "provider", "on"); });
-  if (o.W) {
-    o.reached.forEach((v, b) => { if (v.parent && !v.parent.startsWith("R:")) draw(v.parent, b, "ref", "lit"); });
-    o.chParent.forEach((par, b) => { if (!par.startsWith("R:")) draw(par, b, "ref", "lit"); });
-    m.edges.forEach(([a, b, kind]) => { if (kind === "rows" && o.changed.has(b) && byId[a] && byId[a].news) draw(a, b, "rows", "lit"); });
-  }
-  m.edges.forEach(([a, b, kind]) => { if (kind !== "provider" && (selMembers.has(a) || selMembers.has(b))) draw(a, b, kind, "on"); });
+  // the only lines: the selection's direct edges, one hop each way; a provider line only when its value or its region is the selection
+  m.edges.filter(e => e[2] === "provider").forEach(([a, b]) => { if (sel === a || sel === b) draw(a, b); });
+  m.edges.forEach(([a, b, kind]) => { if (kind !== "provider" && (selMembers.has(a) || selMembers.has(b))) draw(a, b); });
 
   // region columns and headers
   let svgRegions = "", svgHeads = "";
@@ -1592,16 +1661,140 @@ function estateHTML(p) {
   });
 
   return `<div class="gwrap"><svg viewBox="0 0 ${totalW} ${H}" width="${totalW}" height="${H}" role="img" aria-label="The estate as a graph">
-    <defs>${["ref", "output", "rows", "provider", "lit"].map(k => `<marker id="ar-${k}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="ar-${k}" d="M0,0 L8,4 L0,8 z"></path></marker>`).join("")}</defs>
     ${svgRegions}${svgLanes}${svgFrames}${svgBands}${svgNodes}${svgHeads}${svgEdges}</svg>
-    <div class="glegend"><span>a node sits right of, or below, what it reads; point at it for its edges and its answer</span><span>a card with no word under its name is in sync</span>${o.W ? `<span><b style="color:var(--update)">——</b> where the plan goes · <b>- - -</b> reached by it</span>` : ""}</div></div>`;
+    <div class="glegend"><span>a node sits right of, or below, what it reads; click it for its direct edges and the resource itself; Esc lets go</span><span>a card with no word under its name is in sync</span>${o.W ? `<span>lit: changed · tinted, with how many hops away: reached by the change</span>` : ""}</div></div>`;
+}
+
+/* ---------- the resource itself: its desired document, what the world returned, the provider's status ----------
+   a: [path, value, site, {src, r: [word, text], why}]; values the plan prints, secrets as their labels. */
+const A = (p, v, s, o) => ({p, v, s, ...(o || {})});
+function docOf(proj, n) {
+  const id = n.id.slice(2), [lane, key] = id.split("/"), e = (lane.match(/\[(\w+)\]/) || [, lane])[1], PR = e === "prod";
+  if (proj === "ovh") {
+    const nm = `k8s-${e}`, sfx = PR ? "" : `.${e}`, base = PR ? "vodik.xyz" : `${e}.vodik.xyz`, ip = PR ? "148.113.5.21" : "51.79.98.20";
+    const flavor = PR ? A("flavor", "\"b2-15\"", "k3s.df:136", {src: "set { flavor = \"b2-15\" } where env == \"prod\"  stacks/platform.df:23, over the input's \"b2-7\"  stacks/platform.df:6"})
+      : A("flavor", "\"b2-7\"", "k3s.df:136", {src: "input flavor = \"b2-7\"  stacks/platform.df:6, given as use k3s { flavor }  stacks/platform.df:40"});
+    if (key === "k3s.server.vm") return {site: "k3s.df:133, node server  k3s.df:154", a: [
+      A("name", `"${nm}-server"`, "k3s.df:134", {src: `hostname = "\${name}-server"  k3s.df:154; name = "k8s-\${env}"  stacks/platform.df:38`}),
+      A("region", "\"BHS5\"", "k3s.df:135", {src: "config.region  config.df:33, given  stacks/platform.df:39"}),
+      flavor,
+      A("image", "\"Ubuntu 26.04\"", "k3s.df:137", {src: "input image = \"Ubuntu 26.04\"  k3s.df:20 (the default; the stack gives none)"}),
+      A("ssh_key", "admin", "k3s.df:138"),
+      A("networks[k3s.net]", "net", "k3s.df:139"),
+      A("user_data", "(sensitive) #user_data", "k3s.df:140", {why: [N("user_data = server_init: cloud-config with the derived token", "k3s.df:154"), N("lifecycle(vm, \"bootstrap\", \"user_data\"): read at first boot only; a change is said, not a replace", "k3s.df:151", "dimt")]}),
+      ...(PR ? [A("lifecycle", "prevent_destroy", "k3s.df:158", {src: "set k3s.protect = true where env == \"prod\"  stacks/platform.df:48"})] : [])],
+      world: [["id", PR ? "\"c41f9a07-…-55e2\"" : "\"7d0c2a1e-…-0b93\""], ["public_ip", `"${ip}"`], ["networks[k3s.net].ip", "\"10.0.0.2\""], ["created_at", PR ? "\"2026-09-02T10:14:51Z\"" : "\"2026-10-15T07:44:30Z\""]],
+      status: ["ACTIVE", ...(PR ? [] : ["its Read took 4.1s, the run's slowest call"])], invented: "id, public_ip, private ip, created_at"};
+    if (key === "k3s.server.data") return {site: "k3s.df:143", a: [
+      A("name", `"${nm}-server-data"`, "k3s.df:144"), A("region", "\"BHS5\"", "k3s.df:145"),
+      A("size", PR ? "250Gi" : "50Gi", "k3s.df:146", {src: PR ? "set { disk = 250Gi } where env == \"prod\"  stacks/platform.df:23" : "input disk = 50Gi  stacks/platform.df:7"}),
+      A("type", "\"high-speed\"", "k3s.df:147"), A("instance", "server.vm", "k3s.df:148")],
+      world: [["id", "\"vol-…-91c4\""], ["device", "\"/dev/sdb\""]], status: ["in-use, attached to " + nm + "-server"], invented: "id, device"};
+    if (key === "k3s.api" || key === "apex" || key === "forgejo.record") {
+      const apex = key === "apex", git = key === "forgejo.record";
+      const f = git ? "forgejo.df" : apex ? "stacks/platform.df" : "k3s.df", l0 = git ? 158 : apex ? 77 : 185;
+      return {site: `${f}:${l0}`, a: [
+        A("zone", "\"vodik.xyz\"", `${f}:${l0 + 1}`, {src: "config.zone  config.df:14"}),
+        A("subdomain", git ? `"git${sfx}"` : apex ? `"${PR ? "" : e}"` : `"api${sfx}"`, `${f}:${l0 + 2}`, {src: apex ? "config.apex_subdomain  config.df:25-26" : "config.dns_suffix  config.df:23-24"}),
+        A("type", git ? "\"CNAME\"" : "\"A\"", `${f}:${l0 + 3}`),
+        A("target", git ? `"${base}."` : apex ? `k3s.ingress_ip  ("${ip}")` : `server.public_ip  ("${ip}")`, `${f}:${l0 + 4}`, {src: git ? "config.apex_target  config.df:28" : "the instance's public_ip, read from the world"}),
+        A("ttl", "300", `${f}:${l0 + 5}`)],
+        world: [["id", git ? "5294117" : apex ? "5294102" : "5294113"], ["fieldType", git ? "\"CNAME\"" : "\"A\""]],
+        status: ["in the zone; answered by OVH's DNS"], invented: "record ids"};
+    }
+    if (key === "forgejo.data") return {site: "forgejo.df:36", a: [
+      A("metadata.name", "\"forgejo-data\"", "forgejo.df:37"), A("metadata.namespace", "apps", "forgejo.df:37"),
+      A("metadata.labels.owner", "\"simon\"", "policy.df:6", {src: "@default, every resource with metadata"}),
+      A("spec.accessModes", "[\"ReadWriteOnce\"]", "forgejo.df:38"), A("spec.storageClassName", "\"block\"", "forgejo.df:39"),
+      A("spec.resources.requests.storage", PR ? "50Gi" : "20Gi", "forgejo.df:40", {src: PR ? "set { sizes.forgejo = 50Gi } where env == \"prod\"  stacks/apps.df:13" : "input sizes.forgejo = 20Gi  stacks/apps.df:6"})],
+      world: [["spec.volumeName", "\"pvc-3f1e…\""], ["status.capacity.storage", PR ? "50Gi" : "20Gi"]], status: ["Bound"], invented: "volumeName"};
+    if (key === "forgejo.server") {
+      const host = `git.${base}`, img = PR ? "sha256:5b0e44c2…71fd" : NEW;
+      const envs = [["FORGEJO__database__DB_TYPE", "sqlite3", 61], ["FORGEJO__server__DOMAIN", host, 62], ["FORGEJO__server__ROOT_URL", `https://${host}/`, 63], ["FORGEJO__server__SSH_DOMAIN", host, 64],
+        ["FORGEJO__server__SSH_PORT", "2222", 65], ["FORGEJO__server__SSH_LISTEN_PORT", "2222", 66], ["FORGEJO__security__INSTALL_LOCK", "true", 67], ["FORGEJO__service__DISABLE_REGISTRATION", "false", 70],
+        ["FORGEJO__service__ALLOW_ONLY_EXTERNAL_REGISTRATION", "true", 71], ["FORGEJO__service__SHOW_REGISTRATION_BUTTON", "false", 72], ["FORGEJO__service__ENABLE_INTERNAL_SIGNIN", "false", 74],
+        ["FORGEJO__service__ENABLE_BASIC_AUTHENTICATION", "false", 75], ["FORGEJO__oauth2_client__ENABLE_AUTO_REGISTRATION", "true", 78], ["FORGEJO__oauth2_client__UPDATE_AVATAR", "true", 81], ["FORGEJO__picture__DISABLE_GRAVATAR", "true", 82]];
+      const c = "spec.template.spec.containers[name=forgejo]";
+      return {site: "forgejo.df:43, use forgejo  stacks/apps.df:82", a: [
+        A("metadata.name", "\"forgejo\"", "forgejo.df:44"), A("metadata.namespace", "apps", "forgejo.df:44"),
+        A("metadata.labels.owner", "\"simon\"", "policy.df:6", {src: "@default, every resource with metadata"}),
+        A("spec.replicas", "1", "forgejo.df:45"), A("spec.strategy.type", "\"Recreate\"", "forgejo.df:46"),
+        A("spec.revisionHistoryLimit", PR ? "3" : "1", "policy.df:166", {src: `history = ${PR ? 3 : 1} where env ${PR ? "==" : "!="} "prod"  policy.df:${PR ? 164 : 165}`, r: ["provider default", "the cluster's own is 10; the policy sets it over it"]}),
+        A("spec.selector.matchLabels", "{ app = \"forgejo\" }", "forgejo.df:47"),
+        A("spec.template.spec.securityContext", "{ runAsNonRoot = true, runAsUser = 1000, runAsGroup = 1000, fsGroup = 1000, seccompProfile.type = \"RuntimeDefault\" }", "forgejo.df:50"),
+        A("spec.template.spec.automountServiceAccountToken", "false", "policy.df:171", {src: "@default, every Deployment"}),
+        A(`${c}.image`, `"codeberg.org/forgejo/forgejo@${img}"`, "forgejo.df:59", PR ? {src: "oci.resolve(\"…:16.0.4-rootless\")"} : {src: "oci.resolve(\"…:16.0.4-rootless\"), the lab tag", r: ["change", `base and live …@${OLD}; the tag moved at 09:20:14`],
+          why: WHY.fj.tree}),
+        ...envs.map(([k, v, ln]) => A(`${c}.env[${k}]`, `"${v}"`, `forgejo.df:${ln}`, k.endsWith("ENABLE_INTERNAL_SIGNIN") && PR && !DONE["d-fjdrift"] ? {r: ["drift", "live \"true\", kubectl-set 08:40:12 (managedFields)"], why: WHY.fjdrift.tree} : {})),
+        A(`${c}.ports[name=http]`, "{ containerPort = 3000, protocol = \"TCP\" }", "forgejo.df:85"), A(`${c}.ports[name=ssh]`, "{ containerPort = 2222, protocol = \"TCP\" }", "forgejo.df:86"),
+        A(`${c}.volumeMounts[name=data]`, "{ mountPath = \"/var/lib/gitea\", subPath = \"data\" }", "forgejo.df:90"),
+        A(`${c}.readinessProbe`, "{ httpGet = { path = \"/api/healthz\", port = \"http\" }, periodSeconds = 10 }", "forgejo.df:91"),
+        A(`${c}.resources`, "{ requests = { cpu = 100m, memory = 256Mi }, limits = { cpu = 1, memory = 1Gi } }", "forgejo.df:93", {src: "the module's own write, over the policy's @default requests 100m/128Mi and limits 500m/256Mi  policy.df:23, 33"}),
+        A(`${c}.securityContext`, "{ allowPrivilegeEscalation = false, capabilities.drop = [\"ALL\"] }", "policy.df:43", {src: "@default, every container of every Deployment"}),
+        A("spec.template.spec.volumes[name=data].persistentVolumeClaim.claimName", "data  (\"forgejo-data\")", "forgejo.df:95")].map(a => a.p.startsWith(c + ".") ? {...a, g: c, p: a.p.slice(c.length + 1)} : a),
+        world: [["metadata.uid", "\"8c2d…-a1f0\""], ["metadata.generation", PR ? "12" : "4"], ["status.observedGeneration", PR ? "12" : "4"], ["status.replicas", "1"], ["status.availableReplicas", "1"]],
+        status: ["Available True: MinimumReplicasAvailable", "Progressing True: NewReplicaSetAvailable", "Ready 1/1"], invented: "uid, generation" + (PR ? ", prod's digest" : "")};
+    }
+  }
+  if (proj === "shop") {
+    if (key === "pg") return {site: "stacks/shop.df:93", a: [
+      PR ? A("name", "\"shop-orders-prod\"", "stacks/shop.df:94", {r: ["change", "base and live \"shop-db-prod\"; the name forces a replace"], why: WHY.pg.tree}) : A("name", "\"shop-db-staging\"", "stacks/shop.df:94"),
+      A("vpc", "main", "stacks/shop.df:95"),
+      A("ingress[0]", "{ from_port = 5432, to_port = 5432, protocol = \"tcp\", security_groups = [https] }", "stacks/shop.df:96"),
+      A("tags.team", "\"shop\"", "policy.df:5", {src: "set r.tags = { team = \"shop\" } where r in resource"}),
+      A("egress", "[{ from_port = 0, to_port = 0, protocol = \"-1\", cidr_blocks = [\"0.0.0.0/0\"] }]", "", {r: ["provider default", "@internal: AWS adds it; dform declines to own it"]})],
+      world: [["id", PR ? "\"sg-0e5c1a7d2b9f3c812\"" : "\"sg-04b7e19a6c3d2f5e0\""], ["arn", "\"arn:aws:ec2:us-east-1:123456789012:security-group/…\""], ["owner_id", "\"123456789012\""]],
+      status: ["a security group has no health: status says -"], invented: "ids"};
+    if (key === "https") return {site: "stacks/shop.df:87", a: [
+      A("name", `"shop-web-${e}"`, "stacks/shop.df:88"), A("vpc", "main", "stacks/shop.df:89"),
+      A("ingress[0]", "{ from_port = 443, to_port = 443, protocol = \"tcp\", cidr_blocks = [\"0.0.0.0/0\"] }", "stacks/shop.df:90"),
+      ...(PR && !DONE["d-drift"] ? [A("ingress[1]", "absent", "stacks/shop.df:90", {r: ["drift", "live { from_port = 22, to_port = 22, protocol = \"tcp\", cidr_blocks = [\"0.0.0.0/0\"] }, ops@example.com 07:58:21"], why: WHY.https.tree})] : []),
+      A("tags.team", "\"shop\"", "policy.df:5")],
+      world: [["id", "\"sg-0a93c4e7b1d2f6058\""]], status: ["a security group has no health: status says -"], invented: "ids"};
+    if (key === "orders") return {site: "stacks/shop.df:30", a: [
+      A("identifier", `"orders-${e}"`, "stacks/shop.df:31"),
+      A("instance_class", PR ? "\"db.m6g.large\"" : "\"db.t3.micro\"", "stacks/shop.df:32", {src: PR ? "set database.class  stacks/shop.df:23, over the input's \"db.t3.micro\"  :3" : "input database.class  stacks/shop.df:3"}),
+      A("multi_az", PR ? "true" : "false", "stacks/shop.df:33", {src: PR ? "stacks/shop.df:22" : "stacks/shop.df:3"}),
+      A("backup_retention_period", PR ? "14" : "1", "stacks/shop.df:34", {src: PR ? "stacks/shop.df:24" : "stacks/shop.df:3"}),
+      A("publicly_accessible", "false", "stacks/shop.df:35", {src: "input public = false  stacks/shop.df:2"}),
+      A("password", "(sensitive) #orders", "stacks/shop.df:36", {src: "random.password(\"orders\"), derived from the deployment's master"}),
+      A("vpc_security_groups", PR ? "[postgres]  (the replacement's id, once made)" : "[postgres]", "stacks/shop.df:37", PR ? {r: ["change", "follows the postgres replace"], why: WHY.orders.tree} : {}),
+      ...(PR ? [A("lifecycle", "prevent_destroy", "stacks/shop.df:55")] : []),
+      A("engine_version", "\"16.4\"", "", {r: ["provider default", "@internal: dform declines to own it"]})],
+      world: [["resource_id", PR ? "\"db-X4M9QZ…\"" : "\"db-7KQ2PL…\""], ["endpoint", `"orders-${e}.c9x1k2.us-east-1.rds.amazonaws.com:5432"`]],
+      status: ["available"], invented: "endpoint"};
+  }
+  if (proj === "gke") {
+    const pr = {dev: ["platform-dev-973682", "platform-dev", "172.16.3.96/28"], stg: ["platform-stg", "platform-stg", "172.16.3.112/28"], prod: ["platform-prod", "platform-prod", "172.16.3.128/28"]}[e];
+    const f = "stacks/gke_platform.df", set = {dev: 49, stg: 67, prod: 85}[e];
+    if (key === "gke") return {site: `${f}:185`, a: [
+      A("cluster_type", "\"autopilot-private\"", `${f}:186`), A("env", `"${e}"`, `${f}:187`, {src: "the deployment's key"}),
+      A("project_id", `"${pr[0]}"`, `${f}:188`, {src: `gcp.project  ${f}:${set}`}), A("project_name", `"${pr[1]}"`, `${f}:189`),
+      A("name", `"${pr[1]}-gke"`, `${f}:190`), A("network_id", `"projects/${pr[0]}/global/networks/${pr[1]}-network"`, `${f}:191`),
+      A("subnetwork", "gke_subnet", `${f}:192`), A("master_control_plane_cidr", `"${pr[2]}"`, `${f}:193`, {src: `gke.ranges.control_plane  ${f}:${set + 9}`}),
+      A("ip_range_pods", `"${pr[1]}-gke-pods-range"`, `${f}:194`), A("ip_range_services", `"${pr[1]}-gke-svc-range"`, `${f}:195`),
+      A("enable_secret_manager_addon", "true", `${f}:197`), A("deletion_protection", "false", `${f}:198`),
+      A("release_channel", "\"REGULAR\"", "", {r: ["provider default", "@internal: dform declines to own it"]})],
+      world: [["id", `"projects/${pr[0]}/locations/us-east1/clusters/${pr[1]}-gke"`], ["endpoint", "\"10.141.124.2\""], ["node_pools", "autopilot: managed by GKE, none declared"]],
+      status: ["RUNNING"], invented: "endpoint"};
+    if (key === "net") {
+      const rows = {dev: [["envoy-dev", "projects/envoy-dev-426188/…/envoy-dev-network", 2]], stg: [["envoy-stg", "projects/envoy-stg-597462/…/envoy-stg-network", 3], ["edge-stg", "projects/edge-stg/…/envoy-proxy-stg", 4]], prod: [["edge-prod", "projects/edge-prod/…/envoy-proxy-prod", 5], ["envoy-prod", "projects/envoy-prod-318204/…/envoy-prod-network", 6]]}[e];
+      return {site: `${f}:165`, a: [A("project", `"${pr[0]}"`, `${f}:166`), A("name", `"${pr[1]}-network"`, `${f}:167`),
+        ...rows.map(([nm, p, ln]) => A(`peerings[name=${nm}]`, `{ peer_network = "${p}" }`, `${f}:168`, {src: `peering("${e}", "${nm}", …)  data/peerings.csv:${ln}`}))],
+        world: [["id", `"projects/${pr[0]}/global/networks/${pr[1]}-network"`]], status: ["no health: status says -"]};
+    }
+  }
+  if (proj === "k3s" && key === "server") return {site: "stacks/platform.df:24", a: [
+    A("image", PR ? "\"Ubuntu 24.04\"" : "\"Ubuntu 26.04\"", "stacks/platform.df:15", PR ? {src: "the @default  stacks/platform.df:4"} : {src: "set image = \"Ubuntu 26.04\" where env == \"staging\"  stacks/platform.df:15, over the @default \"Ubuntu 24.04\"  :4"})],
+    world: [["public_ip", PR ? "\"51.79.88.4\"" : "\"51.79.104.37\""]], status: [PR ? "ACTIVE" : "ACTIVE since 09:15:40"], partial: true};
+  return null;
 }
 
 /* ---------- inspector for the estate ---------- */
 function estateInsp(el) {
   const m = estModel(cur), p = P[cur];
   const byId = Object.fromEntries(m.nodes.map(n => [n.id, n]));
-  let title = sel, tree = [], cmd = "", members = [], facts = [];
+  let title = sel, tree = [], cmd = "", members = [], facts = [], doc = null, n0 = {};
   if (sel.startsWith("R:")) {
     const r = m.regions.find(r => "R:" + r.id === sel);
     title = "provider instance " + r.label; tree = [N(r.settings, "", ""), N(r.state, "", r.waiting ? "wait" : "ok"), ...(r.why || [])];
@@ -1617,16 +1810,18 @@ function estateInsp(el) {
     const n = byId[sel]; if (!n) return false;
     const w = n.lines.map(id => WHY[id]).find(Boolean), st = nodeState(p, n);
     title = `${n.type} ${n.name}`;
+    doc = docOf(cur, n);
     if (n.planned) facts.push(["exists", "not yet: the plan makes it"]);
-    else facts.push(["health", n.health && n.health !== "-" ? n.health : "not judged"], ["reading", n.reading || "-"]);
+    else facts.push(["health", healthWord(n.health) || "not judged"]);
+    if (!n.planned && readingWord(n)) facts.push(["reading", readingWord(n)]);
     if (st) {
       facts.push(["plan", `${st.mark} ${st.text}`]);
-      if (st.l.because) facts.push(["because", st.l.because.replace(/^because /, "")]);
+      if (st.l.because && !doc) facts.push(["because", st.l.because.replace(/^because /, "")]);
       if (st.l.held && !st.l.heldDone) facts.push(["held", st.l.held[1].replace(/^held\s+/, "")]);
       if (st.l.mag) facts.push(["reach", stripTags(st.l.mag)]);
     }
     nodeTags(n).filter(t => t[0] === "undet").forEach(t => facts.push(["policy", t[1]]));
-    if (n.site) facts.push(["site", n.site]);
+    if (n.site && !doc) facts.push(["site", n.site]);
     if (w) { tree = w.tree; cmd = w.cmd; }
     else {
       cmd = n.kind === "source" ? "" : `dform why '${n.type} ${n.name}'`;
@@ -1634,7 +1829,7 @@ function estateInsp(el) {
       tree = ins.length ? [N(`${n.type} ${n.name}`, n.site, "", ins)] : [];
       const r = m.regions.find(r => r.id === n.region); tree.push(N(`held by provider instance ${r.label}`, r.settings));
     }
-    members = [n];
+    members = [n]; n0 = n;
   }
   // what depends on this: the downstream closure
   const down = new Map();
@@ -1645,10 +1840,22 @@ function estateInsp(el) {
   const laneName = (l) => l === "sources" ? SRC_LANE.name : ((p.deps.find(d => d.id === l) || {}).name || l);
   const depTree = Object.entries(byLane).map(([l, ns]) => N(laneName(l), `${ns.length}`, "", ns.map(n => N(`${n.type} ${n.name}${n.planned ? " (planned)" : ""}`, (m.regions.find(r => r.id === n.region) || {}).label))));
   const d = p.decisions.find(d => members.some(n => n.lines && n.lines.includes(d.line)));
-  el.innerHTML = `<div class="lab">Why</div><h2>${esc(title)}</h2>
+  const docHTML = !doc ? "" : `<div class="blk2"><div class="lab">Desired · as the plan prints it</div><div class="at-src" style="padding-left:0">${esc(doc.site)}</div>
+      <div class="doc">${doc.a.map((a, i) => {
+        const head = a.g && (i === 0 || doc.a[i - 1].g !== a.g) ? `<div class="at-g">${esc(a.g)}</div>` : "";
+        const open = ATTR_OPEN.has(i), why = a.why || [N(`${a.p} = ${a.v}`, a.s || "provider", "", a.src ? [N(a.src)] : [])];
+        return `${head}<div class="at ${a.g ? "in" : ""} ${a.r ? "rd-" + a.r[0].split(" ")[0] : ""}"><button class="at-b" data-attr="${i}" aria-expanded="${open}"><span class="at-m" aria-hidden="true">${open ? "▾" : "▸"}</span><span class="at-l"><span class="at-p">${esc(a.p)}</span> = <span class="at-v">${esc(a.v)}</span></span><span class="at-s">${esc(a.s || "provider")}</span></button>
+          ${a.src ? `<div class="at-src">from ${esc(a.src)}</div>` : ""}${a.r ? `<div class="at-r"><span class="word w-${({drift: "drift", change: "change", "provider default": "default", "ownership lost": "owner"})[a.r[0]] || "unread"}">${esc(a.r[0])}</span> ${esc(a.r[1])}</div>` : ""}
+          ${open ? `<div class="tree at-why">${treeHTML(why)}</div>` : ""}</div>`;
+      }).join("")}</div>${doc.partial ? `<p class="note">The mock carries only the attribute the plan changes; the rest prints with dform show.</p>` : ""}</div>
+    <div class="blk2"><div class="lab">From the world · computed at apply, read at refresh</div>
+      <div class="doc">${doc.world.map(([k, v]) => `<div class="at"><div class="at-b static"><span class="at-m"></span><span class="at-l"><span class="at-p">${esc(k)}</span> = <span class="at-v">${esc(v)}</span></span><span class="at-s">world</span></div></div>`).join("")}</div></div>
+    <div class="blk2"><div class="lab">Status · the provider's words</div><div class="doc">${doc.status.map(t => `<div class="st-l ${healthCls(n0.health)}t">${esc(t)}</div>`).join("")}</div></div>`;
+  el.innerHTML = `<div class="lab">${doc ? "The resource" : "Why"}</div><h2>${esc(title)}</h2>
     ${facts.length ? `<dl class="kv">${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>` : ""}
-    ${cmd ? `<div class="cmd">$ ${esc(cmd)}</div>` : ""}
-    <div class="tree">${treeHTML(tree)}</div>
+    ${docHTML}
+    ${doc ? (tree.length ? `<details class="blk2"><summary class="lab">Why the resource · dform why</summary>${cmd ? `<div class="cmd">$ ${esc(cmd)}</div>` : ""}<div class="tree">${treeHTML(tree)}</div></details>` : "") : `${cmd ? `<div class="cmd">$ ${esc(cmd)}</div>` : ""}
+    <div class="tree">${treeHTML(tree)}</div>`}
     <div class="acts"><div class="lab">What depends on this · ${down.size}</div>
       ${down.size ? `<div class="tree">${treeHTML(depTree)}</div>` : `<p>Nothing reads it.</p>`}</div>
     ${d && ACTS[d.id] ? `<div class="acts"><div class="lab">${esc(d.word)}</div>${ACTS[d.id]()}</div>` : ""}`;
@@ -1983,8 +2190,8 @@ function renderInsp() {
   const el = $("insp");
   if (sel && /^(n:|R:|G:|C:|Q:)/.test(sel) && estateInsp(el)) return;
   if (!sel || !WHY[sel]) {
-    el.innerHTML = `<div class="lab">Why</div><h2>Point at anything</h2>
-      <p class="note">Its state, its reasons and what depends on it: <span class="mono">dform why</span>, the answer the CLI gets.</p>`;
+    el.innerHTML = `<div class="lab">Why</div><h2>Click a node</h2>
+      <p class="note">The resource itself: what the program says, what the world returned, the provider's status, and each attribute's reason on its own line.</p>`;
     return;
   }
   const w = WHY[sel];
@@ -2052,12 +2259,13 @@ function revert() {
 
 /* ---------- events ---------- */
 document.addEventListener("click", (e) => {
-  const t = e.target.closest("[data-est],[data-node],[data-lanehdr],[data-group],[data-mode],[data-p],[data-tab],[data-g],[data-v],[data-line],[data-dec],[data-dep],#sign,#revert,#revert-fj");
-  if (!t) return;
+  const t = e.target.closest("[data-attr],[data-est],[data-node],[data-lanehdr],[data-group],[data-mode],[data-p],[data-tab],[data-g],[data-v],[data-line],[data-dec],[data-dep],#sign,#revert,#revert-fj");
+  if (!t) { if (sel && e.target.closest(".gwrap svg")) { sel = null; ATTR_OPEN.clear(); render(); } return; }
   if (t.id === "sign") return sign();
   if (t.id === "revert") return revert();
   if (t.id === "revert-fj") return revertFj();
-  if (t.dataset.node) { sel = t.dataset.node; if (/^[GCQ]:/.test(sel)) expandRep(sel); if (NARROW.has(sel)) OPEN.region[sel.slice(2)] = true; }
+  if (t.dataset.attr !== undefined) { const i = Number(t.dataset.attr); ATTR_OPEN.has(i) ? ATTR_OPEN.delete(i) : ATTR_OPEN.add(i); return renderInsp(); }
+  if (t.dataset.node) { const again = sel === t.dataset.node; ATTR_OPEN.clear(); if (again) { sel = null; return render(); } sel = t.dataset.node; if (/^[GCQ]:/.test(sel)) expandRep(sel); if (NARROW.has(sel)) OPEN.region[sel.slice(2)] = true; }
   else if (t.dataset.lanehdr) { const l = t.dataset.lanehdr; if (OPEN.lane[l]) { delete OPEN.lane[l]; Object.keys(OPEN.cell).filter(k => k.startsWith(l + "|")).forEach(k => delete OPEN.cell[k]); Object.keys(OPEN.group).filter(k => k.startsWith(l + "/")).forEach(k => delete OPEN.group[k]); } else OPEN.lane[l] = true; }
   else if (t.dataset.group) { delete OPEN.group[t.dataset.group]; }
   else if (t.dataset.mode) { const k = t.dataset.mode; view = k === "text" ? "text" : "graph"; if (k !== "text") ov = k === "plan" ? null : 0; }
@@ -2073,12 +2281,7 @@ document.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if ((e.key === "Enter" || e.key === " ") && e.target.matches("[data-line][tabindex],[data-node][tabindex]")) { e.preventDefault(); e.target.dispatchEvent(new MouseEvent("click", {bubbles: true})); }
 });
-document.addEventListener("mouseover", (e) => {
-  const g = e.target.closest && e.target.closest("g[data-node]");
-  if (!g || g.dataset.node === sel) return;
-  sel = g.dataset.node;
-  renderPane(); renderInsp();
-});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && sel) { sel = null; ATTR_OPEN.clear(); render(); } });
 let rz;
 window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { if (tab === "plan" && view === "graph") renderPane(); }, 120); });
 sel = null;
