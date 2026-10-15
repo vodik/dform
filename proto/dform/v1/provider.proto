@@ -366,6 +366,11 @@ message ApplyRequest {
   // with the "keep" capability; one that cannot leave a path as it is
   // refuses the call naming it.
   repeated string keep = 10;
+  // What state keeps of the object `remote` names, as a Read of it is
+  // told (ReadRequest's `prior`): its computed values as the last apply
+  // or read returned them; absent for a CREATE and when state holds none.
+  // The same rules: a hint, never truth.
+  optional Value prior = 11;
 }
 
 // `path` OP `value`: OP is one of eq, ne, len_ge, len_le, prefix, or a

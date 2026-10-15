@@ -245,6 +245,14 @@ pub struct StateEntry {
     pub computed: Json,
 }
 
+impl StateEntry {
+    /// Its computed values as last answered (`computed`), if state holds
+    /// any.
+    pub fn prior(&self) -> Option<&Json> {
+        Some(&self.computed).filter(|c| !c.is_null())
+    }
+}
+
 impl State {
     pub fn load(path: &Path) -> Result<Self> {
         if !path.exists() {
@@ -324,6 +332,16 @@ impl State {
 
     pub fn get(&self, addr: &Address) -> Option<&StateEntry> {
         self.resources.get(&key(addr))
+    }
+
+    /// What state remembers of the object `remote` at `addr` (a deposed
+    /// one's own): its computed values, the `prior` its provider is told.
+    pub fn prior(&self, addr: &Address, remote: &str) -> Option<&Json> {
+        [&self.resources, &self.deposed]
+            .into_iter()
+            .filter_map(|m| m.get(&key(addr)))
+            .find(|e| e.remote == remote)
+            .and_then(StateEntry::prior)
     }
 
     pub fn set(&mut self, addr: &Address, provider: String, remote: String) {

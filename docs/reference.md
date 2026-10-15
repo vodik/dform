@@ -1005,11 +1005,13 @@ when it exits.
 Read is told the object's prior: its computed values as the last Apply
 answered them, or the last Read an apply made, as state keeps them
 beside its remote id (`computed`); absent when state holds none (an
-object not applied since). It is how a provider remembers what it made
-below an object where the API does not say who made it: the OVH
-provider keeps the port it attached on each network
-(`ports[NET].id`), and its Read finds that port among others on the
-network. The rules:
+object not applied since). An Apply of an object state maps (an update,
+a delete, a replacement's old object) is told the same, so an update
+answers what the object already had beside what it adds. It is how a
+provider remembers what it made below an object where the API does not
+say who made it: the OVH provider keeps the port it attached on each
+network (`ports[NET].id`), and its Read finds that port among others on
+the network. The rules:
 
 - The prior is a hint of ownership, never truth. Read answers what the
   API has: an element the prior remembers that is gone is absent from

@@ -389,6 +389,11 @@ interface types {
     // with the "keep" capability; one that cannot leave a path as it is
     // refuses the call naming it.
     keep: list<string>,
+    // What state keeps of the object `remote` names, as a Read of it is
+    // told (`read-request`'s `prior`): its computed values as the last
+    // apply or read returned them; absent for a create and when state
+    // holds none. The same rules: a hint, never truth.
+    prior: option<tree>,
   }
 
   // `path` OP `value`: OP is one of eq, ne, len_ge, len_le, prefix, or a

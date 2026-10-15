@@ -16,6 +16,7 @@ fn a_value_round_trips_through_its_tree() {
         op: pb::Op::Replace as i32,
         r#type: "net.vpc".into(),
         config: Some(doc.clone()),
+        prior: Some(doc.clone()),
         assertions: vec![pb::Assertion {
             path: "a".into(),
             op: "eq".into(),

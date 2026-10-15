@@ -193,13 +193,6 @@ struct Mapped<'a> {
     link: usize,
 }
 
-impl Mapped<'_> {
-    /// What state remembers of it, for its Read.
-    fn prior(&self) -> Option<&Json> {
-        Some(&self.entry.computed).filter(|c| !c.is_null())
-    }
-}
-
 /// The Read of `remote`, the object at `addr`, told what state remembers
 /// of it (`prior`, absent when state holds nothing).
 fn read_request(addr: &Address, remote: &str, prior: Option<&Json>) -> pb::ReadRequest {
@@ -2657,7 +2650,7 @@ impl Providers {
     fn read_all(&self, objects: Vec<(&String, &Mapped)>) -> Result<()> {
         let mut sent = Vec::new();
         for (k, m) in objects {
-            let req = read_request(&m.addr, &m.entry.remote, m.prior());
+            let req = read_request(&m.addr, &m.entry.remote, m.entry.prior());
             let t = self.link(m.link)?.borrow_mut().submit(req);
             sent.push((k, m, t));
         }
@@ -2673,7 +2666,7 @@ impl Providers {
             let found = match answer {
                 Ok(r) if !r.found => None,
                 Ok(r) => Some(Self::object(r.attrs.as_ref(), r.computed.as_ref())?),
-                Err(_) => self.read(m.link, &m.addr, &m.entry.remote, m.prior())?,
+                Err(_) => self.read(m.link, &m.addr, &m.entry.remote, m.entry.prior())?,
             };
             self.refreshed
                 .borrow_mut()
@@ -4137,6 +4130,7 @@ impl Tick<'_> {
             spans: Vec::new(),
             idempotency_key,
             keep,
+            prior: state.prior(addr, &remote).map(wire::doc),
         };
         let link = self.cloud.route(&addr.typ);
         let ticket = self.cloud.links[link].borrow_mut().submit(req.clone());

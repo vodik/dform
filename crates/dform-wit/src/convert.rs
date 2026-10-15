@@ -529,6 +529,7 @@ macro_rules! convert {
                         .collect(),
                     idempotency_key: r.idempotency_key.clone(),
                     keep: r.keep.clone(),
+                    prior: r.prior.as_ref().map(to_tree),
                 }
             }
 
@@ -563,6 +564,7 @@ macro_rules! convert {
                         .collect(),
                     idempotency_key: r.idempotency_key.clone(),
                     keep: r.keep.clone(),
+                    prior: r.prior.as_ref().map(from_tree).transpose()?,
                 })
             }
 
