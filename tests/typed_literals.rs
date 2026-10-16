@@ -140,11 +140,11 @@ fn a_ref_attribute_refuses_what_is_no_reference_of_its_type() {
     );
     let r = plan(&s).failure();
     for want in [
-        "p.df:5:25: net.subnet[\"b\"].vpc takes a ref(net.vpc): a resource",
+        "p.df:5:25: net.subnet[\"b\"].vpc takes net.vpc: a resource",
         "not the string \"main\"",
-        "p.df:6:25: net.subnet[\"c\"].vpc takes a ref(net.vpc), got net.subnet[\"a\"]",
-        "p.df:7:26: db.postgres[\"d\"].subnets takes a ref(net.subnet), got net.vpc[\"main\"]",
-        "p.df:8:27: k8s.nodepool[\"n\"].cluster takes a ref(k8s.cluster), got net.vpc[\"main\"]",
+        "p.df:6:25: net.subnet[\"c\"].vpc takes net.vpc, got net.subnet[\"a\"]",
+        "p.df:7:26: db.postgres[\"d\"].subnets takes net.subnet, got net.vpc[\"main\"]",
+        "p.df:8:27: k8s.nodepool[\"n\"].cluster takes k8s.cluster, got net.vpc[\"main\"]",
     ] {
         assert!(
             common::says_error(&r.stderr, want),

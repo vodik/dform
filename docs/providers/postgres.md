@@ -138,7 +138,7 @@ service's name directly, without `kubeconfig`.
 | `password` | string, sensitive | write-only (below) |
 | `login`, `superuser`, `createdb`, `createrole`, `inherit`, `replication` | bool | the server's default where not written (`NOLOGIN`, `INHERIT`, ..) |
 | `connection_limit` | int | -1, no limit, unless written |
-| `member_of` | set(ref(postgres.role)) | `GRANT g TO r`, `REVOKE` in place |
+| `member_of` | set(postgres.role) | `GRANT g TO r`, `REVOKE` in place |
 | `id` | string, computed | its name: what a reference to it (an owner, a membership) is |
 
 `postgres.database`
@@ -146,7 +146,7 @@ service's name directly, without `kubeconfig`.
 | attribute | type | |
 |---|---|---|
 | `name` | string | required; a change replaces it |
-| `owner` | ref(postgres.role) | `ALTER DATABASE .. OWNER TO` in place; the provider's role unless written |
+| `owner` | postgres.role | `ALTER DATABASE .. OWNER TO` in place; the provider's role unless written |
 | `encoding` | string | as the server names it (`UTF8`, `LATIN1`; `utf-8` is refused at plan, since it would read back as a change); a change replaces it |
 | `lc_collate`, `lc_ctype` | string | a change replaces it |
 | `id` | string, computed | its name |

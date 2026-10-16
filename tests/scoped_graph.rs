@@ -138,7 +138,7 @@ fn a_module_given_the_key_and_a_resource_is_no_provider_cycle() {
     s.write(
         "m.df",
         r#"input env: enum("lab", "prod")
-input vpc: ref(net.vpc)
+input vpc: net.vpc
 use config { env }
 resource db.postgres d { name = "${env}-${vpc.cidr}${config.suffix}" }
 "#,

@@ -164,7 +164,7 @@ fn main() -> std::process::ExitCode {
 - `#[derive(Resource)]` writes the type's schema facts from its fields:
   `String` is a string, the integers int, `f64` number, `bool` bool, a
   `Vec` list, a map map, anything else obj (`Option<T>` is T's);
-  `ty = "ref(net.vpc)"` says otherwise. Field flags: `required`,
+  `ty = "net.vpc"` says otherwise. Field flags: `required`,
   `computed`, `id`, `sensitive`, `force_new`, `optional_computed`,
   `nullable`, `write_only` (the API takes it and never answers it: a
   password; dform keeps its digest in state and a changed one is a
@@ -179,7 +179,7 @@ fn main() -> std::process::ExitCode {
   answers when unset: `skip_serializing_if = "Option::is_none"`.
 - A reference is the resource: a program writes `vpc = main` and the
   provider is sent `main`'s id. So dform names an attribute typed
-  `ref(T)`, or a list or set of them, for the resource: a name ending in
+  by a resource type `T`, or a list or set of them, for the resource: a name ending in
   `_id` is the program's without it (`vpc_id` is `vpc`, `peer_vpc_id`
   `peer_vpc`), and a list or set named `_ids` is the plural
   (`security_group_ids` is `security_groups`). The provider keeps its

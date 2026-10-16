@@ -116,7 +116,7 @@ fn a_column_of_several_types_is_their_union() {
     let nodes = p.nodes.as_ref().expect("the program's nodes");
     let sigs: Vec<String> = nodes.signatures.values().map(|s| s.to_string()).collect();
     assert!(
-        sigs.contains(&"workload(w: ref(k8s.deployment | k8s.stateful_set))".to_string()),
+        sigs.contains(&"workload(w: k8s.deployment | k8s.stateful_set)".to_string()),
         "{sigs:?}"
     );
 }
@@ -153,7 +153,7 @@ fn an_address_string_in_a_reference_column_is_an_error() {
     let r = mock(&s, &["plan"]).failure();
     assert!(
         r.stderr.contains(
-            "`workload`'s column `w` is ref(k8s.deployment | k8s.stateful_set): a row gives it \
+            "`workload`'s column `w` is k8s.deployment | k8s.stateful_set: a row gives it \
              a resource, not `\"web\"`"
         ),
         "{}",

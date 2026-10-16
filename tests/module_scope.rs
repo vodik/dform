@@ -213,7 +213,7 @@ fn a_module_used_by_a_module_reads_neither_user() {
 }
 
 /// A resource of the user's is no more the module's than a value: the
-/// module takes a reference, `input main: ref(net.vpc)`.
+/// module takes a reference, `input main: net.vpc`.
 #[test]
 fn a_users_resource_is_taken_as_a_reference() {
     let stack = format!("{STACK}resource net.vpc main {{ cidr = \"10.0.0.0/16\" }}\n");
@@ -222,13 +222,13 @@ fn a_users_resource_is_taken_as_a_reference() {
     let r = s.run(&["plan", "--why=none", "main.df"]).failure();
     assert!(
         r.stderr.contains(
-            "help: take it as an input: `input main: ref(net.vpc)` in baseline.df, and give it \
+            "help: take it as an input: `input main: net.vpc` in baseline.df, and give it \
              in the use: `use baseline { main }`"
         ),
         "{}",
         r.stderr
     );
-    let pack = format!("input main: ref(net.vpc)\n{pack}");
+    let pack = format!("input main: net.vpc\n{pack}");
     let stack = stack.replace("use baseline", "use baseline { main }");
     let s = project("scope-resource", &pack, &stack);
     let r = s.run(&["plan", "--why=none", "main.df"]).success();
@@ -274,7 +274,7 @@ fn a_users_copy_is_read_through_an_input() {
     );
     s.write(
         "pack.df",
-        "input vpc: ref(net.vpc)\nwarn \"w\" where vpc.cidr == \"10.0.0.0/16\"\n",
+        "input vpc: net.vpc\nwarn \"w\" where vpc.cidr == \"10.0.0.0/16\"\n",
     );
     s.write(
         "main.df",

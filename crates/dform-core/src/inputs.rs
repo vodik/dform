@@ -172,7 +172,7 @@ pub fn value_type(t: &TypeExpr) -> Option<String> {
     crate::value::is_value_type(&n).then_some(n)
 }
 
-/// The type names an input may have. `addr`, `ref(...)` and `any` are
+/// The type names an input may have. `addr`, a resource type and `any` are
 /// accepted unchecked; `secret(T)` is `T`, labeled secret (`secrets`).
 pub fn check_type(t: &TypeExpr) -> Result<(), String> {
     if value_type(t).is_some() {

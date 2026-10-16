@@ -258,7 +258,7 @@ fn test_type_checks_the_program_as_plan_does() {
         "providers/store/schema.df",
         "type_attr(\"store.user\", \"id\", \"string\", [\"computed\", \"id\"])\n\
          type_attr(\"store.credential\", \"id\", \"string\", [\"computed\", \"id\"])\n\
-         type_attr(\"store.credential\", \"user\", \"ref(store.user)\", [\"required\"])\n\
+         type_attr(\"store.credential\", \"user\", \"store.user\", [\"required\"])\n\
          type_attr(\"store.credential\", \"access\", \"string\", [\"computed\"])\n\
          type_attr(\"store.credential\", \"secret\", \"string\", [\"computed\", \"sensitive\"])\n",
     );
@@ -287,7 +287,7 @@ fn test_type_checks_the_program_as_plan_does() {
     );
     let plan = s.run(&["plan", "p.df"]).failure();
     assert!(
-        plan.stderr.contains(".user takes a ref(store.user)"),
+        plan.stderr.contains(".user takes store.user"),
         "{}",
         plan.stderr
     );

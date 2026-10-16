@@ -563,7 +563,7 @@ pub(crate) fn ref_and_string(
     Diagnostic::error(
         span,
         format!(
-            "{written} compares a reference, ref({want}), with the string {text:?}: a reference \
+            "{written} compares a reference to a {want} with the string {text:?}: a reference \
              is never a string"
         ),
     )

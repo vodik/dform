@@ -1545,13 +1545,14 @@ cargo run -- -C tests/fixtures/demo plan
 ```
 
 A reference is the resource. Where an attribute points at another
-resource, the schema types it `ref(T)` and the program gives it the
+resource, the schema types it by that resource's type (`net.vpc`) and
+the program gives it the
 resource: `vpc = vpc`, `subnets = [ s | s in net.subnet ]`. The provider
 gives its API the object's id once it exists; the plan prints the
 resource by its address, `vpc = main`, before it exists and after
 (`--json` shows the id). A program never reads an id: `x.id` is an
 error naming `x`, and `ref(x)` writes the reference out where an attribute
-that is no `ref(T)` needs the id as text.
+that takes no resource needs the id as text.
 
 An order with no value passed along is a clause on the resource's
 existence: `has r` holds once `r`'s identity is known, so
@@ -4591,7 +4592,8 @@ where the file states it, like a `set`'s; the plan file records each input file'
 
 Types are `int`, `string`, `bool`, `inet`, `ip`, `uri`, `oci`,
 `semver`, `range(T)` of an ordered `T` (`range(ip)`, `range(bytes)`), the quantities `bytes`, `cpu` and `duration`, `time`, `enum(a, b, ...)`, `list(T)`, `set(T)` and objects
-`{ k: T }` (`addr`, `ref(...)` and `any` are unchecked). A `uri` is RFC
+`{ k: T }`, and a resource type `T` (a reference to one; `addr` and
+`any` are unchecked). A `uri` is RFC
 3986's generic syntax (`postgres://user@db:5432/x`, `mailto:ops@example.com`),
 its host held as written and equal by its A-labels, sent to a provider
 in them (`bücher.example` is `xn--bcher-kva.example` on the wire); a host
@@ -5186,7 +5188,7 @@ tests/fixtures/demo an evaluation takes about 30 ms in a release build.
 - Formatting (`dform fmt`'s formatter) and go-to-definition of every
   name the references find: its declaration (a relation's `decl`, else
   its first rule; an output's typed declaration; a resource two types
-  name, the one the attribute's `ref(T)` takes); on a `use`'s path
+  name, the one the attribute's type takes); on a `use`'s path
   or a component's resource's type, the file (or the component in it) the path names, and from a name a `use` binds, its file. A std function
   (`inet.subnet`) goes to its signature line, a provider type
   (`net.vpc`) to the line of its schema file that declares it and an

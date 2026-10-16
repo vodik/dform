@@ -19,7 +19,7 @@ pub struct Database {
     #[dform(required, force_new)]
     pub name: String,
     /// Its owner; the provider's own role when none is written.
-    #[dform(ty = "ref(postgres.role)", optional_computed)]
+    #[dform(ty = "postgres.role", optional_computed)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
     /// As the server names it (`UTF8`, `LATIN1`, `SQL_ASCII`).

@@ -51,24 +51,24 @@ type_attr(compute.vm, "labels", "map(string)", [])
 # What an attribute that points at another resource takes: the resource
 # itself (`vpc = main`), resolved to its id at Apply (R-43). Each is named
 # for the thing it points at.
-type_attr(net.subnet, "vpc", "ref(net.vpc)", [])
-type_attr(net.vpc_peering, "requester_vpc", "ref(net.vpc)", [])
-type_attr(net.vpc_peering, "accepter_vpc", "ref(net.vpc)", [])
-type_attr(net.peering, "from", "ref(net.vpc)", [])
-type_attr(net.peering, "to", "ref(net.vpc)", [])
-type_attr("db.postgres", "subnets", "list(ref(net.subnet))", [])
-type_attr(k8s.cluster, "subnets", "list(ref(net.subnet))", [])
-type_attr(k8s.nodepool, "cluster", "ref(k8s.cluster)", [])
-type_attr(net.route_table, "vpc", "ref(net.vpc)", [])
+type_attr(net.subnet, "vpc", "net.vpc", [])
+type_attr(net.vpc_peering, "requester_vpc", "net.vpc", [])
+type_attr(net.vpc_peering, "accepter_vpc", "net.vpc", [])
+type_attr(net.peering, "from", "net.vpc", [])
+type_attr(net.peering, "to", "net.vpc", [])
+type_attr("db.postgres", "subnets", "list(net.subnet)", [])
+type_attr(k8s.cluster, "subnets", "list(net.subnet)", [])
+type_attr(k8s.nodepool, "cluster", "k8s.cluster", [])
+type_attr(net.route_table, "vpc", "net.vpc", [])
 
 # A relationship whose state lives on one side is an attribute of that
 # side, not a resource (R-158): a role's policies, a route table's
 # routes. Each is a set: every contribution adds its elements, so several
 # modules each add one to the same role.
-type_attr("iam.role", "policies", "set(ref(iam.policy))", [])
+type_attr("iam.role", "policies", "set(iam.policy)", [])
 type_attr(net.route_table, "routes", "set", [])
 type_attr(net.route_table, "routes.destination", "inet", ["required"])
-type_attr(net.route_table, "routes.target", "ref(net.vpc)", ["required"])
+type_attr(net.route_table, "routes.target", "net.vpc", ["required"])
 
 # The types those attributes replace: writing one is an error that names
 # the attribute (`type_instead(Gone, Type, Path)`).

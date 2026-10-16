@@ -190,7 +190,7 @@ use fake
     // The module takes the database it protects (R-205).
     s.write(
         "lib.df",
-        "\ninput main: ref(db.postgres)\nlifecycle(main, \"prevent_destroy\")\n",
+        "\ninput main: db.postgres\nlifecycle(main, \"prevent_destroy\")\n",
     );
     s.write(
         "p.df",

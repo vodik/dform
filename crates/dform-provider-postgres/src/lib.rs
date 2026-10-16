@@ -107,9 +107,9 @@ mod tests {
         for line in [
             r#"type_attr("postgres.role", "name", "string", ["required", "force_new"])"#,
             r#"type_attr("postgres.role", "password", "string", ["sensitive", "write_only"])"#,
-            r#"type_attr("postgres.role", "member_of", "set(ref(postgres.role))", [])"#,
+            r#"type_attr("postgres.role", "member_of", "set(postgres.role)", [])"#,
             r#"type_attr("postgres.role", "login", "bool", ["optional_computed"])"#,
-            r#"type_attr("postgres.database", "owner", "ref(postgres.role)", ["optional_computed"])"#,
+            r#"type_attr("postgres.database", "owner", "postgres.role", ["optional_computed"])"#,
             r#"type_attr("postgres.database", "encoding", "string", ["optional_computed", "force_new"])"#,
             r#"type_replace("postgres.database", "destroy_first")"#,
         ] {

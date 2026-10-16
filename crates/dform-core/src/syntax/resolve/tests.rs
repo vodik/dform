@@ -656,7 +656,7 @@ fn membership_indexing_and_negation() {
 fn modules_instances_and_outputs() {
     let got = lower(
         "component m {\n  input n: int\n  resource net.vpc vpc { size = n }\n  \
-         output vpc: net.vpc = vpc\n  output ids: list(ref(net.vpc)) = [vpc]\n}\n\
+         output vpc: net.vpc = vpc\n  output ids: list(net.vpc) = [vpc]\n}\n\
          resource m a { n = 1 }\n\
          inst(\"a\")\n\
          p(v, s) where inst(i), v = m[i].vpc, s = a.vpc.size\n\
@@ -904,4 +904,20 @@ fn a_second_spelling_is_an_error_naming_the_first() {
         true,
     )
     .unwrap();
+}
+
+/// A resource type is its references' type: `ref(T)` written as a type
+/// is the error whose fix is `T`, wherever a type is written.
+#[test]
+fn a_resource_type_is_written_bare() {
+    for src in [
+        "resource net.vpc main { cidr = \"x\" }\nlet v: ref(net.vpc) = main\n",
+        "input vpcs: list(ref(net.vpc))\n",
+    ] {
+        let e = error(src);
+        assert!(
+            e.contains("is written `net.vpc`: a resource type is its references' type"),
+            "{src}: {e}"
+        );
+    }
 }

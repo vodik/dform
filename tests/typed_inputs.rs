@@ -22,18 +22,18 @@ fn plan(name: &str, src: &str) -> common::Run {
     s.run(&["plan", "p.df"])
 }
 
-/// `input vpc: net.vpc` plans as `input vpc: ref(net.vpc)` does, and
+/// `input vpc: net.vpc` plans as `input vpc: net.vpc` does, and
 /// refuses a resource of another type the same way.
 #[test]
 fn a_resource_type_is_a_reference_to_one() {
     let bare = plan("typed-bare", &program("net.vpc", "main")).success();
-    let written = plan("typed-ref", &program("ref(net.vpc)", "main")).success();
+    let written = plan("typed-ref", &program("net.vpc", "main")).success();
     assert_eq!(bare.stdout, written.stdout);
     assert!(bare.stdout.contains("vpc_id = main"), "{}", bare.stdout);
     let r = plan("typed-other", &program("net.vpc", "other")).failure();
     assert!(
         r.stderr
-            .contains("input vpc of component sub takes a ref(net.vpc), got net.subnet[\"other\"]"),
+            .contains("input vpc of component sub takes net.vpc, got net.subnet[\"other\"]"),
         "{}",
         r.stderr
     );

@@ -440,6 +440,26 @@ impl Lowerer<'_> {
         }
     }
 
+    /// `ref(T)` written as a type: the error, whose fix is `T`.
+    fn ref_spelled(&mut self, n: &SyntaxNode) {
+        let inner: Vec<String> = n
+            .children()
+            .filter(|c| c.kind() == TYPE_EXPR)
+            .map(|c| c.text().to_string())
+            .collect();
+        let bare = inner.join(" | ");
+        let span = self.span(n);
+        let d = Diagnostic::error(
+            span,
+            format!(
+                "`{}` is written `{bare}`: a resource type is its references' type",
+                n.text()
+            ),
+        )
+        .with_fix(format!("write `{bare}`"), vec![(span, bare.clone())]);
+        self.diags.push(d);
+    }
+
     /// `type_expr`; `aliases`: a bare name may be a type alias (not in an
     /// `enum(..)`, whose members are values).
     pub(super) fn type_expr_in(&mut self, n: &SyntaxNode, aliases: bool) -> TypeExpr {
@@ -502,24 +522,29 @@ impl Lowerer<'_> {
                             .collect(),
                     )
                 } else {
-                    // `range(T)` for an ordered `T` (R-180).
-                    if name == "range"
-                        && !matches!(args.as_slice(), [TypeExpr::Name(t)]
-                            if crate::range::ORDERED.contains(&t.as_str()))
-                    {
-                        let d = Diagnostic::error(
-                            self.span(n),
-                            format!("`{}` is no range type", n.text()),
-                        )
-                        .with_help(format!(
-                            "a range is of one ordered type: `range(T)`, `T` one of {}",
-                            crate::range::ORDERED.join(", ")
-                        ));
-                        self.diags.push(d);
-                    }
-                    TypeExpr::Apply(name, args)
+                    self.applied(n, name, args)
                 }
             }
         }
+    }
+
+    /// `name(args)` written as the type `n`: `ref(T)` the error whose fix
+    /// is `T`, `range(T)` of an ordered `T` (R-180).
+    fn applied(&mut self, n: &SyntaxNode, name: String, args: Vec<TypeExpr>) -> TypeExpr {
+        if name == "ref" {
+            self.ref_spelled(n);
+        }
+        if name == "range"
+            && !matches!(args.as_slice(), [TypeExpr::Name(t)]
+                if crate::range::ORDERED.contains(&t.as_str()))
+        {
+            let d = Diagnostic::error(self.span(n), format!("`{}` is no range type", n.text()))
+                .with_help(format!(
+                    "a range is of one ordered type: `range(T)`, `T` one of {}",
+                    crate::range::ORDERED.join(", ")
+                ));
+            self.diags.push(d);
+        }
+        TypeExpr::Apply(name, args)
     }
 }

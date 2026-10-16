@@ -175,9 +175,9 @@ schema's `type_lookup`, see "What a Create that does not answer does").
 | `region`     | string, required  | `ca-east-tor`, `BHS5`, ...; replaces |
 | `flavor`     | string, required  | the flavor's name, `b2-7`; a larger one in place (a resize: the instance reboots), a smaller one replaces |
 | `image`      | string, required  | the image's name in the region, `Ubuntu 24.04`; replaces |
-| `ssh_key`    | ref(ovh.ssh_key)  | `ssh_key = admin`; replaces          |
+| `ssh_key`    | ovh.ssh_key       | `ssh_key = admin`; replaces          |
 | `user_data`  | string, sensitive | cloud-init; replaces                 |
-| `networks`   | set({ network: ref(ovh.network), ip?: ip }) | `networks = [lab]`, or `[{ network = lab, ip = .. }]` for a fixed address; changes in place, but a new address replaces |
+| `networks`   | set({ network: ovh.network, ip?: ip }) | `networks = [lab]`, or `[{ network = lab, ip = .. }]` for a fixed address; changes in place, but a new address replaces |
 | `id`         | computed          |                                     |
 | `public_ip`  | ip, computed      | once the instance has one           |
 | `private_ip` | ip, computed, nullable | its address on the first of its private networks, by id, as `private_ips` has it |
@@ -338,7 +338,7 @@ replaces it (the API has no update for a key); `id` computed.
 | `description` | string               | changes in place                     |
 | `image`       | string, write-only   | the region's image by name, for a bootable volume; replaces |
 | `snapshot`    | string, write-only   | a snapshot's id to make it from; replaces |
-| `instance`    | ref(ovh.instance)    | `instance = server`: attached; changes in place |
+| `instance`    | ovh.instance         | `instance = server`: attached; changes in place |
 | `id`, `status`| computed             | `available`, `in-use`                |
 
 The attachment is the volume's: set, the volume is attached once it is

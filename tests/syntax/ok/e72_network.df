@@ -2,7 +2,7 @@ input vpc_net: inet check vpc_net.bits <= 20
 input zones: list(string) = ["us-test-1a", "us-test-1b"] # @default contribution
 
 output vpc: addr
-output private_subnet_ids: list(ref(net.subnet))
+output private_subnet_ids: list(net.subnet)
 output vpc = vpc
 output private_subnet_ids = [ ref(net.subnet, sn, "id") |
   want(net.subnet, sn),

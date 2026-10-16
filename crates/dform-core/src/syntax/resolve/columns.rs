@@ -34,15 +34,12 @@ impl RefColumn {
         }
     }
 
-    /// The column's type as a message prints it: `ref(k8s.deployment |
-    /// k8s.stateful_set)`, `a reference` when any resource's.
+    /// The column's type as a message prints it: `k8s.deployment |
+    /// k8s.stateful_set`, `a reference` when any resource's.
     fn shown(&self) -> String {
         match self.any {
             true => "a reference".to_string(),
-            false => format!(
-                "ref({})",
-                self.types.iter().cloned().collect::<Vec<_>>().join(" | ")
-            ),
+            false => self.types.iter().cloned().collect::<Vec<_>>().join(" | "),
         }
     }
 

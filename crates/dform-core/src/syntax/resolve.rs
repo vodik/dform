@@ -383,7 +383,7 @@ fn terms(n: &SyntaxNode) -> impl Iterator<Item = SyntaxNode> + '_ {
 }
 
 /// The resource type a typed `let`'s row declares, from the row's term
-/// `t`: `let v: net.vpc = ..`, `let v: ref(net.vpc) = ..` (R-74).
+/// `t`: `let v: net.vpc = ..`, `let v: net.vpc = ..` (R-74).
 fn declared_ref(t: &SyntaxNode) -> Option<String> {
     let ty = node(&t.parent().filter(|l| l.kind() == LET)?, TYPE_EXPR)?;
     let name = dotted_text(&ty, 0);

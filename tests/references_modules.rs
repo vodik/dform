@@ -97,7 +97,7 @@ fn a_stacks_relation_output_cannot_carry_references() {
     let r = mock(&s, &["plan"]).failure();
     assert!(
         r.stderr.contains(
-            "`output mine` publishes mine's column `s`, ref(net.subnet): a reference cannot \
+            "`output mine` publishes mine's column `s`, net.subnet: a reference cannot \
              leave a deployment"
         ),
         "{}",

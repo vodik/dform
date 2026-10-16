@@ -69,7 +69,7 @@ use fake
     );
 }
 
-/// `vpc.cidr` on `input vpc: ref(net.vpc)` reads the referenced vpc's
+/// `vpc.cidr` on `input vpc: net.vpc` reads the referenced vpc's
 /// attribute, in the copy's resources and outputs, and in a copy inside a
 /// copy, where the reference is its user's resource.
 #[test]
@@ -79,7 +79,7 @@ fn a_ref_input_reads_through_the_reference() {
         "p.df",
         r#"
 component sub {
-  input vpc: ref(net.vpc)
+  input vpc: net.vpc
   resource net.subnet s { cidr = vpc.cidr }
   output c: string = vpc.cidr
 }

@@ -33,7 +33,7 @@ type_attr("google.sql_database_instance", "settings.ip_configuration.ipv4_enable
 type_attr(
   "google.sql_database_instance",
   "settings.ip_configuration.private_network",
-  "ref(google.compute_network)",
+  "google.compute_network",
   [],
 )
 type_attr("google.sql_database_instance", "private_ip_address", "string", ["computed"])

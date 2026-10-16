@@ -190,7 +190,7 @@ fn what_a_name_may_not_do() {
     let r = s.run(&["plan", "cross.df"]).failure();
     assert!(
         r.stderr
-            .contains("west.subnet[\"s\"].vpc takes a ref(west.vpc), got east.vpc[\"a\"]"),
+            .contains("west.subnet[\"s\"].vpc takes west.vpc, got east.vpc[\"a\"]"),
         "{}",
         r.stderr
     );
@@ -336,7 +336,7 @@ fn the_schema_is_asked_once_and_served_under_each_name() {
     assert!(!schema.knows_type("aws.vpc"));
     assert_eq!(
         schema.attr("west.subnet", "vpc").map(|a| a.ty.as_str()),
-        Some("ref(west.vpc)")
+        Some("west.vpc")
     );
     assert!(schema.externs.contains_key("east.availability_zone"));
 }

@@ -243,7 +243,7 @@ component postgres {
   type conn = { host: string, port: int }
 
   input name: string
-  input subnet: ref(net.subnet)
+  input subnet: net.subnet
   output conn: conn = { host = "${name}.svc", port = 5432 }
 
   resource db.postgres db { subnets = [subnet] }

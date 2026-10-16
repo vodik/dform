@@ -52,7 +52,7 @@ pub struct Role {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection_limit: Option<i64>,
     /// The roles it is a member of (`GRANT g TO r`).
-    #[dform(ty = "set(ref(postgres.role))")]
+    #[dform(ty = "set(postgres.role)")]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub member_of: Vec<String>,
     #[dform(computed, id)]

@@ -57,11 +57,11 @@ fn a_typed_let_checks_its_value() {
         ),
         (
             "let v: net.subnet = net.vpc[\"other\"]",
-            "let v takes a ref(net.subnet), got net.vpc[\"other\"]",
+            "let v takes net.subnet, got net.vpc[\"other\"]",
         ),
         (
             "let v: net.vpc = \"main\"",
-            "let v takes a ref(net.vpc): a resource",
+            "let v takes net.vpc: a resource",
         ),
         (
             "resource compute.vm solo { size = \"s\" }\nlet n: string = solo",
@@ -85,7 +85,7 @@ fn a_typed_let_picks_the_resource_of_its_type() {
     let r = plan(
         "typed-let-ref",
         &two_mains(
-            "let v: net.vpc = main\nlet s: ref(net.subnet) = main\n\
+            "let v: net.vpc = main\nlet s: net.subnet = main\n\
              resource net.subnet other {\n  vpc = v\n  cidr = s.cidr\n}\n",
         ),
     )
@@ -175,7 +175,7 @@ fn an_untyped_position_keeps_the_error() {
     }
 }
 
-/// OVH's `networks` (an element `{ network: ref(ovh.network), ip?: ip }`)
+/// OVH's `networks` (an element `{ network: ovh.network, ip?: ip }`)
 /// takes a network bare or in its object, and a network and a subnet both
 /// named `lab` are the network there: no `ovh.network["lab"]` needed.
 #[test]

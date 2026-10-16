@@ -107,14 +107,16 @@ impl Ty {
         text.split('|').map(str::trim)
     }
 
-    /// `ref(a | b)`: a reference to one of the types of `a` or of `b`.
+    /// `a | b`: a reference to one of the types of `a` or of `b`.
     pub fn ref_union(a: &str, b: &str) -> Ty {
         let types: std::collections::BTreeSet<&str> =
             Ty::ref_types(a).chain(Ty::ref_types(b)).collect();
         Ty::Ref(types.into_iter().collect::<Vec<_>>().join(" | "))
     }
 
-    /// Read a type's text: `ref(net.vpc)`, `list(ref(net.subnet))`,
+    /// Read a type's text: `net.vpc` (a resource type, its references'),
+    /// `list(net.subnet)`, `k8s.deployment | k8s.stateful_set`, `ref(net.vpc)`
+    /// (a provider's schema may still spell one so),
     /// `enum("a", "b")`, `inet`, `bytes(gib)` (a quantity and how the
     /// provider takes it, `schema::Render`).
     pub fn parse(s: &str) -> Ty {
@@ -124,6 +126,7 @@ impl Ty {
         }
         let Some((head, rest)) = s.split_once('(') else {
             return match s {
+                s if s.contains('.') => Ty::Ref(s.to_string()),
                 "string" | "int" | "float" | "number" | "bool" | "inet" | "ip" | "bytes"
                 | "cpu" | "duration" | "time" | "uri" | "oci" | "semver" | "regex" => {
                     Ty::Scalar(s.to_string())
@@ -180,7 +183,7 @@ impl Ty {
 
     /// What a reference coerces into where this type is wanted: an object
     /// type's one required field, when it is the only required one and a
-    /// reference (`{ network: ref(ovh.network), ip?: ip }` takes `lab` as
+    /// reference (`{ network: ovh.network, ip?: ip }` takes `lab` as
     /// `{ network = lab }`).
     pub fn coerced(&self) -> Option<&Field> {
         let Ty::Object(fs) = self else { return None };
@@ -218,7 +221,7 @@ pub fn measured(ty: &str) -> bool {
 impl std::fmt::Display for Ty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Ty::Ref(t) => write!(f, "ref({t})"),
+            Ty::Ref(t) => write!(f, "{t}"),
             Ty::List(t) => write!(f, "list({t})"),
             Ty::Map(t) => write!(f, "map({t})"),
             Ty::Secret(t) => write!(f, "secret({t})"),
@@ -514,7 +517,7 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
         }
         (Ty::Object(_), Term::Val(v)) => Some(format!("is {ty}, not {}", shown_literal(v))),
         (Ty::Ref(want), Term::Val(v)) => Some(format!(
-            "takes a ref({want}): a resource, by its name, `{want}[\"a\"]` or a variable, not {}",
+            "takes {want}: a resource, by its name, `{want}[\"a\"]` or a variable, not {}",
             shown_literal(v)
         )),
         (Ty::Enum(ms), Term::Val(Value::Str(s))) if !ms.contains(s) => {
@@ -538,7 +541,7 @@ fn reference_mismatch(ty: &Ty, t: &Term, typ: &str, addr: &Term) -> Option<Strin
     let written = explicit(t).is_some();
     match ty {
         Ty::Ref(want) if !Ty::ref_types(want).any(|w| w == typ) => {
-            Some(format!("takes a ref({want}), got {}", shown_ref(typ, addr)))
+            Some(format!("takes {want}, got {}", shown_ref(typ, addr)))
         }
         Ty::Ref(_) | Ty::Any => None,
         Ty::Secret(inner) => mismatch(inner, t),
@@ -1997,9 +2000,9 @@ mod tests {
 
     #[test]
     fn types_parse_as_the_schema_writes_them() {
-        assert_eq!(Ty::parse("ref(net.vpc)"), Ty::Ref("net.vpc".into()));
+        assert_eq!(Ty::parse("net.vpc"), Ty::Ref("net.vpc".into()));
         assert_eq!(
-            Ty::parse("list(ref(net.subnet))"),
+            Ty::parse("list(net.subnet)"),
             Ty::List(Box::new(Ty::Ref("net.subnet".into())))
         );
         assert_eq!(Ty::parse("map"), Ty::Any);
@@ -2018,7 +2021,7 @@ mod tests {
     /// back as written.
     #[test]
     fn an_object_type_parses_its_fields() {
-        let text = "set({ network: ref(ovh.network), ip?: ip })";
+        let text = "set({ network: ovh.network, ip?: ip })";
         let ty = Ty::parse(text);
         let Ty::List(elem) = &ty else {
             panic!("{ty:?}")
@@ -2038,18 +2041,11 @@ mod tests {
                 },
             ])
         );
-        assert_eq!(
-            ty.to_string(),
-            "list({ network: ref(ovh.network), ip?: ip })"
-        );
+        assert_eq!(ty.to_string(), "list({ network: ovh.network, ip?: ip })");
         assert_eq!(elem.coerced().map(|f| f.name.as_str()), Some("network"));
         // Two required fields, or one that is no reference: no coercion.
-        assert!(
-            Ty::parse("{ a: ref(t.a), b: ref(t.b) }")
-                .coerced()
-                .is_none()
-        );
-        assert!(Ty::parse("{ a: string, b?: ref(t.b) }").coerced().is_none());
+        assert!(Ty::parse("{ a: t.a, b: t.b }").coerced().is_none());
+        assert!(Ty::parse("{ a: string, b?: t.b }").coerced().is_none());
         assert_eq!(Ty::parse("{ a }"), Ty::Any);
     }
 
@@ -2059,7 +2055,7 @@ mod tests {
     /// checked as theirs.
     #[test]
     fn a_reference_coerces_into_an_object_of_one_reference_field() {
-        let ty = Ty::parse("set({ network: ref(ovh.network), ip?: ip })");
+        let ty = Ty::parse("set({ network: ovh.network, ip?: ip })");
         let s = |x: &str| Term::Val(Value::Str(x.into()));
         let r = |t: &str| Term::Func {
             name: crate::address::REF.into(),
@@ -2099,14 +2095,14 @@ mod tests {
         assert_eq!(
             mismatch(&elem(), &r("ovh.subnet")).as_deref(),
             Some(
-                "is { network: ref(ovh.network), ip?: ip }: its field `network` takes a \
-                 ref(ovh.network), got ovh.subnet[\"lab\"]"
+                "is { network: ovh.network, ip?: ip }: its field `network` takes \
+                 ovh.network, got ovh.subnet[\"lab\"]"
             )
         );
         assert_eq!(
             mismatch(&elem(), &object(r("ovh.network"), "10.42")).as_deref(),
             Some(
-                "is { network: ref(ovh.network), ip?: ip }: its field `ip` is an ip: \"10.42\" \
+                "is { network: ovh.network, ip?: ip }: its field `ip` is an ip: \"10.42\" \
                  is not an address (`a.b.c.d`)"
             )
         );
@@ -2114,7 +2110,7 @@ mod tests {
         assert_eq!(
             mismatch(&elem(), &extra).as_deref(),
             Some(
-                "is { network: ref(ovh.network), ip?: ip }: it has no field `net`; its fields \
+                "is { network: ovh.network, ip?: ip }: it has no field `net`; its fields \
                  are network, ip"
             )
         );
@@ -2132,7 +2128,7 @@ mod tests {
     /// the name it has, at the site.
     #[test]
     fn the_providers_name_of_a_reference_names_the_programs() {
-        let schema = Schema::parse("type_attr(\"t.s\", \"vpc_id\", \"ref(t.v)\", [])\n", "test")
+        let schema = Schema::parse("type_attr(\"t.s\", \"vpc_id\", \"t.v\", [])\n", "test")
             .and_then(Schema::imported)
             .unwrap();
         let s = |x: &str| Term::Val(Value::Str(x.into()));

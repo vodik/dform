@@ -195,7 +195,7 @@ impl Lowerer<'_> {
                     return Some(UserDecl::Value("TYPE".into()));
                 }
                 if let Some(types) = sc.resources(h) {
-                    return Some(UserDecl::Value(format!("ref({})", types[0])));
+                    return Some(UserDecl::Value(types[0].clone()));
                 }
                 if sc.instance(h).is_some() || sc.module(h).is_some() || sc.stack(h).is_some() {
                     return Some(UserDecl::Scope);

@@ -151,7 +151,7 @@ impl AttrSpec {
     }
 
     /// The type's kind, its name without arguments: `list` for
-    /// `list(ref(net.subnet))`, `ref` for `ref(net.vpc)`.
+    /// `list(net.subnet)`, `ref` for `ref(net.vpc)`.
     pub fn kind(&self) -> &str {
         self.ty.split('(').next().unwrap_or(&self.ty).trim()
     }
@@ -1595,24 +1595,21 @@ mod tests {
     /// for the boundary; an id that is not a reference keeps its name.
     #[test]
     fn a_reference_is_named_for_the_resource() {
+        assert_eq!(reference_name("vpc_id", "aws.vpc").as_deref(), Some("vpc"));
         assert_eq!(
-            reference_name("vpc_id", "ref(aws.vpc)").as_deref(),
-            Some("vpc")
-        );
-        assert_eq!(
-            reference_name("spec.subnet_id", "list(ref(net.subnet))").as_deref(),
+            reference_name("spec.subnet_id", "list(net.subnet)").as_deref(),
             Some("spec.subnet")
         );
         assert_eq!(
-            reference_name("group_ids", "set(ref(aws.security_group))").as_deref(),
+            reference_name("group_ids", "set(aws.security_group)").as_deref(),
             Some("groups")
         );
         assert_eq!(reference_name("vpc_id", "string"), None);
-        assert_eq!(reference_name("vpc_ids", "ref(aws.vpc)"), None);
-        assert_eq!(reference_name("vpc", "ref(aws.vpc)"), None);
-        assert_eq!(reference_name("_id", "ref(aws.vpc)"), None);
+        assert_eq!(reference_name("vpc_ids", "aws.vpc"), None);
+        assert_eq!(reference_name("vpc", "aws.vpc"), None);
+        assert_eq!(reference_name("_id", "aws.vpc"), None);
         let raw = Schema::parse(
-            "type_attr(\"t.s\", \"vpc_id\", \"ref(t.v)\", [\"required\"])\n\
+            "type_attr(\"t.s\", \"vpc_id\", \"t.v\", [\"required\"])\n\
              type_attr(\"t.s\", \"owner_id\", \"string\", [\"computed\"])\n\
              type_doc(\"t.s\", \"vpc_id\", \"The VPC.\")\n\
              type_mint(\"t.s\", \"vpc_id\", \"vpc-1\")\n",
@@ -1637,7 +1634,7 @@ mod tests {
         let again = s.clone().imported().unwrap();
         assert_eq!((again.attrs, again.wire), (s.attrs, s.wire));
         let clash = Schema::parse(
-            "type_attr(\"t.s\", \"vpc_id\", \"ref(t.v)\", [])\n\
+            "type_attr(\"t.s\", \"vpc_id\", \"t.v\", [])\n\
              type_attr(\"t.s\", \"vpc\", \"string\", [])\n",
             "test",
         )

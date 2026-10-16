@@ -508,9 +508,9 @@ and a value type (an `oci`, a `uri`, an `inet`, an `ip`, a time, a
 quantity) given to a function's `string` parameter is its canonical print
 there (`str.starts_with(c.image, "ghcr.io/")` over an `oci`), and so is
 its interpolation (`":" in "${c.image}"`).
-A column a head fills with a resource is a reference, `ref(T)`, the union
-of the types where rules give it several (`workload(w:
-ref(k8s.deployment | k8s.stateful_set))`, "References and their type");
+A column a head fills with a resource is a reference, of its type `T`,
+the union of the types where rules give it several (`workload(w:
+k8s.deployment | k8s.stateful_set)`, "References and their type");
 a dot on a variable of a column with no fields is an error, not a read
 of nothing.
 The settled signature (`az(string, int)`, a `decl`'s or a rule head's
@@ -602,8 +602,8 @@ unchanged from `plan` (H-16): `net.vpc["main.vpc"]`. A resource in scope is writ
 name: `T["n"]` for a resource `n` in scope, and `T.n`, are errors naming
 `n`. A name declared twice in scope (three resources named `web`) is an
 error listing the candidates by address, but where the position's type
-picks one: an attribute the provider's schema types `ref(T)`
-(`list(ref(T))`, `set(ref(T))`) takes the one of type `T` (`network =
+picks one: an attribute the provider's schema types `T`
+(`list(T)`, `set(T)`) takes the one of type `T` (`network =
 main` with `ovh.network main` and `ovh.kube main` in scope), and so does
 a `let` typed `T`. An untyped position (no schema, a `string` attribute,
 a relation's argument, an untyped `let` or output) keeps the error. A
@@ -618,7 +618,7 @@ has a reference column where a rule's head writes a variable `in` types
 (`workload(w) where w in k8s.deployment`), one `x in resource` or `x in
 NS` binds, one another reference column binds, or a resource by its name:
 the column holds the reference, never its address alone, and is typed
-`ref(T)`, or `ref(k8s.deployment | k8s.stateful_set)` where a rule per
+`T`, or `k8s.deployment | k8s.stateful_set` where a rule per
 type fills it. A body that reads the relation has the variable as that
 resource, typed by the column (by each row's own type where it holds
 several), so `w.spec.template.spec` reads the attribute and `set
@@ -627,15 +627,15 @@ where workload(w)` writes each row's resource: one statement for every
 type the relation holds, where `k8s.deployment[_]` takes one. A literal
 in such a column (`workload("web")`) is an error naming the column and
 its type. A column a `decl` types by a resource type (`decl subnet(s:
-net.subnet)`, or `ref(T)`) holds references too. A relation a copy
+net.subnet)`) holds references too. A relation a copy
 exports or a module takes from its user (`output p`, `input p`) carries
 its references across the module's boundary as references ("Inputs and outputs").
 
-A read through an attribute the provider's schema types `ref(T)` reads
-the resource it names: `s.vpc.cidr` (`vpc: ref(net.vpc)`) is `v.cidr
+A read through an attribute the provider's schema types `T` reads
+the resource it names: `s.vpc.cidr` (`vpc: net.vpc`) is `v.cidr
 where v = s.vpc`, a read of that network's attribute, one hop per
 reference on the path (`p.cluster.subnets[0].vpc.cidr` through a
-`ref(k8s.cluster)`, a `list(ref(net.subnet))` and a `ref(net.vpc)`), and
+`k8s.cluster`, a `list(net.subnet)` and a `net.vpc`), and
 `why` shows each read. A reference to a resource no rule wants is the
 error at the attribute that holds it ("Definedness"). A reference whose
 type the program does not fix (an attribute of `x in resource`) is not
@@ -664,16 +664,18 @@ without checking. A field an object does not have is no value
 
 A program never reads an id. A reference is the resource, and
 where an attribute identifies another resource the provider's schema
-types it `ref(T)` (`list(ref(T))`, `set(ref(T))`), so the attribute takes
+types it by the resource's type (`net.vpc`, `list(net.subnet)`), so the
+attribute takes
 the resource itself: `vpc = main`, `subnets = [ s | s in net.subnet ]`.
 The provider gives its API whatever identifies the object (the schema's
 `id`, `schema::IDENTITY`) once it exists; until then the plan prints the
 resource unknown, `vpc = ?net.vpc["main"]`, and after it the resource,
 `vpc = net.vpc["main"]` (the id under `--json`). `x.id` is an error naming
 the reference. `ref(r)` writes the reference out where an attribute that
-is no `ref(T)` needs the id as text (a bridged provider's `string`). An
-input or output of a module or component typed `ref(T)`, `list(ref(T))`
-or by a resource type holds references. An input that is one (`input
+takes no resource needs the id as text (a bridged provider's `string`).
+An input or output of a module or component typed by a resource type
+(`net.vpc`, `list(net.vpc)`) holds references. A resource type is a
+reference's type: `ref(T)` written as a type is an error whose fix is `T`. An input that is one (`input
 role: iam.role`) is the resource, as a `let` of one is: `set
 role.policies = [..]` writes the role's attribute, `role.name` and `has
 role.name` read it, and `r == role` compares addresses.
@@ -900,11 +902,11 @@ to a time, a version or a quantity is read as the other side's type.
 
 A literal in a position whose type is known is checked as that type at
 compile time (Postgres's unknown-literal rule): a schema attribute's
-type (`inet`, `int`, `float`, `number`, `bool`, `uri`, `oci`, `semver`, `enum(..)`, `ref(T)`), an input's declared
+type (`inet`, `int`, `float`, `number`, `bool`, `uri`, `oci`, `semver`, `enum(..)`, a resource type `T`), an input's declared
 type for its default and a copy's value, a function's parameter.
 `cidr_block = "10.0.0/16"` in an `inet` attribute, `vpc = "main"` in a
-`ref(net.vpc)` one and `subnets = [main]` (a `ref(net.vpc)` where
-`ref(net.subnet)` is wanted) are errors at the entry, naming both types; a
+`net.vpc` one and `subnets = [main]` (a `net.vpc` where
+`net.subnet` is wanted) are errors at the entry, naming both types; a
 string literal where an `inet` is declared is read as one, and so is one
 where a quantity or a `time` is (`memory = "512Mi"`). Without a type
 a literal is a string; a quantity literal is its unit's. A reference and a string never compare: `r ==
@@ -1076,7 +1078,8 @@ the reference (`db = pg`).
 any typed position, a literal read as `T` (`let region:
 enum("eu", "us") = "ca"` is an error at `"ca"`, `let n: inet =
 "10.0.0.0/16"` a network); a reference is an error unless `T` is its
-resource type (`let v: net.vpc = main`, also written `ref(net.vpc)`),
+resource type (`let v: net.vpc = main`; `ref(net.vpc)` is an error whose
+fix is `net.vpc`),
 and a bare name two resources share is the one of type `T`. An object
 type reads each field as its type and a list type each element (`let
 hosts: { a: ip, b: uri } = { a = "10.0.0.1", b = "https://x" }`; `"10.0"`
@@ -1180,10 +1183,10 @@ declarations").
 `n.k` from a copy or a used module, `c[t].k` from every copy, and
 `stack[k=v].k` from another stack's deployment.
 An input typed by a resource type, a provider's (`input namespace:
-k8s.namespace`) or the program's, is typed `ref(T)`: it takes a
+k8s.namespace`) or the program's, is a reference of `T`: it takes a
 reference to a resource of `T` (`namespace = shop`), and one of another
 type is an error at the block that gives it. A dot on it reads through
-the reference: `vpc.cidr`, with `input vpc: ref(net.vpc)`, is the
+the reference: `vpc.cidr`, with `input vpc: net.vpc`, is the
 given vpc's `cidr`, the resource its user's wherever the copy is. A dotted name a used module
 declares as a type alias is that alias (`input env: types.environment`),
 and a name in a namespace whose every type the compiler knows (`net`)
@@ -1218,7 +1221,7 @@ attribute (`type_attr(compute.vm, "labels", "map(string)", [])`); a
 value of another type is an error naming its key. A bare `map` (a
 schema's untyped object) takes any object.
 
-A schema attribute may be typed an object, `{ network: ref(ovh.network),
+A schema attribute may be typed an object, `{ network: ovh.network,
 ip?: ip }`: each field read as its type, `?` marking one a value may
 leave out (the provider judges what is missing), and a field the type
 does not have an error naming the ones it has. Where an object type has
@@ -1228,7 +1231,7 @@ checked as the field, and a bare name two resources share is the one of
 the field's type, `{ network = lab }` too, with a subnet also named
 `lab`. The check only: the provider receives what the program wrote,
 the reference or the object, and takes both. It was not extended to a
-program's own object types (`let k: { network: ref(T) }`, an input's):
+program's own object types (`let k: { network: T }`, an input's):
 there a value is read by its fields (`k.network`), which a reference
 does not have.
 
@@ -1755,14 +1758,14 @@ Each name starts its own process of P, with P's grants, credentials and
 (`provider_config("ca", ..)`); two `use`s of one name are the conflict
 two `use`s are, two names are not. A type is renamed at the link only,
 so P never learns of A: P's schema is asked for once and served under
-each name (`ref(ovh.network)` reads `ref(ca.network)`), and its calls
+each name (`ovh.network` reads `ca.network`), and its calls
 carry `ovh.instance`. What the program writes is what state, the plan
 and `why` print: `ca.instance x`, and the address `ca.instance["x"]`.
 `x in ca.instance` ranges over A's resources and `x in ovh.instance`
 over those of every name P has (`__provider_type("ovh.instance", T),
 want(T, x)`). A resource of one name reads another's as any reference
 (a peering across regions reads `peer = ref(ca_vpc)`, or
-`ca_vpc.cidr_block`), but an attribute typed `ref(ca.network)` takes
+`ca_vpc.cidr_block`), but an attribute typed `ca.network` takes
 `ca`'s. Only a provider whose types are named under it
 (`ovh.instance`, `aws.vpc`) takes another name: the fake cloud's
 `net.vpc` is refused, as is a provider dform answers itself (`use env
@@ -1904,7 +1907,7 @@ one its path from the root names, which the loader loads for that
 purpose; never one some other file of the program happens to load. Such
 a read needs no instance of the module, so `config`'s required inputs are
 no one's to give where only its type is named. A dotted name that is no
-alias is a resource type (`ref(T)`).
+alias is a resource type, the type of a reference to one.
 
 ### Documents
 

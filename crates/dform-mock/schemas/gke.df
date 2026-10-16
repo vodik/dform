@@ -25,9 +25,9 @@ type_attr("google.container_node_pool", "id", "string", ["computed", "id"])
 # What points at another resource takes it, and gets its id at Apply (R-43);
 # the bridged module keeps its Terraform names, and a program names a
 # reference for the resource (`subnetwork = gke_subnet`).
-type_attr("google.container_cluster", "subnetwork_id", "ref(google.compute_subnetwork)", [])
-type_attr("google.compute_address", "subnetwork_id", "ref(google.compute_subnetwork)", [])
-type_attr("google.container_node_pool", "cluster", "ref(google.container_cluster)", [])
+type_attr("google.container_cluster", "subnetwork_id", "google.compute_subnetwork", [])
+type_attr("google.compute_address", "subnetwork_id", "google.compute_subnetwork", [])
+type_attr("google.container_node_pool", "cluster", "google.container_cluster", [])
 
 # A network's peerings are its attribute, not resources (R-158): GCP keeps
 # them on the network (networks.addPeering). A set: each contribution adds

@@ -172,7 +172,7 @@ fn a_reference_compared_with_a_string_is_a_compile_error() {
     let r = mock(&s, &["plan"]).failure();
     assert!(
         r.stderr.contains(
-            "`s.vpc == \"main\"` compares a reference, ref(net.vpc), with the string \"main\": \
+            "`s.vpc == \"main\"` compares a reference to a net.vpc with the string \"main\": \
              a reference is never a string"
         ),
         "{}",

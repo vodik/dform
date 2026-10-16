@@ -396,7 +396,7 @@ impl Rename {
     }
 
     /// An attribute's type as a schema writes it (`ref(from.X)`,
-    /// `list(ref(from.X))`): each type in it renamed.
+    /// `list(from.X)`): each type in it renamed.
     pub fn text(&self, s: &str) -> String {
         let mut out = String::new();
         let mut rest = s;
@@ -913,8 +913,8 @@ mod tests {
             out.name("ca.instance/x#password"),
             "ovh.instance/x#password"
         );
-        assert_eq!(out.text("list(ref(ca.network))"), "list(ref(ovh.network))");
-        assert_eq!(out.text("ref(orca.network)"), "ref(orca.network)");
+        assert_eq!(out.text("list(ca.network)"), "list(ovh.network)");
+        assert_eq!(out.text("orca.network"), "orca.network");
         let req = pb::ApplyRequest {
             r#type: "ca.instance".into(),
             config: Some(doc(
