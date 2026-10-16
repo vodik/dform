@@ -203,6 +203,16 @@ pub fn lower_stack(
     })
 }
 
+/// The program's scope tree (R-211, `program::Scopes`) of `units`, `entries`
+/// its entry files: what each scope declares and the scopes around it,
+/// built as the lowering builds it but with nothing lowered and no error
+/// dropping it, for a reader of a program that may not lower (the
+/// language server on a broken buffer, a project's stacks and the modules
+/// nothing uses yet).
+pub fn scopes(units: &[Unit], entries: &[usize], deployed: &[Deployed]) -> crate::program::Scopes {
+    Lowerer::new(units, entries, deployed, false).program.scopes
+}
+
 /// Remember the order `root` writes objects' fields in
 /// (`fmt::value::remember`): each object literal's keys, and a block's
 /// entries' keys under each path they share (`metadata.name`,
@@ -10354,6 +10364,43 @@ mod tests {
 
     fn parse(src: &str) -> anyhow::Result<crate::ast::Program> {
         parse_as(src, false)
+    }
+
+    /// The scope tree built alone is the tree the lowering builds: a
+    /// stack's file, a module's file, a component in each, their names.
+    #[test]
+    fn the_scopes_alone_are_the_lowerings() {
+        let unit = |name: &str, src: &str, path: Option<&str>| {
+            let parse = crate::syntax::parser::parse(src);
+            assert!(parse.errors.is_empty(), "{:?}", parse.errors);
+            super::Unit {
+                file: crate::diag::add_source(name, src),
+                root: parse.syntax(),
+                path: path.map(str::to_string),
+                project: false,
+            }
+        };
+        let units = [
+            unit(
+                "main.df",
+                "\ninput n: int = 1\nlet k = n\nuse lan {}\n\
+                 component box { input size: int\nlet twice = size * 2 }\n\
+                 resource box b { size = k }\n",
+                None,
+            ),
+            unit(
+                "lan.df",
+                "\ninput cidr: string = \"10.0.0.0/8\"\n\
+                 component sub { input c: string\nlet d = c }\n",
+                Some("lan"),
+            ),
+        ];
+        let lowered = super::lower_stack(&units, &[0], true, super::Mode::Program, None, &[])
+            .unwrap_or_else(|d| panic!("{d:?}"));
+        let nodes = lowered.nodes.expect("the program's nodes");
+        let alone = super::scopes(&units, &[0], &[]);
+        assert_eq!(format!("{alone:?}"), format!("{:?}", nodes.scopes));
+        assert!(alone.ids().count() >= 4, "{alone:?}");
     }
 
     fn lower(src: &str) -> Vec<String> {
