@@ -974,6 +974,43 @@ fn references_of_every_kind_of_name() {
     c.shutdown();
 }
 
+/// A pun in a copy's block, `{ .., env }`, reads the user's `env` and
+/// fills the component's input `env` (R-211 step 12): its definition is
+/// the user's declaration, its hover names the input it fills, and both
+/// declarations' references include it.
+#[test]
+fn a_pun_in_a_copy_block_reads_the_users_value_and_fills_the_input() {
+    let (_s, root) = example("tests/fixtures/demo");
+    let stack = root.join("stacks/dform.df");
+    let network = root.join("network.df");
+    let mut c = Client::start(&root, json!({}));
+    c.open(&stack);
+    let pun = "cidrs.main, env }";
+    let found = definitions(&mut c, &root, &stack, pun, 12);
+    assert_eq!(found, vec![("stacks/dform.df".into(), 9, "env".into())]);
+    let h = c.at("textDocument/hover", &stack, find(&stack, pun, 12));
+    let text = h["contents"]["value"].as_str().unwrap_or_default();
+    assert!(
+        text.contains("fills the input `env` of component network.vpc"),
+        "{text}"
+    );
+    let user = references(&mut c, &root, &stack, find(&stack, "key env:", 4));
+    let input = references(&mut c, &root, &network, find(&network, "input env", 6));
+    for found in [&user, &input] {
+        for line in [51, 54] {
+            let want = ("stacks/dform.df".to_string(), line);
+            assert!(found.contains(&want), "{want:?} in {found:?}");
+        }
+    }
+    // Renaming the input keeps the pun's value: `{ .., stage = env }`.
+    let edit = rename(&mut c, &network, find(&network, "input env", 6), "stage");
+    assert!(
+        edit.to_string().contains(r#""newText":"stage = env""#),
+        "{edit}"
+    );
+    c.shutdown();
+}
+
 /// Apply a workspace edit's `changes` to the files on disk and, as an
 /// editor would, to the server's buffers (the demo is ASCII: a UTF-16
 /// column is a byte).

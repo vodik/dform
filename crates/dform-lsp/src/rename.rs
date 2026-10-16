@@ -208,6 +208,12 @@ pub fn rename(p: &Project, path: &Path, at: usize, new: &str) -> Result<Renaming
         };
         edit(n.file, n.range.start().into(), n.range.end().into(), to);
     }
+    // A pun that fills the renamed input keeps its value: `{ env }`
+    // becomes `{ region = env }`.
+    for n in d.filling(&files, &sym) {
+        let to = format!("{new} = {old}");
+        edit(n.file, n.range.start().into(), n.range.end().into(), to);
+    }
     for (f, t, to) in strings {
         let range = t.text_range();
         edit(f, range.start().into(), range.end().into(), to);

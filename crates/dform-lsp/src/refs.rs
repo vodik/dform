@@ -76,6 +76,10 @@ pub fn references(p: &Project, path: &Path, at: usize, declarations: bool) -> Ve
                 push(n.file, n.range);
             }
         }
+        // A pun that fills the input gives it its value there.
+        for n in d.filling(&files, sym) {
+            push(n.file, n.range);
+        }
         let addresses = d.addresses_of(sym);
         for (f, t, typ, a) in dform_core::names::addresses(&files) {
             if addresses.contains(&(typ, a)) {

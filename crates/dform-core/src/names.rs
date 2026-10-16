@@ -1,23 +1,29 @@
-//! What a name at a place denotes, read off the syntax trees of a
-//! project's files in the resolver's order (docs/grammar.md "Names")
-//! without evaluating them: the declaration it is, and every place that
-//! denotes the same. The language server's definition, references, rename
-//! and hover read it; so may any tool that names a declaration by a place.
+//! What a name at a place denotes in a project's files, without
+//! evaluating them: the declaration it is, and every place that denotes
+//! the same. The language server's definition, references, rename and
+//! hover read it; so may any tool that names a declaration by a place.
 //!
-//! Every file is a module by its path from the root (R-65): what a file a
-//! `use` or an `instance` names declares at its top is that module's
-//! (`module a.b`), read by its user as `m.x`; what a component declares
-//! is the component's (`component c`), read through its copies as `n.k`
-//! or `c[e].k`. A name a body does not declare reads outward through its
-//! own file: its component's, then its file's, a stack's file's the
-//! program's; never through a `use` (R-205).
+//! The names are the front end's: the project's scope tree
+//! (`syntax::resolve::scopes`, every file at once, built past any error)
+//! answers what a read reaches through the queries of
+//! `program::scope::query` (R-211 step 12). What stays here is reading
+//! the syntax at a token: whether it is a chain's head, a block's key, a
+//! declaration's name, a segment of a type or a path, and so which query
+//! answers it. A file a `use` or a copy names is a module (`module a.b`,
+//! R-65); a component's names are its own (`component a.b`, by its
+//! path); a stack's file, used by another stack or not, is the program's
+//! top level. A name a body does not declare reads outward through its
+//! own file, never through a `use` (R-205).
 
+use crate::program::scope::query::defines_relation;
+use crate::program::scope::{Decl, DeclKind, ScopeId, Scopes};
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// The block a name is declared in, innermost: `component network`, or
-/// `module a.b` for a module file's top; `None` for the program's.
+/// The scope a name is declared in, as the tree names it: `component
+/// a.b` and `module a.b` by their paths; `None` for the program's (a
+/// stack's file's top level).
 pub type Scope = Option<String>;
 
 /// A name the program declares.
@@ -53,22 +59,6 @@ pub enum Symbol {
     Package(String),
     /// A file a path names (R-65), by its dotted path from the root.
     File(String),
-}
-
-impl Symbol {
-    /// The scope a value, a let, a resource, an output or a relation is
-    /// declared in.
-    pub fn scope(&self) -> Option<&Scope> {
-        match self {
-            Symbol::Predicate(s, _)
-            | Symbol::Value(s, _)
-            | Symbol::Field(s, ..)
-            | Symbol::Let(s, _)
-            | Symbol::Resource(s, ..)
-            | Symbol::Output(s, _) => Some(s),
-            _ => None,
-        }
-    }
 }
 
 /// What a name token is.
@@ -173,46 +163,35 @@ impl Parsed {
     }
 }
 
-/// The declarations of every file of a project, which the order of
-/// resolution consults.
+/// A project's names: its scope tree as the front end builds it
+/// (`syntax::resolve::scopes`, every file at once, past any error), and
+/// what the syntax around a name needs besides (the files by path, the
+/// types and the providers).
 #[derive(Debug, Default)]
 pub struct Decls {
-    lets: BTreeSet<(Scope, String)>,
-    /// Each let's parameters, by its scope, its name and theirs.
-    params: BTreeSet<(Scope, String, String)>,
-    values: BTreeSet<(Scope, String)>,
-    /// An object input's fields, by its scope, name and field path.
-    fields: BTreeSet<(Scope, String, String)>,
-    outputs: BTreeSet<(Scope, String)>,
-    /// By scope and name: each static resource's types.
-    resources: BTreeMap<(Scope, String), Vec<String>>,
-    components: BTreeSet<String>,
-    /// Components and the names `use`s and `instance`s bind.
-    modules: BTreeSet<String>,
-    /// Every relation's name, wherever it is defined.
-    predicates: BTreeSet<String>,
-    /// The relations each scope defines.
-    defined: BTreeSet<(Scope, String)>,
-    aliases: BTreeSet<String>,
-    /// Resource headers', `type` blocks' and the schema's types.
-    types: BTreeSet<String>,
-    instances: BTreeSet<(String, String)>,
-    /// Each file's dotted path from the root, by its tree's root.
-    roots: Vec<(SyntaxNode, String)>,
+    tree: Scopes,
+    /// Each file's tree root and its source id in `tree`.
+    roots: Vec<(SyntaxNode, u32)>,
     /// Each file by its dotted path.
     files: BTreeMap<String, PathBuf>,
-    /// The paths `use`s and `instance`s name.
-    named: BTreeSet<String>,
-    /// The paths of the stacks (`stacks/s.df`, R-65): one a `use` names is
-    /// read for its deployments' outputs, its resources keep their names.
-    stacks: BTreeSet<String>,
-    /// The name a `use` binds -> the module path it names.
-    uses: BTreeMap<String, String>,
+    /// Each file's source id by its dotted path.
+    ids: BTreeMap<String, u32>,
     /// The providers `use`s import (R-112): a path of one segment that
     /// names no file of the project.
     providers: BTreeSet<String>,
+    /// Resource headers', `type` blocks' and the schema's types.
+    types: BTreeSet<String>,
     /// (type, attribute path) -> the type its `ref(T)` takes (R-74).
     refs: BTreeMap<(String, String), String>,
+}
+
+/// What a read from outside a definition looks into: a module's or a
+/// component's scope; a stack another stack uses (`use stacks.platform`),
+/// the program's scope, its file's declarations alone.
+#[derive(Debug, Clone, Copy)]
+struct Body {
+    scope: ScopeId,
+    file: Option<u32>,
 }
 
 /// A file's dotted path from `root`: `stacks/platform.df` is
@@ -223,9 +202,11 @@ fn module_path(root: &Path, file: &Path) -> Option<String> {
     (!segs.is_empty()).then(|| segs.join("."))
 }
 
+/// The first source id of a project's files in its tree: past any the
+/// process has made, no file's message ever names one.
+const FIRST_FILE: u32 = 1 << 30;
+
 impl Decls {
-    /// The declarations of a project's files under `root`, a module
-    /// file's its own (R-65).
     /// The project file a `use` statement names, by its module path
     /// (`use backups` is backups.df); `None` for std, a provider, a
     /// package's module.
@@ -234,107 +215,200 @@ impl Decls {
         self.files.get(&path).map(PathBuf::as_path)
     }
 
+    /// The names of a project's files under `root`: a file a `use` or a
+    /// copy names is a module (R-65), a stack's file and any other the
+    /// program's top level.
     pub fn of_files(root: &Path, files: &[Parsed]) -> Decls {
         let mut d = Decls::default();
-        let named = std::fs::read_to_string(root.join(crate::project::MANIFEST))
-            .ok()
-            .and_then(|t| {
-                crate::project::Manifest::parse(&root.join(crate::project::MANIFEST), &t).ok()
-            })
-            .map(|m| m.stacks)
-            .unwrap_or_default();
-        for f in files {
-            let Some(p) = module_path(root, &f.path) else {
-                continue;
-            };
-            if crate::project::is_stack(root, &f.path, &named) {
-                d.stacks.insert(p.clone());
-            }
-            d.roots.push((f.tree.clone(), p.clone()));
-            d.files.insert(p, f.path.clone());
-            for n in f.tree.descendants() {
-                let path = match n.kind() {
-                    SyntaxKind::USE => {
-                        let (path, name) = crate::syntax::resolve::use_parts(&n);
-                        d.uses.insert(name, path.clone());
-                        path
-                    }
-                    _ => continue,
-                };
-                d.named.insert(path);
-            }
-            // The components, which a resource's type may name (R-113).
-            for n in f.tree.descendants() {
-                if n.kind() == SyntaxKind::COMPONENT
-                    && let Some(x) = declared_name(&n)
-                {
-                    d.components.insert(x.text().to_string());
-                }
+        let stacks = crate::project::Manifest::parse(
+            &root.join(crate::project::MANIFEST),
+            &std::fs::read_to_string(root.join(crate::project::MANIFEST)).unwrap_or_default(),
+        )
+        .map(|m| m.stacks)
+        .unwrap_or_default();
+        let paths: Vec<Option<String>> = files.iter().map(|f| module_path(root, &f.path)).collect();
+        for (f, p) in files.iter().zip(&paths) {
+            if let Some(p) = p {
+                d.files.insert(p.clone(), f.path.clone());
             }
         }
-        // A resource of a component names its file as a `use` does.
-        for f in files {
-            for n in f.tree.descendants() {
-                if n.kind() == SyntaxKind::RESOURCE && d.is_copy(&n) {
-                    d.named.insert(crate::syntax::resolve::copy_parts(&n).0);
-                }
+        let named = Modules::of(files, &d.files);
+        d.providers = named.providers.clone();
+        let mut units = Vec::new();
+        let mut entries = Vec::new();
+        for (i, (f, p)) in files.iter().zip(&paths).enumerate() {
+            let file = FIRST_FILE + i as u32;
+            let stack = crate::project::is_stack(root, &f.path, &stacks);
+            if let Some(p) = p {
+                d.ids.insert(p.clone(), file);
             }
+            let module = p.clone().filter(|p| !stack && named.is_module(p));
+            if module.is_none() {
+                entries.push(i);
+            }
+            units.push(crate::syntax::resolve::Unit {
+                file,
+                root: f.tree.clone(),
+                path: module,
+                project: crate::loader::is_project_module(&f.path),
+            });
+            d.roots.push((f.tree.clone(), file));
+            d.declare_types(&f.tree);
         }
-        let providers: Vec<(String, String)> = d
-            .uses
-            .iter()
-            .filter(|(_, p)| !p.contains('.') && p.as_str() != "std" && !d.files.contains_key(*p))
-            .map(|(n, p)| (n.clone(), p.clone()))
-            .collect();
-        for (name, path) in providers {
-            d.uses.remove(&name);
-            d.named.remove(&path);
-            d.providers.insert(path);
-        }
-        for f in files {
-            d.declare(&f.tree);
-        }
+        d.tree = crate::syntax::resolve::scopes(&units, &entries, &[]);
         d
     }
 
-    /// Whether `n` makes a copy of a component: an `instance`, or a
-    /// `resource` whose type's last segment is a component of the
-    /// project, before it a file, a `use`'s name or nothing (R-113).
-    fn is_copy(&self, n: &SyntaxNode) -> bool {
-        match n.kind() {
-            SyntaxKind::RESOURCE => {
-                let (path, _) = crate::syntax::resolve::copy_parts(n);
-                match path.rsplit_once('.') {
-                    None => self.components.contains(&path),
-                    Some((prefix, last)) => {
-                        let head = prefix.split('.').next().unwrap_or(prefix);
-                        self.components.contains(last)
-                            && (self.files.contains_key(prefix)
-                                || self.uses.contains_key(head)
-                                || self.components.contains(head))
-                    }
-                }
-            }
-            _ => false,
+    /// The source id of the file `n` is in.
+    fn file_of(&self, n: &SyntaxNode) -> Option<u32> {
+        let root = n.ancestors().last()?;
+        self.roots.iter().find(|(r, _)| *r == root).map(|(_, f)| *f)
+    }
+
+    /// The scope a name at `n` is read in: the innermost component whose
+    /// statement holds it, else its file's top level.
+    fn scope_at(&self, n: &SyntaxNode) -> Option<ScopeId> {
+        let file = self.file_of(n)?;
+        match n.parent() {
+            None => self.tree.of_file(file),
+            Some(_) => self.tree.at(file, n.text_range().start().into()),
         }
     }
 
-    /// Whether the body `at` is in (its component's, else its file's)
-    /// binds `name` itself by a `use` or a copy: then the body's own
-    /// resource of the name does not win a read over it (R-101).
-    fn binds_here(&self, at: &SyntaxNode, name: &str) -> bool {
-        let body = at
-            .ancestors()
-            .find(|a| a.kind() == SyntaxKind::COMPONENT)
-            .and_then(|c| c.children().find(|x| x.kind() == SyntaxKind::STMT_BLOCK))
-            .or_else(|| at.ancestors().last());
-        body.into_iter()
-            .flat_map(|b| b.children())
-            .any(|n| match n.kind() {
-                SyntaxKind::USE => crate::syntax::resolve::use_parts(&n).1 == name,
-                _ if self.is_copy(&n) => crate::syntax::resolve::copy_parts(&n).1 == name,
-                _ => false,
-            })
+    /// The scope a statement at `n` declares into.
+    fn declaring_at(&self, n: &SyntaxNode) -> Option<ScopeId> {
+        Some(self.tree.declaring(self.scope_at(n)?))
+    }
+
+    /// A scope as a symbol names it: `component a.b` and `module a.b` by
+    /// their paths, `None` for the program's.
+    fn describe(&self, s: ScopeId) -> Scope {
+        match self.tree.definition(s)? {
+            (p, true) => Some(format!("component {p}")),
+            (p, false) => Some(format!("module {p}")),
+        }
+    }
+
+    /// The scope a symbol's scope names.
+    fn scope_id(&self, s: &Scope) -> Option<ScopeId> {
+        match s.as_deref() {
+            None => Some(self.tree.root),
+            Some(s) => {
+                let path = s.strip_prefix("component ").or(s.strip_prefix("module "))?;
+                self.tree.by_path(path)
+            }
+        }
+    }
+
+    /// The symbol a declaration of `name` in `s` is, as a read names it.
+    fn symbol(&self, s: ScopeId, name: &str, d: &Decl) -> Option<Symbol> {
+        let (scope, name) = (self.describe(s), name.to_string());
+        Some(match &d.kind {
+            DeclKind::Input => Symbol::Value(scope, name),
+            DeclKind::Let | DeclKind::LetFn { .. } => Symbol::Let(scope, name),
+            DeclKind::Resource(t) => Symbol::Resource(scope, t.clone(), name),
+            DeclKind::Output { .. } => Symbol::Output(scope, name),
+            _ => return None,
+        })
+    }
+
+    /// The `use` or the copy the statement `stmt` makes.
+    fn made_by(&self, stmt: &SyntaxNode) -> Option<(&str, &Decl)> {
+        let bound = |k: &DeclKind| matches!(k, DeclKind::Use { .. } | DeclKind::Copy { .. });
+        self.tree.made_by(self.scope_at(stmt)?, stmt, bound)
+    }
+
+    /// Whether `n` makes a copy of a component (R-113): the front end
+    /// declared it one.
+    fn is_copy(&self, n: &SyntaxNode) -> bool {
+        n.kind() == SyntaxKind::RESOURCE
+            && self
+                .made_by(n)
+                .is_some_and(|(_, d)| matches!(d.kind, DeclKind::Copy { .. }))
+    }
+
+    /// The body of the definition a `use` or a copy statement names.
+    fn bound_body(&self, stmt: &SyntaxNode) -> Option<Body> {
+        match &self.made_by(stmt)?.1.kind {
+            DeclKind::Use { module, .. } => self.module_body(module),
+            DeclKind::Copy {
+                component: Some(c), ..
+            } => self.tree.by_path(c).map(|scope| Body { scope, file: None }),
+            _ => None,
+        }
+    }
+
+    /// The body of the module at `path`: a module's file, or a stack's
+    /// file another stack uses, whose top level is the program's.
+    fn module_body(&self, path: &str) -> Option<Body> {
+        if let Some(scope) = self.tree.by_path(path) {
+            return Some(Body { scope, file: None });
+        }
+        Some(Body {
+            scope: self.tree.root,
+            file: Some(*self.ids.get(path)?),
+        })
+    }
+
+    /// The declarations of `x` in the body `b`, each with its kind.
+    fn in_body(&self, b: Body, x: &str) -> Vec<&Decl> {
+        self.tree.names[b.scope]
+            .of(x)
+            .iter()
+            .filter(|d| b.file.is_none() || self.file_of(&d.node) == b.file)
+            .collect()
+    }
+
+    /// What a read of `name` at `at` reaches (`Scopes::reaching`); in the
+    /// program's scope, which every stack's file declares into, the
+    /// reading file's own declaration before another stack's.
+    fn reach(
+        &self,
+        at: &SyntaxNode,
+        name: &str,
+        pick: impl Fn(&DeclKind) -> bool,
+    ) -> Option<(ScopeId, &Decl)> {
+        let (found, d) = self.tree.reaching(self.scope_at(at)?, name, &pick)?;
+        if found != self.tree.root {
+            return Some((found, d));
+        }
+        let file = self.file_of(at);
+        let own = self.tree.names[found]
+            .of(name)
+            .iter()
+            .find(|x| pick(&x.kind) && self.file_of(&x.node) == file);
+        Some((found, own.unwrap_or(d)))
+    }
+
+    /// The use `name` binds, read at `at`: the module's path.
+    fn use_at(&self, at: &SyntaxNode, name: &str) -> Option<&str> {
+        let used = |k: &DeclKind| matches!(k, DeclKind::Use { .. });
+        match &self.reach(at, name, used)?.1.kind {
+            DeclKind::Use { module, .. } => Some(module),
+            _ => None,
+        }
+    }
+
+    /// The copy `name` read at `at`: its component's path as written and
+    /// as resolved.
+    fn copy_at(&self, at: &SyntaxNode, name: &str) -> Option<(&str, &str)> {
+        let copy = |k: &DeclKind| {
+            matches!(
+                k,
+                DeclKind::Copy {
+                    component: Some(_),
+                    ..
+                }
+            )
+        };
+        match &self.reach(at, name, copy)?.1.kind {
+            DeclKind::Copy {
+                written,
+                component: Some(c),
+                ..
+            } => Some((written, c)),
+            _ => None,
+        }
     }
 
     /// Whether `n` is a `use` of a provider (R-112).
@@ -360,178 +434,44 @@ impl Decls {
         self
     }
 
-    fn declare(&mut self, root: &SyntaxNode) {
+    /// The types the program's resource headers and `type` blocks name.
+    fn declare_types(&mut self, root: &SyntaxNode) {
         for n in root.descendants() {
-            // A component signature's inputs and outputs (R-104) are no
-            // scope's: the components that have it declare their own.
-            if n.ancestors().any(|a| a.kind() == SyntaxKind::SIGNATURE) {
-                continue;
-            }
-            let at = n.parent().unwrap_or_else(|| n.clone());
-            let scope = self.scopes(&at).remove(0);
-            let name = || declared_name(&n).map(|t| t.text().to_string());
-            match n.kind() {
-                SyntaxKind::LET => {
-                    if let Some(x) = name() {
-                        for p in crate::program::scope::query::parameters(&n) {
-                            let p = p.text().to_string();
-                            self.params.insert((scope.clone(), x.clone(), p));
-                        }
-                        self.lets.insert((scope, x));
-                    }
-                }
-                SyntaxKind::INPUT => {
-                    if let Some(x) = name() {
-                        for (path, _) in input_fields(&n) {
-                            self.fields.insert((scope.clone(), x.clone(), path));
-                        }
-                        self.values.insert((scope, x));
-                    }
-                }
-                SyntaxKind::OUTPUT_DECL if is_value_output(&n) => {
-                    self.outputs.extend(name().map(|x| (scope, x)))
-                }
-                SyntaxKind::TYPE_ALIAS => self.aliases.extend(name()),
-                SyntaxKind::COMPONENT => {
-                    if let Some(x) = name() {
-                        self.components.insert(x.clone());
-                        self.modules.insert(x);
-                    }
-                }
-                SyntaxKind::USE if self.provider_use(&n) => {}
-                SyntaxKind::USE => {
-                    self.modules.insert(crate::syntax::resolve::use_parts(&n).1);
-                }
-                _ if self.is_copy(&n) => {
-                    let (path, name) = crate::syntax::resolve::copy_parts(&n);
-                    if let Some(last) = path.rsplit('.').next() {
-                        self.modules.insert(last.to_string());
-                    }
-                    self.instances.insert((path, name));
-                }
-                SyntaxKind::RESOURCE => self.declare_resource(&n, scope),
-                SyntaxKind::TYPE_DECL => {
-                    let t = dotted_after_keyword(&n);
-                    if !t.is_empty() {
-                        self.types.insert(t);
-                    }
-                }
-                SyntaxKind::RULE
-                | SyntaxKind::FACT
-                | SyntaxKind::DECL
-                | SyntaxKind::EXTERN
-                | SyntaxKind::INPUT_RELATION => self.declare_relation(&n),
-                _ => {}
-            }
+            let t = match n.kind() {
+                SyntaxKind::RESOURCE => header(&n).map(|h| h.typ),
+                SyntaxKind::TYPE_DECL => Some(dotted_after_keyword(&n)),
+                _ => None,
+            };
+            self.types.extend(t.filter(|t| !t.is_empty()));
         }
     }
 
-    /// `resource T n` in `scope`: its type, and its name when it is static.
-    fn declare_resource(&mut self, n: &SyntaxNode, scope: Scope) {
-        let Some(h) = header(n) else {
-            return;
-        };
-        self.types.insert(h.typ.clone());
-        if h.is_static {
-            let ts = self
-                .resources
-                .entry((scope, h.name.text().to_string()))
-                .or_default();
-            if !ts.contains(&h.typ) {
-                ts.push(h.typ);
-            }
-        }
+    /// The let, the input or the resource `name` read at `at` past
+    /// `supers` enclosing components: `super.x` (R-186).
+    fn item_from(&self, at: &SyntaxNode, supers: usize, name: &str) -> Option<Symbol> {
+        let s = self.scope_at(at)?;
+        let item = |k: &DeclKind| k.is_value() || matches!(k, DeclKind::Resource(_));
+        let (s, d) = self.tree.past(s, supers, name, item)?;
+        self.symbol(s, name, d)
     }
 
-    /// The relation a rule's head, a fact, a `decl`, an `extern` or an
-    /// input relation names, in the scope that keeps it private.
-    fn declare_relation(&mut self, n: &SyntaxNode) {
-        let t = match n.kind() {
-            SyntaxKind::RULE | SyntaxKind::FACT => head_name(n),
-            _ => relation_name(n),
-        };
-        if let Some(t) = t {
-            self.predicates.insert(t.text().to_string());
-            let s = self.relation_scope(n);
-            self.defined.insert((s, t.text().to_string()));
-        }
-    }
-
-    /// Whether the file at dotted `path` is a module: a `use` or an
-    /// `instance` names it, or an item of it.
-    fn is_module(&self, path: &str) -> bool {
-        self.named
-            .iter()
-            .any(|p| p == path || p.strip_prefix(path).is_some_and(|r| r.starts_with('.')))
-    }
-
-    /// The scope of the top of the file `n` is in: `module PATH` when the
-    /// file is a module.
-    fn file_scope(&self, n: &SyntaxNode) -> Scope {
-        let root = n.ancestors().last()?;
-        let (_, p) = self.roots.iter().find(|(r, _)| *r == root)?;
-        self.is_module(p).then(|| format!("module {p}"))
-    }
-
-    /// The scopes a name at `n` is looked up in, innermost first: its
-    /// component's and each component's around it (R-186), then its module
-    /// file's, or in a stack's file the program's. A module never reads
-    /// its user's (R-205).
-    pub fn scopes(&self, n: &SyntaxNode) -> Vec<Scope> {
-        let mut out: Vec<Scope> = component_scopes(n).into_iter().map(Some).collect();
-        out.push(self.file_scope(n));
-        out
-    }
-
-    /// The let, the input or the resource `name` read at `at` past its
-    /// `skip` innermost scopes: `super.x` skips one (R-186).
-    fn item_from(&self, at: &SyntaxNode, skip: usize, name: &str) -> Option<Symbol> {
-        let scopes = self.scopes(at);
-        scopes.get(skip..)?.iter().find_map(|s| {
-            let key = (s.clone(), name.to_string());
-            if self.lets.contains(&key) {
-                return Some(Symbol::Let(s.clone(), name.to_string()));
-            }
-            if self.values.contains(&key) {
-                return Some(Symbol::Value(s.clone(), name.to_string()));
-            }
-            let t = self.resources.get(&key)?.first()?;
-            Some(Symbol::Resource(s.clone(), t.clone(), name.to_string()))
-        })
-    }
-
-    /// The value, let or output `name` seen from `at`: the innermost
-    /// scope's that declares it.
-    fn lookup(
-        &self,
-        set: &BTreeSet<(Scope, String)>,
-        at: &SyntaxNode,
-        name: &str,
-        wrap: fn(Scope, String) -> Symbol,
-    ) -> Option<Symbol> {
-        self.scopes(at)
-            .into_iter()
-            .find(|s| set.contains(&(s.clone(), name.to_string())))
-            .map(|s| wrap(s, name.to_string()))
-    }
-
+    /// A `let` (with parameters or not) `name` read at `at`.
     fn let_(&self, at: &SyntaxNode, name: &str) -> Option<Symbol> {
-        self.lookup(&self.lets, at, name, Symbol::Let)
+        let lets = |k: &DeclKind| matches!(k, DeclKind::Let | DeclKind::LetFn { .. });
+        let (s, d) = self.reach(at, name, lets)?;
+        self.symbol(s, name, d)
     }
 
     /// The `let` or the input `name` read bare at `at`: the innermost
-    /// scope's that declares either, a `let` before an input there, as
-    /// the front end reads it (`Scopes::reaching`).
+    /// scope's that declares either (`Scopes::reaching`), and its
+    /// declaration.
+    fn value_decl(&self, at: &SyntaxNode, name: &str) -> Option<(Symbol, &Decl)> {
+        let (s, d) = self.reach(at, name, DeclKind::is_value)?;
+        Some((self.symbol(s, name, d)?, d))
+    }
+
     fn value_read(&self, at: &SyntaxNode, name: &str) -> Option<Symbol> {
-        self.scopes(at).into_iter().find_map(|s| {
-            let key = (s.clone(), name.to_string());
-            if self.lets.contains(&key) {
-                return Some(Symbol::Let(s, name.to_string()));
-            }
-            self.values
-                .contains(&key)
-                .then(|| Symbol::Value(s, name.to_string()))
-        })
+        self.value_decl(at, name).map(|(s, _)| s)
     }
 
     /// The parameter `name` of the let with parameters `at` is in (its
@@ -543,25 +483,35 @@ impl Decls {
             .any(|p| p.text() == name)
             .then_some(())?;
         let f = declared_name(&stmt)?.text().to_string();
-        let outer = stmt.parent().unwrap_or_else(|| stmt.clone());
-        let scope = self.scopes(&outer).remove(0);
+        let scope = self.describe(self.declaring_at(&stmt)?);
         Some(Symbol::Param(scope, f, name.to_string()))
     }
 
     /// The resources `name` seen from `at`: the innermost scope's that
     /// declares one, each type's.
     fn resources_at(&self, at: &SyntaxNode, name: &str) -> Vec<Symbol> {
-        self.scopes(at)
-            .into_iter()
-            .find_map(|s| {
-                let ts = self.resources.get(&(s.clone(), name.to_string()))?;
-                Some(
-                    ts.iter()
-                        .map(|t| Symbol::Resource(s.clone(), t.clone(), name.to_string()))
-                        .collect(),
-                )
-            })
-            .unwrap_or_default()
+        let resource = |k: &DeclKind| matches!(k, DeclKind::Resource(_));
+        let Some((s, _)) = self.reach(at, name, resource) else {
+            return Vec::new();
+        };
+        let body = Body {
+            scope: s,
+            file: None,
+        };
+        self.resources_in(body, name)
+    }
+
+    /// The resources `name` the body `b` declares, one per type.
+    fn resources_in(&self, b: Body, name: &str) -> Vec<Symbol> {
+        let mut out: Vec<Symbol> = Vec::new();
+        for d in self.in_body(b, name) {
+            if let Some(sym @ Symbol::Resource(..)) = self.symbol(b.scope, name, d)
+                && !out.contains(&sym)
+            {
+                out.push(sym);
+            }
+        }
+        out
     }
 
     /// A resource name read at `at`: the one candidate; among several, the
@@ -615,39 +565,29 @@ impl Decls {
         }
     }
 
-    /// The scope that keeps the relations defined at `at` private: its
-    /// component, else its file when the file is a module.
-    fn relation_scope(&self, at: &SyntaxNode) -> Scope {
-        component_scope(at).or_else(|| self.file_scope(at))
-    }
-
-    /// The scope a `use` or `instance` block's rule at `at` gives rows to:
-    /// the module's or the component's.
-    fn block_target(&self, at: &SyntaxNode) -> Scope {
+    /// The body a `use` or a copy block's statement at `at` gives rows
+    /// to: the module's or the component's.
+    fn block_body(&self, at: &SyntaxNode) -> Option<Body> {
         let owner = at
             .ancestors()
             .find(|a| a.kind() == SyntaxKind::USE || self.is_copy(a))?;
-        Some(match owner.kind() {
-            SyntaxKind::USE => format!("module {}", crate::syntax::resolve::use_parts(&owner).0),
-            _ => {
-                let (path, _) = crate::syntax::resolve::copy_parts(&owner);
-                format!("component {}", last_segment(&path))
-            }
-        })
+        self.bound_body(&owner)
     }
 
-    /// The relation `name` read or defined at `at`: the innermost scope's
-    /// that defines it (in a `use` or `instance` block, the module's or the
-    /// component's first), else the program's.
+    /// The relation `name` read or defined at `at`: the innermost module's
+    /// or component's that defines it (in a `use` or a copy's block, the
+    /// module's or the component's first), else the program's.
     fn predicate(&self, at: &SyntaxNode, name: &str) -> Symbol {
-        let defines =
-            |s: &Scope| s.is_some() && self.defined.contains(&(s.clone(), name.to_string()));
-        let scope = if crate::loader::is_core_pred(name) {
-            None
-        } else {
-            let mut candidates: Vec<Scope> = vec![self.block_target(at)];
-            candidates.extend(self.scopes(at));
-            candidates.into_iter().find(defines).flatten()
+        let scope = match crate::loader::is_core_pred(name) {
+            true => None,
+            false => {
+                let block = self.block_body(at).map(|b| b.scope);
+                let around = self.scope_at(at).map(|s| self.tree.chain(s));
+                let scopes = block.into_iter().chain(around.into_iter().flatten());
+                self.tree
+                    .private_relation(scopes, name)
+                    .and_then(|s| self.describe(s))
+            }
         };
         Symbol::Predicate(scope, name.to_string())
     }
@@ -655,91 +595,85 @@ impl Decls {
     /// Whether `sym`'s kind already has a declaration named `name` where
     /// `sym` is (a rename onto it would merge the two).
     pub fn taken(&self, sym: &Symbol, name: &str) -> bool {
-        let n = name.to_string();
+        let here = |s: &Scope, pick: &dyn Fn(&DeclKind) -> bool| {
+            self.scope_id(s)
+                .is_some_and(|s| self.tree.names[s].of(name).iter().any(|d| pick(&d.kind)))
+        };
+        let anywhere = |pick: &dyn Fn(&DeclKind) -> bool| {
+            self.tree
+                .every()
+                .any(|(_, n, d)| n == name && pick(&d.kind))
+        };
         match sym {
             // Any relation of the name, anywhere: a private one would
             // shadow a global one, or the other way round.
-            Symbol::Predicate(..) => self.predicates.contains(name),
-            Symbol::Value(s, _) => self.values.contains(&(s.clone(), n)),
+            Symbol::Predicate(..) => self.tree.is_relation(name),
+            Symbol::Value(s, _) => here(s, &|k| *k == DeclKind::Input),
             Symbol::Field(s, i, p) => {
                 let p = match p.rsplit_once('.') {
-                    Some((init, _)) => format!("{init}.{n}"),
-                    None => n,
+                    Some((init, _)) => format!("{init}.{name}"),
+                    None => name.to_string(),
                 };
-                self.fields.contains(&(s.clone(), i.clone(), p))
+                self.scope_id(s)
+                    .and_then(|s| self.tree.names[s].input(i))
+                    .is_some_and(|n| input_fields(n).iter().any(|(f, _)| *f == p))
             }
-            Symbol::Let(s, _) => self.lets.contains(&(s.clone(), n)),
-            Symbol::Param(s, f, _) => self.params.contains(&(s.clone(), f.clone(), n)),
-            Symbol::Output(s, _) => self.outputs.contains(&(s.clone(), n)),
-            Symbol::Alias(_) => self.aliases.contains(name),
-            Symbol::Module(_) => self.modules.contains(name),
-            Symbol::Instance(_, _) => self.instances.iter().any(|(_, i)| *i == n),
-            Symbol::Resource(s, _, _) => self.resources.contains_key(&(s.clone(), n)),
+            Symbol::Let(s, _) => here(s, &|k| matches!(k, DeclKind::Let | DeclKind::LetFn { .. })),
+            Symbol::Param(s, f, _) => self
+                .scope_id(s)
+                .and_then(|s| self.tree.names[s].function(f))
+                .is_some_and(|n| {
+                    crate::program::scope::query::parameters(n)
+                        .iter()
+                        .any(|p| p.text() == name)
+                }),
+            Symbol::Output(s, _) => here(s, &|k| matches!(k, DeclKind::Output { .. })),
+            Symbol::Alias(_) => anywhere(&|k| matches!(k, DeclKind::Alias(_))),
+            Symbol::Module(_) => {
+                anywhere(&|k| matches!(k, DeclKind::Component(_) | DeclKind::Use { .. }))
+            }
+            Symbol::Instance(_, _) => anywhere(&|k| matches!(k, DeclKind::Copy { .. })),
+            Symbol::Resource(s, _, _) => here(s, &|k| matches!(k, DeclKind::Resource(_))),
             Symbol::Function(_) | Symbol::Package(_) | Symbol::File(_) => true,
         }
     }
 
-    /// How an evaluation names the cells of a scope's inputs, lets and
-    /// outputs (`attr("input", S, k, V)`): `""` for the program's or a
-    /// stack's own, each copy's name for a component's, each name a `use`
-    /// binds for a module file's.
-    pub fn cell_scopes(&self, scope: &Scope) -> Vec<String> {
-        match scope.as_deref() {
-            None => vec![String::new()],
-            Some(s) => match (s.strip_prefix("component "), s.strip_prefix("module ")) {
-                (Some(c), _) => self
-                    .instances
-                    .iter()
-                    .filter(|(p, _)| last_segment(p) == c)
-                    .map(|(_, i)| i.clone())
-                    .collect(),
-                (_, Some(m)) if self.stacks.contains(m) => vec![String::new()],
-                (_, Some(m)) => self
-                    .uses
-                    .iter()
-                    .filter(|(_, p)| *p == m)
-                    .map(|(n, _)| n.clone())
-                    .collect(),
-                _ => Vec::new(),
-            },
-        }
+    /// The names the scope `scope`'s copies or bindings have: each copy's
+    /// name for a component's, each name a `use` binds for a module
+    /// file's; `None` for the program's.
+    fn bindings(&self, scope: &Scope) -> Option<Vec<String>> {
+        let s = scope.as_deref()?;
+        let (path, component) = match (s.strip_prefix("component "), s.strip_prefix("module ")) {
+            (Some(c), _) => (c, true),
+            (_, Some(m)) => (m, false),
+            _ => return Some(Vec::new()),
+        };
+        let bound = self.tree.bound_to(path, component);
+        Some(bound.into_iter().map(str::to_string).collect())
     }
 
-    /// The file of the stack whose own scope `scope` is, when it is one
-    /// another stack uses: only its evaluation has its cells.
-    pub fn stack_file(&self, scope: &Scope) -> Option<&PathBuf> {
-        let m = scope.as_deref()?.strip_prefix("module ")?;
-        self.stacks.contains(m).then(|| self.files.get(m)).flatten()
+    /// How an evaluation names the cells of a scope's inputs, lets and
+    /// outputs (`attr("input", S, k, V)`): `""` for the program's (a
+    /// stack's own included), each copy's name for a component's, each
+    /// name a `use` binds for a module file's.
+    pub fn cell_scopes(&self, scope: &Scope) -> Vec<String> {
+        self.bindings(scope).unwrap_or_else(|| vec![String::new()])
     }
 
     /// The addresses a resource has, as strings name it (H-16, R-112): its
-    /// name in the program's scope or a stack's; its path `n.name` in each
-    /// copy `n` of its component or under each name its module file is
-    /// used by.
+    /// name in the program's scope; its path `n.name` in each copy `n` of
+    /// its component or under each name its module file is used by.
     pub fn addresses_of(&self, sym: &Symbol) -> Vec<(String, String)> {
         let Symbol::Resource(scope, typ, name) = sym else {
             return Vec::new();
         };
         let name = crate::address::name_segment(name).into_owned();
-        let under = |n: &str| (typ.clone(), crate::address::scoped(n, &name));
-        match scope.as_deref() {
-            None => vec![(typ.clone(), name.clone())],
-            Some(s) => match (s.strip_prefix("component "), s.strip_prefix("module ")) {
-                (Some(c), _) => self
-                    .instances
-                    .iter()
-                    .filter(|(p, _)| last_segment(p) == c)
-                    .map(|(_, i)| under(i))
-                    .collect(),
-                (_, Some(m)) if self.stacks.contains(m) => vec![(typ.clone(), name.clone())],
-                (_, Some(m)) => self
-                    .uses
-                    .iter()
-                    .filter(|(_, p)| *p == m)
-                    .map(|(n, _)| under(n))
-                    .collect(),
-                _ => Vec::new(),
-            },
+        match self.bindings(scope) {
+            None => vec![(typ.clone(), name)],
+            Some(bound) => bound
+                .iter()
+                .map(|n| (typ.clone(), crate::address::scoped(n, &name)))
+                .collect(),
         }
     }
 
@@ -763,7 +697,7 @@ impl Decls {
         let is_declared = || declared_name(&parent).as_ref() == Some(t);
         // A declaration's scope is where its statement stands.
         let outer = parent.parent().unwrap_or_else(|| parent.clone());
-        let scope = || self.scopes(&outer).remove(0);
+        let scope = || self.declaring_at(&outer).and_then(|s| self.describe(s));
         let decl = |s: Symbol| What::Name(s, true);
         let used = |s: Option<Symbol>| s.map_or(What::Other, |s| What::Name(s, false));
         match parent.kind() {
@@ -825,7 +759,11 @@ impl Decls {
         let toks = own_tokens(ty);
         let dotted = toks.iter().any(|x| x.kind() == SyntaxKind::DOT);
         let last = toks.iter().rev().find(|x| x.kind() == SyntaxKind::IDENT);
-        if self.aliases.contains(t.text()) && (!dotted || last == Some(t)) {
+        let alias = self
+            .tree
+            .every()
+            .any(|(_, n, d)| n == t.text() && matches!(d.kind, DeclKind::Alias(_)));
+        if alias && (!dotted || last == Some(t)) {
             What::Name(Symbol::Alias(t.text().to_string()), false)
         } else {
             What::Type(dotted_names(ty))
@@ -869,10 +807,32 @@ impl Decls {
         }
         // `resource network.vpc main`: the component `vpc` of network.df;
         // `resource vpc main`, a component of the program.
-        if self.components.contains(t.text()) {
+        if self.tree.component_named(t.text()).is_some() {
             return What::Name(Symbol::Module(t.text().to_string()), false);
         }
         What::Other
+    }
+
+    /// The input `name` of the module or the component the `use` or the
+    /// copy `stmt` binds, which its block's entry `name = ..` fills.
+    fn filled(&self, stmt: &SyntaxNode, name: &str) -> Option<Symbol> {
+        let body = self.bound_body(stmt)?;
+        let input = self
+            .in_body(body, name)
+            .into_iter()
+            .find(|d| d.kind == DeclKind::Input)?;
+        self.symbol(body.scope, name, input)
+    }
+
+    /// The input a pun in a `use` or a copy's block fills (`env` of `use
+    /// baseline { env }` is the stack's `env` it reads, and fills
+    /// baseline's input `env`).
+    pub fn fills(&self, t: &SyntaxToken) -> Option<Symbol> {
+        let path = t.parent().filter(|p| is_pun(p, t))?;
+        let stmt = path.parent()?.parent()?.parent()?;
+        let bound = stmt.kind() == SyntaxKind::USE || self.is_copy(&stmt);
+        self.filled(&stmt, t.text())
+            .filter(|_| bound && !self.provider_use(&stmt))
     }
 
     /// A name in a block entry's path.
@@ -885,25 +845,25 @@ impl Decls {
             && let Some(input) = attr.ancestors().find(|a| a.kind() == SyntaxKind::INPUT)
             && let Some(i) = declared_name(&input)
         {
-            let at = input.parent().unwrap_or_else(|| input.clone());
-            let s = self.scopes(&at).remove(0);
+            let s = self.declaring_at(&input).and_then(|x| self.describe(x));
             let field = field_path(attr, path, t);
             return What::Name(Symbol::Field(s, i.text().to_string(), field), true);
         }
         let block = entry.as_ref().and_then(|e| e.parent());
         // `k = ..` in an instance or a use block: the component's or the
         // module's input `k`; a provider's `use` block holds its settings.
-        match block
+        // A pun there, `{ env }`, is the user's value it reads: the input
+        // it fills is `fills`'.
+        if let Some(i) = block
             .and_then(|b| b.parent())
+            .filter(|s| s.kind() == SyntaxKind::USE || self.is_copy(s))
             .filter(|s| !self.provider_use(s))
+            .filter(|_| !is_pun(path, t))
         {
-            Some(i) if (i.kind() == SyntaxKind::USE || self.is_copy(&i)) && first => {
-                return What::Name(Symbol::Value(self.block_target(path), name), false);
-            }
-            Some(i) if i.kind() == SyntaxKind::USE || self.is_copy(&i) => {
-                return What::Path;
-            }
-            _ => {}
+            return match self.filled(&i, &name).filter(|_| first) {
+                Some(s) => What::Name(s, false),
+                None => What::Path,
+            };
         }
         // An entry that is only a name is the pun `k = k` (R-33): the name
         // is also its value, a `let`, an input or a resource (the
@@ -912,6 +872,10 @@ impl Decls {
             return match self.value_read(path, &name) {
                 Some(s) => What::Name(s, false),
                 None => match self.pick(path, self.resources_at(path, &name)) {
+                    // In a `use` or a copy's block, what no declaration
+                    // gives is a variable of its clause (`resource app
+                    // "${c}" { c } where run(c)`).
+                    What::Other if self.fills(t).is_some() => What::Variable,
                     What::Other => What::Path,
                     w => w,
                 },
@@ -963,7 +927,7 @@ impl Decls {
                 r.c.parent()
                     .and_then(|call| call.parent())
                     .is_some_and(|h| matches!(h.kind(), SyntaxKind::RULE | SyntaxKind::FACT));
-            if !head && !self.predicates.contains(name0) && crate::functions::callable(name0) {
+            if !head && !self.tree.is_relation(name0) && crate::functions::callable(name0) {
                 return Some(What::Name(Symbol::Function(name0.clone()), false));
             }
             if !head && let Some(s) = self.let_(at, name0) {
@@ -975,15 +939,18 @@ impl Decls {
             return None;
         }
         let name2 = r.name_at(2).unwrap_or_default();
-        let (first, second) = if let Some(path) = self.uses.get(name0) {
-            let module = Some(format!("module {path}"));
+        let (first, second) = if let Some(path) = self.use_at(at, name0) {
+            let module = match self.module_body(path) {
+                Some(b) => self.describe(b.scope),
+                None => Some(format!("module {path}")),
+            };
             (
                 Symbol::Module(name0.clone()),
                 Symbol::Predicate(module, name2),
             )
-        } else if let Some((p, _)) = self.instances.iter().find(|(_, i)| i == name0) {
-            let component = Some(format!("component {}", last_segment(p)));
-            let copy = Symbol::Instance(p.clone(), name0.clone());
+        } else if let Some((written, c)) = self.copy_at(at, name0) {
+            let component = Some(format!("component {c}"));
+            let copy = Symbol::Instance(written.to_string(), name0.clone());
             (copy, Symbol::Predicate(component, name2))
         } else {
             let full = format!("{name0}.{name2}");
@@ -996,7 +963,7 @@ impl Decls {
     /// A `let` or a value name at the head; an object input's field after
     /// it.
     fn value_head(&self, r: &Read) -> Option<What> {
-        let s = self.value_read(r.at, &r.name0)?;
+        let (s, decl) = self.value_decl(r.at, &r.name0)?;
         let k = r.k;
         if k == 0 {
             return Some(What::Name(s, false));
@@ -1008,9 +975,7 @@ impl Decls {
                 .collect();
             let field = field.join(".");
             if field.split('.').count() == k / 2
-                && self
-                    .fields
-                    .contains(&(scope.clone(), input.clone(), field.clone()))
+                && input_fields(&decl.node).iter().any(|(f, _)| *f == field)
             {
                 let f = Symbol::Field(scope.clone(), input.clone(), field);
                 return Some(What::Name(f, false));
@@ -1033,8 +998,7 @@ impl Decls {
             .children()
             .find(|x| x.kind() == SyntaxKind::BLOCK_PATH)?;
         let last = idents(&path).pop().filter(|l| l.text() == r.name0)?;
-        let at = input.parent().unwrap_or_else(|| input.clone());
-        let s = self.scopes(&at).remove(0);
+        let s = self.declaring_at(&input).and_then(|x| self.describe(x));
         let field = Symbol::Field(s, i.text().to_string(), field_path(&attr, &path, &last));
         Some(r.head_or_path(field))
     }
@@ -1074,18 +1038,21 @@ impl Decls {
     /// resource wins over what its user's scope brings in (R-101).
     fn scope_read(&self, r: &Read) -> Option<What> {
         let (name0, at, k) = (&r.name0, r.at, r.k);
-        let instance = self.instances.iter().find(|(_, i)| i == name0);
+        let instance = self.copy_at(at, name0);
+        let used = self.use_at(at, name0);
         let rs = self.resources_at(at, name0);
         let own = matches!(rs.first(), Some(Symbol::Resource(Some(_), _, _)));
         let reads_other = !(own && !self.binds_here(at, name0))
             && r.dot(1)
             && r.name_at(2).is_some_and(|x| {
-                let of = match (instance, self.uses.get(name0)) {
-                    (Some((p, _)), _) => format!("component {}", last_segment(p)),
-                    (_, Some(m)) => format!("module {m}"),
-                    _ => return false,
+                let of = match (instance, used) {
+                    (Some((_, c)), _) => {
+                        self.tree.by_path(c).map(|scope| Body { scope, file: None })
+                    }
+                    (_, Some(m)) => self.module_body(m),
+                    _ => None,
                 };
-                self.has_item(&of, &x)
+                of.is_some_and(|b| self.has_item(b, &x))
             });
         if !rs.is_empty() && !r.index(1) && !reads_other {
             return Some(if k == 0 {
@@ -1095,16 +1062,16 @@ impl Decls {
             });
         }
         if r.dot(1)
-            && let Some((p, _)) = instance
+            && let Some((written, c)) = instance
         {
-            let component = format!("component {}", last_segment(p));
+            let body = self.tree.by_path(c).map(|scope| Body { scope, file: None });
             return Some(match k {
-                0 => What::Name(Symbol::Instance(p.clone(), name0.clone()), false),
-                2 => self.item(&component, &r.name_at(2)?, r.call),
+                0 => What::Name(Symbol::Instance(written.to_string(), name0.clone()), false),
+                2 => self.item(body?, &r.name_at(2)?, r.call),
                 _ => What::Path,
             });
         }
-        if let Some(path) = self.uses.get(name0) {
+        if let Some(path) = used {
             let j = if r.index(1) { 3 } else { 2 };
             if k == 0 {
                 return Some(What::Name(Symbol::Module(name0.clone()), false));
@@ -1113,15 +1080,45 @@ impl Decls {
                 && r.dot(j - 1)
                 && let Some(x) = r.name_at(j)
             {
-                return Some(self.item(&format!("module {path}"), &x, r.call));
+                return Some(match self.module_body(path) {
+                    Some(b) => self.item(b, &x, r.call),
+                    None => What::Path,
+                });
             }
-            return Some(self.component_read(&r.ps, j, k).unwrap_or(What::Path));
+            let c = r.name_at(j);
+            let inner = c.and_then(|c| self.tree.by_path(&format!("{path}.{c}")));
+            return Some(self.component_read(r, j, inner).unwrap_or(What::Path));
         }
-        if self.components.contains(name0) && r.index(1) {
-            let after = if k >= 1 { What::Path } else { What::Other };
-            return Some(self.component_read(&r.ps, 0, k).unwrap_or(after));
+        if r.index(1) {
+            let copied = |k: &DeclKind| matches!(k, DeclKind::Copied(_));
+            let c = self
+                .reach(at, name0, copied)
+                .and_then(|(_, d)| match &d.kind {
+                    DeclKind::Copied(p) => self.tree.by_path(p),
+                    _ => None,
+                })
+                .or_else(|| {
+                    self.tree
+                        .component_named(name0)
+                        .and_then(|p| self.tree.by_path(p))
+                });
+            if c.is_some() {
+                let after = if k >= 1 { What::Path } else { What::Other };
+                return Some(self.component_read(r, 0, c).unwrap_or(after));
+            }
         }
         None
+    }
+
+    /// Whether the body `at` is in (its component's, else the program's
+    /// or its module's) binds `name` itself by a `use` or a copy: then
+    /// the body's own resource of the name does not win a read over it
+    /// (R-101).
+    fn binds_here(&self, at: &SyntaxNode, name: &str) -> bool {
+        self.scope_at(at).is_some_and(|s| {
+            let body = self.tree.declaring(self.tree.body(s));
+            self.tree.names[body].bound(name).next().is_some()
+        })
     }
 
     /// The path of a file, then a component of it: `net.c[e].k`.
@@ -1150,8 +1147,12 @@ impl Decls {
                 if i == r.k {
                     return Some(What::Name(Symbol::File(prefix), false));
                 }
-            } else if self.components.contains(x.text()) {
-                return Some(self.component_read(&r.ps, i, r.k).unwrap_or(What::Path));
+            } else if let Some(c) = self.tree.by_path(&prefix).or_else(|| {
+                self.tree
+                    .component_named(x.text())
+                    .and_then(|p| self.tree.by_path(p))
+            }) {
+                return Some(self.component_read(r, i, Some(c)).unwrap_or(What::Path));
             } else if i == r.k {
                 return Some(What::Other);
             }
@@ -1161,7 +1162,7 @@ impl Decls {
 
     /// A relation's `p[..]`; a type, `T[e]`, `T.n`.
     fn relation_or_type(&self, r: &Read) -> Option<What> {
-        if r.index(1) && self.predicates.contains(&r.name0) {
+        if r.index(1) && self.tree.is_relation(&r.name0) {
             return Some(r.head_or_path(self.predicate(r.at, &r.name0)));
         }
         self.typed(&r.ps, 0, r.k)
@@ -1199,12 +1200,15 @@ impl Decls {
             return Some(What::Type(typ));
         }
         if let (Some(Part::Dot), Some(Part::Name(n))) = (ps.get(end + 1), ps.get(end + 2)) {
-            let rs: Vec<Symbol> = self
-                .resources
-                .iter()
-                .filter(|((_, x), ts)| x == n.text() && ts.contains(&typ))
-                .map(|((s, x), _)| Symbol::Resource(s.clone(), typ.clone(), x.clone()))
-                .collect();
+            let mut rs: Vec<Symbol> = Vec::new();
+            for (s, x, d) in self.tree.every() {
+                if x == n.text() && d.kind == DeclKind::Resource(typ.clone()) {
+                    let sym = Symbol::Resource(self.describe(s), typ.clone(), x.to_string());
+                    if !rs.contains(&sym) {
+                        rs.push(sym);
+                    }
+                }
+            }
             if !rs.is_empty() {
                 return Some(match k.cmp(&(end + 2)) {
                     std::cmp::Ordering::Equal => self.pick_first(rs),
@@ -1222,69 +1226,71 @@ impl Decls {
         }
     }
 
-    /// A component's copies read at part `at` (`c[e].k`): the component,
-    /// then its output after the index.
-    fn component_read(&self, ps: &[Part], at: usize, k: usize) -> Option<What> {
-        let Some(Part::Name(c)) = ps.get(at) else {
+    /// A component's copies read at part `at` (`c[e].k`), `body` the
+    /// component's: the component, then its output after the index.
+    fn component_read(&self, r: &Read, at: usize, body: Option<ScopeId>) -> Option<What> {
+        let Some(Part::Name(c)) = r.ps.get(at) else {
             return None;
         };
-        let c = c.text().to_string();
-        if !self.components.contains(&c) {
-            return None;
-        }
-        if k == at {
-            return Some(What::Name(Symbol::Module(c), false));
+        let body = body?;
+        if r.k == at {
+            return Some(What::Name(Symbol::Module(c.text().to_string()), false));
         }
         let o = at + 3;
-        if !matches!(ps.get(at + 1), Some(Part::Index))
-            || !matches!(ps.get(at + 2), Some(Part::Dot))
-        {
+        if !r.index(at + 1) || !r.dot(at + 2) {
             return None;
         }
-        match ps.get(o) {
-            Some(Part::Name(x)) if k == o => {
-                Some(self.item(&format!("component {c}"), x.text(), false))
+        match r.ps.get(o) {
+            Some(Part::Name(x)) if r.k == o => {
+                let b = Body {
+                    scope: body,
+                    file: None,
+                };
+                Some(self.item(b, x.text(), false))
             }
             _ => Some(What::Path),
         }
     }
 
-    /// Whether the scope `s` declares an item `x` its user reads.
-    fn has_item(&self, s: &str, x: &str) -> bool {
-        let key = (Some(s.to_string()), x.to_string());
-        self.defined.contains(&key)
-            || self.outputs.contains(&key)
-            || self.lets.contains(&key)
-            || self.values.contains(&key)
-            || self.resources.contains_key(&key)
+    /// Whether the body `b` declares an item `x` its user reads.
+    fn has_item(&self, b: Body, x: &str) -> bool {
+        self.in_body(b, x).iter().any(|d| {
+            defines_relation(&d.kind)
+                || d.kind.is_value()
+                || matches!(
+                    d.kind,
+                    DeclKind::Output { .. } | DeclKind::LetFn { .. } | DeclKind::Resource(_)
+                )
+        })
     }
 
-    /// The item `x` of the scope `s` (a component's or a module file's),
+    /// The item `x` of the body `b` (a component's or a module file's),
     /// read from outside it: a relation it defines, an output, a `let`, a
     /// value, a resource, a component of a module.
-    fn item(&self, s: &str, x: &str, call: bool) -> What {
-        let s = Some(s.to_string());
-        let key = (s.clone(), x.to_string());
-        let found = if self.defined.contains(&key) || call {
-            Some(Symbol::Predicate(s, x.to_string()))
-        } else if self.outputs.contains(&key) {
-            Some(Symbol::Output(s, x.to_string()))
-        } else if self.lets.contains(&key) {
-            Some(Symbol::Let(s, x.to_string()))
-        } else if self.values.contains(&key) {
-            Some(Symbol::Value(s, x.to_string()))
-        } else if let Some(ts) = self.resources.get(&key) {
-            return self.pick_first(
-                ts.iter()
-                    .map(|t| Symbol::Resource(s.clone(), t.clone(), x.to_string()))
-                    .collect(),
-            );
-        } else if self.components.contains(x) {
-            Some(Symbol::Module(x.to_string()))
-        } else {
-            None
-        };
-        found.map_or(What::Path, |s| What::Name(s, false))
+    fn item(&self, b: Body, x: &str, call: bool) -> What {
+        let decls = self.in_body(b, x);
+        let is = |pick: &dyn Fn(&DeclKind) -> bool| decls.iter().find(|d| pick(&d.kind));
+        let scope = self.describe(b.scope);
+        if call || is(&defines_relation).is_some() {
+            return What::Name(Symbol::Predicate(scope, x.to_string()), false);
+        }
+        let found = is(&|k| matches!(k, DeclKind::Output { .. }))
+            .or_else(|| is(&|k| matches!(k, DeclKind::Let | DeclKind::LetFn { .. })))
+            .or_else(|| is(&|k| *k == DeclKind::Input));
+        if let Some(sym) = found.and_then(|d| self.symbol(b.scope, x, d)) {
+            return What::Name(sym, false);
+        }
+        let rs = self.resources_in(b, x);
+        if !rs.is_empty() {
+            return self.pick_first(rs);
+        }
+        if decls
+            .iter()
+            .any(|d| matches!(d.kind, DeclKind::Component(_)))
+        {
+            return What::Name(Symbol::Module(x.to_string()), false);
+        }
+        What::Path
     }
 
     /// Every name of a file, and what each is: its tree's, and those of
@@ -1338,6 +1344,16 @@ impl Decls {
                 What::Names(ss) => ss.contains(sym),
                 _ => false,
             })
+            .collect()
+    }
+
+    /// Every pun of the parsed files that fills the input `sym` (`env`
+    /// of `use baseline { env }` fills baseline's `env`).
+    pub fn filling<'p>(&self, files: &'p [Parsed], sym: &Symbol) -> Vec<Named<'p>> {
+        files
+            .iter()
+            .flat_map(|f| self.names(f))
+            .filter(|n| self.fills(&n.token).as_ref() == Some(sym))
             .collect()
     }
 
@@ -1434,7 +1450,7 @@ impl Decls {
                     .filter(|(_, t)| kind(t) == Some(SyntaxKind::COMPONENT))
                     .collect();
                 if components.is_empty()
-                    && let Some(f) = self.uses.get(m).and_then(|p| self.files.get(p))
+                    && let Some(f) = self.used_by(m)
                 {
                     return vec![Site::File(f.clone())];
                 }
@@ -1446,6 +1462,14 @@ impl Decls {
             .into_iter()
             .map(|(f, t)| Site::Text(f, t.text_range()))
             .collect()
+    }
+
+    /// The file a `use` binds to the name `m`, when it is the project's.
+    fn used_by(&self, m: &str) -> Option<&PathBuf> {
+        self.tree.every().find_map(|(_, n, d)| match &d.kind {
+            DeclKind::Use { module, .. } if n == m => self.files.get(module.as_str()),
+            _ => None,
+        })
     }
 
     /// The token at byte `at` of `path` (a name of an interpolation hole
@@ -1480,6 +1504,71 @@ impl Decls {
             what: self.classify(&t),
             token: t,
         })
+    }
+}
+
+/// What a project's `use`s and copies name, read off its files before
+/// the scope tree is built, as the loader reads a program's: which files
+/// are modules (R-65), and which `use`s import a provider (R-112).
+struct Modules {
+    /// The paths `use`s and copies name.
+    named: BTreeSet<String>,
+    /// A `use`'s path of one segment that names no file and is not std.
+    providers: BTreeSet<String>,
+}
+
+impl Modules {
+    fn of(files: &[Parsed], paths: &BTreeMap<String, PathBuf>) -> Modules {
+        let mut uses: BTreeMap<String, String> = BTreeMap::new();
+        let mut components: BTreeSet<String> = BTreeSet::new();
+        for n in files.iter().flat_map(|f| f.tree.descendants()) {
+            match n.kind() {
+                SyntaxKind::USE => {
+                    let (path, name) = crate::syntax::resolve::use_parts(&n);
+                    uses.insert(name, path);
+                }
+                SyntaxKind::COMPONENT => {
+                    components.extend(declared_name(&n).map(|x| x.text().to_string()));
+                }
+                _ => {}
+            }
+        }
+        // A copy of a component: a resource whose type's last segment is
+        // a component, before it a file, a `use`'s name or nothing.
+        let copy = |path: &str| match path.rsplit_once('.') {
+            None => components.contains(path),
+            Some((prefix, last)) => {
+                let head = prefix.split('.').next().unwrap_or(prefix);
+                components.contains(last)
+                    && (paths.contains_key(prefix)
+                        || uses.contains_key(head)
+                        || components.contains(head))
+            }
+        };
+        let mut named: BTreeSet<String> = BTreeSet::new();
+        for n in files.iter().flat_map(|f| f.tree.descendants()) {
+            if n.kind() == SyntaxKind::RESOURCE {
+                let (path, _) = crate::syntax::resolve::copy_parts(&n);
+                if copy(&path) {
+                    named.insert(path);
+                }
+            }
+        }
+        let providers: BTreeSet<String> = uses
+            .values()
+            .filter(|p| !p.contains('.') && p.as_str() != "std" && !paths.contains_key(*p))
+            .cloned()
+            .collect();
+        named.extend(uses.into_values().filter(|p| !providers.contains(p)));
+        Modules { named, providers }
+    }
+
+    /// Whether the file at dotted `path` is a module: a `use` or a copy
+    /// names it, or an item of it.
+    fn is_module(&self, path: &str) -> bool {
+        self.named
+            .iter()
+            .any(|p| p == path || p.strip_prefix(path).is_some_and(|r| r.starts_with('.')))
     }
 }
 
@@ -1531,23 +1620,6 @@ fn token_at(root: &SyntaxNode, at: usize) -> Option<SyntaxToken> {
         (Some(l), _) => Some(l),
         _ => None,
     }
-}
-
-/// The innermost component `node` is in (itself included).
-fn component_scope(node: &SyntaxNode) -> Scope {
-    component_scopes(node).into_iter().next()
-}
-
-/// The components `node` is in (itself included), innermost first.
-fn component_scopes(node: &SyntaxNode) -> Vec<String> {
-    node.ancestors()
-        .filter(|a| a.kind() == SyntaxKind::COMPONENT)
-        .filter_map(|a| Some(format!("component {}", declared_name(&a)?.text())))
-        .collect()
-}
-
-fn last_segment(path: &str) -> &str {
-    path.rsplit('.').next().unwrap_or(path)
 }
 
 /// Whether an `output` names a value (`output k: T`, `output k = t`), not
@@ -2284,7 +2356,10 @@ warn \"w\" where env == \"prod\", region == \"eu\"\n",
         );
         assert_eq!(
             what("app.conn", 4, 0),
-            item(Symbol::Output(Some("component pg".into()), "conn".into()))
+            item(Symbol::Output(
+                Some("component db.pg".into()),
+                "conn".into()
+            ))
         );
         assert_eq!(
             what("config {}", 0, 0),
@@ -2343,5 +2418,41 @@ warn \"w\" where env == \"prod\", region == \"eu\"\n",
         let d = Decls::of_files(Path::new("/"), &files);
         assert!(d.taken(&sym("n"), "m"));
         assert!(!d.taken(&sym("n"), "k"));
+    }
+
+    /// A stack another stack uses is the program's in its own file, and
+    /// what the user reads of it (`platform.subnet`) is that file's own
+    /// declaration (R-211 step 12: the tree's answer, not a module's).
+    #[test]
+    fn a_stack_another_uses_is_the_programs_in_its_own_file() {
+        let file = |path: &str, src: &str| Parsed::new(PathBuf::from(path), src.into());
+        let files = vec![
+            file(
+                "/p/stacks/platform.df",
+                "input region: string = \"eu\"\noutput subnet = region\n",
+            ),
+            file(
+                "/p/stacks/apps.df",
+                "use stacks.platform as platform\nlet region = \"us\"\nlet s = platform.subnet\nlet t = region\n",
+            ),
+        ];
+        let d = Decls::of_files(Path::new("/p"), &files);
+        let what = |f: usize, needle: &str, ahead: usize| {
+            let at = files[f].text.find(needle).unwrap() + ahead;
+            d.at(&files, &files[f].path, at).map(|a| a.what)
+        };
+        assert_eq!(
+            what(0, "region\n", 0),
+            Some(What::Name(Symbol::Value(None, "region".into()), false))
+        );
+        // Each stack reads its own file's `region`.
+        assert_eq!(
+            what(1, "t = region", 4),
+            Some(What::Name(Symbol::Let(None, "region".into()), false))
+        );
+        assert_eq!(
+            what(1, "platform.subnet", 9),
+            Some(What::Name(Symbol::Output(None, "subnet".into()), false))
+        );
     }
 }

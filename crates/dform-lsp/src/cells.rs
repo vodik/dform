@@ -46,12 +46,15 @@ fn holding<'e>(
         Symbol::Resource(s, ..) => s,
         _ => return Vec::new(),
     };
-    let declared_in = d.stack_file(scope).cloned().or_else(|| {
-        match d.definition(files, &What::Name(sym.clone(), false)).first() {
+    // A stack's own names (the program's, `None`) are its file's: only
+    // its own evaluation has their cells.
+    let declared_in = match scope {
+        None => match d.definition(files, &What::Name(sym.clone(), false)).first() {
             Some(Site::Text(f, _)) => Some(f.path.clone()),
             _ => None,
-        }
-    });
+        },
+        Some(_) => None,
+    };
     let own: Vec<&Evaluated> = evaluated
         .iter()
         .copied()

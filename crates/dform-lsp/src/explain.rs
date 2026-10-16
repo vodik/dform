@@ -386,7 +386,7 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
             .map(reference_md)
             .or_else(|| output_md(&files, &h.t)),
     };
-    joined(h.in_copies(), out)
+    joined(joined(h.in_copies(), out), h.fills())
 }
 
 /// The hover of a token that is no name: a keyword (`check` where it opens
@@ -538,6 +538,16 @@ impl Hovered<'_> {
             out.push_str(&hover(e, &nodes));
         }
         Some(out)
+    }
+
+    /// A pun in a `use` or a copy's block (`use baseline { env }`): the
+    /// input of the module or the component it fills, beside the value it
+    /// reads.
+    fn fills(&self) -> Option<String> {
+        let Symbol::Value(Some(scope), k) = self.d.fills(&self.t)? else {
+            return None;
+        };
+        Some(format!("fills the input `{k}` of {scope}"))
     }
 
     /// A name read bare in a component's body: what it denotes in each
