@@ -740,11 +740,13 @@ fn seals(
 }
 
 /// The passphrase asked on the terminal, once a process: with no terminal,
-/// none.
+/// none. A thread that needs it while another asks waits for that answer
+/// (the deployments of a tree's plan are read at once).
 fn prompt(deployment: &str) -> Result<std::result::Result<Vec<u8>, String>> {
     use std::io::{BufRead, IsTerminal, Write};
     static ANSWER: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
-    if let Some(a) = ANSWER.lock().expect("prompt").clone() {
+    let mut answer = ANSWER.lock().expect("prompt");
+    if let Some(a) = answer.clone() {
         return Ok(Ok(a));
     }
     if !std::io::stdin().is_terminal() {
@@ -767,7 +769,7 @@ fn prompt(deployment: &str) -> Result<std::result::Result<Vec<u8>, String>> {
     if a.is_empty() {
         return Ok(Err("no passphrase was given".into()));
     }
-    *ANSWER.lock().expect("prompt") = Some(a.clone());
+    *answer = Some(a.clone());
     Ok(Ok(a))
 }
 
