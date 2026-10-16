@@ -739,20 +739,10 @@ impl Instance {
         self,
         engine: &'static Engine,
         component: Component,
-        mut calls: tokio::sync::mpsc::UnboundedReceiver<Submitted>,
+        calls: tokio::sync::mpsc::UnboundedReceiver<Submitted>,
         ready: std::sync::mpsc::Sender<Result<()>>,
     ) {
-        let started = async {
-            let linker = self.linker(engine)?;
-            let mut store = Store::new(engine, self.state()?);
-            store.set_epoch_deadline(ticks(DEADLINE));
-            let provider =
-                bindings::HostedProvider::instantiate_async(&mut store, &component, &linker)
-                    .await
-                    .map_err(anyhow::Error::from)?;
-            Ok::<_, anyhow::Error>((store, provider))
-        };
-        let (mut store, provider) = match started.await {
+        let (store, provider) = match self.instantiate(engine, &component).await {
             Ok(s) => {
                 let _ = ready.send(Ok(()));
                 s
@@ -762,74 +752,121 @@ impl Instance {
                 return;
             }
         };
+        self.answer_all(store, provider, calls).await;
+    }
+
+    /// The component instantiated in a store of its own, its calls'
+    /// epoch deadline set.
+    async fn instantiate(
+        &self,
+        engine: &'static Engine,
+        component: &Component,
+    ) -> Result<(Store<State>, bindings::HostedProvider)> {
+        let linker = self.linker(engine)?;
+        let mut store = Store::new(engine, self.state()?);
+        store.set_epoch_deadline(ticks(DEADLINE));
+        let provider = bindings::HostedProvider::instantiate_async(&mut store, component, &linker)
+            .await
+            .map_err(anyhow::Error::from)?;
+        Ok((store, provider))
+    }
+
+    /// Run every call `calls` brings at once, until dform drops the
+    /// provider (`calls` ends) or the instance traps; then answer every
+    /// call left as crashed ([`Instance::died`]).
+    async fn answer_all(
+        &self,
+        mut store: Store<State>,
+        provider: bindings::HostedProvider,
+        mut calls: tokio::sync::mpsc::UnboundedReceiver<Submitted>,
+    ) {
         let who = std::cell::RefCell::new(self.program.clone());
         // The calls not answered yet: each answered as crashed if the
         // instance traps.
         let open = std::cell::RefCell::new(std::collections::BTreeSet::new());
         let ran = store
-            .run_concurrent(async |a| {
-                type Running<'a> =
-                    Pin<Box<dyn Future<Output = (Ticket, bool, wasmtime::Result<()>)> + 'a>>;
-                let mut running: Vec<Running> = Vec::new();
-                loop {
-                    let next = std::future::poll_fn(|cx| {
-                        for i in 0..running.len() {
-                            if let Poll::Ready(r) = running[i].as_mut().poll(cx) {
-                                drop(running.swap_remove(i));
-                                return Poll::Ready(r);
-                            }
-                        }
-                        Poll::Pending
-                    });
-                    tokio::select! {
-                        got = calls.recv() => match got {
-                            Some(c) => {
-                                open.borrow_mut().insert(c.t);
-                                running.push(Box::pin(self.one(a, &provider, &who, c)));
-                            }
-                            // dform dropped the provider.
-                            None => return None,
-                        },
-                        (t, apply, r) = next => {
-                            open.borrow_mut().remove(&t);
-                            if let Err(trap) = r {
-                                return Some((t, apply, trap));
-                            }
-                        }
-                    }
-                }
-            })
+            .run_concurrent(async |a| self.run_calls(a, &provider, &who, &open, &mut calls).await)
             .await;
         let trapped = match ran {
             Ok(None) => return,
-            Ok(Some((t, apply, trap))) => Some((t, apply, trap)),
+            Ok(Some(trapped)) => Some(trapped),
             Err(trap) => {
                 let t = open.borrow().iter().next().copied();
                 t.map(|t| (t, false, trap))
             }
         };
-        let who = who.into_inner();
+        self.died(&who.into_inner(), trapped, open.into_inner(), calls)
+            .await;
+    }
+
+    /// Each call `calls` brings run as it comes, all at once, each noted
+    /// in `open` until it is answered: `None` once `calls` ends, else the
+    /// first call that trapped, with whether it was an Apply.
+    async fn run_calls(
+        &self,
+        a: &Accessor<State>,
+        provider: &bindings::HostedProvider,
+        who: &std::cell::RefCell<String>,
+        open: &std::cell::RefCell<std::collections::BTreeSet<Ticket>>,
+        calls: &mut tokio::sync::mpsc::UnboundedReceiver<Submitted>,
+    ) -> Option<(Ticket, bool, wasmtime::Error)> {
+        type Running<'a> = Pin<Box<dyn Future<Output = (Ticket, bool, wasmtime::Result<()>)> + 'a>>;
+        let mut running: Vec<Running> = Vec::new();
+        loop {
+            let next = std::future::poll_fn(|cx| {
+                for i in 0..running.len() {
+                    if let Poll::Ready(r) = running[i].as_mut().poll(cx) {
+                        drop(running.swap_remove(i));
+                        return Poll::Ready(r);
+                    }
+                }
+                Poll::Pending
+            });
+            tokio::select! {
+                got = calls.recv() => match got {
+                    Some(c) => {
+                        open.borrow_mut().insert(c.t);
+                        running.push(Box::pin(self.one(a, provider, who, c)));
+                    }
+                    // dform dropped the provider.
+                    None => return None,
+                },
+                (t, apply, r) = next => {
+                    open.borrow_mut().remove(&t);
+                    if let Err(trap) = r {
+                        return Some((t, apply, trap));
+                    }
+                }
+            }
+        }
+    }
+
+    /// The instance trapped (in the call `trapped` names, when one did):
+    /// that call answered with its trap, every call still `open` and
+    /// every call submitted since as crashed, and no call taken again.
+    async fn died(
+        &self,
+        who: &str,
+        trapped: Option<(Ticket, bool, wasmtime::Error)>,
+        mut open: std::collections::BTreeSet<Ticket>,
+        mut calls: tokio::sync::mpsc::UnboundedReceiver<Submitted>,
+    ) {
         if let Some((t, apply, trap)) = trapped {
-            open.borrow_mut().remove(&t);
+            open.remove(&t);
             let _ = self.tx.send(Back::Answer(
                 t,
-                Box::new(Err(trapped_as(&who, apply, &trap))),
+                Box::new(Err(trapped_as(who, apply, &trap))),
             ));
         }
         let gone = format!("the provider {who} has exited");
         *self.dead.lock().unwrap_or_else(|e| e.into_inner()) = Some(gone.clone());
-        for t in open.into_inner() {
-            let _ = self.tx.send(Back::Answer(
-                t,
-                Box::new(Err(CallError::Crashed(gone.clone()))),
-            ));
+        let crashed = |t| Back::Answer(t, Box::new(Err(CallError::Crashed(gone.clone()))));
+        for t in open {
+            let _ = self.tx.send(crashed(t));
         }
         // A call submitted before the submitter saw it die.
         while let Some(Submitted { t, .. }) = calls.recv().await {
-            let _ = self.tx.send(Back::Answer(
-                t,
-                Box::new(Err(CallError::Crashed(gone.clone()))),
-            ));
+            let _ = self.tx.send(crashed(t));
         }
     }
 
@@ -875,105 +912,7 @@ impl Instance {
         Submitted { t, call, number }: Submitted,
     ) -> (Ticket, bool, wasmtime::Result<()>) {
         let apply = matches!(call, Call::Apply(_));
-        let p = provider.dform_provider_provider();
-        let answered = async {
-            Ok::<_, wasmtime::Error>(match &call {
-                Call::Handshake(r) => {
-                    Instance::exported(a, p.func_handshake(), conv::to_handshake_request(r), number)
-                        .await?
-                        .map_err(conv::from_call_error)
-                        .and_then(|r| {
-                            decode(conv::from_handshake_response(&r)).map(Reply::Handshake)
-                        })
-                }
-                Call::Configure(r) => {
-                    Instance::exported(a, p.func_configure(), conv::to_configure_request(r), number)
-                        .await?
-                        .map_err(conv::from_call_error)
-                        .and_then(|r| {
-                            decode(conv::from_configure_response(&r)).map(Reply::Configure)
-                        })
-                }
-                Call::Schema(r) => {
-                    Instance::exported(a, p.func_schema(), conv::to_schema_request(r), number)
-                        .await?
-                        .map_err(conv::from_call_error)
-                        .and_then(|r| decode(conv::from_schema_response(&r)).map(Reply::Schema))
-                }
-                Call::Query(r) => {
-                    Instance::exported(a, p.func_query(), conv::to_query_request(r), number)
-                        .await?
-                        .map_err(conv::from_call_error)
-                        .and_then(|r| decode(conv::from_rows(&r)).map(Reply::Query))
-                }
-                Call::Read(r) => {
-                    Instance::exported(a, p.func_read(), conv::to_read_request(r), number)
-                        .await?
-                        .map_err(conv::from_call_error)
-                        .and_then(|r| decode(conv::from_read_response(&r)).map(Reply::Read))
-                }
-                Call::Plan(r) => {
-                    Instance::exported(a, p.func_plan(), conv::to_plan_request(r), number)
-                        .await?
-                        .map_err(conv::from_call_error)
-                        .and_then(|r| decode(conv::from_plan_response(&r)).map(Reply::Plan))
-                }
-                Call::Apply(r) if r.op == pb::Op::Unspecified as i32 => {
-                    Err(CallError::Refused("an Apply call with no op".to_string()))
-                }
-                Call::Apply(r) => {
-                    let f = p.func_apply();
-                    let started = a.with(|mut s| {
-                        f.start_call_concurrent(s.as_context_mut(), (conv::to_apply_request(r),))
-                    })?;
-                    let task = started.task();
-                    Instance::numbered(a, task, number);
-                    let (events, result) = f.finish_call_concurrent(a, started).await?.0;
-                    let (done, answer) = tokio::sync::oneshot::channel();
-                    a.with(|mut s| -> wasmtime::Result<()> {
-                        events.pipe(
-                            &mut s,
-                            Events {
-                                t,
-                                tx: self.tx.clone(),
-                            },
-                        )?;
-                        result.pipe(&mut s, Done(Some(done)))?;
-                        Ok(())
-                    })?;
-                    let answered = answer.await;
-                    Instance::numbered(a, task, None);
-                    match answered {
-                        Ok(r) => r
-                            .map_err(conv::from_call_error)
-                            .and_then(|r| decode(conv::from_apply_response(&r)).map(Reply::Apply)),
-                        Err(_) => Err(CallError::Crashed(format!(
-                            "the provider {} dropped its Apply's answer",
-                            who.borrow()
-                        ))),
-                    }
-                }
-                Call::Import(r) => {
-                    Instance::exported(a, p.func_import(), conv::to_import_request(r), number)
-                        .await?
-                        .map_err(conv::from_call_error)
-                        .and_then(|r| decode(conv::from_import_response(&r)).map(Reply::Import))
-                }
-                Call::Reveal(r) => {
-                    Instance::exported(a, p.func_reveal(), conv::to_reveal_request(r), number)
-                        .await?
-                        .map_err(conv::from_call_error)
-                        .and_then(|r| decode(conv::from_reveal_response(&r)).map(Reply::Reveal))
-                }
-                Call::Health(r) => {
-                    Instance::exported(a, p.func_health(), conv::to_health_request(r), number)
-                        .await?
-                        .map_err(conv::from_call_error)
-                        .and_then(|r| decode(conv::from_health_response(&r)).map(Reply::Health))
-                }
-            })
-        };
-        match answered.await {
+        match self.answer(a, provider, who, t, &call, number).await {
             Ok(answer) => {
                 if let Ok(Reply::Handshake(h)) = &answer {
                     *who.borrow_mut() = h.name.clone();
@@ -984,6 +923,127 @@ impl Instance {
             Err(trap) => (t, apply, Err(trap)),
         }
     }
+
+    /// `call`'s answer, from the export that serves it; a trap is the
+    /// error.
+    async fn answer(
+        &self,
+        a: &Accessor<State>,
+        provider: &bindings::HostedProvider,
+        who: &std::cell::RefCell<String>,
+        t: Ticket,
+        call: &Call,
+        number: Option<u64>,
+    ) -> wasmtime::Result<Result<Reply, CallError>> {
+        let p = provider.dform_provider_provider();
+        Ok(match call {
+            Call::Handshake(r) => answered(
+                Instance::exported(a, p.func_handshake(), conv::to_handshake_request(r), number)
+                    .await?,
+                conv::from_handshake_response,
+                Reply::Handshake,
+            ),
+            Call::Configure(r) => answered(
+                Instance::exported(a, p.func_configure(), conv::to_configure_request(r), number)
+                    .await?,
+                conv::from_configure_response,
+                Reply::Configure,
+            ),
+            Call::Schema(r) => answered(
+                Instance::exported(a, p.func_schema(), conv::to_schema_request(r), number).await?,
+                conv::from_schema_response,
+                Reply::Schema,
+            ),
+            Call::Query(r) => answered(
+                Instance::exported(a, p.func_query(), conv::to_query_request(r), number).await?,
+                |rows: &Vec<wp::Row>| conv::from_rows(rows),
+                Reply::Query,
+            ),
+            Call::Read(r) => answered(
+                Instance::exported(a, p.func_read(), conv::to_read_request(r), number).await?,
+                conv::from_read_response,
+                Reply::Read,
+            ),
+            Call::Plan(r) => answered(
+                Instance::exported(a, p.func_plan(), conv::to_plan_request(r), number).await?,
+                conv::from_plan_response,
+                Reply::Plan,
+            ),
+            Call::Apply(r) if r.op == pb::Op::Unspecified as i32 => {
+                Err(CallError::Refused("an Apply call with no op".to_string()))
+            }
+            Call::Apply(r) => return self.apply(a, p, who, t, r, number).await,
+            Call::Import(r) => answered(
+                Instance::exported(a, p.func_import(), conv::to_import_request(r), number).await?,
+                conv::from_import_response,
+                Reply::Import,
+            ),
+            Call::Reveal(r) => answered(
+                Instance::exported(a, p.func_reveal(), conv::to_reveal_request(r), number).await?,
+                conv::from_reveal_response,
+                Reply::Reveal,
+            ),
+            Call::Health(r) => answered(
+                Instance::exported(a, p.func_health(), conv::to_health_request(r), number).await?,
+                conv::from_health_response,
+                Reply::Health,
+            ),
+        })
+    }
+
+    /// An Apply's answer: its events told as the component writes them,
+    /// then its result once it resolves its future.
+    async fn apply(
+        &self,
+        a: &Accessor<State>,
+        p: &bindings::exports::dform::provider::provider::Guest,
+        who: &std::cell::RefCell<String>,
+        t: Ticket,
+        r: &pb::ApplyRequest,
+        number: Option<u64>,
+    ) -> wasmtime::Result<Result<Reply, CallError>> {
+        let f = p.func_apply();
+        let started = a.with(|mut s| {
+            f.start_call_concurrent(s.as_context_mut(), (conv::to_apply_request(r),))
+        })?;
+        let task = started.task();
+        Instance::numbered(a, task, number);
+        let (events, result) = f.finish_call_concurrent(a, started).await?.0;
+        let (done, answer) = tokio::sync::oneshot::channel();
+        a.with(|mut s| -> wasmtime::Result<()> {
+            events.pipe(
+                &mut s,
+                Events {
+                    t,
+                    tx: self.tx.clone(),
+                },
+            )?;
+            result.pipe(&mut s, Done(Some(done)))?;
+            Ok(())
+        })?;
+        let answered = answer.await;
+        Instance::numbered(a, task, None);
+        Ok(match answered {
+            Ok(r) => r
+                .map_err(conv::from_call_error)
+                .and_then(|r| decode(conv::from_apply_response(&r)).map(Reply::Apply)),
+            Err(_) => Err(CallError::Crashed(format!(
+                "the provider {} dropped its Apply's answer",
+                who.borrow()
+            ))),
+        })
+    }
+}
+
+/// An export's answer as the engine takes it: the component's error as
+/// the call's, its value decoded by `from` and made the reply `reply`.
+fn answered<W, T>(
+    r: Result<W, wp::CallError>,
+    from: impl FnOnce(&W) -> std::result::Result<T, String>,
+    reply: fn(T) -> Reply,
+) -> Result<Reply, CallError> {
+    r.map_err(conv::from_call_error)
+        .and_then(|w| decode(from(&w)).map(reply))
 }
 
 /// A trap of the provider `who` in a call, as the call's failure: an exit
