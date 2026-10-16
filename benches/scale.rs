@@ -163,11 +163,12 @@ static IN_PROVIDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 impl<H: Handler> Handler for Timed<H> {
     fn handle(
         &self,
+        session: dform::plugin::backend::Session,
         call: Call,
         progress: dform::plugin::backend::Progress,
     ) -> Result<Reply, CallError> {
         let start = Instant::now();
-        let r = self.0.handle(call, progress);
+        let r = self.0.handle(session, call, progress);
         IN_PROVIDER.fetch_add(
             start.elapsed().as_nanos() as u64,
             std::sync::atomic::Ordering::Relaxed,

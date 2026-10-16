@@ -23,7 +23,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: cargo build
-        run: cargo build --workspace --verbose
+        run: cargo build --workspace --all-targets --verbose
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: dform-core builds without a network stack
         run: |

@@ -133,7 +133,7 @@ fn the_policy_file_round_trips_and_a_console_edit_is_drift() {
         .seen()
         .into_iter()
         .filter(|c| c.method == "POST" && c.path.ends_with("/acl"))
-        .last()
+        .next_back()
         .unwrap();
     assert!(post.if_match.is_some(), "{post:?}");
     let again = dform(&s, &["plan", "main.df"]).success();

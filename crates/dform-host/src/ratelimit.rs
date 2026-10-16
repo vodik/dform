@@ -497,7 +497,8 @@ mod tests {
                 session,
                 ..Default::default()
             }));
-            p.next_completed(&mut |_, _| {});
+            let (_, answered) = p.next_completed(&mut |_, _| {});
+            answered.expect("a Configure the fake answers");
         }
         l.acquire(Session(1), None).answered(&status(429, &[]));
         assert_eq!(l.window(Session(2), None).0, 1, "one account");

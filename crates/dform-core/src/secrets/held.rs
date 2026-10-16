@@ -184,7 +184,7 @@ mod tests {
         let fmt = Value::Str("%s %s".into());
         let s = secret("vault.token/t#value");
         assert!(in_template(crate::address::FORMAT, &[fmt.clone(), s.clone(), open]).is_none());
-        assert!(in_template("json.encode", &[s.clone()]).is_none());
+        assert!(in_template("json.encode", std::slice::from_ref(&s)).is_none());
         assert!(in_template(crate::address::FORMAT, &[fmt, s, Value::Int(1)]).is_some());
     }
 
