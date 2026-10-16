@@ -154,12 +154,12 @@ schema's `type_lookup`, see "What a Create that does not answer does").
 | `image`      | string, required  | the image's name in the region, `Ubuntu 24.04`; replaces |
 | `ssh_key`    | ref(ovh.ssh_key)  | `ssh_key = admin`; replaces          |
 | `user_data`  | string, sensitive | cloud-init; replaces                 |
-| `networks`   | set(ref(ovh.network)) | `networks = [lab]`; changes in place |
+| `networks`   | set(ref(ovh.network)) | `networks = [lab]`, or `[{ network = lab, ip = .. }]` for a fixed address; changes in place, but a new address replaces |
 | `id`         | computed          |                                     |
 | `public_ip`  | ip, computed      | once the instance has one           |
 | `private_ip` | ip, computed, nullable | its address on the first of its private networks, by id, as `private_ips` has it |
 | `private_ips`| map(ip), computed | its address on each private network, by the network's id: its own port's, else the first port's |
-| `ports`      | map, computed     | its own port on each private network, by the network's id: `id` and `ipv4` |
+| `ports`      | map, computed     | its own port on each private network, by the network's id: `id`, `ipv4`, and `fixed` where the program asked the address |
 | `status`     | string, computed  | `ACTIVE` once it runs               |
 
 The API changes an instance's name on its id (`PUT`), and its flavor
@@ -218,6 +218,80 @@ apply ovh.instance["vm"]: network pn-1000123_42 has 3 ports and none is known as
 Ports beside its own are found only by an Apply of the instance: the
 plan reads its networks as a set, so a second port on a network is no
 change to plan.
+
+An instance's address on a private network is DHCP's unless the program
+asks for one: an entry of `networks` is a network or `{ network, ip }`,
+and the port on that network is made with that address (the create's
+`networks[].ip`, an attach's `ip`), DHCP left on for the rest. The
+program knows the address before the instance exists, so its user data
+can carry it:
+
+```dform
+let range = "10.42.0.0/24"
+
+resource ovh.subnet nodes {
+  network = lab
+  region = "BHS5"
+  range
+  pool = "10.42.0.100..=10.42.0.200"
+}
+
+resource ovh.instance server {
+  name = "server"
+  region = "BHS5"
+  flavor = "b2-7"
+  image = "Ubuntu 24.04"
+  networks = [{ network = lab, ip = inet.host(range, 9) }]
+  user_data = "#!/bin/sh\nexec k3s server --node-ip ${inet.host(range, 9)}\n"
+}
+```
+
+`inet.host(range, 9)` is `10.42.0.10`, and `server.private_ips[lab.id]`
+is that address, read from the port. The port is the instance's own from
+its creation, `fixed` in `ports`, and while it has the address Read
+answers the entry as the program writes it, so the plan after the apply
+is clean.
+
+- Plan checks that the address is a host of a subnet of the network in
+  the instance's region (not the range's network address, broadcast or
+  gateway), naming the network's subnets otherwise; a network the same
+  plan makes, or one with no subnet in the region yet, is checked by the
+  Apply's create instead, with the same words:
+
+  ```
+  refused  plan ovh.instance server: networks: 10.9.0.5 is no host of a subnet of network pn-1000123_42 in BHS5 (nor its gateway): its subnets are 10.42.0.0/24 in BHS5
+  ```
+
+- An address is one port's. Two instances asking one on one network are
+  refused at plan, naming both; one an instance outside the run holds
+  (another stack's, the console's) is the API's refusal at Apply:
+
+  ```
+  refused  plan ovh.instance agent: networks: 10.42.0.10 on network pn-1000123_42 is asked by both ovh.instance agent and ovh.instance server, and an address is one port's: give each instance its own
+  ```
+
+- No API call changes a port's address. A new one, or one asked on a
+  network where DHCP gave the instance its address, replaces the
+  instance, and the Apply says why; an address no longer asked changes
+  nothing (the port keeps it); a network added with an address is an
+  interface attached with it, in place. A replacement made first
+  (`lifecycle(vm, "create_first")`) that asks the old instance's address
+  deletes the old one first, and says so.
+- The API takes an address inside the subnet's pool, where DHCP may have
+  given it to another port: keep fixed addresses outside the pool, as
+  `nodes` does above.
+- Inside the object a name another resource shares (a subnet also named
+  `lab`) is ambiguous: write the network's address,
+  `{ network = ovh.network["lab"], ip = .. }`.
+
+A project whose nodes find their address at boot moves to this once: a
+node takes its index, `let address = inet.host(range, 10 + index)`, its
+`networks` entry is `{ network = lab, ip = address }` and its user data
+names the address as a literal (k3s's `--node-ip`), agents join the
+server over the vRack (`K3S_URL=https://${server_ip}:6443`, the server's
+address made the same way), and a deny holds every index's address
+inside the range and outside the pool. Each node is replaced once: its
+user data changes.
 
 The API never answers an instance's user data: the schema marks it
 `write_only`, so dform keeps the digest of what it applied (never
@@ -432,8 +506,8 @@ unused, for the control panel. A 429 or
 ## Not done
 
 Managed Kubernetes, databases, load balancers, floating IPs, volume
-snapshots and backups, fixed private addresses for an instance, and
-multi-attach volumes are not in this provider yet.
+snapshots and backups, fixed IPv6 or public addresses for an instance,
+and multi-attach volumes are not in this provider yet.
 
 ## API behaviour observed
 
@@ -495,9 +569,12 @@ replace the cassettes' answers:
 - a void call's answer (`PUT`, `DELETE`, the refresh): `null`;
 - `…/interface`: the public port's `networkId`, whether the `POST`'s
   answer names the network as the `GET` does and carries the port's
-  `id` (the provider keeps it as the instance's own port), and whether a
-  new port's `fixedIps` is filled at once;
-- `…/instance`: whether the list embeds `flavor`, `image` and `sshKey`,
+  `id` (the provider keeps it as the instance's own port), whether a
+  new port's `fixedIps` is filled at once, and the `POST`'s `ip` making
+  the port with that address;
+- `…/instance`: the create's `networks[].ip` making the port with that
+  address, and its refusals of one in no subnet and of one taken (the
+  fake's 400 and 409); whether the list embeds `flavor`, `image` and `sshKey`,
   an address's `networkId` in `ipAddresses`, `ipAddresses` empty while
   `BUILD`, a resize confirmed by OVH (`RESIZE` then `ACTIVE`, never
   `VERIFY_RESIZE`), how long `ipAddresses` lags (the fake counts reads,
