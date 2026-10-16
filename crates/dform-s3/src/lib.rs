@@ -5,9 +5,10 @@
 //! are the store's defaults over those writes.
 //!
 //! Requests are signed with `rusty-s3` (SigV4, query-string auth, the
-//! condition headers among the signed ones) and sent with `ureq` over
-//! rustls: blocking, with no async runtime, so the command line stays
-//! synchronous and dform-core keeps no network stack.
+//! condition headers among the signed ones) and sent with dform's one
+//! HTTP client (`dform_core::http`, R-103): the process's pool, so a
+//! run's reads of a bucket go over one connection (its streams, when the
+//! endpoint speaks HTTP/2), and the command line stays synchronous.
 //!
 //! Conditional writes are checked once per bucket ([`S3Store::check_conditions`])
 //! before a deployment's objects are written there: a server that ignores
@@ -21,6 +22,7 @@
 //! no profile file, no instance metadata.
 
 use anyhow::{Context, Result, anyhow, bail};
+use dform_core::plugin::host::{HttpRequest, HttpResponse};
 use dform_core::store::{self, Cond, Object, S3Spec, Store};
 use rusty_s3::actions::{
     CreateBucket, DeleteObject, GetObject, ListObjectsV2, PutObject, S3Action,
@@ -37,9 +39,6 @@ pub mod fake;
 /// How long a signed URL is good for: it is used at once.
 const SIGNED_FOR: Duration = Duration::from_secs(300);
 
-/// The largest object read: an audit log grows.
-const READ_LIMIT: u64 = 1 << 30;
-
 /// One deployment's objects: `s3://BUCKET/PREFIX[/<k>=<v>]/<key>`.
 pub struct S3Store {
     /// The endpoint as given (`None`: AWS's), for the conditions cache.
@@ -48,7 +47,6 @@ pub struct S3Store {
     creds: Credentials,
     /// The deployment's prefix, without a trailing `/`.
     prefix: String,
-    agent: ureq::Agent,
     /// What the run that opened it read ([`remember_reads`]).
     reads: Option<Arc<Reads>>,
 }
@@ -138,28 +136,32 @@ impl Reads {
     }
 }
 
-/// The process's one HTTP agent: every store of a run shares its pool of
-/// kept-alive connections, so a run that reads state, the plan key and
-/// the audit log of one bucket opens one TLS connection, not one each.
-fn agent() -> ureq::Agent {
-    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
-    AGENT
-        .get_or_init(|| {
-            ureq::Agent::config_builder()
-                .http_status_as_error(false)
-                .timeout_global(Some(Duration::from_secs(60)))
-                .build()
-                .new_agent()
-        })
-        .clone()
-}
+/// How long one request may take.
+const TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Read what is left of an answer's body, so its connection goes back to
-/// the agent's pool: ureq reuses a connection only once its body is read
-/// to the end, and an unread one (a 404's or a 412's error document) is
-/// closed.
-fn drain(mut resp: ureq::http::Response<ureq::Body>) {
-    let _ = resp.body_mut().with_config().limit(1 << 20).read_to_vec();
+/// `method` of the signed `url`, with `headers` and `body`, through the
+/// process's pool; `op` and `at` name it in an error.
+fn call(
+    op: &str,
+    at: &str,
+    method: &str,
+    url: &str,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+) -> Result<HttpResponse> {
+    dform_core::http::send(
+        HttpRequest {
+            method: method.into(),
+            url: url.into(),
+            headers,
+            body,
+            timeout: Some(TIMEOUT),
+            ..HttpRequest::default()
+        },
+        None,
+        None,
+    )
+    .map_err(|e| anyhow!("s3 {op} {at}: {}", e.message))
 }
 
 /// The credentials from the environment.
@@ -225,7 +227,6 @@ impl S3Store {
             bucket,
             creds,
             prefix,
-            agent: agent(),
             reads: RUN.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         })
     }
@@ -334,26 +335,27 @@ impl S3Store {
     /// Make the bucket, unless it is there (tests: a fresh MinIO).
     pub fn create_bucket(&self) -> Result<()> {
         let url = CreateBucket::new(&self.bucket, &self.creds).sign(SIGNED_FOR);
-        let resp = self
-            .agent
-            .put(url.as_str())
-            .send_empty()
-            .map_err(|e| anyhow!("create bucket {}: {e}", self.bucket.name()))?;
-        match resp.status().as_u16() {
-            200..=299 | 409 => {
-                drain(resp);
-                Ok(())
-            }
-            _ => Err(failure("create bucket", self.bucket.name(), resp)),
+        let name = self.bucket.name();
+        let resp = call(
+            "create bucket",
+            name,
+            "PUT",
+            url.as_str(),
+            Vec::new(),
+            Vec::new(),
+        )?;
+        match resp.status {
+            200..=299 | 409 => Ok(()),
+            _ => Err(failure("create bucket", name, &resp)),
         }
     }
 }
 
 /// An S3 error response as a message: the status, and the body's `Code`
 /// and `Message`.
-fn failure(op: &str, at: &str, mut resp: ureq::http::Response<ureq::Body>) -> anyhow::Error {
-    let status = resp.status();
-    let body = resp.body_mut().read_to_string().unwrap_or_default();
+fn failure(op: &str, at: &str, resp: &HttpResponse) -> anyhow::Error {
+    let status = resp.status;
+    let body = String::from_utf8_lossy(&resp.body);
     let tag = |t: &str| {
         let open = format!("<{t}>");
         let start = body.find(&open)? + open.len();
@@ -367,10 +369,8 @@ fn failure(op: &str, at: &str, mut resp: ureq::http::Response<ureq::Body>) -> an
     }
 }
 
-fn etag(resp: &ureq::http::Response<ureq::Body>, op: &str, at: &str) -> Result<String> {
-    resp.headers()
-        .get("etag")
-        .and_then(|v| v.to_str().ok())
+fn etag(resp: &HttpResponse, op: &str, at: &str) -> Result<String> {
+    resp.header("etag")
         .map(String::from)
         .ok_or_else(|| anyhow!("s3 {op} {at}: the answer has no ETag"))
 }
@@ -451,27 +451,17 @@ impl S3Store {
     fn get_now(&self, key: &str) -> Result<Option<Object>> {
         let (obj, at) = (self.object(key), self.locate(key));
         let url = GetObject::new(&self.bucket, Some(&self.creds), &obj).sign(SIGNED_FOR);
-        let mut resp = self
-            .agent
-            .get(url.as_str())
-            .call()
-            .map_err(|e| anyhow!("s3 get {at}: {e}"))?;
-        match resp.status().as_u16() {
+        let resp = call("get", &at, "GET", url.as_str(), Vec::new(), Vec::new())?;
+        match resp.status {
             200 => {
                 let etag = etag(&resp, "get", &at)?;
-                let bytes = resp
-                    .body_mut()
-                    .with_config()
-                    .limit(READ_LIMIT)
-                    .read_to_vec()
-                    .map_err(|e| anyhow!("s3 get {at}: {e}"))?;
-                Ok(Some(Object { bytes, etag }))
+                Ok(Some(Object {
+                    bytes: resp.body,
+                    etag,
+                }))
             }
-            404 => {
-                drain(resp);
-                Ok(None)
-            }
-            _ => Err(failure("get", &at, resp)),
+            404 => Ok(None),
+            _ => Err(failure("get", &at, &resp)),
         }
     }
 
@@ -499,23 +489,16 @@ impl S3Store {
             action.headers_mut().insert(*k, v.clone());
         }
         let url = action.sign(SIGNED_FOR);
-        let mut req = self.agent.put(url.as_str());
-        if let Some((k, v)) = &header {
-            req = req.header(*k, v);
-        }
-        let resp = req.send(bytes).map_err(|e| anyhow!("s3 put {at}: {e}"))?;
-        match resp.status().as_u16() {
-            200..=299 => {
-                let etag = etag(&resp, "put", &at)?;
-                drain(resp);
-                Ok(Some(etag))
-            }
+        let headers = header
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        let resp = call("put", &at, "PUT", url.as_str(), headers, bytes.to_vec())?;
+        match resp.status {
+            200..=299 => Ok(Some(etag(&resp, "put", &at)?)),
             // 409: a conditional write raced another one (AWS).
-            412 | 409 => {
-                drain(resp);
-                Ok(None)
-            }
-            _ => Err(failure("put", &at, resp)),
+            412 | 409 => Ok(None),
+            _ => Err(failure("put", &at, &resp)),
         }
     }
 
@@ -547,18 +530,11 @@ impl S3Store {
                 action.with_continuation_token(t.as_str());
             }
             let url = action.sign(SIGNED_FOR);
-            let mut resp = self
-                .agent
-                .get(url.as_str())
-                .call()
-                .map_err(|e| anyhow!("s3 list {at}: {e}"))?;
-            if resp.status().as_u16() != 200 {
-                return Err(failure("list", &at, resp));
+            let resp = call("list", &at, "GET", url.as_str(), Vec::new(), Vec::new())?;
+            if resp.status != 200 {
+                return Err(failure("list", &at, &resp));
             }
-            let text = resp
-                .body_mut()
-                .read_to_string()
-                .map_err(|e| anyhow!("s3 list {at}: {e}"))?;
+            let text = String::from_utf8_lossy(&resp.body);
             let page =
                 ListObjectsV2::parse_response(&text).map_err(|e| anyhow!("s3 list {at}: {e}"))?;
             out.extend(
@@ -590,17 +566,17 @@ impl S3Store {
     fn delete_now(&self, key: &str) -> Result<()> {
         let (obj, at) = (self.object(key), self.locate(key));
         let url = DeleteObject::new(&self.bucket, Some(&self.creds), &obj).sign(SIGNED_FOR);
-        let resp = self
-            .agent
-            .delete(url.as_str())
-            .call()
-            .map_err(|e| anyhow!("s3 delete {at}: {e}"))?;
-        match resp.status().as_u16() {
-            200..=299 | 404 => {
-                drain(resp);
-                Ok(())
-            }
-            _ => Err(failure("delete", &at, resp)),
+        let resp = call(
+            "delete",
+            &at,
+            "DELETE",
+            url.as_str(),
+            Vec::new(),
+            Vec::new(),
+        )?;
+        match resp.status {
+            200..=299 | 404 => Ok(()),
+            _ => Err(failure("delete", &at, &resp)),
         }
     }
 }

@@ -68,7 +68,7 @@ wasm = ["dform-host/wasm"]
 # collector (Jaeger, Zipkin, Tempo) to show the run's spans. Off by
 # default: its dependencies are a build's to ask for. The trace file
 # (`--trace FILE`) is every build's.
-otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-http", "dep:tracing-opentelemetry", "dep:ureq", "dep:async-trait"]
+otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:opentelemetry-http", "dep:tracing-opentelemetry", "dep:async-trait"]
 
 [dependencies]
 anyhow = "1.0"
@@ -101,14 +101,13 @@ tracing-core = { version = "0.1", default-features = false, features = ["std"] }
 # exporter and `DFORM_LOG`'s lines its layers.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 # The `otel` feature (src/trace.rs): OTLP over HTTP (protobuf), sent
-# with the one HTTP client (R-103, ureq, as dform-core's) rather than the
+# with the one HTTP client (R-103, dform-core's) rather than the
 # exporter's reqwest.
 opentelemetry = { version = "=0.33.1", default-features = false, features = ["trace"], optional = true }
 opentelemetry_sdk = { version = "=0.33.1", default-features = false, features = ["trace"], optional = true }
 opentelemetry-otlp = { version = "=0.33.1", default-features = false, features = ["http-proto", "trace"], optional = true }
 opentelemetry-http = { version = "=0.33.1", default-features = false, optional = true }
 tracing-opentelemetry = { version = "=0.34.0", default-features = false, optional = true }
-ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"], optional = true }
 async-trait = { version = "0.1", optional = true }
 
 [[bin]]
@@ -143,8 +142,9 @@ name = "model"
 name = "provider_parallel"
 
 [dev-dependencies]
-# tests/model.rs turns the executor's mutant on (`executor::hooks`).
-dform-core = { path = "crates/dform-core", features = ["test-hooks"] }
+# tests/model.rs turns the executor's mutant on (`executor::hooks`);
+# tests/host_pace.rs serves HTTP/2 with `http::fake`.
+dform-core = { path = "crates/dform-core", features = ["test-hooks", "fake"] }
 # tests/s3.rs: the S3 store, and a fake S3 server to run it against.
 dform-s3 = { path = "crates/dform-s3", features = ["fake"] }
 rusty-s3 = { version = "0.10", default-features = false, features = ["rustcrypto", "xml"] }

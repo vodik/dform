@@ -126,9 +126,9 @@ impl Calls for Services {
             (cred, via)
         };
         let admitted = self.limiter.acquire(req.session, req.bucket.as_deref());
-        let r = http::send(req, cred.as_deref(), via);
-        admitted.answered(&r);
-        r
+        let x = http::exchange(req, cred.as_deref(), via);
+        admitted.answered(&x);
+        x.answer
     }
 
     fn io_read(&self, location: &str) -> Result<Vec<u8>, Failure> {

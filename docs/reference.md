@@ -1016,10 +1016,29 @@ alone when its provider reports none; the bucket is
 the provider's word on a request (`Request::bucket("ec2.describe")`,
 `"route53.change:ZONE"` for a limit an object has; none, the provider's
 default), and nobody declares a rate. A window starts at two, grows while
-the server answers, halves on a 429, a 503 or a timeout, and a
-`Retry-After` pauses its bucket that long; the throttled request is
+the server answers, halves on a 429, a 503, a timeout or a stall (below),
+and a `Retry-After` pauses its bucket that long; the throttled request is
 answered to the provider as the server answered it, and its retry waits
-its turn. At most 64 of a bucket's requests are in flight.
+its turn. At most 64 of a bucket's requests are in flight, and never more
+than the server takes at once on its connection.
+
+The host's HTTP is dform's one client, which its own requests share (the
+state backend's, an `https://` or `git+https://` read, an image's digest,
+a JWKS): one connection per endpoint (scheme, host and port, the tunnel
+it goes through, the TLS of the credential it carries) for the whole
+process. Where the server offers HTTP/2 (ALPN), every request to it is a
+stream of that one connection, after one TLS handshake; the server's
+`SETTINGS_MAX_CONCURRENT_STREAMS` is the ceiling of each window on it,
+and a request whose body could not start because the connection's
+flow-control window was spent is a stall, backpressure before any 429.
+Otherwise HTTP/1.1, each connection kept alive for the next request, and
+a request with none idle opens another. A request a connection lost
+before it was taken (a kept-alive connection the server closed, an
+HTTP/2 stream refused unprocessed) is sent once more on a new one; one
+that may have reached the server only when it changes nothing (a GET).
+TLS verifies with the machine's CA store and a credential's own CA
+beside it; the proxy is the environment's (`HTTPS_PROXY`, `HTTP_PROXY`,
+`ALL_PROXY`, `NO_PROXY`; an `http://` proxy, by `CONNECT`).
 A provider built on `dform-grpc`'s `transport::serve`, the mock included, listens
 on TCP unless `DFORM_PROVIDER_TRANSPORT=unix` is in its environment (which it
 inherits from dform): then on a socket in the temporary directory, removed

@@ -11,6 +11,9 @@ publish = false
 # (`src/hooks.rs`). Only dev-dependencies turn the feature on; the `dform`
 # binary never carries it (CI checks).
 test-hooks = []
+# `fake`: a local HTTP/1.1 and HTTP/2 server (`src/http/fake`), for the
+# tests of crates whose requests go through the one client.
+fake = []
 
 [dependencies]
 anyhow = "1.0"
@@ -108,7 +111,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["s
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 russh = { version = "=0.64.1", default-features = false, features = ["ring", "rsa"] }
 russh-sftp = "=3.0.1"
-tokio = { version = "1", features = ["rt", "net", "time", "sync", "io-util"] }
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "io-util", "macros"] }
 # Git without the `git` binary (R-103, house rules): the program's own
 # repository (HEAD, what is modified, a tree at a commit for `diff
 # --since`, the controller's watch) and the mirrors a `git+https://` or
@@ -118,7 +121,22 @@ tokio = { version = "1", features = ["rt", "net", "time", "sync", "io-util"] }
 # and file transports, which spawn programs, are never used.
 gix = { version = "0.88", default-features = false, features = ["sha1", "revision", "status", "blocking-network-client"] }
 gix-transport = { version = "0.60", default-features = false, features = ["http-client"] }
-# The one HTTP client (R-103): `https://` locations, git over https, the
-# JWKS an approval is verified against. Blocking, rustls with the
-# machine's CA (the platform verifier), as dform-host's and dform-s3's.
-ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+# The one HTTP client (R-103, src/http/): a provider's requests, the
+# state backend's, `https://` locations, git over https, an image's
+# digest, the JWKS an approval is verified against. One pooled
+# connection per endpoint, HTTP/2 where the server offers it by ALPN
+# (`h2` directly, for its stream ceiling and flow control), HTTP/1.1
+# kept alive otherwise (`hyper`'s connection API); rustls with `ring` and
+# the machine's CA (the platform verifier); the proxy from the
+# environment (`hyper-util`'s matcher). All already in the tree through
+# tonic and kube: no crate is new.
+bytes = "1"
+h2 = "0.4"
+http = "1"
+http-body-util = "0.1"
+hyper = { version = "1", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio", "client-proxy"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pki-types = { version = "1", features = ["std"] }
+rustls-platform-verifier = "0.7"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }

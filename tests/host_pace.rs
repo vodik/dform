@@ -106,3 +106,64 @@ fn a_bucket_is_paced_by_what_the_server_answers() {
         "a 429 paused the bucket: {refused} refused, {answered:?}"
     );
 }
+
+/// A bucket whose server speaks HTTP/2 grows its window no wider than
+/// the streams the server takes at once on its connection, which each
+/// answer tells; its requests at once are streams of that one
+/// connection, made with the credential's CA.
+#[test]
+fn a_window_keeps_under_the_servers_stream_ceiling() {
+    use base64::Engine;
+    use dform::http::fake::{CA, Server};
+    use dform::plugin::backend::Session;
+    use dform::plugin::credentials::{self, Secret};
+    use dform_host::ratelimit::Limiter;
+    let server = Arc::new(Server::h2(3));
+    let name = "kubeconfig:pace-streams";
+    let ca = base64::engine::general_purpose::STANDARD.encode(CA);
+    credentials::provide(
+        name,
+        Secret::new(
+            format!(
+                "current-context: c\ncontexts: [{{name: c, context: {{cluster: k, user: u}}}}]\n\
+                 clusters: [{{name: k, cluster: {{server: '{}', certificate-authority-data: {ca}}}}}]\n\
+                 users: [{{name: u, user: {{token: t}}}}]\n",
+                server.url("")
+            )
+            .into_bytes(),
+        ),
+    );
+    let limiter = Arc::new(Limiter::new("streams"));
+    let services = Arc::new(Services::paced(
+        Grants {
+            provider: "streams".into(),
+            credentials: [name.to_string()].into(),
+            ..Grants::default()
+        },
+        limiter.clone(),
+    ));
+    let auth = services.open(name).unwrap().handle;
+    let get = |i: usize| HttpRequest {
+        method: "GET".into(),
+        url: server.url(&format!("/{i}")),
+        bucket: Some("things.get".into()),
+        ..HttpRequest::default()
+    };
+    // Ten answers would open a window of twelve.
+    for i in 0..10 {
+        assert_eq!(services.send(get(i), Some(auth), None).unwrap().status, 200);
+    }
+    assert_eq!(limiter.window(Session::NONE, Some("things.get")).0, 3);
+    server.slow(Duration::from_millis(100));
+    let calls: Vec<_> = (0..9)
+        .map(|i| {
+            let (services, get) = (services.clone(), get(i));
+            std::thread::spawn(move || services.send(get, Some(auth), None).unwrap().status)
+        })
+        .collect();
+    for c in calls {
+        assert_eq!(c.join().unwrap(), 200);
+    }
+    assert_eq!(server.connections(), 1, "one TLS handshake");
+    assert_eq!(server.most_at_once(), 3);
+}

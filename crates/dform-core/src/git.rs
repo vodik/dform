@@ -27,7 +27,7 @@
 //! `commit` writes files onto a branch of a local repository. Pushing to
 //! a remote is not done: gitoxide has no push yet (WORK.org R-13b).
 
-use crate::plugin::host::{Error, GitFile};
+use crate::plugin::host::{Error, GitFile, HttpRequest};
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -483,11 +483,7 @@ fn fetch(r: &gix::Repository, url: &str, via: Via<'_>) -> Result<(), String> {
     }
     match via {
         Via::Https { headers } => {
-            let client = Client {
-                agent: crate::http::agent(None, None, crate::http::TIMEOUT)
-                    .map_err(|e| e.message)?,
-                headers,
-            };
+            let client = Client { headers };
             go!(
                 gix::protocol::transport::client::blocking_io::http::connect_http(
                     client,
@@ -522,10 +518,10 @@ fn fetch(r: &gix::Repository, url: &str, via: Via<'_>) -> Result<(), String> {
 
 /// gix-transport's HTTP over dform's client (`crate::http`): a GET at
 /// once, a POST once its body is written (gix drops the body's writer
-/// before it reads the answer). A 401 is `PermissionDenied`, as the trait
-/// asks; any other status that is no success is an error naming it.
+/// before it reads the answer), the answer's body read as it comes. A
+/// 401 is `PermissionDenied`, as the trait asks; any other status that
+/// is no success is an error naming it.
 struct Client {
-    agent: ureq::Agent,
     headers: Vec<(String, String)>,
 }
 
@@ -535,10 +531,8 @@ type Answer = (Vec<u8>, Box<dyn Read + Send>);
 /// A request, its body as written so far, and its answer once sent.
 #[derive(Default)]
 struct Pending {
-    request: Option<ureq::http::request::Builder>,
-    body: Vec<u8>,
+    request: Option<HttpRequest>,
     answer: Option<std::io::Result<Answer>>,
-    agent: Option<ureq::Agent>,
 }
 
 type Shared = Arc<Mutex<Pending>>;
@@ -549,33 +543,19 @@ impl Pending {
         if self.answer.is_some() {
             return;
         }
-        let (Some(b), Some(agent)) = (self.request.take(), self.agent.take()) else {
+        let Some(req) = self.request.take() else {
             self.answer = Some(Err(std::io::Error::other("internal: no request")));
             return;
         };
-        let body = std::mem::take(&mut self.body);
-        let answer = b
-            .body(body)
-            .map_err(std::io::Error::other)
-            .and_then(|req| agent.run(req).map_err(std::io::Error::other))
+        let answer = crate::http::stream(req, None, None)
+            .map_err(|e| std::io::Error::other(e.message))
             .and_then(|resp| {
-                let status = resp.status();
-                let header_lines = |resp: &ureq::http::Response<ureq::Body>| {
-                    let mut h = Vec::new();
-                    for (k, v) in resp.headers() {
-                        h.extend_from_slice(k.as_str().as_bytes());
-                        h.push(b':');
-                        h.extend_from_slice(v.as_bytes());
-                        h.push(b'\n');
-                    }
-                    h
-                };
-                if status.as_u16() == 401 {
+                if resp.status == 401 {
                     let www_authenticate = resp
-                        .headers()
-                        .get_all("www-authenticate")
+                        .headers
                         .iter()
-                        .map(|v| v.as_bytes().into())
+                        .filter(|(k, _)| k.eq_ignore_ascii_case("www-authenticate"))
+                        .map(|(_, v)| v.as_bytes().into())
                         .collect();
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::PermissionDenied,
@@ -584,15 +564,20 @@ impl Pending {
                         },
                     ));
                 }
-                if !status.is_success() {
+                if !(200..300).contains(&resp.status) {
                     return Err(std::io::Error::other(format!(
                         "Received HTTP status {}",
-                        status.as_u16()
+                        resp.status
                     )));
                 }
-                let headers = header_lines(&resp);
-                let body: Box<dyn Read + Send> = Box::new(resp.into_body().into_reader());
-                Ok((headers, body))
+                let mut lines = Vec::new();
+                for (k, v) in &resp.headers {
+                    lines.extend_from_slice(k.as_bytes());
+                    lines.push(b':');
+                    lines.extend_from_slice(v.as_bytes());
+                    lines.push(b'\n');
+                }
+                Ok((lines, resp.body))
             });
         self.answer = Some(answer);
     }
@@ -648,7 +633,9 @@ struct Body(Shared);
 impl Write for Body {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let mut p = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        p.body.extend_from_slice(buf);
+        if let Some(req) = p.request.as_mut() {
+            req.body.extend_from_slice(buf);
+        }
         Ok(buf.len())
     }
 
@@ -664,18 +651,19 @@ impl Client {
         url: &str,
         headers: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Shared {
-        let mut b = ureq::http::Request::builder().method(method).uri(url);
+        let mut req = HttpRequest {
+            method: method.into(),
+            url: url.into(),
+            ..HttpRequest::default()
+        };
         for line in headers {
             if let Some((k, v)) = line.as_ref().split_once(':') {
-                b = b.header(k.trim(), v.trim());
+                req.headers.push((k.trim().into(), v.trim().into()));
             }
         }
-        for (k, v) in &self.headers {
-            b = b.header(k.as_str(), v.as_str());
-        }
+        req.headers.extend(self.headers.iter().cloned());
         Arc::new(Mutex::new(Pending {
-            request: Some(b),
-            agent: Some(self.agent.clone()),
+            request: Some(req),
             ..Pending::default()
         }))
     }

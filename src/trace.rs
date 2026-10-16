@@ -157,7 +157,7 @@ mod endpoint {
         }
         let otlp = SpanExporter::builder()
             .with_http()
-            .with_http_client(Ureq::new())
+            .with_http_client(OneClient)
             .build()
             .context("the OTLP exporter (OTEL_EXPORTER_OTLP_ENDPOINT)")?;
         let provider = SdkTracerProvider::builder()
@@ -190,30 +190,32 @@ mod endpoint {
         }
     }
 
-    /// OTLP over the one HTTP client (R-103).
+    /// OTLP over the one HTTP client (R-103, `dform_core::http`).
     #[derive(Debug)]
-    struct Ureq(ureq::Agent);
-
-    impl Ureq {
-        fn new() -> Ureq {
-            let config = ureq::Agent::config_builder()
-                .http_status_as_error(false)
-                .timeout_global(Some(Duration::from_secs(10)))
-                .build();
-            Ureq(config.into())
-        }
-    }
+    struct OneClient;
 
     #[async_trait::async_trait]
-    impl HttpClient for Ureq {
+    impl HttpClient for OneClient {
         async fn send_bytes(&self, request: Request<Bytes>) -> Result<Response<Bytes>, HttpError> {
             let (parts, body) = request.into_parts();
-            let request = Request::from_parts(parts, body.to_vec());
-            let (parts, mut body) = self.0.run(request)?.into_parts();
-            Ok(Response::from_parts(
-                parts,
-                Bytes::from(body.read_to_vec()?),
-            ))
+            let req = dform_core::plugin::host::HttpRequest {
+                method: parts.method.to_string(),
+                url: parts.uri.to_string(),
+                headers: parts
+                    .headers
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), String::from_utf8_lossy(v.as_bytes()).into()))
+                    .collect(),
+                body: body.to_vec(),
+                timeout: Some(Duration::from_secs(10)),
+                ..Default::default()
+            };
+            let r = dform_core::http::send(req, None, None).map_err(|e| e.message)?;
+            let mut resp = Response::builder().status(r.status);
+            for (k, v) in &r.headers {
+                resp = resp.header(k, v);
+            }
+            Ok(resp.body(Bytes::from(r.body))?)
         }
     }
 }

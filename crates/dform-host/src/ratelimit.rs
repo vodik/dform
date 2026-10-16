@@ -9,19 +9,24 @@
 //! in flight at once. It starts small and grows while the server answers
 //! (by one for each answer until the first throttle, so it doubles each
 //! round trip; then by one each window's worth of answers), and halves
-//! on a throttle (a 429 or a 503) or a timeout: congestion control for
+//! on a throttle (a 429 or a 503), a timeout, or a stall of its
+//! connection (HTTP/2's flow control holding a body back: backpressure
+//! before any 429, `dform_core::http::Pace`): congestion control for
 //! an API's calls (TCP's additive increase and multiplicative decrease;
 //! Netflix's concurrency-limits, Envoy's adaptive concurrency, the AWS
 //! SDK's adaptive retry mode). A `Retry-After` pauses the bucket that
 //! long. The request that was throttled is answered to the provider as
 //! the server answered it: its retry is the provider's, and waits its
 //! turn here. Requests wait in the order they came; a wait is a
-//! `ratelimit.wait` span. [`CEILING`] bounds a window whatever the
-//! server says: a safety ceiling, not a rate. The account is never a
-//! span's: a revealed secret may be one.
+//! `ratelimit.wait` span. A window never passes the streams the server
+//! takes at once on its connection (HTTP/2's
+//! `SETTINGS_MAX_CONCURRENT_STREAMS`, as each answer tells it), nor
+//! [`CEILING`] whatever the server says: a safety ceiling, not a rate.
+//! The account is never a span's: a revealed secret may be one.
 
+use dform_core::http::Exchange;
 use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Session, Stop, Ticket};
-use dform_core::plugin::host::{Class, Error, HttpResponse};
+use dform_core::plugin::host::Class;
 use dform_core::plugin::pb;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -71,6 +76,9 @@ struct Bucket {
     admitted: u64,
     /// No request is sent before this (a `Retry-After`).
     paused: Option<Instant>,
+    /// The most the server takes at once on its connection, as its last
+    /// answer told it; none: [`CEILING`].
+    streams: Option<usize>,
 }
 
 impl Bucket {
@@ -82,12 +90,18 @@ impl Bucket {
             next: 0,
             admitted: 0,
             paused: None,
+            streams: None,
         }
+    }
+
+    /// The most it may grow to: the server's streams, or [`CEILING`].
+    fn ceiling(&self) -> usize {
+        self.streams.unwrap_or(CEILING).clamp(1, CEILING)
     }
 
     /// How many may be in flight now.
     fn size(&self) -> usize {
-        (self.window as usize).clamp(1, CEILING)
+        (self.window as usize).clamp(1, self.ceiling())
     }
 
     /// A new request's place in the queue.
@@ -118,9 +132,16 @@ impl Bucket {
         admits
     }
 
-    /// The server answered `r`: the window learns from it.
-    fn learn(&mut self, r: &Result<HttpResponse, Error>, now: Instant) {
-        match r {
+    /// The server answered `x`: the window learns from it.
+    fn learn(&mut self, x: &Exchange, now: Instant) {
+        if let Some(streams) = x.pace.streams {
+            self.streams = Some(streams);
+            self.window = self.window.min(self.ceiling() as f64);
+        }
+        if x.pace.stalled {
+            return self.shrink();
+        }
+        match &x.answer {
             Ok(resp) if matches!(resp.status, 429 | 503) => {
                 self.shrink();
                 if let Some(d) = resp.header("retry-after").and_then(retry_after) {
@@ -140,7 +161,7 @@ impl Bucket {
             true => 1.0,
             false => 1.0 / self.window,
         };
-        self.window = self.window.min(CEILING as f64);
+        self.window = self.window.min(self.ceiling() as f64);
     }
 
     fn shrink(&mut self) {
@@ -314,10 +335,10 @@ impl<P: Provider> Provider for Paced<P> {
 }
 
 impl Permit<'_> {
-    /// Its answer came, `r`: the window learns from it.
-    pub fn answered(self, r: &Result<HttpResponse, Error>) {
+    /// Its answer came, `x`: the window learns from it.
+    pub fn answered(self, x: &Exchange) {
         if let Some(b) = self.limiter.buckets().get_mut(&self.bucket) {
-            b.learn(r, Instant::now());
+            b.learn(x, Instant::now());
         }
     }
 }
@@ -337,15 +358,28 @@ mod tests {
     const NONE: Session = Session::NONE;
     use std::sync::Arc;
 
-    fn status(s: u16, headers: &[(&str, &str)]) -> Result<HttpResponse, Error> {
-        Ok(HttpResponse {
-            status: s,
-            headers: headers
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-            body: Vec::new(),
-        })
+    use dform_core::http::Pace;
+    use dform_core::plugin::host::{Error, HttpResponse};
+
+    fn status(s: u16, headers: &[(&str, &str)]) -> Exchange {
+        Exchange {
+            answer: Ok(HttpResponse {
+                status: s,
+                headers: headers
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+                body: Vec::new(),
+            }),
+            pace: Pace::default(),
+        }
+    }
+
+    fn paced(pace: Pace) -> Exchange {
+        Exchange {
+            pace,
+            ..status(200, &[])
+        }
     }
 
     /// A bucket starts small, doubles each round trip until the first
@@ -370,8 +404,10 @@ mod tests {
             "one more a window's worth: {:?}",
             l.window(NONE, None)
         );
-        l.acquire(NONE, None)
-            .answered(&Err(Error::maybe_applied("timed out")));
+        l.acquire(NONE, None).answered(&Exchange {
+            answer: Err(Error::maybe_applied("timed out")),
+            pace: Pace::default(),
+        });
         assert_eq!(l.window(NONE, None).0, 2);
         for _ in 0..4 {
             l.acquire(NONE, None).answered(&status(503, &[]));
@@ -522,5 +558,33 @@ mod tests {
             t.elapsed() < Duration::from_millis(500),
             "east's a is not paused"
         );
+    }
+
+    /// A window never passes the streams its server takes at once, as
+    /// the answers tell them, and shrinks on a stall of its connection
+    /// as on a throttle.
+    #[test]
+    fn a_window_keeps_under_the_servers_streams_and_halves_on_a_stall() {
+        let l = Limiter::new("p");
+        let streams = |n| Pace {
+            streams: Some(n),
+            stalled: false,
+        };
+        for _ in 0..10 {
+            l.acquire(NONE, None).answered(&paced(streams(5)));
+        }
+        assert_eq!(l.window(NONE, None).0, 5, "the server's ceiling");
+        l.acquire(NONE, None).answered(&paced(streams(3)));
+        assert_eq!(l.window(NONE, None).0, 3, "a lower ceiling told later");
+        l.acquire(NONE, None).answered(&paced(Pace {
+            streams: Some(3),
+            stalled: true,
+        }));
+        assert_eq!(l.window(NONE, None).0, 1, "3 halved, a stall as a throttle");
+        // HTTP/1.1 tells no ceiling: the last one told holds.
+        for _ in 0..20 {
+            l.acquire(NONE, None).answered(&status(200, &[]));
+        }
+        assert_eq!(l.window(NONE, None).0, 3);
     }
 }
