@@ -45,11 +45,34 @@ pub struct TypeRef {
     pub span: Span,
 }
 
-/// A relation as a statement names it: `zone`, `policy.allowed`.
+/// A relation as a statement names it: `zone`, `policy.allowed`; how
+/// the read reaches it (`via`): its own scope's, or an enclosing
+/// definition's (R-186), read through the copy the body was taken from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelRef {
     pub name: Name,
     pub span: Span,
+    pub via: Reach,
+}
+
+impl RelRef {
+    /// The relation the resolver writes as `pred` at `span`: an enclosing
+    /// definition's (`modules::lexical_pred`) by its own name, reached
+    /// lexically.
+    pub fn written(pred: impl Into<Name>, span: Span) -> RelRef {
+        let pred = pred.into();
+        let (name, via) = match crate::modules::lexical_parts(&pred) {
+            Some((body, n)) => (n.to_string(), Reach::Lexical(body.to_string())),
+            None => (pred, Reach::Own),
+        };
+        RelRef { name, span, via }
+    }
+
+    /// The relation as the program's own lowering names it (the copies'
+    /// put an enclosing definition's under the instance it is read from).
+    pub fn pred(&self) -> String {
+        self.via.relation(&self.name)
+    }
 }
 
 // --- expressions --------------------------------------------------------

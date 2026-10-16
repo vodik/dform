@@ -5,6 +5,7 @@
 //! parameters' columns, a table its `+` columns, a function every column;
 //! any other relation binds every column.
 
+use crate::program::node::RelRef;
 use crate::program::{ScopeId, Scopes};
 
 /// How a reference reads a relation's columns: each column it reads, by
@@ -17,19 +18,20 @@ pub struct Mode {
 
 impl Mode {
     /// The mode of the relation `rel` a read in `scope` names.
-    pub fn of(scopes: &Scopes, scope: ScopeId, rel: &str) -> Mode {
-        if crate::functions::callable(rel) {
+    pub fn of(scopes: &Scopes, scope: ScopeId, rel: &RelRef) -> Mode {
+        let pred = rel.pred();
+        if crate::functions::callable(&pred) {
             return Mode {
                 reads: Vec::new(),
                 rest: true,
             };
         }
         let params = scopes
-            .function_columns(scope, super::plain(rel))
+            .function_columns(scope, &rel.name)
             .map_or(0, |n| n - 1);
         let table: Vec<bool> = scopes
             .externs
-            .get(rel)
+            .get(&pred)
             .map(|cols| cols.iter().map(|(read, _)| *read).collect())
             .unwrap_or_default();
         let reads = (0..params.max(table.len()))

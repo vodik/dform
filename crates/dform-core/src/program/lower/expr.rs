@@ -94,14 +94,13 @@ impl<'p> Lowering<'p> {
         }
     }
 
-    /// The relation `name` as written, read at `span`: an enclosing
-    /// definition's (the resolver's `__lexical:B:p`, R-186) the relation
-    /// of the instance it is taken from; and where the copies' parts start
-    /// for it.
-    pub(super) fn relation(&self, name: &str, span: Span) -> (String, Option<From>) {
-        match (self.env.chain, crate::modules::lexical_parts(name)) {
-            (Some(c), Some((body, n))) => c.lexical_pred(body, n, span),
-            _ => (name.to_string(), self.env.from),
+    /// The relation `rel` reads: an enclosing definition's (R-186) the
+    /// relation of the instance it is taken from; and where the copies'
+    /// parts start for it.
+    pub(super) fn relation(&self, rel: &RelRef) -> (String, Option<From>) {
+        match (self.env.chain, &rel.via) {
+            (Some(c), Reach::Lexical(body)) => c.lexical_pred(body, &rel.name, rel.span),
+            _ => (rel.pred(), self.env.from),
         }
     }
 
@@ -252,7 +251,7 @@ impl<'p> Lowering<'p> {
                     .iter()
                     .map(|a| (self.expr(*a), self.start_of(*a)))
                     .collect();
-                (self.relation(&rel.name, rel.span), args, *out)
+                (self.relation(rel), args, *out)
             }
             ExprKind::Address { of, typ } => {
                 let v = value_of(self);

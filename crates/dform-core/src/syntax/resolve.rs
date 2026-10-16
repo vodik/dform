@@ -2825,7 +2825,7 @@ impl<'u> Lowerer<'u> {
         // another module of the same name is another relation (R-65).
         let fed = !self.names(self.decl_scope(scope)).defines(&pred);
         let span = self.span(n);
-        let rel = crate::program::node::RelRef { name: pred, span };
+        let rel = crate::program::node::RelRef::written(pred, span);
         let kind = crate::program::ItemKind::Decl {
             rel,
             columns,
@@ -3641,10 +3641,7 @@ impl<'u> Lowerer<'u> {
         let mut args = vec![var(&read.path), var(&read.at)];
         args.extend(outs.iter().cloned());
         body.push(Lit::Pos(atom_at(&read.name, args, read.span)));
-        let rel = RelRef {
-            name: read.name.clone(),
-            span: read.span,
-        };
+        let rel = RelRef::written(read.name.clone(), read.span);
         self.building(rc, read.span, |b| {
             let path = b.bound_into(read.location, &read.path);
             let mut args = vec![path, b.variable(&read.at)];
@@ -3768,7 +3765,7 @@ impl<'u> Lowerer<'u> {
                     // A column of references holds the copy's resources,
                     // and never leaves a deployment (R-204).
                     let ref_columns = self.published_refs(scope, &name, **n, span)?;
-                    let rel = crate::program::node::RelRef { name, span };
+                    let rel = crate::program::node::RelRef::written(name, span);
                     let kind = crate::program::ItemKind::OutputRelation { rel, ref_columns };
                     return Ok(self.program.item(span, self.item_scope, kind));
                 }
@@ -6997,10 +6994,7 @@ impl<'u> Lowerer<'u> {
     /// The goal of the atom `a` whose arguments are `args`: its relation's.
     fn rel_goal(&mut self, rc: &Rc, a: &Atom, args: AtomArgs) -> GoalId {
         let span = a.span;
-        let rel = RelRef {
-            name: a.pred.clone(),
-            span,
-        };
+        let rel = RelRef::written(a.pred.clone(), span);
         let args = self.rel_args(rc, span, args);
         self.goal(rc, span, GoalKind::Rel { rel, args })
     }
@@ -9151,10 +9145,7 @@ impl<'u> Lowerer<'u> {
                 .into_iter()
                 .map(|a| b.pattern_of(a))
                 .collect();
-            let rel = RelRef {
-                name: pred.to_string(),
-                span,
-            };
+            let rel = RelRef::written(pred, span);
             let args = RelArgs::Positional(args);
             b.goal_node(span, GoalKind::Rel { rel, args })
         });
@@ -9761,8 +9752,8 @@ impl<'u> Lowerer<'u> {
                         Plan::Node(self.var_node(rc, span, &v))
                     }
                     None => {
-                        let base = crate::modules::lexical_name(&pred).unwrap_or(&pred);
-                        let name = fresh(rc, &capitalise(base));
+                        let used = matches!(via, Reach::Use(_));
+                        let name = fresh(rc, &capitalise(if used { &pred } else { &decl.name }));
                         rc.values.insert(pred.clone(), name.clone());
                         Plan::Read {
                             read: PlanRead::Value(decl, via),

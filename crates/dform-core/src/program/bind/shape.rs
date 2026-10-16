@@ -2,7 +2,7 @@
 //! side that is a pattern), the bodies inside it, and the names it waits
 //! for.
 
-use super::{Binder, DENSE, Inner, Mode, Shape, Use, Way, plain, written};
+use super::{Binder, DENSE, Inner, Mode, Shape, Use, Way, written};
 use crate::ast::Span;
 use crate::program::node::*;
 use crate::value::Value;
@@ -169,8 +169,8 @@ impl Binder<'_> {
     /// A relation's columns its mode leaves free bind; those it reads are
     /// read.
     fn rel_shape(&mut self, rel: &RelRef, args: &RelArgs, way: &mut Way, bodies: &mut Vec<Inner>) {
-        let by = format!("in this call of `{}`", plain(&rel.name));
-        let mode = Mode::of(&self.program.scopes, self.scope, &rel.name);
+        let by = format!("in this call of `{}`", rel.name);
+        let mode = Mode::of(&self.program.scopes, self.scope, rel);
         let pats: Vec<PatternId> = match args {
             RelArgs::Positional(ps) => ps.clone(),
             RelArgs::Record(fs) => fs.iter().map(|(_, p)| *p).collect(),

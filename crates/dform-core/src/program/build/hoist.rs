@@ -236,10 +236,7 @@ impl Builder<'_> {
                 }
                 // A resource whose type is a variable: its relation's.
                 _ => ExprKind::Lookup {
-                    rel: RelRef {
-                        name: "attr".to_string(),
-                        span,
-                    },
+                    rel: RelRef::written("attr", span),
                     args: vec![typ, addr, self.lit(Value::Str(attr.to_string()))],
                     out: 3,
                     path: Vec::new(),
@@ -259,10 +256,7 @@ impl Builder<'_> {
                 path: self.fields(path),
             },
             ReadOf::Lookup { rel, args, out } => ExprKind::Lookup {
-                rel: RelRef {
-                    name: rel.to_string(),
-                    span,
-                },
+                rel: RelRef::written(rel, span),
                 args,
                 out,
                 path: Vec::new(),
@@ -277,10 +271,7 @@ impl Builder<'_> {
     pub fn address_into(&mut self, rel: &str, typ: &str, v: &str) -> ExprId {
         let span = self.span;
         let of = self.expr_node(ExprKind::Lookup {
-            rel: RelRef {
-                name: rel.to_string(),
-                span,
-            },
+            rel: RelRef::written(rel, span),
             args: Vec::new(),
             out: 0,
             path: Vec::new(),
@@ -317,10 +308,7 @@ impl Builder<'_> {
     /// A call of a let with parameters, `f(args..)`, read into `v`: the
     /// relation `f(args.., V)` (R-187).
     pub fn call_into(&mut self, rel: &str, args: Vec<ExprId>, v: &str) -> ExprId {
-        let rel = RelRef {
-            name: rel.to_string(),
-            span: self.span,
-        };
+        let rel = RelRef::written(rel, self.span);
         let out = args.len();
         let kind = ExprKind::Lookup {
             rel,

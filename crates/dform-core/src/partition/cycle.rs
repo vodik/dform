@@ -234,7 +234,6 @@ impl Names {
         if self.helpers.contains(pred) {
             return None;
         }
-        let pred = crate::modules::lexical_name(pred).unwrap_or(pred);
         let (scope, name) = match pred.rsplit_once("::") {
             Some((s, n)) => (Some(s), n),
             None => (None, pred),

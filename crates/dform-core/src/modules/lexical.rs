@@ -35,18 +35,8 @@ pub fn lexical_term(body: &str, name: &str) -> Term {
     }
 }
 
-/// The name a [`lexical_pred`] reads, for a variable named after it.
-pub fn lexical_name(pred: &str) -> Option<&str> {
-    pred_parts(pred).map(|(_, n)| n)
-}
-
 /// The definition and the name a [`lexical_pred`] reads.
 pub fn lexical_parts(pred: &str) -> Option<(&str, &str)> {
-    pred_parts(pred)
-}
-
-/// The definition and the name a [`lexical_pred`] reads.
-fn pred_parts(pred: &str) -> Option<(&str, &str)> {
     pred.strip_prefix(LEXICAL)?
         .strip_prefix(':')?
         .rsplit_once(':')

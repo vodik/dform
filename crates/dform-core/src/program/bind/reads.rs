@@ -2,7 +2,7 @@
 //! name alone in an index the key of the row it reads (`T[e]`, `p[k]`,
 //! `xs[i]`), a comprehension a clause inside the one around it.
 
-use super::{Binder, Inner, Use, Way, plain, written};
+use super::{Binder, Inner, Use, Way, written};
 use crate::ast::Span;
 use crate::program::node::*;
 
@@ -196,7 +196,7 @@ impl Binder<'_> {
                 ItemKind::LetFn { name, .. } => name.clone(),
                 _ => String::new(),
             },
-            Callee::Extern(rel) => plain(&rel.name).to_string(),
+            Callee::Extern(rel) => rel.name.clone(),
             Callee::Loader(name) | Callee::Data(name) => name.clone(),
         }
     }

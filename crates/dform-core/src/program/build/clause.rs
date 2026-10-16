@@ -68,10 +68,7 @@ impl Builder<'_> {
     pub(super) fn rel(&mut self, a: &Atom) -> GoalId {
         self.at(a.span, |b| {
             let args = b.args(a);
-            let rel = RelRef {
-                name: a.pred.clone(),
-                span: a.span,
-            };
+            let rel = RelRef::written(a.pred.clone(), a.span);
             b.goal_node(a.span, GoalKind::Rel { rel, args })
         })
     }

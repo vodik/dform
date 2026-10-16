@@ -133,7 +133,7 @@ fn statements_of(env: Env, id: ItemId) -> Vec<Stmt> {
             clause,
         } => output(env, (name, ty.as_ref()), *value, *clause, it.span),
         ItemKind::OutputRelation { rel, ref_columns } => vec![Stmt::Output(ast::OutputDecl {
-            name: rel.name.clone(),
+            name: rel.pred(),
             ty: None,
             value: None,
             relation: Some(ref_columns.clone()),
@@ -383,8 +383,8 @@ pub(super) fn copy_parts(
 /// The relation a copy block's row `r` gives rows of.
 fn row_relation(program: &Program, r: ItemId) -> String {
     match &program.items[r].kind {
-        ItemKind::Rule { head, .. } => head.rel.name.clone(),
-        ItemKind::RelationInput { rel, .. } => rel.name.clone(),
+        ItemKind::Rule { head, .. } => head.rel.pred(),
+        ItemKind::RelationInput { rel, .. } => rel.pred(),
         k => unreachable!("{} is no row", super::super::spell::kind(k)),
     }
 }
@@ -620,7 +620,7 @@ fn relation_input(
     clause: Option<ClauseId>,
 ) -> Vec<Stmt> {
     let e = ast::Extern {
-        pred: rel.name.clone(),
+        pred: rel.pred(),
         arity,
         span: rel.span,
     };
@@ -633,7 +633,7 @@ fn relation_input(
     };
     l.goal(source.rows, &mut body);
     let mut head = Atom {
-        pred: rel.name.clone(),
+        pred: rel.pred(),
         args: columns.iter().map(|v| l.var(*v)).collect(),
         record: None,
         span: rel.span,
@@ -1093,7 +1093,7 @@ fn decl(
     span: Span,
 ) -> Vec<Stmt> {
     let e = ast::Extern {
-        pred: rel.name.clone(),
+        pred: rel.pred(),
         arity: columns.len(),
         span,
     };
@@ -1105,7 +1105,7 @@ fn decl(
     }
     let (fields, types) = columns.iter().cloned().unzip();
     out.push(Stmt::Decl(Decl {
-        pred: rel.name.clone(),
+        pred: rel.pred(),
         fields,
         types,
         span,

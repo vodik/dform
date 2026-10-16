@@ -39,10 +39,7 @@ impl Builder<'_> {
     pub fn rule_item(&mut self, r: RuleLowered) -> ItemId {
         let head = match r.args {
             Some(args) => Head {
-                rel: RelRef {
-                    name: r.head.pred.clone(),
-                    span: r.head.span,
-                },
+                rel: RelRef::written(r.head.pred.clone(), r.head.span),
                 args,
             },
             None => self.head(r.head, &r.body[r.seed..]),
@@ -94,10 +91,7 @@ impl Builder<'_> {
 
     /// The head `a`, after the reads `reads` its arguments hoisted.
     pub(super) fn head(&mut self, a: &Atom, reads: &[Lit]) -> Head {
-        let rel = RelRef {
-            name: a.pred.clone(),
-            span: a.span,
-        };
+        let rel = RelRef::written(a.pred.clone(), a.span);
         let (args, left) = self.reading(reads, |b| b.at(a.span, |b| b.args(a)));
         assert!(
             left.is_empty(),

@@ -337,9 +337,3 @@ fn written(span: Span) -> Option<String> {
     text.get(span.start as usize..span.end as usize)
         .map(str::to_string)
 }
-
-/// A relation's name as a read writes it: an enclosing definition's by
-/// its own name (`modules::lexical_pred`'s mark taken off).
-fn plain(rel: &str) -> &str {
-    crate::modules::lexical_name(rel).unwrap_or(rel)
-}

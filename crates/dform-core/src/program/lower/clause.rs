@@ -10,6 +10,7 @@
 
 use super::Env;
 use super::expr::Lowering;
+use super::instances::From;
 use crate::ast::{Atom, Helper, Lit, RuleStmt, Span, Stmt, Term, str_term};
 use crate::program::node::*;
 use crate::program::{NodeId, Program};
@@ -471,24 +472,34 @@ impl Lowering<'_> {
     pub(super) fn head(&mut self, rel: &RelRef, args: &RelArgs) -> Atom {
         let atom = self.written(rel, args);
         let mut atom = self.env.columns(atom, true);
-        if let Some((scope, takes)) = self.taken
-            && takes.contains(&atom.pred)
-        {
-            atom.pred = super::instances::private_name(scope, &atom.pred);
+        match self.taken {
+            Some((scope, takes)) if takes.contains(&atom.pred) => {
+                atom.pred = super::instances::private_name(scope, &atom.pred);
+                let pred = (atom.pred.clone(), self.env.from);
+                self.put_columns(atom, pred, args)
+            }
+            _ => self.put_rel(atom, rel, args),
         }
-        self.put_rel(atom, rel, args)
     }
 
     /// The atom of `rel` written over `args` as the copies write it: the
     /// relation's name read as written, each column from its pattern's
     /// start.
-    fn put_rel(&self, mut atom: Atom, rel: &RelRef, args: &RelArgs) -> Atom {
+    fn put_rel(&self, atom: Atom, rel: &RelRef, args: &RelArgs) -> Atom {
+        match self.env.chain {
+            None => atom,
+            Some(_) => self.put_columns(atom, self.relation(rel), args),
+        }
+    }
+
+    /// [`Self::put_rel`] of the relation `pred` and where its parts start.
+    fn put_columns(&self, mut atom: Atom, pred: (String, Option<From>), args: &RelArgs) -> Atom {
         if self.env.chain.is_none() {
             return atom;
         }
-        let (pred, pred_at) = self.relation(&atom.pred, rel.span);
+        let (pred, pred_at) = pred;
         atom.pred = pred;
-        let at: Vec<Option<super::instances::From>> = match args {
+        let at: Vec<Option<From>> = match args {
             RelArgs::Positional(ps) if atom.args.len() == ps.len() => {
                 ps.iter().map(|p| self.pattern_from(*p)).collect()
             }
@@ -510,7 +521,7 @@ impl Lowering<'_> {
             }
         };
         Atom {
-            pred: rel.name.clone(),
+            pred: rel.pred(),
             args,
             record,
             span: rel.span,
