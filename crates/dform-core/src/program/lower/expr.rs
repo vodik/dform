@@ -122,14 +122,7 @@ impl<'p> Lowering<'p> {
             ExprKind::Scoped {
                 name,
                 via: Reach::Lexical(body),
-            } => {
-                let Term::Val(crate::value::Value::Str(n)) =
-                    Lowering::new(Env::plain(self.program)).expr(*name)
-                else {
-                    unreachable!("an enclosing body's name is its segment")
-                };
-                c.lexical_term(body, &n, x.span).1
-            }
+            } => c.lexical_term(body, &self.segment(*name), x.span).1,
             _ => self.env.from,
         }
     }
@@ -151,11 +144,26 @@ impl<'p> Lowering<'p> {
             Some(v) => self.hoist(id, v),
             None => self.kind(id),
         };
-        match (self.readings.get(id), self.env.chain) {
+        let t = match (self.readings.get(id), self.env.chain) {
             (Some(read), Some(c)) => c.raw_term(read.clone(), self.env.from),
             (Some(read), None) => read.clone(),
             (None, _) => t,
+        };
+        match self.env.visit {
+            Some(visit) => visit(id, t),
+            None => t,
         }
+    }
+
+    /// The segment an enclosing body's name `name` is: its own term, as
+    /// written (no pass's).
+    fn segment(&self, name: ExprId) -> String {
+        let Term::Val(crate::value::Value::Str(n)) =
+            Lowering::new(Env::plain(self.program)).expr(name)
+        else {
+            unreachable!("an enclosing body's name is its segment")
+        };
+        n
     }
 
     /// The read in term position `id`, read into `v`: its literal onto
@@ -515,19 +523,9 @@ impl<'p> Lowering<'p> {
     fn scoped(&mut self, name: ExprId, via: &Reach) -> Term {
         let span = self.program.exprs[name].span;
         match (self.env.chain, via) {
-            (Some(c), Reach::Lexical(body)) => {
-                let Term::Val(crate::value::Value::Str(n)) = self.expr(name) else {
-                    unreachable!("an enclosing body's name is its segment")
-                };
-                c.lexical_term(body, &n, span).0
-            }
+            (Some(c), Reach::Lexical(body)) => c.lexical_term(body, &self.segment(name), span).0,
             (Some(_), Reach::Absolute) => self.expr(name),
-            (None, Reach::Lexical(body)) => {
-                let Term::Val(crate::value::Value::Str(n)) = self.expr(name) else {
-                    unreachable!("an enclosing body's name is its segment")
-                };
-                crate::modules::lexical_term(body, &n)
-            }
+            (None, Reach::Lexical(body)) => crate::modules::lexical_term(body, &self.segment(name)),
             (None, Reach::Absolute) => func(crate::modules::ABSOLUTE, vec![self.expr(name)]),
             (_, r) => unreachable!("a name {r:?} is written bare"),
         }
@@ -561,7 +559,7 @@ impl<'p> Lowering<'p> {
 type ReadParts = ((String, Option<From>), Vec<(Term, Option<From>)>, usize);
 
 /// A path of field steps as stored: its segments joined by `.`.
-pub(crate) fn stored(path: &[Step]) -> String {
+pub(super) fn stored(path: &[Step]) -> String {
     let segs: Vec<&str> = path
         .iter()
         .map(|s| match s {

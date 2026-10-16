@@ -14,7 +14,6 @@ pub mod instances;
 mod items;
 mod records;
 pub use clause::{lower_clause, lower_goal};
-pub(crate) use expr::stored;
 pub use expr::{expr_helpers, lower_expr, read_expr};
 pub use items::{element_write, lower_item, value_entries};
 pub use records::Records;
@@ -28,7 +27,8 @@ use std::cell::RefCell;
 /// evaluation, each record atom's fields in their columns by its scope's
 /// `decl`s ([`Records`]), what is wrong with one said in `errors`; and
 /// the copies being instanced (`chain`), each part of what is written
-/// final from `from` ([`instances::From`]).
+/// final from `from` ([`instances::From`]); and a pass that reads what
+/// is written node by node (`visit`, [`Visit`]).
 #[derive(Clone, Copy)]
 pub(crate) struct Env<'p> {
     pub program: &'p Program,
@@ -36,7 +36,14 @@ pub(crate) struct Env<'p> {
     pub errors: Option<&'p RefCell<Vec<Diagnostic>>>,
     pub chain: Option<&'p instances::Chain>,
     pub from: Option<instances::From>,
+    pub visit: Option<Visit<'p>>,
 }
+
+/// A pass that walks what `lower` writes rather than mirroring its walk
+/// (R-211 step 11): given each term node and the term `lower` wrote for
+/// it, the term to write in its place. The readings' graph marks each
+/// literal with its node this way ([`crate::edges`]).
+pub type Visit<'p> = &'p dyn Fn(super::ExprId, ast::Term) -> ast::Term;
 
 impl<'p> Env<'p> {
     /// The program's nodes as written.
@@ -47,6 +54,7 @@ impl<'p> Env<'p> {
             errors: None,
             chain: None,
             from: None,
+            visit: None,
         }
     }
 
@@ -73,12 +81,25 @@ impl<'p> Env<'p> {
 /// the statement it is lowered out of (`RuleStmt.origin`), or what the
 /// build found wrong.
 pub fn lower(program: &Program) -> Result<ast::Program, Vec<Diagnostic>> {
+    lower_in(Env::plain(program))
+}
+
+/// [`lower`], each term node's term as `visit` writes it.
+pub fn lower_visited(program: &Program, visit: Visit) -> Result<ast::Program, Vec<Diagnostic>> {
+    lower_in(Env {
+        visit: Some(visit),
+        ..Env::plain(program)
+    })
+}
+
+fn lower_in(env: Env) -> Result<ast::Program, Vec<Diagnostic>> {
+    let program = env.program;
     if !program.diags.is_empty() {
         return Err(program.diags.clone());
     }
     let mut statements = Vec::new();
     for &id in &program.roots {
-        items::item(Env::plain(program), id, &mut statements);
+        items::item(env, id, &mut statements);
     }
     Ok(ast::Program {
         statements,

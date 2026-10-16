@@ -26,7 +26,7 @@
 
 use crate::address::Address;
 use crate::ast::str_term;
-use crate::ast::{Lit, Program, Stmt, Term, TypeExpr};
+use crate::ast::{Atom, Lit, Program, Span, Stmt, Term, TypeExpr};
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::program::node::{
     ExprId, ExprKind, Header, ItemId, ItemKind, ListPart, ObjPart, ResourceBody, Target, Write,
@@ -1269,7 +1269,7 @@ impl<'p> Reader<'p> {
     /// Each entry at its attribute's path.
     fn resource(&mut self, typ: &str, name: &Header, body: &ResourceBody) {
         let p = self.p;
-        let name = crate::edges::header_term(name);
+        let name = header_term(name);
         // A constant object's keys, each read and folded back.
         if let ResourceBody::Value(v) = body
             && p.exprs[*v].hoisted.is_none()
@@ -1292,10 +1292,7 @@ impl<'p> Reader<'p> {
             }
             return;
         }
-        for (key, part, span) in crate::edges::entries(p, body) {
-            let crate::edges::Part::Node(e) = part else {
-                unreachable!("a value's entries are its nodes")
-            };
+        for (key, e, span) in entries(p, body) {
             let mut out = std::mem::take(&mut self.read);
             let r = self.at(typ, &key, e, &mut out);
             self.read = out;
@@ -1388,7 +1385,7 @@ impl<'p> Reader<'p> {
         written: Written,
         clause: Option<ClauseId>,
     ) {
-        let r = crate::edges::set_rule(self.p, typ, clause);
+        let r = set_rule(self.p, typ, clause);
         let types = row_types(&r.head.args[0], &r.body);
         if types.is_empty() {
             if let Some(read) = self.at_edge(&r, path, written) {
@@ -1649,6 +1646,56 @@ impl<'p> Reader<'p> {
             _ => {}
         }
     }
+}
+
+/// A resource's name as a message reads it: written, or `None`'s stand-in
+/// for an interpolated one.
+fn header_term(name: &Header) -> Term {
+    match name {
+        Header::Bare(n) => str_term(n),
+        Header::Literal(s) => str_term(&crate::address::name_segment(s)),
+        Header::Interp(_) => Term::Wildcard,
+    }
+}
+
+/// A resource's entries as `lower` writes them: its block's, or a value's
+/// keys written out (`items::value_entries`), each its key, its value and
+/// its span; a value computed whole at the root.
+fn entries(p: &prog::Program, body: &ResourceBody) -> Vec<(String, ExprId, Span)> {
+    match body {
+        ResourceBody::Block(entries) => entries
+            .iter()
+            .map(|e| (e.path.clone(), e.value, e.span))
+            .collect(),
+        ResourceBody::Value(v) => {
+            let span = p.exprs[*v].span;
+            match &p.exprs[*v].kind {
+                ExprKind::Object { parts }
+                    if p.exprs[*v].hoisted.is_none()
+                        && parts.iter().all(|x| matches!(x, ObjPart::Field { .. })) =>
+                {
+                    fields(parts)
+                        .into_iter()
+                        .map(|(k, e)| (crate::address::path_join("", k), e, span))
+                        .collect()
+                }
+                _ => vec![(String::new(), *v, span)],
+            }
+        }
+    }
+}
+
+/// A `set` through a variable's rule as the schema's types are found
+/// from it ([`set_types`]): its head's type, its clause's literals.
+fn set_rule(p: &prog::Program, typ: Term, clause: Option<ClauseId>) -> crate::ast::RuleStmt {
+    let body = clause.map(|c| prog::lower_clause(p, c, &[]).0);
+    let head = Atom {
+        pred: "arg".into(),
+        args: vec![typ, Term::Wildcard, Term::Wildcard, Term::Wildcard],
+        record: None,
+        span: Span::default(),
+    };
+    crate::ast::RuleStmt::new(head, body.unwrap_or_default())
 }
 
 /// Whether an object's parts compute a key (`__object`).

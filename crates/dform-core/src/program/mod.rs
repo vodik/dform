@@ -25,7 +25,8 @@ pub mod types;
 
 pub use build::Builder;
 pub use lower::{
-    Records, lower, lower_clause, lower_expr, lower_goal, lower_item, read_expr, records_checked,
+    Records, Visit, lower, lower_clause, lower_expr, lower_goal, lower_item, lower_visited,
+    read_expr, records_checked,
 };
 pub use node::{
     Clause, ClauseId, Expr, ExprId, ExprKind, Goal, GoalId, Item, ItemId, ItemKind, Pattern,

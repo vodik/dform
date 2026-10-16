@@ -327,6 +327,7 @@ impl<'p> Instancer<'p> {
             errors: None,
             chain: Some(chain),
             from,
+            visit: None,
         }
     }
 
