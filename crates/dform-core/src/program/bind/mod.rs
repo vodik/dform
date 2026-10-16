@@ -111,23 +111,60 @@ fn hoisted(program: &Program, e: ExprId, out: &mut BTreeSet<Name>) {
     }
 }
 
+/// The names goal `g` binds, written in `scope`, the compiler's
+/// variables' too: what any way it holds binds (an index's key among
+/// them), not what the clauses inside it bind.
+pub fn binds(program: &Program, scope: ScopeId, g: GoalId) -> BTreeSet<Name> {
+    let shape = Binder::with_implicit(program, scope).shape(g);
+    shape.ways.iter().flat_map(Way::bound).cloned().collect()
+}
+
+/// The clauses inside goal `g` other than a negation's own: a
+/// comprehension's body, in any of its terms.
+pub fn bodies(program: &Program, scope: ScopeId, g: GoalId) -> Vec<ClauseId> {
+    let shape = Binder::new(program, scope).shape(g);
+    shape
+        .inner
+        .iter()
+        .filter_map(|i| match i {
+            Inner::Body(c, items) if !items.is_empty() => Some(*c),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The source names goal `g` writes, those of the clauses inside it
 /// included.
 pub fn goal_names(program: &Program, g: GoalId) -> BTreeSet<Name> {
-    let mut out = BTreeSet::new();
-    Binder::new(program, ScopeId::default()).goal_names(g, &mut out);
-    out
+    let b = Binder::new(program, ScopeId::default());
+    let mut vars = BTreeSet::new();
+    b.goal_vars(g, &mut vars);
+    b.names(&vars).into_iter().collect()
 }
 
 /// The source names term `t` writes, a comprehension's included.
 pub fn term_names(program: &Program, t: Term) -> BTreeSet<Name> {
     let b = Binder::new(program, ScopeId::default());
-    let mut out = BTreeSet::new();
+    let mut vars = BTreeSet::new();
     match t {
-        Term::Expr(e) => b.expr_names(e, &mut out),
-        Term::Pattern(p) => b.pattern_names(p, &mut out),
+        Term::Expr(e) => b.expr_vars(e, &mut vars),
+        Term::Pattern(p) => b.pattern_vars(p, &mut vars),
     }
-    out
+    b.names(&vars).into_iter().collect()
+}
+
+/// The variables of goal `g`, the compiler's too, those of the clauses
+/// inside it included, into `out`.
+pub fn goal_vars(program: &Program, g: GoalId, out: &mut BTreeSet<VarId>) {
+    Binder::with_implicit(program, ScopeId::default()).goal_vars(g, out);
+}
+
+/// The variables of clause `c`, the compiler's too, those of the
+/// clauses inside it included.
+pub fn clause_vars(program: &Program, c: ClauseId) -> BTreeSet<VarId> {
+    let mut vars = BTreeSet::new();
+    Binder::with_implicit(program, ScopeId::default()).clause_vars(c, &mut vars);
+    vars
 }
 
 /// The variable term `t` is, written alone (none for a read of one).
@@ -234,6 +271,9 @@ struct Binder<'a> {
     scope: ScopeId,
     /// The names the clauses checked so far bind: what can bind them.
     binds: BTreeSet<Name>,
+    /// The variables the compiler made count as the program's: what a
+    /// negation's helper shares is any variable.
+    implicit: bool,
     diags: Vec<Diagnostic>,
 }
 
@@ -243,8 +283,22 @@ impl<'a> Binder<'a> {
             program,
             scope,
             binds: BTreeSet::new(),
+            implicit: false,
             diags: Vec::new(),
         }
+    }
+
+    /// A pass that counts the variables the compiler made too.
+    fn with_implicit(program: &'a Program, scope: ScopeId) -> Self {
+        Binder {
+            implicit: true,
+            ..Binder::new(program, scope)
+        }
+    }
+
+    /// Whether the pass counts `v`: a variable the program wrote, or any.
+    fn counts(&self, v: &Var) -> bool {
+        self.implicit || !v.implicit
     }
 }
 

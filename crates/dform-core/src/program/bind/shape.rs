@@ -197,6 +197,13 @@ impl Binder<'_> {
             Some(of) => self.side_reads(elem, &format!("{DENSE} {of}"), way, bodies),
             None => self.side_binds(elem, way, bodies),
         }
+        // `x in T` over the types a variable takes binds the variable,
+        // the compiler's.
+        if self.implicit
+            && let Some(ty) = super::names::type_expr(coll)
+        {
+            self.expr_binds(ty, way, bodies);
+        }
         if let Some(e) = coll_expr(coll) {
             self.reads(e, "at this `in`", way, bodies);
         }

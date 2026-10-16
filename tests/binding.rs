@@ -174,3 +174,16 @@ version("{\"major\": 1}")
     assert_eq!(facts(src, "u"), ["u(2)", "u(3)"]);
     assert_eq!(facts(src, "v"), [r#"v("{\"major\": 1}")"#]);
 }
+
+/// A negation inside another reads what the clause around both binds:
+/// its helper takes `x` from `p(x)`, not any `x` of `r` (R-211).
+#[test]
+fn a_negation_inside_another_shares_the_clauses_variables() {
+    let src = r#"p(1)
+p(2)
+q(10)
+r(1, 10)
+ok(x) where p(x), not { q(y), not { r(x, y) } }
+"#;
+    assert_eq!(facts(src, "ok"), ["ok(1)"]);
+}

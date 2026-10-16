@@ -716,7 +716,7 @@ impl Lowerer<'_> {
             std::mem::take(&mut rc.values),
         );
         if let Some(g) = &mut self.gather {
-            g.open();
+            g.open_comprehension();
         }
         self.nested += 1;
         let body = self.body(rc, &body_node);

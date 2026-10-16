@@ -33,7 +33,7 @@ mod spread;
 pub use aggregate::{Column, fold_numbers, folds, grouped, number_folds};
 pub use checks::CheckLowered;
 pub use contributions::{SetFromLowered, SetLowered, TargetLowered, WriteLowered};
-pub use gather::{Gather, Statement};
+pub use gather::{Around, Gather, Statement};
 pub use hoist::{Keyed, ReadOf};
 pub use inputs::{InputLowered, RelationInputLowered, RelationRows};
 pub use lets::{LetFnLowered, LetLowered};

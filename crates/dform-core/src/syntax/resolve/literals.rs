@@ -33,11 +33,14 @@ impl Lowerer<'_> {
         if self.nested > 0 {
             return self.lits_as_written(rc, lits, seed);
         }
-        let outer = rc.outer.clone();
         let out = self.lits_as_written(rc, lits, seed)?;
-        let order = self.binding_order(rc, &outer_names(rc, &outer))?;
+        let order = self.binding_order(rc, &outer_names(rc, &rc.outer))?;
         if let Some(s) = &mut self.gather {
-            s.order(&mut self.program, &order, &outer);
+            let around = crate::program::build::Around {
+                outer: &rc.outer,
+                scope: rc.scope,
+            };
+            s.order(&mut self.program, &order, &around);
         }
         Ok(out)
     }
@@ -491,8 +494,8 @@ impl Lowerer<'_> {
     }
 
     /// `not { B }` (or a `not` no single literal can say): a helper
-    /// `__neg_N(ȳ) :- P, B` over the variables ȳ the body so far binds,
-    /// and `not __neg_N(ȳ)`.
+    /// `__neg_N(ȳ) :- P, B` over the variables ȳ its body shares with
+    /// what is bound before it, and `not __neg_N(ȳ)` (`Gather::negated`).
     pub(super) fn neg_helper(
         &mut self,
         rc: &mut Rc,
@@ -502,32 +505,33 @@ impl Lowerer<'_> {
     ) -> L<()> {
         let body_from = self.gather.as_ref().map(|s| s.goals());
         let inner = self.negated_body(rc, n)?;
-        let outer_bound = {
-            let mut b = bound_vars(out);
-            b.extend(rc.bound_around().cloned());
-            b
-        };
-        let mut used = BTreeSet::new();
-        for l in &inner {
-            lit_vars(l, &mut used);
-        }
-        let shared: Vec<String> = used.intersection(&outer_bound).cloned().collect();
-        let number = self.program.helpers.neg();
-        let pred = format!("__neg_{number}");
-        let head = atom_at(&pred, shared.iter().map(|v| var(v)).collect(), span);
         // An aggregate's value is not the helper's: it is folded after.
-        let results: BTreeSet<&String> = self.aggs.iter().map(|a| &a.var).collect();
-        let reads_result = |l: &Lit| {
-            let mut vs = BTreeSet::new();
-            lit_vars(l, &mut vs);
-            vs.iter().any(|v| results.contains(v))
+        let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
+        let (Some(s), Some(from)) = (&mut self.gather, body_from) else {
+            return Ok(());
         };
-        if inner.iter().any(reads_result) {
+        let number = self.program.helpers.neg();
+        if s.reads_any(&self.program, from, &results) {
             return self.error(
                 span,
                 "an aggregate's value is compared after the fold, not inside `not { }`",
             );
         }
+        s.negation(number, results.clone(), from);
+        let around = crate::program::build::Around {
+            outer: &rc.outer,
+            scope: rc.scope,
+        };
+        let (shared, own) = s.negated(&mut self.program, span, negated(n), &around);
+        // The helper's own variables are bound in the helper.
+        rc.inner.extend(own);
+        let pred = format!("__neg_{number}");
+        let head = atom_at(&pred, shared.iter().map(|v| var(v)).collect(), span);
+        let reads_result = |l: &Lit| {
+            let mut vs = BTreeSet::new();
+            lit_vars(l, &mut vs);
+            vs.iter().any(|v| results.contains(v))
+        };
         let mut body: Vec<Lit> = out
             .iter()
             .filter(|l| !matches!(l, Lit::Not(_)) && !reads_result(l))
@@ -539,18 +543,6 @@ impl Lowerer<'_> {
             head.clone(),
             body,
         )));
-        if let (Some(s), Some(from)) = (&mut self.gather, body_from) {
-            s.negation(
-                number,
-                results.iter().map(|v| v.to_string()).collect(),
-                from,
-            );
-            s.negated(&mut self.program, &shared, span, negated(n));
-        }
-        // The helper's own variables are bound in the helper.
-        for v in used.difference(&outer_bound) {
-            rc.inner.insert(v.clone());
-        }
         out.push(Lit::Not(head));
         Ok(())
     }

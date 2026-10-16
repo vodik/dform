@@ -144,7 +144,7 @@ impl Binder<'_> {
     /// alone, else by the read it heads (`x.p`, `x[i]`).
     pub(super) fn read_var(&self, v: VarId, at: Span, by: &str, way: &mut Way) {
         let v = &self.program.vars[v];
-        if v.implicit {
+        if !self.counts(v) {
             return;
         }
         let by = match written(at) {
@@ -162,7 +162,7 @@ impl Binder<'_> {
     /// `v` bound by the goal.
     pub(super) fn binds(&self, v: VarId, way: &mut Way) {
         let v = &self.program.vars[v];
-        if !v.implicit {
+        if self.counts(v) {
             way.binds.push(v.name.clone());
         }
     }
@@ -170,7 +170,7 @@ impl Binder<'_> {
     /// `v` bound by an index of the goal, before it.
     fn binds_key(&self, v: VarId, way: &mut Way) {
         let v = &self.program.vars[v];
-        if !v.implicit {
+        if self.counts(v) {
             way.keys.push(v.name.clone());
         }
     }
