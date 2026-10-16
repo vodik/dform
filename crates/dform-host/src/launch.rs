@@ -125,16 +125,22 @@ impl Provider for Native {
     }
 }
 
-/// The executable `exe`, with the host service at `DFORM_HOST`.
+/// The executable `exe`, with the host service at `DFORM_HOST`; its
+/// signer, when its manifest says it signs, the host's for its `signed`
+/// credentials.
 fn native(exe: &Path, grants: Grants) -> Result<Link> {
     let limiter = Arc::new(Limiter::new(&grants.provider));
-    let served = grpc::serve(Services::paced(grants.clone(), limiter.clone()))?;
+    let services = Arc::new(Services::paced(grants.clone(), limiter.clone()));
+    let served = grpc::serve_shared(services.clone())?;
     let program = Program::exe(exe);
     let mut conn = Conn::start(&program, &Env::default().set(grpc::ENV, &served.address))?;
     let declared = conn.manifest()?;
     let manifest = declared
         .as_ref()
         .map(|d| Manifest::of(d.imports.iter().map(String::as_str), false));
+    if declared.as_ref().is_some_and(|d| d.signs) {
+        services.set_signer(conn.signer());
+    }
     let schemes = declared.map(|d| d.schemes).unwrap_or_default();
     let reader = conn.reader();
     let native = Native {

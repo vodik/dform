@@ -2,17 +2,19 @@
 //! with that provider's grants. Both transports serve it: the gRPC `Host`
 //! service (`grpc`) and the component imports (`wasm`).
 
+use crate::signed::{self, Source, Steps};
 use crate::{git, http, ratelimit, ssh};
-use dform_core::plugin::credentials::{self, Credential};
+use dform_core::plugin::credentials::{self, Credential, Kind};
 use dform_core::plugin::host::{
     Calls, Endpoint, Error, Failure, GitFile, Grants, Handle, HttpRequest, HttpResponse, Level,
     Opened, Run, Target,
 };
+use dform_core::plugin::signer::{Material, Recipe, Signer};
 use dform_core::plugin::timed;
 use dform_core::timing::location;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
 /// How long before it expires a credential is opened again for the next
@@ -35,6 +37,10 @@ pub struct Services {
     limiter: Arc<ratelimit::Limiter>,
     ssh: Box<dyn ssh::Ssh>,
     git: git::Git,
+    /// The provider's signer, when it has one: what makes its `signed`
+    /// credentials and signs its requests with them, run apart from it
+    /// (`crate::signed`).
+    signer: OnceLock<Arc<dyn Signer + Send + Sync>>,
 }
 
 /// What a provider's calls opened, by handle.
@@ -74,6 +80,7 @@ impl Services {
             renewing: Mutex::new(()),
             ssh: ssh::client(),
             git: git::Git::cache(),
+            signer: OnceLock::new(),
         }
     }
 
@@ -81,6 +88,19 @@ impl Services {
     pub fn with_ssh(mut self, ssh: Box<dyn ssh::Ssh>) -> Services {
         self.ssh = ssh;
         self
+    }
+
+    /// The same, its provider's signer `signer` (a component's, or an
+    /// in-process test's).
+    pub fn with_signer(self, signer: Arc<dyn Signer + Send + Sync>) -> Services {
+        self.set_signer(signer);
+        self
+    }
+
+    /// Its provider's signer is `signer`, served by the provider's process
+    /// once it is started (a native provider's): the first set holds.
+    pub fn set_signer(&self, signer: Arc<dyn Signer + Send + Sync>) {
+        let _ = self.signer.set(signer);
     }
 
     pub fn grants(&self) -> &Grants {
@@ -134,7 +154,10 @@ impl Services {
         if !c.expired_by(renew_by) {
             return Ok(c);
         }
-        let renewed = Arc::new(self.load(&c.name)?);
+        let renewed = Arc::new(match &c.signed {
+            Some(material) => self.signed(&c.name, Some(material))?,
+            None => self.load(&c.name)?,
+        });
         self.opened().credentials.insert(h, renewed.clone());
         Ok(renewed)
     }
@@ -145,6 +168,9 @@ impl Services {
     /// error is why it does not load: its name is one the engine made,
     /// which the user never wrote.
     fn load(&self, name: &str) -> Result<Credential, Error> {
+        if let Ok((Kind::Signed, _)) = credentials::parse_name(name) {
+            return self.signed(name, None);
+        }
         if let Some(held) = credentials::held(name, &self.grants.provider) {
             return held.map_err(|e| Error::fatal(format!("{e:#}")));
         }
@@ -196,6 +222,48 @@ impl Services {
     }
 }
 
+impl Services {
+    /// The `signed` credential `name`, as the provider's signer makes it
+    /// of the operator's grant (`crate::signed`), or renews it from its
+    /// last `material`.
+    fn signed(&self, name: &str, material: Option<&Material>) -> Result<Credential, Error> {
+        let provider = &self.grants.provider;
+        let signer = self.signer.get().ok_or_else(|| {
+            Error::fatal(format!(
+                "provider {provider}: the credential {name} is signed, and the provider has no \
+                 signer"
+            ))
+        })?;
+        let source = Source::of(name, provider, || self.grants.credential(name))?;
+        let steps = Steps {
+            host: self,
+            signer: signer.as_ref(),
+            source,
+            name,
+        };
+        let material = match material {
+            Some(m) => steps.renewed(m)?,
+            None => steps.material()?,
+        };
+        Ok(signed::applied(name, material))
+    }
+
+    /// `req` as it is sent with `cred`: signed by the provider's signer
+    /// when the credential's recipe says so; as it is otherwise.
+    fn signing(&self, req: HttpRequest, cred: &Credential) -> Result<HttpRequest, Error> {
+        let Some(material) = cred.signed.as_ref().filter(|m| m.recipe == Recipe::Signed) else {
+            return Ok(req);
+        };
+        let signer = self.signer.get().ok_or_else(|| {
+            Error::fatal(format!(
+                "the credential {} is signed, and no signer is",
+                cred.name
+            ))
+        })?;
+        signed::sign(signer.as_ref(), req, material, &cred.name)
+    }
+}
+
 /// The span a request sent for the call numbered `call` is under: that
 /// call's while it is in flight, else the current one. Held while the
 /// request's span is made, so the call's cannot end meanwhile.
@@ -226,6 +294,10 @@ impl Calls for Services {
         via: Option<Handle>,
     ) -> Result<HttpResponse, Error> {
         let (cred, via) = self.held(auth, via)?;
+        let req = match &cred {
+            Some(c) => self.signing(req, c)?,
+            None => req,
+        };
         self.request(req, cred.as_deref(), via)
     }
 
@@ -286,7 +358,8 @@ impl Calls for Services {
 mod tests {
     use super::*;
     use dform_core::http::fake::Server;
-    use dform_core::plugin::credentials::{Kind, Secret};
+    use dform_core::plugin::credentials::Secret;
+    use dform_core::plugin::signer::{Got, Need, Outcome, Request};
 
     /// A kubeconfig held for the provider `p` whose exec plugin answers
     /// `t1`, `t2`, .. (one more each run, counted in `dir`), expiring at
@@ -327,6 +400,82 @@ mod tests {
                 String::from_utf8(r.body).unwrap()
             })
             .collect()
+    }
+
+    /// A signer that makes a bearer token of the file it names (the
+    /// grant's, here a value held for the provider), which expires at
+    /// `expires`, and renews it as `renewed`.
+    struct Tokens {
+        expires: Option<u64>,
+    }
+
+    impl Signer for Tokens {
+        fn needs(&self) -> Result<Vec<Need>, String> {
+            Ok(vec![
+                Need::Env(vec!["HOME".into()]),
+                Need::File("~/.token".into()),
+            ])
+        }
+
+        fn step(&self, got: &[Got]) -> Result<Outcome, String> {
+            match got {
+                [Got::Env(env), Got::File(Some(token))] if env.is_empty() => {
+                    let token = String::from_utf8(token.clone()).map_err(|e| e.to_string())?;
+                    Ok(Outcome::Material(Material {
+                        bytes: token.clone().into_bytes(),
+                        recipe: Recipe::Bearer(token),
+                        expires: self.expires,
+                    }))
+                }
+                other => Err(format!("got {other:?}")),
+            }
+        }
+
+        fn sign(&self, _: Request, _: &Material, _: u64) -> Result<Request, String> {
+            Err("a bearer token signs nothing".into())
+        }
+
+        fn refresh(&self, _: &Material, now: u64) -> Result<Outcome, String> {
+            Ok(Outcome::Material(Material {
+                bytes: b"renewed".to_vec(),
+                recipe: Recipe::Bearer("renewed".into()),
+                expires: Some(now + 3600),
+            }))
+        }
+    }
+
+    /// A `signed` credential is what its provider's signer makes of the
+    /// grant (a held value stands for the file it names; no variable is
+    /// given), applied as its recipe says, and renewed by the signer
+    /// before it expires.
+    #[test]
+    fn a_signed_credential_is_its_signers_recipe_renewed_before_it_expires() {
+        let server = Server::http1();
+        server.answer(|s| {
+            (
+                200,
+                Vec::new(),
+                s.header("authorization").unwrap_or("").into(),
+            )
+        });
+        let sent = |expires: Option<u64>| {
+            let parts = [("token".to_string(), Secret::new(b"t1".to_vec()))];
+            let held = credentials::hold(Kind::Signed, "p", parts.into());
+            let host = Services::new(Grants::none("p")).with_signer(Arc::new(Tokens { expires }));
+            let h = host.open(held.name()).unwrap().handle;
+            (0..2)
+                .map(|_| {
+                    let req = HttpRequest {
+                        method: "GET".into(),
+                        url: server.url("/"),
+                        ..HttpRequest::default()
+                    };
+                    String::from_utf8(host.send(req, Some(h), None).unwrap().body).unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(sent(None), ["Bearer t1", "Bearer t1"]);
+        assert_eq!(sent(Some(0)), ["Bearer renewed", "Bearer renewed"]);
     }
 
     /// An exec plugin's token is used until it expires, then the plugin

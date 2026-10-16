@@ -224,8 +224,11 @@ interface types {
     // (`dform:host/secrets`) and the host applies (`http.send`'s `auth`).
     // Of a provider the program does not configure, the environment's
     // credential of the kind (a kubeconfig's: `KUBECONFIG`), when it has
-    // one, is held so and named in the Configure's `credentials`
-    // (`{"kubeconfig": NAME}`).
+    // one, is named in the Configure's `credentials`
+    // (`{"kubeconfig": "kubeconfig:environment"}`), as the one dform.toml
+    // grants a provider of each kind is in every Configure
+    // (`{"signed": "signed:lab"}`), declared or not; the
+    // host opens either only with the grant.
     credential: option<string>,
   }
 

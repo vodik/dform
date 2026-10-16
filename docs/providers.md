@@ -497,6 +497,7 @@ A credential is a name; its kind says how the host applies it:
 | `header` | `NAME: VALUE` | that header |
 | `tls` | PEM: a certificate chain and its key | the TLS session's client certificate |
 | `kubeconfig` | a kubeconfig, or its parts (`host`, `ca`, `token`, `client_certificate`, `client_key`) | its current context's token, client certificate or exec plugin's answer (run by dform, again once it expires), and its cluster's CA, `tls-server-name` and `proxy-url`; its server is the credential's `endpoint`, its namespace the credential's `namespace` |
+| `signed` | what the provider's signer makes of the grant: the environment's variables it names, else the file it names (`signed:environment`), or the operator's file (`signed:NAME`) | as the material's recipe says: a bearer token, headers, a client certificate, a proxy, or each request signed by the signer as the host sends it |
 | `ssh` | an unencrypted OpenSSH private key, in the operator's file only (or an agent's key by its comment or fingerprint) | by dform's SSH client for an `ssh://` or `git+ssh://` location, never to an HTTP call: `[io] credentials = { "ssh://HOST/*" = "ssh:NAME" }` (docs/reference.md, "Locations and transports") |
 
 The value comes from the program or the operator. A provider declares
@@ -512,11 +513,36 @@ the operator's, as dform.toml grants it: the file
 `$XDG_CONFIG_HOME/dform/credentials/KIND/NAME` (`DFORM_CREDENTIALS` names
 another directory), or `KIND:environment`, the environment's of a kind
 that has one (`kubeconfig:environment`: `KUBECONFIG`'s files, else
-`~/.kube/config`, else a pod's service account, read by dform). A
-provider the program does not configure is told that name in the
-Configure's `credentials` (`{"kubeconfig": "kubeconfig:environment"}`),
-and opens it only with the grant: nothing in the environment reaches a
-provider unless the program or dform.toml gives it.
+`~/.kube/config`, else a pod's service account, read by dform;
+`signed:environment`: the variables the provider's signer names, else
+the file it names, OVH's `OVH_APPLICATION_KEY` .. else `~/.ovh.conf`).
+A provider is told, in
+each Configure's `credentials`, the one dform.toml grants it of each kind
+(`[providers.ovh] credentials = ["signed:lab"]`:
+`{"signed": "signed:lab"}`; two of one kind name neither),
+and a provider the program does not configure the environment's of each
+kind it declares a setting of (`{"kubeconfig":
+"kubeconfig:environment"}`); it opens one only with the grant: nothing in
+the environment reaches a provider unless the program or dform.toml gives
+it.
+
+A provider whose API wants each request signed with a secret (OVH's
+application keys, AWS's SigV4) has a signer: wit/host's `signer`, sans
+I/O. It names what it needs (`env` variables, a `file`, an `exec`'s
+output, a `fetch` of one URL, unauthenticated: an API's clock); dform
+performs each under the grant, in order, and hands it what each got
+(`step`), until it answers the material and how dform applies it (a
+`recipe`: `bearer`, `headers`, `tls-client`, `proxy`, or `signed`, each
+request handed to its `sign` with the material and dform's time as dform
+sends it; renewed through `refresh` before it `expires`). dform runs the
+signer apart from its provider: a wasm provider's is a component of its
+own beside it (`NAME_signer.wasm` beside `NAME.wasm`, `world
+signer-component`), linked with nothing (one that imports anything is
+refused, naming what), and a native provider serves its own as `Signer`
+beside the protocol (the SDK's `Handler::signer`). The provider that
+talks to the network never holds the material; the signer cannot reach
+the network. An `exec` need is refused until dform runs one under a
+grant.
 Either way it stays in dform's memory, is never serialized to a
 provider, and is zeroed when dropped. A provider opening a credential it
 was not granted is refused: `provider k8s is not granted the credential

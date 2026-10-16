@@ -37,9 +37,15 @@ type R<T> = Result<Response<T>, Status>;
 
 #[tonic::async_trait]
 impl h::host_server::Host for Service {
+    /// `secrets.open`, in the span of the call it is opened in: what the
+    /// host does to open it (a `signed` credential's fetch) is under it.
     async fn open(&self, r: Request<h::OpenRequest>) -> R<h::OpenResponse> {
+        let call = dform_grpc::traced::call(&r);
         let name = r.into_inner().name;
-        self.with(move |s| match s.open(&name) {
+        let within = call
+            .and_then(dform_core::plugin::timed::call_span)
+            .unwrap_or_else(tracing::Span::current);
+        self.with(move |s| match within.in_scope(|| s.open(&name)) {
             Ok(o) => h::OpenResponse {
                 failure: None,
                 handle: o.handle,
@@ -207,6 +213,12 @@ pub struct Served {
 
 /// Serve `services` on a socket of its own.
 pub fn serve(services: Services) -> Result<Served> {
+    serve_shared(Arc::new(services))
+}
+
+/// [`serve`], the services held beside (a native provider's signer is
+/// given them once the provider has started).
+pub fn serve_shared(services: Arc<Services>) -> Result<Served> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
     let socket = std::env::temp_dir().join(format!(
@@ -218,7 +230,7 @@ pub fn serve(services: Services) -> Result<Served> {
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let (ready, listening) = std::sync::mpsc::channel::<std::io::Result<()>>();
     let path = socket.clone();
-    let service = Service(Arc::new(services));
+    let service = Service(services);
     // What the host does for the provider is in the span it was started
     // in: each request its tasks serve sees it as the current one.
     let within = tracing::Span::current();

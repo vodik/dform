@@ -3930,8 +3930,9 @@ credentials"):
 [providers.k8s]
 source = "providers/k8s"
 allow = ["wasi:sockets"]          # wasi:filesystem, wasi:http, wasi:sockets
-credentials = ["kubeconfig:prod"] # KIND:NAME, applied by the host, never sent to the provider;
-                                  # "kubeconfig:environment" is KUBECONFIG's
+credentials = ["kubeconfig:prod"] # KIND:NAME, applied by the host, never sent to the provider,
+                                  # which is told the one of each kind; "kubeconfig:environment"
+                                  # is KUBECONFIG's, "signed:environment" what its signer names
 reads = ["https://github.com/*"]  # SCHEME://HOST/PATH patterns its files.read may take
 ```
 

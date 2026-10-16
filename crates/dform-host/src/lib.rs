@@ -17,6 +17,7 @@ pub use dform_core::http;
 pub mod launch;
 pub mod ratelimit;
 pub mod services;
+mod signed;
 pub mod ssh;
 #[cfg(feature = "wasm")]
 pub mod wasm;

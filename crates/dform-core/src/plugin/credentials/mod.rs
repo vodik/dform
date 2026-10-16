@@ -12,6 +12,7 @@
 //! | `header`     | `NAME: VALUE`                     | that header                             |
 //! | `tls`        | PEM: a certificate chain and key  | the TLS session's client certificate    |
 //! | `kubeconfig` | a kubeconfig (its current context), or its parts ([`kubeconfig`]) | its user's token, client certificate or exec plugin's answer (until it expires), its cluster's CA, server name and proxy; its server is the credential's endpoint, its namespace the credential's |
+//! | `signed` | what the provider's signer makes of the operator's grant (`crate::plugin::signer`): the environment's variables or a file it names, the operator's file | as its material's recipe says: a bearer token, headers, a client certificate, a proxy, or each request signed by the signer as the host sends it |
 //! | `ssh`        | an unencrypted OpenSSH private key | by the `ssh` provider (`use ssh { key = "NAME" }`), never to an HTTP call; only the operator's file ([`file`]) |
 //!
 //! Where a value comes from:
@@ -28,11 +29,14 @@
 //!   `$XDG_CONFIG_HOME/dform/credentials/KIND/NAME` (or under
 //!   `DFORM_CREDENTIALS`), or, named `KIND:environment` ([`ENVIRONMENT`]),
 //!   the environment's of a kind that has one (a kubeconfig's:
-//!   `KUBECONFIG`, `~/.kube/config`, a pod's service account). A provider
-//!   the program does not configure is told that name for each such kind
-//!   it declares, and the host opens it only with the grant: nothing in
-//!   the environment reaches a provider unless the program or dform.toml
-//!   gives it.
+//!   `KUBECONFIG`, `~/.kube/config`, a pod's service account; a signed
+//!   one's: the variables its provider's signer names, else the file it
+//!   names). A provider is told, in its
+//!   Configure's `credentials`, the one dform.toml grants it of each kind,
+//!   and a provider the program does not configure the environment's of
+//!   each kind it declares a setting of; the host opens it only with the
+//!   grant: nothing in the environment reaches a provider unless the
+//!   program or dform.toml gives it.
 
 pub mod kubeconfig;
 
@@ -84,10 +88,19 @@ pub enum Kind {
     Header,
     Tls,
     Kubeconfig,
+    Signed,
     Ssh,
 }
 
-pub const KINDS: [&str; 6] = ["bearer", "basic", "header", "tls", "kubeconfig", "ssh"];
+pub const KINDS: [&str; 7] = [
+    "bearer",
+    "basic",
+    "header",
+    "tls",
+    "kubeconfig",
+    "signed",
+    "ssh",
+];
 
 impl Kind {
     /// The kind `word` names, as a credential's name or a setting's
@@ -99,15 +112,17 @@ impl Kind {
             "header" => Kind::Header,
             "tls" => Kind::Tls,
             "kubeconfig" => Kind::Kubeconfig,
+            "signed" => Kind::Signed,
             "ssh" => Kind::Ssh,
             _ => return None,
         })
     }
 
     /// Whether the environment has one of the kind (a kubeconfig's:
-    /// `KUBECONFIG`), which `KIND:environment` names ([`ENVIRONMENT`]).
+    /// `KUBECONFIG`; a signed one's: what its signer names), which
+    /// `KIND:environment` names ([`ENVIRONMENT`]).
     pub fn in_environment(self) -> bool {
-        self == Kind::Kubeconfig
+        matches!(self, Kind::Kubeconfig | Kind::Signed)
     }
 
     pub fn as_str(self) -> &'static str {
@@ -117,6 +132,7 @@ impl Kind {
             Kind::Header => "header",
             Kind::Tls => "tls",
             Kind::Kubeconfig => "kubeconfig",
+            Kind::Signed => "signed",
             Kind::Ssh => "ssh",
         }
     }
@@ -176,6 +192,9 @@ pub struct Credential {
     /// When what it applies stops working (an exec plugin's token, its
     /// `expirationTimestamp`): the host opens it again then.
     pub expires: Option<std::time::SystemTime>,
+    /// The material each request is signed with by the provider's signer
+    /// as the host sends it (`signed`, its recipe `Recipe::Signed`).
+    pub signed: Option<crate::plugin::signer::Material>,
 }
 
 impl Credential {
@@ -241,6 +260,10 @@ impl Credential {
                 let what = format!("the credential {name}");
                 kubeconfig::Kubeconfig::parse(&what, value.text(&name)?, dir)?.apply(self)?
             }
+            Kind::Signed => bail!(
+                "the credential {name} is signed: its provider's signer makes it, which the \
+                 host runs"
+            ),
             Kind::Ssh => bail!(
                 "the credential {name} is an SSH key: the ssh provider uses it (`use ssh {{ key \
                  = .. }}`), never an HTTP call"
@@ -339,6 +362,23 @@ pub fn held(name: &str, to: &str) -> Option<Result<Credential>> {
         (h.kind, h.parts.clone())
     };
     Some(of_settings(kind, name, &parts))
+}
+
+/// The credential `name` held for the provider `to` as one setting, its
+/// value as given (a `signed` credential's, which stands for the file its
+/// provider's signer names); `None` when it is not one held for it.
+pub fn held_value(name: &str, to: &str) -> Option<Result<Secret>> {
+    let map = held_map();
+    let h = map.get(name).filter(|h| h.to == to)?;
+    let mut values = h.parts.values();
+    Some(match (values.next(), values.next()) {
+        (Some(v), None) => Ok(v.clone()),
+        _ => Err(anyhow!(
+            "a {} credential is one setting, not {}",
+            h.kind.as_str(),
+            h.parts.keys().cloned().collect::<Vec<_>>().join(", ")
+        )),
+    })
 }
 
 /// Where the operator's credential files are: `DFORM_CREDENTIALS`, else

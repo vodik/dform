@@ -453,20 +453,22 @@ impl Link {
     /// another than the one named, is refused, naming it and its build.
     /// A setting it declares a credential is held by the host
     /// ([`Link::hold`]) and sent as the name it is held under, never its
-    /// value.
+    /// value; the operator's credentials it may open are named.
     pub fn configure(
         &mut self,
         session: Session,
         config: pb::Value,
     ) -> Result<pb::ConfigureResponse> {
-        let (config, held) = match self.credentials.is_empty() {
-            true => (config, Vec::new()),
-            false => {
-                let mut doc = wire::from_doc(&config)?;
-                let held = self.hold(&mut doc)?;
-                (wire::doc(&doc), held)
-            }
-        };
+        let granted = self.hosting.as_ref().map(|h| &h.grants.credentials);
+        let (config, held) =
+            match self.credentials.is_empty() && granted.is_none_or(|g| g.is_empty()) {
+                true => (config, Vec::new()),
+                false => {
+                    let mut doc = wire::from_doc(&config)?;
+                    let held = self.hold(&mut doc)?;
+                    (wire::doc(&doc), held)
+                }
+            };
         let r: pb::ConfigureResponse = self.call(
             session,
             pb::ConfigureRequest {
@@ -499,29 +501,19 @@ impl Link {
     /// The credentials the Configure document `config` gives: each setting
     /// this provider declares a credential, its settings of one kind held
     /// by the host as one credential for it (`credentials::hold`) and each
-    /// replaced by that credential's name. A Configure that gives no
-    /// settings and is not deferred (a provider the program does not
-    /// configure) names, in its `credentials`, the environment's of each
-    /// kind that has one (`{"kubeconfig": "kubeconfig:environment"}`),
-    /// which the host opens only where dform.toml grants it: nothing is
-    /// held for it.
+    /// replaced by that credential's name. A Configure that is not
+    /// deferred names, in its `credentials`, the operator's this provider
+    /// may open ([`Link::operators`]).
     fn hold(&self, config: &mut Json) -> Result<Vec<Holding>> {
         if config.get("deferred") == Some(&Json::Bool(true)) {
             return Ok(Vec::new());
         }
+        let configured = config.get("settings").is_some_and(Json::is_object);
+        let named = self.operators(configured);
+        if !named.is_empty() {
+            config["credentials"] = Json::Object(named);
+        }
         let Some(settings) = config.get_mut("settings").and_then(Json::as_object_mut) else {
-            let named: serde_json::Map<String, Json> = self
-                .credentials
-                .values()
-                .filter(|k| k.in_environment())
-                .map(|k| {
-                    let name = format!("{}:{}", k.as_str(), credentials::ENVIRONMENT);
-                    (k.as_str().to_string(), json!(name))
-                })
-                .collect();
-            if !named.is_empty() {
-                config["credentials"] = Json::Object(named);
-            }
             return Ok(Vec::new());
         };
         // The provider's name in dform.toml: what its host opens by.
@@ -555,6 +547,35 @@ impl Link {
             held.push(h);
         }
         Ok(held)
+    }
+
+    /// The operator's credentials a Configure names, by kind, which the
+    /// host opens only where dform.toml grants them, nothing held: the one
+    /// dform.toml grants this provider of each kind, when it grants one
+    /// (`{"signed": "signed:lab"}`; several of a kind name
+    /// none); and, for a provider the program does not configure
+    /// (`configured` false), the environment's of each kind it declares a
+    /// setting of that has one (`{"kubeconfig": "kubeconfig:environment"}`).
+    fn operators(&self, configured: bool) -> serde_json::Map<String, Json> {
+        let mut granted: BTreeMap<Kind, Vec<&str>> = BTreeMap::new();
+        for name in self.hosting.iter().flat_map(|h| &h.grants.credentials) {
+            if let Ok((kind, _)) = credentials::parse_name(name) {
+                granted.entry(kind).or_default().push(name);
+            }
+        }
+        let mut named: serde_json::Map<String, Json> = granted
+            .into_iter()
+            .filter_map(|(kind, names)| match names[..] {
+                [one] => Some((kind.as_str().to_string(), json!(one))),
+                _ => None,
+            })
+            .collect();
+        let environment = self.credentials.values().filter(|k| k.in_environment());
+        for k in environment.filter(|_| !configured) {
+            let name = format!("{}:{}", k.as_str(), credentials::ENVIRONMENT);
+            named.entry(k.as_str()).or_insert_with(|| json!(name));
+        }
+        named
     }
 
     /// `reply`, as the answer to a `method` call.
@@ -780,6 +801,42 @@ mod tests {
         l.configure(Session(1), wire::doc(&json!({"deferred": true})))
             .unwrap();
         assert_eq!(holder.0.lock().unwrap()[2], json!({"deferred": true}));
+    }
+
+    /// The operator's credential dform.toml grants a provider is named in
+    /// each Configure, by its kind, with the program's settings or
+    /// without, in place of the environment's: one of each kind, none of a
+    /// kind granted twice, nothing held.
+    #[test]
+    fn a_granted_credential_is_named_by_its_kind() {
+        let holder = std::sync::Arc::new(Holder::default());
+        struct Shared(std::sync::Arc<Holder>);
+        impl Handler for Shared {
+            fn handle(&self, s: Session, c: Call, p: Progress) -> Result<Reply, CallError> {
+                self.0.handle(s, c, p)
+            }
+        }
+        let q = Queue::new(Shared(holder.clone()), Order::Clock, false);
+        let mut l = Link::start("kube", Box::new(q)).unwrap();
+        let granted = ["signed:lab", "bearer:a", "bearer:b", "kubeconfig:prod"];
+        l.hosting = Some(super::super::host::Hosting {
+            host: "native",
+            manifest: None,
+            grants: super::super::host::Grants {
+                provider: "kube".into(),
+                credentials: granted.map(String::from).into(),
+                ..Default::default()
+            },
+        });
+        let named = json!({"kubeconfig": "kubeconfig:prod", "signed": "signed:lab"});
+        let config = json!({"settings": {"namespace": "shop"}});
+        l.configure(Session::NONE, wire::doc(&config)).unwrap();
+        l.configure(Session(1), wire::doc(&json!({}))).unwrap();
+        let sent = holder.0.lock().unwrap().clone();
+        assert_eq!(sent[0]["credentials"], named, "{sent:?}");
+        assert_eq!(sent[0]["settings"], json!({"namespace": "shop"}));
+        assert_eq!(sent[1]["credentials"], named, "{sent:?}");
+        assert!(credentials::held("signed:lab", "kube").is_none());
     }
 
     /// A provider whose Configure answers no session is refused, naming

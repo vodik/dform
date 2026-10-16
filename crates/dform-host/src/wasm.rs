@@ -38,6 +38,7 @@ use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Session, Tic
 use dform_core::plugin::host::{self as h, Calls, Grants, Hosting, Manifest};
 use dform_core::plugin::link::Link;
 use dform_core::plugin::pb;
+use dform_core::plugin::signer::Signer;
 use dform_core::plugin::timed;
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -54,6 +55,8 @@ use wasmtime::component::{
 use wasmtime::{AsContextMut, Config, Engine, Store, StoreContextMut};
 use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView};
+
+pub mod signer;
 
 mod bindings {
     wasmtime::component::bindgen!({
@@ -643,10 +646,16 @@ pub struct Wasm {
 
 impl Wasm {
     /// Load, admit (its imports against `grants`) and instantiate the
-    /// component at `path`.
+    /// component at `path`, with its signer when one is beside it
+    /// ([`signer::beside`]).
     pub fn start(path: &Path, grants: Grants, limiter: Arc<Limiter>) -> Result<(Wasm, Manifest)> {
         let program = path.display().to_string();
         let engine = engine()?;
+        let beside = signer::beside(path);
+        let signer: Option<Arc<dyn Signer + Send + Sync>> = match beside.exists() {
+            true => Some(Arc::new(signer::Component::load(&beside)?)),
+            false => None,
+        };
         let component =
             load(engine, path).with_context(|| format!("load the provider component {program}"))?;
         let manifest = manifest(engine, &component);
@@ -660,6 +669,7 @@ impl Wasm {
         let instance = Instance {
             program: program.clone(),
             started_in: tracing::Span::current(),
+            signer,
             grants,
             limiter,
             dead: dead.clone(),
@@ -692,6 +702,9 @@ struct Instance {
     /// The provider's start: its instantiation's spans are under it, its
     /// calls' under theirs.
     started_in: tracing::Span,
+    /// Its signer, which its host's `signed` credentials are made and
+    /// applied with.
+    signer: Option<Arc<dyn Signer + Send + Sync>>,
     grants: Grants,
     /// What its host paces its requests by ([`crate::ratelimit::Paced`]).
     limiter: Arc<Limiter>,
@@ -737,7 +750,11 @@ impl Instance {
                 .allow_udp(false)
                 .allow_ip_name_lookup(false);
         }
-        let host = Arc::new(Services::paced(self.grants.clone(), self.limiter.clone()));
+        let mut host = Services::paced(self.grants.clone(), self.limiter.clone());
+        if let Some(signer) = &self.signer {
+            host = host.with_signer(signer.clone());
+        }
+        let host = Arc::new(host);
         Ok(State {
             wasi: wasi.build(),
             http: WasiHttpCtx::new(),
