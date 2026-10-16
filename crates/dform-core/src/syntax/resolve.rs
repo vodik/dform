@@ -666,8 +666,12 @@ struct Rc {
     values: BTreeMap<String, String>,
     /// Reads already hoisted, by what they read.
     reads: BTreeMap<String, Term>,
-    /// Lowered names an enclosing `for`/`when` binds.
+    /// Lowered names an enclosing `for`/`when` binds: what the statement
+    /// around binds, which building a clause leaves as it found it.
     outer: BTreeSet<String>,
+    /// Lowered names the clause binds where none of its literals shows
+    /// it: a `has` walk's value, a negation helper's own variables.
+    inner: BTreeSet<String>,
     /// Source names written in a binding position somewhere: an argument
     /// of a relation, the left of `=` or `in`, a `some` binder, a pattern.
     binders: BTreeSet<String>,
@@ -692,6 +696,14 @@ struct Rc {
     /// scope a read holding it names: those no read of the literal holds
     /// are goals before its own.
     tests: Vec<(Option<ExprId>, GoalId)>,
+}
+
+impl Rc {
+    /// The lowered names bound outside the literals written so far: what
+    /// the statement around binds and what the clause binds unseen.
+    fn bound_around(&self) -> impl Iterator<Item = &String> {
+        self.outer.iter().chain(&self.inner)
+    }
 }
 
 /// A term and its node.
@@ -4637,7 +4649,7 @@ impl<'u> Lowerer<'u> {
             let text = header.text();
             let bound = bound_vars(&body);
             match rc.vars.get(text) {
-                Some(v) if bound.contains(v) || rc.outer.contains(v) => {
+                Some(v) if bound.contains(v) || rc.bound_around().any(|b| b == v) => {
                     let d = Diagnostic::error(
                         self.span_of(header.text_range()),
                         format!(
@@ -5812,9 +5824,10 @@ impl<'u> Lowerer<'u> {
             .map(|t| Lit::Neq((*t).clone(), (*t).clone()))
             .collect();
         bound.extend(bound_vars(&holder));
-        bound.extend(rc.outer.iter().cloned());
+        bound.extend(rc.bound_around().cloned());
         for (src, low) in &rc.vars {
             if rc.outer.contains(low)
+                || rc.inner.contains(low)
                 || (bound.contains(low) && rc.binders.contains(src))
                 || unbound.contains(low)
             {
@@ -6142,7 +6155,7 @@ impl<'u> Lowerer<'u> {
                 let v = fresh(rc, HAS_VAR);
                 out.push(Lit::Eq(var(&v), t));
                 let var = self.building(rc, span, |b| b.var(&v));
-                rc.outer.insert(v);
+                rc.inner.insert(v);
                 Has::Walk { var, value }
             }
             None => {
@@ -6337,7 +6350,7 @@ impl<'u> Lowerer<'u> {
         }
         let outer_bound = {
             let mut b = bound_vars(out);
-            b.extend(rc.outer.iter().cloned());
+            b.extend(rc.bound_around().cloned());
             b
         };
         let mut used = BTreeSet::new();
@@ -6382,7 +6395,7 @@ impl<'u> Lowerer<'u> {
         }
         // The helper's own variables are bound in the helper.
         for v in used.difference(&outer_bound) {
-            rc.outer.insert(v.clone());
+            rc.inner.insert(v.clone());
         }
         out.push(Lit::Not(head));
         Ok(())

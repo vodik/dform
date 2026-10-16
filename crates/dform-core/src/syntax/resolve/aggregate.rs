@@ -168,7 +168,7 @@ impl Lowerer<'_> {
             .map(|(_, l)| l.clone())
             .collect();
         let mut bound = bound_vars(&others);
-        bound.extend(rc.outer.iter().cloned());
+        bound.extend(rc.bound_around().cloned());
         let mut out = BTreeSet::new();
         for (_, v, call) in &found {
             let mut used = BTreeSet::new();
