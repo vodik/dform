@@ -456,7 +456,11 @@ always safe to redirect: a string's bytes exactly (no quotes, no
 folding, no newline added), another scalar as the program spells it, a
 relation's rows tab-separated. `--json` prints either as JSON. A secret
 output lists as `secret`; state keeps no bytes of it, so `output TARGET
-NAME` of one is an error.
+NAME` of one is an error. `output TARGET NAME --reveal` prints it: the
+program is evaluated with the deployment's master and its providers, and
+each secret in the output revealed (a provider holds one, an OVH S3
+credential's secret: it asks its API). It is the only way dform prints a
+secret, and the audit log records each reveal.
 
 ```bash
 dform output app env=prod                 # url  "https://..", then each relation's table
@@ -1157,6 +1161,7 @@ type_retry(db.postgres, 5)                                  # optional: Read att
 type_replace(k8s.deployment, "create_first")                # optional: create_first, destroy_first, either (default)
 type_remote_name(k8s.deployment, "metadata.name")           # optional: a name the provider generates for a create-first replacement
 type_lookup(ovh.instance, ["name", "region"])               # optional: what a Create that timed out is found by (the provider's)
+type_created_once(ovh.s3_credential, "secret")              # optional: a computed value the create answers and no Read after it
 type_lifecycle(tailscale.device, "retain")                  # optional: what removal from the program means (destroy default)
 type_doc(net.vpc, "cidr", "The network's IPv4 range.")      # optional: a path's description ("" the type's)
 extern_decl("ovh.image", "+region, -name, -id, -distribution")  # a data source, no `extern` line needed
@@ -1169,6 +1174,17 @@ compares the program's value with it: the same is no change, another a
 change (a replace when the path is `force_new`); with none kept (an
 object made elsewhere) no change. An `extern_decl` declares a data
 source to the compiler: a program reads it with no `extern` line.
+
+`type_created_once` is the mirror of `write_only`: a computed value the
+API answers to the create and to no Read after it (an S3 credential's
+secret, a cloud access key's, a token request's token). Its provider
+answers it at every Read as the create left it, a secret one as its
+label (Read is told what state last kept), so it is never empty and
+never a change; it changes only with its object, by a replacement the
+plan names, and a key is rotated by making another object. Who has the
+bytes after the create is the provider's: OVH's API answers an S3
+secret again by a call of its own, which Reveal makes; where nothing
+does (a Tailscale auth key), only the run that made it can reveal it.
 
 Built-in mock schemas: `fake` (the demo's), `gke` (gke_platform.df), `k8s` (fifteen
 Kubernetes kinds; try `cargo run -- -C tests/fixtures/k8s plan`)

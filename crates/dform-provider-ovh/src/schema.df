@@ -134,16 +134,18 @@ type_lookup("ovh.cloud_project_user", ["description"])
 # An S3 credential of a user, its remote id `USER/ACCESS`: the API makes
 # its access key, and nothing of it changes in place. Its secret is held:
 # the API answers it to the create and to a call of its own (`POST
-# …/secret`), never to a read, and Reveal reads it there. Nothing of the
-# program's names a credential, so it has no `type_lookup`: a Create sent
-# again is answered by what this provider made under its key. Two
-# credentials of a user live side by side, so a replacement is made
-# first, and what reads the old one moves before it goes.
+# …/secret`), never to a read (`type_created_once`), and Reveal reads it
+# there. Nothing of the program's names a credential, so it has no
+# `type_lookup`: a Create sent again is answered by what this provider
+# made under its key. Two credentials of a user live side by side, so a
+# replacement is made first, and what reads the old one moves before it
+# goes.
 type_provider("ovh.s3_credential", "ovh")
 type_attr("ovh.s3_credential", "id", "string", ["computed", "id"])
 type_attr("ovh.s3_credential", "user", "ref(ovh.cloud_project_user)", ["required", "force_new"])
 type_attr("ovh.s3_credential", "access", "string", ["computed"])
 type_attr("ovh.s3_credential", "secret", "string", ["computed", "sensitive"])
+type_created_once("ovh.s3_credential", "secret")
 type_replace("ovh.s3_credential", "create_first")
 
 # A volume is found by its name in its region; it grows in place (a smaller

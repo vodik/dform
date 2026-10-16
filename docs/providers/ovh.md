@@ -307,8 +307,9 @@ API makes, and `secret`. A user has as many as the program writes, each
 revealed by its own name; its remote id is `USER/ACCESS`. The secret is
 sensitive and held by the provider: the API answers it to the create and
 to a call of its own (`POST …/s3Credentials/{access}/secret`), never to a
-read, so Read and Apply answer only its label, the same every time (no
-change, never empty), and a provider configured with it (`secret_key =
+read (the schema's `type_created_once`, docs/reference.md), so Read and
+Apply answer only its label, the same every time (no change, never
+empty), and a provider configured with it (`secret_key =
 backup_key.secret` in its `use` block, or another stack's output of it)
 or `dform output TARGET NAME --reveal` of an output of it gets the bytes
 by the protocol's Reveal, which asks the API; dform never keeps them.

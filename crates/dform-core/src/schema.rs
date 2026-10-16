@@ -45,6 +45,10 @@
 //!                                     % `lifecycle(r, Word)` for each r of
 //!                                     % T, unless the program gives r
 //!                                     % another removal word
+//!   type_created_once(T, Path).       % optional: Path, computed, is answered
+//!                                     % by the create and by no Read after
+//!                                     % it (an S3 secret, an auth key):
+//!                                     % [`TYPE_CREATED_ONCE`]
 //!   type_refine(T, Path, C).          % optional: a checkable refinement of
 //!                                     % Path (`crate::refine`): range(Lo, Hi),
 //!                                     % prefix_len_le(N), prefix_len_ge(N),
@@ -398,6 +402,18 @@ fn extern_decl(pred: &str, sig: &str) -> Result<crate::ast::ExternFn> {
 /// another of [`crate::zset::REMOVAL`]'s words replaces
 /// (`zset::lifecycle_prelude`).
 pub const TYPE_LIFECYCLE: &str = "type_lifecycle";
+
+/// `type_created_once(T, Path)`: a computed value the API answers to the
+/// create and to no Read after it (an OVH S3 credential's secret, an AWS
+/// secret access key, a Kubernetes token request's token). Its provider
+/// answers it at every Read as the create left it: a sensitive one as its
+/// label, from the prior Read is told, so it is never empty and never a
+/// change. It changes only with its object, by a replacement the plan
+/// names (rotation is a new object). Who has the bytes after the create
+/// is the provider's: the API, by a call of its own (OVH's S3 secret,
+/// revealed there), or nobody (an auth key, revealed only in the run
+/// that made it).
+pub const TYPE_CREATED_ONCE: &str = "type_created_once";
 
 /// The words a type's lifecycle may be: removal destroys the object (the
 /// default), or forgets it and leaves it in the world.
@@ -957,6 +973,14 @@ impl Schema {
                 span: Default::default(),
             });
         }
+        for f in s.facts.iter().filter(|f| f.pred == TYPE_CREATED_ONCE) {
+            let [Term::Val(Value::Str(t)), Term::Val(Value::Str(p))] = f.args.as_slice() else {
+                bail!("{TYPE_CREATED_ONCE}: a type and a path");
+            };
+            if !s.computed.contains_key(&(t.clone(), p.clone())) {
+                bail!("{TYPE_CREATED_ONCE}({t}, {p}): not a computed attribute of {t}");
+            }
+        }
         for (t, p) in s.list_keys.keys() {
             if let Some(a) = s.attr(t, p)
                 && a.kind() != "list"
@@ -1161,7 +1185,7 @@ impl Schema {
 }
 
 /// Schema predicates with a row per type (the type in the first column).
-pub const PER_TYPE: [&str; 11] = [
+pub const PER_TYPE: [&str; 12] = [
     "type_attr",
     "type_doc",
     "type_list_key",
@@ -1172,6 +1196,7 @@ pub const PER_TYPE: [&str; 11] = [
     TYPE_LIFECYCLE,
     "type_mint",
     "type_lookup",
+    TYPE_CREATED_ONCE,
     crate::refine::TYPE_REFINE,
 ];
 
@@ -1452,6 +1477,32 @@ mod tests {
             ),
             "{e:#}"
         );
+    }
+
+    /// A value answered by the create alone is a computed attribute of
+    /// its type.
+    #[test]
+    fn a_value_created_once_is_a_computed_attribute() {
+        let attrs = r#"
+            type_attr("t.a", "secret", "string", ["computed", "sensitive"])
+            type_attr("t.a", "name", "string", ["required"])
+        "#;
+        let ok = format!("{attrs}\ntype_created_once(\"t.a\", \"secret\")");
+        assert!(Schema::parse(&ok, "s").is_ok());
+        for (path, why) in [
+            (
+                "name",
+                "type_created_once(t.a, name): not a computed attribute of t.a",
+            ),
+            (
+                "nmae",
+                "type_created_once(t.a, nmae): not a computed attribute of t.a",
+            ),
+        ] {
+            let bad = format!("{attrs}\ntype_created_once(\"t.a\", \"{path}\")");
+            let e = Schema::parse(&bad, "s").unwrap_err();
+            assert!(format!("{e:#}").contains(why), "{e:#}");
+        }
     }
 
     /// `name`, `metadata.name` and `bucket` name every type's objects; a
