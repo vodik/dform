@@ -93,6 +93,8 @@ pub fn request(r: h::SendRequest) -> (HttpRequest, Option<u64>, Option<u64>) {
             timeout: r.timeout_ms.map(|ms| Duration::from_millis(ms.into())),
             bucket: r.bucket,
             session: Session(r.session),
+            // In the call's metadata, not its message (`traced`).
+            call: None,
         },
         r.auth,
         r.via,

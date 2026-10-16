@@ -3,7 +3,8 @@
 //! fake OVH API that takes a while to answer each call, as the real one
 //! does from far away), applied once and then planned. A plan reads the
 //! deployment's objects over one connection and writes none; its
-//! provider calls go out together, not one after another.
+//! provider calls go out together, not one after another, their
+//! requests paced by the host.
 
 use crate::common;
 use common::{Run, Scratch};
@@ -139,8 +140,10 @@ fn a_plan_reads_over_one_connection_writes_nothing_and_calls_its_provider_at_onc
     let writes: Vec<&String> = c.s3.iter().filter(|r| !r.starts_with("GET ")).collect();
     assert!(writes.is_empty(), "a plan wrote {writes:?}");
     assert_eq!(c.s3_connections, 1, "{:?}", c.s3);
-    // The five objects' reads go out together.
-    assert!(server.most_at_once() >= 5, "{:?}", c.ovh);
+    // The five objects' reads go out together, their requests as the
+    // host's window lets them (two at first contact,
+    // `dform_host::ratelimit`): one after another would be one.
+    assert!(server.most_at_once() >= 2, "{:?}", c.ovh);
     // Every line of the log is there: each phase and call as it ends.
     for phase in [
         "kind=\"s3.get\"",

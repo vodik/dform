@@ -3,12 +3,14 @@
 //! serves `proto/dform/v1/provider.proto` on TCP or a unix socket
 //! (`transport`); `client` implements dform-core's `Provider` over it, and
 //! `server` serves a `Handler` (the mock) as such an executable. `host`
-//! is the host's types as the additive `Host` service's messages (R-13b).
+//! is the host's types as the additive `Host` service's messages (R-13b),
+//! and `traced` a call's trace number in either's metadata.
 
 pub mod client;
 pub mod host;
 pub mod server;
 pub mod spawn;
+pub mod traced;
 pub mod transport;
 
 /// The protocol's messages (`dform-wire`) and its service.

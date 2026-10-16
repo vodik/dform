@@ -338,7 +338,7 @@ impl Sessions {
         progress: Progress,
     ) -> Result<Reply, CallError> {
         let session = self.of(&call);
-        let _in = In::enter(session);
+        let _in = In::session(session);
         let mut reply = handler.handle(session, call, progress)?;
         if let Reply::Configure(r) = &mut reply {
             r.session = session.0;
@@ -347,24 +347,68 @@ impl Sessions {
     }
 }
 
+/// The call a thread is in: the session it is made in, and its number
+/// while dform traces it (`timed::call_span`), for the host calls made
+/// for it. dform's side is in it while it sends the call (the transport
+/// carries the number to the provider); a provider's, while it answers
+/// one ([`Sessions::serve`], the transport's adapter). A thread the
+/// handler starts for the call takes it along ([`Within::here`] on the
+/// handler's thread, [`Within::enter`] on its own): its requests are the
+/// call's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Within {
+    pub session: Session,
+    pub call: Option<u64>,
+}
+
 thread_local! {
-    /// The session of the call this thread is answering.
-    static CURRENT: Cell<Session> = const { Cell::new(Session::NONE) };
+    static CURRENT: Cell<Within> = const {
+        Cell::new(Within {
+            session: Session::NONE,
+            call: None,
+        })
+    };
 }
 
 /// The session of the call this thread is answering ([`Sessions::serve`]),
 /// for the host calls it makes: none outside a call, and on a thread of
-/// the provider's own.
+/// the provider's own that was not given its call ([`Within`]).
 pub fn current() -> Session {
-    CURRENT.with(|c| c.get())
+    CURRENT.with(|c| c.get().session)
 }
 
-/// This thread answering a call of a session, until dropped.
-struct In(Session);
+impl Within {
+    /// The call this thread is in.
+    pub fn here() -> Within {
+        CURRENT.with(|c| c.get())
+    }
+
+    /// This thread in the call, until the guard is dropped.
+    pub fn enter(self) -> In {
+        In(CURRENT.with(|c| c.replace(self)))
+    }
+
+    /// This thread in the call numbered `call` (none: not traced), its
+    /// session as it is, until the guard is dropped.
+    pub fn call(call: Option<u64>) -> In {
+        Within {
+            call,
+            ..Within::here()
+        }
+        .enter()
+    }
+}
+
+/// A thread in a call, until dropped: then in the one it was in before.
+pub struct In(Within);
 
 impl In {
-    fn enter(session: Session) -> In {
-        In(CURRENT.with(|c| c.replace(session)))
+    fn session(session: Session) -> In {
+        Within {
+            session,
+            ..Within::here()
+        }
+        .enter()
     }
 }
 

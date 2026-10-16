@@ -5,7 +5,10 @@
 users and their S3 credentials, S3 containers) and the records of DNS zones OVH
 hosts, over the OVH API (`/cloud/project/{serviceName}/...`,
 `/domain/zone/{zone}/record`). It is a native provider: dform starts it
-and speaks the plugin protocol to it.
+and speaks the plugin protocol to it. It signs each request with the
+account's keys itself and sends it through the host's HTTP, so dform
+holds its connection to the API, paces its requests with its other calls'
+and traces each under the call it is made for.
 
 ## Configure
 

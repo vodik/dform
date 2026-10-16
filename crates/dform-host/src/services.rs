@@ -8,6 +8,8 @@ use dform_core::plugin::host::{
     Calls, Endpoint, Error, Failure, GitFile, Grants, Handle, HttpRequest, HttpResponse, Level,
     Opened, Run, Target,
 };
+use dform_core::plugin::timed;
+use dform_core::timing::location;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -79,6 +81,81 @@ impl Services {
         // Each use is one insert or lookup: a panic leaves the maps whole.
         self.opened.lock().unwrap_or_else(|e| e.into_inner())
     }
+
+    /// The credential and the tunnel's end the handles `auth` and `via`
+    /// name.
+    fn held(
+        &self,
+        auth: Option<Handle>,
+        via: Option<Handle>,
+    ) -> Result<(Option<Arc<Credential>>, Option<SocketAddr>), Error> {
+        let o = self.opened();
+        let cred = match auth {
+            None => None,
+            Some(h) => Some(
+                o.credentials
+                    .get(&h)
+                    .cloned()
+                    .ok_or_else(|| Error::fatal(format!("no credential {h} is open")))?,
+            ),
+        };
+        let via = match via {
+            None => None,
+            Some(h) => Some(
+                o.tunnels
+                    .get(&h)
+                    .map(|(_, a)| *a)
+                    .ok_or_else(|| Error::fatal(format!("no tunnel {h} is open")))?,
+            ),
+        };
+        Ok((cred, via))
+    }
+
+    /// `req`, once its bucket's window admits it, sent with `cred`
+    /// through `via`: an `io.call` span (`http`), the child of the
+    /// provider call it is sent for while that call is traced, else of
+    /// the span the host's thread is in. Its wait for the window is a
+    /// `ratelimit.wait` span under it.
+    // `parent` before `target`: tracing-attributes 0.1 takes a `parent`
+    // after it for a second one.
+    #[tracing::instrument(
+        parent = &parent(req.call),
+        target = "dform",
+        level = "debug",
+        name = "io.call",
+        skip_all,
+        fields(
+            otel.name = %format_args!("{} {} {}", self.grants.provider, req.method, location(&req.url)),
+            otel.kind = "client",
+            kind = "http",
+            provider = self.grants.provider.as_str(),
+            addr = %location(&req.url),
+            bucket = req.bucket.as_deref(),
+            status = tracing::field::Empty,
+        )
+    )]
+    fn request(
+        &self,
+        req: HttpRequest,
+        cred: Option<&Credential>,
+        via: Option<SocketAddr>,
+    ) -> Result<HttpResponse, Error> {
+        let admitted = self.limiter.acquire(req.session, req.bucket.as_deref());
+        let x = http::exchange(req, cred, via);
+        admitted.answered(&x);
+        if let Ok(r) = &x.answer {
+            tracing::Span::current().record("status", r.status);
+        }
+        x.answer
+    }
+}
+
+/// The span a request sent for the call numbered `call` is under: that
+/// call's while it is in flight, else the current one. Held while the
+/// request's span is made, so the call's cannot end meanwhile.
+fn parent(call: Option<u64>) -> tracing::Span {
+    call.and_then(timed::call_span)
+        .unwrap_or_else(tracing::Span::current)
 }
 
 impl Calls for Services {
@@ -103,32 +180,8 @@ impl Calls for Services {
         auth: Option<Handle>,
         via: Option<Handle>,
     ) -> Result<HttpResponse, Error> {
-        let (cred, via) = {
-            let o = self.opened();
-            let cred = match auth {
-                None => None,
-                Some(h) => Some(
-                    o.credentials
-                        .get(&h)
-                        .cloned()
-                        .ok_or_else(|| Error::fatal(format!("no credential {h} is open")))?,
-                ),
-            };
-            let via = match via {
-                None => None,
-                Some(h) => Some(
-                    o.tunnels
-                        .get(&h)
-                        .map(|(_, a)| *a)
-                        .ok_or_else(|| Error::fatal(format!("no tunnel {h} is open")))?,
-                ),
-            };
-            (cred, via)
-        };
-        let admitted = self.limiter.acquire(req.session, req.bucket.as_deref());
-        let x = http::exchange(req, cred.as_deref(), via);
-        admitted.answered(&x);
-        x.answer
+        let (cred, via) = self.held(auth, via)?;
+        self.request(req, cred.as_deref(), via)
     }
 
     fn io_read(&self, location: &str) -> Result<Vec<u8>, Failure> {

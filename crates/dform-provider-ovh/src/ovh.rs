@@ -1234,15 +1234,10 @@ fn resolve_listed(client: &Client, given: &str) -> Result<String> {
     }
     // Each project's description, asked at once: an account with several
     // waits one round trip, not one per project.
-    let projects: Vec<api::Result<Json>> = std::thread::scope(|scope| {
-        let asks: Vec<_> = ids
-            .iter()
-            .map(|id| scope.spawn(move || client.get(&format!("/cloud/project/{}", escape(id)))))
-            .collect();
-        asks.into_iter()
-            .map(|h| h.join().expect("a project's GET does not panic"))
-            .collect()
-    });
+    let projects: Vec<api::Result<Json>> = dform_sdk::at_once(
+        ids.iter()
+            .map(|id| move || client.get(&format!("/cloud/project/{}", escape(id)))),
+    );
     let mut seen = Vec::new();
     for (id, p) in ids.iter().zip(projects) {
         let p = p?;

@@ -24,7 +24,7 @@
 pub use dform_core::files::Document;
 pub use dform_core::plugin::backend::{CallError, Handler, health};
 pub use dform_core::plugin::host::{
-    Class, Endpoint, Error, Failure, GitFile, HttpResponse as Response, Level, Run, Target,
+    Calls, Class, Endpoint, Error, Failure, GitFile, HttpResponse as Response, Level, Run, Target,
 };
 pub use dform_core::plugin::pb;
 pub use dform_sdk_derive::Resource;
@@ -38,7 +38,7 @@ pub mod native;
 #[cfg(all(target_family = "wasm", feature = "component"))]
 pub mod component;
 
-use dform_core::plugin::host::{Calls, Handle, HttpRequest};
+use dform_core::plugin::host::{Handle, HttpRequest};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -49,6 +49,16 @@ static CALLS: OnceLock<Box<dyn Calls>> = OnceLock::new();
 /// once: nothing here is locked across a call.
 fn calls() -> &'static dyn Calls {
     CALLS.get_or_init(connect).as_ref()
+}
+
+/// This process's host is `calls`, in place of the one `DFORM_HOST`
+/// names: a host in the same process, for a test that runs a provider's
+/// code against a fake API through dform's own host
+/// (`dform_host::services::Services`: its pool, its pacing). Before the
+/// process's first call to the host; `false` when its host is set
+/// already (an earlier `set_host`, or a call that connected it).
+pub fn set_host(calls: Box<dyn Calls>) -> bool {
+    CALLS.set(calls).is_ok()
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -265,16 +275,49 @@ pub struct Http(());
 
 impl Http {
     /// Send `req`; a status the server answered is a response, not an
-    /// error. It names the session of the call it is sent for, so dform
-    /// paces each session's buckets apart (a thread of the provider's own
-    /// names none).
+    /// error. It names the call it is sent for (`backend::Within`): its
+    /// session, so dform paces each session's buckets apart, and its trace
+    /// number, so the request's span is the call's child (a thread of the
+    /// provider's own names neither, unless it took the call along).
     pub fn request(&self, req: Request) -> Result<Response, Error> {
+        let within = dform_core::plugin::backend::Within::here();
         let http = HttpRequest {
-            session: dform_core::plugin::backend::current(),
+            session: within.session,
+            call: within.call,
             ..req.req
         };
         calls().send(http, req.auth, req.via)
     }
+}
+
+/// Each of `asks` at once, on a thread of its own in the call this thread
+/// answers, so its requests are the call's (its session's windows, its
+/// span: `backend::Within`); their answers in their order. A thread a
+/// handler starts by itself is in no call.
+pub fn at_once<T, F>(asks: impl IntoIterator<Item = F>) -> Vec<T>
+where
+    F: FnOnce() -> T + Send,
+    T: Send,
+{
+    let within = dform_core::plugin::backend::Within::here();
+    std::thread::scope(|scope| {
+        let threads: Vec<_> = asks
+            .into_iter()
+            .map(|ask| {
+                scope.spawn(move || {
+                    let _in = within.enter();
+                    ask()
+                })
+            })
+            .collect();
+        threads
+            .into_iter()
+            .map(|t| match t.join() {
+                Ok(answer) => answer,
+                Err(panic) => std::panic::resume_unwind(panic),
+            })
+            .collect()
+    })
 }
 
 /// `dform:host/io` (R-153, R-155): a location read by the host, whatever

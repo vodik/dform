@@ -24,13 +24,13 @@
 //! out answered `MaybeApplied` already, which is what a provider stopped
 //! in the middle of it may have left; its late answer was dropped anyway.
 
-use super::backend::{Call, CallError, Provider, Reply, Session, Stop, Ticket};
+use super::backend::{Call, CallError, Provider, Reply, Session, Stop, Ticket, Within};
 use super::pb;
 use super::policy::{describe, show};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -59,7 +59,8 @@ pub fn timed_out(e: &CallError) -> bool {
 }
 
 enum Cmd {
-    Submit(Ticket, Box<Call>),
+    /// A call, and its number while it is traced.
+    Submit(Ticket, Box<Call>, Option<u64>),
     /// Answer one call.
     Next,
     IsDead(Sender<bool>),
@@ -72,6 +73,47 @@ struct Live {
     due: Instant,
     what: String,
     span: tracing::Span,
+    traced: Option<Traced>,
+}
+
+/// The `provider.call` spans of the calls in flight, by number: what the
+/// provider names a request it sends the host with (the call it is
+/// answering, `backend::Within`), so the host's span of the request is
+/// the call's child. A number, not the span's id: a request that comes
+/// after its call ended (on a thread of the provider's own) finds none.
+static TRACED: Mutex<BTreeMap<u64, tracing::Span>> = Mutex::new(BTreeMap::new());
+
+/// The `provider.call` span of the call numbered `number`, while it is in
+/// flight.
+pub fn call_span(number: u64) -> Option<tracing::Span> {
+    traced().get(&number).cloned()
+}
+
+fn traced() -> std::sync::MutexGuard<'static, BTreeMap<u64, tracing::Span>> {
+    // An insert, a removal or a lookup: a panic leaves the map whole.
+    TRACED.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A call's span, found by its number until dropped.
+struct Traced(u64);
+
+impl Traced {
+    /// `span`'s number, when it is traced (a subscriber takes it).
+    fn new(span: &tracing::Span) -> Option<Traced> {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        if span.is_disabled() {
+            return None;
+        }
+        let number = NEXT.fetch_add(1, Ordering::Relaxed);
+        traced().insert(number, span.clone());
+        Some(Traced(number))
+    }
+}
+
+impl Drop for Traced {
+    fn drop(&mut self) {
+        traced().remove(&self.0);
+    }
 }
 
 impl Live {
@@ -82,7 +124,18 @@ impl Live {
         if call.session() != Session::NONE {
             span.record("session", call.session().0);
         }
-        Live { due, what, span }
+        let traced = Traced::new(&span);
+        Live {
+            due,
+            what,
+            span,
+            traced,
+        }
+    }
+
+    /// Its number while it is traced.
+    fn number(&self) -> Option<u64> {
+        self.traced.as_ref().map(|t| t.0)
     }
 
     /// The span of a call of `kind` to `provider`, `what` its description
@@ -191,7 +244,8 @@ impl Timed {
     /// they would.
     pub fn flush(&mut self) {
         for (t, call) in std::mem::take(&mut self.batch) {
-            self.send(Cmd::Submit(t, Box::new(call)));
+            let number = self.live.get(&t).and_then(Live::number);
+            self.send(Cmd::Submit(t, Box::new(call), number));
         }
     }
 
@@ -306,7 +360,9 @@ fn serve(
     let mut ours: HashMap<Ticket, Ticket> = HashMap::new();
     for c in rx {
         match c {
-            Cmd::Submit(t, call) => {
+            Cmd::Submit(t, call, number) => {
+                // The transport sends the call's number with it.
+                let _in = Within::call(number);
                 ours.insert(backend.submit(*call), t);
             }
             Cmd::Next if ours.is_empty() => {}

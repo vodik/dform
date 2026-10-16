@@ -131,6 +131,10 @@ pub struct HttpRequest {
     /// The session of the call it is sent for: its buckets are those of
     /// the account it reported, else its own. [`Session::NONE`]: a request outside a call.
     pub session: super::backend::Session,
+    /// The call it is sent for, by its trace number
+    /// (`super::timed::call_span`): the host's span of the request is
+    /// that call's child. None: the call is not traced, or there is none.
+    pub call: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

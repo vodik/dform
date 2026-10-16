@@ -10,7 +10,7 @@
 //! result. The adapter numbers the handler's sessions ([`Sessions`]).
 
 use crate::pb;
-use dform_core::plugin::backend::{self, Call, CallError, Handler, Reply, Sessions};
+use dform_core::plugin::backend::{self, Call, CallError, Handler, Reply, Sessions, Within};
 use std::sync::Arc;
 use tonic::codegen::tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::{Request, Response, Status};
@@ -93,18 +93,24 @@ impl<H: Handler + Send + Sync + 'static> Adapter<H> {
         }
     }
 
-    /// `call` on the blocking pool: the transport's runtime is a single
-    /// thread, and a handler blocks (on its own I/O, on the host), so the
-    /// calls dform sends at once run at once.
+    /// `req`'s call on the blocking pool: the transport's runtime is a
+    /// single thread, and a handler blocks (on its own I/O, on the host),
+    /// so the calls dform sends at once run at once. The thread is in the
+    /// call its metadata numbers while it answers (`traced`).
     #[allow(clippy::result_large_err)] // tonic's own error type
-    async fn call<R>(&self, call: impl Into<Call>) -> Result<Response<R>, Status>
+    async fn call<T, R>(&self, req: Request<T>) -> Result<Response<R>, Status>
     where
+        T: Into<Call>,
         R: TryFrom<Reply, Error = Reply> + Send + 'static,
     {
-        let call = call.into();
+        let number = crate::traced::call(&req);
+        let call = req.into_inner().into();
         let method = call.method();
         let (handler, sessions) = (self.handler.clone(), self.sessions.clone());
-        let answered = move || answer(method, sessions.serve(&*handler, call, &backend::silent));
+        let answered = move || {
+            let _in = Within::call(number);
+            answer(method, sessions.serve(&*handler, call, &backend::silent))
+        };
         tokio::task::spawn_blocking(answered)
             .await
             .map_err(|e| Status::internal(format!("the {method} call failed: {e}")))?
@@ -117,15 +123,15 @@ type Reply_<T> = Result<Response<T>, Status>;
 #[tonic::async_trait]
 impl<H: Handler + Send + Sync + 'static> pb::provider_server::Provider for Adapter<H> {
     async fn handshake(&self, req: Request<pb::HandshakeRequest>) -> Reply_<pb::HandshakeResponse> {
-        self.call(req.into_inner()).await
+        self.call(req).await
     }
 
     async fn configure(&self, req: Request<pb::ConfigureRequest>) -> Reply_<pb::ConfigureResponse> {
-        self.call(req.into_inner()).await
+        self.call(req).await
     }
 
     async fn schema(&self, req: Request<pb::SchemaRequest>) -> Reply_<pb::SchemaResponse> {
-        self.call(req.into_inner()).await
+        self.call(req).await
     }
 
     type QueryStream = tonic::codegen::tokio_stream::Iter<
@@ -133,39 +139,43 @@ impl<H: Handler + Send + Sync + 'static> pb::provider_server::Provider for Adapt
     >;
 
     async fn query(&self, req: Request<pb::QueryRequest>) -> Reply_<Self::QueryStream> {
-        let rows: Response<Vec<pb::Row>> = self.call(req.into_inner()).await?;
+        let rows: Response<Vec<pb::Row>> = self.call(req).await?;
         let rows: Vec<_> = rows.into_inner().into_iter().map(Ok).collect();
         Ok(Response::new(tonic::codegen::tokio_stream::iter(rows)))
     }
 
     async fn read(&self, req: Request<pb::ReadRequest>) -> Reply_<pb::ReadResponse> {
-        self.call(req.into_inner()).await
+        self.call(req).await
     }
 
     async fn plan(&self, req: Request<pb::PlanRequest>) -> Reply_<pb::PlanResponse> {
-        self.call(req.into_inner()).await
+        self.call(req).await
     }
 
     type ApplyStream = ApplyStream;
 
     async fn apply(&self, req: Request<pb::ApplyRequest>) -> Reply_<Self::ApplyStream> {
         let (handler, sessions) = (self.handler.clone(), self.sessions.clone());
+        let number = crate::traced::call(&req);
         Ok(Response::new(apply_stream(
             req.into_inner(),
-            move |call, progress| sessions.serve(&*handler, call, progress),
+            move |call, progress| {
+                let _in = Within::call(number);
+                sessions.serve(&*handler, call, progress)
+            },
         )))
     }
 
     async fn import(&self, req: Request<pb::ImportRequest>) -> Reply_<pb::ImportResponse> {
-        self.call(req.into_inner()).await
+        self.call(req).await
     }
 
     async fn reveal(&self, req: Request<pb::RevealRequest>) -> Reply_<pb::RevealResponse> {
-        self.call(req.into_inner()).await
+        self.call(req).await
     }
 
     async fn health(&self, req: Request<pb::HealthRequest>) -> Reply_<pb::HealthResponse> {
-        self.call(req.into_inner()).await
+        self.call(req).await
     }
 }
 

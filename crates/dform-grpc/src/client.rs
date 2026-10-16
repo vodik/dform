@@ -283,28 +283,41 @@ impl Conn {
     }
 }
 
-/// One call over gRPC; a server-streamed Query collected, an Apply's
-/// events told to `event` as they come.
+/// One call over gRPC, naming its trace `number` (`traced`); a
+/// server-streamed Query collected, an Apply's events told to `event` as
+/// they come.
 #[allow(clippy::result_large_err)] // tonic's own error type
-async fn send(mut c: ProviderClient<Channel>, call: Call, event: impl Fn(pb::Event)) -> Answer {
+async fn send(
+    mut c: ProviderClient<Channel>,
+    call: Call,
+    number: Option<u64>,
+    event: impl Fn(pb::Event),
+) -> Answer {
+    use crate::traced::request;
     use tonic::Response;
     Ok(match call {
-        Call::Handshake(r) => Reply::Handshake(c.handshake(r).await?.into_inner()),
-        Call::Configure(r) => Reply::Configure(c.configure(r).await?.into_inner()),
-        Call::Schema(r) => Reply::Schema(c.schema(r).await?.into_inner()),
+        Call::Handshake(r) => Reply::Handshake(c.handshake(request(r, number)).await?.into_inner()),
+        Call::Configure(r) => Reply::Configure(c.configure(request(r, number)).await?.into_inner()),
+        Call::Schema(r) => Reply::Schema(c.schema(request(r, number)).await?.into_inner()),
         Call::Query(r) => {
-            let mut stream = c.query(r).await.map(Response::into_inner)?;
+            let mut stream = c
+                .query(request(r, number))
+                .await
+                .map(Response::into_inner)?;
             let mut rows: Vec<pb::Row> = Vec::new();
             while let Some(row) = stream.message().await? {
                 rows.push(row);
             }
             Reply::Query(rows)
         }
-        Call::Read(r) => Reply::Read(c.read(r).await?.into_inner()),
-        Call::Plan(r) => Reply::Plan(c.plan(r).await?.into_inner()),
+        Call::Read(r) => Reply::Read(c.read(request(r, number)).await?.into_inner()),
+        Call::Plan(r) => Reply::Plan(c.plan(request(r, number)).await?.into_inner()),
         Call::Apply(r) => {
             use pb::apply_event::Kind;
-            let mut stream = c.apply(r).await.map(Response::into_inner)?;
+            let mut stream = c
+                .apply(request(r, number))
+                .await
+                .map(Response::into_inner)?;
             loop {
                 match stream.message().await? {
                     Some(pb::ApplyEvent {
@@ -322,9 +335,9 @@ async fn send(mut c: ProviderClient<Channel>, call: Call, event: impl Fn(pb::Eve
                 }
             }
         }
-        Call::Import(r) => Reply::Import(c.import(r).await?.into_inner()),
-        Call::Reveal(r) => Reply::Reveal(c.reveal(r).await?.into_inner()),
-        Call::Health(r) => Reply::Health(c.health(r).await?.into_inner()),
+        Call::Import(r) => Reply::Import(c.import(request(r, number)).await?.into_inner()),
+        Call::Reveal(r) => Reply::Reveal(c.reveal(request(r, number)).await?.into_inner()),
+        Call::Health(r) => Reply::Health(c.health(request(r, number)).await?.into_inner()),
     })
 }
 
@@ -341,9 +354,10 @@ impl Provider for Conn {
             return t;
         }
         let (client, tx) = (self.client.clone(), self.tx.clone());
+        let number = dform_core::plugin::backend::Within::here().call;
         self.rt.spawn(async move {
             let said = tx.clone();
-            let answer = send(client, call, move |e| {
+            let answer = send(client, call, number, move |e| {
                 let _ = said.send(Back::Event(t, e));
             })
             .await;

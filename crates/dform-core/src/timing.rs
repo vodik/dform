@@ -13,13 +13,16 @@
 //!   `session` (the configured instance the call is made in);
 //! - `io.call`: one request dform makes itself, with `kind` (`s3.get`,
 //!   `s3.put`, `s3.list`, `io.read`, `oci.resolve`, ..) and `addr` (the
-//!   location, without its userinfo, query or fragment);
+//!   location, without its userinfo, query or fragment); or one a
+//!   provider sends through the host (`http`, with `provider`, `bucket`
+//!   and `status`), under the `provider.call` it is made for
+//!   (`plugin::timed::call_span`);
 //! - `tick`: one apply tick, with `tick` (from 1);
 //! - `apply.wait`: a tick waiting on values the world has not reached
 //!   (R-81), with `tick`, `kind` (`world`, `extern`) and `count`;
 //! - `ratelimit.wait`: a provider's request waiting on its bucket's
-//!   window in the host (`dform_host::ratelimit`), with `provider`,
-//!   `session`, `bucket`, `queued` and `window`.
+//!   window in the host (`dform_host::ratelimit`), under its `io.call`,
+//!   with `provider`, `session`, `bucket`, `queued` and `window`.
 //!
 //! Each is the function that does the work, `#[tracing::instrument]`ed
 //! under [`TARGET`]; a call, whose answer may come after others', is a

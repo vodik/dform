@@ -192,6 +192,49 @@ fn a_program_plans_against_the_account() {
     );
 }
 
+/// The provider's requests go through the host (its HTTP, dform's
+/// pool and pacing), and each is a span of the run's trace (`io.call`,
+/// `http`) under the provider call it was made for: a Configure's
+/// project lookup under the Configure, a Plan's flavor and image lookups
+/// under that Plan.
+#[test]
+fn its_requests_are_spans_under_the_calls_they_are_made_for() {
+    let server = Server::start();
+    let s = project(
+        "ovh-trace",
+        "",
+        &program(&server, "#cloud-config\\n", "b2-7"),
+    );
+    dform(&s, &server, &["plan", "main.df", "--trace", "run.jsonl"]).success();
+    let spans = common::spans(&s.path("run.jsonl"));
+    let by_id: std::collections::BTreeMap<&str, &Json> = spans
+        .iter()
+        .map(|sp| (sp["spanId"].as_str().unwrap(), sp))
+        .collect();
+    let requests: Vec<&Json> = spans
+        .iter()
+        .filter(|sp| common::attr(sp, "kind").as_deref() == Some("http"))
+        .collect();
+    assert!(
+        requests.len() >= server.calls().len(),
+        "{} spans, {} calls",
+        requests.len(),
+        server.calls().len()
+    );
+    let mut under = std::collections::BTreeSet::new();
+    for r in &requests {
+        assert_eq!(common::attr(r, "provider").as_deref(), Some("ovh"));
+        let addr = common::attr(r, "addr").unwrap();
+        assert!(addr.starts_with(&server.endpoint), "{addr}");
+        let parent = r["parentSpanId"].as_str().and_then(|p| by_id.get(p));
+        let call = parent.and_then(|p| p["name"].as_str()).unwrap_or_default();
+        assert!(call.starts_with("ovh "), "{addr} is under {call:?}");
+        under.insert(call.to_string());
+    }
+    assert!(under.contains("ovh Configure"), "{under:?}");
+    assert!(under.contains("ovh Plan"), "{under:?}");
+}
+
 #[test]
 fn a_program_plans_applies_and_plans_clean() {
     let server = Server::start();
@@ -757,8 +800,9 @@ fn a_zone_not_on_the_account_is_named() {
 
 /// A record's create first looks for one of its key in the zone (After
 /// R-123): the records of its name are asked at once, not one after
-/// another, so a name with several costs one round trip; one of another
-/// target is not taken for it.
+/// another, so a name with several costs one round trip of the host's
+/// window (two at first contact, `dform_host::ratelimit`); one of
+/// another target is not taken for it.
 #[test]
 fn a_records_lookup_asks_the_names_records_at_once() {
     let server = Server::start();
@@ -780,7 +824,7 @@ fn a_records_lookup_asks_the_names_records_at_once() {
     dform(&s, &server, &["apply", "main.df"]).success();
     assert_eq!(server.records().len(), 5, "{:?}", server.records());
     assert!(
-        server.most_at_once() >= 4,
+        server.most_at_once() >= 2,
         "{} at once: {:?}",
         server.most_at_once(),
         server.calls()

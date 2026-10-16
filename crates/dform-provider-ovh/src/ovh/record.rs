@@ -74,18 +74,11 @@ impl Ovh {
             .collect();
         // Each record of the name asked at once: a name with
         // several waits one round trip, not one per record.
-        let records: Vec<api::Result<Option<Json>>> = std::thread::scope(|scope| {
-            let asks: Vec<_> = ids
-                .iter()
-                .map(|id| {
-                    let (client, zone) = (&a.client, &zone);
-                    scope.spawn(move || client.get_opt(&format!("/domain/zone/{zone}/record/{id}")))
-                })
-                .collect();
-            asks.into_iter()
-                .map(|h| h.join().expect("a record's GET does not panic"))
-                .collect()
-        });
+        let (client, zone) = (&a.client, &zone);
+        let records: Vec<api::Result<Option<Json>>> = dform_sdk::at_once(
+            ids.iter()
+                .map(|id| move || client.get_opt(&format!("/domain/zone/{zone}/record/{id}"))),
+        );
         for (id, o) in ids.into_iter().zip(records) {
             if o?.is_some_and(|o| s(&o, "target") == Some(target)) {
                 return Ok(Some(map::record_remote(zone_name, id)));

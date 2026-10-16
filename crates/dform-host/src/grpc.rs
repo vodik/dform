@@ -54,7 +54,9 @@ impl h::host_server::Host for Service {
     }
 
     async fn send(&self, r: Request<h::SendRequest>) -> R<h::SendResponse> {
-        let (req, auth, via) = conv::request(r.into_inner());
+        let call = dform_grpc::traced::call(&r);
+        let (mut req, auth, via) = conv::request(r.into_inner());
+        req.call = call;
         self.with(move |s| conv::from_response(s.send(req, auth, via)))
             .await
     }

@@ -35,11 +35,11 @@ impl Ovh {
         if missing.len() < 2 {
             return;
         }
-        std::thread::scope(|scope| {
-            for what in missing {
-                scope.spawn(move || self.list(a, p, what, region));
+        dform_sdk::at_once(missing.into_iter().map(|what| {
+            move || {
+                let _ = self.list(a, p, what, region);
             }
-        });
+        }));
     }
 
     pub(super) fn flavor_id(

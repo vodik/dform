@@ -1,7 +1,10 @@
-//! A client of the OVH API, blocking, over `ureq`: each call signed
-//! (`sign`) with the three keys, or carrying a bearer token minted from a
-//! service account's client credentials (R-179), or one given as it is
-//! (`access_token`).
+//! A client of the OVH API: each call signed (`sign`) with the three
+//! keys, or carrying a bearer token minted from a service account's
+//! client credentials (R-179), or one given as it is (`access_token`),
+//! and sent through the host's HTTP (`dform_sdk::host().http`), so dform
+//! pools its connection, paces it with the provider's other requests and
+//! traces it under the call it is made for. The keys stay here: the
+//! signature is over the request, which the host sends as it is.
 //!
 //! A bearer token is minted with OAuth2's client-credentials grant
 //! (`grant_type=client_credentials`, `scope=all`, the client id and
@@ -95,7 +98,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 pub struct Client {
     creds: Credentials,
-    agent: ureq::Agent,
     /// Server time minus local time, in seconds, once known, and whether
     /// it was read from the cache rather than asked in this run.
     delta: Mutex<Option<(i64, bool)>>,
@@ -144,14 +146,8 @@ pub fn write_cache(file: &std::path::Path, key: &str, value: &str) {
 
 impl Client {
     pub fn new(creds: Credentials) -> Client {
-        let agent = ureq::Agent::config_builder()
-            .http_status_as_error(false)
-            .timeout_global(Some(REQUEST_TIMEOUT))
-            .build()
-            .new_agent();
         Client {
             creds,
-            agent,
             delta: Mutex::new(None),
             cache: None,
             token: Mutex::new(None),
@@ -369,38 +365,20 @@ impl Client {
             path: path.into(),
             why,
         };
-        let resp = match method {
-            "GET" | "DELETE" => {
-                let mut req = match method {
-                    "GET" => self.agent.get(url),
-                    _ => self.agent.delete(url),
-                };
-                for (k, v) in headers {
-                    req = req.header(*k, v);
-                }
-                req.call()
-            }
-            _ => {
-                let mut req = match method {
-                    "POST" => self.agent.post(url),
-                    _ => self.agent.put(url),
-                };
-                for (k, v) in headers {
-                    req = req.header(*k, v);
-                }
-                match body {
-                    Some(body) => req.send(body.as_bytes()),
-                    None => req.send_empty(),
-                }
-            }
-        };
-        let mut resp = resp.map_err(|e| unreachable(e.to_string()))?;
-        let status = resp.status().as_u16();
-        let text = resp
-            .body_mut()
-            .read_to_string()
+        let mut req = dform_sdk::Request::new(method, url).timeout(REQUEST_TIMEOUT);
+        for (k, v) in headers {
+            req = req.header(k, v);
+        }
+        if let Some(body) = body {
+            req = req.body(body);
+        }
+        let resp = dform_sdk::host()
+            .http
+            .request(req)
+            .map_err(|e| unreachable(e.message))?;
+        let text = String::from_utf8(resp.body)
             .map_err(|e| unreachable(format!("reading the answer: {e}")))?;
-        Ok((status, text))
+        Ok((resp.status, text))
     }
 
     fn send_once(&self, method: &str, path: &str, body: Option<&Json>, by: By) -> Result<Json> {

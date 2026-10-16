@@ -165,7 +165,9 @@ impl Calls for Grpc {
         auth: Option<Handle>,
         via: Option<Handle>,
     ) -> Result<HttpResponse, Error> {
-        let r = rpc!(self, send, conv::from_request(req, auth, via))?;
+        let call = req.call;
+        let req = dform_grpc::traced::request(conv::from_request(req, auth, via), call);
+        let r = rpc!(self, send, req)?;
         conv::response(r)
     }
 

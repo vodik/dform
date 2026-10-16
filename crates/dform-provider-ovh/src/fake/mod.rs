@@ -163,8 +163,19 @@ fn host_of(cidr: &str, n: u32) -> Option<String> {
     Some(std::net::Ipv4Addr::from(u32::from(a) + n).to_string())
 }
 
+/// The provider's code run in this process (a test's) sends its requests
+/// through dform's own host here, as it would through dform's: set once,
+/// as the first fake starts.
+fn host() {
+    use dform_core::plugin::host::Grants;
+    let _ = dform_sdk::set_host(Box::new(dform_host::services::Services::new(Grants::none(
+        "ovh",
+    ))));
+}
+
 impl Server {
     pub fn start() -> Server {
+        host();
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind the fake OVH API");
         let endpoint = format!("http://{}/1.0", listener.local_addr().expect("its address"));
         let world = Arc::new(Mutex::new(World {

@@ -6,8 +6,9 @@ edition = "2024"
 publish = false
 
 [features]
-# `fake`: an OVH API server in the test process (`src/fake.rs`), for tests.
-fake = []
+# `fake`: an OVH API server in the test process (`src/fake/`), for tests,
+# and dform's host in that process for the provider's code run there.
+fake = ["dep:dform-host"]
 
 [dependencies]
 anyhow = "1.0"
@@ -18,8 +19,10 @@ dform-grpc = { path = "../dform-grpc" }
 # so a slow Create does not hold up the Reads beside it.
 tokio = { version = "1", features = ["rt"] }
 tonic = "0.13"
-# Blocking HTTP over rustls, as dform-s3 has it.
-ureq = { version = "3", default-features = false, features = ["rustls"] }
+# Its requests go through the host's HTTP (`dform_sdk::host().http`):
+# dform's pool, its pacing, its trace; the signing stays here (`sign.rs`).
+dform-sdk = { path = "../dform-sdk" }
+dform-host = { path = "../dform-host", optional = true }
 # A service account's client id and secret as Basic auth, to mint its
 # bearer token (`api.rs`).
 base64 = "0.22"
