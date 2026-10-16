@@ -392,7 +392,7 @@ pub fn gave_up(e: CallError, retries: u32) -> CallError {
 
 #[cfg(test)]
 mod tests {
-    use super::super::backend::{FAKECLOUD, Handler, KUBERNETES, Progress};
+    use super::super::backend::{FAKECLOUD, Handler, KUBERNETES, Progress, Session};
     use super::super::queue::{Order, Queue};
     use super::*;
 
@@ -400,7 +400,7 @@ mod tests {
     struct Hello(&'static str, &'static str);
 
     impl Handler for Hello {
-        fn handle(&self, _: Call, _: Progress) -> Result<Reply, CallError> {
+        fn handle(&self, _: Session, _: Call, _: Progress) -> Result<Reply, CallError> {
             Ok(Reply::Handshake(pb::HandshakeResponse {
                 protocol_version: VERSION,
                 name: self.0.into(),
@@ -437,10 +437,10 @@ mod tests {
     struct Busy(std::sync::atomic::AtomicU32);
 
     impl Handler for Busy {
-        fn handle(&self, call: Call, progress: Progress) -> Result<Reply, CallError> {
+        fn handle(&self, s: Session, call: Call, progress: Progress) -> Result<Reply, CallError> {
             use std::sync::atomic::Ordering;
             match call {
-                Call::Handshake(_) => Hello(FAKECLOUD, BUILD).handle(call, progress),
+                Call::Handshake(_) => Hello(FAKECLOUD, BUILD).handle(s, call, progress),
                 Call::Read(_)
                     if self
                         .0

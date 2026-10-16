@@ -348,7 +348,7 @@ impl Drop for Timed {
 
 #[cfg(test)]
 mod tests {
-    use super::super::backend::{Handler, Progress};
+    use super::super::backend::{Handler, Progress, Session};
     use super::super::queue::{Order, Queue};
     use super::*;
 
@@ -356,7 +356,7 @@ mod tests {
     struct Slow;
 
     impl Handler for Slow {
-        fn handle(&self, call: Call, _: Progress) -> Result<Reply, CallError> {
+        fn handle(&self, _: Session, call: Call, _: Progress) -> Result<Reply, CallError> {
             let Call::Apply(r) = call else {
                 return Err(CallError::Refused("apply only".into()));
             };

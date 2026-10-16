@@ -7,6 +7,12 @@
 //! the lifecycle, Import is a read. An attribute the schema marks
 //! `computed` is returned as computed; the rest as configured.
 //!
+//! Each session (a configured instance: the deployments of a run, `use aws
+//! as east` beside `use aws as west`) has its own [`Provider`], made by
+//! its Configure, and each call is answered by its session's: a provider
+//! writes nothing for it. A session's calls are answered one at a time,
+//! two sessions' at once.
+//!
 //! Create, update and delete are told a [`Progress`]: each time the object's
 //! status as the API gives it changes (a poll that saw `BUILD` turn
 //! `ACTIVE`), say so, and dform prints it beside the change (R-130).
@@ -17,7 +23,9 @@
 //! retry policy sends it again (R-81).
 
 use dform_core::address::Address;
-use dform_core::plugin::backend::{self, Call, CallError, Handler, Reply, VERSION};
+use dform_core::plugin::backend::{
+    self, Call, CallError, Configured, Handler, Reply, Session, VERSION,
+};
 use dform_core::plugin::{pb, wire};
 use dform_core::provider::Planned;
 use dform_core::schema::Schema;
@@ -25,7 +33,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value as Json, json};
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 /// A resource type's schema, from `#[derive(Resource)]`.
 pub trait Resource: Serialize + DeserializeOwned {
@@ -391,7 +399,8 @@ pub struct Typed<P: Provider> {
     facts: String,
     schema: Schema,
     examples: Vec<pb::Example>,
-    provider: Mutex<Option<P>>,
+    /// Each session's provider, as its Configure made it.
+    sessions: Configured<Mutex<P>>,
 }
 
 impl<P: Provider> Default for Typed<P> {
@@ -407,7 +416,7 @@ impl<P: Provider> Typed<P> {
             facts: String::new(),
             schema: Schema::default(),
             examples: Vec::new(),
-            provider: Mutex::new(None),
+            sessions: Configured::default(),
         }
     }
 
@@ -465,10 +474,10 @@ impl<P: Provider> Typed<P> {
             .ok_or_else(|| Error::Refused(format!("provider {} serves no type {typ}", P::NAME)))
     }
 
-    fn with<T>(&self, f: impl FnOnce(&P) -> Result<T>) -> Result<T> {
-        let p = self.provider.lock().unwrap_or_else(|e| e.into_inner());
-        match p.as_ref() {
-            Some(p) => f(p),
+    /// `f` of `session`'s provider; refused when it has none yet.
+    fn with<T>(&self, session: Session, f: impl FnOnce(&P) -> Result<T>) -> Result<T> {
+        match self.sessions.get(session) {
+            Some(p) => f(&lock(&p)),
             None => Err(Error::Refused(format!(
                 "provider {} is not configured yet",
                 P::NAME
@@ -512,7 +521,7 @@ impl<P: Provider> Typed<P> {
         (Json::Object(attrs), Json::Object(comp))
     }
 
-    fn plan(&self, r: pb::PlanRequest) -> Result<pb::PlanResponse> {
+    fn plan(&self, session: Session, r: pb::PlanRequest) -> Result<pb::PlanResponse> {
         let doc = |v: Option<&pb::Value>| -> Result<Option<Json>> {
             v.map(wire::from_doc).transpose().map_err(Error::from)
         };
@@ -528,7 +537,8 @@ impl<P: Provider> Typed<P> {
         }
         // A provider configured later (from a tick's output) checks at
         // its Apply.
-        let p = self.provider.lock().unwrap_or_else(|e| e.into_inner());
+        let p = self.sessions.get(session);
+        let p = p.as_deref().map(lock);
         if let Some(d) = &desired {
             if let Some(why) = self.schema.missing_required(&addr.typ, d) {
                 return Err(Error::Refused(format!("plan {addr}: {why}")));
@@ -561,7 +571,12 @@ impl<P: Provider> Typed<P> {
         }))
     }
 
-    fn apply(&self, r: pb::ApplyRequest, sink: backend::Progress) -> Result<pb::ApplyResponse> {
+    fn apply(
+        &self,
+        session: Session,
+        r: pb::ApplyRequest,
+        sink: backend::Progress,
+    ) -> Result<pb::ApplyResponse> {
         let op = pb::Op::try_from(r.op).unwrap_or(pb::Op::Unspecified);
         if op == pb::Op::EndTick {
             return Ok(pb::ApplyResponse::default());
@@ -596,7 +611,7 @@ impl<P: Provider> Typed<P> {
             Some(why) => Err(Error::Refused(format!("apply {}: {why}", progress.address))),
             None => Ok(()),
         };
-        let (remote, obj) = self.with(|p| match op {
+        let (remote, obj) = self.with(session, |p| match op {
             pb::Op::Create => {
                 refuse_create()?;
                 k.check(p, &desired)?;
@@ -644,18 +659,18 @@ impl<P: Provider> Typed<P> {
         })
     }
 
-    fn answer(&self, call: Call, progress: backend::Progress) -> Result<Reply> {
+    fn answer(&self, session: Session, call: Call, progress: backend::Progress) -> Result<Reply> {
         Ok(match call {
             Call::Handshake(_) => Reply::Handshake(self.handshake()),
-            Call::Configure(r) => Reply::Configure(self.configure(r)?),
+            Call::Configure(r) => Reply::Configure(self.configure(session, r)?),
             Call::Schema(r) => Reply::Schema(self.schema_reply(r)?),
-            Call::Query(r) => Reply::Query(self.query(r)?),
-            Call::Read(r) => Reply::Read(self.read(r)?),
-            Call::Plan(r) => Reply::Plan(self.plan(r)?),
-            Call::Apply(r) => Reply::Apply(self.apply(r, progress)?),
-            Call::Import(r) => Reply::Import(self.import(r)?),
-            Call::Reveal(r) => Reply::Reveal(self.reveal(r)?),
-            Call::Health(r) => Reply::Health(self.health(r)?),
+            Call::Query(r) => Reply::Query(self.query(session, r)?),
+            Call::Read(r) => Reply::Read(self.read(session, r)?),
+            Call::Plan(r) => Reply::Plan(self.plan(session, r)?),
+            Call::Apply(r) => Reply::Apply(self.apply(session, r, progress)?),
+            Call::Import(r) => Reply::Import(self.import(session, r)?),
+            Call::Reveal(r) => Reply::Reveal(self.reveal(session, r)?),
+            Call::Health(r) => Reply::Health(self.health(session, r)?),
         })
     }
 
@@ -683,7 +698,12 @@ impl<P: Provider> Typed<P> {
         }
     }
 
-    fn configure(&self, r: pb::ConfigureRequest) -> Result<pb::ConfigureResponse> {
+    /// Configure `session`: its provider, in place of the one it had.
+    fn configure(
+        &self,
+        session: Session,
+        r: pb::ConfigureRequest,
+    ) -> Result<pb::ConfigureResponse> {
         let config = wire::from_doc_or_empty(r.config.as_ref()).map_err(Error::from)?;
         // The engine's first Configure of a provider a program
         // configures says so; the settings come at the second.
@@ -692,7 +712,7 @@ impl<P: Provider> Typed<P> {
         }
         let settings = config.get("settings").cloned().unwrap_or_else(|| json!({}));
         let (p, account) = P::configure(&settings)?;
-        *self.provider.lock().unwrap_or_else(|e| e.into_inner()) = Some(p);
+        self.sessions.set(session, Mutex::new(p));
         Ok(pb::ConfigureResponse {
             account,
             notes: Vec::new(),
@@ -718,11 +738,11 @@ impl<P: Provider> Typed<P> {
         })
     }
 
-    fn read(&self, r: pb::ReadRequest) -> Result<pb::ReadResponse> {
+    fn read(&self, session: Session, r: pb::ReadRequest) -> Result<pb::ReadResponse> {
         let k = self.kind(&r.r#type)?;
         let prior = r.prior.as_ref().map(wire::from_doc).transpose()?;
         Ok(
-            match self.with(|p| k.read_with_prior(p, &r.remote, prior.as_ref()))? {
+            match self.with(session, |p| k.read_with_prior(p, &r.remote, prior.as_ref()))? {
                 Some(j) => {
                     let (attrs, computed) = self.split(&r.r#type, &r.name, j);
                     pb::ReadResponse {
@@ -736,9 +756,9 @@ impl<P: Provider> Typed<P> {
         )
     }
 
-    fn import(&self, r: pb::ImportRequest) -> Result<pb::ImportResponse> {
+    fn import(&self, session: Session, r: pb::ImportRequest) -> Result<pb::ImportResponse> {
         let k = self.kind(&r.r#type)?;
-        Ok(match self.with(|p| k.read(p, &r.remote))? {
+        Ok(match self.with(session, |p| k.read(p, &r.remote))? {
             Some(j) => {
                 let (attrs, computed) = self.split(&r.r#type, &r.remote, j);
                 pb::ImportResponse {
@@ -754,7 +774,7 @@ impl<P: Provider> Typed<P> {
     }
 
     /// The engine's call alone, under the deployment's lease.
-    fn reveal(&self, r: pb::RevealRequest) -> Result<pb::RevealResponse> {
+    fn reveal(&self, session: Session, r: pb::RevealRequest) -> Result<pb::RevealResponse> {
         let h = r.held.unwrap_or_default();
         if r.lease.is_empty() {
             return Err(Error::Refused(format!(
@@ -764,25 +784,20 @@ impl<P: Provider> Typed<P> {
             )));
         }
         Ok(pb::RevealResponse {
-            value: self.with(|p| p.reveal(&h))?,
+            value: self.with(session, |p| p.reveal(&h))?,
         })
     }
 
     /// The rows of an extern, each value as the protocol has it. Asked
     /// before the program's settings came, it is not yet: one row, each
     /// answer column an open null, asked again once they have.
-    fn query(&self, r: pb::QueryRequest) -> Result<Vec<pb::Row>> {
+    fn query(&self, session: Session, r: pb::QueryRequest) -> Result<Vec<pb::Row>> {
         let inputs = r
             .inputs
             .iter()
             .map(wire::from_doc)
             .collect::<anyhow::Result<Vec<_>>>()?;
-        let configured = self
-            .provider
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_some();
-        if !configured {
+        if self.sessions.get(session).is_none() {
             let bare = r
                 .inputs
                 .iter()
@@ -805,7 +820,7 @@ impl<P: Provider> Typed<P> {
                 .collect();
             return Ok(vec![pb::Row { values }]);
         }
-        let rows = self.with(|p| p.query(&r.pred, &inputs))?;
+        let rows = self.with(session, |p| p.query(&r.pred, &inputs))?;
         Ok(rows
             .iter()
             .map(|row| pb::Row {
@@ -819,14 +834,14 @@ impl<P: Provider> Typed<P> {
 
     /// Each object's health, as its type's [`Lifecycle::health`] judges
     /// it; `unknown` for one it judges none of.
-    fn health(&self, r: pb::HealthRequest) -> Result<pb::HealthResponse> {
+    fn health(&self, session: Session, r: pb::HealthRequest) -> Result<pb::HealthResponse> {
         let answers = r
             .objects
             .iter()
             .map(|o| {
                 let k = self.kind(&o.r#type)?;
                 let judged = match k.answers_health() {
-                    true => self.with(|p| k.health(p, &o.remote))?,
+                    true => self.with(session, |p| k.health(p, &o.remote))?,
                     false => None,
                 };
                 Ok(judged.unwrap_or_else(|| {
@@ -847,15 +862,15 @@ impl<P: Provider> Handler for Typed<P> {
         self.read_versioned(location).map(|d| d.bytes)
     }
 
-    /// A read before the program has configured the provider waits on it,
-    /// as a resource of it would.
+    /// A read names no session: the provider of the session opened last
+    /// reads it. A read before the program has configured the provider
+    /// waits on it, as a resource of it would.
     fn read_versioned(
         &self,
         location: &str,
     ) -> std::result::Result<crate::Document, crate::Failure> {
-        let p = self.provider.lock().unwrap_or_else(|e| e.into_inner());
-        match p.as_ref() {
-            Some(p) => p.read(location),
+        match self.sessions.latest() {
+            Some(p) => lock(&p).read(location),
             None => Err(crate::Failure::NotYet(format!(
                 "{location}: provider {} is not configured yet",
                 P::NAME
@@ -865,12 +880,18 @@ impl<P: Provider> Handler for Typed<P> {
 
     fn handle(
         &self,
+        session: Session,
         call: Call,
         progress: backend::Progress,
     ) -> std::result::Result<Reply, CallError> {
-        self.answer(call, progress).map_err(|e| match e {
+        self.answer(session, call, progress).map_err(|e| match e {
             Error::Refused(m) => CallError::Refused(m),
             Error::MaybeApplied(m) => CallError::MaybeApplied(m),
         })
     }
+}
+
+/// A session's provider, for one call.
+fn lock<P>(p: &Mutex<P>) -> MutexGuard<'_, P> {
+    p.lock().unwrap_or_else(|e| e.into_inner())
 }

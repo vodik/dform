@@ -265,9 +265,15 @@ pub struct Http(());
 
 impl Http {
     /// Send `req`; a status the server answered is a response, not an
-    /// error.
+    /// error. It names the session of the call it is sent for, so dform
+    /// paces each session's buckets apart (a thread of the provider's own
+    /// names none).
     pub fn request(&self, req: Request) -> Result<Response, Error> {
-        calls().send(req.req, req.auth, req.via)
+        let http = HttpRequest {
+            session: dform_core::plugin::backend::current(),
+            ..req.req
+        };
+        calls().send(http, req.auth, req.via)
     }
 }
 

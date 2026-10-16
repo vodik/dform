@@ -39,10 +39,11 @@ struct Shared<H>(std::sync::Arc<H>);
 impl<H: Handler> Handler for Shared<H> {
     fn handle(
         &self,
+        session: dform_core::plugin::backend::Session,
         call: dform_core::plugin::backend::Call,
         progress: dform_core::plugin::backend::Progress,
     ) -> Result<dform_core::plugin::backend::Reply, dform_core::plugin::backend::CallError> {
-        self.0.handle(call, progress)
+        self.0.handle(session, call, progress)
     }
 
     fn is_dead(&self) -> bool {

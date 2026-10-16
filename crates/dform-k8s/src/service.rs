@@ -28,6 +28,10 @@
 //! the manager and the field. A generated name (`metadata.generateName`) is
 //! picked here, since server-side apply needs a name. Delete propagates in
 //! the background and waits (bounded) for the object to go.
+//!
+//! Each session (a deployment's Configure) is a [`K8s`] of its own: its
+//! cluster, its schema, its deployment's label. A call is answered by its
+//! session's.
 
 use crate::cluster::{Cluster, WriteError};
 use crate::object::{
@@ -36,6 +40,7 @@ use crate::object::{
 };
 use crate::openapi::{self, Derived, Kind};
 use anyhow::{Result, anyhow, bail};
+use dform_core::plugin::backend::{Configured, Session, Sessions};
 use dform_core::plugin::providers::{CREATED, INVENTORY};
 use dform_core::plugin::wire;
 use dform_core::provider::{self, diff, get_path, marker, set_path};
@@ -44,7 +49,7 @@ use dform_core::value::Value;
 use dform_grpc::pb;
 use serde_json::{Value as Json, json};
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tonic::{Request, Response, Status};
 
@@ -880,20 +885,22 @@ fn doc_of(v: Option<&pb::Value>) -> std::result::Result<Option<Json>, Status> {
     v.map(wire::from_doc).transpose().map_err(invalid)
 }
 
-/// The gRPC service: the provider once Configure has run.
+/// The gRPC service: a provider per session, once its Configure has run.
 #[derive(Default)]
 pub struct Service {
-    k8s: RwLock<Option<Arc<K8s>>>,
+    sessions: Sessions,
+    k8s: Configured<K8s>,
 }
 
 impl Service {
+    /// The provider of the session `session`.
     #[allow(clippy::result_large_err)] // tonic's own error type
-    fn k8s(&self) -> std::result::Result<Arc<K8s>, Status> {
-        self.k8s
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .ok_or_else(|| Status::failed_precondition("the provider is not configured"))
+    fn k8s(&self, session: u64) -> std::result::Result<Arc<K8s>, Status> {
+        self.k8s.get(Session(session)).ok_or_else(|| {
+            Status::failed_precondition(format!(
+                "the provider is not configured: no session {session}"
+            ))
+        })
     }
 }
 
@@ -933,7 +940,9 @@ impl pb::provider_server::Provider for Service {
     }
 
     async fn configure(&self, req: Request<pb::ConfigureRequest>) -> Reply<pb::ConfigureResponse> {
-        let config = doc_of(req.into_inner().config.as_ref())?.unwrap_or(json!({}));
+        let req = req.into_inner();
+        let session = self.sessions.configure(Session(req.session));
+        let config = doc_of(req.config.as_ref())?.unwrap_or(json!({}));
         // The run's cache directory (`dform.state/cache/`), else beside the
         // world file.
         let cache = config
@@ -1019,12 +1028,15 @@ impl pb::provider_server::Provider for Service {
             stack: stack.or(k8s.stack),
             ..k8s
         };
-        *self.k8s.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(k8s));
-        Ok(Response::new(pb::ConfigureResponse::default()))
+        self.k8s.set(session, k8s);
+        Ok(Response::new(pb::ConfigureResponse {
+            session: session.0,
+            ..Default::default()
+        }))
     }
 
     async fn schema(&self, req: Request<pb::SchemaRequest>) -> Reply<pb::SchemaResponse> {
-        let k8s = self.k8s()?;
+        let k8s = self.k8s(req.get_ref().session)?;
         let schema = match &req.get_ref().types {
             Some(t) => k8s.derived.schema_of(t.names.iter().map(String::as_str)),
             None => k8s.derived.schema(),
@@ -1067,8 +1079,8 @@ impl pb::provider_server::Provider for Service {
 
     async fn query(&self, req: Request<pb::QueryRequest>) -> Reply<Self::QueryStream> {
         let r = req.into_inner();
+        let k8s = self.k8s(r.session)?;
         if INVENTORY.iter().any(|(p, _)| *p == r.pred) {
-            let k8s = self.k8s()?;
             // Offline, the inventory is empty: a plan reads no world.
             if k8s.cluster.is_err() {
                 return Ok(Response::new(
@@ -1098,7 +1110,6 @@ impl pb::provider_server::Provider for Service {
                 r.pred
             )));
         }
-        let k8s = self.k8s()?;
         let args = r
             .inputs
             .iter()
@@ -1127,8 +1138,8 @@ impl pb::provider_server::Provider for Service {
     }
 
     async fn read(&self, req: Request<pb::ReadRequest>) -> Reply<pb::ReadResponse> {
-        let k8s = self.k8s()?;
         let r = req.into_inner();
+        let k8s = self.k8s(r.session)?;
         let found = k8s
             .read(&r.r#type, &r.remote, &r.name)
             .await
@@ -1144,8 +1155,8 @@ impl pb::provider_server::Provider for Service {
     }
 
     async fn plan(&self, req: Request<pb::PlanRequest>) -> Reply<pb::PlanResponse> {
-        let k8s = self.k8s()?;
         let r = req.into_inner();
+        let k8s = self.k8s(r.session)?;
         let prior = doc_of(r.prior.as_ref())?;
         let desired = doc_of(r.desired.as_ref())?;
         let (changes, requires_replace) = k8s
@@ -1170,8 +1181,8 @@ impl pb::provider_server::Provider for Service {
     /// The result alone: a Kubernetes object is there once the API server
     /// takes it (R-130's events are for a provider that waits).
     async fn apply(&self, req: Request<pb::ApplyRequest>) -> Reply<Self::ApplyStream> {
-        let k8s = self.k8s()?;
         let r = req.into_inner();
+        let k8s = self.k8s(r.session)?;
         let config = doc_of(r.config.as_ref())?.unwrap_or(Json::Null);
         let result = k8s.apply(&r, &config).await.map_err(Status::from);
         Ok(Response::new(dform_grpc::server::apply_answer(result)))
@@ -1188,17 +1199,18 @@ impl pb::provider_server::Provider for Service {
     }
 
     async fn health(&self, req: Request<pb::HealthRequest>) -> Reply<pb::HealthResponse> {
-        let k8s = self.k8s()?;
-        let answers = k8s
-            .health(&req.into_inner().objects)
+        let r = req.into_inner();
+        let answers = self
+            .k8s(r.session)?
+            .health(&r.objects)
             .await
             .map_err(|e| Status::unavailable(format!("{e:#}")))?;
         Ok(Response::new(pb::HealthResponse { answers }))
     }
 
     async fn import(&self, req: Request<pb::ImportRequest>) -> Reply<pb::ImportResponse> {
-        let k8s = self.k8s()?;
         let r = req.into_inner();
+        let k8s = self.k8s(r.session)?;
         let found = k8s
             .import(&r.r#type, &r.remote)
             .await

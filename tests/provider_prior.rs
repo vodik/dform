@@ -9,7 +9,7 @@
 
 use crate::common::{self, Scratch};
 use dform::plugin::Launch;
-use dform::plugin::backend::{Call, CallError, Handler, Progress, Reply};
+use dform::plugin::backend::{Call, CallError, Handler, Progress, Reply, Session};
 use dform::plugin::link::Link;
 use dform::plugin::pb;
 use dform::plugin::queue::{Order, Queue};
@@ -24,7 +24,7 @@ static TOLD: Mutex<Vec<(&'static str, Option<Json>)>> = Mutex::new(Vec::new());
 struct Recording(dform_mock::Mock);
 
 impl Handler for Recording {
-    fn handle(&self, call: Call, progress: Progress) -> Result<Reply, CallError> {
+    fn handle(&self, s: Session, call: Call, progress: Progress) -> Result<Reply, CallError> {
         let doc = |v: &Option<pb::Value>| {
             v.as_ref()
                 .map(|v| dform::plugin::wire::from_doc(v).unwrap())
@@ -35,7 +35,7 @@ impl Handler for Recording {
             _ => None,
         };
         TOLD.lock().unwrap().extend(told);
-        self.0.handle(call, progress)
+        self.0.handle(s, call, progress)
     }
 }
 

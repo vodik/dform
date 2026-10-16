@@ -2,7 +2,7 @@
 //! dform sends it, the server's catalog after it, and what crossed the
 //! wire.
 
-use dform_core::plugin::backend::{Call, CallError, Handler, Reply, silent};
+use dform_core::plugin::backend::{Call, CallError, Handler, Reply, Session, silent};
 use dform_core::plugin::{pb, wire};
 use dform_provider_postgres::fake::{self, ADMIN, ADMIN_PASSWORD, Server};
 use dform_provider_postgres::{Postgres, provider, scram};
@@ -12,6 +12,7 @@ use serde_json::{Value as Json, json};
 fn configured(settings: Json) -> Typed<Postgres> {
     let h = provider();
     h.handle(
+        Session(1),
         pb::ConfigureRequest {
             config: Some(wire::doc(&json!({ "settings": settings }))),
             ..Default::default()
@@ -29,7 +30,7 @@ fn admin(s: &Server) -> Json {
 }
 
 fn call<R: TryFrom<Reply, Error = Reply>>(h: &Typed<Postgres>, c: impl Into<Call>) -> R {
-    R::try_from(h.handle(c.into(), &silent).unwrap()).unwrap()
+    R::try_from(h.handle(Session(1), c.into(), &silent).unwrap()).unwrap()
 }
 
 fn try_apply(
@@ -41,6 +42,7 @@ fn try_apply(
     key: &str,
 ) -> Result<pb::ApplyResponse, CallError> {
     h.handle(
+        Session(1),
         pb::ApplyRequest {
             op: op as i32,
             r#type: typ.into(),
@@ -92,6 +94,7 @@ fn plan(
     desired: Json,
 ) -> Result<pb::PlanResponse, CallError> {
     h.handle(
+        Session(1),
         pb::PlanRequest {
             r#type: typ.into(),
             name: "it".into(),
@@ -497,6 +500,7 @@ fn tls_as_sslmode_says() {
     let h = configured(settings.clone());
     let e = h
         .handle(
+            Session(1),
             pb::ReadRequest {
                 r#type: "postgres.role".into(),
                 remote: ADMIN.into(),
@@ -532,6 +536,7 @@ fn tls_as_sslmode_says() {
     let h = configured(settings);
     assert!(
         h.handle(
+            Session(1),
             pb::ReadRequest {
                 r#type: "postgres.role".into(),
                 remote: ADMIN.into(),
@@ -603,6 +608,7 @@ fn the_fake_logs_in_with_a_verifier_the_provider_computed() {
     );
     let e = h
         .handle(
+            Session(1),
             pb::ReadRequest {
                 r#type: "postgres.role".into(),
                 remote: "x".into(),

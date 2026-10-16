@@ -7,10 +7,10 @@
 //! once (a refresh's Reads, a plan's Plans, `--parallel`'s Applies) run at
 //! once and a slow one holds up no other (R-142); an Apply's progress
 //! events (R-130) stream as it says them, and its stream ends with its
-//! result.
+//! result. The adapter numbers the handler's sessions ([`Sessions`]).
 
 use crate::pb;
-use dform_core::plugin::backend::{self, Call, CallError, Handler, Reply};
+use dform_core::plugin::backend::{self, Call, CallError, Handler, Reply, Sessions};
 use std::sync::Arc;
 use tonic::codegen::tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::{Request, Response, Status};
@@ -18,6 +18,7 @@ use tonic::{Request, Response, Status};
 /// `handler` behind the protocol's service.
 pub struct Adapter<H> {
     handler: Arc<H>,
+    sessions: Arc<Sessions>,
 }
 
 /// A failure as its gRPC status.
@@ -86,7 +87,10 @@ impl<H: Handler + Send + Sync + 'static> Adapter<H> {
 
     /// The adapter of a handler held elsewhere too (its `Files`).
     pub fn shared(handler: Arc<H>) -> Adapter<H> {
-        Adapter { handler }
+        Adapter {
+            handler,
+            sessions: Arc::default(),
+        }
     }
 
     /// `call` on the blocking pool: the transport's runtime is a single
@@ -99,8 +103,8 @@ impl<H: Handler + Send + Sync + 'static> Adapter<H> {
     {
         let call = call.into();
         let method = call.method();
-        let handler = self.handler.clone();
-        let answered = move || answer(method, handler.handle(call, &backend::silent));
+        let (handler, sessions) = (self.handler.clone(), self.sessions.clone());
+        let answered = move || answer(method, sessions.serve(&*handler, call, &backend::silent));
         tokio::task::spawn_blocking(answered)
             .await
             .map_err(|e| Status::internal(format!("the {method} call failed: {e}")))?
@@ -145,10 +149,10 @@ impl<H: Handler + Send + Sync + 'static> pb::provider_server::Provider for Adapt
     type ApplyStream = ApplyStream;
 
     async fn apply(&self, req: Request<pb::ApplyRequest>) -> Reply_<Self::ApplyStream> {
-        let handler = self.handler.clone();
+        let (handler, sessions) = (self.handler.clone(), self.sessions.clone());
         Ok(Response::new(apply_stream(
             req.into_inner(),
-            move |call, progress| handler.handle(call, progress),
+            move |call, progress| sessions.serve(&*handler, call, progress),
         )))
     }
 

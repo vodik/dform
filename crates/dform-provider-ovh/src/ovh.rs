@@ -1,4 +1,6 @@
-//! The provider: the plugin protocol (`Handler`) over the OVH API.
+//! The provider: the plugin protocol (`Handler`) over the OVH API. Each
+//! session (a deployment's Configure) is an [`Ovh`] of its own: its
+//! credentials, its project, what it made and listed.
 //!
 //! Configure finds the credentials (`config`), and with the program's
 //! settings (`use ovh { endpoint, project }`, a second Configure) the
@@ -33,7 +35,7 @@ use crate::config;
 use crate::map;
 use anyhow::{Result, anyhow, bail};
 use dform_core::address::Address;
-use dform_core::plugin::backend::{self, CallError, Handler, Reply, VERSION};
+use dform_core::plugin::backend::{self, CallError, Handler, Reply, Session, VERSION};
 use dform_core::plugin::pb;
 use dform_core::plugin::providers::CREATED;
 use dform_core::plugin::wire;
@@ -47,6 +49,7 @@ use std::time::{Duration, Instant};
 
 mod catalog;
 mod handler;
+pub use handler::Provider;
 mod health;
 mod instance;
 mod network;

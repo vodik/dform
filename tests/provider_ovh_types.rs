@@ -2,7 +2,7 @@
 //! S3 containers, users and their S3 credentials, volumes attached to
 //! instances, private networks and their subnets, each against the fake
 //! OVH API (`dform_provider_ovh::fake`). Most tests call the provider in
-//! this process, as dform's protocol does (`Handler::handle`), so each
+//! this process, as dform's protocol does (`Ovh::answer`, a session's), so each
 //! call's effect on the API is looked at directly; the last plans and
 //! applies a program with all of them through dform.
 //!
@@ -11,7 +11,7 @@
 
 use crate::common;
 use common::{Run, Scratch};
-use dform_core::plugin::backend::{Call, CallError, Handler, Reply};
+use dform_core::plugin::backend::{Call, CallError, Reply};
 use dform_core::plugin::{pb, wire};
 use dform_core::provider::Planned;
 use dform_provider_ovh::fake::{self, Server};
@@ -57,7 +57,7 @@ impl Lab {
                 said.lock().unwrap().push(s);
             }
         };
-        self.ovh.handle(call, &progress)
+        self.ovh.answer(call, &progress)
     }
 
     fn apply(
@@ -1425,7 +1425,7 @@ fn a_run_is_given_the_lookups_of_the_types_it_names() {
         }),
         ..Default::default()
     };
-    let Ok(Reply::Schema(answer)) = ovh.handle(Call::Schema(req), &|_| {}) else {
+    let Ok(Reply::Schema(answer)) = ovh.answer(Call::Schema(req), &|_| {}) else {
         panic!("Schema answers");
     };
     let served: Vec<String> = answer

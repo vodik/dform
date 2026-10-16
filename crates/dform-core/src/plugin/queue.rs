@@ -20,7 +20,7 @@
 //! decodes it again, so what crosses is exactly what the protocol can
 //! carry; the direct backend hands the messages over as they are.
 
-use super::backend::{Call, CallError, Handler, Provider, Reply, Ticket};
+use super::backend::{Call, CallError, Handler, Provider, Reply, Sessions, Ticket};
 use super::pb;
 use prost::Message;
 use std::cmp::Reverse;
@@ -38,6 +38,8 @@ pub enum Order {
 
 pub struct Queue<H> {
     handler: H,
+    /// Its sessions, as its Configures open them.
+    sessions: Sessions,
     order: Order,
     /// Encode and decode every message (the wire backend).
     wire: bool,
@@ -62,6 +64,7 @@ impl<H: Handler> Queue<H> {
         };
         Queue {
             handler,
+            sessions: Sessions::default(),
             order,
             wire,
             next: 0,
@@ -96,9 +99,9 @@ impl<H: Handler> Queue<H> {
         let said = Mutex::new(Vec::new());
         let progress = |e: pb::Event| said.lock().unwrap_or_else(|e| e.into_inner()).push(e);
         let answer = match self.wire {
-            false => self.handler.handle(call, &progress),
+            false => self.sessions.serve(&self.handler, call, &progress),
             true => across_call(&call)
-                .and_then(|call| self.handler.handle(call, &progress))
+                .and_then(|call| self.sessions.serve(&self.handler, call, &progress))
                 .and_then(|r| across_reply(&r)),
         };
         for e in said.into_inner().unwrap_or_else(|e| e.into_inner()) {
@@ -193,7 +196,7 @@ fn across_reply(r: &Reply) -> Result<Reply, CallError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::backend::Progress;
+    use crate::plugin::backend::{Progress, Session};
     use std::cell::RefCell;
 
     /// Answers every Apply with the latency its name asks for, and fails
@@ -204,7 +207,7 @@ mod tests {
     }
 
     impl Handler for Clocked {
-        fn handle(&self, call: Call, _: Progress) -> Result<Reply, CallError> {
+        fn handle(&self, _: Session, call: Call, _: Progress) -> Result<Reply, CallError> {
             let Call::Apply(r) = call else {
                 return Err(CallError::Refused("apply only".into()));
             };

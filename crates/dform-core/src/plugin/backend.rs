@@ -19,6 +19,10 @@
 //! the gRPC server adapter serve one.
 
 use super::pb;
+use std::cell::Cell;
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 /// The protocol version this dform speaks.
 pub const VERSION: u32 = 1;
@@ -154,6 +158,43 @@ methods! {
     Health(pb::HealthRequest) -> pb::HealthResponse,
 }
 
+impl Call {
+    /// The session the call is made in: none for a Handshake, and for a
+    /// Configure that opens one.
+    pub fn session(&self) -> Session {
+        Session(match self {
+            Call::Handshake(_) => 0,
+            Call::Configure(r) => r.session,
+            Call::Schema(r) => r.session,
+            Call::Query(r) => r.session,
+            Call::Read(r) => r.session,
+            Call::Plan(r) => r.session,
+            Call::Apply(r) => r.session,
+            Call::Import(r) => r.session,
+            Call::Reveal(r) => r.session,
+            Call::Health(r) => r.session,
+        })
+    }
+
+    /// The call, made in `session` (a Handshake names none).
+    pub fn in_session(mut self, session: Session) -> Call {
+        let at = match &mut self {
+            Call::Handshake(_) => return self,
+            Call::Configure(r) => &mut r.session,
+            Call::Schema(r) => &mut r.session,
+            Call::Query(r) => &mut r.session,
+            Call::Read(r) => &mut r.session,
+            Call::Plan(r) => &mut r.session,
+            Call::Apply(r) => &mut r.session,
+            Call::Import(r) => &mut r.session,
+            Call::Reveal(r) => &mut r.session,
+            Call::Health(r) => &mut r.session,
+        };
+        *at = session.0;
+        self
+    }
+}
+
 /// Where a call says how it is going (R-130): an Apply's provider sends an
 /// event each time its own view of the object changes (a poll that saw a
 /// new status, a retry), never on a timer. Its answer is the reply, not an
@@ -218,10 +259,15 @@ pub trait Provider {
 
 /// A provider that answers each call as a function of it: what the direct
 /// and wire backends link in, and what the gRPC server adapter serves,
-/// which calls `handle` from several threads at once (R-142).
+/// which calls `handle` from several threads at once (R-142). What serves
+/// it numbers the sessions ([`Sessions`]): it keeps one configuration per
+/// session ([`Configured`]) and answers each call with its session's.
 pub trait Handler {
-    /// Answer `call`, saying how it goes on `progress` while it runs.
-    fn handle(&self, call: Call, progress: Progress) -> Result<Reply, CallError>;
+    /// Answer `call`, made in `session`, saying how it goes on `progress`
+    /// while it runs. A Configure's session is the one it configures (a new
+    /// one when it opens one: its answer names it, whatever the handler
+    /// answers); a Handshake's is none.
+    fn handle(&self, session: Session, call: Call, progress: Progress) -> Result<Reply, CallError>;
 
     /// Whether the provider is gone (it crashed).
     fn is_dead(&self) -> bool {
@@ -252,5 +298,134 @@ pub trait Handler {
     ) -> Result<crate::files::Document, super::host::Failure> {
         self.read_location(location)
             .map(crate::files::Document::from)
+    }
+}
+
+/// The sessions of a [`Handler`], as what serves it numbers them (the gRPC
+/// server, the component, the direct and wire backends): a Configure that
+/// names none opens the next, from 1.
+#[derive(Debug, Default)]
+pub struct Sessions {
+    last: AtomicU64,
+}
+
+impl Sessions {
+    /// The session `call` is made in: the one it names, else, for a
+    /// Configure, a new one.
+    pub fn of(&self, call: &Call) -> Session {
+        match call {
+            Call::Configure(_) => self.configure(call.session()),
+            call => call.session(),
+        }
+    }
+
+    /// The session a Configure naming `named` configures: that one, else
+    /// a new one.
+    pub fn configure(&self, named: Session) -> Session {
+        match named {
+            Session::NONE => Session(self.last.fetch_add(1, Ordering::Relaxed) + 1),
+            s => s,
+        }
+    }
+
+    /// `handler`'s answer to `call`, in its session ([`Sessions::of`]): the
+    /// session the HTTP requests it sends while it runs name ([`current`]),
+    /// and the one a Configure's answer names.
+    pub fn serve<H: Handler + ?Sized>(
+        &self,
+        handler: &H,
+        call: Call,
+        progress: Progress,
+    ) -> Result<Reply, CallError> {
+        let session = self.of(&call);
+        let _in = In::enter(session);
+        let mut reply = handler.handle(session, call, progress)?;
+        if let Reply::Configure(r) = &mut reply {
+            r.session = session.0;
+        }
+        Ok(reply)
+    }
+}
+
+thread_local! {
+    /// The session of the call this thread is answering.
+    static CURRENT: Cell<Session> = const { Cell::new(Session::NONE) };
+}
+
+/// The session of the call this thread is answering ([`Sessions::serve`]),
+/// for the host calls it makes: none outside a call, and on a thread of
+/// the provider's own.
+pub fn current() -> Session {
+    CURRENT.with(|c| c.get())
+}
+
+/// This thread answering a call of a session, until dropped.
+struct In(Session);
+
+impl In {
+    fn enter(session: Session) -> In {
+        In(CURRENT.with(|c| c.replace(session)))
+    }
+}
+
+impl Drop for In {
+    fn drop(&mut self) {
+        CURRENT.with(|c| c.set(self.0));
+    }
+}
+
+/// A provider's configuration of each session: what a Configure sets, and
+/// what each call after it is answered with. A call of a session not
+/// configured (yet) finds none.
+#[derive(Debug)]
+pub struct Configured<T> {
+    by: RwLock<BTreeMap<Session, Arc<T>>>,
+}
+
+impl<T> Default for Configured<T> {
+    fn default() -> Configured<T> {
+        Configured {
+            by: Default::default(),
+        }
+    }
+}
+
+impl<T> Configured<T> {
+    fn by(&self) -> RwLockReadGuard<'_, BTreeMap<Session, Arc<T>>> {
+        self.by.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Configure `session` as `t`: in place of what configured it before.
+    pub fn set(&self, session: Session, t: T) -> Arc<T> {
+        let t = Arc::new(t);
+        self.by
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(session, t.clone());
+        t
+    }
+
+    /// `session`'s configuration, if it has one.
+    pub fn get(&self, session: Session) -> Option<Arc<T>> {
+        self.by().get(&session).cloned()
+    }
+
+    /// `session`'s configuration, else `new()`, which configures it.
+    pub fn get_or_set(&self, session: Session, new: impl FnOnce() -> T) -> Arc<T> {
+        if let Some(t) = self.get(session) {
+            return t;
+        }
+        self.by
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(session)
+            .or_insert_with(|| Arc::new(new()))
+            .clone()
+    }
+
+    /// The configuration of the session opened last: what answers what
+    /// names no session (a location read, R-153).
+    pub fn latest(&self) -> Option<Arc<T>> {
+        self.by().values().next_back().cloned()
     }
 }

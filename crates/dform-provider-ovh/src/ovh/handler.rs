@@ -1,20 +1,56 @@
 //! The plugin protocol over the provider (`Handler`): each call answered by
-//! the method for it, its documents converted on the way in and out.
+//! its session's provider, by the method for it, its documents converted
+//! on the way in and out.
 
 use super::*;
 
-impl Handler for Ovh {
+/// The provider behind the protocol: an [`Ovh`] per session, each
+/// configured by its session's Configure (its account, its project), its
+/// caches its own.
+#[derive(Default)]
+pub struct Provider {
+    sessions: backend::Configured<Ovh>,
+}
+
+impl Handler for Provider {
     fn handle(
+        &self,
+        session: Session,
+        call: backend::Call,
+        progress: backend::Progress,
+    ) -> std::result::Result<Reply, CallError> {
+        use backend::Call as C;
+        match call {
+            C::Handshake(req) => Ok(Reply::Handshake(handshake(&req)?)),
+            C::Configure(req) => {
+                let config = doc_of(req.config.as_ref())?.unwrap_or(json!({}));
+                let ovh = self.sessions.get_or_set(session, Ovh::new);
+                Ok(Reply::Configure(ovh.configure(&config).map_err(invalid)?))
+            }
+            call => match self.sessions.get(session) {
+                Some(ovh) => ovh.answer(call, progress),
+                None => Err(CallError::Refused(format!(
+                    "the provider {PROVIDER} has no session {session}: a Configure opens one"
+                ))),
+            },
+        }
+    }
+}
+
+impl Ovh {
+    /// The answer to `call`, a call of this session but its Configure.
+    pub fn answer(
         &self,
         call: backend::Call,
         progress: backend::Progress,
     ) -> std::result::Result<Reply, CallError> {
         use backend::Call as C;
         Ok(match call {
-            C::Handshake(req) => Reply::Handshake(handshake(&req)?),
-            C::Configure(req) => {
-                let config = doc_of(req.config.as_ref())?.unwrap_or(json!({}));
-                Reply::Configure(self.configure(&config).map_err(invalid)?)
+            C::Handshake(_) | C::Configure(_) => {
+                return Err(CallError::Refused(format!(
+                    "a {} call is the provider's, not its session's",
+                    call.method()
+                )));
             }
             C::Schema(req) => Reply::Schema(self.schema_reply(&req)?),
             C::Query(q) => Reply::Query(self.query_reply(&q)?),

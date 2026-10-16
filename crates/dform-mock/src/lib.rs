@@ -26,12 +26,18 @@
 //!
 //! Chaos knobs (`dform dev --chaos`, `chaos`) arrive at Configure. The world's
 //! clock advances at every END_TICK, when chaos `mutate` lands.
+//!
+//! Each session (a Configure's: a deployment of the run) is a mock cloud of
+//! its own (`FakeCloud`): its world file, its schemas, its account, its
+//! chaos, so the calls of two deployments in flight together each land in
+//! their own world. A Configure again of a session configures its cloud
+//! again, what it counted of chaos kept.
 
 use anyhow::{Context, Result, anyhow, bail};
 use dform_core::address::Address;
 use dform_core::ast::{Atom, Term};
 use dform_core::chaos::Chaos;
-use dform_core::plugin::backend::{self, CallError, Handler, Reply, VERSION};
+use dform_core::plugin::backend::{self, CallError, Configured, Handler, Reply, Session, VERSION};
 use dform_core::plugin::link::Link;
 use dform_core::plugin::pb;
 use dform_core::plugin::providers::{CREATED, INVENTORY, Launch};
@@ -46,6 +52,7 @@ use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RemoteState {
@@ -244,8 +251,6 @@ pub struct FakeCloud {
     /// Linked in: chaos `crash` cannot kill the process, so the mock is
     /// gone instead.
     in_process: bool,
-    /// The address whose Apply crashed the mock linked in.
-    crashed: Option<String>,
     /// Configured `deferred` (a provider the program configures) and its
     /// settings not given yet: like a cluster not reached, it reads
     /// nothing and says what a Create made of nothing.
@@ -915,7 +920,6 @@ impl FakeCloud {
         if self.chaos.crash.contains(addr) {
             if self.in_process {
                 eprintln!("chaos: crash during apply {shown}: the provider is gone");
-                self.crashed = Some(at.clone());
                 return Err(Failed::Crashed(format!(
                     "the provider fakecloud exited during the call (chaos crash={at})"
                 )));
@@ -1385,12 +1389,15 @@ fn flatten_json_facts(
     }
 }
 
-/// The fake behind the protocol: every call locks the one mock cloud. As
-/// a process (`dform-provider-fake`, `in_process` false) chaos `crash`
-/// kills it; linked in, it is gone from that call on.
+/// The fake behind the protocol: a mock cloud per session, every call
+/// locking its session's. As a process (`dform-provider-fake`,
+/// `in_process` false) chaos `crash` kills it; linked in, it is gone from
+/// that call on, every session's.
 pub struct Mock {
-    cloud: std::sync::Mutex<FakeCloud>,
+    clouds: Configured<Mutex<FakeCloud>>,
     in_process: bool,
+    /// The address whose Apply crashed the mock linked in.
+    crashed: Mutex<Option<String>>,
 }
 
 impl Mock {
@@ -1406,16 +1413,31 @@ impl Mock {
 
     fn new(in_process: bool) -> Mock {
         Mock {
-            cloud: std::sync::Mutex::new(FakeCloud {
-                in_process,
-                ..FakeCloud::default()
-            }),
+            clouds: Configured::default(),
             in_process,
+            crashed: Mutex::new(None),
         }
     }
 
-    fn cloud(&self) -> std::sync::MutexGuard<'_, FakeCloud> {
-        self.cloud.lock().unwrap_or_else(|e| e.into_inner())
+    /// `f` of `session`'s cloud, locked; refused when no Configure opened
+    /// it.
+    fn with<T>(
+        &self,
+        session: Session,
+        f: impl FnOnce(&mut FakeCloud) -> T,
+    ) -> std::result::Result<T, CallError> {
+        let cloud = self.clouds.get(session).ok_or_else(|| {
+            CallError::Refused(format!(
+                "the provider {} has no session {session}: a Configure opens one",
+                backend::FAKECLOUD
+            ))
+        })?;
+        Ok(f(&mut cloud.lock().unwrap_or_else(|e| e.into_inner())))
+    }
+
+    /// The address whose Apply crashed the mock linked in, if one did.
+    fn crashed(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+        self.crashed.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
@@ -1457,11 +1479,12 @@ impl Handler for Mock {
 
     fn handle(
         &self,
+        session: Session,
         call: backend::Call,
         progress: backend::Progress,
     ) -> std::result::Result<Reply, CallError> {
         use backend::Call as C;
-        if let Some(at) = &self.cloud().crashed {
+        if let Some(at) = &*self.crashed() {
             return Err(CallError::Crashed(format!(
                 "the provider fakecloud has exited (chaos crash={at})"
             )));
@@ -1512,14 +1535,22 @@ impl Handler for Mock {
             }
             C::Configure(req) => {
                 let config = doc_of(req.config.as_ref())?.unwrap_or(json!({}));
-                self.cloud().configure(&config).map_err(invalid)?;
+                let in_process = self.in_process;
+                let cloud = self.clouds.get_or_set(session, || {
+                    Mutex::new(FakeCloud {
+                        in_process,
+                        ..FakeCloud::default()
+                    })
+                });
+                let mut cloud = cloud.lock().unwrap_or_else(|e| e.into_inner());
+                cloud.configure(&config).map_err(invalid)?;
                 // The account its settings name (`use fake { account
                 // = .. }`): what `expect_account` is checked against.
                 let account = config
                     .pointer("/settings/account")
                     .and_then(Json::as_str)
                     .map(str::to_string)
-                    .or_else(|| self.cloud().account.clone());
+                    .or_else(|| cloud.account.clone());
                 Reply::Configure(pb::ConfigureResponse {
                     account,
                     notes: Vec::new(),
@@ -1527,19 +1558,20 @@ impl Handler for Mock {
                 })
             }
             C::Schema(req) => {
-                let cloud = self.cloud();
-                let facts = wire::schema_facts(cloud.schema(), &req).map_err(invalid)?;
-                let externs = cloud
-                    .externs()
-                    .into_iter()
-                    .map(|(pred, arity)| pb::ExternDecl {
-                        pred,
-                        arity: arity as u32,
-                        input: Vec::new(),
-                    })
-                    .collect();
+                let (facts, externs) = self.with(session, |cloud| {
+                    let externs = cloud
+                        .externs()
+                        .into_iter()
+                        .map(|(pred, arity)| pb::ExternDecl {
+                            pred,
+                            arity: arity as u32,
+                            input: Vec::new(),
+                        })
+                        .collect();
+                    (wire::schema_facts(cloud.schema(), &req), externs)
+                })?;
                 Reply::Schema(pb::SchemaResponse {
-                    facts,
+                    facts: facts.map_err(invalid)?,
                     externs,
                     checks_refinements: true,
                     examples: Vec::new(),
@@ -1552,20 +1584,20 @@ impl Handler for Mock {
                     .map(Value::try_from)
                     .collect::<Result<Vec<_>>>()
                     .map_err(invalid)?;
-                let mut cloud = self.cloud();
-                let rows = cloud.query(&q.pred, &q.input, &inputs).map_err(invalid)?;
-                Reply::Query(
-                    cloud
-                        .hold(&q.pred, &inputs, &q.secret, rows)
-                        .map_err(invalid)?,
-                )
+                let rows = self.with(session, |cloud| {
+                    let rows = cloud.query(&q.pred, &q.input, &inputs)?;
+                    cloud.hold(&q.pred, &inputs, &q.secret, rows)
+                })?;
+                Reply::Query(rows.map_err(invalid)?)
             }
             C::Read(r) => {
                 let addr = Address {
                     typ: r.r#type,
                     name: r.name,
                 };
-                let found = self.cloud().read(&addr, &r.remote).map_err(invalid)?;
+                let found = self
+                    .with(session, |c| c.read(&addr, &r.remote))?
+                    .map_err(invalid)?;
                 Reply::Read(match found {
                     Some((attrs, computed)) => pb::ReadResponse {
                         found: true,
@@ -1583,14 +1615,15 @@ impl Handler for Mock {
                 let prior = doc_of(r.prior.as_ref())?;
                 let desired = doc_of(r.desired.as_ref())?;
                 let planned = self
-                    .cloud()
-                    .plan(&addr, prior.as_ref(), desired.as_ref())
+                    .with(session, |c| c.plan(&addr, prior.as_ref(), desired.as_ref()))?
                     .map_err(invalid)?;
                 Reply::Plan(pb::PlanResponse::from(&planned))
             }
-            C::Apply(r) => Reply::Apply(self.apply(r, progress)?),
+            C::Apply(r) => Reply::Apply(self.apply(session, r, progress)?),
             C::Import(r) => {
-                let found = self.cloud().import(&r.r#type, &r.remote).map_err(invalid)?;
+                let found = self
+                    .with(session, |c| c.import(&r.r#type, &r.remote))?
+                    .map_err(invalid)?;
                 Reply::Import(match found {
                     Some((name, attrs, computed)) => pb::ImportResponse {
                         found: true,
@@ -1602,15 +1635,17 @@ impl Handler for Mock {
                     None => pb::ImportResponse::default(),
                 })
             }
-            C::Reveal(r) => Reply::Reveal(self.reveal(r)?),
+            C::Reveal(r) => Reply::Reveal(self.reveal(session, r)?),
             C::Health(r) => Reply::Health(pb::HealthResponse {
-                answers: self.cloud().health(&r.objects).map_err(invalid)?,
+                answers: self
+                    .with(session, |c| c.health(&r.objects))?
+                    .map_err(invalid)?,
             }),
         })
     }
 
     fn is_dead(&self) -> bool {
-        self.in_process && self.cloud().crashed.is_some()
+        self.in_process && self.crashed().is_some()
     }
 }
 
@@ -1618,7 +1653,11 @@ impl Mock {
     /// A secret the mock holds (an extern's, or an object's attribute), for
     /// the engine to configure another provider with (R-45): only with the
     /// deployment's lease, and only one held by `fakecloud`.
-    fn reveal(&self, r: pb::RevealRequest) -> std::result::Result<pb::RevealResponse, CallError> {
+    fn reveal(
+        &self,
+        session: Session,
+        r: pb::RevealRequest,
+    ) -> std::result::Result<pb::RevealResponse, CallError> {
         let h = r.held.unwrap_or_default();
         let at = format!("reveal {} {}#{}", h.r#type, h.remote, h.path);
         if r.lease.is_empty() {
@@ -1642,8 +1681,7 @@ impl Mock {
             digest: h.digest,
         };
         let v = self
-            .cloud()
-            .materialize_held(&held)
+            .with(session, |c| c.materialize_held(&held))?
             .map_err(|e| CallError::Refused(format!("{at}: {e:#}")))?;
         Ok(pb::RevealResponse {
             value: match v {
@@ -1655,6 +1693,7 @@ impl Mock {
 
     fn apply(
         &self,
+        session: Session,
         r: pb::ApplyRequest,
         progress: backend::Progress,
     ) -> std::result::Result<pb::ApplyResponse, CallError> {
@@ -1669,7 +1708,9 @@ impl Mock {
                     end_ms: s.end_ms,
                 })
                 .collect();
-            let notes = self.cloud().end_tick(spans).map_err(invalid)?;
+            let notes = self
+                .with(session, |c| c.end_tick(spans))?
+                .map_err(invalid)?;
             return Ok(pb::ApplyResponse {
                 notes,
                 ..Default::default()
@@ -1701,7 +1742,10 @@ impl Mock {
             keep: r.keep,
         };
         let at = call.addr.to_string();
-        let applied = self.cloud().apply(call);
+        let applied = self.with(session, |c| c.apply(call))?;
+        if let (Err(Failed::Crashed(_)), true) = (&applied, self.in_process) {
+            *self.crashed() = Some(at.clone());
+        }
         // Chaos `delay`: the object is made and the answer is late, which
         // the mock says, as a cloud says an object is there but not ready.
         if let Ok(a) = &applied

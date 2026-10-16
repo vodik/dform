@@ -9,7 +9,7 @@
 //! The SDK finds the host in `DFORM_HOST`, as a provider dform starts
 //! does: this binary sets it, so it holds this one test.
 
-use dform::plugin::backend::{Call, CallError, Handler, Progress, Reply};
+use dform::plugin::backend::{Call, CallError, Handler, Progress, Reply, Session};
 use dform::plugin::host::Grants;
 use dform::plugin::pb;
 use dform_grpc::pb::provider_client::ProviderClient;
@@ -27,7 +27,7 @@ static URL: OnceLock<String> = OnceLock::new();
 struct Fetches;
 
 impl Handler for Fetches {
-    fn handle(&self, call: Call, _: Progress) -> Result<Reply, CallError> {
+    fn handle(&self, _: Session, call: Call, _: Progress) -> Result<Reply, CallError> {
         match call {
             Call::Read(_) => {
                 let r = dform_sdk::host()

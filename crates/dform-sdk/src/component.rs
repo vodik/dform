@@ -11,7 +11,7 @@
 //! write each as it said it. A host that drops the stream (it cancelled
 //! the call) is written no more events.
 
-use dform_core::plugin::backend::{Call, Handler, Progress, Reply};
+use dform_core::plugin::backend::{Call, Handler, Progress, Reply, Sessions};
 use dform_core::plugin::host::{
     self as h, Calls, Endpoint, Failure, GitFile, Handle, HttpRequest, HttpResponse, Level, Opened,
     Run, Target,
@@ -41,6 +41,8 @@ thread_local! {
     /// The provider, made at its first call (a component is
     /// single-threaded).
     static HANDLER: OnceCell<Box<dyn Handler>> = const { OnceCell::new() };
+    /// Its sessions, as its Configures open them.
+    static SESSIONS: Sessions = Sessions::default();
 }
 
 /// The provider, made at the first call, in the working directory the
@@ -59,8 +61,9 @@ fn call(
     progress: Progress,
 ) -> Result<Reply, t::CallError> {
     HANDLER.with(|cell| {
-        cell.get_or_init(|| start(make))
-            .handle(c, progress)
+        let handler = cell.get_or_init(|| start(make));
+        SESSIONS
+            .with(|s| s.serve(handler.as_ref(), c, progress))
             .map_err(|e| conv::to_call_error(&e))
     })
 }

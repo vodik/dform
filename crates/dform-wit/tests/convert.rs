@@ -36,7 +36,6 @@ fn a_value_round_trips_through_its_tree() {
         prior: Some(wire::doc(
             &serde_json::json!({"ports": {"pn-1": {"id": "p-1"}}}),
         )),
-        ..Default::default()
     };
     assert_eq!(
         c::from_read_request(&c::to_read_request(&read)).unwrap(),

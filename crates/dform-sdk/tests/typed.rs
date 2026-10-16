@@ -1,7 +1,7 @@
 //! A provider from Rust types: `#[derive(Resource)]` gives the schema,
 //! `Lifecycle` the calls, Plan comes from the schema (R-25).
 
-use dform_core::plugin::backend::{Call, Handler, Reply, silent};
+use dform_core::plugin::backend::{Call, Handler, Reply, Session, silent};
 use dform_core::plugin::{pb, wire};
 use dform_sdk::typed::Result;
 use dform_sdk::{Lifecycle, Progress, Provider, Resource, Typed};
@@ -92,7 +92,7 @@ fn provider() -> Typed<Acme> {
 }
 
 fn call<R: TryFrom<Reply, Error = Reply>>(h: &Typed<Acme>, c: impl Into<Call>) -> R {
-    R::try_from(h.handle(c.into(), &silent).unwrap()).unwrap()
+    R::try_from(h.handle(Session(1), c.into(), &silent).unwrap()).unwrap()
 }
 
 #[test]
@@ -160,6 +160,7 @@ fn plan_comes_from_the_schema_and_apply_from_the_lifecycle() {
     // A required attribute missing refuses.
     let e = h
         .handle(
+            Session(1),
             pb::PlanRequest {
                 r#type: "acme.bucket".into(),
                 name: "logs".into(),
@@ -265,6 +266,7 @@ fn a_create_says_how_it_goes_on_the_apply_sink() {
     let said = Mutex::new(Vec::new());
     let sink = |e: pb::Event| said.lock().unwrap().push(e);
     let r = h.handle(
+        Session(1),
         pb::ApplyRequest {
             op: pb::Op::Create as i32,
             r#type: "acme.bucket".into(),
@@ -389,6 +391,7 @@ fn write_only_optional_computed_examples_and_check() {
 
     let e = h
         .handle(
+            Session(1),
             pb::PlanRequest {
                 r#type: "acme.key".into(),
                 name: "mine".into(),
@@ -426,6 +429,7 @@ fn configure_takes_the_programs_settings_only() {
     ] {
         let _: pb::ConfigureResponse = h
             .handle(
+                Session(1),
                 pb::ConfigureRequest {
                     config: Some(wire::doc(&config)),
                     ..Default::default()
@@ -545,6 +549,7 @@ fn keep_is_the_providers_promise() {
     let _: pb::ConfigureResponse = call(&h2, pb::ConfigureRequest::default());
     let e = h2
         .handle(
+            Session(1),
             pb::ApplyRequest {
                 op: pb::Op::Update as i32,
                 r#type: "acme.bucket".into(),
@@ -567,7 +572,7 @@ fn keep_is_the_providers_promise() {
         h: &Typed<P>,
         c: impl Into<Call>,
     ) -> R {
-        R::try_from(h.handle(c.into(), &silent).unwrap()).unwrap()
+        R::try_from(h.handle(Session(1), c.into(), &silent).unwrap()).unwrap()
     }
     // The update kept the secret the create wrote.
     assert_eq!(
@@ -639,6 +644,7 @@ fn a_type_that_declares_health_answers_it() {
     assert_eq!(
         provider()
             .handle(
+                Session(1),
                 pb::HandshakeRequest {
                     protocol_version: 1
                 }
@@ -771,6 +777,7 @@ fn a_sensitive_computed_value_is_held_and_revealed() {
     };
     let e = h
         .handle(
+            Session(1),
             pb::RevealRequest {
                 held: Some(held.clone()),
                 lease: String::new(),
@@ -796,7 +803,7 @@ fn a_sensitive_computed_value_is_held_and_revealed() {
 }
 
 fn call_on<P: Provider, R: TryFrom<Reply, Error = Reply>>(h: &Typed<P>, c: impl Into<Call>) -> R {
-    R::try_from(h.handle(c.into(), &silent).unwrap()).unwrap()
+    R::try_from(h.handle(Session(1), c.into(), &silent).unwrap()).unwrap()
 }
 
 /// A mount that remembers the port its create attached under computed:
@@ -906,4 +913,68 @@ fn read_is_told_the_prior_computed_values() {
     let plain = read_bucket(None);
     assert!(plain.found);
     assert_eq!(read_bucket(Some(json!({"id": "other"}))), plain);
+}
+
+/// Each session is a provider of its own, made by its Configure: what one
+/// session's Apply made, another's Read does not find, and a Configure
+/// again of a session keeps its number.
+#[test]
+fn each_session_is_answered_by_its_own_configuration() {
+    use dform_core::plugin::backend::Sessions;
+    let (h, sessions) = (provider(), Sessions::default());
+    let serve = |c: Call| sessions.serve(&h, c, &silent);
+    let configure = |session: u64, account: &str| -> pb::ConfigureResponse {
+        let c = pb::ConfigureRequest {
+            config: Some(wire::doc(&json!({"settings": {"account": account}}))),
+            session,
+        };
+        serve(c.into()).unwrap().try_into().unwrap()
+    };
+    let (east, west) = (configure(0, "east"), configure(0, "west"));
+    assert_eq!((east.session, east.account.as_deref()), (1, Some("east")));
+    assert_eq!((west.session, west.account.as_deref()), (2, Some("west")));
+    let made: pb::ApplyResponse = serve(
+        pb::ApplyRequest {
+            op: pb::Op::Create as i32,
+            r#type: "acme.bucket".into(),
+            name: "logs".into(),
+            config: Some(wire::doc(&json!({"name": "logs"}))),
+            session: east.session,
+            ..Default::default()
+        }
+        .into(),
+    )
+    .unwrap()
+    .try_into()
+    .unwrap();
+    let found = |session: u64| -> bool {
+        let r: pb::ReadResponse = serve(
+            pb::ReadRequest {
+                r#type: "acme.bucket".into(),
+                remote: made.remote.clone(),
+                session,
+                ..Default::default()
+            }
+            .into(),
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+        r.found
+    };
+    assert!(found(east.session) && !found(west.session));
+    // Configured again, the session is the same one, its provider anew.
+    assert_eq!(configure(east.session, "east").session, east.session);
+    assert!(!found(east.session));
+    let e = serve(
+        pb::ReadRequest {
+            r#type: "acme.bucket".into(),
+            remote: made.remote.clone(),
+            session: 3,
+            ..Default::default()
+        }
+        .into(),
+    )
+    .unwrap_err();
+    assert_eq!(e.to_string(), "provider acme is not configured yet");
 }

@@ -145,7 +145,7 @@ fn a_secret_a_provider_holds_configures_another_and_stays_in_memory() {
 /// and one for a secret it does not hold, naming the object and path.
 #[test]
 fn a_reveal_without_the_lease_or_of_another_s_secret_is_refused() {
-    use dform::plugin::backend::{Call, Handler, silent};
+    use dform::plugin::backend::{Call, Handler, Session, silent};
     use dform::plugin::pb;
     let mock = dform_mock::Mock::process();
     let held = pb::Held {
@@ -158,6 +158,7 @@ fn a_reveal_without_the_lease_or_of_another_s_secret_is_refused() {
     };
     let ask = |held: pb::Held, lease: &str| {
         mock.handle(
+            Session(1),
             Call::Reveal(pb::RevealRequest {
                 held: Some(held),
                 lease: lease.into(),

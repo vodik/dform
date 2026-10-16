@@ -7,7 +7,7 @@
 //! Last, a port made with the address the program asks
 //! (`networks = [{ network, ip }]`), at the fake and through the provider.
 
-use dform_core::plugin::backend::{self, Call, Handler, Reply};
+use dform_core::plugin::backend::{self, Call, Reply};
 use dform_core::plugin::{pb, wire};
 use dform_provider_ovh::api::Client;
 use dform_provider_ovh::config;
@@ -81,7 +81,7 @@ fn apply(ovh: &Ovh, op: pb::Op, typ: &str, remote: &str, config: &Json) -> pb::A
         idempotency_key: format!("key-{typ}-{remote}"),
         ..Default::default()
     };
-    match ovh.handle(Call::Apply(r), &backend::silent) {
+    match ovh.answer(Call::Apply(r), &backend::silent) {
         Ok(Reply::Apply(a)) => a,
         other => panic!("apply {typ}: {other:?}"),
     }
@@ -202,7 +202,7 @@ fn the_provider_sends_no_body_where_the_api_takes_none() {
         lease: "lease".into(),
         ..Default::default()
     };
-    match ovh.handle(Call::Reveal(reveal), &backend::silent) {
+    match ovh.answer(Call::Reveal(reveal), &backend::silent) {
         Ok(Reply::Reveal(r)) => assert!(!r.value.is_empty()),
         other => panic!("reveal: {other:?}"),
     }
@@ -284,7 +284,7 @@ fn read(ovh: &Ovh, vm: &str, prior: Option<&Json>) -> Json {
         prior: prior.map(wire::doc),
         ..Default::default()
     };
-    match ovh.handle(Call::Read(r), &backend::silent) {
+    match ovh.answer(Call::Read(r), &backend::silent) {
         Ok(Reply::Read(r)) if r.found => wire::from_doc(r.computed.as_ref().unwrap()).unwrap(),
         other => panic!("read: {other:?}"),
     }
@@ -301,7 +301,7 @@ fn update(ovh: &Ovh, vm: &str, config: &Json, prior: Option<&Json>) -> Json {
         prior: prior.map(wire::doc),
         ..Default::default()
     };
-    match ovh.handle(Call::Apply(r), &backend::silent) {
+    match ovh.answer(Call::Apply(r), &backend::silent) {
         Ok(Reply::Apply(a)) => wire::from_doc(a.computed.as_ref().unwrap()).unwrap(),
         other => panic!("update: {other:?}"),
     }
@@ -440,7 +440,7 @@ fn update_refused(ovh: &Ovh, vm: &str, config: &Json, prior: Option<&Json>) -> S
         prior: prior.map(wire::doc),
         ..Default::default()
     };
-    match ovh.handle(Call::Apply(r), &backend::silent) {
+    match ovh.answer(Call::Apply(r), &backend::silent) {
         Err(backend::CallError::Refused(m)) => m,
         other => panic!("update not refused: {other:?}"),
     }
@@ -458,7 +458,7 @@ fn update_noted(ovh: &Ovh, vm: &str, config: &Json, prior: Option<&Json>) -> (Js
         prior: prior.map(wire::doc),
         ..Default::default()
     };
-    match ovh.handle(Call::Apply(r), &backend::silent) {
+    match ovh.answer(Call::Apply(r), &backend::silent) {
         Ok(Reply::Apply(a)) => (
             wire::from_doc(a.computed.as_ref().unwrap()).unwrap(),
             a.notes,
@@ -816,7 +816,7 @@ fn apply_refused(ovh: &Ovh, config: &Json) -> String {
         idempotency_key: "refused".into(),
         ..Default::default()
     };
-    match ovh.handle(Call::Apply(r), &backend::silent) {
+    match ovh.answer(Call::Apply(r), &backend::silent) {
         Err(backend::CallError::Refused(m)) => m,
         other => panic!("create not refused: {other:?}"),
     }
@@ -931,7 +931,7 @@ fn an_address_asked_anew_replaces_the_instance() {
         idempotency_key: "replace".into(),
         ..Default::default()
     };
-    let replaced = match ovh.handle(Call::Apply(r), &backend::silent) {
+    let replaced = match ovh.answer(Call::Apply(r), &backend::silent) {
         Ok(Reply::Apply(a)) => a,
         other => panic!("replace: {other:?}"),
     };
@@ -1011,7 +1011,7 @@ fn a_replacement_asking_the_old_address_deletes_the_old_one_first() {
         idempotency_key: "replace".into(),
         ..Default::default()
     };
-    let replaced = match ovh.handle(Call::Apply(r), &backend::silent) {
+    let replaced = match ovh.answer(Call::Apply(r), &backend::silent) {
         Ok(Reply::Apply(a)) => a,
         other => panic!("replace: {other:?}"),
     };
