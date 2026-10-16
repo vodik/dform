@@ -232,7 +232,8 @@ fn main() -> std::process::ExitCode {
   its schema says so with a `provider_setting(NAME, SETTING,
   ["connection"])` fact (`["sensitive", "connection"]` for a secret
   one). The k8s provider's are `kubeconfig`, `host`, `ca`, `token`,
-  `client_certificate` and `client_key`, not `namespace` (an object's
+  `client_certificate` and `client_key` (its kubeconfig credential's
+  parts, "Grants and credentials"), not `namespace` (an object's
   default). When every setting a provider waits on is its connection,
   the plan shows its objects as planned, documents and diffs, under
   `later` marked `provisional: planned against the offline schema;
@@ -396,6 +397,7 @@ on both; tests/host_wasm.rs keeps them from drifting.
 | `vault` (`crates/dform-provider-vault`) | the SDK's typed layer, a scheme and no resource | native: every request through the host's HTTP client | docs/providers/vault.md |
 | `tailscale` (`crates/dform-provider-tailscale`) | the SDK's typed layer: a tailnet's policy file, auth keys (held), DNS and devices (adopted), its users and devices data sources | native: every request through the host's HTTP client | docs/providers/tailscale.md |
 | `ovh` (`crates/dform-provider-ovh`) | the protocol's `Handler` directly, its own signing | native: every request through the host's HTTP client | docs/providers/ovh.md |
+| `k8s` (`crates/dform-k8s`) | the protocol's gRPC service directly, a thin client of the Kubernetes API | native: every request through the host's HTTP client, its kubeconfig a credential the host holds | docs/reference.md, "The Kubernetes provider" |
 
 ## Grants and credentials
 
@@ -452,18 +454,29 @@ A credential is a name; its kind says how the host applies it:
 | `basic` | `USER:PASSWORD` | `Authorization: Basic ..` |
 | `header` | `NAME: VALUE` | that header |
 | `tls` | PEM: a certificate chain and its key | the TLS session's client certificate |
-| `kubeconfig` | a kubeconfig | its current context's token or client certificate, and its cluster's CA; its server is the credential's `endpoint` |
+| `kubeconfig` | a kubeconfig, or its parts (`host`, `ca`, `token`, `client_certificate`, `client_key`) | its current context's token, client certificate or exec plugin's answer (run by dform), and its cluster's CA; its server is the credential's `endpoint`, its namespace the credential's `namespace` |
 | `ssh` | an unencrypted OpenSSH private key, in the operator's file only (or an agent's key by its comment or fingerprint) | by dform's SSH client for an `ssh://` or `git+ssh://` location, never to an HTTP call: `[io] credentials = { "ssh://HOST/*" = "ssh:NAME" }` (docs/reference.md, "Locations and transports") |
 
-The value comes from the program (`use k8s { kubeconfig =
-cluster.kubeconfig }` registers the secret under the name the grant
-lists), else the operator's file
-`$XDG_CONFIG_HOME/dform/credentials/KIND/NAME` (`DFORM_CREDENTIALS`
-names another directory). It stays in dform's memory, is never
-serialized to a provider, and is zeroed when dropped. A provider opening
-a credential it was not granted is refused: `provider k8s is not granted
-the credential kubeconfig:staging: add it to [providers.k8s] credentials
-in dform.toml`.
+The value comes from the program or the operator. A provider declares
+which of its settings are credentials (the handshake's
+`setting-decl.credential`; in the SDK, `Typed::credential("token",
+"bearer")`): the settings of one kind that a Configure gives (`use k8s {
+kubeconfig = cluster.kubeconfig }`, a secret revealed into that
+Configure) are held by dform as one credential for that provider, under
+a name of its own (`kubeconfig:k8s.1`), and each setting reaches the
+provider as that name, which it opens; the next Configure of the session
+lets it go. A provider the program does not configure is given the
+environment's credential of a kind that has one the same way, named in
+the Configure's `credentials` (`{"kubeconfig": NAME}`: `KUBECONFIG`'s
+files, else `~/.kube/config`, else a pod's service account, read by
+dform). Only the provider it was held for opens it. Else the value is
+the operator's file `$XDG_CONFIG_HOME/dform/credentials/KIND/NAME`
+(`DFORM_CREDENTIALS` names another directory), as dform.toml grants it.
+Either way it stays in dform's memory, is never serialized to a
+provider, and is zeroed when dropped. A provider opening a credential it
+was not granted is refused: `provider k8s is not granted the credential
+kubeconfig:staging: add it to [providers.k8s] credentials in
+dform.toml`.
 
 `dform provider check` prints how a provider is hosted, beside the
 conformance cases:

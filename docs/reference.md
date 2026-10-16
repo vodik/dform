@@ -1300,8 +1300,11 @@ descriptions the language server shows, are never injected.
 `dform-provider-k8s` (built with dform, `crates/dform-k8s`) is a real provider: it
 speaks the same protocol against the API server of the cluster the
 environment names (`KUBECONFIG`, else `~/.kube/config`, else the pod's service
-account). Select it by path; the program the mock plans applies to a cluster
-unchanged:
+account). dform reads that kubeconfig (running its user's exec plugin, if
+it has one) and holds it; the provider sends every request through
+dform's HTTP with it applied, by name, and never holds a credential
+(docs/providers.md, "Grants and credentials"). Select it by path; the
+program the mock plans applies to a cluster unchanged:
 
 ```dform
 use k8s { source = "./providers/k8s" }   # a directory holding dform-provider-k8s
@@ -1312,15 +1315,14 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   arrives: `provider_config("k8s", { kubeconfig = K })` with `K` the
   text of a kubeconfig (its current context), or `{ host = H, ca = C, token =
   T }` (`client_certificate` and `client_key` instead of `token`; `ca` and
-  those as PEM or base64 of it; optionally `namespace`). The value may be a
-  secret (an input declared `secret(string)`): the provider receives it at
-  a second Configure once the program's evaluation knows it, keeps it in
-  memory, and never writes or prints it. Until then the provider serves
+  those as PEM or base64 of it; optionally `namespace`, which comes before
+  the kubeconfig context's). The value may be a secret (an input declared
+  `secret(string)`, a cluster's sensitive `kubeconfig`): at a second
+  Configure, once the program's evaluation knows it, dform holds it in
+  memory and the provider is configured with the name it is held under;
+  nothing writes, prints or digests it. Until then the provider serves
   nothing (the environment's kubeconfig is not read) and its resources wait
-  on the null; the schema is the snapshot's. A secret computed value of
-  another provider's resource (a cluster's `kubeconfig` as a sensitive
-  attribute) cannot reach it yet: secrets travel as labels, and no
-  protocol call hands one provider's secret to another.
+  on the null; the schema is the snapshot's.
 - Types are `k8s.<group>.<version>.<kind>`, the core group as `core` and the
   kind in snake_case (`k8s.apps.v1.deployment`, `k8s.core.v1.config_map`,
   `k8s.networking.k8s.io.v1.ingress`): a type name is a lowercase qualified
@@ -1459,8 +1461,8 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   once, `k8s: offline, no kubeconfig at ~/.kube/config and not in a
   cluster; planning against the snapshot schema
   (crates/dform-k8s/openapi-snapshot.json)` (or `the kubeconfig at P does
-  not load`, `the cluster at URL did not answer`); the client's own errors
-  behind it print under `DFORM_LOG=debug`.
+  not load`, `the cluster at URL did not answer`); why, under
+  `DFORM_LOG=debug`.
 
 ```bash
 cargo build
