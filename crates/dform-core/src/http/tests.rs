@@ -153,3 +153,26 @@ fn a_body_waiting_on_a_spent_window_is_a_stall() {
     // the third waits for the first two to be read.
     assert_eq!(stalled, [false, false, true]);
 }
+
+/// A burst of requests to an HTTP/1.1 endpoint opens a connection each;
+/// the endpoint keeps eight of them idle for what comes next.
+#[test]
+fn an_endpoint_keeps_eight_connections_idle() {
+    let server = Arc::new(Server::http1());
+    server.slow(Duration::from_millis(300));
+    let burst = || {
+        let sent: Vec<_> = (0..12)
+            .map(|i| {
+                let server = server.clone();
+                std::thread::spawn(move || send(get(server.url(&format!("/{i}"))), None, None))
+            })
+            .collect();
+        for s in sent {
+            assert_eq!(s.join().unwrap().unwrap().status, 200);
+        }
+    };
+    burst();
+    assert_eq!(server.connections(), 12);
+    burst();
+    assert_eq!(server.connections(), 12 + 4, "eight kept, four more");
+}

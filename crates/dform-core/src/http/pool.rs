@@ -21,6 +21,10 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
+/// The most HTTP/1.1 connections an endpoint keeps idle: a burst of
+/// requests opens as many as it needs, and closes all but these.
+const IDLE: usize = 8;
+
 pub(super) struct Pool {
     runtime: tokio::runtime::Handle,
     endpoints: Mutex<HashMap<Route, Arc<Endpoint>>>,
@@ -218,10 +222,11 @@ impl Endpoint {
     }
 
     /// An HTTP/1.1 connection whose answer was read to its end: kept for
-    /// the next request.
+    /// the next request, unless [`IDLE`] are kept already.
     pub(super) fn give_back(&self, send: http1::SendRequest<Full<Bytes>>) {
-        if !send.is_closed() {
-            self.held().idle.push(send);
+        let mut held = self.held();
+        if !send.is_closed() && held.idle.len() < IDLE {
+            held.idle.push(send);
         }
     }
 }
