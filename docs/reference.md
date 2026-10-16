@@ -603,7 +603,7 @@ refused), the others stopped after that tick.
 <!-- man:environment: docs/man/environment.md, copied by `cargo xtask man` -->
 | Variable | Meaning |
 |---|---|
-| `DFORM_LOG` | `debug`: a line on stderr for each phase of a run and each call it makes, as it ends, with its time; `trace` adds each step a trace shows (an `EnvFilter`'s directives over dform's spans) |
+| `DFORM_LOG` | `debug`: a line on stderr for each phase of a run and each call it makes, as it ends, with its time; `trace` adds each step a trace shows (an `EnvFilter`'s directives over dform's spans). A line names the span it is said in, with its fields, and not the spans above it (a trace shows the path) |
 | `DFORM_TRACE` | a file to write the run's trace to, as `--trace FILE` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | where to send the run's trace over OTLP/HTTP, with the exporter's other `OTEL_EXPORTER_OTLP_*` variables (a build with the `otel` feature; else ignored) |
 | `DFORM_ACTOR` | who acts, as the audit log records it (a CI job's OIDC subject); else `USER@HOST`, from `USER` or `LOGNAME` |
