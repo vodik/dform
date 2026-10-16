@@ -11,9 +11,9 @@
 //! unbound operand at it, `=` with both sides bound by other goals (`==`
 //! is meant).
 //!
-//! The front end builds a statement's goals as written, asks the pass,
-//! and builds them again in the order it says (the build reads a
-//! variable's type off the `in` that binds it).
+//! The front end builds a statement's goals once, as written, asks the
+//! pass, and puts the clause in the order it says
+//! ([`crate::program::build::Gather::order`]); `lower` writes it so.
 //!
 //! The nodes keep what a term reads and how it is written where that
 //! binds ([`Written`](super::node::Written): a name alone, a tuple; where

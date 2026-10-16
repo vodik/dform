@@ -5843,10 +5843,11 @@ impl<'u> Lowerer<'u> {
         self.lits(rc, &lits)
     }
 
-    /// A statement's body (its clauses together), checked for what binds
-    /// and lowered in the order its literals hold (R-10): each after what
-    /// binds what it reads, otherwise as written. A body nested in it is
-    /// checked with it.
+    /// A statement's body (its clauses together), built once as written,
+    /// checked for what binds, its clause in the order its goals hold
+    /// (R-10): each after what binds what it reads, otherwise as written.
+    /// A body nested in it is checked with it. The literals it returns are
+    /// the resolver's own, as written.
     fn lits(&mut self, rc: &mut Rc, lits: &[SyntaxNode]) -> L<Vec<Lit>> {
         self.lits_after(rc, lits, Vec::new())
     }
@@ -5858,25 +5859,13 @@ impl<'u> Lowerer<'u> {
         if self.nested > 0 {
             return self.lits_as_written(rc, lits, seed);
         }
-        let saved = (
-            rc.clone(),
-            self.helpers.len(),
-            self.program.helpers,
-            self.aggs.len(),
-        );
         let outer = rc.outer.clone();
-        let out = self.lits_as_written(rc, lits, seed.clone())?;
+        let out = self.lits_as_written(rc, lits, seed)?;
         let order = self.binding_order(rc, &outer_names(rc, &outer))?;
-        if order.iter().enumerate().all(|(i, &j)| i == j) {
-            return Ok(out);
+        if let Some(s) = &mut self.gather {
+            s.order(&mut self.program, &order, &outer);
         }
-        let (rc0, helpers, counters, aggs) = saved;
-        *rc = rc0;
-        self.helpers.truncate(helpers);
-        self.program.helpers = counters;
-        self.aggs.truncate(aggs);
-        let lits: Vec<SyntaxNode> = order.iter().map(|&i| lits[i].clone()).collect();
-        self.lits_as_written(rc, &lits, seed)
+        Ok(out)
     }
 
     /// The order the clause just built holds in (R-10,

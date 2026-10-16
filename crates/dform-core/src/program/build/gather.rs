@@ -10,8 +10,9 @@
 use super::{Builder, Reads};
 use crate::ast::{self, Lit, Span, Stmt};
 use crate::program::dump::{Spans, dump};
-use crate::program::node::{ClauseId, GoalId, VarId};
-use crate::program::{NodeId, Program, lower_goal};
+use crate::program::node::{ClauseId, GoalId, GoalKind, VarId};
+use crate::program::{NodeId, Program, lower_clause, lower_goal};
+use crate::syntax::resolve::{bound_vars, lit_vars};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::ops::Range;
@@ -161,6 +162,61 @@ impl Gather {
         if let Some(f) = self.frames.last_mut() {
             f.failed = true;
         }
+    }
+
+    /// The statement's clause in the order its goals hold (R-10,
+    /// [`crate::program::bind::order`], `order`): what binds before what
+    /// reads it, a negation's helper taking what its body shares with
+    /// what the goals before it bind and what the statement around binds
+    /// (`outer`).
+    pub fn order(&mut self, program: &mut Program, order: &[usize], outer: &BTreeSet<String>) {
+        let Some(c) = self.clause else { return };
+        if order.iter().enumerate().all(|(i, &j)| i == j) {
+            return;
+        }
+        let written = program.clauses[c].goals.clone();
+        let goals: Vec<GoalId> = order.iter().map(|&i| written[i]).collect();
+        program.clauses[c].goals = goals.clone();
+        let mut before: Vec<Lit> = Vec::new();
+        for g in goals {
+            if let GoalKind::Not {
+                clause,
+                helper: Some(_),
+                ..
+            } = &program.goals[g].kind
+            {
+                let args = self.helper_args(program, *clause, &before, outer);
+                if let GoalKind::Not {
+                    helper: Some(h), ..
+                } = &mut program.goals[g].kind
+                {
+                    h.args = args;
+                }
+            }
+            let (lits, _) = lower_goal(program, g, &before);
+            before.extend(lits);
+        }
+    }
+
+    /// The arguments of a negation's helper whose body is `clause`: the
+    /// variables it shares with what `before` and `outer` bind.
+    fn helper_args(
+        &self,
+        program: &Program,
+        clause: ClauseId,
+        before: &[Lit],
+        outer: &BTreeSet<String>,
+    ) -> Vec<VarId> {
+        let (inner, _) = lower_clause(program, clause, &[]);
+        let mut bound = bound_vars(before);
+        bound.extend(outer.iter().cloned());
+        let mut used = BTreeSet::new();
+        for l in &inner {
+            lit_vars(l, &mut used);
+        }
+        used.intersection(&bound)
+            .filter_map(|v| self.vars.get(v).copied())
+            .collect()
     }
 
     /// The clause of the statement's body, once it is lowered whole.
