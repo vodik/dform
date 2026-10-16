@@ -32,15 +32,16 @@ fn an_override_that_violates_a_refinement_is_a_deny() {
     )
     .failure();
     assert!(
-        r.stdout
-            .contains("conflicts\n  ! input db.backup_days: 40 violates range(1, 35)\n"),
+        r.stdout.contains(
+            "conflicts\n  ! input db.backup_days: 40 is outside the check 1 <= backup_days <= 35\n"
+        ),
         "{}",
         r.stdout
     );
     // Each witness by where it was written (R-111), and said once.
     assert!(
         r.stdout.contains(
-            "\n      override { backup_days = 40 }  p.df:9\n      check range(1, 35)  p.df:3\n"
+            "\n      override { backup_days = 40 }  p.df:9\n      check 1 <= backup_days <= 35  p.df:3\n"
         ),
         "{}",
         r.stdout
@@ -162,7 +163,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     assert!(
         r.stderr.contains(
             "refused  google.container_cluster gke_platform.zones: \
-             [\"us-east1-b\", \"us-east1-c\"] violates len_ge(3)\n"
+             [\"us-east1-b\", \"us-east1-c\"] is outside the check zones.len >= 3\n"
         ) && r.stderr.contains("^ checked here\n")
             && r.stderr
                 .contains("tests/fixtures/refine/stacks/refine_gke.df:121  ")
@@ -286,7 +287,7 @@ n(\"{name}\")
     let r = plan(&s, &src("abcd", "10.0.0.0/16")).failure();
     assert!(
         r.stdout
-            .contains("! app.thing a.name: \"abcd\" violates len_le(3)\n"),
+            .contains("! app.thing a.name: \"abcd\" is outside the check name.len <= 3\n"),
         "{}",
         r.stdout
     );

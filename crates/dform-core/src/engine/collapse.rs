@@ -192,7 +192,7 @@ impl Collapse<'_> {
             let a = store.get(*t);
             return obj(vec![
                 ("rank", Value::Str("refinement".into())),
-                ("value", Value::Str(r.constraint.to_string())),
+                ("value", Value::Str(checked(r, a.span))),
                 (
                     "from",
                     Value::List(vec![Value::Str(with_place(spell::atom(a), a.span))]),
@@ -287,20 +287,19 @@ impl Collapse<'_> {
             "attr_conflict",
             vec![self.first(ws), self.first(refinement)],
         ));
-        let place = refinement
-            .iter()
-            .find_map(|w| self.refinement_of(*w))
-            .and_then(|(t, _)| diag::place(self.store.get(*t).span))
-            .unwrap_or_default();
+        let stated = refinement.iter().find_map(|w| self.refinement_of(*w));
+        let span = stated.map(|(t, _)| self.store.get(*t).span);
+        let place = span.and_then(diag::place).unwrap_or_default();
+        let reason = match span.and_then(crate::report::tree::check_at) {
+            Some(check) => format!("{} is outside the check {check}", spell::value(&value)),
+            None => format!("{} violates {constraint}", spell::value(&value)),
+        };
         let mut kv = vec![
             ("type", Value::Str(typ.clone())),
             ("addr", addr.clone()),
             ("path", Value::Str(at)),
             ("constraint", Value::Str(constraint.to_string())),
-            (
-                "reason",
-                Value::Str(format!("{} violates {constraint}", spell::value(&value))),
-            ),
+            ("reason", Value::Str(reason)),
             ("value", value),
             (
                 "witnesses",
@@ -367,4 +366,10 @@ impl Collapse<'_> {
             ctx,
         ));
     }
+}
+
+/// A refinement as a witness says it: the check as the program writes it
+/// at `at`, else (a provider schema's) its constraint.
+fn checked(r: &crate::refine::Stated, at: crate::ast::Span) -> String {
+    crate::report::tree::check_at(at).unwrap_or_else(|| r.constraint.to_string())
 }

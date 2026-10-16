@@ -120,3 +120,25 @@ fn a_check_over_another_input_is_a_policy() {
     ])
     .success();
 }
+
+/// An object's field's check is said as the program writes it, by the
+/// field's own name, not spelled again from its path.
+#[test]
+fn a_fields_check_is_said_as_written() {
+    let s = project(
+        "input-check-field",
+        "key env: enum(dev, prod)\n\
+         input db {\n  size: int = 2 check size < 3, size != 7\n}\n\
+         use fake\n\
+         resource net.vpc v { cidr = \"10.0.0.0/16\", tags = { s = \"${db.size}\" } }\n",
+    );
+    let r = s
+        .run(&["plan", "app", "env=dev", "--set", "db.size=7"])
+        .failure();
+    assert!(
+        r.stderr
+            .contains("help: give db.size a value of int check size < 3, size != 7\n"),
+        "{}",
+        r.stderr
+    );
+}

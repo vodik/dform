@@ -1,6 +1,6 @@
 //! A range in a `check` refines a value of every ordered type, as it does
 //! an int: a computed value outside it is a conflict in the value's cell,
-//! printed with its bounds as values (`range(10Gi, 4Ti)`), and a bound
+//! printed as the program writes it (`disk in 10Gi..=4Ti`), and a bound
 //! of another type than the value's is an error at the check.
 
 use crate::common;
@@ -39,7 +39,8 @@ fn a_computed_quantity_outside_its_range_is_a_conflict() {
             r.stdout
         );
         assert!(
-            r.stdout.contains("5Ti violates range(10Gi, 4Ti)"),
+            r.stdout
+                .contains(&format!("5Ti is outside the check {check}\n")),
             "{check}: {}",
             r.stdout
         );
@@ -54,7 +55,8 @@ fn a_duration_range_refines_its_value() {
         let src = computed(&format!("ttl: duration = 1h check {check}"), "ttl", "3h");
         let r = plan(&s, &src, &[]).failure();
         assert!(
-            r.stdout.contains("3h violates range(1s, 2h)"),
+            r.stdout
+                .contains(&format!("3h is outside the check {check}\n")),
             "{check}: {}",
             r.stdout
         );
@@ -82,7 +84,8 @@ fn a_float_range_without_its_end_refines_its_value() {
         let src = computed(&format!("r: float = 0.5 check {check}"), "r", "1.0");
         let r = plan(&s, &src, &[]).failure();
         assert!(
-            r.stdout.contains("1.0 violates range(0.0, 1.0, open)"),
+            r.stdout
+                .contains(&format!("1.0 is outside the check {check}\n")),
             "{check}: {}",
             r.stdout
         );
@@ -145,7 +148,12 @@ fn a_strict_start_of_a_float_is_a_refinement() {
     let s = Scratch::new("range-float-strict");
     let src = computed("r: float = 0.5 check 0.0 < r <= 1.0", "r", "0.0");
     let r = plan(&s, &src, &[]).failure();
-    assert!(r.stdout.contains("violates range("), "{}", r.stdout);
+    assert!(
+        r.stdout
+            .contains("0.0 is outside the check 0.0 < r <= 1.0\n"),
+        "{}",
+        r.stdout
+    );
 }
 
 /// Not yet a refinement: a bound whose literal its position reads (`1m`,
@@ -158,7 +166,8 @@ fn an_ambiguous_bound_is_read_by_the_values_type() {
     let src = computed("ttl: duration = 1h check 1m <= ttl <= 2h", "ttl", "3h");
     let r = plan(&s, &src, &[]).failure();
     assert!(
-        r.stdout.contains("3h violates range(1m, 2h)"),
+        r.stdout
+            .contains("3h is outside the check 1m <= ttl <= 2h\n"),
         "{}",
         r.stdout
     );

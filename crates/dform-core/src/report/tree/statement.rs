@@ -60,6 +60,30 @@ pub fn written_at(span: crate::ast::Span) -> Option<String> {
     Some(collapse(&shown.text))
 }
 
+/// The check written in the declaration at `span` (an input's, a
+/// field's, an attribute's in a type block), after `check`, on one line:
+/// how a message says a refinement, its names as they read there.
+pub fn check_at(span: crate::ast::Span) -> Option<String> {
+    use SyntaxKind::{BODY, REFINEMENT};
+    let (_, text) = crate::diag::source_of(span)?;
+    let root = crate::syntax::parser::parse(&text).syntax();
+    let len: usize = root.text_range().end().into();
+    if span.start > span.end || span.end as usize > len {
+        return None;
+    }
+    let range = rowan::TextRange::new(span.start.into(), span.end.into());
+    let n = match root.covering_element(range) {
+        NodeOrToken::Node(n) => n,
+        NodeOrToken::Token(t) => t.parent()?,
+    };
+    let refinement = n
+        .descendants()
+        .find(|d| d.kind() == REFINEMENT)
+        .or_else(|| n.ancestors().find(|a| a.kind() == REFINEMENT))?;
+    let body = refinement.children().find(|c| c.kind() == BODY)?;
+    Some(collapse(&body.text().to_string()))
+}
+
 /// The statement the span `start..end` is in, and the block entry it is
 /// when it is one (a rule lowered out of a resource's or an instance's
 /// `k = v`).

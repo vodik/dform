@@ -613,6 +613,12 @@ fn set_path(v: &mut Value, rest: &str, x: Value) {
 /// The check of input `decl` as the program writes it, its name read
 /// as written: `0 <= agents, agents <= 3` (spelled back from its parts).
 pub fn check_text(decl: &InputDecl) -> String {
+    crate::report::tree::check_at(check_span(decl)).unwrap_or_else(|| spelled_check(decl))
+}
+
+/// Input `decl`'s check spelled from its literals, where its source is
+/// not at hand.
+fn spelled_check(decl: &InputDecl) -> String {
     let named = BTreeMap::from([(decl.name.clone(), Term::Var(decl.name.clone()))]);
     decl.refinement
         .iter()

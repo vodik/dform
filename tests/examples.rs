@@ -160,7 +160,7 @@ const FIXTURES: &[Case] = &[
             one(
                 &["apply", "--set", "zones=2"],
                 Apply::Stops(
-                    "gke_platform.zones: [\"us-east1-b\", \"us-east1-c\"] violates len_ge(3)",
+                    "gke_platform.zones: [\"us-east1-b\", \"us-east1-c\"] is outside the check zones.len >= 3",
                 ),
             ),
         ],
