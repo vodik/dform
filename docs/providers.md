@@ -176,6 +176,14 @@ fn main() -> std::process::ExitCode {
   replaces, a missing `required` attribute refuses. Import is a read.
 - `Provider::configure` gets the program's `use NAME { .. }` settings,
   each secret revealed into them, `{}` when the program writes none.
+  It makes the provider of one session: a configured instance, one per
+  deployment of the run (docs/reference.md, "Providers are processes").
+  The SDK keeps one per session and answers each call with its
+  session's, so two deployments' calls in flight never meet; a session's
+  calls come one at a time, two sessions' at once. Keep nothing of a
+  session's outside the value `configure` returns. A location read
+  (`Provider::read`) names no session: the session opened last answers
+  it.
   Until they are known (a kubeconfig another deployment outputs), the
   provider is configured `deferred` and still asked to Plan, against
   the schema it serves offline. A setting that only reaches what the
@@ -261,7 +269,16 @@ fn main() -> std::process::ExitCode {
   one says so, and dform's retry policy sends it again.
 - `provider!(EXPR)` is the entry point. Any `Handler` will do: the fake
   provider (`crates/dform-provider-fake`) is `provider!(dform_mock::Mock::process())`,
-  the mock answering every call itself.
+  the mock answering every call itself. `Handler::handle` is told each
+  call's session: what serves it numbers them (a Configure that names
+  none opens the next) and puts it in the Configure's answer. A
+  `Handler` keeps one configuration per session (`backend::Configured`
+  holds them: the mock keeps a cloud per session, the OVH provider an
+  `Ovh`) and refuses a call of a session no Configure opened. A
+  provider of its own over gRPC answers each Configure with the session
+  (`ConfigureResponse.session`, never 0: dform refuses a provider that
+  answers none) and reads each call's `session`, as the Kubernetes
+  provider does.
 
 - A type whose objects the API makes (a device joins a tailnet) says why
   in `Lifecycle::NOT_CREATED`: Plan refuses a create of one, naming the

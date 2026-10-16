@@ -993,7 +993,8 @@ ordering, parallelism, state and crash safety: a provider that dies during an
 Apply is a failed action naming the resource, and the next `apply` resumes.
 dform paces the HTTP requests a provider sends through the host
 (`dform:host/http`) by what the server answers, a window of requests in
-flight per bucket: the bucket is
+flight per session and bucket: the session is the configured instance
+the request's call is made in (below), the bucket is
 the provider's word on a request (`Request::bucket("ec2.describe")`,
 `"route53.change:ZONE"` for a limit an object has; none, the provider's
 default), and nobody declares a rate. A window starts at two, grows while
@@ -1005,6 +1006,23 @@ A provider built on `dform-grpc`'s `transport::serve`, the mock included, listen
 on TCP unless `DFORM_PROVIDER_TRANSPORT=unix` is in its environment (which it
 inherits from dform): then on a socket in the temporary directory, removed
 when it exits.
+
+A session is a configured instance of a provider. Configure opens one
+and answers its number; every call after it (Schema, Query, Read, Plan,
+Apply, Import, Reveal, Health) names the session it is made in, and the
+provider answers it with that session's configuration. A provider keeps
+one configuration per session and nothing else for it: what a call is
+told of an object (its prior) is state's, and a session's configuration
+is what its last Configure sent. A Configure that names a session
+configures that one again (a program's settings, once the evaluation
+knows them); one that names none opens a new one. dform opens a session
+per deployment on each provider the run starts, so the deployments of a
+tree planned or applied as one run share one process per provider, each
+in its own session: their calls may be in flight together, and each
+lands in its own deployment's world. A provider whose Configure answers
+no session was built before sessions, and dform refuses it, naming it
+and its build. One session's throttle leaves another's window as it
+was.
 
 Read is told the object's prior: its computed values as the last Apply
 answered them, or the last Read an apply made, as state keeps them
@@ -5224,11 +5242,11 @@ fails says its trace id after the error. The spans:
 | Span | What | Attributes |
 |---|---|---|
 | `plan.phase` | a step: loaded and compiled, located the deployment, providers started and configured, evaluated, each extern round, refresh, Plan calls, the policy pass, each deployment of a project's plan | `count` (the refresh's objects, the Plan calls asked) |
-| `provider.call` | one call to a provider, from its submit to its answer (a client span, its status `ok` or `error`) | `provider`, `kind` (`Configure`, `Read`, `Plan`, `Apply`, `Query`, ..), `addr` (the resource's address or the extern's name) |
+| `provider.call` | one call to a provider, from its submit to its answer (a client span, its status `ok` or `error`) | `provider`, `kind` (`Configure`, `Read`, `Plan`, `Apply`, `Query`, ..), `addr` (the resource's address or the extern's name), `session` (the configured instance the call is made in; a Configure's, the one it opened) |
 | `io.call` | a request dform makes itself (a client span) | `kind` (`s3.get`, `s3.put`, `s3.list`, `io.read`, `oci.resolve`), `addr` (the location, without its userinfo, query or fragment) |
 | `tick` | an apply tick | `tick` |
 | `apply.wait` | a tick waiting on values the world has not reached (R-81) | `tick`, `kind` (`world`, `extern`), `count` |
-| `ratelimit.wait` | a provider's request waiting on its bucket's window in the host | `provider`, `bucket`, `queued` (the requests before it), `window` |
+| `ratelimit.wait` | a provider's request waiting on its bucket's window in the host | `provider`, `session`, `bucket`, `queued` (the requests before it), `window` |
 
 The order the run took is the viewer's, from each span's times and
 parent: calls sent one after another follow each other, a batch sent
