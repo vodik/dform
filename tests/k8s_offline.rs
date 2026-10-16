@@ -187,7 +187,8 @@ fn offline_apply_fails_naming_why() {
 }
 
 /// With no kubeconfig and no cluster, the provider says so in one sentence
-/// of dform's, and the client's chain of errors only under `DFORM_LOG=debug`.
+/// of dform's (the host's, which looked for the environment's kubeconfig),
+/// and again under `DFORM_LOG=debug`.
 #[test]
 fn offline_is_said_in_one_sentence() {
     let s = Scratch::project("k8s-offline-line");
@@ -221,7 +222,7 @@ fn offline_is_said_in_one_sentence() {
     let r = run(true);
     assert!(
         r.stderr
-            .contains("k8s: no kubeconfig and not in a cluster: "),
+            .contains("DEBUG k8s: no kubeconfig at ~/.kube/config and not in a cluster"),
         "{}",
         r.stderr
     );
@@ -729,6 +730,50 @@ fn the_k8s_provider_conforms() {
         ["/api/v1/namespaces/default"],
         "the check cleans up"
     );
+}
+
+/// Every request the provider makes goes through the host: an `io.call`
+/// span under the `provider.call` it is made for (Configure's discovery,
+/// Plan's dry runs), paced in a bucket of its verb and resource, its
+/// server the kubeconfig's.
+#[test]
+fn its_requests_are_spans_under_the_calls_they_are_made_for() {
+    let s = Scratch::project("k8s-trace");
+    real_demo(&s);
+    let (api, url) = Api::start();
+    let kc = kubeconfig(&s, &url);
+    let args = common::on("k8s_demo.df", &[], &["plan", "--trace", "run.jsonl"]);
+    dform(&s, Some(&kc), &args).success();
+    let spans = common::spans(&s.path("run.jsonl"));
+    let by_id: BTreeMap<&str, &Json> = spans
+        .iter()
+        .map(|sp| (sp["spanId"].as_str().unwrap(), sp))
+        .collect();
+    let requests: Vec<&Json> = spans
+        .iter()
+        .filter(|sp| common::attr(sp, "kind").as_deref() == Some("http"))
+        .collect();
+    let sent = api.requests.lock().unwrap().len();
+    assert_eq!(
+        requests.len(),
+        sent,
+        "a span for each of the server's requests"
+    );
+    let (mut under, mut buckets) = (BTreeMap::new(), std::collections::BTreeSet::new());
+    for r in &requests {
+        buckets.extend(common::attr(r, "bucket"));
+        let addr = common::attr(r, "addr").unwrap();
+        assert!(addr.starts_with(&url), "{addr}");
+        let parent = r["parentSpanId"].as_str().and_then(|p| by_id.get(p));
+        let call = parent.and_then(|p| p["name"].as_str()).unwrap_or_default();
+        assert!(call.starts_with("k8s "), "{addr} is under {call:?}");
+        *under.entry(call.to_string()).or_insert(0) += 1;
+    }
+    assert!(under.contains_key("k8s Configure"), "{under:?}");
+    assert!(under.contains_key("k8s Plan"), "{under:?}");
+    for b in ["get openapi", "patch namespaces", "patch services"] {
+        assert!(buckets.contains(b), "{buckets:?}");
+    }
 }
 
 /// The demo applies through the fake API server: server-side apply as
@@ -1315,6 +1360,60 @@ fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
             .iter()
             .all(|a| a == &format!("Bearer {TOKEN}"))
     );
+}
+
+/// A kubeconfig the program gives with a client certificate (k3s's, a
+/// managed cluster's): the host presents it to the API server, over one
+/// TLS connection for the whole run, its CA trusted beside the machine's;
+/// the provider never sees the key.
+#[test]
+fn the_host_presents_the_programs_client_certificate() {
+    use base64::Engine;
+    use dform::http::fake::{CA, CLIENT_CHAIN, CLIENT_KEY, Server};
+    let s = Scratch::project("k8s-client-cert");
+    std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
+    std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();
+    let server = Server::h2_mutual(100);
+    let (presented, shown) = (Server::client_der(), Arc::new(Mutex::new(Vec::new())));
+    let seen = shown.clone();
+    server.answer(move |r| {
+        seen.lock()
+            .unwrap()
+            .push(r.peer.as_ref() == Some(&presented));
+        let index = json!({"paths": {}});
+        (
+            200,
+            vec![("content-type".into(), "application/json".into())],
+            index.to_string().into_bytes(),
+        )
+    });
+    let b64 = |s: &str| base64::engine::general_purpose::STANDARD.encode(s);
+    let kc = json!({
+        "apiVersion": "v1", "kind": "Config", "current-context": "k3s",
+        "clusters": [{"name": "k3s", "cluster": {"server": server.url(""),
+                                                 "certificate-authority-data": b64(CA)}}],
+        "contexts": [{"name": "k3s", "context": {"cluster": "k3s", "user": "admin"}}],
+        "users": [{"name": "admin", "user": {"client-certificate-data": b64(CLIENT_CHAIN),
+                                             "client-key-data": b64(CLIENT_KEY)}}]
+    })
+    .to_string();
+    s.write(
+        "p.df",
+        "\ninput kubeconfig: secret(string)\n\
+         use k8s { source = \"./providers/k8s\" }\n\
+         provider_config(\"k8s\", { kubeconfig = k }) where kubeconfig(k)\n\
+         resource k8s.namespace shop { metadata.name = \"shop\" }\n",
+    );
+    let mut args = common::on("p.df", &[], &["plan"]);
+    args.extend(["--set".to_string(), format!("kubeconfig={kc}")]);
+    dform(&s, None, &args);
+    let shown = shown.lock().unwrap();
+    assert!(!shown.is_empty(), "the provider asked the cluster");
+    assert!(
+        shown.iter().all(|p| *p),
+        "each request presented the certificate"
+    );
+    assert_eq!(server.connections(), 1, "one connection for the run");
 }
 
 /// A Create whose answer is lost (the server applied it and the

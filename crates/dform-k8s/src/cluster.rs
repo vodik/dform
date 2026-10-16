@@ -1,41 +1,141 @@
-//! The API server: the kubeconfig's cluster (or the pod's, in a cluster),
-//! reached with kube's client. Objects by kind, namespace and name; writes
-//! are server-side apply as the field manager `dform`, never forced.
+//! The API server, reached through the host: a thin client of the
+//! Kubernetes API over the SDK's `Http` (discovery, get, list, server-side
+//! apply, delete), every request sent with the session's kubeconfig
+//! credential applied by the host, which the provider holds by name and
+//! never by value. Each request is an `io.call` span under the call it is
+//! sent for, paced in its session's window (its bucket the verb and the
+//! resource, `get deployments`), over the host's one connection to the
+//! server. Writes are server-side apply as the field manager `dform`, never
+//! forced.
+//!
+//! A status is answered as it is waited for: by polling (a delete's
+//! [`Cluster::gone`]), not by a watch, since the host answers a request
+//! whole (`http.send` has no streamed body until wasip3) and a watch is a
+//! body that does not end.
 
 use crate::object::MANAGER;
 use crate::openapi::Kind;
 use anyhow::{Context, Result, anyhow, bail};
-use kube::config::Kubeconfig;
-use kube::core::Status;
-use kube::core::params::{DeleteParams, GetParams, ListParams, Patch, PatchParams};
-use kube::core::request::Request;
+use dform_core::plugin::backend::{Session, Within};
+use dform_sdk::{Credential, Request, Response, host};
 use serde_json::{Value as Json, json};
 use std::path::Path;
 use std::time::Duration;
 
-/// How long connecting to the API server may take before the provider
+/// How long the API server may take to answer its OpenAPI index, the
+/// first request of a session (connecting, TLS), before the provider
 /// works offline.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const REACH: Duration = Duration::from_secs(5);
 
-/// The settings [`Cluster::configured`] reads, each with whether its value
-/// is sensitive: what the handshake declares, so a program's secret goes
-/// only where the provider keeps it in memory (E0304).
-pub const SETTINGS: [(&str, bool); 7] = [
-    ("kubeconfig", true),
-    ("host", false),
-    ("ca", false),
-    ("token", true),
-    ("client_certificate", false),
-    ("client_key", true),
-    ("namespace", false),
+/// The objects a list asks for at once; the server's `continue` token
+/// asks for the rest.
+const PAGE: usize = 500;
+
+/// A setting [`Cluster::configured`] reads.
+pub struct Setting {
+    pub name: &'static str,
+    /// Its value is a secret's: what the handshake declares, so a
+    /// program's secret goes only where the host keeps it (E0304).
+    pub sensitive: bool,
+    /// It is the kubeconfig, or a part of it: the host holds it, and the
+    /// provider is configured with the credential's name.
+    pub credential: bool,
+}
+
+const fn setting(name: &'static str, sensitive: bool, credential: bool) -> Setting {
+    Setting {
+        name,
+        sensitive,
+        credential,
+    }
+}
+
+/// The settings [`Cluster::configured`] reads: the kubeconfig, or its
+/// parts (`host`, `ca`, `token`, `client_certificate`, `client_key`),
+/// each a part of the session's kubeconfig credential, and `namespace`.
+pub const SETTINGS: [Setting; 7] = [
+    setting("kubeconfig", true, true),
+    setting("host", false, true),
+    setting("ca", false, true),
+    setting("token", true, true),
+    setting("client_certificate", false, true),
+    setting("client_key", true, true),
+    setting("namespace", false, false),
 ];
 
+/// The credential kind of the [`SETTINGS`] that are credentials.
+pub const CREDENTIAL: &str = "kubeconfig";
+
+tokio::task_local! {
+    /// The trace number of the call a handler answers (`dform-call`,
+    /// `dform_grpc::traced`): what the requests it sends are spans under.
+    pub static CALL: Option<u64>;
+}
+
 pub struct Cluster {
-    client: kube::Client,
-    /// The kubeconfig context's namespace (`default` without one).
+    /// The session's kubeconfig, as the host holds it: a handle.
+    credential: Credential,
+    /// The session the cluster was configured in: what its requests are
+    /// paced under.
+    session: Session,
+    /// The objects' namespace when a document names none: the `namespace`
+    /// setting, else the kubeconfig context's, else `default`.
     pub namespace: String,
-    /// The server's URL, for messages and the schema cache's name.
+    /// The server's URL, for messages, the schema cache's name and the
+    /// account the session reaches.
     pub url: String,
+}
+
+/// A status the API server answered for a request it refused
+/// (`kind: Status`).
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+pub struct Status {
+    pub code: u16,
+    pub reason: String,
+    pub message: String,
+    pub details: Option<StatusDetails>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+pub struct StatusDetails {
+    pub causes: Vec<StatusCause>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+pub struct StatusCause {
+    pub reason: String,
+    pub message: String,
+    pub field: String,
+}
+
+/// Why a request answered nothing it asked for.
+#[derive(Debug)]
+pub enum Refused {
+    /// The server refused it, saying why.
+    Api(Status),
+    /// No answer: the host's error (a write may have happened).
+    Transport(anyhow::Error),
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Refused::Api(s) => write!(f, "{} ({})", s.message, s.code),
+            Refused::Transport(e) => write!(f, "{e:#}"),
+        }
+    }
+}
+
+impl std::error::Error for Refused {}
+
+impl Refused {
+    /// The server's status, if it answered `code`.
+    fn is(&self, code: u16) -> bool {
+        matches!(self, Refused::Api(s) if s.code == code)
+    }
 }
 
 /// Why a write did not happen.
@@ -81,10 +181,10 @@ fn conflicting_manager(message: &str) -> String {
     message.split('"').nth(1).unwrap_or(message).to_string()
 }
 
-fn write_error(e: kube::Error) -> WriteError {
+fn write_error(e: Refused) -> WriteError {
     match e {
-        kube::Error::Api(s) => api_write_error(&s),
-        other => WriteError::Transport(other.into()),
+        Refused::Api(s) => api_write_error(&s),
+        Refused::Transport(e) => WriteError::Transport(e),
     }
 }
 
@@ -116,49 +216,19 @@ fn api_write_error(s: &Status) -> WriteError {
     WriteError::Other(anyhow!("{} ({})", s.message, s.code))
 }
 
-/// A kubeconfig of one context from separate fields: `host`, `ca`,
-/// `token` or `client_certificate` and `client_key`, `namespace`.
-fn fields_kubeconfig(settings: &Json) -> Result<Kubeconfig> {
-    let field = |k: &str| -> Result<Option<&str>> {
-        match settings.get(k) {
-            None => Ok(None),
-            Some(Json::String(s)) => Ok(Some(s)),
-            Some(_) => bail!("provider_config k8s: {k} is a string"),
+/// `s` as a URL's query value: every byte but the unreserved ones
+/// percent-encoded.
+fn query(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
         }
-    };
-    // PEM as it is, or base64 of it (as a kubeconfig carries it).
-    let data = |k: &str| -> Result<Option<String>> {
-        Ok(
-            field(k)?.map(|v| match v.trim_start().starts_with("-----BEGIN") {
-                true => crate::object::base64_encode(v.as_bytes()),
-                false => v.to_string(),
-            }),
-        )
-    };
-    let host = field("host")?.unwrap_or_default();
-    let server = match host.contains("://") {
-        true => host.to_string(),
-        false => format!("https://{host}"),
-    };
-    let token = field("token")?;
-    let (cert, key) = (data("client_certificate")?, data("client_key")?);
-    if token.is_none() && (cert.is_none() || key.is_none()) {
-        bail!(
-            "provider_config k8s: host needs a token, or a client_certificate and a \
-             client_key"
-        );
     }
-    let kc = json!({
-        "clusters": [{"name": "dform", "cluster": {
-            "server": server, "certificate-authority-data": data("ca")?}}],
-        "users": [{"name": "dform", "user": {
-            "token": token, "client-certificate-data": cert, "client-key-data": key}}],
-        "contexts": [{"name": "dform", "context": {
-            "cluster": "dform", "user": "dform", "namespace": field("namespace")?}}],
-        "current-context": "dform",
-    });
-    serde_json::from_value(crate::object::strip_nulls(&kc))
-        .map_err(|_| anyhow!("provider_config k8s: the fields make no kubeconfig"))
+    out
 }
 
 /// A cluster's OpenAPI document and its hash (of the cache file's text,
@@ -194,90 +264,117 @@ impl Document {
 }
 
 impl Cluster {
-    /// The cluster the environment names: `KUBECONFIG` or `~/.kube/config`,
-    /// else the pod's service account. Nothing is contacted yet.
-    pub async fn infer() -> Result<Cluster> {
-        let config = kube::Config::infer()
-            .await
-            .context("no kubeconfig and not in a cluster")?;
-        Cluster::connect(config)
-    }
-
-    /// Why [`Cluster::infer`] found no cluster, as the user would look:
-    /// the kubeconfig kube reads (`KUBECONFIG`'s files, else
-    /// `~/.kube/config`) is missing or does not load, or in a pod, its
-    /// service account does not.
-    pub fn not_found() -> String {
-        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-        let paths: Vec<std::path::PathBuf> = match std::env::var_os("KUBECONFIG") {
-            Some(v) if !v.is_empty() => std::env::split_paths(&v).collect(),
-            _ => home.iter().map(|h| h.join(".kube/config")).collect(),
-        };
-        let shown = |p: &Path| match home.as_deref().and_then(|h| p.strip_prefix(h).ok()) {
-            Some(rest) => format!("~/{}", rest.display()),
-            None => p.display().to_string(),
-        };
-        match paths.iter().find(|p| p.exists()) {
-            Some(p) => format!("the kubeconfig at {} does not load", shown(p)),
-            None if std::env::var_os("KUBERNETES_SERVICE_HOST").is_some() => {
-                "the pod's service account does not load".into()
-            }
-            None if paths.is_empty() => "no kubeconfig and not in a cluster".into(),
-            None => format!(
-                "no kubeconfig at {} and not in a cluster",
-                paths
-                    .iter()
-                    .map(|p| shown(p))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        }
-    }
-
-    /// The cluster the program's `provider_config("k8s", ...)`
-    /// names, if it names one: `kubeconfig` (the text of a kubeconfig, its
-    /// current context), or `host` with `ca` and a `token` or a
-    /// `client_certificate` and `client_key` (PEM, or base64 of it), and
-    /// optionally `namespace`. The values stay in memory: nothing is
-    /// written, and an error never quotes them.
-    pub async fn configured(settings: &Json) -> Result<Option<Cluster>> {
-        let kubeconfig = match settings.get("kubeconfig") {
-            Some(Json::String(text)) => Kubeconfig::from_yaml(text).map_err(|_| {
-                anyhow!("provider_config k8s: kubeconfig is not a kubeconfig (YAML)")
-            })?,
-            Some(_) => bail!("provider_config k8s: kubeconfig is a string"),
-            None => match settings.get("host") {
-                Some(_) => fields_kubeconfig(settings)?,
-                None => return Ok(None),
-            },
-        };
-        let config = kube::Config::from_custom_kubeconfig(kubeconfig, &Default::default())
-            .await
-            .map_err(|e| anyhow!("provider_config k8s: {e}"))?;
-        Cluster::connect(config).map(Some)
-    }
-
-    fn connect(mut config: kube::Config) -> Result<Cluster> {
-        config.connect_timeout = Some(CONNECT_TIMEOUT);
-        let url = config.cluster_url.to_string();
-        let namespace = config.default_namespace.clone();
-        let client = kube::Client::try_from(config).context("a client for the kubeconfig")?;
+    /// The cluster the kubeconfig credential `name` reaches, which the
+    /// host holds for this provider (the environment's, or the program's),
+    /// opened in `session`; `namespace` (the setting) before its
+    /// context's. Nothing is contacted yet. Its error is the host's: why
+    /// the kubeconfig does not load (`no kubeconfig at ~/.kube/config and
+    /// not in a cluster`).
+    pub fn open(name: &str, session: Session, namespace: Option<&str>) -> Result<Cluster> {
+        let credential = host()
+            .secrets
+            .open(name)
+            .map_err(|e| anyhow!("{}", e.message))?;
+        let url = credential
+            .endpoint()
+            .ok_or_else(|| anyhow!("the kubeconfig names no server"))?
+            .trim_end_matches('/')
+            .to_string();
+        let namespace = namespace
+            .or(credential.namespace())
+            .unwrap_or("default")
+            .to_string();
         Ok(Cluster {
-            client,
+            credential,
+            session,
             namespace,
             url,
         })
     }
 
-    async fn get_json(&self, uri: &str) -> Result<Json> {
-        let mut req = Request::new("/openapi")
-            .get("v3", &GetParams::default())
-            .map_err(|e| anyhow!("{e}"))?;
-        *req.uri_mut() = uri.parse().with_context(|| format!("the URL {uri}"))?;
-        self.client
-            .request::<Json>(req)
+    /// The cluster the program's `use k8s { .. }` names, if it names one:
+    /// its kubeconfig credential, by the name each of its credential
+    /// settings (`kubeconfig`, or `host` and the rest) was configured with
+    /// in their place, and its `namespace`. A setting that is no
+    /// credential's name is refused without quoting it.
+    pub fn configured(settings: &Json, session: Session) -> Result<Option<Cluster>> {
+        let named = SETTINGS
+            .iter()
+            .filter(|s| s.credential)
+            .find_map(|s| settings.get(s.name).map(|v| (s.name, v)));
+        let Some((setting, name)) = named else {
+            return Ok(None);
+        };
+        let name = match name.as_str() {
+            Some(n) if n.starts_with(&format!("{CREDENTIAL}:")) => n,
+            _ => bail!(
+                "use k8s: {setting} is not the name of the credential dform holds for it \
+                 (the provider is configured by a dform that holds none)"
+            ),
+        };
+        let namespace = match settings.get("namespace") {
+            None | Some(Json::Null) => None,
+            Some(Json::String(n)) => Some(n.as_str()),
+            Some(_) => bail!("use k8s: namespace is a string"),
+        };
+        Cluster::open(name, session, namespace).map(Some)
+    }
+
+    /// Send `req` through the host with the session's credential, in the
+    /// call the handler answers: its own thread, as the host's calls
+    /// block. A status the server answered that is not a success is
+    /// [`Refused::Api`].
+    async fn send(&self, req: Request) -> std::result::Result<Response, Refused> {
+        let within = Within {
+            session: self.session,
+            call: CALL.try_with(|c| *c).ok().flatten(),
+        };
+        let req = req.auth(&self.credential);
+        let answer = tokio::task::spawn_blocking(move || {
+            let _in = within.enter();
+            host().http.request(req)
+        })
+        .await
+        .map_err(|e| Refused::Transport(anyhow!("the request's thread: {e}")))?
+        .map_err(|e| Refused::Transport(e.into()))?;
+        if (200..300).contains(&answer.status) {
+            return Ok(answer);
+        }
+        let status = serde_json::from_slice::<Status>(&answer.body)
+            .ok()
+            .filter(|s| s.code != 0)
+            .unwrap_or_else(|| Status {
+                code: answer.status,
+                reason: "Failed to parse error data".into(),
+                message: String::from_utf8_lossy(&answer.body).into_owned(),
+                details: None,
+            });
+        Err(Refused::Api(status))
+    }
+
+    /// A request for `path` (and query) on the server, its bucket `verb`
+    /// and `resource`.
+    fn request(&self, method: &str, path: &str, verb: &str, resource: &str) -> Request {
+        Request::new(method, format!("{}{path}", self.url))
+            .header("accept", "application/json")
+            .bucket(format!("{verb} {resource}"))
+    }
+
+    /// `req`'s answer as JSON.
+    async fn json(&self, req: Request) -> std::result::Result<Json, Refused> {
+        let answer = self.send(req).await?;
+        serde_json::from_slice(&answer.body)
+            .map_err(|e| Refused::Transport(anyhow!("the server's answer is not JSON: {e}")))
+    }
+
+    async fn get_json(&self, uri: &str, timeout: Option<Duration>) -> Result<Json> {
+        let mut req = self.request("GET", uri, "get", "openapi");
+        if let Some(t) = timeout {
+            req = req.timeout(t);
+        }
+        self.json(req)
             .await
-            .with_context(|| format!("GET {}{uri}", self.url.trim_end_matches('/')))
+            .with_context(|| format!("GET {}{uri}", self.url))
     }
 
     /// The OpenAPI v3 document, `{"paths": {GV: DOC}}`: the index, and each
@@ -294,7 +391,7 @@ impl Cluster {
             #[allow(dead_code)]
             document: serde::de::IgnoredAny,
         }
-        let index = self.get_json("/openapi/v3").await?;
+        let index = self.get_json("/openapi/v3", Some(REACH)).await?;
         let urls = index
             .get("paths")
             .and_then(Json::as_object)
@@ -316,7 +413,7 @@ impl Cluster {
             let Some(url) = entry.get("serverRelativeURL").and_then(Json::as_str) else {
                 continue;
             };
-            paths.insert(gv.clone(), self.get_json(url).await?);
+            paths.insert(gv.clone(), self.get_json(url, None).await?);
         }
         let document = json!({ "paths": paths });
         let cached = json!({"server": self.url, "index": index, "document": document});
@@ -336,12 +433,13 @@ impl Cluster {
 
     /// The object, or `None` if there is none.
     pub async fn get(&self, kind: &Kind, ns: &str, name: &str) -> Result<Option<Json>> {
-        let req = Request::new(kind.collection(ns))
-            .get(name, &GetParams::default())
-            .map_err(|e| anyhow!("{e}"))?;
-        match self.client.request::<Json>(req).await {
+        let path = format!("{}/{name}", kind.collection(ns));
+        match self
+            .json(self.request("GET", &path, "get", &kind.plural))
+            .await
+        {
             Ok(o) => Ok(Some(o)),
-            Err(kube::Error::Api(s)) if s.code == 404 => Ok(None),
+            Err(e) if e.is(404) => Ok(None),
             Err(e) => Err(anyhow::Error::new(e).context(format!(
                 "GET {} {}",
                 kind.kind,
@@ -351,24 +449,34 @@ impl Cluster {
     }
 
     /// The objects of `kind` in every namespace whose labels match
-    /// `selector` (all of them without one).
+    /// `selector` (all of them without one), [`PAGE`] at a time.
     pub async fn list(&self, kind: &Kind, selector: Option<&str>) -> Result<Vec<Json>> {
-        let mut lp = ListParams::default();
-        if let Some(s) = selector {
-            lp = lp.labels(s);
+        let mut items = Vec::new();
+        let mut next: Option<String> = None;
+        loop {
+            let mut path = format!("{}?limit={PAGE}", kind.collection_all());
+            if let Some(s) = selector {
+                path += &format!("&labelSelector={}", query(s));
+            }
+            if let Some(c) = &next {
+                path += &format!("&continue={}", query(c));
+            }
+            let mut page = self
+                .json(self.request("GET", &path, "list", &kind.plural))
+                .await
+                .with_context(|| format!("LIST {}", kind.kind))?;
+            if let Some(Json::Array(more)) = page.get_mut("items").map(Json::take) {
+                items.extend(more);
+            }
+            next = page
+                .pointer("/metadata/continue")
+                .and_then(Json::as_str)
+                .filter(|c| !c.is_empty())
+                .map(String::from);
+            if next.is_none() {
+                return Ok(items);
+            }
         }
-        let req = Request::new(kind.collection_all())
-            .list(&lp)
-            .map_err(|e| anyhow!("{e}"))?;
-        let list = self
-            .client
-            .request::<Json>(req)
-            .await
-            .with_context(|| format!("LIST {}", kind.kind))?;
-        Ok(match list.get("items") {
-            Some(Json::Array(items)) => items.clone(),
-            _ => Vec::new(),
-        })
     }
 
     /// Server-side apply `obj` as `dform`, not forced; `dry_run` persists
@@ -381,25 +489,34 @@ impl Cluster {
         obj: &Json,
         dry_run: bool,
     ) -> std::result::Result<Json, WriteError> {
-        let mut pp = PatchParams::apply(MANAGER);
+        let mut path = format!(
+            "{}/{name}?fieldManager={}",
+            kind.collection(ns),
+            query(MANAGER)
+        );
         if dry_run {
-            pp = pp.dry_run();
+            path += "&dryRun=All";
         }
-        let req = Request::new(kind.collection(ns))
-            .patch(name, &pp, &Patch::Apply(obj))
-            .map_err(|e| WriteError::Other(anyhow!("{e}")))?;
-        self.client.request::<Json>(req).await.map_err(write_error)
+        let body = serde_json::to_vec(obj).map_err(|e| WriteError::Other(e.into()))?;
+        let req = self
+            .request("PATCH", &path, "patch", &kind.plural)
+            .header("content-type", "application/apply-patch+yaml")
+            .body(body);
+        self.json(req).await.map_err(write_error)
     }
 
     /// Delete with background propagation (the garbage collector removes
     /// what the object owns). Gone already is not an error.
     pub async fn delete(&self, kind: &Kind, ns: &str, name: &str) -> Result<()> {
-        let req = Request::new(kind.collection(ns))
-            .delete(name, &DeleteParams::background())
-            .map_err(|e| anyhow!("{e}"))?;
-        match self.client.request::<Json>(req).await {
+        let path = format!("{}/{name}", kind.collection(ns));
+        let options = json!({"apiVersion": "v1", "kind": "DeleteOptions",
+                             "propagationPolicy": "Background"});
+        let req = self
+            .request("DELETE", &path, "delete", &kind.plural)
+            .json(&options);
+        match self.send(req).await {
             Ok(_) => Ok(()),
-            Err(kube::Error::Api(s)) if s.code == 404 => Ok(()),
+            Err(e) if e.is(404) => Ok(()),
             Err(e) => Err(anyhow::Error::new(e).context(format!(
                 "DELETE {} {}",
                 kind.kind,
@@ -427,7 +544,6 @@ impl Cluster {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kube::core::response::{StatusCause, StatusDetails};
 
     #[test]
     fn a_conflict_names_the_manager_and_the_field() {
@@ -437,18 +553,12 @@ mod tests {
             message: "Apply failed with 1 conflict: conflict with \"kubectl\": .spec.replicas"
                 .into(),
             details: Some(StatusDetails {
-                name: "web".into(),
-                group: "apps".into(),
-                kind: "deployments".into(),
-                uid: String::new(),
                 causes: vec![StatusCause {
                     reason: "FieldManagerConflict".into(),
                     message: "conflict with \"kubectl\" using apps/v1".into(),
                     field: ".spec.replicas".into(),
                 }],
-                retry_after_seconds: 0,
             }),
-            ..Default::default()
         };
         let e = api_write_error(&s);
         assert!(
@@ -484,5 +594,14 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(api_write_error(&s), WriteError::Immutable(_)));
+    }
+
+    /// A label selector is a query value, its `=`, `,` and `/` encoded.
+    #[test]
+    fn a_selector_is_encoded() {
+        assert_eq!(
+            query("dform.dev/stack=app,x!=y"),
+            "dform.dev%2Fstack%3Dapp%2Cx%21%3Dy"
+        );
     }
 }
