@@ -397,6 +397,11 @@ The host's interfaces need no grant. A component that imports
 it gets the machine's network, or the filesystem from `/` (relative
 paths are dform's working directory's), and gives up for what it does
 there the host's TLS, retries, waits and audit: a trade made in the open.
+`wasi:http` keeps the host's transport: its requests go through the
+host's `send` as `dform:host/http`'s do (dform's pool, the window, a
+span), paced in the component's default bucket since such a request
+names neither its session nor a bucket; only the credential is not the
+host's.
 
 A credential is a name; its kind says how the host applies it:
 

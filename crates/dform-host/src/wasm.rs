@@ -16,7 +16,8 @@
 //! has; a component that imports `wasi:sockets` or `wasi:http` is refused
 //! unless dform.toml grants it, naming both, and one that imports
 //! `wasi:filesystem` likewise (it then sees the filesystem as the user
-//! does, from `/`). No environment variable is passed in: a credential
+//! does, from `/`). A `wasi:http` request is sent as a `dform:host/http`
+//! one is, through the host's `send` ([`Outgoing`]). No environment variable is passed in: a credential
 //! is had by name (`dform:host/secrets`), never from the environment.
 
 use crate::ratelimit::{Limiter, Paced};
@@ -113,7 +114,8 @@ struct State {
     wasi: WasiCtx,
     http: WasiHttpCtx,
     table: ResourceTable,
-    host: Services,
+    host: Arc<Services>,
+    outgoing: Outgoing,
 }
 
 impl WasiView for State {
@@ -128,10 +130,91 @@ impl WasiView for State {
 impl WasiHttpView for State {
     fn http(&mut self) -> WasiHttpCtxView<'_> {
         WasiHttpCtxView {
-            hooks: wasmtime_wasi_http::default_hooks(),
+            hooks: &mut self.outgoing,
             table: &mut self.table,
             ctx: &mut self.http,
         }
+    }
+}
+
+/// A component's `wasi:http` outgoing requests, sent as its
+/// `dform:host/http` ones are: through its host's `send` (dform's pool,
+/// its window, an `io.call` span), never a connection of their own. A
+/// `wasi:http` request names no session and no bucket, so the
+/// component's are paced in its default bucket, its sessions' together;
+/// one that wants its own names it through `dform:host/http`.
+struct Outgoing(Arc<Services>);
+
+type Answered = wasmtime_wasi_http::Result<(
+    http::Response<wasmtime_wasi_http::WasiBody>,
+    Box<dyn Future<Output = wasmtime_wasi_http::Result<()>> + Send>,
+)>;
+
+impl wasmtime_wasi_http::WasiHttpHooks for Outgoing {
+    fn send_request(
+        &mut self,
+        request: http::Request<wasmtime_wasi_http::WasiBody>,
+        options: Option<wasmtime_wasi_http::RequestOptions>,
+        _: Box<dyn Future<Output = wasmtime_wasi_http::Result<()>> + Send>,
+    ) -> Box<dyn Future<Output = Answered> + Send> {
+        let host = self.0.clone();
+        Box::new(async move {
+            let req = Outgoing::request(request, options).await?;
+            let sent = tokio::task::spawn_blocking(move || host.send(req, None, None))
+                .await
+                .map_err(|_| wasmtime_wasi_http::Error::ConnectionTerminated)?;
+            let resp = Outgoing::response(sent)?;
+            let done: Box<dyn Future<Output = wasmtime_wasi_http::Result<()>> + Send> =
+                Box::new(async { Ok(()) });
+            Ok((resp, done))
+        })
+    }
+}
+
+impl Outgoing {
+    /// The component's request as the host's `send` takes it, its body
+    /// read whole; its first-byte timeout the request's.
+    async fn request(
+        request: http::Request<wasmtime_wasi_http::WasiBody>,
+        options: Option<wasmtime_wasi_http::RequestOptions>,
+    ) -> wasmtime_wasi_http::Result<h::HttpRequest> {
+        use http_body_util::BodyExt;
+        let (head, body) = request.into_parts();
+        let body = body.collect().await?.to_bytes();
+        Ok(h::HttpRequest {
+            method: head.method.to_string(),
+            url: head.uri.to_string(),
+            headers: head
+                .headers
+                .iter()
+                .map(|(k, v)| (k.to_string(), String::from_utf8_lossy(v.as_bytes()).into()))
+                .collect(),
+            body: body.to_vec(),
+            timeout: options.and_then(|o| o.first_byte_timeout),
+            ..h::HttpRequest::default()
+        })
+    }
+
+    /// The host's answer as `wasi:http` gives it; a failure as the error
+    /// of its class.
+    fn response(
+        sent: Result<h::HttpResponse, h::Error>,
+    ) -> wasmtime_wasi_http::Result<http::Response<wasmtime_wasi_http::WasiBody>> {
+        use http_body_util::BodyExt;
+        use wasmtime_wasi_http::Error as E;
+        let r = sent.map_err(|e| match e.class {
+            h::Class::Retryable => E::ConnectionRefused,
+            h::Class::MaybeApplied => E::ConnectionReadTimeout,
+            h::Class::Final => E::HttpRequestDenied,
+        })?;
+        let mut resp = http::Response::builder().status(r.status);
+        for (k, v) in &r.headers {
+            resp = resp.header(k, v);
+        }
+        let body = http_body_util::Full::new(bytes::Bytes::from(r.body))
+            .map_err(E::from)
+            .boxed_unsync();
+        resp.body(body).map_err(|_| E::HttpProtocolError)
     }
 }
 
@@ -520,11 +603,13 @@ impl Instance {
                 .allow_udp(false)
                 .allow_ip_name_lookup(false);
         }
+        let host = Arc::new(Services::paced(self.grants.clone(), self.limiter.clone()));
         Ok(State {
             wasi: wasi.build(),
             http: WasiHttpCtx::new(),
             table: ResourceTable::new(),
-            host: Services::paced(self.grants.clone(), self.limiter.clone()),
+            outgoing: Outgoing(host.clone()),
+            host,
         })
     }
 
@@ -899,4 +984,57 @@ pub fn link(path: &Path, grants: Grants) -> Result<Link> {
         grants,
     });
     Ok(link)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dform_core::http::fake::Server;
+    use http_body_util::BodyExt;
+    use wasmtime_wasi_http::WasiHttpHooks;
+
+    /// A component's `wasi:http` requests go through its host's `send`:
+    /// paced by its window (two at first contact, then wider as the
+    /// server answers), kept-alive connections of the pool.
+    #[test]
+    fn a_components_wasi_http_requests_are_paced_by_its_host() {
+        let server = Server::http1();
+        server.slow(Duration::from_millis(200));
+        let limiter = Arc::new(Limiter::new("component"));
+        let host = Arc::new(Services::paced(Grants::none("component"), limiter.clone()));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let statuses = rt.block_on(async {
+            let sent: Vec<_> = (0..4)
+                .map(|i| {
+                    let req = http::Request::get(server.url(&format!("/{i}")))
+                        .body(
+                            http_body_util::Empty::new()
+                                .map_err(wasmtime_wasi_http::Error::from)
+                                .boxed_unsync(),
+                        )
+                        .unwrap();
+                    let answered =
+                        Outgoing(host.clone()).send_request(req, None, Box::new(async { Ok(()) }));
+                    tokio::spawn(Box::into_pin(answered))
+                })
+                .collect();
+            let mut statuses = Vec::new();
+            for s in sent {
+                let (resp, _) = s.await.unwrap().unwrap();
+                statuses.push(resp.status().as_u16());
+            }
+            statuses
+        });
+        assert_eq!(statuses, [200; 4]);
+        assert_eq!(server.most_at_once(), 2, "the window at first contact");
+        assert!(
+            server.connections() <= 2,
+            "kept alive: {}",
+            server.connections()
+        );
+        assert!(limiter.window(Session::NONE, None).0 > 2, "it grew");
+    }
 }

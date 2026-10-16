@@ -15,7 +15,7 @@ publish = false
 # interfaces as imports. Without it nothing here needs wasmtime or a wasm
 # target, and a `.wasm` source is refused naming the feature.
 [features]
-wasm = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:wasmtime-wasi-http", "dep:dform-wit", "dep:sha2"]
+wasm = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:wasmtime-wasi-http", "dep:dform-wit", "dep:sha2", "dep:http", "dep:bytes", "dep:http-body-util"]
 
 [dependencies]
 anyhow = "1.0"
@@ -34,7 +34,16 @@ tonic = "0.13"
 wasmtime = { version = "=49.0.1", default-features = false, features = ["component-model", "component-model-async", "async", "runtime", "std", "cranelift", "parallel-compilation", "wat", "anyhow"], optional = true }
 wasmtime-wasi = { version = "=49.0.1", optional = true }
 wasmtime-wasi-http = { version = "=49.0.1", optional = true }
+# A component's `wasi:http` request as the host's `send` takes it
+# (`wasm::Outgoing`): the types wasmtime-wasi-http's hooks speak.
+http = { version = "1", optional = true }
+bytes = { version = "1", optional = true }
+http-body-util = { version = "0.1", optional = true }
 dform-wit = { path = "../dform-wit", default-features = false, features = ["host"], optional = true }
 # The compiled component's cache key.
 sha2 = { version = "0.10", optional = true }
 
+
+[dev-dependencies]
+# A local HTTP server for the tests of what the host sends (`http::fake`).
+dform-core = { path = "../dform-core", features = ["fake"] }
