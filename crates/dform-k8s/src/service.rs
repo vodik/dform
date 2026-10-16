@@ -547,99 +547,112 @@ impl K8s {
                 self.create(c, kind, typ, &at, config, &req.idempotency_key)
                     .await?
             }
-            pb::Op::Update | pb::Op::Adopt => {
-                let (ns, n) = parse_remote(kind, &req.remote, &c.namespace);
-                // `keep` (R-164): each path applied again as the object has
-                // it (a Secret's `stringData` key from its `data`), so the
-                // server-side apply leaves it untouched.
-                let kept;
-                let config = match req.keep.is_empty() {
-                    true => config,
-                    false => {
-                        let live = c
-                            .get(kind, ns, n)
-                            .await
-                            .map_err(|e| refused(&at, e))?
-                            .ok_or_else(|| {
-                                Failed::Refused(format!("{at}: {} is not there", req.remote))
-                            })?;
-                        kept = keep(config, &attrs(&live), &req.keep)
-                            .map_err(|e| Failed::Refused(format!("{at}: {e}")))?;
-                        &kept
-                    }
-                };
-                let obj = self
-                    .manifest(kind, config, ns, n)
-                    .map_err(|e| refused(&at, e))?;
-                self.write(c, kind, ns, n, &obj, &at).await?
-            }
+            pb::Op::Update | pb::Op::Adopt => self.update(c, kind, req, &at, config).await?,
             pb::Op::Delete => {
-                let (ns, n) = parse_remote(kind, &req.remote, &c.namespace);
-                c.delete(kind, ns, n).await.map_err(|e| maybe(&at, e))?;
-                if !c
-                    .gone(kind, ns, n, DELETE_WAIT)
-                    .await
-                    .map_err(|e| maybe(&at, e))?
-                {
-                    notes.push(format!(
-                        "{at}: {} is still terminating after {}s",
-                        req.remote,
-                        DELETE_WAIT.as_secs()
-                    ));
-                }
                 return Ok(pb::ApplyResponse {
-                    notes,
+                    notes: delete(c, kind, &req.remote, &at).await?,
                     ..Default::default()
                 });
             }
-            pb::Op::Replace => {
-                let (ns, n) = parse_remote(kind, &req.remote, &c.namespace);
-                let new_ns = namespace(config, &c.namespace);
-                let same = get_path(config, "metadata.name").and_then(Json::as_str) == Some(n)
-                    && (!kind.namespaced || new_ns == ns);
-                if req.create_first && same {
-                    notes.push(format!(
-                        "{at}: the replacement has the old object's name, so the old one goes \
-                         first"
-                    ));
-                }
-                if !req.create_first || same {
-                    c.delete(kind, ns, n).await.map_err(|e| maybe(&at, e))?;
-                    if !c
-                        .gone(kind, ns, n, REPLACE_WAIT)
-                        .await
-                        .map_err(|e| maybe(&at, e))?
-                    {
-                        return Err(Failed::MaybeApplied(format!(
-                            "{at}: {} is still terminating after {}s; its replacement is not \
-                             created",
-                            req.remote,
-                            REPLACE_WAIT.as_secs()
-                        )));
-                    }
-                }
-                self.create(c, kind, typ, &at, config, &req.idempotency_key)
-                    .await?
-            }
+            pb::Op::Replace => self.replace(c, kind, req, &at, config, &mut notes).await?,
             _ => return Err(Failed::Refused(format!("{at}: no operation"))),
         };
-        let name = get_path(&live, "metadata.name")
-            .and_then(Json::as_str)
-            .unwrap_or("");
-        let ns = get_path(&live, "metadata.namespace")
-            .and_then(Json::as_str)
-            .unwrap_or("");
+        self.applied(kind, typ, &at, &live, notes)
+    }
+
+    /// An Apply's answer: the object as the server has it after the write.
+    fn applied(
+        &self,
+        kind: &Kind,
+        typ: &str,
+        at: &str,
+        live: &Json,
+        notes: Vec<String>,
+    ) -> std::result::Result<pb::ApplyResponse, Failed> {
+        let s = |p: &str| get_path(live, p).and_then(Json::as_str).unwrap_or("");
         Ok(pb::ApplyResponse {
-            remote: remote(kind, ns, name),
-            attrs: Some(wire::doc(&attrs(&live))),
+            remote: remote(kind, s("metadata.namespace"), s("metadata.name")),
+            attrs: Some(wire::doc(&attrs(live))),
             computed: Some(wire::doc(
                 &self
-                    .computed(typ, &live)
+                    .computed(typ, live)
                     .map_err(|e| Failed::MaybeApplied(format!("{at}: {e:#}")))?,
             )),
             elapsed_ms: 0,
             notes,
         })
+    }
+
+    /// An update (or an adoption) in place: server-side apply of the
+    /// document, each `keep` path (R-164) applied again as the object has
+    /// it (a Secret's `stringData` key from its `data`), so the apply
+    /// leaves it untouched.
+    async fn update(
+        &self,
+        c: &Cluster,
+        kind: &Kind,
+        req: &pb::ApplyRequest,
+        at: &str,
+        config: &Json,
+    ) -> std::result::Result<Json, Failed> {
+        let (ns, n) = parse_remote(kind, &req.remote, &c.namespace);
+        let kept;
+        let config = match req.keep.is_empty() {
+            true => config,
+            false => {
+                let live = c
+                    .get(kind, ns, n)
+                    .await
+                    .map_err(|e| refused(at, e))?
+                    .ok_or_else(|| Failed::Refused(format!("{at}: {} is not there", req.remote)))?;
+                kept = keep(config, &attrs(&live), &req.keep)
+                    .map_err(|e| Failed::Refused(format!("{at}: {e}")))?;
+                &kept
+            }
+        };
+        let obj = self
+            .manifest(kind, config, ns, n)
+            .map_err(|e| refused(at, e))?;
+        self.write(c, kind, ns, n, &obj, at).await
+    }
+
+    /// A replacement: the old object deleted first (destroy-first, or
+    /// when the new one takes its name) and waited for, then the new one
+    /// created.
+    async fn replace(
+        &self,
+        c: &Cluster,
+        kind: &Kind,
+        req: &pb::ApplyRequest,
+        at: &str,
+        config: &Json,
+        notes: &mut Vec<String>,
+    ) -> std::result::Result<Json, Failed> {
+        let (ns, n) = parse_remote(kind, &req.remote, &c.namespace);
+        let new_ns = namespace(config, &c.namespace);
+        let same = get_path(config, "metadata.name").and_then(Json::as_str) == Some(n)
+            && (!kind.namespaced || new_ns == ns);
+        if req.create_first && same {
+            notes.push(format!(
+                "{at}: the replacement has the old object's name, so the old one goes first"
+            ));
+        }
+        if !req.create_first || same {
+            c.delete(kind, ns, n).await.map_err(|e| maybe(at, e))?;
+            if !c
+                .gone(kind, ns, n, REPLACE_WAIT)
+                .await
+                .map_err(|e| maybe(at, e))?
+            {
+                return Err(Failed::MaybeApplied(format!(
+                    "{at}: {} is still terminating after {}s; its replacement is not created",
+                    req.remote,
+                    REPLACE_WAIT.as_secs()
+                )));
+            }
+        }
+        self.create(c, kind, &req.r#type, at, config, &req.idempotency_key)
+            .await
     }
 
     /// The document with every secret another stack's object holds
@@ -654,25 +667,6 @@ impl K8s {
         at: &str,
         doc: &Json,
     ) -> std::result::Result<Json, Failed> {
-        fn held_at(v: &Json, path: &str, out: &mut Vec<(String, provider::Held, String)>) {
-            if let Some(h) = provider::held(v) {
-                let l = marker(v).map(|(_, l)| l.to_string()).unwrap_or_default();
-                out.push((path.to_string(), h, l));
-                return;
-            }
-            let join = |k: &str| match path {
-                "" => k.to_string(),
-                p => format!("{p}.{k}"),
-            };
-            match v {
-                Json::Object(m) => m.iter().for_each(|(k, x)| held_at(x, &join(k), out)),
-                Json::Array(xs) => xs
-                    .iter()
-                    .enumerate()
-                    .for_each(|(i, x)| held_at(x, &join(&i.to_string()), out)),
-                _ => {}
-            }
-        }
         let mut found = Vec::new();
         held_at(doc, "", &mut found);
         let mut out = doc.clone();
@@ -690,46 +684,49 @@ impl K8s {
                     "{at}: {path}: the secret {label} cannot be read: {why}"
                 ))
             };
-            if h.provider != openapi::PROVIDER {
-                return Err(refuse(format!(
-                    "it is held by the provider {}, not this one",
-                    h.provider
-                )));
-            }
-            let kind = self
-                .derived
-                .kind(&h.typ)
-                .map_err(|e| refuse(format!("{e:#}")))?;
-            let (ns, n) = parse_remote(kind, &h.remote, &c.namespace);
-            let live = c
-                .get(kind, ns, n)
-                .await
-                .map_err(|e| refuse(format!("{e:#}")))?
-                .ok_or_else(|| refuse(format!("{} {} is not in the cluster", h.typ, h.remote)))?;
-            let v = get_path(&attrs_raw(&live), &h.path).cloned().or_else(|| {
-                let k = h.path.strip_prefix("stringData.")?;
-                let text = base64(live.get("data")?.get(k)?.as_str()?)?;
-                String::from_utf8(text).ok().map(Json::String)
-            });
-            let Some(v) = v.filter(|v| marker(v).is_none()) else {
-                return Err(refuse(format!(
-                    "{} {} does not set {}",
-                    h.typ, h.remote, h.path
-                )));
-            };
+            let v = self.held_value(c, &h).await.map_err(refuse)?;
             set_path(&mut out, &path, v);
         }
-        let annotations = match get_path(&out, "metadata.annotations") {
+        let mut annotations = match get_path(&out, "metadata.annotations") {
             Some(Json::Object(a)) => a.clone(),
             _ => serde_json::Map::new(),
         };
-        let mut annotations = annotations;
         annotations.insert(
             HELD_ANNOTATION.into(),
             Json::String(Json::Object(markers).to_string()),
         );
         set_path(&mut out, "metadata.annotations", Json::Object(annotations));
         Ok(out)
+    }
+
+    /// The value of the secret `h` holds: the object this provider manages
+    /// read from the cluster (a Secret's `stringData` key from its `data`,
+    /// decoded), else why not.
+    async fn held_value(
+        &self,
+        c: &Cluster,
+        h: &provider::Held,
+    ) -> std::result::Result<Json, String> {
+        if h.provider != openapi::PROVIDER {
+            return Err(format!(
+                "it is held by the provider {}, not this one",
+                h.provider
+            ));
+        }
+        let kind = self.derived.kind(&h.typ).map_err(|e| format!("{e:#}"))?;
+        let (ns, n) = parse_remote(kind, &h.remote, &c.namespace);
+        let live = c
+            .get(kind, ns, n)
+            .await
+            .map_err(|e| format!("{e:#}"))?
+            .ok_or_else(|| format!("{} {} is not in the cluster", h.typ, h.remote))?;
+        let v = get_path(&attrs_raw(&live), &h.path).cloned().or_else(|| {
+            let k = h.path.strip_prefix("stringData.")?;
+            let text = base64(live.get("data")?.get(k)?.as_str()?)?;
+            String::from_utf8(text).ok().map(Json::String)
+        });
+        v.filter(|v| marker(v).is_none())
+            .ok_or_else(|| format!("{} {} does not set {}", h.typ, h.remote, h.path))
     }
 
     /// A new object: named by the document, or by its `generateName` and a
@@ -875,6 +872,51 @@ impl From<Failed> for Status {
             Failed::Refused(m) => Status::failed_precondition(m),
             Failed::MaybeApplied(m) => Status::deadline_exceeded(m),
         }
+    }
+}
+
+/// A delete: background propagation, then the object waited for (bounded:
+/// still terminating after [`DELETE_WAIT`] is a note, not a failure).
+async fn delete(
+    c: &Cluster,
+    kind: &Kind,
+    remote: &str,
+    at: &str,
+) -> std::result::Result<Vec<String>, Failed> {
+    let (ns, n) = parse_remote(kind, remote, &c.namespace);
+    c.delete(kind, ns, n).await.map_err(|e| maybe(at, e))?;
+    let gone = c
+        .gone(kind, ns, n, DELETE_WAIT)
+        .await
+        .map_err(|e| maybe(at, e))?;
+    Ok(match gone {
+        true => Vec::new(),
+        false => vec![format!(
+            "{at}: {remote} is still terminating after {}s",
+            DELETE_WAIT.as_secs()
+        )],
+    })
+}
+
+/// Each secret another object holds in `v` (its marker, `provider::Held`)
+/// under the path `path`: where it is, where it is held, its label.
+fn held_at(v: &Json, path: &str, out: &mut Vec<(String, provider::Held, String)>) {
+    if let Some(h) = provider::held(v) {
+        let l = marker(v).map(|(_, l)| l.to_string()).unwrap_or_default();
+        out.push((path.to_string(), h, l));
+        return;
+    }
+    let join = |k: &str| match path {
+        "" => k.to_string(),
+        p => format!("{p}.{k}"),
+    };
+    match v {
+        Json::Object(m) => m.iter().for_each(|(k, x)| held_at(x, &join(k), out)),
+        Json::Array(xs) => xs
+            .iter()
+            .enumerate()
+            .for_each(|(i, x)| held_at(x, &join(&i.to_string()), out)),
+        _ => {}
     }
 }
 
