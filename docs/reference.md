@@ -260,7 +260,23 @@ behind a value platform's tick 1 makes (its server's address, the
 kubeconfig read off it) waits for tick 2. The headline counts the
 tree's ticks. A deployment up to date is one line; one whose plan fails
 or is refused stops what reads it, `not planned`, and the run exits
-with its status. `--json` nests the same: `summary`, `outcome`, and per
+with its status.
+
+The deployments of the tree are planned at once, each on a thread of
+its own, each loaded and located and its state and master read beside
+the others'. What a deployment reads is the only thing it waits on:
+once those it reads have made their outputs known, which is after their
+evaluations and before their Plan calls and policy, it reads them,
+starts and configures its providers (its own session of the tree's one
+process of each), and is refreshed, evaluated and planned beside them;
+it says what of them is known only after a tick once their plans have.
+Deployments that read nothing of each other (a project's `prod` and
+`staging`) wait on nothing. A replace in an upstream's plan makes what its evaluation knew
+of the replaced object (a computed endpoint) known only after a tick: a
+reader that read the old value is planned again over the plan's before
+it says anything. The plan prints as it did, each deployment's section
+in the tree's order whatever order they finished in; what deployments
+say on stderr as they go (a warning, a note) may interleave. `--json` nests the same: `summary`, `outcome`, and per
 deployment its `deployment`, `mark`, `site`, `state` and its own
 document under `plan`. `--out` writes the tree to one plan file, a
 section per deployment, each with its own digest ("The plan file"). A
@@ -5322,7 +5338,8 @@ fails says its trace id after the error. The spans:
 
 The order the run took is the viewer's, from each span's times and
 parent: calls sent one after another follow each other, a batch sent
-together begins before any of it ends. A call ends when the run takes
+together begins before any of it ends; the deployments of a tree's plan
+run at once, each's phases under its own `deployment` span. A call ends when the run takes
 its answer: while the run waits on one provider, another's answer waits
 for it, so a batch to two providers shows the quicker one's calls as
 long as the slower one's. A span names things (addresses, kinds,
