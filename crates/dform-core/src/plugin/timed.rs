@@ -17,19 +17,28 @@
 //! move its timeout: a call that keeps saying how it goes still has to
 //! answer in time.
 //!
+//! One thread serves several `Timed`s ([`Timed::another`]), each a front
+//! of the backend with calls, answers and timeouts of its own: the
+//! deployments of a tree planned at once, each on a thread of its own,
+//! share a provider's process so. An answer goes to the front whose call
+//! it is; the thread waits in the backend while a front that asked for an
+//! answer has a call in flight, and takes every command sent meanwhile
+//! before it waits again.
+//!
 //! The thread owns the backend, and a process backend owns its process:
-//! dropping a `Timed` stops the process first when a call is still stuck
-//! (its [`Provider::stopper`]), which fails that call and frees the
-//! thread, and then joins the thread, within [`JOIN`]. A call that timed
-//! out answered `MaybeApplied` already, which is what a provider stopped
-//! in the middle of it may have left; its late answer was dropped anyway.
+//! dropping the last `Timed` of a thread stops the process first when a
+//! call is still stuck (its [`Provider::stopper`]), which fails that call
+//! and frees the thread, and then joins the thread, within [`JOIN`]. A
+//! call that timed out answered `MaybeApplied` already, which is what a
+//! provider stopped in the middle of it may have left; its late answer was
+//! dropped anyway.
 
 use super::backend::{Call, CallError, Provider, Reply, Session, Stop, Ticket, Within};
 use super::pb;
 use super::policy::{describe, show};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -58,11 +67,16 @@ pub fn timed_out(e: &CallError) -> bool {
     matches!(e, CallError::MaybeApplied(m) if m.contains(PAST) && m.contains(ITS_TIMEOUT))
 }
 
+/// What a front sends the thread, each command naming the front.
 enum Cmd {
+    /// A front, and where its answers and events go.
+    Open(u64, Sender<Back>),
+    /// A front dropped: what answers its calls in flight is dropped.
+    Close(u64),
     /// A call, and its number while it is traced.
-    Submit(Ticket, Box<Call>, Option<u64>),
-    /// Answer one call.
-    Next,
+    Submit(u64, Ticket, Box<Call>, Option<u64>),
+    /// Answer one call of the front.
+    Next(u64),
     IsDead(Sender<bool>),
 }
 
@@ -171,13 +185,46 @@ impl Live {
     }
 }
 
+/// The thread a backend runs on, shared by its fronts: stopped once the
+/// last is dropped.
+struct Worker {
+    cmds: Option<Sender<Cmd>>,
+    thread: Option<JoinHandle<()>>,
+    /// Whether the backend said it is dead, as of its last answer.
+    dead: Arc<AtomicBool>,
+    /// The fronts that asked for an answer they have not taken yet: the
+    /// thread is in a call, or will be.
+    asking: AtomicUsize,
+    /// Stops the backend's process while the thread is stuck in a call.
+    stop: Mutex<Option<Stop>>,
+    /// The next front's number.
+    fronts: AtomicU64,
+}
+
+impl Worker {
+    fn send(&self, c: Cmd) -> bool {
+        self.cmds.as_ref().is_some_and(|tx| tx.send(c).is_ok())
+    }
+
+    /// A front of its own: its number, and where its answers come.
+    fn open(&self) -> (u64, Receiver<Back>) {
+        let front = self.fronts.fetch_add(1, Ordering::Relaxed);
+        let (tx, answers) = mpsc::channel::<Back>();
+        self.send(Cmd::Open(front, tx));
+        (front, answers)
+    }
+}
+
+/// A front of a backend's thread: its calls, each waited for at most the
+/// timeout.
 pub struct Timed {
     /// What the backend is, for messages.
     what: String,
     timeout: Duration,
-    cmds: Option<Sender<Cmd>>,
+    worker: Arc<Worker>,
+    /// This front's number on the thread.
+    front: u64,
     answers: Receiver<Back>,
-    worker: Option<JoinHandle<()>>,
     next: u64,
     /// Submitted, not yet passed on.
     batch: Vec<(Ticket, Call)>,
@@ -188,12 +235,9 @@ pub struct Timed {
     /// Calls submitted while one that timed out had no answer: they wait
     /// behind it, and their timeouts start again once it answers.
     behind: BTreeSet<Ticket>,
-    /// `Next` requests the thread has not answered yet.
-    asked: usize,
-    /// Whether the backend said it is dead, as of its last answer.
-    dead: Arc<AtomicBool>,
-    /// Stops the backend's process while the thread is stuck in a call.
-    stop: Option<Stop>,
+    /// Whether this front asked the thread for an answer it has not
+    /// taken yet.
+    asked: bool,
 }
 
 impl Timed {
@@ -205,28 +249,44 @@ impl Timed {
         timeout: Duration,
     ) -> std::io::Result<Timed> {
         let (cmds, rx) = mpsc::channel::<Cmd>();
-        let (tx, answers) = mpsc::channel::<Back>();
         let dead = Arc::new(AtomicBool::new(false));
         let flag = dead.clone();
         let stop = backend.stopper();
-        let worker = std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("dform-provider".into())
-            .spawn(move || serve(backend, rx, tx, flag))?;
-        Ok(Timed {
+            .spawn(move || serve(backend, rx, flag))?;
+        let worker = Arc::new(Worker {
+            cmds: Some(cmds),
+            thread: Some(thread),
+            dead,
+            asking: AtomicUsize::new(0),
+            stop: Mutex::new(stop),
+            fronts: AtomicU64::new(0),
+        });
+        Ok(Timed::front(what, timeout, worker))
+    }
+
+    /// Another front of the same backend: calls of its own, answered on
+    /// the same thread, whichever thread makes them.
+    pub fn another(&self) -> Timed {
+        Timed::front(self.what.clone(), self.timeout, self.worker.clone())
+    }
+
+    fn front(what: String, timeout: Duration, worker: Arc<Worker>) -> Timed {
+        let (front, answers) = worker.open();
+        Timed {
             what,
             timeout,
-            cmds: Some(cmds),
+            worker,
+            front,
             answers,
-            worker: Some(worker),
             next: 0,
             batch: Vec::new(),
             live: BTreeMap::new(),
             abandoned: BTreeSet::new(),
             behind: BTreeSet::new(),
-            asked: 0,
-            dead,
-            stop,
-        })
+            asked: false,
+        }
     }
 
     pub fn set_timeout(&mut self, timeout: Duration) {
@@ -245,12 +305,25 @@ impl Timed {
     pub fn flush(&mut self) {
         for (t, call) in std::mem::take(&mut self.batch) {
             let number = self.live.get(&t).and_then(Live::number);
-            self.send(Cmd::Submit(t, Box::new(call), number));
+            self.worker
+                .send(Cmd::Submit(self.front, t, Box::new(call), number));
         }
     }
 
-    fn send(&self, c: Cmd) -> bool {
-        self.cmds.as_ref().is_some_and(|tx| tx.send(c).is_ok())
+    /// Ask the thread for an answer of this front, unless it was asked.
+    fn ask(&mut self) {
+        if !self.asked && self.worker.send(Cmd::Next(self.front)) {
+            self.asked = true;
+            self.worker.asking.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// An answer came: what this front asked for, or one the thread took
+    /// for it while it answered another front.
+    fn answered(&mut self) {
+        if std::mem::take(&mut self.asked) {
+            self.worker.asking.fetch_sub(1, Ordering::SeqCst);
+        }
     }
     /// [`Provider::next_completed`], waiting no later than `deadline`:
     /// `None` when it passes first (a call that waits to be sent again,
@@ -263,9 +336,7 @@ impl Timed {
         assert!(!self.live.is_empty(), "internal: no call in flight");
         self.flush();
         loop {
-            if self.asked == 0 && self.send(Cmd::Next) {
-                self.asked += 1;
-            }
+            self.ask();
             let (first, due) = self.first_due();
             let until = deadline.map_or(due, |d| d.min(due));
             match self
@@ -302,7 +373,7 @@ impl Timed {
     /// one that timed out already, dropped (the calls behind it have their
     /// whole timeout from now when it was the last).
     fn taken(&mut self, (t, r): Answer) -> Option<Answer> {
-        self.asked -= 1;
+        self.answered();
         if self.abandoned.remove(&t) {
             if self.abandoned.is_empty() {
                 let due = Instant::now() + self.timeout;
@@ -349,40 +420,98 @@ impl Timed {
     }
 }
 
-/// The thread: pass each submit on, answer each `Next` with the
-/// backend's next answer.
-fn serve(
-    mut backend: Box<dyn Provider + Send>,
-    rx: Receiver<Cmd>,
-    tx: Sender<Back>,
-    dead: Arc<AtomicBool>,
-) {
-    let mut ours: HashMap<Ticket, Ticket> = HashMap::new();
-    for c in rx {
+/// The thread: pass each front's submit on, and while a front that asked
+/// for an answer has a call in flight, the backend's next answer to
+/// whichever front's call it is; the commands sent meanwhile are taken
+/// first.
+fn serve(backend: Box<dyn Provider + Send>, rx: Receiver<Cmd>, dead: Arc<AtomicBool>) {
+    let mut s = Serving {
+        backend,
+        dead,
+        fronts: HashMap::new(),
+        ours: HashMap::new(),
+        asking: BTreeSet::new(),
+    };
+    loop {
+        let c = match s.answerable() {
+            true => match rx.try_recv() {
+                Ok(c) => Some(c),
+                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Disconnected) => return,
+            },
+            false => match rx.recv() {
+                Ok(c) => Some(c),
+                Err(_) => return,
+            },
+        };
         match c {
-            Cmd::Submit(t, call, number) => {
+            Some(c) => s.command(c),
+            None => s.answer(),
+        }
+    }
+}
+
+/// What the thread serves: the backend, its fronts and their calls.
+struct Serving {
+    backend: Box<dyn Provider + Send>,
+    dead: Arc<AtomicBool>,
+    /// Where each front's answers and events go.
+    fronts: HashMap<u64, Sender<Back>>,
+    /// The calls in flight, by the backend's ticket: whose, by its own.
+    ours: HashMap<Ticket, (u64, Ticket)>,
+    /// The fronts that asked for an answer and have had none since.
+    asking: BTreeSet<u64>,
+}
+
+impl Serving {
+    /// Whether a front that asked for an answer has a call in flight.
+    fn answerable(&self) -> bool {
+        self.ours.values().any(|(f, _)| self.asking.contains(f))
+    }
+
+    fn command(&mut self, c: Cmd) {
+        match c {
+            Cmd::Open(front, tx) => {
+                self.fronts.insert(front, tx);
+            }
+            Cmd::Close(front) => {
+                self.fronts.remove(&front);
+                self.asking.remove(&front);
+            }
+            Cmd::Submit(front, t, call, number) => {
                 // The transport sends the call's number with it.
                 let _in = Within::call(number);
-                ours.insert(backend.submit(*call), t);
+                self.ours.insert(self.backend.submit(*call), (front, t));
             }
-            Cmd::Next if ours.is_empty() => {}
-            Cmd::Next => {
-                let (t, r) = backend.next_completed(&mut |t, e| {
-                    if let Some(&t) = ours.get(&t) {
-                        let _ = tx.send(Back::Event(t, e));
-                    }
-                });
-                dead.store(backend.is_dead(), Ordering::SeqCst);
-                let Some(t) = ours.remove(&t) else { continue };
-                if tx.send(Back::Answer(Box::new((t, r)))).is_err() {
-                    return;
-                }
+            Cmd::Next(front) => {
+                self.asking.insert(front);
             }
             Cmd::IsDead(reply) => {
-                let d = backend.is_dead();
-                dead.store(d, Ordering::SeqCst);
+                let d = self.backend.is_dead();
+                self.dead.store(d, Ordering::SeqCst);
                 let _ = reply.send(d);
             }
+        }
+    }
+
+    /// The backend's next answer, to the front whose call it is; the
+    /// events of calls in flight meanwhile to theirs.
+    fn answer(&mut self) {
+        let (ours, fronts) = (&self.ours, &self.fronts);
+        let (t, r) = self.backend.next_completed(&mut |t, e| {
+            if let Some(&(front, t)) = ours.get(&t)
+                && let Some(tx) = fronts.get(&front)
+            {
+                let _ = tx.send(Back::Event(t, e));
+            }
+        });
+        self.dead.store(self.backend.is_dead(), Ordering::SeqCst);
+        let Some((front, t)) = self.ours.remove(&t) else {
+            return;
+        };
+        self.asking.remove(&front);
+        if let Some(tx) = self.fronts.get(&front) {
+            let _ = tx.send(Back::Answer(Box::new((t, r))));
         }
     }
 }
@@ -409,11 +538,11 @@ impl Provider for Timed {
     }
 
     fn is_dead(&mut self) -> bool {
-        if self.asked > 0 {
-            return self.dead.load(Ordering::SeqCst);
+        if self.worker.asking.load(Ordering::SeqCst) > 0 {
+            return self.worker.dead.load(Ordering::SeqCst);
         }
         let (tx, rx) = mpsc::channel();
-        if !self.send(Cmd::IsDead(tx)) {
+        if !self.worker.send(Cmd::IsDead(tx)) {
             return true;
         }
         rx.recv().unwrap_or(true)
@@ -421,6 +550,14 @@ impl Provider for Timed {
 }
 
 impl Drop for Timed {
+    /// The front closed: the thread drops what answers its calls in
+    /// flight. The last front's drop stops the thread ([`Worker`]).
+    fn drop(&mut self) {
+        self.worker.send(Cmd::Close(self.front));
+    }
+}
+
+impl Drop for Worker {
     /// The backend is dropped on its thread (a process backend stops its
     /// process). A thread still in a call (one that timed out) is freed by
     /// stopping the backend's process first; then it is waited for, at
@@ -428,9 +565,14 @@ impl Drop for Timed {
     /// stopped: its thread is left to finish when the call does.
     fn drop(&mut self) {
         self.cmds.take();
-        let Some(w) = self.worker.take() else { return };
-        if self.asked > 0 {
-            match self.stop.take() {
+        let Some(w) = self.thread.take() else { return };
+        if self.asking.load(Ordering::SeqCst) > 0 {
+            let stop = self
+                .stop
+                .get_mut()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
+            match stop {
                 Some(stop) => stop(),
                 None => return,
             }
@@ -510,6 +652,34 @@ mod tests {
         let (t, r) = p.next_completed(&mut |_, _| {});
         assert_eq!(t, fast);
         assert!(r.is_ok(), "{r:?}");
+    }
+
+    /// Two fronts of one backend, each waiting on a thread of its own:
+    /// each takes its own call's answer, never the other's, though their
+    /// tickets are alike; the backend lives until the last is dropped.
+    #[test]
+    fn each_front_takes_its_own_answers() {
+        let a = timed(5_000);
+        let b = a.another();
+        let ask = |mut p: Timed, name: &'static str| {
+            std::thread::spawn(move || {
+                let t = p.submit(apply(name));
+                let (got, r) = p.next_completed(&mut |_, _| {});
+                assert_eq!(got, t);
+                let Ok(Reply::Apply(r)) = r else {
+                    panic!("{r:?}")
+                };
+                (r.remote, p)
+            })
+        };
+        let (slow, fast) = (ask(a, "50"), ask(b, "0"));
+        let (fast, b) = fast.join().unwrap();
+        let (slow, a) = slow.join().unwrap();
+        assert_eq!((slow.as_str(), fast.as_str()), ("50", "0"));
+        drop(a);
+        let mut b = b;
+        let t = b.submit(apply("0"));
+        assert_eq!(b.next_completed(&mut |_, _| {}).0, t);
     }
 
     /// Within the timeout the backend answers as it would unwrapped: the

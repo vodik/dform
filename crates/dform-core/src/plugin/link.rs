@@ -190,6 +190,35 @@ impl Link {
         Ok(link)
     }
 
+    /// Another link to the same provider, as its handshake answered: its
+    /// calls, answers and waits its own, its process the same
+    /// ([`Timed::another`]). A tree's deployments planned at once, each
+    /// on a thread of its own, reach a provider so (`plugin::pool`).
+    pub fn attach(&self) -> Link {
+        Link {
+            name: self.name.clone(),
+            capabilities: self.capabilities.clone(),
+            settings: self.settings.clone(),
+            credentials: self.credentials.clone(),
+            holding: BTreeMap::new(),
+            health: self.health.clone(),
+            version: self.version.clone(),
+            program: self.program.clone(),
+            hosting: self.hosting.clone(),
+            schemes: self.schemes.clone(),
+            reader: self.reader.clone(),
+            backend: self.backend.another(),
+            policy: self.policy,
+            done: BTreeMap::new(),
+            retries: Vec::new(),
+            events: Vec::new(),
+            rename: self.rename.clone(),
+            typed: Default::default(),
+            names: self.names.clone(),
+            answers: BTreeMap::new(),
+        }
+    }
+
     /// Its call policy (`[providers.NAME]` in dform.toml).
     pub fn set_policy(&mut self, policy: Policy) {
         self.policy = policy;
