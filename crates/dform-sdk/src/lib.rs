@@ -76,7 +76,7 @@ fn connect() -> Box<dyn Calls> {
 
 #[cfg(all(target_family = "wasm", feature = "component"))]
 fn connect() -> Box<dyn Calls> {
-    Box::new(component::Imports::default())
+    Box::new(component::Imports)
 }
 
 #[cfg(all(target_family = "wasm", not(feature = "component")))]

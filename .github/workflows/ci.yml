@@ -13,8 +13,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
 
       - name: Install protoc (build.rs generates the provider protocol)
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -53,10 +53,9 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --verbose
 
-      - name: the fake provider as a component, on the wasm host (R-13b)
+      - name: the fake provider and the async-ABI probe as components, on the wasm host (R-13b)
         run: |
-          rustup target add wasm32-wasip2
-          cargo build -p dform-provider-fake --release --target wasm32-wasip2 --features component
+          cargo xtask components
           cargo test --features wasm --test main -- host_wasm::
 
       - name: plan examples/shop in prod

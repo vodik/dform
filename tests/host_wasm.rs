@@ -1,12 +1,13 @@
 //! The wasm host (R-13b, the `wasm` feature): the fake provider built as a
 //! component conforms as its native build does, a run plans, applies and
-//! resumes through it, and a component's grantable imports are refused
-//! without their grant and admitted with it.
+//! resumes through it, a component's grantable imports are refused
+//! without their grant and admitted with it, and one call of a component
+//! keeps several host calls in flight (the async ABI).
 //!
-//! The component is built apart (a test never runs cargo):
+//! The components are built apart (a test never runs cargo):
 //!
-//!   cargo build -p dform-provider-fake --release --target wasm32-wasip3 --features component
-//!   cargo test --features wasm --test host_wasm
+//!   cargo xtask components
+//!   cargo test --features wasm --test main -- host_wasm::
 //!
 //! Every other test that drives the mock runs through the wasm host when
 //! `DFORM_PROVIDER_FAKE` names the component (the CLI's mock is then the

@@ -18,8 +18,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
 
       - name: Install protoc (build.rs generates the provider protocol)
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -40,8 +40,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
 
       - name: Install protoc (build.rs generates the provider protocol)
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler

@@ -23,7 +23,10 @@ enum Tok {
     String,
     /// An integer: decimal, or in another base by Rust's prefixes,
     /// `0x1f`, `0o600`, `0b1010` (one regex each, above a quantity's of
-    /// the same length: `0x1f` is no number with the unit `x1f`).
+    /// the same length: `0x1f` is no number with the unit `x1f`). Each
+    /// regex its own `priority`, which clippy's `duplicated_attributes`
+    /// (nightly) takes for one attribute repeated.
+    #[allow(clippy::duplicated_attributes)]
     #[regex(r"[0-9]+")]
     #[regex(r"0x[0-9a-fA-F]+", priority = 10)]
     #[regex(r"0o[0-7]+", priority = 10)]

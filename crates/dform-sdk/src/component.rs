@@ -179,7 +179,6 @@ fn target(t: &Target) -> wh::ssh::Target {
 /// the world are `async func`s (each a subtask); a synchronous handler
 /// waits on one at once ([`wit_bindgen::block_on`]), and [`send_all`]
 /// keeps several in flight.
-#[derive(Default)]
 pub struct Imports;
 
 struct Held {

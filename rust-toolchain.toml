@@ -1,0 +1,9 @@
+# The toolchain the workspace builds with: a nightly, pinned, for the
+# wasm32-wasip3 target a component provider is built for (the component
+# model's async ABI, WASI 0.3: `cargo xtask components`), which no stable
+# Rust has yet. Moved forward on purpose, every gate run on the new date;
+# back to stable once wasip3 is a stable target.
+[toolchain]
+channel = "nightly-2026-10-01"
+targets = ["wasm32-wasip3"]
+components = ["rustfmt", "clippy", "rust-src"]

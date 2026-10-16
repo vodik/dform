@@ -5,6 +5,9 @@
 //!   docs/man's fragments into docs/reference.md between their markers.
 //!   `man --check` writes nothing and fails when docs/reference.md's
 //!   copies are not the fragments (tests/man.rs runs the same check).
+//! - `components`: the components the wasm host's tests run
+//!   (tests/host_wasm.rs), built for wasm32-wasip3 in release: the fake
+//!   provider and the SDK's async-ABI probe (`examples/fetch_at_once`).
 
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
@@ -15,7 +18,8 @@ fn main() -> Result<()> {
     match args.as_slice() {
         ["man"] => man(false),
         ["man", "--check"] => man(true),
-        _ => bail!("usage: cargo xtask man [--check]"),
+        ["components"] => components(),
+        _ => bail!("usage: cargo xtask man [--check] | components"),
     }
 }
 
@@ -56,5 +60,34 @@ fn man(check: bool) -> Result<()> {
         std::fs::write(dir.join(format!("{}.1", page.name)), &page.roff)?;
     }
     println!("{}: {} pages", dir.display(), pages.len());
+    Ok(())
+}
+
+/// The components, each a `cargo build` of the workspace's toolchain
+/// (rust-toolchain.toml carries the target).
+fn components() -> Result<()> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let wasm = [
+        "build",
+        "--release",
+        "--target",
+        "wasm32-wasip3",
+        "--features",
+        "component",
+    ];
+    for which in [
+        &["-p", "dform-provider-fake"][..],
+        &["-p", "dform-sdk", "--example", "fetch_at_once"],
+    ] {
+        let status = std::process::Command::new(&cargo)
+            .args(wasm)
+            .args(which)
+            .current_dir(root())
+            .status()
+            .context("run cargo")?;
+        if !status.success() {
+            bail!("cargo {} {}: {status}", wasm.join(" "), which.join(" "));
+        }
+    }
     Ok(())
 }
