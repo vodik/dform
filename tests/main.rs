@@ -154,6 +154,7 @@ mod patterns;
 mod perf_reads;
 mod perf_resume;
 mod plan_because;
+mod plan_concurrent;
 mod plan_cost;
 mod plan_dangling_ref;
 mod plan_deps;

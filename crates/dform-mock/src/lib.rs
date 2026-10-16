@@ -1468,6 +1468,31 @@ fn invalid(e: anyhow::Error) -> CallError {
     CallError::Refused(format!("{e:#}"))
 }
 
+/// In a test of what runs while a Plan call is in flight
+/// (`DFORM_TEST_FAKE_PLAN_AWAITS=HOST:PORT`): the call first asks that
+/// server for a manifest and is refused unless it answers 200, as a
+/// registry that answers once a second request is in flight with it does.
+fn plan_awaits() -> std::result::Result<(), CallError> {
+    use std::io::{Read, Write};
+    let Ok(at) = std::env::var("DFORM_TEST_FAKE_PLAN_AWAITS") else {
+        return Ok(());
+    };
+    let refused = |why: String| CallError::Refused(format!("plan awaits {at}: {why}"));
+    let mut conn = std::net::TcpStream::connect(&at).map_err(|e| refused(e.to_string()))?;
+    write!(
+        conn,
+        "HEAD /v2/fake/plan/manifests/a-plan HTTP/1.1\r\nhost: {at}\r\nconnection: close\r\n\r\n"
+    )
+    .map_err(|e| refused(e.to_string()))?;
+    let mut answer = String::new();
+    conn.read_to_string(&mut answer)
+        .map_err(|e| refused(e.to_string()))?;
+    match answer.starts_with("HTTP/1.1 200") {
+        true => Ok(()),
+        false => Err(refused(answer.lines().next().unwrap_or_default().into())),
+    }
+}
+
 fn doc_of(v: Option<&pb::Value>) -> std::result::Result<Option<Json>, CallError> {
     v.map(wire::from_doc).transpose().map_err(invalid)
 }
@@ -1627,18 +1652,7 @@ impl Handler for Mock {
                     None => pb::ReadResponse::default(),
                 })
             }
-            C::Plan(r) => {
-                let addr = Address {
-                    typ: r.r#type,
-                    name: r.name,
-                };
-                let prior = doc_of(r.prior.as_ref())?;
-                let desired = doc_of(r.desired.as_ref())?;
-                let planned = self
-                    .with(session, |c| c.plan(&addr, prior.as_ref(), desired.as_ref()))?
-                    .map_err(invalid)?;
-                Reply::Plan(pb::PlanResponse::from(&planned))
-            }
+            C::Plan(r) => Reply::Plan(self.plan(session, r)?),
             C::Apply(r) => Reply::Apply(self.apply(session, r, progress)?),
             C::Import(r) => {
                 let found = self
@@ -1670,6 +1684,26 @@ impl Handler for Mock {
 }
 
 impl Mock {
+    /// The change from `r`'s prior to its desired document, and whether it
+    /// replaces the object.
+    fn plan(
+        &self,
+        session: Session,
+        r: pb::PlanRequest,
+    ) -> std::result::Result<pb::PlanResponse, CallError> {
+        plan_awaits()?;
+        let addr = Address {
+            typ: r.r#type,
+            name: r.name,
+        };
+        let prior = doc_of(r.prior.as_ref())?;
+        let desired = doc_of(r.desired.as_ref())?;
+        let planned = self
+            .with(session, |c| c.plan(&addr, prior.as_ref(), desired.as_ref()))?
+            .map_err(invalid)?;
+        Ok(pb::PlanResponse::from(&planned))
+    }
+
     /// A secret the mock holds (an extern's, or an object's attribute), for
     /// the engine to configure another provider with (R-45): only with the
     /// deployment's lease, and only one held by `fakecloud`.
