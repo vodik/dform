@@ -140,3 +140,58 @@ fn a_crash_under_a_trees_tick_leaves_each_deployment_its_own_record() {
         assert_eq!(world(&s, stack), creates, "{stack}");
     }
 }
+
+/// A reader's call that reads a secret its upstream holds reads it where
+/// it is held, inside its Apply: in a tree's tick it waits for the
+/// upstream's call that changes it (slowed, chaos `delay`), so a rotated
+/// secret reaches the reader in the same apply.
+#[test]
+fn a_readers_call_waits_for_the_call_that_changes_the_secret_it_reads() {
+    let s = Scratch::project("tree-tick-held");
+    s.write(
+        "stacks/prod.df",
+        "input pw: secret(string)\n\
+         use fake\n\
+         resource leaky.vault v {\n  password = p\n} where pw(p)\n\
+         output pass: secret(string) = v.password\n",
+    );
+    // App's `v` is there so that chaos may name `v` (it names only a
+    // deployment's own resources): it does not change, and the call
+    // slowed is prod's alone.
+    s.write(
+        "stacks/app.df",
+        "use fake\nuse stacks.prod\n\
+         resource leaky.vault v { backup = \"plain\" }\n\
+         resource leaky.vault copy { backup = prod.pass }\n",
+    );
+    let schema = common::repo().join("tests/fixtures/providers/leaky/schema.df");
+    let schema = schema.to_str().unwrap();
+    let delay = format!("delay=leaky.vault[\"v\"]:{}", DELAY_MS / 3);
+    let apply = |target: &str, pw: &str, chaos: &[&str]| {
+        let set = format!("pw={pw}");
+        let mut a = vec!["dev", "--provider", schema];
+        for c in chaos {
+            a.extend(["--chaos", c]);
+        }
+        a.extend(["apply", target, "--set", &set, "--yes"]);
+        traced(&s, &a)
+    };
+    // Applied once, prod's world is where the reader reads its secret.
+    apply("prod", "FIRST", &[]).0.success();
+    apply("app", "FIRST", &[]).0.success();
+    let (r, spans) = apply("app", "ROTATED", &[&delay]);
+    r.success();
+    let (v, copy) = (
+        applies(&spans, "leaky.vault v"),
+        applies(&spans, "leaky.vault copy"),
+    );
+    let ([(_, _, v_end)], [(_, copy_start, _)]) = (v.as_slice(), copy.as_slice()) else {
+        panic!("one call each: {v:?} {copy:?}");
+    };
+    assert!(copy_start >= v_end, "copy after v: {v:?} {copy:?}");
+    let w = s.json("dform.state/stacks.app/remote.json");
+    assert_eq!(
+        w["resources"]["leaky.vault::copy"]["materialized"]["backup"], "ROTATED",
+        "{w}"
+    );
+}

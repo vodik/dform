@@ -305,9 +305,11 @@ changes confirmed once, every lease is taken before the first call.
 A tick is the tree's: every deployment's calls whose dependencies are
 met are submitted together, across deployments, paced by one window
 (`--parallel`, and each provider's window of requests), each in its
-deployment's session of the tree's one process per provider; within a
-tick no deployment's call waits on another's (what a reader reads of
-its upstream is known a tick later). The tick's block on stderr is one,
+deployment's session of the tree's one process per provider. A
+deployment's call waits on another's only where it reads a secret the
+other holds at an object the tick changes (its provider reads it there,
+inside the call); what else a reader reads of its upstream is known a
+tick later. The tick's block on stderr is one,
 each deployment's changes under its `== NAME`. Then the tick evaluates
 each deployment over what it made known, a reader over its upstreams'.
 Each deployment's state is written, its lease checked and its audit

@@ -84,6 +84,9 @@ pub struct Options<'a> {
 /// actions, made by its providers, the state their answers are written
 /// to, and how it is told.
 pub struct Part<'a> {
+    /// The deployment, as a reader of it names it (`provider::Held`'s
+    /// `deployment`).
+    pub name: &'a str,
     pub cloud: &'a Providers,
     pub desired: &'a [Resource],
     pub adopts: &'a [Adopt],
@@ -150,12 +153,13 @@ pub enum Event<'a> {
 /// Apply every definite action of each part's plan as one tick of the
 /// world, walking the parts' dependency DAGs together with at most
 /// `parallel` calls in flight: a deployment's apply has one part, a
-/// tree's one per deployment whose tick it is (no call of one waits on
-/// another's within a tick: a reader waits on what its upstream makes a
-/// tick later). The first failure, of any part, stops new calls; those
-/// in flight finish, and every action that answered keeps its identity
-/// in its part's state. Returns what each part's answered Apply calls
-/// returned.
+/// tree's one per deployment whose tick it is. A call of one part waits
+/// on another's only where it reads a secret the other holds at an
+/// object the tick changes ([`cross`]); what else a reader reads of its
+/// upstream is known a tick later. The first failure, of any part, stops
+/// new calls; those in flight finish, and every action that answered
+/// keeps its identity in its part's state. Returns what each part's
+/// answered Apply calls returned.
 ///
 /// The walk is single-threaded: submit every ready call while fewer than
 /// `parallel` are in flight (each part's in plan order, the parts in
@@ -233,6 +237,7 @@ impl<'a, 'o> Walk<'a, 'o> {
                     .tick_part(part.desired, part.adopts, part.lifecycle),
             );
         }
+        cross(&parts, &calls, &mut waits);
         let n = calls.len();
         Walk {
             failed: parts.iter().map(|_| None).collect(),
@@ -423,6 +428,31 @@ impl Part<'_> {
             // state was not written.
             (Some(e), Err(p)) => Err(p.context(format!("{e:#}"))),
             (None, r) => r,
+        }
+    }
+}
+
+/// The calls of one part that wait on another's in the same tick, added
+/// to `waits`: a secret output a deployment holds at an object is read
+/// where it is held, inside the reader's Apply (`provider::Held`), so the
+/// reader's call waits for the holder's call that changes that object.
+/// What else a reader reads of its upstream is known a tick later.
+fn cross(parts: &[Part], calls: &[(usize, &Action)], waits: &mut [Vec<usize>]) {
+    for (c, &(p, a)) in calls.iter().enumerate() {
+        let Some(r) = parts[p].desired.iter().find(|r| r.addr == a.addr) else {
+            continue;
+        };
+        for h in parts[p].cloud.held_in(r) {
+            let holds = |&(q, b): &(usize, &Action)| {
+                q != p
+                    && parts[q].name == h.deployment
+                    && b.addr.typ == h.typ
+                    && parts[q]
+                        .state
+                        .get(&b.addr)
+                        .is_some_and(|e| e.remote == h.remote)
+            };
+            waits[c].extend((0..calls.len()).filter(|&d| holds(&calls[d])));
         }
     }
 }

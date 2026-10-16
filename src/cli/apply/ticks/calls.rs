@@ -236,7 +236,7 @@ impl<'a> Ticks<'a, '_> {
         p: &'p TickPlan,
         calling: &'p Calling<'_, '_>,
     ) -> executor::Part<'p> {
-        p.part(self.backend(), &mut self.st, calling)
+        p.part(self.deployment(), self.backend(), &mut self.st, calling)
     }
 
     /// The tick's calls of this deployment, its own walk of one part: its
@@ -256,7 +256,7 @@ impl<'a> Ticks<'a, '_> {
             parallel: self.args.parallel as usize,
             stop_after: self.stop_after.as_ref(),
         };
-        let part = p.part(self.backend(), &mut self.st, &calling);
+        let part = p.part(self.deployment(), self.backend(), &mut self.st, &calling);
         let walked = executor::run_tick(vec![part], &opts);
         let log = calling.into_log();
         let failed = progress.map(Progress::finish).unwrap_or_default();
@@ -407,15 +407,18 @@ impl ActionLog<'_> {
 }
 
 impl TickPlan {
-    /// The plan's part of the tick's walk: its calls made by `cloud`, their
-    /// answers written to `state`, `hooks` told.
+    /// The plan's part of the tick's walk, of the deployment `name`: its
+    /// calls made by `cloud`, their answers written to `state`, `hooks`
+    /// told.
     fn part<'p>(
         &'p self,
+        name: &'p str,
         cloud: &'p crate::plugin::Providers,
         state: &'p mut state::State,
         hooks: &'p dyn executor::Hooks,
     ) -> executor::Part<'p> {
         executor::Part {
+            name,
             cloud,
             desired: &self.tick.planned.resources,
             adopts: &self.adopts,

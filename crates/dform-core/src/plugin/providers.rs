@@ -3238,6 +3238,17 @@ impl Providers {
     /// Whether the null labeled `label` is a secret a provider holds,
     /// which no evaluation fills (R-218): a resource's sensitive computed
     /// value, an extern's secret column, another stack's held output.
+    /// Where each secret another deployment holds that `r`'s document
+    /// reads is held ([`Config::held`]): its provider reads it there,
+    /// inside `r`'s Apply.
+    pub fn held_in(&self, r: &Resource) -> Vec<provider::Held> {
+        let held = self.held.borrow();
+        crate::lattice::nulls_in(&r.attrs)
+            .iter()
+            .filter_map(|l| held.get(l).cloned())
+            .collect()
+    }
+
     pub fn holds_secret(&self, label: &str) -> bool {
         self.held.borrow().contains_key(label) || self.null_class(label) == NullClass::Secret
     }
