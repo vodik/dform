@@ -2,7 +2,9 @@
 //! component conforms as its native build does, a run plans, applies and
 //! resumes through it, a component's grantable imports are refused
 //! without their grant and admitted with it, and one call of a component
-//! keeps several host calls in flight (the async ABI).
+//! keeps several host calls in flight (the async ABI). The OVH and
+//! Kubernetes providers, built as wasm providers, run against their fake
+//! APIs and trace as their native builds do.
 //!
 //! The components are built apart (a test never runs cargo):
 //!
@@ -433,18 +435,217 @@ resource ovh.instance server {{
     assert_eq!(component, native);
 }
 
-/// Each `io.call` and `ratelimit.wait` span of a trace by its parent's
-/// name and its own, counted; each request's bucket and each wait's
-/// session filled.
+/// The Kubernetes provider built as a wasm provider (`cargo xtask
+/// components`) against the fake API server (tests/k8s_api.rs, native in
+/// this process), through the host's HTTP with the kubeconfig the host
+/// holds for it (a wasm provider reads no environment and no file): its
+/// Configure asks the index, then the documents, several in flight
+/// together; a Read GETs the object; a Plan is a dry run, a server-side
+/// apply that persists nothing.
+#[test]
+fn the_k8s_component_configures_reads_and_plans_through_the_host() {
+    use crate::k8s_api::{Api, kubeconfig};
+    use dform::plugin::backend::Session;
+    use dform::plugin::host::Grants;
+    use dform::plugin::{pb, wire};
+    let k8s = k8s_component();
+    let (api, url) = Api::start();
+    let s = Scratch::project("k8s-wasm");
+    let text = std::fs::read_to_string(kubeconfig(&s, &url)).unwrap();
+    dform_host::wasm::compile_cache(wasm_cache());
+    let mut grants = Grants::none("k8s");
+    grants.allow.insert("wasi:filesystem".into());
+    let mut link = dform_host::wasm::link(std::path::Path::new(&k8s), grants).unwrap();
+    // The program's cluster (`use k8s { kubeconfig }`), its kubeconfig
+    // held by the host and the provider configured with its name; its
+    // kinds beyond the static schema derived and kept for the deployment.
+    let config = serde_json::json!({
+        "settings": {"kubeconfig": text},
+        "cache": s.path("cache"),
+        "stack": "shop",
+    });
+    let configured = link.configure(Session::NONE, wire::doc(&config)).unwrap();
+    assert_eq!(configured.account.as_deref(), Some(url.as_str()));
+    let asked = api.count("GET /openapi/v3/", &[]);
+    assert!(asked > 2, "{asked} documents");
+    assert!(
+        api.most_documents_at_once() >= 2,
+        "the server answered {} of {asked} documents at once",
+        api.most_documents_at_once()
+    );
+    let session = Session(configured.session);
+    let read: pb::ReadResponse = link
+        .call(
+            session,
+            pb::ReadRequest {
+                r#type: "k8s.core.v1.namespace".into(),
+                remote: "default".into(),
+                name: "default".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(read.found);
+    let computed = wire::from_doc(read.computed.as_ref().unwrap()).unwrap();
+    assert_eq!(computed["metadata"]["uid"], "uid-default", "{computed}");
+    let desired = serde_json::json!({"metadata": {"name": "app", "namespace": "default"},
+                                     "data": {"mode": "a"}});
+    let plan: pb::PlanResponse = link
+        .call(
+            session,
+            pb::PlanRequest {
+                r#type: "k8s.core.v1.config_map".into(),
+                name: "app".into(),
+                desired: Some(wire::doc(&desired)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(!plan.changes.is_empty());
+    assert_eq!(
+        api.count(
+            "PATCH /api/v1/namespaces/default/configmaps/app?",
+            &["dryRun=All", "fieldManager=dform"]
+        ),
+        1
+    );
+    assert!(
+        api.get("/api/v1/namespaces/default/configmaps/app")
+            .is_none(),
+        "a dry run persists nothing"
+    );
+}
+
+/// The Kubernetes provider's trace as a wasm provider is its native
+/// build's: tests/fixtures/k8s's demo planned against the fake API server
+/// (from no cache, so each Configure fetches every document) has, under
+/// each `provider.call` span, the same `io.call` requests (the index and
+/// the documents under the Configure, the dry runs under the Plans, each
+/// with its bucket) and its `ratelimit.wait` waits (the documents queued
+/// behind the window's first).
+#[test]
+fn the_k8s_component_traces_as_its_native_build_does() {
+    use crate::k8s_api::{Api, kubeconfig};
+    // One server: each run's cache is its own, so each fetches every
+    // document, and a plan's dry runs persist nothing.
+    let (_api, url) = Api::start();
+    let traced = |name: &str, provider: &str| {
+        let s = k8s_demo(name, provider);
+        plan_demo(&s, &kubeconfig(&s, &url));
+        under_calls(&common::spans(&s.path("run.jsonl")))
+    };
+    let native = traced("k8s-trace-native", &common::exe("dform-provider-k8s"));
+    let component = traced("k8s-trace-wasm", &k8s_component());
+    for call in ["k8s Configure", "k8s Plan"] {
+        assert!(
+            native.keys().any(|(c, _)| c == call),
+            "requests under {call}: {native:#?}"
+        );
+    }
+    assert!(
+        native
+            .keys()
+            .any(|(_, child)| child.ends_with("waits on its window")),
+        "the documents wait on the window: {native:#?}"
+    );
+    assert_eq!(component, native);
+}
+
+/// The Kubernetes provider as a wasm provider keeps what it fetched and
+/// derived in the run's cache directory, as its native build does: the
+/// next plan asks the cluster's index, and no document again.
+#[test]
+fn the_k8s_component_keeps_its_cache_across_runs() {
+    use crate::k8s_api::{Api, kubeconfig};
+    let (api, url) = Api::start();
+    let s = k8s_demo("k8s-wasm-cache", &k8s_component());
+    let kc = kubeconfig(&s, &url);
+    plan_demo(&s, &kc);
+    let fetched = api.count("GET /openapi/v3/", &[]);
+    assert!(fetched > 2, "{fetched} documents");
+    for file in ["k8s-openapi.json", "k8s-schema.json"] {
+        let cached = s.path(&format!("dform.state/cache/{file}"));
+        assert!(cached.exists(), "{}", cached.display());
+    }
+    plan_demo(&s, &kc);
+    assert_eq!(
+        api.count("GET /openapi/v3/", &[]),
+        fetched,
+        "no document again"
+    );
+}
+
+/// A project of tests/fixtures/k8s's demo whose dform.toml names the
+/// Kubernetes provider at `provider` (the executable or the wasm
+/// provider), granted the environment's kubeconfig and, for a wasm
+/// provider, the filesystem (its schema's parse, its cache).
+fn k8s_demo(name: &str, provider: &str) -> Scratch {
+    let s = Scratch::project(name);
+    s.write(
+        "dform.toml",
+        &format!(
+            "[project]\nedition = \"2026\"\n\n[providers.k8s]\npath = \"{provider}\"\n\
+             allow = [\"wasi:filesystem\"]\ncredentials = [\"kubeconfig:environment\"]\n"
+        ),
+    );
+    let demo = common::repo().join("tests/fixtures/k8s/stacks/k8s_demo.df");
+    s.write("k8s_demo.df", &std::fs::read_to_string(demo).unwrap());
+    s
+}
+
+/// `dform plan` of [`k8s_demo`]'s project against the cluster the
+/// kubeconfig `kc` names, traced to run.jsonl.
+fn plan_demo(s: &Scratch, kc: &str) -> common::Run {
+    let out = common::dform()
+        .args(common::on(
+            "k8s_demo.df",
+            &[],
+            &["plan", "--trace", "run.jsonl"],
+        ))
+        .current_dir(&s.dir)
+        .env("HOME", &s.dir)
+        .env("XDG_CONFIG_HOME", s.path("config"))
+        .env("XDG_CACHE_HOME", wasm_cache())
+        .env("KUBECONFIG", kc)
+        .env_remove("DFORM_K8S_OFFLINE")
+        .env_remove("KUBERNETES_SERVICE_HOST")
+        .env_remove("KUBERNETES_SERVICE_PORT")
+        .env_remove("DFORM_TRACE")
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .output()
+        .unwrap();
+    common::Run::from(out).success()
+}
+
+/// The Kubernetes provider as a wasm provider, built beside the
+/// workspace's target.
+fn k8s_component() -> String {
+    built(
+        "dform_provider_k8s.wasm",
+        "cargo build -p dform-provider-k8s --release --target wasm32-wasip3 --features component",
+    )
+}
+
+/// Each `io.call` span of a trace by its parent's name (the call it is
+/// made for) and its own, and each `ratelimit.wait` span by the call of
+/// the request that waited, counted: which of a call's requests sent
+/// together wait is the order they reach the host in. Each request's
+/// bucket and each wait's session filled.
 fn under_calls(spans: &[serde_json::Value]) -> std::collections::BTreeMap<(String, String), usize> {
     let by_id: std::collections::BTreeMap<&str, &serde_json::Value> = spans
         .iter()
         .map(|sp| (sp["spanId"].as_str().unwrap(), sp))
         .collect();
+    let parent = |sp: &serde_json::Value| {
+        sp["parentSpanId"]
+            .as_str()
+            .and_then(|p| by_id.get(p).copied())
+    };
+    let is_request = |sp: &serde_json::Value| common::attr(sp, "kind").as_deref() == Some("http");
     let mut out = std::collections::BTreeMap::new();
     for sp in spans {
         let name = sp["name"].as_str().unwrap_or_default();
-        let request = common::attr(sp, "kind").as_deref() == Some("http");
+        let request = is_request(sp);
         let wait = name.ends_with("waits on its window");
         if !request && !wait {
             continue;
@@ -455,13 +656,13 @@ fn under_calls(spans: &[serde_json::Value]) -> std::collections::BTreeMap<(Strin
         if wait {
             assert_ne!(common::attr(sp, "session").as_deref(), Some("0"), "{sp}");
         }
-        let parent = sp["parentSpanId"]
-            .as_str()
-            .and_then(|p| by_id.get(p))
-            .and_then(|p| p["name"].as_str())
-            .unwrap_or("(none)");
-        *out.entry((parent.to_string(), name.to_string()))
-            .or_insert(0) += 1;
+        // A wait under the request that waited is by that request's call.
+        let under = match parent(sp) {
+            Some(p) if wait && is_request(p) => parent(p),
+            p => p,
+        };
+        let call = under.and_then(|p| p["name"].as_str()).unwrap_or("(none)");
+        *out.entry((call.to_string(), name.to_string())).or_insert(0) += 1;
     }
     out
 }
