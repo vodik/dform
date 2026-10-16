@@ -15,6 +15,13 @@ publish = false
 [features]
 component = ["dep:wit-bindgen", "dep:dform-wit", "dep:futures"]
 
+# The probe of the async ABI: a component whose Read sends two requests at
+# once (tests/host_wasm.rs).
+[[example]]
+name = "fetch_at_once"
+crate-type = ["cdylib"]
+required-features = ["component"]
+
 [dependencies]
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }

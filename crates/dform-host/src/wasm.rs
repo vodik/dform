@@ -617,8 +617,13 @@ struct Instance {
 impl Instance {
     fn linker(&self, engine: &Engine) -> Result<Linker<State>> {
         let mut linker: Linker<State> = Linker::new(engine);
+        // Both WASI versions: std on wasm32-wasip3 links 0.3's
+        // interfaces, a wasip2 build and the SDK's bindings 0.2's. A
+        // `wasi:http` request of either goes through [`Outgoing`].
         wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
         wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
+        wasmtime_wasi::p3::add_to_linker(&mut linker)?;
+        wasmtime_wasi_http::p3::add_to_linker(&mut linker)?;
         wh::types::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::secrets::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::http::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;

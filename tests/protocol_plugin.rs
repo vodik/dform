@@ -24,9 +24,8 @@ fn fake() -> String {
 
 /// The provider process exits as it is called to Apply the third action:
 /// dform reports that action failed, naming it, keeps the two identities
-/// before it, and the next apply finishes the rest. (Its exit status is the
-/// native process's: a component's wasip2 exit carries none, and
-/// tests/host_wasm.rs has its own case.)
+/// before it, and the next apply finishes the rest (tests/host_wasm.rs:
+/// the same of the component).
 #[test]
 fn a_provider_crash_mid_apply_fails_the_action_and_resume_finishes() {
     let s = Scratch::new("protocol-crash");

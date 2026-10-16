@@ -5,12 +5,12 @@
 //!
 //! The component is built apart (a test never runs cargo):
 //!
-//!   cargo build -p dform-provider-fake --release --target wasm32-wasip2 --features component
+//!   cargo build -p dform-provider-fake --release --target wasm32-wasip3 --features component
 //!   cargo test --features wasm --test host_wasm
 //!
 //! Every other test that drives the mock runs through the wasm host when
 //! `DFORM_PROVIDER_FAKE` names the component (the CLI's mock is then the
-//! component): `DFORM_PROVIDER_FAKE=$PWD/target/wasm32-wasip2/release/dform_provider_fake.wasm
+//! component): `DFORM_PROVIDER_FAKE=$PWD/target/wasm32-wasip3/release/dform_provider_fake.wasm
 //! cargo test --features wasm --test chaos`.
 
 #![cfg(feature = "wasm")]
@@ -28,34 +28,43 @@ use fake
 
 /// The fake provider as a component, built beside the workspace's target.
 fn component() -> String {
+    built(
+        "dform_provider_fake.wasm",
+        "cargo build -p dform-provider-fake --release --target wasm32-wasip3 --features component",
+    )
+}
+
+/// The component `file` under the wasip3 target's directory, release or
+/// debug, else a panic naming the `build` command.
+fn built(file: &str, build: &str) -> String {
     let target = std::path::Path::new(env!("CARGO_BIN_EXE_dform"))
         .parent()
         .and_then(|d| d.parent())
         .unwrap()
         .to_path_buf();
     for profile in ["release", "debug"] {
-        let p = target.join(format!("wasm32-wasip2/{profile}/dform_provider_fake.wasm"));
+        let p = target.join(format!("wasm32-wasip3/{profile}/{file}"));
         if p.exists() {
             return p.display().to_string();
         }
     }
-    panic!(
-        "the fake provider's component is not built: cargo build -p dform-provider-fake --release \
-         --target wasm32-wasip2 --features component"
-    );
+    panic!("the component {file} is not built: {build}");
 }
 
 /// `dform ARGS` with the mock as the component, its compiled code cached
 /// under the build's directory for tests.
 fn on_component<S: AsRef<std::ffi::OsStr>>(s: &Scratch, args: &[S]) -> common::Run {
-    let out = common::dform()
-        .args(common::yes(args))
+    common::Run::from(component_dform(s, args).output().unwrap())
+}
+
+/// The command [`on_component`] runs.
+fn component_dform<S: AsRef<std::ffi::OsStr>>(s: &Scratch, args: &[S]) -> std::process::Command {
+    let mut c = common::dform();
+    c.args(common::yes(args))
         .env("DFORM_PROVIDER_FAKE", component())
         .env("XDG_CACHE_HOME", wasm_cache())
-        .current_dir(&s.dir)
-        .output()
-        .unwrap();
-    common::Run::from(out)
+        .current_dir(&s.dir);
+    c
 }
 
 /// `dform dev --world w.json ARGS` on `p.df`, the mock the component.
@@ -119,43 +128,50 @@ fn a_run_plans_and_applies_through_the_component() {
 
 /// The component's Apply answers a stream of events and a future of its
 /// result (the component model's async ABI, R-130): what the mock says
-/// under chaos `delay` is shown beside the change, as the native build's
-/// is (tests/apply_events.rs).
+/// under chaos `delay` reaches dform as it is written, as the native
+/// build's does (tests/apply_events.rs: `DFORM_LOG=debug` logs each event).
 #[test]
 fn an_apply_s_events_come_through_the_component_s_stream() {
     let s = Scratch::new("host-wasm-events");
     s.write("p.df", PROG);
-    let r = mock(
-        &s,
-        &["apply", "--chaos", "delay=net.subnet[\"a\"]:200", "--yes"],
-    )
-    .success();
-    let lines: Vec<&str> = r
-        .stderr
-        .lines()
-        .filter(|l| l.starts_with("  + net.subnet a  "))
-        .collect();
+    let args = common::on(
+        "p.df",
+        &[
+            "--world",
+            "w.json",
+            "--chaos",
+            "delay=net.subnet[\"a\"]:200",
+        ],
+        &["apply", "--yes"],
+    );
+    let out = component_dform(&s, &args)
+        .env("DFORM_LOG", "debug")
+        .output()
+        .unwrap();
+    let r = common::Run::from(out).success();
     assert!(
-        !lines.is_empty() && lines.iter().all(|l| l.ends_with("s  made")),
+        r.stderr
+            .lines()
+            .any(|l| l.ends_with("apply net.subnet a: made: answers 200ms late (chaos delay)")),
         "{}",
         r.stderr
     );
-    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
 }
 
 /// The component exits as it is called to Apply the third action: the
-/// action fails naming it, the two before it are kept, and the next apply
-/// finishes, as with the native process (tests/protocol_plugin.rs).
+/// action fails naming it, its exit status the native process's (WASI
+/// 0.3's exit carries its code), the two before it are kept, and the next
+/// apply finishes, as with the native process (tests/protocol_plugin.rs).
 #[test]
 fn a_component_crash_mid_apply_fails_the_action_and_resume_finishes() {
     let s = Scratch::new("host-wasm-crash");
     s.write("p.df", PROG);
     let r = mock(&s, &["apply", "--chaos", "crash=compute.vm[\"app\"]"]).failure();
     assert!(
-        r.stderr
-            .contains("apply compute.vm app: the provider")
-            // wasip2's exit carries only failure, not its code.
-            && r.stderr.contains("exited during the call (exit status: 1)"),
+        r.stderr.contains(
+            "! apply compute.vm app: the provider died; the change may have taken effect\n    \
+             the provider fakecloud exited during the call (exit status: 137)"
+        ),
         "{}",
         r.stderr
     );
@@ -198,4 +214,45 @@ fn wasi_sockets_needs_its_grant() {
     let admitted = start(&granted);
     assert!(!admitted.contains("not granted"), "{admitted}");
     assert!(admitted.contains("instantiate"), "{admitted}");
+}
+
+/// One Read of a component sends two requests at once
+/// (`dform_sdk::Http::request_all`): under the async ABI each `send` is a
+/// subtask, the component going on while the host waits, with no thread
+/// in it. The server answers only while two requests are open together,
+/// so the Read finds it only if neither waited for the other: one at a
+/// time, the first waits out its 3 s alone and is answered 503.
+#[test]
+fn a_components_read_keeps_two_requests_in_flight() {
+    use dform::plugin::backend::Session;
+    use dform::plugin::host::Grants;
+    use dform::plugin::pb;
+    let probe = built(
+        "examples/fetch_at_once.wasm",
+        "cargo build -p dform-sdk --example fetch_at_once --release --target wasm32-wasip3 \
+         --features component",
+    );
+    let pairs = common::answers_in_pairs(std::time::Duration::from_secs(3));
+    // std links `wasi:filesystem` (the SDK changes to the host's working
+    // directory): granted, as the mock's is.
+    let mut grants = Grants::none("fetch-at-once");
+    grants.allow.insert("wasi:filesystem".into());
+    let mut link = dform_host::wasm::link(std::path::Path::new(&probe), grants).unwrap();
+    let from = std::time::Instant::now();
+    let read: pb::ReadResponse = link
+        .call(
+            Session::NONE,
+            pb::ReadRequest {
+                r#type: "web.page".into(),
+                remote: format!("http://{pairs}"),
+                name: "both".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(
+        read.found,
+        "both requests open at once ({:?})",
+        from.elapsed()
+    );
 }
