@@ -6025,26 +6025,7 @@ impl<'u> Lowerer<'u> {
                 }
                 out.push(Lit::Pos(atom));
             }
-            LIT_TRUTH => {
-                let c = terms(n).next().and_then(|t| Chain::read(&t)).ok_or(Skip)?;
-                let mark = out.len();
-                let res = self.resolve(rc, &c, out)?;
-                let e = match self.read_atom(&res, Term::Val(Value::Bool(true)), span) {
-                    Some(a) => {
-                        out.push(Lit::Pos(a));
-                        self.in_place(rc, &res, span).ok_or(Skip)?
-                    }
-                    None => {
-                        let local = out.split_off(mark);
-                        let id = self.realize_expr(rc, res, Pos::Content, (local, out), span)?;
-                        let t = self.lowered(id, out);
-                        out.push(Lit::Eq(t, Term::Val(Value::Bool(true))));
-                        id
-                    }
-                };
-                let g = self.goal(rc, span, GoalKind::Truth(e));
-                self.built(g);
-            }
+            LIT_TRUTH => self.truth_lit(rc, n, out, span)?,
             LIT_CMP => self.cmp(rc, n, out)?,
             LIT_IN => self.member_lit(rc, n, out)?,
             // `v not in PATH[_]`: no value the path reaches is `v`, a
@@ -6058,86 +6039,7 @@ impl<'u> Lowerer<'u> {
                     self.built(g);
                 }
             }
-            LIT_HAS => {
-                let t = terms(n).next().ok_or(Skip)?;
-                let c = Chain::read(&t).ok_or(Skip)?;
-                if self.bare_resource(rc, &c) {
-                    let (typ, addr) = self.reference(rc, &c, out, span)?;
-                    let args = vec![self.term_of(typ), self.term_of(addr)];
-                    out.push(Lit::Pos(atom_at(IDENTITY, args, span)));
-                    let g = self.goal(rc, span, GoalKind::Has(Has::Resource { typ, addr }));
-                    self.built(g);
-                    return Ok(());
-                }
-                let res = self.resolve(rc, &c, out)?;
-                match &res {
-                    Res::Ref { typ, addr, path } if path.is_empty() => {
-                        let args = vec![self.term_of(*typ), self.term_of(*addr)];
-                        let a = atom_at(IDENTITY, args, span);
-                        out.push(Lit::Pos(a));
-                        let (typ, addr) = (*typ, *addr);
-                        let g = self.goal(rc, span, GoalKind::Has(Has::Resource { typ, addr }));
-                        self.built(g);
-                        return Ok(());
-                    }
-                    Res::Ref { path, .. } if is_identity(path) => {
-                        return self.has_identity(&t, span);
-                    }
-                    _ => {}
-                }
-                let start = out.len();
-                let marked = self.has_atom(&res, span);
-                let mark = self.has_mark(&res);
-                // The reads the mark covers are the test's own: where the
-                // schema answers it they are gone (R-106), so nothing
-                // after it reads through them (R-204).
-                let reads = marked.as_ref().map(|_| rc.reads.clone());
-                let test = match self.read_atom(&res, Term::Wildcard, span) {
-                    Some(a) => {
-                        out.push(Lit::Pos(a));
-                        // A marked read's resource is the mark's.
-                        let res = match mark {
-                            Some(_) => self.settled(rc, res, span),
-                            None => res,
-                        };
-                        Has::Read(self.in_place(rc, &res, span).ok_or(Skip)?)
-                    }
-                    // A nested path, or a field of a value: it has a value
-                    // when the walk to it does.
-                    None if matches!(
-                        res,
-                        Res::Ref { .. } | Res::Var { .. } | Res::Value { .. }
-                    ) =>
-                    {
-                        // The reads resolving it stay before the mark.
-                        let res = self.settled(rc, res, span);
-                        let value =
-                            self.realize_expr(rc, res, Pos::Content, (Vec::new(), out), span)?;
-                        let t = self.lowered(value, out);
-                        let v = fresh(rc, HAS_VAR);
-                        out.push(Lit::Eq(var(&v), t));
-                        let var = self.building(rc, span, |b| b.var(&v));
-                        rc.outer.insert(v);
-                        Has::Walk { var, value }
-                    }
-                    None => {
-                        return self.error(
-                            span,
-                            "`has` takes an attribute of a resource (`has r.p`), a value name \
-                             or a field of a value",
-                        );
-                    }
-                };
-                mark_has(out, start, marked, false);
-                if let Some(reads) = reads {
-                    rc.reads = reads;
-                }
-                let mut g = self.goal(rc, span, GoalKind::Has(test));
-                if let Some(mark) = mark {
-                    g = self.goal(rc, span, GoalKind::Marked { mark, goal: g });
-                }
-                self.built(g);
-            }
+            LIT_HAS => self.has_lit(rc, n, out, span)?,
             LIT_NOT => {
                 let inner = n.children().next().ok_or(Skip)?;
                 self.not(rc, &inner, out, span)?;
@@ -6148,6 +6050,116 @@ impl<'u> Lowerer<'u> {
             }
             k => return self.error(span, format!("unexpected {k:?} in a body")),
         }
+        Ok(())
+    }
+
+    /// `x.ready`: the read with `true` in its value column, or the value
+    /// compared with `true`.
+    fn truth_lit(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>, span: Span) -> L<()> {
+        let c = terms(n).next().and_then(|t| Chain::read(&t)).ok_or(Skip)?;
+        let mark = out.len();
+        let res = self.resolve(rc, &c, out)?;
+        let e = match self.read_atom(&res, Term::Val(Value::Bool(true)), span) {
+            Some(a) => {
+                out.push(Lit::Pos(a));
+                self.in_place(rc, &res, span).ok_or(Skip)?
+            }
+            None => {
+                let local = out.split_off(mark);
+                let id = self.realize_expr(rc, res, Pos::Content, (local, out), span)?;
+                let t = self.lowered(id, out);
+                out.push(Lit::Eq(t, Term::Val(Value::Bool(true))));
+                id
+            }
+        };
+        let g = self.goal(rc, span, GoalKind::Truth(e));
+        self.built(g);
+        Ok(())
+    }
+
+    /// `has r`, `has r.p`, `has x.f`: whether the resource exists, the
+    /// attribute or the path into a value has one.
+    fn has_lit(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>, span: Span) -> L<()> {
+        let t = terms(n).next().ok_or(Skip)?;
+        let c = Chain::read(&t).ok_or(Skip)?;
+        if self.bare_resource(rc, &c) {
+            let (typ, addr) = self.reference(rc, &c, out, span)?;
+            let args = vec![self.term_of(typ), self.term_of(addr)];
+            out.push(Lit::Pos(atom_at(IDENTITY, args, span)));
+            let g = self.goal(rc, span, GoalKind::Has(Has::Resource { typ, addr }));
+            self.built(g);
+            return Ok(());
+        }
+        let res = self.resolve(rc, &c, out)?;
+        match &res {
+            Res::Ref { typ, addr, path } if path.is_empty() => {
+                let args = vec![self.term_of(*typ), self.term_of(*addr)];
+                let a = atom_at(IDENTITY, args, span);
+                out.push(Lit::Pos(a));
+                let (typ, addr) = (*typ, *addr);
+                let g = self.goal(rc, span, GoalKind::Has(Has::Resource { typ, addr }));
+                self.built(g);
+                return Ok(());
+            }
+            Res::Ref { path, .. } if is_identity(path) => {
+                return self.has_identity(&t, span);
+            }
+            _ => {}
+        }
+        self.has_path(rc, res, out, span)
+    }
+
+    /// `has R.p`, `has x.f`, `has R.p.q` of what `res` resolved: the read
+    /// itself, or the walk to the path; a resource's attribute path marked
+    /// as the test (R-106).
+    fn has_path(&mut self, rc: &mut Rc, res: Res, out: &mut Vec<Lit>, span: Span) -> L<()> {
+        let start = out.len();
+        let marked = self.has_atom(&res, span);
+        let mark = self.has_mark(&res);
+        // The reads the mark covers are the test's own: where the
+        // schema answers it they are gone (R-106), so nothing
+        // after it reads through them (R-204).
+        let reads = marked.as_ref().map(|_| rc.reads.clone());
+        let test = match self.read_atom(&res, Term::Wildcard, span) {
+            Some(a) => {
+                out.push(Lit::Pos(a));
+                // A marked read's resource is the mark's.
+                let res = match mark {
+                    Some(_) => self.settled(rc, res, span),
+                    None => res,
+                };
+                Has::Read(self.in_place(rc, &res, span).ok_or(Skip)?)
+            }
+            // A nested path, or a field of a value: it has a value
+            // when the walk to it does.
+            None if matches!(res, Res::Ref { .. } | Res::Var { .. } | Res::Value { .. }) => {
+                // The reads resolving it stay before the mark.
+                let res = self.settled(rc, res, span);
+                let value = self.realize_expr(rc, res, Pos::Content, (Vec::new(), out), span)?;
+                let t = self.lowered(value, out);
+                let v = fresh(rc, HAS_VAR);
+                out.push(Lit::Eq(var(&v), t));
+                let var = self.building(rc, span, |b| b.var(&v));
+                rc.outer.insert(v);
+                Has::Walk { var, value }
+            }
+            None => {
+                return self.error(
+                    span,
+                    "`has` takes an attribute of a resource (`has r.p`), a value name \
+                     or a field of a value",
+                );
+            }
+        };
+        mark_has(out, start, marked, false);
+        if let Some(reads) = reads {
+            rc.reads = reads;
+        }
+        let mut g = self.goal(rc, span, GoalKind::Has(test));
+        if let Some(mark) = mark {
+            g = self.goal(rc, span, GoalKind::Marked { mark, goal: g });
+        }
+        self.built(g);
         Ok(())
     }
 
