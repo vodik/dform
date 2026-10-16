@@ -933,6 +933,7 @@ impl pb::provider_server::Provider for Service {
                 .map(|&(name, sensitive)| pb::SettingDecl {
                     name: name.into(),
                     sensitive,
+                    credential: None,
                 })
                 .collect(),
             health: crate::health::types(),

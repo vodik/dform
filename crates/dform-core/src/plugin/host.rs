@@ -196,6 +196,9 @@ pub struct Opened {
     pub handle: Handle,
     /// The endpoint it is for, when it names one (a kubeconfig's server).
     pub endpoint: Option<String>,
+    /// The namespace it defaults to, when it names one (a kubeconfig
+    /// context's).
+    pub namespace: Option<String>,
 }
 
 /// The host's interfaces as calls: `dform:host`'s `secrets`, `http`,

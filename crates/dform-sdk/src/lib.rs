@@ -147,13 +147,14 @@ pub fn host() -> &'static Host {
     &HOST
 }
 
-/// A credential the operator granted, by name: the host applies it; its
-/// value never reaches the provider.
+/// A credential by name, held for the provider or granted by the
+/// operator: the host applies it; its value never reaches the provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Credential {
     handle: Handle,
     name: String,
     endpoint: Option<String>,
+    namespace: Option<String>,
 }
 
 impl Credential {
@@ -164,6 +165,12 @@ impl Credential {
     /// What it is for, when it says (a kubeconfig's server).
     pub fn endpoint(&self) -> Option<&str> {
         self.endpoint.as_deref()
+    }
+
+    /// The namespace it defaults to, when it says (a kubeconfig
+    /// context's).
+    pub fn namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
     }
 }
 
@@ -184,7 +191,9 @@ impl Tunnel {
 pub struct Secrets(());
 
 impl Secrets {
-    /// The credential `name` (`KIND:NAME`), as dform.toml grants it
+    /// The credential `name` (`KIND:NAME`): one held for this provider
+    /// (the name a setting it declares a credential is configured with,
+    /// [`typed::Typed::credential`]), else one dform.toml grants
     /// (`[providers.NAME] credentials`); refused, naming both, when not.
     pub fn open(&self, name: &str) -> Result<Credential, Error> {
         let o = calls().open(name)?;
@@ -192,6 +201,7 @@ impl Secrets {
             handle: o.handle,
             name: name.to_string(),
             endpoint: o.endpoint,
+            namespace: o.namespace,
         })
     }
 }

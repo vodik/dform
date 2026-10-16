@@ -103,6 +103,7 @@ message OpenResponse {
   optional Failure failure = 1;
   uint64 handle = 2;
   optional string endpoint = 3;
+  optional string namespace = 4;
 }
 
 message Header {

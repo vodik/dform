@@ -44,6 +44,7 @@ impl h::host_server::Host for Service {
                 failure: None,
                 handle: o.handle,
                 endpoint: o.endpoint,
+                namespace: o.namespace,
             },
             Err(e) => h::OpenResponse {
                 failure: Some(conv::from_error(e)),

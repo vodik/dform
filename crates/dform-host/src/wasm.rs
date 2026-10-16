@@ -70,6 +70,7 @@ pub struct Credential {
     handle: h::Handle,
     name: String,
     endpoint: Option<String>,
+    namespace: Option<String>,
 }
 
 /// A tunnel a component forwarded.
@@ -256,6 +257,10 @@ impl wh::types::HostCredential for State {
         self.table.get(&c).ok().and_then(|c| c.endpoint.clone())
     }
 
+    fn namespace(&mut self, c: Resource<Credential>) -> Option<String> {
+        self.table.get(&c).ok().and_then(|c| c.namespace.clone())
+    }
+
     fn drop(&mut self, c: Resource<Credential>) -> wasmtime::Result<()> {
         self.table.delete(c)?;
         Ok(())
@@ -295,6 +300,7 @@ impl wh::secrets::Host for State {
                 handle: o.handle,
                 name,
                 endpoint: o.endpoint,
+                namespace: o.namespace,
             })
             .map_err(|e| error(h::Error::fatal(e.to_string())))
     }

@@ -9,7 +9,7 @@
 
 use crate::common;
 
-use dform::plugin::credentials::{Secret, provide};
+use dform::plugin::credentials::{Given, Kind, Secret, hold};
 use dform::plugin::host::{
     Calls, Class, Endpoint, Error, Failure, Grants, HttpRequest, Run, Target,
 };
@@ -82,17 +82,23 @@ fn echo_auth() -> (SocketAddr, std::thread::JoinHandle<()>) {
     (addr, t)
 }
 
-/// The provider names the credential; the host applies it to the request.
-/// What the provider holds is a handle: the value is in no message it is
-/// sent.
+/// The provider names the credential held for it (a setting of its
+/// Configure); the host applies it to the request. What the provider holds
+/// is a handle: the value is in no message it is sent. Another provider's
+/// host does not open it.
 #[test]
-fn a_granted_credential_is_applied_by_the_host() {
-    provide(
-        "bearer:host-grpc-test",
-        Secret::new(b"t0ken-value".to_vec()),
+fn a_held_credential_is_applied_by_the_host() {
+    let token = [("token".to_string(), Secret::new(b"t0ken-value".to_vec()))];
+    let held = hold(Kind::Bearer, "k8s", Given::Settings(token.into()));
+    let (_o, other) = client(Services::new(Grants::none("other")));
+    let e = other.open(held.name()).unwrap_err();
+    assert!(
+        e.message.contains("provider other is not granted"),
+        "{}",
+        e.message
     );
-    let (_h, c) = client(Services::new(grants(&["bearer:host-grpc-test"])));
-    let opened = c.open("bearer:host-grpc-test").unwrap();
+    let (_h, c) = client(Services::new(grants(&[])));
+    let opened = c.open(held.name()).unwrap();
     assert!(!format!("{opened:?}").contains("t0ken"));
     let (addr, t) = echo_auth();
     let r = c

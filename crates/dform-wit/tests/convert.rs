@@ -113,10 +113,12 @@ fn a_handshake_carries_its_settings_and_health_types() {
             pb::SettingDecl {
                 name: "kubeconfig".into(),
                 sensitive: true,
+                credential: Some("kubeconfig".into()),
             },
             pb::SettingDecl {
                 name: "namespace".into(),
                 sensitive: false,
+                credential: None,
             },
         ],
         health: vec!["k8s.deployment".into(), "k8s.apps.v1.deployment".into()],

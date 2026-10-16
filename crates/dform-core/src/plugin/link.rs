@@ -10,10 +10,13 @@
 //! (`providers::Tick`).
 
 use super::backend::{BUILD, BUILT_IN, Call, CallError, Provider, Reply, Session, Ticket, VERSION};
+use super::credentials::{self, Given, Holding, Kind, Secret};
 use super::pb;
 use super::policy::{self, Class, Policy};
 use super::timed::Timed;
-use anyhow::{Context, Result, bail};
+use super::wire;
+use anyhow::{Context, Result, anyhow, bail};
+use serde_json::{Value as Json, json};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -24,6 +27,13 @@ pub struct Link {
     /// The settings its handshake declares, each with whether its value is
     /// sensitive ([`crate::schema::Schema::settings`]).
     pub settings: Vec<(String, bool)>,
+    /// The settings its handshake declares a credential (or a part of
+    /// one), each with the credential's kind: what a Configure has held by
+    /// the host in their place ([`Link::configure`]).
+    credentials: BTreeMap<String, Kind>,
+    /// The credentials each session's last Configure had held, until it
+    /// is configured again or the link stops.
+    holding: BTreeMap<Session, Vec<Holding>>,
     /// The types its handshake says it answers Health for (R-203), as
     /// the provider names them.
     pub health: Vec<String>,
@@ -122,6 +132,8 @@ impl Link {
             name: String::new(),
             capabilities: Vec::new(),
             settings: Vec::new(),
+            credentials: BTreeMap::new(),
+            holding: BTreeMap::new(),
             health: Vec::new(),
             version: String::new(),
             backend,
@@ -157,6 +169,19 @@ impl Link {
         link.capabilities = hs.capabilities;
         link.health = hs.health;
         link.version = hs.version;
+        for s in &hs.settings {
+            let Some(kind) = &s.credential else { continue };
+            let kind = Kind::named(kind).ok_or_else(|| {
+                anyhow!(
+                    "provider {} declares the setting {} a credential of the kind {kind:?}: \
+                     expected one of {}",
+                    link.program,
+                    s.name,
+                    credentials::KINDS.join(", ")
+                )
+            })?;
+            link.credentials.insert(s.name.clone(), kind);
+        }
         link.settings = hs
             .settings
             .into_iter()
@@ -397,11 +422,22 @@ impl Link {
     /// Configure `session` (none: open one) with `config`: its answer, which
     /// names the session configured. A provider that answers none, or
     /// another than the one named, is refused, naming it and its build.
+    /// A setting it declares a credential is held by the host
+    /// ([`Link::hold`]) and sent as the name it is held under, never its
+    /// value.
     pub fn configure(
         &mut self,
         session: Session,
         config: pb::Value,
     ) -> Result<pb::ConfigureResponse> {
+        let (config, held) = match self.credentials.is_empty() {
+            true => (config, Vec::new()),
+            false => {
+                let mut doc = wire::from_doc(&config)?;
+                let held = self.hold(&mut doc)?;
+                (wire::doc(&doc), held)
+            }
+        };
         let r: pb::ConfigureResponse = self.call(
             session,
             pb::ConfigureRequest {
@@ -426,7 +462,67 @@ impl Link {
                 },
             );
         }
+        // The session's credentials of its last Configure are released.
+        self.holding.insert(answered, held);
         Ok(r)
+    }
+
+    /// The credentials the Configure document `config` gives: each setting
+    /// this provider declares a credential, its settings of one kind held
+    /// by the host as one credential for it (`credentials::hold`) and each
+    /// replaced by that credential's name. A Configure that gives no
+    /// settings and is not deferred (a provider the program does not
+    /// configure) has the environment's of each kind that has one, named in
+    /// its `credentials` (`{"kubeconfig": NAME}`).
+    fn hold(&self, config: &mut Json) -> Result<Vec<Holding>> {
+        if config.get("deferred") == Some(&Json::Bool(true)) {
+            return Ok(Vec::new());
+        }
+        // The provider's name in dform.toml: what its host opens by.
+        let to = self
+            .hosting
+            .as_ref()
+            .map_or(self.name.as_str(), |h| h.grants.provider.as_str());
+        let mut held = Vec::new();
+        let Some(settings) = config.get_mut("settings").and_then(Json::as_object_mut) else {
+            let mut named = serde_json::Map::new();
+            for kind in self.credentials.values().filter(|k| k.in_environment()) {
+                if !named.contains_key(kind.as_str()) {
+                    let h = credentials::hold(*kind, to, Given::Environment);
+                    named.insert(kind.as_str().into(), json!(h.name()));
+                    held.push(h);
+                }
+            }
+            if !named.is_empty() {
+                config["credentials"] = Json::Object(named);
+            }
+            return Ok(held);
+        };
+        let mut by_kind: BTreeMap<Kind, BTreeMap<String, Secret>> = BTreeMap::new();
+        for (setting, kind) in &self.credentials {
+            match settings.get(setting) {
+                None | Some(Json::Null) => {}
+                Some(Json::String(v)) => {
+                    by_kind
+                        .entry(*kind)
+                        .or_default()
+                        .insert(setting.clone(), Secret::new(v.as_bytes().to_vec()));
+                }
+                Some(_) => bail!(
+                    "provider {}: the setting {setting} is a credential: a string",
+                    self.name_or_program()
+                ),
+            }
+        }
+        for (kind, parts) in by_kind {
+            let given: Vec<String> = parts.keys().cloned().collect();
+            let h = credentials::hold(kind, to, Given::Settings(parts));
+            for setting in given {
+                settings.insert(setting, json!(h.name()));
+            }
+            held.push(h);
+        }
+        Ok(held)
     }
 
     /// `reply`, as the answer to a `method` call.
@@ -578,6 +674,77 @@ mod tests {
             };
             (t, Ok(reply))
         }
+    }
+
+    /// Declares `kubeconfig` and `token` a kubeconfig's parts, and keeps
+    /// each Configure it is sent.
+    #[derive(Default)]
+    struct Holder(std::sync::Mutex<Vec<Json>>);
+
+    impl Handler for Holder {
+        fn handle(&self, _: Session, call: Call, _: Progress) -> Result<Reply, CallError> {
+            let decl = |name: &str| pb::SettingDecl {
+                name: name.into(),
+                sensitive: true,
+                credential: Some("kubeconfig".into()),
+            };
+            Ok(match call {
+                Call::Handshake(_) => Reply::Handshake(pb::HandshakeResponse {
+                    protocol_version: VERSION,
+                    name: "kube".into(),
+                    settings: vec![decl("kubeconfig"), decl("token")],
+                    ..Default::default()
+                }),
+                Call::Configure(r) => {
+                    let c = wire::from_doc_or_empty(r.config.as_ref()).unwrap();
+                    self.0.lock().unwrap().push(c);
+                    Reply::Configure(pb::ConfigureResponse {
+                        session: r.session.max(1),
+                        ..Default::default()
+                    })
+                }
+                _ => Reply::Read(pb::ReadResponse::default()),
+            })
+        }
+    }
+
+    /// A setting the provider declares a credential reaches it as the
+    /// name the host holds it under, never its value, and only that
+    /// provider opens it; a Configure with no settings names the
+    /// environment's; configuring the session again lets the last one go.
+    #[test]
+    fn a_credential_setting_reaches_the_provider_as_a_name() {
+        let holder = std::sync::Arc::new(Holder::default());
+        struct Shared(std::sync::Arc<Holder>);
+        impl Handler for Shared {
+            fn handle(&self, s: Session, c: Call, p: Progress) -> Result<Reply, CallError> {
+                self.0.handle(s, c, p)
+            }
+        }
+        let q = Queue::new(Shared(holder.clone()), Order::Clock, false);
+        let mut l = Link::start("kube", Box::new(q)).unwrap();
+        const KC: &str = "current-context: c\ncontexts: [{name: c, context: {cluster: k}}]\n\
+                          clusters: [{name: k, cluster: {server: 'https://k'}}]\n";
+        let config = json!({"settings": {"kubeconfig": KC, "namespace": "shop"}});
+        l.configure(Session::NONE, wire::doc(&config)).unwrap();
+        let sent = holder.0.lock().unwrap()[0].clone();
+        let name = sent["settings"]["kubeconfig"].as_str().unwrap().to_string();
+        assert!(name.starts_with("kubeconfig:kube."), "{sent}");
+        assert_eq!(sent["settings"]["namespace"], "shop");
+        assert!(!sent.to_string().contains("https://k"), "{sent}");
+        let c = credentials::held(&name, "kube").unwrap().unwrap();
+        assert_eq!(c.endpoint.as_deref(), Some("https://k"));
+        assert!(credentials::held(&name, "other").is_none());
+        // Its session again, with no settings: the environment's.
+        l.configure(Session(1), wire::doc(&json!({}))).unwrap();
+        let sent = holder.0.lock().unwrap()[1].clone();
+        let env = sent["credentials"]["kubeconfig"].as_str().unwrap();
+        assert!(env.starts_with("kubeconfig:kube."), "{sent}");
+        assert!(credentials::held(&name, "kube").is_none(), "let go");
+        // A deferred Configure holds nothing.
+        l.configure(Session(1), wire::doc(&json!({"deferred": true})))
+            .unwrap();
+        assert_eq!(holder.0.lock().unwrap()[2], json!({"deferred": true}));
     }
 
     /// A provider whose Configure answers no session is refused, naming

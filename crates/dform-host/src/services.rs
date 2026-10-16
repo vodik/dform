@@ -159,19 +159,32 @@ fn parent(call: Option<u64>) -> tracing::Span {
 }
 
 impl Calls for Services {
+    /// A credential held for this provider (a setting of its Configure,
+    /// R-45; the environment's), else the operator's as dform.toml grants
+    /// it. A held one's error is why it does not load: its name is one
+    /// the engine made, which the user never wrote.
     fn open(&self, name: &str) -> Result<Opened, Error> {
-        self.grants.credential(name)?;
-        let c = credentials::load(name).map_err(|e| {
-            Error::fatal(format!(
-                "provider {}: the credential {name}: {e:#}",
-                self.grants.provider
-            ))
-        })?;
-        let endpoint = c.endpoint.clone();
+        let c = match credentials::held(name, &self.grants.provider) {
+            Some(held) => held.map_err(|e| Error::fatal(format!("{e:#}")))?,
+            None => {
+                self.grants.credential(name)?;
+                credentials::load(name).map_err(|e| {
+                    Error::fatal(format!(
+                        "provider {}: the credential {name}: {e:#}",
+                        self.grants.provider
+                    ))
+                })?
+            }
+        };
+        let (endpoint, namespace) = (c.endpoint.clone(), c.namespace.clone());
         let mut o = self.opened();
         let handle = o.handle();
         o.credentials.insert(handle, Arc::new(c));
-        Ok(Opened { handle, endpoint })
+        Ok(Opened {
+            handle,
+            endpoint,
+            namespace,
+        })
     }
 
     fn send(

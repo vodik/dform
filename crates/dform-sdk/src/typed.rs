@@ -399,6 +399,9 @@ pub struct Typed<P: Provider> {
     facts: String,
     schema: Schema,
     examples: Vec<pb::Example>,
+    /// The settings that are credentials, each with its kind
+    /// ([`Typed::credential`]).
+    credentials: BTreeMap<String, String>,
     /// Each session's provider, as its Configure made it.
     sessions: Configured<Mutex<P>>,
 }
@@ -416,6 +419,7 @@ impl<P: Provider> Typed<P> {
             facts: String::new(),
             schema: Schema::default(),
             examples: Vec::new(),
+            credentials: BTreeMap::new(),
             sessions: Configured::default(),
         }
     }
@@ -443,6 +447,24 @@ impl<P: Provider> Typed<P> {
         self.facts.push('\n');
         self.schema = Schema::parse(&self.facts, P::NAME)
             .unwrap_or_else(|e| panic!("the schema facts of {} do not parse: {e:#}", P::NAME));
+        self
+    }
+
+    /// The setting `setting` is a credential of `kind` (`"bearer"`,
+    /// `"kubeconfig"`; dform:host's kinds), or a part of one: dform holds
+    /// its value in the host and [`Provider::configure`] is given the
+    /// credential's name in its place, which it opens
+    /// (`host().secrets.open`) and has the host apply
+    /// ([`crate::Request::auth`]). The provider never holds the value.
+    pub fn credential(mut self, setting: &str, kind: &str) -> Typed<P> {
+        if dform_core::plugin::credentials::Kind::named(kind).is_none() {
+            panic!(
+                "{}: the setting {setting} is a credential of no kind {kind:?}",
+                P::NAME
+            );
+        }
+        self.credentials
+            .insert(setting.to_string(), kind.to_string());
         self
     }
 
@@ -688,7 +710,17 @@ impl<P: Provider> Typed<P> {
             .map(String::from)
             .collect(),
             version: P::VERSION.to_string(),
-            settings: Vec::new(),
+            // Its credential settings (the rest its schema's
+            // `provider_setting` facts declare).
+            settings: self
+                .credentials
+                .iter()
+                .map(|(name, kind)| pb::SettingDecl {
+                    name: name.clone(),
+                    sensitive: true,
+                    credential: Some(kind.clone()),
+                })
+                .collect(),
             health: self
                 .kinds
                 .iter()

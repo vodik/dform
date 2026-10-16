@@ -156,6 +156,7 @@ impl Calls for Grpc {
         Ok(Opened {
             handle: r.handle,
             endpoint: r.endpoint,
+            namespace: r.namespace,
         })
     }
 

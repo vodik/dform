@@ -234,6 +234,7 @@ macro_rules! convert {
                         .map(|s| w::SettingDecl {
                             name: s.name.clone(),
                             sensitive: s.sensitive,
+                            credential: s.credential.clone(),
                         })
                         .collect(),
                     health: r.health.clone(),
@@ -252,6 +253,7 @@ macro_rules! convert {
                         .map(|s| pb::SettingDecl {
                             name: s.name.clone(),
                             sensitive: s.sensitive,
+                            credential: s.credential.clone(),
                         })
                         .collect(),
                     health: r.health.clone(),

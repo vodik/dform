@@ -71,6 +71,9 @@ interface types {
     // kubeconfig's server): not secret, so the provider may build URLs
     // against it.
     endpoint: func() -> option<string>;
+    // The namespace the credential defaults to, when it names one (a
+    // kubeconfig context's): not secret.
+    namespace: func() -> option<string>;
   }
 
   // A forwarded port (`ssh.forward`): a handle `http.send` takes as

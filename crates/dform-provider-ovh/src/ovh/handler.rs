@@ -93,6 +93,7 @@ fn handshake(req: &pb::HandshakeRequest) -> std::result::Result<pb::HandshakeRes
             .map(|name| pb::SettingDecl {
                 name: name.into(),
                 sensitive: false,
+                credential: None,
             })
             .to_vec(),
     })

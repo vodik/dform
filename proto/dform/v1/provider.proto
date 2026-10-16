@@ -186,6 +186,9 @@ message HandshakeResponse {
 message SettingDecl {
   string name = 1;
   bool sensitive = 2;
+  // The kind of credential the setting is (or is a part of), when it is
+  // one: see the WIT's `setting-decl`.
+  optional string credential = 3;
 }
 
 message ConfigureRequest {

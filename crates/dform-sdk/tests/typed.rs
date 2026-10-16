@@ -443,6 +443,36 @@ fn configure_takes_the_programs_settings_only() {
     assert_eq!(*SEEN.lock().unwrap(), [json!({}), json!({"region": "r"})]);
 }
 
+/// A setting the typed layer declares a credential reaches `configure` as
+/// the name the host holds it under, never its value: through a link, as
+/// dform configures it.
+#[test]
+fn a_credential_setting_is_configured_as_its_name() {
+    use dform_core::plugin::credentials;
+    use dform_core::plugin::link::Link;
+    use dform_core::plugin::queue::{Order, Queue};
+    struct Tok;
+    static SEEN: Mutex<Vec<Json>> = Mutex::new(Vec::new());
+    impl Provider for Tok {
+        const NAME: &'static str = "tok";
+        fn configure(settings: &Json) -> Result<(Tok, Option<String>)> {
+            SEEN.lock().unwrap().push(settings.clone());
+            Ok((Tok, None))
+        }
+    }
+    let h = Typed::<Tok>::new().credential("token", "bearer");
+    let mut link = Link::start("tok", Box::new(Queue::new(h, Order::Clock, false))).unwrap();
+    let config = json!({"settings": {"token": "t0ken-value", "region": "r"}});
+    link.configure(Session::NONE, wire::doc(&config)).unwrap();
+    let seen = SEEN.lock().unwrap()[0].clone();
+    assert!(!seen.to_string().contains("t0ken"), "{seen}");
+    let name = seen["token"].as_str().unwrap();
+    assert!(name.starts_with("bearer:tok."), "{seen}");
+    assert_eq!(seen["region"], "r");
+    let c = credentials::held(name, "tok").unwrap().unwrap();
+    assert_eq!(c.headers[0].1.expose(), b"Bearer t0ken-value");
+}
+
 /// `Provider::KEEP` (R-164): an Apply update's `keep` path is left as the
 /// object has it: a provider whose update sends only what `desired`
 /// holds says `keep` in its handshake, and its update never sees the

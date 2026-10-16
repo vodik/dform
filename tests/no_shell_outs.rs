@@ -18,6 +18,13 @@ const ALLOWED: &[(&str, &str)] = &[
     // `dform __explain` in a scratch copy of the project at a commit
     // (`diff --since`): dform running itself.
     ("crates/dform-core/src/diff.rs", "dform's own executable"),
+    // A kubeconfig's exec plugin (`gke-gcloud-auth-plugin`): the operator
+    // configured it, and the host runs it as kubectl does, so the provider
+    // never holds what it answers.
+    (
+        "crates/dform-core/src/plugin/credentials/kubeconfig.rs",
+        "a kubeconfig's exec plugin",
+    ),
 ];
 
 fn sources(dir: &Path, out: &mut Vec<PathBuf>) {

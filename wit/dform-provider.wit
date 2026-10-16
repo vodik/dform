@@ -215,6 +215,18 @@ interface types {
   record setting-decl {
     name: string,
     sensitive: bool,
+    // The kind of credential the setting is, when it is one (`kubeconfig`,
+    // `bearer`; dform:host's credential kinds), or a part of (a
+    // kubeconfig's `host`, `ca`, `token`, `client_certificate`,
+    // `client_key`): dform never sends its value. The settings of a kind
+    // a Configure gives are held by the host as one credential, and each
+    // reaches the provider as that credential's name, which it opens
+    // (`dform:host/secrets`) and the host applies (`http.send`'s `auth`).
+    // Of a provider the program does not configure, the environment's
+    // credential of the kind (a kubeconfig's: `KUBECONFIG`), when it has
+    // one, is held so and named in the Configure's `credentials`
+    // (`{"kubeconfig": NAME}`).
+    credential: option<string>,
   }
 
   record configure-request {

@@ -116,32 +116,27 @@ fn a_window_keeps_under_the_servers_stream_ceiling() {
     use base64::Engine;
     use dform::http::fake::{CA, Server};
     use dform::plugin::backend::Session;
-    use dform::plugin::credentials::{self, Secret};
+    use dform::plugin::credentials::{self, Given, Kind, Secret};
     use dform_host::ratelimit::Limiter;
     let server = Arc::new(Server::h2(3));
-    let name = "kubeconfig:pace-streams";
     let ca = base64::engine::general_purpose::STANDARD.encode(CA);
-    credentials::provide(
-        name,
-        Secret::new(
-            format!(
-                "current-context: c\ncontexts: [{{name: c, context: {{cluster: k, user: u}}}}]\n\
-                 clusters: [{{name: k, cluster: {{server: '{}', certificate-authority-data: {ca}}}}}]\n\
-                 users: [{{name: u, user: {{token: t}}}}]\n",
-                server.url("")
-            )
-            .into_bytes(),
-        ),
+    let kubeconfig = Secret::new(
+        format!(
+            "current-context: c\ncontexts: [{{name: c, context: {{cluster: k, user: u}}}}]\n\
+             clusters: [{{name: k, cluster: {{server: '{}', certificate-authority-data: {ca}}}}}]\n\
+             users: [{{name: u, user: {{token: t}}}}]\n",
+            server.url("")
+        )
+        .into_bytes(),
     );
+    let held = credentials::hold(
+        Kind::Kubeconfig,
+        "streams",
+        Given::Settings([("kubeconfig".to_string(), kubeconfig)].into()),
+    );
+    let name = held.name();
     let limiter = Arc::new(Limiter::new("streams"));
-    let services = Arc::new(Services::paced(
-        Grants {
-            provider: "streams".into(),
-            credentials: [name.to_string()].into(),
-            ..Grants::default()
-        },
-        limiter.clone(),
-    ));
+    let services = Arc::new(Services::paced(Grants::none("streams"), limiter.clone()));
     let auth = services.open(name).unwrap().handle;
     let get = |i: usize| HttpRequest {
         method: "GET".into(),

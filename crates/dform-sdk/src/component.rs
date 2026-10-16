@@ -197,11 +197,15 @@ impl Held {
 impl Calls for Imports {
     fn open(&self, name: &str) -> Result<Opened, h::Error> {
         let c = wh::secrets::open(name).map_err(error)?;
-        let endpoint = c.endpoint();
+        let (endpoint, namespace) = (c.endpoint(), c.namespace());
         let mut o = self.opened();
         let handle = o.handle();
         o.credentials.insert(handle, c);
-        Ok(Opened { handle, endpoint })
+        Ok(Opened {
+            handle,
+            endpoint,
+            namespace,
+        })
     }
 
     fn send(
