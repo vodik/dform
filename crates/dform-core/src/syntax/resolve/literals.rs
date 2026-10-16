@@ -501,29 +501,7 @@ impl Lowerer<'_> {
         span: Span,
     ) -> L<()> {
         let body_from = self.gather.as_ref().map(|s| s.goals());
-        let mut inner = Vec::new();
-        let mut rc2 = rc.clone();
-        rc2.reads.clear();
-        rc2.values.clear();
-        self.nested += 1;
-        let lowered = match n.kind() {
-            BODY => self.body(&mut rc2, n).map(|b| inner = b),
-            // `v not in PATH[_]`: the helper's body is the membership.
-            LIT_NOT_IN => self.lit_as(&mut rc2, n, &mut inner, Self::member_lit),
-            _ => self.lit(&mut rc2, n, &mut inner),
-        };
-        self.nested -= 1;
-        lowered?;
-        // Keep the variable table: names the helper introduced are its own.
-        for (k, v) in &rc2.vars {
-            rc.vars.entry(k.clone()).or_insert_with(|| v.clone());
-        }
-        rc.reserved.extend(rc2.reserved.iter().cloned());
-        // The body is written once in the rule: its names count there.
-        rc.uses = rc2.uses;
-        for (k, at) in rc2.first {
-            rc.first.entry(k).or_insert(at);
-        }
+        let inner = self.negated_body(rc, n)?;
         let outer_bound = {
             let mut b = bound_vars(out);
             b.extend(rc.bound_around().cloned());
@@ -575,6 +553,36 @@ impl Lowerer<'_> {
         }
         out.push(Lit::Not(head));
         Ok(())
+    }
+
+    /// The body of a negation `n` (a block, a membership, a literal),
+    /// lowered in a rule context of its own, its reads its own; the names
+    /// it writes are the rule's (`rc`).
+    fn negated_body(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<Vec<Lit>> {
+        let mut inner = Vec::new();
+        let mut rc2 = rc.clone();
+        rc2.reads.clear();
+        rc2.values.clear();
+        self.nested += 1;
+        let lowered = match n.kind() {
+            BODY => self.body(&mut rc2, n).map(|b| inner = b),
+            // `v not in PATH[_]`: the helper's body is the membership.
+            LIT_NOT_IN => self.lit_as(&mut rc2, n, &mut inner, Self::member_lit),
+            _ => self.lit(&mut rc2, n, &mut inner),
+        };
+        self.nested -= 1;
+        lowered?;
+        // Keep the variable table: names the helper introduced are its own.
+        for (k, v) in &rc2.vars {
+            rc.vars.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        rc.reserved.extend(rc2.reserved.iter().cloned());
+        // The body is written once in the rule: its names count there.
+        rc.uses = rc2.uses;
+        for (k, at) in rc2.first {
+            rc.first.entry(k).or_insert(at);
+        }
+        Ok(inner)
     }
 
     /// `a op b [op c]`, with the direct forms: `x = R.p` and `R.p == c`
