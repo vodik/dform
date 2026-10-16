@@ -26,6 +26,14 @@ pub(super) enum Conn {
     H2(h2::client::SendRequest<Bytes>),
 }
 
+/// How much of an answer's body the server may send on an HTTP/2 stream
+/// before the client takes it, and on the connection: hyper's defaults.
+/// HTTP/2's own (64 KiB) holds a large answer to 64 KiB a round trip (an
+/// API server's OpenAPI document, megabytes, took seconds across an
+/// ocean).
+const STREAM_WINDOW: u32 = 2 * 1024 * 1024;
+const CONNECTION_WINDOW: u32 = 5 * 1024 * 1024;
+
 /// The environment's proxy settings, read once.
 fn proxies() -> &'static Matcher {
     static PROXIES: OnceLock<Matcher> = OnceLock::new();
@@ -129,6 +137,8 @@ where
         // past its ceiling would be refused unprocessed.
         let (send, conn) = h2::client::Builder::new()
             .initial_max_send_streams(1)
+            .initial_window_size(STREAM_WINDOW)
+            .initial_connection_window_size(CONNECTION_WINDOW)
             .handshake(io)
             .await
             .map_err(|e| unreachable(route, "HTTP/2", e))?;
