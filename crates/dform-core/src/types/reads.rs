@@ -64,15 +64,16 @@ fn declared(schema: &Schema, typ: &str) -> BTreeSet<String> {
 }
 
 /// `{typ} has no attribute `{attr}``, its help the declared attribute it
-/// is nearest (a slip of the pen), else the attributes it has.
+/// is nearest (a slip of the pen), else the command that prints the
+/// type's attributes: its provider's schema, by the provider's name in
+/// the type's (`ovh.s3_credential` is `ovh`'s).
 fn no_such_attribute(e: &Expr, typ: &str, attr: &str, declared: &BTreeSet<String>) -> Diagnostic {
-    let names = declared.iter().map(String::as_str);
-    let help = match crate::diag::nearest(attr, names.clone()) {
+    let help = match crate::diag::nearest(attr, declared.iter().map(String::as_str)) {
         Some(n) => format!("`{n}` is an attribute of {typ}"),
-        None => format!(
-            "{typ}'s attributes: {}",
-            names.collect::<Vec<_>>().join(", ")
-        ),
+        None => {
+            let provider = typ.split_once('.').map_or(typ, |(p, _)| p);
+            format!("`dform provider schema {provider}` prints {typ}'s attributes")
+        }
     };
     Diagnostic::error(
         e.span,
@@ -212,7 +213,8 @@ mod tests {
     /// The renamed attribute (the user's project, edge 6): a read of what
     /// the provider dropped is an error at the read, of a resource or of
     /// a live object, naming the type and the attribute; the help is the
-    /// attribute it is nearest, else the type's attributes.
+    /// attribute it is nearest, else the command that prints the type's
+    /// attributes.
     #[test]
     fn a_read_of_an_attribute_the_type_does_not_have_is_an_error_at_its_site() {
         let errors = errors(
@@ -232,7 +234,7 @@ mod tests {
             [
                 (
                     no("s3_access_key"),
-                    "s.cred's attributes: access, id, secret, status".into(),
+                    "`dform provider schema s` prints s.cred's attributes".into(),
                     "k.s3_access_key".into()
                 ),
                 (

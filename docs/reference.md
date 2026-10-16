@@ -1275,11 +1275,11 @@ A type's attributes are the ones its provider declares and the ones the
 program writes. A read of any other (`backup_key.s3_access_key` after
 the provider renamed it `access`) never has a value, so plan, apply and
 `dform test` refuse it at the read, naming the type and the attribute;
-the help is the declared attribute it is nearest, else the type's
-attributes. A `type_open` type takes attributes its rows do not list, as
-every type of the `fake` schema does, and a read of one is not checked;
-nor is one of a type its schema declares nothing of (a component, a kind
-a cluster defines).
+the help is the declared attribute it is nearest, else `dform provider
+schema NAME`, which prints them. A `type_open` type takes attributes its
+rows do not list, as every type of the `fake` schema does, and a read of
+one is not checked; nor is one of a type its schema declares nothing of
+(a component, a kind a cluster defines).
 
 Built-in mock schemas: `fake` (the demo's), `gke` (gke_platform.df), `k8s` (fifteen
 Kubernetes kinds; try `cargo run -- -C tests/fixtures/k8s plan`)
