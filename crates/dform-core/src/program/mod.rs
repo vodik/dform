@@ -70,13 +70,26 @@ pub struct Program {
     pub signatures: crate::infer::Signatures,
 }
 
-/// The typed readings (R-66, R-134, R-192): the term a node lowers to as
-/// its position reads it, by node. A literal read as its type (`"10.0.0.0/8"`
-/// at an `inet` edge a network, `500m` at a cpu one millicores), a
-/// computed value read at run time (`__as(V, "inet")`), a candidate picked
-/// for a name two resources share (R-74). No pass rewrites a node: `lower`
-/// writes the reading where the node's own term would be.
-pub type Readings = slotmap::SecondaryMap<ExprId, ast::Term>;
+/// The typed readings (R-66, R-134, R-192): how a node is read where its
+/// position types it, by node. No pass rewrites a node: `lower` writes the
+/// reading where the node's own term would be, of that term as written
+/// there (under the copies being instanced too).
+pub type Readings = slotmap::SecondaryMap<ExprId, Reading>;
+
+/// How a node is read where its position types it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Reading {
+    /// A literal read as its type, now (`"10.0.0.0/8"` at an `inet` edge a
+    /// network, `500m` at a cpu one millicores): the constant it is.
+    Value(ast::Term),
+    /// A computed value at a typed position: its term read as the type
+    /// ([`crate::types::read_typed`]), now or at run time (`__as(V,
+    /// "inet")`).
+    As(crate::types::Ty),
+    /// A name two resources share, read as the one candidate a `ref(T)`
+    /// position takes (R-74): the `n`th its term holds.
+    Candidate(usize),
+}
 
 /// How many of each numbered helper the build has taken: the one counter
 /// the resolver and the builders take numbers from, in the order the

@@ -307,58 +307,6 @@ impl Chain {
     }
 }
 
-impl Chain {
-    /// A term no node lowers to (a reading, a resolver's helper's) as the
-    /// copies write it from `from`: each scoped name's scope and each
-    /// reference's address the copy's own, each named per row.
-    pub fn raw_term(&self, t: Term, from: Option<From>) -> Term {
-        match t {
-            Term::Func { name, args } if name == crate::address::SCOPED && args.len() == 2 => {
-                let args = args.into_iter().map(|a| self.raw_term(a, from)).collect();
-                self.scoped_fold(Term::Func { name, args }, from, from)
-            }
-            Term::Func { name, args } if name == crate::address::REF && args.len() == 3 => {
-                let [typ, addr, path]: [Term; 3] = args.try_into().expect("three");
-                let (typ, path) = (self.raw_term(typ, from), self.raw_term(path, from));
-                self.reference(typ, addr, from, path)
-            }
-            Term::Func { name, args } => Term::Func {
-                name,
-                args: args.into_iter().map(|a| self.raw_term(a, from)).collect(),
-            },
-            Term::List(xs) => Term::List(xs.into_iter().map(|a| self.raw_term(a, from)).collect()),
-            Term::Obj(m) => Term::Obj(
-                m.into_iter()
-                    .map(|(k, v)| (k, self.raw_term(v, from)))
-                    .collect(),
-            ),
-            Term::ListComp { item, body } => Term::ListComp {
-                item: Box::new(self.raw_term(*item, from)),
-                body: body
-                    .into_iter()
-                    .map(|l| {
-                        l.map(
-                            |a| {
-                                let a = crate::ast::Atom {
-                                    args: a
-                                        .args
-                                        .into_iter()
-                                        .map(|t| self.raw_term(t, from))
-                                        .collect(),
-                                    ..a
-                                };
-                                self.atom_from(a, from)
-                            },
-                            |t| self.raw_term(t, from),
-                        )
-                    })
-                    .collect(),
-            },
-            other => other,
-        }
-    }
-}
-
 /// `scoped(scope, name)`.
 pub fn scoped(scope: Term, name: Term) -> Term {
     Term::Func {

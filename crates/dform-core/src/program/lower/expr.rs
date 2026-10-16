@@ -10,7 +10,7 @@ use super::instances::From;
 use crate::ast::{Atom, Lit, Span, Stmt, Term, TypeExpr, str_term};
 use crate::program::node::*;
 use crate::program::scope::Reach;
-use crate::program::{NodeId, Program, Readings};
+use crate::program::{NodeId, Program, Reading, Readings};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The term `id` is, and the reads it hoists, in order.
@@ -142,10 +142,11 @@ impl<'p> Lowering<'p> {
             Some(v) => self.hoist(id, v),
             None => self.kind(id),
         };
-        let t = match (self.readings.get(id), self.env.chain) {
-            (Some(read), Some(c)) => c.raw_term(read.clone(), self.env.from),
-            (Some(read), None) => read.clone(),
-            (None, _) => t,
+        let t = match self.readings.get(id) {
+            Some(Reading::Value(v)) => v.clone(),
+            Some(Reading::As(ty)) => crate::types::read_typed(ty, t),
+            Some(Reading::Candidate(n)) => crate::types::candidate(t, *n),
+            None => t,
         };
         match self.env.visit {
             Some(visit) => visit.term(id, t),

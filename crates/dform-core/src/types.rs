@@ -32,7 +32,7 @@ use crate::edges::Read;
 use crate::program::node::{
     ExprId, ExprKind, Header, ItemId, ItemKind, ListPart, ObjPart, ResourceBody, Target, Write,
 };
-use crate::program::{self as prog, ClauseId, Readings};
+use crate::program::{self as prog, ClauseId, Reading, Readings};
 use crate::quantity::{self, Dim};
 use crate::schema::Schema;
 use crate::spell;
@@ -253,6 +253,30 @@ fn spanned(name: &str, text: &str, span: crate::ast::Span) -> Term {
 pub const AMBIGUOUS_REF: &str = "__resource";
 
 /// The name and the candidate references of an ambiguous resource name.
+/// A computed value `t` at a position typed `ty` (a measured type's or a
+/// value type's, R-66, R-134), read as one: a literal now, anything else
+/// at run time (`__as(t, "T")`); a range's ends each.
+pub fn read_typed(ty: &Ty, t: Term) -> Term {
+    match (ty, &t) {
+        _ if ty.measured() => read_as(ty, t),
+        (Ty::Scalar(s), _) if crate::value::is_value_type(s) => match &t {
+            Term::Func { name, .. } if name == crate::range::LOWERED => read_as(ty, t),
+            Term::Var(_) | Term::Func { .. } => at_run_time(ty, t),
+            _ => read_as(ty, t),
+        },
+        _ => t,
+    }
+}
+
+/// The `n`th candidate `t`, a name two resources share (R-74), holds;
+/// `t` itself when it holds none.
+pub fn candidate(t: Term, n: usize) -> Term {
+    match ambiguous_ref_of(&t).and_then(|(_, cs)| cs.get(n)) {
+        Some(c) => c.clone(),
+        None => t,
+    }
+}
+
 fn ambiguous_ref_of(t: &Term) -> Option<(&str, &[Term])> {
     match t {
         Term::Func { name, args } if name == AMBIGUOUS_REF && args.len() > 4 => match &args[0] {
@@ -1289,7 +1313,8 @@ impl<'p> Reader<'p> {
                 *x = constant(t);
             }
             if read != *m {
-                self.read.insert(*v, Term::Val(Value::Obj(read)));
+                self.read
+                    .insert(*v, Reading::Value(Term::Val(Value::Obj(read))));
             }
             return;
         }
@@ -1505,7 +1530,7 @@ impl<'p> Reader<'p> {
                             *x = constant(t);
                         }
                         if read != *m {
-                            out.insert(value, Term::Val(Value::Obj(read)));
+                            out.insert(value, Reading::Value(Term::Val(Value::Obj(read))));
                         }
                         r
                     }
@@ -1536,7 +1561,7 @@ impl<'p> Reader<'p> {
             let before = t.clone();
             let r = read_at(self.schema, typ, path, &mut t);
             if t != before {
-                out.insert(e, t);
+                out.insert(e, Reading::Value(t));
             }
             return r;
         }
@@ -1591,26 +1616,21 @@ impl<'p> Reader<'p> {
         let p = self.p;
         self.pick(ty, e, out);
         let unread = prog::lower_expr(p, e).0;
-        let t = if ty.measured() {
-            let t = prog::read_expr(p, out, e);
-            if let Some(why) = mismatch(ty, &t) {
-                return Some(Err((path.to_string(), why)));
-            }
-            read_as(ty, t)
-        } else if let Ty::Scalar(s) = ty
-            && crate::value::is_value_type(s)
-        {
-            let t = prog::read_expr(p, out, e);
-            match &t {
-                Term::Func { name, .. } if name == crate::range::LOWERED => read_as(ty, t),
-                Term::Var(_) | Term::Func { .. } => at_run_time(ty, t),
-                _ => read_as(ty, t),
-            }
-        } else {
-            return None;
+        let typed = match ty {
+            Ty::Scalar(s) => ty.measured() || crate::value::is_value_type(s),
+            _ => ty.measured(),
         };
-        if t != unread {
-            out.insert(e, t);
+        if !typed {
+            return None;
+        }
+        let t = prog::read_expr(p, out, e);
+        if ty.measured()
+            && let Some(why) = mismatch(ty, &t)
+        {
+            return Some(Err((path.to_string(), why)));
+        }
+        if read_typed(ty, t) != unread {
+            out.insert(e, Reading::As(ty.clone()));
         }
         Some(Ok(()))
     }
@@ -1637,11 +1657,12 @@ impl<'p> Reader<'p> {
                 let picked = ambiguous_ref_of(&t).and_then(|(_, cs)| {
                     let mut of = cs
                         .iter()
-                        .filter(|c| reference(c).is_some_and(|(typ, _)| typ == want));
-                    of.next().filter(|_| of.next().is_none()).cloned()
+                        .enumerate()
+                        .filter(|(_, c)| reference(c).is_some_and(|(typ, _)| typ == want));
+                    of.next().filter(|_| of.next().is_none()).map(|(n, _)| n)
                 });
-                if let Some(c) = picked {
-                    out.insert(e, c);
+                if let Some(n) = picked {
+                    out.insert(e, Reading::Candidate(n));
                 }
             }
             _ => {}
@@ -1894,7 +1915,7 @@ mod tests {
     /// A component's literals are read by node, its body as written
     /// (R-211): the attribute's own (`cidr = "10.0.0.0/8"`), one a let
     /// gives the attribute, and the let's value the attribute reads at run
-    /// time (`__as(C, "inet")`), each a reading `lower` writes in its
+    /// time (read as `inet`, `__as(C, "inet")`), each a reading `lower` writes in its
     /// place; the program lowered without them is unread.
     #[test]
     fn a_components_literals_are_read_by_node_its_body_as_written() {
@@ -1912,7 +1933,10 @@ mod tests {
         assert!(diags.is_empty(), "{diags:?}");
         let read: Vec<String> = readings.values().map(|t| format!("{t:?}")).collect();
         let networks = read.iter().filter(|t| t.contains("IpNet")).count();
-        let at_run_time = read.iter().filter(|t| t.contains("__as")).count();
+        let at_run_time = readings
+            .values()
+            .filter(|r| matches!(r, prog::Reading::As(_)))
+            .count();
         assert_eq!((networks, at_run_time, read.len()), (2, 1, 3), "{read:?}");
         let body = |p: &Program| {
             p.statements

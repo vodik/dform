@@ -145,7 +145,8 @@ impl Graph<'_> {
                 let before = self.readings.is_some().then(|| held.clone());
                 self.place(n, path, held, at);
                 if before.is_some_and(|b| b != *held) {
-                    self.read.insert(node_id(*id), held.clone());
+                    self.read
+                        .insert(node_id(*id), prog::Reading::Value(held.clone()));
                 }
             }
             // `x.p`: the part of `x` at `p`, a field of an object (R-185).
