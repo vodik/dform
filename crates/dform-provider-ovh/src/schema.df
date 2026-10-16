@@ -1,9 +1,10 @@
 # The OVHcloud provider's schema (`dform-provider-ovh`, R-44): Public
-# Cloud instances, SSH keys, S3 containers, users, volumes and private
-# networks of one project, and DNS records of a zone. Each type is an
-# object the API gives an identity; a relationship whose state lives on
-# another object (a volume's attachment, an instance's networks) is an
-# attribute of that object, by the folding rule (docs/grammar.md). A
+# Cloud instances, SSH keys, S3 containers, users and their S3
+# credentials, volumes and private networks of one project, and DNS
+# records of a zone. Each type is an object the API gives an identity; a
+# relationship whose state lives on another object (a volume's
+# attachment, an instance's networks) is an attribute of that object, by
+# the folding rule (docs/grammar.md, "When a relationship folds"). A
 # user's S3 credentials are not: each is named on its own (a secret to
 # reveal, a key to rotate), so each is an object, `ovh.s3_credential`.
 #

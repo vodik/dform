@@ -554,6 +554,30 @@ one element per line with its site (`policies[app_policy]  identity.df:8`);
 an element added or removed is an update of the set
 (`- policies[app_policy]`), and `why` says each element by its writer.
 
+**When a relationship folds**. A relationship may be an attribute of
+one side (it folds) when its provider can keep three promises:
+
+1. Read gets the whole set from a source that has all of it, or fails:
+   a set read in part is never answered as the set.
+2. Apply converges the set against a fresh read, removing as well as
+   adding, so an Apply repeated is harmless.
+3. Converging is safe: the elements are interchangeable, or the provider
+   knows which are its own and converges only those.
+
+And the set is keyed by the element's identity (`type_list_key`, or
+`set(T)`), never by its position, so a reorder is no change and the plan
+prints set operations (`+ networks[lab]`). A provider that breaks the
+first or the second has a bug to fix, not a type to add. Where the third
+fails and the provider cannot tell its own elements, the element is a
+type of its own. Addressability says the same in general: what someone
+must name on its own (a secret to reveal, a credential to rotate, an
+output another stack reads) is a resource. An OVH instance's private
+networks fold (`networks = [lab]`): the instance's ports are listed
+whole, an Apply attaches and detaches against that list, and the
+provider keeps the port it made on each network. A user's S3 credentials
+do not: each has a secret to reveal and a key to rotate, so each is an
+`ovh.s3_credential` (docs/providers/ovh.md).
+
 ### References and their type
 
 A reference is a pair (type, address). A dot on a reference needs its type

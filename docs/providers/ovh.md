@@ -125,7 +125,9 @@ state the API keeps on another object is an attribute of that object, not
 a type of its own: a volume's attachment is the volume's `instance`, an
 instance's private networks its `networks`. A user's S3 credentials are
 not: each has a secret to reveal and a key to rotate on its own, so each
-is an object, `ovh.s3_credential`.
+is an object, `ovh.s3_credential`. When a relationship may fold into an
+attribute is docs/grammar.md's folding rule ("When a relationship
+folds").
 
 The last column is what a Create that timed out is found by (the
 schema's `type_lookup`, see "What a Create that does not answer does").
