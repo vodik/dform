@@ -25,33 +25,26 @@ pub(super) fn check_heads(rules: &[RuleStmt]) -> Result<()> {
     for r in rules {
         if AGGREGATE_OUTPUTS.contains(&r.head.pred.as_str()) {
             bail!(
-                "{} is derived by the attribute aggregate; contribute with arg instead: {}{}",
+                "{} is derived by the attribute aggregate; contribute with arg instead: {}",
                 r.head.pred,
-                spell::rule(r),
-                at_suffix(r.head.span)
+                quoted(r)
             );
         }
         if r.head.pred == partition::STUCK || r.head.pred == stuck::MAY_DERIVE {
             bail!(
-                "{} is derived by the evaluator; no rule may: {}{}",
+                "{} is derived by the evaluator; no rule may: {}",
                 if r.head.pred == partition::STUCK {
                     "stuck/4"
                 } else {
                     "may_derive/3"
                 },
-                spell::rule(r),
-                at_suffix(r.head.span)
+                quoted(r)
             );
         }
         if LATTICE_DECLS.contains(&r.head.pred.as_str())
             || REFINE_DECLS.contains(&r.head.pred.as_str())
         {
-            bail!(
-                "{} must be a fact, not a rule: {}{}",
-                r.head.pred,
-                spell::rule(r),
-                at_suffix(r.head.span)
-            );
+            bail!("{} must be a fact, not a rule: {}", r.head.pred, quoted(r));
         }
     }
     Ok(())
@@ -130,6 +123,20 @@ pub(super) fn with_place(text: String, span: Span) -> String {
 }
 
 /// ` (at file:line:col)` for an error message, or nothing.
+/// A rule as a message quotes it: the statement it is lowered out of, as
+/// the program writes it, at its place; one only the compiler writes by
+/// its text.
+fn quoted(r: &RuleStmt) -> String {
+    let span = match r.head.span.is_none() {
+        true => r.site(),
+        false => r.head.span,
+    };
+    match crate::report::tree::written_at(span) {
+        Some(text) => format!("{text}{}", at_suffix(span)),
+        None => format!("{}{}", spell::rule(r), at_suffix(r.head.span)),
+    }
+}
+
 pub(super) fn at_suffix(span: Span) -> String {
     diag::place(span)
         .map(|at| format!(" (at {at})"))

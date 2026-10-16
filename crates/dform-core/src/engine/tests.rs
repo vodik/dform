@@ -1277,10 +1277,15 @@ fn a_stuck_reader_on_a_cycle_is_an_error() {
 
 #[test]
 fn a_rule_cannot_define_stuck() {
-    let err = run("stuck(1, \"a\", \"b\", \"c\") where input(\"x\", \"y\")").unwrap_err();
+    let err = run("stuck(1, \"a\", \"b\", \"c\") where input(\"x\", \"y\")")
+        .unwrap_err()
+        .to_string();
     assert!(
-        err.to_string()
-            .contains("stuck/4 is derived by the evaluator")
+        err.starts_with(
+            "stuck/4 is derived by the evaluator; no rule may: stuck(1, \"a\", \"b\", \"c\") \
+             where input(\"x\", \"y\") (at <input>:1:1)"
+        ),
+        "{err}"
     );
 }
 
