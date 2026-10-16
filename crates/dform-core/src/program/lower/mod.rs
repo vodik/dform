@@ -19,7 +19,7 @@ pub use expr::{expr_helpers, lower_expr, read_expr};
 pub use items::{element_write, lower_item, value_entries};
 pub use records::Records;
 
-use super::{Origin, Program};
+use super::Program;
 use crate::ast;
 use crate::diag::Diagnostic;
 use std::cell::RefCell;
@@ -69,41 +69,22 @@ impl<'p> Env<'p> {
     }
 }
 
-/// What the program lowers to: the resolver's output, and where each
-/// statement came from, one origin per statement in the order a walk
-/// meets them (a module's own, then its body's).
-#[derive(Debug)]
-pub struct LoweredStack {
-    pub rules: Result<ast::Program, Vec<Diagnostic>>,
-    pub origins: Vec<Origin>,
-}
-
-impl LoweredStack {
-    pub fn into_result(self) -> Result<ast::Program, Vec<Diagnostic>> {
-        self.rules
-    }
-}
-
-pub fn lower(program: &Program) -> LoweredStack {
+/// What the program lowers to: the resolver's output, each rule with
+/// the statement it is lowered out of (`RuleStmt.origin`), or what the
+/// build found wrong.
+pub fn lower(program: &Program) -> Result<ast::Program, Vec<Diagnostic>> {
     if !program.diags.is_empty() {
-        return LoweredStack {
-            rules: Err(program.diags.clone()),
-            origins: Vec::new(),
-        };
+        return Err(program.diags.clone());
     }
-    let mut origins = Vec::new();
     let mut statements = Vec::new();
     for &id in &program.roots {
-        items::item(Env::plain(program), id, &mut statements, &mut origins);
+        items::item(Env::plain(program), id, &mut statements);
     }
-    LoweredStack {
-        rules: Ok(ast::Program {
-            statements,
-            stack: program.stack.clone(),
-            nodes: None,
-        }),
-        origins,
-    }
+    Ok(ast::Program {
+        statements,
+        stack: program.stack.clone(),
+        nodes: None,
+    })
 }
 
 /// Whether every record atom of the item `id` (a definition's body,
@@ -122,7 +103,7 @@ pub fn records_checked(
         ..Env::plain(program)
     };
     let mut out = Vec::new();
-    items::item(env, id, &mut out, &mut Vec::new());
+    items::item(env, id, &mut out);
     match errors.into_inner().into_iter().next() {
         None => Ok(()),
         Some(e) => Err(vec![e]),
@@ -142,7 +123,7 @@ mod tests {
             diags: err.clone(),
             ..Program::new()
         };
-        assert_eq!(dump(&lower(&program).rules), dump(&Err(err)));
+        assert_eq!(dump(&lower(&program)), dump(&Err(err)));
     }
 
     /// Every rule the lowering writes carries the statement it is lowered

@@ -1735,9 +1735,7 @@ pub fn read(program: &Program, schema: &Schema) -> Result<Program> {
     let mut nodes = program.nodes.as_deref().cloned().unwrap_or_default();
     let (readings, mut diags) = readings(&nodes, schema);
     nodes.readings = readings;
-    let read = crate::program::lower(&nodes)
-        .into_result()
-        .map_err(Diagnostics)?;
+    let read = crate::program::lower(&nodes).map_err(Diagnostics)?;
     let mut out = program.clone();
     let n = read.statements.len();
     out.statements.splice(..n, read.statements);
@@ -1861,10 +1859,10 @@ mod tests {
                 })
                 .expect("the component")
         };
-        let unread = body(&crate::program::lower(&nodes).into_result().unwrap());
+        let unread = body(&crate::program::lower(&nodes).unwrap());
         assert!(unread.contains("Str(\"10.0.0.0/8\")") && !unread.contains("IpNet"));
         nodes.readings = readings;
-        let read = body(&crate::program::lower(&nodes).into_result().unwrap());
+        let read = body(&crate::program::lower(&nodes).unwrap());
         assert!(!read.contains("Str(\"10.0.0.0/8\")") && !read.contains("Str(\"10.1.0.0/16\")"));
     }
 

@@ -196,7 +196,7 @@ pub fn lower_stack(
     program.roots = roots;
     program.stack = settings;
     program.diags = std::mem::take(&mut l.diags);
-    let result = crate::program::lower(&program).into_result();
+    let result = crate::program::lower(&program);
     result.map(|p| Program {
         nodes: Some(std::rc::Rc::new(program)),
         ..p

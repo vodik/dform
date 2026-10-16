@@ -33,18 +33,16 @@ use crate::program::node::{
     CheckKind, ClauseId, CopyKind, ExprId, Head, Header, ItemId, ItemKind, Param, RelRef,
     ResourceBody, Setting, Source, Target, TypeRef, VarId, Write,
 };
-use crate::program::{NodeId, Origin, Program};
+use crate::program::{NodeId, Program};
 use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The statements of the item `id`, onto `out`, one origin each.
-pub(super) fn item(env: Env, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<Origin>) {
+/// The statements of the item `id`, onto `out`.
+pub(super) fn item(env: Env, id: ItemId, out: &mut Vec<Stmt>) {
     if let ItemKind::Module { .. } = &env.program.items[id].kind {
-        return module(env, id, out, origins);
+        return module(env, id, out);
     }
-    let stmts = statements(env, id);
-    origins.extend(stmts.iter().map(|_| Origin::of(id)));
-    out.extend(stmts);
+    out.extend(statements(env, id));
 }
 
 /// Each rule of `s` (a copy's rows' too) lowered out of the statement
@@ -64,9 +62,8 @@ fn stamp(s: &mut Stmt, span: Span) {
 }
 
 /// A module's file or a component: `Stmt::Module` around its items'
-/// statements, its own origin before theirs; its own `decl`s name its
-/// relations' fields inside it.
-fn module(env: Env, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<Origin>) {
+/// statements; its own `decl`s name its relations' fields inside it.
+fn module(env: Env, id: ItemId, out: &mut Vec<Stmt>) {
     let program = env.program;
     let it = &program.items[id];
     let ItemKind::Module {
@@ -78,7 +75,6 @@ fn module(env: Env, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<Origin>) 
     else {
         unreachable!("a module")
     };
-    origins.push(Origin::of(id));
     let records = env.records.map(|r| r.with_items(program, items));
     let env = Env {
         records: records.as_ref(),
@@ -86,7 +82,7 @@ fn module(env: Env, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<Origin>) 
     };
     let mut body = Vec::new();
     for &i in items {
-        item(env, i, &mut body, origins);
+        item(env, i, &mut body);
     }
     out.push(Stmt::Module(ast::Module {
         name: path.clone(),
@@ -243,7 +239,7 @@ fn doc(kind: &str, name: &str, pairs: &[(String, String)], span: Span) -> Vec<St
 /// The statements of the item `id` alone: what it lowers to.
 pub fn lower_item(program: &Program, id: ItemId) -> Vec<Stmt> {
     let mut out = Vec::new();
-    item(Env::plain(program), id, &mut out, &mut Vec::new());
+    item(Env::plain(program), id, &mut out);
     out
 }
 

@@ -19,21 +19,18 @@ pub mod build;
 pub mod dump;
 pub mod lower;
 pub mod node;
-pub mod origin;
 pub mod scope;
 pub mod spell;
 pub mod types;
 
 pub use build::Builder;
 pub use lower::{
-    LoweredStack, Records, lower, lower_clause, lower_expr, lower_goal, lower_item, read_expr,
-    records_checked,
+    Records, lower, lower_clause, lower_expr, lower_goal, lower_item, read_expr, records_checked,
 };
 pub use node::{
     Clause, ClauseId, Expr, ExprId, ExprKind, Goal, GoalId, Item, ItemId, ItemKind, Pattern,
     PatternId, Var, VarId,
 };
-pub use origin::Origin;
 pub use scope::{Scope, ScopeId, ScopeKind, Scopes};
 pub use spell::spell;
 
