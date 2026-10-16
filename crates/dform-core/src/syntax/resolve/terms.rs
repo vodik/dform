@@ -68,7 +68,7 @@ impl Lowerer<'_> {
         let was = self.term_of(id);
         Ok(
             crate::types::literal(&crate::types::of_expr(ty), was.clone())
-                .map(|now| self.retyped(rc, id, &was, now)),
+                .map(|now| self.retyped(id, &was, now)),
         )
     }
 
@@ -311,7 +311,7 @@ impl Lowerer<'_> {
     /// constant read as the type ([`Self::read_as`]), the value read `as`
     /// it (`__as(v, "T")`), a written list's or object's parts each read
     /// so.
-    pub(super) fn retyped(&mut self, rc: &Rc, id: ExprId, was: &Term, now: Term) -> ExprId {
+    pub(super) fn retyped(&mut self, id: ExprId, was: &Term, now: Term) -> ExprId {
         if *was == now {
             return id;
         }
@@ -325,7 +325,7 @@ impl Lowerer<'_> {
                     }
                     [v, Term::Val(Value::Str(ty))] => {
                         let ty = TypeExpr::Name(ty.clone());
-                        let value = self.retyped(rc, id, was, v.clone());
+                        let value = self.retyped(id, was, v.clone());
                         self.node(e.span, ExprKind::As { value, ty })
                     }
                     _ => id,
@@ -341,7 +341,7 @@ impl Lowerer<'_> {
                     .into_iter()
                     .zip(ws.iter().zip(ns))
                     .map(|(p, (w, n))| match p {
-                        ListPart::Elem(x) => ListPart::Elem(self.retyped(rc, x, w, n.clone())),
+                        ListPart::Elem(x) => ListPart::Elem(self.retyped(x, w, n.clone())),
                         p => p,
                     })
                     .collect();
@@ -363,7 +363,7 @@ impl Lowerer<'_> {
                             value,
                             pun,
                         } => {
-                            let value = self.retyped(rc, value, &ws[&key], ns[&key].clone());
+                            let value = self.retyped(value, &ws[&key], ns[&key].clone());
                             ObjPart::Field {
                                 key,
                                 key_span,

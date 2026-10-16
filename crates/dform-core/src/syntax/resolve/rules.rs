@@ -225,7 +225,7 @@ impl Lowerer<'_> {
         let (value, id) = match (&ty, &declared) {
             (Some(ty), Some(d)) => {
                 let typed = self.let_typed(scope, &name, (ty, d), &t, value.clone())?;
-                let id = id.map(|id| self.retyped(&rc, id, &value, typed.clone()));
+                let id = id.map(|id| self.retyped(id, &value, typed.clone()));
                 (typed, id)
             }
             _ => (value, id),

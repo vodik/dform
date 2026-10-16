@@ -139,7 +139,7 @@ impl Lowerer<'_> {
             Some(d) => {
                 let ty = (&crate::types::of_expr(d), d);
                 let typed = self.let_typed(scope, &name, ty, &t, value.clone())?;
-                let id = self.retyped(&rc, id, &value, typed.clone());
+                let id = self.retyped(id, &value, typed.clone());
                 (typed, id)
             }
             None => (value, id),
@@ -173,14 +173,9 @@ impl Lowerer<'_> {
     }
 
     /// The let with parameters a call names in `rc`, when it names one:
-    /// its relation as the read writes it and how the read reaches it,
-    /// its declaring scope and its statement. `f` in scope, `m.f` of a used module or of the module the
-    /// read is in, `super.f`.
-    fn called_function(
-        &mut self,
-        rc: &Rc,
-        n: &SyntaxNode,
-    ) -> L<Option<((String, Reach), ScopeId, SyntaxNode)>> {
+    /// `f` in scope, `m.f` of a used module or of the module the read is
+    /// in, `super.f`.
+    fn called_function(&mut self, rc: &Rc, n: &SyntaxNode) -> L<Option<Called>> {
         let Some(c) = n.children().find_map(|c| Chain::of(&c)) else {
             return Ok(None);
         };
@@ -189,38 +184,43 @@ impl Lowerer<'_> {
         }
         let fields = c.fields();
         let found = match fields.as_slice() {
-            [f] => self.function_def(rc.scope, f).map(|(s, def)| {
-                (
-                    (f.clone(), self.relation_reach(rc.scope, rc.scope, f)),
-                    s,
-                    def,
-                )
+            [f] => self.function_def(rc.scope, f).map(|(scope, def)| Called {
+                rel: f.clone(),
+                via: self.relation_reach(rc.scope, rc.scope, f),
+                scope,
+                def,
             }),
             [m, f] if m == "super" => {
                 let span = self.span_of(c.range);
                 let (from, rest) = self.super_chain(rc, &c, span)?;
                 self.function_def(from, &rest.head)
-                    .map(|(s, def)| {
-                        let via = self.relation_reach(rc.scope, from, &rest.head);
-                        ((rest.head.clone(), via), s, def)
+                    .map(|(scope, def)| Called {
+                        rel: rest.head.clone(),
+                        via: self.relation_reach(rc.scope, from, &rest.head),
+                        scope,
+                        def,
                     })
                     .filter(|_| rest.ops.is_empty() && rest.head == *f)
             }
             [m, f] => {
                 if let Some(path) = self.use_in(rc.scope, m) {
                     let module = self.module_at(&path).map(|m| m.0);
-                    module.and_then(|s| {
-                        let def = self.names(s).function(f)?;
-                        Some(((format!("{m}::{f}"), Reach::Own), s, def.clone()))
+                    module.and_then(|scope| {
+                        let def = self.names(scope).function(f)?.clone();
+                        Some(Called {
+                            rel: format!("{m}::{f}"),
+                            via: Reach::Own,
+                            scope,
+                            def,
+                        })
                     })
                 } else if let Some(from) = self.self_module(rc.scope, m) {
                     let def = self.names(from).function(f).cloned();
-                    def.map(|def| {
-                        (
-                            (f.clone(), self.relation_reach(rc.scope, from, f)),
-                            from,
-                            def,
-                        )
+                    def.map(|def| Called {
+                        rel: f.clone(),
+                        via: self.relation_reach(rc.scope, from, f),
+                        scope: from,
+                        def,
                     })
                 } else {
                     None
@@ -240,22 +240,27 @@ impl Lowerer<'_> {
         n: &SyntaxNode,
         pre: &mut Vec<Lit>,
     ) -> Option<L<ExprId>> {
-        let (pred, scope, def) = match self.called_function(rc, n) {
+        let called = match self.called_function(rc, n) {
             Ok(found) => found?,
             Err(e) => return Some(Err(e)),
         };
-        Some(self.call_function(rc, n, (&pred.0, pred.1), scope, &def, pre))
+        Some(self.call_function(rc, n, called, pre))
     }
 
     fn call_function(
         &mut self,
         rc: &mut Rc,
         n: &SyntaxNode,
-        (pred, via): (&str, Reach),
-        scope: ScopeId,
-        def: &SyntaxNode,
+        called: Called,
         pre: &mut Vec<Lit>,
     ) -> L<ExprId> {
+        let Called {
+            rel: pred,
+            via,
+            scope,
+            def,
+        } = called;
+        let (pred, def) = (pred.as_str(), &def);
         let span = self.span(n);
         let name = word_text(def, 1);
         let ps = params(def).unwrap_or_default();
@@ -410,4 +415,13 @@ impl Lowerer<'_> {
         self.diags.push(d);
         Err(Skip)
     }
+}
+
+/// The let with parameters a call names: its relation as the read writes
+/// it and how the read reaches it, its declaring scope and its statement.
+struct Called {
+    rel: String,
+    via: Reach,
+    scope: ScopeId,
+    def: SyntaxNode,
 }
