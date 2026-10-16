@@ -15,6 +15,13 @@
 //!   host's interfaces are its imports. wasip2 is the target that exists on
 //!   stable; wasip3 is the intent and changes nothing here.
 //!
+//! A provider is a worker and dform its runtime (docs/providers.md, "The
+//! host does the transport"): the host owns the connections, the pace,
+//! the credentials and the trace, so a provider sends through
+//! [`Http`], never a client of its own, names its limits
+//! ([`Request::bucket`]) and no rates, and classifies its errors rather
+//! than retrying them.
+//!
 //! [`provider!`] is the entry point for either. A provider is a
 //! [`Handler`] (the protocol's calls, answered at once as dform sends
 //! them); [`typed::Typed`] makes one from Rust types: `#[derive(Resource)]`
@@ -270,7 +277,10 @@ impl Request {
     }
 }
 
-/// `dform:host/http`.
+/// `dform:host/http`: a provider's one way to the network. dform holds the
+/// connection (one per endpoint, HTTP/2 where the server offers it),
+/// paces the request in its bucket's window, applies the credential and
+/// traces it under the call it is sent for.
 pub struct Http(());
 
 impl Http {

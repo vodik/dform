@@ -28,6 +28,47 @@ unless dform.toml says), not a call's `timeout`. An error carries a class: `fina
 worth sending again) or `maybe-applied` (no answer came; it may have
 taken effect).
 
+A provider is a worker and dform is its runtime, as an edge runtime is
+a worker's: the provider gets these `fetch`-shaped capabilities and
+nothing else, and the host owns what is under them: the connections,
+the pace, the credentials, the tunnels, the trace, the timeouts. A
+component has nothing else to reach for (its imports are these, and
+`wasi:*` only as granted). A native provider keeps the same contract
+over gRPC by sending through the SDK's `Http` rather than a client of
+its own; one that holds its own client opts out of all of the below.
+
+What the host guarantees a request:
+
+- one connection per endpoint for the whole process, its requests the
+  streams of one HTTP/2 connection where the server offers it, else
+  kept-alive HTTP/1.1; TLS with the machine's CA and the credential's;
+- a pace: a window of requests in flight per account and bucket that
+  grows while the server answers, halves on a 429, a 503, a timeout or a
+  stall of the connection, waits out a `Retry-After`, and never passes
+  the streams the server takes at once;
+- a request the connection lost before the server took it, sent again
+  on a new one; a call that failed `retryable`, sent again by dform's
+  retry policy;
+- a timeout (60s unless the request says), and a span in the run's
+  trace under the call it is made for.
+
+What a provider author may assume, and leave to it: no sockets, no
+client to configure, no credential values (a handle names one), no
+retries of its own beyond classifying its errors (a 429 comes back as
+the server answered it; sent again, it waits its turn), no rates: it
+names its limits (`Request::bucket("ec2.describe")`) and the window
+learns them. A thread it starts for a call takes the call along
+(`dform_sdk::at_once`), so its requests are paced and traced as the
+call's.
+
+To place it: a Cloudflare Worker or a Fastly Compute service gets
+`fetch` and bindings and never a socket, and the platform pools its
+connections and holds its secrets; Chrome's renderers likewise reach the
+network only through its network process. dform is that runtime for
+infrastructure APIs. What it adds is the pace: a provider's requests
+come from one plan, not from many users, so the host sees them together
+and paces each account's API by what it answers.
+
 ## With the SDK
 
 ```toml
