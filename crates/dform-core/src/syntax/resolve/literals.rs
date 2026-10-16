@@ -285,117 +285,134 @@ impl Lowerer<'_> {
     /// `not L`: an atom, a read with a value, a membership; anything else
     /// through a helper relation.
     pub(super) fn not(&mut self, rc: &mut Rc, n: &SyntaxNode, span: Span) -> L<()> {
-        match n.kind() {
+        let done = match n.kind() {
             LIT_ATOM => {
                 let a = terms(n).next().ok_or(Skip)?;
                 let (atom, args, via) = self.atom_args(rc, &a, Pos::Content)?;
                 self.core_read(&a, &atom)?;
                 let g = self.rel_goal(rc, (&atom, via), args);
-                let g = self.building(rc, span, |b| b.not_one(g, Negated::Literal));
-                self.built(g);
-                return Ok(());
+                self.negated_one(rc, span, g);
+                true
             }
             LIT_IN
                 if !n.descendants().any(|d| d.kind() == TUPLE) && !self.each_membership(rc, n) =>
             {
                 if let Some(g) = self.membership(rc, n)? {
-                    let g = self.building(rc, span, |b| b.not_one(g, Negated::Literal));
-                    self.built(g);
+                    self.negated_one(rc, span, g);
                 }
-                return Ok(());
+                true
             }
             // `not has r` of a resource: a helper over its identity.
             LIT_HAS
                 if terms(n)
                     .next()
                     .and_then(|t| Chain::read(&t))
-                    .is_some_and(|c| self.bare_resource(rc, &c)) => {}
-            LIT_TRUTH | LIT_HAS => {
-                let t = terms(n).next().ok_or(Skip)?;
-                let c = Chain::read(&t).ok_or(Skip)?;
-                let res = self.resolve(rc, &c)?;
-                match &res {
-                    Res::Ref { path, .. } if n.kind() == LIT_HAS && path.is_empty() => {
-                        return self.neg_helper(rc, n, span);
-                    }
-                    Res::Ref { path, .. } if n.kind() == LIT_HAS && is_identity(path) => {
-                        return self.has_identity(&t, span);
-                    }
-                    _ => {}
-                }
-                let mark = (n.kind() == LIT_HAS).then(|| self.has_mark(&res)).flatten();
-                if Self::in_place_read(&res).is_some() {
-                    // A marked read's resource is the mark's.
-                    let res = match mark {
-                        Some(_) => self.settled(rc, res, span),
-                        None => res,
-                    };
-                    let e = self.in_place(rc, &res, span).ok_or(Skip)?;
-                    let kind = match n.kind() {
-                        LIT_HAS => GoalKind::Has(Has::Read(e)),
-                        _ => GoalKind::Truth(e),
-                    };
-                    let g = self.goal(rc, span, kind);
-                    let mut g = self.building(rc, span, |b| b.not_one(g, Negated::Literal));
-                    if let Some(mark) = mark {
-                        g = self.goal(rc, span, GoalKind::Marked { mark, goal: g });
-                    }
-                    self.built(g);
-                    return Ok(());
-                }
-                if mark.is_some() {
-                    self.neg_helper(rc, n, span)?;
-                    let mark = mark.map(|m| {
-                        let (typ, addr) =
-                            self.building(rc, span, |b| (b.settled(m.typ), b.settled(m.addr)));
-                        HasMark { typ, addr, ..m }
-                    });
-                    if let (Some(mark), Some(s)) = (mark, &mut self.gather)
-                        && let Some(g) = s.take_built()
-                    {
-                        let g = self.goal(rc, span, GoalKind::Marked { mark, goal: g });
-                        self.built(g);
-                    }
-                    return Ok(());
-                }
+                    .is_some_and(|c| self.bare_resource(rc, &c)) =>
+            {
+                false
             }
-            LIT_CMP => {
-                let ts: Vec<SyntaxNode> = terms(n).collect();
-                let ops: Vec<SyntaxKind> = tokens(n).map(|t| t.kind()).collect();
-                if ts.len() == 2 && matches!(ops.as_slice(), [EQ | EQ2]) {
-                    for (r, v) in [(&ts[0], &ts[1]), (&ts[1], &ts[0])] {
-                        let Some(c) = Chain::of(r) else { continue };
-                        let mut rc2 = rc.clone();
-                        let Ok(res) = self.probe(|l| l.resolve(&mut rc2, &c)) else {
-                            continue;
-                        };
-                        if matches!(res, Res::Val(_) | Res::Var { .. } | Res::Type(_)) {
-                            continue;
-                        }
-                        let Ok(id) =
-                            self.probe(|l| l.bind(false, |l| l.expr(&mut rc2, v, Pos::Content)))
-                        else {
-                            continue;
-                        };
-                        if self.reads(id) {
-                            continue;
-                        }
-                        if Self::in_place_read(&res).is_some() {
-                            *rc = rc2;
-                            let e = self.in_place(rc, &res, span).ok_or(Skip)?;
-                            let ops = vec![(CmpOp::Eq, id)];
-                            let g = self.goal(rc, span, GoalKind::Compare { lhs: e, ops });
-                            let g = self.building(rc, span, |b| b.not_one(g, Negated::Literal));
-                            self.built(g);
-                            return Ok(());
-                        }
-                    }
-                }
+            LIT_TRUTH | LIT_HAS => self.not_read(rc, n, span)?,
+            LIT_CMP => self.not_compare(rc, n, span)?,
+            _ => false,
+        };
+        match done {
+            true => Ok(()),
+            // A body holding this one literal.
+            false => self.neg_helper(rc, n, span),
+        }
+    }
+
+    /// The written literal being lowered is `not g`, at `span`.
+    fn negated_one(&mut self, rc: &Rc, span: Span, g: GoalId) {
+        let g = self.building(rc, span, |b| b.not_one(g, Negated::Literal));
+        self.built(g);
+    }
+
+    /// `not x.ready`, `not has r.p`: the read itself negated, a `has` of a
+    /// resource's attribute path marked as the test (R-106), or a helper
+    /// over the walk to it; whether it is lowered (else a helper over the
+    /// literal says it).
+    fn not_read(&mut self, rc: &mut Rc, n: &SyntaxNode, span: Span) -> L<bool> {
+        let t = terms(n).next().ok_or(Skip)?;
+        let c = Chain::read(&t).ok_or(Skip)?;
+        let res = self.resolve(rc, &c)?;
+        let has = n.kind() == LIT_HAS;
+        match &res {
+            Res::Ref { path, .. } if has && path.is_empty() => {
+                self.neg_helper(rc, n, span)?;
+                return Ok(true);
+            }
+            Res::Ref { path, .. } if has && is_identity(path) => {
+                return self.has_identity(&t, span);
             }
             _ => {}
         }
-        // A body holding this one literal.
-        self.neg_helper(rc, n, span)
+        let mark = has.then(|| self.has_mark(&res)).flatten();
+        if Self::in_place_read(&res).is_some() {
+            // A marked read's resource is the mark's.
+            let res = match mark {
+                Some(_) => self.settled(rc, res, span),
+                None => res,
+            };
+            let e = self.in_place(rc, &res, span).ok_or(Skip)?;
+            let kind = match has {
+                true => GoalKind::Has(Has::Read(e)),
+                false => GoalKind::Truth(e),
+            };
+            let g = self.goal(rc, span, kind);
+            let mut g = self.building(rc, span, |b| b.not_one(g, Negated::Literal));
+            if let Some(mark) = mark {
+                g = self.goal(rc, span, GoalKind::Marked { mark, goal: g });
+            }
+            self.built(g);
+            return Ok(true);
+        }
+        let Some(m) = mark else { return Ok(false) };
+        self.neg_helper(rc, n, span)?;
+        let (typ, addr) = self.building(rc, span, |b| (b.settled(m.typ), b.settled(m.addr)));
+        let mark = HasMark { typ, addr, ..m };
+        if let Some(s) = &mut self.gather
+            && let Some(g) = s.take_built()
+        {
+            let g = self.goal(rc, span, GoalKind::Marked { mark, goal: g });
+            self.built(g);
+        }
+        Ok(true)
+    }
+
+    /// `not R.p == c`: the read itself with `c` in its value column,
+    /// negated, when one side is one read and the other reads nothing;
+    /// whether it is.
+    fn not_compare(&mut self, rc: &mut Rc, n: &SyntaxNode, span: Span) -> L<bool> {
+        let ts: Vec<SyntaxNode> = terms(n).collect();
+        let ops: Vec<SyntaxKind> = tokens(n).map(|t| t.kind()).collect();
+        if ts.len() != 2 || !matches!(ops.as_slice(), [EQ | EQ2]) {
+            return Ok(false);
+        }
+        for (r, v) in [(&ts[0], &ts[1]), (&ts[1], &ts[0])] {
+            let Some(c) = Chain::of(r) else { continue };
+            let mut rc2 = rc.clone();
+            let Ok(res) = self.probe(|l| l.resolve(&mut rc2, &c)) else {
+                continue;
+            };
+            if matches!(res, Res::Val(_) | Res::Var { .. } | Res::Type(_)) {
+                continue;
+            }
+            let Ok(id) = self.probe(|l| l.bind(false, |l| l.expr(&mut rc2, v, Pos::Content)))
+            else {
+                continue;
+            };
+            if self.reads(id) || Self::in_place_read(&res).is_none() {
+                continue;
+            }
+            *rc = rc2;
+            let e = self.in_place(rc, &res, span).ok_or(Skip)?;
+            let ops = vec![(CmpOp::Eq, id)];
+            let g = self.goal(rc, span, GoalKind::Compare { lhs: e, ops });
+            self.negated_one(rc, span, g);
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     /// `not { B }` (or a `not` no single literal can say): a helper
@@ -465,37 +482,8 @@ impl Lowerer<'_> {
         let span = self.span(n);
         let ts: Vec<SyntaxNode> = terms(n).collect();
         let ops: Vec<SyntaxKind> = tokens(n).map(|t| t.kind()).collect();
-        // `P = e` with a tuple or object pattern on the left (R-58); an
-        // element `P = e[i]` (or `e[i] = P`) is `member(e, i, P)` (H-9).
-        let pattern = |t: &SyntaxNode| Self::is_pattern(t) || t.kind() == LIST;
-        if ts.len() == 2 && ops.as_slice() == [EQ] && (pattern(&ts[0]) || pattern(&ts[1])) {
-            let (p, c) = match pattern(&ts[0]) {
-                true => (&ts[0], &ts[1]),
-                false => (&ts[1], &ts[0]),
-            };
-            let element = Chain::of(c)
-                .filter(|ch| matches!(ch.ops.last(), Some(Op::Index(ix, _)) if ix.len() == 1));
-            if let Some(ch) = element
-                && let Some(Op::Index(ix, _)) = ch.ops.last()
-            {
-                let ix = ix[0].clone();
-                let mut list = ch.clone();
-                list.ops.pop();
-                let res = self.resolve(rc, &list)?;
-                let lid = self.realize_expr(rc, res, Pos::Content, span)?;
-                let (_, iid) = self.bind(true, |x| x.arg_node(rc, &ix, Pos::Content))?;
-                let (_, pid) = self.pattern(rc, p)?;
-                let g = self.building(rc, span, |b| {
-                    let value = b.element_in_place(lid, iid);
-                    let pat = b.pattern_of(pid);
-                    b.bind_goal(span, pat, value)
-                });
-                self.built(g);
-                return Ok(());
-            }
-            if pattern(&ts[0]) {
-                return self.pattern_eq(rc, p, c);
-            }
+        if let Some(r) = self.pattern_cmp(rc, (&ts, &ops), span) {
+            return r;
         }
         // An input that is a reference (`input role: iam.role`) compares
         // as the resource it names, not as its relation's row: `r == role`
@@ -508,74 +496,14 @@ impl Lowerer<'_> {
                         && self.input_ref(rc.scope, &c.head).is_some()
                 })
             });
-        if ts.len() == 2 && matches!(ops.as_slice(), [EQ | EQ2]) && !refs {
-            for (r, v) in [(&ts[0], &ts[1]), (&ts[1], &ts[0])] {
-                let Some(c) = Chain::of(r) else { continue };
-                let mut rc2 = rc.clone();
-                let Ok(res) = self.probe(|l| l.resolve(&mut rc2, &c)) else {
-                    continue;
-                };
-                if matches!(res, Res::Val(_) | Res::Var { .. } | Res::Type(_)) {
-                    continue;
-                }
-                if let Res::Ref { path, .. } = &res
-                    && matches!(path.first(), Some(Seg::F(f)) if f == crate::schema::IDENTITY)
-                {
-                    return self.identity_read(r, self.span(r));
-                }
-                let binding = ops[0] == EQ;
-                let Ok(id) = self.probe(|l| l.bind(binding, |l| l.expr(&mut rc2, v, Pos::Content)))
-                else {
-                    continue;
-                };
-                if self.reads(id) {
-                    continue;
-                }
-                if Self::in_place_read(&res).is_some() {
-                    *rc = rc2;
-                    let e = self.in_place(rc, &res, span).ok_or(Skip)?;
-                    let g = self.building(rc, span, |b| match binding {
-                        true => {
-                            let pat = b.pattern_of(id);
-                            b.bind_goal(span, pat, e)
-                        }
-                        false => {
-                            let kind = GoalKind::Compare {
-                                lhs: e,
-                                ops: vec![(CmpOp::Eq, id)],
-                            };
-                            b.goal_node(span, kind)
-                        }
-                    });
-                    self.built(g);
-                    return Ok(());
-                }
-            }
+        if ts.len() == 2
+            && matches!(ops.as_slice(), [EQ | EQ2])
+            && !refs
+            && let Some(r) = self.direct_cmp(rc, (&ts[0], &ts[1]), ops[0], span)
+        {
+            return r;
         }
-        // `r == "main"`: a reference is never a string (R-31).
-        if ts.len() == 2 && matches!(ops.as_slice(), [EQ2 | NEQ]) {
-            for (r, s) in [(&ts[0], &ts[1]), (&ts[1], &ts[0])] {
-                if s.kind() == LITERAL
-                    && tokens(s).any(|t| t.kind() == STRING)
-                    && self.is_reference(rc, r)
-                {
-                    let text = r.text().to_string();
-                    let lit = s.text().to_string();
-                    let d = Diagnostic::error(
-                        span,
-                        format!("`{text}` is a reference and {lit} a string: they are never equal"),
-                    )
-                    .with_help(format!(
-                        "compare with the resource: `{text} {op} {}`, or `{text} {op} T[{lit}]` \
-                         (R-31)",
-                        lit.trim_matches('"'),
-                        op = if ops[0] == NEQ { "!=" } else { "==" },
-                    ));
-                    self.diags.push(d);
-                    return Err(Skip);
-                }
-            }
-        }
+        self.string_ref(rc, (&ts, &ops), span)?;
         // `r == main`, `r != T[e]`: a resource compares as a reference, and
         // so does the other side (R-42).
         if ts.len() == 2
@@ -595,6 +523,157 @@ impl Lowerer<'_> {
             self.built(g);
             return Ok(());
         }
+        self.typed_cmp(rc, (&ts, &ops), span)
+    }
+
+    /// `P = e` with a tuple or object pattern on the left (R-58); an
+    /// element `P = e[i]` (or `e[i] = P`), `member(e, i, P)` (H-9): its
+    /// goal, when the comparison `ts`, `ops` is one.
+    fn pattern_cmp(
+        &mut self,
+        rc: &mut Rc,
+        (ts, ops): (&[SyntaxNode], &[SyntaxKind]),
+        span: Span,
+    ) -> Option<L<()>> {
+        let pattern = |t: &SyntaxNode| Self::is_pattern(t) || t.kind() == LIST;
+        if ts.len() != 2 || ops != [EQ] || !(pattern(&ts[0]) || pattern(&ts[1])) {
+            return None;
+        }
+        let (p, c) = match pattern(&ts[0]) {
+            true => (&ts[0], &ts[1]),
+            false => (&ts[1], &ts[0]),
+        };
+        let element = Chain::of(c)
+            .filter(|ch| matches!(ch.ops.last(), Some(Op::Index(ix, _)) if ix.len() == 1));
+        if let Some(ch) = element
+            && let Some(Op::Index(ix, _)) = ch.ops.last()
+        {
+            return Some(self.element_bind(rc, (&ch, &ix[0]), p, span));
+        }
+        pattern(&ts[0]).then(|| self.pattern_eq(rc, p, c))
+    }
+
+    /// `P = e[i]`: the pattern `p` bound to the element of the list `ch`
+    /// (its last index `ix`) in place.
+    fn element_bind(
+        &mut self,
+        rc: &mut Rc,
+        (ch, ix): (&Chain, &SyntaxNode),
+        p: &SyntaxNode,
+        span: Span,
+    ) -> L<()> {
+        let mut list = ch.clone();
+        list.ops.pop();
+        let res = self.resolve(rc, &list)?;
+        let lid = self.realize_expr(rc, res, Pos::Content, span)?;
+        let (_, iid) = self.bind(true, |x| x.arg_node(rc, ix, Pos::Content))?;
+        let (_, pid) = self.pattern(rc, p)?;
+        let g = self.building(rc, span, |b| {
+            let value = b.element_in_place(lid, iid);
+            let pat = b.pattern_of(pid);
+            b.bind_goal(span, pat, value)
+        });
+        self.built(g);
+        Ok(())
+    }
+
+    /// `x = R.p`, `R.p == c` (`op` the operator): the read itself with
+    /// the other side in its value column, when one side is one read and
+    /// the other reads nothing; its goal.
+    fn direct_cmp(
+        &mut self,
+        rc: &mut Rc,
+        (a, b): (&SyntaxNode, &SyntaxNode),
+        op: SyntaxKind,
+        span: Span,
+    ) -> Option<L<()>> {
+        for (r, v) in [(a, b), (b, a)] {
+            let Some(c) = Chain::of(r) else { continue };
+            let mut rc2 = rc.clone();
+            let Ok(res) = self.probe(|l| l.resolve(&mut rc2, &c)) else {
+                continue;
+            };
+            if matches!(res, Res::Val(_) | Res::Var { .. } | Res::Type(_)) {
+                continue;
+            }
+            if let Res::Ref { path, .. } = &res
+                && matches!(path.first(), Some(Seg::F(f)) if f == crate::schema::IDENTITY)
+            {
+                return Some(self.identity_read(r, self.span(r)));
+            }
+            let binding = op == EQ;
+            let Ok(id) = self.probe(|l| l.bind(binding, |l| l.expr(&mut rc2, v, Pos::Content)))
+            else {
+                continue;
+            };
+            if self.reads(id) || Self::in_place_read(&res).is_none() {
+                continue;
+            }
+            *rc = rc2;
+            let Some(e) = self.in_place(rc, &res, span) else {
+                return Some(Err(Skip));
+            };
+            let g = self.building(rc, span, |b| match binding {
+                true => {
+                    let pat = b.pattern_of(id);
+                    b.bind_goal(span, pat, e)
+                }
+                false => {
+                    let kind = GoalKind::Compare {
+                        lhs: e,
+                        ops: vec![(CmpOp::Eq, id)],
+                    };
+                    b.goal_node(span, kind)
+                }
+            });
+            self.built(g);
+            return Some(Ok(()));
+        }
+        None
+    }
+
+    /// `r == "main"`: a reference is never a string (R-31), an error.
+    fn string_ref(
+        &mut self,
+        rc: &Rc,
+        (ts, ops): (&[SyntaxNode], &[SyntaxKind]),
+        span: Span,
+    ) -> L<()> {
+        if ts.len() != 2 || !matches!(ops, [EQ2 | NEQ]) {
+            return Ok(());
+        }
+        for (r, s) in [(&ts[0], &ts[1]), (&ts[1], &ts[0])] {
+            if s.kind() == LITERAL
+                && tokens(s).any(|t| t.kind() == STRING)
+                && self.is_reference(rc, r)
+            {
+                let text = r.text().to_string();
+                let lit = s.text().to_string();
+                let d = Diagnostic::error(
+                    span,
+                    format!("`{text}` is a reference and {lit} a string: they are never equal"),
+                )
+                .with_help(format!(
+                    "compare with the resource: `{text} {op} {}`, or `{text} {op} T[{lit}]` \
+                     (R-31)",
+                    lit.trim_matches('"'),
+                    op = if ops[0] == NEQ { "!=" } else { "==" },
+                ));
+                self.diags.push(d);
+                return Err(Skip);
+            }
+        }
+        Ok(())
+    }
+
+    /// `a op b [op c]` of values: each pair read as the other side's type
+    /// (R-66), `=` binding either side; its goal.
+    fn typed_cmp(
+        &mut self,
+        rc: &mut Rc,
+        (ts, ops): (&[SyntaxNode], &[SyntaxKind]),
+        span: Span,
+    ) -> L<()> {
         let mut lowered = Vec::new();
         let mut ids = Vec::new();
         for (i, t) in ts.iter().enumerate() {
@@ -608,14 +687,14 @@ impl Lowerer<'_> {
         let mut pairs = Vec::new();
         for (i, op) in ops.iter().enumerate() {
             let (a, b) = (lowered[i].clone(), lowered[i + 1].clone());
-            let sign = match op {
-                EQ => "=",
-                EQ2 => "==",
-                NEQ => "!=",
-                LT => "<",
-                LE => "<=",
-                GT => ">",
-                _ => ">=",
+            let (sign, cmp) = match op {
+                EQ => ("=", CmpOp::Eq),
+                EQ2 => ("==", CmpOp::Eq),
+                NEQ => ("!=", CmpOp::Ne),
+                LT => ("<", CmpOp::Lt),
+                LE => ("<=", CmpOp::Le),
+                GT => (">", CmpOp::Gt),
+                _ => (">=", CmpOp::Ge),
             };
             let (was_a, was_b) = (a.clone(), b.clone());
             let (a, b) = match crate::types::operands(sign, a, b) {
@@ -624,14 +703,6 @@ impl Lowerer<'_> {
             };
             let ia = self.read_as(ids[i], &was_a, a);
             let ib = self.read_as(ids[i + 1], &was_b, b);
-            let cmp = match op {
-                EQ | EQ2 => CmpOp::Eq,
-                NEQ => CmpOp::Ne,
-                LT => CmpOp::Lt,
-                LE => CmpOp::Le,
-                GT => CmpOp::Gt,
-                _ => CmpOp::Ge,
-            };
             pairs.push((cmp, ia, ib));
         }
         let g = self.compare_goal(rc, span, ops[0] == EQ, pairs);

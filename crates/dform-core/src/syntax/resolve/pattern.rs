@@ -57,68 +57,7 @@ impl Lowerer<'_> {
                 }
                 Ok((Term::List(out), self.node(span, ExprKind::List { parts })))
             }
-            OBJECT => {
-                let at = self.span(n);
-                let obj = fresh(rc, "Obj");
-                let whole = var(&obj);
-                let mut goals = Vec::new();
-                let mut key_nodes = vec![self.var_node(rc, at, &obj)];
-                let mut rest = None;
-                for f in n
-                    .children()
-                    .filter(|c| matches!(c.kind(), OBJECT_FIELD | SPREAD))
-                {
-                    if rest.is_some() {
-                        return self.rest_not_last(n, &f);
-                    }
-                    if f.kind() == SPREAD {
-                        rest = Some(self.rest(rc, &f)?);
-                        continue;
-                    }
-                    let k = tokens(&f).next().ok_or(Skip)?;
-                    let key = if k.kind() == STRING {
-                        self.string(&k)?
-                    } else {
-                        k.text().to_string()
-                    };
-                    if key.contains('.') {
-                        return self.error(
-                            self.span(&f),
-                            format!("an object pattern names a field, and `{key}` is a path"),
-                        );
-                    }
-                    let (_, id) = match terms(&f).next() {
-                        Some(p) => self.pattern1(rc, &p)?,
-                        // `{ a }` binds `a` to the field `a`.
-                        None => self.pun(rc, &k)?,
-                    };
-                    // A nested object's reads follow its own binding.
-                    let nested_goals = std::mem::take(&mut self.after_goals);
-                    let fspan = self.span(&f);
-                    let g = self.building(rc, fspan, |b| {
-                        let base = b.variable(&obj);
-                        let value = b.path(base, &key);
-                        let pat = b.pattern_of(id);
-                        b.bind_goal(fspan, pat, value)
-                    });
-                    goals.push(g);
-                    goals.extend(nested_goals);
-                    key_nodes.push(self.str_node(fspan, &key));
-                }
-                if let Some((_, id)) = rest {
-                    let g = self.building(rc, at, |b| {
-                        let value = b.form(crate::functions::REST, key_nodes);
-                        let pat = b.pattern_of(id);
-                        b.bind_goal(at, pat, value)
-                    });
-                    goals.push(g);
-                }
-                if goals.is_empty() {
-                    return self.error(at, "an object pattern names at least one field");
-                }
-                self.after_goals.extend(goals);
-                Ok((whole, self.var_node(rc, at, &obj)))
-            }
+            OBJECT => self.object_pattern(rc, n),
             SPREAD => self.misplaced_spread(n),
             LIST => {
                 let d = Diagnostic::error(
@@ -140,6 +79,72 @@ impl Lowerer<'_> {
             }
             _ => self.arg_node(rc, n, Pos::Content),
         }
+    }
+
+    /// `{ a, b: p, ..r }`: the object bound to a variable of its own, each
+    /// field's pattern bound to its field after the literal that binds it
+    /// (`after_goals`), the rest to the object without the fields named.
+    fn object_pattern(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<(Term, ExprId)> {
+        let at = self.span(n);
+        let obj = fresh(rc, "Obj");
+        let whole = var(&obj);
+        let mut goals = Vec::new();
+        let mut key_nodes = vec![self.var_node(rc, at, &obj)];
+        let mut rest = None;
+        for f in n
+            .children()
+            .filter(|c| matches!(c.kind(), OBJECT_FIELD | SPREAD))
+        {
+            if rest.is_some() {
+                return self.rest_not_last(n, &f);
+            }
+            if f.kind() == SPREAD {
+                rest = Some(self.rest(rc, &f)?);
+                continue;
+            }
+            let k = tokens(&f).next().ok_or(Skip)?;
+            let key = if k.kind() == STRING {
+                self.string(&k)?
+            } else {
+                k.text().to_string()
+            };
+            if key.contains('.') {
+                return self.error(
+                    self.span(&f),
+                    format!("an object pattern names a field, and `{key}` is a path"),
+                );
+            }
+            let (_, id) = match terms(&f).next() {
+                Some(p) => self.pattern1(rc, &p)?,
+                // `{ a }` binds `a` to the field `a`.
+                None => self.pun(rc, &k)?,
+            };
+            // A nested object's reads follow its own binding.
+            let nested_goals = std::mem::take(&mut self.after_goals);
+            let fspan = self.span(&f);
+            let g = self.building(rc, fspan, |b| {
+                let base = b.variable(&obj);
+                let value = b.path(base, &key);
+                let pat = b.pattern_of(id);
+                b.bind_goal(fspan, pat, value)
+            });
+            goals.push(g);
+            goals.extend(nested_goals);
+            key_nodes.push(self.str_node(fspan, &key));
+        }
+        if let Some((_, id)) = rest {
+            let g = self.building(rc, at, |b| {
+                let value = b.form(crate::functions::REST, key_nodes);
+                let pat = b.pattern_of(id);
+                b.bind_goal(at, pat, value)
+            });
+            goals.push(g);
+        }
+        if goals.is_empty() {
+            return self.error(at, "an object pattern names at least one field");
+        }
+        self.after_goals.extend(goals);
+        Ok((whole, self.var_node(rc, at, &obj)))
     }
 
     /// `..name` ending an object pattern (R-199): the name the rest binds.
