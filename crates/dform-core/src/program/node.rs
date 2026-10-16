@@ -953,6 +953,9 @@ pub struct Write {
     pub rank: Option<Rank>,
     pub folds: Vec<u32>,
     pub span: Span,
+    /// The rule of a relation that places its target, the `set`'s clause
+    /// unfolded with it (`resolve::unfold`).
+    pub through: Option<Span>,
 }
 
 /// What a `set` writes, as the cell it lowers to.

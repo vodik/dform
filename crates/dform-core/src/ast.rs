@@ -684,12 +684,14 @@ impl RuleStmt {
 
 /// Where a lowered rule comes from (R-211): the statement as the program
 /// writes it, its span in the instance (a `use`, a copy) the rule's head
-/// is lowered in; and for a let's rule copied for one call
-/// (`demand::answer`), that call.
+/// is lowered in; for a let's rule copied for one call
+/// (`demand::answer`), that call; for a `set` through a relation, the
+/// rule of it the `set` is unfolded with (`resolve::unfold`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Origin {
     pub stmt: Span,
     pub call: Option<Span>,
+    pub through: Option<Span>,
 }
 
 /// The rules the compiler writes that no statement is: each is read by

@@ -44,7 +44,7 @@ impl Lowerer<'_> {
             return v.clone();
         }
         let mut v = capitalise(name);
-        if rc.vars.values().any(|w| *w == v) {
+        if rc.vars.values().any(|w| *w == v) || rc.taken.contains(&v) {
             v = fresh(rc, &v);
         }
         rc.reserved.insert(v.clone());
@@ -84,6 +84,13 @@ impl Lowerer<'_> {
         // `super.x`: the scope around this component (R-186).
         if h == "super" && !rc.vars.contains_key(h) {
             return self.super_read(rc, c, span);
+        }
+        // A place a `set` writes through (`p = w.spec.template`): a path
+        // into its resource.
+        if !rc.vars.contains_key(h)
+            && let Some(place) = rc.places.get(h).cloned()
+        {
+            return self.placed(rc, c, &place, span);
         }
         // A let with parameters has no value until called (R-187).
         if !rc.vars.contains_key(h)

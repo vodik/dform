@@ -24,6 +24,9 @@ pub struct SetLowered<'a> {
     /// The clause of B, gathered; none without `where`.
     pub clause: Option<ClauseId>,
     pub writes: Vec<WriteLowered<'a>>,
+    /// The rule of a relation that places the lines' targets, the clause
+    /// unfolded with it.
+    pub through: Option<Span>,
 }
 
 /// One line of a `set` as the resolver lowered it.
@@ -81,7 +84,11 @@ impl Builder<'_> {
 
     /// The `Set` item of `s`.
     pub fn set_item(&mut self, s: SetLowered) -> ItemId {
-        let writes = s.writes.iter().map(|w| self.write(w, s.clause)).collect();
+        let writes = s
+            .writes
+            .iter()
+            .map(|w| self.write(w, (s.clause, s.through)))
+            .collect();
         let kind = ItemKind::Set {
             writes,
             clause: s.clause,
@@ -94,7 +101,11 @@ impl Builder<'_> {
     }
 
     /// One line, its aggregates numbered when they fold through helpers.
-    fn write(&mut self, w: &WriteLowered, clause: Option<ClauseId>) -> Write {
+    fn write(
+        &mut self,
+        w: &WriteLowered,
+        (clause, through): (Option<ClauseId>, Option<Span>),
+    ) -> Write {
         self.at(w.span, |b| {
             let target = match &w.target {
                 TargetLowered::Attr { typ, addr, path } => Target::Attr {
@@ -146,6 +157,7 @@ impl Builder<'_> {
                 rank: w.rank,
                 folds,
                 span: w.span,
+                through,
             }
         })
     }

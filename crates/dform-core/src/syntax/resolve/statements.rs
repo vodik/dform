@@ -71,9 +71,9 @@ impl Lowerer<'_> {
     /// A statement's item: what it lowers to, with the helper rules it
     /// generated after it. `outer` carries the variables an enclosing
     /// `for`/`when` binds.
-    pub(super) fn stmt(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> Option<ItemId> {
+    pub(super) fn stmt(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> Vec<ItemId> {
         if n.kind() == COMPONENT {
-            return Some(self.component(n, scope, outer));
+            return vec![self.component(n, scope, outer)];
         }
         let gathered = self.gather.as_mut().map(|g| g.begin());
         let item = self.stmt_item(n, scope, outer);
@@ -84,13 +84,16 @@ impl Lowerer<'_> {
     }
 
     /// [`Self::stmt`], the statement's variables and clause gathered on
-    /// their own.
-    pub(super) fn stmt_item(
-        &mut self,
-        n: &SyntaxNode,
-        scope: ScopeId,
-        outer: &Rc,
-    ) -> Option<ItemId> {
+    /// their own: a `set` through a relation is several items.
+    pub(super) fn stmt_item(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> Vec<ItemId> {
+        match n.kind() {
+            SET => self.ported_all(n, |l| l.set(n, scope, outer)),
+            _ => self.one_item(n, scope, outer).into_iter().collect(),
+        }
+    }
+
+    /// [`Self::stmt_item`] of a statement that is one item.
+    fn one_item(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> Option<ItemId> {
         if let Some(value) = self.literal_let(n) {
             return self.let_literal(n, scope, &value);
         }
@@ -110,7 +113,6 @@ impl Lowerer<'_> {
                     l.provider(n, scope, outer)
                 })
             }
-            SET => self.ported(n, |l| l.set(n, scope, outer)),
             INPUT_RELATION => self.ported(n, |l| l.relation_input(n, scope, outer)),
             RESOURCE if self.decls.project.contains(&self.file) => {
                 self.ported(n, |l| l.deployment(n, scope, outer))
@@ -145,24 +147,40 @@ impl Lowerer<'_> {
         n: &SyntaxNode,
         build: impl FnOnce(&mut Self) -> L<Option<ItemId>>,
     ) -> Option<ItemId> {
+        let items = self.ported_all(n, |l| build(l).map(|i| i.into_iter().collect()));
+        items.into_iter().next()
+    }
+
+    /// [`Self::ported`] of a statement that is any number of items.
+    fn ported_all(
+        &mut self,
+        n: &SyntaxNode,
+        build: impl FnOnce(&mut Self) -> L<Vec<ItemId>>,
+    ) -> Vec<ItemId> {
         let saved = std::mem::take(&mut self.helpers);
         let aggs = std::mem::take(&mut self.aggs);
         let own = self.gather.is_none();
         if own {
             self.gather = Some(Box::default());
         }
-        let item = build(self);
+        let items = build(self);
         if own {
             self.gather = None;
         }
         self.aggs = aggs;
         self.helpers = saved;
-        let item = item.ok()??;
+        let Ok(items) = items else {
+            return Vec::new();
+        };
         if !(self.core || self.lenient || self.text || self.any_type) {
-            let stmts = crate::program::lower_item(&self.program, item);
-            self.placeholders(&stmts, self.span(n)).ok()?;
+            for &item in &items {
+                let stmts = crate::program::lower_item(&self.program, item);
+                if self.placeholders(&stmts, self.span(n)).is_err() {
+                    return Vec::new();
+                }
+            }
         }
-        Some(item)
+        items
     }
 
     /// `component NAME [: S] { .. }`: its statements' items in a scope of
@@ -503,6 +521,17 @@ impl Lowerer<'_> {
 
     pub(super) fn span(&self, n: &SyntaxNode) -> Span {
         self.span_of(n.text_range())
+    }
+
+    /// Where `n` of the file `file` is.
+    pub(super) fn span_in(&self, file: u32, n: &SyntaxNode) -> Span {
+        let r = n.text_range();
+        Span {
+            file,
+            start: r.start().into(),
+            end: r.end().into(),
+            origin: 0,
+        }
     }
 
     pub(super) fn error<T>(&mut self, span: Span, msg: impl Into<String>) -> L<T> {

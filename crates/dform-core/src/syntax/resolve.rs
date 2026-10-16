@@ -87,6 +87,7 @@ mod sets;
 mod statements;
 mod terms;
 mod undeclared;
+mod unfold;
 pub use provider::ENV_VAR;
 
 /// One parsed file of a program.
@@ -211,7 +212,7 @@ pub fn lower_stack(
     let mut program = std::mem::take(&mut l.program);
     program.roots = roots;
     program.stack = settings;
-    program.diags = std::mem::take(&mut l.diags);
+    program.diags = l.said();
     let result = crate::program::lower(&program);
     result.map(|p| Program {
         nodes: Some(std::rc::Rc::new(program)),
@@ -712,6 +713,16 @@ struct Rc {
     /// scope a read holding it names: those no read of the literal holds
     /// are goals before its own.
     tests: Vec<(Option<ExprId>, GoalId)>,
+    /// What the body places for a `set` (`unfold`): its relation
+    /// literals unfolded, each with its rule, and the literals that name
+    /// a place.
+    placing: unfold::Placing,
+    /// Source variable -> the place it names (`p = w.spec.template`): a
+    /// chain on it is a path into that resource.
+    places: BTreeMap<String, unfold::Place>,
+    /// Lowered names the variables of a rule unfolded into the statement
+    /// hold: no variable of the statement's own takes one.
+    taken: BTreeSet<String>,
 }
 
 impl Rc {
@@ -791,6 +802,9 @@ pub struct Lowerer<'u> {
     /// Added to every range: the offset of an interpolation hole.
     offset: u32,
     pub diags: Vec<Diagnostic>,
+    /// What lowering a rule unfolded into a `set` said (`unfold`): said
+    /// once the walk is done, unless the rule's own lowering said it.
+    spliced: Vec<Diagnostic>,
     lenient: bool,
     /// In an input's `check`, the name of the value checked (the input,
     /// a field by its field's name): it is its own text, which the check's
@@ -882,6 +896,7 @@ impl<'u> Lowerer<'u> {
             file: 0,
             offset: 0,
             diags: Vec::new(),
+            spliced: Vec::new(),
             lenient,
             checked: None,
             objects: Vec::new(),

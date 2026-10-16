@@ -109,7 +109,7 @@ fn on_cycle(names: &Names, g: &Graph, scc: &BTreeSet<Node>) -> Vec<(String, Vec<
         let at = match out.iter().position(|(r, _)| *r == rule) {
             Some(at) => at,
             None => {
-                out.push((rule, Vec::new()));
+                out.push((rule, through(&g.rules[i]).into_iter().collect()));
                 out.len() - 1
             }
         };
@@ -162,6 +162,16 @@ fn written(r: &RuleStmt) -> String {
         within.unwrap_or_default(),
         call.unwrap_or_default()
     )
+}
+
+/// The rule of a relation a `set` writes through, as the program writes
+/// it, when the rule is the `set`'s unfolded with it: `through main.df:3
+/// pod(w, p) where ..`, the rule that may read what the `set` writes.
+fn through(r: &RuleStmt) -> Option<String> {
+    let span = r.origin?.through?;
+    let (file, line, _) = crate::diag::location(span)?;
+    let text = crate::report::tree::written_at(span)?;
+    Some(format!("through {file}:{line}  {text}"))
 }
 
 /// A value node: `T.p`, `T a.p` at an address, a cell by its scope.

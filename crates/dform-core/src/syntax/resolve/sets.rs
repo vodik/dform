@@ -260,14 +260,41 @@ impl Lowerer<'_> {
     /// `Set` item (R-211 step 5): each line's target, its value and the
     /// reads they hoisted, the clause B's goals; `lower` writes each
     /// line's `arg`.
-    pub(super) fn set(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
+    ///
+    /// A `set` whose target a relation places (`where pod(w, p), c in
+    /// p.spec.containers`) is one item per way its rules place it
+    /// ([`Self::placings`]).
+    pub(super) fn set(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<Vec<ItemId>> {
         if tokens(n).nth(1).is_some_and(|t| t.text() == "from")
             && !tokens(n).any(|t| matches!(t.kind(), EQ | PLUS_EQ | COLON_EQ))
         {
-            return self.set_from(n, scope, outer);
+            return self.set_from(n, scope, outer).map(|i| vec![i]);
         }
+        let mut items = Vec::new();
+        for placing in self.placings(n, (scope, outer))? {
+            // Each way gathers its own variables, reads and clause.
+            let around = self.gather.as_mut().map(|g| g.begin());
+            let item = self.set_placed(n, (scope, outer), placing);
+            if let (Some(g), Some(around)) = (&mut self.gather, around) {
+                g.resume(around);
+            }
+            items.push(item?);
+        }
+        Ok(items)
+    }
+
+    /// The `set` statement `n`'s item, its clause placing what it writes
+    /// as `placing` does.
+    fn set_placed(
+        &mut self,
+        n: &SyntaxNode,
+        (scope, outer): (ScopeId, &Rc),
+        placing: super::unfold::Placing,
+    ) -> L<ItemId> {
         let span = self.span(n);
         let mut rc = self.rc(n, scope, outer);
+        let through = self.through(&placing);
+        rc.placing = placing;
         self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
         let rank = self.rank_tok(n)?;
@@ -315,6 +342,7 @@ impl Lowerer<'_> {
             scope: self.item_scope,
             clause,
             writes: writes.iter().map(|w| w.lowered(&self.helpers)).collect(),
+            through,
         };
         let gather = self
             .gather
@@ -628,6 +656,7 @@ impl Lowerer<'_> {
         let named = c.is_bare()
             || c.call.is_some()
             || rc.vars.contains_key(h)
+            || rc.places.contains_key(h)
             || rc.types.contains_key(h)
             || rc.instances.contains_key(h)
             || self.declares(rc.scope, h)

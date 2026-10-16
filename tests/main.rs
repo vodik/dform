@@ -230,6 +230,7 @@ mod set_attributes;
 mod set_check;
 mod set_inputs;
 mod set_targets;
+mod set_through;
 mod signatures;
 mod spread;
 mod stack_list;

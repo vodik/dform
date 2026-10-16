@@ -66,12 +66,7 @@ impl Lowerer<'_> {
                 s.open();
             }
         }
-        let mut failed = false;
-        for l in lits {
-            if self.lit(rc, l).is_err() {
-                failed = true;
-            }
-        }
+        let failed = self.placed_lits(rc, lits);
         if whole {
             let span = self.span(&lits[0]);
             if let Some(s) = &mut self.gather {
@@ -835,7 +830,25 @@ impl Lowerer<'_> {
     /// at a constant path (`w.spec.template.spec.containers`). Resolved on
     /// the side: the caller lowers `t` itself.
     pub(super) fn resource_list(&mut self, rc: &Rc, t: &SyntaxNode) -> Option<Elem> {
-        let c = Chain::of(t).filter(|c| !c.is_bare())?;
+        Chain::of(t).filter(|c| !c.is_bare())?;
+        let (typ, addr, path) = self.resource_path(rc, t)?;
+        let list = self.path_string(&path).filter(|p| !p.is_empty())?;
+        Some(Elem {
+            typ: (self.term_of(typ), typ),
+            addr: (self.term_of(addr), addr),
+            list,
+        })
+    }
+
+    /// The resource and the path into it the chain `t` reads, when it is
+    /// a resource's attribute: its type's node, its address's and the
+    /// path. Probed: nothing it makes is kept but the nodes.
+    pub(super) fn resource_path(
+        &mut self,
+        rc: &Rc,
+        t: &SyntaxNode,
+    ) -> Option<(ExprId, ExprId, Vec<Seg>)> {
+        let c = Chain::of(t)?;
         let (diags, helpers, negs) = (
             self.diags.len(),
             self.helpers.len(),
@@ -847,14 +860,7 @@ impl Lowerer<'_> {
         self.helpers.truncate(helpers);
         self.program.helpers.negs = negs;
         match res {
-            Ok(Res::Ref { typ, addr, path }) => {
-                let list = self.path_string(&path).filter(|p| !p.is_empty())?;
-                Some(Elem {
-                    typ: (self.term_of(typ), typ),
-                    addr: (self.term_of(addr), addr),
-                    list,
-                })
-            }
+            Ok(Res::Ref { typ, addr, path }) => Some((typ, addr, path)),
             _ => None,
         }
     }

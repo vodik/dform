@@ -87,16 +87,6 @@ impl Lowerer<'_> {
         }
     }
 
-    fn span_in(&self, file: u32, n: &SyntaxNode) -> Span {
-        let r = n.text_range();
-        Span {
-            file,
-            start: r.start().into(),
-            end: r.end().into(),
-            origin: 0,
-        }
-    }
-
     /// The aliases of `name` in scope at `scope`.
     fn aliases_at(&self, scope: ScopeId, name: &str) -> BTreeSet<usize> {
         self.chain_of(scope)

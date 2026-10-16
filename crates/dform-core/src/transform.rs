@@ -1212,6 +1212,7 @@ fn resource_to_stmts(r: Resource) -> Result<Vec<Stmt>> {
     let origin = crate::ast::Origin {
         stmt: r.span,
         call: None,
+        through: None,
     };
     let mut out = resource_rules(r)?;
     for s in &mut out {

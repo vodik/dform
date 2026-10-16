@@ -46,17 +46,21 @@ pub(super) fn item(env: Env, id: ItemId, out: &mut Vec<Stmt>) {
 }
 
 /// Each rule of `s` (a copy's rows' too) lowered out of the statement
-/// written at `span`, in the instance its head is lowered in; a rule that
-/// has its origin keeps it.
-fn stamp(s: &mut Stmt, span: Span) {
+/// written at `span`, in the instance its head is lowered in, `through`
+/// the rule a `set` is unfolded with; a rule that has its origin keeps
+/// it.
+fn stamp(s: &mut Stmt, span: Span, through: Option<Span>) {
     match s {
         Stmt::Rule(r) if r.origin.is_none() => {
             r.origin = Some(ast::Origin {
                 stmt: span.within(r.head.span.origin),
                 call: None,
+                through,
             })
         }
-        Stmt::Instance(i) | Stmt::Use(i) => i.rows.iter_mut().for_each(|r| stamp(r, span)),
+        Stmt::Instance(i) | Stmt::Use(i) => {
+            i.rows.iter_mut().for_each(|r| stamp(r, span, through));
+        }
         _ => {}
     }
 }
@@ -97,7 +101,7 @@ fn module(env: Env, id: ItemId, out: &mut Vec<Stmt>) {
 fn statements(env: Env, id: ItemId) -> Vec<Stmt> {
     let mut out = statements_of(env, id);
     let span = env.program.items[id].span;
-    out.iter_mut().for_each(|s| stamp(s, span));
+    out.iter_mut().for_each(|s| stamp(s, span, None));
     out
 }
 
@@ -888,7 +892,9 @@ fn set(env: Env, writes: &[Write], clause: Option<ClauseId>, span: Span) -> Vec<
         for (f, n) in folds.iter_mut().zip(&w.folds) {
             f.2 = Some(*n);
         }
-        out.extend(clause_rule(&l, head, body, folds, clause.is_some(), span));
+        let mut rules = clause_rule(&l, head, body, folds, clause.is_some(), span);
+        rules.iter_mut().for_each(|r| stamp(r, span, w.through));
+        out.extend(rules);
     }
     out.append(&mut l.helpers);
     out

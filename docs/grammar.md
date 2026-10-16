@@ -1031,6 +1031,27 @@ attribute without element writes (its base: the blocks' and whole-list
 writes), so it may read the list it writes (`not has c.resources.limits`)
 without a cycle; it does not see another rule's element writes.
 
+A `set` writes through a relation the program's rules define: with
+`pod(w, p) where w in k8s.deployment, p = w.spec.template` and a rule
+like it per workload kind, `set c.resources.requests = { .. } @default
+where pod(_, p), c in p.spec.containers` is the `set` once per rule of
+`pod`, that rule's clause in the place of `pod(_, p)`, its variables its
+own but for the columns the `set` names. A variable bound to a
+resource's attribute where a `set` writes through it (`p =
+w.spec.template`, in a rule or in the `set`'s own clause) is a place,
+not a value: `p.x` is `w.spec.template.x`, which the target writes and
+the clause reads, and the binding reads nothing. Each rule says where a
+column the `set` writes through is: a resource (`w in T`), an element
+(`c in p.spec.containers`), an attribute (`p = w.path`), or a relation
+that does, so `set .. where container(_, c)` with `container(w, c) where
+pod(w, p), c in p.spec.containers` unfolds through both. A relation a
+fact gives rows to, one whose rules place through itself, a rule that
+does not say where its column is, and a value in a column (`pod("web",
+p)`) are errors at their line. A rule that chooses its place by what the
+`set` writes there (`p.metadata.labels.tier == "web"` beside a `set` of
+the labels) is a cycle, and the error shows the rule the `set` went
+through. A used module's relation (`m.pod(w, p)`) is read, not unfolded.
+
 A read takes an element by its key the same way, in a body or a value:
 `w.spec.template.spec.containers["api"].image` is the image of the
 container whose key field (`type_list_key`, one field) is `"api"`, no row

@@ -4068,6 +4068,9 @@ one run rewrites a file of the old spelling.
     `,` (a braced body is an error that says so); `let name = term where
     body` is a value, read by name.
   - `set r.tags = { team = "platform" } where r in resource`: a contribution.
+  - `set c.resources.requests = { .. } where pod(_, p), c in
+    p.spec.containers`: a `set` through a relation, once per rule of it
+    (docs/grammar.md, `set`).
   - `deny "msg" { key = v } where body`, `warn ...`; the message interpolates.
   - `x in net.vpc` ranges over the wanted resources of a type (with `x`
     a plan row's reference, `deformation(k, x, _)`, it tests the type, so
