@@ -13,6 +13,7 @@ use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// A provider's `use`: the name it binds, the provider it starts and that
 /// provider's spec (as `specs` names it). `use ovh as ca` is `{ name: ca,
@@ -120,8 +121,8 @@ struct Starting<'a> {
     links: Vec<Rc<RefCell<Link>>>,
     /// Each link's session, as its Configure opened it.
     sessions: Vec<Session>,
-    pooled: Vec<Option<Rc<crate::plugin::pool::Entry>>>,
-    pool: Option<Rc<crate::plugin::pool::Pool>>,
+    pooled: Vec<Option<Arc<crate::plugin::pool::Entry>>>,
+    pool: Option<Arc<crate::plugin::pool::Pool>>,
     /// Each link's Configure.
     sent: BTreeMap<usize, Json>,
     bases: Vec<Json>,
@@ -245,8 +246,8 @@ impl<'a> Starting<'a> {
     ) -> Result<Rc<RefCell<Link>>> {
         let (link, entry) = match &self.pool {
             Some(pool) => {
-                let e = pool.link(key, start)?;
-                (e.link.clone(), Some(e))
+                let (link, e) = pool.link(key, start)?;
+                (link, Some(e))
             }
             None => (Rc::new(RefCell::new(start()?)), None),
         };

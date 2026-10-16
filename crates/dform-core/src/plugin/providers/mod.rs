@@ -163,9 +163,9 @@ pub struct Providers {
     sessions: Vec<Session>,
     /// Of each link the pool shares, its entry ([`super::pool`]): its
     /// Schema answer, asked once for the tree.
-    pooled: Vec<Option<Rc<super::pool::Entry>>>,
+    pooled: Vec<Option<std::sync::Arc<super::pool::Entry>>>,
     /// The pool, when the run is a tree's.
-    pool: Option<Rc<super::pool::Pool>>,
+    pool: Option<std::sync::Arc<super::pool::Pool>>,
     /// The Configure each link's session was last sent: what its Schema
     /// answer is asked under. Held in memory only, as the call was (a
     /// revealed setting among it is never written or printed).
