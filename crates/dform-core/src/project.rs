@@ -471,7 +471,8 @@ pub struct ProviderTable {
 /// Where a provider comes from ([`Manifest::provider_location`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Located {
-    /// Its executable, `dform-provider-NAME`, where the lookup found it.
+    /// Its executable, `dform-provider-NAME`, or its wasm provider,
+    /// `dform-provider-NAME.wasm`, where the lookup found it.
     Found(Place, PathBuf),
     /// dform.toml's `path`, the lookup having found no executable.
     Path(PathBuf),
@@ -756,8 +757,8 @@ impl Manifest {
     /// Where the provider `name` comes from, when the manifest says. An
     /// entry without a `source` is its `path` when it names one (spelled
     /// as a path whatever is there, so a missing executable is not taken
-    /// for a schema's name), else the executable `dform-provider-NAME`
-    /// where `lookup` finds it. The mock, `fake`, is dform itself and never looked up. A
+    /// for a schema's name), else the provider `NAME` where `lookup`
+    /// finds it, its executable or wasm provider. The mock, `fake`, is dform itself and never looked up. A
     /// `source` is a path under the root (an executable, a directory
     /// holding one, else its `schema.df`; a `.df` file), else the source
     /// as written (a built-in schema's name).

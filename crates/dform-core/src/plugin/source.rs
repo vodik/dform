@@ -6,11 +6,16 @@
 //! is a schema the mock provider plays.
 //!
 //! A provider dform.toml names without a `source` is the executable
-//! `dform-provider-NAME`, looked for in one order ([`Lookup`]): beside
-//! dform's own executable (a release archive's), in the target directory
-//! of the checkout dform was built in (`cargo install --path .`), on
-//! `PATH`; an entry's own `path` wins over the lookup.
+//! `dform-provider-NAME` or the wasm provider `dform-provider-NAME.wasm`,
+//! looked for in one order ([`Lookup::of`]; docs/reference.md
+//! "Installing"): beside dform's own executable (a release archive's),
+//! the user's data directory (`cargo xtask install`'s), the system's data
+//! directories, the install's `lib` (a package's), the target directory
+//! of the checkout dform was built in, `PATH`; an entry's own `path` wins
+//! over the lookup.
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 /// A provider executable's name, or its prefix; also the first word of its
@@ -65,11 +70,19 @@ pub fn plugin_in(dir: &Path) -> Option<PathBuf> {
     found.into_iter().next()
 }
 
-/// Where a provider's executable was found by the [`Lookup`].
+/// Where a provider was found by the [`Lookup`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Place {
     /// Beside dform's own executable: the providers a release bundles.
     Bundled,
+    /// The user's: `$XDG_DATA_HOME/dform/providers`, where `cargo xtask
+    /// install` puts them.
+    UserData,
+    /// A `$XDG_DATA_DIRS` entry's `dform/providers`.
+    SystemData,
+    /// The install's `lib/dform/providers`, beside the `bin` holding
+    /// dform (a package's, `$PREFIX/lib`), or `/usr/lib`'s.
+    Lib,
     /// The target directory of the checkout dform was built in.
     Checkout,
     /// A directory on `PATH`.
@@ -80,85 +93,202 @@ impl std::fmt::Display for Place {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Place::Bundled => "beside dform",
+            Place::UserData => "XDG_DATA_HOME",
+            Place::SystemData => "XDG_DATA_DIRS",
+            Place::Lib => "the install's lib directory",
             Place::Checkout => "the checkout's target directory",
             Place::PathVar => "PATH",
         })
     }
 }
 
-/// The directories a provider's executable is looked for in, in order:
-/// the first holding `dform-provider-NAME` wins.
+/// A data or lib directory's providers directory.
+const PROVIDERS: &str = "dform/providers";
+
+/// What the [`Lookup`]'s directories are made of: dform's executable and
+/// the variables naming the others.
+#[derive(Debug, Clone, Default)]
+pub struct Env {
+    /// dform's own executable.
+    pub exe: Option<PathBuf>,
+    /// `$HOME`, `$XDG_DATA_HOME`, `$XDG_DATA_DIRS` and `$PATH`.
+    pub home: Option<OsString>,
+    pub xdg_data_home: Option<OsString>,
+    pub xdg_data_dirs: Option<OsString>,
+    pub path: Option<OsString>,
+}
+
+impl Env {
+    /// This process's.
+    pub fn here() -> Env {
+        Env {
+            exe: std::env::current_exe().ok(),
+            home: std::env::var_os("HOME"),
+            xdg_data_home: std::env::var_os("XDG_DATA_HOME"),
+            xdg_data_dirs: std::env::var_os("XDG_DATA_DIRS"),
+            path: std::env::var_os("PATH"),
+        }
+    }
+
+    /// The user's providers directory, `dform/providers` under the
+    /// user's data directory: `$XDG_DATA_HOME`, else `~/.local/share`. A
+    /// relative path is none (the XDG spec's rule).
+    pub fn user_providers(&self) -> Option<PathBuf> {
+        let data = absolute(self.xdg_data_home.as_deref())
+            .or_else(|| Some(absolute(self.home.as_deref())?.join(".local/share")))?;
+        Some(data.join(PROVIDERS))
+    }
+
+    /// The system's data directories: `$XDG_DATA_DIRS`'s absolute
+    /// entries, else `/usr/local/share` and `/usr/share`.
+    fn data_dirs(&self) -> Vec<PathBuf> {
+        let dirs = self.xdg_data_dirs.as_deref().filter(|d| !d.is_empty());
+        let dirs = dirs.unwrap_or("/usr/local/share:/usr/share".as_ref());
+        std::env::split_paths(dirs)
+            .filter(|d| d.is_absolute())
+            .collect()
+    }
+}
+
+/// The providers directory of an install at `prefix` (dform in
+/// `PREFIX/bin`): `PREFIX/lib/dform/providers`.
+pub fn lib_providers(prefix: &Path) -> PathBuf {
+    prefix.join("lib").join(PROVIDERS)
+}
+
+/// `v` as a directory, when it is an absolute path.
+fn absolute(v: Option<&OsStr>) -> Option<PathBuf> {
+    v.map(PathBuf::from).filter(|p| p.is_absolute())
+}
+
+/// The directories a provider is looked for in, in order: the first
+/// holding the provider `NAME`, its executable `dform-provider-NAME` or
+/// else its wasm provider `dform-provider-NAME.wasm`, wins.
 #[derive(Debug, Clone, Default)]
 pub struct Lookup {
     dirs: Vec<(Place, PathBuf)>,
 }
 
 impl Lookup {
-    /// This process's: the directory of its executable, the checkout's
-    /// target directory (the profile dform was built with first), and
-    /// `PATH`'s directories.
+    /// This process's: [`Lookup::of`] [`Env::here`].
     pub fn here() -> Lookup {
+        Lookup::of(&Env::here())
+    }
+
+    /// `env`'s, in order: the directory of dform's executable; the
+    /// user's data directory's `dform/providers`; each system data
+    /// directory's; the install's `lib/dform/providers` (the `lib` beside
+    /// the `bin` holding dform) and `/usr/lib/dform/providers`; the
+    /// target directory of the checkout dform was built in (the profile
+    /// it was built with first); `PATH`'s directories.
+    pub fn of(env: &Env) -> Lookup {
+        let bin = env.exe.as_deref().and_then(Path::parent);
         let mut lookup = Lookup::default();
-        if let Some(dir) = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(Path::to_path_buf))
-        {
-            lookup = lookup.with(Place::Bundled, dir);
+        if let Some(bin) = bin {
+            lookup = lookup.with(Place::Bundled, bin.to_path_buf());
         }
-        // dform-core is `crates/dform-core` in the checkout.
-        let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2);
-        let target = option_env!("CARGO_TARGET_DIR")
-            .map(PathBuf::from)
-            .or_else(|| checkout.map(|c| c.join("target")));
-        let profiles = if cfg!(debug_assertions) {
-            ["debug", "release"]
-        } else {
-            ["release", "debug"]
-        };
-        for (target, profile) in target.iter().flat_map(|t| profiles.map(|p| (t, p))) {
-            lookup = lookup.with(Place::Checkout, target.join(profile));
+        if let Some(dir) = env.user_providers() {
+            lookup = lookup.with(Place::UserData, dir);
         }
-        for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
+        for data in env.data_dirs() {
+            lookup = lookup.with(Place::SystemData, data.join(PROVIDERS));
+        }
+        if let Some(prefix) = bin.and_then(Path::parent) {
+            lookup = lookup.with(Place::Lib, lib_providers(prefix));
+        }
+        lookup = lookup.with(Place::Lib, lib_providers(Path::new("/usr")));
+        for dir in checkout_targets() {
+            lookup = lookup.with(Place::Checkout, dir);
+        }
+        // An empty entry is the working directory, to a shell: never a
+        // provider's.
+        let path = std::env::split_paths(env.path.as_deref().unwrap_or_default());
+        for dir in path.filter(|d| !d.as_os_str().is_empty()) {
             lookup = lookup.with(Place::PathVar, dir);
         }
         lookup
     }
 
-    /// Also look in `dir`, after the directories before it.
+    /// Also look in `dir`, after the directories before it; one looked
+    /// in already is not looked in again.
     pub fn with(mut self, place: Place, dir: PathBuf) -> Lookup {
-        self.dirs.push((place, dir));
+        if !self.dirs.iter().any(|(_, d)| *d == dir) {
+            self.dirs.push((place, dir));
+        }
         self
     }
 
-    /// The provider `name`'s executable, `dform-provider-NAME`, and where
-    /// it was found.
-    pub fn find(&self, name: &str) -> Option<(Place, PathBuf)> {
-        let file = executable(name);
-        self.dirs
-            .iter()
-            .map(|(place, dir)| (*place, dir.join(&file)))
-            .find(|(_, p)| is_executable(p))
+    /// The directories, in order.
+    pub fn dirs(&self) -> &[(Place, PathBuf)] {
+        &self.dirs
     }
 
-    /// Every provider executable found, by name, each where [`Lookup::find`]
-    /// finds it.
-    pub fn installed(&self) -> std::collections::BTreeMap<String, (Place, PathBuf)> {
-        let mut found = std::collections::BTreeMap::new();
-        for (place, dir) in &self.dirs {
-            let Ok(entries) = std::fs::read_dir(dir) else {
-                continue;
-            };
-            for p in entries.filter_map(|e| e.ok().map(|e| e.path())) {
-                let name = p.file_name().and_then(|n| n.to_str());
-                if let Some(name) = name.and_then(|n| n.strip_prefix(&format!("{MAGIC}-")))
-                    && is_executable(&p)
-                {
-                    found.entry(name.to_string()).or_insert((*place, p.clone()));
-                }
-            }
-        }
-        found
+    /// The provider `name`'s executable or wasm provider, and where it
+    /// was found.
+    pub fn find(&self, name: &str) -> Option<(Place, PathBuf)> {
+        self.dirs
+            .iter()
+            .find_map(|(place, dir)| Some((*place, provider_in(dir, name)?)))
     }
+
+    /// Every provider found, by name, each where [`Lookup::find`] finds
+    /// it.
+    pub fn installed(&self) -> BTreeMap<String, (Place, PathBuf)> {
+        let names: BTreeSet<String> = self
+            .dirs
+            .iter()
+            .filter_map(|(_, dir)| std::fs::read_dir(dir).ok())
+            .flatten()
+            .filter_map(|e| provider_name(e.ok()?.file_name().to_str()?))
+            .collect();
+        names
+            .into_iter()
+            .filter_map(|name| Some((name.clone(), self.find(&name)?)))
+            .collect()
+    }
+}
+
+/// The profile directories of the target directory of the checkout
+/// dform was built in, its own profile first.
+fn checkout_targets() -> Vec<PathBuf> {
+    // dform-core is `crates/dform-core` in the checkout.
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2);
+    let target = option_env!("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .or_else(|| checkout.map(|c| c.join("target")));
+    let profiles = if cfg!(debug_assertions) {
+        ["debug", "release"]
+    } else {
+        ["release", "debug"]
+    };
+    target
+        .iter()
+        .flat_map(|t| profiles.map(|p| t.join(p)))
+        .collect()
+}
+
+/// The provider `name` in `dir`: its executable, else its wasm provider.
+fn provider_in(dir: &Path, name: &str) -> Option<PathBuf> {
+    let exe = dir.join(executable(name));
+    if is_executable(&exe) {
+        return Some(exe);
+    }
+    let wasm = dir.join(wasm(name));
+    is_component(&wasm).then_some(wasm)
+}
+
+/// The provider a file in a providers directory is, by its name:
+/// `NAME` of `dform-provider-NAME` or `dform-provider-NAME.wasm`.
+fn provider_name(file: &str) -> Option<String> {
+    let name = file.strip_prefix(MAGIC)?.strip_prefix('-')?;
+    let name = name.strip_suffix(".wasm").unwrap_or(name);
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// The provider `name`'s wasm provider's file name:
+/// `dform-provider-NAME.wasm`.
+pub fn wasm(name: &str) -> String {
+    format!("{}.wasm", executable(name))
 }
 
 /// The provider `name`'s executable's file name: `dform-provider-NAME`.
@@ -230,12 +360,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A provider's executable is found in the first directory holding
-    /// it, in the lookup's order; a file that is not executable is passed
-    /// over.
+    /// A provider is found in the first directory holding it, in the
+    /// lookup's order: its executable, else its wasm provider; a file
+    /// that is not executable is passed over.
     #[cfg(unix)]
     #[test]
-    fn the_first_directory_holding_the_executable_wins() {
+    fn the_first_directory_holding_the_provider_wins() {
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("dform-lookup-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -257,7 +387,16 @@ mod tests {
         assert_eq!(lookup.find("x"), Some((Place::Bundled, x(&bundled))));
         place("a", false);
         assert_eq!(lookup.find("x"), Some((Place::Checkout, x(&checkout))));
+        let wasm = checkout.join("dform-provider-x.wasm");
+        std::fs::write(&wasm, b"\0asm").unwrap();
+        assert_eq!(lookup.find("x"), Some((Place::Checkout, x(&checkout))));
         std::fs::remove_file(x(&checkout)).unwrap();
+        assert_eq!(lookup.find("x"), Some((Place::Checkout, wasm.clone())));
+        assert_eq!(
+            lookup.installed().into_iter().collect::<Vec<_>>(),
+            vec![("x".to_string(), (Place::Checkout, wasm.clone()))]
+        );
+        std::fs::remove_file(&wasm).unwrap();
         assert_eq!(lookup.find("x"), Some((Place::PathVar, x(&path))));
         assert_eq!(lookup.find("y"), None);
         assert_eq!(
@@ -265,5 +404,57 @@ mod tests {
             vec![("x".to_string(), (Place::PathVar, x(&path)))]
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The directories are beside dform, the user's data directory, each
+    /// system data directory, the install's lib and `/usr/lib`, the
+    /// checkout's target directory, `PATH`: each `dform/providers` but
+    /// the first and the last two, a relative XDG directory none (the
+    /// spec's rule), and one directory looked in once.
+    #[test]
+    fn the_lookup_order() {
+        let p = PathBuf::from;
+        let env = Env {
+            exe: Some(p("/opt/dform/bin/dform")),
+            home: Some("/home/u".into()),
+            xdg_data_home: Some("/home/u/data".into()),
+            xdg_data_dirs: Some("/srv/share:share:/usr/share".into()),
+            path: Some("/usr/bin:/opt/dform/bin".into()),
+        };
+        let checkout = checkout_targets().into_iter().map(|d| (Place::Checkout, d));
+        let expected: Vec<(Place, PathBuf)> = [
+            (Place::Bundled, p("/opt/dform/bin")),
+            (Place::UserData, p("/home/u/data/dform/providers")),
+            (Place::SystemData, p("/srv/share/dform/providers")),
+            (Place::SystemData, p("/usr/share/dform/providers")),
+            (Place::Lib, p("/opt/dform/lib/dform/providers")),
+            (Place::Lib, p("/usr/lib/dform/providers")),
+        ]
+        .into_iter()
+        .chain(checkout.clone())
+        .chain([(Place::PathVar, p("/usr/bin"))])
+        .collect();
+        assert_eq!(Lookup::of(&env).dirs(), expected);
+
+        // Unset or relative, the XDG directories are their defaults;
+        // a package's lib is /usr/lib.
+        let env = Env {
+            exe: Some(p("/usr/bin/dform")),
+            home: Some("/home/u".into()),
+            xdg_data_home: Some("data".into()),
+            xdg_data_dirs: None,
+            path: None,
+        };
+        let expected: Vec<(Place, PathBuf)> = [
+            (Place::Bundled, p("/usr/bin")),
+            (Place::UserData, p("/home/u/.local/share/dform/providers")),
+            (Place::SystemData, p("/usr/local/share/dform/providers")),
+            (Place::SystemData, p("/usr/share/dform/providers")),
+            (Place::Lib, p("/usr/lib/dform/providers")),
+        ]
+        .into_iter()
+        .chain(checkout)
+        .collect();
+        assert_eq!(Lookup::of(&env).dirs(), expected);
     }
 }

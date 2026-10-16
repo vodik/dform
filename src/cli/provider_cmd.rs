@@ -12,7 +12,7 @@ use anyhow::{Result, bail};
 use std::path::Path;
 
 /// `dform provider list`: each provider dform.toml names and where it was
-/// found; outside a project, each provider executable the lookup finds.
+/// found; outside a project, each provider the lookup finds.
 #[derive(Debug, Clone)]
 pub(super) struct ProviderList;
 
