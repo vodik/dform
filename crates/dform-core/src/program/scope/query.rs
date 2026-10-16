@@ -7,6 +7,7 @@
 
 use super::{Decl, DeclKind, DeclRef, ScopeId, Scopes};
 use crate::ast::Span;
+use crate::program::node::Name;
 use crate::program::{ExprKind, Program};
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
@@ -73,6 +74,85 @@ impl Scopes {
         self.reaching(at, name, pick)
     }
 
+    /// Every declaration of every scope, with its scope and its name, in
+    /// the order the scopes were made, each scope's by name.
+    pub fn every(&self) -> impl Iterator<Item = (ScopeId, &str, &Decl)> {
+        self.ids().flat_map(move |s| {
+            self.names[s]
+                .iter()
+                .flat_map(move |(n, ds)| ds.iter().map(move |d| (s, n.as_str(), d)))
+        })
+    }
+
+    /// The declaration the statement `stmt` written in `s` makes that
+    /// `pick` takes (a copy also makes its component readable by its last
+    /// segment): its name and its declaration.
+    pub fn made_by(
+        &self,
+        s: ScopeId,
+        stmt: &SyntaxNode,
+        pick: impl Fn(&DeclKind) -> bool,
+    ) -> Option<(&str, &Decl)> {
+        self.names[self.declaring(s)].iter().find_map(|(n, ds)| {
+            ds.iter()
+                .find(|d| d.node == *stmt && pick(&d.kind))
+                .map(|d| (n.as_str(), d))
+        })
+    }
+
+    /// The path of a component whose last segment is `name`, when the
+    /// program declares one.
+    pub fn component_named(&self, name: &str) -> Option<&Name> {
+        self.every().find_map(|(_, n, d)| match &d.kind {
+            DeclKind::Component(p) if n == name => Some(p),
+            _ => None,
+        })
+    }
+
+    /// Whether any scope makes `name` a relation its statements define
+    /// (`defines_relation`), or the program declares an extern of it.
+    pub fn is_relation(&self, name: &str) -> bool {
+        self.externs.contains_key(name)
+            || self
+                .every()
+                .any(|(_, n, d)| n == name && defines_relation(&d.kind))
+    }
+
+    /// The first of `scopes` that is a module's or a component's body and
+    /// defines the relation `name`: the scope that keeps it private.
+    pub fn private_relation(
+        &self,
+        scopes: impl IntoIterator<Item = ScopeId>,
+        name: &str,
+    ) -> Option<ScopeId> {
+        scopes.into_iter().find(|s| {
+            self.definition(*s).is_some()
+                && self.names[*s]
+                    .of(name)
+                    .iter()
+                    .any(|d| defines_relation(&d.kind))
+        })
+    }
+
+    /// The names that bind the definition at `path`, in the order met:
+    /// each copy's of the component, else each `use`'s of the module.
+    pub fn bound_to(&self, path: &str, component: bool) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        for (_, n, d) in self.every() {
+            let of = match &d.kind {
+                DeclKind::Copy {
+                    component: Some(c), ..
+                } if component => c,
+                DeclKind::Use { module, .. } if !component => module,
+                _ => continue,
+            };
+            if of == path && !out.contains(&n) {
+                out.push(n);
+            }
+        }
+        out
+    }
+
     /// The declaration a read names.
     pub fn declaration(&self, d: &DeclRef) -> Option<&Decl> {
         self.names.get(d.scope)?.of(&d.name).get(d.at)
@@ -119,6 +199,16 @@ impl Scopes {
         let (_, d) = self.reaching(s, function, fun)?;
         parameters(&d.node).into_iter().find(|t| t.text() == param)
     }
+}
+
+/// Whether a declaration of the kind makes its name a relation the
+/// scope's own statements define or declare: a rule's head, a fact, a
+/// `decl`, an input relation.
+pub fn defines_relation(k: &DeclKind) -> bool {
+    matches!(
+        k,
+        DeclKind::Rule { .. } | DeclKind::Decl { .. } | DeclKind::RelationInput { .. }
+    )
 }
 
 /// The parameters of a `let` statement, each its name's token in the
@@ -247,6 +337,36 @@ let x = cidr(1)
         assert_eq!(s.copied_body(file, "v"), Some(vpc));
         let outs: Vec<&str> = s.outputs(vpc).into_iter().map(|(n, _)| n).collect();
         assert_eq!(outs, ["id"]);
+    }
+
+    #[test]
+    fn a_statement_makes_its_declaration() {
+        let (p, ids) = program(&[("q.df", None, STACK)]);
+        let s = &p.scopes;
+        let outer = s.by_path("outer").unwrap();
+        let (_, _, copy) = s
+            .every()
+            .find(|(_, n, d)| *n == "i" && matches!(d.kind, DeclKind::Copy { .. }))
+            .unwrap();
+        let at = s.at(ids[0], offset(STACK, "resource inner i")).unwrap();
+        assert_eq!(at, outer);
+        let copies = |k: &DeclKind| matches!(k, DeclKind::Copy { .. });
+        let (name, made) = s.made_by(at, &copy.node, copies).unwrap();
+        assert_eq!((name, made.node.clone()), ("i", copy.node.clone()));
+        // The same statement makes `inner` readable by its last segment.
+        let copied = |k: &DeclKind| matches!(k, DeclKind::Copied(_));
+        assert_eq!(
+            s.made_by(at, &copy.node, copied).map(|x| x.0),
+            Some("inner")
+        );
+        assert!(s.every().any(|(sc, n, _)| sc == s.root && n == "cidr"));
+        assert_eq!(
+            s.component_named("inner").map(String::as_str),
+            Some("inner")
+        );
+        assert_eq!(s.bound_to("inner", true), ["i"]);
+        assert_eq!(s.bound_to("outer", true), ["o"]);
+        assert!(!s.is_relation("cidr") && !s.is_relation("tag"));
     }
 
     #[test]
