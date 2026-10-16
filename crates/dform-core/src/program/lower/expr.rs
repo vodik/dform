@@ -30,14 +30,6 @@ pub fn read_expr(program: &Program, readings: &Readings, id: ExprId) -> Term {
     l.expr(id)
 }
 
-/// The helper statements lowering the term `id` makes (a comprehension's
-/// `not { }` rule).
-pub fn expr_helpers(program: &Program, id: ExprId) -> Vec<Stmt> {
-    let mut l = Lowering::new(Env::plain(program));
-    l.expr(id);
-    l.helpers
-}
-
 /// A lowering in progress: the reads the term being lowered hoisted so
 /// far, and the helper statements written so far (a `not { }`'s rule, the
 /// facts a membership states), in order.
@@ -85,12 +77,19 @@ impl<'p> Lowering<'p> {
         }
     }
 
-    /// A statement no node lowers to (a resolver's helper) as the copies
-    /// write it.
-    pub(super) fn put_raw(&self, s: Stmt) -> Stmt {
-        match self.env.chain {
-            None => s,
-            Some(c) => super::instances::raw_stmt(c, s, self.env.from),
+    /// A declaration or a fact `lower` writes of an item's own data (a
+    /// relation's `extern`, `mixed` or mode, a doc comment's facts, a
+    /// loader's extern) as the copies being instanced write it: a
+    /// relation named as each copy's, a fact's columns under its scope.
+    pub(super) fn put_stmt(&self, s: Stmt) -> Stmt {
+        let Some(c) = self.env.chain else { return s };
+        let from = self.env.from;
+        match s {
+            Stmt::Fact(a) => Stmt::Fact(c.atom_from(a, from)),
+            Stmt::Extern(e) => Stmt::Extern(c.relation(e, from)),
+            Stmt::Mixed(e) => Stmt::Mixed(c.relation(e, from)),
+            Stmt::Mode(e) => Stmt::Mode(c.relation(e, from)),
+            s => s,
         }
     }
 
@@ -409,8 +408,7 @@ impl<'p> Lowering<'p> {
     /// its own.
     pub(super) fn terms_made(&mut self, node: NodeId) {
         if let Some(made) = self.program.terms_made.get(&node) {
-            let made: Vec<Stmt> = made.iter().map(|s| self.put_raw(s.clone())).collect();
-            self.helpers.extend(made);
+            self.helpers.extend(made.iter().cloned());
         }
     }
 

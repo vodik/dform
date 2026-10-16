@@ -7,9 +7,7 @@
 use super::{Builder, grouped, number_folds};
 use crate::ast::{Atom, Lit, Rank, Span, Stmt};
 use crate::program::NodeId;
-use crate::program::node::{
-    ClauseId, ExprId, Head, Item, ItemId, ItemKind, PatternId, PatternKind, RelArgs, RelRef,
-};
+use crate::program::node::{ClauseId, Head, Item, ItemId, ItemKind, RelArgs, RelRef};
 use crate::program::scope::ScopeId;
 
 /// A rule as the resolver lowered it.
@@ -57,32 +55,7 @@ impl Builder<'_> {
             scope: r.scope,
             kind,
         });
-        let nodes = self.head_nodes(item);
-        let made = self.made_but(r.made, &nodes);
-        if !made.is_empty() {
-            self.program.terms_made.insert(NodeId::Item(item), made);
-        }
+        self.made_by(NodeId::Item(item), r.made);
         item
-    }
-
-    /// The terms of rule `item`'s head.
-    fn head_nodes(&self, item: ItemId) -> Vec<ExprId> {
-        let ItemKind::Rule { head, .. } = &self.program.items[item].kind else {
-            return Vec::new();
-        };
-        let mut out = Vec::new();
-        let mut walk: Vec<PatternId> = match &head.args {
-            RelArgs::Positional(ps) => ps.clone(),
-            RelArgs::Record(ps) => ps.iter().map(|(_, p)| *p).collect(),
-        };
-        while let Some(p) = walk.pop() {
-            match &self.program.patterns[p].kind {
-                PatternKind::Expr(e) => out.push(*e),
-                PatternKind::Tuple { elems, .. } => walk.extend(elems),
-                PatternKind::Object { fields, .. } => walk.extend(fields.iter().map(|f| f.2)),
-                PatternKind::Hole | PatternKind::Bind(_) => {}
-            }
-        }
-        out
     }
 }

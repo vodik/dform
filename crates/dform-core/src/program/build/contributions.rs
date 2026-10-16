@@ -84,11 +84,7 @@ impl Builder<'_> {
     /// The rows of a document: the externs reading it, and the goal of
     /// its table's extern, `rows`; the helpers its terms made the rows'.
     pub(super) fn source(&mut self, externs: Vec<Stmt>, rows: GoalId, made: &[Stmt]) -> Source {
-        if !made.is_empty() {
-            self.program
-                .terms_made
-                .insert(NodeId::Goal(rows), made.to_vec());
-        }
+        self.made_by(NodeId::Goal(rows), made);
         Source { externs, rows }
     }
 
@@ -148,13 +144,7 @@ impl Builder<'_> {
                 }
             };
             for (node, made) in made_by {
-                let made = match node {
-                    NodeId::Expr(e) => b.made_but(&made, &[e]),
-                    _ => made,
-                };
-                if !made.is_empty() {
-                    b.program.terms_made.insert(node, made);
-                }
+                b.made_by(node, &made);
             }
             let folds = match clause {
                 Some(c) if !results.is_empty() && grouped(w.head, w.body, results) => {

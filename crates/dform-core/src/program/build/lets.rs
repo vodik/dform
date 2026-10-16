@@ -51,10 +51,7 @@ impl Builder<'_> {
         let value = match l.fold {
             Some(fold) => {
                 clause = Some(self.ending(clause, fold));
-                if !l.made.is_empty() {
-                    let made = l.made.to_vec();
-                    self.program.terms_made.insert(NodeId::Goal(fold), made);
-                }
+                self.made_by(NodeId::Goal(fold), l.made);
                 value
             }
             None => self.holding(value, l.made),

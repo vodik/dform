@@ -55,30 +55,19 @@ impl Builder<'_> {
         })
     }
 
-    /// `made`, but the helper statements lowering the nodes `nodes` makes
-    /// itself (a comprehension's `not { }` rule).
-    pub(super) fn made_but(&self, made: &[Stmt], nodes: &[ExprId]) -> Vec<Stmt> {
-        let own: Vec<String> = nodes
-            .iter()
-            .flat_map(|&e| crate::program::lower::expr_helpers(self.program, e))
-            .map(|s| format!("{s:?}"))
-            .collect();
-        made.iter()
-            .filter(|s| !own.contains(&format!("{s:?}")))
-            .cloned()
-            .collect()
+    /// The node `e` the resolver built, the helper statements its terms
+    /// made that no node lowers to its own ([`super::unlowered`]).
+    pub(super) fn holding(&mut self, e: ExprId, made: &[Stmt]) -> ExprId {
+        self.made_by(NodeId::Expr(e), made);
+        e
     }
 
-    /// The node `e` the resolver built, the helper statements its terms
-    /// made its own, but those its lowering makes itself (a
-    /// comprehension's `not { }` rule).
-    pub(super) fn holding(&mut self, e: ExprId, made: &[Stmt]) -> ExprId {
-        let made = self.made_but(made, &[e]);
+    /// Of the helper statements `made`, those no node lowers to, the node
+    /// `node`'s ([`super::unlowered`]).
+    pub(super) fn made_by(&mut self, node: NodeId, made: &[Stmt]) {
+        let made = super::unlowered(made);
         if !made.is_empty() {
-            self.program
-                .terms_made
-                .insert(NodeId::Expr(e), made.to_vec());
+            self.program.terms_made.insert(node, made);
         }
-        e
     }
 }

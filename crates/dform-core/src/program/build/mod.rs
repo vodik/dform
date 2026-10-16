@@ -64,6 +64,16 @@ pub struct Builder<'p> {
     reads: Reads,
 }
 
+/// Of the helper statements a statement's terms made, those no node of
+/// them lowers to: a loader's externs (R-155). A negation's rule and a
+/// membership's facts are their goals', which `lower` writes.
+fn unlowered(made: &[crate::ast::Stmt]) -> Vec<crate::ast::Stmt> {
+    made.iter()
+        .filter(|s| matches!(s, crate::ast::Stmt::ExternFn(_)))
+        .cloned()
+        .collect()
+}
+
 /// What the reads of the statement built so far hold.
 #[derive(Default)]
 pub struct Reads {

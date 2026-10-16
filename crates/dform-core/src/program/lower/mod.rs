@@ -14,7 +14,7 @@ pub mod instances;
 mod items;
 mod records;
 pub use clause::{lower_clause, lower_goal};
-pub use expr::{expr_helpers, lower_expr, read_expr};
+pub use expr::{lower_expr, read_expr};
 pub use items::{element_write, lower_item, value_entries};
 pub use records::Records;
 

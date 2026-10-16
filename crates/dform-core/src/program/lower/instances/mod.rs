@@ -18,7 +18,7 @@
 
 mod chain;
 
-pub use chain::{Chain, Frame, From, Named, Stage, private_name, raw_stmt};
+pub use chain::{Chain, Frame, From, Named, Stage, private_name};
 
 use super::{Env, Records};
 use crate::ast::{self, Atom, InputDecl, Lit, RuleStmt, Span, Stmt, Term, str_term};

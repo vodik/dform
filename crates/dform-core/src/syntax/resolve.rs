@@ -5962,7 +5962,6 @@ impl<'u> Lowerer<'u> {
         let saved = std::mem::take(&mut self.after);
         let saved_goals = std::mem::take(&mut self.after_goals);
         let saved_tests = std::mem::take(&mut rc.tests);
-        let start = out.len();
         if let Some(s) = &mut self.gather {
             s.open();
         }
@@ -5984,24 +5983,19 @@ impl<'u> Lowerer<'u> {
             self.built(g);
         }
         match (r.is_ok(), &mut self.gather) {
-            (true, Some(_)) => self.built_literal(n, &out[..start], &tests),
+            (true, Some(_)) => self.built_literal(n, &tests),
             (false, Some(s)) => s.failed(),
             _ => {}
         }
         r
     }
 
-    /// The written literal `n`, after the clause's `context`, made after
-    /// the `tests`: the goal built of it gathered (R-211 step 4).
-    fn built_literal(
-        &mut self,
-        n: &SyntaxNode,
-        context: &[Lit],
-        tests: &[(Option<ExprId>, GoalId)],
-    ) {
+    /// The written literal `n`, made after the `tests`: the goal built of
+    /// it gathered (R-211 step 4).
+    fn built_literal(&mut self, n: &SyntaxNode, tests: &[(Option<ExprId>, GoalId)]) {
         let span = self.span(n);
         let Some(s) = &mut self.gather else { return };
-        s.literal(&mut self.program, span, context, tests, &self.helpers);
+        s.literal(&mut self.program, span, tests, &self.helpers);
     }
 
     /// `v in PATH`, PATH with a `[_]` past its type's (R-162): `v` is

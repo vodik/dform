@@ -277,16 +277,14 @@ impl Gather {
         self.clause = outer.clause;
     }
 
-    /// The written literal being lowered at `span`, after the clause's
-    /// `context`, the resolver's `helpers` made so far: the goal the
-    /// resolver built of it, after the `tests` it made that no read of it
-    /// holds, one of the frame around it; the helpers its terms made the
-    /// goal's.
+    /// The written literal being lowered at `span`, the resolver's
+    /// `helpers` made so far: the goal the resolver built of it, after the
+    /// `tests` it made that no read of it holds, one of the frame around
+    /// it; the helpers its terms made that no node lowers to the goal's.
     pub fn literal(
         &mut self,
         program: &mut Program,
         span: Span,
-        context: &[Lit],
         tests: &[(Option<ExprId>, GoalId)],
         helpers: &[Stmt],
     ) {
@@ -295,16 +293,9 @@ impl Gather {
             .built
             .map(|g| self.after_tests(program, span, tests, g));
         if let Some(g) = goal {
-            // What its terms made that no node of it makes.
-            let (_, makes) = lower_goal(program, g, context);
-            let makes: Vec<String> = makes.iter().map(|s| format!("{s:?}")).collect();
-            let made_by_terms: Vec<Stmt> = frame
-                .attached(helpers)
-                .into_iter()
-                .filter(|s| !makes.contains(&format!("{s:?}")))
-                .collect();
-            if !made_by_terms.is_empty() {
-                program.terms_made.insert(NodeId::Goal(g), made_by_terms);
+            let made = super::unlowered(&frame.attached(helpers));
+            if !made.is_empty() {
+                program.terms_made.insert(NodeId::Goal(g), made);
             }
         }
         if let Some(f) = self.frames.last_mut() {

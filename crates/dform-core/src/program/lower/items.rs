@@ -148,7 +148,7 @@ fn statements_of(env: Env, id: ItemId) -> Vec<Stmt> {
         } => {
             let l = Lowering::new(env);
             let out = decl(rel, columns, *mixed, *fed, it.span);
-            out.into_iter().map(|s| l.put_raw(s)).collect()
+            out.into_iter().map(|s| l.put_stmt(s)).collect()
         }
         ItemKind::Extern { name, args } => vec![Stmt::ExternFn(ast::ExternFn {
             name: name.clone(),
@@ -175,7 +175,7 @@ fn statements_of(env: Env, id: ItemId) -> Vec<Stmt> {
             let l = Lowering::new(env);
             doc(kind, name, pairs, it.span)
                 .into_iter()
-                .map(|s| l.put_raw(s))
+                .map(|s| l.put_stmt(s))
                 .collect()
         }
     }
@@ -647,11 +647,11 @@ fn relation_input(
     let mut out: Vec<Stmt> = source
         .externs
         .iter()
-        .map(|s| l.put_raw(s.clone()))
+        .map(|s| l.put_stmt(s.clone()))
         .collect();
     out.extend(clause_rule(l, head, body, folds, true, rel.span));
     if mixed {
-        out.push(l.put_raw(Stmt::Mixed(e)));
+        out.push(l.put_stmt(Stmt::Mixed(e)));
     }
     out
 }
@@ -693,8 +693,8 @@ fn let_fn(
     });
     let mut out = clause_rule(&l, head, body, folds, true, span);
     let relation = |pred: String, arity| ast::Extern { pred, arity, span };
-    out.push(l.put_raw(Stmt::Extern(relation(demand, arity - 1))));
-    out.push(l.put_raw(Stmt::Mode(relation(name.to_string(), arity))));
+    out.push(l.put_stmt(Stmt::Extern(relation(demand, arity - 1))));
+    out.push(l.put_stmt(Stmt::Mode(relation(name.to_string(), arity))));
     out.append(&mut l.helpers);
     out
 }
@@ -973,7 +973,7 @@ fn set_from(
     let mut out: Vec<Stmt> = source
         .externs
         .iter()
-        .map(|s| l.put_raw(s.clone()))
+        .map(|s| l.put_stmt(s.clone()))
         .collect();
     out.extend(clause_rule(&l, head, body, folds, true, span));
     out.append(&mut l.helpers);

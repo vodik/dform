@@ -10,7 +10,7 @@
 //! the copy of that definition it is taken from; a name of the user's
 //! (`Reach::Absolute`), at none.
 
-use crate::ast::{Atom, Lit, Resource, Span, Stmt, Term, Via, str_term};
+use crate::ast::{Atom, Resource, Span, Term, Via, str_term};
 use crate::modules::{INPUT, LET, LEXICAL_OF, ROWS};
 use crate::value::Value;
 use std::cell::RefCell;
@@ -556,55 +556,5 @@ impl Named {
             ),
             other => other,
         }
-    }
-}
-
-/// A raw statement (one a node does not lower to: a resolver's helper)
-/// under the chain from `from`: each of its atoms and terms, each
-/// resource's name.
-pub fn raw_stmt(chain: &Chain, s: Stmt, from: Option<From>) -> Stmt {
-    let atom = |a: Atom| {
-        let a = Atom {
-            args: a
-                .args
-                .into_iter()
-                .map(|t| chain.raw_term(t, from))
-                .collect(),
-            ..a
-        };
-        chain.atom_from(a, from)
-    };
-    let lits = |ls: Vec<Lit>| {
-        ls.into_iter()
-            .map(|l| l.map(atom, |t| chain.raw_term(t, from)))
-            .collect()
-    };
-    match s {
-        Stmt::Fact(a) => Stmt::Fact(atom(a)),
-        Stmt::Rule(r) => Stmt::Rule(crate::ast::RuleStmt {
-            head: atom(r.head),
-            body: lits(r.body),
-            ..r
-        }),
-        Stmt::Resource(r) => {
-            let fields = r
-                .fields
-                .into_iter()
-                .map(|f| crate::ast::FieldAssign {
-                    value: chain.raw_term(f.value, from),
-                    ..f
-                })
-                .collect();
-            let r = Resource {
-                fields,
-                body: r.body.map(lits),
-                ..r
-            };
-            Stmt::Resource(chain.resource(r, from))
-        }
-        Stmt::Extern(e) => Stmt::Extern(chain.relation(e, from)),
-        Stmt::Mixed(e) => Stmt::Mixed(chain.relation(e, from)),
-        Stmt::Mode(e) => Stmt::Mode(chain.relation(e, from)),
-        other => other,
     }
 }
