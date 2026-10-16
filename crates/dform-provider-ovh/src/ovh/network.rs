@@ -905,10 +905,21 @@ impl Ovh {
         id: &str,
     ) -> api::Result<map::Interfaces> {
         let ifaces = a.client.get(&interface_path(p, id))?;
+        self.ports(a, p, &ifaces)
+    }
+
+    /// The ports `ifaces` (an instance's, as `GET /interface` answers
+    /// them), as [`Ovh::interfaces`] has them.
+    pub(super) fn ports(
+        &self,
+        a: &Account,
+        p: &str,
+        ifaces: &Json,
+    ) -> api::Result<map::Interfaces> {
         if ifaces.as_array().is_none_or(Vec::is_empty) {
             return Ok(map::Interfaces::default());
         }
-        Ok(map::interfaces(&ifaces, &self.openstack_ids(a, p)?))
+        Ok(map::interfaces(ifaces, &self.openstack_ids(a, p)?))
     }
 
     /// The project's private networks by each id an interface's
@@ -945,7 +956,7 @@ impl Ovh {
 }
 
 /// `/instance/{remote}/interface` of project `p`.
-fn interface_path(p: &str, remote: &str) -> String {
+pub(super) fn interface_path(p: &str, remote: &str) -> String {
     format!("/cloud/project/{p}/instance/{}/interface", escape(remote))
 }
 

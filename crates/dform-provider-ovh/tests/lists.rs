@@ -156,3 +156,66 @@ fn each_list_is_asked_once_per_run_and_again_after_a_write_to_it() {
     let asked: Vec<usize> = lists.iter().map(|l| gets(&server, l)).collect();
     assert_eq!(asked, [1, 1, 2, 2], "{:?}", &server.calls()[from..]);
 }
+
+/// A Read asks its object by its id: a network, a volume, an S3
+/// container one GET; a subnet its network's subnets (the API has no GET
+/// of one), listed once. An instance asks itself, its ports and the
+/// private networks at once, the networks once per run (and, where the
+/// API names its flavor and image by id alone, the region's flavors and
+/// images, once).
+#[test]
+fn a_read_asks_its_object_by_id_and_an_instance_asks_at_once() {
+    let (server, c) = world();
+    let (net, [vm, _]) = lab(&server, &c);
+    let subnet = server.subnets()[0]["id"].as_str().unwrap().to_string();
+    let volume = server.add_volume("data", "BHS5", 10);
+    server.add_container("BHS5", "backups");
+    let ovh = provider(&server);
+    server.slow(std::time::Duration::from_millis(50));
+    let asked = |typ: &str, remote: &str| {
+        let from = server.calls().len();
+        read(&ovh, typ, remote);
+        let mut calls = server.calls()[from..].to_vec();
+        calls.sort();
+        calls
+    };
+    let get = |rest: &str| format!("GET {}", project(rest));
+    let mut first = [
+        get(&format!("/instance/{vm}")),
+        get(&format!("/instance/{vm}/interface")),
+        get("/network/private"),
+        get("/flavor?region=BHS5"),
+        get("/image?region=BHS5"),
+    ];
+    first.sort();
+    assert_eq!(asked("ovh.instance", &vm), first);
+    assert_eq!(
+        server.most_at_once(),
+        3,
+        "the instance, its ports, the networks"
+    );
+    assert_eq!(
+        asked("ovh.instance", &vm),
+        [
+            get(&format!("/instance/{vm}")),
+            get(&format!("/instance/{vm}/interface"))
+        ]
+    );
+    assert_eq!(
+        asked("ovh.network", &net),
+        [get(&format!("/network/private/{net}"))]
+    );
+    assert_eq!(
+        asked("ovh.subnet", &format!("{net}/{subnet}")),
+        [get(&format!("/network/private/{net}/subnet"))]
+    );
+    assert!(asked("ovh.subnet", &format!("{net}/{subnet}")).is_empty());
+    assert_eq!(
+        asked("ovh.volume", &volume),
+        [get(&format!("/volume/{volume}"))]
+    );
+    assert_eq!(
+        asked("ovh.storage_container", "BHS5/backups"),
+        [get("/region/BHS5/storage/backups")]
+    );
+}

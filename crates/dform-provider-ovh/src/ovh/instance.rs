@@ -7,7 +7,13 @@
 
 use super::*;
 
+/// One of the requests a Read sends at once.
+type Ask<'a> = Box<dyn FnOnce() -> api::Result<Option<Json>> + Send + 'a>;
+
 impl Ovh {
+    /// The instance `id`, its ports and the project's private networks
+    /// (which name the ports' networks, listed once per run) asked at
+    /// once: none waits on another, and the API is seconds away.
     pub(super) fn read_instance(
         &self,
         a: &Account,
@@ -15,24 +21,32 @@ impl Ovh {
         id: &str,
         owned: &map::Owned,
     ) -> api::Result<Option<(Json, Json)>> {
-        let Some(o) = a
-            .client
-            .get_opt(&format!("/cloud/project/{p}/instance/{}", escape(id)))?
-        else {
+        let (path, ports) = (instance_path(p, id), network::interface_path(p, id));
+        let asks: [Ask; 3] = [
+            Box::new(|| a.client.get_opt(&path)),
+            Box::new(|| a.client.get(&ports).map(Some)),
+            Box::new(|| self.private_networks(a, p).map(|_| None)),
+        ];
+        let [o, ifaces, networks] = <[_; 3]>::try_from(dform_sdk::at_once(asks))
+            .unwrap_or_else(|_| unreachable!("an answer to each ask"));
+        let Some(o) = o? else {
             return Ok(None);
         };
-        self.instance_doc(a, p, &o, owned)
+        let ifaces = ifaces?.unwrap_or_default();
+        networks?;
+        self.instance_doc(a, p, &o, &ifaces, owned)
     }
 
-    /// An instance's document, `owned` which of its ports are its own; a
-    /// call that fails fails it, rather than leave out what Plan would
-    /// read as changed (an image left out would replace the instance, a
-    /// network attach it again).
+    /// An instance's document, `ifaces` its ports as the API lists them,
+    /// `owned` which are its own; a call that fails fails it, rather than
+    /// leave out what Plan would read as changed (an image left out would
+    /// replace the instance, a network attach it again).
     fn instance_doc(
         &self,
         a: &Account,
         p: &str,
         o: &Json,
+        ifaces: &Json,
         owned: &map::Owned,
     ) -> api::Result<Option<(Json, Json)>> {
         if matches!(s(o, "status"), Some("DELETED" | "SOFT_DELETED")) {
@@ -56,10 +70,7 @@ impl Ovh {
             };
         let flavor = named("flavor", "flavor", "flavorId")?;
         let image = named("image", "image", "imageId")?;
-        let nics = match s(o, "id") {
-            Some(id) => self.interfaces(a, p, id)?,
-            None => map::Interfaces::default(),
-        };
+        let nics = self.ports(a, p, ifaces)?;
         Ok(Some(map::instance(
             o,
             flavor.as_deref(),
@@ -149,9 +160,14 @@ impl Ovh {
         let id = s(&o, "id").unwrap_or_default().to_string();
         let last = wait_active(&a, &p, at, &id, o, notes, say)?;
         let owned = map::Owned::made(network::fixed(config));
+        let made = |e| Failed::MaybeApplied(format!("{at}: instance {id} is made: {e}"));
+        let ifaces = a
+            .client
+            .get(&network::interface_path(&p, &id))
+            .map_err(made)?;
         let (attrs, computed) = self
-            .instance_doc(&a, &p, &last, &owned)
-            .map_err(|e| Failed::MaybeApplied(format!("{at}: instance {id} is made: {e}")))?
+            .instance_doc(&a, &p, &last, &ifaces, &owned)
+            .map_err(made)?
             .ok_or_else(|| Failed::MaybeApplied(format!("{at}: instance {id} was deleted")))?;
         Ok((id, attrs, computed))
     }
@@ -207,7 +223,7 @@ impl Ovh {
         let id = self
             .flavor_id(a, p, region, flavor)
             .map_err(|e| refused(at, format!("{e:#}")))?;
-        let path = format!("/cloud/project/{p}/instance/{}", escape(remote));
+        let path = instance_path(p, remote);
         let o = a
             .client
             .post(&format!("{path}/resize"), Some(&json!({"flavorId": id})))
@@ -275,10 +291,7 @@ impl Ovh {
         let name = need(at, config, "name")?;
         if s(now, "name") != Some(name) {
             a.client
-                .put(
-                    &format!("/cloud/project/{p}/instance/{}", escape(remote)),
-                    &json!({"instanceName": name}),
-                )
+                .put(&instance_path(&p, remote), &json!({"instanceName": name}))
                 .map_err(|e| failed(at, e))?;
         }
         self.resize(&a, &p, at, remote, now, config, notes, say)?;
@@ -297,7 +310,7 @@ impl Ovh {
         let (a, p) = self
             .project(at)
             .map_err(|e| refused(at, format!("{e:#}")))?;
-        let path = format!("/cloud/project/{p}/instance/{}", escape(remote));
+        let path = instance_path(&p, remote);
         match a.client.delete(&path) {
             Ok(_) => {}
             Err(e) if e.is_not_found() => {}
@@ -368,10 +381,7 @@ fn wait_active(
             break;
         }
         std::thread::sleep(a.poll);
-        match a
-            .client
-            .get_opt(&format!("/cloud/project/{p}/instance/{}", escape(id)))
-        {
+        match a.client.get_opt(&instance_path(p, id)) {
             Ok(Some(o)) => {
                 if status(&o) != said {
                     said = status(&o);
@@ -389,4 +399,9 @@ fn wait_active(
         }
     }
     Ok(last)
+}
+
+/// `/instance/{remote}` of project `p`.
+fn instance_path(p: &str, remote: &str) -> String {
+    format!("/cloud/project/{p}/instance/{}", escape(remote))
 }
