@@ -1,8 +1,9 @@
 //! The OVH provider (`dform-provider-ovh`, R-44) against a fake OVH API
 //! (`dform_provider_ovh::fake`): the conformance suite, and a program
 //! planned, applied, planned clean, changed and destroyed, named in
-//! dform.toml by `path =`. The provider's credentials come from the
-//! environment the fake gives; HOME and XDG_CONFIG_HOME point into the
+//! dform.toml by `path =`. The keys the host signs the provider's calls
+//! with come from the environment the fake gives, which dform.toml grants
+//! (`signed:environment`); HOME and XDG_CONFIG_HOME point into the
 //! scratch directory, so no real `ovh.conf` is read.
 //!
 //! `OVH_INTEGRATION=1` runs one more test against the real account the
@@ -37,7 +38,7 @@ fn project(name: &str, providers: &str, program: &str) -> Scratch {
     s.write(
         "dform.toml",
         &format!(
-            "[project]\nedition = \"2026\"\n\n[providers]\novh = {{ path = \"{}\"{providers} }}\n",
+            "[project]\nedition = \"2026\"\n\n[providers]\novh = {{ path = \"{}\", credentials = [\"signed:environment\"]{providers} }}\n",
             ovh()
         ),
     );
@@ -95,7 +96,8 @@ fn posts(server: &Server, path: &str) -> usize {
 #[test]
 fn provider_check_conforms_against_the_fake_api() {
     let server = Server::start();
-    let s = Scratch::new("ovh-check");
+    // In a project granting the keys the host signs with, as a run would.
+    let s = project("ovh-check", "", "");
     let mut c = common::dform();
     c.args(["provider", "check", &ovh()])
         .current_dir(&s.dir)
@@ -124,8 +126,14 @@ fn provider_check_conforms_against_the_fake_api() {
     // What the credentials are is a line of the check's, not stderr's.
     let form = format!(
         "note  Configure: provider ovh: credentials for {}: an application key and a consumer \
-         key; the consumer key ",
+         key, signed:environment, the host signing with them; the consumer key ",
         server.endpoint
+    );
+    assert!(
+        r.stdout
+            .contains("host  native: credentials: signed:environment"),
+        "{}",
+        r.stdout
     );
     assert!(r.stdout.contains(&form), "{}", r.stdout);
     assert!(
@@ -472,36 +480,47 @@ fn a_records_target_changes_in_place() {
     assert!(plan.stdout.contains("replace"), "{}", plan.stdout);
 }
 
-/// The credentials come from ovh.conf where OVH's SDKs look: `~/.ovh.conf`,
-/// then `./ovh.conf` in the working directory (dform's `-C`), a later one
-/// overriding an earlier one key by key. `$XDG_CONFIG_HOME/ovh/ovh.conf`
-/// is not read.
+/// The keys the provider's signer signs with are the operator's file
+/// where dform.toml grants it (`signed:lab`, an ovh.conf section's lines
+/// under `DFORM_CREDENTIALS`), or, `signed:environment` with no `OVH_*`
+/// variable set, `~/.ovh.conf` as OVH's own clients read it (a scratch
+/// HOME's), never the provider's: without a grant, the keys in the
+/// working directory's ovh.conf are named with how to grant them, and
+/// nothing is sent.
 #[test]
-fn ovh_conf_is_read_where_ovhs_sdks_read_it() {
+fn the_operators_keys_sign_where_dform_toml_grants_them() {
     let server = Server::start();
     let e = &server.endpoint;
-    let s = project(
-        "ovh-conf",
-        "",
+    let s = Scratch::project("ovh-signed-file");
+    let toml = |grant: &str| {
+        format!(
+            "[project]\nedition = \"2026\"\n\n[providers]\novh = {{ path = \"{}\"{grant} }}\n",
+            ovh()
+        )
+    };
+    s.write("dform.toml", &toml(", credentials = [\"signed:lab\"]"));
+    s.write(
+        "main.df",
         &format!(
             "use ovh {{ endpoint = \"{e}\", project = \"lab\" }}\n\
              resource ovh.ssh_key k {{ name = \"k\", public_key = \"ssh-ed25519 A\" }}\n"
         ),
     );
-    let conf = |consumer_key: &str| {
-        format!(
-            "[{e}]\napplication_key={}\napplication_secret={}\nconsumer_key={consumer_key}\n",
-            fake::APPLICATION_KEY,
-            fake::APPLICATION_SECRET
-        )
-    };
-    // The environment without the credentials: the files are all there is.
+    let keys = format!(
+        "application_key={}\napplication_secret={}\nconsumer_key={}\n",
+        fake::APPLICATION_KEY,
+        fake::APPLICATION_SECRET,
+        fake::CONSUMER_KEY
+    );
+    s.write("credentials/signed/lab", &keys);
+    // The environment without the keys: the file is all there is.
     let apply = |s: &Scratch| {
         let mut c = common::dform();
         c.args(common::yes(&["apply", "main.df"]))
             .current_dir(&s.dir)
             .env("HOME", s.path("home"))
             .env("XDG_CONFIG_HOME", s.path("config"))
+            .env("DFORM_CREDENTIALS", s.path("credentials"))
             .env_remove("OVH_CLOUD_PROJECT_SERVICE");
         for (k, v) in server.env() {
             match k.starts_with("OVH_") {
@@ -514,21 +533,16 @@ fn ovh_conf_is_read_where_ovhs_sdks_read_it() {
         }
         Run::from(c.output().unwrap())
     };
-    s.write("config/ovh/ovh.conf", &conf(fake::CONSUMER_KEY));
-    let r = apply(&s).failure();
-    assert!(
-        r.stderr.contains("no OVH application_key") && !r.stderr.contains("config/ovh"),
-        "{}",
-        r.stderr
-    );
-    s.write("home/.ovh.conf", &conf(fake::CONSUMER_KEY));
     apply(&s).success();
     assert_eq!(names(&server.keys()), ["k"]);
-    // The working directory's overrides the user's.
-    s.write("home/.ovh.conf", &conf("not-the-key"));
+    // The environment's: ~/.ovh.conf, its `[default]` endpoint's section.
     s.write(
-        "ovh.conf",
-        &format!("[{e}]\nconsumer_key={}\n", fake::CONSUMER_KEY),
+        "dform.toml",
+        &toml(", credentials = [\"signed:environment\"]"),
+    );
+    s.write(
+        "home/.ovh.conf",
+        &format!("[default]\nendpoint={e}\n\n[{e}]\n{keys}"),
     );
     s.write(
         "main.df",
@@ -536,6 +550,21 @@ fn ovh_conf_is_read_where_ovhs_sdks_read_it() {
     );
     apply(&s).success();
     assert!(server.keys().is_empty(), "{:?}", server.keys());
+    // Ungranted, the keys of an ovh.conf are named, and how to grant them.
+    s.write("dform.toml", &toml(""));
+    s.write("ovh.conf", &format!("[{e}]\n{keys}"));
+    let n = server.calls().len();
+    let r = apply(&s).failure();
+    assert!(
+        r.stderr.contains(&format!(
+            "no OVH credentials for the endpoint {e} (application_key, application_secret, \
+             consumer_key found: the host holds the keys and signs, not the provider): grant the \
+             provider the host's signature in dform.toml"
+        )),
+        "{}",
+        r.stderr
+    );
+    assert_eq!(server.calls().len(), n, "{:?}", server.calls());
 }
 
 #[test]
@@ -574,8 +603,8 @@ fn a_project_is_found_by_its_description_and_credentials_are_named() {
         "{}",
         r.stderr
     );
-    // No credentials anywhere: the error says where they were looked for
-    // (and nothing is asked of the real endpoint).
+    // The keys granted are not in the environment: the error names the
+    // one missing (and nothing is asked of the real endpoint).
     s.write(
         "main.df",
         &format!("use ovh {{ endpoint = \"ovh-ca\", project = \"lab\" }}\n{key}"),
@@ -595,12 +624,11 @@ fn a_project_is_found_by_its_description_and_credentials_are_named() {
     }
     let r = Run::from(c.output().unwrap()).failure();
     assert!(
-        r.stderr
-            .contains("no OVH application_key for the endpoint ovh-ca")
-            && r.stderr.contains(&format!(
-                "/etc/ovh.conf, {0}/.ovh.conf, {0}/ovh.conf",
-                s.dir.display()
-            )),
+        r.stderr.contains(
+            "provider ovh: the credential signed:environment: no OVH keys: neither \
+             OVH_APPLICATION_KEY, OVH_APPLICATION_SECRET and OVH_CONSUMER_KEY in the environment \
+             nor ~/.ovh.conf"
+        ),
         "{}",
         r.stderr
     );
@@ -666,15 +694,15 @@ fn a_project_named_by_description_is_listed_once_and_its_id_kept() {
     assert_eq!(asked(&server, n), [one]);
 }
 
-/// The server's clock offset is asked once and kept beside the project
-/// ids (After R-123): a later run signs with the kept one and asks no
-/// `/auth/time`; when the server's clock has moved and it refuses a
-/// signed call, the offset is asked again and the call sent once more.
+/// A signed call is stamped with the API's time, which the host asks
+/// once per run (`GET /auth/time`), never the machine's: a server whose
+/// clock is an hour ahead takes the calls.
 #[test]
-fn the_clock_offset_is_kept_and_asked_again_when_refused() {
+fn a_signed_call_is_stamped_with_the_apis_time() {
     let server = Server::start();
+    server.skew(3600);
     let s = project(
-        "ovh-clock-kept",
+        "ovh-clock",
         "",
         &format!(
             "use ovh {{ endpoint = \"{}\", project = \"{}\" }}\n\
@@ -685,14 +713,6 @@ fn the_clock_offset_is_kept_and_asked_again_when_refused() {
     );
     dform(&s, &server, &["plan", "main.df"]).success();
     assert_eq!(server.times_asked(), 1);
-    let kept = s.read("dform.state/cache/ovh-projects.json");
-    assert!(kept.contains(" /auth/time\""), "{kept}");
-    dform(&s, &server, &["plan", "main.df"]).success();
-    assert_eq!(server.times_asked(), 1);
-    // The server's clock moves an hour: the kept offset is refused once.
-    server.skew(3600);
-    let r = dform(&s, &server, &["plan", "main.df"]).success();
-    assert_eq!(server.times_asked(), 2, "{}", r.stderr);
     dform(&s, &server, &["plan", "main.df"]).success();
     assert_eq!(server.times_asked(), 2);
 }
@@ -898,9 +918,11 @@ fn the_images_of_a_region_are_a_table() {
     assert!(r.stdout.contains("image = \"Debian 13\""), "{}", r.stdout);
 }
 
-/// Against the real account (`OVH_INTEGRATION=1`, the machine's own
-/// ovh.conf or OVH_* variables, `OVH_CLOUD_PROJECT_SERVICE` naming the
-/// project): its regions are listed. Nothing is created.
+/// Against the real account (`OVH_INTEGRATION=1`, the machine's
+/// `OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET` and `OVH_CONSUMER_KEY`
+/// held as dform holds a credential it grants, `OVH_ENDPOINT`, and
+/// `OVH_CLOUD_PROJECT_SERVICE` naming the project): its regions are
+/// listed. Nothing is created.
 #[test]
 fn the_real_account_lists_its_regions() {
     if std::env::var("OVH_INTEGRATION").as_deref() != Ok("1") {
@@ -911,9 +933,20 @@ fn the_real_account_lists_its_regions() {
     let ovh = dform_provider_ovh::ovh::Ovh::new();
     let project = std::env::var("OVH_CLOUD_PROJECT_SERVICE")
         .expect("OVH_CLOUD_PROJECT_SERVICE names the project (its id or description)");
-    let account =
-        dform_sdk::block_on(ovh.configure(&serde_json::json!({"settings": {"project": project}})))
-            .unwrap();
+    use dform::plugin::credentials::{self, Kind, Secret};
+    let var = |v: &str| std::env::var(v).unwrap_or_else(|_| panic!("{v} is not set"));
+    let keys = format!(
+        "endpoint={}\napplication_key={}\napplication_secret={}\nconsumer_key={}\n",
+        var("OVH_ENDPOINT"),
+        var("OVH_APPLICATION_KEY"),
+        var("OVH_APPLICATION_SECRET"),
+        var("OVH_CONSUMER_KEY")
+    );
+    let keys = [("keys".to_string(), Secret::new(keys.into_bytes()))];
+    let held = credentials::hold(Kind::Signed, "ovh", keys.into());
+    let config = serde_json::json!({"settings": {"project": project},
+                                    "credentials": {"signed": held.name()}});
+    let account = dform_sdk::block_on(ovh.configure(&config)).unwrap();
     eprintln!("project {account:?}");
     let rows = dform_sdk::block_on(ovh.query(
         "ovh.region",

@@ -9,6 +9,7 @@ members = [
     "crates/dform-provider-fake",
     "crates/dform-provider-k8s",
     "crates/dform-provider-ovh",
+    "crates/dform-provider-ovh/signer",
     "crates/dform-provider-postgres",
     "crates/dform-provider-vault",
     "crates/dform-provider-tailscale",
@@ -37,6 +38,7 @@ default-members = [
     "crates/dform-provider-fake",
     "crates/dform-provider-k8s",
     "crates/dform-provider-ovh",
+    "crates/dform-provider-ovh/signer",
     "crates/dform-provider-postgres",
     "crates/dform-provider-vault",
     "crates/dform-provider-tailscale",
@@ -169,9 +171,14 @@ tokio-stream = { version = "0.1", default-features = false, features = ["net"] }
 age = { version = "0.11", default-features = false, features = ["armor"] }
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
 sha2 = "0.10"
+# tests/credentials_signed.rs signs as OVH's clients do, apart from the
+# signer's code (the version it links).
+sha1 = "0.10"
 base64 = "0.22"
-# tests/provider_ovh.rs: the OVH provider against a fake OVH API.
+# tests/provider_ovh.rs: the OVH provider against a fake OVH API;
+# tests/credentials_signed.rs its signer, in-process.
 dform-provider-ovh = { path = "crates/dform-provider-ovh", features = ["fake"] }
+dform-provider-ovh-signer = { path = "crates/dform-provider-ovh/signer" }
 # tests/provider_postgres.rs: the Postgres provider against a fake server.
 dform-provider-postgres = { path = "crates/dform-provider-postgres", features = ["fake"] }
 # tests/vault_scheme.rs: the Vault provider's scheme against a fake Vault.

@@ -6,8 +6,9 @@
 //! call's effect on the API is looked at directly; the last plans and
 //! applies a program with all of them through dform.
 //!
-//! The provider is configured with the fake's environment and no
-//! configuration file, so no real `ovh.conf` is read.
+//! The provider is configured with the fake's environment, its keys held
+//! for the host to sign with, and no configuration file, so no real
+//! `ovh.conf` is read.
 
 use crate::common;
 use common::{Run, Scratch};
@@ -42,8 +43,10 @@ impl Lab {
         let ovh = Ovh::new();
         let env: Vec<(&str, String)> = server.env();
         let get = |k: &str| env.iter().find(|(n, _)| *n == k).map(|(_, v)| v.clone());
+        let held = server.signature();
         dform_sdk::block_on(ovh.configure_with(
-            &json!({"settings": {"endpoint": server.endpoint, "project": fake::PROJECT}}),
+            &json!({"settings": {"endpoint": server.endpoint, "project": fake::PROJECT},
+                    "credentials": {"signed": held.name()}}),
             &get,
             &[],
         ))
@@ -548,11 +551,7 @@ fn a_volumes_attachment_converges_against_the_volume_as_it_is() {
         d
     };
     let v = lab.create(VOLUME, "data", doc(None));
-    let env = lab.server.env();
-    let get = |k: &str| env.iter().find(|(n, _)| *n == k).map(|(_, v)| v.clone());
-    let client = dform_provider_ovh::api::Client::new(
-        dform_provider_ovh::config::resolve(Some(&lab.server.endpoint), &get, &[]).unwrap(),
-    );
+    let client = lab.server.client();
     lab.server.build_polls(5);
     dform_sdk::block_on(client.post(
         &format!(
@@ -1158,7 +1157,7 @@ fn project(name: &str, program: &str) -> Scratch {
     s.write(
         "dform.toml",
         &format!(
-            "[project]\nedition = \"2026\"\n\n[providers]\novh = {{ path = \"{}\" }}\n",
+            "[project]\nedition = \"2026\"\n\n[providers]\novh = {{ path = \"{}\", credentials = [\"signed:environment\"] }}\n",
             ovh()
         ),
     );

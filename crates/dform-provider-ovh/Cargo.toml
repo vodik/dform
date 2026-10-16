@@ -22,14 +22,18 @@ anyhow = "1.0"
 serde_json = "1.0"
 dform-core = { path = "../dform-core" }
 # Its requests go through the host's HTTP (`dform_sdk::host().http`):
-# dform's pool, its pacing, its trace; the signing stays here (`sign.rs`).
+# dform's pool, its pacing, its trace, and its signer's signature, which
+# the host applies.
 dform-sdk = { path = "../dform-sdk" }
+# Its signer (`signer/`): the keys made into a `signed` credential's
+# material and each request signed with them, run by dform's host apart
+# from the provider; served natively beside it, a component of its own
+# for the wasm build.
+dform-provider-ovh-signer = { path = "signer" }
 dform-host = { path = "../dform-host", optional = true }
 # A service account's client id and secret as Basic auth, to mint its
 # bearer token (`api.rs`).
 base64 = "0.22"
-# The request signature: SHA-1 over the signed request (`sign.rs`).
-sha1 = "0.10"
 # The user data's digest the provider keeps (`record.rs`).
 sha2 = "0.10"
 

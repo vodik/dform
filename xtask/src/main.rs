@@ -98,9 +98,10 @@ struct Component<'a> {
 }
 
 /// The components `components` builds.
-const COMPONENTS: [Component<'static>; 4] = [
+const COMPONENTS: [Component<'static>; 5] = [
     Component::of("dform-provider-fake"),
     Component::of("dform-provider-ovh"),
+    Component::of("dform-provider-ovh-signer"),
     Component::of("dform-provider-k8s"),
     Component {
         package: "dform-sdk",

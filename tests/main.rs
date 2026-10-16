@@ -48,6 +48,7 @@ mod controller_spike;
 mod copies_with;
 mod copy_ref_inputs;
 mod crd_wait;
+mod credentials_signed;
 mod cross_stack_wait;
 mod custody;
 mod dangling_reads;

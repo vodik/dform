@@ -13,6 +13,12 @@ pub struct Provider {
 }
 
 impl Handler for Provider {
+    /// The signer of its `signed` credentials: the OVH signature
+    /// (`dform_provider_ovh_signer`), served beside the provider natively.
+    fn signer(&self) -> Option<Arc<dyn dform_core::plugin::signer::Signer + Send + Sync>> {
+        Some(Arc::new(dform_provider_ovh_signer::Ovh))
+    }
+
     async fn handle(
         &self,
         session: Session,
@@ -89,8 +95,9 @@ fn handshake(req: &pb::HandshakeRequest) -> std::result::Result<pb::HandshakeRes
         // R-203: each judged from its status word.
         health: health::TYPES.map(String::from).to_vec(),
         version: backend::BUILD.into(),
-        // What names the account; the keys are the OVH SDK's
-        // configuration's, never a setting (R-44).
+        // What names the account; the keys are the operator's, which the
+        // host holds and the provider's signer signs with (a `signed`
+        // credential, dform.toml's grant), never a setting (R-44).
         settings: ["endpoint", "project"]
             .map(|name| pb::SettingDecl {
                 name: name.into(),

@@ -27,7 +27,7 @@ use fake
 
 /// The component `file` under the wasip3 target's directory, release or
 /// debug, else a panic naming the `build` command.
-fn built(file: &str, build: &str) -> String {
+pub(crate) fn built(file: &str, build: &str) -> String {
     let target = std::path::Path::new(env!("CARGO_BIN_EXE_dform"))
         .parent()
         .and_then(|d| d.parent())
@@ -43,7 +43,7 @@ fn built(file: &str, build: &str) -> String {
 }
 
 /// The compiled components' cache tests/host_wasm.rs keeps: compiled once.
-fn wasm_cache() -> std::path::PathBuf {
+pub(crate) fn wasm_cache() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("host-wasm-cache")
 }
 

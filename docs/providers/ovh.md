@@ -5,9 +5,9 @@
 users and their S3 credentials, S3 containers) and the records of DNS zones OVH
 hosts, over the OVH API (`/cloud/project/{serviceName}/...`,
 `/domain/zone/{zone}/record`). It is a native provider: dform starts it
-and speaks the plugin protocol to it. It signs each request with the
-account's keys itself and sends it through the host's HTTP, so dform
-holds its connection to the API, paces its requests, each class of
+and speaks the plugin protocol to it. It sends each request through the
+host's HTTP, which signs it with the account's keys the provider never
+holds, so dform holds its connection to the API, paces its requests, each class of
 endpoint in a window of its own (`instance`, `network`, `volume`,
 `domain`, ..: a project's kind of object, else the API's first path
 segment), and traces each under the call it is made for.
@@ -32,13 +32,13 @@ waits for it. A longer timeout makes the apply print less.
 Built as a component (`cargo xtask components` puts it at
 `target/wasm32-wasip3/release/dform_provider_ovh.wasm`, dform built with
 `--features wasm`), it reads no environment and no file, so its
-credentials are the program's `token` (below), and it is granted
-`wasi:filesystem` for now: dform's language front-end, which parses its
-schema, links it.
+credentials are the keys the host signs with or the program's `token`
+(below), and it is granted `wasi:filesystem` for now: dform's language
+front-end, which parses its schema, links it.
 
 ```toml
 [providers]
-ovh = { path = "target/wasm32-wasip3/release/dform_provider_ovh.wasm", allow = ["wasi:filesystem"] }
+ovh = { path = "target/wasm32-wasip3/release/dform_provider_ovh.wasm", allow = ["wasi:filesystem"], credentials = ["signed:environment"] }
 ```
 
 The program names the account, never a credential:
@@ -57,11 +57,53 @@ use ovh { endpoint = "ovh-ca", project = "vodik" }
 
 ### Credentials
 
-The credentials are the provider's own, read as OVH's SDKs
-(python-ovh, go-ovh) read them: each key from the environment
-(`OVH_` and the key's name in capitals), else from the section of
-`ovh.conf` named by the endpoint, read from these files, a later one
-overriding an earlier one key by key:
+An application key and secret and a consumer key sign each call, and
+dform holds them; the provider's signer (`crates/dform-provider-ovh/
+signer`, natively served beside the provider, as a component
+`dform_provider_ovh_signer.wasm` beside its own) signs: the provider
+never has them. dform.toml grants them by name, a `signed` credential
+(docs/providers.md, "Grants and credentials"):
+
+```toml
+[providers.ovh]
+credentials = ["signed:environment"]   # OVH_APPLICATION_KEY, .._SECRET, OVH_CONSUMER_KEY, OVH_ENDPOINT, else ~/.ovh.conf
+# or ["signed:lab"]: the file ~/.config/dform/credentials/signed/lab
+```
+
+`signed:environment` is the environment's `OVH_APPLICATION_KEY`,
+`OVH_APPLICATION_SECRET` and `OVH_CONSUMER_KEY` (and `OVH_ENDPOINT`),
+and, with none of them set, `~/.ovh.conf` as OVH's own clients read it
+(python-ovh, the ovhcloud CLI, the Terraform provider): the section its
+`[default] endpoint` names. The operator's file is an `ovh.conf`, or a
+section's lines alone:
+
+```ini
+endpoint=ovh-ca
+application_key=...
+application_secret=...
+consumer_key=...
+```
+
+Make them at https://ca.api.ovh.com/createToken/ (or the `eu`/`us`
+host), with unlimited validity and the rights below. Each call is
+stamped with the API's time: its endpoint named, the signer asks dform
+to fetch its clock once (`GET ENDPOINT/auth/time`) and signs at dform's
+time and the difference; no endpoint named, at dform's time. A consumer key the API no longer takes is said as "the
+consumer key for ovh-ca expired or was revoked", with where to make one.
+Configure reads the key's validity (`GET /auth/currentCredential`, kept
+in dform's cache for that credential's name) and warns when it expires
+within a week. Outside a program (`dform provider check`) it also says
+which form is in use, when the key expires, and each right below the key
+lacks, each a line of the check's: `note  Configure: provider ovh: the
+consumer key for ovh-ca lacks POST /domain/zone/*`. Without the grant,
+the three keys in `ovh.conf` or the environment are not read: the error
+names them and the grant.
+
+The other forms are the provider's own, read as OVH's SDKs (python-ovh,
+go-ovh) read them: each key from the environment (`OVH_` and the key's
+name in capitals), else from the section of `ovh.conf` named by the
+endpoint, read from these files, a later one overriding an earlier one
+key by key:
 
 1. `/etc/ovh.conf`
 2. `~/.ovh.conf`
@@ -69,9 +111,9 @@ overriding an earlier one key by key:
    or its `-C` directory.
 
 A working directory's `ovh.conf` holds secrets: never commit it (name it
-in the repository's `.gitignore`). A section holds one of three forms;
-two in one, the environment's keys counted with the file's, is an error
-naming each key given.
+in the repository's `.gitignore`). One form is given: two, the
+environment's keys counted with the file's and the grant with them, is
+an error naming each.
 
 A service account's client id and secret (`OVH_CLIENT_ID`,
 `OVH_CLIENT_SECRET`). The provider mints a bearer token from them with
@@ -92,27 +134,6 @@ endpoint=ovh-ca
 client_id=...
 client_secret=...
 ```
-
-An application key and secret and a consumer key
-(`OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, `OVH_CONSUMER_KEY`),
-each call signed with them:
-
-```ini
-[ovh-ca]
-application_key=...
-application_secret=...
-consumer_key=...
-```
-
-Make them at https://ca.api.ovh.com/createToken/ (or the `eu`/`us`
-host), with unlimited validity and the rights below. A consumer key the
-API no longer takes is said as "the consumer key for ovh-ca expired or
-was revoked", with where to make one. Configure reads the key's validity
-(`GET /auth/currentCredential`, kept in dform's cache for that key) and
-warns when it expires within a week. Outside a program (`dform provider
-check`) it also says which form is in use, when the key expires, and each
-right below the key lacks, each a line of the check's: `note  Configure:
-provider ovh: the consumer key for ovh-ca lacks POST /domain/zone/*`.
 
 A bearer token minted elsewhere (`OVH_ACCESS_TOKEN`), as go-ovh takes
 it: each call carries it as it is, and nothing mints another, so when it

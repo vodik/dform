@@ -86,7 +86,7 @@ fn the_ovh_provider_plans_with_no_credentials() {
     s.write(
         "dform.toml",
         &format!(
-            "[project]\nedition = \"2026\"\n\n[providers]\novh = {{ path = \"{}\" }}\n",
+            "[project]\nedition = \"2026\"\n\n[providers]\novh = {{ path = \"{}\", credentials = [\"signed:environment\"] }}\n",
             common::exe("dform-provider-ovh")
         ),
     );

@@ -1,12 +1,13 @@
-//! A client of the OVH API: each call signed (`sign`) with the three
-//! keys, or carrying a bearer token minted from a service account's
-//! client credentials (R-179), or one given as it is (`access_token`),
-//! and sent through the host's HTTP (`dform_sdk::host().http`), so dform
-//! pools its connection, paces it with the provider's other requests and
-//! traces it under the call it is made for. The keys stay here: the
-//! signature is over the request, which the host sends as it is. Each
-//! request names the class of endpoint it is (`bucket`): the host paces
-//! each class's window by what the API answers it.
+//! A client of the OVH API: each call signed by the host with the keys it
+//! holds (a `signed` credential: the provider's signer signs, apart from
+//! it; the provider names it and never sees the keys), or
+//! carrying the program's token the host holds, or a bearer token minted
+//! from a service account's client credentials (R-179), or one given as
+//! it is (`access_token`), and sent through the host's HTTP
+//! (`dform_sdk::host().http`), so dform pools its connection, paces it
+//! with the provider's other requests and traces it under the call it is
+//! made for. Each request names the class of endpoint it is (`bucket`):
+//! the host paces each class's window by what the API answers it.
 //!
 //! A bearer token is minted with OAuth2's client-credentials grant
 //! (`grant_type=client_credentials`, `scope=all`, the client id and
@@ -14,13 +15,8 @@
 //! before its `expires_in`, and minted afresh once when a call is refused
 //! with a 401.
 //!
-//! A signed call is signed with the server's clock: the difference to the
-//! local one is asked once (`GET /auth/time`) and kept in dform's cache
-//! beside the project ids (`ovh-projects.json`), so a run after the first
-//! asks it again only when a signed call is refused (After R-123): the
-//! clock moved, the offset is asked afresh and the call sent once more. A
-//! failure names the method,
-//! the path and the HTTP status (`HTTP 503`), so dform's retry policy
+//! A failure names the method, the path and the HTTP status (`HTTP 503`),
+//! so dform's retry policy
 //! (R-81, `plugin::policy::retryable`) tells a transient one (429, 5xx)
 //! from a refusal; a call that reached no answer is `Unreachable`, which
 //! may have taken effect.
@@ -33,12 +29,10 @@
 //! is answered as the API is after the write. A failure is not kept.
 
 use crate::config::{Auth, Credentials};
-use crate::sign::signature;
 use base64::Engine;
 use dform_sdk::sync::Mutex as Held;
 use serde_json::Value as Json;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -108,17 +102,13 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 pub struct Client {
     creds: Credentials,
-    /// Server time minus local time, in seconds, once known, and whether
-    /// it was read from the cache rather than asked in this run.
-    delta: Mutex<Option<(i64, bool)>>,
-    /// The cache file the offset is kept in (`ovh-projects.json`).
-    cache: Option<PathBuf>,
     /// The bearer token minted from a service account's credentials, and
     /// when it is to be minted afresh: held while one is minted.
     token: Held<Option<(String, Instant)>>,
     /// The lists asked once.
     kept: Mutex<Kept>,
-    /// The token the host holds (`Auth::Held`), opened.
+    /// The credential the host holds and applies (`Auth::Held`,
+    /// `Auth::Signed`), opened.
     held: Option<dform_sdk::Credential>,
 }
 
@@ -157,21 +147,18 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 /// How one call is authenticated.
 #[derive(Clone, Copy)]
 enum By<'a> {
-    /// Not at all (`/auth/time`).
+    /// Not at all: no credential was opened.
     Nothing,
-    /// Signed with the three keys.
-    Signature,
     Bearer(&'a str),
-    /// The host applies the token it holds.
+    /// The host applies the credential it holds: signs the call, or sets
+    /// the token.
     Held(&'a dform_sdk::Credential),
 }
 
-/// The file in dform's cache directory the project ids and the clock
-/// offset are kept in.
+/// The file in dform's cache directory the project ids are kept in.
 pub const CACHE_FILE: &str = "ovh-projects.json";
 
-/// The cache file's entries: `"ENDPOINT NAME"` to a project's id, and
-/// `"ENDPOINT /auth/time"` to the clock offset in seconds.
+/// The cache file's entries: `"ENDPOINT NAME"` to a project's id.
 pub fn read_cache(file: &std::path::Path) -> BTreeMap<String, String> {
     crate::machine::read(file)
         .and_then(|b| serde_json::from_slice(&b).ok())
@@ -194,89 +181,37 @@ impl Client {
     pub fn new(creds: Credentials) -> Client {
         Client {
             creds,
-            delta: Mutex::new(None),
-            cache: None,
             token: Held::new(None),
             kept: Mutex::default(),
             held: None,
         }
     }
 
-    /// The client applying the token the host holds, `held` (opened by
-    /// its name, `Auth::Held`).
-    pub fn holding(mut self, held: Option<dform_sdk::Credential>) -> Client {
-        self.held = held;
-        self
-    }
-
-    /// The client keeping its clock offset in dform's cache directory
-    /// `dir` (`None`: asked every run).
-    pub fn with_cache(mut self, dir: Option<&std::path::Path>) -> Client {
-        self.cache = dir.map(|d| d.join(CACHE_FILE));
-        self
-    }
-
-    /// The cache key of this endpoint's clock offset.
-    fn clock_key(&self) -> String {
-        format!("{} /auth/time", self.creds.endpoint)
+    /// The client of `creds`, applying what the host holds for it (the
+    /// program's token, the keys it signs with, `Auth::Held` and
+    /// `Auth::Signed`), opened by its name: refused, saying why, when the
+    /// host does not open it (dform.toml does not grant it).
+    pub fn opened(creds: Credentials) -> std::result::Result<Client, String> {
+        let held = match &creds.auth {
+            Auth::Held { name } | Auth::Signed { name } => Some(
+                dform_sdk::host()
+                    .secrets
+                    .open(name)
+                    .map_err(|e| e.message)?,
+            ),
+            Auth::OAuth2 { .. } | Auth::Token { .. } => None,
+        };
+        let mut client = Client::new(creds);
+        client.held = held;
+        Ok(client)
     }
 
     pub fn credentials(&self) -> &Credentials {
         &self.creds
     }
 
-    fn now() -> i64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0)
-    }
-
-    /// The server's time now, from its clock's offset: known, kept in
-    /// the cache, or asked.
-    async fn timestamp(&self) -> Result<i64> {
-        let known = *self.delta.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((d, _)) = known {
-            return Ok(Self::now() + d);
-        }
-        let cached = self.cache.as_deref().and_then(|f| {
-            read_cache(f)
-                .get(&self.clock_key())
-                .and_then(|v| v.parse::<i64>().ok())
-        });
-        let d = match cached {
-            Some(d) => {
-                let mut delta = self.delta.lock().unwrap_or_else(|e| e.into_inner());
-                delta.get_or_insert((d, true)).0
-            }
-            None => self.ask_time().await?,
-        };
-        Ok(Self::now() + d)
-    }
-
-    /// Ask the server its time (`GET /auth/time`): the offset now known
-    /// and kept in the cache.
-    async fn ask_time(&self) -> Result<i64> {
-        // Boxed: a call may ask the time, and asking it is a call.
-        let server = Box::pin(self.send("GET", "/auth/time", None, false))
-            .await?
-            .as_i64()
-            .ok_or_else(|| Error::Status {
-                method: "GET".into(),
-                path: "/auth/time".into(),
-                status: 200,
-                message: "the server's time is not a number".into(),
-            })?;
-        let d = server - Self::now();
-        *self.delta.lock().unwrap_or_else(|e| e.into_inner()) = Some((d, false));
-        if let Some(f) = &self.cache {
-            write_cache(f, &self.clock_key(), &d.to_string());
-        }
-        Ok(d)
-    }
-
     pub async fn get(&self, path: &str) -> Result<Json> {
-        self.send("GET", path, None, true).await
+        self.send("GET", path, None).await
     }
 
     /// GET, `None` for a 404.
@@ -340,54 +275,36 @@ impl Client {
     /// it is answered (or not), so none asked meanwhile is kept.
     async fn write(&self, method: &str, path: &str, body: Option<&Json>) -> Result<Json> {
         lock(&self.kept).wrote(path);
-        let out = self.send(method, path, body, true).await;
+        let out = self.send(method, path, body).await;
         lock(&self.kept).wrote(path);
         out
     }
 
-    /// One call: `path` under the endpoint's URL (it carries its query),
-    /// `authed` unless it is `/auth/time`. A bearer token refused (a 401)
-    /// is minted afresh and the call sent once more. A signed call the
-    /// server refuses while its timestamp rests on an offset read from
-    /// the cache asks the server's time again, and is sent once more when
-    /// the offset moved.
-    async fn send(
-        &self,
-        method: &str,
-        path: &str,
-        body: Option<&Json>,
-        authed: bool,
-    ) -> Result<Json> {
-        if let (true, Some(c)) = (authed, &self.held) {
+    /// One call: `path` under the endpoint's URL (it carries its query).
+    /// A bearer token minted from a service account and refused (a 401) is
+    /// minted afresh and the call sent once more.
+    async fn send(&self, method: &str, path: &str, body: Option<&Json>) -> Result<Json> {
+        if let Some(c) = &self.held {
             return self.send_once(method, path, body, By::Held(c)).await;
         }
-        if let (true, Auth::Token { access_token }) = (authed, &self.creds.auth) {
-            return self
-                .send_once(method, path, body, By::Bearer(access_token))
-                .await;
-        }
-        if authed && matches!(self.creds.auth, Auth::OAuth2 { .. }) {
-            let token = self.bearer().await?;
-            let out = self.send_once(method, path, body, By::Bearer(&token)).await;
-            if !matches!(&out, Err(e) if e.status() == Some(401)) {
-                return out;
+        match &self.creds.auth {
+            Auth::Token { access_token } => {
+                self.send_once(method, path, body, By::Bearer(access_token))
+                    .await
             }
-            self.forget(&token).await;
-            let token = self.bearer().await?;
-            return self.send_once(method, path, body, By::Bearer(&token)).await;
-        }
-        let by = if authed { By::Signature } else { By::Nothing };
-        let out = self.send_once(method, path, body, by).await;
-        let refused = matches!(&out, Err(e) if matches!(e.status(), Some(400 | 401 | 403)));
-        let cached = *self.delta.lock().unwrap_or_else(|e| e.into_inner());
-        match cached {
-            Some((was, true)) if authed && refused => {
-                if self.ask_time().await? == was {
+            Auth::OAuth2 { .. } => {
+                let token = self.bearer().await?;
+                let out = self.send_once(method, path, body, By::Bearer(&token)).await;
+                if !matches!(&out, Err(e) if e.status() == Some(401)) {
                     return out;
                 }
-                self.send_once(method, path, body, by).await
+                self.forget(&token).await;
+                let token = self.bearer().await?;
+                self.send_once(method, path, body, By::Bearer(&token)).await
             }
-            _ => out,
+            Auth::Held { .. } | Auth::Signed { .. } => {
+                self.send_once(method, path, body, By::Nothing).await
+            }
         }
     }
 
@@ -516,36 +433,8 @@ impl Client {
         if body.is_some() {
             headers.push(("Content-Type", "application/json".to_string()));
         }
-        match (&self.creds.auth, by) {
-            (_, By::Bearer(token)) => headers.push(("Authorization", format!("Bearer {token}"))),
-            (_, By::Held(_)) => {}
-            (
-                Auth::Keys {
-                    application_key,
-                    application_secret,
-                    consumer_key,
-                },
-                by,
-            ) => {
-                headers.push(("X-Ovh-Application", application_key.clone()));
-                if let By::Signature = by {
-                    let ts = self.timestamp().await?;
-                    headers.push(("X-Ovh-Timestamp", ts.to_string()));
-                    headers.push(("X-Ovh-Consumer", consumer_key.clone()));
-                    headers.push((
-                        "X-Ovh-Signature",
-                        signature(
-                            application_secret,
-                            consumer_key,
-                            method,
-                            &url,
-                            body.as_deref().unwrap_or(""),
-                            ts,
-                        ),
-                    ));
-                }
-            }
-            (Auth::OAuth2 { .. } | Auth::Token { .. } | Auth::Held { .. }, _) => {}
+        if let By::Bearer(token) = by {
+            headers.push(("Authorization", format!("Bearer {token}")));
         }
         let held = match by {
             By::Held(c) => Some(c),
@@ -587,7 +476,7 @@ impl Client {
         let invalid = code == "INVALID_CREDENTIAL"
             || msg.contains("credential is not valid")
             || msg.contains("credential does not exist");
-        if status == 403 && invalid && matches!(self.creds.auth, Auth::Keys { .. }) {
+        if status == 403 && invalid && matches!(self.creds.auth, Auth::Signed { .. }) {
             return self.creds.expired_key();
         }
         if status == 401 && matches!(self.creds.auth, Auth::Token { .. }) {

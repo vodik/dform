@@ -3,7 +3,7 @@
 //! the clock), and the DNS resolver beside it over UDP.
 
 use super::*;
-use crate::sign::signature;
+use dform_provider_ovh_signer::signature;
 use std::io::{BufRead, BufReader, Write};
 
 /// One request as it came: its method, target (the path with its query),
@@ -116,22 +116,27 @@ impl World {
         let (path, query) = req.path_and_query();
         let (method, target, headers, body) = (&req.method, &req.target, &req.headers, &req.body);
         let json_body = serde_json::from_str(body).unwrap_or(Json::Null);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0)
-            + self.skew;
+        let now = self.stopped.unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0)
+                + self.skew
+        });
         let bearer = headers
             .get("authorization")
             .and_then(|a| a.strip_prefix("Bearer "));
         if path == "/auth/time" {
             self.times_asked += 1;
-            (200, json!(now))
+            match self.fail_next("GET /auth/time") {
+                Some(s) => (s, json!({"message": "Forbidden"})),
+                None => (200, json!(now)),
+            }
         } else if path == "/auth/oauth2/token" {
             self.mint(headers, body)
         } else if let Some(token) = bearer {
             if self.tokens.contains(token) {
-                self.answer_seen(method, &path, target, &query, json_body)
+                self.answer_seen(method, &path, target, &query, headers, json_body)
             } else {
                 (401, json!({"message": "Invalid token"}))
             }
@@ -159,7 +164,7 @@ impl World {
         {
             (400, json!({"message": "Query out of time"}))
         } else {
-            self.answer_seen(method, &path, target, &query, json_body)
+            self.answer_seen(method, &path, target, &query, headers, json_body)
         }
     }
 }
@@ -203,7 +208,14 @@ fn bad_signature(
         return Some("This credential does not exist".into());
     }
     let ts: i64 = h("x-ovh-timestamp").parse().unwrap_or(0);
-    let want = signature(APPLICATION_SECRET, CONSUMER_KEY, method, url, body, ts);
+    let want = signature(
+        APPLICATION_SECRET.as_bytes(),
+        CONSUMER_KEY.as_bytes(),
+        method,
+        url,
+        body.as_bytes(),
+        ts,
+    );
     (h("x-ovh-signature") != want).then(|| "Invalid signature".to_string())
 }
 

@@ -15,6 +15,9 @@ struct Given {
     endpoint: Option<String>,
     /// The program's token, the name dform holds it in the host by.
     token: Option<String>,
+    /// The keys the host signs with, as the operator's grant names them
+    /// (`signed:lab`).
+    signature: Option<String>,
     project: Option<String>,
     cache: Option<PathBuf>,
 }
@@ -37,6 +40,10 @@ impl Given {
             deferred: config.get("deferred") == Some(&Json::Bool(true)),
             endpoint: setting("endpoint")?,
             token: setting("token")?,
+            signature: config
+                .pointer("/credentials/signed")
+                .and_then(Json::as_str)
+                .map(String::from),
             project: setting("project")?,
             cache: config
                 .get("cache")
@@ -45,21 +52,12 @@ impl Given {
         })
     }
 
-    /// The client of `creds`, applying the program's token, which it
-    /// opens in the host by its name.
-    fn client(&self, creds: config::Credentials) -> Result<Client> {
-        let held = match &self.token {
-            Some(name) => Some(
-                dform_sdk::host()
-                    .secrets
-                    .open(name)
-                    .map_err(|e| anyhow!("provider ovh: the token: {}", e.message))?,
-            ),
-            None => None,
-        };
-        Ok(Client::new(creds)
-            .with_cache(self.cache.as_deref())
-            .holding(held))
+    /// What the host holds for the provider, by name.
+    fn held(&self) -> config::Held<'_> {
+        config::Held {
+            token: self.token.as_deref(),
+            signature: self.signature.as_deref(),
+        }
     }
 }
 
@@ -87,12 +85,7 @@ impl Ovh {
             self.set_account(Err(why.into()), true);
             return Ok(pb::ConfigureResponse::default());
         }
-        let creds = config::resolve_holding(
-            given.endpoint.as_deref(),
-            given.token.as_deref(),
-            env,
-            files,
-        );
+        let creds = config::resolve(given.endpoint.as_deref(), given.held(), env, files);
         let creds = match creds {
             Ok(c) => c,
             // The program names the account: it cannot be reached.
@@ -102,7 +95,8 @@ impl Ovh {
                 return Ok(pb::ConfigureResponse::default());
             }
         };
-        let client = given.client(creds)?;
+        // The host's refusal names the provider and the credential.
+        let client = Client::opened(creds).map_err(|e| anyhow!("{e}"))?;
         // Run outside a program and a project, as `provider check` runs
         // it: which credentials, and what they may do.
         let full = !given.configured && given.cache.is_none();

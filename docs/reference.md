@@ -40,7 +40,8 @@ provider in `$XDG_DATA_HOME/dform/providers`
 installed; `--features F` adds dform's features. A provider built as a
 wasm provider is installed as one, `dform-provider-NAME.wasm` (the
 Kubernetes and OVH providers, which their `dform.toml` table grants
-what docs/providers.md says), the others as their executables. A
+what docs/providers.md says), with its signer beside it when it has one
+(`dform-provider-ovh_signer.wasm`), the others as their executables. A
 package's build calls `cargo xtask install --prefix DIR`: dform in
 `DIR/bin`, the providers in `DIR/lib/dform/providers`.
 

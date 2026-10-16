@@ -87,12 +87,13 @@ impl Key {
 /// (no program: `provider check`) says which form is in use, the key's
 /// validity and each right it lacks; otherwise only a short validity is
 /// warned of, and the key's expiry is kept in the cache directory `cache`
-/// (by a digest of the key), so a later run asks nothing.
+/// (by the credential's name: the provider never has the key), so a
+/// later run asks nothing.
 pub async fn notes(client: &Client, full: bool, cache: Option<&Path>, now: u64) -> Vec<String> {
     let creds = client.credentials();
     let endpoint = &creds.endpoint;
-    let consumer_key = match &creds.auth {
-        Auth::Keys { consumer_key, .. } => consumer_key,
+    let signed = match &creds.auth {
+        Auth::Signed { name } => name,
         Auth::Held { name } => {
             return if full {
                 vec![format!(
@@ -125,7 +126,7 @@ pub async fn notes(client: &Client, full: bool, cache: Option<&Path>, now: u64) 
         }
     };
     let file = cache.filter(|_| !full).map(|c| c.join(api::CACHE_FILE));
-    let key = match current(client, consumer_key, file.as_deref()).await {
+    let key = match current(client, signed, file.as_deref()).await {
         Ok(k) => k,
         // A refused key is said by the call that needs it.
         Err(e) if full => {
@@ -140,8 +141,8 @@ pub async fn notes(client: &Client, full: bool, cache: Option<&Path>, now: u64) 
             None => "does not expire".to_string(),
         };
         out.push(format!(
-            "provider ovh: credentials for {endpoint}: an application key and a consumer key; \
-             the consumer key {validity}"
+            "provider ovh: credentials for {endpoint}: an application key and a consumer key, \
+             {signed}, the host signing with them; the consumer key {validity}"
         ));
         out.extend(
             key.lacks()
@@ -164,11 +165,12 @@ pub async fn notes(client: &Client, full: bool, cache: Option<&Path>, now: u64) 
     out
 }
 
-/// The consumer key `client` signs with: its expiry as `file` (a cache)
-/// keeps it for the key's digest, else as the API answers, then kept.
-async fn current(client: &Client, consumer_key: &str, file: Option<&Path>) -> api::Result<Key> {
+/// The consumer key `client`'s calls are signed with, the credential
+/// `signed`: its expiry as `file` (a cache) keeps it for the credential's
+/// digest, else as the API answers, then kept.
+async fn current(client: &Client, signed: &str, file: Option<&Path>) -> api::Result<Key> {
     let cache_key = format!("{} {CURRENT}", client.credentials().endpoint);
-    let digest: String = Sha256::digest(consumer_key.as_bytes())[..8]
+    let digest: String = Sha256::digest(signed.as_bytes())[..8]
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();

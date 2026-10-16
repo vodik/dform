@@ -30,7 +30,7 @@ fn project(name: &str, server: &Server) -> Scratch {
     s.write(
         "dform.toml",
         &format!(
-            "[project]\nedition = \"2026\"\n\n[providers]\novh = {{ path = \"{}\" }}\n\n\
+            "[project]\nedition = \"2026\"\n\n[providers]\novh = {{ path = \"{}\", credentials = [\"signed:environment\"] }}\n\n\
              [defaults]\nbackend = 's3(\"dform\", \"{prefix}/{{stack}}\", \
              {{endpoint = \"{}\", region = \"us-east-1\"}})'\n\n\
              [secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n\n[stacks.main]\n",

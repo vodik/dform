@@ -1,8 +1,8 @@
-//! The provider's two forms of credentials against the fake API (R-179):
-//! a service account's client id and secret, a bearer token minted from
-//! them, kept and minted afresh; the three keys, a refused consumer key
-//! said with its fix, and its validity and rights as Configure reads
-//! them.
+//! The provider's forms of credentials against the fake API (R-179): a
+//! service account's client id and secret, a bearer token minted from
+//! them, kept and minted afresh; the three keys the host signs with, a
+//! refused consumer key said with its fix, and its validity and rights
+//! as Configure reads them.
 
 use dform_core::approval::parse_rfc3339;
 use dform_provider_ovh::api::Client;
@@ -19,7 +19,8 @@ fn lookup(env: Vec<(&'static str, String)>) -> impl Fn(&str) -> Option<String> {
 
 /// A client of `server` with the credentials `env` gives.
 fn client(server: &Server, env: Vec<(&'static str, String)>) -> Client {
-    Client::new(config::resolve(Some(&server.endpoint), &lookup(env), &[]).unwrap())
+    let held = config::Held::default();
+    Client::new(config::resolve(Some(&server.endpoint), held, &lookup(env), &[]).unwrap())
 }
 
 fn scratch(name: &str) -> PathBuf {
@@ -103,8 +104,10 @@ fn a_wrong_client_secret_is_named() {
 fn an_expired_consumer_key_says_so_and_the_fix() {
     let server = Server::start();
     server.revoke_key();
+    let held = server.signature();
     let e = dform_sdk::block_on(Ovh::new().configure_with(
-        &json!({"settings": {"endpoint": server.endpoint, "project": fake::PROJECT}}),
+        &json!({"settings": {"endpoint": server.endpoint, "project": fake::PROJECT},
+                "credentials": {"signed": held.name()}}),
         &lookup(server.env()),
         &[],
     ))
@@ -127,7 +130,10 @@ fn an_expired_consumer_key_says_so_and_the_fix() {
 #[test]
 fn a_short_validity_is_warned_of_and_the_rights_named() {
     let server = Server::start();
-    let c = client(&server, server.env());
+    let c = server.client();
+    let config::Auth::Signed { name } = &c.credentials().auth else {
+        unreachable!("the fake's client signs");
+    };
     let now = parse_rfc3339("2026-10-08T10:00:00Z").unwrap();
     let cache = scratch("validity");
     server.key_expires(Some("2026-10-09T08:00:00+02:00"));
@@ -163,8 +169,9 @@ fn a_short_validity_is_warned_of_and_the_rights_named() {
         dform_sdk::block_on(notes(&c, true, None, now)),
         [
             format!(
-                "provider ovh: credentials for {e}: an application key and a consumer key; the \
-                 consumer key expires 2026-10-09T06:00:00Z"
+                "provider ovh: credentials for {e}: an application key and a consumer key, \
+                 {name}, the host signing with them; the consumer key expires \
+                 2026-10-09T06:00:00Z"
             ),
             format!("provider ovh: the consumer key for {e} lacks POST /domain/zone/*"),
             format!("provider ovh: the consumer key for {e} lacks PUT /domain/zone/*"),
@@ -177,8 +184,8 @@ fn a_short_validity_is_warned_of_and_the_rights_named() {
         dform_sdk::block_on(notes(&c, true, None, now)),
         [
             format!(
-                "provider ovh: credentials for {e}: an application key and a consumer key; the \
-                 consumer key does not expire"
+                "provider ovh: credentials for {e}: an application key and a consumer key, \
+                 {name}, the host signing with them; the consumer key does not expire"
             ),
             format!("provider ovh: the consumer key for {e} lacks POST /domain/zone/*"),
             format!("provider ovh: the consumer key for {e} lacks PUT /domain/zone/*"),

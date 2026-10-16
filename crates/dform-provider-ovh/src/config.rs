@@ -1,26 +1,28 @@
-//! The provider's credentials: its own configuration, never the program's
-//! (R-44 amendment, R-40). As OVH's SDKs read them: `OVH_ENDPOINT`,
-//! `OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET` and `OVH_CONSUMER_KEY`
-//! in the environment, else `ovh.conf`:
+//! The provider's credentials: the operator's, never the program's
+//! (R-44 amendment, R-40). An application key and secret and a consumer
+//! key sign each call, and the host holds them and signs: dform.toml
+//! grants the provider `signed:environment` (`OVH_APPLICATION_KEY`,
+//! ..) or `signed:NAME` (a file), the Configure names it, and the
+//! provider has only that name, natively and as a component alike. Else,
+//! as OVH's SDKs read them, from `OVH_*` in the environment or
+//! `ovh.conf`:
 //!
 //! ```text
 //! [default]
 //! endpoint=ovh-ca
 //!
 //! [ovh-ca]
-//! application_key=...
-//! application_secret=...
-//! consumer_key=...
+//! client_id=...
+//! client_secret=...
 //! ```
 //!
-//! or, for a service account (R-179), `client_id` and `client_secret`
-//! (`OVH_CLIENT_ID`, `OVH_CLIENT_SECRET`) in place of the three keys: the
-//! client mints a bearer token from them (`api`); or `access_token`
-//! (`OVH_ACCESS_TOKEN`), a bearer token minted elsewhere, used as it is.
-//! A section holds one form of the three. The program may give a token
-//! instead (`use ovh { token = .. }`): dform holds it in the host, which
-//! applies it to each call, and the provider has only its name; a
-//! component, which reads no environment and no file, is configured so.
+//! a service account's (R-179) `client_id` and `client_secret`
+//! (`OVH_CLIENT_ID`, `OVH_CLIENT_SECRET`): the client mints a bearer token
+//! from them (`api`); or `access_token` (`OVH_ACCESS_TOKEN`), a bearer
+//! token minted elsewhere, used as it is. One form of the three is given.
+//! The program may give a token instead (`use ovh { token = .. }`): dform
+//! holds it in the host, which applies it to each call, and the provider
+//! has only its name.
 //!
 //! read, as OVH's SDKs read them (python-ovh's `config.py`, go-ovh's
 //! `configuration.go`), from `/etc/ovh.conf`, `~/.ovh.conf` and
@@ -33,16 +35,9 @@ use anyhow::{Result, bail};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-/// The API endpoints OVH's SDKs know, by name.
-pub const ENDPOINTS: [(&str, &str); 7] = [
-    ("ovh-eu", "https://eu.api.ovh.com/1.0"),
-    ("ovh-ca", "https://ca.api.ovh.com/1.0"),
-    ("ovh-us", "https://api.us.ovhcloud.com/1.0"),
-    ("kimsufi-eu", "https://eu.api.kimsufi.com/1.0"),
-    ("kimsufi-ca", "https://ca.api.kimsufi.com/1.0"),
-    ("soyoustart-eu", "https://eu.api.soyoustart.com/1.0"),
-    ("soyoustart-ca", "https://ca.api.soyoustart.com/1.0"),
-];
+/// The API endpoints OVH's SDKs know, and `ovh.conf` as they read it:
+/// the signer's, one reading for both.
+pub use dform_provider_ovh_signer::{ENDPOINTS, endpoint_url, parse_ini};
 
 /// OAuth2's token endpoint of each API endpoint that offers it, as OVH's
 /// own SDKs know them.
@@ -65,13 +60,10 @@ pub struct Credentials {
 /// How calls are authenticated.
 #[derive(Clone, PartialEq, Eq)]
 pub enum Auth {
-    /// An application's key and secret and a consumer key: each call is
-    /// signed (`sign`).
-    Keys {
-        application_key: String,
-        application_secret: String,
-        consumer_key: String,
-    },
+    /// An application's key and secret and a consumer key the host holds
+    /// (`signed:NAME`, dform.toml's grant): the host signs each
+    /// call, and the keys never reach the provider.
+    Signed { name: String },
     /// A service account's OAuth2 client credentials: each call carries
     /// a bearer token minted from them at `token_url`.
     OAuth2 {
@@ -91,12 +83,7 @@ pub enum Auth {
 impl std::fmt::Debug for Auth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Auth::Keys {
-                application_key, ..
-            } => f
-                .debug_struct("Keys")
-                .field("application_key", application_key)
-                .finish_non_exhaustive(),
+            Auth::Signed { name } => f.debug_struct("Signed").field("name", name).finish(),
             Auth::OAuth2 {
                 client_id,
                 token_url,
@@ -164,41 +151,6 @@ fn token_url(endpoint: &str, url: &str) -> Option<String> {
     Some(format!("{scheme}://{host}/auth/oauth2/token"))
 }
 
-/// An endpoint's base URL: a known name's, or the URL itself.
-pub fn endpoint_url(endpoint: &str) -> Option<String> {
-    if endpoint.starts_with("https://") || endpoint.starts_with("http://") {
-        return Some(endpoint.trim_end_matches('/').to_string());
-    }
-    ENDPOINTS
-        .iter()
-        .find(|(n, _)| *n == endpoint)
-        .map(|(_, u)| u.to_string())
-}
-
-/// An INI file's sections, each key to its value. `;` and `#` start a
-/// comment line; keys before any section are in the section `""`.
-pub fn parse_ini(text: &str) -> BTreeMap<String, BTreeMap<String, String>> {
-    let mut out: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-    let mut section = String::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
-            continue;
-        }
-        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-            section = name.trim().to_string();
-            out.entry(section.clone()).or_default();
-            continue;
-        }
-        if let Some((k, v)) = line.split_once('=').or_else(|| line.split_once(':')) {
-            out.entry(section.clone())
-                .or_default()
-                .insert(k.trim().to_string(), v.trim().to_string());
-        }
-    }
-    out
-}
-
 /// The configuration files, lowest precedence first: the machine's,
 /// the user's, the working directory's. A component reads none
 /// (`machine`).
@@ -226,23 +178,24 @@ pub fn files_in(home: Option<PathBuf>, cwd: Option<PathBuf>) -> Vec<PathBuf> {
     out
 }
 
-/// The credentials for `endpoint` (the program's setting, if it gives one)
-/// from `env` (a variable's value) and the files `files`, lowest
-/// precedence first. Missing a key is an error naming where it was looked
-/// for.
-pub fn resolve(
-    endpoint: Option<&str>,
-    env: &dyn Fn(&str) -> Option<String>,
-    files: &[PathBuf],
-) -> Result<Credentials> {
-    resolve_holding(endpoint, None, env, files)
+/// What the host holds for the provider, each by the name it opens it
+/// by: the program's token, the signature dform.toml grants it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Held<'a> {
+    /// The program's `token` (`bearer:ovh.N`): in place of any other form.
+    pub token: Option<&'a str>,
+    /// The operator's keys the host signs with (`signed:NAME`), as
+    /// the Configure names them.
+    pub signature: Option<&'a str>,
 }
 
-/// [`resolve`], the token the host holds as the program's `token`
-/// (`held`, its name) in place of any credentials `env` and `files` give.
-pub fn resolve_holding(
+/// The credentials for `endpoint` (the program's setting, if it gives one)
+/// from what the host holds (`held`), `env` (a variable's value) and the
+/// files `files`, lowest precedence first. None of them, or a missing
+/// key, is an error naming where they were looked for.
+pub fn resolve(
     endpoint: Option<&str>,
-    held: Option<&str>,
+    held: Held,
     env: &dyn Fn(&str) -> Option<String>,
     files: &[PathBuf],
 ) -> Result<Credentials> {
@@ -254,11 +207,11 @@ pub fn resolve_holding(
             ENDPOINTS.map(|(n, _)| n).join(", ")
         );
     };
-    let auth = match held {
+    let auth = match held.token {
         Some(name) => Auth::Held {
             name: name.to_string(),
         },
-        None => sources.auth(&endpoint, &url)?,
+        None => sources.auth(&endpoint, &url, held.signature)?,
     };
     Ok(Credentials {
         endpoint,
@@ -295,13 +248,16 @@ impl<'a> Sources<'a> {
 
     /// Where `var` was looked for, for a message.
     fn looked(&self, var: &str) -> String {
-        let files = self
-            .files
+        format!("the environment ({var}) and {}", self.files_list())
+    }
+
+    /// The configuration files, for a message.
+    fn files_list(&self) -> String {
+        self.files
             .iter()
             .map(|f| f.display().to_string())
             .collect::<Vec<_>>()
-            .join(", ");
-        format!("the environment ({var}) and {files}")
+            .join(", ")
     }
 
     /// The endpoint `given`, else the environment's, else the files'
@@ -341,6 +297,29 @@ impl<'a> Sources<'a> {
         }
     }
 
+    /// No form of credentials for `endpoint`: how to give one, naming the
+    /// signing keys where they were found (the host's now, not read here).
+    fn none_given(&self, endpoint: &str) -> String {
+        let found = self.set(endpoint, &KEYS);
+        let found = match found.as_slice() {
+            [] => String::new(),
+            keys => format!(
+                " ({} found: the host holds the keys and signs, not the provider)",
+                keys.join(", ")
+            ),
+        };
+        format!(
+            "no OVH credentials for the endpoint {endpoint}{found}: grant the provider the \
+             host's signature in dform.toml, [providers.ovh] credentials = \
+             [\"signed:environment\"] (OVH_APPLICATION_KEY, OVH_APPLICATION_SECRET and \
+             OVH_CONSUMER_KEY, else ~/.ovh.conf) or [\"signed:NAME\"] (the file \
+             credentials/signed/NAME, an ovh.conf); or give a service account's client_id and \
+             client_secret, or an access_token, under [{endpoint}] in ovh.conf or the \
+             environment ({})",
+            self.files_list()
+        )
+    }
+
     /// Each key of `keys` that is set for `endpoint`, by where it was set.
     fn set(&self, endpoint: &str, keys: &[(&str, &str)]) -> Vec<String> {
         let section = self.conf.get(endpoint);
@@ -353,14 +332,15 @@ impl<'a> Sources<'a> {
     }
 
     /// The one form of credentials set for `endpoint` (at `url`): an
-    /// access token, a service account, or a consumer key's three keys
-    /// when neither is; more than one form is an error naming them.
-    fn auth(&self, endpoint: &str, url: &str) -> Result<Auth> {
-        let three = self.set(endpoint, &KEYS);
+    /// access token, a service account, or the keys the host signs with,
+    /// `signature` (the name dform.toml's grant gives them); more than one
+    /// form is an error naming them, none an error saying how to give one.
+    fn auth(&self, endpoint: &str, url: &str, signature: Option<&str>) -> Result<Auth> {
+        let signed: Vec<String> = signature.map(String::from).into_iter().collect();
         let client = self.set(endpoint, &CLIENT);
         let token = self.set(endpoint, &TOKEN);
         let given: Vec<String> = [
-            ("a consumer key's", &three),
+            ("the host's signature", &signed),
             ("a service account's", &client),
             ("an access token's", &token),
         ]
@@ -375,10 +355,14 @@ impl<'a> Sources<'a> {
                 1 => ("both ", "one or the other"),
                 _ => ("", "one of them"),
             };
+            let grant = match signature {
+                Some(_) => ", or the grant from [providers.ovh] credentials in dform.toml",
+                None => "",
+            };
             bail!(
                 "the credentials for the endpoint {endpoint} give {both}{} and {last}: they are \
                  {which}; remove the ones you do not use from [{endpoint}] in ovh.conf or the \
-                 environment",
+                 environment{grant}",
                 first.join(", ")
             );
         }
@@ -387,12 +371,12 @@ impl<'a> Sources<'a> {
             Auth::Token {
                 access_token: key("OVH_ACCESS_TOKEN", "access_token")?,
             }
-        } else if client.is_empty() {
-            Auth::Keys {
-                application_key: key("OVH_APPLICATION_KEY", "application_key")?,
-                application_secret: key("OVH_APPLICATION_SECRET", "application_secret")?,
-                consumer_key: key("OVH_CONSUMER_KEY", "consumer_key")?,
+        } else if let Some(name) = signature {
+            Auth::Signed {
+                name: name.to_string(),
             }
+        } else if client.is_empty() {
+            bail!("{}", self.none_given(endpoint))
         } else {
             let Some(token_url) = token_url(endpoint, url) else {
                 bail!(
@@ -410,7 +394,8 @@ impl<'a> Sources<'a> {
     }
 }
 
-/// The three keys' variables and names in ovh.conf.
+/// The three keys' variables and names in ovh.conf: the host's to sign
+/// with, never read here (a credential `signed:..`).
 const KEYS: [(&str, &str); 3] = [
     ("OVH_APPLICATION_KEY", "application_key"),
     ("OVH_APPLICATION_SECRET", "application_secret"),
@@ -438,15 +423,27 @@ mod tests {
         d
     }
 
-    /// The three keys of the keys form.
-    fn keys(c: &Credentials) -> (&str, &str, &str) {
+    /// Nothing held for the provider in the host.
+    const NONE: Held = Held {
+        token: None,
+        signature: None,
+    };
+
+    /// The keys the host signs with, as dform.toml grants them.
+    const SIGNED: Held = Held {
+        token: None,
+        signature: Some("signed:lab"),
+    };
+
+    /// The service account's id and secret.
+    fn account(c: &Credentials) -> (&str, &str) {
         match &c.auth {
-            Auth::Keys {
-                application_key,
-                application_secret,
-                consumer_key,
-            } => (application_key, application_secret, consumer_key),
-            a => panic!("not the keys form: {a:?}"),
+            Auth::OAuth2 {
+                client_id,
+                client_secret,
+                ..
+            } => (client_id, client_secret),
+            a => panic!("not a service account: {a:?}"),
         }
     }
 
@@ -456,22 +453,20 @@ mod tests {
 endpoint=ovh-ca
 
 [ovh-ca]
-application_key=ak-ca
-application_secret = as-ca
-consumer_key=ck-ca
+client_id=id-ca
+client_secret = cs-ca
 
 [ovh-eu]
-application_key=ak-eu
-application_secret=as-eu
-consumer_key=ck-eu
+client_id=id-eu
+client_secret=cs-eu
 ";
 
     #[test]
     fn reads_the_ini_sections() {
         let ini = parse_ini(CONF);
         assert_eq!(ini["default"]["endpoint"], "ovh-ca");
-        assert_eq!(ini["ovh-ca"]["application_secret"], "as-ca");
-        assert_eq!(ini["ovh-eu"].len(), 3);
+        assert_eq!(ini["ovh-ca"]["client_secret"], "cs-ca");
+        assert_eq!(ini["ovh-eu"].len(), 2);
     }
 
     #[test]
@@ -479,13 +474,13 @@ consumer_key=ck-eu
         let d = scratch("default");
         std::fs::write(d.join("ovh.conf"), CONF).unwrap();
         let none = |_: &str| None;
-        let c = resolve(None, &none, &[d.join("ovh.conf")]).unwrap();
+        let c = resolve(None, NONE, &none, &[d.join("ovh.conf")]).unwrap();
         assert_eq!(c.endpoint, "ovh-ca");
         assert_eq!(c.url, "https://ca.api.ovh.com/1.0");
-        assert_eq!(keys(&c), ("ak-ca", "as-ca", "ck-ca"));
+        assert_eq!(account(&c), ("id-ca", "cs-ca"));
         // The program's endpoint picks the section.
-        let c = resolve(Some("ovh-eu"), &none, &[d.join("ovh.conf")]).unwrap();
-        assert_eq!(keys(&c).0, "ak-eu");
+        let c = resolve(Some("ovh-eu"), NONE, &none, &[d.join("ovh.conf")]).unwrap();
+        assert_eq!(account(&c).0, "id-eu");
         assert_eq!(c.url, "https://eu.api.ovh.com/1.0");
     }
 
@@ -495,44 +490,95 @@ consumer_key=ck-eu
         std::fs::write(d.join("ovh.conf"), CONF).unwrap();
         let env = |k: &str| match k {
             "OVH_ENDPOINT" => Some("ovh-eu".to_string()),
-            "OVH_CONSUMER_KEY" => Some("ck-env".to_string()),
+            "OVH_CLIENT_SECRET" => Some("cs-env".to_string()),
             _ => None,
         };
-        let c = resolve(None, &env, &[d.join("ovh.conf")]).unwrap();
+        let c = resolve(None, NONE, &env, &[d.join("ovh.conf")]).unwrap();
         assert_eq!(c.endpoint, "ovh-eu");
-        assert_eq!((keys(&c).0, keys(&c).2), ("ak-eu", "ck-env"));
+        assert_eq!(account(&c), ("id-eu", "cs-env"));
     }
 
     #[test]
     fn a_later_file_overrides_an_earlier_one_key_by_key() {
         let d = scratch("layers");
         std::fs::write(d.join("etc.conf"), CONF).unwrap();
-        std::fs::write(d.join("home.conf"), "[ovh-ca]\nconsumer_key=ck-home\n").unwrap();
+        std::fs::write(d.join("home.conf"), "[ovh-ca]\nclient_secret=cs-home\n").unwrap();
         let none = |_: &str| None;
-        let c = resolve(None, &none, &[d.join("etc.conf"), d.join("home.conf")]).unwrap();
-        assert_eq!((keys(&c).0, keys(&c).2), ("ak-ca", "ck-home"));
+        let files = [d.join("etc.conf"), d.join("home.conf")];
+        let c = resolve(None, NONE, &none, &files).unwrap();
+        assert_eq!(account(&c), ("id-ca", "cs-home"));
+    }
+
+    /// The keys are the host's: granted, the provider signs with them by
+    /// their name, and never reads the three keys of a file or the
+    /// environment.
+    #[test]
+    fn the_host_signs_with_the_granted_keys() {
+        let d = scratch("signed");
+        std::fs::write(
+            d.join("ovh.conf"),
+            "[ovh-ca]\napplication_key=a\napplication_secret=s\nconsumer_key=c\n",
+        )
+        .unwrap();
+        let none = |_: &str| None;
+        let c = resolve(Some("ovh-ca"), SIGNED, &none, &[d.join("ovh.conf")]).unwrap();
+        assert_eq!(
+            c.auth,
+            Auth::Signed {
+                name: "signed:lab".into()
+            }
+        );
+        // The program's token is used in place of any other form.
+        let held = Held {
+            token: Some("bearer:ovh.1"),
+            ..SIGNED
+        };
+        let c = resolve(Some("ovh-ca"), held, &none, &[]).unwrap();
+        assert_eq!(
+            c.auth,
+            Auth::Held {
+                name: "bearer:ovh.1".into()
+            }
+        );
     }
 
     #[test]
     fn what_is_missing_is_named() {
         let d = scratch("missing");
         let none = |_: &str| None;
-        let e = resolve(None, &none, &[d.join("ovh.conf")])
+        let e = resolve(None, NONE, &none, &[d.join("ovh.conf")])
             .unwrap_err()
             .to_string();
         assert!(
             e.contains("no OVH endpoint") && e.contains("OVH_ENDPOINT"),
             "{e}"
         );
-        std::fs::write(d.join("ovh.conf"), "[ovh-ca]\napplication_key=a\n").unwrap();
-        let e = resolve(Some("ovh-ca"), &none, &[d.join("ovh.conf")])
+        let e = resolve(Some("ovh-ca"), NONE, &none, &[d.join("ovh.conf")])
             .unwrap_err()
             .to_string();
         assert!(
-            e.contains("application_secret") && e.contains("[ovh-ca]"),
+            e.starts_with(
+                "no OVH credentials for the endpoint ovh-ca: grant the provider the host's \
+                 signature in dform.toml, [providers.ovh] credentials = \
+                 [\"signed:environment\"]"
+            ) && e.ends_with(&format!("({})", d.join("ovh.conf").display())),
             "{e}"
         );
-        let e = resolve(Some("ovh-mars"), &none, &[])
+        // The three keys where the provider used to read them are named:
+        // the host's now.
+        std::fs::write(d.join("ovh.conf"), "[ovh-ca]\napplication_key=a\n").unwrap();
+        let env = |k: &str| (k == "OVH_CONSUMER_KEY").then(|| "c".to_string());
+        let e = resolve(Some("ovh-ca"), NONE, &env, &[d.join("ovh.conf")])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.starts_with(
+                "no OVH credentials for the endpoint ovh-ca (application_key, OVH_CONSUMER_KEY \
+                 found: the host holds the keys and signs, not the provider): grant"
+            ),
+            "{e}"
+        );
+        let e = resolve(Some("ovh-mars"), NONE, &none, &[])
             .unwrap_err()
             .to_string();
         assert!(e.contains("ovh-mars") && e.contains("ovh-ca"), "{e}");
@@ -552,22 +598,20 @@ consumer_key=ck-eu
         let c = Credentials {
             endpoint: "ovh-ca".into(),
             url: "u".into(),
-            auth: Auth::Keys {
-                application_key: "ak".into(),
-                application_secret: "hunter2".into(),
-                consumer_key: "ck".into(),
-            },
-        };
-        assert!(!format!("{c:?}").contains("hunter2"));
-        let c = Credentials {
             auth: Auth::OAuth2 {
                 client_id: "id".into(),
                 client_secret: "hunter3".into(),
                 token_url: "t".into(),
             },
-            ..c
         };
         assert!(!format!("{c:?}").contains("hunter3"));
+        let c = Credentials {
+            auth: Auth::Token {
+                access_token: "hunter4".into(),
+            },
+            ..c
+        };
+        assert!(!format!("{c:?}").contains("hunter4"));
     }
 
     /// A section with a service account's client id and secret is the
@@ -581,7 +625,7 @@ consumer_key=ck-eu
         )
         .unwrap();
         let none = |_: &str| None;
-        let c = resolve(Some("ovh-ca"), &none, &[d.join("ovh.conf")]).unwrap();
+        let c = resolve(Some("ovh-ca"), NONE, &none, &[d.join("ovh.conf")]).unwrap();
         assert_eq!(
             c.auth,
             Auth::OAuth2 {
@@ -598,7 +642,7 @@ consumer_key=ck-eu
             "OVH_CLIENT_SECRET" => Some("env-secret".to_string()),
             _ => None,
         };
-        let c = resolve(Some("http://127.0.0.1:9/1.0"), &env, &[]).unwrap();
+        let c = resolve(Some("http://127.0.0.1:9/1.0"), NONE, &env, &[]).unwrap();
         assert!(
             matches!(&c.auth, Auth::OAuth2 { client_id, token_url, .. }
                 if client_id == "env-id" && token_url == "http://127.0.0.1:9/auth/oauth2/token"),
@@ -606,7 +650,7 @@ consumer_key=ck-eu
         );
         // Half a service account names the other half.
         std::fs::write(d.join("ovh.conf"), "[ovh-ca]\nclient_id=sa-id\n").unwrap();
-        let e = resolve(Some("ovh-ca"), &none, &[d.join("ovh.conf")])
+        let e = resolve(Some("ovh-ca"), NONE, &none, &[d.join("ovh.conf")])
             .unwrap_err()
             .to_string();
         assert!(
@@ -614,7 +658,7 @@ consumer_key=ck-eu
             "{e}"
         );
         // An endpoint without OAuth2 says so.
-        let e = resolve(Some("kimsufi-eu"), &env, &[])
+        let e = resolve(Some("kimsufi-eu"), NONE, &env, &[])
             .unwrap_err()
             .to_string();
         assert!(e.contains("kimsufi-eu takes no service account"), "{e}");
@@ -642,7 +686,7 @@ consumer_key=ck-eu
         let d = scratch("token");
         std::fs::write(d.join("ovh.conf"), "[kimsufi-eu]\naccess_token=tok\n").unwrap();
         let none = |_: &str| None;
-        let c = resolve(Some("kimsufi-eu"), &none, &[d.join("ovh.conf")]).unwrap();
+        let c = resolve(Some("kimsufi-eu"), NONE, &none, &[d.join("ovh.conf")]).unwrap();
         assert_eq!(
             c.auth,
             Auth::Token {
@@ -651,7 +695,7 @@ consumer_key=ck-eu
         );
         assert!(!format!("{c:?}").contains("tok\""), "{c:?}");
         let env = |k: &str| (k == "OVH_ACCESS_TOKEN").then(|| "env-tok".to_string());
-        let c = resolve(Some("ovh-ca"), &env, &[]).unwrap();
+        let c = resolve(Some("ovh-ca"), NONE, &env, &[]).unwrap();
         assert_eq!(
             c.auth,
             Auth::Token {
@@ -660,41 +704,37 @@ consumer_key=ck-eu
         );
         std::fs::write(
             d.join("ovh.conf"),
-            "[ovh-ca]\nconsumer_key=c\nclient_id=i\nclient_secret=s\n",
+            "[ovh-ca]\nclient_id=i\nclient_secret=s\n",
         )
         .unwrap();
-        let e = resolve(Some("ovh-ca"), &env, &[d.join("ovh.conf")])
+        let e = resolve(Some("ovh-ca"), SIGNED, &env, &[d.join("ovh.conf")])
             .unwrap_err()
             .to_string();
         assert_eq!(
             e,
-            "the credentials for the endpoint ovh-ca give a consumer key's (consumer_key), a \
-             service account's (client_id, client_secret) and an access token's \
-             (OVH_ACCESS_TOKEN): they are one of them; remove the ones you do not use from \
-             [ovh-ca] in ovh.conf or the environment"
+            "the credentials for the endpoint ovh-ca give the host's signature \
+             (signed:lab), a service account's (client_id, client_secret) and an access \
+             token's (OVH_ACCESS_TOKEN): they are one of them; remove the ones you do not use \
+             from [ovh-ca] in ovh.conf or the environment, or the grant from [providers.ovh] \
+             credentials in dform.toml"
         );
     }
 
-    /// Both forms in one section is an error naming each key and where
-    /// it was given.
+    /// Two forms is an error naming each key and where it was given.
     #[test]
     fn both_forms_is_an_error_naming_the_two() {
         let d = scratch("both");
-        std::fs::write(
-            d.join("ovh.conf"),
-            "[ovh-ca]\napplication_key=a\napplication_secret=s\nconsumer_key=c\nclient_id=i\n",
-        )
-        .unwrap();
+        std::fs::write(d.join("ovh.conf"), "[ovh-ca]\nclient_id=i\n").unwrap();
         let env = |k: &str| (k == "OVH_CLIENT_SECRET").then(|| "x".to_string());
-        let e = resolve(Some("ovh-ca"), &env, &[d.join("ovh.conf")])
+        let e = resolve(Some("ovh-ca"), SIGNED, &env, &[d.join("ovh.conf")])
             .unwrap_err()
             .to_string();
         assert_eq!(
             e,
-            "the credentials for the endpoint ovh-ca give both a consumer key's \
-             (application_key, application_secret, consumer_key) and a service account's \
-             (client_id, OVH_CLIENT_SECRET): they are one or the other; remove the ones you do \
-             not use from [ovh-ca] in ovh.conf or the environment"
+            "the credentials for the endpoint ovh-ca give both the host's signature \
+             (signed:lab) and a service account's (client_id, OVH_CLIENT_SECRET): they \
+             are one or the other; remove the ones you do not use from [ovh-ca] in ovh.conf or \
+             the environment, or the grant from [providers.ovh] credentials in dform.toml"
         );
     }
 }

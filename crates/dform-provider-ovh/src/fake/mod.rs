@@ -29,6 +29,7 @@ mod user;
 mod volume;
 
 use cassette::{shaped, shaped_at};
+use dform_core::plugin::credentials;
 use http::{resolve, serve};
 use instance::Port;
 use serde_json::{Value as Json, json};
@@ -49,12 +50,14 @@ pub const DESCRIPTION: &str = "lab";
 /// The nameservers the API says serve every zone it hosts.
 pub const NAMESERVERS: [&str; 2] = ["dns200.anycast.me", "ns200.anycast.me"];
 
-/// One call the server answered: method, path (with its query), body.
+/// One call the server answered: method, path (with its query), body,
+/// and the headers it came with (lower-case names).
 #[derive(Debug, Clone)]
 pub struct Seen {
     pub method: String,
     pub path: String,
     pub body: Json,
+    pub headers: BTreeMap<String, String>,
 }
 
 #[derive(Default)]
@@ -109,6 +112,9 @@ pub struct World {
     /// signed call stamped more than [`TIME_WINDOW`] away from it is
     /// refused, as the real API refuses a stale timestamp.
     skew: i64,
+    /// Its clock stopped at this time (`clock_at`), in place of the
+    /// local one and its skew.
+    stopped: Option<i64>,
     /// How many times `/auth/time` was asked.
     times_asked: usize,
     /// The bearer tokens minted and still good, and how many were minted.
@@ -164,13 +170,13 @@ fn host_of(cidr: &str, n: u32) -> Option<String> {
 }
 
 /// The provider's code run in this process (a test's) sends its requests
-/// through dform's own host here, as it would through dform's: set once,
-/// as the first fake starts.
+/// through dform's own host here, as it would through dform's, with the
+/// provider's signer: set once, as the first fake starts.
 fn host() {
     use dform_core::plugin::host::Grants;
-    let _ = dform_sdk::set_host(Box::new(dform_host::services::Services::new(Grants::none(
-        "ovh",
-    ))));
+    let services = dform_host::services::Services::new(Grants::none("ovh"))
+        .with_signer(Arc::new(dform_provider_ovh_signer::Ovh));
+    let _ = dform_sdk::set_host(Box::new(services));
 }
 
 impl Server {
@@ -231,6 +237,11 @@ impl Server {
     /// Its clock runs `secs` ahead of the local one (behind, negative).
     pub fn skew(&self, secs: i64) {
         self.world().skew = secs;
+    }
+
+    /// Its clock reads `time`, seconds since the epoch, and stays there.
+    pub fn clock_at(&self, time: i64) {
+        self.world().stopped = Some(time);
     }
 
     /// How many times its clock was asked (`GET /auth/time`), which
@@ -445,7 +456,43 @@ impl Server {
         id
     }
 
-    /// The environment that points the provider at this server.
+    /// Its endpoint and keys, an `ovh.conf` section's lines, held in this
+    /// process for the provider `ovh` (the in-process host's) as dform
+    /// holds a `signed` credential the program gives: a Configure names it
+    /// (`"credentials": {"signed": NAME}`), the provider's signer makes the
+    /// material of it in place of its file, and the host signs each call
+    /// with that, until the holding is dropped.
+    pub fn signature(&self) -> credentials::Holding {
+        let file = format!(
+            "endpoint={}\napplication_key={APPLICATION_KEY}\napplication_secret=\
+             {APPLICATION_SECRET}\nconsumer_key={CONSUMER_KEY}\n",
+            self.endpoint
+        );
+        let parts = [(
+            "keys".to_string(),
+            credentials::Secret::new(file.into_bytes()),
+        )];
+        credentials::hold(credentials::Kind::Signed, "ovh", parts.into())
+    }
+
+    /// A client of this server, each call signed by this process's host
+    /// with its keys ([`Server::signature`]).
+    pub fn client(&self) -> crate::api::Client {
+        let held = self.signature();
+        let creds = crate::config::Credentials {
+            endpoint: self.endpoint.clone(),
+            url: self.endpoint.clone(),
+            auth: crate::config::Auth::Signed {
+                name: held.name().to_string(),
+            },
+        };
+        crate::api::Client::opened(creds).expect("the host opens the fake's keys")
+    }
+
+    /// The environment that points the provider at this server: its
+    /// keys are `signed:environment`'s, which the host reads where
+    /// dform.toml grants it (`ovh = { path = "..", credentials =
+    /// ["signed:environment"] }`).
     pub fn env(&self) -> Vec<(&'static str, String)> {
         vec![
             ("OVH_ENDPOINT", self.endpoint.clone()),
@@ -490,6 +537,7 @@ impl World {
         path: &str,
         target: &str,
         query: &BTreeMap<String, String>,
+        headers: &BTreeMap<String, String>,
         body: Json,
     ) -> (u16, Json) {
         if let Some(s) = self.fail_next(&format!("{method} {path}")) {
@@ -518,6 +566,7 @@ impl World {
             method: method.to_string(),
             path: target.strip_prefix("/1.0").unwrap_or(target).to_string(),
             body: body.clone(),
+            headers: headers.clone(),
         });
         self.answer(method, path, query, &body)
     }

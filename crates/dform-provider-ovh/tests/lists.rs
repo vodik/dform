@@ -7,7 +7,6 @@
 use dform_core::plugin::backend::{self, Call, Reply};
 use dform_core::plugin::{pb, wire};
 use dform_provider_ovh::api::Client;
-use dform_provider_ovh::config;
 use dform_provider_ovh::fake::{self, Server};
 use dform_provider_ovh::ovh::Ovh;
 use serde_json::{Value as Json, json};
@@ -21,16 +20,17 @@ fn world() -> (Server, Client) {
     let server = Server::start();
     server.build_polls(0);
     server.ip_lag(0);
-    let env = lookup(server.env());
-    let client = Client::new(config::resolve(Some(&server.endpoint), &env, &[]).unwrap());
+    let client = server.client();
     (server, client)
 }
 
 /// The provider, configured for `server`'s project: one session.
 fn provider(server: &Server) -> Ovh {
     let ovh = Ovh::new();
+    let held = server.signature();
     dform_sdk::block_on(ovh.configure_with(
-        &json!({"settings": {"endpoint": server.endpoint, "project": fake::PROJECT}}),
+        &json!({"settings": {"endpoint": server.endpoint, "project": fake::PROJECT},
+                "credentials": {"signed": held.name()}}),
         &lookup(server.env()),
         &[],
     ))

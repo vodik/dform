@@ -1,0 +1,23 @@
+[package]
+name = "dform-provider-ovh-signer"
+version = "0.1.0"
+license = "Apache-2.0"
+edition = "2024"
+publish = false
+
+# The OVH provider's signer (dform-signer): the operator's application
+# keys made into a `signed` credential's material, and each request signed
+# with them, as OVH's clients sign one. dform's host runs it apart from the
+# provider: built as a component (`cargo build --target wasm32-wasip3
+# --features component`, `cargo xtask components`) that imports nothing,
+# or in the native provider's process (`dform-provider-ovh`).
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+component = ["dform-signer/component"]
+
+[dependencies]
+dform-signer = { path = "../../dform-signer" }
+# The request signature: SHA-1 over the signed request.
+sha1 = { version = "0.10", default-features = false }

@@ -10,8 +10,10 @@
 //! rule's): dform built and copied to `DIR/bin`, the providers to
 //! `DIR/lib/dform/providers`. dform is built with the wasm host (`wasm`)
 //! and the features given; a provider built as a wasm provider is
-//! installed as one, `dform-provider-NAME.wasm`, the others as their
-//! executables, `dform-provider-NAME`.
+//! installed as one, `dform-provider-NAME.wasm`, with its signer when it
+//! has one beside it (`dform-provider-NAME_signer.wasm`, which the wasm
+//! host looks for), the others as their executables,
+//! `dform-provider-NAME`.
 
 use crate::{Component, cargo, target_dir};
 use anyhow::{Context, Result, bail};
@@ -28,18 +30,20 @@ enum Build {
     Native,
 }
 
-/// A built-in provider: its name and how it is installed.
+/// A built-in provider: its name, how it is installed, and whether it
+/// has a signer (`crates/dform-provider-NAME/signer`), which a wasm
+/// provider's install places beside it.
 #[derive(Debug, Clone, Copy)]
-struct Provider(&'static str, Build);
+struct Provider(&'static str, Build, bool);
 
 /// Every built-in provider (a `crates/dform-provider-NAME` but the fake,
 /// which tests run).
 const PROVIDERS: [Provider; 5] = [
-    Provider("k8s", Build::Wasm),
-    Provider("ovh", Build::Wasm),
-    Provider("postgres", Build::Native),
-    Provider("tailscale", Build::Native),
-    Provider("vault", Build::Native),
+    Provider("k8s", Build::Wasm, false),
+    Provider("ovh", Build::Wasm, true),
+    Provider("postgres", Build::Native, false),
+    Provider("tailscale", Build::Native, false),
+    Provider("vault", Build::Native, false),
 ];
 
 impl Provider {
@@ -62,6 +66,20 @@ impl Provider {
             Build::Wasm => source::wasm(self.0),
             Build::Native => source::executable(self.0),
         }
+    }
+
+    /// A wasm provider's signer: its package, and its file's name
+    /// beside the provider's (`NAME_signer.wasm` beside `NAME.wasm`).
+    fn signer(self) -> Option<(String, String)> {
+        if !(self.2 && self.1 == Build::Wasm) {
+            return None;
+        }
+        let file = self.file();
+        let stem = file.strip_suffix(".wasm").unwrap_or(&file);
+        Some((
+            format!("{}-signer", self.package()),
+            format!("{stem}_signer.wasm"),
+        ))
     }
 
     /// The built-in providers installed as `build`.
@@ -116,6 +134,9 @@ impl Install {
         cargo(&native)?;
         for p in Provider::each(Build::Wasm) {
             Component::of(&p.package()).build()?;
+            if let Some((signer, _)) = p.signer() {
+                Component::of(&signer).build()?;
+            }
         }
         for to in place(&target_dir(), &dir)? {
             println!("installed {}", to.display());
@@ -178,14 +199,18 @@ impl Install {
 /// The built providers, from `target`, copied into `dir` under the names
 /// dform looks for; the copies.
 fn place(target: &Path, dir: &Path) -> Result<Vec<PathBuf>> {
-    PROVIDERS
-        .iter()
-        .map(|p| {
-            let to = dir.join(p.file());
-            copy(&p.built(target), &to)?;
-            Ok(to)
-        })
-        .collect()
+    let mut placed = Vec::new();
+    for p in PROVIDERS {
+        let to = dir.join(p.file());
+        copy(&p.built(target), &to)?;
+        placed.push(to);
+        if let Some((signer, file)) = p.signer() {
+            let to = dir.join(file);
+            copy(&Component::of(&signer).file(target), &to)?;
+            placed.push(to);
+        }
+    }
+    Ok(placed)
 }
 
 /// `from` copied to `to`, its permissions with it, `to`'s directory made.
@@ -260,14 +285,23 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let scratch = scratch("place");
         let (target, dir) = (scratch.join("target"), scratch.join("providers"));
-        for p in PROVIDERS {
-            let built = p.built(&target);
+        let signers = PROVIDERS.iter().filter_map(|p| p.signer());
+        let built = PROVIDERS
+            .iter()
+            .map(|p| p.built(&target))
+            .chain(signers.map(|(s, _)| Component::of(&s).file(&target)));
+        for built in built {
             std::fs::create_dir_all(built.parent().unwrap()).unwrap();
             std::fs::write(&built, b"\0asm").unwrap();
             std::fs::set_permissions(&built, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let placed = place(&target, &dir).unwrap();
-        assert_eq!(placed.len(), PROVIDERS.len());
+        // The OVH provider's signer beside it, where the wasm host looks.
+        assert!(
+            placed.contains(&dir.join("dform-provider-ovh_signer.wasm")),
+            "{placed:?}"
+        );
+        assert_eq!(placed.len(), PROVIDERS.len() + 1);
         let found = Lookup::default()
             .with(Place::UserData, dir.clone())
             .installed();
@@ -288,7 +322,8 @@ mod tests {
             .lines()
             .filter_map(|l| l.trim().strip_prefix("\"crates/dform-provider-"))
             .filter_map(|l| l.strip_suffix("\","))
-            .filter(|name| *name != "fake")
+            // A provider's signer is its own (`ovh/signer`).
+            .filter(|name| *name != "fake" && !name.contains('/'))
             .collect();
         crates.sort();
         crates.dedup();
