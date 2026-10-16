@@ -11,6 +11,8 @@
 //! it (a module never reads its user's names, R-205); a component inside
 //! the scope its block is written in.
 
+pub mod query;
+
 use super::node::{ItemId, Name};
 use crate::syntax::SyntaxNode;
 use slotmap::{SecondaryMap, SlotMap};
