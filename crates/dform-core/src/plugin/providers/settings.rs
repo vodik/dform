@@ -11,6 +11,17 @@ use anyhow::{Context, Result};
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// The settings the program last configured a link with: as they are
+/// kept to tell a change ([`Providers::settings_of`]: a secret as its
+/// label and where it is held), and as the program gave them, with the
+/// objects their secrets are held by, to reveal them again for a
+/// Configure that resends them (R-126's).
+pub(super) struct Given {
+    kept: Json,
+    value: Value,
+    identity: BTreeMap<(String, String), String>,
+}
+
 impl Providers {
     /// Configure each provider the program configures
     /// (`provider_config(Name, Settings)` in `facts`) whose settings are
@@ -60,7 +71,7 @@ impl Providers {
             if self.secrets.standins().carries(&kept) {
                 continue;
             }
-            if self.settings.borrow().get(&i) == Some(&kept) {
+            if self.settings.borrow().get(&i).map(|g| &g.kept) == Some(&kept) {
                 continue;
             }
             let mut shown = Vec::new();
@@ -72,24 +83,15 @@ impl Providers {
             let account = self
                 .configure_link(i, config)
                 .with_context(|| format!("configure provider {name} from provider_config"))?;
-            // An account that is a revealed secret prints as its label.
-            let secret = account.as_ref().and_then(|a| {
-                shown
-                    .iter()
-                    .find(|(_, s)| s.expose() == a.as_bytes())
-                    .map(|(l, _)| l.clone())
-            });
-            match secret {
-                Some(l) => self.secret_accounts.borrow_mut().insert(i, l),
-                None => self.secret_accounts.borrow_mut().remove(&i),
-            };
-            let mut accounts = self.accounts.borrow_mut();
-            match account {
-                Some(a) => accounts.insert(i, a),
-                None => accounts.remove(&i),
-            };
-            drop(accounts);
-            self.settings.borrow_mut().insert(i, kept);
+            self.account_answered(i, account, &shown);
+            self.settings.borrow_mut().insert(
+                i,
+                Given {
+                    kept,
+                    value: v.clone(),
+                    identity: identity.clone(),
+                },
+            );
             self.awaiting.borrow_mut().remove(&i);
             self.forget(i);
             if self.loaded.get().is_some() {
@@ -99,6 +101,32 @@ impl Providers {
             changed.push(name.clone());
         }
         Ok(changed)
+    }
+
+    /// The account link `i`'s Configure answered, as the provider tells
+    /// it; one that is a secret revealed into its settings (`shown`)
+    /// prints as its label.
+    fn account_answered(
+        &self,
+        i: usize,
+        account: Option<String>,
+        shown: &[(String, crate::plugin::credentials::Secret)],
+    ) {
+        let secret = account.as_ref().and_then(|a| {
+            shown
+                .iter()
+                .find(|(_, s)| s.expose() == a.as_bytes())
+                .map(|(l, _)| l.clone())
+        });
+        match secret {
+            Some(l) => self.secret_accounts.borrow_mut().insert(i, l),
+            None => self.secret_accounts.borrow_mut().remove(&i),
+        };
+        let mut accounts = self.accounts.borrow_mut();
+        match account {
+            Some(a) => accounts.insert(i, a),
+            None => accounts.remove(&i),
+        };
     }
 
     /// Settings as they are kept to tell a change: every value as it is,
@@ -140,10 +168,11 @@ impl Providers {
     /// The kinds of `types` (none in any schema, their namespace's
     /// provider one the program configures or a cluster's, [`Providers::reached`]) a
     /// CRD the program made defines (R-126): each such provider is
-    /// configured again with the settings it has (none, one the environment
-    /// configures), told the kinds (`kinds`, which it may wait a moment for the
-    /// cluster to serve), and what it serves now learned. Each kind is
-    /// asked for once a run. Whether the schema learned any.
+    /// configured again with the settings it has, each secret in them
+    /// revealed again (none, one the environment configures), told the
+    /// kinds (`kinds`, which it may wait a moment for the cluster to
+    /// serve), and what it serves now learned. Each kind is asked for once
+    /// a run. Whether the schema learned any.
     pub fn relearn(&self, types: &BTreeSet<String>) -> Result<bool> {
         let mut by_link: BTreeMap<usize, Vec<String>> = BTreeMap::new();
         for t in types {
@@ -163,8 +192,8 @@ impl Providers {
         for (i, kinds) in by_link {
             self.relearned.borrow_mut().extend(kinds.iter().cloned());
             let mut config = self.bases.get(i).cloned().unwrap_or_else(|| json!({}));
-            if let Some(settings) = self.settings.borrow().get(&i) {
-                config["settings"] = settings.clone();
+            if let Some(settings) = self.given(i)? {
+                config["settings"] = settings;
             }
             config["kinds"] = json!(kinds);
             self.configure_link(i, config)
@@ -180,6 +209,19 @@ impl Providers {
             grew |= learned;
         }
         Ok(grew)
+    }
+
+    /// The settings the program last configured link `i` with, as
+    /// Configure takes them: each secret revealed again by the provider
+    /// that holds it ([`Providers::revealed`]).
+    fn given(&self, i: usize) -> Result<Option<Json>> {
+        let settings = self.settings.borrow();
+        let Some(g) = settings.get(&i) else {
+            return Ok(None);
+        };
+        self.revealed(&g.value, &g.identity, &mut Vec::new())
+            .with_context(|| format!("configure provider {} again", self.names[i]))
+            .map(Some)
     }
 }
 

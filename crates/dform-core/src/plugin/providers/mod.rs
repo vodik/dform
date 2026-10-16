@@ -186,7 +186,7 @@ pub struct Providers {
     /// The links the program configures itself: `awaiting` as it started.
     by_program: BTreeSet<usize>,
     /// The settings each link was last configured with from the program.
-    settings: RefCell<BTreeMap<usize, Json>>,
+    settings: RefCell<BTreeMap<usize, settings::Given>>,
     /// The kinds a link was asked to serve again (a CRD made at the last
     /// tick defines them, R-126): each once a run.
     relearned: RefCell<BTreeSet<String>>,

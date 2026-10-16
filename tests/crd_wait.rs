@@ -285,3 +285,39 @@ resource k8s.traefik.middleware large_upload {
         r.stderr
     );
 }
+
+/// The kubeconfig a secret another provider holds (a token the mock as a
+/// plugin makes, as ~/src/ovh-infra's platform holds its kubeconfig): when
+/// apply asks the provider again for the kind a CRD it made defines
+/// (R-126), its settings go with the secret revealed again, never its
+/// label (which the mock refuses, as a provider declaring it a credential
+/// does).
+#[test]
+fn asked_again_the_provider_is_configured_with_its_secret_revealed() {
+    let prog = PROG.replace(
+        "use k8s { kubeconfig = \"kc\",",
+        "use fake { source = \"prov\" }\nresource db.token kc { name = \"kc\" }\n\
+         use k8s { kubeconfig = kc.value,",
+    );
+    assert_ne!(prog, PROG);
+    let s = scratch("crd-wait-secret", &prog);
+    s.write(
+        "providers/fake/schema.df",
+        &(std::fs::read_to_string(common::repo().join("crates/dform-mock/schemas/fake.df"))
+            .unwrap()
+            + "type_provider(db.token, \"fakecloud\")\n\
+               type_attr(db.token, \"name\", \"string\", [\"required\", \"id\"])\n\
+               type_attr(db.token, \"value\", \"string\", [\"computed\", \"sensitive\"])\n\
+               type_mint(db.token, \"value\", \"kc-{name}\")\n"),
+    );
+    std::fs::create_dir_all(s.path("prov")).unwrap();
+    std::os::unix::fs::symlink(
+        common::exe("dform-provider-fake"),
+        s.path("prov/dform-provider-fake"),
+    )
+    .unwrap();
+    dev(&s, &["apply", "--yes"]).success();
+    let w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
+    let mw = &w["resources"]["k8s.traefik.middleware::large_upload"];
+    assert_eq!(mw["computed"]["metadata"]["uid"], "uid-large_upload", "{w}");
+}

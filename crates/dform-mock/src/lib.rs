@@ -289,6 +289,25 @@ fn path_of(config: &Json, k: &str) -> Result<Option<PathBuf>> {
     }
 }
 
+/// Refuse a secret's label in the settings at `at`: dform reveals a secret
+/// into a provider's settings and never sends its label there, as a real
+/// provider (a credential it declares) would refuse it.
+fn no_label(v: &Json, at: &str) -> Result<()> {
+    if dform_core::provider::marker(v).is_some() {
+        bail!("config {at}: a secret's label where its value goes");
+    }
+    match v {
+        Json::Object(m) => m
+            .iter()
+            .try_for_each(|(k, x)| no_label(x, &format!("{at}.{k}"))),
+        Json::Array(xs) => xs
+            .iter()
+            .enumerate()
+            .try_for_each(|(i, x)| no_label(x, &format!("{at}[{i}]"))),
+        _ => Ok(()),
+    }
+}
+
 impl FakeCloud {
     /// `schemas` (names or paths; none is `fake`), `world`, `inventory`,
     /// `chaos`.
@@ -311,6 +330,7 @@ impl FakeCloud {
         // the program's settings name, served once it configures the
         // provider (R-110), as a real cluster's are once it is reached.
         if let Some(settings) = config.get("settings") {
+            no_label(settings, "settings")?;
             for n in strings(settings, "schemas")? {
                 schema = schema.merge(dform_core::schema::load_provider(&n)?)?;
             }
