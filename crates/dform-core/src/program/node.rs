@@ -63,6 +63,46 @@ pub struct Expr {
     pub span: Span,
     pub kind: ExprKind,
     pub hoisted: Option<VarId>,
+    /// How the term is written where its kind does not say: binding
+    /// order reads it (a name alone binds, a tuple matches).
+    pub written: Written,
+}
+
+/// How a term or a pattern is written, where its node's kind does not
+/// keep it: `x` and `(a, b)` lower as what they stand for (a reference
+/// column's read, a list), but a name alone binds where it stands and a
+/// tuple matches, which binding order reads (R-10). The front end reads
+/// it off the source as it makes the node, so no pass reads the text.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Written {
+    /// Anything else, or a node of no source.
+    #[default]
+    Term,
+    /// A name alone: `x`, `db`.
+    Name(Name),
+    /// In parentheses: `(a, b)`.
+    Tuple,
+}
+
+impl Written {
+    /// How the source at `span` is written.
+    pub fn at(span: Span) -> Written {
+        let Some((_, text)) = crate::diag::source_of(span) else {
+            return Written::Term;
+        };
+        let Some(t) = text.get(span.start as usize..span.end as usize) else {
+            return Written::Term;
+        };
+        let name = !t.is_empty()
+            && !t.starts_with(|c: char| c.is_ascii_digit())
+            && t.chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-');
+        match t.starts_with('(') {
+            true => Written::Tuple,
+            false if name => Written::Name(t.to_string()),
+            false => Written::Term,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -400,6 +440,8 @@ pub enum CmpOp {
 pub struct Pattern {
     pub span: Span,
     pub kind: PatternKind,
+    /// How it is written: a tuple's parentheses ([`Written`]).
+    pub written: Written,
 }
 
 #[derive(Debug, Clone)]
@@ -447,7 +489,13 @@ pub enum GoalKind {
     /// `x = e`, `(a, b) = e`, `{ a, ..r } = e`; `p = e[i]` an element
     /// (`value` a `Field` of one `Index` step); `x = R.p` the read itself
     /// (`value` a read in place, [`crate::program::Program::in_place`]).
-    Bind { pat: PatternId, value: ExprId },
+    /// `eq`: where its `=` stands, none where the goal writes none (an
+    /// object pattern's field read).
+    Bind {
+        pat: PatternId,
+        value: ExprId,
+        eq: Option<Span>,
+    },
     /// `a < b`, chained `1 <= x <= 35`; `R.p == c` the read itself (`lhs`
     /// a read in place).
     Compare {
@@ -470,11 +518,13 @@ pub enum GoalKind {
         written: Negated,
     },
     /// `n = count(x)`: an aggregate's binding. `helper` is the `__agg_N`
-    /// number, taken where its rule's body is folded over it.
+    /// number, taken where its rule's body is folded over it; `eq` where
+    /// its `=` stands, as on a `Bind`.
     Fold {
         var: VarId,
         agg: ExprId,
         helper: Option<u32>,
+        eq: Option<Span>,
     },
     /// The goals one written literal lowered to, before the field reads
     /// an object pattern makes after its binding (step 4): a chained

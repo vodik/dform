@@ -127,6 +127,16 @@ impl Program {
         self.items.insert(Item { span, scope, kind })
     }
 
+    /// The term `kind`, written at `span`.
+    pub fn expr_node(&mut self, span: Span, kind: ExprKind) -> ExprId {
+        self.exprs.insert(node::Expr {
+            span,
+            kind,
+            hoisted: None,
+            written: node::Written::at(span),
+        })
+    }
+
     /// Whether `e` is a read a literal tests or binds in place (`R.p ==
     /// c`, `x = k`, `not R.ready`, `has n.k`), its value column the
     /// literal's: a read's node not in term position.

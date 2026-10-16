@@ -41,7 +41,7 @@ impl Binder<'_> {
                     exprs.push(*of);
                 }
             }
-            GoalKind::Bind { pat, value } => {
+            GoalKind::Bind { pat, value, .. } => {
                 pats.push(*pat);
                 exprs.push(*value);
             }

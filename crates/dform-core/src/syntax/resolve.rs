@@ -6411,7 +6411,7 @@ impl<'u> Lowerer<'u> {
                 let g = self.building(rc, span, |b| {
                     let value = b.element_in_place(lid, iid);
                     let pat = b.pattern_of(pid);
-                    b.goal_node(span, GoalKind::Bind { pat, value })
+                    b.bind_goal(span, pat, value)
                 });
                 self.built(g);
                 return Ok(());
@@ -6463,17 +6463,19 @@ impl<'u> Lowerer<'u> {
                     out.extend(pre);
                     out.push(Lit::Pos(a));
                     let e = self.in_place(rc, &res, span).ok_or(Skip)?;
-                    let kind = match binding {
-                        true => GoalKind::Bind {
-                            pat: self.building(rc, span, |b| b.pattern_of(id)),
-                            value: e,
-                        },
-                        false => GoalKind::Compare {
-                            lhs: e,
-                            ops: vec![(CmpOp::Eq, id)],
-                        },
-                    };
-                    let g = self.goal(rc, span, kind);
+                    let g = self.building(rc, span, |b| match binding {
+                        true => {
+                            let pat = b.pattern_of(id);
+                            b.bind_goal(span, pat, e)
+                        }
+                        false => {
+                            let kind = GoalKind::Compare {
+                                lhs: e,
+                                ops: vec![(CmpOp::Eq, id)],
+                            };
+                            b.goal_node(span, kind)
+                        }
+                    });
                     self.built(g);
                     return Ok(());
                 }
@@ -6596,18 +6598,18 @@ impl<'u> Lowerer<'u> {
             }
             let mut goals: Vec<GoalId> = pairs
                 .into_iter()
-                .map(|(op, x, y)| {
-                    let kind = match (op, bind) {
-                        (CmpOp::Eq, true) => GoalKind::Bind {
-                            pat: b.pattern_of(x),
-                            value: y,
-                        },
-                        _ => GoalKind::Compare {
+                .map(|(op, x, y)| match (op, bind) {
+                    (CmpOp::Eq, true) => {
+                        let pat = b.pattern_of(x);
+                        b.bind_goal(span, pat, y)
+                    }
+                    _ => {
+                        let kind = GoalKind::Compare {
                             lhs: x,
                             ops: vec![(op, y)],
-                        },
-                    };
-                    b.goal_node(span, kind)
+                        };
+                        b.goal_node(span, kind)
+                    }
                 })
                 .collect();
             match goals.len() {
@@ -7567,11 +7569,7 @@ impl<'u> Lowerer<'u> {
 
     /// A node of the program at `span`.
     fn node(&mut self, span: Span, kind: ExprKind) -> ExprId {
-        self.program.exprs.insert(crate::program::Expr {
-            span,
-            kind,
-            hoisted: None,
-        })
+        self.program.expr_node(span, kind)
     }
 
     /// The constant string `s`'s node at `span`.

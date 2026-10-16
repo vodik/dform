@@ -85,6 +85,7 @@ impl Builder<'_> {
         self.program.patterns.insert(Pattern {
             span: self.span,
             kind,
+            written: Written::at(self.span),
         })
     }
 }

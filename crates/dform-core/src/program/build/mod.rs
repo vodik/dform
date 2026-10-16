@@ -44,7 +44,7 @@ pub use resources::{BodyLowered, EntryLowered, HeaderLowered, ResourceLowered};
 pub use rules::RuleLowered;
 
 use super::Program;
-use super::node::{Expr, ExprId, ExprKind, Var, VarId};
+use super::node::{ExprId, ExprKind, Var, VarId};
 use crate::ast::Span;
 use std::collections::BTreeMap;
 
@@ -107,11 +107,7 @@ impl<'p> Builder<'p> {
     }
 
     pub(super) fn expr_node(&mut self, kind: ExprKind) -> ExprId {
-        self.program.exprs.insert(Expr {
-            span: self.span,
-            kind,
-            hoisted: None,
-        })
+        self.program.expr_node(self.span, kind)
     }
 
     /// The variable that lowers to `lowered`, one per name.

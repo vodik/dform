@@ -111,7 +111,7 @@ impl Lowerer<'_> {
                         let base = b.variable(&obj);
                         let value = b.path(base, &key);
                         let pat = b.pattern_of(id);
-                        b.goal_node(fspan, GoalKind::Bind { pat, value })
+                        b.bind_goal(fspan, pat, value)
                     });
                     goals.push(g);
                     after.extend(nested);
@@ -124,7 +124,7 @@ impl Lowerer<'_> {
                     let g = self.building(rc, at, |b| {
                         let value = b.form(crate::functions::REST, key_nodes);
                         let pat = b.pattern_of(id);
-                        b.goal_node(at, GoalKind::Bind { pat, value })
+                        b.bind_goal(at, pat, value)
                     });
                     goals.push(g);
                 }
@@ -322,7 +322,7 @@ impl Lowerer<'_> {
         let span = self.span(e);
         let g = self.building(rc, span, |b| {
             let pat = b.pattern_of(p);
-            b.goal_node(span, GoalKind::Bind { pat, value: v })
+            b.bind_goal(span, pat, v)
         });
         self.built(g);
         Ok(())

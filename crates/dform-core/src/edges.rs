@@ -1426,7 +1426,7 @@ impl<'a, 'p> Walk<'a, 'p> {
                 let parts = self.rel_parts(args);
                 self.atom(&rel.name, parts, rel.span, at);
             }
-            GoalKind::Bind { pat, value } => {
+            GoalKind::Bind { pat, value, .. } => {
                 if p.exprs[*value].hoisted.is_none() && self.is_read(*value) {
                     self.read_lit(*value, Part::Pat(*pat), goal.span, at);
                 } else {
@@ -1813,7 +1813,7 @@ impl<'a, 'p> Walk<'a, 'p> {
         let mut out = Vec::new();
         match &p.goals[g].kind {
             GoalKind::Rel { args, .. } => out = self.rel_exprs(args),
-            GoalKind::Bind { pat, value } => {
+            GoalKind::Bind { pat, value, .. } => {
                 if p.exprs[*value].hoisted.is_none() && self.is_read(*value) {
                     out = self.read_args(*value);
                     self.pat_exprs(*pat, &mut out);

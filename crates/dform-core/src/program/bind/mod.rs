@@ -15,10 +15,10 @@
 //! and builds them again in the order it says (the build reads a
 //! variable's type off the `in` that binds it).
 //!
-//! The nodes keep what a term reads, not every token it is written with:
-//! a message quotes the program's text at a node's span (`at this read
-//! `x.p``), and the text says what the node does not keep, a name written
-//! alone and a tuple's parentheses (`written`).
+//! The nodes keep what a term reads and how it is written where that
+//! binds ([`Written`](super::node::Written): a name alone, a tuple; where
+//! a binding's `=` stands); a message quotes the program's text at a
+//! node's span (`at this read `x.p``, a range's ends).
 
 mod mode;
 mod names;
@@ -331,22 +331,11 @@ fn fixpoint(
     }
 }
 
-/// The text `span` names in its source: what a message quotes, and how a
-/// term was written where the node does not keep it.
+/// The text `span` names in its source: what a message quotes.
 fn written(span: Span) -> Option<String> {
     let (_, text) = crate::diag::source_of(span)?;
     text.get(span.start as usize..span.end as usize)
         .map(str::to_string)
-}
-
-/// Whether the term at `span` is written as a name alone.
-fn written_as_name(span: Span) -> bool {
-    written(span).is_some_and(|t| {
-        !t.is_empty()
-            && !t.starts_with(|c: char| c.is_ascii_digit())
-            && t.chars()
-                .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
-    })
 }
 
 /// A relation's name as a read writes it: an enclosing definition's by

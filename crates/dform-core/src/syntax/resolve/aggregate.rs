@@ -98,12 +98,7 @@ impl Lowerer<'_> {
     pub(super) fn fold_goal(&mut self, rc: &Rc, span: Span, v: &str, agg: ExprId) -> GoalId {
         self.building(rc, span, |b| {
             let var = b.var(v);
-            let kind = GoalKind::Fold {
-                var,
-                agg,
-                helper: None,
-            };
-            b.goal_node(span, kind)
+            b.fold_goal(span, var, agg)
         })
     }
 

@@ -193,7 +193,7 @@ impl Builder<'_> {
             let value = b.copy_settled(id);
             let var = b.var(&x);
             let pat = b.pattern_node(PatternKind::Bind(var));
-            Some(b.goal_node(span, GoalKind::Bind { pat, value }))
+            Some(b.bind_goal(span, pat, value))
         })
     }
 

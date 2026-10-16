@@ -143,7 +143,10 @@ impl Lowering<'_> {
                 }
             };
             self.terms_made(NodeId::Goal(g));
-            let GoalKind::Fold { var, agg, helper } = &self.program.goals[fold].kind else {
+            let GoalKind::Fold {
+                var, agg, helper, ..
+            } = &self.program.goals[fold].kind
+            else {
                 unreachable!("a fold")
             };
             let call = self.expr(*agg);
@@ -268,7 +271,7 @@ impl Lowering<'_> {
         let span = g.span;
         match &g.kind {
             GoalKind::Rel { rel, args } => vec![Lit::Pos(self.atom(rel, args))],
-            GoalKind::Bind { pat, value } => {
+            GoalKind::Bind { pat, value, .. } => {
                 // A read bound in place (`x = R.p`, `P = e[i]`, a value's
                 // `k(V)`): the read with the pattern in its value column.
                 if self.program.exprs[*value].hoisted.is_none()

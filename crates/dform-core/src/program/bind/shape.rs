@@ -2,7 +2,7 @@
 //! side that is a pattern), the bodies inside it, and the names it waits
 //! for.
 
-use super::{Binder, DENSE, Inner, Mode, Shape, Use, Way, plain, written, written_as_name};
+use super::{Binder, DENSE, Inner, Mode, Shape, Use, Way, plain, written};
 use crate::ast::Span;
 use crate::program::node::*;
 use crate::value::Value;
@@ -20,7 +20,6 @@ impl Binder<'_> {
     /// What goal `g` binds and needs.
     pub(super) fn shape(&mut self, g: GoalId) -> Shape {
         let goal = &self.program.goals[g];
-        let span = goal.span;
         let mut shape = Shape::default();
         let mut way = Way::default();
         let mut bodies = Vec::new();
@@ -35,10 +34,10 @@ impl Binder<'_> {
                     self.reads(*x, &cmp_by(*op), &mut way, &mut bodies);
                 }
             }
-            GoalKind::Bind { pat, value } => return self.bind_shape(span, *pat, *value),
-            GoalKind::Fold { var, agg, .. } => {
+            GoalKind::Bind { pat, value, eq } => return self.bind_shape(*pat, *value, *eq),
+            GoalKind::Fold { var, eq, .. } => {
                 self.binds(*var, &mut way);
-                shape.eq = eq_between(span, self.program.exprs[*agg].span);
+                shape.eq = *eq;
             }
             GoalKind::Member { pat, coll } => self.member_shape(*pat, coll, &mut way, &mut bodies),
             GoalKind::Not {
@@ -132,7 +131,7 @@ impl Binder<'_> {
 
     /// `a = b`: a side that is a pattern binds, given what the other side
     /// reads, either side in the order written; with neither, both read.
-    fn bind_shape(&mut self, span: Span, pat: PatternId, value: ExprId) -> Shape {
+    fn bind_shape(&mut self, pat: PatternId, value: ExprId, eq: Option<Span>) -> Shape {
         let mut shape = Shape::default();
         let mut bodies = Vec::new();
         let ps = self.program.patterns[pat].span;
@@ -160,8 +159,7 @@ impl Binder<'_> {
         // `=` binds a name the other goals do not; a tuple or object
         // pattern may also compare (R-58).
         if !sides.iter().any(|s| self.is_structure(*s)) {
-            let first = if ps.start <= vs.start { vs } else { ps };
-            shape.eq = eq_between(span, first);
+            shape.eq = eq;
         }
         self.shared(&bodies, &mut shape.waits);
         shape.inner.extend(bodies);
@@ -255,7 +253,7 @@ impl Binder<'_> {
                     PatternKind::Hole | PatternKind::Bind(_) | PatternKind::Object { .. } => {
                         return true;
                     }
-                    PatternKind::Tuple { .. } => return is_tuple(pattern.span),
+                    PatternKind::Tuple { .. } => return pattern.written == Written::Tuple,
                     PatternKind::Expr(e) => *e,
                 }
             }
@@ -267,27 +265,26 @@ impl Binder<'_> {
             | ExprKind::Quantity { .. }
             | ExprKind::Interp { .. }
             | ExprKind::Object { .. } => true,
-            _ => is_tuple(x.span) || written_as_name(x.span),
+            _ => x.written != Written::Term,
         }
     }
 
     /// Whether side `s` is a tuple or an object.
     fn is_structure(&self, s: Side) -> bool {
-        let (span, object) = match s {
+        match s {
             Side::Pattern(p) => {
                 let pattern = &self.program.patterns[p];
                 match &pattern.kind {
-                    PatternKind::Object { .. } => return true,
-                    PatternKind::Expr(e) => return self.is_structure(Side::Expr(*e)),
-                    _ => (pattern.span, false),
+                    PatternKind::Object { .. } => true,
+                    PatternKind::Expr(e) => self.is_structure(Side::Expr(*e)),
+                    _ => pattern.written == Written::Tuple,
                 }
             }
             Side::Expr(e) => {
                 let x = &self.program.exprs[e];
-                (x.span, matches!(x.kind, ExprKind::Object { .. }))
+                matches!(x.kind, ExprKind::Object { .. }) || x.written == Written::Tuple
             }
-        };
-        object || is_tuple(span)
+        }
     }
 
     pub(super) fn side_binds(&mut self, s: Side, way: &mut Way, bodies: &mut Vec<Inner>) {
@@ -338,13 +335,14 @@ impl Binder<'_> {
             ExprKind::Lit(_) | ExprKind::Quantity { .. } | ExprKind::Hole => {}
             // A name alone read as more than a variable (a reference
             // column's `ref(T, R, "")`): its variable binds.
-            _ if written_as_name(x.span) => {
-                let name = written(x.span).unwrap_or_default();
-                if let Some(v) = self.named(e, &name) {
-                    self.binds(v, way);
+            _ => match &x.written {
+                Written::Name(name) => {
+                    if let Some(v) = self.named(e, name) {
+                        self.binds(v, way);
+                    }
                 }
-            }
-            _ => self.reads(e, "here", way, bodies),
+                _ => self.reads(e, "here", way, bodies),
+            },
         }
     }
 
@@ -448,32 +446,4 @@ fn cmp_by(op: CmpOp) -> String {
         CmpOp::Ge => ">=",
     };
     format!("at this `{op}`")
-}
-
-/// Whether the term at `span` is written as a tuple, `(a, b)`.
-fn is_tuple(span: Span) -> bool {
-    written(span).is_some_and(|t| t.starts_with('('))
-}
-
-/// Where `=` stands in the goal at `span`, between its sides: before the
-/// side at `other` when that side is written last, else after it.
-fn eq_between(span: Span, other: Span) -> Option<Span> {
-    let (_, text) = crate::diag::source_of(span)?;
-    let (from, to) = match other.start > span.start {
-        true => (span.start as usize, other.start as usize),
-        false => (other.end as usize, span.end as usize),
-    };
-    let bytes = text.get(from..to)?.as_bytes();
-    let at = (0..bytes.len()).find(|&i| {
-        let prev = i.checked_sub(1).map(|j| bytes[j]);
-        bytes[i] == b'='
-            && !matches!(prev, Some(b'=' | b'!' | b'<' | b'>'))
-            && bytes.get(i + 1) != Some(&b'=')
-    })?;
-    let at = (from + at) as u32;
-    Some(Span {
-        start: at,
-        end: at + 1,
-        ..span
-    })
 }

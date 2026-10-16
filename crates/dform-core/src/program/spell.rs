@@ -343,7 +343,7 @@ impl Speller<'_> {
             GoalKind::Member { pat, coll } => {
                 format!("{} in {}", self.pattern(*pat), self.coll(coll))
             }
-            GoalKind::Bind { pat, value } => {
+            GoalKind::Bind { pat, value, .. } => {
                 format!("{} = {}", self.pattern(*pat), self.expr(*value))
             }
             GoalKind::Compare { lhs, ops } => {
