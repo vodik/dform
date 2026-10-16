@@ -88,8 +88,9 @@ pub struct Config {
     /// carries each as its label and where it is held (`provider::Held`),
     /// and the provider reads it there.
     pub held: BTreeMap<String, provider::Held>,
-    /// The mock's world of each deployment a held secret names: its
-    /// objects are there, not in this run's world.
+    /// The mock's world of each deployment a held secret names, or may
+    /// name once its plan earlier in this run is applied (a tree's
+    /// upstream): its objects are there, not in this run's world.
     pub worlds: BTreeMap<String, PathBuf>,
     /// A key derived from the deployment's plan key (`Key::derive`, hex),
     /// for a provider to digest a secret it holds (`provider::Held`'s

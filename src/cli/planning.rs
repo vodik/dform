@@ -135,6 +135,7 @@ impl<'a> Reporter<'a> {
             values: crate::stack::secret_values(&res.facts, &secret, &standins),
             after: after.clone(),
             outputs,
+            world: self.located.paths.world.clone(),
         })
     }
 

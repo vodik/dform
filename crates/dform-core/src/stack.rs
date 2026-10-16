@@ -1398,6 +1398,9 @@ pub struct Planned {
     pub values: BTreeMap<String, Value>,
     /// The outputs the plan knows only after a tick, by key: that tick.
     pub after: BTreeMap<String, usize>,
+    /// The mock's world of the deployment: where a reader's mock finds a
+    /// secret its objects will hold once applied ([`Read::world`]).
+    pub world: PathBuf,
 }
 
 impl Planned {
@@ -1446,6 +1449,7 @@ impl Planned {
             secret,
         });
         read.planned = Some(self.full.clone());
+        read.world = Some(self.world.clone());
         read
     }
 }

@@ -2022,11 +2022,7 @@ impl Located {
                     })
                     .collect(),
                 files: files.clone(),
-                worlds: outputs
-                    .iter()
-                    .filter(|r| held.values().any(|h| h.deployment == r.name))
-                    .filter_map(|r| Some((r.name.clone(), r.world.clone()?)))
-                    .collect(),
+                worlds: worlds(outputs, &held),
                 no_credentials: false,
                 held,
                 secrets: opts.secrets.clone(),
@@ -3003,6 +2999,22 @@ fn setting_keys(program: &Program, name: &str) -> BTreeSet<String> {
         })
         .flatten()
         .cloned()
+        .collect()
+}
+
+/// The mock's world of each deployment the run reads that a secret it
+/// reads may be held in (`plugin::Config::worlds`): one a held secret
+/// names now, and one planned earlier in this run (a tree's upstream),
+/// whose secrets are held once its plan is applied, a tick before the
+/// reader's call that reads one.
+fn worlds(
+    outputs: &[stack::Read],
+    held: &BTreeMap<String, crate::provider::Held>,
+) -> BTreeMap<String, std::path::PathBuf> {
+    outputs
+        .iter()
+        .filter(|r| r.planned.is_some() || held.values().any(|h| h.deployment == r.name))
+        .filter_map(|r| Some((r.name.clone(), r.world.clone()?)))
         .collect()
 }
 

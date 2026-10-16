@@ -580,14 +580,15 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
         s.run(&a)
     };
     let set = format!("pw={PRODUCED}");
-    dev(&["apply", "prod", "--set", &set]).success();
     let materialized = |s: &Scratch| -> serde_json::Value {
         let w: serde_json::Value =
             serde_json::from_str(&s.read("dform.state/stacks.app/remote.json")).unwrap();
         w["resources"]["leaky.vault::copy"]["materialized"]["backup"].clone()
     };
 
-    // `apply app` applies prod first, which takes its input from `--set`.
+    // `apply app` applies prod first, which takes its input from `--set`:
+    // on the tree's first apply, prod's world is app's to read the secret
+    // from once prod's tick made it.
     let r = dev(&["apply", "app", "--set", &set, "--why=none"]).success();
     for out in [&r.stdout, &r.stderr] {
         assert!(!out.contains(PRODUCED), "{out}");
