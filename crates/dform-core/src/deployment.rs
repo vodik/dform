@@ -1753,8 +1753,23 @@ impl Located {
         )
     }
 
-    /// Evaluate the deployment, `outputs` the other stacks' it reads.
+    /// Evaluate the deployment, `outputs` the other stacks' it reads, and
+    /// plan it when `opts` asks ([`Evaluation::plan`]).
     pub fn evaluate(
+        self,
+        outputs: Vec<stack::Read>,
+        opts: &Options,
+        obs: &mut dyn Observer,
+    ) -> Result<Evaluation> {
+        let mut ev = self.evaluate_program(outputs, opts, obs)?;
+        ev.plan(opts);
+        Ok(ev)
+    }
+
+    /// The deployment's program evaluated, `outputs` the other stacks' it
+    /// reads, and its resources compiled: not planned yet. What it makes
+    /// known (its outputs) is known here, before its Plan calls.
+    pub fn evaluate_program(
         self,
         outputs: Vec<stack::Read>,
         opts: &Options,
@@ -1787,7 +1802,7 @@ impl Located {
         for w in &res.warnings {
             obs.note(Note::Policy(redact.text(w)));
         }
-        let (compiled, policy) = evaluator.compile(&res, &violations, &st, opts);
+        let compiled = evaluator.compile(&res, &violations, opts);
         Ok(Evaluation {
             located: self,
             outputs,
@@ -1798,7 +1813,7 @@ impl Located {
             collisions,
             redact,
             compiled,
-            policy,
+            policy: None,
             evaluator,
         })
     }
@@ -2387,39 +2402,42 @@ impl Evaluator {
         Ok((res, violations, moves))
     }
 
-    /// The resources of `res` and the plan and its policy pass, when asked
-    /// for. A destroy wants nothing, so a deny over the program's resources
-    /// has nothing to refuse; the denies over its plan (its deletes) still
-    /// refuse it. No plan when the resources do not compile: that is why.
-    #[allow(clippy::type_complexity)]
-    fn compile(
+    /// The resources of `res`. None when the program reads what nothing
+    /// derives (R-194), nor when a violation blocks (`opts.blocking`); a
+    /// destroy wants nothing, so a deny over the program's resources has
+    /// nothing to refuse.
+    fn compile(&self, res: &EvalResult, violations: &[String], opts: &Options) -> Result<Compiled> {
+        // A read of what nothing derives is an error at its site before
+        // any provider is asked (R-194); a destroy wants nothing.
+        if !opts.destroy {
+            report::Unanswered::check(&res.facts)?;
+        }
+        if opts.blocking && !opts.destroy && !violations.is_empty() {
+            bail!("blocked by constraints");
+        }
+        Compiled::of(res, self.backend.schema())
+    }
+
+    /// The plan of `res`, whose resources did not compile: why not (the
+    /// read of what nothing derives, the compile's error), or none when a
+    /// violation blocks it ([`Evaluator::compile`]).
+    fn uncompiled(
         &self,
         res: &EvalResult,
         violations: &[String],
         st: &State,
         opts: &Options,
-    ) -> (Result<Compiled>, Option<Result<Planned>>) {
-        // A read of what nothing derives is an error at its site before
-        // any provider is asked (R-194); a destroy wants nothing.
+    ) -> Option<Result<Planned>> {
         if !opts.destroy
             && let Err(e) = report::Unanswered::check(&res.facts)
         {
-            let policy = opts.policy.then(|| Err(anyhow::anyhow!("{e}")));
-            return (Err(e), policy);
+            return Some(Err(anyhow::anyhow!("{e}")));
         }
         if opts.blocking && !opts.destroy && !violations.is_empty() {
-            return (Err(anyhow::anyhow!("blocked by constraints")), None);
+            return None;
         }
         let schema = self.backend.schema();
-        let compiled = Compiled::of(res, schema);
-        let policy = match (&compiled, opts.policy) {
-            (Ok(c), true) => Some(self.planned(c, res, violations, st)),
-            (Err(_), true) => {
-                Some(Compiled::of(res, schema).and_then(|c| self.planned(&c, res, violations, st)))
-            }
-            (_, false) => None,
-        };
-        (compiled, policy)
+        Some(Compiled::of(res, schema).and_then(|c| self.planned(&c, res, violations, st)))
     }
 
     /// The plan of `c`, the resources `res` compiled to, and its policy
@@ -2477,6 +2495,20 @@ pub struct Explained {
 }
 
 impl Evaluation {
+    /// The plan and its policy pass, when `opts` asks for them and they
+    /// are not made yet: the refresh of what the program configured last,
+    /// the Plan calls and the policy ([`Evaluation::policy`]).
+    pub fn plan(&mut self, opts: &Options) {
+        if !opts.policy || self.policy.is_some() {
+            return;
+        }
+        let ev = &self.evaluator;
+        self.policy = match &self.compiled {
+            Ok(c) => Some(ev.planned(c, &self.res, &self.violations, &self.st)),
+            Err(_) => ev.uncompiled(&self.res, &self.violations, &self.st, opts),
+        };
+    }
+
     pub fn schema(&self) -> &Schema {
         self.evaluator.schema()
     }
