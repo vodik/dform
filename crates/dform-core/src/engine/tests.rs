@@ -1215,6 +1215,50 @@ fn a_given_fact_is_an_input_leaf() {
     }));
 }
 
+/// A memo's leaf says when its own run's state kept it: two runs on one
+/// thread (a tree's deployments in one process) each say theirs, whichever
+/// made its memos last.
+#[test]
+fn a_memos_leaf_says_when_its_own_run_kept_it() {
+    let run_kept = |when: &str| {
+        let mut st = crate::state::State::default();
+        st.memo.insert(
+            "db-created".into(),
+            crate::memo::Kept {
+                kept: when.into(),
+                value: Some(Value::Str("then".into())),
+                sealed: String::new(),
+                epoch: None,
+            },
+        );
+        let run = Rc::new(crate::secrets::Run::default());
+        crate::memo::Memos::new(&st, &Default::default(), run.clone());
+        run
+    };
+    let (first, second) = (
+        run_kept("2026-10-01T00:00:00Z"),
+        run_kept("2026-10-02T00:00:00Z"),
+    );
+    let s = |x: &str| Term::Val(Value::Str(x.into()));
+    let fact = Atom {
+        pred: crate::memo::FIRST.into(),
+        args: vec![s("db-created"), s("now"), s("then")],
+        record: None,
+        span: Default::default(),
+    };
+    let program = crate::parser::parse_program("").unwrap();
+    for (run, when) in [(&first, "2026-10-01"), (&second, "2026-10-02")] {
+        let (r, _) = eval_at(&program, std::slice::from_ref(&fact), None, run).unwrap();
+        let leaves = why_leaves(&r, "memo.first(\"db-created\", \"now\", \"then\")");
+        assert!(
+            leaves.contains(&Leaf::Extern {
+                call: format!("memo.first(\"db-created\"): memo, first kept {when}T00:00:00Z")
+            }),
+            "{leaves:?}"
+        );
+    }
+}
+
 /// gke_two_phase with a program appended, on the gke schema.
 fn gke_with(extra: &str) -> Result<(EvalResult, Vec<String>)> {
     let mut program =

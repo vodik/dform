@@ -1691,7 +1691,8 @@ mod held_tests {
 /// What a deployment's run holds for its secrets beside its evaluation:
 /// what its master derives (`functions::random`), its stand-ins
 /// ([`standin`]), its given secrets' key and the files of them it read
-/// (`custody::given`). One per deployment's run, held by its providers
+/// (`custody::given`), and when each memo it reads was kept
+/// (`memo::Memos`). One per deployment's run, held by its providers
 /// (`plugin::Providers::secrets`) and taken by reference by whatever
 /// derives, reads or sends a secret: its evaluation, its tables and
 /// memos, its calls; a tree's deployments in one process each hold their
@@ -1701,6 +1702,10 @@ pub struct Run {
     random: RefCell<crate::functions::random::Derivations>,
     standins: RefCell<standin::Registry>,
     given: RefCell<crate::custody::given::Opened>,
+    /// When each memo the run reads was kept, by its key, for `why`: a
+    /// memo's leaf says when it was kept, never its value (a sealed one
+    /// is a secret).
+    memos: RefCell<BTreeMap<String, String>>,
 }
 
 /// Nothing of a run's secrets is printed.
@@ -1760,6 +1765,17 @@ impl Run {
 
     pub fn given_mut(&self) -> RefMut<'_, crate::custody::given::Opened> {
         self.given.borrow_mut()
+    }
+
+    /// When the memo `key` was kept, if state keeps it: none, a memo this
+    /// run gives first.
+    pub fn memo_kept(&self, key: &str) -> Option<String> {
+        self.memos.borrow().get(key).cloned()
+    }
+
+    /// When each memo the run reads was kept, as its state has them.
+    pub fn set_memos_kept(&self, kept: BTreeMap<String, String>) {
+        *self.memos.borrow_mut() = kept;
     }
 }
 

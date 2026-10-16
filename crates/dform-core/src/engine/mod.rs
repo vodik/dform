@@ -237,7 +237,7 @@ impl Resumable {
         let mut st = self.state.clone();
         for f in more {
             let g = ensure_ground(f, &self.c.secrets)?;
-            let leaf = given_leaf(&g, &self.c.externs, tick);
+            let leaf = given_leaf(&g, &self.c.externs, tick, &self.c.secrets);
             st.prov.given(g, leaf);
         }
         run_only(&self.c, &mut st, self.at, self.again.as_deref())?;
@@ -387,7 +387,7 @@ fn start(
     let mut prov = Prov::default();
     for f in extra_facts {
         let g = ensure_ground(f, secrets)?;
-        let leaf = given_leaf(&g, &externs, tick);
+        let leaf = given_leaf(&g, &externs, tick, secrets);
         prov.given(g, leaf);
     }
 

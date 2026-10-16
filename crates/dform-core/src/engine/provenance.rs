@@ -107,11 +107,12 @@ impl Prov {
 
 /// The leaf for a fact given to this run rather than stated by the program.
 /// `tick`: the apply tick the planner injected its facts at (`None`: the
-/// plan).
+/// plan); `secrets`: the run's, which says when a memo was kept.
 pub(super) fn given_leaf(
     a: &Atom,
     externs: &BTreeSet<crate::ast::Extern>,
     tick: Option<usize>,
+    secrets: &crate::secrets::Run,
 ) -> Leaf {
     let text = spell::atom(a);
     if let Some(event) = crate::stack::published(a) {
@@ -136,7 +137,7 @@ pub(super) fn given_leaf(
         // candidate (either may be a secret).
         crate::memo::FIRST => match a.args.first() {
             Some(Term::Val(Value::Str(k))) => Leaf::Extern {
-                call: crate::memo::provenance(k),
+                call: crate::memo::provenance(k, secrets.memo_kept(k).as_deref()),
             },
             _ => Leaf::Extern { call: text },
         },

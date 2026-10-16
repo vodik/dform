@@ -47,19 +47,14 @@ pub struct Kept {
     pub epoch: Option<u32>,
 }
 
-thread_local! {
-    /// When each key the run reads was kept, for `why` (`engine`'s leaf of
-    /// a `memo.first` fact): the last [`Memos`] made on this thread.
-    static KEPT: RefCell<BTreeMap<String, String>> = const { RefCell::new(BTreeMap::new()) };
-}
-
-/// What `why` says of the `memo.first` answer for `key`: kept when, or
-/// given by this run.
-pub fn provenance(key: &str) -> String {
-    KEPT.with(|k| match k.borrow().get(key) {
+/// What `why` says of the `memo.first` answer for `key` (`engine`'s leaf
+/// of a `memo.first` fact): `kept` when, as the run's state has it
+/// ([`crate::secrets::Run::memo_kept`]), or given by this run.
+pub fn provenance(key: &str, kept: Option<&str>) -> String {
+    match kept {
         Some(when) => format!("{FIRST}(\"{key}\"): memo, first kept {when}"),
         None => format!("{FIRST}(\"{key}\"): memo, first given by this run"),
-    })
+    }
 }
 
 /// How `why` names where an extern's fact came from (its leaf's `call`):
@@ -71,7 +66,8 @@ pub fn source(call: &str) -> String {
     }
 }
 
-/// The answers of `memo.first` for one run, from the state it starts with.
+/// The answers of `memo.first` for one run, from the state it starts with;
+/// when each was kept is the run's to say ([`provenance`]).
 pub struct Memos {
     kept: BTreeMap<String, Kept>,
     /// The deployment's master, each epoch's (R-165), which opens a
@@ -96,7 +92,7 @@ impl Memos {
             .iter()
             .map(|(k, m)| (k.clone(), m.kept.clone()))
             .collect();
-        KEPT.with(|k| *k.borrow_mut() = when);
+        secrets.set_memos_kept(when);
         Memos {
             kept: st.memo.clone(),
             master: master.clone(),
