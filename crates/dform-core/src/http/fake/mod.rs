@@ -6,7 +6,9 @@
 //! it accepts and the requests it holds at once, and answers each
 //! request with what [`Server::answer`] says, after [`Server::slow`]'s
 //! delay (over HTTP/2, before it reads the request's body, whose
-//! flow-control window is held meanwhile).
+//! flow-control window is held meanwhile). Over HTTP/2 it keeps what a
+//! client's first connection sent before its first request, for the
+//! windows the client asked for ([`Server::windows`]).
 
 use crate::plugin::credentials::Credential;
 use bytes::Bytes;
@@ -78,6 +80,112 @@ struct Behaviour {
     answer: Mutex<Answering>,
     delay: Mutex<Duration>,
     counts: Counts,
+    /// The first bytes a client sent on the first HTTP/2 connection, up
+    /// to [`OPENING`]: its preface, settings and window updates.
+    opening: Mutex<Vec<u8>>,
+}
+
+/// How much of a connection's first bytes [`Behaviour::opening`] keeps.
+const OPENING: usize = 4096;
+
+/// The flow-control windows an HTTP/2 client gives the server: what it may
+/// send on a stream, and on the connection, before the client reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Windows {
+    pub stream: u32,
+    pub connection: u32,
+}
+
+impl Windows {
+    /// HTTP/2's own, before a SETTINGS frame or a WINDOW_UPDATE says
+    /// otherwise.
+    const DEFAULT: u32 = 65_535;
+
+    /// The windows the frames after the client's preface in `opening`
+    /// set: SETTINGS_INITIAL_WINDOW_SIZE, and the connection's own (its
+    /// WINDOW_UPDATEs on stream 0).
+    fn of(opening: &[u8]) -> Windows {
+        const PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+        let mut w = Windows {
+            stream: Windows::DEFAULT,
+            connection: Windows::DEFAULT,
+        };
+        let mut rest = opening.strip_prefix(PREFACE).unwrap_or_default();
+        let word = |b: &[u8]| u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
+        while rest.len() >= 9 {
+            let len =
+                (usize::from(rest[0]) << 16) | (usize::from(rest[1]) << 8) | usize::from(rest[2]);
+            let (kind, flags, stream) = (rest[3], rest[4], word(&rest[5..9]) & 0x7fff_ffff);
+            let Some(payload) = rest.get(9..9 + len) else {
+                break;
+            };
+            match (kind, stream) {
+                // SETTINGS, not its ACK: six bytes a setting.
+                (0x4, 0) if flags & 0x1 == 0 => {
+                    for s in payload.as_chunks::<6>().0 {
+                        if u16::from_be_bytes([s[0], s[1]]) == 0x4 {
+                            w.stream = word(&s[2..]);
+                        }
+                    }
+                }
+                (0x8, 0) if len == 4 => w.connection += word(payload) & 0x7fff_ffff,
+                _ => {}
+            }
+            rest = &rest[9 + len..];
+        }
+        w
+    }
+}
+
+/// A connection whose first bytes from the client are kept
+/// ([`Behaviour::opening`]) when it is the server's first.
+struct Tee<S> {
+    io: S,
+    b: Arc<Behaviour>,
+    first: bool,
+}
+
+impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for Tee<S> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let r = std::pin::Pin::new(&mut self.io).poll_read(cx, buf);
+        if !self.first {
+            return r;
+        }
+        let mut kept = self.b.opening.lock().unwrap();
+        let room = OPENING.saturating_sub(kept.len());
+        let new = &buf.filled()[before..];
+        kept.extend_from_slice(&new[..new.len().min(room)]);
+        r
+    }
+}
+
+impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for Tee<S> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.io).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.io).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.io).poll_shutdown(cx)
+    }
 }
 
 impl Behaviour {
@@ -105,6 +213,7 @@ impl Server {
             answer: Mutex::new(path),
             delay: Mutex::new(Duration::ZERO),
             counts: Counts::default(),
+            opening: Mutex::new(Vec::new()),
         })
     }
 
@@ -190,6 +299,12 @@ impl Server {
     /// The most requests it held at once.
     pub fn most_at_once(&self) -> usize {
         self.behaviour.counts.most.load(Ordering::SeqCst)
+    }
+
+    /// The windows the client gave it on its first HTTP/2 connection, as
+    /// they stood when its first request came.
+    pub fn windows(&self) -> Windows {
+        Windows::of(&self.behaviour.opening.lock().unwrap())
     }
 
     /// A credential that trusts its CA.
@@ -304,7 +419,7 @@ async fn serve_h2(l: TcpListener, streams: u32, mutual: bool, b: Arc<Behaviour>)
         let Ok((tcp, _)) = l.accept().await else {
             return;
         };
-        b.counts.connections.fetch_add(1, Ordering::SeqCst);
+        let first = b.counts.connections.fetch_add(1, Ordering::SeqCst) == 0;
         let (tls, b) = (tls.clone(), b.clone());
         tokio::spawn(async move {
             let Ok(io) = tls.accept(tcp).await else {
@@ -316,6 +431,11 @@ async fn serve_h2(l: TcpListener, streams: u32, mutual: bool, b: Arc<Behaviour>)
                 .peer_certificates()
                 .and_then(|c| c.first())
                 .map(|c| c.to_vec());
+            let io = Tee {
+                io,
+                b: b.clone(),
+                first,
+            };
             let Ok(mut conn) = h2::server::Builder::new()
                 .max_concurrent_streams(streams)
                 .handshake::<_, Bytes>(io)

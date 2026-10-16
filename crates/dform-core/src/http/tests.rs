@@ -154,6 +154,23 @@ fn a_body_waiting_on_a_spent_window_is_a_stall() {
     assert_eq!(stalled, [false, false, true]);
 }
 
+/// An HTTP/2 connection lets the server send 2 MiB on a stream and 5 MiB
+/// in all before the client reads (hyper's defaults): HTTP/2's own 64 KiB
+/// held a megabytes answer (an API server's OpenAPI document) to 64 KiB a
+/// round trip.
+#[test]
+fn an_http2_connection_takes_2_mib_a_stream_and_5_mib_in_all() {
+    let server = Server::h2(10);
+    send(get(server.url("/")), Some(&Server::credential()), None).unwrap();
+    assert_eq!(
+        server.windows(),
+        fake::Windows {
+            stream: 2 * 1024 * 1024,
+            connection: 5 * 1024 * 1024,
+        }
+    );
+}
+
 /// A burst of requests to an HTTP/1.1 endpoint opens a connection each;
 /// the endpoint keeps eight of them idle for what comes next.
 #[test]
