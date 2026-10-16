@@ -271,15 +271,9 @@ impl Lowerer<'_> {
     /// `super.x.path` (R-186): what the scope around this component reads
     /// `x` as, a value or a resource, when the component's own `x` shadows
     /// it.
-    pub(super) fn super_read(
-        &mut self,
-        rc: &mut Rc,
-        c: &Chain,
-        pre: &mut Vec<Lit>,
-        span: Span,
-    ) -> L<Res> {
+    pub(super) fn super_read(&mut self, rc: &mut Rc, c: &Chain, span: Span) -> L<Res> {
         let (from, rest) = self.super_chain(rc, c, span)?;
-        if let Some(r) = self.item_read(rc, from, true, &rest, pre, span)? {
+        if let Some(r) = self.item_read(rc, from, true, &rest, span)? {
             return Ok(r);
         }
         let (x, around) = (&rest.head, self.scope_name(from));
@@ -299,13 +293,12 @@ impl Lowerer<'_> {
         from: ScopeId,
         outward: bool,
         c: &Chain,
-        pre: &mut Vec<Lit>,
         span: Span,
     ) -> L<Option<Res>> {
         let x = c.head.as_str();
         let here = self.names(from);
         if (outward && self.is_value(from, x)) || here.is_value(x) {
-            return self.value(rc, from, c, pre, span).map(Some);
+            return self.value(rc, from, c, span).map(Some);
         }
         let types = match outward {
             true => self.resource(from, x),
@@ -317,7 +310,7 @@ impl Lowerer<'_> {
         if types.len() > 1 {
             return self.ambiguous(x, &types, span).map(Some);
         }
-        let path = self.segs(rc, &c.ops, pre)?;
+        let path = self.segs(rc, &c.ops)?;
         Ok(Some(Res::Ref {
             typ: self.str_node(span, &types[0]),
             addr: self.resource_addr_from(rc.scope, from, x, span),

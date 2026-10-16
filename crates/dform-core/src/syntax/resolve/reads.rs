@@ -1,16 +1,15 @@
 //! A resolved chain's reads (R-211 step 7): each read named once per
 //! rule (by its relation, its columns and how each name in them is
-//! reached), planned (`realize.rs`) and built as its node, its reads'
-//! literals the resolver's own; the reads a `has` settles out of what it
-//! tests bound before it; the read a literal tests or binds in place, and
+//! reached), planned (`realize.rs`) and built as its node; the reads a
+//! `has` settles out of what it tests bound before it; the read a literal tests or binds in place, and
 //! the mark of a `has` of a resource's attribute path (R-106).
 
 use super::*;
 
 impl Lowerer<'_> {
     /// Hoist the read `read`, `pred(args.., V)` (V at `out`), once per
-    /// rule: its node, the read into a new variable the first time, its
-    /// literal into `pre`; the variable after.
+    /// rule: its node, the read into a new variable the first time; the
+    /// variable after.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn read_var(
         &mut self,
@@ -19,7 +18,6 @@ impl Lowerer<'_> {
         read: PlanRead,
         out: usize,
         hint: &str,
-        pre: &mut Vec<Lit>,
         span: Span,
     ) -> ExprId {
         let args = self.read_args(&read);
@@ -27,9 +25,7 @@ impl Lowerer<'_> {
         if !new {
             return self.var_node(rc, span, &name);
         }
-        let id = self.building(rc, span, |b| b.read_into(read.of(), &name));
-        self.hoisted_into(id, pre);
-        id
+        self.building(rc, span, |b| b.read_into(read.of(), &name))
     }
 
     /// The columns of the read `read` but its value's, each as a rule's
@@ -89,23 +85,16 @@ impl Lowerer<'_> {
     /// A resolved chain as its node at `pos` (R-211 step 7): what it reads
     /// in term position its read's node, a path into it the steps, each
     /// read's variable named once per rule, over the nodes of what
-    /// resolved it; of the reads resolving it, `local` (the literals the
-    /// resolver made of them), those no node holds into `pre`.
+    /// resolved it.
     pub(super) fn realize_expr(
         &mut self,
         rc: &mut Rc,
         res: Res,
         pos: Pos,
-        (local, pre): (Vec<Lit>, &mut Vec<Lit>),
         span: Span,
     ) -> L<ExprId> {
         let plan = self.plan(rc, res, pos, span)?;
-        let (id, left) = self.building(rc, span, |b| {
-            let id = plan.build(b);
-            (id, b.not_held(id, local))
-        });
-        pre.extend(left);
-        Ok(id)
+        Ok(self.building(rc, span, |b| plan.build(b)))
     }
 
     /// The goals binding the reads [`Self::settled`] takes out of `res`'s
@@ -379,81 +368,21 @@ impl Lowerer<'_> {
     }
 
     /// The read of a value hoisted, `k(V)`: its node, the read into
-    /// `var_name`, its literal into `pre`.
+    /// `var_name`.
     pub(super) fn value_read(
         &mut self,
         rc: &Rc,
         var_name: &str,
         (decl, via): (DeclRef, Reach),
-        pre: &mut Vec<Lit>,
         span: Span,
     ) -> ExprId {
         let read = ReadOf::Value(decl, via);
-        let id = self.building(rc, span, |b| b.read_into(read, var_name));
-        self.hoisted_into(id, pre);
-        id
+        self.building(rc, span, |b| b.read_into(read, var_name))
     }
 
-    /// The read a resolved chain is, with `value` in its value column: the
-    /// direct forms `R.p == c`, `k == c`, `not R.p`. `None` when the chain
-    /// is not one read.
-    pub(super) fn read_atom(&self, res: &Res, value: Term, span: Span) -> Option<Atom> {
-        let t = |id: &ExprId| self.term_of(*id);
-        match res {
-            Res::Ref { typ, addr, path } if path.len() == 1 => match &path[0] {
-                Seg::F(p) => Some(atom_at(
-                    "attr",
-                    vec![
-                        t(typ),
-                        t(addr),
-                        str_term(&crate::address::path_key(p)),
-                        value,
-                    ],
-                    span,
-                )),
-                Seg::I(_) | Seg::K(_) => None,
-            },
-            Res::Output {
-                inst, key, path, ..
-            } if path.is_empty() => {
-                Some(atom_at("output", vec![t(inst), str_term(key), value], span))
-            }
-            Res::World { typ, addr, path } => Some(atom_at(
-                "cloud_attr",
-                vec![str_term(typ), t(addr), str_term(path), value],
-                span,
-            )),
-            Res::Value { decl, via, path } if path.is_empty() => {
-                Some(atom_at(&via.relation(&decl.name), vec![value], span))
-            }
-            Res::Lookup {
-                pred,
-                args,
-                out,
-                path,
-            } if path.is_empty() => {
-                let mut args: Vec<Term> = args.iter().map(t).collect();
-                args.insert(*out, value);
-                Some(atom_at(pred, args, span))
-            }
-            _ => None,
-        }
-    }
-
-    /// `has r.PATH` of a resource's attribute (a path of fields):
-    /// `__has(T, A, "PATH")`, which the compiler answers from the schema in
-    /// a rule that writes under PATH ([`mark_has`]).
-    pub(super) fn has_atom(&self, res: &Res, span: Span) -> Option<Atom> {
-        let m = self.has_mark(res)?;
-        Some(atom_at(
-            crate::partition::HAS,
-            vec![self.term_of(m.typ), self.term_of(m.addr), str_term(&m.path)],
-            span,
-        ))
-    }
-
-    /// The mark of `has r.PATH` ([`Self::has_atom`]), its parts the nodes
-    /// of what resolved `r`.
+    /// The mark of `has r.PATH` of a resource's attribute (a path of
+    /// fields), which the compiler answers from the schema in a rule that
+    /// writes under PATH (R-106), its parts the nodes of what resolved `r`.
     pub(super) fn has_mark(&self, res: &Res) -> Option<HasMark> {
         let Res::Ref { typ, addr, path } = res else {
             return None;

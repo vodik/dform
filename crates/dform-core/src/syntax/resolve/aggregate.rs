@@ -30,12 +30,7 @@ impl Lowerer<'_> {
     /// `n = agg(x)` (or `agg(x) = n`): the binding as `n = agg(x')`, the
     /// aggregate's reads hoisted before it. `None` when the literal is not
     /// one.
-    pub(super) fn aggregate_binding(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        out: &mut Vec<Lit>,
-    ) -> Option<L<()>> {
+    pub(super) fn aggregate_binding(&mut self, rc: &mut Rc, n: &SyntaxNode) -> Option<L<()>> {
         let ts: Vec<SyntaxNode> = terms(n).collect();
         let ops: Vec<SyntaxKind> = tokens(n).map(|t| t.kind()).collect();
         if ts.len() != 2 || ops.as_slice() != [EQ] {
@@ -44,16 +39,10 @@ impl Lowerer<'_> {
         let (name, call) = [(&ts[0], &ts[1]), (&ts[1], &ts[0])]
             .into_iter()
             .find(|(_, c)| c.kind() == CALL && self.aggregate_name(c).is_some())?;
-        Some(self.aggregate_binding1(rc, name, call, out))
+        Some(self.aggregate_binding1(rc, name, call))
     }
 
-    fn aggregate_binding1(
-        &mut self,
-        rc: &mut Rc,
-        name: &SyntaxNode,
-        call: &SyntaxNode,
-        out: &mut Vec<Lit>,
-    ) -> L<()> {
+    fn aggregate_binding1(&mut self, rc: &mut Rc, name: &SyntaxNode, call: &SyntaxNode) -> L<()> {
         let span = self.span(call);
         if self.nested > 0 {
             return self.error(
@@ -71,8 +60,8 @@ impl Lowerer<'_> {
                 ),
             );
         }
-        let (value, agg) = self.aggregate_call(rc, call, out)?;
-        let (named, _) = self.bind(true, |l| l.arg_node(rc, name, Pos::Content, out))?;
+        let (_, agg) = self.aggregate_call(rc, call)?;
+        let (named, _) = self.bind(true, |l| l.arg_node(rc, name, Pos::Content))?;
         let Term::Var(var) = named else {
             return self.error(
                 self.span(name),
@@ -87,7 +76,6 @@ impl Lowerer<'_> {
             text: call.text().to_string(),
             span,
         });
-        out.push(Lit::Eq(Term::Var(var.clone()), value));
         let at = self.span(name.parent().as_ref().unwrap_or(name));
         let g = self.fold_goal(rc, at, &var, agg);
         self.built(g);
@@ -111,12 +99,7 @@ impl Lowerer<'_> {
     }
 
     /// `agg(x)` lowered: one positional argument, its reads into `out`.
-    pub(super) fn aggregate_call(
-        &mut self,
-        rc: &mut Rc,
-        call: &SyntaxNode,
-        out: &mut Vec<Lit>,
-    ) -> L<(Term, ExprId)> {
+    pub(super) fn aggregate_call(&mut self, rc: &mut Rc, call: &SyntaxNode) -> L<(Term, ExprId)> {
         let span = self.span(call);
         let name = self.aggregate_name(call).ok_or(Skip)?;
         let list = node(call, ARG_LIST);
@@ -127,7 +110,7 @@ impl Lowerer<'_> {
         if !is_term(arg.kind()) {
             return self.error(span, format!("`{name}` aggregates one value: `{name}(x)`"));
         }
-        let (x, item) = self.bind(false, |l| l.arg_node(rc, arg, Pos::Content, out))?;
+        let (x, item) = self.bind(false, |l| l.arg_node(rc, arg, Pos::Content))?;
         self.check_aggregated(&name, std::slice::from_ref(&x), span);
         let kind = crate::program::node::aggregate_kind(&name).ok_or(Skip)?;
         let agg = self.node(span, ExprKind::Aggregate { kind, item });

@@ -31,7 +31,7 @@ use super::expr::Lowering;
 use crate::ast::{self, Atom, Decl, Rank, RuleStmt, Span, Stmt, TypeExpr, str_term};
 use crate::program::node::{
     CheckKind, ClauseId, CopyKind, ExprId, Head, Header, ItemId, ItemKind, Param, RelRef,
-    ResourceBody, Setting, Source, Target, TypeRef, VarId, Write,
+    ResourceBody, Setting, Source, Target, TypeAttr, TypeRef, VarId, Write,
 };
 use crate::program::{NodeId, Program};
 use crate::value::Value;
@@ -155,7 +155,7 @@ fn statements_of(env: Env, id: ItemId) -> Vec<Stmt> {
             args: args.clone(),
             span: it.span,
         })],
-        ItemKind::TypeBlock { name, attrs } => type_block(env.program, id, name, attrs),
+        ItemKind::TypeBlock { name, attrs } => type_block(env, id, name, attrs),
         ItemKind::Resource {
             typ,
             name,
@@ -206,18 +206,50 @@ fn input_item(env: Env, id: ItemId, name: &str, rows: Option<&(usize, Vec<Span>)
 
 /// `type T { .. }` (the item `id`): pending, then the helpers its
 /// refinements made.
-fn type_block(program: &Program, id: ItemId, name: &str, attrs: &[ast::AttrDecl]) -> Vec<Stmt> {
+fn type_block(env: Env, id: ItemId, name: &str, attrs: &[TypeAttr]) -> Vec<Stmt> {
+    let mut helpers = Vec::new();
+    let attrs = attrs
+        .iter()
+        .map(|a| attr_decl(env, a, &mut helpers))
+        .collect();
     let pending = Stmt::Pending(ast::Pending {
         kind: ast::PendingKind::TypeDecl {
             name: name.to_string(),
-            attrs: attrs.to_vec(),
+            attrs,
         },
-        span: program.items[id].span,
+        span: env.program.items[id].span,
     });
-    let made = program.terms_made.get(&NodeId::Item(id));
+    let made = env.program.terms_made.get(&NodeId::Item(id));
     std::iter::once(pending)
+        .chain(helpers)
         .chain(made.into_iter().flatten().cloned())
         .collect()
+}
+
+/// A type block's attribute declared, its refinement's literals, the
+/// helper statements they made into `helpers`.
+fn attr_decl(env: Env, a: &TypeAttr, helpers: &mut Vec<Stmt>) -> ast::AttrDecl {
+    let refinement = match a.refinement {
+        Some(c) => {
+            let (lits, made) = super::clause::lower_clause_in(env, c, &[]);
+            helpers.extend(made);
+            lits
+        }
+        None => Vec::new(),
+    };
+    let children = a
+        .children
+        .iter()
+        .map(|c| attr_decl(env, c, helpers))
+        .collect();
+    ast::AttrDecl {
+        path: a.path.clone(),
+        ty: a.ty.clone(),
+        flags: a.flags.clone(),
+        refinement,
+        children,
+        span: a.span,
+    }
 }
 
 /// A doc comment's pairs: `doc(kind, name, key, value)` each.

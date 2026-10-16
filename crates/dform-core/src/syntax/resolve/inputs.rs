@@ -76,13 +76,13 @@ impl Lowerer<'_> {
             self.diags.push(d);
             return Err(Skip);
         }
-        let guard = self.clauses(&mut rc, n)?;
+        self.clauses(&mut rc, n)?;
         let guarded = self.clause_at(node(n, CLAUSE));
         // An input is declared where its clause holds, which every read of
         // it repeats: a clause binds no aggregate there, as a resource's
         // does not; a `let` binds it, read here.
         self.aggregate_in(guarded, span)?;
-        if key && !guard.is_empty() {
+        if key && guarded.is_some() {
             return self.error(
                 span,
                 format!(

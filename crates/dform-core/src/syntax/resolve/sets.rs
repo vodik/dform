@@ -32,14 +32,12 @@ impl Lowerer<'_> {
             );
         }
         let mut rc = self.rc(n, scope, outer);
-        let mut body = self.clauses(&mut rc, n)?;
+        self.clauses(&mut rc, n)?;
         let clause = self.gather.as_mut().and_then(|g| g.take_clause());
         let made = self.helpers.len();
-        let mut reads = Vec::new();
         let (fields, ends, value) = match &block {
             Some(block) => {
-                let fields =
-                    self.wanting(Want::Schema, |l| l.fields(&mut rc, block, &mut reads))?;
+                let fields = self.wanting(Want::Schema, |l| l.fields(&mut rc, block))?;
                 let (fields, ends): (Vec<_>, Vec<_>) = fields
                     .into_iter()
                     .map(|(f, id, end)| ((f, id), end))
@@ -47,23 +45,21 @@ impl Lowerer<'_> {
                 (fields, ends, None)
             }
             None => {
-                let (_, value, fields) = self.value_body(&mut rc, n, &mut reads)?;
-                let end = (reads.len(), self.helpers.len());
+                let (_, value, fields) = self.value_body(&mut rc, n)?;
+                let end = self.helpers.len();
                 let fields = fields.into_iter().map(|f| (f, value)).collect();
                 (fields, vec![end], Some(value))
             }
         };
         let (fields, ids): (Vec<FieldAssign>, Vec<ExprId>) = fields.into_iter().unzip();
-        let reads_at = body.len()..body.len() + reads.len();
-        body.extend(reads);
-        let named_at = (body.len(), self.helpers.len());
+        let named_at = self.helpers.len();
         // The header: a string with holes is bound last, by `format`; a
         // bare name is the literal name, always (R-76). The name is one
         // segment of the address, quoted when it holds a dot (R-112).
         let interp = header.kind() == STRING && has_hole(header.text());
         let mut named = None;
         if interp {
-            let (_, id) = self.name_from_clause(&mut rc, &header, &mut body)?;
+            let id = self.name_from_clause(&mut rc, &header)?;
             named = Some(id);
         } else if header.kind() == STRING {
             self.string(&header)?;
@@ -110,24 +106,21 @@ impl Lowerer<'_> {
         let typ = dotted_text(n, 1);
         let literal =
             (header.kind() == STRING && !interp).then(|| self.string(&header).unwrap_or_default());
-        // Each entry's reads and helpers, from where the one before ended.
-        let starts = std::iter::once((reads_at.start, made))
-            .chain(ends.iter().map(|&(r, h)| (reads_at.start + r, h)));
-        let spans: Vec<(std::ops::Range<usize>, std::ops::Range<usize>)> = starts
-            .zip(&ends)
-            .map(|((r0, h0), &(r1, h1))| (r0..reads_at.start + r1, h0..h1))
-            .collect();
+        // Each entry's helpers, from where the one before ended.
+        let starts = std::iter::once(made).chain(ends.iter().copied());
+        let spans: Vec<std::ops::Range<usize>> =
+            starts.zip(&ends).map(|(h0, &h1)| h0..h1).collect();
         let body_lowered = match value {
             Some(v) => BodyLowered::Value {
                 value: v,
-                made: &self.helpers[spans[0].1.clone()],
+                made: &self.helpers[spans[0].clone()],
             },
             None => BodyLowered::Block(
                 fields
                     .iter()
                     .zip(&ids)
                     .zip(&spans)
-                    .map(|((f, id), (_, h))| EntryLowered {
+                    .map(|((f, id), h)| EntryLowered {
                         path: &f.key,
                         op: f.op,
                         value: *id,
@@ -141,7 +134,7 @@ impl Lowerer<'_> {
         let header_lowered = if let Some(value) = named {
             HeaderLowered::Interp {
                 value,
-                made: &self.helpers[named_at.1..],
+                made: &self.helpers[named_at..],
             }
         } else if let Some(text) = literal {
             HeaderLowered::Literal(text)
@@ -179,11 +172,10 @@ impl Lowerer<'_> {
         &mut self,
         rc: &mut Rc,
         n: &SyntaxNode,
-        reads: &mut Vec<Lit>,
     ) -> L<(Term, ExprId, Vec<FieldAssign>)> {
         let t = terms(n).next().ok_or(Skip)?;
         let span = self.span(&t);
-        let (value, id) = self.wanting(Want::Schema, |l| l.arg_node(rc, &t, Pos::Value, reads))?;
+        let (value, id) = self.wanting(Want::Schema, |l| l.arg_node(rc, &t, Pos::Value))?;
         match crate::program::lower::value_entries(value.clone(), span) {
             Some(entries) => Ok((value, id, entries)),
             None => self.error(
@@ -204,7 +196,7 @@ impl Lowerer<'_> {
     pub(super) fn set_from(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
         let span = self.span(n);
         let mut rc = self.rc(n, scope, outer);
-        let mut body = self.opt_body(&mut rc, n)?;
+        self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
         let rank = self.rank_tok(n)?;
         let (path, value) = (fresh(&mut rc, "Path"), fresh(&mut rc, "Value"));
@@ -222,7 +214,6 @@ impl Lowerer<'_> {
             crate::tables::SET_DOC,
             cols,
             vec![var(&path), var(&value)],
-            &mut body,
         )?;
         self.check_bound(&rc, clause, &[])?;
         let s = crate::program::build::SetFromLowered {
@@ -265,7 +256,7 @@ impl Lowerer<'_> {
         }
         let span = self.span(n);
         let mut rc = self.rc(n, scope, outer);
-        let body = self.opt_body(&mut rc, n)?;
+        self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
         let rank = self.rank_tok(n)?;
         let block = node(n, BLOCK);
@@ -287,7 +278,7 @@ impl Lowerer<'_> {
                 let span = self.span(a);
                 let mut rc = rc.clone();
                 let line = (&lhs, &rhs, add, rank, span);
-                self.contribution(&mut rc, line, body.clone(), clause)
+                self.contribution(&mut rc, line, clause)
             })();
             match r {
                 Ok(w) => writes.push(w),
@@ -320,12 +311,11 @@ impl Lowerer<'_> {
     }
 
     /// One contribution of a `set`: `lhs (=|+=) rhs [@rank]` at `span`,
-    /// under the clause `body` (`clause`, when one is written).
+    /// under the statement's clause `clause`, when one is written.
     pub(super) fn contribution(
         &mut self,
         rc: &mut Rc,
         (lhs, rhs, add, rank, span): (&SyntaxNode, &SyntaxNode, bool, Option<Rank>, Span),
-        mut body: Vec<Lit>,
         clause: Option<ClauseId>,
     ) -> L<Contribution> {
         let has_body = clause.is_some();
@@ -334,7 +324,7 @@ impl Lowerer<'_> {
             return self.error(span, "a rank applies to `=`, not `+=`");
         }
         let made = self.helpers.len();
-        let target = self.set_target(rc, &c, &mut body, span)?;
+        let target = self.set_target(rc, &c, span)?;
         match &target {
             Target::Element(_, _, list, _, _, block) => {
                 if add {
@@ -394,13 +384,13 @@ impl Lowerer<'_> {
             }
             Target::Cell(..) => {}
         }
-        let mid = (body.len(), self.helpers.len());
+        let mid = self.helpers.len();
         // A contribution to an input's cell is normal unless ranked (R-38),
         // written to the cell itself, so that its condition may read
         // another input.
         let (_, value_node) = match &target {
-            Target::Input(_) => self.arg_node(rc, rhs, Pos::Value, &mut body)?,
-            _ => self.wanting(Want::Schema, |l| l.arg_node(rc, rhs, Pos::Value, &mut body))?,
+            Target::Input(_) => self.arg_node(rc, rhs, Pos::Value)?,
+            _ => self.wanting(Want::Schema, |l| l.arg_node(rc, rhs, Pos::Value))?,
         };
         let mut terms = match &target {
             Target::Cell(typ, addr, ..) => vec![typ.1, addr.1],
@@ -416,7 +406,7 @@ impl Lowerer<'_> {
             add,
             rank,
             value: value_node,
-            made: (made, mid.1, self.helpers.len()),
+            made: (made, mid, self.helpers.len()),
             written: rc.vars.values().cloned().collect(),
         })
     }
@@ -424,18 +414,12 @@ impl Lowerer<'_> {
     /// What a `set` sets: a cell `(T, A, path)` and, when the block that
     /// owns the cell is declared in the same scope, how that block is
     /// written; or a stack input.
-    pub(super) fn set_target(
-        &mut self,
-        rc: &mut Rc,
-        c: &Chain,
-        body: &mut Vec<Lit>,
-        span: Span,
-    ) -> L<Target> {
+    pub(super) fn set_target(&mut self, rc: &mut Rc, c: &Chain, span: Span) -> L<Target> {
         let scope = rc.scope;
         // `[_]`: a variable per step, the clause form (R-162).
         let each;
         let c = if c.ops.iter().any(each::is_each) {
-            each = self.each_target(rc, c, body, span)?;
+            each = self.each_target(rc, c, span)?;
             &each
         } else {
             c
@@ -513,9 +497,7 @@ impl Lowerer<'_> {
             ));
         }
         self.target_named(rc, c)?;
-        let mut pre = Vec::new();
-        let res = self.resolve(rc, c, &mut pre)?;
-        body.extend(pre);
+        let res = self.resolve(rc, c)?;
         let (typ, addr, path) = match res {
             Res::Ref { typ, addr, path } if !path.is_empty() => {
                 let addr = self.each_read(rc, (self.term_of(addr), addr));

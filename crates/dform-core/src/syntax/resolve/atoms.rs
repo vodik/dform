@@ -8,13 +8,7 @@ use super::*;
 
 impl Lowerer<'_> {
     /// A chain that must name one resource: its type and address.
-    pub(super) fn reference(
-        &mut self,
-        rc: &mut Rc,
-        c: &Chain,
-        out: &mut Vec<Lit>,
-        span: Span,
-    ) -> L<(ExprId, ExprId)> {
+    pub(super) fn reference(&mut self, rc: &mut Rc, c: &Chain, span: Span) -> L<(ExprId, ExprId)> {
         if c.is_bare()
             && let Some(types) = self.resource(rc.scope, &c.head)
         {
@@ -27,7 +21,7 @@ impl Lowerer<'_> {
             let typ = self.str_node(span, &typ);
             return Ok((typ, self.resource_addr(rc.scope, &c.head, span)));
         }
-        match self.resolve(rc, c, out)? {
+        match self.resolve(rc, c)? {
             Res::Ref { typ, addr, path } if path.is_empty() => Ok((typ, addr)),
             _ => self.error(span, "expected a resource: a name in scope, or `T[e]`"),
         }
@@ -77,10 +71,9 @@ impl Lowerer<'_> {
         rc: &mut Rc,
         n: &SyntaxNode,
         pos: Pos,
-        pre: &mut Vec<Lit>,
     ) -> L<(Atom, AtomArgs, Reach)> {
         let span = self.span(n);
-        if let Some((a, args)) = self.exported_relation(rc, n, pos, pre)? {
+        if let Some((a, args)) = self.exported_relation(rc, n, pos)? {
             return Ok((a, args, Reach::Own));
         }
         let (pred, via) = self.relation_named(rc, n, span)?;
@@ -96,14 +89,14 @@ impl Lowerer<'_> {
                     "a relation's arguments are all positional or all named",
                 );
             }
-            let (a, args) = self.named_args(rc, pred, &named, pos, pre, span)?;
+            let (a, args) = self.named_args(rc, pred, &named, pos, span)?;
             return Ok((a, args, via));
         }
         let terms_of = |l: &Option<SyntaxNode>| -> Vec<SyntaxNode> {
             l.as_ref().map(|l| terms(l).collect()).unwrap_or_default()
         };
         let (a, args) = match crate::zset::REF_RELATIONS.iter().find(|(p, ..)| *p == pred) {
-            Some(_) => self.ref_relation_args(rc, pred, &terms_of(&list), pos, pre, span)?,
+            Some(_) => self.ref_relation_args(rc, pred, &terms_of(&list), pos, span)?,
             // A program relation's reference column (R-185): a resource
             // there is the reference, as in the plan's relations.
             None if !self
@@ -114,7 +107,7 @@ impl Lowerer<'_> {
                 )
                 .is_empty() =>
             {
-                let (args, nodes) = self.ref_args(rc, &pred, list.as_ref(), pos, pre)?;
+                let (args, nodes) = self.ref_args(rc, &pred, list.as_ref(), pos)?;
                 let a = Atom {
                     pred,
                     args,
@@ -124,10 +117,10 @@ impl Lowerer<'_> {
                 (a, AtomArgs::Positional(nodes))
             }
             None if pos == Pos::Content => {
-                self.content_args(rc, pred, &terms_of(&list), pos, pre, span)?
+                self.content_args(rc, pred, &terms_of(&list), pos, span)?
             }
             None => {
-                let (args, nodes) = self.args(rc, n, pos, pre)?;
+                let (args, nodes) = self.args(rc, n, pos)?;
                 Self::positional(pred, args.into_iter().zip(nodes).collect(), span)
             }
         };
@@ -196,14 +189,13 @@ impl Lowerer<'_> {
         pred: String,
         named: &[SyntaxNode],
         pos: Pos,
-        pre: &mut Vec<Lit>,
         span: Span,
     ) -> L<(Atom, AtomArgs)> {
         let mut fields = BTreeMap::new();
         let mut nodes = Vec::new();
         for f in named {
             let key = tokens(f).next().ok_or(Skip)?.text().to_string();
-            let (value, id) = self.arg_node(rc, &terms(f).next().ok_or(Skip)?, pos, pre)?;
+            let (value, id) = self.arg_node(rc, &terms(f).next().ok_or(Skip)?, pos)?;
             if fields.insert(key.clone(), value).is_some() {
                 return self.error(self.span(f), format!("column `{key}` given twice"));
             }
@@ -226,7 +218,6 @@ impl Lowerer<'_> {
         pred: String,
         list: &[SyntaxNode],
         pos: Pos,
-        pre: &mut Vec<Lit>,
         span: Span,
     ) -> L<(Atom, AtomArgs)> {
         if let Err(e) = crate::zset::ref_arity(&pred, list.len()) {
@@ -236,10 +227,10 @@ impl Lowerer<'_> {
         let mut args = Vec::new();
         for (i, t) in list.iter().enumerate() {
             args.push(if Some(i) == at {
-                let id = self.ref_expr(rc, t, pos, pre)?;
-                (self.lowered(id, pre), id)
+                let id = self.ref_expr(rc, t, pos)?;
+                (self.term_of(id), id)
             } else {
-                self.arg_node(rc, t, pos, pre)?
+                self.arg_node(rc, t, pos)?
             });
         }
         // `moved(T, "old-address", r)`: the old address is a path too
@@ -259,14 +250,13 @@ impl Lowerer<'_> {
         pred: String,
         list: &[SyntaxNode],
         pos: Pos,
-        pre: &mut Vec<Lit>,
         span: Span,
     ) -> L<(Atom, AtomArgs)> {
         if let [o] = list
             && o.kind() == OBJECT
             && self.named_columns(rc.scope, &pred)
         {
-            let (record, nodes) = self.record_pattern(rc, o, pre)?;
+            let (record, nodes) = self.record_pattern(rc, o)?;
             let a = Atom {
                 pred,
                 args: Vec::new(),
@@ -278,8 +268,8 @@ impl Lowerer<'_> {
         let mut args = Vec::new();
         for t in list {
             args.push(match t.kind() {
-                TUPLE => self.pattern(rc, t, pre)?,
-                _ => self.arg_node(rc, t, pos, pre)?,
+                TUPLE => self.pattern(rc, t)?,
+                _ => self.arg_node(rc, t, pos)?,
             });
         }
         Ok(Self::positional(pred, args, span))
@@ -303,15 +293,9 @@ impl Lowerer<'_> {
 
     /// A relation's argument at `pos`: its term, the reads it makes into
     /// `pre`, and its node.
-    pub(super) fn arg_node(
-        &mut self,
-        rc: &mut Rc,
-        t: &SyntaxNode,
-        pos: Pos,
-        pre: &mut Vec<Lit>,
-    ) -> L<(Term, ExprId)> {
-        let id = self.expr(rc, t, pos, pre)?;
-        Ok((self.lowered(id, pre), id))
+    pub(super) fn arg_node(&mut self, rc: &mut Rc, t: &SyntaxNode, pos: Pos) -> L<(Term, ExprId)> {
+        let id = self.expr(rc, t, pos)?;
+        Ok((self.term_of(id), id))
     }
 
     /// The goal of the atom `a` whose arguments are `args`: its relation's.
@@ -345,7 +329,6 @@ impl Lowerer<'_> {
         rc: &mut Rc,
         n: &SyntaxNode,
         pos: Pos,
-        pre: &mut Vec<Lit>,
     ) -> L<Option<(Atom, AtomArgs)>> {
         let span = self.span(n);
         let Some(c) = n.children().find_map(|c| Chain::of(&c)) else {
@@ -359,8 +342,7 @@ impl Lowerer<'_> {
             return Ok(None);
         }
         if let Some(d) = self.stack_in(rc.scope, &c.head) {
-            let Res::Output { inst, key, of, .. } = self.deployed_path(rc, &c, &d, pre, span)?
-            else {
+            let Res::Output { inst, key, of, .. } = self.deployed_path(rc, &c, &d, span)? else {
                 return Err(Skip);
             };
             let read = PlanRead::Output {
@@ -368,8 +350,8 @@ impl Lowerer<'_> {
                 key,
                 of,
             };
-            let rows = self.read_var(rc, "output", read, 2, &p, pre, span);
-            let (cols, nodes) = self.args(rc, n, pos, pre)?;
+            let rows = self.read_var(rc, "output", read, 2, &p, span);
+            let (cols, nodes) = self.args(rc, n, pos)?;
             let parts = nodes.into_iter().map(ListPart::Elem).collect();
             let list = self.node(span, ExprKind::List { parts });
             let a = atom_at("member", vec![self.term_of(rows), Term::List(cols)], span);
@@ -402,7 +384,7 @@ impl Lowerer<'_> {
         }
         let mut prefix = c.clone();
         prefix.ops.pop();
-        let Some(Res::Val(inst)) = self.scope_path(rc, &prefix, pre, span)? else {
+        let Some(Res::Val(inst)) = self.scope_path(rc, &prefix, span)? else {
             return Ok(None);
         };
         let inst_term = self.term_of(inst);
@@ -413,11 +395,11 @@ impl Lowerer<'_> {
             .map(|l| terms(&l).collect())
             .unwrap_or_default();
         let (cols, nodes) = match self.exported_ref_columns(rc, n, list.len()) {
-            Some(refs) if !refs.is_empty() => self.ref_args_by(rc, &p, &refs, &list, pos, pre)?,
+            Some(refs) if !refs.is_empty() => self.ref_args_by(rc, &p, &refs, &list, pos)?,
             _ => {
                 let mut cols = Vec::new();
                 for t in &list {
-                    cols.push(self.arg_node(rc, t, pos, pre)?);
+                    cols.push(self.arg_node(rc, t, pos)?);
                 }
                 cols.into_iter().unzip()
             }
@@ -459,9 +441,8 @@ impl Lowerer<'_> {
             return false;
         }
         let mut rc2 = rc.clone();
-        let mut pre = Vec::new();
         matches!(
-            self.probe(|l| l.resolve(&mut rc2, &c, &mut pre)),
+            self.probe(|l| l.resolve(&mut rc2, &c)),
             Ok(Res::Ref { ref path, .. }) if path.is_empty()
         )
     }
@@ -528,13 +509,7 @@ impl Lowerer<'_> {
 
     /// A resource where a relation takes one (R-42) as its node, the reads
     /// no node of it holds into `pre`.
-    pub(super) fn ref_expr(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        pos: Pos,
-        pre: &mut Vec<Lit>,
-    ) -> L<ExprId> {
+    pub(super) fn ref_expr(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos) -> L<ExprId> {
         let span = self.span(n);
         if n.kind() == LITERAL {
             return self.error(
@@ -544,7 +519,7 @@ impl Lowerer<'_> {
             );
         }
         let Some(c) = Chain::of(n) else {
-            return self.expr(rc, n, pos, pre);
+            return self.expr(rc, n, pos);
         };
         if let Some(r) = self.instance_ref(rc, &c, span) {
             return Ok(r);
@@ -553,20 +528,16 @@ impl Lowerer<'_> {
             && !rc.vars.contains_key(&c.head)
             && self.resource(rc.scope, &c.head).is_some()
         {
-            let mut local = Vec::new();
-            let (typ, addr) = self.reference(rc, &c, &mut local, span)?;
+            let (typ, addr) = self.reference(rc, &c, span)?;
             let empty = self.str_node(span, "");
             let args = vec![typ, addr, empty];
             return Ok(self.building(rc, span, |b| b.form(crate::address::REF, args)));
         }
-        let mut local = Vec::new();
-        match self.resolve(rc, &c, &mut local)? {
+        match self.resolve(rc, &c)? {
             Res::Ref { typ, addr, path } if path.is_empty() => {
                 let empty = self.str_node(span, "");
                 let args = vec![typ, addr, empty];
                 let id = self.building(rc, span, |b| b.form(crate::address::REF, args));
-                let left = self.building(rc, span, |b| b.not_held(id, local));
-                pre.extend(left);
                 Ok(id)
             }
             res => {
@@ -576,7 +547,7 @@ impl Lowerer<'_> {
                 {
                     rc.untyped_refs.insert(c.head.clone());
                 }
-                self.realize_expr(rc, res, pos, (local, pre), span)
+                self.realize_expr(rc, res, pos, span)
             }
         }
     }
@@ -644,15 +615,9 @@ impl Lowerer<'_> {
     /// It lowers to `ref(ref(T, A, ""))`, the reference marked as asked
     /// for (`types` lets it into a `string` attribute); evaluated, it is
     /// the reference.
-    pub(super) fn ref_call(
-        &mut self,
-        rc: &mut Rc,
-        list: &SyntaxNode,
-        pre: &mut Vec<Lit>,
-        span: Span,
-    ) -> L<ExprId> {
+    pub(super) fn ref_call(&mut self, rc: &mut Rc, list: &SyntaxNode, span: Span) -> L<ExprId> {
         let arg = terms(list).next().ok_or(Skip)?;
-        let r = self.ref_expr(rc, &arg, Pos::Content, pre)?;
+        let r = self.ref_expr(rc, &arg, Pos::Content)?;
         match self.term_of(r) {
             Term::Func { .. } => {
                 Ok(self.building(rc, span, |b| b.form(crate::address::REF, vec![r])))
@@ -804,29 +769,23 @@ impl Lowerer<'_> {
         rc: &mut Rc,
         n: &SyntaxNode,
         pos: Pos,
-        pre: &mut Vec<Lit>,
     ) -> L<(Vec<Term>, Vec<ExprId>)> {
         let mut out = Vec::new();
         for t in node(n, ARG_LIST).iter().flat_map(terms) {
-            out.push(self.arg_node(rc, &t, pos, pre)?);
+            out.push(self.arg_node(rc, &t, pos)?);
         }
         Ok(out.into_iter().unzip())
     }
 
     /// The arguments of `n` as parts of what a chain resolves to
     /// ([`Self::part`]).
-    pub(super) fn arg_parts(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        pre: &mut Vec<Lit>,
-    ) -> L<Vec<ExprId>> {
+    pub(super) fn arg_parts(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<Vec<ExprId>> {
         let Some(list) = node(n, ARG_LIST) else {
             return Ok(Vec::new());
         };
         let mut out = Vec::new();
         for t in terms(&list) {
-            out.push(self.part(rc, &t, pre)?);
+            out.push(self.part(rc, &t)?);
         }
         Ok(out)
     }

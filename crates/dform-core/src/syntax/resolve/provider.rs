@@ -95,22 +95,18 @@ impl Lowerer<'_> {
             );
         }
         let block = node(n, BLOCK);
-        let mut out = Vec::new();
-        let mut source = Vec::new();
-        let mut settings = BTreeMap::new();
-        // Each setting as lowered: its kind and span, its value, the reads
-        // it hoisted (of `body`, or of an account's own) and the helpers
-        // it made.
+        let mut settings = BTreeSet::new();
+        // Each setting as lowered: its kind and span, its value and the
+        // helpers it made.
         let mut parts: Vec<Part> = Vec::new();
         let mut written = BTreeSet::new();
         let mut rc = self.rc(n, scope, outer);
         // A guarded provider (R-104): its settings, its account and its
         // start hold only while the clause does.
-        let clause = self.clauses(&mut rc, n)?;
+        self.clauses(&mut rc, n)?;
         let gathered = self.gather.as_mut().and_then(|g| g.take_clause());
         // A `use` binds no aggregate, as a copy's does not.
         self.aggregate_in(gathered, self.span(n))?;
-        let mut body = clause.clone();
         let others = self.providers_named(n, &name)?;
         if let Some(b) = &block {
             for a in b.children().filter(|c| c.kind() == ASSIGN) {
@@ -132,36 +128,28 @@ impl Lowerer<'_> {
                                 .error(at, format!("provider {name}: source is a path string"));
                         };
                         let id = self.constant_node(&mut rc, &t)?;
-                        let v = self.term_of(id);
                         let made = made..self.helpers.len();
-                        parts.push((SettingKind::Source(key.clone()), at, id, made));
-                        source.push((key, v, at))
+                        parts.push((SettingKind::Source(key), at, id, made));
                     }
                     EXPECT_ACCOUNT => {
                         let mut rc = self.rc(&a, scope, outer);
-                        let (mut body, own) = match clause.is_empty() {
-                            true => (Vec::new(), None),
-                            false => {
-                                let body = self.clauses(&mut rc, n)?;
-                                (body, self.gather.as_mut().and_then(|g| g.take_clause()))
+                        let own = match gathered {
+                            None => None,
+                            Some(_) => {
+                                self.clauses(&mut rc, n)?;
+                                self.gather.as_mut().and_then(|g| g.take_clause())
                             }
                         };
                         let made = self.helpers.len();
-                        let (v, id) = self.entry_value(&mut rc, &a, Pos::Content, &mut body)?;
-                        let head = atom_at(
-                            crate::plugin::providers::EXPECT_ACCOUNT,
-                            vec![str_term(&name), v.clone()],
-                            at,
-                        );
+                        let (_, id) = self.entry_value(&mut rc, &a, Pos::Content)?;
                         self.check_bound(&rc, own, &[bind::Term::Expr(id)])?;
-                        out.push(rule_or_fact(head, body.clone()));
                         written.extend(rc.vars.values().cloned());
                         let made = made..self.helpers.len();
                         parts.push((SettingKind::Account(own), at, id, made));
                     }
                     _ => {
-                        let (v, id) = self.entry_value(&mut rc, &a, Pos::Content, &mut body)?;
-                        if settings.insert(key.clone(), v).is_some() {
+                        let (_, id) = self.entry_value(&mut rc, &a, Pos::Content)?;
+                        if !settings.insert(key.clone()) {
                             return self.error(at, format!("provider {name}: {key} is set twice"));
                         }
                         let made = made..self.helpers.len();
@@ -174,30 +162,21 @@ impl Lowerer<'_> {
         // A guarded provider is configured by the program, with no
         // settings too: it serves nothing until its clause holds and its
         // `provider_config` fact arrives (`Providers::configure_from`).
-        if !settings.is_empty() || !clause.is_empty() {
-            let head = atom_at(
-                "provider_config",
-                vec![str_term(&name), Term::Obj(settings)],
-                span,
-            );
+        if !settings.is_empty() || gathered.is_some() {
             let values: Vec<bind::Term> = parts
                 .iter()
                 .filter(|(kind, ..)| matches!(kind, SettingKind::Value(_)))
                 .map(|&(_, _, id, _)| bind::Term::Expr(id))
                 .collect();
             self.check_bound(&rc, gathered, &values)?;
-            out.insert(0, rule_or_fact(head, body.clone()));
         }
         // Declared more than once, each under a clause (R-104): the first
         // starts it, each holds while its clause does, and two that both
         // hold are the deny naming both.
         // `effects` reads each guarded declaration's clause off it.
         let mut declared = None;
-        if !clause.is_empty() {
-            let i = others.iter().position(|o| o == n).unwrap_or_default();
-            let group = format!("use {name}");
-            out.push(crate::modules::declared(&group, i, clause.clone(), span));
-            declared = Some(i);
+        if gathered.is_some() {
+            declared = Some(others.iter().position(|o| o == n).unwrap_or_default());
         }
         let mut starts = false;
         let mut denies = Vec::new();
@@ -240,20 +219,8 @@ impl Lowerer<'_> {
             }
             _ => {
                 starts = true;
-                out.insert(
-                    0,
-                    Stmt::Provider(Config {
-                        name: name.clone(),
-                        of: (of != name).then(|| of.clone()),
-                        config: source,
-                        span,
-                    }),
-                );
                 if others.len() > 1 {
                     denies = others.iter().map(|o| self.span(o)).collect();
-                    let sites: Vec<(String, Span)> =
-                        denies.iter().map(|s| (format!("use {name}"), *s)).collect();
-                    out.extend(crate::modules::denies(&format!("use {name}"), &sites));
                 }
             }
         }
@@ -315,7 +282,6 @@ impl Lowerer<'_> {
         rc: &mut Rc,
         n: &SyntaxNode,
         pos: Pos,
-        pre: &mut Vec<Lit>,
     ) -> Option<L<ExprId>> {
         let name = self.callee(n)?;
         if name == "ssh.run" {
@@ -362,20 +328,12 @@ impl Lowerer<'_> {
                 format!("{name} is the {head} provider's: declare `use {head}`"),
             ));
         }
-        Some(self.extern_read(rc, n, pos, pre, &name))
+        Some(self.extern_read(rc, n, pos, &name))
     }
 
-    fn extern_read(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        pos: Pos,
-        pre: &mut Vec<Lit>,
-        name: &str,
-    ) -> L<ExprId> {
+    fn extern_read(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, name: &str) -> L<ExprId> {
         let span = self.span(n);
-        let mut local = Vec::new();
-        let args = self.bind(true, |l| l.arg_parts(rc, n, &mut local))?;
+        let args = self.bind(true, |l| l.arg_parts(rc, n))?;
         let want = match name {
             ENV_VAR => "one argument: the variable's name",
             crate::externs::TIME_NOW => "no argument",
@@ -392,7 +350,7 @@ impl Lowerer<'_> {
             out: ins,
             path: Vec::new(),
         };
-        self.realize_expr(rc, res, pos, (local, pre), span)
+        self.realize_expr(rc, res, pos, span)
     }
 
     /// The externs of the built-in fact providers the program's `use`s
@@ -496,13 +454,5 @@ impl Lowerer<'_> {
         };
         self.diags.push(d);
         Err(Skip)
-    }
-}
-
-fn rule_or_fact(head: Atom, body: Vec<Lit>) -> Stmt {
-    if body.is_empty() {
-        Stmt::Fact(head)
-    } else {
-        Stmt::Rule(RuleStmt::new(head, body))
     }
 }

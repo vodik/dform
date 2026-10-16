@@ -1,9 +1,7 @@
-//! Reads in term position (R-211 steps 6b, 7c). The resolver hoists a
-//! read out of the term that makes it, a literal before the one holding
-//! the term, and builds the read as its node where its term is
-//! ([`Builder::read_into`]): the term holds the read, [`Expr::hoisted`]
-//! into the variable it binds, and `lower` writes it back as the literal
-//! it was, before the literal that holds it.
+//! Reads in term position (R-211 steps 6b, 7c). The resolver builds a
+//! read as its node where its term is ([`Builder::read_into`]): the term
+//! holds the read, [`Expr::hoisted`] into the variable it binds, and
+//! `lower` writes it as a literal before the one that holds the term.
 //!
 //! | hoisted                                   | node, `hoisted` into `V`        |
 //! |-------------------------------------------|---------------------------------|
@@ -17,13 +15,10 @@
 //! | `k(__ref("T", V, ""))`                    | `Address` of the read           |
 //! | `V = t`                                   | `t`'s node                      |
 //!
-//! Which of the resolver's own literals a node holds is what its lowering
-//! writes ([`Builder::not_held`]); a test the resolver makes before a
-//! read (`instance_of`) is the read's when the read holds it
-//! ([`Reads::holds`]).
+//! A test the resolver makes before a read (`instance_of`) is the
+//! read's when the read holds it ([`Reads::holds`]).
 
 use super::Builder;
-use crate::ast::Lit;
 use crate::program::node::*;
 use crate::program::scope::{DeclRef, Reach};
 use crate::value::Value;
@@ -79,20 +74,6 @@ impl super::Reads {
 }
 
 impl Builder<'_> {
-    /// Of `reads`, the resolver's literals for what it hoisted before the
-    /// node `id`, those `id` does not hold (the reads its lowering writes
-    /// taken out), in order.
-    pub fn not_held(&self, id: ExprId, mut reads: Vec<Lit>) -> Vec<Lit> {
-        let (_, held) = crate::program::lower_expr(self.program, id);
-        for r in held {
-            let r = written(&r);
-            if let Some(i) = reads.iter().position(|l| written(l) == r) {
-                reads.remove(i);
-            }
-        }
-        reads
-    }
-
     /// The read `read` in term position, read into the variable `v`: its
     /// node, built from what it reads (step 7), its parts the nodes of
     /// what resolved them.
@@ -261,14 +242,5 @@ impl Builder<'_> {
         let var = self.var(v);
         self.program.exprs[id].hoisted = Some(var);
         id
-    }
-}
-
-/// A literal as written, at its place: two reads of one relation written
-/// in two places are two.
-fn written(l: &Lit) -> String {
-    match l {
-        Lit::Pos(a) | Lit::Not(a) => format!("{l:?}@{:?}", a.span),
-        l => format!("{l:?}"),
     }
 }

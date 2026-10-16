@@ -8,7 +8,7 @@ use super::*;
 
 impl Lowerer<'_> {
     /// The clause of a block statement: the `where` body after its block.
-    pub(super) fn clauses(&mut self, rc: &mut Rc, stmt: &SyntaxNode) -> L<Vec<Lit>> {
+    pub(super) fn clauses(&mut self, rc: &mut Rc, stmt: &SyntaxNode) -> L<()> {
         let mut lits = Vec::new();
         for c in stmt.children().filter(|c| c.kind() == CLAUSE) {
             lits.extend(node(&c, BODY).ok_or(Skip)?.children());
@@ -16,14 +16,9 @@ impl Lowerer<'_> {
         self.lits(rc, &lits)
     }
 
-    /// The assignments of a block, their reads appended to `reads`; with
-    /// each, where its reads and the statement's helpers it made end.
-    pub(super) fn fields(
-        &mut self,
-        rc: &mut Rc,
-        block: &SyntaxNode,
-        reads: &mut Vec<Lit>,
-    ) -> L<Entries> {
+    /// The assignments of a block; with each, where the statement's
+    /// helpers it made end.
+    pub(super) fn fields(&mut self, rc: &mut Rc, block: &SyntaxNode) -> L<Entries> {
         let mut out = Vec::new();
         let mut failed = false;
         for a in block.children().filter(|c| c.kind() == ASSIGN) {
@@ -34,7 +29,7 @@ impl Lowerer<'_> {
                 } else {
                     FieldOp::Assign
                 };
-                let (value, id) = self.entry_value(rc, &a, Pos::Value, reads)?;
+                let (value, id) = self.entry_value(rc, &a, Pos::Value)?;
                 let f = FieldAssign {
                     key,
                     op,
@@ -42,7 +37,7 @@ impl Lowerer<'_> {
                     rank: self.rank_tok(&a)?,
                     span: self.span(&a),
                 };
-                Ok((f, id, (reads.len(), self.helpers.len())))
+                Ok((f, id, self.helpers.len()))
             })();
             match r {
                 Ok(f) => out.push(f),
@@ -52,10 +47,10 @@ impl Lowerer<'_> {
         if failed { Err(Skip) } else { Ok(out) }
     }
 
-    pub(super) fn opt_body(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<Vec<Lit>> {
+    pub(super) fn opt_body(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<()> {
         match node(n, BODY) {
             Some(b) => self.body(rc, &b),
-            None => Ok(Vec::new()),
+            None => Ok(()),
         }
     }
 
@@ -96,7 +91,7 @@ impl Lowerer<'_> {
         let span = self.span(n);
         let head_node = n.children().find(|c| c.kind() == CALL).ok_or(Skip)?;
         let mut rc = self.rc(n, scope, outer);
-        let mut body = self.opt_body(&mut rc, n)?;
+        self.opt_body(&mut rc, n)?;
         let has_body = node(n, BODY).is_some();
         let clause = self.body_clause(n);
         let calls = match self.callee(&head_node).as_deref() {
@@ -119,9 +114,8 @@ impl Lowerer<'_> {
             );
         }
         let made = self.helpers.len();
-        let (head, args, via) = self.calls(calls, |l| {
-            l.atom_args(&mut rc, &head_node, Pos::Whole, &mut body)
-        })?;
+        let (head, args, via) =
+            self.calls(calls, |l| l.atom_args(&mut rc, &head_node, Pos::Whole))?;
         let rel = RelRef::reached(head.pred.clone(), via, head.span);
         let args = self.rel_args(&rc, head.span, args);
         let rank = self.rank_tok(n)?;
@@ -192,7 +186,7 @@ impl Lowerer<'_> {
             _ => Want::Nothing,
         };
         let mut rc = self.rc(n, scope, outer);
-        let mut body = self.opt_body(&mut rc, n)?;
+        self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
         let made = self.helpers.len();
         let t = terms(n).next().ok_or(Skip)?;
@@ -200,19 +194,18 @@ impl Lowerer<'_> {
         let mut fold = None;
         let (value, id) = if aggregate {
             // `let n = count(x) where B`: one group (R-59).
-            let (call, agg) = self.aggregate_call(&mut rc, &t, &mut body)?;
+            let (_, agg) = self.aggregate_call(&mut rc, &t)?;
             let v = fresh(&mut rc, &capitalise(&name));
             self.aggs.push(aggregate::Agg {
                 var: v.clone(),
                 text: t.text().to_string(),
                 span: self.span(&t),
             });
-            body.push(Lit::Eq(var(&v), call));
             let at = self.span(&t);
             fold = Some(self.fold_goal(&rc, at, &v, agg));
             (var(&v), Some(self.var_node(&rc, at, &v)))
         } else {
-            let (value, id) = self.wanting(want, |l| l.let_value(&mut rc, &t, &mut body))?;
+            let (value, id) = self.wanting(want, |l| l.let_value(&mut rc, &t))?;
             (value, Some(id))
         };
         let id = match (&ty, &declared) {
@@ -359,12 +352,7 @@ impl Lowerer<'_> {
 
     /// A `let`'s value: a reference is its key (a resource's address, a
     /// live object's name); anything else the term.
-    pub(super) fn let_value(
-        &mut self,
-        rc: &mut Rc,
-        t: &SyntaxNode,
-        body: &mut Vec<Lit>,
-    ) -> L<(Term, ExprId)> {
+    pub(super) fn let_value(&mut self, rc: &mut Rc, t: &SyntaxNode) -> L<(Term, ExprId)> {
         if let Some(c) = Chain::of(t) {
             // A resource by its bare name.
             if c.is_bare()
@@ -373,12 +361,11 @@ impl Lowerer<'_> {
                 && self.resource(rc.scope, &c.head).is_some()
             {
                 let span = self.span(t);
-                let (_, addr) = self.reference(rc, &c, body, span)?;
+                let (_, addr) = self.reference(rc, &c, span)?;
                 return Ok((self.term_of(addr), addr));
             }
-            let mut pre = Vec::new();
             let mut rc2 = rc.clone();
-            if let Ok(res) = self.probe(|l| l.resolve(&mut rc2, &c, &mut pre)) {
+            if let Ok(res) = self.probe(|l| l.resolve(&mut rc2, &c)) {
                 let key = match &res {
                     Res::Ref { addr, path, .. } if path.is_empty() => Some(*addr),
                     Res::World { addr, path, .. } if path.is_empty() => Some(*addr),
@@ -386,12 +373,11 @@ impl Lowerer<'_> {
                 };
                 if let Some(k) = key {
                     *rc = rc2;
-                    body.extend(pre);
                     return Ok((self.term_of(k), k));
                 }
             }
         }
-        self.arg_node(rc, t, Pos::Value, body)
+        self.arg_node(rc, t, Pos::Value)
     }
 
     /// `output k [: T] = t [where B]` (H-7): the declaration, when typed, and
@@ -450,7 +436,7 @@ impl Lowerer<'_> {
             return Err(Skip);
         };
         let mut rc = self.rc(n, scope, outer);
-        let mut pre = self.opt_body(&mut rc, n)?;
+        self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
         let made = self.helpers.len();
         // An output typed by a resource type holds its address (`scoped` by
@@ -465,8 +451,8 @@ impl Lowerer<'_> {
             {
                 (str_term(&c.head), self.str_node(self.span(&t), &c.head))
             }
-            _ if addr_typed => self.arg_node(&mut rc, &t, Pos::Whole, &mut pre)?,
-            _ => self.arg_node(&mut rc, &t, Pos::Value, &mut pre)?,
+            _ if addr_typed => self.arg_node(&mut rc, &t, Pos::Whole)?,
+            _ => self.arg_node(&mut rc, &t, Pos::Value)?,
         };
         self.check_bound(&rc, clause, &[bind::Term::Expr(id)])?;
         let parts = (name, declared, clause, id, made);
@@ -522,10 +508,10 @@ impl Lowerer<'_> {
     ) -> L<ItemId> {
         let name = word_text(n, 1);
         let mut rc = self.rc(n, scope, outer);
-        let mut pre = self.opt_body(&mut rc, n)?;
+        self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
         let made = self.helpers.len();
-        let (_, id, ty) = self.output_fields(&mut rc, n, &mut pre)?;
+        let (_, id, ty) = self.output_fields(&mut rc, n)?;
         let declared = self.outputs.insert((scope, name.clone())).then_some(ty);
         self.check_bound(&rc, clause, &[bind::Term::Expr(id)])?;
         let parts = (name, declared, clause, id, made);
@@ -537,7 +523,6 @@ impl Lowerer<'_> {
         &mut self,
         rc: &mut Rc,
         n: &SyntaxNode,
-        pre: &mut Vec<Lit>,
     ) -> L<(Term, ExprId, TypeExpr)> {
         let mut value = BTreeMap::new();
         let mut parts = Vec::new();
@@ -552,12 +537,12 @@ impl Lowerer<'_> {
                 );
             }
             let (v, id, t) = if node(&a, ATTR_DECL).is_some() {
-                self.output_fields(rc, &a, pre)?
+                self.output_fields(rc, &a)?
             } else {
                 let Some(t) = terms(&a).next() else {
                     return self.error(span, format!("field {field} has no value: `{field} = t`"));
                 };
-                let (v, id) = self.arg_node(rc, &t, Pos::Value, pre)?;
+                let (v, id) = self.arg_node(rc, &t, Pos::Value)?;
                 let ty = node(&a, TYPE_EXPR)
                     .map(|t| self.type_expr(&t))
                     .unwrap_or_else(|| TypeExpr::Name("any".into()));
@@ -728,17 +713,16 @@ impl Lowerer<'_> {
         let kw = tokens(n).next().ok_or(Skip)?;
         let msg = tokens(n).find(|t| t.kind() == STRING).ok_or(Skip)?;
         let mut rc = self.rc(n, scope, outer);
-        let mut body = self.opt_body(&mut rc, n)?;
+        self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
         let made = self.helpers.len();
         // The message is a string like any other: `${e}` reads the body's
         // variables (H-13).
-        let message = self.string_expr(&mut rc, &msg, &mut body)?;
-        self.lowered(message, &mut body);
+        let message = self.string_expr(&mut rc, &msg)?;
         let made_mid = self.helpers.len();
         let mut detail = None;
         if let Some(o) = node(n, OBJECT) {
-            let (_, id) = self.arg_node(&mut rc, &o, Pos::Whole, &mut body)?;
+            let (_, id) = self.arg_node(&mut rc, &o, Pos::Whole)?;
             detail = Some(id);
         }
         let terms: Vec<bind::Term> = std::iter::once(message)

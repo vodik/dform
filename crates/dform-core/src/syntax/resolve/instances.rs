@@ -12,13 +12,7 @@ impl Lowerer<'_> {
     /// output of each instance of the component `c` (`instance_of(c, T),
     /// output(T, k, V)`); `m.x`, the value `x` of a used module `m`; and a
     /// stack's deployment, `platform[env=e].k`.
-    pub(super) fn scope_path(
-        &mut self,
-        rc: &mut Rc,
-        c: &Chain,
-        pre: &mut Vec<Lit>,
-        span: Span,
-    ) -> L<Option<Res>> {
+    pub(super) fn scope_path(&mut self, rc: &mut Rc, c: &Chain, span: Span) -> L<Option<Res>> {
         let h = c.head.as_str();
         // Inside a module's file the module reads itself by its own name
         // (`backups.repository` in its component): its value or resource
@@ -34,7 +28,7 @@ impl Lowerer<'_> {
                 range: c.range,
                 ops: c.ops[1..].to_vec(),
             };
-            if let Some(r) = self.item_read(rc, from, false, &rest, pre, span)? {
+            if let Some(r) = self.item_read(rc, from, false, &rest, span)? {
                 return Ok(Some(r));
             }
         }
@@ -49,11 +43,11 @@ impl Lowerer<'_> {
             let name = self.str_node(span, h);
             let inst = self.scoped(rc.scope, at, name, span);
             return self
-                .output_of(rc, (inst, None), &path, &c.ops, pre, span)
+                .output_of(rc, (inst, None), &path, &c.ops, span)
                 .map(Some);
         }
         if let Some(d) = self.stack_in(rc.scope, h) {
-            return self.deployed_path(rc, c, &d, pre, span).map(Some);
+            return self.deployed_path(rc, c, &d, span).map(Some);
         }
         // A used stack by its full name, its module path (R-200):
         // `stacks.platform[env].out`, as `platform[env].out` reads it.
@@ -65,7 +59,7 @@ impl Lowerer<'_> {
                 range: c.range,
                 ops: c.ops[n..].to_vec(),
             };
-            return self.deployed_path(rc, &short, &d, pre, span).map(Some);
+            return self.deployed_path(rc, &short, &d, span).map(Some);
         }
         // A component by a name in scope (`network`), a used module's
         // (`net.vpc`), or by its path from the root (`modules.net.vpc`).
@@ -102,7 +96,7 @@ impl Lowerer<'_> {
         let component = self.module_at(&at).is_some_and(|m| m.1);
         match ops.first() {
             Some(Op::Index(ts, _)) if component && ts.len() == 1 => {
-                let mut t = self.bind(true, |l| l.part(rc, &ts[0], pre))?;
+                let mut t = self.bind(true, |l| l.part(rc, &ts[0]))?;
                 // `c[_]` binds each copy (R-162): a name its resources'
                 // addresses are made of (`c[_].vm`, R-191).
                 if matches!(self.program.exprs[t].kind, ExprKind::Hole) {
@@ -123,12 +117,12 @@ impl Lowerer<'_> {
                 let at_scope = own.unwrap_or(self.root());
                 let user = self.str_node(span, "");
                 let parent = self.scoped(rc.scope, at_scope, user, span);
-                self.copy_test(rc, (&at, parent, t), pre, span);
+                self.copy_test(rc, (&at, parent, t), span);
                 let inst = self.scoped(rc.scope, at_scope, t, span);
                 // The test is the read's when it names the copy as the
                 // read does: the body's own copies.
                 let of = (inst == t).then(|| (at.clone(), parent));
-                self.output_of(rc, (inst, of), &at, &ops[1..], pre, span)
+                self.output_of(rc, (inst, of), &at, &ops[1..], span)
                     .map(Some)
             }
             _ if component => self
@@ -159,7 +153,7 @@ impl Lowerer<'_> {
                     .unwrap_or(self.root());
                 let own = self.names(module);
                 if let Some(at) = own.value_at(x) {
-                    let path = self.segs(rc, &ops[1..], pre)?;
+                    let path = self.segs(rc, &ops[1..])?;
                     let decl = DeclRef {
                         scope: module,
                         name: x.clone(),
@@ -171,9 +165,7 @@ impl Lowerer<'_> {
                 if own.output(x).is_some() {
                     let name = self.str_node(span, h);
                     let inst = self.scoped(rc.scope, declared, name, span);
-                    return self
-                        .output_of(rc, (inst, None), &at, ops, pre, span)
-                        .map(Some);
+                    return self.output_of(rc, (inst, None), &at, ops, span).map(Some);
                 }
                 if let Some(types) = own.resources(x) {
                     if types.len() > 1 {
@@ -181,7 +173,7 @@ impl Lowerer<'_> {
                     }
                     let name = self.str_node(span, h);
                     let scope = self.scoped(rc.scope, declared, name, span);
-                    let path = self.segs(rc, &ops[1..], pre)?;
+                    let path = self.segs(rc, &ops[1..])?;
                     let x = self.str_node(span, &crate::address::name_segment(x));
                     return Ok(Some(Res::Ref {
                         typ: self.str_node(span, &types[0]),
@@ -303,18 +295,15 @@ impl Lowerer<'_> {
     }
 
     /// The test that `copy` is a copy of `component` made in `scope`,
-    /// `instance_of(component, scope, copy)`, into `pre` before what reads
-    /// the copy by its key; its goal kept for the builders.
+    /// `instance_of(component, scope, copy)`, before what reads the copy
+    /// by its key: its goal, a test of the rule context.
     pub(super) fn copy_test(
         &mut self,
         rc: &mut Rc,
         (component, scope, copy): (&str, ExprId, ExprId),
-        pre: &mut Vec<Lit>,
         span: Span,
     ) {
         let pred = crate::modules::INSTANCE_OF;
-        let args = vec![str_term(component), self.term_of(scope), self.term_of(copy)];
-        let test = Lit::Pos(atom_at(pred, args, span));
         let of = self.str_node(span, component);
         let g = self.building(rc, span, |b| {
             let args = [of, b.settled(scope), b.settled(copy)]
@@ -326,7 +315,6 @@ impl Lowerer<'_> {
             b.goal_node(span, GoalKind::Rel { rel, args })
         });
         rc.tests.push((Some(scope), g));
-        pre.push(test);
     }
 
     /// `.k.path` after an instance's scope `inst`, of the component at
@@ -339,13 +327,12 @@ impl Lowerer<'_> {
         (inst, of): (ExprId, Option<(String, ExprId)>),
         path: &str,
         ops: &[Op],
-        pre: &mut Vec<Lit>,
         span: Span,
     ) -> L<Res> {
         match ops.first() {
             None => Ok(Res::Val(inst)),
             Some(Op::Field(k)) => {
-                let segs = self.segs(rc, &ops[1..], pre)?;
+                let segs = self.segs(rc, &ops[1..])?;
                 // A resource of the copy (R-191), `c[t].vm`: its address
                 // under the copy's, `__scoped(t, "vm")`, as a used
                 // module's `k3s.admin` is.
@@ -373,7 +360,7 @@ impl Lowerer<'_> {
                         key: k.clone(),
                         of,
                     };
-                    let v = self.read_var(rc, "output", read, 2, k, pre, span);
+                    let v = self.read_var(rc, "output", read, 2, k, span);
                     return Ok(Res::Ref {
                         typ: self.str_node(span, t),
                         addr: v,
@@ -440,7 +427,6 @@ impl Lowerer<'_> {
         rc: &mut Rc,
         c: &Chain,
         d: &Deployed,
-        pre: &mut Vec<Lit>,
         span: Span,
     ) -> L<Res> {
         let m = &c.head;
@@ -476,7 +462,7 @@ impl Lowerer<'_> {
                 let mut values = Vec::new();
                 for k in &keys {
                     let (_, t) = entries.iter().find(|(x, _)| x == k).expect("checked");
-                    let v = self.bind(true, |l| l.part(rc, t, pre))?;
+                    let v = self.bind(true, |l| l.part(rc, t))?;
                     let e = &self.program.exprs[v];
                     let escaped = match (&e.kind, e.hoisted) {
                         (ExprKind::Lit(Value::Str(s)), None) => Some(crate::stack::escape(s)),
@@ -546,7 +532,7 @@ impl Lowerer<'_> {
             );
         };
         self.deployed_output(d, k, span)?;
-        let path = self.segs(rc, &rest[1..], pre)?;
+        let path = self.segs(rc, &rest[1..])?;
         // The keyed read of a copy's output (`network[t].k`), the
         // deployment the instance: `instance_of(PATH, "", NAME), output(NAME,
         // k, V)`, both served from what it published (I-modules section 6).
@@ -554,7 +540,7 @@ impl Lowerer<'_> {
         let inst = self.scoped(rc.scope, root, name, span);
         let user = self.str_node(span, "");
         let user = self.scoped(rc.scope, root, user, span);
-        self.copy_test(rc, (&d.path, user, inst), pre, span);
+        self.copy_test(rc, (&d.path, user, inst), span);
         Ok(Res::Output {
             inst,
             key: k.clone(),

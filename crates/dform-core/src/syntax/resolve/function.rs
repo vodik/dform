@@ -118,23 +118,16 @@ impl Lowerer<'_> {
             inner.vars.insert(p.name.clone(), v.clone());
             vars.push(var(&v));
         }
-        let mut rc = self.rc(n, scope, &inner);
         // The parameters are bound by the demand of the literal that reads
-        // the relation (`crate::demand`), first in the body, so a helper
-        // of the clause (`not { }`) is bound by it too.
-        let demand = Lit::Pos(atom_at(&crate::demand::of(&name), vars.clone(), span));
-        let mut body = match node(n, BODY) {
-            Some(b) => {
-                let lits: Vec<SyntaxNode> = b.children().collect();
-                self.lits_after(&mut rc, &lits, vec![demand])?
-            }
-            None => vec![demand],
-        };
+        // the relation (`crate::demand`), which `lower` writes first in the
+        // body: bound around it.
+        let mut rc = self.rc(n, scope, &inner);
+        self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
         let made = self.helpers.len();
         let t = terms(n).next().ok_or(Skip)?;
         let declared = node(n, TYPE_EXPR).map(|t| self.type_expr(&t));
-        let (value, id) = self.let_value(&mut rc, &t, &mut body)?;
+        let (value, id) = self.let_value(&mut rc, &t)?;
         let (value, id) = match &declared {
             Some(d) => {
                 let ty = (&crate::types::of_expr(d), d);
@@ -231,26 +224,15 @@ impl Lowerer<'_> {
     /// A call of a let with parameters in a term: a fresh variable, the
     /// value column of the relation read with the arguments, once per rule
     /// (R-71's chain). `None` when the call names no let.
-    pub(super) fn function_call(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        pre: &mut Vec<Lit>,
-    ) -> Option<L<ExprId>> {
+    pub(super) fn function_call(&mut self, rc: &mut Rc, n: &SyntaxNode) -> Option<L<ExprId>> {
         let called = match self.called_function(rc, n) {
             Ok(found) => found?,
             Err(e) => return Some(Err(e)),
         };
-        Some(self.call_function(rc, n, called, pre))
+        Some(self.call_function(rc, n, called))
     }
 
-    fn call_function(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        called: Called,
-        pre: &mut Vec<Lit>,
-    ) -> L<ExprId> {
+    fn call_function(&mut self, rc: &mut Rc, n: &SyntaxNode, called: Called) -> L<ExprId> {
         let Called {
             rel: pred,
             via,
@@ -280,7 +262,7 @@ impl Lowerer<'_> {
         }
         let mut given: Vec<Option<(ExprId, Span)>> = (0..ps.len()).map(|_| None).collect();
         for (i, t) in positional.iter().enumerate() {
-            let arg = self.bind(false, |l| l.expr(rc, t, Pos::Content, pre))?;
+            let arg = self.bind(false, |l| l.expr(rc, t, Pos::Content))?;
             given[i] = Some((arg, self.span(t)));
         }
         let named = list
@@ -302,7 +284,7 @@ impl Lowerer<'_> {
                 return self.error(self.span(&a), format!("`{name}`'s `{k}` is given twice"));
             }
             let t = terms(&a).next().ok_or(Skip)?;
-            let arg = self.bind(false, |l| l.expr(rc, &t, Pos::Content, pre))?;
+            let arg = self.bind(false, |l| l.expr(rc, &t, Pos::Content))?;
             given[i] = Some((arg, self.span(&t)));
         }
         let mut args = Vec::new();
@@ -349,9 +331,6 @@ impl Lowerer<'_> {
         if let Some(Term::Var(v)) = rc.reads.get(&key) {
             // Read already: its arguments' reads are made again.
             let v = v.clone();
-            for a in args {
-                self.lowered(a, pre);
-            }
             return Ok(self.var_node(rc, span, &v));
         }
         let v = fresh(rc, &capitalise(&name));
@@ -395,7 +374,7 @@ impl Lowerer<'_> {
     }
 
     /// `x in f`: the error that says why nothing enumerates `f`.
-    pub(super) fn in_function(&mut self, span: Span, name: &str, def: &SyntaxNode) -> L<Lit> {
+    pub(super) fn in_function<T>(&mut self, span: Span, name: &str, def: &SyntaxNode) -> L<T> {
         let ps = params(def).unwrap_or_default();
         let d = Diagnostic::error(
             span,

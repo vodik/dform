@@ -46,13 +46,7 @@ impl Lowerer<'_> {
     /// `{ a: 1, ..base, b: x }`: the parts in order, folded where each is
     /// written (a written object spread is its fields), a run of fields
     /// with a computed key its object spread.
-    pub(super) fn spread_object(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        pos: Pos,
-        pre: &mut Vec<Lit>,
-    ) -> L<ExprId> {
+    pub(super) fn spread_object(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos) -> L<ExprId> {
         let mut parts = Vec::new();
         let mut run = Vec::new();
         for c in n.children() {
@@ -61,16 +55,16 @@ impl Lowerer<'_> {
                 SPREAD => {
                     if !run.is_empty() {
                         let fields = std::mem::take(&mut run);
-                        parts.push(self.field_run(rc, &fields, pos, pre)?);
+                        parts.push(self.field_run(rc, &fields, pos)?);
                     }
-                    let id = self.spread_source(rc, &c, Target::Object, pre)?;
+                    let id = self.spread_source(rc, &c, Target::Object)?;
                     parts.push(self.object_part(id));
                 }
                 _ => {}
             }
         }
         if !run.is_empty() {
-            parts.push(self.field_run(rc, &run, pos, pre)?);
+            parts.push(self.field_run(rc, &run, pos)?);
         }
         let parts = folded(parts);
         let parts = match parts.as_slice() {
@@ -90,13 +84,7 @@ impl Lowerer<'_> {
 
     /// `[a, ..xs, b]`: the parts in order, folded where each is written (a
     /// written list spread is its elements, a known range its members).
-    pub(super) fn list(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        pos: Pos,
-        pre: &mut Vec<Lit>,
-    ) -> L<ExprId> {
+    pub(super) fn list(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos) -> L<ExprId> {
         let mut parts = Vec::new();
         let mut run = Vec::new();
         for t in terms(n) {
@@ -104,10 +92,10 @@ impl Lowerer<'_> {
                 if !run.is_empty() {
                     parts.push(Part::Run(std::mem::take(&mut run)));
                 }
-                let id = self.spread_source(rc, &t, Target::List, pre)?;
+                let id = self.spread_source(rc, &t, Target::List)?;
                 parts.push(self.list_part(id));
             } else {
-                run.push(ListPart::Elem(self.expr(rc, &t, pos, pre)?));
+                run.push(ListPart::Elem(self.expr(rc, &t, pos)?));
             }
         }
         if !run.is_empty() || parts.is_empty() {
@@ -131,14 +119,8 @@ impl Lowerer<'_> {
 
     /// A run of written fields: its fields, or, a key computed, the
     /// object they make spread.
-    fn field_run(
-        &mut self,
-        rc: &mut Rc,
-        fields: &[SyntaxNode],
-        pos: Pos,
-        pre: &mut Vec<Lit>,
-    ) -> L<Part<ObjPart>> {
-        let parts = self.object_fields(rc, fields, pos, pre)?;
+    fn field_run(&mut self, rc: &mut Rc, fields: &[SyntaxNode], pos: Pos) -> L<Part<ObjPart>> {
+        let parts = self.object_fields(rc, fields, pos)?;
         if !parts.iter().any(|p| matches!(p, ObjPart::Computed { .. })) {
             return Ok(Part::Run(parts));
         }
@@ -219,13 +201,7 @@ impl Lowerer<'_> {
     /// The value a spread `..x` gives, read where it stands; an error when
     /// what it is is known and is not what the literal takes. A known
     /// range spread into a list is its members.
-    fn spread_source(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        into: Target,
-        pre: &mut Vec<Lit>,
-    ) -> L<ExprId> {
+    fn spread_source(&mut self, rc: &mut Rc, n: &SyntaxNode, into: Target) -> L<ExprId> {
         let span = self.span(n);
         let Some(inner) = terms(n).next() else {
             let example = match into {
@@ -238,7 +214,7 @@ impl Lowerer<'_> {
                 format!("name it after the dots, `{example}`"),
             );
         };
-        let id = self.bind(false, |l| l.expr(rc, &inner, Pos::Content, pre))?;
+        let id = self.bind(false, |l| l.expr(rc, &inner, Pos::Content))?;
         let t = self.term_of(id);
         let src = inner.text().to_string();
         if let (Target::List, Term::Val(Value::Range(r))) = (into, &t) {

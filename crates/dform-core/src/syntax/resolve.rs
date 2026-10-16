@@ -27,16 +27,16 @@ use super::SyntaxKind::{self, *};
 use super::parser as parse;
 use super::{SyntaxNode, SyntaxToken, tokens};
 use crate::ast::{
-    Atom, AttrDecl, BindArg, Config, ExternFn, FieldAssign, FieldOp, Helper, Lit, Program, Rank,
-    RuleStmt, Span, Stmt, Term, TypeExpr, Via, str_term, var,
+    Atom, BindArg, Config, ExternFn, FieldAssign, FieldOp, Lit, Program, Rank, Span, Stmt, Term,
+    TypeExpr, Via, str_term, var,
 };
 use crate::diag::Diagnostic;
 use crate::program::bind;
-use crate::program::node::CopyKind;
 use crate::program::node::{
     BinOp, CmpOp, Coll, ExprKind, GoalId, GoalKind, Has, HasMark, ListPart, Negated, ObjPart,
     RelArgs, RelRef,
 };
+use crate::program::node::{CopyKind, TypeAttr};
 use crate::program::scope::{self as scopes, DeclKind, DeclRef, Names, Reach};
 use crate::program::{ClauseId, ExprId, ItemId, ScopeId};
 use crate::spell;
@@ -735,9 +735,9 @@ fn read_key(name: &str, via: &Reach) -> String {
 /// A term and its node.
 type Termed = (Term, ExprId);
 
-/// A block's entries as lowered: each, its value's node, and where its
-/// reads and helpers end.
-type Entries = Vec<(FieldAssign, ExprId, (usize, usize))>;
+/// A block's entries as lowered: each, its value's node, and where the
+/// statement's helpers its terms made end.
+type Entries = Vec<(FieldAssign, ExprId, usize)>;
 
 /// The resource list `in` ranges a variable over (R-69): its resource's
 /// type and address and the list's path.
@@ -834,9 +834,8 @@ pub struct Lowerer<'u> {
     aggs: Vec<aggregate::Agg>,
     /// How deep in `not { }` bodies and comprehensions the lowering is.
     nested: usize,
-    /// An object pattern's field reads, appended after the literal that
-    /// binds it (`pattern`), and their goals.
-    after: Vec<Lit>,
+    /// The goals of an object pattern's field reads, after the literal
+    /// that binds it (`pattern`).
     after_goals: Vec<GoalId>,
     /// The columns of a relation with no `decl`, read from its first
     /// source (R-34).
@@ -899,7 +898,6 @@ impl<'u> Lowerer<'u> {
             outputs: BTreeSet::new(),
             aggs: Vec::new(),
             nested: 0,
-            after: Vec::new(),
             after_goals: Vec::new(),
             read_columns: BTreeMap::new(),
             want: Want::Nothing,
@@ -1007,17 +1005,6 @@ struct TableRows {
     made: usize,
 }
 
-/// Mark the literals `out[start..]` that test `has r.PATH` by its value
-/// with `__has(T, A, "PATH", N)` before them (`not` when `negated`), N
-/// their count: the compiler keeps them, or puts the schema's answer in
-/// their place (R-106, `partition::answer_has`).
-fn mark_has(out: &mut Vec<Lit>, start: usize, marked: Option<Atom>, negated: bool) {
-    let Some(mut a) = marked else { return };
-    a.args
-        .push(Term::Val(Value::Int((out.len() - start) as i64)));
-    out.insert(start, if negated { Lit::Not(a) } else { Lit::Pos(a) });
-}
-
 /// The variable `has x.f` of a value's field binds its walk to,
 /// `Has' = __path(X, "f")`, read nowhere else: the mark the secret pass
 /// knows the test by (`secrets`, E0301). The apostrophe is in no name a
@@ -1029,10 +1016,6 @@ pub fn is_has_var(v: &str) -> bool {
     v.strip_prefix(HAS_VAR)
         .is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()))
 }
-
-/// `has r` of a resource (R-152): `__identity(T, A)`, which the compiler
-/// makes a read of the resource's identity (`partition::IDENTITY`).
-const IDENTITY: &str = crate::partition::IDENTITY;
 
 /// A path that reads a resource's id: `r.id`.
 fn is_identity(path: &[Seg]) -> bool {
@@ -1090,81 +1073,12 @@ fn atom_at(pred: &str, args: Vec<Term>, span: Span) -> Atom {
     }
 }
 
-/// A membership negated: a read negated, a negation read, the type
-/// test of a reference column's `r in T` (R-42) the type that differs
-/// (R-219).
-fn negate(l: Lit) -> Lit {
-    match l {
-        Lit::Pos(a) => Lit::Not(a),
-        Lit::Not(a) => Lit::Pos(a),
-        Lit::Eq(a, b) => Lit::Neq(a, b),
-        Lit::Neq(a, b) => Lit::Eq(a, b),
-        other => other,
-    }
-}
-
 /// A relation's arguments as the terms of its head.
 fn arg_terms(args: &RelArgs) -> Vec<bind::Term> {
     match args {
         RelArgs::Positional(ps) => ps.iter().map(|&p| bind::Term::Pattern(p)).collect(),
         RelArgs::Record(fs) => fs.iter().map(|&(_, p)| bind::Term::Pattern(p)).collect(),
     }
-}
-
-/// The variables a body binds: arguments of its positive relation reads
-/// (patterns included), and both sides of an equality.
-pub(crate) fn bound_vars(body: &[Lit]) -> BTreeSet<String> {
-    fn pattern(t: &Term, out: &mut BTreeSet<String>) {
-        match t {
-            Term::Var(v) => {
-                out.insert(v.clone());
-            }
-            // A relation's column takes a reference apart (R-42), in a
-            // row of a copy's relation too (`__rows(.., [ref(T, A, "")])`).
-            Term::Func { name, args } if name == crate::address::REF => {
-                args.iter().for_each(|x| pattern(x, out))
-            }
-            Term::List(xs) => xs.iter().for_each(|x| pattern(x, out)),
-            Term::Obj(m) => m.values().for_each(|x| pattern(x, out)),
-            Term::ListComp { body, .. } => out.extend(bound_vars(body)),
-            _ => {}
-        }
-    }
-    fn nested(t: &Term, out: &mut BTreeSet<String>) {
-        match t {
-            Term::ListComp { item, body } => {
-                out.extend(bound_vars(body));
-                nested(item, out);
-            }
-            Term::Func { args, .. } | Term::List(args) => args.iter().for_each(|x| nested(x, out)),
-            Term::Obj(m) => m.values().for_each(|x| nested(x, out)),
-            _ => {}
-        }
-    }
-    let mut out = BTreeSet::new();
-    for l in body {
-        match l {
-            Lit::Pos(a) => {
-                a.args.iter().for_each(|t| pattern(t, &mut out));
-                if let Some(r) = &a.record {
-                    r.values().for_each(|t| pattern(t, &mut out));
-                }
-                a.args.iter().for_each(|t| nested(t, &mut out));
-            }
-            Lit::Not(a) => a.args.iter().for_each(|t| nested(t, &mut out)),
-            Lit::Eq(a, b) => {
-                pattern(a, &mut out);
-                pattern(b, &mut out);
-                nested(a, &mut out);
-                nested(b, &mut out);
-            }
-            Lit::Neq(a, b) | Lit::Gt(a, b) | Lit::Ge(a, b) | Lit::Lt(a, b) | Lit::Le(a, b) => {
-                nested(a, &mut out);
-                nested(b, &mut out);
-            }
-        }
-    }
-    out
 }
 
 /// The source names of the lowered variables in `outer`.
@@ -1183,41 +1097,6 @@ fn negated(n: &SyntaxNode) -> Negated {
         BODY => Negated::Block,
         LIT_NOT_IN => Negated::NotIn,
         _ => Negated::Literal,
-    }
-}
-
-/// Every variable literal `l` names, a comprehension's included.
-pub(crate) fn lit_vars(l: &Lit, out: &mut BTreeSet<String>) {
-    fn term(t: &Term, out: &mut BTreeSet<String>) {
-        match t {
-            Term::Var(v) => {
-                out.insert(v.clone());
-            }
-            Term::Func { args, .. } | Term::List(args) => args.iter().for_each(|x| term(x, out)),
-            Term::Obj(m) => m.values().for_each(|x| term(x, out)),
-            Term::ListComp { item, body } => {
-                term(item, out);
-                body.iter().for_each(|l| lit_vars(l, out));
-            }
-            _ => {}
-        }
-    }
-    match l {
-        Lit::Pos(a) | Lit::Not(a) => {
-            a.args.iter().for_each(|t| term(t, out));
-            if let Some(r) = &a.record {
-                r.values().for_each(|t| term(t, out));
-            }
-        }
-        Lit::Eq(a, b)
-        | Lit::Neq(a, b)
-        | Lit::Gt(a, b)
-        | Lit::Ge(a, b)
-        | Lit::Lt(a, b)
-        | Lit::Le(a, b) => {
-            term(a, out);
-            term(b, out);
-        }
     }
 }
 

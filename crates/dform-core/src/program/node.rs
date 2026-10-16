@@ -847,16 +847,25 @@ pub enum ItemKind {
     /// `extern p(+a: T, -b)` (step 5).
     Extern { name: Name, args: Vec<ast::BindArg> },
     /// `type T { p: T flag* }`: a type block (step 5).
-    TypeBlock {
-        name: Name,
-        attrs: Vec<ast::AttrDecl>,
-    },
+    TypeBlock { name: Name, attrs: Vec<TypeAttr> },
     /// A doc comment's pairs (step 5).
     Doc {
         kind: &'static str,
         name: Name,
         pairs: Vec<(String, String)>,
     },
+}
+
+/// An attribute of a type block, `p: T flag* [check B]`, and those
+/// declared under it; its refinement B's goals as gathered.
+#[derive(Debug, Clone)]
+pub struct TypeAttr {
+    pub path: Name,
+    pub ty: Option<TypeExpr>,
+    pub flags: Vec<Name>,
+    pub refinement: Option<ClauseId>,
+    pub children: Vec<TypeAttr>,
+    pub span: Span,
 }
 
 /// One setting of a provider's `use` block.

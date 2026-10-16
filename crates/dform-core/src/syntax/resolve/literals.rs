@@ -7,7 +7,7 @@
 use super::*;
 
 impl Lowerer<'_> {
-    pub(super) fn body(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<Vec<Lit>> {
+    pub(super) fn body(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<()> {
         let lits: Vec<SyntaxNode> = n.children().collect();
         self.lits(rc, &lits)
     }
@@ -15,25 +15,12 @@ impl Lowerer<'_> {
     /// A statement's body (its clauses together), built once as written,
     /// checked for what binds, its clause in the order its goals hold
     /// (R-10): each after what binds what it reads, otherwise as written.
-    /// A body nested in it is checked with it. The literals it returns are
-    /// the resolver's own, as written.
-    pub(super) fn lits(&mut self, rc: &mut Rc, lits: &[SyntaxNode]) -> L<Vec<Lit>> {
-        self.lits_after(rc, lits, Vec::new())
-    }
-
-    /// [`Self::lits`] after `seed`, literals the statement holds before
-    /// its clause: a let's parameters' binding (R-187), which a `not { }`
-    /// helper's body takes with the other positive literals before it.
-    pub(super) fn lits_after(
-        &mut self,
-        rc: &mut Rc,
-        lits: &[SyntaxNode],
-        seed: Vec<Lit>,
-    ) -> L<Vec<Lit>> {
+    /// A body nested in it is checked with it.
+    pub(super) fn lits(&mut self, rc: &mut Rc, lits: &[SyntaxNode]) -> L<()> {
         if self.nested > 0 {
-            return self.lits_as_written(rc, lits, seed);
+            return self.lits_as_written(rc, lits);
         }
-        let out = self.lits_as_written(rc, lits, seed)?;
+        self.lits_as_written(rc, lits)?;
         let order = self.binding_order(rc, &outer_names(rc, &rc.outer))?;
         if let Some(s) = &mut self.gather {
             let around = crate::program::build::Around {
@@ -42,7 +29,7 @@ impl Lowerer<'_> {
             };
             s.order(&mut self.program, &order, &around);
         }
-        Ok(out)
+        Ok(())
     }
 
     /// The order the clause just built holds in (R-10,
@@ -66,12 +53,7 @@ impl Lowerer<'_> {
         Ok(bound.order)
     }
 
-    pub(super) fn lits_as_written(
-        &mut self,
-        rc: &mut Rc,
-        lits: &[SyntaxNode],
-        mut out: Vec<Lit>,
-    ) -> L<Vec<Lit>> {
+    pub(super) fn lits_as_written(&mut self, rc: &mut Rc, lits: &[SyntaxNode]) -> L<()> {
         // A statement's clause is gathered whole (R-211 step 4); a body
         // nested in a literal, with the literal.
         let whole = self.nested == 0 && self.gather.is_some() && !lits.is_empty();
@@ -86,7 +68,7 @@ impl Lowerer<'_> {
         }
         let mut failed = false;
         for l in lits {
-            if self.lit(rc, l, &mut out).is_err() {
+            if self.lit(rc, l).is_err() {
                 failed = true;
             }
         }
@@ -99,12 +81,12 @@ impl Lowerer<'_> {
                 }
             }
         }
-        if failed { Err(Skip) } else { Ok(out) }
+        if failed { Err(Skip) } else { Ok(()) }
     }
 
-    /// One literal, with the reads it hoists before it, into `out`.
-    pub(super) fn lit(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<()> {
-        self.lit_as(rc, n, out, Self::lit1)
+    /// One literal, its goal built of its terms' nodes.
+    pub(super) fn lit(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<()> {
+        self.lit_as(rc, n, Self::lit1)
     }
 
     /// [`Self::lit`] of `n` lowered by `lower`: gathered, the goal it
@@ -113,19 +95,15 @@ impl Lowerer<'_> {
         &mut self,
         rc: &mut Rc,
         n: &SyntaxNode,
-        out: &mut Vec<Lit>,
-        lower: impl FnOnce(&mut Self, &mut Rc, &SyntaxNode, &mut Vec<Lit>) -> L<()>,
+        lower: impl FnOnce(&mut Self, &mut Rc, &SyntaxNode) -> L<()>,
     ) -> L<()> {
-        let saved = std::mem::take(&mut self.after);
         let saved_goals = std::mem::take(&mut self.after_goals);
         let saved_tests = std::mem::take(&mut rc.tests);
         if let Some(s) = &mut self.gather {
             s.open();
         }
-        let r = self.bind(true, |l| lower(l, rc, n, out));
+        let r = self.bind(true, |l| lower(l, rc, n));
         let tests = std::mem::replace(&mut rc.tests, saved_tests);
-        out.append(&mut self.after);
-        self.after = saved;
         let after = std::mem::replace(&mut self.after_goals, saved_goals);
         if !after.is_empty()
             && let Some(s) = &mut self.gather
@@ -166,48 +144,43 @@ impl Lowerer<'_> {
 
     /// A membership, positive whatever `n` says: the body of the helper
     /// a negated one lowers through.
-    pub(super) fn member_lit(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<()> {
-        let (lit, g) = self.membership(rc, n, out)?;
-        out.push(lit);
-        if let Some(g) = g {
+    pub(super) fn member_lit(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<()> {
+        if let Some(g) = self.membership(rc, n)? {
             self.built(g);
         }
         Ok(())
     }
 
-    pub(super) fn lit1(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<()> {
+    pub(super) fn lit1(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<()> {
         let span = self.span(n);
         match n.kind() {
             LIT_ATOM => {
                 let a = terms(n).next().ok_or(Skip)?;
-                let (atom, args, via) = self.atom_args(rc, &a, Pos::Content, out)?;
+                let (atom, args, via) = self.atom_args(rc, &a, Pos::Content)?;
                 self.core_read(&a, &atom)?;
                 let g = self.rel_goal(rc, (&atom, via), args);
                 self.built(g);
-                out.push(Lit::Pos(atom));
             }
-            LIT_TRUTH => self.truth_lit(rc, n, out, span)?,
-            LIT_CMP => self.cmp(rc, n, out)?,
-            LIT_IN => self.member_lit(rc, n, out)?,
+            LIT_TRUTH => self.truth_lit(rc, n, span)?,
+            LIT_CMP => self.cmp(rc, n)?,
+            LIT_IN => self.member_lit(rc, n)?,
             // `v not in PATH[_]`: no value the path reaches is `v`, a
             // helper over the membership (R-219).
-            LIT_NOT_IN if self.each_membership(rc, n) => self.neg_helper(rc, n, out, span)?,
+            LIT_NOT_IN if self.each_membership(rc, n) => self.neg_helper(rc, n, span)?,
             LIT_NOT_IN => {
-                let (lit, g) = self.membership(rc, n, out)?;
-                out.push(negate(lit));
-                if let Some(g) = g {
+                if let Some(g) = self.membership(rc, n)? {
                     let g = self.building(rc, span, |b| b.not_one(g, Negated::NotIn));
                     self.built(g);
                 }
             }
-            LIT_HAS => self.has_lit(rc, n, out, span)?,
+            LIT_HAS => self.has_lit(rc, n, span)?,
             LIT_NOT => {
                 let inner = n.children().next().ok_or(Skip)?;
-                self.not(rc, &inner, out, span)?;
+                self.not(rc, &inner, span)?;
             }
             LIT_NOT_BLOCK => {
                 let b = node(n, BODY).ok_or(Skip)?;
-                self.neg_helper(rc, &b, out, span)?;
+                self.neg_helper(rc, &b, span)?;
             }
             k => return self.error(span, format!("unexpected {k:?} in a body")),
         }
@@ -216,28 +189,12 @@ impl Lowerer<'_> {
 
     /// `x.ready`: the read with `true` in its value column, or the value
     /// compared with `true`.
-    pub(super) fn truth_lit(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        out: &mut Vec<Lit>,
-        span: Span,
-    ) -> L<()> {
+    pub(super) fn truth_lit(&mut self, rc: &mut Rc, n: &SyntaxNode, span: Span) -> L<()> {
         let c = terms(n).next().and_then(|t| Chain::read(&t)).ok_or(Skip)?;
-        let mark = out.len();
-        let res = self.resolve(rc, &c, out)?;
-        let e = match self.read_atom(&res, Term::Val(Value::Bool(true)), span) {
-            Some(a) => {
-                out.push(Lit::Pos(a));
-                self.in_place(rc, &res, span).ok_or(Skip)?
-            }
-            None => {
-                let local = out.split_off(mark);
-                let id = self.realize_expr(rc, res, Pos::Content, (local, out), span)?;
-                let t = self.lowered(id, out);
-                out.push(Lit::Eq(t, Term::Val(Value::Bool(true))));
-                id
-            }
+        let res = self.resolve(rc, &c)?;
+        let e = match Self::in_place_read(&res) {
+            Some(_) => self.in_place(rc, &res, span).ok_or(Skip)?,
+            None => self.realize_expr(rc, res, Pos::Content, span)?,
         };
         let g = self.goal(rc, span, GoalKind::Truth(e));
         self.built(g);
@@ -246,29 +203,18 @@ impl Lowerer<'_> {
 
     /// `has r`, `has r.p`, `has x.f`: whether the resource exists, the
     /// attribute or the path into a value has one.
-    pub(super) fn has_lit(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        out: &mut Vec<Lit>,
-        span: Span,
-    ) -> L<()> {
+    pub(super) fn has_lit(&mut self, rc: &mut Rc, n: &SyntaxNode, span: Span) -> L<()> {
         let t = terms(n).next().ok_or(Skip)?;
         let c = Chain::read(&t).ok_or(Skip)?;
         if self.bare_resource(rc, &c) {
-            let (typ, addr) = self.reference(rc, &c, out, span)?;
-            let args = vec![self.term_of(typ), self.term_of(addr)];
-            out.push(Lit::Pos(atom_at(IDENTITY, args, span)));
+            let (typ, addr) = self.reference(rc, &c, span)?;
             let g = self.goal(rc, span, GoalKind::Has(Has::Resource { typ, addr }));
             self.built(g);
             return Ok(());
         }
-        let res = self.resolve(rc, &c, out)?;
+        let res = self.resolve(rc, &c)?;
         match &res {
             Res::Ref { typ, addr, path } if path.is_empty() => {
-                let args = vec![self.term_of(*typ), self.term_of(*addr)];
-                let a = atom_at(IDENTITY, args, span);
-                out.push(Lit::Pos(a));
                 let (typ, addr) = (*typ, *addr);
                 let g = self.goal(rc, span, GoalKind::Has(Has::Resource { typ, addr }));
                 self.built(g);
@@ -279,30 +225,21 @@ impl Lowerer<'_> {
             }
             _ => {}
         }
-        self.has_path(rc, res, out, span)
+        self.has_path(rc, res, span)
     }
 
     /// `has R.p`, `has x.f`, `has R.p.q` of what `res` resolved: the read
     /// itself, or the walk to the path; a resource's attribute path marked
     /// as the test (R-106).
-    pub(super) fn has_path(
-        &mut self,
-        rc: &mut Rc,
-        res: Res,
-        out: &mut Vec<Lit>,
-        span: Span,
-    ) -> L<()> {
-        let start = out.len();
-        let marked = self.has_atom(&res, span);
+    pub(super) fn has_path(&mut self, rc: &mut Rc, res: Res, span: Span) -> L<()> {
         let mark = self.has_mark(&res);
         // The reads the mark covers are the test's own: where the
         // schema answers it they are gone (R-106), so nothing
         // after it reads through them (R-204).
-        let reads = marked.as_ref().map(|_| rc.reads.clone());
+        let reads = mark.as_ref().map(|_| rc.reads.clone());
         let mut before = Vec::new();
-        let test = match self.read_atom(&res, Term::Wildcard, span) {
-            Some(a) => {
-                out.push(Lit::Pos(a));
+        let test = match Self::in_place_read(&res) {
+            Some(_) => {
                 // A marked read's resource is the mark's.
                 let res = match mark {
                     Some(_) => self.settled(rc, res, span),
@@ -319,10 +256,8 @@ impl Lowerer<'_> {
                     before = self.settled_reads(rc, &res, span);
                 }
                 let res = self.settled(rc, res, span);
-                let value = self.realize_expr(rc, res, Pos::Content, (Vec::new(), out), span)?;
-                let t = self.lowered(value, out);
+                let value = self.realize_expr(rc, res, Pos::Content, span)?;
                 let v = fresh(rc, HAS_VAR);
-                out.push(Lit::Eq(var(&v), t));
                 let var = self.building(rc, span, |b| b.var(&v));
                 rc.inner.insert(v);
                 Has::Walk { var, value }
@@ -335,7 +270,6 @@ impl Lowerer<'_> {
                 );
             }
         };
-        mark_has(out, start, marked, false);
         if let Some(reads) = reads {
             rc.reads = reads;
         }
@@ -350,30 +284,21 @@ impl Lowerer<'_> {
 
     /// `not L`: an atom, a read with a value, a membership; anything else
     /// through a helper relation.
-    pub(super) fn not(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        out: &mut Vec<Lit>,
-        span: Span,
-    ) -> L<()> {
+    pub(super) fn not(&mut self, rc: &mut Rc, n: &SyntaxNode, span: Span) -> L<()> {
         match n.kind() {
             LIT_ATOM => {
                 let a = terms(n).next().ok_or(Skip)?;
-                let (atom, args, via) = self.atom_args(rc, &a, Pos::Content, out)?;
+                let (atom, args, via) = self.atom_args(rc, &a, Pos::Content)?;
                 self.core_read(&a, &atom)?;
                 let g = self.rel_goal(rc, (&atom, via), args);
                 let g = self.building(rc, span, |b| b.not_one(g, Negated::Literal));
                 self.built(g);
-                out.push(Lit::Not(atom));
                 return Ok(());
             }
             LIT_IN
                 if !n.descendants().any(|d| d.kind() == TUPLE) && !self.each_membership(rc, n) =>
             {
-                let (lit, g) = self.membership(rc, n, out)?;
-                out.push(negate(lit));
-                if let Some(g) = g {
+                if let Some(g) = self.membership(rc, n)? {
                     let g = self.building(rc, span, |b| b.not_one(g, Negated::Literal));
                     self.built(g);
                 }
@@ -388,31 +313,18 @@ impl Lowerer<'_> {
             LIT_TRUTH | LIT_HAS => {
                 let t = terms(n).next().ok_or(Skip)?;
                 let c = Chain::read(&t).ok_or(Skip)?;
-                let value = if n.kind() == LIT_HAS {
-                    Term::Wildcard
-                } else {
-                    Term::Val(Value::Bool(true))
-                };
-                let mut pre = Vec::new();
-                let res = self.resolve(rc, &c, &mut pre)?;
+                let res = self.resolve(rc, &c)?;
                 match &res {
                     Res::Ref { path, .. } if n.kind() == LIT_HAS && path.is_empty() => {
-                        return self.neg_helper(rc, n, out, span);
+                        return self.neg_helper(rc, n, span);
                     }
                     Res::Ref { path, .. } if n.kind() == LIT_HAS && is_identity(path) => {
                         return self.has_identity(&t, span);
                     }
                     _ => {}
                 }
-                let marked = (n.kind() == LIT_HAS)
-                    .then(|| self.has_atom(&res, span))
-                    .flatten();
-                if let Some(a) = self.read_atom(&res, value, span) {
-                    out.extend(pre);
-                    let start = out.len();
-                    out.push(Lit::Not(a));
-                    mark_has(out, start, marked, true);
-                    let mark = (n.kind() == LIT_HAS).then(|| self.has_mark(&res)).flatten();
+                let mark = (n.kind() == LIT_HAS).then(|| self.has_mark(&res)).flatten();
+                if Self::in_place_read(&res).is_some() {
                     // A marked read's resource is the mark's.
                     let res = match mark {
                         Some(_) => self.settled(rc, res, span),
@@ -431,11 +343,9 @@ impl Lowerer<'_> {
                     self.built(g);
                     return Ok(());
                 }
-                if marked.is_some() {
-                    let start = out.len();
-                    self.neg_helper(rc, n, out, span)?;
-                    mark_has(out, start, marked, true);
-                    let mark = self.has_mark(&res).map(|m| {
+                if mark.is_some() {
+                    self.neg_helper(rc, n, span)?;
+                    let mark = mark.map(|m| {
                         let (typ, addr) =
                             self.building(rc, span, |b| (b.settled(m.typ), b.settled(m.addr)));
                         HasMark { typ, addr, ..m }
@@ -455,28 +365,23 @@ impl Lowerer<'_> {
                 if ts.len() == 2 && matches!(ops.as_slice(), [EQ | EQ2]) {
                     for (r, v) in [(&ts[0], &ts[1]), (&ts[1], &ts[0])] {
                         let Some(c) = Chain::of(r) else { continue };
-                        let mut pre = Vec::new();
                         let mut rc2 = rc.clone();
-                        let Ok(res) = self.probe(|l| l.resolve(&mut rc2, &c, &mut pre)) else {
+                        let Ok(res) = self.probe(|l| l.resolve(&mut rc2, &c)) else {
                             continue;
                         };
                         if matches!(res, Res::Val(_) | Res::Var { .. } | Res::Type(_)) {
                             continue;
                         }
-                        let mut vpre = Vec::new();
-                        let Ok(id) = self.probe(|l| {
-                            l.bind(false, |l| l.expr(&mut rc2, v, Pos::Content, &mut vpre))
-                        }) else {
+                        let Ok(id) =
+                            self.probe(|l| l.bind(false, |l| l.expr(&mut rc2, v, Pos::Content)))
+                        else {
                             continue;
                         };
-                        let value = self.lowered(id, &mut vpre);
-                        if !vpre.is_empty() {
+                        if self.reads(id) {
                             continue;
                         }
-                        if let Some(a) = self.read_atom(&res, value, span) {
+                        if Self::in_place_read(&res).is_some() {
                             *rc = rc2;
-                            out.extend(pre);
-                            out.push(Lit::Not(a));
                             let e = self.in_place(rc, &res, span).ok_or(Skip)?;
                             let ops = vec![(CmpOp::Eq, id)];
                             let g = self.goal(rc, span, GoalKind::Compare { lhs: e, ops });
@@ -490,21 +395,15 @@ impl Lowerer<'_> {
             _ => {}
         }
         // A body holding this one literal.
-        self.neg_helper(rc, n, out, span)
+        self.neg_helper(rc, n, span)
     }
 
     /// `not { B }` (or a `not` no single literal can say): a helper
     /// `__neg_N(ȳ) :- P, B` over the variables ȳ its body shares with
     /// what is bound before it, and `not __neg_N(ȳ)` (`Gather::negated`).
-    pub(super) fn neg_helper(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        out: &mut Vec<Lit>,
-        span: Span,
-    ) -> L<()> {
+    pub(super) fn neg_helper(&mut self, rc: &mut Rc, n: &SyntaxNode, span: Span) -> L<()> {
         let body_from = self.gather.as_ref().map(|s| s.goals());
-        let inner = self.negated_body(rc, n)?;
+        self.negated_body(rc, n)?;
         // An aggregate's value is not the helper's: it is folded after.
         let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
         let (Some(s), Some(from)) = (&mut self.gather, body_from) else {
@@ -517,50 +416,30 @@ impl Lowerer<'_> {
                 "an aggregate's value is compared after the fold, not inside `not { }`",
             );
         }
-        s.negation(number, results.clone(), from);
+        s.negation(number, results, from);
         let around = crate::program::build::Around {
             outer: &rc.outer,
             scope: rc.scope,
         };
-        let (shared, own) = s.negated(&mut self.program, span, negated(n), &around);
+        let own = s.negated(&mut self.program, span, negated(n), &around);
         // The helper's own variables are bound in the helper.
         rc.inner.extend(own);
-        let pred = format!("__neg_{number}");
-        let head = atom_at(&pred, shared.iter().map(|v| var(v)).collect(), span);
-        let reads_result = |l: &Lit| {
-            let mut vs = BTreeSet::new();
-            lit_vars(l, &mut vs);
-            vs.iter().any(|v| results.contains(v))
-        };
-        let mut body: Vec<Lit> = out
-            .iter()
-            .filter(|l| !matches!(l, Lit::Not(_)) && !reads_result(l))
-            .cloned()
-            .collect();
-        body.extend(inner);
-        self.helpers.push(Stmt::Rule(RuleStmt::helper(
-            Helper::Negation,
-            head.clone(),
-            body,
-        )));
-        out.push(Lit::Not(head));
         Ok(())
     }
 
     /// The body of a negation `n` (a block, a membership, a literal),
     /// lowered in a rule context of its own, its reads its own; the names
     /// it writes are the rule's (`rc`).
-    fn negated_body(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<Vec<Lit>> {
-        let mut inner = Vec::new();
+    fn negated_body(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<()> {
         let mut rc2 = rc.clone();
         rc2.reads.clear();
         rc2.values.clear();
         self.nested += 1;
         let lowered = match n.kind() {
-            BODY => self.body(&mut rc2, n).map(|b| inner = b),
+            BODY => self.body(&mut rc2, n),
             // `v not in PATH[_]`: the helper's body is the membership.
-            LIT_NOT_IN => self.lit_as(&mut rc2, n, &mut inner, Self::member_lit),
-            _ => self.lit(&mut rc2, n, &mut inner),
+            LIT_NOT_IN => self.lit_as(&mut rc2, n, Self::member_lit),
+            _ => self.lit(&mut rc2, n),
         };
         self.nested -= 1;
         lowered?;
@@ -574,13 +453,13 @@ impl Lowerer<'_> {
         for (k, at) in rc2.first {
             rc.first.entry(k).or_insert(at);
         }
-        Ok(inner)
+        Ok(())
     }
 
     /// `a op b [op c]`, with the direct forms: `x = R.p` and `R.p == c`
     /// are the read itself.
-    pub(super) fn cmp(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<()> {
-        if let Some(r) = self.aggregate_binding(rc, n, out) {
+    pub(super) fn cmp(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<()> {
+        if let Some(r) = self.aggregate_binding(rc, n) {
             return r;
         }
         let span = self.span(n);
@@ -602,14 +481,10 @@ impl Lowerer<'_> {
                 let ix = ix[0].clone();
                 let mut list = ch.clone();
                 list.ops.pop();
-                let mark = out.len();
-                let res = self.resolve(rc, &list, out)?;
-                let local = out.split_off(mark);
-                let lid = self.realize_expr(rc, res, Pos::Content, (local, out), span)?;
-                let l = self.lowered(lid, out);
-                let (i, iid) = self.bind(true, |x| x.arg_node(rc, &ix, Pos::Content, out))?;
-                let (pat, pid) = self.pattern(rc, p, out)?;
-                out.push(Lit::Pos(atom_at("member", vec![l, i, pat], span)));
+                let res = self.resolve(rc, &list)?;
+                let lid = self.realize_expr(rc, res, Pos::Content, span)?;
+                let (_, iid) = self.bind(true, |x| x.arg_node(rc, &ix, Pos::Content))?;
+                let (_, pid) = self.pattern(rc, p)?;
                 let g = self.building(rc, span, |b| {
                     let value = b.element_in_place(lid, iid);
                     let pat = b.pattern_of(pid);
@@ -619,7 +494,7 @@ impl Lowerer<'_> {
                 return Ok(());
             }
             if pattern(&ts[0]) {
-                return self.pattern_eq(rc, p, c, out);
+                return self.pattern_eq(rc, p, c);
             }
         }
         // An input that is a reference (`input role: iam.role`) compares
@@ -637,8 +512,7 @@ impl Lowerer<'_> {
             for (r, v) in [(&ts[0], &ts[1]), (&ts[1], &ts[0])] {
                 let Some(c) = Chain::of(r) else { continue };
                 let mut rc2 = rc.clone();
-                let mut pre = Vec::new();
-                let Ok(res) = self.probe(|l| l.resolve(&mut rc2, &c, &mut pre)) else {
+                let Ok(res) = self.probe(|l| l.resolve(&mut rc2, &c)) else {
                     continue;
                 };
                 if matches!(res, Res::Val(_) | Res::Var { .. } | Res::Type(_)) {
@@ -649,21 +523,16 @@ impl Lowerer<'_> {
                 {
                     return self.identity_read(r, self.span(r));
                 }
-                let mut vpre = Vec::new();
                 let binding = ops[0] == EQ;
-                let Ok(id) = self
-                    .probe(|l| l.bind(binding, |l| l.expr(&mut rc2, v, Pos::Content, &mut vpre)))
+                let Ok(id) = self.probe(|l| l.bind(binding, |l| l.expr(&mut rc2, v, Pos::Content)))
                 else {
                     continue;
                 };
-                let value = self.lowered(id, &mut vpre);
-                if !vpre.is_empty() {
+                if self.reads(id) {
                     continue;
                 }
-                if let Some(a) = self.read_atom(&res, value, span) {
+                if Self::in_place_read(&res).is_some() {
                     *rc = rc2;
-                    out.extend(pre);
-                    out.push(Lit::Pos(a));
                     let e = self.in_place(rc, &res, span).ok_or(Skip)?;
                     let g = self.building(rc, span, |b| match binding {
                         true => {
@@ -716,14 +585,8 @@ impl Lowerer<'_> {
             let mut ids = Vec::new();
             for (i, t) in ts.iter().enumerate() {
                 let binding = i == 0 && ops[0] == EQ;
-                ids.push(self.bind(binding, |l| l.ref_expr(rc, t, Pos::Content, out))?);
+                ids.push(self.bind(binding, |l| l.ref_expr(rc, t, Pos::Content))?);
             }
-            let (a, b) = (self.lowered(ids[0], out), self.lowered(ids[1], out));
-            out.push(if ops[0] == NEQ {
-                Lit::Neq(a, b)
-            } else {
-                Lit::Eq(a, b)
-            });
             let pair = match ops[0] {
                 NEQ => vec![(CmpOp::Ne, ids[0], ids[1])],
                 _ => vec![(CmpOp::Eq, ids[0], ids[1])],
@@ -738,7 +601,7 @@ impl Lowerer<'_> {
             // `=` binds either side; `==`, `!=` and the orders test.
             let binding = ops.get(i.saturating_sub(1)) == Some(&EQ) && i <= 1
                 || (i == 0 && ops.first() == Some(&EQ));
-            let (t, id) = self.bind(binding, |l| l.arg_node(rc, t, Pos::Content, out))?;
+            let (t, id) = self.bind(binding, |l| l.arg_node(rc, t, Pos::Content))?;
             lowered.push(t);
             ids.push(id);
         }
@@ -759,17 +622,16 @@ impl Lowerer<'_> {
                 Ok(ab) => ab,
                 Err(why) => return self.error(span, why),
             };
-            let ia = self.read_as(ids[i], &was_a, a.clone());
-            let ib = self.read_as(ids[i + 1], &was_b, b.clone());
-            let (lit, cmp) = match op {
-                EQ | EQ2 => (Lit::Eq(a, b), CmpOp::Eq),
-                NEQ => (Lit::Neq(a, b), CmpOp::Ne),
-                LT => (Lit::Lt(a, b), CmpOp::Lt),
-                LE => (Lit::Le(a, b), CmpOp::Le),
-                GT => (Lit::Gt(a, b), CmpOp::Gt),
-                _ => (Lit::Ge(a, b), CmpOp::Ge),
+            let ia = self.read_as(ids[i], &was_a, a);
+            let ib = self.read_as(ids[i + 1], &was_b, b);
+            let cmp = match op {
+                EQ | EQ2 => CmpOp::Eq,
+                NEQ => CmpOp::Ne,
+                LT => CmpOp::Lt,
+                LE => CmpOp::Le,
+                GT => CmpOp::Gt,
+                _ => CmpOp::Ge,
             };
-            out.push(lit);
             pairs.push((cmp, ia, ib));
         }
         let g = self.compare_goal(rc, span, ops[0] == EQ, pairs);
@@ -909,7 +771,7 @@ impl Lowerer<'_> {
             self.program.helpers.negs,
         );
         let mut rc = rc.clone();
-        let res = self.probe(|l| l.resolve(&mut rc, &c, &mut Vec::new()));
+        let res = self.probe(|l| l.resolve(&mut rc, &c));
         self.diags.truncate(diags);
         self.helpers.truncate(helpers);
         self.program.helpers.negs = negs;

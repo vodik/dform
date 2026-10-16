@@ -74,10 +74,8 @@ impl Lowerer<'_> {
 
     /// [`Self::constant`] as its node.
     pub(super) fn constant_node(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<ExprId> {
-        let mut pre = Vec::new();
-        let id = self.expr(rc, n, Pos::Whole, &mut pre)?;
-        self.lowered(id, &mut pre);
-        if !pre.is_empty() {
+        let id = self.expr(rc, n, Pos::Whole)?;
+        if self.reads(id) {
             return self.error(
                 self.span(n),
                 "this value is read before the program runs: it must be a constant",
@@ -88,53 +86,39 @@ impl Lowerer<'_> {
     }
 
     /// A term as its node (R-211 step 7), the reads it makes held by the
-    /// node; a read no node of it holds goes into `pre`. The helper
-    /// statements made while it is built are its terms'.
-    pub(super) fn expr(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        pos: Pos,
-        pre: &mut Vec<Lit>,
-    ) -> L<ExprId> {
+    /// node. The helper statements made while it is built are its terms'.
+    pub(super) fn expr(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos) -> L<ExprId> {
         let made = self.helpers.len();
-        let id = self.expr_of(rc, n, pos, pre);
+        let id = self.expr_of(rc, n, pos);
         if let Some(s) = &mut self.gather {
             s.term(made..self.helpers.len());
         }
         id
     }
 
-    /// The term the node `id` lowers to, the reads it makes into `pre`.
-    pub(super) fn lowered(&self, id: ExprId, pre: &mut Vec<Lit>) -> Term {
-        let (t, reads) = crate::program::lower_expr(&self.program, id);
-        pre.extend(reads);
-        t
+    /// Whether the node `id` reads anything: whether its lowering writes
+    /// a read before the term (it is no constant).
+    pub(super) fn reads(&self, id: ExprId) -> bool {
+        !crate::program::lower_expr(&self.program, id).1.is_empty()
     }
 
-    pub(super) fn expr_of(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        pos: Pos,
-        pre: &mut Vec<Lit>,
-    ) -> L<ExprId> {
+    pub(super) fn expr_of(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos) -> L<ExprId> {
         match n.kind() {
-            LITERAL => self.literal(rc, n, pre),
+            LITERAL => self.literal(rc, n),
             PAREN => {
                 let inner = terms(n).next().ok_or(Skip)?;
-                self.bind(false, |l| l.expr(rc, &inner, Pos::Content, pre))
+                self.bind(false, |l| l.expr(rc, &inner, Pos::Content))
             }
-            BIN_EXPR => self.binary(rc, n, pre),
-            UNARY_EXPR => self.unary(rc, n, pre),
-            RANGE => self.range(rc, n, pre),
+            BIN_EXPR => self.binary(rc, n),
+            UNARY_EXPR => self.unary(rc, n),
+            RANGE => self.range(rc, n),
             SPREAD => self.misplaced_spread(n),
             TUPLE => self.tuple_value(n),
-            CHAIN | CALL_CHAIN => self.chain_term(rc, n, pos, pre),
-            CALL => self.call(rc, n, pos, pre),
-            LIST if !n.children().any(|c| c.kind() == SPREAD) => self.list_expr(rc, n, pos, pre),
-            LIST => self.list(rc, n, pos, pre),
-            OBJECT => self.object(rc, n, pos, pre),
+            CHAIN | CALL_CHAIN => self.chain_term(rc, n, pos),
+            CALL => self.call(rc, n, pos),
+            LIST if !n.children().any(|c| c.kind() == SPREAD) => self.list_expr(rc, n, pos),
+            LIST => self.list(rc, n, pos),
+            OBJECT => self.object(rc, n, pos),
             COMPREHENSION => self.comprehension(rc, n, pos),
             k => {
                 let span = self.span(n);
@@ -273,20 +257,9 @@ impl Lowerer<'_> {
     }
 
     /// A part of what a chain resolves to (an index, a key, an address):
-    /// the term's node, the reads it makes into `pre` too, where the
-    /// resolver's literals hold them.
-    pub(super) fn part(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<ExprId> {
-        let id = self.expr(rc, n, Pos::Content, pre)?;
-        self.lowered(id, pre);
-        Ok(id)
-    }
-
-    /// The read `id` the resolver hoisted, its own literal into `pre`
-    /// (the reads of its parts are there already): the last its lowering
-    /// writes.
-    pub(super) fn hoisted_into(&self, id: ExprId, pre: &mut Vec<Lit>) {
-        let (_, mut reads) = crate::program::lower_expr(&self.program, id);
-        pre.extend(reads.pop());
+    /// the term's node.
+    pub(super) fn part(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<ExprId> {
+        self.expr(rc, n, Pos::Content)
     }
 
     /// The term node `id` is, its reads aside: what a typing of a term
@@ -382,9 +355,9 @@ impl Lowerer<'_> {
 
     /// A literal: an int, a quantity (R-66), a string, an IPv6 address, a
     /// bool.
-    pub(super) fn literal(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<ExprId> {
+    pub(super) fn literal(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<ExprId> {
         match tokens(n).next() {
-            Some(t) if t.kind() == STRING => self.string_expr(rc, &t, pre),
+            Some(t) if t.kind() == STRING => self.string_expr(rc, &t),
             _ => self.literal_expr(n),
         }
     }
@@ -419,16 +392,9 @@ impl Lowerer<'_> {
 
     /// A chain: `x.len` (R-155), a resource by its bare name given as a
     /// value (R-43), a read.
-    pub(super) fn chain_term(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        pos: Pos,
-        pre: &mut Vec<Lit>,
-    ) -> L<ExprId> {
+    pub(super) fn chain_term(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos) -> L<ExprId> {
         let span = self.span(n);
         let mut c = Chain::read(n).ok_or(Skip)?;
-        let mut local = Vec::new();
         // `x.len` (R-155): the length of a list, a string or an
         // object, the one field that is a computation; `x."len"`
         // is an object's key.
@@ -439,8 +405,8 @@ impl Lowerer<'_> {
                 .is_some_and(|t| t.kind() == IDENT);
         if len {
             c.ops.pop();
-            let res = self.resolve(rc, &c, &mut local)?;
-            let base = self.realize_expr(rc, res, Pos::Content, (local, pre), span)?;
+            let res = self.resolve(rc, &c)?;
+            let base = self.realize_expr(rc, res, Pos::Content, span)?;
             let path = vec![crate::program::node::Step::Len];
             return Ok(self.node(span, ExprKind::Field { base, path }));
         }
@@ -457,18 +423,18 @@ impl Lowerer<'_> {
             if let Some(id) = self.deferred_ref(rc, &c.head, span) {
                 return Ok(id);
             }
-            let (typ, addr) = self.reference(rc, &c, &mut local, span)?;
+            let (typ, addr) = self.reference(rc, &c, span)?;
             let empty = self.str_node(span, "");
             let args = vec![typ, addr, empty];
             return Ok(self.building(rc, span, |b| b.form(crate::address::REF, args)));
         }
-        let res = self.resolve(rc, &c, &mut local)?;
+        let res = self.resolve(rc, &c)?;
         if let Res::Ref { path, .. } = &res
             && matches!(path.first(), Some(Seg::F(f)) if f == crate::schema::IDENTITY)
         {
             return self.identity_read(n, span);
         }
-        self.realize_expr(rc, res, pos, (local, pre), span)
+        self.realize_expr(rc, res, pos, span)
     }
 
     /// A call of a function, with its named arguments; `env.var`, a
@@ -476,22 +442,16 @@ impl Lowerer<'_> {
     /// nodes; a call the lowering writes as a form of its own (an
     /// operator's function, `ref`, `__path`, ..) and the others are still
     /// built from what they lower to.
-    pub(super) fn call(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        pos: Pos,
-        pre: &mut Vec<Lit>,
-    ) -> L<ExprId> {
+    pub(super) fn call(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos) -> L<ExprId> {
         let span = self.span(n);
-        if let Some(id) = self.env_var_call(rc, n, pos, pre) {
+        if let Some(id) = self.env_var_call(rc, n, pos) {
             return id;
         }
-        if let Some(id) = self.loader_call(rc, n, pre) {
+        if let Some(id) = self.loader_call(rc, n) {
             return id;
         }
         // A let with parameters (R-187).
-        if let Some(id) = self.function_call(rc, n, pre) {
+        if let Some(id) = self.function_call(rc, n) {
             return id;
         }
         let name = self.callee(n);
@@ -502,7 +462,7 @@ impl Lowerer<'_> {
             && let Some(list) = node(n, ARG_LIST)
             && terms(&list).count() == 1
         {
-            return self.ref_call(rc, &list, pre, span);
+            return self.ref_call(rc, &list, span);
         }
         let named: Vec<(String, SyntaxNode)> = node(n, ARG_LIST)
             .into_iter()
@@ -527,15 +487,12 @@ impl Lowerer<'_> {
             self.near_function(rc.scope, &name, at)?;
         }
         self.check_function(&name, span);
-        let mut args = self.bind(false, |l| l.arg_exprs(rc, n, pre))?;
+        let mut args = self.bind(false, |l| l.arg_exprs(rc, n))?;
         let mut defaults = Vec::new();
         if let (false, Some(f)) = (named.is_empty(), declared) {
             let mut given = Vec::new();
             for (k, t) in named {
-                given.push((
-                    k,
-                    Some(self.bind(false, |l| l.expr(rc, &t, Pos::Content, pre))?),
-                ));
+                given.push((k, Some(self.bind(false, |l| l.expr(rc, &t, Pos::Content))?)));
             }
             let placed = crate::functions::with_named(f, args, given, |v| {
                 defaults.push(v);
@@ -577,34 +534,23 @@ impl Lowerer<'_> {
     }
 
     /// A call's positional arguments, each its node.
-    pub(super) fn arg_exprs(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        pre: &mut Vec<Lit>,
-    ) -> L<Vec<Option<ExprId>>> {
+    pub(super) fn arg_exprs(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<Vec<Option<ExprId>>> {
         let Some(list) = node(n, ARG_LIST) else {
             return Ok(Vec::new());
         };
         let mut out = Vec::new();
         for t in terms(&list) {
-            out.push(Some(self.expr(rc, &t, Pos::Content, pre)?));
+            out.push(Some(self.expr(rc, &t, Pos::Content)?));
         }
         Ok(out)
     }
 
     /// `[a, b]`, written element by element: its node, each element's.
     /// A list with a spread is `spread.rs`'s.
-    pub(super) fn list_expr(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        pos: Pos,
-        pre: &mut Vec<Lit>,
-    ) -> L<ExprId> {
+    pub(super) fn list_expr(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos) -> L<ExprId> {
         let mut parts = Vec::new();
         for t in terms(n) {
-            parts.push(ListPart::Elem(self.expr(rc, &t, pos, pre)?));
+            parts.push(ListPart::Elem(self.expr(rc, &t, pos)?));
         }
         Ok(self.node(self.span(n), ExprKind::List { parts }))
     }
@@ -612,19 +558,13 @@ impl Lowerer<'_> {
     /// An object, its keys given or computed (`{ "${k}": v }`), its
     /// fields written or spread (`{ ..base, k: v }`, R-199): its node,
     /// each field's value its node.
-    pub(super) fn object(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        pos: Pos,
-        pre: &mut Vec<Lit>,
-    ) -> L<ExprId> {
+    pub(super) fn object(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos) -> L<ExprId> {
         self.written_twice(n)?;
         if n.children().any(|c| c.kind() == SPREAD) {
-            return self.spread_object(rc, n, pos, pre);
+            return self.spread_object(rc, n, pos);
         }
         let fields: Vec<SyntaxNode> = n.children().filter(|c| c.kind() == OBJECT_FIELD).collect();
-        let parts = self.object_fields(rc, &fields, pos, pre)?;
+        let parts = self.object_fields(rc, &fields, pos)?;
         Ok(self.node(self.span(n), ExprKind::Object { parts }))
     }
 
@@ -636,7 +576,6 @@ impl Lowerer<'_> {
         rc: &mut Rc,
         fields: &[SyntaxNode],
         pos: Pos,
-        pre: &mut Vec<Lit>,
     ) -> L<Vec<ObjPart>> {
         let computed = self.computed_keys(fields);
         let mut parts = Vec::new();
@@ -645,7 +584,7 @@ impl Lowerer<'_> {
             let key_span = self.span_of(k.text_range());
             let computed_key = match (computed, k.kind()) {
                 (false, _) => None,
-                (true, STRING) => Some(self.string_expr(rc, &k, pre)?),
+                (true, STRING) => Some(self.string_expr(rc, &k)?),
                 (true, _) => Some(self.node(key_span, ExprKind::Lit(Value::Str(k.text().into())))),
             };
             let key = match k.kind() {
@@ -654,11 +593,11 @@ impl Lowerer<'_> {
                 _ => k.text().to_string(),
             };
             let (value, pun) = match terms(f).next() {
-                Some(t) => (self.expr(rc, &t, pos, pre)?, false),
+                Some(t) => (self.expr(rc, &t, pos)?, false),
                 // `{ a }` is `{ a: a }`.
                 None => {
                     let name = if computed { k.text() } else { &key };
-                    (self.punned(rc, name, &k, pos, pre)?, true)
+                    (self.punned(rc, name, &k, pos)?, true)
                 }
             };
             parts.push(match computed_key {
@@ -690,7 +629,6 @@ impl Lowerer<'_> {
         key: &str,
         k: &SyntaxToken,
         pos: Pos,
-        pre: &mut Vec<Lit>,
     ) -> L<ExprId> {
         let c = Chain {
             head: key.to_string(),
@@ -699,9 +637,8 @@ impl Lowerer<'_> {
             range: k.text_range(),
             ops: Vec::new(),
         };
-        let mut local = Vec::new();
-        let res = self.resolve(rc, &c, &mut local)?;
-        self.realize_expr(rc, res, pos, (local, pre), self.span_of(k.text_range()))
+        let res = self.resolve(rc, &c)?;
+        self.realize_expr(rc, res, pos, self.span_of(k.text_range()))
     }
 
     /// A list comprehension: its body resolved nested, its item over it.
@@ -726,7 +663,7 @@ impl Lowerer<'_> {
             Some(g) => g.close(&mut self.program, at),
             None => None,
         };
-        let mut body = body?;
+        body?;
         let item_node = terms(n).next().ok_or(Skip)?;
         // A resource collected into a value is its reference.
         let item_pos = if pos == Pos::Value {
@@ -735,7 +672,7 @@ impl Lowerer<'_> {
             Pos::Whole
         };
         let tests = std::mem::take(&mut rc.tests);
-        let item = self.bind(false, |l| l.expr(rc, &item_node, item_pos, &mut body))?;
+        let item = self.bind(false, |l| l.expr(rc, &item_node, item_pos))?;
         (rc.reads, rc.values) = saved;
         // A test the item made before a read it holds none of is the
         // body's last goal.
@@ -753,7 +690,7 @@ impl Lowerer<'_> {
 
     /// Arithmetic; `us-east` and `us-test-1a`, meant as strings, are
     /// errors that say so.
-    pub(super) fn binary(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<ExprId> {
+    pub(super) fn binary(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<ExprId> {
         let span = self.span(n);
         let ts: Vec<SyntaxNode> = terms(n).collect();
         let op = tokens(n).next().ok_or(Skip)?;
@@ -802,8 +739,8 @@ impl Lowerer<'_> {
             SLASH => BinOp::Div,
             _ => BinOp::Mod,
         };
-        let a = self.bind(false, |l| l.expr(rc, &ts[0], Pos::Content, pre))?;
-        let b = self.bind(false, |l| l.expr(rc, &ts[1], Pos::Content, pre))?;
+        let a = self.bind(false, |l| l.expr(rc, &ts[0], Pos::Content))?;
+        let b = self.bind(false, |l| l.expr(rc, &ts[1], Pos::Content))?;
         let (ta, tb) = (self.term_of(a), self.term_of(b));
         match crate::types::operands(op.text(), ta.clone(), tb.clone()) {
             Ok((x, y)) => {
@@ -816,10 +753,10 @@ impl Lowerer<'_> {
     }
 
     /// A negation: of a literal, its value.
-    pub(super) fn unary(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<ExprId> {
+    pub(super) fn unary(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<ExprId> {
         let span = self.span(n);
         let inner = terms(n).next().ok_or(Skip)?;
-        let e = self.bind(false, |l| l.expr(rc, &inner, Pos::Content, pre))?;
+        let e = self.bind(false, |l| l.expr(rc, &inner, Pos::Content))?;
         let kind = match &self.program.exprs[e].kind {
             ExprKind::Lit(Value::Int(i)) if inner.kind() == LITERAL => {
                 ExprKind::Lit(Value::Int(-i))
@@ -839,14 +776,14 @@ impl Lowerer<'_> {
     /// (R-180), the value when its ends are known, else
     /// `__range(lo, hi, inclusive)`. An ambiguous quantity end is read as
     /// the other end's (`100m..=1` is a cpu's).
-    pub(super) fn range(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<ExprId> {
+    pub(super) fn range(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<ExprId> {
         let span = self.span(n);
         let ends: Vec<SyntaxNode> = terms(n).collect();
         let [lo, hi] = ends.as_slice() else {
             return Err(Skip);
         };
-        let lo = self.expr(rc, lo, Pos::Content, out)?;
-        let hi = self.expr(rc, hi, Pos::Content, out)?;
+        let lo = self.expr(rc, lo, Pos::Content)?;
+        let hi = self.expr(rc, hi, Pos::Content)?;
         let (tl, th) = (self.term_of(lo), self.term_of(hi));
         let (rl, rh) = crate::types::range_ends(tl.clone(), th.clone());
         let inclusive = tokens(n).any(|t| t.kind() == DOT2_EQ);
@@ -862,12 +799,7 @@ impl Lowerer<'_> {
     }
 
     /// A string's node: its text, or its pieces of text and holes.
-    pub(super) fn string_expr(
-        &mut self,
-        rc: &mut Rc,
-        t: &SyntaxToken,
-        pre: &mut Vec<Lit>,
-    ) -> L<ExprId> {
+    pub(super) fn string_expr(&mut self, rc: &mut Rc, t: &SyntaxToken) -> L<ExprId> {
         use crate::program::node::Piece as Part;
         let text = t.text();
         let span = self.span_of(t.text_range());
@@ -904,7 +836,7 @@ impl Lowerer<'_> {
                 }
                 Piece::Hole(hole, at) => {
                     let at = base + at as u32;
-                    parts.push(Part::Hole(self.bind(false, |l| l.hole(rc, hole, at, pre))?));
+                    parts.push(Part::Hole(self.bind(false, |l| l.hole(rc, hole, at))?));
                 }
             }
         }
@@ -922,13 +854,7 @@ impl Lowerer<'_> {
     }
 
     /// An interpolation hole: a term, read now (a content position).
-    pub(super) fn hole(
-        &mut self,
-        rc: &mut Rc,
-        src: &str,
-        at: u32,
-        pre: &mut Vec<Lit>,
-    ) -> L<ExprId> {
+    pub(super) fn hole(&mut self, rc: &mut Rc, src: &str, at: u32) -> L<ExprId> {
         // A variable `in T` types is a reference: it interpolates as its
         // address, `T["A"]`, as an untyped one does (R-42).
         let parse = parse::parse_term(src.trim());
@@ -937,7 +863,7 @@ impl Lowerer<'_> {
             .and_then(|t| Chain::of(&t))
             .is_some_and(|c| c.is_bare() && rc.types.contains_key(&c.head));
         let pos = if typed { Pos::Value } else { Pos::Content };
-        self.text_expr(rc, src, at, pos, pre)
+        self.text_expr(rc, src, at, pos)
     }
 
     /// A block entry's value: its term, or, for an entry that is only a
@@ -949,10 +875,9 @@ impl Lowerer<'_> {
         rc: &mut Rc,
         a: &SyntaxNode,
         pos: Pos,
-        reads: &mut Vec<Lit>,
     ) -> L<(Term, ExprId)> {
         if let Some(t) = terms(a).next() {
-            return self.arg_node(rc, &t, pos, reads);
+            return self.arg_node(rc, &t, pos);
         }
         let path = node(a, BLOCK_PATH).ok_or(Skip)?;
         let seg = tokens(&path).last().ok_or(Skip)?;
@@ -985,19 +910,12 @@ impl Lowerer<'_> {
             return Err(Skip);
         }
         let at: u32 = seg.text_range().start().into();
-        let id = self.text_expr(rc, seg.text(), at, pos, reads)?;
-        Ok((self.lowered(id, reads), id))
+        let id = self.text_expr(rc, seg.text(), at, pos)?;
+        Ok((self.term_of(id), id))
     }
 
     /// The term `src`, written at byte `at`, as its node in `pos`.
-    pub(super) fn text_expr(
-        &mut self,
-        rc: &mut Rc,
-        src: &str,
-        at: u32,
-        pos: Pos,
-        pre: &mut Vec<Lit>,
-    ) -> L<ExprId> {
+    pub(super) fn text_expr(&mut self, rc: &mut Rc, src: &str, at: u32, pos: Pos) -> L<ExprId> {
         let parse = parse::parse_term(src);
         let saved = self.offset;
         self.offset += at;
@@ -1016,7 +934,7 @@ impl Lowerer<'_> {
             }
             let root = parse.syntax();
             let t = terms(&root).next().ok_or(Skip)?;
-            self.expr(rc, &t, pos, pre)
+            self.expr(rc, &t, pos)
         })();
         self.offset = saved;
         r

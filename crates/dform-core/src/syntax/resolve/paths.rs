@@ -55,10 +55,10 @@ impl Lowerer<'_> {
 
     /// What a chain denotes (section "Names" of docs/grammar.md). Index
     /// terms are lowered in `rc`, their reads into `pre`.
-    pub(super) fn resolve(&mut self, rc: &mut Rc, c: &Chain, pre: &mut Vec<Lit>) -> L<Res> {
+    pub(super) fn resolve(&mut self, rc: &mut Rc, c: &Chain) -> L<Res> {
         let span = self.span_of(c.range);
         if let Some(call) = &c.call {
-            return self.call_read(rc, call, &c.ops, pre);
+            return self.call_read(rc, call, &c.ops);
         }
         let field = self.field_in_check(rc, c);
         let c = field.as_ref().unwrap_or(c);
@@ -83,7 +83,7 @@ impl Lowerer<'_> {
         }
         // `super.x`: the scope around this component (R-186).
         if h == "super" && !rc.vars.contains_key(h) {
-            return self.super_read(rc, c, pre, span);
+            return self.super_read(rc, c, span);
         }
         // A let with parameters has no value until called (R-187).
         if !rc.vars.contains_key(h)
@@ -100,7 +100,7 @@ impl Lowerer<'_> {
         if let Some(path) = rc.instances.get(h).cloned() {
             let v = self.var_named(rc, h, span);
             let inst = self.var_node(rc, span, &v);
-            return self.output_of(rc, (inst, None), &path, &c.ops, pre, span);
+            return self.output_of(rc, (inst, None), &path, &c.ops, span);
         }
         // A typed variable: a reference.
         if let Some(t) = rc.types.get(h).cloned() {
@@ -108,7 +108,7 @@ impl Lowerer<'_> {
                 self.namespace_attr(rc, h, first, span)?;
             }
             let v = self.var_named(rc, h, span);
-            let path = self.segs(rc, &c.ops, pre)?;
+            let path = self.segs(rc, &c.ops)?;
             let name = self.var_node(rc, span, &v);
             let addr = match rc.row_refs.contains(h) {
                 true => {
@@ -134,7 +134,7 @@ impl Lowerer<'_> {
         if !rc.vars.contains_key(h) {
             self.undeclared(rc, h, span)?;
             if self.is_value(rc.scope, h) && own != Some(true) {
-                return self.value(rc, rc.scope, c, pre, span);
+                return self.value(rc, rc.scope, c, span);
             }
             // `settings.x` names a resource called `settings` in scope; a
             // settings row, `settings[e]`, is gone (R-38).
@@ -144,7 +144,7 @@ impl Lowerer<'_> {
                 return self.settings_read(c, span);
             }
             if h == "world" && !c.ops.is_empty() {
-                return self.world(rc, c, pre, span);
+                return self.world(rc, c, span);
             }
         }
         if c.is_bare() {
@@ -158,17 +158,17 @@ impl Lowerer<'_> {
                 if types.len() > 1 {
                     return self.ambiguous(h, &types, span);
                 }
-                let path = self.segs(rc, &c.ops, pre)?;
+                let path = self.segs(rc, &c.ops)?;
                 return Ok(Res::Ref {
                     typ: self.str_node(span, &types[0]),
                     addr: self.resource_addr(rc.scope, h, span),
                     path,
                 });
             }
-            if let Some(r) = self.scope_path(rc, c, pre, span)? {
+            if let Some(r) = self.scope_path(rc, c, span)? {
                 return Ok(r);
             }
-            if let Some(r) = self.typed_path(rc, c, pre, span)? {
+            if let Some(r) = self.typed_path(rc, c, span)? {
                 return Ok(r);
             }
         }
@@ -188,7 +188,7 @@ impl Lowerer<'_> {
             || (rc.candidates.contains(h) && !self.decls.namespaces.contains(h))
         {
             let v = self.var_named(rc, h, span);
-            let path = self.segs(rc, &c.ops, pre)?;
+            let path = self.segs(rc, &c.ops)?;
             let var = self.var_node(rc, span, &v);
             return Ok(Res::Var { var, path });
         }
@@ -227,16 +227,9 @@ impl Lowerer<'_> {
 
     /// `f(x).p[i]` (R-71): the call bound to a variable, once per rule, as
     /// `v = f(x)` would, and the path read from it.
-    pub(super) fn call_read(
-        &mut self,
-        rc: &mut Rc,
-        call: &SyntaxNode,
-        ops: &[Op],
-        pre: &mut Vec<Lit>,
-    ) -> L<Res> {
+    pub(super) fn call_read(&mut self, rc: &mut Rc, call: &SyntaxNode, ops: &[Op]) -> L<Res> {
         let span = self.span(call);
-        let id = self.bind(false, |l| l.part(rc, call, pre))?;
-        let t = self.term_of(id);
+        let id = self.bind(false, |l| l.part(rc, call))?;
         let key = format!("call {}", self.read_key_of(id));
         let var = match rc.reads.get(&key) {
             Some(Term::Var(v)) => {
@@ -247,12 +240,11 @@ impl Lowerer<'_> {
                 let name = self.callee(call).unwrap_or_default();
                 let base = capitalise(name.rsplit('.').next().unwrap_or_default());
                 let v = fresh(rc, &base);
-                pre.push(Lit::Eq(var(&v), t));
                 rc.reads.insert(key, var(&v));
                 self.building(rc, span, |b| b.bound_into(id, &v))
             }
         };
-        let path = self.segs(rc, ops, pre)?;
+        let path = self.segs(rc, ops)?;
         Ok(Res::Var { var, path })
     }
 
@@ -260,21 +252,14 @@ impl Lowerer<'_> {
     /// reference (H-6) reads through it: `cfg.x` is `cfg(E), setting(E,
     /// "x", V)`. Looked up from `from` outward: `rc.scope`, or the scope
     /// `super` names.
-    pub(super) fn value(
-        &mut self,
-        rc: &mut Rc,
-        from: ScopeId,
-        c: &Chain,
-        pre: &mut Vec<Lit>,
-        span: Span,
-    ) -> L<Res> {
+    pub(super) fn value(&mut self, rc: &mut Rc, from: ScopeId, c: &Chain, span: Span) -> L<Res> {
         let name = c.head.clone();
         let (decl, via) = self.value_decl(rc.scope, from, &name);
         let key = read_key(&name, &via);
         if !c.is_bare()
             && let Some(typ) = self.input_ref(from, &name)
         {
-            return self.through_ref_input(rc, (c, &decl, via), typ, pre, span);
+            return self.through_ref_input(rc, (c, &decl, via), typ, span);
         }
         let ty = match self.value_type(from, &name) {
             Ok(t) => t,
@@ -283,7 +268,7 @@ impl Lowerer<'_> {
         // A `let` holding a live object is its name alone; one holding a
         // resource is the reference (R-43).
         let Some(ty) = ty.filter(|t| !c.is_bare() || matches!(t, VType::Ref(_))) else {
-            let path = self.segs(rc, &c.ops, pre)?;
+            let path = self.segs(rc, &c.ops)?;
             return Ok(Res::Value { decl, via, path });
         };
         let key = match rc.values.get(&key) {
@@ -293,14 +278,14 @@ impl Lowerer<'_> {
             }
             None => {
                 let v = fresh(rc, &capitalise(&name));
-                let read = self.value_read(rc, &v, (decl, via), pre, span);
+                let read = self.value_read(rc, &v, (decl, via), span);
                 rc.values.insert(key, v.clone());
                 read
             }
         };
         match ty {
             VType::Ref(typ) => {
-                let path = self.segs(rc, &c.ops, pre)?;
+                let path = self.segs(rc, &c.ops)?;
                 Ok(Res::Ref {
                     typ: self.str_node(span, &typ),
                     addr: key,
@@ -308,7 +293,7 @@ impl Lowerer<'_> {
                 })
             }
             VType::World(typ) => {
-                let segs = self.segs(rc, &c.ops, pre)?;
+                let segs = self.segs(rc, &c.ops)?;
                 let Some(path) = self.path_string(&segs) else {
                     return self.error(span, "a live object's path is constant");
                 };
@@ -331,7 +316,6 @@ impl Lowerer<'_> {
         rc: &mut Rc,
         (c, decl, via): (&Chain, &DeclRef, Reach),
         typ: String,
-        pre: &mut Vec<Lit>,
         span: Span,
     ) -> L<Res> {
         let key = format!("ref {}", read_key(&decl.name, &via));
@@ -344,12 +328,11 @@ impl Lowerer<'_> {
                 let name = fresh(rc, &capitalise(&decl.name));
                 let rel = via.relation(&decl.name);
                 let id = self.building(rc, span, |b| b.address_into((&rel, via), &typ, &name));
-                self.hoisted_into(id, pre);
                 rc.values.insert(key, name.clone());
                 id
             }
         };
-        let path = self.segs(rc, &c.ops, pre)?;
+        let path = self.segs(rc, &c.ops)?;
         let via = Reach::Absolute;
         Ok(Res::Ref {
             typ: self.str_node(span, &typ),
@@ -397,7 +380,7 @@ impl Lowerer<'_> {
     }
 
     /// The parts after a reference or value, lowered.
-    pub(super) fn segs(&mut self, rc: &mut Rc, ops: &[Op], pre: &mut Vec<Lit>) -> L<Vec<Seg>> {
+    pub(super) fn segs(&mut self, rc: &mut Rc, ops: &[Op]) -> L<Vec<Seg>> {
         let mut out = Vec::new();
         for op in ops {
             match op {
@@ -411,7 +394,7 @@ impl Lowerer<'_> {
                         CALL => true,
                         _ => Chain::of(&ts[0]).is_some_and(|c| !c.is_bare()),
                     };
-                    let t = self.bind(true, |l| l.part(rc, &ts[0], pre))?;
+                    let t = self.bind(true, |l| l.part(rc, &ts[0]))?;
                     out.push(if keyed { Seg::K(t) } else { Seg::I(t) });
                 }
                 Op::Keyed(_, r) => {
@@ -452,13 +435,7 @@ impl Lowerer<'_> {
     }
 
     /// `world.T[e].path`: the provider's inventory.
-    pub(super) fn world(
-        &mut self,
-        rc: &mut Rc,
-        c: &Chain,
-        pre: &mut Vec<Lit>,
-        span: Span,
-    ) -> L<Res> {
+    pub(super) fn world(&mut self, rc: &mut Rc, c: &Chain, span: Span) -> L<Res> {
         let fields = c.fields();
         let typ = fields[1..].join(".");
         let rest = &c.ops[fields.len() - 1..];
@@ -468,8 +445,8 @@ impl Lowerer<'_> {
         if ts.len() != 1 {
             return self.error(span, "a live object is `world.T[name]`");
         }
-        let addr = self.bind(true, |l| l.part(rc, &ts[0], pre))?;
-        let segs = self.segs(rc, &rest[1..], pre)?;
+        let addr = self.bind(true, |l| l.part(rc, &ts[0]))?;
+        let segs = self.segs(rc, &rest[1..])?;
         let Some(path) = self.path_string(&segs) else {
             return self.error(span, "a live object's path is constant");
         };
@@ -479,13 +456,7 @@ impl Lowerer<'_> {
     /// `T[e].path` for a resource of type `T` by its key, and the lookups
     /// `p[a, b]` and `ext[a]`. `T.n`, a resource by a dot after its type,
     /// is an error that names the spelling (H-10).
-    pub(super) fn typed_path(
-        &mut self,
-        rc: &mut Rc,
-        c: &Chain,
-        pre: &mut Vec<Lit>,
-        span: Span,
-    ) -> L<Option<Res>> {
+    pub(super) fn typed_path(&mut self, rc: &mut Rc, c: &Chain, span: Span) -> L<Option<Res>> {
         let fields = c.fields();
         let k = fields.len();
         // `T.n`: the longest `T` with a resource `n` of that type in scope.
@@ -542,9 +513,9 @@ impl Lowerer<'_> {
             }
             let mut args = Vec::new();
             for t in ts {
-                args.push(self.bind(true, |l| l.part(rc, t, pre))?);
+                args.push(self.bind(true, |l| l.part(rc, t))?);
             }
-            let path = self.segs(rc, rest, pre)?;
+            let path = self.segs(rc, rest)?;
             return Ok(Some(Res::Lookup {
                 pred: name,
                 args,
@@ -558,9 +529,9 @@ impl Lowerer<'_> {
         {
             let mut args = Vec::new();
             for t in ts {
-                args.push(self.bind(true, |l| l.part(rc, t, pre))?);
+                args.push(self.bind(true, |l| l.part(rc, t))?);
             }
-            let path = self.segs(rc, rest, pre)?;
+            let path = self.segs(rc, rest)?;
             let out = args.len();
             return Ok(Some(Res::Lookup {
                 pred: name,
@@ -605,9 +576,9 @@ impl Lowerer<'_> {
                 self.diags.push(d);
                 return Err(Skip);
             }
-            let addr = self.bind(true, |l| l.part(rc, &ts[0], pre))?;
+            let addr = self.bind(true, |l| l.part(rc, &ts[0]))?;
             self.address_key(&self.term_of(addr), span)?;
-            let path = self.segs(rc, rest, pre)?;
+            let path = self.segs(rc, rest)?;
             return Ok(Some(Res::Ref {
                 typ: self.str_node(span, &name),
                 addr,

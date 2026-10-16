@@ -15,8 +15,7 @@ impl Lowerer<'_> {
         &mut self,
         rc: &mut Rc,
         (pred, cols): (&str, Vec<BindArg>),
-        n: &SyntaxNode,
-        (mut body, clause): (Vec<Lit>, Option<ClauseId>),
+        (n, clause): (&SyntaxNode, Option<ClauseId>),
         span: Span,
     ) -> L<TableRows> {
         let vars: Vec<Term> = cols
@@ -24,7 +23,7 @@ impl Lowerer<'_> {
             .map(|c| var(&fresh(rc, &capitalise(&c.name))))
             .collect();
         let made = self.helpers.len();
-        let (externs, rows) = self.doc_source(rc, n, pred, cols, vars.clone(), &mut body)?;
+        let (externs, rows) = self.doc_source(rc, n, pred, cols, vars.clone())?;
         self.check_bound(rc, clause, &[])?;
         Ok(TableRows {
             externs,
@@ -84,7 +83,6 @@ impl Lowerer<'_> {
         table: &str,
         cols: Vec<BindArg>,
         outs: Vec<Term>,
-        body: &mut Vec<Lit>,
     ) -> L<(Vec<Stmt>, GoalId)> {
         let src = terms(n).next().ok_or(Skip)?;
         let selector = node(n, SELECTOR)
@@ -99,9 +97,9 @@ impl Lowerer<'_> {
         if self.loader_of(&src).is_some()
             || callee.is_some_and(|c| crate::functions::registry().get(&c).is_none())
         {
-            return self.table_body(rc, &src, &name, cols, outs, body);
+            return self.table_body(rc, &src, &name, cols, outs);
         }
-        let location = self.expr(rc, &src, Pos::Content, body)?;
+        let location = self.expr(rc, &src, Pos::Content)?;
         let path = fresh(rc, "Doc");
         let at = fresh(rc, "At");
         let ext = crate::tables::extern_name(crate::tables::VALUE, &name);
@@ -113,7 +111,7 @@ impl Lowerer<'_> {
             name: ext.clone(),
             span,
         };
-        let rows = self.rows_goal(rc, &read, &outs, body);
+        let rows = self.rows_goal(rc, &read, &outs);
         let mut ins = vec![
             BindArg {
                 input: true,
@@ -144,12 +142,7 @@ impl Lowerer<'_> {
     /// their place (R-131). `None` for any other call; an old loader
     /// (`yaml(..)`) no relation of the program names is an error naming
     /// the composition.
-    pub(super) fn loader_call(
-        &mut self,
-        rc: &mut Rc,
-        n: &SyntaxNode,
-        pre: &mut Vec<Lit>,
-    ) -> Option<L<ExprId>> {
+    pub(super) fn loader_call(&mut self, rc: &mut Rc, n: &SyntaxNode) -> Option<L<ExprId>> {
         if let Some(e) = self.old_loader(n) {
             return Some(e.map(|never| match never {}));
         }
@@ -161,7 +154,7 @@ impl Lowerer<'_> {
             name: "value".into(),
             ty: Some(TypeExpr::Name("any".into())),
         }];
-        let (stmts, read) = match self.doc_read(rc, n, &table, cols, pre) {
+        let (stmts, read) = match self.doc_read(rc, n, &table, cols) {
             Ok(r) => r,
             Err(e) => return Some(Err(e)),
         };
@@ -279,7 +272,7 @@ impl Lowerer<'_> {
     }
 
     /// A table's source, `FORMAT(LOCATION)`, a path or a uri (R-153),
-    /// read into `body` and asked of its extern there, its outputs `outs`;
+    /// read and asked of its extern, its outputs `outs`;
     /// the extern's declaration.
     pub(super) fn table_body(
         &mut self,
@@ -288,27 +281,15 @@ impl Lowerer<'_> {
         table: &str,
         cols: Vec<BindArg>,
         outs: Vec<Term>,
-        body: &mut Vec<Lit>,
     ) -> L<(Vec<Stmt>, GoalId)> {
-        let (stmts, read) = self.doc_read(rc, src, table, cols, body)?;
-        let rows = self.rows_goal(rc, &read, &outs, body);
+        let (stmts, read) = self.doc_read(rc, src, table, cols)?;
+        let rows = self.rows_goal(rc, &read, &outs);
         Ok((stmts, rows))
     }
 
     /// The rows of a document `read` reads into `outs`, `name(Path, At,
-    /// outs..)` after `Path = LOCATION`, into `body`: their goal.
-    pub(super) fn rows_goal(
-        &mut self,
-        rc: &Rc,
-        read: &DocRead,
-        outs: &[Term],
-        body: &mut Vec<Lit>,
-    ) -> GoalId {
-        let t = self.lowered(read.location, body);
-        body.push(Lit::Eq(var(&read.path), t));
-        let mut args = vec![var(&read.path), var(&read.at)];
-        args.extend(outs.iter().cloned());
-        body.push(Lit::Pos(atom_at(&read.name, args, read.span)));
+    /// outs..)` after `Path = LOCATION`: their goal.
+    pub(super) fn rows_goal(&mut self, rc: &Rc, read: &DocRead, outs: &[Term]) -> GoalId {
         let rel = RelRef::own(read.name.clone(), read.span);
         self.building(rc, read.span, |b| {
             let path = b.bound_into(read.location, &read.path);
@@ -334,7 +315,6 @@ impl Lowerer<'_> {
         src: &SyntaxNode,
         table: &str,
         cols: Vec<BindArg>,
-        pre: &mut Vec<Lit>,
     ) -> L<(Vec<Stmt>, DocRead)> {
         let span = self.span(src);
         let bad = |l: &mut Self, what: &str| -> L<(Vec<Stmt>, DocRead)> {
@@ -379,7 +359,7 @@ impl Lowerer<'_> {
             self.diags.push(d);
             return Err(Skip);
         }
-        let location = self.expr(rc, arg, Pos::Content, pre)?;
+        let location = self.expr(rc, arg, Pos::Content)?;
         let path = fresh(rc, "Path");
         let at = fresh(rc, "At");
         let mut ins = vec![

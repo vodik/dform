@@ -303,34 +303,30 @@ impl Lowerer<'_> {
         let span = self.span(n);
         self.check_gives(n, scope, &module)?;
         let mut rc = self.rc(n, scope, outer);
-        let mut body = self.clauses(&mut rc, n)?;
+        self.clauses(&mut rc, n)?;
         let gathered = self.gather.as_mut().and_then(|g| g.take_clause());
-        let named_at = (body.len(), self.helpers.len());
+        let named_at = self.helpers.len();
         // A name from the clause (R-191): each row a copy, named as a
         // provider type's resource is.
         let named_id = match header_name(n).filter(|_| named_by_clause(n)) {
-            Some(t) => Some(self.name_from_clause(&mut rc, &t, &mut body)?.1),
+            Some(t) => Some(self.name_from_clause(&mut rc, &t)?),
             None => None,
         };
         let made = self.helpers.len();
-        let mut reads = Vec::new();
         let fields = match node(n, BLOCK) {
-            Some(block) => self.fields(&mut rc, &block, &mut reads)?,
+            Some(block) => self.fields(&mut rc, &block)?,
             None => Vec::new(),
         };
-        let base = body.len();
-        body.extend(reads);
         let mut inputs = Vec::new();
-        let mut from = (base, made);
-        for (f, id, (r, h)) in fields {
+        let mut from = made;
+        for (f, id, to) in fields {
             if matches!(f.op, FieldOp::Add) {
                 return self.error(f.span, "an input of a copy is set with `=`, not `+=`");
             }
             if f.rank.is_some() {
                 return self.error(f.span, "an input of a copy takes no rank");
             }
-            let to = (base + r, h);
-            inputs.push((f.key, f.value, f.span, id, from.1..to.1));
+            inputs.push((f.key, f.value, f.span, id, from..to));
             from = to;
         }
         let values: Vec<bind::Term> = inputs
@@ -352,7 +348,7 @@ impl Lowerer<'_> {
             kind,
             module,
             name,
-            named: named_id.map(|id| (id, &self.helpers[named_at.1..made])),
+            named: named_id.map(|id| (id, &self.helpers[named_at..made])),
             inputs: inputs
                 .iter()
                 .map(|(key, _, at, id, h)| crate::program::build::InputGiven {
@@ -463,27 +459,15 @@ impl Lowerer<'_> {
     /// type, a provider's, a stack's or a component's (R-112, R-191): a
     /// term per row of the clause, bound last by `format`, one segment of
     /// the address (quoted when it holds a dot). Its variable.
-    pub(super) fn name_from_clause(
-        &mut self,
-        rc: &mut Rc,
-        header: &SyntaxToken,
-        body: &mut Vec<Lit>,
-    ) -> L<(Term, ExprId)> {
-        let mut pre = Vec::new();
-        let s = self.string_expr(rc, header, &mut pre)?;
-        let t = self.lowered(s, &mut pre);
-        body.extend(pre);
+    pub(super) fn name_from_clause(&mut self, rc: &mut Rc, header: &SyntaxToken) -> L<ExprId> {
+        let s = self.string_expr(rc, header)?;
         let v = fresh(rc, "Addr");
-        body.push(Lit::Eq(
-            var(&v),
-            func(crate::address::NAME_SEGMENT, vec![t]),
-        ));
         let span = self.span_of(header.text_range());
         let id = self.building(rc, span, |b| {
             let segment = b.form(crate::address::NAME_SEGMENT, vec![s]);
             b.bound_into(segment, &v)
         });
-        Ok((var(&v), id))
+        Ok(id)
     }
 
     /// The component signature `name` in scope: the file and the `type`

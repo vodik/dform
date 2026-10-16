@@ -78,17 +78,17 @@ pub(super) fn folded(
         head.args[at] = call.clone();
         return vec![Stmt::Rule(RuleStmt::new(head, base))];
     }
-    let bound = crate::syntax::resolve::bound_vars(&base);
+    let bound = bound_vars(&base);
     let mut wanted = BTreeSet::new();
     for t in head
         .args
         .iter()
         .chain(head.record.iter().flat_map(|r| r.values()))
     {
-        crate::syntax::resolve::lit_vars(&Lit::Eq(t.clone(), t.clone()), &mut wanted);
+        lit_vars(&Lit::Eq(t.clone(), t.clone()), &mut wanted);
     }
     for l in &post {
-        crate::syntax::resolve::lit_vars(l, &mut wanted);
+        lit_vars(l, &mut wanted);
     }
     let group: Vec<Term> = wanted
         .iter()
@@ -590,6 +590,97 @@ fn reads_any(l: &Lit, vars: &BTreeSet<&str>) -> bool {
         return false;
     }
     let mut seen = BTreeSet::new();
-    crate::syntax::resolve::lit_vars(l, &mut seen);
+    lit_vars(l, &mut seen);
     seen.iter().any(|v| vars.contains(v.as_str()))
+}
+
+/// The variables a body binds: arguments of its positive relation reads
+/// (patterns included), and both sides of an equality.
+fn bound_vars(body: &[Lit]) -> BTreeSet<String> {
+    fn pattern(t: &Term, out: &mut BTreeSet<String>) {
+        match t {
+            Term::Var(v) => {
+                out.insert(v.clone());
+            }
+            // A relation's column takes a reference apart (R-42), in a
+            // row of a copy's relation too (`__rows(.., [ref(T, A, "")])`).
+            Term::Func { name, args } if name == crate::address::REF => {
+                args.iter().for_each(|x| pattern(x, out))
+            }
+            Term::List(xs) => xs.iter().for_each(|x| pattern(x, out)),
+            Term::Obj(m) => m.values().for_each(|x| pattern(x, out)),
+            Term::ListComp { body, .. } => out.extend(bound_vars(body)),
+            _ => {}
+        }
+    }
+    fn nested(t: &Term, out: &mut BTreeSet<String>) {
+        match t {
+            Term::ListComp { item, body } => {
+                out.extend(bound_vars(body));
+                nested(item, out);
+            }
+            Term::Func { args, .. } | Term::List(args) => args.iter().for_each(|x| nested(x, out)),
+            Term::Obj(m) => m.values().for_each(|x| nested(x, out)),
+            _ => {}
+        }
+    }
+    let mut out = BTreeSet::new();
+    for l in body {
+        match l {
+            Lit::Pos(a) => {
+                a.args.iter().for_each(|t| pattern(t, &mut out));
+                if let Some(r) = &a.record {
+                    r.values().for_each(|t| pattern(t, &mut out));
+                }
+                a.args.iter().for_each(|t| nested(t, &mut out));
+            }
+            Lit::Not(a) => a.args.iter().for_each(|t| nested(t, &mut out)),
+            Lit::Eq(a, b) => {
+                pattern(a, &mut out);
+                pattern(b, &mut out);
+                nested(a, &mut out);
+                nested(b, &mut out);
+            }
+            Lit::Neq(a, b) | Lit::Gt(a, b) | Lit::Ge(a, b) | Lit::Lt(a, b) | Lit::Le(a, b) => {
+                nested(a, &mut out);
+                nested(b, &mut out);
+            }
+        }
+    }
+    out
+}
+
+/// Every variable literal `l` names, a comprehension's included.
+fn lit_vars(l: &Lit, out: &mut BTreeSet<String>) {
+    fn term(t: &Term, out: &mut BTreeSet<String>) {
+        match t {
+            Term::Var(v) => {
+                out.insert(v.clone());
+            }
+            Term::Func { args, .. } | Term::List(args) => args.iter().for_each(|x| term(x, out)),
+            Term::Obj(m) => m.values().for_each(|x| term(x, out)),
+            Term::ListComp { item, body } => {
+                term(item, out);
+                body.iter().for_each(|l| lit_vars(l, out));
+            }
+            _ => {}
+        }
+    }
+    match l {
+        Lit::Pos(a) | Lit::Not(a) => {
+            a.args.iter().for_each(|t| term(t, out));
+            if let Some(r) = &a.record {
+                r.values().for_each(|t| term(t, out));
+            }
+        }
+        Lit::Eq(a, b)
+        | Lit::Neq(a, b)
+        | Lit::Gt(a, b)
+        | Lit::Ge(a, b)
+        | Lit::Lt(a, b)
+        | Lit::Le(a, b) => {
+            term(a, out);
+            term(b, out);
+        }
+    }
 }

@@ -113,23 +113,23 @@ impl Gather {
     /// were built as ([`Gather::negation`]): built as that goal, its
     /// arguments what its body shares with what is bound before it:
     /// around, and by the goals before it in the clauses it is in, up to
-    /// the comprehension it is in ([`Gather::bound_before`]). Its
-    /// arguments and its body's own variables, by the names they lower to.
+    /// the comprehension it is in ([`Gather::bound_before`]). Its body's
+    /// own variables, by the names they lower to.
     pub fn negated(
         &mut self,
         program: &mut Program,
         span: Span,
         written: crate::program::node::Negated,
         around: &Around,
-    ) -> (Vec<String>, Vec<String>) {
+    ) -> Vec<String> {
         let Some(f) = self.frames.last() else {
-            return Default::default();
+            return Vec::new();
         };
         let Some((number, folded, from)) = f.negation.clone() else {
-            return Default::default();
+            return Vec::new();
         };
         if f.failed {
-            return Default::default();
+            return Vec::new();
         }
         let bound = self.bound_before(program, from, around.scope);
         let body: Vec<GoalId> = f.goals[from..].iter().map(|(g, _)| *g).collect();
@@ -143,7 +143,6 @@ impl Gather {
             .filter(|v| !args.contains(v))
             .map(lowered)
             .collect();
-        let shared = args.iter().map(lowered).collect();
         let helper = NegHelper {
             number,
             args,
@@ -157,7 +156,7 @@ impl Gather {
         let g = b.goal_node(span, kind);
         self.done(b);
         self.built(g);
-        (shared, own)
+        own
     }
 
     /// Whether the goals of the literal being lowered from `from` on read

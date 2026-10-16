@@ -50,20 +50,14 @@ impl Lowerer<'_> {
     /// variable. A `[_]` after a type binds a resource of it, one after a
     /// resource's list an element of the list, which `set` writes by its
     /// key (R-69).
-    pub(super) fn each_target(
-        &mut self,
-        rc: &mut Rc,
-        c: &Chain,
-        body: &mut Vec<Lit>,
-        span: Span,
-    ) -> L<Chain> {
+    pub(super) fn each_target(&mut self, rc: &mut Rc, c: &Chain, span: Span) -> L<Chain> {
         let mut c = c.clone();
         while let Some(k) = c.ops.iter().position(is_each) {
             let Op::Index(_, r) = &c.ops[k] else {
                 unreachable!("is_each")
             };
             let r = *r;
-            let src = self.each_binding(rc, &c, k, body, span)?;
+            let src = self.each_binding(rc, &c, k, span)?;
             c = Chain {
                 head: src,
                 head_kind: IDENT,
@@ -78,14 +72,7 @@ impl Lowerer<'_> {
     /// The `[_]` at `c.ops[k]` bound, into `body`: each resource of the
     /// type before it, `want(T, Each_AT)`, or each element of the
     /// resource's list before it, `member(L, Each_AT)`; the name it binds.
-    fn each_binding(
-        &mut self,
-        rc: &mut Rc,
-        c: &Chain,
-        k: usize,
-        body: &mut Vec<Lit>,
-        span: Span,
-    ) -> L<String> {
+    fn each_binding(&mut self, rc: &mut Rc, c: &Chain, k: usize, span: Span) -> L<String> {
         let Op::Index(_, r) = &c.ops[k] else {
             unreachable!("is_each")
         };
@@ -100,14 +87,12 @@ impl Lowerer<'_> {
         let v = each_var(u32::from(r.start()));
         // The read that binds it: kept for the builders.
         let read = if let Some(t) = self.chain_type(rc, &prefix) {
-            let typ = self.each_type(rc, &t, body, at);
-            body.push(Lit::Pos(atom_at("want", vec![typ.clone(), var(&v)], at)));
+            let typ = self.each_type(rc, &t);
             let id = self.name_node(rc, at, &typ);
             rc.types.insert(src.clone(), typ);
             ("want", id)
         } else {
-            let mark = body.len();
-            let res = self.resolve(rc, &prefix, body)?;
+            let res = self.resolve(rc, &prefix)?;
             let of = match &res {
                 Res::Ref { typ, addr, path } => self
                     .path_string(path)
@@ -126,10 +111,7 @@ impl Lowerer<'_> {
                      of a resource's list (`r.l[_]`), and the path before this one is neither",
                 );
             };
-            let local = body.split_off(mark);
-            let id = self.realize_expr(rc, res, Pos::Content, (local, body), span)?;
-            let list = self.lowered(id, body);
-            body.push(Lit::Pos(atom_at("member", vec![list, var(&v)], at)));
+            let id = self.realize_expr(rc, res, Pos::Content, span)?;
             rc.elems.insert(src.clone(), of);
             ("member", id)
         };
@@ -146,24 +128,10 @@ impl Lowerer<'_> {
 
     /// The type term of a resource of `t`: `t`, or with the provider also
     /// used under another name a variable over its names (R-115).
-    fn each_type(&mut self, rc: &mut Rc, t: &str, body: &mut Vec<Lit>, span: Span) -> Term {
-        let names = self.covering(t);
-        if names.len() < 2 {
-            return str_term(t);
+    fn each_type(&mut self, rc: &mut Rc, t: &str) -> Term {
+        match self.covering(t).len() {
+            0 | 1 => str_term(t),
+            _ => var(&fresh(rc, "Type")),
         }
-        let tv = var(&fresh(rc, "Type"));
-        for each in names {
-            self.helpers.push(Stmt::Fact(atom_at(
-                membership::PROVIDER_TYPE,
-                vec![str_term(t), str_term(&each)],
-                span,
-            )));
-        }
-        body.push(Lit::Pos(atom_at(
-            membership::PROVIDER_TYPE,
-            vec![str_term(t), tv.clone()],
-            span,
-        )));
-        tv
     }
 }

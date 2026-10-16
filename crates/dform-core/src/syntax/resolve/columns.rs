@@ -363,11 +363,10 @@ impl Lowerer<'_> {
         pred: &str,
         list: Option<&SyntaxNode>,
         pos: Pos,
-        pre: &mut Vec<Lit>,
     ) -> L<(Vec<Term>, Vec<ExprId>)> {
         let list: Vec<SyntaxNode> = list.map(|l| terms(l).collect()).unwrap_or_default();
         let cols = self.ref_columns(rc.scope, pred, list.len());
-        self.ref_args_by(rc, pred, &cols, &list, pos, pre)
+        self.ref_args_by(rc, pred, &cols, &list, pos)
     }
 
     /// The arguments `list` of an atom of `pred` whose reference columns
@@ -379,7 +378,6 @@ impl Lowerer<'_> {
         cols: &BTreeMap<usize, RefColumn>,
         list: &[SyntaxNode],
         pos: Pos,
-        pre: &mut Vec<Lit>,
     ) -> L<(Vec<Term>, Vec<ExprId>)> {
         let mut args = Vec::new();
         let mut nodes = Vec::new();
@@ -389,20 +387,20 @@ impl Lowerer<'_> {
                     return self.literal_in_ref_column(pred, i, col, t);
                 }
                 Some(col) if Self::typed(rc, t) || self.named_resource(rc, t) => {
-                    let id = self.ref_expr(rc, t, pos, pre)?;
-                    args.push(self.lowered(id, pre));
+                    let id = self.ref_expr(rc, t, pos)?;
+                    args.push(self.term_of(id));
                     if pos == Pos::Content {
-                        self.row_types(rc, t, col, pre);
+                        self.row_types(rc, t, col);
                     }
                     id
                 }
                 _ if pos == Pos::Content && t.kind() == TUPLE => {
-                    let (t, id) = self.pattern(rc, t, pre)?;
+                    let (t, id) = self.pattern(rc, t)?;
                     args.push(t);
                     id
                 }
                 _ => {
-                    let (t, id) = self.arg_node(rc, t, pos, pre)?;
+                    let (t, id) = self.arg_node(rc, t, pos)?;
                     args.push(t);
                     id
                 }
@@ -429,7 +427,7 @@ impl Lowerer<'_> {
     /// A row's type where the column holds several: one of them,
     /// `member([T1, T2], Type)` before the atom, so what reads by it (a
     /// `set` through the column, `types::read`) knows each it may be.
-    fn row_types(&mut self, rc: &mut Rc, t: &SyntaxNode, col: &RefColumn, pre: &mut Vec<Lit>) {
+    fn row_types(&mut self, rc: &mut Rc, t: &SyntaxNode, col: &RefColumn) {
         let Some(c) = Chain::of(t).filter(Chain::is_bare) else {
             return;
         };
@@ -439,13 +437,6 @@ impl Lowerer<'_> {
         if col.any || col.types.len() < 2 {
             return;
         }
-        let types = col.types.iter().map(|t| str_term(t)).collect();
-        let test = Lit::Pos(Atom {
-            pred: "member".into(),
-            args: vec![Term::List(types), tv.clone()],
-            record: None,
-            span: Span::default(),
-        });
         let span = Span::default();
         let Term::Var(v) = tv else {
             unreachable!("matched")
@@ -465,7 +456,6 @@ impl Lowerer<'_> {
             b.goal_node(span, GoalKind::Rel { rel, args })
         });
         rc.tests.push((None, g));
-        pre.push(test);
     }
 
     /// A literal where a program relation's column holds references: the

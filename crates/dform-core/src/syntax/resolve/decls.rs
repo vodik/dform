@@ -48,9 +48,10 @@ impl Lowerer<'_> {
         let attrs = self.attr_decls(n, scope)?;
         let kind = crate::program::ItemKind::TypeBlock { name, attrs };
         let item = self.program.item(self.span(n), self.item_scope, kind);
-        // The helpers its refinements made (a `not`'s rule) follow it.
-        if !self.helpers.is_empty() {
-            let made = std::mem::take(&mut self.helpers);
+        // The helpers its refinements' terms made that no node lowers to
+        // follow it.
+        let made = crate::program::build::unlowered(&std::mem::take(&mut self.helpers));
+        if !made.is_empty() {
             self.program
                 .terms_made
                 .insert(crate::program::NodeId::Item(item), made);
@@ -176,9 +177,9 @@ impl Lowerer<'_> {
     ) -> L<ItemId> {
         let span = self.span(n);
         let mut rc = self.rc(n, scope, outer);
-        let body = self.opt_body(&mut rc, n)?;
+        self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
-        let rows = self.table(&mut rc, (&pred, cols), n, (body, clause), span)?;
+        let rows = self.table(&mut rc, (&pred, cols), (n, clause), span)?;
         let r = crate::program::build::RelationInputLowered {
             span,
             scope: self.item_scope,
@@ -296,7 +297,7 @@ impl Lowerer<'_> {
         }
     }
 
-    pub(super) fn attr_decls(&mut self, n: &SyntaxNode, scope: ScopeId) -> L<Vec<AttrDecl>> {
+    pub(super) fn attr_decls(&mut self, n: &SyntaxNode, scope: ScopeId) -> L<Vec<TypeAttr>> {
         let mut out = Vec::new();
         for a in n.children().filter(|c| c.kind() == ATTR_DECL) {
             let path = self.block_path(&node(&a, BLOCK_PATH).ok_or(Skip)?)?;
@@ -305,9 +306,10 @@ impl Lowerer<'_> {
                 .filter(|t| t.kind() == IDENT)
                 .map(|t| t.text().to_string())
                 .collect();
-            let refinement = self.refinement(&a, scope, None)?;
+            self.refinement(&a, scope, None)?;
+            let refinement = self.clause_at(node(&a, REFINEMENT).and_then(|r| node(&r, BODY)));
             let children = self.attr_decls(&a, scope)?;
-            out.push(AttrDecl {
+            out.push(TypeAttr {
                 path,
                 ty,
                 flags,
@@ -329,9 +331,9 @@ impl Lowerer<'_> {
         n: &SyntaxNode,
         scope: ScopeId,
         checked: Option<&str>,
-    ) -> L<Vec<Lit>> {
+    ) -> L<()> {
         let Some(b) = node(n, REFINEMENT).and_then(|w| node(&w, BODY)) else {
-            return Ok(Vec::new());
+            return Ok(());
         };
         let saved = (self.lenient, self.checked.take());
         self.lenient = true;
