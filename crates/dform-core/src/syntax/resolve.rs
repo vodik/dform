@@ -31,13 +31,14 @@ use crate::ast::{
     RuleStmt, Span, Stmt, Term, TypeExpr, Via, str_term, var,
 };
 use crate::diag::Diagnostic;
+use crate::program::bind;
 use crate::program::node::CopyKind;
 use crate::program::node::{
     BinOp, CmpOp, Coll, ExprKind, GoalId, GoalKind, Has, HasMark, ListPart, Negated, ObjPart,
     RelArgs, RelRef,
 };
 use crate::program::scope::{self as scopes, DeclKind, DeclRef, Names, Reach};
-use crate::program::{ExprId, ItemId, ScopeId};
+use crate::program::{ClauseId, ExprId, ItemId, ScopeId};
 use crate::spell;
 use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -1102,11 +1103,12 @@ fn negate(l: Lit) -> Lit {
     }
 }
 
-fn atom_terms(a: &Atom) -> Vec<&Term> {
-    a.args
-        .iter()
-        .chain(a.record.iter().flat_map(|r| r.values()))
-        .collect()
+/// A relation's arguments as the terms of its head.
+fn arg_terms(args: &RelArgs) -> Vec<bind::Term> {
+    match args {
+        RelArgs::Positional(ps) => ps.iter().map(|&p| bind::Term::Pattern(p)).collect(),
+        RelArgs::Record(fs) => fs.iter().map(|&(_, p)| bind::Term::Pattern(p)).collect(),
+    }
 }
 
 /// The variables a body binds: arguments of its positive relation reads

@@ -73,7 +73,7 @@ pub fn fold_numbers(program: &mut Program, clause: ClauseId) -> Vec<u32> {
 }
 
 /// The aggregate bindings of `clause`, in order.
-fn folds(program: &Program, clause: ClauseId) -> Vec<GoalId> {
+pub fn folds(program: &Program, clause: ClauseId) -> Vec<GoalId> {
     program.clauses[clause]
         .goals
         .iter()

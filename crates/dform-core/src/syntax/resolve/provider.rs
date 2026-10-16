@@ -107,9 +107,9 @@ impl Lowerer<'_> {
         // A guarded provider (R-104): its settings, its account and its
         // start hold only while the clause does.
         let clause = self.clauses(&mut rc, n)?;
-        // A `use` binds no aggregate, as a copy's does not.
-        self.aggregate_in(&clause, self.span(n))?;
         let gathered = self.gather.as_mut().and_then(|g| g.take_clause());
+        // A `use` binds no aggregate, as a copy's does not.
+        self.aggregate_in(gathered, self.span(n))?;
         let mut body = clause.clone();
         let others = self.providers_named(n, &name)?;
         if let Some(b) = &block {
@@ -153,7 +153,8 @@ impl Lowerer<'_> {
                             vec![str_term(&name), v.clone()],
                             at,
                         );
-                        out.push(self.rule_or_fact(&rc, head, body.clone())?);
+                        self.check_bound(&rc, own, &[bind::Term::Expr(id)])?;
+                        out.push(rule_or_fact(head, body.clone()));
                         written.extend(rc.vars.values().cloned());
                         let made = made..self.helpers.len();
                         parts.push((SettingKind::Account(own), at, id, made));
@@ -179,7 +180,13 @@ impl Lowerer<'_> {
                 vec![str_term(&name), Term::Obj(settings)],
                 span,
             );
-            out.insert(0, self.rule_or_fact(&rc, head, body.clone())?);
+            let values: Vec<bind::Term> = parts
+                .iter()
+                .filter(|(kind, ..)| matches!(kind, SettingKind::Value(_)))
+                .map(|&(_, _, id, _)| bind::Term::Expr(id))
+                .collect();
+            self.check_bound(&rc, gathered, &values)?;
+            out.insert(0, rule_or_fact(head, body.clone()));
         }
         // Declared more than once, each under a clause (R-104): the first
         // starts it, each holds while its clause does, and two that both
@@ -296,15 +303,6 @@ impl Lowerer<'_> {
             .filter(|c| provider_use(c, self.units, &self.decls.deployed).is_some())
             .filter(|c| use_parts(c).1 == name)
             .collect())
-    }
-
-    fn rule_or_fact(&mut self, rc: &Rc, head: Atom, body: Vec<Lit>) -> L<Stmt> {
-        self.check_bound(rc, &body, &atom_terms(&head))?;
-        Ok(if body.is_empty() {
-            Stmt::Fact(head)
-        } else {
-            Stmt::Rule(RuleStmt::new(head, body))
-        })
     }
 
     /// `env.var(NAME)`, `time.now()`, `memo.first(KEY, CANDIDATE)` as a
@@ -498,5 +496,13 @@ impl Lowerer<'_> {
         };
         self.diags.push(d);
         Err(Skip)
+    }
+}
+
+fn rule_or_fact(head: Atom, body: Vec<Lit>) -> Stmt {
+    if body.is_empty() {
+        Stmt::Fact(head)
+    } else {
+        Stmt::Rule(RuleStmt::new(head, body))
     }
 }

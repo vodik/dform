@@ -308,12 +308,9 @@ impl Lowerer<'_> {
         let named_at = (body.len(), self.helpers.len());
         // A name from the clause (R-191): each row a copy, named as a
         // provider type's resource is.
-        let (named, named_id) = match header_name(n).filter(|_| named_by_clause(n)) {
-            Some(t) => {
-                let (t, id) = self.name_from_clause(&mut rc, &t, &mut body)?;
-                (Some(t), Some(id))
-            }
-            None => (None, None),
+        let named_id = match header_name(n).filter(|_| named_by_clause(n)) {
+            Some(t) => Some(self.name_from_clause(&mut rc, &t, &mut body)?.1),
+            None => None,
         };
         let made = self.helpers.len();
         let mut reads = Vec::new();
@@ -336,18 +333,19 @@ impl Lowerer<'_> {
             inputs.push((f.key, f.value, f.span, id, from.1..to.1));
             from = to;
         }
-        let values: Vec<&Term> = inputs
+        let values: Vec<bind::Term> = inputs
             .iter()
-            .map(|(_, v, _, _, _)| v)
-            .chain(named.as_ref())
+            .map(|&(_, _, _, id, _)| id)
+            .chain(named_id)
+            .map(bind::Term::Expr)
             .collect();
-        self.check_bound(&rc, &body, &values)?;
+        self.check_bound(&rc, gathered, &values)?;
         let rows = match node(n, BLOCK) {
             Some(block) => self.block_rows(&block, &module, scope, outer)?,
             None => Default::default(),
         };
         // A copy binds no aggregate: its rows do, each folding its own.
-        self.aggregate_in(&body, span)?;
+        self.aggregate_in(gathered, span)?;
         let c = crate::program::build::CopyLowered {
             span,
             scope: self.item_scope,

@@ -76,14 +76,14 @@ impl Lowerer<'_> {
     pub(super) fn constant_node(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<ExprId> {
         let mut pre = Vec::new();
         let id = self.expr(rc, n, Pos::Whole, &mut pre)?;
-        let t = self.lowered(id, &mut pre);
+        self.lowered(id, &mut pre);
         if !pre.is_empty() {
             return self.error(
                 self.span(n),
                 "this value is read before the program runs: it must be a constant",
             );
         }
-        self.check_bound(rc, &[], &[&t])?;
+        self.check_bound(rc, None, &[bind::Term::Expr(id)])?;
         Ok(id)
     }
 

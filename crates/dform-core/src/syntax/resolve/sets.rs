@@ -62,17 +62,16 @@ impl Lowerer<'_> {
         // segment of the address, quoted when it holds a dot (R-112).
         let interp = header.kind() == STRING && has_hole(header.text());
         let mut named = None;
-        let name = if interp {
-            let (t, id) = self.name_from_clause(&mut rc, &header, &mut body)?;
+        if interp {
+            let (_, id) = self.name_from_clause(&mut rc, &header, &mut body)?;
             named = Some(id);
-            t
         } else if header.kind() == STRING {
-            str_term(&crate::address::name_segment(&self.string(&header)?))
+            self.string(&header)?;
         } else {
             let text = header.text();
-            let bound = bound_vars(&body);
+            let bound = self.binds(&rc, clause, &[]);
             match rc.vars.get(text) {
-                Some(v) if bound.contains(v) || rc.bound_around().any(|b| b == v) => {
+                Some(v) if bound.contains(&source_name(v)) || rc.bound_around().any(|b| b == v) => {
                     let d = Diagnostic::error(
                         self.span_of(header.text_range()),
                         format!(
@@ -96,17 +95,18 @@ impl Lowerer<'_> {
                          name it from the clause (`resource T \"${n}\" { .. } where p(n)`)",
                     );
                 }
-                _ => str_term(text),
+                _ => {}
             }
-        };
-        let values: Vec<&Term> = fields
+        }
+        let values: Vec<bind::Term> = ids
             .iter()
-            .map(|f| &f.value)
-            .chain(std::iter::once(&name))
+            .copied()
+            .chain(named)
+            .map(bind::Term::Expr)
             .collect();
-        self.check_bound(&rc, &body, &values)?;
+        self.check_bound(&rc, clause, &values)?;
         let rank = self.rank_tok(n)?;
-        self.aggregate_in(&body, span)?;
+        self.aggregate_in(clause, span)?;
         let typ = dotted_text(n, 1);
         let literal =
             (header.kind() == STRING && !interp).then(|| self.string(&header).unwrap_or_default());
@@ -224,7 +224,7 @@ impl Lowerer<'_> {
             vec![var(&path), var(&value)],
             &mut body,
         )?;
-        self.check_bound(&rc, &body, &[])?;
+        self.check_bound(&rc, clause, &[])?;
         let s = crate::program::build::SetFromLowered {
             span,
             scope: self.item_scope,
@@ -266,7 +266,6 @@ impl Lowerer<'_> {
         let span = self.span(n);
         let mut rc = self.rc(n, scope, outer);
         let body = self.opt_body(&mut rc, n)?;
-        let has_body = node(n, BODY).is_some();
         let clause = self.body_clause(n);
         let rank = self.rank_tok(n)?;
         let block = node(n, BLOCK);
@@ -288,7 +287,7 @@ impl Lowerer<'_> {
                 let span = self.span(a);
                 let mut rc = rc.clone();
                 let line = (&lhs, &rhs, add, rank, span);
-                self.contribution(&mut rc, line, body.clone(), has_body)
+                self.contribution(&mut rc, line, body.clone(), clause)
             })();
             match r {
                 Ok(w) => writes.push(w),
@@ -321,14 +320,15 @@ impl Lowerer<'_> {
     }
 
     /// One contribution of a `set`: `lhs (=|+=) rhs [@rank]` at `span`,
-    /// under the clause `body` (`has_body`: one is written).
+    /// under the clause `body` (`clause`, when one is written).
     pub(super) fn contribution(
         &mut self,
         rc: &mut Rc,
         (lhs, rhs, add, rank, span): (&SyntaxNode, &SyntaxNode, bool, Option<Rank>, Span),
         mut body: Vec<Lit>,
-        has_body: bool,
+        clause: Option<ClauseId>,
     ) -> L<Contribution> {
+        let has_body = clause.is_some();
         let c = Chain::of(lhs).ok_or(Skip)?;
         if add && rank.is_some() {
             return self.error(span, "a rank applies to `=`, not `+=`");
@@ -398,38 +398,18 @@ impl Lowerer<'_> {
         // A contribution to an input's cell is normal unless ranked (R-38),
         // written to the cell itself, so that its condition may read
         // another input.
-        let (value, value_node) = match &target {
+        let (_, value_node) = match &target {
             Target::Input(_) => self.arg_node(rc, rhs, Pos::Value, &mut body)?,
             _ => self.wanting(Want::Schema, |l| l.arg_node(rc, rhs, Pos::Value, &mut body))?,
         };
-        let ranked = || str_term(rank.unwrap_or(Rank::Normal).name());
-        let (pred, args) = match &target {
-            Target::Element(typ, addr, list, key, rest, _) => {
-                let elem = crate::program::lower::element_write(key.0.clone(), rest, value.clone());
-                let args = vec![
-                    typ.0.clone(),
-                    addr.0.clone(),
-                    str_term(list),
-                    elem,
-                    ranked(),
-                ];
-                ("arg", args)
-            }
-            Target::Input(k) => {
-                let input = str_term(crate::modules::INPUT);
-                (
-                    "arg",
-                    vec![input, str_term(""), str_term(k), value.clone(), ranked()],
-                )
-            }
-            Target::Cell(typ, addr, path, _) => {
-                let mut args = vec![typ.0.clone(), addr.0.clone(), str_term(path), value.clone()];
-                args.extend(rank.map(|r| str_term(r.name())));
-                (if add { "arg_add" } else { "arg" }, args)
-            }
+        let mut terms = match &target {
+            Target::Cell(typ, addr, ..) => vec![typ.1, addr.1],
+            Target::Element(typ, addr, _, key, ..) => vec![typ.1, addr.1, key.1],
+            Target::Input(_) => Vec::new(),
         };
-        let head = atom_at(pred, args, span);
-        self.check_bound(rc, &body, &atom_terms(&head))?;
+        terms.push(value_node);
+        let terms: Vec<bind::Term> = terms.into_iter().map(bind::Term::Expr).collect();
+        self.check_bound(rc, clause, &terms)?;
         Ok(Contribution {
             span,
             target,

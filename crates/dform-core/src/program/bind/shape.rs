@@ -348,7 +348,13 @@ impl Binder<'_> {
 
     /// A pattern read whole (a column its relation's mode reads, the
     /// element of a dense range): what each of its names reads.
-    fn pattern_reads(&mut self, p: PatternId, by: &str, way: &mut Way, bodies: &mut Vec<Inner>) {
+    pub(super) fn pattern_reads(
+        &mut self,
+        p: PatternId,
+        by: &str,
+        way: &mut Way,
+        bodies: &mut Vec<Inner>,
+    ) {
         let pattern = &self.program.patterns[p];
         let span = pattern.span;
         let (parts, rest) = match &pattern.kind {

@@ -147,7 +147,7 @@ impl Lowerer<'_> {
         let mut args = vars;
         args.push(value);
         let head = atom_at(&name, args, span);
-        self.check_bound(&rc, &body, &atom_terms(&head))?;
+        self.check_bound(&rc, clause, &[bind::Term::Expr(id)])?;
         let l = crate::program::build::LetFnLowered {
             name,
             span,

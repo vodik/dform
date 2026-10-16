@@ -41,11 +41,16 @@ pub struct Context<'a> {
     pub scope: ScopeId,
 }
 
-/// The order a clause's goals hold in, and what is wrong with it.
+/// The order a clause's goals hold in, what it binds, and what is wrong
+/// with it.
 pub struct Order {
     /// Each goal's index in the clause, in the order they hold: each
     /// after what binds what it reads, the rest as written after them.
     pub order: Vec<usize>,
+    /// The names some goal of the clause binds, and those each clause
+    /// inside it binds (a comprehension's, a `not { }`'s): what a name
+    /// the statement writes elsewhere is bound by.
+    pub binds: BTreeSet<Name>,
     pub diags: Vec<Diagnostic>,
 }
 
@@ -55,7 +60,54 @@ pub fn order(program: &Program, clause: ClauseId, cx: &Context) -> Order {
     let (_, order) = b.order(clause, cx.outer);
     Order {
         order,
+        binds: b.binds,
         diags: b.diags,
+    }
+}
+
+/// What a term outside the statement's clause reads and binds: a head's
+/// column, a field's value, an aggregate's item.
+#[derive(Default)]
+pub struct TermReads {
+    /// The names it reads.
+    pub reads: Vec<Name>,
+    /// The names it binds itself: an index's (`T[e]`, the key of the row
+    /// it reads) and those a comprehension in it binds.
+    pub binds: BTreeSet<Name>,
+}
+
+/// What the term `t` reads and binds, in `scope`.
+pub fn term(program: &Program, scope: ScopeId, t: Term) -> TermReads {
+    let mut b = Binder::new(program, scope);
+    let mut way = Way::default();
+    let mut bodies = Vec::new();
+    match t {
+        Term::Expr(e) => b.reads(e, "", &mut way, &mut bodies),
+        Term::Pattern(p) => b.pattern_reads(p, "", &mut way, &mut bodies),
+    }
+    b.inside(&bodies);
+    let mut binds = b.binds;
+    binds.extend(way.keys);
+    if let Term::Expr(e) = t {
+        hoisted(program, e, &mut binds);
+    }
+    TermReads {
+        reads: way.needs.into_iter().map(|u| u.name).collect(),
+        binds,
+    }
+}
+
+/// The names the reads in term `e` are read into that the program
+/// wrote: a `set` target's `[_]`, each value its read gives.
+fn hoisted(program: &Program, e: ExprId, out: &mut BTreeSet<Name>) {
+    let x = &program.exprs[e];
+    if let Some(v) = x.hoisted.map(|v| &program.vars[v])
+        && !v.implicit
+    {
+        out.insert(v.name.clone());
+    }
+    for c in x.kind.children() {
+        hoisted(program, c, out);
     }
 }
 
@@ -180,6 +232,8 @@ struct Binder<'a> {
     /// The scope the statement is written in: where a relation's mode is
     /// looked up.
     scope: ScopeId,
+    /// The names the clauses checked so far bind: what can bind them.
+    binds: BTreeSet<Name>,
     diags: Vec<Diagnostic>,
 }
 
@@ -188,6 +242,7 @@ impl<'a> Binder<'a> {
         Binder {
             program,
             scope,
+            binds: BTreeSet::new(),
             diags: Vec::new(),
         }
     }
@@ -208,6 +263,7 @@ impl Binder<'_> {
                 .flat_map(Way::bound)
                 .cloned(),
         );
+        self.binds.extend(known.difference(outer).cloned());
         let (bound, order) = fixpoint(&shapes, outer, &known, None);
         let mut fired = vec![false; shapes.len()];
         for &i in &order {
@@ -240,6 +296,16 @@ impl Binder<'_> {
         let mut all = order;
         all.extend((0..shapes.len()).filter(|i| !fired[*i]));
         (bound, all)
+    }
+
+    /// The clauses among `bodies` checked on their own, outside any
+    /// clause: what each binds.
+    fn inside(&mut self, bodies: &[Inner]) {
+        for inner in bodies {
+            if let Inner::Body(clause, items) = inner {
+                self.inner(*clause, items, &BTreeSet::new());
+            }
+        }
     }
 
     /// A clause inside the one being checked, under what it binds

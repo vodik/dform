@@ -10,14 +10,13 @@ impl Lowerer<'_> {
     /// columns `cols`. Its rows are the answers of the extern
     /// `table.FORMAT.p`, asked once the source is known: `p(Cols) :- B,
     /// reads, Path = SOURCE, table.FORMAT.p(Path, At, Cols)`; of a
-    /// document value, `table.value.p` (`doc_source`).
+    /// document value, `table.value.p` (`doc_source`). `clause` is B's.
     pub(super) fn table(
         &mut self,
         rc: &mut Rc,
-        pred: &str,
-        cols: Vec<BindArg>,
+        (pred, cols): (&str, Vec<BindArg>),
         n: &SyntaxNode,
-        mut body: Vec<Lit>,
+        (mut body, clause): (Vec<Lit>, Option<ClauseId>),
         span: Span,
     ) -> L<TableRows> {
         let vars: Vec<Term> = cols
@@ -26,7 +25,7 @@ impl Lowerer<'_> {
             .collect();
         let made = self.helpers.len();
         let (externs, rows) = self.doc_source(rc, n, pred, cols, vars.clone(), &mut body)?;
-        self.check_bound(rc, &body, &[])?;
+        self.check_bound(rc, clause, &[])?;
         Ok(TableRows {
             externs,
             head: atom_at(pred, vars, span),

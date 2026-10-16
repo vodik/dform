@@ -138,57 +138,43 @@ impl Lowerer<'_> {
         Ok((t, agg))
     }
 
-    /// The aggregate bindings of `body`: what each binds and its call.
-    fn agg_lits(&self, body: &[Lit]) -> Vec<(usize, String, Term)> {
-        body.iter()
-            .enumerate()
-            .filter_map(|(i, l)| match l {
-                Lit::Eq(Term::Var(v), t @ Term::Func { name, .. })
-                    if crate::partition::AGGREGATES.contains(&name.as_str())
-                        && self.aggs.iter().any(|a| &a.var == v) =>
-                {
-                    Some((i, v.clone(), t.clone()))
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// An aggregate's value read by nothing the body binds: an error at
-    /// the call (`check_bound` leaves these names to it).
-    pub(super) fn unbound_aggregates(&mut self, rc: &Rc, body: &[Lit]) -> BTreeSet<String> {
-        let found = self.agg_lits(body);
-        if found.is_empty() {
-            return BTreeSet::new();
-        }
-        let others: Vec<Lit> = body
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !found.iter().any(|(j, ..)| j == i))
-            .map(|(_, l)| l.clone())
-            .collect();
-        let mut bound = bound_vars(&others);
-        bound.extend(rc.bound_around().cloned());
+    /// The aggregates among `folds` whose item reads a name that nothing
+    /// else binds (`bound`, what the statement binds, or around it): an
+    /// error at each call; the names, as they lower (`check_bound` leaves
+    /// them to it).
+    pub(super) fn unbound_aggregates(
+        &mut self,
+        rc: &Rc,
+        folds: &[GoalId],
+        bound: &BTreeSet<String>,
+    ) -> BTreeSet<String> {
+        let around: BTreeSet<String> = rc.bound_around().map(|v| source_name(v)).collect();
+        // A variable as the nodes name it, and as it is written and lowered.
+        let written = |n: &str| rc.vars.iter().find(|(_, low)| source_name(low) == n);
         let mut out = BTreeSet::new();
-        for (_, v, call) in &found {
-            let mut used = BTreeSet::new();
-            lit_vars(&Lit::Eq(call.clone(), call.clone()), &mut used);
-            let missing: Vec<String> = used.difference(&bound).cloned().collect();
+        for &f in folds {
+            let GoalKind::Fold { var, agg, .. } = self.program.goals[f].kind else {
+                continue;
+            };
+            let ExprKind::Aggregate { item, .. } = self.program.exprs[agg].kind else {
+                continue;
+            };
+            let read = bind::term(&self.program, rc.scope, bind::Term::Expr(item));
+            let missing: BTreeSet<String> = read
+                .reads
+                .into_iter()
+                .filter(|n| !bound.contains(n) && !around.contains(n))
+                .collect();
+            let lowered = &self.program.vars[var].lowered;
+            let Some(a) = self.aggs.iter().find(|a| &a.var == lowered).cloned() else {
+                continue;
+            };
             if missing.is_empty() {
                 continue;
             }
-            let Some(a) = self.aggs.iter().find(|a| &a.var == v).cloned() else {
-                continue;
-            };
             let names: Vec<String> = missing
                 .iter()
-                .map(|m| {
-                    rc.vars
-                        .iter()
-                        .find(|(_, low)| *low == m)
-                        .map(|(src, _)| format!("`{src}`"))
-                        .unwrap_or_else(|| format!("`{m}`"))
-                })
+                .map(|m| format!("`{}`", written(m).map_or(m.as_str(), |(src, _)| src)))
                 .collect();
             self.diags.push(
                 Diagnostic::error(
@@ -206,15 +192,21 @@ impl Lowerer<'_> {
                     names[0].trim_matches('`'),
                 )),
             );
-            out.extend(missing);
+            out.extend(
+                missing
+                    .iter()
+                    .filter_map(|m| written(m))
+                    .map(|(_, low)| low.clone()),
+            );
         }
         out
     }
 
-    /// An aggregate bound in `body`, a statement's that is no rule's: an
+    /// An aggregate bound in `clause`, a statement's that is no rule's: an
     /// error at `span`.
-    pub(super) fn aggregate_in(&mut self, body: &[Lit], span: Span) -> L<()> {
-        match self.aggs.is_empty() || self.agg_lits(body).is_empty() {
+    pub(super) fn aggregate_in(&mut self, clause: Option<ClauseId>, span: Span) -> L<()> {
+        let folds = clause.map_or(0, |c| crate::program::build::folds(&self.program, c).len());
+        match self.aggs.is_empty() || folds == 0 {
             true => Ok(()),
             false => self.aggregate_outside(span),
         }

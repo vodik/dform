@@ -140,7 +140,7 @@ impl Lowerer<'_> {
             ranked.args.push(str_term(rank.name()));
         }
         self.core_head(&head_node, &ranked, has_body)?;
-        self.check_bound(&rc, &body, &atom_terms(&ranked))?;
+        self.check_bound(&rc, clause, &arg_terms(&args))?;
         Ok(RuleParts {
             clause,
             head,
@@ -215,26 +215,16 @@ impl Lowerer<'_> {
             let (value, id) = self.wanting(want, |l| l.let_value(&mut rc, &t, &mut body))?;
             (value, Some(id))
         };
-        let (value, id) = match (&ty, &declared) {
+        let id = match (&ty, &declared) {
             (Some(ty), Some(d)) => {
                 let typed = self.let_typed(scope, &name, (ty, d), &t, value.clone())?;
-                let id = id.map(|id| self.retyped(id, &value, typed.clone()));
-                (typed, id)
+                id.map(|id| self.retyped(id, &value, typed))
             }
-            _ => (value, id),
+            _ => id,
         };
         let rank = self.rank_tok(n)?;
-        let head = Atom {
-            pred: crate::modules::LET.to_string(),
-            args: vec![
-                str_term(&name),
-                value.clone(),
-                str_term(rank.unwrap_or(Rank::Normal).name()),
-            ],
-            record: None,
-            span,
-        };
-        self.check_bound(&rc, &body, &atom_terms(&head))?;
+        let terms: Vec<bind::Term> = id.map(bind::Term::Expr).into_iter().collect();
+        self.check_bound_folding(&rc, clause, fold, &terms)?;
         // The cell's type is its reader's column, `decl NAME(NAME: T)`, as
         // R-34 types a relation: once, at the first typed row. A resource
         // type is the reference's own (`value_type`).
@@ -466,7 +456,7 @@ impl Lowerer<'_> {
         // An output typed by a resource type holds its address (`scoped` by
         // the module); any other output is a value, a resource in it the
         // reference (R-43).
-        let (value, id) = match Chain::of(&t) {
+        let (_, id) = match Chain::of(&t) {
             Some(c)
                 if addr_typed
                     && c.is_bare()
@@ -478,11 +468,7 @@ impl Lowerer<'_> {
             _ if addr_typed => self.arg_node(&mut rc, &t, Pos::Whole, &mut pre)?,
             _ => self.arg_node(&mut rc, &t, Pos::Value, &mut pre)?,
         };
-        let head = atom_at("output", vec![str_term(&name), value], span);
-        match pre.is_empty() && clause.is_none() {
-            true => self.check_bound(&rc, &[], &[&head.args[1]])?,
-            false => self.check_bound(&rc, &pre, &head.args.iter().collect::<Vec<_>>())?,
-        }
+        self.check_bound(&rc, clause, &[bind::Term::Expr(id)])?;
         let parts = (name, declared, clause, id, made);
         self.output_item(n, &rc, parts)
     }
@@ -534,16 +520,14 @@ impl Lowerer<'_> {
         scope: ScopeId,
         outer: &Rc,
     ) -> L<ItemId> {
-        let span = self.span(n);
         let name = word_text(n, 1);
         let mut rc = self.rc(n, scope, outer);
         let mut pre = self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
         let made = self.helpers.len();
-        let (value, id, ty) = self.output_fields(&mut rc, n, &mut pre)?;
+        let (_, id, ty) = self.output_fields(&mut rc, n, &mut pre)?;
         let declared = self.outputs.insert((scope, name.clone())).then_some(ty);
-        let head = atom_at("output", vec![str_term(&name), value], span);
-        self.check_bound(&rc, &pre, &head.args.iter().collect::<Vec<_>>())?;
+        self.check_bound(&rc, clause, &[bind::Term::Expr(id)])?;
         let parts = (name, declared, clause, id, made);
         self.output_item(n, &rc, parts)
     }
@@ -750,21 +734,18 @@ impl Lowerer<'_> {
         // The message is a string like any other: `${e}` reads the body's
         // variables (H-13).
         let message = self.string_expr(&mut rc, &msg, &mut body)?;
-        let mut args = vec![self.lowered(message, &mut body)];
+        self.lowered(message, &mut body);
         let made_mid = self.helpers.len();
         let mut detail = None;
         if let Some(o) = node(n, OBJECT) {
-            let (t, id) = self.arg_node(&mut rc, &o, Pos::Whole, &mut body)?;
-            args.push(t);
+            let (_, id) = self.arg_node(&mut rc, &o, Pos::Whole, &mut body)?;
             detail = Some(id);
         }
-        let head = Atom {
-            pred: kw.text().to_string(),
-            args,
-            record: None,
-            span,
-        };
-        self.check_bound(&rc, &body, &atom_terms(&head))?;
+        let terms: Vec<bind::Term> = std::iter::once(message)
+            .chain(detail)
+            .map(bind::Term::Expr)
+            .collect();
+        self.check_bound(&rc, clause, &terms)?;
         let kind = match kw.kind() {
             WARN_KW => crate::program::node::CheckKind::Warn,
             _ => crate::program::node::CheckKind::Deny,
@@ -790,24 +771,40 @@ impl Lowerer<'_> {
         Ok(item)
     }
 
-    /// Every variable written in the statement is bound: by a relation
-    /// read, an equality, or an enclosing `for`/`when`. A name that is none
-    /// of these was meant as a string.
-    pub(super) fn check_bound(&mut self, rc: &Rc, body: &[Lit], heads: &[&Term]) -> L<()> {
-        let unbound = self.unbound_aggregates(rc, body);
+    /// Every variable written in the statement is bound: by a goal of
+    /// its clause or of a clause inside one, by an index or a
+    /// comprehension of a term outside it (`terms`: a head's columns, a
+    /// field's value, a `set` target and its `[_]`), or around it. A name
+    /// that is none of these was meant as a string.
+    pub(super) fn check_bound(
+        &mut self,
+        rc: &Rc,
+        clause: Option<ClauseId>,
+        terms: &[bind::Term],
+    ) -> L<()> {
+        self.check_bound_folding(rc, clause, None, terms)
+    }
+
+    /// [`Self::check_bound`] of a statement whose aggregate binding `fold`
+    /// is its clause's but not yet among its goals (`let n = count(x)
+    /// where B`).
+    pub(super) fn check_bound_folding(
+        &mut self,
+        rc: &Rc,
+        clause: Option<ClauseId>,
+        fold: Option<GoalId>,
+        terms: &[bind::Term],
+    ) -> L<()> {
+        let bound = self.binds(rc, clause, terms);
+        let mut folds =
+            clause.map_or_else(Vec::new, |c| crate::program::build::folds(&self.program, c));
+        folds.extend(fold);
+        let unbound = self.unbound_aggregates(rc, &folds, &bound);
         let mut failed = !unbound.is_empty();
-        let mut bound = bound_vars(body);
-        // A comprehension binds its own variables, wherever it stands.
-        let holder: Vec<Lit> = heads
-            .iter()
-            .map(|t| Lit::Neq((*t).clone(), (*t).clone()))
-            .collect();
-        bound.extend(bound_vars(&holder));
-        bound.extend(rc.bound_around().cloned());
         for (src, low) in &rc.vars {
             if rc.outer.contains(low)
                 || rc.inner.contains(low)
-                || (bound.contains(low) && rc.binders.contains(src))
+                || (bound.contains(&source_name(low)) && rc.binders.contains(src))
                 || unbound.contains(low)
             {
                 continue;
@@ -831,5 +828,30 @@ impl Lowerer<'_> {
         } else {
             self.singletons(rc)
         }
+    }
+
+    /// The names the statement binds, as its nodes name its variables
+    /// ([`source_name`] of the names they lower to): what some goal of
+    /// `clause` or of a clause inside one binds, and what an index or a
+    /// comprehension of `terms` binds.
+    pub(super) fn binds(
+        &self,
+        rc: &Rc,
+        clause: Option<ClauseId>,
+        terms: &[bind::Term],
+    ) -> BTreeSet<String> {
+        let mut out = BTreeSet::new();
+        if let Some(c) = clause {
+            let outer = outer_names(rc, &rc.outer);
+            let cx = bind::Context {
+                outer: &outer,
+                scope: rc.scope,
+            };
+            out.extend(bind::order(&self.program, c, &cx).binds);
+        }
+        for &t in terms {
+            out.extend(bind::term(&self.program, rc.scope, t).binds);
+        }
+        out
     }
 }

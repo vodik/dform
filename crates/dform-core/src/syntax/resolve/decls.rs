@@ -178,7 +178,7 @@ impl Lowerer<'_> {
         let mut rc = self.rc(n, scope, outer);
         let body = self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
-        let rows = self.table(&mut rc, &pred, cols, n, body, span)?;
+        let rows = self.table(&mut rc, (&pred, cols), n, (body, clause), span)?;
         let r = crate::program::build::RelationInputLowered {
             span,
             scope: self.item_scope,
