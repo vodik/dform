@@ -454,7 +454,7 @@ A credential is a name; its kind says how the host applies it:
 | `basic` | `USER:PASSWORD` | `Authorization: Basic ..` |
 | `header` | `NAME: VALUE` | that header |
 | `tls` | PEM: a certificate chain and its key | the TLS session's client certificate |
-| `kubeconfig` | a kubeconfig, or its parts (`host`, `ca`, `token`, `client_certificate`, `client_key`) | its current context's token, client certificate or exec plugin's answer (run by dform), and its cluster's CA; its server is the credential's `endpoint`, its namespace the credential's `namespace` |
+| `kubeconfig` | a kubeconfig, or its parts (`host`, `ca`, `token`, `client_certificate`, `client_key`) | its current context's token, client certificate or exec plugin's answer (run by dform, again once it expires), and its cluster's CA, `tls-server-name` and `proxy-url`; its server is the credential's `endpoint`, its namespace the credential's `namespace` |
 | `ssh` | an unencrypted OpenSSH private key, in the operator's file only (or an agent's key by its comment or fingerprint) | by dform's SSH client for an `ssh://` or `git+ssh://` location, never to an HTTP call: `[io] credentials = { "ssh://HOST/*" = "ssh:NAME" }` (docs/reference.md, "Locations and transports") |
 
 The value comes from the program or the operator. A provider declares

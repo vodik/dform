@@ -9,7 +9,8 @@
 //! request a stream of one connection and one TLS handshake for all;
 //! HTTP/1.1 kept alive otherwise. TLS with the machine's CA (the platform
 //! verifier) and proxy (`HTTPS_PROXY`, `NO_PROXY`); a credential applied
-//! by its parts (headers, a client certificate, its own CA); a tunnel by
+//! by its parts (headers, a client certificate, its own CA, the name TLS
+//! verifies, its own proxy); a tunnel by
 //! connecting to the tunnel's local end, so TLS still verifies the name
 //! the URL gives. No `curl`, no second TLS stack.
 //!
@@ -139,6 +140,11 @@ pub(crate) struct Route {
     /// A tunnel's local end, connected to in place of the host.
     via: Option<SocketAddr>,
     tls: tls::Profile,
+    /// The name TLS verifies in place of the host (a credential's).
+    server_name: Option<String>,
+    /// The proxy it goes through in place of the environment's (a
+    /// credential's).
+    proxy: Option<String>,
 }
 
 impl Route {
@@ -198,6 +204,8 @@ impl Request {
             host,
             via,
             tls: tls::Profile::of(cred),
+            server_name: cred.and_then(|c| c.server_name.clone()),
+            proxy: cred.and_then(|c| c.proxy.clone()),
         };
         let mut headers = http::HeaderMap::new();
         let given = req.headers.iter().map(|(k, v)| (k.as_str(), v.as_bytes()));

@@ -1,9 +1,10 @@
 //! Opening a connection to an endpoint: TCP to the URL's host, or to a
-//! tunnel's local end, or through the environment's proxy (`HTTPS_PROXY`,
-//! `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`, by HTTP `CONNECT`); TLS for
-//! `https`, offering HTTP/2 and HTTP/1.1; then the protocol the server
-//! chose, its connection driven by a task of the pool's runtime until
-//! either side closes it.
+//! tunnel's local end, or through the credential's proxy, else the
+//! environment's (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`), by
+//! HTTP `CONNECT`; TLS for `https` (verifying the credential's server
+//! name, else the URL's host), offering HTTP/2 and HTTP/1.1; then the
+//! protocol the server chose, its connection driven by a task of the
+//! pool's runtime until either side closes it.
 
 use super::Route;
 use super::tls;
@@ -53,7 +54,7 @@ pub(super) async fn dial(route: &Route, tls: Option<Arc<ClientConfig>>) -> Resul
     match tls {
         None => handshake(route, tcp, false).await,
         Some(config) => {
-            let name = tls::server_name(&route.host)?;
+            let name = tls::server_name(route.server_name.as_deref().unwrap_or(&route.host))?;
             let stream = tokio_rustls::TlsConnector::from(config)
                 .connect(name, tcp)
                 .await
@@ -72,16 +73,11 @@ async fn tcp(route: &Route) -> Result<TcpStream, Error> {
             .await
             .map_err(|e| unreachable(route, &format!("the tunnel at {at}"), e));
     }
-    let uri: http::Uri = route
-        .origin()
-        .parse()
-        .map_err(|e| Error::fatal(format!("{}: {e}", route.origin())))?;
-    let Some(proxy) = proxies().intercept(&uri) else {
+    let Some((at, auth)) = proxy(route)? else {
         return TcpStream::connect((route.connect_host(), route.port))
             .await
             .map_err(|e| unreachable(route, "connect", e));
     };
-    let at = proxy.uri();
     if at.scheme_str() != Some("http") {
         return Err(Error::fatal(format!(
             "{}: the proxy {at}: only an http:// proxy is supported",
@@ -92,10 +88,45 @@ async fn tcp(route: &Route) -> Result<TcpStream, Error> {
     let mut tcp = TcpStream::connect((host, at.port_u16().unwrap_or(80)))
         .await
         .map_err(|e| unreachable(route, &format!("the proxy {at}"), e))?;
-    tunnel(&mut tcp, route, proxy.basic_auth())
+    tunnel(&mut tcp, route, auth.as_ref())
         .await
         .map_err(|e| unreachable(route, &format!("the proxy {at}"), e))?;
     Ok(tcp)
+}
+
+/// The proxy `route` goes through, and its `Proxy-Authorization`: the
+/// credential's (its URL's user and password, which no message shows),
+/// else the environment's for the route's origin, else none.
+fn proxy(route: &Route) -> Result<Option<(http::Uri, Option<http::HeaderValue>)>, Error> {
+    if let Some(p) = &route.proxy {
+        let refused = || Error::fatal(format!("{}: its proxy is not a URL", route.origin()));
+        let (scheme, rest) = p.split_once("://").ok_or_else(refused)?;
+        let authority = rest.split('/').next().unwrap_or_default();
+        let (userinfo, host) = match authority.rsplit_once('@') {
+            Some((u, h)) => (Some(u), h),
+            None => (None, authority),
+        };
+        let at: http::Uri = format!("{scheme}://{host}")
+            .parse()
+            .map_err(|_| refused())?;
+        return Ok(Some((at, userinfo.and_then(basic))));
+    }
+    let uri: http::Uri = route
+        .origin()
+        .parse()
+        .map_err(|e| Error::fatal(format!("{}: {e}", route.origin())))?;
+    Ok(proxies()
+        .intercept(&uri)
+        .map(|p| (p.uri().clone(), p.basic_auth().cloned())))
+}
+
+/// `USER:PASSWORD` (as a URL carries it, percent-encoded) as a `Basic`
+/// authorization.
+fn basic(userinfo: &str) -> Option<http::HeaderValue> {
+    use base64::Engine;
+    let pair: Vec<u8> = percent_encoding::percent_decode_str(userinfo).collect();
+    let enc = base64::engine::general_purpose::STANDARD.encode(pair);
+    http::HeaderValue::from_str(&format!("Basic {enc}")).ok()
 }
 
 /// Ask the proxy on `tcp` for a tunnel to `route`'s host (HTTP

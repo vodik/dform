@@ -13,6 +13,12 @@ use dform_core::timing::location;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
+
+/// How long before it expires a credential is opened again for the next
+/// request (an exec plugin's token: the plugin runs again), so no request
+/// goes out with a token that lapses on its way.
+const RENEW_BEFORE: Duration = Duration::from_secs(10);
 
 /// One provider's host: its grants and clients, which its calls only
 /// read, and the credentials it opened and the tunnels it forwarded, by
@@ -21,6 +27,9 @@ use std::sync::{Arc, Mutex};
 pub struct Services {
     grants: Grants,
     opened: Mutex<Held>,
+    /// Held while an expired credential is opened again: one renewal at
+    /// a time, the others finding it renewed.
+    renewing: Mutex<()>,
     /// The pace of its requests, a window per account and bucket
     /// (`ratelimit`).
     limiter: Arc<ratelimit::Limiter>,
@@ -62,6 +71,7 @@ impl Services {
                 tunnels: BTreeMap::new(),
                 next: 1,
             }),
+            renewing: Mutex::new(()),
             ssh: ssh::client(),
             git: git::Git::cache(),
         }
@@ -89,16 +99,8 @@ impl Services {
         auth: Option<Handle>,
         via: Option<Handle>,
     ) -> Result<(Option<Arc<Credential>>, Option<SocketAddr>), Error> {
+        let cred = auth.map(|h| self.credential(h)).transpose()?;
         let o = self.opened();
-        let cred = match auth {
-            None => None,
-            Some(h) => Some(
-                o.credentials
-                    .get(&h)
-                    .cloned()
-                    .ok_or_else(|| Error::fatal(format!("no credential {h} is open")))?,
-            ),
-        };
         let via = match via {
             None => None,
             Some(h) => Some(
@@ -109,6 +111,50 @@ impl Services {
             ),
         };
         Ok((cred, via))
+    }
+
+    /// The credential opened as `h`, opened again first when it expires
+    /// within [`RENEW_BEFORE`] (an exec plugin's token).
+    fn credential(&self, h: Handle) -> Result<Arc<Credential>, Error> {
+        let opened = || {
+            self.opened()
+                .credentials
+                .get(&h)
+                .cloned()
+                .ok_or_else(|| Error::fatal(format!("no credential {h} is open")))
+        };
+        let renew_by = SystemTime::now() + RENEW_BEFORE;
+        let c = opened()?;
+        if !c.expired_by(renew_by) {
+            return Ok(c);
+        }
+        // A panic while renewing leaves nothing half done: take the lock.
+        let _one = self.renewing.lock().unwrap_or_else(|e| e.into_inner());
+        let c = opened()?;
+        if !c.expired_by(renew_by) {
+            return Ok(c);
+        }
+        let renewed = Arc::new(self.load(&c.name)?);
+        self.opened().credentials.insert(h, renewed.clone());
+        Ok(renewed)
+    }
+
+    /// The credential `name` as the host applies it: held for this
+    /// provider (a setting of its Configure, R-45), else the operator's as
+    /// dform.toml grants it (a file, or the environment's). A held one's
+    /// error is why it does not load: its name is one the engine made,
+    /// which the user never wrote.
+    fn load(&self, name: &str) -> Result<Credential, Error> {
+        if let Some(held) = credentials::held(name, &self.grants.provider) {
+            return held.map_err(|e| Error::fatal(format!("{e:#}")));
+        }
+        self.grants.credential(name)?;
+        credentials::load(name).map_err(|e| {
+            Error::fatal(format!(
+                "provider {}: the credential {name}: {e:#}",
+                self.grants.provider
+            ))
+        })
     }
 
     /// `req`, once its bucket's window admits it, sent with `cred`
@@ -159,23 +205,9 @@ fn parent(call: Option<u64>) -> tracing::Span {
 }
 
 impl Calls for Services {
-    /// A credential held for this provider (a setting of its Configure,
-    /// R-45; the environment's), else the operator's as dform.toml grants
-    /// it. A held one's error is why it does not load: its name is one
-    /// the engine made, which the user never wrote.
+    /// The credential `name`, opened ([`Services::load`]).
     fn open(&self, name: &str) -> Result<Opened, Error> {
-        let c = match credentials::held(name, &self.grants.provider) {
-            Some(held) => held.map_err(|e| Error::fatal(format!("{e:#}")))?,
-            None => {
-                self.grants.credential(name)?;
-                credentials::load(name).map_err(|e| {
-                    Error::fatal(format!(
-                        "provider {}: the credential {name}: {e:#}",
-                        self.grants.provider
-                    ))
-                })?
-            }
-        };
+        let c = self.load(name)?;
         let (endpoint, namespace) = (c.endpoint.clone(), c.namespace.clone());
         let mut o = self.opened();
         let handle = o.handle();
@@ -247,5 +279,77 @@ impl Calls for Services {
             Level::Error => "error",
         };
         eprintln!("provider {}: {level}: {message}", self.grants.provider);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dform_core::http::fake::Server;
+    use dform_core::plugin::credentials::{Kind, Secret};
+
+    /// A kubeconfig held for the provider `p` whose exec plugin answers
+    /// `t1`, `t2`, .. (one more each run, counted in `dir`), expiring at
+    /// `expires`; the server is `url`.
+    fn exec_kubeconfig(dir: &std::path::Path, url: &str, expires: &str) -> credentials::Holding {
+        let script = "n=$(( $(cat \"$DIR/runs\" 2>/dev/null || echo 0) + 1 )); echo $n > \"$DIR/runs\"; \
+                      printf '{\"status\": {\"token\": \"t%s\", \"expirationTimestamp\": \"%s\"}}' $n \"$EXP\"";
+        let kc = serde_json::json!({
+            "current-context": "c",
+            "contexts": [{"name": "c", "context": {"cluster": "k", "user": "u"}}],
+            "clusters": [{"name": "k", "cluster": {"server": url}}],
+            "users": [{"name": "u", "user": {"exec": {
+                "apiVersion": "client.authentication.k8s.io/v1",
+                "command": "sh", "args": ["-c", script],
+                "env": [{"name": "DIR", "value": dir.display().to_string()},
+                        {"name": "EXP", "value": expires}]}}}]
+        });
+        let parts = [(
+            "kubeconfig".to_string(),
+            Secret::new(kc.to_string().into_bytes()),
+        )];
+        credentials::hold(Kind::Kubeconfig, "p", parts.into())
+    }
+
+    /// The tokens two requests carry, sent with the credential `held`
+    /// opened once.
+    fn two_requests(server: &Server, held: &credentials::Holding) -> Vec<String> {
+        let host = Services::new(Grants::none("p"));
+        let h = host.open(held.name()).unwrap().handle;
+        (0..2)
+            .map(|_| {
+                let req = HttpRequest {
+                    method: "GET".into(),
+                    url: server.url("/"),
+                    ..HttpRequest::default()
+                };
+                let r = host.send(req, Some(h), None).unwrap();
+                String::from_utf8(r.body).unwrap()
+            })
+            .collect()
+    }
+
+    /// An exec plugin's token is used until it expires, then the plugin
+    /// runs again for the next request; one that does not expire runs
+    /// once.
+    #[test]
+    fn an_exec_plugins_token_is_renewed_when_it_expires() {
+        let server = Server::http1();
+        server.answer(|s| {
+            (
+                200,
+                Vec::new(),
+                s.header("authorization").unwrap_or("").into(),
+            )
+        });
+        let dir = std::env::temp_dir().join(format!("dform-renew-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let held = exec_kubeconfig(&dir, &server.url(""), "2000-01-01T00:00:00Z");
+        assert_eq!(two_requests(&server, &held), ["Bearer t2", "Bearer t3"]);
+        std::fs::remove_file(dir.join("runs")).unwrap();
+        let held = exec_kubeconfig(&dir, &server.url(""), "2999-01-01T00:00:00Z");
+        assert_eq!(two_requests(&server, &held), ["Bearer t1", "Bearer t1"]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

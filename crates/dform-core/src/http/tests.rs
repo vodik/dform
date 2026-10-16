@@ -193,3 +193,82 @@ fn an_endpoint_keeps_eight_connections_idle() {
     burst();
     assert_eq!(server.connections(), 12 + 4, "eight kept, four more");
 }
+
+/// A credential's server name is what TLS verifies (a kubeconfig's
+/// `tls-server-name`): a server reached at a name its certificate is not
+/// for is accepted by the name it is for, and refused without it.
+#[test]
+fn a_credentials_server_name_is_what_tls_verifies() {
+    let server = Server::h2(10);
+    let url = format!("https://k8s.internal.example:{}/", server.addr.port());
+    let named = Credential {
+        server_name: Some("localhost".into()),
+        ..Server::credential()
+    };
+    let r = send(get(url.clone()), Some(&named), Some(server.addr)).unwrap();
+    assert_eq!(r.status, 200);
+    let e = send(get(url), Some(&Server::credential()), Some(server.addr)).unwrap_err();
+    assert!(e.message.contains("TLS"), "{}", e.message);
+}
+
+/// A proxy that tunnels each connection (HTTP `CONNECT`) to where it is
+/// asked, keeping each request line and `Proxy-Authorization` it took.
+fn proxy() -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{BufRead, BufReader, Write};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://127.0.0.1:{}", l.local_addr().unwrap().port());
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = seen.clone();
+    std::thread::spawn(move || {
+        for s in l.incoming() {
+            let Ok(mut s) = s else { return };
+            let mut r = BufReader::new(s.try_clone().unwrap());
+            let mut ask = Vec::new();
+            loop {
+                let mut line = String::new();
+                if r.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+                ask.push(line.trim_end().to_string());
+            }
+            let to = ask[0].split_whitespace().nth(1).unwrap().to_string();
+            kept.lock().unwrap().extend(ask);
+            let up = std::net::TcpStream::connect(to).unwrap();
+            s.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                .unwrap();
+            let (mut a, mut b) = (up.try_clone().unwrap(), s.try_clone().unwrap());
+            std::thread::spawn(move || std::io::copy(&mut r, &mut a));
+            std::thread::spawn(move || {
+                let mut up = up;
+                std::io::copy(&mut up, &mut b)
+            });
+        }
+    });
+    (url, seen)
+}
+
+/// A credential's proxy is the one its requests go through (a
+/// kubeconfig's `proxy-url`), with the user and password its URL carries,
+/// never shown.
+#[test]
+fn a_credentials_proxy_carries_its_requests() {
+    let server = Server::http1();
+    let (at, seen) = proxy();
+    let cred = Credential {
+        name: "kubeconfig:p".into(),
+        proxy: Some(at.replace("http://", "http://u:p%40ss@")),
+        ..Credential::default()
+    };
+    let r = send(get(server.url("/through")), Some(&cred), None).unwrap();
+    assert_eq!((r.status, r.body.as_slice()), (200, &b"/through"[..]));
+    let port = server.addr.port();
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [
+            format!("CONNECT localhost:{port} HTTP/1.1"),
+            format!("Host: localhost:{port}"),
+            // u:p@ss
+            "Proxy-Authorization: Basic dTpwQHNz".to_string(),
+        ]
+    );
+}

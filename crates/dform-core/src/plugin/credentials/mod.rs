@@ -11,7 +11,7 @@
 //! | `basic`      | `USER:PASSWORD`                   | `Authorization: Basic ..`               |
 //! | `header`     | `NAME: VALUE`                     | that header                             |
 //! | `tls`        | PEM: a certificate chain and key  | the TLS session's client certificate    |
-//! | `kubeconfig` | a kubeconfig (its current context), or its parts ([`kubeconfig`]) | its user's token, client certificate or exec plugin's answer, its cluster's CA; its server is the credential's endpoint, its namespace the credential's |
+//! | `kubeconfig` | a kubeconfig (its current context), or its parts ([`kubeconfig`]) | its user's token, client certificate or exec plugin's answer (until it expires), its cluster's CA, server name and proxy; its server is the credential's endpoint, its namespace the credential's |
 //! | `ssh`        | an unencrypted OpenSSH private key | by the `ssh` provider (`use ssh { key = "NAME" }`), never to an HTTP call; only the operator's file ([`file`]) |
 //!
 //! Where a value comes from:
@@ -167,9 +167,23 @@ pub struct Credential {
     /// Skip verifying the server (a kubeconfig's
     /// `insecure-skip-tls-verify`).
     pub insecure: bool,
+    /// The name TLS offers and verifies in place of the URL's host (a
+    /// kubeconfig's `tls-server-name`).
+    pub server_name: Option<String>,
+    /// The proxy its requests go through, in place of the environment's
+    /// (a kubeconfig's `proxy-url`): an `http://` URL.
+    pub proxy: Option<String>,
+    /// When what it applies stops working (an exec plugin's token, its
+    /// `expirationTimestamp`): the host opens it again then.
+    pub expires: Option<std::time::SystemTime>,
 }
 
 impl Credential {
+    /// Whether it has expired by `at`.
+    pub fn expired_by(&self, at: std::time::SystemTime) -> bool {
+        self.expires.is_some_and(|e| e <= at)
+    }
+
     fn named(name: &str) -> Credential {
         Credential {
             name: name.to_string(),

@@ -2,12 +2,15 @@
 //! applies it. Its cluster's server is the credential's endpoint, its
 //! CA (`certificate-authority-data`, or the file
 //! `certificate-authority` names) is trusted beside the machine's, and
-//! `insecure-skip-tls-verify` skips verifying the server; its user's
+//! `insecure-skip-tls-verify` skips verifying the server,
+//! `tls-server-name` is the name TLS verifies in place of the server's
+//! host, and `proxy-url` the proxy its requests go through; its user's
 //! token (`token`, `tokenFile`), client certificate (`-data`, or the
 //! files), `username` and `password`, or what its exec plugin answers
-//! (run by the host, as kubectl runs it), authenticate; its namespace is
-//! the credential's. A user with none of these is anonymous. A file a
-//! kubeconfig names is read relative to the kubeconfig's directory.
+//! (run by the host, as kubectl runs it, again once what it answered
+//! expires), authenticate; its namespace is the credential's. A user with
+//! none of these is anonymous. A file a kubeconfig names is read relative
+//! to the kubeconfig's directory.
 //!
 //! What a kubeconfig is, given:
 //!
@@ -42,6 +45,8 @@ pub struct Kubeconfig {
     namespace: Option<String>,
     ca: Option<Vec<u8>>,
     insecure: bool,
+    server_name: Option<String>,
+    proxy: Option<String>,
     token: Option<Secret>,
     /// `USER:PASSWORD`.
     basic: Option<Secret>,
@@ -152,6 +157,8 @@ impl Kubeconfig {
                 .get("insecure-skip-tls-verify")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            server_name: text(cluster, "tls-server-name").map(String::from),
+            proxy: text(cluster, "proxy-url").map(String::from),
             token: token.map(Secret::new),
             basic,
             client_cert,
@@ -198,6 +205,8 @@ impl Kubeconfig {
             namespace: None,
             ca: pem("ca")?,
             insecure: false,
+            server_name: None,
+            proxy: None,
             token,
             basic: None,
             client_cert,
@@ -249,17 +258,21 @@ impl Kubeconfig {
         }
     }
 
-    /// Its parts on `c`: what its exec plugin answers, run now.
+    /// Its parts on `c`: what its exec plugin answers, run now, until it
+    /// expires.
     pub fn apply(self, c: &mut Credential) -> Result<()> {
         c.endpoint = self.server;
         c.namespace = self.namespace;
         c.ca = self.ca;
         c.insecure = self.insecure;
+        c.server_name = self.server_name;
+        c.proxy = self.proxy;
         let (mut token, mut client_cert) = (self.token, self.client_cert);
         if let Some(exec) = &self.exec {
-            let (t, cc) = exec.run(&self.what)?;
-            token = token.or(t);
-            client_cert = client_cert.or(cc);
+            let answer = exec.run(&self.what)?;
+            token = token.or(answer.token);
+            client_cert = client_cert.or(answer.client_cert);
+            c.expires = answer.expires;
         }
         if let Some(t) = token {
             c.bearer(t.text(&self.what)?);
@@ -332,6 +345,8 @@ fn in_cluster() -> Result<Kubeconfig> {
             .and_then(|n| String::from_utf8(n).ok()),
         ca: Some(read("ca.crt")?),
         insecure: false,
+        server_name: None,
+        proxy: None,
         token: Some(Secret::new(read("token")?)),
         basic: None,
         client_cert: None,
@@ -378,6 +393,14 @@ fn absolute(doc: &mut Value, dir: &Path) {
     }
 }
 
+/// What an exec plugin answers (its `ExecCredential`'s status): a token,
+/// or a client certificate and its key, and when they expire.
+struct Answer {
+    token: Option<Secret>,
+    client_cert: Option<(Secret, Secret)>,
+    expires: Option<std::time::SystemTime>,
+}
+
 impl Exec {
     fn of(what: &str, e: &Value) -> Result<Exec> {
         let strings = |k: &str| -> Vec<String> {
@@ -406,10 +429,9 @@ impl Exec {
         })
     }
 
-    /// Run the plugin, not interactively: the token or the client
-    /// certificate and key its `ExecCredential` answers.
-    #[allow(clippy::type_complexity)]
-    fn run(&self, what: &str) -> Result<(Option<Secret>, Option<(Secret, Secret)>)> {
+    /// Run the plugin, not interactively: what its `ExecCredential`
+    /// answers.
+    fn run(&self, what: &str) -> Result<Answer> {
         let info = serde_json::json!({
             "apiVersion": self.api_version,
             "kind": "ExecCredential",
@@ -453,7 +475,24 @@ impl Exec {
                 self.command
             );
         }
-        Ok((token, cert))
+        let expires = match s("expirationTimestamp") {
+            None => None,
+            Some(t) => {
+                let secs = crate::approval::parse_rfc3339(t).ok_or_else(|| {
+                    anyhow!(
+                        "{what}: its exec plugin {} answered an expirationTimestamp that is not \
+                         an RFC 3339 time in UTC",
+                        self.command
+                    )
+                })?;
+                Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+            }
+        };
+        Ok(Answer {
+            token,
+            client_cert: cert,
+            expires,
+        })
     }
 }
 
@@ -510,6 +549,25 @@ users: [{name: u, user: {exec: {apiVersion: client.authentication.k8s.io/v1, com
 "#;
         let c = applied(Kubeconfig::parse("t", kc, None).unwrap());
         assert_eq!(c.headers[0].1.expose(), b"Bearer from-exec");
+    }
+
+    /// A cluster's `tls-server-name` and `proxy-url` are the credential's;
+    /// an exec plugin's `expirationTimestamp` is when it expires.
+    #[test]
+    fn the_server_name_the_proxy_and_an_expiry_are_read() {
+        let kc = r#"current-context: c
+contexts: [{name: c, context: {cluster: k, user: u}}]
+clusters: [{name: k, cluster: {server: 'https://10.0.0.1:6443', tls-server-name: k.example,
+  proxy-url: 'http://proxy:3128'}}]
+users: [{name: u, user: {exec: {command: sh, args: [-c,
+  'echo ''{"status": {"token": "t", "expirationTimestamp": "2030-01-02T03:04:05Z"}}''']}}}]
+"#;
+        let c = applied(Kubeconfig::parse("t", kc, None).unwrap());
+        assert_eq!(c.server_name.as_deref(), Some("k.example"));
+        assert_eq!(c.proxy.as_deref(), Some("http://proxy:3128"));
+        let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_893_553_445);
+        assert_eq!(c.expires, Some(at));
+        assert!(!c.expired_by(at - std::time::Duration::from_secs(1)) && c.expired_by(at));
     }
 
     /// Parts as a provider's settings name them: a host, a token.
