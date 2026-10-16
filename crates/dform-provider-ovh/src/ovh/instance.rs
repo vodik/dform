@@ -98,12 +98,15 @@ impl Ovh {
     }
 
     /// An instance's flavor and image are offered in its region, when the
-    /// account is reachable and they are known.
-    pub(super) fn check_instance(&self, at: &str, d: &Json) -> Result<()> {
+    /// account is reachable and they are known, and `prior` (the instance
+    /// as Read answered it) has not them there already.
+    pub(super) fn check_instance(&self, at: &str, prior: Option<&Json>, d: &Json) -> Result<()> {
         let Ok((a, p)) = self.project(at) else {
             return Ok(());
         };
-        let (Some(region), flavor, image) = (s(d, "region"), s(d, "flavor"), s(d, "image")) else {
+        let asked = |k: &str| s(d, k).filter(|_| changed(prior, d, k));
+        let (Some(region), flavor, image) = (s(d, "region"), asked("flavor"), asked("image"))
+        else {
             return Ok(());
         };
         if flavor.is_some() && image.is_some() {

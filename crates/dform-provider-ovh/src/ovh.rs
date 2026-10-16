@@ -276,6 +276,13 @@ fn known(typ: &str, prior: &Json, d: &Json) -> Json {
     p
 }
 
+/// Whether `d` asks of attribute `k` what `prior` (the object as Read
+/// answered it) does not have in the same region: every attribute of an
+/// object not there.
+fn changed(prior: Option<&Json>, d: &Json, k: &str) -> bool {
+    prior.is_none_or(|p| p.get("region") != d.get("region") || p.get(k) != d.get(k))
+}
+
 fn status(o: &Json) -> String {
     s(o, "status").unwrap_or("unknown").to_string()
 }
@@ -625,7 +632,7 @@ impl Ovh {
                 ..Default::default()
             });
         };
-        let pool = self.check_desired(&at, typ, d)?;
+        let pool = self.check_desired(&at, typ, prior, d)?;
         let known = prior.map(|p| known(typ, p, d));
         let prior = known.as_ref();
         // An instance's user data is write-only (R-106): the API never
@@ -673,19 +680,28 @@ impl Ovh {
     /// Refuse a desired document `d` of `typ` the API would: a required
     /// attribute unset, an instance's flavor or image the region does
     /// not offer, a bootable volume's image, a subnet's pool. A subnet's
-    /// pool, when the plan gives it one.
-    fn check_desired(&self, at: &str, typ: &str, d: &Json) -> Result<Option<String>> {
+    /// pool, when the plan gives it one. A flavor or an image `prior` (the
+    /// object as Read answered it) has in the same region is the API's
+    /// answer already, and is not asked again.
+    fn check_desired(
+        &self,
+        at: &str,
+        typ: &str,
+        prior: Option<&Json>,
+        d: &Json,
+    ) -> Result<Option<String>> {
         for ((t, p), a) in &self.schema.attrs {
             if t == typ && a.has("required") && d.get(p).is_none() {
                 bail!("{at}: required attribute {p} is not set");
             }
         }
         if typ == INSTANCE {
-            self.check_instance(at, d)?;
+            self.check_instance(at, prior, d)?;
         }
         // A bootable volume's image is the region's, as an instance's is.
         if typ == VOLUME
             && let (Some(region), Some(image)) = (s(d, "region"), s(d, "image"))
+            && changed(prior, d, "image")
             && let Ok((a, p)) = self.project(at)
         {
             self.image_id(&a, &p, region, image)

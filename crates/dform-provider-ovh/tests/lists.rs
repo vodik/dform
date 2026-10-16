@@ -219,3 +219,33 @@ fn a_read_asks_its_object_by_id_and_an_instance_asks_at_once() {
         [get("/region/BHS5/storage/backups")]
     );
 }
+
+/// A Plan of an instance whose region, flavor and image are those Read
+/// answered asks nothing: the API made it so. Another flavor asks the
+/// region's flavors (once per run), another image its images.
+#[test]
+fn a_plan_asks_no_catalog_of_what_read_answered() {
+    let (server, c) = world();
+    let (net, [vm, _]) = lab(&server, &c);
+    let ovh = provider(&server);
+    let prior = read(&ovh, "ovh.instance", &vm);
+    assert_eq!(
+        (&prior["flavor"], &prior["image"]),
+        (&json!("b2-7"), &json!("Ubuntu 24.04"))
+    );
+    let fresh = provider(&server);
+    let plan = |d: &Json| {
+        let from = server.calls().len();
+        fresh
+            .plan("ovh.instance", "a", &vm, Some(&prior), Some(d))
+            .unwrap();
+        server.calls()[from..].to_vec()
+    };
+    let mut d = on("a", &net, "10.0.0.20");
+    d["networks"] = prior["networks"].clone();
+    assert_eq!(plan(&d), Vec::<String>::new());
+    d["flavor"] = json!("b2-15");
+    assert_eq!(plan(&d), [format!("GET {}", project("/flavor?region=BHS5"))]);
+    d["image"] = json!("Debian 13");
+    assert_eq!(plan(&d), [format!("GET {}", project("/image?region=BHS5"))]);
+}
