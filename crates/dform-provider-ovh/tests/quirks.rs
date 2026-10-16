@@ -884,15 +884,18 @@ fn an_address_asked_anew_replaces_the_instance() {
         ovh.plan("ovh.instance", "vm", "", Some(&attrs), Some(doc))
             .unwrap()
     };
-    let (same, replaces) = plan(&at(&id, "10.0.0.50"));
-    assert!(same.is_empty() && !replaces, "{same:?}");
-    let (changes, replaces) = plan(&at(&id, "10.0.0.51"));
-    assert!(replaces, "{changes:?}");
+    let same = plan(&at(&id, "10.0.0.50"));
+    assert!(same.changes.is_empty() && !same.replaces, "{same:?}");
+    let moved = plan(&at(&id, "10.0.0.51"));
+    assert!(moved.replaces, "{moved:?}");
     let mut dhcp = at(&id, "10.0.0.50");
     dhcp["networks"] = json!([id]);
-    let (changes, replaces) = plan(&dhcp);
-    assert!(!changes.is_empty() && !replaces, "{changes:?}");
-    let (changes, replaces) = ovh
+    let dropped = plan(&dhcp);
+    assert!(
+        !dropped.changes.is_empty() && !dropped.replaces,
+        "{dropped:?}"
+    );
+    let asked = ovh
         .plan(
             "ovh.instance",
             "vm",
@@ -901,7 +904,7 @@ fn an_address_asked_anew_replaces_the_instance() {
             Some(&at(&id, "10.0.0.50")),
         )
         .unwrap();
-    assert!(replaces, "{changes:?}");
+    assert!(asked.replaces, "{asked:?}");
     let r = pb::ApplyRequest {
         op: pb::Op::Replace as i32,
         r#type: "ovh.instance".into(),

@@ -141,11 +141,12 @@ impl Lab {
                 world[path.as_str()] = v.clone();
             }
         }
-        let (changes, replaces) = self
+        let planned = self
             .ovh
             .plan(typ, "x", "", Some(&world), Some(desired))
             .unwrap();
-        (changes.into_iter().map(|c| c.path).collect(), replaces)
+        let paths = planned.changes.into_iter().map(|c| c.path).collect();
+        (paths, planned.replaces)
     }
 
     fn plan_err(&self, typ: &str, prior: Option<&Json>, desired: &Json) -> String {
@@ -773,7 +774,11 @@ fn a_subnets_pool_defaults_to_its_ranges_hosts() {
     let net = lab.create(NETWORK, "lab", json!({"name": "lab", "regions": ["BHS5"]}));
     let doc = json!({"network": net.remote, "region": "BHS5", "range": "10.42.0.0/24",
                      "dhcp": true});
-    let (changes, _) = lab.ovh.plan(SUBNET, "lab", "", None, Some(&doc)).unwrap();
+    let changes = lab
+        .ovh
+        .plan(SUBNET, "lab", "", None, Some(&doc))
+        .unwrap()
+        .changes;
     let pool = changes.iter().find(|c| c.path == "pool").unwrap();
     assert_eq!(
         (&pool.before, &pool.after),
@@ -802,7 +807,11 @@ fn a_subnets_pool_defaults_to_its_ranges_hosts() {
     // Without a gateway the pool starts at the first host.
     let mut bare = doc.clone();
     bare["no_gateway"] = json!(true);
-    let (changes, _) = lab.ovh.plan(SUBNET, "lab", "", None, Some(&bare)).unwrap();
+    let changes = lab
+        .ovh
+        .plan(SUBNET, "lab", "", None, Some(&bare))
+        .unwrap()
+        .changes;
     assert!(
         changes
             .iter()

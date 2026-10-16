@@ -269,6 +269,32 @@ impl TryFrom<&pb::Change> for provider::Change {
     }
 }
 
+/// A provider's Plan as the protocol's answer.
+impl From<&provider::Planned> for pb::PlanResponse {
+    fn from(p: &provider::Planned) -> pb::PlanResponse {
+        pb::PlanResponse {
+            changes: p.changes.iter().map(pb::Change::from).collect(),
+            requires_replace: p.replaces,
+        }
+    }
+}
+
+/// A provider's Plan back from its answer.
+impl TryFrom<&pb::PlanResponse> for provider::Planned {
+    type Error = anyhow::Error;
+
+    fn try_from(r: &pb::PlanResponse) -> Result<provider::Planned> {
+        Ok(provider::Planned {
+            changes: r
+                .changes
+                .iter()
+                .map(provider::Change::try_from)
+                .collect::<Result<_>>()?,
+            replaces: r.requires_replace,
+        })
+    }
+}
+
 /// An optional document field; absent is an empty object.
 pub fn from_doc_or_empty(v: Option<&pb::Value>) -> Result<Json> {
     match v {

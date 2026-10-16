@@ -33,7 +33,9 @@ use super::timed::timed_out;
 use super::wire;
 use crate::address::Address;
 use crate::ast::{Atom, Lit, Term};
-use crate::provider::{self, Action, ActionKind, Change, Plan, get_path, remove_path, set_path};
+use crate::provider::{
+    self, Action, ActionKind, Change, Plan, Planned, get_path, remove_path, set_path,
+};
 use crate::resources::{Adopt, Resource};
 use crate::schema::Schema;
 use crate::secrets::held;
@@ -174,9 +176,6 @@ pub struct Object {
 /// Objects by `key(type, remote id)`.
 type World = BTreeMap<String, Object>;
 
-/// A provider's Plan of one resource: its changes, and whether they
-/// replace it.
-type Planned = (Vec<Change>, bool);
 /// One Plan call: the address, its remote id (empty for a create), the
 /// world's document and the desired one.
 type Ask = (Address, String, Option<Json>, Option<Json>);
@@ -2836,7 +2835,7 @@ impl Providers {
         let mut submitted: Vec<(usize, usize, Ticket, Address)> = Vec::new();
         for (i, (addr, remote, prior, desired)) in asks.into_iter().enumerate() {
             if prior.is_none() && desired.is_none() {
-                out.push(Some(Ok((Vec::new(), false))));
+                out.push(Some(Ok(Planned::default())));
                 continue;
             }
             out.push(None);
@@ -2873,14 +2872,7 @@ impl Providers {
                     &e.to_string(),
                 ))
             });
-            out[i] = Some(r.and_then(|r| {
-                let changes = r
-                    .changes
-                    .iter()
-                    .map(Change::try_from)
-                    .collect::<Result<_>>()?;
-                Ok((changes, r.requires_replace))
-            }));
+            out[i] = Some(r.and_then(|r| Planned::try_from(&r)));
         }
         out.into_iter()
             .map(|r| r.expect("every ask is answered"))
@@ -3879,14 +3871,10 @@ impl<'a> Planning<'a> {
         deleting
     }
 
-    /// The action of the desired `addr`, deformed as `d`, its provider's
-    /// Plan answered `changes` and whether they replace it.
-    fn action(
-        &mut self,
-        addr: Address,
-        d: &zset::Deformation,
-        (changes, replaces): Planned,
-    ) -> Result<Action> {
+    /// The action of the desired `addr`, deformed as `d`, as its
+    /// provider's Plan `planned` it.
+    fn action(&mut self, addr: Address, d: &zset::Deformation, planned: Planned) -> Result<Action> {
+        let Planned { changes, replaces } = planned;
         let kind = self.kind(&addr, d, &changes, replaces);
         let (changes, on) = match d.kind {
             zset::Kind::Pending => (changes, d.unresolved.clone()),
@@ -3949,11 +3937,11 @@ fn deletes(deleting: Vec<Deleting<'_>>, answers: impl Iterator<Item = Planned>) 
     let mut deletes: Vec<(Action, &[String])> = deleting
         .into_iter()
         .zip(answers)
-        .map(|((kind, addr, deps), (changes, _))| {
+        .map(|((kind, addr, deps), planned)| {
             let delete = Action {
                 kind,
                 addr,
-                changes,
+                changes: planned.changes,
                 on: BTreeSet::new(),
                 kept: Vec::new(),
                 renamed: None,

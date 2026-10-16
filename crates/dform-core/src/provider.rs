@@ -50,6 +50,14 @@ pub struct Change {
     pub note: Option<String>,
 }
 
+/// A provider's Plan of one object: its changes leaf by leaf, and
+/// whether they replace it.
+#[derive(Debug, Clone, Default)]
+pub struct Planned {
+    pub changes: Vec<Change>,
+    pub replaces: bool,
+}
+
 /// A kept value's note (R-218): the object holding a secret it reveals
 /// is another one (a key replaced), the value around it is the same.
 pub const HOLDER_REPLACED: &str = "(the key was replaced)";

@@ -118,7 +118,7 @@ impl Ovh {
     fn plan_reply(&self, r: &pb::PlanRequest) -> std::result::Result<pb::PlanResponse, CallError> {
         let prior = doc_of(r.prior.as_ref())?;
         let desired = doc_of(r.desired.as_ref())?;
-        let (changes, requires_replace) = self
+        let planned = self
             .plan(
                 &r.r#type,
                 &r.name,
@@ -127,10 +127,7 @@ impl Ovh {
                 desired.as_ref(),
             )
             .map_err(invalid)?;
-        Ok(pb::PlanResponse {
-            changes: changes.iter().map(pb::Change::from).collect(),
-            requires_replace,
-        })
+        Ok(pb::PlanResponse::from(&planned))
     }
 
     fn import_reply(

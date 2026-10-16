@@ -588,7 +588,7 @@ impl Ovh {
         _remote: &str,
         prior: Option<&Json>,
         desired: Option<&Json>,
-    ) -> Result<(Vec<provider::Change>, bool)> {
+    ) -> Result<provider::Planned> {
         let at = format!("plan {}", address(typ, name));
         if !self.schema.knows_type(typ) {
             bail!("{at}: the ovh provider has no type {typ}");
@@ -600,7 +600,10 @@ impl Ovh {
             self.check_networks(&at, &who, desired.unwrap_or(&Json::Null))?;
         }
         let Some(d) = desired else {
-            return Ok((diff(&self.schema, typ, prior, None), false));
+            return Ok(provider::Planned {
+                changes: diff(&self.schema, typ, prior, None),
+                replaces: false,
+            });
         };
         for ((t, p), a) in &self.schema.attrs {
             if t == typ && a.has("required") && d.get(p).is_none() {
@@ -663,7 +666,7 @@ impl Ovh {
         if typ == NETWORK && prior.is_none() {
             self.check_vrack(&at)?;
         }
-        Ok((changes, replaces))
+        Ok(provider::Planned { changes, replaces })
     }
 
     /// Whether a change of `prior` to `d` replaces the object: a path the

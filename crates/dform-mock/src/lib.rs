@@ -37,7 +37,7 @@ use dform_core::plugin::pb;
 use dform_core::plugin::providers::{CREATED, INVENTORY, Launch};
 use dform_core::plugin::queue::{Order, Queue};
 use dform_core::plugin::wire;
-use dform_core::provider::{self, Change, get_path, norm_path, set_path, short_hash};
+use dform_core::provider::{self, Planned, get_path, norm_path, set_path, short_hash};
 use dform_core::report;
 use dform_core::schema::Schema;
 use dform_core::value::{NullClass, Value};
@@ -640,7 +640,7 @@ impl FakeCloud {
         addr: &Address,
         prior: Option<&Json>,
         desired: Option<&Json>,
-    ) -> Result<(Vec<Change>, bool)> {
+    ) -> Result<Planned> {
         if let Some(d) = desired {
             self.check_required(addr, d)?;
         }
@@ -650,7 +650,7 @@ impl FakeCloud {
             && changes
                 .iter()
                 .any(|c| self.schema.forces_new(&addr.typ, &norm_path(&c.path)));
-        Ok((changes, replaces))
+        Ok(Planned { changes, replaces })
     }
 
     /// A secret's value, from the computed values of the object its label
@@ -1577,14 +1577,11 @@ impl Handler for Mock {
                 };
                 let prior = doc_of(r.prior.as_ref())?;
                 let desired = doc_of(r.desired.as_ref())?;
-                let (changes, requires_replace) = self
+                let planned = self
                     .cloud()
                     .plan(&addr, prior.as_ref(), desired.as_ref())
                     .map_err(invalid)?;
-                Reply::Plan(pb::PlanResponse {
-                    changes: changes.iter().map(pb::Change::from).collect(),
-                    requires_replace,
-                })
+                Reply::Plan(pb::PlanResponse::from(&planned))
             }
             C::Apply(r) => Reply::Apply(self.apply(r, progress)?),
             C::Import(r) => {

@@ -522,16 +522,14 @@ impl<P: Provider> Typed<P> {
         }
         let changes =
             dform_core::provider::diff(&self.schema, &addr.typ, prior.as_ref(), desired.as_ref());
-        let requires_replace = prior.is_some()
+        let replaces = prior.is_some()
             && desired.is_some()
             && changes.iter().any(|c| {
                 self.schema
                     .forces_new(&addr.typ, &dform_core::provider::norm_path(&c.path))
             });
-        Ok(pb::PlanResponse {
-            changes: changes.iter().map(pb::Change::from).collect(),
-            requires_replace,
-        })
+        let planned = dform_core::provider::Planned { changes, replaces };
+        Ok(pb::PlanResponse::from(&planned))
     }
 
     fn apply(&self, r: pb::ApplyRequest, sink: backend::Progress) -> Result<pb::ApplyResponse> {
