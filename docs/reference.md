@@ -1198,7 +1198,9 @@ Crates select the backend, not cargo features.
 
 `dform provider check PATH` is the conformance suite: it runs every method
 against the provider at PATH with a synthetic schema and prints one line per
-check, failing if any deviates. A provider that serves its own schema (a real
+check, failing if any deviates. In a project whose dform.toml names the
+provider at PATH, it is started with what its table grants, as a run
+starts it; else with nothing. A provider that serves its own schema (a real
 API's) instead of the one it is given is checked with the `examples` its
 Schema returns: documents of its own types to plan, create, update, replace
 and delete. Every provider's Schema is checked to name each type under
@@ -1299,12 +1301,25 @@ descriptions the language server shows, are never injected.
 
 `dform-provider-k8s` (built with dform, `crates/dform-k8s`) is a real provider: it
 speaks the same protocol against the API server of the cluster the
-environment names (`KUBECONFIG`, else `~/.kube/config`, else the pod's service
-account). dform reads that kubeconfig (running its user's exec plugin, if
-it has one) and holds it; the provider sends every request through
-dform's HTTP with it applied, by name, and never holds a credential
-(docs/providers.md, "Grants and credentials"). Select it by path; the
-program the mock plans applies to a cluster unchanged:
+program names (`use k8s { kubeconfig = .. }`, below), else the one the
+environment names (`KUBECONFIG`, else `~/.kube/config`, else the pod's
+service account) where dform.toml grants it, and only then:
+
+```toml
+[providers.k8s]
+source = "providers/k8s"
+credentials = ["kubeconfig:environment"]
+```
+
+Without either the provider is offline, saying which grant it lacks:
+`k8s: offline, provider k8s is not granted the credential
+kubeconfig:environment (the environment's kubeconfig): add it to
+[providers.k8s] credentials in dform.toml`. dform reads the kubeconfig
+(running its user's exec plugin, if it has one) and holds it; the
+provider sends every request through dform's HTTP with it applied, by
+name, and never holds a credential (docs/providers.md, "Grants and
+credentials"). Select it by path; the program the mock plans applies to a
+cluster unchanged:
 
 ```dform
 use k8s { source = "./providers/k8s" }   # a directory holding dform-provider-k8s
@@ -1448,8 +1463,8 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   `resource k8s.custom_resource_definition "${d.metadata.name}" = d where
   d in yaml.decode(io.read("vendor/traefik-crds.yml"))`. This holds
   however the provider is configured: by the program's `use k8s { .. }`,
-  or by the environment (`KUBECONFIG`, `~/.kube/config`, offline), whose
-  cluster's document is fetched again the same way.
+  or by the environment's kubeconfig as dform.toml grants it (or
+  offline), whose cluster's document is fetched again the same way.
 - With no cluster in reach, or `DFORM_K8S_OFFLINE` set, the provider is
   offline: the schema is the checked-in snapshot of Kubernetes v1.36.0's
   document (`crates/dform-k8s/openapi-snapshot.json`, every kind of the
@@ -1458,10 +1473,11 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   admissionregistration, apiextensions and certificates, trimmed by
   `crates/dform-k8s/trim_openapi.py`), the provider's static schema; Plan
   diffs locally, and Read, Apply and Import fail naming why. It says so
-  once, `k8s: offline, no kubeconfig at ~/.kube/config and not in a
-  cluster; planning against the snapshot schema
-  (crates/dform-k8s/openapi-snapshot.json)` (or `the kubeconfig at P does
-  not load`, `the cluster at URL did not answer`); why, under
+  once, `k8s: offline, provider k8s: the credential kubeconfig:environment:
+  no kubeconfig at ~/.kube/config and not in a cluster; planning against
+  the snapshot schema (crates/dform-k8s/openapi-snapshot.json)` (or that
+  dform.toml does not grant it, `the kubeconfig at P does not load`, `the
+  cluster at URL did not answer`); why, under
   `DFORM_LOG=debug`.
 
 ```bash
@@ -3855,7 +3871,8 @@ credentials"):
 [providers.k8s]
 source = "providers/k8s"
 allow = ["wasi:sockets"]          # wasi:filesystem, wasi:http, wasi:sockets
-credentials = ["kubeconfig:prod"] # KIND:NAME, applied by the host, never sent to the provider
+credentials = ["kubeconfig:prod"] # KIND:NAME, applied by the host, never sent to the provider;
+                                  # "kubeconfig:environment" is KUBECONFIG's
 reads = ["https://github.com/*"]  # SCHEME://HOST/PATH patterns its files.read may take
 ```
 

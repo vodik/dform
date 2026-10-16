@@ -1,8 +1,9 @@
 //! `dform-provider-k8s`: the plugin protocol over a Kubernetes API server.
 //!
 //! Configure finds the cluster (the environment's kubeconfig, which the
-//! host holds for it: `KUBECONFIG`, `~/.kube/config`, or the pod's service
-//! account) and derives the schema from its `/openapi/v3`,
+//! host opens for it where dform.toml grants it, `credentials =
+//! ["kubeconfig:environment"]`: `KUBECONFIG`, `~/.kube/config`, or the
+//! pod's service account) and derives the schema from its `/openapi/v3`,
 //! cached as `k8s-openapi.json` in the cache directory Configure names
 //! (`dform.state/cache/`; else beside the world file). With no cluster to reach, or
 //! `DFORM_K8S_OFFLINE` set, the provider is offline: the schema is the
@@ -88,8 +89,9 @@ struct Asked {
     settings: Json,
     /// The program configures it and has not yet: no cluster now.
     deferred: bool,
-    /// The environment's kubeconfig, as the host holds it, for a provider
-    /// the program does not configure.
+    /// The environment's kubeconfig, by the name the host opens it by
+    /// where dform.toml grants it, for a provider the program does not
+    /// configure.
     kubeconfig: Option<String>,
     /// The kinds dform expects the cluster to serve now (R-126): a CRD the
     /// program made at the last tick defines them, and the API server
@@ -136,9 +138,10 @@ fn say(line: &str, e: &anyhow::Error) {
 
 impl K8s {
     /// Configure: the cluster the environment names (its kubeconfig, the
-    /// host's credential `kubeconfig`, which dform holds for a provider the
-    /// program does not configure) and its schema, else offline on the
-    /// snapshot. `cache` is the directory the OpenAPI document and the
+    /// credential `kubeconfig:environment`, which the host opens for a
+    /// provider the program does not configure where dform.toml grants it)
+    /// and its schema, else offline on the snapshot, saying why (the grant
+    /// it lacks). `cache` is the directory the OpenAPI document and the
     /// schema derived from it are cached in.
     pub async fn configure(
         cache: Option<PathBuf>,

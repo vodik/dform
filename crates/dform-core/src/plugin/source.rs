@@ -166,6 +166,16 @@ pub fn executable(name: &str) -> String {
     format!("{MAGIC}-{name}")
 }
 
+/// Whether the specs `a` and `b` name one file: a program's `source`
+/// (`./providers/k8s`, from its file's directory) and dform.toml's
+/// (`providers/k8s`, from the root) are spelled apart.
+pub fn same_file(a: &str, b: &str) -> bool {
+    match (Path::new(a).canonicalize(), Path::new(b).canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
 pub fn resolve(spec: &str) -> Source {
     let p = Path::new(spec);
     if spec.contains('/') {

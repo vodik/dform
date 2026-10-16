@@ -465,13 +465,16 @@ kubeconfig = cluster.kubeconfig }`, a secret revealed into that
 Configure) are held by dform as one credential for that provider, under
 a name of its own (`kubeconfig:k8s.1`), and each setting reaches the
 provider as that name, which it opens; the next Configure of the session
-lets it go. A provider the program does not configure is given the
-environment's credential of a kind that has one the same way, named in
-the Configure's `credentials` (`{"kubeconfig": NAME}`: `KUBECONFIG`'s
-files, else `~/.kube/config`, else a pod's service account, read by
-dform). Only the provider it was held for opens it. Else the value is
-the operator's file `$XDG_CONFIG_HOME/dform/credentials/KIND/NAME`
-(`DFORM_CREDENTIALS` names another directory), as dform.toml grants it.
+lets it go. Only the provider it was held for opens it. Else the value is
+the operator's, as dform.toml grants it: the file
+`$XDG_CONFIG_HOME/dform/credentials/KIND/NAME` (`DFORM_CREDENTIALS` names
+another directory), or `KIND:environment`, the environment's of a kind
+that has one (`kubeconfig:environment`: `KUBECONFIG`'s files, else
+`~/.kube/config`, else a pod's service account, read by dform). A
+provider the program does not configure is told that name in the
+Configure's `credentials` (`{"kubeconfig": "kubeconfig:environment"}`),
+and opens it only with the grant: nothing in the environment reaches a
+provider unless the program or dform.toml gives it.
 Either way it stays in dform's memory, is never serialized to a
 provider, and is zeroed when dropped. A provider opening a credential it
 was not granted is refused: `provider k8s is not granted the credential

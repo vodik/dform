@@ -102,7 +102,8 @@ fn two_projects_in_one_process_each_start_their_provider_with_their_grants() {
             o.problems.iter().map(|p| &p.message).collect::<Vec<_>>()
         );
     }
-    let none = Grants::none_for(Path::new(&exe));
+    // No table: nothing granted, under the name the program uses it by.
+    let none = Grants::none("fake");
     let want = [
         grants(&["wasi:filesystem"], &[]),
         grants(&[], &["bearer:b"]),

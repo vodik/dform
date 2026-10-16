@@ -63,7 +63,8 @@ pub(super) struct ProviderCheck {
 impl ProviderCheck {
     pub(super) fn run(&self) -> Result<Outcome> {
         let path = &self.path;
-        let (lines, failed) = plugin::check::run(launch(), path)?;
+        let grants = self.grants()?;
+        let (lines, failed) = plugin::check::run(launch(), path, grants.as_ref())?;
         for l in &lines {
             println!("{l}");
         }
@@ -75,6 +76,23 @@ impl ProviderCheck {
         }
         println!("provider {path}: conforms");
         Ok(Outcome::Done)
+    }
+
+    /// What dform.toml grants the provider at its path, in a project that
+    /// names it: the provider is checked as a run starts it.
+    fn grants(&self) -> Result<Option<plugin::host::Grants>> {
+        let Source::Plugin(exe) = source::resolve(&self.path) else {
+            return Ok(None);
+        };
+        let Some(project) = Project::find(Path::new("."), env!("CARGO_PKG_VERSION"))? else {
+            return Ok(None);
+        };
+        let exe = exe.display().to_string();
+        Ok(project
+            .manifest
+            .grants()
+            .into_iter()
+            .find_map(|(spec, g)| source::same_file(&spec, &exe).then_some(g)))
     }
 }
 

@@ -275,9 +275,12 @@ impl<'a> Starting<'a> {
         let link = self.started(key, || match (&mock, source::resolve(&st.spec)) {
             (Some(_), _) => launch.start_mock(),
             (None, Source::Plugin(p)) => {
-                let mut none = crate::plugin::host::Grants::none_for(&p);
+                let mut none = match st.names.first() {
+                    Some(name) => crate::plugin::host::Grants::none(name),
+                    None => crate::plugin::host::Grants::none_for(&p),
+                };
                 none.files = crate::files::Shared(Some(cfg.files.clone()));
-                launch.start_plugin(&p, cfg.grants.get(&st.spec).unwrap_or(&none))
+                launch.start_plugin(&p, cfg.grants_of(&st.spec).unwrap_or(&none))
             }
             (None, Source::Mock(_)) => unreachable!("a plugin"),
         })?;

@@ -19,15 +19,20 @@
 //! - held for one provider ([`hold`]): a setting its handshake declares a
 //!   credential (`kubeconfig`), as the program gives it (`use k8s {
 //!   kubeconfig = cluster.kubeconfig }`, a secret revealed into the
-//!   Configure, R-45), or, for a provider the program does not configure,
-//!   the environment's (`KUBECONFIG`). The engine holds it at that
-//!   Configure under a name of its own, `KIND:PROVIDER.N`, and the
-//!   provider is configured with the name; only that provider opens it,
-//!   and it is gone once its session is configured again or its link
-//!   stops;
-//! - else the operator's file `$XDG_CONFIG_HOME/dform/credentials/KIND/NAME`
-//!   (or under `DFORM_CREDENTIALS`), as dform.toml grants it
-//!   (`[providers.k8s] credentials = ["kubeconfig:prod"]`).
+//!   Configure, R-45). The engine holds it at that Configure under a name
+//!   of its own, `KIND:PROVIDER.N`, and the provider is configured with
+//!   the name; only that provider opens it, and it is gone once its
+//!   session is configured again or its link stops;
+//! - else the operator's, as dform.toml grants it (`[providers.k8s]
+//!   credentials = ["kubeconfig:prod"]`): the file
+//!   `$XDG_CONFIG_HOME/dform/credentials/KIND/NAME` (or under
+//!   `DFORM_CREDENTIALS`), or, named `KIND:environment` ([`ENVIRONMENT`]),
+//!   the environment's of a kind that has one (a kubeconfig's:
+//!   `KUBECONFIG`, `~/.kube/config`, a pod's service account). A provider
+//!   the program does not configure is told that name for each such kind
+//!   it declares, and the host opens it only with the grant: nothing in
+//!   the environment reaches a provider unless the program or dform.toml
+//!   gives it.
 
 pub mod kubeconfig;
 
@@ -100,8 +105,7 @@ impl Kind {
     }
 
     /// Whether the environment has one of the kind (a kubeconfig's:
-    /// `KUBECONFIG`), which a provider the program does not configure is
-    /// given ([`Given::Environment`]).
+    /// `KUBECONFIG`), which `KIND:environment` names ([`ENVIRONMENT`]).
     pub fn in_environment(self) -> bool {
         self == Kind::Kubeconfig
     }
@@ -117,6 +121,11 @@ impl Kind {
         }
     }
 }
+
+/// The NAME of the environment's credential of a kind that has one
+/// ([`Kind::in_environment`]): `kubeconfig:environment` is the
+/// environment's kubeconfig, never an operator's file.
+pub const ENVIRONMENT: &str = "environment";
 
 /// `KIND:NAME`, checked.
 pub fn parse_name(name: &str) -> Result<(Kind, &str)> {
@@ -227,57 +236,34 @@ impl Credential {
     }
 }
 
-/// What a held credential's value is ([`hold`]).
-#[derive(Debug, Clone)]
-pub enum Given {
-    /// The settings of a provider's Configure that its handshake declares
-    /// this kind, by setting: one is the value; several are a kind's
-    /// parts (a kubeconfig's `host`, `ca`, `token`, ..,
-    /// [`kubeconfig::Kubeconfig::of_parts`]).
-    Settings(BTreeMap<String, Secret>),
-    /// The environment's credential of the kind, read when it is opened:
-    /// a kubeconfig's ([`kubeconfig::Kubeconfig::environment`]).
-    Environment,
-}
-
-impl Given {
-    /// The credential `name` of `kind` this gives, as the host applies it.
-    fn load(&self, kind: Kind, name: &str) -> Result<Credential> {
-        let mut c = Credential::named(name);
-        match (self, kind) {
-            (Given::Environment, Kind::Kubeconfig) => {
-                kubeconfig::Kubeconfig::environment()?.apply(&mut c)?
-            }
-            (Given::Environment, _) => {
-                bail!(
-                    "a {} credential has no source in the environment",
-                    kind.as_str()
-                )
-            }
-            (Given::Settings(parts), Kind::Kubeconfig) => {
-                kubeconfig::Kubeconfig::of_parts(name, parts)?.apply(&mut c)?
-            }
-            (Given::Settings(parts), _) => {
-                let mut values = parts.values();
-                let (Some(v), None) = (values.next(), values.next()) else {
-                    bail!(
-                        "a {} credential is one setting, not {}",
-                        kind.as_str(),
-                        parts.keys().cloned().collect::<Vec<_>>().join(", ")
-                    );
-                };
-                c.apply(kind, v, None)?
-            }
-        }
-        Ok(c)
+/// The credential `name` of `kind` a provider's settings give, by
+/// setting, as the host applies it: one is the value; several are a
+/// kind's parts (a kubeconfig's `host`, `ca`, `token`, ..,
+/// [`kubeconfig::Kubeconfig::of_parts`]).
+fn of_settings(kind: Kind, name: &str, parts: &BTreeMap<String, Secret>) -> Result<Credential> {
+    let mut c = Credential::named(name);
+    if kind == Kind::Kubeconfig {
+        kubeconfig::Kubeconfig::of_parts(name, parts)?.apply(&mut c)?;
+        return Ok(c);
     }
+    let mut values = parts.values();
+    let (Some(v), None) = (values.next(), values.next()) else {
+        bail!(
+            "a {} credential is one setting, not {}",
+            kind.as_str(),
+            parts.keys().cloned().collect::<Vec<_>>().join(", ")
+        );
+    };
+    c.apply(kind, v, None)?;
+    Ok(c)
 }
 
-/// A credential held for a provider: its kind, the provider, its value.
+/// A credential held for a provider: its kind, the provider, the
+/// settings that give it.
 struct Held {
     kind: Kind,
     to: String,
-    given: Given,
+    parts: BTreeMap<String, Secret>,
 }
 
 /// The credentials held, by name ([`hold`]).
@@ -307,11 +293,11 @@ impl Drop for Holding {
     }
 }
 
-/// Hold `given` as a credential of `kind` for the provider `to` (its name
-/// in dform.toml, as its host's grants say): in this process's memory,
-/// under a name of its own, `KIND:TO.N`, which only `to` opens
-/// ([`held`]), until the holding is dropped.
-pub fn hold(kind: Kind, to: &str, given: Given) -> Holding {
+/// Hold the settings `parts` as a credential of `kind` for the provider
+/// `to` (its name in dform.toml, as its host's grants say): in this
+/// process's memory, under a name of its own, `KIND:TO.N`, which only `to`
+/// opens ([`held`]), until the holding is dropped.
+pub fn hold(kind: Kind, to: &str, parts: BTreeMap<String, Secret>) -> Holding {
     let name = format!(
         "{}:{to}.{}",
         kind.as_str(),
@@ -322,7 +308,7 @@ pub fn hold(kind: Kind, to: &str, given: Given) -> Holding {
         Held {
             kind,
             to: to.to_string(),
-            given,
+            parts,
         },
     );
     Holding(name)
@@ -332,12 +318,13 @@ pub fn hold(kind: Kind, to: &str, given: Given) -> Holding {
 /// provider `to` ([`hold`]); `None` when it is not one held for it. Its
 /// error says why it does not load, never a value.
 pub fn held(name: &str, to: &str) -> Option<Result<Credential>> {
-    let (kind, given) = {
+    // Loaded with the map let go: a kubeconfig's exec plugin runs.
+    let (kind, parts) = {
         let map = held_map();
         let h = map.get(name).filter(|h| h.to == to)?;
-        (h.kind, h.given.clone())
+        (h.kind, h.parts.clone())
     };
-    Some(given.load(kind, name))
+    Some(of_settings(kind, name, &parts))
 }
 
 /// Where the operator's credential files are: `DFORM_CREDENTIALS`, else
@@ -362,10 +349,13 @@ pub fn file(name: &str) -> Result<PathBuf> {
     Ok(dir.join(kind).join(file))
 }
 
-/// Load the operator's credential `name` (`KIND:NAME`, its file) as the
-/// host applies it.
+/// Load the operator's credential `name` as the host applies it: its
+/// file, or, `KIND:environment`, the environment's ([`ENVIRONMENT`]).
 pub fn load(name: &str) -> Result<Credential> {
-    let (kind, _) = parse_name(name)?;
+    let (kind, rest) = parse_name(name)?;
+    if rest == ENVIRONMENT {
+        return environment(kind, name);
+    }
     let path = file(name)?;
     let v = std::fs::read(&path).map(Secret::new).map_err(|e| {
         anyhow!(
@@ -375,6 +365,20 @@ pub fn load(name: &str) -> Result<Credential> {
     })?;
     let mut c = Credential::named(name);
     c.apply(kind, &v, path.parent())?;
+    Ok(c)
+}
+
+/// The environment's credential of `kind`, named `name`
+/// (`KIND:environment`), read now.
+fn environment(kind: Kind, name: &str) -> Result<Credential> {
+    let mut c = Credential::named(name);
+    match kind {
+        Kind::Kubeconfig => kubeconfig::Kubeconfig::environment()?.apply(&mut c)?,
+        _ => bail!(
+            "the credential {name}: a {} credential has no source in the environment",
+            kind.as_str()
+        ),
+    }
     Ok(c)
 }
 
@@ -405,7 +409,7 @@ mod tests {
                   clusters:\n- name: k\n  cluster: {server: \"https://k.example:6443\", certificate-authority-data: Q0E=}\n\
                   users:\n- name: u\n  user: {token: s3cret}\n";
         let parts = BTreeMap::from([("kubeconfig".to_string(), Secret::new(kc.into()))]);
-        let h = hold(Kind::Kubeconfig, "k8s", Given::Settings(parts));
+        let h = hold(Kind::Kubeconfig, "k8s", parts);
         assert!(h.name().starts_with("kubeconfig:k8s."), "{}", h.name());
         assert!(held(h.name(), "other").is_none(), "another provider's");
         let c = held(h.name(), "k8s").unwrap().unwrap();
@@ -423,14 +427,14 @@ mod tests {
     #[test]
     fn a_bearer_is_one_setting() {
         let one = BTreeMap::from([("token".to_string(), Secret::new(b"t".to_vec()))]);
-        let h = hold(Kind::Bearer, "p", Given::Settings(one));
+        let h = hold(Kind::Bearer, "p", one);
         let c = held(h.name(), "p").unwrap().unwrap();
         assert_eq!(c.headers[0].1.expose(), b"Bearer t");
         let two = BTreeMap::from([
             ("a".to_string(), Secret::new(b"t".to_vec())),
             ("b".to_string(), Secret::new(b"u".to_vec())),
         ]);
-        let h = hold(Kind::Bearer, "p", Given::Settings(two));
+        let h = hold(Kind::Bearer, "p", two);
         let e = held(h.name(), "p").unwrap().unwrap_err().to_string();
         assert_eq!(e, "a bearer credential is one setting, not a, b");
     }

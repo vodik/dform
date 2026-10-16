@@ -4,6 +4,7 @@
 name = "crud-api"
 edition = "2026"
 
-# The mock plays the Kubernetes types; against a cluster, `k8s = {}`.
+# The mock plays the Kubernetes types; against the cluster your kubeconfig
+# names, `k8s = { credentials = ["kubeconfig:environment"] }`.
 [providers]
 k8s = "k8s"

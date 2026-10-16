@@ -111,11 +111,17 @@ resource k8s.deployment web {{
     )
 }
 
-/// A project (apply needs one) holding the real provider.
+/// A project (apply needs one) holding the real provider, which it
+/// grants the environment's kubeconfig.
 fn scratch(name: &str) -> Scratch {
     let s = Scratch::project(name);
     std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
     std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[providers.k8s]\nsource = \"providers/k8s\"\n\
+         credentials = [\"kubeconfig:environment\"]\n",
+    );
     s
 }
 

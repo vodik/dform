@@ -116,6 +116,20 @@ pub struct Config {
     pub secrets: Rc<crate::secrets::Run>,
 }
 
+impl Config {
+    /// What dform.toml grants the provider at `spec`: its entry's, by
+    /// spec or by the file both name (a `use`'s `source` is spelled from
+    /// its file's directory).
+    fn grants_of(&self, spec: &str) -> Option<&super::host::Grants> {
+        self.grants.get(spec).or_else(|| {
+            self.grants
+                .iter()
+                .find(|(s, _)| super::source::same_file(s, spec))
+                .map(|(_, g)| g)
+        })
+    }
+}
+
 /// An object as Read, Apply or Import returns it: its configured
 /// attributes and its computed values (a secret one as its label).
 #[derive(Debug, Clone, PartialEq)]

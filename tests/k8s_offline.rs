@@ -17,8 +17,12 @@ fn k8s() -> String {
 }
 
 /// `dform ARGS` in the scratch directory with no cluster in reach but the
-/// one `kubeconfig` names (none: offline).
+/// one `kubeconfig` names, which dform.toml grants the provider at
+/// `providers/k8s` (none: offline).
 fn dform<S: AsRef<std::ffi::OsStr>>(s: &Scratch, kubeconfig: Option<&str>, args: &[S]) -> Run {
+    if kubeconfig.is_some() {
+        grant(s);
+    }
     let mut c = common::dform();
     c.args(common::yes(args))
         .current_dir(&s.dir)
@@ -29,6 +33,25 @@ fn dform<S: AsRef<std::ffi::OsStr>>(s: &Scratch, kubeconfig: Option<&str>, args:
         None => c.env("DFORM_K8S_OFFLINE", "1"),
     };
     Run::from(c.output().unwrap())
+}
+
+/// dform.toml grants the provider at `providers/k8s` (the real one) the
+/// environment's kubeconfig.
+fn grant(s: &Scratch) {
+    if !s.path("providers/k8s/dform-provider-k8s").exists() {
+        std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
+        std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();
+    }
+    let toml = s.read("dform.toml");
+    if !toml.contains("[providers.k8s]") {
+        s.write(
+            "dform.toml",
+            &format!(
+                "{toml}\n[providers.k8s]\nsource = \"providers/k8s\"\n\
+                 credentials = [\"kubeconfig:environment\"]\n"
+            ),
+        );
+    }
 }
 
 /// The demo with its provider's `use` pointed at the real provider:
@@ -186,13 +209,14 @@ fn offline_apply_fails_naming_why() {
     );
 }
 
-/// With no kubeconfig and no cluster, the provider says so in one sentence
-/// of dform's (the host's, which looked for the environment's kubeconfig),
-/// and again under `DFORM_LOG=debug`.
+/// With no kubeconfig and no cluster, the provider granted the
+/// environment's says so in one sentence of dform's (the host's, which
+/// looked for it), and again under `DFORM_LOG=debug`.
 #[test]
 fn offline_is_said_in_one_sentence() {
     let s = Scratch::project("k8s-offline-line");
     real_demo(&s);
+    grant(&s);
     let run = |debug: bool| {
         let mut c = common::dform();
         c.args(["plan", "k8s_demo.df"])
@@ -213,19 +237,57 @@ fn offline_is_said_in_one_sentence() {
     assert_eq!(
         said,
         [
-            "k8s: offline, no kubeconfig at ~/.kube/config and not in a cluster; planning \
-          against the snapshot schema (crates/dform-k8s/openapi-snapshot.json)"
+            "k8s: offline, provider k8s: the credential kubeconfig:environment: no kubeconfig \
+             at ~/.kube/config and not in a cluster; planning against the snapshot schema \
+             (crates/dform-k8s/openapi-snapshot.json)"
         ],
         "{}",
         r.stderr
     );
     let r = run(true);
     assert!(
-        r.stderr
-            .contains("DEBUG k8s: no kubeconfig at ~/.kube/config and not in a cluster"),
+        r.stderr.contains(
+            "DEBUG k8s: provider k8s: the credential kubeconfig:environment: no kubeconfig"
+        ),
         "{}",
         r.stderr
     );
+}
+
+/// The environment's kubeconfig reaches the provider only by dform.toml's
+/// grant: without it the provider is offline, saying which grant it
+/// lacks, and the cluster the kubeconfig names hears nothing; with it the
+/// plan reaches the cluster.
+#[test]
+fn the_environments_kubeconfig_is_the_providers_only_by_a_grant() {
+    let s = Scratch::project("k8s-env-grant");
+    real_demo(&s);
+    let (api, url) = Api::start();
+    let kc = kubeconfig(&s, &url);
+    let plan = || {
+        let mut c = common::dform();
+        c.args(["plan", "k8s_demo.df"])
+            .current_dir(&s.dir)
+            .env("KUBECONFIG", &kc)
+            .env_remove("DFORM_K8S_OFFLINE")
+            .env_remove("KUBERNETES_SERVICE_HOST");
+        Run::from(c.output().unwrap()).success()
+    };
+    let r = plan();
+    assert!(
+        r.stderr.contains(
+            "k8s: offline, provider k8s is not granted the credential kubeconfig:environment \
+             (the environment's kubeconfig): add it to [providers.k8s] credentials in \
+             dform.toml;"
+        ),
+        "{}",
+        r.stderr
+    );
+    assert_eq!(*api.requests.lock().unwrap(), Vec::<String>::new());
+    grant(&s);
+    let r = plan();
+    assert!(!r.stderr.contains("offline"), "{}", r.stderr);
+    assert!(api.count("GET /openapi/v3", &[]) > 0);
 }
 
 // --- a fake API server ------------------------------------------------------
@@ -693,7 +755,8 @@ fn kubeconfig(s: &Scratch, url: &str) -> String {
 }
 
 /// `dform provider check` against the k8s binary: no cluster, the fake API
-/// server standing in. The checks run on the provider's own examples.
+/// server standing in, the kubeconfig as dform.toml grants it. The checks
+/// run on the provider's own examples.
 #[test]
 fn the_k8s_provider_conforms() {
     let s = Scratch::project("k8s-check");
@@ -702,6 +765,8 @@ fn the_k8s_provider_conforms() {
     let r = dform(&s, Some(&kc), &["provider", "check", &k8s()]).success();
     assert!(!r.stdout.contains("FAIL"), "{}", r.stdout);
     for line in [
+        // Checked with what dform.toml grants the provider at that path.
+        "host  native: credentials: kubeconfig:environment",
         "ok    Schema serves its own types, with examples",
         "ok    Schema's types are named under the provider's name, k8s",
         "ok    Plan refuses a document without a required attribute",

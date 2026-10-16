@@ -109,14 +109,22 @@ where
 }
 
 /// Run the suite against the provider at `path` (a plugin, else, a mock
-/// schema, the mock), reached through `launch`. Returns the report's lines
-/// and how many checks failed.
-pub fn run(launch: &dyn Launch, path: &str) -> Result<(Vec<String>, usize)> {
+/// schema, the mock), reached through `launch`, with what dform.toml
+/// grants it (`grants`; none outside a project, or for a provider it does
+/// not name). Returns the report's lines and how many checks failed.
+pub fn run(
+    launch: &dyn Launch,
+    path: &str,
+    grants: Option<&super::host::Grants>,
+) -> Result<(Vec<String>, usize)> {
     let dir = std::env::temp_dir().join(format!("dform-provider-check-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).with_context(|| format!("mkdir {}", dir.display()))?;
     let start = || match source::resolve(path) {
-        Source::Plugin(p) => launch.plugin(&p, &super::host::Grants::none_for(&p)),
+        Source::Plugin(p) => match grants {
+            Some(g) => launch.plugin(&p, g),
+            None => launch.plugin(&p, &super::host::Grants::none_for(&p)),
+        },
         Source::Mock(_) => launch.mock(),
     };
     let out = suite(start, &dir);

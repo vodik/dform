@@ -116,7 +116,7 @@ fn a_window_keeps_under_the_servers_stream_ceiling() {
     use base64::Engine;
     use dform::http::fake::{CA, Server};
     use dform::plugin::backend::Session;
-    use dform::plugin::credentials::{self, Given, Kind, Secret};
+    use dform::plugin::credentials::{self, Kind, Secret};
     use dform_host::ratelimit::Limiter;
     let server = Arc::new(Server::h2(3));
     let ca = base64::engine::general_purpose::STANDARD.encode(CA);
@@ -132,7 +132,7 @@ fn a_window_keeps_under_the_servers_stream_ceiling() {
     let held = credentials::hold(
         Kind::Kubeconfig,
         "streams",
-        Given::Settings([("kubeconfig".to_string(), kubeconfig)].into()),
+        [("kubeconfig".to_string(), kubeconfig)].into(),
     );
     let name = held.name();
     let limiter = Arc::new(Limiter::new("streams"));

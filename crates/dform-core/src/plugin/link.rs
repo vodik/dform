@@ -10,7 +10,7 @@
 //! (`providers::Tick`).
 
 use super::backend::{BUILD, BUILT_IN, Call, CallError, Provider, Reply, Session, Ticket, VERSION};
-use super::credentials::{self, Given, Holding, Kind, Secret};
+use super::credentials::{self, Holding, Kind, Secret};
 use super::pb;
 use super::policy::{self, Class, Policy};
 use super::timed::Timed;
@@ -472,32 +472,35 @@ impl Link {
     /// by the host as one credential for it (`credentials::hold`) and each
     /// replaced by that credential's name. A Configure that gives no
     /// settings and is not deferred (a provider the program does not
-    /// configure) has the environment's of each kind that has one, named in
-    /// its `credentials` (`{"kubeconfig": NAME}`).
+    /// configure) names, in its `credentials`, the environment's of each
+    /// kind that has one (`{"kubeconfig": "kubeconfig:environment"}`),
+    /// which the host opens only where dform.toml grants it: nothing is
+    /// held for it.
     fn hold(&self, config: &mut Json) -> Result<Vec<Holding>> {
         if config.get("deferred") == Some(&Json::Bool(true)) {
             return Ok(Vec::new());
         }
+        let Some(settings) = config.get_mut("settings").and_then(Json::as_object_mut) else {
+            let named: serde_json::Map<String, Json> = self
+                .credentials
+                .values()
+                .filter(|k| k.in_environment())
+                .map(|k| {
+                    let name = format!("{}:{}", k.as_str(), credentials::ENVIRONMENT);
+                    (k.as_str().to_string(), json!(name))
+                })
+                .collect();
+            if !named.is_empty() {
+                config["credentials"] = Json::Object(named);
+            }
+            return Ok(Vec::new());
+        };
         // The provider's name in dform.toml: what its host opens by.
         let to = self
             .hosting
             .as_ref()
             .map_or(self.name.as_str(), |h| h.grants.provider.as_str());
         let mut held = Vec::new();
-        let Some(settings) = config.get_mut("settings").and_then(Json::as_object_mut) else {
-            let mut named = serde_json::Map::new();
-            for kind in self.credentials.values().filter(|k| k.in_environment()) {
-                if !named.contains_key(kind.as_str()) {
-                    let h = credentials::hold(*kind, to, Given::Environment);
-                    named.insert(kind.as_str().into(), json!(h.name()));
-                    held.push(h);
-                }
-            }
-            if !named.is_empty() {
-                config["credentials"] = Json::Object(named);
-            }
-            return Ok(held);
-        };
         let mut by_kind: BTreeMap<Kind, BTreeMap<String, Secret>> = BTreeMap::new();
         for (setting, kind) in &self.credentials {
             match settings.get(setting) {
@@ -516,7 +519,7 @@ impl Link {
         }
         for (kind, parts) in by_kind {
             let given: Vec<String> = parts.keys().cloned().collect();
-            let h = credentials::hold(kind, to, Given::Settings(parts));
+            let h = credentials::hold(kind, to, parts);
             for setting in given {
                 settings.insert(setting, json!(h.name()));
             }
@@ -711,7 +714,8 @@ mod tests {
     /// A setting the provider declares a credential reaches it as the
     /// name the host holds it under, never its value, and only that
     /// provider opens it; a Configure with no settings names the
-    /// environment's; configuring the session again lets the last one go.
+    /// environment's, which only a grant opens; configuring the session
+    /// again lets the last one go.
     #[test]
     fn a_credential_setting_reaches_the_provider_as_a_name() {
         let holder = std::sync::Arc::new(Holder::default());
@@ -735,11 +739,13 @@ mod tests {
         let c = credentials::held(&name, "kube").unwrap().unwrap();
         assert_eq!(c.endpoint.as_deref(), Some("https://k"));
         assert!(credentials::held(&name, "other").is_none());
-        // Its session again, with no settings: the environment's.
+        // Its session again, with no settings: the environment's, by the
+        // name a grant gives it, held for no one.
         l.configure(Session(1), wire::doc(&json!({}))).unwrap();
         let sent = holder.0.lock().unwrap()[1].clone();
         let env = sent["credentials"]["kubeconfig"].as_str().unwrap();
-        assert!(env.starts_with("kubeconfig:kube."), "{sent}");
+        assert_eq!(env, "kubeconfig:environment", "{sent}");
+        assert!(credentials::held(env, "kube").is_none(), "{sent}");
         assert!(credentials::held(&name, "kube").is_none(), "let go");
         // A deferred Configure holds nothing.
         l.configure(Session(1), wire::doc(&json!({"deferred": true})))

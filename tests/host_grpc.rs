@@ -9,7 +9,7 @@
 
 use crate::common;
 
-use dform::plugin::credentials::{Given, Kind, Secret, hold};
+use dform::plugin::credentials::{Kind, Secret, hold};
 use dform::plugin::host::{
     Calls, Class, Endpoint, Error, Failure, Grants, HttpRequest, Run, Target,
 };
@@ -89,7 +89,7 @@ fn echo_auth() -> (SocketAddr, std::thread::JoinHandle<()>) {
 #[test]
 fn a_held_credential_is_applied_by_the_host() {
     let token = [("token".to_string(), Secret::new(b"t0ken-value".to_vec()))];
-    let held = hold(Kind::Bearer, "k8s", Given::Settings(token.into()));
+    let held = hold(Kind::Bearer, "k8s", token.into());
     let (_o, other) = client(Services::new(Grants::none("other")));
     let e = other.open(held.name()).unwrap_err();
     assert!(
@@ -145,7 +145,7 @@ fn a_held_kubeconfig_presents_its_client_certificate() {
     );
     let held = |text: &str| {
         let given = [("kubeconfig".to_string(), Secret::new(text.into()))];
-        hold(Kind::Kubeconfig, "k8s", Given::Settings(given.into()))
+        hold(Kind::Kubeconfig, "k8s", given.into())
     };
     // The same cluster, its CA trusted, and no client certificate.
     let anonymous = held(&kubeconfig.replace("user: {client-certificate-data", "x: {a"));

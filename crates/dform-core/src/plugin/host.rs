@@ -380,13 +380,19 @@ impl Grants {
     }
 
     /// Refuse to open a credential this does not grant, naming the
-    /// provider and the credential.
+    /// provider and the credential (the environment's, when it is).
     pub fn credential(&self, name: &str) -> Result<(), Error> {
         if self.credentials.contains(name) {
             return Ok(());
         }
+        let what = match super::credentials::parse_name(name) {
+            Ok((kind, super::credentials::ENVIRONMENT)) => {
+                format!(" (the environment's {})", kind.as_str())
+            }
+            _ => String::new(),
+        };
         Err(Error::fatal(format!(
-            "provider {} is not granted the credential {name}: add it to [providers.{}] \
+            "provider {} is not granted the credential {name}{what}: add it to [providers.{}] \
              credentials in dform.toml",
             self.provider, self.provider
         )))
@@ -488,6 +494,17 @@ mod tests {
                 .contains("provider k8s is not granted the credential kubeconfig:staging"),
             "{}",
             e.message
+        ); // The environment's is a grant like any other.
+        let e = g.credential("kubeconfig:environment").unwrap_err();
+        assert_eq!(
+            e.message,
+            "provider k8s is not granted the credential kubeconfig:environment (the \
+             environment's kubeconfig): add it to [providers.k8s] credentials in dform.toml"
+        );
+        assert!(
+            grants(&[], &["kubeconfig:environment"])
+                .credential("kubeconfig:environment")
+                .is_ok()
         );
     }
 }

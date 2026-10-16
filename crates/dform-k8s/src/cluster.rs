@@ -265,11 +265,11 @@ impl Document {
 
 impl Cluster {
     /// The cluster the kubeconfig credential `name` reaches, which the
-    /// host holds for this provider (the environment's, or the program's),
-    /// opened in `session`; `namespace` (the setting) before its
-    /// context's. Nothing is contacted yet. Its error is the host's: why
-    /// the kubeconfig does not load (`no kubeconfig at ~/.kube/config and
-    /// not in a cluster`).
+    /// host opens for this provider (the program's, or the environment's
+    /// where dform.toml grants it), opened in `session`; `namespace` (the
+    /// setting) before its context's. Nothing is contacted yet. Its error
+    /// is the host's: why the kubeconfig does not load (not granted, or
+    /// `no kubeconfig at ~/.kube/config and not in a cluster`).
     pub fn open(name: &str, session: Session, namespace: Option<&str>) -> Result<Cluster> {
         let credential = host()
             .secrets
