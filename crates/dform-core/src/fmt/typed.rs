@@ -700,10 +700,10 @@ mod tests {
     /// a string.
     #[test]
     fn a_typed_column_takes_the_short_spelling() {
-        let src = "decl r(net: inet, size: bytes, n: cpu, s: string)\n\
+        let src = "decl r(net: inet, size: bytes, n: cpu, s: string)\n\n\
                    r(\"10.0.0.0/16\", \"2Gi\", \"500m\", \"2Gi\")\n\
                    r(size: \"1Gi\", net: \"10.1.0.0/16\", n: \"2\", s: \"x\")\n";
-        let want = "decl r(net: inet, size: bytes, n: cpu, s: string)\n\
+        let want = "decl r(net: inet, size: bytes, n: cpu, s: string)\n\n\
                     r(\"10.0.0.0/16\", 2Gi, \"500m\", \"2Gi\")\n\
                     r(size: 1Gi, net: \"10.1.0.0/16\", n: \"2\", s: \"x\")\n";
         assert_eq!(fmt(src), want);

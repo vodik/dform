@@ -1,8 +1,11 @@
 input backup_days: int
 input multi_az: bool
+
 #| The subnets the database is placed in, one row each.
 input subnet
+
 decl subnet(subnet: net.subnet)
+
 #| Only when the database exists in this environment.
 output iam_need = { action = "db.connect", resource = db } where has backup_days
 

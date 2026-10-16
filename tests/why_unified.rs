@@ -113,9 +113,9 @@ fn a_guarded_instance_names_the_guard_that_did_not_hold() {
     assert_eq!(
         out,
         "net.vpc peer.vpc: no rule derives it\n  \
-         tests/fixtures/demo/network.df:19  resource net.vpc vpc { .. }   (resource network.vpc peer)\n    \
+         tests/fixtures/demo/network.df:22  resource net.vpc vpc { .. }   (resource network.vpc peer)\n    \
          resource network.vpc peer: not made\n      \
-         tests/fixtures/demo/stacks/dform.df:54  resource network.vpc peer { .. } where env != \"dev\"\n        \
+         tests/fixtures/demo/stacks/dform.df:57  resource network.vpc peer { .. } where env != \"dev\"\n        \
          env != \"dev\": false, with env = \"dev\"\n"
     );
     golden("why_absent_guard", &out);

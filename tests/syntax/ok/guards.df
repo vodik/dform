@@ -11,17 +11,20 @@ type conn = string
 
 type database = component {
   input name: string
+
   output conn: conn
 }
 
 component pg_aws: database {
   input name: string
   input size: int = 1
+
   output conn: conn = "aws:${name}"
 }
 
 component pg_gcp: database {
   input name: string
+
   output conn: conn = "gcp:${gcp_project}/${name}"
 }
 

@@ -391,9 +391,9 @@ fn the_formatter_round_trips() {
     s.run(&["fmt", "p.df"]).success();
     assert_eq!(
         s.read("p.df"),
-        "use fake\nlet cidr(a, b: int = 7) = \"10.${a}.${b}.0/24\"\nlet long(\n  \
+        "use fake\n\nlet cidr(a, b: int = 7) = \"10.${a}.${b}.0/24\"\nlet long(\n  \
          alpha_parameter,\n  beta_parameter,\n  gamma_parameter,\n  delta_parameter: string = \
-         \"a default value\"\n) = alpha_parameter\nresource net.vpc v { cidr = cidr(1, b: 2) }\n"
+         \"a default value\"\n) = alpha_parameter\n\nresource net.vpc v { cidr = cidr(1, b: 2) }\n"
     );
     s.run(&["fmt", "--check", "p.df"]).success();
 }

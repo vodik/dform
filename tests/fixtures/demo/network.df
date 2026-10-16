@@ -9,9 +9,12 @@ component vpc {
   #| The VPC's IPv4 range; each zone's subnet is a /20 of it.
   input vpc_net: inet
   input env: enum("dev", "staging", "prod")
+
   decl private_subnet(subnet: net.subnet)
+
   #| The network's VPC, for peering.
   output vpc: net.vpc = vpc
+
   #| The network's private subnets, one row each, for a database or a
   #| cluster: `main.private_subnet(s)`.
   output private_subnet

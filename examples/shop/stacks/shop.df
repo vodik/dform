@@ -2,6 +2,7 @@ key env: enum("staging", "prod") = "staging"
 input public: bool = false
 input database { class: string = "db.t3.micro", multi_az: bool = false, backup_days: int = 1 }
 input web { type: string = "t3.small" }
+
 use aws { region = "us-east-1", expect_account = "123456789012" }
 
 resource aws.vpc main { cidr_block = "10.0.0.0/16" }

@@ -25,6 +25,7 @@
 key env: enum("dev", "prod") = "dev"
 input public_db: bool = false
 input database { backup_days: int = 1, multi_az: bool = false }
+
 use fake
 
 # 1. One resource
@@ -160,7 +161,7 @@ resource db.postgres orders {
 #   $ dform plan --set public_db=true
 #   ~ db.postgres orders
 #     public = false → true
-#   refused  a database must not be public  stacks/tour.df:172
+#   refused  a database must not be public  stacks/tour.df:173
 #     └─ database = "orders"
 #
 # The plan shows the change it refuses (`~` is an update) and the rule
@@ -177,14 +178,14 @@ deny "a database must not be public" { database = pg } where pg in db.postgres, 
 # has a tag its block does not write:
 #
 #   $ dform why 'net.vpc main.tags.team'
-#   net.vpc main.tags.team = "shop"  stacks/tour.df:170
+#   net.vpc main.tags.team = "shop"  stacks/tour.df:171
 #
 # The statement at line 170 of this file (section 5's) wrote it. A value
 # passed along says each expression it went through, to the literal:
 #
 #   $ dform why orders.backup_days
 #   db.postgres orders.backup_days = 1
-#     = database.backup_days  stacks/tour.df:145
+#     = database.backup_days  stacks/tour.df:146
 #     = 1 @default            stacks/tour.df:27
 #
 # The address is the one the plan printed, pasted: whatever it shows.
@@ -213,6 +214,7 @@ deny "a database must not be public" { database = pg } where pg in db.postgres, 
 
 component network {
   input cidr: inet
+
   output vpc: net.vpc = vpc
 
   resource net.vpc vpc { cidr, tags = { component = "network" } }

@@ -2,6 +2,7 @@
 #| namespace the apps run in.
 key env: enum("staging", "prod") = "staging"
 input flavor: string = "b2-7"
+
 output kubeconfig: secret(string) = kubeconfig
 output ingress: ip = server.public_ip
 
@@ -32,6 +33,7 @@ resource ovh.instance server {
 
 let raw: secret(string) = io.read("ssh://ubuntu@${server.public_ip}/etc/rancher/k3s/k3s.yaml")
 let kubeconfig = str.replace(raw, "https://127.0.0.1:6443", "https://${server.public_ip}:6443")
+
 use k8s { kubeconfig }
 
 resource k8s.namespace apps { metadata.name = "apps" }

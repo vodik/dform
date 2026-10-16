@@ -2760,9 +2760,14 @@ of the program are rejected with "not yet supported".
 layout. The author's line breaks are not kept: what fits in 100
 columns is printed on one line however it was written, and what does not
 breaks from the outside in, its outermost group first, then each part
-measured again, so an inner group that fits stays on its line. A blank
-line between statements, entries or elements is kept (at most one), and
-so is every comment, where it was: one on its own line above what follows
+measured again, so an inner group that fits stays on its line. Between
+a file's or a component's statements a blank line is a rule: one between
+statements of different kinds (a fact and a rule are two kinds; `key`,
+`input` and `input .. from` one) and above a comment block, none between
+facts of one relation or between `set` lines (a braced `set { }` is a
+block of its own), and between two other statements of one kind the
+author's choice. A blank line between entries or elements is kept (at
+most one), and so is every comment, where it was: one on its own line above what follows
 it, one after code at the end of that code's line; a comment breaks the
 groups around it. Two spaces indent a line one step deeper than the line
 its group opened on; a closer is on its own line at the opener's indent.

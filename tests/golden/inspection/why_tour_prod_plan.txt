@@ -3,133 +3,133 @@ plan: 16 changes (16 create) over 2 ticks; policy: 1 hold
 
 tick 1  16 changes
   + network blue
-    + net.vpc blue.vpc                     stacks/tour.df:218
-        cidr = "10.1.0.0/16"               input blue.cidr = 10.1.0.0/16   stacks/tour.df:227
-          = cidr                           stacks/tour.df:218
-          = "10.1.0.0/16"                  stacks/tour.df:227
+    + net.vpc blue.vpc                     stacks/tour.df:220
+        cidr = "10.1.0.0/16"               input blue.cidr = 10.1.0.0/16   stacks/tour.df:229
+          = cidr                           stacks/tour.df:220
+          = "10.1.0.0/16"                  stacks/tour.df:229
         tags.component = "network"
-        tags.team = "shop"                 stacks/tour.df:170
-    + net.subnet blue.private-us-test-1a   stacks/tour.df:220  with z = "us-test-1a", n = 1
+        tags.team = "shop"                 stacks/tour.df:171
+    + net.subnet blue.private-us-test-1a   stacks/tour.df:222  with z = "us-test-1a", n = 1
         cidr = "10.1.1.0/24"               inet.subnet(cidr, 8, n)
-          = inet.subnet(cidr, 8, n)        stacks/tour.df:222
-          = "10.1.0.0/16"                  stacks/tour.df:227
-        tags.team = "shop"                 stacks/tour.df:170
+          = inet.subnet(cidr, 8, n)        stacks/tour.df:224
+          = "10.1.0.0/16"                  stacks/tour.df:229
+        tags.team = "shop"                 stacks/tour.df:171
         vpc = blue.vpc
-          = vpc                            stacks/tour.df:221
+          = vpc                            stacks/tour.df:223
         zone = "us-test-1a"
-          = z                              stacks/tour.df:223
-    + net.subnet blue.private-us-test-1b   stacks/tour.df:220  with z = "us-test-1b", n = 2
+          = z                              stacks/tour.df:225
+    + net.subnet blue.private-us-test-1b   stacks/tour.df:222  with z = "us-test-1b", n = 2
         cidr = "10.1.2.0/24"               inet.subnet(cidr, 8, n)
-          = inet.subnet(cidr, 8, n)        stacks/tour.df:222
-          = "10.1.0.0/16"                  stacks/tour.df:227
-        tags.team = "shop"                 stacks/tour.df:170
+          = inet.subnet(cidr, 8, n)        stacks/tour.df:224
+          = "10.1.0.0/16"                  stacks/tour.df:229
+        tags.team = "shop"                 stacks/tour.df:171
         vpc = blue.vpc
-          = vpc                            stacks/tour.df:221
+          = vpc                            stacks/tour.df:223
         zone = "us-test-1b"
-          = z                              stacks/tour.df:223
+          = z                              stacks/tour.df:225
   + network green
-    + net.vpc green.vpc                    stacks/tour.df:218
-        cidr = "10.2.0.0/16"               input green.cidr = 10.2.0.0/16   stacks/tour.df:229
-          = cidr                           stacks/tour.df:218
-          = "10.2.0.0/16"                  stacks/tour.df:229
+    + net.vpc green.vpc                    stacks/tour.df:220
+        cidr = "10.2.0.0/16"               input green.cidr = 10.2.0.0/16   stacks/tour.df:231
+          = cidr                           stacks/tour.df:220
+          = "10.2.0.0/16"                  stacks/tour.df:231
         tags.component = "network"
-        tags.team = "shop"                 stacks/tour.df:170
-    + net.subnet green.private-us-test-1a  stacks/tour.df:220  with z = "us-test-1a", n = 1
+        tags.team = "shop"                 stacks/tour.df:171
+    + net.subnet green.private-us-test-1a  stacks/tour.df:222  with z = "us-test-1a", n = 1
         cidr = "10.2.1.0/24"               inet.subnet(cidr, 8, n)
-          = inet.subnet(cidr, 8, n)        stacks/tour.df:222
-          = "10.2.0.0/16"                  stacks/tour.df:229
-        tags.team = "shop"                 stacks/tour.df:170
+          = inet.subnet(cidr, 8, n)        stacks/tour.df:224
+          = "10.2.0.0/16"                  stacks/tour.df:231
+        tags.team = "shop"                 stacks/tour.df:171
         vpc = green.vpc
-          = vpc                            stacks/tour.df:221
+          = vpc                            stacks/tour.df:223
         zone = "us-test-1a"
-          = z                              stacks/tour.df:223
-    + net.subnet green.private-us-test-1b  stacks/tour.df:220  with z = "us-test-1b", n = 2
+          = z                              stacks/tour.df:225
+    + net.subnet green.private-us-test-1b  stacks/tour.df:222  with z = "us-test-1b", n = 2
         cidr = "10.2.2.0/24"               inet.subnet(cidr, 8, n)
-          = inet.subnet(cidr, 8, n)        stacks/tour.df:222
-          = "10.2.0.0/16"                  stacks/tour.df:229
-        tags.team = "shop"                 stacks/tour.df:170
+          = inet.subnet(cidr, 8, n)        stacks/tour.df:224
+          = "10.2.0.0/16"                  stacks/tour.df:231
+        tags.team = "shop"                 stacks/tour.df:171
         vpc = green.vpc
-          = vpc                            stacks/tour.df:221
+          = vpc                            stacks/tour.df:223
         zone = "us-test-1b"
-          = z                              stacks/tour.df:223
-  + net.vpc main                           stacks/tour.df:46
+          = z                              stacks/tour.df:225
+  + net.vpc main                           stacks/tour.df:47
       cidr = "10.0.0.0/16"
-      tags.team = "shop"                   stacks/tour.df:170
-  + net.vpc_peering main-blue              stacks/tour.df:255  with t = "blue", v = "blue.vpc"
+      tags.team = "shop"                   stacks/tour.df:171
+  + net.vpc_peering main-blue              stacks/tour.df:257  with t = "blue", v = "blue.vpc"
       accepter_vpc = blue.vpc              net.vpc[v]
-        = net.vpc[v]                       stacks/tour.df:257  with v = "blue.vpc"
+        = net.vpc[v]                       stacks/tour.df:259  with v = "blue.vpc"
       requester_vpc = main
-      tags.team = "shop"                   stacks/tour.df:170
-  + net.vpc_peering main-green             stacks/tour.df:255  with t = "green", v = "green.vpc"
+      tags.team = "shop"                   stacks/tour.df:171
+  + net.vpc_peering main-green             stacks/tour.df:257  with t = "green", v = "green.vpc"
       accepter_vpc = green.vpc             net.vpc[v]
-        = net.vpc[v]                       stacks/tour.df:257  with v = "green.vpc"
+        = net.vpc[v]                       stacks/tour.df:259  with v = "green.vpc"
       requester_vpc = main
-      tags.team = "shop"                   stacks/tour.df:170
-  + net.route_table blue                   stacks/tour.df:286  with n = "blue", v = "blue.vpc"
+      tags.team = "shop"                   stacks/tour.df:171
+  + net.route_table blue                   stacks/tour.df:288  with n = "blue", v = "blue.vpc"
       routes[0].destination = "10.0.0.0/16"
       routes[0].target = main
       routes[1].destination = "10.2.0.0/16"
       routes[1].target = green.vpc
-      tags.team = "shop"                   stacks/tour.df:170
+      tags.team = "shop"                   stacks/tour.df:171
       vpc = blue.vpc                       net.vpc[v]
-        = net.vpc[v]                       stacks/tour.df:286  with v = "blue.vpc"
-  + net.route_table green                  stacks/tour.df:286  with n = "green", v = "green.vpc"
+        = net.vpc[v]                       stacks/tour.df:288  with v = "blue.vpc"
+  + net.route_table green                  stacks/tour.df:288  with n = "green", v = "green.vpc"
       routes[0].destination = "10.0.0.0/16"
       routes[0].target = main
       routes[1].destination = "10.1.0.0/16"
       routes[1].target = blue.vpc
-      tags.team = "shop"                   stacks/tour.df:170
+      tags.team = "shop"                   stacks/tour.df:171
       vpc = green.vpc                      net.vpc[v]
-        = net.vpc[v]                       stacks/tour.df:286  with v = "green.vpc"
-  + net.route_table main                   stacks/tour.df:286  with n = "main", v = "main"
+        = net.vpc[v]                       stacks/tour.df:288  with v = "green.vpc"
+  + net.route_table main                   stacks/tour.df:288  with n = "main", v = "main"
       routes[0].destination = "10.1.0.0/16"
       routes[0].target = blue.vpc
       routes[1].destination = "10.2.0.0/16"
       routes[1].target = green.vpc
-      tags.team = "shop"                   stacks/tour.df:170
+      tags.team = "shop"                   stacks/tour.df:171
       vpc = main                           net.vpc[v]
-        = net.vpc[v]                       stacks/tour.df:286  with v = "main"
-  + net.subnet private-us-test-1a          stacks/tour.df:104  with z = "us-test-1a", n = 1
+        = net.vpc[v]                       stacks/tour.df:288  with v = "main"
+  + net.subnet private-us-test-1a          stacks/tour.df:105  with z = "us-test-1a", n = 1
       cidr = "10.0.1.0/24"                 inet.subnet(main.cidr, 8, n)
-        = inet.subnet(main.cidr, 8, n)     stacks/tour.df:106  with n = 1
-      tags.team = "shop"                   stacks/tour.df:170
+        = inet.subnet(main.cidr, 8, n)     stacks/tour.df:107  with n = 1
+      tags.team = "shop"                   stacks/tour.df:171
       visibility = "private"
       vpc = main
       zone = "us-test-1a"
-        = z                                stacks/tour.df:107
-  + net.subnet private-us-test-1b          stacks/tour.df:104  with z = "us-test-1b", n = 2
+        = z                                stacks/tour.df:108
+  + net.subnet private-us-test-1b          stacks/tour.df:105  with z = "us-test-1b", n = 2
       cidr = "10.0.2.0/24"                 inet.subnet(main.cidr, 8, n)
-        = inet.subnet(main.cidr, 8, n)     stacks/tour.df:106  with n = 2
-      tags.team = "shop"                   stacks/tour.df:170
+        = inet.subnet(main.cidr, 8, n)     stacks/tour.df:107  with n = 2
+      tags.team = "shop"                   stacks/tour.df:171
       visibility = "private"
       vpc = main
       zone = "us-test-1b"
-        = z                                stacks/tour.df:107
-  + net.subnet public                      stacks/tour.df:77
+        = z                                stacks/tour.df:108
+  + net.subnet public                      stacks/tour.df:78
       cidr = "10.0.0.0/24"
-      tags.team = "shop"                   stacks/tour.df:170
+      tags.team = "shop"                   stacks/tour.df:171
       visibility = "public"
       vpc = main
-  + db.postgres orders                     stacks/tour.df:143
+  + db.postgres orders                     stacks/tour.df:144
       backup_days = 14
-        = database.backup_days             stacks/tour.df:145
-        = 14                               stacks/tour.df:139
+        = database.backup_days             stacks/tour.df:146
+        = 14                               stacks/tour.df:140
         over 1 @default                    stacks/tour.df:27
       multi_az = true
-        = database.multi_az                stacks/tour.df:146
-        = true                             stacks/tour.df:139
+        = database.multi_az                stacks/tour.df:147
+        = true                             stacks/tour.df:140
         over false @default                stacks/tour.df:27
       public = false                       input public_db = false @default   stacks/tour.df:26
-        = public_db                        stacks/tour.df:147
+        = public_db                        stacks/tour.df:148
         = false @default                   stacks/tour.df:26
       subnets[0] = private-us-test-1a      [ s | s in net.subnet, s.visibility == "private" ]
       subnets[1] = private-us-test-1b      [ s | s in net.subnet, s.visibility == "private" ]
-      tags.team = "shop"                   stacks/tour.df:170
+      tags.team = "shop"                   stacks/tour.df:171
 
 tick 2  ? changes
   waits on  orders.endpoint
-  iam.policy "connect-${host}"             stacks/tour.df:322  waits on orders.endpoint
+  iam.policy "connect-${host}"             stacks/tour.df:324  waits on orders.endpoint
 
 policy  1 hold
-  holds  a database must not be public  stacks/tour.df:172  1 hold
+  holds  a database must not be public  stacks/tour.df:173  1 hold
     db.postgres orders                  holds

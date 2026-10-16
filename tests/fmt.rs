@@ -184,7 +184,7 @@ fn separates(t: &dform::syntax::SyntaxToken) -> bool {
 #[test]
 fn check_lists_unformatted_files_and_fmt_rewrites_them() {
     let s = Scratch::new("fmt");
-    s.write("ok.df", "p(\"a\")\nuse fake\n");
+    s.write("ok.df", "p(\"a\")\n\nuse fake\n");
     s.write(
         "messy.df",
         "resource net.vpc main {\n    cidr = \"10.0.0.0/16\",\n    tags = {team = \"x\"},\n}\nuse fake\n",
@@ -197,7 +197,7 @@ fn check_lists_unformatted_files_and_fmt_rewrites_them() {
     s.run(&["fmt", "ok.df", "messy.df"]).success();
     assert_eq!(
         s.read("messy.df"),
-        "resource net.vpc main { cidr = \"10.0.0.0/16\", tags = { team = \"x\" } }\nuse fake\n"
+        "resource net.vpc main { cidr = \"10.0.0.0/16\", tags = { team = \"x\" } }\n\nuse fake\n"
     );
     s.run(&["fmt", "--check", "ok.df", "messy.df"]).success();
 }
@@ -231,7 +231,7 @@ fn fmt_writes_an_objects_colon_as_equals() {
     let src = "p(x) where q(a: x)\nlet o: { a: int } = { a: 1 }\n\
                resource t n { tags = {team: \"x\", nested: { b : 2 }, env}, data = \"${f({ k:1 })}\" }\n\
                input k: string\n";
-    let want = "input k: string\n\np(x) where q(a: x)\nlet o: { a: int } = { a = 1 }\n\
+    let want = "input k: string\n\np(x) where q(a: x)\n\nlet o: { a: int } = { a = 1 }\n\n\
                 resource t n { tags = { team = \"x\", nested = { b = 2 }, env }, \
                 data = \"${f({ k = 1 })}\" }\n";
     let got = dform::fmt::format_source("p.df", src).unwrap();
@@ -242,7 +242,7 @@ fn fmt_writes_an_objects_colon_as_equals() {
     let r = s.run(&["fmt", "--check", "old.df"]).failure();
     assert_eq!(r.stdout, "old.df\n");
     s.run(&["fmt", "old.df"]).success();
-    assert_eq!(s.read("old.df"), "let o = { a = 1 }\nuse fake\n");
+    assert_eq!(s.read("old.df"), "let o = { a = 1 }\n\nuse fake\n");
 }
 
 /// A file's header is `key` and `input` lines (value
@@ -258,9 +258,9 @@ fn fmt_puts_the_header_in_order() {
                use fake\n\n#| The relation.\ninput p from csv.decode(io.read(\"p.csv\"))\ndecl p(a)\n\n\
                p2(x) where p(x)\noutput r = p2(1)\nuse m # its modules\ninput a: int\n";
     let want = "# A program.\n\n# The key.\n\
-                key env: string\ninput b: int\ninput a: int\n#| The relation.\n\
-                input p from csv.decode(io.read(\"p.csv\"))\ndecl p(a)\noutput r = p2(1)\n\nuse fake\n\n\
-                p2(x) where p(x)\nuse m # its modules\n";
+                key env: string\ninput b: int\ninput a: int\n\n#| The relation.\n\
+                input p from csv.decode(io.read(\"p.csv\"))\n\ndecl p(a)\n\noutput r = p2(1)\n\nuse fake\n\n\
+                p2(x) where p(x)\n\nuse m # its modules\n";
     let got = dform::fmt::format_source("p.df", src).unwrap();
     assert_eq!(got, want);
     assert_eq!(dform::fmt::format_source("p.df", &got).unwrap(), got);
@@ -279,8 +279,8 @@ fn fmt_orders_a_components_interface_first() {
     let src = "component m {\n  input a: int\n\n  p(x) where q(x)\n  \
                use helper\n  decl q(a)\n  resource other o {}\n  #| the answer\n  \
                output r = p(a)\n}\n";
-    let want = "component m {\n  input a: int\n  decl q(a)\n  \
-                #| the answer\n  output r = p(a)\n\n  p(x) where q(x)\n  use helper\n  \
+    let want = "component m {\n  input a: int\n\n  decl q(a)\n\n  \
+                #| the answer\n  output r = p(a)\n\n  p(x) where q(x)\n\n  use helper\n\n  \
                 resource other o {}\n}\n";
     assert_eq!(fmt(src), want);
     assert_eq!(fmt(want), want);
@@ -293,8 +293,8 @@ fn fmt_drops_an_empty_block() {
     let src = "use fake {}\nuse env {\n}\nuse k8s { # later\n}\n\
                component m {\n  input n: int = 1\n}\nresource m a {} where 1 == 1\nresource m b {   }\n\
                resource net.vpc v {}\n";
-    let want = "use fake\nuse env\nuse k8s { # later\n}\n\
-                component m {\n  input n: int = 1\n}\nresource m a {} where 1 == 1\nresource m b {}\n\
+    let want = "use fake\nuse env\nuse k8s { # later\n}\n\n\
+                component m {\n  input n: int = 1\n}\n\nresource m a {} where 1 == 1\nresource m b {}\n\
                 resource net.vpc v {}\n";
     assert_eq!(fmt(src), want);
     assert_eq!(fmt(want), want);
@@ -309,7 +309,7 @@ fn fmt_puns_an_entry_whose_value_is_its_name() {
     let src = "use aws { region = region, source = source }\n\
                resource net.subnet s {\n  zone = zone\n  spec.selector.color = color @default\n  \
                cidr = zone\n  tags += tags\n}\n";
-    let want = "use aws { region, source = source }\n\
+    let want = "use aws { region, source = source }\n\n\
                 resource net.subnet s { zone, spec.selector.color = color @default, cidr = zone, tags += tags }\n";
     assert_eq!(fmt(src), want);
     assert_eq!(fmt(want), want);
@@ -324,7 +324,7 @@ fn fmt_writes_out_a_bare_dotted_path() {
     let src = "use k3s { net.cidr }\n\
                resource k8s.deployment d {\n  spec.replicas\n  spec.template.metadata.labels @default\n  \
                zone\n}\n";
-    let want = "use k3s { net.cidr = cidr }\n\
+    let want = "use k3s { net.cidr = cidr }\n\n\
                 resource k8s.deployment d {\n  spec.replicas = replicas\n  \
                 spec.template.metadata.labels = labels @default\n  zone\n}\n";
     assert_eq!(fmt(src), want);
@@ -339,11 +339,11 @@ fn fmt_writes_out_a_bare_dotted_path() {
 #[test]
 fn fmt_writes_a_typed_literal_in_its_shortest_spelling() {
     let src = "use k8s\n\nresource k8s.deployment d {\n  spec.replicas = 1\n  \
-               spec.template.spec.containers = [{ name = \"a\", resources = { limits = { memory = \"2Gi\" } } }]\n}\n\
-               component c {\n  input cidr: inet\n}\nresource c a { cidr = \"10.1.0.0/16\" }\n";
+               spec.template.spec.containers = [{ name = \"a\", resources = { limits = { memory = \"2Gi\" } } }]\n}\n\n\
+               component c {\n  input cidr: inet\n}\n\nresource c a { cidr = \"10.1.0.0/16\" }\n";
     let want = "use k8s\n\nresource k8s.deployment d {\n  spec.replicas = 1\n  \
-                spec.template.spec.containers = [{ name = \"a\", resources = { limits = { memory = 2Gi } } }]\n}\n\
-                component c {\n  input cidr: inet\n}\nresource c a { cidr = \"10.1.0.0/16\" }\n";
+                spec.template.spec.containers = [{ name = \"a\", resources = { limits = { memory = 2Gi } } }]\n}\n\n\
+                component c {\n  input cidr: inet\n}\n\nresource c a { cidr = \"10.1.0.0/16\" }\n";
     let p = Scratch::project("fmt-typed");
     p.write("stacks/app.df", src);
     p.run(&["fmt", "stacks/app.df"]).success();
@@ -362,7 +362,7 @@ fn a_spread_is_spaced_as_its_literal() {
                let l = [ .. xs ,1,  ..0..3]\n\
                p(x) where doc(d), {metadata = m,  ..x} = d, m == 1\n";
     let want = "let o = { ..base, tier = \"back\", spec = { ..base.spec, replicas = 3 } }\n\
-                let l = [..xs, 1, ..0..3]\n\
+                let l = [..xs, 1, ..0..3]\n\n\
                 p(x) where doc(d), { metadata = m, ..x } = d, m == 1\n";
     assert_eq!(fmt(src), want);
     assert_eq!(fmt(want), want);
@@ -418,4 +418,20 @@ fn a_clause_fits_hangs_or_breaks_a_literal_per_line() {
         lits[..2].join(", ")
     );
     assert_eq!(fmt(&inner), inner);
+}
+
+/// Blank lines between statements are a rule: one between statements of
+/// different kinds and above a comment block, none between facts of one
+/// relation or between `set` lines, the author's between two of one kind
+/// otherwise; in a component as in a file, and the result prints back.
+#[test]
+fn blank_lines_between_statements_are_a_rule() {
+    let src = "input a: int\n\n\ninput b: int\noutput c = a\nzone(\"a\")\n\nzone(\"b\")\n\
+               region(\"x\")\nset a = 1\n\nset b = 2\n# about d\nlet d = 1\nlet e = 2\n\nlet f = 3\n\
+               component m {\n  input on: bool\n  output vpc = on\n  # the last\n}\n";
+    let want = "input a: int\n\ninput b: int\n\noutput c = a\n\nzone(\"a\")\nzone(\"b\")\n\
+                region(\"x\")\n\nset a = 1\nset b = 2\n\n# about d\nlet d = 1\nlet e = 2\n\nlet f = 3\n\n\
+                component m {\n  input on: bool\n\n  output vpc = on\n\n  # the last\n}\n";
+    assert_eq!(fmt(src), want);
+    assert_eq!(fmt(want), want);
 }

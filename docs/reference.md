@@ -4021,7 +4021,8 @@ per line whatever the width past three literals or with a comment among
 them; `{ a }` for `{ a = a }`; `==` between bound
 sides; docs/grammar.md "Formatting"), two-space indentation per open
 bracket, block or body, one space around operators and after commas,
-`{ a = 1 }` inside braces, at most one blank line, and no comma where a
+`{ a = 1 }` inside braces, at most one blank line (between statements by
+docs/grammar.md "Formatting"'s rule), and no comma where a
 newline already separates block entries. A list or a call whose only
 element is an object or a list hugs it when it breaks, `[{` .. `}]`,
 `json.encode({` .. `})`, the closers on one line. A number keeps the

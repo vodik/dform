@@ -9,6 +9,7 @@
 # To run it, from this directory: README.md.
 
 input env: enum("staging", "prod") = "staging"
+
 # List-valued inputs (human-friendly), the same in every environment.
 input tenants: list(string) = ["tenant_a", "tenant_b"]
 input mesh {
@@ -18,11 +19,13 @@ input mesh {
     { name = "core_c", net = "10.230.0.0/16" },
   ]
 }
+
 # Peering intent.
 # In staging, only tenant_a peers with shared.
 # In prod, tenant_b also peers with shared, which creates tenant->tenant reachability via shared.
 # A fact and a guarded fact (a rule): declared mixed (E 2.6).
 decl peer_intent(tenant) mixed
+
 # Declared so the check can negate it with no rows; uncomment the fact to
 # explicitly allow certain non-adjacent direct routes:
 decl mesh_allow_direct_route(from, to)
@@ -46,6 +49,7 @@ resource net.vpc "${t}" {
 } where tenant(t, i), corp_net(corp)
 
 peer_intent("tenant_a")
+
 peer_intent("tenant_b") where env == "prod"
 
 peer("shared", t) where peer_intent(t), tenant(t, _)

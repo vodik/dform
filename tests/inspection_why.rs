@@ -16,8 +16,8 @@ fn why_a_value_prints_its_chain() {
     assert_eq!(
         out,
         "db.postgres orders.backup_days = 14
-  = database.backup_days  stacks/tour.df:145
-  = 14                    stacks/tour.df:139
+  = database.backup_days  stacks/tour.df:146
+  = 14                    stacks/tour.df:140
   over 1 @default         stacks/tour.df:27
 "
     );
@@ -27,13 +27,13 @@ fn why_a_value_prints_its_chain() {
     );
     assert_eq!(
         out,
-        "net.vpc main.vpc.tags.team = \"platform\"  baseline.df:10\n"
+        "net.vpc main.vpc.tags.team = \"platform\"  baseline.df:11\n"
     );
     // A resource: its header, and each attribute's chain; never the
     // bindings of the whole rule, nor how many contributions merged.
     let out = dform(at, &["why", "orders"]);
     assert!(
-        out.starts_with("db.postgres orders  stacks/tour.df:143\n"),
+        out.starts_with("db.postgres orders  stacks/tour.df:144\n"),
         "{out}"
     );
     assert!(
@@ -65,7 +65,7 @@ fn why_a_tag_exists() {
     );
     assert!(
         out.contains(
-            "tests/fixtures/demo/baseline.df:10  set r.tags = { team = \"platform\" } where r in \
+            "tests/fixtures/demo/baseline.df:11  set r.tags = { team = \"platform\" } where r in \
              resource   (use baseline)\n"
         ),
         "{out}"
@@ -109,7 +109,7 @@ fn why_takes_a_resource_by_its_path() {
         assert_eq!(out, by_address, "{path}");
     }
     assert!(
-        by_address.starts_with("net.vpc main.vpc  network.df:19\n"),
+        by_address.starts_with("net.vpc main.vpc  network.df:22\n"),
         "{by_address}"
     );
 }
@@ -123,7 +123,7 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
     let want = dform(at, &["why", "--tree", r#"net.vpc["main.vpc"]"#]);
     assert!(
         want.starts_with(
-            "net.vpc main.vpc\n  tests/fixtures/demo/network.df:19  resource \
+            "net.vpc main.vpc\n  tests/fixtures/demo/network.df:22  resource \
              net.vpc vpc { .. }   (resource network.vpc main)\n"
         ),
         "{want}"
@@ -139,7 +139,7 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
     for arg in ["net.vpc main.vpc", "main.vpc"] {
         let want = dform(at, &["why", "--tree", arg]);
         assert!(
-            want.starts_with("net.vpc main.vpc\n  tests/fixtures/demo/network.df:19  "),
+            want.starts_with("net.vpc main.vpc\n  tests/fixtures/demo/network.df:22  "),
             "{arg}: {want}"
         );
     }
@@ -188,7 +188,7 @@ fn why_an_attribute_shows_every_contribution() {
     assert!(out.contains("  merged from 2 contributions\n"), "{out}");
     assert!(
         out.contains(
-            "tests/fixtures/demo/network.df:19  resource net.vpc vpc { .. tags = { env, \
+            "tests/fixtures/demo/network.df:22  resource net.vpc vpc { .. tags = { env, \
              component = \"network\" } }   (resource network.vpc main)\n"
         ),
         "{out}"
@@ -222,12 +222,12 @@ fn why_a_route_shows_the_statements_that_fired() {
     let start = "net.route_table blue.routes = [{destination = 10.0.0.0/16, target = net.vpc main}, {destination = 10.2.0.0/16, target = net.vpc green.vpc}]
   merged from 2 contributions
   ├─ [{destination = 10.2.0.0/16, target = net.vpc green.vpc}]
-       tests/fixtures/tour/stacks/tour.df:288  set net.route_table[a].routes = [{ destination = dest, target = net.vpc[w] }] where reaches(a, b), a != b, network_of(b, w), dest = net.vpc[w].cidr
+       tests/fixtures/tour/stacks/tour.df:290  set net.route_table[a].routes = [{ destination = dest, target = net.vpc[w] }] where reaches(a, b), a != b, network_of(b, w), dest = net.vpc[w].cidr
        with a = \"blue\", dest = 10.2.0.0/16, w = \"green.vpc\", b = \"green\"
             net.vpc[w] = net.vpc green.vpc
             net.vpc[w].cidr = 10.2.0.0/16
        ├─ reaches(\"blue\", \"green\")
-            tests/fixtures/tour/stacks/tour.df:281  reaches(a, c) where reaches(a, b), link(b, c)
+            tests/fixtures/tour/stacks/tour.df:283  reaches(a, c) where reaches(a, b), link(b, c)
 ";
     let got: String = out
         .lines()
@@ -236,7 +236,7 @@ fn why_a_route_shows_the_statements_that_fired() {
         .collect();
     assert_eq!(got.replace("  │ ", "    "), start, "{out}");
     assert!(
-        out.contains("├─ spoke(\"green\")   tests/fixtures/tour/stacks/tour.df:248\n"),
+        out.contains("├─ spoke(\"green\")   tests/fixtures/tour/stacks/tour.df:250\n"),
         "{out}"
     );
     assert!(out.contains("network[t].vpc = \"green.vpc\"\n"), "{out}");
@@ -253,7 +253,7 @@ fn why_a_settings_read_shows_the_read() {
     );
     assert!(
         out.contains(
-            "tests/fixtures/tour/stacks/tour.df:145  resource db.postgres orders { .. backup_days = \
+            "tests/fixtures/tour/stacks/tour.df:146  resource db.postgres orders { .. backup_days = \
              database.backup_days .. }\n"
         ),
         "{out}"
@@ -267,7 +267,7 @@ fn why_a_settings_read_shows_the_read() {
     );
     assert!(
         out.contains(
-            "tests/fixtures/tour/stacks/tour.df:139  set { database.backup_days = 14 .. } where \
+            "tests/fixtures/tour/stacks/tour.df:140  set { database.backup_days = 14 .. } where \
              env == \"prod\"\n"
         ),
         "{out}"
@@ -452,7 +452,7 @@ fn why_prints_a_braced_clause_on_one_line() {
     );
     assert!(
         out.contains(
-            "tests/fixtures/demo/baseline.df:15  set p.statements = [{ action = \"org.read\", \
+            "tests/fixtures/demo/baseline.df:16  set p.statements = [{ action = \"org.read\", \
              resource = \"org\" }] where env == \"prod\", p in iam.policy, p.name == \"app\"   \
              (use baseline)\n"
         ),
@@ -478,14 +478,14 @@ fn plan_why_explains_each_deformation() {
     );
     assert!(
         out.contains(
-            "  + net.subnet private-us-test-1a          stacks/tour.df:104  with z = \"us-test-1a\", n = 1
+            "  + net.subnet private-us-test-1a          stacks/tour.df:105  with z = \"us-test-1a\", n = 1
       cidr = \"10.0.1.0/24\"                 inet.subnet(main.cidr, 8, n)
-        = inet.subnet(main.cidr, 8, n)     stacks/tour.df:106  with n = 1
-      tags.team = \"shop\"                   stacks/tour.df:170
+        = inet.subnet(main.cidr, 8, n)     stacks/tour.df:107  with n = 1
+      tags.team = \"shop\"                   stacks/tour.df:171
       visibility = \"private\"
       vpc = main
       zone = \"us-test-1a\"
-        = z                                stacks/tour.df:107
+        = z                                stacks/tour.df:108
 "
         ),
         "{out}"
@@ -494,7 +494,7 @@ fn plan_why_explains_each_deformation() {
     assert!(
         out.contains(
             "        cidr = \"10.1.0.0/16\"               input blue.cidr = 10.1.0.0/16   \
-             stacks/tour.df:227\n          = cidr                           stacks/tour.df:218\n"
+             stacks/tour.df:229\n          = cidr                           stacks/tour.df:220\n"
         ),
         "{out}"
     );

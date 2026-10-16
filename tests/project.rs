@@ -8,12 +8,15 @@ use common::Scratch;
 use std::path::PathBuf;
 
 const APP: &str = r#"key env: enum("staging", "prod") = "staging"
+
 use fake
+
 resource net.vpc main { cidr = "10.0.0.0/16", tags = { env } }
 "#;
 
 const NET: &str = r#"
 use fake
+
 resource net.vpc shared { cidr = "10.9.0.0/16" }
 "#;
 

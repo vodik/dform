@@ -11,6 +11,7 @@ let next = "blue" where not has live
 migrated(release.schema) where k8s.job["migrate-v${release.schema}"].status.succeeded == 1
 
 run(live, live_image)
+
 run(next, release.image) where migrated(release.schema)
 
 ready(colour) where run(colour, _), app[colour].ready_replicas == app[colour].total_replicas
@@ -50,6 +51,7 @@ resource app "${colour}" { colour, image } where run(colour, image)
 component app {
   input colour: enum("blue", "green")
   input image: string
+
   output ready_replicas: int = deploy.status.readyReplicas
   output total_replicas: int = deploy.status.replicas
 

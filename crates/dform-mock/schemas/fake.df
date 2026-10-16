@@ -35,7 +35,6 @@ type_attr(k8s.cluster, "id", "string", ["computed", "id"])
 type_attr(k8s.nodepool, "id", "string", ["computed", "id"])
 type_attr("iam.role", "id", "string", ["computed", "id"])
 type_attr("iam.policy", "id", "string", ["computed", "id"])
-
 type_attr(net.vpc, "cidr", "string", ["force_new"])
 type_attr(net.subnet, "cidr", "string", ["force_new"])
 

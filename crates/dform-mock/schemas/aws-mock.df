@@ -209,6 +209,7 @@ type_mint("aws.iam_policy", "attachment_count", 0)
 
 # aws.s3_bucket
 type_provider("aws.s3_bucket", "aws")
+
 # A bucket name is global: the old bucket must be gone before it is reused.
 type_replace("aws.s3_bucket", "destroy_first")
 type_attr("aws.s3_bucket", "id", "string", ["computed", "id"])
@@ -248,6 +249,7 @@ type_mint("aws.db_instance", "engine", "postgres")
 type_attr("aws.db_instance", "engine_version", "string", ["optional_computed"])
 type_mint("aws.db_instance", "engine_version", "16.3")
 type_attr("aws.db_instance", "instance_class", "string", ["required"])
+
 # Whole GiB, as RDS takes it: `allocated_storage = 20Gi` (R-66).
 type_attr("aws.db_instance", "allocated_storage", "bytes(gib)", ["optional_computed"])
 type_mint("aws.db_instance", "allocated_storage", 20)

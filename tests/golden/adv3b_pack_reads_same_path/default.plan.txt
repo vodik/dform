@@ -2,5 +2,5 @@ exit: error
 -- stdout --
 -- stderr --
 error  iam.policy.statements waits on itself: a value is known only once every write to it is, so it cannot be computed
-  tests/fixtures/adversarial/packs/same_path.df:3  set p.statements = [{ action = "org.read", resource = "org" }] where p in iam.policy, arg("iam.policy", p, "statements", s), { action = "org.read", resource = "org" } not in s   (use packs.same_path)
+  tests/fixtures/adversarial/packs/same_path.df:4  set p.statements = [{ action = "org.read", resource = "org" }] where p in iam.policy, arg("iam.policy", p, "statements", s), { action = "org.read", resource = "org" } not in s   (use packs.same_path)
     iam.policy.statements from itself

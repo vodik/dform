@@ -21,12 +21,15 @@
 input env: enum("dev", "prod") = "dev"
 input region: string = "us-east1"
 input replicas: int = 2 check replicas >= 1
+
 # The database's machine and availability, per environment (below).
 input database { tier: string, availability: string }
+
 decl approve(type, address)
 
 # release("crud_api", "digest", "sha256:9f2c..."): data/releases.df.
 use data.releases
+
 # approve(t, a): accept the drift of t.a, data/approvals.df's.
 use data.approvals
 
@@ -162,6 +165,7 @@ migrated(schema) where k8s.job["migrate-v${schema}"].status.succeeded == 1
 # The serving color keeps what it runs; the rollout color runs the release,
 # once the migration has reached the release's schema.
 run(active, live_image, live_schema)
+
 run(rollout, released_image, schema) where migrated(schema)
 
 resource app blue {
@@ -203,6 +207,7 @@ component app {
   input namespace: string
   input db_secret: string
   input replicas: int
+
   # Only while the instance runs: a color with no run has no Deployment,
   # and a ref to it would dangle.
   output ready_replicas: int = n where has color, n = deploy.status.readyReplicas

@@ -152,7 +152,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     let r = gke(&s, &["plan"]).success();
     assert!(
         r.stdout
-            .contains("  undetermined  len_ge(3) of google.container_cluster gke_platform.zones  stacks/refine_gke.df:121"),
+            .contains("  undetermined  len_ge(3) of google.container_cluster gke_platform.zones  stacks/refine_gke.df:123"),
         "{}",
         r.stdout
     );
@@ -166,7 +166,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
              [\"us-east1-b\", \"us-east1-c\"] is outside the check zones.len >= 3\n"
         ) && r.stderr.contains("^ checked here\n")
             && r.stderr
-                .contains("tests/fixtures/refine/stacks/refine_gke.df:121  ")
+                .contains("tests/fixtures/refine/stacks/refine_gke.df:123  ")
             && r.stderr.contains("\n  after tick 1\n")
             && !r.stderr.contains("ctx=")
             && r.stderr

@@ -10,7 +10,9 @@ use common::Scratch;
 
 /// The type's home: a module with an input, the type in its header.
 const CONFIG: &str = r#"type environment = enum("lab", "prod")
+
 input env: environment
+
 let domain = "${env}.example.org"
 "#;
 

@@ -1,5 +1,6 @@
 #| The permissions the stack's components need: rows its `use` gives.
 input iam_need
+
 decl iam_need(role: string, action: string, resource: string)
 
 #| The app's role, and one policy of every permission. The role holds its

@@ -70,7 +70,7 @@ deny "no nodepool in zone z" {pool = n} where n in google.container_node_pool, a
     let r = gke(&s, &["extra.df"], "plan").success();
     assert!(
         r.stdout.contains(
-            "  undetermined  no nodepool in zone z                  p.df:108  1 undetermined\n    \
+            "  undetermined  no nodepool in zone z                  p.df:110  1 undetermined\n    \
              google.container_cluster gke_platform              until zones is known (tick 2)\n"
         ),
         "{}",
@@ -338,7 +338,7 @@ fn color_is_a_rendering_of_the_same_text() {
     for want in [
         "  \x1b[32m+\x1b[0m \x1b[1;32mgoogle.compute_subnetwork gke_subnet\x1b[0m  ",
         "\x1b[1mtick 1  3 changes\x1b[0m\n",
-        "  \x1b[2mstacks/gke_two_phase.df:38\x1b[0m\n",
+        "  \x1b[2mstacks/gke_two_phase.df:40\x1b[0m\n",
         "  waits on  gke_platform.ca_certificate\n",
         "      data.password = \x1b[2m(sensitive)\x1b[0m\n",
         "  \x1b[33mgoogle.container_node_pool \"np-${z}\"\x1b[0m  ",

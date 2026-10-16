@@ -3,6 +3,7 @@
 #| The peered VPCs: a relation the module takes, its rows the user's
 #| `use` gives (a module reads only what it declares).
 input vpc_peer
+
 decl vpc_peer(a: net.vpc, b: net.vpc)
 
 #| Deny if peered VPC CIDRs overlap.

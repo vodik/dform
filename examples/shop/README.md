@@ -30,11 +30,11 @@ deployment: stacks.shop[env=staging]
 plan: 12 changes (12 create) over 2 ticks; policy: 4 hold
 
 tick 1  11 changes
-  + aws.vpc main                      stacks/shop.df:7
+  + aws.vpc main                      stacks/shop.df:8
       cidr_block = "10.0.0.0/16"
       tags.team = "shop"              policy.df:5
 ...
-  + aws.subnet private-us-east-1a     stacks/shop.df:12  with n = 0
+  + aws.subnet private-us-east-1a     stacks/shop.df:13  with n = 0
       availability_zone = "us-east-1a"
       cidr_block = "10.0.0.0/24"
       tags.team = "shop"              policy.df:5
@@ -42,9 +42,9 @@ tick 1  11 changes
 ...
 tick 2  1+ changes
   waits on  orders.resource_id
-  + aws.iam_role app                  stacks/shop.df:61
+  + aws.iam_role app                  stacks/shop.df:62
 ...
-  aws.iam_policy "connect-${id}"      stacks/shop.df:42  waits on orders.resource_id
+  aws.iam_policy "connect-${id}"      stacks/shop.df:43  waits on orders.resource_id
 
 policy  4 hold
 ```
@@ -79,11 +79,11 @@ $ dform plan shop env=prod
 deployment: stacks.shop[env=prod]
 plan: 12 changes (12 create) over 2 ticks; policy: 4 hold
 ...
-  + aws.db_instance orders             stacks/shop.df:30
-      backup_retention_period = 14     stacks/shop.df:25
+  + aws.db_instance orders             stacks/shop.df:31
+      backup_retention_period = 14     stacks/shop.df:26
       identifier = "orders-prod"
-      instance_class = "db.m6g.large"  stacks/shop.df:24
-      multi_az = true                  stacks/shop.df:23
+      instance_class = "db.m6g.large"  stacks/shop.df:25
+      multi_az = true                  stacks/shop.df:24
 ...
 ```
 
@@ -93,8 +93,8 @@ plan: 12 changes (12 create) over 2 ticks; policy: 4 hold
 ```
 $ dform why orders.backup_retention_period shop env=prod
 aws.db_instance orders.backup_retention_period = 14
-  = database.backup_days  stacks/shop.df:34
-  = 14                    stacks/shop.df:25
+  = database.backup_days  stacks/shop.df:35
+  = 14                    stacks/shop.df:26
   over 1 @default         stacks/shop.df:3
 ```
 
@@ -141,7 +141,7 @@ And `why` says why something does not exist:
 ```
 $ dform why 'aws.subnet private-us-east-1d'
 aws.subnet private-us-east-1d: no rule derives it
-  stacks/shop.df:12  resource aws.subnet "private-${availability_zone}" { .. } where aws.availability_zone("available", availability_zone, n)
+  stacks/shop.df:13  resource aws.subnet "private-${availability_zone}" { .. } where aws.availability_zone("available", availability_zone, n)
     aws.availability_zone("available", "us-east-1d", n): no row
     nearest: ("us-east-1a", 0), ("us-east-1b", 1), ("us-east-1c", 2)
 ```

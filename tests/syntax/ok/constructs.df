@@ -8,11 +8,13 @@ input gke { static_ips: any }
 input seen from yaml.decode(io.read("seen.yaml"))[_].rows
 input peers from csv.decode(io.read("peers.csv"))
 input pinned from yaml.decode(io.read("git+https://github.com/acme/ops/pinned.yaml?ref=main"))
+
 decl seen(a: string, b: int)
 decl peers(env: enum("dev", "prod"), name: string)
 decl pinned(name: string)
 decl provided(a, b)
 decl project(id: int, network_name: string)
+
 # Patterns (R-58): after `in`, on the left of `=`, as an argument.
 decl labels(l)
 decl images(i)
@@ -20,6 +22,7 @@ decl p(a) mixed
 decl q(a) mixed
 
 project(1, "net-a")
+
 names(n) where project(network_name: n)
 
 label(k, v) where labels(l), (k, v) in l
@@ -27,6 +30,7 @@ host_of(h) where labels(l), { host = h } = l
 tagged(repo, tag) where images(i), (repo, tag) = str.split(i, ":", 1)
 untagged(i) where images(i), not (_, _) = str.split(i, ":", 1)
 ids(i) where project({ id = i })
+
 # Spread (R-199): a literal's fields or elements, and an object pattern's rest.
 spread(x) where labels(l), x = { ..l, team = "web", spec = { ..l.spec, replicas = 3 } }
 spread_list(x) where images(i), x = [..0..3, ..[i], 9]
@@ -40,6 +44,7 @@ use checks {
 
 component m {
   input on: bool
+
   output vpc: addr = vpc
 
   resource net.vpc vpc @default {
@@ -51,6 +56,7 @@ component m {
   } where on == true
 
   on_vpc("vpc") where on == true
+
   iam_need("app", "net.read", ref(net.vpc, "vpc", "id"))
 }
 
@@ -69,6 +75,7 @@ set { gke.static_ips = { "gke-platform-grpc" = { type = "INTERNAL" } } } where e
 set from yaml.decode(io.read("settings.yaml")) @override where env("prod")
 
 env("prod")
+
 p(x_) where
   q(x_),
   x_ == 1 + 2 * 3 - -4 / (5 % 2),
@@ -81,15 +88,23 @@ r(v) where v = gke.static_ips."gke-platform-grpc".type
 s(v) where q(x_), o = { a = { b = x_ } }, v = o.a.b
 t(l) where l = [ x_ | q(x_) ], 1 in l, 2 not in l
 u(a_) where ref(net.vpc, "main.vpc", "id") = a_
+
 adopt(net.vpc["main.vpc"], "vpc-123")
 moved(net.vpc, "old.vpc", net.vpc["main.vpc"])
 lifecycle(net.vpc["main.vpc"], "prevent_destroy")
 ignore_changes(net.vpc["main.vpc"], "tags.owner")
+
 counts(n_) where n_ = count(x_), q(x_)
+
 deny "q must not be empty" where not q(1)
+
 v("input", "output", "settings", "type") where input("env", _), output("k", _)
+
 p(5)
 q(2)
+
 w(v) where v = main.vpc, checks.listed("main")
+
 vpc_inst("main")
+
 x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)

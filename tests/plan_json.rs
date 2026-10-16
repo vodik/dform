@@ -302,8 +302,8 @@ fn plan_json_why_explains_each_change() {
     assert_eq!(
         cidr["chain"],
         json!([
-            {"expr": "gke.subnet_cidr", "at": "stacks/gke_two_phase.df:43"},
-            {"expr": "\"10.141.76.0/22\"", "at": "stacks/gke_two_phase.df:28"},
+            {"expr": "gke.subnet_cidr", "at": "stacks/gke_two_phase.df:45"},
+            {"expr": "\"10.141.76.0/22\"", "at": "stacks/gke_two_phase.df:30"},
         ]),
         "{subnet}"
     );
@@ -320,7 +320,7 @@ fn plan_json_why_explains_each_change() {
     let subnet = &p["ticks"][0]["changes"][0];
     assert!(subnet["changes"][0].get("chain").is_none(), "{subnet}");
     assert_eq!(
-        subnet["site"]["at"], "stacks/gke_two_phase.df:38",
+        subnet["site"]["at"], "stacks/gke_two_phase.df:40",
         "{subnet}"
     );
     assert_eq!(

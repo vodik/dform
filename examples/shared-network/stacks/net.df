@@ -1,8 +1,10 @@
 key env: enum("staging", "prod") = "staging"
 input supernet: inet
+
 use aws { region = "us-east-1", expect_account = "123456789012" }
 
 let net = toml.decode(io.read("data/networks.toml"))
+
 set from yaml.decode(io.read("config/net/${env}.yaml"))
 
 resource network "${s.team}" {
@@ -13,6 +15,7 @@ resource network "${s.team}" {
 component network {
   input team: string
   input cidr: inet
+
   output vpc: aws.vpc = vpc
 
   resource aws.vpc vpc { cidr_block = cidr, tags = { Name = team, team } }
@@ -27,6 +30,7 @@ component network {
 resource aws.vpc core { cidr_block = inet.subnet(supernet, 4, 0), tags = { Name = "core" } }
 
 hub(core)
+
 spoke(vpc) where s in net.spokes, vpc in aws.vpc, vpc == network[s.team].vpc
 link(from, to) where hub(from), spoke(to)
 

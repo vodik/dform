@@ -28,13 +28,13 @@ $ dform plan
 plan: 2 changes (2 create) over 2 ticks; policy: 2 undetermined
 
 tick 1  2 changes
-  + k8s.namespace shop   stacks/api.df:29
+  + k8s.namespace shop   stacks/api.df:30
       metadata.name = "shop"
-  + k8s.job migrate-v42  stacks/api.df:32
+  + k8s.job migrate-v42  stacks/api.df:33
 ...
 tick 2  ? changes
   waits on  migrate-v42.status.succeeded
-  k8s.service api        stacks/api.df:21  if serving(_)
+  k8s.service api        stacks/api.df:22  if serving(_)
 ...
 ```
 

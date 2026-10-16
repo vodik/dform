@@ -8,11 +8,13 @@
 #| owner: platform
 key env: environment = "staging"
 input cidrs { main: inet = "10.50.0.0/16", peer: inet = "10.60.0.0/16" }
+
 data("zone", "us-test-1a")
 data("zone", "us-test-1b")
 
 # A fact with a condition: it holds in prod only.
 iam_need("app", "audit.write", "audit-log") where env == "prod"
+
 # A component's need is its output, wired here.
 iam_need("app", n.action, n.resource) where n = database.iam_need
 iam_need("app", n.action, n.resource) where n = kubernetes.iam_need
@@ -36,6 +38,7 @@ set {
 # account, so identity's fixed names do not collide.
 
 use fake
+
 #| The environments: an alias, the enum wherever it is written.
 type environment = enum("dev", "staging", "prod")
 

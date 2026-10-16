@@ -20,7 +20,7 @@ exit: ok
       ],
       "reason": "reads undetermined aggregate zone_count",
       "site": {
-        "at": "stacks/gke_two_phase.df:100",
+        "at": "stacks/gke_two_phase.df:102",
         "statement": "deny \"cluster must be in at least two zones\" { cluster = \"gke_platform\" } where \"gke_platform\" in google.container_cluster, zone_count(n), n < 2"
       },
       "status": "undetermined"
@@ -30,7 +30,7 @@ exit: ok
   "outcome": "done",
   "policy": [
     {
-      "at": "stacks/gke_two_phase.df:100",
+      "at": "stacks/gke_two_phase.df:102",
       "fails": [],
       "hold": 0,
       "holds": [],
@@ -44,7 +44,7 @@ exit: ok
       ]
     },
     {
-      "at": "stacks/gke_two_phase.df:106",
+      "at": "stacks/gke_two_phase.df:108",
       "fails": [],
       "hold": 1,
       "holds": [
@@ -55,7 +55,7 @@ exit: ok
       "undetermined": []
     },
     {
-      "at": "stacks/gke_two_phase.df:13",
+      "at": "stacks/gke_two_phase.df:14",
       "fails": [],
       "hold": 1,
       "holds": [],
@@ -94,7 +94,7 @@ exit: ok
               "op": "set",
               "path": "ip_cidr_range",
               "site": {
-                "at": "stacks/gke_two_phase.df:28",
+                "at": "stacks/gke_two_phase.df:30",
                 "entry": "gke = { control_plane_cidr = \"172.16.3.96/28\", subnet_cidr = \"10.141.76.0/22\" }",
                 "statement": "set { .. gke = { control_plane_cidr = \"172.16.3.96/28\", subnet_cidr = \"10.141.76.0/22\" } } where env == \"dev\""
               }
@@ -105,7 +105,7 @@ exit: ok
               "op": "set",
               "path": "name",
               "site": {
-                "at": "stacks/gke_two_phase.df:42",
+                "at": "stacks/gke_two_phase.df:44",
                 "entry": "name = \"${name}-gke-subnet\"",
                 "statement": "resource google.compute_subnetwork gke_subnet { .. name = \"${name}-gke-subnet\" .. } where project(id, name, region, net_id)",
                 "with": [
@@ -122,7 +122,7 @@ exit: ok
               "op": "set",
               "path": "network",
               "site": {
-                "at": "stacks/gke_two_phase.df:41",
+                "at": "stacks/gke_two_phase.df:43",
                 "entry": "network = net_id",
                 "statement": "resource google.compute_subnetwork gke_subnet { .. network = net_id .. } where project(id, name, region, net_id)",
                 "with": [
@@ -139,7 +139,7 @@ exit: ok
               "op": "set",
               "path": "project",
               "site": {
-                "at": "stacks/gke_two_phase.df:39",
+                "at": "stacks/gke_two_phase.df:41",
                 "entry": "project = id",
                 "statement": "resource google.compute_subnetwork gke_subnet { project = id .. } where project(id, name, region, net_id)",
                 "with": [
@@ -156,7 +156,7 @@ exit: ok
               "op": "set",
               "path": "region",
               "site": {
-                "at": "stacks/gke_two_phase.df:40",
+                "at": "stacks/gke_two_phase.df:42",
                 "entry": "region",
                 "statement": "resource google.compute_subnetwork gke_subnet { .. region .. } where project(id, name, region, net_id)",
                 "with": [
@@ -171,7 +171,7 @@ exit: ok
           "kind": "create",
           "name": "gke_subnet",
           "site": {
-            "at": "stacks/gke_two_phase.df:38",
+            "at": "stacks/gke_two_phase.df:40",
             "statement": "resource google.compute_subnetwork gke_subnet { .. } where project(id, name, region, net_id)",
             "with": [
               "id = \"platform-dev-973682\"",
@@ -192,7 +192,7 @@ exit: ok
               "op": "set",
               "path": "deletion_protection",
               "site": {
-                "at": "stacks/gke_two_phase.df:62",
+                "at": "stacks/gke_two_phase.df:64",
                 "entry": "deletion_protection = true",
                 "statement": "resource google.container_cluster gke_platform { .. deletion_protection = true } where project(id, name, _, net_id)",
                 "with": [
@@ -219,7 +219,7 @@ exit: ok
               "op": "set",
               "path": "master_control_plane_cidr",
               "site": {
-                "at": "stacks/gke_two_phase.df:28",
+                "at": "stacks/gke_two_phase.df:30",
                 "entry": "gke = { control_plane_cidr = \"172.16.3.96/28\", subnet_cidr = \"10.141.76.0/22\" }",
                 "statement": "set { .. gke = { control_plane_cidr = \"172.16.3.96/28\", subnet_cidr = \"10.141.76.0/22\" } } where env == \"dev\""
               }
@@ -230,7 +230,7 @@ exit: ok
               "op": "set",
               "path": "name",
               "site": {
-                "at": "stacks/gke_two_phase.df:57",
+                "at": "stacks/gke_two_phase.df:59",
                 "entry": "name = \"${name}-gke\"",
                 "statement": "resource google.container_cluster gke_platform { .. name = \"${name}-gke\" .. } where project(id, name, _, net_id)",
                 "with": [
@@ -246,7 +246,7 @@ exit: ok
               "op": "set",
               "path": "network_id",
               "site": {
-                "at": "stacks/gke_two_phase.df:58",
+                "at": "stacks/gke_two_phase.df:60",
                 "entry": "network_id = net_id",
                 "statement": "resource google.container_cluster gke_platform { .. network_id = net_id .. } where project(id, name, _, net_id)",
                 "with": [
@@ -262,7 +262,7 @@ exit: ok
               "op": "set",
               "path": "node_locations[0]",
               "site": {
-                "at": "stacks/gke_two_phase.df:61",
+                "at": "stacks/gke_two_phase.df:63",
                 "entry": "node_locations = [ z | zone_at(i, z), i <= zones ]",
                 "statement": "resource google.container_cluster gke_platform { .. node_locations = [ z | zone_at(i, z), i <= zones ] .. } where project(id, name, _, net_id)",
                 "with": [
@@ -278,7 +278,7 @@ exit: ok
               "op": "set",
               "path": "node_locations[1]",
               "site": {
-                "at": "stacks/gke_two_phase.df:61",
+                "at": "stacks/gke_two_phase.df:63",
                 "entry": "node_locations = [ z | zone_at(i, z), i <= zones ]",
                 "statement": "resource google.container_cluster gke_platform { .. node_locations = [ z | zone_at(i, z), i <= zones ] .. } where project(id, name, _, net_id)",
                 "with": [
@@ -294,7 +294,7 @@ exit: ok
               "op": "set",
               "path": "project_id",
               "site": {
-                "at": "stacks/gke_two_phase.df:56",
+                "at": "stacks/gke_two_phase.df:58",
                 "entry": "project_id = id",
                 "statement": "resource google.container_cluster gke_platform { .. project_id = id .. } where project(id, name, _, net_id)",
                 "with": [
@@ -313,7 +313,7 @@ exit: ok
               "op": "set",
               "path": "subnetwork",
               "site": {
-                "at": "stacks/gke_two_phase.df:59",
+                "at": "stacks/gke_two_phase.df:61",
                 "entry": "subnetwork = gke_subnet",
                 "statement": "resource google.container_cluster gke_platform { .. subnetwork = gke_subnet .. } where project(id, name, _, net_id)",
                 "with": [
@@ -327,7 +327,7 @@ exit: ok
           "kind": "create",
           "name": "gke_platform",
           "site": {
-            "at": "stacks/gke_two_phase.df:54",
+            "at": "stacks/gke_two_phase.df:56",
             "statement": "resource google.container_cluster gke_platform { .. } where project(id, name, _, net_id)",
             "with": [
               "id = \"platform-dev-973682\"",
@@ -347,7 +347,7 @@ exit: ok
               "op": "set",
               "path": "name",
               "site": {
-                "at": "stacks/gke_two_phase.df:50",
+                "at": "stacks/gke_two_phase.df:52",
                 "entry": "name = \"gke-platform-grpc\"",
                 "statement": "resource google.compute_address static_ip { .. name = \"gke-platform-grpc\" .. } where project(id, _, region, _)",
                 "with": [
@@ -362,7 +362,7 @@ exit: ok
               "op": "set",
               "path": "project",
               "site": {
-                "at": "stacks/gke_two_phase.df:48",
+                "at": "stacks/gke_two_phase.df:50",
                 "entry": "project = id",
                 "statement": "resource google.compute_address static_ip { project = id .. } where project(id, _, region, _)",
                 "with": [
@@ -377,7 +377,7 @@ exit: ok
               "op": "set",
               "path": "region",
               "site": {
-                "at": "stacks/gke_two_phase.df:49",
+                "at": "stacks/gke_two_phase.df:51",
                 "entry": "region",
                 "statement": "resource google.compute_address static_ip { .. region .. } where project(id, _, region, _)",
                 "with": [
@@ -395,7 +395,7 @@ exit: ok
               "op": "set",
               "path": "subnetwork",
               "site": {
-                "at": "stacks/gke_two_phase.df:51",
+                "at": "stacks/gke_two_phase.df:53",
                 "entry": "subnetwork = gke_subnet",
                 "statement": "resource google.compute_address static_ip { .. subnetwork = gke_subnet } where project(id, _, region, _)",
                 "with": [
@@ -408,7 +408,7 @@ exit: ok
           "kind": "create",
           "name": "static_ip",
           "site": {
-            "at": "stacks/gke_two_phase.df:47",
+            "at": "stacks/gke_two_phase.df:49",
             "statement": "resource google.compute_address static_ip { .. } where project(id, _, region, _)",
             "with": [
               "id = \"platform-dev-973682\"",
@@ -436,7 +436,7 @@ exit: ok
               "op": "set",
               "path": "metadata.namespace",
               "site": {
-                "at": "stacks/gke_two_phase.df:78",
+                "at": "stacks/gke_two_phase.df:80",
                 "entry": "metadata.namespace = ns",
                 "statement": "resource k8s.deployment api { metadata.namespace = ns .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
@@ -450,7 +450,7 @@ exit: ok
               "op": "set",
               "path": "spec.replicas",
               "site": {
-                "at": "stacks/gke_two_phase.df:79",
+                "at": "stacks/gke_two_phase.df:81",
                 "entry": "spec.replicas = 3",
                 "statement": "resource k8s.deployment api { .. spec.replicas = 3 .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
@@ -464,7 +464,7 @@ exit: ok
               "op": "set",
               "path": "spec.selector.matchLabels.app",
               "site": {
-                "at": "stacks/gke_two_phase.df:80",
+                "at": "stacks/gke_two_phase.df:82",
                 "entry": "spec.selector.matchLabels = { app = \"api\" }",
                 "statement": "resource k8s.deployment api { .. spec.selector.matchLabels = { app = \"api\" } .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
@@ -478,7 +478,7 @@ exit: ok
               "op": "set",
               "path": "spec.template.metadata.labels.app",
               "site": {
-                "at": "stacks/gke_two_phase.df:81",
+                "at": "stacks/gke_two_phase.df:83",
                 "entry": "spec.template.metadata.labels = { app = \"api\" }",
                 "statement": "resource k8s.deployment api { .. spec.template.metadata.labels = { app = \"api\" } .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
@@ -492,7 +492,7 @@ exit: ok
               "op": "set",
               "path": "spec.template.spec.containers[name=api].image",
               "site": {
-                "at": "stacks/gke_two_phase.df:82",
+                "at": "stacks/gke_two_phase.df:84",
                 "entry": "spec.template.spec.containers = [{ name = \"api\", image = \"gcr.io/platform/api:1.42\" }]",
                 "statement": "resource k8s.deployment api { .. spec.template.spec.containers = [{ name = \"api\", image = \"gcr.io/platform/api:1.42\" }] } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
@@ -506,7 +506,7 @@ exit: ok
               "op": "set",
               "path": "spec.template.spec.containers[name=api].name",
               "site": {
-                "at": "stacks/gke_two_phase.df:82",
+                "at": "stacks/gke_two_phase.df:84",
                 "entry": "spec.template.spec.containers = [{ name = \"api\", image = \"gcr.io/platform/api:1.42\" }]",
                 "statement": "resource k8s.deployment api { .. spec.template.spec.containers = [{ name = \"api\", image = \"gcr.io/platform/api:1.42\" }] } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
@@ -518,7 +518,7 @@ exit: ok
           "kind": "create",
           "name": "api",
           "site": {
-            "at": "stacks/gke_two_phase.df:77",
+            "at": "stacks/gke_two_phase.df:79",
             "statement": "resource k8s.deployment api { .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
             "with": [
               "ns = \"gke-platform\""
@@ -536,7 +536,7 @@ exit: ok
               "op": "set",
               "path": "metadata.name",
               "site": {
-                "at": "stacks/gke_two_phase.df:74",
+                "at": "stacks/gke_two_phase.df:76",
                 "entry": "metadata.name = \"gke-platform\"",
                 "statement": "k8s.namespace gke_platform.metadata = {name = \"gke-platform\"}"
               }
@@ -545,7 +545,7 @@ exit: ok
           "kind": "create",
           "name": "gke_platform",
           "site": {
-            "at": "stacks/gke_two_phase.df:74",
+            "at": "stacks/gke_two_phase.df:76",
             "statement": "k8s.namespace gke_platform"
           },
           "type": "k8s.namespace"
@@ -562,7 +562,7 @@ exit: ok
               "op": "set",
               "path": "data.password",
               "site": {
-                "at": "stacks/gke_two_phase.df:87",
+                "at": "stacks/gke_two_phase.df:89",
                 "entry": "data = { password = google.secret_manager_secret_version[\"db_pw\"].secret_data }",
                 "statement": "resource k8s.secret db_credentials { .. data = { password = google.secret_manager_secret_version[\"db_pw\"].secret_data } } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
@@ -576,7 +576,7 @@ exit: ok
               "op": "set",
               "path": "metadata.namespace",
               "site": {
-                "at": "stacks/gke_two_phase.df:86",
+                "at": "stacks/gke_two_phase.df:88",
                 "entry": "metadata.namespace = ns",
                 "statement": "resource k8s.secret db_credentials { metadata.namespace = ns .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
                 "with": [
@@ -588,7 +588,7 @@ exit: ok
           "kind": "create",
           "name": "db_credentials",
           "site": {
-            "at": "stacks/gke_two_phase.df:85",
+            "at": "stacks/gke_two_phase.df:87",
             "statement": "resource k8s.secret db_credentials { .. } where ns = k8s.namespace[\"gke_platform\"].metadata.name",
             "with": [
               "ns = \"gke-platform\""
@@ -613,7 +613,7 @@ exit: ok
           "reads": null,
           "reason": "member/2 over a null list",
           "site": {
-            "at": "stacks/gke_two_phase.df:91",
+            "at": "stacks/gke_two_phase.df:93",
             "statement": "resource google.container_node_pool \"np-${z}\" { .. } where z in google.container_cluster[\"gke_platform\"].zones"
           }
         }

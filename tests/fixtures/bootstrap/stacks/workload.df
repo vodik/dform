@@ -15,12 +15,14 @@
 #     --digest sha256:... --stack workload --approver alice --format fact >> data/approvals.df
 
 input env: enum("dev", "prod") = "dev"
+
 decl approve(type, address)
 decl approval(token)
 
 # The release to run, `releases.release(image)`; a change to the file is
 # an input event, as to any program file.
 use data.releases
+
 # `approve(t, a)`: accept the drift of t.a, correcting it; `approval(token)`:
 # a signed approval of a plan's digest.
 use data.approvals

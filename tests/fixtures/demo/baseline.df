@@ -2,6 +2,7 @@
 # audit sinks (config/dform/prod.yaml's `baseline.audit`), no public db.
 input env: enum("dev", "staging", "prod")
 input audit { enabled: bool = false, sinks: list(string) = ["s3"] }
+
 # Lattices for paths several authors contribute to. Object paths such as
 # `tags` are maps by default; a list is one value unless declared a set.
 type_lattice(iam.policy, "statements", "set")

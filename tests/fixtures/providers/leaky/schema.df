@@ -18,6 +18,5 @@ type_provider(leaky.oops, "fakecloud")
 type_attr(leaky.vault, "id", "string", ["computed", "id"])
 type_attr(leaky.vault, "password", "string", ["sensitive"])
 type_attr(leaky.vault, "backup", "string", ["sensitive"]) # a second place a secret may go
-
 type_attr(leaky.oops, "id", "string", ["computed", "id"])
 type_attr(leaky.oops, "password", "string", [])

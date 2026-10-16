@@ -2,7 +2,8 @@
 //! [`normal`]) from its lossless tree, in its layout ([`layout`], R-52):
 //! what fits in [`WIDTH`] columns on one line, what does not broken from
 //! the outside in. The author's line breaks are not kept, their blank
-//! lines (at most one in a row) and comments are. In a project, a literal
+//! lines (at most one in a row; between statements by a rule) and
+//! comments are. In a project, a literal
 //! in a typed position is in its shortest spelling ([`typed`]). A file
 //! already in this form prints back byte for byte.
 
@@ -234,7 +235,7 @@ mod tests {
     fn spaces_and_indentation_are_normalised() {
         assert_eq!(
             fmt("p( a ,b )where q(x),x>1\nresource  net.vpc  main{cidr=\"x\",tags={a = 1}}\n"),
-            "p(a, b) where q(x), x > 1\nresource net.vpc main { cidr = \"x\", tags = { a = 1 } }\n"
+            "p(a, b) where q(x), x > 1\n\nresource net.vpc main { cidr = \"x\", tags = { a = 1 } }\n"
         );
         assert_eq!(
             fmt("component m {\np(x) where q(x)\n}\n"),
@@ -269,7 +270,7 @@ mod tests {
             fmt(
                 "resource t n {\nf = x\n} where\n  a(x),\n  b(x),\ndeny \"m\" { x } where\n a(x),\n not b(x)\n"
             ),
-            "resource t n { f = x } where a(x), b(x)\ndeny \"m\" { x } where a(x), not b(x)\n"
+            "resource t n { f = x } where a(x), b(x)\n\ndeny \"m\" { x } where a(x), not b(x)\n"
         );
         let long = "p(x) where\n  q(x, \"a rather long string that fills the line\"),\n  \
                     r(x, \"and another one that runs past its end\"),\n";
@@ -313,7 +314,7 @@ mod tests {
         );
         assert_eq!(
             fmt("component m {\n  input n: int = 1\n}\nf(\"k\", {\n  a = 1\n})\n"),
-            "component m {\n  input n: int = 1\n}\nf(\"k\", { a = 1 })\n"
+            "component m {\n  input n: int = 1\n}\n\nf(\"k\", { a = 1 })\n"
         );
     }
 
@@ -455,7 +456,7 @@ mod tests {
         assert_eq!(fmt(src), src);
         let src = "p(x) where\n  q(x), # why\n  r(x),\n";
         assert_eq!(fmt(src), src);
-        let src = "use k8s { # later\n}\np(x) where q(x) # a rule\n# the end\n";
+        let src = "use k8s { # later\n}\n\np(x) where q(x) # a rule\n\n# the end\n";
         assert_eq!(fmt(src), src);
     }
 

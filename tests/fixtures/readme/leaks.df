@@ -5,4 +5,5 @@ use aws { region = "us-east-1" }
 let pw = random.password("db")
 
 deny "short password" where pw.len < 12 # E0301: inspecting it leaks it
+
 resource aws.iam_user "u-${pw}" { name = "x" } # E0305: addresses are printed

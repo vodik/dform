@@ -46,6 +46,7 @@ extern_decl("google.client_config", "+project, -access_token: secret(string)")
 type_attr(google.secret_manager_secret_version, "secret_data", "string", ["computed", "sensitive"])
 
 type_mint("google.container_cluster", "endpoint", "https://{name}.gke.fake")
+
 # The zones a cluster lands in are the node locations it was configured with.
 type_mint("google.container_cluster", "zones", "{doc:node_locations}")
 

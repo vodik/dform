@@ -1,6 +1,7 @@
 # gke_platform.df, direction E. The platform stack for one GCP project per environment.
 
 input env: enum("dev", "stg", "prod") = "dev"
+
 decl peering(env: symbol, name: string, peer_network: string)
 
 use google { source = "registry.dform.dev/google", version = ">=6" }

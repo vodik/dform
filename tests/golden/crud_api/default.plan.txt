@@ -3,10 +3,10 @@ exit: ok
 plan: 8 changes (8 create) over 2 ticks; policy: 5 hold · 8 undetermined
 
 tick 1  8 changes
-  + google.compute_network vpc       stacks/crud_api.df:75
+  + google.compute_network vpc       stacks/crud_api.df:78
       auto_create_subnetworks = false
       name = "shop-dev"
-  + google.sql_database_instance db  stacks/crud_api.df:77
+  + google.sql_database_instance db  stacks/crud_api.df:80
       database_version = "POSTGRES_16"
       deletion_protection = true
       name = "crud-api-dev"
@@ -17,22 +17,22 @@ tick 1  8 changes
         backup_configuration = { enabled = true, point_in_time_recovery_enabled = true },
         ip_configuration = { ipv4_enabled = false, private_network = vpc },
       }
-  + google.sql_user crud_user        stacks/crud_api.df:92
+  + google.sql_user crud_user        stacks/crud_api.df:95
       instance = "crud-api-dev"
       name = "crud_api"
       password = (sensitive)
-  + k8s.namespace shop               stacks/crud_api.df:102
+  + k8s.namespace shop               stacks/crud_api.df:105
       metadata.labels."pod-security.kubernetes.io/enforce" = "restricted"
       metadata.name = "shop"
-  + k8s.network_policy default_deny  stacks/crud_api.df:107
+  + k8s.network_policy default_deny  stacks/crud_api.df:110
       metadata.name = "default-deny"
       metadata.namespace = "shop"
       spec.podSelector = {}
       spec.policyTypes = ["Ingress", "Egress"]
-  + google.sql_database crud_db      stacks/crud_api.df:90
+  + google.sql_database crud_db      stacks/crud_api.df:93
       instance = "crud-api-dev"
       name = "crud_api"
-  + k8s.secret db_conn               stacks/crud_api.df:120
+  + k8s.secret db_conn               stacks/crud_api.df:123
       metadata = { name = "crud-api-db", namespace = "shop" }
       stringData = {
         PGHOST = db.private_ip_address,
@@ -40,7 +40,7 @@ tick 1  8 changes
         PGDATABASE = (sensitive),
         PGPASSWORD = (sensitive),
       }
-  + k8s.job migrate-v42              stacks/crud_api.df:134
+  + k8s.job migrate-v42              stacks/crud_api.df:137
       metadata.labels = { app = "crud-api", schema = "42" }
       metadata.name = "crud-api-migrate-v42"
       metadata.namespace = "shop"
@@ -71,23 +71,23 @@ tick 2  ? changes
     k8s.horizontal_pod_autoscaler green.hpa
     k8s.pod_disruption_budget green.pdb
     k8s.network_policy green.allow_http
-  k8s.service api                    stacks/crud_api.df:193  if serving(_)
+  k8s.service api                    stacks/crud_api.df:197  if serving(_)
 
 policy  5 hold · 8 undetermined
-  undetermined  a rollout runs a schema the migration has not reached  stacks/crud_api.df:270
+  undetermined  a rollout runs a schema the migration has not reached  stacks/crud_api.df:275
     k8s.job migrate-v42                            until status.succeeded is known (tick 2)
-  undetermined  container memory limit above 2Gi   stacks/crud_api.df:298  1 undetermined
+  undetermined  container memory limit above 2Gi   stacks/crud_api.df:303  1 undetermined
     k8s.job migrate-v42                            until status.succeeded is known (tick 2)
-  undetermined  container requests more memory than its limit  stacks/crud_api.df:301
+  undetermined  container requests more memory than its limit  stacks/crud_api.df:306
     k8s.job migrate-v42                            until status.succeeded is known (tick 2)
-  undetermined  container without resource limits  stacks/crud_api.df:291  1 undetermined
+  undetermined  container without resource limits  stacks/crud_api.df:296  1 undetermined
     k8s.job migrate-v42                            until status.succeeded is known (tick 2)
-  undetermined  cutover to a color with unready pods  stacks/crud_api.df:273  1 undetermined
+  undetermined  cutover to a color with unready pods  stacks/crud_api.df:278  1 undetermined
     k8s.job migrate-v42                            until status.succeeded is known (tick 2)
-  undetermined  image not pinned by digest         stacks/crud_api.df:304  1 undetermined
+  undetermined  image not pinned by digest         stacks/crud_api.df:309  1 undetermined
     k8s.job migrate-v42                            until status.succeeded is known (tick 2)
-  undetermined  migration failed; the rollout is held  stacks/crud_api.df:267  1 undetermined
+  undetermined  migration failed; the rollout is held  stacks/crud_api.df:272  1 undetermined
     k8s.job migrate-v42                            until status.conditions is known (tick 2)
-  undetermined  plaintext secret in env            stacks/crud_api.df:315  1 undetermined
+  undetermined  plaintext secret in env            stacks/crud_api.df:320  1 undetermined
     k8s.job migrate-v42                            until status.succeeded is known (tick 2)
 -- stderr --

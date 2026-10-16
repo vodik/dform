@@ -11,10 +11,12 @@ use common::Scratch;
 fn a_backslash_at_a_line_end_joins_the_lines() {
     let s = Scratch::project("strings-join");
     let src = "input name: string = \"web\"\n\
+               \n\
                output one = \"a \\\n  b\"\n\
                output hole = \"${name}-\\\n${name}\"\n\
                output crlf = \"x\\\r\ny\"\n\
                output script = str.dedent(\n  \"\n  echo \\\n    ${name}\n\",\n)\n\
+               \n\
                use fake\n";
     s.write("main.df", src);
     let r = s

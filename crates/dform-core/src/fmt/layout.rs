@@ -2,8 +2,9 @@
 //! [`WIDTH`] columns. What fits on its line is on one line, however the
 //! author broke it; what does not breaks from the outside in, its
 //! outermost bracket first, one element per line. The author's line
-//! breaks are not kept; their blank lines between statements, entries and
-//! elements are, and so are their comments, where they were written.
+//! breaks are not kept; their blank lines between entries and elements
+//! are, and so are their comments, where they were written; between
+//! statements a blank line is a rule ([`blank_between`]).
 //!
 //! The groups:
 //! - a list, an object, an argument list, a tuple, an object type and a
@@ -338,22 +339,53 @@ pub fn layout(root: &SyntaxNode) -> Doc {
     let mut l = Layout {
         c: Comments::of(root),
     };
-    let mut v = Vec::new();
-    for (i, s) in root.children().enumerate() {
-        let it = l.item_node(&s);
-        if i > 0 {
-            v.push(hard(it.blank_above()));
-        }
-        v.extend(it.docs(nil()));
-    }
+    let mut v = l.statements(root.children());
     let eof = std::mem::take(&mut l.c.eof);
-    for c in eof {
+    for (i, c) in eof.into_iter().enumerate() {
         if !v.is_empty() {
-            v.push(hard(c.blank));
+            v.push(hard(i == 0 || c.blank));
         }
         v.push(text(c.text));
     }
     concat(v)
+}
+
+/// The blank line rule between a file's or a component's statements: an
+/// empty line between statements of different kinds (a fact and a rule
+/// are two) and above a comment block; none between consecutive facts of
+/// one relation or consecutive `set` lines (a braced `set { }` is a block
+/// of its own); else as the author wrote it (`blank`).
+fn blank_between(prev: &SyntaxNode, next: &SyntaxNode, it: &Item) -> bool {
+    if !it.leading.is_empty() || stmt_kind(prev) != stmt_kind(next) {
+        return true;
+    }
+    let grouped = match next.kind() {
+        SET => set_line(prev) && set_line(next),
+        FACT => fact_relation(prev) == fact_relation(next),
+        _ => false,
+    };
+    !grouped && it.blank
+}
+
+/// A statement's kind as its reader sees it: `input k`, `key k` and
+/// `input r from ..` are inputs.
+fn stmt_kind(n: &SyntaxNode) -> SyntaxKind {
+    match n.kind() {
+        INPUT_RELATION => INPUT,
+        k => k,
+    }
+}
+
+/// A `set` of one target, not a braced block of them.
+fn set_line(n: &SyntaxNode) -> bool {
+    n.children().all(|c| c.kind() != BLOCK)
+}
+
+/// The relation a fact is a row of.
+fn fact_relation(n: &SyntaxNode) -> Option<String> {
+    let call = n.children().find(|c| c.kind() == CALL)?;
+    let chain = call.children().find(|c| c.kind() == CHAIN)?;
+    Some(chain.text().to_string())
 }
 
 impl Layout {
@@ -400,6 +432,22 @@ impl Layout {
             doc,
             trailing,
         }
+    }
+
+    /// Statements, one per line, an empty line between two by
+    /// [`blank_between`].
+    fn statements(&mut self, nodes: impl IntoIterator<Item = SyntaxNode>) -> Vec<Doc> {
+        let mut v = Vec::new();
+        let mut prev: Option<SyntaxNode> = None;
+        for n in nodes {
+            let it = self.item_node(&n);
+            if let Some(p) = &prev {
+                v.push(hard(blank_between(p, &n, &it)));
+            }
+            v.extend(it.docs(nil()));
+            prev = Some(n);
+        }
+        v
     }
 
     fn item_node(&mut self, n: &SyntaxNode) -> Item {
@@ -736,24 +784,25 @@ impl Layout {
             unreachable!("a statement block is braced")
         };
         let open = self.tok(o);
-        let items: Vec<Item> = elems[1..elems.len() - 1]
-            .iter()
-            .filter_map(|e| e.as_node().cloned())
-            .map(|n| self.item_node(&n))
-            .collect();
+        let stmts = self.statements(
+            elems[1..elems.len() - 1]
+                .iter()
+                .filter_map(|e| e.as_node().cloned()),
+        );
         let dangling = self.take_leading(c);
         let close = self.tok(c);
-        if items.is_empty() && dangling.is_empty() {
+        if stmts.is_empty() && dangling.is_empty() {
             return concat(vec![open, close]);
         }
-        let n = items.len();
+        let any = !stmts.is_empty();
         let mut inner = Vec::new();
-        for (i, it) in items.into_iter().enumerate() {
-            inner.push(hard(i > 0 && it.blank_above()));
-            inner.extend(it.docs(nil()));
+        if any {
+            inner.push(hard(false));
+            inner.extend(stmts);
         }
-        for c in dangling {
-            inner.push(hard(c.blank && n > 0));
+        // A comment block below the last statement has an empty line above.
+        for (i, c) in dangling.into_iter().enumerate() {
+            inner.push(hard(any && (i == 0 || c.blank)));
             inner.push(text(c.text));
         }
         concat(vec![open, indent(concat(inner)), hard(false), close])

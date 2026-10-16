@@ -50,18 +50,18 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     assert!(text.contains("winning rank: normal"), "{text}");
     // Every contribution: the module's, and the policy pack's.
     assert!(
-        text.contains("network.df:19:42, resource network.vpc main"),
+        text.contains("network.df:22:42, resource network.vpc main"),
         "{text}"
     );
-    assert!(text.contains("baseline.df:10:1, use baseline"), "{text}");
+    assert!(text.contains("baseline.df:11:1, use baseline"), "{text}");
     // The derivation as `dform why` prints it (R-150: the same entry):
     // each value's chain.
     assert!(
         text.contains(
             "net.vpc main.vpc.tags = { env = \"staging\", component = \"network\" }\n  \
-             = { env, component = \"network\" }       network.df:19\n  \
-             = env                                  stacks/dform.df:51\n\
-             net.vpc main.vpc.tags.team = \"platform\"  baseline.df:10\n"
+             = { env, component = \"network\" }       network.df:22\n  \
+             = env                                  stacks/dform.df:54\n\
+             net.vpc main.vpc.tags.team = \"platform\"  baseline.df:11\n"
         ),
         "{text}"
     );
@@ -75,7 +75,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     assert!(
         why.starts_with(
             "net.vpc main.vpc.tags = { env = \"staging\", component = \"network\" }\n  \
-             = { env, component = \"network\" }       network.df:19\n"
+             = { env, component = \"network\" }       network.df:22\n"
         ),
         "{why}"
     );
@@ -94,7 +94,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
         "{hover}"
     );
     assert!(
-        text.contains("network.df:19:26, resource network.vpc peer"),
+        text.contains("network.df:22:26, resource network.vpc peer"),
         "{hover}"
     );
     c.shutdown();
@@ -533,7 +533,7 @@ fn definition_and_formatting() {
         "textDocument/formatting",
         json!({ "textDocument": { "uri": uri(&scratch) }, "options": { "tabSize": 2, "insertSpaces": true } }),
     );
-    assert_eq!(edits[0]["newText"], "q(1)\np(x) where q(x)\n", "{edits}");
+    assert_eq!(edits[0]["newText"], "q(1)\n\np(x) where q(x)\n", "{edits}");
     c.shutdown();
 }
 
@@ -697,7 +697,7 @@ fn quick_fix_declares_a_predicate_mixed() {
     let (_s, root) = example("tests/fixtures/demo");
     let stack = root.join("stacks/dform.df");
     let text = std::fs::read_to_string(&stack).unwrap();
-    let edited = format!("{text}\nq(1)\nq(x) where data(\"zone\", x)\n");
+    let edited = format!("{text}\nq(1)\n\nq(x) where data(\"zone\", x)\n");
     let texts = quick_fix(
         &root,
         &stack,
@@ -707,14 +707,14 @@ fn quick_fix_declares_a_predicate_mixed() {
     );
     assert!(
         texts[0].contains(
-            "input cidrs { main: inet = \"10.50.0.0/16\", peer: inet = \"10.60.0.0/16\" }\n\
+            "input cidrs { main: inet = \"10.50.0.0/16\", peer: inet = \"10.60.0.0/16\" }\n\n\
              decl q(a) mixed\n"
         ),
         "{}",
         texts[0]
     );
     assert!(
-        texts[0].ends_with("\nq(1)\nq(x) where data(\"zone\", x)\n"),
+        texts[0].ends_with("\nq(1)\n\nq(x) where data(\"zone\", x)\n"),
         "{}",
         texts[0]
     );
@@ -883,20 +883,20 @@ fn references_of_every_kind_of_name() {
 
     // A predicate: its rule's head and the bodies that read it.
     let found = references(&mut c, &root, &stack, find(&stack, "vpc_peer_pair(ia", 2));
-    assert_eq!(found, at_places("stacks/dform.df", &[78, 80, 87]));
+    assert_eq!(found, at_places("stacks/dform.df", &[81, 83, 90]));
 
     // An input: the stack's own reads; a component's and a module's
     // `env` are their own inputs, given by the stack (R-205).
     let found = references(&mut c, &root, &stack, find(&stack, "key env:", 4));
     for want in [
         ("stacks/dform.df".to_string(), 9),
-        ("stacks/dform.df".into(), 15),
-        ("stacks/dform.df".into(), 54),
-        ("stacks/dform.df".into(), 93),
+        ("stacks/dform.df".into(), 16),
+        ("stacks/dform.df".into(), 57),
+        ("stacks/dform.df".into(), 96),
     ] {
         assert!(found.contains(&want), "{want:?} in {found:?}");
     }
-    for not in [("network.df".to_string(), 19), ("baseline.df".into(), 16)] {
+    for not in [("network.df".to_string(), 22), ("baseline.df".into(), 17)] {
         assert!(!found.contains(&not), "{not:?} in {found:?}");
     }
 
@@ -907,17 +907,17 @@ fn references_of_every_kind_of_name() {
         found,
         vec![
             ("network.df".into(), 10),
-            ("network.df".into(), 19),
-            ("stacks/dform.df".into(), 51),
+            ("network.df".into(), 22),
             ("stacks/dform.df".into(), 54),
+            ("stacks/dform.df".into(), 57),
         ]
     );
 
     // An object input read by its fields (R-38), and a type alias.
     let found = references(&mut c, &root, &stack, find(&stack, "input cidrs", 6));
-    assert_eq!(found, at_places("stacks/dform.df", &[10, 51, 54, 90]));
+    assert_eq!(found, at_places("stacks/dform.df", &[10, 54, 57, 93]));
     let found = references(&mut c, &root, &stack, find(&stack, "type environment", 5));
-    assert_eq!(found, at_places("stacks/dform.df", &[9, 40]));
+    assert_eq!(found, at_places("stacks/dform.df", &[9, 43]));
 
     // A component, a module used, a module the stack uses.
     // Its copies read by its path, `network.vpc[ia].vpc`, too.
@@ -926,19 +926,19 @@ fn references_of_every_kind_of_name() {
         found,
         vec![
             ("network.df".into(), 8),
-            ("stacks/dform.df".into(), 51),
             ("stacks/dform.df".into(), 54),
-            ("stacks/dform.df".into(), 79),
-            ("stacks/dform.df".into(), 79),
+            ("stacks/dform.df".into(), 57),
+            ("stacks/dform.df".into(), 82),
+            ("stacks/dform.df".into(), 82),
         ]
     );
     // Its output read in the stack; its resources' addresses from outside
     // are strings (H-16).
     let found = references(&mut c, &root, &stack, find(&stack, "use database", 4));
     // Its inputs given by the stack's `set` block are its too (R-38).
-    assert_eq!(found, at_places("stacks/dform.df", &[17, 27, 28, 60]));
+    assert_eq!(found, at_places("stacks/dform.df", &[19, 29, 30, 63]));
     let found = references(&mut c, &root, &stack, find(&stack, "use baseline", 6));
-    assert_eq!(found, at_places("stacks/dform.df", &[43]));
+    assert_eq!(found, at_places("stacks/dform.df", &[46]));
 
     // A resource by its name in its component, and from outside by its
     // address as a string (`"peer.vpc" in net.vpc`, H-16).
@@ -946,11 +946,11 @@ fn references_of_every_kind_of_name() {
     assert_eq!(
         found,
         vec![
-            ("network.df".into(), 14),
-            ("network.df".into(), 19),
-            ("network.df".into(), 25),
-            ("network.df".into(), 26),
-            ("stacks/dform.df".into(), 104),
+            ("network.df".into(), 16),
+            ("network.df".into(), 22),
+            ("network.df".into(), 28),
+            ("network.df".into(), 29),
+            ("stacks/dform.df".into(), 107),
         ]
     );
 
@@ -962,14 +962,14 @@ fn references_of_every_kind_of_name() {
         &format!("{original}\nextra(x) where vpc_peer_pair(x, _, _, _)\n"),
     );
     let found = references(&mut c, &root, &stack, find(&stack, "vpc_peer_pair(ia", 2));
-    assert_eq!(found, at_places("stacks/dform.df", &[78, 80, 87, 106]));
+    assert_eq!(found, at_places("stacks/dform.df", &[81, 83, 90, 109]));
 
     // An attribute path: every rule contributing to the cell, the
     // component's field and the module's.
     let found = references(&mut c, &root, &network, find(&network, "tags = { env", 1));
     assert_eq!(
         found,
-        vec![("baseline.df".into(), 10), ("network.df".into(), 19),]
+        vec![("baseline.df".into(), 11), ("network.df".into(), 22),]
     );
     c.shutdown();
 }
@@ -997,7 +997,7 @@ fn a_pun_in_a_copy_block_reads_the_users_value_and_fills_the_input() {
     let user = references(&mut c, &root, &stack, find(&stack, "key env:", 4));
     let input = references(&mut c, &root, &network, find(&network, "input env", 6));
     for found in [&user, &input] {
-        for line in [51, 54] {
+        for line in [54, 57] {
             let want = ("stacks/dform.df".to_string(), line);
             assert!(found.contains(&want), "{want:?} in {found:?}");
         }
@@ -1224,7 +1224,7 @@ fn a_rename_that_changes_the_plan_is_refused() {
     );
     assert!(
         e.contains(
-            "resource network.vpc main is also the string \"main\" at stacks/dform.df:74:15"
+            "resource network.vpc main is also the string \"main\" at stacks/dform.df:77:15"
         ),
         "{e}"
     );
@@ -1902,10 +1902,10 @@ fn inlay_hints_show_the_plan_and_values() {
     c.open(&stack);
     let hints = inlays(&mut c, &stack);
     for want in [
-        (15, "= \"staging\""),
-        (51, "= \"10.50.0.0/16\""),
-        (90, "+ create"),
-        (90, "= \"10.50.0.0/16\""),
+        (16, "= \"staging\""),
+        (54, "= \"10.50.0.0/16\""),
+        (93, "+ create"),
+        (93, "= \"10.50.0.0/16\""),
     ] {
         assert!(
             hints.contains(&(want.0, want.1.to_string())),
@@ -1915,13 +1915,13 @@ fn inlay_hints_show_the_plan_and_values() {
     let hints = inlays(&mut c, &network);
     assert!(
         hints.contains(&(
-            19,
+            22,
             "= main: \"10.50.0.0/16\", peer: \"10.60.0.0/16\"".to_string()
         )),
         "{hints:?}"
     );
     assert!(
-        hints.contains(&(19, "2× + create".to_string())),
+        hints.contains(&(22, "2× + create".to_string())),
         "{hints:?}"
     );
 

@@ -29,18 +29,18 @@ deployment: stacks.net[env=staging]
 plan: 11 changes (11 create) over 1 tick; policy: 2 hold
 
 tick 1  11 changes
-  + aws.vpc core                          stacks/net.df:27
+  + aws.vpc core                          stacks/net.df:30
       cidr_block = "10.16.0.0/16"
       tags.Name = "core"
   + network data
-    + aws.vpc data.vpc                    stacks/net.df:18
-        cidr_block = "10.18.0.0/16"       stacks/net.df:10
+    + aws.vpc data.vpc                    stacks/net.df:21
+        cidr_block = "10.18.0.0/16"       stacks/net.df:12
         tags = { Name = "data", team = "data" }
 ...
-  + aws.vpc_peering_connection core-data  stacks/net.df:33
+  + aws.vpc_peering_connection core-data  stacks/net.df:37
       peer_vpc = data.vpc
       vpc = core
-  + aws.vpc_peering_connection core-shop  stacks/net.df:33
+  + aws.vpc_peering_connection core-shop  stacks/net.df:37
       peer_vpc = shop.vpc
       vpc = core
 
@@ -62,7 +62,7 @@ deployment: stacks.net[env=prod]
 plan: 11 changes (11 create) over 1 tick; policy: 2 hold
 
 tick 1  11 changes
-  + aws.vpc core                          stacks/net.df:27
+  + aws.vpc core                          stacks/net.df:30
       cidr_block = "10.0.0.0/16"
 ...
 ```

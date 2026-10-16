@@ -1,6 +1,8 @@
 # A number in another base and a bare IPv6 address are numbers.
 let mode = 0o600
+
 #          ^ number
 let link = fe80::1/64
+
 #          ^ number
 #                 ^ number
