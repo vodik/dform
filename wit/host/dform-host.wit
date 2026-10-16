@@ -235,9 +235,8 @@ interface log {
 // grant, naming the provider and the interface. What Rust std links
 // (environment, stdio, exit, clocks, random) needs none.
 //
-// Built for wasm32-wasip3 (nightly), std links WASI 0.3's interfaces and
-// the host links both versions; the `include`s here are 0.2's, what the
-// SDK's bindings name (`wasi:cli/environment`'s initial-cwd).
+// WASI 0.3 only: what std links on wasm32-wasip3 (nightly) and what the
+// SDK's bindings name (`wasi:clocks/monotonic-clock`'s `wait-for`).
 world hosted-provider {
   import types;
   import secrets;
@@ -246,8 +245,8 @@ world hosted-provider {
   import ssh;
   import git;
   import log;
-  include wasi:cli/imports@0.2.12;
-  include wasi:http/imports@0.2.12;
+  include wasi:cli/imports@0.3.0;
+  import wasi:http/client@0.3.0;
 
   export dform:provider/provider@1.0.0;
 }

@@ -63,11 +63,15 @@ fn opened() -> MutexGuard<'static, Held> {
     OPENED.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// The provider, made at the first call, in the working directory the
-/// host gives (`wasi:cli/environment`'s initial-cwd, which wasi-libc does
-/// not read: it starts at `/`).
+/// The provider, made at the first call. One that reads files (the
+/// `filesystem` feature, granted `wasi:filesystem`) starts in the
+/// working directory the host gives (`wasi:cli/environment`'s
+/// initial-cwd, which wasi-libc does not read: it starts at `/`); the
+/// change of directory is what links `wasi:filesystem`, so a component
+/// without the feature imports none and needs no grant.
 fn start(make: Make) -> Box<dyn Handler + Send + Sync> {
-    if let Some(cwd) = bindings::wasi::cli::environment::initial_cwd() {
+    #[cfg(feature = "filesystem")]
+    if let Some(cwd) = bindings::wasi::cli::environment::get_initial_cwd() {
         let _ = std::env::set_current_dir(cwd);
     }
     make()

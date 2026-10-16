@@ -627,18 +627,16 @@ interface provider {
 
 // What a provider component is (not `world provider`: a world and an
 // interface of one package cannot share a name): it serves `provider`
-// with the async ABI and reaches its API through WASI 0.2's imports
-// (0.2.12, the version wasmtime 49 ships; a component built against any
-// 0.2.x links), which a wasm32-wasip2 build links; 0.3's are the same
-// interfaces made async, which a wasm32-wasip3 build links and the host
-// links beside them. wasi:cli/imports brings what Rust std on
-// wasm32-wasip2 links (environment, where credentials come from; stdio;
-// exit; clocks; random) together with wasi:filesystem (types, preopens)
-// and wasi:sockets (tcp, udp, ip-name-lookup); wasi:http/imports brings the
-// outgoing handler an HTTP SDK speaks through.
+// with the async ABI and reaches its API through WASI 0.3's imports (the
+// version a wasm32-wasip3 build links and wasmtime 49 hosts, as
+// `wasmtime_wasi::p3`). wasi:cli/imports brings what Rust std links
+// (environment; stdio; exit; clocks; random) together with
+// wasi:filesystem (types, preopens) and wasi:sockets (types,
+// ip-name-lookup); wasi:http/client is the outgoing handler an HTTP SDK
+// speaks through.
 world provider-component {
-  include wasi:cli/imports@0.2.12;
-  include wasi:http/imports@0.2.12;
+  include wasi:cli/imports@0.3.0;
+  import wasi:http/client@0.3.0;
 
   export provider;
 }

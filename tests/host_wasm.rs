@@ -73,7 +73,9 @@ fn mock(s: &Scratch, args: &[&str]) -> common::Run {
     on_component(s, &common::on("p.df", &["--world", "w.json"], args))
 }
 
-/// One cache for the test binary's runs: the component is compiled once.
+/// One cache for the test binary's runs and its own process (in-process
+/// links, `dform_host::wasm::compile_cache`): the component is compiled
+/// once, never into the user's cache.
 fn wasm_cache() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("host-wasm-cache")
 }
@@ -191,12 +193,13 @@ fn wasi_sockets_needs_its_grant() {
     // admitted, it fails later, for want of the provider export.
     let wasm = wat::parse_str(
         r#"(component
-             (import "wasi:sockets/network@0.2.12" (instance
-               (export "network" (type (sub resource))))))"#,
+             (import "wasi:sockets/types@0.3.0" (instance
+               (export "tcp-socket" (type (sub resource))))))"#,
     )
     .unwrap();
     std::fs::write(s.path("net.wasm"), wasm).unwrap();
     let path = s.path("net.wasm");
+    dform_host::wasm::compile_cache(wasm_cache());
     let launch = dform_host::Launcher::Cli;
     let start = |grants: &Grants| {
         dform::plugin::Launch::plugin(&launch, &path, grants)
@@ -234,10 +237,9 @@ fn a_components_read_keeps_two_requests_in_flight() {
          --features component",
     );
     let pairs = common::answers_in_pairs(std::time::Duration::from_secs(3));
-    // std links `wasi:filesystem` (the SDK changes to the host's working
-    // directory): granted, as the mock's is.
-    let mut grants = Grants::none("fetch-at-once");
-    grants.allow.insert("wasi:filesystem".into());
+    // It imports no `wasi:filesystem`, so it needs no grant.
+    dform_host::wasm::compile_cache(wasm_cache());
+    let grants = Grants::none("fetch-at-once");
     let mut link = dform_host::wasm::link(std::path::Path::new(&probe), grants).unwrap();
     let from = std::time::Instant::now();
     let read: pb::ReadResponse = link

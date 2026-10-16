@@ -1472,6 +1472,9 @@ fn invalid(e: anyhow::Error) -> CallError {
 /// (`DFORM_TEST_FAKE_PLAN_AWAITS=HOST:PORT`): the call first asks that
 /// server for a manifest and is refused unless it answers 200, as a
 /// registry that answers once a second request is in flight with it does.
+/// The native build's only: its socket would have the component import
+/// `wasi:sockets`, which the mock is not granted.
+#[cfg(not(target_family = "wasm"))]
 fn plan_awaits() -> std::result::Result<(), CallError> {
     use std::io::{Read, Write};
     let Ok(at) = std::env::var("DFORM_TEST_FAKE_PLAN_AWAITS") else {
@@ -1491,6 +1494,11 @@ fn plan_awaits() -> std::result::Result<(), CallError> {
         true => Ok(()),
         false => Err(refused(answer.lines().next().unwrap_or_default().into())),
     }
+}
+
+#[cfg(target_family = "wasm")]
+fn plan_awaits() -> std::result::Result<(), CallError> {
+    Ok(())
 }
 
 fn doc_of(v: Option<&pb::Value>) -> std::result::Result<Option<Json>, CallError> {

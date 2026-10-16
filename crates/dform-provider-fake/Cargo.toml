@@ -13,7 +13,8 @@ publish = false
 crate-type = ["rlib", "cdylib"]
 
 [features]
-component = ["dform-sdk/component"]
+# Its world, inventory and schemas are files: the SDK's `filesystem`.
+component = ["dform-sdk/component", "dform-sdk/filesystem"]
 
 [dependencies]
 dform-mock = { path = "../dform-mock" }

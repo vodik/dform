@@ -47,13 +47,12 @@ mod bindings {
         world: "dform:host/hosted-provider",
         require_store_data_send: true,
         with: {
-            "wasi:cli": wasmtime_wasi::p2::bindings::cli,
-            "wasi:clocks": wasmtime_wasi::p2::bindings::clocks,
-            "wasi:random": wasmtime_wasi::p2::bindings::random,
-            "wasi:io": wasmtime_wasi::p2::bindings::io,
-            "wasi:filesystem": wasmtime_wasi::p2::bindings::filesystem,
-            "wasi:sockets": wasmtime_wasi::p2::bindings::sockets,
-            "wasi:http": wasmtime_wasi_http::p2::bindings::http,
+            "wasi:cli": wasmtime_wasi::p3::bindings::cli,
+            "wasi:clocks": wasmtime_wasi::p3::bindings::clocks,
+            "wasi:random": wasmtime_wasi::p3::bindings::random,
+            "wasi:filesystem": wasmtime_wasi::p3::bindings::filesystem,
+            "wasi:sockets": wasmtime_wasi::p3::bindings::sockets,
+            "wasi:http": wasmtime_wasi_http::p3::bindings::http,
             "dform:host/types.credential": super::Credential,
             "dform:host/types.tunnel": super::Tunnel,
         },
@@ -491,6 +490,29 @@ impl wh::log::Host for State {
     }
 }
 
+/// Where this process keeps compiled components, in place of the
+/// operator's cache ([`compile_cache`]).
+static COMPILED_IN: OnceLock<std::path::PathBuf> = OnceLock::new();
+
+/// Keep this process's compiled components in `dir`, not the operator's
+/// cache: a test's scratch directory, set before its first component is
+/// loaded. `false` when another directory was set already.
+pub fn compile_cache(dir: std::path::PathBuf) -> bool {
+    COMPILED_IN.get_or_init(|| dir.clone()) == &dir
+}
+
+/// The directory compiled components are kept in: the process's own
+/// ([`compile_cache`]), else `$XDG_CACHE_HOME/dform/wasm`.
+fn compiled_dir() -> Option<std::path::PathBuf> {
+    if let Some(d) = COMPILED_IN.get() {
+        return Some(d.clone());
+    }
+    std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
+        .map(|c| c.join("dform").join("wasm"))
+}
+
 /// The component at `path`, compiled, or as compiled before: compiling a
 /// provider takes seconds, so the native code is kept in
 /// `$XDG_CACHE_HOME/dform/wasm/<sha256 of the file>.cwasm`, written by
@@ -503,10 +525,7 @@ fn load(engine: &Engine, path: &Path) -> Result<Component> {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
-    let dir = std::env::var_os("XDG_CACHE_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
-        .map(|c| c.join("dform").join("wasm"));
+    let dir = compiled_dir();
     let cached = dir.as_ref().map(|d| d.join(format!("{digest}.cwasm")));
     if let Some(c) = &cached
         && c.exists()
@@ -617,11 +636,8 @@ struct Instance {
 impl Instance {
     fn linker(&self, engine: &Engine) -> Result<Linker<State>> {
         let mut linker: Linker<State> = Linker::new(engine);
-        // Both WASI versions: std on wasm32-wasip3 links 0.3's
-        // interfaces, a wasip2 build and the SDK's bindings 0.2's. A
-        // `wasi:http` request of either goes through [`Outgoing`].
-        wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
-        wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
+        // WASI 0.3, what a wasm32-wasip3 build links (wit/host's world).
+        // A `wasi:http` request goes through [`Outgoing`].
         wasmtime_wasi::p3::add_to_linker(&mut linker)?;
         wasmtime_wasi_http::p3::add_to_linker(&mut linker)?;
         wh::types::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
