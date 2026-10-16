@@ -6,7 +6,7 @@
 //! canonical print `a..=b`, which a `range(T)` position parses back.
 
 use crate::common;
-use common::{error, facts};
+use common::{error, facts, read_facts};
 use dform_core::{engine, parser::parse_program};
 
 /// The error evaluating `src` gives.
@@ -94,7 +94,7 @@ fn a_bytes_range_tests_a_bound_value() {
 fn a_version_range_tests_a_bound_version() {
     let src = "decl q(v: semver)\nq(\"1.1.0\")\nq(\"1.5.0\")\nq(\"2.0.0\")\n\
                p(v) where q(v), v in \"1.2.0\"..\"2.0.0\"\n";
-    assert_eq!(facts(src, "p"), ["p(1.5.0)"]);
+    assert_eq!(read_facts(src, "p"), ["p(1.5.0)"]);
 }
 
 /// Generation needs a next member: a dense range with its variable

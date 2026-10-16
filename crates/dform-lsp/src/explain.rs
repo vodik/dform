@@ -581,23 +581,14 @@ impl Hovered<'_> {
 }
 
 /// A relation's columns as declared or inferred (R-34): `az(name:
-/// string, index: int)`; a component's relation by its copies'.
+/// string, index: int)`; a component's relation by its definition's.
 fn signature_md(p: &refs::Project, name: &str) -> Option<String> {
     let sigs: std::collections::BTreeSet<String> = p
         .evaluated
         .iter()
         .flat_map(|e| e.signatures.values())
-        .filter(|s| {
-            s.pred == name
-                || s.pred
-                    .rsplit_once("::")
-                    .is_some_and(|(_, last)| last == name)
-        })
-        .map(|s| {
-            let mut s = s.clone();
-            s.pred = name.to_string();
-            s.to_string()
-        })
+        .filter(|s| s.pred == name)
+        .map(|s| s.to_string())
         .collect();
     (!sigs.is_empty()).then(|| {
         format!(

@@ -358,7 +358,7 @@ impl Why {
             res: &x.res,
             schema: Some(ev.schema()),
             redact: &x.redact,
-            signatures: ev.located.loaded.lowered.as_ref().map(|l| &l.signatures),
+            program: ev.evaluator.program.nodes.as_deref(),
             stack_keys: &keys,
             top: top.as_deref(),
             waits: &waits,

@@ -158,6 +158,22 @@ impl Scopes {
         self.names.get(d.scope)?.of(&d.name).get(d.at)
     }
 
+    /// The body of the definition a copy's path names from the program's
+    /// scope (`n`, `n.inner`, a `use`'s name): each segment a copy of a
+    /// component, or a `use` of a module, declared in the body the one
+    /// before it names.
+    pub fn copied(&self, path: &str) -> Option<ScopeId> {
+        path.split('.').try_fold(self.root, |s, seg| {
+            self.copied_body(s, seg).or_else(|| {
+                let used = |k: &DeclKind| matches!(k, DeclKind::Use { .. });
+                match &self.reaching(s, seg, used)?.1.kind {
+                    DeclKind::Use { module, .. } => self.by_path(module),
+                    _ => None,
+                }
+            })
+        })
+    }
+
     /// The body of the component the copy `name` reached from `s` is of.
     pub fn copied_body(&self, s: ScopeId, name: &str) -> Option<ScopeId> {
         let copy = |k: &DeclKind| {

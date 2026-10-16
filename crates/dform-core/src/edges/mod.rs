@@ -34,6 +34,7 @@
 //! value type read from a string: `inet`, `ip`, `uri`, `oci`, `semver`, a
 //! range): a `string` position takes any of them as its text (R-133).
 
+mod columns;
 mod shape;
 mod sites;
 mod walk;
@@ -41,10 +42,12 @@ mod walk;
 use crate::address::Address;
 use crate::ast::{Atom, Lit, Span, Stmt, Term, TypeExpr};
 use crate::diag::Diagnostic;
+use crate::infer::Signatures;
 use crate::schema::Schema;
 use crate::types::{self, Ty};
 use crate::value::Value;
-use shape::{Edge, Path, Shape};
+use columns::Typing;
+use shape::{Edge, Path, Role, Shape};
 use sites::{Holder, Reading, Site};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -60,6 +63,8 @@ struct Graph<'a> {
     scopes: &'a prog::Scopes,
     parent: Vec<usize>,
     edges: Vec<Vec<Edge>>,
+    /// The column each node was made for.
+    col_of: Vec<Option<Col>>,
     /// `(whole, path, part)`: the value of `part` is `whole`'s at `path`.
     links: Vec<(usize, Path, usize)>,
     /// `(from, into)`: a variable's value given to a let, an output or an
@@ -75,10 +80,15 @@ struct Graph<'a> {
     /// The second pass: what to read each site as, in the order the first
     /// found them.
     readings: Option<Vec<Reading>>,
+    /// The second pass: the type each site's column settled as, where
+    /// the site is a relation's argument (R-34): read at it too.
+    column_types: Vec<Option<Ty>>,
     /// The second pass: each literal's node as read, where reading
     /// changed it.
     read: Readings,
     diags: Vec<Diagnostic>,
+    /// What the columns' types are settled from (R-34).
+    typing: Typing,
 }
 
 /// Where a term is placed: its scope, the span of what holds it, what it
@@ -99,14 +109,17 @@ impl<'a> Graph<'a> {
             scopes,
             parent: Vec::new(),
             edges: Vec::new(),
+            col_of: Vec::new(),
             links: Vec::new(),
             flows: Vec::new(),
             columns: BTreeMap::new(),
             vars: BTreeMap::new(),
             sites: Vec::new(),
             readings: None,
+            column_types: Vec::new(),
             read: Readings::new(),
             diags: Vec::new(),
+            typing: Typing::default(),
         }
     }
 
@@ -114,6 +127,7 @@ impl<'a> Graph<'a> {
         let n = self.parent.len();
         self.parent.push(n);
         self.edges.push(Vec::new());
+        self.col_of.push(None);
         n
     }
 
@@ -135,9 +149,24 @@ impl<'a> Graph<'a> {
         }
     }
 
-    fn edge(&mut self, n: usize, shape: Shape, what: String, span: Span) {
+    fn edge(&mut self, n: usize, shape: Shape, what: String, span: Span, role: Role) {
+        let col = self.col_of[n].clone();
         let n = self.find(n);
-        self.edges[n].push(Edge { shape, what, span });
+        self.edges[n].push(Edge {
+            shape,
+            what,
+            span,
+            role,
+            col,
+        });
+    }
+
+    /// `a` and `b` reach each other's types, and their columns stay
+    /// apart: the sides of a comparison, a column that joins nothing (a
+    /// compiler's relation, one declared `any`).
+    fn reach(&mut self, a: usize, b: usize) {
+        self.flows.push((a, b));
+        self.flows.push((b, a));
     }
 
     /// `part` is `whole`'s value at `path`.
@@ -159,13 +188,35 @@ impl<'a> Graph<'a> {
     }
 
     fn column(&mut self, scope: ScopeId, pred: &str, arity: usize, i: usize) -> usize {
-        let c = (self.declaring(scope, pred), pred.to_string(), arity, i);
+        let (declaring, name) = self.resolve(scope, pred);
+        let c = (declaring, name, arity, i);
         if let Some(&n) = self.columns.get(&c) {
             return n;
         }
         let n = self.node();
+        self.col_of[n] = Some(c.clone());
         self.columns.insert(c, n);
         n
+    }
+
+    /// The relation `pred` a read in `scope` names: the scope that declares
+    /// it and its name there. A used module's, `m::k` (R-113), is the
+    /// module's `k`.
+    fn resolve(&self, scope: ScopeId, pred: &str) -> (ScopeId, String) {
+        let used = pred.split_once("::").and_then(|(m, k)| {
+            let body = self.used(scope, m)?;
+            Some((self.declaring(body, k), k.to_string()))
+        });
+        used.unwrap_or_else(|| (self.declaring(scope, pred), pred.to_string()))
+    }
+
+    /// The body of the module a `use` binds to `name`, read in `scope`.
+    fn used(&self, scope: ScopeId, name: &str) -> Option<ScopeId> {
+        let using = |d: &DeclKind| matches!(d, DeclKind::Use { .. });
+        match &self.scopes.reaching(scope, name, using)?.1.kind {
+            DeclKind::Use { module, .. } => self.scopes.by_path(module),
+            _ => None,
+        }
     }
 
     /// The scope whose `pred` a read in `scope` names: the innermost
@@ -297,21 +348,42 @@ fn unmarked_rule(r: &crate::ast::RuleStmt) -> crate::ast::RuleStmt {
     r
 }
 
+/// What the pass makes of a program: each node's reading, every
+/// relation's signature, and the errors.
+pub struct Read {
+    pub readings: Readings,
+    pub signatures: Signatures,
+    pub diags: Vec<Diagnostic>,
+}
+
 /// Read every literal of the program's nodes at the type of the edges it
-/// reaches (R-192): the program as `lower` writes it, each literal marked
-/// with its node, walked twice (the edges, then the readings); each
-/// node's reading, and the errors.
-pub fn read_nodes(program: &prog::Program, schema: &Schema) -> (Readings, Vec<Diagnostic>) {
+/// reaches (R-192), and at the type its column settles as where it is a
+/// relation's argument (R-34): the program as `lower` writes it, each
+/// literal marked with its node, walked twice (the edges and the columns,
+/// then the readings).
+pub fn read_nodes(program: &prog::Program, schema: &Schema) -> Read {
     let Ok(lowered) = prog::lower_visited(program, &Marks(program)) else {
-        return (Readings::new(), Vec::new());
+        return Read {
+            readings: Readings::new(),
+            signatures: Signatures::default(),
+            diags: Vec::new(),
+        };
     };
     let mut stmts = lowered.statements;
     let (scopes, root) = (&program.scopes, program.scopes.root);
     let mut g = Graph::new(schema, scopes);
+    g.declarations(&stmts, root);
     g.program(&mut stmts, root);
     let readings = g.readings();
+    let columns = g.columns(&readings);
     let mut g = Graph::new(schema, scopes);
+    g.declarations(&stmts, root);
     g.readings = Some(readings);
+    g.column_types = columns.of_sites;
     g.program(&mut stmts, root);
-    (g.read, g.diags)
+    Read {
+        readings: g.read,
+        signatures: columns.signatures,
+        diags: g.diags,
+    }
 }

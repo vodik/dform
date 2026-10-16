@@ -26,13 +26,15 @@
 //!    and a comparison of two types that are never equal, are errors, not
 //!    a silent non-match.
 //!
-//! The settled signatures (`az(name: string, index: int)`) are what the
-//! LSP's hover prints, and the program's literals in an `inet`, `ip`,
-//! quantity or time column are read as one before it is evaluated.
-//! Variables are never coerced.
+//! What the columns settle as, per definition, is the readings' (R-192,
+//! [`crate::edges`]): the signatures (`az(name: string, index: int)`)
+//! the LSP's hover prints, and the program's literals in an `inet`, `ip`,
+//! quantity or time column read as one before it is evaluated. This pass
+//! says what is wrong. Variables are never coerced.
 
 use crate::ast::{Atom, Decl, ExternFn, Lit, Program, Span, Stmt, Term, TypeExpr};
 use crate::diag::{Diagnostic, Diagnostics};
+use crate::program::Scopes;
 use crate::spell;
 use crate::types::{self, Ty};
 use crate::value::Value;
@@ -71,8 +73,40 @@ impl std::fmt::Display for Signature {
     }
 }
 
-/// Every relation's signature, by name and arity.
-pub type Signatures = BTreeMap<(String, usize), Signature>;
+/// Every relation's signature, by the definition that declares it (its
+/// path, `""` the program's), its name and its arity: settled once, at
+/// the readings' stage (R-192), per definition, every copy's private
+/// relation its definition's (R-211).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Signatures(BTreeMap<(String, String, usize), Signature>);
+
+impl Signatures {
+    /// The relation `pred` of `arity` the definition at `def` declares
+    /// has the columns `sig`.
+    pub fn insert(&mut self, def: String, arity: usize, sig: Signature) {
+        self.0.insert((def, sig.pred.clone(), arity), sig);
+    }
+
+    /// Every signature, by definition, name and arity.
+    pub fn values(&self) -> impl Iterator<Item = &Signature> {
+        self.0.values()
+    }
+
+    /// The signature of the relation an evaluated fact names, `pred` of
+    /// `arity`: the program's own, or a copy's private relation (`n::p`,
+    /// `n.inner::p`) its definition's, found by the copies' names in the
+    /// program's `scopes`.
+    pub fn of(&self, pred: &str, arity: usize, scopes: &Scopes) -> Option<&Signature> {
+        let (def, name) = match pred.rsplit_once("::") {
+            Some((copies, name)) => {
+                let body = scopes.copied(copies)?;
+                (scopes.definition(body)?.0.clone(), name)
+            }
+            None => (String::new(), pred),
+        };
+        self.0.get(&(def, name.to_string(), arity))
+    }
+}
 
 /// The `decl`s of a program, top level and in modules, before `transform`
 /// lowers them away: by relation name, and whether a module declares it
@@ -151,7 +185,7 @@ fn outputs(program: &Program) -> BTreeMap<(String, String), TypeExpr> {
 
 /// Relations the compiler writes and reads with values of any type: not a
 /// program's relation, never typed by its uses.
-fn untyped(pred: &str) -> bool {
+pub(crate) fn untyped(pred: &str) -> bool {
     crate::loader::is_core_pred(pred)
         || pred.contains("__")
         || pred.starts_with("type_")
@@ -168,28 +202,28 @@ fn untyped(pred: &str) -> bool {
 }
 
 /// A function's call, not a relation's atom.
-fn function(pred: &str) -> Option<&'static crate::functions::Function> {
+pub(crate) fn function(pred: &str) -> Option<&'static crate::functions::Function> {
     crate::functions::get(pred)
 }
 
 /// What fixed a type, for the message.
 #[derive(Debug, Clone)]
-struct Hard {
-    ty: Ty,
-    span: Span,
-    what: String,
+pub(crate) struct Hard<C> {
+    pub(crate) ty: Ty,
+    pub(crate) span: Span,
+    pub(crate) what: String,
     /// The column it was given to, when it was given to one (not to a
     /// variable).
-    col: Option<Col>,
+    pub(crate) col: Option<C>,
     /// A builtin's `string` parameter: a value type is given to it as its
     /// print (R-133), so beside one it constrains nothing.
-    prints: bool,
+    pub(crate) prints: bool,
 }
 
 #[derive(Debug, Clone)]
-struct Literal {
-    value: Value,
-    span: Span,
+pub(crate) struct Literal {
+    pub(crate) value: Value,
+    pub(crate) span: Span,
 }
 
 /// A column: (relation, arity, index).
@@ -198,7 +232,7 @@ type Col = (String, usize, usize);
 #[derive(Default)]
 struct Solver {
     parent: Vec<usize>,
-    hard: Vec<Vec<Hard>>,
+    hard: Vec<Vec<Hard<Col>>>,
     lits: Vec<Vec<Literal>>,
     /// The columns each node is, for the message.
     cols: Vec<Vec<Col>>,
@@ -342,18 +376,18 @@ struct Flow {
 }
 
 /// What flowed into a cell: its type, the variable as written, the rule.
-struct Given {
-    ty: Ty,
-    var: String,
-    what: String,
-    span: Span,
+pub(crate) struct Given {
+    pub(crate) ty: Ty,
+    pub(crate) var: String,
+    pub(crate) what: String,
+    pub(crate) span: Span,
 }
 
 /// The column `col` of the type `f` says: what flows in (`given`) is
 /// checked assignable to it and never narrows it (R-213), and its
 /// literals `lits` are checked against it.
-fn declared(
-    f: Hard,
+pub(crate) fn declared<C>(
+    f: Hard<C>,
     col: &str,
     given: &[Given],
     lits: &[Literal],
@@ -394,7 +428,7 @@ fn declared(
 
 /// The column `col` of literals only (`lits`): their kind; a string
 /// where nothing says otherwise. Two kinds are the error.
-fn of_literals(col: &str, lits: &[Literal], diags: &mut Vec<Diagnostic>) -> Option<Ty> {
+pub(crate) fn of_literals(col: &str, lits: &[Literal], diags: &mut Vec<Diagnostic>) -> Option<Ty> {
     let mut first: Option<(&Literal, Ty)> = None;
     let mut string: Option<&Literal> = None;
     for l in lits {
@@ -515,7 +549,7 @@ impl Pass<'_> {
             t => {
                 self.shape_of(col, t, span);
                 self.calls(rule, t, span);
-                if let Some((ty, what)) = self.term_type(t) {
+                if let Some((ty, what)) = term_type(t) {
                     self.s.hard(col, ty, span, what);
                 }
             }
@@ -554,25 +588,6 @@ impl Pass<'_> {
                 span,
             });
         }
-    }
-
-    /// The type a call's result has, by its signature.
-    fn term_type(&self, t: &Term) -> Option<(Ty, String)> {
-        let Term::Func { name, args } = t else {
-            return None;
-        };
-        if name == crate::address::REF && args.len() == 3 {
-            return match &args[0] {
-                Term::Val(Value::Str(typ)) => Some((Ty::Ref(typ.clone()), "a reference".into())),
-                _ => None,
-            };
-        }
-        if arithmetic(name).is_some() {
-            return None;
-        }
-        let f = function(name)?;
-        let ty = Ty::parse(f.ret.trim_end_matches('?'));
-        (ty != Ty::Any).then(|| (ty, format!("`{name}`'s result")))
     }
 
     /// Every call inside `t`: a variable argument takes the parameter's
@@ -851,7 +866,7 @@ impl Pass<'_> {
                             });
                         }
                         self.shape_of(n, t, span);
-                        if let Some((ty, what)) = self.term_type(t) {
+                        if let Some((ty, what)) = term_type(t) {
                             self.s.hard(n, ty, span, what);
                         }
                     }
@@ -880,8 +895,28 @@ impl Pass<'_> {
     }
 }
 
+/// The type a call's result has, by its signature; a reference's, its
+/// type's (`ref(T, A, "")`).
+pub(crate) fn term_type(t: &Term) -> Option<(Ty, String)> {
+    let Term::Func { name, args } = t else {
+        return None;
+    };
+    if name == crate::address::REF && args.len() == 3 {
+        return match &args[0] {
+            Term::Val(Value::Str(typ)) => Some((Ty::Ref(typ.clone()), "a reference".into())),
+            _ => None,
+        };
+    }
+    if arithmetic(name).is_some() {
+        return None;
+    }
+    let f = function(name)?;
+    let ty = Ty::parse(f.ret.trim_end_matches('?'));
+    (ty != Ty::Any).then(|| (ty, format!("`{name}`'s result")))
+}
+
 /// An object literal of constants as its value (`{ x: "big" }`).
-fn constant(t: &Term) -> Option<Value> {
+pub(crate) fn constant(t: &Term) -> Option<Value> {
     match t {
         Term::Val(v) => Some(v.clone()),
         Term::Obj(m) => m
@@ -907,7 +942,7 @@ fn arithmetic(name: &str) -> Option<&'static str> {
 
 /// A literal's type, `None` for a string (unknown until its column is
 /// settled) and for what the pass does not judge.
-fn kind(v: &Value) -> Option<Ty> {
+pub(crate) fn kind(v: &Value) -> Option<Ty> {
     let s = |x: &str| Some(Ty::Scalar(x.into()));
     match v {
         Value::Int(_) => s("int"),
@@ -926,7 +961,7 @@ fn kind(v: &Value) -> Option<Ty> {
 }
 
 /// Whether a value of `a` can ever equal one of `b`.
-fn compatible(a: &Ty, b: &Ty) -> bool {
+pub(crate) fn compatible(a: &Ty, b: &Ty) -> bool {
     match (a, b) {
         (Ty::Any, _) | (_, Ty::Any) => true,
         (Ty::Secret(x), y) | (y, Ty::Secret(x)) => compatible(x, y),
@@ -948,7 +983,7 @@ fn compatible(a: &Ty, b: &Ty) -> bool {
 
 /// A value type with a canonical print, given as it where a string is
 /// wanted: an `oci`, a `uri`, a network or an address, a time, a quantity.
-fn printed(ty: &Ty) -> bool {
+pub(crate) fn printed(ty: &Ty) -> bool {
     matches!(ty, Ty::Scalar(s) if matches!(s.as_str(),
         "oci" | "uri" | "inet" | "ip" | "time" | "bytes" | "cpu" | "duration"
         | "semver") || crate::range::element(s).is_some())
@@ -984,7 +1019,7 @@ fn text_of(string: &str, narrow: &str) -> bool {
 
 /// The more telling of two compatible types: an enum over a string, a
 /// typed list over an untyped one; an int and a float are numbers.
-fn narrower(a: Ty, b: &Ty) -> Ty {
+pub(crate) fn narrower(a: Ty, b: &Ty) -> Ty {
     match (&a, b) {
         (Ty::Scalar(x), Ty::Scalar(y)) if x != y && number(x) && number(y) => {
             Ty::Scalar("number".into())
@@ -1012,23 +1047,18 @@ fn shown_col(c: &Col, declared: &Declared, names: &BTreeMap<Col, String>) -> Str
     }
 }
 
-/// The pass's result: the signatures, and each node's settled type.
-pub struct Inferred {
-    pub signatures: Signatures,
-    settled: BTreeMap<Col, Ty>,
-}
-
-/// Infer and check the column types of the lowered program `program`,
-/// its externs `externs`, inputs `inputs` and the source program's
-/// `decl`s; the schema, when given, types the attributes read into a
-/// column.
+/// Check the column types of the lowered program `program`, its externs
+/// `externs`, inputs `inputs` and the source program's `decl`s; the
+/// schema, when given, types the attributes read into a column. The
+/// types the columns settle as, what the literals are read as and the
+/// signatures are the readings' (R-192, [`crate::edges`]).
 pub fn infer(
     program: &Program,
     externs: &[ExternFn],
     inputs: &[crate::inputs::Declared],
     declared: &Declared,
     schema: Option<&crate::schema::Schema>,
-) -> Result<Inferred> {
+) -> Result<()> {
     let mut p = Pass::new(declared, inputs, schema);
     // The declarations: every relation the program has that a `decl`
     // types, and the externs' typed columns.
@@ -1049,7 +1079,17 @@ pub fn infer(
             _ => {}
         }
     }
-    p.solve(&arities)
+    p.solve()
+}
+
+/// The relations of `program` (lowered) that are the program's: what its
+/// facts, its rules' heads and their bodies name, but a function's call,
+/// a table's read and what the compiler writes with values of any type.
+pub fn relations(program: &Program) -> std::collections::BTreeSet<String> {
+    arities(program)
+        .into_keys()
+        .filter(|p| !untyped(p) && function(p).is_none() && !p.starts_with("table."))
+        .collect()
 }
 
 /// The arities of every relation `program` has: its facts', its rules'
@@ -1196,7 +1236,7 @@ fn shown_term(t: &Term) -> String {
 
 /// A lowered variable as the program wrote it: `Zone` is `zone`; a fresh
 /// one's suffix dropped.
-fn shown_var(v: &str) -> String {
+pub(crate) fn shown_var(v: &str) -> String {
     let base = v.trim_end_matches(|c: char| c.is_ascii_digit() || c == '_');
     let base = if base.is_empty() { v } else { base };
     let mut out = String::new();
@@ -1214,10 +1254,7 @@ fn shown_var(v: &str) -> String {
 }
 
 impl Pass<'_> {
-    fn solve(
-        mut self,
-        arities: &BTreeMap<String, std::collections::BTreeSet<usize>>,
-    ) -> Result<Inferred> {
+    fn solve(mut self) -> Result<()> {
         let mut diags = Vec::new();
         self.throughs();
         self.own_values();
@@ -1245,7 +1282,7 @@ impl Pass<'_> {
         if !diags.is_empty() {
             return Err(Diagnostics(diags).into());
         }
-        Ok(self.signatures(arities, &settled))
+        Ok(())
     }
 
     /// Each `x = r.p` with `r` a reference: `x` takes the type the schema
@@ -1289,7 +1326,7 @@ impl Pass<'_> {
                 }
                 _ => None,
             },
-            t => self.term_type(t).map(|(t, _)| t),
+            t => term_type(t).map(|(t, _)| t),
         }
     }
 
@@ -1363,70 +1400,6 @@ impl Pass<'_> {
                 "`(k, v) in {o}` takes each key and value, `(k, _) in {o}` each key (R-58)"
             )),
         )
-    }
-
-    /// The signatures of the predicates `arities` names, each column's
-    /// type as the columns `settled`, and the types by column.
-    fn signatures(
-        &mut self,
-        arities: &BTreeMap<String, std::collections::BTreeSet<usize>>,
-        settled: &Settled,
-    ) -> Inferred {
-        let mut signatures = Signatures::new();
-        let mut by_col = BTreeMap::new();
-        for (pred, ns) in arities {
-            if untyped(pred) || function(pred).is_some() || pred.starts_with("table.") {
-                continue;
-            }
-            for &k in ns {
-                let columns = (0..k)
-                    .map(|i| {
-                        let c = (pred.clone(), k, i);
-                        let column = self.column(&c, settled);
-                        if let Some(t) = &column.ty {
-                            by_col.insert(c, t.clone());
-                        }
-                        column
-                    })
-                    .collect();
-                signatures.insert(
-                    (pred.clone(), k),
-                    Signature {
-                        pred: pred.clone(),
-                        columns,
-                    },
-                );
-            }
-        }
-        Inferred {
-            signatures,
-            settled: by_col,
-        }
-    }
-
-    /// The column `c`: its name, the declaration's else the head's, and
-    /// its type as the columns `settled` (any, when it is open).
-    fn column(&mut self, c: &Col, settled: &Settled) -> Column {
-        let (pred, k, i) = c;
-        let decl = self.declared.get(pred).filter(|d| d.fields.len() == *k);
-        let ty = match self.s.columns.get(c).copied() {
-            Some(n) => {
-                let r = self.s.find(n);
-                settled.get(&r).cloned().flatten()
-            }
-            None => None,
-        };
-        let ty = if self.s.open.contains(c) {
-            Some(Ty::Any)
-        } else {
-            ty
-        };
-        Column {
-            name: decl
-                .and_then(|d| d.fields.get(*i).cloned())
-                .or_else(|| self.head_names.get(c).cloned()),
-            ty,
-        }
     }
 
     /// The type the schema gives `path` read through a reference to a
@@ -1586,7 +1559,7 @@ impl Pass<'_> {
             return declared(f, &col, given, &lits, diags);
         }
         if let Some(g) = given.first() {
-            return self.widened(&col, g, &given[1..], &lits, diags);
+            return widened(&col, g, &given[1..], &lits, diags);
         }
         of_literals(&col, &lits, diags)
     }
@@ -1609,8 +1582,12 @@ impl Pass<'_> {
     /// The types `hard` says the column `col` is, joined: the narrower of
     /// two compatible, a reference to either of two references (R-185, a
     /// column a rule per type fills); two that are not is the error.
-    fn joined(&self, hard: Vec<Hard>, col: &str) -> Result<Option<Hard>, Box<Diagnostic>> {
-        let mut from: Option<Hard> = None;
+    fn joined(
+        &self,
+        hard: Vec<Hard<Col>>,
+        col: &str,
+    ) -> Result<Option<Hard<Col>>, Box<Diagnostic>> {
+        let mut from: Option<Hard<Col>> = None;
         for h in hard {
             let Some(f) = &from else {
                 from = Some(h);
@@ -1628,106 +1605,108 @@ impl Pass<'_> {
 
     /// The error of the column `col` that `h` says is one type and `f`
     /// another.
-    fn disjoint(&self, h: &Hard, f: &Hard, col: &str) -> Diagnostic {
-        let named = |h: &Hard| match &h.col {
+    fn disjoint(&self, h: &Hard<Col>, f: &Hard<Col>, col: &str) -> Diagnostic {
+        let named = |h: &Hard<Col>| match &h.col {
             Some(c) => shown_col(c, self.declared, &self.head_names),
             None => col.to_string(),
         };
-        let (hc, fc) = (named(h), named(f));
-        let msg = if hc == fc {
-            format!("{hc} is {} here ({}) and {} elsewhere", h.ty, h.what, f.ty)
-        } else {
-            format!(
-                "{hc} is {} here ({}), and joins {fc}, which is {}",
-                h.ty, h.what, f.ty
-            )
-        };
-        Diagnostic::error(h.span, msg)
-            .with_label(f.span, format!("{fc} is {} here ({})", f.ty, f.what))
-            .with_help("one column has one type: declare it `any` to take both")
+        disjoint(h, f, named(h), named(f))
     }
+}
 
-    /// An untyped cell's type: the wider of what flows into it (`g` and
-    /// `rest`) and its literals, an enum and a string a string (R-213).
-    fn widened(
-        &self,
-        col: &str,
-        g: &Given,
-        rest: &[Given],
-        lits: &[Literal],
-        diags: &mut Vec<Diagnostic>,
-    ) -> Option<Ty> {
-        let mut ty = g.ty.clone();
-        for h in rest {
-            match wider(&ty, &h.ty) {
-                Some(t) => ty = t,
-                None => {
-                    diags.push(
-                        Diagnostic::error(
-                            h.span,
-                            format!(
-                                "{col} takes {} here, {}, and {} elsewhere, {}: one value has \
-                                 one type",
-                                h.var,
-                                a(&h.ty),
-                                g.var,
-                                a(&g.ty)
-                            ),
-                        )
-                        .with_label(
-                            g.span,
-                            format!("{} is {} here ({})", g.var, a(&g.ty), g.what),
+/// An untyped cell's type: the wider of what flows into it (`g` and
+/// `rest`) and its literals, an enum and a string a string (R-213).
+pub(crate) fn widened(
+    col: &str,
+    g: &Given,
+    rest: &[Given],
+    lits: &[Literal],
+    diags: &mut Vec<Diagnostic>,
+) -> Option<Ty> {
+    let mut ty = g.ty.clone();
+    for h in rest {
+        match wider(&ty, &h.ty) {
+            Some(t) => ty = t,
+            None => {
+                diags.push(
+                    Diagnostic::error(
+                        h.span,
+                        format!(
+                            "{col} takes {} here, {}, and {} elsewhere, {}: one value has \
+                             one type",
+                            h.var,
+                            a(&h.ty),
+                            g.var,
+                            a(&g.ty)
                         ),
-                    );
-                    return None;
-                }
+                    )
+                    .with_label(
+                        g.span,
+                        format!("{} is {} here ({})", g.var, a(&g.ty), g.what),
+                    ),
+                );
+                return None;
             }
         }
-        let map = matches!(&ty, Ty::Map(_));
-        for l in lits
-            .iter()
-            .filter(|l| map || !matches!(l.value, Value::Obj(_)))
-        {
-            let wide = match (&l.value, kind(&l.value)) {
-                (Value::Str(_), _)
-                    if types::mismatch(&ty, &Term::Val(l.value.clone())).is_none() =>
-                {
-                    continue;
-                }
-                (Value::Str(_), _) => to_string(&ty).then(|| Ty::Scalar("string".into())),
-                (_, Some(k)) => wider(&ty, &k),
-                _ => continue,
-            };
-            match wide {
-                Some(t) => ty = t,
-                None => {
-                    diags.push(
-                        Diagnostic::error(
-                            l.span,
-                            format!(
-                                "{col} takes {} here, and {} elsewhere, {}: one value has one type",
-                                shown(&l.value),
-                                g.var,
-                                a(&g.ty)
-                            ),
-                        )
-                        .with_label(
-                            g.span,
-                            format!("{} is {} here ({})", g.var, a(&g.ty), g.what),
-                        ),
-                    );
-                    return None;
-                }
-            }
-        }
-        Some(ty)
     }
+    let map = matches!(&ty, Ty::Map(_));
+    for l in lits
+        .iter()
+        .filter(|l| map || !matches!(l.value, Value::Obj(_)))
+    {
+        let wide = match (&l.value, kind(&l.value)) {
+            (Value::Str(_), _) if types::mismatch(&ty, &Term::Val(l.value.clone())).is_none() => {
+                continue;
+            }
+            (Value::Str(_), _) => to_string(&ty).then(|| Ty::Scalar("string".into())),
+            (_, Some(k)) => wider(&ty, &k),
+            _ => continue,
+        };
+        match wide {
+            Some(t) => ty = t,
+            None => {
+                diags.push(
+                    Diagnostic::error(
+                        l.span,
+                        format!(
+                            "{col} takes {} here, and {} elsewhere, {}: one value has one type",
+                            shown(&l.value),
+                            g.var,
+                            a(&g.ty)
+                        ),
+                    )
+                    .with_label(
+                        g.span,
+                        format!("{} is {} here ({})", g.var, a(&g.ty), g.what),
+                    ),
+                );
+                return None;
+            }
+        }
+    }
+    Some(ty)
+}
+
+/// The error of a column that `h` (in the column `hc`) says is one type
+/// and `f` (in `fc`) another.
+pub(crate) fn disjoint<C>(h: &Hard<C>, f: &Hard<C>, hc: String, fc: String) -> Diagnostic {
+    let msg = if hc == fc {
+        format!("{hc} is {} here ({}) and {} elsewhere", h.ty, h.what, f.ty)
+    } else {
+        format!(
+            "{hc} is {} here ({}), and joins {fc}, which is {}",
+            h.ty, h.what, f.ty
+        )
+    };
+    Diagnostic::error(h.span, msg)
+        .with_label(f.span, format!("{fc} is {} here ({})", f.ty, f.what))
+        .with_help("one column has one type: declare it `any` to take both")
 }
 
 /// The type two values of `a` and `b` given to one untyped cell are both
 /// of: an enum and a string a string, two enums their members together,
 /// an int and a float a number; `None` where they never meet.
-fn wider(a: &Ty, b: &Ty) -> Option<Ty> {
+pub(crate) fn wider(a: &Ty, b: &Ty) -> Option<Ty> {
     let string = || Some(Ty::Scalar("string".into()));
     match (a, b) {
         _ if a == b => Some(a.clone()),
@@ -1748,7 +1727,7 @@ fn wider(a: &Ty, b: &Ty) -> Option<Ty> {
 
 /// A type whose values are text a string holds as they are: an enum's
 /// members, a network, an address, an image reference, a version.
-fn to_string(ty: &Ty) -> bool {
+pub(crate) fn to_string(ty: &Ty) -> bool {
     match ty {
         Ty::Enum(_) => true,
         Ty::Scalar(s) => text_of("string", s),
@@ -1757,7 +1736,7 @@ fn to_string(ty: &Ty) -> bool {
 }
 
 /// `ty` with its article: `an int`, `a string`; an enum as it is written.
-fn a(ty: &Ty) -> String {
+pub(crate) fn a(ty: &Ty) -> String {
     match ty {
         Ty::Scalar(s) if s.starts_with(['a', 'e', 'i', 'o']) => format!("an {ty}"),
         Ty::Scalar(_) | Ty::List(_) | Ty::Map(_) | Ty::Ref(_) | Ty::Secret(_) => format!("a {ty}"),
@@ -1795,74 +1774,13 @@ fn ref_and_string(written: &str, read: &str, want: &str, text: &str, span: Span)
     .with_help(help)
 }
 
-fn shown(v: &Value) -> String {
+pub(crate) fn shown(v: &Value) -> String {
     match v {
         Value::Str(s) => format!("the string {s:?}"),
         Value::Int(i) => format!("the int {i}"),
         Value::Float(f) => format!("the float {f}"),
         Value::Bool(b) => format!("the bool {b}"),
         v => format!("`{}`", spell::value(v)),
-    }
-}
-
-impl Inferred {
-    /// A table's column with no type of its own takes the type its uses
-    /// settled, so its cells are read as one (`"10.0.0.0/8"` as an inet).
-    pub fn type_tables(&self, externs: &mut [ExternFn]) {
-        for e in externs.iter_mut().filter(|e| e.name.starts_with("table.")) {
-            let n = e.args.len();
-            for (i, b) in e.args.iter_mut().enumerate() {
-                if b.ty.is_some() || b.input {
-                    continue;
-                }
-                if let Some(Ty::Scalar(s)) = self.settled.get(&(e.name.clone(), n, i)) {
-                    b.ty = Some(TypeExpr::Name(s.clone()));
-                }
-            }
-        }
-    }
-
-    /// Read the program's literals as their columns' types (R-31): a
-    /// string in an `inet` column is a network, a bare integer in a
-    /// `bytes` one a quantity. What `infer` checked parses.
-    pub fn read(&self, program: &mut Program) {
-        let read = |ty: Option<&Ty>, t: &mut Term| {
-            let Some(ty) = ty else { return };
-            let wanted = matches!(ty, Ty::Scalar(s) if matches!(s.as_str(),
-                "inet" | "ip" | "float" | "bytes" | "cpu" | "duration" | "time"
-                | "semver") || crate::range::element(s).is_some());
-            if !wanted || !matches!(t, Term::Val(_)) {
-                return;
-            }
-            let v = std::mem::replace(t, Term::Wildcard);
-            *t = match types::literal(ty, v.clone()) {
-                Ok(x) => x,
-                Err(_) => v,
-            };
-        };
-        let atom = |a: &mut Atom| {
-            if untyped(&a.pred) || function(&a.pred).is_some() {
-                return;
-            }
-            let n = a.args.len();
-            for (i, t) in a.args.iter_mut().enumerate() {
-                read(self.settled.get(&(a.pred.clone(), n, i)), t);
-            }
-        };
-        for s in &mut program.statements {
-            match s {
-                Stmt::Fact(a) => atom(a),
-                Stmt::Rule(r) => {
-                    atom(&mut r.head);
-                    for l in &mut r.body {
-                        if let Lit::Pos(a) | Lit::Not(a) = l {
-                            atom(a);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
     }
 }
 

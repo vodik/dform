@@ -23,8 +23,6 @@ pub struct Lowered {
     pub secret_outputs: Vec<(String, String)>,
     /// Every output declared with a type, by (scope, name).
     pub output_types: std::collections::BTreeMap<(String, String), crate::ast::TypeExpr>,
-    /// Every relation's columns, declared or inferred (R-34).
-    pub signatures: crate::infer::Signatures,
     /// The source program's `decl`s, for the pass with a schema.
     pub declared: crate::infer::Declared,
 }
@@ -98,11 +96,10 @@ pub fn lower(program: &Program) -> Result<Lowered> {
             vec![str_term(typ), str_term(scope), str_term(key)],
         )));
     }
-    // Column types (R-34): checked, and the literals read as them.
-    let inferred = crate::infer::infer(&expanded, &extern_fns, &inputs, &declared, None)?;
-    inferred.read(&mut expanded);
+    // Column types (R-34): checked; what they settle as is the readings'
+    // (`types::read`).
+    crate::infer::infer(&expanded, &extern_fns, &inputs, &declared, None)?;
     let mut extern_fns = extern_fns;
-    inferred.type_tables(&mut extern_fns);
     // A file of given secrets' values are secrets from the first byte
     // (R-108): never recorded in the clear.
     crate::tables::seal_columns(&mut extern_fns);
@@ -113,7 +110,6 @@ pub fn lower(program: &Program) -> Result<Lowered> {
         extern_fns,
         secret_outputs,
         output_types,
-        signatures: inferred.signatures,
         declared,
     })
 }

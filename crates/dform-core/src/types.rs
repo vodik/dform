@@ -28,6 +28,7 @@ use crate::address::Address;
 use crate::ast::str_term;
 use crate::ast::{Atom, Lit, Program, Span, Stmt, Term, TypeExpr};
 use crate::diag::{Diagnostic, Diagnostics};
+use crate::edges::Read;
 use crate::program::node::{
     ExprId, ExprKind, Header, ItemId, ItemKind, ListPart, ObjPart, ResourceBody, Target, Write,
 };
@@ -1746,11 +1747,16 @@ fn object_parts(parts: &[ObjPart]) -> Vec<Result<BTreeMap<&str, ExprId>, ExprId>
 }
 
 /// What every literal of the program's nodes is read as, now the schema
-/// is known (R-66, R-62, R-134, R-192): each node's reading, and the
-/// errors but those of what no position reads ([`read`]).
-pub fn readings(program: &prog::Program, schema: &Schema) -> (Readings, Vec<Diagnostic>) {
+/// is known (R-66, R-62, R-134, R-192, R-34): each node's reading, every
+/// relation's signature, and the errors but those of what no position
+/// reads ([`read`]).
+pub fn readings(program: &prog::Program, schema: &Schema) -> Read {
     if !program.diags.is_empty() {
-        return (Readings::new(), program.diags.clone());
+        return Read {
+            readings: Readings::new(),
+            signatures: Default::default(),
+            diags: program.diags.clone(),
+        };
     }
     let mut r = Reader {
         p: program,
@@ -1759,10 +1765,14 @@ pub fn readings(program: &prog::Program, schema: &Schema) -> (Readings, Vec<Diag
         diags: Vec::new(),
     };
     r.items(&program.roots);
-    let (edges, diags) = crate::edges::read_nodes(program, schema);
-    r.read.extend(edges);
-    r.diags.extend(diags);
-    (r.read, r.diags)
+    let edges = crate::edges::read_nodes(program, schema);
+    r.read.extend(edges.readings);
+    r.diags.extend(edges.diags);
+    Read {
+        readings: r.read,
+        signatures: edges.signatures,
+        diags: r.diags,
+    }
 }
 
 /// Read every literal as its position's type, once the providers' schemas
@@ -1780,8 +1790,13 @@ pub fn readings(program: &prog::Program, schema: &Schema) -> (Readings, Vec<Diag
 /// both readings.
 pub fn read(program: &Program, schema: &Schema) -> Result<Program> {
     let mut nodes = program.nodes.as_deref().cloned().unwrap_or_default();
-    let (readings, mut diags) = readings(&nodes, schema);
+    let Read {
+        readings,
+        signatures,
+        mut diags,
+    } = readings(&nodes, schema);
     nodes.readings = readings;
+    nodes.signatures = signatures;
     let read = crate::program::lower(&nodes).map_err(Diagnostics)?;
     let mut out = program.clone();
     let n = read.statements.len();
@@ -1891,7 +1906,9 @@ mod tests {
              resource t.r a { cidr = \"10.0.0.0/8\" }\n  \
              resource t.r b { cidr = c }\n}\nresource lan n {}\n",
         );
-        let (readings, diags) = readings(&nodes, &schema);
+        let Read {
+            readings, diags, ..
+        } = readings(&nodes, &schema);
         assert!(diags.is_empty(), "{diags:?}");
         let read: Vec<String> = readings.values().map(|t| format!("{t:?}")).collect();
         let networks = read.iter().filter(|t| t.contains("IpNet")).count();
@@ -1924,7 +1941,9 @@ mod tests {
              component inner {\n    ok() where nets(\"10.0.0.0/8\")\n  }\n  \
              resource inner i {}\n}\nresource outer o {}\n",
         );
-        let (readings, diags) = readings(&nodes, &schema);
+        let Read {
+            readings, diags, ..
+        } = readings(&nodes, &schema);
         assert!(diags.is_empty(), "{diags:?}");
         let read: Vec<String> = readings.values().map(|t| format!("{t:?}")).collect();
         assert_eq!(read.len(), 1, "{read:?}");

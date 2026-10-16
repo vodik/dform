@@ -72,6 +72,26 @@ pub(super) enum Shape {
 }
 
 impl Shape {
+    /// The type this gives the value itself, a literal of it read or not:
+    /// what its column settles as (R-34).
+    pub(super) fn ty(&self, schema: &Schema) -> Option<Ty> {
+        match self {
+            Shape::Attr(typ, path) => {
+                let keys = path
+                    .iter()
+                    .map(|s| match s {
+                        Seg::Key(k) => Some(k.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<&str>>>()?;
+                Some(Ty::parse(&schema.attr(typ, &keys.join("."))?.ty))
+            }
+            Shape::Declared(t) => Some(types::of_expr(t)),
+            Shape::Ty(t) => Some(t.clone()),
+            Shape::Like(_) => None,
+        }
+    }
+
     /// The type this gives the value's part at `q`, if it gives one.
     pub(super) fn at(&self, schema: &Schema, q: &[Seg]) -> Option<Ty> {
         let ty = match self {
@@ -154,12 +174,39 @@ pub(super) fn readable(ty: &Ty) -> bool {
     }
 }
 
-/// An edge: what gives the type, and where.
+/// What an edge is evidence of: the type a literal the value reaches is
+/// read as (R-192), the type the value's column settles as (R-34), or
+/// both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Role {
+    /// Both: a declaration's type, a function's parameter.
+    Both,
+    /// A literal is read at it, and the column takes nothing from it: an
+    /// attribute a value is written to.
+    Reads,
+    /// It types the column only: a function's result, a reference, an
+    /// extern's column, an attribute read; `prints`, a builtin's `string`
+    /// parameter, which takes a value type as its print (R-133) and so
+    /// constrains nothing beside one.
+    Types { prints: bool },
+}
+
+impl Role {
+    /// A literal the value reaches is read at it.
+    pub(super) fn reads(self) -> bool {
+        matches!(self, Role::Both | Role::Reads)
+    }
+}
+
+/// An edge: what gives the type, where, as what (`role`), and the column
+/// it was given to, when it was given to one (a message names it).
 #[derive(Debug, Clone)]
 pub(super) struct Edge {
     pub(super) shape: Shape,
     pub(super) what: String,
     pub(super) span: Span,
+    pub(super) role: Role,
+    pub(super) col: Option<Col>,
 }
 
 impl Edge {

@@ -88,9 +88,13 @@ impl Graph<'_> {
                 None => read,
             };
             self.diags.push(d);
-        } else {
-            *t = read;
+            return;
         }
+        // A relation's argument, read at its column's type in turn (R-34).
+        *t = match (self.column_types.get(i).cloned().flatten(), read) {
+            (Some(ty), read @ Term::Val(_)) => types::literal(&ty, read.clone()).unwrap_or(read),
+            (_, read) => read,
+        };
     }
 
     /// The types the edges `n` reaches give its value at `q`, each with
@@ -112,6 +116,9 @@ impl Graph<'_> {
                 continue;
             }
             for e in self.edges[r].clone() {
+                if !e.role.reads() {
+                    continue;
+                }
                 match e.shape {
                     // A side of a sum is the other's type, a duration
                     // beside a time.

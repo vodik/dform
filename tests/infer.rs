@@ -15,11 +15,18 @@ fn program(src: &str) -> String {
     format!("\n{src}")
 }
 
-/// The lowered program's signatures, as hover prints them.
-fn signatures(src: &str) -> Vec<String> {
+/// The program read (R-192), with no provider's schema.
+fn read(src: &str) -> dform::ast::Program {
     let p = parse_file("t.df", &program(src)).unwrap_or_else(|e| panic!("{e:#}"));
-    let l = transform::lower(&p).unwrap_or_else(|e| panic!("{e:#}"));
-    l.signatures.values().map(|s| s.to_string()).collect()
+    dform::types::read(&p, &Default::default()).unwrap_or_else(|e| panic!("{e:#}"))
+}
+
+/// The program's signatures as the readings settle them, as hover prints
+/// them.
+fn signatures(src: &str) -> Vec<String> {
+    let p = read(src);
+    let nodes = p.nodes.as_ref().expect("the program's nodes");
+    nodes.signatures.values().map(|s| s.to_string()).collect()
 }
 
 /// What lowering `src` reports.
@@ -32,8 +39,7 @@ fn error(src: &str) -> String {
 }
 
 fn facts(src: &str, pred: &str) -> Vec<String> {
-    let p = parse_file("t.df", &program(src)).unwrap_or_else(|e| panic!("{e:#}"));
-    let (r, _) = dform::engine::eval(&p, &[]).unwrap_or_else(|e| panic!("{e:#}"));
+    let (r, _) = dform::engine::eval(&read(src), &[]).unwrap_or_else(|e| panic!("{e:#}"));
     r.facts
         .iter()
         .filter(|a| a.pred == pred)
@@ -267,4 +273,25 @@ fn a_uri_types_its_column() {
     );
     assert!(sigs.contains(&"p(u: uri)".to_string()), "{sigs:?}");
     assert!(sigs.contains(&"q(h: uri)".to_string()), "{sigs:?}");
+}
+
+/// Columns are per definition (R-211): a component's relation has one
+/// signature, its definition's, however many copies there are, and a
+/// literal its copies write in it is read at the column's type.
+#[test]
+fn a_components_relation_has_its_definitions_signature() {
+    let src = "component lan {\n  decl hosts(h: ip)\n  hosts(\"10.0.0.1\")\n  \
+               seen(x) where hosts(x)\n}\nresource lan a {}\nresource lan b {}\n";
+    let sigs = signatures(src);
+    let seen: Vec<&String> = sigs.iter().filter(|s| s.starts_with("seen(")).collect();
+    assert_eq!(seen, ["seen(x: ip)"], "{sigs:?}");
+    let p = read(src);
+    let (r, _) = dform::engine::eval(&p, &[]).unwrap_or_else(|e| panic!("{e:#}"));
+    let hosts: Vec<String> = r
+        .facts
+        .iter()
+        .filter(|a| a.pred.ends_with("::seen"))
+        .map(spell::atom)
+        .collect();
+    assert_eq!(hosts, ["a::seen(10.0.0.1)", "b::seen(10.0.0.1)"]);
 }

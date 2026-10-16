@@ -7,7 +7,6 @@
 use crate::common;
 use common::{Scratch, error, mock};
 use dform::parser::parse_file;
-use dform::transform;
 
 /// A vpc and a subnet both named `main`, then `rest`.
 fn two_mains(rest: &str) -> String {
@@ -113,8 +112,9 @@ fn a_typed_let_picks_the_resource_of_its_type() {
 fn a_typed_let_types_the_columns_it_reaches() {
     let sigs = |src: &str| -> Vec<String> {
         let p = parse_file("t.df", &format!("\n{src}")).unwrap_or_else(|e| panic!("{e:#}"));
-        let l = transform::lower(&p).unwrap_or_else(|e| panic!("{e:#}"));
-        l.signatures.values().map(|s| s.to_string()).collect()
+        let p = dform::types::read(&p, &Default::default()).unwrap_or_else(|e| panic!("{e:#}"));
+        let nodes = p.nodes.as_ref().expect("the program's nodes");
+        nodes.signatures.values().map(|s| s.to_string()).collect()
     };
     let typed = sigs("decl src(v: any)\nlet host: string = x where src(x)\nq(h) where h = host\n");
     assert!(typed.contains(&"q(h: string)".to_string()), "{typed:?}");

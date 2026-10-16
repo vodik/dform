@@ -65,6 +65,9 @@ pub struct Program {
     /// (R-192, [`crate::types::readings`]): empty until then, and what
     /// `lower` writes in each node's place.
     pub readings: Readings,
+    /// Every relation's columns as declared or inferred (R-34), settled
+    /// with the readings: empty until then.
+    pub signatures: crate::infer::Signatures,
 }
 
 /// The typed readings (R-66, R-134, R-192): the term a node lowers to as
@@ -112,6 +115,12 @@ pub enum NodeId {
 }
 
 impl Program {
+    /// The signature of the relation an evaluated fact names, `pred` of
+    /// `arity` ([`crate::infer::Signatures::of`]).
+    pub fn signature(&self, pred: &str, arity: usize) -> Option<&crate::infer::Signature> {
+        self.signatures.of(pred, arity, &self.scopes)
+    }
+
     /// An empty program: its own scope and nothing in it.
     pub fn new() -> Program {
         Program {

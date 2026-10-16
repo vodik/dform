@@ -465,7 +465,11 @@ fn run_noted(
         schema: ev.schema().clone(),
         res: explained.res,
         lowered: lowered.as_ref().map(|l| l.program.clone()),
-        signatures: lowered.map(|l| l.signatures).unwrap_or_default(),
+        signatures: program
+            .nodes
+            .as_ref()
+            .map(|n| n.signatures.clone())
+            .unwrap_or_default(),
         program,
         redact: explained.redact,
         collisions: std::mem::take(&mut ev.collisions),

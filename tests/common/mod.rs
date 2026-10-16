@@ -533,7 +533,22 @@ pub fn mock(s: &Scratch, args: &[&str]) -> Run {
 /// `fmt_atom` prints them.
 pub fn facts(src: &str, pred: &str) -> Vec<String> {
     let program = dform_core::parser::parse_program(src).unwrap_or_else(|e| panic!("{e}"));
-    let (r, _) = dform_core::engine::eval(&program, &[]).unwrap();
+    derived(&program, pred)
+}
+
+/// [`facts`], the program read first as an evaluation reads it (R-192,
+/// R-34: a literal at its position's and its column's type), with no
+/// provider's schema.
+pub fn read_facts(src: &str, pred: &str) -> Vec<String> {
+    let program = dform_core::parser::parse_program(src).unwrap_or_else(|e| panic!("{e}"));
+    let program =
+        dform_core::types::read(&program, &Default::default()).unwrap_or_else(|e| panic!("{e:#}"));
+    derived(&program, pred)
+}
+
+/// The facts of `pred` `program` derives.
+fn derived(program: &dform_core::ast::Program, pred: &str) -> Vec<String> {
+    let (r, _) = dform_core::engine::eval(program, &[]).unwrap();
     r.facts
         .iter()
         .filter(|a| a.pred == pred)

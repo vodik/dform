@@ -1552,7 +1552,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
             .loaded
             .lowered
             .as_ref()
-            .map(|l| l.signatures.keys().map(|(p, _)| p.clone()).collect())
+            .map(|l| crate::infer::relations(&l.program))
             .unwrap_or_default();
         let redact = query::Redactor::new(&res.facts, self.backend().schema());
         let record = zset::Derived::of(res, &redact, &relations, self.r.top.as_deref());

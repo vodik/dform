@@ -85,6 +85,9 @@ impl Matrix {
             let given = crate::deployment::input_fact_keys(&program);
             crate::inputs::check_required(&lowered.inputs, &given)?;
         }
+        // Read as any evaluation is (R-192, R-34), with no provider's
+        // schema: the project module plans nothing.
+        let program = crate::types::read(&program, &Default::default())?;
         let (res, violations) = crate::engine::eval(&program, &[])?;
         if !violations.is_empty() {
             bail!(

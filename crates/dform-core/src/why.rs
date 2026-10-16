@@ -49,7 +49,8 @@ pub struct Context<'a> {
     /// requires (R-184).
     pub schema: Option<&'a crate::schema::Schema>,
     pub redact: &'a Redactor,
-    pub signatures: Option<&'a crate::infer::Signatures>,
+    /// The program as read: its relations' signatures.
+    pub program: Option<&'a crate::program::Program>,
     pub stack_keys: &'a BTreeSet<String>,
     pub top: Option<&'a Path>,
     pub waits: &'a Lookup<'a>,
@@ -358,15 +359,18 @@ fn derivations(
             out.push('\n');
         }
         if !core
-            && let Some(sig) = cx
-                .signatures
-                .and_then(|s| s.get(&(a.pred.clone(), a.args.len())))
+            && let Some(sig) = cx.program.and_then(|p| p.signature(&a.pred, a.args.len()))
             && sig
                 .columns
                 .iter()
                 .any(|c| c.ty.as_ref().is_some_and(|t| *t != crate::types::Ty::Any))
             && typed.insert(&a.pred)
         {
+            // A copy's relation by the name its facts have.
+            let sig = crate::infer::Signature {
+                pred: a.pred.clone(),
+                columns: sig.columns.clone(),
+            };
             out.push_str(&format!("decl {sig}\n"));
         }
         if core {

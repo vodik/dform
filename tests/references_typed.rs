@@ -112,8 +112,9 @@ fn a_set_writes_through_a_relation_of_references() {
 fn a_column_of_several_types_is_their_union() {
     let p = dform::parser::parse_file("t.df", &format!("\nuse k8s\n{WORKLOADS}"))
         .unwrap_or_else(|e| panic!("{e:#}"));
-    let l = dform::transform::lower(&p).unwrap_or_else(|e| panic!("{e:#}"));
-    let sigs: Vec<String> = l.signatures.values().map(|s| s.to_string()).collect();
+    let p = dform::types::read(&p, &Default::default()).unwrap_or_else(|e| panic!("{e:#}"));
+    let nodes = p.nodes.as_ref().expect("the program's nodes");
+    let sigs: Vec<String> = nodes.signatures.values().map(|s| s.to_string()).collect();
     assert!(
         sigs.contains(&"workload(w: ref(k8s.deployment | k8s.stateful_set))".to_string()),
         "{sigs:?}"

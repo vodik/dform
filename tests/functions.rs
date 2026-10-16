@@ -3,13 +3,13 @@
 //! bodies, the resolver and the reference read the same declarations.
 
 use crate::common;
-use common::{error, facts};
+use common::{error, facts, read_facts};
 use dform_core::engine;
 use dform_core::parser::parse_program;
 
 #[test]
 fn qualified_functions_evaluate() {
-    let got = facts(
+    let got = read_facts(
         r#"net("10.50.0.0/16")
 sub(c) where net(n), c = inet.subnet(n, 8, 2)
 host(h) where net(n), h = inet.host(n, 1)
@@ -22,7 +22,7 @@ counted(a, b) where xs = [1, 2], s = "abc", a = xs.len, b = s.len
         "sub",
     );
     assert_eq!(got, ["sub(10.50.2.0/24)"]);
-    let one = |pred: &str, src: &str| facts(src, pred);
+    let one = |pred: &str, src: &str| read_facts(src, pred);
     assert_eq!(
         one(
             "inside",
