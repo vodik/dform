@@ -758,101 +758,163 @@ pub fn resolve_uncertain(
     state: &mut State,
     which: impl Fn(&str) -> bool,
 ) -> Result<Vec<String>> {
-    let mut out = Vec::new();
-    let outstanding = |state: &State, k: &str| {
-        state
+    let mut r = Resolving {
+        cloud,
+        state,
+        said: Vec::new(),
+    };
+    for (k, u) in r.state.uncertain.clone() {
+        if which(&k) {
+            r.resolve(&k, &u)?;
+        }
+    }
+    Ok(r.said)
+}
+
+/// Uncertain calls being resolved ([`resolve_uncertain`]): the run's
+/// providers, the state they are resolved in, and what each resolution
+/// says.
+struct Resolving<'a> {
+    cloud: &'a Providers,
+    state: &'a mut State,
+    said: Vec<String>,
+}
+
+impl Resolving<'_> {
+    /// The uncertain call `k`, `u`: resolved, or left for the call that
+    /// sends it again; one whose provider waits on the program's settings
+    /// is left alone.
+    fn resolve(&mut self, k: &str, u: &Uncertain) -> Result<()> {
+        let Some(addr) = state::parse_key(k.strip_suffix("#deposed").unwrap_or(k)) else {
+            self.state.uncertain.remove(k);
+            return Ok(());
+        };
+        if self.cloud.waits(&addr.typ).is_some() {
+            return Ok(());
+        }
+        match u.op {
+            UncertainOp::Create | UncertainOp::Replace { .. } => self.made(k, u, &addr),
+            UncertainOp::Update => {
+                self.done(k);
+                Ok(())
+            }
+            UncertainOp::Delete | UncertainOp::DeleteDeposed => self.deleted(k, u, &addr),
+        }
+    }
+
+    /// A create or a replace: what its idempotency key made, if it made
+    /// anything, mapped; a destroy-first replace that made nothing, a
+    /// create; else left for the call that sends it again, if one will.
+    fn made(&mut self, k: &str, u: &Uncertain, addr: &Address) -> Result<()> {
+        let at = crate::report::address(addr);
+        // A create's address may still map an object that is gone.
+        let mapped = self.state.get(addr).map(|e| e.remote.clone());
+        let made = created(self.cloud, addr, &u.key).with_context(|| {
+            format!(
+                "{at}: looking up what the {} whose answer was lost made",
+                op_name(&u.op)
+            )
+        })?;
+        if let Some(remote) = made {
+            self.adopt(k, u, addr, mapped, remote);
+            return Ok(());
+        }
+        // A destroy-first replacement that deleted the old object and
+        // made nothing: what is left is a create.
+        if let UncertainOp::Replace {
+            create_first: false,
+        } = u.op
+            && mapped.is_some_and(|m| m == u.remote)
+            && !self.cloud.exists(addr, &u.remote)?
+        {
+            self.create_again(k, u, addr);
+            return Ok(());
+        }
+        if !self.outstanding(k) {
+            self.state.uncertain.remove(k);
+        }
+        Ok(())
+    }
+
+    /// The object `remote` a create or a replace made, mapped at `addr`
+    /// (which mapped `mapped`): a create-first replacement's old object
+    /// deposed.
+    fn adopt(
+        &mut self,
+        k: &str,
+        u: &Uncertain,
+        addr: &Address,
+        mapped: Option<String>,
+        remote: String,
+    ) {
+        let state = &mut *self.state;
+        if let UncertainOp::Replace { create_first: true } = u.op
+            && mapped.is_some_and(|m| m != remote)
+        {
+            state.depose(addr);
+        }
+        let provider = self.cloud.provider_of(&addr.typ).to_string();
+        state.set(addr, provider, remote.clone());
+        state.set_name(addr, u.name.clone());
+        self.done(k);
+        self.said.push(format!(
+            "{}: the {} whose answer was lost made {remote}; state maps it",
+            crate::report::address(addr),
+            op_name(&u.op)
+        ));
+    }
+
+    /// A destroy-first replace that deleted the old object and made
+    /// nothing: state forgets the old one, and the call is a create.
+    fn create_again(&mut self, k: &str, u: &Uncertain, addr: &Address) {
+        self.state.remove(addr);
+        if let Some(e) = self.state.uncertain.get_mut(k) {
+            e.op = UncertainOp::Create;
+            e.remote.clear();
+        }
+        self.said.push(format!(
+            "{}: the replace whose answer was lost deleted {} and made nothing;                          it is created again",
+            crate::report::address(addr),
+            u.remote
+        ));
+    }
+
+    /// A delete: a Read. Gone, state forgets it; there, the plan deletes
+    /// it again.
+    fn deleted(&mut self, k: &str, u: &Uncertain, addr: &Address) -> Result<()> {
+        if !self.cloud.exists(addr, &u.remote)? {
+            match u.op {
+                UncertainOp::DeleteDeposed => {
+                    self.state.deposed.remove(&state::key(addr));
+                }
+                _ => self.state.remove(addr),
+            }
+            self.said.push(format!(
+                "{}: the delete whose answer was lost took effect; {} is gone",
+                crate::report::address(addr),
+                u.remote
+            ));
+        }
+        self.done(k);
+        Ok(())
+    }
+
+    /// The call `k` is resolved: neither uncertain nor remaining.
+    fn done(&mut self, k: &str) {
+        self.state.uncertain.remove(k);
+        if let Some(f) = &mut self.state.in_flight {
+            f.remaining.remove(k);
+        }
+    }
+
+    /// Whether the interrupted tick's record still has the call `k` to
+    /// make.
+    fn outstanding(&self, k: &str) -> bool {
+        self.state
             .in_flight
             .as_ref()
             .is_some_and(|f| f.remaining.contains_key(k))
-    };
-    let done = |state: &mut State, k: &str| {
-        state.uncertain.remove(k);
-        if let Some(f) = &mut state.in_flight {
-            f.remaining.remove(k);
-        }
-    };
-    for (k, u) in state.uncertain.clone() {
-        let deposed = matches!(u.op, UncertainOp::DeleteDeposed);
-        if !which(&k) {
-            continue;
-        }
-        let Some(addr) = state::parse_key(k.strip_suffix("#deposed").unwrap_or(&k)) else {
-            state.uncertain.remove(&k);
-            continue;
-        };
-        if cloud.waits(&addr.typ).is_some() {
-            continue;
-        }
-        let at = crate::report::address(&addr);
-        match u.op {
-            UncertainOp::Create | UncertainOp::Replace { .. } => {
-                // A create's address may still map an object that is gone.
-                let mapped = state.get(&addr).map(|e| e.remote.clone());
-                let made = created(cloud, &addr, &u.key).with_context(|| {
-                    format!(
-                        "{at}: looking up what the {} whose answer was lost made",
-                        op_name(&u.op)
-                    )
-                })?;
-                if let Some(remote) = made {
-                    if let UncertainOp::Replace { create_first: true } = u.op
-                        && mapped.as_ref().is_some_and(|m| *m != remote)
-                    {
-                        state.depose(&addr);
-                    }
-                    let provider = cloud.provider_of(&addr.typ).to_string();
-                    state.set(&addr, provider, remote.clone());
-                    state.set_name(&addr, u.name.clone());
-                    done(state, &k);
-                    out.push(format!(
-                        "{at}: the {} whose answer was lost made {remote}; state maps it",
-                        op_name(&u.op)
-                    ));
-                    continue;
-                }
-                // A destroy-first replacement that deleted the old object
-                // and made nothing: what is left is a create.
-                if let UncertainOp::Replace {
-                    create_first: false,
-                } = u.op
-                    && mapped.is_some_and(|m| m == u.remote)
-                    && !cloud.exists(&addr, &u.remote)?
-                {
-                    state.remove(&addr);
-                    if let Some(e) = state.uncertain.get_mut(&k) {
-                        e.op = UncertainOp::Create;
-                        e.remote.clear();
-                    }
-                    out.push(format!(
-                        "{at}: the replace whose answer was lost deleted {} and made nothing;                          it is created again",
-                        u.remote
-                    ));
-                    continue;
-                }
-                if !outstanding(state, &k) {
-                    state.uncertain.remove(&k);
-                }
-            }
-            UncertainOp::Update => done(state, &k),
-            UncertainOp::Delete | UncertainOp::DeleteDeposed => {
-                let gone = !cloud.exists(&addr, &u.remote)?;
-                if gone {
-                    match deposed {
-                        true => {
-                            state.deposed.remove(&state::key(&addr));
-                        }
-                        false => state.remove(&addr),
-                    }
-                    out.push(format!(
-                        "{at}: the delete whose answer was lost took effect; {} is gone",
-                        u.remote
-                    ));
-                }
-                done(state, &k);
-            }
-        }
     }
-    Ok(out)
 }
 
 /// The uncertain entries (`State::uncertain`) whose provider waits on the
