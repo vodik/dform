@@ -1,41 +1,29 @@
 //! What a region offers: its flavors and images, each listed once per region
-//! (`Ovh::lists`), an instance's or a volume's named by its name, and a flavor
+//! and run (`api::Client::list`), an instance's or a volume's named by its name, and a flavor
 //! compared with another (an instance resizes only to a larger one).
 
 use super::*;
 
 impl Ovh {
-    /// A region's flavors or images (`what`), listed once.
-    pub(super) fn list(&self, a: &Account, p: &str, what: &str, region: &str) -> api::Result<Json> {
-        let k = format!("{what}/{region}");
-        if let Some(v) = self.lists.lock().unwrap_or_else(|e| e.into_inner()).get(&k) {
-            return Ok(v.clone());
-        }
-        let v = a.client.get(&format!(
+    /// A region's flavors or images (`what`), listed once per run.
+    pub(super) fn list(
+        &self,
+        a: &Account,
+        p: &str,
+        what: &str,
+        region: &str,
+    ) -> api::Result<Arc<Json>> {
+        a.client.list(&format!(
             "/cloud/project/{p}/{what}?region={}",
             escape(region)
-        ))?;
-        self.lists
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(k, v.clone());
-        Ok(v)
+        ))
     }
 
-    /// A region's flavors and images, both listed at once when either is
-    /// not yet: an instance is checked or read against both, and the API
-    /// is a round trip away. A failure is left for the one that asks.
+    /// A region's flavors and images, both asked at once: an instance is
+    /// checked or read against both, and the API is a round trip away. A
+    /// failure is left for the one that asks.
     pub(super) fn list_region(&self, a: &Account, p: &str, region: &str) {
-        let lists = self.lists.lock().unwrap_or_else(|e| e.into_inner());
-        let missing: Vec<&str> = ["flavor", "image"]
-            .into_iter()
-            .filter(|w| !lists.contains_key(&format!("{w}/{region}")))
-            .collect();
-        drop(lists);
-        if missing.len() < 2 {
-            return;
-        }
-        dform_sdk::at_once(missing.into_iter().map(|what| {
+        dform_sdk::at_once(["flavor", "image"].map(|what| {
             move || {
                 let _ = self.list(a, p, what, region);
             }
@@ -92,7 +80,7 @@ impl Ovh {
                 .and_then(|x| s(x, "name"))
                 .map(str::to_string)
         };
-        if let Some(n) = by_id(&self.list(a, p, what, region)?) {
+        if let Some(n) = by_id(&*self.list(a, p, what, region)?) {
             return Ok(Some(n));
         }
         let one = a

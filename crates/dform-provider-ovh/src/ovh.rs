@@ -1,6 +1,7 @@
 //! The provider: the plugin protocol (`Handler`) over the OVH API. Each
 //! session (a deployment's Configure) is an [`Ovh`] of its own: its
-//! credentials, its project, what it made and listed.
+//! credentials, its project, what it made, and its client, which asks
+//! each list the provider reads once per run (`api::Client::list`).
 //!
 //! Configure finds the credentials (`config`), and with the program's
 //! settings (`use ovh { endpoint, project }`, a second Configure) the
@@ -196,10 +197,6 @@ pub struct Ovh {
     lookups: BTreeMap<String, Vec<String>>,
     /// The Creates this process was sent, by idempotency key.
     made: Mutex<BTreeMap<String, Made>>,
-    /// Each region's flavors and images, as the API listed them.
-    lists: Mutex<BTreeMap<String, Json>>,
-    /// Whether each project is on a vRack, once asked.
-    vrack: Mutex<BTreeMap<String, bool>>,
     /// The private addresses instances asked at Plan, by network.
     asked: Mutex<network::Asked>,
 }
@@ -297,8 +294,6 @@ impl Ovh {
             schema,
             state: RwLock::new(None),
             made: Mutex::new(BTreeMap::new()),
-            lists: Mutex::new(BTreeMap::new()),
-            vrack: Mutex::new(BTreeMap::new()),
             asked: Mutex::new(network::Asked::default()),
         }
     }
@@ -1075,11 +1070,11 @@ impl Ovh {
             ZONE => self.zone_rows(&what, input)?,
             FLAVOR => {
                 let (a, p) = self.project(&what)?;
-                map::flavor_rows(input, &self.list(&a, &p, "flavor", input)?)
+                map::flavor_rows(input, &*self.list(&a, &p, "flavor", input)?)
             }
             _ => {
                 let (a, p) = self.project(&what)?;
-                map::image_rows(input, &self.list(&a, &p, "image", input)?)
+                map::image_rows(input, &*self.list(&a, &p, "image", input)?)
             }
         })
     }
@@ -1112,7 +1107,7 @@ impl Ovh {
     fn region_rows(&self, what: &str, input: &str) -> Result<Vec<Vec<Value>>> {
         let a = self.account(what)?;
         let p = resolve_project(&a.client, input, a.cache.as_deref())?;
-        let names = a.client.get(&format!("/cloud/project/{p}/region"))?;
+        let names = a.client.list(&format!("/cloud/project/{p}/region"))?;
         let mut rows = Vec::new();
         for n in names
             .as_array()

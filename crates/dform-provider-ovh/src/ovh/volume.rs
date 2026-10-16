@@ -276,7 +276,7 @@ impl Ovh {
     /// The volume named `name` in `region`, unless it is deleted.
     pub(super) fn find_volume(&self, name: &str, region: &str) -> Result<Option<String>> {
         let (a, p) = self.project("find a volume")?;
-        let list = a.client.get(&format!(
+        let list = a.client.list(&format!(
             "/cloud/project/{p}/volume?region={}",
             escape(region)
         ))?;

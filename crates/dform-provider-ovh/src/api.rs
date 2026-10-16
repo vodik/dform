@@ -24,6 +24,13 @@
 //! (R-81, `plugin::policy::retryable`) tells a transient one (429, 5xx)
 //! from a refusal; a call that reached no answer is `Unreachable`, which
 //! may have taken effect.
+//!
+//! A list (`Client::list`: a region's flavors, the project's private
+//! networks, a network's subnets) is asked once per client, a session's
+//! run: the callers asking it at the same time wait on the one request,
+//! and every later one has its answer. A write to its class of endpoint
+//! (`bucket`) forgets it, whatever the write's outcome, so the next ask
+//! is answered as the API is after the write. A failure is not kept.
 
 use crate::config::{Auth, Credentials};
 use crate::sign::signature;
@@ -31,7 +38,7 @@ use base64::Engine;
 use serde_json::Value as Json;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 /// How long one HTTP request may take.
@@ -108,6 +115,39 @@ pub struct Client {
     /// The bearer token minted from a service account's credentials, and
     /// when it is to be minted afresh.
     token: Mutex<Option<(String, Instant)>>,
+    /// The lists asked once.
+    kept: Mutex<Kept>,
+}
+
+/// The lists a client asked (`Client::list`), by path, and how many
+/// writes each class of endpoint has had: an answer asked while one was
+/// sent may predate it, and is not kept.
+#[derive(Default)]
+struct Kept {
+    lists: BTreeMap<String, Slot>,
+    writes: BTreeMap<String, u64>,
+}
+
+impl Kept {
+    /// The writes to `path`'s class of endpoint so far.
+    fn writes(&self, path: &str) -> u64 {
+        self.writes.get(bucket(path)).copied().unwrap_or(0)
+    }
+
+    /// A write to `path`'s class: its lists forgotten.
+    fn wrote(&mut self, path: &str) {
+        let class = bucket(path);
+        *self.writes.entry(class.to_string()).or_default() += 1;
+        self.lists.retain(|p, _| bucket(p) != class);
+    }
+}
+
+/// One list: not asked yet, or its answer, `None` where the API has none
+/// (a 404). Its lock is held while it is asked.
+type Slot = Arc<Mutex<Option<Option<Arc<Json>>>>>;
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// How one call is authenticated.
@@ -153,6 +193,7 @@ impl Client {
             delta: Mutex::new(None),
             cache: None,
             token: Mutex::new(None),
+            kept: Mutex::default(),
         }
     }
 
@@ -234,16 +275,59 @@ impl Client {
         }
     }
 
+    /// The list at `path`, asked once (the module's doc).
+    pub fn list(&self, path: &str) -> Result<Arc<Json>> {
+        let asked = self.remember(path, || self.get(path).map(Some))?;
+        Ok(asked.unwrap_or_default())
+    }
+
+    /// [`Client::list`], `None` for a 404 (kept as the answer).
+    pub fn list_opt(&self, path: &str) -> Result<Option<Arc<Json>>> {
+        self.remember(path, || self.get_opt(path))
+    }
+
+    /// The answer kept for `path`, else `ask`'s, kept unless it failed or
+    /// a write to its class was sent while it was asked.
+    fn remember(
+        &self,
+        path: &str,
+        ask: impl FnOnce() -> Result<Option<Json>>,
+    ) -> Result<Option<Arc<Json>>> {
+        let (slot, writes) = {
+            let mut kept = lock(&self.kept);
+            let slot = kept.lists.entry(path.to_string()).or_default().clone();
+            (slot, kept.writes(path))
+        };
+        let mut held = lock(&slot);
+        if let Some(answer) = &*held {
+            return Ok(answer.clone());
+        }
+        let answer = ask()?.map(Arc::new);
+        if lock(&self.kept).writes(path) == writes {
+            *held = Some(answer.clone());
+        }
+        Ok(answer)
+    }
+
     pub fn post(&self, path: &str, body: Option<&Json>) -> Result<Json> {
-        self.send("POST", path, body, true)
+        self.write("POST", path, body)
     }
 
     pub fn put(&self, path: &str, body: &Json) -> Result<Json> {
-        self.send("PUT", path, Some(body), true)
+        self.write("PUT", path, Some(body))
     }
 
     pub fn delete(&self, path: &str) -> Result<Json> {
-        self.send("DELETE", path, None, true)
+        self.write("DELETE", path, None)
+    }
+
+    /// A write: the lists of its class forgotten as it is sent and once
+    /// it is answered (or not), so none asked meanwhile is kept.
+    fn write(&self, method: &str, path: &str, body: Option<&Json>) -> Result<Json> {
+        lock(&self.kept).wrote(path);
+        let out = self.send(method, path, body, true);
+        lock(&self.kept).wrote(path);
+        out
     }
 
     /// One call: `path` under the endpoint's URL (it carries its query),

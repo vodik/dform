@@ -239,7 +239,7 @@ impl Ovh {
     /// The instance named `name` in `region`, unless it is deleted.
     pub(super) fn find_instance(&self, name: &str, region: &str) -> Result<Option<String>> {
         let (a, p) = self.project("find an instance")?;
-        let list = a.client.get(&format!(
+        let list = a.client.list(&format!(
             "/cloud/project/{p}/instance?region={}",
             escape(region)
         ))?;

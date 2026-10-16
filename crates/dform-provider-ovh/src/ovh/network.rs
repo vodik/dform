@@ -22,33 +22,17 @@ impl Ovh {
         a.client.get_opt(&network_path(p, remote))
     }
 
-    /// Whether the project is on a vRack, asked once; a project that is
-    /// not refuses a private network naming it. An account that cannot be
-    /// reached is not judged here.
+    /// Whether the project is on a vRack, asked once per run; a project
+    /// that is not refuses a private network naming it. An account that
+    /// cannot be reached is not judged here.
     pub(super) fn check_vrack(&self, at: &str) -> Result<()> {
         let Ok((a, p)) = self.project(at) else {
             return Ok(());
         };
-        let known = self
-            .vrack
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&p)
-            .copied();
-        let on = match known {
-            Some(on) => on,
-            None => {
-                let on = a
-                    .client
-                    .get_opt(&format!("/cloud/project/{p}/vrack"))?
-                    .is_some();
-                self.vrack
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .insert(p.clone(), on);
-                on
-            }
-        };
+        let on = a
+            .client
+            .list_opt(&format!("/cloud/project/{p}/vrack"))?
+            .is_some();
         if !on {
             bail!("{at}: {}", no_vrack(&p));
         }
@@ -161,10 +145,8 @@ impl Ovh {
     /// The private network named `name`, unless it is being deleted.
     pub(super) fn find_network(&self, name: &str) -> Result<Option<String>> {
         let (a, p) = self.project("find a private network")?;
-        let list = a
-            .client
-            .get(&format!("/cloud/project/{p}/network/private"))?;
-        Ok(list
+        Ok(self
+            .private_networks(&a, &p)?
             .as_array()
             .into_iter()
             .flatten()
@@ -508,10 +490,11 @@ fn holds(sub: &(Json, Json), ip: Ipv4Addr) -> bool {
 /// It is its own object (it has an id), named by its network, region and
 /// range; nothing of it changes in place.
 impl Ovh {
-    /// A network's subnets; none when the network is gone.
+    /// A network's subnets, listed once per run; none when the network
+    /// is gone.
     pub(super) fn subnets(&self, a: &Account, p: &str, network: &str) -> api::Result<Vec<Json>> {
         Ok(a.client
-            .get_opt(&format!("{}/subnet", network_path(p, network)))?
+            .list_opt(&format!("{}/subnet", network_path(p, network)))?
             .and_then(|l| l.as_array().cloned())
             .unwrap_or_default())
     }
@@ -674,7 +657,7 @@ impl Ovh {
         }
         let public = a
             .client
-            .get(&format!("/cloud/project/{p}/network/public"))
+            .list(&format!("/cloud/project/{p}/network/public"))
             .map_err(|e| failed(at, e))?;
         let ext = public
             .as_array()
@@ -933,9 +916,7 @@ impl Ovh {
     /// answers) and the OpenStack ids of its regions (what an attach
     /// sends).
     fn openstack_ids(&self, a: &Account, p: &str) -> api::Result<BTreeMap<String, String>> {
-        let list = a
-            .client
-            .get(&format!("/cloud/project/{p}/network/private"))?;
+        let list = self.private_networks(a, p)?;
         let mut out = BTreeMap::new();
         for net in list.as_array().into_iter().flatten() {
             let Some(id) = s(net, "id") else { continue };
@@ -952,6 +933,14 @@ impl Ovh {
             }
         }
         Ok(out)
+    }
+}
+
+impl Ovh {
+    /// The project's private networks, listed once per run.
+    pub(super) fn private_networks(&self, a: &Account, p: &str) -> api::Result<Arc<Json>> {
+        a.client
+            .list(&format!("/cloud/project/{p}/network/private"))
     }
 }
 
