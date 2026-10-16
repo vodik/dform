@@ -364,7 +364,7 @@ impl Lowerer<'_> {
         list: Option<&SyntaxNode>,
         pos: Pos,
         pre: &mut Vec<Lit>,
-    ) -> L<(Vec<Term>, Option<Vec<ExprId>>)> {
+    ) -> L<(Vec<Term>, Vec<ExprId>)> {
         let list: Vec<SyntaxNode> = list.map(|l| terms(l).collect()).unwrap_or_default();
         let cols = self.ref_columns(rc.scope, pred, list.len());
         self.ref_args_by(rc, pred, &cols, &list, pos, pre)
@@ -380,9 +380,9 @@ impl Lowerer<'_> {
         list: &[SyntaxNode],
         pos: Pos,
         pre: &mut Vec<Lit>,
-    ) -> L<(Vec<Term>, Option<Vec<ExprId>>)> {
+    ) -> L<(Vec<Term>, Vec<ExprId>)> {
         let mut args = Vec::new();
-        let mut nodes = Some(Vec::new());
+        let mut nodes = Vec::new();
         for (i, t) in list.iter().enumerate() {
             let id = match cols.get(&i) {
                 Some(col) if t.kind() == LITERAL => {
@@ -394,23 +394,20 @@ impl Lowerer<'_> {
                     if pos == Pos::Content {
                         self.row_types(rc, t, col, pre);
                     }
-                    Some(id)
+                    id
                 }
                 _ if pos == Pos::Content && t.kind() == TUPLE => {
                     let (t, id) = self.pattern(rc, t, pre)?;
                     args.push(t);
-                    Some(id)
+                    id
                 }
                 _ => {
                     let (t, id) = self.arg_node(rc, t, pos, pre)?;
                     args.push(t);
-                    Some(id)
+                    id
                 }
             };
-            nodes = nodes.zip(id).map(|(mut ns, id)| {
-                ns.push(id);
-                ns
-            });
+            nodes.push(id);
         }
         Ok((args, nodes))
     }

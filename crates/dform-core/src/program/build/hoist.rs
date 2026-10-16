@@ -17,17 +17,16 @@
 //! | `k(__ref("T", __scope(V), ""))`           | `Address` of the read           |
 //! | `V = t`                                   | `t`'s node                      |
 //!
-//! The resolver keeps each read's node by the variable it binds
-//! ([`Reads`]): a builder given a literal the resolver lowered (a
-//! comprehension's body outside a statement) takes the node of each read
-//! it holds rather than remaking it ([`Builder::reading`]).
+//! Which of the resolver's own literals a node holds is what its lowering
+//! writes ([`Builder::not_held`]); a test the resolver makes before a
+//! read (`instance_of`) is the read's when the read holds it
+//! ([`Reads::holds`]).
 
 use super::Builder;
-use crate::ast::{Lit, Term};
+use crate::ast::Lit;
 use crate::program::node::*;
 use crate::program::scope::{DeclRef, Reach};
 use crate::value::Value;
-use std::collections::BTreeMap;
 
 /// What a read reads, as the front end holds it, its parts their nodes:
 /// its node is built from it ([`Builder::read_into`]).
@@ -72,14 +71,6 @@ pub struct Keyed<'t> {
     pub field: &'t str,
 }
 
-/// A read hoisted before what is being built that no node holds yet:
-/// where it was hoisted among the others, the variable it binds.
-#[derive(Debug, Clone)]
-pub(super) struct Pending {
-    binds: Option<String>,
-    lit: Lit,
-}
-
 impl super::Reads {
     /// Whether a read built so far tests the copy in the scope `scope`.
     pub fn holds(&self, scope: ExprId) -> bool {
@@ -88,103 +79,23 @@ impl super::Reads {
 }
 
 impl Builder<'_> {
-    /// `f`, the reads `reads` hoisted before what it builds, each the node
-    /// of the first use of the variable it binds; the reads whose
-    /// variables `f` does not use, given back in order.
-    pub fn reading<T>(&mut self, reads: &[Lit], f: impl FnOnce(&mut Self) -> T) -> (T, Vec<Lit>) {
-        let pending = reads
-            .iter()
-            .map(|l| Pending {
-                binds: self.binder(l),
-                lit: l.clone(),
-            })
-            .collect();
-        let outer = std::mem::replace(&mut self.pending, pending);
-        let out = f(self);
-        let left = std::mem::replace(&mut self.pending, outer);
-        (out, left.into_iter().map(|p| p.lit).collect())
-    }
-
-    /// `f` with no read pending: a comprehension's body, whose reads are
-    /// its own.
-    pub(super) fn sealed<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        let outer = std::mem::take(&mut self.pending);
-        let out = f(self);
-        let inner = std::mem::replace(&mut self.pending, outer);
-        debug_assert!(inner.is_empty(), "a sealed build leaves nothing pending");
-        out
-    }
-
-    /// The variable a hoisted read binds: the variable of the node the
-    /// resolver kept of it (whose own literal it is, the last its lowering
-    /// writes), the left of `V = t`.
-    fn binder(&self, l: &Lit) -> Option<String> {
-        let key = written(l);
-        let kept = self.reads.nodes.values().flatten().find(|&&id| {
-            let (_, reads) = crate::program::lower_expr(self.program, id);
-            reads.last().is_some_and(|r| written(r) == key)
-        });
-        if let Some(v) = kept.and_then(|&id| self.program.exprs[id].hoisted) {
-            return Some(self.program.vars[v].lowered.clone());
-        }
-        match l {
-            Lit::Eq(Term::Var(v), _) => Some(v.clone()),
-            _ => None,
-        }
-    }
-
-    /// The node of the use of `x`: the read that binds it when one is
-    /// pending, taken.
-    pub(super) fn pending_read(&mut self, x: &str) -> Option<ExprId> {
-        let i = self
-            .pending
-            .iter()
-            .position(|p| p.binds.as_deref() == Some(x))?;
-        let Pending { lit, .. } = self.pending.remove(i);
-        if let Some(id) = self.built_read(x, &lit) {
-            self.took(id);
-            return Some(id);
-        }
-        let Lit::Eq(_, t) = &lit else {
-            unreachable!("a read the resolver kept, or `V = t`: {lit:?}")
-        };
-        let id = self.expr(t);
-        // A read read again into `x`: its own node, of the read.
-        let id = match self.program.exprs[id].hoisted {
-            Some(_) => self.expr_node(ExprKind::Alias(id)),
-            None => id,
-        };
-        let var = self.var(x);
-        self.program.exprs[id].hoisted = Some(var);
-        Some(id)
-    }
-
-    /// The node built where its term is (step 7) of the read `lit` into
-    /// `x`: one of those read into `x` that writes `lit`.
-    fn built_read(&self, x: &str, lit: &Lit) -> Option<ExprId> {
-        let lit = written(lit);
-        self.reads.nodes.get(x)?.iter().copied().find(|&id| {
-            let (_, reads) = crate::program::lower_expr(self.program, id);
-            reads.iter().any(|r| written(r) == lit)
-        })
-    }
-
-    /// The node `id`, built where its term is (step 7), holds the reads
-    /// its lowering writes: taken from those pending.
-    pub fn took(&mut self, id: ExprId) {
-        let (_, reads) = crate::program::lower_expr(self.program, id);
-        for r in reads {
+    /// Of `reads`, the resolver's literals for what it hoisted before the
+    /// node `id`, those `id` does not hold (the reads its lowering writes
+    /// taken out), in order.
+    pub fn not_held(&self, id: ExprId, mut reads: Vec<Lit>) -> Vec<Lit> {
+        let (_, held) = crate::program::lower_expr(self.program, id);
+        for r in held {
             let r = written(&r);
-            if let Some(i) = self.pending.iter().position(|p| written(&p.lit) == r) {
-                self.pending.remove(i);
+            if let Some(i) = reads.iter().position(|l| written(l) == r) {
+                reads.remove(i);
             }
         }
+        reads
     }
 
     /// The read `read` in term position, read into the variable `v`: its
     /// node, built from what it reads (step 7), its parts the nodes of
-    /// what resolved them. Kept for the literals that hold its read
-    /// ([`Builder::pending_read`]).
+    /// what resolved them.
     pub fn read_into(&mut self, read: ReadOf, v: &str) -> ExprId {
         let id = self.read_node(read);
         self.hoist_into(id, v)
@@ -344,53 +255,11 @@ impl Builder<'_> {
         self.expr_node(ExprKind::RefOf(res))
     }
 
-    /// The read `id` in term position, read into `v`, kept for the
-    /// literals that hold its read.
+    /// The read `id` in term position, read into `v`.
     fn hoist_into(&mut self, id: ExprId, v: &str) -> ExprId {
         let var = self.var(v);
         self.program.exprs[id].hoisted = Some(var);
-        self.reads.nodes.entry(v.to_string()).or_default().push(id);
         id
-    }
-
-    /// `m`'s entries in the order the resolver read them: by the first
-    /// read each one's term holds (a written object's fields hoist in the
-    /// order written; the lowered term keeps them by name).
-    pub(super) fn in_read_order<'t>(
-        &self,
-        m: &'t BTreeMap<String, Term>,
-    ) -> Vec<(&'t String, &'t Term)> {
-        let mut entries: Vec<(&String, &Term)> = m.iter().collect();
-        if !self.pending.is_empty() {
-            entries.sort_by_key(|(_, t)| self.first_read(t));
-        }
-        entries
-    }
-
-    /// The first pending read `t` holds, through the reads it holds: where
-    /// it was hoisted, or none.
-    fn first_read(&self, t: &Term) -> usize {
-        let mut seen = std::collections::BTreeSet::new();
-        let mut walk = vec![t.clone()];
-        let mut first = usize::MAX;
-        while let Some(t) = walk.pop() {
-            let mut vars = std::collections::BTreeSet::new();
-            crate::syntax::resolve::lit_vars(&Lit::Eq(t.clone(), Term::Wildcard), &mut vars);
-            for v in vars {
-                let Some(at) = self
-                    .pending
-                    .iter()
-                    .position(|p| p.binds.as_deref() == Some(v.as_str()))
-                else {
-                    continue;
-                };
-                if seen.insert(at) {
-                    first = first.min(at);
-                    walk.extend(self.pending[at].lit.terms().cloned());
-                }
-            }
-        }
-        first
     }
 }
 

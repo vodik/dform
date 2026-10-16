@@ -17,15 +17,14 @@ pub struct RuleLowered<'a> {
     pub span: Span,
     pub scope: ScopeId,
     /// The head, its rank not among its arguments; its arguments'
-    /// patterns where the resolver built them of its nodes.
+    /// patterns, built of its nodes.
     pub head: &'a Atom,
-    pub args: Option<RelArgs>,
+    pub args: RelArgs,
     pub rank: Option<Rank>,
     /// The clause of B, gathered; none for a fact.
     pub clause: Option<ClauseId>,
-    /// B's literals, then from `seed` the reads the head hoisted.
+    /// B's literals, then the reads the head hoisted.
     pub body: &'a [Lit],
-    pub seed: usize,
     /// The helper statements the head's terms made.
     pub made: &'a [Stmt],
     /// The statement's aggregate values, and the head as the resolver
@@ -37,12 +36,9 @@ pub struct RuleLowered<'a> {
 impl Builder<'_> {
     /// The `rule` item of `r`.
     pub fn rule_item(&mut self, r: RuleLowered) -> ItemId {
-        let head = match r.args {
-            Some(args) => Head {
-                rel: RelRef::written(r.head.pred.clone(), r.head.span),
-                args,
-            },
-            None => self.head(r.head, &r.body[r.seed..]),
+        let head = Head {
+            rel: RelRef::written(r.head.pred.clone(), r.head.span),
+            args: r.args,
         };
         if let Some(c) = r.clause
             && !r.results.is_empty()
@@ -87,16 +83,5 @@ impl Builder<'_> {
             }
         }
         out
-    }
-
-    /// The head `a`, after the reads `reads` its arguments hoisted.
-    pub(super) fn head(&mut self, a: &Atom, reads: &[Lit]) -> Head {
-        let rel = RelRef::written(a.pred.clone(), a.span);
-        let (args, left) = self.reading(reads, |b| b.at(a.span, |b| b.args(a)));
-        assert!(
-            left.is_empty(),
-            "a head uses every read it hoisted: {a:?} after {left:?}"
-        );
-        Head { rel, args }
     }
 }

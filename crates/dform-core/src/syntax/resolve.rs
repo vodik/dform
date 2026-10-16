@@ -726,16 +726,15 @@ struct Elem {
 struct RuleParts {
     /// The clause gathered of its body.
     clause: Option<crate::program::ClauseId>,
-    /// Its head, its arguments' patterns where the resolver built them,
-    /// and with its rank the last argument.
+    /// Its head, its arguments' patterns, and with its rank the last
+    /// argument.
     head: Atom,
-    args: Option<crate::program::node::RelArgs>,
+    args: crate::program::node::RelArgs,
     ranked: Atom,
     rank: Option<Rank>,
-    /// Its clause's literals, then from `seed` the reads the head hoisted,
-    /// which made the statement's helpers from `made`.
+    /// Its clause's literals, then the reads the head hoisted, which made
+    /// the statement's helpers from `made`.
     body: Vec<Lit>,
-    seed: usize,
     made: usize,
     /// The variables the program wrote, by the name each lowers to.
     written: BTreeSet<String>,
@@ -4862,7 +4861,6 @@ impl<'u> Lowerer<'u> {
             rank: r.rank,
             clause: r.clause,
             body: &r.body,
-            seed: r.seed,
             made: &self.helpers[r.made..],
             results: &results,
             ranked: &r.ranked,
@@ -4906,11 +4904,11 @@ impl<'u> Lowerer<'u> {
                 ),
             );
         }
-        let (seed, made) = (body.len(), self.helpers.len());
+        let made = self.helpers.len();
         let (head, args) = self.calls(calls, |l| {
             l.atom_args(&mut rc, &head_node, Pos::Whole, &mut body)
         })?;
-        let args = args.map(|args| self.rel_args(&rc, head.span, args));
+        let args = self.rel_args(&rc, head.span, args);
         let rank = self.rank_tok(n)?;
         let mut ranked = head.clone();
         if let Some(rank) = rank {
@@ -4935,7 +4933,6 @@ impl<'u> Lowerer<'u> {
             ranked,
             rank,
             body,
-            seed,
             made,
             written: rc.vars.values().cloned().collect(),
         })
@@ -6029,10 +6026,8 @@ impl<'u> Lowerer<'u> {
                 let a = terms(n).next().ok_or(Skip)?;
                 let (atom, args) = self.atom_args(rc, &a, Pos::Content, out)?;
                 self.core_read(&a, &atom)?;
-                if let Some(args) = args {
-                    let g = self.rel_goal(rc, &atom, args);
-                    self.built(g);
-                }
+                let g = self.rel_goal(rc, &atom, args);
+                self.built(g);
                 out.push(Lit::Pos(atom));
             }
             LIT_TRUTH => self.truth_lit(rc, n, out, span)?,
@@ -6187,11 +6182,9 @@ impl<'u> Lowerer<'u> {
                 let a = terms(n).next().ok_or(Skip)?;
                 let (atom, args) = self.atom_args(rc, &a, Pos::Content, out)?;
                 self.core_read(&a, &atom)?;
-                if let Some(args) = args {
-                    let g = self.rel_goal(rc, &atom, args);
-                    let g = self.building(rc, span, |b| b.not_one(g, Negated::Literal));
-                    self.built(g);
-                }
+                let g = self.rel_goal(rc, &atom, args);
+                let g = self.building(rc, span, |b| b.not_one(g, Negated::Literal));
+                self.built(g);
                 out.push(Lit::Not(atom));
                 return Ok(());
             }
@@ -6821,7 +6814,7 @@ impl<'u> Lowerer<'u> {
         n: &SyntaxNode,
         pos: Pos,
         pre: &mut Vec<Lit>,
-    ) -> L<(Atom, Option<AtomArgs>)> {
+    ) -> L<(Atom, AtomArgs)> {
         let span = self.span(n);
         if let Some(a) = self.exported_relation(rc, n, pos, pre)? {
             return Ok(a);
@@ -6897,7 +6890,7 @@ impl<'u> Lowerer<'u> {
                 record: Some(fields),
                 span,
             };
-            return Ok((a, Some(AtomArgs::Record(nodes))));
+            return Ok((a, AtomArgs::Record(nodes)));
         }
         match crate::zset::REF_RELATIONS.iter().find(|(p, ..)| *p == pred) {
             Some(_) => {
@@ -6942,7 +6935,7 @@ impl<'u> Lowerer<'u> {
                     record: None,
                     span,
                 };
-                Ok((a, nodes.map(AtomArgs::Positional)))
+                Ok((a, AtomArgs::Positional(nodes)))
             }
             // In a body an argument is a pattern (R-58): `pair((a, b))`;
             // a relation of several named columns takes one object
@@ -6963,7 +6956,7 @@ impl<'u> Lowerer<'u> {
                         record: Some(record),
                         span,
                     };
-                    return Ok((a, Some(nodes)));
+                    return Ok((a, nodes));
                 }
                 let mut args = Vec::new();
                 for t in &list {
@@ -6986,7 +6979,7 @@ impl<'u> Lowerer<'u> {
     }
 
     /// The atom `pred(args)` at `span`, each argument its term and node.
-    fn positional(pred: String, args: Vec<(Term, ExprId)>, span: Span) -> (Atom, Option<AtomArgs>) {
+    fn positional(pred: String, args: Vec<(Term, ExprId)>, span: Span) -> (Atom, AtomArgs) {
         let (args, nodes): (Vec<Term>, Vec<ExprId>) = args.into_iter().unzip();
         let a = Atom {
             pred,
@@ -6994,7 +6987,7 @@ impl<'u> Lowerer<'u> {
             record: None,
             span,
         };
-        (a, Some(AtomArgs::Positional(nodes)))
+        (a, AtomArgs::Positional(nodes))
     }
 
     /// A relation's argument at `pos`: its term, the reads it makes into
@@ -7042,7 +7035,7 @@ impl<'u> Lowerer<'u> {
         n: &SyntaxNode,
         pos: Pos,
         pre: &mut Vec<Lit>,
-    ) -> L<Option<(Atom, Option<AtomArgs>)>> {
+    ) -> L<Option<(Atom, AtomArgs)>> {
         let span = self.span(n);
         let Some(c) = n.children().find_map(|c| Chain::of(&c)) else {
             return Ok(None);
@@ -7069,7 +7062,7 @@ impl<'u> Lowerer<'u> {
             let parts = nodes.into_iter().map(ListPart::Elem).collect();
             let list = self.node(span, ExprKind::List { parts });
             let a = atom_at("member", vec![self.term_of(rows), Term::List(cols)], span);
-            return Ok(Some((a, Some(AtomArgs::Positional(vec![rows, list])))));
+            return Ok(Some((a, AtomArgs::Positional(vec![rows, list]))));
         }
         let named = self
             .instance_in(rc.scope, &c.head)
@@ -7115,8 +7108,7 @@ impl<'u> Lowerer<'u> {
                 for t in &list {
                     cols.push(self.arg_node(rc, t, pos, pre)?);
                 }
-                let (cols, nodes) = cols.into_iter().unzip();
-                (cols, Some(nodes))
+                cols.into_iter().unzip()
             }
         };
         let a = atom_at(
@@ -7124,11 +7116,9 @@ impl<'u> Lowerer<'u> {
             vec![inst_term, str_term(&p), Term::List(cols)],
             span,
         );
-        let args = nodes.map(|nodes| {
-            let parts = nodes.into_iter().map(ListPart::Elem).collect();
-            let list = self.node(span, ExprKind::List { parts });
-            AtomArgs::Positional(vec![inst, self.str_node(span, &p), list])
-        });
+        let parts = nodes.into_iter().map(ListPart::Elem).collect();
+        let list = self.node(span, ExprKind::List { parts });
+        let args = AtomArgs::Positional(vec![inst, self.str_node(span, &p), list]);
         Ok(Some((a, args)))
     }
 
@@ -7258,7 +7248,7 @@ impl<'u> Lowerer<'u> {
                 let empty = self.str_node(span, "");
                 let args = vec![typ, addr, empty];
                 let id = self.building(rc, span, |b| b.form(crate::address::REF, args));
-                let left = self.building(rc, span, |b| b.reading(&local, |b| b.took(id)).1);
+                let left = self.building(rc, span, |b| b.not_held(id, local));
                 pre.extend(left);
                 Ok(id)
             }
@@ -7605,6 +7595,12 @@ impl<'u> Lowerer<'u> {
         self.building(rc, span, |b| b.goal_node(span, kind))
     }
 
+    /// Whether a read built so far in the statement tests the copy in the
+    /// scope `scope` itself (an `Output` holding its test).
+    fn held(&self, scope: ExprId) -> bool {
+        self.gather.as_ref().is_some_and(|g| g.holds(scope))
+    }
+
     /// The written literal being lowered is the goal `g`, built of its
     /// terms' nodes (R-211 step 7c).
     fn built(&mut self, g: GoalId) {
@@ -7739,7 +7735,12 @@ impl<'u> Lowerer<'u> {
                         let ty = TypeExpr::Name(ty.clone());
                         self.node(e.span, ExprKind::As { value: id, ty })
                     }
-                    _ => self.building(rc, Span::default(), |b| b.expr(&now)),
+                    [v, Term::Val(Value::Str(ty))] => {
+                        let ty = TypeExpr::Name(ty.clone());
+                        let value = self.retyped(rc, id, was, v.clone());
+                        self.node(e.span, ExprKind::As { value, ty })
+                    }
+                    _ => id,
                 }
             }
             (Term::List(ns), Term::List(ws), ExprKind::List { parts })
@@ -8133,16 +8134,21 @@ impl<'u> Lowerer<'u> {
         } else {
             Pos::Whole
         };
-        let lits = body.len();
+        let tests = std::mem::take(&mut rc.tests);
         let item = self.bind(false, |l| l.expr(rc, &item_node, item_pos, &mut body))?;
         (rc.reads, rc.values) = saved;
-        if let Some(clause) = clause
-            && body.len() == lits
-        {
-            return Ok(self.node(span, ExprKind::Comprehension { item, clause }));
-        }
-        let item = self.lowered(item, &mut body);
-        Ok(self.building(rc, span, |b| b.comprehension(&item, &body)))
+        // A test the item made before a read it holds none of is the
+        // body's last goal.
+        let item_tests = std::mem::replace(&mut rc.tests, tests);
+        let clause = clause.unwrap_or_else(|| self.building(rc, at, |b| b.clause_of(Vec::new())));
+        let held = |l: &Self, s: Option<ExprId>| s.is_some_and(|s| l.held(s));
+        let unheld: Vec<GoalId> = item_tests
+            .into_iter()
+            .filter(|&(s, _)| !held(self, s))
+            .map(|(_, g)| g)
+            .collect();
+        self.program.clauses[clause].goals.extend(unheld);
+        Ok(self.node(span, ExprKind::Comprehension { item, clause }))
     }
 
     /// Arithmetic; `us-east` and `us-test-1a`, meant as strings, are
@@ -9653,11 +9659,8 @@ impl<'u> Lowerer<'u> {
     ) -> L<ExprId> {
         let plan = self.plan(rc, res, pos, span)?;
         let (id, left) = self.building(rc, span, |b| {
-            b.reading(&local, |b| {
-                let id = plan.build(b);
-                b.took(id);
-                id
-            })
+            let id = plan.build(b);
+            (id, b.not_held(id, local))
         });
         pre.extend(left);
         Ok(id)

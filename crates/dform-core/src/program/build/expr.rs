@@ -1,84 +1,27 @@
-//! A term as nodes (R-211 step 3), built from what the resolver lowered
-//! it to: every form an `ast::Term` takes has its node, the internal
-//! functions the resolver writes for what has no other spelling included.
+//! A term's form as its node (R-211 step 3): what a call of a function
+//! of the language or the lowering is, over its arguments' nodes
+//! ([`Builder::form`]), and a term with the reads it holds made already
+//! ([`Builder::settled`]).
 //!
-//! | lowered                                  | node                              |
+//! | call                                     | node                              |
 //! |------------------------------------------|-----------------------------------|
-//! | `Val(v)`                                 | `Lit(v)`                          |
 //! | `__quantity("500m", file, start, end)`   | `Quantity`, at its span           |
-//! | `Var(X)`, `_`                            | `Var`, `Hole`                     |
 //! | `add(a, b)` .. `mod(a, b)`, `sub(0, a)`  | `Binary`, `Neg`                   |
 //! | `str.format("a%sb", x)`                  | `Interp`                          |
-//! | `{..}`, `__object(..)`, `__merge(..)`    | `Object` (`spread.rs`)            |
-//! | `[..]`, `__concat(..)`                   | `List` (`spread.rs`)              |
+//! | `__object(..)`, `__merge(..)`            | `Object` (`spread.rs`)            |
+//! | `__concat(..)`                           | `List` (`spread.rs`)              |
 //! | `__range(lo, hi, incl)`                  | `Range`                           |
 //! | `__as(v, "T")`                           | `As`                              |
 //! | `__path(v, "a.b")`, `__len(v)`           | `Field` of `Field` and `Len` steps |
 //! | `__ref("T", a, "p")`                     | `RefOf` a `Resource` (or its `Field`) |
-//! | `__scope(n)`, `__lexical("B", "n")`      | `Scoped`, `Absolute`, `Lexical("B")` |
-//! | `[item \| body]`                         | `Comprehension` (`clause.rs`)     |
 //! | any other `f(..)`                        | `Call` of the function, or of a name read as data |
-//!
-//! The reads a term hoisted are its nodes in term position
-//! ([`Builder::hoisted`], `hoist.rs`). The resolver builds a term written
-//! in the program as its node (R-211 step 7), the forms over its
-//! arguments' nodes ([`Builder::form`]); a term is built from what it
-//! lowered to where a statement's builder reads a lowered literal, and
-//! for the terms the resolver makes of what it resolved.
 
 use super::Builder;
-use crate::ast::{Lit, Term, TypeExpr};
+use crate::ast::TypeExpr;
 use crate::program::node::*;
-use crate::program::scope::Reach;
 use crate::value::Value;
 
 impl Builder<'_> {
-    /// The term `t` the resolver lowered, after the reads it hoisted,
-    /// `reads`: each the node of the first use of its variable in `t`.
-    pub fn hoisted(&mut self, t: &Term, reads: &[Lit]) -> ExprId {
-        let (e, left) = self.reading(reads, |b| b.expr(t));
-        assert!(
-            left.is_empty(),
-            "a term uses every read it hoisted: {t:?} after {left:?}"
-        );
-        e
-    }
-
-    /// The lowered term `t`.
-    pub fn expr(&mut self, t: &Term) -> ExprId {
-        let kind = match t {
-            Term::Val(v) => ExprKind::Lit(v.clone()),
-            Term::Var(x) => match self.pending_read(x) {
-                Some(read) => return read,
-                None => ExprKind::Var(self.var(x)),
-            },
-            Term::Wildcard => ExprKind::Hole,
-            Term::List(xs) => return self.list_of(xs),
-            Term::Obj(m) => return self.object_of(m),
-            Term::ListComp { item, body } => return self.comprehension(item, body),
-            Term::Func { name, args } => return self.func(name, args),
-        };
-        self.expr_node(kind)
-    }
-
-    /// `[item | body]` as lowered: its clause the body's literals, its
-    /// reads its own.
-    pub fn comprehension(&mut self, item: &Term, body: &[Lit]) -> ExprId {
-        let kind = self.sealed(|b| {
-            let clause = b.clause(body);
-            let item = b.expr(item);
-            ExprKind::Comprehension { item, clause }
-        });
-        self.expr_node(kind)
-    }
-
-    /// `name(args)`: its arguments' nodes, the form of the language it
-    /// lowers ([`Builder::form`]).
-    fn func(&mut self, name: &str, args: &[Term]) -> ExprId {
-        let args = args.iter().map(|a| self.expr(a)).collect();
-        self.form(name, args)
-    }
-
     /// `name(args)` of the nodes `args`: the form of the language the
     /// lowering writes it as (an operator, an interpolation, a spread, a
     /// range, a typing, a path, a reference), else a call of the function
@@ -131,19 +74,6 @@ impl Builder<'_> {
                 };
                 let text = text.clone();
                 return self.at(span, |b| b.expr_node(ExprKind::Quantity { text }));
-            }
-            (crate::modules::ABSOLUTE, [name]) => ExprKind::Scoped {
-                name: *name,
-                via: Reach::Absolute,
-            },
-            (crate::modules::LEXICAL, [body, seg])
-                if let (Some(Value::Str(body)), Some(Value::Str(_))) =
-                    (self.constant(*body), self.constant(*seg)) =>
-            {
-                ExprKind::Scoped {
-                    name: *seg,
-                    via: Reach::Lexical(body.clone()),
-                }
             }
             (LEN, [v]) => ExprKind::Field {
                 base: *v,
@@ -417,70 +347,46 @@ fn interp(f: &str, holes: &[ExprId]) -> ExprKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Span, str_term, var};
+    use crate::ast::Span;
     use crate::program::Program;
 
-    fn f(name: &str, args: Vec<Term>) -> Term {
-        Term::Func {
-            name: name.into(),
-            args,
-        }
-    }
-
-    /// Each internal function the resolver writes is built as the node of
-    /// the form it lowers.
+    /// Each function of the language or the lowering a call names is
+    /// built as the node of its form.
     #[test]
-    fn a_lowered_term_is_the_node_of_its_form() {
+    fn a_call_is_the_node_of_its_form() {
         let mut p = Program::new();
         let written = |v: &str| v == "X";
         let mut b = Builder::new(&mut p, Span::default(), &written);
-        let int = |i| Term::Val(Value::Int(i));
+        let x = b.variable("X");
+        let int = |b: &mut Builder, i| b.lit(Value::Int(i));
+        let s = |b: &mut Builder, t: &str| b.lit(Value::Str(t.into()));
+        let one = int(&mut b, 1);
+        let zero = int(&mut b, 0);
+        let yes = b.lit(Value::Bool(true));
+        let fmt = s(&mut b, "a%sb");
+        let ty = s(&mut b, "int");
+        let typ = s(&mut b, "net.vpc");
+        let empty = s(&mut b, "");
         let cases = [
-            (f("add", vec![var("X"), int(1)]), "Binary"),
-            (f("sub", vec![int(0), var("X")]), "Neg"),
-            (f("str.format", vec![str_term("a%sb"), var("X")]), "Interp"),
-            (
-                f("__merge", vec![var("X"), Term::Obj(Default::default())]),
-                "Object",
-            ),
-            (
-                f("__concat", vec![var("X"), Term::List(vec![int(1)])]),
-                "List",
-            ),
-            (
-                f(
-                    "__object",
-                    vec![f("str.format", vec![str_term("%s"), var("X")]), int(1)],
-                ),
-                "Object",
-            ),
-            (
-                f(
-                    "__range",
-                    vec![int(0), var("X"), Term::Val(Value::Bool(true))],
-                ),
-                "Range",
-            ),
-            (f("__as", vec![var("X"), str_term("int")]), "As"),
-            (f("__len", vec![var("X")]), "Field"),
-            (
-                f("__ref", vec![str_term("net.vpc"), var("X"), str_term("")]),
-                "RefOf",
-            ),
-            (
-                f("__quantity", vec![str_term("500m"), int(1), int(2), int(6)]),
-                "Quantity",
-            ),
-            (f("inet.subnet", vec![var("X"), int(4), int(1)]), "Call"),
-            (Term::Wildcard, "Hole"),
+            ("add", vec![x, one], "Binary"),
+            ("sub", vec![zero, x], "Neg"),
+            ("str.format", vec![fmt, x], "Interp"),
+            ("__merge", vec![x], "Object"),
+            ("__concat", vec![x], "List"),
+            ("__object", vec![fmt, one], "Object"),
+            ("__range", vec![zero, x, yes], "Range"),
+            ("__as", vec![x, ty], "As"),
+            ("__len", vec![x], "Field"),
+            ("__ref", vec![typ, x, empty], "RefOf"),
+            ("inet.subnet", vec![x, one, one], "Call"),
         ];
-        for (t, kind) in cases {
-            let id = b.expr(&t);
+        for (name, args, kind) in cases {
+            let id = b.form(name, args);
             let got = format!("{:?}", b.program.exprs[id].kind);
-            assert!(got.starts_with(kind), "{t:?}: {got}");
+            assert!(got.starts_with(kind), "{name}: {got}");
         }
-        let quoted = f("__path", vec![var("X"), str_term("a.\"b.c\"")]);
-        let id = b.expr(&quoted);
+        let quoted = s(&mut b, "a.\"b.c\"");
+        let id = b.form("__path", vec![x, quoted]);
         let ExprKind::Field { path, .. } = &b.program.exprs[id].kind else {
             panic!("not a field");
         };

@@ -6,23 +6,9 @@
 //! order: a written run's fields or elements, then a spread.
 
 use super::Builder;
-use crate::ast::Term;
 use crate::program::node::*;
-use std::collections::BTreeMap;
 
 impl Builder<'_> {
-    /// `{k: v, ..}`: written fields.
-    pub(super) fn object_of(&mut self, m: &BTreeMap<String, Term>) -> ExprId {
-        let parts = self.fields_of(m);
-        self.expr_node(ExprKind::Object { parts })
-    }
-
-    /// `[a, b]`: written elements.
-    pub(super) fn list_of(&mut self, xs: &[Term]) -> ExprId {
-        let parts = self.elems_of(xs);
-        self.expr_node(ExprKind::List { parts })
-    }
-
     /// `__merge(parts..)`: a written object a run of fields, any other
     /// part a spread; an empty one a spread of itself, the part it is.
     pub(super) fn merge(&mut self, parts: &[ExprId]) -> ExprId {
@@ -86,21 +72,5 @@ impl Builder<'_> {
             }
             _ => None,
         }
-    }
-
-    fn fields_of(&mut self, m: &BTreeMap<String, Term>) -> Vec<ObjPart> {
-        self.in_read_order(m)
-            .into_iter()
-            .map(|(k, v)| ObjPart::Field {
-                key: k.clone(),
-                key_span: self.span,
-                value: self.expr(v),
-                pun: false,
-            })
-            .collect()
-    }
-
-    fn elems_of(&mut self, xs: &[Term]) -> Vec<ListPart> {
-        xs.iter().map(|x| ListPart::Elem(self.expr(x))).collect()
     }
 }

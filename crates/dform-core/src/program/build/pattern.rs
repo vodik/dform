@@ -1,39 +1,13 @@
 //! What a binding position matches (R-211): a relation's column, the left
-//! of `=`. Step 3 builds it from the lowered term: `_` a hole, a variable
-//! a binding (or a comparison, when it is bound: binding order decides,
+//! of `=`, built of the node written there: `_` a hole, a variable a
+//! binding (or a comparison, when it is bound: binding order decides,
 //! R-10), a list a tuple, an object an object pattern, anything else the
 //! term it compares with.
 
 use super::Builder;
-use crate::ast::Term;
 use crate::program::node::*;
 
 impl Builder<'_> {
-    /// The lowered term `t` in a binding position.
-    pub(super) fn pattern(&mut self, t: &Term) -> PatternId {
-        let kind = match t {
-            Term::Wildcard => PatternKind::Hole,
-            Term::Var(x) => match self.pending_read(x) {
-                Some(read) => PatternKind::Expr(read),
-                None => PatternKind::Bind(self.var(x)),
-            },
-            Term::List(xs) => PatternKind::Tuple {
-                elems: xs.iter().map(|x| self.pattern(x)).collect(),
-                rest: None,
-            },
-            Term::Obj(m) => PatternKind::Object {
-                fields: self
-                    .in_read_order(m)
-                    .into_iter()
-                    .map(|(k, v)| (k.clone(), self.span, self.pattern(v)))
-                    .collect(),
-                rest: None,
-            },
-            t => PatternKind::Expr(self.expr(t)),
-        };
-        self.pattern_node(kind)
-    }
-
     /// The node `id` in a binding position, where `id` is written: `_` a
     /// hole, a variable a binding, a written list a tuple and a written
     /// object an object pattern (each part in its place), anything else

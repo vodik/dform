@@ -60,22 +60,16 @@ pub struct Builder<'p> {
     /// Whether a lowered name is a variable the program wrote; any other
     /// the compiler made (`implicit`).
     written: &'p dyn Fn(&str) -> bool,
-    /// The reads hoisted before what is being built that no node holds
-    /// yet, in order, each by the variable it binds (`hoist.rs`).
-    pending: Vec<hoist::Pending>,
-    /// The reads the resolver kept of the statement.
+    /// What the statement's reads hold.
     reads: Reads,
 }
 
-/// The node of each read the resolver built where its term is (step 7),
-/// by the variable it binds: what holds the read's literal holds that
-/// node (`hoist.rs`).
+/// What the reads of the statement built so far hold.
 #[derive(Default)]
 pub struct Reads {
-    nodes: BTreeMap<String, Vec<ExprId>>,
-    /// The copies' scopes the reads built so far test the copy in (an
-    /// `Output` with its test, `of`): the resolver's test before such a
-    /// read is the read's.
+    /// The copies' scopes the reads test the copy in (an `Output` with
+    /// its test, `of`): the resolver's test before such a read is the
+    /// read's.
     held: std::collections::BTreeSet<ExprId>,
 }
 
@@ -87,7 +81,6 @@ impl<'p> Builder<'p> {
             span,
             vars: BTreeMap::new(),
             written,
-            pending: Vec::new(),
             reads: Reads::default(),
         }
     }

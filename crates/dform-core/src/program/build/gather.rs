@@ -211,6 +211,12 @@ impl Gather {
             .collect()
     }
 
+    /// Whether a read built so far in the statement tests the copy in the
+    /// scope `scope` itself ([`Reads::holds`]).
+    pub fn holds(&self, scope: ExprId) -> bool {
+        self.reads.holds(scope)
+    }
+
     /// The clause of the statement's body, once it is lowered whole.
     pub fn body(&self) -> Option<ClauseId> {
         self.clause
