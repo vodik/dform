@@ -154,6 +154,7 @@ fn plan_comes_from_the_schema_and_apply_from_the_lifecycle() {
         &h,
         pb::ConfigureRequest {
             config: Some(wire::doc(&json!({"settings": {"account": "acct-1"}}))),
+            ..Default::default()
         },
     );
     // A required attribute missing refuses.
@@ -202,6 +203,7 @@ fn plan_comes_from_the_schema_and_apply_from_the_lifecycle() {
                 prior: Some(wire::doc(prior)),
                 desired: Some(wire::doc(&desired)),
                 remote: "b-logs".into(),
+                ..Default::default()
             },
         )
     };
@@ -227,6 +229,7 @@ fn plan_comes_from_the_schema_and_apply_from_the_lifecycle() {
             remote: "b-logs".into(),
             name: "logs".into(),
             prior: None,
+            ..Default::default()
         },
     );
     assert!(r.found);
@@ -247,6 +250,7 @@ fn plan_comes_from_the_schema_and_apply_from_the_lifecycle() {
             remote: "b-logs".into(),
             name: "logs".into(),
             prior: None,
+            ..Default::default()
         },
     );
     assert!(!r.found);
@@ -365,6 +369,7 @@ fn write_only_optional_computed_examples_and_check() {
         &h,
         pb::ConfigureRequest {
             config: Some(wire::doc(&json!({"world": "/w.json", "stack": "s"}))),
+            ..Default::default()
         },
     );
     let r: pb::ReadResponse = call(
@@ -374,6 +379,7 @@ fn write_only_optional_computed_examples_and_check() {
             remote: "a".into(),
             name: "a".into(),
             prior: None,
+            ..Default::default()
         },
     );
     let attrs = wire::from_doc(r.attrs.as_ref().unwrap()).unwrap();
@@ -422,6 +428,7 @@ fn configure_takes_the_programs_settings_only() {
             .handle(
                 pb::ConfigureRequest {
                     config: Some(wire::doc(&config)),
+                    ..Default::default()
                 }
                 .into(),
                 &silent,
@@ -574,6 +581,7 @@ fn keep_is_the_providers_promise() {
             remote: "t".into(),
             name: "t".into(),
             prior: None,
+            ..Default::default()
         },
     );
     assert_eq!(
@@ -647,6 +655,7 @@ fn a_type_that_declares_health_answers_it() {
         &h,
         pb::ConfigureRequest {
             config: Some(wire::doc(&json!({"settings": {}}))),
+            ..Default::default()
         },
     );
     let r: pb::HealthResponse = call(
@@ -657,6 +666,7 @@ fn a_type_that_declares_health_answers_it() {
                 name: "jobs".into(),
                 remote: "jobs".into(),
             }],
+            ..Default::default()
         },
     );
     assert_eq!(
@@ -764,6 +774,7 @@ fn a_sensitive_computed_value_is_held_and_revealed() {
             pb::RevealRequest {
                 held: Some(held.clone()),
                 lease: String::new(),
+                ..Default::default()
             }
             .into(),
             &silent,
@@ -778,6 +789,7 @@ fn a_sensitive_computed_value_is_held_and_revealed() {
         pb::RevealRequest {
             held: Some(held),
             lease: "simon@host pid 1".into(),
+            ..Default::default()
         },
     );
     assert_eq!(r.value, b"secret-of-t1");
@@ -842,6 +854,7 @@ fn read_is_told_the_prior_computed_values() {
         &h,
         pb::ConfigureRequest {
             config: Some(wire::doc(&json!({"settings": {}}))),
+            ..Default::default()
         },
     );
     let read = |typ: &str, prior: Option<Json>| -> Option<Json> {
@@ -852,6 +865,7 @@ fn read_is_told_the_prior_computed_values() {
                 remote: "m".into(),
                 name: "m".into(),
                 prior: prior.as_ref().map(wire::doc),
+                ..Default::default()
             },
         );
         r.computed.map(|c| wire::from_doc(&c).unwrap())
@@ -885,6 +899,7 @@ fn read_is_told_the_prior_computed_values() {
                 remote: "b-m".into(),
                 name: "m".into(),
                 prior: prior.as_ref().map(wire::doc),
+                ..Default::default()
             },
         )
     };

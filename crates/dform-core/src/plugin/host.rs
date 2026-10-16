@@ -128,6 +128,9 @@ pub struct HttpRequest {
     /// one an object has): the host paces each bucket by what the server
     /// answers it. None: the provider's default bucket.
     pub bucket: Option<String>,
+    /// The session of the call it is sent for: each session's buckets
+    /// are paced apart. [`Session::NONE`]: a request outside a call.
+    pub session: super::backend::Session,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

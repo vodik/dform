@@ -1523,6 +1523,7 @@ impl Handler for Mock {
                 Reply::Configure(pb::ConfigureResponse {
                     account,
                     notes: Vec::new(),
+                    ..Default::default()
                 })
             }
             C::Schema(req) => {

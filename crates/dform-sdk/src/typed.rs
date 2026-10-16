@@ -696,6 +696,7 @@ impl<P: Provider> Typed<P> {
         Ok(pb::ConfigureResponse {
             account,
             notes: Vec::new(),
+            ..Default::default()
         })
     }
 

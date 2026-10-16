@@ -200,6 +200,7 @@ fn the_provider_sends_no_body_where_the_api_takes_none() {
             ..Default::default()
         }),
         lease: "lease".into(),
+        ..Default::default()
     };
     match ovh.handle(Call::Reveal(reveal), &backend::silent) {
         Ok(Reply::Reveal(r)) => assert!(!r.value.is_empty()),
@@ -281,6 +282,7 @@ fn read(ovh: &Ovh, vm: &str, prior: Option<&Json>) -> Json {
         remote: vm.into(),
         name: "vm".into(),
         prior: prior.map(wire::doc),
+        ..Default::default()
     };
     match ovh.handle(Call::Read(r), &backend::silent) {
         Ok(Reply::Read(r)) if r.found => wire::from_doc(r.computed.as_ref().unwrap()).unwrap(),

@@ -14,6 +14,7 @@ fn configured(settings: Json) -> Typed<Postgres> {
     h.handle(
         pb::ConfigureRequest {
             config: Some(wire::doc(&json!({ "settings": settings }))),
+            ..Default::default()
         }
         .into(),
         &silent,
@@ -73,6 +74,7 @@ fn read(h: &Typed<Postgres>, typ: &str, remote: &str) -> Option<(Json, Json)> {
             remote: remote.into(),
             name: "it".into(),
             prior: None,
+            ..Default::default()
         },
     );
     r.found.then(|| {
@@ -96,6 +98,7 @@ fn plan(
             prior: prior.as_ref().map(wire::doc),
             desired: Some(wire::doc(&desired)),
             remote: String::new(),
+            ..Default::default()
         }
         .into(),
         &silent,
@@ -499,6 +502,7 @@ fn tls_as_sslmode_says() {
                 remote: ADMIN.into(),
                 name: "it".into(),
                 prior: None,
+                ..Default::default()
             }
             .into(),
             &silent,
@@ -533,6 +537,7 @@ fn tls_as_sslmode_says() {
                 remote: ADMIN.into(),
                 name: "it".into(),
                 prior: None,
+                ..Default::default()
             }
             .into(),
             &silent
@@ -603,6 +608,7 @@ fn the_fake_logs_in_with_a_verifier_the_provider_computed() {
                 remote: "x".into(),
                 name: "it".into(),
                 prior: None,
+                ..Default::default()
             }
             .into(),
             &silent,

@@ -206,6 +206,7 @@ fn schema_rows(
         types: types.map(|t| pb::TypeFilter {
             names: t.iter().map(|s| s.to_string()).collect(),
         }),
+        ..Default::default()
     };
     let resp: pb::SchemaResponse = conn.call(req).unwrap();
     let facts: Vec<_> = resp
@@ -241,7 +242,10 @@ fn the_mock_answers_the_schema_asked_for(mut conn: Link) {
     });
     let config = Some(dform::plugin::wire::doc(&config));
     let _: dform::plugin::pb::ConfigureResponse = conn
-        .call(dform::plugin::pb::ConfigureRequest { config })
+        .call(dform::plugin::pb::ConfigureRequest {
+            config,
+            ..Default::default()
+        })
         .unwrap();
     let (all, providers) = schema_rows(&mut conn, None);
     assert!(all.len() > 10, "{all:?}");

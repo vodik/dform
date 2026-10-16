@@ -260,18 +260,21 @@ macro_rules! convert {
 
             pub fn to_configure_request(r: &pb::ConfigureRequest) -> w::ConfigureRequest {
                 w::ConfigureRequest {
+                    session: r.session,
                     config: to_doc(&r.config),
                 }
             }
 
             pub fn from_configure_request(r: &w::ConfigureRequest) -> R<pb::ConfigureRequest> {
                 Ok(pb::ConfigureRequest {
+                    session: r.session,
                     config: from_doc(&r.config)?,
                 })
             }
 
             pub fn to_configure_response(r: &pb::ConfigureResponse) -> w::ConfigureResponse {
                 w::ConfigureResponse {
+                    session: r.session,
                     account: r.account.clone(),
                     notes: r.notes.clone(),
                 }
@@ -279,6 +282,7 @@ macro_rules! convert {
 
             pub fn from_configure_response(r: &w::ConfigureResponse) -> R<pb::ConfigureResponse> {
                 Ok(pb::ConfigureResponse {
+                    session: r.session,
                     account: r.account.clone(),
                     notes: r.notes.clone(),
                 })
@@ -286,6 +290,7 @@ macro_rules! convert {
 
             pub fn to_schema_request(r: &pb::SchemaRequest) -> w::SchemaRequest {
                 w::SchemaRequest {
+                    session: r.session,
                     types: r.types.as_ref().map(|t| w::TypeFilter {
                         names: t.names.clone(),
                     }),
@@ -294,6 +299,7 @@ macro_rules! convert {
 
             pub fn from_schema_request(r: &w::SchemaRequest) -> R<pb::SchemaRequest> {
                 Ok(pb::SchemaRequest {
+                    session: r.session,
                     types: r.types.as_ref().map(|t| pb::TypeFilter {
                         names: t.names.clone(),
                     }),
@@ -356,6 +362,7 @@ macro_rules! convert {
 
             pub fn to_query_request(r: &pb::QueryRequest) -> w::QueryRequest {
                 w::QueryRequest {
+                    session: r.session,
                     pred: r.pred.clone(),
                     input: r.input.clone(),
                     inputs: trees(&r.inputs),
@@ -365,6 +372,7 @@ macro_rules! convert {
 
             pub fn from_query_request(r: &w::QueryRequest) -> R<pb::QueryRequest> {
                 Ok(pb::QueryRequest {
+                    session: r.session,
                     pred: r.pred.clone(),
                     input: r.input.clone(),
                     inputs: from_trees(&r.inputs)?,
@@ -392,6 +400,7 @@ macro_rules! convert {
 
             pub fn to_read_request(r: &pb::ReadRequest) -> w::ReadRequest {
                 w::ReadRequest {
+                    session: r.session,
                     type_: r.r#type.clone(),
                     remote: r.remote.clone(),
                     name: r.name.clone(),
@@ -401,6 +410,7 @@ macro_rules! convert {
 
             pub fn from_read_request(r: &w::ReadRequest) -> R<pb::ReadRequest> {
                 Ok(pb::ReadRequest {
+                    session: r.session,
                     r#type: r.type_.clone(),
                     remote: r.remote.clone(),
                     name: r.name.clone(),
@@ -426,6 +436,7 @@ macro_rules! convert {
 
             pub fn to_plan_request(r: &pb::PlanRequest) -> w::PlanRequest {
                 w::PlanRequest {
+                    session: r.session,
                     type_: r.r#type.clone(),
                     name: r.name.clone(),
                     prior: r.prior.as_ref().map(to_tree),
@@ -436,6 +447,7 @@ macro_rules! convert {
 
             pub fn from_plan_request(r: &w::PlanRequest) -> R<pb::PlanRequest> {
                 Ok(pb::PlanRequest {
+                    session: r.session,
                     r#type: r.type_.clone(),
                     name: r.name.clone(),
                     prior: r.prior.as_ref().map(from_tree).transpose()?,
@@ -504,6 +516,7 @@ macro_rules! convert {
 
             pub fn to_apply_request(r: &pb::ApplyRequest) -> w::ApplyRequest {
                 w::ApplyRequest {
+                    session: r.session,
                     op: to_op(r.op),
                     type_: r.r#type.clone(),
                     name: r.name.clone(),
@@ -537,6 +550,7 @@ macro_rules! convert {
 
             pub fn from_apply_request(r: &w::ApplyRequest) -> R<pb::ApplyRequest> {
                 Ok(pb::ApplyRequest {
+                    session: r.session,
                     op: from_op(r.op) as i32,
                     r#type: r.type_.clone(),
                     name: r.name.clone(),
@@ -592,6 +606,7 @@ macro_rules! convert {
 
             pub fn to_import_request(r: &pb::ImportRequest) -> w::ImportRequest {
                 w::ImportRequest {
+                    session: r.session,
                     type_: r.r#type.clone(),
                     remote: r.remote.clone(),
                 }
@@ -599,6 +614,7 @@ macro_rules! convert {
 
             pub fn from_import_request(r: &w::ImportRequest) -> R<pb::ImportRequest> {
                 Ok(pb::ImportRequest {
+                    session: r.session,
                     r#type: r.type_.clone(),
                     remote: r.remote.clone(),
                 })
@@ -666,6 +682,7 @@ macro_rules! convert {
             /// holds.
             pub fn to_reveal_request(r: &pb::RevealRequest) -> w::RevealRequest {
                 w::RevealRequest {
+                    session: r.session,
                     held: to_held(&r.held.clone().unwrap_or_default()),
                     lease: r.lease.clone(),
                 }
@@ -673,6 +690,7 @@ macro_rules! convert {
 
             pub fn from_reveal_request(r: &w::RevealRequest) -> R<pb::RevealRequest> {
                 Ok(pb::RevealRequest {
+                    session: r.session,
                     held: Some(from_held(&r.held)),
                     lease: r.lease.clone(),
                 })
@@ -692,6 +710,7 @@ macro_rules! convert {
 
             pub fn to_health_request(r: &pb::HealthRequest) -> w::HealthRequest {
                 w::HealthRequest {
+                    session: r.session,
                     objects: r
                         .objects
                         .iter()
@@ -706,6 +725,7 @@ macro_rules! convert {
 
             pub fn from_health_request(r: &w::HealthRequest) -> R<pb::HealthRequest> {
                 Ok(pb::HealthRequest {
+                    session: r.session,
                     objects: r
                         .objects
                         .iter()

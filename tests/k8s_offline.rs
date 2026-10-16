@@ -1074,7 +1074,10 @@ fn offline_provider(s: &Scratch, dir: &str) -> dform::plugin::link::Link {
     let config = json!({"world": s.path(&format!("{dir}/world.json")).display().to_string()});
     let config = Some(dform::plugin::wire::doc(&config));
     let _: dform::plugin::pb::ConfigureResponse = conn
-        .call(dform::plugin::pb::ConfigureRequest { config })
+        .call(dform::plugin::pb::ConfigureRequest {
+            config,
+            ..Default::default()
+        })
         .unwrap();
     conn
 }
@@ -1087,6 +1090,7 @@ fn schema_of(conn: &mut dform::plugin::link::Link, types: Option<&[&str]>) -> Ve
         types: types.map(|t| pb::TypeFilter {
             names: t.iter().map(|s| s.to_string()).collect(),
         }),
+        ..Default::default()
     };
     let resp: pb::SchemaResponse = conn.call(req).unwrap();
     resp.facts

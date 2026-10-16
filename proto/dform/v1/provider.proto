@@ -10,6 +10,11 @@
 // gRPC to it for the rest of the run. The provider exits when its stdin
 // closes.
 //
+// A session is a configured instance of the provider: Configure opens one
+// and answers its number, and every call after it names the session it is
+// made in. A provider keeps one configuration per session (the WIT's
+// header says more).
+//
 // The protocol carries facts, schema and documents, never rules. Plan and
 // Apply are per resource: the engine owns ordering, parallelism, state and
 // crash safety. A document is a Value (an Obj of the configured
@@ -189,6 +194,9 @@ message ConfigureRequest {
   // `apply --chaos` specs), `settings` (a program's `provider` block or
   // `provider_config`, at a second Configure; its `account` is reported).
   Value config = 1;
+  // The session this configures: 0 opens a new one; a session this
+  // provider answered before is configured again, the same session.
+  uint64 session = 2;
 }
 
 message ConfigureResponse {
@@ -200,6 +208,9 @@ message ConfigureResponse {
   // credentials' form, their expiry, a right they lack. `provider check`
   // prints each as a line of its own; a run prints each on stderr.
   repeated string notes = 2;
+  // The session configured: what each call made with this configuration
+  // names. Never 0: dform refuses a provider that answers none.
+  uint64 session = 3;
 }
 
 message SchemaRequest {
@@ -209,6 +220,8 @@ message SchemaRequest {
   // types a run names. Absent: the whole schema. A provider may answer
   // with more than asked; dform keeps what it needs.
   optional TypeFilter types = 1;
+  // The session the call is made in: what a Configure answered.
+  uint64 session = 2;
 }
 
 message TypeFilter {
@@ -259,6 +272,8 @@ message QueryRequest {
   // keeps the value (its label is the engine's to choose), never the
   // value: the engine refuses a value there.
   repeated bool secret = 4;
+  // The session the call is made in: what a Configure answered.
+  uint64 session = 5;
 }
 
 // One answer: a full tuple of the predicate.
@@ -278,6 +293,8 @@ message ReadRequest {
   // element remembered here that is gone reads as absent. A provider
   // that needs none ignores it.
   optional Value prior = 4;
+  // The session the call is made in: what a Configure answered.
+  uint64 session = 5;
 }
 
 message ReadResponse {
@@ -301,6 +318,8 @@ message PlanRequest {
   // leaves out what the provider picked (an Optional+Computed path the
   // program does not set), a generated name among them.
   string remote = 5;
+  // The session the call is made in: what a Configure answered.
+  uint64 session = 6;
 }
 
 message PlanResponse {
@@ -376,6 +395,8 @@ message ApplyRequest {
   // or read returned them; absent for a CREATE and when state holds none.
   // The same rules: a hint, never truth.
   optional Value prior = 11;
+  // The session the call is made in: what a Configure answered.
+  uint64 session = 12;
 }
 
 // `path` OP `value`: OP is one of eq, ne, len_ge, len_le, prefix, or a
@@ -436,6 +457,8 @@ message RevealRequest {
   // The deployment's lease, as the run that holds it names it: refused
   // without one. Reveal is the engine's call, never a program's.
   string lease = 2;
+  // The session the call is made in: what a Configure answered.
+  uint64 session = 3;
 }
 
 message RevealResponse {
@@ -455,6 +478,8 @@ message Identity {
 message HealthRequest {
   // Objects of the types the handshake's `health` lists.
   repeated Identity objects = 1;
+  // The session the call is made in: what a Configure answered.
+  uint64 session = 2;
 }
 
 message HealthResponse {
@@ -489,6 +514,8 @@ enum HealthState {
 message ImportRequest {
   string type = 1;
   string remote = 2;
+  // The session the call is made in: what a Configure answered.
+  uint64 session = 3;
 }
 
 message ImportResponse {

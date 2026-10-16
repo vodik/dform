@@ -6,6 +6,17 @@
 // credentials, connection reuse) and calls it, several calls at once (the
 // component model's async ABI: WASI 0.3's).
 //
+// A session is a configured instance of the provider: Configure opens
+// one and answers its number, and every call after it (Schema, Query,
+// Read, Plan, Apply, Import, Reveal, Health) names the session it is
+// made in. A provider keeps one configuration per session and answers
+// each call with its session's: one instance serves the deployments of
+// a run (each its own configuration, its own world) and two instances
+// of one provider in a program (`use aws as east`, `use aws as west`),
+// their calls in flight together. A session carries no state of its own
+// beyond its configuration (what a call is told of the object, its
+// `prior`, is the engine's).
+//
 // proto/dform/v1/provider.proto is derived from this file for a native
 // provider over gRPC (crates/dform-grpc), additively only: a call or a
 // field is added here first. crates/dform-wit/tests/drift.rs checks that
@@ -212,6 +223,10 @@ interface types {
     // `apply --chaos` specs), `settings` (a program's `provider` block or
     // `provider_config`, at a second configure; its `account` is reported).
     config: tree,
+    // The session this configures: 0 opens a new one; a session this
+    // provider answered before is configured again (a program's
+    // settings, once known), the same session.
+    session: u64,
   }
 
   record configure-response {
@@ -223,6 +238,10 @@ interface types {
     // credentials' form, their expiry, a right they lack. `provider check`
     // prints each as a line of its own; a run prints each on stderr.
     notes: list<string>,
+    // The session configured: what each call made with this
+    // configuration names. Never 0: dform refuses a provider that
+    // answers none.
+    session: u64,
   }
 
   record schema-request {
@@ -232,6 +251,8 @@ interface types {
     // types a run names. Absent: the whole schema. A provider may answer
     // with more than asked; dform keeps what it needs.
     types: option<type-filter>,
+    // The session the call is made in: what a Configure answered.
+    session: u64,
   }
 
   record type-filter {
@@ -282,6 +303,8 @@ interface types {
     // keeps the value (its label is the engine's to choose), never the
     // value: the engine refuses a value there.
     secret: list<bool>,
+    // The session the call is made in: what a Configure answered.
+    session: u64,
   }
 
   // One answer: a full tuple of the predicate.
@@ -301,6 +324,8 @@ interface types {
     // element remembered here that is gone reads as absent. A provider
     // that needs none ignores it.
     prior: option<tree>,
+    // The session the call is made in: what a Configure answered.
+    session: u64,
   }
 
   record read-response {
@@ -324,6 +349,8 @@ interface types {
     // leaves out what the provider picked (an Optional+Computed path the
     // program does not set), a generated name among them.
     remote: string,
+    // The session the call is made in: what a Configure answered.
+    session: u64,
   }
 
   record plan-response {
@@ -399,6 +426,8 @@ interface types {
     // apply or read returned them; absent for a create and when state
     // holds none. The same rules: a hint, never truth.
     prior: option<tree>,
+    // The session the call is made in: what a Configure answered.
+    session: u64,
   }
 
   // `path` OP `value`: OP is one of eq, ne, len_ge, len_le, prefix, or a
@@ -456,6 +485,8 @@ interface types {
     // made inside another provider's Configure (R-45), never a
     // program's.
     lease: string,
+    // The session the call is made in: what a Configure answered.
+    session: u64,
   }
 
   record reveal-response {
@@ -476,6 +507,8 @@ interface types {
   record health-request {
     // Objects of the types the handshake's `health` lists.
     objects: list<identity>,
+    // The session the call is made in: what a Configure answered.
+    session: u64,
   }
 
   record health-response {
@@ -514,6 +547,8 @@ interface types {
   record import-request {
     %type: string,
     remote: string,
+    // The session the call is made in: what a Configure answered.
+    session: u64,
   }
 
   record import-response {

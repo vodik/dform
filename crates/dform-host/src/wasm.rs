@@ -21,7 +21,7 @@
 
 use crate::services::Services;
 use anyhow::{Context, Result, anyhow};
-use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Ticket};
+use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Session, Ticket};
 use dform_core::plugin::host::{self as h, Calls, Grants, Hosting, Manifest};
 use dform_core::plugin::link::Link;
 use dform_core::plugin::pb;
@@ -243,6 +243,7 @@ impl wh::http::Host for State {
                     body: req.body,
                     timeout: req.timeout_ms.map(|ms| Duration::from_millis(ms.into())),
                     bucket: req.bucket,
+                    session: Session(req.session),
                 },
                 auth,
                 via,

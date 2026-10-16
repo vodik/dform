@@ -107,6 +107,10 @@ interface http {
     // The limit it counts against, in the provider's word: the host
     // paces each bucket by what the server answers it. None: the default.
     bucket: option<string>,
+    // The session of the call it is sent for (a configured instance of
+    // the provider): each session's buckets are paced apart. 0: none, a
+    // request outside a call.
+    session: u64,
   }
 
   record response {

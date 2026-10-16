@@ -123,6 +123,10 @@ message SendRequest {
   // The limit it counts against, in the provider's word: the host paces
   // each bucket by what the server answers it. Unset: the default one.
   optional string bucket = 8;
+  // The session of the call it is sent for (a configured instance of the
+  // provider): each session's buckets are paced apart. 0: none, a request
+  // outside a call.
+  uint64 session = 9;
 }
 
 message SendResponse {

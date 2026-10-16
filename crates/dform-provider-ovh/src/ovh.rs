@@ -536,7 +536,11 @@ impl Ovh {
             })),
             awaiting: false,
         });
-        Ok(pb::ConfigureResponse { account, notes })
+        Ok(pb::ConfigureResponse {
+            account,
+            notes,
+            ..Default::default()
+        })
     }
 
     // Read.

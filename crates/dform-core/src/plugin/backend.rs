@@ -36,6 +36,25 @@ pub const KUBERNETES: &str = "k8s";
 /// one whose [`BUILD`] differs is stale.
 pub const BUILT_IN: [&str; 2] = [FAKECLOUD, KUBERNETES];
 
+/// A configured instance of a provider: what Configure answers, and what
+/// every call after it names. A provider keeps one configuration per
+/// session, so one process serves several (the deployments of a tree,
+/// `use aws as east` beside `use aws as west`), their calls in flight
+/// together. [`Session::NONE`] is no session: the Handshake's, and a
+/// Configure's that opens one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Session(pub u64);
+
+impl Session {
+    pub const NONE: Session = Session(0);
+}
+
+impl std::fmt::Display for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// A submitted call, as its backend names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Ticket(pub u64);

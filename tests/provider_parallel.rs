@@ -93,6 +93,7 @@ fn an_sdk_provider_answers_two_reads_at_once() {
                 remote: name.into(),
                 name: name.into(),
                 prior: None,
+                ..Default::default()
             };
             async move { c.read(req).await.map(|r| r.into_inner().found) }
         };

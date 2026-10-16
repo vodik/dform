@@ -15,6 +15,7 @@ fn a_value_round_trips_through_its_tree() {
     let r = pb::ApplyRequest {
         op: pb::Op::Replace as i32,
         r#type: "net.vpc".into(),
+        session: 7,
         config: Some(doc.clone()),
         prior: Some(doc.clone()),
         assertions: vec![pb::Assertion {
@@ -31,9 +32,11 @@ fn a_value_round_trips_through_its_tree() {
         r#type: "ovh.instance".into(),
         remote: "i-1".into(),
         name: "vm".into(),
+        session: 7,
         prior: Some(wire::doc(
             &serde_json::json!({"ports": {"pn-1": {"id": "p-1"}}}),
         )),
+        ..Default::default()
     };
     assert_eq!(
         c::from_read_request(&c::to_read_request(&read)).unwrap(),
@@ -82,6 +85,7 @@ fn an_event_and_a_reveal_round_trip() {
             digest: "hmac-sha256:00".into(),
         }),
         lease: "lease-1".into(),
+        ..Default::default()
     };
     assert_eq!(
         c::from_reveal_request(&c::to_reveal_request(&r)).unwrap(),
@@ -134,6 +138,7 @@ fn health_crosses_the_wit() {
             name: "web".into(),
             remote: "i-1".into(),
         }],
+        ..Default::default()
     };
     assert_eq!(
         c::from_health_request(&c::to_health_request(&req)).unwrap(),

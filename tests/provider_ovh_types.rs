@@ -118,6 +118,7 @@ impl Lab {
             name: name.into(),
             remote: remote.into(),
             prior: None,
+            ..Default::default()
         };
         match self.call(Call::Read(r), &Mutex::default()).unwrap() {
             Reply::Read(r) if r.found => Some((
@@ -266,6 +267,7 @@ fn reveal(lab: &Lab, typ: &str, remote: &str, path: &str, lease: &str) -> Result
             digest: String::new(),
         }),
         lease: lease.into(),
+        ..Default::default()
     };
     match lab.call(Call::Reveal(r), &Mutex::default()) {
         Ok(Reply::Reveal(r)) => Ok(String::from_utf8(r.value).unwrap()),
@@ -1421,6 +1423,7 @@ fn a_run_is_given_the_lookups_of_the_types_it_names() {
         types: Some(pb::TypeFilter {
             names: named.map(String::from).to_vec(),
         }),
+        ..Default::default()
     };
     let Ok(Reply::Schema(answer)) = ovh.handle(Call::Schema(req), &|_| {}) else {
         panic!("Schema answers");

@@ -161,6 +161,7 @@ fn a_reveal_without_the_lease_or_of_another_s_secret_is_refused() {
             Call::Reveal(pb::RevealRequest {
                 held: Some(held),
                 lease: lease.into(),
+                ..Default::default()
             }),
             &silent,
         )

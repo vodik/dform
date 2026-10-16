@@ -148,6 +148,7 @@ fn suite(start: impl FnOnce() -> Result<Link>, dir: &Path) -> Result<(Vec<String
         &conn,
         pb::ConfigureRequest {
             config: Some(wire::doc(&config)),
+            ..Default::default()
         },
     )
     .map(|c| c.notes);
@@ -236,6 +237,7 @@ fn suite(start: impl FnOnce() -> Result<Link>, dir: &Path) -> Result<(Vec<String
                     input: vec![true, false],
                     inputs: vec![pb::Value::from(&Value::Str(input.into()))],
                     secret: Vec::new(),
+                    ..Default::default()
                 },
             )
             .and_then(|rows| {
@@ -450,6 +452,7 @@ fn read(conn: &Conn, typ: &str, remote: &str) -> Result<Option<(Json, Json)>> {
         remote: remote.into(),
         name: "a".into(),
         prior: None,
+        ..Default::default()
     };
     let resp: pb::ReadResponse = call(conn, req)?;
     if !resp.found {
@@ -473,6 +476,7 @@ fn plan(
         prior: prior.map(wire::doc),
         desired: desired.map(wire::doc),
         remote: String::new(),
+        ..Default::default()
     };
     call(conn, req)
 }
@@ -523,6 +527,7 @@ fn made_by(conn: &Conn, typ: &str, key: &str) -> Result<Vec<String>> {
             input: vec![true, true, true, false],
             inputs: vec![s(typ), s("a"), s(key)],
             secret: Vec::new(),
+            ..Default::default()
         },
     )?;
     rows.iter()
@@ -894,6 +899,7 @@ fn import(conn: &Conn, typ: &str, remote: &str) -> Result<Option<(Json, Json)>> 
     let req = pb::ImportRequest {
         r#type: typ.into(),
         remote: remote.into(),
+        ..Default::default()
     };
     let resp: pb::ImportResponse = call(conn, req)?;
     if !resp.found {

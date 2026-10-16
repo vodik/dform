@@ -200,6 +200,7 @@ fn read_request(addr: &Address, remote: &str, prior: Option<&Json>) -> pb::ReadR
         remote: remote.to_string(),
         name: addr.name.clone(),
         prior: prior.map(wire::doc),
+        ..Default::default()
     }
 }
 
@@ -688,7 +689,10 @@ impl Generation {
 /// stderr.
 fn configure(link: &mut Link, config: Json) -> Result<Option<String>> {
     let config = Some(wire::doc(&config));
-    let r: pb::ConfigureResponse = link.call(pb::ConfigureRequest { config })?;
+    let r: pb::ConfigureResponse = link.call(pb::ConfigureRequest {
+        config,
+        ..Default::default()
+    })?;
     for n in &r.notes {
         eprintln!("{n}");
     }
@@ -1100,6 +1104,7 @@ impl Providers {
                 digest: held.digest.clone(),
             }),
             lease: format!("{} pid {}", crate::audit::who(), std::process::id()),
+            ..Default::default()
         };
         let r: pb::RevealResponse = self.link(i)?.borrow_mut().call(req).with_context(|| {
             format!(
@@ -1510,7 +1515,10 @@ impl Providers {
         }
         let ask = |names: Option<Vec<String>>| -> Result<pb::SchemaResponse> {
             let types = names.map(|names| pb::TypeFilter { names });
-            self.link(i)?.borrow_mut().call(pb::SchemaRequest { types })
+            self.link(i)?.borrow_mut().call(pb::SchemaRequest {
+                types,
+                ..Default::default()
+            })
         };
         // A link of the tree's pool is asked once for what the tree's
         // deployments name.
@@ -1653,6 +1661,7 @@ impl Providers {
         }
         let req = pb::SchemaRequest {
             types: missing.clone().map(|names| pb::TypeFilter { names }),
+            ..Default::default()
         };
         let resp: pb::SchemaResponse = self.link(i)?.borrow_mut().call(req)?;
         let new = |t: &str| {
@@ -1761,7 +1770,10 @@ impl Providers {
             let _: pb::ConfigureResponse = e
                 .link
                 .borrow_mut()
-                .call(pb::ConfigureRequest { config })
+                .call(pb::ConfigureRequest {
+                    config,
+                    ..Default::default()
+                })
                 .with_context(|| format!("configure provider {} again", self.names[i]))?;
         }
         e.owner.set(self.id);
@@ -1960,6 +1972,7 @@ impl Providers {
                 true => secret,
                 false => Vec::new(),
             },
+            ..Default::default()
         }
     }
 
@@ -2442,6 +2455,7 @@ impl Providers {
             input: plus.to_vec(),
             inputs: inputs.iter().map(pb::Value::from).collect(),
             secret: Vec::new(),
+            ..Default::default()
         })?;
         rows.iter()
             .map(|r| r.values.iter().map(Value::try_from).collect())
@@ -2568,6 +2582,7 @@ impl Providers {
         let req = pb::ImportRequest {
             r#type: typ.to_string(),
             remote: remote.to_string(),
+            ..Default::default()
         };
         let r: pb::ImportResponse = self.link(i)?.borrow_mut().call(req)?;
         let o = match r.found {
@@ -2715,7 +2730,10 @@ impl Providers {
             let r: pb::HealthResponse = self
                 .link(i)?
                 .borrow_mut()
-                .call(pb::HealthRequest { objects })
+                .call(pb::HealthRequest {
+                    objects,
+                    ..Default::default()
+                })
                 .with_context(|| format!("provider {}: Health", self.block_name(i)))?;
             if r.answers.len() != n {
                 bail!(
@@ -2845,6 +2863,7 @@ impl Providers {
                 prior: prior.as_ref().map(wire::doc),
                 desired: desired.as_ref().map(wire::doc),
                 remote,
+                ..Default::default()
             };
             let l = self.route(&addr.typ);
             submitted.push((i, l, self.link(l)?.borrow_mut().submit(req), addr));
@@ -4117,6 +4136,7 @@ impl Tick<'_> {
             idempotency_key,
             keep,
             prior: state.prior(addr, &remote).map(wire::doc),
+            ..Default::default()
         };
         let link = self.cloud.route(&addr.typ);
         let ticket = self.cloud.links[link].borrow_mut().submit(req.clone());
