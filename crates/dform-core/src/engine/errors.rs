@@ -149,24 +149,54 @@ pub(super) fn at_suffix(span: Span) -> String {
 /// give; or a variable nothing bound, which the compiler must not let
 /// through.
 pub(super) fn head_error(head: &Atom, state: &HashMap<String, Value>) -> Option<String> {
-    enum NoValue {
-        /// A call that answered nothing, and whether its function is
-        /// partial (R-134: else its arguments are not ones it takes).
-        Call(String, bool),
-        /// `__as(V, T)` (R-134): a typed position over a computed value
-        /// that is not of the type.
-        Typed(String, String),
-        /// A spread's part that is not what its literal takes (R-199).
-        Spread(String),
-        Unbound(String),
-    }
-    fn no_value(t: &Term, state: &HashMap<String, Value>) -> Option<NoValue> {
+    let at = crate::diag::place(head.span).unwrap_or_else(|| head.pred.clone());
+    let what = head_cell(head, state).unwrap_or_else(|| format!("`{}`", head.pred));
+    head.args
+        .iter()
+        .find_map(|t| NoValue::of(t, state))
+        .map(|n| n.said(&at, &what))
+}
+
+/// The cell a head gives, as a message names it: an input's or an
+/// output's by its key, an attribute by its address and path.
+fn head_cell(head: &Atom, state: &HashMap<String, Value>) -> Option<String> {
+    let s = |t: &Term| match eval_term(t, state) {
+        Some(Value::Str(s)) => Some(s),
+        _ => None,
+    };
+    let ("arg", [t, a, k, _, _]) = (head.pred.as_str(), head.args.as_slice()) else {
+        return None;
+    };
+    let (typ, name, k) = (s(t)?, s(a)?, s(k)?);
+    Some(match typ.as_str() {
+        crate::modules::INPUT | crate::transform::OUTPUT => format!("{typ} {k}"),
+        _ => crate::report::attribute(&crate::address::Address { typ, name }, &k),
+    })
+}
+
+/// Why a head argument has no value ([`head_error`]).
+enum NoValue {
+    /// A call that answered nothing, and whether its function is
+    /// partial (R-134: else its arguments are not ones it takes).
+    Call(String, bool),
+    /// `__as(V, T)` (R-134): a typed position over a computed value
+    /// that is not of the type.
+    Typed(String, String),
+    /// A spread's part that is not what its literal takes (R-199).
+    Spread(String),
+    Unbound(String),
+}
+
+impl NoValue {
+    /// Why `t` has no value under `state`, the innermost reason first;
+    /// `None` when it has one.
+    fn of(t: &Term, state: &HashMap<String, Value>) -> Option<NoValue> {
         if eval_term(t, state).is_some() {
             return None;
         }
         match t {
             Term::Var(v) => Some(NoValue::Unbound(v.clone())),
-            Term::Func { name, args } => match args.iter().find_map(|a| no_value(a, state)) {
+            Term::Func { name, args } => match args.iter().find_map(|a| NoValue::of(a, state)) {
                 Some(inner) => Some(inner),
                 None if name == crate::types::AS => {
                     let v = eval_term(&args[0], state)?;
@@ -174,48 +204,32 @@ pub(super) fn head_error(head: &Atom, state: &HashMap<String, Value>) -> Option<
                     let why = crate::value::read_typed(&ty, &v).err()?;
                     Some(NoValue::Typed(ty, why))
                 }
-                None => {
-                    let vals: Vec<Value> =
-                        args.iter().filter_map(|a| eval_term(a, state)).collect();
-                    if let Some(why) = spread_error(name, &vals) {
-                        return Some(NoValue::Spread(why));
-                    }
-                    let shown: Vec<String> = vals
-                        .iter()
-                        .map(|v| spell::term(&Term::Val(v.clone())))
-                        .collect();
-                    let partial = crate::functions::get(name).is_none_or(|f| f.partial);
-                    Some(NoValue::Call(
-                        format!("{name}({})", shown.join(", ")),
-                        partial,
-                    ))
-                }
+                None => Some(NoValue::call(name, args, state)),
             },
-            Term::List(xs) => xs.iter().find_map(|x| no_value(x, state)),
-            Term::Obj(m) => m.values().find_map(|x| no_value(x, state)),
+            Term::List(xs) => xs.iter().find_map(|x| NoValue::of(x, state)),
+            Term::Obj(m) => m.values().find_map(|x| NoValue::of(x, state)),
             _ => None,
         }
     }
-    let at = crate::diag::place(head.span).unwrap_or_else(|| head.pred.clone());
-    let s = |t: &Term| match eval_term(t, state) {
-        Some(Value::Str(s)) => Some(s),
-        _ => None,
-    };
-    let cell = match (head.pred.as_str(), head.args.as_slice()) {
-        ("arg", [t, a, k, _, _]) => match (s(t), s(a), s(k)) {
-            (Some(typ), Some(name), Some(k)) => Some(match typ.as_str() {
-                crate::modules::INPUT | crate::transform::OUTPUT => format!("{typ} {k}"),
-                _ => crate::report::attribute(&crate::address::Address { typ, name }, &k),
-            }),
-            _ => None,
-        },
-        _ => None,
-    };
-    let what = cell.unwrap_or_else(|| format!("`{}`", head.pred));
-    head.args
-        .iter()
-        .find_map(|t| no_value(t, state))
-        .map(|n| match n {
+
+    /// The call `name(args)` that answered nothing: a spread's part that
+    /// is not what it takes, else the call as its values show it.
+    fn call(name: &str, args: &[Term], state: &HashMap<String, Value>) -> NoValue {
+        let vals: Vec<Value> = args.iter().filter_map(|a| eval_term(a, state)).collect();
+        if let Some(why) = spread_error(name, &vals) {
+            return NoValue::Spread(why);
+        }
+        let shown: Vec<String> = vals
+            .iter()
+            .map(|v| spell::term(&Term::Val(v.clone())))
+            .collect();
+        let partial = crate::functions::get(name).is_none_or(|f| f.partial);
+        NoValue::Call(format!("{name}({})", shown.join(", ")), partial)
+    }
+
+    /// The error, at `at`, of the cell `what` names.
+    fn said(self, at: &str, what: &str) -> String {
+        match self {
             NoValue::Call(call, true) => format!(
                 "{at}: {call} answered nothing, so {what} has no value (the function's \
                  result is optional, `T?`): give it arguments it answers, or test it with \
@@ -230,7 +244,8 @@ pub(super) fn head_error(head: &Atom, state: &HashMap<String, Value>) -> Option<
                 "internal error: {at}: the head of the rule for {what} leaves `{v}` unbound \
                  (a compiler bug: please report it with the program)"
             ),
-        })
+        }
+    }
 }
 
 /// `an inet`, `a time`: a type with its article.

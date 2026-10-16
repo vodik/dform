@@ -361,23 +361,42 @@ impl<'a> WhyNot<'a> {
         pad: &str,
         depth: usize,
     ) -> Result<()> {
-        let rules = &self.res.rules;
         let id = format!("r{i}");
         if !self.seen.insert(format!("{id} {}", spell::atom(atom))) {
             return Ok(());
         }
-        let mut best: Option<Attempt> = None;
-        for seed in seeds {
-            let a = attempt(rule, seed, &self.res.facts);
-            let further = |a: &Attempt| a.failed.unwrap_or(usize::MAX);
-            if best.as_ref().is_none_or(|b| further(&a) > further(b)) {
-                best = Some(a);
+        let Some(a) = furthest(rule, seeds, &self.res.facts) else {
+            return Ok(());
+        };
+        let site = self.site(&id, rule, &a);
+        self.out.push_str(&format!("{pad}  {site}\n"));
+        let inner = format!("{pad}    ");
+        let Some(k) = a.failed else {
+            self.all_held(atom, rule, &a, &inner);
+            return Ok(());
+        };
+        let lit = &rule.body[k];
+        let bound = lit.subst(&a.known);
+        match &bound {
+            Lit::Pos(b) if b.pred == "__known" => self.not_known(rule, lit, b, &a.known, &inner),
+            Lit::Pos(b) => {
+                if let Lit::Pos(written) = lit {
+                    self.not_read(b, written, &inner, depth)?;
+                }
             }
+            Lit::Not(b) => self.row_exists(b, &bound, &inner)?,
+            _ => self.test_failed(i, lit, &a.known, &inner),
         }
-        let Some(a) = best else { return Ok(()) };
+        Ok(())
+    }
+
+    /// Where the rule `id` (`rule`) is written, with the bindings `a`
+    /// tried it with; one dform writes in its words, at `dform`.
+    fn site(&self, id: &str, rule: &RuleStmt, a: &Attempt) -> String {
+        let rules = &self.res.rules;
         let bindings: Vec<(String, Value)> =
             a.seed.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        let site = match self.printer.rule_site(rules, &id, &bindings) {
+        match self.printer.rule_site(rules, id, &bindings) {
             Some(s) => {
                 let origin = s
                     .origin
@@ -386,126 +405,129 @@ impl<'a> WhyNot<'a> {
                     .unwrap_or_default();
                 format!("{}  {}{origin}", s.at, s.statement)
             }
-            // A rule dform writes: its words, at `dform`.
             None => format!(
                 "dform  {}",
                 self.printer
-                    .rule_words(rules, &id)
+                    .rule_words(rules, id)
                     .unwrap_or_else(|| self.written.rule(rule))
             ),
-        };
-        self.out.push_str(&format!("{pad}  {site}\n"));
-        let inner = format!("{pad}    ");
-        let Some(k) = a.failed else {
-            // A `not has` waiting on a value: its helper is stuck, so
-            // the negation is undetermined though no row holds.
-            if let Some(t) = self.undetermined(rule, &a.known) {
-                self.out
-                    .push_str(&format!("{inner}{}\n", self.redact.text(&t)));
-                return Ok(());
-            }
-            let with = match self.written.bindings(&a.seed) {
-                b if b.is_empty() || atom.pred == "attr" => String::new(),
-                b => format!(" with {b}"),
-            };
-            let what = match (atom.args.get(2), rule.head.args.get(2)) {
-                (Some(Term::Val(Value::Str(p))), Some(Term::Val(Value::Str(h))))
-                    if atom.pred == "attr" && p != h =>
-                {
-                    format!("what it writes to {h} has no {}", &p[h.len() + 1..])
-                }
-                _ if atom.pred == "attr" => "it writes another value".to_string(),
-                _ => "it derives another one".to_string(),
-            };
+        }
+    }
+
+    /// Every condition of `rule` held for `atom` (the attempt `a`): it
+    /// derives another row, or writes another value; or a `not has`
+    /// waits on a value (its helper is stuck, so the negation is
+    /// undetermined though no row holds).
+    fn all_held(&mut self, atom: &Atom, rule: &RuleStmt, a: &Attempt, inner: &str) {
+        if let Some(t) = self.undetermined(rule, &a.known) {
             self.out
-                .push_str(&format!("{inner}every condition holds{with}: {what}\n"));
-            return Ok(());
+                .push_str(&format!("{inner}{}\n", self.redact.text(&t)));
+            return;
+        }
+        let with = match self.written.bindings(&a.seed) {
+            b if b.is_empty() || atom.pred == "attr" => String::new(),
+            b => format!(" with {b}"),
         };
-        let lit = &rule.body[k];
-        let bound = lit.subst(&a.known);
-        match &bound {
-            Lit::Pos(b) if b.pred == "__known" => {
-                let line = match known_text(rule, lit, &a.known) {
-                    Some(t) => t,
-                    None => format!("{}: not known yet", self.written.atom(b)),
-                };
-                self.out
-                    .push_str(&format!("{inner}{}\n", self.redact.text(&line)));
+        let what = match (atom.args.get(2), rule.head.args.get(2)) {
+            (Some(Term::Val(Value::Str(p))), Some(Term::Val(Value::Str(h))))
+                if atom.pred == "attr" && p != h =>
+            {
+                format!("what it writes to {h} has no {}", &p[h.len() + 1..])
             }
-            Lit::Pos(b) => {
-                let Lit::Pos(written) = lit else {
-                    return Ok(());
-                };
-                let derived = rules
-                    .iter()
-                    .any(|r| r.head.pred == b.pred && r.head.args.len() == b.args.len());
-                let none = match (derived, b.pred.ends_with("::__instance")) {
-                    (true, true) => "not made",
-                    (true, false) => "not derived",
-                    (false, _) => "no row",
-                };
-                // A copy's own relation by its name there (R-73), the
-                // copy a clause named by its row's name (R-191).
-                let read = crate::modules::private_text(b, &|a| self.written.atom(a), " ")
-                    .unwrap_or_else(|| self.written.atom(b));
-                self.out.push_str(&format!("{inner}{read}: {none}\n"));
-                let rows = self.rows(&b.pred, b.args.len());
-                if !rows.is_empty() || !derived {
-                    self.nearest(b, written, &inner);
-                }
-                if derived && depth + 1 < DEPTH {
-                    self.explain(b, &inner, depth + 1)?;
-                }
-            }
-            // The row the `not` found: said as the program would, with
-            // where it is written; one of dform's own said in words, by
-            // the program's rows it was derived from.
-            Lit::Not(b) => {
-                let held = engine::query(&[Lit::Pos(b.clone())], &self.res.facts)?;
-                let rows = held
-                    .first()
-                    .and_then(|(_, used)| used.first())
-                    .map(|r| self.held(r))
-                    .unwrap_or_default();
-                let said = match (spell::worded(&b.pred), rows.is_empty()) {
-                    (true, _) => format!("it writes {}", rows.join(", ")),
-                    (false, true) => "the row exists".to_string(),
-                    (false, false) => format!("the row exists: {}", rows.join(", ")),
-                };
-                self.out
-                    .push_str(&format!("{inner}{}: {said}\n", self.written.lit(&bound)));
-            }
-            _ => {
-                let mut vars = BTreeSet::new();
-                lit_vars(lit, &mut vars);
-                let shown: Env = a
-                    .known
-                    .iter()
-                    .filter(|(k, _)| vars.contains(*k))
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect();
-                let with = match shown.is_empty() {
-                    true => String::new(),
-                    false => format!(", with {}", self.written.bindings(&shown)),
-                };
-                // A comparison over a value not known yet is not false:
-                // it waits, as the plan says under `later` (R-193).
-                let waits = shown.values().any(crate::stuck::has_null)
-                    || self.res.stuck.iter().any(|s| {
-                        s.rule == Some(i)
-                            && a.known
-                                .iter()
-                                .all(|(k, v)| s.bindings.get(k).is_none_or(|b| b == v))
-                    });
-                let said = match waits {
-                    true => "not known yet",
-                    false => "false",
-                };
-                self.out
-                    .push_str(&format!("{inner}{}: {said}{with}\n", self.written.lit(lit)));
-            }
+            _ if atom.pred == "attr" => "it writes another value".to_string(),
+            _ => "it derives another one".to_string(),
+        };
+        self.out
+            .push_str(&format!("{inner}every condition holds{with}: {what}\n"));
+    }
+
+    /// The `__known` test `lit` of `rule`, bound as `b`, failed: its value
+    /// is not known yet.
+    fn not_known(&mut self, rule: &RuleStmt, lit: &Lit, b: &Atom, known: &Env, inner: &str) {
+        let line = match known_text(rule, lit, known) {
+            Some(t) => t,
+            None => format!("{}: not known yet", self.written.atom(b)),
+        };
+        self.out
+            .push_str(&format!("{inner}{}\n", self.redact.text(&line)));
+    }
+
+    /// The read `written`, bound as `b`, found no row: whether one is
+    /// derived, the nearest rows, and why the row is not, in turn.
+    fn not_read(&mut self, b: &Atom, written: &Atom, inner: &str, depth: usize) -> Result<()> {
+        let derived = self
+            .res
+            .rules
+            .iter()
+            .any(|r| r.head.pred == b.pred && r.head.args.len() == b.args.len());
+        let none = match (derived, b.pred.ends_with("::__instance")) {
+            (true, true) => "not made",
+            (true, false) => "not derived",
+            (false, _) => "no row",
+        };
+        // A copy's own relation by its name there (R-73), the copy a
+        // clause named by its row's name (R-191).
+        let read = crate::modules::private_text(b, &|a| self.written.atom(a), " ")
+            .unwrap_or_else(|| self.written.atom(b));
+        self.out.push_str(&format!("{inner}{read}: {none}\n"));
+        let rows = self.rows(&b.pred, b.args.len());
+        if !rows.is_empty() || !derived {
+            self.nearest(b, written, inner);
+        }
+        if derived && depth + 1 < DEPTH {
+            self.explain(b, inner, depth + 1)?;
         }
         Ok(())
+    }
+
+    /// The `not b` (`bound`) failed: the row it found, said as the
+    /// program would, with where it is written; one of dform's own said
+    /// in words, by the program's rows it was derived from.
+    fn row_exists(&mut self, b: &Atom, bound: &Lit, inner: &str) -> Result<()> {
+        let held = engine::query(&[Lit::Pos(b.clone())], &self.res.facts)?;
+        let rows = held
+            .first()
+            .and_then(|(_, used)| used.first())
+            .map(|r| self.held(r))
+            .unwrap_or_default();
+        let said = match (spell::worded(&b.pred), rows.is_empty()) {
+            (true, _) => format!("it writes {}", rows.join(", ")),
+            (false, true) => "the row exists".to_string(),
+            (false, false) => format!("the row exists: {}", rows.join(", ")),
+        };
+        self.out
+            .push_str(&format!("{inner}{}: {said}\n", self.written.lit(bound)));
+        Ok(())
+    }
+
+    /// The test `lit` of the rule `i` failed under `known`: false, or not
+    /// known yet when it reads a value not known yet, as the plan says
+    /// under `later` (R-193).
+    fn test_failed(&mut self, i: usize, lit: &Lit, known: &Env, inner: &str) {
+        let mut vars = BTreeSet::new();
+        lit_vars(lit, &mut vars);
+        let shown: Env = known
+            .iter()
+            .filter(|(k, _)| vars.contains(*k))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let with = match shown.is_empty() {
+            true => String::new(),
+            false => format!(", with {}", self.written.bindings(&shown)),
+        };
+        let waits = shown.values().any(crate::stuck::has_null)
+            || self.res.stuck.iter().any(|s| {
+                s.rule == Some(i)
+                    && known
+                        .iter()
+                        .all(|(k, v)| s.bindings.get(k).is_none_or(|b| b == v))
+            });
+        let said = match waits {
+            true => "not known yet",
+            false => "false",
+        };
+        self.out
+            .push_str(&format!("{inner}{}: {said}{with}\n", self.written.lit(lit)));
     }
 
     /// The first `not h(..)` of a stuck `rule` whose helper `h` tests a
@@ -1000,6 +1022,19 @@ fn splits(s: &str, pieces: &[&str]) -> Vec<Vec<String>> {
         }
     }
     out
+}
+
+/// Of `rule`'s attempts from each of `seeds`, the one that got furthest.
+fn furthest(rule: &RuleStmt, seeds: Vec<Env>, facts: &BTreeSet<Atom>) -> Option<Attempt> {
+    let further = |a: &Attempt| a.failed.unwrap_or(usize::MAX);
+    let mut best: Option<Attempt> = None;
+    for seed in seeds {
+        let a = attempt(rule, seed, facts);
+        if best.as_ref().is_none_or(|b| further(&a) > further(b)) {
+            best = Some(a);
+        }
+    }
+    best
 }
 
 /// Evaluate `rule`'s body with `seed` bound, literal by literal: the
