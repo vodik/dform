@@ -9,6 +9,10 @@
 //!   (tests/host_wasm.rs), built for wasm32-wasip3 in release: the fake
 //!   provider, the OVH and Kubernetes providers and the SDK's async-ABI
 //!   probe (`examples/fetch_at_once`).
+//! - `install [--prefix DIR] [--features F]`: dform and every built-in
+//!   provider, installed where dform looks for them (install.rs).
+
+mod install;
 
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
@@ -20,7 +24,10 @@ fn main() -> Result<()> {
         ["man"] => man(false),
         ["man", "--check"] => man(true),
         ["components"] => components(),
-        _ => bail!("usage: cargo xtask man [--check] | components"),
+        ["install", args @ ..] => install::Install::parse(args)?.run(),
+        _ => bail!(
+            "usage: cargo xtask man [--check] | components | install [--prefix DIR] [--features F]"
+        ),
     }
 }
 
@@ -48,10 +55,7 @@ fn man(check: bool) -> Result<()> {
         std::fs::write(&reference, spliced)?;
         println!("docs/reference.md: the fragments copied");
     }
-    let dir = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root().join("target"))
-        .join("man");
+    let dir = target_dir().join("man");
     // The pages of commands since removed go too.
     if dir.exists() {
         std::fs::remove_dir_all(&dir)?;
@@ -64,33 +68,86 @@ fn man(check: bool) -> Result<()> {
     Ok(())
 }
 
-/// The components, each a `cargo build` of the workspace's toolchain
-/// (rust-toolchain.toml carries the target).
-fn components() -> Result<()> {
+/// The repository's target directory: `$CARGO_TARGET_DIR`, else
+/// `target`.
+fn target_dir() -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root().join("target"))
+}
+
+/// `cargo ARGS` in the repository, the cargo running the xtask's.
+fn cargo(args: &[&str]) -> Result<()> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let wasm = [
-        "build",
-        "--release",
-        "--target",
-        "wasm32-wasip3",
-        "--features",
-        "component",
-    ];
-    for which in [
-        &["-p", "dform-provider-fake"][..],
-        &["-p", "dform-provider-ovh"],
-        &["-p", "dform-provider-k8s"],
-        &["-p", "dform-sdk", "--example", "fetch_at_once"],
-    ] {
-        let status = std::process::Command::new(&cargo)
-            .args(wasm)
-            .args(which)
-            .current_dir(root())
-            .status()
-            .context("run cargo")?;
-        if !status.success() {
-            bail!("cargo {} {}: {status}", wasm.join(" "), which.join(" "));
-        }
+    let status = std::process::Command::new(&cargo)
+        .args(args)
+        .current_dir(root())
+        .status()
+        .context("run cargo")?;
+    if !status.success() {
+        bail!("cargo {}: {status}", args.join(" "));
     }
     Ok(())
+}
+
+/// A component: a package's library built for wasm32-wasip3, or one of
+/// its examples.
+struct Component<'a> {
+    package: &'a str,
+    example: Option<&'a str>,
+}
+
+/// The components `components` builds.
+const COMPONENTS: [Component<'static>; 4] = [
+    Component::of("dform-provider-fake"),
+    Component::of("dform-provider-ovh"),
+    Component::of("dform-provider-k8s"),
+    Component {
+        package: "dform-sdk",
+        example: Some("fetch_at_once"),
+    },
+];
+
+impl<'a> Component<'a> {
+    /// The package `package`'s library.
+    const fn of(package: &'a str) -> Component<'a> {
+        Component {
+            package,
+            example: None,
+        }
+    }
+
+    /// A `cargo build` of the workspace's toolchain (rust-toolchain.toml
+    /// carries the target), in release.
+    fn build(&self) -> Result<()> {
+        let mut args = vec![
+            "build",
+            "--release",
+            "--target",
+            "wasm32-wasip3",
+            "--features",
+            "component",
+            "-p",
+            self.package,
+        ];
+        if let Some(example) = self.example {
+            args.extend(["--example", example]);
+        }
+        cargo(&args)
+    }
+
+    /// The built library's file: `NAME.wasm` (the package's name, `_` for
+    /// `-`) in `target`'s wasm32-wasip3 release directory.
+    fn file(&self, target: &Path) -> PathBuf {
+        let release = target.join("wasm32-wasip3/release");
+        match self.example {
+            Some(example) => release.join(format!("examples/{example}.wasm")),
+            None => release.join(format!("{}.wasm", self.package.replace('-', "_"))),
+        }
+    }
+}
+
+/// The components.
+fn components() -> Result<()> {
+    COMPONENTS.iter().try_for_each(Component::build)
 }
