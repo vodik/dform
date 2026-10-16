@@ -7,8 +7,12 @@
 //! Requests are signed with `rusty-s3` (SigV4, query-string auth, the
 //! condition headers among the signed ones) and sent with dform's one
 //! HTTP client (`dform_core::http`, R-103): the process's pool, so a
-//! run's reads of a bucket go over one connection (its streams, when the
-//! endpoint speaks HTTP/2), and the command line stays synchronous.
+//! run's reads of a bucket go over one kept-alive connection, and the
+//! command line stays synchronous. Reads that depend on nothing but
+//! where they are (an audit log's segments) are asked together
+//! ([`Store::get_all`]): streams of that connection where the endpoint
+//! speaks HTTP/2; over HTTP/1.1 (AWS's, OVH's) a few connections more,
+//! whose handshakes go at once and cost less than the reads in a row.
 //!
 //! Conditional writes are checked once per bucket ([`S3Store::check_conditions`])
 //! before a deployment's objects are written there: a server that ignores
@@ -138,6 +142,9 @@ impl Reads {
 
 /// How long one request may take.
 const TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How many reads of a bucket are asked at once ([`Store::get_all`]).
+const TOGETHER: usize = 8;
 
 /// `method` of the signed `url`, with `headers` and `body`, through the
 /// process's pool; `op` and `at` name it in an error.
@@ -390,6 +397,31 @@ impl Store for S3Store {
             r.got(&self.at(key), &o);
         }
         Ok(o)
+    }
+
+    /// Asked together, [`TOGETHER`] at a time, each through the run's
+    /// reads, on threads in the span this one is in.
+    fn get_all(&self, keys: &[String]) -> Result<Vec<Option<Object>>> {
+        let within = tracing::Span::current();
+        let mut out = Vec::with_capacity(keys.len());
+        for some in keys.chunks(TOGETHER) {
+            let got: Vec<Result<Option<Object>>> = std::thread::scope(|scope| {
+                let asks: Vec<_> = some
+                    .iter()
+                    .map(|k| {
+                        let within = &within;
+                        scope.spawn(move || within.in_scope(|| self.get(k)))
+                    })
+                    .collect();
+                asks.into_iter()
+                    .map(|a| a.join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
+                    .collect()
+            });
+            for o in got {
+                out.push(o?);
+            }
+        }
+        Ok(out)
     }
 
     fn put(&self, key: &str, bytes: &[u8], cond: &Cond) -> Result<Option<String>> {
@@ -670,6 +702,26 @@ mod tests {
             Credentials::new("id", "secret"),
         )
         .unwrap()
+    }
+
+    /// A run's reads that depend on nothing but where they are (an audit
+    /// log's segments) are asked together, answered in their order.
+    #[test]
+    fn independent_reads_are_asked_together() {
+        let server = fake::Server::start();
+        let s = store(&server, "together", "");
+        let keys: Vec<String> = (1..=4)
+            .map(|n| format!("state.audit/{n:06}.jsonl"))
+            .collect();
+        for k in &keys {
+            s.put(k, k.as_bytes(), &Cond::Any).unwrap();
+        }
+        server.slow(std::time::Duration::from_millis(100));
+        let got = s.get_all(&keys).unwrap();
+        let bytes: Vec<Vec<u8>> = got.into_iter().map(|o| o.unwrap().bytes).collect();
+        let want: Vec<Vec<u8>> = keys.iter().map(|k| k.as_bytes().to_vec()).collect();
+        assert_eq!(bytes, want);
+        assert!(server.most_at_once() >= 2, "{}", server.most_at_once());
     }
 
     #[test]

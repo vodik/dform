@@ -981,9 +981,9 @@ its own objects' Reads, not every object's again. A Read that failed is
 asked again; a provider configured again with other settings reads its
 own objects again; what the run writes it reads again. A run reads each
 of its state objects in a bucket (the state, the audit log, the master)
-once too, until it writes one; a lease, published outputs and approvals
-are read every time, since another process may change them while it
-waits.
+once too, until it writes one, and an audit log's segments together; a
+lease, published outputs and approvals are read every time, since
+another process may change them while it waits.
 
 Only what state maps is the stack's: an object in the world file that state
 does not name is someone else's, never refreshed, updated or deleted, and a

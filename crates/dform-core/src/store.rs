@@ -110,6 +110,12 @@ pub trait Store: Send + Sync {
     /// The object at `key`, if there is one.
     fn get(&self, key: &str) -> Result<Option<Object>>;
 
+    /// The objects at `keys`, in their order, which depend on nothing
+    /// but where they are: a store across a network asks them together.
+    fn get_all(&self, keys: &[String]) -> Result<Vec<Option<Object>>> {
+        keys.iter().map(|k| self.get(k)).collect()
+    }
+
     /// Write `bytes` at `key` when `cond` holds: the new ETag, or `None`
     /// when it did not hold (the object changed, or exists).
     fn put(&self, key: &str, bytes: &[u8], cond: &Cond) -> Result<Option<String>>;

@@ -121,9 +121,10 @@ impl Log {
             parts.push((self.locate(), o.bytes));
         }
         if !self.store.appends_in_place() {
-            for k in self.store.list(AUDIT_SEGMENTS)? {
-                if let Some(o) = self.store.get(&k)? {
-                    parts.push((self.store.locate(&k), o.bytes));
+            let keys = self.store.list(AUDIT_SEGMENTS)?;
+            for (k, o) in keys.iter().zip(self.store.get_all(&keys)?) {
+                if let Some(o) = o {
+                    parts.push((self.store.locate(k), o.bytes));
                 }
             }
         }
@@ -156,15 +157,16 @@ impl Log {
             && !self.store.appends_in_place()
         {
             let mut text = String::new();
-            for k in self.store.list(AUDIT_SEGMENTS)? {
-                if k.as_str() < part {
-                    continue;
-                }
-                if let Some(o) = self.store.get(&k)? {
-                    text.push_str(&String::from_utf8_lossy(&o.bytes));
-                    if !text.ends_with('\n') {
-                        text.push('\n');
-                    }
+            let keys: Vec<String> = self
+                .store
+                .list(AUDIT_SEGMENTS)?
+                .into_iter()
+                .filter(|k| k.as_str() >= part)
+                .collect();
+            for o in self.store.get_all(&keys)?.into_iter().flatten() {
+                text.push_str(&String::from_utf8_lossy(&o.bytes));
+                if !text.ends_with('\n') {
+                    text.push('\n');
                 }
             }
             if let (tail, true) = tail(&text, pos) {

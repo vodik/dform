@@ -24,6 +24,10 @@ pub struct Server {
 struct Seen {
     connections: AtomicUsize,
     requests: Mutex<Vec<String>>,
+    /// How long each GET takes ([`Server::slow`]).
+    slow: Mutex<std::time::Duration>,
+    now: AtomicUsize,
+    most: AtomicUsize,
 }
 
 impl Server {
@@ -53,6 +57,16 @@ impl Server {
         Server { endpoint, seen }
     }
 
+    /// Take `d` over each GET's answer.
+    pub fn slow(&self, d: std::time::Duration) {
+        *self.seen.slow.lock().unwrap_or_else(|e| e.into_inner()) = d;
+    }
+
+    /// The most GETs it held at once.
+    pub fn most_at_once(&self) -> usize {
+        self.seen.most.load(Ordering::SeqCst)
+    }
+
     /// How many connections it has accepted.
     pub fn connections(&self) -> usize {
         self.seen.connections.load(Ordering::SeqCst)
@@ -65,6 +79,22 @@ impl Server {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+}
+
+impl Seen {
+    /// `answer`, a GET's after the server's delay, counted while it is
+    /// held.
+    fn holding<T>(&self, method: &str, answer: impl FnOnce() -> T) -> T {
+        if method != "GET" {
+            return answer();
+        }
+        let now = self.now.fetch_add(1, Ordering::SeqCst) + 1;
+        self.most.fetch_max(now, Ordering::SeqCst);
+        std::thread::sleep(*self.slow.lock().unwrap_or_else(|e| e.into_inner()));
+        let a = answer();
+        self.now.fetch_sub(1, Ordering::SeqCst);
+        a
     }
 }
 
@@ -152,7 +182,9 @@ fn serve(conn: TcpStream, objects: &MemoryStore, seen: &Seen, lax: bool) {
         if r.read_exact(&mut body).is_err() {
             return;
         }
-        let answer = handle(&method, &target, &header, &body, objects, lax);
+        let answer = seen.holding(&method, || {
+            handle(&method, &target, &header, &body, objects, lax)
+        });
         let path = target.split_once('?').map_or(target.as_str(), |(p, _)| p);
         seen.requests
             .lock()
