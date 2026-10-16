@@ -6820,8 +6820,8 @@ impl<'u> Lowerer<'u> {
     }
 
     /// A relation atom, its arguments lowered at `pos`: positional, or
-    /// named by the relation's columns (`p(a: x)`, H-12); and its
-    /// arguments' nodes where each is one.
+    /// named by the relation's columns (`p(a: x)`, H-12); its arguments'
+    /// nodes, and how the read reaches the relation.
     fn atom_args(
         &mut self,
         rc: &mut Rc,
@@ -6833,52 +6833,7 @@ impl<'u> Lowerer<'u> {
         if let Some((a, args)) = self.exported_relation(rc, n, pos, pre)? {
             return Ok((a, args, Reach::Own));
         }
-        let pred = self.callee(n).ok_or(Skip);
-        let Ok(mut pred) = pred else {
-            return self.error(span, "a relation is named by a plain name (`p` or `m.p`)");
-        };
-        let mut via = Reach::Own;
-        // A used module's relation: `releases.release(..)` is the
-        // activation's `releases::release` (R-65).
-        if let Some((m, p)) = pred.split_once('.')
-            && let Some(path) = self.use_in(rc.scope, m)
-        {
-            let Some(scope) = self.module_at(&path).map(|m| m.0) else {
-                return Err(Skip);
-            };
-            if !self.names(scope).is_relation(p) {
-                return self.error(span, format!("the module {path} has no relation `{p}`"));
-            }
-            pred = format!("{m}::{p}");
-        } else if let Some(c) = n.children().find_map(|c| Chain::of(&c))
-            && c.head == "super"
-        {
-            // `super.p(..)`: the relation of the scope around this
-            // component (R-186).
-            let (from, rest) = self.super_chain(rc, &c, span)?;
-            let p = &rest.head;
-            let known = self.chain_of(from).into_iter().any(|s| {
-                let sc = self.names(s);
-                sc.is_relation(p) || sc.takes(p)
-            });
-            if !rest.ops.is_empty() || !known {
-                let around = self.scope_name(from);
-                return self.error(span, format!("`super.{p}`: {around} has no relation `{p}`"));
-            }
-            via = self.relation_reach(rc.scope, from, p);
-            pred = p.clone();
-        } else if let Some((m, p)) = pred.split_once('.')
-            && let Some(from) = self.self_module(rc.scope, m)
-            && self.names(from).is_relation(p)
-        {
-            // The module's own relation by its name, in its file: the
-            // instance's the read is in (R-186).
-            via = self.relation_reach(rc.scope, from, p);
-            pred = p.to_string();
-        } else if !pred.contains('.') {
-            self.undeclared_relation(rc, &pred, span)?;
-            via = self.relation_reach(rc.scope, rc.scope, &pred);
-        }
+        let (pred, via) = self.relation_named(rc, n, span)?;
         let list = node(n, ARG_LIST);
         let named: Vec<SyntaxNode> = list
             .iter()
@@ -6891,51 +6846,14 @@ impl<'u> Lowerer<'u> {
                     "a relation's arguments are all positional or all named",
                 );
             }
-            let mut fields = BTreeMap::new();
-            let mut nodes = Vec::new();
-            for f in named {
-                let key = tokens(&f).next().ok_or(Skip)?.text().to_string();
-                let (value, id) = self.arg_node(rc, &terms(&f).next().ok_or(Skip)?, pos, pre)?;
-                if fields.insert(key.clone(), value).is_some() {
-                    return self.error(self.span(&f), format!("column `{key}` given twice"));
-                }
-                nodes.push((key, id));
-            }
-            let a = Atom {
-                pred,
-                args: Vec::new(),
-                record: Some(fields),
-                span,
-            };
-            return Ok((a, AtomArgs::Record(nodes), via));
+            let (a, args) = self.named_args(rc, pred, &named, pos, pre, span)?;
+            return Ok((a, args, via));
         }
-        match crate::zset::REF_RELATIONS.iter().find(|(p, ..)| *p == pred) {
-            Some(_) => {
-                let list: Vec<SyntaxNode> = list
-                    .as_ref()
-                    .map(|l| terms(l).collect())
-                    .unwrap_or_default();
-                if let Err(e) = crate::zset::ref_arity(&pred, list.len()) {
-                    return self.error(span, e);
-                }
-                let at = crate::zset::ref_column(&pred, list.len());
-                let mut args = Vec::new();
-                for (i, t) in list.iter().enumerate() {
-                    args.push(if Some(i) == at {
-                        let id = self.ref_expr(rc, t, pos, pre)?;
-                        (self.lowered(id, pre), id)
-                    } else {
-                        self.arg_node(rc, t, pos, pre)?
-                    });
-                }
-                // `moved(T, "old-address", r)`: the old address is a path
-                // too (R-112).
-                if pred == "moved" {
-                    self.address_key(&args[1].0, span)?;
-                }
-                let (a, args) = Self::positional(pred, args, span);
-                Ok((a, args, via))
-            }
+        let terms_of = |l: &Option<SyntaxNode>| -> Vec<SyntaxNode> {
+            l.as_ref().map(|l| terms(l).collect()).unwrap_or_default()
+        };
+        let (a, args) = match crate::zset::REF_RELATIONS.iter().find(|(p, ..)| *p == pred) {
+            Some(_) => self.ref_relation_args(rc, pred, &terms_of(&list), pos, pre, span)?,
             // A program relation's reference column (R-185): a resource
             // there is the reference, as in the plan's relations.
             None if !self
@@ -6953,45 +6871,163 @@ impl<'u> Lowerer<'u> {
                     record: None,
                     span,
                 };
-                Ok((a, AtomArgs::Positional(nodes), via))
+                (a, AtomArgs::Positional(nodes))
             }
-            // In a body an argument is a pattern (R-58): `pair((a, b))`;
-            // a relation of several named columns takes one object
-            // pattern, `zone({ name, index })`, its record pattern.
             None if pos == Pos::Content => {
-                let list: Vec<SyntaxNode> = list
-                    .as_ref()
-                    .map(|l| terms(l).collect())
-                    .unwrap_or_default();
-                if let [o] = list.as_slice()
-                    && o.kind() == OBJECT
-                    && self.named_columns(rc.scope, &pred)
-                {
-                    let (record, nodes) = self.record_pattern(rc, o, pre)?;
-                    let a = Atom {
-                        pred,
-                        args: Vec::new(),
-                        record: Some(record),
-                        span,
-                    };
-                    return Ok((a, nodes, via));
-                }
-                let mut args = Vec::new();
-                for t in &list {
-                    args.push(match t.kind() {
-                        TUPLE => self.pattern(rc, t, pre)?,
-                        _ => self.arg_node(rc, t, pos, pre)?,
-                    });
-                }
-                let (a, args) = Self::positional(pred, args, span);
-                Ok((a, args, via))
+                self.content_args(rc, pred, &terms_of(&list), pos, pre, span)?
             }
             None => {
                 let (args, nodes) = self.args(rc, n, pos, pre)?;
-                let (a, args) = Self::positional(pred, args.into_iter().zip(nodes).collect(), span);
-                Ok((a, args, via))
+                Self::positional(pred, args.into_iter().zip(nodes).collect(), span)
             }
+        };
+        Ok((a, args, via))
+    }
+
+    /// The relation the atom `n` names, and how the read reaches it: a
+    /// used module's (`releases.release(..)`, the activation's
+    /// `releases::release`, R-65), the scope's around a component's
+    /// (`super.p(..)`, R-186), the module's own by its name in its file,
+    /// or one in scope by its name.
+    fn relation_named(&mut self, rc: &Rc, n: &SyntaxNode, span: Span) -> L<(String, Reach)> {
+        let Some(pred) = self.callee(n) else {
+            return self.error(span, "a relation is named by a plain name (`p` or `m.p`)");
+        };
+        if let Some((m, p)) = pred.split_once('.')
+            && let Some(path) = self.use_in(rc.scope, m)
+        {
+            let Some(scope) = self.module_at(&path).map(|m| m.0) else {
+                return Err(Skip);
+            };
+            if !self.names(scope).is_relation(p) {
+                return self.error(span, format!("the module {path} has no relation `{p}`"));
+            }
+            return Ok((format!("{m}::{p}"), Reach::Own));
         }
+        if let Some(c) = n.children().find_map(|c| Chain::of(&c))
+            && c.head == "super"
+        {
+            let (from, rest) = self.super_chain(rc, &c, span)?;
+            let p = &rest.head;
+            let known = self.chain_of(from).into_iter().any(|s| {
+                let sc = self.names(s);
+                sc.is_relation(p) || sc.takes(p)
+            });
+            if !rest.ops.is_empty() || !known {
+                let around = self.scope_name(from);
+                return self.error(span, format!("`super.{p}`: {around} has no relation `{p}`"));
+            }
+            return Ok((p.clone(), self.relation_reach(rc.scope, from, p)));
+        }
+        if let Some((m, p)) = pred.split_once('.')
+            && let Some(from) = self.self_module(rc.scope, m)
+            && self.names(from).is_relation(p)
+        {
+            // The instance's the read is in (R-186).
+            return Ok((p.to_string(), self.relation_reach(rc.scope, from, p)));
+        }
+        if !pred.contains('.') {
+            self.undeclared_relation(rc, &pred, span)?;
+            let via = self.relation_reach(rc.scope, rc.scope, &pred);
+            return Ok((pred, via));
+        }
+        Ok((pred, Reach::Own))
+    }
+
+    /// `pred(a: x, ..)`: the arguments `named` by the relation's columns.
+    fn named_args(
+        &mut self,
+        rc: &mut Rc,
+        pred: String,
+        named: &[SyntaxNode],
+        pos: Pos,
+        pre: &mut Vec<Lit>,
+        span: Span,
+    ) -> L<(Atom, AtomArgs)> {
+        let mut fields = BTreeMap::new();
+        let mut nodes = Vec::new();
+        for f in named {
+            let key = tokens(f).next().ok_or(Skip)?.text().to_string();
+            let (value, id) = self.arg_node(rc, &terms(f).next().ok_or(Skip)?, pos, pre)?;
+            if fields.insert(key.clone(), value).is_some() {
+                return self.error(self.span(f), format!("column `{key}` given twice"));
+            }
+            nodes.push((key, id));
+        }
+        let a = Atom {
+            pred,
+            args: Vec::new(),
+            record: Some(fields),
+            span,
+        };
+        Ok((a, AtomArgs::Record(nodes)))
+    }
+
+    /// A relation of the plan's whose one column holds a reference
+    /// (`zset::REF_RELATIONS`): that argument the reference.
+    fn ref_relation_args(
+        &mut self,
+        rc: &mut Rc,
+        pred: String,
+        list: &[SyntaxNode],
+        pos: Pos,
+        pre: &mut Vec<Lit>,
+        span: Span,
+    ) -> L<(Atom, AtomArgs)> {
+        if let Err(e) = crate::zset::ref_arity(&pred, list.len()) {
+            return self.error(span, e);
+        }
+        let at = crate::zset::ref_column(&pred, list.len());
+        let mut args = Vec::new();
+        for (i, t) in list.iter().enumerate() {
+            args.push(if Some(i) == at {
+                let id = self.ref_expr(rc, t, pos, pre)?;
+                (self.lowered(id, pre), id)
+            } else {
+                self.arg_node(rc, t, pos, pre)?
+            });
+        }
+        // `moved(T, "old-address", r)`: the old address is a path too
+        // (R-112).
+        if pred == "moved" {
+            self.address_key(&args[1].0, span)?;
+        }
+        Ok(Self::positional(pred, args, span))
+    }
+
+    /// In a body an argument is a pattern (R-58): `pair((a, b))`; a
+    /// relation of several named columns takes one object pattern, `zone({
+    /// name, index })`, its record pattern.
+    fn content_args(
+        &mut self,
+        rc: &mut Rc,
+        pred: String,
+        list: &[SyntaxNode],
+        pos: Pos,
+        pre: &mut Vec<Lit>,
+        span: Span,
+    ) -> L<(Atom, AtomArgs)> {
+        if let [o] = list
+            && o.kind() == OBJECT
+            && self.named_columns(rc.scope, &pred)
+        {
+            let (record, nodes) = self.record_pattern(rc, o, pre)?;
+            let a = Atom {
+                pred,
+                args: Vec::new(),
+                record: Some(record),
+                span,
+            };
+            return Ok((a, nodes));
+        }
+        let mut args = Vec::new();
+        for t in list {
+            args.push(match t.kind() {
+                TUPLE => self.pattern(rc, t, pre)?,
+                _ => self.arg_node(rc, t, pos, pre)?,
+            });
+        }
+        Ok(Self::positional(pred, args, span))
     }
 
     /// The atom `pred(args)` at `span`, each argument its term and node.
@@ -8693,35 +8729,10 @@ impl<'u> Lowerer<'u> {
         let name = c.head.clone();
         let (decl, via) = self.value_decl(rc.scope, from, &name);
         let key = read_key(&name, &via);
-        // An input typed `ref(T)` holds the reference itself: a dot reads
-        // through it, the address taken out of the reference (R-101). It
-        // is its user's, so no copy's scope goes in front of it.
         if !c.is_bare()
             && let Some(typ) = self.input_ref(from, &name)
         {
-            let key = format!("ref {key}");
-            let read = match rc.values.get(&key) {
-                Some(v) => {
-                    let v = v.clone();
-                    self.var_node(rc, span, &v)
-                }
-                None => {
-                    let name = fresh(rc, &capitalise(&name));
-                    let rel = (via.relation(&decl.name), via.clone());
-                    let id =
-                        self.building(rc, span, |b| b.address_into((&rel.0, rel.1), &typ, &name));
-                    self.hoisted_into(id, pre);
-                    rc.values.insert(key, name.clone());
-                    id
-                }
-            };
-            let path = self.segs(rc, &c.ops, pre)?;
-            let via = Reach::Absolute;
-            return Ok(Res::Ref {
-                typ: self.str_node(span, &typ),
-                addr: self.node(span, ExprKind::Scoped { name: read, via }),
-                path,
-            });
+            return self.through_ref_input(rc, (c, &decl, via), typ, pre, span);
         }
         let ty = match self.value_type(from, &name) {
             Ok(t) => t,
@@ -8766,6 +8777,43 @@ impl<'u> Lowerer<'u> {
                 })
             }
         }
+    }
+
+    /// `k.p` of an input `k` typed `ref(T)` (`c` the chain, `decl` and
+    /// `via` the input as read): it holds the reference itself, so a dot
+    /// reads through it, the address taken out of the reference (R-101),
+    /// read once per rule. It is its user's, so no copy's scope goes in
+    /// front of it.
+    fn through_ref_input(
+        &mut self,
+        rc: &mut Rc,
+        (c, decl, via): (&Chain, &DeclRef, Reach),
+        typ: String,
+        pre: &mut Vec<Lit>,
+        span: Span,
+    ) -> L<Res> {
+        let key = format!("ref {}", read_key(&decl.name, &via));
+        let read = match rc.values.get(&key) {
+            Some(v) => {
+                let v = v.clone();
+                self.var_node(rc, span, &v)
+            }
+            None => {
+                let name = fresh(rc, &capitalise(&decl.name));
+                let rel = via.relation(&decl.name);
+                let id = self.building(rc, span, |b| b.address_into((&rel, via), &typ, &name));
+                self.hoisted_into(id, pre);
+                rc.values.insert(key, name.clone());
+                id
+            }
+        };
+        let path = self.segs(rc, &c.ops, pre)?;
+        let via = Reach::Absolute;
+        Ok(Res::Ref {
+            typ: self.str_node(span, &typ),
+            addr: self.node(span, ExprKind::Scoped { name: read, via }),
+            path,
+        })
     }
 
     /// A bare name: a variable, unless it names something no variable may.
@@ -9817,23 +9865,7 @@ impl<'u> Lowerer<'u> {
                 self.plan_read(rc, "cloud_attr", (3, &last), read, span)
             }
             Res::Value { decl, via, path } => {
-                let pred = via.relation(&decl.name);
-                let key = read_key(&decl.name, &via);
-                let base = match rc.values.get(&key) {
-                    Some(v) => {
-                        let v = v.clone();
-                        Plan::Node(self.var_node(rc, span, &v))
-                    }
-                    None => {
-                        let used = matches!(via, Reach::Use(_));
-                        let name = fresh(rc, &capitalise(if used { &pred } else { &decl.name }));
-                        rc.values.insert(key, name.clone());
-                        Plan::Read {
-                            read: PlanRead::Value(decl, via),
-                            var: name,
-                        }
-                    }
-                };
+                let base = self.value_plan(rc, decl, via, span);
                 self.plan_path(rc, base, path, None)
             }
             Res::Lookup {
@@ -9852,6 +9884,25 @@ impl<'u> Lowerer<'u> {
                 self.plan_path(rc, base, path, None)
             }
         })
+    }
+
+    /// The value `decl` read `via`: its variable when the rule read it
+    /// already, else the read into a new one, named after the value (a
+    /// used module's after its relation, `m::k`).
+    fn value_plan(&mut self, rc: &mut Rc, decl: DeclRef, via: Reach, span: Span) -> Plan {
+        let key = read_key(&decl.name, &via);
+        if let Some(v) = rc.values.get(&key) {
+            let v = v.clone();
+            return Plan::Node(self.var_node(rc, span, &v));
+        }
+        let pred = via.relation(&decl.name);
+        let used = matches!(via, Reach::Use(_));
+        let name = fresh(rc, &capitalise(if used { &pred } else { &decl.name }));
+        rc.values.insert(key, name.clone());
+        Plan::Read {
+            read: PlanRead::Value(decl, via),
+            var: name,
+        }
     }
 
     /// The read `read`, `pred(args.., V)` (V at `out`): its variable when
