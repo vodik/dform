@@ -252,6 +252,7 @@ mod time;
 mod timing;
 mod transport_ssh;
 mod transports;
+mod tree_tick;
 mod treesit_agreement;
 mod type_table_names;
 mod typed_edges;
