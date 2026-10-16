@@ -1,7 +1,7 @@
 //! The command line as typed (clap's definitions) and what `resolve` makes
 //! of it: one run, [`Cli`].
 
-use super::apply::Apply;
+use super::apply::{Apply, PARALLEL};
 use super::complete::{Complete, Completions};
 use super::controller_cmd::Controller;
 use super::dev::{Effects, Eval, Graph, Show, Strata};
@@ -284,8 +284,9 @@ pub(super) enum Run {
         #[arg(long = "max-ticks", default_value_t = 8)]
         max_ticks: usize,
         /// At most this many provider Apply calls in flight: a tick's
-        /// independent actions overlap.
-        #[arg(long = "parallel", default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..))]
+        /// independent actions overlap. 1 makes one call at a time, in
+        /// plan order: for a first apply against a new provider.
+        #[arg(long = "parallel", default_value_t = PARALLEL, value_parser = clap::value_parser!(u64).range(1..))]
         parallel: u64,
         /// A signed approval of the plan file's digest (a JWT, or a DSSE
         /// envelope): verified against the stack's `approvals` trust root
@@ -331,8 +332,9 @@ pub(super) enum Run {
         /// A safety valve: stop after this many ticks.
         #[arg(long = "max-ticks", default_value_t = 8)]
         max_ticks: usize,
-        /// At most this many provider Apply calls in flight.
-        #[arg(long = "parallel", default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..))]
+        /// At most this many provider Apply calls in flight, as `apply
+        /// --parallel`; 1 makes one call at a time.
+        #[arg(long = "parallel", default_value_t = PARALLEL, value_parser = clap::value_parser!(u64).range(1..))]
         parallel: u64,
         /// A signed approval of the digest `plan --destroy` prints, when
         /// the policy says `requires_approval` of a delete.

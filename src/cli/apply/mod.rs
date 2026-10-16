@@ -16,6 +16,12 @@ use crate::{deployment, engine, report, resources, zset};
 use anyhow::Result;
 use std::path::PathBuf;
 
+/// `--parallel`'s default: the host's ceiling on a provider's window of
+/// requests in flight. Below it the executor submits every call whose
+/// dependencies are met, and what paces a provider is that window, kept
+/// by what the server answers (`dform_host::ratelimit`).
+pub(super) const PARALLEL: u64 = dform_host::ratelimit::CEILING as u64;
+
 /// `dform apply TARGET`, `dform apply PLAN.json` and `dform destroy
 /// TARGET`.
 #[derive(Debug, Clone)]
@@ -67,7 +73,7 @@ impl Apply {
             plan_file: None,
             chaos: Vec::new(),
             max_ticks,
-            parallel: 1,
+            parallel: PARALLEL,
             approval: None,
             yes: true,
             allow_empty: Vec::new(),

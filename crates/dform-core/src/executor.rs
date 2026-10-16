@@ -7,9 +7,10 @@
 //! log, and checkpoints the state per tick, `wal`). Persistence points:
 //!
 //! * after every Apply call that returns, answered or not: `identity` for a
-//!   create or adopt, its removal for a delete. A failure at action N leaves
-//!   the N-1 identities before it in state; a crash loses at most the call in
-//!   flight.
+//!   create or adopt, its removal for a delete, in the order the calls
+//!   answer. A failure leaves every identity answered before it in state;
+//!   a crash loses at most the calls in flight, `--parallel` of them (with
+//!   1, a failure at action N leaves the N-1 before it).
 //! * at the end of the tick, once the world's clock has advanced.
 //!
 //! Order. The tick's actions form a DAG (`dag`): a create or update after

@@ -16,29 +16,27 @@ resource net.subnet s { vpc_id = ref(net.vpc, "a", "id"), tier = "web" }
 use fake
 "#;
 
-fn apply(backend: Backend, parallel: &str) -> (common::Run, Vec<(String, u64, u64)>) {
+/// `apply`, with `--parallel` when `parallel` is given.
+fn apply(backend: Backend, parallel: Option<&str>) -> (common::Run, Vec<(String, u64, u64)>) {
     let s = Scratch::new("parallel");
     s.write("p.df", PROG);
-    let r = s
-        .run_on(
-            backend,
-            &[
-                "dev",
-                "--world",
-                "w.json",
-                "--chaos",
-                "latency=net.vpc[\"a\"]:100",
-                "--chaos",
-                "latency=net.vpc[\"b\"]:100",
-                "--chaos",
-                "latency=net.subnet[\"s\"]:50",
-                "apply",
-                "--parallel",
-                parallel,
-                "p.df",
-            ],
-        )
-        .success();
+    let mut args = vec![
+        "dev",
+        "--world",
+        "w.json",
+        "--chaos",
+        "latency=net.vpc[\"a\"]:100",
+        "--chaos",
+        "latency=net.vpc[\"b\"]:100",
+        "--chaos",
+        "latency=net.subnet[\"s\"]:50",
+        "apply",
+    ];
+    if let Some(p) = parallel {
+        args.extend(["--parallel", p]);
+    }
+    args.push("p.df");
+    let r = s.run_on(backend, &args).success();
     let w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
     let spans = w["timeline"]
         .as_array()
@@ -60,9 +58,9 @@ fn span(a: &str, start: u64, end: u64) -> (String, u64, u64) {
 }
 
 #[test]
-fn one_at_a_time_by_default() {
+fn one_at_a_time_at_parallel_1() {
     for backend in BACKENDS {
-        let (r, spans) = apply(backend, "1");
+        let (r, spans) = apply(backend, Some("1"));
         one_at_a_time(&r, &spans);
     }
 }
@@ -83,16 +81,18 @@ fn one_at_a_time(r: &common::Run, spans: &[(String, u64, u64)]) {
     );
 }
 
-/// The two vpcs overlap; the subnet waits for its vpc, not for the other.
+/// The two vpcs overlap; the subnet waits for its vpc, not for the other:
+/// at `--parallel 2`, and by default.
 #[test]
 fn independent_creates_overlap() {
     for backend in [Backend::Direct, Backend::Wire] {
-        independent_creates_overlap_on(backend);
+        independent_creates_overlap_on(backend, Some("2"));
+        independent_creates_overlap_on(backend, None);
     }
 }
 
-fn independent_creates_overlap_on(backend: Backend) {
-    let (r, spans) = apply(backend, "2");
+fn independent_creates_overlap_on(backend: Backend, parallel: Option<&str>) {
+    let (r, spans) = apply(backend, parallel);
     assert_eq!(
         spans,
         [
@@ -107,7 +107,7 @@ fn independent_creates_overlap_on(backend: Backend) {
         r.stdout
     );
     // Output order does not depend on the limit.
-    let (one, _) = apply(backend, "1");
+    let (one, _) = apply(backend, Some("1"));
     let strip = |s: &str| {
         s.lines()
             .filter(|l| !l.starts_with("chaos: simulated"))
@@ -121,7 +121,7 @@ fn independent_creates_overlap_on(backend: Backend) {
 #[test]
 fn a_dependent_waits_for_its_dependency() {
     for backend in BACKENDS {
-        let (_, spans) = apply(backend, "8");
+        let (_, spans) = apply(backend, Some("8"));
         let a = spans.iter().find(|x| x.0 == r#"net.vpc["a"]"#).unwrap();
         let s = spans.iter().find(|x| x.0 == r#"net.subnet["s"]"#).unwrap();
         assert!(s.1 >= a.2, "{backend:?}: {spans:?}");
