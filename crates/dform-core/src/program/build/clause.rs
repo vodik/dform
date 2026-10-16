@@ -46,6 +46,7 @@ impl Builder<'_> {
                 let kind = GoalKind::Not {
                     clause,
                     helper: None,
+                    written: Negated::Literal,
                 };
                 return self.goal_node(a.span, kind);
             }

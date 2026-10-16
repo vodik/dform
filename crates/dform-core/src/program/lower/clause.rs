@@ -205,6 +205,7 @@ impl Lowering<'_> {
             GoalKind::Not {
                 clause,
                 helper: None,
+                ..
             } => {
                 let [one] = self.program.clauses[*clause].goals.as_slice() else {
                     unreachable!("a `not` without a helper negates one goal")
@@ -216,6 +217,7 @@ impl Lowering<'_> {
             GoalKind::Not {
                 clause,
                 helper: Some(h),
+                ..
             } => self.negation(*clause, h, g.span, out),
             _ => {
                 // A goal's terms hoist their reads before it.
@@ -375,7 +377,7 @@ impl Lowering<'_> {
                 let pred = crate::modules::INSTANCE_OF;
                 vec![Lit::Pos(self.put_at(atom_at(pred, args, span), all, &at))]
             }
-            Coll::Each(e) | Coll::TypeOf(e) => {
+            Coll::Each(e) | Coll::TypeOf { ty: e, .. } => {
                 let p = self.pattern(pat);
                 vec![Lit::Eq(p, self.expr(*e))]
             }

@@ -358,7 +358,7 @@ impl Lowerer<'_> {
                 format!("{name} is a relation: read it as `{name}[..]` or after `where`"),
             ));
         }
-        if !self.decls.externs.contains_key(&name) {
+        if !self.program.scopes.externs.contains_key(&name) {
             return Some(self.error(
                 span,
                 format!("{name} is the {head} provider's: declare `use {head}`"),
@@ -384,7 +384,7 @@ impl Lowerer<'_> {
             crate::files::oci::RESOLVE => "one argument: the image reference",
             _ => "two arguments: the key and the candidate",
         };
-        let ins = self.decls.externs[name].len() - 1;
+        let ins = self.program.scopes.externs[name].len() - 1;
         if args.len() != ins {
             return self.error(span, format!("{name} takes {want}"));
         }
@@ -420,13 +420,13 @@ impl Lowerer<'_> {
                 continue;
             };
             for mut f in b.externs() {
-                if self.decls.externs.contains_key(&f.name) {
+                if self.program.scopes.externs.contains_key(&f.name) {
                     continue;
                 }
                 // Declared where the provider's `use` stands.
                 f.span = span;
                 let cols = f.args.iter().map(|b| (b.input, b.name.clone())).collect();
-                self.decls.externs.insert(f.name.clone(), cols);
+                self.program.scopes.externs.insert(f.name.clone(), cols);
                 let kind = crate::program::ItemKind::Extern {
                     name: f.name.clone(),
                     args: f.args.clone(),

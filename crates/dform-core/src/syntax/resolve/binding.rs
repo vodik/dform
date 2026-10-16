@@ -462,7 +462,7 @@ impl Lowerer<'_> {
         let name = self.callee(call).unwrap_or_default();
         let by = format!("in this call of `{name}`");
         let function = crate::functions::callable(&name);
-        let ext = self.decls.externs.get(&name).cloned();
+        let ext = self.program.scopes.externs.get(&name).cloned();
         // A let with parameters reads its parameters' columns (R-187).
         let params = self.function_inputs(rc.scope, &name).unwrap_or(0);
         // `c[t].p(..)`, `platform[env=e].p(..)`: the index names a copy.

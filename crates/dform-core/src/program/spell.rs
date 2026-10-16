@@ -391,7 +391,9 @@ impl Speller<'_> {
 
     fn coll(&self, c: &Coll) -> String {
         match c {
-            Coll::Expr(e) | Coll::Type(e) | Coll::Each(e) | Coll::TypeOf(e) => self.expr(*e),
+            Coll::Expr(e) | Coll::Type(e) | Coll::Each(e) | Coll::TypeOf { ty: e, .. } => {
+                self.expr(*e)
+            }
             Coll::ProviderType { typ: n, .. }
             | Coll::Enum { name: n, .. }
             | Coll::Namespace { ns: n, .. }

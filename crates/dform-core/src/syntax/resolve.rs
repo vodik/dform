@@ -33,8 +33,8 @@ use crate::ast::{
 use crate::diag::Diagnostic;
 use crate::program::node::CopyKind;
 use crate::program::node::{
-    BinOp, CmpOp, Coll, ExprKind, GoalId, GoalKind, Has, HasMark, ListPart, ObjPart, RelArgs,
-    RelRef,
+    BinOp, CmpOp, Coll, ExprKind, GoalId, GoalKind, Has, HasMark, ListPart, Negated, ObjPart,
+    RelArgs, RelRef,
 };
 use crate::program::scope::{self as scopes, DeclKind, DeclRef, Names, Reach};
 use crate::program::{ExprId, ItemId, ScopeId};
@@ -308,8 +308,6 @@ struct Decls {
     /// provider schema's the compiler does not read (`--provider`, a
     /// plugin's).
     closed: BTreeSet<String>,
-    /// `extern` relations: their columns, `(input, name)`.
-    externs: BTreeMap<String, Vec<(bool, String)>>,
     /// Each `resource T n` statement as collected, before what `T` names
     /// is known: the scope it declares into, its file and the statement.
     pending: Vec<(ScopeId, u32, SyntaxNode)>,
@@ -1209,7 +1207,7 @@ impl<'u> Lowerer<'u> {
                             (input, word_text(&b, 0))
                         })
                         .collect();
-                    self.decls.externs.insert(name, cols);
+                    self.program.scopes.externs.insert(name, cols);
                 }
                 DECL => {
                     let name = dotted_text(&n, 1);
@@ -6037,7 +6035,7 @@ impl<'u> Lowerer<'u> {
                 let (lit, g) = self.membership(rc, n, out)?;
                 out.push(negate(lit));
                 if let Some(g) = g {
-                    let g = self.building(rc, span, |b| b.not_one(g));
+                    let g = self.building(rc, span, |b| b.not_one(g, Negated::NotIn));
                     self.built(g);
                 }
             }
@@ -6144,7 +6142,7 @@ impl<'u> Lowerer<'u> {
                 self.core_read(&a, &atom)?;
                 if let Some(args) = args {
                     let g = self.rel_goal(rc, &atom, args);
-                    let g = self.building(rc, span, |b| b.not_one(g));
+                    let g = self.building(rc, span, |b| b.not_one(g, Negated::Literal));
                     self.built(g);
                 }
                 out.push(Lit::Not(atom));
@@ -6156,7 +6154,7 @@ impl<'u> Lowerer<'u> {
                 let (lit, g) = self.membership(rc, n, out)?;
                 out.push(negate(lit));
                 if let Some(g) = g {
-                    let g = self.building(rc, span, |b| b.not_one(g));
+                    let g = self.building(rc, span, |b| b.not_one(g, Negated::Literal));
                     self.built(g);
                 }
                 return Ok(());
@@ -6206,7 +6204,7 @@ impl<'u> Lowerer<'u> {
                         _ => GoalKind::Truth(e),
                     };
                     let g = self.goal(rc, span, kind);
-                    let mut g = self.building(rc, span, |b| b.not_one(g));
+                    let mut g = self.building(rc, span, |b| b.not_one(g, Negated::Literal));
                     if let Some(mark) = mark {
                         g = self.goal(rc, span, GoalKind::Marked { mark, goal: g });
                     }
@@ -6262,7 +6260,7 @@ impl<'u> Lowerer<'u> {
                             let e = self.in_place(rc, &res, span).ok_or(Skip)?;
                             let ops = vec![(CmpOp::Eq, id)];
                             let g = self.goal(rc, span, GoalKind::Compare { lhs: e, ops });
-                            let g = self.building(rc, span, |b| b.not_one(g));
+                            let g = self.building(rc, span, |b| b.not_one(g, Negated::Literal));
                             self.built(g);
                             return Ok(());
                         }
@@ -6346,7 +6344,7 @@ impl<'u> Lowerer<'u> {
                 results.iter().map(|v| v.to_string()).collect(),
                 from,
             );
-            s.negated(&mut self.program, &shared, span);
+            s.negated(&mut self.program, &shared, span, negated(n));
         }
         // The helper's own variables are bound in the helper.
         for v in used.difference(&outer_bound) {
@@ -9418,7 +9416,7 @@ impl<'u> Lowerer<'u> {
         };
         let name = fields.join(".");
         let rest = &c.ops[k..];
-        if let Some(cols) = self.decls.externs.get(&name).cloned() {
+        if let Some(cols) = self.program.scopes.externs.get(&name).cloned() {
             let outs: Vec<usize> = cols
                 .iter()
                 .enumerate()
@@ -10207,6 +10205,16 @@ fn outer_names(rc: &Rc, outer: &BTreeSet<String>) -> BTreeSet<String> {
         .filter(|(_, low)| outer.contains(*low))
         .map(|(src, _)| src.clone())
         .collect()
+}
+
+/// How the negation whose body is `n` is written: `not { B }` (the body),
+/// `x not in e`, or `not L` (the literal).
+fn negated(n: &SyntaxNode) -> Negated {
+    match n.kind() {
+        BODY => Negated::Block,
+        LIT_NOT_IN => Negated::NotIn,
+        _ => Negated::Literal,
+    }
 }
 
 /// Every variable literal `l` names, a comprehension's included.

@@ -395,6 +395,7 @@ pub enum GoalKind {
     Not {
         clause: ClauseId,
         helper: Option<NegHelper>,
+        written: Negated,
     },
     /// `n = count(x)`: an aggregate's binding. `helper` is the `__agg_N`
     /// number, taken where its rule's body is folded over it.
@@ -416,6 +417,18 @@ pub enum GoalKind {
     /// marked as that test: the compiler keeps it, or puts the schema's
     /// answer in its place (R-106, `partition::answer_has`).
     Marked { mark: HasMark, goal: GoalId },
+}
+
+/// How a negation is written: binding order reads each its own way
+/// (R-10), though `not x in e` and `x not in e` lower alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Negated {
+    /// `not L`: what `L` reads is bound outside it, what it binds its own.
+    Literal,
+    /// `not { B }`: a clause of its own, inside the one around it.
+    Block,
+    /// `x not in e`: every term read.
+    NotIn,
 }
 
 /// What `has` tests.
@@ -506,8 +519,8 @@ pub enum Coll {
     /// steps enumerating.
     Each(ExprId),
     /// `r in T` of a reference column's `r` (R-42): the type the column
-    /// read tested, `Type = "T"`.
-    TypeOf(ExprId),
+    /// read tested, `Type = "T"`; `of` the element as written, `r`.
+    TypeOf { ty: ExprId, of: ExprId },
 }
 
 /// A variable of a clause: its source name, the name `lower` writes,

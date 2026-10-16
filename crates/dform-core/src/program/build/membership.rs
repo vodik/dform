@@ -33,13 +33,15 @@ impl Builder<'_> {
         }
     }
 
-    /// `not g`, `g` one goal whose last literal is negated.
-    pub fn not_one(&mut self, g: GoalId) -> GoalId {
+    /// `not g` written `written`, `g` one goal whose last literal is
+    /// negated.
+    pub fn not_one(&mut self, g: GoalId, written: Negated) -> GoalId {
         let span = self.program.goals[g].span;
         let clause = self.at(span, |b| b.clause_of(vec![g]));
         let kind = GoalKind::Not {
             clause,
             helper: None,
+            written,
         };
         self.goal_node(span, kind)
     }

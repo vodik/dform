@@ -97,9 +97,15 @@ impl Gather {
     }
 
     /// The literal being lowered is `not __neg_{number}(args)` at `span`,
-    /// its helper's body the goals its body's literals were built as
-    /// ([`Gather::negation`]): built as that goal.
-    pub fn negated(&mut self, program: &mut Program, args: &[String], span: Span) {
+    /// written `written`, its helper's body the goals its body's literals
+    /// were built as ([`Gather::negation`]): built as that goal.
+    pub fn negated(
+        &mut self,
+        program: &mut Program,
+        args: &[String],
+        span: Span,
+        written: crate::program::node::Negated,
+    ) {
         let Some(f) = self.frames.last() else { return };
         let Some((number, folded, from)) = f.negation.clone() else {
             return;
@@ -118,6 +124,7 @@ impl Gather {
         let kind = crate::program::node::GoalKind::Not {
             clause,
             helper: Some(helper),
+            written,
         };
         let g = b.goal_node(span, kind);
         self.done(b);

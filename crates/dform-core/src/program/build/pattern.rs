@@ -34,11 +34,16 @@ impl Builder<'_> {
         self.pattern_node(kind)
     }
 
-    /// The node `id` in a binding position: `_` a hole, a variable a
-    /// binding, a written list a tuple and a written object an object
-    /// pattern (each part in its place), anything else the term it
-    /// compares with.
+    /// The node `id` in a binding position, where `id` is written: `_` a
+    /// hole, a variable a binding, a written list a tuple and a written
+    /// object an object pattern (each part in its place), anything else
+    /// the term it compares with.
     pub fn pattern_of(&mut self, id: ExprId) -> PatternId {
+        let span = self.program.exprs[id].span;
+        self.at(span, |b| b.pattern_at(id))
+    }
+
+    fn pattern_at(&mut self, id: ExprId) -> PatternId {
         let e = &self.program.exprs[id];
         let kind = match (&e.kind, e.hoisted) {
             (ExprKind::Hole, None) => PatternKind::Hole,

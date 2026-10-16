@@ -338,14 +338,15 @@ impl Lowerer<'_> {
             && Self::ref_bound(&m.n, &c.head)
         {
             if let Some((test, coll)) = renamed {
-                let hole = self.node(span, ExprKind::Hole);
+                // A test alone: its element as written.
                 let coll = Self::tested(coll, false);
-                let g = self.member_goal(rc, span, hole, coll);
+                let g = self.member_goal(rc, span, lhs_id, coll);
                 return Ok((test, Some(g)));
             }
             let have = rc.types.get(&c.head).cloned().unwrap_or_else(|| t.clone());
             let (h, ty) = (self.name_node(rc, span, &have), self.name_node(rc, span, t));
-            let g = self.member_goal(rc, span, h, Coll::TypeOf(ty));
+            let coll = Coll::TypeOf { ty, of: lhs_id };
+            let g = self.member_goal(rc, span, h, coll);
             return Ok((Lit::Eq(have, t.clone()), Some(g)));
         }
         if let Some(w) = m.world() {

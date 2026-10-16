@@ -1390,11 +1390,13 @@ impl<'a, 'p> Walk<'a, 'p> {
             GoalKind::Not {
                 clause,
                 helper: None,
+                ..
             } => self.clause(Some(*clause), at),
             // `not __neg_N(ȳ)`, and the helper's body.
             GoalKind::Not {
                 clause,
                 helper: Some(h),
+                ..
             } => {
                 let pred = format!("__neg_{}", h.number);
                 let args = h.args.iter().map(|v| Part::Var(*v)).collect();
@@ -1511,7 +1513,7 @@ impl<'a, 'p> Walk<'a, 'p> {
                 ];
                 self.atom(crate::modules::INSTANCE_OF, parts, span, at);
             }
-            Coll::Each(e) | Coll::TypeOf(e) => {
+            Coll::Each(e) | Coll::TypeOf { ty: e, .. } => {
                 let x = self.term_node(Part::Pat(pat), at);
                 let y = self.term_node(Part::Node(*e), at);
                 self.g.union(x, y);
@@ -1865,7 +1867,7 @@ impl<'a, 'p> Walk<'a, 'p> {
                     out.push(*scope);
                     self.pat_exprs(*pat, &mut out);
                 }
-                Coll::Each(e) | Coll::TypeOf(e) => {
+                Coll::Each(e) | Coll::TypeOf { ty: e, .. } => {
                     self.pat_exprs(*pat, &mut out);
                     out.push(*e);
                 }

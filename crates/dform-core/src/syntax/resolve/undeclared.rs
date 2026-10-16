@@ -66,7 +66,8 @@ impl Lowerer<'_> {
             let sc = self.names(s);
             sc.is_relation(p) || sc.takes(p)
         });
-        if defines || !crate::modules::is_private(p) || self.decls.externs.contains_key(p) {
+        if defines || !crate::modules::is_private(p) || self.program.scopes.externs.contains_key(p)
+        {
             return Ok(());
         }
         self.not_declared(rc.scope, p, true, span)

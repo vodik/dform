@@ -63,6 +63,10 @@ pub struct Scopes {
     blocks: BTreeMap<(u32, u32), ScopeId>,
     /// Each module's file and each component's body, by path.
     paths: BTreeMap<Name, ScopeId>,
+    /// The provider tables the program declares (`extern p(+a, -b)`, a
+    /// built-in provider's), program-wide, by name: each column, whether
+    /// a read gives it (`+`), and its name.
+    pub externs: BTreeMap<Name, Vec<(bool, Name)>>,
 }
 
 impl std::ops::Index<ScopeId> for Scopes {
