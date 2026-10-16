@@ -97,7 +97,15 @@ fn handshake(req: &pb::HandshakeRequest) -> std::result::Result<pb::HandshakeRes
                 sensitive: false,
                 credential: None,
             })
-            .to_vec(),
+            .into_iter()
+            // A token the program gives: dform holds it in the host, and
+            // the provider is configured with its name.
+            .chain([pb::SettingDecl {
+                name: "token".into(),
+                sensitive: true,
+                credential: Some("bearer".into()),
+            }])
+            .collect(),
     })
 }
 

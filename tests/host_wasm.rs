@@ -309,3 +309,57 @@ fn a_components_read_keeps_two_requests_in_flight() {
 fn a_component_blocked_on_the_host_holds_its_instance() {
     assert_eq!(two_reads_at_once("web.blocked"), [false, true]);
 }
+
+/// The OVH provider built as a component (`cargo xtask components`): a
+/// Read of an instance against the fake OVH API (native, in this
+/// process) through the host's HTTP, configured with the program's token
+/// (the host holds it; a component reads no environment and no file). The
+/// instance, its ports and the project's networks are asked together, so
+/// the server has several requests in flight from the one call.
+#[test]
+fn the_ovh_component_reads_an_instance_through_the_host() {
+    use dform::plugin::backend::Session;
+    use dform::plugin::host::Grants;
+    use dform::plugin::{pb, wire};
+    use dform_provider_ovh::fake::{self, Server};
+    let ovh = built(
+        "dform_provider_ovh.wasm",
+        "cargo build -p dform-provider-ovh --release --target wasm32-wasip3 --features component",
+    );
+    let server = Server::start();
+    let vm = server.add_instance("vm", "ca-east-tor");
+    dform_host::wasm::compile_cache(wasm_cache());
+    // dform-core's language front-end, which parses the provider's schema,
+    // links `wasi:filesystem` (it reads a source's file for its columns):
+    // granted, until the crate split keeps it out of a provider.
+    let mut grants = Grants::none("ovh");
+    grants.allow.insert("wasi:filesystem".into());
+    let mut link = dform_host::wasm::link(std::path::Path::new(&ovh), grants).unwrap();
+    let settings = serde_json::json!({"settings": {
+        "endpoint": server.endpoint,
+        "project": fake::PROJECT,
+        "token": server.access_token(),
+    }});
+    let configured = link.configure(Session::NONE, wire::doc(&settings)).unwrap();
+    assert_eq!(configured.account.as_deref(), Some(fake::PROJECT));
+    server.slow(std::time::Duration::from_millis(50));
+    let read: pb::ReadResponse = link
+        .call(
+            Session(configured.session),
+            pb::ReadRequest {
+                r#type: "ovh.instance".into(),
+                remote: vm,
+                name: "vm".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(read.found);
+    let attrs = wire::from_doc(read.attrs.as_ref().unwrap()).unwrap();
+    assert_eq!(attrs["name"], "vm");
+    assert_eq!(
+        server.most_at_once(),
+        3,
+        "the instance, its ports and the networks in flight together"
+    );
+}

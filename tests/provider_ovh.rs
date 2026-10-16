@@ -192,6 +192,48 @@ fn a_program_plans_against_the_account() {
     );
 }
 
+/// A token the program gives (`use ovh { token }`) is held by the host,
+/// which applies it to each request: with no credential in the
+/// environment the plan reaches the API with it, and the provider is
+/// configured with its name, never its value.
+#[test]
+fn a_token_the_program_gives_is_applied_by_the_host() {
+    let server = Server::start();
+    let s = project(
+        "ovh-token",
+        "",
+        &format!(
+            "use ovh {{ endpoint = \"{}\", project = \"{}\", token = \"{}\" }}\n\n\
+             resource ovh.ssh_key admin {{ name = \"lab-admin\", public_key = \"ssh-ed25519 \
+             AAAAC3Nz lab\" }}\n",
+            server.endpoint,
+            fake::DESCRIPTION,
+            server.access_token()
+        ),
+    );
+    let mut c = common::dform();
+    c.args(["plan", "main.df"])
+        .current_dir(&s.dir)
+        .env("HOME", &s.dir)
+        .env("XDG_CONFIG_HOME", s.path("config"))
+        .env("DFORM_OVH_RESOLVER", "127.0.0.1:9");
+    for k in [
+        "OVH_ENDPOINT",
+        "OVH_APPLICATION_KEY",
+        "OVH_ACCESS_TOKEN",
+        "OVH_CLIENT_ID",
+    ] {
+        c.env_remove(k);
+    }
+    let r = Run::from(c.output().unwrap()).success();
+    assert!(r.stdout.contains("+ ovh.ssh_key admin"), "{}", r.stdout);
+    assert!(
+        server.calls().iter().any(|c| c == "GET /cloud/project"),
+        "{:?}",
+        server.calls()
+    );
+}
+
 /// The provider's requests go through the host (its HTTP, dform's
 /// pool and pacing), and each is a span of the run's trace (`io.call`,
 /// `http`) under the provider call it was made for: a Configure's

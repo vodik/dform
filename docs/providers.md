@@ -419,7 +419,7 @@ on both; tests/host_wasm.rs keeps them from drifting.
 | `postgres` (`crates/dform-provider-postgres`) | the SDK's typed layer | native only: it dials the server itself | docs/providers/postgres.md |
 | `vault` (`crates/dform-provider-vault`) | the SDK's typed layer, a scheme and no resource | native: every request through the host's HTTP client | docs/providers/vault.md |
 | `tailscale` (`crates/dform-provider-tailscale`) | the SDK's typed layer: a tailnet's policy file, auth keys (held), DNS and devices (adopted), its users and devices data sources | native: every request through the host's HTTP client | docs/providers/tailscale.md |
-| `ovh` (`crates/dform-provider-ovh`) | the protocol's `Handler` directly, its own signing | native: every request through the host's HTTP client | docs/providers/ovh.md |
+| `ovh` (`crates/dform-provider-ovh`) | the SDK's `Handler` directly, its own signing | native, or a component (its token the program's; granted `wasi:filesystem` until the crate split): every request through the host's HTTP client | docs/providers/ovh.md |
 | `k8s` (`crates/dform-k8s`) | the protocol's gRPC service directly, a thin client of the Kubernetes API | native: every request through the host's HTTP client, its kubeconfig a credential the host holds | docs/reference.md, "The Kubernetes provider" |
 
 ## Grants and credentials

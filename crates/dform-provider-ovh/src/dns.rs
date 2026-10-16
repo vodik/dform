@@ -1,16 +1,27 @@
 //! A zone's nameservers, asked of the machine's resolver over UDP (the
 //! first `nameserver` of /etc/resolv.conf, or `DFORM_OVH_RESOLVER`,
 //! `IP:PORT`): what a refusal names for a zone this account does not host.
-//! Best effort: no answer within [`TIMEOUT`] is none.
+//! Best effort: no answer within [`TIMEOUT`] is none. A component has no
+//! socket (it is granted none): its refusal names no nameservers.
+#![cfg_attr(target_family = "wasm", allow(dead_code))] // the codec is the resolver's
 
+#[cfg(not(target_family = "wasm"))]
 use std::net::{IpAddr, SocketAddr, UdpSocket};
+#[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
 
 /// How long the resolver has to answer.
+#[cfg(not(target_family = "wasm"))]
 const TIMEOUT: Duration = Duration::from_secs(2);
+
+#[cfg(target_family = "wasm")]
+pub fn nameservers(_: &str) -> Option<Vec<String>> {
+    None
+}
 
 /// The NS records of `zone`, without their final dot; `None` when the
 /// resolver gives none.
+#[cfg(not(target_family = "wasm"))]
 pub fn nameservers(zone: &str) -> Option<Vec<String>> {
     let server = resolver()?;
     let local: SocketAddr = match server {
@@ -31,11 +42,13 @@ pub fn nameservers(zone: &str) -> Option<Vec<String>> {
 }
 
 /// `DFORM_OVH_RESOLVER`, else the first `nameserver` of /etc/resolv.conf.
+#[cfg(not(target_family = "wasm"))]
 fn resolver() -> Option<SocketAddr> {
     if let Ok(a) = std::env::var("DFORM_OVH_RESOLVER") {
         return a.parse().ok();
     }
-    let conf = std::fs::read_to_string("/etc/resolv.conf").ok()?;
+    let conf = crate::machine::read("/etc/resolv.conf".as_ref())?;
+    let conf = String::from_utf8(conf).ok()?;
     conf.lines().find_map(|l| {
         let mut w = l.split_whitespace();
         (w.next() == Some("nameserver"))

@@ -17,7 +17,10 @@
 //! (`OVH_CLIENT_ID`, `OVH_CLIENT_SECRET`) in place of the three keys: the
 //! client mints a bearer token from them (`api`); or `access_token`
 //! (`OVH_ACCESS_TOKEN`), a bearer token minted elsewhere, used as it is.
-//! A section holds one form of the three.
+//! A section holds one form of the three. The program may give a token
+//! instead (`use ovh { token = .. }`): dform holds it in the host, which
+//! applies it to each call, and the provider has only its name; a
+//! component, which reads no environment and no file, is configured so.
 //!
 //! read, as OVH's SDKs read them (python-ovh's `config.py`, go-ovh's
 //! `configuration.go`), from `/etc/ovh.conf`, `~/.ovh.conf` and
@@ -79,6 +82,10 @@ pub enum Auth {
     /// A bearer token minted elsewhere, which each call carries as it
     /// is: nothing mints another when it expires.
     Token { access_token: String },
+    /// A bearer token the host holds, the program's `token` setting
+    /// (`bearer:NAME`): the host applies it to each call, and its value
+    /// never reaches the provider.
+    Held { name: String },
 }
 
 impl std::fmt::Debug for Auth {
@@ -100,6 +107,7 @@ impl std::fmt::Debug for Auth {
                 .field("token_url", token_url)
                 .finish_non_exhaustive(),
             Auth::Token { .. } => f.debug_struct("Token").finish_non_exhaustive(),
+            Auth::Held { name } => f.debug_struct("Held").field("name", name).finish(),
         }
     }
 }
@@ -110,6 +118,15 @@ impl Credentials {
     pub fn create_token_url(&self) -> String {
         let base = self.url.strip_suffix("/1.0").unwrap_or(&self.url);
         format!("{base}/createToken/")
+    }
+
+    /// What a refused token the host holds means, and the fix.
+    pub fn refused_held(&self, name: &str) -> String {
+        format!(
+            "the token {name} for {} expired or was revoked: the program's `token` is used as it \
+             is; give a new one (docs/providers/ovh.md)",
+            self.endpoint
+        )
     }
 
     /// What a refused access token means, and the fix.
@@ -183,7 +200,16 @@ pub fn parse_ini(text: &str) -> BTreeMap<String, BTreeMap<String, String>> {
 }
 
 /// The configuration files, lowest precedence first: the machine's,
+/// the user's, the working directory's. A component reads none
+/// (`machine`).
+#[cfg(target_family = "wasm")]
+pub fn default_files() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+/// The configuration files, lowest precedence first: the machine's,
 /// the user's, the working directory's.
+#[cfg(not(target_family = "wasm"))]
 pub fn default_files() -> Vec<PathBuf> {
     files_in(
         std::env::var_os("HOME").map(PathBuf::from),
@@ -209,6 +235,17 @@ pub fn resolve(
     env: &dyn Fn(&str) -> Option<String>,
     files: &[PathBuf],
 ) -> Result<Credentials> {
+    resolve_holding(endpoint, None, env, files)
+}
+
+/// [`resolve`], the token the host holds as the program's `token`
+/// (`held`, its name) in place of any credentials `env` and `files` give.
+pub fn resolve_holding(
+    endpoint: Option<&str>,
+    held: Option<&str>,
+    env: &dyn Fn(&str) -> Option<String>,
+    files: &[PathBuf],
+) -> Result<Credentials> {
     let sources = Sources::read(env, files);
     let endpoint = sources.endpoint(endpoint)?;
     let Some(url) = endpoint_url(&endpoint) else {
@@ -217,7 +254,12 @@ pub fn resolve(
             ENDPOINTS.map(|(n, _)| n).join(", ")
         );
     };
-    let auth = sources.auth(&endpoint, &url)?;
+    let auth = match held {
+        Some(name) => Auth::Held {
+            name: name.to_string(),
+        },
+        None => sources.auth(&endpoint, &url)?,
+    };
     Ok(Credentials {
         endpoint,
         url,
@@ -237,7 +279,7 @@ impl<'a> Sources<'a> {
     fn read(env: &'a dyn Fn(&str) -> Option<String>, files: &'a [PathBuf]) -> Self {
         let mut conf: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
         for f in files {
-            if let Ok(text) = std::fs::read_to_string(f) {
+            if let Some(text) = crate::machine::read(f).and_then(|b| String::from_utf8(b).ok()) {
                 for (s, kv) in parse_ini(&text) {
                     conf.entry(s).or_default().extend(kv);
                 }

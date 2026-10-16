@@ -506,7 +506,9 @@ impl Ovh {
                 ),
             }
         };
-        let creds = config::resolve(setting("endpoint")?.as_deref(), env, files);
+        let token = setting("token")?;
+        let endpoint = setting("endpoint")?;
+        let creds = config::resolve_holding(endpoint.as_deref(), token.as_deref(), env, files);
         let creds = match (creds, settings) {
             (Ok(c), _) => c,
             // The program names the account: it cannot be reached.
@@ -525,7 +527,19 @@ impl Ovh {
             .get("cache")
             .and_then(Json::as_str)
             .map(std::path::PathBuf::from);
-        let client = Client::new(creds).with_cache(cache.as_deref());
+        // The program's token, which dform holds in the host by a name.
+        let held = match &token {
+            Some(name) => Some(
+                dform_sdk::host()
+                    .secrets
+                    .open(name)
+                    .map_err(|e| anyhow!("provider ovh: the token: {}", e.message))?,
+            ),
+            None => None,
+        };
+        let client = Client::new(creds)
+            .with_cache(cache.as_deref())
+            .holding(held);
         // Run outside a program and a project, as `provider check` runs
         // it: which credentials, and what they may do.
         let full = settings.is_none() && cache.is_none();

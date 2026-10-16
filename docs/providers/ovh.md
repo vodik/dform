@@ -29,6 +29,18 @@ three minutes; with the default, the Create times out, dform finds the
 instance by its name and adopts it, and a tick that reads its address
 waits for it. A longer timeout makes the apply print less.
 
+Built as a component (`cargo xtask components` puts it at
+`target/wasm32-wasip3/release/dform_provider_ovh.wasm`, dform built with
+`--features wasm`), it reads no environment and no file, so its
+credentials are the program's `token` (below), and it is granted
+`wasi:filesystem` for now: dform's language front-end, which parses its
+schema, links it.
+
+```toml
+[providers]
+ovh = { path = "target/wasm32-wasip3/release/dform_provider_ovh.wasm", allow = ["wasi:filesystem"] }
+```
+
 The program names the account, never a credential:
 
 ```text
@@ -111,6 +123,12 @@ configuration:
 [ovh-ca]
 access_token=...
 ```
+
+Or the program gives that token, `use ovh { endpoint = "ovh-ca", project
+= "vodik", token = env.var("OVH_ACCESS_TOKEN") }`: dform holds it in the
+host, which applies it to each call, and the provider has only its name
+(docs/providers.md, "Grants and credentials"). It is used in place of any
+form the environment or `ovh.conf` gives.
 
 The rights the provider needs, and no others; a type that calls another
 path adds its line:

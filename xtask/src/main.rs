@@ -7,7 +7,8 @@
 //!   copies are not the fragments (tests/man.rs runs the same check).
 //! - `components`: the components the wasm host's tests run
 //!   (tests/host_wasm.rs), built for wasm32-wasip3 in release: the fake
-//!   provider and the SDK's async-ABI probe (`examples/fetch_at_once`).
+//!   provider, the OVH provider and the SDK's async-ABI probe
+//!   (`examples/fetch_at_once`).
 
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
@@ -77,6 +78,7 @@ fn components() -> Result<()> {
     ];
     for which in [
         &["-p", "dform-provider-fake"][..],
+        &["-p", "dform-provider-ovh"],
         &["-p", "dform-sdk", "--example", "fetch_at_once"],
     ] {
         let status = std::process::Command::new(&cargo)

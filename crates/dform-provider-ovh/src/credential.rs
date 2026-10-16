@@ -93,6 +93,16 @@ pub async fn notes(client: &Client, full: bool, cache: Option<&Path>, now: u64) 
     let endpoint = &creds.endpoint;
     let consumer_key = match &creds.auth {
         Auth::Keys { consumer_key, .. } => consumer_key,
+        Auth::Held { name } => {
+            return if full {
+                vec![format!(
+                    "provider ovh: credentials for {endpoint}: the token {name}, held by the \
+                     host; its rights are its own"
+                )]
+            } else {
+                Vec::new()
+            };
+        }
         Auth::Token { .. } => {
             return if full {
                 vec![format!(

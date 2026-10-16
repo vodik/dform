@@ -118,6 +118,8 @@ pub struct Client {
     token: Held<Option<(String, Instant)>>,
     /// The lists asked once.
     kept: Mutex<Kept>,
+    /// The token the host holds (`Auth::Held`), opened.
+    held: Option<dform_sdk::Credential>,
 }
 
 /// The lists a client asked (`Client::list`), by path, and how many
@@ -160,6 +162,8 @@ enum By<'a> {
     /// Signed with the three keys.
     Signature,
     Bearer(&'a str),
+    /// The host applies the token it holds.
+    Held(&'a dform_sdk::Credential),
 }
 
 /// The file in dform's cache directory the project ids and the clock
@@ -169,8 +173,7 @@ pub const CACHE_FILE: &str = "ovh-projects.json";
 /// The cache file's entries: `"ENDPOINT NAME"` to a project's id, and
 /// `"ENDPOINT /auth/time"` to the clock offset in seconds.
 pub fn read_cache(file: &std::path::Path) -> BTreeMap<String, String> {
-    std::fs::read(file)
-        .ok()
+    crate::machine::read(file)
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default()
 }
@@ -183,8 +186,7 @@ pub fn write_cache(file: &std::path::Path, key: &str, value: &str) {
     }
     kept.insert(key.to_string(), value.to_string());
     if let Ok(bytes) = serde_json::to_vec_pretty(&kept) {
-        let _ = file.parent().map(std::fs::create_dir_all);
-        let _ = std::fs::write(file, bytes);
+        crate::machine::write(file, &bytes);
     }
 }
 
@@ -196,7 +198,15 @@ impl Client {
             cache: None,
             token: Held::new(None),
             kept: Mutex::default(),
+            held: None,
         }
+    }
+
+    /// The client applying the token the host holds, `held` (opened by
+    /// its name, `Auth::Held`).
+    pub fn holding(mut self, held: Option<dform_sdk::Credential>) -> Client {
+        self.held = held;
+        self
     }
 
     /// The client keeping its clock offset in dform's cache directory
@@ -348,6 +358,9 @@ impl Client {
         body: Option<&Json>,
         authed: bool,
     ) -> Result<Json> {
+        if let (true, Some(c)) = (authed, &self.held) {
+            return self.send_once(method, path, body, By::Held(c)).await;
+        }
         if let (true, Auth::Token { access_token }) = (authed, &self.creds.auth) {
             return self
                 .send_once(method, path, body, By::Bearer(access_token))
@@ -426,7 +439,7 @@ impl Client {
         ];
         let body = "grant_type=client_credentials&scope=all";
         let (status, text) = self
-            .exchange("POST", token_url, token_url, &headers, Some(body))
+            .exchange("POST", token_url, token_url, &headers, Some(body), None)
             .await?;
         let answer = serde_json::from_str::<Json>(&text).unwrap_or(Json::Null);
         let refused = |message: String| Error::Status {
@@ -461,6 +474,7 @@ impl Client {
         url: &str,
         headers: &[(&str, String)],
         body: Option<&str>,
+        auth: Option<&dform_sdk::Credential>,
     ) -> Result<(u16, String)> {
         let unreachable = |why: String| Error::Unreachable {
             method: method.into(),
@@ -475,6 +489,9 @@ impl Client {
         }
         if let Some(body) = body {
             req = req.body(body);
+        }
+        if let Some(c) = auth {
+            req = req.auth(c);
         }
         let resp = dform_sdk::host()
             .http
@@ -501,6 +518,7 @@ impl Client {
         }
         match (&self.creds.auth, by) {
             (_, By::Bearer(token)) => headers.push(("Authorization", format!("Bearer {token}"))),
+            (_, By::Held(_)) => {}
             (
                 Auth::Keys {
                     application_key,
@@ -527,10 +545,14 @@ impl Client {
                     ));
                 }
             }
-            (Auth::OAuth2 { .. } | Auth::Token { .. }, _) => {}
+            (Auth::OAuth2 { .. } | Auth::Token { .. } | Auth::Held { .. }, _) => {}
         }
+        let held = match by {
+            By::Held(c) => Some(c),
+            _ => None,
+        };
         let (status, text) = self
-            .exchange(method, path, &url, &headers, body.as_deref())
+            .exchange(method, path, &url, &headers, body.as_deref(), held)
             .await?;
         if !(200..300).contains(&status) {
             return Err(Error::Status {
@@ -570,6 +592,9 @@ impl Client {
         }
         if status == 401 && matches!(self.creds.auth, Auth::Token { .. }) {
             return self.creds.expired_token();
+        }
+        if let (401, Auth::Held { name }) = (status, &self.creds.auth) {
+            return self.creds.refused_held(name);
         }
         match (msg, code) {
             ("", _) => text.trim().chars().take(200).collect(),
