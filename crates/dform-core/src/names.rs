@@ -409,20 +409,7 @@ impl Decls {
                     }
                     self.instances.insert((path, name));
                 }
-                SyntaxKind::RESOURCE => {
-                    if let Some(h) = header(&n) {
-                        self.types.insert(h.typ.clone());
-                        if h.is_static {
-                            let ts = self
-                                .resources
-                                .entry((scope, h.name.text().to_string()))
-                                .or_default();
-                            if !ts.contains(&h.typ) {
-                                ts.push(h.typ);
-                            }
-                        }
-                    }
-                }
+                SyntaxKind::RESOURCE => self.declare_resource(&n, scope),
                 SyntaxKind::TYPE_DECL => {
                     let t = dotted_after_keyword(&n);
                     if !t.is_empty() {
@@ -433,19 +420,40 @@ impl Decls {
                 | SyntaxKind::FACT
                 | SyntaxKind::DECL
                 | SyntaxKind::EXTERN
-                | SyntaxKind::INPUT_RELATION => {
-                    let t = match n.kind() {
-                        SyntaxKind::RULE | SyntaxKind::FACT => head_name(&n),
-                        _ => relation_name(&n),
-                    };
-                    if let Some(t) = t {
-                        self.predicates.insert(t.text().to_string());
-                        let s = self.relation_scope(&n);
-                        self.defined.insert((s, t.text().to_string()));
-                    }
-                }
+                | SyntaxKind::INPUT_RELATION => self.declare_relation(&n),
                 _ => {}
             }
+        }
+    }
+
+    /// `resource T n` in `scope`: its type, and its name when it is static.
+    fn declare_resource(&mut self, n: &SyntaxNode, scope: Scope) {
+        let Some(h) = header(n) else {
+            return;
+        };
+        self.types.insert(h.typ.clone());
+        if h.is_static {
+            let ts = self
+                .resources
+                .entry((scope, h.name.text().to_string()))
+                .or_default();
+            if !ts.contains(&h.typ) {
+                ts.push(h.typ);
+            }
+        }
+    }
+
+    /// The relation a rule's head, a fact, a `decl`, an `extern` or an
+    /// input relation names, in the scope that keeps it private.
+    fn declare_relation(&mut self, n: &SyntaxNode) {
+        let t = match n.kind() {
+            SyntaxKind::RULE | SyntaxKind::FACT => head_name(n),
+            _ => relation_name(n),
+        };
+        if let Some(t) = t {
+            self.predicates.insert(t.text().to_string());
+            let s = self.relation_scope(n);
+            self.defined.insert((s, t.text().to_string()));
         }
     }
 
@@ -792,18 +800,7 @@ impl Decls {
                 _ => What::Other,
             },
             SyntaxKind::TYPE_DECL => What::Type(dotted_after_keyword(&parent)),
-            // An alias, bare or read through its module (`network.subnets`,
-            // R-65).
-            SyntaxKind::TYPE_EXPR => {
-                let toks = own_tokens(&parent);
-                let dotted = toks.iter().any(|x| x.kind() == SyntaxKind::DOT);
-                let last = toks.iter().rev().find(|x| x.kind() == SyntaxKind::IDENT);
-                if self.aliases.contains(&name) && (!dotted || last == Some(t)) {
-                    used(Some(Symbol::Alias(name)))
-                } else {
-                    What::Type(dotted_names(&parent))
-                }
-            }
+            SyntaxKind::TYPE_EXPR => self.type_name(&parent, t),
             SyntaxKind::BLOCK_PATH => self.block_path(&parent, t),
             SyntaxKind::CHAIN => self.chain(&parent, t, &here),
             // `{ env }`: the field's value is the name's; `{ k = v }`, a key.
@@ -812,23 +809,42 @@ impl Decls {
                     .iter()
                     .any(|x| matches!(x.kind(), SyntaxKind::EQ | SyntaxKind::COLON)) =>
             {
-                match self
-                    .param(&here, &name)
-                    .or_else(|| self.value_read(&here, &name))
-                {
-                    Some(s) => What::Name(s, false),
-                    None => match self.pick(&parent, self.resources_at(&here, &name)) {
-                        // A pattern's field binds a variable of its name.
-                        What::Other => What::Variable,
-                        w => w,
-                    },
-                }
+                self.object_pun(&parent, &here, &name)
             }
             // A field of an object, a named argument, a column of a `decl`.
             SyntaxKind::OBJECT_FIELD | SyntaxKind::NAMED_ARG | SyntaxKind::BIND_ARG => What::Key,
             // What a dot reads off a call's value, `str.split(s, ":")[0]`.
             SyntaxKind::CALL_CHAIN => What::Path,
             _ => What::Other,
+        }
+    }
+
+    /// A name in a type: an alias, bare or read through its module
+    /// (`network.subnets`, R-65), else the type it is part of.
+    fn type_name(&self, ty: &SyntaxNode, t: &SyntaxToken) -> What {
+        let toks = own_tokens(ty);
+        let dotted = toks.iter().any(|x| x.kind() == SyntaxKind::DOT);
+        let last = toks.iter().rev().find(|x| x.kind() == SyntaxKind::IDENT);
+        if self.aliases.contains(t.text()) && (!dotted || last == Some(t)) {
+            What::Name(Symbol::Alias(t.text().to_string()), false)
+        } else {
+            What::Type(dotted_names(ty))
+        }
+    }
+
+    /// `{ name }` in `field`, read at `here`: the field's value is the
+    /// name's, a let's parameter, a let, an input or a resource; in a
+    /// pattern, a variable of its name.
+    fn object_pun(&self, field: &SyntaxNode, here: &SyntaxNode, name: &str) -> What {
+        match self
+            .param(here, name)
+            .or_else(|| self.value_read(here, name))
+        {
+            Some(s) => What::Name(s, false),
+            None => match self.pick(field, self.resources_at(here, name)) {
+                What::Other => What::Variable,
+                w => w,
+            },
         }
     }
 
@@ -905,238 +921,250 @@ impl Decls {
     }
 
     /// A name in a chain, by the order of resolution, its names looked up
-    /// from `at`.
+    /// from `at`: the first step that knows it says what it is, else it
+    /// is a variable (a dot on one a path).
     fn chain(&self, c: &SyntaxNode, t: &SyntaxToken, at: &SyntaxNode) -> What {
-        let ps = parts(c);
-        let Some(k) = ps.iter().position(|p| matches!(p, Part::Name(x) if x == t)) else {
+        let Some(r) = Read::of(c, t, at) else {
             return What::Other;
         };
-        let name_at = |i: usize| match ps.get(i) {
-            Some(Part::Name(x)) => Some(x.text().to_string()),
-            _ => None,
-        };
-        let Some(name0) = name_at(0) else {
-            return What::Other;
-        };
-        let call = c.parent().is_some_and(|p| p.kind() == SyntaxKind::CALL);
-        let dot = |i: usize| matches!(ps.get(i), Some(Part::Dot));
-        let index = |i: usize| matches!(ps.get(i), Some(Part::Index));
-        let after = |from: usize| if k >= from { What::Path } else { What::Other };
-        // A parameter of the let the chain is in, read in its body: a
-        // variable of the let's clause, bound around it.
-        if !call && let Some(p) = self.param(at, &name0) {
-            return if k == 0 {
-                What::Name(p, false)
-            } else {
-                What::Path
-            };
-        }
-        // A relation's name, `p(..)`, a head; a function's, `int(..)`.
-        if call && ps.len() == 1 {
-            let head = c
-                .parent()
-                .and_then(|call| call.parent())
-                .is_some_and(|h| matches!(h.kind(), SyntaxKind::RULE | SyntaxKind::FACT));
-            if !head && !self.predicates.contains(&name0) && crate::functions::callable(&name0) {
-                return What::Name(Symbol::Function(name0), false);
-            }
-            // A call of a let with parameters, `f(x, y)` (R-187): the let.
-            if !head && let Some(s) = self.let_(at, &name0) {
-                return What::Name(s, false);
-            }
-            return What::Name(self.predicate(at, &name0), head);
-        }
-        // `m.p(..)`, the relation `p` of the module `m` binds; `n.p(..)`,
-        // the relation the copy `n` exports; `inet.subnet(..)`, a function.
-        if call && ps.len() == 3 && dot(1) {
-            let name2 = name_at(2).unwrap_or_default();
-            if let Some(path) = self.uses.get(&name0) {
-                return match k {
-                    0 => What::Name(Symbol::Module(name0), false),
-                    _ => What::Name(
-                        Symbol::Predicate(Some(format!("module {path}")), name2),
-                        false,
-                    ),
-                };
-            }
-            if let Some((p, _)) = self.instances.iter().find(|(_, i)| *i == name0) {
-                return match k {
-                    0 => What::Name(Symbol::Instance(p.clone(), name0), false),
-                    _ => {
-                        let s = Some(format!("component {}", last_segment(p)));
-                        What::Name(Symbol::Predicate(s, name2), false)
-                    }
-                };
-            }
-            let full = format!("{name0}.{name2}");
-            if crate::functions::callable(&full) {
-                return match k {
-                    0 => What::Name(Symbol::Package(name0), false),
-                    _ => What::Name(Symbol::Function(full), false),
-                };
-            }
-        }
-        // 1, 2: a `let`, a value name; an object input's field after it.
-        if let Some(s) = self.value_read(at, &name0) {
-            if k == 0 {
-                return What::Name(s, false);
-            }
-            if let Symbol::Value(scope, input) = &s {
-                let field: Vec<String> = (2..=k)
-                    .step_by(2)
-                    .map_while(|i| name_at(i).filter(|_| dot(i - 1)))
-                    .collect();
-                let field = field.join(".");
-                if field.split('.').count() == k / 2
-                    && self
-                        .fields
-                        .contains(&(scope.clone(), input.clone(), field.clone()))
-                {
-                    return What::Name(Symbol::Field(scope.clone(), input.clone(), field), false);
-                }
-            }
-            return What::Path;
-        }
-        // A refinement of an object input's field reads the field,
-        // `count: int check count >= 1`.
-        if let Some(attr) = c
-            .ancestors()
-            .find(|a| a.kind() == SyntaxKind::REFINEMENT)
-            .and_then(|r| r.parent())
-            .filter(|a| a.kind() == SyntaxKind::ATTR_DECL)
-            && let Some(input) = attr.ancestors().find(|a| a.kind() == SyntaxKind::INPUT)
-            && let Some(i) = declared_name(&input)
-            && let Some(path) = attr.children().find(|x| x.kind() == SyntaxKind::BLOCK_PATH)
-            && let Some(last) = idents(&path).pop()
-            && last.text() == name0
-        {
-            let at = input.parent().unwrap_or_else(|| input.clone());
-            let s = self.scopes(&at).remove(0);
-            return match k {
-                0 => What::Name(
-                    Symbol::Field(s, i.text().to_string(), field_path(&attr, &path, &last)),
-                    false,
-                ),
+        self.param_read(&r)
+            .or_else(|| self.called(&r))
+            .or_else(|| self.value_head(&r))
+            .or_else(|| self.refined_field(&r))
+            .or_else(|| self.super_read(&r))
+            .or_else(|| self.world_read(&r))
+            .or_else(|| self.scope_read(&r))
+            .or_else(|| self.file_read(&r))
+            .or_else(|| self.relation_or_type(&r))
+            .unwrap_or(match r.k {
+                0 => What::Variable,
                 _ => What::Path,
-            };
+            })
+    }
+
+    /// A parameter of the let the chain is in, read in its body: a
+    /// variable of the let's clause, bound around it.
+    fn param_read(&self, r: &Read) -> Option<What> {
+        let p = self.param(r.at, &r.name0).filter(|_| !r.call)?;
+        Some(r.head_or_path(p))
+    }
+
+    /// A call's name: a relation's, `p(..)`, a head; a function's,
+    /// `int(..)`; a let with parameters', `f(x, y)` (R-187). `m.p(..)`,
+    /// the relation `p` of the module `m` binds; `n.p(..)`, the relation
+    /// the copy `n` exports; `inet.subnet(..)`, a function.
+    fn called(&self, r: &Read) -> Option<What> {
+        if !r.call {
+            return None;
         }
-        // `super.x`: what the scope around the component reads `x` as, one
-        // scope per `super` (R-186).
-        if name0 == "super" {
-            let supers = (0..)
-                .take_while(|i| {
-                    name_at(2 * i).as_deref() == Some("super") && (*i == 0 || dot(2 * i - 1))
-                })
-                .count();
-            let x = name_at(2 * supers).filter(|_| dot(2 * supers - 1));
-            return match x.and_then(|x| self.item_from(at, supers, &x)) {
-                Some(s) if k == 2 * supers => What::Name(s, false),
-                Some(_) if k > 2 * supers => What::Path,
-                _ => What::Other,
-            };
+        let (name0, at) = (&r.name0, r.at);
+        if r.ps.len() == 1 {
+            let head =
+                r.c.parent()
+                    .and_then(|call| call.parent())
+                    .is_some_and(|h| matches!(h.kind(), SyntaxKind::RULE | SyntaxKind::FACT));
+            if !head && !self.predicates.contains(name0) && crate::functions::callable(name0) {
+                return Some(What::Name(Symbol::Function(name0.clone()), false));
+            }
+            if !head && let Some(s) = self.let_(at, name0) {
+                return Some(What::Name(s, false));
+            }
+            return Some(What::Name(self.predicate(at, name0), head));
         }
-        // 3: `world.T[e]`.
-        if name0 == "world" {
-            return match k {
-                0 => What::Other,
-                _ => self.typed(&ps, 2, k).unwrap_or(What::Path),
-            };
+        if r.ps.len() != 3 || !r.dot(1) {
+            return None;
         }
-        // 4: a resource in scope: its reference or what a dot reads. A
-        // module's item or a copy's output reads the module or the copy
-        // though a resource has the name (R-76).
-        let instance = self.instances.iter().find(|(_, i)| *i == name0);
-        let rs = self.resources_at(at, &name0);
-        // In a module's or a component's body its own resource wins over
-        // what its user's scope brings in (R-101).
+        let name2 = r.name_at(2).unwrap_or_default();
+        let (first, second) = if let Some(path) = self.uses.get(name0) {
+            let module = Some(format!("module {path}"));
+            (
+                Symbol::Module(name0.clone()),
+                Symbol::Predicate(module, name2),
+            )
+        } else if let Some((p, _)) = self.instances.iter().find(|(_, i)| i == name0) {
+            let component = Some(format!("component {}", last_segment(p)));
+            let copy = Symbol::Instance(p.clone(), name0.clone());
+            (copy, Symbol::Predicate(component, name2))
+        } else {
+            let full = format!("{name0}.{name2}");
+            crate::functions::callable(&full).then_some(())?;
+            (Symbol::Package(name0.clone()), Symbol::Function(full))
+        };
+        Some(What::Name(if r.k == 0 { first } else { second }, false))
+    }
+
+    /// A `let` or a value name at the head; an object input's field after
+    /// it.
+    fn value_head(&self, r: &Read) -> Option<What> {
+        let s = self.value_read(r.at, &r.name0)?;
+        let k = r.k;
+        if k == 0 {
+            return Some(What::Name(s, false));
+        }
+        if let Symbol::Value(scope, input) = &s {
+            let field: Vec<String> = (2..=k)
+                .step_by(2)
+                .map_while(|i| r.name_at(i).filter(|_| r.dot(i - 1)))
+                .collect();
+            let field = field.join(".");
+            if field.split('.').count() == k / 2
+                && self
+                    .fields
+                    .contains(&(scope.clone(), input.clone(), field.clone()))
+            {
+                let f = Symbol::Field(scope.clone(), input.clone(), field);
+                return Some(What::Name(f, false));
+            }
+        }
+        Some(What::Path)
+    }
+
+    /// A refinement of an object input's field reads the field, `count:
+    /// int check count >= 1`.
+    fn refined_field(&self, r: &Read) -> Option<What> {
+        let attr =
+            r.c.ancestors()
+                .find(|a| a.kind() == SyntaxKind::REFINEMENT)
+                .and_then(|x| x.parent())
+                .filter(|a| a.kind() == SyntaxKind::ATTR_DECL)?;
+        let input = attr.ancestors().find(|a| a.kind() == SyntaxKind::INPUT)?;
+        let i = declared_name(&input)?;
+        let path = attr
+            .children()
+            .find(|x| x.kind() == SyntaxKind::BLOCK_PATH)?;
+        let last = idents(&path).pop().filter(|l| l.text() == r.name0)?;
+        let at = input.parent().unwrap_or_else(|| input.clone());
+        let s = self.scopes(&at).remove(0);
+        let field = Symbol::Field(s, i.text().to_string(), field_path(&attr, &path, &last));
+        Some(r.head_or_path(field))
+    }
+
+    /// `super.x`: what the scope around the component reads `x` as, one
+    /// scope per `super` (R-186).
+    fn super_read(&self, r: &Read) -> Option<What> {
+        if r.name0 != "super" {
+            return None;
+        }
+        let supers = (0..)
+            .take_while(|i| {
+                r.name_at(2 * i).as_deref() == Some("super") && (*i == 0 || r.dot(2 * i - 1))
+            })
+            .count();
+        let x = r.name_at(2 * supers).filter(|_| r.dot(2 * supers - 1));
+        Some(match x.and_then(|x| self.item_from(r.at, supers, &x)) {
+            Some(s) if r.k == 2 * supers => What::Name(s, false),
+            Some(_) if r.k > 2 * supers => What::Path,
+            _ => What::Other,
+        })
+    }
+
+    /// `world.T[e]`.
+    fn world_read(&self, r: &Read) -> Option<What> {
+        (r.name0 == "world").then(|| match r.k {
+            0 => What::Other,
+            k => self.typed(&r.ps, 2, k).unwrap_or(What::Path),
+        })
+    }
+
+    /// A resource in scope: its reference or what a dot reads; a copy,
+    /// `n.k`; a used module's item or a stack's deployment, `m.x`,
+    /// `s[k=v].out`; a component's copies, `c[e].k`. A module's item or a
+    /// copy's output reads the module or the copy though a resource has
+    /// the name (R-76), but in a module's or a component's body its own
+    /// resource wins over what its user's scope brings in (R-101).
+    fn scope_read(&self, r: &Read) -> Option<What> {
+        let (name0, at, k) = (&r.name0, r.at, r.k);
+        let instance = self.instances.iter().find(|(_, i)| i == name0);
+        let rs = self.resources_at(at, name0);
         let own = matches!(rs.first(), Some(Symbol::Resource(Some(_), _, _)));
-        let reads_other = !(own && !self.binds_here(at, &name0))
-            && dot(1)
-            && name_at(2).is_some_and(|x| {
-                let of = match (instance, self.uses.get(&name0)) {
+        let reads_other = !(own && !self.binds_here(at, name0))
+            && r.dot(1)
+            && r.name_at(2).is_some_and(|x| {
+                let of = match (instance, self.uses.get(name0)) {
                     (Some((p, _)), _) => format!("component {}", last_segment(p)),
                     (_, Some(m)) => format!("module {m}"),
                     _ => return false,
                 };
                 self.has_item(&of, &x)
             });
-        if !rs.is_empty() && !index(1) && !reads_other {
-            return if k == 0 { self.pick(c, rs) } else { What::Path };
-        }
-        // 5: a copy, `n.k`; a used module's item or a stack's deployment,
-        // `m.x`, `s[k=v].out`; a component's copies, `c[e].k`, or by the
-        // path of its file, `net.c[e].k`.
-        if dot(1)
-            && let Some((p, _)) = instance
-        {
-            return match k {
-                0 => What::Name(Symbol::Instance(p.clone(), name0), false),
-                2 => self.item(
-                    &format!("component {}", last_segment(p)),
-                    &name_at(2).unwrap(),
-                    call,
-                ),
-                _ => What::Path,
-            };
-        }
-        if let Some(path) = self.uses.get(&name0) {
-            let j = if index(1) { 3 } else { 2 };
-            if k == 0 {
-                return What::Name(Symbol::Module(name0), false);
-            }
-            if k == j
-                && dot(j - 1)
-                && let Some(x) = name_at(j)
-            {
-                return self.item(&format!("module {path}"), &x, call);
-            }
-            return self.component_read(&ps, j, k).unwrap_or(What::Path);
-        }
-        if self.components.contains(&name0) && index(1) {
-            return self.component_read(&ps, 0, k).unwrap_or_else(|| after(1));
-        }
-        if self
-            .files
-            .keys()
-            .any(|f| f == &name0 || f.starts_with(&format!("{name0}.")))
-        {
-            // The path of a file, then a component of it.
-            let mut prefix = String::new();
-            for (i, p) in ps.iter().enumerate() {
-                let Part::Name(x) = p else {
-                    if matches!(p, Part::Index) {
-                        break;
-                    }
-                    continue;
-                };
-                if !prefix.is_empty() {
-                    prefix.push('.');
-                }
-                prefix.push_str(x.text());
-                if self.files.contains_key(&prefix) {
-                    if i == k {
-                        return What::Name(Symbol::File(prefix), false);
-                    }
-                } else if self.components.contains(x.text()) {
-                    return self.component_read(&ps, i, k).unwrap_or(What::Path);
-                } else if i == k {
-                    return What::Other;
-                }
-            }
-        }
-        // 6: a relation's `p[..]`; a type, `T[e]`, `T.n`.
-        if index(1) && self.predicates.contains(&name0) {
-            return if k == 0 {
-                What::Name(self.predicate(at, &name0), false)
+        if !rs.is_empty() && !r.index(1) && !reads_other {
+            return Some(if k == 0 {
+                self.pick(r.c, rs)
             } else {
                 What::Path
+            });
+        }
+        if r.dot(1)
+            && let Some((p, _)) = instance
+        {
+            let component = format!("component {}", last_segment(p));
+            return Some(match k {
+                0 => What::Name(Symbol::Instance(p.clone(), name0.clone()), false),
+                2 => self.item(&component, &r.name_at(2)?, r.call),
+                _ => What::Path,
+            });
+        }
+        if let Some(path) = self.uses.get(name0) {
+            let j = if r.index(1) { 3 } else { 2 };
+            if k == 0 {
+                return Some(What::Name(Symbol::Module(name0.clone()), false));
+            }
+            if k == j
+                && r.dot(j - 1)
+                && let Some(x) = r.name_at(j)
+            {
+                return Some(self.item(&format!("module {path}"), &x, r.call));
+            }
+            return Some(self.component_read(&r.ps, j, k).unwrap_or(What::Path));
+        }
+        if self.components.contains(name0) && r.index(1) {
+            let after = if k >= 1 { What::Path } else { What::Other };
+            return Some(self.component_read(&r.ps, 0, k).unwrap_or(after));
+        }
+        None
+    }
+
+    /// The path of a file, then a component of it: `net.c[e].k`.
+    fn file_read(&self, r: &Read) -> Option<What> {
+        let name0 = &r.name0;
+        if !self
+            .files
+            .keys()
+            .any(|f| f == name0 || f.starts_with(&format!("{name0}.")))
+        {
+            return None;
+        }
+        let mut prefix = String::new();
+        for (i, p) in r.ps.iter().enumerate() {
+            let Part::Name(x) = p else {
+                if matches!(p, Part::Index) {
+                    break;
+                }
+                continue;
             };
+            if !prefix.is_empty() {
+                prefix.push('.');
+            }
+            prefix.push_str(x.text());
+            if self.files.contains_key(&prefix) {
+                if i == r.k {
+                    return Some(What::Name(Symbol::File(prefix), false));
+                }
+            } else if self.components.contains(x.text()) {
+                return Some(self.component_read(&r.ps, i, r.k).unwrap_or(What::Path));
+            } else if i == r.k {
+                return Some(What::Other);
+            }
         }
-        if let Some(w) = self.typed(&ps, 0, k) {
-            return w;
+        None
+    }
+
+    /// A relation's `p[..]`; a type, `T[e]`, `T.n`.
+    fn relation_or_type(&self, r: &Read) -> Option<What> {
+        if r.index(1) && self.predicates.contains(&r.name0) {
+            return Some(r.head_or_path(self.predicate(r.at, &r.name0)));
         }
-        // 7: a variable; a dot on it is a path.
-        if k == 0 { What::Variable } else { What::Path }
+        self.typed(&r.ps, 0, r.k)
     }
 
     /// A chain read from the `T` starting at part `start`: the longest
@@ -1736,6 +1764,63 @@ fn parts(chain: &SyntaxNode) -> Vec<Part> {
             },
         })
         .collect()
+}
+
+/// A name of a chain being read: the chain, its parts, which of them the
+/// name is (`k`), its head's name, whether the chain is called, and where
+/// its names are looked up (`at`).
+struct Read<'a> {
+    c: &'a SyntaxNode,
+    ps: Vec<Part>,
+    k: usize,
+    name0: String,
+    call: bool,
+    at: &'a SyntaxNode,
+}
+
+impl<'a> Read<'a> {
+    /// The name `t` of the chain `c`, read at `at`; `None` when `t` is no
+    /// name of it or the chain starts with none.
+    fn of(c: &'a SyntaxNode, t: &SyntaxToken, at: &'a SyntaxNode) -> Option<Read<'a>> {
+        let ps = parts(c);
+        let k = ps
+            .iter()
+            .position(|p| matches!(p, Part::Name(x) if x == t))?;
+        let Some(Part::Name(head)) = ps.first() else {
+            return None;
+        };
+        Some(Read {
+            c,
+            name0: head.text().to_string(),
+            call: c.parent().is_some_and(|p| p.kind() == SyntaxKind::CALL),
+            ps,
+            k,
+            at,
+        })
+    }
+
+    fn name_at(&self, i: usize) -> Option<String> {
+        match self.ps.get(i) {
+            Some(Part::Name(x)) => Some(x.text().to_string()),
+            _ => None,
+        }
+    }
+
+    fn dot(&self, i: usize) -> bool {
+        matches!(self.ps.get(i), Some(Part::Dot))
+    }
+
+    fn index(&self, i: usize) -> bool {
+        matches!(self.ps.get(i), Some(Part::Index))
+    }
+
+    /// `s` when the name is the chain's head; a path after it.
+    fn head_or_path(&self, s: Symbol) -> What {
+        match self.k {
+            0 => What::Name(s, false),
+            _ => What::Path,
+        }
+    }
 }
 
 /// Whether `t` is the whole of a block entry with no value (a pun).
