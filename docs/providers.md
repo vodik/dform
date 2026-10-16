@@ -57,9 +57,9 @@ client to configure, no credential values (a handle names one), no
 retries of its own beyond classifying its errors (a 429 comes back as
 the server answered it; sent again, it waits its turn), no rates: it
 names its limits (`Request::bucket("ec2.describe")`) and the window
-learns them. A thread it starts for a call takes the call along
-(`dform_sdk::at_once`), so its requests are paced and traced as the
-call's.
+learns them. What a call awaits is the call's (paced in its session's
+windows, traced under its span), however many it awaits together; a
+thread it starts by itself is in no call.
 
 To place it: a Cloudflare Worker or a Fastly Compute service gets
 `fetch` and bindings and never a socket, and the platform pools its
@@ -98,7 +98,7 @@ struct Acme {
 
 impl Provider for Acme {
     const NAME: &'static str = "acme";
-    fn configure(settings: &serde_json::Value) -> Result<(Acme, Option<String>)> {
+    async fn configure(settings: &serde_json::Value) -> Result<(Acme, Option<String>)> {
         let endpoint = settings["endpoint"].as_str().unwrap_or_default().to_string();
         // The operator granted `bearer:acme`; the host applies it.
         let token = host().secrets.open("bearer:acme")?;
@@ -120,22 +120,32 @@ struct Bucket {
 }
 
 impl Lifecycle<Acme> for Bucket {
-    fn read(p: &Acme, remote: &str) -> Result<Option<Bucket>> {
-        let r = host().http.request(
-            Request::get(format!("{}/buckets/{remote}", p.endpoint)).auth(&p.token),
-        )?;
+    async fn read(p: &Acme, remote: &str) -> Result<Option<Bucket>> {
+        let get = |path: String| host().http.request(Request::get(path).auth(&p.token));
+        // One request awaited: what it answers decides the next.
+        let r = get(format!("{}/buckets/{remote}", p.endpoint)).await?;
         if r.status == 404 {
             return Ok(None);
         }
-        Ok(Some(serde_json::from_slice(&r.body)?))
+        let mut bucket: Bucket = serde_json::from_slice(&r.body)?;
+        // Two awaited together: both in flight, the host pacing them.
+        let (tags, policy) = dform_sdk::join(
+            get(format!("{}/buckets/{remote}/tags", p.endpoint)),
+            get(format!("{}/buckets/{remote}/policy", p.endpoint)),
+        )
+        .await;
+        bucket.tags = serde_json::from_slice(&tags?.body)?;
+        /* .. policy? .. */
+        Ok(Some(bucket))
     }
-    fn create(p: &Acme, desired: Bucket, key: &str, progress: &Progress) -> Result<(String, Bucket)> {
-        // .. POST it, then poll until it is ready, saying each status seen:
+    async fn create(p: &Acme, desired: Bucket, key: &str, progress: &Progress<'_>) -> Result<(String, Bucket)> {
+        // .. POST it, then poll until it is ready, saying each status seen,
+        // waiting between polls with `dform_sdk::sleep(..).await`:
         progress.status("PROVISIONING");
         /* .. */
     }
-    fn update(p: &Acme, remote: &str, prior: Bucket, desired: Bucket, progress: &Progress) -> Result<Bucket> { /* .. */ }
-    fn delete(p: &Acme, remote: &str, progress: &Progress) -> Result<()> { /* .. */ }
+    async fn update(p: &Acme, remote: &str, prior: Bucket, desired: Bucket, progress: &Progress<'_>) -> Result<Bucket> { /* .. */ }
+    async fn delete(p: &Acme, remote: &str, progress: &Progress<'_>) -> Result<()> { /* .. */ }
 }
 
 dform_sdk::provider!(
@@ -364,10 +374,12 @@ unchanged); the SDK dials it. The provider also serves `Manifest`, what
 `uses = [..]` declares. A native provider runs as the user: its grants
 and its manifest are a declaration and a convention, not a sandbox.
 dform sends calls at once (a refresh's Reads, a plan's Plans,
-`--parallel`'s Applies); natively the SDK runs each on a thread of its
-own, and the host calls they make run at once too, so a `Handler` (or a
-`Lifecycle`) is called from several threads at once and keeps any state
-of its own behind its own lock (it is `Send + Sync`).
+`--parallel`'s Applies); natively the SDK answers each on a thread of
+its own, and each host call a handler awaits waits on a thread of its
+own, so what it awaits together is in flight together. A `Handler` (or
+a `Lifecycle`) is called several times at once and keeps any state of
+its own behind its own lock (it is `Send + Sync`); a lock held across
+an `.await` is `dform_sdk::sync::Mutex`, never std's (below).
 
 **Component** (experimental): `cargo build --target wasm32-wasip3
 --features component` makes `target/wasm32-wasip3/debug/<crate>.wasm`, a
@@ -380,14 +392,24 @@ import: no environment variable, no file, no socket without a grant.
 The provider's calls are async functions (the component model's async
 ABI, WASI 0.3): one instance has every call dform submits in flight at
 once, and an Apply answers a `stream<event>` and a `future` of its
-result. The host's calls that wait on the world (`http.send`,
-`io.read`, `ssh.exec`) are async too, each a subtask: a `Handler`, which
-is synchronous, waits on one at a time, and `host().http.request_all(..)`
-sends several from one call with no thread (natively, a thread each),
-dform's window pacing them. On wasip3 every call is a thread of its own,
-with its own thread-locals, so what an instance keeps is in statics. A
-component's exit carries its code. Its compiled code is cached in
-`$XDG_CACHE_HOME/dform/wasm/` by the file's digest.
+result, each event written as the provider says it. The host's calls
+that wait on the world (`http.send`, `io.read`, `ssh.exec`, and
+`wasi:clocks`' wait under `dform_sdk::sleep`) are async too, each a
+subtask: a `Handler` awaits them, and the instance answers its other
+calls meanwhile, so `--parallel` holds for a component as natively.
+What a call awaits together (`dform_sdk::join`, `join_all`) is in
+flight together with no thread, dform's window pacing it. A synchronous
+handler (a `backend::Handler`, or one waiting with
+`dform_sdk::block_on`) holds the instance while it waits: its other
+calls wait for it. On wasip3 every call is a task of its own, with its
+own thread-locals, so what an instance keeps is in statics, and the
+calls take turns on one thread: a std lock held across an `.await`
+would never be released to the call waiting on it. A component imports
+`wasi:filesystem` only with the SDK's `filesystem` feature (it then
+starts in dform's working directory, as a native provider does), so
+one that reads no file needs no grant. A component's exit carries its
+code. Its compiled code is cached in `$XDG_CACHE_HOME/dform/wasm/` by
+the file's digest.
 
 The fake provider is built both ways and passes `dform provider check`
 on both; tests/host_wasm.rs keeps them from drifting.

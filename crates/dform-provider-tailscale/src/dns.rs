@@ -69,18 +69,23 @@ fn strings(v: &Json) -> Vec<String> {
         .collect()
 }
 
-fn get(p: &Tailscale, part: &str) -> Result<Json> {
+async fn get(p: &Tailscale, part: &str) -> Result<Json> {
     let path = p.client.tailnet_path(&format!("/dns/{part}"));
-    Ok(p.client.get(&path)?.map(|a| a.body).unwrap_or(Json::Null))
+    Ok(p.client
+        .get(&path)
+        .await?
+        .map(|a| a.body)
+        .unwrap_or(Json::Null))
 }
 
 /// What the API has.
-fn current(p: &Tailscale) -> Result<Dns> {
+async fn current(p: &Tailscale) -> Result<Dns> {
     Ok(Dns {
-        nameservers: strings(&get(p, "nameservers")?["dns"]),
-        magic_dns: get(p, "preferences")?["magicDNS"].as_bool(),
-        search_paths: strings(&get(p, "searchpaths")?["searchPaths"]),
-        split: get(p, "split-dns")?
+        nameservers: strings(&get(p, "nameservers").await?["dns"]),
+        magic_dns: get(p, "preferences").await?["magicDNS"].as_bool(),
+        search_paths: strings(&get(p, "searchpaths").await?["searchPaths"]),
+        split: get(p, "split-dns")
+            .await?
             .as_object()
             .into_iter()
             .flatten()
@@ -92,29 +97,33 @@ fn current(p: &Tailscale) -> Result<Dns> {
 
 /// Write each part of `want` that `now` does not have as it is; MagicDNS
 /// only where the program says.
-fn write(p: &Tailscale, now: &Dns, want: &Dns, progress: &Progress) -> Result<()> {
-    let post = |part: &str, method: &str, body: Json| -> Result<()> {
+async fn write(p: &Tailscale, now: &Dns, want: &Dns, progress: &Progress<'_>) -> Result<()> {
+    let post = async |part: &str, method: &str, body: Json| -> Result<()> {
         progress.message(&format!("writing dns/{part}"));
         let path = p.client.tailnet_path(&format!("/dns/{part}"));
-        p.client.call(method, &path, Body::Json(body)).map(|_| ())
+        p.client
+            .call(method, &path, Body::Json(body))
+            .await
+            .map(|_| ())
     };
     if now.nameservers != want.nameservers {
-        post("nameservers", "POST", json!({"dns": want.nameservers}))?;
+        post("nameservers", "POST", json!({"dns": want.nameservers})).await?;
     }
     if now.search_paths != want.search_paths {
         post(
             "searchpaths",
             "POST",
             json!({"searchPaths": want.search_paths}),
-        )?;
+        )
+        .await?;
     }
     if now.split != want.split {
-        post("split-dns", "PUT", json!(want.split))?;
+        post("split-dns", "PUT", json!(want.split)).await?;
     }
     if let Some(m) = want.magic_dns
         && now.magic_dns != Some(m)
     {
-        post("preferences", "POST", json!({"magicDNS": m}))?;
+        post("preferences", "POST", json!({"magicDNS": m})).await?;
     }
     Ok(())
 }
@@ -131,14 +140,19 @@ fn same_tailnet(p: &Tailscale, remote: &str) -> Result<()> {
 }
 
 impl Lifecycle<Tailscale> for Dns {
-    fn read(p: &Tailscale, remote: &str) -> Result<Option<Dns>> {
+    async fn read(p: &Tailscale, remote: &str) -> Result<Option<Dns>> {
         same_tailnet(p, remote)?;
-        Ok(Some(current(p)?))
+        Ok(Some(current(p).await?))
     }
 
-    fn create(p: &Tailscale, desired: Dns, _: &str, progress: &Progress) -> Result<(String, Dns)> {
+    async fn create(
+        p: &Tailscale,
+        desired: Dns,
+        _: &str,
+        progress: &Progress<'_>,
+    ) -> Result<(String, Dns)> {
         let tailnet = p.client.tailnet().to_string();
-        let now = current(p)?;
+        let now = current(p).await?;
         if !now.is_default() {
             return Err(Error::Refused(format!(
                 "{}: the tailnet's DNS settings are not its defaults: someone wrote them. Adopt \
@@ -147,28 +161,28 @@ impl Lifecycle<Tailscale> for Dns {
                 at(TYPE, &tailnet)
             )));
         }
-        write(p, &now, &desired, progress)?;
-        Ok((tailnet, current(p)?))
+        write(p, &now, &desired, progress).await?;
+        Ok((tailnet, current(p).await?))
     }
 
-    fn update(
+    async fn update(
         p: &Tailscale,
         remote: &str,
         _: Dns,
         desired: Dns,
-        progress: &Progress,
+        progress: &Progress<'_>,
     ) -> Result<Dns> {
         same_tailnet(p, remote)?;
-        let now = current(p)?;
-        write(p, &now, &desired, progress)?;
-        current(p)
+        let now = current(p).await?;
+        write(p, &now, &desired, progress).await?;
+        current(p).await
     }
 
     /// The settings stay: the defaults are written in their place.
-    fn delete(p: &Tailscale, remote: &str, progress: &Progress) -> Result<()> {
+    async fn delete(p: &Tailscale, remote: &str, progress: &Progress<'_>) -> Result<()> {
         same_tailnet(p, remote)?;
-        let now = current(p)?;
-        write(p, &now, &Dns::defaults(), progress)?;
+        let now = current(p).await?;
+        write(p, &now, &Dns::defaults(), progress).await?;
         progress.note(&format!(
             "{}: the tailnet's DNS settings are its defaults again (no nameservers, no search \
              paths, no split domain, MagicDNS on); a tailnet always has them",

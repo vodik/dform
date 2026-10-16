@@ -460,9 +460,7 @@ impl Client {
         if let Some(body) = body {
             req = req.body(body);
         }
-        let resp = dform_sdk::host()
-            .http
-            .request(req)
+        let resp = dform_sdk::block_on(dform_sdk::host().http.request(req))
             .map_err(|e| unreachable(e.message))?;
         let text = String::from_utf8(resp.body)
             .map_err(|e| unreachable(format!("reading the answer: {e}")))?;

@@ -110,18 +110,20 @@ fn from_api(d: &Json, routes: Vec<String>) -> Device {
 }
 
 /// Every device on the tailnet.
-pub fn list(p: &Tailscale) -> Result<Vec<Json>> {
+pub async fn list(p: &Tailscale) -> Result<Vec<Json>> {
     let a = p
         .client
-        .call("GET", &p.client.tailnet_path("/devices"), Body::None)?;
+        .call("GET", &p.client.tailnet_path("/devices"), Body::None)
+        .await?;
     Ok(a.body["devices"].as_array().cloned().unwrap_or_default())
 }
 
 /// `tailscale.device(+tailnet, -hostname, -id, -addresses, -tags, -os,
 /// -authorized, -last_seen)`: a row of every device the tailnet lists.
-pub fn rows(p: &Tailscale, inputs: &[Json]) -> Result<Vec<Vec<Json>>> {
+pub async fn rows(p: &Tailscale, inputs: &[Json]) -> Result<Vec<Vec<Json>>> {
     let tailnet = p.asked(TYPE, inputs)?;
-    Ok(list(p)?
+    Ok(list(p)
+        .await?
         .iter()
         .map(|d| {
             let d = from_api(d, Vec::new());
@@ -141,8 +143,9 @@ pub fn rows(p: &Tailscale, inputs: &[Json]) -> Result<Vec<Vec<Json>>> {
 
 /// The one device whose hostname is `hostname`: none is `None`, two are
 /// refused, naming each.
-fn by_hostname(p: &Tailscale, hostname: &str) -> Result<Option<Json>> {
-    let mut found: Vec<Json> = list(p)?
+async fn by_hostname(p: &Tailscale, hostname: &str) -> Result<Option<Json>> {
+    let mut found: Vec<Json> = list(p)
+        .await?
         .into_iter()
         .filter(|d| d["hostname"].as_str() == Some(hostname))
         .collect();
@@ -173,11 +176,15 @@ fn by_hostname(p: &Tailscale, hostname: &str) -> Result<Option<Json>> {
 }
 
 /// The device `remote` (its id) and its approved routes.
-fn fetch(p: &Tailscale, remote: &str) -> Result<Option<Device>> {
-    let Some(d) = p.client.get(&format!("/device/{remote}?fields=all"))? else {
+async fn fetch(p: &Tailscale, remote: &str) -> Result<Option<Device>> {
+    let Some(d) = p
+        .client
+        .get(&format!("/device/{remote}?fields=all"))
+        .await?
+    else {
         return Ok(None);
     };
-    let routes = match p.client.get(&format!("/device/{remote}/routes"))? {
+    let routes = match p.client.get(&format!("/device/{remote}/routes")).await? {
         Some(r) => strings(&r.body["enabledRoutes"]),
         None => strings(&d.body["enabledRoutes"]),
     };
@@ -191,21 +198,21 @@ impl Lifecycle<Tailscale> for Device {
     );
 
     /// By its id; by its hostname where it has no id yet (an adopt's plan).
-    fn read(p: &Tailscale, remote: &str) -> Result<Option<Device>> {
-        if let Some(d) = fetch(p, remote)? {
+    async fn read(p: &Tailscale, remote: &str) -> Result<Option<Device>> {
+        if let Some(d) = fetch(p, remote).await? {
             return Ok(Some(d));
         }
-        match by_hostname(p, remote)? {
-            Some(d) => fetch(p, id_of(&d).unwrap_or_default()),
+        match by_hostname(p, remote).await? {
+            Some(d) => fetch(p, id_of(&d).unwrap_or_default()).await,
             None => Ok(None),
         }
     }
 
-    fn adopt(p: &Tailscale, given: &str) -> Result<String> {
-        if p.client.get(&format!("/device/{given}"))?.is_some() {
+    async fn adopt(p: &Tailscale, given: &str) -> Result<String> {
+        if p.client.get(&format!("/device/{given}")).await?.is_some() {
             return Ok(given.to_string());
         }
-        let d = by_hostname(p, given)?.ok_or_else(|| {
+        let d = by_hostname(p, given).await?.ok_or_else(|| {
             Error::Refused(format!(
                 "{}: no device on the tailnet {:?} has that hostname: it joins with an auth key \
                  first",
@@ -216,18 +223,23 @@ impl Lifecycle<Tailscale> for Device {
         Ok(id_of(&d).unwrap_or_default().to_string())
     }
 
-    fn create(_: &Tailscale, _: Device, _: &str, _: &Progress) -> Result<(String, Device)> {
+    async fn create(
+        _: &Tailscale,
+        _: Device,
+        _: &str,
+        _: &Progress<'_>,
+    ) -> Result<(String, Device)> {
         Err(Error::Refused(
             Self::NOT_CREATED.expect("declared").to_string(),
         ))
     }
 
-    fn update(
+    async fn update(
         p: &Tailscale,
         remote: &str,
         prior: Device,
         desired: Device,
-        progress: &Progress,
+        progress: &Progress<'_>,
     ) -> Result<Device> {
         let at = at(TYPE, &prior.hostname);
         if desired.hostname != prior.hostname {
@@ -237,7 +249,7 @@ impl Lifecycle<Tailscale> for Device {
                 prior.hostname
             )));
         }
-        let post = |what: &str, body: Json| -> Result<()> {
+        let post = async |what: &str, body: Json| -> Result<()> {
             progress.message(&format!("writing {what}"));
             p.client
                 .call(
@@ -245,35 +257,41 @@ impl Lifecycle<Tailscale> for Device {
                     &format!("/device/{remote}/{what}"),
                     Body::Json(body),
                 )
+                .await
                 .map(|_| ())
         };
         if let Some(tags) = &desired.tags
             && Some(sorted(tags.clone())) != prior.tags
         {
-            post("tags", json!({"tags": tags}))?;
+            post("tags", json!({"tags": tags})).await?;
         }
         if let Some(routes) = &desired.routes
             && Some(sorted(routes.clone())) != prior.routes
         {
-            post("routes", json!({"routes": routes}))?;
+            post("routes", json!({"routes": routes})).await?;
         }
         if let Some(a) = desired.authorized
             && Some(a) != prior.authorized
         {
-            post("authorized", json!({"authorized": a}))?;
+            post("authorized", json!({"authorized": a})).await?;
         }
         if let Some(n) = &desired.name
             && Some(n) != prior.name.as_ref()
         {
-            post("name", json!({"name": n}))?;
+            post("name", json!({"name": n})).await?;
         }
-        fetch(p, remote)?.ok_or_else(|| Error::Refused(format!("{at}: gone during its update")))
+        fetch(p, remote)
+            .await?
+            .ok_or_else(|| Error::Refused(format!("{at}: gone during its update")))
     }
 
     /// Remove it from the tailnet.
-    fn delete(p: &Tailscale, remote: &str, _: &Progress) -> Result<()> {
+    async fn delete(p: &Tailscale, remote: &str, _: &Progress<'_>) -> Result<()> {
         let path = format!("/device/{remote}");
-        let a = p.client.send("DELETE", &path, &Body::None, None, false)?;
+        let a = p
+            .client
+            .send("DELETE", &path, &Body::None, None, false)
+            .await?;
         match a.status {
             404 => Ok(()),
             _ => p.client.expect("DELETE", &path, a).map(|_| ()),
@@ -282,8 +300,12 @@ impl Lifecycle<Tailscale> for Device {
 
     /// On the tailnet and connected; waiting for an admin's approval; not
     /// connected (as of the API's last word); gone.
-    fn health(p: &Tailscale, remote: &str) -> Result<Option<pb::Health>> {
-        let Some(d) = p.client.get(&format!("/device/{remote}?fields=all"))? else {
+    async fn health(p: &Tailscale, remote: &str) -> Result<Option<pb::Health>> {
+        let Some(d) = p
+            .client
+            .get(&format!("/device/{remote}?fields=all"))
+            .await?
+        else {
             return Ok(Some(health(
                 pb::HealthState::Degraded,
                 "not on the tailnet",

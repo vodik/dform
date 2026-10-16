@@ -98,7 +98,7 @@ impl Kube {
             .header("accept", "application/json")
             .body(serde_json::to_vec(body).unwrap())
             .auth(&self.credential);
-        let r = dform_sdk::host().http.request(req).unwrap();
+        let r = dform_sdk::block_on(dform_sdk::host().http.request(req)).unwrap();
         assert!(
             (200..300).contains(&r.status),
             "{method} {path}: {} {}",

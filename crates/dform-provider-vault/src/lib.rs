@@ -21,11 +21,11 @@
 pub mod fake;
 pub mod location;
 
+use dform_sdk::sync::Mutex;
 use dform_sdk::typed::{Error, Result};
 use dform_sdk::{Document, Failure, Provider, Request, Typed};
 use location::Location;
 use serde_json::{Value as Json, json};
-use std::sync::Mutex;
 
 /// The scheme it reads.
 pub const SCHEME: &str = "vault";
@@ -142,21 +142,24 @@ impl Vault {
     /// Send `r` as the provider's identity: the token credential applied
     /// by the host, or the AppRole token, logging in first (and again once
     /// when Vault refuses a token it has let lapse).
-    fn send(&self, r: impl Fn() -> Request) -> std::result::Result<dform_sdk::Response, Failure> {
+    async fn send(
+        &self,
+        r: impl Fn() -> Request,
+    ) -> std::result::Result<dform_sdk::Response, Failure> {
         let host = dform_sdk::host();
         match &self.auth {
             Auth::Token(name) => {
                 let c = host.secrets.open(name)?;
-                Ok(host.http.request(r().auth(&c))?)
+                Ok(host.http.request(r().auth(&c)).await?)
             }
             Auth::AppRole { token, .. } => {
                 for fresh in [false, true] {
-                    let t = self.approle_token(fresh)?;
-                    let resp = host.http.request(r().header("X-Vault-Token", &t))?;
+                    let t = self.approle_token(fresh).await?;
+                    let resp = host.http.request(r().header("X-Vault-Token", &t)).await?;
                     if resp.status != 403 || fresh {
                         return Ok(resp);
                     }
-                    *token.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    *token.lock().await = None;
                 }
                 unreachable!("the second try returns")
             }
@@ -164,7 +167,7 @@ impl Vault {
     }
 
     /// The AppRole token: the one kept, else a login's.
-    fn approle_token(&self, fresh: bool) -> std::result::Result<String, Failure> {
+    async fn approle_token(&self, fresh: bool) -> std::result::Result<String, Failure> {
         let Auth::AppRole {
             mount,
             role_id,
@@ -174,14 +177,17 @@ impl Vault {
         else {
             unreachable!("approle_token of a token's provider")
         };
-        let mut kept = token.lock().unwrap_or_else(|e| e.into_inner());
+        let mut kept = token.lock().await;
         if let (false, Some(t)) = (fresh, kept.as_ref()) {
             return Ok(t.clone());
         }
-        let resp = dform_sdk::host().http.request(
-            self.request("POST", &format!("/v1/auth/{mount}/login"))
-                .json(&json!({ "role_id": role_id, "secret_id": secret_id })),
-        )?;
+        let resp = dform_sdk::host()
+            .http
+            .request(
+                self.request("POST", &format!("/v1/auth/{mount}/login"))
+                    .json(&json!({ "role_id": role_id, "secret_id": secret_id })),
+            )
+            .await?;
         if resp.status != 200 {
             return Err(dform_sdk::Error::fatal(format!(
                 "vault {}: the AppRole login at auth/{mount} was refused ({}): {}",
@@ -206,11 +212,11 @@ impl Vault {
     }
 
     /// The secret at `location`, with its version.
-    pub fn read_secret(&self, location: &str) -> std::result::Result<Document, Failure> {
+    pub async fn read_secret(&self, location: &str) -> std::result::Result<Document, Failure> {
         let fatal = |m: String| -> Failure { dform_sdk::Error::fatal(m).into() };
         let at = Location::parse(location).map_err(fatal)?;
         let path = at.api_path();
-        let resp = self.send(|| self.request("GET", &path))?;
+        let resp = self.send(|| self.request("GET", &path)).await?;
         let body: Json = serde_json::from_slice(&resp.body).unwrap_or_default();
         match resp.status {
             200 => {}
@@ -307,14 +313,14 @@ impl Provider for Vault {
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const SCHEMES: &'static [&'static str] = &[SCHEME];
 
-    fn configure(settings: &Json) -> Result<(Vault, Option<String>)> {
+    async fn configure(settings: &Json) -> Result<(Vault, Option<String>)> {
         let v = Vault::parse(settings, &|k| std::env::var(k).ok())?;
         let account = v.address.clone();
         Ok((v, Some(account)))
     }
 
-    fn read(&self, location: &str) -> std::result::Result<Document, Failure> {
-        self.read_secret(location)
+    async fn read(&self, location: &str) -> std::result::Result<Document, Failure> {
+        self.read_secret(location).await
     }
 }
 

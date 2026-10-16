@@ -203,15 +203,15 @@ fn names(xs: &[String]) -> String {
 }
 
 impl Lifecycle<Postgres> for Role {
-    fn read(p: &Postgres, remote: &str) -> Result<Option<Role>> {
+    async fn read(p: &Postgres, remote: &str) -> Result<Option<Role>> {
         Ok(find(p, remote)?.map(|(r, _)| r))
     }
 
-    fn create(
+    async fn create(
         p: &Postgres,
         desired: Role,
         key: &str,
-        progress: &Progress,
+        progress: &Progress<'_>,
     ) -> Result<(String, Role)> {
         let name = desired.name.clone();
         let at = at(&name);
@@ -251,12 +251,12 @@ impl Lifecycle<Postgres> for Role {
         Ok((name, made.0))
     }
 
-    fn update(
+    async fn update(
         p: &Postgres,
         remote: &str,
         prior: Role,
         desired: Role,
-        progress: &Progress,
+        progress: &Progress<'_>,
     ) -> Result<Role> {
         let at = at(remote);
         let role = ident(remote);
@@ -293,7 +293,7 @@ impl Lifecycle<Postgres> for Role {
             .ok_or_else(|| Error::Refused(format!("{at}: gone during its update")))
     }
 
-    fn delete(p: &Postgres, remote: &str, _: &Progress) -> Result<()> {
+    async fn delete(p: &Postgres, remote: &str, _: &Progress<'_>) -> Result<()> {
         let at = at(remote);
         if remote == p.user() {
             return Err(Error::Refused(own_role(&at, p.user())));

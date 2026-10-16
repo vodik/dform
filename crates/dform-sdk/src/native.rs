@@ -1,10 +1,17 @@
 //! A provider built natively: the protocol served over gRPC
 //! (`dform-grpc`), its `Manifest` beside it, and the host called back over
 //! the `Host` service at `DFORM_HOST`.
+//!
+//! The gRPC adapter answers each call on a thread of its own (tokio's
+//! blocking pool), which waits on the handler's answer ([`block_on`]). A
+//! host call the handler awaits runs on a thread of its own while it
+//! waits ([`waits`]), so the calls it awaits together are in flight
+//! together, each in the call ([`Within`]): its session's windows, its
+//! span.
 
-use crate::Absent;
+use crate::{Absent, Handler};
 use anyhow::{Context, Result};
-use dform_core::plugin::backend::Handler;
+use dform_core::plugin::backend::{self, Within};
 use dform_core::plugin::host::{
     Calls, Endpoint, Error, Failure, GitFile, Handle, HttpRequest, HttpResponse, Level, Opened,
     Run, Target,
@@ -13,36 +20,57 @@ use dform_grpc::host as conv;
 use dform_grpc::host_pb as h;
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tonic::transport::Channel;
 
 /// Serve `handler` over gRPC, declaring `uses` (it runs as the user: a
 /// declaration, not a sandbox) and the location schemes it reads
 /// (`Handler::schemes`, served as `Io`, R-153, R-155), until stdin closes.
-pub fn serve<H: Handler + Send + Sync + 'static>(handler: H, uses: &[&str]) -> Result<()> {
-    let handler = std::sync::Arc::new(handler);
-    let schemes = handler.schemes();
+pub fn serve<H: Handler>(handler: H, uses: &[&str]) -> Result<()> {
+    let handler = Arc::new(Blocking(handler));
+    let schemes = handler.0.schemes();
     let reads = handler.clone();
     let declares = dform_grpc::server::Declares {
         imports: uses.iter().map(|s| s.to_string()).collect(),
         read: (!schemes.is_empty()).then(|| -> dform_grpc::server::Read {
-            std::sync::Arc::new(move |l: &str| reads.read_versioned(l))
+            Arc::new(move |l: &str| block_on(reads.0.read_versioned(l)))
         }),
         schemes,
     };
     dform_grpc::server::serve_declaring(Shared(handler), declares)
 }
 
-/// A handler held twice: by the protocol's service and by `Io`.
-struct Shared<H>(std::sync::Arc<H>);
+/// A [`Handler`] as a synchronous one (`backend::Handler`), each call
+/// waited on by the thread that makes it: what the gRPC adapter serves,
+/// and a provider linked into a process of dform's (the direct and wire
+/// backends, a test).
+pub struct Blocking<H>(pub H);
 
-impl<H: Handler> Handler for Shared<H> {
+impl<H: Handler> backend::Handler for Blocking<H> {
     fn handle(
         &self,
-        session: dform_core::plugin::backend::Session,
-        call: dform_core::plugin::backend::Call,
-        progress: dform_core::plugin::backend::Progress,
-    ) -> Result<dform_core::plugin::backend::Reply, dform_core::plugin::backend::CallError> {
+        session: backend::Session,
+        call: backend::Call,
+        progress: backend::Progress,
+    ) -> Result<backend::Reply, backend::CallError> {
+        block_on(self.0.handle(session, call, progress))
+    }
+
+    fn is_dead(&self) -> bool {
+        self.0.is_dead()
+    }
+}
+
+/// A handler held twice: by the protocol's service and by `Io`.
+struct Shared<H>(Arc<H>);
+
+impl<H: backend::Handler> backend::Handler for Shared<H> {
+    fn handle(
+        &self,
+        session: backend::Session,
+        call: backend::Call,
+        progress: backend::Progress,
+    ) -> Result<backend::Reply, backend::CallError> {
         self.0.handle(session, call, progress)
     }
 
@@ -52,16 +80,84 @@ impl<H: Handler> Handler for Shared<H> {
 }
 
 /// `provider!`'s `main`.
-pub fn main<H: Handler + Send + Sync + 'static>(
-    make: impl FnOnce() -> H,
-    uses: &[&str],
-) -> std::process::ExitCode {
+pub fn main<H: Handler>(make: impl FnOnce() -> H, uses: &[&str]) -> std::process::ExitCode {
     match serve(make(), uses) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("{}: {e:#}", env!("CARGO_PKG_NAME"));
             std::process::ExitCode::FAILURE
         }
+    }
+}
+
+/// `future`'s answer, this thread parked until it is ready. Nests: a
+/// synchronous handler served here may wait on the host the same way.
+pub fn block_on<F: Future>(future: F) -> F::Output {
+    struct Unpark(std::thread::Thread);
+
+    impl std::task::Wake for Unpark {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    let waker = std::task::Waker::from(Arc::new(Unpark(std::thread::current())));
+    let mut cx = std::task::Context::from_waker(&waker);
+    let mut future = std::pin::pin!(future);
+    loop {
+        if let std::task::Poll::Ready(t) = future.as_mut().poll(&mut cx) {
+            return t;
+        }
+        std::thread::park();
+    }
+}
+
+/// `f`'s answer, run on a thread of its own in the call this one is in
+/// ([`Within`]): its host calls are the call's. A panic there is the
+/// awaiting one's.
+async fn on_a_thread<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    let within = Within::here();
+    let (tx, rx) = futures::channel::oneshot::channel();
+    std::thread::spawn(move || {
+        let _in = within.enter();
+        let _ = tx.send(std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)));
+    });
+    match rx.await {
+        Ok(Ok(t)) => t,
+        Ok(Err(panic)) => std::panic::resume_unwind(panic),
+        Err(_) => unreachable!("a host call's thread answers or panics"),
+    }
+}
+
+/// The host's calls that wait on the world, each on a thread of its own
+/// while it waits.
+pub(crate) mod waits {
+    use super::*;
+    use crate::calls;
+    use std::time::Duration;
+
+    pub async fn send(
+        req: HttpRequest,
+        auth: Option<Handle>,
+        via: Option<Handle>,
+    ) -> Result<HttpResponse, Error> {
+        on_a_thread(move || calls().send(req, auth, via)).await
+    }
+
+    pub async fn io_read(location: String) -> Result<Vec<u8>, Failure> {
+        on_a_thread(move || calls().io_read(&location)).await
+    }
+
+    pub async fn exec(
+        on: Target,
+        argv: Vec<String>,
+        stdin: Option<Vec<u8>>,
+    ) -> Result<Run, Failure> {
+        on_a_thread(move || calls().exec(&on, &argv, stdin.as_deref())).await
+    }
+
+    pub async fn sleep(d: Duration) {
+        on_a_thread(move || std::thread::sleep(d)).await
     }
 }
 

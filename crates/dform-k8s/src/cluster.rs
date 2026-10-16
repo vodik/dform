@@ -378,9 +378,7 @@ impl Cluster {
             ..Within::here()
         }
         .enter();
-        let answer = host()
-            .http
-            .request(req.auth(&self.credential))
+        let answer = dform_sdk::block_on(host().http.request(req.auth(&self.credential)))
             .map_err(|e| Refused::Transport(e.into()))?;
         if (200..300).contains(&answer.status) {
             return Ok(answer);

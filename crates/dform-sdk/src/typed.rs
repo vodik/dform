@@ -13,6 +13,12 @@
 //! writes nothing for it. A session's calls are answered one at a time,
 //! two sessions' at once.
 //!
+//! What may call the host is `async` (read, create, update, delete,
+//! adopt, health; Configure, a query, a reveal, a location read): it
+//! awaits the host's calls, one after another or several at once
+//! ([`crate::join_all`]). What is decided from the documents alone
+//! (check, replaced) is not.
+//!
 //! Create, update and delete are told a [`Progress`]: each time the object's
 //! status as the API gives it changes (a poll that saw `BUILD` turn
 //! `ACTIVE`), say so, and dform prints it beside the change (R-130).
@@ -22,18 +28,19 @@
 //! before it sends it again; a transient one says `retryable:`, so dform's
 //! retry policy sends it again (R-81).
 
+use crate::Handler;
 use dform_core::address::Address;
-use dform_core::plugin::backend::{
-    self, Call, CallError, Configured, Handler, Reply, Session, VERSION,
-};
+use dform_core::plugin::backend::{self, Call, CallError, Configured, Reply, Session, VERSION};
 use dform_core::plugin::{pb, wire};
 use dform_core::provider::Planned;
 use dform_core::schema::Schema;
+use futures::future::LocalBoxFuture;
+use futures::lock::Mutex as Held;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value as Json, json};
 use std::collections::BTreeMap;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::Mutex;
 
 /// A resource type's schema, from `#[derive(Resource)]`.
 pub trait Resource: Serialize + DeserializeOwned {
@@ -110,6 +117,7 @@ impl From<serde_json::Error> for Error {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// A provider: its name and how it is configured.
+#[allow(async_fn_in_trait)] // a call's future is polled where it is served, never sent
 pub trait Provider: Sized + Send + 'static {
     /// The name its handshake gives: what state records.
     const NAME: &'static str;
@@ -129,7 +137,7 @@ pub trait Provider: Sized + Send + 'static {
     /// program configures it with none, the engine's own keys never
     /// among them): the provider, and the account its credentials reach
     /// when it can tell.
-    fn configure(settings: &Json) -> Result<(Self, Option<String>)>;
+    async fn configure(settings: &Json) -> Result<(Self, Option<String>)>;
 
     /// The location schemes it reads (R-153), which its manifest declares
     /// and dform routes to [`Provider::read`]: `&["vault"]`.
@@ -139,7 +147,7 @@ pub trait Provider: Sized + Send + 'static {
     /// version the source names it by when it keeps versions (R-172); not
     /// there yet is `Failure::NotYet`. Called once the provider is
     /// configured.
-    fn read(&self, location: &str) -> std::result::Result<crate::Document, crate::Failure> {
+    async fn read(&self, location: &str) -> std::result::Result<crate::Document, crate::Failure> {
         Err(crate::Error::fatal(format!(
             "{location}: provider {} reads no location",
             Self::NAME
@@ -150,7 +158,7 @@ pub trait Provider: Sized + Send + 'static {
     /// The rows of the data source `pred` (declared with
     /// [`Typed::facts_text`]'s `extern_decl`) for its `+` columns'
     /// `inputs`, in order: each a full row, every column.
-    fn query(&self, pred: &str, inputs: &[Json]) -> Result<Vec<Vec<Json>>> {
+    async fn query(&self, pred: &str, inputs: &[Json]) -> Result<Vec<Vec<Json>>> {
         let _ = inputs;
         Err(Error::Refused(format!(
             "provider {} answers no extern {pred}",
@@ -161,7 +169,7 @@ pub trait Provider: Sized + Send + 'static {
     /// The bytes of a sensitive computed value it holds (`held`: its type,
     /// remote id and path), for the engine to reveal into the one call
     /// that takes it (R-45). Asked only with the deployment's lease.
-    fn reveal(&self, held: &pb::Held) -> Result<Vec<u8>> {
+    async fn reveal(&self, held: &pb::Held) -> Result<Vec<u8>> {
         Err(Error::Refused(format!(
             "reveal {} {}#{}: provider {} holds no secret",
             held.r#type,
@@ -219,38 +227,49 @@ impl<'a> Progress<'a> {
 }
 
 /// One resource type's lifecycle.
+#[allow(async_fn_in_trait)] // a call's future is polled where it is served, never sent
 pub trait Lifecycle<P: Provider>: Resource {
     /// Why a program cannot create one, when the API makes them itself (a
     /// device joins a tailnet; it is not posted): Plan refuses a create
     /// with it, naming the address, and a program adopts them instead.
     const NOT_CREATED: Option<&'static str> = None;
     /// The object `remote`, if it exists.
-    fn read(p: &P, remote: &str) -> Result<Option<Self>>;
+    async fn read(p: &P, remote: &str) -> Result<Option<Self>>;
     /// The object `remote` as a Read finds it, told its computed values as
     /// the last apply or read returned them (`prior`, a secret one as its
     /// label; `None` when dform holds none): a hint of what the provider
     /// made below it, never truth, so an element remembered there that is
     /// gone reads as absent. By default [`Lifecycle::read`].
-    fn read_with_prior(p: &P, remote: &str, prior: Option<&Json>) -> Result<Option<Self>> {
+    async fn read_with_prior(p: &P, remote: &str, prior: Option<&Json>) -> Result<Option<Self>> {
         let _ = prior;
-        Self::read(p, remote)
+        Self::read(p, remote).await
     }
     /// The remote id of the object a program adopts by `given`
     /// (`adopt(r, "web-1")`): what state keeps and every later call is
     /// sent. By default `given` is the id; a type adopted by a name that
     /// is not its id finds the one object of that name here, and refuses
     /// a name two objects have.
-    fn adopt(p: &P, given: &str) -> Result<String> {
+    async fn adopt(p: &P, given: &str) -> Result<String> {
         let _ = p;
         Ok(given.to_string())
     }
     /// Create it; `key` is unique to this intended creation (pass it to
     /// an API that takes a client token). Its remote id and what it is.
-    fn create(p: &P, desired: Self, key: &str, progress: &Progress) -> Result<(String, Self)>;
+    async fn create(
+        p: &P,
+        desired: Self,
+        key: &str,
+        progress: &Progress<'_>,
+    ) -> Result<(String, Self)>;
     /// Change `remote` from `prior` to `desired`.
-    fn update(p: &P, remote: &str, prior: Self, desired: Self, progress: &Progress)
-    -> Result<Self>;
-    fn delete(p: &P, remote: &str, progress: &Progress) -> Result<()>;
+    async fn update(
+        p: &P,
+        remote: &str,
+        prior: Self,
+        desired: Self,
+        progress: &Progress<'_>,
+    ) -> Result<Self>;
+    async fn delete(p: &P, remote: &str, progress: &Progress<'_>) -> Result<()>;
     /// Refuse a desired document the provider cannot apply as configured
     /// (a role it connects as, to be rotated), before anything changes:
     /// called by Plan once the provider is configured, and by Apply before
@@ -277,7 +296,7 @@ pub trait Lifecycle<P: Provider>: Resource {
     /// provider that must poll to answer polls here); never measure time:
     /// degraded is the API having given up, and what may recover by itself
     /// is progressing. `None` answers `unknown`.
-    fn health(p: &P, remote: &str) -> Result<Option<pb::Health>> {
+    async fn health(p: &P, remote: &str) -> Result<Option<pb::Health>> {
         let _ = (p, remote);
         Ok(None)
     }
@@ -286,32 +305,45 @@ pub trait Lifecycle<P: Provider>: Resource {
 /// An object as the protocol has it: configured and computed.
 type Object = (Json, Json);
 
+/// A lifecycle function's answer, being worked out.
+type Answer<'a, T> = LocalBoxFuture<'a, Result<T>>;
+
 /// One resource type, its type erased.
 trait Kind<P>: Send + Sync {
     fn not_created(&self) -> Option<&'static str>;
-    fn read(&self, p: &P, remote: &str) -> Result<Option<Json>>;
-    fn read_with_prior(&self, p: &P, remote: &str, prior: Option<&Json>) -> Result<Option<Json>>;
-    fn adopt(&self, p: &P, given: &str) -> Result<String>;
-    fn create(
-        &self,
-        p: &P,
+    fn read<'a>(&'a self, p: &'a P, remote: &'a str) -> Answer<'a, Option<Json>>;
+    fn read_with_prior<'a>(
+        &'a self,
+        p: &'a P,
+        remote: &'a str,
+        prior: Option<&'a Json>,
+    ) -> Answer<'a, Option<Json>>;
+    fn adopt<'a>(&'a self, p: &'a P, given: &'a str) -> Answer<'a, String>;
+    fn create<'a>(
+        &'a self,
+        p: &'a P,
         desired: Json,
-        key: &str,
-        progress: &Progress,
-    ) -> Result<(String, Json)>;
-    fn update(
-        &self,
-        p: &P,
-        remote: &str,
+        key: &'a str,
+        progress: &'a Progress<'a>,
+    ) -> Answer<'a, (String, Json)>;
+    fn update<'a>(
+        &'a self,
+        p: &'a P,
+        remote: &'a str,
         prior: Json,
         desired: Json,
-        progress: &Progress,
-    ) -> Result<Json>;
-    fn delete(&self, p: &P, remote: &str, progress: &Progress) -> Result<()>;
+        progress: &'a Progress<'a>,
+    ) -> Answer<'a, Json>;
+    fn delete<'a>(
+        &'a self,
+        p: &'a P,
+        remote: &'a str,
+        progress: &'a Progress<'a>,
+    ) -> Answer<'a, ()>;
     fn check(&self, p: &P, desired: &Json) -> Result<()>;
     fn replaced(&self, p: &P, prior: &Json, desired: &Json) -> Option<String>;
     fn answers_health(&self) -> bool;
-    fn health(&self, p: &P, remote: &str) -> Result<Option<pb::Health>>;
+    fn health<'a>(&'a self, p: &'a P, remote: &'a str) -> Answer<'a, Option<pb::Health>>;
 }
 
 struct K<R>(std::marker::PhantomData<fn() -> R>);
@@ -329,51 +361,62 @@ impl<P: Provider, R: Lifecycle<P> + 'static> Kind<P> for K<R> {
         R::NOT_CREATED
     }
 
-    fn read(&self, p: &P, remote: &str) -> Result<Option<Json>> {
-        R::read(p, remote)?.map(|r| to_json(&r)).transpose()
+    fn read<'a>(&'a self, p: &'a P, remote: &'a str) -> Answer<'a, Option<Json>> {
+        Box::pin(async move { R::read(p, remote).await?.map(|r| to_json(&r)).transpose() })
     }
 
-    fn read_with_prior(&self, p: &P, remote: &str, prior: Option<&Json>) -> Result<Option<Json>> {
-        R::read_with_prior(p, remote, prior)?
-            .map(|r| to_json(&r))
-            .transpose()
+    fn read_with_prior<'a>(
+        &'a self,
+        p: &'a P,
+        remote: &'a str,
+        prior: Option<&'a Json>,
+    ) -> Answer<'a, Option<Json>> {
+        Box::pin(async move {
+            R::read_with_prior(p, remote, prior)
+                .await?
+                .map(|r| to_json(&r))
+                .transpose()
+        })
     }
 
-    fn adopt(&self, p: &P, given: &str) -> Result<String> {
-        R::adopt(p, given)
+    fn adopt<'a>(&'a self, p: &'a P, given: &'a str) -> Answer<'a, String> {
+        Box::pin(R::adopt(p, given))
     }
 
-    fn create(
-        &self,
-        p: &P,
+    fn create<'a>(
+        &'a self,
+        p: &'a P,
         desired: Json,
-        key: &str,
-        progress: &Progress,
-    ) -> Result<(String, Json)> {
-        let (remote, r) = R::create(p, from_json(R::TYPE, desired)?, key, progress)?;
-        Ok((remote, to_json(&r)?))
+        key: &'a str,
+        progress: &'a Progress<'a>,
+    ) -> Answer<'a, (String, Json)> {
+        Box::pin(async move {
+            let (remote, r) = R::create(p, from_json(R::TYPE, desired)?, key, progress).await?;
+            Ok((remote, to_json(&r)?))
+        })
     }
 
-    fn update(
-        &self,
-        p: &P,
-        remote: &str,
+    fn update<'a>(
+        &'a self,
+        p: &'a P,
+        remote: &'a str,
         prior: Json,
         desired: Json,
-        progress: &Progress,
-    ) -> Result<Json> {
-        let r = R::update(
-            p,
-            remote,
-            from_json(R::TYPE, prior)?,
-            from_json(R::TYPE, desired)?,
-            progress,
-        )?;
-        to_json(&r)
+        progress: &'a Progress<'a>,
+    ) -> Answer<'a, Json> {
+        Box::pin(async move {
+            let (prior, desired) = (from_json(R::TYPE, prior)?, from_json(R::TYPE, desired)?);
+            to_json(&R::update(p, remote, prior, desired, progress).await?)
+        })
     }
 
-    fn delete(&self, p: &P, remote: &str, progress: &Progress) -> Result<()> {
-        R::delete(p, remote, progress)
+    fn delete<'a>(
+        &'a self,
+        p: &'a P,
+        remote: &'a str,
+        progress: &'a Progress<'a>,
+    ) -> Answer<'a, ()> {
+        Box::pin(R::delete(p, remote, progress))
     }
 
     fn check(&self, p: &P, desired: &Json) -> Result<()> {
@@ -388,8 +431,8 @@ impl<P: Provider, R: Lifecycle<P> + 'static> Kind<P> for K<R> {
         R::HEALTH
     }
 
-    fn health(&self, p: &P, remote: &str) -> Result<Option<pb::Health>> {
-        R::health(p, remote)
+    fn health<'a>(&'a self, p: &'a P, remote: &'a str) -> Answer<'a, Option<pb::Health>> {
+        Box::pin(R::health(p, remote))
     }
 }
 
@@ -402,8 +445,9 @@ pub struct Typed<P: Provider> {
     /// The settings that are credentials, each with its kind
     /// ([`Typed::credential`]).
     credentials: BTreeMap<String, String>,
-    /// Each session's provider, as its Configure made it.
-    sessions: Configured<Mutex<P>>,
+    /// Each session's provider, as its Configure made it: held by one
+    /// call at a time, across the host calls it awaits.
+    sessions: Configured<Held<P>>,
 }
 
 impl<P: Provider> Default for Typed<P> {
@@ -497,9 +541,9 @@ impl<P: Provider> Typed<P> {
     }
 
     /// `f` of `session`'s provider; refused when it has none yet.
-    fn with<T>(&self, session: Session, f: impl FnOnce(&P) -> Result<T>) -> Result<T> {
+    async fn with<T>(&self, session: Session, f: impl AsyncFnOnce(&P) -> Result<T>) -> Result<T> {
         match self.sessions.get(session) {
-            Some(p) => f(&lock(&p)),
+            Some(p) => f(&*p.lock().await).await,
             None => Err(Error::Refused(format!(
                 "provider {} is not configured yet",
                 P::NAME
@@ -543,7 +587,7 @@ impl<P: Provider> Typed<P> {
         (Json::Object(attrs), Json::Object(comp))
     }
 
-    fn plan(&self, session: Session, r: pb::PlanRequest) -> Result<pb::PlanResponse> {
+    async fn plan(&self, session: Session, r: pb::PlanRequest) -> Result<pb::PlanResponse> {
         let doc = |v: Option<&pb::Value>| -> Result<Option<Json>> {
             v.map(wire::from_doc).transpose().map_err(Error::from)
         };
@@ -560,7 +604,10 @@ impl<P: Provider> Typed<P> {
         // A provider configured later (from a tick's output) checks at
         // its Apply.
         let p = self.sessions.get(session);
-        let p = p.as_deref().map(lock);
+        let p = match p.as_deref() {
+            Some(p) => Some(p.lock().await),
+            None => None,
+        };
         if let Some(d) = &desired {
             if let Some(why) = self.schema.missing_required(&addr.typ, d) {
                 return Err(Error::Refused(format!("plan {addr}: {why}")));
@@ -593,11 +640,11 @@ impl<P: Provider> Typed<P> {
         }))
     }
 
-    fn apply(
+    async fn apply(
         &self,
         session: Session,
         r: pb::ApplyRequest,
-        sink: backend::Progress,
+        sink: backend::Progress<'_>,
     ) -> Result<pb::ApplyResponse> {
         let op = pb::Op::try_from(r.op).unwrap_or(pb::Op::Unspecified);
         if op == pb::Op::EndTick {
@@ -625,52 +672,55 @@ impl<P: Provider> Typed<P> {
             .to_string(),
             sink,
         );
-        let found = |p: &P, remote: &str| -> Result<Json> {
-            k.read(p, remote)?
+        let found = async |p: &P, remote: &str| -> Result<Json> {
+            k.read(p, remote)
+                .await?
                 .ok_or_else(|| Error::Refused(format!("{} {remote:?} does not exist", r.r#type)))
         };
         let refuse_create = || match k.not_created() {
             Some(why) => Err(Error::Refused(format!("apply {}: {why}", progress.address))),
             None => Ok(()),
         };
-        let (remote, obj) = self.with(session, |p| match op {
-            pb::Op::Create => {
-                refuse_create()?;
-                k.check(p, &desired)?;
-                k.create(p, desired, &r.idempotency_key, &progress)
-            }
-            pb::Op::Update | pb::Op::Adopt => {
-                k.check(p, &desired)?;
-                let remote = match op {
-                    pb::Op::Adopt => k.adopt(p, &r.remote)?,
-                    _ => r.remote.clone(),
-                };
-                let prior = found(p, &remote)?;
-                // `keep`: as Read answers it, else absent (`Provider::KEEP`).
-                for path in &r.keep {
-                    if let Some(v) = dform_core::provider::get_path(&prior, path) {
-                        dform_core::provider::set_path(&mut desired, path, v.clone());
+        let (remote, obj) = self
+            .with(session, async |p| match op {
+                pb::Op::Create => {
+                    refuse_create()?;
+                    k.check(p, &desired)?;
+                    k.create(p, desired, &r.idempotency_key, &progress).await
+                }
+                pb::Op::Update | pb::Op::Adopt => {
+                    k.check(p, &desired)?;
+                    let remote = match op {
+                        pb::Op::Adopt => k.adopt(p, &r.remote).await?,
+                        _ => r.remote.clone(),
+                    };
+                    let prior = found(p, &remote).await?;
+                    // `keep`: as Read answers it, else absent (`Provider::KEEP`).
+                    for path in &r.keep {
+                        if let Some(v) = dform_core::provider::get_path(&prior, path) {
+                            dform_core::provider::set_path(&mut desired, path, v.clone());
+                        }
                     }
+                    let obj = k.update(p, &remote, prior, desired, &progress).await?;
+                    Ok((remote, obj))
                 }
-                let obj = k.update(p, &remote, prior, desired, &progress)?;
-                Ok((remote, obj))
-            }
-            pb::Op::Delete => {
-                k.delete(p, &r.remote, &progress)?;
-                Ok((String::new(), Json::Null))
-            }
-            pb::Op::Replace => {
-                refuse_create()?;
-                k.check(p, &desired)?;
-                if !r.create_first {
-                    k.delete(p, &r.remote, &progress)?;
+                pb::Op::Delete => {
+                    k.delete(p, &r.remote, &progress).await?;
+                    Ok((String::new(), Json::Null))
                 }
-                k.create(p, desired, &r.idempotency_key, &progress)
-            }
-            pb::Op::Unspecified | pb::Op::EndTick => {
-                Err(Error::Refused("an Apply call with no op".into()))
-            }
-        })?;
+                pb::Op::Replace => {
+                    refuse_create()?;
+                    k.check(p, &desired)?;
+                    if !r.create_first {
+                        k.delete(p, &r.remote, &progress).await?;
+                    }
+                    k.create(p, desired, &r.idempotency_key, &progress).await
+                }
+                pb::Op::Unspecified | pb::Op::EndTick => {
+                    Err(Error::Refused("an Apply call with no op".into()))
+                }
+            })
+            .await?;
         let (attrs, computed) = self.split(&r.r#type, &r.name, obj);
         Ok(pb::ApplyResponse {
             remote,
@@ -681,18 +731,23 @@ impl<P: Provider> Typed<P> {
         })
     }
 
-    fn answer(&self, session: Session, call: Call, progress: backend::Progress) -> Result<Reply> {
+    async fn answer(
+        &self,
+        session: Session,
+        call: Call,
+        progress: backend::Progress<'_>,
+    ) -> Result<Reply> {
         Ok(match call {
             Call::Handshake(_) => Reply::Handshake(self.handshake()),
-            Call::Configure(r) => Reply::Configure(self.configure(session, r)?),
+            Call::Configure(r) => Reply::Configure(self.configure(session, r).await?),
             Call::Schema(r) => Reply::Schema(self.schema_reply(r)?),
-            Call::Query(r) => Reply::Query(self.query(session, r)?),
-            Call::Read(r) => Reply::Read(self.read(session, r)?),
-            Call::Plan(r) => Reply::Plan(self.plan(session, r)?),
-            Call::Apply(r) => Reply::Apply(self.apply(session, r, progress)?),
-            Call::Import(r) => Reply::Import(self.import(session, r)?),
-            Call::Reveal(r) => Reply::Reveal(self.reveal(session, r)?),
-            Call::Health(r) => Reply::Health(self.health(session, r)?),
+            Call::Query(r) => Reply::Query(self.query(session, r).await?),
+            Call::Read(r) => Reply::Read(self.read(session, r).await?),
+            Call::Plan(r) => Reply::Plan(self.plan(session, r).await?),
+            Call::Apply(r) => Reply::Apply(self.apply(session, r, progress).await?),
+            Call::Import(r) => Reply::Import(self.import(session, r).await?),
+            Call::Reveal(r) => Reply::Reveal(self.reveal(session, r).await?),
+            Call::Health(r) => Reply::Health(self.health(session, r).await?),
         })
     }
 
@@ -731,7 +786,7 @@ impl<P: Provider> Typed<P> {
     }
 
     /// Configure `session`: its provider, in place of the one it had.
-    fn configure(
+    async fn configure(
         &self,
         session: Session,
         r: pb::ConfigureRequest,
@@ -743,8 +798,8 @@ impl<P: Provider> Typed<P> {
             return Ok(pb::ConfigureResponse::default());
         }
         let settings = config.get("settings").cloned().unwrap_or_else(|| json!({}));
-        let (p, account) = P::configure(&settings)?;
-        self.sessions.set(session, Mutex::new(p));
+        let (p, account) = P::configure(&settings).await?;
+        self.sessions.set(session, Held::new(p));
         Ok(pb::ConfigureResponse {
             account,
             notes: Vec::new(),
@@ -770,43 +825,47 @@ impl<P: Provider> Typed<P> {
         })
     }
 
-    fn read(&self, session: Session, r: pb::ReadRequest) -> Result<pb::ReadResponse> {
+    async fn read(&self, session: Session, r: pb::ReadRequest) -> Result<pb::ReadResponse> {
         let k = self.kind(&r.r#type)?;
         let prior = r.prior.as_ref().map(wire::from_doc).transpose()?;
-        Ok(
-            match self.with(session, |p| k.read_with_prior(p, &r.remote, prior.as_ref()))? {
-                Some(j) => {
-                    let (attrs, computed) = self.split(&r.r#type, &r.name, j);
-                    pb::ReadResponse {
-                        found: true,
-                        attrs: Some(wire::doc(&attrs)),
-                        computed: Some(wire::doc(&computed)),
-                    }
-                }
-                None => pb::ReadResponse::default(),
-            },
-        )
-    }
-
-    fn import(&self, session: Session, r: pb::ImportRequest) -> Result<pb::ImportResponse> {
-        let k = self.kind(&r.r#type)?;
-        Ok(match self.with(session, |p| k.read(p, &r.remote))? {
+        let read = async |p: &P| k.read_with_prior(p, &r.remote, prior.as_ref()).await;
+        Ok(match self.with(session, read).await? {
             Some(j) => {
-                let (attrs, computed) = self.split(&r.r#type, &r.remote, j);
-                pb::ImportResponse {
+                let (attrs, computed) = self.split(&r.r#type, &r.name, j);
+                pb::ReadResponse {
                     found: true,
-                    r#type: r.r#type,
-                    name: r.remote,
                     attrs: Some(wire::doc(&attrs)),
                     computed: Some(wire::doc(&computed)),
                 }
             }
-            None => pb::ImportResponse::default(),
+            None => pb::ReadResponse::default(),
         })
     }
 
+    async fn import(&self, session: Session, r: pb::ImportRequest) -> Result<pb::ImportResponse> {
+        let k = self.kind(&r.r#type)?;
+        Ok(
+            match self
+                .with(session, async |p| k.read(p, &r.remote).await)
+                .await?
+            {
+                Some(j) => {
+                    let (attrs, computed) = self.split(&r.r#type, &r.remote, j);
+                    pb::ImportResponse {
+                        found: true,
+                        r#type: r.r#type,
+                        name: r.remote,
+                        attrs: Some(wire::doc(&attrs)),
+                        computed: Some(wire::doc(&computed)),
+                    }
+                }
+                None => pb::ImportResponse::default(),
+            },
+        )
+    }
+
     /// The engine's call alone, under the deployment's lease.
-    fn reveal(&self, session: Session, r: pb::RevealRequest) -> Result<pb::RevealResponse> {
+    async fn reveal(&self, session: Session, r: pb::RevealRequest) -> Result<pb::RevealResponse> {
         let h = r.held.unwrap_or_default();
         if r.lease.is_empty() {
             return Err(Error::Refused(format!(
@@ -816,14 +875,14 @@ impl<P: Provider> Typed<P> {
             )));
         }
         Ok(pb::RevealResponse {
-            value: self.with(session, |p| p.reveal(&h))?,
+            value: self.with(session, async |p| p.reveal(&h).await).await?,
         })
     }
 
     /// The rows of an extern, each value as the protocol has it. Asked
     /// before the program's settings came, it is not yet: one row, each
     /// answer column an open null, asked again once they have.
-    fn query(&self, session: Session, r: pb::QueryRequest) -> Result<Vec<pb::Row>> {
+    async fn query(&self, session: Session, r: pb::QueryRequest) -> Result<Vec<pb::Row>> {
         let inputs = r
             .inputs
             .iter()
@@ -852,7 +911,9 @@ impl<P: Provider> Typed<P> {
                 .collect();
             return Ok(vec![pb::Row { values }]);
         }
-        let rows = self.with(session, |p| p.query(&r.pred, &inputs))?;
+        let rows = self
+            .with(session, async |p| p.query(&r.pred, &inputs).await)
+            .await?;
         Ok(rows
             .iter()
             .map(|row| pb::Row {
@@ -866,21 +927,21 @@ impl<P: Provider> Typed<P> {
 
     /// Each object's health, as its type's [`Lifecycle::health`] judges
     /// it; `unknown` for one it judges none of.
-    fn health(&self, session: Session, r: pb::HealthRequest) -> Result<pb::HealthResponse> {
-        let answers = r
-            .objects
-            .iter()
-            .map(|o| {
-                let k = self.kind(&o.r#type)?;
-                let judged = match k.answers_health() {
-                    true => self.with(session, |p| k.health(p, &o.remote))?,
-                    false => None,
-                };
-                Ok(judged.unwrap_or_else(|| {
-                    backend::health(pb::HealthState::Unknown, "the provider judges none")
-                }))
-            })
-            .collect::<Result<_>>()?;
+    async fn health(&self, session: Session, r: pb::HealthRequest) -> Result<pb::HealthResponse> {
+        let mut answers = Vec::new();
+        for o in &r.objects {
+            let k = self.kind(&o.r#type)?;
+            let judged = match k.answers_health() {
+                true => {
+                    self.with(session, async |p| k.health(p, &o.remote).await)
+                        .await?
+                }
+                false => None,
+            };
+            answers.push(judged.unwrap_or_else(|| {
+                backend::health(pb::HealthState::Unknown, "the provider judges none")
+            }));
+        }
         Ok(pb::HealthResponse { answers })
     }
 }
@@ -890,19 +951,15 @@ impl<P: Provider> Handler for Typed<P> {
         P::SCHEMES.iter().map(|s| s.to_string()).collect()
     }
 
-    fn read_location(&self, location: &str) -> std::result::Result<Vec<u8>, crate::Failure> {
-        self.read_versioned(location).map(|d| d.bytes)
-    }
-
     /// A read names no session: the provider of the session opened last
     /// reads it. A read before the program has configured the provider
     /// waits on it, as a resource of it would.
-    fn read_versioned(
+    async fn read_versioned(
         &self,
         location: &str,
     ) -> std::result::Result<crate::Document, crate::Failure> {
         match self.sessions.latest() {
-            Some(p) => lock(&p).read(location),
+            Some(p) => p.lock().await.read(location).await,
             None => Err(crate::Failure::NotYet(format!(
                 "{location}: provider {} is not configured yet",
                 P::NAME
@@ -910,20 +967,17 @@ impl<P: Provider> Handler for Typed<P> {
         }
     }
 
-    fn handle(
+    async fn handle(
         &self,
         session: Session,
         call: Call,
-        progress: backend::Progress,
+        progress: backend::Progress<'_>,
     ) -> std::result::Result<Reply, CallError> {
-        self.answer(session, call, progress).map_err(|e| match e {
-            Error::Refused(m) => CallError::Refused(m),
-            Error::MaybeApplied(m) => CallError::MaybeApplied(m),
-        })
+        self.answer(session, call, progress)
+            .await
+            .map_err(|e| match e {
+                Error::Refused(m) => CallError::Refused(m),
+                Error::MaybeApplied(m) => CallError::MaybeApplied(m),
+            })
     }
-}
-
-/// A session's provider, for one call.
-fn lock<P>(p: &Mutex<P>) -> MutexGuard<'_, P> {
-    p.lock().unwrap_or_else(|e| e.into_inner())
 }

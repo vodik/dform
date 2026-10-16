@@ -5,10 +5,10 @@
 //! `message`.
 
 use crate::config::{Auth, Settings};
+use dform_sdk::sync::Mutex;
 use dform_sdk::typed::{Error, Result};
 use dform_sdk::{Request, host};
 use serde_json::{Value as Json, json};
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// A request's body.
@@ -96,23 +96,26 @@ impl Client {
 
     /// The OAuth client's token: the one kept while it is good, else one
     /// minted (`fresh`: always minted, the kept one refused).
-    fn oauth_token(&self, id: &str, secret: &str, fresh: bool) -> Result<String> {
-        let mut kept = self.token.lock().unwrap_or_else(|e| e.into_inner());
+    async fn oauth_token(&self, id: &str, secret: &str, fresh: bool) -> Result<String> {
+        let mut kept = self.token.lock().await;
         if let (false, Some((t, until))) = (fresh, kept.as_ref())
             && Instant::now() < *until
         {
             return Ok(t.clone());
         }
         let url = format!("{}/api/v2/oauth/token", self.settings.base_url);
-        let r = host().http.request(
-            Request::post(url)
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(format!(
-                    "client_id={}&client_secret={}&grant_type=client_credentials",
-                    form(id),
-                    form(secret)
-                )),
-        )?;
+        let r = host()
+            .http
+            .request(
+                Request::post(url)
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(format!(
+                        "client_id={}&client_secret={}&grant_type=client_credentials",
+                        form(id),
+                        form(secret)
+                    )),
+            )
+            .await?;
         let body: Json = serde_json::from_slice(&r.body).unwrap_or(Json::Null);
         if r.status != 200 {
             return Err(Error::Refused(format!(
@@ -141,7 +144,7 @@ impl Client {
     /// is an answer; a 429 or a 5xx is a retryable refusal, a 401 or a
     /// 403 a refusal naming the credential and the scope. The policy
     /// file (`hujson`) is asked for as HuJSON, its body answered as text.
-    pub fn send(
+    pub async fn send(
         &self,
         method: &str,
         path: &str,
@@ -173,13 +176,17 @@ impl Client {
         for fresh in [false, true] {
             let r = match &self.settings.auth {
                 Auth::OAuth { id, secret } => {
-                    let t = self.oauth_token(id, secret, fresh)?;
+                    let t = self.oauth_token(id, secret, fresh).await?;
                     build().header("authorization", &format!("Bearer {t}"))
                 }
                 Auth::ApiKey(k) => build().header("authorization", &format!("Bearer {k}")),
                 Auth::Credential(name) => build().auth(&host().secrets.open(name)?),
             };
-            let r = host().http.request(r).map_err(|e| Error::from(e).at(&at))?;
+            let r = host()
+                .http
+                .request(r)
+                .await
+                .map_err(|e| Error::from(e).at(&at))?;
             let oauth = matches!(self.settings.auth, Auth::OAuth { .. });
             if r.status == 401 && oauth && !fresh {
                 continue;
@@ -216,8 +223,8 @@ impl Client {
     }
 
     /// `GET path`: `None` for a 404.
-    pub fn get(&self, path: &str) -> Result<Option<Answer>> {
-        let a = self.send("GET", path, &Body::None, None, false)?;
+    pub async fn get(&self, path: &str) -> Result<Option<Answer>> {
+        let a = self.send("GET", path, &Body::None, None, false).await?;
         match a.status {
             404 => Ok(None),
             _ => self.expect("GET", path, a).map(Some),
@@ -225,8 +232,8 @@ impl Client {
     }
 
     /// `method path` with `body`, which must succeed.
-    pub fn call(&self, method: &str, path: &str, body: Body) -> Result<Answer> {
-        let a = self.send(method, path, &body, None, false)?;
+    pub async fn call(&self, method: &str, path: &str, body: Body) -> Result<Answer> {
+        let a = self.send(method, path, &body, None, false).await?;
         self.expect(method, path, a)
     }
 

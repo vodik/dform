@@ -30,9 +30,8 @@ impl Handler for Fetches {
     fn handle(&self, _: Session, call: Call, _: Progress) -> Result<Reply, CallError> {
         match call {
             Call::Read(_) => {
-                let r = dform_sdk::host()
-                    .http
-                    .request(dform_sdk::Request::get(URL.get().unwrap()))
+                let get = dform_sdk::Request::get(URL.get().unwrap());
+                let r = dform_sdk::block_on(dform_sdk::host().http.request(get))
                     .map_err(|e| CallError::Refused(e.message))?;
                 Ok(Reply::Read(pb::ReadResponse {
                     found: r.status == 200,

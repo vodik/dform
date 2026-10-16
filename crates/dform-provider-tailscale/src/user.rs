@@ -10,11 +10,12 @@ use serde_json::{Value as Json, json};
 
 pub const USER: &str = "tailscale.user";
 
-pub fn rows(p: &Tailscale, inputs: &[Json]) -> Result<Vec<Vec<Json>>> {
+pub async fn rows(p: &Tailscale, inputs: &[Json]) -> Result<Vec<Vec<Json>>> {
     let tailnet = p.asked(USER, inputs)?;
     let a = p
         .client
-        .call("GET", &p.client.tailnet_path("/users"), Body::None)?;
+        .call("GET", &p.client.tailnet_path("/users"), Body::None)
+        .await?;
     Ok(a.body["users"]
         .as_array()
         .into_iter()

@@ -220,6 +220,55 @@ fn wasi_sockets_needs_its_grant() {
     assert!(admitted.contains("instantiate"), "{admitted}");
 }
 
+/// The SDK's probe (`examples/fetch_at_once`), linked in this process
+/// under `grants`, its compiled code in the tests' cache.
+fn probe() -> dform::plugin::link::Link {
+    use dform::plugin::host::Grants;
+    let probe = built(
+        "examples/fetch_at_once.wasm",
+        "cargo build -p dform-sdk --example fetch_at_once --release --target wasm32-wasip3 \
+         --features component",
+    );
+    // It imports no `wasi:filesystem`, so it needs no grant.
+    dform_host::wasm::compile_cache(wasm_cache());
+    dform_host::wasm::link(std::path::Path::new(&probe), Grants::none("fetch-at-once")).unwrap()
+}
+
+/// Two Reads of the probe's `typ` at once, each fetching one page of a
+/// server that answers only while two requests are open together: each
+/// found when it was answered 200, so both when neither waited for the
+/// other.
+fn two_reads_at_once(typ: &str) -> [bool; 2] {
+    use dform::plugin::backend::Session;
+    use dform::plugin::pb;
+    let pairs = common::answers_in_pairs(std::time::Duration::from_secs(3));
+    let mut link = probe();
+    let tickets = ["a", "b"].map(|page| {
+        link.submit(
+            Session::NONE,
+            pb::ReadRequest {
+                r#type: typ.into(),
+                remote: format!("http://{pairs}/{page}"),
+                name: page.into(),
+                ..Default::default()
+            },
+        )
+    });
+    tickets.map(|t| {
+        let answer = link.wait(t).unwrap();
+        let read: pb::ReadResponse = link.expect("Read", answer).unwrap();
+        read.found
+    })
+}
+
+/// A component's call that awaits the host lets the instance answer its
+/// other calls meanwhile: two Reads, each awaiting one request, have
+/// both requests open together.
+#[test]
+fn a_component_answers_its_other_calls_while_one_awaits_the_host() {
+    assert_eq!(two_reads_at_once("web.one"), [true, true]);
+}
+
 /// One Read of a component sends two requests at once
 /// (`dform_sdk::Http::request_all`): under the async ABI each `send` is a
 /// subtask, the component going on while the host waits, with no thread
@@ -229,18 +278,9 @@ fn wasi_sockets_needs_its_grant() {
 #[test]
 fn a_components_read_keeps_two_requests_in_flight() {
     use dform::plugin::backend::Session;
-    use dform::plugin::host::Grants;
     use dform::plugin::pb;
-    let probe = built(
-        "examples/fetch_at_once.wasm",
-        "cargo build -p dform-sdk --example fetch_at_once --release --target wasm32-wasip3 \
-         --features component",
-    );
     let pairs = common::answers_in_pairs(std::time::Duration::from_secs(3));
-    // It imports no `wasi:filesystem`, so it needs no grant.
-    dform_host::wasm::compile_cache(wasm_cache());
-    let grants = Grants::none("fetch-at-once");
-    let mut link = dform_host::wasm::link(std::path::Path::new(&probe), grants).unwrap();
+    let mut link = probe();
     let from = std::time::Instant::now();
     let read: pb::ReadResponse = link
         .call(
@@ -258,4 +298,14 @@ fn a_components_read_keeps_two_requests_in_flight() {
         "both requests open at once ({:?})",
         from.elapsed()
     );
+}
+
+/// A synchronous handler waiting on the host on its own task
+/// (`dform_sdk::block_on`) holds the instance: its other calls wait for
+/// it (wasmtime 49, wit-bindgen 0.61). The first Read is answered alone
+/// after the server's 3 s; the second is sent only then. What
+/// docs/providers.md says of `--parallel` for a component.
+#[test]
+fn a_component_blocked_on_the_host_holds_its_instance() {
+    assert_eq!(two_reads_at_once("web.blocked"), [false, true]);
 }

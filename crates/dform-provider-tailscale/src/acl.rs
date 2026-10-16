@@ -37,9 +37,9 @@ pub struct Acl {
 }
 
 /// The file the API has: its canonical text and its ETag.
-fn current(p: &Tailscale, at: &str) -> Result<(String, Option<String>)> {
+async fn current(p: &Tailscale, at: &str) -> Result<(String, Option<String>)> {
     let path = p.client.tailnet_path("/acl");
-    let a = p.client.send("GET", &path, &Body::None, None, true)?;
+    let a = p.client.send("GET", &path, &Body::None, None, true).await?;
     let a = p.client.expect("GET", &path, a)?;
     let text = a.body.as_str().unwrap_or_default();
     let policy = hujson::canonical(text)
@@ -48,15 +48,18 @@ fn current(p: &Tailscale, at: &str) -> Result<(String, Option<String>)> {
 }
 
 /// Write `policy` over the file whose ETag is `etag`.
-fn write(p: &Tailscale, at: &str, policy: &str, etag: Option<&str>) -> Result<()> {
+async fn write(p: &Tailscale, at: &str, policy: &str, etag: Option<&str>) -> Result<()> {
     let path = p.client.tailnet_path("/acl");
-    let a = p.client.send(
-        "POST",
-        &path,
-        &Body::HuJson(policy.to_string()),
-        etag,
-        false,
-    )?;
+    let a = p
+        .client
+        .send(
+            "POST",
+            &path,
+            &Body::HuJson(policy.to_string()),
+            etag,
+            false,
+        )
+        .await?;
     match a.status {
         412 => Err(Error::Refused(format!(
             "retryable: {at}: the policy file changed while it was written (an edit in the \
@@ -79,19 +82,24 @@ fn same_tailnet(p: &Tailscale, remote: &str) -> Result<()> {
 }
 
 impl Lifecycle<Tailscale> for Acl {
-    fn read(p: &Tailscale, remote: &str) -> Result<Option<Acl>> {
+    async fn read(p: &Tailscale, remote: &str) -> Result<Option<Acl>> {
         same_tailnet(p, remote)?;
-        let (policy, _) = current(p, &at(TYPE, remote))?;
+        let (policy, _) = current(p, &at(TYPE, remote)).await?;
         Ok(Some(Acl {
             policy,
             tailnet: Some(remote.to_string()),
         }))
     }
 
-    fn create(p: &Tailscale, desired: Acl, _: &str, progress: &Progress) -> Result<(String, Acl)> {
+    async fn create(
+        p: &Tailscale,
+        desired: Acl,
+        _: &str,
+        progress: &Progress<'_>,
+    ) -> Result<(String, Acl)> {
         let tailnet = p.client.tailnet().to_string();
         let at = at(TYPE, &tailnet);
-        let (now, etag) = current(p, &at)?;
+        let (now, etag) = current(p, &at).await?;
         if now != desired.policy && now != DEFAULT {
             return Err(Error::Refused(format!(
                 "{at}: the tailnet's policy file is not its default: someone wrote it. Adopt it \
@@ -100,7 +108,7 @@ impl Lifecycle<Tailscale> for Acl {
             )));
         }
         progress.message("writing the policy file");
-        write(p, &at, &desired.policy, etag.as_deref())?;
+        write(p, &at, &desired.policy, etag.as_deref()).await?;
         Ok((
             tailnet.clone(),
             Acl {
@@ -110,18 +118,18 @@ impl Lifecycle<Tailscale> for Acl {
         ))
     }
 
-    fn update(
+    async fn update(
         p: &Tailscale,
         remote: &str,
         _: Acl,
         desired: Acl,
-        progress: &Progress,
+        progress: &Progress<'_>,
     ) -> Result<Acl> {
         same_tailnet(p, remote)?;
         let at = at(TYPE, remote);
-        let (_, etag) = current(p, &at)?;
+        let (_, etag) = current(p, &at).await?;
         progress.message("writing the policy file");
-        write(p, &at, &desired.policy, etag.as_deref())?;
+        write(p, &at, &desired.policy, etag.as_deref()).await?;
         Ok(Acl {
             tailnet: Some(remote.to_string()),
             ..desired
@@ -129,11 +137,11 @@ impl Lifecycle<Tailscale> for Acl {
     }
 
     /// The file stays: the tailnet's default is written in its place.
-    fn delete(p: &Tailscale, remote: &str, progress: &Progress) -> Result<()> {
+    async fn delete(p: &Tailscale, remote: &str, progress: &Progress<'_>) -> Result<()> {
         same_tailnet(p, remote)?;
         let at = at(TYPE, remote);
-        let (_, etag) = current(p, &at)?;
-        write(p, &at, DEFAULT, etag.as_deref())?;
+        let (_, etag) = current(p, &at).await?;
+        write(p, &at, DEFAULT, etag.as_deref()).await?;
         progress.note(&format!(
             "{at}: the tailnet's policy file is its default again (every device reaches every \
              other); a tailnet always has one"

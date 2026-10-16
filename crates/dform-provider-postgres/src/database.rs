@@ -115,15 +115,15 @@ fn find(p: &Postgres, name: &str) -> Result<Option<(Database, Option<String>)>> 
 }
 
 impl Lifecycle<Postgres> for Database {
-    fn read(p: &Postgres, remote: &str) -> Result<Option<Database>> {
+    async fn read(p: &Postgres, remote: &str) -> Result<Option<Database>> {
         Ok(find(p, remote)?.map(|(d, _)| d))
     }
 
-    fn create(
+    async fn create(
         p: &Postgres,
         desired: Database,
         key: &str,
-        progress: &Progress,
+        progress: &Progress<'_>,
     ) -> Result<(String, Database)> {
         let name = desired.name.clone();
         let at = at(&name);
@@ -169,12 +169,12 @@ impl Lifecycle<Postgres> for Database {
         Ok((name, made.0))
     }
 
-    fn update(
+    async fn update(
         p: &Postgres,
         remote: &str,
         prior: Database,
         desired: Database,
-        _: &Progress,
+        _: &Progress<'_>,
     ) -> Result<Database> {
         let at = at(remote);
         if let Some(o) = &desired.owner
@@ -193,7 +193,7 @@ impl Lifecycle<Postgres> for Database {
             .ok_or_else(|| Error::Refused(format!("{at}: gone during its update")))
     }
 
-    fn delete(p: &Postgres, remote: &str, _: &Progress) -> Result<()> {
+    async fn delete(p: &Postgres, remote: &str, _: &Progress<'_>) -> Result<()> {
         let at = at(remote);
         if remote == p.pool.settings().database {
             return Err(Error::Refused(format!(

@@ -3,6 +3,7 @@
 
 use dform_core::plugin::backend::{Call, Handler, Reply, Session, silent};
 use dform_core::plugin::{pb, wire};
+use dform_sdk::native::Blocking;
 use dform_sdk::typed::Result;
 use dform_sdk::{Lifecycle, Progress, Provider, Resource, Typed};
 use serde::{Deserialize, Serialize};
@@ -17,7 +18,7 @@ struct Acme {
 
 impl Provider for Acme {
     const NAME: &'static str = "acme";
-    fn configure(settings: &Json) -> Result<(Acme, Option<String>)> {
+    async fn configure(settings: &Json) -> Result<(Acme, Option<String>)> {
         Ok((
             Acme {
                 buckets: Mutex::new(BTreeMap::new()),
@@ -40,14 +41,14 @@ struct Bucket {
 }
 
 impl Lifecycle<Acme> for Bucket {
-    fn read(p: &Acme, remote: &str) -> Result<Option<Bucket>> {
+    async fn read(p: &Acme, remote: &str) -> Result<Option<Bucket>> {
         Ok(p.buckets.lock().unwrap().get(remote).cloned())
     }
-    fn create(
+    async fn create(
         p: &Acme,
         mut desired: Bucket,
         _key: &str,
-        progress: &Progress,
+        progress: &Progress<'_>,
     ) -> Result<(String, Bucket)> {
         // As an API answers a create: there, not ready, then ready.
         progress.status("PROVISIONING");
@@ -61,12 +62,12 @@ impl Lifecycle<Acme> for Bucket {
             .insert(id.clone(), desired.clone());
         Ok((id, desired))
     }
-    fn update(
+    async fn update(
         p: &Acme,
         remote: &str,
         prior: Bucket,
         mut desired: Bucket,
-        _: &Progress,
+        _: &Progress<'_>,
     ) -> Result<Bucket> {
         desired.id = prior.id;
         p.buckets
@@ -81,24 +82,24 @@ impl Lifecycle<Acme> for Bucket {
         let (was, now) = (tier(prior)?, tier(desired)?);
         (was != now).then(|| format!("tier {now} is not {was}; a bucket stays in its tier"))
     }
-    fn delete(p: &Acme, remote: &str, _: &Progress) -> Result<()> {
+    async fn delete(p: &Acme, remote: &str, _: &Progress<'_>) -> Result<()> {
         p.buckets.lock().unwrap().remove(remote);
         Ok(())
     }
 }
 
-fn provider() -> Typed<Acme> {
-    Typed::new().resource::<Bucket>()
+fn provider() -> Blocking<Typed<Acme>> {
+    Blocking(Typed::new().resource::<Bucket>())
 }
 
-fn call<R: TryFrom<Reply, Error = Reply>>(h: &Typed<Acme>, c: impl Into<Call>) -> R {
+fn call<R: TryFrom<Reply, Error = Reply>>(h: &Blocking<Typed<Acme>>, c: impl Into<Call>) -> R {
     R::try_from(h.handle(Session(1), c.into(), &silent).unwrap()).unwrap()
 }
 
 #[test]
 fn the_derive_gives_the_schema() {
     let h = provider();
-    let facts = h.facts();
+    let facts = h.0.facts();
     assert!(
         facts.contains("type_provider(\"acme.bucket\", \"acme\")"),
         "{facts}"
@@ -316,7 +317,7 @@ struct Key {
 }
 
 impl Lifecycle<Acme> for Key {
-    fn read(_: &Acme, remote: &str) -> Result<Option<Key>> {
+    async fn read(_: &Acme, remote: &str) -> Result<Option<Key>> {
         Ok(Some(Key {
             name: remote.to_string(),
             secret: None,
@@ -324,14 +325,14 @@ impl Lifecycle<Acme> for Key {
             id: Some(remote.to_string()),
         }))
     }
-    fn create(p: &Acme, desired: Key, _: &str, _: &Progress) -> Result<(String, Key)> {
-        let k = Key::read(p, &desired.name)?.unwrap();
+    async fn create(p: &Acme, desired: Key, _: &str, _: &Progress<'_>) -> Result<(String, Key)> {
+        let k = Key::read(p, &desired.name).await?.unwrap();
         Ok((desired.name, k))
     }
-    fn update(p: &Acme, remote: &str, _: Key, _: Key, _: &Progress) -> Result<Key> {
-        Ok(Key::read(p, remote)?.unwrap())
+    async fn update(p: &Acme, remote: &str, _: Key, _: Key, _: &Progress<'_>) -> Result<Key> {
+        Ok(Key::read(p, remote).await?.unwrap())
     }
-    fn delete(_: &Acme, _: &str, _: &Progress) -> Result<()> {
+    async fn delete(_: &Acme, _: &str, _: &Progress<'_>) -> Result<()> {
         Ok(())
     }
     fn check(_: &Acme, desired: &Json) -> Result<()> {
@@ -351,16 +352,16 @@ impl Lifecycle<Acme> for Key {
 /// program writes none, never the engine's own keys.
 #[test]
 fn write_only_optional_computed_examples_and_check() {
-    let h = Typed::<Acme>::new().resource::<Key>().example::<Key>(
+    let h = Blocking(Typed::<Acme>::new().resource::<Key>().example::<Key>(
         json!({"name": "a"}),
         json!({"name": "a", "size": 4096}),
         "name",
-    );
+    ));
     assert!(
-        h.facts()
+        h.0.facts()
             .contains(r#"type_attr("acme.key", "secret", "string", ["sensitive", "write_only"])"#),
         "{}",
-        h.facts()
+        h.0.facts()
     );
     let s: pb::SchemaResponse = call(&h, pb::SchemaRequest::default());
     assert_eq!(s.examples.len(), 1);
@@ -417,12 +418,12 @@ fn configure_takes_the_programs_settings_only() {
     static SEEN: Mutex<Vec<Json>> = Mutex::new(Vec::new());
     impl Provider for Seen {
         const NAME: &'static str = "seen";
-        fn configure(settings: &Json) -> Result<(Seen, Option<String>)> {
+        async fn configure(settings: &Json) -> Result<(Seen, Option<String>)> {
             SEEN.lock().unwrap().push(settings.clone());
             Ok((Seen, None))
         }
     }
-    let h = Typed::<Seen>::new();
+    let h = Blocking(Typed::<Seen>::new());
     for config in [
         json!({"world": "/w.json", "stack": "s"}),
         json!({"world": "/w.json", "settings": {"region": "r"}}),
@@ -455,12 +456,12 @@ fn a_credential_setting_is_configured_as_its_name() {
     static SEEN: Mutex<Vec<Json>> = Mutex::new(Vec::new());
     impl Provider for Tok {
         const NAME: &'static str = "tok";
-        fn configure(settings: &Json) -> Result<(Tok, Option<String>)> {
+        async fn configure(settings: &Json) -> Result<(Tok, Option<String>)> {
             SEEN.lock().unwrap().push(settings.clone());
             Ok((Tok, None))
         }
     }
-    let h = Typed::<Tok>::new().credential("token", "bearer");
+    let h = Blocking(Typed::<Tok>::new().credential("token", "bearer"));
     let mut link = Link::start("tok", Box::new(Queue::new(h, Order::Clock, false))).unwrap();
     let config = json!({"settings": {"token": "t0ken-value", "region": "r"}});
     link.configure(Session::NONE, wire::doc(&config)).unwrap();
@@ -484,7 +485,7 @@ fn keep_is_the_providers_promise() {
     impl Provider for Vault {
         const NAME: &'static str = "vault";
         const KEEP: bool = true;
-        fn configure(_: &Json) -> Result<(Vault, Option<String>)> {
+        async fn configure(_: &Json) -> Result<(Vault, Option<String>)> {
             Ok((Vault, None))
         }
     }
@@ -500,26 +501,31 @@ fn keep_is_the_providers_promise() {
         secret: Option<String>,
     }
     impl Lifecycle<Vault> for Token {
-        fn read(_: &Vault, remote: &str) -> Result<Option<Token>> {
+        async fn read(_: &Vault, remote: &str) -> Result<Option<Token>> {
             // The API never answers the secret.
             Ok(TOKENS.lock().unwrap().get(remote).map(|t| Token {
                 secret: None,
                 ..t.clone()
             }))
         }
-        fn create(_: &Vault, desired: Token, _: &str, _: &Progress) -> Result<(String, Token)> {
+        async fn create(
+            _: &Vault,
+            desired: Token,
+            _: &str,
+            _: &Progress<'_>,
+        ) -> Result<(String, Token)> {
             TOKENS
                 .lock()
                 .unwrap()
                 .insert(desired.name.clone(), desired.clone());
             Ok((desired.name.clone(), desired))
         }
-        fn update(
+        async fn update(
             _: &Vault,
             remote: &str,
             _: Token,
             desired: Token,
-            _: &Progress,
+            _: &Progress<'_>,
         ) -> Result<Token> {
             // Only what `desired` holds is sent.
             let mut all = TOKENS.lock().unwrap();
@@ -530,11 +536,11 @@ fn keep_is_the_providers_promise() {
             }
             Ok(t.clone())
         }
-        fn delete(_: &Vault, _: &str, _: &Progress) -> Result<()> {
+        async fn delete(_: &Vault, _: &str, _: &Progress<'_>) -> Result<()> {
             Ok(())
         }
     }
-    let h = Typed::<Vault>::new().resource::<Token>();
+    let h = Blocking(Typed::<Vault>::new().resource::<Token>());
     let hs: pb::HandshakeResponse = call_any(
         &h,
         pb::HandshakeRequest {
@@ -599,7 +605,7 @@ fn keep_is_the_providers_promise() {
         "{e}"
     );
     fn call_any<P: Provider, R: TryFrom<Reply, Error = Reply>>(
-        h: &Typed<P>,
+        h: &Blocking<Typed<P>>,
         c: impl Into<Call>,
     ) -> R {
         R::try_from(h.handle(Session(1), c.into(), &silent).unwrap()).unwrap()
@@ -634,21 +640,21 @@ struct Queue {
 }
 
 impl Lifecycle<Acme> for Queue {
-    fn read(_: &Acme, remote: &str) -> Result<Option<Queue>> {
+    async fn read(_: &Acme, remote: &str) -> Result<Option<Queue>> {
         Ok(Some(Queue {
             name: remote.into(),
         }))
     }
-    fn create(_: &Acme, d: Queue, _: &str, _: &Progress) -> Result<(String, Queue)> {
+    async fn create(_: &Acme, d: Queue, _: &str, _: &Progress<'_>) -> Result<(String, Queue)> {
         Ok((d.name.clone(), d))
     }
-    fn update(_: &Acme, _: &str, _: Queue, d: Queue, _: &Progress) -> Result<Queue> {
+    async fn update(_: &Acme, _: &str, _: Queue, d: Queue, _: &Progress<'_>) -> Result<Queue> {
         Ok(d)
     }
-    fn delete(_: &Acme, _: &str, _: &Progress) -> Result<()> {
+    async fn delete(_: &Acme, _: &str, _: &Progress<'_>) -> Result<()> {
         Ok(())
     }
-    fn health(_: &Acme, remote: &str) -> Result<Option<pb::Health>> {
+    async fn health(_: &Acme, remote: &str) -> Result<Option<pb::Health>> {
         Ok(Some(dform_sdk::health(
             pb::HealthState::Degraded,
             format!("{remote}: 9000 messages behind"),
@@ -661,9 +667,11 @@ impl Lifecycle<Acme> for Queue {
 /// and vault declare none).
 #[test]
 fn a_type_that_declares_health_answers_it() {
-    let h = Typed::<Acme>::new()
-        .resource::<Bucket>()
-        .resource::<Queue>();
+    let h = Blocking(
+        Typed::<Acme>::new()
+            .resource::<Bucket>()
+            .resource::<Queue>(),
+    );
     let hs: pb::HandshakeResponse = call(
         &h,
         pb::HandshakeRequest {
@@ -722,7 +730,7 @@ struct Issuer {
 
 impl Provider for Issuer {
     const NAME: &'static str = "issuer";
-    fn configure(_: &Json) -> Result<(Issuer, Option<String>)> {
+    async fn configure(_: &Json) -> Result<(Issuer, Option<String>)> {
         Ok((
             Issuer {
                 issued: Mutex::new(BTreeMap::new()),
@@ -730,7 +738,7 @@ impl Provider for Issuer {
             None,
         ))
     }
-    fn reveal(&self, held: &pb::Held) -> Result<Vec<u8>> {
+    async fn reveal(&self, held: &pb::Held) -> Result<Vec<u8>> {
         match self.issued.lock().unwrap().get(&held.remote) {
             Some(v) => Ok(v.clone().into_bytes()),
             None => Err(dform_sdk::typed::Error::Refused("not issued here".into())),
@@ -752,14 +760,14 @@ struct Token {
 }
 
 impl Lifecycle<Issuer> for Token {
-    fn read(_: &Issuer, remote: &str) -> Result<Option<Token>> {
+    async fn read(_: &Issuer, remote: &str) -> Result<Option<Token>> {
         Ok(Some(Token {
             name: remote.into(),
             id: Some(remote.into()),
             value: Some(String::new()),
         }))
     }
-    fn create(p: &Issuer, d: Token, _: &str, _: &Progress) -> Result<(String, Token)> {
+    async fn create(p: &Issuer, d: Token, _: &str, _: &Progress<'_>) -> Result<(String, Token)> {
         let v = format!("secret-of-{}", d.name);
         p.issued.lock().unwrap().insert(d.name.clone(), v.clone());
         let t = Token {
@@ -769,10 +777,16 @@ impl Lifecycle<Issuer> for Token {
         };
         Ok((t.name.clone(), t))
     }
-    fn update(_: &Issuer, _: &str, prior: Token, _: Token, _: &Progress) -> Result<Token> {
+    async fn update(
+        _: &Issuer,
+        _: &str,
+        prior: Token,
+        _: Token,
+        _: &Progress<'_>,
+    ) -> Result<Token> {
         Ok(prior)
     }
-    fn delete(_: &Issuer, _: &str, _: &Progress) -> Result<()> {
+    async fn delete(_: &Issuer, _: &str, _: &Progress<'_>) -> Result<()> {
         Ok(())
     }
 }
@@ -781,7 +795,7 @@ impl Lifecycle<Issuer> for Token {
 /// in it; its bytes are revealed to the engine's call alone (a lease).
 #[test]
 fn a_sensitive_computed_value_is_held_and_revealed() {
-    let h = Typed::<Issuer>::new().resource::<Token>();
+    let h = Blocking(Typed::<Issuer>::new().resource::<Token>());
     let _: pb::ConfigureResponse = call_on(&h, pb::ConfigureRequest::default());
     let a: pb::ApplyResponse = call_on(
         &h,
@@ -832,7 +846,10 @@ fn a_sensitive_computed_value_is_held_and_revealed() {
     assert_eq!(r.value, b"secret-of-t1");
 }
 
-fn call_on<P: Provider, R: TryFrom<Reply, Error = Reply>>(h: &Typed<P>, c: impl Into<Call>) -> R {
+fn call_on<P: Provider, R: TryFrom<Reply, Error = Reply>>(
+    h: &Blocking<Typed<P>>,
+    c: impl Into<Call>,
+) -> R {
     R::try_from(h.handle(Session(1), c.into(), &silent).unwrap()).unwrap()
 }
 
@@ -852,28 +869,32 @@ struct Mount {
 const PORTS: [&str; 1] = ["p-1"];
 
 impl Lifecycle<Acme> for Mount {
-    fn read(_: &Acme, remote: &str) -> Result<Option<Mount>> {
+    async fn read(_: &Acme, remote: &str) -> Result<Option<Mount>> {
         Ok(Some(Mount {
             name: remote.into(),
             port: None,
         }))
     }
-    fn read_with_prior(p: &Acme, remote: &str, prior: Option<&Json>) -> Result<Option<Mount>> {
+    async fn read_with_prior(
+        p: &Acme,
+        remote: &str,
+        prior: Option<&Json>,
+    ) -> Result<Option<Mount>> {
         let port = prior
             .and_then(|c| c["port"].as_str())
             .filter(|id| PORTS.contains(id));
-        Ok(Mount::read(p, remote)?.map(|m| Mount {
+        Ok(Mount::read(p, remote).await?.map(|m| Mount {
             port: port.map(String::from),
             ..m
         }))
     }
-    fn create(_: &Acme, d: Mount, _: &str, _: &Progress) -> Result<(String, Mount)> {
+    async fn create(_: &Acme, d: Mount, _: &str, _: &Progress<'_>) -> Result<(String, Mount)> {
         Ok((d.name.clone(), d))
     }
-    fn update(_: &Acme, _: &str, _: Mount, d: Mount, _: &Progress) -> Result<Mount> {
+    async fn update(_: &Acme, _: &str, _: Mount, d: Mount, _: &Progress<'_>) -> Result<Mount> {
         Ok(d)
     }
-    fn delete(_: &Acme, _: &str, _: &Progress) -> Result<()> {
+    async fn delete(_: &Acme, _: &str, _: &Progress<'_>) -> Result<()> {
         Ok(())
     }
 }
@@ -884,9 +905,11 @@ impl Lifecycle<Acme> for Mount {
 /// without them.
 #[test]
 fn read_is_told_the_prior_computed_values() {
-    let h = Typed::<Acme>::new()
-        .resource::<Bucket>()
-        .resource::<Mount>();
+    let h = Blocking(
+        Typed::<Acme>::new()
+            .resource::<Bucket>()
+            .resource::<Mount>(),
+    );
     let _: pb::ConfigureResponse = call(
         &h,
         pb::ConfigureRequest {

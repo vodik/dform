@@ -12,9 +12,15 @@
 //!   named in its environment (`DFORM_HOST`);
 //! * as a component (`cargo build --target wasm32-wasip3 --features
 //!   component`, the crate a `cdylib`): dform's wasm host runs it, and the
-//!   host's interfaces are its imports, those that wait on the world
-//!   async (the component model's async ABI): [`Http::request_all`] keeps
-//!   several requests in flight from one call with no thread.
+//!   host's interfaces are its imports (the component model's async ABI).
+//!
+//! The host's calls that wait on the world ([`Http::request`],
+//! [`Io::read`], [`Ssh::exec`], [`sleep`]) are `async`: a [`Handler`]
+//! awaits them, one at a time as straight-line code (request, parse,
+//! request) or several at once with a join ([`join`], [`join_all`]).
+//! Natively each is a thread of its own while it waits; in a component
+//! each is a subtask of the host's import, and the instance answers its
+//! other calls meanwhile.
 //!
 //! A provider is a worker and dform its runtime (docs/providers.md, "The
 //! host does the transport"): the host owns the connections, the pace,
@@ -24,13 +30,13 @@
 //! than retrying them.
 //!
 //! [`provider!`] is the entry point for either. A provider is a
-//! [`Handler`] (the protocol's calls, answered at once as dform sends
-//! them); [`typed::Typed`] makes one from Rust types: `#[derive(Resource)]`
-//! for the schema, [`typed::Lifecycle`] for read, create, update and
-//! delete, plan derived from the schema. docs/providers.md is the guide.
+//! [`Handler`] (the protocol's calls, answered as dform sends them);
+//! [`typed::Typed`] makes one from Rust types: `#[derive(Resource)]` for
+//! the schema, [`typed::Lifecycle`] for read, create, update and delete,
+//! plan derived from the schema. docs/providers.md is the guide.
 
 pub use dform_core::files::Document;
-pub use dform_core::plugin::backend::{CallError, Handler, health};
+pub use dform_core::plugin::backend::{CallError, health};
 pub use dform_core::plugin::host::{
     Calls, Class, Endpoint, Error, Failure, GitFile, HttpResponse as Response, Level, Run, Target,
 };
@@ -46,9 +52,159 @@ pub mod native;
 #[cfg(all(target_family = "wasm", feature = "component"))]
 pub mod component;
 
+/// Several of the host's calls at once (any futures: requests, reads,
+/// execs, or a chain of each), their answers together: `join(a, b)`,
+/// `join3`, and `join_all` for any number, in their order.
+pub use futures::future::{join, join_all, join3};
+
+/// A lock a provider holds across the host's calls (a token being
+/// minted, a list being asked once): the waiting call awaits it. Never
+/// `std::sync::Mutex` across an `.await`: in a component the instance's
+/// calls take turns on one thread, and one waiting on a lock another
+/// holds never lets that other finish.
+pub mod sync {
+    pub use futures::lock::{Mutex, MutexGuard};
+}
+
+use dform_core::plugin::backend::{self, Call, Reply, Session, Within};
 use dform_core::plugin::host::{Handle, HttpRequest};
+use std::future::Future;
 use std::sync::OnceLock;
 use std::time::Duration;
+
+/// A provider: the protocol's calls, each answered as dform sends it,
+/// several at once (a session's, and several sessions'). Its answers may
+/// await the host ([`host()`]): natively each call is served on a thread
+/// of its own, and in a component the instance answers its other calls
+/// while one awaits.
+///
+/// A [`backend::Handler`] (a synchronous one, which awaits nothing) is
+/// one as it is.
+#[allow(async_fn_in_trait)] // a call's future is polled where it is served, never sent
+pub trait Handler: Send + Sync + 'static {
+    /// Answer `call`, made in `session`, saying how it goes on `progress`
+    /// while it runs. A Configure's session is the one it configures (a new
+    /// one when it opens one: its answer names it, whatever the handler
+    /// answers); a Handshake's is none.
+    async fn handle(
+        &self,
+        session: Session,
+        call: Call,
+        progress: backend::Progress<'_>,
+    ) -> Result<Reply, CallError>;
+
+    /// Whether the provider is gone (it crashed).
+    fn is_dead(&self) -> bool {
+        false
+    }
+
+    /// The location schemes it reads (R-153): its manifest declares them,
+    /// and dform routes a read of one to [`Handler::read_versioned`].
+    fn schemes(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// The document at `location`, of a scheme it declares, with its
+    /// version when the source keeps versions (R-172); not there yet is
+    /// `Failure::NotYet`.
+    async fn read_versioned(&self, location: &str) -> Result<Document, Failure> {
+        Err(Error::fatal(format!("{location}: this provider reads no location")).into())
+    }
+}
+
+impl<H: backend::Handler + Send + Sync + 'static> Handler for H {
+    async fn handle(
+        &self,
+        session: Session,
+        call: Call,
+        progress: backend::Progress<'_>,
+    ) -> Result<Reply, CallError> {
+        backend::Handler::handle(self, session, call, progress)
+    }
+
+    fn is_dead(&self) -> bool {
+        backend::Handler::is_dead(self)
+    }
+
+    fn schemes(&self) -> Vec<String> {
+        backend::Handler::schemes(self)
+    }
+
+    async fn read_versioned(&self, location: &str) -> Result<Document, Failure> {
+        backend::Handler::read_versioned(self, location)
+    }
+}
+
+/// Wait on `future` on this thread: for code that is not async (a
+/// synchronous [`backend::Handler`]) calling the host. Natively the
+/// thread parks until it is answered; in a component the instance waits
+/// with it, its other calls too (docs/providers.md).
+pub fn block_on<T: 'static>(future: impl Future<Output = T>) -> T {
+    #[cfg(not(target_family = "wasm"))]
+    return native::block_on(future);
+    #[cfg(all(target_family = "wasm", feature = "component"))]
+    return wit_bindgen::block_on(future);
+    #[cfg(all(target_family = "wasm", not(feature = "component")))]
+    absent::block_on(future)
+}
+
+/// Wait `d`: a poll's interval, a backoff. Natively on a thread of its
+/// own; in a component `wasi:clocks`' `wait-for`, the instance answering
+/// its other calls meanwhile.
+pub async fn sleep(d: Duration) {
+    waits::sleep(d).await
+}
+
+// How this build waits on the host: natively a thread per call, in a
+// component the import's subtask, built for wasm without the `component`
+// feature at once (there is no host to wait on).
+#[cfg(not(target_family = "wasm"))]
+use native::waits;
+
+#[cfg(all(target_family = "wasm", feature = "component"))]
+use component::waits;
+
+#[cfg(all(target_family = "wasm", not(feature = "component")))]
+use absent as waits;
+
+/// Built for wasm without the `component` feature: no host, every call
+/// answered at once with why.
+#[cfg(all(target_family = "wasm", not(feature = "component")))]
+mod absent {
+    use super::*;
+
+    pub fn block_on<T>(future: impl Future<Output = T>) -> T {
+        let mut future = std::pin::pin!(future);
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        loop {
+            if let std::task::Poll::Ready(t) = future.as_mut().poll(&mut cx) {
+                return t;
+            }
+        }
+    }
+
+    pub async fn send(
+        req: HttpRequest,
+        auth: Option<Handle>,
+        via: Option<Handle>,
+    ) -> Result<Response, Error> {
+        calls().send(req, auth, via)
+    }
+
+    pub async fn io_read(location: String) -> Result<Vec<u8>, Failure> {
+        calls().io_read(&location)
+    }
+
+    pub async fn exec(
+        on: Target,
+        argv: Vec<String>,
+        stdin: Option<Vec<u8>>,
+    ) -> Result<Run, Failure> {
+        calls().exec(&on, &argv, stdin.as_deref())
+    }
+
+    pub async fn sleep(_: Duration) {}
+}
 
 /// The host this provider runs under.
 static CALLS: OnceLock<Box<dyn Calls>> = OnceLock::new();
@@ -298,57 +454,20 @@ impl Http {
     /// Send `req`; a status the server answered is a response, not an
     /// error. It names the call it is sent for (`backend::Within`): its
     /// session, so dform paces each session's buckets apart, and its trace
-    /// number, so the request's span is the call's child (a thread of the
-    /// provider's own names neither, unless it took the call along).
-    pub fn request(&self, req: Request) -> Result<Response, Error> {
-        let within = dform_core::plugin::backend::Within::here();
+    /// number, so the request's span is the call's child. Several are sent
+    /// at once by awaiting them together ([`join_all`]): the host's window
+    /// paces them, so a provider asks for what it needs (every document
+    /// of an index, every object of a list) and dform decides how many go
+    /// together.
+    pub async fn request(&self, req: Request) -> Result<Response, Error> {
+        let within = Within::here();
         let http = HttpRequest {
             session: within.session,
             call: within.call,
             ..req.req
         };
-        calls().send(http, req.auth, req.via)
+        waits::send(http, req.auth, req.via).await
     }
-
-    /// Send each of `reqs` at once; their answers in their order. Natively
-    /// each on a thread of its own ([`at_once`]); in a component each a
-    /// subtask of the host's `send`, all in flight from the one call with
-    /// no thread. Either way the host's window paces them: a provider
-    /// submits what it needs (every document of an index, every object
-    /// of a list) and lets dform decide how many go together.
-    pub fn request_all(
-        &self,
-        reqs: impl IntoIterator<Item = Request>,
-    ) -> Vec<Result<Response, Error>> {
-        send_all(self, reqs.into_iter().collect())
-    }
-}
-
-#[cfg(not(target_family = "wasm"))]
-fn send_all(http: &Http, reqs: Vec<Request>) -> Vec<Result<Response, Error>> {
-    at_once(reqs.into_iter().map(|r| move || http.request(r)))
-}
-
-#[cfg(all(target_family = "wasm", feature = "component"))]
-fn send_all(_: &Http, reqs: Vec<Request>) -> Vec<Result<Response, Error>> {
-    let within = dform_core::plugin::backend::Within::here();
-    component::send_all(
-        reqs.into_iter()
-            .map(|r| {
-                let http = HttpRequest {
-                    session: within.session,
-                    call: within.call,
-                    ..r.req
-                };
-                (http, r.auth, r.via)
-            })
-            .collect(),
-    )
-}
-
-#[cfg(all(target_family = "wasm", not(feature = "component")))]
-fn send_all(http: &Http, reqs: Vec<Request>) -> Vec<Result<Response, Error>> {
-    reqs.into_iter().map(|r| http.request(r)).collect()
 }
 
 /// Each of `asks` at once, on a thread of its own in the call this thread
@@ -360,7 +479,7 @@ where
     F: FnOnce() -> T + Send,
     T: Send,
 {
-    let within = dform_core::plugin::backend::Within::here();
+    let within = Within::here();
     std::thread::scope(|scope| {
         let threads: Vec<_> = asks
             .into_iter()
@@ -390,8 +509,8 @@ pub struct Io(());
 
 impl Io {
     /// The bytes at `location`; not there yet is `Failure::NotYet`.
-    pub fn read(&self, location: &str) -> Result<Vec<u8>, Failure> {
-        calls().io_read(location)
+    pub async fn read(&self, location: &str) -> Result<Vec<u8>, Failure> {
+        waits::io_read(location.to_string()).await
     }
 }
 
@@ -401,19 +520,23 @@ pub struct Ssh(());
 
 impl Ssh {
     /// Run `argv` (no shell) on `on`.
-    pub fn exec(&self, on: &Target, argv: &[&str]) -> Result<Run, Failure> {
-        let argv: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
-        calls().exec(on, &argv, None)
+    pub async fn exec(&self, on: &Target, argv: &[&str]) -> Result<Run, Failure> {
+        waits::exec(
+            on.clone(),
+            argv.iter().map(|s| s.to_string()).collect(),
+            None,
+        )
+        .await
     }
 
-    pub fn exec_with_stdin(
+    pub async fn exec_with_stdin(
         &self,
         on: &Target,
         argv: &[&str],
         stdin: &[u8],
     ) -> Result<Run, Failure> {
-        let argv: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
-        calls().exec(on, &argv, Some(stdin))
+        let argv = argv.iter().map(|s| s.to_string()).collect();
+        waits::exec(on.clone(), argv, Some(stdin.to_vec())).await
     }
 
     pub fn write(&self, on: &Target, path: &str, data: &[u8], mode: u32) -> Result<(), Error> {
@@ -502,7 +625,7 @@ macro_rules! provider {
             use super::*;
             use $crate::component::bindings::dform::provider::types as t;
 
-            fn make() -> ::std::boxed::Box<dyn $crate::Handler + ::std::marker::Send + ::std::marker::Sync> {
+            fn make() -> ::std::boxed::Box<dyn $crate::component::Serve> {
                 ::std::boxed::Box::new($make)
             }
 

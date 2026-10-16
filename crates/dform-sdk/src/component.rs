@@ -1,31 +1,36 @@
 //! A provider built as a component (`--target wasm32-wasip3 --features
 //! component`): `dform:host/hosted-provider`'s bindings, its exports
 //! answered by the provider's [`Handler`] and its imports the host's
-//! calls ([`Imports`]).
+//! calls: those that wait on the world as the async ABI's subtasks
+//! ([`waits`]), the rest as [`Imports`].
 //!
 //! What the instance keeps (the handler, its sessions, what it opened) is
 //! in statics, never `thread_local!`s: on wasip3 every call of an export
-//! is a thread of its own (the component model's cooperative threads),
-//! each with its own thread-locals, so a thread-local is the call's. The
-//! threads take turns where one waits on the host, so nothing is held
-//! locked across an import.
+//! is a task of its own, each with its own thread-locals, so a
+//! thread-local is the call's. The tasks take turns where one awaits the
+//! host, so nothing is held locked across an import.
 //!
-//! The exports are async (the component model's async ABI, R-130): Apply
-//! answers at once with a stream of events and a future of its result,
-//! and runs the handler in a task of its own. The handler is synchronous,
-//! so the instance does nothing else while it runs, and its events are
-//! written as it returns, before its result; an async handler would
-//! write each as it said it. A host that drops the stream (it cancelled
-//! the call) is written no more events.
+//! The exports are async (the component model's async ABI, R-130): each
+//! awaits the handler's answer, and the instance answers its other calls
+//! while one awaits the host. Apply answers at once with a stream of
+//! events and a future of its result, and runs the handler in a task of
+//! its own, writing each event to the stream as the handler says it. A
+//! host that drops the stream (it cancelled the call) is written no more
+//! events.
 
-use dform_core::plugin::backend::{Call, Handler, Progress, Reply, Sessions};
+use crate::{CallError, Handler};
+use dform_core::plugin::backend::{Call, Reply, Sessions, Within};
 use dform_core::plugin::host::{
     self as h, Calls, Endpoint, Failure, GitFile, Handle, HttpRequest, HttpResponse, Level, Opened,
     Run, Target,
 };
 use dform_core::plugin::pb;
+use futures::StreamExt;
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock};
+use std::task::{Context, Poll};
 
 pub mod bindings {
     wit_bindgen::generate!({
@@ -43,11 +48,74 @@ dform_wit::convert!(conv, crate::component::bindings::dform::provider::types);
 use bindings::dform::host as wh;
 use bindings::dform::provider::types as t;
 
+/// A [`Handler`] behind a pointer: its answer a boxed future.
+pub trait Serve: Send + Sync {
+    fn serve<'a>(&'a self, c: Call, progress: Progress<'a>) -> Answer<'a>;
+}
+
+/// A call's answer, being worked out.
+pub type Answer<'a> = Pin<Box<dyn Future<Output = Result<Reply, CallError>> + 'a>>;
+
+type Progress<'a> = dform_core::plugin::backend::Progress<'a>;
+
+impl<H: Handler> Serve for H {
+    fn serve<'a>(&'a self, c: Call, progress: Progress<'a>) -> Answer<'a> {
+        Box::pin(serve(&SESSIONS, self, c, progress))
+    }
+}
+
+/// `handler`'s answer to `call`, in its session as `sessions` numbers it:
+/// the session the host calls made while it runs name, its future polled
+/// in the call ([`InCall`]) wherever it is polled.
+async fn serve<H: Handler + ?Sized>(
+    sessions: &Sessions,
+    handler: &H,
+    call: Call,
+    progress: Progress<'_>,
+) -> Result<Reply, CallError> {
+    let session = sessions.of(&call);
+    let within = Within {
+        session,
+        ..Within::here()
+    };
+    let mut reply = InCall::new(within, handler.handle(session, call, progress)).await?;
+    if let Reply::Configure(r) = &mut reply {
+        r.session = session.0;
+    }
+    Ok(reply)
+}
+
+/// A future polled in a call (`backend::Within`): the thread that polls
+/// it is in the call while it does, so the host calls it starts are the
+/// call's, whichever thread or task polls it.
+struct InCall<F> {
+    within: Within,
+    inner: Pin<Box<F>>,
+}
+
+impl<F: Future> InCall<F> {
+    fn new(within: Within, inner: F) -> InCall<F> {
+        InCall {
+            within,
+            inner: Box::pin(inner),
+        }
+    }
+}
+
+impl<F: Future> Future for InCall<F> {
+    type Output = F::Output;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
+        let _in = self.within.enter();
+        self.inner.as_mut().poll(cx)
+    }
+}
+
 /// What makes the provider: `provider!`'s expression.
-pub type Make = fn() -> Box<dyn Handler + Send + Sync>;
+pub type Make = fn() -> Box<dyn Serve>;
 
 /// The provider, made at its first call.
-static HANDLER: OnceLock<Box<dyn Handler + Send + Sync>> = OnceLock::new();
+static HANDLER: OnceLock<Box<dyn Serve>> = OnceLock::new();
 /// Its sessions, as its Configures open them.
 static SESSIONS: LazyLock<Sessions> = LazyLock::new(Sessions::default);
 /// The credentials and tunnels it opened, by handle: locked only to
@@ -69,7 +137,7 @@ fn opened() -> MutexGuard<'static, Held> {
 /// initial-cwd, which wasi-libc does not read: it starts at `/`); the
 /// change of directory is what links `wasi:filesystem`, so a component
 /// without the feature imports none and needs no grant.
-fn start(make: Make) -> Box<dyn Handler + Send + Sync> {
+fn start(make: Make) -> Box<dyn Serve> {
     #[cfg(feature = "filesystem")]
     if let Some(cwd) = bindings::wasi::cli::environment::get_initial_cwd() {
         let _ = std::env::set_current_dir(cwd);
@@ -77,10 +145,11 @@ fn start(make: Make) -> Box<dyn Handler + Send + Sync> {
     make()
 }
 
-fn call(make: Make, c: Call, progress: Progress) -> Result<Reply, t::CallError> {
+async fn call(make: Make, c: Call, progress: Progress<'_>) -> Result<Reply, t::CallError> {
     let handler = HANDLER.get_or_init(|| start(make));
-    SESSIONS
-        .serve(handler.as_ref(), c, progress)
+    handler
+        .serve(c, progress)
+        .await
         .map_err(|e| conv::to_call_error(&e))
 }
 
@@ -96,7 +165,7 @@ macro_rules! export {
     ($($name:ident($req:ty => $from:ident) -> $resp:ty: $variant:ident => $to:expr;)*) => {$(
         pub async fn $name(make: Make, r: $req) -> Result<$resp, t::CallError> {
             let req = decode(conv::$from(&r))?;
-            match call(make, req.into(), &dform_core::plugin::backend::silent)? {
+            match call(make, req.into(), &dform_core::plugin::backend::silent).await? {
                 Reply::$variant(x) => Ok(($to)(&x)),
                 other => Err(wrong(other)),
             }
@@ -123,7 +192,7 @@ pub type Applied = (
 );
 
 /// Apply `r`: the stream and the future at once, the handler in a task
-/// of its own writing them.
+/// of its own, each event written as it says it, then its result.
 pub async fn apply(make: Make, r: t::ApplyRequest) -> Applied {
     let (mut events, said_rx) = bindings::wit_stream::new::<t::Event>();
     let (result, result_rx) =
@@ -133,21 +202,27 @@ pub async fn apply(make: Make, r: t::ApplyRequest) -> Applied {
             ))
         });
     wit_bindgen::spawn_local(async move {
-        let said = std::sync::Mutex::new(Vec::<pb::Event>::new());
-        let progress = |e: pb::Event| said.lock().unwrap_or_else(|e| e.into_inner()).push(e);
-        let answer = decode(conv::from_apply_request(&r)).and_then(|req| {
-            match call(make, req.into(), &progress)? {
+        let (said, mut heard) = futures::channel::mpsc::unbounded::<pb::Event>();
+        let answered = async move {
+            let progress = move |e: pb::Event| {
+                // Refused: the stream is gone, and so is what it tells.
+                let _ = said.unbounded_send(e);
+            };
+            let req = decode(conv::from_apply_request(&r))?;
+            match call(make, req.into(), &progress).await? {
                 Reply::Apply(x) => Ok(conv::to_apply_response(&x)),
                 other => Err(wrong(other)),
             }
-        });
-        for e in said.into_inner().unwrap_or_else(|e| e.into_inner()) {
-            // Refused: the host dropped the stream.
-            if events.write_one(conv::to_event(&e)).await.is_some() {
-                break;
+        };
+        let told = async move {
+            while let Some(e) = heard.next().await {
+                // Refused: the host dropped the stream.
+                if events.write_one(conv::to_event(&e)).await.is_some() {
+                    break;
+                }
             }
-        }
-        drop(events);
+        };
+        let (answer, ()) = futures::future::join(answered, told).await;
         let _ = result.write(answer).await;
     });
     (said_rx, result_rx)
@@ -179,10 +254,8 @@ fn target(t: &Target) -> wh::ssh::Target {
     }
 }
 
-/// The host's calls as the component's imports. The calls that wait on
-/// the world are `async func`s (each a subtask); a synchronous handler
-/// waits on one at once ([`wit_bindgen::block_on`]), and [`send_all`]
-/// keeps several in flight.
+/// The host's calls that do not wait on the world, as the component's
+/// imports; those that do are [`waits`].
 pub struct Imports;
 
 struct Held {
@@ -198,53 +271,73 @@ impl Held {
     }
 }
 
-/// Send `req` with the credential and the tunnel it names, held for the
-/// import (the resources are borrowed by it), not the table.
-async fn sending(
-    req: HttpRequest,
-    auth: Option<Handle>,
-    via: Option<Handle>,
-) -> Result<HttpResponse, h::Error> {
-    let (auth, via) = {
-        let o = opened();
-        (
-            auth.and_then(|a| o.credentials.get(&a).cloned()),
-            via.and_then(|v| o.tunnels.get(&v)).map(|(t, _)| t.clone()),
-        )
-    };
-    let r = wh::http::send(
-        wh::http::Request {
-            method: req.method,
-            url: req.url,
-            headers: req.headers,
-            body: req.body,
-            timeout_ms: req
-                .timeout
-                .map(|d| u32::try_from(d.as_millis()).unwrap_or(u32::MAX)),
-            bucket: req.bucket,
-            session: req.session.0,
-        },
-        auth.as_deref(),
-        via.as_deref(),
-    )
-    .await
-    .map_err(error)?;
-    Ok(HttpResponse {
-        status: r.status,
-        headers: r.headers,
-        body: r.body,
-    })
-}
+/// The host's calls that wait on the world: each an `async func` import,
+/// a subtask the component awaits while the instance goes on.
+pub(crate) mod waits {
+    use super::*;
+    use std::time::Duration;
 
-/// Each of `reqs` at once, every one a subtask of the host's `send` in
-/// flight together, the host's window pacing them; their answers in
-/// their order. The component's own thread waits on all of them.
-pub fn send_all(
-    reqs: Vec<(HttpRequest, Option<Handle>, Option<Handle>)>,
-) -> Vec<Result<HttpResponse, h::Error>> {
-    wit_bindgen::block_on(futures::future::join_all(
-        reqs.into_iter().map(|(r, auth, via)| sending(r, auth, via)),
-    ))
+    /// Send `req` with the credential and the tunnel it names, held for
+    /// the import (the resources are borrowed by it), not the table.
+    pub async fn send(
+        req: HttpRequest,
+        auth: Option<Handle>,
+        via: Option<Handle>,
+    ) -> Result<HttpResponse, h::Error> {
+        let (auth, via) = {
+            let o = opened();
+            (
+                auth.and_then(|a| o.credentials.get(&a).cloned()),
+                via.and_then(|v| o.tunnels.get(&v)).map(|(t, _)| t.clone()),
+            )
+        };
+        let r = wh::http::send(
+            wh::http::Request {
+                method: req.method,
+                url: req.url,
+                headers: req.headers,
+                body: req.body,
+                timeout_ms: req
+                    .timeout
+                    .map(|d| u32::try_from(d.as_millis()).unwrap_or(u32::MAX)),
+                bucket: req.bucket,
+                session: req.session.0,
+            },
+            auth.as_deref(),
+            via.as_deref(),
+        )
+        .await
+        .map_err(error)?;
+        Ok(HttpResponse {
+            status: r.status,
+            headers: r.headers,
+            body: r.body,
+        })
+    }
+
+    pub async fn io_read(location: String) -> Result<Vec<u8>, Failure> {
+        wh::io::read(location).await.map_err(failure)
+    }
+
+    pub async fn exec(
+        on: Target,
+        argv: Vec<String>,
+        stdin: Option<Vec<u8>>,
+    ) -> Result<Run, Failure> {
+        let r = wh::ssh::exec(target(&on), argv, stdin)
+            .await
+            .map_err(failure)?;
+        Ok(Run {
+            status: r.status,
+            stdout: r.stdout,
+            stderr: r.stderr,
+        })
+    }
+
+    pub async fn sleep(d: Duration) {
+        let nanos = u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
+        bindings::wasi::clocks::monotonic_clock::wait_for(nanos).await
+    }
 }
 
 impl Calls for Imports {
@@ -267,11 +360,11 @@ impl Calls for Imports {
         auth: Option<Handle>,
         via: Option<Handle>,
     ) -> Result<HttpResponse, h::Error> {
-        wit_bindgen::block_on(sending(req, auth, via))
+        wit_bindgen::block_on(waits::send(req, auth, via))
     }
 
     fn io_read(&self, location: &str) -> Result<Vec<u8>, Failure> {
-        wit_bindgen::block_on(wh::io::read(location.to_string())).map_err(failure)
+        wit_bindgen::block_on(waits::io_read(location.to_string()))
     }
 
     fn io_read_versioned(&self, location: &str) -> Result<dform_core::files::Document, Failure> {
@@ -284,17 +377,11 @@ impl Calls for Imports {
     }
 
     fn exec(&self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure> {
-        let r = wit_bindgen::block_on(wh::ssh::exec(
-            target(on),
+        wit_bindgen::block_on(waits::exec(
+            on.clone(),
             argv.to_vec(),
             stdin.map(<[u8]>::to_vec),
         ))
-        .map_err(failure)?;
-        Ok(Run {
-            status: r.status,
-            stdout: r.stdout,
-            stderr: r.stderr,
-        })
     }
 
     fn write(&self, on: &Target, path: &str, data: &[u8], mode: u32) -> Result<(), h::Error> {

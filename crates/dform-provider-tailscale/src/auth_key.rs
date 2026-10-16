@@ -122,10 +122,11 @@ fn seconds_of(t: &str) -> Option<i64> {
 
 impl Lifecycle<Tailscale> for AuthKey {
     /// The key, unless it is revoked or expired.
-    fn read(p: &Tailscale, remote: &str) -> Result<Option<AuthKey>> {
+    async fn read(p: &Tailscale, remote: &str) -> Result<Option<AuthKey>> {
         let Some(a) = p
             .client
-            .get(&p.client.tailnet_path(&format!("/keys/{remote}")))?
+            .get(&p.client.tailnet_path(&format!("/keys/{remote}")))
+            .await?
         else {
             return Ok(None);
         };
@@ -137,11 +138,11 @@ impl Lifecycle<Tailscale> for AuthKey {
         Ok(Some(from_api(&a.body)))
     }
 
-    fn create(
+    async fn create(
         p: &Tailscale,
         desired: AuthKey,
         _: &str,
-        progress: &Progress,
+        progress: &Progress<'_>,
     ) -> Result<(String, AuthKey)> {
         let mut body = json!({
             "description": desired.description,
@@ -158,7 +159,8 @@ impl Lifecycle<Tailscale> for AuthKey {
         progress.message("making the key");
         let a = p
             .client
-            .call("POST", &p.client.tailnet_path("/keys"), Body::Json(body))?;
+            .call("POST", &p.client.tailnet_path("/keys"), Body::Json(body))
+            .await?;
         let id = a.body["id"]
             .as_str()
             .ok_or_else(|| {
@@ -177,12 +179,12 @@ impl Lifecycle<Tailscale> for AuthKey {
     }
 
     /// Every attribute replaces: nothing is changed in place.
-    fn update(
+    async fn update(
         p: &Tailscale,
         remote: &str,
         prior: AuthKey,
         _: AuthKey,
-        _: &Progress,
+        _: &Progress<'_>,
     ) -> Result<AuthKey> {
         let _ = p;
         let _ = remote;
@@ -190,9 +192,12 @@ impl Lifecycle<Tailscale> for AuthKey {
     }
 
     /// Revoke it: the devices that joined with it stay.
-    fn delete(p: &Tailscale, remote: &str, _: &Progress) -> Result<()> {
+    async fn delete(p: &Tailscale, remote: &str, _: &Progress<'_>) -> Result<()> {
         let path = p.client.tailnet_path(&format!("/keys/{remote}"));
-        let a = p.client.send("DELETE", &path, &Body::None, None, false)?;
+        let a = p
+            .client
+            .send("DELETE", &path, &Body::None, None, false)
+            .await?;
         match a.status {
             404 => Ok(()),
             _ => p.client.expect("DELETE", &path, a).map(|_| ()),

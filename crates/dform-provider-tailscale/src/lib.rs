@@ -95,16 +95,16 @@ impl Provider for Tailscale {
     const NAME: &'static str = "tailscale";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
-    fn configure(settings: &Json) -> Result<(Tailscale, Option<String>)> {
+    async fn configure(settings: &Json) -> Result<(Tailscale, Option<String>)> {
         let settings = config::Settings::parse(settings, &|k| std::env::var(k).ok())?;
         let account = settings.tailnet.clone();
         Ok((Tailscale::new(settings), Some(account)))
     }
 
-    fn query(&self, pred: &str, inputs: &[Json]) -> Result<Vec<Vec<Json>>> {
+    async fn query(&self, pred: &str, inputs: &[Json]) -> Result<Vec<Vec<Json>>> {
         match pred {
-            user::USER => user::rows(self, inputs),
-            device::TYPE => device::rows(self, inputs),
+            user::USER => user::rows(self, inputs).await,
+            device::TYPE => device::rows(self, inputs).await,
             _ => Err(Error::Refused(format!(
                 "provider tailscale answers no extern {pred}"
             ))),
@@ -112,7 +112,7 @@ impl Provider for Tailscale {
     }
 
     /// An auth key's value, made in this run.
-    fn reveal(&self, held: &pb::Held) -> Result<Vec<u8>> {
+    async fn reveal(&self, held: &pb::Held) -> Result<Vec<u8>> {
         let at = format!("reveal {} {}#{}", held.r#type, held.remote, held.path);
         if held.r#type != auth_key::TYPE || held.path != "key" {
             return Err(Error::Refused(format!(

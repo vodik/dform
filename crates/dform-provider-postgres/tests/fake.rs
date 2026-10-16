@@ -7,10 +7,11 @@ use dform_core::plugin::{pb, wire};
 use dform_provider_postgres::fake::{self, ADMIN, ADMIN_PASSWORD, Server};
 use dform_provider_postgres::{Postgres, provider, scram};
 use dform_sdk::Typed;
+use dform_sdk::native::Blocking;
 use serde_json::{Value as Json, json};
 
-fn configured(settings: Json) -> Typed<Postgres> {
-    let h = provider();
+fn configured(settings: Json) -> Blocking<Typed<Postgres>> {
+    let h = Blocking(provider());
     h.handle(
         Session(1),
         pb::ConfigureRequest {
@@ -29,12 +30,12 @@ fn admin(s: &Server) -> Json {
            "sslmode": "disable"})
 }
 
-fn call<R: TryFrom<Reply, Error = Reply>>(h: &Typed<Postgres>, c: impl Into<Call>) -> R {
+fn call<R: TryFrom<Reply, Error = Reply>>(h: &Blocking<Typed<Postgres>>, c: impl Into<Call>) -> R {
     R::try_from(h.handle(Session(1), c.into(), &silent).unwrap()).unwrap()
 }
 
 fn try_apply(
-    h: &Typed<Postgres>,
+    h: &Blocking<Typed<Postgres>>,
     op: pb::Op,
     typ: &str,
     remote: &str,
@@ -59,7 +60,7 @@ fn try_apply(
 }
 
 fn apply(
-    h: &Typed<Postgres>,
+    h: &Blocking<Typed<Postgres>>,
     op: pb::Op,
     typ: &str,
     remote: &str,
@@ -68,7 +69,7 @@ fn apply(
     try_apply(h, op, typ, remote, doc, "k1").unwrap()
 }
 
-fn read(h: &Typed<Postgres>, typ: &str, remote: &str) -> Option<(Json, Json)> {
+fn read(h: &Blocking<Typed<Postgres>>, typ: &str, remote: &str) -> Option<(Json, Json)> {
     let r: pb::ReadResponse = call(
         h,
         pb::ReadRequest {
@@ -88,7 +89,7 @@ fn read(h: &Typed<Postgres>, typ: &str, remote: &str) -> Option<(Json, Json)> {
 }
 
 fn plan(
-    h: &Typed<Postgres>,
+    h: &Blocking<Typed<Postgres>>,
     typ: &str,
     prior: Option<Json>,
     desired: Json,

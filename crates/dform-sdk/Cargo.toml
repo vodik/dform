@@ -13,7 +13,7 @@ publish = false
 # `--target wasm32-wasip3 --features component` it is a component whose
 # imports are the host's interfaces (wit/host).
 [features]
-component = ["dep:wit-bindgen", "dep:dform-wit", "dep:futures"]
+component = ["dep:wit-bindgen", "dep:dform-wit"]
 # A component that reads files (granted `wasi:filesystem`): it starts in
 # the host's working directory, as a native provider does.
 filesystem = ["component"]
@@ -35,9 +35,10 @@ dform-sdk-derive = { path = "../dform-sdk-derive" }
 # The provider's exports are async (R-130): a task per Apply.
 wit-bindgen = { version = "0.61", features = ["async", "async-spawn"], optional = true }
 dform-wit = { path = "../dform-wit", default-features = false, optional = true }
-# A component's requests at once (`Http::request_all`): the host's sends
-# joined, each a subtask.
-futures = { version = "0.3", default-features = false, features = ["alloc"], optional = true }
+# The host's calls awaited together (`join`, `join_all`), the channels a
+# call's thread or an Apply's events answer on, and the lock a session's
+# provider is held by across them.
+futures = { version = "0.3", default-features = false, features = ["std"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 dform-grpc = { path = "../dform-grpc" }

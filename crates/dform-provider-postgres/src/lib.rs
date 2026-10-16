@@ -63,7 +63,7 @@ impl Provider for Postgres {
     const NAME: &'static str = "postgres";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
-    fn configure(settings: &Json) -> Result<(Postgres, Option<String>)> {
+    async fn configure(settings: &Json) -> Result<(Postgres, Option<String>)> {
         let settings = config::Settings::parse(settings, &|k| std::env::var(k).ok())?;
         if let Some(w) = settings.warning() {
             dform_sdk::host().log.warn(&w);
