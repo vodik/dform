@@ -98,39 +98,66 @@ fn the_plan_deletes_every_object_dependents_first() {
     assert!(!j.stdout.contains("\"reason\""), "{}", j.stdout);
 }
 
-#[test]
-fn destroy_deletes_in_that_order_and_leaves_an_empty_state() {
-    let s = applied("destroy-apply");
-    let r = dev(&s, &["destroy", "--yes"]).success();
-    assert!(!r.stdout.contains("destroy: complete"), "{}", r.stdout);
-    assert!(objects(&s).is_empty(), "{}", s.read("w.json"));
-    // The calls in the order they were made.
-    let calls: Vec<String> = s
-        .read("w.state.audit.jsonl")
+/// What depends on what, by the deletes' addresses: the role that holds
+/// the policy, and the cluster's object read through the provider the
+/// server configures.
+const DEPENDS: [(&str, &str); 2] = [
+    ("iam.role[\"reader\"]", "iam.policy[\"app_policy\"]"),
+    ("k8s.namespace[\"ns\"]", "db.postgres[\"server\"]"),
+];
+
+/// The windows a destroy runs under: serial (`--parallel 1`) and the
+/// host's ceiling.
+const WINDOWS: [usize; 2] = [1, dform_host::ratelimit::CEILING];
+
+/// The deletes the audit log has, in the order they were answered.
+fn deletes(s: &Scratch) -> Vec<String> {
+    s.read("w.state.audit.jsonl")
         .lines()
         .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
         .filter(|e| e["kind"] == "action" && e["action"] == "delete")
         .map(|e| e["address"].as_str().unwrap().to_string())
-        .collect();
-    assert_eq!(
-        calls,
-        [
-            "iam.role[\"app_role\"]",
-            "iam.role[\"reader\"]",
-            "iam.policy[\"app_policy\"]",
-            "k8s.namespace[\"ns\"]",
-            "db.postgres[\"server\"]",
-        ]
-    );
-    let st = s.json("w.state.json");
-    assert_eq!(st["resources"], serde_json::json!({}), "{st}");
-    // Nothing is left to destroy.
-    let again = dev(&s, &["destroy", "--yes"]).success();
-    assert!(
-        again.stdout.ends_with("is up to date\n"),
-        "{}",
-        again.stdout
-    );
+        .collect()
+}
+
+/// Every object deleted once, and each dependent's delete answered before
+/// its dependency's: the order the dependencies force, and no more.
+#[test]
+fn destroy_deletes_dependents_first_and_leaves_an_empty_state() {
+    for window in WINDOWS {
+        let s = applied("destroy-apply");
+        let parallel = window.to_string();
+        let r = dev(&s, &["destroy", "--yes", "--parallel", &parallel]).success();
+        assert!(!r.stdout.contains("destroy: complete"), "{}", r.stdout);
+        assert!(objects(&s).is_empty(), "{}", s.read("w.json"));
+        let calls = deletes(&s);
+        let mut every = calls.clone();
+        every.sort();
+        assert_eq!(
+            every,
+            [
+                "db.postgres[\"server\"]",
+                "iam.policy[\"app_policy\"]",
+                "iam.role[\"app_role\"]",
+                "iam.role[\"reader\"]",
+                "k8s.namespace[\"ns\"]",
+            ],
+            "window {window}"
+        );
+        let at = |a: &str| calls.iter().position(|c| c == a).unwrap();
+        for (dependent, dependency) in DEPENDS {
+            assert!(at(dependent) < at(dependency), "window {window}: {calls:?}");
+        }
+        let st = s.json("w.state.json");
+        assert_eq!(st["resources"], serde_json::json!({}), "{st}");
+        // Nothing is left to destroy.
+        let again = dev(&s, &["destroy", "--yes"]).success();
+        assert!(
+            again.stdout.ends_with("is up to date\n"),
+            "{}",
+            again.stdout
+        );
+    }
 }
 
 #[test]
@@ -160,27 +187,39 @@ fn prevent_destroy_refuses_naming_the_resource() {
     assert_eq!(p.code, Some(4), "{}\n{}", p.stdout, p.stderr);
 }
 
+/// Stopped after two deletes answered (which two is the window's): the
+/// next destroy resumes with the three state still holds, in the plan's
+/// order, and deletes them.
 #[test]
 fn a_stopped_destroy_resumes() {
-    let s = applied("destroy-resume");
-    let mut args = vec!["dev", "--world", "w.json", "--chaos", "stop-after=2"];
-    args.extend(["destroy", "--yes", "p.df"]);
-    Run::from(dform(&s, &args).output().unwrap()).failure();
-    // The checkpoint and the log after it (R-146).
-    let held = common::replayed(&s, "w.state.json")["resources"]
-        .as_object()
-        .unwrap()
-        .len();
-    assert_eq!(held, 3, "{}", s.read("w.state.json"));
-    let r = dev(&s, &["destroy", "--yes"]).success();
-    assert!(
-        r.stdout.contains("tick 1  3 remaining, resumed\n"),
-        "{}",
-        r.stdout
-    );
-    let order: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("  - ")).collect();
-    assert_eq!(order[..3], ORDER[2..], "{}", r.stdout);
-    assert!(objects(&s).is_empty());
+    for window in WINDOWS {
+        let s = applied("destroy-resume");
+        let parallel = window.to_string();
+        let mut args = vec!["dev", "--world", "w.json", "--chaos", "stop-after=2"];
+        args.extend(["destroy", "--yes", "--parallel", &parallel, "p.df"]);
+        Run::from(dform(&s, &args).output().unwrap()).failure();
+        // The checkpoint and the log after it (R-146).
+        let held = common::replayed(&s, "w.state.json")["resources"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|k| k.replacen("::", " ", 1))
+            .collect::<Vec<_>>();
+        assert_eq!(held.len(), 3, "{}", s.read("w.state.json"));
+        let r = dev(&s, &["destroy", "--yes"]).success();
+        assert!(
+            r.stdout.contains("tick 1  3 remaining, resumed\n"),
+            "{}",
+            r.stdout
+        );
+        let order: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("  - ")).collect();
+        let left: Vec<&str> = ORDER
+            .into_iter()
+            .filter(|l| held.iter().any(|h| l.trim_start_matches("  - ") == h))
+            .collect();
+        assert_eq!(order[..3], left[..], "window {window}: {}", r.stdout);
+        assert!(objects(&s).is_empty());
+    }
 }
 
 /// On a terminal it asks before deleting anything; `n` keeps everything

@@ -6,6 +6,7 @@
 
 use crate::common;
 use common::Scratch;
+use std::collections::BTreeSet;
 
 const PROG: &str = r#"
 
@@ -26,28 +27,75 @@ moved(net.vpc, "main", core)
 use fake
 "#;
 
+/// The resume's marks, whatever the window: a `main` whose answer was
+/// lost is found by its key and mapped before the plan, so only the two
+/// not made are retried.
 const MARKS: &str = "resumed from the apply interrupted at tick 1:\n  \
     net.vpc peer  (retried with its idempotency key: nothing it made was found)\n  \
     net.subnet a  (retried with its idempotency key: nothing it made was found)\n\
     Apply these 2 changes to p? [y/N] ";
 
-/// An apply the provider crashed under at `net.vpc.peer`: `net.vpc.main`
-/// made, the other two remaining in flight, each an uncertain create;
-/// then the program renames `net.vpc.main`.
-fn interrupted() -> Scratch {
+/// The windows the interrupted apply runs under: serial (`--parallel 1`)
+/// and the host's ceiling.
+const WINDOWS: [usize; 2] = [1, dform_host::ratelimit::CEILING];
+
+/// An apply with at most `window` Apply calls in flight that the provider
+/// crashed under at `net.vpc.peer`; then the program renames
+/// `net.vpc.main`. Which of `main` and `peer` answered before the crash is
+/// the provider's when both are in flight; what holds either way: every
+/// create of the tick state does not map is uncertain, with its
+/// idempotency key, and remains in flight, the crashed one among them;
+/// the calls whose answers the crash lost are at most the window; and
+/// each object the world has is mapped or uncertain. Serially the crash
+/// at `peer` leaves `main`, sent before it, mapped.
+fn interrupted(window: usize) -> Scratch {
     let s = Scratch::new("confirm-resume");
     s.write("p.df", PROG);
+    let parallel = window.to_string();
     s.run(&common::on(
         "p.df",
         &["--world", "w.json", "--chaos", "crash=net.vpc[\"peer\"]"],
-        &["apply"],
+        &["apply", "--parallel", &parallel],
     ))
     .failure();
-    let st: serde_json::Value = serde_json::from_str(&s.read("w.state.json")).unwrap();
-    assert_eq!(st["in_flight"]["remaining"].as_object().unwrap().len(), 2);
-    assert_eq!(st["uncertain"].as_object().unwrap().len(), 2, "{st}");
+    let st = s.json("w.state.json");
+    let mapped = keys(&st["resources"]);
+    let uncertain = keys(&st["uncertain"]);
+    let creates =
+        BTreeSet::from(["net.vpc::main", "net.vpc::peer", "net.subnet::a"].map(String::from));
+    assert_eq!(uncertain, &creates - &mapped, "window {window}: {st}");
+    assert!(uncertain.contains("net.vpc::peer"), "window {window}: {st}");
+    assert_eq!(keys(&st["in_flight"]["remaining"]), uncertain, "{st}");
+    for (a, u) in st["uncertain"].as_object().unwrap() {
+        assert_eq!(u["op"], "create", "{a}: {st}");
+        assert!(
+            u["key"].as_str().is_some_and(|k| !k.is_empty()),
+            "{a}: {st}"
+        );
+    }
+    let lost = audit_kinds(&s)
+        .iter()
+        .filter(|(k, r)| k == "action" && r == "failed")
+        .count();
+    assert!((1..=window).contains(&lost), "window {window}: {lost} lost");
+    let made = keys(&s.json("w.json")["resources"]);
+    assert!(made.is_subset(&(&mapped | &uncertain)), "{made:?}: {st}");
+    if window == 1 {
+        assert_eq!(
+            mapped,
+            BTreeSet::from(["net.vpc::main".to_string()]),
+            "{st}"
+        );
+    }
     s.write("p.df", RENAMED);
     s
+}
+
+/// An object's keys.
+fn keys(v: &serde_json::Value) -> BTreeSet<String> {
+    v.as_object()
+        .map(|o| o.keys().cloned().collect())
+        .unwrap_or_default()
 }
 
 /// `dform dev --world w.json apply p.df` on a pty, answering `answer`:
@@ -84,7 +132,13 @@ fn audit_kinds(s: &Scratch) -> Vec<(String, String)> {
 /// answer, the exit is 3 (R-147), and the stack is unlocked.
 #[test]
 fn declining_a_resumed_apply_changes_nothing() {
-    let s = interrupted();
+    for window in WINDOWS {
+        declining_a_resumed_apply_changes_nothing_after(window);
+    }
+}
+
+fn declining_a_resumed_apply_changes_nothing_after(window: usize) {
+    let s = interrupted(window);
     let (state, world) = (s.read("w.state.json"), s.read("w.json"));
     let log = audit_kinds(&s);
     let (before, after, code) = answer(&s, "n");
@@ -115,7 +169,13 @@ fn declining_a_resumed_apply_changes_nothing() {
 /// `y`: the remaining actions are applied, with the rename.
 #[test]
 fn confirming_a_resumed_apply_finishes_it() {
-    let s = interrupted();
+    for window in WINDOWS {
+        confirming_a_resumed_apply_finishes_it_after(window);
+    }
+}
+
+fn confirming_a_resumed_apply_finishes_it_after(window: usize) {
+    let s = interrupted(window);
     let (before, after, code) = answer(&s, "y");
     assert!(before.ends_with(MARKS), "{before}");
     assert_eq!(code, 0, "{after}");

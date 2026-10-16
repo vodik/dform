@@ -73,9 +73,17 @@ fn a_replace_updates_its_dependents_after_the_create() {
 }
 
 /// Create-first: the subnets move in tick 2, before the deposed vpc is
-/// deleted.
+/// deleted. Tick 2's calls as the audit log has them, in the order they
+/// were answered: the two updates in either order (neither reads the
+/// other), the deposed delete after both (each still pointed at it).
 #[test]
 fn create_first_moves_dependents_before_the_deposed_delete() {
+    for window in [1, dform_host::ratelimit::CEILING] {
+        create_first_moves_dependents_under(window);
+    }
+}
+
+fn create_first_moves_dependents_under(window: usize) {
     let s = Scratch::new("replace-deps-cbd");
     s.write("p.df", NET);
     mock(&s, &["apply", "--chaos", "fresh-ids"]).success();
@@ -86,9 +94,12 @@ fn create_first_moves_dependents_before_the_deposed_delete() {
             NET.replace("10.0.0.0/16", "10.1.0.0/16")
         ),
     );
-    let r = mock(&s, &["apply", "--chaos", "fresh-ids"]).success();
-    // Tick 2's calls in the order they were made, as the audit log has
-    // them.
+    let parallel = window.to_string();
+    let r = mock(
+        &s,
+        &["apply", "--chaos", "fresh-ids", "--parallel", &parallel],
+    )
+    .success();
     let order: Vec<(String, String)> = s
         .read("w.state.audit.jsonl")
         .lines()
@@ -100,14 +111,22 @@ fn create_first_moves_dependents_before_the_deposed_delete() {
         })
         .collect();
     let call = |a: &str, b: &str| (a.to_string(), b.to_string());
+    let (last, updates) = order.split_last().expect("tick 2 made calls");
     assert_eq!(
-        order,
+        last,
+        &call("delete_deposed", "net.vpc[\"main\"]"),
+        "window {window}: {}",
+        r.stdout
+    );
+    let mut updates = updates.to_vec();
+    updates.sort();
+    assert_eq!(
+        updates,
         [
             call("update", "net.subnet[\"a\"]"),
             call("update", "net.subnet[\"b\"]"),
-            call("delete_deposed", "net.vpc[\"main\"]"),
         ],
-        "{}",
+        "window {window}: {}",
         r.stdout
     );
     let (new, subnets) = ids(&s, "main-2");

@@ -109,11 +109,27 @@ fn diff_names_the_row_an_apply_added_and_explains_each_apply_by_its_commit() {
         "{}",
         line.stdout
     );
+    // In the order the calls were answered: the vpc first, as every
+    // subnet reads its id; the subnets in any order.
     let quiet = s.run(&["diff", "--since", &since, "-q", "net"]).success();
-    assert!(
-        quiet.stdout.contains(
-            ": ok\n-/+ net.vpc[\"main\"]\n-/+ net.subnet[\"private-us-test-1a\"]\n-/+ \
-             net.subnet[\"private-us-test-1b\"]\n+ net.subnet[\"private-us-test-1c\"]\nchanged"
+    let changes: Vec<&str> = quiet
+        .stdout
+        .split_once(": ok\n")
+        .and_then(|(_, rest)| rest.split_once("changed"))
+        .map(|(changes, _)| changes.lines().collect())
+        .unwrap_or_else(|| panic!("{}", quiet.stdout));
+    let (vpc, subnets) = changes.split_first().unwrap();
+    let mut subnets = subnets.to_vec();
+    subnets.sort();
+    assert_eq!(
+        (*vpc, subnets),
+        (
+            "-/+ net.vpc[\"main\"]",
+            vec![
+                "+ net.subnet[\"private-us-test-1c\"]",
+                "-/+ net.subnet[\"private-us-test-1a\"]",
+                "-/+ net.subnet[\"private-us-test-1b\"]",
+            ]
         ),
         "{}",
         quiet.stdout
