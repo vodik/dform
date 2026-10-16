@@ -9,7 +9,8 @@
 //!   its text under `otel.name`;
 //! - `provider.call`: one call to a provider, with `provider` (its name
 //!   as the run says it), `kind` (`Configure`, `Read`, `Plan`, `Query`,
-//!   ..) and `addr` (the resource's address, or the extern's name);
+//!   ..), `addr` (the resource's address, or the extern's name) and
+//!   `session` (the configured instance the call is made in);
 //! - `io.call`: one request dform makes itself, with `kind` (`s3.get`,
 //!   `s3.put`, `s3.list`, `io.read`, `oci.resolve`, ..) and `addr` (the
 //!   location, without its userinfo, query or fragment);
@@ -18,7 +19,7 @@
 //!   (R-81), with `tick`, `kind` (`world`, `extern`) and `count`;
 //! - `ratelimit.wait`: a provider's request waiting on its bucket's
 //!   window in the host (`dform_host::ratelimit`), with `provider`,
-//!   `bucket`, `queued` and `window`.
+//!   `session`, `bucket`, `queued` and `window`.
 //!
 //! Each is the function that does the work, `#[tracing::instrument]`ed
 //! under [`TARGET`]; a call, whose answer may come after others', is a

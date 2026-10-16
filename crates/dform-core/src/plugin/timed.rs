@@ -24,7 +24,7 @@
 //! out answered `MaybeApplied` already, which is what a provider stopped
 //! in the middle of it may have left; its late answer was dropped anyway.
 
-use super::backend::{Call, CallError, Provider, Reply, Stop, Ticket};
+use super::backend::{Call, CallError, Provider, Reply, Session, Stop, Ticket};
 use super::pb;
 use super::policy::{describe, show};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -79,6 +79,9 @@ impl Live {
     fn new(provider: &str, call: &Call, due: Instant) -> Live {
         let what = describe(call);
         let span = Live::span(provider, call.method(), &what);
+        if call.session() != Session::NONE {
+            span.record("session", call.session().0);
+        }
         Live { due, what, span }
     }
 
@@ -98,16 +101,21 @@ impl Live {
             provider,
             kind,
             addr = (!addr.is_empty()).then_some(addr),
+            session = tracing::field::Empty,
         )
     }
 
-    /// Its answer, `r`, is taken: its status recorded, its span ended.
+    /// Its answer, `r`, is taken: its status recorded (and the session a
+    /// Configure opened), its span ended.
     fn finish(self, r: &Result<Reply, CallError>) {
         let status = match r {
             Ok(_) => "ok",
             Err(_) => "error",
         };
         self.span.record("otel.status_code", status);
+        if let Ok(Reply::Configure(c)) = r {
+            self.span.record("session", c.session);
+        }
     }
 }
 

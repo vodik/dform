@@ -185,6 +185,7 @@ mod provider_ovh_types;
 mod provider_ovh_zone;
 mod provider_postgres;
 mod provider_prior;
+mod provider_sessions;
 mod provider_tailscale;
 mod provider_waits;
 mod providers_by_key;

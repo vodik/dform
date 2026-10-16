@@ -151,8 +151,12 @@ fn a_plan_writes_its_spans_to_the_trace_file() {
     ] {
         assert!(names.contains(want), "no span {want:?} in {names:?}");
     }
-    // The attributes a span may carry: names, kinds, counts.
-    let allowed: BTreeSet<&str> = ["provider", "kind", "addr", "tick", "count", "command"].into();
+    // The attributes a span may carry: names, kinds, counts, and the
+    // session a provider call is made in.
+    let allowed: BTreeSet<&str> = [
+        "provider", "kind", "addr", "session", "tick", "count", "command",
+    ]
+    .into();
     for sp in &spans {
         for a in sp["attributes"].as_array().unwrap() {
             let k = a["key"].as_str().unwrap();
