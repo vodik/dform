@@ -222,7 +222,9 @@ fn its_requests_are_spans_under_the_calls_they_are_made_for() {
         server.calls().len()
     );
     let mut under = std::collections::BTreeSet::new();
+    let mut buckets = std::collections::BTreeSet::new();
     for r in &requests {
+        buckets.extend(common::attr(r, "bucket"));
         assert_eq!(common::attr(r, "provider").as_deref(), Some("ovh"));
         let addr = common::attr(r, "addr").unwrap();
         assert!(addr.starts_with(&server.endpoint), "{addr}");
@@ -233,6 +235,10 @@ fn its_requests_are_spans_under_the_calls_they_are_made_for() {
     }
     assert!(under.contains("ovh Configure"), "{under:?}");
     assert!(under.contains("ovh Plan"), "{under:?}");
+    // Each paced in its class of endpoint's window (`api::bucket`).
+    for class in ["project", "flavor", "image"] {
+        assert!(buckets.contains(class), "{buckets:?}");
+    }
 }
 
 #[test]

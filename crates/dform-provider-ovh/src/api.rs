@@ -4,7 +4,9 @@
 //! and sent through the host's HTTP (`dform_sdk::host().http`), so dform
 //! pools its connection, paces it with the provider's other requests and
 //! traces it under the call it is made for. The keys stay here: the
-//! signature is over the request, which the host sends as it is.
+//! signature is over the request, which the host sends as it is. Each
+//! request names the class of endpoint it is (`bucket`): the host paces
+//! each class's window by what the API answers it.
 //!
 //! A bearer token is minted with OAuth2's client-credentials grant
 //! (`grant_type=client_credentials`, `scope=all`, the client id and
@@ -365,7 +367,9 @@ impl Client {
             path: path.into(),
             why,
         };
-        let mut req = dform_sdk::Request::new(method, url).timeout(REQUEST_TIMEOUT);
+        let mut req = dform_sdk::Request::new(method, url)
+            .timeout(REQUEST_TIMEOUT)
+            .bucket(bucket(path));
         for (k, v) in headers {
             req = req.header(k, v);
         }
@@ -466,6 +470,25 @@ impl Client {
     }
 }
 
+/// The class of endpoint the request to `path` is, as the host's window
+/// for it is named: a project's kind of object (`instance`, `network`,
+/// `volume`, `sshkey`, `flavor`, ..), `project` for the projects
+/// themselves, else the API's first segment (`domain`, `auth`, `me`); a
+/// token URL is `auth`.
+pub fn bucket(path: &str) -> &str {
+    if path.contains("://") {
+        return "auth";
+    }
+    let path = path.split(['?', '#']).next().unwrap_or_default();
+    let mut segments = path.trim_start_matches('/').split('/');
+    match (segments.next(), segments.next(), segments.nth(1)) {
+        (Some("cloud"), Some("project"), Some(kind)) if !kind.is_empty() => kind,
+        (Some("cloud"), Some("project"), _) => "project",
+        (Some(first), _, _) if !first.is_empty() => first,
+        _ => "api",
+    }
+}
+
 /// `s` as a URL path segment or query value.
 pub fn escape(s: &str) -> String {
     let mut out = String::new();
@@ -505,6 +528,24 @@ mod tests {
             message: "bad".into(),
         };
         assert!(!dform_core::plugin::policy::retryable(&refused.to_string()));
+    }
+
+    /// A request's window is its class of endpoint's.
+    #[test]
+    fn a_request_is_paced_by_its_class_of_endpoint() {
+        for (path, class) in [
+            ("/cloud/project/p/instance/i-1/interface", "instance"),
+            ("/cloud/project/p/instance?region=BHS5", "instance"),
+            ("/cloud/project/p/network/private/pn-1/subnet", "network"),
+            ("/cloud/project/p/flavor?region=BHS5", "flavor"),
+            ("/cloud/project/p", "project"),
+            ("/cloud/project", "project"),
+            ("/domain/zone/example.com/record?subDomain=www", "domain"),
+            ("/auth/time", "auth"),
+            ("https://www.ovh.com/auth/oauth2/token", "auth"),
+        ] {
+            assert_eq!(bucket(path), class, "{path}");
+        }
     }
 
     #[test]

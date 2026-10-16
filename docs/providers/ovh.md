@@ -7,8 +7,10 @@ hosts, over the OVH API (`/cloud/project/{serviceName}/...`,
 `/domain/zone/{zone}/record`). It is a native provider: dform starts it
 and speaks the plugin protocol to it. It signs each request with the
 account's keys itself and sends it through the host's HTTP, so dform
-holds its connection to the API, paces its requests with its other calls'
-and traces each under the call it is made for.
+holds its connection to the API, paces its requests, each class of
+endpoint in a window of its own (`instance`, `network`, `volume`,
+`domain`, ..: a project's kind of object, else the API's first path
+segment), and traces each under the call it is made for.
 
 ## Configure
 
