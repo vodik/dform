@@ -3,8 +3,10 @@
 
 #![allow(dead_code)]
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// What an unattended apply says when it stops before a tick that adds
@@ -356,26 +358,57 @@ const SIBLINGS: &[(&str, &str)] = &[
 /// `cargo test --workspace` build every default member's binaries before
 /// any test runs, so the binary is there; a test never runs cargo itself
 /// (a nested build doubled the suite's build load and took the workspace
-/// lock twice). `cargo test --test X` builds only this package's
-/// binaries: a missing sibling fails naming the command that builds it,
-/// and one from another commit fails the provider handshake
-/// (`plugin::link::check_build`).
+/// lock twice). `cargo test -p dform` and `cargo test --test X` build
+/// only this package's binaries: a missing sibling fails naming the
+/// command that builds it, and so does one older than a source it is
+/// built from ([`stale_source`]: `dform-direct` after an edit of the
+/// library it shares with `dform`), before it runs stale code.
 pub fn exe(name: &str) -> String {
     let dform = Path::new(env!("CARGO_BIN_EXE_dform"));
     let path = dform.with_file_name(name);
+    let package = SIBLINGS
+        .iter()
+        .find(|(bin, _)| *bin == name)
+        .map_or(name, |&(_, package)| package);
+    let build = format!(
+        "build it with `cargo build --package {package}` (or run `cargo build --workspace`)"
+    );
     if !path.exists() {
-        let package = SIBLINGS
-            .iter()
-            .find(|(bin, _)| *bin == name)
-            .map_or(name, |&(_, package)| package);
         panic!(
-            "{} is not built: tests run the binary cargo built beside dform; \
-             build it with `cargo build --package {package}` (or run \
-             `cargo test --workspace`)",
+            "{} is not built: tests run the binary cargo built beside dform; {build}",
             path.display()
         );
     }
+    static FRESH: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+    if !FRESH.lock().unwrap().contains(name) {
+        if let Some(source) = stale_source(&path) {
+            panic!(
+                "{} is older than {}, which it is built from: `cargo test -p dform` does not \
+                 rebuild it; {build}",
+                path.display(),
+                source.display()
+            );
+        }
+        FRESH.lock().unwrap().insert(name.to_string());
+    }
     path.to_str().unwrap().to_string()
+}
+
+/// A source the binary `bin` is built from that changed after it was:
+/// one its dep-info (`BIN.d`, every file cargo built it from) lists,
+/// newer than it, as cargo's own fingerprint would find. None without
+/// dep-info.
+fn stale_source(bin: &Path) -> Option<PathBuf> {
+    let modified = |p: &Path| p.metadata().and_then(|m| m.modified()).ok();
+    let built = modified(bin)?;
+    let info = std::fs::read_to_string(bin.with_extension("d")).ok()?;
+    let (_, sources) = info.lines().next()?.split_once(": ")?;
+    // Make's escaping: a space in a path is `\ `.
+    let sources = sources.replace("\\ ", "\0");
+    sources
+        .split_whitespace()
+        .map(|s| PathBuf::from(s.replace('\0', " ")))
+        .find(|s| modified(s).is_some_and(|m| m > built))
 }
 
 /// `ARGS` with `--yes` after `apply` (once): a test applies with no
