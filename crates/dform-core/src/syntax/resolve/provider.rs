@@ -45,61 +45,31 @@ type Part = (
     std::ops::Range<usize>,
 );
 
+/// The account a `use` block expects as lowered: the block's clause
+/// again, in a rule context of its own, its value's node, the variables
+/// it wrote, by the names they lower to, and where the helpers its value
+/// made start.
+struct Account {
+    clause: Option<ClauseId>,
+    value: ExprId,
+    written: Vec<String>,
+    made: usize,
+}
+
 /// A provider's `use` block's setting that is checked, not sent.
 const EXPECT_ACCOUNT: &str = "expect_account";
 
 impl Lowerer<'_> {
     /// A provider's `use`, built as a `Provider` item (R-211 step 5): its
-    /// settings' values and the reads they hoisted, its clause B's goals,
-    /// which declaration of its name it is; `lower` writes its
-    /// configuration's rules.
+    /// settings' values, its clause B's goals, which declaration of its
+    /// name it is; `lower` writes its configuration's rules.
     pub(super) fn provider(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
         use crate::program::build::{SettingKind, SettingLowered};
         let span = self.span(n);
         // `use ovh as ca` (R-115): the provider `ovh` under the name `ca`,
         // its own process, settings and state, its types `ca.instance`.
         let (of, name) = use_parts(n);
-        if of == "random" {
-            let d = Diagnostic::error(span, "random is not a provider").with_help(
-                "random.password, random.base64, random.id, random.uuid and \
-                     random.signing_key are std functions (std/random.df): delete the \
-                     `use random` statement and call them",
-            );
-            self.diags.push(d);
-            return Err(Skip);
-        }
-        if of == "ssh" {
-            let d = Diagnostic::error(span, "the ssh provider is gone (R-153)").with_help(
-                "a host's file is a location dform reads itself: \
-                 `io.read(\"ssh://USER@HOST/PATH\")`, a format's decode of it \
-                 (`yaml.decode(io.read(..))`); delete the `use ssh` statement",
-            );
-            self.diags.push(d);
-            return Err(Skip);
-        }
-        if of == "file" && !super::names_source(n) {
-            let d = Diagnostic::error(span, "the file provider is gone (R-155)").with_help(
-                "a project file's text is `io.read(\"PATH\")`, the one read, a std function \
-                 in scope with no `use`; delete the `use file` statement",
-            );
-            self.diags.push(d);
-            return Err(Skip);
-        }
-        if of != name && crate::externs::builtin(&of).is_some_and(|b| b.in_process) {
-            return self.error(
-                span,
-                format!(
-                    "`use {of} as {name}`: {of} is answered by dform itself, with nothing to \
-                     configure twice: write `use {of}`"
-                ),
-            );
-        }
-        let block = node(n, BLOCK);
-        let mut settings = BTreeSet::new();
-        // Each setting as lowered: its kind and span, its value and the
-        // helpers it made.
-        let mut parts: Vec<Part> = Vec::new();
-        let mut written = BTreeSet::new();
+        self.no_provider(n, (&of, &name), span)?;
         let mut rc = self.rc(n, scope, outer);
         // A guarded provider (R-104): its settings, its account and its
         // start hold only while the clause does.
@@ -108,122 +78,14 @@ impl Lowerer<'_> {
         // A `use` binds no aggregate, as a copy's does not.
         self.aggregate_in(gathered, self.span(n))?;
         let others = self.providers_named(n, &name)?;
-        if let Some(b) = &block {
-            for a in b.children().filter(|c| c.kind() == ASSIGN) {
-                let at = self.span(&a);
-                let key = self.block_path(&node(&a, BLOCK_PATH).ok_or(Skip)?)?;
-                if tokens(&a).any(|t| matches!(t.kind(), PLUS_EQ | RANK)) {
-                    return self.error(
-                        at,
-                        format!(
-                            "provider {name}: a setting is `{key} = term`, with no `+=` or rank"
-                        ),
-                    );
-                }
-                let made = self.helpers.len();
-                match key.as_str() {
-                    "source" => {
-                        let Some(t) = terms(&a).next() else {
-                            return self
-                                .error(at, format!("provider {name}: source is a path string"));
-                        };
-                        let id = self.constant_node(&mut rc, &t)?;
-                        let made = made..self.helpers.len();
-                        parts.push((SettingKind::Source(key), at, id, made));
-                    }
-                    EXPECT_ACCOUNT => {
-                        let mut rc = self.rc(&a, scope, outer);
-                        let own = match gathered {
-                            None => None,
-                            Some(_) => {
-                                self.clauses(&mut rc, n)?;
-                                self.gather.as_mut().and_then(|g| g.take_clause())
-                            }
-                        };
-                        let made = self.helpers.len();
-                        let (_, id) = self.entry_value(&mut rc, &a, Pos::Content)?;
-                        self.check_bound(&rc, own, &[bind::Term::Expr(id)])?;
-                        written.extend(rc.vars.values().cloned());
-                        let made = made..self.helpers.len();
-                        parts.push((SettingKind::Account(own), at, id, made));
-                    }
-                    _ => {
-                        let (_, id) = self.entry_value(&mut rc, &a, Pos::Content)?;
-                        if !settings.insert(key.clone()) {
-                            return self.error(at, format!("provider {name}: {key} is set twice"));
-                        }
-                        let made = made..self.helpers.len();
-                        parts.push((SettingKind::Value(key), at, id, made));
-                    }
-                }
-            }
-        }
-        written.extend(rc.vars.values().cloned());
-        // A guarded provider is configured by the program, with no
-        // settings too: it serves nothing until its clause holds and its
-        // `provider_config` fact arrives (`Providers::configure_from`).
-        if !settings.is_empty() || gathered.is_some() {
-            let values: Vec<bind::Term> = parts
-                .iter()
-                .filter(|(kind, ..)| matches!(kind, SettingKind::Value(_)))
-                .map(|&(_, _, id, _)| bind::Term::Expr(id))
-                .collect();
-            self.check_bound(&rc, gathered, &values)?;
-        }
+        let (parts, written) =
+            self.provider_settings(&mut rc, (n, scope, outer), &name, gathered)?;
         // Declared more than once, each under a clause (R-104): the first
         // starts it, each holds while its clause does, and two that both
         // hold are the deny naming both.
         // `effects` reads each guarded declaration's clause off it.
-        let mut declared = None;
-        if gathered.is_some() {
-            declared = Some(others.iter().position(|o| o == n).unwrap_or_default());
-        }
-        let mut starts = false;
-        let mut denies = Vec::new();
-        match others.first() {
-            Some(first) if first != n => {
-                let first_source = node(first, BLOCK)
-                    .into_iter()
-                    .flat_map(|b| {
-                        b.children()
-                            .filter(|c| c.kind() == ASSIGN)
-                            .collect::<Vec<_>>()
-                    })
-                    .find(|a| node(a, BLOCK_PATH).is_some_and(|p| p.text() == "source"))
-                    .and_then(|a| terms(&a).next())
-                    .map(|t| t.text().to_string());
-                let this_source = block
-                    .iter()
-                    .flat_map(|b| {
-                        b.children()
-                            .filter(|c| c.kind() == ASSIGN)
-                            .collect::<Vec<_>>()
-                    })
-                    .find(|a| node(a, BLOCK_PATH).is_some_and(|p| p.text() == "source"))
-                    .and_then(|a| terms(&a).next())
-                    .map(|t| t.text().to_string());
-                if this_source.is_some() && this_source != first_source {
-                    let at = self.span(first);
-                    let d = Diagnostic::error(
-                        span,
-                        format!("provider {name}: each declaration names another source"),
-                    )
-                    .with_label(at, "the first declaration")
-                    .with_help(format!(
-                        "provider {name} runs one executable: keep `source` in the first \
-                         declaration and drop it from this one"
-                    ));
-                    self.diags.push(d);
-                    return Err(Skip);
-                }
-            }
-            _ => {
-                starts = true;
-                if others.len() > 1 {
-                    denies = others.iter().map(|o| self.span(o)).collect();
-                }
-            }
-        }
+        let declared = gathered.map(|_| others.iter().position(|o| o == n).unwrap_or_default());
+        let (starts, denies) = self.provider_start(n, &others, &name)?;
         let settings = parts
             .iter()
             .map(|(kind, at, v, made)| SettingLowered {
@@ -257,6 +119,176 @@ impl Lowerer<'_> {
         let item = b.provider_item(p);
         gather.done(b);
         Ok(item)
+    }
+
+    /// A `use` of what is no provider (any more) or a provider dform
+    /// answers itself renamed: the error that says what to write.
+    fn no_provider(&mut self, n: &SyntaxNode, (of, name): (&str, &str), span: Span) -> L<()> {
+        let gone = match of {
+            "random" => Some((
+                "random is not a provider",
+                "random.password, random.base64, random.id, random.uuid and \
+                 random.signing_key are std functions (std/random.df): delete the \
+                 `use random` statement and call them",
+            )),
+            "ssh" => Some((
+                "the ssh provider is gone (R-153)",
+                "a host's file is a location dform reads itself: \
+                 `io.read(\"ssh://USER@HOST/PATH\")`, a format's decode of it \
+                 (`yaml.decode(io.read(..))`); delete the `use ssh` statement",
+            )),
+            "file" if !super::names_source(n) => Some((
+                "the file provider is gone (R-155)",
+                "a project file's text is `io.read(\"PATH\")`, the one read, a std function \
+                 in scope with no `use`; delete the `use file` statement",
+            )),
+            _ => None,
+        };
+        if let Some((message, help)) = gone {
+            self.diags
+                .push(Diagnostic::error(span, message).with_help(help));
+            return Err(Skip);
+        }
+        if of != name && crate::externs::builtin(of).is_some_and(|b| b.in_process) {
+            return self.error(
+                span,
+                format!(
+                    "`use {of} as {name}`: {of} is answered by dform itself, with nothing to \
+                     configure twice: write `use {of}`"
+                ),
+            );
+        }
+        Ok(())
+    }
+
+    /// The settings of the provider `name`'s `use` block `n` under its
+    /// clause `gathered`: each as lowered, and the variables the program
+    /// wrote in them, by the names they lower to.
+    fn provider_settings(
+        &mut self,
+        rc: &mut Rc,
+        (n, scope, outer): (&SyntaxNode, ScopeId, &Rc),
+        name: &str,
+        gathered: Option<ClauseId>,
+    ) -> L<(Vec<Part>, BTreeSet<String>)> {
+        use crate::program::build::SettingKind;
+        let mut settings = BTreeSet::new();
+        let mut parts: Vec<Part> = Vec::new();
+        let mut written = BTreeSet::new();
+        let assigns = node(n, BLOCK).into_iter().flat_map(|b| {
+            b.children()
+                .filter(|c| c.kind() == ASSIGN)
+                .collect::<Vec<_>>()
+        });
+        for a in assigns {
+            let at = self.span(&a);
+            let key = self.block_path(&node(&a, BLOCK_PATH).ok_or(Skip)?)?;
+            if tokens(&a).any(|t| matches!(t.kind(), PLUS_EQ | RANK)) {
+                return self.error(
+                    at,
+                    format!("provider {name}: a setting is `{key} = term`, with no `+=` or rank"),
+                );
+            }
+            let mut made = self.helpers.len();
+            let (kind, id) = match key.as_str() {
+                "source" => {
+                    let Some(t) = terms(&a).next() else {
+                        return self.error(at, format!("provider {name}: source is a path string"));
+                    };
+                    (SettingKind::Source(key), self.constant_node(rc, &t)?)
+                }
+                EXPECT_ACCOUNT => {
+                    let account = self.account(&a, (n, scope, outer), gathered)?;
+                    // Its helpers are its value's, not its clause's again.
+                    made = account.made;
+                    written.extend(account.written);
+                    (SettingKind::Account(account.clause), account.value)
+                }
+                _ => {
+                    let (_, id) = self.entry_value(rc, &a, Pos::Content)?;
+                    if !settings.insert(key.clone()) {
+                        return self.error(at, format!("provider {name}: {key} is set twice"));
+                    }
+                    (SettingKind::Value(key), id)
+                }
+            };
+            parts.push((kind, at, id, made..self.helpers.len()));
+        }
+        written.extend(rc.vars.values().cloned());
+        // A guarded provider is configured by the program, with no
+        // settings too: it serves nothing until its clause holds and its
+        // `provider_config` fact arrives (`Providers::configure_from`).
+        if !settings.is_empty() || gathered.is_some() {
+            let values: Vec<bind::Term> = parts
+                .iter()
+                .filter(|(kind, ..)| matches!(kind, SettingKind::Value(_)))
+                .map(|&(_, _, id, _)| bind::Term::Expr(id))
+                .collect();
+            self.check_bound(rc, gathered, &values)?;
+        }
+        Ok((parts, written))
+    }
+
+    /// The account a `use` block expects, `a` its setting, in a rule
+    /// context of its own under the block's clause when it has one
+    /// (`gathered`).
+    fn account(
+        &mut self,
+        a: &SyntaxNode,
+        (n, scope, outer): (&SyntaxNode, ScopeId, &Rc),
+        gathered: Option<ClauseId>,
+    ) -> L<Account> {
+        let mut rc = self.rc(a, scope, outer);
+        let own = match gathered {
+            None => None,
+            Some(_) => {
+                self.clauses(&mut rc, n)?;
+                self.gather.as_mut().and_then(|g| g.take_clause())
+            }
+        };
+        let made = self.helpers.len();
+        let (_, value) = self.entry_value(&mut rc, a, Pos::Content)?;
+        self.check_bound(&rc, own, &[bind::Term::Expr(value)])?;
+        Ok(Account {
+            clause: own,
+            value,
+            written: rc.vars.values().cloned().collect(),
+            made,
+        })
+    }
+
+    /// Whether the `use` `n` of the provider `name` starts it, the first of
+    /// the declarations `others` of its name, and where they all are when
+    /// it is one of several (the deny where two hold); a later one naming
+    /// another source than the first is an error.
+    fn provider_start(
+        &mut self,
+        n: &SyntaxNode,
+        others: &[SyntaxNode],
+        name: &str,
+    ) -> L<(bool, Vec<Span>)> {
+        match others.first() {
+            Some(first) if first != n => {
+                let this = source_text(n);
+                if this.is_some() && this != source_text(first) {
+                    let at = self.span(first);
+                    let d = Diagnostic::error(
+                        self.span(n),
+                        format!("provider {name}: each declaration names another source"),
+                    )
+                    .with_label(at, "the first declaration")
+                    .with_help(format!(
+                        "provider {name} runs one executable: keep `source` in the first \
+                         declaration and drop it from this one"
+                    ));
+                    self.diags.push(d);
+                    return Err(Skip);
+                }
+                Ok((false, Vec::new()))
+            }
+            _ if others.len() > 1 => Ok((true, others.iter().map(|o| self.span(o)).collect())),
+            _ => Ok((true, Vec::new())),
+        }
     }
 
     /// The provider's `use`s beside `n` that bind `name` (`use ovh as
@@ -455,4 +487,14 @@ impl Lowerer<'_> {
         self.diags.push(d);
         Err(Skip)
     }
+}
+
+/// The text of the `source` a `use` block sets, as written.
+fn source_text(n: &SyntaxNode) -> Option<String> {
+    node(n, BLOCK)?
+        .children()
+        .filter(|c| c.kind() == ASSIGN)
+        .find(|a| node(a, BLOCK_PATH).is_some_and(|p| p.text() == "source"))
+        .and_then(|a| terms(&a).next())
+        .map(|t| t.text().to_string())
 }

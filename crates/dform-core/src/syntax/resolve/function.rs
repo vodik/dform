@@ -66,48 +66,11 @@ impl Lowerer<'_> {
         let span = self.span(n);
         let name = word_text(n, 1);
         let ps = params(n).unwrap_or_default();
-        if ps.is_empty() {
-            return self.error(
-                span,
-                format!("`let {name}()` has no parameters: a value is `let {name} = ..`"),
-            );
-        }
-        if self.rank_tok(n)?.is_some() {
-            return self.error(
-                span,
-                format!(
-                    "a rank orders a value's rows: `let {}` is a relation, whose rows are not \
-                     ranked",
-                    signature(&name, &ps)
-                ),
-            );
-        }
-        let mut seen = BTreeSet::new();
-        for p in &ps {
-            if !seen.insert(p.name.as_str()) {
-                return self.error(
-                    span,
-                    format!("`let {name}` names its parameter `{}` twice", p.name),
-                );
-            }
-        }
-        // Every declaration of the name takes the same parameters (R-104).
-        if let Some((_, first)) = self.function_def(scope, &name)
-            && first != *n
-            && node(&first, PARAMS).map(|p| p.text().to_string())
-                != node(n, PARAMS).map(|p| p.text().to_string())
-        {
-            let at = crate::diag::at(self.span(&first)).unwrap_or_default();
-            return self.error(
-                span,
-                format!(
-                    "`let {name}` takes other parameters here than at {at}: one relation has \
-                     one set of columns"
-                ),
-            );
-        }
+        self.check_params(n, (&name, &ps), scope, span)?;
         // The parameters are bound around the body, as an enclosing
-        // statement's variables are.
+        // statement's variables are: by the demand of the literal that
+        // reads the relation (`crate::demand`), which `lower` writes first
+        // in the body.
         let mut inner = outer.clone();
         let mut vars = Vec::new();
         for p in &ps {
@@ -116,11 +79,8 @@ impl Lowerer<'_> {
                 v.push('_');
             }
             inner.vars.insert(p.name.clone(), v.clone());
-            vars.push(var(&v));
+            vars.push(v);
         }
-        // The parameters are bound by the demand of the literal that reads
-        // the relation (`crate::demand`), which `lower` writes first in the
-        // body: bound around it.
         let mut rc = self.rc(n, scope, &inner);
         self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
@@ -128,25 +88,21 @@ impl Lowerer<'_> {
         let t = terms(n).next().ok_or(Skip)?;
         let declared = node(n, TYPE_EXPR).map(|t| self.type_expr(&t));
         let (value, id) = self.let_value(&mut rc, &t)?;
-        let (value, id) = match &declared {
+        let id = match &declared {
             Some(d) => {
                 let ty = (&crate::types::of_expr(d), d);
                 let typed = self.let_typed(scope, &name, ty, &t, value.clone())?;
-                let id = self.retyped(id, &value, typed.clone());
-                (typed, id)
+                self.retyped(id, &value, typed)
             }
-            None => (value, id),
+            None => id,
         };
-        let mut args = vars;
-        args.push(value);
-        let head = atom_at(&name, args, span);
         self.check_bound(&rc, clause, &[bind::Term::Expr(id)])?;
         let l = crate::program::build::LetFnLowered {
             name,
             span,
             scope: self.item_scope,
             clause,
-            head: &head,
+            params: &vars,
             value: id,
             made: &self.helpers[made..],
         };
@@ -160,6 +116,59 @@ impl Lowerer<'_> {
         let item = b.let_fn_item(l);
         gather.done(b);
         Ok(item)
+    }
+
+    /// What a let with parameters `ps` named `name` may not be: without
+    /// them, ranked, naming one twice, or another declaration's other
+    /// parameters (R-104).
+    fn check_params(
+        &mut self,
+        n: &SyntaxNode,
+        (name, ps): (&str, &[Param]),
+        scope: ScopeId,
+        span: Span,
+    ) -> L<()> {
+        if ps.is_empty() {
+            return self.error(
+                span,
+                format!("`let {name}()` has no parameters: a value is `let {name} = ..`"),
+            );
+        }
+        if self.rank_tok(n)?.is_some() {
+            return self.error(
+                span,
+                format!(
+                    "a rank orders a value's rows: `let {}` is a relation, whose rows are not \
+                     ranked",
+                    signature(name, ps)
+                ),
+            );
+        }
+        let mut seen = BTreeSet::new();
+        for p in ps {
+            if !seen.insert(p.name.as_str()) {
+                return self.error(
+                    span,
+                    format!("`let {name}` names its parameter `{}` twice", p.name),
+                );
+            }
+        }
+        // Every declaration of the name takes the same parameters (R-104).
+        if let Some((_, first)) = self.function_def(scope, name)
+            && first != *n
+            && node(&first, PARAMS).map(|p| p.text().to_string())
+                != node(n, PARAMS).map(|p| p.text().to_string())
+        {
+            let at = crate::diag::at(self.span(&first)).unwrap_or_default();
+            return self.error(
+                span,
+                format!(
+                    "`let {name}` takes other parameters here than at {at}: one relation has \
+                     one set of columns"
+                ),
+            );
+        }
+        Ok(())
     }
 
     /// The let with parameters a call names in `rc`, when it names one:
@@ -244,49 +253,7 @@ impl Lowerer<'_> {
         let name = word_text(def, 1);
         let ps = params(def).unwrap_or_default();
         let sig = signature(&name, &ps);
-        let list = node(n, ARG_LIST);
-        let positional: Vec<SyntaxNode> = list
-            .as_ref()
-            .map(|l| terms(l).collect())
-            .unwrap_or_default();
-        if positional.len() > ps.len() {
-            return self.error(
-                span,
-                format!(
-                    "`{name}` takes {} argument{}, not {}: `{sig}`",
-                    ps.len(),
-                    if ps.len() == 1 { "" } else { "s" },
-                    positional.len()
-                ),
-            );
-        }
-        let mut given: Vec<Option<(ExprId, Span)>> = (0..ps.len()).map(|_| None).collect();
-        for (i, t) in positional.iter().enumerate() {
-            let arg = self.bind(false, |l| l.expr(rc, t, Pos::Content))?;
-            given[i] = Some((arg, self.span(t)));
-        }
-        let named = list
-            .iter()
-            .flat_map(|l| l.children().filter(|c| c.kind() == NAMED_ARG));
-        for a in named {
-            let k = word_text(&a, 0);
-            let Some(i) = ps.iter().position(|p| p.name == k) else {
-                let names: Vec<&str> = ps.iter().map(|p| p.name.as_str()).collect();
-                return self.error(
-                    self.span(&a),
-                    format!(
-                        "`{name}` has no parameter `{k}`: its parameters are {}",
-                        names.join(", ")
-                    ),
-                );
-            };
-            if given[i].is_some() {
-                return self.error(self.span(&a), format!("`{name}`'s `{k}` is given twice"));
-            }
-            let t = terms(&a).next().ok_or(Skip)?;
-            let arg = self.bind(false, |l| l.expr(rc, &t, Pos::Content))?;
-            given[i] = Some((arg, self.span(&t)));
-        }
+        let given = self.given_args(rc, n, (&name, &ps), &sig)?;
         let mut args = Vec::new();
         for (p, g) in ps.iter().zip(given) {
             let (arg, at) = match (g, &p.default) {
@@ -329,13 +296,69 @@ impl Lowerer<'_> {
         let args_key: Vec<String> = args.iter().map(|a| self.read_key_of(*a)).collect();
         let key = format!("fn {} {terms:?} {args_key:?}", read_key(pred, &via));
         if let Some(Term::Var(v)) = rc.reads.get(&key) {
-            // Read already: its arguments' reads are made again.
+            // Read already: the variable it read into.
             let v = v.clone();
             return Ok(self.var_node(rc, span, &v));
         }
         let v = fresh(rc, &capitalise(&name));
         rc.reads.insert(key, var(&v));
         Ok(self.building(rc, span, |b| b.call_into((pred, via), args, &v)))
+    }
+
+    /// The arguments the call `n` of the let with parameters `ps` named
+    /// `name` (its signature `sig`) gives each parameter, by position then
+    /// by name, each with where it is written.
+    fn given_args(
+        &mut self,
+        rc: &mut Rc,
+        n: &SyntaxNode,
+        (name, ps): (&str, &[Param]),
+        sig: &str,
+    ) -> L<Vec<Option<(ExprId, Span)>>> {
+        let list = node(n, ARG_LIST);
+        let positional: Vec<SyntaxNode> = list
+            .as_ref()
+            .map(|l| terms(l).collect())
+            .unwrap_or_default();
+        if positional.len() > ps.len() {
+            return self.error(
+                self.span(n),
+                format!(
+                    "`{name}` takes {} argument{}, not {}: `{sig}`",
+                    ps.len(),
+                    if ps.len() == 1 { "" } else { "s" },
+                    positional.len()
+                ),
+            );
+        }
+        let mut given: Vec<Option<(ExprId, Span)>> = (0..ps.len()).map(|_| None).collect();
+        for (i, t) in positional.iter().enumerate() {
+            let arg = self.bind(false, |l| l.expr(rc, t, Pos::Content))?;
+            given[i] = Some((arg, self.span(t)));
+        }
+        let named = list
+            .iter()
+            .flat_map(|l| l.children().filter(|c| c.kind() == NAMED_ARG));
+        for a in named {
+            let k = word_text(&a, 0);
+            let Some(i) = ps.iter().position(|p| p.name == k) else {
+                let names: Vec<&str> = ps.iter().map(|p| p.name.as_str()).collect();
+                return self.error(
+                    self.span(&a),
+                    format!(
+                        "`{name}` has no parameter `{k}`: its parameters are {}",
+                        names.join(", ")
+                    ),
+                );
+            };
+            if given[i].is_some() {
+                return self.error(self.span(&a), format!("`{name}`'s `{k}` is given twice"));
+            }
+            let t = terms(&a).next().ok_or(Skip)?;
+            let arg = self.bind(false, |l| l.expr(rc, &t, Pos::Content))?;
+            given[i] = Some((arg, self.span(&t)));
+        }
+        Ok(given)
     }
 
     /// A call of an unknown function whose name is nearest a let with

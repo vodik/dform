@@ -10,7 +10,7 @@
 //! binds them.
 
 use super::{Builder, Column, grouped, number_folds};
-use crate::ast::{Atom, Rank, Span, Stmt, TypeExpr};
+use crate::ast::{Rank, Span, Stmt, TypeExpr};
 use crate::program::NodeId;
 use crate::program::bind::Term;
 use crate::program::node::{ClauseId, ExprId, GoalId, Item, ItemId, ItemKind, Param};
@@ -78,8 +78,8 @@ pub struct LetFnLowered<'a> {
     pub scope: ScopeId,
     /// The clause of B, gathered after the demand; none without `where`.
     pub clause: Option<ClauseId>,
-    /// `f(params, v)`, as the resolver wrote it.
-    pub head: &'a Atom,
+    /// Its parameters' variables, by the names they lower to.
+    pub params: &'a [String],
     /// The value's node, as the resolver built it.
     pub value: ExprId,
     /// The helper statements the value's terms made.
@@ -87,19 +87,16 @@ pub struct LetFnLowered<'a> {
 }
 
 impl Builder<'_> {
-    /// The `LetFn` item of `l`: its parameters the head's leading
-    /// variables, its value the last column's node after its reads.
+    /// The `LetFn` item of `l`: its parameters' variables, its value the
+    /// node after its reads.
     pub fn let_fn_item(&mut self, l: LetFnLowered) -> ItemId {
-        let (_, params) = l.head.args.split_last().expect("a value column");
-        let params: Vec<Param> = params
+        let params: Vec<Param> = l
+            .params
             .iter()
-            .map(|t| match t {
-                crate::ast::Term::Var(v) => Param {
-                    var: self.var(v),
-                    ty: None,
-                    default: None,
-                },
-                t => unreachable!("a parameter is a variable: {t:?}"),
+            .map(|v| Param {
+                var: self.var(v),
+                ty: None,
+                default: None,
             })
             .collect();
         let value = self.holding(l.value, l.made);

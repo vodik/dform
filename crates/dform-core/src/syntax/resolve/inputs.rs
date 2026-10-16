@@ -22,22 +22,8 @@ impl Lowerer<'_> {
         if key && let Some(path) = self.module_path(self.file) {
             return self.key_in_module(n, &name, &path, span);
         }
-        if key && n.parent().is_some_and(|p| p.kind() != SOURCE_FILE) {
-            return self.error(
-                span,
-                format!(
-                    "key {name} inside a block: a key selects the stack's deployment, \
-                             so it is declared at the top of the stack's file"
-                ),
-            );
-        }
-        if key && matches!(&ty, TypeExpr::Apply(t, _) if t == "secret") {
-            let d = Diagnostic::error(span, format!("key {name} is a secret")).with_note(
-                "a key's value names the deployment: its state's directory and \
-                             its registry entry",
-            );
-            self.diags.push(d);
-            return Err(Skip);
+        if key {
+            self.check_key(n, (&name, &ty), span)?;
         }
         let mut rc = self.rc(n, scope, outer);
         let default_node = match terms(n).next() {
@@ -52,30 +38,7 @@ impl Lowerer<'_> {
         };
         self.refinement(n, scope, Some(&name))?;
         let refined = self.clause_at(node(n, REFINEMENT).and_then(|r| node(&r, BODY)));
-        // `input k: T where B` (R-104): declared where `B` holds. A
-        // clause that reads the input itself is a check misspelled.
-        if let Some(c) = node(n, CLAUSE)
-            && c.descendants()
-                .filter_map(|x| Chain::of(&x))
-                .any(|x| x.head == name)
-        {
-            let head = n.text().to_string();
-            let at: usize = (c.text_range().start() - n.text_range().start()).into();
-            let body = c.text().to_string();
-            let body = body.trim_start().trim_start_matches("where").trim();
-            let d = Diagnostic::error(
-                self.span(&c),
-                format!(
-                    "the clause of input {name} reads {name}: a clause picks where it is declared"
-                ),
-            )
-            .with_help(format!(
-                "a refinement is spelled `check` (R-1): `{} check {body}`",
-                head[..at].trim()
-            ));
-            self.diags.push(d);
-            return Err(Skip);
-        }
+        self.self_reading_clause(n, &name)?;
         self.clauses(&mut rc, n)?;
         let guarded = self.clause_at(node(n, CLAUSE));
         // An input is declared where its clause holds, which every read of
@@ -112,6 +75,54 @@ impl Lowerer<'_> {
         let item = b.input_item(i);
         gather.done(b);
         Ok(item)
+    }
+
+    /// What a `key` (R-29) may not be: inside a block, or a secret.
+    fn check_key(&mut self, n: &SyntaxNode, (name, ty): (&str, &TypeExpr), span: Span) -> L<()> {
+        if n.parent().is_some_and(|p| p.kind() != SOURCE_FILE) {
+            return self.error(
+                span,
+                format!(
+                    "key {name} inside a block: a key selects the stack's deployment, so it is \
+                     declared at the top of the stack's file"
+                ),
+            );
+        }
+        if matches!(ty, TypeExpr::Apply(t, _) if t == "secret") {
+            let d = Diagnostic::error(span, format!("key {name} is a secret")).with_note(
+                "a key's value names the deployment: its state's directory and its registry \
+                 entry",
+            );
+            self.diags.push(d);
+            return Err(Skip);
+        }
+        Ok(())
+    }
+
+    /// `input k: T where B` (R-104): declared where `B` holds. A clause
+    /// that reads the input itself is a check misspelled, an error.
+    fn self_reading_clause(&mut self, n: &SyntaxNode, name: &str) -> L<()> {
+        let Some(c) = node(n, CLAUSE).filter(|c| {
+            c.descendants()
+                .filter_map(|x| Chain::of(&x))
+                .any(|x| x.head == name)
+        }) else {
+            return Ok(());
+        };
+        let head = n.text().to_string();
+        let at: usize = (c.text_range().start() - n.text_range().start()).into();
+        let body = c.text().to_string();
+        let body = body.trim_start().trim_start_matches("where").trim();
+        let d = Diagnostic::error(
+            self.span(&c),
+            format!("the clause of input {name} reads {name}: a clause picks where it is declared"),
+        )
+        .with_help(format!(
+            "a refinement is spelled `check` (R-1): `{} check {body}`",
+            head[..at].trim()
+        ));
+        self.diags.push(d);
+        Err(Skip)
     }
 
     /// The object type of an input's fields.
