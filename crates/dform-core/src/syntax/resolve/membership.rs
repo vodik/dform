@@ -525,7 +525,7 @@ impl Lowerer<'_> {
         let v = fresh(rc, "Values");
         let list = var(&v);
         let of = self.str_node(span, &name);
-        let read = self.building(rc, span, |b| b.call_into(ENUM, vec![of], &v));
+        let read = self.building(rc, span, |b| b.call_into((ENUM, Reach::Own), vec![of], &v));
         self.hoisted_into(read, out);
         let coll = Coll::Enum {
             name,

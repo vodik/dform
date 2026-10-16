@@ -139,7 +139,7 @@ impl Lowerer<'_> {
         rc.binders.insert(src.clone());
         let (rel, of) = read;
         let v = rc.vars[&src].clone();
-        let read = self.building(rc, at, |b| b.call_into(rel, vec![of], &v));
+        let read = self.building(rc, at, |b| b.call_into((rel, Reach::Own), vec![of], &v));
         rc.each_reads.insert(v, read);
         Ok(src)
     }

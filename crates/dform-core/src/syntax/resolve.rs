@@ -706,6 +706,16 @@ impl Rc {
     }
 }
 
+/// What a rule's reads of the relation `name` a read reaches `via` are
+/// kept by, once per rule: two relations of one name a body reaches two
+/// ways (`k`, `super.k`) are two.
+fn read_key(name: &str, via: &Reach) -> String {
+    match via {
+        Reach::Lexical(body) => format!("{name} of {body}"),
+        via => via.relation(name),
+    }
+}
+
 /// A term and its node.
 type Termed = (Term, ExprId);
 
@@ -729,6 +739,7 @@ struct RuleParts {
     /// Its head, its arguments' patterns, and with its rank the last
     /// argument.
     head: Atom,
+    rel: RelRef,
     args: crate::program::node::RelArgs,
     ranked: Atom,
     rank: Option<Rank>,
@@ -1527,20 +1538,20 @@ impl<'u> Lowerer<'u> {
         (decl, via)
     }
 
-    /// The relation `p` called in `scope`, looked up from `from` outward:
-    /// an enclosing body's own relation marked as [`Self::value_pred`]
-    /// marks a value; anything else by its name.
-    fn relation_pred(&self, scope: ScopeId, from: ScopeId, p: &str) -> String {
+    /// How a read in `scope` of the relation `p`, looked up from `from`
+    /// outward, reaches it: an enclosing body's own relation lexically, as
+    /// [`Self::value_decl`] reaches a value; anything else as its own.
+    fn relation_reach(&self, scope: ScopeId, from: ScopeId, p: &str) -> Reach {
         if !crate::modules::is_private(p) {
-            return p.to_string();
+            return Reach::Own;
         }
         let declared = self.chain_of(from).into_iter().find(|s| {
             let sc = self.names(*s);
             sc.is_relation(p) || sc.takes(p)
         });
         match declared.and_then(|d| self.lexical(scope, d)) {
-            Some(body) => crate::modules::lexical_pred(&body, p),
-            None => p.to_string(),
+            Some(body) => Reach::Lexical(body),
+            None => Reach::Own,
         }
     }
 
@@ -2843,7 +2854,7 @@ impl<'u> Lowerer<'u> {
         // another module of the same name is another relation (R-65).
         let fed = !self.names(self.decl_scope(scope)).defines(&pred);
         let span = self.span(n);
-        let rel = crate::program::node::RelRef::written(pred, span);
+        let rel = crate::program::node::RelRef::own(pred, span);
         let kind = crate::program::ItemKind::Decl {
             rel,
             columns,
@@ -3531,7 +3542,7 @@ impl<'u> Lowerer<'u> {
         Some(Ok(self.building(rc, read.span, |b| {
             let path = b.bound_into(read.location, &read.path);
             let at = b.variable(&read.at);
-            b.call_into(&read.name, vec![path, at], &v)
+            b.call_into((&read.name, Reach::Own), vec![path, at], &v)
         })))
     }
 
@@ -3659,7 +3670,7 @@ impl<'u> Lowerer<'u> {
         let mut args = vec![var(&read.path), var(&read.at)];
         args.extend(outs.iter().cloned());
         body.push(Lit::Pos(atom_at(&read.name, args, read.span)));
-        let rel = RelRef::written(read.name.clone(), read.span);
+        let rel = RelRef::own(read.name.clone(), read.span);
         self.building(rc, read.span, |b| {
             let path = b.bound_into(read.location, &read.path);
             let mut args = vec![path, b.variable(&read.at)];
@@ -3783,7 +3794,7 @@ impl<'u> Lowerer<'u> {
                     // A column of references holds the copy's resources,
                     // and never leaves a deployment (R-204).
                     let ref_columns = self.published_refs(scope, &name, **n, span)?;
-                    let rel = crate::program::node::RelRef::written(name, span);
+                    let rel = crate::program::node::RelRef::own(name, span);
                     let kind = crate::program::ItemKind::OutputRelation { rel, ref_columns };
                     return Ok(self.program.item(span, self.item_scope, kind));
                 }
@@ -4857,6 +4868,7 @@ impl<'u> Lowerer<'u> {
             span: self.span(n),
             scope: self.item_scope,
             head: &r.head,
+            rel: r.rel,
             args: r.args,
             rank: r.rank,
             clause: r.clause,
@@ -4905,9 +4917,10 @@ impl<'u> Lowerer<'u> {
             );
         }
         let made = self.helpers.len();
-        let (head, args) = self.calls(calls, |l| {
+        let (head, args, via) = self.calls(calls, |l| {
             l.atom_args(&mut rc, &head_node, Pos::Whole, &mut body)
         })?;
+        let rel = RelRef::reached(head.pred.clone(), via, head.span);
         let args = self.rel_args(&rc, head.span, args);
         let rank = self.rank_tok(n)?;
         let mut ranked = head.clone();
@@ -4929,6 +4942,7 @@ impl<'u> Lowerer<'u> {
         Ok(RuleParts {
             clause,
             head,
+            rel,
             args,
             ranked,
             rank,
@@ -6024,9 +6038,9 @@ impl<'u> Lowerer<'u> {
         match n.kind() {
             LIT_ATOM => {
                 let a = terms(n).next().ok_or(Skip)?;
-                let (atom, args) = self.atom_args(rc, &a, Pos::Content, out)?;
+                let (atom, args, via) = self.atom_args(rc, &a, Pos::Content, out)?;
                 self.core_read(&a, &atom)?;
-                let g = self.rel_goal(rc, &atom, args);
+                let g = self.rel_goal(rc, (&atom, via), args);
                 self.built(g);
                 out.push(Lit::Pos(atom));
             }
@@ -6180,9 +6194,9 @@ impl<'u> Lowerer<'u> {
         match n.kind() {
             LIT_ATOM => {
                 let a = terms(n).next().ok_or(Skip)?;
-                let (atom, args) = self.atom_args(rc, &a, Pos::Content, out)?;
+                let (atom, args, via) = self.atom_args(rc, &a, Pos::Content, out)?;
                 self.core_read(&a, &atom)?;
-                let g = self.rel_goal(rc, &atom, args);
+                let g = self.rel_goal(rc, (&atom, via), args);
                 let g = self.building(rc, span, |b| b.not_one(g, Negated::Literal));
                 self.built(g);
                 out.push(Lit::Not(atom));
@@ -6814,15 +6828,16 @@ impl<'u> Lowerer<'u> {
         n: &SyntaxNode,
         pos: Pos,
         pre: &mut Vec<Lit>,
-    ) -> L<(Atom, AtomArgs)> {
+    ) -> L<(Atom, AtomArgs, Reach)> {
         let span = self.span(n);
-        if let Some(a) = self.exported_relation(rc, n, pos, pre)? {
-            return Ok(a);
+        if let Some((a, args)) = self.exported_relation(rc, n, pos, pre)? {
+            return Ok((a, args, Reach::Own));
         }
         let pred = self.callee(n).ok_or(Skip);
         let Ok(mut pred) = pred else {
             return self.error(span, "a relation is named by a plain name (`p` or `m.p`)");
         };
+        let mut via = Reach::Own;
         // A used module's relation: `releases.release(..)` is the
         // activation's `releases::release` (R-65).
         if let Some((m, p)) = pred.split_once('.')
@@ -6850,17 +6865,19 @@ impl<'u> Lowerer<'u> {
                 let around = self.scope_name(from);
                 return self.error(span, format!("`super.{p}`: {around} has no relation `{p}`"));
             }
-            pred = self.relation_pred(rc.scope, from, p);
+            via = self.relation_reach(rc.scope, from, p);
+            pred = p.clone();
         } else if let Some((m, p)) = pred.split_once('.')
             && let Some(from) = self.self_module(rc.scope, m)
             && self.names(from).is_relation(p)
         {
             // The module's own relation by its name, in its file: the
             // instance's the read is in (R-186).
-            pred = self.relation_pred(rc.scope, from, p);
+            via = self.relation_reach(rc.scope, from, p);
+            pred = p.to_string();
         } else if !pred.contains('.') {
             self.undeclared_relation(rc, &pred, span)?;
-            pred = self.relation_pred(rc.scope, rc.scope, &pred);
+            via = self.relation_reach(rc.scope, rc.scope, &pred);
         }
         let list = node(n, ARG_LIST);
         let named: Vec<SyntaxNode> = list
@@ -6890,7 +6907,7 @@ impl<'u> Lowerer<'u> {
                 record: Some(fields),
                 span,
             };
-            return Ok((a, AtomArgs::Record(nodes)));
+            return Ok((a, AtomArgs::Record(nodes), via));
         }
         match crate::zset::REF_RELATIONS.iter().find(|(p, ..)| *p == pred) {
             Some(_) => {
@@ -6916,7 +6933,8 @@ impl<'u> Lowerer<'u> {
                 if pred == "moved" {
                     self.address_key(&args[1].0, span)?;
                 }
-                Ok(Self::positional(pred, args, span))
+                let (a, args) = Self::positional(pred, args, span);
+                Ok((a, args, via))
             }
             // A program relation's reference column (R-185): a resource
             // there is the reference, as in the plan's relations.
@@ -6935,7 +6953,7 @@ impl<'u> Lowerer<'u> {
                     record: None,
                     span,
                 };
-                Ok((a, AtomArgs::Positional(nodes)))
+                Ok((a, AtomArgs::Positional(nodes), via))
             }
             // In a body an argument is a pattern (R-58): `pair((a, b))`;
             // a relation of several named columns takes one object
@@ -6956,7 +6974,7 @@ impl<'u> Lowerer<'u> {
                         record: Some(record),
                         span,
                     };
-                    return Ok((a, nodes));
+                    return Ok((a, nodes, via));
                 }
                 let mut args = Vec::new();
                 for t in &list {
@@ -6965,15 +6983,13 @@ impl<'u> Lowerer<'u> {
                         _ => self.arg_node(rc, t, pos, pre)?,
                     });
                 }
-                Ok(Self::positional(pred, args, span))
+                let (a, args) = Self::positional(pred, args, span);
+                Ok((a, args, via))
             }
             None => {
                 let (args, nodes) = self.args(rc, n, pos, pre)?;
-                Ok(Self::positional(
-                    pred,
-                    args.into_iter().zip(nodes).collect(),
-                    span,
-                ))
+                let (a, args) = Self::positional(pred, args.into_iter().zip(nodes).collect(), span);
+                Ok((a, args, via))
             }
         }
     }
@@ -7004,9 +7020,9 @@ impl<'u> Lowerer<'u> {
     }
 
     /// The goal of the atom `a` whose arguments are `args`: its relation's.
-    fn rel_goal(&mut self, rc: &Rc, a: &Atom, args: AtomArgs) -> GoalId {
+    fn rel_goal(&mut self, rc: &Rc, (a, via): (&Atom, Reach), args: AtomArgs) -> GoalId {
         let span = a.span;
-        let rel = RelRef::written(a.pred.clone(), span);
+        let rel = RelRef::reached(a.pred.clone(), via, span);
         let args = self.rel_args(rc, span, args);
         self.goal(rc, span, GoalKind::Rel { rel, args })
     }
@@ -8676,14 +8692,14 @@ impl<'u> Lowerer<'u> {
     ) -> L<Res> {
         let name = c.head.clone();
         let (decl, via) = self.value_decl(rc.scope, from, &name);
-        let pred = via.relation(&name);
+        let key = read_key(&name, &via);
         // An input typed `ref(T)` holds the reference itself: a dot reads
         // through it, the address taken out of the reference (R-101). It
         // is its user's, so no copy's scope goes in front of it.
         if !c.is_bare()
             && let Some(typ) = self.input_ref(from, &name)
         {
-            let key = format!("ref {pred}");
+            let key = format!("ref {key}");
             let read = match rc.values.get(&key) {
                 Some(v) => {
                     let v = v.clone();
@@ -8691,7 +8707,9 @@ impl<'u> Lowerer<'u> {
                 }
                 None => {
                     let name = fresh(rc, &capitalise(&name));
-                    let id = self.building(rc, span, |b| b.address_into(&pred, &typ, &name));
+                    let rel = (via.relation(&decl.name), via.clone());
+                    let id =
+                        self.building(rc, span, |b| b.address_into((&rel.0, rel.1), &typ, &name));
                     self.hoisted_into(id, pre);
                     rc.values.insert(key, name.clone());
                     id
@@ -8715,16 +8733,16 @@ impl<'u> Lowerer<'u> {
             let path = self.segs(rc, &c.ops, pre)?;
             return Ok(Res::Value { decl, via, path });
         };
-        let key = match rc.values.get(&pred) {
+        let key = match rc.values.get(&key) {
             Some(v) => {
                 let v = v.clone();
                 self.var_node(rc, span, &v)
             }
             None => {
                 let v = fresh(rc, &capitalise(&name));
-                let key = self.value_read(rc, &v, (decl, via), pre, span);
-                rc.values.insert(pred.clone(), v.clone());
-                key
+                let read = self.value_read(rc, &v, (decl, via), pre, span);
+                rc.values.insert(key, v.clone());
+                read
             }
         };
         match ty {
@@ -9170,7 +9188,7 @@ impl<'u> Lowerer<'u> {
                 .into_iter()
                 .map(|a| b.pattern_of(a))
                 .collect();
-            let rel = RelRef::written(pred, span);
+            let rel = RelRef::own(pred, span);
             let args = RelArgs::Positional(args);
             b.goal_node(span, GoalKind::Rel { rel, args })
         });
@@ -9800,7 +9818,8 @@ impl<'u> Lowerer<'u> {
             }
             Res::Value { decl, via, path } => {
                 let pred = via.relation(&decl.name);
-                let base = match rc.values.get(&pred) {
+                let key = read_key(&decl.name, &via);
+                let base = match rc.values.get(&key) {
                     Some(v) => {
                         let v = v.clone();
                         Plan::Node(self.var_node(rc, span, &v))
@@ -9808,7 +9827,7 @@ impl<'u> Lowerer<'u> {
                     None => {
                         let used = matches!(via, Reach::Use(_));
                         let name = fresh(rc, &capitalise(if used { &pred } else { &decl.name }));
-                        rc.values.insert(pred.clone(), name.clone());
+                        rc.values.insert(key, name.clone());
                         Plan::Read {
                             read: PlanRead::Value(decl, via),
                             var: name,

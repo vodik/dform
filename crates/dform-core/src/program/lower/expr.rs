@@ -100,17 +100,7 @@ impl<'p> Lowering<'p> {
     pub(super) fn relation(&self, rel: &RelRef) -> (String, Option<From>) {
         match (self.env.chain, &rel.via) {
             (Some(c), Reach::Lexical(body)) => c.lexical_pred(body, &rel.name, rel.span),
-            _ => (self.named(&rel.name, &rel.via), self.env.from),
-        }
-    }
-
-    /// The name of the relation `name` a read reaches `via`, as the
-    /// program's own lowering writes it or the visiting pass says
-    /// ([`super::Visit::relation`]).
-    pub(super) fn named(&self, name: &str, via: &Reach) -> String {
-        match self.env.visit {
-            Some(v) => v.relation(name, via),
-            None => via.relation(name),
+            _ => (rel.via.relation(&rel.name), self.env.from),
         }
     }
 
@@ -344,7 +334,7 @@ impl<'p> Lowering<'p> {
     fn value_relation(&self, name: &str, via: &Reach, span: Span) -> (String, Option<From>) {
         match (self.env.chain, via) {
             (Some(c), Reach::Lexical(body)) => c.lexical_pred(body, name, span),
-            _ => (self.named(name, via), self.env.from),
+            _ => (via.relation(name), self.env.from),
         }
     }
 

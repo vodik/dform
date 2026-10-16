@@ -278,7 +278,7 @@ pub(crate) fn shown_attr(typ: &str, name: &Term, path: &str) -> String {
 
 // --- over what `lower` writes ---------------------------------------------
 
-use crate::program::scope::{DeclKind, Reach, ScopeId};
+use crate::program::scope::{DeclKind, ScopeId};
 use crate::program::{self as prog, ExprId, ExprKind, Readings};
 use slotmap::{Key, KeyData};
 
@@ -302,13 +302,6 @@ impl prog::Visit for Marks<'_> {
                 args: vec![Term::Val(Value::Int(id.data().as_ffi() as i64)), t],
             },
             _ => t,
-        }
-    }
-
-    fn relation(&self, name: &str, via: &Reach) -> String {
-        match via {
-            Reach::Lexical(_) => name.to_string(),
-            via => via.relation(name),
         }
     }
 }

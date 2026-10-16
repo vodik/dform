@@ -173,14 +173,14 @@ impl Lowerer<'_> {
     }
 
     /// The let with parameters a call names in `rc`, when it names one:
-    /// its relation as the read writes it, its declaring scope and its
-    /// statement. `f` in scope, `m.f` of a used module or of the module the
+    /// its relation as the read writes it and how the read reaches it,
+    /// its declaring scope and its statement. `f` in scope, `m.f` of a used module or of the module the
     /// read is in, `super.f`.
     fn called_function(
         &mut self,
         rc: &Rc,
         n: &SyntaxNode,
-    ) -> L<Option<(String, ScopeId, SyntaxNode)>> {
+    ) -> L<Option<((String, Reach), ScopeId, SyntaxNode)>> {
         let Some(c) = n.children().find_map(|c| Chain::of(&c)) else {
             return Ok(None);
         };
@@ -189,14 +189,21 @@ impl Lowerer<'_> {
         }
         let fields = c.fields();
         let found = match fields.as_slice() {
-            [f] => self
-                .function_def(rc.scope, f)
-                .map(|(s, def)| (self.relation_pred(rc.scope, rc.scope, f), s, def)),
+            [f] => self.function_def(rc.scope, f).map(|(s, def)| {
+                (
+                    (f.clone(), self.relation_reach(rc.scope, rc.scope, f)),
+                    s,
+                    def,
+                )
+            }),
             [m, f] if m == "super" => {
                 let span = self.span_of(c.range);
                 let (from, rest) = self.super_chain(rc, &c, span)?;
                 self.function_def(from, &rest.head)
-                    .map(|(s, def)| (self.relation_pred(rc.scope, from, &rest.head), s, def))
+                    .map(|(s, def)| {
+                        let via = self.relation_reach(rc.scope, from, &rest.head);
+                        ((rest.head.clone(), via), s, def)
+                    })
                     .filter(|_| rest.ops.is_empty() && rest.head == *f)
             }
             [m, f] => {
@@ -204,11 +211,17 @@ impl Lowerer<'_> {
                     let module = self.module_at(&path).map(|m| m.0);
                     module.and_then(|s| {
                         let def = self.names(s).function(f)?;
-                        Some((format!("{m}::{f}"), s, def.clone()))
+                        Some(((format!("{m}::{f}"), Reach::Own), s, def.clone()))
                     })
                 } else if let Some(from) = self.self_module(rc.scope, m) {
                     let def = self.names(from).function(f).cloned();
-                    def.map(|def| (self.relation_pred(rc.scope, from, f), from, def))
+                    def.map(|def| {
+                        (
+                            (f.clone(), self.relation_reach(rc.scope, from, f)),
+                            from,
+                            def,
+                        )
+                    })
                 } else {
                     None
                 }
@@ -231,14 +244,14 @@ impl Lowerer<'_> {
             Ok(found) => found?,
             Err(e) => return Some(Err(e)),
         };
-        Some(self.call_function(rc, n, &pred, scope, &def, pre))
+        Some(self.call_function(rc, n, (&pred.0, pred.1), scope, &def, pre))
     }
 
     fn call_function(
         &mut self,
         rc: &mut Rc,
         n: &SyntaxNode,
-        pred: &str,
+        (pred, via): (&str, Reach),
         scope: ScopeId,
         def: &SyntaxNode,
         pre: &mut Vec<Lit>,
@@ -329,7 +342,7 @@ impl Lowerer<'_> {
             args.push((self.read_as(arg, &was, term.clone()), term));
         }
         let (args, terms): (Vec<ExprId>, Vec<Term>) = args.into_iter().unzip();
-        let key = format!("fn {pred} {terms:?}");
+        let key = format!("fn {} {terms:?}", read_key(pred, &via));
         if let Some(Term::Var(v)) = rc.reads.get(&key) {
             // Read already: its arguments' reads are made again.
             let v = v.clone();
@@ -340,7 +353,7 @@ impl Lowerer<'_> {
         }
         let v = fresh(rc, &capitalise(&name));
         rc.reads.insert(key, var(&v));
-        Ok(self.building(rc, span, |b| b.call_into(pred, args, &v)))
+        Ok(self.building(rc, span, |b| b.call_into((pred, via), args, &v)))
     }
 
     /// A call of an unknown function whose name is nearest a let with

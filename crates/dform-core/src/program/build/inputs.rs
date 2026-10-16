@@ -101,7 +101,7 @@ impl Builder<'_> {
             None => (None, Vec::new(), None),
         };
         let kind = ItemKind::RelationInput {
-            rel: RelRef::written(r.rel, r.span),
+            rel: RelRef::own(r.rel, r.span),
             arity: r.arity,
             mixed: r.mixed,
             source,

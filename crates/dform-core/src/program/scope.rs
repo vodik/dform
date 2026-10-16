@@ -640,10 +640,10 @@ impl Names {
 
 /// How a read reaches the declaration it names (R-186, R-205): the body
 /// it is in declares it; an enclosing definition does, read through the
-/// copy the body was taken from (`modules::lexical_pred`); a module a
-/// `use` binds to `name` does (`name.k`); or a scope no copy of the body
-/// is taken from (its user's, the program's), the name as written, no
-/// copy's scope put in front of it (`modules::ABSOLUTE`).
+/// copy the body was taken from (`Chain::lexical`); a module a `use`
+/// binds to `name` does (`name.k`); or a scope no copy of the body is
+/// taken from (its user's, the program's), the name as written, no
+/// copy's scope put in front of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reach {
     Own,
@@ -653,13 +653,13 @@ pub enum Reach {
 }
 
 impl Reach {
-    /// The relation a read of `name` this way is: its name, an enclosing
-    /// definition's marked for expansion, a used module's by the name the
-    /// `use` binds.
+    /// The relation a read of `name` this way is, as the program's own
+    /// lowering writes it: its name, a used module's by the name the `use`
+    /// binds. An enclosing definition's is its own name there; the copies
+    /// being instanced name the instance's (`Chain::lexical_pred`).
     pub fn relation(&self, name: &str) -> String {
         match self {
-            Reach::Own | Reach::Absolute => name.to_string(),
-            Reach::Lexical(body) => crate::modules::lexical_pred(body, name),
+            Reach::Own | Reach::Absolute | Reach::Lexical(_) => name.to_string(),
             Reach::Use(m) => format!("{m}::{name}"),
         }
     }

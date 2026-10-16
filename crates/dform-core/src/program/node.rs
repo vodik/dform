@@ -56,16 +56,18 @@ pub struct RelRef {
 }
 
 impl RelRef {
-    /// The relation the resolver writes as `pred` at `span`: an enclosing
-    /// definition's (`modules::lexical_pred`) by its own name, reached
-    /// lexically.
-    pub fn written(pred: impl Into<Name>, span: Span) -> RelRef {
-        let pred = pred.into();
-        let (name, via) = match crate::modules::lexical_parts(&pred) {
-            Some((body, n)) => (n.to_string(), Reach::Lexical(body.to_string())),
-            None => (pred, Reach::Own),
-        };
-        RelRef { name, span, via }
+    /// The relation `name` of the scope the read is in, at `span`.
+    pub fn own(name: impl Into<Name>, span: Span) -> RelRef {
+        RelRef::reached(name, Reach::Own, span)
+    }
+
+    /// The relation `name` a read reaches `via`, at `span`.
+    pub fn reached(name: impl Into<Name>, via: Reach, span: Span) -> RelRef {
+        RelRef {
+            name: name.into(),
+            span,
+            via,
+        }
     }
 
     /// The relation as the program's own lowering names it (the copies'

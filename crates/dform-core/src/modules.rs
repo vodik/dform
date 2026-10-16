@@ -45,7 +45,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod lexical;
 mod named;
 
-pub use lexical::{LEXICAL, LEXICAL_OF, lexical_parts, lexical_pred, lexical_term};
+pub use lexical::{LEXICAL, LEXICAL_OF, lexical_term};
 
 /// The attribute aggregate's pseudo-type for inputs: `(input, Scope, key)`,
 /// scope `""` for the stack's own.

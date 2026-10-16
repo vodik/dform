@@ -14,7 +14,7 @@
 //! | `p(a, .., V, ..)` by its others           | `Lookup`                        |
 //! | `member(L, i, V)`                         | `Field` of an `Index` step      |
 //! | `member(L, V), type_list_key(..), ..`     | `Field` of a `Keyed` step       |
-//! | `k(__ref("T", __scope(V), ""))`           | `Address` of the read           |
+//! | `k(__ref("T", V, ""))`                    | `Address` of the read           |
 //! | `V = t`                                   | `t`'s node                      |
 //!
 //! Which of the resolver's own literals a node holds is what its lowering
@@ -119,7 +119,7 @@ impl Builder<'_> {
                 }
                 // A resource whose type is a variable: its relation's.
                 _ => ExprKind::Lookup {
-                    rel: RelRef::written("attr", span),
+                    rel: RelRef::own("attr", span),
                     args: vec![typ, addr, self.lit(Value::Str(attr.to_string()))],
                     out: 3,
                     path: Vec::new(),
@@ -144,7 +144,7 @@ impl Builder<'_> {
                 path: self.fields(path),
             },
             ReadOf::Lookup { rel, args, out } => ExprKind::Lookup {
-                rel: RelRef::written(rel, span),
+                rel: RelRef::own(rel, span),
                 args,
                 out,
                 path: Vec::new(),
@@ -153,13 +153,13 @@ impl Builder<'_> {
         self.expr_node(kind)
     }
 
-    /// The address of the resource of type `typ` the input `rel`, typed
-    /// `ref(T)`, holds (R-101), read into `v`: `rel(__ref("T",
-    /// __scope(V), ""))`.
-    pub fn address_into(&mut self, rel: &str, typ: &str, v: &str) -> ExprId {
+    /// The address of the resource of type `typ` the input `rel`, read
+    /// `via`, typed `ref(T)`, holds (R-101), read into `v`: `rel(__ref("T",
+    /// V, ""))`, the address its user's.
+    pub fn address_into(&mut self, (rel, via): (&str, Reach), typ: &str, v: &str) -> ExprId {
         let span = self.span;
         let of = self.expr_node(ExprKind::Lookup {
-            rel: RelRef::written(rel, span),
+            rel: RelRef::reached(rel, via, span),
             args: Vec::new(),
             out: 0,
             path: Vec::new(),
@@ -193,10 +193,11 @@ impl Builder<'_> {
         self.expr_node(ExprKind::Lit(v))
     }
 
-    /// A call of a let with parameters, `f(args..)`, read into `v`: the
+    /// A call of a let with parameters (or a relation read as one), `f(
+    /// args..)` of the relation `rel` read `via`, read into `v`: the
     /// relation `f(args.., V)` (R-187).
-    pub fn call_into(&mut self, rel: &str, args: Vec<ExprId>, v: &str) -> ExprId {
-        let rel = RelRef::written(rel, self.span);
+    pub fn call_into(&mut self, (rel, via): (&str, Reach), args: Vec<ExprId>, v: &str) -> ExprId {
+        let rel = RelRef::reached(rel, via, self.span);
         let out = args.len();
         let kind = ExprKind::Lookup {
             rel,

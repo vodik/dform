@@ -521,7 +521,7 @@ impl Lowering<'_> {
             }
         };
         Atom {
-            pred: self.named(&rel.name, &rel.via),
+            pred: rel.via.relation(&rel.name),
             args,
             record,
             span: rel.span,

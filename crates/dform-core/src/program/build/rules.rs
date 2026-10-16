@@ -19,6 +19,7 @@ pub struct RuleLowered<'a> {
     /// The head, its rank not among its arguments; its arguments'
     /// patterns, built of its nodes.
     pub head: &'a Atom,
+    pub rel: RelRef,
     pub args: RelArgs,
     pub rank: Option<Rank>,
     /// The clause of B, gathered; none for a fact.
@@ -37,7 +38,7 @@ impl Builder<'_> {
     /// The `rule` item of `r`.
     pub fn rule_item(&mut self, r: RuleLowered) -> ItemId {
         let head = Head {
-            rel: RelRef::written(r.head.pred.clone(), r.head.span),
+            rel: r.rel,
             args: r.args,
         };
         if let Some(c) = r.clause
