@@ -1913,6 +1913,24 @@ mod tests {
         assert!(!read.contains("Str(\"10.0.0.0/8\")") && !read.contains("Str(\"10.1.0.0/16\")"));
     }
 
+    /// A literal in an enclosing definition's relation, read from a
+    /// component inside it (R-186), is read at that relation's column:
+    /// the scope tree says which scope declares the relation.
+    #[test]
+    fn a_literal_read_through_an_enclosing_definitions_relation_is_its_columns() {
+        let schema = Schema::default();
+        let nodes = nodes(
+            "component outer {\n  decl nets(c: inet)\n  \
+             component inner {\n    ok() where nets(\"10.0.0.0/8\")\n  }\n  \
+             resource inner i {}\n}\nresource outer o {}\n",
+        );
+        let (readings, diags) = readings(&nodes, &schema);
+        assert!(diags.is_empty(), "{diags:?}");
+        let read: Vec<String> = readings.values().map(|t| format!("{t:?}")).collect();
+        assert_eq!(read.len(), 1, "{read:?}");
+        assert!(read[0].contains("IpNet"), "{read:?}");
+    }
+
     #[test]
     fn dotted_joins_a_scope_and_a_name_either_empty() {
         assert_eq!(dotted("net", "vpc"), "net.vpc");

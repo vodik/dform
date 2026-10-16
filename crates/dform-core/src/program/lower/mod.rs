@@ -19,6 +19,7 @@ pub use items::{element_write, lower_item, value_entries};
 pub use records::Records;
 
 use super::Program;
+use super::scope::Reach;
 use crate::ast;
 use crate::diag::Diagnostic;
 use std::cell::RefCell;
@@ -36,14 +37,26 @@ pub(crate) struct Env<'p> {
     pub errors: Option<&'p RefCell<Vec<Diagnostic>>>,
     pub chain: Option<&'p instances::Chain>,
     pub from: Option<instances::From>,
-    pub visit: Option<Visit<'p>>,
+    pub visit: Option<&'p dyn Visit>,
 }
 
 /// A pass that walks what `lower` writes rather than mirroring its walk
 /// (R-211 step 11): given each term node and the term `lower` wrote for
-/// it, the term to write in its place. The readings' graph marks each
-/// literal with its node this way ([`crate::edges`]).
-pub type Visit<'p> = &'p dyn Fn(super::ExprId, ast::Term) -> ast::Term;
+/// it, the term to write in its place; given each relation a read names,
+/// by how the read reaches it, the name to write. The readings' graph
+/// marks each literal with its node this way, and names each relation as
+/// its scope declares it ([`crate::edges`]).
+pub trait Visit {
+    /// The term to write for the node `id`, `t` what `lower` wrote.
+    fn term(&self, id: super::ExprId, t: ast::Term) -> ast::Term;
+
+    /// The name to write for the relation `name` a read reaches `via`:
+    /// the program's own lowering's ([`Reach::relation`]) unless the pass
+    /// says otherwise.
+    fn relation(&self, name: &str, via: &Reach) -> String {
+        via.relation(name)
+    }
+}
 
 impl<'p> Env<'p> {
     /// The program's nodes as written.
@@ -85,7 +98,10 @@ pub fn lower(program: &Program) -> Result<ast::Program, Vec<Diagnostic>> {
 }
 
 /// [`lower`], each term node's term as `visit` writes it.
-pub fn lower_visited(program: &Program, visit: Visit) -> Result<ast::Program, Vec<Diagnostic>> {
+pub fn lower_visited(
+    program: &Program,
+    visit: &dyn Visit,
+) -> Result<ast::Program, Vec<Diagnostic>> {
     lower_in(Env {
         visit: Some(visit),
         ..Env::plain(program)

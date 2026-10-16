@@ -14,9 +14,10 @@
 //!
 //! One pass over the program before it is evaluated, once the providers'
 //! schemas are known ([`crate::types::read`]): over the statements `lower`
-//! writes for its nodes, each literal marked with its node (a [`prog::Visit`]
-//! of `lower`), so the pass walks what `lower` writes and reads each
-//! literal by node:
+//! writes for its nodes, each literal marked with its node and each
+//! relation named as its scope declares it (a [`prog::Visit`] of `lower`),
+//! so the pass walks what `lower` writes, reads each literal by node, and
+//! finds each relation's columns by the program's scope tree:
 //!
 //! 1. Collect: union-find nodes for each relation's columns (a let's
 //!    cell is its relation's one column) and each statement's variables,
@@ -244,73 +245,6 @@ enum Reading {
     Disagree(Ty, Edge, Ty, Edge),
 }
 
-/// The scopes of a program: the names each defines, and the one around it.
-#[derive(Default, Clone)]
-struct Scopes {
-    defines: BTreeMap<String, BTreeSet<String>>,
-    parent: BTreeMap<String, String>,
-}
-
-impl Scopes {
-    /// What `stmts` define in `scope`, their heads; a module's statements
-    /// in a scope of its own inside it.
-    fn collect(&mut self, scope: &str, stmts: &[Stmt]) {
-        let defs = self.defines.entry(scope.to_string()).or_default();
-        for st in stmts {
-            match st {
-                Stmt::Fact(a) | Stmt::Rule(crate::ast::RuleStmt { head: a, .. }) => {
-                    match let_key(a) {
-                        Some(k) => defs.insert(k.to_string()),
-                        None => defs.insert(a.pred.clone()),
-                    };
-                }
-                Stmt::Input(i) => {
-                    defs.insert(i.name.clone());
-                }
-                Stmt::Output(o) => {
-                    defs.insert(format!("{OUTPUT}{}", o.name));
-                }
-                Stmt::Decl(d) => {
-                    defs.insert(d.pred.clone());
-                }
-                Stmt::Mode(e) | Stmt::Extern(e) | Stmt::RelationInput(e) => {
-                    defs.insert(e.pred.clone());
-                }
-                _ => {}
-            }
-        }
-        for st in stmts {
-            if let Stmt::Module(m) = st {
-                self.parent.insert(m.name.clone(), scope.to_string());
-                self.collect(&m.name, &m.body);
-            }
-        }
-    }
-
-    /// The scope whose `pred` a read in `scope` names, and the name: an
-    /// enclosing definition's marked one (R-186), else the nearest scope
-    /// outward that defines it, else the program's.
-    fn resolve(&self, scope: &str, pred: &str) -> (String, String) {
-        if let Some(rest) = pred
-            .strip_prefix(crate::modules::LEXICAL)
-            .and_then(|r| r.strip_prefix(':'))
-            && let Some((body, name)) = rest.rsplit_once(':')
-        {
-            return (body.to_string(), name.to_string());
-        }
-        let mut s = scope;
-        loop {
-            if self.defines.get(s).is_some_and(|d| d.contains(pred)) {
-                return (s.to_string(), pred.to_string());
-            }
-            match self.parent.get(s) {
-                Some(p) => s = p,
-                None => return (String::new(), pred.to_string()),
-            }
-        }
-    }
-}
-
 /// The key `k` of a `let(k, t, rank)` head.
 fn let_key(a: &Atom) -> Option<&str> {
     match (a.pred.as_str(), a.args.as_slice()) {
@@ -332,12 +266,13 @@ struct Links {
 /// The cell of an output `k`, `output:k`: no relation's name.
 const OUTPUT: &str = "output:";
 
-/// A column: (scope, relation, arity, index).
-type Col = (String, String, usize, usize);
+/// A column: (the scope that declares the relation, the relation, arity,
+/// index).
+type Col = (ScopeId, String, usize, usize);
 
 struct Graph<'a> {
     schema: &'a Schema,
-    scopes: Scopes,
+    scopes: &'a prog::Scopes,
     parent: Vec<usize>,
     edges: Vec<Vec<Edge>>,
     /// `(whole, path, part)`: the value of `part` is `whole`'s at `path`.
@@ -366,14 +301,14 @@ struct Graph<'a> {
 /// attribute's own reading reads them, [`crate::types::read`]).
 #[derive(Clone)]
 struct At {
-    scope: String,
+    scope: ScopeId,
     span: Span,
     holder: Option<Holder>,
     sites: bool,
 }
 
 impl<'a> Graph<'a> {
-    fn new(schema: &'a Schema, scopes: Scopes) -> Graph<'a> {
+    fn new(schema: &'a Schema, scopes: &'a prog::Scopes) -> Graph<'a> {
         Graph {
             schema,
             scopes,
@@ -438,9 +373,8 @@ impl<'a> Graph<'a> {
         n
     }
 
-    fn column(&mut self, scope: &str, pred: &str, arity: usize, i: usize) -> usize {
-        let (scope, pred) = self.scopes.resolve(scope, pred);
-        let c = (scope, pred, arity, i);
+    fn column(&mut self, scope: ScopeId, pred: &str, arity: usize, i: usize) -> usize {
+        let c = (self.declaring(scope, pred), pred.to_string(), arity, i);
         if let Some(&n) = self.columns.get(&c) {
             return n;
         }
@@ -449,18 +383,47 @@ impl<'a> Graph<'a> {
         n
     }
 
+    /// The scope whose `pred` a read in `scope` names: the innermost
+    /// around it that declares a relation or a value of the name (an
+    /// output's cell, `output:k`, an output), else the program's.
+    fn declaring(&self, scope: ScopeId, pred: &str) -> ScopeId {
+        let found = match pred.strip_prefix(OUTPUT) {
+            Some(k) => self.scopes.reaching(scope, k, |d| {
+                matches!(d, DeclKind::Output { .. } | DeclKind::RelationOutput)
+            }),
+            None => self.scopes.reaching(scope, pred, |d| {
+                matches!(
+                    d,
+                    DeclKind::Input
+                        | DeclKind::Let
+                        | DeclKind::LetFn { .. }
+                        | DeclKind::Rule { .. }
+                        | DeclKind::Decl { .. }
+                        | DeclKind::RelationInput { .. }
+                )
+            }),
+        };
+        found.map_or(self.scopes.root, |(s, _)| s)
+    }
+
+    /// The scope of the module or component at `path`; the program's
+    /// when none is (a copy of what the program does not define).
+    fn definition(&self, path: &str) -> ScopeId {
+        self.scopes.by_path(path).unwrap_or(self.scopes.root)
+    }
+
     /// The statements `lower` writes, each in its scope, its variables its
     /// own.
-    fn program(&mut self, stmts: &mut [Stmt], scope: &str) {
+    fn program(&mut self, stmts: &mut [Stmt], scope: ScopeId) {
         for s in stmts {
             self.vars.clear();
             self.stmt(s, scope);
         }
     }
 
-    fn stmt(&mut self, s: &mut Stmt, scope: &str) {
+    fn stmt(&mut self, s: &mut Stmt, scope: ScopeId) {
         let at = |span: Span| At {
-            scope: scope.to_string(),
+            scope,
             span,
             holder: None,
             sites: true,
@@ -495,7 +458,10 @@ impl<'a> Graph<'a> {
                 self.head(&mut r.head, &a);
                 self.body(&mut r.body, &a);
             }
-            Stmt::Module(m) => self.program(&mut m.body, &m.name),
+            Stmt::Module(m) => {
+                let scope = self.definition(&m.name);
+                self.program(&mut m.body, scope)
+            }
             Stmt::Resource(r) => self.resource(r, &at(r.span)),
             Stmt::Input(i) => {
                 let n = self.column(scope, &i.name, 1, 0);
@@ -566,12 +532,13 @@ impl<'a> Graph<'a> {
             self.body(b, at);
         }
         let module = u.module.clone();
+        let scope = self.definition(&module);
         for (k, t, span) in &mut u.inputs {
             let mut path = keys(k);
             let Some(Seg::Key(input)) = (!path.is_empty()).then(|| path.remove(0)) else {
                 continue;
             };
-            let n = self.column(&module, &input, 1, 0);
+            let n = self.column(scope, &input, 1, 0);
             let holder = Holder::Named(format!("input {k} of {kind} {module}"));
             let at = At {
                 span: *span,
@@ -589,7 +556,7 @@ impl<'a> Graph<'a> {
     /// relation's row.
     fn head(&mut self, a: &mut Atom, at: &At) {
         if let Some(k) = let_key(a).map(str::to_string) {
-            let n = self.column(&at.scope, &k, 1, 0);
+            let n = self.column(at.scope, &k, 1, 0);
             let at = At {
                 holder: Some(Holder::Let(k)),
                 ..at.clone()
@@ -599,7 +566,7 @@ impl<'a> Graph<'a> {
         }
         // `output(k, V) :- B`: the value of `output k`.
         if let ("output", [Term::Val(Value::Str(k)), _]) = (a.pred.as_str(), a.args.as_slice()) {
-            let n = self.column(&at.scope, &format!("{OUTPUT}{k}"), 1, 0);
+            let n = self.column(at.scope, &format!("{OUTPUT}{k}"), 1, 0);
             self.give(n, &mut a.args[1], at);
             return;
         }
@@ -629,7 +596,7 @@ impl<'a> Graph<'a> {
         let arity = a.args.len();
         let pred = a.pred.clone();
         for (i, t) in a.args.iter_mut().enumerate() {
-            let n = self.column(&at.scope, &pred, arity, i);
+            let n = self.column(at.scope, &pred, arity, i);
             self.place(n, Vec::new(), t, at);
         }
     }
@@ -1143,6 +1110,7 @@ fn untyped(text: &str, site: &Site) -> Diagnostic {
 
 // --- over what `lower` writes ---------------------------------------------
 
+use crate::program::scope::{DeclKind, Reach, ScopeId};
 use crate::program::{self as prog, ExprId, ExprKind, Readings};
 use slotmap::{Key, KeyData};
 
@@ -1151,15 +1119,29 @@ use slotmap::{Key, KeyData};
 /// gives each literal's reading to its node.
 const NODE: &str = "__node";
 
-/// `t`, what `lower` writes for the node `id`, marked with its node when
-/// it is a literal (a site the walk may read).
-fn marked(program: &prog::Program, id: ExprId, t: Term) -> Term {
-    match program.exprs[id].kind {
-        ExprKind::Lit(_) | ExprKind::Quantity { .. } | ExprKind::Range { .. } => Term::Func {
-            name: NODE.to_string(),
-            args: vec![Term::Val(Value::Int(id.data().as_ffi() as i64)), t],
-        },
-        _ => t,
+/// What the walk reads `lower`'s output by ([`prog::Visit`]): each literal
+/// marked with its node (a site the walk may read), and each relation by
+/// the name its scope declares it under, whatever reaches it (an
+/// enclosing definition's, R-186, too): the scope tree says which scope
+/// that is ([`Graph::declaring`]).
+struct Marks<'p>(&'p prog::Program);
+
+impl prog::Visit for Marks<'_> {
+    fn term(&self, id: ExprId, t: Term) -> Term {
+        match self.0.exprs[id].kind {
+            ExprKind::Lit(_) | ExprKind::Quantity { .. } | ExprKind::Range { .. } => Term::Func {
+                name: NODE.to_string(),
+                args: vec![Term::Val(Value::Int(id.data().as_ffi() as i64)), t],
+            },
+            _ => t,
+        }
+    }
+
+    fn relation(&self, name: &str, via: &Reach) -> String {
+        match via {
+            Reach::Lexical(_) => name.to_string(),
+            via => via.relation(name),
+        }
     }
 }
 
@@ -1218,18 +1200,16 @@ fn unmarked_rule(r: &crate::ast::RuleStmt) -> crate::ast::RuleStmt {
 /// with its node, walked twice (the edges, then the readings); each
 /// node's reading, and the errors.
 pub fn read_nodes(program: &prog::Program, schema: &Schema) -> (Readings, Vec<Diagnostic>) {
-    let mark = |id, t| marked(program, id, t);
-    let Ok(lowered) = prog::lower_visited(program, &mark) else {
+    let Ok(lowered) = prog::lower_visited(program, &Marks(program)) else {
         return (Readings::new(), Vec::new());
     };
     let mut stmts = lowered.statements;
-    let mut scopes = Scopes::default();
-    scopes.collect("", &stmts);
-    let mut g = Graph::new(schema, scopes.clone());
-    g.program(&mut stmts, "");
+    let (scopes, root) = (&program.scopes, program.scopes.root);
+    let mut g = Graph::new(schema, scopes);
+    g.program(&mut stmts, root);
     let readings = g.readings();
     let mut g = Graph::new(schema, scopes);
     g.readings = Some(readings);
-    g.program(&mut stmts, "");
+    g.program(&mut stmts, root);
     (g.read, g.diags)
 }
