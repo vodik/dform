@@ -51,7 +51,7 @@
 use crate::address::Address;
 use crate::ast::{Atom, Term};
 use crate::lattice::nulls_in;
-use crate::plugin::Providers;
+use crate::plugin::providers::{Providers, Tick};
 use crate::provider::{Action, ActionKind, Change, Plan, fmt_value};
 use crate::report::waits_on;
 use crate::resources::{Adopt, Resource};
@@ -143,70 +143,149 @@ pub fn run_tick(
         .filter(|a| !matches!(a.kind, ActionKind::Noop | ActionKind::Pending))
         .collect();
     let waits = dag(&actions, desired, state);
-    let mut tick = cloud.begin_tick(desired, adopts, lifecycle)?;
-    let mut started = vec![false; actions.len()];
-    let mut done = vec![false; actions.len()];
-    let mut start_ms = vec![0; actions.len()];
-    // The order the calls were submitted in.
-    let mut seq = vec![0; actions.len()];
-    // Answered at submit: no call was needed.
-    let mut at_once: VecDeque<usize> = VecDeque::new();
-    // (action, start, end) of every call taken, for the world's timeline.
-    let mut spans: Vec<(usize, u64, u64)> = Vec::new();
-    let mut in_flight = 0;
-    let mut now = 0;
-    let mut failed = None;
+    let tick = cloud.begin_tick(desired, adopts, lifecycle)?;
+    let mut walk = Walk::new(&actions, waits, tick, opts);
     loop {
-        while failed.is_none() && in_flight + at_once.len() < opts.parallel.max(1) {
-            let Some(i) =
-                (0..actions.len()).find(|&i| !started[i] && waits[i].iter().all(|&j| done[j]))
-            else {
+        walk.submit_ready(state)?;
+        let Some((i, r, called)) = walk.take(state) else {
+            break;
+        };
+        walk.answered(i, r, called, state)?;
+    }
+    walk.end(state)
+}
+
+/// A tick's walk of its dependency DAG ([`run_tick`]): where each action
+/// is, the calls in flight, the executor's clock, and the first failure.
+struct Walk<'a, 't> {
+    actions: &'a [&'a Action],
+    /// What each action waits on, by index.
+    waits: Vec<Vec<usize>>,
+    tick: Tick<'t>,
+    opts: &'a Options<'a>,
+    started: Vec<bool>,
+    done: Vec<bool>,
+    start_ms: Vec<u64>,
+    /// The order the calls were submitted in.
+    seq: Vec<usize>,
+    /// Answered at submit: no call was needed.
+    at_once: VecDeque<usize>,
+    /// (action, start, end) of every call taken, for the world's timeline.
+    spans: Vec<(usize, u64, u64)>,
+    in_flight: usize,
+    now: u64,
+    failed: Option<anyhow::Error>,
+}
+
+impl<'a, 't> Walk<'a, 't> {
+    fn new(
+        actions: &'a [&'a Action],
+        waits: Vec<Vec<usize>>,
+        tick: Tick<'t>,
+        opts: &'a Options<'a>,
+    ) -> Walk<'a, 't> {
+        let n = actions.len();
+        Walk {
+            actions,
+            waits,
+            tick,
+            opts,
+            started: vec![false; n],
+            done: vec![false; n],
+            start_ms: vec![0; n],
+            seq: vec![0; n],
+            at_once: VecDeque::new(),
+            spans: Vec::new(),
+            in_flight: 0,
+            now: 0,
+            failed: None,
+        }
+    }
+
+    /// Submit every ready action, in plan order, while fewer than
+    /// `parallel` calls are in flight and none has failed.
+    fn submit_ready(&mut self, state: &mut State) -> Result<()> {
+        while self.failed.is_none()
+            && self.in_flight + self.at_once.len() < self.opts.parallel.max(1)
+        {
+            let Some(i) = self.ready() else {
                 break;
             };
-            started[i] = true;
-            start_ms[i] = now;
-            seq[i] = started.iter().filter(|s| **s).count();
-            // No new call once a signal asked to stop (`interrupt`): the
-            // calls in flight are awaited below, and their answers kept.
-            let check = crate::interrupt::check()
-                .and_then(|()| opts.before_submit.map_or(Ok(()), |check| check()));
-            if let Err(e) = check {
-                started[i] = false;
-                failed = Some(e);
-                break;
-            }
-            event(opts, Event::Started(&actions[i].addr));
-            // A forget (`lifecycle(r, "retain")`, R-154) calls no provider:
-            // state drops the object, and the world keeps it.
-            if matches!(actions[i].kind, ActionKind::Forget) {
-                state.remove(&actions[i].addr);
-                at_once.push_back(i);
-                continue;
-            }
-            match tick.submit(i, actions[i], state) {
-                Ok(true) => in_flight += 1,
-                Ok(false) => at_once.push_back(i),
-                Err(e) => {
-                    (opts.persist)(state)?;
-                    report_action(opts, actions[i], Some(&e), state);
-                    event(opts, Event::Failed(&actions[i].addr, &e));
-                    spans.push((i, now, now));
-                    failed = Some(e);
-                }
+            self.submit(i, state)?;
+        }
+        Ok(())
+    }
+
+    /// The first action not started whose dependencies are done.
+    fn ready(&self) -> Option<usize> {
+        (0..self.actions.len())
+            .find(|&i| !self.started[i] && self.waits[i].iter().all(|&j| self.done[j]))
+    }
+
+    /// Submit action `i`: its call in flight, or answered at once; a
+    /// failure to send it is its failure.
+    fn submit(&mut self, i: usize, state: &mut State) -> Result<()> {
+        let opts = self.opts;
+        let a = self.actions[i];
+        self.started[i] = true;
+        self.start_ms[i] = self.now;
+        self.seq[i] = self.started.iter().filter(|s| **s).count();
+        // No new call once a signal asked to stop (`interrupt`): the
+        // calls in flight are awaited, and their answers kept.
+        let check = crate::interrupt::check()
+            .and_then(|()| opts.before_submit.map_or(Ok(()), |check| check()));
+        if let Err(e) = check {
+            self.started[i] = false;
+            self.failed = Some(e);
+            return Ok(());
+        }
+        event(opts, Event::Started(&a.addr));
+        // A forget (`lifecycle(r, "retain")`, R-154) calls no provider:
+        // state drops the object, and the world keeps it.
+        if matches!(a.kind, ActionKind::Forget) {
+            state.remove(&a.addr);
+            self.at_once.push_back(i);
+            return Ok(());
+        }
+        match self.tick.submit(i, a, state) {
+            Ok(true) => self.in_flight += 1,
+            Ok(false) => self.at_once.push_back(i),
+            Err(e) => {
+                (opts.persist)(state)?;
+                report_action(opts, a, Some(&e), state);
+                event(opts, Event::Failed(&a.addr, &e));
+                self.spans.push((i, self.now, self.now));
+                self.failed = Some(e);
             }
         }
-        let (i, r, called) = match at_once.pop_front() {
-            Some(i) => (i, Ok(()), false),
-            None if tick.busy() => {
-                in_flight -= 1;
-                let (i, r) = tick.next_completed(state, &mut |i, e| {
-                    event(opts, Event::Progress(&actions[i].addr, &e));
-                });
-                (i, r, true)
-            }
-            None => break,
-        };
-        let a = actions[i];
+        Ok(())
+    }
+
+    /// The next action answered: one answered at submit, else the next
+    /// call's answer, recorded in `state`; whether a call was made.
+    /// `None` when nothing is left in flight.
+    fn take(&mut self, state: &mut State) -> Option<(usize, Result<()>, bool)> {
+        if let Some(i) = self.at_once.pop_front() {
+            return Some((i, Ok(()), false));
+        }
+        if !self.tick.busy() {
+            return None;
+        }
+        self.in_flight -= 1;
+        let (actions, opts) = (self.actions, self.opts);
+        let (i, r) = self.tick.next_completed(state, &mut |i, e| {
+            event(opts, Event::Progress(&actions[i].addr, &e));
+        });
+        Some((i, r, true))
+    }
+
+    /// Action `i` answered `r` (`called`: a call was made): its state
+    /// persisted and reported, its span on the clock, what waited on it
+    /// released, or its failure kept. An error when chaos `stop-after`
+    /// stops dform here.
+    fn answered(&mut self, i: usize, r: Result<()>, called: bool, state: &mut State) -> Result<()> {
+        let opts = self.opts;
+        let a = self.actions[i];
         if r.is_ok()
             && let Some(f) = &mut state.in_flight
         {
@@ -214,63 +293,78 @@ pub fn run_tick(
         }
         persist_answered(opts, state)?;
         report_action(opts, a, r.as_ref().err(), state);
-        let end = start_ms[i] + tick.latency(&a.addr);
-        spans.push((i, start_ms[i], end));
+        let end = self.start_ms[i] + self.tick.latency(&a.addr);
+        self.spans.push((i, self.start_ms[i], end));
         match r {
             Ok(()) => {
                 event(opts, Event::Finished(&a.addr));
-                done[i] = true;
-                now = now.max(end);
+                self.done[i] = true;
+                self.now = self.now.max(end);
             }
             Err(e) => {
                 event(opts, Event::Failed(&a.addr, &e));
-                failed.get_or_insert(e);
+                self.failed.get_or_insert(e);
             }
         }
-        if let Some(left) = opts.stop_after.filter(|_| called) {
-            left.set(left.get().saturating_sub(1));
-            if left.get() == 0 {
-                // As if dform were killed here: nothing in flight is
-                // waited for, and the tick never ends.
-                return Err(crate::report::Failure::of(
+        match opts.stop_after.filter(|_| called) {
+            Some(left) => stop_after(left, a),
+            None => Ok(()),
+        }
+    }
+
+    /// The walk's end: an action never sent is a cycle's; the timeline
+    /// recorded, the tick ended, state persisted. What the answered calls
+    /// returned, or why the tick stopped.
+    fn end(mut self, state: &mut State) -> Result<Seen> {
+        let opts = self.opts;
+        if self.failed.is_none()
+            && let Some(i) = self.started.iter().position(|s| !s)
+        {
+            self.failed = Some(
+                crate::report::Failure::of(
                     "apply",
-                    &a.addr,
-                    "dform stopped after this Apply call returned",
-                    "chaos stop-after; the next apply resumes",
+                    &self.actions[i].addr,
+                    "not sent",
+                    "its dependencies never finished (a cycle)",
                 )
-                .into());
-            }
+                .into(),
+            );
+        }
+        // The timeline in the order the calls started.
+        let seq = &self.seq;
+        self.spans.sort_by_key(|&(i, _, _)| seq[i]);
+        for &(i, start, end) in &self.spans {
+            self.tick.record(&self.actions[i].addr, start, end);
+        }
+        // The end of a tick that failed may fail in turn (its call waits
+        // behind one that timed out): why the tick stopped comes first.
+        let ended = self.tick.end(state);
+        let persisted = (opts.persist)(state);
+        match (self.failed, ended.and_then(|r| persisted.map(|()| r))) {
+            (Some(e), Ok(_)) => Err(e),
+            // Why the tick stopped first, then why it did not end or its
+            // state was not written.
+            (Some(e), Err(p)) => Err(p.context(format!("{e:#}"))),
+            (None, r) => r,
         }
     }
-    if failed.is_none()
-        && let Some(i) = started.iter().position(|s| !s)
-    {
-        failed = Some(
-            crate::report::Failure::of(
-                "apply",
-                &actions[i].addr,
-                "not sent",
-                "its dependencies never finished (a cycle)",
-            )
-            .into(),
-        );
+}
+
+/// Chaos `stop-after=N`: one more Apply call (`a`) returned; at none
+/// left, dform stops as if killed: nothing in flight is waited for, and
+/// the tick never ends.
+fn stop_after(left: &Cell<usize>, a: &Action) -> Result<()> {
+    left.set(left.get().saturating_sub(1));
+    if left.get() > 0 {
+        return Ok(());
     }
-    // The timeline in the order the calls started.
-    spans.sort_by_key(|&(i, _, _)| seq[i]);
-    for (i, start, end) in spans {
-        tick.record(&actions[i].addr, start, end);
-    }
-    // The end of a tick that failed may fail in turn (its call waits
-    // behind one that timed out): why the tick stopped comes first.
-    let ended = tick.end(state);
-    let persisted = (opts.persist)(state);
-    match (failed, ended.and_then(|r| persisted.map(|()| r))) {
-        (Some(e), Ok(_)) => Err(e),
-        // Why the tick stopped first, then why it did not end or its state
-        // was not written.
-        (Some(e), Err(p)) => Err(p.context(format!("{e:#}"))),
-        (None, r) => r,
-    }
+    Err(crate::report::Failure::of(
+        "apply",
+        &a.addr,
+        "dform stopped after this Apply call returned",
+        "chaos stop-after; the next apply resumes",
+    )
+    .into())
 }
 
 /// State after an Apply call returned. A `test-hooks` build (never the
