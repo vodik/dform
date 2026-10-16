@@ -51,16 +51,55 @@ pub struct Order {
 
 /// The order of `clause`'s goals.
 pub fn order(program: &Program, clause: ClauseId, cx: &Context) -> Order {
-    let mut b = Binder {
-        program,
-        scope: cx.scope,
-        diags: Vec::new(),
-    };
+    let mut b = Binder::new(program, cx.scope);
     let (_, order) = b.order(clause, cx.outer);
     Order {
         order,
         diags: b.diags,
     }
+}
+
+/// The source names goal `g` writes, those of the clauses inside it
+/// included.
+pub fn goal_names(program: &Program, g: GoalId) -> BTreeSet<Name> {
+    let mut out = BTreeSet::new();
+    Binder::new(program, ScopeId::default()).goal_names(g, &mut out);
+    out
+}
+
+/// The source names term `t` writes, a comprehension's included.
+pub fn term_names(program: &Program, t: Term) -> BTreeSet<Name> {
+    let b = Binder::new(program, ScopeId::default());
+    let mut out = BTreeSet::new();
+    match t {
+        Term::Expr(e) => b.expr_names(e, &mut out),
+        Term::Pattern(p) => b.pattern_names(p, &mut out),
+    }
+    out
+}
+
+/// The variable term `t` is, written alone (none for a read of one).
+pub fn alone(program: &Program, t: Term) -> Option<VarId> {
+    let e = match t {
+        Term::Pattern(p) => match &program.patterns[p].kind {
+            PatternKind::Bind(v) => return Some(*v),
+            PatternKind::Expr(e) => *e,
+            _ => return None,
+        },
+        Term::Expr(e) => e,
+    };
+    let x = &program.exprs[e];
+    match x.kind {
+        ExprKind::Var(v) if x.hoisted.is_none() => Some(v),
+        _ => None,
+    }
+}
+
+/// A term of the program: a node of a value, or a pattern.
+#[derive(Clone, Copy)]
+pub enum Term {
+    Expr(ExprId),
+    Pattern(PatternId),
 }
 
 /// How a read under `in` over a dense range is said, the range's element
@@ -142,6 +181,16 @@ struct Binder<'a> {
     /// looked up.
     scope: ScopeId,
     diags: Vec<Diagnostic>,
+}
+
+impl<'a> Binder<'a> {
+    fn new(program: &'a Program, scope: ScopeId) -> Self {
+        Binder {
+            program,
+            scope,
+            diags: Vec::new(),
+        }
+    }
 }
 
 impl Binder<'_> {

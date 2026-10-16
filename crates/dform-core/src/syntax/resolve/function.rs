@@ -148,17 +148,14 @@ impl Lowerer<'_> {
         args.push(value);
         let head = atom_at(&name, args, span);
         self.check_bound(&rc, &body, &atom_terms(&head))?;
-        let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
         let l = crate::program::build::LetFnLowered {
             name,
             span,
             scope: self.item_scope,
             clause,
             head: &head,
-            body: &body,
             value: id,
             made: &self.helpers[made..],
-            results: &results,
         };
         let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
         let written = |v: &str| written.contains(v);

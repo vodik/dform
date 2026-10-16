@@ -26,7 +26,7 @@ impl Binder<'_> {
         }
     }
 
-    fn goal_names(&self, g: GoalId, out: &mut BTreeSet<Name>) {
+    pub(super) fn goal_names(&self, g: GoalId, out: &mut BTreeSet<Name>) {
         let mut exprs = Vec::new();
         let mut pats = Vec::new();
         match &self.program.goals[g].kind {
@@ -80,7 +80,7 @@ impl Binder<'_> {
         }
     }
 
-    fn pattern_names(&self, p: PatternId, out: &mut BTreeSet<Name>) {
+    pub(super) fn pattern_names(&self, p: PatternId, out: &mut BTreeSet<Name>) {
         let (parts, rest) = match &self.program.patterns[p].kind {
             PatternKind::Hole => return,
             PatternKind::Bind(v) => return self.var_name(*v, out),
@@ -99,7 +99,7 @@ impl Binder<'_> {
     }
 
     /// The source names term `e` writes, a comprehension's included.
-    fn expr_names(&self, e: ExprId, out: &mut BTreeSet<Name>) {
+    pub(super) fn expr_names(&self, e: ExprId, out: &mut BTreeSet<Name>) {
         let x = &self.program.exprs[e];
         match &x.kind {
             ExprKind::Var(v) => self.var_name(*v, out),

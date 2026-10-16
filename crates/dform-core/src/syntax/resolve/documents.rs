@@ -30,7 +30,6 @@ impl Lowerer<'_> {
         Ok(TableRows {
             externs,
             head: atom_at(pred, vars, span),
-            body,
             rows,
             made,
         })

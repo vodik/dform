@@ -8,9 +8,10 @@
 //! through helpers takes their numbers per line, as each line's rule
 //! folds on its own.
 
-use super::{Builder, fold_numbers, grouped};
-use crate::ast::{Atom, FieldOp, Lit, Rank, Span, Stmt};
+use super::{Builder, Column, fold_numbers, grouped};
+use crate::ast::{FieldOp, Rank, Span, Stmt};
 use crate::program::NodeId;
+use crate::program::bind::Term;
 use crate::program::node::{
     ClauseId, ExprId, GoalId, Item, ItemId, ItemKind, Source, Target, VarId, Write,
 };
@@ -23,8 +24,6 @@ pub struct SetLowered<'a> {
     /// The clause of B, gathered; none without `where`.
     pub clause: Option<ClauseId>,
     pub writes: Vec<WriteLowered<'a>>,
-    /// The statement's aggregate values.
-    pub results: &'a [String],
 }
 
 /// One line of a `set` as the resolver lowered it.
@@ -35,10 +34,6 @@ pub struct WriteLowered<'a> {
     pub rank: Option<Rank>,
     /// Its value's node, as the resolver built it.
     pub value: ExprId,
-    /// The line's head as the resolver wrote it, and its body: B's
-    /// literals, then the reads its target and its value hoisted.
-    pub head: &'a Atom,
-    pub body: &'a [Lit],
     /// The helper statements its target's terms made, and its value's.
     pub made: (&'a [Stmt], &'a [Stmt]),
 }
@@ -69,15 +64,11 @@ pub struct SetFromLowered<'a> {
     /// The leaf's path and value variables.
     pub path: &'a str,
     pub value: &'a str,
-    /// The externs reading the document, the rule's body (B's literals,
-    /// then the document's reads) and the goal reading its rows.
+    /// The externs reading the document and the goal reading its rows.
     pub externs: Vec<Stmt>,
-    pub head: &'a Atom,
-    pub body: &'a [Lit],
     pub rows: GoalId,
     /// The helper statements the document's terms made.
     pub made: &'a [Stmt],
-    pub results: &'a [String],
 }
 
 impl Builder<'_> {
@@ -90,11 +81,7 @@ impl Builder<'_> {
 
     /// The `Set` item of `s`.
     pub fn set_item(&mut self, s: SetLowered) -> ItemId {
-        let writes = s
-            .writes
-            .iter()
-            .map(|w| self.write(w, s.clause, s.results))
-            .collect();
+        let writes = s.writes.iter().map(|w| self.write(w, s.clause)).collect();
         let kind = ItemKind::Set {
             writes,
             clause: s.clause,
@@ -107,7 +94,7 @@ impl Builder<'_> {
     }
 
     /// One line, its aggregates numbered when they fold through helpers.
-    fn write(&mut self, w: &WriteLowered, clause: Option<ClauseId>, results: &[String]) -> Write {
+    fn write(&mut self, w: &WriteLowered, clause: Option<ClauseId>) -> Write {
         self.at(w.span, |b| {
             let target = match &w.target {
                 TargetLowered::Attr { typ, addr, path } => Target::Attr {
@@ -147,7 +134,7 @@ impl Builder<'_> {
                 b.made_by(node, &made);
             }
             let folds = match clause {
-                Some(c) if !results.is_empty() && grouped(w.head, w.body, results) => {
+                Some(c) if grouped(b.program, c, w.head(&target).as_deref()) => {
                     fold_numbers(b.program, c)
                 }
                 _ => Vec::new(),
@@ -167,9 +154,9 @@ impl Builder<'_> {
     pub fn set_from_item(&mut self, s: SetFromLowered) -> ItemId {
         let source = self.source(s.externs, s.rows, s.made);
         let (path, value): (VarId, VarId) = (self.var(s.path), self.var(s.value));
+        let head = [Column::Var(path), Column::Var(value)];
         if let Some(c) = s.clause
-            && !s.results.is_empty()
-            && grouped(s.head, s.body, s.results)
+            && grouped(self.program, c, Some(&head))
         {
             super::number_folds(self.program, c);
         }
@@ -185,5 +172,18 @@ impl Builder<'_> {
             scope: s.scope,
             kind,
         })
+    }
+}
+
+impl WriteLowered<'_> {
+    /// The columns of the line's head, `target` its target as built: an
+    /// element's write is none, its value inside the element's.
+    fn head(&self, target: &Target) -> Option<Vec<Column>> {
+        let term = |e| Column::Term(Term::Expr(e));
+        match target {
+            Target::Attr { typ, addr, .. } => Some(vec![term(*typ), term(*addr), term(self.value)]),
+            Target::Element { .. } => None,
+            Target::Input { .. } => Some(vec![term(self.value)]),
+        }
     }
 }

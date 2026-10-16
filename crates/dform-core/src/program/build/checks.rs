@@ -5,9 +5,10 @@
 //! goals as gathered; a clause whose aggregates fold through helpers
 //! takes their numbers here, as a rule's does.
 
-use super::{Builder, grouped, number_folds};
-use crate::ast::{Atom, Lit, Span, Stmt};
+use super::{Builder, Column, grouped, number_folds};
+use crate::ast::{Span, Stmt};
 use crate::program::NodeId;
+use crate::program::bind::Term;
 use crate::program::node::{CheckKind, ClauseId, ExprId, Item, ItemId, ItemKind};
 use crate::program::scope::ScopeId;
 
@@ -18,17 +19,11 @@ pub struct CheckLowered<'a> {
     pub scope: ScopeId,
     /// The clause of B, gathered; none without `where`.
     pub clause: Option<ClauseId>,
-    /// `deny(m[, detail])`, as the resolver wrote it.
-    pub head: &'a Atom,
-    /// B's literals, then the reads its message and its detail hoisted.
-    pub body: &'a [Lit],
     /// The message's node and the detail's, as the resolver built them.
     pub message: ExprId,
     pub detail: Option<ExprId>,
     /// The helper statements the message's terms made, and the detail's.
     pub made: (&'a [Stmt], &'a [Stmt]),
-    /// The statement's aggregate values.
-    pub results: &'a [String],
 }
 
 impl Builder<'_> {
@@ -36,9 +31,12 @@ impl Builder<'_> {
     pub fn check_item(&mut self, c: CheckLowered) -> ItemId {
         let message = self.holding(c.message, c.made.0);
         let detail = c.detail.map(|d| self.holding(d, c.made.1));
+        let head: Vec<Column> = std::iter::once(message)
+            .chain(detail)
+            .map(|e| Column::Term(Term::Expr(e)))
+            .collect();
         if let Some(cl) = c.clause
-            && !c.results.is_empty()
-            && grouped(c.head, c.body, c.results)
+            && grouped(self.program, cl, Some(&head))
         {
             number_folds(self.program, cl);
         }

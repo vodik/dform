@@ -30,7 +30,7 @@ mod resources;
 mod rules;
 mod spread;
 
-pub use aggregate::{fold_numbers, grouped, number_folds};
+pub use aggregate::{Column, fold_numbers, grouped, number_folds};
 pub use checks::CheckLowered;
 pub use contributions::{SetFromLowered, SetLowered, TargetLowered, WriteLowered};
 pub use gather::{Gather, Statement};

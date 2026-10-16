@@ -9,29 +9,46 @@
 //! variables and what is read after the fold), N stamped on its `Fold`
 //! from the program's counter.
 
-use crate::ast::{Atom, Lit, Term};
 use crate::program::Program;
+use crate::program::bind::{self, Term};
 use crate::program::node::*;
-use std::collections::BTreeSet;
 
-/// Whether the aggregate bindings of `body` (those binding `results`)
-/// fold through a helper each: not one alone whose value is a column of
-/// `head` that nothing else reads, which the head applies.
-pub fn grouped(head: &Atom, body: &[Lit], results: &[String]) -> bool {
-    let found = |l: &Lit| {
-        matches!(l, Lit::Eq(Term::Var(v), Term::Func { name, .. })
-        if results.contains(v) && aggregate_kind(name).is_some())
+/// A column of a head, as built: a term, or a variable the statement
+/// makes (a parameter, a document's leaf).
+#[derive(Clone, Copy)]
+pub enum Column {
+    Term(Term),
+    Var(VarId),
+}
+
+/// Whether the aggregate bindings of `clause` fold through a helper
+/// each: not one alone whose value is one of `head`'s columns and read by
+/// nothing else, which the head applies. `head` is none where a head
+/// applies no aggregate (one written by column name, a list element's
+/// write).
+pub fn grouped(program: &Program, clause: ClauseId, head: Option<&[Column]>) -> bool {
+    let folds = folds(program, clause);
+    let ([fold], Some(head)) = (folds.as_slice(), head) else {
+        return !folds.is_empty();
     };
-    let folds = body.iter().filter(|l| found(l)).count();
-    !(folds == 1 && head.record.is_none() && {
-        let reads: BTreeSet<&str> = results.iter().map(String::as_str).collect();
-        let post = body.iter().any(|l| !found(l) && reads_any(l, &reads));
-        let v = body.iter().find(|l| found(l)).and_then(|l| match l {
-            Lit::Eq(Term::Var(v), _) => Some(v),
-            _ => None,
-        });
-        !post && v.is_some_and(|v| in_head_once(head, v))
-    })
+    let GoalKind::Fold { var, .. } = program.goals[*fold].kind else {
+        unreachable!("a fold")
+    };
+    let v = &program.vars[var];
+    let name = (!v.implicit).then_some(&v.name);
+    // What the clause reads of the value after the fold.
+    let post = program.clauses[clause].goals.iter().any(|&g| {
+        let names = match &program.goals[g].kind {
+            GoalKind::Group { goals, after } if goals == &[*fold] => after
+                .iter()
+                .flat_map(|&a| bind::goal_names(program, a))
+                .collect(),
+            _ if g == *fold => return false,
+            _ => bind::goal_names(program, g),
+        };
+        name.is_some_and(|n| names.contains(n))
+    });
+    post || !in_head_once(program, head, var)
 }
 
 /// Each aggregate binding of `clause`, in order, folds through the next
@@ -57,7 +74,16 @@ pub fn fold_numbers(program: &mut Program, clause: ClauseId) -> Vec<u32> {
 
 /// The aggregate bindings of `clause`, in order.
 fn folds(program: &Program, clause: ClauseId) -> Vec<GoalId> {
-    let fold = |g: GoalId| match &program.goals[g].kind {
+    program.clauses[clause]
+        .goals
+        .iter()
+        .filter_map(|&g| fold_of(program, g))
+        .collect()
+}
+
+/// The aggregate binding goal `g` is: a fold, or a group of one.
+fn fold_of(program: &Program, g: GoalId) -> Option<GoalId> {
+    match &program.goals[g].kind {
         GoalKind::Fold { .. } => Some(g),
         GoalKind::Group { goals, .. }
             if let [f] = goals.as_slice()
@@ -66,35 +92,19 @@ fn folds(program: &Program, clause: ClauseId) -> Vec<GoalId> {
             Some(*f)
         }
         _ => None,
-    };
-    program.clauses[clause]
-        .goals
-        .iter()
-        .filter_map(|&g| fold(g))
-        .collect()
-}
-
-/// Whether `v` is one column of `head` and in no other.
-fn in_head_once(head: &Atom, v: &str) -> bool {
-    let at = head
-        .args
-        .iter()
-        .filter(|t| matches!(t, Term::Var(x) if x == v))
-        .count();
-    let mut elsewhere = BTreeSet::new();
-    for t in head
-        .args
-        .iter()
-        .filter(|t| !matches!(t, Term::Var(x) if x == v))
-    {
-        crate::syntax::resolve::lit_vars(&Lit::Eq(t.clone(), t.clone()), &mut elsewhere);
     }
-    at == 1 && !elsewhere.contains(v)
 }
 
-/// Whether `l` reads any of `vars`.
-fn reads_any(l: &Lit, vars: &BTreeSet<&str>) -> bool {
-    let mut seen = BTreeSet::new();
-    crate::syntax::resolve::lit_vars(l, &mut seen);
-    seen.iter().any(|v| vars.contains(v.as_str()))
+/// Whether `var` is one column of `head`, alone, and in no other.
+fn in_head_once(program: &Program, head: &[Column], var: VarId) -> bool {
+    let alone = |c: &Column| match *c {
+        Column::Var(v) => v == var,
+        Column::Term(t) => bind::alone(program, t) == Some(var),
+    };
+    let v = &program.vars[var];
+    let elsewhere = head.iter().filter(|c| !alone(c)).any(|c| match *c {
+        Column::Var(w) => w == var,
+        Column::Term(t) => !v.implicit && bind::term_names(program, t).contains(&v.name),
+    });
+    head.iter().filter(|c| alone(c)).count() == 1 && !elsewhere
 }

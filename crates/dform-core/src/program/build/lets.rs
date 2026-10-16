@@ -9,9 +9,10 @@
 //! parameters' variables, its value, its clause after the demand that
 //! binds them.
 
-use super::{Builder, grouped, number_folds};
-use crate::ast::{Atom, Lit, Rank, Span, Stmt, TypeExpr};
+use super::{Builder, Column, grouped, number_folds};
+use crate::ast::{Atom, Rank, Span, Stmt, TypeExpr};
 use crate::program::NodeId;
+use crate::program::bind::Term;
 use crate::program::node::{ClauseId, ExprId, GoalId, Item, ItemId, ItemKind, Param};
 use crate::program::scope::ScopeId;
 
@@ -26,20 +27,12 @@ pub struct LetLowered<'a> {
     pub scope: ScopeId,
     /// The clause of B, gathered; none when the `let` has no `where`.
     pub clause: Option<ClauseId>,
-    /// `let(k, v, rank)`, as the resolver wrote it (an aggregate's value
-    /// its variable).
-    pub head: &'a Atom,
-    /// B's literals, then the value's reads, or the aggregate's binding
-    /// after the reads its call hoisted.
-    pub body: &'a [Lit],
     /// The value's node, as the resolver built it: an aggregate's its
     /// variable, bound by its fold `fold`, the clause's last goal.
     pub value: Option<ExprId>,
     pub fold: Option<GoalId>,
     /// The helper statements the value's terms made.
     pub made: &'a [Stmt],
-    /// The statement's aggregate values.
-    pub results: &'a [String],
 }
 
 impl Builder<'_> {
@@ -57,8 +50,7 @@ impl Builder<'_> {
             None => self.holding(value, l.made),
         };
         if let Some(c) = clause
-            && !l.results.is_empty()
-            && grouped(l.head, l.body, l.results)
+            && grouped(self.program, c, Some(&[Column::Term(Term::Expr(value))]))
         {
             number_folds(self.program, c);
         }
@@ -88,13 +80,10 @@ pub struct LetFnLowered<'a> {
     pub clause: Option<ClauseId>,
     /// `f(params, v)`, as the resolver wrote it.
     pub head: &'a Atom,
-    /// The demand, B's literals, then the value's reads.
-    pub body: &'a [Lit],
     /// The value's node, as the resolver built it.
     pub value: ExprId,
     /// The helper statements the value's terms made.
     pub made: &'a [Stmt],
-    pub results: &'a [String],
 }
 
 impl Builder<'_> {
@@ -102,7 +91,7 @@ impl Builder<'_> {
     /// variables, its value the last column's node after its reads.
     pub fn let_fn_item(&mut self, l: LetFnLowered) -> ItemId {
         let (_, params) = l.head.args.split_last().expect("a value column");
-        let params = params
+        let params: Vec<Param> = params
             .iter()
             .map(|t| match t {
                 crate::ast::Term::Var(v) => Param {
@@ -114,9 +103,13 @@ impl Builder<'_> {
             })
             .collect();
         let value = self.holding(l.value, l.made);
+        let head: Vec<Column> = params
+            .iter()
+            .map(|p| Column::Var(p.var))
+            .chain([Column::Term(Term::Expr(value))])
+            .collect();
         if let Some(c) = l.clause
-            && !l.results.is_empty()
-            && grouped(l.head, l.body, l.results)
+            && grouped(self.program, c, Some(&head))
         {
             number_folds(self.program, c);
         }

@@ -756,11 +756,8 @@ struct RuleParts {
     head: Atom,
     rel: RelRef,
     args: crate::program::node::RelArgs,
-    ranked: Atom,
     rank: Option<Rank>,
-    /// Its clause's literals, then the reads the head hoisted, which made
-    /// the statement's helpers from `made`.
-    body: Vec<Lit>,
+    /// Where the statement's helpers the head made start.
     made: usize,
     /// The variables the program wrote, by the name each lowers to.
     written: BTreeSet<String>,
@@ -954,17 +951,14 @@ enum Target {
 }
 
 /// One line of a `set` as the resolver lowered it (R-211 step 5): its
-/// head, and its body: the clause's literals, then from `seed` the reads
-/// its target hoisted and from `mid` its value's, which made the
-/// statement's helpers `made.0..made.1` and `made.1..made.2`.
+/// target and its value, whose terms made the statement's helpers
+/// `made.0..made.1` and `made.1..made.2`.
 struct Contribution {
     span: Span,
     target: Target,
     add: bool,
     rank: Option<Rank>,
     value: ExprId,
-    head: Atom,
-    body: Vec<Lit>,
     made: (usize, usize, usize),
     /// The variables the program wrote, by the name each lowers to.
     written: BTreeSet<String>,
@@ -996,21 +990,17 @@ impl Contribution {
             add: self.add,
             rank: self.rank,
             value: self.value,
-            head: &self.head,
-            body: &self.body,
             made: (&helpers[a..b], &helpers[b..c]),
         }
     }
 }
 
 /// A relation's rows read from a document (R-39), as the resolver
-/// lowered them: the externs reading it, then the rule `head :- body`,
-/// its clause's literals then from `seed` the document's reads, which
-/// made the statement's helpers from `made`.
+/// lowered them: the externs reading it, then the rule `head :- ..`
+/// whose document's reads made the statement's helpers from `made`.
 struct TableRows {
     externs: Vec<Stmt>,
     head: Atom,
-    body: Vec<Lit>,
     /// The goal reading the document's rows.
     rows: GoalId,
     made: usize,

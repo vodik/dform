@@ -225,18 +225,6 @@ impl Lowerer<'_> {
             &mut body,
         )?;
         self.check_bound(&rc, &body, &[])?;
-        let head = atom_at(
-            "arg",
-            vec![
-                str_term(crate::modules::INPUT),
-                str_term(""),
-                var(&path),
-                var(&value),
-                str_term(rank.unwrap_or(Rank::Normal).name()),
-            ],
-            span,
-        );
-        let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
         let s = crate::program::build::SetFromLowered {
             span,
             scope: self.item_scope,
@@ -245,11 +233,8 @@ impl Lowerer<'_> {
             path: &path,
             value: &value,
             externs,
-            head: &head,
-            body: &body,
             rows,
             made: &self.helpers[made..],
-            results: &results,
         };
         let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
         let written = |v: &str| written.contains(v);
@@ -314,7 +299,6 @@ impl Lowerer<'_> {
         if failed {
             return Err(Skip);
         }
-        let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
         let written: BTreeSet<&str> = writes
             .iter()
             .flat_map(|w| w.written.iter().map(String::as_str))
@@ -325,7 +309,6 @@ impl Lowerer<'_> {
             scope: self.item_scope,
             clause,
             writes: writes.iter().map(|w| w.lowered(&self.helpers)).collect(),
-            results: &results,
         };
         let gather = self
             .gather
@@ -453,8 +436,6 @@ impl Lowerer<'_> {
             add,
             rank,
             value: value_node,
-            head,
-            body,
             made: (made, mid.1, self.helpers.len()),
             written: rc.vars.values().cloned().collect(),
         })

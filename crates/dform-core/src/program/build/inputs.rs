@@ -6,9 +6,9 @@
 //! input ([`RelationInputLowered`]): a module's, or a stack's the rows of
 //! a document, its source's reads the goals they lowered to.
 
-use super::{Builder, grouped, number_folds};
-use crate::ast::{Atom, Lit, Span, Stmt, Term, TypeExpr};
-use crate::program::node::{ClauseId, ExprId, Item, ItemId, ItemKind, RelRef};
+use super::{Builder, Column, grouped, number_folds};
+use crate::ast::{Atom, Span, Stmt, Term, TypeExpr};
+use crate::program::node::{ClauseId, ExprId, Item, ItemId, ItemKind, RelRef, VarId};
 use crate::program::scope::ScopeId;
 
 /// An input as the resolver read it.
@@ -66,13 +66,10 @@ pub struct RelationRows<'a> {
     pub externs: Vec<Stmt>,
     /// `p(columns)`, as the resolver wrote it.
     pub head: &'a Atom,
-    /// B's literals, then the document's reads.
-    pub body: &'a [Lit],
     /// The goal reading the document's rows.
     pub rows: crate::program::node::GoalId,
     /// The helper statements the document's terms made.
     pub made: &'a [Stmt],
-    pub results: &'a [String],
 }
 
 impl Builder<'_> {
@@ -81,7 +78,7 @@ impl Builder<'_> {
         let (source, columns, clause) = match r.from {
             Some(rows) => {
                 let source = self.source(rows.externs, rows.rows, rows.made);
-                let columns = rows
+                let columns: Vec<VarId> = rows
                     .head
                     .args
                     .iter()
@@ -90,9 +87,9 @@ impl Builder<'_> {
                         t => unreachable!("a relation input's column is a variable: {t:?}"),
                     })
                     .collect();
+                let head: Vec<Column> = columns.iter().map(|&v| Column::Var(v)).collect();
                 if let Some(c) = rows.clause
-                    && !rows.results.is_empty()
-                    && grouped(rows.head, rows.body, rows.results)
+                    && grouped(self.program, c, Some(&head))
                 {
                     number_folds(self.program, c);
                 }

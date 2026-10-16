@@ -179,7 +179,6 @@ impl Lowerer<'_> {
         let body = self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
         let rows = self.table(&mut rc, &pred, cols, n, body, span)?;
-        let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
         let r = crate::program::build::RelationInputLowered {
             span,
             scope: self.item_scope,
@@ -190,10 +189,8 @@ impl Lowerer<'_> {
                 clause,
                 externs: rows.externs.clone(),
                 head: &rows.head,
-                body: &rows.body,
                 rows: rows.rows,
                 made: &self.helpers[rows.made..],
-                results: &results,
             }),
         };
         let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();

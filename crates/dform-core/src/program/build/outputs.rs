@@ -5,8 +5,9 @@
 //! goals as gathered, the type written where the scope declares the
 //! output (its first row); a relation exported its columns.
 
-use super::{Builder, grouped, number_folds};
-use crate::ast::{Atom, Lit, Span, Stmt, TypeExpr};
+use super::{Builder, Column, grouped, number_folds};
+use crate::ast::{Span, Stmt, TypeExpr};
+use crate::program::bind::Term;
 use crate::program::node::{ClauseId, ExprId, Item, ItemId, ItemKind};
 use crate::program::scope::ScopeId;
 
@@ -19,16 +20,10 @@ pub struct OutputLowered<'a> {
     pub scope: ScopeId,
     /// The clause of B, gathered; none without `where`.
     pub clause: Option<ClauseId>,
-    /// `output(k, v)`, as the resolver wrote it.
-    pub head: &'a Atom,
-    /// B's literals, then the value's reads.
-    pub body: &'a [Lit],
     /// The value's node, as the resolver built it.
     pub value: ExprId,
     /// The helper statements the value's terms made.
     pub made: &'a [Stmt],
-    /// The statement's aggregate values.
-    pub results: &'a [String],
 }
 
 impl Builder<'_> {
@@ -36,8 +31,7 @@ impl Builder<'_> {
     pub fn output_item(&mut self, o: OutputLowered) -> ItemId {
         let value = self.holding(o.value, o.made);
         if let Some(c) = o.clause
-            && !o.results.is_empty()
-            && grouped(o.head, o.body, o.results)
+            && grouped(self.program, c, Some(&[Column::Term(Term::Expr(value))]))
         {
             number_folds(self.program, c);
         }

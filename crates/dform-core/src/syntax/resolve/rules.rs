@@ -65,19 +65,14 @@ impl Lowerer<'_> {
     /// `lower` writes it.
     pub(super) fn rule(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
         let r = self.rule_parts(n, scope, outer)?;
-        let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
         let l = crate::program::build::RuleLowered {
             span: self.span(n),
             scope: self.item_scope,
-            head: &r.head,
             rel: r.rel,
             args: r.args,
             rank: r.rank,
             clause: r.clause,
-            body: &r.body,
             made: &self.helpers[r.made..],
-            results: &results,
-            ranked: &r.ranked,
         };
         let written: BTreeSet<&str> = r.written.iter().map(String::as_str).collect();
         let written = |v: &str| written.contains(v);
@@ -151,9 +146,7 @@ impl Lowerer<'_> {
             head,
             rel,
             args,
-            ranked,
             rank,
-            body,
             made,
             written: rc.vars.values().cloned().collect(),
         })
@@ -247,7 +240,6 @@ impl Lowerer<'_> {
         // type is the reference's own (`value_type`).
         let declares = matches!(&ty, Some(t) if !matches!(t, crate::types::Ty::Ref(_)))
             && typed_rows.first().and_then(|t| t.parent()).as_ref() == Some(n);
-        let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
         let l = crate::program::build::LetLowered {
             name,
             ty: declared,
@@ -256,12 +248,9 @@ impl Lowerer<'_> {
             span,
             scope: self.item_scope,
             clause,
-            head: &head,
-            body: &body,
             value: id,
             fold,
             made: &self.helpers[made..],
-            results: &results,
         };
         let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
         let written = |v: &str| written.contains(v);
@@ -495,7 +484,7 @@ impl Lowerer<'_> {
             false => self.check_bound(&rc, &pre, &head.args.iter().collect::<Vec<_>>())?,
         }
         let parts = (name, declared, clause, id, made);
-        self.output_item(n, &rc, parts, head, pre)
+        self.output_item(n, &rc, parts)
     }
 
     /// An output row's item, of what it lowered to: its name, its type
@@ -513,22 +502,16 @@ impl Lowerer<'_> {
             ExprId,
             usize,
         ),
-        head: Atom,
-        pre: Vec<Lit>,
     ) -> L<ItemId> {
         let span = self.span(n);
-        let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
         let o = crate::program::build::OutputLowered {
             name,
             ty: declared,
             span,
             scope: self.item_scope,
             clause,
-            head: &head,
-            body: &pre,
             value,
             made: &self.helpers[made..],
-            results: &results,
         };
         let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
         let written = |v: &str| written.contains(v);
@@ -562,7 +545,7 @@ impl Lowerer<'_> {
         let head = atom_at("output", vec![str_term(&name), value], span);
         self.check_bound(&rc, &pre, &head.args.iter().collect::<Vec<_>>())?;
         let parts = (name, declared, clause, id, made);
-        self.output_item(n, &rc, parts, head, pre)
+        self.output_item(n, &rc, parts)
     }
 
     /// An object output's fields: the object term and its type.
@@ -786,18 +769,14 @@ impl Lowerer<'_> {
             WARN_KW => crate::program::node::CheckKind::Warn,
             _ => crate::program::node::CheckKind::Deny,
         };
-        let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
         let c = crate::program::build::CheckLowered {
             kind,
             span,
             scope: self.item_scope,
             clause,
-            head: &head,
-            body: &body,
             message,
             detail,
             made: (&self.helpers[made..made_mid], &self.helpers[made_mid..]),
-            results: &results,
         };
         let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
         let written = |v: &str| written.contains(v);
