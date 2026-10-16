@@ -7,6 +7,7 @@
 //! (`Link::hosting`).
 
 use crate::grpc;
+use crate::ratelimit::{Limiter, Paced};
 use crate::services::Services;
 use anyhow::Result;
 use dform_core::plugin::Launch;
@@ -18,6 +19,7 @@ use dform_core::plugin::source;
 use dform_grpc::client::{Conn, Process};
 use dform_grpc::spawn::{Env, FAKE_ENV, Program};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Every provider started as `dform-grpc`'s [`Process`] does, an
 /// executable with the host service beside it, a component in the wasm
@@ -125,7 +127,8 @@ impl Provider for Native {
 
 /// The executable `exe`, with the host service at `DFORM_HOST`.
 fn native(exe: &Path, grants: Grants) -> Result<Link> {
-    let served = grpc::serve(Services::new(grants.clone()))?;
+    let limiter = Arc::new(Limiter::new(&grants.provider));
+    let served = grpc::serve(Services::paced(grants.clone(), limiter.clone()))?;
     let program = Program::exe(exe);
     let mut conn = Conn::start(&program, &Env::default().set(grpc::ENV, &served.address))?;
     let declared = conn.manifest()?;
@@ -134,13 +137,11 @@ fn native(exe: &Path, grants: Grants) -> Result<Link> {
         .map(|d| Manifest::of(d.imports.iter().map(String::as_str), false));
     let schemes = declared.map(|d| d.schemes).unwrap_or_default();
     let reader = conn.reader();
-    let mut link = Link::start(
-        program.display(),
-        Box::new(Native {
-            conn,
-            _host: served,
-        }),
-    )?;
+    let native = Native {
+        conn,
+        _host: served,
+    };
+    let mut link = Link::start(program.display(), Box::new(Paced::new(native, limiter)))?;
     link.hosting = Some(Hosting {
         host: "native",
         manifest,

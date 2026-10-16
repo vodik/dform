@@ -19,9 +19,9 @@ use std::sync::{Arc, Mutex};
 pub struct Services {
     grants: Grants,
     opened: Mutex<Held>,
-    /// The pace of its requests, a window per session and bucket
+    /// The pace of its requests, a window per account and bucket
     /// (`ratelimit`).
-    limiter: ratelimit::Limiter,
+    limiter: Arc<ratelimit::Limiter>,
     ssh: Box<dyn ssh::Ssh>,
     git: git::Git,
 }
@@ -44,8 +44,16 @@ impl Held {
 impl Services {
     /// The host of the provider `grants` names.
     pub fn new(grants: Grants) -> Services {
+        let limiter = Arc::new(ratelimit::Limiter::new(&grants.provider));
+        Services::paced(grants, limiter)
+    }
+
+    /// The host of the provider `grants` names, its requests paced by
+    /// `limiter`, which the provider's Configure answers tell each
+    /// session's account (`ratelimit::Paced`).
+    pub fn paced(grants: Grants, limiter: Arc<ratelimit::Limiter>) -> Services {
         Services {
-            limiter: ratelimit::Limiter::new(&grants.provider),
+            limiter,
             grants,
             opened: Mutex::new(Held {
                 credentials: BTreeMap::new(),

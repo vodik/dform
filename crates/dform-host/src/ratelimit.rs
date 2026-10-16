@@ -1,8 +1,11 @@
-//! The host's pacing of a provider's requests: one window per session
-//! and bucket (the configured instance the request's call is made in, its
-//! own account or region: `HttpRequest::session`; and the limit it counts
-//! against, in the provider's word: `HttpRequest::bucket`, none the
-//! default bucket), and no declared rates. A window is how many of a bucket's requests may be
+//! The host's pacing of a provider's requests: one window per account
+//! and bucket (what the server throttles: the account the session of the
+//! request's call reported at its Configure, else that session alone,
+//! `HttpRequest::session`; and the limit it counts against, in the
+//! provider's word: `HttpRequest::bucket`, none the default bucket), and
+//! no declared rates. Two sessions on one account (a tree's deployments in
+//! one process of a provider) share its windows and halve together. A
+//! window is how many of a bucket's requests may be
 //! in flight at once. It starts small and grows while the server answers
 //! (by one for each answer until the first throttle, so it doubles each
 //! round trip; then by one each window's worth of answers), and halves
@@ -14,12 +17,14 @@
 //! the server answered it: its retry is the provider's, and waits its
 //! turn here. Requests wait in the order they came; a wait is a
 //! `ratelimit.wait` span. [`CEILING`] bounds a window whatever the
-//! server says: a safety ceiling, not a rate.
+//! server says: a safety ceiling, not a rate. The account is never a
+//! span's: a revealed secret may be one.
 
-use dform_core::plugin::backend::Session;
+use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Session, Stop, Ticket};
 use dform_core::plugin::host::{Class, Error, HttpResponse};
+use dform_core::plugin::pb;
 use std::collections::BTreeMap;
-use std::sync::{Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 /// The most requests of one bucket in flight at once.
@@ -31,15 +36,25 @@ const FIRST: f64 = 2.0;
 /// The longest pause a `Retry-After` is taken for.
 const LONGEST_PAUSE: Duration = Duration::from_secs(300);
 
-/// A bucket: the session of its requests' calls, and its name.
-type Key = (Session, String);
+/// What the server throttles a request's call by: the account its
+/// session reported, else the session alone.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Throttled {
+    Account(String),
+    Session(Session),
+}
+
+/// A bucket: what its requests are throttled by, and its name.
+type Key = (Throttled, String);
 
 /// The buckets, locked.
 type Buckets<'a> = MutexGuard<'a, BTreeMap<Key, Bucket>>;
 
-/// One provider's buckets, each session's apart.
+/// One provider's buckets, each account's apart.
 pub struct Limiter {
     provider: String,
+    /// The account each session's last Configure reported ([`Paced`]).
+    accounts: Mutex<BTreeMap<Session, String>>,
     buckets: Mutex<BTreeMap<Key, Bucket>>,
     turn: Condvar,
 }
@@ -151,6 +166,7 @@ impl Limiter {
     pub fn new(provider: &str) -> Limiter {
         Limiter {
             provider: provider.to_string(),
+            accounts: Mutex::new(BTreeMap::new()),
             buckets: Mutex::new(BTreeMap::new()),
             turn: Condvar::new(),
         }
@@ -160,15 +176,38 @@ impl Limiter {
         self.buckets.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    fn accounts(&self) -> MutexGuard<'_, BTreeMap<Session, String>> {
+        self.accounts.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// `session` was configured, and reported `account` (none: it does
+    /// not tell): its requests count against that account's windows.
+    pub fn configured(&self, session: Session, account: Option<&str>) {
+        let mut accounts = self.accounts();
+        match account {
+            Some(a) => accounts.insert(session, a.to_string()),
+            None => accounts.remove(&session),
+        };
+    }
+
+    /// The bucket `bucket` of what `session`'s requests are throttled by.
+    fn key(&self, session: Session, bucket: Option<&str>) -> Key {
+        let by = match self.accounts().get(&session) {
+            Some(a) => Throttled::Account(a.clone()),
+            None => Throttled::Session(session),
+        };
+        (by, bucket.unwrap_or_default().to_string())
+    }
+
     /// Wait until a request of `session`'s `bucket` may be sent: its turn
     /// in the queue, a place in the window, the bucket not paused.
     pub fn acquire(&self, session: Session, bucket: Option<&str>) -> Permit<'_> {
-        let name = (session, bucket.unwrap_or_default().to_string());
+        let name = self.key(session, bucket);
         let mut buckets = self.buckets();
         let b = buckets.entry(name.clone()).or_insert_with(Bucket::new);
         let place = b.queue();
         if !b.admit(place, Instant::now()) {
-            buckets = self.wait(buckets, &name, place);
+            buckets = self.wait(buckets, session, &name, place);
         }
         drop(buckets);
         // The next in the queue may fit too.
@@ -180,10 +219,10 @@ impl Limiter {
     }
 
     /// Wait until `place` in the queue of the bucket `name` is admitted:
-    /// a `ratelimit.wait` span, with its `session` and `bucket`, `queued`
-    /// (the requests before it) and
-    /// `window` (how many may be in flight). A thread of the host's has no
-    /// span of its own: the wait is the run's.
+    /// a `ratelimit.wait` span, with the `session` of the request's call
+    /// and the `bucket`, `queued` (the requests before it) and `window`
+    /// (how many may be in flight). A thread of the host's has no span of
+    /// its own: the wait is the run's.
     #[tracing::instrument(
         parent = dform_core::timing::parent(),
         target = "dform",
@@ -193,13 +232,19 @@ impl Limiter {
         fields(
             otel.name = %format_args!("{} waits on its window", self.provider),
             provider = self.provider.as_str(),
-            session = name.0.0,
+            session = session.0,
             bucket = name.1.as_str(),
             queued = buckets[name].before(place),
             window = buckets[name].size(),
         )
     )]
-    fn wait<'a>(&'a self, mut buckets: Buckets<'a>, name: &Key, place: u64) -> Buckets<'a> {
+    fn wait<'a>(
+        &'a self,
+        mut buckets: Buckets<'a>,
+        session: Session,
+        name: &Key,
+        place: u64,
+    ) -> Buckets<'a> {
         loop {
             let now = Instant::now();
             let b = buckets.get_mut(name).expect("queued before it waits");
@@ -221,11 +266,51 @@ impl Limiter {
     /// The window of `session`'s `bucket` now, and whether it is paused
     /// (tests).
     pub fn window(&self, session: Session, bucket: Option<&str>) -> (usize, bool) {
+        let key = self.key(session, bucket);
         let buckets = self.buckets();
-        match buckets.get(&(session, bucket.unwrap_or_default().to_string())) {
+        match buckets.get(&key) {
             Some(b) => (b.size(), b.paused.is_some_and(|p| p > Instant::now())),
             None => (FIRST as usize, false),
         }
+    }
+}
+
+/// A provider whose host paces its requests by `limiter`: each Configure
+/// it answers tells the limiter the account its session reported.
+pub struct Paced<P> {
+    provider: P,
+    limiter: Arc<Limiter>,
+}
+
+impl<P: Provider> Paced<P> {
+    pub fn new(provider: P, limiter: Arc<Limiter>) -> Paced<P> {
+        Paced { provider, limiter }
+    }
+}
+
+impl<P: Provider> Provider for Paced<P> {
+    fn submit(&mut self, call: Call) -> Ticket {
+        self.provider.submit(call)
+    }
+
+    fn next_completed(
+        &mut self,
+        events: &mut dyn FnMut(Ticket, pb::Event),
+    ) -> (Ticket, Result<Reply, CallError>) {
+        let (t, r) = self.provider.next_completed(events);
+        if let Ok(Reply::Configure(c)) = &r {
+            self.limiter
+                .configured(Session(c.session), c.account.as_deref());
+        }
+        (t, r)
+    }
+
+    fn is_dead(&mut self) -> bool {
+        self.provider.is_dead()
+    }
+
+    fn stopper(&self) -> Option<Stop> {
+        self.provider.stopper()
     }
 }
 
@@ -348,6 +433,76 @@ mod tests {
             w.join().unwrap();
         }
         assert_eq!(*order.lock().unwrap(), [0, 1, 2]);
+    }
+
+    /// Sessions that reported one account share its windows: one's
+    /// throttle halves the other's, one's `Retry-After` pauses the
+    /// other's bucket; a session on another account, or that reports
+    /// none, keeps its own.
+    #[test]
+    fn sessions_on_one_account_share_its_windows() {
+        let l = Limiter::new("p");
+        let (east, west, apart, untold) = (Session(1), Session(2), Session(3), Session(4));
+        l.configured(east, Some("acct-1"));
+        l.configured(west, Some("acct-1"));
+        l.configured(apart, Some("acct-2"));
+        for _ in 0..2 {
+            l.acquire(east, None).answered(&status(200, &[]));
+        }
+        assert_eq!(l.window(west, None).0, 4, "west sees east's growth");
+        l.acquire(west, None).answered(&status(429, &[]));
+        assert_eq!(l.window(east, None).0, 2, "east halves with west");
+        assert_eq!(l.window(apart, None), (2, false));
+        assert_eq!(l.window(untold, None), (2, false));
+        l.acquire(east, Some("a"))
+            .answered(&status(429, &[("Retry-After", "1")]));
+        assert_eq!(l.window(west, Some("a")), (1, true));
+        // Configured again with none, a session is its own again.
+        l.configured(west, None);
+        assert_eq!(l.window(west, Some("a")), (2, false));
+    }
+
+    /// A provider's Configure answers, as its link takes them, tell its
+    /// host's limiter each session's account (`Paced`).
+    #[test]
+    fn a_configure_answer_names_its_sessions_account() {
+        /// Answers each Configure with its session's account.
+        struct Accounts(Vec<(Ticket, Reply)>);
+        impl Provider for Accounts {
+            fn submit(&mut self, call: Call) -> Ticket {
+                let Call::Configure(c) = call else {
+                    unreachable!("Configure only")
+                };
+                let t = Ticket(self.0.len() as u64);
+                let account = (c.session != 3).then(|| "acct-1".to_string());
+                let r = pb::ConfigureResponse {
+                    session: c.session,
+                    account,
+                    ..Default::default()
+                };
+                self.0.push((t, Reply::Configure(r)));
+                t
+            }
+            fn next_completed(
+                &mut self,
+                _: &mut dyn FnMut(Ticket, pb::Event),
+            ) -> (Ticket, Result<Reply, CallError>) {
+                let (t, r) = self.0.remove(0);
+                (t, Ok(r))
+            }
+        }
+        let l = Arc::new(Limiter::new("p"));
+        let mut p = Paced::new(Accounts(Vec::new()), l.clone());
+        for session in 1..=3 {
+            p.submit(Call::Configure(pb::ConfigureRequest {
+                session,
+                ..Default::default()
+            }));
+            p.next_completed(&mut |_, _| {});
+        }
+        l.acquire(Session(1), None).answered(&status(429, &[]));
+        assert_eq!(l.window(Session(2), None).0, 1, "one account");
+        assert_eq!(l.window(Session(3), None), (2, false), "none told");
     }
 
     /// Each session's buckets are its own: one session's throttle leaves

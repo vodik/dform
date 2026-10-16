@@ -19,6 +19,7 @@
 //! does, from `/`). No environment variable is passed in: a credential
 //! is had by name (`dform:host/secrets`), never from the environment.
 
+use crate::ratelimit::{Limiter, Paced};
 use crate::services::Services;
 use anyhow::{Context, Result, anyhow};
 use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Session, Ticket};
@@ -429,7 +430,7 @@ pub struct Wasm {
 impl Wasm {
     /// Load, admit (its imports against `grants`) and instantiate the
     /// component at `path`.
-    pub fn start(path: &Path, grants: Grants) -> Result<(Wasm, Manifest)> {
+    pub fn start(path: &Path, grants: Grants, limiter: Arc<Limiter>) -> Result<(Wasm, Manifest)> {
         let program = path.display().to_string();
         let engine = engine()?;
         let component =
@@ -445,6 +446,7 @@ impl Wasm {
         let instance = Instance {
             program: program.clone(),
             grants,
+            limiter,
             dead: dead.clone(),
             tx,
         };
@@ -485,6 +487,8 @@ impl Wasm {
 struct Instance {
     program: String,
     grants: Grants,
+    /// What its host paces its requests by ([`crate::ratelimit::Paced`]).
+    limiter: Arc<Limiter>,
     dead: Arc<Mutex<Option<String>>>,
     tx: std::sync::mpsc::Sender<Back>,
 }
@@ -529,7 +533,7 @@ impl Instance {
             wasi: wasi.build(),
             http: WasiHttpCtx::new(),
             table: ResourceTable::new(),
-            host: Services::new(self.grants.clone()),
+            host: Services::paced(self.grants.clone(), self.limiter.clone()),
         })
     }
 
@@ -873,8 +877,9 @@ impl Drop for Wasm {
 
 /// The component at `path`, started with `grants` and shaken hands with.
 pub fn link(path: &Path, grants: Grants) -> Result<Link> {
-    let (w, manifest) = Wasm::start(path, grants.clone())?;
-    let mut link = Link::start(path.display().to_string(), Box::new(w))?;
+    let limiter = Arc::new(Limiter::new(&grants.provider));
+    let (w, manifest) = Wasm::start(path, grants.clone(), limiter.clone())?;
+    let mut link = Link::start(path.display().to_string(), Box::new(Paced::new(w, limiter)))?;
     link.hosting = Some(Hosting {
         host: "wasm",
         manifest: Some(manifest),

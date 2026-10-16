@@ -1009,8 +1009,10 @@ ordering, parallelism, state and crash safety: a provider that dies during an
 Apply is a failed action naming the resource, and the next `apply` resumes.
 dform paces the HTTP requests a provider sends through the host
 (`dform:host/http`) by what the server answers, a window of requests in
-flight per session and bucket: the session is the configured instance
-the request's call is made in (below), the bucket is
+flight per account and bucket: the account is what the server throttles,
+the one the session of the request's call reported at its Configure (the
+configured instance the call is made in, below), else that session
+alone when its provider reports none; the bucket is
 the provider's word on a request (`Request::bucket("ec2.describe")`,
 `"route53.change:ZONE"` for a limit an object has; none, the provider's
 default), and nobody declares a rate. A window starts at two, grows while
@@ -1037,8 +1039,10 @@ tree planned or applied as one run share one process per provider, each
 in its own session: their calls may be in flight together, and each
 lands in its own deployment's world. A provider whose Configure answers
 no session was built before sessions, and dform refuses it, naming it
-and its build. One session's throttle leaves another's window as it
-was.
+and its build. Sessions on one account (two deployments of a tree with
+the same credentials) share its windows and halve together; a session
+on another account, or one its provider reports no account for, keeps
+its own.
 
 Read is told the object's prior: its computed values as the last Apply
 answered them, or the last Read an apply made, as state keeps them
