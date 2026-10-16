@@ -72,15 +72,44 @@ impl Stuck {
     }
 }
 
-/// A head as `stuck/4` and `may_derive/3` say it: as written, but a
-/// copy's gate (`g::__instance("pair")`, the relation its clause lowers
-/// to) as the program writes the copy, `resource pair g`.
+/// A head as `stuck/4` and `may_derive/3` say it, as the program names
+/// what it writes: a resource's attribute by its address and path
+/// (`net.subnet s.name`), an input's, a `let`'s or an output's cell by
+/// its copy and name (`one.n`), a copy's relation by its name in the copy
+/// (`n(_) (in one)`), a copy's gate (`g::__instance("pair")`, the
+/// relation its clause lowers to) as the program writes the copy,
+/// `resource pair g`; any other as written, a reference by its address.
 fn head_text(head: &Atom) -> String {
-    match head.pred.rsplit_once("::") {
-        Some((_, crate::modules::GATE)) => crate::modules::private_text(head, &spell::atom, " "),
-        _ => None,
+    let written = |a: &Atom| crate::query::Redactor::default().surface_atom(a);
+    cell_text(head)
+        .or_else(|| match head.pred.contains("::") {
+            true => crate::modules::private_text(head, &written, " "),
+            false => None,
+        })
+        .unwrap_or_else(|| written(head))
+}
+
+/// `arg(T, A, P, ..)` with its type, address and path known, as the plan
+/// names the value it writes.
+fn cell_text(head: &Atom) -> Option<String> {
+    let [Term::Val(t), Term::Val(a), Term::Val(p), ..] = head.args.as_slice() else {
+        return None;
+    };
+    let (t, a, p) = (t.as_str()?, a.as_str()?, p.as_str()?);
+    if head.pred != "arg" {
+        return None;
     }
-    .unwrap_or_else(|| spell::atom(head))
+    Some(match (crate::partition::scoped_cell(t), a.is_empty()) {
+        (true, true) => p.to_string(),
+        (true, false) => format!("{}.{p}", crate::report::path(a)),
+        (false, _) => {
+            let a = crate::address::Address {
+                typ: t.to_string(),
+                name: a.to_string(),
+            };
+            format!("{}.{p}", crate::report::address(&a))
+        }
+    })
 }
 
 /// The nulls a stuck instance waits on, as the plan prints them: `?T.a.p`
@@ -594,6 +623,49 @@ fn other_stacks(v: &Value) -> BTreeSet<String> {
 mod tests {
     use super::*;
     use crate::report::Style;
+
+    /// `stuck/4` names what a stuck rule writes as the program does: a
+    /// copy's input by the copy, a resource's attribute by its address,
+    /// a copy's relation by its name in the copy, a reference by its
+    /// address; never the core's `arg(..)` or a `::` scope.
+    #[test]
+    fn a_stuck_head_is_said_in_the_programs_words() {
+        let s = |v: &str| Term::Val(Value::Str(v.into()));
+        let atom = |pred: &str, args: Vec<Term>| Atom {
+            pred: pred.into(),
+            args,
+            record: None,
+            span: Default::default(),
+        };
+        let reference = Term::Val(Value::Ref {
+            typ: "x.box".into(),
+            name: "b".into(),
+            attr: String::new(),
+        });
+        for (head, said) in [
+            (
+                atom(
+                    "arg",
+                    vec![s("input"), s("one"), s("n"), Term::Wildcard, s("normal")],
+                ),
+                "one.n",
+            ),
+            (
+                atom(
+                    "arg",
+                    vec![s("net.subnet"), s("s"), s("name"), Term::Wildcard],
+                ),
+                "net.subnet s.name",
+            ),
+            (atom("one::n", vec![Term::Wildcard]), "n(_) (in one)"),
+            (
+                atom("policy::ready", vec![reference]),
+                "ready(x.box b) (in policy)",
+            ),
+        ] {
+            assert_eq!(head_text(&head), said);
+        }
+    }
 
     /// One text for the nulls a stuck instance waits on, plain or painted.
     #[test]

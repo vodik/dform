@@ -897,8 +897,7 @@ fn format_over_a_computed_ref_is_stuck() {
     let stuck = facts_of(&r, "stuck");
     assert_eq!(stuck.len(), 1, "{stuck:?}");
     assert!(
-        stuck[0].contains("arg(\\\"net.subnet\\\", \\\"s\\\", \\\"name\\\", _, \\\"normal\\\")")
-            && stuck[0].contains("[\"net.vpc/v#id\"]"),
+        stuck[0].contains("\"net.subnet s.name\"") && stuck[0].contains("[\"net.vpc/v#id\"]"),
         "{stuck:?}"
     );
     assert_eq!(r.stuck[0].reason, "builtin str.format() over a null");

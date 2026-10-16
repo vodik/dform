@@ -152,7 +152,8 @@ fn a_negation_of_what_waits_waits() {
 }
 
 /// `stuck/4` names the program's rules, never a helper of a module: the
-/// denies and `ready` that wait, not `policy::__neg_0` or
+/// denies and `ready` (the module's, as the plan names it) that wait, not
+/// `policy::__neg_0` or
 /// `policy::__agg_0`; as the evaluation ends, and where a rule reads it.
 #[test]
 fn a_modules_helper_is_never_stuck_in_its_rules_place() {
@@ -165,7 +166,7 @@ fn a_modules_helper_is_never_stuck_in_its_rules_place() {
         assert!(
             r.stdout
                 .contains("deny(\\\"none ready\\\", {box = \\\"b\\\"})")
-                && r.stdout.contains("policy::ready(")
+                && r.stdout.contains("ready(x.box b) (in policy)")
                 && !r.stdout.contains("__"),
             "{relation}\n{}",
             r.stdout
