@@ -2174,7 +2174,7 @@ fn unanswered_read(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -> 
 
 /// Each reference `ref(T, A, "")` of a constant type in `t`: its type and
 /// address.
-fn references(t: &Term, out: &mut Vec<(Term, Term)>) {
+pub(crate) fn references(t: &Term, out: &mut Vec<(Term, Term)>) {
     match t {
         Term::Func { name, args } if name == crate::address::REF && args.len() == 3 => {
             if let (Term::Val(Value::Str(_)), Term::Val(Value::Str(p))) = (&args[0], &args[2])

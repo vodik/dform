@@ -23,7 +23,7 @@
 //! document, a provider's table, the environment, the clock): a let is
 //! the program's answer, and a program's answer is pure.
 
-use crate::ast::{Atom, Lit, Program, RuleStmt, Span, Stmt, Term};
+use crate::ast::{Atom, Helper, Lit, Program, RuleStmt, Span, Stmt, Term};
 use crate::diag::{Diagnostic, Diagnostics};
 use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
@@ -253,6 +253,7 @@ impl Lets {
                 let mut demand = RuleStmt::new(demand, r.body[..j].to_vec());
                 demand.origin = r.origin;
                 rules.push(demand);
+                rules.extend(passed(&r, j));
                 if new {
                     unions.push(union(&f, &copied, a, self.columns(&f, a.args.len())));
                     let names = self.renames(&f, &scope);
@@ -311,6 +312,37 @@ impl Lets {
         out.insert(of(f), of(&copy(f)));
         out
     }
+}
+
+/// A contribution `r` that passes a reference to the call at its literal
+/// `j` holds it, as an entry written `= apps` does: each resource it
+/// passes is applied first, `__ref_dep(T, A, T2, A2)` over the body
+/// before the call (`transform::REF_DEP`), so a function's read through
+/// its parameter is the caller's edge, as the read written inline is.
+fn passed(r: &RuleStmt, j: usize) -> Vec<RuleStmt> {
+    let (Lit::Pos(call), ("arg", [typ, addr, _, _, _])) =
+        (&r.body[j], (r.head.pred.as_str(), r.head.args.as_slice()))
+    else {
+        return Vec::new();
+    };
+    let mut to = Vec::new();
+    for a in &call.args[..call.args.len() - 1] {
+        crate::transform::references(a, &mut to);
+    }
+    to.into_iter()
+        .map(|(t, a)| {
+            let args = vec![typ.clone(), addr.clone(), t, a];
+            let head = Atom {
+                pred: crate::transform::REF_DEP.into(),
+                args,
+                record: None,
+                span: call.span,
+            };
+            let mut dep = RuleStmt::helper(Helper::RefDep, head, r.body[..j].to_vec());
+            dep.origin = r.origin;
+            dep
+        })
+        .collect()
 }
 
 /// The copies made so far, one per site: a call where it is written, in

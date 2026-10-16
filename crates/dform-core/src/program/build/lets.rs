@@ -78,8 +78,9 @@ pub struct LetFnLowered<'a> {
     pub scope: ScopeId,
     /// The clause of B, gathered after the demand; none without `where`.
     pub clause: Option<ClauseId>,
-    /// Its parameters' variables, by the names they lower to.
-    pub params: &'a [String],
+    /// Its parameters' variables, by the names they lower to, each with
+    /// its declared type.
+    pub params: &'a [(String, Option<TypeExpr>)],
     /// The value's node, as the resolver built it.
     pub value: ExprId,
     /// The helper statements the value's terms made.
@@ -93,9 +94,9 @@ impl Builder<'_> {
         let params: Vec<Param> = l
             .params
             .iter()
-            .map(|v| Param {
+            .map(|(v, ty)| Param {
                 var: self.var(v),
-                ty: None,
+                ty: ty.clone(),
                 default: None,
             })
             .collect();

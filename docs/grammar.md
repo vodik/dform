@@ -1110,7 +1110,15 @@ its uses as a relation's column is, or written, `let
 restic(tag: string, mounts: list(object)) = ..`, its argument read as
 that type; a parameter may have a default, a constant, and a call names
 its arguments as a std function's call does: `cidr(1)`,
-`cidr(b: 3, a: 2)`. Each call is answered where it is written, its rows
+`cidr(b: 3, a: 2)`. A parameter of a resource type takes a resource as a
+block's entry does: `let ingress(name: string, service: k8s.service) =
+{ .. service.metadata.name .. }` is called `ingress("web", web)`, with a
+`let` that holds one, or with `T["web"]`; a name two resources share is
+the one of the parameter's type. In the body the parameter is that
+resource, and a read through it is the caller's: the resource the caller
+passes is applied before what the caller writes, as an entry `= web`
+orders it. Anywhere a call's argument is a resource by its bare name, it
+is the reference. Each call is answered where it is written, its rows
 its own (`why 'f(a, b, v)'` prints them `(in call at FILE:LINE:COL)`,
 under the let's rule), so a call stratifies where its site does. A let
 with parameters takes no rank: its rows are a relation's, not a cell's.

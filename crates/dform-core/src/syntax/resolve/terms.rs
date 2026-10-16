@@ -412,14 +412,7 @@ impl Lowerer<'_> {
         }
         // A resource by its bare name, given as a value: the
         // reference, in its module or out of it (R-43).
-        if pos == Pos::Value
-            && c.is_bare()
-            && c.head != "_"
-            && !rc.vars.contains_key(&c.head)
-            && !rc.types.contains_key(&c.head)
-            && !self.is_value(rc.scope, &c.head)
-            && self.resource(rc.scope, &c.head).is_some()
-        {
+        if pos == Pos::Value && self.resource_named(rc, &c) {
             if let Some(id) = self.deferred_ref(rc, &c.head, span) {
                 return Ok(id);
             }
@@ -524,7 +517,7 @@ impl Lowerer<'_> {
         if let (false, Some(f)) = (named.is_empty(), declared) {
             let mut given = Vec::new();
             for (k, t) in named {
-                given.push((k, Some(self.bind(false, |l| l.expr(rc, &t, Pos::Content))?)));
+                given.push((k, Some(self.bind(false, |l| l.arg_expr(rc, &t))?)));
             }
             let placed = crate::functions::with_named(f, args, given, |v| {
                 defaults.push(v);
@@ -555,9 +548,28 @@ impl Lowerer<'_> {
         };
         let mut out = Vec::new();
         for t in terms(&list) {
-            out.push(Some(self.expr(rc, &t, Pos::Content)?));
+            out.push(Some(self.arg_expr(rc, &t)?));
         }
         Ok(out)
+    }
+
+    /// A call's argument `t`: read as any term is, a resource by its
+    /// bare name the reference, as it is given to a block's entry.
+    pub(super) fn arg_expr(&mut self, rc: &mut Rc, t: &SyntaxNode) -> L<ExprId> {
+        let named = Chain::of(t).is_some_and(|c| self.resource_named(rc, &c));
+        let pos = if named { Pos::Value } else { Pos::Content };
+        self.expr(rc, t, pos)
+    }
+
+    /// Whether `c` is a resource by its bare name: one in scope that no
+    /// variable or value of the name hides.
+    pub(super) fn resource_named(&self, rc: &Rc, c: &Chain) -> bool {
+        c.is_bare()
+            && c.head != "_"
+            && !rc.vars.contains_key(&c.head)
+            && !rc.types.contains_key(&c.head)
+            && !self.is_value(rc.scope, &c.head)
+            && self.resource(rc.scope, &c.head).is_some()
     }
 
     /// `[a, b]`, written element by element: its node, each element's.

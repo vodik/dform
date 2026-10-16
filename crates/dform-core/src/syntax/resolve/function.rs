@@ -71,6 +71,8 @@ impl Lowerer<'_> {
         // statement's variables are: by the demand of the literal that
         // reads the relation (`crate::demand`), which `lower` writes first
         // in the body.
+        // A parameter of a resource type holds the reference, and a dot
+        // on it reads through it, as on any variable of the type.
         let mut inner = outer.clone();
         let mut vars = Vec::new();
         for p in &ps {
@@ -79,7 +81,12 @@ impl Lowerer<'_> {
                 v.push('_');
             }
             inner.vars.insert(p.name.clone(), v.clone());
-            vars.push(v);
+            let ty = p.ty.as_ref().map(|t| self.type_expr(t));
+            if let Some(crate::types::Ty::Ref(t)) = ty.as_ref().map(crate::types::of_expr) {
+                inner.types.insert(p.name.clone(), str_term(&t));
+                inner.row_refs.insert(p.name.clone());
+            }
+            vars.push((v, ty));
         }
         let mut rc = self.rc(n, scope, &inner);
         self.opt_body(&mut rc, n)?;
@@ -333,7 +340,7 @@ impl Lowerer<'_> {
         }
         let mut given: Vec<Option<(ExprId, Span)>> = (0..ps.len()).map(|_| None).collect();
         for (i, t) in positional.iter().enumerate() {
-            let arg = self.bind(false, |l| l.expr(rc, t, Pos::Content))?;
+            let arg = self.bind(false, |l| l.param_arg(rc, t, &ps[i]))?;
             given[i] = Some((arg, self.span(t)));
         }
         let named = list
@@ -355,10 +362,24 @@ impl Lowerer<'_> {
                 return self.error(self.span(&a), format!("`{name}`'s `{k}` is given twice"));
             }
             let t = terms(&a).next().ok_or(Skip)?;
-            let arg = self.bind(false, |l| l.expr(rc, &t, Pos::Content))?;
+            let arg = self.bind(false, |l| l.param_arg(rc, &t, &ps[i]))?;
             given[i] = Some((arg, self.span(&t)));
         }
         Ok(given)
+    }
+
+    /// The argument `t` a call gives the parameter `p`: given to one of a
+    /// resource type `T`, a resource by its name or a variable of the type
+    /// is the reference, as a block's entry takes it, and a name two
+    /// resources share is the one of type `T` (R-74).
+    fn param_arg(&mut self, rc: &mut Rc, t: &SyntaxNode, p: &Param) -> L<ExprId> {
+        let ty = p.ty.as_ref().map(|t| self.type_expr(t));
+        match ty.as_ref().map(crate::types::of_expr) {
+            Some(crate::types::Ty::Ref(typ)) => {
+                self.wanting(Want::Type(typ), |l| l.expr(rc, t, Pos::Value))
+            }
+            _ => self.arg_expr(rc, t),
+        }
     }
 
     /// A call of an unknown function whose name is nearest a let with

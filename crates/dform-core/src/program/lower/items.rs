@@ -706,7 +706,7 @@ fn let_fn(
     span: Span,
 ) -> Vec<Stmt> {
     let mut l = Lowering::new(env);
-    let mut args: Vec<ast::Term> = params.iter().map(|p| l.var(p.var)).collect();
+    let mut args: Vec<ast::Term> = params.iter().map(|p| param(&mut l, p)).collect();
     let demand = crate::demand::of(name);
     let seed = vec![ast::Lit::Pos(l.put(Atom {
         pred: demand.clone(),
@@ -733,6 +733,20 @@ fn let_fn(
     out.push(l.put_stmt(Stmt::Mode(relation(name.to_string(), arity))));
     out.append(&mut l.helpers);
     out
+}
+
+/// A let's parameter as its relation's column: its variable, or one of
+/// a resource type the reference whose address it is, `__ref(T, A, "")`,
+/// as a reference column holds it.
+fn param(l: &mut Lowering, p: &Param) -> ast::Term {
+    let var = l.var(p.var);
+    match p.ty.as_ref().map(crate::types::of_expr) {
+        Some(crate::types::Ty::Ref(t)) => ast::Term::Func {
+            name: crate::address::REF.into(),
+            args: vec![str_term(&t), var, str_term("")],
+        },
+        _ => var,
+    }
 }
 
 /// A provider's `use p [as n] { .. } [where B]`: when it starts the

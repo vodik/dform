@@ -460,3 +460,75 @@ r(a, b) where a = tcp([80, 443]), b = web([8080])
         .collect();
     assert_eq!(rows, ["r([{port = 443}], {rules = [{port = 8080}]})"]);
 }
+
+/// A resource passed to a function (the user, 2026-10-16): a parameter
+/// of a resource type takes the resource by its name as a block's entry
+/// does, by a `let` that holds it, and among two resources of one name
+/// the one of its type, or by its type and key; a read through it is the
+/// caller's edge, so each Ingress the helper writes applies after the
+/// Service it was given.
+#[test]
+fn a_resource_is_given_to_a_function_by_its_name() {
+    let src = r#"use k8s
+
+let ingress(name: string, host: string, service: k8s.service, port: int) = {
+  metadata = { name = name },
+  spec = { rules = [{ host = host, http = { paths = [{
+    path = "/",
+    pathType = "Prefix",
+    backend = { service = { name = service.metadata.name, port = { number = port } } },
+  }] } }] },
+}
+
+resource k8s.service web { metadata.name = "web-svc"
+  spec.ports = [{ port = 80, protocol = "TCP" }] }
+resource k8s.service api { metadata.name = "api-svc"
+  spec.ports = [{ port = 8080, protocol = "TCP" }] }
+resource k8s.service docs { metadata.name = "docs-svc"
+  spec.ports = [{ port = 80, protocol = "TCP" }] }
+
+resource k8s.ingress web = ingress("web", "web.example.org", web, 80)
+resource k8s.ingress api = ingress("api", "api.example.org", api, 8080)
+let site: k8s.service = docs
+resource k8s.ingress docs = ingress("docs", "docs.example.org", site, 80)
+"#;
+    let s = Scratch::new("lets-params-resource");
+    s.write("p.df", src);
+    let r = s
+        .run(&["dev", "--world", "w.json", "plan", "--json", "p.df"])
+        .success();
+    let doc: serde_json::Value = serde_json::from_str(&r.stdout).unwrap();
+    let order: Vec<&str> = doc["ticks"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["address"].as_str().unwrap())
+        .collect();
+    let backend = "spec.rules[0].http.paths[0].backend.service.name";
+    for (app, svc) in [("web", "web-svc"), ("api", "api-svc"), ("docs", "docs-svc")] {
+        let at = |a: &str| order.iter().position(|o| *o == a).unwrap();
+        let ingress = format!("k8s.ingress[\"{app}\"]");
+        assert!(
+            at(&format!("k8s.service[\"{app}\"]")) < at(&ingress),
+            "{order:?}"
+        );
+        let change = doc["ticks"][0]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["address"] == ingress.as_str())
+            .unwrap();
+        let name = change["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|l| l["path"] == backend)
+            .map(|l| l["after"].clone());
+        assert_eq!(name, Some(serde_json::json!(svc)), "{ingress}: {change}");
+    }
+    let keyed = src.replace(
+        "ingress(\"web\", \"web.example.org\", web, 80)",
+        "ingress(\"web\", \"web.example.org\", k8s.service[\"web\"], 80)",
+    );
+    plan(&keyed).success();
+}
