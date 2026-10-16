@@ -5,9 +5,19 @@
 //!
 //!   kind create cluster --name dform-test --kubeconfig target/kind.kubeconfig
 //!   DFORM_K8S_TEST_KUBECONFIG=target/kind.kubeconfig cargo test --test k8s_cluster
+//!
+//! The test reaches the cluster itself as the provider does: through its
+//! thin client (`dform_k8s::cluster`) over dform's own host, in this
+//! process (`dform_sdk::set_host`, process-wide: a binary of its own).
 
-use crate::common;
+mod common;
+
 use common::{Run, Scratch, repo};
+use dform::plugin::backend::Session;
+use dform::plugin::credentials::{self, Holding, Kind, Secret};
+use dform::plugin::host::Grants;
+use dform_k8s::cluster::Cluster;
+use dform_k8s::openapi;
 use serde_json::{Value as Json, json};
 
 fn k8s() -> String {
@@ -26,19 +36,84 @@ fn kubeconfig(test: &str) -> Option<String> {
     }
 }
 
-fn client(kubeconfig: &str) -> (tokio::runtime::Runtime, kube::Client) {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let client = rt.block_on(async {
-        let kc = kube::config::Kubeconfig::read_from(kubeconfig).unwrap();
-        let config = kube::Config::from_custom_kubeconfig(kc, &Default::default())
-            .await
-            .unwrap();
-        kube::Client::try_from(config).unwrap()
-    });
-    (rt, client)
+/// The provider the test's host serves: what its kubeconfig is held for.
+const PROVIDER: &str = "k8s-cluster-test";
+
+/// A kind of the core group, or of `group`.
+fn kind(group: &str, version: &str, kind: &str, plural: &str, namespaced: bool) -> openapi::Kind {
+    openapi::Kind {
+        group: group.into(),
+        version: version.into(),
+        kind: kind.into(),
+        plural: plural.into(),
+        namespaced,
+    }
+}
+
+fn namespaces() -> openapi::Kind {
+    kind("", "v1", "Namespace", "namespaces", false)
+}
+
+fn config_maps() -> openapi::Kind {
+    kind("", "v1", "ConfigMap", "configmaps", true)
+}
+
+fn deployments() -> openapi::Kind {
+    kind("apps", "v1", "Deployment", "deployments", true)
+}
+
+/// The test cluster through the provider's thin client, its kubeconfig
+/// held by dform's host in this process (its text: a kind cluster's and
+/// k3s's carry their certificates inline).
+struct Kube {
+    cluster: Cluster,
+    /// The same kubeconfig, for a request of another field manager's.
+    credential: dform_sdk::Credential,
+    _held: Holding,
+}
+
+impl Kube {
+    fn new(kubeconfig: &str) -> Kube {
+        let _ = dform_sdk::set_host(Box::new(dform_host::services::Services::new(Grants::none(
+            PROVIDER,
+        ))));
+        let text = std::fs::read(kubeconfig).unwrap();
+        let held = credentials::hold(
+            Kind::Kubeconfig,
+            PROVIDER,
+            [("kubeconfig".to_string(), Secret::new(text))].into(),
+        );
+        Kube {
+            cluster: Cluster::open(held.name(), Session::NONE, None).unwrap(),
+            credential: dform_sdk::host().secrets.open(held.name()).unwrap(),
+            _held: held,
+        }
+    }
+
+    /// `METHOD PATH` with `body` of `content_type`, as another client
+    /// (`kubectl`, a controller) sends it: the server's answer, a success.
+    fn send(&self, method: &str, path: &str, content_type: &str, body: &Json) -> Json {
+        let req = dform_sdk::Request::new(method, format!("{}{path}", self.cluster.url))
+            .header("content-type", content_type)
+            .header("accept", "application/json")
+            .body(serde_json::to_vec(body).unwrap())
+            .auth(&self.credential);
+        let r = dform_sdk::host().http.request(req).unwrap();
+        assert!(
+            (200..300).contains(&r.status),
+            "{method} {path}: {} {}",
+            r.status,
+            String::from_utf8_lossy(&r.body)
+        );
+        serde_json::from_slice(&r.body).unwrap()
+    }
+
+    /// The objects of `kind` in the namespace `ns`.
+    fn list(&self, kind: &openapi::Kind, ns: &str) -> Vec<Json> {
+        let mut all = self.cluster.list(kind, None).unwrap();
+        all.retain(|o| o.pointer("/metadata/namespace").and_then(Json::as_str) == Some(ns));
+        all
+    }
 }
 
 /// A namespace for one test, deleted when dropped.
@@ -62,9 +137,8 @@ impl Namespace {
 
 impl Drop for Namespace {
     fn drop(&mut self) {
-        let (rt, client) = client(&self.kubeconfig);
-        let api: kube::Api<k8s_openapi::api::core::v1::Namespace> = kube::Api::all(client);
-        let _ = rt.block_on(api.delete(&self.name, &kube::api::DeleteParams::background()));
+        let kube = Kube::new(&self.kubeconfig);
+        let _ = kube.cluster.delete(&namespaces(), "", &self.name);
     }
 }
 
@@ -167,17 +241,17 @@ fn a_field_another_manager_owns_fails_the_apply() {
     s.write("p.df", &program(&ns.name, "nginx:1.27"));
     dform(&s, &kc, &["apply", "p.df"]).success();
 
-    let (rt, client) = client(&kc);
-    let api: kube::Api<k8s_openapi::api::apps::v1::Deployment> =
-        kube::Api::namespaced(client, &ns.name);
     let patch = json!({"apiVersion": "apps/v1", "kind": "Deployment",
                        "metadata": {"name": "web"}, "spec": {"replicas": 2}});
-    rt.block_on(api.patch(
-        "web",
-        &kube::api::PatchParams::apply("dform-test-other").force(),
-        &kube::api::Patch::Apply(&patch),
-    ))
-    .unwrap();
+    Kube::new(&kc).send(
+        "PATCH",
+        &format!(
+            "{}/web?fieldManager=dform-test-other&force=true",
+            deployments().collection(&ns.name)
+        ),
+        "application/apply-patch+yaml",
+        &patch,
+    );
 
     let r = dform(&s, &kc, &["apply", "p.df"]).failure();
     assert!(
@@ -211,10 +285,13 @@ fn a_removed_resource_is_deleted() {
         r.stdout
     );
 
-    let (rt, client) = client(&kc);
-    let api: kube::Api<k8s_openapi::api::apps::v1::Deployment> =
-        kube::Api::namespaced(client, &ns.name);
-    assert!(rt.block_on(api.get_opt("web")).unwrap().is_none());
+    let kube = Kube::new(&kc);
+    assert!(
+        kube.cluster
+            .get(&deployments(), &ns.name, "web")
+            .unwrap()
+            .is_none()
+    );
 }
 
 /// tests/fixtures/k8s's demo, its namespace the test's, against the real
@@ -270,19 +347,15 @@ fn drift_from_a_kubectl_patch_is_planned_back() {
     s.write("p.df", &program(&ns.name, "nginx:1.27"));
     dform(&s, &kc, &["apply", "p.df"]).success();
 
-    let (rt, client) = client(&kc);
-    let api: kube::Api<k8s_openapi::api::apps::v1::Deployment> =
-        kube::Api::namespaced(client, &ns.name);
-    let pp = kube::api::PatchParams {
-        field_manager: Some("kubectl-patch".into()),
-        ..Default::default()
-    };
-    rt.block_on(api.patch(
-        "web",
-        &pp,
-        &kube::api::Patch::Merge(json!({"spec": {"replicas": 3}})),
-    ))
-    .unwrap();
+    Kube::new(&kc).send(
+        "PATCH",
+        &format!(
+            "{}/web?fieldManager=kubectl-patch",
+            deployments().collection(&ns.name)
+        ),
+        "application/merge-patch+json",
+        &json!({"spec": {"replicas": 3}}),
+    );
 
     let r = dform(&s, &kc, &["plan", "p.df"]).success();
     assert!(
@@ -333,39 +406,23 @@ fn a_create_whose_answer_was_lost_is_found_not_made_again() {
     s.write("p.df", &program(&ns.name, "nginx:1.27"));
     dform(&s, &kc, &["apply", "p.df"]).success();
 
-    let (rt, client) = client(&kc);
-    let api: kube::Api<k8s_openapi::api::core::v1::ConfigMap> =
-        kube::Api::namespaced(client, &ns.name);
-    let settings = || -> Vec<k8s_openapi::api::core::v1::ConfigMap> {
-        rt.block_on(api.list(&Default::default()))
-            .unwrap()
-            .items
-            .into_iter()
-            .filter(|c| {
-                c.metadata
-                    .name
-                    .as_deref()
-                    .is_some_and(|n| n.starts_with("settings-"))
-            })
-            .collect()
+    let kube = Kube::new(&kc);
+    let settings = || -> Vec<Json> {
+        let mut made = kube.list(&config_maps(), &ns.name);
+        made.retain(|c| {
+            c.pointer("/metadata/name")
+                .and_then(Json::as_str)
+                .is_some_and(|n| n.starts_with("settings-"))
+        });
+        made
     };
     let made = settings();
     assert_eq!(made.len(), 1);
-    let name = made[0].metadata.name.clone().unwrap();
-    let key = made[0]
-        .metadata
-        .annotations
-        .as_ref()
-        .and_then(|a| a.get("dform.io/idempotency-key"))
-        .cloned()
-        .expect("the Create's key");
+    let meta = |p: &str| made[0].pointer(p).and_then(Json::as_str).map(String::from);
+    let name = meta("/metadata/name").unwrap();
+    let key = meta("/metadata/annotations/dform.io~1idempotency-key").expect("the Create's key");
     assert_eq!(
-        made[0]
-            .metadata
-            .labels
-            .as_ref()
-            .and_then(|l| l.get("dform.io/stack"))
-            .map(String::as_str),
+        meta("/metadata/labels/dform.io~1stack").as_deref(),
         Some("p")
     );
 
@@ -547,25 +604,21 @@ fn a_world_read_answers_from_a_live_object() {
         return;
     };
     let ns = Namespace::new(&kc);
-    let (rt, client) = client(&kc);
-    let nss: kube::Api<k8s_openapi::api::core::v1::Namespace> = kube::Api::all(client.clone());
-    let pp = kube::api::PostParams::default();
-    rt.block_on(nss.create(
-        &pp,
-        &serde_json::from_value(json!({"metadata": {"name": ns.name}})).unwrap(),
-    ))
-    .unwrap();
-    let cms: kube::Api<k8s_openapi::api::core::v1::ConfigMap> =
-        kube::Api::namespaced(client, &ns.name);
-    rt.block_on(
-        cms.create(
-            &pp,
-            &serde_json::from_value(json!({"metadata": {"name": "release"},
-                                       "data": {"COLOR": "green"}}))
-            .unwrap(),
-        ),
-    )
-    .unwrap();
+    let kube = Kube::new(&kc);
+    let ct = "application/json";
+    kube.send(
+        "POST",
+        &namespaces().collection(""),
+        ct,
+        &json!({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": ns.name}}),
+    );
+    kube.send(
+        "POST",
+        &config_maps().collection(&ns.name),
+        ct,
+        &json!({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "release"},
+                "data": {"COLOR": "green"}}),
+    );
     let s = scratch("k8s-cluster-world");
     s.write(
         "p.df",

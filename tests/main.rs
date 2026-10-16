@@ -105,7 +105,6 @@ mod inspection_why;
 mod instances;
 mod instancing;
 mod k8s;
-mod k8s_cluster;
 mod k8s_cronjob;
 mod k8s_offline;
 mod keep_patch;

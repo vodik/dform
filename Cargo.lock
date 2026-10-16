@@ -1263,8 +1263,6 @@ dependencies = [
  "dform-s3",
  "dform-sdk",
  "expectrl",
- "k8s-openapi",
- "kube",
  "libc",
  "opentelemetry",
  "opentelemetry-http",

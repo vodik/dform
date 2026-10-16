@@ -141,6 +141,10 @@ name = "model"
 [[test]]
 name = "provider_parallel"
 
+# Sets the SDK's host of the process (`dform_sdk::set_host`).
+[[test]]
+name = "k8s_cluster"
+
 [dev-dependencies]
 # tests/model.rs turns the executor's mutant on (`executor::hooks`);
 # tests/host_pace.rs serves HTTP/2 with `http::fake`.
@@ -150,9 +154,8 @@ dform-s3 = { path = "crates/dform-s3", features = ["fake"] }
 rusty-s3 = { version = "0.10", default-features = false, features = ["rustcrypto", "xml"] }
 tree-sitter = "0.26"
 tree-sitter-dform = { path = "tree-sitter-dform" }
-# tests/k8s_cluster.rs talks to the cluster it applies to.
-kube = "4.2"
-k8s-openapi = { version = "0.28", features = ["latest"] }
+# tests/provider_parallel.rs and tests/transport_ssh.rs run their servers
+# on tokio.
 tokio = { version = "1", features = ["rt", "net", "macros", "io-util", "time"] }
 # tests/ssh_provider.rs makes its sshd's host keys and the client's key
 # (OpenSSH format), the version dform-core links.
