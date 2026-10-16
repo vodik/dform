@@ -28,9 +28,8 @@
 // model's async ABI (WASI 0.3) each is a subtask, so a component keeps
 // several in flight from one call (a Read that fetches two documents at
 // once, a Configure that submits every OpenAPI document of a cluster)
-// and the host's window paces them, with no thread in the component. A
-// component built for wasip2 calls them as it did, one at a time. Large
-// bodies are `list<u8>` until they are `stream<u8>`, additively.
+// and the host's window paces them, with no thread in the component.
+// Large bodies are `list<u8>` until they are `stream<u8>`, additively.
 
 package dform:host@1.0.0;
 
@@ -233,8 +232,8 @@ interface log {
 // import the host's interfaces. The WASI imports are there to be granted:
 // a component imports only what it uses, and the host refuses one that
 // imports `wasi:sockets`, `wasi:http` or `wasi:filesystem` without the
-// grant, naming the provider and the interface. What Rust std links on
-// wasm32-wasip2 (environment, stdio, exit, clocks, random) needs none.
+// grant, naming the provider and the interface. What Rust std links
+// (environment, stdio, exit, clocks, random) needs none.
 //
 // Built for wasm32-wasip3 (nightly), std links WASI 0.3's interfaces and
 // the host links both versions; the `include`s here are 0.2's, what the

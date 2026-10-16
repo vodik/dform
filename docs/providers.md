@@ -369,23 +369,24 @@ own, and the host calls they make run at once too, so a `Handler` (or a
 `Lifecycle`) is called from several threads at once and keeps any state
 of its own behind its own lock (it is `Send + Sync`).
 
-**Component** (experimental): `cargo build --target wasm32-wasip2
---features component` makes `target/wasm32-wasip2/debug/<crate>.wasm`, a
-component of `dform:host/hosted-provider`. dform runs it in wasmtime when
-built with `--features wasm` (`dform version` says `wasm host in`); a
-`.wasm` source, or a directory holding `provider.wasm`, is one. Its
+**Component** (experimental): `cargo build --target wasm32-wasip3
+--features component` makes `target/wasm32-wasip3/debug/<crate>.wasm`, a
+component of `dform:host/hosted-provider` (the target is nightly's: the
+workspace pins one in rust-toolchain.toml). dform runs it in wasmtime
+when built with `--features wasm` (`dform version` says `wasm host in`);
+a `.wasm` source, or a directory holding `provider.wasm`, is one. Its
 imports are its manifest, and nothing reaches it that it does not
 import: no environment variable, no file, no socket without a grant.
 The provider's calls are async functions (the component model's async
-ABI, WASI 0.3's; wit-bindgen's `async` and wasmtime's
-`component-model-async`): one instance has every call dform submits in
-flight at once, and an Apply answers a `stream<event>` and a `future` of
-its result. The SDK runs a `Handler`, which is synchronous, one call at a
-time, so `--parallel` still serializes for an SDK component, and its
-events reach dform as the call returns; the WASI imports are 0.2's, which
-the wasm32-wasip2 target links (wasm32-wasip3 is not a target stable Rust
-ships yet). A component's
-exit carries no code (`exit status: 1`). Its compiled code is cached in
+ABI, WASI 0.3): one instance has every call dform submits in flight at
+once, and an Apply answers a `stream<event>` and a `future` of its
+result. The host's calls that wait on the world (`http.send`,
+`io.read`, `ssh.exec`) are async too, each a subtask: a `Handler`, which
+is synchronous, waits on one at a time, and `host().http.request_all(..)`
+sends several from one call with no thread (natively, a thread each),
+dform's window pacing them. On wasip3 every call is a thread of its own,
+with its own thread-locals, so what an instance keeps is in statics. A
+component's exit carries its code. Its compiled code is cached in
 `$XDG_CACHE_HOME/dform/wasm/` by the file's digest.
 
 The fake provider is built both ways and passes `dform provider check`
@@ -500,8 +501,7 @@ host  wasm: credentials: kubeconfig:prod
   refused (gitoxide has no push yet). A remote is read through its
   mirror, fetched over dform's HTTP client or its SSH client.
 - `io.read` answers a `list<u8>` in a component and a stream of chunks
-  over gRPC; a component's `stream<u8>` waits on the host interfaces'
-  move to WASI 0.3's async, with the rest of `dform:host`. `io` has no
+  over gRPC; a component's `stream<u8>` is to come, additively. `io` has no
   write, and will not: a write is an effect with no state to
   converge, a provider's apply.
 - A wasm component cannot declare a scheme yet: the wasm host does not
