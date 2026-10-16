@@ -74,15 +74,18 @@ impl Test {
 }
 
 /// What every combination of a test is evaluated with: the program
-/// lowered, its providers' schemas (none when it names only built-in
-/// ones), a reader of locations that reads no provider's, and what the
-/// test stood in for the world. `render` evaluates its one combination
-/// with it too.
+/// lowered and typed, its providers' schemas (none when it names only
+/// built-in ones), a reader of locations that reads no provider's, and
+/// what the test stood in for the world. `render` evaluates its one
+/// combination with it too.
 pub(super) struct Space<'a> {
     cli: &'a Cli,
     program: &'a crate::ast::Program,
     stack: &'a str,
     lowered: crate::transform::Lowered,
+    /// The program evaluated: its policy rules and externs declared, read
+    /// against the schema as plan reads it.
+    typed: crate::ast::Program,
     pub(super) backend: Providers,
     reader: std::sync::Arc<crate::files::Files>,
     /// Whether an image's digest was stood in (no registry is asked).
@@ -111,39 +114,8 @@ impl<'a> Space<'a> {
             )
             .standing_in(),
         );
-        let backend = match loaded.starts_none() {
-            true => {
-                let p = Providers::none(Default::default());
-                p.load_schema(None)?;
-                p
-            }
-            false => {
-                let grants = cli.manifest.iter().flat_map(|m| m.grants());
-                let config = plugin::Config {
-                    // What the program configures is left unconfigured: a
-                    // test configures no provider, so what it serves waits;
-                    // nor does one reach its credentials (R-188).
-                    configured: deployment::provider_configs(program),
-                    no_credentials: true,
-                    grants: grants
-                        .map(|(k, mut g)| {
-                            g.files = crate::files::Shared(Some(reader.clone()));
-                            (k, g)
-                        })
-                        .collect(),
-                    files: reader.clone(),
-                    ..Default::default()
-                };
-                Providers::start(launch(), &loaded.providers, &config)?
-            }
-        };
-        // A provider's data sources the program reads with no `extern`
-        // line (R-106) are read as plan reads them.
-        let lowered =
-            deployment::with_schema_externs(&crate::transform::lower(program)?, backend.schema());
-        crate::secrets::check(&lowered, backend.schema(), &Default::default())?;
-        crate::refine::check(&lowered.program, backend.schema())?;
-        crate::inputs::check_literals(&lowered.program, &lowered.inputs)?;
+        let backend = providers(cli, loaded, &reader)?;
+        let (lowered, typed) = typed(program, backend.schema())?;
         let keys = lowered
             .inputs
             .iter()
@@ -155,6 +127,7 @@ impl<'a> Space<'a> {
             program,
             stack: &loaded.stack,
             lowered,
+            typed,
             backend,
             reader,
             images: std::cell::Cell::new(false),
@@ -287,11 +260,7 @@ impl<'a> Space<'a> {
                 }
                 Ok(rows)
             });
-        let mut p = zset::with_policy_rules(program.clone())?;
-        deployment::declare_externs(&mut p, lowered);
-        // Quantity and time literals read as their attributes' types (R-66).
-        let p = crate::types::read(&p, backend.schema())?;
-        let (res, mut violations) = externs.eval(&p, &extra, backend.secrets())?;
+        let (res, mut violations) = externs.eval(&self.typed, &extra, backend.secrets())?;
         // A read of what nothing derives (R-194).
         report::Unanswered::check(&res.facts)?;
         // What the plan refuses before any provider is asked (R-184): a
@@ -395,6 +364,54 @@ impl<'a> Space<'a> {
         }
         out
     }
+}
+
+/// The program's providers as a test starts them: none when it names
+/// only built-in ones; else each unconfigured, so what it serves waits,
+/// and with no way to its credentials (R-188).
+fn providers(
+    cli: &Cli,
+    loaded: &deployment::Loaded,
+    reader: &std::sync::Arc<crate::files::Files>,
+) -> Result<Providers> {
+    if loaded.starts_none() {
+        let p = Providers::none(Default::default());
+        p.load_schema(None)?;
+        return Ok(p);
+    }
+    let grants = cli.manifest.iter().flat_map(|m| m.grants());
+    let config = plugin::Config {
+        configured: deployment::provider_configs(&loaded.program),
+        no_credentials: true,
+        grants: grants
+            .map(|(k, mut g)| {
+                g.files = crate::files::Shared(Some(reader.clone()));
+                (k, g)
+            })
+            .collect(),
+        files: reader.clone(),
+        ..Default::default()
+    };
+    Providers::start(launch(), &loaded.providers, &config)
+}
+
+/// The program lowered, checked against the schema and typed as plan
+/// checks and types it: a provider's data sources it reads with no
+/// `extern` line (R-106) declared, its quantity and time literals read
+/// as their attributes' types (R-66), a read of an attribute its type
+/// does not have refused. What every combination evaluates.
+fn typed(
+    program: &crate::ast::Program,
+    schema: &schema::Schema,
+) -> Result<(crate::transform::Lowered, crate::ast::Program)> {
+    let lowered = deployment::with_schema_externs(&crate::transform::lower(program)?, schema);
+    crate::secrets::check(&lowered, schema, &Default::default())?;
+    crate::refine::check(&lowered.program, schema)?;
+    crate::inputs::check_literals(&lowered.program, &lowered.inputs)?;
+    crate::types::check(&lowered.program, schema)?;
+    let mut typed = zset::with_policy_rules(program.clone())?;
+    deployment::declare_externs(&mut typed, &lowered);
+    Ok((lowered, crate::types::read(&typed, schema)?))
 }
 
 /// One combination evaluated ([`Space::evaluated`]).

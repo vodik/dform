@@ -4875,6 +4875,12 @@ no provider is configured, so its data sources answer "not yet" and what
 reads them is undetermined: ovh.zone("example.com")`.
 dform's own transports (`https://`, `ssh://`, git) read as plan's do.
 
+The program is checked against its providers' schemas once, before any
+combination, as plan checks it: a value a typed attribute cannot take, a
+literal a refinement refuses, a read of an attribute its type does not
+have ("Providers are processes; the mock plays schema files"). Such an
+error is the test's, said as the plan says it, and no combination runs.
+
 Each combination's resources then go to their providers' Plan, as
 `plan` sends them, with no credentials: a provider whose Plan
 answers so as it would with them (the `offline` capability: the k8s

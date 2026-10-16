@@ -245,3 +245,51 @@ fn a_deny_prints_with_its_doc() {
         r.stdout
     );
 }
+
+/// The user's project, edge 6: a provider renamed an attribute
+/// (`s3_access_key` became `access`), and a read of the old name was left.
+/// `dform test` refuses it as plan does, in the plan's words at the
+/// plan's site; and a write plan's type check refuses (a string where a
+/// reference goes), so does `dform test`.
+#[test]
+fn test_type_checks_the_program_as_plan_does() {
+    let s = Scratch::project("test-typed");
+    s.write(
+        "providers/store/schema.df",
+        "type_attr(\"store.user\", \"id\", \"string\", [\"computed\", \"id\"])\n\
+         type_attr(\"store.credential\", \"id\", \"string\", [\"computed\", \"id\"])\n\
+         type_attr(\"store.credential\", \"user\", \"ref(store.user)\", [\"required\"])\n\
+         type_attr(\"store.credential\", \"access\", \"string\", [\"computed\"])\n\
+         type_attr(\"store.credential\", \"secret\", \"string\", [\"computed\", \"sensitive\"])\n",
+    );
+    let program = "use store\n\
+                   resource store.user backup { }\n\
+                   resource store.credential backup_key { user = backup }\n\
+                   output key: string = backup_key.s3_access_key\n";
+    s.write("p.df", program);
+    let plan = s.run(&["plan", "p.df"]).failure();
+    assert!(
+        plan.stderr.contains(
+            "error  store.credential has no attribute `s3_access_key`: its provider does not \
+             declare it and the program writes none\n  \
+             p.df:4  output key: string = backup_key.s3_access_key\n"
+        ),
+        "{}",
+        plan.stderr
+    );
+    let test = s.run(&["test", "p.df"]).failure();
+    assert_eq!(test.stderr, plan.stderr);
+    assert!(test.stdout.is_empty(), "{}", test.stdout);
+
+    s.write(
+        "p.df",
+        &program.replace("user = backup", "user = \"backup\""),
+    );
+    let plan = s.run(&["plan", "p.df"]).failure();
+    assert!(
+        plan.stderr.contains(".user takes a ref(store.user)"),
+        "{}",
+        plan.stderr
+    );
+    assert_eq!(s.run(&["test", "p.df"]).failure().stderr, plan.stderr);
+}
