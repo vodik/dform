@@ -121,9 +121,23 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
         return why_not();
     }
     let mut out = derivations(&matched, how, cx)?;
-    // What a resource leaves unset that its schema requires: what the
-    // plan refuses it for, before its provider is asked (R-184).
-    for (a, _) in &matched {
+    out.push_str(&unset_of(&matched, cx));
+    for l in unanswered(&matched, cx)
+        .into_iter()
+        .chain(planned(&matched, cx))
+        .chain(kept(&matched, cx))
+    {
+        out.push_str(&format!("{l}\n"));
+    }
+    Ok(cx.redact.text(&out))
+}
+
+/// What the resources `matched` names leave unset that their schema
+/// requires: what the plan refuses them for, before their provider is
+/// asked (R-184).
+fn unset_of(matched: &[Matched], cx: &Context) -> String {
+    let mut out = String::new();
+    for (a, _) in matched {
         if a.pred != "want" {
             continue;
         }
@@ -136,8 +150,13 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
             out.push_str(&unset.join(""));
         }
     }
-    // A contribution of the resource that reads what nothing derives
-    // answered nothing (R-183): say the read, as the plan's error does.
+    out
+}
+
+/// A contribution of a resource `matched` names that reads what nothing
+/// derives answered nothing (R-183): the read, as the plan's error says
+/// it.
+fn unanswered(matched: &[Matched], cx: &Context) -> Vec<String> {
     let holders: BTreeSet<address::Address> =
         matched.iter().filter_map(|(a, _)| resource_of(a)).collect();
     let mut unset: Vec<String> = Vec::new();
@@ -147,13 +166,15 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
             unset.push(line);
         }
     }
-    for l in unset {
-        out.push_str(&format!("{l}\n"));
-    }
-    // A change the plan holds: the tick it runs in and what it waits on,
-    // or `later` for what no tick of the plan makes (R-110, R-121, R-156).
+    unset
+}
+
+/// Of a change the plan holds: the tick it runs in and what it waits
+/// on, or `later` for what no tick of the plan makes (R-110, R-121,
+/// R-156).
+fn planned(matched: &[Matched], cx: &Context) -> Vec<String> {
     let mut on: Vec<String> = Vec::new();
-    for (a, _) in &matched {
+    for (a, _) in matched {
         let w = match cx.when {
             Some(when) => resource_of(a).and_then(|r| when(&r.to_string())),
             None => not::waiting(a, cx.res, cx.waits).map(|w| format!("later  waits on  {w}")),
@@ -164,11 +185,13 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
             on.push(w);
         }
     }
-    for w in on {
-        out.push_str(&format!("{w}\n"));
-    }
-    // An attribute given at creation only whose value differs from the
-    // object's: the object's, and where it was made (R-198).
+    on
+}
+
+/// Of an attribute `matched` names, given at creation only, whose value
+/// differs from the object's: the object's, and where it was made
+/// (R-198).
+fn kept(matched: &[Matched], cx: &Context) -> Vec<String> {
     let mut kept: Vec<String> = Vec::new();
     for (a, _) in matched.iter().filter(|(a, _)| a.pred == "attr") {
         let (Some(addr), Some(Term::Val(Value::Str(path)))) = (resource_of(a), a.args.get(2))
@@ -181,10 +204,7 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
             kept.push(k);
         }
     }
-    for k in kept {
-        out.push_str(&format!("{k}\n"));
-    }
-    Ok(cx.redact.text(&out))
+    kept
 }
 
 /// Each attribute the resource at `addr` leaves unset that its schema
