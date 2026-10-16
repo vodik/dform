@@ -774,11 +774,13 @@ fn prompt(deployment: &str) -> Result<std::result::Result<Vec<u8>, String>> {
 }
 
 /// The terminal's echo, off until dropped.
+#[cfg(not(target_family = "wasm"))]
 struct Echo {
     fd: i32,
     was: Option<libc::termios>,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl Echo {
     fn off(tty: &std::fs::File) -> Echo {
         use std::os::fd::AsRawFd;
@@ -798,12 +800,27 @@ impl Echo {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl Drop for Echo {
     fn drop(&mut self) {
         if let Some(t) = self.was {
             // SAFETY: restores the attributes read in `off`.
             unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, &t) };
         }
+    }
+}
+
+/// A component has no terminal attributes (WASI has no termios): a
+/// prompt there echoes. Until the crate split moves the prompt out of
+/// the core (the components ticket), this keeps the core building for a
+/// component provider.
+#[cfg(target_family = "wasm")]
+struct Echo;
+
+#[cfg(target_family = "wasm")]
+impl Echo {
+    fn off(_: &std::fs::File) -> Echo {
+        Echo
     }
 }
 

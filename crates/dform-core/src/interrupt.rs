@@ -14,7 +14,6 @@
 //! (`nohup`, a job started in the background of a non-interactive shell)
 //! stays ignored.
 
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
@@ -23,11 +22,15 @@ static SIGNALLED: AtomicI32 = AtomicI32::new(0);
 
 /// The dispositions dform found, by signal: what a second signal, and the
 /// guard's drop, restore.
-static PREVIOUS: [OnceLock<libc::sigaction>; 2] = [OnceLock::new(), OnceLock::new()];
+#[cfg(not(target_family = "wasm"))]
+static PREVIOUS: [std::sync::OnceLock<libc::sigaction>; 2] =
+    [std::sync::OnceLock::new(), std::sync::OnceLock::new()];
 
 /// The signals handled, in [`PREVIOUS`]'s order.
+#[cfg(not(target_family = "wasm"))]
 const SIGNALS: [libc::c_int; 2] = [libc::SIGINT, libc::SIGTERM];
 
+#[cfg(not(target_family = "wasm"))]
 extern "C" fn on_signal(sig: libc::c_int) {
     if SIGNALLED
         .compare_exchange(0, sig, Ordering::SeqCst, Ordering::SeqCst)
@@ -53,11 +56,13 @@ extern "C" fn on_signal(sig: libc::c_int) {
 /// The handler, installed for SIGINT and SIGTERM until it drops.
 #[must_use = "dropping the guard restores the dispositions dform found"]
 pub struct Guard {
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     installed: Vec<usize>,
 }
 
 /// Install the handler for SIGINT and SIGTERM, keeping what each was;
 /// one found ignored is left ignored.
+#[cfg(not(target_family = "wasm"))]
 pub fn install() -> Guard {
     let mut installed = Vec::new();
     for (i, &sig) in SIGNALS.iter().enumerate() {
@@ -87,6 +92,18 @@ pub fn install() -> Guard {
     Guard { installed }
 }
 
+/// A component receives no signals (WASI has none): its host stops it.
+/// Until the crate split moves the handler out of the core (the
+/// components ticket), this keeps the core building for a component
+/// provider.
+#[cfg(target_family = "wasm")]
+pub fn install() -> Guard {
+    Guard {
+        installed: Vec::new(),
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
 impl Drop for Guard {
     fn drop(&mut self) {
         for &i in &self.installed {
@@ -118,7 +135,9 @@ pub fn request(sig: i32) {
 /// The signal's name, as messages say it.
 pub fn name(sig: i32) -> &'static str {
     match sig {
+        #[cfg(not(target_family = "wasm"))]
         libc::SIGINT => "SIGINT",
+        #[cfg(not(target_family = "wasm"))]
         libc::SIGTERM => "SIGTERM",
         _ => "a signal",
     }

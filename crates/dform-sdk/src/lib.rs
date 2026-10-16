@@ -495,6 +495,9 @@ macro_rules! provider {
                 async fn reveal(r: t::RevealRequest) -> ::std::result::Result<t::RevealResponse, t::CallError> {
                     $crate::component::reveal(make, r).await
                 }
+                async fn health(r: t::HealthRequest) -> ::std::result::Result<t::HealthResponse, t::CallError> {
+                    $crate::component::health(make, r).await
+                }
             }
 
             $crate::component::bindings::export_provider!(Exported with_types_in $crate::component::bindings);
