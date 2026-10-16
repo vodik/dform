@@ -83,6 +83,16 @@ fn independent_deployments_calls_overlap_and_each_lands_in_its_world() {
     assert_eq!(made.len(), 2, "{made:?}");
     let ((sa, a0, a1), (sb, b0, b1)) = (&made[0], &made[1]);
     assert_ne!(sa, sb, "a session each: {made:?}");
+    // Of one process: an apply shares the tree's links as a plan does.
+    let handshakes = spans
+        .iter()
+        .filter(|x| {
+            x["name"]
+                .as_str()
+                .is_some_and(|n| n.ends_with(" Handshake"))
+        })
+        .count();
+    assert_eq!(handshakes, 1, "one process for the tree");
     assert!(a0 < b1 && b0 < a1, "the two creates overlap: {made:?}");
     for stack in ["east", "west"] {
         assert_eq!(
