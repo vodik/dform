@@ -13,7 +13,6 @@
 mod common;
 
 use common::{Run, Scratch, repo};
-use dform::plugin::backend::Session;
 use dform::plugin::credentials::{self, Holding, Kind, Secret};
 use dform::plugin::host::Grants;
 use dform_k8s::cluster::Cluster;
@@ -84,7 +83,7 @@ impl Kube {
             [("kubeconfig".to_string(), Secret::new(text))].into(),
         );
         Kube {
-            cluster: Cluster::open(held.name(), Session::NONE, None).unwrap(),
+            cluster: Cluster::open(held.name(), None).unwrap(),
             credential: dform_sdk::host().secrets.open(held.name()).unwrap(),
             _held: held,
         }
@@ -110,7 +109,7 @@ impl Kube {
 
     /// The objects of `kind` in the namespace `ns`.
     fn list(&self, kind: &openapi::Kind, ns: &str) -> Vec<Json> {
-        let mut all = self.cluster.list(kind, None).unwrap();
+        let mut all = dform_sdk::block_on(self.cluster.list(kind, None)).unwrap();
         all.retain(|o| o.pointer("/metadata/namespace").and_then(Json::as_str) == Some(ns));
         all
     }
@@ -138,7 +137,7 @@ impl Namespace {
 impl Drop for Namespace {
     fn drop(&mut self) {
         let kube = Kube::new(&self.kubeconfig);
-        let _ = kube.cluster.delete(&namespaces(), "", &self.name);
+        let _ = dform_sdk::block_on(kube.cluster.delete(&namespaces(), "", &self.name));
     }
 }
 
@@ -287,8 +286,7 @@ fn a_removed_resource_is_deleted() {
 
     let kube = Kube::new(&kc);
     assert!(
-        kube.cluster
-            .get(&deployments(), &ns.name, "web")
+        dform_sdk::block_on(kube.cluster.get(&deployments(), &ns.name, "web"))
             .unwrap()
             .is_none()
     );

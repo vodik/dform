@@ -379,6 +379,60 @@ fn its_requests_are_spans_under_the_calls_they_are_made_for() {
     }
 }
 
+/// A Configure with no document cached asks the index, then every
+/// group-version document it names at once (the 27 of a k3s cluster
+/// were asked one after another): the host's window paces them, so the
+/// server answers several together and the trace's requests for them
+/// overlap, each under the Configure.
+#[test]
+fn a_cold_configure_asks_for_every_document_at_once() {
+    let s = Scratch::project("k8s-documents");
+    real_demo(&s);
+    let (api, url) = Api::start();
+    let kc = kubeconfig(&s, &url);
+    let args = common::on("k8s_demo.df", &[], &["plan", "--trace", "run.jsonl"]);
+    dform(&s, Some(&kc), &args).success();
+    let asked = api.count("GET /openapi/v3/", &[]);
+    assert!(asked > 2, "{asked} documents");
+    assert!(
+        api.most_documents_at_once() >= 2,
+        "the server answered {} of {asked} documents at once",
+        api.most_documents_at_once()
+    );
+    let spans = common::spans(&s.path("run.jsonl"));
+    let documents: Vec<&Json> = spans
+        .iter()
+        .filter(|sp| common::attr(sp, "addr").is_some_and(|a| a.contains("/openapi/v3/")))
+        .collect();
+    assert_eq!(documents.len(), asked, "a span each");
+    assert!(
+        most_at_once(&documents) >= 2,
+        "the trace's requests for the documents overlap"
+    );
+}
+
+/// The most of `spans` open at once.
+fn most_at_once(spans: &[&Json]) -> usize {
+    let at = |sp: &Json, k: &str| sp[k].as_str().unwrap().parse::<u128>().unwrap();
+    let mut edges: Vec<(u128, i32)> = spans
+        .iter()
+        .flat_map(|sp| {
+            [
+                (at(sp, "startTimeUnixNano"), 1),
+                (at(sp, "endTimeUnixNano"), -1),
+            ]
+        })
+        .collect();
+    // An end before a start at the same instant: touching is not open.
+    edges.sort();
+    let (mut open, mut most) = (0, 0);
+    for (_, d) in edges {
+        open += d;
+        most = most.max(open);
+    }
+    most as usize
+}
+
 /// The cluster's OpenAPI documents, and the schema derived from them,
 /// cached in dform.state/cache/ (`plan` plans again): a plan fetches no
 /// document the index names at the same URL again, whatever its other

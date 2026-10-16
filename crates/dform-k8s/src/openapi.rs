@@ -554,8 +554,8 @@ pub const DERIVED_CACHE: &str = "k8s-schema.json";
 /// The schema derived from the OpenAPI document whose hash is `doc_hash`:
 /// read from `DIR/k8s-schema.json` when that is keyed by the document's
 /// hash (and this derivation's source and aliases), else `derive`d and
-/// written there. Deriving is most of what the provider does at Configure;
-/// the cache skips parsing the document too.
+/// written there (`crate::cache`). Deriving is most of what the provider
+/// does at Configure; the cache skips parsing the document too.
 pub fn cached(
     doc_hash: &str,
     dir: Option<&Path>,
@@ -573,7 +573,7 @@ pub fn cached(
     );
     let path = dir.map(|d| d.join(DERIVED_CACHE));
     if let Some(p) = &path
-        && let Ok(text) = std::fs::read_to_string(p)
+        && let Some(text) = crate::cache::read(p)
         && let Some(d) = decode(&text, &key)
     {
         return Ok(d);
@@ -582,10 +582,7 @@ pub fn cached(
     if let Some(p) = &path
         && let Some(text) = encode(&d, &key)
     {
-        if let Some(dir) = p.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        std::fs::write(p, text).with_context(|| format!("write {}", p.display()))?;
+        crate::cache::write(p, &text)?;
     }
     Ok(d)
 }
@@ -667,7 +664,7 @@ pub fn extended(base: &Derived, ext: &Derived) -> Result<Derived> {
 /// of the cluster document `doc_hash`, or of any when `None` (the
 /// deployment's cluster is not known yet: its last one's).
 pub fn read_extension(path: &Path, doc_hash: Option<&str>) -> Option<Derived> {
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = crate::cache::read(path)?;
     let key = serde_json::from_str::<Json>(text.split_once('\n')?.0)
         .ok()?
         .get("key")?
@@ -685,10 +682,7 @@ pub fn read_extension(path: &Path, doc_hash: Option<&str>) -> Option<Derived> {
 pub fn write_extension(path: &Path, doc_hash: &str, ext: &Derived) -> Result<()> {
     let key = format!("{} {doc_hash}", derivation());
     let text = encode(ext, &key).ok_or_else(|| anyhow!("the extension does not encode"))?;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
-    }
-    std::fs::write(path, text).with_context(|| format!("write {}", path.display()))
+    crate::cache::write(path, &text)
 }
 
 /// A cached derivation: a line `{"key", "kinds", "types": [[TYPE, FROM,

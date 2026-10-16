@@ -33,7 +33,10 @@
 //!
 //! Each session (a deployment's Configure) is a [`K8s`] of its own: its
 //! cluster, its schema, its deployment's label. A call is answered by its
-//! session's.
+//! session's, awaiting the cluster's answers: several sent at once where
+//! they do not depend on each other (the OpenAPI documents, a health's
+//! objects, an inventory's kinds), a poll's interval slept, so a wasm
+//! provider answers its other calls meanwhile.
 
 use crate::cluster::{Cluster, WriteError};
 use crate::object::{
@@ -43,7 +46,7 @@ use crate::object::{
 use crate::openapi::{self, Derived, Kind};
 use anyhow::{Result, anyhow, bail};
 use dform_core::plugin::backend::{
-    BUILD, Call, CallError, Configured, Handler, Progress, Reply, Session, VERSION,
+    BUILD, Call, CallError, Configured, Progress, Reply, Session, VERSION,
 };
 use dform_core::plugin::pb;
 use dform_core::plugin::providers::{CREATED, INVENTORY};
@@ -51,6 +54,7 @@ use dform_core::plugin::wire;
 use dform_core::provider::{self, diff, get_path, marker, set_path};
 use dform_core::schema::Schema;
 use dform_core::value::Value;
+use dform_sdk::{Handler, join_all};
 use serde_json::{Value as Json, json};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -144,21 +148,18 @@ impl K8s {
     /// and its schema, else offline on the snapshot, saying why (the grant
     /// it lacks). `cache` is the directory the OpenAPI document and the
     /// schema derived from it are cached in.
-    pub fn configure(
-        cache: Option<PathBuf>,
-        kubeconfig: Option<&str>,
-        session: Session,
-    ) -> Result<K8s> {
+    pub async fn configure(cache: Option<PathBuf>, kubeconfig: Option<&str>) -> Result<K8s> {
         let why = if std::env::var_os("DFORM_K8S_OFFLINE").is_some_and(|v| !v.is_empty()) {
             "DFORM_K8S_OFFLINE is set".to_string()
         } else {
             let opened = kubeconfig
                 .ok_or_else(|| anyhow!("dform holds no kubeconfig for it"))
-                .and_then(|name| Cluster::open(name, session, None));
+                .and_then(|name| Cluster::open(name, None));
             let (why, e) = match opened {
                 Err(e) => (e.to_string(), e),
                 Ok(c) => {
-                    match c.openapi(cache.as_deref().map(|d| d.join(OPENAPI_CACHE)).as_deref()) {
+                    let cached = cache.as_deref().map(|d| d.join(OPENAPI_CACHE));
+                    match c.openapi(cached.as_deref()).await {
                         Ok(doc) => {
                             let derived =
                                 openapi::cached(&doc.hash.clone(), cache.as_deref(), || {
@@ -212,26 +213,25 @@ impl K8s {
         })
     }
 
-    /// The provider `asked` configures in `session`: the program's
-    /// cluster ([`K8s::program`]), none yet (deferred), or the
-    /// environment's, fetched again until it serves the kinds dform
-    /// expects (R-126).
-    fn asked(asked: &Asked, session: Session) -> Result<K8s> {
-        let k8s = match Cluster::configured(&asked.settings, session)? {
-            Some(c) => K8s::program(asked, c)?,
+    /// The provider `asked` configures: the program's cluster
+    /// ([`K8s::program`]), none yet (deferred), or the environment's,
+    /// fetched again until it serves the kinds dform expects (R-126).
+    async fn asked(asked: &Asked) -> Result<K8s> {
+        let k8s = match Cluster::configured(&asked.settings)? {
+            Some(c) => K8s::program(asked, c).await?,
             None if asked.deferred => K8s::deferred(asked.cache.clone(), asked.stack.as_deref())?,
             None => {
                 let deadline = std::time::Instant::now() + KIND_WAIT;
                 loop {
                     let k =
-                        K8s::configure(asked.cache.clone(), asked.kubeconfig.as_deref(), session)?;
+                        K8s::configure(asked.cache.clone(), asked.kubeconfig.as_deref()).await?;
                     if k.cluster.is_err()
                         || asked.served(&k)
                         || std::time::Instant::now() >= deadline
                     {
                         break k;
                     }
-                    std::thread::sleep(Duration::from_secs(1));
+                    dform_sdk::sleep(Duration::from_secs(1)).await;
                 }
             }
         };
@@ -245,11 +245,11 @@ impl K8s {
     /// cached ([`K8s::extend`]), again until it serves the kinds dform
     /// expects, and the static schema extended by them, so a CRD the
     /// run's schema lacks is planned against it at this tick (R-45).
-    fn program(asked: &Asked, c: Cluster) -> Result<K8s> {
+    async fn program(asked: &Asked, c: Cluster) -> Result<K8s> {
         if let (Some(dir), Some(s)) = (&asked.cache, &asked.stack) {
             let deadline = std::time::Instant::now() + KIND_WAIT;
             loop {
-                if let Err(e) = K8s::extend(&c, dir, s) {
+                if let Err(e) = K8s::extend(&c, dir, s).await {
                     say(
                         &format!("k8s: the schema of the cluster at {} is not cached", c.url),
                         &e,
@@ -261,7 +261,7 @@ impl K8s {
                 {
                     break;
                 }
-                std::thread::sleep(Duration::from_secs(1));
+                dform_sdk::sleep(Duration::from_secs(1)).await;
             }
         }
         Ok(K8s::deferred(asked.cache.clone(), asked.stack.as_deref())?.with_cluster(c))
@@ -272,9 +272,9 @@ impl K8s {
     /// deployment's next run, which starts `deferred` again. Once per
     /// change of the cluster's document; a cluster that does not answer
     /// keeps the cache it had.
-    fn extend(cluster: &Cluster, cache: &std::path::Path, stack: &str) -> Result<()> {
+    async fn extend(cluster: &Cluster, cache: &std::path::Path, stack: &str) -> Result<()> {
         let path = openapi::extension_path(cache, stack);
-        let doc = cluster.openapi(Some(&cache.join(OPENAPI_CACHE)))?;
+        let doc = cluster.openapi(Some(&cache.join(OPENAPI_CACHE))).await?;
         if openapi::read_extension(&path, Some(&doc.hash)).is_some() {
             return Ok(());
         }
@@ -327,14 +327,15 @@ impl K8s {
     /// with no label configured), the one whose `KEY_ANNOTATION` is `key`.
     /// A message names the object by its address (`name`), never by its
     /// key, which is dform's own (R-177).
-    pub fn created(&self, typ: &str, name: &str, key: &str) -> Result<Option<String>> {
+    pub async fn created(&self, typ: &str, name: &str, key: &str) -> Result<Option<String>> {
         let kind = self.derived.kind(typ)?;
         let c = self.cluster(&format!(
             "find what the create of {} made",
             address(typ, name)
         ))?;
         let selector = self.stack.as_ref().map(|l| format!("{STACK_LABEL}={l}"));
-        Ok(c.list(kind, selector.as_deref())?
+        Ok(c.list(kind, selector.as_deref())
+            .await?
             .iter()
             .find(|o| idempotency_key(o) == Some(key))
             .map(|o| {
@@ -346,32 +347,31 @@ impl K8s {
     /// The inventory rows of `pred` (`cloud_exists`, `cloud_attr`,
     /// `cloud_computed`) for the objects of type `typ` in every namespace,
     /// each named by its remote id; with no type, of every kind that has a
-    /// short name (`k8s.service`), under that name.
-    pub fn inventory(&self, pred: &str, typ: Option<&str>) -> Result<Vec<Vec<Value>>> {
+    /// short name (`k8s.service`), under that name, every kind's list
+    /// asked for at once.
+    pub async fn inventory(&self, pred: &str, typ: Option<&str>) -> Result<Vec<Vec<Value>>> {
         let c = self.cluster(&format!("answer {pred}"))?;
         let types: Vec<String> = match typ {
             Some(t) => vec![t.to_string()],
             None => openapi::aliases()?.into_iter().map(|(a, _)| a).collect(),
         };
+        let kinds: Vec<(String, &Kind)> = types
+            .into_iter()
+            .filter_map(|t| Some((t.clone(), self.derived.kind(&t).ok()?)))
+            .collect();
+        let lists = join_all(kinds.iter().map(|(_, kind)| c.list(kind, None))).await;
         let s = |x: &str| Value::Str(x.to_string());
         let mut rows = Vec::new();
-        for t in types {
-            let Ok(kind) = self.derived.kind(&t) else {
-                continue;
-            };
-            for o in c.list(kind, None)? {
+        for ((t, kind), objects) in kinds.iter().zip(lists) {
+            for o in objects? {
                 let at = |p: &str| get_path(&o, p).and_then(Json::as_str).unwrap_or("");
                 let e = remote(kind, at("metadata.namespace"), at("metadata.name"));
                 let (attrs, status) = inventory(&o);
                 match pred {
-                    "cloud_exists" => rows.push(vec![s(&t), s(&e)]),
+                    "cloud_exists" => rows.push(vec![s(t), s(&e)]),
                     "cloud_attr" | "cloud_computed" => {
                         let leaves = if pred == "cloud_attr" { attrs } else { status };
-                        rows.extend(
-                            leaves
-                                .into_iter()
-                                .map(|(p, v)| vec![s(&t), s(&e), s(&p), v]),
-                        );
+                        rows.extend(leaves.into_iter().map(|(p, v)| vec![s(t), s(&e), s(&p), v]));
                     }
                     _ => {}
                 }
@@ -386,42 +386,50 @@ impl K8s {
             .map_err(|why| anyhow!("{what}: no cluster ({why})"))
     }
 
-    pub fn read(&self, typ: &str, remote_id: &str, name: &str) -> Result<Option<(Json, Json)>> {
+    pub async fn read(
+        &self,
+        typ: &str,
+        remote_id: &str,
+        name: &str,
+    ) -> Result<Option<(Json, Json)>> {
         let kind = self.derived.kind(typ)?;
         let c = self.cluster(&format!("read {}", address(typ, name)))?;
         let (ns, n) = parse_remote(kind, remote_id, &c.namespace);
-        let Some(o) = c.get(kind, ns, n)? else {
+        let Some(o) = c.get(kind, ns, n).await? else {
             return Ok(None);
         };
         Ok(Some((attrs(&o), self.computed(typ, &o)?)))
     }
 
     /// Health (R-203): each object GET and judged from its status now
-    /// (`crate::health`); one of a kind not judged is `unknown`.
-    pub fn health(&self, objects: &[pb::Identity]) -> Result<Vec<pb::Health>> {
-        let mut out = Vec::with_capacity(objects.len());
-        for o in objects {
-            let kind = self.derived.kind(&o.r#type)?;
-            if !crate::health::judged(kind) {
-                out.push(dform_core::plugin::backend::health(
-                    pb::HealthState::Unknown,
-                    format!("the provider judges no {}", kind.kind),
-                ));
-                continue;
-            }
-            let c = self.cluster(&format!("health {}", address(&o.r#type, &o.name)))?;
-            let (ns, n) = parse_remote(kind, &o.remote, &c.namespace);
-            let got = c.get(kind, ns, n)?;
-            out.push(crate::health::judge(kind, got.as_ref()));
+    /// (`crate::health`), every object asked for at once; one of a kind
+    /// not judged is `unknown`.
+    pub async fn health(&self, objects: &[pb::Identity]) -> Result<Vec<pb::Health>> {
+        join_all(objects.iter().map(|o| self.health_of(o)))
+            .await
+            .into_iter()
+            .collect()
+    }
+
+    async fn health_of(&self, o: &pb::Identity) -> Result<pb::Health> {
+        let kind = self.derived.kind(&o.r#type)?;
+        if !crate::health::judged(kind) {
+            return Ok(dform_core::plugin::backend::health(
+                pb::HealthState::Unknown,
+                format!("the provider judges no {}", kind.kind),
+            ));
         }
-        Ok(out)
+        let c = self.cluster(&format!("health {}", address(&o.r#type, &o.name)))?;
+        let (ns, n) = parse_remote(kind, &o.remote, &c.namespace);
+        let got = c.get(kind, ns, n).await?;
+        Ok(crate::health::judge(kind, got.as_ref()))
     }
 
     /// Plan one resource: validate, diff, and whether it replaces. The dry
     /// run names the object by the document, else by `remote` (a generated
     /// name, or a namespace the program leaves to the kubeconfig, is not in
     /// the document once the object exists).
-    pub fn plan(
+    pub async fn plan(
         &self,
         typ: &str,
         name: &str,
@@ -475,7 +483,7 @@ impl K8s {
             _ => namespace(d, &c.namespace),
         };
         let obj = self.manifest(kind, d, &ns, n)?;
-        match c.apply(kind, &ns, n, &obj, true) {
+        match c.apply(kind, &ns, n, &obj, true).await {
             Ok(live) => {
                 let after = world_doc(schema, typ, &attrs(&live), &self.computed(typ, &live)?, d);
                 let changes = diff(schema, typ, prior, Some(&after));
@@ -498,11 +506,11 @@ impl K8s {
         }
     }
 
-    pub fn import(&self, typ: &str, remote_id: &str) -> Result<Option<(String, Json, Json)>> {
+    pub async fn import(&self, typ: &str, remote_id: &str) -> Result<Option<(String, Json, Json)>> {
         let kind = self.derived.kind(typ)?;
         let c = self.cluster(&format!("import {typ} {remote_id}"))?;
         let (ns, n) = parse_remote(kind, remote_id, &c.namespace);
-        let Some(o) = c.get(kind, ns, n)? else {
+        let Some(o) = c.get(kind, ns, n).await? else {
             return Ok(None);
         };
         let name = get_path(&o, "metadata.name")
@@ -513,7 +521,7 @@ impl K8s {
     }
 
     /// Apply one planned action.
-    pub fn apply(
+    pub async fn apply(
         &self,
         req: &pb::ApplyRequest,
         config: &Json,
@@ -533,19 +541,22 @@ impl K8s {
             .map_err(|e| Failed::Refused(format!("{e:#}")))?;
         let config = &match op {
             pb::Op::Delete => config.clone(),
-            _ => self.materialize(c, &at, config)?,
+            _ => self.materialize(c, &at, config).await?,
         };
         let mut notes = Vec::new();
         let live = match op {
-            pb::Op::Create => self.create(c, kind, typ, &at, config, &req.idempotency_key)?,
-            pb::Op::Update | pb::Op::Adopt => self.update(c, kind, req, &at, config)?,
+            pb::Op::Create => {
+                self.create(c, kind, typ, &at, config, &req.idempotency_key)
+                    .await?
+            }
+            pb::Op::Update | pb::Op::Adopt => self.update(c, kind, req, &at, config).await?,
             pb::Op::Delete => {
                 return Ok(pb::ApplyResponse {
-                    notes: delete(c, kind, &req.remote, &at)?,
+                    notes: delete(c, kind, &req.remote, &at).await?,
                     ..Default::default()
                 });
             }
-            pb::Op::Replace => self.replace(c, kind, req, &at, config, &mut notes)?,
+            pb::Op::Replace => self.replace(c, kind, req, &at, config, &mut notes).await?,
             _ => return Err(Failed::Refused(format!("{at}: no operation"))),
         };
         self.applied(kind, typ, &at, &live, notes)
@@ -578,7 +589,7 @@ impl K8s {
     /// document, each `keep` path (R-164) applied again as the object has
     /// it (a Secret's `stringData` key from its `data`), so the apply
     /// leaves it untouched.
-    fn update(
+    async fn update(
         &self,
         c: &Cluster,
         kind: &Kind,
@@ -593,6 +604,7 @@ impl K8s {
             false => {
                 let live = c
                     .get(kind, ns, n)
+                    .await
                     .map_err(|e| refused(at, e))?
                     .ok_or_else(|| Failed::Refused(format!("{at}: {} is not there", req.remote)))?;
                 kept = keep(config, &attrs(&live), &req.keep)
@@ -603,13 +615,13 @@ impl K8s {
         let obj = self
             .manifest(kind, config, ns, n)
             .map_err(|e| refused(at, e))?;
-        self.write(c, kind, ns, n, &obj, at)
+        self.write(c, kind, ns, n, &obj, at).await
     }
 
     /// A replacement: the old object deleted first (destroy-first, or
     /// when the new one takes its name) and waited for, then the new one
     /// created.
-    fn replace(
+    async fn replace(
         &self,
         c: &Cluster,
         kind: &Kind,
@@ -628,9 +640,10 @@ impl K8s {
             ));
         }
         if !req.create_first || same {
-            c.delete(kind, ns, n).map_err(|e| maybe(at, e))?;
+            c.delete(kind, ns, n).await.map_err(|e| maybe(at, e))?;
             if !c
                 .gone(kind, ns, n, REPLACE_WAIT)
+                .await
                 .map_err(|e| maybe(at, e))?
             {
                 return Err(Failed::MaybeApplied(format!(
@@ -641,6 +654,7 @@ impl K8s {
             }
         }
         self.create(c, kind, &req.r#type, at, config, &req.idempotency_key)
+            .await
     }
 
     /// The document with every secret another stack's object holds
@@ -649,7 +663,12 @@ impl K8s {
     /// the cluster (a Secret's `stringData` key from its `data`, decoded).
     /// One held by another provider, or not found, refuses the call naming
     /// the path; nothing is written.
-    fn materialize(&self, c: &Cluster, at: &str, doc: &Json) -> std::result::Result<Json, Failed> {
+    async fn materialize(
+        &self,
+        c: &Cluster,
+        at: &str,
+        doc: &Json,
+    ) -> std::result::Result<Json, Failed> {
         let mut found = Vec::new();
         held_at(doc, "", &mut found);
         let mut out = doc.clone();
@@ -667,7 +686,7 @@ impl K8s {
                     "{at}: {path}: the secret {label} cannot be read: {why}"
                 ))
             };
-            let v = self.held_value(c, &h).map_err(refuse)?;
+            let v = self.held_value(c, &h).await.map_err(refuse)?;
             set_path(&mut out, &path, v);
         }
         let mut annotations = match get_path(&out, "metadata.annotations") {
@@ -685,7 +704,11 @@ impl K8s {
     /// The value of the secret `h` holds: the object this provider manages
     /// read from the cluster (a Secret's `stringData` key from its `data`,
     /// decoded), else why not.
-    fn held_value(&self, c: &Cluster, h: &provider::Held) -> std::result::Result<Json, String> {
+    async fn held_value(
+        &self,
+        c: &Cluster,
+        h: &provider::Held,
+    ) -> std::result::Result<Json, String> {
         if h.provider != openapi::PROVIDER {
             return Err(format!(
                 "it is held by the provider {}, not this one",
@@ -696,6 +719,7 @@ impl K8s {
         let (ns, n) = parse_remote(kind, &h.remote, &c.namespace);
         let live = c
             .get(kind, ns, n)
+            .await
             .map_err(|e| format!("{e:#}"))?
             .ok_or_else(|| format!("{} {} is not in the cluster", h.typ, h.remote))?;
         let v = get_path(&attrs_raw(&live), &h.path).cloned().or_else(|| {
@@ -712,7 +736,7 @@ impl K8s {
     /// Create that made it carried the same idempotency key `key` (its
     /// `KEY_ANNOTATION`): then it is the answer. A generated name's first
     /// suffix comes from the key, so a Create again finds it by name.
-    fn create(
+    async fn create(
         &self,
         c: &Cluster,
         kind: &Kind,
@@ -736,7 +760,7 @@ impl K8s {
                     )));
                 }
             };
-            match c.get(kind, &ns, &n).map_err(|e| refused(at, e))? {
+            match c.get(kind, &ns, &n).await.map_err(|e| refused(at, e))? {
                 None => {
                     name = Some(n);
                     break;
@@ -769,10 +793,10 @@ impl K8s {
                 a.insert(KEY_ANNOTATION.into(), json!(key));
             }
         }
-        self.write(c, kind, &ns, &name, &obj, at)
+        self.write(c, kind, &ns, &name, &obj, at).await
     }
 
-    fn write(
+    async fn write(
         &self,
         c: &Cluster,
         kind: &Kind,
@@ -781,10 +805,12 @@ impl K8s {
         obj: &Json,
         at: &str,
     ) -> std::result::Result<Json, Failed> {
-        c.apply(kind, ns, name, obj, false).map_err(|e| match e {
-            WriteError::Transport(_) => Failed::MaybeApplied(format!("{at}: {e}")),
-            _ => Failed::Refused(format!("{at}: {e}")),
-        })
+        c.apply(kind, ns, name, obj, false)
+            .await
+            .map_err(|e| match e {
+                WriteError::Transport(_) => Failed::MaybeApplied(format!("{at}: {e}")),
+                _ => Failed::Refused(format!("{at}: {e}")),
+            })
     }
 
     /// Documents of the kinds for `dform provider check`.
@@ -853,15 +879,18 @@ impl From<Failed> for CallError {
 
 /// A delete: background propagation, then the object waited for (bounded:
 /// still terminating after [`DELETE_WAIT`] is a note, not a failure).
-fn delete(
+async fn delete(
     c: &Cluster,
     kind: &Kind,
     remote: &str,
     at: &str,
 ) -> std::result::Result<Vec<String>, Failed> {
     let (ns, n) = parse_remote(kind, remote, &c.namespace);
-    c.delete(kind, ns, n).map_err(|e| maybe(at, e))?;
-    let gone = c.gone(kind, ns, n, DELETE_WAIT).map_err(|e| maybe(at, e))?;
+    c.delete(kind, ns, n).await.map_err(|e| maybe(at, e))?;
+    let gone = c
+        .gone(kind, ns, n, DELETE_WAIT)
+        .await
+        .map_err(|e| maybe(at, e))?;
     Ok(match gone {
         true => Vec::new(),
         false => vec![format!(
@@ -1027,22 +1056,22 @@ pub struct Provider {
 }
 
 impl Handler for Provider {
-    fn handle(
+    async fn handle(
         &self,
         session: Session,
         call: Call,
-        _: Progress,
+        _: Progress<'_>,
     ) -> std::result::Result<Reply, CallError> {
         match call {
             Call::Handshake(req) => Ok(Reply::Handshake(handshake(&req)?)),
-            Call::Configure(req) => Ok(Reply::Configure(self.configure(session, &req)?)),
+            Call::Configure(req) => Ok(Reply::Configure(self.configure(session, &req).await?)),
             call => {
                 let k8s = self.k8s.get(session).ok_or_else(|| {
                     CallError::Refused(format!(
                         "the provider is not configured: no session {session}"
                     ))
                 })?;
-                k8s.answer(call)
+                k8s.answer(call).await
             }
         }
     }
@@ -1082,13 +1111,13 @@ impl Provider {
     /// Configure `session`: its [`K8s`], and the cluster it reaches as its
     /// account, so the host paces each cluster's requests in one window,
     /// whichever session sends them.
-    fn configure(
+    async fn configure(
         &self,
         session: Session,
         req: &pb::ConfigureRequest,
     ) -> std::result::Result<pb::ConfigureResponse, CallError> {
         let config = doc_of(req.config.as_ref())?.unwrap_or(json!({}));
-        let k8s = K8s::asked(&Asked::of(&config), session).map_err(refusal)?;
+        let k8s = K8s::asked(&Asked::of(&config)).await.map_err(refusal)?;
         let account = k8s.cluster.as_ref().ok().map(|c| c.url.clone());
         self.k8s.set(session, k8s);
         Ok(pb::ConfigureResponse {
@@ -1102,7 +1131,7 @@ impl Provider {
 impl K8s {
     /// The answer to `call`, a call of this session but its Handshake and
     /// Configure.
-    fn answer(&self, call: Call) -> std::result::Result<Reply, CallError> {
+    async fn answer(&self, call: Call) -> std::result::Result<Reply, CallError> {
         Ok(match call {
             Call::Handshake(_) | Call::Configure(_) => {
                 return Err(CallError::Refused(format!(
@@ -1111,17 +1140,17 @@ impl K8s {
                 )));
             }
             Call::Schema(r) => Reply::Schema(self.schema_reply(&r)?),
-            Call::Query(q) => Reply::Query(self.query_reply(&q)?),
-            Call::Read(r) => Reply::Read(self.read_reply(&r)?),
-            Call::Plan(r) => Reply::Plan(self.plan_reply(&r)?),
+            Call::Query(q) => Reply::Query(self.query_reply(&q).await?),
+            Call::Read(r) => Reply::Read(self.read_reply(&r).await?),
+            Call::Plan(r) => Reply::Plan(self.plan_reply(&r).await?),
             // The result alone: a Kubernetes object is there once the API
             // server takes it (R-130's events are for a provider that
             // waits).
             Call::Apply(r) => {
                 let config = doc_of(r.config.as_ref())?.unwrap_or(Json::Null);
-                Reply::Apply(self.apply(&r, &config)?)
+                Reply::Apply(self.apply(&r, &config).await?)
             }
-            Call::Import(r) => Reply::Import(self.import_reply(r)?),
+            Call::Import(r) => Reply::Import(self.import_reply(r).await?),
             // No kind of this provider is held for another to read: a
             // secret in an object is the program's, sent in its document.
             Call::Reveal(r) => {
@@ -1132,7 +1161,7 @@ impl K8s {
                 )));
             }
             Call::Health(r) => Reply::Health(pb::HealthResponse {
-                answers: self.health(&r.objects).map_err(refusal)?,
+                answers: self.health(&r.objects).await.map_err(refusal)?,
             }),
         })
     }
@@ -1176,7 +1205,10 @@ impl K8s {
 
     /// The inventory's rows (offline, none: a plan reads no world), or
     /// `provider.created`'s.
-    fn query_reply(&self, q: &pb::QueryRequest) -> std::result::Result<Vec<pb::Row>, CallError> {
+    async fn query_reply(
+        &self,
+        q: &pb::QueryRequest,
+    ) -> std::result::Result<Vec<pb::Row>, CallError> {
         let row = |values: Vec<Value>| pb::Row {
             values: values.iter().map(pb::Value::from).collect(),
         };
@@ -1188,7 +1220,10 @@ impl K8s {
                 (Some(true), Some(Ok(Value::Str(t)))) => Some(t),
                 _ => None,
             };
-            let rows = self.inventory(&q.pred, typ.as_deref()).map_err(refusal)?;
+            let rows = self
+                .inventory(&q.pred, typ.as_deref())
+                .await
+                .map_err(refusal)?;
             return Ok(rows.into_iter().map(row).collect());
         }
         if q.pred != CREATED {
@@ -1208,7 +1243,7 @@ impl K8s {
                 "{CREATED} is asked with Type, Name and Key bound"
             )));
         };
-        let found = self.created(typ, name, key).map_err(refusal)?;
+        let found = self.created(typ, name, key).await.map_err(refusal)?;
         let s = |x: &str| Value::Str(x.to_string());
         Ok(found
             .map(|remote| row(vec![s(typ), s(name), s(key), s(&remote)]))
@@ -1216,8 +1251,14 @@ impl K8s {
             .collect())
     }
 
-    fn read_reply(&self, r: &pb::ReadRequest) -> std::result::Result<pb::ReadResponse, CallError> {
-        let found = self.read(&r.r#type, &r.remote, &r.name).map_err(refusal)?;
+    async fn read_reply(
+        &self,
+        r: &pb::ReadRequest,
+    ) -> std::result::Result<pb::ReadResponse, CallError> {
+        let found = self
+            .read(&r.r#type, &r.remote, &r.name)
+            .await
+            .map_err(refusal)?;
         Ok(match found {
             Some((attrs, computed)) => pb::ReadResponse {
                 found: true,
@@ -1228,7 +1269,10 @@ impl K8s {
         })
     }
 
-    fn plan_reply(&self, r: &pb::PlanRequest) -> std::result::Result<pb::PlanResponse, CallError> {
+    async fn plan_reply(
+        &self,
+        r: &pb::PlanRequest,
+    ) -> std::result::Result<pb::PlanResponse, CallError> {
         let prior = doc_of(r.prior.as_ref())?;
         let desired = doc_of(r.desired.as_ref())?;
         let (changes, requires_replace) = self
@@ -1239,6 +1283,7 @@ impl K8s {
                 prior.as_ref(),
                 desired.as_ref(),
             )
+            .await
             .map_err(refusal)?;
         Ok(pb::PlanResponse {
             changes: changes.iter().map(pb::Change::from).collect(),
@@ -1247,11 +1292,11 @@ impl K8s {
         })
     }
 
-    fn import_reply(
+    async fn import_reply(
         &self,
         r: pb::ImportRequest,
     ) -> std::result::Result<pb::ImportResponse, CallError> {
-        let found = self.import(&r.r#type, &r.remote).map_err(refusal)?;
+        let found = self.import(&r.r#type, &r.remote).await.map_err(refusal)?;
         Ok(match found {
             Some((name, attrs, computed)) => pb::ImportResponse {
                 found: true,

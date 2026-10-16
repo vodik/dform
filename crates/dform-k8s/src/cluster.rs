@@ -2,22 +2,22 @@
 //! Kubernetes API over the SDK's `Http` (discovery, get, list, server-side
 //! apply, delete), every request sent with the session's kubeconfig
 //! credential applied by the host, which the provider holds by name and
-//! never by value. Each request is an `io.call` span under the call it is
-//! sent for, paced in its session's window (its bucket the verb and the
-//! resource, `get deployments`), over the host's one connection to the
-//! server. Writes are server-side apply as the field manager `dform`, never
-//! forced.
+//! never by value. Each request is awaited in the call it is sent for: an
+//! `io.call` span under that call, paced in its session's window (its
+//! bucket the verb and the resource, `get deployments`), over the host's
+//! one connection to the server. Writes are server-side apply as the
+//! field manager `dform`, never forced.
 //!
 //! A status is answered as it is waited for: by polling (a delete's
 //! [`Cluster::gone`]), not by a watch, since the host answers a request
-//! whole (`http.send` has no streamed body until wasip3) and a watch is a
-//! body that does not end.
+//! whole (`http.send` has no streamed body) and a watch is a body that
+//! does not end. Between polls the call sleeps (`dform_sdk::sleep`): a
+//! wasm provider answers its other calls meanwhile.
 
 use crate::object::MANAGER;
 use crate::openapi::Kind;
 use anyhow::{Context, Result, anyhow, bail};
-use dform_core::plugin::backend::{Session, Within};
-use dform_sdk::{Credential, Request, Response, host};
+use dform_sdk::{Credential, Request, Response, host, join_all};
 use serde_json::{Value as Json, json};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -70,9 +70,6 @@ pub const CREDENTIAL: &str = "kubeconfig";
 pub struct Cluster {
     /// The session's kubeconfig, as the host holds it: a handle.
     credential: Credential,
-    /// The session the cluster was configured in: what its requests are
-    /// paced under.
-    session: Session,
     /// The objects' namespace when a document names none: the `namespace`
     /// setting, else the kubeconfig context's, else `default`.
     pub namespace: String,
@@ -314,11 +311,11 @@ impl Cached {
 impl Cluster {
     /// The cluster the kubeconfig credential `name` reaches, which the
     /// host opens for this provider (the program's, or the environment's
-    /// where dform.toml grants it), opened in `session`; `namespace` (the
-    /// setting) before its context's. Nothing is contacted yet. Its error
-    /// is the host's: why the kubeconfig does not load (not granted, or
-    /// `no kubeconfig at ~/.kube/config and not in a cluster`).
-    pub fn open(name: &str, session: Session, namespace: Option<&str>) -> Result<Cluster> {
+    /// where dform.toml grants it); `namespace` (the setting) before its
+    /// context's. Nothing is contacted yet. Its error is the host's: why
+    /// the kubeconfig does not load (not granted, or `no kubeconfig at
+    /// ~/.kube/config and not in a cluster`).
+    pub fn open(name: &str, namespace: Option<&str>) -> Result<Cluster> {
         let credential = host()
             .secrets
             .open(name)
@@ -334,7 +331,6 @@ impl Cluster {
             .to_string();
         Ok(Cluster {
             credential,
-            session,
             namespace,
             url,
         })
@@ -345,7 +341,7 @@ impl Cluster {
     /// settings (`kubeconfig`, or `host` and the rest) was configured with
     /// in their place, and its `namespace`. A setting that is no
     /// credential's name is refused without quoting it.
-    pub fn configured(settings: &Json, session: Session) -> Result<Option<Cluster>> {
+    pub fn configured(settings: &Json) -> Result<Option<Cluster>> {
         let named = SETTINGS
             .iter()
             .filter(|s| s.credential)
@@ -365,20 +361,17 @@ impl Cluster {
             Some(Json::String(n)) => Some(n.as_str()),
             Some(_) => bail!("use k8s: namespace is a string"),
         };
-        Cluster::open(name, session, namespace).map(Some)
+        Cluster::open(name, namespace).map(Some)
     }
 
     /// Send `req` through the host with the session's credential, in the
-    /// call this thread answers (`Within`: its trace number), paced under
-    /// the session the cluster was configured in. A status the server
-    /// answered that is not a success is [`Refused::Api`].
-    fn send(&self, req: Request) -> std::result::Result<Response, Refused> {
-        let _in = Within {
-            session: self.session,
-            ..Within::here()
-        }
-        .enter();
-        let answer = dform_sdk::block_on(host().http.request(req.auth(&self.credential)))
+    /// call it is awaited in (its session's window, its span). A status the
+    /// server answered that is not a success is [`Refused::Api`].
+    async fn send(&self, req: Request) -> std::result::Result<Response, Refused> {
+        let answer = host()
+            .http
+            .request(req.auth(&self.credential))
+            .await
             .map_err(|e| Refused::Transport(e.into()))?;
         if (200..300).contains(&answer.status) {
             return Ok(answer);
@@ -404,45 +397,58 @@ impl Cluster {
     }
 
     /// `req`'s answer as JSON.
-    fn json(&self, req: Request) -> std::result::Result<Json, Refused> {
-        let answer = self.send(req)?;
+    async fn json(&self, req: Request) -> std::result::Result<Json, Refused> {
+        let answer = self.send(req).await?;
         serde_json::from_slice(&answer.body)
             .map_err(|e| Refused::Transport(anyhow!("the server's answer is not JSON: {e}")))
     }
 
-    fn get_json(&self, uri: &str, timeout: Option<Duration>) -> Result<Json> {
+    async fn get_json(&self, uri: &str, timeout: Option<Duration>) -> Result<Json> {
         let mut req = self.request("GET", uri, "get", "openapi");
         if let Some(t) = timeout {
             req = req.timeout(t);
         }
         self.json(req)
+            .await
             .with_context(|| format!("GET {}{uri}", self.url))
     }
 
     /// The OpenAPI v3 document, `{"paths": {GV: DOC}}`: each group-version's
-    /// document the index names ([`served`]). The copy cached in the file
-    /// `cache` is used as is when the index names each of its documents at
-    /// the URL it was fetched from (the URL carries the document's hash);
-    /// otherwise each document whose URL changed is fetched again, the rest
-    /// kept, and the cache rewritten. A cached document is parsed only if
-    /// it is needed ([`Document::parse`]): its derived schema may be cached
-    /// too.
-    pub fn openapi(&self, cache: Option<&Path>) -> Result<Document> {
-        let index = served(&self.get_json("/openapi/v3", Some(REACH))?)?;
+    /// document the index names ([`served`]). The copy cached at `cache`
+    /// (`crate::cache`) is used as is when the index names each of its
+    /// documents at the URL it was fetched from (the URL carries the
+    /// document's hash); otherwise each document whose URL changed is
+    /// fetched again, the rest kept, and the cache rewritten. A cached
+    /// document is parsed only if it is needed ([`Document::parse`]): its
+    /// derived schema may be cached too.
+    pub async fn openapi(&self, cache: Option<&Path>) -> Result<Document> {
+        let index = served(&self.get_json("/openapi/v3", Some(REACH)).await?)?;
         let mut kept = None;
-        if let Some(text) = cache.and_then(|c| std::fs::read_to_string(c).ok()) {
+        if let Some(text) = cache.and_then(crate::cache::read) {
             if Cached::names(&text, &index) {
                 return Ok(Document::cached(text));
             }
             kept = serde_json::from_str::<Cached>(&text).ok();
         }
         let mut paths = serde_json::Map::new();
+        let mut asked = Vec::new();
         for (gv, url) in &index {
-            let doc = match kept.as_mut().and_then(|k| k.take(gv, url)) {
-                Some(doc) => doc,
-                None => self.get_json(url, None)?,
-            };
-            paths.insert(gv.clone(), doc);
+            match kept.as_mut().and_then(|k| k.take(gv, url)) {
+                Some(doc) => {
+                    paths.insert(gv.clone(), doc);
+                }
+                None => asked.push((gv, url)),
+            }
+        }
+        // Every document not kept, asked for at once: the host's window
+        // paces them, and each is parsed as it arrives.
+        let fetched = join_all(asked.into_iter().map(|(gv, url)| async move {
+            Ok::<_, anyhow::Error>((gv.clone(), self.get_json(url, None).await?))
+        }))
+        .await;
+        for got in fetched {
+            let (gv, doc) = got?;
+            paths.insert(gv, doc);
         }
         let cached = Cached {
             server: self.url.clone(),
@@ -451,10 +457,7 @@ impl Cluster {
         };
         let text = serde_json::to_string(&cached)?;
         if let Some(cache) = cache {
-            if let Some(dir) = cache.parent() {
-                let _ = std::fs::create_dir_all(dir);
-            }
-            std::fs::write(cache, &text).with_context(|| format!("write {}", cache.display()))?;
+            crate::cache::write(cache, &text)?;
         }
         Ok(Document {
             hash: dform_core::zset::file::fnv64(text.as_bytes()),
@@ -464,9 +467,12 @@ impl Cluster {
     }
 
     /// The object, or `None` if there is none.
-    pub fn get(&self, kind: &Kind, ns: &str, name: &str) -> Result<Option<Json>> {
+    pub async fn get(&self, kind: &Kind, ns: &str, name: &str) -> Result<Option<Json>> {
         let path = format!("{}/{name}", kind.collection(ns));
-        match self.json(self.request("GET", &path, "get", &kind.plural)) {
+        match self
+            .json(self.request("GET", &path, "get", &kind.plural))
+            .await
+        {
             Ok(o) => Ok(Some(o)),
             Err(e) if e.is(404) => Ok(None),
             Err(e) => Err(anyhow::Error::new(e).context(format!(
@@ -479,7 +485,7 @@ impl Cluster {
 
     /// The objects of `kind` in every namespace whose labels match
     /// `selector` (all of them without one), [`PAGE`] at a time.
-    pub fn list(&self, kind: &Kind, selector: Option<&str>) -> Result<Vec<Json>> {
+    pub async fn list(&self, kind: &Kind, selector: Option<&str>) -> Result<Vec<Json>> {
         let mut items = Vec::new();
         let mut next: Option<String> = None;
         loop {
@@ -492,6 +498,7 @@ impl Cluster {
             }
             let mut page = self
                 .json(self.request("GET", &path, "list", &kind.plural))
+                .await
                 .with_context(|| format!("LIST {}", kind.kind))?;
             if let Some(Json::Array(more)) = page.get_mut("items").map(Json::take) {
                 items.extend(more);
@@ -509,7 +516,7 @@ impl Cluster {
 
     /// Server-side apply `obj` as `dform`, not forced; `dry_run` persists
     /// nothing. The object as the server has it (or would).
-    pub fn apply(
+    pub async fn apply(
         &self,
         kind: &Kind,
         ns: &str,
@@ -530,19 +537,19 @@ impl Cluster {
             .request("PATCH", &path, "patch", &kind.plural)
             .header("content-type", "application/apply-patch+yaml")
             .body(body);
-        self.json(req).map_err(write_error)
+        self.json(req).await.map_err(write_error)
     }
 
     /// Delete with background propagation (the garbage collector removes
     /// what the object owns). Gone already is not an error.
-    pub fn delete(&self, kind: &Kind, ns: &str, name: &str) -> Result<()> {
+    pub async fn delete(&self, kind: &Kind, ns: &str, name: &str) -> Result<()> {
         let path = format!("{}/{name}", kind.collection(ns));
         let options = json!({"apiVersion": "v1", "kind": "DeleteOptions",
                              "propagationPolicy": "Background"});
         let req = self
             .request("DELETE", &path, "delete", &kind.plural)
             .json(&options);
-        match self.send(req) {
+        match self.send(req).await {
             Ok(_) => Ok(()),
             Err(e) if e.is(404) => Ok(()),
             Err(e) => Err(anyhow::Error::new(e).context(format!(
@@ -555,16 +562,16 @@ impl Cluster {
 
     /// Wait until the object is gone (a finalizer can hold it), polling,
     /// up to `timeout`. Whether it went.
-    pub fn gone(&self, kind: &Kind, ns: &str, name: &str, timeout: Duration) -> Result<bool> {
+    pub async fn gone(&self, kind: &Kind, ns: &str, name: &str, timeout: Duration) -> Result<bool> {
         let start = std::time::Instant::now();
         loop {
-            if self.get(kind, ns, name)?.is_none() {
+            if self.get(kind, ns, name).await?.is_none() {
                 return Ok(true);
             }
             if start.elapsed() >= timeout {
                 return Ok(false);
             }
-            std::thread::sleep(Duration::from_millis(250));
+            dform_sdk::sleep(Duration::from_millis(250)).await;
         }
     }
 }

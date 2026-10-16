@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// Objects by URL path, and the requests seen.
 #[derive(Default)]
@@ -29,7 +30,14 @@ pub struct Api {
     /// The group-version whose document changed, its hash in the index
     /// another.
     pub changed: Mutex<Option<String>>,
+    /// The group-version documents being answered now, and the most at
+    /// once so far: each is answered [`DOCUMENT`] after it is asked, as a
+    /// server's are some time after.
+    documents: Mutex<(usize, usize)>,
 }
+
+/// How long a group-version document takes to be answered.
+const DOCUMENT: Duration = Duration::from_millis(20);
 
 fn snapshot() -> Json {
     serde_json::from_str(
@@ -235,7 +243,7 @@ impl Api {
             return (200, self.index());
         }
         if let Some(gv) = path.strip_prefix("/openapi/v3/") {
-            return (200, snapshot()["paths"][gv].clone());
+            return (200, self.document(gv));
         }
         let segs: Vec<&str> = path.trim_start_matches('/').split('/').collect();
         let rest = match segs.first() {
@@ -468,6 +476,25 @@ impl Api {
         }
         entries.push(json!({"manager": manager, "operation": "Update", "fieldsV1": fields}));
         (200, obj.clone())
+    }
+
+    /// The snapshot's document of `gv`, answered [`DOCUMENT`] after it
+    /// was asked.
+    fn document(&self, gv: &str) -> Json {
+        {
+            let mut d = self.documents.lock().unwrap();
+            d.0 += 1;
+            d.1 = d.1.max(d.0);
+        }
+        std::thread::sleep(DOCUMENT);
+        let doc = snapshot()["paths"][gv].clone();
+        self.documents.lock().unwrap().0 -= 1;
+        doc
+    }
+
+    /// The most group-version documents being answered at once so far.
+    pub fn most_documents_at_once(&self) -> usize {
+        self.documents.lock().unwrap().1
     }
 
     pub fn get(&self, path: &str) -> Option<Json> {
