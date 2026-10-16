@@ -319,6 +319,11 @@ impl<'h> Evaluated<'h> {
             audit,
         } = objects;
         let mut cx = Context::new(cli, &located, audit, saved, rekey)?;
+        // A deployment of a tree's plan reads what those it reads make
+        // known, once their evaluations have (`board`).
+        if let Some(up) = &cx.cli.upstreams {
+            cx.cli.planned = up.evaluated()?;
+        }
         let read_outputs = cx.read_outputs(&located)?;
         if cx.writes {
             cx.inputs = Some(cx.plan_inputs(cx.file_key())?);
@@ -334,11 +339,13 @@ impl<'h> Evaluated<'h> {
         let opts = cx.options(hook.is_some())?;
         // A key never rotated is as old as its master (R-161, `secrets/4`).
         cx.secrets.random_mut().set_born(born(cx.entries.get()));
-        let ev = located.evaluate(
+        let mut ev = located.evaluate_program(
             read_outputs,
             &opts,
             &mut Watch::new(hook.as_deref_mut(), &cx.cli.cmd),
         )?;
+        cx.tell_readers(&ev)?;
+        ev.plan(&opts);
         // A destroy is refused by the denies over its plan, not by the
         // program's own: it wants none of the resources they are about.
         // A read of what nothing derives is an error before them (R-194).
@@ -627,6 +634,18 @@ impl Context {
             })
             .collect();
         Ok(read)
+    }
+
+    /// What the evaluation `ev` makes known, for the deployments of a
+    /// tree's plan that read this one (`board`): its outputs, before its
+    /// Plan calls and its policy.
+    fn tell_readers(&self, ev: &deployment::Evaluation) -> Result<()> {
+        let Some(up) = &self.cli.upstreams else {
+            return Ok(());
+        };
+        let r = super::planning::Reporter::new(self, &ev.evaluator, &ev.located, &ev.st);
+        up.tell(r.outputs_of(&ev.res, &ev.st, &Default::default())?);
+        Ok(())
     }
 
     /// `apply PLAN`: the plan file's inputs are this run's, the environment

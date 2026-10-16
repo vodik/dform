@@ -5,15 +5,17 @@
 
 use super::apply::Apply;
 use super::args::Target;
+use super::board::{Board, Upstreams, Verdict};
 use super::dev::Effects;
 use super::plan::Plan;
 use super::test::Test;
-use super::{Cli, Cmd, Dependency, Held, Outcome, Refused};
+use super::{Cli, Cmd, Dependency, Held, HeldPlan, Outcome, Refused};
 use crate::matrix::{Kept, Made, Matrix};
 use crate::provider::ActionKind;
 use crate::{report, zset};
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// The project module a command runs on: with no target, the root's
 /// project.df for `plan`, `apply`, `test` and `dev effects`; a target
@@ -295,10 +297,11 @@ fn plan(
     .plan(order, removed, of)
 }
 
-/// A plan of several deployments in apply order, printed as one tree
-/// (R-200): the project module's (R-114), or a target's and those it
-/// reads (R-30). Each is planned against the outputs of those planned
-/// before it, as they will be once applied; a deployment whose plan fails
+/// A plan of several deployments, printed as one tree (R-200): the
+/// project module's (R-114), or a target's and those it reads (R-30).
+/// Each is planned on a thread of its own, all at once, and waits only on
+/// those it reads (`board`): its evaluation on what their evaluations
+/// make known, its report on their plans. A deployment whose plan fails
 /// stops the chain there: what reads it is not planned.
 pub(super) struct Tree<'a> {
     pub(super) cli: &'a Cli,
@@ -316,7 +319,43 @@ struct Planned {
     error: Option<anyhow::Error>,
     /// Its `plan --json` document.
     json: Option<serde_json::Value>,
+    /// Its part of the tree's plan file (`--out`).
+    step: Option<zset::file::Step>,
 }
+
+impl Planned {
+    /// `node`, not planned: why.
+    fn not(mut node: report::deployments::Deployed, why: &str) -> Planned {
+        node.state = format!("not planned: {why}");
+        Planned {
+            node,
+            tally: None,
+            error: None,
+            json: None,
+            step: None,
+        }
+    }
+}
+
+/// A deployment of a tree's plan: its run, and whether it is the destroy
+/// of one removed from the project module.
+struct Member<'d> {
+    d: &'d Dependency,
+    run: Cli,
+    gone: bool,
+}
+
+/// A run of a deployment of a tree's plan, as it ended: its outcome, what
+/// it held for the tree, and whether the deployment had been applied.
+struct Ran {
+    result: Result<Outcome>,
+    held: HeldPlan,
+    applied: bool,
+}
+
+/// The stack of a thread a deployment of a tree's plan runs on: the main
+/// thread's.
+const STACK: usize = 8 << 20;
 
 /// A tree's deployments planned or applied as one run while this lives:
 /// each provider started, and its schema asked, once for the tree
@@ -338,25 +377,21 @@ impl OneRun {
     }
 }
 
-/// What a tree's plan has gathered, deployment by deployment.
-#[derive(Default)]
-struct Gathered {
-    /// The outputs of those planned, as their plans have them (R-200).
-    outputs: std::collections::BTreeMap<String, crate::stack::Planned>,
-    /// The plan file's deployments (`--out`), in apply order.
-    steps: Vec<zset::file::Step>,
-    /// The deployments not planned, and why: their plan failed, or one
-    /// they read did.
-    stopped: std::collections::BTreeMap<String, String>,
-    planned: Vec<Planned>,
+/// The deployments of `members` that member `i` reads: those before it it
+/// names.
+fn upstreams_of(members: &[Member], i: usize) -> Vec<usize> {
+    let reads = &members[i].d.reads;
+    (0..i)
+        .filter(|&j| reads.contains(&members[j].d.name))
+        .collect()
 }
 
-/// The full names of the deployments of `order` that `d` reads.
-fn reads_of(order: &[Dependency], d: &Dependency) -> Vec<String> {
-    order
+/// The full names of the deployments of `members` that `d` reads.
+fn reads_of(members: &[Member], d: &Dependency) -> Vec<String> {
+    members
         .iter()
-        .filter(|o| d.reads.contains(&o.name))
-        .map(|o| o.full.clone())
+        .filter(|m| d.reads.contains(&m.d.name))
+        .map(|m| m.d.full.clone())
         .collect()
 }
 
@@ -397,7 +432,7 @@ fn save_file(out: &Path, steps: Vec<zset::file::Step>) -> Result<()> {
 }
 
 impl Tree<'_> {
-    /// Plan `order`, then the destroy of each of `removed`, each a run of
+    /// Plan `order`, and the destroy of each of `removed`, each a run of
     /// its own (`of`), and print the tree.
     pub(super) fn plan(
         &self,
@@ -413,34 +448,39 @@ impl Tree<'_> {
             ..p.clone()
         });
         let _run = OneRun::begin(order);
-        let mut g = Gathered::default();
-        let runs = order
+        let members: Vec<Member> = order
             .iter()
             .map(|d| (d, self.cli.cmd.clone(), false))
-            .chain(removed.iter().map(|d| (d, destroy.clone(), true)));
-        for (d, cmd, gone) in runs {
-            self.plan_one(&mut g, order, d, of(d, cmd), gone);
-        }
+            .chain(removed.iter().map(|d| (d, destroy.clone(), true)))
+            .map(|(d, cmd, gone)| Member {
+                d,
+                run: of(d, cmd),
+                gone,
+            })
+            .collect();
+        let mut planned = self.plan_all(&members).0;
         let mut tally = report::Tally::default();
-        for p in &g.planned {
+        for p in &planned {
             if let Some(t) = &p.tally {
                 tally.add(t);
             }
         }
         if let Some(out) = &p.out
-            && g.steps.len() == order.len()
-            && g.planned.iter().all(|p| p.error.is_none())
+            && planned.iter().all(|p| p.error.is_none())
         {
-            save_file(out, g.steps)?;
+            let steps: Vec<_> = planned.iter_mut().filter_map(|p| p.step.take()).collect();
+            if steps.len() == order.len() {
+                save_file(out, steps)?;
+            }
         }
         if p.json {
-            return self.print_json(&tally, g.planned);
+            return self.print_json(&tally, planned);
         }
-        self.print_text(&tally, g.planned)
+        self.print_text(&tally, planned)
     }
 
     /// What the deployments of `order` will publish as their plans say,
-    /// each planned (unprinted) over those before it: what a run of a
+    /// each planned (unprinted) over those it reads: what a run of a
     /// deployment that reads them reads (`why`, `query`). One whose plan
     /// fails is left out: its reader reads what it published.
     pub(super) fn outputs(
@@ -455,79 +495,125 @@ impl Tree<'_> {
             why: report::Why::Line,
             new_master: false,
         });
-        let mut g = Gathered::default();
-        for d in order {
-            self.plan_one(&mut g, order, d, of(d, plan.clone()), false);
-        }
-        g.outputs
+        let members: Vec<Member> = order
+            .iter()
+            .map(|d| Member {
+                d,
+                run: of(d, plan.clone()),
+                gone: false,
+            })
+            .collect();
+        self.plan_all(&members).1.outputs()
     }
 
-    /// Plan the deployment `d` (`gone`: its destroy, removed from the
-    /// project module) as the run `dep`, after what `g` gathered of those
-    /// before it, and gather it.
-    fn plan_one(
-        &self,
-        g: &mut Gathered,
-        order: &[Dependency],
-        d: &Dependency,
-        mut dep: Cli,
-        gone: bool,
-    ) {
-        let applied = applied(self.cli, d);
-        let mut node = self.node(d, gone, applied);
-        if let Some(why) = d.reads.iter().find_map(|r| g.stopped.get(r)) {
-            node.state = format!("not planned: {why}");
-            g.stopped.insert(d.name.clone(), why.clone());
-            g.planned.push(Planned {
-                node,
-                tally: None,
-                error: None,
-                json: None,
-            });
-            return;
+    /// Each of `members` planned on a thread of its own, all at once, in
+    /// the tree's run (its providers, `plugin::pool`): what each planned,
+    /// in their order, and the board they read each other on.
+    fn plan_all(&self, members: &[Member]) -> (Vec<Planned>, Arc<Board>) {
+        let board = Board::new(members.iter().map(|m| m.d.name.clone()).collect());
+        let pool = crate::plugin::pool::current();
+        let within = tracing::Span::current();
+        let planned = std::thread::scope(|s| {
+            let threads: Vec<_> = (0..members.len())
+                .map(|i| {
+                    let (board, pool, within) = (&board, pool.clone(), within.clone());
+                    std::thread::Builder::new()
+                        .name(format!("plan {}", members[i].d.full))
+                        // As deep as the main thread's: an evaluation
+                        // recurses there as here.
+                        .stack_size(STACK)
+                        .spawn_scoped(s, move || {
+                            let _unwinding = board.unwinding(i);
+                            let _pool = pool.map(crate::plugin::pool::join);
+                            within.in_scope(|| self.plan_one(board, members, i))
+                        })
+                        .expect("a thread for a deployment's plan")
+                })
+                .collect();
+            threads
+                .into_iter()
+                .map(|t| t.join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
+                .collect()
+        });
+        (planned, board)
+    }
+
+    /// Member `i` of `members` planned, and posted on `board` for those
+    /// that read it: again while what its evaluation read of those it
+    /// reads is not what their plans make known; not when one of them is
+    /// not planned.
+    fn plan_one(&self, board: &Arc<Board>, members: &[Member], i: usize) -> Planned {
+        let m = &members[i];
+        let applied = applied(self.cli, m.d);
+        let of = upstreams_of(members, i);
+        loop {
+            let up = Upstreams::new(board.clone(), i, of.clone());
+            let mut dep = m.run.clone();
+            dep.held = Held::new();
+            dep.upstreams = Some(up.clone());
+            let result = run_deployment(dep.clone(), &m.d.full);
+            match up.verdict() {
+                Verdict::Stands => {
+                    let ran = Ran {
+                        result,
+                        held: dep.held.take(),
+                        applied,
+                    };
+                    return self.gathered(board, members, i, ran);
+                }
+                Verdict::Again => continue,
+                Verdict::NotPlanned(why) => {
+                    board.stopped(i, why.clone());
+                    return Planned::not(self.node(m.d, m.gone, applied), &why);
+                }
+            }
         }
-        dep.held = Held::new();
-        dep.planned = g.outputs.clone();
-        let result = run_deployment(dep.clone(), &d.full);
-        let mut held = dep.held.take();
+    }
+
+    /// What the run of member `i` of `members` planned (`ran`), its
+    /// outputs posted on `board` for the plans that read it (R-200): what
+    /// it will publish once applied (an apply with no change publishes
+    /// too); else why it was not.
+    fn gathered(&self, board: &Board, members: &[Member], i: usize, ran: Ran) -> Planned {
+        let Member { d, gone, .. } = &members[i];
+        let Ran {
+            result,
+            mut held,
+            applied,
+        } = ran;
+        let mut node = self.node(d, *gone, applied);
         // Its plan file's part (`--out`): after what it reads.
-        if let Some(plan) = held.file.take() {
-            g.steps.push(zset::file::Step {
-                deployment: d.full.clone(),
-                after: reads_of(order, d),
-                plan,
-            });
-        }
+        let step = held.file.take().map(|plan| zset::file::Step {
+            deployment: d.full.clone(),
+            after: reads_of(members, d),
+            plan,
+        });
         let (state, error) = match result {
             Err(e) => {
                 let word = match Outcome::of_error(&e) {
                     Outcome::Refused { .. } => "refused",
                     _ => "failed",
                 };
-                g.stopped
-                    .insert(d.name.clone(), format!("{} {word}", d.full));
+                board.stopped(i, format!("{} {word}", d.full));
                 (word.to_string(), Some(e))
             }
-            Ok(_) => (
-                self.state_of(&mut node, held.tally.as_ref(), gone, applied),
-                None,
-            ),
+            Ok(_) => {
+                board.planned(i, held.outputs.take());
+                let state = self.state_of(&mut node, held.tally.as_ref(), *gone, applied);
+                (state, None)
+            }
         };
-        // Its plan feeds the plans that read it (R-200): what it will
-        // publish once applied (an apply with no change publishes too).
-        if let (None, Some(outputs)) = (&error, held.outputs) {
-            g.outputs.insert(d.name.clone(), outputs);
-        }
-        node.state = self.listed(state, d, gone);
+        node.state = self.listed(state, d, *gone);
         if !matches!(node.kind, ActionKind::Noop) {
             node.body = held.text;
         }
-        g.planned.push(Planned {
+        Planned {
             node,
             tally: held.tally,
             error,
             json: held.json,
-        });
+            step,
+        }
     }
 
     /// The tree's node of `d`, its state not said yet: its destroy

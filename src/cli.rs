@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 mod apply;
 mod args;
+mod board;
 mod cmd;
 mod complete;
 mod controller_cmd;
@@ -93,6 +94,9 @@ struct Cli {
     /// by the name a reader gives each (`platform[env=lab]`): a plan reads
     /// them over what each published.
     planned: BTreeMap<String, crate::stack::Planned>,
+    /// A run of a deployment in a tree's plan: those it reads, as their
+    /// plans go (`board`), what `planned` is taken from.
+    upstreams: Option<board::Upstreams>,
     /// `apply PLAN` of a plan file of several deployments: which this run
     /// is, and what the earlier ones published.
     sequence: Option<order::InSequence>,

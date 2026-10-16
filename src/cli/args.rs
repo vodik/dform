@@ -882,6 +882,7 @@ impl Cli {
             matrix: None,
             held: Held::default(),
             planned: Default::default(),
+            upstreams: None,
             sequence: None,
         };
         if let Cmd::Apply(Apply { chaos, .. }) = &mut cli.cmd {

@@ -27,7 +27,7 @@ impl Plan {
     /// written or the plan needs an approval; refused when the program
     /// denies it.
     pub(super) fn run(&self, run: Evaluated) -> Result<Outcome> {
-        let Evaluated { cx, ev, .. } = run;
+        let Evaluated { mut cx, ev, .. } = run;
         let deployment::Evaluation {
             located,
             st,
@@ -46,6 +46,11 @@ impl Plan {
             true => Vec::new(),
             false => violations,
         };
+        // A deployment of a tree's plan says what those it reads know only
+        // after a tick as their plans have it (`board`).
+        if let Some(up) = &cx.cli.upstreams {
+            cx.cli.planned = up.planned()?;
+        }
         let r = Reporter::new(&cx, &evaluator, &located, &st);
         let report = self.report(&cx, &r, &planned, &st, &moves)?;
         let file = self.file(&cx, &located, &r, &planned, &st)?;

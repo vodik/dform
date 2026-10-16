@@ -1387,7 +1387,7 @@ impl Outputs {
 /// the deployments that read it in the same tree read in place of what it
 /// published, so a value the plan knows flows and one known only after a
 /// tick waits on that tick.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Planned {
     /// The deployment's full name, `stacks.platform[env=lab]`.
     pub full: String,
@@ -1404,6 +1404,17 @@ pub struct Planned {
 }
 
 impl Planned {
+    /// Whether `other` makes the same known: alike but for the tick each
+    /// output neither knows is known after (an evaluation's, before its
+    /// plan, says none).
+    pub fn knows_alike(&self, other: &Planned) -> bool {
+        let unticked = |p: &Planned| Planned {
+            after: BTreeMap::new(),
+            ..p.clone()
+        };
+        unticked(self) == unticked(other)
+    }
+
     /// What a reader reads of the deployment it names `name`: `read`,
     /// what it published if anything, with the plan's outputs over it. A
     /// public output the plan knows is its planned value; one it does not
