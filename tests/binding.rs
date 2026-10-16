@@ -119,6 +119,47 @@ fn an_interpolation_reads() {
     assert!(e.contains("`y` is unbound in this interpolation"), "{e}");
 }
 
+/// `not x = 3` is built as a comparison (R-211 step 9): `x` stays the
+/// negation's own, never bound outside it, so a read of `x` after it is
+/// the ordinary binding-order error, naming `x`.
+#[test]
+fn not_equals_is_a_comparison_so_x_stays_unbound_outside_it() {
+    let e = error("p(y) where not x = 3, y = x\n");
+    assert!(e.contains("`x` is unbound"), "{e}");
+    let src = r#"q(3)
+q(4)
+r(x) where q(x), not x = 3
+"#;
+    assert_eq!(facts(src, "r"), ["r(4)"]);
+}
+
+/// A chained comparison whose middle term is read as two different
+/// quantities (ambiguous beside `=`, a duration beside `<`) is a goal
+/// per pair, not one comparison read whole: its `=` binds its pattern
+/// side, `a = 30m < 1h` binding `a`. A chain with no such quantity reads
+/// every term instead, so `b` must already be bound.
+#[test]
+fn a_chained_equals_with_a_quantity_binds_its_side() {
+    let e = error("p(a) where a = b < 3\n");
+    assert!(e.contains("`a` is unbound at this `==`"), "{e}");
+    let ok = parse_file("t.df", "\np(a) where a = 30m < 1h\n");
+    assert!(ok.is_ok(), "{:#}", ok.unwrap_err());
+}
+
+/// A computed key in a binding position, `e[i] = P` (R-211 step 9,
+/// H-9): the key `i` is read to pick the element, as well as the
+/// pattern `P` being bound to it; an unbound key is the error.
+#[test]
+fn a_computed_key_in_a_binding_position_is_read_too() {
+    let e = error("obj({\"a\" = 1})\np(v) where obj(o), o[k] = v\n");
+    assert!(e.contains('k'), "{e}");
+    let src = r#"obj({"a" = 1})
+key("a")
+p(v) where obj(o), key(k), o[k] = v
+"#;
+    assert_eq!(facts(src, "p"), ["p(1)"]);
+}
+
 /// A negation written before what binds its names is decided after it.
 #[test]
 fn a_negation_waits_for_its_binders() {
