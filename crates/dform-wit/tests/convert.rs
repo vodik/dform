@@ -160,3 +160,28 @@ fn health_crosses_the_wit() {
         resp
     );
 }
+
+/// A Plan's answer crosses the WIT with the reason a provider gives for
+/// its replace, and without one.
+#[test]
+fn a_plans_reason_crosses_the_wit() {
+    let mut plan = pb::PlanResponse {
+        changes: vec![pb::Change {
+            path: "flavor".into(),
+            before: Some(wire::doc(&serde_json::json!("b2-15"))),
+            after: Some(wire::doc(&serde_json::json!("d2-2"))),
+            sensitive: false,
+        }],
+        requires_replace: true,
+        reason: Some("flavor d2-2 is smaller than b2-15".into()),
+    };
+    assert_eq!(
+        c::from_plan_response(&c::to_plan_response(&plan)).unwrap(),
+        plan
+    );
+    plan.reason = None;
+    assert_eq!(
+        c::from_plan_response(&c::to_plan_response(&plan)).unwrap(),
+        plan
+    );
+}

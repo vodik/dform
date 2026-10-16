@@ -827,14 +827,11 @@ mod tests {
             name: "main".into(),
         };
         let mut plan = Plan {
-            actions: vec![crate::provider::Action {
-                kind: ActionKind::Create,
+            actions: vec![crate::provider::Action::new(
+                ActionKind::Create,
                 addr,
-                changes: Vec::new(),
-                on: BTreeSet::new(),
-                kept: Vec::new(),
-                renamed: None,
-            }],
+                Vec::new(),
+            )],
         };
         let needs = [(r#"net.vpc["main"]"#.to_string(), "every change".to_string())];
         store.break_lease(LOCK, "app").unwrap();

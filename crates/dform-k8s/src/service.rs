@@ -1161,6 +1161,7 @@ impl pb::provider_server::Provider for Service {
         Ok(Response::new(pb::PlanResponse {
             changes: changes.iter().map(pb::Change::from).collect(),
             requires_replace,
+            reason: None,
         }))
     }
 

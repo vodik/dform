@@ -3874,7 +3874,11 @@ impl<'a> Planning<'a> {
     /// The action of the desired `addr`, deformed as `d`, as its
     /// provider's Plan `planned` it.
     fn action(&mut self, addr: Address, d: &zset::Deformation, planned: Planned) -> Result<Action> {
-        let Planned { changes, replaces } = planned;
+        let Planned {
+            changes,
+            replaces,
+            reason,
+        } = planned;
         let kind = self.kind(&addr, d, &changes, replaces);
         let (changes, on) = match d.kind {
             zset::Kind::Pending => (changes, d.unresolved.clone()),
@@ -3893,6 +3897,9 @@ impl<'a> Planning<'a> {
             _ => None,
         };
         let kept = self.kept.remove(&addr).unwrap_or_default();
+        // Said of a replace only: beside no replace, a reason explains
+        // nothing.
+        let reason = reason.filter(|_| matches!(kind, ActionKind::Replace { .. }));
         Ok(Action {
             kind,
             addr,
@@ -3900,6 +3907,7 @@ impl<'a> Planning<'a> {
             on,
             kept,
             renamed,
+            reason,
         })
     }
 
@@ -3937,17 +3945,7 @@ fn deletes(deleting: Vec<Deleting<'_>>, answers: impl Iterator<Item = Planned>) 
     let mut deletes: Vec<(Action, &[String])> = deleting
         .into_iter()
         .zip(answers)
-        .map(|((kind, addr, deps), planned)| {
-            let delete = Action {
-                kind,
-                addr,
-                changes: planned.changes,
-                on: BTreeSet::new(),
-                kept: Vec::new(),
-                renamed: None,
-            };
-            (delete, deps)
-        })
+        .map(|((kind, addr, deps), planned)| (Action::new(kind, addr, planned.changes), deps))
         .collect();
     deletes.sort_by(|a, b| a.0.addr.cmp(&b.0.addr));
     reverse_dependency_order(deletes)

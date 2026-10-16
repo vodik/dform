@@ -457,6 +457,7 @@ macro_rules! convert {
                         })
                         .collect(),
                     requires_replace: r.requires_replace,
+                    reason: r.reason.clone(),
                 }
             }
 
@@ -475,6 +476,7 @@ macro_rules! convert {
                         })
                         .collect::<R<_>>()?,
                     requires_replace: r.requires_replace,
+                    reason: r.reason.clone(),
                 })
             }
 

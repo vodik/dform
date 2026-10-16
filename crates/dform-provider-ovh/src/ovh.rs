@@ -602,7 +602,7 @@ impl Ovh {
         let Some(d) = desired else {
             return Ok(provider::Planned {
                 changes: diff(&self.schema, typ, prior, None),
-                replaces: false,
+                ..Default::default()
             });
         };
         for ((t, p), a) in &self.schema.attrs {
@@ -666,7 +666,11 @@ impl Ovh {
         if typ == NETWORK && prior.is_none() {
             self.check_vrack(&at)?;
         }
-        Ok(provider::Planned { changes, replaces })
+        Ok(provider::Planned {
+            changes,
+            replaces,
+            reason: None,
+        })
     }
 
     /// Whether a change of `prior` to `d` replaces the object: a path the

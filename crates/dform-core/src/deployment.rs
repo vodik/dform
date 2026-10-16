@@ -908,12 +908,8 @@ impl Evaluator {
             ),
         };
         provider::Action {
-            kind,
-            addr: r.addr.clone(),
-            changes,
             on: BTreeSet::from([label.to_string()]),
-            kept: Vec::new(),
-            renamed: None,
+            ..provider::Action::new(kind, r.addr.clone(), changes)
         }
     }
 
@@ -1346,14 +1342,11 @@ impl Evaluator {
                 continue;
             }
             if lifecycle.retains(&a) {
-                plan.actions.push(provider::Action {
-                    kind: provider::ActionKind::Delete,
-                    addr: a,
-                    changes: Vec::new(),
-                    on: BTreeSet::new(),
-                    kept: Vec::new(),
-                    renamed: None,
-                });
+                plan.actions.push(provider::Action::new(
+                    provider::ActionKind::Delete,
+                    a,
+                    Vec::new(),
+                ));
                 continue;
             }
             let why = match self.provider_wait(&a.typ) {

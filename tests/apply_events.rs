@@ -28,14 +28,7 @@ fn addr(t: &str, n: &str) -> Address {
 }
 
 fn action(t: &str, n: &str) -> Action {
-    Action {
-        kind: ActionKind::Create,
-        addr: addr(t, n),
-        changes: Vec::new(),
-        on: Default::default(),
-        kept: Vec::new(),
-        renamed: None,
-    }
+    Action::new(ActionKind::Create, addr(t, n), Vec::new())
 }
 
 /// The tick of `vpc main`, `subnet a`, `subnet b`, started at `t0`, the

@@ -519,17 +519,11 @@ mod tests {
     use super::*;
 
     fn action(kind: ActionKind, t: &str, n: &str) -> Action {
-        Action {
-            kind,
-            addr: Address {
-                typ: t.into(),
-                name: n.into(),
-            },
-            changes: Vec::new(),
-            on: Default::default(),
-            kept: Vec::new(),
-            renamed: None,
-        }
+        let addr = Address {
+            typ: t.into(),
+            name: n.into(),
+        };
+        Action::new(kind, addr, Vec::new())
     }
 
     /// `ms` after `t0`.

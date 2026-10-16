@@ -308,6 +308,11 @@ message PlanResponse {
   repeated Change changes = 1;
   // A change the provider cannot make in place.
   bool requires_replace = 2;
+  // Why it replaces, in a line the plan prints under the change
+  // (`flavor d2-2 is smaller than b2-15; the API resizes an instance
+  // only to a larger one`), where the provider decides it beyond a
+  // `force_new` path, which dform names itself. Absent otherwise.
+  optional string reason = 3;
 }
 
 message Change {

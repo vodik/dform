@@ -650,7 +650,11 @@ impl FakeCloud {
             && changes
                 .iter()
                 .any(|c| self.schema.forces_new(&addr.typ, &norm_path(&c.path)));
-        Ok(Planned { changes, replaces })
+        Ok(Planned {
+            changes,
+            replaces,
+            reason: None,
+        })
     }
 
     /// A secret's value, from the computed values of the object its label

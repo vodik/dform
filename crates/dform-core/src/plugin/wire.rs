@@ -275,6 +275,7 @@ impl From<&provider::Planned> for pb::PlanResponse {
         pb::PlanResponse {
             changes: p.changes.iter().map(pb::Change::from).collect(),
             requires_replace: p.replaces,
+            reason: p.reason.clone(),
         }
     }
 }
@@ -291,6 +292,7 @@ impl TryFrom<&pb::PlanResponse> for provider::Planned {
                 .map(provider::Change::try_from)
                 .collect::<Result<_>>()?,
             replaces: r.requires_replace,
+            reason: r.reason.clone(),
         })
     }
 }
@@ -999,6 +1001,7 @@ mod tests {
                 ..Default::default()
             }],
             requires_replace: false,
+            reason: None,
         };
         let Reply::Plan(plan) = back.reply(Reply::Plan(plan), Some("t.s")) else {
             unreachable!()

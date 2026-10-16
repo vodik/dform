@@ -50,12 +50,15 @@ pub struct Change {
     pub note: Option<String>,
 }
 
-/// A provider's Plan of one object: its changes leaf by leaf, and
-/// whether they replace it.
+/// A provider's Plan of one object: its changes leaf by leaf, whether
+/// they replace it, and why, where the provider decides it beyond a
+/// `force_new` path (which dform names itself): a line in the
+/// provider's words, which the plan prints under the change.
 #[derive(Debug, Clone, Default)]
 pub struct Planned {
     pub changes: Vec<Change>,
     pub replaces: bool,
+    pub reason: Option<String>,
 }
 
 /// A kept value's note (R-218): the object holding a secret it reveals
@@ -170,9 +173,26 @@ pub struct Action {
     /// old object's remote name and the new one's, the next generation of
     /// the program's (`forgejo-3`, `forgejo-4`).
     pub renamed: Option<(String, String)>,
+    /// A replace's reason, where its provider's Plan gave one
+    /// ([`Planned::reason`]).
+    pub reason: Option<String>,
 }
 
 impl Action {
+    /// An action of `kind` on `addr` making `changes`, nothing more said
+    /// of it.
+    pub fn new(kind: ActionKind, addr: crate::address::Address, changes: Vec<Change>) -> Action {
+        Action {
+            kind,
+            addr,
+            changes,
+            on: Default::default(),
+            kept: Vec::new(),
+            renamed: None,
+            reason: None,
+        }
+    }
+
     /// What the action sends that differs from the world: its changes,
     /// and a replace's values given at creation only, in path order.
     pub fn sent(&self) -> Vec<&Change> {

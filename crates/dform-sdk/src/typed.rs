@@ -528,7 +528,11 @@ impl<P: Provider> Typed<P> {
                 self.schema
                     .forces_new(&addr.typ, &dform_core::provider::norm_path(&c.path))
             });
-        let planned = dform_core::provider::Planned { changes, replaces };
+        let planned = dform_core::provider::Planned {
+            changes,
+            replaces,
+            reason: None,
+        };
         Ok(pb::PlanResponse::from(&planned))
     }
 
