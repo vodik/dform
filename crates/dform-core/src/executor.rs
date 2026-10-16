@@ -873,7 +873,8 @@ impl Resolving<'_> {
             e.remote.clear();
         }
         self.said.push(format!(
-            "{}: the replace whose answer was lost deleted {} and made nothing;                          it is created again",
+            "{}: the replace whose answer was lost deleted {} and made nothing; it is \
+             created again",
             crate::report::address(addr),
             u.remote
         ));

@@ -242,3 +242,37 @@ fn chaos_names_must_be_resources_of_the_stack() {
     );
     assert!(!s.path("w.json").exists());
 }
+
+/// A destroy-first replace whose answer was lost after it deleted the old
+/// object and before it made the new: nothing its key made, the old object
+/// gone. The next run says it is a create again, on one line, and plans it.
+#[test]
+fn a_lost_replace_that_made_nothing_is_created_again() {
+    let s = stack("chaos-replace-nothing");
+    mock(&s, &["apply"]).success();
+    let mut st = s.json("w.state.json");
+    st["uncertain"] = serde_json::json!({
+        "net.vpc::main": {
+            "op": { "replace": { "create_first": false } },
+            "remote": "main",
+            "key": "lost",
+        }
+    });
+    s.write("w.state.json", &st.to_string());
+    let mut w = s.json("w.json");
+    w["resources"]
+        .as_object_mut()
+        .unwrap()
+        .remove("net.vpc::main");
+    s.write("w.json", &w.to_string());
+    let r = mock(&s, &["plan"]).success();
+    assert!(
+        r.stderr.contains(
+            "resolved: net.vpc main: the replace whose answer was lost deleted main and made \
+             nothing; it is created again\n"
+        ),
+        "{}",
+        r.stderr
+    );
+    assert!(r.stdout.contains("+ net.vpc main"), "{}", r.stdout);
+}
