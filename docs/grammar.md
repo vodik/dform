@@ -1188,6 +1188,20 @@ attribute (`type_attr(compute.vm, "labels", "map(string)", [])`); a
 value of another type is an error naming its key. A bare `map` (a
 schema's untyped object) takes any object.
 
+A schema attribute may be typed an object, `{ network: ref(ovh.network),
+ip?: ip }`: each field read as its type, `?` marking one a value may
+leave out (the provider judges what is missing), and a field the type
+does not have an error naming the ones it has. Where an object type has
+one required field and that field is a reference, a reference is that
+object (`networks = [lab]` checks as `[{ network = lab }]`): it is
+checked as the field, and a bare name two resources share is the one of
+the field's type, `{ network = lab }` too, with a subnet also named
+`lab`. The check only: the provider receives what the program wrote,
+the reference or the object, and takes both. It was not extended to a
+program's own object types (`let k: { network: ref(T) }`, an input's):
+there a value is read by its fields (`k.network`), which a reference
+does not have.
+
 **Relations.** A relation is declared once, by `decl p(a: T, ..)` or by
 its uses; `input` and `output` name it and never re-spell its
 columns:

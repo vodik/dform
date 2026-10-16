@@ -174,3 +174,39 @@ fn an_untyped_position_keeps_the_error() {
         assert!(e.contains(listed), "{rest}\n{e}");
     }
 }
+
+/// OVH's `networks` (an element `{ network: ref(ovh.network), ip?: ip }`)
+/// takes a network bare or in its object, and a network and a subnet both
+/// named `lab` are the network there: no `ovh.network["lab"]` needed.
+#[test]
+fn a_network_and_a_subnet_of_one_name_are_the_network_in_networks() {
+    let schema = dform::schema::Schema::parse(
+        &std::fs::read_to_string(common::repo().join("crates/dform-provider-ovh/src/schema.df"))
+            .unwrap(),
+        "ovh",
+    )
+    .unwrap();
+    let src = "\nuse ovh\n\n\
+               resource ovh.network lab { name = \"lab\", vlan = 42 }\n\
+               resource ovh.subnet lab {\n  network = lab\n  region = \"BHS5\"\n  range = \"10.42.0.0/24\"\n}\n\
+               resource ovh.instance a { networks = [lab] }\n\
+               resource ovh.instance b { networks = [{ network = lab, ip = \"10.42.0.9\" }] }\n";
+    let p = parse_file("t.df", src).unwrap_or_else(|e| panic!("{e:#}"));
+    let read = dform::types::read(&p, &schema).unwrap_or_else(|e| panic!("{e:#}"));
+    let networks: Vec<String> = read
+        .statements
+        .iter()
+        .filter_map(|st| match st {
+            dform::ast::Stmt::Resource(r) => Some(&r.fields),
+            _ => None,
+        })
+        .flatten()
+        .filter(|f| f.key == "networks")
+        .map(|f| dform::spell::term(&f.value))
+        .collect();
+    assert_eq!(networks.len(), 2, "{networks:?}");
+    for n in &networks {
+        assert!(n.contains("ref(\"ovh.network\", \"lab\""), "{n}");
+        assert!(!n.contains("ovh.subnet"), "{n}");
+    }
+}

@@ -248,6 +248,7 @@ pub(crate) fn compatible(a: &Ty, b: &Ty) -> bool {
         // Numbers compare by value (R-75).
         (Ty::Scalar(x), Ty::Scalar(y)) if number(x) && number(y) => true,
         (Ty::List(x), Ty::List(y)) | (Ty::Map(x), Ty::Map(y)) => compatible(x, y),
+        (Ty::Object(x), Ty::Object(y)) => x == y,
         (Ty::Ref(x), Ty::Ref(y)) => Ty::ref_types(x).any(|t| Ty::ref_types(y).any(|u| t == u)),
         (Ty::Scalar(x), Ty::Scalar(y)) => x == y,
         _ => false,
@@ -273,7 +274,7 @@ pub(crate) fn fieldless(ty: &Ty) -> bool {
                 && crate::range::element(s).is_none()
         }
         Ty::Enum(_) | Ty::List(_) | Ty::Ref(_) => true,
-        Ty::Map(_) | Ty::Any => false,
+        Ty::Map(_) | Ty::Object(_) | Ty::Any => false,
     }
 }
 

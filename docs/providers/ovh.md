@@ -159,7 +159,7 @@ schema's `type_lookup`, see "What a Create that does not answer does").
 | `image`      | string, required  | the image's name in the region, `Ubuntu 24.04`; replaces |
 | `ssh_key`    | ref(ovh.ssh_key)  | `ssh_key = admin`; replaces          |
 | `user_data`  | string, sensitive | cloud-init; replaces                 |
-| `networks`   | set(ref(ovh.network)) | `networks = [lab]`, or `[{ network = lab, ip = .. }]` for a fixed address; changes in place, but a new address replaces |
+| `networks`   | set({ network: ref(ovh.network), ip?: ip }) | `networks = [lab]`, or `[{ network = lab, ip = .. }]` for a fixed address; changes in place, but a new address replaces |
 | `id`         | computed          |                                     |
 | `public_ip`  | ip, computed      | once the instance has one           |
 | `private_ip` | ip, computed, nullable | its address on the first of its private networks, by id, as `private_ips` has it |
@@ -289,9 +289,6 @@ is clean.
 - The API takes an address inside the subnet's pool, where DHCP may have
   given it to another port: keep fixed addresses outside the pool, as
   `nodes` does above.
-- Inside the object a name another resource shares (a subnet also named
-  `lab`) is ambiguous: write the network's address,
-  `{ network = ovh.network["lab"], ip = .. }`.
 
 A project whose nodes find their address at boot moves to this once: a
 node takes its index, `let address = inet.host(range, 10 + index)`, its

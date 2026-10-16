@@ -63,12 +63,8 @@ type_attr("ovh.instance", "user_data", "string", ["sensitive", "force_new", "wri
 # Its private networks: made on them, it has an interface on each. An
 # entry is a network (its port's address DHCP's) or `{ network, ip }`
 # (its port made with that address, which no call changes: another
-# replaces the instance). The element type is that object, a bare
-# reference coerced into it, once the checker coerces one (a reference
-# where an object with one required reference field is expected); until
-# then it says `ref`, which the checker does not judge, and Plan checks
-# an object's fields.
-type_attr("ovh.instance", "networks", "set(ref(ovh.network))", [])
+# replaces the instance): the object, a bare reference coerced into it.
+type_attr("ovh.instance", "networks", "set({ network: ref(ovh.network), ip?: ip })", [])
 type_attr("ovh.instance", "public_ip", "ip", ["computed"])
 type_attr("ovh.instance", "private_ip", "ip", ["computed", "nullable"])
 type_attr("ovh.instance", "private_ips", "map(ip)", ["computed"])

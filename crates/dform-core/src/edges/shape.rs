@@ -161,6 +161,7 @@ fn ty_at(t: &Ty, q: &[Seg]) -> Option<Ty> {
         (Ty::List(inner), Seg::Elem) | (Ty::Map(inner), Seg::Key(_) | Seg::Any) => {
             ty_at(inner, rest)
         }
+        (Ty::Object(fs), Seg::Key(k)) => ty_at(&fs.iter().find(|f| &f.name == k)?.ty, rest),
         _ => None,
     }
 }

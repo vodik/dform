@@ -64,9 +64,39 @@ pub enum Ty {
     /// a function parameter only), the quantities `bytes`, `cpu`,
     /// `duration`, `time`, and `range(T)` of an ordered `T` (R-180).
     Scalar(String),
+    /// `{ k: T, j?: U }`: an object of typed fields, `?` marking one the
+    /// value may leave out. A reference is one where it has one required
+    /// field and that field is a reference ([`Ty::coerced`]).
+    Object(Vec<Field>),
     /// Anything the check does not judge (an untyped `map`, `object`,
     /// `any`, an untyped `list`).
     Any,
+}
+
+/// A field of an object type: its name, its type, whether a value must
+/// give it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Field {
+    pub name: String,
+    pub ty: Ty,
+    pub required: bool,
+}
+
+impl Field {
+    /// `name: T` or `name?: T`.
+    fn parse(s: &str) -> Option<Field> {
+        let (name, ty) = s.split_once(':')?;
+        let name = name.trim();
+        let (name, required) = match name.strip_suffix('?') {
+            Some(n) => (n.trim_end(), false),
+            None => (name, true),
+        };
+        (!name.is_empty()).then(|| Field {
+            name: name.to_string(),
+            ty: Ty::parse(ty),
+            required,
+        })
+    }
 }
 
 impl Ty {
@@ -87,6 +117,9 @@ impl Ty {
     /// provider takes it, `schema::Render`).
     pub fn parse(s: &str) -> Ty {
         let s = s.trim();
+        if let Some(fields) = s.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+            return Ty::object(fields);
+        }
         let Some((head, rest)) = s.split_once('(') else {
             return match s {
                 "string" | "int" | "float" | "number" | "bool" | "inet" | "ip" | "bytes"
@@ -117,11 +150,49 @@ impl Ty {
         }
     }
 
+    /// `{ k: T, j?: U }`'s fields, each at its top-level comma; `any`
+    /// when one is not `name: T`.
+    fn object(fields: &str) -> Ty {
+        let mut depth = 0i32;
+        let mut parts = Vec::new();
+        let mut start = 0;
+        for (i, c) in fields.char_indices() {
+            match c {
+                '(' | '{' | '[' => depth += 1,
+                ')' | '}' | ']' => depth -= 1,
+                ',' if depth == 0 => {
+                    parts.push(&fields[start..i]);
+                    start = i + 1;
+                }
+                _ => {}
+            }
+        }
+        parts.push(&fields[start..]);
+        let parsed: Option<Vec<Field>> = parts
+            .into_iter()
+            .filter(|p| !p.trim().is_empty())
+            .map(Field::parse)
+            .collect();
+        parsed.map_or(Ty::Any, Ty::Object)
+    }
+
+    /// What a reference coerces into where this type is wanted: an object
+    /// type's one required field, when it is the only required one and a
+    /// reference (`{ network: ref(ovh.network), ip?: ip }` takes `lab` as
+    /// `{ network = lab }`).
+    pub fn coerced(&self) -> Option<&Field> {
+        let Ty::Object(fs) = self else { return None };
+        let mut required = fs.iter().filter(|f| f.required);
+        let one = required.next().filter(|_| required.next().is_none())?;
+        matches!(one.ty, Ty::Ref(_)).then_some(one)
+    }
+
     /// A quantity's or a time's type: what [`read`] reads.
     fn measured(&self) -> bool {
         match self {
             Ty::Scalar(s) => measured(s),
             Ty::Secret(t) | Ty::List(t) | Ty::Map(t) => t.measured(),
+            Ty::Object(fs) => fs.iter().any(|f| f.ty.measured()),
             _ => false,
         }
     }
@@ -158,6 +229,16 @@ impl std::fmt::Display for Ty {
                     .join(", ")
             ),
             Ty::Scalar(s) => write!(f, "{s}"),
+            Ty::Object(fs) => {
+                let fields: Vec<String> = fs
+                    .iter()
+                    .map(|x| {
+                        let opt = if x.required { "" } else { "?" };
+                        format!("{}{opt}: {}", x.name, x.ty)
+                    })
+                    .collect();
+                write!(f, "{{ {} }}", fields.join(", "))
+            }
             Ty::Any => write!(f, "any"),
         }
     }
@@ -313,6 +394,20 @@ fn pick_refs(ty: &Ty, t: &mut Term) {
     match (ty, &mut *t) {
         (Ty::Secret(inner), _) => pick_refs(inner, t),
         (Ty::List(inner), Term::List(xs)) => xs.iter_mut().for_each(|x| pick_refs(inner, x)),
+        (Ty::Object(fs), Term::Obj(m)) => {
+            for f in fs {
+                if let Some(x) = m.get_mut(&f.name) {
+                    pick_refs(&f.ty, x);
+                }
+            }
+        }
+        // A bare name where an object of one required reference is
+        // wanted is that reference.
+        (Ty::Object(_), _) => {
+            if let Some(f) = ty.coerced() {
+                pick_refs(&f.ty, t);
+            }
+        }
         (Ty::Ref(want), _) => {
             let picked = ambiguous_ref_of(t).and_then(|(_, cs)| {
                 let mut of = cs
@@ -409,6 +504,13 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
                 .map(|why| format!("is {ty}: its key {k:?} {why}"))
         }),
         (Ty::Map(_), Term::Val(v)) => Some(format!("is {ty}, not {}", shown_literal(v))),
+        (Ty::Object(fs), Term::Obj(m)) => {
+            object_mismatch(ty, fs, m.iter().map(|(k, x)| (k, x.clone())))
+        }
+        (Ty::Object(fs), Term::Val(Value::Obj(m))) => {
+            object_mismatch(ty, fs, m.iter().map(|(k, x)| (k, Term::Val(x.clone()))))
+        }
+        (Ty::Object(_), Term::Val(v)) => Some(format!("is {ty}, not {}", shown_literal(v))),
         (Ty::Ref(want), Term::Val(v)) => Some(format!(
             "takes a ref({want}): a resource, by its name, `{want}[\"a\"]` or a variable, not {}",
             shown_literal(v)
@@ -442,6 +544,15 @@ fn reference_mismatch(ty: &Ty, t: &Term, typ: &str, addr: &Term) -> Option<Strin
             "is {ty}, not one reference: {} in a list is `[r]`",
             shown_ref(typ, addr)
         )),
+        Ty::Object(_) => match ty.coerced() {
+            Some(f) => {
+                mismatch(&f.ty, t).map(|why| format!("is {ty}: its field `{}` {why}", f.name))
+            }
+            None => Some(format!(
+                "is {ty}, not a reference: write the object, `{{ .. }}`, with {} in its field",
+                shown_ref(typ, addr)
+            )),
+        },
         Ty::Scalar(s) if s == "string" && written => None,
         _ => Some(format!(
             "is {ty}, not a reference: {} is no {ty}; read one of its attributes \
@@ -505,6 +616,30 @@ fn scalar_mismatch(s: &str, v: &Value) -> Option<String> {
         ),
         _ => format!("is {s}, not {}", shown_literal(v)),
     })
+}
+
+/// Why an object's fields, `(key, value)` each, do not make a `ty` of
+/// fields `fs`: one it has no field of, or one whose value is not its
+/// field's type. A field left out is the provider's to judge: another
+/// contribution may give it.
+fn object_mismatch<'k>(
+    ty: &Ty,
+    fs: &[Field],
+    fields: impl Iterator<Item = (&'k String, Term)>,
+) -> Option<String> {
+    for (k, x) in fields {
+        let Some(f) = fs.iter().find(|f| &f.name == k) else {
+            let named: Vec<&str> = fs.iter().map(|f| f.name.as_str()).collect();
+            return Some(format!(
+                "is {ty}: it has no field `{k}`; its fields are {}",
+                named.join(", ")
+            ));
+        };
+        if let Some(why) = mismatch(&f.ty, &x) {
+            return Some(format!("is {ty}: its field `{k}` {why}"));
+        }
+    }
+    None
 }
 
 /// A declared type (an input's, a module input's) as the check reads it:
@@ -1669,6 +1804,22 @@ impl<'p> Reader<'p> {
                     out.insert(e, Reading::Candidate(n));
                 }
             }
+            // An object's fields each as its type; a bare name, as the
+            // reference it coerces into.
+            Ty::Object(fs) => match &p.exprs[e].kind {
+                ExprKind::Object { parts } if p.exprs[e].hoisted.is_none() => {
+                    for (k, v) in fields(parts) {
+                        if let Some(f) = fs.iter().find(|f| f.name == k) {
+                            self.pick(&f.ty, v, out);
+                        }
+                    }
+                }
+                _ => {
+                    if let Some(f) = ty.coerced() {
+                        self.pick(&f.ty, e, out);
+                    }
+                }
+            },
             _ => {}
         }
     }
@@ -1855,6 +2006,112 @@ mod tests {
         assert_eq!(
             Ty::parse("enum(\"a\", \"b\")"),
             Ty::Enum(vec!["a".into(), "b".into()])
+        );
+    }
+
+    /// An object type in a schema's text, `?` an optional field; printed
+    /// back as written.
+    #[test]
+    fn an_object_type_parses_its_fields() {
+        let text = "set({ network: ref(ovh.network), ip?: ip })";
+        let ty = Ty::parse(text);
+        let Ty::List(elem) = &ty else {
+            panic!("{ty:?}")
+        };
+        assert_eq!(
+            **elem,
+            Ty::Object(vec![
+                Field {
+                    name: "network".into(),
+                    ty: Ty::Ref("ovh.network".into()),
+                    required: true,
+                },
+                Field {
+                    name: "ip".into(),
+                    ty: Ty::Scalar("ip".into()),
+                    required: false,
+                },
+            ])
+        );
+        assert_eq!(
+            ty.to_string(),
+            "list({ network: ref(ovh.network), ip?: ip })"
+        );
+        assert_eq!(elem.coerced().map(|f| f.name.as_str()), Some("network"));
+        // Two required fields, or one that is no reference: no coercion.
+        assert!(
+            Ty::parse("{ a: ref(t.a), b: ref(t.b) }")
+                .coerced()
+                .is_none()
+        );
+        assert!(Ty::parse("{ a: string, b?: ref(t.b) }").coerced().is_none());
+        assert_eq!(Ty::parse("{ a }"), Ty::Any);
+    }
+
+    /// A reference where an object of one required reference field is
+    /// wanted is checked as that field, a bare name two resources share
+    /// picked by its type, in the object too; the object's fields are
+    /// checked as theirs.
+    #[test]
+    fn a_reference_coerces_into_an_object_of_one_reference_field() {
+        let ty = Ty::parse("set({ network: ref(ovh.network), ip?: ip })");
+        let s = |x: &str| Term::Val(Value::Str(x.into()));
+        let r = |t: &str| Term::Func {
+            name: crate::address::REF.into(),
+            args: vec![s(t), s("lab"), s("")],
+        };
+        let shared = || Term::Func {
+            name: AMBIGUOUS_REF.into(),
+            args: vec![
+                s("lab"),
+                Term::Val(Value::Int(1)),
+                Term::Val(Value::Int(0)),
+                Term::Val(Value::Int(3)),
+                r("ovh.network"),
+                r("ovh.subnet"),
+            ],
+        };
+        let object = |network: Term, ip: &str| {
+            Term::Obj(BTreeMap::from([
+                ("network".into(), network),
+                ("ip".into(), s(ip)),
+            ]))
+        };
+        let mut t = Term::List(vec![shared(), object(shared(), "10.42.0.9")]);
+        pick_refs(&ty, &mut t);
+        assert_eq!(
+            t,
+            Term::List(vec![
+                r("ovh.network"),
+                object(r("ovh.network"), "10.42.0.9")
+            ])
+        );
+        assert_eq!(mismatch(&ty, &t), None);
+        let elem = || match &ty {
+            Ty::List(e) => (**e).clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            mismatch(&elem(), &r("ovh.subnet")).as_deref(),
+            Some(
+                "is { network: ref(ovh.network), ip?: ip }: its field `network` takes a \
+                 ref(ovh.network), got ovh.subnet[\"lab\"]"
+            )
+        );
+        assert_eq!(
+            mismatch(&elem(), &object(r("ovh.network"), "10.42")).as_deref(),
+            Some(
+                "is { network: ref(ovh.network), ip?: ip }: its field `ip` is an ip: \"10.42\" \
+                 is not an address (`a.b.c.d`)"
+            )
+        );
+        let extra = Term::Obj(BTreeMap::from([("net".into(), r("ovh.network"))]));
+        assert_eq!(
+            mismatch(&elem(), &extra).as_deref(),
+            Some(
+                "is { network: ref(ovh.network), ip?: ip }: it has no field `net`; its fields \
+                 are network, ip"
+            )
         );
     }
 

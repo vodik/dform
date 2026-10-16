@@ -163,15 +163,19 @@ struct Leaves<'a> {
 
 impl<'a> Leaves<'a> {
     /// Whether the schema types the leaf at `path` a reference: an
-    /// element of a `set(ref(T))`, or a `ref(T)` field.
+    /// element of a `set(ref(T))` (or of a set of objects a reference
+    /// coerces into, `types::Ty::coerced`), or a `ref(T)` field.
     fn is_ref(&self, path: &str) -> bool {
+        use crate::types::Ty;
         let ty = self
             .schema
             .attr(&self.a.addr.typ, &schema_path(path))
-            .map(|s| s.ty.replace(' ', ""))
-            .unwrap_or_default();
-        ty.starts_with("ref(")
-            || (path.ends_with(']') && (ty.starts_with("set(ref(") || ty.starts_with("list(ref(")))
+            .map_or(Ty::Any, |s| Ty::parse(&s.ty));
+        match ty {
+            Ty::Ref(_) => true,
+            Ty::List(e) if path.ends_with(']') => matches!(*e, Ty::Ref(_)) || e.coerced().is_some(),
+            _ => false,
+        }
     }
 
     /// Change `c`'s line at `path`, its values as the plan shows them.
