@@ -125,10 +125,29 @@ pub fn run(launch: &dyn Launch, path: &str) -> Result<(Vec<String>, usize)> {
 }
 
 fn suite(start: impl FnOnce() -> Result<Link>, dir: &Path) -> Result<(Vec<String>, usize)> {
+    write_fixtures(dir)?;
     let mut r = Report {
         lines: Vec::new(),
         failed: 0,
     };
+    if let Some(conn) = r.connect(start)
+        && r.configure(&conn, dir)
+        && let Some((schema, resp)) = r.schema(&conn)
+        && let Some(fixture) = r.fixture(&conn, &schema, &resp)
+    {
+        r.queries(&conn, &resp);
+        let serves_resources = conn.borrow().has("resource");
+        match serves_resources {
+            true => resources(&conn, &mut r, &schema, &fixture),
+            false => r.skip("Read, Plan, Apply, Import", "no `resource` capability"),
+        }
+    }
+    Ok(r.into_result())
+}
+
+/// The files the suite's Configure names, in `dir`: the synthetic type's
+/// schema, its extern's answers, and an inventory of one object.
+fn write_fixtures(dir: &Path) -> Result<()> {
     std::fs::write(dir.join("schema.df"), SCHEMA)?;
     std::fs::write(dir.join("externs.df"), EXTERNS)?;
     std::fs::write(
@@ -138,134 +157,150 @@ fn suite(start: impl FnOnce() -> Result<Link>, dir: &Path) -> Result<(Vec<String
             "attrs": {"name": "found", "zone": "z1"},
             "computed": {"id": "found-id", "endpoint": "found.example", "token": "t0ken"}}}}))?,
     )?;
+    Ok(())
+}
 
-    let conn = match start() {
-        Ok(c) => Conn {
-            link: RefCell::new(c),
-            session: Cell::new(Session::NONE),
-        },
-        Err(e) => {
-            r.check("Handshake", Err(e));
-            return Ok((r.lines, r.failed));
-        }
-    };
-    r.check(
-        "Handshake",
-        ensure(!conn.borrow().name.is_empty(), || {
-            "the handshake names no provider".into()
-        }),
-    );
-    // How it is hosted (R-13b): which host ran it, what its manifest says
-    // it uses, and what dform.toml grants it.
-    if let Some(h) = &conn.borrow().hosting {
-        for l in h.grants.describe(h.manifest.as_ref()) {
-            r.lines.push(format!("host  {}: {l}", h.host));
-        }
-    }
-    let config = json!({
-        "schemas": [dir.join("schema.df").display().to_string()],
-        "world": dir.join("world.json").display().to_string(),
-        "inventory": dir.join("inventory.json").display().to_string(),
-        "chaos": [],
-    });
-    let configured = conn.configure(&config);
-    let ok = configured.is_ok();
-    // What it notes of its configuration (the credentials' form, their
-    // expiry, a right they lack), each a line under it.
-    let notes = configured.as_ref().cloned().unwrap_or_default();
-    r.check("Configure", configured.map(|_| ()));
-    r.lines
-        .extend(notes.into_iter().map(|n| format!("note  Configure: {n}")));
-    if !ok {
-        return Ok((r.lines, r.failed));
+impl Report {
+    /// The report's lines, and how many checks failed.
+    fn into_result(self) -> (Vec<String>, usize) {
+        (self.lines, self.failed)
     }
 
-    // Schema: the synthetic type, as facts the engine can read.
-    let schema = call::<pb::SchemaResponse>(&conn, pb::SchemaRequest::default()).and_then(|resp| {
-        let facts = resp
-            .facts
-            .iter()
-            .map(crate::ast::Atom::try_from)
-            .collect::<Result<Vec<_>>>()?;
-        Ok((Schema::from_facts(&facts)?, resp))
-    });
-    let (schema, resp) = match schema {
-        Ok(x) => x,
-        Err(e) => {
-            r.check("Schema", Err(e));
-            return Ok((r.lines, r.failed));
+    /// The provider started (`start`) and its handshake checked, and how
+    /// it is hosted (R-13b): which host ran it, what its manifest says it
+    /// uses, and what dform.toml grants it. `None` when it did not start.
+    fn connect(&mut self, start: impl FnOnce() -> Result<Link>) -> Option<Conn> {
+        let conn = match start() {
+            Ok(c) => Conn {
+                link: RefCell::new(c),
+                session: Cell::new(Session::NONE),
+            },
+            Err(e) => {
+                self.check("Handshake", Err(e));
+                return None;
+            }
+        };
+        self.check(
+            "Handshake",
+            ensure(!conn.borrow().name.is_empty(), || {
+                "the handshake names no provider".into()
+            }),
+        );
+        if let Some(h) = &conn.borrow().hosting {
+            for l in h.grants.describe(h.manifest.as_ref()) {
+                self.lines.push(format!("host  {}: {l}", h.host));
+            }
         }
-    };
-    // Every provider, whatever schema it serves (R-36): a type is named
-    // under the provider its `type_provider` row gives it.
-    r.check(
-        "Schema's types are named under the providers that serve them",
-        served_under(&schema),
-    );
-    let served = schema.class_of(TYPE, "id") == Some(NullClass::Fresh)
-        && schema.class_of(TYPE, "token") == Some(NullClass::Secret)
-        && schema.list_key(TYPE, "ports").is_some()
-        && schema.forces_new(TYPE, "zone");
-    let fixture = if served {
-        r.check("Schema serves the synthetic type", Ok(()));
-        Fixture::synthetic()
-    } else if !resp.examples.is_empty() {
-        match Fixture::examples(&schema, &resp.examples) {
+        Some(conn)
+    }
+
+    /// Configure, with the fixtures in `dir`: whether it was, and what
+    /// the provider notes of its configuration (the credentials' form,
+    /// their expiry, a right they lack), each a line under it.
+    fn configure(&mut self, conn: &Conn, dir: &Path) -> bool {
+        let config = json!({
+            "schemas": [dir.join("schema.df").display().to_string()],
+            "world": dir.join("world.json").display().to_string(),
+            "inventory": dir.join("inventory.json").display().to_string(),
+            "chaos": [],
+        });
+        let configured = conn.configure(&config);
+        let ok = configured.is_ok();
+        let notes = configured.as_ref().cloned().unwrap_or_default();
+        self.check("Configure", configured.map(|_| ()));
+        self.lines
+            .extend(notes.into_iter().map(|n| format!("note  Configure: {n}")));
+        ok
+    }
+
+    /// Schema: the provider's, as facts the engine can read, and its
+    /// answer; every type named under the provider that serves it (R-36).
+    fn schema(&mut self, conn: &Conn) -> Option<(Schema, pb::SchemaResponse)> {
+        let schema =
+            call::<pb::SchemaResponse>(conn, pb::SchemaRequest::default()).and_then(|resp| {
+                let facts = resp
+                    .facts
+                    .iter()
+                    .map(crate::ast::Atom::try_from)
+                    .collect::<Result<Vec<_>>>()?;
+                Ok((Schema::from_facts(&facts)?, resp))
+            });
+        let (schema, resp) = match schema {
+            Ok(x) => x,
+            Err(e) => {
+                self.check("Schema", Err(e));
+                return None;
+            }
+        };
+        self.check(
+            "Schema's types are named under the providers that serve them",
+            served_under(&schema),
+        );
+        Some((schema, resp))
+    }
+
+    /// What the resource checks run on: the synthetic type when the
+    /// schema serves it as configured, else the provider's own examples;
+    /// `None` when it offers neither.
+    fn fixture(
+        &mut self,
+        conn: &Conn,
+        schema: &Schema,
+        resp: &pb::SchemaResponse,
+    ) -> Option<Fixture> {
+        let served = schema.class_of(TYPE, "id") == Some(NullClass::Fresh)
+            && schema.class_of(TYPE, "token") == Some(NullClass::Secret)
+            && schema.list_key(TYPE, "ports").is_some()
+            && schema.forces_new(TYPE, "zone");
+        if served {
+            self.check("Schema serves the synthetic type", Ok(()));
+            return Some(Fixture::synthetic());
+        }
+        if resp.examples.is_empty() {
+            self.check(
+                "Schema serves the synthetic type",
+                Err(anyhow::anyhow!(
+                    "{TYPE} is not in the schema as configured (id fresh, token secret, ports \
+                     keyed by name, zone force_new), and the schema offers no examples of its \
+                     own types; the resource checks need one or the other"
+                )),
+            );
+            return None;
+        }
+        match Fixture::examples(schema, &resp.examples) {
             Ok(f) => {
-                r.check("Schema serves its own types, with examples", Ok(()));
+                self.check("Schema serves its own types, with examples", Ok(()));
                 let name = conn.borrow().name.clone();
-                r.check(
+                self.check(
                     &format!("Schema's types are named under the provider's name, {name}"),
-                    named_under(&name, &schema),
+                    named_under(&name, schema),
                 );
-                f
+                Some(f)
             }
             Err(e) => {
-                r.check("Schema's examples are documents of its types", Err(e));
-                return Ok((r.lines, r.failed));
+                self.check("Schema's examples are documents of its types", Err(e));
+                None
             }
         }
-    } else {
-        r.check(
-            "Schema serves the synthetic type",
-            Err(anyhow::anyhow!(
-                "{TYPE} is not in the schema as configured (id fresh, token secret, ports keyed \
-                 by name, zone force_new), and the schema offers no examples of its own types; \
-                 the resource checks need one or the other"
-            )),
-        );
-        return Ok((r.lines, r.failed));
-    };
+    }
 
-    // Query: bound inputs in, every matching row out, streamed.
-    if conn.borrow().has("fact") {
-        r.check(
+    /// Query: bound inputs in, every matching row out, streamed; skipped
+    /// without the `fact` capability.
+    fn queries(&mut self, conn: &Conn, resp: &pb::SchemaResponse) {
+        if !conn.borrow().has("fact") {
+            self.skip("Query", "no `fact` capability");
+            return;
+        }
+        self.check(
             "Schema declares the externs Query answers",
             ensure(
                 resp.externs.iter().any(|e| e.pred == "check.lookup"),
                 || "no extern check.lookup".into(),
             ),
         );
-        let q = |input: &str| {
-            call::<Vec<pb::Row>>(
-                &conn,
-                pb::QueryRequest {
-                    pred: "check.lookup".into(),
-                    input: vec![true, false],
-                    inputs: vec![pb::Value::from(&Value::Str(input.into()))],
-                    secret: Vec::new(),
-                    ..Default::default()
-                },
-            )
-            .and_then(|rows| {
-                rows.iter()
-                    .map(|row| row.values.iter().map(Value::try_from).collect())
-                    .collect::<Result<Vec<Vec<Value>>>>()
-            })
-        };
-        r.check(
+        self.check(
             "Query answers every row with the bound inputs",
-            q("a").and_then(|rows| {
+            lookup(conn, "a").and_then(|rows| {
                 let want = vec![
                     vec![Value::Str("a".into()), Value::Str("1".into())],
                     vec![Value::Str("a".into()), Value::Str("one".into())],
@@ -273,19 +308,29 @@ fn suite(start: impl FnOnce() -> Result<Link>, dir: &Path) -> Result<(Vec<String
                 ensure(rows == want, || format!("got {rows:?}"))
             }),
         );
-        r.check(
+        self.check(
             "Query with no match answers no row",
-            q("zzz").and_then(|rows| ensure(rows.is_empty(), || format!("got {rows:?}"))),
+            lookup(conn, "zzz")
+                .and_then(|rows| ensure(rows.is_empty(), || format!("got {rows:?}"))),
         );
-    } else {
-        r.skip("Query", "no `fact` capability");
     }
-    if !conn.borrow().has("resource") {
-        r.skip("Read, Plan, Apply, Import", "no `resource` capability");
-        return Ok((r.lines, r.failed));
-    }
-    resources(&conn, &mut r, &schema, &fixture);
-    Ok((r.lines, r.failed))
+}
+
+/// The rows `check.lookup` answers with `input` bound.
+fn lookup(conn: &Conn, input: &str) -> Result<Vec<Vec<Value>>> {
+    let rows = call::<Vec<pb::Row>>(
+        conn,
+        pb::QueryRequest {
+            pred: "check.lookup".into(),
+            input: vec![true, false],
+            inputs: vec![pb::Value::from(&Value::Str(input.into()))],
+            secret: Vec::new(),
+            ..Default::default()
+        },
+    )?;
+    rows.iter()
+        .map(|row| row.values.iter().map(Value::try_from).collect())
+        .collect()
 }
 
 /// A provider's name is its types' namespace (R-36): `use k8s` serves
@@ -624,32 +669,43 @@ impl Suite<'_> {
 
     /// Read of nothing; Plan: validation, the diff, requires_replace.
     fn plans(&self, r: &mut Report) {
-        let (conn, schema, f, typ, doc) = (self.conn, self.schema, self.f, self.typ, self.doc);
         r.check(
             "Read of an id nothing has answers not found",
-            read(conn, typ, "no-such-object")
+            read(self.conn, self.typ, "no-such-object")
                 .and_then(|o| ensure(o.is_none(), || format!("got {o:?}"))),
         );
+        self.plans_missing(r);
+        self.plans_create(r);
+        self.plans_keyed(r);
+        self.plans_sensitive(r);
+        self.plans_force_new(r);
+        self.plans_in_place(r);
+    }
 
-        // Plan: validation, the diff, requires_replace.
-        match &f.missing {
-            Some((t, d, path)) => r.check(
-                "Plan refuses a document without a required attribute",
-                match plan(conn, t, None, Some(d)) {
-                    Ok(_) => Err(anyhow::anyhow!("a document without `{path}` was planned")),
-                    Err(e) => ensure(format!("{e:#}").contains(path.as_str()), || {
-                        format!("the refusal does not name the attribute: {e:#}")
-                    }),
-                },
-            ),
-            None => r.skip(
-                "Plan refuses a document without a required attribute",
-                "no example names a required attribute",
-            ),
-        }
+    /// Plan refuses a document without a required attribute, naming it.
+    fn plans_missing(&self, r: &mut Report) {
+        let what = "Plan refuses a document without a required attribute";
+        let Some((t, d, path)) = &self.f.missing else {
+            r.skip(what, "no example names a required attribute");
+            return;
+        };
+        r.check(
+            what,
+            match plan(self.conn, t, None, Some(d)) {
+                Ok(_) => Err(anyhow::anyhow!("a document without `{path}` was planned")),
+                Err(e) => ensure(format!("{e:#}").contains(path.as_str()), || {
+                    format!("the refusal does not name the attribute: {e:#}")
+                }),
+            },
+        );
+    }
+
+    /// A create's Plan is every leaf of its document, and no replace.
+    fn plans_create(&self, r: &mut Report) {
+        let (schema, typ, doc) = (self.schema, self.typ, self.doc);
         r.check(
             "Plan of a create is every leaf, not a replace",
-            plan(conn, typ, None, Some(doc)).and_then(|p| {
+            plan(self.conn, typ, None, Some(doc)).and_then(|p| {
                 ensure(!p.requires_replace, || "a create requires replace".into())?;
                 let want: Vec<String> = diff(schema, typ, None, Some(doc))
                     .into_iter()
@@ -661,58 +717,71 @@ impl Suite<'_> {
                 })
             }),
         );
-        match &f.keyed {
-            Some((t, d, prefix)) => r.check(
-                "Plan spells a keyed list by key",
-                plan(conn, t, None, Some(d)).and_then(|p| {
-                    let paths: Vec<&str> = p.changes.iter().map(|c| c.path.as_str()).collect();
-                    let by_key = |x: &&str| {
-                        x.starts_with(prefix.as_str())
-                            && x[prefix.len()..]
-                                .split(']')
-                                .next()
-                                .is_some_and(|k| k.contains('='))
-                    };
-                    ensure(paths.iter().any(by_key), || {
-                        format!("a keyed list is not spelled by key: {paths:?}")
-                    })
-                }),
-            ),
-            None => r.skip(
-                "Plan spells a keyed list by key",
-                "no example sets a keyed list",
-            ),
-        }
-        match &f.sensitive {
-            Some((t, d, path)) => r.check(
-                "Plan marks a sensitive attribute sensitive",
-                plan(conn, t, None, Some(d)).and_then(|p| {
-                    ensure(
-                        p.changes.iter().any(|c| &c.path == path && c.sensitive),
-                        || format!("the sensitive {path} is not marked sensitive"),
-                    )
-                }),
-            ),
-            None => r.skip(
-                "Plan marks a sensitive attribute sensitive",
-                "no example sets a sensitive attribute",
-            ),
-        }
-        match &f.moved {
-            Some(moved) => r.check(
-                "Plan of a force_new change requires replace",
-                plan(conn, typ, Some(doc), Some(moved))
-                    .and_then(|p| ensure(p.requires_replace, || "zone is force_new".into())),
-            ),
-            None => r.skip(
-                "Plan of a force_new change requires replace",
-                "the examples change no force_new path",
-            ),
-        }
-        let renamed = &f.renamed;
+    }
+
+    /// Plan spells a keyed list's elements by their key.
+    fn plans_keyed(&self, r: &mut Report) {
+        let what = "Plan spells a keyed list by key";
+        let Some((t, d, prefix)) = &self.f.keyed else {
+            r.skip(what, "no example sets a keyed list");
+            return;
+        };
+        r.check(
+            what,
+            plan(self.conn, t, None, Some(d)).and_then(|p| {
+                let paths: Vec<&str> = p.changes.iter().map(|c| c.path.as_str()).collect();
+                let by_key = |x: &&str| {
+                    x.starts_with(prefix.as_str())
+                        && x[prefix.len()..]
+                            .split(']')
+                            .next()
+                            .is_some_and(|k| k.contains('='))
+                };
+                ensure(paths.iter().any(by_key), || {
+                    format!("a keyed list is not spelled by key: {paths:?}")
+                })
+            }),
+        );
+    }
+
+    /// Plan marks a sensitive attribute's change sensitive.
+    fn plans_sensitive(&self, r: &mut Report) {
+        let what = "Plan marks a sensitive attribute sensitive";
+        let Some((t, d, path)) = &self.f.sensitive else {
+            r.skip(what, "no example sets a sensitive attribute");
+            return;
+        };
+        r.check(
+            what,
+            plan(self.conn, t, None, Some(d)).and_then(|p| {
+                ensure(
+                    p.changes.iter().any(|c| &c.path == path && c.sensitive),
+                    || format!("the sensitive {path} is not marked sensitive"),
+                )
+            }),
+        );
+    }
+
+    /// A change of a `force_new` path requires replace.
+    fn plans_force_new(&self, r: &mut Report) {
+        let what = "Plan of a force_new change requires replace";
+        let Some(moved) = &self.f.moved else {
+            r.skip(what, "the examples change no force_new path");
+            return;
+        };
+        r.check(
+            what,
+            plan(self.conn, self.typ, Some(self.doc), Some(moved))
+                .and_then(|p| ensure(p.requires_replace, || "zone is force_new".into())),
+        );
+    }
+
+    /// An in-place change does not replace, and its changes are the diff.
+    fn plans_in_place(&self, r: &mut Report) {
+        let (schema, typ, doc, renamed) = (self.schema, self.typ, self.doc, &self.f.renamed);
         r.check(
             "Plan of an in-place change does not replace",
-            plan(conn, typ, Some(doc), Some(renamed)).and_then(|p| {
+            plan(self.conn, typ, Some(doc), Some(renamed)).and_then(|p| {
                 ensure(!p.requires_replace, || {
                     "an in-place change requires replace".into()
                 })?;
