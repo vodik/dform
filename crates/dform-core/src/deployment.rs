@@ -2338,15 +2338,6 @@ fn check(
     crate::refine::check(&l.program, schema)?;
     crate::inputs::check_literals(&l.program, &l.inputs)?;
     crate::types::check(&l.program, schema)?;
-    // Column types again, the attributes read into a column typed by the
-    // schema (R-34).
-    crate::infer::infer(
-        &l.program,
-        &l.extern_fns,
-        &l.inputs,
-        &l.declared,
-        Some(schema),
-    )?;
     for (at, n) in transform::computed_reads(&l.program.statements, schema) {
         obs.note(Note::Computed(at, n));
     }

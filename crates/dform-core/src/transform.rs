@@ -23,8 +23,6 @@ pub struct Lowered {
     pub secret_outputs: Vec<(String, String)>,
     /// Every output declared with a type, by (scope, name).
     pub output_types: std::collections::BTreeMap<(String, String), crate::ast::TypeExpr>,
-    /// The source program's `decl`s, for the pass with a schema.
-    pub declared: crate::infer::Declared,
 }
 
 /// `secret_cell(Type, Scope, Key)`: an input or output declared
@@ -55,7 +53,6 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     // `type` blocks: their refinements (`crate::refine`).
     let program = &crate::refine::lower_types(program)?;
     reject_pending(&program.statements)?;
-    let declared = crate::infer::Declared::of(program);
     let program = apply_decls(program)?;
     // In the future, imports should be handled in a loader before parsing.
     // For now, keep Import statements in the AST but drop them before eval.
@@ -66,7 +63,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
         output_types,
     } = crate::modules::expand(&program)?;
     check_mixed(&expanded)?;
-    let (expanded, externs, extern_fns) = drop_metadata(&expanded);
+    let (expanded, externs, mut extern_fns) = drop_metadata(&expanded);
     let expanded = desugar_resources(&expanded)?;
     let expanded = desugar_comprehensions(&expanded)?;
     let mut expanded = declassified(lower_contributions(&expanded)?);
@@ -96,10 +93,6 @@ pub fn lower(program: &Program) -> Result<Lowered> {
             vec![str_term(typ), str_term(scope), str_term(key)],
         )));
     }
-    // Column types (R-34): checked; what they settle as is the readings'
-    // (`types::read`).
-    crate::infer::infer(&expanded, &extern_fns, &inputs, &declared, None)?;
-    let mut extern_fns = extern_fns;
     // A file of given secrets' values are secrets from the first byte
     // (R-108): never recorded in the clear.
     crate::tables::seal_columns(&mut extern_fns);
@@ -110,7 +103,6 @@ pub fn lower(program: &Program) -> Result<Lowered> {
         extern_fns,
         secret_outputs,
         output_types,
-        declared,
     })
 }
 

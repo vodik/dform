@@ -144,13 +144,6 @@ impl<'a> Space<'a> {
         crate::secrets::check(&lowered, backend.schema(), &Default::default())?;
         crate::refine::check(&lowered.program, backend.schema())?;
         crate::inputs::check_literals(&lowered.program, &lowered.inputs)?;
-        crate::infer::infer(
-            &lowered.program,
-            &lowered.extern_fns,
-            &lowered.inputs,
-            &lowered.declared,
-            Some(backend.schema()),
-        )?;
         let keys = lowered
             .inputs
             .iter()

@@ -90,8 +90,8 @@ fn every_program_lowers() {
 /// What checking a file prints: its diagnostics, one per line group.
 fn check(name: &str, src: &str) -> String {
     let err = match dform::parser::parse_file(name, src) {
-        Ok(program) => match dform::transform::lower(&program) {
-            Ok(_) => return "ok\n".to_string(),
+        Ok(program) => match checked(&program) {
+            Ok(()) => return "ok\n".to_string(),
             Err(e) => e,
         },
         Err(e) => e,
@@ -99,13 +99,22 @@ fn check(name: &str, src: &str) -> String {
     dform::diag::report(&err, false)
 }
 
+/// What a program says is wrong before it is evaluated: its lowering's
+/// errors, then its readings' (R-192, R-34: its column types), with no
+/// provider's schema.
+fn checked(program: &dform::ast::Program) -> anyhow::Result<()> {
+    dform::transform::lower(program)?;
+    dform::types::read(program, &Default::default())?;
+    Ok(())
+}
+
 /// What loading a project's stack prints (an error case that is a
 /// directory, `tests/syntax/err/NAME/`, a project): the program of its
 /// `stacks/main.df`, with the modules its paths name.
 fn check_project(dir: &Path) -> String {
     let err = match dform::loader::load_program(&[dir.join("stacks/main.df")]) {
-        Ok(program) => match dform::transform::lower(&program) {
-            Ok(_) => return "ok\n".to_string(),
+        Ok(program) => match checked(&program) {
+            Ok(()) => return "ok\n".to_string(),
             Err(e) => e,
         },
         Err(e) => e,

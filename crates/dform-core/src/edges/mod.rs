@@ -25,16 +25,24 @@
 //!    give a node a type, and every literal (a site) at its node and path.
 //! 2. Ask, for each site, the types the edges its node reaches give its
 //!    path, through the links both ways.
-//! 3. Read the literal at the one type they agree on, the reading its
-//!    node's (no statement is rewritten: `lower` writes it); two types are
-//!    an error naming both edges; a quantity no edge types (`100m`) in a
-//!    let is an error naming the let and what would type it.
+//! 3. Settle each relation's columns (R-34, [`columns`]): the type the
+//!    edges that type a column give it, its literals' kind, what flows
+//!    into a cell; and judge the uses ([`checks`]). What is wrong is said
+//!    first, and alone.
+//! 4. Read the literal at the one type they agree on, the reading its
+//!    node's (no statement is rewritten: `lower` writes it), and a
+//!    relation's argument at its column's type in turn; two types are an
+//!    error naming both edges; a quantity no edge types (`100m`) in a let
+//!    is an error naming the let and what would type it.
 //!
-//! Only the types read from a literal take part (a quantity, a time, a
-//! value type read from a string: `inet`, `ip`, `uri`, `oci`, `semver`, a
-//! range): a `string` position takes any of them as its text (R-133).
+//! Only the types read from a literal take part in a reading (a quantity,
+//! a time, a value type read from a string: `inet`, `ip`, `uri`, `oci`,
+//! `semver`, a range): a `string` position takes any of them as its text
+//! (R-133). A column takes every type.
 
+mod checks;
 mod columns;
+pub(crate) mod lattice;
 mod shape;
 mod sites;
 mod walk;
@@ -46,6 +54,7 @@ use crate::infer::Signatures;
 use crate::schema::Schema;
 use crate::types::{self, Ty};
 use crate::value::Value;
+use checks::Checks;
 use columns::Typing;
 use shape::{Edge, Path, Role, Shape};
 use sites::{Holder, Reading, Site};
@@ -89,6 +98,8 @@ struct Graph<'a> {
     diags: Vec<Diagnostic>,
     /// What the columns' types are settled from (R-34).
     typing: Typing,
+    /// What the columns' types judge (R-34).
+    checks: Checks,
 }
 
 /// Where a term is placed: its scope, the span of what holds it, what it
@@ -98,6 +109,9 @@ struct Graph<'a> {
 struct At {
     scope: ScopeId,
     span: Span,
+    /// The atom the term is an argument of, else `span`: where a check
+    /// says what is wrong of it (R-34).
+    atom: Span,
     holder: Option<Holder>,
     sites: bool,
 }
@@ -120,6 +134,7 @@ impl<'a> Graph<'a> {
             read: Readings::new(),
             diags: Vec::new(),
             typing: Typing::default(),
+            checks: Checks::default(),
         }
     }
 
@@ -376,6 +391,15 @@ pub fn read_nodes(program: &prog::Program, schema: &Schema) -> Read {
     g.program(&mut stmts, root);
     let readings = g.readings();
     let columns = g.columns(&readings);
+    // What the columns' types say is wrong is said first, and alone: the
+    // readings of a program whose columns do not settle say nothing more.
+    if !columns.diags.is_empty() {
+        return Read {
+            readings: Readings::new(),
+            signatures: columns.signatures,
+            diags: columns.diags,
+        };
+    }
     let mut g = Graph::new(schema, scopes);
     g.declarations(&stmts, root);
     g.readings = Some(readings);

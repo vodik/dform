@@ -4016,9 +4016,12 @@ one run rewrites a file of the old spelling.
     gives `az(string, int)`, a rule's head takes its body's columns, a
     function's parameter or an attribute read types the column it reads,
     and `input p from FORMAT("path")` takes its first document's columns.
-    Uses that disagree are a compile error naming both, a string literal
-    is read as its column's type (`"10.0.0.0/8"` in a column
-    `inet.subnet` reads), and `n + 1` on a column of strings is an
+    Types are settled once, with the providers' schemas, per definition:
+    a component's relation has one signature however many copies there
+    are, so two copies that give it two kinds of value are an error
+    naming both. Uses that disagree are a compile error naming both, a
+    string literal is read as its column's type (`"10.0.0.0/8"` in a
+    column `inet.subnet` reads), and `n + 1` on a column of strings is an
     error, not a silent non-match; a column declared `any` takes every
     type. The editor's hover prints the signature.
   - A `decl` of a relation no rule defines declares one a provider feeds

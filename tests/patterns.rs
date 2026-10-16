@@ -62,11 +62,14 @@ untiered(l) where labels(l), not ("tier", _) in l
     assert_eq!(facts(src, "untiered"), [r#"untiered({app = "web"})"#]);
 }
 
-/// What lowering a program file reports.
+/// What lowering and reading a program file reports (its column types
+/// are settled with the readings, R-192).
 fn lower_error(src: &str) -> String {
     let p = parse_file("t.df", &format!("\n{src}")).unwrap_or_else(|e| panic!("{e:#}"));
-    match dform_core::transform::lower(&p) {
-        Ok(_) => panic!("lowers: {src}"),
+    let read = dform_core::transform::lower(&p)
+        .and_then(|_| dform_core::types::read(&p, &Default::default()));
+    match read {
+        Ok(_) => panic!("lowers and reads: {src}"),
         Err(e) => format!("{e:#}"),
     }
 }

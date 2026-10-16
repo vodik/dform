@@ -7,6 +7,13 @@ fn run(src: &str) -> Result<(EvalResult, Vec<String>)> {
     eval(&program, &[])
 }
 
+/// [`run`], the program read first as an evaluation reads it (R-192, its
+/// column types settled, R-34), with no provider's schema.
+fn read_run(src: &str) -> Result<(EvalResult, Vec<String>)> {
+    let program = crate::parser::parse_program(src)?;
+    eval(&crate::types::read(&program, &Default::default())?, &[])
+}
+
 fn facts_of(r: &EvalResult, pred: &str) -> Vec<String> {
     r.facts
         .iter()
@@ -555,11 +562,11 @@ fn extern_and_provider_predicates_are_defined() {
 #[test]
 fn coercion_is_explicit() {
     // A column of strings in arithmetic is a compile error (R-34).
-    let err = run("s(\"10\")\nn(x) where s(s), x = s + 1")
+    let err = read_run("s(\"10\")\nn(x) where s(s), x = s + 1")
         .unwrap_err()
         .to_string();
     assert!(err.contains("`s + 1`: `s` is string"), "{err}");
-    let err = run("n(x) where x = int.trunc(\"abc\") + 1")
+    let err = read_run("n(x) where x = int.trunc(\"abc\") + 1")
         .unwrap_err()
         .to_string();
     assert!(

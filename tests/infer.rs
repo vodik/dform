@@ -9,7 +9,6 @@ use crate::common;
 use common::Scratch;
 use dform::parser::parse_file;
 use dform::spell;
-use dform::transform;
 
 fn program(src: &str) -> String {
     format!("\n{src}")
@@ -29,11 +28,12 @@ fn signatures(src: &str) -> Vec<String> {
     nodes.signatures.values().map(|s| s.to_string()).collect()
 }
 
-/// What lowering `src` reports.
+/// What reading `src` reports: the column types are settled with the
+/// readings (R-192), with no provider's schema here.
 fn error(src: &str) -> String {
     let p = parse_file("t.df", &program(src)).unwrap_or_else(|e| panic!("{e:#}"));
-    match transform::lower(&p) {
-        Ok(_) => panic!("lowers: {src}"),
+    match dform::types::read(&p, &Default::default()) {
+        Ok(_) => panic!("reads: {src}"),
         Err(e) => format!("{e:#}"),
     }
 }
@@ -294,4 +294,20 @@ fn a_components_relation_has_its_definitions_signature() {
         .map(spell::atom)
         .collect();
     assert_eq!(hosts, ["a::seen(10.0.0.1)", "b::seen(10.0.0.1)"]);
+}
+
+/// Columns are per definition (R-211): two copies of a component that
+/// give its relation literals of two kinds are an error naming both
+/// copies' rows.
+#[test]
+fn two_copies_of_two_kinds_in_one_column_name_both() {
+    let e = error(
+        "component c {\n  input p\n  q(x) where p(x)\n}\n\
+         resource c a { p(1) }\nresource c b { p(\"x\") }\n",
+    );
+    assert!(
+        e.contains("t.df:6:16: `q`'s column `x` holds the int 1 here and strings elsewhere"),
+        "{e}"
+    );
+    assert!(e.contains("t.df:7:16: the string \"x\" here"), "{e}");
 }
