@@ -54,6 +54,10 @@
 //!                                     % prefix_len_le(N), prefix_len_ge(N),
 //!                                     % enum([..]), regex(S), len_le(N),
 //!                                     % len_ge(N); carried as its text
+//!   type_open(T).                     % optional: T takes attributes its
+//!                                     % rows do not list (the fake's), so
+//!                                     % a read of one is not checked:
+//!                                     % [`TYPE_OPEN`]
 //!
 //! The facts are injected into the program as EDB (so `dform query type_attr`
 //! lists them) and folded into [`Schema`], the in-memory view the partition
@@ -415,6 +419,14 @@ pub const TYPE_LIFECYCLE: &str = "type_lifecycle";
 /// that made it).
 pub const TYPE_CREATED_ONCE: &str = "type_created_once";
 
+/// `type_open(T)`: `T`'s provider takes attributes its `type_attr` rows do
+/// not list, as the fake provider does, so a program may read one no
+/// block of it writes (a policy pack's, over every stack's resources).
+/// Without it a type's attributes are the ones its provider declares
+/// and the ones the program writes: a read of any other never has a value
+/// and is an error at its site (`types::reads`).
+pub const TYPE_OPEN: &str = "type_open";
+
 /// The words a type's lifecycle may be: removal destroys the object (the
 /// default), or forgets it and leaves it in the world.
 pub const SEEDED: [&str; 2] = ["destroy", "retain"];
@@ -652,6 +664,15 @@ impl Schema {
                     .map(|((_, p), _)| p.clone()),
             )
             .collect()
+    }
+
+    /// Whether `typ` takes attributes its schema does not list
+    /// ([`TYPE_OPEN`]).
+    pub fn is_open(&self, typ: &str) -> bool {
+        self.facts.iter().any(|f| {
+            f.pred == TYPE_OPEN
+                && matches!(f.args.as_slice(), [Term::Val(Value::Str(t))] if t == typ)
+        })
     }
 
     pub fn knows_type(&self, typ: &str) -> bool {
@@ -1185,7 +1206,7 @@ impl Schema {
 }
 
 /// Schema predicates with a row per type (the type in the first column).
-pub const PER_TYPE: [&str; 12] = [
+pub const PER_TYPE: [&str; 13] = [
     "type_attr",
     "type_doc",
     "type_list_key",
@@ -1198,6 +1219,7 @@ pub const PER_TYPE: [&str; 12] = [
     "type_lookup",
     TYPE_CREATED_ONCE,
     crate::refine::TYPE_REFINE,
+    TYPE_OPEN,
 ];
 
 /// Whether `pred` is a schema predicate: a read of it sees the whole schema.

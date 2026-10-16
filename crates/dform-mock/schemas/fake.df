@@ -24,6 +24,21 @@ type_provider(k8s.nodepool, "fakecloud")
 type_provider("iam.role", "fakecloud")
 type_provider("iam.policy", "fakecloud")
 
+# What a program sets is not listed (above), so every type is open: a
+# read of an attribute this file does not list is not checked
+# (`type_open`).
+type_open(net.vpc)
+type_open(net.subnet)
+type_open(net.vpc_peering)
+type_open(net.peering)
+type_open(net.route_table)
+type_open(compute.vm)
+type_open("db.postgres")
+type_open(k8s.cluster)
+type_open(k8s.nodepool)
+type_open("iam.role")
+type_open("iam.policy")
+
 type_attr(net.vpc, "id", "string", ["computed", "id"])
 type_attr(net.subnet, "id", "string", ["computed", "id"])
 type_attr(net.vpc_peering, "id", "string", ["computed", "id"])

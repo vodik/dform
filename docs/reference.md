@@ -1248,6 +1248,7 @@ type_lookup(ovh.instance, ["name", "region"])               # optional: what a C
 type_created_once(ovh.s3_credential, "secret")              # optional: a computed value the create answers and no Read after it
 type_lifecycle(tailscale.device, "retain")                  # optional: what removal from the program means (destroy default)
 type_doc(net.vpc, "cidr", "The network's IPv4 range.")      # optional: a path's description ("" the type's)
+type_open(net.vpc)                                          # optional: it takes attributes its rows do not list (the fake's)
 extern_decl("ovh.image", "+region, -name, -id, -distribution")  # a data source, no `extern` line needed
 ```
 
@@ -1269,6 +1270,16 @@ plan names, and a key is rotated by making another object. Who has the
 bytes after the create is the provider's: OVH's API answers an S3
 secret again by a call of its own, which Reveal makes; where nothing
 does (a Tailscale auth key), only the run that made it can reveal it.
+
+A type's attributes are the ones its provider declares and the ones the
+program writes. A read of any other (`backup_key.s3_access_key` after
+the provider renamed it `access`) never has a value, so plan, apply and
+`dform test` refuse it at the read, naming the type and the attribute;
+the help is the declared attribute it is nearest, else the type's
+attributes. A `type_open` type takes attributes its rows do not list, as
+every type of the `fake` schema does, and a read of one is not checked;
+nor is one of a type its schema declares nothing of (a component, a kind
+a cluster defines).
 
 Built-in mock schemas: `fake` (the demo's), `gke` (gke_platform.df), `k8s` (fifteen
 Kubernetes kinds; try `cargo run -- -C tests/fixtures/k8s plan`)

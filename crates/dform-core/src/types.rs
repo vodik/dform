@@ -40,6 +40,8 @@ use crate::value::Value;
 use anyhow::Result;
 use std::collections::BTreeMap;
 
+mod reads;
+
 /// The internal function a quantity literal with no reading of its own
 /// lowers to (`500m`, `2.5m`): the position's type reads it.
 pub const AMBIGUOUS: &str = "__quantity";
@@ -1926,7 +1928,8 @@ fn object_parts(parts: &[ObjPart]) -> Vec<Result<BTreeMap<&str, ExprId>, ExprId>
 /// What every literal of the program's nodes is read as, now the schema
 /// is known (R-66, R-62, R-134, R-192, R-34): each node's reading, every
 /// relation's signature, and the errors but those of what no position
-/// reads ([`read`]).
+/// reads ([`read`]), a read of an attribute its type does not have
+/// ([`reads`]) among them.
 pub fn readings(program: &prog::Program, schema: &Schema) -> Read {
     if !program.diags.is_empty() {
         return Read {
@@ -1942,6 +1945,7 @@ pub fn readings(program: &prog::Program, schema: &Schema) -> Read {
         diags: Vec::new(),
     };
     r.items(&program.roots);
+    r.diags.extend(reads::undeclared(program, schema));
     let edges = crate::edges::read_nodes(program, schema);
     r.read.extend(edges.readings);
     r.diags.extend(edges.diags);
@@ -2159,7 +2163,7 @@ mod tests {
     }
 
     /// The nodes `src` builds to, as a stack's file.
-    fn nodes(src: &str) -> prog::Program {
+    pub(super) fn nodes(src: &str) -> prog::Program {
         use crate::syntax::resolve::{Mode, Unit, lower_stack};
         let file = crate::diag::add_source("readings.df", src);
         let parse = crate::syntax::parser::parse(src);
