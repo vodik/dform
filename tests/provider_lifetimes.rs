@@ -6,7 +6,7 @@
 
 use crate::common;
 use common::Scratch;
-use dform::plugin::backend::CallError;
+use dform::plugin::backend::{CallError, Session};
 use dform::plugin::pb;
 use dform::plugin::policy::Policy;
 use dform::plugin::wire;
@@ -112,20 +112,18 @@ fn a_link_dropped_with_a_call_stuck_stops_its_provider() {
         "inventory": s.path("i.json").display().to_string(),
         "chaos": ["delay=net.vpc[\"a\"]:30000"],
     });
-    let _: pb::ConfigureResponse = link
-        .call(pb::ConfigureRequest {
-            config: Some(wire::doc(&config)),
+    let session = link.configure(Session::NONE, wire::doc(&config)).unwrap();
+    let t = link.submit(
+        Session(session.session),
+        pb::ApplyRequest {
+            op: pb::Op::Create as i32,
+            r#type: "net.vpc".into(),
+            name: "a".into(),
+            config: Some(wire::doc(&json!({ "cidr": "10.0.0.0/16" }))),
+            idempotency_key: "k".into(),
             ..Default::default()
-        })
-        .unwrap();
-    let t = link.submit(pb::ApplyRequest {
-        op: pb::Op::Create as i32,
-        r#type: "net.vpc".into(),
-        name: "a".into(),
-        config: Some(wire::doc(&json!({ "cidr": "10.0.0.0/16" }))),
-        idempotency_key: "k".into(),
-        ..Default::default()
-    });
+        },
+    );
     let r = link.wait(t);
     assert!(
         matches!(&r, Err(CallError::MaybeApplied(m)) if m.contains("within 200ms")),

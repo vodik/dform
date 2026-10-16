@@ -1,4 +1,6 @@
-//! One started provider: its handshake, and calls to it. A blocking call
+//! One started provider: its handshake, its sessions' Configures, and calls
+//! to it, each in the session it names ([`Session`]: the configured
+//! instance it is made in; one link serves several). A blocking call
 //! is a submit and a wait for its own ticket; an answer to another call
 //! that arrives meanwhile (an Apply in flight) is kept for whoever waits
 //! for it, and so is an event a call in flight sends meanwhile
@@ -7,7 +9,7 @@
 //! (R-81, [`super::policy`]); an Apply is the executor's to retry
 //! (`providers::Tick`).
 
-use super::backend::{BUILD, BUILT_IN, Call, CallError, Provider, Reply, Ticket, VERSION};
+use super::backend::{BUILD, BUILT_IN, Call, CallError, Provider, Reply, Session, Ticket, VERSION};
 use super::pb;
 use super::policy::{self, Class, Policy};
 use super::timed::Timed;
@@ -25,6 +27,8 @@ pub struct Link {
     /// The types its handshake says it answers Health for (R-203), as
     /// the provider names them.
     pub health: Vec<String>,
+    /// Its build, as its handshake gave it.
+    pub version: String,
     /// What was started, for messages.
     pub program: String,
     /// How the launcher hosted it, for `provider check` (R-13b).
@@ -116,6 +120,7 @@ impl Link {
             capabilities: Vec::new(),
             settings: Vec::new(),
             health: Vec::new(),
+            version: String::new(),
             backend: Timed::new(program.clone(), backend, policy.timeout),
             program,
             hosting: None,
@@ -130,9 +135,12 @@ impl Link {
             names: Default::default(),
             answers: BTreeMap::new(),
         };
-        let hs: pb::HandshakeResponse = link.call(pb::HandshakeRequest {
-            protocol_version: VERSION,
-        })?;
+        let hs: pb::HandshakeResponse = link.call(
+            Session::NONE,
+            pb::HandshakeRequest {
+                protocol_version: VERSION,
+            },
+        )?;
         if hs.protocol_version != VERSION {
             bail!(
                 "provider {} speaks protocol version {}; this dform speaks {VERSION}",
@@ -145,6 +153,7 @@ impl Link {
         link.name = hs.name;
         link.capabilities = hs.capabilities;
         link.health = hs.health;
+        link.version = hs.version;
         link.settings = hs
             .settings
             .into_iter()
@@ -216,8 +225,9 @@ impl Link {
         self.names = (out.inverse(), out);
     }
 
-    pub fn submit(&mut self, call: impl Into<Call>) -> Ticket {
-        let call = call.into();
+    /// Start `call` in `session`.
+    pub fn submit(&mut self, session: Session, call: impl Into<Call>) -> Ticket {
+        let call = call.into().in_session(session);
         let answered = match self.names.1.is_empty() {
             true => None,
             false => super::wire::Names::answered_by(&call),
@@ -311,15 +321,15 @@ impl Link {
     /// retried with backoff, up to the policy's budget: a transient
     /// refusal, and a timeout of a call that changes nothing (not an
     /// Apply, whose retries are the executor's).
-    pub fn try_call<R>(&mut self, call: impl Into<Call>) -> Result<R, CallError>
+    pub fn try_call<R>(&mut self, session: Session, call: impl Into<Call>) -> Result<R, CallError>
     where
         R: TryFrom<Reply, Error = Reply>,
     {
-        let call = call.into();
+        let call = call.into().in_session(session);
         let method = call.method();
         let mut attempt = 0;
         loop {
-            let t = self.submit(call.clone());
+            let t = self.submit(session, call.clone());
             let e = match self.wait(t) {
                 Ok(reply) => return self.expect(method, reply),
                 Err(e) => e,
@@ -355,11 +365,46 @@ impl Link {
     }
 
     /// One call; any failure is an error carrying the provider's message.
-    pub fn call<R>(&mut self, call: impl Into<Call>) -> Result<R>
+    pub fn call<R>(&mut self, session: Session, call: impl Into<Call>) -> Result<R>
     where
         R: TryFrom<Reply, Error = Reply>,
     {
-        self.try_call(call).map_err(anyhow::Error::new)
+        self.try_call(session, call).map_err(anyhow::Error::new)
+    }
+
+    /// Configure `session` (none: open one) with `config`: its answer, which
+    /// names the session configured. A provider that answers none, or
+    /// another than the one named, is refused, naming it and its build.
+    pub fn configure(
+        &mut self,
+        session: Session,
+        config: pb::Value,
+    ) -> Result<pb::ConfigureResponse> {
+        let r: pb::ConfigureResponse = self.call(
+            session,
+            pb::ConfigureRequest {
+                config: Some(config),
+                session: session.0,
+            },
+        )?;
+        let answered = Session(r.session);
+        if answered == Session::NONE || (session != Session::NONE && answered != session) {
+            let said = match answered {
+                Session::NONE => "no session".to_string(),
+                s => format!("session {s} for session {session}"),
+            };
+            bail!(
+                "provider {} ({} {}) answered its Configure with {said}: it was built \
+                 before sessions; rebuild it",
+                self.program,
+                self.name_or_program(),
+                match self.version.as_str() {
+                    "" => "of no version",
+                    v => v,
+                },
+            );
+        }
+        Ok(r)
     }
 
     /// `reply`, as the answer to a `method` call.
@@ -471,17 +516,61 @@ mod tests {
             l
         };
         let mut l = link(2);
-        let r: Result<pb::ReadResponse, _> = l.try_call(pb::ReadRequest::default());
+        let r: Result<pb::ReadResponse, _> = l.try_call(Session(1), pb::ReadRequest::default());
         assert!(r.is_ok(), "{r:?}");
         let retries = l.take_retries();
         assert_eq!(retries.len(), 2);
         assert_eq!((retries[1].attempt, retries[1].of), (2, 2));
         assert_eq!(retries[1].call, "Read");
         let mut l = link(3);
-        let r: Result<pb::ReadResponse, _> = l.try_call(pb::ReadRequest::default());
+        let r: Result<pb::ReadResponse, _> = l.try_call(Session(1), pb::ReadRequest::default());
         assert_eq!(
             r.unwrap_err().to_string(),
             "read x: Too Many Requests (429) (gave up after 2 retries)"
+        );
+    }
+
+    /// A provider built before sessions: its Configure answers none.
+    struct Old(Vec<(Ticket, Call)>);
+
+    impl Provider for Old {
+        fn submit(&mut self, call: Call) -> Ticket {
+            let t = Ticket(self.0.len() as u64);
+            self.0.push((t, call));
+            t
+        }
+
+        fn next_completed(
+            &mut self,
+            _: &mut dyn FnMut(Ticket, pb::Event),
+        ) -> (Ticket, Result<Reply, CallError>) {
+            let (t, call) = self.0.pop().expect("a call in flight");
+            let reply = match call {
+                Call::Handshake(_) => Reply::Handshake(pb::HandshakeResponse {
+                    protocol_version: VERSION,
+                    name: "acme".into(),
+                    version: "1.0.0".into(),
+                    ..Default::default()
+                }),
+                _ => Reply::Configure(pb::ConfigureResponse::default()),
+            };
+            (t, Ok(reply))
+        }
+    }
+
+    /// A provider whose Configure answers no session is refused, naming
+    /// it and its build: no call of a deployment goes to it unnamed.
+    #[test]
+    fn a_provider_that_answers_no_session_is_refused() {
+        let mut l = Link::start("prov", Box::new(Old(Vec::new()))).unwrap();
+        let e = l
+            .configure(Session::NONE, pb::Value::default())
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            e,
+            "provider prov (acme 1.0.0) answered its Configure with no session: it was built \
+             before sessions; rebuild it"
         );
     }
 }

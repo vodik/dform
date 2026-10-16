@@ -1,7 +1,8 @@
-//! The host's pacing of a provider's requests: one window per bucket
-//! (the limit a request counts against, in the provider's word:
-//! `HttpRequest::bucket`; none is the provider's default bucket), and
-//! no declared rates. A window is how many of a bucket's requests may be
+//! The host's pacing of a provider's requests: one window per session
+//! and bucket (the configured instance the request's call is made in, its
+//! own account or region: `HttpRequest::session`; and the limit it counts
+//! against, in the provider's word: `HttpRequest::bucket`, none the
+//! default bucket), and no declared rates. A window is how many of a bucket's requests may be
 //! in flight at once. It starts small and grows while the server answers
 //! (by one for each answer until the first throttle, so it doubles each
 //! round trip; then by one each window's worth of answers), and halves
@@ -15,6 +16,7 @@
 //! `ratelimit.wait` span. [`CEILING`] bounds a window whatever the
 //! server says: a safety ceiling, not a rate.
 
+use dform_core::plugin::backend::Session;
 use dform_core::plugin::host::{Class, Error, HttpResponse};
 use std::collections::BTreeMap;
 use std::sync::{Condvar, Mutex, MutexGuard};
@@ -29,13 +31,16 @@ const FIRST: f64 = 2.0;
 /// The longest pause a `Retry-After` is taken for.
 const LONGEST_PAUSE: Duration = Duration::from_secs(300);
 
-/// The buckets, locked.
-type Buckets<'a> = MutexGuard<'a, BTreeMap<String, Bucket>>;
+/// A bucket: the session of its requests' calls, and its name.
+type Key = (Session, String);
 
-/// One provider's buckets.
+/// The buckets, locked.
+type Buckets<'a> = MutexGuard<'a, BTreeMap<Key, Bucket>>;
+
+/// One provider's buckets, each session's apart.
 pub struct Limiter {
     provider: String,
-    buckets: Mutex<BTreeMap<String, Bucket>>,
+    buckets: Mutex<BTreeMap<Key, Bucket>>,
     turn: Condvar,
 }
 
@@ -138,7 +143,7 @@ fn retry_after(v: &str) -> Option<Duration> {
 /// A request admitted to its bucket's window, until it is dropped.
 pub struct Permit<'a> {
     limiter: &'a Limiter,
-    bucket: String,
+    bucket: Key,
 }
 
 impl Limiter {
@@ -155,10 +160,10 @@ impl Limiter {
         self.buckets.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Wait until a request of `bucket` may be sent: its turn in the
-    /// queue, a place in the window, the bucket not paused.
-    pub fn acquire(&self, bucket: Option<&str>) -> Permit<'_> {
-        let name = bucket.unwrap_or_default().to_string();
+    /// Wait until a request of `session`'s `bucket` may be sent: its turn
+    /// in the queue, a place in the window, the bucket not paused.
+    pub fn acquire(&self, session: Session, bucket: Option<&str>) -> Permit<'_> {
+        let name = (session, bucket.unwrap_or_default().to_string());
         let mut buckets = self.buckets();
         let b = buckets.entry(name.clone()).or_insert_with(Bucket::new);
         let place = b.queue();
@@ -175,7 +180,8 @@ impl Limiter {
     }
 
     /// Wait until `place` in the queue of the bucket `name` is admitted:
-    /// a `ratelimit.wait` span, with `queued` (the requests before it) and
+    /// a `ratelimit.wait` span, with its `session` and `bucket`, `queued`
+    /// (the requests before it) and
     /// `window` (how many may be in flight). A thread of the host's has no
     /// span of its own: the wait is the run's.
     #[tracing::instrument(
@@ -187,12 +193,13 @@ impl Limiter {
         fields(
             otel.name = %format_args!("{} waits on its window", self.provider),
             provider = self.provider.as_str(),
-            bucket = name,
+            session = name.0.0,
+            bucket = name.1.as_str(),
             queued = buckets[name].before(place),
             window = buckets[name].size(),
         )
     )]
-    fn wait<'a>(&'a self, mut buckets: Buckets<'a>, name: &str, place: u64) -> Buckets<'a> {
+    fn wait<'a>(&'a self, mut buckets: Buckets<'a>, name: &Key, place: u64) -> Buckets<'a> {
         loop {
             let now = Instant::now();
             let b = buckets.get_mut(name).expect("queued before it waits");
@@ -211,10 +218,11 @@ impl Limiter {
         }
     }
 
-    /// The window of `bucket` now, and whether it is paused (tests).
-    pub fn window(&self, bucket: Option<&str>) -> (usize, bool) {
+    /// The window of `session`'s `bucket` now, and whether it is paused
+    /// (tests).
+    pub fn window(&self, session: Session, bucket: Option<&str>) -> (usize, bool) {
         let buckets = self.buckets();
-        match buckets.get(bucket.unwrap_or_default()) {
+        match buckets.get(&(session, bucket.unwrap_or_default().to_string())) {
             Some(b) => (b.size(), b.paused.is_some_and(|p| p > Instant::now())),
             None => (FIRST as usize, false),
         }
@@ -242,6 +250,7 @@ impl Drop for Permit<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const NONE: Session = Session::NONE;
     use std::sync::Arc;
 
     fn status(s: u16, headers: &[(&str, &str)]) -> Result<HttpResponse, Error> {
@@ -261,49 +270,52 @@ mod tests {
     #[test]
     fn a_window_grows_on_answers_and_halves_on_a_throttle() {
         let l = Limiter::new("p");
-        assert_eq!(l.window(None), (2, false));
+        assert_eq!(l.window(NONE, None), (2, false));
         for _ in 0..6 {
-            l.acquire(None).answered(&status(200, &[]));
+            l.acquire(NONE, None).answered(&status(200, &[]));
         }
-        assert_eq!(l.window(None).0, 8);
-        l.acquire(None).answered(&status(429, &[]));
-        assert_eq!(l.window(None).0, 4);
+        assert_eq!(l.window(NONE, None).0, 8);
+        l.acquire(NONE, None).answered(&status(429, &[]));
+        assert_eq!(l.window(NONE, None).0, 4);
         for _ in 0..4 {
-            l.acquire(None).answered(&status(200, &[]));
+            l.acquire(NONE, None).answered(&status(200, &[]));
         }
         assert_eq!(
-            l.window(None).0,
+            l.window(NONE, None).0,
             4,
             "one more a window's worth: {:?}",
-            l.window(None)
+            l.window(NONE, None)
         );
-        l.acquire(None)
+        l.acquire(NONE, None)
             .answered(&Err(Error::maybe_applied("timed out")));
-        assert_eq!(l.window(None).0, 2);
+        assert_eq!(l.window(NONE, None).0, 2);
         for _ in 0..4 {
-            l.acquire(None).answered(&status(503, &[]));
+            l.acquire(NONE, None).answered(&status(503, &[]));
         }
-        assert_eq!(l.window(None).0, 1);
+        assert_eq!(l.window(NONE, None).0, 1);
         // Another bucket is its own.
-        assert_eq!(l.window(Some("route53.change:example.com")), (2, false));
+        assert_eq!(
+            l.window(NONE, Some("route53.change:example.com")),
+            (2, false)
+        );
         let m = Limiter::new("p");
         for _ in 0..500 {
-            m.acquire(None).answered(&status(200, &[]));
+            m.acquire(NONE, None).answered(&status(200, &[]));
         }
-        assert_eq!(m.window(None).0, CEILING);
+        assert_eq!(m.window(NONE, None).0, CEILING);
     }
 
     /// A `Retry-After` pauses its bucket that long, and only its bucket.
     #[test]
     fn retry_after_pauses_the_bucket() {
         let l = Limiter::new("p");
-        l.acquire(Some("a"))
+        l.acquire(NONE, Some("a"))
             .answered(&status(429, &[("Retry-After", "1")]));
-        assert_eq!(l.window(Some("a")), (1, true));
+        assert_eq!(l.window(NONE, Some("a")), (1, true));
         let t = Instant::now();
-        drop(l.acquire(Some("b")));
+        drop(l.acquire(NONE, Some("b")));
         assert!(t.elapsed() < Duration::from_millis(500), "b is not paused");
-        drop(l.acquire(Some("a")));
+        drop(l.acquire(NONE, Some("a")));
         assert!(
             t.elapsed() >= Duration::from_millis(900),
             "{:?}",
@@ -316,14 +328,14 @@ mod tests {
     #[test]
     fn a_window_admits_in_order() {
         let l = Arc::new(Limiter::new("p"));
-        let held = l.acquire(None);
-        let _second = l.acquire(None);
+        let held = l.acquire(NONE, None);
+        let _second = l.acquire(NONE, None);
         let order = Arc::new(Mutex::new(Vec::new()));
         let mut waiting = Vec::new();
         for i in 0..3 {
             let (l, order) = (l.clone(), order.clone());
             waiting.push(std::thread::spawn(move || {
-                let p = l.acquire(None);
+                let p = l.acquire(NONE, None);
                 order.lock().unwrap().push(i);
                 drop(p);
             }));
@@ -336,5 +348,24 @@ mod tests {
             w.join().unwrap();
         }
         assert_eq!(*order.lock().unwrap(), [0, 1, 2]);
+    }
+
+    /// Each session's buckets are its own: one session's throttle leaves
+    /// another's window as it was.
+    #[test]
+    fn each_session_has_its_own_windows() {
+        let l = Limiter::new("p");
+        let (east, west) = (Session(1), Session(2));
+        l.acquire(east, None).answered(&status(429, &[]));
+        assert_eq!(l.window(east, None).0, 1);
+        assert_eq!(l.window(west, None), (2, false));
+        l.acquire(west, Some("a"))
+            .answered(&status(429, &[("Retry-After", "1")]));
+        let t = Instant::now();
+        drop(l.acquire(east, Some("a")));
+        assert!(
+            t.elapsed() < Duration::from_millis(500),
+            "east's a is not paused"
+        );
     }
 }

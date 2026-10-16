@@ -19,7 +19,8 @@ use std::sync::{Arc, Mutex};
 pub struct Services {
     grants: Grants,
     opened: Mutex<Held>,
-    /// The pace of its requests, a window per bucket (`ratelimit`).
+    /// The pace of its requests, a window per session and bucket
+    /// (`ratelimit`).
     limiter: ratelimit::Limiter,
     ssh: Box<dyn ssh::Ssh>,
     git: git::Git,
@@ -116,7 +117,7 @@ impl Calls for Services {
             };
             (cred, via)
         };
-        let admitted = self.limiter.acquire(req.bucket.as_deref());
+        let admitted = self.limiter.acquire(req.session, req.bucket.as_deref());
         let r = http::send(req, cred.as_deref(), via);
         admitted.answered(&r);
         r

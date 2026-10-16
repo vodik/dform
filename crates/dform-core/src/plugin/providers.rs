@@ -24,7 +24,7 @@
 //! A plan whose resource has a type none of them declares is refused before
 //! anything is planned ([`Providers::check_types`]).
 
-use super::backend::{Call, CallError, Reply, Ticket};
+use super::backend::{Call, CallError, Reply, Session, Ticket};
 use super::link::{Link, Retry};
 use super::pb;
 use super::policy::{self, Class};
@@ -227,17 +227,18 @@ pub struct Asked {
 pub struct Providers {
     /// Each link: its own, or the tree's pool's ([`super::pool`]).
     links: Vec<Rc<RefCell<Link>>>,
-    /// Of each link the pool shares, its entry: a link another
-    /// deployment's providers configured since is configured back
-    /// ([`Providers::link`]).
+    /// Each link's session that these providers' Configure opened: what
+    /// every call of theirs to it names, so a link the tree's deployments
+    /// share answers each deployment's calls with its own configuration.
+    sessions: Vec<Session>,
+    /// Of each link the pool shares, its entry ([`super::pool`]): its
+    /// Schema answer, asked once for the tree.
     pooled: Vec<Option<Rc<super::pool::Entry>>>,
     /// The pool, when the run is a tree's.
     pool: Option<Rc<super::pool::Pool>>,
-    /// These providers, as a pooled link's owner names them.
-    id: u64,
-    /// The Configure each link was last sent by these providers: what
-    /// configures a pooled link back. Held in memory only, as the call
-    /// was (a revealed setting among it is never written or printed).
+    /// The Configure each link's session was last sent: what its Schema
+    /// answer is asked under. Held in memory only, as the call was (a
+    /// revealed setting among it is never written or printed).
     sent: RefCell<BTreeMap<usize, Json>>,
     /// Each provider's name, as its handshake gave it.
     names: Vec<String>,
@@ -364,10 +365,11 @@ struct Starting<'a> {
     /// The configuration every link starts from.
     base: Json,
     links: Vec<Rc<RefCell<Link>>>,
+    /// Each link's session, as its Configure opened it.
+    sessions: Vec<Session>,
     pooled: Vec<Option<Rc<super::pool::Entry>>>,
     pool: Option<Rc<super::pool::Pool>>,
-    /// The providers' id ([`Providers::id`]), and each link's Configure.
-    id: u64,
+    /// Each link's Configure.
     sent: BTreeMap<usize, Json>,
     bases: Vec<Json>,
     awaiting: BTreeSet<usize>,
@@ -394,9 +396,9 @@ impl<'a> Starting<'a> {
             mocks,
             base: base_config(cfg),
             links: Vec::new(),
+            sessions: Vec::new(),
             pooled: Vec::new(),
             pool: super::pool::current(),
-            id: super::pool::next_id(),
             sent: BTreeMap::new(),
             bases: Vec::new(),
             awaiting: BTreeSet::new(),
@@ -471,8 +473,9 @@ impl<'a> Starting<'a> {
             config["deferred"] = json!(true);
             self.awaiting.insert(0);
         }
-        self.accounts
-            .extend(configure(&mut link, config.clone())?.map(|a| (0, a)));
+        let (session, account) = configure(&mut link, config.clone())?;
+        self.sessions.push(session);
+        self.accounts.extend(account.map(|a| (0, a)));
         drop(link);
         self.sent.insert(self.links.len() - 1, config.clone());
         self.bases.push(config);
@@ -490,7 +493,6 @@ impl<'a> Starting<'a> {
         let (link, entry) = match &self.pool {
             Some(pool) => {
                 let e = pool.link(key, start)?;
-                e.owner.set(self.id);
                 (e.link.clone(), Some(e))
             }
             None => (Rc::new(RefCell::new(start()?)), None),
@@ -552,8 +554,9 @@ impl<'a> Starting<'a> {
             config["deferred"] = json!(true);
             self.awaiting.insert(i);
         }
-        let account = configure(&mut link, config.clone())
+        let (session, account) = configure(&mut link, config.clone())
             .with_context(|| format!("configure provider {shown}"))?;
+        self.sessions.push(session);
         drop(link);
         self.sent.insert(i, config.clone());
         self.accounts.extend(account.map(|a| (i, a)));
@@ -584,11 +587,10 @@ impl<'a> Starting<'a> {
                 }
             }
         }
-        let p = Providers::deferred(self.links);
+        let p = Providers::deferred(self.links, self.sessions);
         Ok(Providers {
             pooled: self.pooled,
             pool: self.pool,
-            id: self.id,
             sent: RefCell::new(self.sent),
             bases: self.bases,
             shares: self.shares,
@@ -684,19 +686,25 @@ impl Generation {
     }
 }
 
-/// Configure a link: the account its credentials reach, if it tells;
-/// what it notes of its configuration (a credential about to expire) on
-/// stderr.
-fn configure(link: &mut Link, config: Json) -> Result<Option<String>> {
-    let config = Some(wire::doc(&config));
-    let r: pb::ConfigureResponse = link.call(pb::ConfigureRequest {
-        config,
-        ..Default::default()
-    })?;
+/// Open a session of a link, configured with `config`: the session, and
+/// the account its credentials reach, if it tells.
+fn configure(link: &mut Link, config: Json) -> Result<(Session, Option<String>)> {
+    reconfigure(link, Session::NONE, config)
+}
+
+/// Configure `session` of a link (none: open one) with `config`: the
+/// session, and the account its credentials reach, if it tells; what it
+/// notes of its configuration (a credential about to expire) on stderr.
+fn reconfigure(
+    link: &mut Link,
+    session: Session,
+    config: Json,
+) -> Result<(Session, Option<String>)> {
+    let r = link.configure(session, wire::doc(&config))?;
     for n in &r.notes {
         eprintln!("{n}");
     }
-    Ok(r.account)
+    Ok((Session(r.session), r.account))
 }
 
 impl Providers {
@@ -713,7 +721,7 @@ impl Providers {
     /// over (R-26), its schema not loaded yet ([`Providers::load_schema`]:
     /// empty). Asking it anything else is the no-provider error.
     pub fn none() -> Providers {
-        Self::deferred(Vec::new())
+        Self::deferred(Vec::new(), Vec::new())
     }
 
     /// `start`, without asking for the schema yet: the caller asks with
@@ -1106,7 +1114,7 @@ impl Providers {
             lease: format!("{} pid {}", crate::audit::who(), std::process::id()),
             ..Default::default()
         };
-        let r: pb::RevealResponse = self.link(i)?.borrow_mut().call(req).with_context(|| {
+        let r: pb::RevealResponse = self.call(i, req).with_context(|| {
             format!(
                 "provider {} reveals the secret {}",
                 held.provider,
@@ -1172,14 +1180,14 @@ impl Providers {
             && self.reached(typ).is_some()
     }
 
-    fn deferred(links: Vec<Rc<RefCell<Link>>>) -> Providers {
+    fn deferred(links: Vec<Rc<RefCell<Link>>>, sessions: Vec<Session>) -> Providers {
         Providers {
             names: links.iter().map(|l| l.borrow().name.clone()).collect(),
             pooled: links.iter().map(|_| None).collect(),
             pool: None,
-            id: super::pool::next_id(),
             sent: RefCell::new(BTreeMap::new()),
             links,
+            sessions,
             loaded: OnceCell::new(),
             fallback: 0,
             refreshed: RefCell::new(BTreeMap::new()),
@@ -1515,10 +1523,13 @@ impl Providers {
         }
         let ask = |names: Option<Vec<String>>| -> Result<pb::SchemaResponse> {
             let types = names.map(|names| pb::TypeFilter { names });
-            self.link(i)?.borrow_mut().call(pb::SchemaRequest {
-                types,
-                ..Default::default()
-            })
+            self.call(
+                i,
+                pb::SchemaRequest {
+                    types,
+                    ..Default::default()
+                },
+            )
         };
         // A link of the tree's pool is asked once for what the tree's
         // deployments name.
@@ -1663,7 +1674,7 @@ impl Providers {
             types: missing.clone().map(|names| pb::TypeFilter { names }),
             ..Default::default()
         };
-        let resp: pb::SchemaResponse = self.link(i)?.borrow_mut().call(req)?;
+        let resp: pb::SchemaResponse = self.call(i, req)?;
         let new = |t: &str| {
             !known.knows_type(t) && missing.as_ref().is_none_or(|m| m.iter().any(|x| x == t))
         };
@@ -1743,47 +1754,35 @@ impl Providers {
     }
 
     /// The link `i`, to call; none when the run started no provider (a
-    /// program naming only built-in providers, R-26): nothing to ask. A
-    /// link of the tree's pool another deployment's providers configured
-    /// since is configured back first ([`Providers::claim`]).
+    /// program naming only built-in providers, R-26): nothing to ask.
     fn link(&self, i: usize) -> Result<&RefCell<Link>> {
-        let link = self
-            .links
+        self.links
             .get(i)
-            .ok_or_else(|| anyhow!(crate::deployment::NO_PROVIDER))?;
-        self.claim(i)?;
-        Ok(link)
+            .map(|l| &**l)
+            .ok_or_else(|| anyhow!(crate::deployment::NO_PROVIDER))
     }
 
-    /// Link `i` of the tree's pool, configured back with what these
-    /// providers last sent it when another deployment's configured it
-    /// since: Configure is a deployment's session on a link.
-    fn claim(&self, i: usize) -> Result<()> {
-        let Some(Some(e)) = self.pooled.get(i) else {
-            return Ok(());
-        };
-        if e.owner.get() == self.id {
-            return Ok(());
-        }
-        if let Some(config) = self.sent.borrow().get(&i) {
-            let config = Some(wire::doc(config));
-            let _: pb::ConfigureResponse = e
-                .link
-                .borrow_mut()
-                .call(pb::ConfigureRequest {
-                    config,
-                    ..Default::default()
-                })
-                .with_context(|| format!("configure provider {} again", self.names[i]))?;
-        }
-        e.owner.set(self.id);
-        Ok(())
+    /// One call to link `i`, in these providers' session of it.
+    fn call<R>(&self, i: usize, call: impl Into<Call>) -> Result<R>
+    where
+        R: TryFrom<Reply, Error = Reply>,
+    {
+        self.link(i)?.borrow_mut().call(self.sessions[i], call)
     }
 
-    /// Configure link `i` with `config`, kept as what configures it back
-    /// ([`Providers::claim`]).
+    /// Start `call` on link `i`, in these providers' session of it.
+    fn submit(&self, i: usize, call: impl Into<Call>) -> Result<Ticket> {
+        Ok(self.link(i)?.borrow_mut().submit(self.sessions[i], call))
+    }
+
+    /// Configure these providers' session of link `i` again, with
+    /// `config`: the same session, what its Schema is asked under.
     fn configure_link(&self, i: usize, config: Json) -> Result<Option<String>> {
-        let account = configure(&mut self.link(i)?.borrow_mut(), config.clone())?;
+        let (_, account) = reconfigure(
+            &mut self.link(i)?.borrow_mut(),
+            self.sessions[i],
+            config.clone(),
+        )?;
         self.sent.borrow_mut().insert(i, config);
         Ok(account)
     }
@@ -1953,10 +1952,7 @@ impl Providers {
             .get(&f.name)
             .copied()
             .unwrap_or(self.fallback);
-        let ticket = self
-            .link(i)?
-            .borrow_mut()
-            .submit(Self::extern_request(f, inputs));
+        let ticket = self.submit(i, Self::extern_request(f, inputs))?;
         Ok(Asked { link: i, ticket })
     }
 
@@ -2000,10 +1996,7 @@ impl Providers {
         };
         let rows = match answer {
             Ok(rows) => rows,
-            Err(_) => self
-                .link(i)?
-                .borrow_mut()
-                .call(Self::extern_request(f, inputs))?,
+            Err(_) => self.call(i, Self::extern_request(f, inputs))?,
         };
         self.extern_rows(i, f, inputs, rows)
     }
@@ -2450,13 +2443,16 @@ impl Providers {
         plus: &[bool],
         inputs: &[Value],
     ) -> Result<Vec<Vec<Value>>> {
-        let rows: Vec<pb::Row> = self.link(i)?.borrow_mut().call(pb::QueryRequest {
-            pred: pred.to_string(),
-            input: plus.to_vec(),
-            inputs: inputs.iter().map(pb::Value::from).collect(),
-            secret: Vec::new(),
-            ..Default::default()
-        })?;
+        let rows: Vec<pb::Row> = self.call(
+            i,
+            pb::QueryRequest {
+                pred: pred.to_string(),
+                input: plus.to_vec(),
+                inputs: inputs.iter().map(pb::Value::from).collect(),
+                secret: Vec::new(),
+                ..Default::default()
+            },
+        )?;
         rows.iter()
             .map(|r| r.values.iter().map(Value::try_from).collect())
             .collect()
@@ -2563,7 +2559,7 @@ impl Providers {
         prior: Option<&Json>,
     ) -> Result<Option<Object>> {
         let req = read_request(addr, remote, prior);
-        let r: pb::ReadResponse = self.link(i)?.borrow_mut().call(req)?;
+        let r: pb::ReadResponse = self.call(i, req)?;
         if !r.found {
             return Ok(None);
         }
@@ -2584,7 +2580,7 @@ impl Providers {
             remote: remote.to_string(),
             ..Default::default()
         };
-        let r: pb::ImportResponse = self.link(i)?.borrow_mut().call(req)?;
+        let r: pb::ImportResponse = self.call(i, req)?;
         let o = match r.found {
             true => Some(Self::object(r.attrs.as_ref(), r.computed.as_ref())?),
             false => None,
@@ -2665,7 +2661,7 @@ impl Providers {
         let mut sent = Vec::new();
         for (k, m) in objects {
             let req = read_request(&m.addr, &m.entry.remote, m.entry.prior());
-            let t = self.link(m.link)?.borrow_mut().submit(req);
+            let t = self.submit(m.link, req)?;
             sent.push((k, m, t));
         }
         for l in &self.links {
@@ -2728,12 +2724,13 @@ impl Providers {
         for (i, objects) in objects {
             let n = objects.len();
             let r: pb::HealthResponse = self
-                .link(i)?
-                .borrow_mut()
-                .call(pb::HealthRequest {
-                    objects,
-                    ..Default::default()
-                })
+                .call(
+                    i,
+                    pb::HealthRequest {
+                        objects,
+                        ..Default::default()
+                    },
+                )
                 .with_context(|| format!("provider {}: Health", self.block_name(i)))?;
             if r.answers.len() != n {
                 bail!(
@@ -2866,7 +2863,7 @@ impl Providers {
                 ..Default::default()
             };
             let l = self.route(&addr.typ);
-            submitted.push((i, l, self.link(l)?.borrow_mut().submit(req), addr));
+            submitted.push((i, l, self.submit(l, req)?, addr));
         }
         for l in &self.links {
             l.borrow_mut().flush();
@@ -3237,11 +3234,6 @@ impl Providers {
         adopts: &[Adopt],
         lifecycle: &'a Lifecycle,
     ) -> Result<Tick<'a>> {
-        // A tick's calls are these providers' alone: each link of the
-        // tree's pool is configured for them first.
-        for i in 0..self.links.len() {
-            self.claim(i)?;
-        }
         Ok(Tick {
             lifecycle,
             cloud: self,
@@ -4139,7 +4131,7 @@ impl Tick<'_> {
             ..Default::default()
         };
         let link = self.cloud.route(&addr.typ);
-        let ticket = self.cloud.links[link].borrow_mut().submit(req.clone());
+        let ticket = self.cloud.submit(link, req.clone())?;
         self.cloud.invalidate();
         self.in_flight.push(InFlight {
             id,
@@ -4480,7 +4472,7 @@ impl Tick<'_> {
         };
         link.retried(retry);
         std::thread::sleep(delay);
-        f.ticket = link.submit(f.req.clone());
+        f.ticket = link.submit(self.cloud.sessions[f.link], f.req.clone());
         None
     }
 
@@ -4746,7 +4738,7 @@ impl Tick<'_> {
         for (addr, r) in &self.desired {
             state.set_deps(addr, r.deps.iter().cloned());
         }
-        for link in &self.cloud.links {
+        for (link, &session) in self.cloud.links.iter().zip(&self.cloud.sessions) {
             let mut link = link.borrow_mut();
             if link.is_dead() {
                 continue;
@@ -4756,7 +4748,7 @@ impl Tick<'_> {
                 spans: self.timeline.clone(),
                 ..Default::default()
             };
-            let r: pb::ApplyResponse = link.call(req)?;
+            let r: pb::ApplyResponse = link.call(session, req)?;
             self.cloud.notes.borrow_mut().extend(r.notes);
         }
         self.cloud.invalidate();

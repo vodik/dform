@@ -198,6 +198,7 @@ fn a_provider_without_a_handshake_deviates() {
 /// `type_provider` rows it holds.
 fn schema_rows(
     conn: &mut Link,
+    session: dform::plugin::backend::Session,
     types: Option<&[&str]>,
 ) -> (std::collections::BTreeSet<String>, usize) {
     use dform::ast::Atom;
@@ -208,7 +209,7 @@ fn schema_rows(
         }),
         ..Default::default()
     };
-    let resp: pb::SchemaResponse = conn.call(req).unwrap();
+    let resp: pb::SchemaResponse = conn.call(session, req).unwrap();
     let facts: Vec<_> = resp
         .facts
         .iter()
@@ -240,16 +241,18 @@ fn the_mock_answers_the_schema_asked_for(mut conn: Link) {
         "schemas": ["fake", "k8s"],
         "world": s.path("w.json").display().to_string(),
     });
-    let config = Some(dform::plugin::wire::doc(&config));
-    let _: dform::plugin::pb::ConfigureResponse = conn
-        .call(dform::plugin::pb::ConfigureRequest {
-            config,
-            ..Default::default()
-        })
-        .unwrap();
-    let (all, providers) = schema_rows(&mut conn, None);
+    let session = conn
+        .configure(
+            dform::plugin::backend::Session::NONE,
+            dform::plugin::wire::doc(&config),
+        )
+        .unwrap()
+        .session;
+    let session = dform::plugin::backend::Session(session);
+    let (all, providers) = schema_rows(&mut conn, session, None);
     assert!(all.len() > 10, "{all:?}");
-    let (some, scoped_providers) = schema_rows(&mut conn, Some(&["net.vpc", "k8s.deployment"]));
+    let (some, scoped_providers) =
+        schema_rows(&mut conn, session, Some(&["net.vpc", "k8s.deployment"]));
     assert_eq!(
         some.into_iter().collect::<Vec<_>>(),
         ["\"k8s.deployment\"", "\"net.vpc\""],

@@ -3,19 +3,17 @@
 //! tree, its process started, its handshake and its schema asked once,
 //! whichever deployment's providers reach it.
 //!
-//! Configure is a deployment's session on a link: each deployment's
-//! providers configure it with their own configuration (the deployment,
-//! its world, the program's settings), and a link another deployment's
-//! providers configured since is configured back before their next call
-//! ([`Entry::owner`]). The protocol names no deployment per call, so a
-//! link serves one deployment at a time: the tree's deployments are
-//! planned one after another, and an apply's calls are made deployment by
-//! deployment within a tick.
+//! Each deployment's providers open a session of a link with their own
+//! configuration (the deployment, its world, the program's settings), and
+//! every call they make names it ([`super::backend::Session`]): the
+//! provider answers it with that configuration, so the deployments'
+//! calls may be in flight on one link together, each landing in its own
+//! world.
 
 use super::link::Link;
 use super::pb;
 use anyhow::Result;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
@@ -48,8 +46,6 @@ pub enum Key {
 pub struct Entry {
     key: Key,
     pub link: Rc<RefCell<Link>>,
-    /// The providers ([`super::Providers`]) that configured it last.
-    pub owner: Cell<u64>,
     /// Its Schema answer, as it was configured then and asked for which
     /// types (`None`: all).
     schema: RefCell<Option<Asked>>,
@@ -132,12 +128,6 @@ pub fn active() -> bool {
     POOL.with(|p| p.borrow().is_some())
 }
 
-/// A providers' id, what [`Entry::owner`] holds.
-pub(super) fn next_id() -> u64 {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-}
-
 impl Pool {
     /// The link of `key`: the pool's, else started now (`start`) and
     /// kept.
@@ -148,7 +138,6 @@ impl Pool {
         let e = Rc::new(Entry {
             key,
             link: Rc::new(RefCell::new(start()?)),
-            owner: Cell::new(0),
             schema: RefCell::new(None),
         });
         self.entries.borrow_mut().push(e.clone());

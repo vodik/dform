@@ -10,7 +10,7 @@
 //! interfaces its manifest imports, and its grants (none: a provider is
 //! checked outside any project's dform.toml).
 
-use super::backend::CallError;
+use super::backend::{CallError, Session};
 use super::link::Link;
 use super::pb;
 use super::providers::Launch;
@@ -21,7 +21,7 @@ use crate::schema::Schema;
 use crate::value::{NullClass, Value};
 use anyhow::{Context, Result};
 use serde_json::{Value as Json, json};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 
 const TYPE: &str = "check.thing";
@@ -77,14 +77,35 @@ fn ensure(cond: bool, msg: impl FnOnce() -> String) -> Result<()> {
     }
 }
 
-/// A started provider, called through `&`.
-type Conn = RefCell<Link>;
+/// A started provider, called through `&`, in the session its Configure
+/// opened.
+struct Conn {
+    link: RefCell<Link>,
+    session: Cell<Session>,
+}
+
+impl Conn {
+    fn borrow(&self) -> std::cell::Ref<'_, Link> {
+        self.link.borrow()
+    }
+
+    /// Open the session the suite's calls are made in, configured with
+    /// `config`: what the provider notes of it.
+    fn configure(&self, config: &Json) -> Result<Vec<String>> {
+        let r = self
+            .link
+            .borrow_mut()
+            .configure(Session::NONE, wire::doc(config))?;
+        self.session.set(Session(r.session));
+        Ok(r.notes)
+    }
+}
 
 fn call<R>(conn: &Conn, c: impl Into<super::backend::Call>) -> Result<R>
 where
     R: TryFrom<super::backend::Reply, Error = super::backend::Reply>,
 {
-    conn.borrow_mut().call(c)
+    conn.link.borrow_mut().call(conn.session.get(), c)
 }
 
 /// Run the suite against the provider at `path` (a plugin, else, a mock
@@ -119,7 +140,10 @@ fn suite(start: impl FnOnce() -> Result<Link>, dir: &Path) -> Result<(Vec<String
     )?;
 
     let conn = match start() {
-        Ok(c) => RefCell::new(c),
+        Ok(c) => Conn {
+            link: RefCell::new(c),
+            session: Cell::new(Session::NONE),
+        },
         Err(e) => {
             r.check("Handshake", Err(e));
             return Ok((r.lines, r.failed));
@@ -144,14 +168,7 @@ fn suite(start: impl FnOnce() -> Result<Link>, dir: &Path) -> Result<(Vec<String
         "inventory": dir.join("inventory.json").display().to_string(),
         "chaos": [],
     });
-    let configured = call::<pb::ConfigureResponse>(
-        &conn,
-        pb::ConfigureRequest {
-            config: Some(wire::doc(&config)),
-            ..Default::default()
-        },
-    )
-    .map(|c| c.notes);
+    let configured = conn.configure(&config);
     let ok = configured.is_ok();
     // What it notes of its configuration (the credentials' form, their
     // expiry, a right they lack), each a line under it.
@@ -514,7 +531,7 @@ fn apply_keyed(
         idempotency_key: key.into(),
         ..Default::default()
     };
-    conn.borrow_mut().try_call(req)
+    conn.link.borrow_mut().try_call(conn.session.get(), req)
 }
 
 /// `provider.created(Type, "a", Key, Remote)`: the remote ids it answers.

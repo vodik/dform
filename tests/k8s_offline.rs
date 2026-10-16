@@ -1063,27 +1063,32 @@ fn a_type_built_at_runtime_gets_the_whole_schema() {
     );
 }
 
-/// The provider, offline, as a plugin connection: configured with its
-/// state directory `dir`.
-fn offline_provider(s: &Scratch, dir: &str) -> dform::plugin::link::Link {
+/// The provider, offline, as a plugin connection, and its session
+/// configured with its state directory `dir`.
+fn offline_provider(
+    s: &Scratch,
+    dir: &str,
+) -> (dform::plugin::link::Link, dform::plugin::backend::Session) {
     let env = dform_grpc::spawn::Env::default()
         .unset("KUBECONFIG")
         .set("DFORM_K8S_OFFLINE", "1");
     let mut conn =
         dform_grpc::client::Conn::link(&dform_grpc::spawn::Program::exe(k8s()), &env).unwrap();
     let config = json!({"world": s.path(&format!("{dir}/world.json")).display().to_string()});
-    let config = Some(dform::plugin::wire::doc(&config));
-    let _: dform::plugin::pb::ConfigureResponse = conn
-        .call(dform::plugin::pb::ConfigureRequest {
-            config,
-            ..Default::default()
-        })
+    let r = conn
+        .configure(
+            dform::plugin::backend::Session::NONE,
+            dform::plugin::wire::doc(&config),
+        )
         .unwrap();
-    conn
+    (conn, dform::plugin::backend::Session(r.session))
 }
 
 /// A Schema answer's facts, spelled.
-fn schema_of(conn: &mut dform::plugin::link::Link, types: Option<&[&str]>) -> Vec<String> {
+fn schema_of(
+    (conn, session): &mut (dform::plugin::link::Link, dform::plugin::backend::Session),
+    types: Option<&[&str]>,
+) -> Vec<String> {
     use dform::ast::Atom;
     use dform::plugin::pb;
     let req = pb::SchemaRequest {
@@ -1092,7 +1097,7 @@ fn schema_of(conn: &mut dform::plugin::link::Link, types: Option<&[&str]>) -> Ve
         }),
         ..Default::default()
     };
-    let resp: pb::SchemaResponse = conn.call(req).unwrap();
+    let resp: pb::SchemaResponse = conn.call(*session, req).unwrap();
     resp.facts
         .iter()
         .map(|f| dform::spell::atom(&Atom::try_from(f).unwrap()))
