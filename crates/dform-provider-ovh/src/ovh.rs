@@ -3,7 +3,7 @@
 //! credentials, its project, what it made, and its client, which asks
 //! each list the provider reads once per run (`api::Client::list`).
 //!
-//! Configure finds the credentials (`config`), and with the program's
+//! Configure (`configure`) finds the credentials (`config`), and with the program's
 //! settings (`use ovh { endpoint, project }`, a second Configure) the
 //! project: its id, or the description or name it was given in the
 //! console (`vodik`). It reports the project's id as the account
@@ -50,6 +50,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 mod catalog;
+mod configure;
 mod handler;
 pub use handler::Provider;
 mod health;
@@ -465,104 +466,6 @@ impl Ovh {
             )
         })?;
         Ok((a, p))
-    }
-
-    /// Configure from `config` (dform's, with the program's `settings` the
-    /// second time): the account's project id, for `expect_account`, and
-    /// what the credentials are and lack, as notes.
-    pub async fn configure(&self, config: &Json) -> Result<pb::ConfigureResponse> {
-        let env = |k: &str| std::env::var(k).ok();
-        self.configure_with(config, &env, &config::default_files())
-            .await
-    }
-
-    /// `configure` with the environment `env` and the configuration files
-    /// `files` (a test's own, so no real `ovh.conf` is read).
-    pub async fn configure_with(
-        &self,
-        config: &Json,
-        env: &dyn Fn(&str) -> Option<String>,
-        files: &[std::path::PathBuf],
-    ) -> Result<pb::ConfigureResponse> {
-        let settings = config.get("settings").filter(|v| v.is_object());
-        let deferred = config.get("deferred") == Some(&Json::Bool(true));
-        let set = |c: Configured| {
-            *self.state.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(c));
-        };
-        if settings.is_none() && deferred {
-            set(Configured {
-                account: Err("the program configures it (`use ovh { .. }`) and has not yet".into()),
-                awaiting: true,
-            });
-            return Ok(pb::ConfigureResponse::default());
-        }
-        let setting = |k: &str| -> Result<Option<String>> {
-            match settings.and_then(|s| s.get(k)) {
-                None | Some(Json::Null) => Ok(None),
-                Some(Json::String(v)) => Ok(Some(v.clone())),
-                Some(v) => bail!(
-                    "provider ovh: {k} is {}, not a string",
-                    provider::fmt_value(Some(v))
-                ),
-            }
-        };
-        let token = setting("token")?;
-        let endpoint = setting("endpoint")?;
-        let creds = config::resolve_holding(endpoint.as_deref(), token.as_deref(), env, files);
-        let creds = match (creds, settings) {
-            (Ok(c), _) => c,
-            // The program names the account: it cannot be reached.
-            (Err(e), Some(_)) => return Err(e.context("provider ovh")),
-            (Err(e), None) => {
-                set(Configured {
-                    account: Err(format!("{e:#}")),
-                    awaiting: false,
-                });
-                return Ok(pb::ConfigureResponse::default());
-            }
-        };
-        let project = setting("project")?
-            .or_else(|| env("OVH_CLOUD_PROJECT_SERVICE").filter(|v| !v.is_empty()));
-        let cache = config
-            .get("cache")
-            .and_then(Json::as_str)
-            .map(std::path::PathBuf::from);
-        // The program's token, which dform holds in the host by a name.
-        let held = match &token {
-            Some(name) => Some(
-                dform_sdk::host()
-                    .secrets
-                    .open(name)
-                    .map_err(|e| anyhow!("provider ovh: the token: {}", e.message))?,
-            ),
-            None => None,
-        };
-        let client = Client::new(creds)
-            .with_cache(cache.as_deref())
-            .holding(held);
-        // Run outside a program and a project, as `provider check` runs
-        // it: which credentials, and what they may do.
-        let full = settings.is_none() && cache.is_none();
-        let notes = crate::credential::notes(&client, full, cache.as_deref(), unix_now()).await;
-        let project = match project {
-            Some(p) => Some(resolve_project(&client, &p, cache.as_deref()).await?),
-            None => None,
-        };
-        let account = project.clone();
-        set(Configured {
-            account: Ok(Arc::new(Account {
-                client,
-                project,
-                cache,
-                poll: poll_every(env),
-            })),
-            awaiting: false,
-        });
-        Ok(pb::ConfigureResponse {
-            account,
-            notes,
-            ..Default::default()
-        })
     }
 
     // Read.
