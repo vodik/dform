@@ -123,6 +123,7 @@ fn describe(s: &Symbol) -> String {
         Symbol::Value(None, _) => "a value name".into(),
         Symbol::Let(Some(scope), _) => format!("a let in {scope}"),
         Symbol::Let(None, _) => "a let".into(),
+        Symbol::Param(_, f, _) => format!("a parameter of let {f}"),
         Symbol::Alias(_) => "a type alias".into(),
         Symbol::Module(_) => "a component or a used module".into(),
         Symbol::Instance(m, _) => format!("a resource of the component {m}"),

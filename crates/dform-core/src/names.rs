@@ -34,6 +34,9 @@ pub enum Symbol {
     Field(Scope, String, String),
     /// `let a = t`, in its scope.
     Let(Scope, String),
+    /// A parameter of a let with parameters (R-187), `n` of `let cidr(n)
+    /// = ..`: the let's scope, its name and the parameter's.
+    Param(Scope, String, String),
     /// `type NAME = TYPE`.
     Alias(String),
     /// A component, or the name a `use` binds (R-65).
@@ -175,6 +178,8 @@ impl Parsed {
 #[derive(Debug, Default)]
 pub struct Decls {
     lets: BTreeSet<(Scope, String)>,
+    /// Each let's parameters, by its scope, its name and theirs.
+    params: BTreeSet<(Scope, String, String)>,
     values: BTreeSet<(Scope, String)>,
     /// An object input's fields, by its scope, name and field path.
     fields: BTreeSet<(Scope, String, String)>,
@@ -366,7 +371,15 @@ impl Decls {
             let scope = self.scopes(&at).remove(0);
             let name = || declared_name(&n).map(|t| t.text().to_string());
             match n.kind() {
-                SyntaxKind::LET => self.lets.extend(name().map(|x| (scope, x))),
+                SyntaxKind::LET => {
+                    if let Some(x) = name() {
+                        for p in crate::program::scope::query::parameters(&n) {
+                            let p = p.text().to_string();
+                            self.params.insert((scope.clone(), x.clone(), p));
+                        }
+                        self.lets.insert((scope, x));
+                    }
+                }
                 SyntaxKind::INPUT => {
                     if let Some(x) = name() {
                         for (path, _) in input_fields(&n) {
@@ -513,6 +526,20 @@ impl Decls {
         })
     }
 
+    /// The parameter `name` of the let with parameters `at` is in (its
+    /// head or its body), as `Scopes::parameter` finds it in the let's head.
+    fn param(&self, at: &SyntaxNode, name: &str) -> Option<Symbol> {
+        let stmt = at.ancestors().find(|a| a.kind() == SyntaxKind::LET)?;
+        crate::program::scope::query::parameters(&stmt)
+            .iter()
+            .any(|p| p.text() == name)
+            .then_some(())?;
+        let f = declared_name(&stmt)?.text().to_string();
+        let outer = stmt.parent().unwrap_or_else(|| stmt.clone());
+        let scope = self.scopes(&outer).remove(0);
+        Some(Symbol::Param(scope, f, name.to_string()))
+    }
+
     /// The resources `name` seen from `at`: the innermost scope's that
     /// declares one, each type's.
     fn resources_at(&self, at: &SyntaxNode, name: &str) -> Vec<Symbol> {
@@ -634,6 +661,7 @@ impl Decls {
                 self.fields.contains(&(s.clone(), i.clone(), p))
             }
             Symbol::Let(s, _) => self.lets.contains(&(s.clone(), n)),
+            Symbol::Param(s, f, _) => self.params.contains(&(s.clone(), f.clone(), n)),
             Symbol::Output(s, _) => self.outputs.contains(&(s.clone(), n)),
             Symbol::Alias(_) => self.aliases.contains(name),
             Symbol::Module(_) => self.modules.contains(name),
@@ -742,6 +770,11 @@ impl Decls {
                 }
             }
             SyntaxKind::TYPE_ALIAS if is_declared() => decl(Symbol::Alias(name)),
+            // `n` of `let cidr(n) = ..`: the parameter's declaration.
+            SyntaxKind::PARAM if is_declared() => match self.param(&parent, &name) {
+                Some(p) => decl(p),
+                None => What::Other,
+            },
             SyntaxKind::COMPONENT if is_declared() => decl(Symbol::Module(name)),
             SyntaxKind::USE if self.provider_use(&parent) => What::Provider,
             SyntaxKind::USE => self.statement_path(&parent, t),
@@ -779,7 +812,10 @@ impl Decls {
                     .iter()
                     .any(|x| matches!(x.kind(), SyntaxKind::EQ | SyntaxKind::COLON)) =>
             {
-                match self.value_read(&here, &name) {
+                match self
+                    .param(&here, &name)
+                    .or_else(|| self.value_read(&here, &name))
+                {
                     Some(s) => What::Name(s, false),
                     None => match self.pick(&parent, self.resources_at(&here, &name)) {
                         // A pattern's field binds a variable of its name.
@@ -886,6 +922,15 @@ impl Decls {
         let dot = |i: usize| matches!(ps.get(i), Some(Part::Dot));
         let index = |i: usize| matches!(ps.get(i), Some(Part::Index));
         let after = |from: usize| if k >= from { What::Path } else { What::Other };
+        // A parameter of the let the chain is in, read in its body: a
+        // variable of the let's clause, bound around it.
+        if !call && let Some(p) = self.param(at, &name0) {
+            return if k == 0 {
+                What::Name(p, false)
+            } else {
+                What::Path
+            };
+        }
         // A relation's name, `p(..)`, a head; a function's, `int(..)`.
         if call && ps.len() == 1 {
             let head = c
@@ -2191,5 +2236,27 @@ warn \"w\" where env == \"prod\", region == \"eu\"\n",
             names(src, &Symbol::Let(None, "schema".into())),
             vec![(0, true), (6, false)]
         );
+    }
+
+    /// A let's parameter is declared in its head and read in its body,
+    /// a hole of a string included; a name of the program the let does
+    /// not take is the program's (R-187).
+    #[test]
+    fn a_lets_parameter_is_declared_in_its_head() {
+        let src = "input n: int = 1\nlet cidr(n, m: int = 2) = \"10.${n}.${m}.0/24\" where n > 0\nlet x = { n }\nlet y = n\n";
+        let sym = |p: &str| Symbol::Param(None, "cidr".into(), p.into());
+        assert_eq!(
+            names(src, &sym("n")),
+            vec![(1, true), (1, false), (1, false)]
+        );
+        assert_eq!(names(src, &sym("m")), vec![(1, true), (1, false)]);
+        assert_eq!(
+            names(src, &Symbol::Value(None, "n".into())),
+            vec![(0, true), (2, false), (3, false)]
+        );
+        let files = vec![Parsed::new(PathBuf::from("/a.df"), src.into())];
+        let d = Decls::of_files(Path::new("/"), &files);
+        assert!(d.taken(&sym("n"), "m"));
+        assert!(!d.taken(&sym("n"), "k"));
     }
 }

@@ -185,16 +185,11 @@ fn walk(name: &str, root: &Path, every_token: bool) -> Vec<String> {
                     What::Name(Symbol::Function(f), _) => {
                         dform_core::functions::FORMS.contains(&f.as_str())
                     }
-                    // A word, or a directory in a path; or a let's
-                    // parameter where it is declared, which the server
-                    // has no definition of yet (`let cidr(n) = ..`).
+                    // A word, or a directory in a path.
                     What::Other => {
                         WORDS.contains(&t.text())
                             || t.parent().is_some_and(|p| {
-                                matches!(
-                                    p.kind(),
-                                    SyntaxKind::USE | SyntaxKind::RESOURCE | SyntaxKind::PARAM
-                                )
+                                matches!(p.kind(), SyntaxKind::USE | SyntaxKind::RESOURCE)
                             })
                     }
                     _ => false,
