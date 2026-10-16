@@ -142,3 +142,27 @@ fn a_fields_check_is_said_as_written() {
         r.stderr
     );
 }
+
+/// A check that reads another input by name, a deny after evaluation, is
+/// said as written: `agents <= max`, not the core's `max(Max), agents <=
+/// Max`.
+#[test]
+fn a_check_over_another_input_is_said_as_written() {
+    let s = project(
+        "input-check-named",
+        "key env: enum(dev, prod)\n\
+         input max: int = 3\n\
+         input agents: int = 2 check agents <= max\n\
+         use fake\n\
+         resource net.vpc \"agent-${i}\" { cidr = \"10.0.0.0/16\" } where i in 0..agents\n",
+    );
+    let r = s
+        .run(&["plan", "app", "env=dev", "--set", "agents=5"])
+        .failure();
+    assert!(
+        r.stdout
+            .contains("  fails  input agents check agents <= max  stacks/app.df:3  1 fails\n"),
+        "{}",
+        r.stdout
+    );
+}
