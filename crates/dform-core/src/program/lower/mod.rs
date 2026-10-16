@@ -144,4 +144,26 @@ mod tests {
         };
         assert_eq!(dump(&lower(&program).rules), dump(&Err(err)));
     }
+
+    /// Every rule the lowering writes carries the statement it is lowered
+    /// out of, a `not { }`'s helper its rule's.
+    #[test]
+    fn a_rule_and_its_helper_carry_their_statement() {
+        let text = "\np(1)\nq(x) where p(x), not { p(x), x > 1 }\n";
+        let program = crate::parser::parse_program(text).unwrap();
+        let rules: Vec<&ast::RuleStmt> = program
+            .statements
+            .iter()
+            .filter_map(|s| match s {
+                ast::Stmt::Rule(r) => Some(r),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rules.len(), 2, "{rules:?}");
+        for r in rules {
+            let at = r.origin.expect("an origin").stmt;
+            let written = &text[at.start as usize..at.end as usize];
+            assert!(written.starts_with("q(x) where"), "{written:?}");
+        }
+    }
 }

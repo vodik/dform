@@ -1019,8 +1019,23 @@ fn desugar_resources(program: &Program) -> Result<Program> {
 
 /// `resource T N [@rank] { [for body] k = v [@rank] ... }` is `want(T, N)`
 /// plus one contribution `arg(T, N, k, v, Rank)` per field, each with the
-/// whole body. `+=` is a plain contribution: the lattice decides the merge.
+/// whole body, each rule's origin the statement. `+=` is a plain
+/// contribution: the lattice decides the merge.
 fn resource_to_stmts(r: Resource) -> Result<Vec<Stmt>> {
+    let origin = crate::ast::Origin {
+        stmt: r.span,
+        call: None,
+    };
+    let mut out = resource_rules(r)?;
+    for s in &mut out {
+        if let Stmt::Rule(rule) = s {
+            rule.origin.get_or_insert(origin);
+        }
+    }
+    Ok(out)
+}
+
+fn resource_rules(r: Resource) -> Result<Vec<Stmt>> {
     let body = r.body.unwrap_or_default();
     let mut out = vec![fact_or_rule(
         Atom {
@@ -1785,6 +1800,7 @@ pub fn rewrite_computed_refs(
             out_facts.push(head);
             continue;
         }
+        let (helper, origin) = (r.helper, r.origin);
         let body_only = refs.body(r.body);
         for read in &wants {
             unanswered.push(unanswered_read(&head, read, "", body_only.clone()));
@@ -1801,7 +1817,8 @@ pub fn rewrite_computed_refs(
         out_rules.push(RuleStmt {
             head,
             body,
-            helper: r.helper,
+            helper,
+            origin,
         });
     }
     out_rules.extend(unanswered);

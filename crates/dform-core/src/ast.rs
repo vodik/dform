@@ -608,6 +608,11 @@ pub struct RuleStmt {
     /// name: a module's copy is `m::__neg_0`, a call site's `S::__neg_0`
     /// (R-212). A rule rewritten from another keeps it.
     pub helper: Option<Helper>,
+    /// The statement of the program the rule is lowered out of (R-211):
+    /// what a message names it by. `lower` stamps it; a rule rewritten
+    /// from another keeps it; none for a rule only the compiler writes
+    /// (the prelude, the policy's lifecycle rules).
+    pub origin: Option<Origin>,
 }
 
 impl RuleStmt {
@@ -617,6 +622,7 @@ impl RuleStmt {
             head,
             body,
             helper: None,
+            origin: None,
         }
     }
 
@@ -626,8 +632,36 @@ impl RuleStmt {
             head,
             body,
             helper: Some(kind),
+            origin: None,
         }
     }
+
+    /// `head :- body` in this rule's place: its helper kind and origin
+    /// kept.
+    pub fn rewritten(&self, head: Atom, body: Vec<Lit>) -> Self {
+        RuleStmt {
+            head,
+            body,
+            helper: self.helper,
+            origin: self.origin,
+        }
+    }
+
+    /// Where a message places the rule: the statement it is lowered out
+    /// of, else its head.
+    pub fn site(&self) -> Span {
+        self.origin.map_or(self.head.span, |o| o.stmt)
+    }
+}
+
+/// Where a lowered rule comes from (R-211): the statement as the program
+/// writes it, its span in the instance (a `use`, a copy) the rule's head
+/// is lowered in; and for a let's rule copied for one call
+/// (`demand::answer`), that call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Origin {
+    pub stmt: Span,
+    pub call: Option<Span>,
 }
 
 /// The rules the compiler writes that no statement is: each is read by

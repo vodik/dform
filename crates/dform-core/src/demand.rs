@@ -209,20 +209,20 @@ impl Lets {
                 }
                 let (scope, new) = sites.scope(&f, a.span, within.as_deref());
                 let copied = format!("{scope}::{}", program_name(&f));
-                rules.push(RuleStmt::new(
-                    Atom {
-                        pred: of(&copied),
-                        args: a.args[..a.args.len() - 1].to_vec(),
-                        record: None,
-                        span: a.span,
-                    },
-                    r.body[..j].to_vec(),
-                ));
+                let demand = Atom {
+                    pred: of(&copied),
+                    args: a.args[..a.args.len() - 1].to_vec(),
+                    record: None,
+                    span: a.span,
+                };
+                let mut demand = RuleStmt::new(demand, r.body[..j].to_vec());
+                demand.origin = r.origin;
+                rules.push(demand);
                 if new {
                     unions.push(union(&f, &copied, a, self.columns(&f, a.args.len())));
                     let names = self.renames(&f, &scope);
                     for c in self.rules(&f) {
-                        queue.push_back((rename(c, &names), Some(scope.clone())));
+                        queue.push_back((rename(c, &names, a.span), Some(scope.clone())));
                     }
                 }
                 if let Lit::Pos(a) | Lit::Not(a) = &mut r.body[j] {
@@ -346,19 +346,23 @@ fn union(f: &str, copy: &str, site: &Atom, columns: Vec<Term>) -> RuleStmt {
     )
 }
 
-/// `r` with the relations `names` renames renamed, its head and body.
-fn rename(r: &RuleStmt, names: &BTreeMap<String, String>) -> RuleStmt {
+/// `r` with the relations `names` renames renamed, its head and body: its
+/// copy for the call at `call`.
+fn rename(r: &RuleStmt, names: &BTreeMap<String, String>, call: Span) -> RuleStmt {
     let atom = |mut a: Atom| {
         if let Some(n) = names.get(&a.pred) {
             a.pred = n.clone();
         }
         a
     };
-    RuleStmt {
-        head: atom(r.head.clone()),
-        body: r.body.iter().cloned().map(|l| l.map(atom, |t| t)).collect(),
-        helper: r.helper,
+    let mut copy = r.rewritten(
+        atom(r.head.clone()),
+        r.body.iter().cloned().map(|l| l.map(atom, |t| t)).collect(),
+    );
+    if let Some(o) = &mut copy.origin {
+        o.call = Some(call);
     }
+    copy
 }
 
 /// The calls from `f` back to `f`, in order, `f` first and last.

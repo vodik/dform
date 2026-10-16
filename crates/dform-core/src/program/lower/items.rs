@@ -47,6 +47,22 @@ pub(super) fn item(env: Env, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<
     out.extend(stmts);
 }
 
+/// Each rule of `s` (a copy's rows' too) lowered out of the statement
+/// written at `span`, in the instance its head is lowered in; a rule that
+/// has its origin keeps it.
+fn stamp(s: &mut Stmt, span: Span) {
+    match s {
+        Stmt::Rule(r) if r.origin.is_none() => {
+            r.origin = Some(ast::Origin {
+                stmt: span.within(r.head.span.origin),
+                call: None,
+            })
+        }
+        Stmt::Instance(i) | Stmt::Use(i) => i.rows.iter_mut().for_each(|r| stamp(r, span)),
+        _ => {}
+    }
+}
+
 /// A module's file or a component: `Stmt::Module` around its items'
 /// statements, its own origin before theirs; its own `decl`s name its
 /// relations' fields inside it.
@@ -80,8 +96,16 @@ fn module(env: Env, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<Origin>) 
     }));
 }
 
-/// The statements of the item `id`, which is not a module.
+/// The statements of the item `id`, which is not a module, each rule's
+/// origin the item.
 fn statements(env: Env, id: ItemId) -> Vec<Stmt> {
+    let mut out = statements_of(env, id);
+    let span = env.program.items[id].span;
+    out.iter_mut().for_each(|s| stamp(s, span));
+    out
+}
+
+fn statements_of(env: Env, id: ItemId) -> Vec<Stmt> {
     let it = &env.program.items[id];
     match &it.kind {
         ItemKind::Module { .. } => unreachable!("a module is its items' statements"),

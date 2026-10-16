@@ -960,14 +960,11 @@ fn per_type(rules: &[RuleStmt], facts: &[Atom], graph: &Graph) -> Option<Vec<Rul
         any = true;
         for typ in types {
             let env = BTreeMap::from([(t.clone(), Value::Str(typ))]);
-            out.push(RuleStmt {
-                head: Atom {
-                    args: r.head.args.iter().map(|a| a.subst(&env)).collect(),
-                    ..r.head.clone()
-                },
-                body: r.body.iter().map(|l| l.subst(&env)).collect(),
-                helper: r.helper,
-            });
+            let head = Atom {
+                args: r.head.args.iter().map(|a| a.subst(&env)).collect(),
+                ..r.head.clone()
+            };
+            out.push(r.rewritten(head, r.body.iter().map(|l| l.subst(&env)).collect()));
         }
     }
     any.then_some(out)
@@ -1091,11 +1088,7 @@ fn per_key(r: &RuleStmt, vb: &ValueBody, schema: &Schema) -> Option<Vec<RuleStmt
             .collect();
         let mut head = r.head.clone();
         head.args[2] = Term::Val(Value::Str(crate::address::name_segment(key).into_owned()));
-        out.push(RuleStmt {
-            head,
-            body,
-            helper: r.helper,
-        });
+        out.push(r.rewritten(head, body));
     }
     if rest {
         let mut body = r.body.clone();
@@ -1111,11 +1104,7 @@ fn per_key(r: &RuleStmt, vb: &ValueBody, schema: &Schema) -> Option<Vec<RuleStmt
                 span: member.span,
             }),
         );
-        out.push(RuleStmt {
-            head: r.head.clone(),
-            body,
-            helper: r.helper,
-        });
+        out.push(r.rewritten(r.head.clone(), body));
     }
     Some(out)
 }
