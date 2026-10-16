@@ -1870,15 +1870,11 @@ impl Guard {
     fn renew_every(&mut self, times: LeaseTimes) {
         let (tx, rx) = mpsc::channel::<()>();
         let mut renewer = Renewer::new(self.inner.clone(), times);
+        // Its renewals are in the span the lease was taken in.
+        let within = tracing::Span::current();
         let thread = std::thread::Builder::new()
             .name("dform-lease".into())
-            .spawn(move || {
-                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(renewer.wait) {
-                    if !renewer.step() {
-                        return;
-                    }
-                }
-            })
+            .spawn(move || within.in_scope(|| renewer.run(&rx)))
             .expect("spawn the lease renewer");
         self.stop = Some(tx);
         *locked(&self.inner.renewer) = Some(thread);
@@ -1906,6 +1902,15 @@ impl Renewer {
             times,
             wait: times.renewal,
             failing: false,
+        }
+    }
+
+    /// Renew until `stop` says to, or a step says the lease is lost.
+    fn run(&mut self, stop: &mpsc::Receiver<()>) {
+        while let Err(mpsc::RecvTimeoutError::Timeout) = stop.recv_timeout(self.wait) {
+            if !self.step() {
+                return;
+            }
         }
     }
 

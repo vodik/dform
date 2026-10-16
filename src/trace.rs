@@ -74,7 +74,6 @@ pub fn install(flag: Option<PathBuf>, command: &str) -> Result<Option<Run>> {
         otel.name = %format_args!("dform {command}"),
         command,
     );
-    dform_core::timing::set_root(span.id());
     // OpenTelemetry's id when it exports too, so the file and the
     // collector name the run alike; else the file's own.
     let trace_id = traced.then(|| {

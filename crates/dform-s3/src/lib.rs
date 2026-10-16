@@ -433,12 +433,10 @@ impl Store for S3Store {
 }
 
 /// The calls, each one HTTP request (a list, one a page), each an
-/// `io.call` span; one made on a thread with no span of its own (the
-/// lease's renewer) is the run's. (`parent` comes before `target`:
-/// tracing-attributes 0.1.31 refuses one after it.)
+/// `io.call` span, under the span its thread is in (the lease's renewer
+/// is in the one it was started in).
 impl S3Store {
     #[tracing::instrument(
-        parent = dform_core::timing::parent(),
         target = "dform",
         level = "debug",
         name = "io.call",
@@ -478,7 +476,6 @@ impl S3Store {
     }
 
     #[tracing::instrument(
-        parent = dform_core::timing::parent(),
         target = "dform",
         level = "debug",
         name = "io.call",
@@ -523,7 +520,6 @@ impl S3Store {
     }
 
     #[tracing::instrument(
-        parent = dform_core::timing::parent(),
         target = "dform",
         level = "debug",
         name = "io.call",
@@ -580,7 +576,6 @@ impl S3Store {
     }
 
     #[tracing::instrument(
-        parent = dform_core::timing::parent(),
         target = "dform",
         level = "debug",
         name = "io.call",

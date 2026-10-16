@@ -93,7 +93,6 @@ impl Live {
         let provider = provider.rsplit('/').next().unwrap_or(provider);
         tracing::debug_span!(
             target: crate::timing::TARGET,
-            parent: crate::timing::parent(),
             "provider.call",
             otel.name = %format_args!("{provider} {kind}"),
             otel.kind = "client",

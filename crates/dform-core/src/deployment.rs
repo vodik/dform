@@ -2175,7 +2175,6 @@ impl Fetching {
     fn new(n: usize, fetch: Fetch, kind: &str, inputs: &[Value]) -> Fetching {
         let span = tracing::debug_span!(
             target: crate::timing::TARGET,
-            parent: crate::timing::parent(),
             "io.call",
             otel.name = kind,
             otel.kind = "client",
@@ -2254,15 +2253,19 @@ impl Round<'_> {
                 .into_iter()
                 .map(|Fetching { n, fetch, span }| {
                     let (f, inputs) = calls[n];
-                    let made = scope.spawn(move || match fetch {
-                        Fetch::Read(location, base) => {
-                            let read = files.read(&location, &base);
-                            Fetched::Read(location, read)
-                        }
-                        Fetch::Digest => Fetched::Rows(
-                            crate::files::oci::answer(f, inputs, files)
-                                .expect("oci.resolve is answered by dform"),
-                        ),
+                    // The request's work is in its call's span.
+                    let within = span.clone();
+                    let made = scope.spawn(move || {
+                        within.in_scope(|| match fetch {
+                            Fetch::Read(location, base) => {
+                                let read = files.read(&location, &base);
+                                Fetched::Read(location, read)
+                            }
+                            Fetch::Digest => Fetched::Rows(
+                                crate::files::oci::answer(f, inputs, files)
+                                    .expect("oci.resolve is answered by dform"),
+                            ),
+                        })
                     });
                     (n, span, made)
                 })

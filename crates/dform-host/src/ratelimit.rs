@@ -221,10 +221,9 @@ impl Limiter {
     /// Wait until `place` in the queue of the bucket `name` is admitted:
     /// a `ratelimit.wait` span, with the `session` of the request's call
     /// and the `bucket`, `queued` (the requests before it) and `window`
-    /// (how many may be in flight). A thread of the host's has no span of
-    /// its own: the wait is the run's.
+    /// (how many may be in flight), under the span the host's thread is
+    /// in (`grpc::serve`).
     #[tracing::instrument(
-        parent = dform_core::timing::parent(),
         target = "dform",
         level = "trace",
         name = "ratelimit.wait",

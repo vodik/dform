@@ -450,21 +450,11 @@ impl Wasm {
             dead: dead.clone(),
             tx,
         };
+        // What the instance does is in the span it was started in.
+        let within = tracing::Span::current();
         std::thread::Builder::new()
             .name("dform-wasm".into())
-            .spawn(move || {
-                let rt = match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(rt) => rt,
-                    Err(e) => {
-                        let _ = ready.send(Err(anyhow!("start its runtime: {e}")));
-                        return;
-                    }
-                };
-                rt.block_on(instance.serve(engine, component, rx, ready));
-            })
+            .spawn(move || within.in_scope(|| instance.run(engine, component, rx, ready)))
             .context("start the wasm provider's thread")?;
         started
             .recv()
@@ -535,6 +525,28 @@ impl Instance {
             table: ResourceTable::new(),
             host: Services::paced(self.grants.clone(), self.limiter.clone()),
         })
+    }
+
+    /// The instance's thread: a runtime of its own, serving it there
+    /// ([`Instance::serve`]).
+    fn run(
+        self,
+        engine: &'static Engine,
+        component: Component,
+        calls: tokio::sync::mpsc::UnboundedReceiver<(Ticket, Call)>,
+        ready: std::sync::mpsc::Sender<Result<()>>,
+    ) {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                let _ = ready.send(Err(anyhow!("start its runtime: {e}")));
+                return;
+            }
+        };
+        rt.block_on(self.serve(engine, component, calls, ready));
     }
 
     /// Instantiate, say so on `ready`, then run every call `calls` brings

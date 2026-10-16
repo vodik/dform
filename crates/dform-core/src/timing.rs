@@ -26,38 +26,20 @@
 //! span held by what tracks it and ended when that is dropped
 //! (`plugin::timed`'s `Live`, a round's `Fetching`), when the run takes
 //! its answer, which for a provider the run is not waiting on then is
-//! after it came. The order the run took is a reader's to compute, from
-//! the spans' times and parents. A phase `DFORM_LOG=debug` says is a
+//! after it came. Work a thread of dform's does for the run is in the
+//! span current where the thread was started (`Span::current()` taken
+//! there and entered around its work, as tokio's `Instrumented` does): the
+//! lease's renewer, the host serving a provider, a round's requests. The
+//! order the run took is a reader's to compute, from the spans' times and
+//! parents. A phase `DFORM_LOG=debug` says is a
 //! `debug` span; one only a trace showed, `trace`.
 //!
 //! With no subscriber (no trace asked for) and no `DFORM_LOG`, a span
 //! costs its callsite's check.
 
-use std::sync::OnceLock;
-
 /// The target every span of dform's is under: a subscriber keeps these
 /// and drops the libraries' own.
 pub const TARGET: &str = "dform";
-
-/// The run's span, set by whoever exports the spans: a span made on a
-/// thread with no span of its own (the lease's renewer, a host thread
-/// pacing a provider's requests) names it its parent ([`parent`]), so it
-/// is in the run's trace.
-static ROOT: OnceLock<tracing::Id> = OnceLock::new();
-
-/// The run's span is `id`.
-pub fn set_root(id: Option<tracing::Id>) {
-    if let Some(id) = id {
-        let _ = ROOT.set(id);
-    }
-}
-
-/// A new span's parent: the span it is made in, else the run's.
-pub fn parent() -> Option<tracing::Id> {
-    tracing::Span::current()
-        .id()
-        .or_else(|| ROOT.get().cloned())
-}
 
 /// A location as a span names it: a URI without its userinfo, query or
 /// fragment, where a credential could be written; anything else as it is.

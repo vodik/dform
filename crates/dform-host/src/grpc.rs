@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use dform_core::plugin::host::Calls;
 use dform_grpc::host as conv;
 use dform_grpc::host_pb as h;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
@@ -216,43 +216,12 @@ pub fn serve(services: Services) -> Result<Served> {
     let (ready, listening) = std::sync::mpsc::channel::<std::io::Result<()>>();
     let path = socket.clone();
     let service = Service(Arc::new(services));
+    // What the host does for the provider is in the span it was started
+    // in: each request its tasks serve sees it as the current one.
+    let within = tracing::Span::current();
     let thread = std::thread::Builder::new()
         .name("dform-host".into())
-        .spawn(move || {
-            let rt = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(e) => {
-                    let _ = ready.send(Err(e));
-                    return;
-                }
-            };
-            rt.block_on(async move {
-                let listener = match tokio::net::UnixListener::bind(&path) {
-                    Ok(l) => l,
-                    Err(e) => {
-                        let _ = ready.send(Err(e));
-                        return;
-                    }
-                };
-                let _ = ready.send(Ok(()));
-                let _ = tonic::transport::Server::builder()
-                    .add_service(
-                        h::host_server::HostServer::new(service)
-                            .max_decoding_message_size(usize::MAX)
-                            .max_encoding_message_size(usize::MAX),
-                    )
-                    .serve_with_incoming_shutdown(
-                        tonic::codegen::tokio_stream::wrappers::UnixListenerStream::new(listener),
-                        async {
-                            let _ = stopped.await;
-                        },
-                    )
-                    .await;
-            });
-        })
+        .spawn(move || within.in_scope(|| host(service, &path, ready, stopped)))
         .context("start the host service")?;
     listening
         .recv()
@@ -264,6 +233,50 @@ pub fn serve(services: Services) -> Result<Served> {
         stop: Some(stop),
         thread: Some(thread),
     })
+}
+
+/// The host's thread: `service` served on the socket at `path` until
+/// `stopped`, on a runtime of its own; `ready` told once it listens, or
+/// why it does not.
+fn host(
+    service: Service,
+    path: &Path,
+    ready: std::sync::mpsc::Sender<std::io::Result<()>>,
+    stopped: tokio::sync::oneshot::Receiver<()>,
+) {
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            let _ = ready.send(Err(e));
+            return;
+        }
+    };
+    rt.block_on(async move {
+        let listener = match tokio::net::UnixListener::bind(path) {
+            Ok(l) => l,
+            Err(e) => {
+                let _ = ready.send(Err(e));
+                return;
+            }
+        };
+        let _ = ready.send(Ok(()));
+        let _ = tonic::transport::Server::builder()
+            .add_service(
+                h::host_server::HostServer::new(service)
+                    .max_decoding_message_size(usize::MAX)
+                    .max_encoding_message_size(usize::MAX),
+            )
+            .serve_with_incoming_shutdown(
+                tonic::codegen::tokio_stream::wrappers::UnixListenerStream::new(listener),
+                async {
+                    let _ = stopped.await;
+                },
+            )
+            .await;
+    });
 }
 
 impl Drop for Served {
