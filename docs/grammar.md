@@ -255,6 +255,7 @@ What a doc comment may document, and the `Kind` and `Name` of its facts:
 | `output k`                                  | `output`    | `k`                   |
 | `decl p(..)`, `extern p(..)`, `input p from ..` | `predicate` | `p` |
 | `p(..) where ..`, a fact, `let k = t`, `deny "m"`, `warn "m"` | `rule` | `p`, `k`, `m` (the message) |
+| `let f(a, ..) = t`, a let with parameters   | `function`  | `f`                   |
 | `type a = T`                                | `alias`     | `a`                   |
 | `resource T n`, `resource T "n-${e}"`       | `resource`  | `T["n"]`, `T["n-${e}"]` (as written) |
 
@@ -1070,7 +1071,8 @@ let a type, `let limits: { cpu: cpu }`, or use it where a cpu or a
 duration is wanted`. A let with parameters is the same: its call's value
 flows to where the call is written.
 
-`let f(a, b) = t [where B]` is a let with parameters: the
+`let f(a, b) = t [where B]` is a let with parameters, a function in
+messages, `dform doc` and the language server: the
 relation `f(a, b, v)` with the mode `(+, +, -)`, every column but the
 last bound by whoever reads it, as a provider's table's `+` columns are
 ("Functions"). It lowers to the rule `f(A, B, V) :- B, V = t`; a call

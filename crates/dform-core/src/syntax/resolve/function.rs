@@ -376,7 +376,7 @@ impl Lowerer<'_> {
             return Ok(());
         };
         let d = Diagnostic::error(span, format!("unknown function {name}"))
-            .with_help(format!("the let with parameters in scope is `{near}`"))
+            .with_help(format!("the function in scope is `{near}`"))
             .with_fix(format!("call `{near}`"), vec![(span, near.to_string())]);
         self.diags.push(d);
         Err(Skip)
@@ -390,7 +390,7 @@ impl Lowerer<'_> {
         self.error(
             span,
             format!(
-                "`{name}` is a let with parameters: call it, `{}`",
+                "`{name}` is a function: call it, `{}`",
                 signature(name, &ps)
             ),
         )
@@ -402,8 +402,8 @@ impl Lowerer<'_> {
         let d = Diagnostic::error(
             span,
             format!(
-                "`in` over `{name}`: a let with parameters is a relation whose arguments must be \
-                 bound, so nothing enumerates it"
+                "`in` over `{name}`: a function is a relation whose arguments must be bound, \
+                 so nothing enumerates it"
             ),
         )
         .with_help(format!(

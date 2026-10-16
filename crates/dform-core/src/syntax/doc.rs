@@ -1,6 +1,6 @@
 //! Doc comments (docs/grammar.md "Doc comments"): `#|` lines directly
-//! above a component, input, output, predicate, rule, type alias or
-//! resource. `#| key: value` is a pair, any other `#|` line is
+//! above a component, input, output, predicate, rule, function, type
+//! alias or resource. `#| key: value` is a pair, any other `#|` line is
 //! part of the item's `description`. They lower to `doc(Kind, Name, Key,
 //! Value)` facts; the language server shows them and `dform doc` renders
 //! them. The first `#|` lines of a file, a blank line below them, are
@@ -16,8 +16,8 @@ pub const KEYS: &[&str] = &["description", "owner", "since", "deprecated"];
 /// One documented item.
 #[derive(Debug, Clone)]
 pub struct Doc {
-    /// `component`, `input`, `output`, `predicate`, `rule`, `alias` or
-    /// `resource`.
+    /// `component`, `input`, `output`, `predicate`, `rule`, `function`,
+    /// `alias` or `resource`.
     pub kind: &'static str,
     /// Its name; inside a component `COMPONENT.NAME`.
     pub name: String,
@@ -174,6 +174,9 @@ pub fn item(n: &SyntaxNode) -> Option<(&'static str, String)> {
             let chain = call.children().find(|c| c.kind() == CHAIN)?;
             ("rule", chain.text().to_string())
         }
+        // A let with parameters (R-187) is a rule underneath; its reader
+        // calls it a function.
+        LET if n.children().any(|c| c.kind() == PARAMS) => ("function", word(n, 1)?),
         LET => ("rule", word(n, 1)?),
         CHECK => ("rule", unquote(&tokens(n).find(|t| t.kind() == STRING)?)),
         RESOURCE => {
@@ -368,7 +371,7 @@ mod tests {
 
     #[test]
     fn doc_lines_directly_above_an_item_document_it() {
-        let src = "\n\n#| The network.\n#| owner: platform\n#|\n#| Its subnets are private.\ncomponent network {\n  #| The VPC's range.\n  #| since: 2026.1\n  input vpc_net: inet\n\n  #| not this: a blank line follows\n\n  output vpc: net.vpc\n  #| A subnet.\n  resource net.subnet \"private-${z}\" @default {\n  } where data(\"zone\", z)\n}\nlet x = 1 #| a trailing comment\nlet y = 2\n# a plain comment\n#| deprecated: use q\np(a) where q(a)\n#| Checked.\ndeny \"no\" where p(1)\n#| Named.\ntype env = enum(\"a\")\n#| An extern.\nextern dns.lookup(+name, -addr)\n";
+        let src = "\n\n#| The network.\n#| owner: platform\n#|\n#| Its subnets are private.\ncomponent network {\n  #| The VPC's range.\n  #| since: 2026.1\n  input vpc_net: inet\n\n  #| not this: a blank line follows\n\n  output vpc: net.vpc\n  #| A subnet.\n  resource net.subnet \"private-${z}\" @default {\n  } where data(\"zone\", z)\n}\nlet x = 1 #| a trailing comment\nlet y = 2\n# a plain comment\n#| deprecated: use q\np(a) where q(a)\n#| Checked.\ndeny \"no\" where p(1)\n#| Named.\ntype env = enum(\"a\")\n#| An extern.\nextern dns.lookup(+name, -addr)\n#| A range.\nlet cidr(a) = a\n";
         assert_eq!(
             docs(src),
             vec![
@@ -405,6 +408,11 @@ mod tests {
                     "predicate".into(),
                     "dns.lookup".into(),
                     kv(&[("description", "An extern.")])
+                ),
+                (
+                    "function".into(),
+                    "cidr".into(),
+                    kv(&[("description", "A range.")])
                 ),
             ]
         );

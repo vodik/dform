@@ -206,8 +206,8 @@ resource net.vpc u { cidr = c } where c in cidr
     .failure();
     assert!(
         r.stderr.contains(
-            "error  `in` over `cidr`: a let with parameters is a relation whose arguments \
-             must be bound, so nothing enumerates it"
+            "error  `in` over `cidr`: a function is a relation whose arguments must be \
+             bound, so nothing enumerates it"
         ) && r.stderr.contains(
             "call it with its arguments, `cidr(a, b)`; `x in cidr(a, b)` reads a list it returns"
         ),
@@ -223,7 +223,7 @@ resource net.vpc u { cidr = cidr }
     .failure();
     assert!(
         r.stderr
-            .contains("`cidr` is a let with parameters: call it, `cidr(a, b)`"),
+            .contains("`cidr` is a function: call it, `cidr(a, b)`"),
         "{}",
         r.stderr
     );
@@ -241,8 +241,7 @@ resource net.vpc u { cidr = resti(1) }
     .failure();
     assert!(
         r.stderr.contains("error  unknown function resti")
-            && r.stderr
-                .contains("the let with parameters in scope is `restic`"),
+            && r.stderr.contains("the function in scope is `restic`"),
         "{}",
         r.stderr
     );
@@ -263,7 +262,7 @@ fn a_reader_inside_is_an_error() {
         .failure();
         assert!(
             r.stderr.contains(&format!(
-                "let f reads {what}: a let with parameters is pure, its value its arguments' \
+                "function f reads {what}: a function is pure, its value its arguments' \
                  alone"
             )) && r
                 .stderr
@@ -288,7 +287,7 @@ resource net.vpc u { cidr = f(1) }
     .failure();
     assert!(
         r.stderr
-            .contains("error  let f calls itself: f calls g calls f"),
+            .contains("error  function f calls itself: f calls g calls f"),
         "{}",
         r.stderr
     );

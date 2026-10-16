@@ -119,8 +119,8 @@ impl Lets {
                         Diagnostic::error(
                             a.span,
                             format!(
-                                "let {name} reads {what}: a let with parameters is pure, its \
-                                 value its arguments' alone"
+                                "function {name} reads {what}: a function is pure, its value \
+                                 its arguments' alone"
                             ),
                         )
                         .with_help(format!(
@@ -169,11 +169,11 @@ impl Lets {
             out.push(
                 Diagnostic::error(
                     self.modes[f],
-                    format!("let {name} calls itself: {}", names.join(" calls ")),
+                    format!("function {name} calls itself: {}", names.join(" calls ")),
                 )
                 .with_note(
-                    "a let with parameters is answered where it is called, once its \
-                     arguments are known; a call of itself waits on its own answer",
+                    "a function is answered where it is called, once its arguments are \
+                     known; a call of itself waits on its own answer",
                 ),
             );
         }

@@ -28,7 +28,8 @@ pub fn kind(k: &ItemKind) -> &'static str {
             component: true, ..
         } => "a component",
         ItemKind::Module { .. } => "a module",
-        ItemKind::Let { .. } | ItemKind::LetFn { .. } => "a let",
+        ItemKind::Let { .. } => "a let",
+        ItemKind::LetFn { .. } => "a function",
         ItemKind::Rule { .. } => "a rule",
         ItemKind::Check {
             kind: CheckKind::Deny,
