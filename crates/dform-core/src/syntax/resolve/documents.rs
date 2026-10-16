@@ -346,19 +346,7 @@ impl Lowerer<'_> {
         let [arg] = args.as_slice() else {
             return bad(self, "`io.read` takes one location");
         };
-        if arg.kind() == CALL && self.callee(arg).as_deref() == Some("git") {
-            let d = Diagnostic::error(
-                self.span(arg),
-                "`git(..)` is gone (R-153): a repository's file is a location",
-            )
-            .with_help(
-                "`io.read(\"git+https://HOST/OWNER/REPO/PATH?ref=TAG\")` (`git+ssh://` over \
-                 ssh, `git+file:REPO/PATH?ref=TAG` for a repository in the project), read at \
-                 the commit the ref names, which the plan file records",
-            );
-            self.diags.push(d);
-            return Err(Skip);
-        }
+        self.no_git(arg)?;
         let location = self.expr(rc, arg, Pos::Content)?;
         let path = fresh(rc, "Path");
         let at = fresh(rc, "At");
@@ -389,5 +377,23 @@ impl Lowerer<'_> {
             span,
         };
         Ok((vec![decl], read))
+    }
+
+    /// `git(..)` as a document's location is gone (R-153): an error.
+    fn no_git(&mut self, arg: &SyntaxNode) -> L<()> {
+        if arg.kind() != CALL || self.callee(arg).as_deref() != Some("git") {
+            return Ok(());
+        }
+        let d = Diagnostic::error(
+            self.span(arg),
+            "`git(..)` is gone (R-153): a repository's file is a location",
+        )
+        .with_help(
+            "`io.read(\"git+https://HOST/OWNER/REPO/PATH?ref=TAG\")` (`git+ssh://` over ssh, \
+             `git+file:REPO/PATH?ref=TAG` for a repository in the project), read at the commit \
+             the ref names, which the plan file records",
+        );
+        self.diags.push(d);
+        Err(Skip)
     }
 }

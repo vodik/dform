@@ -14,23 +14,8 @@ impl Lowerer<'_> {
     /// stack's deployment, `platform[env=e].k`.
     pub(super) fn scope_path(&mut self, rc: &mut Rc, c: &Chain, span: Span) -> L<Option<Res>> {
         let h = c.head.as_str();
-        // Inside a module's file the module reads itself by its own name
-        // (`backups.repository` in its component): its value or resource
-        // is the one of the instance the read is in, as a bare read's is
-        // (R-186).
-        if let Some(from) = self.self_module(rc.scope, h)
-            && let Some(Op::Field(x)) = c.ops.first()
-        {
-            let rest = Chain {
-                head: x.clone(),
-                head_kind: IDENT,
-                call: None,
-                range: c.range,
-                ops: c.ops[1..].to_vec(),
-            };
-            if let Some(r) = self.item_read(rc, from, false, &rest, span)? {
-                return Ok(Some(r));
-            }
+        if let Some(r) = self.self_read(rc, c, span)? {
+            return Ok(Some(r));
         }
         // Its other items under the name its user's `use` binds it to
         // (`use backups as b`).
@@ -61,70 +46,14 @@ impl Lowerer<'_> {
             };
             return self.deployed_path(rc, &short, &d, span).map(Some);
         }
-        // A component by a name in scope (`network`), a used module's
-        // (`net.vpc`), or by its path from the root (`modules.net.vpc`).
-        let mut ops = &c.ops[..];
-        let mut path = match self.component_in(rc.scope, h) {
-            Some(p) => Some(p),
-            None => self.use_in(rc.scope, h),
-        };
-        if path.is_none() {
-            let mut at = h.to_string();
-            while let Some(Op::Field(f)) = ops.first() {
-                if self.module_at(&at).is_some() {
-                    break;
-                }
-                at = format!("{at}.{f}");
-                ops = &ops[1..];
-            }
-            if !self.module_at(&at).is_some() {
-                return Ok(None);
-            }
-            path = Some(at);
-        }
-        let Some(mut at) = path.take() else {
+        let Some((at, ops)) = self.module_named(rc.scope, h, &c.ops) else {
             return Ok(None);
         };
-        while let Some(Op::Field(f)) = ops.first() {
-            let next = format!("{at}.{f}");
-            if !self.module_at(&next).is_some_and(|m| m.1) {
-                break;
-            }
-            at = next;
-            ops = &ops[1..];
-        }
         let component = self.module_at(&at).is_some_and(|m| m.1);
         match ops.first() {
-            Some(Op::Index(ts, _)) if component && ts.len() == 1 => {
-                let mut t = self.bind(true, |l| l.part(rc, &ts[0]))?;
-                // `c[_]` binds each copy (R-162): a name its resources'
-                // addresses are made of (`c[_].vm`, R-191).
-                if matches!(self.program.exprs[t].kind, ExprKind::Hole) {
-                    let copy = fresh(rc, "Copy");
-                    t = self.var_node(rc, span, &copy);
-                }
-                // The copies of `at` this body makes, or its user's.
-                let own = self
-                    .own_scopes(rc.scope)
-                    .iter()
-                    .find(|s| {
-                        self.names(**s)
-                            .instances()
-                            .map(|(_, c)| c)
-                            .any(|p| *p == at)
-                    })
-                    .copied();
-                let at_scope = own.unwrap_or(self.root());
-                let user = self.str_node(span, "");
-                let parent = self.scoped(rc.scope, at_scope, user, span);
-                self.copy_test(rc, (&at, parent, t), span);
-                let inst = self.scoped(rc.scope, at_scope, t, span);
-                // The test is the read's when it names the copy as the
-                // read does: the body's own copies.
-                let of = (inst == t).then(|| (at.clone(), parent));
-                self.output_of(rc, (inst, of), &at, &ops[1..], span)
-                    .map(Some)
-            }
+            Some(Op::Index(ts, _)) if component && ts.len() == 1 => self
+                .copies_read(rc, (&at, &ts[0], &ops[1..]), span)
+                .map(Some),
             _ if component => self
                 .error(
                     span,
@@ -143,50 +72,7 @@ impl Lowerer<'_> {
             Some(Op::Field(x))
                 if self.use_in(rc.scope, h).is_some() && ops.len() == c.ops.len() =>
             {
-                let Some((module, _)) = self.module_at(&at) else {
-                    return Err(Skip);
-                };
-                let declared = self
-                    .chain_of(rc.scope)
-                    .into_iter()
-                    .find(|s| self.names(*s).module(h).is_some())
-                    .unwrap_or(self.root());
-                let own = self.names(module);
-                if let Some(at) = own.value_at(x) {
-                    let path = self.segs(rc, &ops[1..])?;
-                    let decl = DeclRef {
-                        scope: module,
-                        name: x.clone(),
-                        at,
-                    };
-                    let via = Reach::Use(h.to_string());
-                    return Ok(Some(Res::Value { decl, via, path }));
-                }
-                if own.output(x).is_some() {
-                    let name = self.str_node(span, h);
-                    let inst = self.scoped(rc.scope, declared, name, span);
-                    return self.output_of(rc, (inst, None), &at, ops, span).map(Some);
-                }
-                if let Some(types) = own.resources(x) {
-                    if types.len() > 1 {
-                        return self.ambiguous(x, &types, span).map(Some);
-                    }
-                    let name = self.str_node(span, h);
-                    let scope = self.scoped(rc.scope, declared, name, span);
-                    let path = self.segs(rc, &ops[1..])?;
-                    let x = self.str_node(span, &crate::address::name_segment(x));
-                    return Ok(Some(Res::Ref {
-                        typ: self.str_node(span, &types[0]),
-                        addr: self
-                            .building(rc, span, |b| b.form(crate::address::SCOPED, vec![scope, x])),
-                        path,
-                    }));
-                }
-                self.error(
-                    span,
-                    format!("the module {at} has no value, output or resource `{x}`"),
-                )
-                .map(Some)
+                self.used_item(rc, (h, &at), (x, ops), span).map(Some)
             }
             _ => self
                 .error(
@@ -195,6 +81,150 @@ impl Lowerer<'_> {
                 )
                 .map(Some),
         }
+    }
+
+    /// Inside a module's file the module reads itself by its own name
+    /// (`backups.repository` in its component): its value or resource is
+    /// the one of the instance the read is in, as a bare read's is (R-186).
+    fn self_read(&mut self, rc: &mut Rc, c: &Chain, span: Span) -> L<Option<Res>> {
+        let (Some(from), Some(Op::Field(x))) = (self.self_module(rc.scope, &c.head), c.ops.first())
+        else {
+            return Ok(None);
+        };
+        let rest = Chain {
+            head: x.clone(),
+            head_kind: IDENT,
+            call: None,
+            range: c.range,
+            ops: c.ops[1..].to_vec(),
+        };
+        self.item_read(rc, from, false, &rest, span)
+    }
+
+    /// The module or component `h` names in `scope` (a name in scope,
+    /// `network`; a used module's, `net.vpc`; a path from the root,
+    /// `modules.net.vpc`) and the components under it `ops` reach: its
+    /// path, and the ops after it.
+    fn module_named<'o>(
+        &self,
+        scope: ScopeId,
+        h: &str,
+        ops: &'o [Op],
+    ) -> Option<(String, &'o [Op])> {
+        let mut ops = ops;
+        let mut at = match self.component_in(scope, h) {
+            Some(p) => p,
+            None => match self.use_in(scope, h) {
+                Some(p) => p,
+                None => {
+                    let mut at = h.to_string();
+                    while let Some(Op::Field(f)) = ops.first() {
+                        if self.module_at(&at).is_some() {
+                            break;
+                        }
+                        at = format!("{at}.{f}");
+                        ops = &ops[1..];
+                    }
+                    self.module_at(&at)?;
+                    at
+                }
+            },
+        };
+        while let Some(Op::Field(f)) = ops.first() {
+            let next = format!("{at}.{f}");
+            if !self.module_at(&next).is_some_and(|m| m.1) {
+                break;
+            }
+            at = next;
+            ops = &ops[1..];
+        }
+        Some((at, ops))
+    }
+
+    /// `c[t].k`: an output of each copy of the component at `at` by its
+    /// key `t` (`instance_of(c, S, T), output(T, k, V)`), the test that it
+    /// exists before the read.
+    fn copies_read(
+        &mut self,
+        rc: &mut Rc,
+        (at, key, ops): (&str, &SyntaxNode, &[Op]),
+        span: Span,
+    ) -> L<Res> {
+        let mut t = self.bind(true, |l| l.part(rc, key))?;
+        // `c[_]` binds each copy (R-162): a name its resources'
+        // addresses are made of (`c[_].vm`, R-191).
+        if matches!(self.program.exprs[t].kind, ExprKind::Hole) {
+            let copy = fresh(rc, "Copy");
+            t = self.var_node(rc, span, &copy);
+        }
+        // The copies of `at` this body makes, or its user's.
+        let own = self
+            .own_scopes(rc.scope)
+            .iter()
+            .find(|s| self.names(**s).instances().map(|(_, c)| c).any(|p| p == at))
+            .copied();
+        let at_scope = own.unwrap_or(self.root());
+        let user = self.str_node(span, "");
+        let parent = self.scoped(rc.scope, at_scope, user, span);
+        self.copy_test(rc, (at, parent, t), span);
+        let inst = self.scoped(rc.scope, at_scope, t, span);
+        // The test is the read's when it names the copy as the read
+        // does: the body's own copies.
+        let of = (inst == t).then(|| (at.to_string(), parent));
+        self.output_of(rc, (inst, of), at, ops, span)
+    }
+
+    /// `m.x`, the item `x` of the module at `at` a `use` binds to `h`: a
+    /// value, an output, or a resource; `ops` from `x` on.
+    fn used_item(
+        &mut self,
+        rc: &mut Rc,
+        (h, at): (&str, &str),
+        (x, ops): (&String, &[Op]),
+        span: Span,
+    ) -> L<Res> {
+        let Some((module, _)) = self.module_at(at) else {
+            return Err(Skip);
+        };
+        let declared = self
+            .chain_of(rc.scope)
+            .into_iter()
+            .find(|s| self.names(*s).module(h).is_some())
+            .unwrap_or(self.root());
+        let own = self.names(module);
+        if let Some(at) = own.value_at(x) {
+            let path = self.segs(rc, &ops[1..])?;
+            let decl = DeclRef {
+                scope: module,
+                name: x.clone(),
+                at,
+            };
+            let via = Reach::Use(h.to_string());
+            return Ok(Res::Value { decl, via, path });
+        }
+        if own.output(x).is_some() {
+            let name = self.str_node(span, h);
+            let inst = self.scoped(rc.scope, declared, name, span);
+            return self.output_of(rc, (inst, None), at, ops, span);
+        }
+        let Some(types) = own.resources(x) else {
+            return self.error(
+                span,
+                format!("the module {at} has no value, output or resource `{x}`"),
+            );
+        };
+        if types.len() > 1 {
+            return self.ambiguous(x, &types, span);
+        }
+        let name = self.str_node(span, h);
+        let scope = self.scoped(rc.scope, declared, name, span);
+        let path = self.segs(rc, &ops[1..])?;
+        let x = self.str_node(span, &crate::address::name_segment(x));
+        Ok(Res::Ref {
+            typ: self.str_node(span, &types[0]),
+            addr: self.building(rc, span, |b| b.form(crate::address::SCOPED, vec![scope, x])),
+            path,
+        })
     }
 
     /// Each declaration of `h` in `s`, when it is declared more than once
@@ -419,6 +449,58 @@ impl Lowerer<'_> {
         Err(Skip)
     }
 
+    /// The name of the deployment of `d` its keys `entries` name,
+    /// `NAME[k=v,..]`: a constant when every value is one, else formatted
+    /// of them.
+    fn deployment_name(
+        &mut self,
+        rc: &mut Rc,
+        d: &Deployed,
+        entries: &[(String, SyntaxNode)],
+        span: Span,
+    ) -> L<ExprId> {
+        let mut values = Vec::new();
+        for k in &d.keys {
+            let (_, t) = entries.iter().find(|(x, _)| x == k).expect("checked");
+            let v = self.bind(true, |l| l.part(rc, t))?;
+            let e = &self.program.exprs[v];
+            let escaped = match (&e.kind, e.hoisted) {
+                (ExprKind::Lit(Value::Str(s)), None) => Some(crate::stack::escape(s)),
+                (ExprKind::Lit(v), None) => Some(crate::stack::escape(&spell::bare(v))),
+                _ => None,
+            };
+            values.push(match escaped {
+                Some(s) => self.str_node(span, &s),
+                None => v,
+            });
+        }
+        let text = |vs: Vec<String>| {
+            let kv: Vec<String> = d
+                .keys
+                .iter()
+                .zip(vs)
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect();
+            format!("{}[{}]", d.name, kv.join(","))
+        };
+        let constant: Option<Vec<String>> = values
+            .iter()
+            .map(|v| match &self.program.exprs[*v].kind {
+                ExprKind::Lit(Value::Str(s)) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+        Ok(match constant {
+            Some(vs) => self.str_node(span, &text(vs)),
+            None => {
+                let holes = text(vec!["%s".to_string(); d.keys.len()]);
+                let holes = self.str_node(span, &holes);
+                let args = std::iter::once(holes).chain(values).collect();
+                self.building(rc, span, |b| b.form(crate::address::FORMAT, args))
+            }
+        })
+    }
+
     /// `NAME[k=v, ..].out.path`, or `NAME.out.path` unkeyed: an output of
     /// a stack's deployment (R-65), the instance `NAME[k=v,..]`, read from
     /// what it published. Each key is given once.
@@ -459,46 +541,7 @@ impl Lowerer<'_> {
                         ),
                     );
                 }
-                let mut values = Vec::new();
-                for k in &keys {
-                    let (_, t) = entries.iter().find(|(x, _)| x == k).expect("checked");
-                    let v = self.bind(true, |l| l.part(rc, t))?;
-                    let e = &self.program.exprs[v];
-                    let escaped = match (&e.kind, e.hoisted) {
-                        (ExprKind::Lit(Value::Str(s)), None) => Some(crate::stack::escape(s)),
-                        (ExprKind::Lit(v), None) => Some(crate::stack::escape(&spell::bare(v))),
-                        _ => None,
-                    };
-                    values.push(match escaped {
-                        Some(s) => self.str_node(span, &s),
-                        None => v,
-                    });
-                }
-                let text = |vs: Vec<String>| {
-                    let kv: Vec<String> = keys
-                        .iter()
-                        .zip(vs)
-                        .map(|(k, v)| format!("{k}={v}"))
-                        .collect();
-                    format!("{}[{}]", d.name, kv.join(","))
-                };
-                let constant: Option<Vec<String>> = values
-                    .iter()
-                    .map(|v| match &self.program.exprs[*v].kind {
-                        ExprKind::Lit(Value::Str(s)) => Some(s.clone()),
-                        _ => None,
-                    })
-                    .collect();
-                let name = match constant {
-                    Some(vs) => self.str_node(span, &text(vs)),
-                    None => {
-                        let holes = text(vec!["%s".to_string(); keys.len()]);
-                        let holes = self.str_node(span, &holes);
-                        let args = std::iter::once(holes).chain(values).collect();
-                        self.building(rc, span, |b| b.form(crate::address::FORMAT, args))
-                    }
-                };
-                (name, &c.ops[1..])
+                (self.deployment_name(rc, d, entries, span)?, &c.ops[1..])
             }
             Some(Op::Field(_)) if keys.is_empty() => (self.str_node(span, &d.name), &c.ops[..]),
             _ if keys.is_empty() => {
@@ -522,6 +565,18 @@ impl Lowerer<'_> {
                 );
             }
         };
+        self.deployment_output(rc, (d, m), (name, rest), span)
+    }
+
+    /// `.out.path` of the deployment of `d` named `name`, `rest` the ops
+    /// from `.out` on; `m` the deployment as the read writes it.
+    fn deployment_output(
+        &mut self,
+        rc: &mut Rc,
+        (d, m): (&Deployed, &str),
+        (name, rest): (ExprId, &[Op]),
+        span: Span,
+    ) -> L<Res> {
         let Some(Op::Field(k)) = rest.first() else {
             return self.error(
                 span,

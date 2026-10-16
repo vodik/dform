@@ -54,7 +54,7 @@ impl Lowerer<'_> {
     }
 
     /// What a chain denotes (section "Names" of docs/grammar.md). Index
-    /// terms are lowered in `rc`, their reads into `pre`.
+    /// terms are lowered in `rc`.
     pub(super) fn resolve(&mut self, rc: &mut Rc, c: &Chain) -> L<Res> {
         let span = self.span_of(c.range);
         if let Some(call) = &c.call {
@@ -104,74 +104,100 @@ impl Lowerer<'_> {
         }
         // A typed variable: a reference.
         if let Some(t) = rc.types.get(h).cloned() {
-            if let Some(Op::Field(first)) = c.ops.first() {
-                self.namespace_attr(rc, h, first, span)?;
-            }
-            let v = self.var_named(rc, h, span);
-            let path = self.segs(rc, &c.ops)?;
-            let name = self.var_node(rc, span, &v);
-            let addr = match rc.row_refs.contains(h) {
-                true => {
-                    let via = Reach::Absolute;
-                    self.node(span, ExprKind::Scoped { name, via })
-                }
-                false => name,
-            };
-            let typ = self.name_node(rc, span, &t);
-            return Ok(Res::Ref { typ, addr, path });
+            return self.typed_var(rc, c, &t, span);
         }
-        // A name a resource shares, read as the other thing's (R-76); in a
-        // module's or a component's body, the body's own (R-101).
-        let own = match rc.vars.contains_key(h) {
+        if let Some(r) = self.declared_read(rc, c, span)? {
+            return Ok(r);
+        }
+        self.variable_or_type(rc, c, span)
+    }
+
+    /// `x.p` of a variable `x in T` types `t`: a reference, a reference
+    /// column's row its own (R-204).
+    fn typed_var(&mut self, rc: &mut Rc, c: &Chain, t: &Term, span: Span) -> L<Res> {
+        let h = c.head.as_str();
+        if let Some(Op::Field(first)) = c.ops.first() {
+            self.namespace_attr(rc, h, first, span)?;
+        }
+        let v = self.var_named(rc, h, span);
+        let path = self.segs(rc, &c.ops)?;
+        let name = self.var_node(rc, span, &v);
+        let addr = match rc.row_refs.contains(h) {
+            true => {
+                let via = Reach::Absolute;
+                self.node(span, ExprKind::Scoped { name, via })
+            }
+            false => name,
+        };
+        let typ = self.name_node(rc, span, t);
+        Ok(Res::Ref { typ, addr, path })
+    }
+
+    /// A chain whose head the program declares, no variable of the rule
+    /// shadowing it: a value, a setting, the world, a bare name, a
+    /// resource, a scope's item, a type's resource by key. A name a
+    /// resource shares is read as the other thing's (R-76); in a module's
+    /// or a component's body, the body's own (R-101). None for a
+    /// variable's path or a type's name.
+    fn declared_read(&mut self, rc: &mut Rc, c: &Chain, span: Span) -> L<Option<Res>> {
+        let h = c.head.as_str();
+        let var = rc.vars.contains_key(h);
+        let own = match var {
             true => None,
             false => self.own_wins(rc.scope, h),
         };
-        let shared = !rc.vars.contains_key(h)
+        let shared = !var
             && match own {
                 Some(resource) => !resource,
                 None => self.shared_name(rc.scope, c, span)?,
             };
-        if !rc.vars.contains_key(h) {
+        if !var {
             self.undeclared(rc, h, span)?;
             if self.is_value(rc.scope, h) && own != Some(true) {
-                return self.value(rc, rc.scope, c, span);
+                return self.value(rc, rc.scope, c, span).map(Some);
             }
             // `settings.x` names a resource called `settings` in scope; a
             // settings row, `settings[e]`, is gone (R-38).
             let resource =
                 matches!(c.ops.first(), Some(Op::Field(_))) && self.resource(rc.scope, h).is_some();
             if c.head_kind == SETTINGS_KW && !c.is_bare() && !resource {
-                return self.settings_read(c, span);
+                return self.settings_read(c, span).map(Some);
             }
             if h == "world" && !c.ops.is_empty() {
-                return self.world(rc, c, span);
+                return self.world(rc, c, span).map(Some);
             }
         }
         if c.is_bare() {
-            if c.head_kind == SETTINGS_KW && !rc.vars.contains_key(h) {
-                return self.settings_read(c, span);
+            if c.head_kind == SETTINGS_KW && !var {
+                return self.settings_read(c, span).map(Some);
             }
-            return self.bare(rc, h, span);
+            return self.bare(rc, h, span).map(Some);
         }
-        if !rc.vars.contains_key(h) {
-            if let Some(types) = self.resource(rc.scope, h).filter(|_| !shared) {
-                if types.len() > 1 {
-                    return self.ambiguous(h, &types, span);
-                }
-                let path = self.segs(rc, &c.ops)?;
-                return Ok(Res::Ref {
-                    typ: self.str_node(span, &types[0]),
-                    addr: self.resource_addr(rc.scope, h, span),
-                    path,
-                });
-            }
-            if let Some(r) = self.scope_path(rc, c, span)? {
-                return Ok(r);
-            }
-            if let Some(r) = self.typed_path(rc, c, span)? {
-                return Ok(r);
-            }
+        if var {
+            return Ok(None);
         }
+        if let Some(types) = self.resource(rc.scope, h).filter(|_| !shared) {
+            if types.len() > 1 {
+                return self.ambiguous(h, &types, span);
+            }
+            let path = self.segs(rc, &c.ops)?;
+            return Ok(Some(Res::Ref {
+                typ: self.str_node(span, &types[0]),
+                addr: self.resource_addr(rc.scope, h, span),
+                path,
+            }));
+        }
+        if let Some(r) = self.scope_path(rc, c, span)? {
+            return Ok(Some(r));
+        }
+        self.typed_path(rc, c, span)
+    }
+
+    /// A path of a variable (`x.a.b`, `x[0]`), a type's name in a type
+    /// namespace (H-10), else an unknown name: a typo is an error, never
+    /// a string.
+    fn variable_or_type(&mut self, rc: &mut Rc, c: &Chain, span: Span) -> L<Res> {
+        let h = c.head.as_str();
         if rc.untyped_refs.contains(h) {
             let d = Diagnostic::error(
                 span,
@@ -183,7 +209,6 @@ impl Lowerer<'_> {
             self.diags.push(d);
             return Err(Skip);
         }
-        // A variable's fields: `x.a.b`, `x[0]`.
         if rc.vars.contains_key(h)
             || (rc.candidates.contains(h) && !self.decls.namespaces.contains(h))
         {
@@ -192,8 +217,6 @@ impl Lowerer<'_> {
             let var = self.var_node(rc, span, &v);
             return Ok(Res::Var { var, path });
         }
-        // A dotted name in a type namespace is a type's name, and must be a
-        // known type (H-10): a typo is an error, never a string.
         if c.ops.iter().all(|o| matches!(o, Op::Field(..)))
             && (self.decls.namespaces.contains(h) || self.any_type)
         {
@@ -459,80 +482,47 @@ impl Lowerer<'_> {
     pub(super) fn typed_path(&mut self, rc: &mut Rc, c: &Chain, span: Span) -> L<Option<Res>> {
         let fields = c.fields();
         let k = fields.len();
-        // `T.n`: the longest `T` with a resource `n` of that type in scope.
-        for i in (1..k).rev() {
-            let typ = fields[..i].join(".");
-            if self.resource_of_type(rc.scope, &typ, &fields[i]) {
-                let n = &fields[i];
-                let unique = self.resource(rc.scope, n).is_some_and(|ts| ts.len() == 1);
-                let write = if unique {
-                    n.clone()
-                } else {
-                    crate::address::Address {
-                        typ,
-                        name: n.clone(),
-                    }
-                    .to_string()
-                };
-                let d = Diagnostic::error(
-                    span,
-                    format!(
-                        "`{}` names a resource by a dot after its type",
-                        fields[..=i].join(".")
-                    ),
-                )
-                .with_help(format!(
-                    "a resource in scope is named `{write}` (H-10); `.` is static, `[ ]` a key"
-                ));
-                self.diags.push(d);
-                return Err(Skip);
-            }
-        }
+        self.dotted_resource(rc.scope, &fields, span)?;
         let Some(Op::Index(ts, _)) = c.ops.get(k - 1) else {
             return Ok(None);
         };
         let name = fields.join(".");
         let rest = &c.ops[k..];
-        if let Some(cols) = self.program.scopes.externs.get(&name).cloned() {
-            let outs: Vec<usize> = cols
-                .iter()
-                .enumerate()
-                .filter(|(_, (input, _))| !input)
-                .map(|(i, _)| i)
-                .collect();
-            if outs.len() != 1 || ts.len() != cols.len() - 1 {
-                return self
-                    .error(
-                        span,
-                        format!(
-                            "extern {name} is looked up with its inputs in brackets; it needs \
-                             exactly one output"
-                        ),
-                    )
-                    .map(Some);
+        let out = match self.program.scopes.externs.get(&name) {
+            Some(cols) => {
+                let outs: Vec<usize> = cols
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (input, _))| !input)
+                    .map(|(i, _)| i)
+                    .collect();
+                if outs.len() != 1 || ts.len() != cols.len() - 1 {
+                    return self
+                        .error(
+                            span,
+                            format!(
+                                "extern {name} is looked up with its inputs in brackets; it \
+                                 needs exactly one output"
+                            ),
+                        )
+                        .map(Some);
+                }
+                Some(outs[0])
             }
+            None if k == 1
+                && self.program.scopes.declares_relation(&name)
+                && !self.decls.types.contains(&name) =>
+            {
+                Some(ts.len())
+            }
+            None => None,
+        };
+        if let Some(out) = out {
             let mut args = Vec::new();
             for t in ts {
                 args.push(self.bind(true, |l| l.part(rc, t))?);
             }
             let path = self.segs(rc, rest)?;
-            return Ok(Some(Res::Lookup {
-                pred: name,
-                args,
-                out: outs[0],
-                path,
-            }));
-        }
-        if k == 1
-            && self.program.scopes.declares_relation(&name)
-            && !self.decls.types.contains(&name)
-        {
-            let mut args = Vec::new();
-            for t in ts {
-                args.push(self.bind(true, |l| l.part(rc, t))?);
-            }
-            let path = self.segs(rc, rest)?;
-            let out = args.len();
             return Ok(Some(Res::Lookup {
                 pred: name,
                 args,
@@ -553,37 +543,7 @@ impl Lowerer<'_> {
         // provider schema's type the compiler does not read.
         let foreign = !self.decls.closed.contains(&c.head);
         if self.decls.types.contains(&name) || (k > 1 && (self.any_type || foreign)) {
-            if ts.len() != 1 {
-                return self.error(span, "a resource is `T[key]`").map(Some);
-            }
-            // `T["n"]` for a resource `n` in scope: it is named `n` (H-10),
-            // unless `n` names something else too (R-76).
-            if !self.any_type
-                && let Some(LITERAL) = ts.first().map(|t| t.kind())
-                && let Some(s) = tokens(&ts[0]).find(|t| t.kind() == STRING)
-                && let Ok(n) = string_value(s.text())
-                && !has_hole(s.text())
-                && self
-                    .resource(rc.scope, &n)
-                    .is_some_and(|types| types == vec![name.clone()])
-                && !self.names_other(rc.scope, &n)
-            {
-                let d = Diagnostic::error(
-                    span,
-                    format!("`{name}[\"{n}\"]` names the resource `{n}` in scope"),
-                )
-                .with_help(format!("write `{n}` (H-10)"));
-                self.diags.push(d);
-                return Err(Skip);
-            }
-            let addr = self.bind(true, |l| l.part(rc, &ts[0]))?;
-            self.address_key(&self.term_of(addr), span)?;
-            let path = self.segs(rc, rest)?;
-            return Ok(Some(Res::Ref {
-                typ: self.str_node(span, &name),
-                addr,
-                path,
-            }));
+            return self.keyed_resource(rc, (&name, ts, rest), span).map(Some);
         }
         if k > 1 && self.decls.closed.contains(&c.head) {
             return self
@@ -598,6 +558,82 @@ impl Lowerer<'_> {
         }
         self.error(span, format!("unknown relation or type `{name}`"))
             .map(Some)
+    }
+
+    /// `T[e].path`, a resource of the type `name` by its key, `ts` the
+    /// index, `rest` the ops after it.
+    fn keyed_resource(
+        &mut self,
+        rc: &mut Rc,
+        (name, ts, rest): (&str, &[SyntaxNode], &[Op]),
+        span: Span,
+    ) -> L<Res> {
+        let [key] = ts else {
+            return self.error(span, "a resource is `T[key]`");
+        };
+        // `T["n"]` for a resource `n` in scope: it is named `n` (H-10),
+        // unless `n` names something else too (R-76).
+        if !self.any_type
+            && key.kind() == LITERAL
+            && let Some(s) = tokens(key).find(|t| t.kind() == STRING)
+            && let Ok(n) = string_value(s.text())
+            && !has_hole(s.text())
+            && self
+                .resource(rc.scope, &n)
+                .is_some_and(|types| types == [name.to_string()])
+            && !self.names_other(rc.scope, &n)
+        {
+            let d = Diagnostic::error(
+                span,
+                format!("`{name}[\"{n}\"]` names the resource `{n}` in scope"),
+            )
+            .with_help(format!("write `{n}` (H-10)"));
+            self.diags.push(d);
+            return Err(Skip);
+        }
+        let addr = self.bind(true, |l| l.part(rc, key))?;
+        self.address_key(&self.term_of(addr), span)?;
+        let path = self.segs(rc, rest)?;
+        Ok(Res::Ref {
+            typ: self.str_node(span, name),
+            addr,
+            path,
+        })
+    }
+
+    /// `T.n`, a resource by a dot after its type, `fields` the chain's
+    /// (the longest `T` with a resource `n` of that type in `scope`): an
+    /// error that names the spelling (H-10).
+    fn dotted_resource(&mut self, scope: ScopeId, fields: &[String], span: Span) -> L<()> {
+        let k = fields.len();
+        let Some(i) = (1..k)
+            .rev()
+            .find(|&i| self.resource_of_type(scope, &fields[..i].join("."), &fields[i]))
+        else {
+            return Ok(());
+        };
+        let n = &fields[i];
+        let unique = self.resource(scope, n).is_some_and(|ts| ts.len() == 1);
+        let write = match unique {
+            true => n.clone(),
+            false => crate::address::Address {
+                typ: fields[..i].join("."),
+                name: n.clone(),
+            }
+            .to_string(),
+        };
+        let d = Diagnostic::error(
+            span,
+            format!(
+                "`{}` names a resource by a dot after its type",
+                fields[..=i].join(".")
+            ),
+        )
+        .with_help(format!(
+            "a resource in scope is named `{write}` (H-10); `.` is static, `[ ]` a key"
+        ));
+        self.diags.push(d);
+        Err(Skip)
     }
 
     /// An address written as a constant, `T["blue/vpc"]` or `"blue/vpc"

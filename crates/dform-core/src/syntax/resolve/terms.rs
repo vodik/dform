@@ -487,34 +487,7 @@ impl Lowerer<'_> {
             self.near_function(rc.scope, &name, at)?;
         }
         self.check_function(&name, span);
-        let mut args = self.bind(false, |l| l.arg_exprs(rc, n))?;
-        let mut defaults = Vec::new();
-        if let (false, Some(f)) = (named.is_empty(), declared) {
-            let mut given = Vec::new();
-            for (k, t) in named {
-                given.push((k, Some(self.bind(false, |l| l.expr(rc, &t, Pos::Content))?)));
-            }
-            let placed = crate::functions::with_named(f, args, given, |v| {
-                defaults.push(v);
-                None
-            });
-            args = match placed {
-                Ok(a) => a,
-                Err(why) => return self.error(span, why),
-            };
-        }
-        // A parameter left out before a named one is its default.
-        let mut defaults = defaults.into_iter();
-        let args: Vec<ExprId> = args
-            .into_iter()
-            .map(|a| match a {
-                Some(a) => a,
-                None => {
-                    let v = defaults.next().expect("a default per argument left out");
-                    self.node(span, ExprKind::Lit(v))
-                }
-            })
-            .collect();
+        let args = self.call_args(rc, n, (declared, named), span)?;
         let was: Vec<Term> = args.iter().map(|&a| self.term_of(a)).collect();
         self.check_aggregated(&name, &was, span);
         // `cloud_ref(T, name, path)`, a form of the language, is
@@ -531,6 +504,48 @@ impl Lowerer<'_> {
             .map(|(a, (was, now))| self.read_as(a, was, now))
             .collect();
         Ok(self.building(rc, span, |b| b.form(&name, args)))
+    }
+
+    /// The arguments of the call `n` of the std function `declared`, by
+    /// position then by name (`named`), a parameter left out before a
+    /// named one its default: each its node.
+    fn call_args(
+        &mut self,
+        rc: &mut Rc,
+        n: &SyntaxNode,
+        (declared, named): (
+            Option<&'static crate::functions::Function>,
+            Vec<(String, SyntaxNode)>,
+        ),
+        span: Span,
+    ) -> L<Vec<ExprId>> {
+        let mut args = self.bind(false, |l| l.arg_exprs(rc, n))?;
+        let mut defaults = Vec::new();
+        if let (false, Some(f)) = (named.is_empty(), declared) {
+            let mut given = Vec::new();
+            for (k, t) in named {
+                given.push((k, Some(self.bind(false, |l| l.expr(rc, &t, Pos::Content))?)));
+            }
+            let placed = crate::functions::with_named(f, args, given, |v| {
+                defaults.push(v);
+                None
+            });
+            args = match placed {
+                Ok(a) => a,
+                Err(why) => return self.error(span, why),
+            };
+        }
+        let mut defaults = defaults.into_iter();
+        Ok(args
+            .into_iter()
+            .map(|a| match a {
+                Some(a) => a,
+                None => {
+                    let v = defaults.next().expect("a default per argument left out");
+                    self.node(span, ExprKind::Lit(v))
+                }
+            })
+            .collect())
     }
 
     /// A call's positional arguments, each its node.

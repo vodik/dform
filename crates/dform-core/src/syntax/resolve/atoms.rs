@@ -342,20 +342,9 @@ impl Lowerer<'_> {
             return Ok(None);
         }
         if let Some(d) = self.stack_in(rc.scope, &c.head) {
-            let Res::Output { inst, key, of, .. } = self.deployed_path(rc, &c, &d, span)? else {
-                return Err(Skip);
-            };
-            let read = PlanRead::Output {
-                copy: inst,
-                key,
-                of,
-            };
-            let rows = self.read_var(rc, "output", read, 2, &p, span);
-            let (cols, nodes) = self.args(rc, n, pos)?;
-            let parts = nodes.into_iter().map(ListPart::Elem).collect();
-            let list = self.node(span, ExprKind::List { parts });
-            let a = atom_at("member", vec![self.term_of(rows), Term::List(cols)], span);
-            return Ok(Some((a, AtomArgs::Positional(vec![rows, list]))));
+            return self
+                .deployed_rows(rc, (n, &c, &d), (&p, pos), span)
+                .map(Some);
         }
         let named = self
             .instance_in(rc.scope, &c.head)
@@ -413,6 +402,31 @@ impl Lowerer<'_> {
         let list = self.node(span, ExprKind::List { parts });
         let args = AtomArgs::Positional(vec![inst, self.str_node(span, &p), list]);
         Ok(Some((a, args)))
+    }
+
+    /// `platform[env=e].p(..)`: the rows a deployment published of its
+    /// relation `p`, an output read, each a list of the columns.
+    fn deployed_rows(
+        &mut self,
+        rc: &mut Rc,
+        (n, c, d): (&SyntaxNode, &Chain, &Deployed),
+        (p, pos): (&str, Pos),
+        span: Span,
+    ) -> L<(Atom, AtomArgs)> {
+        let Res::Output { inst, key, of, .. } = self.deployed_path(rc, c, d, span)? else {
+            return Err(Skip);
+        };
+        let read = PlanRead::Output {
+            copy: inst,
+            key,
+            of,
+        };
+        let rows = self.read_var(rc, "output", read, 2, p, span);
+        let (cols, nodes) = self.args(rc, n, pos)?;
+        let parts = nodes.into_iter().map(ListPart::Elem).collect();
+        let list = self.node(span, ExprKind::List { parts });
+        let a = atom_at("member", vec![self.term_of(rows), Term::List(cols)], span);
+        Ok((a, AtomArgs::Positional(vec![rows, list])))
     }
 
     /// Is `n` a reference: a resource, a typed variable, or a variable a
