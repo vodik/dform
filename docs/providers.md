@@ -420,7 +420,24 @@ on both; tests/host_wasm.rs keeps them from drifting.
 | `vault` (`crates/dform-provider-vault`) | the SDK's typed layer, a scheme and no resource | native: every request through the host's HTTP client | docs/providers/vault.md |
 | `tailscale` (`crates/dform-provider-tailscale`) | the SDK's typed layer: a tailnet's policy file, auth keys (held), DNS and devices (adopted), its users and devices data sources | native: every request through the host's HTTP client | docs/providers/tailscale.md |
 | `ovh` (`crates/dform-provider-ovh`) | the SDK's `Handler` directly, its own signing | native, or a component (its token the program's; granted `wasi:filesystem` until the crate split): every request through the host's HTTP client | docs/providers/ovh.md |
-| `k8s` (`crates/dform-k8s`) | the protocol's gRPC service directly, a thin client of the Kubernetes API | native: every request through the host's HTTP client, its kubeconfig a credential the host holds | docs/reference.md, "The Kubernetes provider" |
+| `k8s` (`crates/dform-k8s`, built by `crates/dform-provider-k8s`) | the SDK's `Handler` directly, a thin client of the Kubernetes API | native, or a wasm provider (granted `wasi:filesystem`, below): every request through the host's HTTP client, its kubeconfig a credential the host holds | docs/reference.md, "The Kubernetes provider" |
+
+The Kubernetes provider is the same source either way: the executable
+`dform-provider-k8s`, or `dform_provider_k8s.wasm` (`cargo xtask
+components` builds it with the fake and the OVH provider). As a wasm
+provider it is granted the filesystem, which the language front-end
+that parses its schema links until the crate split, and in which it
+keeps what it derives from a cluster in the run's cache directory (the
+OpenAPI documents, the schema, a deployment's CRDs), as natively; its
+kubeconfig is the host's either way, the environment's by the grant or
+the program's (`use k8s { kubeconfig }`):
+
+```toml
+[providers.k8s]
+path = "target/wasm32-wasip3/release/dform_provider_k8s.wasm"
+allow = ["wasi:filesystem"]
+credentials = ["kubeconfig:environment"]
+```
 
 ## Grants and credentials
 
