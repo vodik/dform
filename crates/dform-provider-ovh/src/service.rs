@@ -12,7 +12,7 @@ pub fn serve() -> anyhow::Result<()> {
     dform_grpc::transport::serve(
         tonic::transport::Server::builder().add_service(
             pb::provider_server::ProviderServer::new(dform_grpc::server::Adapter::new(
-                Provider::default(),
+                dform_sdk::native::Blocking(Provider::default()),
             ))
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX),

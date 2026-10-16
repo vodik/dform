@@ -42,11 +42,11 @@ impl Lab {
         let ovh = Ovh::new();
         let env: Vec<(&str, String)> = server.env();
         let get = |k: &str| env.iter().find(|(n, _)| *n == k).map(|(_, v)| v.clone());
-        ovh.configure_with(
+        dform_sdk::block_on(ovh.configure_with(
             &json!({"settings": {"endpoint": server.endpoint, "project": fake::PROJECT}}),
             &get,
             &[],
-        )
+        ))
         .unwrap();
         Lab { server, ovh }
     }
@@ -57,7 +57,7 @@ impl Lab {
                 said.lock().unwrap().push(s);
             }
         };
-        self.ovh.answer(call, &progress)
+        dform_sdk::block_on(self.ovh.answer(call, &progress))
     }
 
     fn apply(
@@ -151,17 +151,13 @@ impl Lab {
                 world[path.as_str()] = v.clone();
             }
         }
-        self.ovh
-            .plan(typ, "x", "", Some(&world), Some(desired))
-            .unwrap()
+        dform_sdk::block_on(self.ovh.plan(typ, "x", "", Some(&world), Some(desired))).unwrap()
     }
 
     fn plan_err(&self, typ: &str, prior: Option<&Json>, desired: &Json) -> String {
         format!(
             "{:#}",
-            self.ovh
-                .plan(typ, "x", "", prior, Some(desired))
-                .unwrap_err()
+            dform_sdk::block_on(self.ovh.plan(typ, "x", "", prior, Some(desired))).unwrap_err()
         )
     }
 
@@ -558,16 +554,15 @@ fn a_volumes_attachment_converges_against_the_volume_as_it_is() {
         dform_provider_ovh::config::resolve(Some(&lab.server.endpoint), &get, &[]).unwrap(),
     );
     lab.server.build_polls(5);
-    client
-        .post(
-            &format!(
-                "/cloud/project/{}/volume/{}/attach",
-                fake::PROJECT,
-                v.remote
-            ),
-            Some(&json!({"instanceId": one})),
-        )
-        .unwrap();
+    dform_sdk::block_on(client.post(
+        &format!(
+            "/cloud/project/{}/volume/{}/attach",
+            fake::PROJECT,
+            v.remote
+        ),
+        Some(&json!({"instanceId": one})),
+    ))
+    .unwrap();
     let caught = lab.update(VOLUME, "data", &v.remote, doc(Some(&one)));
     assert_eq!(caught.said, ["attaching", "in-use"]);
     assert_eq!(caught.attrs["instance"], one.as_str());
@@ -680,8 +675,14 @@ fn a_records_lost_create_is_found_by_its_content() {
     let doc = json!({"zone": "example.com", "subdomain": "www", "type": "A", "target": "10.0.0.1"});
     let r = lab.create(RECORD, "www", doc);
     let key = format!("{RECORD}/www//Create");
-    assert_eq!(lab.ovh.created(&key).unwrap(), Some(r.remote));
-    assert_eq!(lab.ovh.created("another key").unwrap(), None);
+    assert_eq!(
+        dform_sdk::block_on(lab.ovh.created(&key)).unwrap(),
+        Some(r.remote)
+    );
+    assert_eq!(
+        dform_sdk::block_on(lab.ovh.created("another key")).unwrap(),
+        None
+    );
 }
 
 /// A project that is not on a vRack: a private network is refused at
@@ -792,9 +793,7 @@ fn a_subnets_pool_defaults_to_its_ranges_hosts() {
     let net = lab.create(NETWORK, "lab", json!({"name": "lab", "regions": ["BHS5"]}));
     let doc = json!({"network": net.remote, "region": "BHS5", "range": "10.42.0.0/24",
                      "dhcp": true});
-    let changes = lab
-        .ovh
-        .plan(SUBNET, "lab", "", None, Some(&doc))
+    let changes = dform_sdk::block_on(lab.ovh.plan(SUBNET, "lab", "", None, Some(&doc)))
         .unwrap()
         .changes;
     let pool = changes.iter().find(|c| c.path == "pool").unwrap();
@@ -825,9 +824,7 @@ fn a_subnets_pool_defaults_to_its_ranges_hosts() {
     // Without a gateway the pool starts at the first host.
     let mut bare = doc.clone();
     bare["no_gateway"] = json!(true);
-    let changes = lab
-        .ovh
-        .plan(SUBNET, "lab", "", None, Some(&bare))
+    let changes = dform_sdk::block_on(lab.ovh.plan(SUBNET, "lab", "", None, Some(&bare)))
         .unwrap()
         .changes;
     assert!(
@@ -894,17 +891,16 @@ fn a_subnets_pool_is_one_attribute_inside_its_range() {
         "{gateway}"
     );
     assert!(
-        lab.ovh
-            .plan(
-                SUBNET,
-                "x",
-                "",
-                None,
-                Some(&doc(
-                    json!({"pool": "10.42.0.1..=10.42.0.9", "no_gateway": true})
-                ))
-            )
-            .is_ok()
+        dform_sdk::block_on(lab.ovh.plan(
+            SUBNET,
+            "x",
+            "",
+            None,
+            Some(&doc(
+                json!({"pool": "10.42.0.1..=10.42.0.9", "no_gateway": true})
+            ))
+        ))
+        .is_ok()
     );
     let tiny = lab.plan_err(SUBNET, None, &doc(json!({"range": "10.42.0.0/31"})));
     assert!(
@@ -1425,7 +1421,8 @@ fn a_run_is_given_the_lookups_of_the_types_it_names() {
         }),
         ..Default::default()
     };
-    let Ok(Reply::Schema(answer)) = ovh.answer(Call::Schema(req), &|_| {}) else {
+    let Ok(Reply::Schema(answer)) = dform_sdk::block_on(ovh.answer(Call::Schema(req), &|_| {}))
+    else {
         panic!("Schema answers");
     };
     let served: Vec<String> = answer

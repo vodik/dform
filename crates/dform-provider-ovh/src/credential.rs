@@ -88,7 +88,7 @@ impl Key {
 /// validity and each right it lacks; otherwise only a short validity is
 /// warned of, and the key's expiry is kept in the cache directory `cache`
 /// (by a digest of the key), so a later run asks nothing.
-pub fn notes(client: &Client, full: bool, cache: Option<&Path>, now: u64) -> Vec<String> {
+pub async fn notes(client: &Client, full: bool, cache: Option<&Path>, now: u64) -> Vec<String> {
     let creds = client.credentials();
     let endpoint = &creds.endpoint;
     let consumer_key = match &creds.auth {
@@ -115,7 +115,7 @@ pub fn notes(client: &Client, full: bool, cache: Option<&Path>, now: u64) -> Vec
         }
     };
     let file = cache.filter(|_| !full).map(|c| c.join(api::CACHE_FILE));
-    let key = match current(client, consumer_key, file.as_deref()) {
+    let key = match current(client, consumer_key, file.as_deref()).await {
         Ok(k) => k,
         // A refused key is said by the call that needs it.
         Err(e) if full => {
@@ -156,7 +156,7 @@ pub fn notes(client: &Client, full: bool, cache: Option<&Path>, now: u64) -> Vec
 
 /// The consumer key `client` signs with: its expiry as `file` (a cache)
 /// keeps it for the key's digest, else as the API answers, then kept.
-fn current(client: &Client, consumer_key: &str, file: Option<&Path>) -> api::Result<Key> {
+async fn current(client: &Client, consumer_key: &str, file: Option<&Path>) -> api::Result<Key> {
     let cache_key = format!("{} {CURRENT}", client.credentials().endpoint);
     let digest: String = Sha256::digest(consumer_key.as_bytes())[..8]
         .iter()
@@ -173,7 +173,7 @@ fn current(client: &Client, consumer_key: &str, file: Option<&Path>) -> api::Res
     if let Some(k) = kept {
         return Ok(k);
     }
-    let k = Key::from(&client.get(CURRENT)?);
+    let k = Key::from(&client.get(CURRENT).await?);
     if let Some(f) = file {
         let expires = k.expires.map_or("never".to_string(), |e| e.to_string());
         api::write_cache(f, &cache_key, &format!("{digest} {expires}"));

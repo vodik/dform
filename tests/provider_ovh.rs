@@ -869,17 +869,16 @@ fn the_real_account_lists_its_regions() {
     let ovh = dform_provider_ovh::ovh::Ovh::new();
     let project = std::env::var("OVH_CLOUD_PROJECT_SERVICE")
         .expect("OVH_CLOUD_PROJECT_SERVICE names the project (its id or description)");
-    let account = ovh
-        .configure(&serde_json::json!({"settings": {"project": project}}))
-        .unwrap();
+    let account =
+        dform_sdk::block_on(ovh.configure(&serde_json::json!({"settings": {"project": project}})))
+            .unwrap();
     eprintln!("project {account:?}");
-    let rows = ovh
-        .query(
-            "ovh.region",
-            &[true, false, false],
-            &[Value::Str(project.clone())],
-        )
-        .unwrap();
+    let rows = dform_sdk::block_on(ovh.query(
+        "ovh.region",
+        &[true, false, false],
+        &[Value::Str(project.clone())],
+    ))
+    .unwrap();
     assert!(!rows.is_empty(), "no regions");
     for r in &rows {
         eprintln!("{r:?}");

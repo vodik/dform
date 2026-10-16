@@ -7,18 +7,19 @@
 use super::*;
 
 impl Ovh {
-    pub(super) fn read_container(
+    pub(super) async fn read_container(
         &self,
         a: &Account,
         p: &str,
         remote: &str,
     ) -> api::Result<Option<(Json, Json)>> {
         Ok(a.client
-            .get_opt(&map::container_path(p, remote))?
+            .get_opt(&map::container_path(p, remote))
+            .await?
             .map(|o| map::container(&o)))
     }
 
-    pub(super) fn create_container(
+    pub(super) async fn create_container(
         &self,
         at: &str,
         config: &Json,
@@ -39,6 +40,7 @@ impl Ovh {
                 &format!("/cloud/project/{p}/region/{}/storage", escape(region)),
                 Some(&body),
             )
+            .await
             .map_err(|e| failed(at, e))?;
         let (attrs, computed) = map::container(&o);
         Ok((map::container_remote(region, name), attrs, computed))
@@ -47,7 +49,7 @@ impl Ovh {
     /// Versioning on is `enabled`; off again is `suspended`, as S3 has it
     /// (a container that had it never goes back to `disabled`). `now` is
     /// what Read computed.
-    pub(super) fn update_container(
+    pub(super) async fn update_container(
         &self,
         at: &str,
         remote: &str,
@@ -67,28 +69,30 @@ impl Ovh {
                 &map::container_path(&p, remote),
                 &json!({"versioning": {"status": status}}),
             )
+            .await
             .map_err(|e| failed(at, e))?;
         Ok(())
     }
 
     /// The container named `name` in `region`.
-    pub(super) fn find_container(&self, region: &str, name: &str) -> Result<Option<String>> {
+    pub(super) async fn find_container(&self, region: &str, name: &str) -> Result<Option<String>> {
         let (a, p) = self.project("find an S3 container")?;
         Ok(self
-            .read_container(&a, &p, &map::container_remote(region, name))?
+            .read_container(&a, &p, &map::container_remote(region, name))
+            .await?
             .map(|_| map::container_remote(region, name)))
     }
 
-    pub(super) fn delete_container(
+    pub(super) async fn delete_container(
         &self,
         at: &str,
         remote: &str,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(), Failed> {
         let (a, p) = self.project_for(at)?;
         let path = map::container_path(&p, remote);
-        self.delete_at(&a, at, &path, false, notes, say)
+        self.delete_at(&a, at, &path, false, notes, say).await
     }
 }
 

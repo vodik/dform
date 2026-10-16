@@ -29,11 +29,11 @@ fn world() -> (Server, Client) {
 /// The provider, configured for `server`'s project: one session.
 fn provider(server: &Server) -> Ovh {
     let ovh = Ovh::new();
-    ovh.configure_with(
+    dform_sdk::block_on(ovh.configure_with(
         &json!({"settings": {"endpoint": server.endpoint, "project": fake::PROJECT}}),
         &lookup(server.env()),
         &[],
-    )
+    ))
     .unwrap();
     ovh
 }
@@ -51,29 +51,28 @@ fn gets(server: &Server, path: &str) -> usize {
 /// Private network `lab` in BHS5 with a subnet there, and two instances
 /// on it: the network's id and the instances'.
 fn lab(server: &Server, c: &Client) -> (String, [String; 2]) {
-    let net = c
-        .post(
-            &project("/network/private"),
-            Some(&json!({"name": "lab", "vlanId": 42, "regions": ["BHS5"]})),
-        )
-        .unwrap();
+    let net = dform_sdk::block_on(c.post(
+        &project("/network/private"),
+        Some(&json!({"name": "lab", "vlanId": 42, "regions": ["BHS5"]})),
+    ))
+    .unwrap();
     let id = net["id"].as_str().unwrap().to_string();
-    c.post(
+    dform_sdk::block_on(c.post(
         &project(&format!("/network/private/{id}/subnet")),
         Some(
             &json!({"region": "BHS5", "network": "10.0.0.0/24", "dhcp": true,
                      "noGateway": false, "start": "10.0.0.10", "end": "10.0.0.200"}),
         ),
-    )
+    ))
     .unwrap();
-    let net = c.get(&project(&format!("/network/private/{id}"))).unwrap();
+    let net = dform_sdk::block_on(c.get(&project(&format!("/network/private/{id}")))).unwrap();
     let os = net["regions"][0]["openstackId"].as_str().unwrap();
     let vms = ["a", "b"].map(|name| {
         let vm = server.add_instance(name, "BHS5");
-        c.post(
+        dform_sdk::block_on(c.post(
             &project(&format!("/instance/{vm}/interface")),
             Some(&json!({"networkId": os})),
-        )
+        ))
         .unwrap();
         vm
     });
@@ -87,7 +86,7 @@ fn read(ovh: &Ovh, typ: &str, remote: &str) -> Json {
         name: "x".into(),
         ..Default::default()
     };
-    match ovh.answer(Call::Read(r), &backend::silent) {
+    match dform_sdk::block_on(ovh.answer(Call::Read(r), &backend::silent)) {
         Ok(Reply::Read(r)) if r.found => wire::from_doc(r.attrs.as_ref().unwrap()).unwrap(),
         other => panic!("read {typ} {remote}: {other:?}"),
     }
@@ -120,7 +119,9 @@ fn each_list_is_asked_once_per_run_and_again_after_a_write_to_it() {
             for (name, ip) in [("a", "10.0.0.20"), ("b", "10.0.0.21")] {
                 let d = on(name, &net, ip);
                 let ovh = &ovh;
-                s.spawn(move || ovh.plan("ovh.instance", name, "", None, Some(&d)).unwrap());
+                s.spawn(move || {
+                    dform_sdk::block_on(ovh.plan("ovh.instance", name, "", None, Some(&d))).unwrap()
+                });
             }
         })
     };
@@ -140,7 +141,7 @@ fn each_list_is_asked_once_per_run_and_again_after_a_write_to_it() {
             &server.calls()[from..]
         );
     }
-    let made = ovh.answer(
+    let made = dform_sdk::block_on(ovh.answer(
         Call::Apply(pb::ApplyRequest {
             op: pb::Op::Create as i32,
             r#type: "ovh.network".into(),
@@ -150,7 +151,7 @@ fn each_list_is_asked_once_per_run_and_again_after_a_write_to_it() {
             ..Default::default()
         }),
         &backend::silent,
-    );
+    ));
     assert!(matches!(made, Ok(Reply::Apply(_))), "{made:?}");
     session();
     let asked: Vec<usize> = lists.iter().map(|l| gets(&server, l)).collect();
@@ -236,9 +237,7 @@ fn a_plan_asks_no_catalog_of_what_read_answered() {
     let fresh = provider(&server);
     let plan = |d: &Json| {
         let from = server.calls().len();
-        fresh
-            .plan("ovh.instance", "a", &vm, Some(&prior), Some(d))
-            .unwrap();
+        dform_sdk::block_on(fresh.plan("ovh.instance", "a", &vm, Some(&prior), Some(d))).unwrap();
         server.calls()[from..].to_vec()
     };
     let mut d = on("a", &net, "10.0.0.20");
@@ -260,7 +259,7 @@ fn a_users_credentials_are_listed_once() {
     let (server, c) = world();
     let user = server.add_user("backup");
     let path = project(&format!("/user/{user}/s3Credentials"));
-    let access = c.post(&path, None).unwrap()["access"]
+    let access = dform_sdk::block_on(c.post(&path, None)).unwrap()["access"]
         .as_str()
         .unwrap()
         .to_string();
@@ -269,7 +268,7 @@ fn a_users_credentials_are_listed_once() {
     read(&ovh, "ovh.s3_credential", &remote);
     read(&ovh, "ovh.s3_credential", &remote);
     assert_eq!(gets(&server, &path), 1, "{:?}", server.calls());
-    let made = ovh.answer(
+    let made = dform_sdk::block_on(ovh.answer(
         Call::Apply(pb::ApplyRequest {
             op: pb::Op::Create as i32,
             r#type: "ovh.s3_credential".into(),
@@ -279,7 +278,7 @@ fn a_users_credentials_are_listed_once() {
             ..Default::default()
         }),
         &backend::silent,
-    );
+    ));
     assert!(matches!(made, Ok(Reply::Apply(_))), "{made:?}");
     read(&ovh, "ovh.s3_credential", &remote);
     assert_eq!(gets(&server, &path), 2, "{:?}", server.calls());

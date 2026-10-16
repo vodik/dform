@@ -17,17 +17,16 @@ pub const TYPES: [&str; 4] = [INSTANCE, VOLUME, NETWORK, USER];
 
 impl Ovh {
     /// Each object's health, from its status as Read answers it now.
-    pub fn health(&self, objects: &[pb::Identity]) -> Result<Vec<pb::Health>> {
-        objects
-            .iter()
-            .map(|o| {
-                let read = self.read(&o.r#type, &o.remote, &o.name, None)?;
-                Ok(judge(
-                    &o.r#type,
-                    read.as_ref().map(|(_, computed)| computed),
-                ))
-            })
-            .collect()
+    pub async fn health(&self, objects: &[pb::Identity]) -> Result<Vec<pb::Health>> {
+        let mut judged = Vec::new();
+        for o in objects {
+            let read = self.read(&o.r#type, &o.remote, &o.name, None).await?;
+            judged.push(judge(
+                &o.r#type,
+                read.as_ref().map(|(_, computed)| computed),
+            ));
+        }
+        Ok(judged)
     }
 }
 

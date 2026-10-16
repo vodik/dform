@@ -7,14 +7,11 @@
 
 use super::*;
 
-/// One of the requests a Read sends at once.
-type Ask<'a> = Box<dyn FnOnce() -> api::Result<Option<Json>> + Send + 'a>;
-
 impl Ovh {
     /// The instance `id`, its ports and the project's private networks
     /// (which name the ports' networks, listed once per run) asked at
     /// once: none waits on another, and the API is seconds away.
-    pub(super) fn read_instance(
+    pub(super) async fn read_instance(
         &self,
         a: &Account,
         p: &str,
@@ -22,26 +19,25 @@ impl Ovh {
         owned: &map::Owned,
     ) -> api::Result<Option<(Json, Json)>> {
         let (path, ports) = (instance_path(p, id), network::interface_path(p, id));
-        let asks: [Ask; 3] = [
-            Box::new(|| a.client.get_opt(&path)),
-            Box::new(|| a.client.get(&ports).map(Some)),
-            Box::new(|| self.private_networks(a, p).map(|_| None)),
-        ];
-        let [o, ifaces, networks] = <[_; 3]>::try_from(dform_sdk::at_once(asks))
-            .unwrap_or_else(|_| unreachable!("an answer to each ask"));
+        let (o, ifaces, networks) = dform_sdk::join3(
+            a.client.get_opt(&path),
+            a.client.get(&ports),
+            self.private_networks(a, p),
+        )
+        .await;
         let Some(o) = o? else {
             return Ok(None);
         };
-        let ifaces = ifaces?.unwrap_or_default();
+        let ifaces = ifaces?;
         networks?;
-        self.instance_doc(a, p, &o, &ifaces, owned)
+        self.instance_doc(a, p, &o, &ifaces, owned).await
     }
 
     /// An instance's document, `ifaces` its ports as the API lists them,
     /// `owned` which are its own; a call that fails fails it, rather than
     /// leave out what Plan would read as changed (an image left out would
     /// replace the instance, a network attach it again).
-    fn instance_doc(
+    async fn instance_doc(
         &self,
         a: &Account,
         p: &str,
@@ -57,20 +53,21 @@ impl Ovh {
             .iter()
             .any(|k| o.get(k).and_then(|x| s(x, "name")).is_none())
         {
-            self.list_region(a, p, region);
+            self.list_region(a, p, region).await;
         }
-        let named =
-            |what: &str, embedded: &str, id: &str| match o.get(embedded).and_then(|x| s(x, "name"))
-            {
-                Some(n) => Ok(Some(n.to_string())),
-                None => match s(o, id) {
-                    Some(id) => self.name_of(a, p, what, region, id),
-                    None => Ok(None),
-                },
-            };
-        let flavor = named("flavor", "flavor", "flavorId")?;
-        let image = named("image", "image", "imageId")?;
-        let nics = self.ports(a, p, ifaces)?;
+        let named = async |what: &str, embedded: &str, id: &str| match o
+            .get(embedded)
+            .and_then(|x| s(x, "name"))
+        {
+            Some(n) => Ok(Some(n.to_string())),
+            None => match s(o, id) {
+                Some(id) => self.name_of(a, p, what, region, id).await,
+                None => Ok(None),
+            },
+        };
+        let flavor = named("flavor", "flavor", "flavorId").await?;
+        let image = named("image", "image", "imageId").await?;
+        let nics = self.ports(a, p, ifaces).await?;
         Ok(Some(map::instance(
             o,
             flavor.as_deref(),
@@ -83,13 +80,13 @@ impl Ovh {
     /// Why an instance is replaced when its flavor changes from
     /// `prior`'s to a smaller one in `d`, which the API cannot resize to.
     /// None when the account cannot be reached: Apply refuses it then.
-    pub(super) fn flavor_shrinks(&self, at: &str, prior: &Json, d: &Json) -> Option<String> {
+    pub(super) async fn flavor_shrinks(&self, at: &str, prior: &Json, d: &Json) -> Option<String> {
         let (was, now, region) = (s(prior, "flavor")?, s(d, "flavor")?, s(d, "region")?);
         if was == now {
             return None;
         }
         let (a, p) = self.project(at).ok()?;
-        (self.smaller_flavor(&a, &p, region, was, now) == Some(true)).then(|| {
+        (self.smaller_flavor(&a, &p, region, was, now).await == Some(true)).then(|| {
             format!(
                 "flavor {now} is smaller than {was}; the API resizes an instance only to a \
                  larger one"
@@ -100,7 +97,12 @@ impl Ovh {
     /// An instance's flavor and image are offered in its region, when the
     /// account is reachable and they are known, and `prior` (the instance
     /// as Read answered it) has not them there already.
-    pub(super) fn check_instance(&self, at: &str, prior: Option<&Json>, d: &Json) -> Result<()> {
+    pub(super) async fn check_instance(
+        &self,
+        at: &str,
+        prior: Option<&Json>,
+        d: &Json,
+    ) -> Result<()> {
         let Ok((a, p)) = self.project(at) else {
             return Ok(());
         };
@@ -110,25 +112,27 @@ impl Ovh {
             return Ok(());
         };
         if flavor.is_some() && image.is_some() {
-            self.list_region(&a, &p, region);
+            self.list_region(&a, &p, region).await;
         }
         if let Some(f) = flavor {
             self.flavor_id(&a, &p, region, f)
+                .await
                 .map_err(|e| anyhow!("{at}: flavor: {e:#}"))?;
         }
         if let Some(i) = image {
             self.image_id(&a, &p, region, i)
+                .await
                 .map_err(|e| anyhow!("{at}: image: {e:#}"))?;
         }
         Ok(())
     }
 
-    pub(super) fn create_instance(
+    pub(super) async fn create_instance(
         &self,
         at: &str,
         config: &Json,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(String, Json, Json), Failed> {
         let (a, p) = self
             .project(at)
@@ -139,8 +143,8 @@ impl Ovh {
         let mut body = json!({
             "name": need(at, config, "name")?,
             "region": region,
-            "flavorId": self.flavor_id(&a, &p, region, flavor).map_err(|e| refused(at, format!("{e:#}")))?,
-            "imageId": self.image_id(&a, &p, region, image).map_err(|e| refused(at, format!("{e:#}")))?,
+            "flavorId": self.flavor_id(&a, &p, region, flavor).await.map_err(|e| refused(at, format!("{e:#}")))?,
+            "imageId": self.image_id(&a, &p, region, image).await.map_err(|e| refused(at, format!("{e:#}")))?,
             "monthlyBilling": false,
         });
         if config.get("ssh_key").is_some() {
@@ -153,23 +157,26 @@ impl Ovh {
         if let Some(u) = user_data {
             body["userData"] = json!(u);
         }
-        if let Some(nets) = self.instance_networks(&a, &p, at, region, config)? {
+        if let Some(nets) = self.instance_networks(&a, &p, at, region, config).await? {
             body["networks"] = json!(nets);
         }
         let o = a
             .client
             .post(&format!("/cloud/project/{p}/instance"), Some(&body))
+            .await
             .map_err(|e| failed(at, e))?;
         let id = s(&o, "id").unwrap_or_default().to_string();
-        let last = wait_active(&a, &p, at, &id, o, notes, say)?;
+        let last = wait_active(&a, &p, at, &id, o, notes, say).await?;
         let owned = map::Owned::made(network::fixed(config));
         let made = |e| Failed::MaybeApplied(format!("{at}: instance {id} is made: {e}"));
         let ifaces = a
             .client
             .get(&network::interface_path(&p, &id))
+            .await
             .map_err(made)?;
         let (attrs, computed) = self
             .instance_doc(&a, &p, &last, &ifaces, &owned)
+            .await
             .map_err(made)?
             .ok_or_else(|| Failed::MaybeApplied(format!("{at}: instance {id} was deleted")))?;
         Ok((id, attrs, computed))
@@ -179,7 +186,7 @@ impl Ovh {
     /// `config` made, as its prior: the port on each network it was made
     /// on is its own (`map::Owned::made`), with the address `config`
     /// asked there, for the Create sent again that finds it.
-    pub(super) fn made_instance(
+    pub(super) async fn made_instance(
         &self,
         at: &str,
         remote: &str,
@@ -189,6 +196,7 @@ impl Ovh {
         let owned = map::Owned::made(network::fixed(config));
         let made = self
             .read_instance(&a, &p, remote, &owned)
+            .await
             .map_err(|e| failed(at, e))?;
         Ok(made.map(|(_, computed)| computed))
     }
@@ -198,7 +206,7 @@ impl Ovh {
     /// for until it is ACTIVE on it. A smaller one is refused: the API
     /// resizes only up, and Plan replaces the instance for one.
     #[allow(clippy::too_many_arguments)]
-    fn resize(
+    async fn resize(
         &self,
         a: &Account,
         p: &str,
@@ -207,14 +215,14 @@ impl Ovh {
         now: &Json,
         config: &Json,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(), Failed> {
         let flavor = need(at, config, "flavor")?;
         let Some(was) = s(now, "flavor").filter(|w| *w != flavor) else {
             return Ok(());
         };
         let region = need(at, config, "region")?;
-        if self.smaller_flavor(a, p, region, was, flavor) == Some(true) {
+        if self.smaller_flavor(a, p, region, was, flavor).await == Some(true) {
             return Err(refused(
                 at,
                 format!(
@@ -225,11 +233,13 @@ impl Ovh {
         }
         let id = self
             .flavor_id(a, p, region, flavor)
+            .await
             .map_err(|e| refused(at, format!("{e:#}")))?;
         let path = instance_path(p, remote);
         let o = a
             .client
             .post(&format!("{path}/resize"), Some(&json!({"flavorId": id})))
+            .await
             .map_err(|e| failed(at, e))?;
         // The instance's flavor is its `flavorId`, or its `flavor`'s id
         // where the API embeds the flavor.
@@ -248,7 +258,8 @@ impl Ovh {
             CREATE_WAIT,
             notes,
             say,
-        )?;
+        )
+        .await?;
         notes.push(format!(
             "{at}: resized from {was} to {flavor}; the instance rebooted"
         ));
@@ -256,12 +267,15 @@ impl Ovh {
     }
 
     /// The instance named `name` in `region`, unless it is deleted.
-    pub(super) fn find_instance(&self, name: &str, region: &str) -> Result<Option<String>> {
+    pub(super) async fn find_instance(&self, name: &str, region: &str) -> Result<Option<String>> {
         let (a, p) = self.project("find an instance")?;
-        let list = a.client.list(&format!(
-            "/cloud/project/{p}/instance?region={}",
-            escape(region)
-        ))?;
+        let list = a
+            .client
+            .list(&format!(
+                "/cloud/project/{p}/instance?region={}",
+                escape(region)
+            ))
+            .await?;
         Ok(list
             .as_array()
             .into_iter()
@@ -277,7 +291,7 @@ impl Ovh {
     /// Its own port on each network now, by network. A network whose ports
     /// none is known as its own refuses it before anything changes.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn update_instance(
+    pub(super) async fn update_instance(
         &self,
         at: &str,
         remote: &str,
@@ -285,36 +299,41 @@ impl Ovh {
         config: &Json,
         owned: &map::Owned,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<Vec<(String, String)>, Failed> {
         let (a, p) = self
             .project(at)
             .map_err(|e| refused(at, format!("{e:#}")))?;
-        let ports = self.instance_ports(&a, &p, at, remote, config, owned)?;
+        let ports = self
+            .instance_ports(&a, &p, at, remote, config, owned)
+            .await?;
         let name = need(at, config, "name")?;
         if s(now, "name") != Some(name) {
             a.client
                 .put(&instance_path(&p, remote), &json!({"instanceName": name}))
+                .await
                 .map_err(|e| failed(at, e))?;
         }
-        self.resize(&a, &p, at, remote, now, config, notes, say)?;
+        self.resize(&a, &p, at, remote, now, config, notes, say)
+            .await?;
         self.converge_ports(&a, &p, at, remote, config, ports, notes)
+            .await
     }
 
     /// An instance deleted (gone already is done), and waited for until the
     /// API no longer answers it, saying each status it gives.
-    pub(super) fn delete_instance(
+    pub(super) async fn delete_instance(
         &self,
         at: &str,
         remote: &str,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(), Failed> {
         let (a, p) = self
             .project(at)
             .map_err(|e| refused(at, format!("{e:#}")))?;
         let path = instance_path(&p, remote);
-        match a.client.delete(&path) {
+        match a.client.delete(&path).await {
             Ok(_) => {}
             Err(e) if e.is_not_found() => {}
             Err(e) => return Err(failed(at, e)),
@@ -322,7 +341,7 @@ impl Ovh {
         let start = Instant::now();
         let mut said = None;
         loop {
-            let got = a.client.get_opt(&path);
+            let got = a.client.get_opt(&path).await;
             if let Ok(Some(o)) = &got
                 && let Some(now) = s(o, "status")
                 && said.as_deref() != Some(now)
@@ -340,7 +359,7 @@ impl Ovh {
                     ));
                     break;
                 }
-                _ => std::thread::sleep(a.poll),
+                _ => dform_sdk::sleep(a.poll).await,
             }
         }
         Ok(())
@@ -350,14 +369,14 @@ impl Ovh {
 /// Wait for instance `id` to run (until then it has no address), `o` as
 /// the API last answered it: its document then, or as it was when it
 /// failed or the wait ran out, with a note.
-fn wait_active(
+async fn wait_active(
     a: &Account,
     p: &str,
     at: &str,
     id: &str,
     o: Json,
     notes: &mut Vec<String>,
-    say: Say,
+    say: Say<'_>,
 ) -> std::result::Result<Json, Failed> {
     // Wait for it to run: until then it has no address. Each status
     // the API gives that is not the last one's is said (`BUILD`,
@@ -383,8 +402,8 @@ fn wait_active(
             ));
             break;
         }
-        std::thread::sleep(a.poll);
-        match a.client.get_opt(&instance_path(p, id)) {
+        dform_sdk::sleep(a.poll).await;
+        match a.client.get_opt(&instance_path(p, id)).await {
             Ok(Some(o)) => {
                 if status(&o) != said {
                     said = status(&o);

@@ -13,11 +13,11 @@ pub struct Provider {
 }
 
 impl Handler for Provider {
-    fn handle(
+    async fn handle(
         &self,
         session: Session,
         call: backend::Call,
-        progress: backend::Progress,
+        progress: backend::Progress<'_>,
     ) -> std::result::Result<Reply, CallError> {
         use backend::Call as C;
         match call {
@@ -25,10 +25,12 @@ impl Handler for Provider {
             C::Configure(req) => {
                 let config = doc_of(req.config.as_ref())?.unwrap_or(json!({}));
                 let ovh = self.sessions.get_or_set(session, Ovh::new);
-                Ok(Reply::Configure(ovh.configure(&config).map_err(invalid)?))
+                Ok(Reply::Configure(
+                    ovh.configure(&config).await.map_err(invalid)?,
+                ))
             }
             call => match self.sessions.get(session) {
-                Some(ovh) => ovh.answer(call, progress),
+                Some(ovh) => ovh.answer(call, progress).await,
                 None => Err(CallError::Refused(format!(
                     "the provider {PROVIDER} has no session {session}: a Configure opens one"
                 ))),
@@ -39,10 +41,10 @@ impl Handler for Provider {
 
 impl Ovh {
     /// The answer to `call`, a call of this session but its Configure.
-    pub fn answer(
+    pub async fn answer(
         &self,
         call: backend::Call,
-        progress: backend::Progress,
+        progress: backend::Progress<'_>,
     ) -> std::result::Result<Reply, CallError> {
         use backend::Call as C;
         Ok(match call {
@@ -53,14 +55,14 @@ impl Ovh {
                 )));
             }
             C::Schema(req) => Reply::Schema(self.schema_reply(&req)?),
-            C::Query(q) => Reply::Query(self.query_reply(&q)?),
-            C::Read(r) => Reply::Read(self.read_reply(&r)?),
-            C::Plan(r) => Reply::Plan(self.plan_reply(&r)?),
-            C::Apply(r) => Reply::Apply(self.apply(&r, progress)?),
-            C::Import(r) => Reply::Import(self.import_reply(r)?),
-            C::Reveal(r) => Reply::Reveal(self.reveal(r)?),
+            C::Query(q) => Reply::Query(self.query_reply(&q).await?),
+            C::Read(r) => Reply::Read(self.read_reply(&r).await?),
+            C::Plan(r) => Reply::Plan(self.plan_reply(&r).await?),
+            C::Apply(r) => Reply::Apply(self.apply(&r, progress).await?),
+            C::Import(r) => Reply::Import(self.import_reply(r).await?),
+            C::Reveal(r) => Reply::Reveal(self.reveal(r).await?),
             C::Health(r) => Reply::Health(pb::HealthResponse {
-                answers: self.health(&r.objects).map_err(invalid)?,
+                answers: self.health(&r.objects).await.map_err(invalid)?,
             }),
         })
     }
@@ -119,14 +121,20 @@ impl Ovh {
         })
     }
 
-    fn query_reply(&self, q: &pb::QueryRequest) -> std::result::Result<Vec<pb::Row>, CallError> {
+    async fn query_reply(
+        &self,
+        q: &pb::QueryRequest,
+    ) -> std::result::Result<Vec<pb::Row>, CallError> {
         let inputs = q
             .inputs
             .iter()
             .map(Value::try_from)
             .collect::<Result<Vec<_>>>()
             .map_err(invalid)?;
-        let rows = self.query(&q.pred, &q.input, &inputs).map_err(invalid)?;
+        let rows = self
+            .query(&q.pred, &q.input, &inputs)
+            .await
+            .map_err(invalid)?;
         Ok(rows
             .iter()
             .map(|row| pb::Row {
@@ -135,11 +143,15 @@ impl Ovh {
             .collect())
     }
 
-    fn read_reply(&self, r: &pb::ReadRequest) -> std::result::Result<pb::ReadResponse, CallError> {
+    async fn read_reply(
+        &self,
+        r: &pb::ReadRequest,
+    ) -> std::result::Result<pb::ReadResponse, CallError> {
         let prior = doc_of(r.prior.as_ref())?;
         Ok(
             match self
                 .read(&r.r#type, &r.remote, &r.name, prior.as_ref())
+                .await
                 .map_err(invalid)?
             {
                 Some((attrs, computed)) => pb::ReadResponse {
@@ -152,7 +164,10 @@ impl Ovh {
         )
     }
 
-    fn plan_reply(&self, r: &pb::PlanRequest) -> std::result::Result<pb::PlanResponse, CallError> {
+    async fn plan_reply(
+        &self,
+        r: &pb::PlanRequest,
+    ) -> std::result::Result<pb::PlanResponse, CallError> {
         let prior = doc_of(r.prior.as_ref())?;
         let desired = doc_of(r.desired.as_ref())?;
         let planned = self
@@ -163,16 +178,21 @@ impl Ovh {
                 prior.as_ref(),
                 desired.as_ref(),
             )
+            .await
             .map_err(invalid)?;
         Ok(pb::PlanResponse::from(&planned))
     }
 
-    fn import_reply(
+    async fn import_reply(
         &self,
         r: pb::ImportRequest,
     ) -> std::result::Result<pb::ImportResponse, CallError> {
         Ok(
-            match self.read(&r.r#type, &r.remote, "", None).map_err(invalid)? {
+            match self
+                .read(&r.r#type, &r.remote, "", None)
+                .await
+                .map_err(invalid)?
+            {
                 Some((attrs, computed)) => pb::ImportResponse {
                     found: true,
                     name: s(&attrs, "name").unwrap_or(&r.remote).to_string(),

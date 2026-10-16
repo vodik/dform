@@ -31,11 +31,11 @@ fn world() -> (Server, Client) {
 /// The provider, configured for `server`'s project.
 fn provider(server: &Server) -> Ovh {
     let ovh = Ovh::new();
-    ovh.configure_with(
+    dform_sdk::block_on(ovh.configure_with(
         &json!({"settings": {"endpoint": server.endpoint, "project": fake::PROJECT}}),
         &lookup(server.env()),
         &[],
-    )
+    ))
     .unwrap();
     ovh
 }
@@ -47,22 +47,21 @@ fn project(rest: &str) -> String {
 /// Private network `lab` (VLAN 42) in BHS5 with a subnet there: its id
 /// (`pn-…`) and its OpenStack id in BHS5.
 fn lab(c: &Client) -> (String, String) {
-    let net = c
-        .post(
-            &project("/network/private"),
-            Some(&json!({"name": "lab", "vlanId": 42, "regions": ["BHS5"]})),
-        )
-        .unwrap();
+    let net = dform_sdk::block_on(c.post(
+        &project("/network/private"),
+        Some(&json!({"name": "lab", "vlanId": 42, "regions": ["BHS5"]})),
+    ))
+    .unwrap();
     let id = net["id"].as_str().unwrap().to_string();
-    c.post(
+    dform_sdk::block_on(c.post(
         &project(&format!("/network/private/{id}/subnet")),
         Some(
             &json!({"region": "BHS5", "network": "10.0.0.0/24", "dhcp": true,
                      "noGateway": false, "start": "10.0.0.10", "end": "10.0.0.200"}),
         ),
-    )
+    ))
     .unwrap();
-    let net = c.get(&project(&format!("/network/private/{id}"))).unwrap();
+    let net = dform_sdk::block_on(c.get(&project(&format!("/network/private/{id}")))).unwrap();
     let os = net["regions"][0]["openstackId"]
         .as_str()
         .unwrap()
@@ -81,7 +80,7 @@ fn apply(ovh: &Ovh, op: pb::Op, typ: &str, remote: &str, config: &Json) -> pb::A
         idempotency_key: format!("key-{typ}-{remote}"),
         ..Default::default()
     };
-    match ovh.answer(Call::Apply(r), &backend::silent) {
+    match dform_sdk::block_on(ovh.answer(Call::Apply(r), &backend::silent)) {
         Ok(Reply::Apply(a)) => a,
         other => panic!("apply {typ}: {other:?}"),
     }
@@ -89,9 +88,8 @@ fn apply(ovh: &Ovh, op: pb::Op, typ: &str, remote: &str, config: &Json) -> pb::A
 
 /// The private ports of `instance`, as GET /interface answers them.
 fn private_ports(c: &Client, instance: &str) -> Vec<Json> {
-    let all = c
-        .get(&project(&format!("/instance/{instance}/interface")))
-        .unwrap();
+    let all =
+        dform_sdk::block_on(c.get(&project(&format!("/instance/{instance}/interface")))).unwrap();
     all.as_array()
         .unwrap()
         .iter()
@@ -112,7 +110,7 @@ fn a_port_names_its_network_by_the_ovh_id_not_the_openstack_id_it_was_attached_b
     assert_ne!(id, os);
     let vm = server.add_instance("vm", "BHS5");
     let path = project(&format!("/instance/{vm}/interface"));
-    let port = c.post(&path, Some(&json!({"networkId": os}))).unwrap();
+    let port = dform_sdk::block_on(c.post(&path, Some(&json!({"networkId": os})))).unwrap();
     assert_eq!(port["networkId"], json!(id));
     let ports = private_ports(&c, &vm);
     assert_eq!(ports.len(), 1, "{ports:?}");
@@ -120,7 +118,7 @@ fn a_port_names_its_network_by_the_ovh_id_not_the_openstack_id_it_was_attached_b
     // Each field the recording has, no other.
     let keys = |o: &Json| o.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
     assert_eq!(keys(&ports[0]), keys(&cassette::get("interface").answer[0]));
-    c.post(&path, Some(&json!({"networkId": os}))).unwrap();
+    dform_sdk::block_on(c.post(&path, Some(&json!({"networkId": os})))).unwrap();
     let ports = private_ports(&c, &vm);
     assert_eq!(ports.len(), 2, "{ports:?}");
     assert_ne!(ports[0]["id"], ports[1]["id"]);
@@ -141,7 +139,9 @@ fn the_provider_reads_a_port_by_the_ovh_id_and_attaches_once() {
     let a = apply(&ovh, pb::Op::Update, "ovh.instance", &vm, &config);
     let attrs = wire::from_doc(a.attrs.as_ref().unwrap()).unwrap();
     assert_eq!(attrs["networks"], json!([id]));
-    let (attrs, _) = ovh.read("ovh.instance", &vm, "vm", None).unwrap().unwrap();
+    let (attrs, _) = dform_sdk::block_on(ovh.read("ovh.instance", &vm, "vm", None))
+        .unwrap()
+        .unwrap();
     assert_eq!(attrs["networks"], json!([id]));
     let a = apply(&ovh, pb::Op::Update, "ovh.instance", &vm, &config);
     assert!(
@@ -166,14 +166,14 @@ fn a_call_that_takes_no_body_refuses_one_with_the_apis_400() {
         "/domain/zone/example.com/refresh".to_string(),
     ];
     for path in &calls {
-        let e = c.post(path, Some(&json!({}))).unwrap_err();
+        let e = dform_sdk::block_on(c.post(path, Some(&json!({})))).unwrap_err();
         assert_eq!(e.status(), Some(status), "{e}");
         assert!(
             e.to_string()
                 .ends_with(refusal["message"].as_str().unwrap()),
             "{e}"
         );
-        c.post(path, None).unwrap();
+        dform_sdk::block_on(c.post(path, None)).unwrap();
     }
 }
 
@@ -202,7 +202,7 @@ fn the_provider_sends_no_body_where_the_api_takes_none() {
         lease: "lease".into(),
         ..Default::default()
     };
-    match ovh.answer(Call::Reveal(reveal), &backend::silent) {
+    match dform_sdk::block_on(ovh.answer(Call::Reveal(reveal), &backend::silent)) {
         Ok(Reply::Reveal(r)) => assert!(!r.value.is_empty()),
         other => panic!("reveal: {other:?}"),
     }
@@ -241,7 +241,7 @@ fn ip_addresses_lag_an_attach_and_the_ports_do_not() {
     server.ip_lag(3);
     let (id, os) = lab(&c);
     let vm = server.add_instance("vm", "BHS5");
-    let instance = || c.get(&project(&format!("/instance/{vm}"))).unwrap();
+    let instance = || dform_sdk::block_on(c.get(&project(&format!("/instance/{vm}")))).unwrap();
     let private = |o: &Json| {
         o["ipAddresses"]
             .as_array()
@@ -250,15 +250,15 @@ fn ip_addresses_lag_an_attach_and_the_ports_do_not() {
             .filter(|a| a["type"] == "private")
             .count()
     };
-    c.post(
+    dform_sdk::block_on(c.post(
         &project(&format!("/instance/{vm}/interface")),
         Some(&json!({"networkId": os})),
-    )
+    ))
     .unwrap();
     let ip = private_ports(&c, &vm)[0]["fixedIps"][0]["ip"].clone();
     assert!(ip.is_string(), "{ip}");
-    let (attrs, computed) = provider(&server)
-        .read("ovh.instance", &vm, "vm", None)
+    let ovh = provider(&server);
+    let (attrs, computed) = dform_sdk::block_on(ovh.read("ovh.instance", &vm, "vm", None))
         .unwrap()
         .unwrap();
     assert_eq!(attrs["networks"], json!([id]));
@@ -284,7 +284,7 @@ fn read(ovh: &Ovh, vm: &str, prior: Option<&Json>) -> Json {
         prior: prior.map(wire::doc),
         ..Default::default()
     };
-    match ovh.answer(Call::Read(r), &backend::silent) {
+    match dform_sdk::block_on(ovh.answer(Call::Read(r), &backend::silent)) {
         Ok(Reply::Read(r)) if r.found => wire::from_doc(r.computed.as_ref().unwrap()).unwrap(),
         other => panic!("read: {other:?}"),
     }
@@ -301,7 +301,7 @@ fn update(ovh: &Ovh, vm: &str, config: &Json, prior: Option<&Json>) -> Json {
         prior: prior.map(wire::doc),
         ..Default::default()
     };
-    match ovh.answer(Call::Apply(r), &backend::silent) {
+    match dform_sdk::block_on(ovh.answer(Call::Apply(r), &backend::silent)) {
         Ok(Reply::Apply(a)) => wire::from_doc(a.computed.as_ref().unwrap()).unwrap(),
         other => panic!("update: {other:?}"),
     }
@@ -324,10 +324,10 @@ fn an_attach_keeps_its_port_and_a_read_finds_it_by_id() {
     let (own, ip) = (&ports[0]["id"], &ports[0]["fixedIps"][0]["ip"]);
     assert_eq!(made["ports"], json!({id.clone(): {"id": own, "ipv4": ip}}));
     // Another port on the network (the attach loop's), listed after.
-    c.post(
+    dform_sdk::block_on(c.post(
         &project(&format!("/instance/{vm}/interface")),
         Some(&json!({"networkId": os})),
-    )
+    ))
     .unwrap();
     let other = private_ports(&c, &vm)[1].clone();
     let (theirs, their_ip) = (&other["id"], &other["fixedIps"][0]["ip"]);
@@ -363,9 +363,9 @@ fn a_remembered_port_that_is_gone_reads_as_absent() {
                         "image": "Ubuntu 24.04", "networks": [id]});
     let made = update(&ovh, &vm, &config, None);
     let path = project(&format!("/instance/{vm}/interface"));
-    c.post(&path, Some(&json!({"networkId": os}))).unwrap();
+    dform_sdk::block_on(c.post(&path, Some(&json!({"networkId": os})))).unwrap();
     let own = made["ports"][&id]["id"].as_str().unwrap().to_string();
-    c.delete(&format!("{path}/{own}")).unwrap();
+    dform_sdk::block_on(c.delete(&format!("{path}/{own}"))).unwrap();
     let left = private_ports(&c, &vm);
     assert_eq!(left.len(), 1, "{left:?}");
     let now = read(&ovh, &vm, Some(&made));
@@ -374,8 +374,7 @@ fn a_remembered_port_that_is_gone_reads_as_absent() {
         now["private_ips"],
         json!({id.clone(): left[0]["fixedIps"][0]["ip"]})
     );
-    let (attrs, _) = ovh
-        .read("ovh.instance", &vm, "vm", Some(&made))
+    let (attrs, _) = dform_sdk::block_on(ovh.read("ovh.instance", &vm, "vm", Some(&made)))
         .unwrap()
         .unwrap();
     assert_eq!(attrs["networks"], json!([id]));
@@ -440,7 +439,7 @@ fn update_refused(ovh: &Ovh, vm: &str, config: &Json, prior: Option<&Json>) -> S
         prior: prior.map(wire::doc),
         ..Default::default()
     };
-    match ovh.answer(Call::Apply(r), &backend::silent) {
+    match dform_sdk::block_on(ovh.answer(Call::Apply(r), &backend::silent)) {
         Err(backend::CallError::Refused(m)) => m,
         other => panic!("update not refused: {other:?}"),
     }
@@ -458,7 +457,7 @@ fn update_noted(ovh: &Ovh, vm: &str, config: &Json, prior: Option<&Json>) -> (Js
         prior: prior.map(wire::doc),
         ..Default::default()
     };
-    match ovh.answer(Call::Apply(r), &backend::silent) {
+    match dform_sdk::block_on(ovh.answer(Call::Apply(r), &backend::silent)) {
         Ok(Reply::Apply(a)) => (
             wire::from_doc(a.computed.as_ref().unwrap()).unwrap(),
             a.notes,
@@ -474,7 +473,7 @@ fn three_ports(server: &Server, c: &Client) -> (String, String) {
     let vm = server.add_instance("vm", "BHS5");
     let path = project(&format!("/instance/{vm}/interface"));
     for _ in 0..3 {
-        c.post(&path, Some(&json!({"networkId": os}))).unwrap();
+        dform_sdk::block_on(c.post(&path, Some(&json!({"networkId": os})))).unwrap();
     }
     (id, vm)
 }
@@ -566,10 +565,10 @@ fn several_ports_none_known_refuse_and_change_nothing() {
     assert_eq!(private_ports(&c, &vm).len(), 3);
     // A person detaches two; the one left is taken as its own.
     for p in &ports[1..] {
-        c.delete(&project(&format!(
+        dform_sdk::block_on(c.delete(&project(&format!(
             "/instance/{vm}/interface/{}",
             p["id"].as_str().unwrap()
-        )))
+        ))))
         .unwrap();
     }
     let (computed, notes) = update_noted(&ovh, &vm, &on_lab(&id), None);
@@ -591,7 +590,7 @@ fn a_network_left_detaches_its_own_port() {
     let made = update(&ovh, &vm, &on_lab(&id), None);
     let own = made["ports"][&id]["id"].clone();
     let path = project(&format!("/instance/{vm}/interface"));
-    c.post(&path, Some(&json!({"networkId": os}))).unwrap();
+    dform_sdk::block_on(c.post(&path, Some(&json!({"networkId": os})))).unwrap();
     let theirs = private_ports(&c, &vm)[1]["id"].clone();
     let off = json!({"name": "vm", "region": "BHS5", "flavor": "b2-7", "image": "Ubuntu 24.04"});
     let (_, notes) = update_noted(&ovh, &vm, &off, Some(&made));
@@ -627,10 +626,10 @@ fn a_create_sent_again_owns_the_port_it_was_made_with() {
     let made = apply(&ovh, pb::Op::Create, "ovh.instance", "", &on_lab(&id));
     let vm = made.remote.clone();
     let first = private_ports(&c, &vm)[0]["id"].clone();
-    c.post(
+    dform_sdk::block_on(c.post(
         &project(&format!("/instance/{vm}/interface")),
         Some(&json!({"networkId": os})),
-    )
+    ))
     .unwrap();
     let again = apply(&ovh, pb::Op::Create, "ovh.instance", "", &on_lab(&id));
     assert_eq!(again.remote, vm);
@@ -662,18 +661,18 @@ fn the_fake_makes_a_port_with_the_address_asked() {
     let (server, c) = world();
     let (_, os) = lab(&c);
     let create = |name: &str, ip: &str| {
-        c.post(
+        dform_sdk::block_on(c.post(
             &project("/instance"),
             Some(&json!({"name": name, "region": "BHS5",
                          "flavorId": "flavor-b2-7-BHS5", "imageId": "image-ubuntu-24.04-BHS5",
                          "networks": [{"networkId": "ext-BHS5"}, {"networkId": os, "ip": ip}]})),
-        )
+        ))
     };
     let vm = create("a", "10.0.0.5").unwrap();
     let vm = vm["id"].as_str().unwrap();
     let port = &private_ports(&c, vm)[0];
     assert_eq!(port["fixedIps"][0]["ip"], "10.0.0.5");
-    let o = c.get(&project(&format!("/instance/{vm}"))).unwrap();
+    let o = dform_sdk::block_on(c.get(&project(&format!("/instance/{vm}")))).unwrap();
     assert!(
         o["ipAddresses"]
             .as_array()
@@ -694,11 +693,12 @@ fn the_fake_makes_a_port_with_the_address_asked() {
         assert!(e.to_string().contains("is in no subnet of network"), "{e}");
     }
     let path = project(&format!("/instance/{vm}/interface"));
-    let attached = c
-        .post(&path, Some(&json!({"networkId": os, "ip": "10.0.0.6"})))
-        .unwrap();
+    let attached =
+        dform_sdk::block_on(c.post(&path, Some(&json!({"networkId": os, "ip": "10.0.0.6"}))))
+            .unwrap();
     assert_eq!(attached["fixedIps"][0]["ip"], "10.0.0.6");
-    let again = c.post(&path, Some(&json!({"networkId": os, "ip": "10.0.0.6"})));
+    let again =
+        dform_sdk::block_on(c.post(&path, Some(&json!({"networkId": os, "ip": "10.0.0.6"}))));
     assert_eq!(again.unwrap_err().status(), Some(409));
     assert_eq!(server.instances().len(), 1);
 }
@@ -741,14 +741,13 @@ fn an_instance_made_with_an_address_has_it_and_reads_it_back() {
         computed["ports"],
         json!({id.clone(): {"id": port["id"], "ipv4": "10.0.0.50", "fixed": true}})
     );
-    let (again, read) = ovh
-        .read("ovh.instance", &made.remote, "vm", Some(&computed))
-        .unwrap()
-        .unwrap();
+    let (again, read) =
+        dform_sdk::block_on(ovh.read("ovh.instance", &made.remote, "vm", Some(&computed)))
+            .unwrap()
+            .unwrap();
     assert_eq!(again["networks"], attrs["networks"]);
     assert_eq!(read, computed);
-    let (plain, _) = ovh
-        .read("ovh.instance", &made.remote, "vm", None)
+    let (plain, _) = dform_sdk::block_on(ovh.read("ovh.instance", &made.remote, "vm", None))
         .unwrap()
         .unwrap();
     assert_eq!(plain["networks"], json!([id]));
@@ -758,8 +757,7 @@ fn an_instance_made_with_an_address_has_it_and_reads_it_back() {
 fn plan_refused(ovh: &Ovh, name: &str, prior: Option<&Json>, doc: &Json) -> String {
     format!(
         "{:#}",
-        ovh.plan("ovh.instance", name, "", prior, Some(doc))
-            .unwrap_err()
+        dform_sdk::block_on(ovh.plan("ovh.instance", name, "", prior, Some(doc))).unwrap_err()
     )
 }
 
@@ -789,15 +787,12 @@ fn an_address_outside_the_networks_subnets_is_refused_at_plan() {
         "{text}"
     );
     assert!(
-        ovh.plan("ovh.instance", "vm", "", None, Some(&at(&id, "10.0.0.5")))
+        dform_sdk::block_on(ovh.plan("ovh.instance", "vm", "", None, Some(&at(&id, "10.0.0.5"))))
             .is_ok()
     );
     let mut pending = at(&id, "10.9.0.5");
     pending["networks"][0]["network"] = json!({"$null": "ovh.network/lab#id"});
-    assert!(
-        ovh.plan("ovh.instance", "vm", "", None, Some(&pending))
-            .is_ok()
-    );
+    assert!(dform_sdk::block_on(ovh.plan("ovh.instance", "vm", "", None, Some(&pending))).is_ok());
     let refused = apply_refused(&ovh, &at(&id, "10.9.0.5"));
     assert!(
         refused.ends_with("its subnets are 10.0.0.0/24 in BHS5"),
@@ -816,7 +811,7 @@ fn apply_refused(ovh: &Ovh, config: &Json) -> String {
         idempotency_key: "refused".into(),
         ..Default::default()
     };
-    match ovh.answer(Call::Apply(r), &backend::silent) {
+    match dform_sdk::block_on(ovh.answer(Call::Apply(r), &backend::silent)) {
         Err(backend::CallError::Refused(m)) => m,
         other => panic!("create not refused: {other:?}"),
     }
@@ -833,7 +828,7 @@ fn two_instances_asking_one_address_are_refused_at_plan() {
     let mut b = at(&id, "10.0.0.5");
     b["name"] = json!("b");
     assert!(
-        ovh.plan("ovh.instance", "a", "", None, Some(&at(&id, "10.0.0.5")))
+        dform_sdk::block_on(ovh.plan("ovh.instance", "a", "", None, Some(&at(&id, "10.0.0.5"))))
             .is_ok()
     );
     assert_eq!(
@@ -846,21 +841,21 @@ fn two_instances_asking_one_address_are_refused_at_plan() {
     );
     // The same instance planned again is no second asker.
     assert!(
-        ovh.plan("ovh.instance", "a", "", None, Some(&at(&id, "10.0.0.5")))
+        dform_sdk::block_on(ovh.plan("ovh.instance", "a", "", None, Some(&at(&id, "10.0.0.5"))))
             .is_ok()
     );
     assert!(
-        ovh.plan("ovh.instance", "a", "", None, Some(&at(&id, "10.0.0.6")))
+        dform_sdk::block_on(ovh.plan("ovh.instance", "a", "", None, Some(&at(&id, "10.0.0.6"))))
             .is_ok()
     );
-    assert!(ovh.plan("ovh.instance", "b", "", None, Some(&b)).is_ok());
+    assert!(dform_sdk::block_on(ovh.plan("ovh.instance", "b", "", None, Some(&b))).is_ok());
     assert!(
-        ovh.plan("ovh.instance", "a", "", None, Some(&at(&id, "10.0.0.5")))
+        dform_sdk::block_on(ovh.plan("ovh.instance", "a", "", None, Some(&at(&id, "10.0.0.5"))))
             .is_err()
     );
-    ovh.plan("ovh.instance", "b", "", Some(&b), None).unwrap();
+    dform_sdk::block_on(ovh.plan("ovh.instance", "b", "", Some(&b), None)).unwrap();
     assert!(
-        ovh.plan("ovh.instance", "a", "", None, Some(&at(&id, "10.0.0.5")))
+        dform_sdk::block_on(ovh.plan("ovh.instance", "a", "", None, Some(&at(&id, "10.0.0.5"))))
             .is_ok()
     );
 }
@@ -883,8 +878,7 @@ fn an_address_asked_anew_replaces_the_instance() {
     );
     let attrs = wire::from_doc(made.attrs.as_ref().unwrap()).unwrap();
     let plan = |doc: &Json| {
-        ovh.plan("ovh.instance", "vm", "", Some(&attrs), Some(doc))
-            .unwrap()
+        dform_sdk::block_on(ovh.plan("ovh.instance", "vm", "", Some(&attrs), Some(doc))).unwrap()
     };
     let same = plan(&at(&id, "10.0.0.50"));
     assert!(same.changes.is_empty() && !same.replaces, "{same:?}");
@@ -904,15 +898,14 @@ fn an_address_asked_anew_replaces_the_instance() {
         !dropped.changes.is_empty() && !dropped.replaces,
         "{dropped:?}"
     );
-    let asked = ovh
-        .plan(
-            "ovh.instance",
-            "vm",
-            "",
-            Some(&dhcp),
-            Some(&at(&id, "10.0.0.50")),
-        )
-        .unwrap();
+    let asked = dform_sdk::block_on(ovh.plan(
+        "ovh.instance",
+        "vm",
+        "",
+        Some(&dhcp),
+        Some(&at(&id, "10.0.0.50")),
+    ))
+    .unwrap();
     assert!(asked.replaces, "{asked:?}");
     assert_eq!(
         asked.reason,
@@ -931,7 +924,7 @@ fn an_address_asked_anew_replaces_the_instance() {
         idempotency_key: "replace".into(),
         ..Default::default()
     };
-    let replaced = match ovh.answer(Call::Apply(r), &backend::silent) {
+    let replaced = match dform_sdk::block_on(ovh.answer(Call::Apply(r), &backend::silent)) {
         Ok(Reply::Apply(a)) => a,
         other => panic!("replace: {other:?}"),
     };
@@ -1011,7 +1004,7 @@ fn a_replacement_asking_the_old_address_deletes_the_old_one_first() {
         idempotency_key: "replace".into(),
         ..Default::default()
     };
-    let replaced = match ovh.answer(Call::Apply(r), &backend::silent) {
+    let replaced = match dform_sdk::block_on(ovh.answer(Call::Apply(r), &backend::silent)) {
         Ok(Reply::Apply(a)) => a,
         other => panic!("replace: {other:?}"),
     };

@@ -23,23 +23,24 @@ const ON_ITS_WAY: [&str; 4] = ["attaching", "detaching", "creating", "extending"
 
 impl Ovh {
     /// The volume as the API answers it, unless it is gone.
-    pub(super) fn read_volume(
+    pub(super) async fn read_volume(
         &self,
         a: &Account,
         p: &str,
         remote: &str,
     ) -> api::Result<Option<Json>> {
         Ok(a.client
-            .get_opt(&volume_path(p, remote))?
+            .get_opt(&volume_path(p, remote))
+            .await?
             .filter(|o| s(o, "status") != Some("deleted")))
     }
 
-    pub(super) fn create_volume(
+    pub(super) async fn create_volume(
         &self,
         at: &str,
         config: &Json,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(String, Json, Json), Failed> {
         let (a, p) = self.project_for(at)?;
         let region = need(at, config, "region")?;
@@ -57,6 +58,7 @@ impl Ovh {
             let image = need(at, config, "image")?;
             body["imageId"] = json!(
                 self.image_id(&a, &p, region, image)
+                    .await
                     .map_err(|e| refused(at, format!("image: {e:#}")))?
             );
         }
@@ -66,23 +68,26 @@ impl Ovh {
         let o = a
             .client
             .post(&format!("/cloud/project/{p}/volume"), Some(&body))
+            .await
             .map_err(|e| failed(at, e))?;
         let id = s(&o, "id").unwrap_or_default().to_string();
         let path = volume_path(&p, &id);
-        let o = self.settle(
-            &a,
-            at,
-            &path,
-            o,
-            &["available"],
-            &FAILED,
-            CREATE_WAIT,
-            notes,
-            say,
-        )?;
+        let o = self
+            .settle(
+                &a,
+                at,
+                &path,
+                o,
+                &["available"],
+                &FAILED,
+                CREATE_WAIT,
+                notes,
+                say,
+            )
+            .await?;
         let o = match instance(at, config)? {
             Some(i) if s(&o, "status") == Some("available") => {
-                self.attach(&a, at, &path, i, notes, say)?
+                self.attach(&a, at, &path, i, notes, say).await?
             }
             _ => o,
         };
@@ -93,18 +98,19 @@ impl Ovh {
     /// Its name and description in place, its size grown, and its
     /// instance: detached from the one it is on, attached to the
     /// program's.
-    pub(super) fn update_volume(
+    pub(super) async fn update_volume(
         &self,
         at: &str,
         remote: &str,
         config: &Json,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(), Failed> {
         let (a, p) = self.project_for(at)?;
         let path = volume_path(&p, remote);
         let now = self
             .read_volume(&a, &p, remote)
+            .await
             .map_err(|e| refused(at, e))?
             .ok_or_else(|| refused(at, format!("volume {remote} is not there")))?;
         let mut put = json!({});
@@ -116,7 +122,7 @@ impl Ovh {
             }
         }
         if put.as_object().is_some_and(|m| !m.is_empty()) {
-            a.client.put(&path, &put).map_err(|e| failed(at, e))?;
+            a.client.put(&path, &put).await.map_err(|e| failed(at, e))?;
         }
         let want = size(at, config)?;
         let was = now.get("size").and_then(Json::as_i64).unwrap_or(0);
@@ -124,6 +130,7 @@ impl Ovh {
             let o = a
                 .client
                 .post(&format!("{path}/upsize"), Some(&json!({"size": want})))
+                .await
                 .map_err(|e| failed(at, e))?;
             self.settle(
                 &a,
@@ -135,10 +142,12 @@ impl Ovh {
                 ATTACH_WAIT,
                 notes,
                 say,
-            )?;
+            )
+            .await?;
         }
         let want = instance(at, config)?;
         self.converge_attachment(&a, at, &path, now, want, notes, say)
+            .await
     }
 
     /// The volume at `path` attached to `want` alone (to none: detached),
@@ -147,7 +156,7 @@ impl Ovh {
     /// `in-use` volume), then detached from each instance but `want`, and
     /// attached to `want` unless it is already. Repeated, it does nothing.
     #[allow(clippy::too_many_arguments)]
-    fn converge_attachment(
+    async fn converge_attachment(
         &self,
         a: &Account,
         at: &str,
@@ -155,29 +164,29 @@ impl Ovh {
         now: Json,
         want: Option<&str>,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(), Failed> {
-        let now = self.settled(a, at, path, now, notes, say)?;
+        let now = self.settled(a, at, path, now, notes, say).await?;
         let on = map::attached_to(&now);
         for i in on.iter().filter(|i| Some(i.as_str()) != want) {
-            self.detach(a, at, path, i, notes, say)?;
+            self.detach(a, at, path, i, notes, say).await?;
         }
         if let Some(i) = want.filter(|w| !on.iter().any(|o| o == w)) {
-            self.attach(a, at, path, i, notes, say)?;
+            self.attach(a, at, path, i, notes, say).await?;
         }
         Ok(())
     }
 
     /// The volume `now` once it is not on its way (`attaching`,
     /// `detaching`, `creating`, `extending`): as it is when it is not.
-    fn settled(
+    async fn settled(
         &self,
         a: &Account,
         at: &str,
         path: &str,
         now: Json,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<Json, Failed> {
         if !ON_ITS_WAY.contains(&status(&now).as_str()) {
             return Ok(now);
@@ -193,36 +202,39 @@ impl Ovh {
             notes,
             say,
         )
+        .await
     }
 
     /// Detached from every instance it is on first: the API refuses to
     /// delete a volume in use.
-    pub(super) fn delete_volume(
+    pub(super) async fn delete_volume(
         &self,
         at: &str,
         remote: &str,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(), Failed> {
         let (a, p) = self.project_for(at)?;
         let path = volume_path(&p, remote);
         if let Some(now) = self
             .read_volume(&a, &p, remote)
+            .await
             .map_err(|e| refused(at, e))?
         {
-            self.converge_attachment(&a, at, &path, now, None, notes, say)?;
+            self.converge_attachment(&a, at, &path, now, None, notes, say)
+                .await?;
         }
-        self.delete_at(&a, at, &path, true, notes, say)
+        self.delete_at(&a, at, &path, true, notes, say).await
     }
 
-    fn attach(
+    async fn attach(
         &self,
         a: &Account,
         at: &str,
         path: &str,
         instance: &str,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<Json, Failed> {
         let o = a
             .client
@@ -230,6 +242,7 @@ impl Ovh {
                 &format!("{path}/attach"),
                 Some(&json!({"instanceId": instance})),
             )
+            .await
             .map_err(|e| failed(&format!("{at}: attach to instance {instance}"), e))?;
         self.settle(
             a,
@@ -242,16 +255,17 @@ impl Ovh {
             notes,
             say,
         )
+        .await
     }
 
-    fn detach(
+    async fn detach(
         &self,
         a: &Account,
         at: &str,
         path: &str,
         instance: &str,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<Json, Failed> {
         let o = a
             .client
@@ -259,6 +273,7 @@ impl Ovh {
                 &format!("{path}/detach"),
                 Some(&json!({"instanceId": instance})),
             )
+            .await
             .map_err(|e| failed(&format!("{at}: detach from instance {instance}"), e))?;
         self.settle(
             a,
@@ -271,15 +286,19 @@ impl Ovh {
             notes,
             say,
         )
+        .await
     }
 
     /// The volume named `name` in `region`, unless it is deleted.
-    pub(super) fn find_volume(&self, name: &str, region: &str) -> Result<Option<String>> {
+    pub(super) async fn find_volume(&self, name: &str, region: &str) -> Result<Option<String>> {
         let (a, p) = self.project("find a volume")?;
-        let list = a.client.list(&format!(
-            "/cloud/project/{p}/volume?region={}",
-            escape(region)
-        ))?;
+        let list = a
+            .client
+            .list(&format!(
+                "/cloud/project/{p}/volume?region={}",
+                escape(region)
+            ))
+            .await?;
         Ok(list
             .as_array()
             .into_iter()

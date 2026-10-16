@@ -27,14 +27,15 @@
 //!
 //! A list (`Client::list`: a region's flavors, the project's private
 //! networks, a network's subnets) is asked once per client, a session's
-//! run: the callers asking it at the same time wait on the one request,
-//! and every later one has its answer. A write to its class of endpoint
+//! run: the callers asking it at the same time await the one request in
+//! flight, and every later one has its answer. A write to its class of endpoint
 //! (`bucket`) forgets it, whatever the write's outcome, so the next ask
 //! is answered as the API is after the write. A failure is not kept.
 
 use crate::config::{Auth, Credentials};
 use crate::sign::signature;
 use base64::Engine;
+use dform_sdk::sync::Mutex as Held;
 use serde_json::Value as Json;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -113,8 +114,8 @@ pub struct Client {
     /// The cache file the offset is kept in (`ovh-projects.json`).
     cache: Option<PathBuf>,
     /// The bearer token minted from a service account's credentials, and
-    /// when it is to be minted afresh.
-    token: Mutex<Option<(String, Instant)>>,
+    /// when it is to be minted afresh: held while one is minted.
+    token: Held<Option<(String, Instant)>>,
     /// The lists asked once.
     kept: Mutex<Kept>,
 }
@@ -143,8 +144,9 @@ impl Kept {
 }
 
 /// One list: not asked yet, or its answer, `None` where the API has none
-/// (a 404). Its lock is held while it is asked.
-type Slot = Arc<Mutex<Option<Option<Arc<Json>>>>>;
+/// (a 404). Its lock is held while it is asked, so a second asker awaits
+/// the first's request.
+type Slot = Arc<Held<Option<Option<Arc<Json>>>>>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -192,7 +194,7 @@ impl Client {
             creds,
             delta: Mutex::new(None),
             cache: None,
-            token: Mutex::new(None),
+            token: Held::new(None),
             kept: Mutex::default(),
         }
     }
@@ -222,7 +224,7 @@ impl Client {
 
     /// The server's time now, from its clock's offset: known, kept in
     /// the cache, or asked.
-    fn timestamp(&self) -> Result<i64> {
+    async fn timestamp(&self) -> Result<i64> {
         let known = *self.delta.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((d, _)) = known {
             return Ok(Self::now() + d);
@@ -237,16 +239,17 @@ impl Client {
                 let mut delta = self.delta.lock().unwrap_or_else(|e| e.into_inner());
                 delta.get_or_insert((d, true)).0
             }
-            None => self.ask_time()?,
+            None => self.ask_time().await?,
         };
         Ok(Self::now() + d)
     }
 
     /// Ask the server its time (`GET /auth/time`): the offset now known
     /// and kept in the cache.
-    fn ask_time(&self) -> Result<i64> {
-        let server = self
-            .send("GET", "/auth/time", None, false)?
+    async fn ask_time(&self) -> Result<i64> {
+        // Boxed: a call may ask the time, and asking it is a call.
+        let server = Box::pin(self.send("GET", "/auth/time", None, false))
+            .await?
             .as_i64()
             .ok_or_else(|| Error::Status {
                 method: "GET".into(),
@@ -262,13 +265,13 @@ impl Client {
         Ok(d)
     }
 
-    pub fn get(&self, path: &str) -> Result<Json> {
-        self.send("GET", path, None, true)
+    pub async fn get(&self, path: &str) -> Result<Json> {
+        self.send("GET", path, None, true).await
     }
 
     /// GET, `None` for a 404.
-    pub fn get_opt(&self, path: &str) -> Result<Option<Json>> {
-        match self.get(path) {
+    pub async fn get_opt(&self, path: &str) -> Result<Option<Json>> {
+        match self.get(path).await {
             Ok(v) => Ok(Some(v)),
             Err(e) if e.is_not_found() => Ok(None),
             Err(e) => Err(e),
@@ -276,56 +279,58 @@ impl Client {
     }
 
     /// The list at `path`, asked once (the module's doc).
-    pub fn list(&self, path: &str) -> Result<Arc<Json>> {
-        let asked = self.remember(path, || self.get(path).map(Some))?;
+    pub async fn list(&self, path: &str) -> Result<Arc<Json>> {
+        let asked = self
+            .remember(path, async || self.get(path).await.map(Some))
+            .await?;
         Ok(asked.unwrap_or_default())
     }
 
     /// [`Client::list`], `None` for a 404 (kept as the answer).
-    pub fn list_opt(&self, path: &str) -> Result<Option<Arc<Json>>> {
-        self.remember(path, || self.get_opt(path))
+    pub async fn list_opt(&self, path: &str) -> Result<Option<Arc<Json>>> {
+        self.remember(path, async || self.get_opt(path).await).await
     }
 
     /// The answer kept for `path`, else `ask`'s, kept unless it failed or
     /// a write to its class was sent while it was asked.
-    fn remember(
+    async fn remember(
         &self,
         path: &str,
-        ask: impl FnOnce() -> Result<Option<Json>>,
+        ask: impl AsyncFnOnce() -> Result<Option<Json>>,
     ) -> Result<Option<Arc<Json>>> {
         let (slot, writes) = {
             let mut kept = lock(&self.kept);
             let slot = kept.lists.entry(path.to_string()).or_default().clone();
             (slot, kept.writes(path))
         };
-        let mut held = lock(&slot);
+        let mut held = slot.lock().await;
         if let Some(answer) = &*held {
             return Ok(answer.clone());
         }
-        let answer = ask()?.map(Arc::new);
+        let answer = ask().await?.map(Arc::new);
         if lock(&self.kept).writes(path) == writes {
             *held = Some(answer.clone());
         }
         Ok(answer)
     }
 
-    pub fn post(&self, path: &str, body: Option<&Json>) -> Result<Json> {
-        self.write("POST", path, body)
+    pub async fn post(&self, path: &str, body: Option<&Json>) -> Result<Json> {
+        self.write("POST", path, body).await
     }
 
-    pub fn put(&self, path: &str, body: &Json) -> Result<Json> {
-        self.write("PUT", path, Some(body))
+    pub async fn put(&self, path: &str, body: &Json) -> Result<Json> {
+        self.write("PUT", path, Some(body)).await
     }
 
-    pub fn delete(&self, path: &str) -> Result<Json> {
-        self.write("DELETE", path, None)
+    pub async fn delete(&self, path: &str) -> Result<Json> {
+        self.write("DELETE", path, None).await
     }
 
     /// A write: the lists of its class forgotten as it is sent and once
     /// it is answered (or not), so none asked meanwhile is kept.
-    fn write(&self, method: &str, path: &str, body: Option<&Json>) -> Result<Json> {
+    async fn write(&self, method: &str, path: &str, body: Option<&Json>) -> Result<Json> {
         lock(&self.kept).wrote(path);
-        let out = self.send(method, path, body, true);
+        let out = self.send(method, path, body, true).await;
         lock(&self.kept).wrote(path);
         out
     }
@@ -336,43 +341,52 @@ impl Client {
     /// server refuses while its timestamp rests on an offset read from
     /// the cache asks the server's time again, and is sent once more when
     /// the offset moved.
-    fn send(&self, method: &str, path: &str, body: Option<&Json>, authed: bool) -> Result<Json> {
+    async fn send(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Json>,
+        authed: bool,
+    ) -> Result<Json> {
         if let (true, Auth::Token { access_token }) = (authed, &self.creds.auth) {
-            return self.send_once(method, path, body, By::Bearer(access_token));
+            return self
+                .send_once(method, path, body, By::Bearer(access_token))
+                .await;
         }
         if authed && matches!(self.creds.auth, Auth::OAuth2 { .. }) {
-            let token = self.bearer()?;
-            let out = self.send_once(method, path, body, By::Bearer(&token));
+            let token = self.bearer().await?;
+            let out = self.send_once(method, path, body, By::Bearer(&token)).await;
             if !matches!(&out, Err(e) if e.status() == Some(401)) {
                 return out;
             }
-            self.forget(&token);
-            return self.send_once(method, path, body, By::Bearer(&self.bearer()?));
+            self.forget(&token).await;
+            let token = self.bearer().await?;
+            return self.send_once(method, path, body, By::Bearer(&token)).await;
         }
         let by = if authed { By::Signature } else { By::Nothing };
-        let out = self.send_once(method, path, body, by);
+        let out = self.send_once(method, path, body, by).await;
         let refused = matches!(&out, Err(e) if matches!(e.status(), Some(400 | 401 | 403)));
         let cached = *self.delta.lock().unwrap_or_else(|e| e.into_inner());
         match cached {
             Some((was, true)) if authed && refused => {
-                if self.ask_time()? == was {
+                if self.ask_time().await? == was {
                     return out;
                 }
-                self.send_once(method, path, body, by)
+                self.send_once(method, path, body, by).await
             }
             _ => out,
         }
     }
 
     /// The bearer token: the one held while it is good, else one minted.
-    fn bearer(&self) -> Result<String> {
-        let mut held = self.token.lock().unwrap_or_else(|e| e.into_inner());
+    async fn bearer(&self) -> Result<String> {
+        let mut held = self.token.lock().await;
         if let Some((token, until)) = &*held
             && Instant::now() < *until
         {
             return Ok(token.clone());
         }
-        let (token, life) = self.mint()?;
+        let (token, life) = self.mint().await?;
         *held = Some((
             token.clone(),
             Instant::now() + life.saturating_sub(TOKEN_MARGIN),
@@ -382,8 +396,8 @@ impl Client {
 
     /// Drop `token`, refused, unless another call has minted its
     /// successor already.
-    fn forget(&self, token: &str) {
-        let mut held = self.token.lock().unwrap_or_else(|e| e.into_inner());
+    async fn forget(&self, token: &str) {
+        let mut held = self.token.lock().await;
         if held.as_ref().is_some_and(|(t, _)| t == token) {
             *held = None;
         }
@@ -391,7 +405,7 @@ impl Client {
 
     /// A bearer token from the service account's client credentials,
     /// and how long it is good for.
-    fn mint(&self) -> Result<(String, Duration)> {
+    async fn mint(&self) -> Result<(String, Duration)> {
         let Auth::OAuth2 {
             client_id,
             client_secret,
@@ -411,7 +425,9 @@ impl Client {
             ("Accept", "application/json".to_string()),
         ];
         let body = "grant_type=client_credentials&scope=all";
-        let (status, text) = self.exchange("POST", token_url, token_url, &headers, Some(body))?;
+        let (status, text) = self
+            .exchange("POST", token_url, token_url, &headers, Some(body))
+            .await?;
         let answer = serde_json::from_str::<Json>(&text).unwrap_or(Json::Null);
         let refused = |message: String| Error::Status {
             method: "POST".into(),
@@ -438,7 +454,7 @@ impl Client {
 
     /// One HTTP request to `url` (`path` names it in an error): its
     /// status and its answer's text.
-    fn exchange(
+    async fn exchange(
         &self,
         method: &str,
         path: &str,
@@ -460,14 +476,23 @@ impl Client {
         if let Some(body) = body {
             req = req.body(body);
         }
-        let resp = dform_sdk::block_on(dform_sdk::host().http.request(req))
+        let resp = dform_sdk::host()
+            .http
+            .request(req)
+            .await
             .map_err(|e| unreachable(e.message))?;
         let text = String::from_utf8(resp.body)
             .map_err(|e| unreachable(format!("reading the answer: {e}")))?;
         Ok((resp.status, text))
     }
 
-    fn send_once(&self, method: &str, path: &str, body: Option<&Json>, by: By) -> Result<Json> {
+    async fn send_once(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Json>,
+        by: By<'_>,
+    ) -> Result<Json> {
         let url = format!("{}{path}", self.creds.url);
         let body = body.map(Json::to_string);
         let mut headers = Vec::new();
@@ -486,7 +511,7 @@ impl Client {
             ) => {
                 headers.push(("X-Ovh-Application", application_key.clone()));
                 if let By::Signature = by {
-                    let ts = self.timestamp()?;
+                    let ts = self.timestamp().await?;
                     headers.push(("X-Ovh-Timestamp", ts.to_string()));
                     headers.push(("X-Ovh-Consumer", consumer_key.clone()));
                     headers.push((
@@ -504,7 +529,9 @@ impl Client {
             }
             (Auth::OAuth2 { .. } | Auth::Token { .. }, _) => {}
         }
-        let (status, text) = self.exchange(method, path, &url, &headers, body.as_deref())?;
+        let (status, text) = self
+            .exchange(method, path, &url, &headers, body.as_deref())
+            .await?;
         if !(200..300).contains(&status) {
             return Err(Error::Status {
                 method: method.into(),

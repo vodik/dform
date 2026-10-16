@@ -36,13 +36,14 @@ use crate::config;
 use crate::map;
 use anyhow::{Result, anyhow, bail};
 use dform_core::address::Address;
-use dform_core::plugin::backend::{self, CallError, Handler, Reply, Session, VERSION};
+use dform_core::plugin::backend::{self, CallError, Reply, Session, VERSION};
 use dform_core::plugin::pb;
 use dform_core::plugin::providers::CREATED;
 use dform_core::plugin::wire;
 use dform_core::provider::{self, diff, marker, norm_path};
 use dform_core::schema::Schema;
 use dform_core::value::Value;
+use dform_sdk::Handler;
 use serde_json::{Value as Json, json};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -336,7 +337,7 @@ impl Ovh {
     /// replaced or deleted. Past `limit`, a note; a failed poll is asked
     /// again.
     #[allow(clippy::too_many_arguments)]
-    fn settle(
+    async fn settle(
         &self,
         a: &Account,
         at: &str,
@@ -346,17 +347,18 @@ impl Ovh {
         failed: &[&str],
         limit: Duration,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<Json, Failed> {
         let done = |o: &Json| done.contains(&status(o).as_str());
         self.settle_until(a, at, path, last, &done, failed, limit, notes, say)
+            .await
     }
 
     /// [`Ovh::settle`] until the object is `done`, which may ask more of
     /// it than its status (a resized instance is ACTIVE again on its new
     /// flavor).
     #[allow(clippy::too_many_arguments)]
-    fn settle_until(
+    async fn settle_until(
         &self,
         a: &Account,
         at: &str,
@@ -366,7 +368,7 @@ impl Ovh {
         failed: &[&str],
         limit: Duration,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<Json, Failed> {
         let start = Instant::now();
         let mut said = status(&last);
@@ -385,8 +387,8 @@ impl Ovh {
                 ));
                 break;
             }
-            std::thread::sleep(a.poll);
-            match a.client.get_opt(path) {
+            dform_sdk::sleep(a.poll).await;
+            match a.client.get_opt(path).await {
                 Ok(Some(o)) => {
                     if status(&o) != said {
                         said = status(&o);
@@ -407,16 +409,16 @@ impl Ovh {
 
     /// DELETE `path` (gone already is done), then, when `wait`, poll it
     /// until the API no longer answers it, saying each status it gives.
-    fn delete_at(
+    async fn delete_at(
         &self,
         a: &Account,
         at: &str,
         path: &str,
         wait: bool,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(), Failed> {
-        match a.client.delete(path) {
+        match a.client.delete(path).await {
             Ok(_) => {}
             Err(e) if e.is_not_found() => return Ok(()),
             Err(e) => return Err(failed(at, e)),
@@ -427,7 +429,7 @@ impl Ovh {
         let start = Instant::now();
         let mut said = None;
         loop {
-            match a.client.get_opt(path) {
+            match a.client.get_opt(path).await {
                 Ok(None) => break,
                 Ok(Some(o)) => {
                     let now = status(&o);
@@ -448,7 +450,7 @@ impl Ovh {
                 ));
                 break;
             }
-            std::thread::sleep(a.poll);
+            dform_sdk::sleep(a.poll).await;
         }
         Ok(())
     }
@@ -468,14 +470,15 @@ impl Ovh {
     /// Configure from `config` (dform's, with the program's `settings` the
     /// second time): the account's project id, for `expect_account`, and
     /// what the credentials are and lack, as notes.
-    pub fn configure(&self, config: &Json) -> Result<pb::ConfigureResponse> {
+    pub async fn configure(&self, config: &Json) -> Result<pb::ConfigureResponse> {
         let env = |k: &str| std::env::var(k).ok();
         self.configure_with(config, &env, &config::default_files())
+            .await
     }
 
     /// `configure` with the environment `env` and the configuration files
     /// `files` (a test's own, so no real `ovh.conf` is read).
-    pub fn configure_with(
+    pub async fn configure_with(
         &self,
         config: &Json,
         env: &dyn Fn(&str) -> Option<String>,
@@ -526,9 +529,9 @@ impl Ovh {
         // Run outside a program and a project, as `provider check` runs
         // it: which credentials, and what they may do.
         let full = settings.is_none() && cache.is_none();
-        let notes = crate::credential::notes(&client, full, cache.as_deref(), unix_now());
+        let notes = crate::credential::notes(&client, full, cache.as_deref(), unix_now()).await;
         let project = match project {
-            Some(p) => Some(resolve_project(&client, &p, cache.as_deref())?),
+            Some(p) => Some(resolve_project(&client, &p, cache.as_deref()).await?),
             None => None,
         };
         let account = project.clone();
@@ -553,7 +556,7 @@ impl Ovh {
     /// The object `remote` of type `typ`, if it is there, `prior` its
     /// computed values as dform last kept them: an instance's own ports
     /// (`map::Owned`).
-    pub fn read(
+    pub async fn read(
         &self,
         typ: &str,
         remote: &str,
@@ -564,40 +567,45 @@ impl Ovh {
         Ok(match typ {
             INSTANCE => {
                 let (a, p) = self.project(&at)?;
-                self.read_instance(&a, &p, remote, &prior.into())?
+                self.read_instance(&a, &p, remote, &prior.into()).await?
             }
             SSH_KEY => {
                 let (a, p) = self.project(&at)?;
-                self.read_ssh_key(&a, &p, remote)?
+                self.read_ssh_key(&a, &p, remote).await?
             }
             RECORD => {
                 let a = self.account(&at)?;
-                self.read_record(&a, remote)?
+                self.read_record(&a, remote).await?
             }
             CONTAINER => {
                 let (a, p) = self.project(&at)?;
-                self.read_container(&a, &p, remote)?
+                self.read_container(&a, &p, remote).await?
             }
             USER => {
                 let (a, p) = self.project(&at)?;
-                self.read_user(&a, &p, remote)?
+                self.read_user(&a, &p, remote).await?
             }
             S3_CREDENTIAL => {
                 let (a, p) = self.project(&at)?;
-                self.read_s3_credential(&a, &p, remote)?
+                self.read_s3_credential(&a, &p, remote).await?
             }
             VOLUME => {
                 let (a, p) = self.project(&at)?;
-                self.read_volume(&a, &p, remote)?.map(|o| map::volume(&o))
+                self.read_volume(&a, &p, remote)
+                    .await?
+                    .map(|o| map::volume(&o))
             }
             NETWORK => {
                 let (a, p) = self.project(&at)?;
-                self.read_network(&a, &p, remote)?.map(|o| map::network(&o))
+                self.read_network(&a, &p, remote)
+                    .await?
+                    .map(|o| map::network(&o))
             }
             SUBNET => {
                 let (a, p) = self.project(&at)?;
                 let (network, _) = map::subnet_parts(remote);
-                self.read_subnet(&a, &p, remote)?
+                self.read_subnet(&a, &p, remote)
+                    .await?
                     .map(|o| map::subnet(network, &o))
             }
             _ => bail!("{at}: the ovh provider has no type {typ}"),
@@ -608,7 +616,7 @@ impl Ovh {
 
     /// Validate `desired` and diff it against `prior`; whether a change
     /// replaces the object, and why where the schema does not say.
-    pub fn plan(
+    pub async fn plan(
         &self,
         typ: &str,
         name: &str,
@@ -624,7 +632,8 @@ impl Ovh {
         // that goes asks no more.
         if typ == INSTANCE {
             let who = dform_core::report::address(&address(typ, name));
-            self.check_networks(&at, &who, desired.unwrap_or(&Json::Null))?;
+            self.check_networks(&at, &who, desired.unwrap_or(&Json::Null))
+                .await?;
         }
         let Some(d) = desired else {
             return Ok(provider::Planned {
@@ -632,7 +641,7 @@ impl Ovh {
                 ..Default::default()
             });
         };
-        let pool = self.check_desired(&at, typ, prior, d)?;
+        let pool = self.check_desired(&at, typ, prior, d).await?;
         let known = prior.map(|p| known(typ, p, d));
         let prior = known.as_ref();
         // An instance's user data is write-only (R-106): the API never
@@ -653,7 +662,7 @@ impl Ovh {
             });
         }
         if typ == NETWORK && prior.is_none() {
-            self.check_vrack(&at)?;
+            self.check_vrack(&at).await?;
         }
         let Some(prior) = prior else {
             return Ok(provider::Planned {
@@ -668,7 +677,7 @@ impl Ovh {
             .any(|c| self.schema.forces_new(typ, &norm_path(&c.path)));
         let reason = match forced {
             true => None,
-            false => self.replaced(&at, typ, prior, d),
+            false => self.replaced(&at, typ, prior, d).await,
         };
         Ok(provider::Planned {
             changes,
@@ -683,7 +692,7 @@ impl Ovh {
     /// pool, when the plan gives it one. A flavor or an image `prior` (the
     /// object as Read answered it) has in the same region is the API's
     /// answer already, and is not asked again.
-    fn check_desired(
+    async fn check_desired(
         &self,
         at: &str,
         typ: &str,
@@ -696,7 +705,7 @@ impl Ovh {
             }
         }
         if typ == INSTANCE {
-            self.check_instance(at, prior, d)?;
+            self.check_instance(at, prior, d).await?;
         }
         // A bootable volume's image is the region's, as an instance's is.
         if typ == VOLUME
@@ -705,6 +714,7 @@ impl Ovh {
             && let Ok((a, p)) = self.project(at)
         {
             self.image_id(&a, &p, region, image)
+                .await
                 .map_err(|e| anyhow!("{at}: image: {e:#}"))?;
         }
         match typ {
@@ -716,7 +726,7 @@ impl Ovh {
     /// Why a change of `prior` to `d` replaces the object where no path
     /// the schema forces new says so: one the API changes in one
     /// direction only.
-    fn replaced(&self, at: &str, typ: &str, prior: &Json, d: &Json) -> Option<String> {
+    async fn replaced(&self, at: &str, typ: &str, prior: &Json, d: &Json) -> Option<String> {
         let reasons: Vec<String> = match typ {
             VOLUME => volume::shrinks(prior, d).into_iter().collect(),
             NETWORK => network::leaves(prior, d).into_iter().collect(),
@@ -730,6 +740,7 @@ impl Ovh {
                 let moved = (!moved.is_empty())
                     .then(|| format!("{}; no API call changes a port's address", moved.join("; ")));
                 self.flavor_shrinks(at, prior, d)
+                    .await
                     .into_iter()
                     .chain(moved)
                     .collect()
@@ -741,10 +752,10 @@ impl Ovh {
 
     // Apply.
 
-    fn apply(
+    async fn apply(
         &self,
         r: &pb::ApplyRequest,
-        progress: backend::Progress,
+        progress: backend::Progress<'_>,
     ) -> std::result::Result<pb::ApplyResponse, Failed> {
         let op = pb::Op::try_from(r.op).unwrap_or(pb::Op::Unspecified);
         if op == pb::Op::EndTick {
@@ -767,7 +778,10 @@ impl Ovh {
             progress(backend::event(&addr, Some(status), message));
         };
         let (remote, attrs, computed) = match op {
-            pb::Op::Create => self.create(typ, &at, &config, key, &mut notes, &say)?,
+            pb::Op::Create => {
+                self.create(typ, &at, &config, key, &mut notes, &say)
+                    .await?
+            }
             pb::Op::Update | pb::Op::Adopt => {
                 // `keep` (R-164): an update sends no write-only attribute
                 // (an instance's `user_data` is set at its creation only),
@@ -782,16 +796,17 @@ impl Ovh {
                 }
                 let prior = r.prior.as_ref().map(wire::from_doc).transpose();
                 let prior = prior.map_err(|e| refused(&at, format!("{e:#}")))?;
-                self.update(typ, &at, &r.remote, &config, prior, &mut notes, &say)?
+                self.update(typ, &at, &r.remote, &config, prior, &mut notes, &say)
+                    .await?
             }
             pb::Op::Delete => {
-                self.delete(typ, &at, &r.remote, &mut notes, &say)?;
+                self.delete(typ, &at, &r.remote, &mut notes, &say).await?;
                 return Ok(pb::ApplyResponse {
                     notes,
                     ..Default::default()
                 });
             }
-            pb::Op::Replace => self.replace(r, &at, &config, &mut notes, &say)?,
+            pb::Op::Replace => self.replace(r, &at, &config, &mut notes, &say).await?,
             _ => return Err(refused(&at, "no operation")),
         };
         let computed = self.outward(typ, &r.name, &computed);
@@ -807,13 +822,13 @@ impl Ovh {
     /// An object replaced: the old one deleted first when the replacement
     /// has its key or the host does not create first, then the new one
     /// created.
-    fn replace(
+    async fn replace(
         &self,
         r: &pb::ApplyRequest,
         at: &str,
         config: &Json,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(String, Json, Json), Failed> {
         let (typ, key) = (r.r#type.as_str(), r.idempotency_key.as_str());
         // Read as dform kept it: an instance's own ports, and the
@@ -822,6 +837,7 @@ impl Ovh {
         let prior = prior.map_err(|e| refused(at, format!("{e:#}")))?;
         let old = self
             .read(typ, &r.remote, &r.name, prior.as_ref())
+            .await
             .map_err(|e| refused(at, format!("{e:#}")))?;
         // The key is the name: the old object goes first unless the
         // replacement has another key, or its type has none (two S3
@@ -841,9 +857,9 @@ impl Ovh {
             first |= network::holds_asked(at, computed, config, !first, notes);
         }
         if first {
-            self.delete(typ, at, &r.remote, notes, say)?;
+            self.delete(typ, at, &r.remote, notes, say).await?;
         }
-        self.create(typ, at, config, key, notes, say)
+        self.create(typ, at, config, key, notes, say).await
     }
 
     /// What a Create of `doc` is found by: each attribute of the type's
@@ -867,25 +883,31 @@ impl Ovh {
     }
 
     /// The remote id of the object `made` names, if it exists.
-    fn find(&self, made: &Made) -> Result<Option<String>> {
+    async fn find(&self, made: &Made) -> Result<Option<String>> {
         let k = |a: &str| made.get(a);
         Ok(match made.typ.as_str() {
-            INSTANCE => self.find_instance(k("name"), k("region"))?,
-            SSH_KEY => self.find_ssh_key(k("name"))?,
-            RECORD => self.find_record(k("zone"), k("type"), k("subdomain"), k("target"))?,
-            CONTAINER => self.find_container(k("region"), k("name"))?,
-            USER => self.find_user(k("description"))?,
-            S3_CREDENTIAL => self.find_s3_credential(k("user"), k("access"))?,
-            VOLUME => self.find_volume(k("name"), k("region"))?,
-            NETWORK => self.find_network(k("name"))?,
-            SUBNET => self.find_subnet(k("network"), k("region"), k("range"))?,
+            INSTANCE => self.find_instance(k("name"), k("region")).await?,
+            SSH_KEY => self.find_ssh_key(k("name")).await?,
+            RECORD => {
+                self.find_record(k("zone"), k("type"), k("subdomain"), k("target"))
+                    .await?
+            }
+            CONTAINER => self.find_container(k("region"), k("name")).await?,
+            USER => self.find_user(k("description")).await?,
+            S3_CREDENTIAL => self.find_s3_credential(k("user"), k("access")).await?,
+            VOLUME => self.find_volume(k("name"), k("region")).await?,
+            NETWORK => self.find_network(k("name")).await?,
+            SUBNET => {
+                self.find_subnet(k("network"), k("region"), k("range"))
+                    .await?
+            }
             typ => bail!("the ovh provider has no lookup for {typ}"),
         })
     }
 
     /// `provider.created(Type, Name, Key, Remote)`: what a Create this
     /// process was sent with `key` made.
-    pub fn created(&self, key: &str) -> Result<Option<String>> {
+    pub async fn created(&self, key: &str) -> Result<Option<String>> {
         let made = self
             .made
             .lock()
@@ -893,19 +915,19 @@ impl Ovh {
             .get(key)
             .cloned();
         match made {
-            Some(m) => self.find(&m),
+            Some(m) => self.find(&m).await,
             None => Ok(None),
         }
     }
 
-    fn create(
+    async fn create(
         &self,
         typ: &str,
         at: &str,
         config: &Json,
         key: &str,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(String, Json, Json), Failed> {
         // Nothing of the program's names an S3 credential (the API makes
         // its access key): a Create sent again is answered by the one this
@@ -913,11 +935,14 @@ impl Ovh {
         if typ == S3_CREDENTIAL {
             if let Some(remote) = self
                 .created(key)
+                .await
                 .map_err(|e| refused(at, format!("{e:#}")))?
             {
-                return self.update(typ, at, &remote, config, None, notes, say);
+                return self
+                    .update(typ, at, &remote, config, None, notes, say)
+                    .await;
             }
-            return self.create_s3_credential(at, config, key);
+            return self.create_s3_credential(at, config, key).await;
         }
         let made = self
             .key_of(typ, config)
@@ -928,6 +953,7 @@ impl Ovh {
             && self.made.lock().unwrap_or_else(|e| e.into_inner()).get(key) == Some(&made);
         if let Some(remote) = self
             .find(&made)
+            .await
             .map_err(|e| refused(at, format!("{e:#}")))?
         {
             // The same Create again: what it made, brought to the
@@ -935,10 +961,12 @@ impl Ovh {
             // owning what it was made with (an instance's ports).
             if ours {
                 let prior = match typ {
-                    INSTANCE => self.made_instance(at, &remote, config)?,
+                    INSTANCE => self.made_instance(at, &remote, config).await?,
                     _ => None,
                 };
-                return self.update(typ, at, &remote, config, prior, notes, say);
+                return self
+                    .update(typ, at, &remote, config, prior, notes, say)
+                    .await;
             }
             return Err(refused(
                 at,
@@ -954,21 +982,21 @@ impl Ovh {
                 .insert(key.to_string(), made);
         }
         match typ {
-            INSTANCE => self.create_instance(at, config, notes, say),
-            SSH_KEY => self.create_ssh_key(at, config),
-            RECORD => self.create_record(at, config, notes),
-            CONTAINER => self.create_container(at, config),
-            USER => self.create_user(at, config, notes, say),
-            VOLUME => self.create_volume(at, config, notes, say),
-            NETWORK => self.create_network(at, config, notes, say),
-            SUBNET => self.create_subnet(at, config),
+            INSTANCE => self.create_instance(at, config, notes, say).await,
+            SSH_KEY => self.create_ssh_key(at, config).await,
+            RECORD => self.create_record(at, config, notes).await,
+            CONTAINER => self.create_container(at, config).await,
+            USER => self.create_user(at, config, notes, say).await,
+            VOLUME => self.create_volume(at, config, notes, say).await,
+            NETWORK => self.create_network(at, config, notes, say).await,
+            SUBNET => self.create_subnet(at, config).await,
             _ => Err(refused(at, format!("the ovh provider has no type {typ}"))),
         }
     }
 
     /// The object a Create or an Update made, read, `prior` what it owns
     /// below it.
-    fn read_made(
+    async fn read_made(
         &self,
         typ: &str,
         at: &str,
@@ -976,6 +1004,7 @@ impl Ovh {
         prior: Option<&Json>,
     ) -> std::result::Result<(Json, Json), Failed> {
         self.read(typ, remote, "", prior)
+            .await
             .map_err(|e| refused(at, format!("{e:#}")))?
             .ok_or_else(|| Failed::MaybeApplied(format!("{at}: {typ} {remote} is gone again")))
     }
@@ -984,7 +1013,7 @@ impl Ovh {
     /// keeps them; what it now is, read with what it owns below it (the
     /// ports an instance had, and the ones attached here).
     #[allow(clippy::too_many_arguments)]
-    fn update(
+    async fn update(
         &self,
         typ: &str,
         at: &str,
@@ -992,53 +1021,59 @@ impl Ovh {
         config: &Json,
         prior: Option<Json>,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(String, Json, Json), Failed> {
         let mut prior = prior.unwrap_or(Json::Null);
         let now = self
             .read(typ, remote, "", Some(&prior))
+            .await
             .map_err(|e| refused(at, format!("{e:#}")))?
             .ok_or_else(|| refused(at, format!("{typ} {remote} is not there")))?;
         match typ {
             INSTANCE => {
                 let owned = map::Owned::from(Some(&prior));
-                let own = self.update_instance(at, remote, &now.0, config, &owned, notes, say)?;
+                let own = self
+                    .update_instance(at, remote, &now.0, config, &owned, notes, say)
+                    .await?;
                 let fixed = network::fixed(config);
                 for (net, port) in own {
                     map::own_port(&mut prior, &net, &port, fixed.contains(&net));
                 }
             }
-            RECORD => self.update_record(at, remote, &now, config)?,
-            CONTAINER => self.update_container(at, remote, &now.1, config)?,
-            USER => self.update_user(at, remote, &now.0, config)?,
-            VOLUME => self.update_volume(at, remote, config, notes, say)?,
-            NETWORK => self.update_network(at, remote, &now, config, notes, say)?,
+            RECORD => self.update_record(at, remote, &now, config).await?,
+            CONTAINER => self.update_container(at, remote, &now.1, config).await?,
+            USER => self.update_user(at, remote, &now.0, config).await?,
+            VOLUME => self.update_volume(at, remote, config, notes, say).await?,
+            NETWORK => {
+                self.update_network(at, remote, &now, config, notes, say)
+                    .await?
+            }
             // Nothing of an SSH key or an S3 credential changes in place
             // (the schema replaces it).
             _ => {}
         }
-        let (attrs, computed) = self.read_made(typ, at, remote, Some(&prior))?;
+        let (attrs, computed) = self.read_made(typ, at, remote, Some(&prior)).await?;
         Ok((remote.to_string(), attrs, computed))
     }
 
-    fn delete(
+    async fn delete(
         &self,
         typ: &str,
         at: &str,
         remote: &str,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(), Failed> {
         match typ {
-            INSTANCE => self.delete_instance(at, remote, notes, say)?,
-            SSH_KEY => self.delete_ssh_key(at, remote)?,
-            RECORD => self.delete_record(at, remote, notes)?,
-            CONTAINER => self.delete_container(at, remote, notes, say)?,
-            USER => self.delete_user(at, remote, notes, say)?,
-            S3_CREDENTIAL => self.delete_s3_credential(at, remote, notes, say)?,
-            VOLUME => self.delete_volume(at, remote, notes, say)?,
-            NETWORK => self.delete_network(at, remote, notes, say)?,
-            SUBNET => self.delete_subnet(at, remote, notes, say)?,
+            INSTANCE => self.delete_instance(at, remote, notes, say).await?,
+            SSH_KEY => self.delete_ssh_key(at, remote).await?,
+            RECORD => self.delete_record(at, remote, notes).await?,
+            CONTAINER => self.delete_container(at, remote, notes, say).await?,
+            USER => self.delete_user(at, remote, notes, say).await?,
+            S3_CREDENTIAL => self.delete_s3_credential(at, remote, notes, say).await?,
+            VOLUME => self.delete_volume(at, remote, notes, say).await?,
+            NETWORK => self.delete_network(at, remote, notes, say).await?,
+            SUBNET => self.delete_subnet(at, remote, notes, say).await?,
             _ => return Err(refused(at, format!("the ovh provider has no type {typ}"))),
         }
         Ok(())
@@ -1062,9 +1097,14 @@ impl Ovh {
 
     // Query.
 
-    pub fn query(&self, pred: &str, plus: &[bool], inputs: &[Value]) -> Result<Vec<Vec<Value>>> {
+    pub async fn query(
+        &self,
+        pred: &str,
+        plus: &[bool],
+        inputs: &[Value],
+    ) -> Result<Vec<Vec<Value>>> {
         if pred == CREATED {
-            return self.created_rows(inputs);
+            return self.created_rows(inputs).await;
         }
         let Some((_, binding)) = EXTERNS.iter().find(|(p, _)| *p == pred) else {
             bail!("the ovh provider answers no extern {pred}");
@@ -1082,22 +1122,22 @@ impl Ovh {
         }
         let what = format!("answer {pred}({input:?}, ..)");
         Ok(match pred {
-            REGION => self.region_rows(&what, input)?,
-            ZONE => self.zone_rows(&what, input)?,
+            REGION => self.region_rows(&what, input).await?,
+            ZONE => self.zone_rows(&what, input).await?,
             FLAVOR => {
                 let (a, p) = self.project(&what)?;
-                map::flavor_rows(input, &*self.list(&a, &p, "flavor", input)?)
+                map::flavor_rows(input, &*self.list(&a, &p, "flavor", input).await?)
             }
             _ => {
                 let (a, p) = self.project(&what)?;
-                map::image_rows(input, &*self.list(&a, &p, "image", input)?)
+                map::image_rows(input, &*self.list(&a, &p, "image", input).await?)
             }
         })
     }
 
     /// `provider.created(Type, Name, Key, Remote)` asked with its first
     /// three columns bound.
-    fn created_rows(&self, inputs: &[Value]) -> Result<Vec<Vec<Value>>> {
+    async fn created_rows(&self, inputs: &[Value]) -> Result<Vec<Vec<Value>>> {
         let [Value::Str(typ), name, Value::Str(key)] = inputs else {
             bail!("{CREATED} is asked with Type, Name and Key bound");
         };
@@ -1105,7 +1145,8 @@ impl Ovh {
             return Ok(Vec::new());
         }
         Ok(self
-            .created(key)?
+            .created(key)
+            .await?
             .map(|remote| {
                 vec![
                     Value::Str(typ.clone()),
@@ -1120,10 +1161,10 @@ impl Ovh {
 
     /// `ovh.region(Project, Region, Status)`: each region of the project
     /// `input` names, with its status.
-    fn region_rows(&self, what: &str, input: &str) -> Result<Vec<Vec<Value>>> {
+    async fn region_rows(&self, what: &str, input: &str) -> Result<Vec<Vec<Value>>> {
         let a = self.account(what)?;
-        let p = resolve_project(&a.client, input, a.cache.as_deref())?;
-        let names = a.client.list(&format!("/cloud/project/{p}/region"))?;
+        let p = resolve_project(&a.client, input, a.cache.as_deref()).await?;
+        let names = a.client.list(&format!("/cloud/project/{p}/region")).await?;
         let mut rows = Vec::new();
         for n in names
             .as_array()
@@ -1133,7 +1174,8 @@ impl Ovh {
         {
             let r = a
                 .client
-                .get(&format!("/cloud/project/{p}/region/{}", escape(n)))?;
+                .get(&format!("/cloud/project/{p}/region/{}", escape(n)))
+                .await?;
             rows.push(vec![
                 Value::Str(input.to_string()),
                 Value::Str(n.to_string()),
@@ -1203,7 +1245,7 @@ fn unix_now() -> u64 {
 /// directory) kept for a description, costs one GET of that project,
 /// which must still answer to it; otherwise every project of the account
 /// is asked, and the id found is kept.
-pub fn resolve_project(
+pub async fn resolve_project(
     client: &Client,
     given: &str,
     cache: Option<&std::path::Path>,
@@ -1217,12 +1259,14 @@ pub fn resolve_project(
         .cloned()
         .or_else(|| is_id.then(|| given.to_string()));
     if let Some(id) = guess
-        && let Ok(Some(p)) = client.get_opt(&format!("/cloud/project/{}", escape(&id)))
+        && let Ok(Some(p)) = client
+            .get_opt(&format!("/cloud/project/{}", escape(&id)))
+            .await
         && (id == given || [s(&p, "description"), s(&p, "projectName")].contains(&Some(given)))
     {
         return Ok(id);
     }
-    let id = resolve_listed(client, given)?;
+    let id = resolve_listed(client, given).await?;
     if let Some(f) = &file
         && id != given
     {
@@ -1232,8 +1276,8 @@ pub fn resolve_project(
 }
 
 /// `resolve_project` by listing the account's projects.
-fn resolve_listed(client: &Client, given: &str) -> Result<String> {
-    let ids = client.get("/cloud/project")?;
+async fn resolve_listed(client: &Client, given: &str) -> Result<String> {
+    let ids = client.get("/cloud/project").await?;
     let ids: Vec<&str> = ids
         .as_array()
         .into_iter()
@@ -1245,10 +1289,11 @@ fn resolve_listed(client: &Client, given: &str) -> Result<String> {
     }
     // Each project's description, asked at once: an account with several
     // waits one round trip, not one per project.
-    let projects: Vec<api::Result<Json>> = dform_sdk::at_once(
-        ids.iter()
-            .map(|id| move || client.get(&format!("/cloud/project/{}", escape(id)))),
-    );
+    let paths: Vec<String> = ids
+        .iter()
+        .map(|id| format!("/cloud/project/{}", escape(id)))
+        .collect();
+    let projects = dform_sdk::join_all(paths.iter().map(|p| client.get(p))).await;
     let mut seen = Vec::new();
     for (id, p) in ids.iter().zip(projects) {
         let p = p?;

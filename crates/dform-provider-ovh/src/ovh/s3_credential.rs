@@ -16,14 +16,14 @@ const SECRET: &str = "secret";
 impl Ovh {
     /// The credential, if its user still lists it (its credentials listed
     /// once per run).
-    pub(super) fn read_s3_credential(
+    pub(super) async fn read_s3_credential(
         &self,
         a: &Account,
         p: &str,
         remote: &str,
     ) -> api::Result<Option<(Json, Json)>> {
         let (user, access) = map::s3_credential_parts(remote);
-        let Some(list) = a.client.list_opt(&credentials_path(p, user))? else {
+        let Some(list) = a.client.list_opt(&credentials_path(p, user)).await? else {
             return Ok(None);
         };
         Ok(list
@@ -35,10 +35,17 @@ impl Ovh {
     }
 
     /// The credential `access` of `user`, if the user lists it.
-    pub(super) fn find_s3_credential(&self, user: &str, access: &str) -> Result<Option<String>> {
+    pub(super) async fn find_s3_credential(
+        &self,
+        user: &str,
+        access: &str,
+    ) -> Result<Option<String>> {
         let (a, p) = self.project("find an S3 credential")?;
         let remote = map::s3_credential_remote(user, access);
-        Ok(self.read_s3_credential(&a, &p, &remote)?.map(|_| remote))
+        Ok(self
+            .read_s3_credential(&a, &p, &remote)
+            .await?
+            .map(|_| remote))
     }
 
     /// POST a credential for the program's user, with no body (the API
@@ -46,7 +53,7 @@ impl Ovh {
     /// is dropped: Reveal reads it from the API. Nothing of the program's
     /// names a credential (the API makes its access key), so what this
     /// process made is kept under `key`, for a Create sent again.
-    pub(super) fn create_s3_credential(
+    pub(super) async fn create_s3_credential(
         &self,
         at: &str,
         config: &Json,
@@ -58,6 +65,7 @@ impl Ovh {
         let o = a
             .client
             .post(&credentials_path(&p, user), None)
+            .await
             .map_err(|e| failed(at, e))?;
         let access = s(&o, "access")
             .ok_or_else(|| Failed::MaybeApplied(format!("{at}: the API answered no access key")))?;
@@ -75,28 +83,28 @@ impl Ovh {
                 .insert(key.to_string(), made);
         }
         let remote = map::s3_credential_remote(user, access);
-        let (attrs, computed) = self.read_made(S3_CREDENTIAL, at, &remote, None)?;
+        let (attrs, computed) = self.read_made(S3_CREDENTIAL, at, &remote, None).await?;
         Ok((remote, attrs, computed))
     }
 
     /// A credential deleted; gone already (or its user gone) is done.
-    pub(super) fn delete_s3_credential(
+    pub(super) async fn delete_s3_credential(
         &self,
         at: &str,
         remote: &str,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(), Failed> {
         let (a, p) = self.project_for(at)?;
         let (user, access) = map::s3_credential_parts(remote);
         let path = format!("{}/{}", credentials_path(&p, user), escape(access));
-        self.delete_at(&a, at, &path, false, notes, say)
+        self.delete_at(&a, at, &path, false, notes, say).await
     }
 
     /// A credential's secret, for the engine to configure another
     /// provider with or to print (`output NAME --reveal`): only with the
     /// deployment's lease, read from the API by the call of its own.
-    pub(super) fn reveal(
+    pub(super) async fn reveal(
         &self,
         r: pb::RevealRequest,
     ) -> std::result::Result<pb::RevealResponse, CallError> {
@@ -120,6 +128,7 @@ impl Ovh {
                 &format!("{}/{}/secret", credentials_path(&p, user), escape(access)),
                 None,
             )
+            .await
             .map_err(|e| CallError::Refused(format!("{at}: {e}")))?;
         let secret = s(&secret, "secret")
             .ok_or_else(|| CallError::Refused(format!("{at}: the API answered no secret")))?;

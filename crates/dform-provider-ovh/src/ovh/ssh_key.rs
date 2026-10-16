@@ -4,21 +4,22 @@
 use super::*;
 
 impl Ovh {
-    pub(super) fn read_ssh_key(
+    pub(super) async fn read_ssh_key(
         &self,
         a: &Account,
         p: &str,
         remote: &str,
     ) -> api::Result<Option<(Json, Json)>> {
         Ok(a.client
-            .get_opt(&format!("/cloud/project/{p}/sshkey/{}", escape(remote)))?
+            .get_opt(&format!("/cloud/project/{p}/sshkey/{}", escape(remote)))
+            .await?
             .map(|o| map::ssh_key(&o)))
     }
 
     /// The key named `name`.
-    pub(super) fn find_ssh_key(&self, name: &str) -> Result<Option<String>> {
+    pub(super) async fn find_ssh_key(&self, name: &str) -> Result<Option<String>> {
         let (a, p) = self.project("find an SSH key")?;
-        let list = a.client.list(&format!("/cloud/project/{p}/sshkey"))?;
+        let list = a.client.list(&format!("/cloud/project/{p}/sshkey")).await?;
         Ok(list
             .as_array()
             .into_iter()
@@ -28,7 +29,7 @@ impl Ovh {
             .map(str::to_string))
     }
 
-    pub(super) fn create_ssh_key(
+    pub(super) async fn create_ssh_key(
         &self,
         at: &str,
         config: &Json,
@@ -43,19 +44,25 @@ impl Ovh {
         let o = a
             .client
             .post(&format!("/cloud/project/{p}/sshkey"), Some(&body))
+            .await
             .map_err(|e| failed(at, e))?;
         let (attrs, computed) = map::ssh_key(&o);
         Ok((s(&o, "id").unwrap_or_default().to_string(), attrs, computed))
     }
 
     /// A key deleted; gone already is done.
-    pub(super) fn delete_ssh_key(&self, at: &str, remote: &str) -> std::result::Result<(), Failed> {
+    pub(super) async fn delete_ssh_key(
+        &self,
+        at: &str,
+        remote: &str,
+    ) -> std::result::Result<(), Failed> {
         let (a, p) = self
             .project(at)
             .map_err(|e| refused(at, format!("{e:#}")))?;
         match a
             .client
             .delete(&format!("/cloud/project/{p}/sshkey/{}", escape(remote)))
+            .await
         {
             Ok(_) => Ok(()),
             Err(e) if e.is_not_found() => Ok(()),

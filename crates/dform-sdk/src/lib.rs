@@ -470,36 +470,6 @@ impl Http {
     }
 }
 
-/// Each of `asks` at once, on a thread of its own in the call this thread
-/// answers, so its requests are the call's (its session's windows, its
-/// span: `backend::Within`); their answers in their order. A thread a
-/// handler starts by itself is in no call.
-pub fn at_once<T, F>(asks: impl IntoIterator<Item = F>) -> Vec<T>
-where
-    F: FnOnce() -> T + Send,
-    T: Send,
-{
-    let within = Within::here();
-    std::thread::scope(|scope| {
-        let threads: Vec<_> = asks
-            .into_iter()
-            .map(|ask| {
-                scope.spawn(move || {
-                    let _in = within.enter();
-                    ask()
-                })
-            })
-            .collect();
-        threads
-            .into_iter()
-            .map(|t| match t.join() {
-                Ok(answer) => answer,
-                Err(panic) => std::panic::resume_unwind(panic),
-            })
-            .collect()
-    })
-}
-
 /// `dform:host/io` (R-153, R-155): a location read by the host, whatever
 /// its scheme (`ssh://USER@HOST/PATH`, `https://..`,
 /// `git+https://HOST/OWNER/REPO/PATH?ref=TAG`, `s3://BUCKET/KEY`), as

@@ -13,25 +13,26 @@ use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 
 impl Ovh {
-    pub(super) fn read_network(
+    pub(super) async fn read_network(
         &self,
         a: &Account,
         p: &str,
         remote: &str,
     ) -> api::Result<Option<Json>> {
-        a.client.get_opt(&network_path(p, remote))
+        a.client.get_opt(&network_path(p, remote)).await
     }
 
     /// Whether the project is on a vRack, asked once per run; a project
     /// that is not refuses a private network naming it. An account that
     /// cannot be reached is not judged here.
-    pub(super) fn check_vrack(&self, at: &str) -> Result<()> {
+    pub(super) async fn check_vrack(&self, at: &str) -> Result<()> {
         let Ok((a, p)) = self.project(at) else {
             return Ok(());
         };
         let on = a
             .client
-            .list_opt(&format!("/cloud/project/{p}/vrack"))?
+            .list_opt(&format!("/cloud/project/{p}/vrack"))
+            .await?
             .is_some();
         if !on {
             bail!("{at}: {}", no_vrack(&p));
@@ -39,12 +40,12 @@ impl Ovh {
         Ok(())
     }
 
-    pub(super) fn create_network(
+    pub(super) async fn create_network(
         &self,
         at: &str,
         config: &Json,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(String, Json, Json), Failed> {
         let (a, p) = self.project_for(at)?;
         let mut body = json!({"name": need(at, config, "name")?});
@@ -57,48 +58,51 @@ impl Ovh {
                 .map(Json::from)
                 .ok_or_else(|| refused(at, format!("vlan_id {v} is not a number")))?;
         }
-        let o = a
+        let posted = a
             .client
             .post(&format!("/cloud/project/{p}/network/private"), Some(&body))
-            .map_err(|e| match e.status() {
-                // The API's refusal of a project with no vRack is said as
-                // what it is.
-                Some(400..500)
-                    if matches!(
-                        a.client.get_opt(&format!("/cloud/project/{p}/vrack")),
-                        Ok(None)
-                    ) =>
-                {
-                    refused(at, no_vrack(&p))
-                }
-                _ => failed(at, e),
-            })?;
+            .await;
+        let o = match posted {
+            Ok(o) => o,
+            // The API's refusal of a project with no vRack is said as what
+            // it is.
+            Err(e) if matches!(e.status(), Some(400..500)) => {
+                let vrack = format!("/cloud/project/{p}/vrack");
+                return Err(match a.client.get_opt(&vrack).await {
+                    Ok(None) => refused(at, no_vrack(&p)),
+                    _ => failed(at, e),
+                });
+            }
+            Err(e) => return Err(failed(at, e)),
+        };
         let id = s(&o, "id").unwrap_or_default().to_string();
         let path = network_path(&p, &id);
-        let o = self.settle(
-            &a,
-            at,
-            &path,
-            o,
-            &["ACTIVE"],
-            &["ERROR"],
-            CREATE_WAIT,
-            notes,
-            say,
-        )?;
+        let o = self
+            .settle(
+                &a,
+                at,
+                &path,
+                o,
+                &["ACTIVE"],
+                &["ERROR"],
+                CREATE_WAIT,
+                notes,
+                say,
+            )
+            .await?;
         let (attrs, computed) = map::network(&o);
         Ok((id, attrs, computed))
     }
 
     /// Its name in place, and the regions the program adds.
-    pub(super) fn update_network(
+    pub(super) async fn update_network(
         &self,
         at: &str,
         remote: &str,
         now: &(Json, Json),
         config: &Json,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(), Failed> {
         let (a, p) = self.project_for(at)?;
         let path = network_path(&p, remote);
@@ -106,6 +110,7 @@ impl Ovh {
         if s(&now.0, "name") != Some(name) {
             a.client
                 .put(&path, &json!({"name": name}))
+                .await
                 .map_err(|e| failed(at, e))?;
         }
         let has: Vec<&str> = now
@@ -122,6 +127,7 @@ impl Ovh {
                 last = Some(
                     a.client
                         .post(&format!("{path}/region"), Some(&json!({"region": r})))
+                        .await
                         .map_err(|e| failed(at, e))?,
                 );
             }
@@ -137,16 +143,18 @@ impl Ovh {
                 CREATE_WAIT,
                 notes,
                 say,
-            )?;
+            )
+            .await?;
         }
         Ok(())
     }
 
     /// The private network named `name`, unless it is being deleted.
-    pub(super) fn find_network(&self, name: &str) -> Result<Option<String>> {
+    pub(super) async fn find_network(&self, name: &str) -> Result<Option<String>> {
         let (a, p) = self.project("find a private network")?;
         Ok(self
-            .private_networks(&a, &p)?
+            .private_networks(&a, &p)
+            .await?
             .as_array()
             .into_iter()
             .flatten()
@@ -156,16 +164,16 @@ impl Ovh {
             .map(str::to_string))
     }
 
-    pub(super) fn delete_network(
+    pub(super) async fn delete_network(
         &self,
         at: &str,
         remote: &str,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(), Failed> {
         let (a, p) = self.project_for(at)?;
         let path = format!("/cloud/project/{p}/network/private/{}", escape(remote));
-        self.delete_at(&a, at, &path, true, notes, say)
+        self.delete_at(&a, at, &path, true, notes, say).await
     }
 }
 
@@ -492,15 +500,21 @@ fn holds(sub: &(Json, Json), ip: Ipv4Addr) -> bool {
 impl Ovh {
     /// A network's subnets, listed once per run; none when the network
     /// is gone.
-    pub(super) fn subnets(&self, a: &Account, p: &str, network: &str) -> api::Result<Vec<Json>> {
+    pub(super) async fn subnets(
+        &self,
+        a: &Account,
+        p: &str,
+        network: &str,
+    ) -> api::Result<Vec<Json>> {
         Ok(a.client
-            .list_opt(&format!("{}/subnet", network_path(p, network)))?
+            .list_opt(&format!("{}/subnet", network_path(p, network)))
+            .await?
             .and_then(|l| l.as_array().cloned())
             .unwrap_or_default())
     }
 
     /// The API has no GET of one subnet: its network's are listed.
-    pub(super) fn read_subnet(
+    pub(super) async fn read_subnet(
         &self,
         a: &Account,
         p: &str,
@@ -508,12 +522,13 @@ impl Ovh {
     ) -> api::Result<Option<Json>> {
         let (network, id) = map::subnet_parts(remote);
         Ok(self
-            .subnets(a, p, network)?
+            .subnets(a, p, network)
+            .await?
             .into_iter()
             .find(|o| s(o, "id") == Some(id)))
     }
 
-    pub(super) fn create_subnet(
+    pub(super) async fn create_subnet(
         &self,
         at: &str,
         config: &Json,
@@ -543,6 +558,7 @@ impl Ovh {
                 &format!("{}/subnet", network_path(&p, network)),
                 Some(&body),
             )
+            .await
             .map_err(|e| failed(at, e))?;
         let (attrs, computed) = map::subnet(network, &o);
         let id = map::subnet_remote(network, s(&o, "id").unwrap_or_default());
@@ -550,7 +566,7 @@ impl Ovh {
     }
 
     /// The subnet of `network` in `region` over `range`.
-    pub(super) fn find_subnet(
+    pub(super) async fn find_subnet(
         &self,
         network: &str,
         region: &str,
@@ -558,7 +574,8 @@ impl Ovh {
     ) -> Result<Option<String>> {
         let (a, p) = self.project("find a subnet")?;
         Ok(self
-            .subnets(&a, &p, network)?
+            .subnets(&a, &p, network)
+            .await?
             .iter()
             .map(|o| map::subnet(network, o))
             .find(|(attrs, _)| {
@@ -567,12 +584,12 @@ impl Ovh {
             .and_then(|(_, computed)| s(&computed, "id").map(str::to_string)))
     }
 
-    pub(super) fn delete_subnet(
+    pub(super) async fn delete_subnet(
         &self,
         at: &str,
         remote: &str,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(), Failed> {
         let (a, p) = self.project_for(at)?;
         let (network, id) = map::subnet_parts(remote);
@@ -581,7 +598,7 @@ impl Ovh {
             escape(network),
             escape(id)
         );
-        self.delete_at(&a, at, &path, false, notes, say)
+        self.delete_at(&a, at, &path, false, notes, say).await
     }
 }
 
@@ -643,7 +660,7 @@ impl Ovh {
     /// sets none (the public network alone, as the API makes it); else the
     /// public network's first, then each private one's, in the instance's
     /// region, with the address asked of its port where one is.
-    pub(super) fn instance_networks(
+    pub(super) async fn instance_networks(
         &self,
         a: &Account,
         p: &str,
@@ -658,6 +675,7 @@ impl Ovh {
         let public = a
             .client
             .list(&format!("/cloud/project/{p}/network/public"))
+            .await
             .map_err(|e| failed(at, e))?;
         let ext = public
             .as_array()
@@ -667,7 +685,7 @@ impl Ovh {
             .ok_or_else(|| refused(at, format!("region {region} has no public network")))?;
         let mut out = vec![json!({"networkId": ext})];
         for e in entries {
-            out.push(self.port_body(a, p, at, region, &e)?);
+            out.push(self.port_body(a, p, at, region, &e).await?);
         }
         Ok(Some(out))
     }
@@ -675,7 +693,7 @@ impl Ovh {
     /// What makes a port on `e`'s network in `region`, the instance's
     /// create's `networks[]` and an attach's body alike: the network's
     /// OpenStack id, and the address asked, checked against its subnets.
-    fn port_body(
+    async fn port_body(
         &self,
         a: &Account,
         p: &str,
@@ -683,12 +701,15 @@ impl Ovh {
         region: &str,
         e: &Entry,
     ) -> std::result::Result<Json, Failed> {
-        let os = self.private_network_in(a, p, at, region, &e.network)?;
+        let os = self
+            .private_network_in(a, p, at, region, &e.network)
+            .await?;
         let Some(ip) = e.ip else {
             return Ok(json!({"networkId": os}));
         };
         let held = self
             .address_held(a, p, region, &e.network, ip)
+            .await
             .map_err(|e| failed(at, e))?;
         held.map_err(|why| refused(at, why))?;
         Ok(json!({"networkId": os, "ip": ip.to_string()}))
@@ -697,7 +718,7 @@ impl Ovh {
     /// Whether `ip` is a host of a subnet of `network` in `region`, as the
     /// API lists them: why not, naming the network's subnets. Not judged
     /// (held) where the network has no subnet in the region yet.
-    fn address_held(
+    async fn address_held(
         &self,
         a: &Account,
         p: &str,
@@ -706,7 +727,8 @@ impl Ovh {
         ip: Ipv4Addr,
     ) -> api::Result<std::result::Result<(), String>> {
         let subnets: Vec<(Json, Json)> = self
-            .subnets(a, p, network)?
+            .subnets(a, p, network)
+            .await?
             .iter()
             .map(|o| map::subnet(network, o))
             .collect();
@@ -731,7 +753,7 @@ impl Ovh {
     /// region, where the account says (a network the plan makes, or one
     /// with no subnet there yet, is judged at Apply); and none asked by
     /// another instance this provider planned (`Asked`).
-    pub(super) fn check_networks(&self, at: &str, who: &str, d: &Json) -> Result<()> {
+    pub(super) async fn check_networks(&self, at: &str, who: &str, d: &Json) -> Result<()> {
         let entries = entries(d).map_err(|e| anyhow!("{at}: {e}"))?;
         let asks: Vec<(String, Ipv4Addr)> = entries
             .iter()
@@ -757,7 +779,8 @@ impl Ovh {
         };
         for e in entries.iter().filter(|e| e.known) {
             if let Some(ip) = e.ip {
-                self.address_held(&a, &p, region, &e.network, ip)?
+                self.address_held(&a, &p, region, &e.network, ip)
+                    .await?
                     .map_err(|why| anyhow!("{at}: {why}"))?;
             }
         }
@@ -767,7 +790,7 @@ impl Ovh {
     /// The OpenStack id of private network `id` in `region`, as an
     /// interface names it; a network not in the region is refused naming
     /// the regions it is in.
-    fn private_network_in(
+    async fn private_network_in(
         &self,
         a: &Account,
         p: &str,
@@ -777,6 +800,7 @@ impl Ovh {
     ) -> std::result::Result<String, Failed> {
         let net = self
             .read_network(a, p, id)
+            .await
             .map_err(|e| failed(at, e))?
             .ok_or_else(|| refused(at, format!("network {id} is not there")))?;
         openstack_id(&net, region).ok_or_else(|| {
@@ -806,7 +830,7 @@ impl Ovh {
     /// its own (which to keep is a person's choice), and where the port
     /// it keeps has another address than the one asked (Plan replaces
     /// the instance for that).
-    pub(super) fn instance_ports(
+    pub(super) async fn instance_ports(
         &self,
         a: &Account,
         p: &str,
@@ -817,7 +841,10 @@ impl Ovh {
     ) -> std::result::Result<PortSteps, Failed> {
         let entries = entries_known(at, config)?;
         let want: Vec<&str> = entries.iter().map(|e| e.network.as_str()).collect();
-        let nics = self.interfaces(a, p, remote).map_err(|e| failed(at, e))?;
+        let nics = self
+            .interfaces(a, p, remote)
+            .await
+            .map_err(|e| failed(at, e))?;
         let steps = PortSteps::new(&want, &nics.private, owned);
         let refusal = steps.refusal(at, &interface_path(p, remote));
         match refusal.or_else(|| steps.readdressed(at, &entries)) {
@@ -832,7 +859,7 @@ impl Ovh {
     /// detached. Its own port on each network now, by network: the one it
     /// had, the one taken as its own, or the one attached (`map::Owned`).
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn converge_ports(
+    pub(super) async fn converge_ports(
         &self,
         a: &Account,
         p: &str,
@@ -858,10 +885,11 @@ impl Ovh {
         let entries = entries_known(at, config)?;
         for e in entries.iter().filter(|e| steps.attach.contains(&e.network)) {
             let (net, region) = (e.network.clone(), need(at, config, "region")?);
-            let body = self.port_body(a, p, at, region, e)?;
+            let body = self.port_body(a, p, at, region, e).await?;
             let port = a
                 .client
                 .post(&path, Some(&body))
+                .await
                 .map_err(|e| failed(at, e))?;
             let with = match e.ip {
                 Some(ip) => format!(", with address {ip}"),
@@ -875,7 +903,11 @@ impl Ovh {
             }
         }
         for (net, port, why) in steps.detach {
-            match a.client.delete(&format!("{path}/{}", escape(&port.id))) {
+            match a
+                .client
+                .delete(&format!("{path}/{}", escape(&port.id)))
+                .await
+            {
                 Ok(_) => {}
                 Err(e) if e.is_not_found() => {}
                 Err(e) => return Err(failed(at, e)),
@@ -898,19 +930,19 @@ impl Ovh {
     /// private networks, by network, each with its address
     /// (`map::interfaces`). A failed call fails the read: a network left
     /// out would be attached again.
-    pub(super) fn interfaces(
+    pub(super) async fn interfaces(
         &self,
         a: &Account,
         p: &str,
         id: &str,
     ) -> api::Result<map::Interfaces> {
-        let ifaces = a.client.get(&interface_path(p, id))?;
-        self.ports(a, p, &ifaces)
+        let ifaces = a.client.get(&interface_path(p, id)).await?;
+        self.ports(a, p, &ifaces).await
     }
 
     /// The ports `ifaces` (an instance's, as `GET /interface` answers
     /// them), as [`Ovh::interfaces`] has them.
-    pub(super) fn ports(
+    pub(super) async fn ports(
         &self,
         a: &Account,
         p: &str,
@@ -919,15 +951,15 @@ impl Ovh {
         if ifaces.as_array().is_none_or(Vec::is_empty) {
             return Ok(map::Interfaces::default());
         }
-        Ok(map::interfaces(ifaces, &self.openstack_ids(a, p)?))
+        Ok(map::interfaces(ifaces, &self.openstack_ids(a, p).await?))
     }
 
     /// The project's private networks by each id an interface's
     /// `networkId` may be: the network's own (`pn-…`, what the API
     /// answers) and the OpenStack ids of its regions (what an attach
     /// sends).
-    fn openstack_ids(&self, a: &Account, p: &str) -> api::Result<BTreeMap<String, String>> {
-        let list = self.private_networks(a, p)?;
+    async fn openstack_ids(&self, a: &Account, p: &str) -> api::Result<BTreeMap<String, String>> {
+        let list = self.private_networks(a, p).await?;
         let mut out = BTreeMap::new();
         for net in list.as_array().into_iter().flatten() {
             let Some(id) = s(net, "id") else { continue };
@@ -949,9 +981,10 @@ impl Ovh {
 
 impl Ovh {
     /// The project's private networks, listed once per run.
-    pub(super) fn private_networks(&self, a: &Account, p: &str) -> api::Result<Arc<Json>> {
+    pub(super) async fn private_networks(&self, a: &Account, p: &str) -> api::Result<Arc<Json>> {
         a.client
             .list(&format!("/cloud/project/{p}/network/private"))
+            .await
     }
 }
 

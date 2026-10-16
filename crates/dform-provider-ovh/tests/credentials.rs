@@ -35,13 +35,12 @@ fn scratch(name: &str) -> PathBuf {
 fn a_service_account_configures_the_provider() {
     let server = Server::start();
     let ovh = Ovh::new();
-    let account = ovh
-        .configure_with(
-            &json!({"settings": {"endpoint": server.endpoint, "project": fake::DESCRIPTION}}),
-            &lookup(server.oauth_env()),
-            &[],
-        )
-        .unwrap();
+    let account = dform_sdk::block_on(ovh.configure_with(
+        &json!({"settings": {"endpoint": server.endpoint, "project": fake::DESCRIPTION}}),
+        &lookup(server.oauth_env()),
+        &[],
+    ))
+    .unwrap();
     assert_eq!(account.account.as_deref(), Some(fake::PROJECT));
     assert_eq!(server.tokens_minted(), 1);
     assert!(server.calls().contains(&"GET /cloud/project".to_string()));
@@ -55,23 +54,23 @@ fn a_service_account_configures_the_provider() {
 fn a_token_is_kept_and_minted_afresh_when_refused() {
     let server = Server::start();
     let c = client(&server, server.oauth_env());
-    c.get("/cloud/project").unwrap();
-    c.get("/cloud/project").unwrap();
+    dform_sdk::block_on(c.get("/cloud/project")).unwrap();
+    dform_sdk::block_on(c.get("/cloud/project")).unwrap();
     assert_eq!(server.tokens_minted(), 1);
     server.revoke_tokens();
-    c.get("/cloud/project").unwrap();
+    dform_sdk::block_on(c.get("/cloud/project")).unwrap();
     assert_eq!(server.tokens_minted(), 2);
     // Refused again after a fresh token: the refusal is the answer.
     server.fail("GET /cloud/project", &[401, 401]);
-    let e = c.get("/cloud/project").unwrap_err();
+    let e = dform_sdk::block_on(c.get("/cloud/project")).unwrap_err();
     assert_eq!(e.status(), Some(401), "{e}");
     assert_eq!(server.tokens_minted(), 3);
     // A token good for less than the margin is minted for each call.
     let server = Server::start();
     server.token_life(30);
     let c = client(&server, server.oauth_env());
-    c.get("/cloud/project").unwrap();
-    c.get("/cloud/project").unwrap();
+    dform_sdk::block_on(c.get("/cloud/project")).unwrap();
+    dform_sdk::block_on(c.get("/cloud/project")).unwrap();
     assert_eq!(server.tokens_minted(), 2);
 }
 
@@ -83,8 +82,7 @@ fn a_wrong_client_secret_is_named() {
     let mut env = server.oauth_env();
     env.retain(|(k, _)| *k != "OVH_CLIENT_SECRET");
     env.push(("OVH_CLIENT_SECRET", "wrong".into()));
-    let e = client(&server, env)
-        .get("/cloud/project")
+    let e = dform_sdk::block_on(client(&server, env).get("/cloud/project"))
         .unwrap_err()
         .to_string();
     assert!(
@@ -105,13 +103,12 @@ fn a_wrong_client_secret_is_named() {
 fn an_expired_consumer_key_says_so_and_the_fix() {
     let server = Server::start();
     server.revoke_key();
-    let e = Ovh::new()
-        .configure_with(
-            &json!({"settings": {"endpoint": server.endpoint, "project": fake::PROJECT}}),
-            &lookup(server.env()),
-            &[],
-        )
-        .unwrap_err();
+    let e = dform_sdk::block_on(Ovh::new().configure_with(
+        &json!({"settings": {"endpoint": server.endpoint, "project": fake::PROJECT}}),
+        &lookup(server.env()),
+        &[],
+    ))
+    .unwrap_err();
     let base = server.endpoint.strip_suffix("/1.0").unwrap();
     assert!(
         format!("{e:#}").ends_with(&format!(
@@ -142,17 +139,17 @@ fn a_short_validity_is_warned_of_and_the_rights_named() {
         server.endpoint.strip_suffix("/1.0").unwrap()
     );
     assert_eq!(
-        notes(&c, false, Some(&cache), now),
+        dform_sdk::block_on(notes(&c, false, Some(&cache), now)),
         std::slice::from_ref(&warning)
     );
     assert_eq!(
-        notes(&c, false, Some(&cache), now),
+        dform_sdk::block_on(notes(&c, false, Some(&cache), now)),
         std::slice::from_ref(&warning)
     );
     assert_eq!(server.key_asked(), 1, "the second run reads the cache");
     // A week and more ahead: nothing to say.
     let later = parse_rfc3339("2026-10-01T00:00:00Z").unwrap();
-    assert!(notes(&c, false, Some(&cache), later).is_empty());
+    assert!(dform_sdk::block_on(notes(&c, false, Some(&cache), later)).is_empty());
 
     // Outside a program: the form, the validity, what it lacks.
     server.key_rules(&[
@@ -163,7 +160,7 @@ fn a_short_validity_is_warned_of_and_the_rights_named() {
     ]);
     let e = &server.endpoint;
     assert_eq!(
-        notes(&c, true, None, now),
+        dform_sdk::block_on(notes(&c, true, None, now)),
         [
             format!(
                 "provider ovh: credentials for {e}: an application key and a consumer key; the \
@@ -177,7 +174,7 @@ fn a_short_validity_is_warned_of_and_the_rights_named() {
     );
     server.key_expires(None);
     assert_eq!(
-        notes(&c, true, None, now),
+        dform_sdk::block_on(notes(&c, true, None, now)),
         [
             format!(
                 "provider ovh: credentials for {e}: an application key and a consumer key; the \
@@ -191,7 +188,7 @@ fn a_short_validity_is_warned_of_and_the_rights_named() {
     // A service account's rights are not the API's to answer.
     let c = client(&server, server.oauth_env());
     assert_eq!(
-        notes(&c, true, None, now),
+        dform_sdk::block_on(notes(&c, true, None, now)),
         [format!(
             "provider ovh: credentials for {e}: the service account {}; its rights are its IAM \
              policies",
@@ -207,13 +204,12 @@ fn a_short_validity_is_warned_of_and_the_rights_named() {
 fn an_access_token_is_used_as_it_is() {
     let server = Server::start();
     let ovh = Ovh::new();
-    let account = ovh
-        .configure_with(
-            &json!({"settings": {"endpoint": server.endpoint, "project": fake::DESCRIPTION}}),
-            &lookup(server.token_env()),
-            &[],
-        )
-        .unwrap();
+    let account = dform_sdk::block_on(ovh.configure_with(
+        &json!({"settings": {"endpoint": server.endpoint, "project": fake::DESCRIPTION}}),
+        &lookup(server.token_env()),
+        &[],
+    ))
+    .unwrap();
     assert_eq!(account.account.as_deref(), Some(fake::PROJECT));
     assert_eq!(
         (
@@ -226,14 +222,16 @@ fn an_access_token_is_used_as_it_is() {
     let c = client(&server, server.token_env());
     let e = &server.endpoint;
     assert_eq!(
-        notes(&c, true, None, 0),
+        dform_sdk::block_on(notes(&c, true, None, 0)),
         [format!(
             "provider ovh: credentials for {e}: an access token, used as it is; its rights are \
              its own"
         )]
     );
     server.revoke_tokens();
-    let err = c.get("/cloud/project").unwrap_err().to_string();
+    let err = dform_sdk::block_on(c.get("/cloud/project"))
+        .unwrap_err()
+        .to_string();
     assert!(
         err.ends_with(&format!(
             "HTTP 401: the access token for {e} expired or was revoked: one given as \

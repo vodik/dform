@@ -8,14 +8,14 @@ use super::*;
 
 impl Ovh {
     /// The user, unless it is deleted.
-    pub(super) fn read_user(
+    pub(super) async fn read_user(
         &self,
         a: &Account,
         p: &str,
         remote: &str,
     ) -> api::Result<Option<(Json, Json)>> {
         let path = format!("/cloud/project/{p}/user/{}", escape(remote));
-        let Some(o) = a.client.get_opt(&path)? else {
+        let Some(o) = a.client.get_opt(&path).await? else {
             return Ok(None);
         };
         if s(&o, "status") == Some("deleted") {
@@ -26,12 +26,12 @@ impl Ovh {
 
     /// POST the user and wait for it to be `ok` (`creating` until then).
     /// The password the answer carries is dropped.
-    pub(super) fn create_user(
+    pub(super) async fn create_user(
         &self,
         at: &str,
         config: &Json,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(String, Json, Json), Failed> {
         let (a, p) = self.project_for(at)?;
         let body = json!({
@@ -41,6 +41,7 @@ impl Ovh {
         let o = a
             .client
             .post(&format!("/cloud/project/{p}/user"), Some(&body))
+            .await
             .map_err(|e| failed(at, e))?;
         let id = o.get("id").and_then(Json::as_i64).unwrap_or(0).to_string();
         let path = format!("/cloud/project/{p}/user/{id}");
@@ -58,14 +59,15 @@ impl Ovh {
             CREATE_WAIT,
             notes,
             say,
-        )?;
-        let (attrs, computed) = self.read_made(USER, at, &id, None)?;
+        )
+        .await?;
+        let (attrs, computed) = self.read_made(USER, at, &id, None).await?;
         Ok((id, attrs, computed))
     }
 
     /// Its roles, set at once to the program's (by the ids the project
     /// gives the roles' names), `now` its attributes as read.
-    pub(super) fn update_user(
+    pub(super) async fn update_user(
         &self,
         at: &str,
         remote: &str,
@@ -82,6 +84,7 @@ impl Ovh {
         let all = a
             .client
             .get(&format!("/cloud/project/{p}/role"))
+            .await
             .map_err(|e| failed(at, e))?;
         let ids = want
             .iter()
@@ -97,14 +100,15 @@ impl Ovh {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         a.client
             .put(&format!("{path}/role"), &json!({"rolesIds": ids}))
+            .await
             .map_err(|e| failed(at, e))?;
         Ok(())
     }
 
     /// The user of `description`, unless it is deleted.
-    pub(super) fn find_user(&self, description: &str) -> Result<Option<String>> {
+    pub(super) async fn find_user(&self, description: &str) -> Result<Option<String>> {
         let (a, p) = self.project("find a user")?;
-        let list = a.client.list(&format!("/cloud/project/{p}/user"))?;
+        let list = a.client.list(&format!("/cloud/project/{p}/user")).await?;
         Ok(list
             .as_array()
             .into_iter()
@@ -115,16 +119,16 @@ impl Ovh {
             .map(|id| id.to_string()))
     }
 
-    pub(super) fn delete_user(
+    pub(super) async fn delete_user(
         &self,
         at: &str,
         remote: &str,
         notes: &mut Vec<String>,
-        say: Say,
+        say: Say<'_>,
     ) -> std::result::Result<(), Failed> {
         let (a, p) = self.project_for(at)?;
         let path = format!("/cloud/project/{p}/user/{}", escape(remote));
-        self.delete_at(&a, at, &path, true, notes, say)
+        self.delete_at(&a, at, &path, true, notes, say).await
     }
 }
 
