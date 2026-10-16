@@ -63,7 +63,7 @@ pub struct Builder<'p> {
     /// The reads hoisted before what is being built that no node holds
     /// yet, in order, each by the variable it binds (`hoist.rs`).
     pending: Vec<hoist::Pending>,
-    /// The reads the resolver kept of the statement, and its tests.
+    /// The reads the resolver kept of the statement.
     reads: Reads,
 }
 
@@ -73,10 +73,10 @@ pub struct Builder<'p> {
 #[derive(Default)]
 pub struct Reads {
     nodes: BTreeMap<String, Vec<ExprId>>,
-    /// The tests the resolver made before what holds them (a copy named
-    /// by its key, `instance_of`), each by its literal as written: its
-    /// goal.
-    tests: Vec<(String, super::node::GoalId)>,
+    /// The copies' scopes the reads built so far test the copy in (an
+    /// `Output` with its test, `of`): the resolver's test before such a
+    /// read is the read's.
+    held: std::collections::BTreeSet<ExprId>,
 }
 
 impl<'p> Builder<'p> {

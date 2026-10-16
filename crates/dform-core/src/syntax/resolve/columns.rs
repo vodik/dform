@@ -432,7 +432,7 @@ impl Lowerer<'_> {
     /// A row's type where the column holds several: one of them,
     /// `member([T1, T2], Type)` before the atom, so what reads by it (a
     /// `set` through the column, `types::read`) knows each it may be.
-    fn row_types(&mut self, rc: &Rc, t: &SyntaxNode, col: &RefColumn, pre: &mut Vec<Lit>) {
+    fn row_types(&mut self, rc: &mut Rc, t: &SyntaxNode, col: &RefColumn, pre: &mut Vec<Lit>) {
         let Some(c) = Chain::of(t).filter(Chain::is_bare) else {
             return;
         };
@@ -467,9 +467,7 @@ impl Lowerer<'_> {
             let args = RelArgs::Positional(args);
             b.goal_node(span, GoalKind::Rel { rel, args })
         });
-        if let Some(s) = &mut self.gather {
-            s.test(&test, g);
-        }
+        rc.tests.push((None, g));
         pre.push(test);
     }
 

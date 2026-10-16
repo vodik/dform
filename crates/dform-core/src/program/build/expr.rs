@@ -193,6 +193,30 @@ impl Builder<'_> {
         }
     }
 
+    /// The reads [`Self::settled`] takes out of the node `id`, each bound
+    /// to its variable: `x = read`, in the order they stand.
+    pub fn settled_reads(&mut self, id: ExprId) -> Vec<GoalId> {
+        let e = &self.program.exprs[id];
+        let span = e.span;
+        let children = match (&e.kind, e.hoisted) {
+            (_, Some(v)) => {
+                return self.at(span, |b| {
+                    let value = b.copy_settled(id);
+                    let pat = b.pattern_node(PatternKind::Bind(v));
+                    vec![b.bind_goal(span, pat, value)]
+                });
+            }
+            (ExprKind::Comprehension { .. } | ExprKind::Deployed { .. }, None) => {
+                return Vec::new();
+            }
+            (kind, None) => kind.children(),
+        };
+        children
+            .into_iter()
+            .flat_map(|c| self.settled_reads(c))
+            .collect()
+    }
+
     /// A copy of the node `id`, a read in place when it is one, whose
     /// parts' reads are made already ([`Self::settled`]).
     pub fn copy_settled(&mut self, id: ExprId) -> ExprId {

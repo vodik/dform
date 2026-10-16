@@ -20,10 +20,7 @@
 //! The resolver keeps each read's node by the variable it binds
 //! ([`Reads`]): a builder given a literal the resolver lowered (a
 //! comprehension's body outside a statement) takes the node of each read
-//! it holds rather than remaking it ([`Builder::reading`]), and the
-//! literals the resolver made before a goal it built that no node of the
-//! goal holds are made of the nodes and the tests it kept
-//! ([`Builder::made_goal`]).
+//! it holds rather than remaking it ([`Builder::reading`]).
 
 use super::Builder;
 use crate::ast::{Lit, Term};
@@ -84,10 +81,9 @@ pub(super) struct Pending {
 }
 
 impl super::Reads {
-    /// The resolver made the test `lit` (an `instance_of` before a copy's
-    /// read by its key) as the goal `g`.
-    pub fn test(&mut self, lit: &Lit, g: GoalId) {
-        self.tests.push((written(lit), g));
+    /// Whether a read built so far tests the copy in the scope `scope`.
+    pub fn holds(&self, scope: ExprId) -> bool {
+        self.held.contains(&scope)
     }
 }
 
@@ -173,30 +169,6 @@ impl Builder<'_> {
         })
     }
 
-    /// The goal of `lit`, a literal the resolver made before the one that
-    /// holds it, no term of that literal's holding it: a test it made
-    /// ([`Reads::test`]), or a read whose node it kept, bound in place
-    /// to its variable.
-    pub(super) fn made_goal(&mut self, lit: &Lit) -> Option<GoalId> {
-        let key = written(lit);
-        if let Some(&(_, g)) = self.reads.tests.iter().find(|(k, _)| *k == key) {
-            return Some(g);
-        }
-        let x = self.binder(lit)?;
-        let id = self.built_read(&x, lit)?;
-        let (_, reads) = crate::program::lower_expr(self.program, id);
-        if reads.last().map(written) != Some(key) {
-            return None;
-        }
-        let span = self.program.exprs[id].span;
-        self.at(span, |b| {
-            let value = b.copy_settled(id);
-            let var = b.var(&x);
-            let pat = b.pattern_node(PatternKind::Bind(var));
-            Some(b.bind_goal(span, pat, value))
-        })
-    }
-
     /// The node `id`, built where its term is (step 7), holds the reads
     /// its lowering writes: taken from those pending.
     pub fn took(&mut self, id: ExprId) {
@@ -242,11 +214,16 @@ impl Builder<'_> {
                     path: Vec::new(),
                 },
             },
-            ReadOf::Output { copy, key, of } => ExprKind::Output {
-                of,
-                copy,
-                key: key.to_string(),
-            },
+            ReadOf::Output { copy, key, of } => {
+                if let Some((_, scope)) = &of {
+                    self.reads.held.insert(*scope);
+                }
+                ExprKind::Output {
+                    of,
+                    copy,
+                    key: key.to_string(),
+                }
+            }
             ReadOf::World { typ, addr, path } => ExprKind::World {
                 typ: TypeRef {
                     name: typ.to_string(),

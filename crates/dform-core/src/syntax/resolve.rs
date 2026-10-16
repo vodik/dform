@@ -687,6 +687,11 @@ struct Rc {
     /// (R-204): the resource the row holds, its address its own, never a
     /// copy's (`modules::ABSOLUTE`).
     row_refs: BTreeSet<String>,
+    /// The tests made before the literal being lowered (a copy named by
+    /// its key, a row's type among its column's), each with the copy's
+    /// scope a read holding it names: those no read of the literal holds
+    /// are goals before its own.
+    tests: Vec<(Option<ExprId>, GoalId)>,
 }
 
 /// A term and its node.
@@ -5941,11 +5946,13 @@ impl<'u> Lowerer<'u> {
     ) -> L<()> {
         let saved = std::mem::take(&mut self.after);
         let saved_goals = std::mem::take(&mut self.after_goals);
-        let (start, made) = (out.len(), self.helpers.len());
+        let saved_tests = std::mem::take(&mut rc.tests);
+        let start = out.len();
         if let Some(s) = &mut self.gather {
             s.open();
         }
         let r = self.bind(true, |l| lower(l, rc, n, out));
+        let tests = std::mem::replace(&mut rc.tests, saved_tests);
         out.append(&mut self.after);
         self.after = saved;
         let after = std::mem::replace(&mut self.after_goals, saved_goals);
@@ -5962,34 +5969,24 @@ impl<'u> Lowerer<'u> {
             self.built(g);
         }
         match (r.is_ok(), &mut self.gather) {
-            (true, Some(_)) => self.built_literal(rc, n, out, (start, made)),
+            (true, Some(_)) => self.built_literal(n, &out[..start], &tests),
             (false, Some(s)) => s.failed(),
             _ => {}
         }
         r
     }
 
-    /// The written literal `n` lowered to `out[start..]`, making
-    /// `self.helpers[made..]`: the goal built of it gathered (R-211 step
-    /// 4).
+    /// The written literal `n`, after the clause's `context`, made after
+    /// the `tests`: the goal built of it gathered (R-211 step 4).
     fn built_literal(
         &mut self,
-        rc: &Rc,
         n: &SyntaxNode,
-        out: &[Lit],
-        (start, made): (usize, usize),
+        context: &[Lit],
+        tests: &[(Option<ExprId>, GoalId)],
     ) {
         let span = self.span(n);
         let Some(s) = &mut self.gather else { return };
-        let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
-        s.literal(
-            &mut self.program,
-            span,
-            out,
-            start,
-            (&self.helpers, made),
-            &|v| written.contains(v),
-        );
+        s.literal(&mut self.program, span, context, tests, &self.helpers);
     }
 
     /// `v in PATH`, PATH with a `[_]` past its type's (R-162): `v` is
@@ -6120,6 +6117,7 @@ impl<'u> Lowerer<'u> {
         // schema answers it they are gone (R-106), so nothing
         // after it reads through them (R-204).
         let reads = marked.as_ref().map(|_| rc.reads.clone());
+        let mut before = Vec::new();
         let test = match self.read_atom(&res, Term::Wildcard, span) {
             Some(a) => {
                 out.push(Lit::Pos(a));
@@ -6133,7 +6131,11 @@ impl<'u> Lowerer<'u> {
             // A nested path, or a field of a value: it has a value
             // when the walk to it does.
             None if matches!(res, Res::Ref { .. } | Res::Var { .. } | Res::Value { .. }) => {
-                // The reads resolving it stay before the mark.
+                // The reads resolving it stay before the mark, or before
+                // the walk when no mark holds them.
+                if mark.is_none() {
+                    before = self.settled_reads(rc, &res, span);
+                }
                 let res = self.settled(rc, res, span);
                 let value = self.realize_expr(rc, res, Pos::Content, (Vec::new(), out), span)?;
                 let t = self.lowered(value, out);
@@ -6159,6 +6161,7 @@ impl<'u> Lowerer<'u> {
         if let Some(mark) = mark {
             g = self.goal(rc, span, GoalKind::Marked { mark, goal: g });
         }
+        let g = self.after(rc, span, before, g);
         self.built(g);
         Ok(())
     }
@@ -9134,7 +9137,7 @@ impl<'u> Lowerer<'u> {
     /// the copy by its key; its goal kept for the builders.
     fn copy_test(
         &mut self,
-        rc: &Rc,
+        rc: &mut Rc,
         (component, scope, copy): (&str, ExprId, ExprId),
         pre: &mut Vec<Lit>,
         span: Span,
@@ -9152,9 +9155,7 @@ impl<'u> Lowerer<'u> {
             let args = RelArgs::Positional(args);
             b.goal_node(span, GoalKind::Rel { rel, args })
         });
-        if let Some(s) = &mut self.gather {
-            s.test(&test, g);
-        }
+        rc.tests.push((Some(scope), g));
         pre.push(test);
     }
 
@@ -9647,6 +9648,40 @@ impl<'u> Lowerer<'u> {
         });
         pre.extend(left);
         Ok(id)
+    }
+
+    /// The goals binding the reads [`Self::settled`] takes out of `res`'s
+    /// parts, each `x = read`: what holds the settled `res` holds them
+    /// before it.
+    fn settled_reads(&mut self, rc: &Rc, res: &Res, span: Span) -> Vec<GoalId> {
+        let segs = |path: &[Seg]| -> Vec<ExprId> {
+            path.iter()
+                .filter_map(|s| match s {
+                    Seg::I(x) | Seg::K(x) => Some(*x),
+                    Seg::F(_) => None,
+                })
+                .collect()
+        };
+        let parts = match res {
+            Res::Ref { addr, path, .. } => [vec![*addr], segs(path)].concat(),
+            Res::Var { var, path } => [vec![*var], segs(path)].concat(),
+            Res::Value { path, .. } => segs(path),
+            _ => Vec::new(),
+        };
+        self.building(rc, span, |b| {
+            parts.into_iter().flat_map(|p| b.settled_reads(p)).collect()
+        })
+    }
+
+    /// `goal` after the goals `before`: a group of them, at `span`.
+    fn after(&mut self, rc: &Rc, span: Span, before: Vec<GoalId>, goal: GoalId) -> GoalId {
+        if before.is_empty() {
+            return goal;
+        }
+        let mut goals = before;
+        goals.push(goal);
+        let after = Vec::new();
+        self.goal(rc, span, GoalKind::Group { goals, after })
     }
 
     /// `res` with the reads its parts make left where they were made: each
