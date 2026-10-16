@@ -11,89 +11,20 @@ impl Lowerer<'_> {
     /// its header, each entry's value and the reads it hoisted, the clause
     /// B's goals; `lower` writes the statement.
     pub(super) fn block_stmt(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
-        use crate::program::build::{BodyLowered, EntryLowered, HeaderLowered};
+        use crate::program::build::HeaderLowered;
         let span = self.span(n);
         let block = node(n, BLOCK);
         let header = self.header_token(n).ok_or(Skip)?;
-        // Rows are a component's relation inputs (R-55); a type's
-        // resource has attributes.
-        if let Some(row) = block
-            .iter()
-            .flat_map(|b| b.children())
-            .find(|c| matches!(c.kind(), RULE | FACT | INPUT_RELATION))
-        {
-            let typ = dotted_text(n, 1);
-            return self.error(
-                self.span(&row),
-                format!(
-                    "{typ} is no component, so its resource takes no rows: a row gives a \
-                     relation a component takes (`input p`)"
-                ),
-            );
-        }
+        self.no_rows(n, block.as_ref())?;
         let mut rc = self.rc(n, scope, outer);
         self.clauses(&mut rc, n)?;
         let clause = self.gather.as_mut().and_then(|g| g.take_clause());
         let made = self.helpers.len();
-        let (fields, ends, value) = match &block {
-            Some(block) => {
-                let fields = self.wanting(Want::Schema, |l| l.fields(&mut rc, block))?;
-                let (fields, ends): (Vec<_>, Vec<_>) = fields
-                    .into_iter()
-                    .map(|(f, id, end)| ((f, id), end))
-                    .unzip();
-                (fields, ends, None)
-            }
-            None => {
-                let (_, value, fields) = self.value_body(&mut rc, n)?;
-                let end = self.helpers.len();
-                let fields = fields.into_iter().map(|f| (f, value)).collect();
-                (fields, vec![end], Some(value))
-            }
-        };
+        let (fields, ends, value) = self.resource_entries(&mut rc, n, block.as_ref())?;
         let (fields, ids): (Vec<FieldAssign>, Vec<ExprId>) = fields.into_iter().unzip();
         let named_at = self.helpers.len();
-        // The header: a string with holes is bound last, by `format`; a
-        // bare name is the literal name, always (R-76). The name is one
-        // segment of the address, quoted when it holds a dot (R-112).
         let interp = header.kind() == STRING && has_hole(header.text());
-        let mut named = None;
-        if interp {
-            let id = self.name_from_clause(&mut rc, &header)?;
-            named = Some(id);
-        } else if header.kind() == STRING {
-            self.string(&header)?;
-        } else {
-            let text = header.text();
-            let bound = self.binds(&rc, clause, &[]);
-            match rc.vars.get(text) {
-                Some(v) if bound.contains(&source_name(v)) || rc.bound_around().any(|b| b == v) => {
-                    let d = Diagnostic::error(
-                        self.span_of(header.text_range()),
-                        format!(
-                            "`{text}` is bound by the clause, but a bare header name is the \
-                             resource's literal name: a name from the clause is a string, \
-                             `\"${{{text}}}\"`"
-                        ),
-                    )
-                    .with_help(format!(
-                        "write `resource {} \"${{{text}}}\" {{ .. }}` for the resource the \
-                         clause names, or `\"{text}\"` quoted for the one named \"{text}\"",
-                        dotted_text(n, 1)
-                    ));
-                    self.diags.push(d);
-                    return Err(Skip);
-                }
-                _ if text == "_" => {
-                    return self.error(
-                        self.span_of(header.text_range()),
-                        "a resource is written by its name: `_` names nothing; name it, or \
-                         name it from the clause (`resource T \"${n}\" { .. } where p(n)`)",
-                    );
-                }
-                _ => {}
-            }
-        }
+        let named = self.header(&mut rc, (n, &header), clause)?;
         let values: Vec<bind::Term> = ids
             .iter()
             .copied()
@@ -106,31 +37,8 @@ impl Lowerer<'_> {
         let typ = dotted_text(n, 1);
         let literal =
             (header.kind() == STRING && !interp).then(|| self.string(&header).unwrap_or_default());
-        // Each entry's helpers, from where the one before ended.
-        let starts = std::iter::once(made).chain(ends.iter().copied());
-        let spans: Vec<std::ops::Range<usize>> =
-            starts.zip(&ends).map(|(h0, &h1)| h0..h1).collect();
-        let body_lowered = match value {
-            Some(v) => BodyLowered::Value {
-                value: v,
-                made: &self.helpers[spans[0].clone()],
-            },
-            None => BodyLowered::Block(
-                fields
-                    .iter()
-                    .zip(&ids)
-                    .zip(&spans)
-                    .map(|((f, id), h)| EntryLowered {
-                        path: &f.key,
-                        op: f.op,
-                        value: *id,
-                        rank: f.rank,
-                        span: f.span,
-                        made: &self.helpers[h.clone()],
-                    })
-                    .collect(),
-            ),
-        };
+        let entries = (fields.as_slice(), ids.as_slice());
+        let body_lowered = body_lowered(&self.helpers, entries, (made, &ends), value);
         let header_lowered = if let Some(value) = named {
             HeaderLowered::Interp {
                 value,
@@ -160,6 +68,100 @@ impl Lowerer<'_> {
         let item = b.resource_item(r);
         gather.done(b);
         Ok(item)
+    }
+
+    /// Rows are a component's relation inputs (R-55); a type's resource
+    /// has attributes: a row in `block` is an error.
+    fn no_rows(&mut self, n: &SyntaxNode, block: Option<&SyntaxNode>) -> L<()> {
+        let Some(row) = block
+            .iter()
+            .flat_map(|b| b.children())
+            .find(|c| matches!(c.kind(), RULE | FACT | INPUT_RELATION))
+        else {
+            return Ok(());
+        };
+        let typ = dotted_text(n, 1);
+        self.error(
+            self.span(&row),
+            format!(
+                "{typ} is no component, so its resource takes no rows: a row gives a \
+                 relation a component takes (`input p`)"
+            ),
+        )
+    }
+
+    /// A resource's entries, each with its value's node, where the
+    /// statement's helpers each made end, and the value of `resource T N
+    /// = VALUE` when it is written so.
+    #[allow(clippy::type_complexity)]
+    fn resource_entries(
+        &mut self,
+        rc: &mut Rc,
+        n: &SyntaxNode,
+        block: Option<&SyntaxNode>,
+    ) -> L<(Vec<(FieldAssign, ExprId)>, Vec<usize>, Option<ExprId>)> {
+        Ok(match block {
+            Some(block) => {
+                let fields = self.wanting(Want::Schema, |l| l.fields(rc, block))?;
+                let (fields, ends): (Vec<_>, Vec<_>) = fields
+                    .into_iter()
+                    .map(|(f, id, end)| ((f, id), end))
+                    .unzip();
+                (fields, ends, None)
+            }
+            None => {
+                let (_, value, fields) = self.value_body(rc, n)?;
+                let end = self.helpers.len();
+                let fields = fields.into_iter().map(|f| (f, value)).collect();
+                (fields, vec![end], Some(value))
+            }
+        })
+    }
+
+    /// The header of the resource `n`: a string with holes is bound last,
+    /// by `format`, its node; a bare name is the literal name, always
+    /// (R-76), and one the clause binds an error. The name is one segment
+    /// of the address, quoted when it holds a dot (R-112).
+    fn header(
+        &mut self,
+        rc: &mut Rc,
+        (n, header): (&SyntaxNode, &SyntaxToken),
+        clause: Option<ClauseId>,
+    ) -> L<Option<ExprId>> {
+        if header.kind() == STRING {
+            return match has_hole(header.text()) {
+                true => self.name_from_clause(rc, header).map(Some),
+                false => self.string(header).map(|_| None),
+            };
+        }
+        let text = header.text();
+        let at = self.span_of(header.text_range());
+        let bound = self.binds(rc, clause, &[]);
+        match rc.vars.get(text) {
+            Some(v) if bound.contains(&source_name(v)) || rc.bound_around().any(|b| b == v) => {
+                let d = Diagnostic::error(
+                    at,
+                    format!(
+                        "`{text}` is bound by the clause, but a bare header name is the \
+                         resource's literal name: a name from the clause is a string, \
+                         `\"${{{text}}}\"`"
+                    ),
+                )
+                .with_help(format!(
+                    "write `resource {} \"${{{text}}}\" {{ .. }}` for the resource the \
+                     clause names, or `\"{text}\"` quoted for the one named \"{text}\"",
+                    dotted_text(n, 1)
+                ));
+                self.diags.push(d);
+                Err(Skip)
+            }
+            _ if text == "_" => self.error(
+                at,
+                "a resource is written by its name: `_` names nothing; name it, or name it \
+                 from the clause (`resource T \"${n}\" { .. } where p(n)`)",
+            ),
+            _ => Ok(None),
+        }
     }
 
     /// `resource T N = VALUE` (R-126): the body is a value of the type, a
@@ -318,72 +320,13 @@ impl Lowerer<'_> {
         (lhs, rhs, add, rank, span): (&SyntaxNode, &SyntaxNode, bool, Option<Rank>, Span),
         clause: Option<ClauseId>,
     ) -> L<Contribution> {
-        let has_body = clause.is_some();
         let c = Chain::of(lhs).ok_or(Skip)?;
         if add && rank.is_some() {
             return self.error(span, "a rank applies to `=`, not `+=`");
         }
         let made = self.helpers.len();
         let target = self.set_target(rc, &c, span)?;
-        match &target {
-            Target::Element(_, _, list, _, _, block) => {
-                if add {
-                    return self.error(
-                        span,
-                        "`+=` adds to a list or a set; an element of a keyed list is written \
-                         with `=`",
-                    );
-                }
-                if let Some(block) = block
-                    && !has_body
-                {
-                    let d = Diagnostic::error(
-                        span,
-                        format!(
-                            "`set {}` with no condition is an entry of `{block}`, declared in \
-                             the same scope",
-                            lhs.text()
-                        ),
-                    )
-                    .with_help(format!("write the element in the block's `{list}`"));
-                    self.diags.push(d);
-                    return Err(Skip);
-                }
-            }
-            Target::Input(k) => {
-                // A stack input: `input(k, t)`, as `--set k=t` gives it.
-                if !has_body {
-                    let d = Diagnostic::error(
-                        span,
-                        format!("`set {k}` at the top of the program sets the program's own input"),
-                    )
-                    .with_help(format!(
-                        "give `input {k}` a default, or pass `--set {k}=...` on the command line"
-                    ));
-                    self.diags.push(d);
-                    return Err(Skip);
-                }
-                if add {
-                    return self.error(span, "an input is set with `=`");
-                }
-            }
-            Target::Cell(_, _, path, Some(block)) if !has_body => {
-                let d = Diagnostic::error(
-                    self.span(lhs),
-                    format!(
-                        "`set {}` with no condition is an entry of `{block}`, declared in the same \
-                         scope",
-                        lhs.text()
-                    ),
-                )
-                .with_help(format!(
-                    "write `{path} = ...` in the block `{block} {{ .. }}`"
-                ));
-                self.diags.push(d);
-                return Err(Skip);
-            }
-            Target::Cell(..) => {}
-        }
+        self.check_target(&target, (lhs, add, span), clause.is_some())?;
         let mid = self.helpers.len();
         // A contribution to an input's cell is normal unless ranked (R-38),
         // written to the cell itself, so that its condition may read
@@ -411,11 +354,62 @@ impl Lowerer<'_> {
         })
     }
 
+    /// What a `set` line written `lhs` may not set: `+=` of a keyed
+    /// list's element or of an input; with no condition (`has_body`), an
+    /// entry of a block declared in the same scope, or the program's own
+    /// input.
+    fn check_target(
+        &mut self,
+        target: &Target,
+        (lhs, add, span): (&SyntaxNode, bool, Span),
+        has_body: bool,
+    ) -> L<()> {
+        let d = match target {
+            Target::Element(..) if add => {
+                return self.error(
+                    span,
+                    "`+=` adds to a list or a set; an element of a keyed list is written with `=`",
+                );
+            }
+            Target::Element(_, _, list, _, _, Some(block)) if !has_body => Diagnostic::error(
+                span,
+                format!(
+                    "`set {}` with no condition is an entry of `{block}`, declared in the same \
+                     scope",
+                    lhs.text()
+                ),
+            )
+            .with_help(format!("write the element in the block's `{list}`")),
+            // A stack input: `input(k, t)`, as `--set k=t` gives it.
+            Target::Input(k) if !has_body => Diagnostic::error(
+                span,
+                format!("`set {k}` at the top of the program sets the program's own input"),
+            )
+            .with_help(format!(
+                "give `input {k}` a default, or pass `--set {k}=...` on the command line"
+            )),
+            Target::Input(_) if add => return self.error(span, "an input is set with `=`"),
+            Target::Cell(_, _, path, Some(block)) if !has_body => Diagnostic::error(
+                self.span(lhs),
+                format!(
+                    "`set {}` with no condition is an entry of `{block}`, declared in the same \
+                     scope",
+                    lhs.text()
+                ),
+            )
+            .with_help(format!(
+                "write `{path} = ...` in the block `{block} {{ .. }}`"
+            )),
+            _ => return Ok(()),
+        };
+        self.diags.push(d);
+        Err(Skip)
+    }
+
     /// What a `set` sets: a cell `(T, A, path)` and, when the block that
     /// owns the cell is declared in the same scope, how that block is
     /// written; or a stack input.
     pub(super) fn set_target(&mut self, rc: &mut Rc, c: &Chain, span: Span) -> L<Target> {
-        let scope = rc.scope;
         // `[_]`: a variable per step, the clause form (R-162).
         let each;
         let c = if c.ops.iter().any(each::is_each) {
@@ -424,79 +418,98 @@ impl Lowerer<'_> {
         } else {
             c
         };
-        // A stack input, set by name, or a field of an object input by its
-        // path (R-54); a field of an input that is a reference is the
-        // referenced resource's attribute (`set role.policies` in a module
-        // given `input role: iam.role`), as a `let` of one's is.
-        let through_ref = !c.ops.is_empty() && self.input_ref(scope, &c.head).is_some();
-        if c.ops.iter().all(|o| matches!(o, Op::Field(_)))
-            && self.is_value(scope, &c.head)
-            && self.find_let(scope, &c.head).is_none()
-            && !through_ref
-        {
-            return Ok(Target::Input(c.fields().join(".")));
-        }
-        // A used module's input, `m.k` or a field of an object one,
-        // `m.k.f` (R-55): its cell `(input, m, k)`.
-        if !c.ops.is_empty()
-            && c.ops.iter().all(|o| matches!(o, Op::Field(_)))
-            && let Some(at) = self
-                .chain_of(scope)
-                .into_iter()
-                .find(|&s| self.names(s).module(&c.head).is_some())
-        {
-            let own = at == self.decl_scope(scope);
-            return Ok(Target::Cell(
-                self.termed_str(span, crate::modules::INPUT),
-                self.scoped_name(scope, at, &c.head, span),
-                c.fields()[1..].join("."),
-                own.then(|| format!("use {}", c.head)),
-            ));
+        if let Some(t) = self.input_target(rc.scope, c, span) {
+            return Ok(t);
         }
         // An element of a keyed list a variable ranges over: `set c.p = v
         // where c in w.containers` writes `w.containers[c].p` (R-69).
-        if let Some(Elem { typ, addr, list }) = rc.elems.get(&c.head).cloned()
+        if let Some(elem) = rc.elems.get(&c.head).cloned()
             && (!c.ops.is_empty() || c.head.starts_with("_[_]"))
         {
-            let mut rest = Vec::new();
-            for op in &c.ops {
-                match op {
-                    Op::Field(f) => rest.push(f.clone()),
-                    Op::Index(_, r) | Op::Keyed(_, r) => {
-                        return self.error(
-                            self.span_of(*r),
-                            format!(
-                                "`{}` is an element of `{list}`: what `set` writes in it is a \
-                                 path of fields, `{}.p.q`",
-                                c.head, c.head
-                            ),
-                        );
-                    }
-                }
-            }
-            let key = self.var_named(rc, &c.head, span);
-            let key = (var(&key), self.var_node(rc, span, &key));
-            let block = self.owning_block(scope, &typ.0, &addr.0);
-            let (typ, addr) = (
-                self.settled_part(rc, typ, span),
-                self.settled_part(rc, addr, span),
-            );
-            let (addr, key) = (self.each_read(rc, addr), self.each_read(rc, key));
-            return Ok(Target::Element(typ, addr, list, key, rest, block));
+            return self.elem_target(rc, c, elem, span);
         }
         // An instance's input: `n.k`.
         if let [Op::Field(k)] = c.ops.as_slice()
-            && let Some((at, path)) = self.instance_in(scope, &c.head)
+            && let Some((at, path)) = self.instance_in(rc.scope, &c.head)
         {
-            let own = at == self.decl_scope(scope);
+            let own = at == self.decl_scope(rc.scope);
             return Ok(Target::Cell(
                 self.termed_str(span, crate::modules::INPUT),
-                self.scoped_name(scope, at, &c.head, span),
+                self.scoped_name(rc.scope, at, &c.head, span),
                 k.clone(),
                 own.then(|| format!("resource {path} {}", c.head)),
             ));
         }
         self.target_named(rc, c)?;
+        self.attr_target(rc, c, span)
+    }
+
+    /// A stack input, set by name, or a field of an object input by its
+    /// path (R-54); a used module's input, `m.k` or a field of an object
+    /// one, `m.k.f` (R-55), its cell `(input, m, k)`. A field of an input
+    /// that is a reference is the referenced resource's attribute (`set
+    /// role.policies` in a module given `input role: iam.role`), as a
+    /// `let` of one's is: none.
+    fn input_target(&mut self, scope: ScopeId, c: &Chain, span: Span) -> Option<Target> {
+        let fields = c.ops.iter().all(|o| matches!(o, Op::Field(_)));
+        let through_ref = !c.ops.is_empty() && self.input_ref(scope, &c.head).is_some();
+        if fields
+            && self.is_value(scope, &c.head)
+            && self.find_let(scope, &c.head).is_none()
+            && !through_ref
+        {
+            return Some(Target::Input(c.fields().join(".")));
+        }
+        if c.ops.is_empty() || !fields {
+            return None;
+        }
+        let at = self
+            .chain_of(scope)
+            .into_iter()
+            .find(|&s| self.names(s).module(&c.head).is_some())?;
+        let own = at == self.decl_scope(scope);
+        Some(Target::Cell(
+            self.termed_str(span, crate::modules::INPUT),
+            self.scoped_name(scope, at, &c.head, span),
+            c.fields()[1..].join("."),
+            own.then(|| format!("use {}", c.head)),
+        ))
+    }
+
+    /// `set c.p` of an element `c` of the keyed list `elem` (R-69).
+    fn elem_target(&mut self, rc: &mut Rc, c: &Chain, elem: Elem, span: Span) -> L<Target> {
+        let Elem { typ, addr, list } = elem;
+        let mut rest = Vec::new();
+        for op in &c.ops {
+            match op {
+                Op::Field(f) => rest.push(f.clone()),
+                Op::Index(_, r) | Op::Keyed(_, r) => {
+                    return self.error(
+                        self.span_of(*r),
+                        format!(
+                            "`{}` is an element of `{list}`: what `set` writes in it is a path \
+                             of fields, `{}.p.q`",
+                            c.head, c.head
+                        ),
+                    );
+                }
+            }
+        }
+        let key = self.var_named(rc, &c.head, span);
+        let key = (var(&key), self.var_node(rc, span, &key));
+        let block = self.owning_block(rc.scope, &typ.0, &addr.0);
+        let (typ, addr) = (
+            self.settled_part(rc, typ, span),
+            self.settled_part(rc, addr, span),
+        );
+        let (addr, key) = (self.each_read(rc, addr), self.each_read(rc, key));
+        Ok(Target::Element(typ, addr, list, key, rest, block))
+    }
+
+    /// `set R.p`, `set T[e].p`: a resource's attribute, or with a key
+    /// (`containers[k]`) the element of a keyed list whose key is `k`, any
+    /// term but an integer, which stays the position (R-35, R-69).
+    fn attr_target(&mut self, rc: &mut Rc, c: &Chain, span: Span) -> L<Target> {
         let res = self.resolve(rc, c)?;
         let (typ, addr, path) = match res {
             Res::Ref { typ, addr, path } if !path.is_empty() => {
@@ -510,46 +523,43 @@ impl Lowerer<'_> {
                 );
             }
         };
-        // `containers[k]`: the element of a keyed list whose key is `k`, any
-        // term but an integer, which stays the position (R-35, R-69).
+        let block = self.owning_block(rc.scope, &typ.0, &addr.0);
         let keyed = path.iter().position(|s| match s {
             Seg::I(t) => !matches!(self.term_of(*t), Term::Val(Value::Int(_))),
             Seg::K(_) => true,
             Seg::F(_) => false,
         });
-        if let Some(i) = keyed
-            && !matches!(&typ.0, Term::Val(Value::Str(t)) if t == "settings")
-        {
-            let (Seg::I(key) | Seg::K(key)) = path[i].clone() else {
-                unreachable!("found above")
-            };
-            let key = (self.term_of(key), key);
-            let Some(list) = self.path_string(&path[..i]).filter(|l| !l.is_empty()) else {
+        let Some(i) =
+            keyed.filter(|_| !matches!(&typ.0, Term::Val(Value::Str(t)) if t == "settings"))
+        else {
+            let Some(path) = self.path_string(&path) else {
                 return self.error(span, "a contribution's path is constant");
             };
-            let mut rest = Vec::new();
-            for s in &path[i + 1..] {
-                match s {
-                    Seg::F(f) => rest.push(f.clone()),
-                    Seg::I(_) | Seg::K(_) => {
-                        return self.error(
-                            span,
-                            format!(
-                                "one index per written path: below the element of `{list}` \
-                                 the path is fields"
-                            ),
-                        );
-                    }
-                }
-            }
-            let block = self.owning_block(scope, &typ.0, &addr.0);
-            return Ok(Target::Element(typ, addr, list, key, rest, block));
-        }
-        let Some(path) = self.path_string(&path) else {
+            return Ok(Target::Cell(typ, addr, path, block));
+        };
+        let (Seg::I(key) | Seg::K(key)) = path[i].clone() else {
+            unreachable!("found above")
+        };
+        let key = (self.term_of(key), key);
+        let Some(list) = self.path_string(&path[..i]).filter(|l| !l.is_empty()) else {
             return self.error(span, "a contribution's path is constant");
         };
-        let block = self.owning_block(scope, &typ.0, &addr.0);
-        Ok(Target::Cell(typ, addr, path, block))
+        let mut rest = Vec::new();
+        for s in &path[i + 1..] {
+            match s {
+                Seg::F(f) => rest.push(f.clone()),
+                Seg::I(_) | Seg::K(_) => {
+                    return self.error(
+                        span,
+                        format!(
+                            "one index per written path: below the element of `{list}` the \
+                             path is fields"
+                        ),
+                    );
+                }
+            }
+        }
+        Ok(Target::Element(typ, addr, list, key, rest, block))
     }
 
     /// The string `s`, its term and its node at `span`.
@@ -638,5 +648,41 @@ impl Lowerer<'_> {
                 .then(|| format!("resource {t} {a}")),
             _ => None,
         }
+    }
+}
+
+/// A resource's body for its builder: `resource T N = VALUE`'s value, or
+/// each entry with its value's node, the statement's `helpers` each made
+/// from `made` on (each entry's to its end in `ends`).
+fn body_lowered<'a>(
+    helpers: &'a [Stmt],
+    (fields, ids): (&'a [FieldAssign], &[ExprId]),
+    (made, ends): (usize, &[usize]),
+    value: Option<ExprId>,
+) -> crate::program::build::BodyLowered<'a> {
+    use crate::program::build::{BodyLowered, EntryLowered};
+    // Each entry's helpers, from where the one before ended.
+    let starts = std::iter::once(made).chain(ends.iter().copied());
+    let spans: Vec<std::ops::Range<usize>> = starts.zip(ends).map(|(h0, &h1)| h0..h1).collect();
+    match value {
+        Some(v) => BodyLowered::Value {
+            value: v,
+            made: &helpers[spans[0].clone()],
+        },
+        None => BodyLowered::Block(
+            fields
+                .iter()
+                .zip(ids)
+                .zip(&spans)
+                .map(|((f, id), h)| EntryLowered {
+                    path: &f.key,
+                    op: f.op,
+                    value: *id,
+                    rank: f.rank,
+                    span: f.span,
+                    made: &helpers[h.clone()],
+                })
+                .collect(),
+        ),
     }
 }

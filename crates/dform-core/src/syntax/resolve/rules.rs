@@ -161,25 +161,7 @@ impl Lowerer<'_> {
         // `let NAME: T = t` (R-74): its rows agree on `T`, and a literal is
         // read as one, as in any typed position (R-31).
         let declared = node(n, TYPE_EXPR).map(|t| self.type_expr(&t));
-        let typed_rows: Vec<SyntaxNode> = self
-            .find_let(scope, &name)
-            .map(|(_, rows)| rows)
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|r| r.parent().and_then(|l| node(&l, TYPE_EXPR)))
-            .collect();
-        if let (Some(here), Some(first)) = (node(n, TYPE_EXPR), typed_rows.first())
-            && here.text() != first.text()
-        {
-            return self.error(
-                self.span(&here),
-                format!(
-                    "`let {name}` is declared `{}` in one row and `{}` in another",
-                    first.text(),
-                    here.text()
-                ),
-            );
-        }
+        let typed_rows = self.typed_rows(n, scope, &name)?;
         let ty = declared.as_ref().map(crate::types::of_expr);
         let want = match &ty {
             Some(crate::types::Ty::Ref(t)) => Want::Type(t.clone()),
@@ -193,17 +175,9 @@ impl Lowerer<'_> {
         let aggregate = t.kind() == CALL && self.aggregate_name(&t).is_some();
         let mut fold = None;
         let (value, id) = if aggregate {
-            // `let n = count(x) where B`: one group (R-59).
-            let (_, agg) = self.aggregate_call(&mut rc, &t)?;
-            let v = fresh(&mut rc, &capitalise(&name));
-            self.aggs.push(aggregate::Agg {
-                var: v.clone(),
-                text: t.text().to_string(),
-                span: self.span(&t),
-            });
-            let at = self.span(&t);
-            fold = Some(self.fold_goal(&rc, at, &v, agg));
-            (var(&v), Some(self.var_node(&rc, at, &v)))
+            let (value, id, g) = self.let_fold(&mut rc, &t, &name)?;
+            fold = Some(g);
+            (value, Some(id))
         } else {
             let (value, id) = self.wanting(want, |l| l.let_value(&mut rc, &t))?;
             (value, Some(id))
@@ -247,6 +221,46 @@ impl Lowerer<'_> {
         gather.done(b);
         let item = item.ok_or(Skip)?;
         Ok(item)
+    }
+
+    /// The type expressions of the rows of `let name` in `scope`, the
+    /// first the cell's; `n`'s another is an error.
+    fn typed_rows(&mut self, n: &SyntaxNode, scope: ScopeId, name: &str) -> L<Vec<SyntaxNode>> {
+        let typed_rows: Vec<SyntaxNode> = self
+            .find_let(scope, name)
+            .map(|(_, rows)| rows)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|r| r.parent().and_then(|l| node(&l, TYPE_EXPR)))
+            .collect();
+        if let (Some(here), Some(first)) = (node(n, TYPE_EXPR), typed_rows.first())
+            && here.text() != first.text()
+        {
+            return self.error(
+                self.span(&here),
+                format!(
+                    "`let {name}` is declared `{}` in one row and `{}` in another",
+                    first.text(),
+                    here.text()
+                ),
+            );
+        }
+        Ok(typed_rows)
+    }
+
+    /// `let n = count(x) where B`: one group (R-59), its value the
+    /// variable `t`'s fold binds: its term and node, and the fold.
+    fn let_fold(&mut self, rc: &mut Rc, t: &SyntaxNode, name: &str) -> L<(Term, ExprId, GoalId)> {
+        let (_, agg) = self.aggregate_call(rc, t)?;
+        let v = fresh(rc, &capitalise(name));
+        self.aggs.push(aggregate::Agg {
+            var: v.clone(),
+            text: t.text().to_string(),
+            span: self.span(t),
+        });
+        let at = self.span(t);
+        let fold = self.fold_goal(rc, at, &v, agg);
+        Ok((var(&v), self.var_node(rc, at, &v), fold))
     }
 
     /// The clause of statement `n`'s body just lowered, gathered (empty
