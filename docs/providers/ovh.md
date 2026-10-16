@@ -492,6 +492,32 @@ resource ovh.domain_record k8s {
 } where ovh.zone(zone, z, _)
 ```
 
+## What it asks the API
+
+A Read asks its object by its id: an instance, an SSH key, a volume, a
+private network, a user, a record one `GET`; an S3 container `GET
+/region/{region}/storage/{name}`; an S3 credential its user's
+credentials; a subnet its network's subnets, as the API has no `GET` of
+one. An instance's Read asks the instance, its ports
+(`…/instance/{id}/interface`) and the project's private networks, which
+name the ports' networks, at once.
+
+A list is asked once per session and run, shared by every Read, Plan
+and Apply of the session, and the callers asking it at the same time
+wait on the one request: a region's flavors and images, the regions,
+the private networks, each network's subnets, the public network, a
+region's instances and volumes, the SSH keys and the users (what a
+Create is found by), a user's S3 credentials, and whether the project
+is on a vRack. A write (`POST`, `PUT`, `DELETE`) forgets the
+lists of its kind of object, whatever its answer, so the next one asked
+is as the API is after it. A failure is not kept. The OVH API answers a
+list in seconds; a run pays it once.
+
+Plan checks an instance's flavor and image, and a bootable volume's
+image, against the region's lists only where the program asks one the
+object does not have there: the flavor and image Read answered are the
+API's, and a Plan of an instance as it is asks nothing.
+
 ## What a Create that does not answer does
 
 OVH's create calls are not idempotent. A Create first looks for an object
@@ -614,7 +640,7 @@ replace the cassettes' answers:
 (`dform_provider_ovh::fake`, with a DNS resolver beside it), which
 answers from the recordings above and plays what the live API was seen
 to do; `cargo test -p dform-provider-ovh --test quirks` checks each of
-those. `OVH_INTEGRATION=1
+those, and `--test lists` counts what a session asks of it. `OVH_INTEGRATION=1
 OVH_CLOUD_PROJECT_SERVICE=<project> cargo test --test main --
 provider_ovh::the_real_account` lists the regions of the real account the machine's
 configuration names, and changes nothing.
