@@ -18,7 +18,7 @@ impl Ovh {
     /// The key named `name`.
     pub(super) fn find_ssh_key(&self, name: &str) -> Result<Option<String>> {
         let (a, p) = self.project("find an SSH key")?;
-        let list = a.client.get(&format!("/cloud/project/{p}/sshkey"))?;
+        let list = a.client.list(&format!("/cloud/project/{p}/sshkey"))?;
         Ok(list
             .as_array()
             .into_iter()

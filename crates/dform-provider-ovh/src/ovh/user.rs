@@ -104,7 +104,7 @@ impl Ovh {
     /// The user of `description`, unless it is deleted.
     pub(super) fn find_user(&self, description: &str) -> Result<Option<String>> {
         let (a, p) = self.project("find a user")?;
-        let list = a.client.get(&format!("/cloud/project/{p}/user"))?;
+        let list = a.client.list(&format!("/cloud/project/{p}/user"))?;
         Ok(list
             .as_array()
             .into_iter()

@@ -245,7 +245,42 @@ fn a_plan_asks_no_catalog_of_what_read_answered() {
     d["networks"] = prior["networks"].clone();
     assert_eq!(plan(&d), Vec::<String>::new());
     d["flavor"] = json!("b2-15");
-    assert_eq!(plan(&d), [format!("GET {}", project("/flavor?region=BHS5"))]);
+    assert_eq!(
+        plan(&d),
+        [format!("GET {}", project("/flavor?region=BHS5"))]
+    );
     d["image"] = json!("Debian 13");
     assert_eq!(plan(&d), [format!("GET {}", project("/image?region=BHS5"))]);
+}
+
+/// A user's S3 credentials are a list too, asked once however many of
+/// them are read; making one asks them afresh.
+#[test]
+fn a_users_credentials_are_listed_once() {
+    let (server, c) = world();
+    let user = server.add_user("backup");
+    let path = project(&format!("/user/{user}/s3Credentials"));
+    let access = c.post(&path, None).unwrap()["access"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let ovh = provider(&server);
+    let remote = format!("{user}/{access}");
+    read(&ovh, "ovh.s3_credential", &remote);
+    read(&ovh, "ovh.s3_credential", &remote);
+    assert_eq!(gets(&server, &path), 1, "{:?}", server.calls());
+    let made = ovh.answer(
+        Call::Apply(pb::ApplyRequest {
+            op: pb::Op::Create as i32,
+            r#type: "ovh.s3_credential".into(),
+            name: "second".into(),
+            config: Some(wire::doc(&json!({"user": user.to_string()}))),
+            idempotency_key: "second".into(),
+            ..Default::default()
+        }),
+        &backend::silent,
+    );
+    assert!(matches!(made, Ok(Reply::Apply(_))), "{made:?}");
+    read(&ovh, "ovh.s3_credential", &remote);
+    assert_eq!(gets(&server, &path), 2, "{:?}", server.calls());
 }

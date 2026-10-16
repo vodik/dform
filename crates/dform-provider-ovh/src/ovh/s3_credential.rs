@@ -14,7 +14,8 @@ use super::*;
 const SECRET: &str = "secret";
 
 impl Ovh {
-    /// The credential, if its user still lists it.
+    /// The credential, if its user still lists it (its credentials listed
+    /// once per run).
     pub(super) fn read_s3_credential(
         &self,
         a: &Account,
@@ -22,7 +23,7 @@ impl Ovh {
         remote: &str,
     ) -> api::Result<Option<(Json, Json)>> {
         let (user, access) = map::s3_credential_parts(remote);
-        let Some(list) = a.client.get_opt(&credentials_path(p, user))? else {
+        let Some(list) = a.client.list_opt(&credentials_path(p, user))? else {
             return Ok(None);
         };
         Ok(list
