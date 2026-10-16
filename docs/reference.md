@@ -1057,8 +1057,10 @@ configured instance the call is made in, below), else that session
 alone when its provider reports none; the bucket is
 the provider's word on a request (`Request::bucket("ec2.describe")`,
 `"route53.change:ZONE"` for a limit an object has; none, the provider's
-default), and nobody declares a rate. A window starts at two, grows while
-the server answers, halves on a 429, a 503, a timeout or a stall (below),
+default), and nobody declares a rate. A window starts at two (at eight,
+or the server's streams when fewer, once an HTTP/2 server's answer has
+stated how many it takes at once), grows while the server answers,
+halves on a 429, a 503, a timeout or a stall (below),
 and a `Retry-After` pauses its bucket that long; the throttled request is
 answered to the provider as the server answered it, and its retry waits
 its turn. At most 64 of a bucket's requests are in flight, and never more

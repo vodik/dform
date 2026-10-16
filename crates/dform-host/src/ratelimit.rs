@@ -6,7 +6,9 @@
 //! no declared rates. Two sessions on one account (a tree's deployments in
 //! one process of a provider) share its windows and halve together. A
 //! window is how many of a bucket's requests may be
-//! in flight at once. It starts small and grows while the server answers
+//! in flight at once. It starts small (two; eight, or fewer if the server
+//! takes fewer, once an HTTP/2 server's answer has stated the streams it
+//! takes at once) and grows while the server answers
 //! (by one for each answer until the first throttle, so it doubles each
 //! round trip; then by one each window's worth of answers), and halves
 //! on a throttle (a 429 or a 503), a timeout, or a stall of its
@@ -37,6 +39,11 @@ pub const CEILING: usize = 64;
 
 /// A bucket's window at first contact.
 const FIRST: f64 = 2.0;
+
+/// A bucket's window, until its first throttle, once its server has
+/// stated the streams it takes at once (HTTP/2's
+/// `SETTINGS_MAX_CONCURRENT_STREAMS`): at least this many of them.
+const FIRST_STATED: f64 = 8.0;
 
 /// The longest pause a `Retry-After` is taken for.
 const LONGEST_PAUSE: Duration = Duration::from_secs(300);
@@ -156,11 +163,17 @@ impl Bucket {
         }
     }
 
+    /// One more answer: one more in the window until the first
+    /// throttle, and, while so, at least [`FIRST_STATED`] once the server
+    /// stated its streams; a window's worth more after it.
     fn grow(&mut self) {
         self.window += match self.starting {
             true => 1.0,
             false => 1.0 / self.window,
         };
+        if self.starting && self.streams.is_some() {
+            self.window = self.window.max(FIRST_STATED);
+        }
         self.window = self.window.min(self.ceiling() as f64);
     }
 
@@ -558,6 +571,58 @@ mod tests {
             t.elapsed() < Duration::from_millis(500),
             "east's a is not paused"
         );
+    }
+
+    /// An HTTP/2 server's first answer states the streams it takes at
+    /// once: the window is eight of them from then on (fewer if it takes
+    /// fewer), so a burst after a first request (the OpenAPI documents
+    /// after the index) goes eight at a time, not three; a throttle
+    /// halves it as before, and an HTTP/1.1 server's grows from two.
+    #[test]
+    fn an_http2_servers_stated_streams_open_the_window_to_eight() {
+        use dform_core::http::fake::Server;
+        let get = |server: &Server| dform_core::plugin::host::HttpRequest {
+            method: "GET".into(),
+            url: server.url("/"),
+            timeout: Some(Duration::from_secs(5)),
+            ..Default::default()
+        };
+        let send = |l: &Limiter, server: &Server| {
+            let p = l.acquire(NONE, None);
+            p.answered(&dform_core::http::exchange(
+                get(server),
+                Some(&Server::credential()),
+                None,
+            ));
+        };
+        let server = Server::h2(100);
+        server.slow(Duration::from_millis(200));
+        let l = Limiter::new("p");
+        send(&l, &server);
+        assert_eq!(l.window(NONE, None).0, 8, "the first answer stated 100");
+        std::thread::scope(|s| {
+            for _ in 0..12 {
+                s.spawn(|| send(&l, &server));
+            }
+        });
+        assert_eq!(server.most_at_once(), 8, "eight at a time");
+        l.acquire(NONE, None).answered(&status(429, &[]));
+        let halved = l.window(NONE, None).0;
+        l.acquire(NONE, None).answered(&paced(Pace {
+            streams: Some(100),
+            stalled: false,
+        }));
+        assert_eq!(l.window(NONE, None).0, halved, "no floor after a throttle");
+        // Fewer streams stated: the window is the server's.
+        let few = Limiter::new("p");
+        few.acquire(NONE, None).answered(&paced(Pace {
+            streams: Some(5),
+            stalled: false,
+        }));
+        assert_eq!(few.window(NONE, None).0, 5);
+        let h1 = Limiter::new("p");
+        h1.acquire(NONE, None).answered(&status(200, &[]));
+        assert_eq!(h1.window(NONE, None).0, 3);
     }
 
     /// A window never passes the streams its server takes at once, as
