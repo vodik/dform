@@ -1,5 +1,5 @@
 //! The OVH provider's Public Cloud types beyond the instance (R-157):
-//! S3 containers, users with S3 credentials, volumes attached to
+//! S3 containers, users and their S3 credentials, volumes attached to
 //! instances, private networks and their subnets, each against the fake
 //! OVH API (`dform_provider_ovh::fake`). Most tests call the provider in
 //! this process, as dform's protocol does (`Handler::handle`), so each
@@ -267,50 +267,27 @@ fn reveal(lab: &Lab, typ: &str, remote: &str, path: &str, lease: &str) -> Result
     }
 }
 
-/// A user is made with its roles, said `creating` then `ok`, and given
-/// an S3 credential: its access key is computed, its secret only a label
-/// (the value never leaves the API but for Reveal, with the lease). Its
-/// roles change in place; a new description replaces it; the same
+/// A user is made with its roles, said `creating` then `ok`, with no S3
+/// credential (that is an `ovh.s3_credential` of its own), and the
+/// password the API answered is nowhere in what the provider answers.
+/// Its roles change in place; a new description replaces it; the same
 /// description from another Create is refused, to be adopted.
 #[test]
-fn a_user_has_an_s3_credential_whose_secret_is_held() {
+fn a_user_is_made_with_its_roles() {
     let lab = Lab::new();
     let doc = json!({"description": "backup", "roles": ["objectstore_operator"]});
     let u = lab.create(USER, "backup", doc.clone());
     assert_eq!(u.said, ["creating", "ok"], "{u:?}");
     let id: i64 = u.remote.parse().unwrap();
-    let creds = lab.server.s3_credentials(id);
-    assert_eq!(creds.len(), 1);
-    let (access, secret) = &creds[0];
+    assert!(lab.server.s3_credentials(id).is_empty());
     assert_eq!(u.attrs, doc);
-    assert_eq!(u.computed["s3_access_key"], access.as_str());
-    assert_eq!(u.computed["status"], "ok");
     assert_eq!(
-        u.computed["s3_secret_key"],
-        json!({"$secret": "ovh.cloud_project_user/backup#s3_secret_key"})
+        u.computed,
+        json!({"id": u.remote, "username": format!("user-{id:x}"), "status": "ok"})
     );
-    // The secret and the password the API answered are nowhere in what
-    // the provider answers.
-    let answered = format!("{u:?}");
-    assert!(
-        !answered.contains(secret.as_str()) && !answered.contains("pw-"),
-        "{answered}"
-    );
+    assert!(!format!("{u:?}").contains("pw-"), "{u:?}");
     let (_, computed) = lab.read(USER, "backup", &u.remote).unwrap();
     assert_eq!(computed, u.computed);
-
-    // Reveal: the secret, read from the API, with the lease only.
-    assert_eq!(
-        reveal(&lab, USER, &u.remote, "s3_secret_key", "lease-1").unwrap(),
-        *secret
-    );
-    let no_lease = reveal(&lab, USER, &u.remote, "s3_secret_key", "").unwrap_err();
-    assert!(
-        no_lease.contains("without the deployment's lease"),
-        "{no_lease}"
-    );
-    let elsewhere = reveal(&lab, USER, &u.remote, "username", "lease-1").unwrap_err();
-    assert!(elsewhere.contains("holds no secret there"), "{elsewhere}");
 
     // Roles in place: one PUT of their ids.
     let more = json!({"description": "backup",
@@ -344,23 +321,101 @@ fn a_user_has_an_s3_credential_whose_secret_is_held() {
         .apply(pb::Op::Create, USER, "other", "", doc.clone())
         .unwrap_err();
     assert!(again.contains("already exists with this key"), "{again}");
-    // Adopting one made elsewhere with no credential gives it one.
-    let found = lab.server.add_user("found");
-    lab.server.world.lock().unwrap().s3.remove(&found);
-    let adopted = lab
-        .apply(
-            pb::Op::Adopt,
-            USER,
-            "found",
-            &found.to_string(),
-            json!({"description": "found", "roles": ["objectstore_operator"]}),
-        )
-        .unwrap();
-    assert_eq!(lab.server.s3_credentials(found).len(), 1);
-    assert!(adopted.computed["s3_access_key"].is_string());
 
     lab.delete(USER, "backup", &u.remote);
     assert!(lab.read(USER, "backup", &u.remote).is_none());
+}
+
+const CREDENTIAL: &str = "ovh.s3_credential";
+
+/// An S3 credential is made for its user, with no body (the API refuses
+/// one): its access key is computed, its secret only a label, which every
+/// read answers the same (the API answers the secret to no read), and
+/// which Reveal reads from the API with the lease only. A user may have
+/// several, each its own object; a Create sent again is answered by the
+/// one it made; another user replaces it; a delete removes that one only.
+#[test]
+fn an_s3_credential_is_an_object_whose_secret_is_held() {
+    let lab = Lab::new();
+    let user = lab.server.add_user("backup");
+    let had = lab.server.s3_credentials(user);
+    let doc = json!({"user": user.to_string()});
+    let c = lab.create(CREDENTIAL, "backup", doc.clone());
+    let creds = lab.server.s3_credentials(user);
+    assert_eq!(creds.len(), had.len() + 1);
+    let (access, secret) = creds.last().unwrap();
+    assert_eq!(c.remote, format!("{user}/{access}"));
+    assert_eq!(c.attrs, doc);
+    assert_eq!(
+        c.computed,
+        json!({"id": c.remote, "access": access,
+               "secret": {"$secret": "ovh.s3_credential/backup#secret"}})
+    );
+    assert!(!format!("{c:?}").contains(secret.as_str()), "{c:?}");
+    // Read never has the secret, and answers its label all the same: no
+    // change, nothing empty.
+    let (attrs, computed) = lab.read(CREDENTIAL, "backup", &c.remote).unwrap();
+    assert_eq!((&attrs, &computed), (&c.attrs, &c.computed));
+    assert!(lab.plan(CREDENTIAL, (&attrs, &computed), &doc).0.is_empty());
+
+    // Reveal: this credential's secret, read from the API, with the
+    // lease only.
+    assert_eq!(
+        reveal(&lab, CREDENTIAL, &c.remote, "secret", "lease-1").unwrap(),
+        *secret
+    );
+    let no_lease = reveal(&lab, CREDENTIAL, &c.remote, "secret", "").unwrap_err();
+    assert!(
+        no_lease.contains("without the deployment's lease"),
+        "{no_lease}"
+    );
+    let elsewhere = reveal(&lab, CREDENTIAL, &c.remote, "access", "lease-1").unwrap_err();
+    assert!(elsewhere.contains("holds no secret there"), "{elsewhere}");
+    let user_s = reveal(&lab, USER, &user.to_string(), "secret", "lease-1").unwrap_err();
+    assert!(user_s.contains("holds no secret there"), "{user_s}");
+
+    // The same Create sent again: the one it made, not another.
+    let again = lab.create(CREDENTIAL, "backup", doc.clone());
+    assert_eq!(again.remote, c.remote);
+    assert_eq!(lab.server.s3_credentials(user).len(), had.len() + 1);
+    // Another credential of the user beside it.
+    let other = lab.create(CREDENTIAL, "other", doc.clone());
+    assert_ne!(other.remote, c.remote);
+    assert_eq!(lab.server.s3_credentials(user).len(), had.len() + 2);
+    // Another user replaces it, made first: the old one is left for
+    // what reads it to move off (two credentials share no key).
+    let (_, replaces) = lab.plan(
+        CREDENTIAL,
+        (&c.attrs, &c.computed),
+        &json!({"user": "100999"}),
+    );
+    assert!(replaces);
+    let second = lab.server.add_user("second");
+    let r = pb::ApplyRequest {
+        op: pb::Op::Replace as i32,
+        r#type: CREDENTIAL.into(),
+        name: "other".into(),
+        remote: other.remote.clone(),
+        config: Some(wire::doc(&json!({"user": second.to_string()}))),
+        idempotency_key: "replace-other".into(),
+        create_first: true,
+        ..Default::default()
+    };
+    let Ok(Reply::Apply(moved)) = lab.call(Call::Apply(r), &Mutex::default()) else {
+        panic!("the replacement is refused");
+    };
+    assert!(moved.remote.starts_with(&format!("{second}/")), "{moved:?}");
+    assert!(lab.read(CREDENTIAL, "other", &other.remote).is_some());
+    lab.delete(CREDENTIAL, "other", &moved.remote);
+
+    lab.delete(CREDENTIAL, "backup", &c.remote);
+    assert!(lab.read(CREDENTIAL, "backup", &c.remote).is_none());
+    assert_eq!(lab.server.s3_credentials(user).len(), had.len() + 1);
+    // Gone already is deleted; so is one whose user is gone.
+    lab.delete(CREDENTIAL, "backup", &c.remote);
+    lab.delete(USER, "backup", &user.to_string());
+    assert!(lab.read(CREDENTIAL, "other", &other.remote).is_none());
+    lab.delete(CREDENTIAL, "other", &other.remote);
 }
 
 const VOLUME: &str = "ovh.volume";
@@ -1095,8 +1150,9 @@ fn project(name: &str, program: &str) -> Scratch {
 }
 
 /// The program of R-157's done-when: a private network and its subnet, an
-/// instance on it, a volume attached to the instance, a user with S3
-/// credentials and a container it owns.
+/// instance on it, a volume attached to the instance, a user with an S3
+/// credential, a container it owns, and the credential's secret as an
+/// output.
 fn lab_program(server: &Server, image: &str) -> String {
     format!(
         r#"
@@ -1137,6 +1193,12 @@ resource ovh.cloud_project_user backup {{
   roles = ["objectstore_operator"]
 }}
 
+resource ovh.s3_credential backup_key {{
+  user = backup
+}}
+
+output backup_secret: secret(string) = backup_key.secret
+
 resource ovh.storage_container backups {{
   region = "BHS5"
   name = "lab-backups"
@@ -1151,8 +1213,9 @@ resource ovh.storage_container backups {{
 
 /// R-157's done-when: the program plans, applies against the fake API,
 /// and plans clean. The instance is on the private network, the volume
-/// attached to it, the container owned by the user, whose S3 secret is
-/// nowhere in dform's files; the volume's image, write-only, is kept as
+/// attached to it, the container owned by the user, whose credential's
+/// secret is nowhere in dform's files and is printed only by `output
+/// backup_secret --reveal`; the volume's image, write-only, is kept as
 /// its digest in state (R-106), and a new one replaces the volume. An
 /// empty program deletes them all, each after what refers to it.
 #[test]
@@ -1166,6 +1229,7 @@ fn a_program_with_every_type_plans_applies_and_plans_clean() {
         "+ ovh.instance server",
         "+ ovh.volume data",
         "+ ovh.cloud_project_user backup",
+        "+ ovh.s3_credential backup_key",
         "+ ovh.storage_container backups",
         "instance = server",
         "owner = backup",
@@ -1237,6 +1301,16 @@ fn a_program_with_every_type_plans_applies_and_plans_clean() {
     assert!(again.stdout.contains("is up to date"), "{}", again.stdout);
     let json = dform(&s, &server, &["plan", "main.df", "--json"]).success();
     assert!(!json.stdout.contains(&creds[0].1), "{}", json.stdout);
+    // The credential's secret, revealed by its own name: the API's.
+    let listed = dform(&s, &server, &["output", "main.df"]).success();
+    assert!(!listed.stdout.contains(&creds[0].1), "{}", listed.stdout);
+    let shown = dform(
+        &s,
+        &server,
+        &["output", "main.df", "backup_secret", "--reveal"],
+    )
+    .success();
+    assert_eq!(shown.stdout, creds[0].1);
 
     // Another image replaces the volume.
     s.write("main.df", &lab_program(&server, "Ubuntu 24.04"));

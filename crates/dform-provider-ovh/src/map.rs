@@ -305,11 +305,8 @@ pub fn container(o: &Json) -> (Json, Json) {
     (attrs, computed)
 }
 
-/// A user (`cloud.user.User`) and the access key of its first S3
-/// credential, if it has one. Its roles are their names, sorted; its S3
-/// secret is never here: where the credential exists, `s3_secret_key` is
-/// `true`, which the provider answers as the secret's label.
-pub fn user(o: &Json, access: Option<&str>) -> (Json, Json) {
+/// A user (`cloud.user.User`). Its roles are their names, sorted.
+pub fn user(o: &Json) -> (Json, Json) {
     let mut roles: Vec<&str> = o
         .get("roles")
         .and_then(Json::as_array)
@@ -324,16 +321,35 @@ pub fn user(o: &Json, access: Option<&str>) -> (Json, Json) {
         "roles": roles,
     });
     let id = o.get("id").and_then(Json::as_i64).unwrap_or(0);
-    let mut computed = json!({
+    let computed = json!({
         "id": id.to_string(),
         "username": str_of(o, "username").unwrap_or_default(),
         "status": str_of(o, "status").unwrap_or_default(),
-        "s3_access_key": access,
     });
-    if access.is_some() {
-        computed["s3_secret_key"] = json!(true);
-    }
     (attrs, computed)
+}
+
+/// An S3 credential's remote id: its user's id and its access key.
+pub fn s3_credential_remote(user: &str, access: &str) -> String {
+    format!("{user}/{access}")
+}
+
+/// The user's id and the access key in an S3 credential's remote id.
+pub fn s3_credential_parts(remote: &str) -> (&str, &str) {
+    remote.split_once('/').unwrap_or((remote, ""))
+}
+
+/// An S3 credential (`cloud.user.S3Credentials`) of the user `user`. Its
+/// secret is never here (no read answers it): `secret` is `true`, which
+/// the provider answers as the secret's label, and Reveal asks the API.
+pub fn s3_credential(user: &str, o: &Json) -> (Json, Json) {
+    let access = str_of(o, "access").unwrap_or_default();
+    let computed = json!({
+        "id": s3_credential_remote(user, access),
+        "access": access,
+        "secret": true,
+    });
+    (json!({"user": user}), computed)
 }
 
 /// A volume (`cloud.volume.Volume`): its size in GiB, as the schema's
@@ -788,8 +804,8 @@ mod tests {
     }
 
     #[test]
-    fn a_user_and_its_s3_credential() {
-        let (attrs, computed) = user(&fixture("user.json"), Some("AKIA0EXAMPLE"));
+    fn a_user() {
+        let (attrs, computed) = user(&fixture("user.json"));
         assert_eq!(
             attrs,
             json!({"description": "backup",
@@ -797,13 +813,25 @@ mod tests {
         );
         assert_eq!(
             computed,
-            json!({"id": "482913", "username": "user-Xk3pQ9", "status": "ok",
-                   "s3_access_key": "AKIA0EXAMPLE", "s3_secret_key": true})
+            json!({"id": "482913", "username": "user-Xk3pQ9", "status": "ok"})
         );
-        // No credential: no secret, and the access key is null.
-        let (_, none) = user(&fixture("user.json"), None);
-        assert_eq!(none["s3_access_key"], Json::Null);
-        assert_eq!(none.get("s3_secret_key"), None);
+    }
+
+    /// A credential is its user's and its access key; the secret is the
+    /// marker the provider answers as its label, whatever the read had.
+    #[test]
+    fn an_s3_credential() {
+        let (attrs, computed) = s3_credential("482913", &fixture("s3-credential.json"));
+        assert_eq!(attrs, json!({"user": "482913"}));
+        assert_eq!(
+            computed,
+            json!({"id": "482913/0123456789abcdef0123456789abcdef",
+                   "access": "0123456789abcdef0123456789abcdef", "secret": true})
+        );
+        assert_eq!(
+            s3_credential_parts(computed["id"].as_str().unwrap()),
+            ("482913", "0123456789abcdef0123456789abcdef")
+        );
     }
 
     #[test]

@@ -175,25 +175,26 @@ fn a_call_that_takes_no_body_refuses_one_with_the_apis_400() {
     }
 }
 
-/// The provider sends no body where the API takes none: a user's S3
-/// credential made, its secret revealed, a zone refreshed after a
-/// record is written.
+/// The provider sends no body where the API takes none: an S3
+/// credential made, its secret revealed, a zone refreshed after a record
+/// is written.
 #[test]
 fn the_provider_sends_no_body_where_the_api_takes_none() {
     let (server, _) = world();
     let ovh = provider(&server);
+    let user = server.add_user("backup");
     let made = apply(
         &ovh,
         pb::Op::Create,
-        "ovh.cloud_project_user",
+        "ovh.s3_credential",
         "",
-        &json!({"description": "backup", "roles": ["objectstore_operator"]}),
+        &json!({"user": user.to_string()}),
     );
     let reveal = pb::RevealRequest {
         held: Some(pb::Held {
-            r#type: "ovh.cloud_project_user".into(),
+            r#type: "ovh.s3_credential".into(),
             remote: made.remote.clone(),
-            path: "s3_secret_key".into(),
+            path: "secret".into(),
             ..Default::default()
         }),
         lease: "lease".into(),

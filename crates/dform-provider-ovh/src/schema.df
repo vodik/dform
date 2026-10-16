@@ -2,8 +2,10 @@
 # Cloud instances, SSH keys, S3 containers, users, volumes and private
 # networks of one project, and DNS records of a zone. Each type is an
 # object the API gives an identity; a relationship whose state lives on
-# another object (a volume's attachment, an instance's networks, a user's
-# S3 credentials) is an attribute of that object.
+# another object (a volume's attachment, an instance's networks) is an
+# attribute of that object, by the folding rule (docs/grammar.md). A
+# user's S3 credentials are not: each is named on its own (a secret to
+# reveal, a key to rotate), so each is an object, `ovh.s3_credential`.
 #
 #   type_attr(Type, Path, Ty, Flags).   Flags: required computed id sensitive
 #                                       nullable optional_computed force_new
@@ -113,8 +115,8 @@ type_lookup("ovh.storage_container", ["region", "name"])
 
 # A user is found by its description (the API makes up its username),
 # which no call this provider knows changes (not verified against the
-# API); its roles change in place. Its S3 secret is held: the API keeps
-# it, and Reveal reads it there.
+# API); its roles change in place. Its S3 credentials are
+# `ovh.s3_credential`.
 type_provider("ovh.cloud_project_user", "ovh")
 type_attr("ovh.cloud_project_user", "id", "string", ["computed", "id"])
 type_attr("ovh.cloud_project_user", "description", "string", ["required", "force_new"])
@@ -126,10 +128,23 @@ type_attr(
 )
 type_attr("ovh.cloud_project_user", "username", "string", ["computed"])
 type_attr("ovh.cloud_project_user", "status", "string", ["computed"])
-type_attr("ovh.cloud_project_user", "s3_access_key", "string", ["computed", "nullable"])
-type_attr("ovh.cloud_project_user", "s3_secret_key", "string", ["computed", "sensitive"])
 type_replace("ovh.cloud_project_user", "destroy_first")
 type_lookup("ovh.cloud_project_user", ["description"])
+
+# An S3 credential of a user, its remote id `USER/ACCESS`: the API makes
+# its access key, and nothing of it changes in place. Its secret is held:
+# the API answers it to the create and to a call of its own (`POST
+# …/secret`), never to a read, and Reveal reads it there. Nothing of the
+# program's names a credential, so it has no `type_lookup`: a Create sent
+# again is answered by what this provider made under its key. Two
+# credentials of a user live side by side, so a replacement is made
+# first, and what reads the old one moves before it goes.
+type_provider("ovh.s3_credential", "ovh")
+type_attr("ovh.s3_credential", "id", "string", ["computed", "id"])
+type_attr("ovh.s3_credential", "user", "ref(ovh.cloud_project_user)", ["required", "force_new"])
+type_attr("ovh.s3_credential", "access", "string", ["computed"])
+type_attr("ovh.s3_credential", "secret", "string", ["computed", "sensitive"])
+type_replace("ovh.s3_credential", "create_first")
 
 # A volume is found by its name in its region; it grows in place (a smaller
 # size replaces it, which Plan says), its name, description and instance
@@ -289,7 +304,7 @@ type_doc(
 type_doc(
   "ovh.cloud_project_user",
   "",
-  "An OpenStack user of the project, with an S3 credential (the API's `/user`).",
+  "An OpenStack user of the project (the API's `/user`); its S3 credentials are `ovh.s3_credential`.",
 )
 type_doc(
   "ovh.cloud_project_user",
@@ -308,14 +323,20 @@ type_doc(
   "`ok` once it can be used; `creating` while it is made.",
 )
 type_doc(
-  "ovh.cloud_project_user",
-  "s3_access_key",
-  "The access key of its S3 credential, made with the user.",
+  "ovh.s3_credential",
+  "",
+  "An S3 credential of a user (the API's `/user/{id}/s3Credentials`): an access key and its secret.",
 )
 type_doc(
-  "ovh.cloud_project_user",
-  "s3_secret_key",
-  "The S3 credential's secret. The API keeps it; dform has only its label, and a provider configured with it reads it from the API.",
+  "ovh.s3_credential",
+  "user",
+  "The user it is a credential of (`user = backup`). Changing it replaces the credential.",
+)
+type_doc("ovh.s3_credential", "access", "Its access key, which the API makes.")
+type_doc(
+  "ovh.s3_credential",
+  "secret",
+  "Its secret. The API keeps it and answers it to no read; dform has only its label, and a provider configured with it, or `dform output NAME --reveal`, has it revealed from the API.",
 )
 type_doc("ovh.volume", "", "A block storage volume of the project (the API's `/volume`).")
 type_doc(

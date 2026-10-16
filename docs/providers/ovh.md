@@ -2,7 +2,7 @@
 
 `dform-provider-ovh` manages the Public Cloud of one OVH project
 (instances, SSH keys, block volumes, private networks and their subnets,
-users with S3 credentials, S3 containers) and the records of DNS zones OVH
+users and their S3 credentials, S3 containers) and the records of DNS zones OVH
 hosts, over the OVH API (`/cloud/project/{serviceName}/...`,
 `/domain/zone/{zone}/record`). It is a native provider: dform starts it
 and speaks the plugin protocol to it.
@@ -123,8 +123,9 @@ it, and an update goes to it. An attribute replaces the object only
 where the API cannot change it on its id. A relationship whose
 state the API keeps on another object is an attribute of that object, not
 a type of its own: a volume's attachment is the volume's `instance`, an
-instance's private networks its `networks`, a user's S3 credential its
-`s3_access_key` and `s3_secret_key`.
+instance's private networks its `networks`. A user's S3 credentials are
+not: each has a secret to reveal and a key to rotate on its own, so each
+is an object, `ovh.s3_credential`.
 
 The last column is what a Create that timed out is found by (the
 schema's `type_lookup`, see "What a Create that does not answer does").
@@ -137,6 +138,7 @@ schema's `type_lookup`, see "What a Create that does not answer does").
 | `ovh.network`               | `/cloud/project/{p}/network/private/{id}`               | name                    |
 | `ovh.subnet`                | `/cloud/project/{p}/network/private/{id}/subnet/{id}`   | network, region, range  |
 | `ovh.cloud_project_user`    | `/cloud/project/{p}/user/{id}`                          | description             |
+| `ovh.s3_credential`         | `/cloud/project/{p}/user/{id}/s3Credentials/{access}`   | (made under its key)    |
 | `ovh.storage_container`     | `/cloud/project/{p}/region/{r}/storage/{name}`          | region, name            |
 | `ovh.domain_record`         | `/domain/zone/{zone}/record/{id}`                       | zone, subdomain, type, target |
 
@@ -295,15 +297,48 @@ plan. `start` and `end` are not attributes: Plan refuses them naming
 (what it is found by: the API makes up its username; no call to change
 it is known, so it replaces) and `roles` (a set of
 the API's role names, `objectstore_operator`, `compute_operator`, ...;
-changes in place); computed `username`, `status` (`creating`, then `ok`),
-`s3_access_key` and `s3_secret_key`. Each user is given an S3 credential
-when it is made. The secret is sensitive and held by the provider: the
-API keeps it, Read and Apply answer only its label, and a provider
-configured with it (`secret_key = backup.s3_secret_key` in its `use`
-block, or another stack's output of it) gets the bytes by the protocol's
-Reveal, which reads them from the API; dform never has them. The API
-makes the user's OpenStack password and answers it once, when the user is
-made: the provider drops it, and it is not an attribute.
+changes in place); computed `username` and `status` (`creating`, then
+`ok`). The API makes the user's OpenStack password and answers it once,
+when the user is made: the provider drops it, and it is not an attribute.
+
+`ovh.s3_credential`: an S3 credential of a user, `user = backup` (the
+user; another one replaces it); computed `access`, the access key the
+API makes, and `secret`. A user has as many as the program writes, each
+revealed by its own name; its remote id is `USER/ACCESS`. The secret is
+sensitive and held by the provider: the API answers it to the create and
+to a call of its own (`POST …/s3Credentials/{access}/secret`), never to a
+read, so Read and Apply answer only its label, the same every time (no
+change, never empty), and a provider configured with it (`secret_key =
+backup_key.secret` in its `use` block, or another stack's output of it)
+or `dform output TARGET NAME --reveal` of an output of it gets the bytes
+by the protocol's Reveal, which asks the API; dform never keeps them.
+Nothing of a credential changes in place. A replacement is made before
+the old one goes (`type_replace` `create_first`), so what reads it moves
+first; to rotate a key, write another credential, move what reads it,
+then remove the first.
+
+```dform
+resource ovh.cloud_project_user backup {
+  description = "backups"
+  roles = ["objectstore_operator"]
+}
+
+resource ovh.s3_credential backup_key {
+  user = backup
+}
+
+output backup_secret: secret(string) = backup_key.secret
+```
+
+Until 2026-10-15 a user was made with one S3 credential, its
+`s3_access_key` and `s3_secret_key`. Those attributes are gone: a program
+that read them writes the credential (above) and reads
+`backup_key.access` and `backup_key.secret` instead. The credential the
+user was made with is still there; to keep it rather than make another,
+adopt it by its remote id, the user's id and the access key state has
+for it (`adopt(backup_key, "482913/0123…")`); otherwise the apply makes a
+new one, and the old one is removed in the OVH control panel once nothing
+uses it.
 
 `ovh.storage_container`: an S3 container of a region
 (`/region/{r}/storage`; the older Swift containers of `/storage` are not
@@ -377,12 +412,17 @@ OVH's create calls are not idempotent. A Create first looks for an object
 of its content, what the table above says it is found by (the schema's
 `type_lookup`; not its identity, and not what replaces it): one
 this provider process made for the
-same idempotency key is the answer, brought to the document (a user's S3
-credential made, a volume attached; an instance owns the port on each
-network it was made with, as its Create would have answered); another
-is refused, to be adopted
+same idempotency key is the answer, brought to the document (a user's
+roles set, a volume attached; an instance owns the port on each network
+it was made with, as its Create would have answered); another is
+refused, to be adopted
 (`adopt(r, ID)`) or renamed. `provider.created` answers by the same key,
-so a Create dform gave up waiting for is adopted, not made twice. A 429 or
+so a Create dform gave up waiting for is adopted, not made twice. An S3
+credential has nothing of the program's to be found by (the API makes
+its access key): a Create sent again is answered by the one this
+provider process made under its key, once the API has answered it; one
+whose answer was lost is made again, and the first is left on the user,
+unused, for the control panel. A 429 or
 5xx answer is sent again with backoff (`[providers.ovh] retries`,
 `backoff`).
 

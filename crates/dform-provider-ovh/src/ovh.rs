@@ -11,9 +11,10 @@
 //!
 //! Remote ids: an instance's, an SSH key's, a volume's, a private
 //! network's and a user's are the API's ids; a DNS record's is `ZONE/ID`,
-//! a subnet's `NETWORK/ID`, an S3 container's `REGION/NAME`. Each type is
-//! its module below (`instance`, `ssh_key`, `record`, `storage`, `user`,
-//! `volume`, `network`), what a region offers `catalog`, the protocol
+//! a subnet's `NETWORK/ID`, an S3 container's `REGION/NAME`, an S3
+//! credential's `USER/ACCESS`. Each type is its module below (`instance`,
+//! `ssh_key`, `record`, `storage`, `user`, `s3_credential`, `volume`,
+//! `network`), what a region offers `catalog`, the protocol
 //! `handler`, an object's health `health`; this file dispatches to them.
 //! Plan diffs locally (`provider::diff`), and an
 //! instance's flavor and image are checked against what its region offers.
@@ -50,6 +51,7 @@ mod health;
 mod instance;
 mod network;
 mod record;
+mod s3_credential;
 mod ssh_key;
 mod storage;
 mod user;
@@ -62,6 +64,7 @@ pub const SSH_KEY: &str = "ovh.ssh_key";
 pub const RECORD: &str = "ovh.domain_record";
 pub const CONTAINER: &str = "ovh.storage_container";
 pub const USER: &str = "ovh.cloud_project_user";
+pub const S3_CREDENTIAL: &str = "ovh.s3_credential";
 pub const VOLUME: &str = "ovh.volume";
 pub const NETWORK: &str = "ovh.network";
 pub const SUBNET: &str = "ovh.subnet";
@@ -549,6 +552,10 @@ impl Ovh {
                 let (a, p) = self.project(&at)?;
                 self.read_user(&a, &p, remote)?
             }
+            S3_CREDENTIAL => {
+                let (a, p) = self.project(&at)?;
+                self.read_s3_credential(&a, &p, remote)?
+            }
             VOLUME => {
                 let (a, p) = self.project(&at)?;
                 self.read_volume(&a, &p, remote)?.map(|o| map::volume(&o))
@@ -770,13 +777,14 @@ impl Ovh {
     ) -> std::result::Result<(String, Json, Json), Failed> {
         let (typ, key) = (r.r#type.as_str(), r.idempotency_key.as_str());
         // The key is the name: the old object goes first unless the
-        // replacement has another key.
+        // replacement has another key, or its type has none (two S3
+        // credentials of a user are two objects).
         let old = self
             .read(typ, &r.remote, &r.name, None)
             .map_err(|e| refused(at, format!("{e:#}")))?;
-        let same = old
-            .as_ref()
-            .is_none_or(|(attrs, _)| self.key_of(typ, attrs) == self.key_of(typ, config));
+        let same = old.as_ref().is_none_or(|(attrs, _)| {
+            self.lookups.contains_key(typ) && self.key_of(typ, attrs) == self.key_of(typ, config)
+        });
         if r.create_first && same {
             notes.push(format!(
                 "{at}: the replacement has the old object's key, so the old one goes first"
@@ -828,6 +836,7 @@ impl Ovh {
             RECORD => self.find_record(k("zone"), k("type"), k("subdomain"), k("target"))?,
             CONTAINER => self.find_container(k("region"), k("name"))?,
             USER => self.find_user(k("description"))?,
+            S3_CREDENTIAL => self.find_s3_credential(k("user"), k("access"))?,
             VOLUME => self.find_volume(k("name"), k("region"))?,
             NETWORK => self.find_network(k("name"))?,
             SUBNET => self.find_subnet(k("network"), k("region"), k("range"))?,
@@ -859,6 +868,18 @@ impl Ovh {
         notes: &mut Vec<String>,
         say: Say,
     ) -> std::result::Result<(String, Json, Json), Failed> {
+        // Nothing of the program's names an S3 credential (the API makes
+        // its access key): a Create sent again is answered by the one this
+        // process made under the key, if it was answered.
+        if typ == S3_CREDENTIAL {
+            if let Some(remote) = self
+                .created(key)
+                .map_err(|e| refused(at, format!("{e:#}")))?
+            {
+                return self.update(typ, at, &remote, config, None, notes, say);
+            }
+            return self.create_s3_credential(at, config, key);
+        }
         let made = self
             .key_of(typ, config)
             .ok_or_else(|| refused(at, "its key (what names it in the account) is not known"))?;
@@ -871,7 +892,7 @@ impl Ovh {
             .map_err(|e| refused(at, format!("{e:#}")))?
         {
             // The same Create again: what it made, brought to the
-            // document (a user's S3 credential, a volume's attachment),
+            // document (a user's roles, a volume's attachment),
             // owning what it was made with (an instance's ports).
             if ours {
                 let prior = match typ {
@@ -949,10 +970,11 @@ impl Ovh {
             }
             RECORD => self.update_record(at, remote, &now, config)?,
             CONTAINER => self.update_container(at, remote, &now.1, config)?,
-            USER => self.update_user(at, remote, &now, config)?,
+            USER => self.update_user(at, remote, &now.0, config)?,
             VOLUME => self.update_volume(at, remote, config, notes, say)?,
             NETWORK => self.update_network(at, remote, &now, config, notes, say)?,
-            // Nothing of an SSH key changes in place (the schema replaces it).
+            // Nothing of an SSH key or an S3 credential changes in place
+            // (the schema replaces it).
             _ => {}
         }
         let (attrs, computed) = self.read_made(typ, at, remote, Some(&prior))?;
@@ -973,6 +995,7 @@ impl Ovh {
             RECORD => self.delete_record(at, remote, notes)?,
             CONTAINER => self.delete_container(at, remote, notes, say)?,
             USER => self.delete_user(at, remote, notes, say)?,
+            S3_CREDENTIAL => self.delete_s3_credential(at, remote, notes, say)?,
             VOLUME => self.delete_volume(at, remote, notes, say)?,
             NETWORK => self.delete_network(at, remote, notes, say)?,
             SUBNET => self.delete_subnet(at, remote, notes, say)?,
@@ -982,7 +1005,7 @@ impl Ovh {
     }
 
     /// A computed document as it leaves the provider: each sensitive
-    /// value (a user's S3 secret) is its label, `{"$secret": "T/N#P"}`;
+    /// value (an S3 credential's secret) is its label, `{"$secret": "T/N#P"}`;
     /// the value stays with the API, and Reveal reads it there.
     fn outward(&self, typ: &str, name: &str, computed: &Json) -> Json {
         let mut out = computed.clone();
@@ -1222,13 +1245,15 @@ fn resolve_listed(client: &Client, given: &str) -> Result<String> {
 mod tests {
     use super::*;
 
-    /// Every type has a lookup, of its own attributes; a Create of a
-    /// record is found by its content, the apex's subdomain empty.
+    /// Every type but the S3 credential (which nothing of the program's
+    /// names) has a lookup, of its own attributes; a Create of a record
+    /// is found by its content, the apex's subdomain empty.
     #[test]
     fn each_type_is_found_by_its_lookup() {
         let ovh = Ovh::new();
         for typ in ovh.schema.provider_of.keys() {
-            assert!(ovh.lookups.contains_key(typ), "{typ} has no type_lookup");
+            let has = ovh.lookups.contains_key(typ);
+            assert_eq!(has, typ != S3_CREDENTIAL, "{typ}: type_lookup");
         }
         let doc = json!({"zone": "example.com", "type": "A", "target": "10.0.0.1", "ttl": 60});
         let made = ovh.key_of(RECORD, &doc).unwrap();
