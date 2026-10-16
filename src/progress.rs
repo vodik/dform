@@ -25,7 +25,7 @@ pub use dform_core::progress::*;
 use crossterm::{QueueableCommand, cursor, terminal};
 use dform_core::address::Address;
 use dform_core::interrupt;
-use dform_core::report::progress::{Block, State, took};
+use dform_core::report::progress::{Block, Change, State, took};
 use dform_core::report::{Failure, Style};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -78,13 +78,13 @@ impl Mode {
 #[derive(Debug, Clone)]
 pub enum Event {
     /// A change's call was submitted.
-    Started(Address),
+    Started(Change),
     /// The provider said a status word for a change's call (R-130).
-    Status(Address, String),
+    Status(Change, String),
     /// A change's call answered.
-    Done(Address),
+    Done(Change),
     /// A change's call failed, as it may be printed.
-    Failed(Address, Failure),
+    Failed(Change, Failure),
     /// A line said while the block is drawn: a retry, a stop asked for,
     /// a `DFORM_LOG=debug` line.
     Note(String),
@@ -144,8 +144,13 @@ pub struct Printer {
     /// When each change's line was last printed, or its call started
     /// (`Lines`): its heartbeat's clock.
     said: Vec<Instant>,
-    /// The headers printed (`Lines`): each once, before its first change.
+    /// The headers printed (`Lines`): each once, before its first change
+    /// of its part's run of lines.
     headers: Vec<usize>,
+    /// The part of the last change printed (`Lines`): a line of another
+    /// says its headers again (a tree's tick, its deployments' lines
+    /// interleaved).
+    part: Option<usize>,
     beat: Duration,
     /// Lines to print once, above the block (on a terminal, at its next
     /// draw).
@@ -223,6 +228,7 @@ impl Printer {
             drew: at,
             said: vec![at; n],
             headers: Vec::new(),
+            part: None,
             beat: BEAT,
             notes: Vec::new(),
             now: at,
@@ -247,9 +253,9 @@ impl Printer {
     }
 
     /// The changes that failed, in the order they failed.
-    pub fn failed(&self) -> Vec<Address> {
+    pub fn failed(&self) -> Vec<Change> {
         match &self.board {
-            Board::Tick(b) => b.errors.iter().map(|(a, _)| a.clone()).collect(),
+            Board::Tick(b) => b.errors.iter().map(|(c, _)| c.clone()).collect(),
             Board::Wait { .. } => Vec::new(),
         }
     }
@@ -273,28 +279,28 @@ impl Printer {
         let Board::Tick(b) = &mut self.board else {
             return;
         };
-        let (addr, answered) = match &e {
-            Event::Started(a) => {
-                b.start(a, at);
-                (a, false)
+        let (change, answered) = match &e {
+            Event::Started(c) => {
+                b.start(c.clone(), at);
+                (c, false)
             }
-            Event::Status(a, status) => {
-                if let Some(x) = b.entries.iter_mut().find(|x| x.addr == *a) {
-                    x.status = Some(status.clone());
+            Event::Status(c, status) => {
+                if let Some(i) = b.index(c) {
+                    b.entries[i].status = Some(status.clone());
                 }
-                (a, false)
+                (c, false)
             }
-            Event::Done(a) => {
-                b.done(a, at);
-                (a, true)
+            Event::Done(c) => {
+                b.done(c.clone(), at);
+                (c, true)
             }
-            Event::Failed(a, f) => {
-                b.fail(a, f.clone(), at);
-                (a, true)
+            Event::Failed(c, f) => {
+                b.fail(c.clone(), f.clone(), at);
+                (c, true)
             }
             _ => return,
         };
-        let Some(i) = b.entries.iter().position(|x| x.addr == *addr) else {
+        let Some(i) = b.index(change) else {
             return;
         };
         match self.mode {
@@ -419,6 +425,10 @@ impl Printer {
     /// is under not said yet.
     fn say(&mut self, i: usize, out: &mut dyn Write) {
         if let Board::Tick(b) = &self.board {
+            let part = b.entries[i].part;
+            if self.part.replace(part).is_some_and(|p| p != part) {
+                self.headers.clear();
+            }
             for l in b.line(i, self.style, &mut self.headers) {
                 let _ = writeln!(out, "{l}");
             }
@@ -494,18 +504,24 @@ impl Progress {
         }
     }
 
-    /// The executor's event `e`; `redact` says an error or a word as it
-    /// may be printed.
-    pub fn event(&self, e: &dform_core::executor::Event, redact: &dyn Fn(&str) -> String) {
+    /// The executor's event `e` of the block's part `part`; `redact` says
+    /// an error or a word as it may be printed.
+    pub fn event(
+        &self,
+        part: usize,
+        e: &dform_core::executor::Event,
+        redact: &dyn Fn(&str) -> String,
+    ) {
         use dform_core::executor::Event as E;
+        let change = |a: &Address| Change::from((part, a));
         let e = match e {
-            E::Started(a) => Event::Started((*a).clone()),
-            E::Finished(a) => Event::Done((*a).clone()),
-            E::Failed(a, err) => Event::Failed((*a).clone(), failure(a, err, redact)),
+            E::Started(a) => Event::Started(change(a)),
+            E::Finished(a) => Event::Done(change(a)),
+            E::Failed(a, err) => Event::Failed(change(a), failure(a, err, redact)),
             // The provider's status word, beside the change as it says it
             // (R-130); an event with none changes nothing shown.
             E::Progress(a, e) => match &e.status {
-                Some(status) => Event::Status((*a).clone(), redact(status)),
+                Some(status) => Event::Status(change(a), redact(status)),
                 None => return,
             },
         };
@@ -515,7 +531,7 @@ impl Progress {
     /// The tick ended: a stop asked for since the clock last looked is
     /// said first; then the block as it ended. The failed changes, in the
     /// order they failed.
-    pub fn finish(mut self) -> Vec<Address> {
+    pub fn finish(mut self) -> Vec<Change> {
         self.halt();
         say_stop(&self.printer, &self.stopping);
         let interrupted = interrupt::requested().is_some();

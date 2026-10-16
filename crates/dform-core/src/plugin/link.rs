@@ -43,8 +43,9 @@ pub struct Link {
     policy: Policy,
     /// Answers taken while waiting for another call.
     done: BTreeMap<Ticket, Result<Reply, CallError>>,
-    /// The retries since they were last taken ([`Link::take_retries`]).
-    retries: Vec<Retry>,
+    /// The retries since they were last taken, each of the session its
+    /// call was made in ([`Link::take_retries`]).
+    retries: Vec<(Session, Retry)>,
     /// Events of calls in flight taken while waiting for another call.
     events: Vec<(Ticket, pb::Event)>,
     /// The provider's types under the name a `use .. as` gives it
@@ -172,15 +173,21 @@ impl Link {
         self.policy
     }
 
-    /// Record a retry of a call to this provider, and say so on stderr.
-    pub fn retried(&mut self, r: Retry) {
+    /// Record a retry of a call to this provider made in `session`, and
+    /// say so on stderr.
+    pub fn retried(&mut self, session: Session, r: Retry) {
         crate::progress::line(&r.line());
-        self.retries.push(r);
+        self.retries.push((session, r));
     }
 
-    /// The retries since the last time they were taken.
-    pub fn take_retries(&mut self) -> Vec<Retry> {
-        std::mem::take(&mut self.retries)
+    /// The retries of `session`'s calls since the last time they were
+    /// taken: a tree's deployments share the link, each its session.
+    pub fn take_retries(&mut self, session: Session) -> Vec<Retry> {
+        let (mine, others) = std::mem::take(&mut self.retries)
+            .into_iter()
+            .partition(|(s, _)| *s == session);
+        self.retries = others;
+        mine.into_iter().map(|(_, r)| r).collect()
     }
 
     pub fn has(&self, capability: &str) -> bool {
@@ -347,19 +354,22 @@ impl Link {
                 return Err(gave_up(e, self.policy.retries));
             }
             let delay = self.policy.delay(attempt);
-            self.retried(Retry {
-                provider: self.name_or_program().to_string(),
-                call: policy::describe(&call),
-                attempt,
-                of: self.policy.retries,
-                delay,
-                // The provider's own naming of the resource as the plan
-                // prints it (R-109).
-                error: match policy::address_of(&call) {
-                    Some(a) => crate::report::said_of(&a, &e.to_string()),
-                    None => e.to_string(),
+            self.retried(
+                session,
+                Retry {
+                    provider: self.name_or_program().to_string(),
+                    call: policy::describe(&call),
+                    attempt,
+                    of: self.policy.retries,
+                    delay,
+                    // The provider's own naming of the resource as the plan
+                    // prints it (R-109).
+                    error: match policy::address_of(&call) {
+                        Some(a) => crate::report::said_of(&a, &e.to_string()),
+                        None => e.to_string(),
+                    },
                 },
-            });
+            );
             std::thread::sleep(delay);
         }
     }
@@ -518,7 +528,7 @@ mod tests {
         let mut l = link(2);
         let r: Result<pb::ReadResponse, _> = l.try_call(Session(1), pb::ReadRequest::default());
         assert!(r.is_ok(), "{r:?}");
-        let retries = l.take_retries();
+        let retries = l.take_retries(Session(1));
         assert_eq!(retries.len(), 2);
         assert_eq!((retries[1].attempt, retries[1].of), (2, 2));
         assert_eq!(retries[1].call, "Read");

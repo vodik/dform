@@ -1767,7 +1767,8 @@ impl Providers {
     pub fn take_retries(&self) -> Vec<Retry> {
         self.links
             .iter()
-            .flat_map(|l| l.borrow_mut().take_retries())
+            .zip(&self.sessions)
+            .flat_map(|(l, s)| l.borrow_mut().take_retries(*s))
             .collect()
     }
 
@@ -3251,15 +3252,15 @@ impl Providers {
             .unwrap_or(NullClass::Open)
     }
 
-    /// Open one tick for the executor's per-action Apply calls
-    /// (`executor::run_tick`).
-    pub fn begin_tick<'a>(
+    /// These providers' part of a tick ([`Tick`]): the executor's
+    /// per-action Apply calls of the deployment (`executor::run_tick`).
+    pub fn tick_part<'a>(
         &'a self,
         desired: &'a [Resource],
         adopts: &[Adopt],
         lifecycle: &'a Lifecycle,
-    ) -> Result<Tick<'a>> {
-        Ok(Tick {
+    ) -> Part<'a> {
+        Part {
             lifecycle,
             cloud: self,
             world: None,
@@ -3269,8 +3270,7 @@ impl Providers {
             timeline: Vec::new(),
             returned: BTreeMap::new(),
             elapsed: BTreeMap::new(),
-            in_flight: Vec::new(),
-        })
+        }
     }
 }
 
@@ -3311,11 +3311,10 @@ impl Ctx<'_> {
     }
 }
 
-/// One tick, open for Apply calls. The executor decides the order; each
-/// call is one provider Apply, submitted (`submit`) and answered later
-/// (`next_completed`), and what it returns is the tick's view of the world
-/// for the calls submitted after it.
-pub struct Tick<'a> {
+/// One deployment's part of a tick ([`Tick`]): its providers, what its
+/// plan wants, and the world its Apply calls change, as the tick's view
+/// of it for the calls submitted after each answer.
+pub struct Part<'a> {
     cloud: &'a Providers,
     lifecycle: &'a Lifecycle,
     /// The refresh the tick starts from, overlaid with what its calls
@@ -3332,12 +3331,41 @@ pub struct Tick<'a> {
     returned: BTreeMap<Address, Option<Json>>,
     /// How long each call took on its provider's clock.
     elapsed: BTreeMap<Address, u64>,
+}
+
+/// One tick, open for Apply calls: the parts of the deployments it
+/// applies (a deployment's apply has one; a tree's, one each), and their
+/// calls in flight together. The executor decides the order; each call
+/// is one provider Apply, submitted (`submit`) and answered later
+/// (`next_answer`, then `answered`), and what it returns is its part's
+/// view of the world for the calls submitted after it. The parts' calls
+/// share a link where their deployments share a provider (a tree's pool):
+/// each names its deployment's session, and an answer goes back to its
+/// part by its link and ticket.
+pub struct Tick<'a> {
+    parts: Vec<Part<'a>>,
     /// The Apply calls in flight, in the order they were submitted.
     in_flight: Vec<InFlight>,
 }
 
+/// An Apply call's answer, taken ([`Tick::next_answer`]) and not yet
+/// recorded ([`Tick::answered`]).
+pub struct Answer {
+    f: InFlight,
+    answer: Result<Reply, CallError>,
+}
+
+impl Answer {
+    /// The part whose call it answers.
+    pub fn part(&self) -> usize {
+        self.f.part
+    }
+}
+
 /// One submitted Apply call, and what its answer is recorded against.
 struct InFlight {
+    /// The part it is of.
+    part: usize,
     /// The executor's name for the call.
     id: usize,
     link: usize,
@@ -4091,14 +4119,151 @@ fn unrevealed(addr: &Address, path: &str, label: &str, e: &anyhow::Error) -> any
     )
 }
 
-impl Tick<'_> {
-    /// Submit the Apply call for `a`, as the executor's call `id`. Returns
-    /// whether a call is in flight; an action that needs none (the delete
-    /// of an object state no longer maps) is answered at once.
-    pub fn submit(&mut self, id: usize, a: &Action, state: &mut State) -> Result<bool> {
+impl<'a> Tick<'a> {
+    /// A tick of `parts`, none of their calls made yet.
+    pub fn new(parts: Vec<Part<'a>>) -> Tick<'a> {
+        Tick {
+            parts,
+            in_flight: Vec::new(),
+        }
+    }
+
+    /// Submit the Apply call for `a` of part `part`, as the executor's
+    /// call `id`. Returns whether a call is in flight; an action that
+    /// needs none (the delete of an object state no longer maps) is
+    /// answered at once.
+    pub fn submit(
+        &mut self,
+        part: usize,
+        id: usize,
+        a: &Action,
+        state: &mut State,
+    ) -> Result<bool> {
+        let call = self.parts[part].submit((part, id), a, state)?;
+        let sent = call.is_some();
+        self.in_flight.extend(call);
+        Ok(sent)
+    }
+
+    pub fn busy(&self) -> bool {
+        !self.in_flight.is_empty()
+    }
+
+    /// The next answered Apply call, of whichever part: an answer a link
+    /// already holds comes first; else the link of the oldest call in
+    /// flight is waited on. A call that failed in a way worth trying
+    /// again is sent again ([`Part::again`]) and waited on with the
+    /// rest. What a call in flight says meanwhile goes to `events` with
+    /// its part and its call's id (R-130).
+    pub fn next_answer(&mut self, events: &mut dyn FnMut(usize, usize, pb::Event)) -> Answer {
+        loop {
+            let (mut f, answer) = self.take_answer(events);
+            match self.parts[f.part].again(&mut f, answer) {
+                None => self.in_flight.push(f),
+                Some(answer) => return Answer { f, answer },
+            }
+        }
+    }
+
+    /// Record `answer` in its part's world and in `state`, its part's:
+    /// identity when the call answered; a call that may have taken effect
+    /// without answering (a timeout) records none. Returns the call's id
+    /// and its outcome.
+    pub fn answered(&mut self, answer: Answer, state: &mut State) -> (usize, Result<()>) {
+        let Answer { f, answer } = answer;
+        (f.id, self.parts[f.part].answered(f, answer, state))
+    }
+
+    /// The next answer, out of `in_flight` ([`Tick::next_answer`]).
+    fn take_answer(
+        &mut self,
+        events: &mut dyn FnMut(usize, usize, pb::Event),
+    ) -> (InFlight, Result<Reply, CallError>) {
+        assert!(self.busy(), "internal: no Apply call in flight");
+        let (parts, in_flight) = (&self.parts, &self.in_flight);
+        let link_of = |f: &InFlight| &parts[f.part].cloud.links[f.link];
+        let call_of = |l: &Rc<RefCell<Link>>, t: Ticket| {
+            in_flight
+                .iter()
+                .position(|f| f.ticket == t && Rc::ptr_eq(link_of(f), l))
+        };
+        // The call an event is of, by its link and ticket; an event of a
+        // call no longer in flight is dropped.
+        let mut tell = |l: &Rc<RefCell<Link>>, t: Ticket, e: pb::Event| {
+            if let Some(f) = call_of(l, t).map(|k| &in_flight[k]) {
+                // Its link is in a call: named by the address alone.
+                tracing::debug!(
+                    target: crate::timing::TARGET,
+                    "apply {}: {}",
+                    crate::report::address(&f.addr),
+                    says(&e)
+                );
+                events(f.part, f.id, e);
+            }
+        };
+        // Those kept while a link waited for another call come first.
+        let mut links: Vec<&Rc<RefCell<Link>>> = Vec::new();
+        for l in in_flight.iter().map(link_of) {
+            if !links.iter().any(|x| Rc::ptr_eq(x, l)) {
+                links.push(l);
+            }
+        }
+        for l in links {
+            for (t, e) in l.borrow_mut().take_events() {
+                tell(l, t, e);
+            }
+        }
+        let held = in_flight
+            .iter()
+            .position(|f| link_of(f).borrow().has_answer(f.ticket));
+        let (k, answer) = match held {
+            Some(k) => {
+                let f = &in_flight[k];
+                let r = link_of(f).borrow_mut().take_answer(f.ticket);
+                (k, r.expect("the link has the answer it holds"))
+            }
+            None => {
+                let l = link_of(&in_flight[0]);
+                let (t, r) = l.borrow_mut().next_completed(&mut |t, e| tell(l, t, e));
+                let k = call_of(l, t).expect("internal: an answer to a call nobody made");
+                (k, r)
+            }
+        };
+        (self.in_flight.remove(k), answer)
+    }
+
+    /// How long part `part`'s Apply call for `addr` took on its
+    /// provider's clock.
+    pub fn latency(&self, part: usize, addr: &Address) -> u64 {
+        self.parts[part].latency(addr)
+    }
+
+    /// Record part `part`'s Apply call's span on the executor's clock.
+    pub fn span(&mut self, part: usize, addr: &Address, start_ms: u64, end_ms: u64) {
+        self.parts[part].record(addr, start_ms, end_ms);
+    }
+
+    /// The tick's parts, every call answered: each ends with its state
+    /// ([`Part::end`]).
+    pub fn into_parts(self) -> Vec<Part<'a>> {
+        assert!(!self.busy(), "internal: the tick ends with calls in flight");
+        self.parts
+    }
+}
+
+impl Part<'_> {
+    /// The Apply call for `a`, submitted as the tick's call `id` of this,
+    /// its part `part`; `None` when it needs none (the delete of an object
+    /// state no longer maps), answered at once.
+    fn submit(
+        &mut self,
+        (part, id): (usize, usize),
+        a: &Action,
+        state: &mut State,
+    ) -> Result<Option<InFlight>> {
         let addr = &a.addr;
         if matches!(a.kind, ActionKind::Noop | ActionKind::Pending) {
-            return Ok(false);
+            return Ok(None);
         }
         if self.world.is_none() {
             let world = self.cloud.refresh(state)?;
@@ -4108,8 +4273,39 @@ impl Tick<'_> {
         let (doc, generated) = self.desired_doc(a, state)?;
         let named = self.named(a, &doc, generated, state);
         let Some(sending) = self.sending(a, doc, state)? else {
-            return Ok(false);
+            return Ok(None);
         };
+        let remote = sending.remote.clone();
+        let req = self.request(a, sending, named.clone(), state)?;
+        let link = self.cloud.route(&addr.typ);
+        let ticket = self.cloud.submit(link, req.clone())?;
+        self.cloud.invalidate();
+        Ok(Some(InFlight {
+            part,
+            id,
+            link,
+            ticket,
+            kind: a.kind.clone(),
+            addr: addr.clone(),
+            remote,
+            named,
+            req,
+            retried: 0,
+        }))
+    }
+
+    /// The Apply request for `a` that `sending` says, under the remote
+    /// name `named`: its document's held secrets revealed into it, its
+    /// idempotency key in `state`. A stand-in never leaves the process
+    /// (R-164).
+    fn request(
+        &self,
+        a: &Action,
+        sending: Sending,
+        named: Option<String>,
+        state: &mut State,
+    ) -> Result<pb::ApplyRequest> {
+        let addr = &a.addr;
         let assertions = match sending.config {
             None => Vec::new(),
             Some(_) => self.assertions(addr),
@@ -4141,8 +4337,8 @@ impl Tick<'_> {
             }
             None => None,
         };
-        let idempotency_key = uncertain_from_here(a, addr, &remote, named.clone(), state);
-        let req = pb::ApplyRequest {
+        let idempotency_key = uncertain_from_here(a, addr, &remote, named, state);
+        Ok(pb::ApplyRequest {
             op: op as i32,
             r#type: addr.typ.clone(),
             name: addr.name.clone(),
@@ -4155,22 +4351,7 @@ impl Tick<'_> {
             keep,
             prior: state.prior(addr, &remote).map(wire::doc),
             ..Default::default()
-        };
-        let link = self.cloud.route(&addr.typ);
-        let ticket = self.cloud.submit(link, req.clone())?;
-        self.cloud.invalidate();
-        self.in_flight.push(InFlight {
-            id,
-            link,
-            ticket,
-            kind: a.kind.clone(),
-            addr: addr.clone(),
-            remote,
-            named,
-            req,
-            retried: 0,
-        });
-        Ok(true)
+        })
     }
 
     /// The world the tick's calls are made against: read at its first.
@@ -4262,7 +4443,7 @@ impl Tick<'_> {
                 match entry {
                     Some(e) => sent(pb::Op::Delete, &e.remote, None),
                     None => {
-                        self.answered(a.kind.clone(), addr, &Ok(None), state)?;
+                        self.recorded(a.kind.clone(), addr, &Ok(None), state)?;
                         return Ok(None);
                     }
                 }
@@ -4358,29 +4539,16 @@ impl Tick<'_> {
     }
 
     /// Whether an Apply call is in flight.
-    pub fn busy(&self) -> bool {
-        !self.in_flight.is_empty()
-    }
-
-    /// Take the next answered Apply call and record it: identity in `state`
-    /// when the call answered; a call that may have taken effect without
-    /// answering (a timeout) records none. Returns the call's id and its
-    /// outcome. An answer a link already holds comes first; else the link
-    /// of the oldest call in flight is waited on. What a call in flight
-    /// says meanwhile goes to `events` with its call's id (R-130).
-    pub fn next_completed(
+    /// Record the answer to `f` in the world and in `state`: identity when
+    /// the call answered; a call that may have taken effect without
+    /// answering (a timeout) records none. Its outcome.
+    fn answered(
         &mut self,
+        f: InFlight,
+        answer: Result<Reply, CallError>,
         state: &mut State,
-        events: &mut dyn FnMut(usize, pb::Event),
-    ) -> (usize, Result<()>) {
+    ) -> Result<()> {
         let cloud = self.cloud;
-        let (f, answer) = loop {
-            let (mut f, answer) = self.take_answer(events);
-            match self.again(&mut f, answer) {
-                None => self.in_flight.push(f),
-                Some(answer) => break (f, answer),
-            }
-        };
         cloud.invalidate();
         let result = answer.and_then(|r| {
             cloud.links[f.link]
@@ -4389,7 +4557,7 @@ impl Tick<'_> {
         });
         let result = match result.map(|resp| self.record_object(&f, resp, state)) {
             Ok(Ok(resp)) => Ok(Some(resp)),
-            Ok(Err(e)) => return (f.id, Err(e)),
+            Ok(Err(e)) => return Err(e),
             Err(e) => Err(e),
         };
         self.forget_object(&f, &result, state);
@@ -4399,64 +4567,7 @@ impl Tick<'_> {
         ) {
             state.uncertain.remove(&uncertain_key(&f.kind, &f.addr));
         }
-        (f.id, self.answered(f.kind, &f.addr, &result, state))
-    }
-
-    /// The next answered Apply call, out of `in_flight`: an answer a link
-    /// already holds comes first; else the link of the oldest call in
-    /// flight is waited on.
-    fn take_answer(
-        &mut self,
-        events: &mut dyn FnMut(usize, pb::Event),
-    ) -> (InFlight, Result<Reply, CallError>) {
-        let cloud = self.cloud;
-        assert!(self.busy(), "internal: no Apply call in flight");
-        let in_flight = &self.in_flight;
-        // The call an event is of, by its link and ticket; an event of a
-        // call no longer in flight is dropped.
-        let mut tell = |l: usize, t: Ticket, e: pb::Event| {
-            if let Some(f) = in_flight.iter().find(|f| f.link == l && f.ticket == t) {
-                // Its link is in a call: named by the address alone.
-                tracing::debug!(
-                    target: crate::timing::TARGET,
-                    "apply {}: {}",
-                    crate::report::address(&f.addr),
-                    says(&e)
-                );
-                events(f.id, e);
-            }
-        };
-        // Those kept while a link waited for another call come first.
-        let links: BTreeSet<usize> = in_flight.iter().map(|f| f.link).collect();
-        for l in links {
-            for (t, e) in cloud.links[l].borrow_mut().take_events() {
-                tell(l, t, e);
-            }
-        }
-        let held = self
-            .in_flight
-            .iter()
-            .position(|f| cloud.links[f.link].borrow().has_answer(f.ticket));
-        let (k, answer) = match held {
-            Some(k) => {
-                let f = &self.in_flight[k];
-                let r = cloud.links[f.link].borrow_mut().take_answer(f.ticket);
-                (k, r.expect("the link has the answer it holds"))
-            }
-            None => {
-                let l = self.in_flight[0].link;
-                let (t, r) = cloud.links[l]
-                    .borrow_mut()
-                    .next_completed(&mut |t, e| tell(l, t, e));
-                let k = self
-                    .in_flight
-                    .iter()
-                    .position(|f| f.link == l && f.ticket == t)
-                    .expect("internal: an answer to a call nobody made");
-                (k, r)
-            }
-        };
-        (self.in_flight.remove(k), answer)
+        self.recorded(f.kind, &f.addr, &result, state)
     }
 
     /// A call that failed in a way worth trying again (a transient
@@ -4497,7 +4608,7 @@ impl Tick<'_> {
             // The provider's own naming of the change dropped (R-109).
             error: crate::report::said_of(&f.addr, &e.to_string()),
         };
-        link.retried(retry);
+        link.retried(self.cloud.sessions[f.link], retry);
         std::thread::sleep(delay);
         f.ticket = link.submit(self.cloud.sessions[f.link], f.req.clone());
         None
@@ -4697,7 +4808,7 @@ impl Tick<'_> {
 
     /// What every answered call records: its time, its notes, the
     /// dependencies of what it applied, and what it returned.
-    fn answered(
+    fn recorded(
         &mut self,
         kind: ActionKind,
         addr: &Address,
@@ -4755,12 +4866,12 @@ impl Tick<'_> {
         });
     }
 
-    /// The tick ends: state records every desired object's dependencies,
-    /// and every provider still running hears the boundary (the mock's
-    /// clock advances and its chaos mutations land). Returns what the
-    /// tick's answered Apply calls returned. Every call is answered by now.
+    /// The part's tick ends: state records every desired object's
+    /// dependencies, and every provider still running hears the boundary
+    /// in the deployment's session (the mock's clock advances and its
+    /// chaos mutations land). Returns what the part's answered Apply calls
+    /// returned. Every call is answered by now ([`Tick::into_parts`]).
     pub fn end(self, state: &mut State) -> Result<BTreeMap<Address, Option<Json>>> {
-        assert!(!self.busy(), "internal: the tick ends with calls in flight");
         // What each object depends on, for ordering its delete later.
         for (addr, r) in &self.desired {
             state.set_deps(addr, r.deps.iter().cloned());

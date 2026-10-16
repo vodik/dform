@@ -40,8 +40,37 @@ pub enum State {
     Interrupted,
 }
 
+/// A change of a tick's block: its part's (a deployment of a tree's tick,
+/// [`Block::of_parts`]; a deployment's own tick has one, 0) at its
+/// address.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Change {
+    pub part: usize,
+    pub addr: Address,
+}
+
+impl From<&Address> for Change {
+    fn from(addr: &Address) -> Change {
+        Change {
+            part: 0,
+            addr: addr.clone(),
+        }
+    }
+}
+
+impl From<(usize, &Address)> for Change {
+    fn from((part, addr): (usize, &Address)) -> Change {
+        Change {
+            part,
+            addr: addr.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Entry {
+    /// Its part ([`Change::part`]).
+    pub part: usize,
     pub addr: Address,
     kind: ActionKind,
     mark: &'static str,
@@ -53,10 +82,12 @@ pub struct Entry {
     pub status: Option<String>,
 }
 
-/// A line of the block's tree: a copy's or a module's header, or a
-/// change (an index into [`Block::entries`]).
+/// A line of the block's tree: a part's header (a deployment of a tree's
+/// tick, `== NAME` as the plan names it), a copy's or a module's header,
+/// or a change (an index into [`Block::entries`]).
 #[derive(Debug, Clone)]
 enum Item {
+    Part(String),
     Header { kind: ActionKind, printed: String },
     Change(usize),
 }
@@ -76,9 +107,9 @@ pub struct Block {
     /// How long the tick ran, once it ended.
     ended: Option<Duration>,
     /// Every failure's full error, in the order they came.
-    pub errors: Vec<(Address, Failure)>,
+    pub errors: Vec<(Change, Failure)>,
     /// Where each change is derived (`k3s.df:66`), for its failure.
-    pub sites: std::collections::BTreeMap<Address, String>,
+    pub sites: std::collections::BTreeMap<Change, String>,
 }
 
 /// A duration as progress says it: `0.8s`, `42s`, `1m12s`, `1h3m`.
@@ -145,6 +176,7 @@ impl Block {
             .iter()
             .filter(|a| is_call(a))
             .map(|a| Entry {
+                part: 0,
                 addr: a.addr.clone(),
                 kind: a.kind.clone(),
                 mark: marker_of(&a.kind),
@@ -201,7 +233,7 @@ impl Block {
         let keep: Vec<bool> = (0..tree.len())
             .map(|k| match tree[k].1 {
                 Item::Change(_) => true,
-                Item::Header { .. } => tree[k + 1..]
+                Item::Header { .. } | Item::Part(_) => tree[k + 1..]
                     .iter()
                     .take_while(|(d, _)| *d > tree[k].0)
                     .any(|(_, i)| matches!(i, Item::Change(_))),
@@ -213,8 +245,53 @@ impl Block {
         self
     }
 
-    fn entry(&mut self, addr: &Address) -> Option<&mut Entry> {
-        self.entries.iter_mut().find(|e| e.addr == *addr)
+    /// Where each change is derived (`k3s.df:66`), by its address: what
+    /// its failure is said at.
+    pub fn with_sites(mut self, sites: std::collections::BTreeMap<Address, String>) -> Block {
+        self.sites = sites
+            .into_iter()
+            .map(|(a, s)| (Change::from(&a), s))
+            .collect();
+        self
+    }
+
+    /// The block of a tree's tick, of its `parts` (each deployment's
+    /// block, by its name) in order: each under its name, as the tick's
+    /// plan shows them; one header for the tick, started `at`.
+    pub fn of_parts(tick: usize, parts: Vec<(String, Block)>, at: Instant) -> Block {
+        let mut block = Block::new(tick, &[], at);
+        for (p, (name, b)) in parts.into_iter().enumerate() {
+            let first = block.entries.len();
+            block.tree.push((0, Item::Part(name)));
+            block.tree.extend(b.tree.into_iter().map(|(d, item)| {
+                let item = match item {
+                    Item::Change(i) => Item::Change(first + i),
+                    other => other,
+                };
+                (d + 1, item)
+            }));
+            block
+                .entries
+                .extend(b.entries.into_iter().map(|e| Entry { part: p, ..e }));
+            block.sites.extend(
+                b.sites
+                    .into_iter()
+                    .map(|(c, s)| (Change { part: p, ..c }, s)),
+            );
+        }
+        block
+    }
+
+    /// The index of `change` among the block's entries.
+    pub fn index(&self, change: &Change) -> Option<usize> {
+        self.entries
+            .iter()
+            .position(|e| e.part == change.part && e.addr == change.addr)
+    }
+
+    fn entry(&mut self, change: &Change) -> Option<&mut Entry> {
+        let i = self.index(change)?;
+        self.entries.get_mut(i)
     }
 
     /// The time is `at`: what a running call's time and the tick's are
@@ -224,18 +301,18 @@ impl Block {
     }
 
     /// Its Apply call was submitted `at`.
-    pub fn start(&mut self, addr: &Address, at: Instant) {
+    pub fn start(&mut self, change: impl Into<Change>, at: Instant) {
         self.clock(at);
-        if let Some(e) = self.entry(addr) {
+        if let Some(e) = self.entry(&change.into()) {
             e.state = State::Running;
             e.started = Some(at);
         }
     }
 
     /// Its Apply call answered `at`.
-    pub fn done(&mut self, addr: &Address, at: Instant) {
+    pub fn done(&mut self, change: impl Into<Change>, at: Instant) {
         self.clock(at);
-        if let Some(e) = self.entry(addr) {
+        if let Some(e) = self.entry(&change.into()) {
             e.state = State::Done;
             e.took = e.started.map(|s| at.saturating_duration_since(s));
         }
@@ -244,14 +321,15 @@ impl Block {
     /// Its Apply call failed `at` with `error`: its line keeps its mark
     /// and time; the error is said below the block, at where the change is
     /// derived unless it says where.
-    pub fn fail(&mut self, addr: &Address, error: Failure, at: Instant) {
+    pub fn fail(&mut self, change: impl Into<Change>, error: Failure, at: Instant) {
+        let change = change.into();
         self.clock(at);
-        if let Some(e) = self.entry(addr) {
+        if let Some(e) = self.entry(&change) {
             e.state = State::Failed;
             e.took = e.started.map(|s| at.saturating_duration_since(s));
         }
-        let error = error.at(self.sites.get(addr).cloned());
-        self.errors.push((addr.clone(), error));
+        let error = error.at(self.sites.get(&change).cloned());
+        self.errors.push((change, error));
     }
 
     /// What never started is interrupted: the apply was asked to stop.
@@ -377,6 +455,13 @@ impl Block {
         for (depth, item) in &self.tree {
             let indent = "  ".repeat(depth + 1);
             rows.push(match item {
+                Item::Part(name) => {
+                    let line = format!("== {name}");
+                    Row::new(
+                        &format!("{indent}{line}"),
+                        format!("{indent}{}", style.paint(Paint::Bold, &line)),
+                    )
+                }
                 Item::Header { kind, printed } => {
                     let mark = marker_of(kind);
                     let painted = match kind_paint(kind) {
@@ -610,7 +695,7 @@ mod tests {
             "  + k8s.secret synapse.homeserver  BUILD 2.0s"
         );
         block.done(&b.addr, at(t0, 3400));
-        block.sites.insert(c.addr.clone(), "synapse.df:40".into());
+        block.sites.insert((&c.addr).into(), "synapse.df:40".into());
         block.start(&c.addr, at(t0, 3400));
         // The provider names the change in its own form: dform says it as
         // the plan does, once, below the block.

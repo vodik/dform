@@ -1,6 +1,10 @@
 //! An apply's ticks (E §2.7), each planned, shown, asked for, approved and
 //! applied.
 
+mod calls;
+
+pub(super) use calls::{ActionLog, Calls, failed_of};
+
 use super::approvals::{Approvals, Asked};
 use super::prompt::{Stopped, confirm, confirm_emptied, declined};
 use super::{Apply, Next, Wanted};
@@ -114,19 +118,6 @@ pub(super) struct Tick {
     /// The plan changes nothing: a later tick's re-plan has nothing left
     /// to do; a controller's tick ends the apply.
     pub(super) undeformed: bool,
-}
-
-/// Each Apply call of a tick to the audit log: its result, its remote id,
-/// and a digest of its redacted diff; a forget (R-154) by the remote id it
-/// drops. The first entry that could not be written fails the tick.
-struct ActionLog<'a> {
-    tick: usize,
-    audit: &'a crate::audit::Log,
-    redact: &'a query::Redactor,
-    diffs: BTreeMap<address::Address, String>,
-    /// What a forget drops from state: its remote id, which the log keeps.
-    forgotten: BTreeMap<address::Address, String>,
-    failed: std::cell::RefCell<Option<anyhow::Error>>,
 }
 
 impl<'a, 'h> Ticks<'a, 'h> {
@@ -450,32 +441,6 @@ impl<'a, 'h> Ticks<'a, 'h> {
             tick: self.decide(planned)?,
             adopts,
             lifecycle,
-        })
-    }
-
-    /// The tick's calls: what needs the master this run does not hold
-    /// (R-164) left for an apply with it, the rest made.
-    pub(super) fn apply(&mut self, p: &mut TickPlan) -> Result<Ran> {
-        // A run that does not hold the master makes no change that needs
-        // it, nor one that depends on one: they wait for an apply with it,
-        // and this one stops after the tick.
-        let t = &mut p.tick;
-        let needing = needing_master(
-            &t.planned.plan,
-            &t.planned.resources,
-            &self.st,
-            self.backend(),
-        );
-        t.planned
-            .plan
-            .actions
-            .retain(|a| !needing.contains_key(&a.addr));
-        let (seen, pending, changed) = self.call(t, &p.adopts, &p.lifecycle)?;
-        Ok(Ran {
-            seen,
-            pending,
-            changed,
-            needing,
         })
     }
 
@@ -883,7 +848,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
     fn print(&self, t: &Tick) {
         let (tick, p) = (self.tick, &t.planned);
         if tick > 1 && t.undeformed {
-            self.progress(p).finish();
+            self.progress(self.block(p)).finish();
             return;
         }
         let report = self
@@ -1232,236 +1197,6 @@ impl<'a, 'h> Ticks<'a, 'h> {
             )?;
         }
         Ok(())
-    }
-
-    /// The tick's calls: its in-flight record written, then every definite
-    /// action applied (`executor::run_tick`), each to the audit log, the
-    /// tick's block on stderr filling in (R-127). What the executor saw
-    /// of the world, what the tick held, and whether it changed anything.
-    fn call(
-        &mut self,
-        t: &mut Tick,
-        adopts: &[resources::Adopt],
-        lifecycle: &zset::Lifecycle,
-    ) -> Result<(executor::Seen, BTreeSet<address::Address>, bool)> {
-        let tick = self.tick;
-        let backend = self.backend();
-        let p = &mut t.planned;
-        let sections = &p.sections;
-        self.ran.extend(
-            p.plan
-                .actions
-                .iter()
-                .filter(|a| !matches!(a.kind, ActionKind::Noop) && waits_on(a, sections).is_none())
-                .map(|a| (a.addr.typ.clone(), a.addr.name.clone())),
-        );
-        // Kept in state: a sensitive leaf by its digest.
-        let observed = backend.stored_world(&backend.observe(&self.st)?);
-        executor::begin(&mut self.st, tick, &p.plan, &observed);
-        if let Some(f) = self.st.in_flight.as_mut() {
-            f.destroy = self.args.destroy;
-        }
-        let deployment = self.deployment();
-        executor::mark_creates(
-            &mut self.st,
-            deployment,
-            p.plan
-                .actions
-                .iter()
-                .filter(|a| waits_on(a, sections).is_none()),
-        );
-        self.persist()?;
-        let pending: BTreeSet<address::Address> = p
-            .plan
-            .actions
-            .iter()
-            .filter(|a| waits_on(a, sections).is_some())
-            .map(|a| a.addr.clone())
-            .collect();
-        let mut seen: executor::Seen = observed.into_iter().map(|(a, d)| (a, Some(d))).collect();
-        p.plan.actions.retain(|a| waits_on(a, sections).is_none());
-        let changed = p
-            .plan
-            .actions
-            .iter()
-            .any(|a| !matches!(a.kind, ActionKind::Noop));
-        // Every apply is at least one tick of the fake world, also when
-        // there is nothing to do. Each Apply call's change of state is
-        // logged before the next call (`executor`, `wal`).
-        if tick == 1 || changed {
-            seen.extend(self.run_calls(p, adopts, lifecycle)?);
-            // The world as the executor saw it, keyed like a secret: a
-            // document may hold one.
-            let world: serde_json::Map<String, serde_json::Value> = seen
-                .iter()
-                .map(|(a, d)| (state::key(a), d.clone().unwrap_or_default()))
-                .collect();
-            let canonical = crate::approval::canonical_json(&world.into());
-            // Without the master there is no digest of it (R-164).
-            self.cx.audit.append(
-                "tick",
-                serde_json::json!({
-                    "tick": tick,
-                    "world": self.key().map(|k| format!("hmac-sha256:{}", k.digest(canonical.as_bytes()))),
-                }),
-            )?;
-        }
-        Ok((seen, pending, changed))
-    }
-
-    /// The tick's Apply calls, each logged (`ActionLog`); then the tick's
-    /// checkpoint. What the executor saw of the world.
-    fn run_calls(
-        &mut self,
-        p: &Planned,
-        adopts: &[resources::Adopt],
-        lifecycle: &zset::Lifecycle,
-    ) -> Result<executor::Seen> {
-        let tick = self.tick;
-        let (backend, audit) = (self.backend(), &self.cx.audit);
-        let redact = query::Redactor::new(&p.res.facts, backend.schema(), backend.secrets());
-        let log = ActionLog {
-            tick,
-            audit,
-            redact: &redact,
-            diffs: self.diffs(p),
-            forgotten: forgotten(&p.plan, &self.st),
-            failed: std::cell::RefCell::new(None),
-        };
-        let on_action = |a: &crate::provider::Action,
-                         err: Option<&anyhow::Error>,
-                         st: &state::State| { log.action(a, err, st) };
-        let dep = &self.cx.dep;
-        let fence = || dep.check_fence();
-        let record = |st: &state::State| dep.record(st);
-        // The tick's block on stderr, filling in (R-127); a controller's
-        // log line is its report.
-        let progress = self.hook.is_none().then(|| self.progress(p));
-        let interrupt = &self.cx.chaos.interrupt;
-        let on_event = |e: executor::Event| {
-            // Chaos `interrupt`: the stop a Ctrl-C asks for, once the call
-            // is sent.
-            if let executor::Event::Started(a) = e
-                && interrupt.contains(a)
-            {
-                crate::interrupt::request(libc::SIGINT);
-            }
-            if let Some(p) = &progress {
-                p.event(&e, &|t: &str| redact.text(t));
-            }
-        };
-        let opts = executor::Options {
-            parallel: self.args.parallel as usize,
-            persist: &record,
-            stop_after: self.stop_after.as_ref(),
-            on_action: Some(&on_action),
-            before_submit: Some(&fence),
-            on_event: Some(&on_event),
-        };
-        let applied = executor::run_tick(
-            backend,
-            &p.resources,
-            adopts,
-            lifecycle,
-            &mut self.st,
-            &p.plan,
-            &opts,
-        );
-        let failed = progress.map(|p| p.finish()).unwrap_or_default();
-        let applied = self.said_below(applied, &failed);
-        for note in backend.take_notes() {
-            self.say(Said::Chaos(note));
-        }
-        if let Some(e) = log.failed.into_inner() {
-            return Err(e);
-        }
-        let checkpoint = self.checkpoint();
-        log_retries(audit, &redact, backend, tick)?;
-        let seen = applied?;
-        checkpoint?;
-        Ok(seen)
-    }
-
-    /// The tick's checkpoint, also of a tick that failed; not of one chaos
-    /// `stop-after` stopped as if dform were killed: its calls' answers
-    /// are in the log alone, and the next run replays them.
-    fn checkpoint(&mut self) -> Result<()> {
-        match self.stop_after.as_ref().is_some_and(|left| left.get() == 0) {
-            true => Ok(()),
-            false => self.persist(),
-        }
-    }
-
-    /// The tick's calls' outcome, `applied`: a failure the block said in
-    /// full below it (the calls that `failed`) is not said again, the run
-    /// ends naming what failed (R-109).
-    fn said_below(
-        &self,
-        applied: Result<executor::Seen>,
-        failed: &[address::Address],
-    ) -> Result<executor::Seen> {
-        match applied {
-            Err(e) if !failed.is_empty() && e.is::<report::Failure>() => Err(anyhow::anyhow!(
-                "apply {}: tick {} failed: {}",
-                self.cx.deployment,
-                self.tick,
-                failed
-                    .iter()
-                    .map(report::address)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
-            applied => applied,
-        }
-    }
-
-    /// A digest of each action's redacted diff, as the plan file records
-    /// it.
-    fn diffs(&self, p: &Planned) -> BTreeMap<address::Address, String> {
-        self.r
-            .delta(&p.plan, &p.res, &p.sections, self.tick, self.key())
-            .into_iter()
-            .map(|e| {
-                let digest =
-                    crate::approval::digest_of(&serde_json::to_value(&e).unwrap_or_default());
-                (
-                    address::Address {
-                        typ: e.typ,
-                        name: e.name,
-                    },
-                    digest,
-                )
-            })
-            .collect()
-    }
-
-    /// The tick's block on stderr (R-127, R-206): its actions as the
-    /// plan's tree nests them, each failure's site where its change is
-    /// derived (R-109); under `--yes`, a line per change of state.
-    fn progress(&self, p: &Planned) -> crate::progress::Progress {
-        let mode =
-            crate::progress::Mode::of_block(self.r.why() == report::Why::None, self.args.yes);
-        let actions: Vec<&crate::provider::Action> = p.plan.actions.iter().collect();
-        let report = self
-            .r
-            .report(&p.plan, &p.res, &p.sections, self.tick, &[], &p.denies);
-        let mut block =
-            report::progress::Block::new(self.tick, &actions, std::time::Instant::now())
-                .nested(&report.outline());
-        block.sites = report::sites(
-            &p.res,
-            actions.iter().map(|a| &a.addr),
-            self.r.top.as_deref(),
-        );
-        crate::progress::Progress::tick(
-            block,
-            mode,
-            match mode {
-                crate::progress::Mode::Terminal => self.cx.cli.style,
-                _ => report::Style::default(),
-            },
-            self.asked.take(),
-        )
     }
 
     /// A destroy's last tick: what no Delete could reach stays in state,
@@ -1939,40 +1674,6 @@ impl<'a, 'h> Ticks<'a, 'h> {
             res: next,
             violations,
         })
-    }
-}
-
-impl ActionLog<'_> {
-    fn action(&self, a: &crate::provider::Action, err: Option<&anyhow::Error>, st: &state::State) {
-        let tick = self.tick;
-        if let Some(remote) = self.forgotten.get(&a.addr) {
-            let e = serde_json::json!({
-                "tick": tick,
-                "address": a.addr.to_string(),
-                "remote": remote,
-                "why": "lifecycle retain",
-            });
-            self.append("forgot", e);
-            return;
-        }
-        let mut e = serde_json::json!({
-            "tick": tick,
-            "action": zset::deformation_kind(&a.kind, false).unwrap_or("no-op"),
-            "address": a.addr.to_string(),
-            "result": if err.is_some() { "failed" } else { "ok" },
-            "remote": st.get(&a.addr).map(|e| e.remote.clone()),
-            "diff": self.diffs.get(&a.addr),
-        });
-        if let Some(err) = err {
-            crate::audit::error(&mut e, &self.redact.text(&crate::diag::shape(err)));
-        }
-        self.append("action", e);
-    }
-
-    fn append(&self, kind: &str, e: serde_json::Value) {
-        if let Err(x) = self.audit.append(kind, e) {
-            self.failed.borrow_mut().get_or_insert(x);
-        }
     }
 }
 

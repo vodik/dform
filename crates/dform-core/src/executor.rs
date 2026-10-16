@@ -64,9 +64,6 @@ use serde_json::Value as Json;
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-/// Where state goes after every Apply call: durable when it returns.
-pub type Persist<'a> = &'a dyn Fn(&State) -> Result<()>;
-
 /// What the world holds per address as the executor last saw it: the
 /// refresh a tick was planned from, overlaid with what its Apply calls
 /// returned (`None`: deleted).
@@ -74,23 +71,64 @@ pub type Seen = BTreeMap<Address, Option<Json>>;
 
 /// How a tick runs.
 pub struct Options<'a> {
-    /// At most this many Apply calls in flight (`--parallel`, at least 1).
+    /// At most this many Apply calls in flight, of every part
+    /// (`--parallel`, at least 1).
     pub parallel: usize,
-    /// Where state goes after every Apply call.
-    pub persist: Persist<'a>,
     /// Chaos `stop-after=N`: how many more Apply calls may return before
     /// dform stops as if killed (`None`: no limit). Counted across the
     /// run's ticks.
     pub stop_after: Option<&'a Cell<usize>>,
-    /// The audit log's hook: told how each action ended, once state has
-    /// been written for it (`report_action`).
-    pub on_action: Option<ActionHook<'a>>,
+}
+
+/// One deployment's part of a tick ([`run_tick`]): its plan's definite
+/// actions, made by its providers, the state their answers are written
+/// to, and how it is told.
+pub struct Part<'a> {
+    pub cloud: &'a Providers,
+    pub desired: &'a [Resource],
+    pub adopts: &'a [Adopt],
+    pub lifecycle: &'a Lifecycle,
+    pub state: &'a mut State,
+    pub plan: &'a Plan,
+    pub hooks: &'a dyn Hooks,
+}
+
+/// What a part's calls tell as they go: where its state is written, its
+/// audit log, its fence, its progress.
+pub trait Hooks {
+    /// Where state goes after every Apply call: durable when it returns.
+    fn persist(&self, state: &State) -> Result<()>;
+
+    /// How action `a` ended, its error if it failed, once state has been
+    /// written for it: the audit log.
+    fn action(&self, _a: &Action, _err: Option<&anyhow::Error>, _state: &State) {}
+
     /// Asked before each Apply call is submitted: an error stops the tick
     /// as the call's failure, and no call is made (the lease fence,
     /// `store::Deployment::check_fence`).
-    pub before_submit: Option<&'a dyn Fn() -> Result<()>>,
-    /// Told each change of state of an action (R-127): apply's progress.
-    pub on_event: Option<&'a dyn Fn(Event)>,
+    fn before_submit(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Each change of state of an action (R-127): apply's progress.
+    fn event(&self, _e: Event) {}
+}
+
+/// What a tick's walk came to ([`run_tick`]).
+pub enum Walked {
+    /// Each part's tick ended: what its answered calls returned, or why
+    /// its tick stopped.
+    Ended(Vec<Result<Seen>>),
+    /// The walk stopped at part `part` with none of the parts' ticks
+    /// ended: its state could not be written, or chaos `stop-after`
+    /// stopped dform as if killed.
+    Stopped { part: usize, error: anyhow::Error },
+}
+
+impl Walked {
+    fn stopped(part: usize, error: anyhow::Error) -> Walked {
+        Walked::Stopped { part, error }
+    }
 }
 
 /// A change of state of one of the tick's actions (R-127). A heartbeat
@@ -109,60 +147,55 @@ pub enum Event<'a> {
     Progress(&'a Address, &'a crate::plugin::pb::Event),
 }
 
-/// How an action ended: its error, if it failed; state as written after it.
-pub type ActionHook<'a> = &'a dyn Fn(&Action, Option<&anyhow::Error>, &State);
-
-/// Apply every definite action of `plan` as one tick of the world, walking
-/// the tick's dependency DAG with at most `parallel` calls in flight. The
-/// first failure stops new calls; those in flight finish, and every action
-/// that answered keeps its identity. Returns what the answered Apply calls
+/// Apply every definite action of each part's plan as one tick of the
+/// world, walking the parts' dependency DAGs together with at most
+/// `parallel` calls in flight: a deployment's apply has one part, a
+/// tree's one per deployment whose tick it is (no call of one waits on
+/// another's within a tick: a reader waits on what its upstream makes a
+/// tick later). The first failure, of any part, stops new calls; those
+/// in flight finish, and every action that answered keeps its identity
+/// in its part's state. Returns what each part's answered Apply calls
 /// returned.
 ///
-/// The walk is single-threaded: submit every ready action while fewer than
-/// `parallel` calls are in flight (in plan order), then take the next
-/// answer, persist, and release what waited on it. Which call answers next
+/// The walk is single-threaded: submit every ready call while fewer than
+/// `parallel` are in flight (each part's in plan order, the parts in
+/// order), then take the next answer, whichever part's, persist its
+/// part's state, and release what waited on it. Which call answers next
 /// is the backend's: the process backend's calls run at once; the direct
 /// and wire backends answer in simulated time (`plugin::queue`). Each call
 /// is put on the executor's clock from its answer's `elapsed_ms` (the
 /// mock's chaos `latency`): it starts when it is submitted and ends that
 /// much later, and the clock moves to the end of each call as it is
-/// taken. The world records the spans. With `parallel` 1 the calls run in
-/// plan order, one after the other.
-pub fn run_tick(
-    cloud: &Providers,
-    desired: &[Resource],
-    adopts: &[Adopt],
-    lifecycle: &Lifecycle,
-    state: &mut State,
-    plan: &Plan,
-    opts: &Options,
-) -> Result<Seen> {
-    let actions: Vec<&Action> = plan
-        .actions
-        .iter()
-        .filter(|a| !matches!(a.kind, ActionKind::Noop | ActionKind::Pending))
-        .collect();
-    let waits = dag(&actions, desired, state);
-    let tick = cloud.begin_tick(desired, adopts, lifecycle)?;
-    let mut walk = Walk::new(&actions, waits, tick, opts);
+/// taken. Each part's world records its spans. With `parallel` 1 the
+/// calls run one after the other, part by part, each in plan order.
+pub fn run_tick(parts: Vec<Part>, opts: &Options) -> Walked {
+    let mut walk = Walk::new(parts, opts);
     loop {
-        walk.submit_ready(state)?;
-        let Some((i, r, called)) = walk.take(state) else {
+        if let Err(stopped) = walk.submit_ready() {
+            return stopped;
+        }
+        let Some((c, r, called)) = walk.take() else {
             break;
         };
-        walk.answered(i, r, called, state)?;
+        if let Err(stopped) = walk.answered(c, r, called) {
+            return stopped;
+        }
     }
-    walk.end(state)
+    walk.end()
 }
 
-/// A tick's walk of its dependency DAG ([`run_tick`]): where each action
-/// is, the calls in flight, the executor's clock, and the first failure.
-struct Walk<'a, 't> {
-    actions: &'a [&'a Action],
-    /// What each action waits on, by index.
+/// A tick's walk of its parts' dependency DAGs ([`run_tick`]): their
+/// calls in one list (each part's in plan order, the parts in order),
+/// where each is, the calls in flight, the executor's clock, and each
+/// part's first failure.
+struct Walk<'a, 'o> {
+    parts: Vec<Part<'a>>,
+    /// Each call's part and action.
+    calls: Vec<(usize, &'a Action)>,
+    /// What each call waits on, by index into `calls`.
     waits: Vec<Vec<usize>>,
-    tick: Tick<'t>,
-    opts: &'a Options<'a>,
+    tick: Tick<'a>,
+    opts: &'o Options<'o>,
     started: Vec<bool>,
     done: Vec<bool>,
     start_ms: Vec<u64>,
@@ -170,25 +203,43 @@ struct Walk<'a, 't> {
     seq: Vec<usize>,
     /// Answered at submit: no call was needed.
     at_once: VecDeque<usize>,
-    /// (action, start, end) of every call taken, for the world's timeline.
+    /// (call, start, end) of every call taken, for the world's timeline.
     spans: Vec<(usize, u64, u64)>,
     in_flight: usize,
     now: u64,
-    failed: Option<anyhow::Error>,
+    /// Each part's first failure: after any, no new call starts.
+    failed: Vec<Option<anyhow::Error>>,
 }
 
-impl<'a, 't> Walk<'a, 't> {
-    fn new(
-        actions: &'a [&'a Action],
-        waits: Vec<Vec<usize>>,
-        tick: Tick<'t>,
-        opts: &'a Options<'a>,
-    ) -> Walk<'a, 't> {
-        let n = actions.len();
+impl<'a, 'o> Walk<'a, 'o> {
+    fn new(parts: Vec<Part<'a>>, opts: &'o Options<'o>) -> Walk<'a, 'o> {
+        let mut calls = Vec::new();
+        let mut waits = Vec::new();
+        let mut ticks = Vec::new();
+        for (p, part) in parts.iter().enumerate() {
+            let actions: Vec<&'a Action> = part
+                .plan
+                .actions
+                .iter()
+                .filter(|a| !matches!(a.kind, ActionKind::Noop | ActionKind::Pending))
+                .collect();
+            let first = calls.len();
+            for w in dag(&actions, part.desired, part.state) {
+                waits.push(w.into_iter().map(|j| first + j).collect());
+            }
+            calls.extend(actions.into_iter().map(|a| (p, a)));
+            ticks.push(
+                part.cloud
+                    .tick_part(part.desired, part.adopts, part.lifecycle),
+            );
+        }
+        let n = calls.len();
         Walk {
-            actions,
+            failed: parts.iter().map(|_| None).collect(),
+            parts,
+            calls,
             waits,
-            tick,
+            tick: Tick::new(ticks),
             opts,
             started: vec![false; n],
             done: vec![false; n],
@@ -198,132 +249,138 @@ impl<'a, 't> Walk<'a, 't> {
             spans: Vec::new(),
             in_flight: 0,
             now: 0,
-            failed: None,
         }
     }
 
-    /// Submit every ready action, in plan order, while fewer than
-    /// `parallel` calls are in flight and none has failed.
-    fn submit_ready(&mut self, state: &mut State) -> Result<()> {
-        while self.failed.is_none()
-            && self.in_flight + self.at_once.len() < self.opts.parallel.max(1)
-        {
-            let Some(i) = self.ready() else {
+    /// Whether a part's call failed: no new call starts.
+    fn stopping(&self) -> bool {
+        self.failed.iter().any(Option::is_some)
+    }
+
+    /// Submit every ready call, in order, while fewer than `parallel`
+    /// calls are in flight and none has failed.
+    fn submit_ready(&mut self) -> Result<(), Walked> {
+        while !self.stopping() && self.in_flight + self.at_once.len() < self.opts.parallel.max(1) {
+            let Some(c) = self.ready() else {
                 break;
             };
-            self.submit(i, state)?;
+            self.submit(c)?;
         }
         Ok(())
     }
 
-    /// The first action not started whose dependencies are done.
+    /// The first call not started whose dependencies are done.
     fn ready(&self) -> Option<usize> {
-        (0..self.actions.len())
-            .find(|&i| !self.started[i] && self.waits[i].iter().all(|&j| self.done[j]))
+        (0..self.calls.len())
+            .find(|&c| !self.started[c] && self.waits[c].iter().all(|&j| self.done[j]))
     }
 
-    /// Submit action `i`: its call in flight, or answered at once; a
-    /// failure to send it is its failure.
-    fn submit(&mut self, i: usize, state: &mut State) -> Result<()> {
-        let opts = self.opts;
-        let a = self.actions[i];
-        self.started[i] = true;
-        self.start_ms[i] = self.now;
-        self.seq[i] = self.started.iter().filter(|s| **s).count();
+    /// Submit call `c`: in flight, or answered at once; a failure to send
+    /// it is its failure.
+    fn submit(&mut self, c: usize) -> Result<(), Walked> {
+        let (p, a) = self.calls[c];
+        self.started[c] = true;
+        self.start_ms[c] = self.now;
+        self.seq[c] = self.started.iter().filter(|s| **s).count();
+        let part = &mut self.parts[p];
         // No new call once a signal asked to stop (`interrupt`): the
         // calls in flight are awaited, and their answers kept.
-        let check = crate::interrupt::check()
-            .and_then(|()| opts.before_submit.map_or(Ok(()), |check| check()));
+        let check = crate::interrupt::check().and_then(|()| part.hooks.before_submit());
         if let Err(e) = check {
-            self.started[i] = false;
-            self.failed = Some(e);
+            self.started[c] = false;
+            self.failed[p] = Some(e);
             return Ok(());
         }
-        event(opts, Event::Started(&a.addr));
+        part.hooks.event(Event::Started(&a.addr));
         // A forget (`lifecycle(r, "retain")`, R-154) calls no provider:
         // state drops the object, and the world keeps it.
         if matches!(a.kind, ActionKind::Forget) {
-            state.remove(&a.addr);
-            self.at_once.push_back(i);
+            part.state.remove(&a.addr);
+            self.at_once.push_back(c);
             return Ok(());
         }
-        match self.tick.submit(i, a, state) {
+        match self.tick.submit(p, c, a, part.state) {
             Ok(true) => self.in_flight += 1,
-            Ok(false) => self.at_once.push_back(i),
+            Ok(false) => self.at_once.push_back(c),
             Err(e) => {
-                (opts.persist)(state)?;
-                report_action(opts, a, Some(&e), state);
-                event(opts, Event::Failed(&a.addr, &e));
-                self.spans.push((i, self.now, self.now));
-                self.failed = Some(e);
+                part.hooks
+                    .persist(part.state)
+                    .map_err(|e| Walked::stopped(p, e))?;
+                part.hooks.action(a, Some(&e), part.state);
+                part.hooks.event(Event::Failed(&a.addr, &e));
+                self.spans.push((c, self.now, self.now));
+                self.failed[p] = Some(e);
             }
         }
         Ok(())
     }
 
-    /// The next action answered: one answered at submit, else the next
-    /// call's answer, recorded in `state`; whether a call was made.
-    /// `None` when nothing is left in flight.
-    fn take(&mut self, state: &mut State) -> Option<(usize, Result<()>, bool)> {
-        if let Some(i) = self.at_once.pop_front() {
-            return Some((i, Ok(()), false));
+    /// The next call answered: one answered at submit, else the next
+    /// call's answer, recorded in its part's state; whether a call was
+    /// made. `None` when nothing is left in flight.
+    fn take(&mut self) -> Option<(usize, Result<()>, bool)> {
+        if let Some(c) = self.at_once.pop_front() {
+            return Some((c, Ok(()), false));
         }
         if !self.tick.busy() {
             return None;
         }
         self.in_flight -= 1;
-        let (actions, opts) = (self.actions, self.opts);
-        let (i, r) = self.tick.next_completed(state, &mut |i, e| {
-            event(opts, Event::Progress(&actions[i].addr, &e));
+        let (calls, parts) = (&self.calls, &self.parts);
+        let answer = self.tick.next_answer(&mut |p, c, e| {
+            parts[p].hooks.event(Event::Progress(&calls[c].1.addr, &e));
         });
-        Some((i, r, true))
+        let state = &mut *self.parts[answer.part()].state;
+        let (c, r) = self.tick.answered(answer, state);
+        Some((c, r, true))
     }
 
-    /// Action `i` answered `r` (`called`: a call was made): its state
+    /// Call `c` answered `r` (`called`: a call was made): its part's state
     /// persisted and reported, its span on the clock, what waited on it
-    /// released, or its failure kept. An error when chaos `stop-after`
-    /// stops dform here.
-    fn answered(&mut self, i: usize, r: Result<()>, called: bool, state: &mut State) -> Result<()> {
-        let opts = self.opts;
-        let a = self.actions[i];
+    /// released, or its failure kept. The walk stops when its part's
+    /// state cannot be written, or chaos `stop-after` stops dform here.
+    fn answered(&mut self, c: usize, r: Result<()>, called: bool) -> Result<(), Walked> {
+        let (p, a) = self.calls[c];
+        let part = &mut self.parts[p];
         if r.is_ok()
-            && let Some(f) = &mut state.in_flight
+            && let Some(f) = &mut part.state.in_flight
         {
             f.remaining.remove(&state::key(&a.addr));
         }
-        persist_answered(opts, state)?;
-        report_action(opts, a, r.as_ref().err(), state);
-        let end = self.start_ms[i] + self.tick.latency(&a.addr);
-        self.spans.push((i, self.start_ms[i], end));
+        persist_answered(part.hooks, part.state).map_err(|e| Walked::stopped(p, e))?;
+        part.hooks.action(a, r.as_ref().err(), part.state);
+        let end = self.start_ms[c] + self.tick.latency(p, &a.addr);
+        self.spans.push((c, self.start_ms[c], end));
         match r {
             Ok(()) => {
-                event(opts, Event::Finished(&a.addr));
-                self.done[i] = true;
+                part.hooks.event(Event::Finished(&a.addr));
+                self.done[c] = true;
                 self.now = self.now.max(end);
             }
             Err(e) => {
-                event(opts, Event::Failed(&a.addr, &e));
-                self.failed.get_or_insert(e);
+                part.hooks.event(Event::Failed(&a.addr, &e));
+                self.failed[p].get_or_insert(e);
             }
         }
-        match opts.stop_after.filter(|_| called) {
-            Some(left) => stop_after(left, a),
+        match self.opts.stop_after.filter(|_| called) {
+            Some(left) => stop_after(left, a).map_err(|e| Walked::stopped(p, e)),
             None => Ok(()),
         }
     }
 
-    /// The walk's end: an action never sent is a cycle's; the timeline
-    /// recorded, the tick ended, state persisted. What the answered calls
-    /// returned, or why the tick stopped.
-    fn end(mut self, state: &mut State) -> Result<Seen> {
-        let opts = self.opts;
-        if self.failed.is_none()
-            && let Some(i) = self.started.iter().position(|s| !s)
+    /// The walk's end: a call never sent, when nothing failed, is a
+    /// cycle's; each part's timeline recorded, its tick ended and its
+    /// state persisted. What each part's answered calls returned, or why
+    /// its tick stopped.
+    fn end(mut self) -> Walked {
+        if !self.stopping()
+            && let Some(c) = self.started.iter().position(|s| !s)
         {
-            self.failed = Some(
+            let (p, a) = self.calls[c];
+            self.failed[p] = Some(
                 crate::report::Failure::of(
                     "apply",
-                    &self.actions[i].addr,
+                    &a.addr,
                     "not sent",
                     "its dependencies never finished (a cycle)",
                 )
@@ -332,15 +389,35 @@ impl<'a, 't> Walk<'a, 't> {
         }
         // The timeline in the order the calls started.
         let seq = &self.seq;
-        self.spans.sort_by_key(|&(i, _, _)| seq[i]);
-        for &(i, start, end) in &self.spans {
-            self.tick.record(&self.actions[i].addr, start, end);
+        self.spans.sort_by_key(|&(c, _, _)| seq[c]);
+        for &(c, start, end) in &self.spans {
+            let (p, a) = self.calls[c];
+            self.tick.span(p, &a.addr, start, end);
         }
+        let ended = self.tick.into_parts().into_iter().zip(self.parts);
+        Walked::Ended(
+            ended
+                .zip(self.failed)
+                .map(|((tick, part), failed)| part.end(tick, failed))
+                .collect(),
+        )
+    }
+}
+
+impl Part<'_> {
+    /// Its tick `tick` ends, after its first failure `failed`: the
+    /// world's tick ended, state persisted. What its answered calls
+    /// returned, or why its tick stopped.
+    fn end(
+        self,
+        tick: crate::plugin::providers::Part,
+        failed: Option<anyhow::Error>,
+    ) -> Result<Seen> {
         // The end of a tick that failed may fail in turn (its call waits
         // behind one that timed out): why the tick stopped comes first.
-        let ended = self.tick.end(state);
-        let persisted = (opts.persist)(state);
-        match (self.failed, ended.and_then(|r| persisted.map(|()| r))) {
+        let ended = tick.end(self.state);
+        let persisted = self.hooks.persist(self.state);
+        match (failed, ended.and_then(|r| persisted.map(|()| r))) {
             (Some(e), Ok(_)) => Err(e),
             // Why the tick stopped first, then why it did not end or its
             // state was not written.
@@ -371,12 +448,12 @@ fn stop_after(left: &Cell<usize>, a: &Action) -> Result<()> {
 /// `dform` binary's: only tests turn the feature on, as a dev-dependency)
 /// can revert it to one write per tick, the end's, for the model test to
 /// catch (`tests/model.rs`).
-fn persist_answered(opts: &Options, state: &State) -> Result<()> {
+fn persist_answered(part: &dyn Hooks, state: &State) -> Result<()> {
     #[cfg(feature = "test-hooks")]
     if hooks::PERSIST_PER_TICK.load(std::sync::atomic::Ordering::SeqCst) {
         return Ok(());
     }
-    (opts.persist)(state)
+    part.persist(state)
 }
 
 /// Mutants the model test must catch; off unless a test sets one.
@@ -408,20 +485,6 @@ fn created(cloud: &Providers, addr: &Address, key: &str) -> Result<Option<String
 /// `approver_allowed(Who, D)`: may `Who` approve the deformation of `D`, an
 /// address as plan prints it?
 pub type Allowed<'a> = &'a dyn Fn(&str, &str) -> bool;
-
-/// Tell the progress hook of a change of state.
-fn event(opts: &Options, e: Event) {
-    if let Some(hook) = opts.on_event {
-        hook(e);
-    }
-}
-
-/// Tell the audit hook how `a` ended.
-fn report_action(opts: &Options, a: &Action, err: Option<&anyhow::Error>, state: &State) {
-    if let Some(hook) = opts.on_action {
-        hook(a, err, state);
-    }
-}
 
 /// Apply's entry check, before any Apply call (README "Approvals"): verify
 /// `token` against the stack's trust root `roots` and what this apply is

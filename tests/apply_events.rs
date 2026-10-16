@@ -40,8 +40,8 @@ fn block(t0: Instant) -> Block {
         action("net.subnet", "b"),
     );
     let mut block = Block::new(1, &[&v, &a, &b], t0);
-    block.sites.insert(a.addr.clone(), "p.df:4".into());
-    block.sites.insert(b.addr.clone(), "p.df:5".into());
+    block.sites.insert((&a.addr).into(), "p.df:4".into());
+    block.sites.insert((&b.addr).into(), "p.df:5".into());
     block
 }
 
@@ -68,19 +68,19 @@ fn tick(at_end: Event) -> Vec<(u64, Event)> {
         addr("net.subnet", "b"),
     );
     vec![
-        (0, Event::Started(v.clone())),
-        (120, Event::Done(v)),
-        (120, Event::Started(a.clone())),
-        (150, Event::Status(a.clone(), "made".into())),
+        (0, Event::Started((&v).into())),
+        (120, Event::Done((&v).into())),
+        (120, Event::Started((&a).into())),
+        (150, Event::Status((&a).into(), "made".into())),
         (10_000, Event::Clock),
         (30_200, Event::Clock),
         (30_250, Event::Clock),
-        (45_000, Event::Done(a)),
-        (45_000, Event::Started(b.clone())),
+        (45_000, Event::Done((&a).into())),
+        (45_000, Event::Started((&b).into())),
         (
             45_300,
             Event::Failed(
-                b.clone(),
+                (&b).into(),
                 Failure::of(
                     "apply",
                     &b,
@@ -153,11 +153,11 @@ fn an_interrupt_ends_the_block_with_what_never_started() {
         0,
         t0,
         vec![
-            (0, Event::Started(v.clone())),
-            (100, Event::Done(v)),
-            (100, Event::Started(a.clone())),
+            (0, Event::Started((&v).into())),
+            (100, Event::Done((&v).into())),
+            (100, Event::Started((&a).into())),
             (150, Event::Note(stop_text(libc::SIGINT))),
-            (300, Event::Done(a)),
+            (300, Event::Done((&a).into())),
             (300, Event::Ended { interrupted: true }),
         ],
     );
@@ -219,9 +219,9 @@ fn on_a_terminal_the_block_fills_in_place() {
         addr("net.subnet", "b"),
     );
     let mut events = vec![
-        (0, Event::Started(v.clone())),
-        (100, Event::Done(v)),
-        (100, Event::Started(a.clone())),
+        (0, Event::Started((&v).into())),
+        (100, Event::Done((&v).into())),
+        (100, Event::Started((&a).into())),
         (2_100, Event::Clock),
     ];
     let running = print(block(t0), Mode::Terminal, 0, t0, events.clone());
@@ -236,9 +236,9 @@ fn on_a_terminal_the_block_fills_in_place() {
         ]
     );
     events.extend([
-        (2_500, Event::Done(a)),
-        (2_500, Event::Started(b.clone())),
-        (2_700, Event::Done(b)),
+        (2_500, Event::Done((&a).into())),
+        (2_500, Event::Started((&b).into())),
+        (2_700, Event::Done((&b).into())),
         (2_700, Event::Ended { interrupted: false }),
     ]);
     let done = print(block(t0), Mode::Terminal, 0, t0, events);
@@ -267,12 +267,12 @@ fn a_line_said_meanwhile_goes_above_the_block() {
         0,
         t0,
         vec![
-            (0, Event::Started(v.clone())),
+            (0, Event::Started((&v).into())),
             (
                 50,
                 Event::Note("retry net.vpc main apply (2/5): 503".into()),
             ),
-            (100, Event::Done(v)),
+            (100, Event::Done((&v).into())),
         ],
     );
     assert_eq!(
@@ -298,12 +298,12 @@ fn the_block_takes_the_questions_place() {
     let mut out = "tick 2  1 change   apply? [y/N] y\n".as_bytes().to_vec();
     let mut p = Printer::tick(b, Mode::Terminal, Style::default(), 1, t0, &mut out).width(Some(80));
     p.event(
-        Event::Started(vm.addr.clone()),
+        Event::Started((&vm.addr).into()),
         t0 + Duration::from_millis(10),
         &mut out,
     );
     p.event(
-        Event::Done(vm.addr.clone()),
+        Event::Done((&vm.addr).into()),
         t0 + Duration::from_millis(400),
         &mut out,
     );

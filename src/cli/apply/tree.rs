@@ -4,28 +4,35 @@
 //! log, its outputs) and nothing about ordering: the ticks are the
 //! tree's.
 //!
-//! Every deployment is evaluated in apply order, each over what those it
-//! reads plan to publish, and planned for tick 1; every lease is taken
-//! before the first call. Each tick plans every deployment still
-//! changing, in apply order, a reader's wait on an output its upstream
-//! knows only after a tick scheduled the tick after; tick 1's plan of the
-//! tree is shown and confirmed once. A tick's calls are made deployment by
-//! deployment (a provider's link serves one deployment's configuration at
-//! a time), then the boundaries in apply order, each reader evaluated
-//! over what its upstreams' boundaries made known. A deployment whose
-//! plan holds nothing more is done: its outputs published, its apply's
-//! end logged and its lease released. A tick waits on what it cannot
-//! reach yet only when no deployment changed anything in it.
+//! The tree is one run: each provider started once for it, each
+//! deployment's calls in a session of its own (`matrix::OneRun`,
+//! `plugin::pool`). Every deployment is evaluated in apply order, each
+//! over what those it reads plan to publish, and planned for tick 1;
+//! every lease is taken before the first call. Each tick plans every
+//! deployment still changing, in apply order, a reader's wait on an
+//! output its upstream knows only after a tick scheduled the tick after;
+//! tick 1's plan of the tree is shown and confirmed once. A tick's calls
+//! are the tree's: every deployment's are walked together
+//! (`executor::run_tick`, one part each), each whose dependencies are met
+//! submitted, under one window, each deployment's state written, its
+//! fence checked and its audit log told as its own calls go; their block
+//! is one, each deployment's changes under its name. Then the boundaries
+//! in apply order, each reader evaluated over what its upstreams'
+//! boundaries made known. A deployment whose plan holds nothing more is
+//! done: its outputs published, its apply's end logged and its lease
+//! released. A tick waits on what it cannot reach yet only when no
+//! deployment changed anything in it.
 
 use super::super::evaluated::{Context, Evaluated, Objects};
 use super::super::order::Dependency;
 use super::super::planning::Reporter;
 use super::super::{Cli, Cmd, Outcome, Session};
 use super::prompt::{confirm, declined};
-use super::ticks::{TickPlan, Ticks};
+use super::ticks::{Calls, Ran, TickPlan, Ticks, failed_of};
 use super::{Apply, Next, Wanted};
+use crate::report::progress::Block;
 use crate::said::Teller;
-use crate::{deployment, report, resources, stack, state, zset};
+use crate::{deployment, executor, report, resources, stack, state, zset};
 use anyhow::{Result, bail};
 use std::collections::BTreeMap;
 
@@ -60,6 +67,7 @@ pub(in crate::cli) fn apply(
     let Cmd::Apply(args) = &cli.cmd else {
         bail!("internal: an apply");
     };
+    let _run = super::super::matrix::OneRun::begin(order);
     let (members, seeds) = evaluate(order, of)?;
     let teller = Teller {
         quiet: args.why == report::Why::None,
@@ -164,6 +172,10 @@ fn run(args: &Apply, teller: &Teller, members: &[Member], seeds: Vec<Seed>) -> R
         ended: members.iter().map(|_| None).collect(),
         at: None,
         tick: 1,
+        stop_after: members
+            .first()
+            .and_then(|m| m.cx.chaos.stop_after)
+            .map(std::cell::Cell::new),
     };
     let r = tree.start(seeds, &mut sessions).and_then(|()| tree.drive());
     let r = super::super::interrupted(r);
@@ -186,6 +198,17 @@ struct Tree<'a> {
     /// The member a step of the tree was at when it failed.
     at: Option<usize>,
     tick: usize,
+    /// Chaos `stop-after`: the tree's, counted across its ticks and its
+    /// deployments' calls.
+    stop_after: Option<std::cell::Cell<usize>>,
+}
+
+/// What a tick's walk did ([`Tree::walk`]): its outcome, each part's
+/// audit log, and the changes its block said failed.
+struct Made<'a> {
+    walked: executor::Walked,
+    logs: Vec<super::ticks::ActionLog<'a>>,
+    failed: Vec<crate::report::progress::Change>,
 }
 
 /// What a member's coming tick is planned from.
@@ -244,9 +267,9 @@ impl<'a> Tree<'a> {
     }
 
     /// One tick of the tree: each member still changing planned, the tick
-    /// shown, each member's calls made, then each boundary in apply order,
-    /// a reader's over what its upstreams' made known. `Some`: the tree's
-    /// apply ends.
+    /// shown, every member's calls made together, then each boundary in
+    /// apply order, a reader's over what its upstreams' made known.
+    /// `Some`: the tree's apply ends.
     #[tracing::instrument(
         target = "dform",
         name = "tick",
@@ -264,18 +287,15 @@ impl<'a> Tree<'a> {
         if let Some(o) = self.show(&active, &plans)? {
             return Ok(Some(o));
         }
-        let mut changed = false;
-        let mut ran = Vec::new();
-        for (i, p) in active.iter().zip(plans.iter_mut()) {
-            self.enter(*i);
-            self.ticks[*i].approve(&p.tick)?;
+        for (&i, p) in active.iter().zip(&plans) {
+            self.enter(i);
+            self.ticks[i].approve(&p.tick)?;
             if self.tick == 1 {
-                self.ticks[*i].log_start()?;
+                self.ticks[i].log_start()?;
             }
-            let r = self.ticks[*i].apply(p)?;
-            changed |= r.changed;
-            ran.push(r);
         }
+        let ran = self.calls(&active, &mut plans)?;
+        let changed = ran.iter().any(|r| r.changed);
         self.check_progress(&active, &plans, changed)?;
         for ((i, p), r) in active.iter().zip(plans).zip(ran) {
             self.enter(*i);
@@ -298,6 +318,134 @@ impl<'a> Tree<'a> {
         }
         self.at = None;
         Ok(None)
+    }
+
+    /// The tick's calls, every active member's together (their `plans`):
+    /// each prepared, then one walk of the parts of those whose tick makes
+    /// calls ([`Tree::walk`]), then what each did taken back
+    /// ([`Tree::taken_back`]).
+    fn calls(&mut self, active: &[usize], plans: &mut [TickPlan]) -> Result<Vec<Ran>> {
+        let mut prepared = Vec::new();
+        for (&i, p) in active.iter().zip(plans.iter_mut()) {
+            self.enter(i);
+            prepared.push(self.ticks[i].calls(p)?);
+        }
+        let making: Vec<usize> = (0..active.len())
+            .filter(|&k| prepared[k].made(self.tick))
+            .collect();
+        let made = self.walk(active, plans, &making);
+        self.taken_back(active, prepared, &making, made)
+    }
+
+    /// What each active member's calls (`prepared`) did, taken back in
+    /// apply order ([`Ticks::called`]); `making` made calls, the walk's
+    /// parts in order. A member whose calls failed stops the tree there,
+    /// once every member's are taken back. A walk that stopped as a whole
+    /// (chaos `stop-after`, a state that could not be written) stops it at
+    /// once, the part it stopped at taken back, the others' answers in
+    /// their write-ahead records alone.
+    fn taken_back(
+        &mut self,
+        active: &[usize],
+        mut prepared: Vec<Calls>,
+        making: &[usize],
+        made: Made,
+    ) -> Result<Vec<Ran>> {
+        let killed = self.stop_after.as_ref().is_some_and(|l| l.get() == 0);
+        let Made {
+            walked,
+            mut logs,
+            failed,
+        } = made;
+        let results = match walked {
+            executor::Walked::Ended(results) => results,
+            executor::Walked::Stopped { part, error } => {
+                let k = making[part];
+                self.enter(active[k]);
+                let (calls, log) = (prepared.swap_remove(k), logs.swap_remove(part));
+                let failed = failed_of(&failed, part);
+                self.ticks[active[k]].called(calls, log, Err(error), &failed, killed)?;
+                bail!("internal: a stopped walk's part took its calls back");
+            }
+        };
+        let mut taken: Vec<Option<_>> = active.iter().map(|_| None).collect();
+        for (part, ((&k, applied), log)) in making.iter().zip(results).zip(logs).enumerate() {
+            taken[k] = Some((part, applied, log));
+        }
+        let mut ran = Vec::new();
+        let mut failure = None;
+        for ((&i, calls), taken) in active.iter().zip(prepared).zip(taken) {
+            self.enter(i);
+            let r = match taken {
+                Some((part, applied, log)) => {
+                    let failed = failed_of(&failed, part);
+                    self.ticks[i].called(calls, log, applied, &failed, killed)
+                }
+                None => Ok(calls.ran()),
+            };
+            match r {
+                Ok(r) => ran.push(r),
+                Err(e) => {
+                    failure.get_or_insert((i, e));
+                }
+            }
+        }
+        match failure {
+            Some((i, e)) => {
+                self.at = Some(i);
+                Err(e)
+            }
+            None => Ok(ran),
+        }
+    }
+
+    /// The walk of the members `making` (indices into `active` and
+    /// `plans`), those whose tick makes calls: one part each, in apply
+    /// order, under one window (`--parallel`); their block one, each
+    /// member's changes under its name.
+    fn walk(&mut self, active: &[usize], plans: &[TickPlan], making: &[usize]) -> Made<'a> {
+        let Some(&first) = making.first() else {
+            return Made {
+                walked: executor::Walked::Ended(Vec::new()),
+                logs: Vec::new(),
+                failed: Vec::new(),
+            };
+        };
+        let blocks = making
+            .iter()
+            .map(|&k| {
+                let (i, p) = (active[k], &plans[k].tick.planned);
+                (self.members[i].d.full.clone(), self.ticks[i].block(p))
+            })
+            .collect();
+        let block = Block::of_parts(self.tick, blocks, std::time::Instant::now());
+        let progress = self.ticks[active[first]].progress(block);
+        let callings: Vec<_> = making
+            .iter()
+            .enumerate()
+            .map(|(part, &k)| {
+                let p = &plans[k].tick.planned;
+                self.ticks[active[k]].calling(p, Some(&progress), part)
+            })
+            .collect();
+        let opts = executor::Options {
+            parallel: self.args.parallel as usize,
+            stop_after: self.stop_after.as_ref(),
+        };
+        let mut ticks: Vec<Option<&mut Ticks<'a, 'static>>> =
+            self.ticks.iter_mut().map(Some).collect();
+        let parts = making
+            .iter()
+            .zip(&callings)
+            .filter_map(|(&k, c)| Some(ticks[active[k]].take()?.part(&plans[k], c)))
+            .collect();
+        let walked = executor::run_tick(parts, &opts);
+        let logs = callings.into_iter().map(|c| c.into_log()).collect();
+        Made {
+            walked,
+            logs,
+            failed: progress.finish(),
+        }
     }
 
     /// Each active member's plan of this tick, in apply order: a reader's
