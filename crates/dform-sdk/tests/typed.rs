@@ -75,6 +75,12 @@ impl Lifecycle<Acme> for Bucket {
             .insert(remote.to_string(), desired.clone());
         Ok(desired)
     }
+    // As an API that keeps a bucket in the storage tier it was made in.
+    fn replaced(_: &Acme, prior: &Json, desired: &Json) -> Option<String> {
+        let tier = |d: &Json| d["tags"]["tier"].as_str().map(str::to_string);
+        let (was, now) = (tier(prior)?, tier(desired)?);
+        (was != now).then(|| format!("tier {now} is not {was}; a bucket stays in its tier"))
+    }
     fn delete(p: &Acme, remote: &str, _: &Progress) -> Result<()> {
         p.buckets.lock().unwrap().remove(remote);
         Ok(())
@@ -185,23 +191,34 @@ fn plan_comes_from_the_schema_and_apply_from_the_lifecycle() {
     assert_eq!(computed, json!({"id": "b-logs"}));
     let attrs = wire::from_doc(a.attrs.as_ref().unwrap()).unwrap();
     assert_eq!(attrs, json!({"name": "logs", "tags": {"team": "a"}}));
-    // A tag changes in place; the name, force_new, replaces.
-    let plan = |desired: Json| -> pb::PlanResponse {
+    // A tag changes in place; the name, force_new, replaces, which dform
+    // names; another tier replaces as the lifecycle says, and says why.
+    let plan_from = |prior: &Json, desired: Json| -> pb::PlanResponse {
         call(
             &h,
             pb::PlanRequest {
                 r#type: "acme.bucket".into(),
                 name: "logs".into(),
-                prior: Some(wire::doc(&attrs)),
+                prior: Some(wire::doc(prior)),
                 desired: Some(wire::doc(&desired)),
                 remote: "b-logs".into(),
             },
         )
     };
+    let plan = |desired: Json| plan_from(&attrs, desired);
     let p = plan(json!({"name": "logs", "tags": {"team": "b"}}));
     assert_eq!(p.changes.len(), 1);
-    assert!(!p.requires_replace);
-    assert!(plan(json!({"name": "logs2", "tags": {"team": "a"}})).requires_replace);
+    assert!(!p.requires_replace && p.reason.is_none());
+    let p = plan(json!({"name": "logs2", "tags": {"team": "a"}}));
+    assert!(p.requires_replace && p.reason.is_none(), "{p:?}");
+    let tier = |t: &str| json!({"name": "logs", "tags": {"team": "a", "tier": t}});
+    let p = plan_from(&tier("hot"), tier("cold"));
+    assert!(p.requires_replace, "{p:?}");
+    assert_eq!(
+        p.reason.as_deref(),
+        Some("tier cold is not hot; a bucket stays in its tier")
+    );
+    assert!(!plan_from(&tier("hot"), tier("hot")).requires_replace);
     // Read answers what the lifecycle has.
     let r: pb::ReadResponse = call(
         &h,

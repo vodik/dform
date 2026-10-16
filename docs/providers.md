@@ -268,6 +268,11 @@ fn main() -> std::process::ExitCode {
   address, and a program adopts it. `Lifecycle::adopt(p, given)` answers
   the remote id of what a program adopts by a name that is not its id
   (a hostname), and refuses a name two objects have; state keeps the id.
+- A change the API cannot make in place where no `force_new` path says
+  so (a size it only grows) is `Lifecycle::replaced(p, prior, desired)`:
+  why, in one line, which Plan answers as a replace whose reason the
+  plan prints under the change. A `force_new` change needs none: the
+  plan names the path.
 - `progress.note(..)` is something the user sees under the change once
   the call is done (a destroy that wrote a default rather than removing
   anything).

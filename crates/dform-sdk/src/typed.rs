@@ -19,6 +19,7 @@
 use dform_core::address::Address;
 use dform_core::plugin::backend::{self, Call, CallError, Handler, Reply, VERSION};
 use dform_core::plugin::{pb, wire};
+use dform_core::provider::Planned;
 use dform_core::schema::Schema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -251,6 +252,17 @@ pub trait Lifecycle<P: Provider>: Resource {
         let _ = (p, desired);
         Ok(())
     }
+    /// Why a change of the object from `prior` to `desired` replaces it
+    /// where no `force_new` path says so, as the API decides it (a size
+    /// it only grows): Plan answers a replace with it as the reason the
+    /// plan prints under the change (`size 20 is smaller than 50; a
+    /// volume only grows`). Called by Plan once the provider is
+    /// configured, as [`Lifecycle::check`] is, of an object that exists,
+    /// with the protocol's documents. By default none.
+    fn replaced(p: &P, prior: &Json, desired: &Json) -> Option<String> {
+        let _ = (p, prior, desired);
+        None
+    }
     /// The object `remote`'s health as of now (R-203), for `dform status`
     /// and nothing else: asked only of a type that declares it
     /// (`#[dform(health)]`). Judge it from what the API says now (a
@@ -289,6 +301,7 @@ trait Kind<P>: Send + Sync {
     ) -> Result<Json>;
     fn delete(&self, p: &P, remote: &str, progress: &Progress) -> Result<()>;
     fn check(&self, p: &P, desired: &Json) -> Result<()>;
+    fn replaced(&self, p: &P, prior: &Json, desired: &Json) -> Option<String>;
     fn answers_health(&self) -> bool;
     fn health(&self, p: &P, remote: &str) -> Result<Option<pb::Health>>;
 }
@@ -357,6 +370,10 @@ impl<P: Provider, R: Lifecycle<P> + 'static> Kind<P> for K<R> {
 
     fn check(&self, p: &P, desired: &Json) -> Result<()> {
         R::check(p, desired)
+    }
+
+    fn replaced(&self, p: &P, prior: &Json, desired: &Json) -> Option<String> {
+        R::replaced(p, prior, desired)
     }
 
     fn answers_health(&self) -> bool {
@@ -509,31 +526,39 @@ impl<P: Provider> Typed<P> {
         if let (None, Some(_), Some(why)) = (&prior, &desired, k.not_created()) {
             return Err(Error::Refused(format!("plan {addr}: {why}")));
         }
+        // A provider configured later (from a tick's output) checks at
+        // its Apply.
+        let p = self.provider.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(d) = &desired {
             if let Some(why) = self.schema.missing_required(&addr.typ, d) {
                 return Err(Error::Refused(format!("plan {addr}: {why}")));
             }
-            // A provider configured later (from a tick's output) checks at
-            // its Apply.
-            let p = self.provider.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(p) = p.as_ref() {
                 k.check(p, d).map_err(|e| e.at(&format!("plan {addr}")))?;
             }
         }
         let changes =
             dform_core::provider::diff(&self.schema, &addr.typ, prior.as_ref(), desired.as_ref());
-        let replaces = prior.is_some()
-            && desired.is_some()
-            && changes.iter().any(|c| {
-                self.schema
-                    .forces_new(&addr.typ, &dform_core::provider::norm_path(&c.path))
-            });
-        let planned = dform_core::provider::Planned {
-            changes,
-            replaces,
-            reason: None,
+        let (Some(prior), Some(d), false) = (&prior, &desired, changes.is_empty()) else {
+            return Ok(pb::PlanResponse::from(&Planned {
+                changes,
+                ..Default::default()
+            }));
         };
-        Ok(pb::PlanResponse::from(&planned))
+        let forced = changes.iter().any(|c| {
+            self.schema
+                .forces_new(&addr.typ, &dform_core::provider::norm_path(&c.path))
+        });
+        // A replace the API decides, said; one a path forces dform names.
+        let reason = match forced {
+            true => None,
+            false => p.as_ref().and_then(|p| k.replaced(p, prior, d)),
+        };
+        Ok(pb::PlanResponse::from(&Planned {
+            changes,
+            replaces: forced || reason.is_some(),
+            reason,
+        }))
     }
 
     fn apply(&self, r: pb::ApplyRequest, sink: backend::Progress) -> Result<pb::ApplyResponse> {
