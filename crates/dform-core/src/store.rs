@@ -45,7 +45,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::time::Duration;
 
 /// The deployment's state.
@@ -833,7 +833,7 @@ impl Store for LocalStore {
             .metadata()
             .with_context(|| format!("stat {}", path.display()))?
             .len();
-        let mut tails = self.tails.lock().expect("tails");
+        let mut tails = locked(&self.tails);
         let tail = match tails.remove(key) {
             Some((at, tail)) if at == len => tail,
             _ => read_tail(&mut f, len).with_context(|| format!("read {}", path.display()))?,
@@ -1069,7 +1069,7 @@ impl Store for MemoryStore {
     }
 
     fn get(&self, key: &str) -> Result<Option<Object>> {
-        let objects = self.objects.lock().expect("memory store");
+        let objects = locked(&self.objects);
         Ok(objects.get(key).map(|b| Object {
             bytes: b.clone(),
             etag: content_etag(b),
@@ -1077,7 +1077,7 @@ impl Store for MemoryStore {
     }
 
     fn put(&self, key: &str, bytes: &[u8], cond: &Cond) -> Result<Option<String>> {
-        let mut objects = self.objects.lock().expect("memory store");
+        let mut objects = locked(&self.objects);
         let now = objects.get(key).map(|b| content_etag(b));
         let holds = match cond {
             Cond::Any => true,
@@ -1092,7 +1092,7 @@ impl Store for MemoryStore {
     }
 
     fn list(&self, prefix: &str) -> Result<Vec<String>> {
-        let objects = self.objects.lock().expect("memory store");
+        let objects = locked(&self.objects);
         Ok(objects
             .keys()
             .filter(|k| k.starts_with(prefix))
@@ -1101,7 +1101,7 @@ impl Store for MemoryStore {
     }
 
     fn delete(&self, key: &str) -> Result<()> {
-        self.objects.lock().expect("memory store").remove(key);
+        locked(&self.objects).remove(key);
         Ok(())
     }
 }
@@ -1154,6 +1154,16 @@ pub fn parse_duration(s: &str) -> Option<Duration> {
         "m" => Some(Duration::from_secs(n * 60)),
         _ => None,
     }
+}
+
+/// One of a store's or a deployment's locks, taken: each is held to
+/// read or replace what it guards, and across nothing that can panic but
+/// a write of the state, whose panic ends the run; so none is poisoned
+/// when it is taken. (The lease's, which its renewer may hold when it
+/// panics, is [`Inner::lease`].)
+fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock()
+        .expect("a store's lock is poisoned only by a panic that ends the run")
 }
 
 /// One deployment's state in its store: what reads and writes it, and its
@@ -1268,8 +1278,8 @@ impl Deployment {
     pub fn load_state(&self) -> Result<State> {
         let read = self.read()?;
         let st = serde_json::from_value(read.state.clone()).context("parse state")?;
-        *self.inner.etag.lock().expect("etag") = Some(read.etag);
-        *self.inner.wal.lock().expect("wal") = Wal {
+        *locked(&self.inner.etag) = Some(read.etag);
+        *locked(&self.inner.wal) = Wal {
             state: Some(read.state),
             pos: read.replayed.pos,
             chained: read.replayed.chained,
@@ -1328,7 +1338,7 @@ impl Deployment {
     /// The log the state's entries go to: the audit log, its sink as this
     /// run's ([`Deployment::audit`]).
     fn wal_log(&self) -> crate::audit::Log {
-        let (sink, timeout, all) = self.inner.sink.lock().expect("sink").clone();
+        let (sink, timeout, all) = locked(&self.inner.sink).clone();
         crate::audit::Log::new(self.inner.store.clone(), sink)
             .with_sink_timeout(timeout)
             .with_sink_entries(all)
@@ -1347,7 +1357,7 @@ impl Deployment {
     fn log_state(&self, st: &State) -> Result<()> {
         let inner = &self.inner;
         let v = serde_json::to_value(st)?;
-        let mut wal = inner.wal.lock().expect("wal");
+        let mut wal = locked(&inner.wal);
         let fields = match (&wal.state, wal.chained) {
             (Some(was), true) => {
                 let changes = crate::wal::diff(was, &v);
@@ -1389,7 +1399,7 @@ impl Deployment {
         stall_at("DFORM_TEST_STALL_AT_WRITE", &inner.writes);
         self.log_state(st)?;
         let mut v = serde_json::to_value(st)?;
-        if let (Some(m), Some(pos)) = (v.as_object_mut(), &inner.wal.lock().expect("wal").pos) {
+        if let (Some(m), Some(pos)) = (v.as_object_mut(), &locked(&inner.wal).pos) {
             m.insert("log".into(), serde_json::to_value(pos)?);
         }
         if inner.store.fenced() {
@@ -1409,7 +1419,7 @@ impl Deployment {
             m.insert("fence".into(), fence.into());
         }
         let bytes = serde_json::to_vec_pretty(&v)?;
-        let mut etag = inner.etag.lock().expect("etag");
+        let mut etag = locked(&inner.etag);
         let cond = match &*etag {
             Some(Some(e)) => Cond::IfMatch(e.clone()),
             Some(None) => Cond::IfAbsent,
@@ -1566,7 +1576,7 @@ impl Deployment {
             );
         }
         *inner.lease() = Some(lease);
-        *inner.lost.lock().expect("lost") = None;
+        *locked(&inner.lost) = None;
         let mut guard = Guard {
             inner: self.inner.clone(),
             stop: None,
@@ -1602,8 +1612,8 @@ impl Deployment {
             "lease",
             serde_json::json!({ "fence": fence, "holder": holder }),
         )?;
-        let mut etag = inner.etag.lock().expect("etag");
-        let mut wal = inner.wal.lock().expect("wal");
+        let mut etag = locked(&inner.etag);
+        let mut wal = locked(&inner.wal);
         let changed = || {
             anyhow!(
                 "stack {}: its state {} changed since this run read it (another apply wrote \
@@ -1659,7 +1669,7 @@ impl Deployment {
     /// `timeout` for each, the state's own entries only when `all`. The
     /// log the state is written to carries the same sink.
     pub fn audit(&self, sink: Option<String>, timeout: Duration, all: bool) -> crate::audit::Log {
-        *self.inner.sink.lock().expect("sink") = (sink, timeout, all);
+        *locked(&self.inner.sink) = (sink, timeout, all);
         self.wal_log()
     }
 
@@ -1757,7 +1767,7 @@ fn abort_at(point: &str) {
 impl Inner {
     /// This run's lease. A renewer that panicked holding it leaves it as
     /// it was, so a poisoned lock still holds the lease.
-    fn lease(&self) -> std::sync::MutexGuard<'_, Option<Lease>> {
+    fn lease(&self) -> MutexGuard<'_, Option<Lease>> {
         self.lease.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -1777,14 +1787,11 @@ impl Inner {
     /// it recorded the lease lost, or when its guard stops it: finished
     /// otherwise, it panicked, and nothing renews the lease any more.
     fn held(&self) -> std::result::Result<(), String> {
-        let mut lost = self.lost.lock().expect("lost");
+        let mut lost = locked(&self.lost);
         if let Some(why) = &*lost {
             return Err(why.clone());
         }
-        if self
-            .renewer
-            .lock()
-            .expect("renewer")
+        if locked(&self.renewer)
             .as_ref()
             .is_some_and(|r| r.is_finished())
         {
@@ -1874,7 +1881,7 @@ impl Guard {
             })
             .expect("spawn the lease renewer");
         self.stop = Some(tx);
-        *self.inner.renewer.lock().expect("renewer") = Some(thread);
+        *locked(&self.inner.renewer) = Some(thread);
     }
 }
 
@@ -1921,7 +1928,7 @@ impl Renewer {
             }
             Err(e) if e.is::<Lost>() => {
                 eprintln!("warning: stack {}: {e:#}", inner.name);
-                *inner.lost.lock().expect("lost") = Some(format!("{e:#}"));
+                *locked(&inner.lost) = Some(format!("{e:#}"));
                 return false;
             }
             Err(e) => {
