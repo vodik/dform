@@ -2331,12 +2331,18 @@ cargo run -- -C tests/fixtures/demo why 'deny(m)'    # the deny, the lifecycle f
 Only policy may read the deformation: a resource rule over it would make the
 plan depend on itself, and is an error.
 
-`apply --parallel N` (default 1) walks a tick's dependency DAG with at most N
-Apply calls in flight: a create or update waits for what its document
-references, deletes wait for everything else. Output order does not change
-with N. The calls in flight run at once, and each is put on the executor's
-clock from the time its provider says it took; on the mock (chaos `latency`)
-the difference shows there:
+`apply --parallel N` walks a tick's dependency DAG with at most N Apply
+calls in flight: a create or update waits for what its document references,
+deletes wait for everything else. The default, 64, is the host's ceiling on
+a provider's window: below it every call whose dependencies are met is sent,
+and what paces a provider is the window of its requests the host keeps by
+what the server answers (see the providers section). `--parallel 1` makes
+one call at a time, in plan order: the serial escape, and the setting for a
+first apply against a new provider, whose throttles and failures then come
+one at a time. The plan's output does not change with N; the calls answer in
+the provider's order. The calls in flight run at once, and each is put on
+the executor's clock from the time its provider says it took; on the mock
+(chaos `latency`) the difference shows there:
 
 ```bash
 cargo run -- -C tests/fixtures/demo dev --chaos 'latency=net.vpc["main.vpc"]:100' \
@@ -2345,7 +2351,16 @@ cargo run -- -C tests/fixtures/demo dev --chaos 'latency=net.vpc["main.vpc"]:100
 
 An apply that fails or is killed can be resumed: before a tick's first Apply
 call its deformations are written to state as in flight, each with the world
-document it was planned against, and each answered call takes its action out.
+document it was planned against, and each create with its idempotency key as
+uncertain; each answered call takes its action out. A failure stops new
+calls and awaits the ones in flight. A crash (the provider's or dform's)
+or a kill loses their answers instead, so under a window of N up to N
+calls may have reached the provider unrecorded: each is still in the
+in-flight record, each create among them still uncertain, and the next
+run resolves every one by its key before it plans, as it would a single
+one. What a crash leaves mapped is every call answered before it, in
+whatever order they answered; under `--parallel 1` that is every action
+before the one in flight.
 The next `apply` refreshes and finishes the remaining actions: its plan's
 first tick is what remained, headed `tick 1  10 remaining, resumed`, one
 change line per remaining change (those done are not listed), then the
@@ -3257,10 +3272,13 @@ The kinds:
 - `lease`: an s3 lease taken: its `fence` and holder;
 - `action`: the kind, the address, the result (and the error), the remote
   id, and a digest of the redacted diff (after the `state` entry of its
-  answer); an error is its one-line head, what happened (`apply net.vpc
-  main: refused, nothing changed`), and, when there is more, the whole
-  text (the provider's message, the site) under `detail`, in every
-  entry that has one (`retry`, `approval`, `apply_end` too);
+  answer), one per call as it answers: in the order the calls answered,
+  which with more than one in flight is the provider's, an action's entry
+  always after those of what it waited on; an error is its one-line head,
+  what happened (`apply net.vpc main: refused, nothing changed`), and,
+  when there is more, the whole text (the provider's message, the site)
+  under `detail`, in every entry that has one (`retry`, `approval`,
+  `apply_end` too);
 - `tick`: the world as the executor saw it, as an HMAC with the stack's key;
 - `retry`: a provider call sent again: the tick, the provider, the
   call, the attempt and its budget (`of`), the delay, and why the last
@@ -3797,8 +3815,10 @@ Addresses are written as the plan prints them, `T["N"]` (quote the spec for
 the shell), and must name a resource of the stack. The world is
 saved after every action, and state (the identity mapping) is written after
 every Apply call that returns, so a failed or killed apply leaves exactly what
-a real cloud would: a failure or a crash at action N leaves the N-1 identities
-before it in state.
+a real cloud would: every identity answered before the failure or the crash
+in state, and the calls in flight (at most `--parallel`) uncertain; at
+`--parallel 1`, a failure or a crash at action N leaves the N-1 identities
+before it.
 
 A call whose outcome dform does not know (it timed out, the provider
 crashed, or dform stopped with it in flight) is recorded as `uncertain` in
