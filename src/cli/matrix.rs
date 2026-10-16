@@ -105,93 +105,14 @@ pub(super) fn run(cli: Cli, module: &Path) -> Result<Outcome> {
         eprintln!("warning: {w}");
     }
     found.check()?;
-    // The module as the project names it, its path from the root.
-    let label = std::fs::canonicalize(module)
-        .ok()
-        .and_then(|m| {
-            let root = std::fs::canonicalize(&project.root).ok()?;
-            Some(m.strip_prefix(root).ok()?.display().to_string())
-        })
-        .unwrap_or_else(|| module.display().to_string());
-    let file_of = |stack: &str| match found.named(stack)[..] {
-        [one] => Some(one.file.clone()),
-        _ => None,
-    };
-    let mut roots = Vec::new();
-    for l in &matrix.listed {
-        let Some(file) = file_of(&l.stack) else {
-            bail!(
-                "{label}: {} lists a deployment of no stack of the project",
-                l.target()
-            );
-        };
-        roots.push((file, l.key.clone()));
-    }
-    let order = super::order::order_of(&roots)?;
-    // What an apply of the module made that it lists no more: destroyed,
-    // readers first.
-    let mut gone = Vec::new();
-    for (name, kept) in Made::load(&cli.root)?.of(&label) {
-        if order.iter().any(|d| d.name == name) {
-            continue;
-        }
-        let Some(file) = file_of(&kept.stack) else {
-            bail!(
-                "{name}: {label} lists it no more, and the project has no stack {}: its destroy \
-                 needs its program; restore the stack's file, destroy {name}, then remove it",
-                kept.stack
-            );
-        };
-        gone.push((name, file, kept.key));
-    }
-    let removed = {
-        let roots: Vec<_> = gone
-            .iter()
-            .map(|(_, f, k)| (f.clone(), k.clone()))
-            .collect();
-        let mut order = super::order::order_of(&roots)?;
-        order.retain(|d| gone.iter().any(|(n, _, _)| *n == d.name));
-        order.reverse();
-        order
-    };
+    let label = label_of(module, &project);
+    let order = listed_order(&matrix, &label, &found)?;
+    let removed = removed_order(&cli, &label, &order, &found)?;
     if !cli.input_files.is_empty() {
         bail!("--input-file gives one deployment's inputs: name it as the target");
     }
-    // A `--set` goes to each deployment's stack that declares the input;
-    // one none declares is an error.
-    let input = |kv: &String| {
-        kv.split_once('=')
-            .map_or(kv.as_str(), |(k, _)| k)
-            .to_string()
-    };
-    if let Some(kv) = cli.user_set.iter().find(|kv| {
-        !order
-            .iter()
-            .chain(&removed)
-            .any(|d| d.inputs.contains(&input(kv)))
-    }) {
-        bail!(
-            "--set {kv}: no stack {label} lists declares input {}",
-            input(kv)
-        );
-    }
-    let of = |d: &Dependency, cmd: Cmd| {
-        let mut dep = cli.clone();
-        dep.cmd = cmd;
-        dep.matrix = None;
-        dep.user_set = cli
-            .user_set
-            .iter()
-            .filter(|kv| d.inputs.contains(&input(kv)))
-            .cloned()
-            .collect();
-        dep.set = dep.user_set.clone();
-        dep.set
-            .extend(d.key.iter().map(|(k, v)| format!("{k}={v}")));
-        dep.keys = d.key.clone();
-        dep.files = vec![d.file.clone()];
-        dep
-    };
+    check_sets(&cli, &label, &order, &removed)?;
+    let of = |d: &Dependency, cmd: Cmd| deployment_run(&cli, d, cmd);
     match &cli.cmd {
         Cmd::Plan(_) => plan(&cli, &label, &matrix, &order, &removed, &of),
         Cmd::Apply(_) => apply(&cli, &label, &order, &removed, &of),
@@ -201,6 +122,118 @@ pub(super) fn run(cli: Cli, module: &Path) -> Result<Outcome> {
         Cmd::Render(_) => super::render::matrix(&cli, &order, &of),
         _ => bail!("internal: a project module runs plan, apply, test and dev effects"),
     }
+}
+
+/// The module as the project names it: its path from the root.
+fn label_of(module: &Path, project: &crate::project::Project) -> String {
+    std::fs::canonicalize(module)
+        .ok()
+        .and_then(|m| {
+            let root = std::fs::canonicalize(&project.root).ok()?;
+            Some(m.strip_prefix(root).ok()?.display().to_string())
+        })
+        .unwrap_or_else(|| module.display().to_string())
+}
+
+/// The file of the project's stack `stack`, when exactly one is so named.
+fn stack_file(found: &crate::project::Discovered, stack: &str) -> Option<PathBuf> {
+    match found.named(stack)[..] {
+        [one] => Some(one.file.clone()),
+        _ => None,
+    }
+}
+
+/// The deployments the module lists and those they read, in apply order.
+fn listed_order(
+    matrix: &Matrix,
+    label: &str,
+    found: &crate::project::Discovered,
+) -> Result<Vec<Dependency>> {
+    let mut roots = Vec::new();
+    for l in &matrix.listed {
+        let Some(file) = stack_file(found, &l.stack) else {
+            bail!(
+                "{label}: {} lists a deployment of no stack of the project",
+                l.target()
+            );
+        };
+        roots.push((file, l.key.clone()));
+    }
+    super::order::order_of(&roots)
+}
+
+/// What an apply of the module made that it lists no more (not in
+/// `order`): destroyed, readers first.
+fn removed_order(
+    cli: &Cli,
+    label: &str,
+    order: &[Dependency],
+    found: &crate::project::Discovered,
+) -> Result<Vec<Dependency>> {
+    let mut gone = Vec::new();
+    for (name, kept) in Made::load(&cli.root)?.of(label) {
+        if order.iter().any(|d| d.name == name) {
+            continue;
+        }
+        let Some(file) = stack_file(found, &kept.stack) else {
+            bail!(
+                "{name}: {label} lists it no more, and the project has no stack {}: its destroy \
+                 needs its program; restore the stack's file, destroy {name}, then remove it",
+                kept.stack
+            );
+        };
+        gone.push((name, file, kept.key));
+    }
+    let roots: Vec<_> = gone
+        .iter()
+        .map(|(_, f, k)| (f.clone(), k.clone()))
+        .collect();
+    let mut removed = super::order::order_of(&roots)?;
+    removed.retain(|d| gone.iter().any(|(n, _, _)| *n == d.name));
+    removed.reverse();
+    Ok(removed)
+}
+
+/// The input a `--set K=V` names.
+fn set_input(kv: &str) -> String {
+    kv.split_once('=').map_or(kv, |(k, _)| k).to_string()
+}
+
+/// A `--set` goes to each deployment's stack that declares the input;
+/// one none of `order` and `removed` declares is an error.
+fn check_sets(cli: &Cli, label: &str, order: &[Dependency], removed: &[Dependency]) -> Result<()> {
+    let Some(kv) = cli.user_set.iter().find(|kv| {
+        !order
+            .iter()
+            .chain(removed)
+            .any(|d| d.inputs.contains(&set_input(kv)))
+    }) else {
+        return Ok(());
+    };
+    bail!(
+        "--set {kv}: no stack {label} lists declares input {}",
+        set_input(kv)
+    )
+}
+
+/// The run of the deployment `d` the module's `cli` makes, as `cmd`:
+/// its file and key, and the `--set`s of the inputs its stack declares.
+fn deployment_run(cli: &Cli, d: &Dependency, cmd: Cmd) -> Cli {
+    let mut dep = cli.clone();
+    dep.cmd = cmd;
+    dep.matrix = None;
+    dep.user_set = cli
+        .user_set
+        .iter()
+        .filter(|kv| d.inputs.contains(&set_input(kv)))
+        .cloned()
+        .collect();
+    dep.set = dep.user_set.clone();
+    dep.set
+        .extend(d.key.iter().map(|(k, v)| format!("{k}={v}")));
+    dep.keys = d.key.clone();
+    dep.files = vec![d.file.clone()];
+    dep
 }
 
 type For<'a> = dyn Fn(&Dependency, Cmd) -> Cli + 'a;
