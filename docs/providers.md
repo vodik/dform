@@ -424,7 +424,9 @@ on both; tests/host_wasm.rs keeps them from drifting.
 
 The Kubernetes provider is the same source either way: the executable
 `dform-provider-k8s`, or `dform_provider_k8s.wasm` (`cargo xtask
-components` builds it with the fake and the OVH provider). As a wasm
+components` builds it with the fake and the OVH provider; `cargo xtask
+install` installs it where dform looks, so its table needs no `path`,
+docs/reference.md "Installing"). As a wasm
 provider it is granted the filesystem, which the language front-end
 that parses its schema links until the crate split, and in which it
 keeps what it derives from a cluster in the run's cache directory (the

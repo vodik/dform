@@ -32,13 +32,38 @@ A release is one archive per platform, `dform-VERSION-TARGET.tar.gz`
 holding `dform` and every `dform-provider-*` beside it, with
 `SHA256SUMS`. mise installs the whole archive: `mise use -g
 github:vodik/dform@latest` (or `ubi:vodik/dform[extract_all=true]`).
-From a checkout, `cargo build --workspace` builds the providers and
-`cargo install --path .` the CLI, which finds them in the checkout's
-target directory. A provider `dform.toml` names without a `source` is
-the executable `dform-provider-NAME`, found beside `dform` first, then
-in that target directory, then on `PATH`; an entry's own `path` wins
-over all three;
-`dform provider list` says where each was found.
+
+From a checkout, `cargo xtask install` installs dform (`cargo install
+--path . --locked`, built with the wasm host) and every built-in
+provider in `$XDG_DATA_HOME/dform/providers`
+(`~/.local/share/dform/providers` by default), and prints each file it
+installed; `--features F` adds dform's features. A provider built as a
+wasm provider is installed as one, `dform-provider-NAME.wasm` (the
+Kubernetes and OVH providers, which their `dform.toml` table grants
+what docs/providers.md says), the others as their executables. A
+package's build calls `cargo xtask install --prefix DIR`: dform in
+`DIR/bin`, the providers in `DIR/lib/dform/providers`.
+
+A provider `dform.toml` names without a `source` is the provider `NAME`:
+the executable `dform-provider-NAME`, else the wasm provider
+`dform-provider-NAME.wasm`, in the first of these directories holding
+either:
+
+1. beside dform's own executable (a release archive's providers);
+2. `$XDG_DATA_HOME/dform/providers` (`cargo xtask install`'s);
+3. each `$XDG_DATA_DIRS` entry's `dform/providers`
+   (`/usr/local/share/dform/providers`, `/usr/share/dform/providers` by
+   default);
+4. the install's `lib/dform/providers`, the `lib` beside the `bin`
+   holding dform (a package's, `/usr/lib/dform/providers` for
+   `/usr/bin/dform`), then `/usr/lib/dform/providers`;
+5. the target directory of the checkout dform was built in (`release`
+   and `debug`, its own profile first);
+6. the directories on `PATH`.
+
+An entry's own `path` wins over all of them. The mock, `fake`, is dform
+itself and never looked for. `dform provider list` says where each
+provider was found and its file.
 
 ## Quick start
 
@@ -142,14 +167,12 @@ isolated = true
 exclude = ["scratch/**"]
 ```
 
-A provider without a `source` is the executable `dform-provider-NAME`.
+A provider without a `source` is the provider `NAME`, its executable
+`dform-provider-NAME` or its wasm provider `dform-provider-NAME.wasm`.
 An entry with a `path` (relative to the root, absolute, or under `~/`)
-is that file, the user's word; without one, the executable is looked
-for in one order: beside dform's own executable (a release's bundled
-providers), in the target directory of the checkout dform was built in
-(`release` and `debug`, its own profile first), then on `PATH`, until a
-registry serves it. The mock, `fake`, is dform itself and never
-looked for. A `[providers]` table has a `source` or a `path`, not both.
+is that file, the user's word; without one, it is looked for in the
+order "Installing" gives, until a registry serves it. A `[providers]`
+table has a `source` or a `path`, not both.
 
 ### Targets and commands
 
@@ -629,6 +652,8 @@ refused), the others stopped after that tick.
 | `NO_COLOR` | set and not empty: `--color=auto` colours nothing |
 | `RANDOM_MASTER` | the `random.*` input key material instead of the deployment's master (tests, the editor): taken only where state was applied with it, or nothing was applied (see "Secrets") |
 | `XDG_CONFIG_HOME` | where the credential files (`dform/credentials/`) are; default `~/.config` |
+| `XDG_DATA_HOME` | where the user's providers are (`dform/providers/`, where `cargo xtask install` puts them); default `~/.local/share` |
+| `XDG_DATA_DIRS` | where the system's providers are, each entry's `dform/providers/`, looked in after the user's; default `/usr/local/share:/usr/share` |
 | `XDG_CACHE_HOME` | where git mirrors, compiled wasm providers and the language server's read-only files are kept (`dform/`); default `~/.cache` |
 <!-- /man:environment -->
 
@@ -647,6 +672,7 @@ Variables a test sets (`DFORM_TEST_*`, the poll intervals) and those
 | `dform.state/stacks.json` | the registry: where each applied deployment's objects are (a directory, or `s3://..`), by its full name (`stacks.shop[env=prod]`), for the stacks that read its outputs |
 | `dform.state/cache/` | what providers and trust roots fetch (the Kubernetes OpenAPI document, JWKS) |
 | `~/.config/dform/credentials/KIND/NAME` | the operator's credential `KIND:NAME` (under `$XDG_CONFIG_HOME`, or `DFORM_CREDENTIALS`); `age/NAME` an age identity that opens a master sealed to its recipient |
+| `~/.local/share/dform/providers/` | the user's providers, `dform-provider-NAME` or `dform-provider-NAME.wasm` (under `$XDG_DATA_HOME`); a package's are in `/usr/lib/dform/providers/` |
 | `~/.cache/dform/` | git mirrors, compiled wasm providers, the language server's read-only files (under `$XDG_CACHE_HOME`) |
 <!-- /man:files -->
 

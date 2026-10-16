@@ -10,4 +10,6 @@
 | `NO_COLOR` | set and not empty: `--color=auto` colours nothing |
 | `RANDOM_MASTER` | the `random.*` input key material instead of the deployment's master (tests, the editor): taken only where state was applied with it, or nothing was applied (see "Secrets") |
 | `XDG_CONFIG_HOME` | where the credential files (`dform/credentials/`) are; default `~/.config` |
+| `XDG_DATA_HOME` | where the user's providers are (`dform/providers/`, where `cargo xtask install` puts them); default `~/.local/share` |
+| `XDG_DATA_DIRS` | where the system's providers are, each entry's `dform/providers/`, looked in after the user's; default `/usr/local/share:/usr/share` |
 | `XDG_CACHE_HOME` | where git mirrors, compiled wasm providers and the language server's read-only files are kept (`dform/`); default `~/.cache` |
