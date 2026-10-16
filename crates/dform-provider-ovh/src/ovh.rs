@@ -197,6 +197,8 @@ pub struct Ovh {
     lists: Mutex<BTreeMap<String, Json>>,
     /// Whether each project is on a vRack, once asked.
     vrack: Mutex<BTreeMap<String, bool>>,
+    /// The private addresses instances asked at Plan, by network.
+    asked: Mutex<network::Asked>,
 }
 
 /// Why an Apply failed.
@@ -276,6 +278,7 @@ impl Ovh {
             made: Mutex::new(BTreeMap::new()),
             lists: Mutex::new(BTreeMap::new()),
             vrack: Mutex::new(BTreeMap::new()),
+            asked: Mutex::new(network::Asked::default()),
         }
     }
 
@@ -590,6 +593,12 @@ impl Ovh {
         if !self.schema.knows_type(typ) {
             bail!("{at}: the ovh provider has no type {typ}");
         }
+        // An instance's networks and the addresses it asks, which one
+        // that goes asks no more.
+        if typ == INSTANCE {
+            let who = dform_core::report::address(&address(typ, name));
+            self.check_networks(&at, &who, desired.unwrap_or(&Json::Null))?;
+        }
         let Some(d) = desired else {
             return Ok((diff(&self.schema, typ, prior, None), false));
         };
@@ -691,12 +700,14 @@ impl Ovh {
             d.get("regions").is_some() && regions(p).iter().any(|r| !now.contains(r))
         };
         // An instance resizes to a larger flavor in place (it reboots);
-        // a smaller one replaces it.
+        // a smaller one replaces it, as an address asked anew on a
+        // network it is on does.
         let smaller = |p: &Json| self.flavor_shrinks(at, p, d);
+        let readdressed = |p: &Json| !network::readdressed(p, d).is_empty();
         replaces
             || (typ == VOLUME && prior.is_some_and(shrinks))
             || (typ == NETWORK && prior.is_some_and(leaves))
-            || (typ == INSTANCE && prior.is_some_and(smaller))
+            || (typ == INSTANCE && prior.is_some_and(|p| smaller(p) || readdressed(p)))
     }
 
     // Apply.
@@ -776,12 +787,16 @@ impl Ovh {
         say: Say,
     ) -> std::result::Result<(String, Json, Json), Failed> {
         let (typ, key) = (r.r#type.as_str(), r.idempotency_key.as_str());
+        // Read as dform kept it: an instance's own ports, and the
+        // addresses asked of them.
+        let prior = r.prior.as_ref().map(wire::from_doc).transpose();
+        let prior = prior.map_err(|e| refused(at, format!("{e:#}")))?;
+        let old = self
+            .read(typ, &r.remote, &r.name, prior.as_ref())
+            .map_err(|e| refused(at, format!("{e:#}")))?;
         // The key is the name: the old object goes first unless the
         // replacement has another key, or its type has none (two S3
         // credentials of a user are two objects).
-        let old = self
-            .read(typ, &r.remote, &r.name, None)
-            .map_err(|e| refused(at, format!("{e:#}")))?;
         let same = old.as_ref().is_none_or(|(attrs, _)| {
             self.lookups.contains_key(typ) && self.key_of(typ, attrs) == self.key_of(typ, config)
         });
@@ -790,21 +805,58 @@ impl Ovh {
                 "{at}: the replacement has the old object's key, so the old one goes first"
             ));
         }
+        let mut first = !r.create_first || same;
         if typ == INSTANCE
-            && let Some((was, _)) = &old
-            && self.flavor_shrinks(at, was, config)
+            && let Some(was) = &old
         {
+            first |= self.instance_replaced(at, was, config, !first, notes);
+        }
+        if first {
+            self.delete(typ, at, &r.remote, notes, say)?;
+        }
+        self.create(typ, at, config, key, notes, say)
+    }
+
+    /// Why instance `was` (as Read answers it) is replaced for `config`,
+    /// noted: a smaller flavor, an address asked anew. Whether the old one
+    /// goes first because the replacement asks an address it has (a
+    /// port's address is one port's), noted where it would have gone
+    /// after (`made_first`).
+    fn instance_replaced(
+        &self,
+        at: &str,
+        was: &(Json, Json),
+        config: &Json,
+        made_first: bool,
+        notes: &mut Vec<String>,
+    ) -> bool {
+        if self.flavor_shrinks(at, &was.0, config) {
             notes.push(format!(
                 "{at}: flavor {} is smaller than {}, and the API resizes an instance \
                  only to a larger one, so it is replaced",
                 s(config, "flavor").unwrap_or_default(),
-                s(was, "flavor").unwrap_or_default()
+                s(&was.0, "flavor").unwrap_or_default()
             ));
         }
-        if !r.create_first || same {
-            self.delete(typ, at, &r.remote, notes, say)?;
+        let moved: Vec<String> = network::readdressed(&was.0, config)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        if !moved.is_empty() {
+            notes.push(format!(
+                "{at}: {}, and no API call changes a port's address, so it is replaced",
+                moved.join("; ")
+            ));
         }
-        self.create(typ, at, config, key, notes, say)
+        let held = network::held(&was.1, config);
+        if made_first && !held.is_empty() {
+            notes.push(format!(
+                "{at}: the replacement asks {}, which the old instance has, so the old one goes \
+                 first",
+                held.join(", ")
+            ));
+        }
+        !held.is_empty()
     }
 
     /// What a Create of `doc` is found by: each attribute of the type's
@@ -896,7 +948,7 @@ impl Ovh {
             // owning what it was made with (an instance's ports).
             if ours {
                 let prior = match typ {
-                    INSTANCE => self.made_instance(at, &remote)?,
+                    INSTANCE => self.made_instance(at, &remote, config)?,
                     _ => None,
                 };
                 return self.update(typ, at, &remote, config, prior, notes, say);
@@ -964,8 +1016,9 @@ impl Ovh {
             INSTANCE => {
                 let owned = map::Owned::from(Some(&prior));
                 let own = self.update_instance(at, remote, &now.0, config, &owned, notes, say)?;
+                let fixed = network::fixed(config);
                 for (net, port) in own {
-                    map::own_port(&mut prior, &net, &port);
+                    map::own_port(&mut prior, &net, &port, fixed.contains(&net));
                 }
             }
             RECORD => self.update_record(at, remote, &now, config)?,

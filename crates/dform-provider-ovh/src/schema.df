@@ -58,14 +58,22 @@ type_attr("ovh.instance", "ssh_key", "ref(ovh.ssh_key)", ["force_new"])
 # Write-only: the API never answers it; state keeps the digest of what was
 # applied, and a different one replaces the instance (R-106).
 type_attr("ovh.instance", "user_data", "string", ["sensitive", "force_new", "write_only"])
-# Its private networks: made on them, it has an interface on each.
+# Its private networks: made on them, it has an interface on each. An
+# entry is a network (its port's address DHCP's) or `{ network, ip }`
+# (its port made with that address, which no call changes: another
+# replaces the instance). The element type is that object, a bare
+# reference coerced into it, once the checker coerces one (a reference
+# where an object with one required reference field is expected); until
+# then it says `ref`, which the checker does not judge, and Plan checks
+# an object's fields.
 type_attr("ovh.instance", "networks", "set(ref(ovh.network))", [])
 type_attr("ovh.instance", "public_ip", "ip", ["computed"])
 type_attr("ovh.instance", "private_ip", "ip", ["computed", "nullable"])
 type_attr("ovh.instance", "private_ips", "map(ip)", ["computed"])
-# Its own port on each private network, `{id, ipv4}` by the network's id:
-# the API marks no port as the instance's and an attach repeated makes
-# another, so the provider keeps the one it made, and Read finds it by id.
+# Its own port on each private network, `{id, ipv4}` by the network's id,
+# `fixed` where it has the address the program asked: the API marks no
+# port as the instance's and an attach repeated makes another, so the
+# provider keeps the one it made, and Read finds it by id.
 type_attr("ovh.instance", "ports", "map", ["computed"])
 type_attr("ovh.instance", "status", "string", ["computed"])
 type_replace("ovh.instance", "either")
@@ -235,7 +243,7 @@ type_doc("ovh.instance", "public_ip", "The instance's public IPv4 address, once 
 type_doc(
   "ovh.instance",
   "networks",
-  "The private networks it is on (`networks = [lab]`), each in its region and with a subnet there; the public network too. Changed in place: an interface attached on a network added, detached from one left.",
+  "The private networks it is on (`networks = [lab]`), each in its region and with a subnet there; the public network too. An entry `{ network = lab, ip = inet.host(range, 9) }` makes its port there with that address, a host of a subnet of the network in its region; another address replaces the instance. Changed in place: an interface attached on a network added, detached from one left.",
 )
 type_doc(
   "ovh.instance",
@@ -250,7 +258,7 @@ type_doc(
 type_doc(
   "ovh.instance",
   "ports",
-  "The port it was made with or attached on each private network, by the network's id: `id` and its `ipv4` address (`server.ports[lab.id].id`). None on a network whose port it did not make, or whose port is gone.",
+  "The port it was made with or attached on each private network, by the network's id: `id` and its `ipv4` address (`server.ports[lab.id].id`), `fixed` where the program asked that address. None on a network whose port it did not make, or whose port is gone.",
 )
 type_doc("ovh.instance", "status", "ACTIVE once it runs; BUILD while it is made.")
 type_doc("ovh.ssh_key", "", "An SSH public key of the project, for its instances.")

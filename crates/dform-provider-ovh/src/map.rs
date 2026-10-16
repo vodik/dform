@@ -15,10 +15,12 @@ fn str_of<'a>(o: &'a Json, k: &str) -> Option<&'a str> {
 /// `user_data` is not in the answer: the API keeps it write-only, so it is
 /// left out here (`Ovh::plan` compares it with what the provider sent).
 /// `nics` is its ports (`interfaces`), `owned` which of them are its own:
-/// its `networks` are the private networks it has a port on, sorted;
-/// `private_ips` the address on each, its own port's or else the first
-/// port's that has one; `ports` its own port on each, by id with its
-/// address (`ports[NET].id`, `.ipv4`), on none where it owns none. Its
+/// its `networks` are the private networks it has a port on, sorted, each
+/// whose own port has the address the program asked for written as the
+/// program writes it, `{network, ip}`; `private_ips` the address on each,
+/// its own port's or else the first port's that has one; `ports` its own
+/// port on each, by id with its address (`ports[NET].id`, `.ipv4`, and
+/// `.fixed` where it was asked), on none where it owns none. Its
 /// `public_ip` is the public port's, and `private_ip` its address on the
 /// first of its networks, as `private_ips` has it: from the ports, which
 /// the API lists at once, not from `ipAddresses`, which lags an attach;
@@ -68,7 +70,14 @@ pub fn instance(
         computed.insert("public_ip".into(), json!(ip));
     }
     if !nics.private.is_empty() {
-        let networks: Vec<&String> = nics.private.keys().collect();
+        let networks: Vec<Json> = nics
+            .private
+            .iter()
+            .map(|(net, on)| match owned.fixed_on(net, on) {
+                Some(ip) => json!({"network": net, "ip": ip}),
+                None => json!(net),
+            })
+            .collect();
         attrs.insert("networks".into(), json!(networks));
     }
     let (private_ips, ports) = by_network(&nics.private, owned);
@@ -97,7 +106,11 @@ fn by_network(private: &Ports, owned: &Owned) -> (Json, Json) {
             private_ips.insert(net.clone(), json!(ip));
         }
         if let Some(p) = own {
-            ports.insert(net.clone(), p.into());
+            let mut record = Json::from(p);
+            if owned.fixed_on(net, on).is_some() {
+                record["fixed"] = json!(true);
+            }
+            ports.insert(net.clone(), record);
         }
     }
     (Json::Object(private_ips), Json::Object(ports))
@@ -137,10 +150,21 @@ pub struct Interfaces {
     pub private: Ports,
 }
 
-/// Which of an instance's ports are its own: the API marks none, and an
-/// attach repeated makes another port on the same network.
+/// Which of an instance's ports are its own, and on which networks the
+/// program asked its own port's address: the API marks no port as the
+/// instance's, and an attach repeated makes another port on the same
+/// network.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Owned {
+pub struct Owned {
+    ports: Own,
+    /// The networks whose own port was made with the address the program
+    /// asked for (`networks = [{ network, ip }]`), which Read answers as
+    /// the program writes it.
+    fixed: std::collections::BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Own {
     /// The port on each network it was just made with (one each).
     Made,
     /// The port named on each network: what its prior computed values
@@ -149,40 +173,79 @@ pub enum Owned {
 }
 
 impl Owned {
+    /// The port on each network an instance was just made with, `fixed`
+    /// the networks it asked an address on.
+    pub fn made(fixed: impl IntoIterator<Item = String>) -> Owned {
+        Owned {
+            ports: Own::Made,
+            fixed: fixed.into_iter().collect(),
+        }
+    }
+
+    /// The port `ids` names on each network, no address asked.
+    pub fn named(ids: std::collections::BTreeMap<String, String>) -> Owned {
+        Owned {
+            ports: Own::Named(ids),
+            fixed: Default::default(),
+        }
+    }
+
     /// Its own port among `ports`, those on network `net`: none when it
     /// names one that is gone.
     pub fn on<'a>(&self, net: &str, ports: &'a [Port]) -> Option<&'a Port> {
-        match self {
-            Owned::Made => ports.first(),
-            Owned::Named(ids) => {
+        match &self.ports {
+            Own::Made => ports.first(),
+            Own::Named(ids) => {
                 let id = ids.get(net)?;
                 ports.iter().find(|p| p.id == *id)
             }
         }
     }
+
+    /// The address of its own port among `ports` on network `net`, when
+    /// the program asked for it.
+    pub fn fixed_on<'a>(&self, net: &str, ports: &'a [Port]) -> Option<&'a str> {
+        if !self.fixed.contains(net) {
+            return None;
+        }
+        self.on(net, ports)?.ipv4.as_deref()
+    }
 }
 
-/// The ports a prior names, `ports[NET].id`: none without one.
+/// The ports a prior names, `ports[NET].id`, and those made with the
+/// address asked, `ports[NET].fixed`: none without one.
 impl From<Option<&Json>> for Owned {
     fn from(prior: Option<&Json>) -> Owned {
-        let ids = prior
+        let records = prior
             .and_then(|c| c.get("ports"))
             .and_then(Json::as_object)
             .into_iter()
-            .flatten()
-            .filter_map(|(net, p)| Some((net.clone(), str_of(p, "id")?.to_string())))
+            .flatten();
+        let mut owned = Owned::named(
+            records
+                .clone()
+                .filter_map(|(net, p)| Some((net.clone(), str_of(p, "id")?.to_string())))
+                .collect(),
+        );
+        owned.fixed = records
+            .filter(|(_, p)| p.get("fixed") == Some(&json!(true)))
+            .map(|(net, _)| net.clone())
             .collect();
-        Owned::Named(ids)
+        owned
     }
 }
 
-/// `prior` with the port `port` on network `net` its own (`ports[NET].id`):
-/// what an update attached, for the answer it reads back.
-pub fn own_port(prior: &mut Json, net: &str, port: &str) {
+/// `prior` with the port `port` on network `net` its own (`ports[NET].id`),
+/// `fixed` when it has the address the program asked for: what an update
+/// kept or attached, for the answer it reads back.
+pub fn own_port(prior: &mut Json, net: &str, port: &str, fixed: bool) {
     if !prior.is_object() {
         *prior = json!({});
     }
-    prior["ports"][net] = json!({"id": port});
+    prior["ports"][net] = match fixed {
+        true => json!({"id": port, "fixed": true}),
+        false => json!({"id": port}),
+    };
 }
 
 /// An instance's ports from its interfaces
@@ -734,11 +797,34 @@ mod tests {
             json!({"pn-1_42": {"id": "i3", "ipv4": "10.0.0.9"}})
         );
         // Made with its networks: the port on each is its own.
-        let (_, computed) = instance(&o, None, None, &nics, &Owned::Made);
+        let (_, computed) = instance(&o, None, None, &nics, &Owned::made([]));
         assert_eq!(
             computed["ports"],
             json!({"pn-1_42": {"id": "i1", "ipv4": "10.0.0.5"}, "pn-1_43": {"id": "i2"}})
         );
+        // Made with the address asked on a network, or its prior says so:
+        // that network is written as the program writes it, its address
+        // its own port's.
+        let (attrs, computed) = instance(&o, None, None, &nics, &Owned::made(["pn-1_42".into()]));
+        assert_eq!(
+            attrs["networks"],
+            json!([{"network": "pn-1_42", "ip": "10.0.0.5"}, "pn-1_43"])
+        );
+        assert_eq!(
+            computed["ports"]["pn-1_42"],
+            json!({"id": "i1", "ipv4": "10.0.0.5", "fixed": true})
+        );
+        let prior = json!({"ports": {"pn-1_42": {"id": "i3", "fixed": true}}});
+        let (attrs, computed) = instance(&o, None, None, &nics, &Owned::from(Some(&prior)));
+        assert_eq!(
+            attrs["networks"][0],
+            json!({"network": "pn-1_42", "ip": "10.0.0.9"})
+        );
+        assert_eq!(computed["private_ips"]["pn-1_42"], "10.0.0.9");
+        // Its asked port gone: the network as any other, no address.
+        let prior = json!({"ports": {"pn-1_42": {"id": "gone", "fixed": true}}});
+        let (attrs, _) = instance(&o, None, None, &nics, &Owned::from(Some(&prior)));
+        assert_eq!(attrs["networks"], json!(["pn-1_42", "pn-1_43"]));
     }
 
     #[test]
@@ -749,7 +835,7 @@ mod tests {
             Some("b2-7"),
             Some("Ubuntu 24.04"),
             &Default::default(),
-            &Owned::Made,
+            &Owned::made([]),
         );
         assert_eq!(attrs["flavor"], "b2-7");
         assert_eq!(attrs.get("ssh_key"), None);

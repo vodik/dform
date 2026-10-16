@@ -149,24 +149,28 @@ impl Ovh {
             .map_err(|e| failed(at, e))?;
         let id = s(&o, "id").unwrap_or_default().to_string();
         let last = wait_active(&a, &p, at, &id, o, notes, say)?;
+        let owned = map::Owned::made(network::fixed(config));
         let (attrs, computed) = self
-            .instance_doc(&a, &p, &last, &map::Owned::Made)
+            .instance_doc(&a, &p, &last, &owned)
             .map_err(|e| Failed::MaybeApplied(format!("{at}: instance {id} is made: {e}")))?
             .ok_or_else(|| Failed::MaybeApplied(format!("{at}: instance {id} was deleted")))?;
         Ok((id, attrs, computed))
     }
 
-    /// The computed values of instance `remote`, which a Create made, as
-    /// its prior: the port on each network it was made on is its own
-    /// (`map::Owned::Made`), for the Create sent again that finds it.
+    /// The computed values of instance `remote`, which a Create of
+    /// `config` made, as its prior: the port on each network it was made
+    /// on is its own (`map::Owned::made`), with the address `config`
+    /// asked there, for the Create sent again that finds it.
     pub(super) fn made_instance(
         &self,
         at: &str,
         remote: &str,
+        config: &Json,
     ) -> std::result::Result<Option<Json>, Failed> {
         let (a, p) = self.project_for(at)?;
+        let owned = map::Owned::made(network::fixed(config));
         let made = self
-            .read_instance(&a, &p, remote, &map::Owned::Made)
+            .read_instance(&a, &p, remote, &owned)
             .map_err(|e| failed(at, e))?;
         Ok(made.map(|(_, computed)| computed))
     }

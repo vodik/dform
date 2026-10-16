@@ -645,6 +645,12 @@ fn a_create_sent_again_owns_the_port_it_was_made_with() {
 // address, one of a subnet's hosts of the network in the region and no
 // other port's.
 
+/// `lab` with `ip` asked, as a program writes it.
+fn at(id: &str, ip: &str) -> Json {
+    json!({"name": "vm", "region": "BHS5", "flavor": "b2-7", "image": "Ubuntu 24.04",
+           "networks": [{"network": id, "ip": ip}]})
+}
+
 /// The fake makes a port with the address asked of it, at the create and
 /// at an attach; refuses one in no subnet of the network in the region
 /// (or the subnet's gateway) with a 400, and one another port has with a
@@ -693,4 +699,319 @@ fn the_fake_makes_a_port_with_the_address_asked() {
     let again = c.post(&path, Some(&json!({"networkId": os, "ip": "10.0.0.6"})));
     assert_eq!(again.unwrap_err().status(), Some(409));
     assert_eq!(server.instances().len(), 1);
+}
+
+/// An instance made with an address asked on a network sends it
+/// (`networks[].ip`), has it as its address there, owns the port as one
+/// made with it (`ports[NET].fixed`), and reads back as the program
+/// writes it: told its prior, a Read answers `{network, ip}`.
+#[test]
+fn an_instance_made_with_an_address_has_it_and_reads_it_back() {
+    let (server, c) = world();
+    let (id, os) = lab(&c);
+    let ovh = provider(&server);
+    let made = apply(
+        &ovh,
+        pb::Op::Create,
+        "ovh.instance",
+        "",
+        &at(&id, "10.0.0.50"),
+    );
+    let sent = server
+        .seen()
+        .into_iter()
+        .find(|c| c.method == "POST" && c.path.ends_with("/instance"))
+        .unwrap();
+    assert_eq!(
+        sent.body["networks"],
+        json!([{"networkId": "ext-BHS5"}, {"networkId": os, "ip": "10.0.0.50"}])
+    );
+    let attrs = wire::from_doc(made.attrs.as_ref().unwrap()).unwrap();
+    let computed = wire::from_doc(made.computed.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        attrs["networks"],
+        json!([{"network": id, "ip": "10.0.0.50"}])
+    );
+    assert_eq!(computed["private_ips"], json!({id.clone(): "10.0.0.50"}));
+    assert_eq!(computed["private_ip"], "10.0.0.50");
+    let port = &private_ports(&c, &made.remote)[0];
+    assert_eq!(
+        computed["ports"],
+        json!({id.clone(): {"id": port["id"], "ipv4": "10.0.0.50", "fixed": true}})
+    );
+    let (again, read) = ovh
+        .read("ovh.instance", &made.remote, "vm", Some(&computed))
+        .unwrap()
+        .unwrap();
+    assert_eq!(again["networks"], attrs["networks"]);
+    assert_eq!(read, computed);
+    let (plain, _) = ovh
+        .read("ovh.instance", &made.remote, "vm", None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(plain["networks"], json!([id]));
+}
+
+/// The plan of `doc` for instance `name`: its error.
+fn plan_refused(ovh: &Ovh, name: &str, prior: Option<&Json>, doc: &Json) -> String {
+    format!(
+        "{:#}",
+        ovh.plan("ovh.instance", name, "", prior, Some(doc))
+            .unwrap_err()
+    )
+}
+
+/// Plan refuses an address that is no host of a subnet of the network
+/// in the instance's region, naming the subnets the network has; its
+/// gateway too; and one that is no IPv4 address. A network the plan
+/// makes, or one with no subnet in the region yet, is judged at Apply,
+/// where the create refuses it the same way.
+#[test]
+fn an_address_outside_the_networks_subnets_is_refused_at_plan() {
+    let (server, c) = world();
+    let (id, _) = lab(&c);
+    let ovh = provider(&server);
+    let outside = plan_refused(&ovh, "vm", None, &at(&id, "10.9.0.5"));
+    assert_eq!(
+        outside,
+        format!(
+            "plan ovh.instance[\"vm\"]: networks: 10.9.0.5 is no host of a subnet of network \
+             {id} in BHS5 (nor its gateway): its subnets are 10.0.0.0/24 in BHS5"
+        )
+    );
+    let gateway = plan_refused(&ovh, "vm", None, &at(&id, "10.0.0.1"));
+    assert!(gateway.contains("10.0.0.1 is no host"), "{gateway}");
+    let text = plan_refused(&ovh, "vm", None, &at(&id, "10.0.0.300"));
+    assert!(
+        text.ends_with("networks: ip \"10.0.0.300\" is not an IPv4 address"),
+        "{text}"
+    );
+    assert!(
+        ovh.plan("ovh.instance", "vm", "", None, Some(&at(&id, "10.0.0.5")))
+            .is_ok()
+    );
+    let mut pending = at(&id, "10.9.0.5");
+    pending["networks"][0]["network"] = json!({"$null": "ovh.network/lab#id"});
+    assert!(
+        ovh.plan("ovh.instance", "vm", "", None, Some(&pending))
+            .is_ok()
+    );
+    let refused = apply_refused(&ovh, &at(&id, "10.9.0.5"));
+    assert!(
+        refused.ends_with("its subnets are 10.0.0.0/24 in BHS5"),
+        "{refused}"
+    );
+    assert!(server.instances().is_empty());
+}
+
+/// A Create of `config`: the refusal.
+fn apply_refused(ovh: &Ovh, config: &Json) -> String {
+    let r = pb::ApplyRequest {
+        op: pb::Op::Create as i32,
+        r#type: "ovh.instance".into(),
+        name: "vm".into(),
+        config: Some(wire::doc(config)),
+        idempotency_key: "refused".into(),
+        ..Default::default()
+    };
+    match ovh.handle(Call::Apply(r), &backend::silent) {
+        Err(backend::CallError::Refused(m)) => m,
+        other => panic!("create not refused: {other:?}"),
+    }
+}
+
+/// Two instances asking one address on one network are refused at Plan,
+/// the second naming the first; an instance planned again with another
+/// address frees the one it asked, and one deleted every one.
+#[test]
+fn two_instances_asking_one_address_are_refused_at_plan() {
+    let (server, c) = world();
+    let (id, _) = lab(&c);
+    let ovh = provider(&server);
+    let mut b = at(&id, "10.0.0.5");
+    b["name"] = json!("b");
+    assert!(
+        ovh.plan("ovh.instance", "a", "", None, Some(&at(&id, "10.0.0.5")))
+            .is_ok()
+    );
+    assert_eq!(
+        plan_refused(&ovh, "b", None, &b),
+        format!(
+            "plan ovh.instance[\"b\"]: networks: 10.0.0.5 on network {id} is asked by both \
+             ovh.instance a and ovh.instance b, and an address is one port's: give each instance \
+             its own"
+        )
+    );
+    // The same instance planned again is no second asker.
+    assert!(
+        ovh.plan("ovh.instance", "a", "", None, Some(&at(&id, "10.0.0.5")))
+            .is_ok()
+    );
+    assert!(
+        ovh.plan("ovh.instance", "a", "", None, Some(&at(&id, "10.0.0.6")))
+            .is_ok()
+    );
+    assert!(ovh.plan("ovh.instance", "b", "", None, Some(&b)).is_ok());
+    assert!(
+        ovh.plan("ovh.instance", "a", "", None, Some(&at(&id, "10.0.0.5")))
+            .is_err()
+    );
+    ovh.plan("ovh.instance", "b", "", Some(&b), None).unwrap();
+    assert!(
+        ovh.plan("ovh.instance", "a", "", None, Some(&at(&id, "10.0.0.5")))
+            .is_ok()
+    );
+}
+
+/// An address asked anew on a network the instance is on replaces it,
+/// and the replacement says why: one changed, or one asked where DHCP
+/// gave it one. The same address plans clean; one no longer asked
+/// changes in place (the port keeps its address).
+#[test]
+fn an_address_asked_anew_replaces_the_instance() {
+    let (server, c) = world();
+    let (id, _) = lab(&c);
+    let ovh = provider(&server);
+    let made = apply(
+        &ovh,
+        pb::Op::Create,
+        "ovh.instance",
+        "",
+        &at(&id, "10.0.0.50"),
+    );
+    let attrs = wire::from_doc(made.attrs.as_ref().unwrap()).unwrap();
+    let plan = |doc: &Json| {
+        ovh.plan("ovh.instance", "vm", "", Some(&attrs), Some(doc))
+            .unwrap()
+    };
+    let (same, replaces) = plan(&at(&id, "10.0.0.50"));
+    assert!(same.is_empty() && !replaces, "{same:?}");
+    let (changes, replaces) = plan(&at(&id, "10.0.0.51"));
+    assert!(replaces, "{changes:?}");
+    let mut dhcp = at(&id, "10.0.0.50");
+    dhcp["networks"] = json!([id]);
+    let (changes, replaces) = plan(&dhcp);
+    assert!(!changes.is_empty() && !replaces, "{changes:?}");
+    let (changes, replaces) = ovh
+        .plan(
+            "ovh.instance",
+            "vm",
+            "",
+            Some(&dhcp),
+            Some(&at(&id, "10.0.0.50")),
+        )
+        .unwrap();
+    assert!(replaces, "{changes:?}");
+    let r = pb::ApplyRequest {
+        op: pb::Op::Replace as i32,
+        r#type: "ovh.instance".into(),
+        name: "vm".into(),
+        remote: made.remote.clone(),
+        config: Some(wire::doc(&at(&id, "10.0.0.51"))),
+        prior: made.computed.clone(),
+        idempotency_key: "replace".into(),
+        ..Default::default()
+    };
+    let replaced = match ovh.handle(Call::Apply(r), &backend::silent) {
+        Ok(Reply::Apply(a)) => a,
+        other => panic!("replace: {other:?}"),
+    };
+    assert!(
+        replaced.notes.contains(&format!(
+            "apply ovh.instance[\"vm\"]: its address on network {id} changes from 10.0.0.50 to \
+             10.0.0.51, and no API call changes a port's address, so it is replaced"
+        )),
+        "{:?}",
+        replaced.notes
+    );
+    let computed = wire::from_doc(replaced.computed.as_ref().unwrap()).unwrap();
+    assert_eq!(computed["private_ips"][&id], "10.0.0.51");
+}
+
+/// An Update that adds a network with an address asked attaches the
+/// port with it (`ip` beside `networkId`) and owns it as made with it;
+/// asked no longer, the port is kept, its address no longer the
+/// program's. An Update whose kept port has another address than the
+/// one asked is refused before anything changes.
+#[test]
+fn an_update_attaches_with_the_address_asked() {
+    let (server, c) = world();
+    let (id, os) = lab(&c);
+    let vm = server.add_instance("vm", "BHS5");
+    let ovh = provider(&server);
+    let (made, notes) = update_noted(&ovh, &vm, &at(&id, "10.0.0.60"), None);
+    let attach = server
+        .seen()
+        .into_iter()
+        .find(|c| c.method == "POST" && c.path.ends_with("/interface"))
+        .unwrap();
+    assert_eq!(attach.body, json!({"networkId": os, "ip": "10.0.0.60"}));
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.ends_with("is attached, with address 10.0.0.60")),
+        "{notes:?}"
+    );
+    assert_eq!(made["ports"][&id]["fixed"], true);
+    assert_eq!(made["private_ips"][&id], "10.0.0.60");
+    let mut dhcp = at(&id, "10.0.0.60");
+    dhcp["networks"] = json!([id]);
+    let (kept, _) = update_noted(&ovh, &vm, &dhcp, Some(&made));
+    assert_eq!(
+        kept["ports"][&id],
+        json!({"id": made["ports"][&id]["id"], "ipv4": "10.0.0.60"})
+    );
+    let refused = update_refused(&ovh, &vm, &at(&id, "10.0.0.61"), Some(&made));
+    assert!(
+        refused.contains(
+            "has 10.0.0.60, not 10.0.0.61 as asked, and no API call changes a port's address"
+        ),
+        "{refused}"
+    );
+    assert_eq!(private_ports(&c, &vm).len(), 1);
+}
+
+/// A replacement made first that asks an address the old instance has
+/// deletes the old one first, said: two ports cannot have it.
+#[test]
+fn a_replacement_asking_the_old_address_deletes_the_old_one_first() {
+    let (server, c) = world();
+    let (id, _) = lab(&c);
+    let ovh = provider(&server);
+    let made = apply(
+        &ovh,
+        pb::Op::Create,
+        "ovh.instance",
+        "",
+        &at(&id, "10.0.0.50"),
+    );
+    let mut next = at(&id, "10.0.0.50");
+    next["name"] = json!("vm-2");
+    next["image"] = json!("Debian 13");
+    let r = pb::ApplyRequest {
+        op: pb::Op::Replace as i32,
+        r#type: "ovh.instance".into(),
+        name: "vm".into(),
+        remote: made.remote.clone(),
+        config: Some(wire::doc(&next)),
+        create_first: true,
+        idempotency_key: "replace".into(),
+        ..Default::default()
+    };
+    let replaced = match ovh.handle(Call::Apply(r), &backend::silent) {
+        Ok(Reply::Apply(a)) => a,
+        other => panic!("replace: {other:?}"),
+    };
+    assert!(
+        replaced.notes.iter().any(|n| n.ends_with(&format!(
+            "the replacement asks 10.0.0.50 on network {id}, which the old instance has, so \
+             the old one goes first"
+        ))),
+        "{:?}",
+        replaced.notes
+    );
+    assert_eq!(server.instances().len(), 1);
+    let computed = wire::from_doc(replaced.computed.as_ref().unwrap()).unwrap();
+    assert_eq!(computed["private_ips"][&id], "10.0.0.50");
+    assert_ne!(replaced.remote, made.remote);
 }

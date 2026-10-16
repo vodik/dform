@@ -9,6 +9,8 @@
 //! fewer regions replace it).
 
 use super::*;
+use std::collections::BTreeSet;
+use std::net::Ipv4Addr;
 
 impl Ovh {
     pub(super) fn read_network(
@@ -209,29 +211,193 @@ fn openstack_id(net: &Json, region: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// An instance document's private networks, by their ids: none when it
+/// An entry of an instance's `networks`: a private network
+/// (`networks = [lab]`), or one and the address its port is made with
+/// (`{ network = lab, ip = "10.42.0.10" }`), the address DHCP's otherwise.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct Entry {
+    /// The network's id; the label of the value it will be when it is not
+    /// known yet (a network the same plan makes), `known` false.
+    pub network: String,
+    pub known: bool,
+    /// The address asked, if one is and it is known.
+    pub ip: Option<Ipv4Addr>,
+}
+
+impl Entry {
+    /// The entry `n` writes: a network, or `{ network, ip }`.
+    fn of(n: &Json) -> std::result::Result<Entry, String> {
+        let shown = |v: &Json| provider::fmt_value(Some(v));
+        let network = |v: &Json| match (v.as_str(), marker(v)) {
+            (Some(id), _) => Ok((id.to_string(), true)),
+            (_, Some((_, label))) => Ok((label.to_string(), false)),
+            _ => Err(format!("networks: {} is not a network", shown(v))),
+        };
+        let Some(fields) = n.as_object().filter(|_| marker(n).is_none()) else {
+            let (network, known) = network(n)?;
+            return Ok(Entry {
+                network,
+                known,
+                ip: None,
+            });
+        };
+        if let Some(k) = fields
+            .keys()
+            .find(|k| !["network", "ip"].contains(&k.as_str()))
+        {
+            return Err(format!(
+                "networks: an entry is a network or `{{ network, ip }}`, and {k} is neither"
+            ));
+        }
+        let (network, known) = network(
+            fields
+                .get("network")
+                .ok_or("networks: an entry `{ ip }` names its network too (`network = lab`)")?,
+        )?;
+        let ip = match fields.get("ip") {
+            None | Some(Json::Null) => None,
+            Some(v) if marker(v).is_some() => None,
+            Some(v) => Some(
+                v.as_str()
+                    .and_then(|t| t.parse().ok())
+                    .ok_or_else(|| format!("networks: ip {} is not an IPv4 address", shown(v)))?,
+            ),
+        };
+        Ok(Entry { network, known, ip })
+    }
+}
+
+/// An instance document's private networks, each once: none when it
 /// names none.
-fn networks_of<'a>(at: &str, doc: &'a Json) -> std::result::Result<Vec<&'a str>, Failed> {
-    match doc.get("networks") {
-        None | Some(Json::Null) => Ok(Vec::new()),
-        Some(Json::Array(ns)) => ns
-            .iter()
-            .map(|n| {
-                n.as_str().ok_or_else(|| {
-                    refused(
-                        at,
-                        format!(
-                            "networks: {} is not a network's id",
-                            provider::fmt_value(Some(n))
-                        ),
-                    )
-                })
-            })
-            .collect(),
-        Some(v) => Err(refused(
+pub(super) fn entries(doc: &Json) -> std::result::Result<Vec<Entry>, String> {
+    let list = match doc.get("networks") {
+        None | Some(Json::Null) => return Ok(Vec::new()),
+        Some(Json::Array(ns)) => ns,
+        Some(v) => {
+            return Err(format!(
+                "networks is {}, not a list",
+                provider::fmt_value(Some(v))
+            ));
+        }
+    };
+    let mut out: Vec<Entry> = Vec::new();
+    for n in list {
+        let e = Entry::of(n)?;
+        if out.iter().any(|o| o.network == e.network) {
+            return Err(format!(
+                "networks: network {} is named twice, and an instance has one port on a network",
+                e.network
+            ));
+        }
+        out.push(e);
+    }
+    Ok(out)
+}
+
+/// The entries of an Apply's document, each network known.
+fn entries_known(at: &str, doc: &Json) -> std::result::Result<Vec<Entry>, Failed> {
+    let all = entries(doc).map_err(|e| refused(at, e))?;
+    match all.iter().find(|e| !e.known) {
+        Some(e) => Err(refused(
             at,
-            format!("networks is {}, not a list", provider::fmt_value(Some(v))),
+            format!("networks: network {} is not known yet", e.network),
         )),
+        None => Ok(all),
+    }
+}
+
+/// The networks of `doc` it asks an address on.
+pub(super) fn fixed(doc: &Json) -> BTreeSet<String> {
+    entries(doc)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| e.ip.is_some())
+        .map(|e| e.network)
+        .collect()
+}
+
+/// An address asked on a network an instance is on that is not the one
+/// it has there: no API call changes a port's address, so it replaces
+/// the instance.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct Readdress {
+    network: String,
+    /// The address it has, asked; none where it was DHCP's.
+    had: Option<Ipv4Addr>,
+    asked: Ipv4Addr,
+}
+
+impl std::fmt::Display for Readdress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (net, asked) = (&self.network, self.asked);
+        match self.had {
+            Some(had) => write!(
+                f,
+                "its address on network {net} changes from {had} to {asked}"
+            ),
+            None => write!(
+                f,
+                "its address on network {net} is asked ({asked}), and was DHCP's"
+            ),
+        }
+    }
+}
+
+/// The addresses `d` asks anew of `prior` (an instance as Read answers
+/// it): on each network it is on, an address asked that it has not.
+pub(super) fn readdressed(prior: &Json, d: &Json) -> Vec<Readdress> {
+    let (Ok(was), Ok(now)) = (entries(prior), entries(d)) else {
+        return Vec::new();
+    };
+    now.into_iter()
+        .filter_map(|e| {
+            let asked = e.ip?;
+            let had = was.iter().find(|w| w.network == e.network)?.ip;
+            (had != Some(asked)).then_some(Readdress {
+                network: e.network,
+                had,
+                asked,
+            })
+        })
+        .collect()
+}
+
+/// The addresses `config` asks that `computed` (an instance's, as Read
+/// answers it) has already, each `IP on network NET`.
+pub(super) fn held(computed: &Json, config: &Json) -> Vec<String> {
+    entries(config)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|e| {
+            let ip = e.ip?.to_string();
+            let has = computed.get("private_ips").and_then(|m| s(m, &e.network));
+            (has == Some(ip.as_str())).then(|| format!("{ip} on network {}", e.network))
+        })
+        .collect()
+}
+
+/// The addresses instances asked at Plan in this process, by network and
+/// address, each with the instance that asked it: an address is one
+/// port's, so a second instance asking it is refused.
+#[derive(Debug, Default)]
+pub(super) struct Asked(BTreeMap<(String, Ipv4Addr), String>);
+
+impl Asked {
+    /// `who`'s addresses now `asks`, the ones it asked before dropped;
+    /// the first of them another instance asked, with that instance.
+    fn ask(
+        &mut self,
+        who: &str,
+        asks: &[(String, Ipv4Addr)],
+    ) -> Option<(String, Ipv4Addr, String)> {
+        self.0.retain(|_, w| w != who);
+        if let Some(((net, ip), other)) = asks.iter().find_map(|a| self.0.get_key_value(a)) {
+            return Some((net.clone(), *ip, other.clone()));
+        }
+        for a in asks {
+            self.0.insert(a.clone(), who.to_string());
+        }
+        None
     }
 }
 
@@ -256,6 +422,37 @@ fn regions(at: &str, config: &Json) -> std::result::Result<Option<Vec<String>>, 
             ),
         )),
     }
+}
+
+/// The subnets of a network as a refusal names them: each range and its
+/// region, sorted.
+fn subnet_list(subnets: &[(Json, Json)]) -> String {
+    let mut all: Vec<String> = subnets
+        .iter()
+        .map(|(attrs, _)| {
+            format!(
+                "{} in {}",
+                s(attrs, "range").unwrap_or_default(),
+                s(attrs, "region").unwrap_or_default()
+            )
+        })
+        .collect();
+    all.sort();
+    all.join(", ")
+}
+
+/// Whether `ip` is one of the hosts a port of subnet `sub` (its document,
+/// `map::subnet`) may have: in its range, not its network's address,
+/// broadcast or gateway.
+fn holds(sub: &(Json, Json), ip: Ipv4Addr) -> bool {
+    let no_gateway = sub
+        .1
+        .get("no_gateway")
+        .and_then(Json::as_bool)
+        .unwrap_or(false);
+    s(&sub.0, "range")
+        .and_then(|r| map::pool_hosts(r, no_gateway))
+        .is_some_and(|(first, last)| (first..=last).contains(&u32::from(ip)))
 }
 
 /// Subnets (`ovh.subnet`): the API's
@@ -415,7 +612,7 @@ impl Ovh {
     /// The `networks` an instance's Create sends: none when the program
     /// sets none (the public network alone, as the API makes it); else the
     /// public network's first, then each private one's, in the instance's
-    /// region.
+    /// region, with the address asked of its port where one is.
     pub(super) fn instance_networks(
         &self,
         a: &Account,
@@ -424,8 +621,8 @@ impl Ovh {
         region: &str,
         config: &Json,
     ) -> std::result::Result<Option<Vec<Json>>, Failed> {
-        let ids = networks_of(at, config)?;
-        if ids.is_empty() {
+        let entries = entries_known(at, config)?;
+        if entries.is_empty() {
             return Ok(None);
         }
         let public = a
@@ -439,10 +636,102 @@ impl Ovh {
             .find_map(|net| openstack_id(net, region))
             .ok_or_else(|| refused(at, format!("region {region} has no public network")))?;
         let mut out = vec![json!({"networkId": ext})];
-        for id in ids {
-            out.push(json!({"networkId": self.private_network_in(a, p, at, region, id)?}));
+        for e in entries {
+            out.push(self.port_body(a, p, at, region, &e)?);
         }
         Ok(Some(out))
+    }
+
+    /// What makes a port on `e`'s network in `region`, the instance's
+    /// create's `networks[]` and an attach's body alike: the network's
+    /// OpenStack id, and the address asked, checked against its subnets.
+    fn port_body(
+        &self,
+        a: &Account,
+        p: &str,
+        at: &str,
+        region: &str,
+        e: &Entry,
+    ) -> std::result::Result<Json, Failed> {
+        let os = self.private_network_in(a, p, at, region, &e.network)?;
+        let Some(ip) = e.ip else {
+            return Ok(json!({"networkId": os}));
+        };
+        let held = self
+            .address_held(a, p, region, &e.network, ip)
+            .map_err(|e| failed(at, e))?;
+        held.map_err(|why| refused(at, why))?;
+        Ok(json!({"networkId": os, "ip": ip.to_string()}))
+    }
+
+    /// Whether `ip` is a host of a subnet of `network` in `region`, as the
+    /// API lists them: why not, naming the network's subnets. Not judged
+    /// (held) where the network has no subnet in the region yet.
+    fn address_held(
+        &self,
+        a: &Account,
+        p: &str,
+        region: &str,
+        network: &str,
+        ip: Ipv4Addr,
+    ) -> api::Result<std::result::Result<(), String>> {
+        let subnets: Vec<(Json, Json)> = self
+            .subnets(a, p, network)?
+            .iter()
+            .map(|o| map::subnet(network, o))
+            .collect();
+        let here: Vec<&(Json, Json)> = subnets
+            .iter()
+            .filter(|(attrs, _)| s(attrs, "region") == Some(region))
+            .collect();
+        if here.is_empty() || here.iter().any(|sub| holds(sub, ip)) {
+            return Ok(Ok(()));
+        }
+        Ok(Err(format!(
+            "networks: {ip} is no host of a subnet of network {network} in {region} (nor its \
+             gateway): its subnets are {}",
+            subnet_list(&subnets)
+        )))
+    }
+
+    /// An instance's `networks` at Plan (`d`, `who` the instance as the
+    /// plan names it, `ovh.instance server`): each
+    /// entry a network or `{ network, ip }`, each network once; each
+    /// address asked a host of a subnet of its network in the instance's
+    /// region, where the account says (a network the plan makes, or one
+    /// with no subnet there yet, is judged at Apply); and none asked by
+    /// another instance this provider planned (`Asked`).
+    pub(super) fn check_networks(&self, at: &str, who: &str, d: &Json) -> Result<()> {
+        let entries = entries(d).map_err(|e| anyhow!("{at}: {e}"))?;
+        let asks: Vec<(String, Ipv4Addr)> = entries
+            .iter()
+            .filter_map(|e| Some((e.network.clone(), e.ip?)))
+            .collect();
+        let taken = self
+            .asked
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .ask(who, &asks);
+        if let Some((net, ip, other)) = taken {
+            let mut both = [who, other.as_str()];
+            both.sort();
+            bail!(
+                "{at}: networks: {ip} on network {net} is asked by both {} and {}, and an \
+                 address is one port's: give each instance its own",
+                both[0],
+                both[1]
+            );
+        }
+        let (Ok((a, p)), Some(region)) = (self.project(at), s(d, "region")) else {
+            return Ok(());
+        };
+        for e in entries.iter().filter(|e| e.known) {
+            if let Some(ip) = e.ip {
+                self.address_held(&a, &p, region, &e.network, ip)?
+                    .map_err(|why| anyhow!("{at}: {why}"))?;
+            }
+        }
+        Ok(())
     }
 
     /// The OpenStack id of private network `id` in `region`, as an
@@ -484,7 +773,9 @@ impl Ovh {
     /// its ports as they are (a fresh read, not Read's answer), `owned`
     /// which are its own (its prior's `ports`). Refused, before anything
     /// changes, where a network has several ports and none is known as
-    /// its own: which to keep is a person's choice.
+    /// its own (which to keep is a person's choice), and where the port
+    /// it keeps has another address than the one asked (Plan replaces
+    /// the instance for that).
     pub(super) fn instance_ports(
         &self,
         a: &Account,
@@ -494,20 +785,22 @@ impl Ovh {
         config: &Json,
         owned: &map::Owned,
     ) -> std::result::Result<PortSteps, Failed> {
-        let want = networks_of(at, config)?;
+        let entries = entries_known(at, config)?;
+        let want: Vec<&str> = entries.iter().map(|e| e.network.as_str()).collect();
         let nics = self.interfaces(a, p, remote).map_err(|e| failed(at, e))?;
         let steps = PortSteps::new(&want, &nics.private, owned);
-        match steps.refusal(at, &interface_path(p, remote)) {
+        let refusal = steps.refusal(at, &interface_path(p, remote));
+        match refusal.or_else(|| steps.readdressed(at, &entries)) {
             Some(e) => Err(e),
             None => Ok(steps),
         }
     }
 
     /// `steps` taken on instance `remote`, each said: an interface
-    /// attached on each network it has none on, the others beside its own
-    /// and the ones on a network left detached. Its own port on each
-    /// network now, by network: the one it had, the one taken as its own,
-    /// or the one attached (`map::Owned`).
+    /// attached on each network it has none on (with the address asked
+    /// there), the others beside its own and the ones on a network left
+    /// detached. Its own port on each network now, by network: the one it
+    /// had, the one taken as its own, or the one attached (`map::Owned`).
     #[allow(clippy::too_many_arguments)]
     pub(super) fn converge_ports(
         &self,
@@ -532,14 +825,21 @@ impl Ovh {
             ));
             own.push((net, port.id));
         }
-        for net in steps.attach {
-            let region = need(at, config, "region")?;
-            let os = self.private_network_in(a, p, at, region, &net)?;
+        let entries = entries_known(at, config)?;
+        for e in entries.iter().filter(|e| steps.attach.contains(&e.network)) {
+            let (net, region) = (e.network.clone(), need(at, config, "region")?);
+            let body = self.port_body(a, p, at, region, e)?;
             let port = a
                 .client
-                .post(&path, Some(&json!({"networkId": os})))
+                .post(&path, Some(&body))
                 .map_err(|e| failed(at, e))?;
-            notes.push(format!("{at}: an interface on network {net} is attached"));
+            let with = match e.ip {
+                Some(ip) => format!(", with address {ip}"),
+                None => String::new(),
+            };
+            notes.push(format!(
+                "{at}: an interface on network {net} is attached{with}"
+            ));
             if let Some(port) = s(&port, "id") {
                 own.push((net, port.to_string()));
             }
@@ -686,6 +986,30 @@ impl PortSteps {
         }
     }
 
+    /// The refusal of a port it keeps whose address is not the one
+    /// `entries` (the program's) asks there: no API call changes it, and
+    /// Plan replaces the instance for it.
+    fn readdressed(&self, at: &str, entries: &[Entry]) -> Option<Failed> {
+        let asked = |net: &str| entries.iter().find(|e| e.network == net)?.ip;
+        let (net, port, ip) = self
+            .keep
+            .iter()
+            .chain(&self.adopt)
+            .find_map(|(net, port)| {
+                let ip = asked(net).filter(|ip| port.ipv4 != Some(ip.to_string()))?;
+                Some((net, port, ip))
+            })?;
+        Some(refused(
+            at,
+            format!(
+                "its port {} on network {net} has {}, not {ip} as asked, and no API call changes \
+                 a port's address: plan again, which replaces the instance",
+                port.id,
+                port.ipv4.as_deref().unwrap_or("no address")
+            ),
+        ))
+    }
+
     /// The refusal of the networks whose ports none is known as the
     /// instance's own, each port named with its address, so a person
     /// chooses which to keep; `path` the instance's interfaces.
@@ -755,7 +1079,7 @@ mod tests {
     }
 
     fn owning(net: &str, id: &str) -> map::Owned {
-        map::Owned::Named([(net.to_string(), id.to_string())].into())
+        map::Owned::named([(net.to_string(), id.to_string())].into())
     }
 
     fn none() -> map::Owned {

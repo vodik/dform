@@ -1441,7 +1441,7 @@ fn a_program_resizes_an_instance_and_adds_a_network_in_place() {
             "use ovh {{ endpoint = \"{}\", project = \"{}\" }}\n\n\
              resource ovh.network a {{ name = \"a\", vlan_id = 1, regions = [\"BHS5\"] }}\n\
              resource ovh.network b {{ name = \"b\", vlan_id = 2, regions = [\"BHS5\"] }}\n\
-             resource ovh.subnet a {{ network = a, region = \"BHS5\", range = \"10.1.0.0/24\" }}\n\
+             resource ovh.subnet a_sub {{ network = a, region = \"BHS5\", range = \"10.1.0.0/24\" }}\n\
              resource ovh.subnet b {{ network = b, region = \"BHS5\", range = \"10.2.0.0/24\" }}\n\n\
              resource ovh.instance server {{\n  name = \"server\"\n  region = \"BHS5\"\n  \
              flavor = \"{flavor}\"\n  image = \"Debian 13\"\n  networks = [{nets}]\n}}\n",
@@ -1476,5 +1476,90 @@ fn a_program_resizes_an_instance_and_adds_a_network_in_place() {
         smaller.stdout.contains("ovh.instance server") && smaller.stdout.contains("replace"),
         "{}",
         smaller.stdout
+    );
+}
+
+/// Through dform: an instance asks its address on a private network
+/// (`networks = [{ network = lab, ip = .. }]`, the address from the range
+/// and its index): the plan prints it, the apply makes the port with it,
+/// and the plan after is clean; another address replaces the instance,
+/// the plan saying why; two instances asking one address are refused at
+/// plan, naming both.
+#[test]
+fn a_program_asks_an_instances_private_address() {
+    let server = Server::start();
+    let program = |nodes: &str| {
+        format!(
+            "use ovh {{ endpoint = \"{}\", project = \"{}\" }}\n\n\
+             let range = \"10.42.0.0/24\"\n\
+             resource ovh.network lab {{ name = \"lab\", vlan_id = 42, regions = [\"BHS5\"] }}\n\
+             resource ovh.subnet nodes {{ network = lab, region = \"BHS5\", range, \
+             pool = \"10.42.0.100..=10.42.0.200\" }}\n\n{nodes}",
+            server.endpoint,
+            fake::DESCRIPTION
+        )
+    };
+    let node = |name: &str, index: u32| {
+        format!(
+            "resource ovh.instance {name} {{\n  name = \"{name}\"\n  region = \"BHS5\"\n  \
+             flavor = \"b2-7\"\n  image = \"Debian 13\"\n  \
+             networks = [{{ network = lab, ip = inet.host(range, {index}) }}]\n}}\n"
+        )
+    };
+    let s = project("ovh-fixed-ip", &program(&node("server", 10)));
+    let plan = dform(&s, &server, &["plan", "main.df"]).success();
+    assert!(
+        plan.stdout
+            .contains("networks = [{ network = lab, ip = \"10.42.0.11\" }]"),
+        "{}",
+        plan.stdout
+    );
+    dform(&s, &server, &["apply", "main.df"]).success();
+    let address = |server: &Server| {
+        let i = &server.instances()[0];
+        let private = i["ipAddresses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["type"] == "private");
+        private.unwrap()["ip"].clone()
+    };
+    assert_eq!(address(&server), "10.42.0.11");
+    let again = dform(&s, &server, &["plan", "main.df"]).success();
+    assert!(again.stdout.contains("is up to date"), "{}", again.stdout);
+
+    s.write("main.df", &program(&node("server", 11)));
+    let moved = dform(&s, &server, &["plan", "main.df"]).success();
+    assert!(
+        moved.stdout.contains("(1 replace)") && moved.stdout.contains("± ovh.instance server"),
+        "{}",
+        moved.stdout
+    );
+    let applied = dform(&s, &server, &["apply", "main.df"]).success();
+    assert!(
+        applied.stdout.contains(
+            "changes from 10.42.0.11 to 10.42.0.12, and no API call changes a port's address, \
+             so it is replaced"
+        ) || applied.stderr.contains("so it is replaced"),
+        "{}\n{}",
+        applied.stdout,
+        applied.stderr
+    );
+    assert_eq!(server.instances().len(), 1);
+    assert_eq!(address(&server), "10.42.0.12");
+
+    s.write(
+        "main.df",
+        &program(&format!("{}{}", node("server", 11), node("agent", 11))),
+    );
+    let twice = dform(&s, &server, &["plan", "main.df"]).failure();
+    assert!(
+        twice.stderr.contains(
+            "networks: 10.42.0.12 on network pn-1000123_42 is asked by both ovh.instance \
+             agent and ovh.instance server, and an address is one port's: give each instance \
+             its own"
+        ),
+        "{}",
+        twice.stderr
     );
 }
