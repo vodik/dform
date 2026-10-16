@@ -1540,6 +1540,7 @@ dependencies = [
  "dform-sdk-derive",
  "dform-wire",
  "dform-wit",
+ "futures",
  "serde",
  "serde_json",
  "tokio",

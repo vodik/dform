@@ -10,10 +10,11 @@
 //! * natively (`cargo build`): an executable dform starts, serving the
 //!   protocol over gRPC and calling the host back over the `Host` service
 //!   named in its environment (`DFORM_HOST`);
-//! * as a component (`cargo build --target wasm32-wasip2 --features
+//! * as a component (`cargo build --target wasm32-wasip3 --features
 //!   component`, the crate a `cdylib`): dform's wasm host runs it, and the
-//!   host's interfaces are its imports. wasip2 is the target that exists on
-//!   stable; wasip3 is the intent and changes nothing here.
+//!   host's interfaces are its imports, those that wait on the world
+//!   async (the component model's async ABI): [`Http::request_all`] keeps
+//!   several requests in flight from one call with no thread.
 //!
 //! A provider is a worker and dform its runtime (docs/providers.md, "The
 //! host does the transport"): the host owns the connections, the pace,
@@ -308,6 +309,46 @@ impl Http {
         };
         calls().send(http, req.auth, req.via)
     }
+
+    /// Send each of `reqs` at once; their answers in their order. Natively
+    /// each on a thread of its own ([`at_once`]); in a component each a
+    /// subtask of the host's `send`, all in flight from the one call with
+    /// no thread. Either way the host's window paces them: a provider
+    /// submits what it needs (every document of an index, every object
+    /// of a list) and lets dform decide how many go together.
+    pub fn request_all(
+        &self,
+        reqs: impl IntoIterator<Item = Request>,
+    ) -> Vec<Result<Response, Error>> {
+        send_all(self, reqs.into_iter().collect())
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn send_all(http: &Http, reqs: Vec<Request>) -> Vec<Result<Response, Error>> {
+    at_once(reqs.into_iter().map(|r| move || http.request(r)))
+}
+
+#[cfg(all(target_family = "wasm", feature = "component"))]
+fn send_all(_: &Http, reqs: Vec<Request>) -> Vec<Result<Response, Error>> {
+    let within = dform_core::plugin::backend::Within::here();
+    component::send_all(
+        reqs.into_iter()
+            .map(|r| {
+                let http = HttpRequest {
+                    session: within.session,
+                    call: within.call,
+                    ..r.req
+                };
+                (http, r.auth, r.via)
+            })
+            .collect(),
+    )
+}
+
+#[cfg(all(target_family = "wasm", not(feature = "component")))]
+fn send_all(http: &Http, reqs: Vec<Request>) -> Vec<Result<Response, Error>> {
+    reqs.into_iter().map(|r| http.request(r)).collect()
 }
 
 /// Each of `asks` at once, on a thread of its own in the call this thread

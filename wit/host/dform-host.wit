@@ -23,8 +23,14 @@
 // audit for what it does there. `dform provider check` prints what a
 // provider imports and what it is granted.
 //
-// Large bodies are `list<u8>` until the component model's streams are in
-// (wasip3); the 0.3 shape of each call is the same function made async.
+// The calls that wait on the world (`http.send`, `io.read`,
+// `io.read-versioned`, `ssh.exec`) are `async func`s: under the component
+// model's async ABI (WASI 0.3) each is a subtask, so a component keeps
+// several in flight from one call (a Read that fetches two documents at
+// once, a Configure that submits every OpenAPI document of a cluster)
+// and the host's window paces them, with no thread in the component. A
+// component built for wasip2 calls them as it did, one at a time. Large
+// bodies are `list<u8>` until they are `stream<u8>`, additively.
 
 package dform:host@1.0.0;
 
@@ -127,7 +133,7 @@ interface http {
   // its CA) to the TLS session, a kubeconfig as whichever of those its
   // user has. `via` routes it through a tunnel (`ssh.forward`). A status
   // the server answered (a 404, a 500) is a response, not an error.
-  send: func(req: request, auth: option<borrow<credential>>, via: option<borrow<tunnel>>) -> result<response, error>;
+  send: async func(req: request, auth: option<borrow<credential>>, via: option<borrow<tunnel>>) -> result<response, error>;
 }
 
 // Reading a location (R-153, R-155): one reader for every scheme, a
@@ -161,9 +167,9 @@ interface io {
   }
 
   // The bytes at `location`.
-  read: func(location: string) -> result<list<u8>, not-yet-or-error>;
+  read: async func(location: string) -> result<list<u8>, not-yet-or-error>;
   // The bytes at `location` and their version.
-  read-versioned: func(location: string) -> result<document, not-yet-or-error>;
+  read-versioned: async func(location: string) -> result<document, not-yet-or-error>;
 }
 
 // SSH, with keys from the agent. Commands are argv, never a shell string:
@@ -187,7 +193,7 @@ interface ssh {
   }
 
   // Run `argv` on `on`. A host that does not answer yet is `not-yet`.
-  exec: func(on: target, argv: list<string>, stdin: option<list<u8>>) -> result<run, not-yet-or-error>;
+  exec: async func(on: target, argv: list<string>, stdin: option<list<u8>>) -> result<run, not-yet-or-error>;
   // Write `data` to `path` with `mode` (SFTP).
   write: func(on: target, path: string, data: list<u8>, mode: u32) -> result<_, error>;
   // Forward a connection through `via` to `to` (an API behind a bastion).
@@ -230,8 +236,9 @@ interface log {
 // grant, naming the provider and the interface. What Rust std links on
 // wasm32-wasip2 (environment, stdio, exit, clocks, random) needs none.
 //
-// wasip2 is the target that exists on stable; the intent is wasip3 (its
-// async calls and streams), which changes no interface here.
+// Built for wasm32-wasip3 (nightly), std links WASI 0.3's interfaces and
+// the host links both versions; the `include`s here are 0.2's, what the
+// SDK's bindings name (`wasi:cli/environment`'s initial-cwd).
 world hosted-provider {
   import types;
   import secrets;

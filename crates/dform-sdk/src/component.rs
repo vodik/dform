@@ -17,9 +17,9 @@ use dform_core::plugin::host::{
     Run, Target,
 };
 use dform_core::plugin::pb;
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::rc::Rc;
 
 pub mod bindings {
     wit_bindgen::generate!({
@@ -43,6 +43,9 @@ thread_local! {
     static HANDLER: OnceCell<Box<dyn Handler>> = const { OnceCell::new() };
     /// Its sessions, as its Configures open them.
     static SESSIONS: Sessions = Sessions::default();
+    /// The credentials and tunnels it opened, by handle: borrowed only to
+    /// insert or look one up, never across an import.
+    static OPENED: RefCell<Held> = RefCell::default();
 }
 
 /// The provider, made at the first call, in the working directory the
@@ -163,28 +166,18 @@ fn target(t: &Target) -> wh::ssh::Target {
     }
 }
 
-/// The host's calls as the component's imports. The credentials and
-/// tunnels it opened are held here, by handle, locked only to insert or
-/// look one up.
+/// The host's calls as the component's imports. The calls that wait on
+/// the world are `async func`s (each a subtask); a synchronous handler
+/// waits on one at once ([`wit_bindgen::block_on`]), and [`send_all`]
+/// keeps several in flight.
 #[derive(Default)]
-pub struct Imports(Mutex<Held>);
+pub struct Imports;
 
 #[derive(Default)]
 struct Held {
-    credentials: BTreeMap<Handle, wh::types::Credential>,
-    tunnels: BTreeMap<Handle, (wh::types::Tunnel, Endpoint)>,
+    credentials: BTreeMap<Handle, Rc<wh::types::Credential>>,
+    tunnels: BTreeMap<Handle, (Rc<wh::types::Tunnel>, Endpoint)>,
     next: Handle,
-}
-
-// SAFETY: a component is single-threaded; the resource handles are never
-// touched from another thread.
-unsafe impl Send for Held {}
-
-impl Imports {
-    fn opened(&self) -> std::sync::MutexGuard<'_, Held> {
-        // An insert or a lookup: a panic leaves the maps whole.
-        self.0.lock().unwrap_or_else(|e| e.into_inner())
-    }
 }
 
 impl Held {
@@ -194,13 +187,63 @@ impl Held {
     }
 }
 
+/// Send `req` with the credential and the tunnel it names, held for the
+/// import (the resources are borrowed by it), not the table.
+async fn sending(
+    req: HttpRequest,
+    auth: Option<Handle>,
+    via: Option<Handle>,
+) -> Result<HttpResponse, h::Error> {
+    let (auth, via) = OPENED.with_borrow(|o| {
+        (
+            auth.and_then(|a| o.credentials.get(&a).cloned()),
+            via.and_then(|v| o.tunnels.get(&v)).map(|(t, _)| t.clone()),
+        )
+    });
+    let r = wh::http::send(
+        wh::http::Request {
+            method: req.method,
+            url: req.url,
+            headers: req.headers,
+            body: req.body,
+            timeout_ms: req
+                .timeout
+                .map(|d| u32::try_from(d.as_millis()).unwrap_or(u32::MAX)),
+            bucket: req.bucket,
+            session: req.session.0,
+        },
+        auth.as_deref(),
+        via.as_deref(),
+    )
+    .await
+    .map_err(error)?;
+    Ok(HttpResponse {
+        status: r.status,
+        headers: r.headers,
+        body: r.body,
+    })
+}
+
+/// Each of `reqs` at once, every one a subtask of the host's `send` in
+/// flight together, the host's window pacing them; their answers in
+/// their order. The component's own thread waits on all of them.
+pub fn send_all(
+    reqs: Vec<(HttpRequest, Option<Handle>, Option<Handle>)>,
+) -> Vec<Result<HttpResponse, h::Error>> {
+    wit_bindgen::block_on(futures::future::join_all(
+        reqs.into_iter().map(|(r, auth, via)| sending(r, auth, via)),
+    ))
+}
+
 impl Calls for Imports {
     fn open(&self, name: &str) -> Result<Opened, h::Error> {
         let c = wh::secrets::open(name).map_err(error)?;
         let (endpoint, namespace) = (c.endpoint(), c.namespace());
-        let mut o = self.opened();
-        let handle = o.handle();
-        o.credentials.insert(handle, c);
+        let handle = OPENED.with_borrow_mut(|o| {
+            let handle = o.handle();
+            o.credentials.insert(handle, Rc::new(c));
+            handle
+        });
         Ok(Opened {
             handle,
             endpoint,
@@ -214,41 +257,16 @@ impl Calls for Imports {
         auth: Option<Handle>,
         via: Option<Handle>,
     ) -> Result<HttpResponse, h::Error> {
-        // Held across the import, which borrows the resources: a
-        // component is single-threaded, and an instance is not entered
-        // again while it waits on a synchronous import.
-        let o = self.opened();
-        let auth = auth.and_then(|a| o.credentials.get(&a));
-        let via = via.and_then(|v| o.tunnels.get(&v)).map(|(t, _)| t);
-        let r = wh::http::send(
-            &wh::http::Request {
-                method: req.method,
-                url: req.url,
-                headers: req.headers,
-                body: req.body,
-                timeout_ms: req
-                    .timeout
-                    .map(|d| u32::try_from(d.as_millis()).unwrap_or(u32::MAX)),
-                bucket: req.bucket,
-                session: req.session.0,
-            },
-            auth,
-            via,
-        )
-        .map_err(error)?;
-        Ok(HttpResponse {
-            status: r.status,
-            headers: r.headers,
-            body: r.body,
-        })
+        wit_bindgen::block_on(sending(req, auth, via))
     }
 
     fn io_read(&self, location: &str) -> Result<Vec<u8>, Failure> {
-        wh::io::read(location).map_err(failure)
+        wit_bindgen::block_on(wh::io::read(location.to_string())).map_err(failure)
     }
 
     fn io_read_versioned(&self, location: &str) -> Result<dform_core::files::Document, Failure> {
-        let d = wh::io::read_versioned(location).map_err(failure)?;
+        let d =
+            wit_bindgen::block_on(wh::io::read_versioned(location.to_string())).map_err(failure)?;
         Ok(dform_core::files::Document {
             bytes: d.data,
             version: d.version,
@@ -256,7 +274,12 @@ impl Calls for Imports {
     }
 
     fn exec(&self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure> {
-        let r = wh::ssh::exec(&target(on), argv, stdin).map_err(failure)?;
+        let r = wit_bindgen::block_on(wh::ssh::exec(
+            target(on),
+            argv.to_vec(),
+            stdin.map(<[u8]>::to_vec),
+        ))
+        .map_err(failure)?;
         Ok(Run {
             status: r.status,
             stdout: r.stdout,
@@ -277,14 +300,15 @@ impl Calls for Imports {
             },
         )
         .map_err(error)?;
-        let mut o = self.opened();
-        let handle = o.handle();
-        o.tunnels.insert(handle, (t, to.clone()));
-        Ok(handle)
+        Ok(OPENED.with_borrow_mut(|o| {
+            let handle = o.handle();
+            o.tunnels.insert(handle, (Rc::new(t), to.clone()));
+            handle
+        }))
     }
 
     fn tunnel(&self, h: Handle) -> Option<Endpoint> {
-        self.opened().tunnels.get(&h).map(|(_, e)| e.clone())
+        OPENED.with_borrow(|o| o.tunnels.get(&h).map(|(_, e)| e.clone()))
     }
 
     fn git_commit(

@@ -306,13 +306,13 @@ impl wh::secrets::Host for State {
     }
 }
 
-impl wh::http::Host for State {
-    fn send(
-        &mut self,
-        req: wh::http::Request,
+impl State {
+    /// The host's handles of the credential and the tunnel a call names.
+    fn handles(
+        &self,
         auth: Option<Resource<Credential>>,
         via: Option<Resource<Tunnel>>,
-    ) -> Result<wh::http::Response, wh::types::Error> {
+    ) -> Result<(Option<h::Handle>, Option<h::Handle>), wh::types::Error> {
         let bad =
             |e: wasmtime::component::ResourceTableError| error(h::Error::fatal(e.to_string()));
         let auth = match auth {
@@ -323,22 +323,50 @@ impl wh::http::Host for State {
             Some(t) => Some(self.table.get(&t).map_err(bad)?.handle),
             None => None,
         };
-        let r = self
-            .host
-            .send(
-                h::HttpRequest {
-                    method: req.method,
-                    url: req.url,
-                    headers: req.headers,
-                    body: req.body,
-                    timeout: req.timeout_ms.map(|ms| Duration::from_millis(ms.into())),
-                    bucket: req.bucket,
-                    session: Session(req.session),
-                    call: None,
-                },
-                auth,
-                via,
-            )
+        Ok((auth, via))
+    }
+}
+
+/// `f`, a call of the host's that waits on the world, on a thread of the
+/// blocking pool: the import is a subtask (it is an `async func`), so the
+/// component goes on meanwhile, and its other calls with it. In the span
+/// the import was made in.
+async fn waited<T, E>(f: impl FnOnce() -> Result<T, E> + Send + 'static) -> Result<T, E>
+where
+    T: Send + 'static,
+    E: From<h::Error> + Send + 'static,
+{
+    let span = tracing::Span::current();
+    tokio::task::spawn_blocking(move || span.in_scope(f))
+        .await
+        .unwrap_or_else(|e| Err(h::Error::fatal(format!("the host's call failed: {e}")).into()))
+}
+
+impl wh::http::Host for State {}
+
+impl<U> wh::http::HostWithStore<U> for HasSelf<State> {
+    async fn send(
+        a: &Accessor<U, Self>,
+        req: wh::http::Request,
+        auth: Option<Resource<Credential>>,
+        via: Option<Resource<Tunnel>>,
+    ) -> Result<wh::http::Response, wh::types::Error> {
+        let (host, (auth, via)) = a.with(|mut s| {
+            let s = s.get();
+            s.handles(auth, via).map(|h| (s.host.clone(), h))
+        })?;
+        let req = h::HttpRequest {
+            method: req.method,
+            url: req.url,
+            headers: req.headers,
+            body: req.body,
+            timeout: req.timeout_ms.map(|ms| Duration::from_millis(ms.into())),
+            bucket: req.bucket,
+            session: Session(req.session),
+            call: None,
+        };
+        let r = waited(move || host.send(req, auth, via))
+            .await
             .map_err(error)?;
         Ok(wh::http::Response {
             status: r.status,
@@ -348,16 +376,16 @@ impl wh::http::Host for State {
     }
 }
 
-impl wh::ssh::Host for State {
-    fn exec(
-        &mut self,
+impl<U> wh::ssh::HostWithStore<U> for HasSelf<State> {
+    async fn exec(
+        a: &Accessor<U, Self>,
         on: wh::ssh::Target,
         argv: Vec<String>,
         stdin: Option<Vec<u8>>,
     ) -> Result<wh::ssh::Run, wh::types::NotYetOrError> {
-        let r = self
-            .host
-            .exec(&target(on), &argv, stdin.as_deref())
+        let host = a.with(|mut s| s.get().host.clone());
+        let r = waited(move || host.exec(&target(on), &argv, stdin.as_deref()))
+            .await
             .map_err(failure)?;
         Ok(wh::ssh::Run {
             status: r.status,
@@ -365,7 +393,9 @@ impl wh::ssh::Host for State {
             stderr: r.stderr,
         })
     }
+}
 
+impl wh::ssh::Host for State {
     fn write(
         &mut self,
         on: wh::ssh::Target,
@@ -399,16 +429,27 @@ impl wh::ssh::Host for State {
     }
 }
 
-impl wh::io::Host for State {
-    fn read(&mut self, location: String) -> Result<Vec<u8>, wh::types::NotYetOrError> {
-        self.host.io_read(&location).map_err(failure)
+impl wh::io::Host for State {}
+
+impl<U> wh::io::HostWithStore<U> for HasSelf<State> {
+    async fn read(
+        a: &Accessor<U, Self>,
+        location: String,
+    ) -> Result<Vec<u8>, wh::types::NotYetOrError> {
+        let host = a.with(|mut s| s.get().host.clone());
+        waited(move || host.io_read(&location))
+            .await
+            .map_err(failure)
     }
 
-    fn read_versioned(
-        &mut self,
+    async fn read_versioned(
+        a: &Accessor<U, Self>,
         location: String,
     ) -> Result<wh::io::Document, wh::types::NotYetOrError> {
-        let d = self.host.io_read_versioned(&location).map_err(failure)?;
+        let host = a.with(|mut s| s.get().host.clone());
+        let d = waited(move || host.io_read_versioned(&location))
+            .await
+            .map_err(failure)?;
         Ok(wh::io::Document {
             data: d.bytes,
             version: d.version,
