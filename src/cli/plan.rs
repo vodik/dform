@@ -47,23 +47,7 @@ impl Plan {
             false => violations,
         };
         let r = Reporter::new(&cx, &evaluator, &located, &st);
-        let mut report = r.report(
-            &planned.plan,
-            &planned.res,
-            &planned.sections,
-            1,
-            &moves,
-            &planned.denies,
-        );
-        report.every_site = self.json;
-        report.nested = cx.cli.held.is_held();
-        r.explain(&mut report, &planned.plan, &planned.res, 1);
-        if cx.cli.held.is_held() {
-            cx.cli
-                .held
-                .outputs(r.outputs_of(&planned.res, &st, &report.outputs_after)?);
-            cx.cli.held.tally(report.tally());
-        }
+        let report = self.report(&cx, &r, &planned, &st, &moves)?;
         let file = self.file(&cx, &located, &r, &planned, &st)?;
         if self.json {
             self.print_json(
@@ -77,9 +61,55 @@ impl Plan {
         } else {
             self.print_text(&cx, &r, &report, &planned, file.as_ref(), &evaluator)?;
         }
-        // The report listed the conflicts and the denies over the plan
-        // (R-111): stderr names only what it did not, once. An up to date
-        // plan lists none (a secret's age, R-161, denies one).
+        self.refuse(&cx, &report, &planned, &violations, &redact)?;
+        if let (Some(out), Some(file)) = (&self.out, &file) {
+            self.save(&cx, out, file, &located, &evaluator)?;
+        }
+        Ok(Outcome::Done)
+    }
+
+    /// The report of `planned`, explained; a tree's deployment's
+    /// outputs and headline counts held for the tree (R-200).
+    fn report(
+        &self,
+        cx: &Context,
+        r: &Reporter,
+        planned: &Planned,
+        st: &crate::state::State,
+        moves: &[(crate::address::Address, crate::address::Address)],
+    ) -> Result<report::Report> {
+        let mut report = r.report(
+            &planned.plan,
+            &planned.res,
+            &planned.sections,
+            1,
+            moves,
+            &planned.denies,
+        );
+        report.every_site = self.json;
+        report.nested = cx.cli.held.is_held();
+        r.explain(&mut report, &planned.plan, &planned.res, 1);
+        if cx.cli.held.is_held() {
+            cx.cli
+                .held
+                .outputs(r.outputs_of(&planned.res, st, &report.outputs_after)?);
+            cx.cli.held.tally(report.tally());
+        }
+        Ok(report)
+    }
+
+    /// Refused when the program's violations or the denies over the plan
+    /// block it. The report listed the conflicts and the denies over the
+    /// plan (R-111): stderr names only what it did not, once. An up to
+    /// date plan lists none (a secret's age, R-161, denies one).
+    fn refuse(
+        &self,
+        cx: &Context,
+        report: &report::Report,
+        planned: &Planned,
+        violations: &[String],
+        redact: &crate::query::Redactor,
+    ) -> Result<()> {
         let denies = &planned.denies;
         let mut unshown: Vec<String> = violations
             .iter()
@@ -91,7 +121,7 @@ impl Plan {
         }
         cx.cli
             .cmd
-            .blocked(&unshown, &planned.res.rules, &redact, cx.cli.err_style)?;
+            .blocked(&unshown, &planned.res.rules, redact, cx.cli.err_style)?;
         if !violations.is_empty() || !denies.is_empty() {
             let conflicts = violations.iter().filter(|v| report::is_conflict(v)).count();
             return Err(Refused::new(
@@ -101,41 +131,51 @@ impl Plan {
             )
             .into());
         }
-        if let (Some(out), Some(file)) = (&self.out, &file) {
-            // A tree's file is written once, with each deployment's plan
-            // in apply order (`matrix::Tree`).
-            match cx.cli.held.is_held() {
-                true => cx.cli.held.file(file.clone()),
-                false => {
-                    zset::file::Sequence {
-                        version: zset::file::VERSION,
-                        deployments: vec![zset::file::Step {
-                            deployment: located.stored.clone(),
-                            after: Vec::new(),
-                            plan: file.clone(),
-                        }],
-                    }
-                    .save(out)?;
-                    eprintln!(
-                        "plan file: {} (plan digest: {})",
-                        out.display(),
-                        file.digest.as_deref().unwrap_or_default()
-                    );
+        Ok(())
+    }
+
+    /// The plan file `file` written at `out` (`--out`), and the plan told
+    /// to the audit log. A tree's file is written once, with each
+    /// deployment's plan in apply order (`matrix::Tree`).
+    fn save(
+        &self,
+        cx: &Context,
+        out: &std::path::Path,
+        file: &zset::file::PlanFile,
+        located: &deployment::Located,
+        evaluator: &deployment::Evaluator,
+    ) -> Result<()> {
+        match cx.cli.held.is_held() {
+            true => cx.cli.held.file(file.clone()),
+            false => {
+                zset::file::Sequence {
+                    version: zset::file::VERSION,
+                    deployments: vec![zset::file::Step {
+                        deployment: located.stored.clone(),
+                        after: Vec::new(),
+                        plan: file.clone(),
+                    }],
                 }
+                .save(out)?;
+                eprintln!(
+                    "plan file: {} (plan digest: {})",
+                    out.display(),
+                    file.digest.as_deref().unwrap_or_default()
+                );
             }
-            cx.audit.append(
-                "plan",
-                serde_json::json!({
-                    "digest": file.digest,
-                    "documents": crate::diff::documents(&evaluator.tables.sources()),
-                    "file": out.display().to_string(),
-                    "inputs": file.inputs,
-                    "needs_approval": file.needs_approval,
-                    "who": crate::audit::who(),
-                }),
-            )?;
         }
-        Ok(Outcome::Done)
+        cx.audit.append(
+            "plan",
+            serde_json::json!({
+                "digest": file.digest,
+                "documents": crate::diff::documents(&evaluator.tables.sources()),
+                "file": out.display().to_string(),
+                "inputs": file.inputs,
+                "needs_approval": file.needs_approval,
+                "who": crate::audit::who(),
+            }),
+        )?;
+        Ok(())
     }
 
     /// The plan file, when one is written or the plan needs an approval:
