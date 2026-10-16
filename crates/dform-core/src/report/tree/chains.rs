@@ -141,6 +141,10 @@ impl Surface<'_, '_> {
             .entry
             .as_deref()
             .map(|e| e.split_once(" = ").map_or(e, |(_, r)| r).to_string());
+        // A call's row is the let's value, as it is written.
+        if rhs.is_none() && is_call(fact) {
+            rhs = let_value(&own.statement);
+        }
         if let (Some(f), Some(e)) = (focus.filter(|f| !f.keys.is_empty()), rhs.as_deref()) {
             rhs = field_of(e, &f.keys).or_else(|| shorthand(e, &f.keys));
         }
@@ -213,6 +217,9 @@ impl Surface<'_, '_> {
         };
         // An expression of one cell (`str.lower(cidrs.main)`): that cell's value.
         let next = next.or_else(|| read_cell(c, circuit, children, rhs.as_deref()?));
+        // A call of a let with parameters (`cidr(1, 2)`): the row its
+        // site's copy answered, made by the let's own rule.
+        let next = next.or_else(|| called(circuit, children));
         // A stack key ends it: the deployment line says its value.
         let key = |p: NodeId| match circuit.view(p) {
             View::Fact { fact, .. } => {
@@ -438,6 +445,38 @@ fn read_cell(
         [one] => Some(one.clone()),
         _ => None,
     }
+}
+
+/// The row a call's site answered among `children`, when the firing read
+/// one ([`is_call`]).
+fn called(circuit: &Circuit, children: &[NodeId]) -> Option<(NodeId, Vec<String>)> {
+    children.iter().find_map(|ch| match circuit.view(*ch) {
+        View::Fact { fact, .. } if is_call(fact) => Some((*ch, Vec::new())),
+        _ => None,
+    })
+}
+
+/// Whether `fact` is a row a call answered: a let with parameters is
+/// answered by its copy for the call's site (`crate::demand`), whose
+/// relation is named for the call; not the call's demand (`f?`).
+fn is_call(fact: &Fact) -> bool {
+    fact.pred
+        .rsplit_once("::")
+        .is_some_and(|(scope, f)| scope.starts_with("call at ") && !f.ends_with('?'))
+}
+
+/// The value a let with parameters is written as, `"10.${a}.${b}.0/24"`
+/// of `let cidr(a, b) = "10.${a}.${b}.0/24" where ..`: what a call of it
+/// makes.
+fn let_value(statement: &str) -> Option<String> {
+    let root = crate::syntax::parser::parse(statement).syntax();
+    let l = root.descendants().find(|n| n.kind() == SyntaxKind::LET)?;
+    let value = l
+        .children_with_tokens()
+        .skip_while(|e| e.kind() != SyntaxKind::EQ)
+        .skip(1)
+        .find(|e| !e.kind().is_trivia())?;
+    Some(value.to_string().trim().to_string())
 }
 
 /// Expression `e` without its string literals' text, their

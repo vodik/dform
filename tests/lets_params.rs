@@ -315,7 +315,8 @@ resource db.postgres b { name = "b", tags = labels(a.cidr) }
 }
 
 /// `why` of a value through a call: the attribute's step is the call at
-/// its site; the relation's rows are each the let's rule, at the call.
+/// its site, then the let's value it made; the relation's rows are each
+/// the let's rule, at the call, which the call asked for.
 #[test]
 fn why_shows_the_rule_and_its_site() {
     let s = Scratch::new("lets-params-why");
@@ -329,7 +330,12 @@ resource net.vpc v { cidr = cidr(1, 2) }
     let r = s
         .run(&["dev", "--world", "w.json", "why", "v.cidr", "p.df"])
         .success();
-    assert!(r.stdout.contains("= cidr(1, 2)  p.df:3"), "{}", r.stdout);
+    assert!(
+        r.stdout
+            .contains("  = cidr(1, 2)           p.df:3\n  = \"10.${a}.${b}.0/24\"  p.df:2"),
+        "{}",
+        r.stdout
+    );
     let r = s
         .run(&["dev", "--world", "w.json", "why", "cidr(a, b, v)", "p.df"])
         .success();
@@ -339,6 +345,7 @@ resource net.vpc v { cidr = cidr(1, 2) }
         "p.df:3  resource net.vpc v { cidr = cidr(1, 2) }",
         "cidr(1, 2, \"10.1.2.0/24\")   (in call at p.df:3:29)",
         "p.df:2  let cidr(a, b) = \"10.${a}.${b}.0/24\"",
+        "└─ the call cidr(1, 2)   (at p.df:3:29)",
     ] {
         assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
     }

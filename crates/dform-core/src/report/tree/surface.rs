@@ -242,12 +242,25 @@ impl Surface<'_, '_> {
             }
             _ => {
                 let a = f.atom();
+                if let Some(call) = self.call_text(&a) {
+                    return call;
+                }
                 // dform's own relation, as the program names what it holds.
                 spell::internal(&a, false, &|t| self.term(t))
                     .or_else(|| crate::modules::private_text(&a, &|a| r.surface_atom(a), "   "))
                     .unwrap_or_else(|| r.surface_atom(&a))
             }
         }
+    }
+
+    /// A call's demand (`crate::demand`: a let with parameters is answered
+    /// where it is called, with the arguments the call gives) as the call:
+    /// `the call cidr(1, 2)   (at p.df:4:29)`.
+    fn call_text(&self, a: &Atom) -> Option<String> {
+        let (scope, f) = a.pred.rsplit_once("::")?;
+        let (f, site) = (f.strip_suffix('?')?, scope.strip_prefix("call at ")?);
+        let args: Vec<String> = a.args.iter().map(|t| self.term(t)).collect();
+        Some(format!("the call {f}({})   (at {site})", args.join(", ")))
     }
 
     /// A contribution under its aggregate: the value it contributes and its
