@@ -14,10 +14,10 @@
 //!
 //! One pass over the program before it is evaluated, once the providers'
 //! schemas are known ([`crate::types::read`]): over the statements `lower`
-//! writes for its nodes, each literal marked with its node and each
-//! relation named as its scope declares it (a [`prog::Visit`] of `lower`),
-//! so the pass walks what `lower` writes, reads each literal by node, and
-//! finds each relation's columns by the program's scope tree:
+//! writes for its nodes, each literal marked with its node (a
+//! [`prog::Visit`] of `lower`) and each relation by its own name, so the
+//! pass walks what `lower` writes, reads each literal by node, and finds
+//! each relation's columns by the program's scope tree:
 //!
 //! 1. Collect: union-find nodes for each relation's columns (a let's
 //!    cell is its relation's one column) and each statement's variables,
@@ -40,11 +40,14 @@
 //! `semver`, a range): a `string` position takes any of them as its text
 //! (R-133). A column takes every type.
 
+mod body;
 mod checks;
 mod columns;
 pub(crate) mod lattice;
+mod relations;
 mod shape;
 mod sites;
+mod values;
 mod walk;
 
 use crate::address::Address;
@@ -288,10 +291,10 @@ use slotmap::{Key, KeyData};
 const NODE: &str = "__node";
 
 /// What the walk reads `lower`'s output by ([`prog::Visit`]): each literal
-/// marked with its node (a site the walk may read), and each relation by
-/// the name its scope declares it under, whatever reaches it (an
-/// enclosing definition's, R-186, too): the scope tree says which scope
-/// that is ([`Graph::declaring`]).
+/// marked with its node (a site the walk may read). Each relation is
+/// written by its own name, whatever reaches it (an enclosing
+/// definition's, R-186, too): the scope tree says which scope that is
+/// ([`Graph::declaring`]).
 struct Marks<'p>(&'p prog::Program);
 
 impl prog::Visit for Marks<'_> {
