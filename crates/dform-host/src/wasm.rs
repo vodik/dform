@@ -17,8 +17,15 @@
 //! unless dform.toml grants it, naming both, and one that imports
 //! `wasi:filesystem` likewise (it then sees the filesystem as the user
 //! does, from `/`). A `wasi:http` request is sent as a `dform:host/http`
-//! one is, through the host's `send` ([`Outgoing`]). No environment variable is passed in: a credential
-//! is had by name (`dform:host/secrets`), never from the environment.
+//! one is, through the host's `send` ([`Outgoing`]). No environment
+//! variable is passed in: a credential is had by name
+//! (`dform:host/secrets`), never from the environment.
+//!
+//! A request a component sends is traced under the call it is made for,
+//! as a native provider's is: each export is started on a task the host
+//! knows by the call's trace number (`backend::Within`, carried by the
+//! submit), and an import finds its call by the root of its async call
+//! stack ([`State::numbers`]).
 
 use crate::ratelimit::{Limiter, Paced};
 use crate::services::Services;
@@ -34,8 +41,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::task::Poll;
 use std::time::Duration;
 use wasmtime::component::{
-    Accessor, Component, FutureConsumer, HasSelf, Linker, Resource, ResourceTable, Source,
-    StreamConsumer, StreamResult,
+    Access, Accessor, Component, ComponentNamedList, FutureConsumer, GuestTaskId, HasSelf, Lift,
+    Linker, Lower, Resource, ResourceTable, Source, StreamConsumer, StreamResult, TypedFunc,
 };
 use wasmtime::{AsContextMut, Config, Engine, Store, StoreContextMut};
 use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxView, WasiView};
@@ -116,6 +123,10 @@ struct State {
     table: ResourceTable,
     host: Arc<Services>,
     outgoing: Outgoing,
+    /// The trace numbers of the calls in flight, by their export's task:
+    /// an import finds its call's by the task it is made in
+    /// ([`call_number`]), so its span is the call's child.
+    numbers: std::collections::HashMap<GuestTaskId, u64>,
 }
 
 impl WasiView for State {
@@ -305,6 +316,14 @@ impl wh::secrets::Host for State {
     }
 }
 
+/// The trace number of the call an import is made for: the one its
+/// export's task was started for ([`State::numbers`]), the root of the
+/// import's call stack.
+fn call_number<U: 'static>(s: &mut Access<'_, U, HasSelf<State>>) -> Option<u64> {
+    let root = s.as_context_mut().async_call_stack().ok()?.last()?;
+    s.get().numbers.get(&root).copied()
+}
+
 impl State {
     /// The host's handles of the credential and the tunnel a call names.
     fn handles(
@@ -350,9 +369,10 @@ impl<U> wh::http::HostWithStore<U> for HasSelf<State> {
         auth: Option<Resource<Credential>>,
         via: Option<Resource<Tunnel>>,
     ) -> Result<wh::http::Response, wh::types::Error> {
-        let (host, (auth, via)) = a.with(|mut s| {
+        let (host, (auth, via), call) = a.with(|mut s| {
+            let call = call_number(&mut s);
             let s = s.get();
-            s.handles(auth, via).map(|h| (s.host.clone(), h))
+            s.handles(auth, via).map(|h| (s.host.clone(), h, call))
         })?;
         let req = h::HttpRequest {
             method: req.method,
@@ -362,7 +382,7 @@ impl<U> wh::http::HostWithStore<U> for HasSelf<State> {
             timeout: req.timeout_ms.map(|ms| Duration::from_millis(ms.into())),
             bucket: req.bucket,
             session: Session(req.session),
-            call: None,
+            call,
         };
         let r = waited(move || host.send(req, auth, via))
             .await
@@ -558,6 +578,15 @@ pub fn manifest(engine: &Engine, component: &Component) -> Manifest {
     Manifest::of(names.iter().map(String::as_str), true)
 }
 
+/// A call as dform submitted it: its ticket, and the number it is traced
+/// by (`backend::Within`, `timed::call_span`), which the host's spans of
+/// the requests it sends are under, as a native provider's are.
+struct Submitted {
+    t: Ticket,
+    call: Call,
+    number: Option<u64>,
+}
+
 /// What the instance's thread sends back: an event of a call in flight,
 /// or a call's answer.
 enum Back {
@@ -568,7 +597,7 @@ enum Back {
 /// A running component provider: its instance on a thread of its own,
 /// which takes every call as it is submitted and runs them at once.
 pub struct Wasm {
-    calls: Option<tokio::sync::mpsc::UnboundedSender<(Ticket, Call)>>,
+    calls: Option<tokio::sync::mpsc::UnboundedSender<Submitted>>,
     back: std::sync::mpsc::Receiver<Back>,
     next: u64,
     /// Why it answers no more calls, once it trapped.
@@ -678,6 +707,7 @@ impl Instance {
             table: ResourceTable::new(),
             outgoing: Outgoing(host.clone()),
             host,
+            numbers: Default::default(),
         })
     }
 
@@ -687,7 +717,7 @@ impl Instance {
         self,
         engine: &'static Engine,
         component: Component,
-        calls: tokio::sync::mpsc::UnboundedReceiver<(Ticket, Call)>,
+        calls: tokio::sync::mpsc::UnboundedReceiver<Submitted>,
         ready: std::sync::mpsc::Sender<Result<()>>,
     ) {
         let rt = match tokio::runtime::Builder::new_current_thread()
@@ -709,7 +739,7 @@ impl Instance {
         self,
         engine: &'static Engine,
         component: Component,
-        mut calls: tokio::sync::mpsc::UnboundedReceiver<(Ticket, Call)>,
+        mut calls: tokio::sync::mpsc::UnboundedReceiver<Submitted>,
         ready: std::sync::mpsc::Sender<Result<()>>,
     ) {
         let started = async {
@@ -753,9 +783,9 @@ impl Instance {
                     });
                     tokio::select! {
                         got = calls.recv() => match got {
-                            Some((t, call)) => {
-                                open.borrow_mut().insert(t);
-                                running.push(Box::pin(self.one(a, &provider, &who, t, call)));
+                            Some(c) => {
+                                open.borrow_mut().insert(c.t);
+                                running.push(Box::pin(self.one(a, &provider, &who, c)));
                             }
                             // dform dropped the provider.
                             None => return None,
@@ -795,12 +825,44 @@ impl Instance {
             ));
         }
         // A call submitted before the submitter saw it die.
-        while let Some((t, _)) = calls.recv().await {
+        while let Some(Submitted { t, .. }) = calls.recv().await {
             let _ = self.tx.send(Back::Answer(
                 t,
                 Box::new(Err(CallError::Crashed(gone.clone()))),
             ));
         }
+    }
+
+    /// The export `f` called with `arg`, its task known by the call's
+    /// trace number while it runs ([`State::numbers`]).
+    async fn exported<P, R>(
+        a: &Accessor<State>,
+        f: TypedFunc<(P,), (R,)>,
+        arg: P,
+        number: Option<u64>,
+    ) -> wasmtime::Result<R>
+    where
+        (P,): ComponentNamedList + Lower + Send + Sync + 'static,
+        (R,): ComponentNamedList + Lift + Send + Sync + 'static,
+    {
+        let started = a.with(|mut s| f.start_call_concurrent(s.as_context_mut(), (arg,)))?;
+        let task = started.task();
+        Instance::numbered(a, task, number);
+        let answered = f.finish_call_concurrent(a, started).await;
+        Instance::numbered(a, task, None);
+        Ok(answered?.0)
+    }
+
+    /// The export's task `task` known by the trace number `number`, or
+    /// (`None`) no longer.
+    fn numbered(a: &Accessor<State>, task: GuestTaskId, number: Option<u64>) {
+        a.with(|mut s| {
+            let numbers = &mut s.get().numbers;
+            match number {
+                Some(n) => numbers.insert(task, n),
+                None => numbers.remove(&task),
+            }
+        });
     }
 
     /// Run `call`, telling its events and then its answer; a trap is its
@@ -810,48 +872,63 @@ impl Instance {
         a: &Accessor<State>,
         provider: &bindings::HostedProvider,
         who: &std::cell::RefCell<String>,
-        t: Ticket,
-        call: Call,
+        Submitted { t, call, number }: Submitted,
     ) -> (Ticket, bool, wasmtime::Result<()>) {
         let apply = matches!(call, Call::Apply(_));
         let p = provider.dform_provider_provider();
         let answered = async {
             Ok::<_, wasmtime::Error>(match &call {
-                Call::Handshake(r) => p
-                    .call_handshake(a, conv::to_handshake_request(r))
-                    .await?
-                    .map_err(conv::from_call_error)
-                    .and_then(|r| decode(conv::from_handshake_response(&r)).map(Reply::Handshake)),
-                Call::Configure(r) => p
-                    .call_configure(a, conv::to_configure_request(r))
-                    .await?
-                    .map_err(conv::from_call_error)
-                    .and_then(|r| decode(conv::from_configure_response(&r)).map(Reply::Configure)),
-                Call::Schema(r) => p
-                    .call_schema(a, conv::to_schema_request(r))
-                    .await?
-                    .map_err(conv::from_call_error)
-                    .and_then(|r| decode(conv::from_schema_response(&r)).map(Reply::Schema)),
-                Call::Query(r) => p
-                    .call_query(a, conv::to_query_request(r))
-                    .await?
-                    .map_err(conv::from_call_error)
-                    .and_then(|r| decode(conv::from_rows(&r)).map(Reply::Query)),
-                Call::Read(r) => p
-                    .call_read(a, conv::to_read_request(r))
-                    .await?
-                    .map_err(conv::from_call_error)
-                    .and_then(|r| decode(conv::from_read_response(&r)).map(Reply::Read)),
-                Call::Plan(r) => p
-                    .call_plan(a, conv::to_plan_request(r))
-                    .await?
-                    .map_err(conv::from_call_error)
-                    .and_then(|r| decode(conv::from_plan_response(&r)).map(Reply::Plan)),
+                Call::Handshake(r) => {
+                    Instance::exported(a, p.func_handshake(), conv::to_handshake_request(r), number)
+                        .await?
+                        .map_err(conv::from_call_error)
+                        .and_then(|r| {
+                            decode(conv::from_handshake_response(&r)).map(Reply::Handshake)
+                        })
+                }
+                Call::Configure(r) => {
+                    Instance::exported(a, p.func_configure(), conv::to_configure_request(r), number)
+                        .await?
+                        .map_err(conv::from_call_error)
+                        .and_then(|r| {
+                            decode(conv::from_configure_response(&r)).map(Reply::Configure)
+                        })
+                }
+                Call::Schema(r) => {
+                    Instance::exported(a, p.func_schema(), conv::to_schema_request(r), number)
+                        .await?
+                        .map_err(conv::from_call_error)
+                        .and_then(|r| decode(conv::from_schema_response(&r)).map(Reply::Schema))
+                }
+                Call::Query(r) => {
+                    Instance::exported(a, p.func_query(), conv::to_query_request(r), number)
+                        .await?
+                        .map_err(conv::from_call_error)
+                        .and_then(|r| decode(conv::from_rows(&r)).map(Reply::Query))
+                }
+                Call::Read(r) => {
+                    Instance::exported(a, p.func_read(), conv::to_read_request(r), number)
+                        .await?
+                        .map_err(conv::from_call_error)
+                        .and_then(|r| decode(conv::from_read_response(&r)).map(Reply::Read))
+                }
+                Call::Plan(r) => {
+                    Instance::exported(a, p.func_plan(), conv::to_plan_request(r), number)
+                        .await?
+                        .map_err(conv::from_call_error)
+                        .and_then(|r| decode(conv::from_plan_response(&r)).map(Reply::Plan))
+                }
                 Call::Apply(r) if r.op == pb::Op::Unspecified as i32 => {
                     Err(CallError::Refused("an Apply call with no op".to_string()))
                 }
                 Call::Apply(r) => {
-                    let (events, result) = p.call_apply(a, conv::to_apply_request(r)).await?;
+                    let f = p.func_apply();
+                    let started = a.with(|mut s| {
+                        f.start_call_concurrent(s.as_context_mut(), (conv::to_apply_request(r),))
+                    })?;
+                    let task = started.task();
+                    Instance::numbered(a, task, number);
+                    let (events, result) = f.finish_call_concurrent(a, started).await?.0;
                     let (done, answer) = tokio::sync::oneshot::channel();
                     a.with(|mut s| -> wasmtime::Result<()> {
                         events.pipe(
@@ -864,7 +941,9 @@ impl Instance {
                         result.pipe(&mut s, Done(Some(done)))?;
                         Ok(())
                     })?;
-                    match answer.await {
+                    let answered = answer.await;
+                    Instance::numbered(a, task, None);
+                    match answered {
                         Ok(r) => r
                             .map_err(conv::from_call_error)
                             .and_then(|r| decode(conv::from_apply_response(&r)).map(Reply::Apply)),
@@ -874,21 +953,24 @@ impl Instance {
                         ))),
                     }
                 }
-                Call::Import(r) => p
-                    .call_import(a, conv::to_import_request(r))
-                    .await?
-                    .map_err(conv::from_call_error)
-                    .and_then(|r| decode(conv::from_import_response(&r)).map(Reply::Import)),
-                Call::Reveal(r) => p
-                    .call_reveal(a, conv::to_reveal_request(r))
-                    .await?
-                    .map_err(conv::from_call_error)
-                    .and_then(|r| decode(conv::from_reveal_response(&r)).map(Reply::Reveal)),
-                Call::Health(r) => p
-                    .call_health(a, conv::to_health_request(r))
-                    .await?
-                    .map_err(conv::from_call_error)
-                    .and_then(|r| decode(conv::from_health_response(&r)).map(Reply::Health)),
+                Call::Import(r) => {
+                    Instance::exported(a, p.func_import(), conv::to_import_request(r), number)
+                        .await?
+                        .map_err(conv::from_call_error)
+                        .and_then(|r| decode(conv::from_import_response(&r)).map(Reply::Import))
+                }
+                Call::Reveal(r) => {
+                    Instance::exported(a, p.func_reveal(), conv::to_reveal_request(r), number)
+                        .await?
+                        .map_err(conv::from_call_error)
+                        .and_then(|r| decode(conv::from_reveal_response(&r)).map(Reply::Reveal))
+                }
+                Call::Health(r) => {
+                    Instance::exported(a, p.func_health(), conv::to_health_request(r), number)
+                        .await?
+                        .map_err(conv::from_call_error)
+                        .and_then(|r| decode(conv::from_health_response(&r)).map(Reply::Health))
+                }
             })
         };
         match answered.await {
@@ -996,10 +1078,10 @@ impl Provider for Wasm {
         self.next += 1;
         let dead = self.dead.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let sent = dead.is_none()
-            && self
-                .calls
-                .as_ref()
-                .is_some_and(|c| c.send((t, call)).is_ok());
+            && self.calls.as_ref().is_some_and(|c| {
+                let number = dform_core::plugin::backend::Within::here().call;
+                c.send(Submitted { t, call, number }).is_ok()
+            });
         if !sent {
             let why = dead.unwrap_or_else(|| "the provider has exited".into());
             self.refused.push((t, CallError::Crashed(why)));

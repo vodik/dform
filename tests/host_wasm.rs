@@ -363,3 +363,105 @@ fn the_ovh_component_reads_an_instance_through_the_host() {
         "the instance, its ports and the networks in flight together"
     );
 }
+
+/// The OVH provider's trace as a component is its native build's: a plan
+/// of the same program against the fake OVH API has, under each of its
+/// `provider.call` spans, the same `io.call` requests (each named with
+/// its bucket) and `ratelimit.wait` waits (each with its session): the
+/// host finds the call a component's request is made for by the task of
+/// the export it is made in, as a native provider names it.
+#[test]
+fn the_ovh_component_traces_as_its_native_build_does() {
+    use dform_provider_ovh::fake::{self, Server};
+    let wasm = built(
+        "dform_provider_ovh.wasm",
+        "cargo build -p dform-provider-ovh --release --target wasm32-wasip3 --features component",
+    );
+    let server = Server::start();
+    let program = format!(
+        r#"
+use ovh {{ endpoint = "{}", project = "{}", token = "{}" }}
+
+resource ovh.ssh_key admin {{ name = "lab-admin", public_key = "ssh-ed25519 AAAAC3Nz lab" }}
+
+resource ovh.instance server {{
+  name = "lab-server"
+  region = "ca-east-tor"
+  flavor = "b2-7"
+  image = "Ubuntu 24.04"
+  ssh_key = admin
+}}
+"#,
+        server.endpoint,
+        fake::DESCRIPTION,
+        server.access_token()
+    );
+    let traced = |name: &str, provider: &str| {
+        let s = Scratch::project(name);
+        s.write(
+            "dform.toml",
+            &format!(
+                "[project]\nedition = \"2026\"\n\n[providers]\novh = {{ path = \"{provider}\", \
+                 allow = [\"wasi:filesystem\"] }}\n"
+            ),
+        );
+        s.write("main.df", &program);
+        let out = common::dform()
+            .args(["plan", "main.df", "--trace", "run.jsonl"])
+            .current_dir(&s.dir)
+            .env("HOME", &s.dir)
+            .env("XDG_CONFIG_HOME", s.path("config"))
+            .env("XDG_CACHE_HOME", wasm_cache())
+            .env("DFORM_OVH_RESOLVER", "127.0.0.1:9")
+            .env_remove("OVH_ENDPOINT")
+            .env_remove("OVH_APPLICATION_KEY")
+            .env_remove("DFORM_TRACE")
+            .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+            .output()
+            .unwrap();
+        common::Run::from(out).success();
+        under_calls(&common::spans(&s.path("run.jsonl")))
+    };
+    let native = traced("ovh-trace-native", &common::exe("dform-provider-ovh"));
+    let component = traced("ovh-trace-wasm", &wasm);
+    assert!(
+        native
+            .keys()
+            .any(|(call, child)| call == "ovh Configure" && child.starts_with("ovh GET")),
+        "{native:#?}"
+    );
+    assert_eq!(component, native);
+}
+
+/// Each `io.call` and `ratelimit.wait` span of a trace by its parent's
+/// name and its own, counted; each request's bucket and each wait's
+/// session filled.
+fn under_calls(spans: &[serde_json::Value]) -> std::collections::BTreeMap<(String, String), usize> {
+    let by_id: std::collections::BTreeMap<&str, &serde_json::Value> = spans
+        .iter()
+        .map(|sp| (sp["spanId"].as_str().unwrap(), sp))
+        .collect();
+    let mut out = std::collections::BTreeMap::new();
+    for sp in spans {
+        let name = sp["name"].as_str().unwrap_or_default();
+        let request = common::attr(sp, "kind").as_deref() == Some("http");
+        let wait = name.ends_with("waits on its window");
+        if !request && !wait {
+            continue;
+        }
+        if request {
+            assert!(common::attr(sp, "bucket").is_some(), "{sp}");
+        }
+        if wait {
+            assert_ne!(common::attr(sp, "session").as_deref(), Some("0"), "{sp}");
+        }
+        let parent = sp["parentSpanId"]
+            .as_str()
+            .and_then(|p| by_id.get(p))
+            .and_then(|p| p["name"].as_str())
+            .unwrap_or("(none)");
+        *out.entry((parent.to_string(), name.to_string()))
+            .or_insert(0) += 1;
+    }
+    out
+}
