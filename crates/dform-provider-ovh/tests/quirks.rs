@@ -4,6 +4,8 @@
 //! network by the OVH id, not the OpenStack id it was attached by; a call
 //! that takes no body refuses one; an instance's `ipAddresses` lags an
 //! attach. Each first as the fake answers it, then as the provider copes.
+//! Last, a port made with the address the program asks
+//! (`networks = [{ network, ip }]`), at the fake and through the provider.
 
 use dform_core::plugin::backend::{self, Call, Handler, Reply};
 use dform_core::plugin::{pb, wire};
@@ -635,5 +637,60 @@ fn a_create_sent_again_owns_the_port_it_was_made_with() {
     let left = private_ports(&c, &vm);
     assert_eq!(left.len(), 1, "{left:?}");
     assert_eq!(left[0]["id"], first);
+    assert_eq!(server.instances().len(), 1);
+}
+
+// A fixed private address (`networks = [{ network = lab, ip = .. }]`):
+// the create's `networks[].ip` and an attach's `ip` give the port that
+// address, one of a subnet's hosts of the network in the region and no
+// other port's.
+
+/// The fake makes a port with the address asked of it, at the create and
+/// at an attach; refuses one in no subnet of the network in the region
+/// (or the subnet's gateway) with a 400, and one another port has with a
+/// 409.
+#[test]
+fn the_fake_makes_a_port_with_the_address_asked() {
+    let (server, c) = world();
+    let (_, os) = lab(&c);
+    let create = |name: &str, ip: &str| {
+        c.post(
+            &project("/instance"),
+            Some(&json!({"name": name, "region": "BHS5",
+                         "flavorId": "flavor-b2-7-BHS5", "imageId": "image-ubuntu-24.04-BHS5",
+                         "networks": [{"networkId": "ext-BHS5"}, {"networkId": os, "ip": ip}]})),
+        )
+    };
+    let vm = create("a", "10.0.0.5").unwrap();
+    let vm = vm["id"].as_str().unwrap();
+    let port = &private_ports(&c, vm)[0];
+    assert_eq!(port["fixedIps"][0]["ip"], "10.0.0.5");
+    let o = c.get(&project(&format!("/instance/{vm}"))).unwrap();
+    assert!(
+        o["ipAddresses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["ip"] == "10.0.0.5"),
+        "{o}"
+    );
+    let taken = create("b", "10.0.0.5").unwrap_err();
+    assert_eq!(taken.status(), Some(409), "{taken}");
+    assert!(
+        taken.to_string().contains("10.0.0.5 is already allocated"),
+        "{taken}"
+    );
+    for outside in ["10.9.0.5", "10.0.0.1", "10.0.0.255"] {
+        let e = create("b", outside).unwrap_err();
+        assert_eq!(e.status(), Some(400), "{e}");
+        assert!(e.to_string().contains("is in no subnet of network"), "{e}");
+    }
+    let path = project(&format!("/instance/{vm}/interface"));
+    let attached = c
+        .post(&path, Some(&json!({"networkId": os, "ip": "10.0.0.6"})))
+        .unwrap();
+    assert_eq!(attached["fixedIps"][0]["ip"], "10.0.0.6");
+    let again = c.post(&path, Some(&json!({"networkId": os, "ip": "10.0.0.6"})));
+    assert_eq!(again.unwrap_err().status(), Some(409));
     assert_eq!(server.instances().len(), 1);
 }

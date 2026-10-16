@@ -13,7 +13,8 @@
   "guessed": [
     "the list (GET /instance) embeds `flavor`, `image` and `sshKey` as null, as the create does",
     "a create answers `ipAddresses` empty while BUILD",
-    "the `networkId` of an address in `ipAddresses` is the OpenStack id of the network (public: its region's Ext-Net)"
+    "the `networkId` of an address in `ipAddresses` is the OpenStack id of the network (public: its region's Ext-Net)",
+    "the create's `networks[].ip` (cloud.instance.NetworkParams `ip`) makes the port on that network with that address, DHCP left on the subnet; an address in no subnet of the network in the region (or the subnet's gateway) is refused 400, one a port of the network has refused 409 (the texts are the fake's)"
   ],
   "answer": {
     "id": "6f8b2c1e-4a1d-4f7e-9d3c-2b1a0e9f8c7d",

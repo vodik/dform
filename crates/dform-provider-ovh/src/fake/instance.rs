@@ -1,12 +1,14 @@
 //! Instances: listed, made BUILD then ACTIVE, renamed, resized (RESIZE, to a
-//! flavor no smaller), their interfaces attached and detached, deleted.
+//! flavor no smaller), their interfaces attached and detached, deleted. A
+//! port is made with the address asked of it (`networks[].ip` of the
+//! create, `ip` of an attach), or one of its subnet's pool.
 
 use super::*;
 
 /// A port of an instance (`cloud.instanceInterface.Interface`): its id,
 /// its network's OpenStack id (`ext-REGION` for the public network), and
-/// the address an attach gave it (one made with the instance has the
-/// instance's address on its network).
+/// the address an attach gave it or the create asked for it (another made
+/// with the instance has the instance's address on its network).
 #[derive(Debug, Clone)]
 pub(super) struct Port {
     id: String,
@@ -83,23 +85,34 @@ impl World {
                     return (400, json!({"message": "Invalid sshKeyId"}));
                 }
                 // `networks`: the public network's id and the private ones',
-                // in that region, as OpenStack names them.
-                let nics: Option<Vec<String>> =
+                // in that region, as OpenStack names them, each with the
+                // address asked of its port, if one is.
+                let nics: Option<Vec<(String, Option<String>)>> =
                     body.get("networks").and_then(Json::as_array).map(|ns| {
                         ns.iter()
-                            .filter_map(|n| n["networkId"].as_str().map(str::to_string))
+                            .filter_map(|n| {
+                                let ip = n.get("ip").and_then(Json::as_str).map(str::to_string);
+                                Some((n["networkId"].as_str()?.to_string(), ip))
+                            })
                             .collect()
                     });
-                for nic in nics.iter().flatten() {
+                for (nic, ip) in nics.iter().flatten() {
                     if let Some(why) = self.nic_refused(region, nic) {
                         return (400, json!({"message": why}));
+                    }
+                    if let Some(refused) = ip
+                        .as_deref()
+                        .and_then(|ip| self.ip_refused(region, nic, ip))
+                    {
+                        return refused;
                     }
                 }
                 let id = self.id("instance");
                 if let Some(nics) = nics {
                     let mut ports = Vec::new();
-                    for nic in nics {
-                        let port = Port::new(&ports, &nic, None);
+                    for (nic, ip) in nics {
+                        let ip = ip.map(|ip| self.private_ip(&nic, &ip));
+                        let port = Port::new(&ports, &nic, ip);
                         ports.push(port);
                     }
                     self.nics.insert(id.clone(), ports);
@@ -189,8 +202,9 @@ impl World {
                 (200, json!(all))
             }
             // An attach makes a port, on a network the instance is on
-            // already as well (OVH does); its address is the port's at
-            // once and the instance's `ipAddresses` only later.
+            // already as well (OVH does); its address, the one asked or
+            // one of the pool, is the port's at once and the instance's
+            // `ipAddresses` only later.
             ("POST", ["cloud", "project", _, "instance", id, "interface"]) => {
                 let id = id.to_string();
                 let Some(region) = self.instances.get(&id).map(|o| o["region"].clone()) else {
@@ -201,10 +215,17 @@ impl World {
                 if let Some(why) = self.nic_refused(region, &nic) {
                     return (400, json!({"message": why}));
                 }
+                let asked = body.get("ip").and_then(Json::as_str);
+                if let Some(refused) = asked.and_then(|ip| self.ip_refused(region, &nic, ip)) {
+                    return refused;
+                }
                 // Another port on a network has another address.
                 let on = self.nics.get(&id).into_iter().flatten();
                 let n = self.instances.len() + 10 + on.filter(|p| p.network == nic).count();
-                let ip = self.private_address(&nic, n);
+                let ip = match asked {
+                    Some(ip) => self.private_ip(&nic, ip),
+                    None => self.private_address(&nic, n),
+                };
                 let ports = self
                     .nics
                     .entry(id.clone())
@@ -338,7 +359,8 @@ impl World {
     }
 
     /// An instance's addresses, the `n`th: the public network's, and one
-    /// on each private network it was made on, in its subnet's pool.
+    /// on each private network it was made on, the one asked or in its
+    /// subnet's pool.
     fn addresses(&self, id: &str, n: usize) -> Json {
         let Some(ports) = self.nics.get(id) else {
             return ips(n);
@@ -349,7 +371,10 @@ impl World {
                 out.extend(ips(n).as_array().cloned().unwrap_or_default());
                 continue;
             }
-            out.push(self.private_address(&port.network, n));
+            out.push(match &port.ip {
+                Some(ip) => ip.clone(),
+                None => self.private_address(&port.network, n),
+            });
         }
         json!(out)
     }
@@ -373,12 +398,59 @@ impl World {
         let ip = pool
             .and_then(|start| host_of(&start, n as u32))
             .unwrap_or_else(|| format!("10.0.0.{n}"));
+        self.private_ip(nic, &ip)
+    }
+
+    /// The address `ip` on the private network `nic`, as the instance's
+    /// `ipAddresses` has it.
+    fn private_ip(&self, nic: &str, ip: &str) -> Json {
         shaped_at(
             "instance",
             "/ipAddresses/0",
             json!({"ip": ip, "type": "private", "version": 4,
                    "networkId": nic, "gatewayIp": null}),
         )
+    }
+
+    /// Why a port on `nic` in `region` cannot have the address `ip`: it is
+    /// no host of a subnet of the network there (its gateway is not), or a
+    /// port of the network has it already.
+    fn ip_refused(&self, region: &str, nic: &str, ip: &str) -> Option<(u16, Json)> {
+        let subnets = self
+            .networks
+            .values()
+            .find(|net| {
+                net["regions"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|r| r["openstackId"] == nic)
+            })
+            .and_then(|net| self.subnets.get(net["id"].as_str().unwrap_or_default()))
+            .into_iter()
+            .flatten()
+            .filter(|s| s["ipPools"][0]["region"] == region);
+        let held = subnets.into_iter().any(|s| {
+            let gateway = s["gatewayIp"].as_str();
+            is_host(s["cidr"].as_str().unwrap_or_default(), ip) && gateway != Some(ip)
+        });
+        if !held {
+            let why = format!("Invalid ip {ip}: it is in no subnet of network {nic} in {region}");
+            return Some((400, json!({"message": why})));
+        }
+        let taken = self.nics.iter().any(|(id, ports)| {
+            ports.iter().filter(|p| p.network == nic).any(|p| {
+                self.interface(id, p)["fixedIps"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|f| f["ip"] == ip)
+            })
+        });
+        taken.then(|| {
+            let why = format!("IP address {ip} is already allocated on network {nic}");
+            (409, json!({"message": why}))
+        })
     }
 
     /// Instance `id`'s port `port`, with the IPv4 address it has
@@ -462,6 +534,20 @@ impl World {
         let n = |k: &str| f[k].as_i64().unwrap_or(0);
         Some([n("vcpus"), n("ram"), n("disk")])
     }
+}
+
+/// Whether `ip` is a host of `cidr`: neither its network's address nor
+/// its broadcast.
+fn is_host(cidr: &str, ip: &str) -> bool {
+    let (Some((net, prefix)), Some(ip)) = (
+        dform_core::value::parse_ipnet(cidr),
+        dform_core::value::ipv4_to_u32(ip),
+    ) else {
+        return false;
+    };
+    let size = 1u64 << (32 - u32::from(prefix));
+    let (first, last) = (u64::from(net) + 1, u64::from(net) + size - 2);
+    (first..=last).contains(&u64::from(ip))
 }
 
 /// A public IPv6 and IPv4 address, the `n`th.
