@@ -180,63 +180,31 @@ impl Log {
     /// does not fork, and the append is durable when this returns (the
     /// local file fsynced; an object written whole).
     pub fn append(&self, kind: &str, fields: Json) -> Result<Pos> {
-        let mut written = String::new();
-        let mut at = Pos::default();
-        // `text` is the log, or its last lines (`store::TAIL_LINES`).
+        // The entry as the store last asked for it, after `text`: the log,
+        // or its last lines (`store::TAIL_LINES`).
+        let mut made: Option<(Pos, String)> = None;
         let mut line = |text: &[u8]| {
             let text = String::from_utf8_lossy(text);
-            let mut lines = text.lines().rev().filter(|l| !l.trim().is_empty());
-            let seq_of = |l: &str| {
-                serde_json::from_str::<Json>(l)
-                    .ok()
-                    .and_then(|e| Some((e["seq"].as_u64()?, e)))
-            };
-            let (seq, prev) = match lines.next() {
-                None => (1, String::new()),
-                Some(last) => match seq_of(last) {
-                    Some((seq, e)) => (seq + 1, e["hash"].as_str().unwrap_or_default().to_string()),
-                    // A line a crash cut short counts as an entry.
-                    None => (
-                        match lines.next().and_then(seq_of) {
-                            Some((seq, _)) => seq + 2,
-                            None => {
-                                text.lines().filter(|l| !l.trim().is_empty()).count() as u64 + 1
-                            }
-                        },
-                        format!("sha256:{}", crate::approval::sha256_hex(last.as_bytes())),
-                    ),
-                },
-            };
-            let mut entry = Map::new();
-            entry.insert("seq".into(), seq.into());
-            entry.insert("time".into(), crate::memo::now().into());
-            entry.insert("kind".into(), kind.into());
-            entry.insert("prev".into(), prev.into());
-            if let Json::Object(m) = &fields {
-                for (k, v) in m {
-                    entry.entry(k.clone()).or_insert(v.clone());
-                }
-            }
-            let hash = digest_of(&Json::Object(entry.clone()));
-            at = Pos {
-                seq,
-                hash: hash.clone(),
-                part: None,
-            };
-            entry.insert("hash".into(), hash.into());
-            written = canonical_json(&Json::Object(entry));
+            let (seq, prev) = next_link(&text);
+            let (at, written) = entry_line(kind, &fields, seq, prev);
             // A line a crash cut short stays a line of its own.
             let sep = match text.is_empty() || text.ends_with('\n') {
                 true => "",
                 false => "\n",
             };
-            format!("{sep}{written}\n").into_bytes()
+            let bytes = format!("{sep}{written}\n").into_bytes();
+            made = Some((at, written));
+            bytes
         };
-        if self.store.appends_in_place() {
-            self.store.append(AUDIT, &mut line)?;
-        } else {
-            at.part = Some(self.append_segment(&mut line)?);
-        }
+        let part = match self.store.appends_in_place() {
+            true => {
+                self.store.append(AUDIT, &mut line)?;
+                None
+            }
+            false => Some(self.append_segment(&mut line)?),
+        };
+        let (mut at, written) = made.expect("a store that appended asked for the line");
+        at.part = part;
         if let Some(cmd) = &self.sink
             && (self.sink_all || !STATE_KINDS.contains(&kind))
             && let Err(e) = send(cmd, &written, self.sink_timeout)
@@ -245,6 +213,55 @@ impl Log {
         }
         Ok(at)
     }
+}
+
+/// The `seq` and `prev` of the entry after the log `text`: one past the
+/// last entry's, chained to its hash. A last line a crash cut short counts
+/// as an entry, chained to the digest of its text.
+fn next_link(text: &str) -> (u64, String) {
+    let mut lines = text.lines().rev().filter(|l| !l.trim().is_empty());
+    let seq_of = |l: &str| {
+        serde_json::from_str::<Json>(l)
+            .ok()
+            .and_then(|e| Some((e["seq"].as_u64()?, e)))
+    };
+    let Some(last) = lines.next() else {
+        return (1, String::new());
+    };
+    if let Some((seq, e)) = seq_of(last) {
+        return (seq + 1, e["hash"].as_str().unwrap_or_default().to_string());
+    }
+    let seq = match lines.next().and_then(seq_of) {
+        Some((seq, _)) => seq + 2,
+        None => text.lines().filter(|l| !l.trim().is_empty()).count() as u64 + 1,
+    };
+    (
+        seq,
+        format!("sha256:{}", crate::approval::sha256_hex(last.as_bytes())),
+    )
+}
+
+/// The entry of `kind` with `fields`, numbered `seq` and chained to
+/// `prev`: where it is, and its line (canonical JSON, its hash in it).
+fn entry_line(kind: &str, fields: &Json, seq: u64, prev: String) -> (Pos, String) {
+    let mut entry = Map::new();
+    entry.insert("seq".into(), seq.into());
+    entry.insert("time".into(), crate::memo::now().into());
+    entry.insert("kind".into(), kind.into());
+    entry.insert("prev".into(), prev.into());
+    if let Json::Object(m) = fields {
+        for (k, v) in m {
+            entry.entry(k.clone()).or_insert(v.clone());
+        }
+    }
+    let hash = digest_of(&Json::Object(entry.clone()));
+    let at = Pos {
+        seq,
+        hash: hash.clone(),
+        part: None,
+    };
+    entry.insert("hash".into(), hash.into());
+    (at, canonical_json(&Json::Object(entry)))
 }
 
 /// Where an entry is in a log: its `seq` and `hash`, and in a log kept in
