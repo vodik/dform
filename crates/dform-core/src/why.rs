@@ -54,6 +54,9 @@ pub struct Context<'a> {
     pub top: Option<&'a Path>,
     pub waits: &'a Lookup<'a>,
     pub when: Option<&'a Lookup<'a>>,
+    /// Why the plan's change at an address replaces its object, where
+    /// its provider says (`report::Report::replaced`).
+    pub replaced: Option<&'a Lookup<'a>>,
     /// Of an attribute given at creation only whose value the plan keeps
     /// (R-198), the object's value and where it was made.
     pub kept: Option<&'a AttrLookup<'a>>,
@@ -171,7 +174,7 @@ fn unanswered(matched: &[Matched], cx: &Context) -> Vec<String> {
 
 /// Of a change the plan holds: the tick it runs in and what it waits
 /// on, or `later` for what no tick of the plan makes (R-110, R-121,
-/// R-156).
+/// R-156). Of a replace its provider says why of: that.
 fn planned(matched: &[Matched], cx: &Context) -> Vec<String> {
     let mut on: Vec<String> = Vec::new();
     for (a, _) in matched {
@@ -179,10 +182,13 @@ fn planned(matched: &[Matched], cx: &Context) -> Vec<String> {
             Some(when) => resource_of(a).and_then(|r| when(&r.to_string())),
             None => not::waiting(a, cx.res, cx.waits).map(|w| format!("later  waits on  {w}")),
         };
-        if let Some(w) = w
-            && !on.contains(&w)
-        {
-            on.push(w);
+        let replaced = cx
+            .replaced
+            .and_then(|replaced| replaced(&resource_of(a)?.to_string()));
+        for w in w.into_iter().chain(replaced) {
+            if !on.contains(&w) {
+                on.push(w);
+            }
         }
     }
     on

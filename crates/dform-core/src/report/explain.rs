@@ -12,7 +12,7 @@ use super::policy::denied;
 use super::tree;
 use super::tree::Site;
 use super::waits::waited;
-use super::{Report, Why};
+use super::{REPLACED, Report, Why};
 use crate::address::Address;
 use crate::ast::{Atom, RuleStmt, Term};
 use crate::engine::EvalResult;
@@ -54,6 +54,19 @@ impl Report {
             .iter()
             .find(|g| named(&g.pattern, address_text(&group_address(g))))?;
         Some(line(g.resolves_after, "+", &g.on))
+    }
+
+    /// Why the change at `at` (an address, full or as the plan prints it)
+    /// replaces its object, where its provider says, as `why` says it:
+    /// `replaced: flavor d2-2 is smaller than b2-7; ..`.
+    pub fn replaced(&self, at: &str) -> Option<String> {
+        let pending = self.pending.iter().flat_map(|b| b.deformations.iter());
+        let d = self
+            .definite
+            .iter()
+            .chain(pending)
+            .find(|d| d.addr.to_string() == at || address(&d.addr) == at)?;
+        Some(format!("{REPLACED} {}", d.reason.as_ref()?))
     }
 
     /// The object's value of `path` of `addr`, given at its creation only,

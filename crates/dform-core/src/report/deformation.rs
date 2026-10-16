@@ -112,6 +112,8 @@ pub struct Deformation {
     /// A create-first replace's remote names, old and new, where dform
     /// names the replacement (R-189, [`Action::renamed`]).
     pub renamed: Option<(String, String)>,
+    /// A replace's reason as its provider gave it ([`Action::reason`]).
+    pub reason: Option<String>,
 }
 
 /// An action's change lines. An update diffs a keyless set, or a list
@@ -248,6 +250,7 @@ pub(super) fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs
             })
             .collect(),
         renamed: a.renamed.clone(),
+        reason: a.reason.as_deref().map(|why| r.text(why)),
     }
 }
 

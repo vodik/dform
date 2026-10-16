@@ -168,7 +168,9 @@ the one it has (no fewer vCPUs, no less RAM or disk) is a resize
 (`POST /resize`): the plan is a `~` naming the old flavor and the new,
 and the Apply waits for the instance to be ACTIVE on it again, saying
 `RESIZE`, and notes that it rebooted. The API resizes only up, so a
-smaller flavor replaces the instance, and the Apply says why; planned
+smaller flavor replaces the instance, and the plan says why under it
+(`replaced: flavor d2-2 is smaller than b2-7; the API resizes an
+instance only to a larger one`); planned
 without the account (offline), a flavor change is a `~`, and an Apply
 of a smaller one is refused naming both. A network added is an
 interface attached, one left an interface detached (`POST`/`DELETE
@@ -272,7 +274,9 @@ is clean.
 
 - No API call changes a port's address. A new one, or one asked on a
   network where DHCP gave the instance its address, replaces the
-  instance, and the Apply says why; an address no longer asked changes
+  instance, and the plan says why (`replaced: its address on network
+  pn-1000123_42 changes from 10.42.0.10 to 10.42.0.11; no API call
+  changes a port's address`); an address no longer asked changes
   nothing (the port keeps it); a network added with an address is an
   interface attached with it, in place. A replacement made first
   (`lifecycle(vm, "create_first")`) that asks the old instance's address
@@ -330,7 +334,7 @@ the snapshot, so dform keeps their digests, as an instance's user data.
 `ovh.network`: a private network, a VLAN of the vRack the project is on.
 `name` (in place), `vlan_id` (0 when not set; replaces), `regions` (every
 region of the project when not set; one added is added in place, one left
-replaces it); computed `id` (`pn-..._42`), `status` and `regions_status`.
+replaces it, which the plan says); computed `id` (`pn-..._42`), `status` and `regions_status`.
 The vRack is the account's, attached to the project in the OVH control
 panel, outside dform, as a DNS zone is: on a project without one, Plan
 refuses the network naming what is missing:

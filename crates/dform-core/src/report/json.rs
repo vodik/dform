@@ -258,6 +258,9 @@ impl Report {
             ActionKind::Replace { create_first } => {
                 m.insert("create_first".into(), json!(create_first));
                 m.insert("immutable".into(), json!(d.forces));
+                if let Some(why) = &d.reason {
+                    m.insert("reason".into(), json!(why));
+                }
             }
             ActionKind::DeleteDeposed => {
                 m.insert("deposed".into(), json!(true));

@@ -11,7 +11,7 @@ use super::layout::{Row, WIDTH};
 use super::mask::{Shown, elide, masked_text};
 use super::style::{Paint, Style};
 use super::tree::Site;
-use super::{FORGOTTEN, KEPT, Report, Why};
+use super::{FORGOTTEN, KEPT, REPLACED, Report, Why};
 use crate::address::Address;
 use crate::engine::EvalResult;
 use crate::provider::ActionKind;
@@ -53,7 +53,14 @@ impl Report {
         );
         let right = self.change_column(d, &addr);
         rows.push(Row::new(&plain, painted).with(right));
-        self.write_attrs(rows, d, &format!("{indent}    "), style);
+        let inner = format!("{indent}    ");
+        // Why its provider replaces it, where the schema does not say.
+        if let Some(why) = &d.reason {
+            let plain = format!("{inner}{REPLACED} {why}");
+            let painted = format!("{inner}{} {why}", style.paint(Paint::Replace, REPLACED));
+            rows.push(Row::new(&plain, painted));
+        }
+        self.write_attrs(rows, d, &inner, style);
     }
     /// A change line's right column: where it is derived and, for a
     /// replace, what forces it; a delete's reason; a create's bindings at

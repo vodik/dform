@@ -223,6 +223,10 @@ impl Report {
 /// A forget's note on its line (R-154).
 pub const FORGOTTEN: &str = "  forgotten, kept in the world  (lifecycle retain)";
 
+/// What opens the line under a replace that says why its provider
+/// replaces it: `replaced: flavor d2-2 is smaller than b2-7; ..`.
+pub const REPLACED: &str = "replaced:";
+
 /// What a line says of a value given at creation only that differs from
 /// the object's (R-198): `user_data differs (bootstrap): kept`.
 pub const KEPT: &str = "(bootstrap): kept";

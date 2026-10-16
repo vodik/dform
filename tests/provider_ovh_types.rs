@@ -1548,11 +1548,35 @@ fn a_program_asks_an_instances_private_address() {
     assert!(again.stdout.contains("is up to date"), "{}", again.stdout);
 
     s.write("main.df", &program(&node("server", 11)));
+    // The plan says why, under the change; `--json` carries it, and
+    // `why` says it of the instance.
     let moved = dform(&s, &server, &["plan", "main.df"]).success();
+    let why = "its address on network pn-1000123_42 changes from 10.42.0.11 to 10.42.0.12; \
+               no API call changes a port's address";
+    assert_eq!(
+        moved.stdout,
+        format!(
+            "plan: 1 change (1 replace) over 1 tick\n\n\
+             tick 1  1 change\n  \
+             ± ovh.instance server\n      \
+             replaced: {why}\n      \
+             - networks[]\n          ip = \"10.42.0.11\"\n          network = \"pn-1000123_42\"\n      \
+             + networks[]\n          ip = \"10.42.0.12\"\n          network = \"pn-1000123_42\"\n"
+        )
+    );
+    let json = dform(&s, &server, &["plan", "--json", "main.df"]).success();
+    let json: Json = serde_json::from_str(&json.stdout).unwrap();
+    let change = &json["ticks"][0]["changes"][0];
+    assert_eq!(
+        (&change["kind"], &change["reason"]),
+        (&json!("replace"), &json!(why)),
+        "{change}"
+    );
+    let said = dform(&s, &server, &["why", "server", "main.df"]).success();
     assert!(
-        moved.stdout.contains("(1 replace)") && moved.stdout.contains("± ovh.instance server"),
+        said.stdout.contains(&format!("\nreplaced: {why}\n")),
         "{}",
-        moved.stdout
+        said.stdout
     );
     dform(&s, &server, &["apply", "main.df"]).success();
     assert_eq!(server.instances().len(), 1);

@@ -333,6 +333,7 @@ impl Why {
         let ev = &run.ev;
         let waits = |t: &str| ev.evaluator.provider_wait(t);
         let when = |at: &str| schedule.and_then(|r| r.when(at));
+        let replaced = |at: &str| schedule.and_then(|r| r.replaced(at));
         let keys = ev
             .located
             .instance
@@ -364,6 +365,9 @@ impl Why {
             when: schedule
                 .is_some()
                 .then_some(&when as &dyn Fn(&str) -> Option<String>),
+            replaced: schedule
+                .is_some()
+                .then_some(&replaced as &dyn Fn(&str) -> Option<String>),
             kept: Some(&kept),
         };
         let how = crate::why::As {
