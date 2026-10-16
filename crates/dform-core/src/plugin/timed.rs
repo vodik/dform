@@ -145,8 +145,12 @@ pub struct Timed {
 
 impl Timed {
     /// `backend` on a thread of its own, each call waited for at most
-    /// `timeout`.
-    pub fn new(what: String, backend: Box<dyn Provider + Send>, timeout: Duration) -> Timed {
+    /// `timeout`; `Err` when the thread cannot start.
+    pub fn new(
+        what: String,
+        backend: Box<dyn Provider + Send>,
+        timeout: Duration,
+    ) -> std::io::Result<Timed> {
         let (cmds, rx) = mpsc::channel::<Cmd>();
         let (tx, answers) = mpsc::channel::<Back>();
         let dead = Arc::new(AtomicBool::new(false));
@@ -154,9 +158,8 @@ impl Timed {
         let stop = backend.stopper();
         let worker = std::thread::Builder::new()
             .name("dform-provider".into())
-            .spawn(move || serve(backend, rx, tx, flag))
-            .expect("start the provider call thread");
-        Timed {
+            .spawn(move || serve(backend, rx, tx, flag))?;
+        Ok(Timed {
             what,
             timeout,
             cmds: Some(cmds),
@@ -170,7 +173,7 @@ impl Timed {
             asked: 0,
             dead,
             stop,
-        }
+        })
     }
 
     pub fn set_timeout(&mut self, timeout: Duration) {
@@ -424,6 +427,7 @@ mod tests {
             Box::new(q),
             Duration::from_millis(timeout_ms),
         )
+        .unwrap()
     }
 
     /// A call past its timeout answers `MaybeApplied`, naming the call and

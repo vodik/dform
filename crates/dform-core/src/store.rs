@@ -1582,7 +1582,7 @@ impl Deployment {
             stop: None,
         };
         if inner.store.fenced() {
-            guard.renew_every(inner.times);
+            guard.renew_every(inner.times)?;
             self.fence_state()?;
         }
         // Tests hold the lock until a file appears, to run a second apply
@@ -1867,7 +1867,9 @@ impl Guard {
         }
     }
 
-    fn renew_every(&mut self, times: LeaseTimes) {
+    /// Renew the lease every `times.renewal`, on a thread of its own,
+    /// until the guard stops it; `Err` when the thread cannot start.
+    fn renew_every(&mut self, times: LeaseTimes) -> Result<()> {
         let (tx, rx) = mpsc::channel::<()>();
         let mut renewer = Renewer::new(self.inner.clone(), times);
         // Its renewals are in the span the lease was taken in.
@@ -1875,9 +1877,10 @@ impl Guard {
         let thread = std::thread::Builder::new()
             .name("dform-lease".into())
             .spawn(move || within.in_scope(|| renewer.run(&rx)))
-            .expect("spawn the lease renewer");
+            .context("start the lease renewer")?;
         self.stop = Some(tx);
         *locked(&self.inner.renewer) = Some(thread);
+        Ok(())
     }
 }
 

@@ -13,7 +13,7 @@ use super::backend::{BUILD, BUILT_IN, Call, CallError, Provider, Reply, Session,
 use super::pb;
 use super::policy::{self, Class, Policy};
 use super::timed::Timed;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -116,13 +116,15 @@ impl Link {
     pub fn start(program: impl Into<String>, backend: Box<dyn Provider + Send>) -> Result<Link> {
         let program = program.into();
         let policy = Policy::default();
+        let backend = Timed::new(program.clone(), backend, policy.timeout)
+            .with_context(|| format!("start the thread calls to provider {program} wait on"))?;
         let mut link = Link {
             name: String::new(),
             capabilities: Vec::new(),
             settings: Vec::new(),
             health: Vec::new(),
             version: String::new(),
-            backend: Timed::new(program.clone(), backend, policy.timeout),
+            backend,
             program,
             hosting: None,
             schemes: Vec::new(),

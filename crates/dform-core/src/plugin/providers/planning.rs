@@ -720,7 +720,10 @@ impl<'a> Planning<'a> {
                 if let Some(why) = zset::create_first_refused(self.cloud.schema(), &addr) {
                     return Err(crate::report::Failure::located(&addr, why).into());
                 }
-                let want = self.resolved.get(&addr).expect("a desired address");
+                let want = self
+                    .resolved
+                    .get(&addr)
+                    .expect("a desired address's document is resolved before its action");
                 self.cloud
                     .renamed(&addr, want, self.before.get(&addr), self.state.get(&addr))
             }
