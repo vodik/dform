@@ -5380,9 +5380,13 @@ fails says its trace id after the error. The spans:
 |---|---|---|
 | `plan.phase` | a step: loaded and compiled, located the deployment, providers started and configured, evaluated, each extern round, refresh, Plan calls, the policy pass, each deployment of a project's plan | `count` (the refresh's objects, the Plan calls asked) |
 | `provider.call` | one call to a provider, from its submit to its answer (a client span, its status `ok` or `error`) | `provider`, `kind` (`Configure`, `Read`, `Plan`, `Apply`, `Query`, ..), `addr` (the resource's address or the extern's name), `session` (the configured instance the call is made in; a Configure's, the one it opened) |
-| `io.call` | a request dform makes itself, or one a provider sends through the host (`http`, under the `provider.call` it is made for; a client span) | `kind` (`s3.get`, `s3.put`, `s3.list`, `io.read`, `oci.resolve`, `http`), `addr` (the location, without its userinfo, query or fragment); for `http`, `provider`, `bucket` and the answer's `status` |
+| `provider.export` | a wasm provider's run of one call: the server's side of its `provider.call`, under it and named as it is (a server span, its status the answer's) | `export` (the WIT export, `dform:provider/provider@1.0.0#read`), `error.type` when it trapped (`trap`, `exit`, or `deadline`: past the call's epoch deadline) |
+| `io.call` | a request dform makes itself, or one a provider sends through the host (`http`, under the `provider.call` it is made for, a wasm provider's under its `provider.export`; a client span) | `kind` (`s3.get`, `s3.put`, `s3.list`, `io.read`, `oci.resolve`, `http`), `addr` (the location, without its userinfo, query or fragment); for `http`, `provider`, `bucket` and the answer's `status` |
 | `tick` | an apply tick | `tick` |
 | `apply.wait` | a tick waiting on values the world has not reached (R-81) | `tick`, `kind` (`world`, `extern`), `count` |
+| `wasm.compile` | a wasm provider's code, under its start: compiled, or the cache's (`~/.cache/dform/wasm`) | `path`, `cached` |
+| `wasm.link` | its imports resolved against the host's, under its start | |
+| `wasm.instantiate` | its instance made, under its start | |
 | `ratelimit.wait` | a provider's request waiting on its bucket's window in the host, under its `io.call` | `provider`, `session`, `bucket`, `queued` (the requests before it), `window` |
 
 The order the run took is the viewer's, from each span's times and

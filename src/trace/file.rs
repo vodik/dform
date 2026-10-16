@@ -4,8 +4,9 @@
 //! as OpenTelemetry's file exporter writes them and Jaeger loads them.
 //! Written here from the span data, with no OpenTelemetry crate: a span's
 //! name is its `otel.name`, its kind its `otel.kind` (`client` for a
-//! call, else internal), its status its `otel.status_code` (a call's
-//! answer, `ok` or `error`), every other field an attribute.
+//! call, `server` for a component's export of one, else internal), its
+//! status its `otel.status_code` (a call's answer, `ok` or `error`), every
+//! other field an attribute.
 //!
 //! [`Layer`] feeds it, a layer of the run's subscriber beside the
 //! exporter and `DFORM_LOG`'s lines. A span ends when it is last exited,
@@ -49,7 +50,8 @@ struct Open {
     /// first (a call answered after its phase).
     parent: String,
     name: String,
-    client: bool,
+    /// OTLP's span kind: 1 internal, 2 server, 3 client.
+    kind: u8,
     start: u128,
     /// When it was last exited, if it was ever entered.
     exited: Option<u128>,
@@ -109,7 +111,7 @@ impl Spans {
             span_id: String::new(),
             parent: String::new(),
             name: attrs.metadata().name().to_string(),
-            client: false,
+            kind: 1,
             start: now(),
             exited: None,
             status: None,
@@ -149,7 +151,7 @@ impl Spans {
             "spanId": o.span_id,
             "parentSpanId": o.parent,
             "name": o.name,
-            "kind": if o.client { 3 } else { 1 },
+            "kind": o.kind,
             "startTimeUnixNano": o.start.to_string(),
             "endTimeUnixNano": end.to_string(),
             "attributes": o.attributes,
@@ -214,7 +216,13 @@ impl Visit for Fields<'_> {
     fn record_str(&mut self, field: &Field, value: &str) {
         match field.name() {
             "otel.name" => self.0.name = value.to_string(),
-            "otel.kind" => self.0.client = value == "client",
+            "otel.kind" => {
+                self.0.kind = match value {
+                    "server" => 2,
+                    "client" => 3,
+                    _ => 1,
+                }
+            }
             "otel.status_code" => {
                 self.0.status = match value {
                     "ok" => Some(1),

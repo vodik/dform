@@ -21,11 +21,15 @@
 //! variable is passed in: a credential is had by name
 //! (`dform:host/secrets`), never from the environment.
 //!
-//! A request a component sends is traced under the call it is made for,
-//! as a native provider's is: each export is started on a task the host
-//! knows by the call's trace number (`backend::Within`, carried by the
-//! submit), and an import finds its call by the root of its async call
-//! stack ([`State::numbers`]).
+//! Traced in tracing's idiom, as a native provider is and more: its
+//! start is `wasm.compile` (the cache's code, or compiled), `wasm.link`
+//! and `wasm.instantiate`, under the provider's start; each call's export
+//! is a server span, `provider.export`, under the call's `provider.call`
+//! (named as the call is, the WIT name a field, a trap its error), and a
+//! request the component sends through the host is under its export: each
+//! export is started on a task the host knows by its span while it runs,
+//! and an import finds it by the root of its async call stack
+//! ([`State::exports`]).
 
 use crate::ratelimit::{Limiter, Paced};
 use crate::services::Services;
@@ -34,12 +38,15 @@ use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Session, Tic
 use dform_core::plugin::host::{self as h, Calls, Grants, Hosting, Manifest};
 use dform_core::plugin::link::Link;
 use dform_core::plugin::pb;
+use dform_core::plugin::timed;
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::Poll;
 use std::time::Duration;
+use tracing::Instrument;
 use wasmtime::component::{
     Access, Accessor, Component, ComponentNamedList, FutureConsumer, GuestTaskId, HasSelf, Lift,
     Linker, Lower, Resource, ResourceTable, Source, StreamConsumer, StreamResult, TypedFunc,
@@ -84,6 +91,10 @@ pub struct Tunnel {
     handle: h::Handle,
 }
 
+/// The interface a provider's calls are exports of, as a
+/// `provider.export` span names one (`dform:provider/provider@1.0.0#read`).
+const EXPORTS: &str = "dform:provider/provider@1.0.0";
+
 /// How often the epoch ticks, and how many ticks a call may run.
 const TICK: Duration = Duration::from_millis(100);
 /// The backstop: a call still running after this has its instance
@@ -123,10 +134,10 @@ struct State {
     table: ResourceTable,
     host: Arc<Services>,
     outgoing: Outgoing,
-    /// The trace numbers of the calls in flight, by their export's task:
-    /// an import finds its call's by the task it is made in
-    /// ([`call_number`]), so its span is the call's child.
-    numbers: std::collections::HashMap<GuestTaskId, u64>,
+    /// The `provider.export` spans of the calls in flight, by their
+    /// export's task: an import finds its call's by the task it is made in
+    /// ([`made_in`]), so its spans are the export's children.
+    exports: std::collections::HashMap<GuestTaskId, tracing::Span>,
 }
 
 impl WasiView for State {
@@ -316,12 +327,22 @@ impl wh::secrets::Host for State {
     }
 }
 
-/// The trace number of the call an import is made for: the one its
-/// export's task was started for ([`State::numbers`]), the root of the
-/// import's call stack.
-fn call_number<U: 'static>(s: &mut Access<'_, U, HasSelf<State>>) -> Option<u64> {
-    let root = s.as_context_mut().async_call_stack().ok()?.last()?;
-    s.get().numbers.get(&root).copied()
+/// The span an import is made in: the `provider.export` of the call it is
+/// made for, the one its export's task was started in ([`State::exports`]),
+/// the root of the import's call stack; else the span the instance is in.
+fn made_in<U: 'static>(s: &mut Access<'_, U, HasSelf<State>>) -> tracing::Span {
+    let root = s
+        .as_context_mut()
+        .async_call_stack()
+        .ok()
+        .and_then(|stack| stack.last());
+    root.and_then(|root| s.get().exports.get(&root).cloned())
+        .unwrap_or_else(tracing::Span::current)
+}
+
+/// The host an import calls, and the span it is made in ([`made_in`]).
+fn host_in<U: 'static>(a: &Accessor<U, HasSelf<State>>) -> (Arc<Services>, tracing::Span) {
+    a.with(|mut s| (s.get().host.clone(), made_in(&mut s)))
 }
 
 impl State {
@@ -347,14 +368,16 @@ impl State {
 
 /// `f`, a call of the host's that waits on the world, on a thread of the
 /// blocking pool: the import is a subtask (it is an `async func`), so the
-/// component goes on meanwhile, and its other calls with it. In the span
-/// the import was made in.
-async fn waited<T, E>(f: impl FnOnce() -> Result<T, E> + Send + 'static) -> Result<T, E>
+/// component goes on meanwhile, and its other calls with it. In `span`,
+/// the export's the import was made in ([`made_in`]).
+async fn waited<T, E>(
+    span: tracing::Span,
+    f: impl FnOnce() -> Result<T, E> + Send + 'static,
+) -> Result<T, E>
 where
     T: Send + 'static,
     E: From<h::Error> + Send + 'static,
 {
-    let span = tracing::Span::current();
     tokio::task::spawn_blocking(move || span.in_scope(f))
         .await
         .unwrap_or_else(|e| Err(h::Error::fatal(format!("the host's call failed: {e}")).into()))
@@ -369,10 +392,10 @@ impl<U> wh::http::HostWithStore<U> for HasSelf<State> {
         auth: Option<Resource<Credential>>,
         via: Option<Resource<Tunnel>>,
     ) -> Result<wh::http::Response, wh::types::Error> {
-        let (host, (auth, via), call) = a.with(|mut s| {
-            let call = call_number(&mut s);
+        let (host, (auth, via), span) = a.with(|mut s| {
+            let span = made_in(&mut s);
             let s = s.get();
-            s.handles(auth, via).map(|h| (s.host.clone(), h, call))
+            s.handles(auth, via).map(|h| (s.host.clone(), h, span))
         })?;
         let req = h::HttpRequest {
             method: req.method,
@@ -382,9 +405,10 @@ impl<U> wh::http::HostWithStore<U> for HasSelf<State> {
             timeout: req.timeout_ms.map(|ms| Duration::from_millis(ms.into())),
             bucket: req.bucket,
             session: Session(req.session),
-            call,
+            // Its span's parent is the export's it is sent in.
+            call: None,
         };
-        let r = waited(move || host.send(req, auth, via))
+        let r = waited(span, move || host.send(req, auth, via))
             .await
             .map_err(error)?;
         Ok(wh::http::Response {
@@ -402,10 +426,12 @@ impl<U> wh::ssh::HostWithStore<U> for HasSelf<State> {
         argv: Vec<String>,
         stdin: Option<Vec<u8>>,
     ) -> Result<wh::ssh::Run, wh::types::NotYetOrError> {
-        let host = a.with(|mut s| s.get().host.clone());
-        let r = waited(move || host.exec(&target(on), &argv, stdin.as_deref()))
-            .await
-            .map_err(failure)?;
+        let (host, span) = host_in(a);
+        let r = waited(span, move || {
+            host.exec(&target(on), &argv, stdin.as_deref())
+        })
+        .await
+        .map_err(failure)?;
         Ok(wh::ssh::Run {
             status: r.status,
             stdout: r.stdout,
@@ -455,8 +481,8 @@ impl<U> wh::io::HostWithStore<U> for HasSelf<State> {
         a: &Accessor<U, Self>,
         location: String,
     ) -> Result<Vec<u8>, wh::types::NotYetOrError> {
-        let host = a.with(|mut s| s.get().host.clone());
-        waited(move || host.io_read(&location))
+        let (host, span) = host_in(a);
+        waited(span, move || host.io_read(&location))
             .await
             .map_err(failure)
     }
@@ -465,8 +491,8 @@ impl<U> wh::io::HostWithStore<U> for HasSelf<State> {
         a: &Accessor<U, Self>,
         location: String,
     ) -> Result<wh::io::Document, wh::types::NotYetOrError> {
-        let host = a.with(|mut s| s.get().host.clone());
-        let d = waited(move || host.io_read_versioned(&location))
+        let (host, span) = host_in(a);
+        let d = waited(span, move || host.io_read_versioned(&location))
             .await
             .map_err(failure)?;
         Ok(wh::io::Document {
@@ -537,7 +563,14 @@ fn compiled_dir() -> Option<std::path::PathBuf> {
 /// provider takes seconds, so the native code is kept in
 /// `$XDG_CACHE_HOME/dform/wasm/<sha256 of the file>.cwasm`, written by
 /// this engine (wasmtime refuses one another version wrote, and it is
-/// compiled again).
+/// compiled again). A `wasm.compile` span, whose `cached` says which.
+#[tracing::instrument(
+    target = "dform",
+    level = "debug",
+    name = "wasm.compile",
+    skip_all,
+    fields(path = %path.display(), cached = tracing::field::Empty)
+)]
 fn load(engine: &Engine, path: &Path) -> Result<Component> {
     use sha2::{Digest, Sha256};
     let bytes = std::fs::read(path)?;
@@ -554,9 +587,11 @@ fn load(engine: &Engine, path: &Path) -> Result<Component> {
         // its content's digest, in the operator's own cache); wasmtime
         // checks it was compiled by this version and configuration.
         if let Ok(component) = unsafe { Component::deserialize_file(engine, c) } {
+            tracing::Span::current().record("cached", true);
             return Ok(component);
         }
     }
+    tracing::Span::current().record("cached", false);
     let component = Component::new(engine, &bytes)?;
     if let (Some(d), Some(c)) = (&dir, &cached)
         && let Ok(native) = component.serialize()
@@ -624,16 +659,15 @@ impl Wasm {
         let dead = Arc::new(Mutex::new(None));
         let instance = Instance {
             program: program.clone(),
+            started_in: tracing::Span::current(),
             grants,
             limiter,
             dead: dead.clone(),
             tx,
         };
-        // What the instance does is in the span it was started in.
-        let within = tracing::Span::current();
         std::thread::Builder::new()
             .name("dform-wasm".into())
-            .spawn(move || within.in_scope(|| instance.run(engine, component, rx, ready)))
+            .spawn(move || instance.run(engine, component, rx, ready))
             .context("start the wasm provider's thread")?;
         started
             .recv()
@@ -655,6 +689,9 @@ impl Wasm {
 /// The instance's side: what it was started as, and where answers go.
 struct Instance {
     program: String,
+    /// The provider's start: its instantiation's spans are under it, its
+    /// calls' under theirs.
+    started_in: tracing::Span,
     grants: Grants,
     /// What its host paces its requests by ([`crate::ratelimit::Paced`]).
     limiter: Arc<Limiter>,
@@ -707,7 +744,7 @@ impl Instance {
             table: ResourceTable::new(),
             outgoing: Outgoing(host.clone()),
             host,
-            numbers: Default::default(),
+            exports: Default::default(),
         })
     }
 
@@ -742,7 +779,10 @@ impl Instance {
         calls: tokio::sync::mpsc::UnboundedReceiver<Submitted>,
         ready: std::sync::mpsc::Sender<Result<()>>,
     ) {
-        let (store, provider) = match self.instantiate(engine, &component).await {
+        let started = self
+            .instantiate(engine, &component)
+            .instrument(self.started_in.clone());
+        let (store, provider) = match started.await {
             Ok(s) => {
                 let _ = ready.send(Ok(()));
                 s
@@ -755,19 +795,41 @@ impl Instance {
         self.answer_all(store, provider, calls).await;
     }
 
-    /// The component instantiated in a store of its own, its calls'
-    /// epoch deadline set.
+    /// The component linked and instantiated in a store of its own, its
+    /// calls' epoch deadline set: a `wasm.instantiate` span, after its
+    /// `wasm.link`.
     async fn instantiate(
         &self,
         engine: &'static Engine,
         component: &Component,
     ) -> Result<(Store<State>, bindings::HostedProvider)> {
-        let linker = self.linker(engine)?;
+        let linked = self.link(engine, component)?;
+        self.instance_of(engine, &linked).await
+    }
+
+    /// The component's imports resolved against the host's: a
+    /// `wasm.link` span.
+    #[tracing::instrument(target = "dform", level = "debug", name = "wasm.link", skip_all)]
+    fn link(
+        &self,
+        engine: &'static Engine,
+        component: &Component,
+    ) -> Result<bindings::HostedProviderPre<State>> {
+        let pre = self.linker(engine)?.instantiate_pre(component)?;
+        Ok(bindings::HostedProviderPre::new(pre)?)
+    }
+
+    /// An instance of the component `linked`, in a store of its own: a
+    /// `wasm.instantiate` span.
+    #[tracing::instrument(target = "dform", level = "debug", name = "wasm.instantiate", skip_all)]
+    async fn instance_of(
+        &self,
+        engine: &'static Engine,
+        linked: &bindings::HostedProviderPre<State>,
+    ) -> Result<(Store<State>, bindings::HostedProvider)> {
         let mut store = Store::new(engine, self.state()?);
         store.set_epoch_deadline(ticks(DEADLINE));
-        let provider = bindings::HostedProvider::instantiate_async(&mut store, component, &linker)
-            .await
-            .map_err(anyhow::Error::from)?;
+        let provider = linked.instantiate_async(&mut store).await?;
         Ok((store, provider))
     }
 
@@ -781,9 +843,9 @@ impl Instance {
         mut calls: tokio::sync::mpsc::UnboundedReceiver<Submitted>,
     ) {
         let who = std::cell::RefCell::new(self.program.clone());
-        // The calls not answered yet: each answered as crashed if the
-        // instance traps.
-        let open = std::cell::RefCell::new(std::collections::BTreeSet::new());
+        // The calls not answered yet, each with its export's span: each
+        // answered as crashed if the instance traps.
+        let open = std::cell::RefCell::new(BTreeMap::new());
         let ran = store
             .run_concurrent(async |a| self.run_calls(a, &provider, &who, &open, &mut calls).await)
             .await;
@@ -791,7 +853,7 @@ impl Instance {
             Ok(None) => return,
             Ok(Some(trapped)) => Some(trapped),
             Err(trap) => {
-                let t = open.borrow().iter().next().copied();
+                let t = open.borrow().keys().next().copied();
                 t.map(|t| (t, false, trap))
             }
         };
@@ -799,15 +861,16 @@ impl Instance {
             .await;
     }
 
-    /// Each call `calls` brings run as it comes, all at once, each noted
-    /// in `open` until it is answered: `None` once `calls` ends, else the
-    /// first call that trapped, with whether it was an Apply.
+    /// Each call `calls` brings run as it comes, all at once, in its
+    /// export's span ([`export_span`]), each noted in `open` until it is
+    /// answered: `None` once `calls` ends, else the first call that
+    /// trapped, with whether it was an Apply (still `open`).
     async fn run_calls(
         &self,
         a: &Accessor<State>,
         provider: &bindings::HostedProvider,
         who: &std::cell::RefCell<String>,
-        open: &std::cell::RefCell<std::collections::BTreeSet<Ticket>>,
+        open: &std::cell::RefCell<BTreeMap<Ticket, tracing::Span>>,
         calls: &mut tokio::sync::mpsc::UnboundedReceiver<Submitted>,
     ) -> Option<(Ticket, bool, wasmtime::Error)> {
         type Running<'a> = Pin<Box<dyn Future<Output = (Ticket, bool, wasmtime::Result<()>)> + 'a>>;
@@ -825,34 +888,38 @@ impl Instance {
             tokio::select! {
                 got = calls.recv() => match got {
                     Some(c) => {
-                        open.borrow_mut().insert(c.t);
-                        running.push(Box::pin(self.one(a, provider, who, c)));
+                        let span = export_span(&who.borrow(), &c);
+                        open.borrow_mut().insert(c.t, span.clone());
+                        running.push(Box::pin(self.one(a, provider, who, c).instrument(span)));
                     }
                     // dform dropped the provider.
                     None => return None,
                 },
                 (t, apply, r) = next => {
-                    open.borrow_mut().remove(&t);
                     if let Err(trap) = r {
                         return Some((t, apply, trap));
                     }
+                    open.borrow_mut().remove(&t);
                 }
             }
         }
     }
 
     /// The instance trapped (in the call `trapped` names, when one did):
-    /// that call answered with its trap, every call still `open` and
-    /// every call submitted since as crashed, and no call taken again.
+    /// that call answered with its trap, recorded on its export's span,
+    /// every call still `open` and every call submitted since as crashed,
+    /// and no call taken again.
     async fn died(
         &self,
         who: &str,
         trapped: Option<(Ticket, bool, wasmtime::Error)>,
-        mut open: std::collections::BTreeSet<Ticket>,
+        mut open: BTreeMap<Ticket, tracing::Span>,
         mut calls: tokio::sync::mpsc::UnboundedReceiver<Submitted>,
     ) {
         if let Some((t, apply, trap)) = trapped {
-            open.remove(&t);
+            if let Some(span) = open.remove(&t) {
+                Trapped::of(&trap).record(&span);
+            }
             let _ = self.tx.send(Back::Answer(
                 t,
                 Box::new(Err(trapped_as(who, apply, &trap))),
@@ -861,7 +928,7 @@ impl Instance {
         let gone = format!("the provider {who} has exited");
         *self.dead.lock().unwrap_or_else(|e| e.into_inner()) = Some(gone.clone());
         let crashed = |t| Back::Answer(t, Box::new(Err(CallError::Crashed(gone.clone()))));
-        for t in open {
+        for t in open.into_keys() {
             let _ = self.tx.send(crashed(t));
         }
         // A call submitted before the submitter saw it die.
@@ -870,13 +937,13 @@ impl Instance {
         }
     }
 
-    /// The export `f` called with `arg`, its task known by the call's
-    /// trace number while it runs ([`State::numbers`]).
+    /// The export `f` called with `arg`, its task known by the span it is
+    /// called in (the call's `provider.export`) while it runs
+    /// ([`State::exports`]).
     async fn exported<P, R>(
         a: &Accessor<State>,
         f: TypedFunc<(P,), (R,)>,
         arg: P,
-        number: Option<u64>,
     ) -> wasmtime::Result<R>
     where
         (P,): ComponentNamedList + Lower + Send + Sync + 'static,
@@ -884,36 +951,39 @@ impl Instance {
     {
         let started = a.with(|mut s| f.start_call_concurrent(s.as_context_mut(), (arg,)))?;
         let task = started.task();
-        Instance::numbered(a, task, number);
+        Instance::traced(a, task, Some(tracing::Span::current()));
         let answered = f.finish_call_concurrent(a, started).await;
-        Instance::numbered(a, task, None);
+        Instance::traced(a, task, None);
         Ok(answered?.0)
     }
 
-    /// The export's task `task` known by the trace number `number`, or
-    /// (`None`) no longer.
-    fn numbered(a: &Accessor<State>, task: GuestTaskId, number: Option<u64>) {
+    /// The export's task `task` known by the span `span`, or (`None`) no
+    /// longer.
+    fn traced(a: &Accessor<State>, task: GuestTaskId, span: Option<tracing::Span>) {
         a.with(|mut s| {
-            let numbers = &mut s.get().numbers;
-            match number {
-                Some(n) => numbers.insert(task, n),
-                None => numbers.remove(&task),
+            let exports = &mut s.get().exports;
+            match span {
+                Some(span) => exports.insert(task, span),
+                None => exports.remove(&task),
             }
         });
     }
 
-    /// Run `call`, telling its events and then its answer; a trap is its
+    /// Run `call`, telling its events and then its answer, its status
+    /// recorded on the span it runs in (its export's); a trap is its
     /// outcome, with whether it was an Apply.
     async fn one(
         &self,
         a: &Accessor<State>,
         provider: &bindings::HostedProvider,
         who: &std::cell::RefCell<String>,
-        Submitted { t, call, number }: Submitted,
+        Submitted { t, call, .. }: Submitted,
     ) -> (Ticket, bool, wasmtime::Result<()>) {
         let apply = matches!(call, Call::Apply(_));
-        match self.answer(a, provider, who, t, &call, number).await {
+        match self.answer(a, provider, who, t, &call).await {
             Ok(answer) => {
+                let status = if answer.is_ok() { "ok" } else { "error" };
+                tracing::Span::current().record("otel.status_code", status);
                 if let Ok(Reply::Handshake(h)) = &answer {
                     *who.borrow_mut() = h.name.clone();
                 }
@@ -933,58 +1003,55 @@ impl Instance {
         who: &std::cell::RefCell<String>,
         t: Ticket,
         call: &Call,
-        number: Option<u64>,
     ) -> wasmtime::Result<Result<Reply, CallError>> {
         let p = provider.dform_provider_provider();
         Ok(match call {
             Call::Handshake(r) => answered(
-                Instance::exported(a, p.func_handshake(), conv::to_handshake_request(r), number)
-                    .await?,
+                Instance::exported(a, p.func_handshake(), conv::to_handshake_request(r)).await?,
                 conv::from_handshake_response,
                 Reply::Handshake,
             ),
             Call::Configure(r) => answered(
-                Instance::exported(a, p.func_configure(), conv::to_configure_request(r), number)
-                    .await?,
+                Instance::exported(a, p.func_configure(), conv::to_configure_request(r)).await?,
                 conv::from_configure_response,
                 Reply::Configure,
             ),
             Call::Schema(r) => answered(
-                Instance::exported(a, p.func_schema(), conv::to_schema_request(r), number).await?,
+                Instance::exported(a, p.func_schema(), conv::to_schema_request(r)).await?,
                 conv::from_schema_response,
                 Reply::Schema,
             ),
             Call::Query(r) => answered(
-                Instance::exported(a, p.func_query(), conv::to_query_request(r), number).await?,
+                Instance::exported(a, p.func_query(), conv::to_query_request(r)).await?,
                 |rows: &Vec<wp::Row>| conv::from_rows(rows),
                 Reply::Query,
             ),
             Call::Read(r) => answered(
-                Instance::exported(a, p.func_read(), conv::to_read_request(r), number).await?,
+                Instance::exported(a, p.func_read(), conv::to_read_request(r)).await?,
                 conv::from_read_response,
                 Reply::Read,
             ),
             Call::Plan(r) => answered(
-                Instance::exported(a, p.func_plan(), conv::to_plan_request(r), number).await?,
+                Instance::exported(a, p.func_plan(), conv::to_plan_request(r)).await?,
                 conv::from_plan_response,
                 Reply::Plan,
             ),
             Call::Apply(r) if r.op == pb::Op::Unspecified as i32 => {
                 Err(CallError::Refused("an Apply call with no op".to_string()))
             }
-            Call::Apply(r) => return self.apply(a, p, who, t, r, number).await,
+            Call::Apply(r) => return self.apply(a, p, who, t, r).await,
             Call::Import(r) => answered(
-                Instance::exported(a, p.func_import(), conv::to_import_request(r), number).await?,
+                Instance::exported(a, p.func_import(), conv::to_import_request(r)).await?,
                 conv::from_import_response,
                 Reply::Import,
             ),
             Call::Reveal(r) => answered(
-                Instance::exported(a, p.func_reveal(), conv::to_reveal_request(r), number).await?,
+                Instance::exported(a, p.func_reveal(), conv::to_reveal_request(r)).await?,
                 conv::from_reveal_response,
                 Reply::Reveal,
             ),
             Call::Health(r) => answered(
-                Instance::exported(a, p.func_health(), conv::to_health_request(r), number).await?,
+                Instance::exported(a, p.func_health(), conv::to_health_request(r)).await?,
                 conv::from_health_response,
                 Reply::Health,
             ),
@@ -1000,14 +1067,13 @@ impl Instance {
         who: &std::cell::RefCell<String>,
         t: Ticket,
         r: &pb::ApplyRequest,
-        number: Option<u64>,
     ) -> wasmtime::Result<Result<Reply, CallError>> {
         let f = p.func_apply();
         let started = a.with(|mut s| {
             f.start_call_concurrent(s.as_context_mut(), (conv::to_apply_request(r),))
         })?;
         let task = started.task();
-        Instance::numbered(a, task, number);
+        Instance::traced(a, task, Some(tracing::Span::current()));
         let (events, result) = f.finish_call_concurrent(a, started).await?.0;
         let (done, answer) = tokio::sync::oneshot::channel();
         a.with(|mut s| -> wasmtime::Result<()> {
@@ -1022,7 +1088,7 @@ impl Instance {
             Ok(())
         })?;
         let answered = answer.await;
-        Instance::numbered(a, task, None);
+        Instance::traced(a, task, None);
         Ok(match answered {
             Ok(r) => r
                 .map_err(conv::from_call_error)
@@ -1046,26 +1112,86 @@ fn answered<W, T>(
         .and_then(|w| decode(from(&w)).map(reply))
 }
 
+/// How a trap stopped the instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Trapped {
+    /// It exited, with this status.
+    Exit(i32),
+    /// It ran past its epoch deadline ([`DEADLINE`]).
+    Deadline,
+    /// Any other trap: a crash.
+    Crash,
+}
+
+impl Trapped {
+    fn of(trap: &wasmtime::Error) -> Trapped {
+        if let Some(exit) = trap.downcast_ref::<wasmtime_wasi::I32Exit>() {
+            return Trapped::Exit(exit.0);
+        }
+        match trap.downcast_ref::<wasmtime::Trap>() {
+            Some(wasmtime::Trap::Interrupt) => Trapped::Deadline,
+            _ => Trapped::Crash,
+        }
+    }
+
+    /// As a `provider.export` span's `error.type` names it.
+    fn as_str(self) -> &'static str {
+        match self {
+            Trapped::Exit(_) => "exit",
+            Trapped::Deadline => "deadline",
+            Trapped::Crash => "trap",
+        }
+    }
+
+    /// The trap on the span of the export it stopped: an error of its type.
+    fn record(self, span: &tracing::Span) {
+        span.record("otel.status_code", "error");
+        span.record("error.type", self.as_str());
+    }
+}
+
+/// The span of a call's run in the component, `provider.export`: the
+/// server's side of its `provider.call` (the call's trace number), under
+/// it and named as it is, so a trace's client and server spans of one
+/// call read alike, the export's WIT name a field; its status the
+/// answer's ([`Instance::one`]), a trap its error ([`Trapped::record`]).
+/// None when the call is not traced.
+fn export_span(who: &str, call: &Submitted) -> tracing::Span {
+    let Some(parent) = call.number.and_then(timed::call_span) else {
+        return tracing::Span::none();
+    };
+    let kind = call.call.method();
+    tracing::debug_span!(
+        target: dform_core::timing::TARGET,
+        parent: &parent,
+        "provider.export",
+        otel.name = %timed::call_name(who, kind),
+        otel.kind = "server",
+        otel.status_code = tracing::field::Empty,
+        export = %format_args!("{EXPORTS}#{}", kind.to_lowercase()),
+        error.type = tracing::field::Empty,
+    )
+}
+
 /// A trap of the provider `who` in a call, as the call's failure: an exit
 /// or a crash is `Crashed`; past its deadline, an Apply may have taken
 /// effect, another call is refused.
 fn trapped_as(who: &str, apply: bool, trap: &wasmtime::Error) -> CallError {
-    let interrupted = trap
-        .downcast_ref::<wasmtime::Trap>()
-        .is_some_and(|t| *t == wasmtime::Trap::Interrupt);
-    let exit = trap.downcast_ref::<wasmtime_wasi::I32Exit>().map(|e| e.0);
-    let why = match exit {
-        Some(code) => format!("the provider {who} exited during the call (exit status: {code})"),
-        None if interrupted => format!(
+    let trapped = Trapped::of(trap);
+    let why = match trapped {
+        Trapped::Exit(code) => {
+            format!("the provider {who} exited during the call (exit status: {code})")
+        }
+        Trapped::Deadline => format!(
             "the provider {who} ran past its deadline ({}s) and was stopped",
             DEADLINE.as_secs()
         ),
-        None => format!("the provider {who} trapped: {trap:#}"),
+        Trapped::Crash => format!("the provider {who} trapped: {trap:#}"),
     };
-    match (interrupted, apply) {
-        (true, true) => CallError::MaybeApplied(why),
-        (true, false) => CallError::Refused(why),
-        (false, _) => CallError::Crashed(why),
+    match (trapped, apply) {
+        (Trapped::Deadline, true) => CallError::MaybeApplied(why),
+        (Trapped::Deadline, false) => CallError::Refused(why),
+        (Trapped::Exit(_) | Trapped::Crash, _) => CallError::Crashed(why),
     }
 }
 

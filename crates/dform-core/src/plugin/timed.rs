@@ -103,6 +103,19 @@ pub fn call_span(number: u64) -> Option<tracing::Span> {
     traced().get(&number).cloned()
 }
 
+/// What a call of `kind` to `provider` is named in a trace: `ovh Read`.
+/// Its `provider.call` and, for a component, the `provider.export` that
+/// serves it read alike, a client's and a server's span of one call.
+pub fn call_name(provider: &str, kind: &str) -> String {
+    format!("{} {kind}", short(provider))
+}
+
+/// A provider as a trace names it: one not yet named by its handshake by
+/// its executable's name.
+fn short(provider: &str) -> &str {
+    provider.rsplit('/').next().unwrap_or(provider)
+}
+
 fn traced() -> std::sync::MutexGuard<'static, BTreeMap<u64, tracing::Span>> {
     // An insert, a removal or a lookup: a panic leaves the map whole.
     TRACED.lock().unwrap_or_else(|e| e.into_inner())
@@ -156,12 +169,11 @@ impl Live {
     /// (the kind, then the resource's address or the extern's name).
     fn span(provider: &str, kind: &str, what: &str) -> tracing::Span {
         let addr = what.strip_prefix(kind).unwrap_or(what).trim_start();
-        // A provider not yet named by its handshake, by its executable's name.
-        let provider = provider.rsplit('/').next().unwrap_or(provider);
+        let provider = short(provider);
         tracing::debug_span!(
             target: crate::timing::TARGET,
             "provider.call",
-            otel.name = %format_args!("{provider} {kind}"),
+            otel.name = %call_name(provider, kind),
             otel.kind = "client",
             otel.status_code = tracing::field::Empty,
             provider,
