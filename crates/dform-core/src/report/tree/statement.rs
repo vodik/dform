@@ -48,6 +48,18 @@ pub(super) fn collapse(s: &str) -> String {
     out
 }
 
+/// The statement written at `span` as the tree prints a rule's: its text
+/// on one line, the block elided but for the entry at `span` (a
+/// message's quote of a rule, the cycle's).
+pub fn written_at(span: crate::ast::Span) -> Option<String> {
+    let (_, text) = crate::diag::source_of(span)?;
+    let root = crate::syntax::parser::parse(&text).syntax();
+    let (stmt, entry) = statement_at(&root, span.start as usize, span.end as usize)?;
+    let mut shown = Shown::default();
+    shown.render(&stmt, &stmt, entry.as_ref());
+    Some(collapse(&shown.text))
+}
+
 /// The statement the span `start..end` is in, and the block entry it is
 /// when it is one (a rule lowered out of a resource's or an instance's
 /// `k = v`).

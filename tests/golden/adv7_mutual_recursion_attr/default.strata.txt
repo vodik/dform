@@ -8,8 +8,8 @@ exit: error
    (attr, net.subnet, name) -> (arg, net.vpc, peer)  [reads attr (aggregate)]  rule #1: arg("net.vpc", "x", "peer", P, "normal") :- attr("net.subnet", "y", "name", P)
    (attr, net.vpc, peer) -> (arg, net.subnet, name)  [reads attr (aggregate)]  rule #3: arg("net.subnet", "y", "name", Q, "normal") :- attr("net.vpc", "x", "peer", Q)
 -- stderr --
-error  program is not stratifiable: negative cycle through (arg, net.subnet, name), (arg, net.vpc, peer), (attr, net.subnet, name), (attr, net.vpc, peer)
-  (arg, net.subnet, name) -> (attr, net.subnet, name) [attribute aggregate (lub_ranked)]: (compiler-generated)
-  (arg, net.vpc, peer) -> (attr, net.vpc, peer) [attribute aggregate (lub_ranked)]: (compiler-generated)
-  (attr, net.subnet, name) -> (arg, net.vpc, peer) [reads attr (aggregate)]: arg("net.vpc", "x", "peer", P, "normal") :- attr("net.subnet", "y", "name", P) (at tests/fixtures/adversarial/adv7_mutual_recursion_attr.df:4:22)
-  (attr, net.vpc, peer) -> (arg, net.subnet, name) [reads attr (aggregate)]: arg("net.subnet", "y", "name", Q, "normal") :- attr("net.vpc", "x", "peer", Q) (at tests/fixtures/adversarial/adv7_mutual_recursion_attr.df:6:25)
+error  net.subnet.name and net.vpc.peer wait on each other: a value is known only once every write to it is, so none of them can be computed first
+  tests/fixtures/adversarial/adv7_mutual_recursion_attr.df:4  resource net.vpc x { peer = p } where arg(net.subnet, "y", "name", p)
+    net.vpc.peer from net.subnet.name
+  tests/fixtures/adversarial/adv7_mutual_recursion_attr.df:6  resource net.subnet y { name = q } where arg(net.vpc, "x", "peer", q)
+    net.subnet.name from net.vpc.peer

@@ -97,9 +97,9 @@ fn reading_and_writing_one_attribute_is_still_a_cycle() {
     );
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
-        r.stderr
-            .contains("program is not stratifiable: negative cycle through")
-            && r.stderr.contains("(arg, k8s.config_map, data)"),
+        r.stderr.contains(
+            "k8s.config_map.data and every attribute of k8s.config_map wait on each other"
+        ),
         "{}",
         r.stderr
     );

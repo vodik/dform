@@ -726,7 +726,7 @@ impl Surface<'_, '_> {
 /// carry a doc comment (`transform::computed_prelude`,
 /// `transform::remote_name_prelude`, `zset::SAID`'s rules): by what it
 /// makes from what it reads.
-fn core_words(r: &RuleStmt) -> Option<&'static str> {
+pub fn core_words(r: &RuleStmt) -> Option<&'static str> {
     use crate::ast::Lit;
     let reads = |p: &str| {
         r.body

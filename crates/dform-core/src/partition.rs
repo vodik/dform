@@ -30,6 +30,9 @@
 //! no spans (DESIGN.org "No source locations"), so a rule is identified by its
 //! index in the lowered program and its pretty-printed text.
 
+mod cycle;
+pub use cycle::cycle_error;
+
 use crate::ast::{Atom, Extern, Helper, Lit, Program, RuleStmt, Stmt, Term};
 use crate::schema::Schema;
 use crate::spell;
@@ -474,31 +477,6 @@ impl Node {
             Some((s, k)) => (Some(Addr::of_pattern(s)), k),
             None if self.typ.is_none() => (None, path),
             None => (Some(Addr::exact("")), path),
-        }
-    }
-
-    /// The node as a message names it (R-109, R-209): an input's, a
-    /// `let`'s or an output's cell as the program names the value, by its
-    /// scope (`input k3s.name`, `input name` the stack's own), and what
-    /// writes it as `writes to input k3s.name`; any other node as the
-    /// graph prints it.
-    pub fn spelled(&self) -> String {
-        let (Some(typ), Some(path)) = (self.typ.as_deref(), self.path.as_deref()) else {
-            return self.to_string();
-        };
-        if !scoped_cell(typ) {
-            return self.to_string();
-        }
-        let cell = match path.rsplit_once("::") {
-            Some((scope, k)) => {
-                let scope = scope.split('|').next().unwrap_or(scope);
-                format!("{typ} {scope}.{k}")
-            }
-            None => format!("{typ} {path}"),
-        };
-        match self.pred.as_str() {
-            "arg" => format!("writes to {cell}"),
-            _ => cell,
         }
     }
 }
@@ -2138,35 +2116,6 @@ pub fn report(name: &str, g: &Graph, v: &Verdict) -> String {
                 ));
             }
         }
-    }
-    out
-}
-
-/// The compile error for a negative cycle: every node on it and every
-/// negative edge inside it, each with the full text of the rule that makes it.
-pub fn cycle_error(g: &Graph, scc: &BTreeSet<Node>, negative_edges: &[Edge]) -> String {
-    let mut out = format!(
-        "program is not stratifiable: negative cycle through {}",
-        scc.iter().map(Node::spelled).collect::<Vec<_>>().join(", ")
-    );
-    for e in negative_edges {
-        let rule = match e.rule {
-            Some(i) => {
-                let r = &g.rules[i];
-                match crate::diag::place(r.head.span) {
-                    Some(at) => format!("{} (at {at})", spell::rule(r)),
-                    None => spell::rule(r),
-                }
-            }
-            None => "(compiler-generated)".into(),
-        };
-        out.push_str(&format!(
-            "\n  {} -> {} [{}]: {}",
-            e.from.spelled(),
-            e.to.spelled(),
-            e.why,
-            rule
-        ));
     }
     out
 }

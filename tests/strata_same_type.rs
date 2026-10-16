@@ -99,8 +99,10 @@ fn a_resource_reading_itself_is_a_cycle_through_its_address() {
     let r = s.run(&["plan", "k3s"]).failure();
     assert!(
         r.stderr.contains(
-            "negative cycle through (arg, db.postgres[\"a\"], endpoint), \
-             (attr, db.postgres[\"a\"], endpoint), (want, db.postgres[\"a\"])"
+            "error  db.postgres a.endpoint and db.postgres a wait on each other: a value is \
+             known only once every write to it is, so none of them can be computed first\n  \
+             stacks/k3s.df:2  resource db.postgres a { .. }\n    \
+             db.postgres a from db.postgres a.endpoint\n"
         ),
         "{}",
         r.stderr
@@ -120,8 +122,8 @@ resource db.postgres b { x = "${a.endpoint}" }
     );
     let r = s.run(&["plan", "k3s"]).failure();
     for edge in [
-        "(attr, db.postgres[\"b\"], endpoint) -> (want, db.postgres[\"a\"])",
-        "(attr, db.postgres[\"a\"], endpoint) -> (want, db.postgres[\"b\"])",
+        "db.postgres a from db.postgres b.endpoint",
+        "db.postgres b from db.postgres a.endpoint",
     ] {
         assert!(r.stderr.contains(edge), "{edge}\n{}", r.stderr);
     }

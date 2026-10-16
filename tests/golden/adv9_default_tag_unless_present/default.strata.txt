@@ -8,8 +8,8 @@ exit: error
    (attr, *, tags) -> (arg, *, tags)  [not]  rule #0: arg(T, N, "tags", {team = "platform"}, "normal") :- want(T, N), not attr(T, N, "tags", {team = "platform"})
    (attr, net.vpc, tags) -> (arg, *, tags)  [not]  rule #0: arg(T, N, "tags", {team = "platform"}, "normal") :- want(T, N), not attr(T, N, "tags", {team = "platform"})
 -- stderr --
-error  program is not stratifiable: negative cycle through (arg, *, tags), (attr, *, tags), (attr, net.vpc, tags)
-  (arg, *, tags) -> (attr, *, tags) [attribute aggregate (lub_ranked)]: (compiler-generated)
-  (arg, *, tags) -> (attr, net.vpc, tags) [attribute aggregate (lub_ranked)]: (compiler-generated)
-  (attr, *, tags) -> (arg, *, tags) [not]: arg(T, N, "tags", {team = "platform"}, "normal") :- want(T, N), not attr(T, N, "tags", {team = "platform"}) (at tests/fixtures/adversarial/adv9_default_tag_unless_present.df:7:1)
-  (attr, net.vpc, tags) -> (arg, *, tags) [not]: arg(T, N, "tags", {team = "platform"}, "normal") :- want(T, N), not attr(T, N, "tags", {team = "platform"}) (at tests/fixtures/adversarial/adv9_default_tag_unless_present.df:7:1)
+error  every resource's tags and net.vpc.tags wait on each other: a value is known only once every write to it is; a `not` holds only once what it tests is known, so none of them can be computed first
+  tests/fixtures/adversarial/adv9_default_tag_unless_present.df:7  arg_add(t, n, "tags", { team = "platform" }) where want(t, n), not arg(t, n, "tags", { team = "platform" })
+    every resource's tags unless itself
+    every resource's tags unless net.vpc.tags
+  help: at tests/fixtures/adversarial/adv9_default_tag_unless_present.df:7:1, write the default at `@default` rank: any other write of every resource's tags overrides it, with no test for one

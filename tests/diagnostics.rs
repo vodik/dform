@@ -96,9 +96,18 @@ fn a_negative_cycle_names_each_rule() {
         "\nresource net.vpc x {\n  peer = p\n} where p = y.name\nresource net.subnet y {\n  name = q\n} where q = x.peer\nuse fake\n",
     )
     .failure();
-    assert!(r.stderr.contains("not stratifiable"), "{}", r.stderr);
-    assert!(r.stderr.contains("(at p.df:3:3)"), "{}", r.stderr);
-    assert!(r.stderr.contains("(at p.df:6:3)"), "{}", r.stderr);
+    assert!(
+        r.stderr.contains(
+            "error  net.subnet.name and net.vpc.peer wait on each other: a value is known only \
+             once every write to it is, so none of them can be computed first\n  \
+             p.df:3  resource net.vpc x { peer = p } where p = y.name\n    \
+             net.vpc.peer from net.subnet.name\n  \
+             p.df:6  resource net.subnet y { name = q } where q = x.peer\n    \
+             net.subnet.name from net.vpc.peer\n"
+        ),
+        "{}",
+        r.stderr
+    );
 }
 
 #[test]

@@ -77,7 +77,11 @@ fn a_policy_reading_what_it_writes_is_still_a_cycle() {
     );
     let r = s.run(&["plan", "lab"]).failure();
     assert!(
-        r.stderr.contains("program is not stratifiable"),
+        r.stderr.contains("wait on each other")
+            && r.stderr.contains(
+                "stacks/lab.df:4  set r.metadata.labels.owner = \"simon\" where r in k8s, not has \
+                 r.metadata.labels.team"
+            ),
         "{}",
         r.stderr
     );

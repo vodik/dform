@@ -218,7 +218,7 @@ fn a_walk_to_a_missing_path_is_no_value() {
 }
 
 /// A cycle through negation is a compile error naming the cycle with
-/// the text of every rule on it.
+/// every rule on it as written.
 #[test]
 fn negative_cycle_is_an_error_with_rule_text() {
     let err = run("q(1)
@@ -226,8 +226,11 @@ fn negative_cycle_is_an_error_with_rule_text() {
              r(x) where p(x)")
     .unwrap_err()
     .to_string();
-    assert!(err.contains("negative cycle"), "{err}");
-    assert!(err.contains("p(X) :- q(X), not r(X)"), "{err}");
+    assert!(err.starts_with("p and r wait on each other"), "{err}");
+    assert!(
+        err.contains(":2  p(x) where q(x), not r(x)\n    p unless r\n"),
+        "{err}"
+    );
 }
 
 /// Rules run in the stratum of their head's partition node: a `want`
@@ -1266,8 +1269,11 @@ fn a_stuck_reader_on_a_cycle_is_an_error() {
     )
     .unwrap_err()
     .to_string();
-    assert!(err.contains("negative cycle through"), "{err}");
-    assert!(err.contains("can stick (stuck/4)"), "{err}");
+    assert!(err.contains("wait on each other"), "{err}");
+    assert!(
+        err.contains("`stuck` is known only once every rule that can wait has run"),
+        "{err}"
+    );
 }
 
 #[test]

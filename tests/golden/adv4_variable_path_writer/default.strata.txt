@@ -8,8 +8,7 @@ exit: error
    attr -> arg  [reads attr (aggregate)]  rule #0: arg(T, N, P, V, "normal") :- override(T, N, P, V), want(T, N), attr(T, N, "cidr", _C)
    (attr, net.vpc, cidr) -> arg  [reads attr (aggregate)]  rule #0: arg(T, N, P, V, "normal") :- override(T, N, P, V), want(T, N), attr(T, N, "cidr", _C)
 -- stderr --
-error  program is not stratifiable: negative cycle through arg, attr, (attr, net.vpc, cidr)
-  arg -> attr [attribute aggregate (lub_ranked)]: (compiler-generated)
-  arg -> (attr, net.vpc, cidr) [attribute aggregate (lub_ranked)]: (compiler-generated)
-  attr -> arg [reads attr (aggregate)]: arg(T, N, P, V, "normal") :- override(T, N, P, V), want(T, N), attr(T, N, "cidr", _C) (at tests/fixtures/adversarial/adv4_variable_path_writer.df:9:1)
-  (attr, net.vpc, cidr) -> arg [reads attr (aggregate)]: arg(T, N, P, V, "normal") :- override(T, N, P, V), want(T, N), attr(T, N, "cidr", _C) (at tests/fixtures/adversarial/adv4_variable_path_writer.df:9:1)
+error  every attribute and net.vpc.cidr wait on each other: a value is known only once every write to it is, so none of them can be computed first
+  tests/fixtures/adversarial/adv4_variable_path_writer.df:9  arg(t, n, p, v) where override(t, n, p, v), want(t, n), arg(t, n, "cidr", _c)
+    every attribute from itself
+    every attribute from net.vpc.cidr
