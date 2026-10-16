@@ -233,6 +233,7 @@ fn deployment_run(cli: &Cli, d: &Dependency, cmd: Cmd) -> Cli {
         .extend(d.key.iter().map(|(k, v)| format!("{k}={v}")));
     dep.keys = d.key.clone();
     dep.files = vec![d.file.clone()];
+    dep.world = cli.world.as_deref().map(|w| d.world_beside(w));
     dep
 }
 

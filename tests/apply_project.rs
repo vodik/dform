@@ -115,3 +115,48 @@ fn apply_with_no_target_applies_every_stack_in_dependency_order() {
         r.stderr
     );
 }
+
+/// A world fixture in a tree (`dev --world W`): each deployment has its
+/// own world beside W, named for it, and its own state and lease beside
+/// that, as a tree's deployments have without one; the project's apply
+/// and the project module's alike. One shared file had every deployment
+/// lease one state.
+#[test]
+fn a_world_fixture_in_a_tree_is_each_deployments_own() {
+    let world = |s: &Scratch, full: &str| -> BTreeSet<String> {
+        let w = s.json(&format!("w.{full}.json"));
+        w["resources"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect()
+    };
+    let module = project("apply-project-world-module");
+    module.write(
+        "project.df",
+        "resource stacks.net net {}\nresource stacks.app app {}\nresource stacks.solo solo {}\n",
+    );
+    for s in [project("apply-project-world"), module] {
+        s.run(&["dev", "--world", "w.json", "apply", "--yes"])
+            .success();
+        assert_eq!(
+            world(&s, "stacks.net"),
+            BTreeSet::from(["net.vpc::main".into()])
+        );
+        assert_eq!(
+            world(&s, "stacks.solo"),
+            BTreeSet::from(["net.vpc::solo".into()])
+        );
+        assert_eq!(world(&s, "stacks.app").len(), 1, "app's subnet");
+        for full in ["stacks.net", "stacks.app", "stacks.solo"] {
+            let st = s.json(&format!("w.{full}.state.json"));
+            assert_eq!(st["resources"].as_object().unwrap().len(), 1, "{full}");
+        }
+        // The next apply finds each deployment's objects where it left them.
+        let r = s
+            .run(&["dev", "--world", "w.json", "apply", "--yes"])
+            .success();
+        assert!(!r.stdout.contains("+ net."), "{}", r.stdout);
+    }
+}

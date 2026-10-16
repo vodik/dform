@@ -31,6 +31,21 @@ pub(super) struct Dependency {
     pub(super) types: Option<BTreeSet<String>>,
 }
 
+impl Dependency {
+    /// Its world fixture in a tree run with `--world W` (the project
+    /// module's, the project's `apply`): its own, beside W and named for
+    /// it (`w.json`: `w.stacks.app[env=prod].json`), its state beside
+    /// that, as each deployment of a tree has its own world, state and
+    /// lease without one.
+    pub(super) fn world_beside(&self, w: &Path) -> PathBuf {
+        let stem = w.file_stem().unwrap_or_default().to_string_lossy();
+        let ext = w
+            .extension()
+            .map_or(String::new(), |e| format!(".{}", e.to_string_lossy()));
+        w.with_file_name(format!("{stem}.{}{ext}", self.full))
+    }
+}
+
 /// The types the deployments of `order` name, for the tree's providers
 /// (`plugin::pool`); `None` when one computes a type.
 pub(super) fn types_of(order: &[Dependency]) -> Option<BTreeSet<String>> {
@@ -121,7 +136,9 @@ impl Cli {
         else {
             return Ok(Vec::new());
         };
-        if !self.in_project || self.world.is_some() {
+        // A world fixture of a target applies only it; the project's, each
+        // deployment its own ([`Dependency::world_beside`]).
+        if !self.in_project || (self.world.is_some() && self.every_stack.is_empty()) {
             return Ok(Vec::new());
         }
         // The project (`apply` with no target): every stack, each with its
@@ -490,6 +507,7 @@ impl InOrder {
             .extend(d.keys.iter().map(|(k, v)| format!("{k}={v}")));
         cli.keys = d.keys.clone();
         cli.files = vec![d.file.clone()];
+        cli.world = self.cli.world.as_deref().map(|w| d.world_beside(w));
         cli
     }
 }

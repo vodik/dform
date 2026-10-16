@@ -333,8 +333,8 @@ each deployment from its own record. Stacks that read each other are an
 error naming the cycle. A `--set` goes to each stack of the tree that
 declares the input (one none declares is the target's error);
 `--input-file` is the target's. A plan file applies the tree it
-planned ("The plan file"); a `--world` fixture and a program outside a
-project apply only themselves. `apply` with no target, in a project of
+planned ("The plan file"); a target's `--world` fixture and a program
+outside a project apply only themselves. `apply` with no target, in a project of
 several stacks under the working directory and no project module,
 applies every one of them (each with its default key) as one tree; a
 `--set` no stack declares is an error.
@@ -964,8 +964,11 @@ cargo run -- -C tests/fixtures/adopt dev --inventory ../world/inventory.json pla
 `dform dev --world PATH` (plan and apply) points the fake backend at a world file
 instead: the JSON of what "exists", each resource's configured `attrs` and its
 `computed` values. Plan refreshes from it, apply writes it back, and the stack's
-state sits beside it as `<stem>.state.json`. Edit the world file and re-plan to
-see drift:
+state sits beside it as `<stem>.state.json`. In a tree (the project's `apply`, a
+project module's run) each deployment has its own world beside it, named for the
+deployment (`w.json`: `w.stacks.app.json`), and its own state beside that, as
+each has its own world, state and lease without one. Edit the world file and
+re-plan to see drift:
 
 ```bash
 cargo run -- -C tests/fixtures/demo dev --world ../world/dform.json plan   # steady state: no changes
