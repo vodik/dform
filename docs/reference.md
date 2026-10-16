@@ -301,22 +301,33 @@ one apply: the `stacks:` line names it (`stacks: stacks.apps[env=lab]
 and what it reads, stacks.platform[env=lab]: one apply, its ticks the
 tree's`), every
 deployment's plan is printed under its `== NAME` line and the tree's
-changes confirmed once, every lease is taken before the first call,
-and each tick applies what every deployment has ready, deployment by
-deployment, then evaluates each over what the tick made known, a
-reader over its upstreams'. Each deployment's state is written as its
-objects complete, its audit log's `tick` is the tree's; one whose plan
-holds nothing more is done there: its outputs published, its
-`apply_end` logged and its lease released. A tick waits on what the
-world has not reached yet only when nothing in the tree changed in it.
-A deployment whose apply fails, is declined or stops ends the tree's
-apply after the tick: each other deployment's `apply_end` says
-`stopped` at that tick, its state consistent, and the next `apply X`
-plans the tree again from where each stopped. An interrupt stops it
-the same way: no new call, the calls in flight awaited, each
-deployment's in-flight record kept, each `apply_end` `stopped
-(interrupted)`, every lease released; the next apply resumes each
-deployment from its own record. Stacks that read each other are an
+changes confirmed once, every lease is taken before the first call.
+A tick is the tree's: every deployment's calls whose dependencies are
+met are submitted together, across deployments, paced by one window
+(`--parallel`, and each provider's window of requests), each in its
+deployment's session of the tree's one process per provider; within a
+tick no deployment's call waits on another's (what a reader reads of
+its upstream is known a tick later). The tick's block on stderr is one,
+each deployment's changes under its `== NAME`. Then the tick evaluates
+each deployment over what it made known, a reader over its upstreams'.
+Each deployment's state is written, its lease checked and its audit
+log told as each of its own calls answers; its audit log's `tick` is
+the tree's. One whose plan holds nothing more is done there: its
+outputs published, its `apply_end` logged and its lease released. A
+tick waits on what the world has not reached yet only when nothing in
+the tree changed in it. A call that fails stops new calls in every
+deployment; those in flight are awaited, each answer written to its
+own deployment's state. A deployment whose apply fails, is declined or
+stops ends the tree's apply after the tick: each other deployment's
+`apply_end` says `stopped` at that tick, its state consistent, and the
+next `apply X` plans the tree again from where each stopped. An
+interrupt stops it the same way: no new call, the calls in flight
+awaited, each `apply_end` `stopped (interrupted)`, every lease
+released. What an interrupted or crashed tree apply leaves is each
+deployment's own: its in-flight record holds its remaining actions,
+its creates whose answers were lost uncertain with their idempotency
+keys, whatever another deployment's calls did; the next apply resumes
+each deployment from its own record. Stacks that read each other are an
 error naming the cycle. A `--set` goes to each stack of the tree that
 declares the input (one none declares is the target's error);
 `--input-file` is the target's. A plan file applies the tree it
@@ -2036,7 +2047,10 @@ its call answers, with its word and time; a call still running says its
 line again every 30s (a heartbeat, the sign a long call is alive, with
 the provider's word as it last said it; `DFORM_HEARTBEAT_MS` sets it); a
 copy's header once before its first change; the tick ends with `tick 1
-done 1m50s`. `-q` prints only that end line:
+done 1m50s`. A tree's tick is one block, each deployment's changes under
+its `== NAME`; their calls answer interleaved, and a line of another
+deployment than the line before says its `== NAME` (and its copy's
+header) again. `-q` prints only that end line:
 
 ```
 tick 1  2 changes
@@ -2370,8 +2384,11 @@ and what paces a provider is the window of its requests the host keeps by
 what the server answers (see the providers section). `--parallel 1` makes
 one call at a time, in plan order: the serial escape, and the setting for a
 first apply against a new provider, whose throttles and failures then come
-one at a time. The plan's output does not change with N; the calls answer in
-the provider's order. The calls in flight run at once, and each is put on
+one at a time. A tree's apply walks every deployment's tick as one DAG
+under one window: N calls in flight across its deployments, and at
+`--parallel 1` one at a time, deployment by deployment in apply order,
+each's in plan order. The plan's output does not change with N; the calls
+answer in the provider's order. The calls in flight run at once, and each is put on
 the executor's clock from the time its provider says it took; on the mock
 (chaos `latency`) the difference shows there:
 
