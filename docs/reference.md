@@ -1351,8 +1351,11 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   that name: `traefik.io`'s `Middleware` is
   `k8s.traefik.io.v1alpha1.middleware` and `k8s.traefik.middleware`.
 - The schema is derived at Configure from the cluster's `/openapi/v3`, and
-  cached as `k8s-openapi.json` in the stack's state directory (fetched again
-  when the server's index changes); the schema derived from it is cached
+  cached as `k8s-openapi.json` in the stack's state directory: a
+  group-version's document is fetched again when the index names it at
+  another hash, the others kept (k3s answers new hashes for the index's
+  `apis` and `version` at every ask, which dform never fetches); the
+  schema derived from it is cached
   beside it as `k8s-schema.json`, keyed by the document's hash, and so is
   the snapshot's when offline. A run reads a kind's rows from it only when
   it asks for that kind: its head names each kind and where its rows are,

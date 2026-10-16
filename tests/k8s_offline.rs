@@ -303,6 +303,13 @@ struct Api {
     /// How many of the next writes (a PATCH not a dry run) take effect
     /// but close the connection instead of answering: a lost answer.
     lose_answers: Mutex<usize>,
+    /// How many times the OpenAPI index was asked for: the hash of its
+    /// `apis` and `version` entries, which k3s's change from one ask to
+    /// the next.
+    indexes: Mutex<u64>,
+    /// The group-version whose document changed, its hash in the index
+    /// another.
+    changed: Mutex<Option<String>>,
 }
 
 fn snapshot() -> Json {
@@ -505,15 +512,7 @@ impl Api {
                 .map(String::from)
         };
         if path == "/openapi/v3" {
-            let gvs = snapshot()["paths"].as_object().unwrap().clone();
-            let index: serde_json::Map<String, Json> = gvs
-                .keys()
-                .map(|gv| {
-                    let url = format!("/openapi/v3/{gv}?hash=0123");
-                    (gv.clone(), json!({ "serverRelativeURL": url }))
-                })
-                .collect();
-            return (200, json!({ "paths": index }));
+            return (200, self.index());
         }
         if let Some(gv) = path.strip_prefix("/openapi/v3/") {
             return (200, snapshot()["paths"][gv].clone());
@@ -703,6 +702,32 @@ impl Api {
     /// A JSON merge patch by another field manager, as `kubectl patch`
     /// sends one (an Update): the fields it sets become its own, taken
     /// from whoever owned them.
+    /// The OpenAPI index: each group-version of the snapshot at its
+    /// document's URL (its hash another once [`Api::changed`] names it),
+    /// and, as k3s's, `apis` and `version` at a new hash each ask.
+    fn index(&self) -> Json {
+        let gvs = snapshot()["paths"].as_object().unwrap().clone();
+        let changed = self.changed.lock().unwrap().clone();
+        let mut index: serde_json::Map<String, Json> = gvs
+            .keys()
+            .map(|gv| {
+                let hash = match changed.as_ref() == Some(gv) {
+                    true => "4567",
+                    false => "0123",
+                };
+                let url = format!("/openapi/v3/{gv}?hash={hash}");
+                (gv.clone(), json!({ "serverRelativeURL": url }))
+            })
+            .collect();
+        let mut n = self.indexes.lock().unwrap();
+        *n += 1;
+        for other in ["apis", "version"] {
+            let url = format!("/openapi/v3/{other}?hash={n}");
+            index.insert(other.into(), json!({ "serverRelativeURL": url }));
+        }
+        json!({ "paths": index })
+    }
+
     fn merge_patch(&self, target: &str, body: &[u8]) -> (u16, Json) {
         let (path, query) = target.split_once('?').unwrap_or((target, ""));
         let manager = query
@@ -843,6 +868,38 @@ fn its_requests_are_spans_under_the_calls_they_are_made_for() {
     }
 }
 
+/// The cluster's OpenAPI documents, and the schema derived from them,
+/// cached in dform.state/cache/ (`plan` plans again): a plan fetches no
+/// document the index names at the same URL again, whatever its other
+/// entries say (k3s answers new hashes for `apis` and `version` at every
+/// ask), and only the one whose URL changed.
+fn the_documents_are_cached(s: &Scratch, api: &Api, plan: &dyn Fn()) {
+    let cache = s.path("dform.state/cache/k8s-openapi.json");
+    assert!(cache.exists(), "the schema is cached in dform.state/cache/");
+    assert!(
+        s.path("dform.state/cache/k8s-schema.json").exists(),
+        "and the schema derived from it"
+    );
+    let fetched = api.count("GET /openapi/v3/", &[]);
+    plan();
+    assert_eq!(
+        api.count("GET /openapi/v3/", &[]),
+        fetched,
+        "a cached schema whose documents the index names again is not fetched again, \
+         whatever the index's other entries say"
+    );
+    // One group-version's document changed: it alone is fetched again.
+    *api.changed.lock().unwrap() = Some("apis/apps/v1".into());
+    plan();
+    let again: Vec<String> = api.requests.lock().unwrap()[..]
+        .iter()
+        .filter(|r| r.starts_with("GET /openapi/v3/"))
+        .skip(fetched)
+        .cloned()
+        .collect();
+    assert_eq!(again, ["GET /openapi/v3/apis/apps/v1?hash=4567"]);
+}
+
 /// The demo applies through the fake API server: server-side apply as
 /// `dform`, a generated ConfigMap name the Deployment then refers to, the
 /// objects as the program describes them (the mock's world holds the same
@@ -924,19 +981,9 @@ fn the_demo_applies_through_the_api_server() {
 
     let r = run(&["plan"]).success();
     assert_eq!(r.summary(), "stack k8s_demo is up to date", "{}", r.stdout);
-    let cache = s.path("dform.state/cache/k8s-openapi.json");
-    assert!(cache.exists(), "the schema is cached in dform.state/cache/");
-    assert!(
-        s.path("dform.state/cache/k8s-schema.json").exists(),
-        "and the schema derived from it"
-    );
-    let fetched = api.count("GET /openapi/v3/", &[]);
-    run(&["plan"]).success();
-    assert_eq!(
-        api.count("GET /openapi/v3/", &[]),
-        fetched,
-        "a cached schema whose index is the server's is not fetched again"
-    );
+    the_documents_are_cached(&s, &api, &|| {
+        run(&["plan"]).success();
+    });
 
     // A change to the program is an update in place, planned by dry run.
     s.write(

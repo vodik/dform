@@ -19,6 +19,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use dform_core::plugin::backend::{Session, Within};
 use dform_sdk::{Credential, Request, Response, host};
 use serde_json::{Value as Json, json};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -257,6 +258,59 @@ impl Document {
     }
 }
 
+/// The documents of the OpenAPI index `index` that hold kinds, by the URL
+/// the index names each at (its hash in the query): `api/v1` and
+/// `apis/GROUP/VERSION`. Its other entries (a group's `apis/GROUP`, which
+/// only lists versions; `apis`; `version`) are never fetched: k3s answers
+/// another hash for `apis` and `version` from one ask to the next.
+fn served(index: &Json) -> Result<BTreeMap<String, String>> {
+    let paths = index
+        .get("paths")
+        .and_then(Json::as_object)
+        .ok_or_else(|| anyhow!("the /openapi/v3 index has no paths"))?;
+    Ok(paths
+        .iter()
+        .filter(|(gv, _)| {
+            *gv == "api/v1" || gv.starts_with("apis/") && gv.matches('/').count() == 2
+        })
+        .filter_map(|(gv, e)| {
+            let url = e.get("serverRelativeURL")?.as_str()?;
+            Some((gv.clone(), url.to_string()))
+        })
+        .collect())
+}
+
+/// The cache file of a cluster's OpenAPI documents: the URL each was
+/// fetched from ([`served`]), and the documents, `{"paths": {GV: DOC}}`.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Cached {
+    server: String,
+    index: BTreeMap<String, String>,
+    document: Json,
+}
+
+impl Cached {
+    /// Whether the cache file `text` holds the documents `index` names,
+    /// its documents skipped, not parsed.
+    fn names(text: &str, index: &BTreeMap<String, String>) -> bool {
+        #[derive(serde::Deserialize)]
+        struct Head {
+            index: BTreeMap<String, String>,
+            #[allow(dead_code)]
+            document: serde::de::IgnoredAny,
+        }
+        serde_json::from_str::<Head>(text).is_ok_and(|h| h.index == *index)
+    }
+
+    /// Its document of `gv`, taken, if it was fetched from `url`.
+    fn take(&mut self, gv: &str, url: &str) -> Option<Json> {
+        if self.index.get(gv)? != url {
+            return None;
+        }
+        self.document.get_mut("paths")?.get_mut(gv).map(Json::take)
+    }
+}
+
 impl Cluster {
     /// The cluster the kubeconfig credential `name` reaches, which the
     /// host opens for this provider (the program's, or the environment's
@@ -367,46 +421,36 @@ impl Cluster {
             .with_context(|| format!("GET {}{uri}", self.url))
     }
 
-    /// The OpenAPI v3 document, `{"paths": {GV: DOC}}`: the index, and each
-    /// group-version's document. The copy cached in the file `cache` is used
-    /// as is when its index is the server's (the index names each
-    /// document's hash); otherwise the documents are fetched and the cache
-    /// rewritten. A cached document is parsed only if it is needed
-    /// ([`Document::parse`]): its derived schema may be cached too.
+    /// The OpenAPI v3 document, `{"paths": {GV: DOC}}`: each group-version's
+    /// document the index names ([`served`]). The copy cached in the file
+    /// `cache` is used as is when the index names each of its documents at
+    /// the URL it was fetched from (the URL carries the document's hash);
+    /// otherwise each document whose URL changed is fetched again, the rest
+    /// kept, and the cache rewritten. A cached document is parsed only if
+    /// it is needed ([`Document::parse`]): its derived schema may be cached
+    /// too.
     pub fn openapi(&self, cache: Option<&Path>) -> Result<Document> {
-        /// A cache file's index, its document skipped.
-        #[derive(serde::Deserialize)]
-        struct Head {
-            index: Json,
-            #[allow(dead_code)]
-            document: serde::de::IgnoredAny,
-        }
-        let index = self.get_json("/openapi/v3", Some(REACH))?;
-        let urls = index
-            .get("paths")
-            .and_then(Json::as_object)
-            .ok_or_else(|| anyhow!("the /openapi/v3 index has no paths"))?;
-        if let Some(cache) = cache
-            && let Ok(text) = std::fs::read_to_string(cache)
-            && let Ok(head) = serde_json::from_str::<Head>(&text)
-            && head.index == index
-        {
-            return Ok(Document::cached(text));
+        let index = served(&self.get_json("/openapi/v3", Some(REACH))?)?;
+        let mut kept = None;
+        if let Some(text) = cache.and_then(|c| std::fs::read_to_string(c).ok()) {
+            if Cached::names(&text, &index) {
+                return Ok(Document::cached(text));
+            }
+            kept = serde_json::from_str::<Cached>(&text).ok();
         }
         let mut paths = serde_json::Map::new();
-        for (gv, entry) in urls {
-            // Groups only (`apis/apps`) list versions; the kinds are in the
-            // versioned documents.
-            if !(gv == "api/v1" || gv.starts_with("apis/") && gv.matches('/').count() == 2) {
-                continue;
-            }
-            let Some(url) = entry.get("serverRelativeURL").and_then(Json::as_str) else {
-                continue;
+        for (gv, url) in &index {
+            let doc = match kept.as_mut().and_then(|k| k.take(gv, url)) {
+                Some(doc) => doc,
+                None => self.get_json(url, None)?,
             };
-            paths.insert(gv.clone(), self.get_json(url, None)?);
+            paths.insert(gv.clone(), doc);
         }
-        let document = json!({ "paths": paths });
-        let cached = json!({"server": self.url, "index": index, "document": document});
+        let cached = Cached {
+            server: self.url.clone(),
+            index,
+            document: json!({ "paths": paths }),
+        };
         let text = serde_json::to_string(&cached)?;
         if let Some(cache) = cache {
             if let Some(dir) = cache.parent() {
@@ -417,7 +461,7 @@ impl Cluster {
         Ok(Document {
             hash: dform_core::zset::file::fnv64(text.as_bytes()),
             text: None,
-            parsed: Some(document),
+            parsed: Some(cached.document),
         })
     }
 
