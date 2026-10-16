@@ -5,5 +5,20 @@ license = "Apache-2.0"
 edition = "2024"
 publish = false
 
+# Built with the SDK (`dform_sdk::provider!`): the executable dform starts
+# (`cargo build`), or the wasm provider dform's wasm host runs (`cargo
+# build --target wasm32-wasip3 --features component`, `cargo xtask
+# components`).
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+# A wasm provider that keeps its cache in the cache directory (dform-k8s's
+# `cache`), relative to the host's working directory: `filesystem`.
+component = ["dform-sdk/component", "dform-sdk/filesystem"]
+
 [dependencies]
 dform-k8s = { path = "../dform-k8s" }
+dform-sdk = { path = "../dform-sdk" }
+# `DFORM_LOG`'s lines on stderr, natively (`dform_core::log`).
+dform-core = { path = "../dform-core" }

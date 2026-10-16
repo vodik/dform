@@ -1451,7 +1451,9 @@ dependencies = [
 name = "dform-provider-k8s"
 version = "0.1.0"
 dependencies = [
+ "dform-core",
  "dform-k8s",
+ "dform-sdk",
 ]
 
 [[package]]

@@ -5,10 +5,11 @@
 //! ["kubeconfig:environment"]`: `KUBECONFIG`, `~/.kube/config`, or the
 //! pod's service account) and derives the schema from its `/openapi/v3`,
 //! cached as `k8s-openapi.json` in the cache directory Configure names
-//! (`dform.state/cache/`; else beside the world file). With no cluster to reach, or
-//! `DFORM_K8S_OFFLINE` set, the provider is offline: the schema is the
-//! checked-in snapshot's, Plan diffs locally, and Read, Apply and Import
-//! fail naming why. A program that names its cluster
+//! (`dform.state/cache/`; else beside the world file; `crate::cache`).
+//! With no cluster to reach, or `DFORM_K8S_OFFLINE` set (natively: a wasm
+//! provider has no environment), the provider is offline: the schema is
+//! the checked-in snapshot's, Plan diffs locally, and Read, Apply and
+//! Import fail naming why. A program that names its cluster
 //! (`provider_config("k8s", ...)`) is configured `deferred` first
 //! (the snapshot's schema, the static schema of every stable kind,
 //! extended by the CRDs its cluster served at the deployment's last run,
@@ -1308,18 +1309,6 @@ impl K8s {
             None => pb::ImportResponse::default(),
         })
     }
-}
-
-/// Serve as a provider through the SDK (over gRPC natively), and exit when
-/// stdin closes; `DFORM_LOG`'s lines on stderr. It uses the host's HTTP
-/// and its credentials, nothing else.
-#[cfg(not(target_family = "wasm"))]
-pub fn serve() -> Result<()> {
-    dform_core::log::install();
-    dform_sdk::native::serve(
-        Provider::default(),
-        &["dform:host/http", "dform:host/secrets"],
-    )
 }
 
 /// A resource's address as dform prints it, `T["N"]`.
