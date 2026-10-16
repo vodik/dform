@@ -291,6 +291,20 @@ it feeds and v7 and v8 opened ovh-infra on prod, which lab's tag does not
 feed; and a quiet source (releases' build and tested rows, a kubeconfig
 read that answered) folded into its cell's count like any quiet object.
 
+Query rule: the Query tab takes a dform query in the language's own
+spelling, a head and a body, and answers with a table of the head's
+columns; a row opens its derivation (facts and rules with sites) in the
+right column. The mock answers only the queries it lists, and says so for
+any other text. "save" makes the query a Data tab view: the Data tab is
+saved queries, its relation views among them, each with its text. "light
+in the estate" moves to the estate holding most of the rows' nodes and
+tints every node the result names, as the overlay tints a reached node,
+with no lines; a one-line banner names the query, with "clear".
+ovh-infra's ovh.price is the provider's static table: flavor, region and
+vcpus are the catalogue's (b2-7: 2, b2-15: 4), the prices are …
+
+What v12 changed: the query rule above.
+
 What v11 changed: the document and fact rules above; invented world
 values and status lines are gone, replaced by the placeholder or by the
 model's health; commentary is gone from the sidebar.
@@ -469,6 +483,16 @@ details.blk2 summary{cursor:pointer}
 .at-b.static{cursor:default}
 .at-b:hover .at-p{text-decoration:underline;text-decoration-color:var(--rule)}
 .at-m{color:var(--dim)}
+.qbox{width:100%;font:12.5px/1.5 var(--mono);color:var(--ink);background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:var(--s2) var(--s3);resize:vertical}
+.qbox:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.q-acts{display:flex;gap:var(--s2);flex-wrap:wrap}.q-h{display:flex;justify-content:space-between;align-items:center;gap:var(--s2);flex-wrap:wrap}
+.btn.sm{min-height:32px;padding:4px 12px;font-size:12.5px}
+.qlist{display:flex;flex-direction:column;gap:var(--s1)}
+.qpick{text-align:left;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:var(--s2) var(--s3);font:12px/1.5 var(--mono);cursor:pointer;overflow-wrap:anywhere}
+.qpick:hover{border-color:var(--muted)}
+.qbanner{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s3);padding:var(--s2) var(--s3);border:1px solid var(--because);border-radius:4px;background:var(--surface);font-size:12px}
+.qbanner code{font:12px var(--mono);overflow-wrap:anywhere;min-width:0;flex:1 1 300px}
+.n.ql .box{stroke:var(--because);stroke-opacity:.8}
 .ph{color:var(--dim);background:var(--sunk);border-radius:2px;padding:0 3px;font-style:normal}
 .ph-key{font:11.5px var(--mono);color:var(--dim)}
 .at-g{font:12px/1.55 var(--mono);color:var(--muted);padding:var(--s2) 0 0 22px}
@@ -1108,7 +1132,7 @@ function renderRail() {
 function openCount(p) { return p.decisions.filter(d => !DONE[d.id]).length; }
 function renderTabs() {
   const p = P[cur], n = openCount(p);
-  const tabs = [["plan", "Estate", n ? `<span class="n">${n} waiting</span>` : ""], ["world", "World", ""], ["data", "Data", ""], ["run", "Run", ""]];
+  const tabs = [["plan", "Estate", n ? `<span class="n">${n} waiting</span>` : ""], ["world", "World", ""], ["query", "Query", ""], ["data", "Data", ""], ["run", "Run", ""]];
   $("tabs").innerHTML = tabs.map(([k, l, x]) => `<button role="tab" aria-selected="${k === tab}" data-tab="${k}">${l}${x}</button>`).join("");
 }
 
@@ -1153,6 +1177,7 @@ function renderPlan() {
     <div class="rel"><div class="lab">Waiting on a person</div>${queue}</div>
     <div class="rel"><div class="headline">${esc(headline)}</div>
     <div class="shape"><span class="lab">Against the last apply</span>${p.shape.map(s => `<span class="d"><span class="k">${esc(s[0])}</span> ${esc(s[1])} → <b>${esc(s[2])}</b>${s[3] ? ` (${esc(s[3])})` : ""}</span>`).join("")}<span class="d">${esc(p.reach)}</span></div></div>
+    ${view === "graph" && LIGHT && LIGHT.proj === cur ? `<div class="qbanner"><span class="lab">lit by</span> <code>${esc(LIGHT.text)}</code> <span class="dimt">${Object.entries(LIGHT.count).map(([k, c]) => `${c} in ${esc(estLabel(cur, k))}`).join(" · ")}</span><button class="btn ghost sm" data-qclear="1">clear</button></div>` : ""}
     ${view === "graph" ? `<div class="plan-head"><span class="lab">${esc(estLabel(cur, EST[cur]))} · lanes are its stacks, columns the instances they reach</span>${modeSeg}</div>` + estateHTML(p) + (pol ? `<div class="plan">${pol}</div>` : "") : `
     <div class="plan-head"><span class="lab">The plan of one run · its ticks are the order inside it</span>
       <span style="display:flex;gap:8px;flex-wrap:wrap">${modeSeg}
@@ -1437,7 +1462,8 @@ function estateHTML(p) {
   const visibleNode = (n) => !n.planned || o.changed.has(n.id);
   const nodes = m.nodes.filter(visibleNode);
   const tagsOf = Object.fromEntries(nodes.map(n => [n.id, nodeTags(n)]));
-  const news = (n) => n.kind === "source" || n.news || o.changed.has(n.id) || o.reached.has(n.id) || ["h-bad", "h-unk", "h-wait"].includes(healthCls(n.health)) || readingCls(n.reading) || tagsOf[n.id].length || sel === n.id;
+  const lit = (n) => LIGHT && LIGHT.proj === cur && LIGHT.nodes.has(n.id);
+  const news = (n) => lit(n) || n.kind === "source" || n.news || o.changed.has(n.id) || o.reached.has(n.id) || ["h-bad", "h-unk", "h-wait"].includes(healthCls(n.health)) || readingCls(n.reading) || tagsOf[n.id].length || sel === n.id;
   const laneIds = m.lanes, laneInfo = (l) => l === "sources" ? SRC_LANE : (p.deps.find(d => d.id === l) || {name: l, st: "", mark: ""});
   const cellKey = (l, r) => l + "|" + r;
   const cellNodes = {};
@@ -1557,6 +1583,7 @@ function estateHTML(p) {
     if (showSt) out.push(["ov " + gMark(st.mark), wrap(`${st.mark} ${st.text}`, chars, 2)]);
     if (ch) cls = "ch chg-" + ({"+": "c", "~": "u", "-": "d", "±": "d", "=": "e"}[ch[0].l.mark] || "e");
     else if (o.reached.has(n.id)) { cls = "rc"; wave = o.depth.get(n.id) || 1; }
+    else if (lit(n)) cls = "rc ql";
     if (n.kind === "source") cls += " src" + (n.woke ? " origin" : "");
     if (n.woke) out.push(["wv-o", [`woke run ${n.woke}`]]);
     return {out, cls, wave, woke: n.woke};
@@ -2220,6 +2247,114 @@ const RUNS = {
 };
 function newRun(proj, at, event, did, est) { const r = run(RUNS[proj][0].n + 1, at, event, did, "", [], {state: "running", est}); RUNS[proj].unshift(r); return r; }
 
+/* ---------- queries: dform query, in the language's own spelling; the mock answers only these ---------- */
+const Q = (id, text, cols, rows) => ({id, text, cols, rows});
+const QR = (r, nodes, why) => ({r, nodes: nodes.map(x => "n:" + x), why});
+const QUERIES = {
+  ovh: [
+    Q("cost", "query cost(vm, m) where vm in ovh.instance, ovh.price(vm.flavor, vm.region, _, m, _)", ["vm", "m"], [
+      QR(["platform[lab] k3s.server.vm", PH], ["platform[lab]/k3s.server.vm"], [N("vm = ovh.instance k3s.server.vm", "k3s.df:133", "", [N("flavor = \"b2-7\"", "stacks/platform.df:6"), N("region = \"BHS5\"", "config.df:33")]), N(`ovh.price("b2-7", "BHS5", 2, ${PH}, ${PH})`, "ovh.price, the provider's static table")]),
+      QR(["platform[prod] k3s.server.vm", PH], ["platform[prod]/k3s.server.vm"], [N("vm = ovh.instance k3s.server.vm", "k3s.df:133", "", [N("flavor = \"b2-15\"", "stacks/platform.df:23"), N("region = \"BHS5\"", "config.df:33")]), N(`ovh.price("b2-15", "BHS5", 4, ${PH}, ${PH})`, "ovh.price, the provider's static table")]),
+      QR(["platform[prod] k3s.agent-0.vm", PH], ["platform[prod]/k3s.agent-0.vm"], [N("vm = ovh.instance k3s.agent-0.vm", "k3s.df:173", "", [N("flavor = \"b2-15\"", "stacks/platform.df:23"), N("region = \"BHS5\"", "config.df:33")]), N(`ovh.price("b2-15", "BHS5", 4, ${PH}, ${PH})`, "ovh.price, the provider's static table")]),
+    ]),
+    Q("images", "query in_use(w, image, digest) where w in k8s.deployment, oci.image(w, image, digest)", ["w", "image", "digest"], [
+      QR(["apps[lab] forgejo.server", "codeberg.org/forgejo/forgejo:16.0.4-rootless", NEW], ["apps[lab]/forgejo.server"], [N("oci.image(forgejo.server, \"codeberg.org/forgejo/forgejo:16.0.4-rootless\", " + NEW + ")", "oci.resolve, 09:20:14", "because"), N("image = oci.resolve(oci.with_tag(base, \"16.0.4-rootless\"))", "forgejo.df:59")]),
+      QR(["apps[prod] forgejo.server", "codeberg.org/forgejo/forgejo:16.0.4-rootless", PH], ["apps[prod]/forgejo.server"], [N("image = oci.resolve(oci.with_tag(base, \"16.0.4-rootless\"))", "forgejo.df:59")]),
+      QR(["apps[lab] synapse.server", PH, PH], ["apps[lab]/synapse.server"], [N("k8s.deployment synapse.server", "synapse.df:69")]),
+      QR(["apps[prod] synapse.server", PH, PH], ["apps[prod]/synapse.server"], [N("k8s.deployment synapse.server", "synapse.df:69")]),
+      QR(["apps[lab] pocket_id.server", PH, PH], ["apps[lab]/pocket_id.server"], [N("k8s.deployment pocket_id.server", "pocket_id.df:45")]),
+      QR(["apps[prod] pocket_id.server", PH, PH], ["apps[prod]/pocket_id.server"], [N("k8s.deployment pocket_id.server", "pocket_id.df:45")]),
+      QR(["platform[lab] traefik.server", PH, PH], ["platform[lab]/traefik.server"], [N("k8s.deployment traefik.server", "traefik.df:36")]),
+      QR(["platform[prod] traefik.server", PH, PH], ["platform[prod]/traefik.server"], [N("k8s.deployment traefik.server", "traefik.df:36")]),
+    ]),
+    Q("drifted", "query drifted(t, a, path) where drift(t, a, path, _, _)", ["t", "a", "path"], [
+      QR(["\"k8s.deployment\"", "\"forgejo.server\"", "\"spec.template.spec.containers[0].env[…]\""], ["apps[prod]/forgejo.server"], [N("drift(\"k8s.deployment\", \"forgejo.server\", \"spec.template.spec.containers[0].env[…]\", absent, \"true\")", "controller, event world 08:40:30", "no", [N("managedFields: kubectl-set (Update) 08:40:12", "provider k8s")])]),
+    ]),
+  ],
+  shop: [
+    Q("subnets", "query subnets(zone, s) where s in aws.subnet, zone = s.availability_zone", ["zone", "s"],
+      [...["staging", "prod"].flatMap(e => ["1a", "1b", "1c", ...(e === "prod" ? ["1d"] : [])].map((z, i) => QR([`"us-east-${z}"`, `${e} aws.subnet private-us-east-${z}${z === "1d" ? " (planned)" : ""}`], [`${e}/sub-${z}`],
+        [N(`aws.subnet private-us-east-${z}`, "stacks/shop.df:12", "", [N(`aws.availability_zone("available", "us-east-${z}", ${i})`, "provider table", "because")])])))]),
+    Q("plan", "query planned(kind, r) where deformation(kind, r, _)", ["kind", "r"], [
+      ["\"replace\"", "aws.security_group postgres", "prod/pg"], ["\"update\"", "aws.db_instance orders", "prod/orders"], ["\"create\"", "aws.subnet private-us-east-1d", "prod/sub-1d"],
+      ["\"create\"", "aws.instance web-us-east-1d", "prod/web-1d"], ["\"update\"", "aws.lb storefront", "prod/lb"], ["\"update\"", "aws.security_group https", "prod/https"], ["\"delete\"", "aws.security_group postgres (deposed)", "prod/pg"]]
+      .map(([k, r, n]) => QR([k, r], [n], [N(`deformation(${k}, ${r}, _)`, "the plan, run 218")]))),
+    Q("open", "query open_ingress(sg, port) where sg in aws.security_group, rule in sg.ingress, \"0.0.0.0/0\" in rule.cidr_blocks, port = rule.from_port", ["sg", "port"],
+      ["staging", "prod"].map(e => QR([`${e} aws.security_group https`, "443"], [`${e}/https`], [N("ingress = [{ from_port = 443, to_port = 443, protocol = \"tcp\", cidr_blocks = [\"0.0.0.0/0\"] }]", "stacks/shop.df:90")]))),
+  ],
+  k3s: [
+    Q("flavors", "query flavor(server, f) where server in ovh.instance, f = server.flavor", ["server", "f"], [
+      QR(["platform[staging] server", "\"b2-7\""], ["platform[staging]/server"], [N("input flavor = \"b2-7\"", "stacks/platform.df:4")]),
+      QR(["platform[prod] server", "\"b2-15\""], ["platform[prod]/server"], [N("set flavor = \"b2-15\" where env == \"prod\"", "stacks/platform.df:14")])]),
+    Q("plan", "query planned(kind, r) where deformation(kind, r, _)", ["kind", "r"], [
+      ["\"replace\"", "platform[staging] ovh.instance server", "platform[staging]/server"], ["\"update\"", "platform[staging] ovh.domain_record api", "platform[staging]/api"],
+      ["\"update\"", "apps[staging] ovh.domain_record www", "apps[staging]/www"], ["\"update\"", "apps[prod] k8s.deployment web", "apps[prod]/web"]]
+      .map(([k, r, n]) => QR([k, r], [n], [N(`deformation(${k}, ${r}, _)`, "the plan, run 77")]))),
+  ],
+  gke: [
+    Q("peerings", "query peerings(env, name) where peering(env, name, _)", ["env", "name"], [
+      ["dev", "envoy-dev", 2], ["stg", "envoy-stg", 3], ["stg", "edge-stg", 4], ["prod", "edge-prod", 5], ["prod", "envoy-prod", 6]]
+      .map(([e, nm, ln]) => QR([`"${e}"`, `"${nm}"`], [`${e}/net`], [N(`peering("${e}", "${nm}", _)`, `data/peerings.csv:${ln}`, "because")]))),
+    Q("cp", "query control_plane(c, cidr) where c in google.container_cluster, cidr = c.master_control_plane_cidr", ["c", "cidr"], [
+      ["dev", "172.16.3.96/28", 58], ["stg", "172.16.3.112/28", 76], ["prod", "172.16.3.128/28", 94]]
+      .map(([e, c, ln]) => QR([`${e} google.container_cluster gke_platform`, `"${c}"`], [`${e}/gke`], [N(`gke.ranges.control_plane = "${c}"`, `stacks/gke_platform.df:${ln}`)]))),
+  ],
+  rel: [
+    Q("eligible", "query eligible(app, version)", ["app", "version"], [
+      QR(["\"shop\"", "1.4.0"], [], [N("tested(\"shop\", \"1.4.0\", 2026-10-02T08:00Z)", "sql.table(\"tested\")", "because"), N("time.now() - since >= 7d", "stacks/releases.df:8")]),
+      QR(["\"shop\"", "1.4.1"], ["releases/eu1", "releases/us1"], [N("tested(\"shop\", \"1.4.1\", 2026-10-07T16:20Z)", "sql.table(\"tested\")", "because"), N("time.now() - since >= 7d: true (7d 17h)", "stacks/releases.df:8")])]),
+    Q("candidate", "query candidate(cell, app, version)", ["cell", "app", "version"], [
+      QR(["\"eu-1\"", "\"shop\"", "1.4.1"], ["releases/eu1"], [N("candidate(\"eu-1\", \"shop\", \"1.4.1\")", "stacks/releases.df:12", "", [N("eligible(\"shop\", \"1.4.1\")", "stacks/releases.df:8")])]),
+      QR(["\"us-1\"", "\"shop\"", "1.4.1"], ["releases/us1"], [N("candidate(\"us-1\", \"shop\", \"1.4.1\")", "stacks/releases.df:12", "", [N("eligible(\"shop\", \"1.4.1\")", "stacks/releases.df:8")])])]),
+  ],
+};
+DATA.ovh.unshift({name: "ovh.price(flavor, region, vcpus, monthly, hourly)", from: "the provider's static table", cols: ["flavor", "region", "vcpus", "monthly", "hourly"], rows: [
+  ["\"b2-7\"", "\"BHS5\"", "2", PH, PH], ["\"b2-15\"", "\"BHS5\"", "4", PH, PH]]});
+const SAVED = {ovh: [], shop: [], k3s: [], gke: [], rel: []};
+let QTEXT = {}, QRES = {}, LIGHT = null;
+const normQ = (t) => String(t || "").replace(/\s+/g, " ").trim();
+function runQuery() {
+  const t = normQ(($("qtext") || {}).value);
+  QTEXT[cur] = t;
+  const q = QUERIES[cur].find(q => normQ(q.text) === t);
+  QRES[cur] = q ? q.id : (t ? "unknown" : null);
+}
+function phx(t) { return esc(t).split(PH).join(`<span class="ph">…</span>`); }
+function renderQuery() {
+  const qs = QUERIES[cur], rid = QRES[cur], q = qs.find(q => q.id === rid);
+  const res = rid === "unknown" ? `<p class="note">the mock answers only the queries listed</p>` : !q ? "" : `
+    <div class="rel"><div class="q-h"><span class="lab">${q.rows.length} row${q.rows.length === 1 ? "" : "s"}</span>
+      <span class="q-acts"><button class="btn ghost sm" data-qsave="${q.id}" ${SAVED[cur].includes(q.id) ? "disabled" : ""}>${SAVED[cur].includes(q.id) ? "saved" : "save"}</button>
+      <button class="btn ghost sm" data-qlight="${q.id}" ${q.rows.some(r => r.nodes.length) ? "" : "disabled"}>light in the estate</button></span></div>
+      <div class="tw"><table><thead><tr>${q.cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>
+      ${q.rows.map((r, i) => `<tr class="click ${sel === `q:${q.id}:${i}` ? "sel" : ""}" data-qrow="${q.id}:${i}" tabindex="0">${r.r.map(v => `<td>${phx(v)}</td>`).join("")}</tr>`).join("")}
+      </tbody></table></div></div>`;
+  return `<section class="pane">
+    <div class="rel"><label class="lab" for="qtext">dform query</label>
+      <textarea id="qtext" class="qbox" rows="2" spellcheck="false">${esc(QTEXT[cur] || "")}</textarea>
+      <div class="q-acts"><button class="btn sm" data-qrun="1">Run</button></div></div>
+    ${res}
+    <div class="rel"><div class="lab">Queries the mock answers</div>
+      <div class="qlist">${qs.map(q => `<button class="qpick" data-qpick="${q.id}">${esc(q.text)}</button>`).join("")}</div></div>
+  </section>`;
+}
+function queryInsp(el) {
+  const [, qid, i] = sel.split(":"), q = QUERIES[cur].find(q => q.id === qid), r = q && q.rows[+i];
+  if (!r) return false;
+  el.innerHTML = `<div class="lab">Query row</div><h2>${phx(q.text.match(/^query (\w+)/)[1] + "(" + r.r.join(", ") + ")")}</h2>
+    <dl class="kv">${q.cols.map((c, j) => `<dt>${esc(c)}</dt><dd>${phx(r.r[j])}</dd>`).join("")}</dl>
+    <div class="blk2"><div class="lab">dform why</div><div class="tree">${treeHTML(r.why)}</div></div>`;
+  return true;
+}
+function lightQuery(qid) {
+  const q = QUERIES[cur].find(q => q.id === qid); if (!q) return;
+  const nodes = new Set(q.rows.flatMap(r => r.nodes));
+  const count = {}; nodes.forEach(id => { const n = MODEL[cur].nodes.find(n => n.id === id); const e = n && estOfLane(cur, n.lane); if (e) count[e] = (count[e] || 0) + 1; });
+  LIGHT = {qid, text: q.text, nodes, count, proj: cur};
+  const best = Object.entries(count).sort((a, b) => b[1] - a[1])[0]; if (best) EST[cur] = best[0];
+  tab = "plan"; view = "graph"; ov = 0; sel = null;
+}
+
 function renderWorld() {
   const rows = WORLD[cur] || [];
   return `<section class="pane">
@@ -2239,13 +2374,13 @@ function renderWorld() {
 
 function cell(row) { return Array.isArray(row) ? {r: row} : row; }
 function renderData() {
-  const rels = DATA[cur] || [];
-  return `<section class="pane"><p class="note">${esc(DATA_NOTE[cur])}</p><div class="relgrid">
-    ${rels.map(rel => `<div class="rel"><h3>${esc(rel.name)}</h3><div class="from">${esc(rel.from)}</div>
-      <div class="tw"><table><thead><tr>${rel.cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>
-      ${rel.rows.map(cell).map(r => `<tr class="${r.new ? "newrow" : ""} ${r.line ? "click" : ""} ${r.line && sel === r.line ? "sel" : ""}" ${r.line ? `data-line="${r.line}" tabindex="0"` : ""}>${r.r.map(v => `<td>${esc(v)}</td>`).join("")}</tr>`).join("")}
-      </tbody></table></div></div>`).join("")}
-  </div><p class="note">A row with a bar at its left arrived since the last apply. Click a row for what it made.</p></section>`;
+  const view = (text, from, cols, rows) => `<div class="rel"><h3>${esc(text)}</h3><div class="from">${esc(from)}</div>
+      <div class="tw"><table><thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  const saved = SAVED[cur].map(id => QUERIES[cur].find(q => q.id === id)).map(q => view(q.text, "saved query", q.cols,
+    q.rows.map((r, i) => `<tr class="click" data-qrow="${q.id}:${i}" tabindex="0">${r.r.map(v => `<td>${phx(v)}</td>`).join("")}</tr>`).join("")));
+  const rels = (DATA[cur] || []).map(rel => view(`query ${rel.name}`, rel.from.split(/ · |; |, a /)[0], rel.cols,
+    rel.rows.map(cell).map(r => `<tr class="${r.new ? "newrow" : ""} ${r.line ? "click" : ""} ${r.line && sel === r.line ? "sel" : ""}" ${r.line ? `data-line="${r.line}" tabindex="0"` : ""}>${r.r.map(v => `<td>${phx(v)}</td>`).join("")}</tr>`).join("")));
+  return `<section class="pane"><div class="lab">Saved queries</div><div class="relgrid">${[...saved, ...rels].join("")}</div></section>`;
 }
 
 function renderRun() {
@@ -2273,7 +2408,7 @@ function renderRun() {
 }
 
 function renderPane() {
-  $("pane").innerHTML = {plan: renderPlan, world: renderWorld, data: renderData, run: renderRun}[tab]();
+  $("pane").innerHTML = {plan: renderPlan, world: renderWorld, query: renderQuery, data: renderData, run: renderRun}[tab]();
 }
 
 function treeHTML(nodes) {
@@ -2284,6 +2419,7 @@ function treeHTML(nodes) {
 }
 function renderInsp() {
   const el = $("insp");
+  if (sel && sel.startsWith("q:") && queryInsp(el)) return;
   if (sel && /^(n:|R:|G:|C:|Q:)/.test(sel) && estateInsp(el)) return;
   if (!sel || !WHY[sel]) {
     el.innerHTML = `<div class="lab">Why</div><h2>Nothing selected</h2>`;
@@ -2354,11 +2490,17 @@ function revert() {
 
 /* ---------- events ---------- */
 document.addEventListener("click", (e) => {
-  const t = e.target.closest("[data-attr],[data-est],[data-node],[data-lanehdr],[data-group],[data-mode],[data-p],[data-tab],[data-g],[data-v],[data-line],[data-dec],[data-dep],#sign,#revert,#revert-fj");
+  const t = e.target.closest("[data-qrun],[data-qpick],[data-qrow],[data-qsave],[data-qlight],[data-qclear],[data-attr],[data-est],[data-node],[data-lanehdr],[data-group],[data-mode],[data-p],[data-tab],[data-g],[data-v],[data-line],[data-dec],[data-dep],#sign,#revert,#revert-fj");
   if (!t) { if (sel && e.target.closest(".gwrap svg")) { sel = null; ATTR_OPEN.clear(); render(); } return; }
   if (t.id === "sign") return sign();
   if (t.id === "revert") return revert();
   if (t.id === "revert-fj") return revertFj();
+  if (t.dataset.qrun) { runQuery(); sel = null; return render(); }
+  if (t.dataset.qpick) { QTEXT[cur] = QUERIES[cur].find(q => q.id === t.dataset.qpick).text; QRES[cur] = t.dataset.qpick; sel = null; return render(); }
+  if (t.dataset.qrow) { sel = "q:" + t.dataset.qrow; return render(); }
+  if (t.dataset.qsave) { if (!SAVED[cur].includes(t.dataset.qsave)) SAVED[cur].push(t.dataset.qsave); toast("saved to Data"); return render(); }
+  if (t.dataset.qlight) { lightQuery(t.dataset.qlight); return render(); }
+  if (t.dataset.qclear) { LIGHT = null; return render(); }
   if (t.dataset.attr !== undefined) { const i = Number(t.dataset.attr); ATTR_OPEN.has(i) ? ATTR_OPEN.delete(i) : ATTR_OPEN.add(i); return renderInsp(); }
   if (t.dataset.node) { const again = sel === t.dataset.node; ATTR_OPEN.clear(); if (again) { sel = null; return render(); } sel = t.dataset.node; if (/^[GCQ]:/.test(sel)) expandRep(sel); if (NARROW.has(sel)) OPEN.region[sel.slice(2)] = true; }
   else if (t.dataset.lanehdr) { const l = t.dataset.lanehdr; if (OPEN.lane[l]) { delete OPEN.lane[l]; Object.keys(OPEN.cell).filter(k => k.startsWith(l + "|")).forEach(k => delete OPEN.cell[k]); Object.keys(OPEN.group).filter(k => k.startsWith(l + "/")).forEach(k => delete OPEN.group[k]); } else OPEN.lane[l] = true; }
