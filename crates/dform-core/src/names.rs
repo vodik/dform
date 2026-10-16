@@ -494,12 +494,23 @@ impl Decls {
             .map(|s| wrap(s, name.to_string()))
     }
 
-    fn value(&self, at: &SyntaxNode, name: &str) -> Option<Symbol> {
-        self.lookup(&self.values, at, name, Symbol::Value)
-    }
-
     fn let_(&self, at: &SyntaxNode, name: &str) -> Option<Symbol> {
         self.lookup(&self.lets, at, name, Symbol::Let)
+    }
+
+    /// The `let` or the input `name` read bare at `at`: the innermost
+    /// scope's that declares either, a `let` before an input there, as
+    /// the front end reads it (`Scopes::reaching`).
+    fn value_read(&self, at: &SyntaxNode, name: &str) -> Option<Symbol> {
+        self.scopes(at).into_iter().find_map(|s| {
+            let key = (s.clone(), name.to_string());
+            if self.lets.contains(&key) {
+                return Some(Symbol::Let(s, name.to_string()));
+            }
+            self.values
+                .contains(&key)
+                .then(|| Symbol::Value(s, name.to_string()))
+        })
     }
 
     /// The resources `name` seen from `at`: the innermost scope's that
@@ -768,7 +779,7 @@ impl Decls {
                     .iter()
                     .any(|x| matches!(x.kind(), SyntaxKind::EQ | SyntaxKind::COLON)) =>
             {
-                match self.let_(&here, &name).or_else(|| self.value(&here, &name)) {
+                match self.value_read(&here, &name) {
                     Some(s) => What::Name(s, false),
                     None => match self.pick(&parent, self.resources_at(&here, &name)) {
                         // A pattern's field binds a variable of its name.
@@ -846,7 +857,7 @@ impl Decls {
         // is also its value, a `let`, an input or a resource (the
         // reference, R-43).
         if is_pun(path, t) {
-            return match self.let_(path, &name).or_else(|| self.value(path, &name)) {
+            return match self.value_read(path, &name) {
                 Some(s) => What::Name(s, false),
                 None => match self.pick(path, self.resources_at(path, &name)) {
                     What::Other => What::Path,
@@ -921,7 +932,7 @@ impl Decls {
             }
         }
         // 1, 2: a `let`, a value name; an object input's field after it.
-        if let Some(s) = self.let_(at, &name0).or_else(|| self.value(at, &name0)) {
+        if let Some(s) = self.value_read(at, &name0) {
             if k == 0 {
                 return What::Name(s, false);
             }
@@ -2163,5 +2174,22 @@ warn \"w\" where env == \"prod\", region == \"eu\"\n",
         // The let's references: its declaration, the read and the holes'.
         let sym = Symbol::Let(Some("module config".into()), "base_domain".into());
         assert_eq!(d.occurrences(&files, &sym).len(), 4);
+    }
+
+    /// A bare read takes the innermost scope's declaration whether it is
+    /// a `let` or an input, as the front end does: a component's input
+    /// over the program's `let` of the name.
+    #[test]
+    fn a_components_input_wins_over_an_outer_let() {
+        let src = "let schema = \"s\"\ncomponent app {\n  input schema: string\n  let x = schema\n  let y = \"${schema}\"\n}\nlet z = schema\n";
+        let app = Some("component app".to_string());
+        assert_eq!(
+            names(src, &Symbol::Value(app, "schema".into())),
+            vec![(2, true), (3, false), (4, false)]
+        );
+        assert_eq!(
+            names(src, &Symbol::Let(None, "schema".into())),
+            vec![(0, true), (6, false)]
+        );
     }
 }
