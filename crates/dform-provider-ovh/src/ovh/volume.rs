@@ -291,6 +291,14 @@ impl Ovh {
     }
 }
 
+/// Why a volume `prior` is replaced for `d`, when it is smaller: the
+/// API grows one in place, never shrinks it.
+pub(super) fn shrinks(prior: &Json, d: &Json) -> Option<String> {
+    let size = |d: &Json| d.get("size").and_then(Json::as_i64);
+    let (was, now) = (size(prior)?, size(d)?);
+    (now < was).then(|| format!("size {now} GiB is smaller than {was} GiB; a volume only grows"))
+}
+
 fn volume_path(p: &str, remote: &str) -> String {
     format!("/cloud/project/{p}/volume/{}", escape(remote))
 }

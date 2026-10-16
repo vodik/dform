@@ -69,22 +69,21 @@ impl Ovh {
         )))
     }
 
-    /// Whether an instance's flavor changes from `prior`'s to a smaller
-    /// one in `d`, which the API cannot resize to. Not when the account
-    /// cannot be reached: Apply refuses it then.
-    pub(super) fn flavor_shrinks(&self, at: &str, prior: &Json, d: &Json) -> bool {
-        let (Some(was), Some(now), Some(region)) =
-            (s(prior, "flavor"), s(d, "flavor"), s(d, "region"))
-        else {
-            return false;
-        };
+    /// Why an instance is replaced when its flavor changes from
+    /// `prior`'s to a smaller one in `d`, which the API cannot resize to.
+    /// None when the account cannot be reached: Apply refuses it then.
+    pub(super) fn flavor_shrinks(&self, at: &str, prior: &Json, d: &Json) -> Option<String> {
+        let (was, now, region) = (s(prior, "flavor")?, s(d, "flavor")?, s(d, "region")?);
         if was == now {
-            return false;
+            return None;
         }
-        let Ok((a, p)) = self.project(at) else {
-            return false;
-        };
-        self.smaller_flavor(&a, &p, region, was, now) == Some(true)
+        let (a, p) = self.project(at).ok()?;
+        (self.smaller_flavor(&a, &p, region, was, now) == Some(true)).then(|| {
+            format!(
+                "flavor {now} is smaller than {was}; the API resizes an instance only to a \
+                 larger one"
+            )
+        })
     }
 
     /// An instance's flavor and image are offered in its region, when the

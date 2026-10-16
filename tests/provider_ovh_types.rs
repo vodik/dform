@@ -13,6 +13,7 @@ use crate::common;
 use common::{Run, Scratch};
 use dform_core::plugin::backend::{Call, CallError, Handler, Reply};
 use dform_core::plugin::{pb, wire};
+use dform_core::provider::Planned;
 use dform_provider_ovh::fake::{self, Server};
 use dform_provider_ovh::ovh::Ovh;
 use serde_json::{Value as Json, json};
@@ -128,10 +129,18 @@ impl Lab {
     }
 
     /// Plan against what Read or Apply answered (`attrs`, `computed`):
-    /// the paths that change, and whether it replaces. The prior is the
-    /// world's document as dform makes it: the configured attributes, and
-    /// an optional computed one's value where the program sets it.
+    /// the paths that change, and whether it replaces.
     fn plan(&self, typ: &str, prior: (&Json, &Json), desired: &Json) -> (Vec<String>, bool) {
+        let planned = self.planned(typ, prior, desired);
+        let paths = planned.changes.into_iter().map(|c| c.path).collect();
+        (paths, planned.replaces)
+    }
+
+    /// Plan against what Read or Apply answered, as the provider answers.
+    /// The prior is the world's document as dform makes it: the
+    /// configured attributes, and an optional computed one's value where
+    /// the program sets it.
+    fn planned(&self, typ: &str, prior: (&Json, &Json), desired: &Json) -> Planned {
         let mut world = prior.0.clone();
         for (path, _) in self.ovh.schema().optional_computed_of(typ) {
             if desired.get(&path).is_some()
@@ -141,12 +150,9 @@ impl Lab {
                 world[path.as_str()] = v.clone();
             }
         }
-        let planned = self
-            .ovh
+        self.ovh
             .plan(typ, "x", "", Some(&world), Some(desired))
-            .unwrap();
-        let paths = planned.changes.into_iter().map(|c| c.path).collect();
-        (paths, planned.replaces)
+            .unwrap()
     }
 
     fn plan_err(&self, typ: &str, prior: Option<&Json>, desired: &Json) -> String {
@@ -460,10 +466,18 @@ fn a_volume_is_attached_moved_grown_and_deleted() {
         lab.plan(VOLUME, read, &doc(50, Some(&one))),
         (vec!["size".to_string()], false)
     );
-    assert!(lab.plan(VOLUME, read, &doc(10, Some(&one))).1);
+    let smaller = lab.planned(VOLUME, read, &doc(10, Some(&one)));
+    assert!(smaller.replaces);
+    assert_eq!(
+        smaller.reason.as_deref(),
+        Some("size 10 GiB is smaller than 20 GiB; a volume only grows")
+    );
     let mut moved = doc(20, Some(&one));
     moved["region"] = json!("ca-east-tor");
-    assert!(lab.plan(VOLUME, read, &moved).1);
+    // The schema forces it: dform names the path, the provider says no
+    // more.
+    let moved = lab.planned(VOLUME, read, &moved);
+    assert!(moved.replaces && moved.reason.is_none(), "{moved:?}");
     let grown = lab.update(VOLUME, "data", &v.remote, doc(50, Some(&one)));
     assert_eq!(grown.attrs["size"], 50);
     assert_eq!(lab.calls("POST", "/upsize"), 1);
@@ -620,9 +634,11 @@ fn a_private_network_is_made_grown_and_deleted() {
     let grown = lab.update(NETWORK, "lab", &n.remote, both);
     assert_eq!(grown.computed["regions"], json!(["BHS5", "ca-east-tor"]));
     assert_eq!(lab.calls("POST", "/region"), 1);
-    assert!(
-        lab.plan(NETWORK, (&grown.attrs, &grown.computed), &doc(&["BHS5"]))
-            .1
+    let left = lab.planned(NETWORK, (&grown.attrs, &grown.computed), &doc(&["BHS5"]));
+    assert!(left.replaces);
+    assert_eq!(
+        left.reason.as_deref(),
+        Some("it leaves ca-east-tor; a network is added to a region in place, and leaves none")
     );
     let mut vlan = doc(&["BHS5", "ca-east-tor"]);
     vlan["vlan_id"] = json!(7);
@@ -950,9 +966,9 @@ fn an_instance_joins_a_private_network() {
 /// An instance's flavor changes on its id when the API can resize it
 /// (R-195's audit): a larger one plans in place, and the Apply resizes
 /// it (`POST /resize`), saying RESIZE then ACTIVE, and notes the reboot;
-/// a smaller one, which the API does not resize to, plans as a replace,
-/// and an Update to one (planned without the account) is refused naming
-/// both.
+/// a smaller one, which the API does not resize to, plans as a replace
+/// saying so, and an Update to one (planned without the account) is
+/// refused naming both.
 #[test]
 fn an_instance_resizes_to_a_larger_flavor_and_is_replaced_for_a_smaller() {
     let lab = Lab::new();
@@ -963,9 +979,11 @@ fn an_instance_resizes_to_a_larger_flavor_and_is_replaced_for_a_smaller() {
         lab.plan(INSTANCE, prior, &doc("b2-15")),
         (vec!["flavor".into()], false)
     );
+    let smaller = lab.planned(INSTANCE, prior, &doc("d2-2"));
+    assert!(smaller.replaces);
     assert_eq!(
-        lab.plan(INSTANCE, prior, &doc("d2-2")),
-        (vec!["flavor".into()], true)
+        smaller.reason.as_deref(),
+        Some("flavor d2-2 is smaller than b2-7; the API resizes an instance only to a larger one")
     );
 
     let resized = lab.update(INSTANCE, "vm", &vm.remote, doc("b2-15"));
@@ -1012,14 +1030,6 @@ fn an_instance_resizes_to_a_larger_flavor_and_is_replaced_for_a_smaller() {
     let replaced = lab
         .apply(pb::Op::Replace, INSTANCE, "vm", &vm.remote, doc("d2-2"))
         .unwrap();
-    assert!(
-        replaced
-            .notes
-            .iter()
-            .any(|n| n.contains("flavor d2-2 is smaller than b2-15")),
-        "{:?}",
-        replaced.notes
-    );
     assert_ne!(replaced.remote, vm.remote);
 }
 
@@ -1544,16 +1554,7 @@ fn a_program_asks_an_instances_private_address() {
         "{}",
         moved.stdout
     );
-    let applied = dform(&s, &server, &["apply", "main.df"]).success();
-    assert!(
-        applied.stdout.contains(
-            "changes from 10.42.0.11 to 10.42.0.12, and no API call changes a port's address, \
-             so it is replaced"
-        ) || applied.stderr.contains("so it is replaced"),
-        "{}\n{}",
-        applied.stdout,
-        applied.stderr
-    );
+    dform(&s, &server, &["apply", "main.df"]).success();
     assert_eq!(server.instances().len(), 1);
     assert_eq!(address(&server), "10.42.0.12");
 

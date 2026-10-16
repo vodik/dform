@@ -864,7 +864,7 @@ fn two_instances_asking_one_address_are_refused_at_plan() {
 }
 
 /// An address asked anew on a network the instance is on replaces it,
-/// and the replacement says why: one changed, or one asked where DHCP
+/// and its plan says why: one changed, or one asked where DHCP
 /// gave it one. The same address plans clean; one no longer asked
 /// changes in place (the port keeps its address).
 #[test]
@@ -888,6 +888,13 @@ fn an_address_asked_anew_replaces_the_instance() {
     assert!(same.changes.is_empty() && !same.replaces, "{same:?}");
     let moved = plan(&at(&id, "10.0.0.51"));
     assert!(moved.replaces, "{moved:?}");
+    assert_eq!(
+        moved.reason,
+        Some(format!(
+            "its address on network {id} changes from 10.0.0.50 to 10.0.0.51; no API call \
+             changes a port's address"
+        ))
+    );
     let mut dhcp = at(&id, "10.0.0.50");
     dhcp["networks"] = json!([id]);
     let dropped = plan(&dhcp);
@@ -905,6 +912,13 @@ fn an_address_asked_anew_replaces_the_instance() {
         )
         .unwrap();
     assert!(asked.replaces, "{asked:?}");
+    assert_eq!(
+        asked.reason,
+        Some(format!(
+            "its address on network {id} is asked (10.0.0.50), and was DHCP's; no API call \
+             changes a port's address"
+        ))
+    );
     let r = pb::ApplyRequest {
         op: pb::Op::Replace as i32,
         r#type: "ovh.instance".into(),
@@ -919,14 +933,8 @@ fn an_address_asked_anew_replaces_the_instance() {
         Ok(Reply::Apply(a)) => a,
         other => panic!("replace: {other:?}"),
     };
-    assert!(
-        replaced.notes.contains(&format!(
-            "apply ovh.instance[\"vm\"]: its address on network {id} changes from 10.0.0.50 to \
-             10.0.0.51, and no API call changes a port's address, so it is replaced"
-        )),
-        "{:?}",
-        replaced.notes
-    );
+    // The plan said why; the Apply does not say it again.
+    assert!(replaced.notes.is_empty(), "{:?}", replaced.notes);
     let computed = wire::from_doc(replaced.computed.as_ref().unwrap()).unwrap();
     assert_eq!(computed["private_ips"][&id], "10.0.0.51");
 }

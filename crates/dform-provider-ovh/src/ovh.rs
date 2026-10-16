@@ -258,6 +258,24 @@ fn need<'a>(at: &str, doc: &'a Json, k: &str) -> std::result::Result<&'a str, Fa
 }
 
 /// A status as the API gives it, or `unknown`.
+/// The world's document `prior` as Plan compares it with `d`: an
+/// instance's flavor or image the API no longer names (an image retired
+/// from the region) is unknown, not changed, so it does not replace the
+/// instance. Read fails rather than leave one out on a failed call.
+fn known(typ: &str, prior: &Json, d: &Json) -> Json {
+    let mut p = prior.clone();
+    if typ == INSTANCE {
+        for k in ["flavor", "image"] {
+            if p.get(k).is_none()
+                && let Some(v) = d.get(k)
+            {
+                p[k] = v.clone();
+            }
+        }
+    }
+    p
+}
+
 fn status(o: &Json) -> String {
     s(o, "status").unwrap_or("unknown").to_string()
 }
@@ -580,7 +598,7 @@ impl Ovh {
     // Plan.
 
     /// Validate `desired` and diff it against `prior`; whether a change
-    /// replaces the object.
+    /// replaces the object, and why where the schema does not say.
     pub fn plan(
         &self,
         typ: &str,
@@ -605,46 +623,9 @@ impl Ovh {
                 ..Default::default()
             });
         };
-        for ((t, p), a) in &self.schema.attrs {
-            if t == typ && a.has("required") && d.get(p).is_none() {
-                bail!("{at}: required attribute {p} is not set");
-            }
-        }
-        if typ == INSTANCE {
-            self.check_instance(&at, d)?;
-        }
-        let pool = match typ {
-            SUBNET => network::check_subnet(&at, d)?,
-            _ => None,
-        };
-        // A bootable volume's image is the region's, as an instance's is.
-        if typ == VOLUME
-            && let (Some(region), Some(image)) = (s(d, "region"), s(d, "image"))
-            && let Ok((a, p)) = self.project(&at)
-        {
-            self.image_id(&a, &p, region, image)
-                .map_err(|e| anyhow!("{at}: image: {e:#}"))?;
-        }
-        // An instance's flavor or image the API no longer names (an image
-        // retired from the region) is unknown, not changed: it does not
-        // replace the instance. Read fails rather than leave one out on a
-        // failed call.
-        let known;
-        let prior = match prior {
-            Some(p) if typ == INSTANCE => {
-                let mut p = p.clone();
-                for k in ["flavor", "image"] {
-                    if p.get(k).is_none()
-                        && let Some(v) = d.get(k)
-                    {
-                        p[k] = v.clone();
-                    }
-                }
-                known = p;
-                Some(&known)
-            }
-            p => p,
-        };
+        let pool = self.check_desired(&at, typ, d)?;
+        let known = prior.map(|p| known(typ, p, d));
+        let prior = known.as_ref();
         // An instance's user data is write-only (R-106): the API never
         // answers it, and dform compares it with the digest state keeps,
         // giving the program's value in `prior` when it is the same.
@@ -662,59 +643,82 @@ impl Ovh {
                 note: None,
             });
         }
-        let replaces = self.replaces(&at, typ, prior, d, &changes);
         if typ == NETWORK && prior.is_none() {
             self.check_vrack(&at)?;
         }
+        let Some(prior) = prior else {
+            return Ok(provider::Planned {
+                changes,
+                ..Default::default()
+            });
+        };
+        // A path the schema forces new replaces the object, which dform
+        // names; else one the API changes in one direction only, said.
+        let forced = changes
+            .iter()
+            .any(|c| self.schema.forces_new(typ, &norm_path(&c.path)));
+        let reason = match forced {
+            true => None,
+            false => self.replaced(&at, typ, prior, d),
+        };
         Ok(provider::Planned {
             changes,
-            replaces,
-            reason: None,
+            replaces: forced || reason.is_some(),
+            reason,
         })
     }
 
-    /// Whether a change of `prior` to `d` replaces the object: a path the
-    /// schema forces new, or one the API changes in one direction only.
-    fn replaces(
-        &self,
-        at: &str,
-        typ: &str,
-        prior: Option<&Json>,
-        d: &Json,
-        changes: &[provider::Change],
-    ) -> bool {
-        let replaces = prior.is_some()
-            && changes
-                .iter()
-                .any(|c| self.schema.forces_new(typ, &norm_path(&c.path)));
-        // A volume grows in place; it does not shrink.
-        let shrinks = |p: &Json| {
-            let size = |d: &Json| d.get("size").and_then(Json::as_i64);
-            matches!((size(p), size(d)), (Some(was), Some(now)) if now < was)
-        };
-        // A private network is added to a region in place; it leaves
-        // none.
-        let leaves = |p: &Json| {
-            let regions = |d: &Json| -> Vec<String> {
-                d.get("regions")
-                    .and_then(Json::as_array)
+    /// Refuse a desired document `d` of `typ` the API would: a required
+    /// attribute unset, an instance's flavor or image the region does
+    /// not offer, a bootable volume's image, a subnet's pool. A subnet's
+    /// pool, when the plan gives it one.
+    fn check_desired(&self, at: &str, typ: &str, d: &Json) -> Result<Option<String>> {
+        for ((t, p), a) in &self.schema.attrs {
+            if t == typ && a.has("required") && d.get(p).is_none() {
+                bail!("{at}: required attribute {p} is not set");
+            }
+        }
+        if typ == INSTANCE {
+            self.check_instance(at, d)?;
+        }
+        // A bootable volume's image is the region's, as an instance's is.
+        if typ == VOLUME
+            && let (Some(region), Some(image)) = (s(d, "region"), s(d, "image"))
+            && let Ok((a, p)) = self.project(at)
+        {
+            self.image_id(&a, &p, region, image)
+                .map_err(|e| anyhow!("{at}: image: {e:#}"))?;
+        }
+        match typ {
+            SUBNET => network::check_subnet(at, d),
+            _ => Ok(None),
+        }
+    }
+
+    /// Why a change of `prior` to `d` replaces the object where no path
+    /// the schema forces new says so: one the API changes in one
+    /// direction only.
+    fn replaced(&self, at: &str, typ: &str, prior: &Json, d: &Json) -> Option<String> {
+        let reasons: Vec<String> = match typ {
+            VOLUME => volume::shrinks(prior, d).into_iter().collect(),
+            NETWORK => network::leaves(prior, d).into_iter().collect(),
+            // A smaller flavor; an address asked anew on a network it is
+            // on.
+            INSTANCE => {
+                let moved: Vec<String> = network::readdressed(prior, d)
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect();
+                let moved = (!moved.is_empty())
+                    .then(|| format!("{}; no API call changes a port's address", moved.join("; ")));
+                self.flavor_shrinks(at, prior, d)
                     .into_iter()
-                    .flatten()
-                    .filter_map(|r| r.as_str().map(str::to_string))
+                    .chain(moved)
                     .collect()
-            };
-            let now = regions(d);
-            d.get("regions").is_some() && regions(p).iter().any(|r| !now.contains(r))
+            }
+            _ => Vec::new(),
         };
-        // An instance resizes to a larger flavor in place (it reboots);
-        // a smaller one replaces it, as an address asked anew on a
-        // network it is on does.
-        let smaller = |p: &Json| self.flavor_shrinks(at, p, d);
-        let readdressed = |p: &Json| !network::readdressed(p, d).is_empty();
-        replaces
-            || (typ == VOLUME && prior.is_some_and(shrinks))
-            || (typ == NETWORK && prior.is_some_and(leaves))
-            || (typ == INSTANCE && prior.is_some_and(|p| smaller(p) || readdressed(p)))
+        (!reasons.is_empty()).then(|| reasons.join("; "))
     }
 
     // Apply.
@@ -814,56 +818,14 @@ impl Ovh {
         }
         let mut first = !r.create_first || same;
         if typ == INSTANCE
-            && let Some(was) = &old
+            && let Some((_, computed)) = &old
         {
-            first |= self.instance_replaced(at, was, config, !first, notes);
+            first |= network::holds_asked(at, computed, config, !first, notes);
         }
         if first {
             self.delete(typ, at, &r.remote, notes, say)?;
         }
         self.create(typ, at, config, key, notes, say)
-    }
-
-    /// Why instance `was` (as Read answers it) is replaced for `config`,
-    /// noted: a smaller flavor, an address asked anew. Whether the old one
-    /// goes first because the replacement asks an address it has (a
-    /// port's address is one port's), noted where it would have gone
-    /// after (`made_first`).
-    fn instance_replaced(
-        &self,
-        at: &str,
-        was: &(Json, Json),
-        config: &Json,
-        made_first: bool,
-        notes: &mut Vec<String>,
-    ) -> bool {
-        if self.flavor_shrinks(at, &was.0, config) {
-            notes.push(format!(
-                "{at}: flavor {} is smaller than {}, and the API resizes an instance \
-                 only to a larger one, so it is replaced",
-                s(config, "flavor").unwrap_or_default(),
-                s(&was.0, "flavor").unwrap_or_default()
-            ));
-        }
-        let moved: Vec<String> = network::readdressed(&was.0, config)
-            .iter()
-            .map(ToString::to_string)
-            .collect();
-        if !moved.is_empty() {
-            notes.push(format!(
-                "{at}: {}, and no API call changes a port's address, so it is replaced",
-                moved.join("; ")
-            ));
-        }
-        let held = network::held(&was.1, config);
-        if made_first && !held.is_empty() {
-            notes.push(format!(
-                "{at}: the replacement asks {}, which the old instance has, so the old one goes \
-                 first",
-                held.join(", ")
-            ));
-        }
-        !held.is_empty()
     }
 
     /// What a Create of `doc` is found by: each attribute of the type's

@@ -362,9 +362,30 @@ pub(super) fn readdressed(prior: &Json, d: &Json) -> Vec<Readdress> {
         .collect()
 }
 
+/// Whether an instance's replacement for `config` asks an address the
+/// old one has (`computed`, as Read answers it), so the old one goes
+/// first (a port's address is one port's): said where it would have
+/// gone after (`made_first`).
+pub(super) fn holds_asked(
+    at: &str,
+    computed: &Json,
+    config: &Json,
+    made_first: bool,
+    notes: &mut Vec<String>,
+) -> bool {
+    let held = held(computed, config);
+    if made_first && !held.is_empty() {
+        notes.push(format!(
+            "{at}: the replacement asks {}, which the old instance has, so the old one goes first",
+            held.join(", ")
+        ));
+    }
+    !held.is_empty()
+}
+
 /// The addresses `config` asks that `computed` (an instance's, as Read
 /// answers it) has already, each `IP on network NET`.
-pub(super) fn held(computed: &Json, config: &Json) -> Vec<String> {
+fn held(computed: &Json, config: &Json) -> Vec<String> {
     entries(config)
         .unwrap_or_default()
         .into_iter()
@@ -399,6 +420,32 @@ impl Asked {
         }
         None
     }
+}
+
+/// Why a private network `prior` is replaced for `d`, when `d` leaves
+/// a region it is in: the API adds one to a region in place, and takes
+/// it out of none.
+pub(super) fn leaves(prior: &Json, d: &Json) -> Option<String> {
+    let names = |d: &Json| -> Vec<String> {
+        d.get("regions")
+            .and_then(Json::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|r| r.as_str().map(str::to_string))
+            .collect()
+    };
+    d.get("regions")?;
+    let now = names(d);
+    let left: Vec<String> = names(prior)
+        .into_iter()
+        .filter(|r| !now.contains(r))
+        .collect();
+    (!left.is_empty()).then(|| {
+        format!(
+            "it leaves {}; a network is added to a region in place, and leaves none",
+            left.join(", ")
+        )
+    })
 }
 
 /// The program's regions, if it names them.
