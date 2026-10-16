@@ -455,14 +455,15 @@ pub struct Instance {
 }
 
 /// The module instance a copy's component was named through (R-186):
-/// the module's path, the name its `use` binds, and that instance's
-/// scope as the copy's user reads it (`"a"`, or `__scope("a")` for a
-/// `use` outside the user's body).
+/// the module's path and the name its `use` binds, which is that
+/// instance's scope as the copy's user reads it; `absolute` when the
+/// `use` stands outside the user's body, so no copy of that body puts
+/// its scope in front of it.
 #[derive(Debug, Clone)]
 pub struct Via {
     pub module: String,
     pub name: String,
-    pub scope: Term,
+    pub absolute: bool,
 }
 
 #[derive(Debug, Clone)]

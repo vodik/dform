@@ -33,8 +33,8 @@
 //! head's constant type and path.
 
 use crate::ast::{
-    Atom, FieldAssign, Helper, InputDecl, Lit, OutputDecl, Program, Resource, RuleStmt, Span, Stmt,
-    Term, TypeExpr, atom, str_term,
+    Atom, FieldAssign, Helper, InputDecl, Lit, OutputDecl, Program, RuleStmt, Span, Stmt, Term,
+    TypeExpr, atom, str_term,
 };
 use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::inputs::Declared;
@@ -45,7 +45,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod lexical;
 mod named;
 
-pub use lexical::{LEXICAL, LEXICAL_OF, lexical_term};
+pub use lexical::LEXICAL_OF;
 
 /// The attribute aggregate's pseudo-type for inputs: `(input, Scope, key)`,
 /// scope `""` for the stack's own.
@@ -363,12 +363,6 @@ pub const INSTANCE_OF: &str = "instance_of";
 /// `output p`: what `copy.p(x, ..)` and `c[t].p(x, ..)` read.
 pub const ROWS: &str = "__rows";
 
-/// A scope the resolver wrote as its user's, `__scope(t)`: a read inside a
-/// component of a copy the component does not make (`blue.vpc` of the
-/// stack's `blue`). Expansion puts no copy's scope in front of it, and
-/// takes the mark off once done.
-pub const ABSOLUTE: &str = "__scope";
-
 /// Whether a module or a copy keeps `pred` its own when it defines it:
 /// every relation but the shared ones and the records of copies.
 pub fn is_private(pred: &str) -> bool {
@@ -531,7 +525,6 @@ pub fn expand(program: &Program) -> Result<Expanded> {
             read_input(h, &cx.book.declared);
         }
     }
-    let expanded = expanded.into_iter().map(unmark_stmt).collect::<Vec<_>>();
     cx.finish(Program {
         statements: expanded,
         stack: program.stack.clone(),
@@ -1548,60 +1541,6 @@ fn body_atoms(s: &Stmt, out: &mut Vec<Atom>) {
 // ---------------------------------------------------------------------------
 // Renaming predicates and scoping resource names.
 // ---------------------------------------------------------------------------
-
-/// A statement with the marks of `ABSOLUTE` taken off: `__scope(t)` is
-/// `t`.
-fn unmark_stmt(s: Stmt) -> Stmt {
-    fn term(t: Term) -> Term {
-        match t {
-            Term::Func { name, args } if name == ABSOLUTE && args.len() == 1 => {
-                term(args.into_iter().next().unwrap())
-            }
-            Term::Func { name, args } => Term::Func {
-                name,
-                args: args.into_iter().map(term).collect(),
-            },
-            Term::List(xs) => Term::List(xs.into_iter().map(term).collect()),
-            Term::Obj(m) => Term::Obj(m.into_iter().map(|(k, v)| (k, term(v))).collect()),
-            Term::ListComp { item, body } => Term::ListComp {
-                item: Box::new(term(*item)),
-                body: lits(body),
-            },
-            t => t,
-        }
-    }
-    fn atom(mut a: Atom) -> Atom {
-        a.args = a.args.into_iter().map(term).collect();
-        a
-    }
-    fn lits(ls: Vec<Lit>) -> Vec<Lit> {
-        ls.into_iter().map(|l| l.map_terms(term)).collect()
-    }
-    let fields = |fs: Vec<FieldAssign>| {
-        fs.into_iter()
-            .map(|f| FieldAssign {
-                value: term(f.value),
-                ..f
-            })
-            .collect()
-    };
-    match s {
-        Stmt::Fact(a) => Stmt::Fact(atom(a)),
-        Stmt::Rule(r) => Stmt::Rule(RuleStmt {
-            head: atom(r.head),
-            body: lits(r.body),
-            ..r
-        }),
-        Stmt::Resource(r) => Stmt::Resource(Resource {
-            typ: term(r.typ),
-            name: term(r.name),
-            fields: fields(r.fields),
-            body: r.body.map(lits),
-            ..r
-        }),
-        other => other,
-    }
-}
 
 /// Mark every statement (and each head, field and nested statement) as
 /// lowered out of `origin` (`diag::origin_id`): a pack or a module

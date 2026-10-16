@@ -191,10 +191,8 @@ impl Chain {
                     .via
                     .as_ref()
                     .expect("a copy through a module");
-                let (scope, at) = match absolute(&via.scope) {
-                    Some(t) => (t.clone(), None),
-                    None => (via.scope.clone(), Some(From::at(i, Stage::Named))),
-                };
+                let scope = str_term(&via.name);
+                let at = (!via.absolute).then_some(From::at(i, Stage::Named));
                 let t = scoped(scope, str_term(name));
                 (
                     self.scoped_fold(t, at, Some(From::at(i, Stage::Named))),
@@ -366,17 +364,6 @@ pub fn scoped(scope: Term, name: Term) -> Term {
     Term::Func {
         name: crate::address::SCOPED.into(),
         args: vec![scope, name],
-    }
-}
-
-/// The term a resolver's absolute mark holds (`modules::ABSOLUTE`, a
-/// name the user writes, which no copy puts its scope in front of).
-pub fn absolute(t: &Term) -> Option<&Term> {
-    match t {
-        Term::Func { name, args } if name == crate::modules::ABSOLUTE && args.len() == 1 => {
-            args.first()
-        }
-        _ => None,
     }
 }
 

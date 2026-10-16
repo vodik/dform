@@ -342,7 +342,8 @@ impl Lowerer<'_> {
             args.push((self.read_as(arg, &was, term.clone()), term));
         }
         let (args, terms): (Vec<ExprId>, Vec<Term>) = args.into_iter().unzip();
-        let key = format!("fn {} {terms:?}", read_key(pred, &via));
+        let args_key: Vec<String> = args.iter().map(|a| self.read_key_of(*a)).collect();
+        let key = format!("fn {} {terms:?} {args_key:?}", read_key(pred, &via));
         if let Some(Term::Var(v)) = rc.reads.get(&key) {
             // Read already: its arguments' reads are made again.
             let v = v.clone();

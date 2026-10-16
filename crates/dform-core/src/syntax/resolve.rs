@@ -689,7 +689,7 @@ struct Rc {
     each_reads: BTreeMap<String, ExprId>,
     /// Source variables a reference column types and no `in` does
     /// (R-204): the resource the row holds, its address its own, never a
-    /// copy's (`modules::ABSOLUTE`).
+    /// copy's (`Reach::Absolute`).
     row_refs: BTreeSet<String>,
     /// The tests made before the literal being lowered (a copy named by
     /// its key, a row's type among its column's), each with the copy's
@@ -1452,20 +1452,11 @@ impl<'u> Lowerer<'u> {
         self.program.scopes.own(scope)
     }
 
-    /// An instance's scope, `t`, as a read in `scope` writes it: relative
-    /// when the copy is the body's own (expansion puts the body's scope in
-    /// front of it), else its user's, marked `scope(t)` so that expansion
-    /// leaves it as it is (`modules::ABSOLUTE`).
-    fn scope_term(&self, scope: ScopeId, declared: ScopeId, t: Term) -> Term {
-        match self.own_scopes(scope).contains(&declared) {
-            true => t,
-            false => func(crate::modules::ABSOLUTE, vec![t]),
-        }
-    }
-
-    /// [`Self::scope_term`] as its node: the name `name` itself, or the
-    /// name as a scope no copy of the body is taken from reaches it
-    /// (`Reach::Absolute`), at `span`.
+    /// An instance's scope `name`, written at `span`, as a read in `scope`
+    /// of what `declared` declares reaches it: the name itself when the
+    /// copy is the body's own (the copies being instanced put the body's
+    /// scope in front of it), else as a scope no copy of the body is taken
+    /// from reaches it (`Reach::Absolute`).
     fn scoped(&mut self, scope: ScopeId, declared: ScopeId, name: ExprId, span: Span) -> ExprId {
         match self.own_scopes(scope).contains(&declared) {
             true => name,
@@ -4389,7 +4380,7 @@ impl<'u> Lowerer<'u> {
         Some(Via {
             module: parent.to_string(),
             name: head.to_string(),
-            scope: self.scope_term(scope, declared, str_term(head)),
+            absolute: !self.own_scopes(scope).contains(&declared),
         })
     }
 
@@ -8695,7 +8686,7 @@ impl<'u> Lowerer<'u> {
         let span = self.span(call);
         let id = self.bind(false, |l| l.part(rc, call, pre))?;
         let t = self.term_of(id);
-        let key = format!("call {t:?}");
+        let key = format!("call {}", self.read_key_of(id));
         let var = match rc.reads.get(&key) {
             Some(Term::Var(v)) => {
                 let v = v.clone();
@@ -9674,20 +9665,38 @@ impl<'u> Lowerer<'u> {
         id
     }
 
-    /// The columns of the read `read` but its value's, as the rule writes
-    /// them: what names it once per rule.
-    fn read_args(&self, read: &PlanRead) -> Vec<Term> {
+    /// The columns of the read `read` but its value's, each as a rule's
+    /// reads are kept by it ([`Self::read_key_of`]): what names it once per
+    /// rule.
+    fn read_args(&self, read: &PlanRead) -> Vec<String> {
+        let text = |s: &str| format!("{:?}", str_term(s));
         match read {
             PlanRead::Value(..) => Vec::new(),
             PlanRead::Attr { typ, addr, attr } => {
-                vec![self.term_of(*typ), self.term_of(*addr), str_term(attr)]
+                vec![self.read_key_of(*typ), self.read_key_of(*addr), text(attr)]
             }
-            PlanRead::Output { copy, key, .. } => vec![self.term_of(*copy), str_term(key)],
+            PlanRead::Output { copy, key, .. } => vec![self.read_key_of(*copy), text(key)],
             PlanRead::World { typ, addr, path } => {
-                vec![str_term(typ), self.term_of(*addr), str_term(path)]
+                vec![text(typ), self.read_key_of(*addr), text(path)]
             }
-            PlanRead::Lookup { args, .. } => args.iter().map(|a| self.term_of(*a)).collect(),
+            PlanRead::Lookup { args, .. } => args.iter().map(|a| self.read_key_of(*a)).collect(),
         }
+    }
+
+    /// What a rule's reads are kept by for the term `id`: the term it
+    /// lowers to and how each name in it is reached, so two names written
+    /// alike and reached two ways (`repo`, `super.repo`) are two.
+    fn read_key_of(&self, id: ExprId) -> String {
+        let mut reaches = Vec::new();
+        let mut walk = vec![id];
+        while let Some(e) = walk.pop() {
+            let x = &self.program.exprs[e];
+            if let ExprKind::Scoped { via, .. } = &x.kind {
+                reaches.push(format!("{via:?}"));
+            }
+            walk.extend(x.kind.children());
+        }
+        format!("{:?} {}", self.term_of(id), reaches.join(" "))
     }
 
     /// The variable the read `pred(args.., V)` (V at `out`) binds, once
@@ -9697,7 +9706,7 @@ impl<'u> Lowerer<'u> {
         &mut self,
         rc: &mut Rc,
         pred: &str,
-        args: &[Term],
+        args: &[String],
         out: usize,
         hint: &str,
     ) -> (String, bool) {
@@ -10294,9 +10303,7 @@ pub(crate) fn bound_vars(body: &[Lit]) -> BTreeSet<String> {
             }
             // A relation's column takes a reference apart (R-42), in a
             // row of a copy's relation too (`__rows(.., [ref(T, A, "")])`).
-            Term::Func { name, args }
-                if name == crate::address::REF || name == crate::modules::ABSOLUTE =>
-            {
+            Term::Func { name, args } if name == crate::address::REF => {
                 args.iter().for_each(|x| pattern(x, out))
             }
             Term::List(xs) => xs.iter().for_each(|x| pattern(x, out)),

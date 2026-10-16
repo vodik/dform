@@ -18,7 +18,7 @@
 
 mod chain;
 
-pub use chain::{Chain, Frame, From, Named, Stage, absolute, private_name, raw_stmt};
+pub use chain::{Chain, Frame, From, Named, Stage, private_name, raw_stmt};
 
 use super::{Env, Records};
 use crate::ast::{self, Atom, InputDecl, Lit, RuleStmt, Span, Stmt, Term, str_term};
@@ -552,10 +552,7 @@ impl<'p> Instancer<'p> {
         let parent = c.module.rsplit_once('.').map(|(p, _)| p);
         let after = Some(From::at(f, Stage::Named));
         let scope = match &frame.via {
-            Some(via) => Some(match absolute(&via.scope) {
-                Some(t) => (t.clone(), None),
-                None => (via.scope.clone(), after),
-            }),
+            Some(via) => Some((str_term(&via.name), after.filter(|_| !via.absolute))),
             None if parent.is_some() && parent == site => Some((str_term(""), after)),
             None => None,
         };

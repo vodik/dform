@@ -255,10 +255,6 @@ impl<'p> Lowering<'p> {
             }
             ExprKind::Address { of, typ } => {
                 let v = value_of(self);
-                let v = match self.env.chain {
-                    Some(_) => v,
-                    None => func(crate::modules::ABSOLUTE, vec![v]),
-                };
                 let r = func(
                     crate::address::REF,
                     vec![str_term(&typ.name), v, str_term("")],
@@ -516,16 +512,14 @@ impl<'p> Lowering<'p> {
         }
     }
 
-    /// The name `name` as a read reaches it: `__scope(n)`, kept as
-    /// written by expansion, or `__lexical(Body, n)`, the enclosing body's
-    /// instance's.
+    /// The name `name` as a read reaches it: as written when its user's
+    /// (no copy puts its scope in front of it); an enclosing body's the
+    /// instance's under the copies being instanced, else as written.
     fn scoped(&mut self, name: ExprId, via: &Reach) -> Term {
         let span = self.program.exprs[name].span;
         match (self.env.chain, via) {
             (Some(c), Reach::Lexical(body)) => c.lexical_term(body, &self.segment(name), span).0,
-            (Some(_), Reach::Absolute) => self.expr(name),
-            (None, Reach::Lexical(body)) => crate::modules::lexical_term(body, &self.segment(name)),
-            (None, Reach::Absolute) => func(crate::modules::ABSOLUTE, vec![self.expr(name)]),
+            (_, Reach::Absolute | Reach::Lexical(_)) => self.expr(name),
             (_, r) => unreachable!("a name {r:?} is written bare"),
         }
     }
