@@ -378,7 +378,8 @@ fn pascal(s: &str) -> String {
 
 /// The host's contract (wit/host, proto/dform/host/v1/host.proto): each
 /// interface a provider exports to the host (`world scheme-provider`,
-/// beyond `hosted-provider`) is a service of the host proto by its name,
+/// beyond `hosted-provider`, and `world signer-component`) is a service
+/// of the host proto by its name,
 /// its functions the service's calls (R-155: `io`, never `files`), and
 /// the proto has no other service but those [`HOST_PROTO_ONLY`] names.
 #[test]
@@ -393,9 +394,10 @@ fn the_hosts_exports_are_its_services() {
     let mut resolve = Resolve::new();
     let wit = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../wit/host");
     let (pkg, _) = resolve.push_dir(&wit).unwrap();
-    let world = resolve.packages[pkg].worlds["scheme-provider"];
+    let worlds = ["scheme-provider", "signer-component"].map(|w| resolve.packages[pkg].worlds[w]);
     let mut exported = BTreeSet::new();
-    for (key, item) in &resolve.worlds[world].exports {
+    let exports = worlds.iter().flat_map(|w| &resolve.worlds[*w].exports);
+    for (key, item) in exports {
         let wit_parser::WorldItem::Interface { id, .. } = item else {
             continue;
         };
@@ -418,7 +420,10 @@ fn the_hosts_exports_are_its_services() {
         assert_eq!(wit_calls, proto_calls, "{name}'s calls");
         exported.insert(service);
     }
-    assert!(exported.contains("Io"), "{exported:?}");
+    assert!(
+        exported.contains("Io") && exported.contains("Signer"),
+        "{exported:?}"
+    );
     for s in &proto.service {
         assert!(
             exported.contains(s.name()) || HOST_PROTO_ONLY.contains(&s.name()),

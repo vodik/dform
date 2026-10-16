@@ -36,6 +36,7 @@ pub fn serve<H: Handler>(handler: H, uses: &[&str]) -> Result<()> {
             Arc::new(move |l: &str| block_on(reads.0.read_versioned(l)))
         }),
         schemes,
+        signer: handler.0.signer(),
     };
     dform_grpc::server::serve_declaring(Shared(handler), declares)
 }
@@ -247,7 +248,11 @@ macro_rules! rpc {
 
 impl Calls for Grpc {
     fn open(&self, name: &str) -> Result<Opened, Error> {
-        let r = rpc!(self, open, h::OpenRequest { name: name.into() })?;
+        // Named by its call: what the host does to open it (a signer's
+        // fetch) is the call's.
+        let call = Within::here().call;
+        let req = dform_grpc::traced::request(h::OpenRequest { name: name.into() }, call);
+        let r = rpc!(self, open, req)?;
         conv::to_error(r.failure)?;
         Ok(Opened {
             handle: r.handle,

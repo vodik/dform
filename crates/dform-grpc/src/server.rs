@@ -194,6 +194,7 @@ pub fn serve<H: Handler + Send + Sync + 'static>(handler: H) -> anyhow::Result<(
                 imports: Vec::new(),
                 schemes,
                 read: Some(Arc::new(move |l: &str| reads.read_versioned(l))),
+                signer: None,
             },
         );
     }
@@ -215,13 +216,14 @@ pub type Read = Arc<
 >;
 
 /// What a provider declares beside the protocol (`Manifest`, R-13b): the
-/// interfaces it imports, and the location schemes it reads, which it
-/// serves as `Io` (R-153, R-155).
+/// interfaces it imports, the location schemes it reads, which it serves
+/// as `Io` (R-153, R-155), and its signer, which it serves as `Signer`.
 #[derive(Clone, Default)]
 pub struct Declares {
     pub imports: Vec<String>,
     pub schemes: Vec<String>,
     pub read: Option<Read>,
+    pub signer: Option<Arc<dyn dform_core::plugin::signer::Signer + Send + Sync>>,
 }
 
 #[tonic::async_trait]
@@ -233,6 +235,7 @@ impl crate::host_pb::manifest_server::Manifest for Declares {
         Ok(Response::new(crate::host_pb::ManifestResponse {
             imports: self.imports.clone(),
             schemes: self.schemes.clone(),
+            signs: self.signer.is_some(),
         }))
     }
 }
@@ -319,6 +322,10 @@ fn serve_shared<H: Handler + Send + Sync + 'static>(
     let files = declares.read.clone().map(|r| {
         crate::host_pb::files_server::FilesServer::new(Io(r)).max_encoding_message_size(usize::MAX)
     });
+    let signer = declares.signer.clone().map(|s| {
+        crate::host_pb::signer_server::SignerServer::new(crate::signer::Served(s))
+            .max_decoding_message_size(usize::MAX)
+    });
     crate::transport::serve(
         tonic::transport::Server::builder()
             .add_service(
@@ -330,6 +337,7 @@ fn serve_shared<H: Handler + Send + Sync + 'static>(
                 declares,
             ))
             .add_optional_service(io)
-            .add_optional_service(files),
+            .add_optional_service(files)
+            .add_optional_service(signer),
     )
 }

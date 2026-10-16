@@ -29,6 +29,9 @@ prost = "0.13"
 regex = "1"
 # `hash.*` (std/hash.df).
 sha2 = "0.10"
+# A provider's signer's types (`plugin::signer`): a `signed` credential's
+# material, made and applied by the provider's signer.
+dform-signer = { path = "../dform-signer" }
 # Approvals (src/approval.rs): DSSE envelopes signed with ed25519, and JWTs
 # (RS256, ES256, EdDSA) verified against a JWKS; pure Rust crypto. Also
 # `base64.*` (std/base64.df).

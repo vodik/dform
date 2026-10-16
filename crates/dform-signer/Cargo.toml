@@ -1,0 +1,18 @@
+[package]
+name = "dform-signer"
+version = "0.1.0"
+license = "Apache-2.0"
+edition = "2024"
+publish = false
+
+# A provider's signer (wit/host's `signer`): the types and the trait, in
+# Rust, of what turns the operator's grant into a credential's material
+# and signs a request with it, sans I/O. `no_std`: a signer built as a
+# component (`component`, for wasm32-wasip3) imports nothing, so not even
+# std's WASI; natively, dform's host and a native provider use the same
+# types (`dform_core::plugin::signer`).
+[features]
+component = ["dep:wit-bindgen"]
+
+[dependencies]
+wit-bindgen = { version = "0.61", default-features = false, features = ["macros"], optional = true }

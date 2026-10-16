@@ -15,6 +15,9 @@ pub mod policy;
 pub mod pool;
 pub mod providers;
 pub mod queue;
+/// A provider's signer (wit/host's `signer`): what makes a `signed`
+/// credential's material and signs a request with it, sans I/O.
+pub use dform_signer as signer;
 pub mod source;
 pub mod timed;
 pub mod wire;

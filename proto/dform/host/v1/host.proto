@@ -23,6 +23,10 @@
 // - `Files` is `Io` under the name it had before R-155, kept so a
 //   provider built then still serves its schemes: a provider serves both,
 //   dform calls `Io`, and `Files` when a provider has no `Io`.
+// - `Signer` is served by a provider whose manifest says it `signs`: the
+//   WIT's `signer` exported, which dform calls to make a `signed`
+//   credential's material of what it performed for it, and to sign each
+//   request sent with it. Sans I/O: it reaches nothing itself.
 //
 // A failure is a `Failure` in the response, never a gRPC status, so its
 // class (R-81's: final, retryable, maybe-applied) and `not-yet` travel as
@@ -77,6 +81,18 @@ service Io {
 service Files {
   // io.read, of a scheme the provider declares.
   rpc Read(ReadRequest) returns (stream ReadChunk);
+}
+
+// The WIT's `signer`, of a provider that signs.
+service Signer {
+  // signer.needs
+  rpc Needs(NeedsRequest) returns (NeedsResponse);
+  // signer.step
+  rpc Step(StepRequest) returns (StepResponse);
+  // signer.sign
+  rpc Sign(SignRequest) returns (SignResponse);
+  // signer.refresh
+  rpc Refresh(RefreshRequest) returns (StepResponse);
 }
 
 // error-class, and not-yet-or-error's not-yet.
@@ -254,4 +270,101 @@ message ManifestResponse {
   repeated string imports = 1;
   // The location schemes it reads, served by its `Files` (`gs`).
   repeated string schemes = 2;
+  // It serves `Signer`.
+  bool signs = 3;
+}
+
+// The signer's request (the WIT's `signer.request`): one to sign, or a
+// fetch to perform.
+message SignerRequest {
+  string method = 1;
+  string url = 2;
+  repeated Header headers = 3;
+  bytes body = 4;
+}
+
+message Need {
+  message Strings {
+    repeated string values = 1;
+  }
+  oneof need {
+    Strings env = 1;
+    string file = 2;
+    Strings exec = 3;
+    SignerRequest fetch = 4;
+  }
+}
+
+message Got {
+  message File {
+    optional bytes data = 1;
+  }
+  message Fetched {
+    uint32 status = 1;
+    repeated Header headers = 2;
+    bytes body = 3;
+    uint64 at = 4;
+  }
+  oneof got {
+    Headers env = 1;
+    File file = 2;
+    bytes exec = 3;
+    Fetched fetch = 4;
+  }
+}
+
+// Names and values: the variables an `env` need got.
+message Headers {
+  repeated Header values = 1;
+}
+
+message Material {
+  message TlsClient {
+    bytes cert = 1;
+    bytes key = 2;
+    optional bytes ca = 3;
+  }
+  message Signed {}
+  bytes bytes = 1;
+  oneof recipe {
+    string bearer = 2;
+    Headers headers = 3;
+    Signed signed = 4;
+    TlsClient tls_client = 5;
+    string proxy = 6;
+  }
+  optional uint64 expires = 7;
+}
+
+message NeedsRequest {}
+
+message NeedsResponse {
+  repeated Need needs = 1;
+}
+
+message StepRequest {
+  repeated Got got = 1;
+}
+
+// A step's outcome, or why there is none: `more` needs, or the material.
+message StepResponse {
+  optional string error = 1;
+  repeated Need more = 2;
+  optional Material material = 3;
+}
+
+message SignRequest {
+  SignerRequest request = 1;
+  Material material = 2;
+  uint64 now = 3;
+}
+
+message SignResponse {
+  optional string error = 1;
+  SignerRequest request = 2;
+}
+
+message RefreshRequest {
+  Material material = 1;
+  uint64 now = 2;
 }

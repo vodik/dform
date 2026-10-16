@@ -130,8 +130,10 @@ interface http {
   // Send `req`. `auth` is applied by the host by its kind: a bearer token
   // or a basic pair as the Authorization header, a client certificate (and
   // its CA) to the TLS session, a kubeconfig as whichever of those its
-  // user has. `via` routes it through a tunnel (`ssh.forward`). A status
-  // the server answered (a 404, a 500) is a response, not an error.
+  // user has, a `signed` one as its provider's signer's material says
+  // (`signer`: each request signed as it is sent). `via` routes it
+  // through a tunnel (`ssh.forward`). A status the server answered (a
+  // 404, a 500) is a response, not an error.
   send: async func(req: request, auth: option<borrow<credential>>, via: option<borrow<tunnel>>) -> result<response, error>;
 }
 
@@ -226,6 +228,116 @@ interface log {
   }
 
   log: func(level: level, message: string);
+}
+
+// A provider's signer: what turns the operator's grant of a `signed`
+// credential into the credential's material, and signs a request with
+// it, for a provider whose API wants its requests signed with a secret
+// (OVH's application keys, AWS's SigV4). It is sans-I/O: it names what it
+// needs (a variable, a file, a command's output, a fetch of one URL), the
+// host performs each, under the operator's grant, and hands it the
+// results; it never reaches the world itself. The host runs it apart from
+// the provider (a component of `world signer-component`, which imports
+// nothing, or a native provider's `Signer` service) and holds the
+// material between its calls: the provider that talks to the network
+// never holds the secret, and the signer cannot reach the network.
+interface signer {
+  // A request to sign, or a fetch to perform.
+  record request {
+    method: string,
+    url: string,
+    headers: list<tuple<string, string>>,
+    body: list<u8>,
+  }
+
+  // A fetch's answer, and the host's time when it came, in seconds since
+  // the epoch (a server's clock is read against it).
+  record response {
+    status: u16,
+    headers: list<tuple<string, string>>,
+    body: list<u8>,
+    at: u64,
+  }
+
+  // What the host performs for the signer, in order.
+  variant need {
+    // These environment variables: the ones set, by name. Only for
+    // `signed:environment`.
+    env(list<string>),
+    // A file's bytes: `~/` its path under the operator's home. For
+    // `signed:NAME`, the operator's file `credentials/signed/NAME` in its
+    // place.
+    file(string),
+    // A command's standard output (argv, never a shell string), run under
+    // the operator's grant.
+    exec(list<string>),
+    // This request, sent as it is to exactly its URL, unauthenticated.
+    fetch(request),
+  }
+
+  // What a need got, in the order of the needs.
+  variant got {
+    env(list<tuple<string, string>>),
+    // None: there is no such file.
+    file(option<list<u8>>),
+    exec(list<u8>),
+    fetch(response),
+  }
+
+  // A client certificate and its key, PEM, and a CA to trust beside the
+  // machine's.
+  record tls-client {
+    cert: list<u8>,
+    key: list<u8>,
+    ca: option<list<u8>>,
+  }
+
+  // How the host applies the material.
+  variant recipe {
+    // `Authorization: Bearer TOKEN`.
+    bearer(string),
+    // These headers, on each request.
+    headers(list<tuple<string, string>>),
+    // Each request signed: `sign`, as the host sends it.
+    signed,
+    // The TLS session's client certificate.
+    tls-client(tls-client),
+    // Each request through this proxy, an `http://` URL.
+    proxy(string),
+  }
+
+  // The credential, as the signer made it: its bytes (the signer's own
+  // encoding, opaque to the host), how the host applies it, and when it
+  // stops working (seconds since the epoch), when it does: the host asks
+  // `refresh` before then.
+  record material {
+    bytes: list<u8>,
+    recipe: recipe,
+    expires: option<u64>,
+  }
+
+  // What a step came to: more to perform, or the material.
+  variant outcome {
+    more(list<need>),
+    material(material),
+  }
+
+  // What the signer needs first.
+  needs: func() -> result<list<need>, string>;
+  // The next step, given what the last needs got.
+  step: func(got: list<got>) -> result<outcome, string>;
+  // `req` signed with `material` at `now`, the host's time in seconds
+  // since the epoch: the request as it is to be sent.
+  sign: func(req: request, material: material, now: u64) -> result<request, string>;
+  // The material renewed before it expires, at `now`.
+  refresh: func(material: material, now: u64) -> result<outcome, string>;
+}
+
+// A signer as a component: it exports `signer` and imports nothing (no
+// WASI, no host interface), so the host links it with nothing and refuses
+// one that imports anything.
+world signer-component {
+  export signer;
 }
 
 // A provider the host runs: it serves `dform:provider/provider` and may

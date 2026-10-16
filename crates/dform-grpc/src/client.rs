@@ -37,6 +37,8 @@ enum Back {
 pub struct Declared {
     pub imports: Vec<String>,
     pub schemes: Vec<String>,
+    /// It serves `Signer` ([`Conn::signer`]).
+    pub signs: bool,
 }
 
 /// A provider's `Io` service (R-155), by where it listens.
@@ -193,6 +195,12 @@ impl Conn {
         })
     }
 
+    /// The provider's signer, which its `Signer` service answers (one
+    /// whose manifest says it `signs`).
+    pub fn signer(&self) -> std::sync::Arc<dyn dform_core::plugin::signer::Signer + Send + Sync> {
+        std::sync::Arc::new(crate::signer::Remote::new(&self.address, &self.program))
+    }
+
     /// What the provider says it uses (its `Manifest` service, R-13b):
     /// `None` when it does not serve one; an error when it does not
     /// answer within the handshake's timeout.
@@ -212,6 +220,7 @@ impl Conn {
                 Declared {
                     imports: r.imports,
                     schemes: r.schemes,
+                    signs: r.signs,
                 }
             })),
             Err(_) => anyhow::bail!(

@@ -17,6 +17,7 @@ members = [
     "crates/dform-s3",
     "crates/dform-lsp",
     "crates/dform-wit",
+    "crates/dform-signer",
     "crates/dform-host",
     "crates/dform-sdk",
     "crates/dform-sdk-derive",

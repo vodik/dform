@@ -110,6 +110,17 @@ pub trait Handler: Send + Sync + 'static {
     async fn read_versioned(&self, location: &str) -> Result<Document, Failure> {
         Err(Error::fatal(format!("{location}: this provider reads no location")).into())
     }
+
+    /// Its signer, when its API wants each request signed with a secret
+    /// (`dform_core::plugin::signer`): run by dform apart from it, which
+    /// holds what the signer makes. Natively it is served beside the
+    /// provider (its manifest says it signs); a wasm provider's is a
+    /// component of its own (`world signer-component`), beside it.
+    fn signer(
+        &self,
+    ) -> Option<std::sync::Arc<dyn dform_core::plugin::signer::Signer + Send + Sync>> {
+        None
+    }
 }
 
 impl<H: backend::Handler + Send + Sync + 'static> Handler for H {
