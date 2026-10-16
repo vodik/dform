@@ -59,29 +59,67 @@ pub fn answer(program: Program, externs: &BTreeSet<String>) -> Result<Program> {
 }
 
 /// The lets with parameters and the rules of each: its own and its
-/// clause's helpers, every rule its demand binds.
+/// clause's helpers, every rule its demand binds, directly or through
+/// another of them (a comprehension's helper reading the keys its rule
+/// binds, `transform::Comprehensions::demanded`).
 struct Lets {
     modes: BTreeMap<String, Span>,
     family: BTreeMap<String, Vec<RuleStmt>>,
+    /// The relations the families' rules define.
+    owned: BTreeSet<String>,
 }
 
 impl Lets {
     fn of(program: &Program, modes: &BTreeMap<String, Span>) -> Lets {
-        let demands: BTreeMap<String, &String> = modes.keys().map(|f| (of(f), f)).collect();
-        let mut family: BTreeMap<String, Vec<RuleStmt>> = BTreeMap::new();
-        for s in &program.statements {
-            let Stmt::Rule(r) = s else { continue };
-            let owner = r.body.iter().find_map(|l| match l {
-                Lit::Pos(a) => demands.get(&a.pred).copied(),
+        // What a rule reads that makes it a let's: the let's demand, or a
+        // relation only that let's rules define (never the let itself,
+        // whose readers are its calls).
+        let mut owner: BTreeMap<String, String> =
+            modes.keys().map(|f| (of(f), f.clone())).collect();
+        let mut rest: Vec<&RuleStmt> = program
+            .statements
+            .iter()
+            .filter_map(|s| match s {
+                Stmt::Rule(r) => Some(r),
                 _ => None,
-            });
-            if let Some(f) = owner {
-                family.entry(f.clone()).or_default().push(r.clone());
+            })
+            .collect();
+        let mut family: BTreeMap<String, Vec<RuleStmt>> = BTreeMap::new();
+        loop {
+            let (taken, other): (Vec<&RuleStmt>, Vec<&RuleStmt>) =
+                rest.into_iter().partition(|r| {
+                    r.body
+                        .iter()
+                        .any(|l| matches!(l, Lit::Pos(a) if owner.contains_key(&a.pred)))
+                });
+            if taken.is_empty() {
+                break;
             }
+            for r in taken {
+                let f = r
+                    .body
+                    .iter()
+                    .find_map(|l| match l {
+                        Lit::Pos(a) => owner.get(&a.pred).cloned(),
+                        _ => None,
+                    })
+                    .expect("partitioned by it");
+                if r.head.pred != f {
+                    owner.insert(r.head.pred.clone(), f.clone());
+                }
+                family.entry(f).or_default().push(r.clone());
+            }
+            rest = other;
         }
+        let owned = family
+            .values()
+            .flatten()
+            .map(|r| r.head.pred.clone())
+            .collect();
         Lets {
             modes: modes.clone(),
             family,
+            owned,
         }
     }
 
@@ -92,10 +130,7 @@ impl Lets {
 
     /// Whether `r` is one of a let's own rules (or a helper of one).
     fn owns(&self, r: &RuleStmt) -> bool {
-        let demands: BTreeSet<String> = self.modes.keys().map(|f| of(f)).collect();
-        r.body
-            .iter()
-            .any(|l| matches!(l, Lit::Pos(a) if demands.contains(&a.pred)))
+        self.owned.contains(&r.head.pred)
     }
 
     /// A read of a data source in a let's rules: an error at the read.

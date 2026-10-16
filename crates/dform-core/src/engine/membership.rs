@@ -2,7 +2,7 @@
 //! (a string, an `inet`, a range) tested, and their negations.
 
 use super::builtins::eval_term;
-use super::errors::{missing_walk, ref_and_string};
+use super::errors::{missing_walk, ref_and_string, unknown_in};
 use super::nulls::Rec;
 use super::unify::unify_term;
 use crate::ast::{Atom, Term};
@@ -49,7 +49,7 @@ fn eval_member2(
         return Ok(());
     }
     let list_v = eval_term(&atom.args[0], state, rec.secrets)
-        .ok_or_else(|| anyhow!("unsafe member: list is not ground"))?;
+        .ok_or_else(|| unknown_in(atom, false, &atom.args[0], rec))?;
     if let Value::Null { .. } = &list_v {
         // Rule 2: member over a null list is a content position.
         rec.stuck(state, nulls_in(&list_v), "member/2 over a null list");
@@ -106,7 +106,7 @@ pub(super) fn eval_not_member2(
     rec: &Rec,
 ) -> Result<bool> {
     let list_v = eval_term(&atom.args[0], state, rec.secrets)
-        .ok_or_else(|| anyhow!("unsafe not member: list is not ground"))?;
+        .ok_or_else(|| unknown_in(atom, true, &atom.args[0], rec))?;
     if let Value::Null { .. } = &list_v {
         rec.stuck(state, nulls_in(&list_v), "not member/2 over a null list");
         return Ok(false);
@@ -118,7 +118,7 @@ pub(super) fn eval_not_member2(
         bail!("member/2 first argument must be a list");
     };
     let item_v = eval_term(&atom.args[1], state, rec.secrets)
-        .ok_or_else(|| anyhow!("unsafe not member: item is not ground"))?;
+        .ok_or_else(|| unknown_in(atom, true, &atom.args[1], rec))?;
     let mut unknown = BTreeSet::new();
     for x in &items {
         if let Some(e) = ref_and_string(&atom.args[1], &item_v, "in", &atom.args[0], x, rec) {
@@ -231,7 +231,7 @@ pub(super) fn eval_not_member3(
         return Ok(true);
     }
     let list_v = eval_term(&atom.args[0], state, rec.secrets)
-        .ok_or_else(|| anyhow!("unsafe not member: list is not ground"))?;
+        .ok_or_else(|| unknown_in(atom, true, &atom.args[0], rec))?;
     let entries = entries(list_v)
         .ok_or_else(|| anyhow!("member/3 first argument must be a list or an object"))?;
     for (k, v) in &entries {
@@ -300,7 +300,7 @@ fn eval_member3(
         return Ok(());
     }
     let list_v = eval_term(&atom.args[0], state, rec.secrets)
-        .ok_or_else(|| anyhow!("unsafe member: list is not ground"))?;
+        .ok_or_else(|| unknown_in(atom, false, &atom.args[0], rec))?;
     if let Value::Null { .. } = &list_v {
         rec.stuck(state, nulls_in(&list_v), "member/3 over a null list");
         return Ok(());

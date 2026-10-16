@@ -1513,3 +1513,30 @@ fn the_operators_are_over_the_types_the_table_lists() {
         }
     }
 }
+
+/// A membership whose collection is not known when it runs is an error
+/// at the membership in the program's words: no "unsafe", no "ground".
+#[test]
+fn a_membership_over_an_unknown_collection_says_what_must_be_known() {
+    use crate::ast::{Lit, Program, RuleStmt, Span, atom, var};
+    let member = atom("member", vec![var("L"), var("Y")], Span::default());
+    let rule = RuleStmt::new(
+        atom("p", vec![var("Y")], Span::default()),
+        vec![Lit::Pos(member)],
+    );
+    let program = Program {
+        statements: vec![Stmt::Rule(rule)],
+        stack: Default::default(),
+        nodes: None,
+    };
+    let e = eval(&program, &[]).unwrap_err();
+    let text = format!("{e:#}");
+    assert!(
+        text.contains("`l` must be known before `y in l` can run"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("ground") && !text.contains("unsafe"),
+        "{text}"
+    );
+}

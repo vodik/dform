@@ -657,6 +657,7 @@ fn rewrite_rule_listcomps(mut r: RuleStmt, counter: &mut usize) -> Result<(Vec<S
         counts_all,
         counter,
         helpers: Vec::new(),
+        around: Vec::new(),
     };
     // Rewrite body first (so binding order stays intuitive).
     r.body = c.lits(&r.body)?;
@@ -680,19 +681,32 @@ fn locate(helpers: &mut [Stmt], span: Span) {
 
 /// A rule's comprehensions as they are lowered ([`rewrite_rule_listcomps`]):
 /// how often each variable occurs in the rule, the run's count of helper
-/// rules, and the helper rules made.
+/// rules, the helper rules made, and the literals around the one being
+/// lowered.
 struct Comprehensions<'c> {
     counts_all: BTreeMap<String, usize>,
     counter: &'c mut usize,
     helpers: Vec<Stmt>,
+    /// What binds a comprehension's keys outside it: the rule's literals
+    /// before the one being lowered (lowered) and those after it that do
+    /// not read what it binds; for the head's, the whole body.
+    around: Vec<Lit>,
 }
 
 impl Comprehensions<'_> {
     fn lits(&mut self, lits: &[Lit]) -> Result<Vec<Lit>> {
         let mut out = Vec::new();
-        for lit in lits {
+        for (i, lit) in lits.iter().enumerate() {
+            if has_listcomp_lits(std::slice::from_ref(lit)) {
+                self.around = out
+                    .iter()
+                    .cloned()
+                    .chain(independent(lit, &lits[i + 1..]))
+                    .collect();
+            }
             out.extend(self.lit(lit.clone())?);
         }
+        self.around = out.clone();
         Ok(out)
     }
 
@@ -777,6 +791,8 @@ impl Comprehensions<'_> {
         let lc_pred = format!("__lc_{counter}");
         let list_var = Term::Var(format!("__lc_val_{counter}"));
         let key_vars = self.keys(&item, &body)?;
+        let body = self.demanded(counter, &key_vars, body);
+        unknown_collection(&body, &key_vars)?;
         let helper_head_args: Vec<Term> = key_vars
             .iter()
             .cloned()
@@ -807,6 +823,36 @@ impl Comprehensions<'_> {
         Ok((list_var, vec![join]))
     }
 
+    /// `body` after the keys it only reads and the rule binds around it
+    /// (`p in ports` of a parameter `ports`, `not { r(x, y) }` of a clause's
+    /// `x`), as `__lc_N_in(k..) :- around`: the helper is grouped by its
+    /// keys, so it must bind them, and it binds them as the rule does.
+    fn demanded(&mut self, counter: usize, keys: &[String], body: Vec<Lit>) -> Vec<Lit> {
+        let own = binds(&body);
+        let around = crate::ast::bound_vars(&self.around);
+        let given: Vec<Term> = keys
+            .iter()
+            .filter(|k| !own.contains(*k) && around.contains(*k))
+            .cloned()
+            .map(Term::Var)
+            .collect();
+        if given.is_empty() {
+            return body;
+        }
+        let demand = Atom {
+            pred: format!("__lc_{counter}_in"),
+            args: given,
+            record: None,
+            span: Default::default(),
+        };
+        self.helpers.push(Stmt::Rule(RuleStmt::helper(
+            Helper::Comprehension,
+            demand.clone(),
+            self.around.clone(),
+        )));
+        std::iter::once(Lit::Pos(demand)).chain(body).collect()
+    }
+
     /// The comprehension `[item | body]`'s keys: the variables it shares
     /// with the rest of the rule, each given its values in `body`.
     fn keys(&self, item: &Term, body: &[Lit]) -> Result<Vec<String>> {
@@ -827,6 +873,120 @@ impl Comprehensions<'_> {
         key_vars.dedup();
         Ok(key_vars)
     }
+}
+
+/// The literals of `after` that do not read what `lit` binds outside its
+/// comprehensions, directly or through another of them.
+fn independent(lit: &Lit, after: &[Lit]) -> Vec<Lit> {
+    let mut read = outer_vars(lit);
+    let mut rest: Vec<&Lit> = after.iter().collect();
+    loop {
+        let (reading, other): (Vec<&Lit>, Vec<&Lit>) = rest
+            .into_iter()
+            .partition(|l| count_vars_in_lit(l).keys().any(|v| read.contains(v)));
+        if reading.is_empty() {
+            return other.into_iter().cloned().collect();
+        }
+        for l in reading {
+            read.extend(count_vars_in_lit(l).into_keys());
+        }
+        rest = other;
+    }
+}
+
+/// The variables of `lit` outside its comprehensions.
+fn outer_vars(lit: &Lit) -> BTreeSet<String> {
+    fn term(t: &Term, out: &mut BTreeSet<String>) {
+        match t {
+            Term::Var(v) => {
+                out.insert(v.clone());
+            }
+            Term::Func { args, .. } | Term::List(args) => args.iter().for_each(|a| term(a, out)),
+            Term::Obj(m) => m.values().for_each(|v| term(v, out)),
+            _ => {}
+        }
+    }
+    let mut out = BTreeSet::new();
+    match lit {
+        Lit::Pos(a) | Lit::Not(a) => a.args.iter().for_each(|t| term(t, &mut out)),
+        Lit::Eq(a, b)
+        | Lit::Neq(a, b)
+        | Lit::Gt(a, b)
+        | Lit::Ge(a, b)
+        | Lit::Lt(a, b)
+        | Lit::Le(a, b) => {
+            term(a, &mut out);
+            term(b, &mut out);
+        }
+    }
+    out
+}
+
+/// The variables a comprehension's body binds itself: a membership reads
+/// its collection, it binds only its pattern.
+fn binds(body: &[Lit]) -> BTreeSet<String> {
+    let patterns: Vec<Lit> = body
+        .iter()
+        .map(|l| match l {
+            Lit::Pos(a) if is_membership(a) => Lit::Pos(Atom {
+                args: a.args[1..].to_vec(),
+                ..a.clone()
+            }),
+            l => l.clone(),
+        })
+        .collect();
+    crate::ast::bound_vars(&patterns)
+}
+
+/// A membership as the program writes it: `p in ports`, `(k, v) in m`.
+fn membership_text(a: &Atom) -> String {
+    let redact = crate::query::Redactor::default();
+    let w = spell::Written::new(&redact);
+    let pattern: Vec<String> = a.args[1..].iter().map(|t| w.term(t)).collect();
+    let pattern = match pattern.as_slice() {
+        [one] => one.clone(),
+        many => format!("({})", many.join(", ")),
+    };
+    format!("{pattern} in {}", w.term(&a.args[0]))
+}
+
+fn is_membership(a: &Atom) -> bool {
+    matches!(a.pred.as_str(), "member" | "enumerate") && a.args.len() >= 2
+}
+
+/// `x in l` in a comprehension's body, `l` bound by nothing its helper
+/// reads: an error at the membership, before the engine meets it. `keys`
+/// are the variables the comprehension shares with its rule.
+fn unknown_collection(body: &[Lit], keys: &[String]) -> Result<()> {
+    let bound = binds(body);
+    for l in body {
+        let Lit::Pos(a) = l else { continue };
+        if !is_membership(a) {
+            continue;
+        }
+        let Some(unknown) = count_vars_in_term(&a.args[0])
+            .into_keys()
+            .find(|v| !bound.contains(v))
+        else {
+            continue;
+        };
+        let name = crate::syntax::resolve::source_name(&unknown);
+        let goal = membership_text(a);
+        let help = match keys.contains(&unknown) {
+            true => format!(
+                "`{name}` is bound only through the comprehension's own value: bind it after \
+                 `where` from what does not read the list"
+            ),
+            false => format!("bind `{name}` after the comprehension's `|`, before `{goal}`"),
+        };
+        let d = Diagnostic::error(
+            a.span,
+            format!("`{name}` must be known before `{goal}` can run"),
+        )
+        .with_help(help);
+        return Err(Diagnostics(vec![d]).into());
+    }
+    Ok(())
 }
 
 fn has_listcomp_rule(r: &RuleStmt) -> bool {

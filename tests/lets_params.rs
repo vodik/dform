@@ -437,3 +437,26 @@ fn hover_and_signature_help_on_a_call() {
     assert_eq!(help["activeParameter"], 1, "{help}");
     c.shutdown();
 }
+
+/// A comprehension over a parameter (the user's lab, 2026-10-16): the
+/// parameter is bound by the call, so `p in ports` runs, at each call
+/// with its own argument, inside another let's call too, and with a
+/// filter; before, the comprehension's rows did not know `ports` and the
+/// evaluation stopped at "unsafe member".
+#[test]
+fn a_comprehension_runs_over_a_parameter() {
+    let src = r#"
+let tcp(ports) = [{ port = p } | p in ports, p > 100]
+let web(ports) = { rules = tcp(ports) }
+r(a, b) where a = tcp([80, 443]), b = web([8080])
+"#;
+    let program = dform_core::parser::parse_file("t.df", src).unwrap_or_else(|e| panic!("{e:#}"));
+    let (r, _) = dform_core::engine::eval(&program, &[]).unwrap_or_else(|e| panic!("{e:#}"));
+    let rows: Vec<String> = r
+        .facts
+        .iter()
+        .filter(|a| a.pred == "r")
+        .map(dform_core::spell::atom)
+        .collect();
+    assert_eq!(rows, ["r([{port = 443}], {rules = [{port = 8080}]})"]);
+}

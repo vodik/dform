@@ -338,13 +338,6 @@ pub(super) fn ref_and_string(
     bv: &Value,
     rec: &Rec,
 ) -> Option<anyhow::Error> {
-    fn shown(t: &Term) -> String {
-        match t {
-            Term::Var(x) => crate::syntax::resolve::source_name(x),
-            Term::List(xs) => format!("[{}]", xs.iter().map(shown).collect::<Vec<_>>().join(", ")),
-            t => spell::term(t),
-        }
-    }
     ref_and_string_written(&shown(a), av, op, &shown(b), bv, rec)
 }
 
@@ -389,6 +382,41 @@ fn ref_and_string_written(
     )
     .with_help(help);
     Some(diag::Diagnostics(vec![d]).into())
+}
+
+/// `x in l` run with `unknown` (`l`, or `x` of a `not in`) not known yet:
+/// an error at the membership, in the program's words. The compiler
+/// orders a clause so what it reads is known first; this is where it
+/// could not.
+pub(super) fn unknown_in(atom: &Atom, negated: bool, unknown: &Term, rec: &Rec) -> anyhow::Error {
+    let pattern: Vec<String> = atom.args[1..].iter().map(shown).collect();
+    let pattern = match pattern.as_slice() {
+        [one] => one.clone(),
+        many => format!("({})", many.join(", ")),
+    };
+    let not = if negated { " not" } else { "" };
+    let goal = format!("{pattern}{not} in {}", shown(&atom.args[0]));
+    let name = shown(unknown);
+    let at = if atom.span.is_none() {
+        rec.head.span
+    } else {
+        atom.span
+    };
+    let d = diag::Diagnostic::error(
+        at,
+        format!("`{name}` must be known before `{goal}` can run"),
+    )
+    .with_help(format!("bind `{name}` after `where`, ahead of `{goal}`"));
+    diag::Diagnostics(vec![d]).into()
+}
+
+/// A term as the program writes it, its variables by the source's names.
+fn shown(t: &Term) -> String {
+    match t {
+        Term::Var(x) => crate::syntax::resolve::source_name(x),
+        Term::List(xs) => format!("[{}]", xs.iter().map(shown).collect::<Vec<_>>().join(", ")),
+        t => spell::term(t),
+    }
 }
 
 /// A call that answered nothing (R-134): `Ok` when the function is
