@@ -391,32 +391,7 @@ fn measure(s: &str, t: &Term) -> Option<Result<Value, String>> {
 /// or cannot be seen until evaluation.
 pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
     if let Some((typ, addr)) = explicit(t).and_then(reference).or_else(|| reference(t)) {
-        let written = explicit(t).is_some();
-        return match ty {
-            Ty::Ref(want) if !Ty::ref_types(want).any(|w| w == typ) => {
-                Some(format!("takes a ref({want}), got {}", shown_ref(typ, addr)))
-            }
-            Ty::Ref(_) | Ty::Any => None,
-            Ty::Secret(_) => match ty {
-                Ty::Secret(inner) => mismatch(inner, t),
-                _ => None,
-            },
-            Ty::List(_) => Some(format!(
-                "is {ty}, not one reference: {} in a list is `[r]`",
-                shown_ref(typ, addr)
-            )),
-            Ty::Scalar(s) if s == "string" && written => None,
-            _ => Some(format!(
-                "is {ty}, not a reference: {} is no {ty}; read one of its attributes \
-                 (`r.name`){}",
-                shown_ref(typ, addr),
-                if matches!(ty, Ty::Scalar(s) if s == "string") {
-                    ", or write `ref(r)` where the API takes its id as text"
-                } else {
-                    ""
-                }
-            )),
-        };
+        return reference_mismatch(ty, t, typ, addr);
     }
     match (ty, t) {
         (Ty::Any, _) => None,
@@ -447,60 +422,89 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
             "is {s}, not the quantity `{}`",
             ambiguous(t).unwrap_or_default()
         )),
-        (Ty::Scalar(s), Term::Val(v)) => {
-            let fits = match (s.as_str(), v) {
-                ("string", Value::Str(_)) => true,
-                ("int", Value::Int(_)) => true,
-                // An int literal in a float position is that float.
-                ("float" | "number", Value::Int(_) | Value::Float(_)) => true,
-                ("bool", Value::Bool(_)) => true,
-                ("inet", Value::IpNet { .. }) => true,
-                ("inet", Value::Str(x)) => crate::value::parse_ipnet(x).is_some(),
-                ("ip", Value::Ip(_)) => true,
-                ("ip", Value::Str(x)) => crate::value::ipv4_to_u32(x).is_some(),
-                // A uri's text is read as one (`read_as`); a regex pattern
-                // stays a string, its text checked.
-                ("uri", Value::Uri(_)) => true,
-                ("uri", Value::Str(x)) => crate::uri::Uri::parse(x).is_ok(),
-                ("oci", Value::Oci(_)) => true,
-                ("oci", Value::Str(x)) => crate::value::OciRef::parse(x).is_ok(),
-                ("semver", v) => crate::value::read_typed(s, v).is_ok(),
-                (s, v) if crate::range::element(s).is_some() => {
-                    crate::value::read_typed(s, v).is_ok()
-                }
-                ("regex", Value::Str(x)) => regex::Regex::new(x).is_ok(),
-                // A null is not known yet; a computed value fits its type.
-                (_, Value::Null { .. }) => true,
-                _ => false,
-            };
-            (!fits).then(|| match (s.as_str(), v) {
-                ("inet", Value::Str(x)) => {
-                    format!("is an inet: {x:?} is not a network (`a.b.c.d/n`)")
-                }
-                ("ip", Value::Str(x)) => format!("is an ip: {x:?} is not an address (`a.b.c.d`)"),
-                ("uri", Value::Str(x)) => {
-                    format!("is a uri: {}", crate::uri::Uri::parse(x).unwrap_err())
-                }
-                ("oci", Value::Str(x)) => {
-                    format!("is an oci: {}", crate::value::parse_oci(x).unwrap_err())
-                }
-                ("semver", Value::Str(_)) => format!(
-                    "is a semver: {}",
-                    crate::value::read_typed(s, v).unwrap_err()
-                ),
-                (s, Value::Str(_) | Value::Range(_)) if crate::range::element(s).is_some() => {
-                    format!("is a {s}: {}", crate::value::read_typed(s, v).unwrap_err())
-                }
-                ("regex", Value::Str(x)) => format!(
-                    "is a regex: {x:?} is not a valid pattern ({})",
-                    regex::Regex::new(x).unwrap_err()
-                ),
-                _ => format!("is {s}, not {}", shown_literal(v)),
-            })
-        }
+        (Ty::Scalar(s), Term::Val(v)) => scalar_mismatch(s, v),
         (Ty::Enum(_), Term::Val(v)) => Some(format!("is {ty}, not {}", shown_literal(v))),
         _ => None,
     }
+}
+
+/// Why the reference `t` (to a `typ` at `addr`, written `ref(r)` or not)
+/// is not a `ty`.
+fn reference_mismatch(ty: &Ty, t: &Term, typ: &str, addr: &Term) -> Option<String> {
+    let written = explicit(t).is_some();
+    match ty {
+        Ty::Ref(want) if !Ty::ref_types(want).any(|w| w == typ) => {
+            Some(format!("takes a ref({want}), got {}", shown_ref(typ, addr)))
+        }
+        Ty::Ref(_) | Ty::Any => None,
+        Ty::Secret(inner) => mismatch(inner, t),
+        Ty::List(_) => Some(format!(
+            "is {ty}, not one reference: {} in a list is `[r]`",
+            shown_ref(typ, addr)
+        )),
+        Ty::Scalar(s) if s == "string" && written => None,
+        _ => Some(format!(
+            "is {ty}, not a reference: {} is no {ty}; read one of its attributes \
+         (`r.name`){}",
+            shown_ref(typ, addr),
+            if matches!(ty, Ty::Scalar(s) if s == "string") {
+                ", or write `ref(r)` where the API takes its id as text"
+            } else {
+                ""
+            }
+        )),
+    }
+}
+
+/// Why the literal `v` is not a `s` (a scalar type), when it is not.
+fn scalar_mismatch(s: &str, v: &Value) -> Option<String> {
+    let fits = match (s, v) {
+        ("string", Value::Str(_)) => true,
+        ("int", Value::Int(_)) => true,
+        // An int literal in a float position is that float.
+        ("float" | "number", Value::Int(_) | Value::Float(_)) => true,
+        ("bool", Value::Bool(_)) => true,
+        ("inet", Value::IpNet { .. }) => true,
+        ("inet", Value::Str(x)) => crate::value::parse_ipnet(x).is_some(),
+        ("ip", Value::Ip(_)) => true,
+        ("ip", Value::Str(x)) => crate::value::ipv4_to_u32(x).is_some(),
+        // A uri's text is read as one (`read_as`); a regex pattern
+        // stays a string, its text checked.
+        ("uri", Value::Uri(_)) => true,
+        ("uri", Value::Str(x)) => crate::uri::Uri::parse(x).is_ok(),
+        ("oci", Value::Oci(_)) => true,
+        ("oci", Value::Str(x)) => crate::value::OciRef::parse(x).is_ok(),
+        ("semver", v) => crate::value::read_typed(s, v).is_ok(),
+        (s, v) if crate::range::element(s).is_some() => crate::value::read_typed(s, v).is_ok(),
+        ("regex", Value::Str(x)) => regex::Regex::new(x).is_ok(),
+        // A null is not known yet; a computed value fits its type.
+        (_, Value::Null { .. }) => true,
+        _ => false,
+    };
+    (!fits).then(|| match (s, v) {
+        ("inet", Value::Str(x)) => {
+            format!("is an inet: {x:?} is not a network (`a.b.c.d/n`)")
+        }
+        ("ip", Value::Str(x)) => format!("is an ip: {x:?} is not an address (`a.b.c.d`)"),
+        ("uri", Value::Str(x)) => {
+            format!("is a uri: {}", crate::uri::Uri::parse(x).unwrap_err())
+        }
+        ("oci", Value::Str(x)) => {
+            format!("is an oci: {}", crate::value::parse_oci(x).unwrap_err())
+        }
+        ("semver", Value::Str(_)) => format!(
+            "is a semver: {}",
+            crate::value::read_typed(s, v).unwrap_err()
+        ),
+        (s, Value::Str(_) | Value::Range(_)) if crate::range::element(s).is_some() => {
+            format!("is a {s}: {}", crate::value::read_typed(s, v).unwrap_err())
+        }
+        ("regex", Value::Str(x)) => format!(
+            "is a regex: {x:?} is not a valid pattern ({})",
+            regex::Regex::new(x).unwrap_err()
+        ),
+        _ => format!("is {s}, not {}", shown_literal(v)),
+    })
 }
 
 /// A declared type (an input's, a module input's) as the check reads it:

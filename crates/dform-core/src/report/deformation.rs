@@ -122,111 +122,10 @@ pub struct Deformation {
 /// hash of its content (`[#k3j2d]`); it prints as `[]` in an update and
 /// by position everywhere else.
 pub(super) fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deformation {
-    let sent = a.sent();
-    let paths = relabel(sent.iter().map(|c| c.path.as_str()));
-    // Whether the schema types the leaf at `path` a reference: an
-    // element of a `set(ref(T))`, or a `ref(T)` field.
-    let is_ref = |path: &str| {
-        let ty = schema
-            .attr(&a.addr.typ, &schema_path(path))
-            .map(|s| s.ty.replace(' ', ""))
-            .unwrap_or_default();
-        ty.starts_with("ref(")
-            || (path.ends_with(']') && (ty.starts_with("set(ref(") || ty.starts_with("list(ref(")))
-    };
-    let leaf = |c: &Change, path: String| {
-        let is_ref = is_ref(&c.path);
-        Line {
-            op: Op::Leaf,
-            path,
-            before: refs.shown(
-                &a.addr,
-                &c.path,
-                is_ref,
-                shown(c.before.as_ref(), c.sensitive, schema, r),
-            ),
-            after: refs.shown(
-                &a.addr,
-                &c.path,
-                is_ref,
-                shown(c.after.as_ref(), c.sensitive, schema, r),
-            ),
-            leaves: vec![],
-            site: None,
-            chain: Vec::new(),
-            value: None,
-            row: None,
-        }
-    };
-    let by_element = matches!(
-        a.kind,
-        ActionKind::Update | ActionKind::Drift | ActionKind::Pending | ActionKind::Replace { .. }
-    );
-    let mut lines = Vec::new();
-    // Element prefix -> (its display path, its changes), in first-seen order.
-    let mut elements: Vec<(String, String, ElementChanges)> = Vec::new();
-    for (c, shown_path) in sent.into_iter().zip(paths) {
-        let Some((list, elem, rest)) = by_element
-            .then(|| element_of(&a.addr.typ, &c.path, schema))
-            .flatten()
-        else {
-            lines.push(leaf(c, shown_path));
-            continue;
-        };
-        let prefix = format!("{list}[{elem}]");
-        let display = if elem.starts_with('#') {
-            format!("{list}[]")
-        } else {
-            prefix.clone()
-        };
-        // The rest of the path as relabeled with every other change's.
-        let rest = match rest.is_empty() {
-            true => rest,
-            false => {
-                let after_elem = shown_path[list.len()..]
-                    .find(']')
-                    .map(|j| list.len() + j + 1);
-                after_elem
-                    .map(|j| shown_path[j..].trim_start_matches('.').to_string())
-                    .unwrap_or(rest)
-            }
-        };
-        match elements.iter_mut().find(|(p, _, _)| *p == prefix) {
-            Some((_, _, cs)) => cs.push((c, rest)),
-            None => elements.push((prefix, display, vec![(c, rest)])),
-        }
-    }
+    let leaves = Leaves { a, schema, r, refs };
+    let (mut lines, elements) = leaves.grouped();
     for (_, display, cs) in elements {
-        let added = cs.iter().all(|(c, _)| c.before.is_none());
-        let removed = cs.iter().all(|(c, _)| c.after.is_none());
-        if !added && !removed {
-            lines.extend(
-                cs.iter()
-                    .map(|(c, rest)| leaf(c, format!("{display}.{rest}"))),
-            );
-            continue;
-        }
-        let op = if added { Op::Add } else { Op::Remove };
-        // A scalar element is its own leaf.
-        if let [(c, rest)] = cs.as_slice()
-            && rest.is_empty()
-        {
-            let l = leaf(c, display);
-            lines.push(Line { op, ..l });
-            continue;
-        }
-        let leaves = cs.iter().map(|(c, rest)| leaf(c, rest.clone())).collect();
-        lines.push(Line {
-            op,
-            path: display,
-            before: Shown::Absent,
-            after: Shown::Absent,
-            leaves,
-            site: None,
-            chain: Vec::new(),
-            value: None,
-            row: None,
-        });
+        lines.extend(leaves.element(display, &cs));
     }
     Deformation {
         kind: a.kind.clone(),
@@ -245,13 +144,150 @@ pub(super) fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs
             .kept()
             .iter()
             .map(|c| Kept {
-                line: leaf(c, c.path.clone()),
+                line: leaves.leaf(c, c.path.clone()),
                 note: c.note.clone(),
             })
             .collect(),
         renamed: a.renamed.clone(),
         reason: a.reason.as_deref().map(|why| r.text(why)),
     }
+}
+
+/// What an action's change lines are printed with.
+struct Leaves<'a> {
+    a: &'a Action,
+    schema: &'a Schema,
+    r: &'a Redactor,
+    refs: &'a Refs<'a>,
+}
+
+impl<'a> Leaves<'a> {
+    /// Whether the schema types the leaf at `path` a reference: an
+    /// element of a `set(ref(T))`, or a `ref(T)` field.
+    fn is_ref(&self, path: &str) -> bool {
+        let ty = self
+            .schema
+            .attr(&self.a.addr.typ, &schema_path(path))
+            .map(|s| s.ty.replace(' ', ""))
+            .unwrap_or_default();
+        ty.starts_with("ref(")
+            || (path.ends_with(']') && (ty.starts_with("set(ref(") || ty.starts_with("list(ref(")))
+    }
+
+    /// Change `c`'s line at `path`, its values as the plan shows them.
+    fn leaf(&self, c: &Change, path: String) -> Line {
+        let is_ref = self.is_ref(&c.path);
+        let (addr, schema, r) = (&self.a.addr, self.schema, self.r);
+        Line {
+            op: Op::Leaf,
+            path,
+            before: self.refs.shown(
+                addr,
+                &c.path,
+                is_ref,
+                shown(c.before.as_ref(), c.sensitive, schema, r),
+            ),
+            after: self.refs.shown(
+                addr,
+                &c.path,
+                is_ref,
+                shown(c.after.as_ref(), c.sensitive, schema, r),
+            ),
+            leaves: vec![],
+            site: None,
+            chain: Vec::new(),
+            value: None,
+            row: None,
+        }
+    }
+
+    /// The action's changes: each its own line, but an update's under an
+    /// element of a keyless set or a keyed list, grouped by that element
+    /// (its prefix, its display path), in first-seen order.
+    fn grouped(&self) -> (Vec<Line>, Vec<(String, String, ElementChanges<'a>)>) {
+        let a = self.a;
+        let sent = a.sent();
+        let paths = relabel(sent.iter().map(|c| c.path.as_str()));
+        let by_element = matches!(
+            a.kind,
+            ActionKind::Update
+                | ActionKind::Drift
+                | ActionKind::Pending
+                | ActionKind::Replace { .. }
+        );
+        let mut lines = Vec::new();
+        let mut elements: Vec<(String, String, ElementChanges)> = Vec::new();
+        for (c, shown_path) in sent.into_iter().zip(paths) {
+            let Some((list, elem, rest)) = by_element
+                .then(|| element_of(&a.addr.typ, &c.path, self.schema))
+                .flatten()
+            else {
+                lines.push(self.leaf(c, shown_path));
+                continue;
+            };
+            let prefix = format!("{list}[{elem}]");
+            let display = if elem.starts_with('#') {
+                format!("{list}[]")
+            } else {
+                prefix.clone()
+            };
+            let rest = relabeled_rest(&shown_path, &list, rest);
+            match elements.iter_mut().find(|(p, _, _)| *p == prefix) {
+                Some((_, _, cs)) => cs.push((c, rest)),
+                None => elements.push((prefix, display, vec![(c, rest)])),
+            }
+        }
+        (lines, elements)
+    }
+
+    /// One element's lines: its leaves where it changed, else one `+`
+    /// or `-` line, a scalar element its own leaf.
+    fn element(&self, display: String, cs: &[(&Change, String)]) -> Vec<Line> {
+        let added = cs.iter().all(|(c, _)| c.before.is_none());
+        let removed = cs.iter().all(|(c, _)| c.after.is_none());
+        if !added && !removed {
+            return cs
+                .iter()
+                .map(|(c, rest)| self.leaf(c, format!("{display}.{rest}")))
+                .collect();
+        }
+        let op = if added { Op::Add } else { Op::Remove };
+        if let [(c, rest)] = cs
+            && rest.is_empty()
+        {
+            let l = self.leaf(c, display);
+            return vec![Line { op, ..l }];
+        }
+        let leaves = cs
+            .iter()
+            .map(|(c, rest)| self.leaf(c, rest.clone()))
+            .collect();
+        vec![Line {
+            op,
+            path: display,
+            before: Shown::Absent,
+            after: Shown::Absent,
+            leaves,
+            site: None,
+            chain: Vec::new(),
+            value: None,
+            row: None,
+        }]
+    }
+}
+
+/// The rest of a path after its element (`list[elem]`) as relabeled with
+/// every other change's (`shown_path`).
+fn relabeled_rest(shown_path: &str, list: &str, rest: String) -> String {
+    if rest.is_empty() {
+        return rest;
+    }
+    let after_elem = shown_path[list.len()..]
+        .find(']')
+        .map(|j| list.len() + j + 1);
+    after_elem
+        .map(|j| shown_path[j..].trim_start_matches('.').to_string())
+        .unwrap_or(rest)
 }
 
 /// The paths of replace `a`'s changes the schema declares `force_new`,
