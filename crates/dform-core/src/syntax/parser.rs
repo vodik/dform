@@ -774,316 +774,380 @@ impl<'a> Parser<'a> {
                     && self.nth_text(1) == "relation"
                     && self.raw(2) == IDENT =>
             {
-                self.bump();
-                let msg = format!(
-                    "expected `:` or `(` after the input's name, found `{}`",
-                    self.nth_text(1)
-                );
-                self.error_here(
-                    msg,
-                    Some(
-                        "`input relation p(cols) from ..` is spelled `decl p(cols)` and `input \
-                         p from ..`"
-                            .to_string(),
-                    ),
-                );
-                Err(Bail)
+                self.input_relation_spelling()
             }
             // `input p(cols) ..`: the columns are the relation's declaration's,
             // written once (R-55).
-            INPUT_KW if self.raw(2) == L_PAREN => {
-                let name = self.nth_text(1).to_string();
-                self.bump();
-                self.bump();
-                let msg = format!(
-                    "expected `:`, `{{`, `from` or the end of the line after the input's name, \
-                     found {}",
-                    self.found()
-                );
-                self.error_here(
-                    msg,
-                    Some(format!(
-                        "a relation is declared once, `decl {name}(a: T, ..)`, and `input {name} \
-                         from ..` gives its rows"
-                    )),
-                );
-                Err(Bail)
-            }
+            INPUT_KW if self.raw(2) == L_PAREN => self.input_columns(),
             // `key k: T`: an input the target gives, which selects the
             // deployment (R-29). It has no relation form and no block.
-            KEY_KW if matches!(self.raw(2), L_PAREN | L_BRACE) => {
-                self.bump();
-                self.bump();
-                let msg = format!("expected `:` after the key's name, found {}", self.found());
-                self.error_here(
-                    msg,
-                    Some(
-                        "a key is a scalar value, `key env: environment`; a relation or an \
-                         object is not a key"
-                            .into(),
-                    ),
-                );
-                Err(Bail)
-            }
+            KEY_KW if matches!(self.raw(2), L_PAREN | L_BRACE) => self.key_not_scalar(),
             // `input NAME { field: T [= d] [check B] .. }`: an object input
             // declared by its fields (R-54).
-            INPUT_KW if self.raw(2) == L_BRACE => self.simple(INPUT, |p| {
-                p.expect_word()?;
-                p.fields(true)
-            }),
+            INPUT_KW if self.raw(2) == L_BRACE => self.simple(INPUT, Self::input_object_rest),
             // `input p from TERM [where B]`: rows of the relation `p`; `input
             // p` alone, in a module, a relation its user gives (R-55).
-            INPUT_KW if self.raw(2) != COLON => self.simple(INPUT_RELATION, |p| {
-                p.expect_word()?;
-                if p.at_contextual("from") {
-                    p.bump();
-                    p.source_term()?;
-                    return p.opt_where_body();
-                }
-                if matches!(p.nth(0), NEWLINE | EOF | R_BRACE) {
-                    return Ok(());
-                }
-                let hint = p.at(EQ).then(|| VERB_RULE_ROWS.to_string());
-                let msg = format!(
-                    "expected `:`, `{{`, `from` or the end of the line after the input's name, \
-                     found {}",
-                    p.found()
-                );
-                p.error_here(msg, hint);
-                Err(Bail)
-            }),
-            INPUT_KW | KEY_KW => self.simple(INPUT, |p| {
-                p.expect_word()?;
-                if !p.at(COLON) {
-                    let hint = p.at(EQ).then(|| VERB_RULE_ROWS.to_string());
-                    let msg = format!("expected `:` after the key's name, found {}", p.found());
-                    p.error_here(msg, hint);
-                    return Err(Bail);
-                }
-                p.bump();
-                p.type_expr()?;
-                if p.at_contextual("from") {
-                    let msg = format!("expected `=` or the end of the line, found {}", p.found());
-                    p.error_here(msg, Some(VERB_RULE_FROM.to_string()));
-                    return Err(Bail);
-                }
-                if p.eat(EQ) {
-                    p.term()?;
-                }
-                // `where` is the clause the input is declared under
-                // (R-104); one that reads the input itself is a check
-                // misspelled, which the resolver says.
-                if !p.at(WHERE_KW) {
-                    p.refinement(false)?;
-                }
-                p.opt_clause()
-            }),
+            INPUT_KW if self.raw(2) != COLON => {
+                self.simple(INPUT_RELATION, Self::input_relation_rest)
+            }
+            INPUT_KW | KEY_KW => self.simple(INPUT, Self::input_rest),
             // `output NAME { field[: T] = t .. }`: an object output by its
             // fields (R-55).
-            OUTPUT_KW if self.raw(2) == L_BRACE => self.simple(OUTPUT_DECL, |p| {
-                p.expect_word()?;
-                p.fields(false)?;
-                p.opt_where_body()
-            }),
-            OUTPUT_KW => self.simple(OUTPUT_DECL, |p| {
-                p.expect_word()?;
-                if p.eat(COLON) {
-                    p.type_expr()?;
-                }
-                if p.eat(EQ) {
-                    p.term()?;
-                }
-                p.opt_where_body()
-            }),
+            OUTPUT_KW if self.raw(2) == L_BRACE => {
+                self.simple(OUTPUT_DECL, Self::output_object_rest)
+            }
+            OUTPUT_KW => self.simple(OUTPUT_DECL, Self::output_rest),
             // `let NAME [: T] = term [@rank] [where B]` (R-74); `let
             // NAME(PARAM, ..) [: T] = term [where B]`, a let with
             // parameters (R-187).
-            LET_KW => self.simple(LET, |p| {
-                p.expect_word()?;
-                if p.at(L_PAREN) {
-                    p.params()?;
-                }
-                if p.eat(COLON) {
-                    p.type_expr()?;
-                }
-                p.expect(EQ)?;
-                p.term()?;
-                p.eat(RANK);
-                p.opt_where_body()
-            }),
+            LET_KW => self.simple(LET, Self::let_rest),
             // `set chain = t`, `set { chain = t .. }` (several under one
             // clause), `set from DOC` (a document's leaves to the inputs at
             // their paths): each `[@rank] [where B]` (R-38).
-            SET_KW => self.simple(SET, |p| {
-                if p.at_contextual("from") && !matches!(p.raw(1), DOT | EQ | PLUS_EQ | L_BRACKET) {
-                    p.bump();
-                    p.source_term()?;
-                    p.eat(RANK);
-                    return p.opt_where_body();
-                }
-                if p.at(L_BRACE) {
-                    p.set_block()?;
-                    p.eat(RANK);
-                    return p.opt_where_body();
-                }
-                if !term_name(p.nth(0)) {
-                    return p.err_expected("what the contribution sets: `r.path`, an input");
-                }
-                p.chain()?;
-                if !(p.eat(EQ) || p.eat(PLUS_EQ)) {
-                    return p.err_expected("`=` or `+=`");
-                }
-                p.term()?;
-                p.eat(RANK);
-                p.opt_where_body()
-            }),
-            EXTERN_KW => self.simple(EXTERN, |p| {
-                p.dotted("an extern name")?;
-                p.expect(L_PAREN)?;
-                p.with_nl(false, |p| {
-                    loop {
-                        p.bind_arg()?;
-                        if !p.eat(COMMA) {
-                            break;
-                        }
-                    }
-                    p.expect(R_PAREN)
-                })?;
-                if p.at_contextual("persist") {
-                    p.bump();
-                }
-                Ok(())
-            }),
+            SET_KW => self.simple(SET, Self::set_rest),
+            EXTERN_KW => self.simple(EXTERN, Self::extern_rest),
             // `type NAME = TYPE`: an alias.
-            TYPE_KW if self.raw(2) == EQ => self.simple(TYPE_ALIAS, |p| {
-                p.expect_word()?;
-                p.expect(EQ)?;
-                // `type T = component { .. }`: a component signature (R-104).
-                if p.at(COMPONENT_KW) {
-                    p.start(SIGNATURE);
-                    p.bump();
-                    p.stmt_block()?;
-                    p.finish();
-                    return Ok(());
-                }
-                p.type_expr()
-            }),
-            TYPE_KW => self.simple(TYPE_DECL, |p| {
-                p.dotted("a type name")?;
-                p.attr_block()
-            }),
-            DECL_KW => self.simple(DECL, |p| {
-                if p.at(TYPE_KW) {
-                    let hint = "an open type is not supported: declare the type's attributes \
-                                with a `type` block"
-                        .to_string();
-                    p.error_here("expected a relation name, found `type`".into(), Some(hint));
-                    return Err(Bail);
-                }
-                p.dotted("a relation name")?;
-                if !p.at(L_PAREN) {
-                    let hint = p.at(SLASH).then(|| {
-                        "a relation is declared by its columns: `decl p(a, b)`".to_string()
-                    });
-                    let msg = format!("expected `(`, found {}", p.found());
-                    p.error_here(msg, hint);
-                    return Err(Bail);
-                }
-                p.columns(true)?;
-                if p.at_contextual("mixed") {
-                    p.bump();
-                }
-                Ok(())
-            }),
+            TYPE_KW if self.raw(2) == EQ => self.simple(TYPE_ALIAS, Self::type_alias_rest),
+            TYPE_KW => self.simple(TYPE_DECL, Self::type_rest),
+            DECL_KW => self.simple(DECL, Self::decl_rest),
             // `component NAME { .. }`: a component declared as an item.
             // `component NAME [: SIGNATURE] { .. }`: a component declared
             // as an item, checked against its signature (R-104).
-            COMPONENT_KW => self.simple(COMPONENT, |p| {
-                p.expect_word()?;
-                if p.eat(COLON) {
-                    p.type_expr()?;
-                }
-                p.stmt_block()
-            }),
+            COMPONENT_KW => self.simple(COMPONENT, Self::component_rest),
             // `use PATH [as NAME] [{ .. }] [where B]` (R-65): a module
             // imported once, or a stack's deployments.
-            USE_KW => self.simple(USE, |p| {
-                p.dotted("a module's path")?;
-                if p.at_contextual("as") {
-                    p.bump();
-                    p.expect_word()?;
-                }
-                p.opt_copy_block()?;
-                p.opt_clause()
-            }),
-            RESOURCE_KW => self.simple(RESOURCE, |p| {
-                if !p.nth(0).is_word() {
-                    return p.err_expected("a resource type");
-                }
-                p.dotted("a resource type")?;
-                if p.nth(0).is_word() || p.at(STRING) {
-                    p.bump();
-                } else {
-                    return p.err_expected("a resource name (a name or a string)");
-                }
-                p.eat(RANK);
-                // `= VALUE`: the body is a value of the type, a document
-                // (R-126).
-                if p.eat(EQ) {
-                    p.term()?;
-                    return p.opt_clause();
-                }
-                // A copy of a component takes the rows of the relations
-                // it takes (R-55, R-113); a provider's type, which the
-                // resolver says, none.
-                p.block_of(true)?;
-                p.opt_clause()
-            }),
+            USE_KW => self.simple(USE, Self::use_rest),
+            RESOURCE_KW => self.simple(RESOURCE, Self::resource_rest),
             // `settings` is gone (R-38): a contribution to an input is `set`.
-            SETTINGS_KW => {
-                let msg = format!("expected a statement, found {}", self.found());
-                self.error_here(
-                    msg,
-                    Some(
-                        "`settings` is gone (R-38): an input is given by `set`, `set db.size = 2 \
-                         where env == \"prod\"`, several under one clause by `set { .. } where ..`, \
-                         a document's leaves by `set from yaml.decode(io.read(..))`"
-                            .to_string(),
-                    ),
-                );
-                Err(Bail)
-            }
-            DENY_KW | WARN_KW => self.simple(CHECK, |p| {
-                p.expect(STRING)?;
-                if p.at(L_BRACE) {
-                    p.with_nl(false, |p| p.object().map(drop))?;
-                }
-                p.opt_where_body()
-            }),
-            _ => {
-                let text = self.nth_text(0);
-                let hint = if k == IDENT
-                    && let Some(h) = old_spelling(text)
-                {
-                    Some(h.to_string())
-                } else if matches!(k, IF_KW | WHERE_KW) {
-                    Some(
-                        "`where` goes after the statement it guards, on its line or on the next, \
-                         indented"
-                            .to_string(),
-                    )
-                } else if term_name(k) && matches!(self.raw(1), EQ | PLUS_EQ) {
-                    Some(format!("a value is `let {text} = t`"))
-                } else if term_name(k) && matches!(self.raw(1), DOT | L_BRACKET) {
-                    Some("a contribution to another block's field is `set r.path = t`".to_string())
-                } else {
-                    self.hint()
-                };
-                let msg = format!("expected a statement, found {}", self.found());
-                self.error_here(msg, hint);
-                Err(Bail)
-            }
+            SETTINGS_KW => self.settings_gone(),
+            DENY_KW | WARN_KW => self.simple(CHECK, Self::check_rest),
+            _ => self.unknown_stmt(k),
         }
+    }
+
+    /// `input relation p(cols) ..`, the old spelling: the error naming the
+    /// new one.
+    fn input_relation_spelling(&mut self) -> P {
+        self.bump();
+        let msg = format!(
+            "expected `:` or `(` after the input's name, found `{}`",
+            self.nth_text(1)
+        );
+        self.error_here(
+            msg,
+            Some(
+                "`input relation p(cols) from ..` is spelled `decl p(cols)` and `input \
+                 p from ..`"
+                    .to_string(),
+            ),
+        );
+        Err(Bail)
+    }
+
+    /// `input p(cols) ..`: the error naming the relation's declaration.
+    fn input_columns(&mut self) -> P {
+        let name = self.nth_text(1).to_string();
+        self.bump();
+        self.bump();
+        let msg = format!(
+            "expected `:`, `{{`, `from` or the end of the line after the input's name, \
+             found {}",
+            self.found()
+        );
+        self.error_here(
+            msg,
+            Some(format!(
+                "a relation is declared once, `decl {name}(a: T, ..)`, and `input {name} \
+                 from ..` gives its rows"
+            )),
+        );
+        Err(Bail)
+    }
+
+    /// `key k(..)` or `key k { .. }`: the error that a key is a scalar.
+    fn key_not_scalar(&mut self) -> P {
+        self.bump();
+        self.bump();
+        let msg = format!("expected `:` after the key's name, found {}", self.found());
+        self.error_here(
+            msg,
+            Some(
+                "a key is a scalar value, `key env: environment`; a relation or an \
+                 object is not a key"
+                    .into(),
+            ),
+        );
+        Err(Bail)
+    }
+
+    fn input_object_rest(p: &mut Self) -> P {
+        p.expect_word()?;
+        p.fields(true)
+    }
+
+    fn input_relation_rest(p: &mut Self) -> P {
+        p.expect_word()?;
+        if p.at_contextual("from") {
+            p.bump();
+            p.source_term()?;
+            return p.opt_where_body();
+        }
+        if matches!(p.nth(0), NEWLINE | EOF | R_BRACE) {
+            return Ok(());
+        }
+        let hint = p.at(EQ).then(|| VERB_RULE_ROWS.to_string());
+        let msg = format!(
+            "expected `:`, `{{`, `from` or the end of the line after the input's name, \
+             found {}",
+            p.found()
+        );
+        p.error_here(msg, hint);
+        Err(Bail)
+    }
+
+    fn output_object_rest(p: &mut Self) -> P {
+        p.expect_word()?;
+        p.fields(false)?;
+        p.opt_where_body()
+    }
+
+    fn type_alias_rest(p: &mut Self) -> P {
+        p.expect_word()?;
+        p.expect(EQ)?;
+        // `type T = component { .. }`: a component signature (R-104).
+        if p.at(COMPONENT_KW) {
+            p.start(SIGNATURE);
+            p.bump();
+            p.stmt_block()?;
+            p.finish();
+            return Ok(());
+        }
+        p.type_expr()
+    }
+
+    /// `settings`, gone (R-38): the error naming `set`.
+    fn settings_gone(&mut self) -> P {
+        let msg = format!("expected a statement, found {}", self.found());
+        self.error_here(
+            msg,
+            Some(
+                "`settings` is gone (R-38): an input is given by `set`, `set db.size = 2 \
+                 where env == \"prod\"`, several under one clause by `set { .. } where ..`, \
+                 a document's leaves by `set from yaml.decode(io.read(..))`"
+                    .to_string(),
+            ),
+        );
+        Err(Bail)
+    }
+
+    /// What is no statement, `k` its first token: the error, with the
+    /// statement meant when it can tell.
+    fn unknown_stmt(&mut self, k: SyntaxKind) -> P {
+        let text = self.nth_text(0);
+        let hint = if k == IDENT
+            && let Some(h) = old_spelling(text)
+        {
+            Some(h.to_string())
+        } else if matches!(k, IF_KW | WHERE_KW) {
+            Some(
+                "`where` goes after the statement it guards, on its line or on the next, \
+                 indented"
+                    .to_string(),
+            )
+        } else if term_name(k) && matches!(self.raw(1), EQ | PLUS_EQ) {
+            Some(format!("a value is `let {text} = t`"))
+        } else if term_name(k) && matches!(self.raw(1), DOT | L_BRACKET) {
+            Some("a contribution to another block's field is `set r.path = t`".to_string())
+        } else {
+            self.hint()
+        };
+        let msg = format!("expected a statement, found {}", self.found());
+        self.error_here(msg, hint);
+        Err(Bail)
+    }
+
+    fn input_rest(p: &mut Self) -> P {
+        p.expect_word()?;
+        if !p.at(COLON) {
+            let hint = p.at(EQ).then(|| VERB_RULE_ROWS.to_string());
+            let msg = format!("expected `:` after the key's name, found {}", p.found());
+            p.error_here(msg, hint);
+            return Err(Bail);
+        }
+        p.bump();
+        p.type_expr()?;
+        if p.at_contextual("from") {
+            let msg = format!("expected `=` or the end of the line, found {}", p.found());
+            p.error_here(msg, Some(VERB_RULE_FROM.to_string()));
+            return Err(Bail);
+        }
+        if p.eat(EQ) {
+            p.term()?;
+        }
+        // `where` is the clause the input is declared under
+        // (R-104); one that reads the input itself is a check
+        // misspelled, which the resolver says.
+        if !p.at(WHERE_KW) {
+            p.refinement(false)?;
+        }
+        p.opt_clause()
+    }
+
+    fn output_rest(p: &mut Self) -> P {
+        p.expect_word()?;
+        if p.eat(COLON) {
+            p.type_expr()?;
+        }
+        if p.eat(EQ) {
+            p.term()?;
+        }
+        p.opt_where_body()
+    }
+
+    /// `let NAME [: T] = term [@rank] [where B]` (R-74); `let
+    /// NAME(PARAM, ..) [: T] = term [where B]`, a let with
+    /// parameters (R-187).
+    fn let_rest(p: &mut Self) -> P {
+        p.expect_word()?;
+        if p.at(L_PAREN) {
+            p.params()?;
+        }
+        if p.eat(COLON) {
+            p.type_expr()?;
+        }
+        p.expect(EQ)?;
+        p.term()?;
+        p.eat(RANK);
+        p.opt_where_body()
+    }
+
+    /// `set chain = t`, `set { chain = t .. }` (several under one
+    /// clause), `set from DOC` (a document's leaves to the inputs at
+    /// their paths): each `[@rank] [where B]` (R-38).
+    fn set_rest(p: &mut Self) -> P {
+        if p.at_contextual("from") && !matches!(p.raw(1), DOT | EQ | PLUS_EQ | L_BRACKET) {
+            p.bump();
+            p.source_term()?;
+            p.eat(RANK);
+            return p.opt_where_body();
+        }
+        if p.at(L_BRACE) {
+            p.set_block()?;
+            p.eat(RANK);
+            return p.opt_where_body();
+        }
+        if !term_name(p.nth(0)) {
+            return p.err_expected("what the contribution sets: `r.path`, an input");
+        }
+        p.chain()?;
+        if !(p.eat(EQ) || p.eat(PLUS_EQ)) {
+            return p.err_expected("`=` or `+=`");
+        }
+        p.term()?;
+        p.eat(RANK);
+        p.opt_where_body()
+    }
+
+    fn extern_rest(p: &mut Self) -> P {
+        p.dotted("an extern name")?;
+        p.expect(L_PAREN)?;
+        p.with_nl(false, |p| {
+            loop {
+                p.bind_arg()?;
+                if !p.eat(COMMA) {
+                    break;
+                }
+            }
+            p.expect(R_PAREN)
+        })?;
+        if p.at_contextual("persist") {
+            p.bump();
+        }
+        Ok(())
+    }
+
+    fn type_rest(p: &mut Self) -> P {
+        p.dotted("a type name")?;
+        p.attr_block()
+    }
+
+    fn decl_rest(p: &mut Self) -> P {
+        if p.at(TYPE_KW) {
+            let hint = "an open type is not supported: declare the type's attributes \
+                        with a `type` block"
+                .to_string();
+            p.error_here("expected a relation name, found `type`".into(), Some(hint));
+            return Err(Bail);
+        }
+        p.dotted("a relation name")?;
+        if !p.at(L_PAREN) {
+            let hint = p
+                .at(SLASH)
+                .then(|| "a relation is declared by its columns: `decl p(a, b)`".to_string());
+            let msg = format!("expected `(`, found {}", p.found());
+            p.error_here(msg, hint);
+            return Err(Bail);
+        }
+        p.columns(true)?;
+        if p.at_contextual("mixed") {
+            p.bump();
+        }
+        Ok(())
+    }
+
+    /// `component NAME { .. }`: a component declared as an item.
+    /// `component NAME [: SIGNATURE] { .. }`: a component declared
+    /// as an item, checked against its signature (R-104).
+    fn component_rest(p: &mut Self) -> P {
+        p.expect_word()?;
+        if p.eat(COLON) {
+            p.type_expr()?;
+        }
+        p.stmt_block()
+    }
+
+    /// `use PATH [as NAME] [{ .. }] [where B]` (R-65): a module
+    /// imported once, or a stack's deployments.
+    fn use_rest(p: &mut Self) -> P {
+        p.dotted("a module's path")?;
+        if p.at_contextual("as") {
+            p.bump();
+            p.expect_word()?;
+        }
+        p.opt_copy_block()?;
+        p.opt_clause()
+    }
+
+    fn resource_rest(p: &mut Self) -> P {
+        if !p.nth(0).is_word() {
+            return p.err_expected("a resource type");
+        }
+        p.dotted("a resource type")?;
+        if p.nth(0).is_word() || p.at(STRING) {
+            p.bump();
+        } else {
+            return p.err_expected("a resource name (a name or a string)");
+        }
+        p.eat(RANK);
+        // `= VALUE`: the body is a value of the type, a document
+        // (R-126).
+        if p.eat(EQ) {
+            p.term()?;
+            return p.opt_clause();
+        }
+        // A copy of a component takes the rows of the relations
+        // it takes (R-55, R-113); a provider's type, which the
+        // resolver says, none.
+        p.block_of(true)?;
+        p.opt_clause()
+    }
+
+    fn check_rest(p: &mut Self) -> P {
+        p.expect(STRING)?;
+        if p.at(L_BRACE) {
+            p.with_nl(false, |p| p.object().map(drop))?;
+        }
+        p.opt_where_body()
     }
 
     /// A statement node of `kind`: its keyword, then `rest`.
