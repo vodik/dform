@@ -1025,6 +1025,15 @@ the network. The rules:
   schema declares (an id, an address), never an opaque blob for itself.
 - A provider that needs none ignores it and reads as it would without.
 
+Plan answers an object's changes leaf by leaf and whether they replace
+it: a change to a path the schema declares `force_new`, which dform
+names itself (`cidr forces replace`), or one the provider cannot make
+in place for a reason of its API (a smaller flavor, a volume that only
+grows, a port's address no call changes). For the second it says why,
+in one line, the answer's `reason`, which the plan prints under the
+change; a provider gives none for a `force_new` path, and dform reads
+none beside no replace.
+
 The mock provider (`crates/dform-mock`) is dform itself: dform starts it as
 `dform __provider fake` (a hidden command), a process of its own over gRPC
 but always of the same build. `DFORM_PROVIDER_FAKE=PATH` names another
@@ -1818,7 +1827,10 @@ usage error.
   "us-test-1"`): its clause's variables, never a value the clause reads
   (`i` of `i in 0..agents`, not the input `agents`); an update's `FILE:LINE` alone; a replace's with the
   attribute that forces it (`storageClassName forces replace`, that
-  attribute first among its lines); a delete's why it is gone (see
+  attribute first among its lines), and under it, where its provider
+  replaces it for a reason of its API, that reason on a line of its own
+  (`replaced: flavor d2-2 is smaller than b2-7; the API resizes an
+  instance only to a larger one`); a delete's why it is gone (see
   above), none on a destroy. A column that does not fit the line falls
   back to the site alone. On an attribute's, where its value was
   written when that is outside its own block. Under a change other than
@@ -1887,7 +1899,7 @@ terminal and `NO_COLOR` is unset; errors on stderr likewise) paints the
 plan in the eight basic colours: `+`, `~`, `±`, `-` with the address
 bold in green, yellow, magenta and red; the site column, `later`'s notes
 and a note printed where a value would be (`(sensitive)`, inside an
-object's value too, and `(bootstrap): kept`) dim; `because` cyan; `held for approval` magenta,
+object's value too, and `(bootstrap): kept`) dim; `because` cyan; `replaced:` and `held for approval` magenta,
 `denied` and conflicts red, `warning` and a rule in `later` yellow; tick
 headers and a copy's header bold. `--json` and the plan file are never
 coloured.
@@ -1905,7 +1917,8 @@ resource rules the tick before decides, each as `later` has one),
 `conflicts`, `moved`, `denied` (`{text, message, address, site}`),
 `held_for_approval` and `apply`, the refusal line or `null`. A change is `{kind,
 address, type, name, changes}` (`address` in full, `T["A"]`, as the
-plan file has it), a replace with `create_first` and `immutable`, a
+plan file has it), a replace with `create_first`, `immutable` and its
+provider's `reason` when it gives one, a delete with its `reason`, a
 deposed delete with `deposed: true`, a held one with `held`; from `line`
 it has its `site` (`{at, statement, entry, with, origin, rank, beat,
 beat_at}`) and
@@ -3576,7 +3589,10 @@ waits on  provider k8s  kubeconfig = kc` for one whose wait a tick of
 the plan makes (a server tick 1 creates), `later  waits on  provider
 k8s  kubeconfig = raw` for one no tick makes (its provider's settings
 read from a host that has not answered, a deployment it reads not
-applied). A resource rule the plan holds as a group is not derived:
+applied). A resource the plan replaces for a reason of its provider's
+ends with that reason, as the plan prints it under the change
+(`replaced: flavor d2-2 is smaller than b2-7; ..`). A resource rule the
+plan holds as a group is not derived:
 why not, then its tick as a lower bound, `tick 2+  waits on
 orders.endpoint` (the tick after what it is stuck on first; what it
 reads then may hold it longer), as its tick's header says `3+
