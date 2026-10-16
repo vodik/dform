@@ -1,6 +1,8 @@
 //! A local HTTP server, for tests of what goes over the network: HTTP/1.1
 //! in the clear, or HTTP/2 over TLS under a test CA ([`CA`]) with a
-//! ceiling on the requests it takes at once. It counts the connections
+//! ceiling on the requests it takes at once, optionally asking each
+//! client for a certificate the test client CA issued
+//! ([`Server::h2_mutual`]). It counts the connections
 //! it accepts and the requests it holds at once, and answers each
 //! request with what [`Server::answer`] says, after [`Server::slow`]'s
 //! delay (over HTTP/2, before it reads the request's body, whose
@@ -19,6 +21,12 @@ use std::time::Duration;
 pub const CA: &str = include_str!("ca.pem");
 const CHAIN: &str = include_str!("server.pem");
 const KEY: &str = include_str!("server.key");
+/// The CA a client's certificate is issued by, which
+/// [`Server::h2_mutual`] trusts.
+const CLIENT_CA: &str = include_str!("client-ca.pem");
+/// A client certificate (`CN=dform-k8s-test`) and its key.
+pub const CLIENT_CHAIN: &str = include_str!("client.pem");
+pub const CLIENT_KEY: &str = include_str!("client.key");
 
 /// A request as the server took it.
 #[derive(Debug, Clone, Default)]
@@ -27,6 +35,8 @@ pub struct Seen {
     pub path: String,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+    /// The certificate the client presented, DER ([`Server::h2_mutual`]).
+    pub peer: Option<Vec<u8>>,
 }
 
 impl Seen {
@@ -123,6 +133,17 @@ impl Server {
     /// HTTP/2 over TLS (ALPN `h2` only), taking at most `streams`
     /// requests at once on a connection.
     pub fn h2(streams: u32) -> Server {
+        Server::https(streams, false)
+    }
+
+    /// HTTP/2 over TLS, as [`Server::h2`], refusing a client that presents
+    /// no certificate the test client CA issued; each request's
+    /// [`Seen::peer`] is the one it presented.
+    pub fn h2_mutual(streams: u32) -> Server {
+        Server::https(streams, true)
+    }
+
+    fn https(streams: u32, mutual: bool) -> Server {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         l.set_nonblocking(true).unwrap();
         let addr = l.local_addr().unwrap();
@@ -133,7 +154,7 @@ impl Server {
                 .enable_all()
                 .build()
                 .unwrap();
-            rt.block_on(serve_h2(l, streams, b));
+            rt.block_on(serve_h2(l, streams, mutual, b));
         });
         Server {
             addr,
@@ -178,6 +199,15 @@ impl Server {
             ca: Some(CA.as_bytes().to_vec()),
             ..Credential::default()
         }
+    }
+
+    /// The DER of [`CLIENT_CHAIN`]'s certificate: what [`Seen::peer`] is
+    /// when the client presented it.
+    pub fn client_der() -> Vec<u8> {
+        use rustls_pki_types::pem::PemObject;
+        rustls_pki_types::CertificateDer::from_pem_slice(CLIENT_CHAIN.as_bytes())
+            .unwrap()
+            .to_vec()
     }
 }
 
@@ -234,27 +264,40 @@ fn serve_http1(s: TcpStream, b: &Behaviour) {
     }
 }
 
-async fn serve_h2(l: TcpListener, streams: u32, b: Arc<Behaviour>) {
+/// The certificates in `pem`.
+fn certs(pem: &str) -> Vec<rustls_pki_types::CertificateDer<'static>> {
+    use rustls_pki_types::pem::PemObject;
+    rustls_pki_types::CertificateDer::pem_slice_iter(pem.as_bytes())
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+async fn serve_h2(l: TcpListener, streams: u32, mutual: bool, b: Arc<Behaviour>) {
     let l = tokio::net::TcpListener::from_std(l).unwrap();
-    let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .unwrap()
-    .with_no_client_auth()
-    .with_single_cert(
-        {
-            use rustls_pki_types::pem::PemObject;
-            rustls_pki_types::CertificateDer::pem_slice_iter(CHAIN.as_bytes())
-                .collect::<Result<_, _>>()
-                .unwrap()
-        },
-        {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let builder = rustls::ServerConfig::builder_with_provider(provider.clone())
+        .with_safe_default_protocol_versions()
+        .unwrap();
+    let builder = match mutual {
+        false => builder.with_no_client_auth(),
+        true => {
+            let mut roots = rustls::RootCertStore::empty();
+            for c in certs(CLIENT_CA) {
+                roots.add(c).unwrap();
+            }
+            let verifier =
+                rustls::server::WebPkiClientVerifier::builder_with_provider(roots.into(), provider)
+                    .build()
+                    .unwrap();
+            builder.with_client_cert_verifier(verifier)
+        }
+    };
+    let mut config = builder
+        .with_single_cert(certs(CHAIN), {
             use rustls_pki_types::pem::PemObject;
             rustls_pki_types::PrivateKeyDer::from_pem_slice(KEY.as_bytes()).unwrap()
-        },
-    )
-    .unwrap();
+        })
+        .unwrap();
     config.alpn_protocols = vec![b"h2".to_vec()];
     let tls = tokio_rustls::TlsAcceptor::from(Arc::new(config));
     loop {
@@ -267,6 +310,12 @@ async fn serve_h2(l: TcpListener, streams: u32, b: Arc<Behaviour>) {
             let Ok(io) = tls.accept(tcp).await else {
                 return;
             };
+            let peer = io
+                .get_ref()
+                .1
+                .peer_certificates()
+                .and_then(|c| c.first())
+                .map(|c| c.to_vec());
             let Ok(mut conn) = h2::server::Builder::new()
                 .max_concurrent_streams(streams)
                 .handshake::<_, Bytes>(io)
@@ -275,7 +324,7 @@ async fn serve_h2(l: TcpListener, streams: u32, b: Arc<Behaviour>) {
                 return;
             };
             while let Some(Ok((req, respond))) = conn.accept().await {
-                tokio::spawn(answer_h2(req, respond, b.clone()));
+                tokio::spawn(answer_h2(req, respond, peer.clone(), b.clone()));
             }
         });
     }
@@ -284,6 +333,7 @@ async fn serve_h2(l: TcpListener, streams: u32, b: Arc<Behaviour>) {
 async fn answer_h2(
     req: http::Request<h2::RecvStream>,
     mut respond: h2::server::SendResponse<Bytes>,
+    peer: Option<Vec<u8>>,
     b: Arc<Behaviour>,
 ) {
     let (head, mut body) = req.into_parts();
@@ -296,6 +346,7 @@ async fn answer_h2(
             .to_string(),
         headers: super::headers(&head.headers),
         body: Vec::new(),
+        peer,
     };
     // The delay before the body is read: the window it holds is spent
     // meanwhile.

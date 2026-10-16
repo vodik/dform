@@ -117,6 +117,60 @@ fn a_held_credential_is_applied_by_the_host() {
     assert_eq!(r.body, b"Bearer t0ken-value");
 }
 
+/// A kubeconfig held for the provider (as its Configure gave it): the
+/// host trusts its CA and presents its client certificate, and every
+/// request is a stream of one HTTP/2 connection; the provider holds a
+/// handle, the server and the namespace, never a key. Without the
+/// credential the server refuses the connection.
+#[test]
+fn a_held_kubeconfig_presents_its_client_certificate() {
+    use base64::Engine;
+    use dform::http::fake::{CA, CLIENT_CHAIN, CLIENT_KEY, Server};
+    let server = Server::h2_mutual(8);
+    let presented = Server::client_der();
+    server.answer(move |s| match s.peer.as_ref() == Some(&presented) {
+        true => (200, Vec::new(), b"the client's".to_vec()),
+        false => (403, Vec::new(), Vec::new()),
+    });
+    let b64 = |s: &str| base64::engine::general_purpose::STANDARD.encode(s);
+    let kubeconfig = format!(
+        "current-context: c\n\
+         contexts: [{{name: c, context: {{cluster: k, user: u, namespace: shop}}}}]\n\
+         clusters: [{{name: k, cluster: {{server: '{}', certificate-authority-data: {}}}}}]\n\
+         users: [{{name: u, user: {{client-certificate-data: {}, client-key-data: {}}}}}]\n",
+        server.url(""),
+        b64(CA),
+        b64(CLIENT_CHAIN),
+        b64(CLIENT_KEY)
+    );
+    let held = |text: &str| {
+        let given = [("kubeconfig".to_string(), Secret::new(text.into()))];
+        hold(Kind::Kubeconfig, "k8s", Given::Settings(given.into()))
+    };
+    // The same cluster, its CA trusted, and no client certificate.
+    let anonymous = held(&kubeconfig.replace("user: {client-certificate-data", "x: {a"));
+    let held = held(&kubeconfig);
+    let (_h, c) = client(Services::new(grants(&[])));
+    let opened = c.open(held.name()).unwrap();
+    assert_eq!(opened.endpoint.as_deref(), Some(server.url("").as_str()));
+    assert_eq!(opened.namespace.as_deref(), Some("shop"));
+    let get = |i: usize| HttpRequest {
+        method: "GET".into(),
+        url: server.url(&format!("/api/v1/namespaces/{i}")),
+        ..HttpRequest::default()
+    };
+    for i in 0..3 {
+        let r = c.send(get(i), Some(opened.handle), None).unwrap();
+        assert_eq!((r.status, r.body.as_slice()), (200, &b"the client's"[..]));
+    }
+    assert_eq!(server.connections(), 1, "one connection for all");
+    let anonymous = c.open(anonymous.name()).unwrap();
+    assert!(
+        c.send(get(3), Some(anonymous.handle), None).is_err(),
+        "no certificate, no TLS"
+    );
+}
+
 /// An SSH client that says the host is not up yet, then fails.
 struct Booting;
 
