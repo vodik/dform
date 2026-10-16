@@ -502,7 +502,7 @@ macro_rules! provider {
             use super::*;
             use $crate::component::bindings::dform::provider::types as t;
 
-            fn make() -> ::std::boxed::Box<dyn $crate::Handler> {
+            fn make() -> ::std::boxed::Box<dyn $crate::Handler + ::std::marker::Send + ::std::marker::Sync> {
                 ::std::boxed::Box::new($make)
             }
 

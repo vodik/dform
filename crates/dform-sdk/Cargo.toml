@@ -23,7 +23,7 @@ dform-core = { path = "../dform-core" }
 dform-wire = { path = "../dform-wire" }
 dform-sdk-derive = { path = "../dform-sdk-derive" }
 # The provider's exports are async (R-130): a task per Apply.
-wit-bindgen = { version = "0.57", features = ["async", "async-spawn"], optional = true }
+wit-bindgen = { version = "0.61", features = ["async", "async-spawn"], optional = true }
 dform-wit = { path = "../dform-wit", default-features = false, optional = true }
 # A component's requests at once (`Http::request_all`): the host's sends
 # joined, each a subtask.

@@ -1,7 +1,14 @@
-//! A provider built as a component (`--target wasm32-wasip2 --features
+//! A provider built as a component (`--target wasm32-wasip3 --features
 //! component`): `dform:host/hosted-provider`'s bindings, its exports
 //! answered by the provider's [`Handler`] and its imports the host's
 //! calls ([`Imports`]).
+//!
+//! What the instance keeps (the handler, its sessions, what it opened) is
+//! in statics, never `thread_local!`s: on wasip3 every call of an export
+//! is a thread of its own (the component model's cooperative threads),
+//! each with its own thread-locals, so a thread-local is the call's. The
+//! threads take turns where one waits on the host, so nothing is held
+//! locked across an import.
 //!
 //! The exports are async (the component model's async ABI, R-130): Apply
 //! answers at once with a stream of events and a future of its result,
@@ -17,9 +24,8 @@ use dform_core::plugin::host::{
     Run, Target,
 };
 use dform_core::plugin::pb;
-use std::cell::{OnceCell, RefCell};
 use std::collections::BTreeMap;
-use std::rc::Rc;
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock};
 
 pub mod bindings {
     wit_bindgen::generate!({
@@ -37,38 +43,41 @@ dform_wit::convert!(conv, crate::component::bindings::dform::provider::types);
 use bindings::dform::host as wh;
 use bindings::dform::provider::types as t;
 
-thread_local! {
-    /// The provider, made at its first call (a component is
-    /// single-threaded).
-    static HANDLER: OnceCell<Box<dyn Handler>> = const { OnceCell::new() };
-    /// Its sessions, as its Configures open them.
-    static SESSIONS: Sessions = Sessions::default();
-    /// The credentials and tunnels it opened, by handle: borrowed only to
-    /// insert or look one up, never across an import.
-    static OPENED: RefCell<Held> = RefCell::default();
+/// What makes the provider: `provider!`'s expression.
+pub type Make = fn() -> Box<dyn Handler + Send + Sync>;
+
+/// The provider, made at its first call.
+static HANDLER: OnceLock<Box<dyn Handler + Send + Sync>> = OnceLock::new();
+/// Its sessions, as its Configures open them.
+static SESSIONS: LazyLock<Sessions> = LazyLock::new(Sessions::default);
+/// The credentials and tunnels it opened, by handle: locked only to
+/// insert or look one up, never across an import.
+static OPENED: Mutex<Held> = Mutex::new(Held {
+    credentials: BTreeMap::new(),
+    tunnels: BTreeMap::new(),
+    next: 0,
+});
+
+fn opened() -> MutexGuard<'static, Held> {
+    // An insert or a lookup: a panic leaves the maps whole.
+    OPENED.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// The provider, made at the first call, in the working directory the
 /// host gives (`wasi:cli/environment`'s initial-cwd, which wasi-libc does
 /// not read: it starts at `/`).
-fn start(make: fn() -> Box<dyn Handler>) -> Box<dyn Handler> {
+fn start(make: Make) -> Box<dyn Handler + Send + Sync> {
     if let Some(cwd) = bindings::wasi::cli::environment::initial_cwd() {
         let _ = std::env::set_current_dir(cwd);
     }
     make()
 }
 
-fn call(
-    make: fn() -> Box<dyn Handler>,
-    c: Call,
-    progress: Progress,
-) -> Result<Reply, t::CallError> {
-    HANDLER.with(|cell| {
-        let handler = cell.get_or_init(|| start(make));
-        SESSIONS
-            .with(|s| s.serve(handler.as_ref(), c, progress))
-            .map_err(|e| conv::to_call_error(&e))
-    })
+fn call(make: Make, c: Call, progress: Progress) -> Result<Reply, t::CallError> {
+    let handler = HANDLER.get_or_init(|| start(make));
+    SESSIONS
+        .serve(handler.as_ref(), c, progress)
+        .map_err(|e| conv::to_call_error(&e))
 }
 
 fn decode<T>(r: Result<T, String>) -> Result<T, t::CallError> {
@@ -81,7 +90,7 @@ fn wrong(r: Reply) -> t::CallError {
 
 macro_rules! export {
     ($($name:ident($req:ty => $from:ident) -> $resp:ty: $variant:ident => $to:expr;)*) => {$(
-        pub async fn $name(make: fn() -> Box<dyn Handler>, r: $req) -> Result<$resp, t::CallError> {
+        pub async fn $name(make: Make, r: $req) -> Result<$resp, t::CallError> {
             let req = decode(conv::$from(&r))?;
             match call(make, req.into(), &dform_core::plugin::backend::silent)? {
                 Reply::$variant(x) => Ok(($to)(&x)),
@@ -111,7 +120,7 @@ pub type Applied = (
 
 /// Apply `r`: the stream and the future at once, the handler in a task
 /// of its own writing them.
-pub async fn apply(make: fn() -> Box<dyn Handler>, r: t::ApplyRequest) -> Applied {
+pub async fn apply(make: Make, r: t::ApplyRequest) -> Applied {
     let (mut events, said_rx) = bindings::wit_stream::new::<t::Event>();
     let (result, result_rx) =
         bindings::wit_future::new::<Result<t::ApplyResponse, t::CallError>>(|| {
@@ -119,7 +128,7 @@ pub async fn apply(make: fn() -> Box<dyn Handler>, r: t::ApplyRequest) -> Applie
                 "the provider dropped its Apply's answer".into(),
             ))
         });
-    wit_bindgen::spawn(async move {
+    wit_bindgen::spawn_local(async move {
         let said = std::sync::Mutex::new(Vec::<pb::Event>::new());
         let progress = |e: pb::Event| said.lock().unwrap_or_else(|e| e.into_inner()).push(e);
         let answer = decode(conv::from_apply_request(&r)).and_then(|req| {
@@ -173,10 +182,9 @@ fn target(t: &Target) -> wh::ssh::Target {
 #[derive(Default)]
 pub struct Imports;
 
-#[derive(Default)]
 struct Held {
-    credentials: BTreeMap<Handle, Rc<wh::types::Credential>>,
-    tunnels: BTreeMap<Handle, (Rc<wh::types::Tunnel>, Endpoint)>,
+    credentials: BTreeMap<Handle, Arc<wh::types::Credential>>,
+    tunnels: BTreeMap<Handle, (Arc<wh::types::Tunnel>, Endpoint)>,
     next: Handle,
 }
 
@@ -194,12 +202,13 @@ async fn sending(
     auth: Option<Handle>,
     via: Option<Handle>,
 ) -> Result<HttpResponse, h::Error> {
-    let (auth, via) = OPENED.with_borrow(|o| {
+    let (auth, via) = {
+        let o = opened();
         (
             auth.and_then(|a| o.credentials.get(&a).cloned()),
             via.and_then(|v| o.tunnels.get(&v)).map(|(t, _)| t.clone()),
         )
-    });
+    };
     let r = wh::http::send(
         wh::http::Request {
             method: req.method,
@@ -239,11 +248,9 @@ impl Calls for Imports {
     fn open(&self, name: &str) -> Result<Opened, h::Error> {
         let c = wh::secrets::open(name).map_err(error)?;
         let (endpoint, namespace) = (c.endpoint(), c.namespace());
-        let handle = OPENED.with_borrow_mut(|o| {
-            let handle = o.handle();
-            o.credentials.insert(handle, Rc::new(c));
-            handle
-        });
+        let mut o = opened();
+        let handle = o.handle();
+        o.credentials.insert(handle, Arc::new(c));
         Ok(Opened {
             handle,
             endpoint,
@@ -300,15 +307,14 @@ impl Calls for Imports {
             },
         )
         .map_err(error)?;
-        Ok(OPENED.with_borrow_mut(|o| {
-            let handle = o.handle();
-            o.tunnels.insert(handle, (Rc::new(t), to.clone()));
-            handle
-        }))
+        let mut o = opened();
+        let handle = o.handle();
+        o.tunnels.insert(handle, (Arc::new(t), to.clone()));
+        Ok(handle)
     }
 
     fn tunnel(&self, h: Handle) -> Option<Endpoint> {
-        OPENED.with_borrow(|o| o.tunnels.get(&h).map(|(_, e)| e.clone()))
+        opened().tunnels.get(&h).map(|(_, e)| e.clone())
     }
 
     fn git_commit(
