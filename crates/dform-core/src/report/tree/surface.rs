@@ -537,9 +537,20 @@ impl Surface<'_, '_> {
     pub(super) fn statement(&mut self, id: &str, bindings: &[(String, Value)], pad: &str) {
         let redact = self.p.redact;
         let Some((place, text, shown)) = self.source_line(id) else {
-            // A rule the compiler wrote: there is no source to show.
-            let text = self.p.circuit.rule_text(id).unwrap_or(id);
-            self.push(format!("{pad}{}", redact.text(text)));
+            // A rule the compiler wrote: there is no source to show, so
+            // what it does, in its words where it has them.
+            let words = id
+                .strip_prefix('r')
+                .and_then(|i| i.parse::<usize>().ok())
+                .and_then(|i| self.rules.get(i))
+                .and_then(super::core_words);
+            match words {
+                Some(w) => self.push(format!("{pad}dform  {w}")),
+                None => {
+                    let text = self.p.circuit.rule_text(id).unwrap_or(id);
+                    self.push(format!("{pad}{}", redact.text(text)));
+                }
+            }
             if !bindings.is_empty() {
                 let b: Vec<String> = bindings
                     .iter()

@@ -41,11 +41,11 @@ net.route_table blue.routes = [{destination = 10.0.0.0/16, target = net.vpc main
   │    └─ net.vpc green.vpc.id = ?net.vpc green.vpc
   │         merged from 1 contribution
   │         └─ ?net.vpc green.vpc
-  │              arg("net.vpc", __A, "id", __null("net.vpc", __A, "id", "fresh", "string"), "normal") :- want("net.vpc", __A), not resolved(__label("net.vpc", __A, "id"))
+  │              dform  a computed attribute is not known until its provider gives it
   │              ├─ net.vpc green.vpc
   │              │    tests/fixtures/tour/stacks/tour.df:218  resource net.vpc vpc { .. }   (resource network green)
   │              │    └─ input green.cidr = 10.2.0.0/16   (see above)
-  │              └─ not resolved("net.vpc/green.vpc#id")   (absent)
+  │              └─ its provider has not given net.vpc green.vpc.id yet
   └─ [{destination = 10.0.0.0/16, target = net.vpc main}]
        tests/fixtures/tour/stacks/tour.df:288  set net.route_table[a].routes = [{ destination = dest, target = net.vpc[w] }] where reaches(a, b), a != b, network_of(b, w), dest = net.vpc[w].cidr
        with a = "blue", dest = "10.0.0.0/16", w = "main", b = "main"
@@ -62,6 +62,6 @@ net.route_table blue.routes = [{destination = 10.0.0.0/16, target = net.vpc main
        └─ net.vpc main.id = ?net.vpc main
             merged from 1 contribution
             └─ ?net.vpc main
-                 arg("net.vpc", __A, "id", __null("net.vpc", __A, "id", "fresh", "string"), "normal") :- want("net.vpc", __A), not resolved(__label("net.vpc", __A, "id"))
+                 dform  a computed attribute is not known until its provider gives it
                  ├─ net.vpc main   tests/fixtures/tour/stacks/tour.df:46
-                 └─ not resolved("net.vpc/main#id")   (absent)
+                 └─ its provider has not given net.vpc main.id yet

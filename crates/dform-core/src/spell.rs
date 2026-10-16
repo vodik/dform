@@ -170,6 +170,17 @@ pub fn internal(a: &Atom, negated: bool, term: &dyn Fn(&Term) -> String) -> Opti
             let writes = if negated { "no" } else { "a" };
             Some(format!("the program writes {writes} lifecycle for {what}"))
         }
+        // The world's answer for a computed attribute (`transform::
+        // computed_prelude`), by the attribute it answers.
+        ("resolved", [Term::Val(Value::Str(l))]) => {
+            let (typ, name, path) = crate::value::null_parts(l)?;
+            let a = crate::address::Address { typ, name };
+            let what = format!("{}.{path}", crate::report::address(&a));
+            Some(match negated {
+                true => format!("its provider has not given {what} yet"),
+                false => format!("its provider gave {what}"),
+            })
+        }
         _ => None,
     }
 }
