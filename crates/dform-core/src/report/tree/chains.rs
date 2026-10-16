@@ -133,63 +133,9 @@ impl Surface<'_, '_> {
         let Some(own) = self.site_of(c, id, depth) else {
             return;
         };
-        let mut value = match fact.pred.as_str() {
-            "arg" | "attr" => fact.args.get(3),
-            _ => None,
-        };
-        let mut rhs = own
-            .entry
-            .as_deref()
-            .map(|e| e.split_once(" = ").map_or(e, |(_, r)| r).to_string());
-        // A call's row is the let's value, as it is written.
-        if rhs.is_none() && is_call(fact) {
-            rhs = let_value(&own.statement);
-        }
-        if let (Some(f), Some(e)) = (focus.filter(|f| !f.keys.is_empty()), rhs.as_deref()) {
-            rhs = field_of(e, &f.keys).or_else(|| shorthand(e, &f.keys));
-        }
-        if let Some(f) = focus.filter(|f| !f.keys.is_empty()) {
-            value = f
-                .keys
-                .iter()
-                .try_fold(value, |v, k| match v {
-                    Some(Value::Obj(m)) => Some(m.get(k)),
-                    _ => None,
-                })
-                .flatten();
-        }
-        // The value is a secret's, or a part of one: its expression says no
-        // literal (R-124 amendment 2).
-        let secret = match (value, fact.pred.as_str(), fact.args.get(3)) {
-            (Some(v), "arg" | "attr", Some(whole)) => {
-                self.p.redact.is_secret(v)
-                    || crate::report::surface_in(
-                        self.p.redact,
-                        whole,
-                        focus.map(|f| f.keys.as_slice()).unwrap_or_default(),
-                        v,
-                    ) == "(sensitive)"
-            }
-            (Some(v), ..) => self.p.redact.is_secret(v),
-            _ => false,
-        };
-        let expr = match (&rhs, value) {
-            (Some(r), _) if secret => crate::report::masked(r),
-            (Some(r), _) => r.clone(),
-            // A plain leaf of a secret object is `(sensitive)` too.
-            (None, Some(v)) => match (fact.pred.as_str(), fact.args.get(3)) {
-                ("arg" | "attr", Some(whole)) => crate::report::surface_in(
-                    self.p.redact,
-                    whole,
-                    focus.map(|f| f.keys.as_slice()).unwrap_or_default(),
-                    v,
-                ),
-                _ => self.p.redact.surface(v),
-            },
-            (None, None) => own.statement.clone(),
-        };
+        let written = self.written_step(fact, &own, focus);
         w.out.push(Step {
-            expr,
+            expr: written.expr,
             at: place(&own),
             with: own.with.clone(),
             rank: rank.map(str::to_string),
@@ -204,22 +150,7 @@ impl Surface<'_, '_> {
         let View::Times { children, .. } = circuit.view(alt) else {
             return;
         };
-        // What the entry reads, when it is a path (`config.region`), and the
-        // cell that passes the value on.
-        let read: Option<Vec<String>> = rhs.as_deref().and_then(|rhs| {
-            let plain = !rhs.is_empty()
-                && !rhs.contains(|c: char| c.is_whitespace() || "()[]{}$,\"".contains(c));
-            plain.then(|| crate::address::path_keys(rhs))
-        });
-        let next = match value {
-            Some(v) => passed_cell(c, circuit, children, v, read.as_deref()),
-            None => None,
-        };
-        // An expression of one cell (`str.lower(cidrs.main)`): that cell's value.
-        let next = next.or_else(|| read_cell(c, circuit, children, rhs.as_deref()?));
-        // A call of a let with parameters (`cidr(1, 2)`): the row its
-        // site's copy answered, made by the let's own rule.
-        let next = next.or_else(|| called(circuit, children));
+        let next = passed_on(c, circuit, children, written.value, written.rhs.as_deref());
         // A stack key ends it: the deployment line says its value.
         let key = |p: NodeId| match circuit.view(p) {
             View::Fact { fact, .. } => {
@@ -238,6 +169,104 @@ impl Surface<'_, '_> {
             self.winner_chain(c, p, focus.as_ref(), depth + 1, w);
         }
     }
+
+    /// What wrote fact `fact` at its site `own`, as a step says it: the
+    /// entry's right-hand side (a call's let's value), the focused part
+    /// of it, masked where it is a secret's, else the value.
+    fn written_step<'f>(&self, fact: &'f Fact, own: &Site, focus: Option<&Focus>) -> Written<'f> {
+        let keys = focus.map(|f| f.keys.as_slice()).unwrap_or_default();
+        let mut value = match fact.pred.as_str() {
+            "arg" | "attr" => fact.args.get(3),
+            _ => None,
+        };
+        let mut rhs = own
+            .entry
+            .as_deref()
+            .map(|e| e.split_once(" = ").map_or(e, |(_, r)| r).to_string());
+        // A call's row is the let's value, as it is written.
+        if rhs.is_none() && is_call(fact) {
+            rhs = let_value(&own.statement);
+        }
+        if let (false, Some(e)) = (keys.is_empty(), rhs.as_deref()) {
+            rhs = field_of(e, keys).or_else(|| shorthand(e, keys));
+        }
+        if !keys.is_empty() {
+            value = keys
+                .iter()
+                .try_fold(value, |v, k| match v {
+                    Some(Value::Obj(m)) => Some(m.get(k)),
+                    _ => None,
+                })
+                .flatten();
+        }
+        let expr = self.step_expr(fact, own, keys, value, rhs.as_deref());
+        Written { expr, value, rhs }
+    }
+
+    /// A step's expression: the right-hand side, masked when the value is
+    /// a secret's or a part of one (R-124 amendment 2); else the value (a
+    /// plain leaf of a secret object `(sensitive)` too), else the
+    /// statement.
+    fn step_expr(
+        &self,
+        fact: &Fact,
+        own: &Site,
+        keys: &[String],
+        value: Option<&Value>,
+        rhs: Option<&str>,
+    ) -> String {
+        let redact = self.p.redact;
+        let whole = match fact.pred.as_str() {
+            "arg" | "attr" => fact.args.get(3),
+            _ => None,
+        };
+        let secret = match (value, whole) {
+            (Some(v), Some(whole)) => {
+                redact.is_secret(v)
+                    || crate::report::surface_in(redact, whole, keys, v) == "(sensitive)"
+            }
+            (Some(v), None) => redact.is_secret(v),
+            _ => false,
+        };
+        match (rhs, value) {
+            (Some(r), _) if secret => crate::report::masked(r),
+            (Some(r), _) => r.to_string(),
+            (None, Some(v)) => match whole {
+                Some(whole) => crate::report::surface_in(redact, whole, keys, v),
+                None => redact.surface(v),
+            },
+            (None, None) => own.statement.clone(),
+        }
+    }
+}
+
+/// What a step of a chain wrote: its expression, its value, and the
+/// right-hand side it reads the next cell by.
+struct Written<'f> {
+    expr: String,
+    value: Option<&'f Value>,
+    rhs: Option<String>,
+}
+
+/// The cell that passed a step's value on among the firing's `children`:
+/// one the right-hand side `rhs` reads, when it is a path (`config.region`)
+/// or an expression of one cell (`str.lower(cidrs.main)`), or the row a
+/// call's site answered; with the keys below it.
+fn passed_on(
+    c: &mut Compress,
+    circuit: &Circuit,
+    children: &[NodeId],
+    value: Option<&Value>,
+    rhs: Option<&str>,
+) -> Option<(NodeId, Vec<String>)> {
+    let read: Option<Vec<String>> = rhs.and_then(|rhs| {
+        let plain = !rhs.is_empty()
+            && !rhs.contains(|c: char| c.is_whitespace() || "()[]{}$,\"".contains(c));
+        plain.then(|| crate::address::path_keys(rhs))
+    });
+    let next = value.and_then(|v| passed_cell(c, circuit, children, v, read.as_deref()));
+    next.or_else(|| read_cell(c, circuit, children, rhs?))
+        .or_else(|| called(circuit, children))
 }
 
 /// The keys of printed path `path` below contribution `fact`'s own path,
