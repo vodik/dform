@@ -10,4 +10,5 @@ pub mod object;
 pub mod openapi;
 pub mod service;
 
+#[cfg(not(target_family = "wasm"))]
 pub use service::serve;

@@ -765,6 +765,8 @@ fn the_k8s_provider_conforms() {
     let r = dform(&s, Some(&kc), &["provider", "check", &k8s()]).success();
     assert!(!r.stdout.contains("FAIL"), "{}", r.stdout);
     for line in [
+        // An SDK provider: it declares the host's interfaces it uses.
+        "host  native: imports: host http, secrets",
         // Checked with what dform.toml grants the provider at that path.
         "host  native: credentials: kubeconfig:environment",
         "ok    Schema serves its own types, with examples",

@@ -18,7 +18,7 @@
 
 use crate::openapi::{self, Kind};
 use dform_core::plugin::backend::health;
-use dform_grpc::pb::{self, HealthState as S};
+use dform_core::plugin::pb::{self, HealthState as S};
 use serde_json::Value as Json;
 
 /// The kinds judged, by group and kind.

@@ -66,12 +66,6 @@ pub const SETTINGS: [Setting; 7] = [
 /// The credential kind of the [`SETTINGS`] that are credentials.
 pub const CREDENTIAL: &str = "kubeconfig";
 
-tokio::task_local! {
-    /// The trace number of the call a handler answers (`dform-call`,
-    /// `dform_grpc::traced`): what the requests it sends are spans under.
-    pub static CALL: Option<u64>;
-}
-
 pub struct Cluster {
     /// The session's kubeconfig, as the host holds it: a handle.
     credential: Credential,
@@ -321,22 +315,19 @@ impl Cluster {
     }
 
     /// Send `req` through the host with the session's credential, in the
-    /// call the handler answers: its own thread, as the host's calls
-    /// block. A status the server answered that is not a success is
-    /// [`Refused::Api`].
-    async fn send(&self, req: Request) -> std::result::Result<Response, Refused> {
-        let within = Within {
+    /// call this thread answers (`Within`: its trace number), paced under
+    /// the session the cluster was configured in. A status the server
+    /// answered that is not a success is [`Refused::Api`].
+    fn send(&self, req: Request) -> std::result::Result<Response, Refused> {
+        let _in = Within {
             session: self.session,
-            call: CALL.try_with(|c| *c).ok().flatten(),
-        };
-        let req = req.auth(&self.credential);
-        let answer = tokio::task::spawn_blocking(move || {
-            let _in = within.enter();
-            host().http.request(req)
-        })
-        .await
-        .map_err(|e| Refused::Transport(anyhow!("the request's thread: {e}")))?
-        .map_err(|e| Refused::Transport(e.into()))?;
+            ..Within::here()
+        }
+        .enter();
+        let answer = host()
+            .http
+            .request(req.auth(&self.credential))
+            .map_err(|e| Refused::Transport(e.into()))?;
         if (200..300).contains(&answer.status) {
             return Ok(answer);
         }
@@ -361,19 +352,18 @@ impl Cluster {
     }
 
     /// `req`'s answer as JSON.
-    async fn json(&self, req: Request) -> std::result::Result<Json, Refused> {
-        let answer = self.send(req).await?;
+    fn json(&self, req: Request) -> std::result::Result<Json, Refused> {
+        let answer = self.send(req)?;
         serde_json::from_slice(&answer.body)
             .map_err(|e| Refused::Transport(anyhow!("the server's answer is not JSON: {e}")))
     }
 
-    async fn get_json(&self, uri: &str, timeout: Option<Duration>) -> Result<Json> {
+    fn get_json(&self, uri: &str, timeout: Option<Duration>) -> Result<Json> {
         let mut req = self.request("GET", uri, "get", "openapi");
         if let Some(t) = timeout {
             req = req.timeout(t);
         }
         self.json(req)
-            .await
             .with_context(|| format!("GET {}{uri}", self.url))
     }
 
@@ -383,7 +373,7 @@ impl Cluster {
     /// document's hash); otherwise the documents are fetched and the cache
     /// rewritten. A cached document is parsed only if it is needed
     /// ([`Document::parse`]): its derived schema may be cached too.
-    pub async fn openapi(&self, cache: Option<&Path>) -> Result<Document> {
+    pub fn openapi(&self, cache: Option<&Path>) -> Result<Document> {
         /// A cache file's index, its document skipped.
         #[derive(serde::Deserialize)]
         struct Head {
@@ -391,7 +381,7 @@ impl Cluster {
             #[allow(dead_code)]
             document: serde::de::IgnoredAny,
         }
-        let index = self.get_json("/openapi/v3", Some(REACH)).await?;
+        let index = self.get_json("/openapi/v3", Some(REACH))?;
         let urls = index
             .get("paths")
             .and_then(Json::as_object)
@@ -413,7 +403,7 @@ impl Cluster {
             let Some(url) = entry.get("serverRelativeURL").and_then(Json::as_str) else {
                 continue;
             };
-            paths.insert(gv.clone(), self.get_json(url, None).await?);
+            paths.insert(gv.clone(), self.get_json(url, None)?);
         }
         let document = json!({ "paths": paths });
         let cached = json!({"server": self.url, "index": index, "document": document});
@@ -432,12 +422,9 @@ impl Cluster {
     }
 
     /// The object, or `None` if there is none.
-    pub async fn get(&self, kind: &Kind, ns: &str, name: &str) -> Result<Option<Json>> {
+    pub fn get(&self, kind: &Kind, ns: &str, name: &str) -> Result<Option<Json>> {
         let path = format!("{}/{name}", kind.collection(ns));
-        match self
-            .json(self.request("GET", &path, "get", &kind.plural))
-            .await
-        {
+        match self.json(self.request("GET", &path, "get", &kind.plural)) {
             Ok(o) => Ok(Some(o)),
             Err(e) if e.is(404) => Ok(None),
             Err(e) => Err(anyhow::Error::new(e).context(format!(
@@ -450,7 +437,7 @@ impl Cluster {
 
     /// The objects of `kind` in every namespace whose labels match
     /// `selector` (all of them without one), [`PAGE`] at a time.
-    pub async fn list(&self, kind: &Kind, selector: Option<&str>) -> Result<Vec<Json>> {
+    pub fn list(&self, kind: &Kind, selector: Option<&str>) -> Result<Vec<Json>> {
         let mut items = Vec::new();
         let mut next: Option<String> = None;
         loop {
@@ -463,7 +450,6 @@ impl Cluster {
             }
             let mut page = self
                 .json(self.request("GET", &path, "list", &kind.plural))
-                .await
                 .with_context(|| format!("LIST {}", kind.kind))?;
             if let Some(Json::Array(more)) = page.get_mut("items").map(Json::take) {
                 items.extend(more);
@@ -481,7 +467,7 @@ impl Cluster {
 
     /// Server-side apply `obj` as `dform`, not forced; `dry_run` persists
     /// nothing. The object as the server has it (or would).
-    pub async fn apply(
+    pub fn apply(
         &self,
         kind: &Kind,
         ns: &str,
@@ -502,19 +488,19 @@ impl Cluster {
             .request("PATCH", &path, "patch", &kind.plural)
             .header("content-type", "application/apply-patch+yaml")
             .body(body);
-        self.json(req).await.map_err(write_error)
+        self.json(req).map_err(write_error)
     }
 
     /// Delete with background propagation (the garbage collector removes
     /// what the object owns). Gone already is not an error.
-    pub async fn delete(&self, kind: &Kind, ns: &str, name: &str) -> Result<()> {
+    pub fn delete(&self, kind: &Kind, ns: &str, name: &str) -> Result<()> {
         let path = format!("{}/{name}", kind.collection(ns));
         let options = json!({"apiVersion": "v1", "kind": "DeleteOptions",
                              "propagationPolicy": "Background"});
         let req = self
             .request("DELETE", &path, "delete", &kind.plural)
             .json(&options);
-        match self.send(req).await {
+        match self.send(req) {
             Ok(_) => Ok(()),
             Err(e) if e.is(404) => Ok(()),
             Err(e) => Err(anyhow::Error::new(e).context(format!(
@@ -527,16 +513,16 @@ impl Cluster {
 
     /// Wait until the object is gone (a finalizer can hold it), polling,
     /// up to `timeout`. Whether it went.
-    pub async fn gone(&self, kind: &Kind, ns: &str, name: &str, timeout: Duration) -> Result<bool> {
+    pub fn gone(&self, kind: &Kind, ns: &str, name: &str, timeout: Duration) -> Result<bool> {
         let start = std::time::Instant::now();
         loop {
-            if self.get(kind, ns, name).await?.is_none() {
+            if self.get(kind, ns, name)?.is_none() {
                 return Ok(true);
             }
             if start.elapsed() >= timeout {
                 return Ok(false);
             }
-            tokio::time::sleep(Duration::from_millis(250)).await;
+            std::thread::sleep(Duration::from_millis(250));
         }
     }
 }
