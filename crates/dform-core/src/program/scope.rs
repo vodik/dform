@@ -164,6 +164,17 @@ impl Scopes {
         self.tree.keys()
     }
 
+    /// The columns of the let with parameters `name` a read in `s` reaches,
+    /// looked up outward.
+    pub fn function_columns(&self, s: ScopeId, name: &str) -> Option<usize> {
+        self.chain(s).into_iter().find_map(|at| {
+            self.names[at].of(name).iter().find_map(|d| match d.kind {
+                DeclKind::LetFn { arity } => Some(arity),
+                _ => None,
+            })
+        })
+    }
+
     /// The module path `s` is the body of, and whether it is a
     /// component's; `None` for any other scope.
     pub fn definition(&self, s: ScopeId) -> Option<(&Name, bool)> {

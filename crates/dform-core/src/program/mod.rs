@@ -14,6 +14,7 @@ use crate::ast::{self, Span, Stmt};
 use crate::diag::Diagnostic;
 use slotmap::SlotMap;
 
+pub mod bind;
 pub mod build;
 pub mod dump;
 pub mod lower;

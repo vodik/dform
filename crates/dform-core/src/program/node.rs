@@ -169,6 +169,78 @@ pub enum ExprKind {
     Type(TypeRef),
 }
 
+impl ExprKind {
+    /// The terms directly under it, in the order written.
+    pub fn children(&self) -> Vec<ExprId> {
+        let mut out = Vec::new();
+        let steps = |path: &[Step], out: &mut Vec<ExprId>| {
+            for s in path {
+                match s {
+                    Step::Index(x) | Step::Key(x) => out.push(*x),
+                    Step::Keyed { key, typ, .. } => out.extend([*key, *typ]),
+                    Step::Field(..) | Step::Each(..) | Step::Len => {}
+                }
+            }
+        };
+        match self {
+            Self::Resource { addr: e, .. }
+            | Self::RefOf(e)
+            | Self::Alias(e)
+            | Self::Neg(e)
+            | Self::Scoped { name: e, .. }
+            | Self::Address { of: e, .. }
+            | Self::Comprehension { item: e, .. }
+            | Self::Aggregate { item: e, .. }
+            | Self::As { value: e, .. } => out.push(*e),
+            Self::Field { base, path } => {
+                out.push(*base);
+                steps(path, &mut out);
+            }
+            Self::Output { copy, of, .. } => {
+                out.push(*copy);
+                out.extend(of.iter().map(|(_, s)| *s));
+            }
+            Self::Deployed { keys, .. } => out.extend(keys.iter().map(|(_, x, _)| *x)),
+            Self::World { addr, path, .. } => {
+                out.push(*addr);
+                steps(path, &mut out);
+            }
+            Self::Lookup { args, path, .. } => {
+                out.extend(args.iter().copied());
+                steps(path, &mut out);
+            }
+            Self::Call { args, .. } => out.extend(args.iter().map(|a| a.value)),
+            Self::Binary { lhs, rhs, .. } => out.extend([*lhs, *rhs]),
+            Self::Range { lo, hi, .. } => out.extend([*lo, *hi]),
+            Self::Interp { parts } => out.extend(parts.iter().filter_map(|p| match p {
+                Piece::Hole(h) => Some(*h),
+                Piece::Text(_) => None,
+            })),
+            Self::Object { parts } => {
+                for p in parts {
+                    match p {
+                        ObjPart::Field { value, .. } => out.push(*value),
+                        ObjPart::Computed { key, value } => out.extend([*key, *value]),
+                        ObjPart::Spread(e) => out.push(*e),
+                    }
+                }
+            }
+            Self::List { parts } => out.extend(parts.iter().map(|p| match p {
+                ListPart::Elem(e) | ListPart::Spread(e) => *e,
+            })),
+            Self::Missing
+            | Self::Hole
+            | Self::Lit(_)
+            | Self::Quantity { .. }
+            | Self::Var(_)
+            | Self::Value { .. }
+            | Self::Setting { .. }
+            | Self::Type(_) => {}
+        }
+        out
+    }
+}
+
 /// One segment of a path, with the span of its name for the language
 /// server's definition and rename.
 #[derive(Debug, Clone)]

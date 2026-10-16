@@ -20,7 +20,7 @@ pub(super) fn arg_texts(n: &SyntaxNode) -> Vec<String> {
 /// `unknown name `NAME``, its help the name in scope it is nearest (a
 /// slip of the pen), else how a name gets a value; `quoted` is the
 /// string it may have meant, a quick fix when `fix`.
-pub(super) fn unknown_name<'a>(
+pub(crate) fn unknown_name<'a>(
     span: Span,
     name: &str,
     quoted: &str,

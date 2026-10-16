@@ -44,12 +44,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod aggregate;
 mod alias;
-mod binding;
 mod chain;
 use chain::{Chain, Op};
 mod columns;
 mod diag;
-use diag::{arg_texts, unknown_name};
+use diag::arg_texts;
+pub(crate) use diag::unknown_name;
 mod each;
 mod function;
 mod give;
@@ -5857,7 +5857,7 @@ impl<'u> Lowerer<'u> {
         );
         let outer = rc.outer.clone();
         let out = self.lits_as_written(rc, lits, seed.clone())?;
-        let order = self.check_order(rc, lits, &outer_names(rc, &outer))?;
+        let order = self.binding_order(rc, &outer_names(rc, &outer))?;
         if order.iter().enumerate().all(|(i, &j)| i == j) {
             return Ok(out);
         }
@@ -5868,6 +5868,27 @@ impl<'u> Lowerer<'u> {
         self.aggs.truncate(aggs);
         let lits: Vec<SyntaxNode> = order.iter().map(|&i| lits[i].clone()).collect();
         self.lits_as_written(rc, &lits, seed)
+    }
+
+    /// The order the clause just built holds in (R-10,
+    /// [`crate::program::bind`]), what is wrong with it said; `outer` the
+    /// source names bound around it.
+    fn binding_order(&mut self, rc: &Rc, outer: &BTreeSet<String>) -> L<Vec<usize>> {
+        let clause = self.gather.as_ref().and_then(|g| g.body());
+        let Some(clause) = clause.filter(|_| !(self.lenient || self.core)) else {
+            let n = clause.map_or(0, |c| self.program.clauses[c].goals.len());
+            return Ok((0..n).collect());
+        };
+        let cx = crate::program::bind::Context {
+            outer,
+            scope: rc.scope,
+        };
+        let bound = crate::program::bind::order(&self.program, clause, &cx);
+        if !bound.diags.is_empty() {
+            self.diags.extend(bound.diags);
+            return Err(Skip);
+        }
+        Ok(bound.order)
     }
 
     fn lits_as_written(

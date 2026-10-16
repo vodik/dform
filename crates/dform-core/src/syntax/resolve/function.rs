@@ -53,13 +53,6 @@ impl Lowerer<'_> {
             .find_map(|s| self.names(s).function(name).map(|n| (s, n.clone())))
     }
 
-    /// How many leading columns of the relation `name` a read in `scope`
-    /// must bind: a let's parameters (R-187).
-    pub(super) fn function_inputs(&self, scope: ScopeId, name: &str) -> Option<usize> {
-        let (_, def) = self.function_def(scope, name)?;
-        Some(params(&def)?.len())
-    }
-
     /// `let f(a, b) [: T] = t [where B]`: the rule `f(A, B, t') :- B,
     /// reads` and its mode, built as a `LetFn` item (R-211 step 5): its
     /// parameters, its value's node, its clause B's goals after the

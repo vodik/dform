@@ -163,6 +163,11 @@ impl Gather {
         }
     }
 
+    /// The clause of the statement's body, once it is lowered whole.
+    pub fn body(&self) -> Option<ClauseId> {
+        self.clause
+    }
+
     /// The clause of the statement's body, built when it was lowered
     /// whole: taken.
     pub fn take_clause(&mut self) -> Option<ClauseId> {
