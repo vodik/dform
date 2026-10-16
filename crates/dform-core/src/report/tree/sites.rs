@@ -7,7 +7,7 @@ use super::chains::{
 };
 use super::compress::Compress;
 use super::printer::{Focus, Printer};
-use super::statement::{Cx, collapse, is_check, statement_at};
+use super::statement::{collapse, is_check, statement_at};
 use super::surface::Surface;
 use crate::address::Address;
 use crate::ast::{Atom, RuleStmt, Term};
@@ -677,14 +677,7 @@ impl Surface<'_, '_> {
         let mut with = Vec::new();
         let mut reads = Vec::new();
         if let Some(shown) = shown {
-            let rule = id
-                .strip_prefix('r')
-                .and_then(|i| i.parse::<usize>().ok())
-                .and_then(|i| self.rules.get(i));
-            let cx = Cx {
-                env: bindings.iter().map(|(k, v)| (k.as_str(), v)).collect(),
-                rule,
-            };
+            let cx = self.evaluating(id, bindings);
             let mut names = BTreeSet::new();
             for name in shown.vars {
                 let var = capitalise(&name);

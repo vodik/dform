@@ -88,7 +88,7 @@ pub(super) fn may_derive_over(
                 };
                 let src = Src::whole(store, body, r.body.len());
                 for row in eval_body(&r.body[..j], &src, &rec)? {
-                    let pat = stuck::as_read(&read_pattern(a, &row.s));
+                    let pat = stuck::as_read(&read_pattern(a, &row.s, rec.secrets));
                     for (read, nulls) in heads.borrow().matching(&pat) {
                         let mut s = row.s.clone();
                         for (t, v) in a.args.iter().zip(&read.args) {
@@ -96,7 +96,8 @@ pub(super) fn may_derive_over(
                                 s.entry(x.clone()).or_insert_with(|| v.clone());
                             }
                         }
-                        let head = stuck::head_pattern(&r.head, &s, eval_term);
+                        let head =
+                            stuck::head_pattern(&r.head, &s, |t, b| eval_term(t, b, rec.secrets));
                         let ground = head.args.iter().all(|t| matches!(t, Term::Val(_)));
                         if ground && store.id(&head).is_some() {
                             continue;

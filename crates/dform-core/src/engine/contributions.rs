@@ -3,7 +3,6 @@
 //! strata that can contribute to it have run; the lattices and refinements it reads.
 
 use super::LATTICE_DECLS;
-use super::builtins::eval_term;
 use super::collapse::collapse_group;
 use super::errors::with_place;
 use super::ops;
@@ -553,7 +552,9 @@ fn contribution(a: &Atom) -> Result<(GroupKey, Rank, Value, ElemOf)> {
         return Ok((group, rank, v.clone(), Some((list.to_string(), k.clone()))));
     }
     let (path, value) = transform::normalize_contribution(typ, path, Term::Val(vals[3].clone()));
-    let value = eval_term(&value, &HashMap::new()).ok_or_else(|| anyhow!("internal: normalize"))?;
+    let value = value
+        .ground()
+        .ok_or_else(|| anyhow!("internal: normalize"))?;
     Ok(((typ.to_string(), vals[1].clone(), path), rank, value, None))
 }
 

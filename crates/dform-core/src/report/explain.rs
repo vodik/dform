@@ -99,6 +99,7 @@ impl Report {
             circuit: &res.circuit,
             redact: r,
             all: false,
+            secrets: &res.secrets,
         };
         let rules = &res.rules;
         let attrs = self.changed_attrs(res);

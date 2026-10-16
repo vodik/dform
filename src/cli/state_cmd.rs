@@ -217,7 +217,12 @@ impl Output {
             );
         }
         if let Some(why) = &run.cx.master.without
-            && crate::secrets::standin::carries(&serde_json::to_value(&v)?)
+            && run
+                .ev
+                .evaluator
+                .secrets()
+                .standins()
+                .carries(&serde_json::to_value(&v)?)
         {
             bail!("output {name} of stack {deployment}: revealing it needs its master ({why})");
         }

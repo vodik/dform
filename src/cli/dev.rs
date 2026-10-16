@@ -145,7 +145,8 @@ impl Graph {
             None => print!("{}", graph::resources(&compiled.resources)),
             Some(spec) => {
                 let res = &run.ev.res;
-                let redact = query::Redactor::new(&res.facts, run.ev.schema());
+                let redact =
+                    query::Redactor::new(&res.facts, run.ev.schema(), run.ev.evaluator.secrets());
                 print!("{}", graph::relation(spec, &res.facts, &redact)?);
             }
         }

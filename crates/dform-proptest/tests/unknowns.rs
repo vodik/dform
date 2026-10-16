@@ -745,6 +745,7 @@ fn plan(program: &dform_core::ast::Program, world: &Path, state: &State) -> Resu
         denies: &[],
         kept: &Default::default(),
         outside: &Default::default(),
+        secrets: &Default::default(),
     });
     Ok(Planned {
         res,

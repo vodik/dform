@@ -56,10 +56,10 @@ pub fn why_not(pattern: &str, res: &EvalResult, redact: &Redactor) -> Result<Str
             _ => bail!(super::expected(pattern)),
         },
     };
-    let atom = evaluated(atom);
+    let atom = evaluated(atom, &res.secrets);
     let mut w = WhyNot::new(res, redact);
     let name = w.name(&atom);
-    if !engine::query(&[Lit::Pos(atom.clone())], &res.facts)?.is_empty() {
+    if !engine::query(&[Lit::Pos(atom.clone())], &res.facts, &res.secrets)?.is_empty() {
         return Ok(redact.text(&format!("{name}: it is derived\n")));
     }
     // An attribute of a resource the program does not want: the resource.
@@ -72,7 +72,7 @@ pub fn why_not(pattern: &str, res: &EvalResult, redact: &Redactor) -> Result<Str
             record: None,
             span: Default::default(),
         };
-        if engine::query(&[Lit::Pos(want.clone())], &res.facts)?.is_empty() {
+        if engine::query(&[Lit::Pos(want.clone())], &res.facts, &res.secrets)?.is_empty() {
             let line = format!("{name}: {} is not derived\n", w.name(&want));
             w.out.push_str(&line);
             w.explain(&want, "", 0)?;
@@ -98,22 +98,25 @@ pub fn waiting(
     }
 }
 
-/// `atom` with each call in its columns that needs no row evaluated: a
-/// reference the pattern names (`net.vpc["main"]`, read as
-/// `__ref("net.vpc", "main", "")`) as the value the rows hold, so a head
-/// binds it and a row prints it as its address.
-fn evaluated(mut atom: Atom) -> Atom {
-    fn value(t: &Term) -> Option<Value> {
+/// `atom` with each call in its columns that needs no row evaluated, in
+/// the run `secrets`: a reference the pattern names (`net.vpc["main"]`,
+/// read as `__ref("net.vpc", "main", "")`) as the value the rows hold, so
+/// a head binds it and a row prints it as its address.
+fn evaluated(mut atom: Atom, secrets: &crate::secrets::Run) -> Atom {
+    fn value(t: &Term, secrets: &crate::secrets::Run) -> Option<Value> {
         match t {
             Term::Func { name, args } => {
-                let args = args.iter().map(value).collect::<Option<Vec<_>>>()?;
-                crate::functions::body(name)?(&args)
+                let args = args
+                    .iter()
+                    .map(|a| value(a, secrets))
+                    .collect::<Option<Vec<_>>>()?;
+                crate::functions::apply(name, secrets, &args)
             }
             t => t.ground(),
         }
     }
     for t in atom.args.iter_mut() {
-        if let (Term::Func { .. }, Some(v)) = (&*t, value(t)) {
+        if let (Term::Func { .. }, Some(v)) = (&*t, value(t, secrets)) {
             *t = Term::Val(v);
         }
     }
@@ -177,7 +180,7 @@ pub fn gone(
         let further = |a: &Attempt| a.failed.unwrap_or(usize::MAX);
         let Some(a) = unify_head(&rule.head, &want, &rule.body)
             .into_iter()
-            .map(|seed| attempt(rule, seed, &res.facts))
+            .map(|seed| attempt(rule, seed, res))
             .max_by_key(further)
         else {
             continue;
@@ -281,6 +284,7 @@ impl<'a> WhyNot<'a> {
                 circuit: &res.circuit,
                 redact,
                 all: false,
+                secrets: &res.secrets,
             },
             seen: BTreeSet::new(),
             out: String::new(),
@@ -365,7 +369,7 @@ impl<'a> WhyNot<'a> {
         if !self.seen.insert(format!("{id} {}", spell::atom(atom))) {
             return Ok(());
         }
-        let Some(a) = furthest(rule, seeds, &self.res.facts) else {
+        let Some(a) = furthest(rule, seeds, self.res) else {
             return Ok(());
         };
         let site = self.site(&id, rule, &a);
@@ -484,7 +488,7 @@ impl<'a> WhyNot<'a> {
     /// program would, with where it is written; one of dform's own said
     /// in words, by the program's rows it was derived from.
     fn row_exists(&mut self, b: &Atom, bound: &Lit, inner: &str) -> Result<()> {
-        let held = engine::query(&[Lit::Pos(b.clone())], &self.res.facts)?;
+        let held = engine::query(&[Lit::Pos(b.clone())], &self.res.facts, &self.res.secrets)?;
         let rows = held
             .first()
             .and_then(|(_, used)| used.first())
@@ -1024,12 +1028,13 @@ fn splits(s: &str, pieces: &[&str]) -> Vec<Vec<String>> {
     out
 }
 
-/// Of `rule`'s attempts from each of `seeds`, the one that got furthest.
-fn furthest(rule: &RuleStmt, seeds: Vec<Env>, facts: &BTreeSet<Atom>) -> Option<Attempt> {
+/// Of `rule`'s attempts over the evaluation `res` from each of `seeds`,
+/// the one that got furthest.
+fn furthest(rule: &RuleStmt, seeds: Vec<Env>, res: &EvalResult) -> Option<Attempt> {
     let further = |a: &Attempt| a.failed.unwrap_or(usize::MAX);
     let mut best: Option<Attempt> = None;
     for seed in seeds {
-        let a = attempt(rule, seed, facts);
+        let a = attempt(rule, seed, res);
         if best.as_ref().is_none_or(|b| further(&a) > further(b)) {
             best = Some(a);
         }
@@ -1037,13 +1042,14 @@ fn furthest(rule: &RuleStmt, seeds: Vec<Env>, facts: &BTreeSet<Atom>) -> Option<
     best
 }
 
-/// Evaluate `rule`'s body with `seed` bound, literal by literal: the
-/// first prefix no row satisfies.
-fn attempt(rule: &RuleStmt, seed: Env, facts: &BTreeSet<Atom>) -> Attempt {
+/// Evaluate `rule`'s body with `seed` bound over the evaluation `res`,
+/// literal by literal: the first prefix no row satisfies.
+fn attempt(rule: &RuleStmt, seed: Env, res: &EvalResult) -> Attempt {
+    let facts = &res.facts;
     let body: Vec<Lit> = rule.body.iter().map(|l| l.subst(&seed)).collect();
     let mut known = seed.clone();
     for k in 0..body.len() {
-        let answers = match engine::query(&body[..=k], facts) {
+        let answers = match engine::query(&body[..=k], facts, &res.secrets) {
             Ok(a) => a,
             // A literal the engine cannot evaluate this early: the next
             // prefix says.

@@ -148,19 +148,27 @@ pub(super) fn at_suffix(span: Span) -> String {
 /// function's none) reaching a cell, named with the attribute it was to
 /// give; or a variable nothing bound, which the compiler must not let
 /// through.
-pub(super) fn head_error(head: &Atom, state: &HashMap<String, Value>) -> Option<String> {
+pub(super) fn head_error(
+    head: &Atom,
+    state: &HashMap<String, Value>,
+    secrets: &crate::secrets::Run,
+) -> Option<String> {
     let at = crate::diag::place(head.span).unwrap_or_else(|| head.pred.clone());
-    let what = head_cell(head, state).unwrap_or_else(|| format!("`{}`", head.pred));
+    let what = head_cell(head, state, secrets).unwrap_or_else(|| format!("`{}`", head.pred));
     head.args
         .iter()
-        .find_map(|t| NoValue::of(t, state))
+        .find_map(|t| NoValue::of(t, state, secrets))
         .map(|n| n.said(&at, &what))
 }
 
 /// The cell a head gives, as a message names it: an input's or an
 /// output's by its key, an attribute by its address and path.
-fn head_cell(head: &Atom, state: &HashMap<String, Value>) -> Option<String> {
-    let s = |t: &Term| match eval_term(t, state) {
+fn head_cell(
+    head: &Atom,
+    state: &HashMap<String, Value>,
+    secrets: &crate::secrets::Run,
+) -> Option<String> {
+    let s = |t: &Term| match eval_term(t, state, secrets) {
         Some(Value::Str(s)) => Some(s),
         _ => None,
     };
@@ -190,32 +198,46 @@ enum NoValue {
 impl NoValue {
     /// Why `t` has no value under `state`, the innermost reason first;
     /// `None` when it has one.
-    fn of(t: &Term, state: &HashMap<String, Value>) -> Option<NoValue> {
-        if eval_term(t, state).is_some() {
+    fn of(
+        t: &Term,
+        state: &HashMap<String, Value>,
+        secrets: &crate::secrets::Run,
+    ) -> Option<NoValue> {
+        if eval_term(t, state, secrets).is_some() {
             return None;
         }
         match t {
             Term::Var(v) => Some(NoValue::Unbound(v.clone())),
-            Term::Func { name, args } => match args.iter().find_map(|a| NoValue::of(a, state)) {
-                Some(inner) => Some(inner),
-                None if name == crate::types::AS => {
-                    let v = eval_term(&args[0], state)?;
-                    let ty = eval_term(&args[1], state)?.as_str()?.to_string();
-                    let why = crate::value::read_typed(&ty, &v).err()?;
-                    Some(NoValue::Typed(ty, why))
+            Term::Func { name, args } => {
+                match args.iter().find_map(|a| NoValue::of(a, state, secrets)) {
+                    Some(inner) => Some(inner),
+                    None if name == crate::types::AS => {
+                        let v = eval_term(&args[0], state, secrets)?;
+                        let ty = eval_term(&args[1], state, secrets)?.as_str()?.to_string();
+                        let why = crate::value::read_typed(&ty, &v).err()?;
+                        Some(NoValue::Typed(ty, why))
+                    }
+                    None => Some(NoValue::call(name, args, state, secrets)),
                 }
-                None => Some(NoValue::call(name, args, state)),
-            },
-            Term::List(xs) => xs.iter().find_map(|x| NoValue::of(x, state)),
-            Term::Obj(m) => m.values().find_map(|x| NoValue::of(x, state)),
+            }
+            Term::List(xs) => xs.iter().find_map(|x| NoValue::of(x, state, secrets)),
+            Term::Obj(m) => m.values().find_map(|x| NoValue::of(x, state, secrets)),
             _ => None,
         }
     }
 
     /// The call `name(args)` that answered nothing: a spread's part that
     /// is not what it takes, else the call as its values show it.
-    fn call(name: &str, args: &[Term], state: &HashMap<String, Value>) -> NoValue {
-        let vals: Vec<Value> = args.iter().filter_map(|a| eval_term(a, state)).collect();
+    fn call(
+        name: &str,
+        args: &[Term],
+        state: &HashMap<String, Value>,
+        secrets: &crate::secrets::Run,
+    ) -> NoValue {
+        let vals: Vec<Value> = args
+            .iter()
+            .filter_map(|a| eval_term(a, state, secrets))
+            .collect();
         if let Some(why) = spread_error(name, &vals) {
             return NoValue::Spread(why);
         }
@@ -499,7 +521,7 @@ pub(super) fn side_unanswered(
     if let Err(e) = not_an_object(t, state, rec) {
         return Some(Err(e));
     }
-    let (name, args) = failed_builtin(t, state)?;
+    let (name, args) = failed_builtin(t, state, rec.secrets)?;
     Some(unanswered(&name, &args, rec))
 }
 
@@ -508,7 +530,7 @@ pub(super) fn side_unanswered(
 /// that reaches a value with no fields is an error ([`not_an_object`]).
 pub(super) fn missing_walk(t: &Term, state: &HashMap<String, Value>, rec: &Rec) -> Result<bool> {
     not_an_object(t, state, rec)?;
-    Ok(failed_builtin(t, state).is_some_and(|(name, _)| name == "__path"))
+    Ok(failed_builtin(t, state, rec.secrets).is_some_and(|(name, _)| name == "__path"))
 }
 
 /// A field read of a value that is not an object (R-185: `w.spec` with
@@ -525,8 +547,10 @@ pub(super) fn not_an_object(t: &Term, state: &HashMap<String, Value>, rec: &Rec)
     let ([whole, path], "__path") = (args.as_slice(), name.as_str()) else {
         return Ok(());
     };
-    let (Some(v), Some(Value::Str(path))) = (eval_term(whole, state), eval_term(path, state))
-    else {
+    let (Some(v), Some(Value::Str(path))) = (
+        eval_term(whole, state, rec.secrets),
+        eval_term(path, state, rec.secrets),
+    ) else {
         return Ok(());
     };
     let Some((walked, at)) = crate::functions::not_an_object(&v, &path) else {
@@ -587,16 +611,17 @@ pub(super) fn not_an_object(t: &Term, state: &HashMap<String, Value>, rec: &Rec)
 pub(super) fn failed_builtin(
     t: &Term,
     state: &HashMap<String, Value>,
+    secrets: &crate::secrets::Run,
 ) -> Option<(String, Vec<Value>)> {
     let Term::Func { name, args } = t else {
         return None;
     };
-    if let Some(inner) = args.iter().find_map(|a| failed_builtin(a, state)) {
+    if let Some(inner) = args.iter().find_map(|a| failed_builtin(a, state, secrets)) {
         return Some(inner);
     }
-    let vals: Option<Vec<Value>> = args.iter().map(|a| eval_term(a, state)).collect();
+    let vals: Option<Vec<Value>> = args.iter().map(|a| eval_term(a, state, secrets)).collect();
     let vals = vals?;
-    eval_func(name, args, state)
+    eval_func(name, args, state, secrets)
         .is_none()
         .then(|| (name.clone(), vals))
 }

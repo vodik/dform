@@ -25,7 +25,6 @@
 use super::Key;
 use anyhow::{Context, Result, anyhow, bail};
 use std::collections::BTreeMap;
-use std::sync::Mutex;
 
 /// The metadata's key in the document.
 pub const META: &str = "sops";
@@ -395,9 +394,14 @@ impl File {
     }
 
     /// The rows of the file `f` read at `shown` (`set from
-    /// secrets.decode(..)`): each value's line, dotted path and value; in a
-    /// run without the master, each value's stand-in.
-    pub fn rows(&self, shown: &str) -> Result<Vec<(Option<usize>, String, crate::value::Value)>> {
+    /// secrets.decode(..)`) in the run `run`: each value's line, dotted
+    /// path and value; in a run without the master, each value's
+    /// stand-in, registered.
+    pub fn rows(
+        &self,
+        shown: &str,
+        run: &crate::secrets::Run,
+    ) -> Result<Vec<(Option<usize>, String, crate::value::Value)>> {
         let f = self;
         use crate::value::Value;
         let at = |l: &Leaf| match l.line {
@@ -414,16 +418,16 @@ impl File {
             }
         }
         let mut out = Vec::new();
-        if crate::secrets::standin::active() {
+        if run.standins().active() {
             // No master: each value by its stand-in, as any secret it derives.
             for l in &f.leaves {
                 let name = l.name();
                 let s = l.standin(f, shown);
-                crate::secrets::standin::register(&s, &label(shown, &name), &s);
+                run.standins_mut().register(&s, &label(shown, &name), &s);
                 out.push((l.line, name, Value::Str(s)));
             }
         } else {
-            let ids = identities()?;
+            let ids = run.given().identities()?;
             let Some(key) = f.data_key(&ids)? else {
                 bail!("{shown}: {}", f.why_not(&ids, &|r| super::short_key(r)));
             };
@@ -431,7 +435,7 @@ impl File {
                 let name = l.name();
                 if let Plain::Str(v) = &p {
                     let s = l.standin(f, shown);
-                    crate::secrets::standin::register(v, &label(shown, &name), &s);
+                    run.standins_mut().register(v, &label(shown, &name), &s);
                 }
                 out.push((l.line, name, (&p).into()));
             }
@@ -878,13 +882,6 @@ pub fn standin(shown: &str, path: &str, generation: u32, sealed: &str) -> String
     format!("given-{hex}")
 }
 
-/// The run's key for given secrets: its master's digest key, when it holds
-/// it; set before each evaluation.
-static KEY: Mutex<Option<Key>> = Mutex::new(None);
-
-/// The files of given secrets the last evaluation read.
-static READ: Mutex<Vec<Read>> = Mutex::new(Vec::new());
-
 /// A file of given secrets a run read.
 #[derive(Debug, Clone)]
 pub struct Read {
@@ -897,55 +894,46 @@ pub struct Read {
     pub file: Option<File>,
 }
 
-/// What one deployment's run set here, taken while another's runs in the
-/// same process (a tree's apply, `secrets::Scope`).
-pub struct Saved(Option<Key>, Vec<Read>);
-
-/// What the run set, taken: as no deployment's run has set it.
-pub fn save() -> Saved {
-    let key = KEY.lock().unwrap_or_else(|e| e.into_inner()).take();
-    let read = std::mem::take(&mut *READ.lock().unwrap_or_else(|e| e.into_inner()));
-    Saved(key, read)
+/// A run's given secrets ([`crate::secrets::Run::given`]): its key and the
+/// files its last evaluation read.
+#[derive(Default)]
+pub struct Opened {
+    /// The master's digest key (`custody::Master::digest`), when the run
+    /// holds it.
+    key: Option<Key>,
+    /// The files of given secrets the last evaluation read.
+    reads: Vec<Read>,
 }
 
-/// `saved` set again: its deployment's run goes on.
-pub fn restore(saved: Saved) {
-    *KEY.lock().unwrap_or_else(|e| e.into_inner()) = saved.0;
-    *READ.lock().unwrap_or_else(|e| e.into_inner()) = saved.1;
-}
-
-/// Before an evaluation: the master's digest key (`custody::Master::digest`)
-/// when the run holds it; the files read are forgotten.
-pub fn set_key(k: Option<Key>) {
-    *KEY.lock().unwrap_or_else(|e| e.into_inner()) = k;
-    READ.lock().unwrap_or_else(|e| e.into_inner()).clear();
-}
-
-fn key() -> Option<Key> {
-    KEY.lock().unwrap_or_else(|e| e.into_inner()).clone()
-}
-
-/// The files of given secrets the last evaluation read.
-pub fn reads() -> Vec<Read> {
-    READ.lock().unwrap_or_else(|e| e.into_inner()).clone()
-}
-
-/// A file a run read, recorded.
-pub fn note(r: Read) {
-    let mut all = READ.lock().unwrap_or_else(|e| e.into_inner());
-    if !all.iter().any(|x| x.location == r.location) {
-        all.push(r);
+impl Opened {
+    /// Before an evaluation: the master's digest key when the run holds
+    /// it; the files read are forgotten.
+    pub fn set_key(&mut self, k: Option<Key>) {
+        self.key = k;
+        self.reads.clear();
     }
-}
 
-/// The identities this run opens a file of given secrets with: the
-/// operator's (`AGE_IDENTITY`, `age:NAME`), and the master's.
-pub fn identities() -> Result<Vec<(age::x25519::Identity, String)>> {
-    let mut ids = super::identities()?;
-    if let Some(k) = key() {
-        ids.push((identity_of(&k), "the deployment's master".into()));
+    /// The files of given secrets the last evaluation read.
+    pub fn reads(&self) -> &[Read] {
+        &self.reads
     }
-    Ok(ids)
+
+    /// A file the run read, recorded.
+    pub fn note(&mut self, r: Read) {
+        if !self.reads.iter().any(|x| x.location == r.location) {
+            self.reads.push(r);
+        }
+    }
+
+    /// The identities the run opens a file of given secrets with: the
+    /// operator's (`AGE_IDENTITY`, `age:NAME`), and the master's.
+    pub fn identities(&self) -> Result<Vec<(age::x25519::Identity, String)>> {
+        let mut ids = super::identities()?;
+        if let Some(k) = &self.key {
+            ids.push((identity_of(k), "the deployment's master".into()));
+        }
+        Ok(ids)
+    }
 }
 
 /// A given secret's label, as a plan names it without its value.

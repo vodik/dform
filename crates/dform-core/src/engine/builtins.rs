@@ -28,7 +28,7 @@ pub(super) fn eval_builtin_pred(
 ) -> Result<Option<bool>> {
     let mut vals = Vec::with_capacity(atom.args.len());
     for t in &atom.args {
-        if let Some(v) = eval_term(t, state) {
+        if let Some(v) = eval_term(t, state, rec.secrets) {
             vals.push(v);
             continue;
         }
@@ -96,7 +96,10 @@ pub(super) fn eval_eq(
         return Ok(None);
     }
     let mut out = state;
-    match (eval_term(a, &out), eval_term(b, &out)) {
+    match (
+        eval_term(a, &out, rec.secrets),
+        eval_term(b, &out, rec.secrets),
+    ) {
         // Two numbers compare by value, an int with a float (R-75); a
         // join matches a value as it is.
         (Some(av), Some(bv)) => {
@@ -130,7 +133,7 @@ pub(super) fn eval_eq(
                 if missing_walk(t, &out, rec)? {
                     return Ok(None);
                 }
-                if let Some((name, args)) = failed_builtin(t, &out) {
+                if let Some((name, args)) = failed_builtin(t, &out, rec.secrets) {
                     if name == crate::address::RESOURCE_BODY {
                         let args: Vec<String> = args.iter().map(spell::value).collect();
                         bail!(
@@ -160,7 +163,10 @@ pub(super) fn eval_neq(
     if rec.any_blocked([a, b], state) {
         return Ok(false);
     }
-    match (eval_term(a, state), eval_term(b, state)) {
+    match (
+        eval_term(a, state, rec.secrets),
+        eval_term(b, state, rec.secrets),
+    ) {
         (Some(av), Some(bv)) => {
             if let Some(e) = ref_and_string(a, &av, "!=", b, &bv, rec) {
                 return Err(e);
@@ -199,13 +205,13 @@ pub(super) fn eval_cmp(
     if rec.any_blocked([a, b], state) {
         return Ok(false);
     }
-    let Some(av) = eval_term(a, state) else {
+    let Some(av) = eval_term(a, state, rec.secrets) else {
         if let Some(r) = side_unanswered(a, state, rec) {
             return r.map(|()| false);
         }
         bail!("unsafe comparison: left not ground");
     };
-    let Some(bv) = eval_term(b, state) else {
+    let Some(bv) = eval_term(b, state, rec.secrets) else {
         if let Some(r) = side_unanswered(b, state, rec) {
             return r.map(|()| false);
         }
@@ -228,23 +234,29 @@ pub(super) fn eval_cmp(
     })
 }
 
-pub(super) fn eval_term(term: &Term, state: &HashMap<String, Value>) -> Option<Value> {
+/// `term`'s value under the row's bindings `state`, its calls applied in
+/// the run whose secrets are `secrets` (what a `random.*` derives with).
+pub(super) fn eval_term(
+    term: &Term,
+    state: &HashMap<String, Value>,
+    secrets: &crate::secrets::Run,
+) -> Option<Value> {
     match term {
         Term::Val(v) => Some(v.clone()),
         Term::Var(name) => state.get(name).cloned(),
         Term::Wildcard => None,
-        Term::Func { name, args } => eval_func(name, args, state),
+        Term::Func { name, args } => eval_func(name, args, state, secrets),
         Term::List(xs) => {
             let mut out = Vec::new();
             for x in xs {
-                out.push(eval_term(x, state)?);
+                out.push(eval_term(x, state, secrets)?);
             }
             Some(Value::List(out))
         }
         Term::Obj(m) => {
             let mut out = BTreeMap::new();
             for (k, v) in m {
-                out.insert(k.clone(), eval_term(v, state)?);
+                out.insert(k.clone(), eval_term(v, state, secrets)?);
             }
             Some(Value::Obj(out))
         }
@@ -256,20 +268,23 @@ pub(super) fn eval_func(
     name: &str,
     args: &[Term],
     state: &HashMap<String, Value>,
+    secrets: &crate::secrets::Run,
 ) -> Option<Value> {
     // A path into a bound value is followed in place: the value is not
     // copied to be an argument (`__path` forwards nulls, its path is a
     // string).
     if name == "__path"
         && let [Term::Var(x), path] = args
-        && let Some(Value::Str(path)) = eval_term(path, state)
+        && let Some(Value::Str(path)) = eval_term(path, state, secrets)
     {
         return crate::functions::path_of(state.get(x)?, &path);
     }
-    let body = crate::functions::body(name)?;
+    if !crate::functions::applies(name) {
+        return None;
+    }
     let mut vals = Vec::with_capacity(args.len());
     for a in args {
-        vals.push(eval_term(a, state)?);
+        vals.push(eval_term(a, state, secrets)?);
     }
     // Rule 2: every builtin argument is a content position. A builtin
     // over a null has no value; the literal that needs it is stuck. But a
@@ -281,7 +296,7 @@ pub(super) fn eval_func(
     if spreads(name) && vals.iter().any(|v| matches!(v, Value::Null { .. })) {
         return None;
     }
-    body(&as_params(name, vals))
+    crate::functions::apply(name, secrets, &as_params(name, vals))
 }
 
 /// `vals` as the parameters of the function `name` take them: a value type

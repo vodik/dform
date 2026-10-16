@@ -55,6 +55,7 @@ use provenance::{Prov, given_leaf};
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::rc::Rc;
 use store::{Store, Window};
 use undetermined::{derive_stuck, may_derive, may_derive_over, record_stucks};
 
@@ -75,6 +76,9 @@ pub struct EvalResult {
     /// Work done: index lookups plus tuples read (a deterministic cost
     /// for the scale benchmark).
     pub reads: u64,
+    /// The run it was evaluated in: what its calls derived with, for what
+    /// evaluates over its facts again (an extern's demand, `why`).
+    pub secrets: Rc<crate::secrets::Run>,
 }
 
 /// The aggregate marker Σ of the attribute aggregate (E §3.1).
@@ -97,18 +101,22 @@ const LATTICE_DECLS: [&str; 2] = ["type_lattice", "type_list_key"];
 /// by the aggregate, not by rules, so they must be facts too.
 const REFINE_DECLS: [&str; 2] = [crate::refine::TYPE_REFINE, crate::refine::ATTR_REFINE];
 
+/// The program evaluated over `extra_facts`, in no deployment's run: a
+/// `random.*` call has no value ([`eval_at`]).
 pub fn eval(program: &Program, extra_facts: &[Atom]) -> Result<(EvalResult, Vec<String>)> {
-    eval_at(program, extra_facts, None)
+    eval_at(program, extra_facts, None, &Rc::default())
 }
 
 /// `eval`, with the facts the planner injects (`zset::POLICY_INPUTS`)
-/// labelled as given at apply tick `tick`.
+/// labelled as given at apply tick `tick`, in the run whose secrets are
+/// `secrets`: what its `random.*` calls derive with, and register.
 pub fn eval_at(
     program: &Program,
     extra_facts: &[Atom],
     tick: Option<usize>,
+    secrets: &Rc<crate::secrets::Run>,
 ) -> Result<(EvalResult, Vec<String>)> {
-    let (c, mut st) = start(program, extra_facts, tick)?;
+    let (c, mut st) = start(program, extra_facts, tick, secrets)?;
     run(&c, &mut st, 0)?;
     finish(&c, st)
 }
@@ -131,15 +139,16 @@ pub struct Resumable {
     again: Option<Vec<bool>>,
 }
 
-/// `eval`, keeping what `Resumable::with` needs to evaluate again with
+/// `eval_at`, keeping what `Resumable::with` needs to evaluate again with
 /// more given facts of the predicates `later` (which the program must
-/// define: `decl` or a core predicate).
+/// define: `decl` or a core predicate); in the same run.
 pub fn eval_resumable(
     program: &Program,
     extra_facts: &[Atom],
     later: &[&str],
+    secrets: &Rc<crate::secrets::Run>,
 ) -> Result<(EvalResult, Vec<String>, Resumable)> {
-    let (c, mut st) = start(program, extra_facts, None)?;
+    let (c, mut st) = start(program, extra_facts, None, secrets)?;
     let again = reading(&c, later);
     let first = |of: &dyn Fn(usize) -> bool| {
         (0..c.rules.len())
@@ -227,7 +236,7 @@ impl Resumable {
     pub fn with_at(&self, more: &[Atom], tick: Option<usize>) -> Result<(EvalResult, Vec<String>)> {
         let mut st = self.state.clone();
         for f in more {
-            let g = ensure_ground(f)?;
+            let g = ensure_ground(f, &self.c.secrets)?;
             let leaf = given_leaf(&g, &self.c.externs, tick);
             st.prov.given(g, leaf);
         }
@@ -255,6 +264,9 @@ struct Compiled {
     negations: BTreeSet<String>,
     /// The stratum `stuck/4` is derived at, when a rule reads it.
     stuck_at: Option<usize>,
+    /// The run's secrets, which its `random.*` calls derive with: kept
+    /// while the evaluation can be continued ([`Resumable`]).
+    secrets: Rc<crate::secrets::Run>,
 }
 
 impl Compiled {
@@ -267,6 +279,7 @@ impl Compiled {
         graph: &partition::Graph,
         strata: &BTreeMap<Node, usize>,
         prov: &mut Prov,
+        secrets: Rc<crate::secrets::Run>,
     ) -> Self {
         // A rule runs at the stratum of each node it defines: one, or one per
         // address it reads (`partition::Graph::heads`).
@@ -320,6 +333,7 @@ impl Compiled {
             aggregates,
             negations,
             stuck_at,
+            secrets,
         }
     }
 
@@ -333,6 +347,7 @@ impl Compiled {
             aggregates: &self.aggregates,
             negations: &self.negations,
             found: RefCell::new(Vec::new()),
+            secrets: &self.secrets,
         }
     }
 
@@ -362,6 +377,7 @@ fn start(
     program: &Program,
     extra_facts: &[Atom],
     tick: Option<usize>,
+    secrets: &Rc<crate::secrets::Run>,
 ) -> Result<(Compiled, State)> {
     // The program as it runs and the partition graph it is stratified by,
     // built in one place (`dform dev strata` prints the same graph).
@@ -370,7 +386,7 @@ fn start(
     let mut origins = Origins::default();
     let mut prov = Prov::default();
     for f in extra_facts {
-        let g = ensure_ground(f)?;
+        let g = ensure_ground(f, secrets)?;
         let leaf = given_leaf(&g, &externs, tick);
         prov.given(g, leaf);
     }
@@ -378,7 +394,7 @@ fn start(
     let (rules, fact_atoms) = (compiled.rules, compiled.facts);
     check_heads(&rules)?;
     for a in &fact_atoms {
-        let g = ensure_ground(a)?;
+        let g = ensure_ground(a, secrets)?;
         let (at, contribution) = (g.span, is_contribution(&g));
         let t = prov.stated(g);
         if contribution {
@@ -392,7 +408,7 @@ fn start(
     // revised). Every rule runs in the stratum of its head node.
     let graph = compiled.graph;
     let strata = stratify(&graph)?;
-    let c = Compiled::new(rules, externs, &graph, &strata, &mut prov);
+    let c = Compiled::new(rules, externs, &graph, &strata, &mut prov, secrets.clone());
     origins.rules = c
         .rule_text
         .iter()
@@ -690,6 +706,7 @@ fn finish(c: &Compiled, st: State) -> Result<(EvalResult, Vec<String>)> {
             circuit: prov.circuit,
             rules: c.rules.clone(),
             reads,
+            secrets: c.secrets.clone(),
         },
         violations,
     ))
@@ -699,9 +716,15 @@ fn finish(c: &Compiled, st: State) -> Result<(EvalResult, Vec<String>)> {
 pub type Answer = (BTreeMap<String, Value>, Vec<Atom>);
 
 /// A conjunction evaluated against a final fact store (`dform query`,
-/// `dform why`): every way to satisfy it, with the facts each matched, in
-/// body order. Read-only: nothing is derived and nothing is recorded stuck.
-pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
+/// `dform why`), its calls in the run whose secrets are `secrets` (the
+/// store's evaluation's, `EvalResult::secrets`): every way to satisfy it,
+/// with the facts each matched, in body order. Read-only: nothing is
+/// derived and nothing is recorded stuck.
+pub fn query(
+    body: &[Lit],
+    facts: &BTreeSet<Atom>,
+    secrets: &crate::secrets::Run,
+) -> Result<Vec<Answer>> {
     let plan = ops::compile_body(body, &BTreeSet::new());
     // Tuple ids in fact order: answers come out in fact order.
     let mut store = Store::default();
@@ -741,6 +764,7 @@ pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
         aggregates: &aggregates,
         negations: &negations,
         found: RefCell::new(Vec::new()),
+        secrets,
     };
     let src = Src::whole(&store, &plan, body.len());
     Ok(eval_body(body, &src, &rec)?
@@ -769,10 +793,12 @@ fn index_reads(store: &mut Store, rules: &[RuleStmt], plans: &[ops::Rule]) {
     }
 }
 
-fn ensure_ground(a: &Atom) -> Result<Atom> {
+/// `a` with each argument evaluated, its calls in the run whose secrets
+/// are `secrets` (a stated fact may call `random.*`).
+fn ensure_ground(a: &Atom, secrets: &crate::secrets::Run) -> Result<Atom> {
     let mut args = Vec::with_capacity(a.args.len());
     for t in &a.args {
-        let v = eval_term(t, &HashMap::new())
+        let v = eval_term(t, &HashMap::new(), secrets)
             .with_context(|| format!("fact is not ground: {}(...)", a.pred))?;
         args.push(Term::Val(v));
     }

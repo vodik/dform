@@ -264,6 +264,9 @@ pub struct Input<'a> {
     /// (`stack/FULL#k`) that their plans know only after a tick: by
     /// label, that tick. What waits on one runs the tick after.
     pub outside: &'a BTreeMap<String, usize>,
+    /// The run's secrets: a value its `random.*` derived is labelled by
+    /// the call.
+    pub secrets: &'a crate::secrets::Run,
 }
 
 /// The resources an attribute of which conflicts: the report shows their
@@ -278,7 +281,7 @@ pub fn conflicted(res: &EvalResult) -> BTreeSet<Address> {
 }
 
 pub fn report(i: &Input) -> Report {
-    let r = Redactor::new(&i.res.facts, i.schema);
+    let r = Redactor::new(&i.res.facts, i.schema, i.secrets);
     let refs = Refs::new(&i.res.facts);
     let conflicts = conflicts(i.res, &r);
     let (held, definite) = held_and_definite(i, &conflicts);

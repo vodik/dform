@@ -143,7 +143,7 @@ impl Query {
                 }
                 vec![t]
             }
-            None => match self.relations(program, facts, redact)? {
+            None => match self.relations(program, res, redact)? {
                 Some(tables) => tables,
                 None => return Ok(()),
             },
@@ -169,10 +169,11 @@ impl Query {
     fn relations(
         &self,
         program: &crate::ast::Program,
-        facts: &BTreeSet<Atom>,
+        res: &crate::engine::EvalResult,
         redact: &query::Redactor,
     ) -> Result<Option<Vec<report::table::Table>>> {
         use report::table::{Cell, Table};
+        let facts = &res.facts;
         let pattern = self.pattern.as_str();
         // A `let`'s, an input's or an output's cell by its path (R-176),
         // where no relation is so named (a `let k` is the relation `k` too).
@@ -211,7 +212,7 @@ impl Query {
                 by.into_values().collect()
             }
             query::Query::Body { body, vars } => {
-                let table = query::table(&body, &vars, facts)?;
+                let table = query::table(&body, &vars, facts, &res.secrets)?;
                 if vars.is_empty() && !self.json {
                     println!("{}", if table.rows.is_empty() { "no" } else { "yes" });
                     return Ok(None);
@@ -315,11 +316,12 @@ impl Why {
             denies: &p.denies,
             kept: &Default::default(),
             outside,
+            secrets: ev.evaluator.secrets(),
         });
         r.explain(
             report::Why::Line,
             &p.res,
-            &query::Redactor::new(&p.res.facts, ev.schema()),
+            &query::Redactor::new(&p.res.facts, ev.schema(), ev.evaluator.secrets()),
         );
         Some(r)
     }

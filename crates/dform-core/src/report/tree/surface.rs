@@ -62,6 +62,19 @@ pub(super) struct Surface<'a, 'b> {
 }
 
 impl Surface<'_, '_> {
+    /// The firing of the rule `id` (`r12`) with `bindings`: what a term
+    /// of its statement evaluates against.
+    pub(super) fn evaluating<'s>(&'s self, id: &str, bindings: &'s [(String, Value)]) -> Cx<'s> {
+        Cx {
+            env: bindings.iter().map(|(k, v)| (k.as_str(), v)).collect(),
+            rule: id
+                .strip_prefix('r')
+                .and_then(|i| i.parse::<usize>().ok())
+                .and_then(|i| self.rules.get(i)),
+            secrets: self.p.secrets,
+        }
+    }
+
     pub(super) fn push(&mut self, line: String) {
         self.w.out.push_str(&line);
         self.w.out.push('\n');
@@ -587,14 +600,7 @@ impl Surface<'_, '_> {
         self.push(format!("{pad}{place}  {text}"));
         let Some(shown) = shown else { return };
 
-        let rule = id
-            .strip_prefix('r')
-            .and_then(|i| i.parse::<usize>().ok())
-            .and_then(|i| self.rules.get(i));
-        let cx = Cx {
-            env: bindings.iter().map(|(k, v)| (k.as_str(), v)).collect(),
-            rule,
-        };
+        let cx = self.evaluating(id, bindings);
         let mut lines = Vec::new();
         let mut names = BTreeSet::new();
         for name in shown.vars {

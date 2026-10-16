@@ -665,7 +665,7 @@ pub fn check_given(decl: &InputDecl, v: &Value) -> Truth {
     if !alone {
         return Truth::Unknown;
     }
-    match crate::engine::query(&body, &BTreeSet::new()) {
+    match crate::engine::query(&body, &BTreeSet::new(), &Default::default()) {
         Ok(answers) if answers.is_empty() => Truth::False,
         Ok(_) => Truth::True,
         Err(_) => Truth::Unknown,

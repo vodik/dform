@@ -20,8 +20,9 @@
 //! lowering's own (`add`, `__path`), which a program may not call. A
 //! function is pure, or a coeffect, `reads` (`io.read`): a read the
 //! context satisfies, lowered to a table, never a body.
-//! The bodies are this module's ([`body`], [`BODIES`]), which the engine
-//! looks up by the qualified name; a test keeps the two in step.
+//! The bodies are this module's ([`body`], [`BODIES`]; a derivation's,
+//! [`DERIVATIONS`], takes the run's secrets too), which the engine looks
+//! up by the qualified name ([`apply`]); a test keeps the two in step.
 //!
 //! The format is self-contained text (DESIGN.org R-24: a function package
 //! embeds its signature file), read for now by this module rather than by
@@ -923,6 +924,45 @@ pub fn body(name: &str) -> Option<Body> {
     BODIES.iter().find(|(n, _)| *n == name).map(|(_, b)| *b)
 }
 
+/// A derivation's body (`random.*`, R-60): its arguments' values to its
+/// value as the deployment's run derives it ([`crate::secrets::Run`]), or
+/// none.
+pub type Derivation = fn(&crate::secrets::Run, &[Value]) -> Option<Value>;
+
+/// Every derivation's body, by its qualified name.
+pub const DERIVATIONS: &[(&str, Derivation)] = &[
+    ("random.password", random::password),
+    ("random.base64", random::base64),
+    ("random.id", random::id),
+    ("random.uuid", random::uuid),
+    ("random.signing_key", random::signing_key),
+    ("random.verify_key", random::verify_key),
+    ("random.generation", random::generation),
+];
+
+/// The derivation the function `name` is, by its qualified name.
+pub fn derivation(name: &str) -> Option<Derivation> {
+    DERIVATIONS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, d)| *d)
+}
+
+/// Whether the engine applies the function `name`: it has a body or is a
+/// derivation.
+pub fn applies(name: &str) -> bool {
+    body(name).is_some() || derivation(name).is_some()
+}
+
+/// The function `name` applied to `args` as the engine applies it: its
+/// body, or its derivation in the run `run`.
+pub fn apply(name: &str, run: &crate::secrets::Run, args: &[Value]) -> Option<Value> {
+    match body(name) {
+        Some(b) => b(args),
+        None => derivation(name)?(run, args),
+    }
+}
+
 /// Every function's body, by its qualified name.
 pub const BODIES: &[(&str, Body)] = &[
     ("add", |a| {
@@ -1232,13 +1272,6 @@ pub const BODIES: &[(&str, Body)] = &[
         }
         _ => None,
     }),
-    ("random.password", crate::functions::random::password),
-    ("random.base64", crate::functions::random::base64),
-    ("random.id", crate::functions::random::id),
-    ("random.uuid", crate::functions::random::uuid),
-    ("random.signing_key", crate::functions::random::signing_key),
-    ("random.verify_key", crate::functions::random::verify_key),
-    ("random.generation", crate::functions::random::generation),
     ("str.trim", |a| match a {
         [Value::Str(s)] => Some(Value::Str(s.trim().to_string())),
         _ => None,
@@ -2095,7 +2128,7 @@ mod tests {
     fn every_declared_function_has_a_body() {
         for f in registry().functions().filter(|f| !f.coeffect) {
             assert!(
-                body(&f.name).is_some(),
+                applies(&f.name),
                 "{} ({}:{}) has no body",
                 f.name,
                 f.file,
@@ -2244,12 +2277,8 @@ mod tests {
                 );
             }
             match kind(f) {
-                "pure" => assert!(body(&f.name).is_some(), "{}: pure, with a body", f.name),
-                _ => assert!(
-                    body(&f.name).is_none(),
-                    "{}: a coeffect has no body",
-                    f.name
-                ),
+                "pure" => assert!(applies(&f.name), "{}: pure, with a body", f.name),
+                _ => assert!(!applies(&f.name), "{}: a coeffect has no body", f.name),
             }
             // A bare name of it is no function (`split`, `read`); an
             // aggregate's (`min`, `sum`) is bound in a body.
@@ -2334,7 +2363,8 @@ mod tests {
     #[test]
     fn every_body_is_declared() {
         let r = registry();
-        for (name, _) in BODIES {
+        let derivations = DERIVATIONS.iter().map(|(n, _)| n);
+        for name in BODIES.iter().map(|(n, _)| n).chain(derivations) {
             assert!(
                 r.get(name).is_some(),
                 "the body {name} is declared in no std/*.df"
@@ -2349,13 +2379,15 @@ mod tests {
 /// HKDF-SHA256 of the deployment's master secret, its info the function,
 /// the deployment, the key and every knob, so it is the same on every run
 /// and a changed knob or master is a new value. The master is the run's
-/// (`custody::Master`): a deployment's evaluation sets it on its thread; with
-/// none (an editor, a bare evaluation) the functions have no value.
+/// (`custody::Master`), set in the deployment's [`crate::secrets::Run`],
+/// which its evaluation derives with; with none (an editor, a bare
+/// evaluation) the functions have no value.
 pub mod random {
+    use crate::secrets::Run;
     use crate::value::Value;
-    use std::cell::RefCell;
+    use std::collections::{BTreeMap, BTreeSet};
 
-    /// A thread's masters: the deployment's (`None` in a run that does not
+    /// A run's masters: the deployment's (`None` in a run that does not
     /// hold it) and the public one its stand-ins derive from
     /// (`secrets::standin`).
     struct Masters {
@@ -2365,7 +2397,7 @@ pub mod random {
         /// The epoch `real` is (R-165), and the earlier ones a secret
         /// still derives from: each epoch's master and stand-in master.
         epoch: u32,
-        earlier: std::collections::BTreeMap<u32, (Option<Vec<u8>>, Vec<u8>)>,
+        earlier: BTreeMap<u32, (Option<Vec<u8>>, Vec<u8>)>,
     }
 
     /// The public master a stand-in derives from, made from a master id.
@@ -2378,71 +2410,24 @@ pub mod random {
             .to_vec()
     }
 
-    thread_local! {
-        static MASTER: RefCell<Option<Masters>> = const { RefCell::new(None) };
-        /// `derive` derives a stand-in.
-        static STANDIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-        /// The secrets this thread derived since its master was set, each
-        /// by the call that derived it (`random.password("db")`): what the
-        /// plan, `query` and `why` label one with.
-        static DERIVED: RefCell<std::collections::BTreeMap<Value, String>> =
-            const { RefCell::new(std::collections::BTreeMap::new()) };
+    /// What a deployment's run derives its `random.*` with, and what they
+    /// derived ([`Run::random`]).
+    #[derive(Default)]
+    pub struct Derivations {
+        masters: Option<Masters>,
+        /// The secrets derived since the master was set, each by the call
+        /// that derived it (`random.password("db")`): what the plan,
+        /// `query` and `why` label one with.
+        derived: BTreeMap<Value, String>,
         /// The deployment's rotations, by key (R-161, `State::secrets`).
-        static RECORDS: RefCell<std::collections::BTreeMap<String, crate::state::Secret>> =
-            const { RefCell::new(std::collections::BTreeMap::new()) };
+        records: BTreeMap<String, crate::state::Secret>,
         /// When the deployment's master was first applied (its log's
         /// `master` entry): a key never rotated is as old (R-161).
-        static BORN: RefCell<Option<String>> = const { RefCell::new(None) };
-        /// The generation `derive` derives at: the call's.
-        static GENERATION: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
-        /// The epoch `derive` derives from (R-165): the key's; 0 the
-        /// current one.
-        static EPOCH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        born: Option<String>,
         /// Each key a `random.*` call derived for since the rotations were
         /// set, with its functions and whether one is a secret: what
         /// `dform secrets list` lists.
-        static CALLS: RefCell<std::collections::BTreeMap<String, Called>> =
-            const { RefCell::new(std::collections::BTreeMap::new()) };
-    }
-
-    /// What one deployment's run set here, taken while another's runs in
-    /// the same thread (a tree's apply, `secrets::Scope`).
-    pub struct Saved {
-        master: Option<Masters>,
-        standin: bool,
-        derived: std::collections::BTreeMap<Value, String>,
-        records: std::collections::BTreeMap<String, crate::state::Secret>,
-        born: Option<String>,
-        generation: u32,
-        epoch: u32,
-        calls: std::collections::BTreeMap<String, Called>,
-    }
-
-    /// What this thread's deployment set, taken: the thread as no
-    /// deployment's run has set it.
-    pub fn save() -> Saved {
-        Saved {
-            master: MASTER.with(|m| m.take()),
-            standin: STANDIN.with(|s| s.replace(false)),
-            derived: DERIVED.with(|d| d.take()),
-            records: RECORDS.with(|r| r.take()),
-            born: BORN.with(|b| b.take()),
-            generation: GENERATION.with(|g| g.replace(1)),
-            epoch: EPOCH.with(|e| e.replace(0)),
-            calls: CALLS.with(|c| c.take()),
-        }
-    }
-
-    /// `saved` set again: its deployment's run goes on.
-    pub fn restore(saved: Saved) {
-        MASTER.with(|m| *m.borrow_mut() = saved.master);
-        STANDIN.with(|s| s.set(saved.standin));
-        DERIVED.with(|d| *d.borrow_mut() = saved.derived);
-        RECORDS.with(|r| *r.borrow_mut() = saved.records);
-        BORN.with(|b| *b.borrow_mut() = saved.born);
-        GENERATION.with(|g| g.set(saved.generation));
-        EPOCH.with(|e| e.set(saved.epoch));
-        CALLS.with(|c| *c.borrow_mut() = saved.calls);
+        calls: BTreeMap<String, Called>,
     }
 
     /// What a rotated secret's label says after its call: `generation N,
@@ -2454,42 +2439,42 @@ pub mod random {
     #[derive(Debug, Clone, Default, PartialEq, Eq)]
     pub struct Called {
         /// `password`, `signing_key`, ...
-        pub functions: std::collections::BTreeSet<String>,
+        pub functions: BTreeSet<String>,
         /// One of them is a secret (`password`, `base64`, `signing_key`).
         pub secret: bool,
         /// The secret values derived (a stand-in's, in a run without the
         /// master): where they reach is where the key is read.
-        pub values: std::collections::BTreeSet<Value>,
+        pub values: BTreeSet<Value>,
     }
 
-    /// Derive this thread's `random.*` with the deployment's rotations
-    /// (R-161): each key at its generation, 1 for one never rotated.
-    pub fn set_secrets(records: &std::collections::BTreeMap<String, crate::state::Secret>) {
-        RECORDS.with(|r| *r.borrow_mut() = records.clone());
-        CALLS.with(|c| c.borrow_mut().clear());
-    }
+    impl Derivations {
+        /// Derive with the deployment's rotations (R-161): each key at its
+        /// generation, 1 for one never rotated.
+        pub fn set_secrets(&mut self, records: &BTreeMap<String, crate::state::Secret>) {
+            self.records = records.clone();
+            self.calls.clear();
+        }
 
-    /// When the deployment's master was first applied, from its log: the
-    /// age of a key never rotated (`secrets/4`).
-    pub fn set_born(born: Option<String>) {
-        BORN.with(|b| *b.borrow_mut() = born);
-    }
+        /// When the deployment's master was first applied, from its log:
+        /// the age of a key never rotated (`secrets/4`).
+        pub fn set_born(&mut self, born: Option<String>) {
+            self.born = born;
+        }
 
-    pub fn born() -> Option<String> {
-        BORN.with(|b| b.borrow().clone())
-    }
+        pub fn born(&self) -> Option<&str> {
+            self.born.as_deref()
+        }
 
-    /// The keys this thread's calls derived for since the rotations were
-    /// set.
-    pub fn calls() -> std::collections::BTreeMap<String, Called> {
-        CALLS.with(|c| c.borrow().clone())
-    }
+        /// The keys the run's calls derived for since the rotations were
+        /// set.
+        pub fn calls(&self) -> &BTreeMap<String, Called> {
+            &self.calls
+        }
 
-    /// Each secret key whose derived value `text` holds, at its current
-    /// generation: what an attribute is made with (R-198).
-    pub fn generations_in(text: &str) -> std::collections::BTreeMap<String, u32> {
-        CALLS.with(|c| {
-            c.borrow()
+        /// Each secret key whose derived value `text` holds, at its current
+        /// generation: what an attribute is made with (R-198).
+        pub fn generations_in(&self, text: &str) -> BTreeMap<String, u32> {
+            self.calls
                 .iter()
                 .filter(|(_, c)| c.secret)
                 .filter(|(_, c)| {
@@ -2497,47 +2482,39 @@ pub mod random {
                         .iter()
                         .any(|v| matches!(v, Value::Str(x) if !x.is_empty() && text.contains(x.as_str())))
                 })
-                .map(|(k, _)| (k.clone(), generation_of(k)))
+                .map(|(k, _)| (k.clone(), self.generation_of(k)))
                 .collect()
-        })
-    }
+        }
 
-    /// `key`'s current generation: 1 unless rotated.
-    fn generation_of(key: &str) -> u32 {
-        RECORDS.with(|r| r.borrow().get(key).map_or(1, |s| s.generation))
-    }
+        /// `key`'s current generation: 1 unless rotated.
+        fn generation_of(&self, key: &str) -> u32 {
+            self.records.get(key).map_or(1, |s| s.generation)
+        }
 
-    /// `random.generation(key)`: the key's current generation, public.
-    pub fn generation(a: &[Value]) -> Option<Value> {
-        let [Value::Str(key)] = a else { return None };
-        Some(Value::Int(generation_of(key).into()))
-    }
-
-    /// Derive this thread's `random.*` for `deployment` until the next
-    /// call: from `ikm`, the master's, and each value's stand-in from a
-    /// public master the master id `id` makes; with no `ikm` (a run that
-    /// does not hold the master) the stand-in is the value.
-    pub fn set_master(ikm: Option<Vec<u8>>, id: Option<&str>, deployment: &str) {
-        MASTER.with(|m| {
-            *m.borrow_mut() = Some(Masters {
+        /// Derive for `deployment` until the next call: from `ikm`, the
+        /// master's, and each value's stand-in from a public master the
+        /// master id `id` makes; with no `ikm` (a run that does not hold
+        /// the master) the stand-in is the value.
+        pub fn set_master(&mut self, ikm: Option<Vec<u8>>, id: Option<&str>, deployment: &str) {
+            self.masters = Some(Masters {
                 real: ikm,
                 standin: standin_of(id),
                 deployment: deployment.to_string(),
                 epoch: 1,
                 earlier: Default::default(),
-            })
-        });
-        DERIVED.with(|d| d.borrow_mut().clear());
-    }
+            });
+            self.derived.clear();
+        }
 
-    /// The deployment's masters by epoch (R-165, `custody::Master::epochs`):
-    /// each its id and, when the run holds it, its input key material. The
-    /// last is the current one, which `set_master` set; a key derives from
-    /// its record's epoch, the current one unless pinned.
-    pub fn set_epochs(epochs: &[(u32, String, Option<Vec<u8>>)]) {
-        MASTER.with(|m| {
-            let mut m = m.borrow_mut();
-            let Some(m) = m.as_mut() else { return };
+        /// The deployment's masters by epoch (R-165,
+        /// `custody::Master::epochs`): each its id and, when the run holds
+        /// it, its input key material. The last is the current one, which
+        /// `set_master` set; a key derives from its record's epoch, the
+        /// current one unless pinned.
+        pub fn set_epochs(&mut self, epochs: &[(u32, String, Option<Vec<u8>>)]) {
+            let Some(m) = self.masters.as_mut() else {
+                return;
+            };
             let Some(((current, ..), earlier)) = epochs.split_last() else {
                 return;
             };
@@ -2546,83 +2523,172 @@ pub mod random {
                 .iter()
                 .map(|(e, id, ikm)| (*e, (ikm.clone(), standin_of(Some(id)))))
                 .collect();
-        });
-    }
+        }
 
-    /// The secrets derived on this thread since its master was set, each
-    /// with its label.
-    pub fn derived() -> Vec<(Value, String)> {
-        DERIVED.with(|d| {
-            d.borrow()
-                .iter()
-                .map(|(v, l)| (v.clone(), l.clone()))
-                .collect()
-        })
-    }
+        /// The secrets derived since the master was set, each with its
+        /// label.
+        pub fn derived(&self) -> impl Iterator<Item = (&Value, &str)> {
+            self.derived.iter().map(|(v, l)| (v, l.as_str()))
+        }
 
-    /// The value `f` derives for `random.WHAT(key, ..)` at the generation
-    /// `asked` (the key's current one when `None`), its stand-in
-    /// registered (`secrets::standin`), and, a `secret` one, labelled: a
-    /// rotated one with its reason (`random.password("db"), generation 2,
-    /// rotated 2026-10-07 by simon`). A generation past the current one is
-    /// no input it takes.
-    fn derived_value(
-        what: &str,
-        key: &str,
-        asked: Option<i64>,
-        secret: bool,
-        f: impl Fn() -> Option<Value>,
-    ) -> Option<Value> {
-        let current = generation_of(key);
-        let generation = match asked {
-            None => current,
-            Some(g) => u32::try_from(g)
-                .ok()
-                .filter(|g| (1..=current).contains(g))?,
-        };
-        let epoch = RECORDS.with(|r| r.borrow().get(key).and_then(|s| s.epoch).unwrap_or(0));
-        let at = |standin: bool| {
-            GENERATION.with(|g| g.set(generation));
-            EPOCH.with(|e| e.set(epoch));
-            STANDIN.with(|s| s.set(standin));
-            let v = f();
-            STANDIN.with(|s| s.set(false));
-            EPOCH.with(|e| e.set(0));
-            GENERATION.with(|g| g.set(1));
-            v
-        };
-        let standin = at(true)?;
-        let real = MASTER.with(|m| m.borrow().as_ref().map(|m| m.real.is_some()))?;
-        let v = match real {
-            true => at(false)?,
-            false => standin.clone(),
-        };
-        CALLS.with(|c| {
-            let mut c = c.borrow_mut();
-            let e = c.entry(key.to_string()).or_default();
+        /// The label of the value of `random.WHAT(key)` at `generation`,
+        /// `asked` for by it or not: a rotated one with its reason
+        /// (`random.password("db"), generation 2, rotated 2026-10-07 by
+        /// simon`).
+        fn label(&self, what: &str, key: &str, asked: bool, generation: u32) -> String {
+            match (asked, self.records.get(key)) {
+                (true, _) => format!("random.{what}({key:?}, generation: {generation})"),
+                (false, Some(r)) if r.generation > 1 => format!(
+                    "random.{what}({key:?}), {ROTATED}{generation}, rotated {} by {}",
+                    r.day(),
+                    r.by
+                ),
+                (false, _) => format!("random.{what}({key:?})"),
+            }
+        }
+
+        /// `v`, derived by `random.WHAT(key)` (a `secret` one labelled
+        /// `label`), recorded.
+        fn note(&mut self, what: &str, key: &str, secret: bool, v: &Value, label: &str) {
+            let e = self.calls.entry(key.to_string()).or_default();
             e.functions.insert(what.to_string());
             e.secret |= secret;
             if secret {
                 e.values.insert(v.clone());
+                self.derived
+                    .entry(v.clone())
+                    .or_insert_with(|| label.to_string());
             }
-        });
-        let record = RECORDS.with(|r| r.borrow().get(key).cloned());
-        let label = match (asked, record) {
-            (Some(_), _) => format!("random.{what}({key:?}, generation: {generation})"),
-            (None, Some(r)) if r.generation > 1 => format!(
-                "random.{what}({key:?}), {ROTATED}{generation}, rotated {} by {}",
-                r.day(),
-                r.by
-            ),
-            (None, _) => format!("random.{what}({key:?})"),
-        };
-        if let (Value::Str(v), Value::Str(s)) = (&v, &standin) {
-            crate::secrets::standin::register(v, &label, s);
         }
-        if secret {
-            DERIVED.with(|d| {
-                d.borrow_mut().entry(v.clone()).or_insert(label);
-            });
+    }
+
+    /// One derivation's masters and inputs: the key's generation and
+    /// epoch, and whether it derives the stand-in.
+    struct Deriving<'m> {
+        masters: &'m Masters,
+        generation: u32,
+        /// The epoch it derives from (R-165): the key's; 0 the current one.
+        epoch: u32,
+        standin: bool,
+    }
+
+    impl Deriving<'_> {
+        /// `len` bytes for the call `what` of `key` with `knobs`.
+        fn bytes(&self, what: &str, key: &str, knobs: &[&str], len: usize) -> Option<Vec<u8>> {
+            let m = self.masters;
+            // The key's epoch's master (R-165): the current one unless the
+            // key is pinned to an earlier one.
+            let (real, standin) = match self.epoch {
+                0 => (m.real.as_ref(), &m.standin),
+                e if e == m.epoch => (m.real.as_ref(), &m.standin),
+                e => {
+                    let (real, standin) = m.earlier.get(&e)?;
+                    (real.as_ref(), standin)
+                }
+            };
+            let ikm = match self.standin {
+                true => standin,
+                false => real?,
+            };
+            let mut info = Vec::new();
+            for part in [what, m.deployment.as_str(), key].iter().chain(knobs) {
+                info.extend_from_slice(part.as_bytes());
+                info.push(0);
+            }
+            // A rotated key's generation (R-161); generation 1 adds
+            // nothing, so a key never rotated derives what it always did.
+            if self.generation > 1 {
+                info.extend_from_slice(format!("generation\0{}\0", self.generation).as_bytes());
+            }
+            Some(crate::secrets::hkdf(b"dform random", ikm, &info, len))
+        }
+
+        /// `n` characters of `alphabet`, uniform: bytes past the largest
+        /// multiple of its size are skipped.
+        fn chars(
+            &self,
+            what: &str,
+            key: &str,
+            knobs: &[&str],
+            n: usize,
+            alphabet: &[u8],
+        ) -> Option<String> {
+            let limit = 256 - 256 % alphabet.len();
+            let mut out = String::with_capacity(n);
+            // Twice what is needed, and more rounds in the very unlikely
+            // case that is not enough.
+            for round in 0.. {
+                let r = round.to_string();
+                let mut ks: Vec<&str> = knobs.to_vec();
+                ks.push(&r);
+                let bytes = self.bytes(what, key, &ks, (2 * n + 32).min(255 * 32))?;
+                for b in bytes {
+                    if (b as usize) < limit {
+                        out.push(alphabet[b as usize % alphabet.len()] as char);
+                        if out.len() == n {
+                            return Some(out);
+                        }
+                    }
+                }
+            }
+            None
+        }
+
+        /// The version and the seed of `key`'s ed25519 signing key.
+        fn ed25519(&self, key: &str) -> Option<(String, Vec<u8>)> {
+            let version = self.chars("signing_key version", key, &[], 4, &ALNUM[..52])?;
+            let seed = self.bytes("signing_key ed25519", key, &[], 32)?;
+            Some((version, seed))
+        }
+    }
+
+    /// `random.generation(key)`: the key's current generation, public.
+    pub fn generation(run: &Run, a: &[Value]) -> Option<Value> {
+        let [Value::Str(key)] = a else { return None };
+        Some(Value::Int(run.random().generation_of(key).into()))
+    }
+
+    /// The value `f` derives for `random.WHAT(key, ..)` in `run` at the
+    /// generation `asked` (the key's current one when `None`), its
+    /// stand-in registered (`secrets::standin`), and, a `secret` one,
+    /// labelled ([`Derivations::label`]). A generation past the current
+    /// one is no input it takes.
+    fn derived_value(
+        run: &Run,
+        what: &str,
+        key: &str,
+        asked: Option<i64>,
+        secret: bool,
+        f: impl Fn(&Deriving) -> Option<Value>,
+    ) -> Option<Value> {
+        let (v, standin, label) = {
+            let d = run.random();
+            let current = d.generation_of(key);
+            let generation = match asked {
+                None => current,
+                Some(g) => u32::try_from(g)
+                    .ok()
+                    .filter(|g| (1..=current).contains(g))?,
+            };
+            let masters = d.masters.as_ref()?;
+            let at = |standin: bool| {
+                f(&Deriving {
+                    masters,
+                    generation,
+                    epoch: d.records.get(key).and_then(|s| s.epoch).unwrap_or(0),
+                    standin,
+                })
+            };
+            let standin = at(true)?;
+            let v = match masters.real.is_some() {
+                true => at(false)?,
+                false => standin.clone(),
+            };
+            (v, standin, d.label(what, key, asked.is_some(), generation))
+        };
+        run.random_mut().note(what, key, secret, &v, &label);
+        if let (Value::Str(v), Value::Str(s)) = (&v, &standin) {
+            run.standins_mut().register(v, &label, s);
         }
         Some(v)
     }
@@ -2660,65 +2726,6 @@ pub mod random {
         })
     }
 
-    /// `len` bytes for the call `what` of `key` with `knobs`.
-    fn derive(what: &str, key: &str, knobs: &[&str], len: usize) -> Option<Vec<u8>> {
-        MASTER.with(|m| {
-            let m = m.borrow();
-            let m = m.as_ref()?;
-            // The key's epoch's master (R-165): the current one unless the
-            // key is pinned to an earlier one.
-            let (real, standin) = match EPOCH.with(|e| e.get()) {
-                0 => (m.real.as_ref(), &m.standin),
-                e if e == m.epoch => (m.real.as_ref(), &m.standin),
-                e => {
-                    let (real, standin) = m.earlier.get(&e)?;
-                    (real.as_ref(), standin)
-                }
-            };
-            let ikm = match STANDIN.with(|s| s.get()) {
-                true => standin,
-                false => real?,
-            };
-            let deployment = &m.deployment;
-            let mut info = Vec::new();
-            for part in [what, deployment.as_str(), key].iter().chain(knobs) {
-                info.extend_from_slice(part.as_bytes());
-                info.push(0);
-            }
-            // A rotated key's generation (R-161); generation 1 adds
-            // nothing, so a key never rotated derives what it always did.
-            let generation = GENERATION.with(|g| g.get());
-            if generation > 1 {
-                info.extend_from_slice(format!("generation\0{generation}\0").as_bytes());
-            }
-            Some(crate::secrets::hkdf(b"dform random", ikm, &info, len))
-        })
-    }
-
-    /// `n` characters of `alphabet`, uniform: bytes past the largest
-    /// multiple of its size are skipped.
-    fn chars(what: &str, key: &str, knobs: &[&str], n: usize, alphabet: &[u8]) -> Option<String> {
-        let limit = 256 - 256 % alphabet.len();
-        let mut out = String::with_capacity(n);
-        // Twice what is needed, and more rounds in the very unlikely case
-        // that is not enough.
-        for round in 0.. {
-            let r = round.to_string();
-            let mut ks: Vec<&str> = knobs.to_vec();
-            ks.push(&r);
-            let bytes = derive(what, key, &ks, (2 * n + 32).min(255 * 32))?;
-            for b in bytes {
-                if (b as usize) < limit {
-                    out.push(alphabet[b as usize % alphabet.len()] as char);
-                    if out.len() == n {
-                        return Some(out);
-                    }
-                }
-            }
-        }
-        None
-    }
-
     const ALNUM: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     const BASE64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -2745,7 +2752,7 @@ pub mod random {
         }
     }
 
-    pub fn password(a: &[Value]) -> Option<Value> {
+    pub fn password(run: &Run, a: &[Value]) -> Option<Value> {
         let (a, generation) = generation_arg(a, 3)?;
         let (key, length, name) = match a {
             [Value::Str(k)] => (k, 32, "alnum"),
@@ -2758,14 +2765,15 @@ pub mod random {
         }
         let set = alphabet(name)?;
         let n = length.to_string();
-        derived_value("password", key, generation, true, || {
-            chars("password", key, &[&n, name], length as usize, &set).map(Value::Str)
+        derived_value(run, "password", key, generation, true, |d| {
+            d.chars("password", key, &[&n, name], length as usize, &set)
+                .map(Value::Str)
         })
     }
 
     /// `random.base64`: derived as `random.bytes` was (its derivation's
     /// name kept, so a rename is no rotation).
-    pub fn base64(a: &[Value]) -> Option<Value> {
+    pub fn base64(run: &Run, a: &[Value]) -> Option<Value> {
         use base64::Engine;
         let (a, generation) = generation_arg(a, 2)?;
         let [Value::Str(key), Value::Int(n)] = a else {
@@ -2774,15 +2782,15 @@ pub mod random {
         if !(1..=4096).contains(n) {
             return None;
         }
-        derived_value("base64", key, generation, true, || {
-            let b = derive("bytes", key, &[&n.to_string()], *n as usize)?;
+        derived_value(run, "base64", key, generation, true, |d| {
+            let b = d.bytes("bytes", key, &[&n.to_string()], *n as usize)?;
             Some(Value::Str(
                 base64::engine::general_purpose::STANDARD.encode(b),
             ))
         })
     }
 
-    pub fn id(a: &[Value]) -> Option<Value> {
+    pub fn id(run: &Run, a: &[Value]) -> Option<Value> {
         let (a, generation) = generation_arg(a, 2)?;
         let (key, n) = match a {
             [Value::Str(k)] => (k, 8),
@@ -2792,17 +2800,17 @@ pub mod random {
         if !(1..=64).contains(&n) {
             return None;
         }
-        derived_value("id", key, generation, false, || {
-            let b = derive("id", key, &[&n.to_string()], n as usize)?;
+        derived_value(run, "id", key, generation, false, |d| {
+            let b = d.bytes("id", key, &[&n.to_string()], n as usize)?;
             Some(Value::Str(b.iter().map(|x| format!("{x:02x}")).collect()))
         })
     }
 
-    pub fn uuid(a: &[Value]) -> Option<Value> {
+    pub fn uuid(run: &Run, a: &[Value]) -> Option<Value> {
         let (a, generation) = generation_arg(a, 1)?;
         let [Value::Str(key)] = a else { return None };
-        derived_value("uuid", key, generation, false, || {
-            let mut b = derive("uuid", key, &[], 16)?;
+        derived_value(run, "uuid", key, generation, false, |d| {
+            let mut b = d.bytes("uuid", key, &[], 16)?;
             b[6] = (b[6] & 0x0f) | 0x40;
             b[8] = (b[8] & 0x3f) | 0x80;
             let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
@@ -2817,23 +2825,15 @@ pub mod random {
         })
     }
 
-    /// The version and the seed of `key`'s ed25519 signing key, at the
-    /// generation `derive` derives at.
-    fn ed25519(key: &str) -> Option<(String, Vec<u8>)> {
-        let version = chars("signing_key version", key, &[], 4, &ALNUM[..52])?;
-        let seed = derive("signing_key ed25519", key, &[], 32)?;
-        Some((version, seed))
-    }
-
     /// Synapse's signing key file: `ed25519 a_XXXX SEED`, the version four
     /// letters and the 32-byte seed unpadded base64 (what
     /// `generate_signing_key` writes).
-    pub fn signing_key(a: &[Value]) -> Option<Value> {
+    pub fn signing_key(run: &Run, a: &[Value]) -> Option<Value> {
         use base64::Engine;
         let (a, generation) = generation_arg(a, 1)?;
         let [Value::Str(key)] = a else { return None };
-        derived_value("signing_key", key, generation, true, || {
-            let (version, seed) = ed25519(key)?;
+        derived_value(run, "signing_key", key, generation, true, |d| {
+            let (version, seed) = d.ed25519(key)?;
             Some(Value::Str(format!(
                 "ed25519 a_{version} {}",
                 base64::engine::general_purpose::STANDARD_NO_PAD.encode(seed)
@@ -2845,12 +2845,12 @@ pub mod random {
     /// a_XXXX KEY`, the verify key unpadded base64, as Synapse publishes
     /// one (`old_signing_keys`). Public: it is what remote servers verify
     /// with.
-    pub fn verify_key(a: &[Value]) -> Option<Value> {
+    pub fn verify_key(run: &Run, a: &[Value]) -> Option<Value> {
         use base64::Engine;
         let (a, generation) = generation_arg(a, 1)?;
         let [Value::Str(key)] = a else { return None };
-        derived_value("verify_key", key, generation, false, || {
-            let (version, seed) = ed25519(key)?;
+        derived_value(run, "verify_key", key, generation, false, |d| {
+            let (version, seed) = d.ed25519(key)?;
             let seed: [u8; 32] = seed.try_into().ok()?;
             let public = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key();
             Some(Value::Str(format!(
@@ -2864,6 +2864,7 @@ pub mod random {
 #[cfg(test)]
 mod random_tests {
     use super::random::*;
+    use crate::secrets::Run;
     use crate::value::Value;
 
     fn s(v: Option<Value>) -> String {
@@ -2877,27 +2878,32 @@ mod random_tests {
     /// another for any of them changed; none without a master.
     #[test]
     fn a_value_is_derived_from_the_master_and_every_knob() {
+        let run = Run::default();
         let k = |x: &str| Value::Str(x.into());
-        set_master(Some(b"m1".to_vec()), None, "app");
-        let pw = s(password(&[k("db")]));
+        run.random_mut()
+            .set_master(Some(b"m1".to_vec()), None, "app");
+        let pw = s(password(&run, &[k("db")]));
         assert!(pw.len() == 32 && pw.chars().all(|c| c.is_ascii_alphanumeric()));
-        assert_eq!(pw, s(password(&[k("db")])));
-        assert_eq!(pw, s(password(&[k("db"), Value::Int(32), k("alnum")])));
-        assert_ne!(pw, s(password(&[k("other")])));
-        let long = s(password(&[k("db"), Value::Int(40)]));
+        assert_eq!(pw, s(password(&run, &[k("db")])));
+        assert_eq!(
+            pw,
+            s(password(&run, &[k("db"), Value::Int(32), k("alnum")]))
+        );
+        assert_ne!(pw, s(password(&run, &[k("other")])));
+        let long = s(password(&run, &[k("db"), Value::Int(40)]));
         assert_eq!(long.len(), 40);
         assert!(!long.starts_with(&pw), "a length is in the derivation");
-        let hex = s(password(&[k("db"), Value::Int(16), k("hex")]));
+        let hex = s(password(&run, &[k("db"), Value::Int(16), k("hex")]));
         assert!(hex.len() == 16 && hex.chars().all(|c| c.is_ascii_hexdigit()));
-        assert!(password(&[k("db"), Value::Int(16), k("emoji")]).is_none());
-        assert!(password(&[k("db"), Value::Int(0)]).is_none());
-        let b = s(base64(&[k("cookie"), Value::Int(32)]));
+        assert!(password(&run, &[k("db"), Value::Int(16), k("emoji")]).is_none());
+        assert!(password(&run, &[k("db"), Value::Int(0)]).is_none());
+        let b = s(base64(&run, &[k("cookie"), Value::Int(32)]));
         assert_eq!(b.len(), 44);
-        let id = s(id(&[k("logs")]));
+        let id = s(id(&run, &[k("logs")]));
         assert_eq!(id.len(), 16);
-        let u = s(uuid(&[k("tenant")]));
+        let u = s(uuid(&run, &[k("tenant")]));
         assert!(u.len() == 36 && u.as_bytes()[14] == b'4', "{u}");
-        let sk = s(signing_key(&[k("synapse")]));
+        let sk = s(signing_key(&run, &[k("synapse")]));
         let parts: Vec<&str> = sk.split(' ').collect();
         assert!(
             parts.len() == 3
@@ -2907,10 +2913,12 @@ mod random_tests {
                 && parts[2].len() == 43,
             "{sk}"
         );
-        set_master(Some(b"m1".to_vec()), None, "app[env=prod]");
-        assert_ne!(pw, s(password(&[k("db")])), "the deployment is in it");
-        set_master(Some(b"m2".to_vec()), None, "app");
-        assert_ne!(pw, s(password(&[k("db")])), "the master is in it");
+        run.random_mut()
+            .set_master(Some(b"m1".to_vec()), None, "app[env=prod]");
+        assert_ne!(pw, s(password(&run, &[k("db")])), "the deployment is in it");
+        run.random_mut()
+            .set_master(Some(b"m2".to_vec()), None, "app");
+        assert_ne!(pw, s(password(&run, &[k("db")])), "the master is in it");
     }
 
     /// A run that does not hold the master derives each value's stand-in:
@@ -2919,18 +2927,24 @@ mod random_tests {
     /// stand-in beside the value.
     #[test]
     fn without_the_master_a_value_is_its_stand_in() {
+        let run = Run::default();
         let k = |x: &str| Value::Str(x.into());
-        set_master(Some(b"m1".to_vec()), Some("id-1"), "app");
-        let pw = s(password(&[k("db")]));
-        set_master(None, Some("id-1"), "app");
-        let standin = s(password(&[k("db")]));
+        run.random_mut()
+            .set_master(Some(b"m1".to_vec()), Some("id-1"), "app");
+        let pw = s(password(&run, &[k("db")]));
+        run.random_mut().set_master(None, Some("id-1"), "app");
+        let standin = s(password(&run, &[k("db")]));
         assert_ne!(pw, standin);
         assert!(standin.len() == 32 && standin.chars().all(|c| c.is_ascii_alphanumeric()));
-        assert_eq!(standin, s(password(&[k("db")])), "stable");
-        set_master(None, Some("id-2"), "app");
-        assert_ne!(standin, s(password(&[k("db")])), "the master id is in it");
-        set_master(None, Some("id-1"), "app");
-        assert_ne!(standin, s(password(&[k("db-2")])), "the key is in it");
+        assert_eq!(standin, s(password(&run, &[k("db")])), "stable");
+        run.random_mut().set_master(None, Some("id-2"), "app");
+        assert_ne!(
+            standin,
+            s(password(&run, &[k("db")])),
+            "the master id is in it"
+        );
+        run.random_mut().set_master(None, Some("id-1"), "app");
+        assert_ne!(standin, s(password(&run, &[k("db-2")])), "the key is in it");
     }
 
     /// A key's generation (R-161) is one more input: generation 1 is the
@@ -2939,11 +2953,13 @@ mod random_tests {
     /// one is none.
     #[test]
     fn a_generation_is_in_the_derivation() {
+        let run = Run::default();
         let k = |x: &str| Value::Str(x.into());
-        set_master(Some(b"m1".to_vec()), None, "app");
-        set_secrets(&Default::default());
-        let first = s(password(&[k("db")]));
-        let other = s(password(&[k("other")]));
+        run.random_mut()
+            .set_master(Some(b"m1".to_vec()), None, "app");
+        run.random_mut().set_secrets(&Default::default());
+        let first = s(password(&run, &[k("db")]));
+        let other = s(password(&run, &[k("other")]));
         let rotated = crate::state::Secret {
             generation: 2,
             epoch: None,
@@ -2951,40 +2967,43 @@ mod random_tests {
             by: "alice".into(),
             pending: true,
         };
-        set_secrets(&[("db".to_string(), rotated)].into_iter().collect());
-        let second = s(password(&[k("db")]));
+        run.random_mut()
+            .set_secrets(&[("db".to_string(), rotated)].into_iter().collect());
+        let second = s(password(&run, &[k("db")]));
         assert_ne!(first, second);
         assert_eq!(
             other,
-            s(password(&[k("other")])),
+            s(password(&run, &[k("other")])),
             "another key is as it was"
         );
-        let at = |g| password(&[k("db"), Value::Int(32), k("alnum"), Value::Int(g)]);
+        let at = |g| password(&run, &[k("db"), Value::Int(32), k("alnum"), Value::Int(g)]);
         assert_eq!(first, s(at(1)));
         assert_eq!(second, s(at(2)));
         assert!(at(3).is_none() && at(0).is_none());
         assert!(
-            derived()
-                .iter()
+            run.random()
+                .derived()
                 .any(|(_, l)| l
                     == "random.password(\"db\"), generation 2, rotated 2026-10-07 by alice"),
             "{:?}",
-            derived()
+            run.random().derived().collect::<Vec<_>>()
         );
-        assert_eq!(generation(&[k("db")]), Some(Value::Int(2)));
-        assert_eq!(generation(&[k("other")]), Some(Value::Int(1)));
+        assert_eq!(generation(&run, &[k("db")]), Some(Value::Int(2)));
+        assert_eq!(generation(&run, &[k("other")]), Some(Value::Int(1)));
     }
 
     /// `random.verify_key` is the public half of `random.signing_key`, at
     /// the same generation.
     #[test]
     fn a_verify_key_is_its_signing_keys_public_half() {
+        let run = Run::default();
         use base64::Engine;
         let k = |x: &str| Value::Str(x.into());
-        set_master(Some(b"m1".to_vec()), None, "app");
-        set_secrets(&Default::default());
-        let signing = s(signing_key(&[k("synapse")]));
-        let verify = s(verify_key(&[k("synapse")]));
+        run.random_mut()
+            .set_master(Some(b"m1".to_vec()), None, "app");
+        run.random_mut().set_secrets(&Default::default());
+        let signing = s(signing_key(&run, &[k("synapse")]));
+        let verify = s(verify_key(&run, &[k("synapse")]));
         let (sv, seed) = signing.rsplit_once(' ').unwrap();
         let (vv, public) = verify.rsplit_once(' ').unwrap();
         assert_eq!(sv, vv, "the same version");
@@ -2998,12 +3017,13 @@ mod random_tests {
             base64::engine::general_purpose::STANDARD_NO_PAD.encode(want.as_bytes()),
             public
         );
-        assert_eq!(verify, s(verify_key(&[k("synapse"), Value::Int(1)])));
+        assert_eq!(verify, s(verify_key(&run, &[k("synapse"), Value::Int(1)])));
     }
 
     #[test]
     fn with_no_master_there_is_no_value() {
-        assert!(password(&[Value::Str("db".into())]).is_none());
+        let run = Run::default();
+        assert!(password(&run, &[Value::Str("db".into())]).is_none());
     }
 }
 

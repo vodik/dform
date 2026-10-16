@@ -86,7 +86,8 @@ pub(super) fn contains(v: &Value, w: &Value) -> bool {
 /// The facts `pattern` names, each with the focus it was matched under.
 pub fn find(pattern: &Atom, facts: &BTreeSet<Atom>) -> Result<Vec<(Atom, Option<Focus>)>> {
     let matched = |p: &Atom| -> Result<Vec<Atom>> {
-        let mut out: Vec<Atom> = engine::query(&[Lit::Pos(p.clone())], facts)?
+        // A pattern's terms are values and references: no call of a run.
+        let mut out: Vec<Atom> = engine::query(&[Lit::Pos(p.clone())], facts, &Default::default())?
             .into_iter()
             .filter_map(|(_, used)| used.into_iter().next())
             .collect();
@@ -159,6 +160,9 @@ pub struct Printer<'a> {
     pub redact: &'a Redactor,
     /// Show every alternative, not only the first.
     pub all: bool,
+    /// The run the circuit's evaluation was in (`EvalResult::secrets`):
+    /// a statement's `random.*` call is its value there.
+    pub secrets: &'a crate::secrets::Run,
 }
 
 impl Printer<'_> {

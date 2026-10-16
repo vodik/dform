@@ -80,10 +80,17 @@ pub struct Memos {
     master: crate::custody::Master,
     /// The first candidate of each key not kept, as this run answered it.
     given: RefCell<BTreeMap<String, Value>>,
+    /// The run's secrets: a sealed one's value, or its stand-in, is
+    /// registered there.
+    secrets: std::rc::Rc<crate::secrets::Run>,
 }
 
 impl Memos {
-    pub fn new(st: &State, master: &crate::custody::Master) -> Memos {
+    pub fn new(
+        st: &State,
+        master: &crate::custody::Master,
+        secrets: std::rc::Rc<crate::secrets::Run>,
+    ) -> Memos {
         let when = st
             .memo
             .iter()
@@ -94,6 +101,7 @@ impl Memos {
             kept: st.memo.clone(),
             master: master.clone(),
             given: RefCell::new(BTreeMap::new()),
+            secrets,
         }
     }
 
@@ -147,14 +155,16 @@ impl Memos {
         let label = format!("{FIRST}({k:?})");
         let Some(key) = self.master.key_of(m.epoch.unwrap_or(1)) else {
             // A run that does not hold the master: the stand-in.
-            crate::secrets::standin::register(&standin, &label, &standin);
+            self.secrets
+                .standins_mut()
+                .register(&standin, &label, &standin);
             return Ok(Value::Str(standin));
         };
         let plain = crate::secrets::open(key, k, &m.sealed)?;
         let v: Value = serde_json::from_slice(&plain)
             .with_context(|| format!("memo {k}: the opened value"))?;
         if let Value::Str(t) = &v {
-            crate::secrets::standin::register(t, &label, &standin);
+            self.secrets.standins_mut().register(t, &label, &standin);
         }
         Ok(v)
     }
@@ -163,12 +173,13 @@ impl Memos {
 /// Keep in `st` each memo the run answered that it does not have yet:
 /// `(key, value, secret)` ([`crate::externs::Externs::memos`]), a secret
 /// one sealed with the deployment's master `key`. A run that does not
-/// hold it keeps no secret one, nor one that holds a stand-in: the next
-/// apply with the master does. `now`: when, RFC 3339.
+/// hold it keeps no secret one, nor one that holds a stand-in of its
+/// `secrets`: the next apply with the master does. `now`: when, RFC 3339.
 pub fn keep(
     st: &mut State,
     memos: Vec<(String, Value, bool)>,
     master: &crate::custody::Master,
+    secrets: &crate::secrets::Run,
     now: &str,
 ) -> Result<()> {
     let key = master.key.as_ref();
@@ -180,7 +191,7 @@ pub fn keep(
         }
         let kept = match (secret, key) {
             (true, None) => continue,
-            (false, None) if crate::secrets::standin::carries(&crate::spell::value_to_json(&v)) => {
+            (false, None) if secrets.standins().carries(&crate::spell::value_to_json(&v)) => {
                 continue;
             }
             (true, Some(key)) => Kept {

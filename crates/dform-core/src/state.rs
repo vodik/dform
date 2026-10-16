@@ -223,9 +223,9 @@ pub struct StateEntry {
     /// Each leaf at a secret path that holds a derived value (`random.*`,
     /// a sealed memo's) as last applied, by path: the digest of the leaf
     /// with each derived value replaced by its stand-in
-    /// (`secrets::standin::digest`), a function of public inputs. A run
-    /// that does not hold the master proves the leaf unchanged by it
-    /// (R-164).
+    /// (`secrets::standin::Registry::digest`), a function of public
+    /// inputs. A run that does not hold the master proves the leaf
+    /// unchanged by it (R-164).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub derived: BTreeMap<String, String>,
     /// Each attribute given at the object's creation only (R-198,

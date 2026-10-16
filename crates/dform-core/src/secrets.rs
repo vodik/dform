@@ -46,6 +46,7 @@ use crate::schema::Schema;
 use crate::transform::Lowered;
 use crate::value::Value;
 use anyhow::Result;
+use std::cell::{Ref, RefCell, RefMut};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod held;
@@ -74,12 +75,12 @@ pub const SECRETS: &str = "secrets";
 pub const ROTATED: &str = "rotated";
 
 /// The rows of `secrets/4` and `rotated/3` for a run of `st`: the keys
-/// its `random.*` calls derived for (`functions::random::calls`), the
-/// memos it keeps, and every key rotated.
-pub fn rotation_facts(st: &crate::state::State) -> Vec<Atom> {
+/// its `random.*` calls derived for (`run`'s), the memos it keeps, and
+/// every key rotated.
+pub fn rotation_facts(st: &crate::state::State, run: &Run) -> Vec<Atom> {
     let now = crate::memo::now();
-    let born = crate::functions::random::born();
-    let born = born.as_deref();
+    let random = run.random();
+    let born = random.born();
     let time = |t: &str| {
         crate::time::Time::parse(t)
             .map(Value::Time)
@@ -93,9 +94,9 @@ pub fn rotation_facts(st: &crate::state::State) -> Vec<Atom> {
         span: Default::default(),
     };
     let mut kinds: BTreeMap<String, &str> = BTreeMap::new();
-    for (k, c) in crate::functions::random::calls() {
+    for (k, c) in random.calls() {
         if c.secret {
-            kinds.insert(k, "random");
+            kinds.insert(k.clone(), "random");
         }
     }
     for k in st.memo.keys() {
@@ -1687,6 +1688,81 @@ mod held_tests {
     }
 }
 
+/// What a deployment's run holds for its secrets beside its evaluation:
+/// what its master derives (`functions::random`), its stand-ins
+/// ([`standin`]), its given secrets' key and the files of them it read
+/// (`custody::given`). One per deployment's run, held by its providers
+/// (`plugin::Providers::secrets`) and taken by reference by whatever
+/// derives, reads or sends a secret: its evaluation, its tables and
+/// memos, its calls; a tree's deployments in one process each hold their
+/// own.
+#[derive(Default)]
+pub struct Run {
+    random: RefCell<crate::functions::random::Derivations>,
+    standins: RefCell<standin::Registry>,
+    given: RefCell<crate::custody::given::Opened>,
+}
+
+/// Nothing of a run's secrets is printed.
+impl std::fmt::Debug for Run {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Run").finish_non_exhaustive()
+    }
+}
+
+impl Run {
+    /// What derives from the deployment's master, set for the run: the
+    /// master state was applied with, or `--new-master` (R-163);
+    /// `random.*` from it (R-60) when `random` (the program calls one),
+    /// stand-ins for a run that does not hold it (R-164, [`standin`]); a
+    /// file of given secrets opened with its own identity too (R-108);
+    /// each key at its generation (R-161) and from its epoch's master
+    /// (R-165).
+    pub fn derive_with(
+        &self,
+        master: &crate::custody::Master,
+        st: &crate::state::State,
+        deployment: &str,
+        random: bool,
+    ) {
+        self.standins_mut().set_active(master.random.is_none());
+        self.given_mut().set_key(master.digest.clone());
+        let mut r = self.random_mut();
+        r.set_secrets(&st.secrets);
+        if random {
+            r.set_master(master.random.clone(), master.id.as_deref(), deployment);
+            r.set_epochs(&master.epochs());
+        }
+    }
+
+    /// What the master derives in the run, and what it derived.
+    pub fn random(&self) -> Ref<'_, crate::functions::random::Derivations> {
+        self.random.borrow()
+    }
+
+    pub fn random_mut(&self) -> RefMut<'_, crate::functions::random::Derivations> {
+        self.random.borrow_mut()
+    }
+
+    /// The run's stand-ins.
+    pub fn standins(&self) -> Ref<'_, standin::Registry> {
+        self.standins.borrow()
+    }
+
+    pub fn standins_mut(&self) -> RefMut<'_, standin::Registry> {
+        self.standins.borrow_mut()
+    }
+
+    /// The run's given secrets: its key and the files read.
+    pub fn given(&self) -> Ref<'_, crate::custody::given::Opened> {
+        self.given.borrow()
+    }
+
+    pub fn given_mut(&self) -> RefMut<'_, crate::custody::given::Opened> {
+        self.given.borrow_mut()
+    }
+}
+
 /// Stand-ins (R-164): what a run that does not hold the master derives in
 /// place of each secret the master derives (a `random.*` value, a sealed
 /// memo's), and how it proves one unchanged without its value.
@@ -1697,44 +1773,17 @@ mod held_tests {
 /// key, every knob, the master id) alone: public. A run with the master
 /// derives both and records, beside each secret leaf an apply wrote
 /// (`StateEntry::derived`), the digest of the leaf with every derived
-/// value in it replaced by its stand-in ([`digest`]). A run without the
-/// master derives the stand-ins only: a leaf whose digest is the one state
-/// recorded is unchanged, any other change of it needs the master. A
-/// stand-in never leaves the process but as such a digest: an action that
-/// would send one is not sent ([`carries`]).
-/// What a deployment's run sets for its secrets that the process keeps
-/// (its master's derivations, its stand-ins, its given secrets' key):
-/// taken while another deployment's run of the same tree goes on in the
-/// same process, set again when its own does.
-pub struct Scope {
-    random: crate::functions::random::Saved,
-    given: crate::custody::given::Saved,
-    standin: standin::Saved,
-}
-
-impl Scope {
-    /// The run's, taken: the process as no deployment's run has set it.
-    pub fn save() -> Scope {
-        Scope {
-            random: crate::functions::random::save(),
-            given: crate::custody::given::save(),
-            standin: standin::save(),
-        }
-    }
-
-    /// Set again: its deployment's run goes on.
-    pub fn restore(self) {
-        crate::functions::random::restore(self.random);
-        crate::custody::given::restore(self.given);
-        standin::restore(self.standin);
-    }
-}
-
+/// value in it replaced by its stand-in ([`Registry::digest`]). A run
+/// without the master derives the stand-ins only: a leaf whose digest is
+/// the one state recorded is unchanged, any other change of it needs the
+/// master. A stand-in never leaves the process but as such a digest: an
+/// action that would send one is not sent ([`Registry::carries`]).
 pub mod standin {
     use std::collections::{BTreeMap, BTreeSet};
-    use std::sync::Mutex;
 
-    struct Registry {
+    /// A run's stand-ins ([`super::Run::standins`]).
+    #[derive(Default)]
+    pub struct Registry {
         /// Each derived value's text (a stand-in's own, in a run without
         /// the master) -> its label and its stand-in's text.
         derived: BTreeMap<String, (String, String)>,
@@ -1747,110 +1796,86 @@ pub mod standin {
         active: bool,
     }
 
-    static REGISTRY: Mutex<Registry> = Mutex::new(Registry {
-        derived: BTreeMap::new(),
-        sources: BTreeSet::new(),
-        active: false,
-    });
-
-    fn registry() -> std::sync::MutexGuard<'static, Registry> {
-        REGISTRY.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// What one deployment's run registered, taken while another's runs
-    /// in the same process (a tree's apply, `secrets::Scope`).
-    pub struct Saved(Registry);
-
-    /// What the run registered, taken: as no deployment's run has.
-    pub fn save() -> Saved {
-        let mut r = registry();
-        Saved(Registry {
-            derived: std::mem::take(&mut r.derived),
-            sources: std::mem::take(&mut r.sources),
-            active: std::mem::replace(&mut r.active, false),
-        })
-    }
-
-    /// `saved` registered again: its deployment's run goes on.
-    pub fn restore(saved: Saved) {
-        *registry() = saved.0;
-    }
-
-    /// The run holds no master (`true`): what it derives are stand-ins.
-    pub fn set_active(active: bool) {
-        registry().active = active;
-    }
-
-    pub fn active() -> bool {
-        registry().active
-    }
-
-    /// `value`, derived as `label`, stands in as `standin`.
-    pub fn register(value: &str, label: &str, standin: &str) {
-        if value.is_empty() {
-            return;
+    impl Registry {
+        /// The run holds no master (`true`): what it derives are stand-ins.
+        pub fn set_active(&mut self, active: bool) {
+            self.active = active;
         }
-        registry()
-            .derived
-            .entry(value.to_string())
-            .or_insert_with(|| (label.to_string(), standin.to_string()));
-    }
 
-    /// The run's secrets that are not derived (`query::Redactor::sources`).
-    pub fn set_sources(sources: impl IntoIterator<Item = String>) {
-        registry().sources = sources.into_iter().filter(|s| !s.is_empty()).collect();
-    }
-
-    /// Whether `text` is or holds a derived value (or its stand-in).
-    pub fn derived(text: &str) -> bool {
-        let r = registry();
-        r.derived
-            .iter()
-            .any(|(v, (_, s))| text.contains(v.as_str()) || text.contains(s.as_str()))
-    }
-
-    /// The label of each derived value `text` holds, in a run without the
-    /// master (where a value is its stand-in).
-    pub fn labels(text: &str) -> Vec<String> {
-        let r = registry();
-        r.derived
-            .iter()
-            .filter(|(v, _)| text.contains(v.as_str()))
-            .map(|(_, (l, _))| l.clone())
-            .collect()
-    }
-
-    /// Whether `j` holds a stand-in a run without the master derived: what
-    /// it must never send.
-    pub fn carries(j: &serde_json::Value) -> bool {
-        let r = registry();
-        if !r.active {
-            return false;
+        pub fn active(&self) -> bool {
+            self.active
         }
-        fn walk(j: &serde_json::Value, f: &dyn Fn(&str) -> bool) -> bool {
-            match j {
-                serde_json::Value::String(s) => f(s),
-                serde_json::Value::Array(xs) => xs.iter().any(|x| walk(x, f)),
-                serde_json::Value::Object(m) => m.values().any(|x| walk(x, f)),
-                _ => false,
+
+        /// `value`, derived as `label`, stands in as `standin`.
+        pub fn register(&mut self, value: &str, label: &str, standin: &str) {
+            if value.is_empty() {
+                return;
             }
+            self.derived
+                .entry(value.to_string())
+                .or_insert_with(|| (label.to_string(), standin.to_string()));
         }
-        walk(j, &|s| r.derived.keys().any(|v| s.contains(v.as_str())))
-    }
 
-    /// The digest of the leaf `j` with each derived value in it replaced
-    /// by its stand-in, hex: `None` when it holds none, or holds a secret
-    /// that is not derived.
-    pub fn digest(j: &serde_json::Value) -> Option<String> {
-        let r = registry();
-        let mut hit = false;
-        fn walk(j: &serde_json::Value, r: &Registry, hit: &mut bool) -> Option<serde_json::Value> {
+        /// The run's secrets that are not derived (`query::Redactor::sources`).
+        pub fn set_sources(&mut self, sources: impl IntoIterator<Item = String>) {
+            self.sources = sources.into_iter().filter(|s| !s.is_empty()).collect();
+        }
+
+        /// Whether `text` is or holds a derived value (or its stand-in).
+        pub fn derived(&self, text: &str) -> bool {
+            self.derived
+                .iter()
+                .any(|(v, (_, s))| text.contains(v.as_str()) || text.contains(s.as_str()))
+        }
+
+        /// The label of each derived value `text` holds, in a run without
+        /// the master (where a value is its stand-in).
+        pub fn labels(&self, text: &str) -> Vec<String> {
+            self.derived
+                .iter()
+                .filter(|(v, _)| text.contains(v.as_str()))
+                .map(|(_, (l, _))| l.clone())
+                .collect()
+        }
+
+        /// Whether `j` holds a stand-in a run without the master derived:
+        /// what it must never send.
+        pub fn carries(&self, j: &serde_json::Value) -> bool {
+            if !self.active {
+                return false;
+            }
+            fn walk(j: &serde_json::Value, f: &dyn Fn(&str) -> bool) -> bool {
+                match j {
+                    serde_json::Value::String(s) => f(s),
+                    serde_json::Value::Array(xs) => xs.iter().any(|x| walk(x, f)),
+                    serde_json::Value::Object(m) => m.values().any(|x| walk(x, f)),
+                    _ => false,
+                }
+            }
+            walk(j, &|s| self.derived.keys().any(|v| s.contains(v.as_str())))
+        }
+
+        /// The digest of the leaf `j` with each derived value in it
+        /// replaced by its stand-in, hex: `None` when it holds none, or
+        /// holds a secret that is not derived.
+        pub fn digest(&self, j: &serde_json::Value) -> Option<String> {
+            let mut hit = false;
+            let standin = self.standing_in(j, &mut hit)?;
+            hit.then(|| {
+                crate::approval::sha256_hex(crate::approval::canonical_json(&standin).as_bytes())
+            })
+        }
+
+        /// `j` with each derived value in it replaced by its stand-in
+        /// (`hit`: one was); `None` when it holds a secret that is not
+        /// derived.
+        fn standing_in(&self, j: &serde_json::Value, hit: &mut bool) -> Option<serde_json::Value> {
             Some(match j {
                 serde_json::Value::String(s) => {
                     let mut out = s.clone();
                     // The longest first: one derived value may hold another.
                     let mut vs: Vec<(&String, &String)> =
-                        r.derived.iter().map(|(v, (_, st))| (v, st)).collect();
+                        self.derived.iter().map(|(v, (_, st))| (v, st)).collect();
                     vs.sort_by_key(|(v, _)| std::cmp::Reverse(v.len()));
                     for (v, st) in vs {
                         if out.contains(v.as_str()) {
@@ -1858,34 +1883,24 @@ pub mod standin {
                             out = out.replace(v.as_str(), st);
                         }
                     }
-                    if r.sources.iter().any(|x| out.contains(x.as_str())) {
+                    if self.sources.iter().any(|x| out.contains(x.as_str())) {
                         return None;
                     }
                     serde_json::Value::String(out)
                 }
                 serde_json::Value::Array(xs) => serde_json::Value::Array(
-                    xs.iter().map(|x| walk(x, r, hit)).collect::<Option<_>>()?,
+                    xs.iter()
+                        .map(|x| self.standing_in(x, hit))
+                        .collect::<Option<_>>()?,
                 ),
                 serde_json::Value::Object(m) => serde_json::Value::Object(
                     m.iter()
-                        .map(|(k, x)| Some((k.clone(), walk(x, r, hit)?)))
+                        .map(|(k, x)| Some((k.clone(), self.standing_in(x, hit)?)))
                         .collect::<Option<_>>()?,
                 ),
                 other => other.clone(),
             })
         }
-        let standin = walk(j, &r, &mut hit)?;
-        hit.then(|| {
-            crate::approval::sha256_hex(crate::approval::canonical_json(&standin).as_bytes())
-        })
-    }
-
-    /// Forget the run's registry (a test's, between deployments).
-    pub fn clear() {
-        let mut r = registry();
-        r.derived.clear();
-        r.sources.clear();
-        r.active = false;
     }
 }
 
@@ -2064,14 +2079,14 @@ pub mod inventory {
     }
 
     /// The secrets of a run: `facts` its evaluation's, `redact` its
-    /// labels, `st` its state, `born` when its master was first applied,
-    /// `current` its master's epoch.
+    /// labels, `st` its state, `run` what its master derived (and when it
+    /// was first applied), `current` its master's epoch.
     pub fn of(
         facts: &BTreeSet<Atom>,
         redact: &crate::query::Redactor,
         st: &crate::state::State,
         schema: &crate::schema::Schema,
-        born: Option<&str>,
+        run: &super::Run,
         current: u32,
     ) -> Vec<Secret> {
         let mut inv = Inventory {
@@ -2079,6 +2094,7 @@ pub mod inventory {
             redact,
             st,
             schema,
+            run,
             out: BTreeMap::new(),
         };
         inv.derived();
@@ -2086,7 +2102,8 @@ pub mod inventory {
         inv.managed();
         let held_at = inv.held();
         inv.cells(&held_at);
-        inv.into_secrets(born, current)
+        let born = run.random().born().map(str::to_string);
+        inv.into_secrets(born.as_deref(), current)
     }
 
     /// The secrets of a run, by key, as they are found.
@@ -2095,6 +2112,7 @@ pub mod inventory {
         redact: &'a crate::query::Redactor,
         st: &'a crate::state::State,
         schema: &'a crate::schema::Schema,
+        run: &'a super::Run,
         out: BTreeMap<String, Secret>,
     }
 
@@ -2128,9 +2146,11 @@ pub mod inventory {
         /// What dform derives: each `random.*` key and each memo.
         fn derived(&mut self) {
             let (facts, st) = (self.facts, self.st);
-            for (k, c) in crate::functions::random::calls() {
+            for (k, c) in self.run.random().calls() {
                 if c.secret {
-                    self.row(&k, Kind::Random).values.extend(c.values);
+                    self.row(k, Kind::Random)
+                        .values
+                        .extend(c.values.iter().cloned());
                 }
             }
             for a in facts.iter().filter(|a| a.pred == crate::memo::FIRST) {

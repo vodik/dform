@@ -14,7 +14,7 @@ use dform::schema::Schema;
 use std::collections::BTreeSet;
 
 fn redactor() -> Redactor {
-    Redactor::new(&BTreeSet::new(), &Schema::default())
+    Redactor::new(&BTreeSet::new(), &Schema::default(), &Default::default())
 }
 
 /// The rules a source writes, parsed.

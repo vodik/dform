@@ -324,6 +324,8 @@ pub(super) struct Cx<'a> {
     /// its documents.
     pub(super) env: std::collections::HashMap<&'a str, &'a Value>,
     pub(super) rule: Option<&'a RuleStmt>,
+    /// The run the firing was in: a call's value there.
+    pub(super) secrets: &'a crate::secrets::Run,
 }
 
 impl Cx<'_> {
@@ -443,7 +445,7 @@ impl Cx<'_> {
                     .iter()
                     .map(|a| self.core(a))
                     .collect::<Option<Vec<_>>>()?;
-                call(name, &args)
+                call(name, &args, self.secrets)
             }
             Term::List(xs) => xs
                 .iter()
@@ -512,7 +514,7 @@ impl Cx<'_> {
                     .children()
                     .map(|a| (a.kind() != NAMED_ARG).then(|| self.eval(&a)).flatten())
                     .collect::<Option<Vec<_>>>()?;
-                call(&name, &args)
+                call(&name, &args, self.secrets)
             }
             // A spread's value is the lowering's (R-199), not computed again.
             LIST | OBJECT if n.children().any(|c| c.kind() == SPREAD) => None,
@@ -714,11 +716,11 @@ impl Cx<'_> {
     }
 }
 
-/// A function's value at `args`, as the engine computes it; none over a
-/// null.
-pub(super) fn call(name: &str, args: &[Value]) -> Option<Value> {
+/// A function's value at `args` in the run `secrets`, as the engine
+/// computes it; none over a null.
+pub(super) fn call(name: &str, args: &[Value], secrets: &crate::secrets::Run) -> Option<Value> {
     if args.iter().any(crate::stuck::has_null) {
         return None;
     }
-    crate::functions::body(name)?(args)
+    crate::functions::apply(name, secrets, args)
 }

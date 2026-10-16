@@ -113,7 +113,7 @@ impl<'a> Space<'a> {
         );
         let backend = match loaded.starts_none() {
             true => {
-                let p = Providers::none();
+                let p = Providers::none(Default::default());
                 p.load_schema(None)?;
                 p
             }
@@ -221,8 +221,26 @@ impl<'a> Space<'a> {
     fn evaluate(&self, pairs: &[(String, Value)]) -> Result<Vec<String>> {
         let e = self.evaluated(pairs)?;
         self.plan(&e.res, &e.resources)?;
-        let redact = query::Redactor::new(&e.res.facts, self.backend.schema());
+        let redact =
+            query::Redactor::new(&e.res.facts, self.backend.schema(), self.backend.secrets());
         Ok(e.violations.iter().map(|v| redact.text(v)).collect())
+    }
+
+    /// What answers a combination's tables and memos. Nothing is kept
+    /// and nothing applied: a memo answers its candidate, `random.*`
+    /// derive from a master of the test's own.
+    fn sources(&self) -> (crate::tables::Tables, crate::memo::Memos) {
+        let secrets = self.backend.secrets();
+        secrets
+            .random_mut()
+            .set_master(Some(b"dform test".to_vec()), None, self.stack);
+        let tables = crate::tables::Tables::with_files(self.reader.clone(), secrets.clone());
+        let memos = crate::memo::Memos::new(
+            &state::State::default(),
+            &crate::custody::Master::none(),
+            secrets.clone(),
+        );
+        (tables, memos)
     }
 
     /// The program evaluated with the inputs `pairs`, short of its
@@ -236,12 +254,7 @@ impl<'a> Space<'a> {
         extra.extend(self.cli.manifest.iter().flat_map(|m| m.facts()));
         extra.extend(build_extra_facts(&self.cli.data)?);
         extra.extend(backend.catalog(schema::named_types(&lowered.program, &extra).as_ref())?);
-        let tables = crate::tables::Tables::with_files(self.reader.clone());
-        // Nothing is kept and nothing applied: a memo answers its
-        // candidate, `random.*` derive from a master of the test's own.
-        let memos =
-            crate::memo::Memos::new(&state::State::default(), &crate::custody::Master::none());
-        crate::functions::random::set_master(Some(b"dform test".to_vec()), None, self.stack);
+        let (tables, memos) = self.sources();
         let externs =
             crate::externs::Externs::new(&lowered.program, &lowered.extern_fns, |f, ins| {
                 if let Some(r) = tables.answer(f, ins) {
@@ -278,7 +291,7 @@ impl<'a> Space<'a> {
         deployment::declare_externs(&mut p, lowered);
         // Quantity and time literals read as their attributes' types (R-66).
         let p = crate::types::read(&p, backend.schema())?;
-        let (res, mut violations) = externs.eval(&p, &extra)?;
+        let (res, mut violations) = externs.eval(&p, &extra, backend.secrets())?;
         // A read of what nothing derives (R-194).
         report::Unanswered::check(&res.facts)?;
         // What the plan refuses before any provider is asked (R-184): a

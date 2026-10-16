@@ -1165,6 +1165,7 @@ impl Derived {
             circuit: &res.circuit,
             redact,
             all: false,
+            secrets: &res.secrets,
         };
         let mut out = Derived::default();
         for f in res.facts.iter().filter(|f| f.pred == "want") {
@@ -1534,19 +1535,40 @@ pub mod file {
         }
     }
 
+    /// How a run digests a sensitive value the file stores: keyed with
+    /// the deployment's master (`Keyed`); in a run that does not hold it,
+    /// by its derivation, with the run's stand-ins (`Derived`,
+    /// `secrets::standin`, R-164).
+    #[derive(Clone, Copy)]
+    pub enum Digesting<'a> {
+        Keyed(&'a Key),
+        Derived(&'a crate::secrets::Run),
+    }
+
+    impl<'a> Digesting<'a> {
+        /// With the master's `key` when the run holds it, else by the
+        /// derivations of the run whose secrets are `run`.
+        pub fn of(key: Option<&'a Key>, run: &'a crate::secrets::Run) -> Digesting<'a> {
+            match key {
+                Some(k) => Digesting::Keyed(k),
+                None => Digesting::Derived(run),
+            }
+        }
+    }
+
     /// A redacted value as the file stores it: a sensitive one with the
-    /// digest of its bytes keyed with the deployment's master (`key`); in a
-    /// run that does not hold it, a derived one with its derivation digest
-    /// (`secrets::standin`, R-164) and any other with its label alone, never
-    /// an unkeyed digest. Anything else as shown.
-    pub fn stored(key: Option<&Key>, shown: report::Shown, value: impl FnOnce() -> Json) -> Json {
-        match (shown, key) {
-            (report::Shown::Sensitive(l), Some(k)) => serde_json::json!({
+    /// digest of its bytes keyed with the deployment's master; in a run
+    /// that does not hold it, a derived one with its derivation digest
+    /// and any other with its label alone, never an unkeyed digest
+    /// ([`Digesting`]). Anything else as shown.
+    pub fn stored(by: Digesting, shown: report::Shown, value: impl FnOnce() -> Json) -> Json {
+        match (shown, by) {
+            (report::Shown::Sensitive(l), Digesting::Keyed(k)) => serde_json::json!({
                 "sensitive": l,
                 "digest": k.digest(&serde_json::to_vec(&value()).unwrap_or_default()),
             }),
-            (report::Shown::Sensitive(l), None) => {
-                match crate::secrets::standin::digest(&value()) {
+            (report::Shown::Sensitive(l), Digesting::Derived(run)) => {
+                match run.standins().digest(&value()) {
                     Some(d) => serde_json::json!({ "sensitive": l, "derived": d }),
                     None => serde_json::json!({ "sensitive": l }),
                 }
@@ -1660,9 +1682,9 @@ pub mod file {
 
     /// The values `plan` keeps of objects given at their creation only
     /// (R-198), redacted as a delta's.
-    pub fn kept(plan: &Plan, schema: &Schema, r: &Redactor, key: Option<&Key>) -> Vec<Kept> {
+    pub fn kept(plan: &Plan, schema: &Schema, r: &Redactor, by: Digesting) -> Vec<Kept> {
         let side = |v: Option<&Json>, sensitive: bool| {
-            stored(key, report::shown(v, sensitive, schema, r), || {
+            stored(by, report::shown(v, sensitive, schema, r), || {
                 v.cloned().unwrap_or(Json::Null)
             })
         };
@@ -2006,7 +2028,7 @@ pub mod file {
         report: &Report,
         schema: &Schema,
         r: &Redactor,
-        key: Option<&Key>,
+        by: Digesting,
     ) -> Vec<Entry> {
         let mut tick_of: BTreeMap<&str, usize> = BTreeMap::new();
         for (t, xs) in &report.ticks {
@@ -2017,7 +2039,7 @@ pub mod file {
         plan.actions
             .iter()
             .filter(|a| !matches!(a.kind, ActionKind::Noop))
-            .map(|a| entry(a, sections, &tick_of, schema, r, key))
+            .map(|a| entry(a, sections, &tick_of, schema, r, by))
             .collect()
     }
 
@@ -2027,10 +2049,10 @@ pub mod file {
         tick_of: &BTreeMap<&str, usize>,
         schema: &Schema,
         r: &Redactor,
-        key: Option<&Key>,
+        by: Digesting,
     ) -> Entry {
         let side = |v: Option<&Json>, sensitive: bool| {
-            stored(key, report::shown(v, sensitive, schema, r), || {
+            stored(by, report::shown(v, sensitive, schema, r), || {
                 v.cloned().unwrap_or(Json::Null)
             })
         };
@@ -2059,7 +2081,7 @@ pub mod file {
     /// The pending groups of one evaluation: its stuck resource rules and
     /// those that may derive after a boundary, each with its head, rule
     /// and null-free bindings, redacted.
-    pub fn groups(res: &EvalResult, r: &Redactor, key: Option<&Key>) -> Vec<Group> {
+    pub fn groups(res: &EvalResult, r: &Redactor, by: Digesting) -> Vec<Group> {
         let stuck = res
             .stuck
             .iter()
@@ -2078,7 +2100,7 @@ pub mod file {
                 head: crate::spell::atom(head),
                 rule: format!("r{rule}"),
                 bindings: bindings
-                    .map(|b| redacted(b.iter(), r, key))
+                    .map(|b| redacted(b.iter(), r, by))
                     .unwrap_or_default(),
             };
             if !out.contains(&g) {
@@ -2092,12 +2114,12 @@ pub mod file {
     fn redacted<'a>(
         bindings: impl Iterator<Item = (&'a String, &'a Value)>,
         r: &Redactor,
-        key: Option<&Key>,
+        by: Digesting,
     ) -> BTreeMap<String, Json> {
         bindings
             .filter(|(_, v)| !crate::stuck::has_null(v))
             .map(|(k, v)| {
-                let j = stored(key, report::shown_value(v, r), || {
+                let j = stored(by, report::shown_value(v, r), || {
                     crate::spell::value_to_json(v)
                 });
                 (k.clone(), j)
@@ -2109,7 +2131,7 @@ pub mod file {
     pub fn resolved(
         facts: &std::collections::BTreeSet<Atom>,
         r: &Redactor,
-        key: Option<&Key>,
+        by: Digesting,
     ) -> Vec<Resolved> {
         facts
             .iter()
@@ -2117,7 +2139,7 @@ pub mod file {
             .filter_map(|a| match a.args.as_slice() {
                 [Term::Val(Value::Str(l)), Term::Val(v)] => Some(Resolved {
                     null: l.clone(),
-                    value: stored(key, report::shown_value(v, r), || {
+                    value: stored(by, report::shown_value(v, r), || {
                         crate::spell::value_to_json(v)
                     }),
                 }),

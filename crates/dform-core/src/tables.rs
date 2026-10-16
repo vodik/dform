@@ -46,6 +46,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 
 pub const FORMATS: &[&str] = &["csv", "json", "yaml", "toml", "text", SECRETS];
@@ -265,6 +266,9 @@ pub struct Tables {
     read: RefCell<BTreeMap<(String, Source), String>>,
     /// What reads a location (R-153).
     files: Arc<Files>,
+    /// The run's secrets: a file of given secrets opened with its key,
+    /// its values registered, the file noted.
+    secrets: Rc<crate::secrets::Run>,
 }
 
 /// Paths resolve from the project root of the file the declaration is in
@@ -289,10 +293,12 @@ fn location_of(f: &ExternFn, inputs: &[Value]) -> Result<String> {
 
 impl Tables {
     /// A run's tables, read with `files` (its known hosts, its mirrors,
-    /// the schemes its providers declare).
-    pub fn with_files(files: Arc<Files>) -> Tables {
+    /// the schemes its providers declare), of the run whose secrets are
+    /// `secrets`.
+    pub fn with_files(files: Arc<Files>, secrets: Rc<crate::secrets::Run>) -> Tables {
         Tables {
             files,
+            secrets,
             ..Tables::default()
         }
     }
@@ -426,8 +432,8 @@ impl Tables {
         }
         if format == SECRETS {
             let file = crate::custody::given::parse(&text, &shown)?;
-            let rows = file.rows(&shown);
-            crate::custody::given::note(crate::custody::given::Read {
+            let rows = file.rows(&shown, &self.secrets);
+            self.secrets.given_mut().note(crate::custody::given::Read {
                 location: inputs.first().map(spell::bare).unwrap_or_default(),
                 shown: shown.clone(),
                 path: on_disk,
@@ -478,7 +484,7 @@ impl Tables {
         if path.exists() {
             return None;
         }
-        crate::custody::given::note(crate::custody::given::Read {
+        self.secrets.given_mut().note(crate::custody::given::Read {
             location: location.to_string(),
             shown: p,
             path: Some(path),

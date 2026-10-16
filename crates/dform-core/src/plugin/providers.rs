@@ -108,6 +108,8 @@ pub struct Config {
     /// one started from an executable is told its settings come later,
     /// as a provider the program configures is, and none come.
     pub no_credentials: bool,
+    /// The deployment's run's secrets ([`Providers::secrets`]).
+    pub secrets: Rc<crate::secrets::Run>,
 }
 
 /// A provider's `use`: the name it binds, the provider it starts and that
@@ -294,6 +296,8 @@ pub struct Providers {
     /// What the last plan proved unchanged without the master
     /// ([`Providers::proven`]).
     proven: RefCell<BTreeMap<Address, Vec<String>>>,
+    /// The deployment's run's secrets ([`Providers::secrets`]).
+    secrets: Rc<crate::secrets::Run>,
 }
 
 /// What a resource waits on before its provider plans it
@@ -605,6 +609,7 @@ impl<'a> Starting<'a> {
                 .digest_key
                 .as_deref()
                 .and_then(crate::zset::file::Key::from_hex),
+            secrets: cfg.secrets.clone(),
             ..p
         })
     }
@@ -720,8 +725,13 @@ impl Providers {
     /// No provider: what a program naming only built-in providers runs
     /// over (R-26), its schema not loaded yet ([`Providers::load_schema`]:
     /// empty). Asking it anything else is the no-provider error.
-    pub fn none() -> Providers {
-        Self::deferred(Vec::new(), Vec::new())
+    /// No provider: a program that names only built-in ones, of the run
+    /// whose secrets are `secrets`.
+    pub fn none(secrets: Rc<crate::secrets::Run>) -> Providers {
+        Providers {
+            secrets,
+            ..Self::deferred(Vec::new(), Vec::new())
+        }
     }
 
     /// `start`, without asking for the schema yet: the caller asks with
@@ -794,7 +804,7 @@ impl Providers {
             };
             // A stand-in is no setting (R-164): the provider waits for a
             // run that holds the master.
-            if crate::secrets::standin::carries(&kept) {
+            if self.secrets.standins().carries(&kept) {
                 continue;
             }
             if self.settings.borrow().get(&i) == Some(&kept) {
@@ -1206,7 +1216,15 @@ impl Providers {
             relearned: RefCell::new(BTreeSet::new()),
             digest_key: None,
             proven: RefCell::new(BTreeMap::new()),
+            secrets: Rc::default(),
         }
+    }
+
+    /// The secrets of the deployment's run these providers serve: what
+    /// its evaluation derives and registers, and what its calls must
+    /// never send ([`crate::secrets::Run`]).
+    pub fn secrets(&self) -> &Rc<crate::secrets::Run> {
+        &self.secrets
     }
 
     /// The types and the externs the provider `name` serves: a mock
@@ -2315,18 +2333,23 @@ impl Providers {
     }
 
     /// The derivation digest of each leaf of `doc` that holds a derived
-    /// value (`secrets::standin::digest`), by path: an object's members
-    /// each, anything else (a string, a list) whole.
+    /// value (`secrets::standin::Registry::digest`), by path: an object's
+    /// members each, anything else (a string, a list) whole.
     pub fn derivations(&self, doc: &Json) -> BTreeMap<String, String> {
-        fn walk(v: &Json, path: &str, out: &mut BTreeMap<String, String>) {
+        fn walk(
+            v: &Json,
+            path: &str,
+            standins: &crate::secrets::standin::Registry,
+            out: &mut BTreeMap<String, String>,
+        ) {
             match v {
                 Json::Object(m) if provider::marker(v).is_none() => {
                     for (k, x) in m {
-                        walk(x, &crate::address::path_join(path, k), out);
+                        walk(x, &crate::address::path_join(path, k), standins, out);
                     }
                 }
                 _ if !path.is_empty() => {
-                    if let Some(d) = crate::secrets::standin::digest(v) {
+                    if let Some(d) = standins.digest(v) {
                         out.insert(path.to_string(), d);
                     }
                 }
@@ -2334,7 +2357,7 @@ impl Providers {
             }
         }
         let mut out = BTreeMap::new();
-        walk(doc, "", &mut out);
+        walk(doc, "", &self.secrets.standins(), &mut out);
         out
     }
 
@@ -2345,7 +2368,8 @@ impl Providers {
     /// ([`Providers::proven`]). Any other leaf that holds a stand-in
     /// differs: a change that needs the master.
     fn derived_before(&self, addr: &Address, entry: &StateEntry, want: &Json, doc: &mut Json) {
-        if !crate::secrets::standin::active() {
+        let standins = self.secrets.standins();
+        if !standins.active() {
             return;
         }
         let mut proven = Vec::new();
@@ -2353,7 +2377,7 @@ impl Providers {
             let Some(w) = get_path(want, path) else {
                 continue;
             };
-            if crate::secrets::standin::digest(w).as_ref() == Some(d) {
+            if standins.digest(w).as_ref() == Some(d) {
                 set_path(doc, path, w.clone());
                 proven.push(path.clone());
             }
@@ -2391,10 +2415,11 @@ impl Providers {
     /// where the world does not answer it (a write-only one), too. Empty
     /// when the run holds the master.
     pub fn needs_master(&self, a: &Action, desired: Option<&Json>) -> Vec<String> {
-        use crate::secrets::standin::carries;
-        if !crate::secrets::standin::active() {
+        let standins = self.secrets.standins();
+        if !standins.active() {
             return Vec::new();
         }
+        let carries = |j: &Json| standins.carries(j);
         let changed: Vec<String> = a
             .changes
             .iter()
@@ -4017,9 +4042,10 @@ impl Updating {
         addr: &Address,
         derived: impl Iterator<Item = &'p String>,
         cur: Option<&Object>,
+        standins: &crate::secrets::standin::Registry,
     ) -> Result<()> {
         for p in derived {
-            if !get_path(&self.doc, p).is_some_and(crate::secrets::standin::carries) {
+            if !get_path(&self.doc, p).is_some_and(|v| standins.carries(v)) {
                 continue;
             }
             match cur.and_then(|c| get_path(&c.attrs, p)) {
@@ -4093,7 +4119,7 @@ impl Tick<'_> {
         if sending
             .config
             .as_ref()
-            .is_some_and(crate::secrets::standin::carries)
+            .is_some_and(|c| self.cloud.secrets.standins().carries(c))
         {
             return Err(not_sent(
                 addr,
@@ -4280,8 +4306,9 @@ impl Tick<'_> {
             updating.at_create(at_create, cur, &write_only);
         }
         // A run that does not hold the master (R-164).
-        if crate::secrets::standin::active() {
-            updating.standins(addr, e.derived.keys(), cur)?;
+        let standins = self.cloud.secrets.standins();
+        if standins.active() {
+            updating.standins(addr, e.derived.keys(), cur, &standins)?;
         }
         Ok(Sending {
             op: pb::Op::Update,
@@ -4612,7 +4639,7 @@ impl Tick<'_> {
                     .filter_map(|p| {
                         let mut gens = BTreeMap::new();
                         for text in get_path(doc, p).map(strings).unwrap_or_default() {
-                            gens.extend(crate::functions::random::generations_in(text));
+                            gens.extend(self.cloud.secrets.random().generations_in(text));
                         }
                         (!gens.is_empty()).then(|| ((*p).clone(), gens))
                     })

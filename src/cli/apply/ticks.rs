@@ -330,6 +330,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
             &mut self.st,
             self.evaluator.externs.memos(),
             &self.cx.master,
+            self.evaluator.secrets(),
             &crate::memo::now(),
         )
     }
@@ -369,7 +370,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
         if denies.is_empty() {
             return Ok(());
         }
-        let redact = query::Redactor::new(&after.facts, backend.schema());
+        let redact = query::Redactor::new(&after.facts, backend.schema(), backend.secrets());
         self.say(Said::Violations {
             after: None,
             refusals: report::refusals(&denies, &after.rules, &redact),
@@ -764,7 +765,11 @@ impl<'a, 'h> Ticks<'a, 'h> {
     /// The tick's plan `p` refused by its denies, which are said.
     fn denied(&self, p: &Planned) -> anyhow::Error {
         let tick = self.tick;
-        let redact = query::Redactor::new(&p.res.facts, self.backend().schema());
+        let redact = query::Redactor::new(
+            &p.res.facts,
+            self.backend().schema(),
+            self.backend().secrets(),
+        );
         self.say(Said::Violations {
             after: None,
             refusals: report::refusals(&p.denies, &p.res.rules, &redact),
@@ -1314,7 +1319,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
     ) -> Result<executor::Seen> {
         let tick = self.tick;
         let (backend, audit) = (self.backend(), &self.cx.audit);
-        let redact = query::Redactor::new(&p.res.facts, backend.schema());
+        let redact = query::Redactor::new(&p.res.facts, backend.schema(), backend.secrets());
         let log = ActionLog {
             tick,
             audit,
@@ -1554,7 +1559,11 @@ impl<'a, 'h> Ticks<'a, 'h> {
             .as_ref()
             .map(|l| crate::infer::relations(&l.program))
             .unwrap_or_default();
-        let redact = query::Redactor::new(&res.facts, self.backend().schema());
+        let redact = query::Redactor::new(
+            &res.facts,
+            self.backend().schema(),
+            self.backend().secrets(),
+        );
         let record = zset::Derived::of(res, &redact, &relations, self.r.top.as_deref());
         if record != zset::Derived::default() {
             audit.append("derived", serde_json::json!({ "record": record }))?;
@@ -1706,14 +1715,18 @@ impl<'a, 'h> Ticks<'a, 'h> {
         };
         let key = self.key();
         let outputs = if crate::stack::has_outputs(&res.facts) {
+            let facts = self.evaluator.evaluate(&self.st)?.0.facts;
             crate::stack::outputs(
-                &self.evaluator.evaluate(&self.st)?.0.facts,
+                &facts,
                 secret_types,
                 &backend.observe(&self.st)?,
                 &self.st,
                 deployment,
-                &|b| key.map(|k| k.digest(b)),
-                &seal,
+                crate::stack::Keeping {
+                    digest: &|b| key.map(|k| k.digest(b)),
+                    seal: &seal,
+                    standins: &backend.secrets().standins(),
+                },
             )
         } else {
             Default::default()
@@ -1742,7 +1755,8 @@ impl<'a, 'h> Ticks<'a, 'h> {
         let labels: Vec<String> = on.iter().map(|l| address::label(l)).collect();
         let (budget, setting) = self.wait_budget(&on);
         let (resolved, w) = self.wait_until_moved(&on, &names, budget)?;
-        let redact = query::Redactor::new(&t.planned.res.facts, backend.schema());
+        let redact =
+            query::Redactor::new(&t.planned.res.facts, backend.schema(), backend.secrets());
         log_retries(&self.cx.audit, &redact, backend, tick)?;
         let result = match (resolved, crate::interrupt::requested()) {
             (true, _) => "resolved",
@@ -1885,7 +1899,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
         let (next, violations) =
             self.evaluator
                 .evaluate_with(&self.st, &BTreeSet::new(), &held, Some(tick))?;
-        let redact = query::Redactor::new(&next.facts, backend.schema());
+        let redact = query::Redactor::new(&next.facts, backend.schema(), backend.secrets());
         for w in &next.warnings {
             self.say(Said::Warning(redact.text(w)));
         }
@@ -2036,7 +2050,7 @@ fn needing_master(
     backend: &crate::plugin::Providers,
 ) -> std::collections::BTreeMap<address::Address, Vec<String>> {
     let mut out = std::collections::BTreeMap::new();
-    if !crate::secrets::standin::active() {
+    if !backend.secrets().standins().active() {
         return out;
     }
     let doc = |a: &address::Address| {

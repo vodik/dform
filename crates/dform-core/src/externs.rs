@@ -40,6 +40,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 /// One call: the extern and its `+` arguments, in order.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -517,10 +518,11 @@ impl<'a> Externs<'a> {
             .collect()
     }
 
-    /// The calls the rules demand of `facts`: each extern literal's `+`
-    /// arguments under every answer to the body before it. An input that
-    /// is a null is not ground yet: no call.
-    fn demand(&self, facts: &BTreeSet<Atom>) -> Result<BTreeSet<Call>> {
+    /// The calls the rules demand of the evaluation `res`: each extern
+    /// literal's `+` arguments under every answer to the body before it,
+    /// in its run (a `random.*` candidate of a `memo.first`). An input
+    /// that is a null is not ground yet: no call.
+    fn demand(&self, res: &EvalResult) -> Result<BTreeSet<Call>> {
         let mut out = BTreeSet::new();
         let secret_sites = self.secret_sites.borrow();
         for (site, (prefix, a)) in self.sites.iter().enumerate() {
@@ -534,7 +536,7 @@ impl<'a> Externs<'a> {
                     inputs.push(v);
                 }
             }
-            for (binding, _) in engine::query(&body, facts)? {
+            for (binding, _) in engine::query(&body, &res.facts, &res.secrets)? {
                 let vals: Option<Vec<Value>> =
                     inputs.iter().map(|v| binding.get(v).cloned()).collect();
                 let Some(vals) = vals else { continue };
@@ -554,10 +556,16 @@ impl<'a> Externs<'a> {
         Ok(out)
     }
 
-    /// Evaluate `program` with the externs answered: rounds until no call
-    /// is new.
-    pub fn eval(&self, program: &Program, extra: &[Atom]) -> Result<(EvalResult, Vec<String>)> {
-        self.eval_at(program, extra, None)
+    /// Evaluate `program` with the externs answered, in the run whose
+    /// secrets are `secrets` (`engine::eval_at`): rounds until no call is
+    /// new.
+    pub fn eval(
+        &self,
+        program: &Program,
+        extra: &[Atom],
+        secrets: &Rc<crate::secrets::Run>,
+    ) -> Result<(EvalResult, Vec<String>)> {
+        self.eval_at(program, extra, None, secrets)
     }
 
     /// `eval`, the planner's facts in `extra` given at apply tick `tick`
@@ -567,9 +575,10 @@ impl<'a> Externs<'a> {
         program: &Program,
         extra: &[Atom],
         tick: Option<usize>,
+        secrets: &Rc<crate::secrets::Run>,
     ) -> Result<(EvalResult, Vec<String>)> {
         let (res, violations, ()) = self.rounds(extra, |given| {
-            engine::eval_at(program, given, tick).map(|(r, v)| (r, v, ()))
+            engine::eval_at(program, given, tick, secrets).map(|(r, v)| (r, v, ()))
         })?;
         Ok((res, violations))
     }
@@ -581,18 +590,21 @@ impl<'a> Externs<'a> {
         program: &Program,
         extra: &[Atom],
         later: &[&str],
+        secrets: &Rc<crate::secrets::Run>,
     ) -> Result<(EvalResult, Vec<String>, engine::Resumable)> {
-        self.rounds(extra, |given| engine::eval_resumable(program, given, later))
+        self.rounds(extra, |given| {
+            engine::eval_resumable(program, given, later, secrets)
+        })
     }
 
-    /// After a resumed evaluation over `facts`: true, and `facts`' calls are
+    /// After a resumed evaluation `res`: true, and its facts' calls are
     /// the ones demanded, when every call they demand is answered; false
     /// when a call is new (evaluate again with `eval`).
-    pub fn settle(&self, facts: &BTreeSet<Atom>) -> Result<bool> {
+    pub fn settle(&self, res: &EvalResult) -> Result<bool> {
         if self.is_empty() {
             return Ok(true);
         }
-        let demand = self.demand(facts)?;
+        let demand = self.demand(res)?;
         if !demand.iter().all(|c| self.known.borrow().contains_key(c)) {
             return Ok(false);
         }
@@ -614,7 +626,7 @@ impl<'a> Externs<'a> {
             if self.is_empty() {
                 return Ok((res, violations, t));
             }
-            let demand = self.demand(&res.facts)?;
+            let demand = self.demand(&res)?;
             let new: Vec<Call> = {
                 let known = self.known.borrow();
                 demand

@@ -270,6 +270,9 @@ pub(super) struct Context {
     pub(super) last_derived: Option<zset::Derived>,
     /// `stack rekey`: the deployment whose state moves.
     pub(super) rekey: Option<Rekeying>,
+    /// The run's secrets (`secrets::Run`): what it opened of the outputs
+    /// it reads registered there, then its evaluation's.
+    pub(super) secrets: std::rc::Rc<crate::secrets::Run>,
 }
 
 impl Context {
@@ -330,7 +333,7 @@ impl<'h> Evaluated<'h> {
         }
         let opts = cx.options(hook.is_some())?;
         // A key never rotated is as old as its master (R-161, `secrets/4`).
-        crate::functions::random::set_born(born(cx.entries.get()));
+        cx.secrets.random_mut().set_born(born(cx.entries.get()));
         let ev = located.evaluate(
             read_outputs,
             &opts,
@@ -577,6 +580,7 @@ impl Context {
             rekey,
             root,
             cli,
+            secrets: Default::default(),
         })
     }
 
@@ -604,7 +608,7 @@ impl Context {
                 read.push(p.over(name, was));
             }
         }
-        let (opened, unsealed) = open_sealed(&mut read, &self.stored, &self.master);
+        let (opened, unsealed) = open_sealed(&mut read, &self.stored, &self.master, &self.secrets);
         if let (Cmd::Apply(_), false, None) = (&self.cli.cmd, unsealed.is_empty(), &self.cli.world)
         {
             crate::stack::register(
@@ -739,6 +743,7 @@ impl Context {
                 .map(zset::Derived::facts)
                 .unwrap_or_default(),
             destroy: cmd.destroys(),
+            secrets: self.secrets.clone(),
         })
     }
 }

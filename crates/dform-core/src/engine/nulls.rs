@@ -42,6 +42,8 @@ pub(super) struct Rec<'a> {
     /// Predicates a `not { .. }` helper defines ([`Helper::Negation`]).
     pub(super) negations: &'a BTreeSet<String>,
     pub(super) found: RefCell<Vec<Stuck>>,
+    /// The run's secrets, which its `random.*` calls derive with.
+    pub(super) secrets: &'a crate::secrets::Run,
 }
 
 impl Rec<'_> {
@@ -75,7 +77,7 @@ impl Rec<'_> {
     ) {
         let s = Stuck {
             rule: Some(self.rule),
-            head: stuck::head_pattern(head, state, eval_term),
+            head: stuck::head_pattern(head, state, |t, s| eval_term(t, s, self.secrets)),
             bindings: state
                 .iter()
                 .filter(|(k, _)| !k.starts_with("__"))
@@ -95,7 +97,7 @@ impl Rec<'_> {
     /// Rule 2 for a term: if a builtin inside it cannot evaluate because an
     /// argument carries a null, record the instance and say so.
     fn blocked(&self, t: &Term, state: &HashMap<String, Value>) -> bool {
-        match blocked_by_null(t, state) {
+        match blocked_by_null(t, state, self.secrets) {
             Some((name, nulls)) => {
                 match name == crate::address::SCOPED || name == crate::address::REF {
                     true => self.stuck(state, nulls, "resource address carries a null"),
@@ -153,10 +155,14 @@ pub(super) fn forwards_nulls(name: &str) -> bool {
 /// The innermost builtin application in `t` whose arguments are ground but
 /// carry a null, with those nulls: every builtin argument is a content
 /// position (Rule 2).
-fn blocked_by_null(t: &Term, state: &HashMap<String, Value>) -> Option<(String, BTreeSet<String>)> {
+fn blocked_by_null(
+    t: &Term,
+    state: &HashMap<String, Value>,
+    secrets: &crate::secrets::Run,
+) -> Option<(String, BTreeSet<String>)> {
     match t {
         Term::Func { name, args } => {
-            if let Some(inner) = args.iter().find_map(|a| blocked_by_null(a, state)) {
+            if let Some(inner) = args.iter().find_map(|a| blocked_by_null(a, state, secrets)) {
                 return Some(inner);
             }
             if spreads(name) {
@@ -165,7 +171,7 @@ fn blocked_by_null(t: &Term, state: &HashMap<String, Value>) -> Option<(String, 
                 // inside a part is carried (R-183).
                 let mut nulls = BTreeSet::new();
                 for a in args {
-                    if let v @ Value::Null { .. } = eval_term(a, state)? {
+                    if let v @ Value::Null { .. } = eval_term(a, state, secrets)? {
                         nulls.extend(nulls_in(&v));
                     }
                 }
@@ -175,7 +181,7 @@ fn blocked_by_null(t: &Term, state: &HashMap<String, Value>) -> Option<(String, 
                 return None;
             }
             // A template over held secrets has its value (R-218).
-            if name == crate::address::FORMAT && eval_term(t, state).is_some() {
+            if name == crate::address::FORMAT && eval_term(t, state, secrets).is_some() {
                 return None;
             }
             let mut nulls = BTreeSet::new();
@@ -184,13 +190,13 @@ fn blocked_by_null(t: &Term, state: &HashMap<String, Value>) -> Option<(String, 
                 match a {
                     Term::Var(x) => nulls.extend(nulls_in(state.get(x)?)),
                     Term::Val(v) => nulls.extend(nulls_in(v)),
-                    a => nulls.extend(nulls_in(&eval_term(a, state)?)),
+                    a => nulls.extend(nulls_in(&eval_term(a, state, secrets)?)),
                 }
             }
             (!nulls.is_empty()).then(|| (name.clone(), nulls))
         }
-        Term::List(xs) => xs.iter().find_map(|x| blocked_by_null(x, state)),
-        Term::Obj(m) => m.values().find_map(|x| blocked_by_null(x, state)),
+        Term::List(xs) => xs.iter().find_map(|x| blocked_by_null(x, state, secrets)),
+        Term::Obj(m) => m.values().find_map(|x| blocked_by_null(x, state, secrets)),
         _ => None,
     }
 }

@@ -47,18 +47,18 @@ struct Inventory<'a, 'h> {
 
 impl<'a, 'h> Inventory<'a, 'h> {
     fn of(run: &'a Evaluated<'h>, x: &deployment::Explained) -> Inventory<'a, 'h> {
-        let born = born(run.cx.entries.get());
+        let secrets = run.ev.evaluator.secrets();
         let mut list = crate::secrets::inventory::of(
             &x.res.facts,
             &x.redact,
             &run.ev.st,
             run.ev.evaluator.backend.schema(),
-            born.as_deref(),
+            secrets,
             run.cx.master.epoch,
         );
         // A given secret from its file (R-108): where it lives, its
         // generation and when it was set.
-        let files = crate::custody::given::reads();
+        let files = secrets.given().reads().to_vec();
         given_rows(&mut list, &files, &run.cx.mixing);
         Inventory { run, list, files }
     }
@@ -147,7 +147,7 @@ impl<'a, 'h> Inventory<'a, 'h> {
         let (values, key) = match &read.file {
             None => (Vec::new(), None),
             Some(f) => {
-                let ids = given::identities()?;
+                let ids = self.run.ev.evaluator.secrets().given().identities()?;
                 let Some(k) = f.data_key(&ids)? else {
                     bail!(
                         "secrets {verb} {name}: {}: {}",

@@ -159,6 +159,7 @@ pub fn values(
         circuit: &res.circuit,
         redact,
         all: false,
+        secrets: &res.secrets,
     };
     let mut out = Vec::new();
     for (f, focus) in found.iter().filter(|(f, _)| f.pred == "attr") {
@@ -189,6 +190,7 @@ pub fn attributes(
         circuit: &res.circuit,
         redact,
         all: false,
+        secrets: &res.secrets,
     };
     let mut out = Vec::new();
     for f in res.facts.iter().filter(|a| a.pred == "attr") {
@@ -556,9 +558,15 @@ pub struct Table {
     pub rows: Vec<Vec<Value>>,
 }
 
-/// Evaluate body literals against the final fact store.
-pub fn table(body: &[Lit], vars: &[String], facts: &BTreeSet<Atom>) -> Result<Table> {
-    let rows: BTreeSet<Vec<Value>> = engine::query(body, facts)?
+/// Evaluate body literals against the final fact store, its calls in the
+/// run whose secrets are `secrets` (the store's evaluation's).
+pub fn table(
+    body: &[Lit],
+    vars: &[String],
+    facts: &BTreeSet<Atom>,
+    secrets: &crate::secrets::Run,
+) -> Result<Table> {
+    let rows: BTreeSet<Vec<Value>> = engine::query(body, facts, secrets)?
         .into_iter()
         .map(|(b, _)| {
             vars.iter()
@@ -599,7 +607,9 @@ pub struct Redactor {
 }
 
 impl Redactor {
-    pub fn new(facts: &BTreeSet<Atom>, schema: &Schema) -> Redactor {
+    /// The redactor of an evaluation's `facts` over `schema`, in the run
+    /// whose secrets are `run` (what its `random.*` derived).
+    pub fn new(facts: &BTreeSet<Atom>, schema: &Schema, run: &crate::secrets::Run) -> Redactor {
         let mut r = Redactor::default();
         // Inputs and outputs declared `secret(T)`: (type, scope, key).
         let cells: BTreeSet<(&Value, &Value, &Value)> = facts
@@ -715,9 +725,9 @@ impl Redactor {
             }
         }
         // A secret `random.*` derived this run: by its call.
-        for (v, l) in crate::functions::random::derived() {
-            r.add(&v, &l);
-            r.derived.insert(v, l);
+        for (v, l) in run.random().derived() {
+            r.add(v, l);
+            r.derived.insert(v.clone(), l.to_string());
         }
         for (v, l) in lets {
             r.add(v, &l);
@@ -808,9 +818,9 @@ impl Redactor {
 
     /// The secrets the run holds that are not derived (an input's, an
     /// environment variable's, an extern's column), as text: those a
-    /// derivation digest must not say anything of (`secrets::standin`).
-    /// A value built from a derived one is not one of them.
-    pub fn sources(&self) -> Vec<String> {
+    /// derivation digest must not say anything of (`standins`, the
+    /// run's). A value built from a derived one is not one of them.
+    pub fn sources(&self, standins: &crate::secrets::standin::Registry) -> Vec<String> {
         self.secrets
             .keys()
             .filter(|v| !self.derived.contains_key(*v))
@@ -818,7 +828,7 @@ impl Redactor {
                 Value::Str(s) => Some(s.clone()),
                 _ => None,
             })
-            .filter(|s| !crate::secrets::standin::derived(s))
+            .filter(|s| !standins.derived(s))
             .collect()
     }
 
@@ -1075,14 +1085,17 @@ mod tests {
             panic!()
         };
         assert_eq!(vars, ["X", "N"]);
-        let t = table(&body, &vars, &f).unwrap();
+        let t = table(&body, &vars, &f, &Default::default()).unwrap();
         assert_eq!(t.rows, vec![vec![Value::Str("b".into()), Value::Int(2)]]);
         assert_eq!(
             t.result(&Redactor::default()).render(&Default::default()),
             "X    N\n\"b\"  2\n"
         );
         assert!(matches!(parse("p").unwrap(), Query::Pred(p) if p == "p"));
-        assert_eq!(table(&body, &[], &f).unwrap().rows, vec![Vec::new()]);
+        assert_eq!(
+            table(&body, &[], &f, &Default::default()).unwrap().rows,
+            vec![Vec::new()]
+        );
     }
 
     #[test]
@@ -1118,7 +1131,7 @@ mod tests {
         let lowered = crate::transform::lower(&program).unwrap();
         let taint = crate::secrets::taint(&lowered, schema, &Default::default());
         let facts = engine::eval(&program, &taint).unwrap().0.facts;
-        let r = Redactor::new(&facts, schema);
+        let r = Redactor::new(&facts, schema, &Default::default());
         (facts, r)
     }
 
@@ -1134,7 +1147,9 @@ arg("v", "a", "pw", "hunter22", "normal")
         let Query::Body { body, vars } = parse("leak(S)").unwrap() else {
             panic!()
         };
-        let t = table(&body, &vars, &f).unwrap().result(&r);
+        let t = table(&body, &vars, &f, &Default::default())
+            .unwrap()
+            .result(&r);
         let out = t.render(&Default::default());
         assert_eq!(out, "S\nsecret(11 B)\n");
         // By the column the pass found secret: the value is not the

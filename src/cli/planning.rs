@@ -88,6 +88,11 @@ impl<'a> Reporter<'a> {
         self.evaluator.schema()
     }
 
+    /// The run's secrets.
+    fn secrets(&self) -> &'a crate::secrets::Run {
+        self.evaluator.secrets()
+    }
+
     /// The deployment's outputs as the evaluation `res` has them (R-200),
     /// for the deployments that read it in the same tree: a value it knows
     /// (a secret one in memory), else pending until the tick `after` says
@@ -101,6 +106,7 @@ impl<'a> Reporter<'a> {
     ) -> Result<crate::stack::Planned> {
         let evaluator = self.evaluator;
         let secret = crate::stack::secret_output_types(&evaluator.program);
+        let standins = self.secrets().standins();
         let mut outputs = match crate::stack::has_outputs(&res.facts) {
             false => crate::stack::Outputs::default(),
             true => crate::stack::outputs(
@@ -109,10 +115,14 @@ impl<'a> Reporter<'a> {
                 &evaluator.backend.observe(st)?,
                 st,
                 &self.cx.deployment,
-                // Keyed as its apply would publish it: a reader in the tree
-                // knows it as the seal would say it (`outputs::open_sealed`).
-                &|b| self.cx.master.digest.as_ref().map(|k| k.digest(b)),
-                &|_, _| Default::default(),
+                crate::stack::Keeping {
+                    // Keyed as its apply would publish it: a reader in the
+                    // tree knows it as the seal would say it
+                    // (`outputs::open_sealed`).
+                    digest: &|b| self.cx.master.digest.as_ref().map(|k| k.digest(b)),
+                    seal: &|_, _| Default::default(),
+                    standins: &standins,
+                },
             ),
         };
         for k in crate::stack::declared_outputs(&evaluator.program) {
@@ -122,7 +132,7 @@ impl<'a> Reporter<'a> {
         }
         Ok(crate::stack::Planned {
             full: self.cx.stored.clone(),
-            values: crate::stack::secret_values(&res.facts, &secret),
+            values: crate::stack::secret_values(&res.facts, &secret, &standins),
             after: after.clone(),
             outputs,
         })
@@ -170,6 +180,7 @@ impl<'a> Reporter<'a> {
             denies,
             kept: &self.kept,
             outside: &self.outside.borrow(),
+            secrets: self.secrets(),
         });
         report.resumed = self.resuming.get() && tick == 1;
         // A destroy's deletes say no reason; a plan's say why they are
@@ -227,7 +238,7 @@ impl<'a> Reporter<'a> {
         let Some(then) = then else {
             return;
         };
-        let redact = query::Redactor::new(&res.facts, self.schema());
+        let redact = query::Redactor::new(&res.facts, self.schema(), self.secrets());
         report.because(&then, &crate::diff::snapshot(res, &redact, &addresses));
     }
 
@@ -280,7 +291,7 @@ impl<'a> Reporter<'a> {
         report.explain(
             self.why(),
             res,
-            &query::Redactor::new(&res.facts, self.schema()),
+            &query::Redactor::new(&res.facts, self.schema(), self.secrets()),
         );
         if tick == 1 {
             self.because(report, plan, res);
@@ -332,8 +343,9 @@ impl<'a> Reporter<'a> {
         key: Option<&zset::file::Key>,
     ) -> Vec<zset::file::Entry> {
         let report = self.report(plan, res, sections, tick, &[], &[]);
-        let redact = query::Redactor::new(&res.facts, self.schema());
-        zset::file::delta(plan, sections, &report, self.schema(), &redact, key)
+        let redact = query::Redactor::new(&res.facts, self.schema(), self.secrets());
+        let by = zset::file::Digesting::of(key, self.secrets());
+        zset::file::delta(plan, sections, &report, self.schema(), &redact, by)
     }
 
     /// `apply PLAN`: the delta re-evaluated at tick 1 must be the file's; a
@@ -414,9 +426,10 @@ impl<'a> Reporter<'a> {
     ) -> Result<zset::file::PlanFile> {
         let (externs, backend) = (&self.evaluator.externs, &*self.evaluator.backend);
         let report = self.report(plan, res, sections, 1, &[], &[]);
-        let redact = query::Redactor::new(&res.facts, self.schema());
+        let redact = query::Redactor::new(&res.facts, self.schema(), self.secrets());
+        let by = zset::file::Digesting::of(key, self.secrets());
         let mut deformations =
-            zset::file::delta(plan, sections, &report, self.schema(), &redact, key);
+            zset::file::delta(plan, sections, &report, self.schema(), &redact, by);
         for e in deformations
             .iter_mut()
             .filter(|e| e.action.starts_with("replace"))
@@ -453,9 +466,9 @@ impl<'a> Reporter<'a> {
             },
             world_digest: zset::file::world_digest(&backend.world_facts(st)?),
             deformations,
-            pending_groups: zset::file::groups(res, &redact, key),
+            pending_groups: zset::file::groups(res, &redact, by),
             nulls: zset::file::Nulls {
-                resolved: zset::file::resolved(&res.facts, &redact, key),
+                resolved: zset::file::resolved(&res.facts, &redact, by),
                 unresolved: unresolved.into_iter().collect(),
             },
             ticks: report
@@ -476,7 +489,7 @@ impl<'a> Reporter<'a> {
                 .collect(),
             digest: None,
             unkeyed: key.is_none(),
-            kept: zset::file::kept(plan, self.schema(), &redact, key),
+            kept: zset::file::kept(plan, self.schema(), &redact, by),
             guarded: zset::file::guarded(res),
         })
     }
@@ -492,7 +505,7 @@ fn custody_marks(
     plan: &crate::provider::Plan,
     backend: &crate::plugin::Providers,
 ) {
-    if !crate::secrets::standin::active() {
+    if !backend.secrets().standins().active() {
         return;
     }
     for d in report.definite.iter_mut() {
@@ -528,7 +541,7 @@ fn drift_unknown(
     plan: &crate::provider::Plan,
     backend: &crate::plugin::Providers,
 ) {
-    if !crate::secrets::standin::active() {
+    if !backend.secrets().standins().active() {
         return;
     }
     let leaves: Vec<String> = plan

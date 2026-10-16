@@ -31,7 +31,7 @@ fn a_binding_is_hidden_by_a_whole_segment_of_the_address() {
 /// one deny under its one line.
 #[test]
 fn a_refusal_says_its_bindings_never_its_json() {
-    let r = Redactor::new(&BTreeSet::new(), &Schema::default());
+    let r = Redactor::new(&BTreeSet::new(), &Schema::default(), &Default::default());
     let vs = [
         r#"image not pinned ctx={"image":"traefik:v3.7","replicas":2}"#.to_string(),
         r#"image not pinned ctx={"image":"nginx","replicas":1}"#.to_string(),
@@ -296,7 +296,7 @@ fn a_conflicts_object_value_is_the_programs_text() {
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect();
-    let r = Redactor::new(&BTreeSet::new(), &Schema::default());
+    let r = Redactor::new(&BTreeSet::new(), &Schema::default(), &Default::default());
     let out = errors::diag_lines(&errors::diag(&ctx, &r), Why::Line, Style::PLAIN, true);
     assert_eq!(
         out,

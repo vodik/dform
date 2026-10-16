@@ -32,8 +32,13 @@ fn check(file: &str, provider: &str, env: Option<&str>, append: &str) {
         .into_iter()
         .collect();
     extra.extend(schema.facts.clone());
-    let (first, _, resumable) =
-        dform::engine::eval_resumable(&program, &extra, dform::zset::POLICY_INPUTS).unwrap();
+    let (first, _, resumable) = dform::engine::eval_resumable(
+        &program,
+        &extra,
+        dform::zset::POLICY_INPUTS,
+        &Default::default(),
+    )
+    .unwrap();
     // A deformation of every kind the lifecycle rules read, for every
     // resource, and prevent_destroy on each: every policy rule fires.
     let mut more = vec![];

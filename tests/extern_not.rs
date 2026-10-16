@@ -41,7 +41,7 @@ fn meaning(src: &str) -> BTreeSet<String> {
     let p = dform_core::parser::parse_file("t.df", src).unwrap_or_else(|e| panic!("{e:#}"));
     let l = dform_core::transform::lower(&p).unwrap_or_else(|e| panic!("{e:#}\n{src}"));
     let externs = Externs::new(&l.program, &l.extern_fns, ask);
-    let (res, violations) = externs.eval(&p, &[]).unwrap();
+    let (res, violations) = externs.eval(&p, &[], &Default::default()).unwrap();
     assert!(violations.is_empty(), "{violations:?}");
     res.facts
         .iter()

@@ -54,7 +54,7 @@ impl Render {
         }
         let e = space.evaluated(&pairs)?;
         let schema = space.backend.schema();
-        let redact = query::Redactor::new(&e.res.facts, schema);
+        let redact = query::Redactor::new(&e.res.facts, schema, space.backend.secrets());
         cli.cmd
             .blocked(&e.violations, &e.res.rules, &redact, cli.err_style)?;
         let mut rendered = Rendered::new(&e.resources, &space.backend, &redact)?;

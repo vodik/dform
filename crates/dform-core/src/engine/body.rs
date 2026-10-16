@@ -21,13 +21,17 @@ use std::collections::HashMap;
 
 /// A body atom as a pattern under `state`: bound terms are values, the
 /// rest wildcards.
-pub(super) fn read_pattern(atom: &Atom, state: &HashMap<String, Value>) -> Atom {
+pub(super) fn read_pattern(
+    atom: &Atom,
+    state: &HashMap<String, Value>,
+    secrets: &crate::secrets::Run,
+) -> Atom {
     Atom {
         pred: atom.pred.clone(),
         args: atom
             .args
             .iter()
-            .map(|t| match eval_term(t, state) {
+            .map(|t| match eval_term(t, state, secrets) {
                 Some(v) => Term::Val(v),
                 None => Term::Wildcard,
             })
@@ -119,7 +123,7 @@ pub(super) fn eval_rule(
         // Rule 2: an address argument is a content position. A head whose
         // address carries a null is stuck, not derived.
         if let Some(t) = crate::zset::address_arg(&rule.head)
-            && let Some(v) = eval_term(t, &b)
+            && let Some(v) = eval_term(t, &b, rec.secrets)
         {
             let nulls = nulls_in(&v);
             if !nulls.is_empty() {
@@ -130,9 +134,9 @@ pub(super) fn eval_rule(
         if rec.any_blocked(&rule.head.args, &b) {
             continue;
         }
-        let head = match instantiate_atom(&rule.head, &b) {
+        let head = match instantiate_atom(&rule.head, &b, rec.secrets) {
             Ok(h) => h,
-            Err(e) => match head_error(&rule.head, &b) {
+            Err(e) => match head_error(&rule.head, &b, rec.secrets) {
                 Some(why) => bail!(why),
                 None => return Err(e.context(format!("instantiate head {}", rule.head.pred))),
             },
@@ -308,7 +312,10 @@ fn read_relation(
         // aggregate group is undetermined. It still reads
         // the groups that were decided.
         if rec.aggregates.contains(&atom.pred) && !planted(Rule3Clause::Reader) {
-            let nulls = rec.known.borrow().blocking(&read_pattern(atom, s));
+            let nulls = rec
+                .known
+                .borrow()
+                .blocking(&read_pattern(atom, s, rec.secrets));
             if !nulls.is_empty() {
                 rec.stuck(
                     s,
@@ -366,8 +373,8 @@ fn negate(atom: &Atom, mut row: Row, src: &Src, rec: &Rec) -> Result<Option<Row>
             !rec.any_blocked(&atom.args, s) && eval_builtin_pred(atom, s, rec)? == Some(false);
         return Ok(holds.then_some(row));
     }
-    let grounded =
-        ground_atom(atom, s).with_context(|| format!("unsafe negation: not {}(...)", atom.pred))?;
+    let grounded = ground_atom(atom, s, rec.secrets)
+        .with_context(|| format!("unsafe negation: not {}(...)", atom.pred))?;
     if eval_not(&grounded, src, s, rec) {
         row.absent.push(grounded);
         return Ok(Some(row));

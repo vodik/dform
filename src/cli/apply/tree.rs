@@ -45,9 +45,6 @@ struct Seed {
     moves: Vec<(crate::address::Address, crate::address::Address)>,
     violations: Vec<String>,
     first: First,
-    /// What its run set for its secrets, while another's runs (`None`:
-    /// its own runs now, the last evaluated).
-    scope: Option<crate::secrets::Scope>,
 }
 
 /// A tick's plan and what its calls are made with.
@@ -81,10 +78,6 @@ fn evaluate(
     let mut seeds: Vec<Seed> = Vec::new();
     let mut planned: BTreeMap<String, stack::Planned> = BTreeMap::new();
     for d in order {
-        // What the one before it set for its secrets is its own.
-        if let Some(seed) = seeds.last_mut() {
-            seed.scope = Some(crate::secrets::Scope::save());
-        }
         let mut cli = of(d);
         cli.planned = planned.clone();
         // Its `== NAME` line names it.
@@ -120,7 +113,6 @@ fn evaluate(
             moves,
             violations,
             first: (plan, compiled.adopts, compiled.lifecycle),
-            scope: None,
         });
         members.push(Member {
             d: d.clone(),
@@ -170,8 +162,6 @@ fn run(args: &Apply, teller: &Teller, members: &[Member], seeds: Vec<Seed>) -> R
         ticks: Vec::new(),
         next: Vec::new(),
         ended: members.iter().map(|_| None).collect(),
-        scopes: Vec::new(),
-        current: members.len().checked_sub(1),
         at: None,
         tick: 1,
     };
@@ -193,10 +183,6 @@ struct Tree<'a> {
     next: Vec<Option<Step>>,
     /// How each member ended, once it did.
     ended: Vec<Option<Outcome>>,
-    /// What each member's run set for its secrets, while another's runs.
-    scopes: Vec<Option<crate::secrets::Scope>>,
-    /// The member whose run's secrets are set now.
-    current: Option<usize>,
     /// The member a step of the tree was at when it failed.
     at: Option<usize>,
     tick: usize,
@@ -214,9 +200,8 @@ impl<'a> Tree<'a> {
     /// Each member's ticks begun: its chaos checked, its lease taken, what
     /// `moved/3` did said, and what an interrupted apply of it left
     /// resumed.
-    fn start(&mut self, mut seeds: Vec<Seed>, sessions: &'a mut [Option<Session>]) -> Result<()> {
+    fn start(&mut self, seeds: Vec<Seed>, sessions: &'a mut [Option<Session>]) -> Result<()> {
         let mut sessions = sessions.iter_mut();
-        self.scopes = seeds.iter_mut().map(|s| s.scope.take()).collect();
         for (i, seed) in seeds.into_iter().enumerate() {
             self.enter(i);
             let m = &self.members[i];
@@ -436,20 +421,9 @@ impl<'a> Tree<'a> {
         Ok(())
     }
 
-    /// The steps that follow are member `i`'s: what its run set for its
-    /// secrets set again, what the one before set taken.
+    /// The steps that follow are member `i`'s: a failure is its.
     fn enter(&mut self, i: usize) {
         self.at = Some(i);
-        if self.current == Some(i) {
-            return;
-        }
-        if let Some(c) = self.current {
-            self.scopes[c] = Some(crate::secrets::Scope::save());
-        }
-        if let Some(s) = self.scopes[i].take() {
-            s.restore();
-        }
-        self.current = Some(i);
     }
 
     /// The members not done that read member `i`.

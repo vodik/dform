@@ -130,6 +130,7 @@ impl<'a> Names<'a> {
                 circuit: &res.circuit,
                 redact,
                 all: false,
+                secrets: &res.secrets,
             },
             stack_keys,
             top,

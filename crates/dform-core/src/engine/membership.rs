@@ -48,7 +48,7 @@ fn eval_member2(
     if missing_walk(&atom.args[0], state, rec)? {
         return Ok(());
     }
-    let list_v = eval_term(&atom.args[0], state)
+    let list_v = eval_term(&atom.args[0], state, rec.secrets)
         .ok_or_else(|| anyhow!("unsafe member: list is not ground"))?;
     if let Value::Null { .. } = &list_v {
         // Rule 2: member over a null list is a content position.
@@ -58,7 +58,7 @@ fn eval_member2(
     // `n in r` with `n` unbound: each member of a discrete range, in
     // order (R-180); a bound `n` is tested.
     if let Value::Range(r) = &list_v
-        && eval_term(&atom.args[1], state).is_none()
+        && eval_term(&atom.args[1], state, rec.secrets).is_none()
     {
         let members = r.members().map_err(|e| anyhow!("`{}`: {e}", rec.text))?;
         for item in &members {
@@ -85,7 +85,7 @@ fn eval_member2(
         ),
         _ => bail!("member/2 first argument must be a list"),
     };
-    let given = eval_term(&atom.args[1], state);
+    let given = eval_term(&atom.args[1], state, rec.secrets);
     for item in &items {
         if let Some(v) = &given
             && let Some(e) = ref_and_string(&atom.args[1], v, "in", &atom.args[0], item, rec)
@@ -105,7 +105,7 @@ pub(super) fn eval_not_member2(
     state: &HashMap<String, Value>,
     rec: &Rec,
 ) -> Result<bool> {
-    let list_v = eval_term(&atom.args[0], state)
+    let list_v = eval_term(&atom.args[0], state, rec.secrets)
         .ok_or_else(|| anyhow!("unsafe not member: list is not ground"))?;
     if let Value::Null { .. } = &list_v {
         rec.stuck(state, nulls_in(&list_v), "not member/2 over a null list");
@@ -117,7 +117,7 @@ pub(super) fn eval_not_member2(
     let Value::List(items) = list_v else {
         bail!("member/2 first argument must be a list");
     };
-    let item_v = eval_term(&atom.args[1], state)
+    let item_v = eval_term(&atom.args[1], state, rec.secrets)
         .ok_or_else(|| anyhow!("unsafe not member: item is not ground"))?;
     let mut unknown = BTreeSet::new();
     for x in &items {
@@ -154,7 +154,7 @@ fn in_scalar(
     if matches!(coll, Value::List(_) | Value::Obj(_)) {
         return Ok(None);
     }
-    let Some(item) = eval_term(&atom.args[1], state) else {
+    let Some(item) = eval_term(&atom.args[1], state, rec.secrets) else {
         bail!(
             "`x in {}` in `{}`: a {} holds a value given, it enumerates none; bind `x` first",
             spell::value(coll),
@@ -230,12 +230,14 @@ pub(super) fn eval_not_member3(
     if missing_walk(&atom.args[0], state, rec)? {
         return Ok(true);
     }
-    let list_v = eval_term(&atom.args[0], state)
+    let list_v = eval_term(&atom.args[0], state, rec.secrets)
         .ok_or_else(|| anyhow!("unsafe not member: list is not ground"))?;
     let entries = entries(list_v)
         .ok_or_else(|| anyhow!("member/3 first argument must be a list or an object"))?;
     for (k, v) in &entries {
-        if matches_ground(&atom.args[1], k, state)? && matches_ground(&atom.args[2], v, state)? {
+        if matches_ground(&atom.args[1], k, state, rec.secrets)?
+            && matches_ground(&atom.args[2], v, state, rec.secrets)?
+        {
             return Ok(false);
         }
     }
@@ -260,7 +262,12 @@ fn entries(v: Value) -> Option<Vec<(Value, Value)>> {
 
 /// Whether a negated pattern matches `v`: `_` anything, a tuple element by
 /// element, anything else by its value.
-fn matches_ground(t: &Term, v: &Value, state: &HashMap<String, Value>) -> Result<bool> {
+fn matches_ground(
+    t: &Term,
+    v: &Value,
+    state: &HashMap<String, Value>,
+    secrets: &crate::secrets::Run,
+) -> Result<bool> {
     match t {
         Term::Wildcard => Ok(true),
         Term::List(ts) => {
@@ -269,14 +276,14 @@ fn matches_ground(t: &Term, v: &Value, state: &HashMap<String, Value>) -> Result
                 return Ok(false);
             }
             for (t, v) in ts.iter().zip(vs) {
-                if !matches_ground(t, v, state)? {
+                if !matches_ground(t, v, state, secrets)? {
                     return Ok(false);
                 }
             }
             Ok(true)
         }
         t => {
-            let w = eval_term(t, state)
+            let w = eval_term(t, state, secrets)
                 .ok_or_else(|| anyhow!("unsafe not member: pattern is not ground"))?;
             Ok(&w == v)
         }
@@ -292,7 +299,7 @@ fn eval_member3(
     if missing_walk(&atom.args[0], state, rec)? {
         return Ok(());
     }
-    let list_v = eval_term(&atom.args[0], state)
+    let list_v = eval_term(&atom.args[0], state, rec.secrets)
         .ok_or_else(|| anyhow!("unsafe member: list is not ground"))?;
     if let Value::Null { .. } = &list_v {
         rec.stuck(state, nulls_in(&list_v), "member/3 over a null list");

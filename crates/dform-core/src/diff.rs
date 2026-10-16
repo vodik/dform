@@ -60,6 +60,7 @@ pub fn snapshot(res: &EvalResult, redact: &Redactor, addresses: &[Address]) -> S
         circuit: &res.circuit,
         redact,
         all: false,
+        secrets: &res.secrets,
     };
     let mut s = Snapshot::default();
     let asked: BTreeSet<&Address> = addresses.iter().collect();

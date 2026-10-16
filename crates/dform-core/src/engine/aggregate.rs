@@ -71,7 +71,7 @@ fn stuck_reads(rule: &RuleStmt, rec: &Rec) {
         if a.pred == "member" || a.pred == "enumerate" || ops::is_builtin_pred(&a.pred) {
             continue;
         }
-        let pat = read_pattern(a, &HashMap::new());
+        let pat = read_pattern(a, &HashMap::new(), rec.secrets);
         for (p, nulls) in rec.known.borrow().matching(&pat) {
             let mut b = HashMap::new();
             for (t, v) in a.args.iter().zip(&p.args) {
@@ -123,11 +123,12 @@ impl Groups<'_> {
             if i == idx {
                 continue;
             }
-            let v = eval_term(t, &b).ok_or_else(|| anyhow!("non-ground head term"))?;
+            let v = eval_term(t, &b, rec.secrets).ok_or_else(|| anyhow!("non-ground head term"))?;
             key_nulls.extend(nulls_in(&v));
             key.push(v);
         }
-        let item = eval_term(item_term, &b).ok_or_else(|| anyhow!("non-ground collect item"))?;
+        let item = eval_term(item_term, &b, rec.secrets)
+            .ok_or_else(|| anyhow!("non-ground collect item"))?;
         if !key_nulls.is_empty() {
             rec.stuck(&b, key_nulls, "aggregate group key carries a null");
             return Ok(());

@@ -1456,18 +1456,17 @@ impl Planned {
 /// attribute (E DR-2 as amended keeps it a ref) is resolved to the
 /// program's value of it, else the world's; one neither knows, and a null,
 /// is pending. A secret output (`secret`: key -> T's name) records no
-/// value: its label, its value's keyed digest (`digest`, the deployment's
-/// plan key) when the run knows the value, and where a provider holds it
-/// when it is a resource's attribute (a ref, or a sensitive computed
-/// value's null): the object `state` maps, managed for `deployment`.
+/// value: its label, what `keeping` keeps of it, and where a provider
+/// holds it when it is a resource's attribute (a ref, or a sensitive
+/// computed value's null): the object `state` maps, managed for
+/// `deployment`.
 pub fn outputs(
     facts: &BTreeSet<Atom>,
     secret: &BTreeMap<String, String>,
     world: &BTreeMap<crate::address::Address, serde_json::Value>,
     state: &crate::state::State,
     deployment: &str,
-    digest: &dyn Fn(&[u8]) -> Option<String>,
-    seal: &dyn Fn(&str, &serde_json::Value) -> BTreeMap<String, String>,
+    keeping: Keeping,
 ) -> Outputs {
     let attrs = attrs_of(facts);
     let mut o = Outputting {
@@ -1477,8 +1476,7 @@ pub fn outputs(
         },
         state,
         deployment,
-        digest,
-        seal,
+        keeping,
         out: Outputs::default(),
     };
     for ((t, scope, k), v) in &attrs {
@@ -1489,15 +1487,25 @@ pub fn outputs(
     o.out
 }
 
+/// What a secret output keeps ([`outputs`]): its value's keyed digest
+/// (`digest`, the deployment's plan key) when the run knows the value,
+/// its seals to each reader (`seal`), and its derivation digest by the
+/// run's stand-ins (`standins`), which prove it unchanged without the
+/// master.
+pub struct Keeping<'a> {
+    pub digest: &'a dyn Fn(&[u8]) -> Option<String>,
+    pub seal: &'a dyn Fn(&str, &serde_json::Value) -> BTreeMap<String, String>,
+    pub standins: &'a crate::secrets::standin::Registry,
+}
+
 /// The stack's outputs as they are read ([`outputs`]): how a value is
-/// resolved, the state and deployment a secret one is held in, how its
-/// value is digested and sealed, and the outputs so far.
+/// resolved, the state and deployment a secret one is held in, what is
+/// kept of its value, and the outputs so far.
 struct Outputting<'a> {
     resolver: Resolver<'a>,
     state: &'a crate::state::State,
     deployment: &'a str,
-    digest: &'a dyn Fn(&[u8]) -> Option<String>,
-    seal: &'a dyn Fn(&str, &serde_json::Value) -> BTreeMap<String, String>,
+    keeping: Keeping<'a>,
     out: Outputs,
 }
 
@@ -1543,7 +1551,7 @@ impl Outputting<'_> {
         let held = self.held(v);
         let derived = j
             .as_ref()
-            .and_then(crate::secrets::standin::digest)
+            .and_then(|j| self.keeping.standins.digest(j))
             .unwrap_or_default();
         let digest = self.digest_of(path, j.as_ref(), &derived);
         let sealed = self.sealed(path, j.as_ref(), held.is_some(), &derived);
@@ -1599,7 +1607,7 @@ impl Outputting<'_> {
         let Some(j) = j else {
             return String::new();
         };
-        if let Some(d) = (self.digest)(crate::approval::canonical_json(j).as_bytes()) {
+        if let Some(d) = (self.keeping.digest)(crate::approval::canonical_json(j).as_bytes()) {
             return format!("hmac-sha256:{d}");
         }
         match self.proven(path, derived) {
@@ -1623,7 +1631,7 @@ impl Outputting<'_> {
         derived: &str,
     ) -> BTreeMap<String, String> {
         match j {
-            Some(j) if !held && !crate::secrets::standin::carries(j) => (self.seal)(path, j),
+            Some(j) if !held && !self.keeping.standins.carries(j) => (self.keeping.seal)(path, j),
             Some(_) if !held => self
                 .proven(path, derived)
                 .map(|p| p.sealed.clone())
@@ -1904,11 +1912,12 @@ pub fn declared_outputs(program: &Program) -> BTreeSet<String> {
 
 /// The values of the secret outputs (`secret`: key -> T's name) an
 /// evaluation (`facts`) knows: no null in them, no reference, no
-/// stand-in (a value only the master derives). What a reader in the same
-/// tree reads in memory (`Planned::over`).
+/// stand-in of the run's (`standins`: a value only the master derives).
+/// What a reader in the same tree reads in memory (`Planned::over`).
 pub fn secret_values(
     facts: &BTreeSet<Atom>,
     secret: &BTreeMap<String, String>,
+    standins: &crate::secrets::standin::Registry,
 ) -> BTreeMap<String, Value> {
     let mut out = BTreeMap::new();
     for a in facts.iter().filter(|a| a.pred == "attr") {
@@ -1925,10 +1934,7 @@ pub fn secret_values(
             continue;
         }
         let json = serde_json::to_value(v).unwrap_or_default();
-        if crate::lattice::nulls_in(v).is_empty()
-            && !has_ref(v)
-            && !crate::secrets::standin::carries(&json)
-        {
+        if crate::lattice::nulls_in(v).is_empty() && !has_ref(v) && !standins.carries(&json) {
             out.insert(k.clone(), v.clone());
         }
     }

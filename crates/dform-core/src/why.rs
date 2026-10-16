@@ -345,6 +345,7 @@ fn derivations(
         circuit: &res.circuit,
         redact: cx.redact,
         all,
+        secrets: &res.secrets,
     };
     let mut out = String::new();
     // A relation's facts follow its signature, its columns as declared or
@@ -407,6 +408,7 @@ pub fn fact_text(
         circuit: &res.circuit,
         redact,
         all: false,
+        secrets: &res.secrets,
     };
     let crate::circuit::View::Fact { fact, .. } = res.circuit.view(id) else {
         return printer.source_tree(&res.rules, id, None);

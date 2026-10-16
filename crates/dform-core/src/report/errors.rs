@@ -168,6 +168,7 @@ pub fn sites<'a>(
         circuit: &res.circuit,
         redact: &r,
         all: false,
+        secrets: &res.secrets,
     };
     addrs
         .into_iter()

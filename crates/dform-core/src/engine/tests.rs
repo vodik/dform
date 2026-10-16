@@ -453,7 +453,7 @@ fn eval_tables(program: &Program, extra: &[Atom]) -> Result<(EvalResult, Vec<Str
     let externs = crate::externs::Externs::new(&lowered.program, &lowered.extern_fns, |f, ins| {
         tables.answer(f, ins).unwrap_or(Ok(Vec::new()))
     });
-    externs.eval(program, extra)
+    externs.eval(program, extra, &Default::default())
 }
 
 /// dform.df's inputs are their defaults, a block for the modules', and
@@ -1307,7 +1307,7 @@ fn a_resumed_evaluation_counts_a_constraints_stuck_instance() {
                deny "later is positive" where later(x), x > 0"#,
     )
     .unwrap();
-    let (_, _, resumable) = eval_resumable(&program, &[], &["later"]).unwrap();
+    let (_, _, resumable) = eval_resumable(&program, &[], &["later"], &Default::default()).unwrap();
     let open = Value::Null {
         label: "t/a#n".into(),
         class: crate::value::NullClass::Open,
@@ -1342,7 +1342,8 @@ fn a_resumed_evaluation_runs_only_the_readers_of_its_facts_again() {
                deny "quiet three" where quiet(3)"#,
     )
     .unwrap();
-    let (first, violations, resumable) = eval_resumable(&program, &[], &["later"]).unwrap();
+    let (first, violations, resumable) =
+        eval_resumable(&program, &[], &["later"], &Default::default()).unwrap();
     assert_eq!(facts_of(&first, "quiet").len(), 3);
     assert_eq!(violations.len(), 1);
     let again: Vec<String> = resumable

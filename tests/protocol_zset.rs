@@ -79,7 +79,7 @@ fn plan_on(
     let externs = dform::externs::Externs::new(&lowered.program, &lowered.extern_fns, |f, ins| {
         tables.answer(f, ins).expect("only tables")
     });
-    let (res, violations) = externs.eval(program, &extra).unwrap();
+    let (res, violations) = externs.eval(program, &extra, &Default::default()).unwrap();
     assert!(violations.is_empty(), "{violations:?}");
     let desired = dform::resources::compile_resources(res.facts.iter().cloned(), &schema).unwrap();
     backend

@@ -411,17 +411,19 @@ fn why_labels_facts_injected_at_a_tick() {
         fact("deformation", vec![s("remaining"), a.clone(), s("d1")]),
         fact("world_digest", vec![a, s("d2")]),
     ];
-    let (res, denies) = dform::engine::eval_at(&program, &facts, Some(3)).unwrap();
+    let (res, denies) =
+        dform::engine::eval_at(&program, &facts, Some(3), &Default::default()).unwrap();
     assert_eq!(
         denies,
         ["the world changed under a remaining action: net.subnet[\"a\"]"]
     );
     let schema = dform::schema::Schema::default();
-    let redact = dform::query::Redactor::new(&res.facts, &schema);
+    let redact = dform::query::Redactor::new(&res.facts, &schema, &res.secrets);
     let printer = dform::report::tree::Printer {
         circuit: &res.circuit,
         redact: &redact,
         all: false,
+        secrets: &res.secrets,
     };
     let dform::query::Query::Body { body, .. } = dform::query::parse("deny(M)").unwrap() else {
         unreachable!()

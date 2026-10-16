@@ -135,10 +135,12 @@ fn in_memory(
     v: &Value,
     (to, short): (&str, &str),
     master: &crate::custody::Master,
+    secrets: &crate::secrets::Run,
 ) -> bool {
     if let (Value::Str(text), Some(_)) = (v, &master.key) {
         let label = sealed_label(of, k, to);
-        crate::secrets::standin::register(text, &label, &standin_of(&label, &o.digest));
+        let standin = standin_of(&label, &o.digest);
+        secrets.standins_mut().register(text, &label, &standin);
     }
     !(o.sealed.contains_key(to) || o.sealed.contains_key(short)) && o.held.is_none()
 }
@@ -147,6 +149,7 @@ pub(super) fn open_sealed(
     read: &mut [crate::stack::Read],
     deployment: &str,
     master: &crate::custody::Master,
+    secrets: &crate::secrets::Run,
 ) -> (Vec<String>, Vec<String>) {
     let mut opened = Vec::new();
     let mut unsealed = Vec::new();
@@ -161,7 +164,7 @@ pub(super) fn open_sealed(
             // seal is opened.
             if let Some(v) = r.opened.get(k) {
                 let to = (deployment, short.as_str());
-                if in_memory(&p.deployment, k, o, v, to, master) {
+                if in_memory(&p.deployment, k, o, v, to, master, secrets) {
                     unsealed.push(format!("{}.{k}", r.name));
                 }
                 continue;
@@ -193,7 +196,7 @@ pub(super) fn open_sealed(
                     r.name,
                     master.without.as_deref().unwrap_or("not held")
                 );
-                crate::secrets::standin::register(&standin, &label, &standin);
+                secrets.standins_mut().register(&standin, &label, &standin);
                 r.opened.insert(k.clone(), Value::Str(standin));
                 continue;
             };
@@ -208,7 +211,7 @@ pub(super) fn open_sealed(
             match plain.and_then(|b| Ok(serde_json::from_slice::<Value>(&b)?)) {
                 Ok(v) => {
                     if let Value::Str(text) = &v {
-                        crate::secrets::standin::register(text, &label, &standin);
+                        secrets.standins_mut().register(text, &label, &standin);
                     }
                     r.opened.insert(k.clone(), v);
                     opened.push(format!("{}.{k}", r.name));

@@ -60,7 +60,7 @@ pub(super) fn unify_term(
             if name == crate::address::REF
                 && args.len() == 3
                 && let Value::Ref { typ, name, attr } = fv
-                && eval_term(pat, out).is_none() =>
+                && eval_term(pat, out, rec.secrets).is_none() =>
         {
             let mut tmp = out.clone();
             for (t, v) in args.iter().zip([typ, name, attr]) {
@@ -72,7 +72,7 @@ pub(super) fn unify_term(
             Ok(true)
         }
         Term::Func { .. } => {
-            let pv = match eval_term(pat, out) {
+            let pv = match eval_term(pat, out, rec.secrets) {
                 Some(v) => v,
                 None => return Ok(false),
             };
@@ -145,7 +145,7 @@ fn unify_scoped(
     out: &mut HashMap<String, Value>,
     rec: &Rec,
 ) -> Result<bool> {
-    let Some(Value::Str(scope)) = eval_term(scope, out) else {
+    let Some(Value::Str(scope)) = eval_term(scope, out, rec.secrets) else {
         return Ok(false);
     };
     let Value::Str(full) = fv else {
@@ -164,19 +164,24 @@ fn unify_scoped(
     // As the function: a bound name that is already an address
     // is itself (R-65), another copy's resource read through
     // its output. An unbound one ranges over the scope's own.
-    Ok(crate::address::is_scoped(full) && eval_term(local, out).is_some_and(|v| v == *fv))
+    Ok(crate::address::is_scoped(full)
+        && eval_term(local, out, rec.secrets).is_some_and(|v| v == *fv))
 }
 
 /// A negated atom's pattern: every argument bound, but a wildcard, which
 /// matches anything (`not p(x, _)`: no `p` row with `x` first).
-pub(super) fn ground_atom(atom: &Atom, state: &HashMap<String, Value>) -> Result<Atom> {
+pub(super) fn ground_atom(
+    atom: &Atom,
+    state: &HashMap<String, Value>,
+    secrets: &crate::secrets::Run,
+) -> Result<Atom> {
     let mut args = Vec::with_capacity(atom.args.len());
     for t in &atom.args {
         if matches!(t, Term::Wildcard) {
             args.push(Term::Wildcard);
             continue;
         }
-        let v = eval_term(t, state).ok_or_else(|| anyhow!("unbound var in negation"))?;
+        let v = eval_term(t, state, secrets).ok_or_else(|| anyhow!("unbound var in negation"))?;
         args.push(Term::Val(v));
     }
     Ok(Atom {
@@ -187,10 +192,14 @@ pub(super) fn ground_atom(atom: &Atom, state: &HashMap<String, Value>) -> Result
     })
 }
 
-pub(super) fn instantiate_atom(atom: &Atom, state: &HashMap<String, Value>) -> Result<Atom> {
+pub(super) fn instantiate_atom(
+    atom: &Atom,
+    state: &HashMap<String, Value>,
+    secrets: &crate::secrets::Run,
+) -> Result<Atom> {
     let mut args = Vec::with_capacity(atom.args.len());
     for t in &atom.args {
-        let v = eval_term(t, state).ok_or_else(|| anyhow!("non-ground head"))?;
+        let v = eval_term(t, state, secrets).ok_or_else(|| anyhow!("non-ground head"))?;
         args.push(Term::Val(v));
     }
     Ok(Atom {

@@ -544,6 +544,10 @@ pub struct Options<'a> {
     /// The deployment is being removed (`destroy`, R-149): no rule wants
     /// anything, so the plan deletes every object state holds.
     pub destroy: bool,
+    /// The run's secrets (`secrets::Run`), its providers' to hold: what a
+    /// reader opened of its upstreams' outputs registered there before
+    /// the evaluation; what derives from `master` set there as it starts.
+    pub secrets: Rc<crate::secrets::Run>,
 }
 
 impl<'a> Options<'a> {
@@ -565,6 +569,7 @@ impl<'a> Options<'a> {
             policy: false,
             last_apply: Vec::new(),
             destroy: false,
+            secrets: Rc::default(),
         }
     }
 }
@@ -642,6 +647,11 @@ impl Evaluator {
         self.backend.schema()
     }
 
+    /// The run's secrets: what its evaluation derived and registered.
+    pub fn secrets(&self) -> &Rc<crate::secrets::Run> {
+        self.backend.secrets()
+    }
+
     /// The program over the world as `st` has it, as facts: round 0
     /// resolves every null the world can answer, except those of
     /// `withheld` addresses (being replaced). `more`: the deformation
@@ -687,8 +697,12 @@ impl Evaluator {
         fields(otel.name = "evaluated")
     )]
     fn evaluated(&self, extra: &[Atom]) -> Result<(EvalResult, Vec<String>, engine::Resumable)> {
-        self.externs
-            .eval_resumable(&self.program, extra, zset::POLICY_INPUTS)
+        self.externs.eval_resumable(
+            &self.program,
+            extra,
+            zset::POLICY_INPUTS,
+            self.backend.secrets(),
+        )
     }
 
     /// The program evaluated over `extra`, the planner's facts in it given
@@ -705,7 +719,8 @@ impl Evaluator {
         extra: &[Atom],
         tick: Option<usize>,
     ) -> Result<(EvalResult, Vec<String>)> {
-        self.externs.eval_at(&self.program, extra, tick)
+        self.externs
+            .eval_at(&self.program, extra, tick, self.backend.secrets())
     }
 
     /// The program evaluated from the start; each provider whose settings
@@ -767,7 +782,7 @@ impl Evaluator {
             _ => None,
         };
         let (res, violations) = match resumed {
-            Some((res, violations)) if externs.settle(&res.facts)? => (res, violations),
+            Some((res, violations)) if externs.settle(&res)? => (res, violations),
             _ => {
                 // A new extern call: the answers the resumable was taken
                 // with are not all of them any more.
@@ -1144,9 +1159,10 @@ impl Evaluator {
         unrevealable(&self.backend, &res).map_err(|e| with_site(e, &res))?;
         // The run's secrets that are not derived: a leaf holding one has no
         // derivation digest (`secrets::standin`, R-164).
-        crate::secrets::standin::set_sources(
-            crate::query::Redactor::new(&res.facts, schema).sources(),
-        );
+        let secrets = self.backend.secrets();
+        let sources =
+            crate::query::Redactor::new(&res.facts, schema, secrets).sources(&secrets.standins());
+        secrets.standins_mut().set_sources(sources);
         let Provided {
             res,
             violations,
@@ -1303,7 +1319,7 @@ impl Evaluator {
         let mut facts = self.deformation_facts(plan, sections, &instances, st)?;
         facts.extend(may_derive);
         facts.extend(self.last_apply.iter().cloned());
-        facts.extend(crate::secrets::rotation_facts(st));
+        facts.extend(crate::secrets::rotation_facts(st, self.backend.secrets()));
         Ok(facts)
     }
 
@@ -1767,7 +1783,7 @@ impl Located {
             obs.note(Note::Collision(c.text.clone()));
         }
         // Policy messages quote values and rule text: redacted.
-        let redact = Redactor::new(&res.facts, backend.schema());
+        let redact = Redactor::new(&res.facts, backend.schema(), backend.secrets());
         for w in &res.warnings {
             obs.note(Note::Policy(redact.text(w)));
         }
@@ -1805,11 +1821,14 @@ impl Located {
         let backend = Rc::new(self.start_providers(outputs, opts, &files)?);
         // Externs are asked on demand: a table's of its file, else of the
         // file provider, else of the providers.
-        let tables = Rc::new(tables::Tables::with_files(files.clone()));
+        let tables = Rc::new(tables::Tables::with_files(
+            files.clone(),
+            backend.secrets().clone(),
+        ));
         let st = reading
             .join()
             .map_err(|_| anyhow::anyhow!("internal: the state read panicked"))??;
-        self.derive_with(opts, &st)?;
+        self.derive_with(opts, &st, backend.secrets())?;
         // The SSH host keys state knows.
         files.know(&st.known_hosts);
         Ok(Started {
@@ -1842,7 +1861,11 @@ impl Located {
         let secret_outputs = stack::secret_outputs(outputs);
         // `memo.first`: what state keeps, a sealed one opened with the
         // deployment's key.
-        let memos = Rc::new(crate::memo::Memos::new(st, &opts.master));
+        let memos = Rc::new(crate::memo::Memos::new(
+            st,
+            &opts.master,
+            backend.secrets().clone(),
+        ));
         let mut base_extra = self.base_facts(outputs, opts);
         let (discovered, scope) = self.load_schema(backend, &base_extra, st, opts)?;
         // The data sources the providers' schemas declare that the program
@@ -1967,7 +1990,7 @@ impl Located {
     ) -> Result<Providers> {
         let l = &self.loaded;
         if l.starts_none() {
-            return Ok(Providers::none());
+            return Ok(Providers::none(opts.secrets.clone()));
         }
         let held = stack::held(outputs);
         Providers::start_deferred(
@@ -2006,30 +2029,19 @@ impl Located {
                     .collect(),
                 no_credentials: false,
                 held,
+                secrets: opts.secrets.clone(),
             },
         )
     }
 
-    /// What derives from the deployment's master, set for the run: the
-    /// master state was applied with, or `--new-master` (R-163); `random.*`
-    /// from it (R-60), stand-ins for a run that does not hold it (R-164,
-    /// `secrets::standin`); a file of given secrets opened with its own
-    /// identity too (R-108); each key at its generation (R-161) and from
-    /// its epoch's master (R-165).
-    fn derive_with(&self, opts: &Options, st: &State) -> Result<()> {
+    /// What derives from the deployment's master, set in the run's
+    /// `secrets` once the master is checked against state's
+    /// ([`crate::secrets::Run::derive_with`]).
+    fn derive_with(&self, opts: &Options, st: &State, secrets: &crate::secrets::Run) -> Result<()> {
         opts.master.check(&self.deployment, st.master.as_deref())?;
-        crate::secrets::standin::set_active(opts.master.random.is_none());
-        crate::custody::given::set_key(opts.master.digest.clone());
-        crate::functions::random::set_secrets(&st.secrets);
         let lowered = self.loaded.lowered.as_ref();
-        if lowered.is_some_and(|l| crate::functions::random::called(&l.program)) {
-            crate::functions::random::set_master(
-                opts.master.random.clone(),
-                opts.master.id.as_deref(),
-                &self.deployment,
-            );
-            crate::functions::random::set_epochs(&opts.master.epochs());
-        }
+        let random = lowered.is_some_and(|l| crate::functions::random::called(&l.program));
+        secrets.derive_with(&opts.master, st, &self.deployment, random);
         Ok(())
     }
 
@@ -2481,7 +2493,7 @@ impl Evaluation {
             Some(Err(e)) => (self.res.clone(), Some(e)),
             None => (self.res.clone(), None),
         };
-        let redact = Redactor::new(&res.facts, self.schema());
+        let redact = Redactor::new(&res.facts, self.schema(), self.evaluator.backend.secrets());
         Explained {
             res,
             violations,
