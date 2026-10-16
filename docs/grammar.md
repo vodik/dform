@@ -935,8 +935,9 @@ ofield     := NAME (":" type)? "=" term | NAME ":" ofields
 let        := "let" NAME params? (":" type)? "=" term RANK? ("where" body)?
 params     := "(" param ("," param)* ")"          ; a let with parameters
 param      := NAME (":" type)? ("=" term)?
-set        := "set" chain ("=" | "+=") term RANK? ("where" body)?
-            | "set" "{" (chain ("=" | "+=") term RANK? SEP)* "}" RANK? ("where" body)?
+set        := "set" chain write term RANK? ("where" body)?
+            | "set" "{" (chain write term RANK? SEP)* "}" RANK? ("where" body)?
+write      := "=" | "+=" | ":="
             | "set" "from" term selector? RANK? ("where" body)?   ; a document's leaves
 selector   := ("." SEG | "[" "*" "]")+                ; a path into a document
 use        := "use" path ("as" NAME)? cblock? ("where" body)?
@@ -950,7 +951,7 @@ attrs      := "{" (attrdecl SEP)* "}"
 attrdecl   := blockpath ":" (attrs | type flag* ("check" body1)?)
 flag       := "required" | "computed" | "id" | "sensitive" | "nullable"
 block      := "{" (entry SEP)* "}"
-entry      := blockpath (("=" | "+=") term)? RANK?   ; `zone` alone is `zone = zone`
+entry      := blockpath (write term)? RANK?   ; `zone` alone is `zone = zone`
 cblock     := "{" ((entry | row) SEP)* "}"          ; rows only for a module or a component
 row        := NAME "(" args ")" ("where" body)?     ; a row of a relation it takes
             | NAME "from" term ("where" body)?
@@ -1286,6 +1287,20 @@ winning rank are a conflict naming both, so a broad one says `@default`
 and a narrow one that should win says `@override`. A read is the input's
 name, `db.backup_days`, and `why db.backup_days` shows the layers, each
 where it is written.
+
+`=` merges: an object contributes per key, so the keys a lower rank
+gives that a higher one does not survive. `:=` writes the whole subtree
+at its path: `set c.securityContext.capabilities := {}` (an entry
+`capabilities := {}` in a block alike) makes it `{}` whatever a lower
+rank writes at or below it, a policy's `@default` `drop = ["ALL"]`
+included, where `=` would keep it. A higher rank still merges on top
+(`capabilities.add = [..] @override` is added), and another write of its
+rank at or below its path is a conflict naming both. A list is one
+value already, so `commands := [..]` is what `commands = [..]` is; a
+keyed list's element written whole (`containers[k] := { .. }`) loses
+the content lower ranks gave it. `:=` is a write's operator wherever
+`=` is: a `set` line, a `set { }` entry, a block's entry; a provider's
+setting and a copy's input are values, and take `=` only.
 
 `set from DOC [@rank] [where B]` gives every leaf of a document to the
 input at its path, a leaf by its dotted path (`db: {backup_days: 14}` is
@@ -2685,6 +2700,7 @@ as it is.
 | `deny "m" {o} where B`                    | `deny("m", {o}) :- B` (`warn` the same)                |
 | `deny "a ${x}" where B`                   | `deny(M, ..) :- B, M = str.format("a %s", X)`              |
 | `set R.p = t @r where B` (`+=`: `arg_add`) | `arg(T, A, "p", t', r) :- B, reads`                   |
+| `set R.p := t @r where B`                  | `arg(T, A, "p", {"[whole]": t'}, r) :- B, reads`: the aggregate replaces lower ranks at `p` and drops the mark |
 | `set R.l[k].p = t @r where B` (`l` keyed) | `arg(T, A, "l[]", [k', {p = t'}], r) :- B, reads`, the body's reads of `R`'s attribute `attr_base(..)` |
 | `set c.p = t where .., c in R.l`          | `set R.l[c].p = t`: the key is `c`'s key fields        |
 | `set T[_].l[_].p = t`                     | `set c.p = t where r in T, c in r.l`           |

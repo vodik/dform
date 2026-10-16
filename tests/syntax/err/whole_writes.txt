@@ -1,0 +1,8 @@
+error  provider fake: a setting is `region = term`, with no `+=`, `:=` or rank
+  tests/syntax/err/whole_writes.df:3  use fake { region := "x" }
+                                                 ^^^^^^^^^^^^^
+
+error  an input of a copy is set with `=`, not `:=`
+  tests/syntax/err/whole_writes.df:9  resource c one { n := 1 }
+                                                       ^^^^^^
+2 errors

@@ -33,6 +33,9 @@ pub enum SyntaxKind {
     EQ,
     EQ2,
     PLUS_EQ,
+    /// `:=`: a write of a whole subtree, replacing what lower ranks wrote
+    /// at or below its path.
+    COLON_EQ,
     NEQ,
     LT,
     LE,
@@ -228,6 +231,7 @@ impl SyntaxKind {
             EQ => "`=`",
             EQ2 => "`==`",
             PLUS_EQ => "`+=`",
+            COLON_EQ => "`:=`",
             NEQ => "`!=`",
             LT => "`<`",
             LE => "`<=`",

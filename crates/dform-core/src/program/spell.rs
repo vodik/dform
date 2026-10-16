@@ -66,10 +66,7 @@ fn rank(r: Option<Rank>) -> &'static str {
 }
 
 fn op(o: FieldOp) -> &'static str {
-    match o {
-        FieldOp::Assign => "=",
-        FieldOp::Add => "+=",
-    }
+    o.text()
 }
 
 fn typed(ty: &Option<TypeExpr>) -> String {

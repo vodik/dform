@@ -24,11 +24,7 @@ impl Lowerer<'_> {
         for a in block.children().filter(|c| c.kind() == ASSIGN) {
             let r = (|| {
                 let key = self.block_path(&node(&a, BLOCK_PATH).ok_or(Skip)?)?;
-                let op = if tokens(&a).any(|t| t.kind() == PLUS_EQ) {
-                    FieldOp::Add
-                } else {
-                    FieldOp::Assign
-                };
+                let op = FieldOp::of(&a);
                 let (value, id) = self.entry_value(rc, &a, Pos::Value)?;
                 let f = FieldAssign {
                     key,

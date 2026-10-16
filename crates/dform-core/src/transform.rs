@@ -1,5 +1,6 @@
 use crate::ast::{
-    Atom, Extern, Helper, Lit, Program, Rank, Resource, RuleStmt, Span, Stmt, Term, str_term, var,
+    Atom, Extern, FieldOp, Helper, Lit, Program, Rank, Resource, RuleStmt, Span, Stmt, Term,
+    str_term, var,
 };
 use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::schema::Schema;
@@ -42,6 +43,44 @@ pub const ELEM: &str = "[]";
 /// the content under `ELEM_VALUE` when it is not an object literal.
 pub const ELEM_KEY: &str = "[key]";
 pub const ELEM_VALUE: &str = "[value]";
+/// The key a write of the whole subtree (`:=`) holds its value under, at
+/// its path: the attribute aggregate replaces what lower ranks write at
+/// or below it, and takes the key away (`engine::contributions`).
+pub const WHOLE: &str = "[whole]";
+
+/// `value` written whole at its path (`:=`): `{"[whole]": value}`.
+pub fn whole(value: Term) -> Term {
+    Term::Obj(BTreeMap::from([(WHOLE.to_string(), value)]))
+}
+
+/// The value a write of a whole subtree holds ([`whole`]); any other
+/// term itself.
+pub fn written_whole(t: &Term) -> &Term {
+    match t {
+        Term::Obj(m) if m.len() == 1 => m.get(WHOLE).unwrap_or(t),
+        t => t,
+    }
+}
+
+/// A contribution's value `v` at `at` without the marks of its writes of
+/// a whole subtree ([`whole`]), the path of each pushed onto `out`.
+pub fn unwhole(v: Value, at: &str, out: &mut Vec<String>) -> Value {
+    match v {
+        Value::Obj(mut m) if m.len() == 1 && m.contains_key(WHOLE) => {
+            out.push(at.to_string());
+            unwhole(m.remove(WHOLE).expect("its one key"), at, out)
+        }
+        Value::Obj(m) => Value::Obj(
+            m.into_iter()
+                .map(|(k, x)| {
+                    let x = unwhole(x, &crate::address::path_join(at, &k), out);
+                    (k, x)
+                })
+                .collect(),
+        ),
+        v => v,
+    }
+}
 /// A keyed list's aggregate without its element writes: what a rule that
 /// writes elements of it reads of the top attribute (`attr_base(T, A, P,
 /// V)`), so `set c.p = v where c in w.L` is not a cycle through the
@@ -1244,7 +1283,13 @@ fn resource_rules(r: Resource) -> Result<Vec<Stmt>> {
         // `resource T N = VALUE`: a contribution per key ([`body_entries`]).
         let (path, value, body) = match f.key.is_empty() {
             true => body_entries(&r.typ, &r.name, f.value, &body),
-            false => (str_term(&f.key), f.value, body.clone()),
+            false => {
+                let value = match f.op {
+                    FieldOp::Replace => whole(f.value),
+                    FieldOp::Assign | FieldOp::Add => f.value,
+                };
+                (str_term(&f.key), value, body.clone())
+            }
         };
         let head = Atom {
             pred: "arg".to_string(),

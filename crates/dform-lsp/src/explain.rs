@@ -305,7 +305,15 @@ fn contributions(e: &Evaluated, alts: &[NodeId]) -> Vec<(String, String, String)
                 Some(Value::Str(r)) => r.clone(),
                 _ => continue,
             };
-            let value = f.args.get(3).map(|v| e.redact.fmt(v)).unwrap_or_default();
+            // A write of a whole subtree (`:=`) as its value.
+            let value = f
+                .args
+                .get(3)
+                .map(|v| {
+                    let v = dform_core::transform::unwhole(v.clone(), "", &mut Vec::new());
+                    e.redact.fmt(&v)
+                })
+                .unwrap_or_default();
             out.push((rank, value, owner(e, *ch)));
         }
     }

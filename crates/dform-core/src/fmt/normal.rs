@@ -520,7 +520,7 @@ impl Entry {
         {
             return None;
         }
-        if tokens(a).any(|t| t.kind() == PLUS_EQ) {
+        if tokens(a).any(|t| matches!(t.kind(), PLUS_EQ | COLON_EQ)) {
             return None;
         }
         let value = a.children().find(|c| c.kind() != BLOCK_PATH);

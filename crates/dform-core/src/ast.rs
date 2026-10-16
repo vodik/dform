@@ -531,10 +531,37 @@ pub struct Resource {
     pub span: Span,
 }
 
-#[derive(Debug, Copy, Clone)]
+/// How a write contributes to its path: `=` merges per key with the
+/// other writers, `+=` adds to a list or a set, `:=` writes the whole
+/// subtree, replacing what lower ranks write at or below its path.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum FieldOp {
     Assign,
     Add,
+    Replace,
+}
+
+impl FieldOp {
+    /// The operator of a written write (an `ASSIGN`, a `set` line):
+    /// `=` unless it is `+=` or `:=`.
+    pub fn of(n: &crate::syntax::SyntaxNode) -> FieldOp {
+        use crate::syntax::SyntaxKind::{COLON_EQ, PLUS_EQ};
+        let op = crate::syntax::tokens(n).find_map(|t| match t.kind() {
+            PLUS_EQ => Some(FieldOp::Add),
+            COLON_EQ => Some(FieldOp::Replace),
+            _ => None,
+        });
+        op.unwrap_or(FieldOp::Assign)
+    }
+
+    /// As the program writes it.
+    pub fn text(self) -> &'static str {
+        match self {
+            FieldOp::Assign => "=",
+            FieldOp::Add => "+=",
+            FieldOp::Replace => ":=",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

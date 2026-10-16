@@ -5,6 +5,16 @@
 
 use super::*;
 
+/// One line of a `set` as written: its target, its value, its operator,
+/// its rank (the line's or the statement's) and where it is.
+pub(super) struct SetLine<'a> {
+    pub(super) lhs: &'a SyntaxNode,
+    pub(super) rhs: &'a SyntaxNode,
+    pub(super) op: FieldOp,
+    pub(super) rank: Option<Rank>,
+    pub(super) span: Span,
+}
+
 impl Lowerer<'_> {
     /// `resource T n { f = t ... } where B`, `T` a provider's type or one
     /// the program declares. Built as a `Resource` item (R-211 step 5):
@@ -252,7 +262,7 @@ impl Lowerer<'_> {
     /// line's `arg`.
     pub(super) fn set(&mut self, n: &SyntaxNode, scope: ScopeId, outer: &Rc) -> L<ItemId> {
         if tokens(n).nth(1).is_some_and(|t| t.text() == "from")
-            && !tokens(n).any(|t| matches!(t.kind(), EQ | PLUS_EQ))
+            && !tokens(n).any(|t| matches!(t.kind(), EQ | PLUS_EQ | COLON_EQ))
         {
             return self.set_from(n, scope, outer);
         }
@@ -272,14 +282,18 @@ impl Lowerer<'_> {
             let r = (|| {
                 let lhs = a.children().find(|c| c.kind() == CHAIN).ok_or(Skip)?;
                 let rhs = terms(a).find(|t| *t != lhs).ok_or(Skip)?;
-                let add = tokens(a).any(|t| t.kind() == PLUS_EQ);
                 let rank = match block {
                     Some(_) => self.rank_tok(a)?.or(rank),
                     None => rank,
                 };
-                let span = self.span(a);
+                let line = SetLine {
+                    lhs: &lhs,
+                    rhs: &rhs,
+                    op: FieldOp::of(a),
+                    rank,
+                    span: self.span(a),
+                };
                 let mut rc = rc.clone();
-                let line = (&lhs, &rhs, add, rank, span);
                 self.contribution(&mut rc, line, clause)
             })();
             match r {
@@ -312,21 +326,28 @@ impl Lowerer<'_> {
         Ok(item)
     }
 
-    /// One contribution of a `set`: `lhs (=|+=) rhs [@rank]` at `span`,
-    /// under the statement's clause `clause`, when one is written.
+    /// One contribution of a `set`, `line`, under the statement's clause
+    /// `clause`, when one is written.
     pub(super) fn contribution(
         &mut self,
         rc: &mut Rc,
-        (lhs, rhs, add, rank, span): (&SyntaxNode, &SyntaxNode, bool, Option<Rank>, Span),
+        line: SetLine,
         clause: Option<ClauseId>,
     ) -> L<Contribution> {
+        let SetLine {
+            lhs,
+            rhs,
+            op,
+            rank,
+            span,
+        } = line;
         let c = Chain::of(lhs).ok_or(Skip)?;
-        if add && rank.is_some() {
-            return self.error(span, "a rank applies to `=`, not `+=`");
+        if op == FieldOp::Add && rank.is_some() {
+            return self.error(span, "a rank applies to `=` and `:=`, not `+=`");
         }
         let made = self.helpers.len();
         let target = self.set_target(rc, &c, span)?;
-        self.check_target(&target, (lhs, add, span), clause.is_some())?;
+        self.check_target(&target, (lhs, op, span), clause.is_some())?;
         let mid = self.helpers.len();
         // A contribution to an input's cell is normal unless ranked (R-38),
         // written to the cell itself, so that its condition may read
@@ -346,7 +367,7 @@ impl Lowerer<'_> {
         Ok(Contribution {
             span,
             target,
-            add,
+            op,
             rank,
             value: value_node,
             made: (made, mid, self.helpers.len()),
@@ -361,9 +382,10 @@ impl Lowerer<'_> {
     fn check_target(
         &mut self,
         target: &Target,
-        (lhs, add, span): (&SyntaxNode, bool, Span),
+        (lhs, op, span): (&SyntaxNode, FieldOp, Span),
         has_body: bool,
     ) -> L<()> {
+        let add = op == FieldOp::Add;
         let d = match target {
             Target::Element(..) if add => {
                 return self.error(

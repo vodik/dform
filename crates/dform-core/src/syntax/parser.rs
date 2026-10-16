@@ -954,7 +954,7 @@ impl<'a> Parser<'a> {
                  indented"
                     .to_string(),
             )
-        } else if term_name(k) && matches!(self.raw(1), EQ | PLUS_EQ) {
+        } else if term_name(k) && matches!(self.raw(1), EQ | PLUS_EQ | COLON_EQ) {
             Some(format!("a value is `let {text} = t`"))
         } else if term_name(k) && matches!(self.raw(1), DOT | L_BRACKET) {
             Some("a contribution to another block's field is `set r.path = t`".to_string())
@@ -1025,7 +1025,8 @@ impl<'a> Parser<'a> {
     /// clause), `set from DOC` (a document's leaves to the inputs at
     /// their paths): each `[@rank] [where B]` (R-38).
     fn set_rest(p: &mut Self) -> P {
-        if p.at_contextual("from") && !matches!(p.raw(1), DOT | EQ | PLUS_EQ | L_BRACKET) {
+        if p.at_contextual("from") && !matches!(p.raw(1), DOT | EQ | PLUS_EQ | COLON_EQ | L_BRACKET)
+        {
             p.bump();
             p.source_term()?;
             p.eat(RANK);
@@ -1040,8 +1041,8 @@ impl<'a> Parser<'a> {
             return p.err_expected("what the contribution sets: `r.path`, an input");
         }
         p.chain()?;
-        if !(p.eat(EQ) || p.eat(PLUS_EQ)) {
-            return p.err_expected("`=` or `+=`");
+        if !p.eat_write() {
+            return p.err_expected("`=`, `+=` or `:=`");
         }
         p.term()?;
         p.eat(RANK);
@@ -1374,8 +1375,8 @@ impl<'a> Parser<'a> {
                     return p.err_expected("what the contribution sets: `r.path`, an input");
                 }
                 p.chain()?;
-                if !(p.eat(EQ) || p.eat(PLUS_EQ)) {
-                    return p.err_expected("`=` or `+=`");
+                if !p.eat_write() {
+                    return p.err_expected("`=`, `+=` or `:=`");
                 }
                 p.term()?;
                 p.eat(RANK);
@@ -1387,6 +1388,12 @@ impl<'a> Parser<'a> {
         self.bump();
         self.finish();
         Ok(())
+    }
+
+    /// A write's operator: `=` merges, `+=` adds, `:=` writes the whole
+    /// subtree.
+    fn eat_write(&mut self) -> bool {
+        self.eat(EQ) || self.eat(PLUS_EQ) || self.eat(COLON_EQ)
     }
 
     /// `{ entry* }` of a resource or a `use`: entries
@@ -1401,7 +1408,8 @@ impl<'a> Parser<'a> {
             p.eat_nl();
             while !p.at(R_BRACE) {
                 let clause_word = matches!(p.nth(0), IF_KW | WHERE_KW)
-                    || (p.at_contextual("for") && !matches!(p.raw(1), EQ | PLUS_EQ | DOT | L_BRACKET));
+                    || (p.at_contextual("for")
+                        && !matches!(p.raw(1), EQ | PLUS_EQ | COLON_EQ | DOT | L_BRACKET));
                 if clause_word {
                     let i = p.nth_index(0).expect("a token");
                     let head = p.src[p.stmt_start..open.map_or(p.stmt_start, |o| p.toks[o].start)]
@@ -1458,15 +1466,16 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `path = term [rank]`, `path += term [rank]`, or `path [rank]`
-    /// alone: the pun `path = SEG`, SEG its last segment (R-33).
+    /// `path = term [rank]`, `path += term [rank]`, `path := term
+    /// [rank]`, or `path [rank]` alone: the pun `path = SEG`, SEG its last
+    /// segment (R-33).
     fn assign(&mut self) -> P {
         self.start(ASSIGN);
         self.block_path()?;
-        if self.eat(EQ) || self.eat(PLUS_EQ) {
+        if self.eat_write() {
             self.term()?;
         } else if !matches!(self.nth(0), RANK | COMMA | R_BRACE | NEWLINE) {
-            return self.err_expected("`=`, `+=` or the end of the entry");
+            return self.err_expected("`=`, `+=`, `:=` or the end of the entry");
         }
         self.eat(RANK);
         self.finish();

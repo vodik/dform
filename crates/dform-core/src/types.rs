@@ -1003,7 +1003,8 @@ pub fn check(program: &Program, schema: &Schema) -> Result<()> {
         let Some(spec) = schema.attr(typ, path) else {
             continue;
         };
-        if let Some(why) = mismatch(&Ty::parse(&spec.ty), &head.args[3]) {
+        let value = crate::transform::written_whole(&head.args[3]);
+        if let Some(why) = mismatch(&Ty::parse(&spec.ty), value) {
             let at = match &head.args[1] {
                 Term::Val(Value::Str(a)) => Address {
                     typ: typ.clone(),

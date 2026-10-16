@@ -378,8 +378,12 @@ impl Lowerer<'_> {
         let mut inputs = Vec::new();
         let mut from = made;
         for (f, id, to) in fields {
-            if matches!(f.op, FieldOp::Add) {
-                return self.error(f.span, "an input of a copy is set with `=`, not `+=`");
+            if f.op != FieldOp::Assign {
+                let op = f.op.text();
+                return self.error(
+                    f.span,
+                    format!("an input of a copy is set with `=`, not `{op}`"),
+                );
             }
             if f.rank.is_some() {
                 return self.error(f.span, "an input of a copy takes no rank");

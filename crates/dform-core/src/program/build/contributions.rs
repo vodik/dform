@@ -30,7 +30,7 @@ pub struct SetLowered<'a> {
 pub struct WriteLowered<'a> {
     pub span: Span,
     pub target: TargetLowered<'a>,
-    pub add: bool,
+    pub op: FieldOp,
     pub rank: Option<Rank>,
     /// Its value's node, as the resolver built it.
     pub value: ExprId,
@@ -141,7 +141,7 @@ impl Builder<'_> {
             };
             Write {
                 target,
-                op: if w.add { FieldOp::Add } else { FieldOp::Assign },
+                op: w.op,
                 value,
                 rank: w.rank,
                 folds,

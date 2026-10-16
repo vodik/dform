@@ -245,7 +245,7 @@ export default grammar({
       choice(
         seq(
           field('target', $._chain),
-          field('operator', choice('=', '+=')),
+          field('operator', choice('=', '+=', ':=')),
           field('value', $._term),
         ),
         field('body', $.set_block),
@@ -267,7 +267,7 @@ export default grammar({
 
     set_entry: $ => seq(
       field('target', $._chain),
-      field('operator', choice('=', '+=')),
+      field('operator', choice('=', '+=', ':=')),
       field('value', $._term),
       optional(field('rank', $.rank)),
     ),
@@ -443,7 +443,7 @@ export default grammar({
     field: $ => seq(
       field('path', $.block_path),
       optional(seq(
-        field('operator', choice('=', '+=')),
+        field('operator', choice('=', '+=', ':=')),
         field('value', $._term),
       )),
       optional(field('rank', $.rank)),

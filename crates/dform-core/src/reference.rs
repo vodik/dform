@@ -174,8 +174,8 @@ const REFERENCE: &[Reference] = &[
     r(
         "set",
         Kw,
-        "set REFERENCE.PATH (= | +=) TERM @RANK? (where BODY)?",
-        "A contribution to a block declared elsewhere, or to an input (under a `where`).",
+        "set REFERENCE.PATH (= | += | :=) TERM @RANK? (where BODY)?",
+        "A contribution to a block declared elsewhere, or to an input (under a `where`): `=` merges per key, `:=` writes the whole subtree, replacing lower ranks there.",
         "set r.tags.team = \"platform\" @default where r in resource",
     ),
     r(

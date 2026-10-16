@@ -955,7 +955,7 @@ enum Target {
 struct Contribution {
     span: Span,
     target: Target,
-    add: bool,
+    op: FieldOp,
     rank: Option<Rank>,
     value: ExprId,
     made: (usize, usize, usize),
@@ -986,7 +986,7 @@ impl Contribution {
         crate::program::build::WriteLowered {
             span: self.span,
             target,
-            add: self.add,
+            op: self.op,
             rank: self.rank,
             value: self.value,
             made: (&helpers[a..b], &helpers[b..c]),

@@ -1,0 +1,9 @@
+# `:=` writes a subtree whole: a provider's setting and a copy's input are
+# values, set with `=`.
+use fake { region := "x" }
+
+component c {
+  input n: int
+}
+
+resource c one { n := 1 }

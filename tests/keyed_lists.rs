@@ -301,3 +301,46 @@ set s.spec.ports = [{ port = 80, protocol = "TCP", name = "http" }] where s in k
         ],
     );
 }
+
+/// `:=` writes a subtree whole (the user's capabilities, notes.org 59 and
+/// 61): a policy's `@default` capabilities, `drop = ["ALL"]` in every
+/// container, and one container's `capabilities := {}`, which replaces
+/// them where `=` merges with them; another write of its rank inside it
+/// is the conflict, at its path.
+#[test]
+fn a_whole_write_replaces_a_default_below_its_path() {
+    let policy = "set c.securityContext.capabilities = { drop = [\"ALL\"] } @default \
+                  where w in k8s.deployment, c in w.spec.template.spec.containers\n\
+                  set c.securityContext.capabilities := {} \
+                  where w in k8s.deployment, c in w.spec.template.spec.containers, \
+                  c.name == \"side\"";
+    let r = plan(&project("kl-whole", policy)).success();
+    has(
+        &r,
+        &["containers[name=api].securityContext.capabilities.drop[0] = \"ALL\""],
+    );
+    assert!(
+        !r.stdout
+            .contains("containers[name=side].securityContext.capabilities.drop"),
+        "{}",
+        r.stdout
+    );
+    let merged = policy.replace(":=", "=");
+    let r = plan(&project("kl-whole-merged", &merged)).success();
+    has(
+        &r,
+        &["containers[name=side].securityContext.capabilities.drop[0] = \"ALL\""],
+    );
+    let inside = format!(
+        "{policy}\nset c.securityContext.capabilities.add = [\"NET_ADMIN\"] \
+         where w in k8s.deployment, c in w.spec.template.spec.containers"
+    );
+    let r = plan(&project("kl-whole-inside", &inside)).failure();
+    has(
+        &r,
+        &[
+            "`:=` writes it whole, and another write of its rank writes inside it at \
+           spec.template.spec.containers[name=side].securityContext.capabilities",
+        ],
+    );
+}

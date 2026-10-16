@@ -916,6 +916,10 @@ fn cell_from(l: &Lowering, target: &Target) -> Option<super::instances::From> {
 /// A line's head: the cell its target is (its terms `cell`), `value`
 /// written to it.
 fn write_head(w: &Write, cell: Vec<ast::Term>, value: ast::Term) -> Atom {
+    let value = match w.op {
+        ast::FieldOp::Replace => crate::transform::whole(value),
+        ast::FieldOp::Assign | ast::FieldOp::Add => value,
+    };
     let rank = || str_term(w.rank.unwrap_or(Rank::Normal).name());
     let mut cell = cell.into_iter();
     let mut next = || cell.next().expect("a term of the cell");
@@ -940,7 +944,7 @@ fn write_head(w: &Write, cell: Vec<ast::Term>, value: ast::Term) -> Atom {
     };
     let pred = match w.op {
         ast::FieldOp::Add => "arg_add",
-        ast::FieldOp::Assign => "arg",
+        ast::FieldOp::Assign | ast::FieldOp::Replace => "arg",
     };
     Atom {
         pred: pred.into(),

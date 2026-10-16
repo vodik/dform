@@ -53,6 +53,7 @@ component m {
     size = 2 @override
     list[0].name = "a"
     audit.sinks += ["s3"]
+    labels := { team = "x" }
   } where on == true
 
   on_vpc("vpc") where on == true
@@ -72,6 +73,7 @@ q(1) where env("prod")
 
 set { store.backup_days = 3 } @default where env("prod")
 set { gke.static_ips = { "gke-platform-grpc" = { type = "INTERNAL" } } } where env("prod")
+set { gke.static_ips := {} } @override where env("prod")
 set from yaml.decode(io.read("settings.yaml")) @override where env("prod")
 
 env("prod")

@@ -199,6 +199,10 @@ struct Contribution {
 
 fn leaves_of(at: &str, v: &Value, out: &mut Vec<(String, Value)>) {
     match v {
+        // A write of a whole subtree (`:=`) is its value's leaves.
+        Value::Obj(m) if m.len() == 1 && m.contains_key(crate::transform::WHOLE) => {
+            leaves_of(at, &m[crate::transform::WHOLE], out)
+        }
         Value::Obj(m) if !m.is_empty() => {
             for (k, x) in m {
                 leaves_of(&path_join(at, k), x, out);

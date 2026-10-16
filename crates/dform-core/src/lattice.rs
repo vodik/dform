@@ -952,6 +952,7 @@ mod tests {
             list: "spec.containers".into(),
             key,
             value,
+            whole: Vec::new(),
         };
         let writes = vec![
             write(
@@ -976,8 +977,8 @@ mod tests {
         for ls in permutations(&lists) {
             for ws in permutations(&writes) {
                 let below = Below {
-                    lattices: None,
                     elems: &ws,
+                    ..Below::default()
                 };
                 let got = lub_ranked_refined(&lat, "spec.containers", &ls, &[], below);
                 assert!(
@@ -990,12 +991,115 @@ mod tests {
         // leaf, named by its key.
         let ws = [write(6, Rank::Normal, s("a"), obj(&[("image", s("a:2"))]))];
         let below = Below {
-            lattices: None,
             elems: &ws,
+            ..Below::default()
         };
         let got = lub_ranked_refined(&lat, "spec.containers", &lists, &[], below);
         assert!(
             matches!(&got, Collapsed::Conflict { reason, .. } if reason.ends_with("at spec.containers[name=a].image")),
+            "{got:?}"
+        );
+    }
+
+    /// A write of a whole subtree (`:=`) replaces what lower ranks write at
+    /// or below its path, in any order; a write of a higher rank still merges on top of it; another
+    /// writer of its rank inside it is the conflict, named at its path.
+    #[test]
+    fn a_whole_write_replaces_lower_ranks_below_its_path() {
+        let map = Lattice::Map(Box::new(Lattice::Flat));
+        let caps = |v: Value| obj(&[("securityContext", obj(&[("capabilities", v)]))]);
+        let drop = obj(&[("drop", list(&[s("ALL")]))]);
+        let contribs = vec![
+            (1, Rank::Default, caps(drop.clone())),
+            (2, Rank::Normal, caps(obj(&[]))),
+            (3, Rank::Default, obj(&[("runAsUser", i(0))])),
+        ];
+        let whole = [Whole {
+            witness: 2,
+            rank: Rank::Normal,
+            path: "c.securityContext.capabilities".into(),
+        }];
+        let below = Below {
+            whole: &whole,
+            ..Below::default()
+        };
+        let want = obj(&[
+            ("runAsUser", i(0)),
+            ("securityContext", obj(&[("capabilities", obj(&[]))])),
+        ]);
+        for cs in permutations(&contribs) {
+            let got = lub_ranked_refined(&map, "c", &cs, &[], below);
+            assert!(
+                matches!(&got, Collapsed::Val { value, .. } if *value == want),
+                "{got:?}"
+            );
+        }
+        // `=` instead: the default's `drop` stays.
+        let got = lub_ranked_refined(&map, "c", &contribs, &[], Below::default());
+        assert!(
+            matches!(&got, Collapsed::Val { value, .. } if *value == obj(&[
+                ("runAsUser", i(0)),
+                ("securityContext", obj(&[("capabilities", drop.clone())])),
+            ])),
+            "{got:?}"
+        );
+        // An override inside it merges on top.
+        let add = (
+            4,
+            Rank::Override,
+            caps(obj(&[("add", list(&[s("NET_ADMIN")]))])),
+        );
+        let mut over = contribs.clone();
+        over.push(add.clone());
+        let got = lub_ranked_refined(&map, "c", &over, &[], below);
+        assert!(
+            matches!(&got, Collapsed::Val { value, .. } if value_at(value, "securityContext.capabilities")
+                == Some(&obj(&[("add", list(&[s("NET_ADMIN")]))]))),
+            "{got:?}"
+        );
+        // Another write of its rank inside it: the conflict, at its path.
+        let mut same = contribs.clone();
+        same.push((4, Rank::Normal, add.2));
+        let got = lub_ranked_refined(&map, "c", &same, &[], below);
+        assert!(
+            matches!(&got, Collapsed::Conflict { reason, witnesses, .. }
+                if reason.ends_with("at c.securityContext.capabilities")
+                    && *witnesses == Witnesses::from([2, 4])),
+            "{got:?}"
+        );
+    }
+
+    /// A keyed list's element written whole by key (`containers[k] :=
+    /// { .. }`): its `@default` content goes.
+    #[test]
+    fn a_whole_element_write_replaces_its_defaults() {
+        let map = Lattice::Map(Box::new(Lattice::Flat));
+        let lat = Lattice::Keyed {
+            keys: vec!["name".into()],
+            defaults: BTreeMap::new(),
+            elem: Box::new(map.clone()),
+        };
+        let lists = vec![(
+            1,
+            Rank::Default,
+            list(&[obj(&[("name", s("a")), ("image", s("a:1")), ("cpu", i(1))])]),
+        )];
+        let ws = [ElemWrite {
+            witness: 2,
+            rank: Rank::Normal,
+            list: "spec.containers".into(),
+            key: s("a"),
+            value: obj(&[("image", s("a:2"))]),
+            whole: vec![String::new()],
+        }];
+        let below = Below {
+            elems: &ws,
+            ..Below::default()
+        };
+        let got = lub_ranked_refined(&lat, "spec.containers", &lists, &[], below);
+        assert!(
+            matches!(&got, Collapsed::Val { value, .. }
+                if *value == list(&[obj(&[("name", s("a")), ("image", s("a:2"))])])),
             "{got:?}"
         );
     }
@@ -1842,6 +1946,19 @@ pub struct ElemWrite {
     pub key: Value,
     /// What is written of the element: `{resources: {limits: v}}`.
     pub value: Value,
+    /// The paths in it written whole (`:=`), from the element: `""` the
+    /// element itself.
+    pub whole: Vec<String>,
+}
+
+/// A write of the whole subtree at `path` (`:=`): what lower ranks write
+/// at or below it is replaced; another writer at its rank there is a
+/// conflict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Whole {
+    pub witness: Witness,
+    pub rank: Rank,
+    pub path: String,
 }
 
 /// What assembles the paths below a cell's own: the lattices declared on
@@ -1851,6 +1968,8 @@ pub struct ElemWrite {
 pub struct Below<'a> {
     pub lattices: Option<&'a BTreeMap<String, Lattice>>,
     pub elems: &'a [ElemWrite],
+    /// The writes of a whole subtree at or below the cell's path.
+    pub whole: &'a [Whole],
 }
 
 impl Below<'_> {
@@ -1872,6 +1991,19 @@ pub fn lub_ranked_refined(
     refinements: &[Refinement],
     nested: Below,
 ) -> Collapsed {
+    let kept;
+    let (contribs, nested) = match whole_at(path, contribs, nested) {
+        Ok(None) => (contribs, nested),
+        Ok(Some((cs, elems))) => {
+            kept = (cs, elems);
+            let nested = Below {
+                elems: &kept.1,
+                ..nested
+            };
+            (kept.0.as_slice(), nested)
+        }
+        Err(c) => return *c,
+    };
     let (here, below): (Vec<&Refinement>, Vec<&Refinement>) =
         refinements.iter().partition(|r| r.path == path);
     let list = crate::provider::norm_path(path);
@@ -1927,6 +2059,96 @@ pub fn lub_ranked_refined(
         }
     };
     check_below(collapsed, path, &below)
+}
+
+/// What a write of a whole subtree leaves of a cell's contributions and
+/// element writes ([`whole_at`]).
+type WholeAt = Result<Option<(Vec<RankedContribution>, Vec<ElemWrite>)>, Box<Collapsed>>;
+
+/// The writes of a whole subtree at `path` (`:=`, [`Whole`]) applied to
+/// the contributions and the element writes there: those at the highest
+/// such rank and above are kept, the lower ones replaced; another writer
+/// at that rank whose value differs is the conflict that names both.
+/// `None` where nothing is written whole at `path`.
+fn whole_at(path: &str, contribs: &[RankedContribution], nested: Below) -> WholeAt {
+    let here: Vec<&Whole> = nested.whole.iter().filter(|w| w.path == path).collect();
+    let Some(rank) = here.iter().map(|w| w.rank).max() else {
+        return Ok(None);
+    };
+    let writers: Witnesses = here
+        .iter()
+        .filter(|w| w.rank == rank)
+        .map(|w| w.witness)
+        .collect();
+    let value = contribs
+        .iter()
+        .find(|(w, _, _)| writers.contains(w))
+        .map(|(_, _, v)| v.clone());
+    let conflict = |w: Witness, v: &Value| {
+        let mut witnesses = writers.clone();
+        witnesses.insert(w);
+        Box::new(Collapsed::Conflict {
+            rank: Some(rank),
+            a: (
+                value.clone().unwrap_or(Value::Obj(BTreeMap::new())),
+                writers.clone(),
+            ),
+            b: (v.clone(), Witnesses::from([w])),
+            reason: "`:=` writes it whole, and another write of its rank writes inside it".into(),
+            witnesses,
+            shadowed: vec![],
+        })
+    };
+    let mut kept = Vec::new();
+    for (w, r, v) in contribs {
+        if *r < rank {
+            continue;
+        }
+        if *r == rank && !writers.contains(w) {
+            match &value {
+                Some(x) if eq3(x, v) == Truth::True => continue,
+                _ => return Err(conflict(*w, v)),
+            }
+        }
+        kept.push((*w, *r, v.clone()));
+    }
+    let under = crate::provider::norm_path(path);
+    let mut elems = Vec::new();
+    for e in nested.elems {
+        let inside = e.list == under || e.list.starts_with(&format!("{under}."));
+        match (inside, e.rank.cmp(&rank)) {
+            (true, std::cmp::Ordering::Less) => {}
+            (true, std::cmp::Ordering::Equal) => return Err(conflict(e.witness, &e.value)),
+            _ => elems.push(e.clone()),
+        }
+    }
+    Ok(Some((kept, elems)))
+}
+
+/// The writes of a whole subtree inside the element at `at`: the ones
+/// around it, and each of its element writes' (`ElemWrite::whole`, its
+/// contributions `cs` among `writes`), from `at`.
+fn element_whole(
+    at: &str,
+    cs: &[RankedContribution],
+    writes: &[&ElemWrite],
+    around: &[Whole],
+) -> Vec<Whole> {
+    let mut out = around.to_vec();
+    for w in writes
+        .iter()
+        .filter(|w| cs.iter().any(|(x, _, _)| *x == w.witness))
+    {
+        out.extend(w.whole.iter().map(|rest| Whole {
+            witness: w.witness,
+            rank: w.rank,
+            path: match rest.is_empty() {
+                true => at.to_string(),
+                false => format!("{at}.{rest}"),
+            },
+        }));
+    }
+    out
 }
 
 /// Check refinements at or below `path` against a collapsed value's
@@ -2192,10 +2414,6 @@ fn keyed_overlay(
         }
     }
     elements.groups.sort_by(|a, b| a.0.cmp(&b.0));
-    let inner = Below {
-        elems: &[],
-        ..nested
-    };
     let mut out = Vec::new();
     let mut g = Gathered {
         shadowed,
@@ -2205,6 +2423,12 @@ fn keyed_overlay(
     for (k, cs) in elements.groups {
         rank = rank.max(max_rank(&cs));
         let at = format!("{path}[{}]", key_label(keys, &k));
+        let whole = element_whole(&at, &cs, writes, nested.whole);
+        let inner = Below {
+            elems: &[],
+            whole: &whole,
+            ..nested
+        };
         match g.take(lub_ranked_refined(elem, &at, &cs, &[], inner)) {
             Ok(Some(value)) => out.push(value),
             Ok(None) => {}

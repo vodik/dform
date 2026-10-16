@@ -183,10 +183,12 @@ impl Lowerer<'_> {
         for a in assigns {
             let at = self.span(&a);
             let key = self.block_path(&node(&a, BLOCK_PATH).ok_or(Skip)?)?;
-            if tokens(&a).any(|t| matches!(t.kind(), PLUS_EQ | RANK)) {
+            if tokens(&a).any(|t| matches!(t.kind(), PLUS_EQ | COLON_EQ | RANK)) {
                 return self.error(
                     at,
-                    format!("provider {name}: a setting is `{key} = term`, with no `+=` or rank"),
+                    format!(
+                        "provider {name}: a setting is `{key} = term`, with no `+=`, `:=` or rank"
+                    ),
                 );
             }
             let mut made = self.helpers.len();

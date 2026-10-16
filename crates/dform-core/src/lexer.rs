@@ -78,6 +78,8 @@ enum Tok {
     Eq2,
     #[token("+=")]
     PlusEq,
+    #[token(":=")]
+    ColonEq,
     #[token("!=")]
     Neq,
     #[token("<")]
@@ -200,6 +202,7 @@ fn kind(t: Tok) -> SyntaxKind {
         Tok::Eq => EQ,
         Tok::Eq2 => EQ2,
         Tok::PlusEq => PLUS_EQ,
+        Tok::ColonEq => COLON_EQ,
         Tok::Neq => NEQ,
         Tok::Lt => LT,
         Tok::Le => LE,

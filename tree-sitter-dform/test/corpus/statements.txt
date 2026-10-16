@@ -1306,3 +1306,40 @@ let restic(
       (comparison
         (identifier)
         (string)))))
+
+================================================================================
+A write of a whole subtree
+================================================================================
+
+set c.securityContext.capabilities := {} where c in k8s.deployment
+resource net.vpc v { tags := { a = 1 } }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (set
+    target: (member_expression
+      object: (member_expression
+        object: (identifier)
+        field: (identifier))
+      field: (identifier))
+    value: (object)
+    condition: (body
+      (in_literal
+        element: (identifier)
+        collection: (member_expression
+          object: (identifier)
+          field: (identifier)))))
+  (resource
+    type: (dotted_name
+      (identifier)
+      (identifier))
+    name: (identifier)
+    body: (block
+      (field
+        path: (block_path
+          (identifier))
+        value: (object
+          (object_field
+            key: (identifier)
+            value: (integer)))))))

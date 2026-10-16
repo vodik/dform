@@ -33,17 +33,14 @@ pub(super) fn collapse_group(
     // refinement's the element writes'.
     let writes = elem_writes(elems, contribs.len());
     let first_ref = contribs.len() + elems.len();
+    let (ranked, whole) = ranked(contribs, &key.2);
     let below = lattice::Below {
         lattices: Some(nested),
         elems: &writes,
+        whole: &whole,
     };
-    let collapsed = lattice::lub_ranked_refined(
-        lat,
-        &key.2,
-        &ranked(contribs),
-        &refinements(refs, first_ref),
-        below,
-    );
+    let collapsed =
+        lattice::lub_ranked_refined(lat, &key.2, &ranked, &refinements(refs, first_ref), below);
     let mut cell = Collapse {
         key,
         contribs,
@@ -60,13 +57,26 @@ pub(super) fn collapse_group(
     cell.out
 }
 
-/// The contributions as the lattice ranks them, each its own witness.
-fn ranked(contribs: &[Contribution]) -> Vec<RankedContribution> {
-    contribs
+/// The contributions as the lattice ranks them, each its own witness, at
+/// `path`; and their writes of a whole subtree (`:=`), whose values are
+/// without their marks (`transform::unwhole`).
+fn ranked(contribs: &[Contribution], path: &str) -> (Vec<RankedContribution>, Vec<lattice::Whole>) {
+    let mut whole = Vec::new();
+    let ranked = contribs
         .iter()
         .enumerate()
-        .map(|(i, (_, r, v))| (i as u32, *r, v.clone()))
-        .collect()
+        .map(|(i, (_, r, v))| {
+            let mut at = Vec::new();
+            let v = crate::transform::unwhole(v.clone(), path, &mut at);
+            whole.extend(at.into_iter().map(|path| lattice::Whole {
+                witness: i as u32,
+                rank: *r,
+                path,
+            }));
+            (i as u32, *r, v)
+        })
+        .collect();
+    (ranked, whole)
 }
 
 /// The element writes, their witnesses numbered from `first`.
@@ -74,12 +84,17 @@ fn elem_writes(elems: &[ElemContribution], first: usize) -> Vec<lattice::ElemWri
     elems
         .iter()
         .enumerate()
-        .map(|(i, (_, r, list, k, v))| lattice::ElemWrite {
-            witness: (first + i) as u32,
-            rank: *r,
-            list: list.clone(),
-            key: k.clone(),
-            value: v.clone(),
+        .map(|(i, (_, r, list, k, v))| {
+            let mut whole = Vec::new();
+            let value = crate::transform::unwhole(v.clone(), "", &mut whole);
+            lattice::ElemWrite {
+                witness: (first + i) as u32,
+                rank: *r,
+                list: list.clone(),
+                key: k.clone(),
+                value,
+                whole,
+            }
         })
         .collect()
 }
@@ -206,9 +221,11 @@ impl Collapse<'_> {
                 (t, r, v)
             }
         };
+        // A write of a whole subtree's value as written, without its mark.
+        let v = crate::transform::unwhole(v.clone(), "", &mut Vec::new());
         obj(vec![
             ("rank", Value::Str(rank_name(*r).into())),
-            ("value", v.clone()),
+            ("value", v),
             (
                 "from",
                 Value::List(
