@@ -1504,7 +1504,9 @@ impl<'u> Lowerer<'u> {
         let decl = DeclRef {
             scope: declared.unwrap_or(from),
             name: name.to_string(),
-            at: 0,
+            at: declared
+                .and_then(|d| self.names(d).value_at(name))
+                .unwrap_or(0),
         };
         (decl, via)
     }
@@ -8988,12 +8990,12 @@ impl<'u> Lowerer<'u> {
                     .find(|s| self.names(*s).module(h).is_some())
                     .unwrap_or(self.root());
                 let own = self.names(module);
-                if own.is_value(x) {
+                if let Some(at) = own.value_at(x) {
                     let path = self.segs(rc, &ops[1..], pre)?;
                     let decl = DeclRef {
                         scope: module,
                         name: x.clone(),
-                        at: 0,
+                        at,
                     };
                     let via = Reach::Use(h.to_string());
                     return Ok(Some(Res::Value { decl, via, path }));

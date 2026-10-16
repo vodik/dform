@@ -382,6 +382,24 @@ let x = cidr(1)
         assert!(s.parameter(file, "x", "n").is_none());
     }
 
+    /// A read of a name a scope declares as an output and a `let` is the
+    /// `let`'s: the declaration it names is the value's.
+    #[test]
+    fn a_read_names_the_value_an_output_shares_its_name_with() {
+        let src = "output k = \"o\"\nlet k = \"v\"\noutput m = k\n";
+        let (p, _) = program(&[("k.df", None, src)]);
+        let read = p
+            .exprs
+            .values()
+            .find_map(|e| match &e.kind {
+                ExprKind::Value { decl, .. } => Some(decl.clone()),
+                _ => None,
+            })
+            .expect("the read of k");
+        let d = p.scopes.declaration(&read).expect("its declaration");
+        assert_eq!(d.kind, DeclKind::Let);
+    }
+
     #[test]
     fn every_read_of_a_declaration() {
         let (p, ids) = program(&[("q.df", None, STACK)]);

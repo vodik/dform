@@ -420,7 +420,14 @@ impl Names {
 
     /// Whether `name` is a value read bare here: an input or a `let`.
     pub fn is_value(&self, name: &str) -> bool {
-        self.first(name, DeclKind::is_value).is_some()
+        self.value_at(name).is_some()
+    }
+
+    /// Which of `name`'s declarations a bare read of it reads
+    /// ([`DeclRef::at`]): its first input or `let`, not an output of the
+    /// name.
+    pub fn value_at(&self, name: &str) -> Option<usize> {
+        self.of(name).iter().position(|d| d.kind.is_value())
     }
 
     /// The last `input name` here.
@@ -659,7 +666,8 @@ impl Reach {
 }
 
 /// A read's declaration: the scope that declares the name and which of its
-/// declarations (`at`, R-104).
+/// declarations the read reads (`at`, [`Names::value_at`]): a name may be
+/// an output and a `let` at once, or declared several times (R-104).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeclRef {
     pub scope: ScopeId,
