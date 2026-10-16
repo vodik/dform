@@ -263,26 +263,7 @@ pub fn hover(e: &Evaluated, facts: &[NodeId]) -> String {
         {
             out.push_str(&format!("{d}\n\n"));
         }
-        let mut contributions = Vec::new();
-        for a in alts.iter().take(1) {
-            let View::Times { children, .. } = c.view(*a) else {
-                continue;
-            };
-            for ch in children {
-                let View::Fact { fact: f, .. } = c.view(*ch) else {
-                    continue;
-                };
-                if f.pred != "arg" {
-                    continue;
-                }
-                let rank = match f.args.get(4) {
-                    Some(Value::Str(r)) => r.clone(),
-                    _ => continue,
-                };
-                let value = f.args.get(3).map(|v| e.redact.fmt(v)).unwrap_or_default();
-                contributions.push((rank, value, owner(e, *ch)));
-            }
-        }
+        let contributions = contributions(e, alts);
         if let Some(best) = contributions
             .iter()
             .filter_map(|(r, _, _)| Rank::parse(r))
@@ -301,6 +282,33 @@ pub fn hover(e: &Evaluated, facts: &[NodeId]) -> String {
     out.push_str("```text\n");
     out.push_str(&why_text(e, &facts[..facts.len().min(8)]));
     out.push_str("```\n");
+    out
+}
+
+/// The contributions an `attr` fact's first derivation `alts` read: each
+/// one's rank, value and owner.
+fn contributions(e: &Evaluated, alts: &[NodeId]) -> Vec<(String, String, String)> {
+    let c = &e.res.circuit;
+    let mut out = Vec::new();
+    for a in alts.iter().take(1) {
+        let View::Times { children, .. } = c.view(*a) else {
+            continue;
+        };
+        for ch in children {
+            let View::Fact { fact: f, .. } = c.view(*ch) else {
+                continue;
+            };
+            if f.pred != "arg" {
+                continue;
+            }
+            let rank = match f.args.get(4) {
+                Some(Value::Str(r)) => r.clone(),
+                _ => continue,
+            };
+            let value = f.args.get(3).map(|v| e.redact.fmt(v)).unwrap_or_default();
+            out.push((rank, value, owner(e, *ch)));
+        }
+    }
     out
 }
 

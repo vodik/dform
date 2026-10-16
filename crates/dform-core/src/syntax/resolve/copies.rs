@@ -6,6 +6,15 @@
 
 use super::*;
 
+/// One input a copy's block gives: its key, where, its value's node and
+/// the helpers its value made.
+struct Given {
+    key: String,
+    span: Span,
+    value: ExprId,
+    made: std::ops::Range<usize>,
+}
+
 impl Lowerer<'_> {
     /// The checks of an input declared more than once beside `n` (R-104):
     /// each under a clause, of one type. Which declaration it is, and at
@@ -317,21 +326,10 @@ impl Lowerer<'_> {
             Some(block) => self.fields(&mut rc, &block)?,
             None => Vec::new(),
         };
-        let mut inputs = Vec::new();
-        let mut from = made;
-        for (f, id, to) in fields {
-            if matches!(f.op, FieldOp::Add) {
-                return self.error(f.span, "an input of a copy is set with `=`, not `+=`");
-            }
-            if f.rank.is_some() {
-                return self.error(f.span, "an input of a copy takes no rank");
-            }
-            inputs.push((f.key, f.value, f.span, id, from..to));
-            from = to;
-        }
+        let inputs = self.copy_inputs(fields, made)?;
         let values: Vec<bind::Term> = inputs
             .iter()
-            .map(|&(_, _, _, id, _)| id)
+            .map(|g| g.value)
             .chain(named_id)
             .map(bind::Term::Expr)
             .collect();
@@ -351,11 +349,11 @@ impl Lowerer<'_> {
             named: named_id.map(|id| (id, &self.helpers[named_at..made])),
             inputs: inputs
                 .iter()
-                .map(|(key, _, at, id, h)| crate::program::build::InputGiven {
-                    key: key.clone(),
-                    span: *at,
-                    value: *id,
-                    made: &self.helpers[h.clone()],
+                .map(|g| crate::program::build::InputGiven {
+                    key: g.key.clone(),
+                    span: g.span,
+                    value: g.value,
+                    made: &self.helpers[g.made.clone()],
                 })
                 .collect(),
             rows,
@@ -372,6 +370,29 @@ impl Lowerer<'_> {
         let item = b.copy_item(c);
         gather.done(b);
         Ok(item)
+    }
+
+    /// The inputs a copy's block gives (its `fields`, whose helpers start
+    /// at `made`).
+    fn copy_inputs(&mut self, fields: Entries, made: usize) -> L<Vec<Given>> {
+        let mut inputs = Vec::new();
+        let mut from = made;
+        for (f, id, to) in fields {
+            if matches!(f.op, FieldOp::Add) {
+                return self.error(f.span, "an input of a copy is set with `=`, not `+=`");
+            }
+            if f.rank.is_some() {
+                return self.error(f.span, "an input of a copy takes no rank");
+            }
+            inputs.push(Given {
+                key: f.key,
+                span: f.span,
+                value: id,
+                made: from..to,
+            });
+            from = to;
+        }
+        Ok(inputs)
     }
 
     /// The rows a `use` or `instance` block gives the relations its
