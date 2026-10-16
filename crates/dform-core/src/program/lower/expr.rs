@@ -45,6 +45,10 @@ pub(super) struct Lowering<'p> {
     /// The relations a copy's block gives rows of (R-55), under the
     /// copy's scope: each such head is the copy's own relation.
     pub(super) taken: Option<(&'p str, &'p BTreeSet<String>)>,
+    /// The literals of each clause around the term being lowered, up to
+    /// the goal that holds it: what a negation in a comprehension's body
+    /// is guarded by besides that body's own.
+    pub(super) around: Vec<Vec<Lit>>,
 }
 
 impl<'p> Lowering<'p> {
@@ -56,6 +60,7 @@ impl<'p> Lowering<'p> {
             reads: Vec::new(),
             helpers: Vec::new(),
             taken: None,
+            around: Vec::new(),
         }
     }
 

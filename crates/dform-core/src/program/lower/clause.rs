@@ -224,9 +224,12 @@ impl Lowering<'_> {
                 ..
             } => self.negation(*clause, h, g.span, out),
             _ => {
-                // A goal's terms hoist their reads before it.
+                // A goal's terms hoist their reads before it; a
+                // comprehension among them sees the clause so far.
                 let saved = std::mem::take(&mut self.reads);
+                self.around.push(out.clone());
                 let lits = self.literals(id);
+                self.around.pop();
                 let reads = std::mem::replace(&mut self.reads, saved);
                 out.extend(reads);
                 out.extend(lits);
@@ -235,7 +238,9 @@ impl Lowering<'_> {
     }
 
     /// `not { B }` through its helper: `__neg_N(ȳ) :- P, B`, after the
-    /// helpers B makes, and `not __neg_N(ȳ)`.
+    /// helpers B makes, and `not __neg_N(ȳ)`. `P` is the clause's literals
+    /// before it, after those of the clauses around a comprehension it is
+    /// in, which bind what that comprehension's body reads from them.
     fn negation(
         &mut self,
         clause: ClauseId,
@@ -252,8 +257,11 @@ impl Lowering<'_> {
             .iter()
             .map(|v| self.program.vars[*v].lowered.as_str())
             .collect();
-        let mut body: Vec<Lit> = out
+        let mut body: Vec<Lit> = self
+            .around
             .iter()
+            .flatten()
+            .chain(out.iter())
             .filter(|l| !matches!(l, Lit::Not(_)) && !reads_any(l, &folded))
             .cloned()
             .collect();

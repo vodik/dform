@@ -187,3 +187,16 @@ ok(x) where p(x), not { q(y), not { r(x, y) } }
 "#;
     assert_eq!(facts(src, "ok"), ["ok(1)"]);
 }
+
+/// A `not { }` in a comprehension's body reads the clause's variables as
+/// one in the clause does: `x` is the row's, not any `x` of `r`.
+#[test]
+fn a_negation_inside_a_comprehension_shares_the_clauses_variables() {
+    let src = r#"p(1)
+p(2)
+r(1, 10)
+r(2, 20)
+ok(x, ys) where p(x), ys = [y | y in [10, 20], not { r(x, y) }]
+"#;
+    assert_eq!(facts(src, "ok"), ["ok(1, [20])", "ok(2, [10])"]);
+}

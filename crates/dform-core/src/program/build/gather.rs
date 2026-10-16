@@ -60,23 +60,12 @@ struct Frame {
     terms: BTreeSet<usize>,
     /// The goal the resolver built of it from its nodes.
     built: Option<GoalId>,
-    /// It is a comprehension's body, a clause of its own: what the
-    /// clauses around it bind is not its.
-    comprehension: bool,
 }
 
 impl Gather {
-    /// A literal's or a clause's lowering starts.
+    /// A literal's, a clause's or a comprehension's body's lowering starts.
     pub fn open(&mut self) {
         self.frames.push(Frame::default());
-    }
-
-    /// A comprehension's body's lowering starts ([`Gather::close`]).
-    pub fn open_comprehension(&mut self) {
-        self.frames.push(Frame {
-            comprehension: true,
-            ..Frame::default()
-        });
     }
 
     /// The resolver built the literal being lowered as `goal`, from the
@@ -112,8 +101,8 @@ impl Gather {
     /// written `written`, its helper's body the goals its body's literals
     /// were built as ([`Gather::negation`]): built as that goal, its
     /// arguments what its body shares with what is bound before it:
-    /// around, and by the goals before it in the clauses it is in, up to
-    /// the comprehension it is in ([`Gather::bound_before`]). Its body's
+    /// around, and by the goals before it in the clauses it is in, a
+    /// comprehension's body among them ([`Gather::bound_before`]). Its body's
     /// own variables, by the names they lower to.
     pub fn negated(
         &mut self,
@@ -174,12 +163,11 @@ impl Gather {
     }
 
     /// What the goals before the literal being lowered bind, its body
-    /// from `from` on: the goals before it in each clause it is in, up to
-    /// the comprehension it is in.
+    /// from `from` on: the goals before it in each clause it is in, a
+    /// comprehension's body and the clauses around it alike.
     fn bound_before(&self, program: &Program, from: usize, scope: ScopeId) -> BTreeSet<Name> {
         let (last, enclosing) = self.frames.split_last().expect("a literal's frame");
-        let start = enclosing.iter().rposition(|f| f.comprehension);
-        let goals = enclosing[start.unwrap_or(0)..]
+        let goals = enclosing
             .iter()
             .flat_map(|f| &f.goals)
             .chain(&last.goals[..from])
@@ -414,10 +402,10 @@ fn helpers_in(program: &mut Program, clause: ClauseId, around: &Around, bound: &
                     h.args = args;
                 }
             }
-            // A comprehension's body is a clause of its own.
+            // A comprehension's body reads what is bound before it.
             _ => {
                 for body in bind::bodies(program, around.scope, g) {
-                    helpers_in(program, body, around, &BTreeSet::new());
+                    helpers_in(program, body, around, &bound);
                 }
             }
         }
