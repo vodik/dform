@@ -11,14 +11,15 @@ use std::collections::{BTreeMap, BTreeSet};
 /// The compile error for the negative cycle `scc`, `negative` its
 /// negative edges.
 pub fn cycle_error(g: &Graph, scc: &BTreeSet<Node>, negative: &[Edge]) -> String {
-    let mut out = waits(scc, negative);
-    for (rule, lines) in on_cycle(g, scc) {
+    let names = Names::of(&g.rules);
+    let mut out = waits(&names, scc, negative);
+    for (rule, lines) in on_cycle(&names, g, scc) {
         out.push_str(&format!("\n  {rule}"));
         for l in lines {
             out.push_str(&format!("\n    {l}"));
         }
     }
-    if let Some(help) = unless_itself(g, negative) {
+    if let Some(help) = unless_itself(&names, g, negative) {
         out.push_str(&format!("\n  help: {help}"));
     }
     out
@@ -27,9 +28,9 @@ pub fn cycle_error(g: &Graph, scc: &BTreeSet<Node>, negative: &[Edge]) -> String
 /// What waits on what, the values on the cycle as the program names
 /// them, once each, and why none of them is computed first: what each
 /// kind of negative edge on it waits for.
-fn waits(scc: &BTreeSet<Node>, negative: &[Edge]) -> String {
+fn waits(said: &Names, scc: &BTreeSet<Node>, negative: &[Edge]) -> String {
     let mut names: Vec<String> = Vec::new();
-    for n in scc.iter().filter_map(said) {
+    for n in scc.iter().filter_map(|n| said.node(n)) {
         if !names.contains(&n) {
             names.push(n);
         }
@@ -91,7 +92,7 @@ impl Wait {
 /// Each rule with an edge inside the cycle as written, in program order,
 /// once each (the rules one statement lowers to are one), and what it
 /// makes of what there.
-fn on_cycle(g: &Graph, scc: &BTreeSet<Node>) -> Vec<(String, Vec<String>)> {
+fn on_cycle(names: &Names, g: &Graph, scc: &BTreeSet<Node>) -> Vec<(String, Vec<String>)> {
     let mut rules: BTreeMap<usize, Vec<&Edge>> = BTreeMap::new();
     let inside = g
         .edges
@@ -113,7 +114,7 @@ fn on_cycle(g: &Graph, scc: &BTreeSet<Node>) -> Vec<(String, Vec<String>)> {
             }
         };
         let lines = &mut out[at].1;
-        for l in edges.into_iter().filter_map(makes) {
+        for l in edges.into_iter().filter_map(|e| makes(names, e)) {
             if !lines.contains(&l) {
                 lines.push(l);
             }
@@ -124,8 +125,8 @@ fn on_cycle(g: &Graph, scc: &BTreeSet<Node>) -> Vec<(String, Vec<String>)> {
 
 /// What the rule of edge `e` makes of what it reads: `x.p from y.q`;
 /// none where either end is the compiler's.
-fn makes(e: &Edge) -> Option<String> {
-    let (mut from, to) = (said(&e.from)?, said(&e.to)?);
+fn makes(names: &Names, e: &Edge) -> Option<String> {
+    let (mut from, to) = (names.node(&e.from)?, names.node(&e.to)?);
     if from == to {
         from = "itself".into();
     }
@@ -163,23 +164,6 @@ fn written(r: &RuleStmt) -> String {
     )
 }
 
-/// A node as the program names what it holds: a value by its resource
-/// type, address and path (`net.vpc.peer`, `db.postgres a.endpoint`), an
-/// input's, a `let`'s or an output's cell by its scope (`input
-/// k3s.name`), the resources of a type, a relation by its name; none for
-/// one only the compiler writes.
-fn said(n: &Node) -> Option<String> {
-    match n.pred.as_str() {
-        "arg" | "attr" | ATTR_BASE => Some(value(n)),
-        "want" => Some(match (&n.typ, &n.addr) {
-            (Some(t), Some(a)) => format!("{t} {}", address(a)),
-            (Some(t), None) => format!("the {t} resources"),
-            (None, _) => "every resource".into(),
-        }),
-        p => relation(p),
-    }
-}
-
 /// A value node: `T.p`, `T a.p` at an address, a cell by its scope.
 fn value(n: &Node) -> String {
     let path = n.path.as_deref().map(|p| p.strip_suffix(ELEM).unwrap_or(p));
@@ -211,28 +195,63 @@ fn address(a: &Addr) -> String {
     alts.join("|")
 }
 
-/// A relation by the name the program gives it: an enclosing
-/// definition's by its own, a module's after its scope; none for a
-/// helper the compiler names (`__neg_0`, a call's copy).
-fn relation(pred: &str) -> Option<String> {
-    let pred = crate::modules::lexical_name(pred).unwrap_or(pred);
-    let (scope, name) = match pred.rsplit_once("::") {
-        Some((s, n)) => (Some(s), n),
-        None => (None, pred),
-    };
-    if name.starts_with("__") || scope.is_some_and(|s| s.starts_with("call at")) {
-        return None;
+/// What the program names a node by: the relations the compiler writes
+/// beside the program's ([`crate::ast::Helper`]) it does not.
+struct Names {
+    helpers: BTreeSet<String>,
+}
+
+impl Names {
+    fn of(rules: &[RuleStmt]) -> Names {
+        let helpers = rules.iter().filter(|r| r.helper.is_some());
+        Names {
+            helpers: helpers.map(|r| r.head.pred.clone()).collect(),
+        }
     }
-    Some(match scope {
-        Some(s) => format!("{name} (in {s})"),
-        None => name.to_string(),
-    })
+
+    /// A node as the program names what it holds: a value by its resource
+    /// type, address and path (`net.vpc.peer`, `db.postgres a.endpoint`),
+    /// an input's, a `let`'s or an output's cell by its scope (`input
+    /// k3s.name`), the resources of a type, a relation by its name; none
+    /// for one only the compiler writes.
+    fn node(&self, n: &Node) -> Option<String> {
+        match n.pred.as_str() {
+            "arg" | "attr" | ATTR_BASE => Some(value(n)),
+            "want" => Some(match (&n.typ, &n.addr) {
+                (Some(t), Some(a)) => format!("{t} {}", address(a)),
+                (Some(t), None) => format!("the {t} resources"),
+                (None, _) => "every resource".into(),
+            }),
+            p => self.relation(p),
+        }
+    }
+
+    /// A relation by the name the program gives it: an enclosing
+    /// definition's by its own, a module's after its scope, a let's copy
+    /// for a call by the let's; none for a helper, or one of the core's
+    /// own relations (`__known`), which no program names.
+    fn relation(&self, pred: &str) -> Option<String> {
+        if self.helpers.contains(pred) {
+            return None;
+        }
+        let pred = crate::modules::lexical_name(pred).unwrap_or(pred);
+        let (scope, name) = match pred.rsplit_once("::") {
+            Some((s, n)) => (Some(s), n),
+            None => (None, pred),
+        };
+        Some(match scope {
+            _ if name.starts_with("__") => return None,
+            Some(s) if s.starts_with("call at ") => name.trim_end_matches('?').to_string(),
+            Some(s) => format!("{name} (in {s})"),
+            None => name.to_string(),
+        })
+    }
 }
 
 /// The help for a rule that writes a value unless the value is written
 /// (`set r.tags = .. where not r.tags == ..`): the default it means is a
 /// write at `@default` rank, which any other write overrides.
-fn unless_itself(g: &Graph, negative: &[Edge]) -> Option<String> {
+fn unless_itself(names: &Names, g: &Graph, negative: &[Edge]) -> Option<String> {
     let e = negative.iter().find(|e| {
         e.rule.is_some() && Wait::of(&e.why) == Wait::Not && e.from.unifies(&value_of(&e.to))
     })?;
@@ -240,7 +259,7 @@ fn unless_itself(g: &Graph, negative: &[Edge]) -> Option<String> {
     Some(format!(
         "at {at}, write the default at `@default` rank: any other write of {} overrides it, \
          with no test for one",
-        said(&e.to)?
+        names.node(&e.to)?
     ))
 }
 

@@ -23,6 +23,7 @@ impl Printer<'_> {
             w: Walk::default(),
             files: BTreeMap::new(),
             list_keys: Default::default(),
+            folds: Default::default(),
             sites: Default::default(),
         }
     }
@@ -51,6 +52,9 @@ pub(super) struct Surface<'a, 'b> {
     pub(super) files: BTreeMap<String, SyntaxNode>,
     /// The keyed lists' keys, `type_list_key(T, L, Keys)`, read once.
     list_keys: std::cell::OnceCell<BTreeMap<(String, String), Vec<String>>>,
+    /// The relations the compiler folds an aggregate's group in
+    /// ([`Helper::Aggregate`]), found once.
+    folds: std::cell::OnceCell<BTreeSet<String>>,
     /// Each fact node's site at a depth ([`site_of`]), found once: the
     /// leaves of one large value (a manifest's document) share their
     /// statement, whose bindings print the whole value.
@@ -386,6 +390,13 @@ impl Surface<'_, '_> {
         })
     }
 
+    /// The relations the compiler folds an aggregate's group in, in
+    /// whatever scope their names were given.
+    fn folds(&self) -> &BTreeSet<String> {
+        self.folds
+            .get_or_init(|| crate::ast::Helper::Aggregate.heads(self.rules))
+    }
+
     pub(super) fn firing(&mut self, a: NodeId, pad: &str, focus: Option<&Focus>) {
         let circuit = self.p.circuit;
         let View::Times { children, bindings } = circuit.view(a) else {
@@ -401,7 +412,7 @@ impl Surface<'_, '_> {
                 // An aggregate's group (R-59), which the compiler folded in
                 // a rule of its own: the group's rows, under the statement
                 // that folds them.
-                View::Fact { fact, alts, .. } if fact.pred.starts_with("__agg_") => {
+                View::Fact { fact, alts, .. } if self.folds().contains(&fact.pred) => {
                     let rows = alts.first().map(|a| circuit.view(*a));
                     if let Some(View::Times { children, .. }) = rows {
                         for r in children {

@@ -31,7 +31,7 @@ enum Scope {
 
 /// A copy of a component, `instance_of(path, user, name)`: its scope
 /// (`forgejo_backup`), its component's path (`backups.volume`), and the
-/// scope its component's body reads around it (`__lexical_of`): the
+/// scope its component's body reads around it (`modules::LEXICAL_OF`): the
 /// module instance (`backups`) or the copy around it; `None` the stack.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Copy {
