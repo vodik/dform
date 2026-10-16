@@ -291,15 +291,25 @@ impl Link {
         &mut self,
         events: &mut dyn FnMut(Ticket, pb::Event),
     ) -> (Ticket, Result<Reply, CallError>) {
+        self.next_completed_by(None, events)
+            .expect("with no deadline, an answer")
+    }
+
+    /// [`Link::next_completed`], waited for no later than `deadline`:
+    /// `None` when it passes first.
+    pub fn next_completed_by(
+        &mut self,
+        deadline: Option<std::time::Instant>,
+        events: &mut dyn FnMut(Ticket, pb::Event),
+    ) -> Option<(Ticket, Result<Reply, CallError>)> {
         for (t, e) in self.take_events() {
             events(t, e);
         }
-        if let Some(t) = self.done.keys().next().copied() {
-            let r = self.done.remove(&t).expect("present");
-            return (t, r);
+        if let Some((t, r)) = self.done.pop_first() {
+            return Some((t, r));
         }
-        let (t, r) = self.backend.next_completed(events);
-        (t, self.back(t, r))
+        let (t, r) = self.backend.next_completed_by(deadline, events)?;
+        Some((t, self.back(t, r)))
     }
 
     /// The events of calls in flight kept while waiting for another.

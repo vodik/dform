@@ -4,7 +4,7 @@
 //! which the apply stops naming the resource and the last error.
 
 use crate::common;
-use common::{BACKENDS, Backend, Scratch};
+use common::{BACKENDS, Backend, Scratch, attr, traced};
 
 const PROG: &str = r#"
 use fake
@@ -185,4 +185,55 @@ fn a_refusal_that_is_not_transient_is_not_retried() {
     let s = project("fail-final", "60s", 3);
     apply_on(&s, Backend::Process, &["fail=net.subnet[\"a\"]"]).failure();
     assert!(retries(&s).is_empty());
+}
+
+/// A call waiting out its backoff holds up no other call: what does not
+/// depend on it is answered, and what depends on that is sent, before
+/// it is sent again. Here `main`'s first Apply is refused (transient)
+/// with a backoff of a second or two; `peer` answers 200ms in, and the
+/// subnet in it is sent at once, not after `main`'s backoff.
+#[test]
+fn a_retrys_backoff_waits_for_its_own_call_alone() {
+    let s = Scratch::new("backoff-alone");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[providers]\nfake = { source = \"fake\", \
+         retries = 1, backoff = \"2s\" }\n",
+    );
+    s.write(
+        "p.df",
+        "use fake\n\
+         resource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
+         resource net.vpc peer { cidr = \"10.1.0.0/16\" }\n\
+         resource net.subnet b { vpc_id = ref(peer), cidr = \"10.1.1.0/24\" }\n",
+    );
+    let chaos = [
+        "--chaos",
+        "flaky=net.vpc[\"main\"]:1",
+        "--chaos",
+        "delay=net.vpc[\"peer\"]:200",
+    ];
+    let mut args = vec!["dev", "--world", "w.json"];
+    args.extend(chaos);
+    args.extend(["apply", "--yes", "p.df"]);
+    let (r, spans) = traced(&s, &args);
+    r.success();
+    let starts = |addr: &str| -> Vec<u128> {
+        let mut at: Vec<u128> = spans
+            .iter()
+            .filter(|x| x["name"] == "fakecloud Apply" && attr(x, "addr").as_deref() == Some(addr))
+            .map(|x| x["startTimeUnixNano"].as_str().unwrap().parse().unwrap())
+            .collect();
+        at.sort();
+        at
+    };
+    let (main, subnet) = (starts("net.vpc main"), starts("net.subnet b"));
+    assert_eq!(main.len(), 2, "refused once, then sent again: {main:?}");
+    assert_eq!(subnet.len(), 1, "{subnet:?}");
+    assert!(
+        subnet[0] < main[1],
+        "the subnet waited for main's backoff: subnet at {}, main again at {}",
+        subnet[0],
+        main[1]
+    );
 }

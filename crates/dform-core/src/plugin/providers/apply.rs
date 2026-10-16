@@ -21,6 +21,7 @@ use serde_json::{Value as Json, json};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 impl Providers {
     /// These providers' part of a tick ([`Tick`]): the executor's
@@ -80,6 +81,18 @@ pub struct Tick<'a> {
     parts: Vec<Part<'a>>,
     /// The Apply calls in flight, in the order they were submitted.
     in_flight: Vec<InFlight>,
+    /// The calls that wait out their backoff before they are sent again
+    /// ([`Part::again`]), each with when it ends: nothing else waits with
+    /// them.
+    backing_off: Vec<(Instant, InFlight)>,
+}
+
+/// What a call's answer comes to ([`Part::again`]).
+enum Again {
+    /// It is the call's answer.
+    Answer(Box<Result<Reply, CallError>>),
+    /// The call is sent again after this backoff.
+    After(Duration),
 }
 
 /// An Apply call's answer, taken ([`Tick::next_answer`]) and not yet
@@ -234,6 +247,7 @@ impl<'a> Tick<'a> {
         Tick {
             parts,
             in_flight: Vec::new(),
+            backing_off: Vec::new(),
         }
     }
 
@@ -254,22 +268,27 @@ impl<'a> Tick<'a> {
         Ok(sent)
     }
 
+    /// Whether a call is in flight, or waits to be sent again.
     pub fn busy(&self) -> bool {
-        !self.in_flight.is_empty()
+        !self.in_flight.is_empty() || !self.backing_off.is_empty()
     }
 
     /// The next answered Apply call, of whichever part: an answer a link
     /// already holds comes first; else the link of the oldest call in
     /// flight is waited on. A call that failed in a way worth trying
-    /// again is sent again ([`Part::again`]) and waited on with the
+    /// again waits out its backoff ([`Part::again`]) while the others'
+    /// answers are taken, and is then sent again and waited on with the
     /// rest. What a call in flight says meanwhile goes to `events` with
     /// its part and its call's id (R-130).
     pub fn next_answer(&mut self, events: &mut dyn FnMut(usize, usize, pb::Event)) -> Answer {
         loop {
-            let (mut f, answer) = self.take_answer(events);
+            self.send_due();
+            let Some((mut f, answer)) = self.take_answer(events) else {
+                continue;
+            };
             match self.parts[f.part].again(&mut f, answer) {
-                None => self.in_flight.push(f),
-                Some(answer) => return Answer { f, answer },
+                Again::Answer(answer) => return Answer { f, answer: *answer },
+                Again::After(delay) => self.backing_off.push((Instant::now() + delay, f)),
             }
         }
     }
@@ -283,12 +302,37 @@ impl<'a> Tick<'a> {
         (f.id, self.parts[f.part].answered(f, answer, state))
     }
 
-    /// The next answer, out of `in_flight` ([`Tick::next_answer`]).
+    /// Each call whose backoff has ended, sent again: in flight.
+    fn send_due(&mut self) {
+        let now = Instant::now();
+        let (due, waiting) = std::mem::take(&mut self.backing_off)
+            .into_iter()
+            .partition(|(at, _)| *at <= now);
+        self.backing_off = waiting;
+        for (_, mut f) in due {
+            self.parts[f.part].send_again(&mut f);
+            self.in_flight.push(f);
+        }
+    }
+
+    /// When the first backoff ends, if a call waits one.
+    fn next_due(&self) -> Option<Instant> {
+        self.backing_off.iter().map(|(at, _)| *at).min()
+    }
+
+    /// The next answer, out of `in_flight` ([`Tick::next_answer`]); `None`
+    /// once a backoff ends first.
     fn take_answer(
         &mut self,
         events: &mut dyn FnMut(usize, usize, pb::Event),
-    ) -> (InFlight, Result<Reply, CallError>) {
+    ) -> Option<(InFlight, Result<Reply, CallError>)> {
         assert!(self.busy(), "internal: no Apply call in flight");
+        let due = self.next_due();
+        if self.in_flight.is_empty() {
+            let due = due.expect("a call waits its backoff");
+            std::thread::sleep(due.saturating_duration_since(Instant::now()));
+            return None;
+        }
         let (parts, in_flight) = (&self.parts, &self.in_flight);
         let link_of = |f: &InFlight| &parts[f.part].cloud.links[f.link];
         let call_of = |l: &Rc<RefCell<Link>>, t: Ticket| {
@@ -333,12 +377,14 @@ impl<'a> Tick<'a> {
             }
             None => {
                 let l = link_of(&in_flight[0]);
-                let (t, r) = l.borrow_mut().next_completed(&mut |t, e| tell(l, t, e));
+                let (t, r) = l
+                    .borrow_mut()
+                    .next_completed_by(due, &mut |t, e| tell(l, t, e))?;
                 let k = call_of(l, t).expect("internal: an answer to a call nobody made");
                 (k, r)
             }
         };
-        (self.in_flight.remove(k), answer)
+        Some((self.in_flight.remove(k), answer))
     }
 
     /// How long part `part`'s Apply call for `addr` took on its
@@ -684,30 +730,28 @@ impl Part<'_> {
 
     /// A call that failed in a way worth trying again (a transient
     /// refusal: nothing changed, R-81) is sent again after its backoff,
-    /// while its provider's budget lasts: `None`, `f` in flight again.
-    /// Anything else is its answer, the budget's end saying so.
-    fn again(
-        &mut self,
-        f: &mut InFlight,
-        answer: Result<Reply, CallError>,
-    ) -> Option<Result<Reply, CallError>> {
+    /// while its provider's budget lasts: [`Again::After`] the backoff,
+    /// the retry recorded. Anything else is its answer, the budget's end
+    /// saying so.
+    fn again(&mut self, f: &mut InFlight, answer: Result<Reply, CallError>) -> Again {
         let e = match answer {
             Err(e) if policy::class(&e) == Class::Retryable => e,
             // No answer within its timeout: what the call did is looked up
             // before it is sent again (R-81).
             Err(e) if timed_out(&e) => match self.look(f) {
-                Looked::Made(reply) => return Some(Ok(*reply)),
+                Looked::Made(reply) => return Again::Answer(Box::new(Ok(*reply))),
                 Looked::NotMade => e,
                 Looked::Unknown(why) => {
-                    return Some(Err(CallError::MaybeApplied(format!("{e}; {why}"))));
+                    let e = CallError::MaybeApplied(format!("{e}; {why}"));
+                    return Again::Answer(Box::new(Err(e)));
                 }
             },
-            answer => return Some(answer),
+            answer => return Again::Answer(Box::new(answer)),
         };
         let mut link = self.cloud.links[f.link].borrow_mut();
         let budget = link.policy().retries;
         if f.retried >= budget {
-            return Some(Err(crate::plugin::link::gave_up(e, budget)));
+            return Again::Answer(Box::new(Err(crate::plugin::link::gave_up(e, budget))));
         }
         f.retried += 1;
         let delay = link.policy().delay(f.retried);
@@ -721,9 +765,15 @@ impl Part<'_> {
             error: crate::report::said_of(&f.addr, &e.to_string()),
         };
         link.retried(self.cloud.sessions[f.link], retry);
-        std::thread::sleep(delay);
-        f.ticket = link.submit(self.cloud.sessions[f.link], f.req.clone());
-        None
+        Again::After(delay)
+    }
+
+    /// `f`, its backoff over, sent again in its session.
+    fn send_again(&self, f: &mut InFlight) {
+        let session = self.cloud.sessions[f.link];
+        f.ticket = self.cloud.links[f.link]
+            .borrow_mut()
+            .submit(session, f.req.clone());
     }
 
     /// What an Apply call that timed out did (R-81), so that it is sent

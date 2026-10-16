@@ -3737,7 +3737,9 @@ when that late answer arrives.
 A call that failed in a way worth trying again is sent again after a backoff:
 the provider's `[providers.NAME] backoff` (1s by default), doubled each time up
 to 30s, jittered to between half of it and all of it so that callers backing
-off together do not retry together. At most `retries` times (5 by default);
+off together do not retry together. An Apply waiting out its backoff holds up
+no other call: the tick's other calls, of every deployment of a tree, are
+answered and sent meanwhile. At most `retries` times (5 by default);
 then the run stops with the last error, the resource named: `apply
 T["N"]: ... (gave up after 5 retries)`. What is worth trying again is read from
 what the protocol already returns: a refusal (nothing changed) whose message is

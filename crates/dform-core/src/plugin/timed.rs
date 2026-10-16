@@ -196,6 +196,101 @@ impl Timed {
     fn send(&self, c: Cmd) -> bool {
         self.cmds.as_ref().is_some_and(|tx| tx.send(c).is_ok())
     }
+    /// [`Provider::next_completed`], waiting no later than `deadline`:
+    /// `None` when it passes first (a call that waits to be sent again,
+    /// `providers::Tick`), the call in flight still awaited.
+    pub fn next_completed_by(
+        &mut self,
+        deadline: Option<Instant>,
+        events: &mut dyn FnMut(Ticket, pb::Event),
+    ) -> Option<Answer> {
+        assert!(!self.live.is_empty(), "internal: no call in flight");
+        self.flush();
+        loop {
+            if self.asked == 0 && self.send(Cmd::Next) {
+                self.asked += 1;
+            }
+            let (first, due) = self.first_due();
+            let until = deadline.map_or(due, |d| d.min(due));
+            match self
+                .answers
+                .recv_timeout(until.saturating_duration_since(Instant::now()))
+            {
+                Ok(Back::Event(t, e)) => {
+                    if self.live.contains_key(&t) {
+                        events(t, e);
+                    }
+                }
+                Ok(Back::Answer(answer)) => {
+                    if let Some(a) = self.taken(*answer) {
+                        return Some(a);
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) if until < due => return None,
+                Err(RecvTimeoutError::Timeout) => return Some(self.past_timeout(first)),
+                Err(RecvTimeoutError::Disconnected) => return Some(self.gone(first)),
+            }
+        }
+    }
+
+    /// The live call due first, and when.
+    fn first_due(&self) -> (Ticket, Instant) {
+        self.live
+            .iter()
+            .map(|(t, l)| (*t, l.due))
+            .min_by_key(|&(t, due)| (due, t))
+            .expect("a call is live")
+    }
+
+    /// An answer from the thread: the call's, its span ended; `None` for
+    /// one that timed out already, dropped (the calls behind it have their
+    /// whole timeout from now when it was the last).
+    fn taken(&mut self, (t, r): Answer) -> Option<Answer> {
+        self.asked -= 1;
+        if self.abandoned.remove(&t) {
+            if self.abandoned.is_empty() {
+                let due = Instant::now() + self.timeout;
+                for b in std::mem::take(&mut self.behind) {
+                    if let Some(l) = self.live.get_mut(&b) {
+                        l.due = due;
+                    }
+                }
+            }
+            return None;
+        }
+        if let Some(live) = self.live.remove(&t) {
+            live.finish(&r);
+        }
+        self.behind.remove(&t);
+        Some((t, r))
+    }
+
+    /// The call `first`, past its timeout: `MaybeApplied`, its late
+    /// answer to be dropped.
+    fn past_timeout(&mut self, first: Ticket) -> Answer {
+        let live = self.live.remove(&first).expect("the first due is live");
+        self.behind.remove(&first);
+        self.abandoned.insert(first);
+        let r = Err(CallError::MaybeApplied(format!(
+            "the provider {} did not answer the {} {PAST} {} {ITS_TIMEOUT}",
+            self.what,
+            live.what,
+            show(self.timeout)
+        )));
+        live.finish(&r);
+        (first, r)
+    }
+
+    /// The call `first`, its provider gone.
+    fn gone(&mut self, first: Ticket) -> Answer {
+        let live = self.live.remove(&first).expect("the first due is live");
+        let r = Err(CallError::Crashed(format!(
+            "the provider {} is gone: its {} call has no answer",
+            self.what, live.what
+        )));
+        live.finish(&r);
+        (first, r)
+    }
 }
 
 /// The thread: pass each submit on, answer each `Next` with the
@@ -251,69 +346,8 @@ impl Provider for Timed {
         &mut self,
         events: &mut dyn FnMut(Ticket, pb::Event),
     ) -> (Ticket, Result<Reply, CallError>) {
-        assert!(!self.live.is_empty(), "internal: no call in flight");
-        self.flush();
-        loop {
-            if self.asked == 0 && self.send(Cmd::Next) {
-                self.asked += 1;
-            }
-            let (&first, due) = self
-                .live
-                .iter()
-                .map(|(t, l)| (t, l.due))
-                .min_by_key(|&(t, due)| (due, *t))
-                .expect("a call is live");
-            let wait = due.saturating_duration_since(Instant::now());
-            match self.answers.recv_timeout(wait) {
-                Ok(Back::Event(t, e)) => {
-                    if self.live.contains_key(&t) {
-                        events(t, e);
-                    }
-                }
-                Ok(Back::Answer(answer)) => {
-                    let (t, r) = *answer;
-                    self.asked -= 1;
-                    if self.abandoned.remove(&t) {
-                        if self.abandoned.is_empty() {
-                            let due = Instant::now() + self.timeout;
-                            for b in std::mem::take(&mut self.behind) {
-                                if let Some(l) = self.live.get_mut(&b) {
-                                    l.due = due;
-                                }
-                            }
-                        }
-                        continue;
-                    }
-                    if let Some(live) = self.live.remove(&t) {
-                        live.finish(&r);
-                    }
-                    self.behind.remove(&t);
-                    return (t, r);
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    let live = self.live.remove(&first).expect("the first due is live");
-                    self.behind.remove(&first);
-                    self.abandoned.insert(first);
-                    let r = Err(CallError::MaybeApplied(format!(
-                        "the provider {} did not answer the {} {PAST} {} {ITS_TIMEOUT}",
-                        self.what,
-                        live.what,
-                        show(self.timeout)
-                    )));
-                    live.finish(&r);
-                    return (first, r);
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    let live = self.live.remove(&first).expect("the first due is live");
-                    let r = Err(CallError::Crashed(format!(
-                        "the provider {} is gone: its {} call has no answer",
-                        self.what, live.what
-                    )));
-                    live.finish(&r);
-                    return (first, r);
-                }
-            }
-        }
+        self.next_completed_by(None, events)
+            .expect("with no deadline, an answer")
     }
 
     fn is_dead(&mut self) -> bool {
