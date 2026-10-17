@@ -279,7 +279,7 @@ impl Lowerer<'_> {
         let x = self.str_node(span, &crate::address::name_segment(x));
         Ok(Res::Ref {
             typ: self.str_node(span, &types[0]),
-            addr: self.building(rc, span, |b| b.form(crate::address::SCOPED, vec![scope, x])),
+            addr: self.node(span, ExprKind::InScope { scope, name: x }),
             path,
         })
     }
@@ -430,8 +430,13 @@ impl Lowerer<'_> {
                     let x = self.str_node(span, &crate::address::name_segment(k));
                     return Ok(Res::Ref {
                         typ: self.str_node(span, &types[0]),
-                        addr: self
-                            .building(rc, span, |b| b.form(crate::address::SCOPED, vec![inst, x])),
+                        addr: self.node(
+                            span,
+                            ExprKind::InScope {
+                                scope: inst,
+                                name: x,
+                            },
+                        ),
                         path: segs,
                     });
                 }

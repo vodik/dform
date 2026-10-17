@@ -162,6 +162,10 @@ pub enum ExprKind {
     /// taken from (`Absolute`): `lower` writes the mark expansion reads
     /// (step 7).
     Scoped { name: ExprId, via: Reach },
+    /// A name in the scope a term gives (a copy's name, a used module's
+    /// instance): a resource's address there, `n.x`, which lowers to
+    /// `__scoped(scope, name)` (R-112).
+    InScope { scope: ExprId, name: ExprId },
     /// A term read into a variable of its own, read again into another:
     /// `f(x).p` of a loader's call, its value read once (step 6b).
     Alias(ExprId),
@@ -278,6 +282,7 @@ impl ExprKind {
             }
             Self::Call { args, .. } => out.extend(args.iter().map(|a| a.value)),
             Self::Binary { lhs, rhs, .. } => out.extend([*lhs, *rhs]),
+            Self::InScope { scope, name } => out.extend([*scope, *name]),
             Self::Range { lo, hi, .. } => out.extend([*lo, *hi]),
             Self::Interp { parts } => out.extend(parts.iter().filter_map(|p| match p {
                 Piece::Hole(h) => Some(*h),

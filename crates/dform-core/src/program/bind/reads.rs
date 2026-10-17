@@ -55,7 +55,8 @@ impl Binder<'_> {
             | ExprKind::Alias(_)
             | ExprKind::RefOf(_)
             | ExprKind::Address { .. }
-            | ExprKind::Scoped { .. } => {
+            | ExprKind::Scoped { .. }
+            | ExprKind::InScope { .. } => {
                 for a in x.kind.children() {
                     self.reads(a, by, way, bodies);
                 }

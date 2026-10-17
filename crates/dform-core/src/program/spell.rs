@@ -440,6 +440,12 @@ impl Speller<'_> {
             ExprKind::Value { decl, .. } => decl.name.clone(),
             ExprKind::Resource { typ, addr } => format!("{}[{}]", typ.name, self.expr(*addr)),
             ExprKind::RefOf(e) => format!("ref({})", self.expr(*e)),
+            ExprKind::InScope { scope, name } => format!(
+                "{}({}, {})",
+                crate::address::SCOPED,
+                self.expr(*scope),
+                self.expr(*name)
+            ),
             ExprKind::Field { base, path } => format!("{}{}", self.expr(*base), self.steps(path)),
             ExprKind::Output { copy, key, .. } => format!("{}.{key}", self.expr(*copy)),
             ExprKind::Deployed { stack, keys, out } => {

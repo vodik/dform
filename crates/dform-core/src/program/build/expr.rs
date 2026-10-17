@@ -110,6 +110,10 @@ impl Builder<'_> {
                 name: s(self, name),
                 via,
             },
+            ExprKind::InScope { scope, name } => ExprKind::InScope {
+                scope: s(self, scope),
+                name: s(self, name),
+            },
             ExprKind::Alias(x) => ExprKind::Alias(s(self, x)),
             ExprKind::Field { base, path } => ExprKind::Field {
                 base: s(self, base),

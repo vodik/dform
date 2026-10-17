@@ -128,9 +128,7 @@ impl<'p> Lowering<'p> {
             } => c.lexical_term(body, &self.segment(*name), x.span).1,
             // An address in a scope, `scoped(S, n)`: where its scope starts
             // (a used module's resource under the module's instance).
-            ExprKind::Call { callee, args } if callee.written() == Some(crate::address::SCOPED) => {
-                self.start_of(args[0].value)
-            }
+            ExprKind::InScope { scope, .. } => self.start_of(*scope),
             _ => self.env.from,
         }
     }
@@ -387,6 +385,10 @@ impl<'p> Lowering<'p> {
             ExprKind::Field { base, path } => self.field(*base, path),
             ExprKind::RefOf(r) => self.reference(*r),
             ExprKind::Scoped { name, via } => self.scoped(*name, via),
+            ExprKind::InScope { scope, name } => func(
+                crate::address::SCOPED,
+                vec![self.expr(*scope), self.expr(*name)],
+            ),
             ExprKind::Alias(e) => self.expr(*e),
             // The item's reads are the body's, after its literals.
             ExprKind::Comprehension { item, clause } => {
