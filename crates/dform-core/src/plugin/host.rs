@@ -271,6 +271,11 @@ pub struct Manifest {
     /// reach; a native process runs as the user, and its manifest is a
     /// declaration.
     pub sandboxed: bool,
+    /// Where its `.df` sources are (its `schema.df`, its docs): a wasm
+    /// provider's, as its component carries them (`bundle::SOURCES`),
+    /// written out under the host's cache when it is loaded; a native
+    /// provider has none here.
+    pub sources: Option<std::path::PathBuf>,
 }
 
 /// `wasi:sockets/tcp@0.2.12` -> `wasi:sockets/tcp`.
@@ -292,6 +297,7 @@ impl Manifest {
                 .map(|i| unversioned(i).to_string())
                 .collect(),
             sandboxed,
+            sources: None,
         }
     }
 

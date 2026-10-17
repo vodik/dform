@@ -419,15 +419,14 @@ on both; tests/host_wasm.rs keeps them from drifting.
 | `postgres` (`crates/dform-provider-postgres`) | the SDK's typed layer | native only: it dials the server itself | docs/providers/postgres.md |
 | `vault` (`crates/dform-provider-vault`) | the SDK's typed layer, a scheme and no resource | native: every request through the host's HTTP client | docs/providers/vault.md |
 | `tailscale` (`crates/dform-provider-tailscale`) | the SDK's typed layer: a tailnet's policy file, auth keys (held), DNS and devices (adopted), its users and devices data sources | native: every request through the host's HTTP client | docs/providers/tailscale.md |
-| `ovh` (`crates/dform-provider-ovh`) | the SDK's `Handler` directly, and a signer (`crates/dform-provider-ovh/signer`) | native, or a component (granted `wasi:filesystem` until the crate split) and its signer's component: every request through the host's HTTP client, signed by its signer (`signed`) or with the program's token | docs/providers/ovh.md |
-| `k8s` (`crates/dform-k8s`, built by `crates/dform-provider-k8s`) | the SDK's `Handler` directly, a thin client of the Kubernetes API, and a signer (`crates/dform-provider-k8s/signer`) | native, or a wasm provider (granted `wasi:filesystem`, below) and its signer's component: every request through the host's HTTP client, its kubeconfig a credential the host holds, which the signer makes | docs/reference.md, "The Kubernetes provider" |
+| `ovh` (`crates/dform-provider-ovh`) | the SDK's `Handler` directly, and a signer (`crates/dform-provider-ovh/signer`) | native, or a component (granted `wasi:filesystem` until the crate split) carrying its signer's: every request through the host's HTTP client, signed by its signer (`signed`) or with the program's token | docs/providers/ovh.md |
+| `k8s` (`crates/dform-k8s`, built by `crates/dform-provider-k8s`) | the SDK's `Handler` directly, a thin client of the Kubernetes API, and a signer (`crates/dform-provider-k8s/signer`) | native, or a wasm provider (granted `wasi:filesystem`, below) carrying its signer's component: every request through the host's HTTP client, its kubeconfig a credential the host holds, which the signer makes | docs/reference.md, "The Kubernetes provider" |
 
 The Kubernetes provider is the same source either way: the executable
-`dform-provider-k8s`, or `dform_provider_k8s.wasm` beside its signer,
-`dform_provider_k8s_signer.wasm` (`cargo xtask components` builds them
-with the fake and the OVH provider; `cargo xtask install` installs them
-where dform looks, so its table needs no `path`, docs/reference.md
-"Installing"). As a wasm
+`dform-provider-k8s`, or `dform_provider_k8s.wasm`, one file carrying
+its signer (`cargo xtask components` builds it with the fake and the
+OVH provider; `cargo xtask install` installs it where dform looks, so
+its table needs no `path`, docs/reference.md "Installing"). As a wasm
 provider it is granted the filesystem, which the language front-end
 that parses its schema links until the crate split, and in which it
 keeps what it derives from a cluster in the run's cache directory (the
@@ -545,9 +544,17 @@ material and dform's time as dform sends it), and the `endpoint` and
 `namespace` it is for, which the provider reads off the credential it
 opened; renewed through `refresh` before it `expires`. dform runs the
 signer apart from its provider: a wasm provider's is a component of its
-own beside it (`NAME_signer.wasm` beside `NAME.wasm`, `world
-signer-component`), linked with nothing (one that imports anything is
-refused, naming what), and a native provider serves its own as `Signer`
+own (`world signer-component`) that the provider's carries, so a wasm
+provider is one file to package, distribute and version (custom
+sections, which wasmtime does not read: `dform.signer`, the signer's
+component's bytes; `dform.sources`, the provider's `.df` files, each a
+little-endian `u32` length and its path, then a `u32` length and its
+bytes, which dform writes out under `$XDG_CACHE_HOME/dform/providers/
+DIGEST/src/` when it loads the provider; `cargo xtask components`
+writes both); dform instantiates the signer apart, linked with nothing
+(one that imports anything is refused, naming what; a provider that
+carries none refuses a credential its signer would make, naming the
+section), and a native provider serves its own as `Signer`
 beside the protocol (the SDK's `Handler::signer`). The provider that
 talks to the network never holds the material; the signer cannot reach
 the network. An `exec` need is a command dform runs under the grant as

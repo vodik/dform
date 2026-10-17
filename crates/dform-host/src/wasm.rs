@@ -35,6 +35,7 @@ use crate::ratelimit::{Limiter, Paced};
 use crate::services::Services;
 use anyhow::{Context, Result, anyhow};
 use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Session, Ticket};
+use dform_core::plugin::bundle;
 use dform_core::plugin::host::{self as h, Calls, Grants, Hosting, Manifest};
 use dform_core::plugin::link::Link;
 use dform_core::plugin::pb;
@@ -572,17 +573,84 @@ fn compiled_dir() -> Option<std::path::PathBuf> {
     if let Some(d) = COMPILED_IN.get() {
         return Some(d.clone());
     }
+    cache_dir().map(|c| c.join("wasm"))
+}
+
+/// `$XDG_CACHE_HOME/dform`, else `~/.cache/dform`.
+fn cache_dir() -> Option<std::path::PathBuf> {
     std::env::var_os("XDG_CACHE_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
-        .map(|c| c.join("dform").join("wasm"))
+        .map(|c| c.join("dform"))
 }
 
-/// The component at `path`, compiled, or as compiled before: compiling a
-/// provider takes seconds, so the native code is kept in
-/// `$XDG_CACHE_HOME/dform/wasm/<sha256 of the file>.cwasm`, written by
-/// this engine (wasmtime refuses one another version wrote, and it is
-/// compiled again). A `wasm.compile` span, whose `cached` says which.
+/// Where the sources of the component of digest `digest` are written:
+/// `$XDG_CACHE_HOME/dform/providers/<digest>/src` (under the process's
+/// own directory, [`compile_cache`], when it has one).
+fn sources_dir(digest: &str) -> Option<std::path::PathBuf> {
+    let root = match COMPILED_IN.get() {
+        Some(d) => d.join("providers"),
+        None => cache_dir()?.join("providers"),
+    };
+    Some(root.join(digest).join("src"))
+}
+
+/// A component file as read: its bytes, and their digest, by which its
+/// compiled code and its sources are kept.
+pub struct Read {
+    pub bytes: Vec<u8>,
+    digest: String,
+}
+
+impl Read {
+    pub fn of(bytes: Vec<u8>) -> Read {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(&bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        Read { bytes, digest }
+    }
+
+    pub fn file(path: &Path) -> Result<Read> {
+        let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+        Ok(Read::of(bytes))
+    }
+
+    /// The `.df` sources it carries (`bundle::SOURCES`), written out under
+    /// the host's cache the first time ([`sources_dir`]): where they are.
+    /// One that carries none, or that cannot be written, has none.
+    fn sources(&self) -> Option<std::path::PathBuf> {
+        let section = bundle::section(&self.bytes, bundle::SOURCES).ok()??;
+        let dir = sources_dir(&self.digest)?;
+        if dir.exists() {
+            return Some(dir);
+        }
+        let files = bundle::Sources::decode(section).ok()?;
+        // Written aside and renamed, so a concurrent run never reads half.
+        let tmp = dir.with_extension(format!("tmp{}", std::process::id()));
+        for (path, bytes) in &files.0 {
+            let to = tmp.join(path);
+            std::fs::create_dir_all(to.parent()?).ok()?;
+            std::fs::write(&to, bytes).ok()?;
+        }
+        std::fs::create_dir_all(&tmp).ok()?;
+        match std::fs::rename(&tmp, &dir) {
+            Ok(()) => Some(dir),
+            Err(_) => {
+                let _ = std::fs::remove_dir_all(&tmp);
+                dir.exists().then_some(dir)
+            }
+        }
+    }
+}
+
+/// The component `read` (the file `path`'s, or carried in it), compiled,
+/// or as compiled before: compiling a provider takes seconds, so the
+/// native code is kept in `$XDG_CACHE_HOME/dform/wasm/<sha256 of the
+/// component>.cwasm`, written by this engine (wasmtime refuses one
+/// another version wrote, and it is compiled again). A `wasm.compile`
+/// span, whose `cached` says which.
 #[tracing::instrument(
     target = "dform",
     level = "debug",
@@ -590,15 +658,11 @@ fn compiled_dir() -> Option<std::path::PathBuf> {
     skip_all,
     fields(path = %path.display(), cached = tracing::field::Empty)
 )]
-fn load(engine: &Engine, path: &Path) -> Result<Component> {
-    use sha2::{Digest, Sha256};
-    let bytes = std::fs::read(path)?;
-    let digest: String = Sha256::digest(&bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
+fn load(engine: &Engine, read: &Read, path: &Path) -> Result<Component> {
     let dir = compiled_dir();
-    let cached = dir.as_ref().map(|d| d.join(format!("{digest}.cwasm")));
+    let cached = dir
+        .as_ref()
+        .map(|d| d.join(format!("{}.cwasm", read.digest)));
     if let Some(c) = &cached
         && c.exists()
     {
@@ -611,7 +675,7 @@ fn load(engine: &Engine, path: &Path) -> Result<Component> {
         }
     }
     tracing::Span::current().record("cached", false);
-    let component = Component::new(engine, &bytes)?;
+    let component = Component::new(engine, &read.bytes)?;
     if let (Some(d), Some(c)) = (&dir, &cached)
         && let Ok(native) = component.serialize()
         && std::fs::create_dir_all(d).is_ok()
@@ -662,19 +726,17 @@ pub struct Wasm {
 
 impl Wasm {
     /// Load, admit (its imports against `grants`) and instantiate the
-    /// component at `path`, with its signer when one is beside it
-    /// ([`signer::beside`]).
+    /// component at `path`, with the signer it carries
+    /// ([`signer::of_provider`]), its sources written out ([`Read`]).
     pub fn start(path: &Path, grants: Grants, limiter: Arc<Limiter>) -> Result<(Wasm, Manifest)> {
         let program = path.display().to_string();
         let engine = engine()?;
-        let beside = signer::beside(path);
-        let signer: Option<Arc<dyn Signer + Send + Sync>> = match beside.exists() {
-            true => Some(Arc::new(signer::Component::load(&beside)?)),
-            false => None,
-        };
-        let component =
-            load(engine, path).with_context(|| format!("load the provider component {program}"))?;
-        let manifest = manifest(engine, &component);
+        let read = Read::file(path)?;
+        let signer = signer::of_provider(&read, path)?;
+        let component = load(engine, &read, path)
+            .with_context(|| format!("load the provider component {program}"))?;
+        let mut manifest = manifest(engine, &component);
+        manifest.sources = read.sources();
         grants
             .admit(&manifest)
             .map_err(|e| anyhow!("{e} ({program})"))?;
@@ -718,9 +780,9 @@ struct Instance {
     /// The provider's start, until it is instantiated: its
     /// instantiation's spans are under it, its calls' under theirs.
     started_in: tracing::Span,
-    /// Its signer, which its host's `signed` credentials are made and
-    /// applied with.
-    signer: Option<Arc<dyn Signer + Send + Sync>>,
+    /// Its signer, which its host's credentials its provider makes are
+    /// made and applied with.
+    signer: Arc<dyn Signer + Send + Sync>,
     grants: Grants,
     /// What its host paces its requests by ([`crate::ratelimit::Paced`]).
     limiter: Arc<Limiter>,
@@ -766,10 +828,8 @@ impl Instance {
                 .allow_udp(false)
                 .allow_ip_name_lookup(false);
         }
-        let mut host = Services::paced(self.grants.clone(), self.limiter.clone());
-        if let Some(signer) = &self.signer {
-            host = host.with_signer(signer.clone());
-        }
+        let host = Services::paced(self.grants.clone(), self.limiter.clone())
+            .with_signer(self.signer.clone());
         let host = Arc::new(host);
         Ok(State {
             wasi: wasi.build(),

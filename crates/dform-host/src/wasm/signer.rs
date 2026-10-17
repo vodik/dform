@@ -1,18 +1,19 @@
 //! A wasm provider's signer (`dform_core::plugin::signer`): a component of
-//! `world signer-component` beside the provider's (`NAME_signer.wasm`
-//! beside `NAME.wasm`, as `cargo xtask components` builds them), in a
-//! store of its own, linked with nothing: one that imports anything is
-//! refused, naming what, so it reaches no network, no file, no clock and
-//! no variable; what it needs, the host performs (`crate::signed`). Its
+//! `world signer-component` the provider's carries
+//! (`dform_core::plugin::bundle::SIGNER`, a custom section), in a store of
+//! its own, linked with nothing: one that imports anything is refused,
+//! naming what, so it reaches no network, no file, no clock and no
+//! variable; what it needs, the host performs (`crate::signed`). Its
 //! calls are one at a time, each under a deadline of [`CALL`].
 
-use super::{engine, load, ticks};
+use super::{Read, engine, load, ticks};
 use anyhow::{Context, Result, bail};
+use dform_core::plugin::bundle;
 use dform_core::plugin::signer::{
     Command, Got, Material, Need, Outcome, Recipe, Request, Signer, TlsClient,
 };
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use wasmtime::Store;
 use wasmtime::component::Linker;
@@ -29,28 +30,63 @@ use bindings::exports::dform::host::signer as w;
 /// How long one of a signer's calls may run: it does arithmetic.
 const CALL: Duration = Duration::from_secs(10);
 
-/// A signer component, instantiated.
+/// A signer component, instantiated: the provider's at `path`.
 pub struct Component {
     path: PathBuf,
     instance: Mutex<(Store<()>, bindings::SignerComponent)>,
 }
 
-/// Where the signer of the provider component at `provider` is:
-/// `NAME_signer.wasm` beside `NAME.wasm`.
-pub fn beside(provider: &Path) -> PathBuf {
-    let stem = provider
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default();
-    provider.with_file_name(format!("{stem}_signer.wasm"))
+/// The signer the provider component `read` (the file `path`) carries
+/// in its `dform.signer` section; else one that makes no credential,
+/// saying so.
+pub fn of_provider(read: &Read, path: &Path) -> Result<Arc<dyn Signer + Send + Sync>> {
+    let section = bundle::section(&read.bytes, bundle::SIGNER)
+        .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+    match section {
+        Some(bytes) => Ok(Arc::new(Component::new(bytes, path)?)),
+        None => Ok(Arc::new(Absent(path.to_path_buf()))),
+    }
+}
+
+/// A provider component that carries no signer: its file.
+struct Absent(PathBuf);
+
+impl Absent {
+    fn refusal(&self) -> String {
+        format!(
+            "the provider has no signer: its component {} carries no `{}` section",
+            self.0.display(),
+            bundle::SIGNER
+        )
+    }
+}
+
+impl Signer for Absent {
+    fn needs(&self) -> Result<Vec<Need>, String> {
+        Err(self.refusal())
+    }
+
+    fn step(&self, _: &[Got]) -> Result<Outcome, String> {
+        Err(self.refusal())
+    }
+
+    fn sign(&self, _: Request, _: &Material, _: u64) -> Result<Request, String> {
+        Err(self.refusal())
+    }
+
+    fn refresh(&self, _: &Material, _: u64) -> Result<Outcome, String> {
+        Err(self.refusal())
+    }
 }
 
 impl Component {
-    /// The signer component at `path`, linked with nothing.
-    pub fn load(path: &Path) -> Result<Component> {
+    /// The signer component `bytes`, the provider's at `path`, linked
+    /// with nothing.
+    pub fn new(bytes: &[u8], path: &Path) -> Result<Component> {
         let engine = engine()?;
-        let component =
-            load(engine, path).with_context(|| format!("load the signer {}", path.display()))?;
+        let what = format!("the signer of {}", path.display());
+        let component = load(engine, &Read::of(bytes.to_vec()), path)
+            .with_context(|| format!("load {what}"))?;
         let imports: Vec<String> = component
             .component_type()
             .imports(engine)
@@ -58,9 +94,8 @@ impl Component {
             .collect();
         if !imports.is_empty() {
             bail!(
-                "the signer {} imports {}: a signer imports nothing (wit/host's world \
+                "{what} imports {}: a signer imports nothing (wit/host's world \
                  signer-component); what it needs, it asks the host for",
-                path.display(),
                 imports.join(", ")
             );
         }
@@ -69,7 +104,7 @@ impl Component {
         let instance =
             bindings::SignerComponent::instantiate(&mut store, &component, &Linker::new(engine))
                 .map_err(anyhow::Error::from)
-                .with_context(|| format!("instantiate the signer {}", path.display()))?;
+                .with_context(|| format!("instantiate {what}"))?;
         Ok(Component {
             path: path.to_path_buf(),
             instance: Mutex::new((store, instance)),
@@ -86,7 +121,7 @@ impl Component {
         let (store, instance) = &mut *held;
         store.set_epoch_deadline(ticks(CALL));
         f(store, instance.dform_host_signer())
-            .map_err(|trap| format!("the signer {} trapped: {trap:#}", self.path.display()))?
+            .map_err(|trap| format!("the signer of {} trapped: {trap:#}", self.path.display()))?
     }
 }
 

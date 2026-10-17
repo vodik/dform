@@ -15,8 +15,8 @@ dform-core = { path = "../dform-core" }
 dform-sdk = { path = "../dform-sdk" }
 # Its signer (`../dform-provider-k8s/signer`): the kubeconfig read and made
 # into the credential's material, run by dform's host apart from the
-# provider; served natively beside it, a component of its own for the
-# wasm build.
+# provider; served natively beside it, a component of its own that the
+# wasm build carries (`cargo xtask components`).
 dform-provider-k8s-signer = { path = "../dform-provider-k8s/signer" }
 # The chain of errors behind an offline line, under `DFORM_LOG=debug`
 # (`dform_core::log`).

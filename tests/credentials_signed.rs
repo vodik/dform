@@ -212,22 +212,29 @@ fn a_programs_kubeconfig_that_does_not_parse_says_so() {
 mod wasm {
     use super::*;
     use crate::common;
+    use dform::plugin::bundle;
     use dform::plugin::signer::{Got, Outcome, Request, Response, Signer};
-    use dform_host::wasm::signer::Component;
+    use dform_host::wasm::Read;
+    use dform_host::wasm::signer::{Component, of_provider};
 
     fn s(v: &str) -> String {
         v.to_string()
     }
 
     /// The OVH signer as a component, built beside the provider's.
-    fn signer() -> Component {
-        let path = crate::host_trace::built(
-            "dform_provider_ovh_signer.wasm",
-            "cargo build -p dform-provider-ovh-signer --release --target wasm32-wasip3 \
-             --features component",
-        );
+    /// The OVH wasm provider, as `cargo xtask components` builds it,
+    /// carrying its signer.
+    fn ovh_wasm() -> String {
         dform_host::wasm::compile_cache(crate::host_trace::wasm_cache());
-        Component::load(std::path::Path::new(&path)).unwrap()
+        crate::host_trace::built("dform_provider_ovh.wasm", "cargo xtask components")
+    }
+
+    /// The signer the OVH wasm provider carries.
+    fn signer() -> Component {
+        let path = std::path::PathBuf::from(ovh_wasm());
+        let read = Read::file(&path).unwrap();
+        let bytes = bundle::section(&read.bytes, bundle::SIGNER).unwrap();
+        Component::new(bytes.expect("the provider carries its signer"), &path).unwrap()
     }
 
     /// The signer component, given the environment's keys and endpoint,
@@ -282,23 +289,76 @@ mod wasm {
         );
     }
 
-    /// A signer component that imports anything is refused as it is
-    /// linked, naming what it imports.
+    /// A provider whose signer imports anything is refused as it is
+    /// linked, naming what its signer imports.
     #[test]
     fn a_signer_that_imports_anything_is_refused() {
         let scratch = common::Scratch::new("signer-imports");
-        let wasm = wat::parse_str(
+        let signer = wat::parse_str(
             r#"(component
                  (import "wasi:sockets/types@0.3.0" (instance
                    (export "tcp-socket" (type (sub resource))))))"#,
         )
         .unwrap();
-        let path = scratch.path("net_signer.wasm");
-        std::fs::write(&path, wasm).unwrap();
-        let e = format!("{:#}", Component::load(&path).err().unwrap());
+        let provider = wat::parse_str("(component)").unwrap();
+        let provider = bundle::with_sections(&provider, &[(bundle::SIGNER, &signer)]).unwrap();
+        let path = scratch.path("dform-provider-net.wasm");
+        let e = format!(
+            "{:#}",
+            of_provider(&Read::of(provider), &path).err().unwrap()
+        );
         assert!(
-            e.contains("imports wasi:sockets/types@0.3.0: a signer imports nothing"),
+            e.contains(&format!(
+                "the signer of {} imports wasi:sockets/types@0.3.0: a signer imports nothing",
+                path.display()
+            )),
             "{e}"
+        );
+    }
+
+    /// A wasm provider is one file: its signer is the one it carries,
+    /// whatever the file's name (cargo's hyphenated link to it too); one
+    /// that carries none refuses a credential its signer would make,
+    /// naming the file and the section.
+    #[test]
+    fn the_signer_is_the_one_the_provider_carries() {
+        use dform::plugin::signer::Need;
+        let scratch = common::Scratch::new("signer-carried");
+        let hyphenated = scratch.path("dform-provider-ovh.wasm");
+        std::fs::copy(ovh_wasm(), &hyphenated).unwrap();
+        let read = Read::file(&hyphenated).unwrap();
+        assert_eq!(
+            of_provider(&read, &hyphenated).unwrap().needs().unwrap(),
+            [Need::Given]
+        );
+        let bare = Read::of(wat::parse_str("(component)").unwrap());
+        let e = of_provider(&bare, &hyphenated)
+            .unwrap()
+            .needs()
+            .unwrap_err();
+        assert_eq!(
+            e,
+            format!(
+                "the provider has no signer: its component {} carries no `dform.signer` section",
+                hyphenated.display()
+            )
+        );
+    }
+
+    /// The `.df` sources a wasm provider carries are written out under the
+    /// host's cache when it is linked, where its manifest says.
+    #[test]
+    fn a_providers_sources_are_where_its_manifest_says() {
+        use dform::plugin::host::Grants;
+        let mut grants = Grants::none("ovh");
+        grants.allow.insert("wasi:filesystem".into());
+        let link = dform_host::wasm::link(std::path::Path::new(&ovh_wasm()), grants).unwrap();
+        let manifest = link.hosting.as_ref().unwrap().manifest.as_ref().unwrap();
+        let src = manifest.sources.as_ref().expect("its sources");
+        let schema = crate::common::repo().join("crates/dform-provider-ovh/src/schema.df");
+        assert_eq!(
+            std::fs::read(src.join("src/schema.df")).unwrap(),
+            std::fs::read(schema).unwrap()
         );
     }
 

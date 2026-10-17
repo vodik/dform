@@ -7,6 +7,7 @@
 //! map to the protocol's messages, and `check` the conformance suite.
 
 pub mod backend;
+pub mod bundle;
 pub mod check;
 pub mod credentials;
 pub mod host;

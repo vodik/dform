@@ -28,7 +28,7 @@ dform-sdk = { path = "../dform-sdk" }
 # Its signer (`signer/`): the keys made into a `signed` credential's
 # material and each request signed with them, run by dform's host apart
 # from the provider; served natively beside it, a component of its own
-# for the wasm build.
+# that the wasm build carries (`cargo xtask components`).
 dform-provider-ovh-signer = { path = "signer" }
 dform-host = { path = "../dform-host", optional = true }
 # A service account's client id and secret as Basic auth, to mint its

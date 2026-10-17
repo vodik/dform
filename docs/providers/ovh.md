@@ -62,8 +62,8 @@ use ovh { endpoint = "ovh-ca", project = "vodik" }
 
 An application key and secret and a consumer key sign each call, and
 dform holds them; the provider's signer (`crates/dform-provider-ovh/
-signer`, natively served beside the provider, as a component
-`dform_provider_ovh_signer.wasm` beside its own) signs: the provider
+signer`, natively served beside the provider, as a component the wasm
+provider's file carries, its `dform.signer` section) signs: the provider
 never has them. dform.toml grants them by name, a `signed` credential
 (docs/providers.md, "Grants and credentials"):
 

@@ -7,11 +7,13 @@
 //!   copies are not the fragments (tests/man.rs runs the same check).
 //! - `components`: the components the wasm host's tests run
 //!   (tests/host_wasm.rs), built for wasm32-wasip3 in release: the fake
-//!   provider, the OVH and Kubernetes providers and the SDK's async-ABI
-//!   probe (`examples/fetch_at_once`).
+//!   provider, the OVH and Kubernetes providers, each carrying its signer
+//!   and its `.df` sources (bundle.rs), and the SDK's async-ABI probe
+//!   (`examples/fetch_at_once`).
 //! - `install [--prefix DIR] [--features F]`: dform and every built-in
 //!   provider, installed where dform looks for them (install.rs).
 
+mod bundle;
 mod install;
 
 use anyhow::{Context, Result, bail};
@@ -98,12 +100,10 @@ struct Component<'a> {
 }
 
 /// The components `components` builds.
-const COMPONENTS: [Component<'static>; 6] = [
+const COMPONENTS: [Component<'static>; 4] = [
     Component::of("dform-provider-fake"),
     Component::of("dform-provider-ovh"),
-    Component::of("dform-provider-ovh-signer"),
     Component::of("dform-provider-k8s"),
-    Component::of("dform-provider-k8s-signer"),
     Component {
         package: "dform-sdk",
         example: Some("fetch_at_once"),
@@ -149,7 +149,10 @@ impl<'a> Component<'a> {
     }
 }
 
-/// The components.
+/// The components, each provider with a signer carrying it
+/// ([`bundle::BUNDLES`]).
 fn components() -> Result<()> {
-    COMPONENTS.iter().try_for_each(Component::build)
+    COMPONENTS.iter().try_for_each(Component::build)?;
+    let target = target_dir();
+    bundle::BUNDLES.iter().try_for_each(|b| b.build(&target))
 }

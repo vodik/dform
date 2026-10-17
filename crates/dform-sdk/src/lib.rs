@@ -118,7 +118,8 @@ pub trait Handler: Send + Sync + 'static {
     /// (`dform_core::plugin::signer`): run by dform apart from it, which
     /// holds what the signer makes. Natively it is served beside the
     /// provider (its manifest says it signs); a wasm provider's is a
-    /// component of its own (`world signer-component`), beside it.
+    /// component of its own (`world signer-component`), which the
+    /// provider's carries (`dform_core::plugin::bundle`).
     fn signer(
         &self,
     ) -> Option<std::sync::Arc<dyn dform_core::plugin::signer::Signer + Send + Sync>> {
