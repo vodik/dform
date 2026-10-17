@@ -699,8 +699,8 @@ impl Wasm {
 /// The instance's side: what it was started as, and where answers go.
 struct Instance {
     program: String,
-    /// The provider's start: its instantiation's spans are under it, its
-    /// calls' under theirs.
+    /// The provider's start, until it is instantiated: its
+    /// instantiation's spans are under it, its calls' under theirs.
     started_in: tracing::Span,
     /// Its signer, which its host's `signed` credentials are made and
     /// applied with.
@@ -790,15 +790,17 @@ impl Instance {
     /// Instantiate, say so on `ready`, then run every call `calls` brings
     /// at once, until dform drops the provider or the instance traps.
     async fn serve(
-        self,
+        mut self,
         engine: &'static Engine,
         component: Component,
         calls: tokio::sync::mpsc::UnboundedReceiver<Submitted>,
         ready: std::sync::mpsc::Sender<Result<()>>,
     ) {
-        let started = self
-            .instantiate(engine, &component)
-            .instrument(self.started_in.clone());
+        // Let go of the start's span once instantiated: held for the
+        // instance's life, it would end only as the run exits, after its
+        // trace is written.
+        let within = std::mem::replace(&mut self.started_in, tracing::Span::none());
+        let started = self.instantiate(engine, &component).instrument(within);
         let (store, provider) = match started.await {
             Ok(s) => {
                 let _ = ready.send(Ok(()));
@@ -890,7 +892,7 @@ impl Instance {
         open: &std::cell::RefCell<BTreeMap<Ticket, tracing::Span>>,
         calls: &mut tokio::sync::mpsc::UnboundedReceiver<Submitted>,
     ) -> Option<(Ticket, bool, wasmtime::Error)> {
-        type Running<'a> = Pin<Box<dyn Future<Output = (Ticket, bool, wasmtime::Result<()>)> + 'a>>;
+        type Running<'a> = Pin<Box<dyn Future<Output = Ran> + 'a>>;
         let mut running: Vec<Running> = Vec::new();
         loop {
             let next = std::future::poll_fn(|cx| {
@@ -912,11 +914,15 @@ impl Instance {
                     // dform dropped the provider.
                     None => return None,
                 },
-                (t, apply, r) = next => {
-                    if let Err(trap) = r {
-                        return Some((t, apply, trap));
-                    }
+                Ran { t, apply, answer } = next => {
+                    let answer = match answer {
+                        Ok(answer) => answer,
+                        Err(trap) => return Some((t, apply, trap)),
+                    };
+                    // Its export's span ends before its answer is told:
+                    // a run that ends on the answer has the span.
                     open.borrow_mut().remove(&t);
+                    let _ = self.tx.send(Back::Answer(t, Box::new(answer)));
                 }
             }
         }
@@ -986,29 +992,26 @@ impl Instance {
         });
     }
 
-    /// Run `call`, telling its events and then its answer, its status
-    /// recorded on the span it runs in (its export's); a trap is its
-    /// outcome, with whether it was an Apply.
+    /// Run `call`, telling its events, its status recorded on the span it
+    /// runs in (its export's): its answer, or the trap that stopped it,
+    /// which [`Instance::run_calls`] tells once the span has ended.
     async fn one(
         &self,
         a: &Accessor<State>,
         provider: &bindings::HostedProvider,
         who: &std::cell::RefCell<String>,
         Submitted { t, call, .. }: Submitted,
-    ) -> (Ticket, bool, wasmtime::Result<()>) {
+    ) -> Ran {
         let apply = matches!(call, Call::Apply(_));
-        match self.answer(a, provider, who, t, &call).await {
-            Ok(answer) => {
-                let status = if answer.is_ok() { "ok" } else { "error" };
-                tracing::Span::current().record("otel.status_code", status);
-                if let Ok(Reply::Handshake(h)) = &answer {
-                    *who.borrow_mut() = h.name.clone();
-                }
-                let _ = self.tx.send(Back::Answer(t, Box::new(answer)));
-                (t, apply, Ok(()))
+        let answer = self.answer(a, provider, who, t, &call).await;
+        if let Ok(answered) = &answer {
+            let status = if answered.is_ok() { "ok" } else { "error" };
+            tracing::Span::current().record("otel.status_code", status);
+            if let Ok(Reply::Handshake(h)) = answered {
+                *who.borrow_mut() = h.name.clone();
             }
-            Err(trap) => (t, apply, Err(trap)),
         }
+        Ran { t, apply, answer }
     }
 
     /// `call`'s answer, from the export that serves it; a trap is the
@@ -1116,6 +1119,14 @@ impl Instance {
             ))),
         })
     }
+}
+
+/// A call's run in the instance: its ticket, whether it was an Apply,
+/// and its answer, or the trap that stopped the instance.
+struct Ran {
+    t: Ticket,
+    apply: bool,
+    answer: wasmtime::Result<Result<Reply, CallError>>,
 }
 
 /// An export's answer as the engine takes it: the component's error as
