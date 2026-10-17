@@ -74,12 +74,69 @@ impl Lowerer<'_> {
             {
                 self.used_item(rc, (h, &at), (x, ops), span).map(Some)
             }
-            _ => self
-                .error(
-                    span,
-                    format!("{at} is a module: `use {at}` to read its items, `NAME.x`"),
-                )
-                .map(Some),
+            _ => self.unused_module(&at, &c.fields().join("."), span),
+        }
+    }
+
+    /// `written`, a read or a call through the module `at` that no `use`
+    /// in scope binds: the error, one for a value, a resource and a
+    /// function, its fix the `use` at the top of the file.
+    pub(super) fn unused_module<T>(&mut self, at: &str, written: &str, span: Span) -> L<T> {
+        let top = Span {
+            start: 0,
+            end: 0,
+            ..span
+        };
+        let d = Diagnostic::error(span, format!("`{at}` is a module: `use {at}` to read it"))
+            .with_help(format!(
+                "a module's items are read through the `use` that binds it: `use {at}` at the \
+                 top of the file, then `{written}`"
+            ))
+            .with_fix(
+                format!("add `use {at}`"),
+                vec![(top, format!("use {at}\n"))],
+            );
+        self.diags.push(d);
+        Err(Skip)
+    }
+
+    /// A call `m.f(..)` that names no function, where `m` names a module:
+    /// the module used, the error naming the function it lacks (and the
+    /// one nearest); else the module not used here, [`Self::unused_module`].
+    pub(super) fn module_call(&mut self, rc: &Rc, n: &SyntaxNode) -> L<()> {
+        let Some(c) = n.children().find_map(|c| Chain::of(&c)) else {
+            return Ok(());
+        };
+        let fields = c.ops.iter().all(|o| matches!(o, Op::Field(..)));
+        if c.ops.is_empty() || !fields || rc.vars.contains_key(&c.head) {
+            return Ok(());
+        }
+        let span = self.span_of(c.range);
+        let written = c.fields().join(".");
+        if let Some(path) = self.use_in(rc.scope, &c.head) {
+            let [Op::Field(f)] = c.ops.as_slice() else {
+                return Ok(());
+            };
+            let functions: Vec<String> = self
+                .module_at(&path)
+                .map(|(m, _)| {
+                    let fun = |k: &DeclKind| matches!(k, DeclKind::LetFn { .. });
+                    self.names(m).names(fun).cloned().collect()
+                })
+                .unwrap_or_default();
+            let d = Diagnostic::error(span, format!("the module {path} has no function `{f}`"));
+            let d = match crate::diag::nearest(f, functions.iter().map(String::as_str)) {
+                Some(near) => d.with_help(format!("the function is `{}.{near}`", c.head)),
+                None => d,
+            };
+            self.diags.push(d);
+            return Err(Skip);
+        }
+        match self.module_named(rc.scope, &c.head, &c.ops) {
+            Some((at, ops)) if !ops.is_empty() && !self.module_at(&at).is_some_and(|m| m.1) => {
+                self.unused_module(&at, &written, span)
+            }
+            _ => Ok(()),
         }
     }
 

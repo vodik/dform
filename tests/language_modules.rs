@@ -791,3 +791,48 @@ fn a_module_writes_through_an_input_that_is_a_reference() {
         assert!(!r.stdout.contains(not), "{not}\n{}", r.stdout);
     }
 }
+
+/// A read or a call through a module the program uses but no `use` in
+/// scope binds is one error, for a value as for a function (the user's
+/// project, 2026-10-16, edge 5: `pod.as_user` listed the std packages):
+/// `use` it. A function the used module lacks is named, and the one
+/// nearest.
+#[test]
+fn a_module_not_used_here_is_said_alike_for_a_value_and_a_function() {
+    let s = Scratch::project("lang-modules-unused");
+    s.write(
+        "pod.df",
+        "let as_user(uid: int) = \"uid ${uid}\"\nlet k = \"k\"\n",
+    );
+    s.write(
+        "main.df",
+        "use fake\nuse pod\nuse nodes\nresource nodes.node x {}\n",
+    );
+    for (read, caret) in [("pod.as_user(1)", "^^^^^^^^^^^"), ("pod.k", "^^^^^")] {
+        s.write(
+            "nodes.df",
+            &format!("component node {{\n  resource net.vpc v {{ cidr = {read} }}\n}}\n"),
+        );
+        let r = s.run(&["plan", "main.df"]).failure();
+        let written = read.trim_end_matches("(1)");
+        let want = format!(
+            "error  `pod` is a module: `use pod` to read it\n  nodes.df:2  resource net.vpc v \
+             {{ cidr = {read} }}\n                                          {caret}\n  help: a \
+             module's items are read through the `use` that binds it: `use pod` at the top of \
+             the file, then `{written}`\n"
+        );
+        assert_eq!(r.stderr, want);
+    }
+    s.write(
+        "nodes.df",
+        "use pod\ncomponent node {\n  resource net.vpc v { cidr = pod.as_usr(1) }\n}\n",
+    );
+    let r = s.run(&["plan", "main.df"]).failure();
+    assert!(
+        r.stderr
+            .contains("error  the module pod has no function `as_usr`")
+            && r.stderr.contains("help: the function is `pod.as_user`"),
+        "{}",
+        r.stderr
+    );
+}

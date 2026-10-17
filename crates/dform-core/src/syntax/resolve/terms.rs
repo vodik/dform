@@ -477,6 +477,7 @@ impl Lowerer<'_> {
                 .children()
                 .find_map(|c| Chain::of(&c))
                 .map_or(span, |c| self.span_of(c.range));
+            self.module_call(rc, n)?;
             self.near_function(rc.scope, &name, at)?;
         }
         self.check_function(&name, span);
