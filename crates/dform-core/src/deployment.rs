@@ -859,6 +859,9 @@ impl Evaluator {
                 (None, _) if schema_wait => bail!(self.no_crd(&r.addr)),
                 (None, _) => continue,
             };
+            sections
+                .unread
+                .insert((r.addr.typ.clone(), r.addr.name.clone()));
             if schema_wait {
                 plan.actions.push(self.awaiting_schema(r, &label, st));
             } else if let Some(a) = plan.actions.iter_mut().find(|a| a.addr == r.addr) {

@@ -430,6 +430,20 @@ pub struct Sections {
     /// against its offline schema (R-193): `provider k8s  kubeconfig =
     /// ..`, said `provisional` where the plan shows them.
     pub provisional: BTreeSet<String>,
+    /// The resources held on their provider's settings or schema, planned
+    /// without a read of the world (R-177, R-193): each is planned again
+    /// once its provider is configured, so the world cannot have changed
+    /// under its plan ([`Sections::read_world`]).
+    pub unread: BTreeSet<(String, String)>,
+}
+
+impl Sections {
+    /// Whether the plan of the resource `addr` was made against the world
+    /// read: what the boundary's guard ("the world changed under a pending
+    /// change") compares, and only then.
+    pub fn read_world(&self, addr: &crate::address::Address) -> bool {
+        !self.unread.contains(&(addr.typ.clone(), addr.name.clone()))
+    }
 }
 
 /// E §2.7 phase assignment. A resource is held when its document carries a
@@ -600,6 +614,7 @@ pub fn sections(
         pending_groups,
         undetermined,
         provisional: BTreeSet::new(),
+        unread: BTreeSet::new(),
     }
 }
 

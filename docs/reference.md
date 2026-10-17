@@ -2289,7 +2289,11 @@ deformation is pending for this boundary stops the run before the next tick,
 with the change printed (`the world changed under a pending change after
 tick N:`) and the deny that stops it (see "Policy over the plan" below); a
 change anywhere else is reported as `drift after tick N:` and the
-run goes on, the next tick deforming it back:
+run goes on, the next tick deforming it back. A change held on its
+provider's settings (`waits on  provider k8s  kubeconfig = ..`, planned
+`=` or provisionally) was planned without a read of the world, so
+nothing changed under it: the boundary configures the provider and plans
+it again against the world as it is then:
 
 ```bash
 cargo run -- -C tests/fixtures/gke dev \

@@ -2,7 +2,8 @@
 //! tick 2's refresh sees it. A change under an address with a pending
 //! deformation stops the run before tick 2 with the change printed (a deny
 //! over `deformation/4`); a change anywhere else is drift, reported, and
-//! the run goes on.
+//! the run goes on. A change held on its provider's settings was planned
+//! without a read: it is planned again at the boundary, never refused.
 
 use crate::common;
 use common::{Scratch, mock};
@@ -97,5 +98,57 @@ fn a_mutation_elsewhere_is_drift_and_the_run_continues() {
         r.stdout.ends_with("stack p is up to date\n"),
         "{}",
         r.stdout
+    );
+}
+
+/// A change held on its provider's settings was planned without a read
+/// of the world (R-177: the namespace `=`, as state has it, while k8s's
+/// kubeconfig waits on the new database): the world cannot have changed
+/// under its plan. The boundary configures k8s and plans it again, against
+/// the namespace as the mutation left it: deformed back, never refused.
+#[test]
+fn a_change_held_on_its_provider_s_settings_is_planned_again_not_refused() {
+    let s = Scratch::new("mutate-unread");
+    let p = |server: &str| {
+        format!(
+            "use fake\nresource db.postgres {server} {{ size = 1 }}\n\
+             use k8s {{ kubeconfig = {server}.endpoint }}\n\
+             resource k8s.namespace apps {{ metadata.name = \"apps\" }}\n"
+        )
+    };
+    s.write("p.df", &p("server"));
+    mock(&s, &["apply", "--yes"]).success();
+    s.write("p.df", &p("server2"));
+    let r = mock(&s, &["plan"]).success();
+    assert!(
+        r.stdout.contains(
+            "  waits on  provider k8s  kubeconfig = server2.endpoint\n  provisional: \
+             planned against the offline schema; planned again once kubeconfig is known\n  \
+             = k8s.namespace apps"
+        ),
+        "{}",
+        r.stdout
+    );
+    let r = mock(
+        &s,
+        &[
+            "apply",
+            "--yes",
+            "--chaos",
+            "mutate=k8s.namespace[\"apps\"].metadata.labels={\"x\":\"y\"}",
+        ],
+    )
+    .success();
+    assert!(!r.stderr.contains("refused"), "{}", r.stderr);
+    assert!(
+        r.stdout
+            .contains("  ~ k8s.namespace apps  p.df:4\n      metadata.labels.x = \"y\" → <none>\n"),
+        "{}",
+        r.stdout
+    );
+    let w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
+    assert_eq!(
+        w["resources"]["k8s.namespace::apps"]["attrs"]["metadata"],
+        serde_json::json!({ "name": "apps" })
     );
 }

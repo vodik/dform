@@ -47,6 +47,22 @@ impl Calls {
     }
 }
 
+/// The changes of `plan` the tick holds whose plan read the world: what
+/// the boundary's guard compares with the world then. One held on its
+/// provider's settings was planned without a read (R-177): it is planned
+/// again at the boundary, against the world as it is then, and nothing
+/// changed under it.
+fn guarded(
+    plan: &crate::provider::Plan,
+    sections: &crate::stuck::Sections,
+) -> BTreeSet<address::Address> {
+    plan.actions
+        .iter()
+        .filter(|a| waits_on(a, sections).is_some() && sections.read_world(&a.addr))
+        .map(|a| a.addr.clone())
+        .collect()
+}
+
 /// One deployment's part of a tick's calls while they are made
 /// ([`executor::Hooks`]): each action to its audit log, each answer to
 /// its write-ahead record, its lease's fence before each call, and each
@@ -144,13 +160,7 @@ impl<'a> Ticks<'a, '_> {
             p.plan.actions.iter().filter(|a| !waits(a)),
         );
         self.persist()?;
-        let pending = p
-            .plan
-            .actions
-            .iter()
-            .filter(|a| waits(a))
-            .map(|a| a.addr.clone())
-            .collect();
+        let pending = guarded(&p.plan, sections);
         p.plan.actions.retain(|a| !waits(a));
         let changed = p
             .plan
