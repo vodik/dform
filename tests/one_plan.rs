@@ -74,16 +74,12 @@ fn a_trees_providers_start_once() {
     r.success();
     let handshakes: Vec<String> = spans
         .iter()
-        .filter(|x| {
-            x["name"]
-                .as_str()
-                .is_some_and(|n| n.ends_with(" Handshake"))
-        })
+        .filter(|x| common::attr(x, "provider.call").as_deref() == Some("Handshake"))
         .map(|x| x["name"].as_str().unwrap().to_string())
         .collect();
     assert_eq!(handshakes.len(), 2, "one per provider: {handshakes:?}");
-    assert_eq!(calls(&spans, "fakecloud Schema").len(), 1);
-    assert_eq!(calls(&spans, "k8s Schema").len(), 1);
+    assert_eq!(calls(&spans, "fakecloud", "Schema").len(), 1);
+    assert_eq!(calls(&spans, "k8s", "Schema").len(), 1);
 }
 
 /// An image both deployments name is resolved at its registry once for
@@ -172,7 +168,7 @@ fn a_trees_plan_reads_each_object_once() {
     let (r, spans) = plan(&s, &["plan", "apps"]);
     r.success();
     assert_eq!(
-        calls(&spans, "fakecloud Read"),
+        calls(&spans, "fakecloud", "Read"),
         ["db.postgres server", "net.vpc main"]
     );
 }

@@ -9,10 +9,12 @@
 //! other field an attribute.
 //!
 //! [`Layer`] feeds it, a layer of the run's subscriber beside the
-//! exporter and `DFORM_LOG`'s lines. A span ends when it is last exited,
-//! if it was ever entered (a phase, its function's body), else when it
-//! closes (a call, ended when its answer is taken): a span the registry
-//! keeps open for a child that outlives it ends where its work did.
+//! exporter and `DFORM_LOG`'s lines. A call (a client span) ends when it
+//! closes, when its answer is taken, though the work done for it entered
+//! it (a component's export, the requests it sends); another span when it
+//! is last exited, if it was ever entered (a phase, its function's body),
+//! else when it closes: a span the registry keeps open for a child that
+//! outlives it ends where its work did.
 
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -27,6 +29,9 @@ use tracing::span::{Attributes, Id, Record};
 
 /// The spans ended this many at a time make a line.
 const LINE: usize = 512;
+
+/// OTLP's span kind of a call.
+const CLIENT: u8 = 3;
 
 /// The spans of a run: those open, and those ended and not yet written.
 pub struct Spans {
@@ -53,7 +58,7 @@ struct Open {
     /// OTLP's span kind: 1 internal, 2 server, 3 client.
     kind: u8,
     start: u128,
-    /// When it was last exited, if it was ever entered.
+    /// When it was last exited, if it was ever entered and is not a call.
     exited: Option<u128>,
     /// Its status, from `otel.status_code`: OTLP's code (1 ok, 2 error).
     status: Option<u8>,
@@ -134,9 +139,11 @@ impl Spans {
         }
     }
 
-    /// Span `key` is exited.
+    /// Span `key` is exited: a call's ends when it closes.
     fn exit(&self, key: u64) {
-        if let Some(open) = self.state().open.get_mut(&key) {
+        if let Some(open) = self.state().open.get_mut(&key)
+            && open.kind != CLIENT
+        {
             open.exited = Some(now());
         }
     }
@@ -219,7 +226,7 @@ impl Visit for Fields<'_> {
             "otel.kind" => {
                 self.0.kind = match value {
                     "server" => 2,
-                    "client" => 3,
+                    "client" => CLIENT,
                     _ => 1,
                 }
             }

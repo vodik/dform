@@ -24,12 +24,13 @@
 //! Traced in tracing's idiom, as a native provider is and more: its
 //! start is `wasm.compile` (the cache's code, or compiled), `wasm.link`
 //! and `wasm.instantiate`, under the provider's start; each call's export
-//! is a server span, `provider.export`, under the call's `provider.call`
-//! (named as the call is, the WIT name a field, a trap its error), and a
-//! request the component sends through the host is under its export: each
-//! export is started on a task the host knows by its span while it runs,
-//! and an import finds it by the root of its async call stack
-//! ([`State::exports`]).
+//! runs in the call's `provider.call` span, which it records how long the
+//! call took in the provider on (`provider.took`, in ms) and a trap that
+//! stopped it (`error.type`): the provider is in dform's process, so its
+//! side of the call is no span of its own. A request the component sends
+//! through the host is under its call: each export is started on a task
+//! the host knows by its call's span while it runs, and an import finds
+//! it by the root of its async call stack ([`State::exports`]).
 
 use crate::ratelimit::{Limiter, Paced};
 use crate::services::Services;
@@ -100,10 +101,6 @@ pub struct Tunnel {
     handle: h::Handle,
 }
 
-/// The interface a provider's calls are exports of, as a
-/// `provider.export` span names one (`dform:provider/provider@1.0.0#read`).
-const EXPORTS: &str = "dform:provider/provider@1.0.0";
-
 /// How often the epoch ticks, and how many ticks a call may run.
 const TICK: Duration = Duration::from_millis(100);
 /// The backstop: a call still running after this has its instance
@@ -143,9 +140,9 @@ struct State {
     table: ResourceTable,
     host: Arc<Services>,
     outgoing: Outgoing,
-    /// The `provider.export` spans of the calls in flight, by their
+    /// The `provider.call` spans of the calls in flight, by their
     /// export's task: an import finds its call's by the task it is made in
-    /// ([`made_in`]), so its spans are the export's children.
+    /// ([`made_in`]), so its spans are the call's children.
     exports: std::collections::HashMap<GuestTaskId, tracing::Span>,
 }
 
@@ -325,7 +322,7 @@ impl wh::types::Host for State {}
 impl wh::secrets::Host for State {}
 
 impl<U> wh::secrets::HostWithStore<U> for HasSelf<State> {
-    /// The credential `name`, opened in the span of the export it is
+    /// The credential `name`, opened in the span of the call it is
     /// opened in ([`made_in`]): what its signer's needs make, a fetch,
     /// is under that call, as natively.
     fn open(
@@ -347,7 +344,7 @@ impl<U> wh::secrets::HostWithStore<U> for HasSelf<State> {
     }
 }
 
-/// The span an import is made in: the `provider.export` of the call it is
+/// The span an import is made in: the `provider.call` of the call it is
 /// made for, the one its export's task was started in ([`State::exports`]),
 /// the root of the import's call stack; else the span the instance is in.
 fn made_in<U: 'static>(s: &mut Access<'_, U, HasSelf<State>>) -> tracing::Span {
@@ -938,8 +935,8 @@ impl Instance {
         mut calls: tokio::sync::mpsc::UnboundedReceiver<Submitted>,
     ) {
         let who = std::cell::RefCell::new(self.program.clone());
-        // The calls not answered yet, each with its export's span: each
-        // answered as crashed if the instance traps.
+        // The calls not answered yet, each with its span: each answered as
+        // crashed if the instance traps.
         let open = std::cell::RefCell::new(BTreeMap::new());
         let ran = store
             .run_concurrent(async |a| self.run_calls(a, &provider, &who, &open, &mut calls).await)
@@ -957,7 +954,7 @@ impl Instance {
     }
 
     /// Each call `calls` brings run as it comes, all at once, in its
-    /// export's span ([`export_span`]), each noted in `open` until it is
+    /// span ([`call_span`]), each noted in `open` until it is
     /// answered: `None` once `calls` ends, else the first call that
     /// trapped, with whether it was an Apply (still `open`).
     async fn run_calls(
@@ -983,7 +980,7 @@ impl Instance {
             tokio::select! {
                 got = calls.recv() => match got {
                     Some(c) => {
-                        let span = export_span(&who.borrow(), &c);
+                        let span = call_span(&c);
                         open.borrow_mut().insert(c.t, span.clone());
                         running.push(Box::pin(self.one(a, provider, who, c).instrument(span)));
                     }
@@ -995,8 +992,8 @@ impl Instance {
                         Ok(answer) => answer,
                         Err(trap) => return Some((t, apply, trap)),
                     };
-                    // Its export's span ends before its answer is told:
-                    // a run that ends on the answer has the span.
+                    // The instance lets go of its span before its answer
+                    // is told: the span ends as the run takes it.
                     open.borrow_mut().remove(&t);
                     let _ = self.tx.send(Back::Answer(t, Box::new(answer)));
                 }
@@ -1005,7 +1002,7 @@ impl Instance {
     }
 
     /// The instance trapped (in the call `trapped` names, when one did):
-    /// that call answered with its trap, recorded on its export's span,
+    /// that call answered with its trap, recorded on its span,
     /// every call still `open` and every call submitted since as crashed,
     /// and no call taken again.
     async fn died(
@@ -1037,7 +1034,7 @@ impl Instance {
     }
 
     /// The export `f` called with `arg`, its task known by the span it is
-    /// called in (the call's `provider.export`) while it runs
+    /// called in (the call's `provider.call`) while it runs
     /// ([`State::exports`]).
     async fn exported<P, R>(
         a: &Accessor<State>,
@@ -1068,9 +1065,10 @@ impl Instance {
         });
     }
 
-    /// Run `call`, telling its events, its status recorded on the span it
-    /// runs in (its export's): its answer, or the trap that stopped it,
-    /// which [`Instance::run_calls`] tells once the span has ended.
+    /// Run `call`, telling its events, how long it took in the provider
+    /// recorded on the span it runs in (its call's, `provider.took`, in
+    /// ms): its answer, or the trap that stopped it, which
+    /// [`Instance::run_calls`] tells once the instance let go of the span.
     async fn one(
         &self,
         a: &Accessor<State>,
@@ -1079,13 +1077,12 @@ impl Instance {
         Submitted { t, call, .. }: Submitted,
     ) -> Ran {
         let apply = matches!(call, Call::Apply(_));
+        let began = std::time::Instant::now();
         let answer = self.answer(a, provider, who, t, &call).await;
-        if let Ok(answered) = &answer {
-            let status = if answered.is_ok() { "ok" } else { "error" };
-            tracing::Span::current().record("otel.status_code", status);
-            if let Ok(Reply::Handshake(h)) = answered {
-                *who.borrow_mut() = h.name.clone();
-            }
+        let took = u64::try_from(began.elapsed().as_millis()).unwrap_or(u64::MAX);
+        tracing::Span::current().record("provider.took", took);
+        if let Ok(Ok(Reply::Handshake(h))) = &answer {
+            *who.borrow_mut() = h.name.clone();
         }
         Ran { t, apply, answer }
     }
@@ -1238,7 +1235,7 @@ impl Trapped {
         }
     }
 
-    /// As a `provider.export` span's `error.type` names it.
+    /// As a call's span's `error.type` names it.
     fn as_str(self) -> &'static str {
         match self {
             Trapped::Exit(_) => "exit",
@@ -1247,35 +1244,19 @@ impl Trapped {
         }
     }
 
-    /// The trap on the span of the export it stopped: an error of its type.
+    /// The trap on the span of the call it stopped: an error of its type.
     fn record(self, span: &tracing::Span) {
-        span.record("otel.status_code", "error");
         span.record("error.type", self.as_str());
     }
 }
 
-/// The span of a call's run in the component, `provider.export`: the
-/// server's side of its `provider.call` (the call's trace number), under
-/// it and named as it is, in the provider (`k8s Plan (in the
-/// provider)`), so a reader tells the call's wait from its run, the
-/// export's WIT name a field; its status the answer's
-/// ([`Instance::one`]), a trap its error ([`Trapped::record`]). None when
-/// the call is not traced.
-fn export_span(who: &str, call: &Submitted) -> tracing::Span {
-    let Some(parent) = call.number.and_then(timed::call_span) else {
-        return tracing::Span::none();
-    };
-    let kind = call.call.method();
-    tracing::debug_span!(
-        target: dform_core::timing::TARGET,
-        parent: &parent,
-        "provider.export",
-        otel.name = %format_args!("{} (in the provider)", timed::call_name(who, kind)),
-        otel.kind = "server",
-        otel.status_code = tracing::field::Empty,
-        export = %format_args!("{EXPORTS}#{}", kind.to_lowercase()),
-        error.type = tracing::field::Empty,
-    )
+/// The span a call runs in in the component: its `provider.call` (by
+/// the call's trace number), which the run ends as it takes the answer.
+/// None when the call is not traced.
+fn call_span(call: &Submitted) -> tracing::Span {
+    call.number
+        .and_then(timed::call_span)
+        .unwrap_or_else(tracing::Span::none)
 }
 
 /// A trap of the provider `who` in a call, as the call's failure: an exit

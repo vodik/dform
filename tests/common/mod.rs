@@ -866,11 +866,17 @@ pub fn attr(s: &serde_json::Value, k: &str) -> Option<String> {
         .map(|v| v.as_str().map_or_else(|| v.to_string(), str::to_string))
 }
 
-/// The spans named `name`, by their `addr`, sorted.
-pub fn calls(spans: &[serde_json::Value], name: &str) -> Vec<String> {
+/// Whether the span `s` is a call of `kind` (`Read`) to `provider`.
+pub fn is_call(s: &serde_json::Value, provider: &str, kind: &str) -> bool {
+    attr(s, "provider").as_deref() == Some(provider)
+        && attr(s, "provider.call").as_deref() == Some(kind)
+}
+
+/// The calls of `kind` to `provider`, by their `addr`, sorted.
+pub fn calls(spans: &[serde_json::Value], provider: &str, kind: &str) -> Vec<String> {
     let mut out: Vec<String> = spans
         .iter()
-        .filter(|s| s["name"] == name)
+        .filter(|s| is_call(s, provider, kind))
         .map(|s| attr(s, "addr").unwrap_or_default())
         .collect();
     out.sort();

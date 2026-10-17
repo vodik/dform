@@ -368,12 +368,17 @@ fn its_requests_are_spans_under_the_calls_they_are_made_for() {
         let addr = common::attr(r, "addr").unwrap();
         assert!(addr.starts_with(&url), "{addr}");
         let parent = r["parentSpanId"].as_str().and_then(|p| by_id.get(p));
-        let call = parent.and_then(|p| p["name"].as_str()).unwrap_or_default();
-        assert!(call.starts_with("k8s "), "{addr} is under {call:?}");
-        *under.entry(call.to_string()).or_insert(0) += 1;
+        let call = parent.copied().unwrap_or(&serde_json::Value::Null);
+        assert_eq!(
+            common::attr(call, "provider").as_deref(),
+            Some("k8s"),
+            "{addr} is under {call}"
+        );
+        let kind = common::attr(call, "provider.call").unwrap_or_default();
+        *under.entry(kind).or_insert(0) += 1;
     }
-    assert!(under.contains_key("k8s Configure"), "{under:?}");
-    assert!(under.contains_key("k8s Plan"), "{under:?}");
+    assert!(under.contains_key("Configure"), "{under:?}");
+    assert!(under.contains_key("Plan"), "{under:?}");
     for b in ["get openapi", "patch namespaces", "patch services"] {
         assert!(buckets.contains(b), "{buckets:?}");
     }

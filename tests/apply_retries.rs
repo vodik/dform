@@ -221,7 +221,9 @@ fn a_retrys_backoff_waits_for_its_own_call_alone() {
     let starts = |addr: &str| -> Vec<u128> {
         let mut at: Vec<u128> = spans
             .iter()
-            .filter(|x| x["name"] == "fakecloud Apply" && attr(x, "addr").as_deref() == Some(addr))
+            .filter(|x| {
+                common::is_call(x, "fakecloud", "Apply") && attr(x, "addr").as_deref() == Some(addr)
+            })
             .map(|x| x["startTimeUnixNano"].as_str().unwrap().parse().unwrap())
             .collect();
         at.sort();

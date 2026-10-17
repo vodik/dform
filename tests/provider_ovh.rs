@@ -279,12 +279,16 @@ fn its_requests_are_spans_under_the_calls_they_are_made_for() {
         let addr = common::attr(r, "addr").unwrap();
         assert!(addr.starts_with(&server.endpoint), "{addr}");
         let parent = r["parentSpanId"].as_str().and_then(|p| by_id.get(p));
-        let call = parent.and_then(|p| p["name"].as_str()).unwrap_or_default();
-        assert!(call.starts_with("ovh "), "{addr} is under {call:?}");
-        under.insert(call.to_string());
+        let call = parent.copied().unwrap_or(&serde_json::Value::Null);
+        assert_eq!(
+            common::attr(call, "provider").as_deref(),
+            Some("ovh"),
+            "{addr} is under {call}"
+        );
+        under.insert(common::attr(call, "provider.call").unwrap_or_default());
     }
-    assert!(under.contains("ovh Configure"), "{under:?}");
-    assert!(under.contains("ovh Plan"), "{under:?}");
+    assert!(under.contains("Configure"), "{under:?}");
+    assert!(under.contains("Plan"), "{under:?}");
     // Each paced in its class of endpoint's window (`api::bucket`).
     for class in ["project", "flavor", "image"] {
         assert!(buckets.contains(class), "{buckets:?}");

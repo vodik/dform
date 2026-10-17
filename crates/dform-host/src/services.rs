@@ -188,7 +188,7 @@ impl Services {
 
     /// `req`, once its bucket's window admits it, sent with `cred`
     /// through `via`: an `io.call` span (`http`), named by its method
-    /// (its location a field, and a dry run said), the child of the
+    /// (its location a field, and `dry_run` when it is one), the child of the
     /// provider call it is sent for while that call is traced, else of
     /// the span the host's thread is in. Its wait for the window is a
     /// `ratelimit.wait` span under it.
@@ -201,12 +201,7 @@ impl Services {
         name = "io.call",
         skip_all,
         fields(
-            otel.name = %format_args!(
-                "{} {}{}",
-                self.grants.provider,
-                req.method,
-                if dry_run(&req.url) { " (dry run)" } else { "" }
-            ),
+            otel.name = %format_args!("{} {}", self.grants.provider, req.method),
             otel.kind = "client",
             kind = "http",
             provider = self.grants.provider.as_str(),

@@ -103,12 +103,17 @@ pub fn call_span(number: u64) -> Option<tracing::Span> {
     traced().get(&number).cloned()
 }
 
-/// What a call of `kind` to `provider` is named in a trace: `ovh Read`.
-/// For a component, the `provider.export` that serves it is the same
-/// name in the provider (`ovh Read (in the provider)`), a client's and a
-/// server's span of one call.
-pub fn call_name(provider: &str, kind: &str) -> String {
-    format!("{} {kind}", short(provider))
+/// What a call of `kind` to `provider` is named in a trace: what it is
+/// about, after what it asks (`plan ovh.instance k3s.server`, `query
+/// ovh.zone`), `about` the resource's address or the extern's name; one
+/// about none by its provider (`configure ovh`). The provider and the
+/// kind are its fields.
+fn call_name(provider: &str, kind: &str, about: &str) -> String {
+    let asks = kind.to_lowercase();
+    match about {
+        "" => format!("{asks} {}", short(provider)),
+        about => format!("{asks} {about}"),
+    }
 }
 
 /// A provider as a trace names it: by its name, which one not yet named
@@ -156,9 +161,8 @@ impl Live {
     fn new(provider: &str, call: &Call, due: Instant) -> Live {
         let what = describe(call);
         let span = Live::span(provider, call.method(), &what);
-        // A Configure's is the session it opens, recorded with its answer.
-        if call.session() != Session::NONE && !matches!(call, Call::Configure(_)) {
-            span.record("session", call.session().0);
+        if let Some(session) = Live::made_in(call) {
+            span.record("session", session.0);
         }
         let traced = Traced::new(&span);
         Live {
@@ -169,26 +173,39 @@ impl Live {
         }
     }
 
+    /// The session `call` is made in, as its span records it when it is
+    /// submitted: none outside one, and a Configure's is the session it
+    /// opens, recorded with its answer ([`Live::finish`]), once.
+    fn made_in(call: &Call) -> Option<Session> {
+        let session = call.session();
+        (session != Session::NONE && !matches!(call, Call::Configure(_))).then_some(session)
+    }
+
     /// Its number while it is traced.
     fn number(&self) -> Option<u64> {
         self.traced.as_ref().map(|t| t.0)
     }
 
     /// The span of a call of `kind` to `provider`, `what` its description
-    /// (the kind, then the resource's address or the extern's name).
+    /// (the kind, then the resource's address or the extern's name). A
+    /// provider that runs in dform's process (a component) records on it
+    /// how long the call took in the provider, and the trap that stopped
+    /// it.
     fn span(provider: &str, kind: &str, what: &str) -> tracing::Span {
         let addr = what.strip_prefix(kind).unwrap_or(what).trim_start();
         let provider = short(provider);
         tracing::debug_span!(
             target: crate::timing::TARGET,
             "provider.call",
-            otel.name = %call_name(provider, kind),
+            otel.name = %call_name(provider, kind, addr),
             otel.kind = "client",
             otel.status_code = tracing::field::Empty,
             provider,
-            kind,
+            provider.call = kind,
             addr = (!addr.is_empty()).then_some(addr),
             session = tracing::field::Empty,
+            provider.took = tracing::field::Empty,
+            error.type = tracing::field::Empty,
         )
     }
 
@@ -703,96 +720,54 @@ mod tests {
         assert_eq!(b.next_completed(&mut |_, _| {}).0, t);
     }
 
-    /// Answers a Configure with the session it configures.
-    struct Configures;
-
-    impl Handler for Configures {
-        fn handle(&self, _: Session, call: Call, _: Progress) -> Result<Reply, CallError> {
-            let Call::Configure(r) = call else {
-                return Err(CallError::Refused("configure only".into()));
-            };
-            Ok(Reply::Configure(pb::ConfigureResponse {
-                session: r.session,
-                ..Default::default()
-            }))
-        }
-    }
-
-    /// The fields each span recorded, as it began and after, in order.
-    #[derive(Clone, Default)]
-    struct Recorded(Arc<Mutex<HashMap<u64, Vec<String>>>>);
-
-    struct Names<'a>(&'a mut Vec<String>);
-
-    impl tracing::field::Visit for Names<'_> {
-        fn record_debug(&mut self, f: &tracing::field::Field, _: &dyn std::fmt::Debug) {
-            self.0.push(f.name().to_string());
-        }
-    }
-
-    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Recorded {
-        fn on_new_span(
-            &self,
-            attrs: &tracing::span::Attributes<'_>,
-            id: &tracing::span::Id,
-            _: tracing_subscriber::layer::Context<'_, S>,
-        ) {
-            let mut spans = self.0.lock().unwrap();
-            attrs.record(&mut Names(spans.entry(id.into_u64()).or_default()));
-        }
-
-        fn on_record(
-            &self,
-            id: &tracing::span::Id,
-            values: &tracing::span::Record<'_>,
-            _: tracing_subscriber::layer::Context<'_, S>,
-        ) {
-            let mut spans = self.0.lock().unwrap();
-            values.record(&mut Names(spans.entry(id.into_u64()).or_default()));
-        }
-    }
-
-    /// A Configure of a session its provider answered before (a second
-    /// Configure) names the session once, the one it configured: a
-    /// field a span carries is carried once.
+    /// A call's span records the session it is made in once: a Configure
+    /// of a session its provider answered before (a second Configure) the
+    /// one it configured, with its answer.
     #[test]
     fn a_reconfigure_names_its_session_once() {
-        use tracing_subscriber::layer::SubscriberExt;
-        let recorded = Recorded::default();
-        let subscriber = tracing_subscriber::registry().with(recorded.clone());
-        tracing::subscriber::with_default(subscriber, || {
-            // A test on another thread may have found the call's callsite
-            // with no subscriber, as this one began.
-            tracing::callsite::rebuild_interest_cache();
-            let q = Queue::new(Configures, Order::Clock, false);
-            let mut p =
-                Timed::new("configures".into(), Box::new(q), Duration::from_secs(5)).unwrap();
-            p.submit(Call::Configure(pb::ConfigureRequest {
-                session: 3,
-                ..Default::default()
-            }));
-            assert!(p.next_completed(&mut |_, _| {}).1.is_ok());
+        let configure = Call::Configure(pb::ConfigureRequest {
+            session: 3,
+            ..Default::default()
         });
-        let spans = recorded.0.lock().unwrap().clone();
-        let call = spans
-            .values()
-            .find(|f| f.iter().any(|n| n == "provider"))
-            .unwrap_or_else(|| panic!("the call's span: {spans:?}"));
-        let sessions = call.iter().filter(|n| *n == "session").count();
-        assert_eq!(sessions, 1, "{call:?}");
+        assert_eq!(Live::made_in(&configure), None);
+        let plan = Call::Plan(pb::PlanRequest {
+            session: 3,
+            ..Default::default()
+        });
+        assert_eq!(Live::made_in(&plan), Some(Session(3)));
+        let handshake = Call::Handshake(pb::HandshakeRequest::default());
+        assert_eq!(Live::made_in(&handshake), None);
     }
 
-    /// A provider is named by its name, never its file's path: before its
-    /// handshake names it, by the name its file or command gives it.
+    /// A call is named by what it is about; one about no resource by its
+    /// provider, by its name, never its file's path: before its handshake
+    /// names it, by the name its file or command gives it.
     #[test]
-    fn a_call_names_its_provider_not_its_file() {
-        for (program, name) in [
-            ("/opt/providers/dform-provider-k8s.wasm", "k8s Handshake"),
-            ("./prov/dform-provider-fake", "fake Handshake"),
-            ("dform __provider fake", "fake Handshake"),
-            ("ovh", "ovh Handshake"),
+    fn a_call_is_named_by_what_it_is_about() {
+        for (program, kind, about, name) in [
+            (
+                "ovh",
+                "Plan",
+                "ovh.instance k3s.server",
+                "plan ovh.instance k3s.server",
+            ),
+            ("ovh", "Query", "ovh.zone", "query ovh.zone"),
+            ("ovh", "Configure", "", "configure ovh"),
+            (
+                "/opt/providers/dform-provider-k8s.wasm",
+                "Handshake",
+                "",
+                "handshake k8s",
+            ),
+            (
+                "./prov/dform-provider-fake",
+                "Handshake",
+                "",
+                "handshake fake",
+            ),
+            ("dform __provider fake", "Handshake", "", "handshake fake"),
         ] {
-            assert_eq!(call_name(program, "Handshake"), name, "{program}");
+            assert_eq!(call_name(program, kind, about), name, "{program}");
         }
     }
 

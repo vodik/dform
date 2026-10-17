@@ -1,10 +1,10 @@
 //! A wasm provider's trace (the `wasm` feature): its start is
 //! `wasm.compile`, `wasm.link` and `wasm.instantiate` under the
-//! provider's start, which ends once it is started; each call's export is
-//! a server span, `provider.export`, under the call's `provider.call`,
-//! named as it is in the provider (`fakecloud Plan (in the provider)`),
-//! its WIT name a field and a trap its error; the requests the component
-//! sends through the host are under its export.
+//! provider's start, which ends once it is started; each call's export
+//! runs in the call's `provider.call` span, no span of its own: the span
+//! carries how long the call took in the provider (`provider.took`) and
+//! a trap that stopped it (`error.type`); the requests the component
+//! sends through the host are under its call.
 //!
 //! The components are built apart, as for tests/host_wasm.rs:
 //!
@@ -68,8 +68,8 @@ fn traced(s: &Scratch, args: &[&str]) -> (common::Run, Vec<Json>) {
 }
 
 /// A trace's spans by id, and each one's label: the span it is (a call
-/// and an export by their kind, `provider.call Read`,
-/// `provider.export dform:provider/provider@1.0.0#read`), else its name.
+/// by its kind, `provider.call Read`; a request by its, `io.call http`),
+/// else its name.
 struct Tree<'a> {
     by_id: BTreeMap<&'a str, &'a Json>,
 }
@@ -86,12 +86,11 @@ impl<'a> Tree<'a> {
 
     fn label(s: &Json) -> String {
         let name = s["name"].as_str().unwrap_or_default();
+        let call = common::attr(s, "provider.call");
         let kind = common::attr(s, "kind").unwrap_or_default();
-        match s["kind"].as_u64() {
-            Some(2) => format!("provider.export {}", common::attr(s, "export").unwrap()),
-            // A call's kind is its method's (`Read`); a request's is not.
-            Some(3) if kind.starts_with(char::is_uppercase) => format!("provider.call {kind}"),
-            Some(3) => format!("io.call {kind}"),
+        match (s["kind"].as_u64(), call) {
+            (Some(3), Some(call)) => format!("provider.call {call}"),
+            (Some(3), None) => format!("io.call {kind}"),
             _ => name.to_string(),
         }
     }
@@ -119,12 +118,6 @@ impl<'a> Tree<'a> {
     }
 }
 
-/// What the export of the call `call` is named: the call's name, in the
-/// provider.
-fn in_the_provider(call: &Json) -> String {
-    format!("{} (in the provider)", call["name"].as_str().unwrap())
-}
-
 fn time(s: &Json, k: &str) -> u128 {
     s[k].as_str().unwrap().parse().unwrap()
 }
@@ -133,10 +126,10 @@ fn time(s: &Json, k: &str) -> u128 {
 /// the cache), linked and instantiated under the provider's start, which
 /// ends before the deployment is evaluated (it was the run's whole length
 /// while the instance's thread stayed in it); every call is a client
-/// span with one server span under it, named as it is in the provider,
-/// its export's WIT name a field, its status the answer's.
+/// span and no span is a server's: the call carries how long it took in
+/// the provider, its status the answer's.
 #[test]
-fn a_plan_on_the_fake_component_traces_its_start_and_each_export() {
+fn a_plan_on_the_fake_component_traces_its_start_and_each_call() {
     let s = Scratch::new("host-trace-plan");
     s.write("p.df", PROG);
     let (r, spans) = traced(&s, &["plan"]);
@@ -144,19 +137,20 @@ fn a_plan_on_the_fake_component_traces_its_start_and_each_export() {
     let tree = Tree::of(&spans);
     let edges = tree.edges();
     let start = "provider mock started";
-    let export = |m: &str| format!("provider.export dform:provider/provider@1.0.0#{m}");
     for (parent, child) in [
-        (start.to_string(), "wasm.compile".to_string()),
-        (start.into(), "wasm.link".into()),
-        (start.into(), "wasm.instantiate".into()),
-        (start.into(), "provider.call Handshake".into()),
-        ("provider.call Handshake".into(), export("handshake")),
-        ("provider.call Configure".into(), export("configure")),
-        ("provider.call Schema".into(), export("schema")),
-        ("provider.call Plan".into(), export("plan")),
+        (start, "wasm.compile"),
+        (start, "wasm.link"),
+        (start, "wasm.instantiate"),
+        (start, "provider.call Handshake"),
+        (
+            "providers started and configured",
+            "provider.call Configure",
+        ),
+        ("providers' schema loaded", "provider.call Schema"),
+        ("Plan calls", "provider.call Plan"),
     ] {
         assert!(
-            edges.contains_key(&(parent.clone(), child.clone())),
+            edges.contains_key(&(parent.to_string(), child.to_string())),
             "{parent} > {child} in\n{edges:#?}"
         );
     }
@@ -176,23 +170,19 @@ fn a_plan_on_the_fake_component_traces_its_start_and_each_export() {
         ),
         "{compiled}"
     );
-    // Every call has its export under it, named as it is in the
-    // provider; nothing else is a server span.
-    for s in &spans {
-        let Some(parent) = tree.parent(s) else {
-            continue;
-        };
-        if s["kind"] == 2 {
-            assert_eq!(parent["kind"], 3, "{s}");
-            assert_eq!(s["name"], in_the_provider(parent), "{s}");
-            assert_eq!(s["status"]["code"], 1, "{s}");
-        }
-    }
-    let calls = spans
+    // Every call carries its time in the provider, answered; none is a
+    // server span.
+    assert!(spans.iter().all(|s| s["kind"] != 2), "a server span");
+    let calls: Vec<&Json> = spans
         .iter()
-        .filter(|s| Tree::label(s).starts_with("provider.call"));
-    let exports = spans.iter().filter(|s| s["kind"] == 2);
-    assert_eq!(calls.count(), exports.count());
+        .filter(|s| Tree::label(s).starts_with("provider.call"))
+        .collect();
+    assert!(calls.len() >= 4, "{calls:#?}");
+    for c in calls {
+        let took = common::attr(c, "provider.took").map(|t| t.parse::<u64>());
+        assert!(matches!(took, Some(Ok(_))), "{c}");
+        assert_eq!(c["status"]["code"], 1, "{c}");
+    }
     let started = &tree.named(start)[0];
     let evaluated = tree.named("evaluated");
     assert!(
@@ -204,23 +194,20 @@ fn a_plan_on_the_fake_component_traces_its_start_and_each_export() {
 }
 
 /// The component exits as it is called to Apply `compute.vm app`: that
-/// call's export is an error whose type is the exit, its call an error.
+/// call is an error whose type is the exit.
 #[test]
-fn a_trap_is_its_exports_error() {
+fn a_trap_is_its_calls_error() {
     let s = Scratch::new("host-trace-crash");
     s.write("p.df", PROG);
     let (r, spans) = traced(&s, &["apply", "--chaos", "crash=compute.vm[\"app\"]"]);
     r.failure();
-    let tree = Tree::of(&spans);
     let crashed: Vec<&Json> = spans
         .iter()
         .filter(|s| common::attr(s, "error.type").is_some())
         .collect();
     assert_eq!(crashed.len(), 1, "{crashed:#?}");
-    let export = crashed[0];
-    assert_eq!(common::attr(export, "error.type").as_deref(), Some("exit"));
-    assert_eq!(export["status"]["code"], 2, "{export}");
-    let call = tree.parent(export).unwrap();
+    let call = crashed[0];
+    assert_eq!(common::attr(call, "error.type").as_deref(), Some("exit"));
     assert_eq!(
         common::attr(call, "addr").as_deref(),
         Some("compute.vm app")
@@ -229,13 +216,11 @@ fn a_trap_is_its_exports_error() {
 }
 
 /// The OVH provider as a component: each request it sends through the
-/// host is under its call's export (and so is its signer's fetch of the
-/// API's clock, made as the Configure opens the keys), which is under the
-/// call and named as it is in the provider, so a trace read by its calls
-/// (tests/host_wasm.rs's parity with the native build) reads as the
-/// native provider's, the request under its call.
+/// host is under its call (and so is its signer's fetch of the API's
+/// clock, made as the Configure opens the keys), so a trace reads as the
+/// native provider's (tests/host_wasm.rs's parity with the native build).
 #[test]
-fn the_ovh_components_requests_are_under_its_exports() {
+fn the_ovh_components_requests_are_under_its_calls() {
     use dform_provider_ovh::fake::{self, Server};
     let wasm = built(
         "dform_provider_ovh.wasm",
@@ -288,18 +273,16 @@ fn the_ovh_components_requests_are_under_its_exports() {
         "the signer's fetch of the API's clock: {requests:#?}"
     );
     for r in requests {
-        let export = tree.parent(r).unwrap();
-        assert_eq!(export["kind"], 2, "{r} under {export}");
-        let call = tree.parent(export).unwrap();
-        assert_eq!(call["kind"], 3, "{export} under {call}");
-        assert_eq!(export["name"], in_the_provider(call));
+        let call = tree.parent(r).unwrap();
+        assert_eq!(call["kind"], 3, "{r} under {call}");
+        assert!(
+            Tree::label(call).starts_with("provider.call"),
+            "{r} under {call}"
+        );
     }
     let edges = tree.edges();
     assert!(
-        edges.contains_key(&(
-            "provider.call Configure".into(),
-            "provider.export dform:provider/provider@1.0.0#configure".into()
-        )),
+        edges.contains_key(&("provider.call Configure".into(), "io.call http".into())),
         "{edges:#?}"
     );
 }

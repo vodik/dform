@@ -84,7 +84,7 @@ fn a_plan_sends_its_spans_to_the_endpoint() {
     let sent = common::Run::from(c.output().unwrap()).success();
     assert_eq!(sent.stdout, plain.stdout);
     let file = std::fs::read_to_string(s.path("run.trace.jsonl")).unwrap();
-    assert!(file.contains("\"name\":\"fakecloud Plan\""), "{file}");
+    assert!(file.contains("\"name\":\"plan aws."), "{file}");
     let (head, n) = got.join().unwrap();
     assert!(head[0].starts_with("POST /v1/traces "), "{head:?}");
     assert!(
@@ -146,15 +146,21 @@ fn a_plan_writes_its_spans_to_the_trace_file() {
         "evaluated",
         "evaluation, round 1",
         "policy pass",
-        "fakecloud Configure",
-        "fakecloud Plan",
+        "configure fakecloud",
     ] {
         assert!(names.contains(want), "no span {want:?} in {names:?}");
     }
     // The attributes a span may carry: names, kinds, counts, and the
     // session a provider call is made in.
     let allowed: BTreeSet<&str> = [
-        "provider", "kind", "addr", "session", "tick", "count", "command",
+        "provider",
+        "provider.call",
+        "kind",
+        "addr",
+        "session",
+        "tick",
+        "count",
+        "command",
     ]
     .into();
     for sp in &spans {
@@ -168,7 +174,7 @@ fn a_plan_writes_its_spans_to_the_trace_file() {
     // before any ended (the order is a reader's, from times and parents).
     let plans: Vec<&Value> = spans
         .iter()
-        .filter(|s| s["name"] == "fakecloud Plan")
+        .filter(|s| common::is_call(s, "fakecloud", "Plan"))
         .collect();
     assert_eq!(plans.len(), 12);
     let time = |s: &Value, k: &str| -> u128 { s[k].as_str().unwrap().parse().unwrap() };
@@ -184,7 +190,7 @@ fn a_plan_writes_its_spans_to_the_trace_file() {
         assert_eq!(p["kind"], 3, "a client span");
         assert_eq!(p["status"]["code"], 1, "answered");
         assert_eq!(attr(p, "provider").as_deref(), Some("fakecloud"));
-        assert_eq!(attr(p, "kind").as_deref(), Some("Plan"));
+        assert_eq!(attr(p, "provider.call").as_deref(), Some("Plan"));
         assert!(attr(p, "addr").is_some_and(|a| a.starts_with("aws.")));
         assert_eq!(p["parentSpanId"], phase["spanId"], "under the Plan calls");
     }

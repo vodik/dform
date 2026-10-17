@@ -462,7 +462,7 @@ resource ovh.instance server {{
     assert!(
         native
             .keys()
-            .any(|(call, child)| call == "ovh Configure" && child.starts_with("ovh GET")),
+            .any(|(call, child)| call == "configure ovh" && child.starts_with("ovh GET")),
         "{native:#?}"
     );
     assert_eq!(component, native);
@@ -569,17 +569,17 @@ fn the_k8s_component_traces_as_its_native_build_does() {
     };
     let native = traced("k8s-trace-native", &common::exe("dform-provider-k8s"));
     let component = traced("k8s-trace-wasm", &k8s_component());
-    for call in ["k8s Configure", "k8s Plan"] {
+    for call in ["configure k8s", "plan "] {
         assert!(
-            native.keys().any(|(c, _)| c == call),
+            native.keys().any(|(c, _)| c.starts_with(call)),
             "requests under {call}: {native:#?}"
         );
     }
     // A Plan's apply is a dry run, and says so.
     assert!(
-        native
-            .keys()
-            .any(|(c, r)| c == "k8s Plan" && r.starts_with("k8s PATCH (dry run) https://")),
+        native.keys().any(|(c, r)| c.starts_with("plan ")
+            && r.starts_with("k8s PATCH https://")
+            && r.ends_with(" (dry run)")),
         "{native:#?}"
     );
     assert!(
@@ -667,7 +667,8 @@ fn k8s_component() -> String {
 }
 
 /// Each `io.call` span of a trace by the name of the call it is made for
-/// and its own with its location, and each `ratelimit.wait` span by the call of
+/// and its own with its location (and a dry run said), and each
+/// `ratelimit.wait` span by the call of
 /// the request that waited, counted: which of a call's requests sent
 /// together wait is the order they reach the host in. Each request's
 /// bucket and each wait's session filled.
@@ -696,21 +697,19 @@ fn under_calls(spans: &[serde_json::Value]) -> std::collections::BTreeMap<(Strin
         if wait {
             assert_ne!(common::attr(sp, "session").as_deref(), Some("0"), "{sp}");
         }
-        // A wait under the request that waited is by that request's call;
-        // a component's request, under its call's export, by the call.
-        let mut under = match parent(sp) {
+        // A wait under the request that waited is by that request's call.
+        let under = match parent(sp) {
             Some(p) if wait && is_request(p) => parent(p),
             p => p,
         };
-        if let Some(p) = under
-            && p["kind"] == 2
-        {
-            under = parent(p);
-        }
         let call = under.and_then(|p| p["name"].as_str()).unwrap_or("(none)");
-        // A request by its method and where it went.
+        // A request by its method, where it went, and whether it was a
+        // dry run.
         let child = match common::attr(sp, "addr") {
-            Some(addr) if request => format!("{name} {addr}"),
+            Some(addr) if request => {
+                let dry = common::attr(sp, "dry_run").map_or("", |_| " (dry run)");
+                format!("{name} {addr}{dry}")
+            }
             _ => name.to_string(),
         };
         *out.entry((call.to_string(), child)).or_insert(0) += 1;

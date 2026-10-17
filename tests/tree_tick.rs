@@ -57,7 +57,9 @@ fn applies(spans: &[Json], addr: &str) -> Vec<(String, u128, u128)> {
     let at = |x: &Json, k: &str| x[k].as_str().unwrap().parse::<u128>().unwrap();
     spans
         .iter()
-        .filter(|x| x["name"] == "fakecloud Apply" && attr(x, "addr").as_deref() == Some(addr))
+        .filter(|x| {
+            common::is_call(x, "fakecloud", "Apply") && attr(x, "addr").as_deref() == Some(addr)
+        })
         .map(|x| {
             let session = attr(x, "session").unwrap_or_default();
             (
@@ -86,11 +88,7 @@ fn independent_deployments_calls_overlap_and_each_lands_in_its_world() {
     // Of one process: an apply shares the tree's links as a plan does.
     let handshakes = spans
         .iter()
-        .filter(|x| {
-            x["name"]
-                .as_str()
-                .is_some_and(|n| n.ends_with(" Handshake"))
-        })
+        .filter(|x| attr(x, "provider.call").as_deref() == Some("Handshake"))
         .count();
     assert_eq!(handshakes, 1, "one process for the tree");
     assert!(a0 < b1 && b0 < a1, "the two creates overlap: {made:?}");

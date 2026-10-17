@@ -116,11 +116,11 @@ fn a_trees_deployments_are_sessions_of_one_process() {
     let named = |kind: &str| -> Vec<&serde_json::Value> {
         spans
             .iter()
-            .filter(|x| x["name"].as_str().is_some_and(|n| n.ends_with(kind)))
+            .filter(|x| attr(x, "provider.call").as_deref() == Some(kind))
             .collect()
     };
-    assert_eq!(named(" Handshake").len(), 1, "one process");
-    let mut sessions: Vec<String> = named(" Configure")
+    assert_eq!(named("Handshake").len(), 1, "one process");
+    let mut sessions: Vec<String> = named("Configure")
         .iter()
         .map(|x| attr(x, "session").expect("a Configure's session"))
         .collect();
@@ -128,9 +128,8 @@ fn a_trees_deployments_are_sessions_of_one_process() {
     assert_eq!(sessions, ["1", "2", "3", "4"], "a session per deployment");
     // Every other call names one of them.
     for x in spans.iter().filter(|x| {
-        x["name"]
-            .as_str()
-            .is_some_and(|n| n.starts_with("fakecloud ") && !n.ends_with(" Configure"))
+        attr(x, "provider").as_deref() == Some("fakecloud")
+            && attr(x, "provider.call").is_some_and(|c| c != "Configure" && c != "Handshake")
     }) {
         let session = attr(x, "session").unwrap_or_default();
         assert!(sessions.contains(&session), "{}: {session:?}", x["name"]);

@@ -41,7 +41,7 @@ fn a_provider_configured_mid_plan_reads_only_its_own_objects() {
     let r = r.success();
     assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
     assert_eq!(
-        calls(&spans, "fakecloud Read"),
+        calls(&spans, "fakecloud", "Read"),
         [
             "db.postgres other",
             "db.postgres server",
@@ -91,7 +91,7 @@ output theirs = zones.id
         spans.iter().any(|s| s["name"] == "evaluation, round 2"),
         "a second round asks it again"
     );
-    assert_eq!(calls(&spans, "fakecloud Query"), ["ovh.zone"]);
+    assert_eq!(calls(&spans, "fakecloud", "Query"), ["ovh.zone"]);
 }
 
 /// The calls of one round are independent, so they are asked together:

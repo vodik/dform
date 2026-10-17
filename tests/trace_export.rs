@@ -116,9 +116,9 @@ fn assert_whole(spans: &[Span], from: &str) {
         false
     };
     for (tick, call) in [
-        ("tick 1", "fakecloud Apply"),
+        ("tick 1", "apply db.postgres d"),
         ("tick 2", "wait, tick 2"),
-        ("tick 3", "fakecloud Apply"),
+        ("tick 3", "apply net.vpc v"),
     ] {
         let ticks: Vec<&Span> = spans.iter().filter(|s| s.name == tick).collect();
         assert_eq!(ticks.len(), 1, "{from}: {tick}");
