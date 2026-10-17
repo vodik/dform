@@ -369,17 +369,17 @@ impl Lowering<'_> {
                 vec![Lit::Pos(self.put_at(atom("want", args, span), all, &at))]
             }
             Coll::Namespace {
-                ns,
                 types,
                 typ,
                 enumerate,
-            } => self.tested((NAMESPACE, ns, types), *typ, pat, *enumerate, span),
+                ..
+            } => self.tested(types, *typ, pat, *enumerate, span),
             Coll::ProviderType {
-                typ,
                 names,
                 var,
                 enumerate,
-            } => self.tested((PROVIDER_TYPE, typ, names), *var, pat, *enumerate, span),
+                ..
+            } => self.tested(names, *var, pat, *enumerate, span),
             Coll::World(t) => {
                 let args = vec![str_term(t), self.pattern(pat)];
                 vec![Lit::Pos(self.put(atom("cloud_exists", args, span)))]
@@ -404,21 +404,24 @@ impl Lowering<'_> {
         self.helpers.push(Stmt::Fact(a));
     }
 
-    /// A membership of a set `pred` states the rows of, `pred(key, x)` for
-    /// each of `rows`: the test of `term`, then its enumeration.
+    /// A membership of the set of types `types` (a namespace's, the names
+    /// of a provider's type): the test of `term`, `member([types], T)`,
+    /// then its enumeration.
     fn tested(
         &mut self,
-        (pred, key, rows): (&str, &str, &[String]),
+        types: &[String],
         term: ExprId,
         pat: PatternId,
         enumerate: bool,
         span: crate::ast::Span,
     ) -> Vec<Lit> {
-        for r in rows {
-            self.state(pred, vec![str_term(key), str_term(r)], span);
-        }
+        let types = types.iter().cloned().map(Value::Str).collect();
         let t = self.expr(term);
-        let test = self.put(internal_atom(pred, vec![str_term(key), t.clone()], span));
+        let test = self.put(atom(
+            "member",
+            vec![Term::Val(Value::List(types)), t.clone()],
+            span,
+        ));
         self.enumerate(test, t, pat, enumerate, span)
     }
 
@@ -559,8 +562,6 @@ impl Lowering<'_> {
 
 /// The relations a membership states facts of beside it.
 const ENUM: &str = "__enum";
-const NAMESPACE: &str = "__namespace";
-const PROVIDER_TYPE: &str = "__provider_type";
 
 fn compare(op: CmpOp, a: Term, b: Term) -> Lit {
     match op {

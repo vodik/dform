@@ -643,18 +643,18 @@ pub enum Coll {
     /// type is a term: a variable for `x in resource`, or the one a typed
     /// variable already holds.
     Type(ExprId),
-    /// A provider namespace's resources (R-49): the fact `__namespace(ns,
-    /// t)` per type of it, the test `__namespace(ns, Type)`, then
-    /// `want(Type, x)` unless `x` is bound already.
+    /// A provider namespace's resources (R-49): the test `member([t, ..],
+    /// Type)` over the namespace's types, then `want(Type, x)` unless `x`
+    /// is bound already.
     Namespace {
         ns: Name,
         types: Vec<Name>,
         typ: ExprId,
         enumerate: bool,
     },
-    /// A provider's type a `use .. as` also names (R-115): the fact
-    /// `__provider_type(typ, n)` per name, the test `__provider_type(typ,
-    /// Type)`, then `want(Type, x)` unless `x` is bound already.
+    /// A provider's type a `use .. as` also names (R-115): the test
+    /// `member([n, ..], Type)` over its names, then `want(Type, x)` unless
+    /// `x` is bound already.
     ProviderType {
         typ: Name,
         names: Vec<Name>,

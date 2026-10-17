@@ -1075,13 +1075,11 @@ fn any_types(
     r: &crate::ast::RuleStmt,
     path: &str,
 ) -> std::collections::BTreeSet<String> {
-    let namespace = r.body.iter().find_map(|l| match l {
-        Lit::Pos(a)
-            if a.pred.as_internal() == Some("__namespace")
-                && a.args.get(1) == Some(&r.head.args[0]) =>
-        {
+    // A namespace's test lists its types (R-49).
+    let listed = r.body.iter().find_map(|l| match l {
+        Lit::Pos(a) if a.pred == "member" && a.args.get(1) == Some(&r.head.args[0]) => {
             match a.args.first() {
-                Some(Term::Val(Value::Str(ns))) => Some(format!("{ns}.")),
+                Some(Term::Val(Value::List(types))) => Some(types),
                 _ => None,
             }
         }
@@ -1093,11 +1091,7 @@ fn any_types(
         .keys()
         .filter(|(_, p)| p == path || p.starts_with(&under))
         .map(|(t, _)| t.clone())
-        .filter(|t| {
-            namespace
-                .as_ref()
-                .is_none_or(|ns| t.starts_with(ns.as_str()))
-        })
+        .filter(|t| listed.is_none_or(|types| types.iter().any(|x| x.as_str() == Some(t))))
         .collect()
 }
 

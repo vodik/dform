@@ -847,7 +847,7 @@ pub fn compile(program: &Program, given: &[Atom]) -> Result<Compiled> {
     // other key (`per_path`), kept when that stratifies, alone or with
     // R-116's.
     if let Verdict::Rejected { .. } = stratify(&graph) {
-        let typed = per_type(&rules, &facts, &graph);
+        let typed = per_type(&rules, &graph);
         let pathed = per_path(&rules, &schema);
         let both = typed.as_deref().and_then(|t| per_path(t, &schema));
         for expanded in [typed, pathed, both].into_iter().flatten() {
@@ -910,25 +910,21 @@ fn stratified(
     graph
 }
 
-/// The namespace test `r in NS` lowers to (R-49, the resolver's
-/// `NAMESPACE`): `__namespace(NS, T)`, a fact per type of the namespace.
-const NAMESPACE: &str = "__namespace";
-
 /// `rules` with each contribution whose type is a variable written once
 /// per concrete type it can be (R-116): the type substituted through the
 /// whole rule, so `(arg, k8s.deployment, metadata)` and `(arg,
 /// k8s.namespace, metadata)` are apart and each copy reads its own type's
 /// resources. The types a variable can be are what its positive body
-/// literals allow: `__namespace(NS, T)` the namespace's types; `want(T,
-/// A)` (or another type-keyed relation) the types `graph` defines it for,
-/// when no rule defines it for a type that is not constant. `None` when no
-/// rule is expanded.
-fn per_type(rules: &[RuleStmt], facts: &[Atom], graph: &Graph) -> Option<Vec<RuleStmt>> {
+/// literals allow: `member([t, ..], T)` the types listed (a namespace's,
+/// R-49); `want(T, A)` (or another type-keyed relation) the types `graph`
+/// defines it for, when no rule defines it for a type that is not
+/// constant. `None` when no rule is expanded.
+fn per_type(rules: &[RuleStmt], graph: &Graph) -> Option<Vec<RuleStmt>> {
     let mut out = Vec::with_capacity(rules.len());
     let mut any = false;
     for r in rules {
         let types = match (contrib_node(&r.head), r.head.args.first()) {
-            (Some(_), Some(Term::Var(t))) => types_of(t, r, facts, graph),
+            (Some(_), Some(Term::Var(t))) => types_of(t, r, graph),
             _ => None,
         };
         let (Some(types), Some(Term::Var(t))) = (types, r.head.args.first()) else {
@@ -1088,24 +1084,18 @@ fn per_key(r: &RuleStmt, vb: &ValueBody, schema: &Schema) -> Option<Vec<RuleStmt
 }
 
 /// The concrete types the variable `t` can be in `r` ([`per_type`]).
-fn types_of(t: &str, r: &RuleStmt, facts: &[Atom], graph: &Graph) -> Option<BTreeSet<String>> {
+fn types_of(t: &str, r: &RuleStmt, graph: &Graph) -> Option<BTreeSet<String>> {
     let is_t = |x: &Term| matches!(x, Term::Var(v) if v == t);
     let mut out: Option<BTreeSet<String>> = None;
     for l in &r.body {
         let Lit::Pos(a) = l else { continue };
         let allowed: Option<BTreeSet<String>> = match a.args.as_slice() {
-            [Term::Val(Value::Str(ns)), x]
-                if a.pred.as_internal() == Some(NAMESPACE) && is_t(x) =>
-            {
-                Some(
-                    facts
-                        .iter()
-                        .filter(|f| f.pred.as_internal() == Some(NAMESPACE))
-                        .filter(|f| f.args[0].as_str() == Some(ns))
-                        .filter_map(|f| const_str(&f.args[1]))
-                        .collect(),
-                )
-            }
+            [Term::Val(Value::List(types)), x] if a.pred == "member" && is_t(x) => Some(
+                types
+                    .iter()
+                    .filter_map(|t| t.as_str().map(str::to_string))
+                    .collect(),
+            ),
             [x, ..] if type_keyed(&a.pred) && is_t(x) => {
                 let defs = graph.nodes.iter().filter(|n| n.pred == a.pred);
                 let mut types = BTreeSet::new();
