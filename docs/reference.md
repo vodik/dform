@@ -143,11 +143,17 @@ edition = "2026"                                 # the language edition: require
 dform = ">=0.1"
 
 [providers]
-aws = { source = "aws-mock", version = "2.1" }   # `use aws` in a program
 google = { source = "providers/gcp" }            # a path under the root
-k8s = { source = "k8s", timeout = "2m" }         # each call's timeout (60s by default); `wait`, a tick's on "not yet" (10m)
 ovh = { timeout = "10m" }                        # dform-provider-ovh, as "Installing" finds it
 lab = { path = "~/src/lab/target/debug/dform-provider-lab" }   # else at its path
+
+[providers.aws]                                  # `use aws` in a program
+source = "aws-mock"
+version = "2.1"
+
+[providers.k8s]
+source = "k8s"
+timeout = "2m"                                   # 60s by default; `wait`, a tick's on "not yet" (10m)
 
 [apply]
 wait = "10m"                         # how long a tick waits on a value not reached yet (the default)
@@ -3933,8 +3939,11 @@ makes) stops the tick at once, as `nothing definite to apply, still
 waiting on ...`. Every wait is a `wait` entry in the audit log.
 
 ```toml
-[providers]
-aws = { source = "aws", timeout = "2m", retries = 8, backoff = "500ms" }
+[providers.aws]
+source = "aws"
+timeout = "2m"
+retries = 8
+backoff = "500ms"
 
 [io]
 wait = "20m"      # how long a tick waits on a location not there yet (a host that boots; 10m by default)
