@@ -1743,14 +1743,16 @@ impl Located {
     }
 
     /// Other stacks' published outputs: each deployment the program names,
-    /// of the project (every registered one, when it names one by a
-    /// variable) or of a remote, through its backend (`s3`).
+    /// its own key's values put in a name made of them (`platform[env]`
+    /// of `apps[env=prod]` is `platform[env=prod]`), of the project (every
+    /// registered one, when it names one otherwise) or of a remote,
+    /// through its backend (`s3`).
     pub fn read_outputs(&self, s3: OpenS3) -> Result<Vec<stack::Read>> {
-        let (named, any_name) = self
+        let (named, any) = self
             .loaded
             .lowered
             .as_ref()
-            .map(|l| stack::named_outputs(&l.program, &self.loaded.deployed))
+            .map(|l| stack::reads(&l.program, &self.loaded.deployed, &self.instance.key))
             .unwrap_or_default();
         let remotes = self
             .loaded
@@ -1761,7 +1763,7 @@ impl Located {
         stack::stack_outputs(
             &self.root,
             &self.deployment,
-            (!any_name).then_some(&named),
+            any.is_empty().then_some(&named),
             &remotes,
             s3,
         )

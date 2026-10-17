@@ -2118,37 +2118,6 @@ fn deployment_read<'a>(a: &'a Atom, deployed: &[Deployed]) -> Option<&'a Term> {
     }
 }
 
-/// The deployments a program reads (a keyed read of one of the stacks
-/// `deployed`) with a constant name, and whether one names it otherwise (a
-/// variable: it may read any).
-pub fn named_outputs(
-    program: &Program,
-    deployed: &[Deployed],
-) -> (std::collections::BTreeSet<String>, bool) {
-    let mut named = std::collections::BTreeSet::new();
-    let mut any = false;
-    for s in &program.statements {
-        let body = match s {
-            Stmt::Rule(r) => &r.body[..],
-            Stmt::Resource(r) => r.body.as_deref().unwrap_or_default(),
-            _ => continue,
-        };
-        for l in body {
-            if let crate::ast::Lit::Pos(a) | crate::ast::Lit::Not(a) = l
-                && let Some(n) = deployment_read(a, deployed)
-            {
-                match n {
-                    Term::Val(Value::Str(n)) => {
-                        named.insert(n.clone());
-                    }
-                    _ => any = true,
-                }
-            }
-        }
-    }
-    (named, any)
-}
-
 /// The deployments of other stacks the deployment keyed by `key` reads (a
 /// keyed read of one of the stacks `deployed`): a name written out, or
 /// interpolated from the stack's own key inputs (`platform[env=env]`); `key`

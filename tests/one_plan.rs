@@ -211,16 +211,11 @@ fn a_trees_plan_file_has_a_section_per_deployment() {
     assert!(at(2).contains("net.subnet[\\\"inside\\\"]"), "{ticks}");
 }
 
-/// A reader in the tree needs no master to read a sealed output of a
-/// deployment in it: the value is the producer's plan's, in memory
-/// (never printed, never written). Without any master the reader's
-/// provider is configured from the kubeconfig the producer read, and its
-/// objects plan in tick 1; what only the producer's master derives (a
-/// `random.password`) stays the producer's stand-in, and what reads it
-/// waits.
-#[test]
-fn a_reader_in_the_tree_reads_a_sealed_output_without_its_master() {
-    let s = Scratch::project("one-plan-masters");
+/// Platform, whose kubeconfig is a secret output it reads from a file of
+/// its env's, and apps, whose provider is configured from it; the master
+/// is the passphrase in `DFORM_TEST_PASSPHRASE`.
+fn sealed_project(name: &str) -> Scratch {
+    let s = Scratch::project(name);
     s.write(
         "dform.toml",
         "[project]\nedition = \"2026\"\n\n[providers]\nfake = \"fake\"\nk8s = \"k8s\"\n\n\
@@ -247,6 +242,19 @@ resource k8s.namespace apps { metadata.name = "apps" }
         "kubeconfig-lab.yaml",
         "apiVersion: v1 # KUBECONFIG-SECRET-LAB",
     );
+    s
+}
+
+/// A reader in the tree needs no master to read a sealed output of a
+/// deployment in it: the value is the producer's plan's, in memory
+/// (never printed, never written). Without any master the reader's
+/// provider is configured from the kubeconfig the producer read, and its
+/// objects plan in tick 1; what only the producer's master derives (a
+/// `random.password`) stays the producer's stand-in, and what reads it
+/// waits.
+#[test]
+fn a_reader_in_the_tree_reads_a_sealed_output_without_its_master() {
+    let s = sealed_project("one-plan-masters");
     let out = common::dform()
         .args(["plan", "apps"])
         .current_dir(&s.dir)
@@ -266,4 +274,39 @@ resource k8s.namespace apps { metadata.name = "apps" }
     for out in [&r.stdout, &r.stderr] {
         assert!(!out.contains("KUBECONFIG-SECRET"), "{out}");
     }
+}
+
+/// A reader keyed by env reads its upstream at its own env's value, not
+/// the key's default: planned at env=prod, apps reads platform[env=prod]
+/// (never applied), and says nothing of lab's, whose kubeconfig is not
+/// sealed to it.
+#[test]
+fn a_keyed_reader_reads_its_own_keys_upstream_not_the_defaults() {
+    let s = sealed_project("one-plan-keyed-reader");
+    s.write(
+        "kubeconfig-prod.yaml",
+        "apiVersion: v1 # KUBECONFIG-SECRET-PROD",
+    );
+    let run = |args: &[&str]| {
+        let out = common::dform()
+            .args(args)
+            .current_dir(&s.dir)
+            .env("NO_COLOR", "1")
+            .env("DFORM_K8S_OFFLINE", "1")
+            .env("DFORM_TEST_PASSPHRASE", "one-plan")
+            .output()
+            .unwrap();
+        Run::from(out).success()
+    };
+    run(&["apply", "platform", "env=lab", "--yes"]);
+    let r = run(&["plan", "apps", "env=prod"]);
+    for out in [&r.stdout, &r.stderr] {
+        assert!(!out.contains("env=lab"), "{out}");
+    }
+    assert!(
+        r.stdout
+            .contains("+ stacks.platform[env=prod]  stacks/platform.df  never applied"),
+        "{}",
+        r.stdout
+    );
 }
