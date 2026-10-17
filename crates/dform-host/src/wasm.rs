@@ -1256,10 +1256,11 @@ impl Trapped {
 
 /// The span of a call's run in the component, `provider.export`: the
 /// server's side of its `provider.call` (the call's trace number), under
-/// it and named as it is, so a trace's client and server spans of one
-/// call read alike, the export's WIT name a field; its status the
-/// answer's ([`Instance::one`]), a trap its error ([`Trapped::record`]).
-/// None when the call is not traced.
+/// it and named as it is, in the provider (`k8s Plan (in the
+/// provider)`), so a reader tells the call's wait from its run, the
+/// export's WIT name a field; its status the answer's
+/// ([`Instance::one`]), a trap its error ([`Trapped::record`]). None when
+/// the call is not traced.
 fn export_span(who: &str, call: &Submitted) -> tracing::Span {
     let Some(parent) = call.number.and_then(timed::call_span) else {
         return tracing::Span::none();
@@ -1269,7 +1270,7 @@ fn export_span(who: &str, call: &Submitted) -> tracing::Span {
         target: dform_core::timing::TARGET,
         parent: &parent,
         "provider.export",
-        otel.name = %timed::call_name(who, kind),
+        otel.name = %format_args!("{} (in the provider)", timed::call_name(who, kind)),
         otel.kind = "server",
         otel.status_code = tracing::field::Empty,
         export = %format_args!("{EXPORTS}#{}", kind.to_lowercase()),

@@ -659,8 +659,8 @@ fn k8s_component() -> String {
     )
 }
 
-/// Each `io.call` span of a trace by its parent's name (the call it is
-/// made for) and its own, and each `ratelimit.wait` span by the call of
+/// Each `io.call` span of a trace by the name of the call it is made for
+/// and its own, and each `ratelimit.wait` span by the call of
 /// the request that waited, counted: which of a call's requests sent
 /// together wait is the order they reach the host in. Each request's
 /// bucket and each wait's session filled.
@@ -689,11 +689,17 @@ fn under_calls(spans: &[serde_json::Value]) -> std::collections::BTreeMap<(Strin
         if wait {
             assert_ne!(common::attr(sp, "session").as_deref(), Some("0"), "{sp}");
         }
-        // A wait under the request that waited is by that request's call.
-        let under = match parent(sp) {
+        // A wait under the request that waited is by that request's call;
+        // a component's request, under its call's export, by the call.
+        let mut under = match parent(sp) {
             Some(p) if wait && is_request(p) => parent(p),
             p => p,
         };
+        if let Some(p) = under
+            && p["kind"] == 2
+        {
+            under = parent(p);
+        }
         let call = under.and_then(|p| p["name"].as_str()).unwrap_or("(none)");
         *out.entry((call.to_string(), name.to_string())).or_insert(0) += 1;
     }

@@ -104,8 +104,9 @@ pub fn call_span(number: u64) -> Option<tracing::Span> {
 }
 
 /// What a call of `kind` to `provider` is named in a trace: `ovh Read`.
-/// Its `provider.call` and, for a component, the `provider.export` that
-/// serves it read alike, a client's and a server's span of one call.
+/// For a component, the `provider.export` that serves it is the same
+/// name in the provider (`ovh Read (in the provider)`), a client's and a
+/// server's span of one call.
 pub fn call_name(provider: &str, kind: &str) -> String {
     format!("{} {kind}", short(provider))
 }

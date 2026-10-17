@@ -2,8 +2,9 @@
 //! `wasm.compile`, `wasm.link` and `wasm.instantiate` under the
 //! provider's start, which ends once it is started; each call's export is
 //! a server span, `provider.export`, under the call's `provider.call`,
-//! named as it is, its WIT name a field and a trap its error; the
-//! requests the component sends through the host are under its export.
+//! named as it is in the provider (`fakecloud Plan (in the provider)`),
+//! its WIT name a field and a trap its error; the requests the component
+//! sends through the host are under its export.
 //!
 //! The components are built apart, as for tests/host_wasm.rs:
 //!
@@ -118,6 +119,12 @@ impl<'a> Tree<'a> {
     }
 }
 
+/// What the export of the call `call` is named: the call's name, in the
+/// provider.
+fn in_the_provider(call: &Json) -> String {
+    format!("{} (in the provider)", call["name"].as_str().unwrap())
+}
+
 fn time(s: &Json, k: &str) -> u128 {
     s[k].as_str().unwrap().parse().unwrap()
 }
@@ -126,8 +133,8 @@ fn time(s: &Json, k: &str) -> u128 {
 /// the cache), linked and instantiated under the provider's start, which
 /// ends before the deployment is evaluated (it was the run's whole length
 /// while the instance's thread stayed in it); every call is a client
-/// span with one server span under it, named alike, its export's WIT name
-/// a field, its status the answer's.
+/// span with one server span under it, named as it is in the provider,
+/// its export's WIT name a field, its status the answer's.
 #[test]
 fn a_plan_on_the_fake_component_traces_its_start_and_each_export() {
     let s = Scratch::new("host-trace-plan");
@@ -169,15 +176,15 @@ fn a_plan_on_the_fake_component_traces_its_start_and_each_export() {
         ),
         "{compiled}"
     );
-    // Every call has its export under it, named as it is; nothing else
-    // is a server span.
+    // Every call has its export under it, named as it is in the
+    // provider; nothing else is a server span.
     for s in &spans {
         let Some(parent) = tree.parent(s) else {
             continue;
         };
         if s["kind"] == 2 {
             assert_eq!(parent["kind"], 3, "{s}");
-            assert_eq!(parent["name"], s["name"], "{s}");
+            assert_eq!(s["name"], in_the_provider(parent), "{s}");
             assert_eq!(s["status"]["code"], 1, "{s}");
         }
     }
@@ -224,9 +231,9 @@ fn a_trap_is_its_exports_error() {
 /// The OVH provider as a component: each request it sends through the
 /// host is under its call's export (and so is its signer's fetch of the
 /// API's clock, made as the Configure opens the keys), which is under the
-/// call and named as it is, so a trace read by names (tests/host_wasm.rs's
-/// parity with the native build) reads as the native provider's, the
-/// request under its call's name.
+/// call and named as it is in the provider, so a trace read by its calls
+/// (tests/host_wasm.rs's parity with the native build) reads as the
+/// native provider's, the request under its call.
 #[test]
 fn the_ovh_components_requests_are_under_its_exports() {
     use dform_provider_ovh::fake::{self, Server};
@@ -285,7 +292,7 @@ fn the_ovh_components_requests_are_under_its_exports() {
         assert_eq!(export["kind"], 2, "{r} under {export}");
         let call = tree.parent(export).unwrap();
         assert_eq!(call["kind"], 3, "{export} under {call}");
-        assert_eq!(call["name"], export["name"]);
+        assert_eq!(export["name"], in_the_provider(call));
     }
     let edges = tree.edges();
     assert!(
