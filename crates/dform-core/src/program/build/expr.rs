@@ -17,72 +17,24 @@
 //! | any other `f(..)`                        | `Call` of the function, or of a name read as data |
 
 use super::Builder;
-use crate::ast::TypeExpr;
 use crate::program::node::*;
 use crate::value::Value;
 
 impl Builder<'_> {
     /// `name(args)` of the nodes `args`: the form of the language the
-    /// lowering writes it as (an operator, an interpolation, a spread, a
-    /// range, a typing, a path, a reference), else a call of the function
-    /// the standard library or the lowering declares, or of a name read as
-    /// data.
+    /// resolver writes it as (an interpolation, a reference), else a call
+    /// of the function the standard library or the lowering declares, or
+    /// of a name read as data. The resolver builds every other form's node
+    /// itself (an operator, a spread, a range, a typing, a field).
     pub fn form(&mut self, name: &str, args: Vec<ExprId>) -> ExprId {
-        use crate::address::{FORMAT, LEN, REF};
-        use crate::functions::{CONCAT, MERGE, OBJECT};
+        use crate::address::{FORMAT, REF};
         let kind = match (name, args.as_slice()) {
-            ("sub", [zero, a]) if self.constant(*zero) == Some(&Value::Int(0)) => ExprKind::Neg(*a),
-            (_, [a, b]) if let Ok(op) = BinOp::try_from(name) => ExprKind::Binary {
-                op,
-                lhs: *a,
-                rhs: *b,
-            },
             (FORMAT, [f, holes @ ..])
                 if let Some(Value::Str(f)) = self.constant(*f)
                     && f.matches("%s").count() == holes.len() =>
             {
                 interp(&f.clone(), holes)
             }
-            (MERGE, parts) => return self.merge(parts),
-            (CONCAT, parts) => return self.concat(parts),
-            (OBJECT, pairs) if pairs.len() % 2 == 0 => return self.computed(pairs),
-            (crate::range::LOWERED, [lo, hi, incl])
-                if let Some(Value::Bool(inclusive)) = self.constant(*incl) =>
-            {
-                ExprKind::Range {
-                    lo: *lo,
-                    hi: *hi,
-                    inclusive: *inclusive,
-                }
-            }
-            (crate::types::AS, [v, ty]) if let Some(Value::Str(ty)) = self.constant(*ty) => {
-                ExprKind::As {
-                    value: *v,
-                    ty: TypeExpr::Name(ty.clone()),
-                }
-            }
-            (crate::types::AMBIGUOUS, [text, file, start, end])
-                if let Some(Value::Str(text)) = self.constant(*text)
-                    && let (Some(file), Some(start), Some(end)) =
-                        (self.index(*file), self.index(*start), self.index(*end)) =>
-            {
-                let span = crate::ast::Span {
-                    file,
-                    start,
-                    end,
-                    origin: 0,
-                };
-                let text = text.clone();
-                return self.at(span, |b| b.expr_node(ExprKind::Quantity { text }));
-            }
-            (LEN, [v]) => ExprKind::Field {
-                base: *v,
-                path: vec![Step::Len],
-            },
-            ("__path", [v, p]) if let Some(Value::Str(p)) = self.constant(*p) => ExprKind::Field {
-                base: *v,
-                path: self.fields(&p.clone()),
-            },
             (REF, [typ, addr, p])
                 if let (Some(Value::Str(typ)), Some(Value::Str(p))) =
                     (self.constant(*typ), self.constant(*p)) =>
@@ -309,14 +261,6 @@ impl Builder<'_> {
         }
     }
 
-    /// The constant `u32` node `id` is: a quantity's place.
-    fn index(&self, id: ExprId) -> Option<u32> {
-        match self.constant(id) {
-            Some(Value::Int(i)) => u32::try_from(*i).ok(),
-            _ => None,
-        }
-    }
-
     /// A stored path, `a."b.c".d`, as a field step per segment, each as
     /// the path stores it (quoted, with its index suffix).
     pub(super) fn fields(&self, p: &str) -> Vec<Step> {
@@ -361,22 +305,11 @@ mod tests {
         let int = |b: &mut Builder, i| b.lit(Value::Int(i));
         let s = |b: &mut Builder, t: &str| b.lit(Value::Str(t.into()));
         let one = int(&mut b, 1);
-        let zero = int(&mut b, 0);
-        let yes = b.lit(Value::Bool(true));
         let fmt = s(&mut b, "a%sb");
-        let ty = s(&mut b, "int");
         let typ = s(&mut b, "net.vpc");
         let empty = s(&mut b, "");
         let cases = [
-            ("add", vec![x, one], "Binary"),
-            ("sub", vec![zero, x], "Neg"),
             ("str.format", vec![fmt, x], "Interp"),
-            ("__merge", vec![x], "Object"),
-            ("__concat", vec![x], "List"),
-            ("__object", vec![fmt, one], "Object"),
-            ("__range", vec![zero, x, yes], "Range"),
-            ("__as", vec![x, ty], "As"),
-            ("__len", vec![x], "Field"),
             ("__ref", vec![typ, x, empty], "RefOf"),
             ("inet.subnet", vec![x, one, one], "Call"),
         ];
@@ -386,8 +319,11 @@ mod tests {
             assert!(got.starts_with(kind), "{name}: {got}");
         }
         let quoted = s(&mut b, "a.\"b.c\"");
-        let id = b.form("__path", vec![x, quoted]);
-        let ExprKind::Field { path, .. } = &b.program.exprs[id].kind else {
+        let id = b.form("__ref", vec![typ, x, quoted]);
+        let ExprKind::RefOf(res) = &b.program.exprs[id].kind else {
+            panic!("not a reference");
+        };
+        let ExprKind::Field { path, .. } = &b.program.exprs[*res].kind else {
             panic!("not a field");
         };
         assert_eq!(path.len(), 2, "a quoted segment is one step");

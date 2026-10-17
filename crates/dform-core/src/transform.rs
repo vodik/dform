@@ -700,10 +700,10 @@ fn desugar_comprehensions(program: &Program) -> Result<Program> {
 }
 
 fn rewrite_rule_listcomps(mut r: RuleStmt, counter: &mut usize) -> Result<(Vec<Stmt>, RuleStmt)> {
-    let mut counts_all = count_vars_in_term(&Term::Func {
-        name: "__head".to_string(),
-        args: r.head.args.clone(),
-    });
+    let mut counts_all = BTreeMap::new();
+    for a in &r.head.args {
+        count_vars_in_term_into(a, &mut counts_all);
+    }
     merge_counts(&mut counts_all, &count_vars_in_lits(&r.body));
     let mut c = Comprehensions {
         counts_all,

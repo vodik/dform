@@ -28,7 +28,6 @@ mod pattern;
 mod providers;
 mod resources;
 mod rules;
-mod spread;
 
 pub use aggregate::{Column, fold_numbers, folds, grouped, number_folds};
 pub use checks::CheckLowered;

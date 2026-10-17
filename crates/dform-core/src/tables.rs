@@ -1346,7 +1346,9 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
                 let leaf = read
                     .as_ref()
                     .map_or(v.clone(), |(parsed, _)| parsed.clone());
-                let entry = format!("{v}__entry");
+                // The compiler's own variable (`__V_entry`): no binding a
+                // message shows.
+                let entry = format!("__{v}_entry");
                 let [under, at] = crate::inputs::map_entry_lits(
                     &Term::Var(p.clone()),
                     path,
