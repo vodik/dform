@@ -41,6 +41,7 @@ use anyhow::Result;
 use std::collections::BTreeMap;
 
 mod reads;
+mod writes;
 
 /// The internal function a quantity literal with no reading of its own
 /// lowers to (`500m`, `2.5m`): the position's type reads it.
@@ -1951,6 +1952,7 @@ pub fn readings(program: &prog::Program, schema: &Schema) -> Read {
     };
     r.items(&program.roots);
     r.diags.extend(reads::undeclared(program, schema));
+    r.diags.extend(writes::undeclared(program, schema));
     let edges = crate::edges::read_nodes(program, schema);
     r.read.extend(edges.readings);
     r.diags.extend(edges.diags);
