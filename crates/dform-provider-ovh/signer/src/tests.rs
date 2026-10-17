@@ -54,7 +54,7 @@ fn the_environment_signs_at_the_apis_time() {
         (s("OVH_CONSUMER_KEY"), s(CONSUMER)),
         (s("OVH_ENDPOINT"), s("ovh-eu")),
     ]);
-    let mut got = vec![Got::Given(Vec::new()), env, Got::File(None)];
+    let mut got = vec![Got::Given(Vec::new()), env];
     let Ok(Outcome::More(more)) = Ovh.step(&got) else {
         panic!("the clock is asked")
     };
@@ -100,7 +100,7 @@ fn the_environment_signs_at_the_apis_time() {
     );
 }
 
-/// No key in the environment: `~/.ovh.conf` as OVH's clients read it, the
+/// No key in the environment: an `ovh.conf` as OVH's clients read it, the
 /// section `[default] endpoint` names (or `OVH_ENDPOINT`), or a section's
 /// three lines alone (the operator's own file); what is missing named.
 #[test]
@@ -125,27 +125,27 @@ fn the_file_is_read_as_ovhs_clients_read_it() {
     let got = [
         Got::Given(Vec::new()),
         Got::Env(Vec::new()),
+        Got::File(None),
+        Got::File(None),
         Got::File(Some(lines.to_vec())),
+        Got::File(None),
     ];
     assert!(matches!(Ovh.step(&got), Ok(Outcome::Material(_))));
     let e = Keys::of_file(b"[default]\nendpoint=ovh-ca\n", None).unwrap_err();
     assert_eq!(e, "it has no section [ovh-ca]");
     let e = Keys::of_file(b"[ovh-ca]\napplication_key=a\n", Some(s("ovh-ca"))).unwrap_err();
     assert_eq!(e, "no application_secret in [ovh-ca]");
-    let none = [
-        Got::Given(Vec::new()),
-        Got::Env(Vec::new()),
-        Got::File(None),
-    ];
+    let mut none = vec![Got::Given(Vec::new()), Got::Env(Vec::new())];
+    none.extend([(); 4].map(|_| Got::File(None)));
     assert_eq!(
         Ovh.step(&none).unwrap_err(),
         "no OVH keys: neither OVH_APPLICATION_KEY, OVH_APPLICATION_SECRET and OVH_CONSUMER_KEY \
-         in the environment nor ~/.ovh.conf"
+         in the environment nor an ovh.conf (./ovh.conf, ~/.config/ovh/ovh.conf, ~/.ovh.conf, \
+         /etc/ovh.conf)"
     );
     let half = [
         Got::Given(Vec::new()),
         Got::Env(vec![(s("OVH_APPLICATION_KEY"), s("a"))]),
-        Got::File(None),
     ];
     assert_eq!(
         Ovh.step(&half).unwrap_err(),
@@ -154,8 +154,7 @@ fn the_file_is_read_as_ovhs_clients_read_it() {
 }
 
 /// The grant's value (the operator's file, a program's setting) is the
-/// keys, and nothing else is asked; without one, the environment and
-/// `~/.ovh.conf` are.
+/// keys, and nothing else is asked; without one, the environment is.
 #[test]
 fn the_grants_value_is_the_keys() {
     assert_eq!(Ovh.needs().unwrap(), [Need::Given]);
@@ -168,10 +167,48 @@ fn the_grants_value_is_the_keys() {
     let Ok(Outcome::More(more)) = Ovh.step(&[Got::Given(Vec::new())]) else {
         panic!("the environment is asked")
     };
-    assert_eq!(more[1], Need::File(s("~/.ovh.conf")));
+    assert!(matches!(&more[..], [Need::Env(vars)] if vars.contains(&s("XDG_CONFIG_HOME"))));
     let two = [Got::Given(vec![(s("a"), Vec::new()), (s("b"), Vec::new())])];
     assert_eq!(
         Ovh.step(&two).unwrap_err(),
         "the grant gives 2 values, and the OVH keys are one ovh.conf"
+    );
+}
+
+/// With no key in the environment, the files python-ovh reads, in its
+/// order (`XDG_CONFIG_HOME`'s, else `~/.config`'s): the first there is
+/// is the keys.
+#[test]
+fn the_first_ovh_conf_there_is_is_read() {
+    let keys = |k: &str| format!("application_key={k}\napplication_secret=b\nconsumer_key=c\n");
+    let env = Got::Env(vec![(s("XDG_CONFIG_HOME"), s("/x"))]);
+    let Ok(Outcome::More(more)) = Ovh.step(&[Got::Given(Vec::new()), env.clone()]) else {
+        panic!("the files are asked")
+    };
+    assert_eq!(
+        more,
+        [
+            "./ovh.conf",
+            "/x/ovh/ovh.conf",
+            "~/.ovh.conf",
+            "/etc/ovh.conf"
+        ]
+        .map(|f| Need::File(s(f)))
+    );
+    assert_eq!(conf_files(&[])[1], "~/.config/ovh/ovh.conf");
+    let got = [
+        Got::Given(Vec::new()),
+        env,
+        Got::File(None),
+        Got::File(Some(keys("xdg").into_bytes())),
+        Got::File(Some(keys("home").into_bytes())),
+        Got::File(Some(keys("etc").into_bytes())),
+    ];
+    let Ok(Outcome::Material(m)) = Ovh.step(&got) else {
+        panic!("the material")
+    };
+    assert_eq!(
+        Keys::of_material(&m).unwrap().0.get("application_key"),
+        "xdg"
     );
 }

@@ -515,7 +515,8 @@ another directory), or `KIND:environment`, the environment's of a kind
 that has one (`kubeconfig:environment`: `KUBECONFIG`'s files, else
 `~/.kube/config`, else a pod's service account, read by dform;
 `signed:environment`: the variables the provider's signer names, else
-the file it names, OVH's `OVH_APPLICATION_KEY` .. else `~/.ovh.conf`).
+the files it names, OVH's `OVH_APPLICATION_KEY` .. else the first
+`ovh.conf` where python-ovh looks).
 A provider is told, in
 each Configure's `credentials`, the one dform.toml grants it of each kind
 (`[providers.ovh] credentials = ["signed:lab"]`:

@@ -69,13 +69,16 @@ never has them. dform.toml grants them by name, a `signed` credential
 
 ```toml
 [providers.ovh]
-credentials = ["signed:environment"]   # OVH_APPLICATION_KEY, .._SECRET, OVH_CONSUMER_KEY, OVH_ENDPOINT, else ~/.ovh.conf
+credentials = ["signed:environment"]   # OVH_APPLICATION_KEY, .._SECRET, OVH_CONSUMER_KEY, OVH_ENDPOINT, else an ovh.conf
 # or ["signed:lab"]: the file ~/.config/dform/credentials/signed/lab
 ```
 
 `signed:environment` is the environment's `OVH_APPLICATION_KEY`,
 `OVH_APPLICATION_SECRET` and `OVH_CONSUMER_KEY` (and `OVH_ENDPOINT`),
-and, with none of them set, `~/.ovh.conf` as OVH's own clients read it
+and, with none of them set, the first `ovh.conf` there is where
+python-ovh looks (`./ovh.conf`, `$XDG_CONFIG_HOME/ovh/ovh.conf`,
+`~/.config/ovh/ovh.conf` when `XDG_CONFIG_HOME` is not set,
+`~/.ovh.conf`, `/etc/ovh.conf`), read as OVH's own clients read it
 (python-ovh, the ovhcloud CLI, the Terraform provider): the section its
 `[default] endpoint` names. The operator's file is an `ovh.conf`, or a
 section's lines alone:

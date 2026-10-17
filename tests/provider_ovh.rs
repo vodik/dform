@@ -483,8 +483,9 @@ fn a_records_target_changes_in_place() {
 /// The keys the provider's signer signs with are the operator's file
 /// where dform.toml grants it (`signed:lab`, an ovh.conf section's lines
 /// under `DFORM_CREDENTIALS`), or, `signed:environment` with no `OVH_*`
-/// variable set, `~/.ovh.conf` as OVH's own clients read it (a scratch
-/// HOME's), never the provider's: without a grant, the keys in the
+/// variable set, the first ovh.conf where OVH's own clients look, read as
+/// they read it (a scratch HOME's `~/.ovh.conf`, then
+/// `$XDG_CONFIG_HOME/ovh/ovh.conf` before it), never the provider's: without a grant, the keys in the
 /// working directory's ovh.conf are named with how to grant them, and
 /// nothing is sent.
 #[test]
@@ -550,6 +551,28 @@ fn the_operators_keys_sign_where_dform_toml_grants_them() {
     );
     apply(&s).success();
     assert!(server.keys().is_empty(), "{:?}", server.keys());
+    // `$XDG_CONFIG_HOME/ovh/ovh.conf` before `~/.ovh.conf`, as python-ovh
+    // reads them: the home's keys are not the server's now.
+    s.write(
+        "config/ovh/ovh.conf",
+        &format!("[default]\nendpoint={e}\n\n[{e}]\n{keys}"),
+    );
+    s.write(
+        "home/.ovh.conf",
+        &format!(
+            "[default]\nendpoint={e}\n\n[{e}]\n{}",
+            keys.replace("consumer_key=", "consumer_key=x")
+        ),
+    );
+    s.write(
+        "main.df",
+        &format!(
+            "use ovh {{ endpoint = \"{e}\", project = \"lab\" }}\n\
+             resource ovh.ssh_key k {{ name = \"k\", public_key = \"ssh-ed25519 A\" }}\n"
+        ),
+    );
+    apply(&s).success();
+    assert_eq!(names(&server.keys()), ["k"]);
     // Ungranted, the keys of an ovh.conf are named, and how to grant them.
     s.write("dform.toml", &toml(""));
     s.write("ovh.conf", &format!("[{e}]\n{keys}"));
@@ -627,7 +650,7 @@ fn a_project_is_found_by_its_description_and_credentials_are_named() {
         r.stderr.contains(
             "provider ovh: the credential signed:environment: no OVH keys: neither \
              OVH_APPLICATION_KEY, OVH_APPLICATION_SECRET and OVH_CONSUMER_KEY in the environment \
-             nor ~/.ovh.conf"
+             nor an ovh.conf (./ovh.conf, "
         ),
         "{}",
         r.stderr

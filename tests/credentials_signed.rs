@@ -165,7 +165,7 @@ mod wasm {
             (s("OVH_CONSUMER_KEY"), s("5mBuy6SUQcRw2ZUxg0cG68BoDKpED4KY")),
             (s("OVH_ENDPOINT"), s("ovh-eu")),
         ]);
-        let mut got = vec![Got::Given(Vec::new()), env, Got::File(None)];
+        let mut got = vec![Got::Given(Vec::new()), env];
         let asked = signer.step(&got);
         assert!(
             matches!(asked, Ok(Outcome::More(ref n)) if n.len() == 1),

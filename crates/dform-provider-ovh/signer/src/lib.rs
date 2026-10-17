@@ -6,9 +6,12 @@
 //! Its material is an application's key and secret and a consumer key,
 //! and the API's clock against the host's: from the environment
 //! (`OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, `OVH_CONSUMER_KEY`,
-//! and `OVH_ENDPOINT`), else from `~/.ovh.conf` as OVH's own clients read
-//! it (python-ovh, the ovhcloud CLI, the Terraform provider: `[default]
-//! endpoint=ovh-ca`, then a section per endpoint), or the operator's file
+//! and `OVH_ENDPOINT`), else from the first `ovh.conf` there is where
+//! python-ovh looks ([`conf_files`]: `./ovh.conf`,
+//! `$XDG_CONFIG_HOME/ovh/ovh.conf`, `~/.ovh.conf`, `/etc/ovh.conf`), read
+//! as OVH's own clients read it (python-ovh, the ovhcloud CLI, the
+//! Terraform provider: `[default] endpoint=ovh-ca`, then a section per
+//! endpoint), or the operator's file
 //! (`signed:NAME`: an `ovh.conf`, or a section's three lines alone). The
 //! endpoint named, its clock is fetched once (`GET ENDPOINT/auth/time`).
 //! A request signed at the API's time `T` carries `X-Ovh-Application`,
@@ -90,8 +93,33 @@ const KEYS: [(&str, &str); 3] = [
 /// Where the endpoint is named in the environment.
 const ENDPOINT: &str = "OVH_ENDPOINT";
 
-/// Where OVH's clients keep the keys.
-const CONF: &str = "~/.ovh.conf";
+/// Where python-ovh looks for `XDG_CONFIG_HOME`'s `ovh/ovh.conf`.
+const XDG: &str = "XDG_CONFIG_HOME";
+
+/// The variables the signer asks: the keys', the endpoint's, and where
+/// the configuration directory is.
+fn vars() -> Vec<String> {
+    let mut vars: Vec<String> = KEYS.iter().map(|(_, var)| var.to_string()).collect();
+    vars.extend([ENDPOINT, XDG].map(String::from));
+    vars
+}
+
+/// The files OVH's clients keep the keys in, in the order python-ovh
+/// looks: the working directory's, `$XDG_CONFIG_HOME/ovh/ovh.conf`
+/// (`~/.config` when the environment names none), the home's, the
+/// machine's. The first there is is read.
+pub fn conf_files(env: &[(String, String)]) -> [String; 4] {
+    let xdg = env
+        .iter()
+        .find(|(n, v)| n == XDG && !v.is_empty())
+        .map_or_else(|| "~/.config".to_string(), |(_, v)| v.clone());
+    [
+        "./ovh.conf".to_string(),
+        format!("{xdg}/ovh/ovh.conf"),
+        "~/.ovh.conf".to_string(),
+        "/etc/ovh.conf".to_string(),
+    ]
+}
 
 /// The OVH provider's signer.
 #[derive(Debug, Clone, Copy, Default)]
@@ -207,22 +235,61 @@ impl Keys {
         }
     }
 
-    /// The environment's keys, else the file's (`~/.ovh.conf`), the
-    /// environment's endpoint before the file's.
-    fn of_environment(env: &[(String, String)], file: &Option<Vec<u8>>) -> Result<Keys, String> {
-        match (Keys::of_env(env)?, file) {
-            (Some(keys), _) => Ok(keys),
-            (None, Some(text)) => {
-                let endpoint = env
-                    .iter()
-                    .find(|(n, _)| n == ENDPOINT)
-                    .map(|(_, v)| v.clone());
-                Keys::of_file(text, endpoint).map_err(|e| format!("{CONF}: {e}"))
+    /// The first file there is of `files` (what [`conf_files`] named got),
+    /// the environment's endpoint before the file's.
+    fn of_conf(env: &[(String, String)], files: &[Got]) -> Result<Keys, String> {
+        let names = conf_files(env);
+        let found = names.iter().zip(files).find_map(|(name, got)| match got {
+            Got::File(Some(text)) => Some((name, text)),
+            _ => None,
+        });
+        let Some((name, text)) = found else {
+            return Err(format!(
+                "no OVH keys: neither {}, {} and {} in the environment nor an ovh.conf ({})",
+                KEYS[0].1,
+                KEYS[1].1,
+                KEYS[2].1,
+                names.join(", ")
+            ));
+        };
+        let endpoint = env
+            .iter()
+            .find(|(n, _)| n == ENDPOINT)
+            .map(|(_, v)| v.clone());
+        Keys::of_file(text, endpoint).map_err(|e| format!("{name}: {e}"))
+    }
+}
+
+/// Where the keys are, once the signer knows: the keys and what was got
+/// after them; else what to ask next.
+enum Found<'a> {
+    Keys(Keys, &'a [Got]),
+    More(Vec<Need>),
+}
+
+impl Found<'_> {
+    /// The keys the grant gives, else the environment's, else the first
+    /// `ovh.conf` there is.
+    fn of(got: &[Got]) -> Result<Found<'_>, String> {
+        match got {
+            [Got::Given(given), rest @ ..] if !given.is_empty() => {
+                Ok(Found::Keys(Keys::of_given(given)?, rest))
             }
-            (None, None) => Err(format!(
-                "no OVH keys: neither {}, {} and {} in the environment nor {CONF}",
-                KEYS[0].1, KEYS[1].1, KEYS[2].1
-            )),
+            [Got::Given(_)] => Ok(Found::More(vec![Need::Env(vars())])),
+            [Got::Given(_), Got::Env(env), rest @ ..] => {
+                if let Some(keys) = Keys::of_env(env)? {
+                    return Ok(Found::Keys(keys, rest));
+                }
+                let files = conf_files(env);
+                match rest.split_at_checked(files.len()) {
+                    Some((got, rest)) => Ok(Found::Keys(Keys::of_conf(env, got)?, rest)),
+                    None => Ok(Found::More(files.map(Need::File).to_vec())),
+                }
+            }
+            _ => Err(
+                "the OVH signer is given the grant's value, else the environment and its files"
+                    .into(),
+            ),
         }
     }
 }
@@ -232,28 +299,13 @@ impl Signer for Ovh {
         Ok(vec![Need::Given])
     }
 
-    /// The keys the grant gives, else the environment's, else the file's;
-    /// then, the endpoint named, its clock; then the material.
+    /// The keys the grant gives, else the environment's, else the first
+    /// `ovh.conf`'s; then, the endpoint named, its clock; then the
+    /// material.
     fn step(&self, got: &[Got]) -> Result<Outcome, String> {
-        let (keys, rest) = match got {
-            [Got::Given(given), rest @ ..] if !given.is_empty() => (Keys::of_given(given)?, rest),
-            [Got::Given(_)] => {
-                let mut vars: Vec<String> = KEYS.iter().map(|(_, var)| var.to_string()).collect();
-                vars.push(ENDPOINT.to_string());
-                return Ok(Outcome::More(vec![
-                    Need::Env(vars),
-                    Need::File(CONF.to_string()),
-                ]));
-            }
-            [Got::Given(_), Got::Env(env), Got::File(file), rest @ ..] => {
-                (Keys::of_environment(env, file)?, rest)
-            }
-            _ => {
-                return Err(
-                    "the OVH signer is given the grant's value, else the environment and a file"
-                        .into(),
-                );
-            }
+        let (keys, rest) = match Found::of(got)? {
+            Found::Keys(keys, rest) => (keys, rest),
+            Found::More(needs) => return Ok(Outcome::More(needs)),
         };
         let url = keys.endpoint.as_deref().and_then(endpoint_url);
         match (rest.first(), url) {
