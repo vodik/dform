@@ -510,7 +510,10 @@ impl Tree<'_> {
     /// the tree's run (its providers, `plugin::pool`): what each planned,
     /// in their order, and the board they read each other on.
     fn plan_all(&self, members: &[Member]) -> (Vec<Planned>, Arc<Board>) {
-        let board = Board::new(members.iter().map(|m| m.d.name.clone()).collect());
+        let board = Board::new(
+            members.iter().map(|m| m.d.name.clone()).collect(),
+            members.iter().map(|m| m.d.full.clone()).collect(),
+        );
         let pool = crate::plugin::pool::current();
         let within = tracing::Span::current();
         let planned = std::thread::scope(|s| {

@@ -44,16 +44,21 @@ impl Known {
 pub(super) struct Board {
     /// Each deployment's name, as a reader names it, in the tree's order.
     names: Vec<String>,
+    /// Each one's full name (`stacks.platform[env=lab]`), as its trace
+    /// spans name it.
+    full: Vec<String>,
     known: Mutex<Vec<Known>>,
     changed: Condvar,
 }
 
 impl Board {
-    /// The deployments `names`, none evaluated yet.
-    pub(super) fn new(names: Vec<String>) -> Arc<Board> {
+    /// The deployments `names` (with their `full` names), none evaluated
+    /// yet.
+    pub(super) fn new(names: Vec<String>, full: Vec<String>) -> Arc<Board> {
         let known = names.iter().map(|_| Known::Pending).collect();
         Arc::new(Board {
             names,
+            full,
             known: Mutex::new(known),
             changed: Condvar::new(),
         })
@@ -100,9 +105,33 @@ impl Board {
             .collect()
     }
 
-    /// The board once each deployment of `of` is as `ready` says.
-    fn wait(&self, of: &[usize], ready: fn(&Known) -> bool) -> MutexGuard<'_, Vec<Known>> {
+    /// The board once each deployment of `of` is as `ready` says (what
+    /// it waits for, `until`). A wait is a span of the waiting run's,
+    /// `waits on NAME`, naming those not ready as it starts.
+    fn wait(
+        &self,
+        of: &[usize],
+        ready: fn(&Known) -> bool,
+        until: &'static str,
+    ) -> MutexGuard<'_, Vec<Known>> {
         let known = self.known();
+        let waiting: Vec<&str> = of
+            .iter()
+            .filter(|&&j| !ready(&known[j]))
+            .map(|&j| self.full[j].as_str())
+            .collect();
+        if waiting.is_empty() {
+            return known;
+        }
+        let upstream = waiting.join(", ");
+        let _span = tracing::debug_span!(
+            target: "dform",
+            "plan.wait",
+            otel.name = %format_args!("waits on {upstream}"),
+            upstream = %upstream,
+            until,
+        )
+        .entered();
         self.changed
             .wait_while(known, |k| !of.iter().all(|&j| ready(&k[j])))
             .unwrap_or_else(|e| e.into_inner())
@@ -164,7 +193,9 @@ impl Upstreams {
     /// run's evaluation reads, by name. An error once one is not planned.
     pub(super) fn evaluated(&self) -> Result<BTreeMap<String, Planned>> {
         let read = {
-            let known = self.board.wait(&self.of, |k| !matches!(k, Known::Pending));
+            let known = self
+                .board
+                .wait(&self.of, |k| !matches!(k, Known::Pending), "evaluated");
             self.outputs_of(&known)?
         };
         *self.read.lock().unwrap_or_else(|e| e.into_inner()) = Some(read.clone());
@@ -197,7 +228,7 @@ impl Upstreams {
     /// The verdict, and what their plans make known.
     fn settled(&self) -> (Verdict, BTreeMap<String, Planned>) {
         let planned = {
-            let known = self.board.wait(&self.of, Known::settled);
+            let known = self.board.wait(&self.of, Known::settled, "planned");
             match self.outputs_of(&known) {
                 Ok(p) => p,
                 Err(e) => return (Verdict::NotPlanned(e.to_string()), BTreeMap::new()),
@@ -260,7 +291,8 @@ mod tests {
 
     /// Platform (0) and apps (1), which reads it.
     fn tree() -> (Upstreams, Upstreams) {
-        let board = Board::new(vec!["platform".into(), "apps".into()]);
+        let names = || vec!["platform".to_string(), "apps".to_string()];
+        let board = Board::new(names(), names());
         (
             Upstreams::new(board.clone(), 0, Vec::new()),
             Upstreams::new(board, 1, vec![0]),

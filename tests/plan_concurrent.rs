@@ -245,3 +245,77 @@ fn a_refused_upstream_stops_its_reader_with_its_own_message() {
     };
     assert_eq!(said(&r.stderr), said(&alone.stderr));
 }
+
+/// A server that answers each request 200 after `delay`: what platform's
+/// Plan call waits on (`DFORM_TEST_FAKE_PLAN_AWAITS`).
+fn answering_after(delay: std::time::Duration) -> u16 {
+    use std::io::{BufRead, BufReader, Write};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for mut conn in l.incoming().flatten() {
+            let mut r = BufReader::new(conn.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if r.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            std::thread::sleep(delay);
+            let _ = conn
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+        }
+    });
+    port
+}
+
+/// Apps waits for platform's plan, whose Plan call takes 5 s, before
+/// it says what it read: the wait is a span of apps' deployment, named
+/// for the one it waits on and what for (`until`), never a gap in the
+/// trace.
+#[test]
+fn a_reader_s_wait_on_its_upstream_is_a_span_of_its_own() {
+    let port = answering_after(std::time::Duration::from_secs(5));
+    let s = project("plan-concurrent-wait");
+    std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
+    std::os::unix::fs::symlink(
+        common::exe("dform-provider-k8s"),
+        s.path("providers/k8s/dform-provider-k8s"),
+    )
+    .unwrap();
+    s.write(
+        "stacks/apps.df",
+        r#"key env: enum("lab", "prod") = "lab"
+use stacks.platform
+use k8s { source = "./providers/k8s" }
+resource k8s.namespace apps {
+  metadata.name = "apps-${env}"
+  metadata.annotations.cidr = platform[env].cidr
+}
+"#,
+    );
+    let at = format!("127.0.0.1:{port}");
+    let (r, spans) = traced(
+        &s,
+        &["plan", "apps"],
+        &[
+            ("DFORM_TEST_FAKE_PLAN_AWAITS", at.as_str()),
+            ("DFORM_K8S_OFFLINE", "1"),
+        ],
+    );
+    r.success();
+    let apps = named(&spans, "deployment stacks.apps[env=lab]");
+    let waits = under(&spans, apps, "waits on stacks.platform[env=lab]");
+    let wait = waits
+        .iter()
+        .find(|w| common::attr(w, "until").as_deref() == Some("planned"))
+        .expect("no wait for platform's plan under apps");
+    assert_eq!(
+        common::attr(wait, "upstream").as_deref(),
+        Some("stacks.platform[env=lab]")
+    );
+    let (start, end) = time(wait);
+    assert!(end - start > 500_000_000, "a wait of {} ns", end - start);
+    let platform = named(&spans, "deployment stacks.platform[env=lab]");
+    assert!(under(&spans, platform, "waits on stacks.platform[env=lab]").is_empty());
+}
