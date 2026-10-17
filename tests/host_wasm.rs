@@ -271,6 +271,39 @@ fn a_component_answers_its_other_calls_while_one_awaits_the_host() {
     assert_eq!(two_reads_at_once("web.one"), [true, true]);
 }
 
+/// Two calls of a component contend on the SDK's lock
+/// (`dform_sdk::sync::Mutex`, as the OVH client's list asked once): the
+/// second awaits it while the first holds it across a request, and is
+/// woken when the first lets it go, a task of the instance waking
+/// another (wit-bindgen's `inter-task-wakeup`); both are answered.
+#[test]
+fn a_components_call_awaits_a_lock_another_call_holds() {
+    use dform::http::fake::Server;
+    use dform::plugin::backend::Session;
+    use dform::plugin::pb;
+    let server = Server::http1();
+    server.answer(|_| (200, Vec::new(), Vec::new()));
+    server.slow(std::time::Duration::from_millis(200));
+    let mut link = probe();
+    let tickets = ["a", "b"].map(|page| {
+        link.submit(
+            Session::NONE,
+            pb::ReadRequest {
+                r#type: "web.locked".into(),
+                remote: server.url(&format!("/{page}")),
+                name: page.into(),
+                ..Default::default()
+            },
+        )
+    });
+    let found = tickets.map(|t| {
+        let answer = link.wait(t).unwrap();
+        let read: pb::ReadResponse = link.expect("Read", answer).unwrap();
+        read.found
+    });
+    assert_eq!(found, [true, true]);
+}
+
 /// One Read of a component sends two requests at once
 /// (`dform_sdk::Http::request_all`): under the async ABI each `send` is a
 /// subtask, the component going on while the host waits, with no thread

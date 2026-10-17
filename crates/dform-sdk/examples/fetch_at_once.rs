@@ -12,10 +12,16 @@
 //! `remote` alone, awaiting it, and one of `web.blocked` the same waiting
 //! on this task ([`dform_sdk::block_on`], a synchronous handler's way):
 //! two of them at once say whether the instance answers its other calls
-//! while one waits.
+//! while one waits. A Read of `web.locked` fetches its `remote` holding
+//! the provider's one lock ([`dform_sdk::sync::Mutex`]): two at once, the
+//! second awaits the lock and is woken by the first's task letting it go.
 
 use dform_core::plugin::backend::{Call, Progress, Reply, Session, VERSION};
 use dform_sdk::{CallError, Handler, Request, host, pb};
+use std::sync::OnceLock;
+
+/// The lock a `web.locked` Read holds across its request.
+static LOCK: OnceLock<dform_sdk::sync::Mutex<()>> = OnceLock::new();
 
 struct FetchAtOnce;
 
@@ -29,6 +35,11 @@ impl Handler for FetchAtOnce {
                 ..Default::default()
             })),
             Call::Read(r) if r.r#type == "web.one" => {
+                let answer = host().http.request(Request::get(&r.remote)).await;
+                found(answer.map_err(|e| CallError::Refused(e.message))?.status == 200)
+            }
+            Call::Read(r) if r.r#type == "web.locked" => {
+                let _held = LOCK.get_or_init(Default::default).lock().await;
                 let answer = host().http.request(Request::get(&r.remote)).await;
                 found(answer.map_err(|e| CallError::Refused(e.message))?.status == 200)
             }

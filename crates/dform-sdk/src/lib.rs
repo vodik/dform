@@ -61,7 +61,10 @@ pub use futures::future::{join, join_all, join3};
 /// minted, a list being asked once): the waiting call awaits it. Never
 /// `std::sync::Mutex` across an `.await`: in a component the instance's
 /// calls take turns on one thread, and one waiting on a lock another
-/// holds never lets that other finish.
+/// holds never lets that other finish. In a component the call letting
+/// go wakes the waiting one's task from its own, which wit-bindgen allows
+/// with its `inter-task-wakeup` feature (this crate's, and dform-wit's
+/// guest side): without it the instance traps.
 pub mod sync {
     pub use futures::lock::{Mutex, MutexGuard};
 }
