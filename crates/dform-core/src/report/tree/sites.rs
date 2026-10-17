@@ -10,7 +10,7 @@ use super::printer::{Focus, Printer};
 use super::statement::{collapse, is_check, statement_at};
 use super::surface::Surface;
 use crate::address::Address;
-use crate::ast::{Atom, RuleStmt, Term};
+use crate::ast::{Atom, Rank, RuleStmt, Term};
 use crate::circuit::{Circuit, Fact, Leaf, NodeId, View};
 use crate::engine;
 use crate::syntax::resolve::capitalise;
@@ -329,7 +329,7 @@ impl Printer<'_> {
                     .iter()
                     .zip(memos.iter_mut())
                     .filter_map(|(c, memo)| holds(memo, c.1, &toks, merged, top).then_some(c))
-                    .max_by_key(|(id, f)| (rank_of(f).0, std::cmp::Reverse(*id)))
+                    .max_by_key(|(id, f)| (rank_of(f), std::cmp::Reverse(*id)))
                     .map(|(id, _)| *id)
             })
             .collect()
@@ -349,9 +349,9 @@ impl Printer<'_> {
         };
         let focus = contribution_focus(fact, path);
         let mut site = s.value_site(&mut c, id, focus.as_ref(), 0)?;
-        let rank = rank_of(fact).1;
-        if fact.pred == "arg" && site.rank.is_none() && rank != "normal" {
-            site.rank = Some(rank.to_string());
+        let rank = rank_of(fact);
+        if fact.pred == "arg" && site.rank.is_none() && rank != Rank::Normal {
+            site.rank = Some(rank.name().to_string());
         }
         Some(site)
     }
@@ -395,14 +395,14 @@ impl Surface<'_, '_> {
                 None => true,
             })
             .collect();
-        contributions.sort_by_key(|(_, f)| std::cmp::Reverse(rank_of(f).0));
+        contributions.sort_by_key(|(_, f)| std::cmp::Reverse(rank_of(f)));
         let (win, fact) = *contributions.first()?;
-        let (top, rank) = rank_of(fact);
+        let top = rank_of(fact);
         // Part of the value, not reached by the focus: one writer, or none.
         if single
             && contributions
                 .iter()
-                .filter(|(_, f)| rank_of(f).0 == top)
+                .filter(|(_, f)| rank_of(f) == top)
                 .count()
                 > 1
         {
@@ -412,17 +412,17 @@ impl Surface<'_, '_> {
         // a provider's default is beaten by every value.
         let lower: Vec<(NodeId, &Fact)> = contributions
             .iter()
-            .filter(|(_, f)| rank_of(f).0 < top && !placeholder(f, f.args.get(3)))
+            .filter(|(_, f)| rank_of(f) < top && !placeholder(f, f.args.get(3)))
             .copied()
             .collect();
         let beat = lower.into_iter().find_map(|(id, f)| {
             self.site_of(c, id, depth + 1)
                 .filter(|w| !w.at.is_empty() && !w.at.starts_with('<'))
-                .map(|w| (rank_of(f).1.to_string(), w.at))
+                .map(|w| (rank_of(f).name().to_string(), w.at))
         });
         let mut site = self.value_site(c, win, focus, depth)?;
-        if site.rank.is_none() && rank != "normal" {
-            site.rank = Some(rank.to_string());
+        if site.rank.is_none() && top != Rank::Normal {
+            site.rank = Some(top.name().to_string());
         }
         if site.beat.is_none()
             && let Some((rank, at)) = beat

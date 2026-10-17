@@ -2,11 +2,11 @@
 //! through the shortest alternative of each fact, each line a `Because`.
 
 use super::because::Because;
+use super::chains::rank_of;
 use super::printer::{Focus, plan_text};
 use super::sites::{base_parts, table_row};
 use super::surface::Surface;
 use crate::circuit::{Circuit, Leaf, NodeId, View};
-use crate::value::Value;
 use std::collections::BTreeMap;
 
 /// The compressed walk: the lines so far, and each fact node's size (the
@@ -103,12 +103,8 @@ impl Compress {
             // The winners: the contributions at the highest rank, of those
             // that hold the focused part.
             let rank = |f: &NodeId| match circuit.view(*f) {
-                View::Fact { fact, .. } => match fact.args.get(4).and_then(Value::as_str) {
-                    Some("override") => 2,
-                    Some("default") => 0,
-                    _ => 1,
-                },
-                _ => 0,
+                View::Fact { fact, .. } => Some(rank_of(fact)),
+                _ => None,
             };
             facts.retain(|f| match (focus, circuit.view(*f)) {
                 (Some(focus), View::Fact { fact, .. }) => {

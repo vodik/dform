@@ -7,7 +7,7 @@ use super::printer::{Focus, Printer};
 use super::sites::Site;
 use super::statement::is_check;
 use super::surface::Surface;
-use crate::ast::{Atom, RuleStmt};
+use crate::ast::{Atom, Rank, RuleStmt};
 use crate::circuit::{Circuit, Fact, Leaf, NodeId, View};
 use crate::engine;
 use crate::spell;
@@ -60,17 +60,17 @@ impl Surface<'_, '_> {
             })
             .filter(|(_, f)| f.args.get(3).and_then(part).is_some())
             .collect();
-        contributions.sort_by_key(|(_, f)| std::cmp::Reverse(rank_of(f).0));
+        contributions.sort_by_key(|(_, f)| std::cmp::Reverse(rank_of(f)));
         let Some(&(win, fact)) = contributions.first() else {
             return;
         };
-        let (top, rank) = rank_of(fact);
+        let top = rank_of(fact);
         let won = fact.args.get(3).and_then(part);
         // What it beat: a lower rank's value, where it differs. An object's
         // contributions at the winning rank merge; none of them lost.
         for &(l, f) in &contributions[1..] {
             let v = f.args.get(3).and_then(part);
-            if rank_of(f).0 == top
+            if rank_of(f) == top
                 || v == won
                 || matches!(v, Some(Value::Obj(_)))
                 || placeholder(f, v.as_ref())
@@ -78,7 +78,7 @@ impl Surface<'_, '_> {
                 continue;
             }
             if let (Some(site), Some(v)) = (self.site_of(c, l, depth + 1), v) {
-                let r = rank_of(f).1;
+                let r = rank_of(f);
                 w.lost.push(Step {
                     expr: match f.args.get(3) {
                         Some(whole) => crate::report::surface_in(
@@ -91,12 +91,12 @@ impl Surface<'_, '_> {
                     },
                     at: place(&site),
                     with: Vec::new(),
-                    rank: (r != "normal").then(|| r.to_string()),
+                    rank: (r != Rank::Normal).then(|| r.name().to_string()),
                     lost: true,
                 });
             }
         }
-        let rank = (rank != "normal").then_some(rank);
+        let rank = (top != Rank::Normal).then_some(top.name());
         self.value_chain(c, win, focus, rank, depth, w);
     }
 
@@ -364,13 +364,14 @@ fn generated_name(circuit: &Circuit, alts: &[NodeId]) -> Option<(Value, Value)> 
 /// How deep a value is followed through cells that pass it on.
 pub(super) const FOLLOW: usize = 8;
 
-/// The rank of a contribution, `arg/5`'s last column.
-pub(super) fn rank_of(f: &Fact) -> (u8, &str) {
-    match f.args.get(4).and_then(Value::as_str) {
-        Some("override") => (2, "override"),
-        Some("default") => (0, "default"),
-        _ => (1, "normal"),
-    }
+/// The rank of a contribution, `arg/5`'s last column; normal when it
+/// has none.
+pub(super) fn rank_of(f: &Fact) -> Rank {
+    f.args
+        .get(4)
+        .and_then(Value::as_str)
+        .and_then(Rank::parse)
+        .unwrap_or(Rank::Normal)
 }
 
 /// One step of a value's provenance chain (R-122), `= EXPR   SITE`: the
