@@ -274,6 +274,15 @@ impl Services {
     }
 }
 
+/// Where on `on` a span says an SSH call goes: `ssh://HOST[:PORT]PATH`,
+/// without the user.
+fn ssh_location(on: &Target, path: &str) -> String {
+    match on.port {
+        Some(port) => format!("ssh://{}:{port}{path}", on.host),
+        None => format!("ssh://{}{path}", on.host),
+    }
+}
+
 /// The span a request sent for the call numbered `call` is under: that
 /// call's while it is in flight, else the current one. Held while the
 /// request's span is made, so the call's cannot end meanwhile.
@@ -311,6 +320,21 @@ impl Calls for Services {
         self.request(req, cred.as_deref(), via)
     }
 
+    /// A read the provider asks of the host: an `io.call` span
+    /// (`io.read`), as the program's own `io.read` is.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "io.call",
+        skip_all,
+        fields(
+            otel.name = %format_args!("{} io.read", self.grants.provider),
+            otel.kind = "client",
+            kind = "io.read",
+            provider = self.grants.provider.as_str(),
+            addr = %dform_core::timing::location(location),
+        )
+    )]
     fn io_read(&self, location: &str) -> Result<Vec<u8>, Failure> {
         // The run's reader (its known hosts, mirrors, declared schemes),
         // or, outside a run, one of the host's own.
@@ -318,19 +342,77 @@ impl Calls for Services {
         files.read_for(&self.grants, location)
     }
 
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "io.call",
+        skip_all,
+        fields(
+            otel.name = %format_args!("{} io.read", self.grants.provider),
+            otel.kind = "client",
+            kind = "io.read",
+            provider = self.grants.provider.as_str(),
+            addr = %dform_core::timing::location(location),
+        )
+    )]
     fn io_read_versioned(&self, location: &str) -> Result<dform_core::files::Document, Failure> {
         let files = self.grants.files.get();
         files.read_for_document(&self.grants, location)
     }
 
+    /// A command run on `on` over SSH: an `io.call` span (`ssh.exec`),
+    /// its exit status the answer's; so are a file written there, a
+    /// tunnel forwarded through it, and a commit pushed to a repository.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "io.call",
+        skip_all,
+        fields(
+            otel.name = %format_args!("{} ssh exec", self.grants.provider),
+            otel.kind = "client",
+            kind = "ssh.exec",
+            provider = self.grants.provider.as_str(),
+            addr = %ssh_location(on, ""),
+            status = tracing::field::Empty,
+        )
+    )]
     fn exec(&self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure> {
-        self.ssh.exec(on, argv, stdin)
+        let run = self.ssh.exec(on, argv, stdin)?;
+        tracing::Span::current().record("status", run.status);
+        Ok(run)
     }
 
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "io.call",
+        skip_all,
+        fields(
+            otel.name = %format_args!("{} ssh write", self.grants.provider),
+            otel.kind = "client",
+            kind = "ssh.write",
+            provider = self.grants.provider.as_str(),
+            addr = %ssh_location(on, path),
+        )
+    )]
     fn write(&self, on: &Target, path: &str, data: &[u8], mode: u32) -> Result<(), Error> {
         self.ssh.write(on, path, data, mode)
     }
 
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "io.call",
+        skip_all,
+        fields(
+            otel.name = %format_args!("{} ssh forward", self.grants.provider),
+            otel.kind = "client",
+            kind = "ssh.forward",
+            provider = self.grants.provider.as_str(),
+            addr = %ssh_location(via, ""),
+        )
+    )]
     fn forward(&self, via: &Target, to: &Endpoint) -> Result<Handle, Error> {
         let local = self.ssh.forward(via, to)?;
         let mut o = self.opened();
@@ -343,6 +425,19 @@ impl Calls for Services {
         self.opened().tunnels.get(&h).map(|(e, _)| e.clone())
     }
 
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "io.call",
+        skip_all,
+        fields(
+            otel.name = %format_args!("{} git commit", self.grants.provider),
+            otel.kind = "client",
+            kind = "git.commit",
+            provider = self.grants.provider.as_str(),
+            addr = %location(repo),
+        )
+    )]
     fn git_commit(
         &self,
         repo: &str,
@@ -414,6 +509,79 @@ mod tests {
                 ..m.clone()
             }))
         }
+    }
+
+    /// The spans begun: each one's name and its fields, as text.
+    #[derive(Clone, Default)]
+    struct Begun(Arc<Mutex<Vec<(String, BTreeMap<String, String>)>>>);
+
+    struct Fields<'a>(&'a mut BTreeMap<String, String>);
+
+    impl tracing::field::Visit for Fields<'_> {
+        fn record_debug(&mut self, f: &tracing::field::Field, v: &dyn std::fmt::Debug) {
+            self.0.insert(f.name().to_string(), format!("{v:?}"));
+        }
+
+        fn record_str(&mut self, f: &tracing::field::Field, v: &str) {
+            self.0.insert(f.name().to_string(), v.to_string());
+        }
+    }
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Begun {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _: &tracing::span::Id,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut fields = BTreeMap::new();
+            attrs.record(&mut Fields(&mut fields));
+            let name = attrs.metadata().name().to_string();
+            self.0.lock().unwrap().push((name, fields));
+        }
+    }
+
+    /// What the host does over SSH for a provider is an `io.call` span,
+    /// as a request it sends is: named by the provider and what it does,
+    /// where it goes a field, without the user.
+    #[test]
+    fn an_ssh_call_is_a_span_of_its_own() {
+        use tracing_subscriber::layer::SubscriberExt;
+        let begun = Begun::default();
+        let subscriber = tracing_subscriber::registry().with(begun.clone());
+        let on = Target {
+            host: "10.0.0.5".into(),
+            user: "ubuntu".into(),
+            port: None,
+        };
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::callsite::rebuild_interest_cache();
+            let host = Services::new(Grants::none("k3s"));
+            let to = Endpoint {
+                host: "127.0.0.1".into(),
+                port: 6443,
+            };
+            assert!(host.exec(&on, &["true".into()], None).is_err());
+            assert!(host.write(&on, "/etc/k3s.yaml", b"", 0o600).is_err());
+            assert!(host.forward(&on, &to).is_err());
+        });
+        let spans: Vec<(String, String, String)> = begun
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(name, f)| (name.clone(), f["otel.name"].clone(), f["addr"].clone()))
+            .collect();
+        let call =
+            |name: &str, addr: &str| ("io.call".to_string(), name.to_string(), addr.to_string());
+        assert_eq!(
+            spans,
+            [
+                call("k3s ssh exec", "ssh://10.0.0.5"),
+                call("k3s ssh write", "ssh://10.0.0.5/etc/k3s.yaml"),
+                call("k3s ssh forward", "ssh://10.0.0.5"),
+            ]
+        );
     }
 
     /// A credential its provider makes is what its provider's signer

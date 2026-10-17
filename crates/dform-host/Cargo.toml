@@ -47,3 +47,5 @@ sha2 = { version = "0.10", optional = true }
 [dev-dependencies]
 # A local HTTP server for the tests of what the host sends (`http::fake`).
 dform-core = { path = "../dform-core", features = ["fake"] }
+# services.rs's tests read the spans its calls are in.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
