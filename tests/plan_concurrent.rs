@@ -180,6 +180,49 @@ resource k8s.namespace apps {{
     assert!(evaluated <= reader, "apps evaluated before platform was");
 }
 
+/// A reader of an upstream that has published starts at once, over what
+/// it published: apps is evaluated while platform's evaluation is still
+/// in flight. Each resolves a tag of a registry that answers only once
+/// both are asked at once: the plan succeeds only if apps does not wait
+/// for platform's evaluation.
+#[test]
+fn a_reader_of_what_its_upstream_published_is_evaluated_beside_it() {
+    let s = project("plan-concurrent-published");
+    s.run(&["apply", "apps", "--yes"]).success();
+    let port = common::registry_answering_together(2, std::time::Duration::from_secs(10));
+    let resolve = |name: &str, tag: &str| {
+        format!(
+            "resource compute.vm {name} {{ image = oci.resolve(\"127.0.0.1:{port}/acme/{name}:{tag}\") }}\n"
+        )
+    };
+    s.write(
+        "stacks/platform.df",
+        &(PLATFORM.to_string() + &resolve("build", "a1")),
+    );
+    s.write(
+        "stacks/apps.df",
+        &(APPS.to_string() + &resolve("web", "a1")),
+    );
+    std::fs::create_dir_all(s.path("cache")).unwrap();
+    let cache = s.path("cache");
+    let (r, spans) = traced(
+        &s,
+        &["plan", "apps"],
+        &[("XDG_CACHE_HOME", cache.to_str().unwrap())],
+    );
+    let r = r.success();
+    assert_eq!(r.stdout.matches("…aaaaaaaa").count(), 2, "{}", r.stdout);
+    let first = |d: &str, name: &str| {
+        let d = named(&spans, &format!("deployment stacks.{d}[env=lab]"));
+        under(&spans, d, name).into_iter().map(time).min().unwrap()
+    };
+    let (platform, apps) = (first("platform", "evaluated"), first("apps", "evaluated"));
+    assert!(
+        apps.0 < platform.1,
+        "apps after platform's evaluation: {apps:?} {platform:?}"
+    );
+}
+
 /// Platform's plan replaces the database its output is made of: what its
 /// evaluation knew of the endpoint (the old one's) is known only after
 /// tick 1 in its plan. Apps, which read the old one, is planned again

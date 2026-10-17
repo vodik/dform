@@ -174,7 +174,27 @@ pub(super) struct Upstreams {
     board: Arc<Board>,
     me: usize,
     of: Vec<usize>,
-    read: Arc<Mutex<Option<BTreeMap<String, Planned>>>>,
+    read: Arc<Mutex<Option<BTreeMap<String, Read>>>>,
+}
+
+/// What a run read of one it reads, to compare with its plan's.
+#[derive(Debug, Clone)]
+enum Read {
+    /// What its evaluation made known.
+    Evaluated(Planned),
+    /// What it last published: read before its evaluation made anything
+    /// known, as its plan, steady, makes the same known.
+    Published(crate::stack::Read),
+}
+
+impl Read {
+    /// Whether `planned`, its plan's outputs, make known what was read.
+    fn alike(&self, planned: &Planned) -> bool {
+        match self {
+            Read::Evaluated(e) => e.knows_alike(planned),
+            Read::Published(r) => planned.knows_as(r),
+        }
+    }
 }
 
 impl Upstreams {
@@ -189,17 +209,51 @@ impl Upstreams {
         }
     }
 
-    /// What those it reads make known, once each has evaluated: what the
-    /// run's evaluation reads, by name. An error once one is not planned.
-    pub(super) fn evaluated(&self) -> Result<BTreeMap<String, Planned>> {
-        let read = {
+    /// What the run's evaluation reads of those it reads, by name: of one
+    /// not evaluated yet that has published outputs (`published`, what
+    /// the run read of them), those, at once (nothing in the map: the run
+    /// reads what it read); of another, what its evaluation makes known,
+    /// once it has. An error once one is not planned.
+    pub(super) fn evaluated(
+        &self,
+        published: &[crate::stack::Read],
+    ) -> Result<BTreeMap<String, Planned>> {
+        let ahead: BTreeMap<usize, crate::stack::Read> = {
+            let known = self.board.known();
+            self.of
+                .iter()
+                .filter(|&&j| matches!(known[j], Known::Pending))
+                .filter_map(|&j| {
+                    let r = published
+                        .iter()
+                        .find(|r| r.name == self.board.names[j] && r.published.is_some())?;
+                    Some((j, r.clone()))
+                })
+                .collect()
+        };
+        let waiting: Vec<usize> = self
+            .of
+            .iter()
+            .copied()
+            .filter(|j| !ahead.contains_key(j))
+            .collect();
+        let evaluated = {
             let known = self
                 .board
-                .wait(&self.of, |k| !matches!(k, Known::Pending), "evaluated");
-            self.outputs_of(&known)?
+                .wait(&waiting, |k| !matches!(k, Known::Pending), "evaluated");
+            Self::outputs_in(&self.board, &waiting, &known)?
         };
-        *self.read.lock().unwrap_or_else(|e| e.into_inner()) = Some(read.clone());
-        Ok(read)
+        let read = ahead
+            .into_iter()
+            .map(|(j, r)| (self.board.names[j].clone(), Read::Published(r)))
+            .chain(
+                evaluated
+                    .iter()
+                    .map(|(n, p)| (n.clone(), Read::Evaluated(p.clone()))),
+            )
+            .collect();
+        *self.read.lock().unwrap_or_else(|e| e.into_inner()) = Some(read);
+        Ok(evaluated)
     }
 
     /// The outputs its evaluation makes known, for those that read it.
@@ -248,7 +302,7 @@ impl Upstreams {
                     if !read
                         .as_ref()
                         .and_then(|r| r.get(name))
-                        .is_some_and(|r| r.knows_alike(p)) =>
+                        .is_some_and(|r| r.alike(p)) =>
                 {
                     bail!("planned again: what it reads changed in their plans")
                 }
@@ -273,12 +327,10 @@ impl Upstreams {
             }
         };
         let read = self.read.lock().unwrap_or_else(|e| e.into_inner());
-        let alike = |read: &BTreeMap<String, Planned>| {
-            read.len() == planned.len()
-                && read
-                    .iter()
-                    .zip(&planned)
-                    .all(|((r, a), (p, b))| r == p && a.knows_alike(b))
+        let alike = |read: &BTreeMap<String, Read>| {
+            planned
+                .iter()
+                .all(|(n, p)| read.get(n).is_some_and(|r| r.alike(p)))
         };
         // A run that never read them (it stopped before) stands as it is.
         match read.as_ref().is_none_or(alike) {
@@ -290,14 +342,24 @@ impl Upstreams {
     /// What those it reads make known on `known`, by name; the reason one
     /// is not planned.
     fn outputs_of(&self, known: &[Known]) -> Result<BTreeMap<String, Planned>> {
+        Self::outputs_in(&self.board, &self.of, known)
+    }
+
+    /// What those of `of` make known on `known`, by name; the reason one
+    /// is not planned.
+    fn outputs_in(
+        board: &Board,
+        of: &[usize],
+        known: &[Known],
+    ) -> Result<BTreeMap<String, Planned>> {
         let mut out = BTreeMap::new();
-        for &j in &self.of {
+        for &j in of {
             let p = match &known[j] {
                 Known::Evaluated(p) | Known::Planned(Some(p)) => p,
                 Known::Planned(None) | Known::Pending => continue,
                 Known::Stopped(why) => bail!("{why}"),
             };
-            out.insert(self.board.names[j].clone(), p.clone());
+            out.insert(board.names[j].clone(), p.clone());
         }
         Ok(out)
     }
@@ -345,7 +407,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let reader = apps.clone();
         std::thread::spawn(move || {
-            tx.send(reader.evaluated().unwrap()).unwrap();
+            tx.send(reader.evaluated(&[]).unwrap()).unwrap();
             tx.send(reader.planned().unwrap()).unwrap();
         });
         assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
@@ -369,7 +431,7 @@ mod tests {
     fn a_reader_of_what_a_plan_changed_is_planned_again() {
         let (platform, apps) = tree();
         platform.tell(outputs("stacks.platform", "10.0.0.0/16", None));
-        apps.evaluated().unwrap();
+        apps.evaluated(&[]).unwrap();
         platform
             .board
             .planned(0, Some(outputs("stacks.platform", "10.9.0.0/16", Some(1))));
@@ -377,7 +439,53 @@ mod tests {
         assert!(apps.planned().is_err());
         let again = Upstreams::new(platform.board.clone(), 1, vec![0]);
         assert_eq!(
-            again.evaluated().unwrap()["platform"].outputs.known["cidr"],
+            again.evaluated(&[]).unwrap()["platform"].outputs.known["cidr"],
+            Value::Str("10.9.0.0/16".into())
+        );
+        assert_eq!(again.verdict(), Verdict::Stands);
+    }
+
+    /// What platform last published, as apps read it: `cidr` known as
+    /// `cidr`, `id` pending.
+    fn published(cidr: &str) -> crate::stack::Read {
+        crate::stack::Read {
+            name: "platform".into(),
+            digest: String::new(),
+            published: Some(crate::stack::Published {
+                deployment: "stacks.platform".into(),
+                outputs: [("cidr".to_string(), Value::Str(cidr.into()))].into(),
+                pending: ["id".to_string()].into(),
+                secret: BTreeMap::new(),
+            }),
+            world: None,
+            opened: BTreeMap::new(),
+            planned: None,
+        }
+    }
+
+    /// Apps reads what platform published at once, before platform's
+    /// evaluation; a plan that makes the same known stands, one that
+    /// makes other known plans it again, over the plan's.
+    #[test]
+    fn a_reader_reads_what_was_published_before_the_evaluation() {
+        let (platform, apps) = tree();
+        let read = apps.evaluated(&[published("10.0.0.0/16")]).unwrap();
+        assert!(read.is_empty(), "nothing waited for: {read:?}");
+        platform
+            .board
+            .planned(0, Some(outputs("stacks.platform", "10.0.0.0/16", Some(1))));
+        assert_eq!(apps.verdict(), Verdict::Stands);
+        let (platform, apps) = tree();
+        apps.evaluated(&[published("10.0.0.0/16")]).unwrap();
+        platform
+            .board
+            .planned(0, Some(outputs("stacks.platform", "10.9.0.0/16", Some(1))));
+        assert_eq!(apps.verdict(), Verdict::Again);
+        // Planned again: platform's plan is made, so it is what is read.
+        let again = Upstreams::new(platform.board.clone(), 1, vec![0]);
+        let read = again.evaluated(&[published("10.0.0.0/16")]).unwrap();
+        assert_eq!(
+            read["platform"].outputs.known["cidr"],
             Value::Str("10.9.0.0/16".into())
         );
         assert_eq!(again.verdict(), Verdict::Stands);
@@ -407,14 +515,14 @@ mod tests {
     fn a_reader_of_one_not_planned_is_not() {
         let (platform, apps) = tree();
         platform.tell(outputs("stacks.platform", "10.0.0.0/16", None));
-        apps.evaluated().unwrap();
+        apps.evaluated(&[]).unwrap();
         platform
             .board
             .stopped(0, "stacks.platform[env=lab] refused".into());
         let why = Verdict::NotPlanned("stacks.platform[env=lab] refused".into());
         assert_eq!(apps.verdict(), why);
         let late = Upstreams::new(platform.board.clone(), 1, vec![0]);
-        assert!(late.evaluated().is_err());
+        assert!(late.evaluated(&[]).is_err());
         assert_eq!(late.verdict(), why);
     }
 }

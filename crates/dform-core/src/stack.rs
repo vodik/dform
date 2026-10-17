@@ -1415,6 +1415,25 @@ impl Planned {
         unticked(self) == unticked(other)
     }
 
+    /// Whether it makes known what `read`, its published outputs as a
+    /// reader read them, did: the same public values and the same not
+    /// known, each secret the same (its digest, where it is held). A
+    /// reader that read what was published before the plan compares so
+    /// (steady, the plan's outputs are what was last published).
+    pub fn knows_as(&self, read: &Read) -> bool {
+        let Some(p) = &read.published else {
+            return self.outputs.is_empty();
+        };
+        let secret = |s: &BTreeMap<String, SecretOutput>| -> BTreeMap<String, (String, Option<crate::provider::Held>)> {
+            s.iter()
+                .map(|(k, o)| (k.clone(), (o.digest.clone(), o.held.clone())))
+                .collect()
+        };
+        self.outputs.known == p.outputs
+            && self.outputs.pending == p.pending
+            && secret(&self.outputs.secret) == secret(&p.secret)
+    }
+
     /// What a reader reads of the deployment it names `name`: `read`,
     /// what it published if anything, with the plan's outputs over it. A
     /// public output the plan knows is its planned value; one it does not

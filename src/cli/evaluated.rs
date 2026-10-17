@@ -319,11 +319,6 @@ impl<'h> Evaluated<'h> {
             audit,
         } = objects;
         let mut cx = Context::new(cli, &located, audit, saved, rekey)?;
-        // A deployment of a tree's plan reads what those it reads make
-        // known, once their evaluations have (`board`).
-        if let Some(up) = &cx.cli.upstreams {
-            cx.cli.planned = up.evaluated()?;
-        }
         let read_outputs = cx.read_outputs(&located)?;
         if cx.writes {
             cx.inputs = Some(cx.plan_inputs(cx.file_key())?);
@@ -600,6 +595,25 @@ impl Context {
     /// so the producer's next apply seals to it.
     fn read_outputs(&mut self, located: &deployment::Located) -> Result<Vec<crate::stack::Read>> {
         let mut read = located.read_outputs(&open_s3(&self.root, false))?;
+        // A deployment of a tree's plan reads what those it reads make
+        // known: what one published, at once, while its evaluation has
+        // not made anything known, else what its evaluation makes known,
+        // once it has (`board`). Not what has a secret sealed to it that
+        // this run, without its master, cannot open: the evaluation's in
+        // memory is read instead.
+        if let Some(up) = &self.cli.upstreams {
+            let opens = self.master.key.is_some();
+            let ahead: Vec<crate::stack::Read> = read
+                .iter()
+                .filter(|r| {
+                    r.published
+                        .as_ref()
+                        .is_some_and(|p| opens || p.secret.values().all(|o| o.held.is_some()))
+                })
+                .cloned()
+                .collect();
+            self.cli.planned = up.evaluated(&ahead)?;
+        }
         // A run in a tree (a plan, an apply, `why` and `query` of a
         // deployment that reads others) reads what the deployments before
         // it in the tree will publish (R-200), over what they have.

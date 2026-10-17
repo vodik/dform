@@ -294,12 +294,16 @@ with its status.
 
 The deployments of the tree are planned at once, each on a thread of
 its own, each loaded and located and its state and master read beside
-the others'. What a deployment reads is the only thing it waits on:
-once those it reads have made their outputs known, which is after their
-evaluations and before their Plan calls and policy, it reads them,
-starts and configures its providers (its own session of the tree's one
-process of each), and is refreshed, evaluated and planned beside them;
-it says what of them is known only after a tick once their plans have.
+the others'. What a deployment reads is the only thing it waits on, and
+it reads what each published at once, as a plan of an upstream that
+changed nothing makes the same known: it starts and configures its
+providers (its own session of the tree's one process of each), and is
+refreshed, evaluated and planned beside them. Of an upstream never
+applied, or one with a secret sealed to it that the run cannot open
+without its master, it waits until that upstream's evaluation has made
+its outputs known (before its Plan calls and policy). It says what of
+them is known only after a tick once their plans have; one whose plan
+makes known other than it read is planned again over the plan's.
 Deployments that read nothing of each other (a project's `prod` and
 `staging`) wait on nothing. A replace in an upstream's plan makes what its evaluation knew
 of the replaced object (a computed endpoint) known only after a tick: a
