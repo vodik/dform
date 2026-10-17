@@ -294,6 +294,9 @@ fn write_change(out: &mut String, d: &Deformation, indent: &str, style: Style) {
         }
         write_line(out, &d.kind, l, &inner, style);
     }
+    for lc in &d.list_edits {
+        write_list_change(out, lc, &inner, style);
+    }
     for k in &d.kept {
         let note = k.note.as_deref().map(|n| format!("  {}", style.note(n)));
         out.push_str(&format!(
@@ -302,6 +305,71 @@ fn write_change(out: &mut String, d: &Deformation, indent: &str, style: Style) {
             style.note(crate::report::KEPT),
             note.unwrap_or_default()
         ));
+    }
+}
+
+/// An ordinary list's whole value (R-111 round 2), as [`lines::write_list_change`]
+/// but to a plain string: no site column at `--why=none`.
+fn write_list_change(out: &mut String, lc: &super::deformation::ListChange, indent: &str, style: Style) {
+    use super::deformation::ListLine;
+    out.push_str(&format!("{indent}{} = [\n", lc.path));
+    let base = format!("{indent}  ");
+    let elide = lc.ops.len() > 12;
+    let changed = |op: &ListLine| !matches!(op, ListLine::Keep { .. });
+    let mut i = 0;
+    while i < lc.ops.len() {
+        if changed(&lc.ops[i]) {
+            bare_list_line(out, &lc.ops[i], &base, style);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < lc.ops.len() && !changed(&lc.ops[i]) {
+            i += 1;
+        }
+        let run = &lc.ops[start..i];
+        let needed = usize::from(start > 0) + usize::from(i < lc.ops.len());
+        if !elide || run.len() <= needed {
+            run.iter().for_each(|op| bare_list_line(out, op, &base, style));
+            continue;
+        }
+        if start > 0 {
+            bare_list_line(out, &run[0], &base, style);
+        }
+        out.push_str(&format!(
+            "{base}{}\n",
+            style.note(&format!("… {} unchanged …", run.len() - needed))
+        ));
+        if i < lc.ops.len() {
+            bare_list_line(out, &run[run.len() - 1], &base, style);
+        }
+    }
+    out.push_str(&format!("{indent}]\n"));
+}
+
+fn bare_list_line(out: &mut String, op: &super::deformation::ListLine, base: &str, style: Style) {
+    use super::deformation::ListLine;
+    let shown = |v: &Shown| style.shown(v);
+    match op {
+        ListLine::Keep { value, .. } => {
+            out.push_str(&format!("{base}  {}\n", style.note(&shown(value))))
+        }
+        ListLine::Insert { value, .. } => out.push_str(&format!(
+            "{base}{} {}\n",
+            style.paint(Paint::Create, "+"),
+            shown(value)
+        )),
+        ListLine::Remove { value, .. } => out.push_str(&format!(
+            "{base}{} {}\n",
+            style.paint(Paint::Delete, "-"),
+            shown(value)
+        )),
+        ListLine::Change { before, after, .. } => out.push_str(&format!(
+            "{base}{} {} -> {}\n",
+            style.paint(Paint::Update, "~"),
+            shown(before),
+            shown(after)
+        )),
     }
 }
 

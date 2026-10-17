@@ -9,7 +9,7 @@ use super::tree;
 use super::tree::Site;
 use crate::address::Address;
 use crate::ast::{Atom, Term};
-use crate::provider::{Action, ActionKind, Change};
+use crate::provider::{Action, ActionKind, Change, ListDiffs, ListOp};
 use crate::query::Redactor;
 use crate::schema::Schema;
 use crate::value::Value;
@@ -71,6 +71,28 @@ impl Line {
     }
 }
 
+/// An ordinary list attribute's change, printed whole (the ticket's
+/// R-111 round 2, not R-158's keyed list or set): its display path
+/// (`containers[name=traefik].args`) and its edit script, aligned by
+/// LCS over elements compared by value ([`crate::provider::list_diffs`]).
+#[derive(Debug, Clone)]
+pub struct ListChange {
+    pub path: String,
+    pub ops: Vec<ListLine>,
+}
+
+/// One element of a [`ListChange`]'s edit script, its value(s) redacted
+/// as a leaf's are. `at` is the index in the list the plan's whole-list
+/// block numbers by (the list after, for every op but `Remove`, whose
+/// `at` is the list before's).
+#[derive(Debug, Clone)]
+pub enum ListLine {
+    Keep { at: usize, value: Shown },
+    Insert { at: usize, value: Shown },
+    Remove { at: usize, value: Shown },
+    Change { at: usize, before: Shown, after: Shown },
+}
+
 /// A value given at creation only that the plan keeps (R-198): its line,
 /// and the note it says of why the value differs where dform can tell
 /// (`(the key was replaced)`, [`provider::Change::note`](crate::provider::Change::note)).
@@ -114,6 +136,10 @@ pub struct Deformation {
     pub renamed: Option<(String, String)>,
     /// A replace's reason as its provider gave it ([`Action::reason`]).
     pub reason: Option<String>,
+    /// Every ordinary list attribute that changed, printed whole in
+    /// place of the per-index leaf lines of the same paths in `lines`
+    /// (the ticket's R-111 round 2).
+    pub list_edits: Vec<ListChange>,
 }
 
 /// An action's change lines. An update diffs a keyless set, or a list
@@ -150,7 +176,43 @@ pub(super) fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs
             .collect(),
         renamed: a.renamed.clone(),
         reason: a.reason.as_deref().map(|why| r.text(why)),
+        list_edits: list_changes(&a.list_edits, schema, r),
     }
+}
+
+/// `list_edits` (R-111 round 2), each attribute's edit script redacted
+/// as a leaf's values are.
+fn list_changes(list_edits: &ListDiffs, schema: &Schema, r: &Redactor) -> Vec<ListChange> {
+    list_edits
+        .iter()
+        .map(|(path, (sensitive, ops))| ListChange {
+            path: path.clone(),
+            ops: ops.iter().map(|op| list_line(*sensitive, op, schema, r)).collect(),
+        })
+        .collect()
+}
+
+fn list_line(sensitive: bool, op: &ListOp, schema: &Schema, r: &Redactor) -> ListLine {
+    let v = |j: &Json| shown(Some(j), sensitive, schema, r);
+    match op {
+        ListOp::Keep { at, value } => ListLine::Keep { at: *at, value: v(value) },
+        ListOp::Insert { at, value } => ListLine::Insert { at: *at, value: v(value) },
+        ListOp::Remove { at, value } => ListLine::Remove { at: *at, value: v(value) },
+        ListOp::Change { at, before, after } => ListLine::Change {
+            at: *at,
+            before: v(before),
+            after: v(after),
+        },
+    }
+}
+
+/// Whether leaf change `c`'s path lies under one of `list_edits`'
+/// ordinary-list attributes (its per-index line prints in the list's
+/// whole-list block instead).
+fn in_list_edit(list_edits: &ListDiffs, path: &str) -> bool {
+    list_edits
+        .keys()
+        .any(|k| path.strip_prefix(k.as_str()).is_some_and(|rest| rest.starts_with('[')))
 }
 
 /// What an action's change lines are printed with.
@@ -222,6 +284,11 @@ impl<'a> Leaves<'a> {
         let mut lines = Vec::new();
         let mut elements: Vec<(String, String, ElementChanges)> = Vec::new();
         for (c, shown_path) in sent.into_iter().zip(paths) {
+            // An ordinary list's per-index line prints in its whole-list
+            // block instead (R-111 round 2).
+            if in_list_edit(&a.list_edits, &c.path) {
+                continue;
+            }
             let Some((list, elem, rest)) = by_element
                 .then(|| element_of(&a.addr.typ, &c.path, self.schema))
                 .flatten()

@@ -4,7 +4,7 @@
 //! bindings as the default level says them.
 
 use super::chains::write_chain;
-use super::deformation::{Deformation, Kept, Line, Op};
+use super::deformation::{Deformation, Kept, Line, ListChange, ListLine, Op};
 use super::fold::scalar;
 use super::labels::{address, marker_of, reference};
 use super::layout::{Row, WIDTH};
@@ -166,6 +166,9 @@ impl Report {
             if self.why == Why::Full {
                 write_chain(rows, l, &format!("{inner}  "), self.why);
             }
+        }
+        for lc in &d.list_edits {
+            write_list_change(rows, lc, inner, style, self.why);
         }
         for k in &d.kept {
             write_kept(rows, k, inner, style, self.why);
@@ -369,6 +372,87 @@ pub(super) fn write_kept(rows: &mut Vec<Row>, k: &Kept, indent: &str, style: Sty
             format!("{painted}  {}", style.note(n)),
         ),
         None => (plain, painted),
+    };
+    rows.push(Row::new(&plain, painted));
+}
+
+/// An ordinary list's whole value, under its attribute (R-111 round 2,
+/// the 2026-10-17 decision): the brackets on their own lines, one
+/// element a line, unchanged plain (dimmed), removed `-`, inserted `+`,
+/// changed in place `~ before → after`; a run of unchanged elements over
+/// about twelve elided to `… N unchanged …`, the changed ones always
+/// shown with one neighbour each side.
+fn write_list_change(rows: &mut Vec<Row>, lc: &ListChange, indent: &str, style: Style, why: Why) {
+    let head = format!("{indent}{} = [", lc.path);
+    rows.push(Row::plain(head));
+    let base = format!("{indent}  ");
+    let elide = lc.ops.len() > 12;
+    let changed = |op: &ListLine| !matches!(op, ListLine::Keep { .. });
+    let mut i = 0;
+    while i < lc.ops.len() {
+        if changed(&lc.ops[i]) {
+            write_list_line(rows, &lc.ops[i], &base, style, why);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < lc.ops.len() && !changed(&lc.ops[i]) {
+            i += 1;
+        }
+        let run = &lc.ops[start..i];
+        let needed = usize::from(start > 0) + usize::from(i < lc.ops.len());
+        if !elide || run.len() <= needed {
+            run.iter()
+                .for_each(|op| write_list_line(rows, op, &base, style, why));
+            continue;
+        }
+        if start > 0 {
+            write_list_line(rows, &run[0], &base, style, why);
+        }
+        let note = format!("… {} unchanged …", run.len() - needed);
+        rows.push(Row::new(
+            &format!("{base}{note}"),
+            format!("{base}{}", style.paint(Paint::Dim, &note)),
+        ));
+        if i < lc.ops.len() {
+            write_list_line(rows, &run[run.len() - 1], &base, style, why);
+        }
+    }
+    rows.push(Row::plain(format!("{indent}]")));
+}
+
+fn write_list_line(rows: &mut Vec<Row>, op: &ListLine, base: &str, style: Style, why: Why) {
+    let said = |v: &Shown| v.said(why);
+    let (plain, painted) = match op {
+        ListLine::Keep { value, .. } => (
+            format!("{base}  {}", said(value)),
+            format!("{base}  {}", style.paint(Paint::Dim, &said(value))),
+        ),
+        ListLine::Insert { value, .. } => (
+            format!("{base}+ {}", said(value)),
+            format!(
+                "{base}{} {}",
+                style.paint(Paint::Create, "+"),
+                style.said(value, why)
+            ),
+        ),
+        ListLine::Remove { value, .. } => (
+            format!("{base}- {}", said(value)),
+            format!(
+                "{base}{} {}",
+                style.paint(Paint::Delete, "-"),
+                style.said(value, why)
+            ),
+        ),
+        ListLine::Change { before, after, .. } => (
+            format!("{base}~ {} → {}", said(before), said(after)),
+            format!(
+                "{base}{} {} → {}",
+                style.paint(Paint::Update, "~"),
+                style.said(before, why),
+                style.said(after, why)
+            ),
+        ),
     };
     rows.push(Row::new(&plain, painted));
 }

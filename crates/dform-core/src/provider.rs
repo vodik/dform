@@ -176,6 +176,10 @@ pub struct Action {
     /// A replace's reason, where its provider's Plan gave one
     /// ([`Planned::reason`]).
     pub reason: Option<String>,
+    /// Every ordinary list attribute that changed, by its display path
+    /// ([`list_diffs`]): its edit script replaces the per-index leaf
+    /// changes of the same paths in `changes` when the plan prints it.
+    pub list_edits: ListDiffs,
 }
 
 impl Action {
@@ -190,6 +194,7 @@ impl Action {
             kept: Vec::new(),
             renamed: None,
             reason: None,
+            list_edits: Default::default(),
         }
     }
 
@@ -470,6 +475,187 @@ fn key_fields(keys: &[String], x: &Json) -> Value {
     )
 }
 
+/// One step of an ordinary list's edit script (R-111 round 2): an
+/// element kept, inserted, removed, or changed in place, aligned by LCS
+/// over elements compared by value (R-158 is a keyed list's or a set's,
+/// unchanged). `at` is the element's index in the list the op leaves
+/// behind: the one after (`after`) for `Keep`, `Insert` and `Change`,
+/// the one before (`before`) for `Remove`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ListOp {
+    Keep { at: usize, value: Json },
+    Insert { at: usize, value: Json },
+    Remove { at: usize, value: Json },
+    Change { at: usize, before: Json, after: Json },
+}
+
+/// Every ordinary (unkeyed, non-`set`) list attribute of `typ` whose
+/// value differs between `before` and `after`, by its display path
+/// (`containers[name=traefik].args`): whether the schema marks it
+/// sensitive, and its edit script. A keyed list or a set prints by
+/// element as today (R-158); this walks into one only to find an
+/// ordinary list nested in an element both sides still have, paired by
+/// its key or its content.
+pub fn list_diffs(schema: &Schema, typ: &str, before: &Json, after: &Json) -> ListDiffs {
+    let mut out = BTreeMap::new();
+    walk_list_diffs(schema, typ, before, after, "", "", &mut out);
+    out
+}
+
+pub type ListDiffs = BTreeMap<String, (bool, Vec<ListOp>)>;
+
+fn walk_list_diffs(
+    schema: &Schema,
+    typ: &str,
+    before: &Json,
+    after: &Json,
+    prefix: &str,
+    norm: &str,
+    out: &mut ListDiffs,
+) {
+    let is_list = |p: &str| schema.attr(typ, p).is_some_and(|a| a.kind() == "list");
+    if !norm.is_empty() && is_list(norm) && schema.list_key(typ, norm).is_none() {
+        if let (Json::Array(a), Json::Array(b)) = (before, after)
+            && a != b
+        {
+            let ops = edit_script(a, b);
+            if !ops.is_empty() {
+                out.insert(prefix.to_string(), (schema.is_sensitive(typ, norm), ops));
+            }
+        }
+        return;
+    }
+    match (before, after) {
+        (Json::Object(ma), Json::Object(mb)) => {
+            let keys: BTreeSet<&String> = ma.keys().chain(mb.keys()).collect();
+            for k in keys {
+                let join = |p: &str| crate::address::path_join(p, k);
+                if let (Some(av), Some(bv)) = (ma.get(k), mb.get(k)) {
+                    walk_list_diffs(schema, typ, av, bv, &join(prefix), &join(norm), out);
+                }
+            }
+        }
+        (Json::Array(xa), Json::Array(xb)) => {
+            let keys = schema.list_key(typ, norm);
+            let is_set = schema.attr(typ, norm).is_some_and(|a| a.kind() == "set");
+            if keys.is_none() && !is_set {
+                return;
+            }
+            let label_of = |v: &Json| -> Option<String> {
+                match keys {
+                    Some(ks) => crate::report::fold::label(ks, &key_fields(ks, v)),
+                    None => Some(format!("#{}", short_hash(&serde_json::to_string(v).unwrap_or_default()))),
+                }
+            };
+            let bmap: BTreeMap<String, &Json> = xb
+                .iter()
+                .filter_map(|v| Some((label_of(v)?, v)))
+                .collect();
+            for v in xa {
+                let Some(l) = label_of(v) else { continue };
+                let Some(bv) = bmap.get(&l) else { continue };
+                let child = format!("{prefix}[{l}]");
+                walk_list_diffs(schema, typ, v, bv, &child, norm, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The edit script from `old` to `new`: the longest common subsequence
+/// of elements equal by value kept in place; a gap of leftover elements
+/// on both sides paired front to front as changed, the longer side's
+/// remainder inserted or removed.
+fn edit_script(old: &[Json], new: &[Json]) -> Vec<ListOp> {
+    let mut ops = Vec::new();
+    let mut at = 0usize;
+    let (mut oi, mut ni) = (0, 0);
+    for (mi, nj) in lcs_pairs(old, new) {
+        gap(&old[oi..mi], &new[ni..nj], &mut at, &mut ops);
+        ops.push(ListOp::Keep {
+            at,
+            value: new[nj].clone(),
+        });
+        at += 1;
+        oi = mi + 1;
+        ni = nj + 1;
+    }
+    gap(&old[oi..], &new[ni..], &mut at, &mut ops);
+    ops
+}
+
+/// A gap between two matched elements (or the edges of the lists): the
+/// shorter side's elements paired front to front against the longer's,
+/// a pair the same value `Keep`, else `Change`; the longer side's
+/// remainder `Remove`d or `Insert`ed.
+fn gap(o: &[Json], n: &[Json], at: &mut usize, ops: &mut Vec<ListOp>) {
+    let pair = o.len().min(n.len());
+    for k in 0..pair {
+        ops.push(if o[k] == n[k] {
+            ListOp::Keep {
+                at: *at,
+                value: n[k].clone(),
+            }
+        } else {
+            ListOp::Change {
+                at: *at,
+                before: o[k].clone(),
+                after: n[k].clone(),
+            }
+        });
+        *at += 1;
+    }
+    for v in &o[pair..] {
+        ops.push(ListOp::Remove {
+            at: *at,
+            value: v.clone(),
+        });
+    }
+    for v in &n[pair..] {
+        ops.push(ListOp::Insert {
+            at: *at,
+            value: v.clone(),
+        });
+        *at += 1;
+    }
+}
+
+/// The longest common subsequence of `a` and `b`, elements equal by
+/// value: pairs of indices `(i, j)`, both strictly increasing. A plain
+/// O(n*m) table; lists over 1000 elements fall back to no match (one
+/// `Change` per paired position, R-111's elision keeps the output
+/// readable regardless).
+fn lcs_pairs(a: &[Json], b: &[Json]) -> Vec<(usize, usize)> {
+    let (n, m) = (a.len(), b.len());
+    if n == 0 || m == 0 || n * m > 1_000_000 {
+        return Vec::new();
+    }
+    let mut dp = vec![vec![0u32; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            dp[i][j] = if a[i] == b[j] {
+                dp[i + 1][j + 1] + 1
+            } else {
+                dp[i + 1][j].max(dp[i][j + 1])
+            };
+        }
+    }
+    let mut pairs = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    while i < n && j < m {
+        if a[i] == b[j] {
+            pairs.push((i, j));
+            i += 1;
+            j += 1;
+        } else if dp[i + 1][j] >= dp[i][j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    pairs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -528,5 +714,160 @@ type_attr(k8s.np, "spec.ref.name", "string", ["required"])
         assert_eq!(norm_path("containers[name=api].image"), "containers.image");
         assert_eq!(norm_path("subnet_ids[0]"), "subnet_ids");
         assert_eq!(norm_path("tags.team"), "tags.team");
+    }
+
+    fn strs(xs: &[&str]) -> Vec<Json> {
+        xs.iter().map(|s| json!(s)).collect()
+    }
+
+    /// One element inserted in the middle: one `Insert`, everything
+    /// else `Keep`, in order (the traefik case, notes.org item 82).
+    #[test]
+    fn one_inserted_element_is_one_insert_the_rest_kept() {
+        let old = strs(&["a", "b", "c", "d", "e"]);
+        let mut new = old.clone();
+        new.insert(2, json!("x"));
+        let ops = edit_script(&old, &new);
+        assert_eq!(
+            ops,
+            vec![
+                ListOp::Keep { at: 0, value: json!("a") },
+                ListOp::Keep { at: 1, value: json!("b") },
+                ListOp::Insert { at: 2, value: json!("x") },
+                ListOp::Keep { at: 3, value: json!("c") },
+                ListOp::Keep { at: 4, value: json!("d") },
+                ListOp::Keep { at: 5, value: json!("e") },
+            ]
+        );
+    }
+
+    /// Two elements changed in place (equal counts on both sides of the
+    /// gap): two `Change` ops, not two `Remove`s and two `Insert`s.
+    #[test]
+    fn two_elements_replaced_in_place_are_two_changes() {
+        let old = strs(&["a", "b", "c", "d"]);
+        let new = strs(&["a", "x", "y", "d"]);
+        let ops = edit_script(&old, &new);
+        assert_eq!(
+            ops,
+            vec![
+                ListOp::Keep { at: 0, value: json!("a") },
+                ListOp::Change { at: 1, before: json!("b"), after: json!("x") },
+                ListOp::Change { at: 2, before: json!("c"), after: json!("y") },
+                ListOp::Keep { at: 3, value: json!("d") },
+            ]
+        );
+    }
+
+    /// A removal with nothing inserted beside it is one `Remove`.
+    #[test]
+    fn one_removed_element_is_one_remove() {
+        let old = strs(&["a", "b", "c"]);
+        let new = strs(&["a", "c"]);
+        let ops = edit_script(&old, &new);
+        assert_eq!(
+            ops,
+            vec![
+                ListOp::Keep { at: 0, value: json!("a") },
+                ListOp::Remove { at: 1, value: json!("b") },
+                ListOp::Keep { at: 1, value: json!("c") },
+            ]
+        );
+    }
+
+    /// Two elements inserted together, both new values (no LCS match
+    /// available for either): both `Insert`, in order.
+    #[test]
+    fn two_consecutive_new_values_are_two_inserts() {
+        let old = strs(&["a", "z"]);
+        let new = strs(&["a", "x", "y", "z"]);
+        let ops = edit_script(&old, &new);
+        assert_eq!(
+            ops,
+            vec![
+                ListOp::Keep { at: 0, value: json!("a") },
+                ListOp::Insert { at: 1, value: json!("x") },
+                ListOp::Insert { at: 2, value: json!("y") },
+                ListOp::Keep { at: 3, value: json!("z") },
+            ]
+        );
+    }
+
+    /// A gap with leftovers on both sides, neither a value found
+    /// elsewhere in the other list: the shorter side (one element) pairs
+    /// front to front as a change, the longer side's remainder inserted.
+    #[test]
+    fn an_unequal_gap_pairs_the_shorter_side_then_inserts_the_rest() {
+        let old = strs(&["a", "m", "z"]);
+        let new = strs(&["a", "x", "y", "z"]);
+        let ops = edit_script(&old, &new);
+        assert_eq!(
+            ops,
+            vec![
+                ListOp::Keep { at: 0, value: json!("a") },
+                ListOp::Change { at: 1, before: json!("m"), after: json!("x") },
+                ListOp::Insert { at: 2, value: json!("y") },
+                ListOp::Keep { at: 3, value: json!("z") },
+            ]
+        );
+    }
+
+    /// A list nested inside a keyed list's element, paired by the
+    /// element's key: the top-level `containers` stays by key (R-158),
+    /// only its `args` (ordinary) gets an edit script.
+    #[test]
+    fn an_ordinary_list_nested_in_a_keyed_element_is_found_by_its_key() {
+        let schema = Schema::parse(
+            r#"
+type_attr(k8s.deployment, "spec.containers", "list", [])
+type_list_key(k8s.deployment, "spec.containers", ["name"])
+type_attr(k8s.deployment, "spec.containers.args", "list(string)", [])
+"#,
+            "test",
+        )
+        .unwrap();
+        let before = json!({"spec": {"containers": [
+            {"name": "traefik", "args": ["a", "b", "c"]},
+        ]}});
+        let after = json!({"spec": {"containers": [
+            {"name": "traefik", "args": ["a", "x", "c"]},
+        ]}});
+        let diffs = list_diffs(&schema, "k8s.deployment", &before, &after);
+        assert_eq!(
+            diffs.keys().collect::<Vec<_>>(),
+            ["spec.containers[name=traefik].args"]
+        );
+        let (sensitive, ops) = &diffs["spec.containers[name=traefik].args"];
+        assert!(!sensitive);
+        assert_eq!(
+            ops,
+            &vec![
+                ListOp::Keep { at: 0, value: json!("a") },
+                ListOp::Change { at: 1, before: json!("b"), after: json!("x") },
+                ListOp::Keep { at: 2, value: json!("c") },
+            ]
+        );
+    }
+
+    /// A keyed list or a set itself is not an edit script (R-158): an
+    /// element added or removed there is not a `list_diffs` entry.
+    #[test]
+    fn a_keyed_list_itself_is_not_an_edit_script() {
+        let schema = Schema::parse(
+            r#"
+type_attr(k8s.deployment, "spec.containers", "list", [])
+type_list_key(k8s.deployment, "spec.containers", ["name"])
+type_attr(k8s.deployment, "spec.containers.image", "string", [])
+"#,
+            "test",
+        )
+        .unwrap();
+        let before = json!({"spec": {"containers": [{"name": "a", "image": "a:1"}]}});
+        let after = json!({"spec": {"containers": [
+            {"name": "a", "image": "a:1"},
+            {"name": "b", "image": "b:1"},
+        ]}});
+        let diffs = list_diffs(&schema, "k8s.deployment", &before, &after);
+        assert!(diffs.is_empty(), "{diffs:?}");
     }
 }

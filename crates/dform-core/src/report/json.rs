@@ -1,7 +1,7 @@
 //! The report as JSON (`--json`, the plan file): its changes, lines, conflicts,
 //! groups and policies, each value as the redactor shows it.
 
-use super::deformation::{Deformation, Line, Op};
+use super::deformation::{Deformation, Line, ListChange, ListLine, Op};
 use super::errors::Diag;
 use super::groups::{Group, group_address, group_copy};
 use super::labels::kind_name;
@@ -280,6 +280,19 @@ impl Report {
                 .collect::<Vec<_>>()
                 .into(),
         );
+        // An ordinary list's edit script (R-111 round 2): `inserted`,
+        // `removed` and `changed` entries by index, in place of the old
+        // per-index rewrites of the same paths in `changes`.
+        if !d.list_edits.is_empty() {
+            m.insert(
+                "lists".into(),
+                d.list_edits
+                    .iter()
+                    .map(list_change_json)
+                    .collect::<Vec<_>>()
+                    .into(),
+            );
+        }
         let held: Vec<Json> = self
             .approvals
             .iter()
@@ -339,6 +352,34 @@ fn line_json(l: &Line, explained: bool) -> Json {
         m.insert("chain".into(), json!(l.chain));
     }
     Json::Object(m)
+}
+
+/// An ordinary list's edit script (R-111 round 2): its display path and
+/// each op, by index, `kept`, `inserted`, `removed` or `changed` (never
+/// the old per-index rewrites).
+fn list_change_json(lc: &ListChange) -> Json {
+    json!({
+        "path": lc.path,
+        "ops": lc.ops.iter().map(list_line_json).collect::<Vec<_>>(),
+    })
+}
+
+fn list_line_json(op: &ListLine) -> Json {
+    match op {
+        ListLine::Keep { at, value } => json!({"op": "keep", "at": at, "value": value.json()}),
+        ListLine::Insert { at, value } => {
+            json!({"op": "inserted", "at": at, "value": value.json()})
+        }
+        ListLine::Remove { at, value } => {
+            json!({"op": "removed", "at": at, "value": value.json()})
+        }
+        ListLine::Change { at, before, after } => json!({
+            "op": "changed",
+            "at": at,
+            "before": before.json(),
+            "after": after.json(),
+        }),
+    }
 }
 
 fn diag_json(d: &Diag) -> Json {

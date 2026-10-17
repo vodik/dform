@@ -733,6 +733,26 @@ impl<'a> Planning<'a> {
         // Said of a replace only: beside no replace, a reason explains
         // nothing.
         let reason = reason.filter(|_| matches!(kind, ActionKind::Replace { .. }));
+        // An ordinary list's edit script (the ticket's R-111 round 2),
+        // from the full documents this plan already resolved: a replace
+        // sends its unchanged values too (`sent`), so it compares the
+        // same way an update does.
+        let list_edits = match (
+            matches!(
+                kind,
+                ActionKind::Update
+                    | ActionKind::Drift
+                    | ActionKind::Pending
+                    | ActionKind::Replace { .. }
+            ),
+            self.before.get(&addr),
+            self.resolved.get(&addr),
+        ) {
+            (true, Some(before), Some(after)) => {
+                provider::list_diffs(self.cloud.schema(), &addr.typ, before, after)
+            }
+            _ => Default::default(),
+        };
         Ok(Action {
             kind,
             addr,
@@ -741,6 +761,7 @@ impl<'a> Planning<'a> {
             kept,
             renamed,
             reason,
+            list_edits,
         })
     }
 

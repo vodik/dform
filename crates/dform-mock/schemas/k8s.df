@@ -282,6 +282,7 @@ type_attr(
   [],
 )
 type_attr(k8s.deployment, "spec.template.spec.containers.image", "string", ["required"])
+type_attr(k8s.deployment, "spec.template.spec.containers.args", "list(string)", [])
 type_attr(k8s.deployment, "spec.template.spec.containers.ports", "list", [])
 type_list_key(k8s.deployment, "spec.template.spec.containers.ports", ["containerPort", "protocol"])
 type_attr(k8s.deployment, "spec.template.spec.containers.env", "list", [])

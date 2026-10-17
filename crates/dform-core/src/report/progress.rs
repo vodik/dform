@@ -757,6 +757,7 @@ mod tests {
             kept: vec![],
             renamed: None,
             reason: None,
+            list_edits: vec![],
         };
         let (da, db, dc) = (d(&a), d(&b), d(&c));
         let outline = [
