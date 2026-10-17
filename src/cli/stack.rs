@@ -114,7 +114,14 @@ impl<'a> Listing<'a> {
 
     /// The rows of the stack `s`: each deployment with state, each the
     /// project module lists that has none yet, else one row saying none
-    /// has.
+    /// has. A `stack listed` span.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "store",
+        skip_all,
+        fields(otel.name = "stack listed", stack = %s.path)
+    )]
     fn stack(&mut self, s: &crate::project::Found) -> Result<()> {
         let root = &self.cli.root;
         // Where the stack's deployments are: its backend's, else the state
