@@ -541,3 +541,45 @@ fn a_readers_trace_is_the_schemas_tree() {
     let path = std::env::var("DFORM_TRACE_TREE").expect("DFORM_TRACE_TREE=FILE");
     assert_spans(&common::spans(std::path::Path::new(&path)), &path);
 }
+
+/// The fake as a component (the `wasm` feature; `cargo xtask
+/// components`): its start's compile, link and instantiation under the
+/// provider's start, its calls one span each, their time in it a field.
+#[cfg(feature = "wasm")]
+#[test]
+fn a_components_plan_and_apply_are_the_schemas_tree() {
+    use crate::host_trace::{built, wasm_cache};
+    let fake = built(
+        "dform_provider_fake.wasm",
+        "cargo build -p dform-provider-fake --release --target wasm32-wasip3 --features component",
+    );
+    let s = Scratch::new("trace-tree-wasm");
+    s.write("p.df", WAITS);
+    let cache = wasm_cache().display().to_string();
+    let env = [
+        ("DFORM_PROVIDER_FAKE", fake.as_str()),
+        ("XDG_CACHE_HOME", cache.as_str()),
+    ];
+    let dev = ["dev", "--world", "w.json"];
+    traced(
+        &s,
+        "plan.jsonl",
+        &[&dev[..], &["plan", "p.df"]].concat(),
+        &env,
+    )
+    .success();
+    assert_tree(&s, "plan.jsonl");
+    let apply = [
+        &dev[..],
+        &[
+            "apply",
+            "--yes",
+            "--chaos",
+            r#"not-ready=db.postgres["d"].endpoint:3"#,
+            "p.df",
+        ],
+    ]
+    .concat();
+    traced(&s, "apply.jsonl", &apply, &env).success();
+    assert_tree(&s, "apply.jsonl");
+}
