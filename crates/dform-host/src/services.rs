@@ -25,7 +25,7 @@ const RENEW_BEFORE: Duration = Duration::from_secs(10);
 
 /// How many times an idempotent request is sent again
 /// ([`Services::request`]).
-const RETRIES: u32 = 3;
+pub const RETRIES: u32 = 3;
 /// The pause before an idempotent request's first retry, doubled each
 /// time; its bucket's window paces it beside (a 429 halves it, a
 /// `Retry-After` pauses it).
@@ -704,46 +704,6 @@ mod tests {
         };
         assert_eq!(sent(None), ["Bearer t1", "Bearer t1"]);
         assert_eq!(sent(Some(0)), ["Bearer renewed", "Bearer renewed"]);
-    }
-
-    /// Retries are the host's: an idempotent GET the server answers 503
-    /// once is sent again and answered; a POST is answered the 503, for
-    /// the provider to classify; a GET that keeps failing is sent four
-    /// times in all.
-    #[test]
-    fn the_host_sends_an_idempotent_request_again_and_no_other() {
-        let server = Server::http1();
-        let seen = Arc::new(Mutex::new(std::collections::BTreeMap::<String, u32>::new()));
-        let counts = seen.clone();
-        server.answer(move |s| {
-            let mut c = counts.lock().unwrap();
-            let n = c.entry(format!("{} {}", s.method, s.path)).or_default();
-            *n += 1;
-            match (*n, s.path.as_str()) {
-                (1, _) | (_, "/down") => (503, Vec::new(), b"busy".to_vec()),
-                _ => (200, Vec::new(), b"ok".to_vec()),
-            }
-        });
-        let host = Services::new(Grants::none("p"));
-        let send = |method: &str, path: &str| {
-            let req = HttpRequest {
-                method: method.into(),
-                url: server.url(path),
-                idempotent: HttpRequest::idempotent_method(method),
-                ..HttpRequest::default()
-            };
-            host.send(req, None, None).unwrap().status
-        };
-        assert_eq!(send("GET", "/a"), 200);
-        assert_eq!(send("POST", "/b"), 503);
-        assert_eq!(send("GET", "/down"), 503);
-        let seen = seen.lock().unwrap().clone();
-        assert_eq!(
-            seen,
-            [("GET /a", 2), ("GET /down", 1 + RETRIES), ("POST /b", 1)]
-                .map(|(k, n)| (k.to_string(), n))
-                .into()
-        );
     }
 
     /// A signer whose token is what a command prints.
