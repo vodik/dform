@@ -201,6 +201,12 @@ type_attr("ovh.subnet", "network", "ref(ovh.network)", ["required", "force_new"]
 type_attr("ovh.subnet", "region", "string", ["required", "force_new"])
 type_attr("ovh.subnet", "range", "inet", ["required", "force_new"])
 type_attr("ovh.subnet", "pool", "range(ip)", ["optional_computed", "force_new"])
+
+# The API's own names for the pool's two ends: declared so a program that
+# writes one is refused at `check_subnet`'s own message (`pool = "a..=b"`),
+# not here as an undeclared attribute.
+type_attr("ovh.subnet", "start", "ip", [])
+type_attr("ovh.subnet", "end", "ip", [])
 type_attr("ovh.subnet", "dhcp", "bool", ["optional_computed", "force_new"])
 type_attr("ovh.subnet", "no_gateway", "bool", ["optional_computed", "force_new"])
 type_attr("ovh.subnet", "gateway_ip", "ip", ["computed", "nullable"])
