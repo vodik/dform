@@ -1999,7 +1999,15 @@ fn outputs_digest(bytes: Option<&[u8]>) -> String {
 
 /// The digest of the outputs the project's deployment `full` (by its full
 /// name, else its short one) published, as a reader's plan records it;
-/// `None` when it is not registered or published none.
+/// `None` when it is not registered or published none. An `outputs read`
+/// span.
+#[tracing::instrument(
+    target = "dform",
+    level = "debug",
+    name = "store",
+    skip_all,
+    fields(otel.name = "outputs read", deployment = full)
+)]
 pub fn published_digest(root: &Path, full: &str, s3: OpenS3) -> Result<Option<String>> {
     let reg = registry(root)?;
     let Some((_, e)) = registered(&reg, full, &short_of(full)) else {
@@ -2014,7 +2022,15 @@ pub fn published_digest(root: &Path, full: &str, s3: OpenS3) -> Result<Option<St
 /// Read the outputs a deployment published at `loc`; `name` is the
 /// reader's name of it, `own` the names its project gives it (checked
 /// against the object): its full name, and its short one, which an
-/// object published before R-200's full names says.
+/// object published before R-200's full names says. An `outputs read`
+/// span.
+#[tracing::instrument(
+    target = "dform",
+    level = "debug",
+    name = "store",
+    skip_all,
+    fields(otel.name = "outputs read", deployment = name)
+)]
 fn read_published(loc: &Location, s3: OpenS3, name: &str, own: &[&str]) -> Result<Read> {
     let store = loc.open(s3)?;
     let at = store.locate(crate::store::OUTPUTS);

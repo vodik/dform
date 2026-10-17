@@ -114,7 +114,14 @@ impl Log {
         self.store.locate(AUDIT)
     }
 
-    /// The log's text; `None` when there is no log.
+    /// The log's text; `None` when there is no log. An `audit read` span.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "store",
+        skip_all,
+        fields(otel.name = "audit read")
+    )]
     pub fn text(&self) -> Result<Option<String>> {
         let mut parts = Vec::new();
         if let Some(o) = self.store.get(AUDIT)? {
@@ -180,7 +187,15 @@ impl Log {
     /// last one; where it went. The store appends without losing a
     /// concurrent entry (a `plan --out` beside an apply), so the chain
     /// does not fork, and the append is durable when this returns (the
-    /// local file fsynced; an object written whole).
+    /// local file fsynced; an object written whole). An `audit appended`
+    /// span, the entry's kind its `entry`.
+    #[tracing::instrument(
+        target = "dform",
+        level = "trace",
+        name = "store",
+        skip_all,
+        fields(otel.name = "audit appended", entry = kind)
+    )]
     pub fn append(&self, kind: &str, fields: Json) -> Result<Pos> {
         // The entry as the store last asked for it, after `text`: the log,
         // or its last lines (`store::TAIL_LINES`).

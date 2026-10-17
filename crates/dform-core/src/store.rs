@@ -215,9 +215,23 @@ impl Location {
     pub fn open(&self, s3: OpenS3) -> Result<Arc<dyn Store>> {
         match self {
             Location::Local(d) => Ok(Arc::new(LocalStore::beside(&d.join(STATE)))),
-            Location::S3(spec) => s3(spec),
+            Location::S3(spec) => opened(spec, s3),
         }
     }
+}
+
+/// The bucket prefix `spec`, opened: a `backend opened` span, what the
+/// backend asks of the bucket as it opens (whether it holds a write's
+/// condition) under it.
+#[tracing::instrument(
+    target = "dform",
+    level = "debug",
+    name = "store",
+    skip_all,
+    fields(otel.name = "backend opened", addr = %spec)
+)]
+fn opened(spec: &S3Spec, s3: OpenS3) -> Result<Arc<dyn Store>> {
+    s3(spec)
 }
 
 impl std::fmt::Display for Location {
@@ -1399,7 +1413,15 @@ impl Deployment {
     /// then the checkpoint, written whole, saying the last log entry it
     /// includes. In a store that fences, only under its lease
     /// ([`Deployment::lock`]), with the lease's fencing counter in it, and
-    /// only over the version this run last read or wrote.
+    /// only over the version this run last read or wrote. A `state
+    /// written` span.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "store",
+        skip_all,
+        fields(otel.name = "state written")
+    )]
     pub fn save_state(&self, st: &State) -> Result<()> {
         let inner = &self.inner;
         stall_at("DFORM_TEST_STALL_AT_WRITE", &inner.writes);
@@ -1464,7 +1486,14 @@ impl Deployment {
 
     /// Publish the deployment's outputs (`stack::Published`) beside its
     /// state, under its lease in a store that fences. Unchanged, nothing
-    /// is written.
+    /// is written. An `outputs published` span.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "store",
+        skip_all,
+        fields(otel.name = "outputs published")
+    )]
     pub fn publish(&self, bytes: &[u8]) -> Result<()> {
         let inner = &self.inner;
         if inner.store.get(OUTPUTS)?.is_some_and(|o| o.bytes == bytes) {
@@ -1519,7 +1548,14 @@ impl Deployment {
 
     /// The fencing counter of this run's lease, once the lease object says
     /// it is still this run's (renewed first when it lapsed without being
-    /// taken over).
+    /// taken over). A `lease checked` span.
+    #[tracing::instrument(
+        target = "dform",
+        level = "trace",
+        name = "store",
+        skip_all,
+        fields(otel.name = "lease checked")
+    )]
     fn check_lease(&self) -> Result<u64> {
         let inner = &self.inner;
         if let Err(why) = inner.held() {
@@ -1564,7 +1600,14 @@ impl Deployment {
 
     /// Take the deployment's lock: one apply at a time. Held until
     /// [`Guard::release`], or the guard drops; in a store that fences,
-    /// renewed until then.
+    /// renewed until then. A `lock taken` span, the renewals' parent.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "store",
+        skip_all,
+        fields(otel.name = "lock taken")
+    )]
     pub fn lock(&self) -> Result<Guard> {
         let inner = &self.inner;
         let holder = format!("{} pid {}", crate::audit::who(), std::process::id());
@@ -1681,6 +1724,14 @@ impl Deployment {
 
     /// The deployment's master (`custody`): its key file read, one made
     /// only for a deployment with no state (`want`), or on `--new-master`.
+    /// A `master found` span.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "store",
+        skip_all,
+        fields(otel.name = "master found")
+    )]
     pub fn master(
         &self,
         mixing: &crate::custody::Mixing,
@@ -1839,6 +1890,15 @@ impl Guard {
         self.give_up()
     }
 
+    /// The renewer stopped and the lease released: a `lock released`
+    /// span.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "store",
+        skip_all,
+        fields(otel.name = "lock released")
+    )]
     fn give_up(&mut self) -> Result<()> {
         let inner = &self.inner;
         drop(self.stop.take());
@@ -1925,7 +1985,14 @@ impl Renewer {
 
     /// One renewal: whether the renewer goes on. The lease is copied out
     /// and its renewal written back: the lock is not held across the
-    /// store's call.
+    /// store's call. A `lease renewed` span.
+    #[tracing::instrument(
+        target = "dform",
+        level = "trace",
+        name = "store",
+        skip_all,
+        fields(otel.name = "lease renewed")
+    )]
     fn step(&mut self) -> bool {
         let inner = &self.inner;
         let Some(mut l) = inner.lease().clone() else {
