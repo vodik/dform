@@ -154,6 +154,7 @@ mod path_wildcard;
 mod paths;
 mod pattern_rest;
 mod patterns;
+mod pending_fields;
 mod perf_reads;
 mod perf_resume;
 mod plan_because;

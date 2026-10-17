@@ -2026,7 +2026,11 @@ block's are (`resource k8s.namespace apps = { metadata = { name = "apps" }
 }`); any other value is one contribution at the root of the resource, an
 entry per key of the object it is when the rule runs, so `set`, a
 baseline's `@default` and an `@override` contribute over it as over a
-block, and a value that is no object is an error naming it. A vendored
+block, and a value that is no object is an error naming it. An unknown
+inside the value is pending only there: `resource dns.record a =
+record(name, target)` with `target` computed plans with its `name`, and
+its `target` is an edge applied with what computes it, as a field written
+`target = r.target` is. A vendored
 manifest is one line, a resource per document:
 
 ```
