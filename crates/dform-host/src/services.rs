@@ -506,9 +506,12 @@ mod tests {
         }
     }
 
-    /// The spans begun: each one's name and its fields, as text.
+    /// A span begun: its name and its fields, as text.
+    type Span = (String, BTreeMap<String, String>);
+
+    /// The spans begun.
     #[derive(Clone, Default)]
-    struct Begun(Arc<Mutex<Vec<(String, BTreeMap<String, String>)>>>);
+    struct Begun(Arc<Mutex<Vec<Span>>>);
 
     struct Fields<'a>(&'a mut BTreeMap<String, String>);
 
