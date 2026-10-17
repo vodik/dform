@@ -9,7 +9,7 @@ use dform_core::plugin::host::{
     Calls, Endpoint, Error, Failure, GitFile, Grants, Handle, HttpRequest, HttpResponse, Level,
     Opened, Run, Target,
 };
-use dform_core::plugin::signer::{Material, Recipe, Signer};
+use dform_core::plugin::signer::{Material, Signer};
 use dform_core::plugin::timed;
 use dform_core::timing::location;
 use std::collections::BTreeMap;
@@ -154,7 +154,7 @@ impl Services {
         if !c.expired_by(renew_by) {
             return Ok(c);
         }
-        let renewed = Arc::new(match &c.signed {
+        let renewed = Arc::new(match &c.material {
             Some(material) => self.signed(&c.name, Some(material))?,
             None => self.load(&c.name)?,
         });
@@ -251,7 +251,7 @@ impl Services {
     /// `req` as it is sent with `cred`: signed by the provider's signer
     /// when the credential's recipe says so; as it is otherwise.
     fn signing(&self, req: HttpRequest, cred: &Credential) -> Result<HttpRequest, Error> {
-        let Some(material) = cred.signed.as_ref().filter(|m| m.recipe == Recipe::Signed) else {
+        let Some(material) = cred.material.as_ref().filter(|m| m.signs()) else {
             return Ok(req);
         };
         let signer = self.signer.get().ok_or_else(|| {
@@ -359,7 +359,7 @@ mod tests {
     use super::*;
     use dform_core::http::fake::Server;
     use dform_core::plugin::credentials::Secret;
-    use dform_core::plugin::signer::{Got, Need, Outcome, Request};
+    use dform_core::plugin::signer::{Got, Need, Outcome, Recipe, Request};
 
     /// A kubeconfig held for the provider `p` whose exec plugin answers
     /// `t1`, `t2`, .. (one more each run, counted in `dir`), expiring at
@@ -402,29 +402,29 @@ mod tests {
             .collect()
     }
 
-    /// A signer that makes a bearer token of the file it names (the
-    /// grant's, here a value held for the provider), which expires at
-    /// `expires`, and renews it as `renewed`.
+    /// A signer that makes a bearer token of the value the grant gives
+    /// (here a setting held for the provider), which expires at `expires`,
+    /// for the server `endpoint`; and renews it as `renewed`.
     struct Tokens {
         expires: Option<u64>,
+        endpoint: Option<String>,
     }
 
     impl Signer for Tokens {
         fn needs(&self) -> Result<Vec<Need>, String> {
-            Ok(vec![
-                Need::Env(vec!["HOME".into()]),
-                Need::File("~/.token".into()),
-            ])
+            Ok(vec![Need::Given, Need::Env(vec!["HOME".into()])])
         }
 
         fn step(&self, got: &[Got]) -> Result<Outcome, String> {
             match got {
-                [Got::Env(env), Got::File(Some(token))] if env.is_empty() => {
-                    let token = String::from_utf8(token.clone()).map_err(|e| e.to_string())?;
+                [Got::Given(given), Got::Env(env)] if env.is_empty() && given.len() == 1 => {
+                    let token = String::from_utf8(given[0].1.clone()).map_err(|e| e.to_string())?;
                     Ok(Outcome::Material(Material {
-                        bytes: token.clone().into_bytes(),
-                        recipe: Recipe::Bearer(token),
+                        recipe: vec![Recipe::Bearer(token), Recipe::ServerName("k".into())],
                         expires: self.expires,
+                        endpoint: self.endpoint.clone(),
+                        namespace: Some("shop".into()),
+                        ..Material::default()
                     }))
                 }
                 other => Err(format!("got {other:?}")),
@@ -435,19 +435,23 @@ mod tests {
             Err("a bearer token signs nothing".into())
         }
 
-        fn refresh(&self, _: &Material, now: u64) -> Result<Outcome, String> {
+        fn refresh(&self, m: &Material, now: u64) -> Result<Outcome, String> {
             Ok(Outcome::Material(Material {
-                bytes: b"renewed".to_vec(),
-                recipe: Recipe::Bearer("renewed".into()),
+                recipe: vec![
+                    Recipe::Bearer("renewed".into()),
+                    Recipe::ServerName("k".into()),
+                ],
                 expires: Some(now + 3600),
+                ..m.clone()
             }))
         }
     }
 
-    /// A `signed` credential is what its provider's signer makes of the
-    /// grant (a held value stands for the file it names; no variable is
-    /// given), applied as its recipe says, and renewed by the signer
-    /// before it expires.
+    /// A credential its provider makes is what its provider's signer
+    /// makes of the grant (here the settings held for it; no variable is
+    /// given), applied as each of its recipes says, the server and
+    /// namespace it names the provider's to read, and renewed by the
+    /// signer before it expires.
     #[test]
     fn a_signed_credential_is_its_signers_recipe_renewed_before_it_expires() {
         let server = Server::http1();
@@ -461,8 +465,14 @@ mod tests {
         let sent = |expires: Option<u64>| {
             let parts = [("token".to_string(), Secret::new(b"t1".to_vec()))];
             let held = credentials::hold(Kind::Signed, "p", parts.into());
-            let host = Services::new(Grants::none("p")).with_signer(Arc::new(Tokens { expires }));
-            let h = host.open(held.name()).unwrap().handle;
+            let endpoint = Some(server.url(""));
+            let signer = Tokens { expires, endpoint };
+            let host = Services::new(Grants::none("p")).with_signer(Arc::new(signer));
+            let opened = host.open(held.name()).unwrap();
+            assert_eq!(opened.endpoint, Some(server.url("")));
+            assert_eq!(opened.namespace.as_deref(), Some("shop"));
+            let c = host.credential(opened.handle).unwrap();
+            assert_eq!(c.server_name.as_deref(), Some("k"));
             (0..2)
                 .map(|_| {
                     let req = HttpRequest {
@@ -470,7 +480,8 @@ mod tests {
                         url: server.url("/"),
                         ..HttpRequest::default()
                     };
-                    String::from_utf8(host.send(req, Some(h), None).unwrap().body).unwrap()
+                    let r = host.send(req, Some(opened.handle), None).unwrap();
+                    String::from_utf8(r.body).unwrap()
                 })
                 .collect::<Vec<_>>()
         };

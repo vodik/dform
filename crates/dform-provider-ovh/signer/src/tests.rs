@@ -54,7 +54,7 @@ fn the_environment_signs_at_the_apis_time() {
         (s("OVH_CONSUMER_KEY"), s(CONSUMER)),
         (s("OVH_ENDPOINT"), s("ovh-eu")),
     ]);
-    let mut got = vec![env, Got::File(None)];
+    let mut got = vec![Got::Given(Vec::new()), env, Got::File(None)];
     let Ok(Outcome::More(more)) = Ovh.step(&got) else {
         panic!("the clock is asked")
     };
@@ -76,7 +76,7 @@ fn the_environment_signs_at_the_apis_time() {
     let Ok(Outcome::Material(m)) = Ovh.step(&got) else {
         panic!("the material")
     };
-    assert!(m.recipe == Recipe::Signed && m.expires.is_none());
+    assert!(m.recipe == [Recipe::Signed] && m.expires.is_none());
     let req = Request {
         method: s("get"),
         url: s(URL),
@@ -122,24 +122,56 @@ fn the_file_is_read_as_ovhs_clients_read_it() {
         ("a", None)
     );
     // No endpoint to ask the clock of: the host's is the API's.
-    let got = [Got::Env(Vec::new()), Got::File(Some(lines.to_vec()))];
+    let got = [
+        Got::Given(Vec::new()),
+        Got::Env(Vec::new()),
+        Got::File(Some(lines.to_vec())),
+    ];
     assert!(matches!(Ovh.step(&got), Ok(Outcome::Material(_))));
     let e = Keys::of_file(b"[default]\nendpoint=ovh-ca\n", None).unwrap_err();
     assert_eq!(e, "it has no section [ovh-ca]");
     let e = Keys::of_file(b"[ovh-ca]\napplication_key=a\n", Some(s("ovh-ca"))).unwrap_err();
     assert_eq!(e, "no application_secret in [ovh-ca]");
-    let none = [Got::Env(Vec::new()), Got::File(None)];
+    let none = [
+        Got::Given(Vec::new()),
+        Got::Env(Vec::new()),
+        Got::File(None),
+    ];
     assert_eq!(
         Ovh.step(&none).unwrap_err(),
         "no OVH keys: neither OVH_APPLICATION_KEY, OVH_APPLICATION_SECRET and OVH_CONSUMER_KEY \
          in the environment nor ~/.ovh.conf"
     );
     let half = [
+        Got::Given(Vec::new()),
         Got::Env(vec![(s("OVH_APPLICATION_KEY"), s("a"))]),
         Got::File(None),
     ];
     assert_eq!(
         Ovh.step(&half).unwrap_err(),
         "OVH_APPLICATION_SECRET is not set in the environment"
+    );
+}
+
+/// The grant's value (the operator's file, a program's setting) is the
+/// keys, and nothing else is asked; without one, the environment and
+/// `~/.ovh.conf` are.
+#[test]
+fn the_grants_value_is_the_keys() {
+    assert_eq!(Ovh.needs().unwrap(), [Need::Given]);
+    let lines = b"application_key=a\napplication_secret=b\nconsumer_key=c\n".to_vec();
+    let given = [Got::Given(vec![(s("signed"), lines)])];
+    let Ok(Outcome::Material(m)) = Ovh.step(&given) else {
+        panic!("the material")
+    };
+    assert_eq!(Keys::of_material(&m).unwrap().0.get("application_key"), "a");
+    let Ok(Outcome::More(more)) = Ovh.step(&[Got::Given(Vec::new())]) else {
+        panic!("the environment is asked")
+    };
+    assert_eq!(more[1], Need::File(s("~/.ovh.conf")));
+    let two = [Got::Given(vec![(s("a"), Vec::new()), (s("b"), Vec::new())])];
+    assert_eq!(
+        Ovh.step(&two).unwrap_err(),
+        "the grant gives 2 values, and the OVH keys are one ovh.conf"
     );
 }

@@ -1,22 +1,26 @@
-//! A `signed` credential (`dform_core::plugin::credentials`): its
-//! provider's signer (`plugin::signer`, sans I/O) makes its material of
-//! the operator's grant, the host performing each thing it needs, and
-//! the host applies the material as its recipe says, asking the signer to
-//! sign each request when the recipe is `Signed`. The host knows nothing
-//! of what a signer signs for: it performs, holds and applies.
+//! A credential its provider makes (`signed`, `kubeconfig`,
+//! `dform_core::plugin::credentials`): its provider's signer
+//! (`plugin::signer`, sans I/O) makes its material of the operator's
+//! grant, the host performing each thing it needs, and the host applies
+//! the material as its recipe says, asking the signer to sign each request
+//! when the recipe says `Signed`. The host knows nothing of what a signer
+//! signs for: it performs, holds and applies.
 //!
-//! What a need gets is the grant's: for `signed:environment`, the
-//! environment's variables the signer names, the file it names (`~/` the
-//! operator's home); for `signed:NAME`, no variable, and the operator's
-//! file `credentials/signed/NAME` (or a setting a program gave, held for
-//! the provider) in place of any file. A fetch is that request, to
-//! exactly its URL, unauthenticated, through the host's HTTP (paced and
-//! traced as every request is). An exec is not performed yet.
+//! What a need gets is the grant's: the value it gives (`given`: the
+//! settings a program gave the provider, by setting, or the operator's
+//! file `credentials/KIND/NAME`, named by its kind; none for
+//! `KIND:environment`); the environment's variables the signer names, for
+//! `KIND:environment` only; the files it names (`~/` the operator's home,
+//! a relative path the operator's file's directory's, else the working
+//! directory's). A fetch is that request, to exactly its URL,
+//! unauthenticated, through the host's HTTP (paced and traced as every
+//! request is). An exec is not performed yet.
 
 use crate::services::Services;
 use dform_core::plugin::credentials::{self, Credential, ENVIRONMENT, Secret};
 use dform_core::plugin::host::{Calls, Error, HttpRequest};
 use dform_core::plugin::signer::{Got, Material, Need, Outcome, Recipe, Request, Response, Signer};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -33,16 +37,22 @@ pub fn now() -> u64 {
 
 /// What the grant gives a signer's needs.
 pub enum Source {
-    /// `signed:environment`: the variables and the files it names.
+    /// `KIND:environment`: the variables and the files it names.
     Environment,
-    /// The operator's file, or a program's setting held for the provider,
-    /// in place of any file; no variable.
-    Given(Secret),
+    /// The operator's file `credentials/KIND/NAME`: its value, named by its
+    /// kind, and its directory, which a relative path is under.
+    File {
+        kind: &'static str,
+        value: Secret,
+        dir: PathBuf,
+    },
+    /// The settings a program gave the provider (held for it), by setting.
+    Settings(BTreeMap<String, Secret>),
 }
 
 impl Source {
     /// The source of the credential `name` for the provider `provider`:
-    /// a setting held for it, else, granted, the environment or the
+    /// the settings held for it, else, granted, the environment or the
     /// operator's file.
     pub fn of(
         name: &str,
@@ -52,23 +62,62 @@ impl Source {
         let fatal = |e: anyhow::Error| {
             Error::fatal(format!("provider {provider}: the credential {name}: {e:#}"))
         };
-        if let Some(held) = credentials::held_value(name, provider) {
-            return held.map(Source::Given).map_err(fatal);
+        if let Some(settings) = credentials::held_settings(name, provider) {
+            return Ok(Source::Settings(settings));
         }
         granted()?;
-        let (_, rest) = credentials::parse_name(name).map_err(fatal)?;
+        let (kind, rest) = credentials::parse_name(name).map_err(fatal)?;
         if rest == ENVIRONMENT {
             return Ok(Source::Environment);
         }
         let path = credentials::file(name).map_err(fatal)?;
-        std::fs::read(&path)
-            .map(|b| Source::Given(Secret::new(b)))
-            .map_err(|e| {
-                fatal(anyhow::anyhow!(
-                    "no value: {} cannot be read ({e})",
-                    path.display()
-                ))
-            })
+        let value = std::fs::read(&path).map(Secret::new).map_err(|e| {
+            fatal(anyhow::anyhow!(
+                "no value: {} cannot be read ({e})",
+                path.display()
+            ))
+        })?;
+        Ok(Source::File {
+            kind: kind.as_str(),
+            value,
+            dir: path.parent().map(PathBuf::from).unwrap_or_default(),
+        })
+    }
+
+    /// The value it gives: the settings, or the operator's file.
+    fn given(&self) -> Vec<(String, Vec<u8>)> {
+        match self {
+            Source::Environment => Vec::new(),
+            Source::File { kind, value, .. } => vec![(kind.to_string(), value.expose().to_vec())],
+            Source::Settings(settings) => settings
+                .iter()
+                .map(|(k, v)| (k.clone(), v.expose().to_vec()))
+                .collect(),
+        }
+    }
+
+    /// The environment's variables of `vars` that are set, for
+    /// `KIND:environment`; none for a grant that gives a value.
+    fn env(&self, vars: &[String]) -> Vec<(String, String)> {
+        match self {
+            Source::Environment => vars
+                .iter()
+                .filter_map(|v| Some((v.clone(), std::env::var(v).ok()?)))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The file `path` names: `~/` the operator's home; relative, the
+    /// operator's file's directory's, else the working directory's.
+    fn path(&self, path: &str) -> Option<PathBuf> {
+        if let Some(rest) = path.strip_prefix("~/") {
+            return std::env::var_os("HOME").map(|h| PathBuf::from(h).join(rest));
+        }
+        Some(match self {
+            Source::File { dir, .. } => dir.join(path),
+            _ => PathBuf::from(path),
+        })
     }
 }
 
@@ -128,25 +177,20 @@ impl Steps<'_> {
 
     /// What `need` gets from the grant.
     fn perform(&self, need: &Need) -> Result<Got, Error> {
-        Ok(match (need, &self.source) {
-            (Need::Env(vars), Source::Environment) => Got::Env(
-                vars.iter()
-                    .filter_map(|v| Some((v.clone(), std::env::var(v).ok()?)))
-                    .collect(),
-            ),
-            (Need::Env(_), Source::Given(_)) => Got::Env(Vec::new()),
-            (Need::File(path), Source::Environment) => {
-                Got::File(home(path).and_then(|p| std::fs::read(p).ok()))
+        Ok(match need {
+            Need::Given => Got::Given(self.source.given()),
+            Need::Env(vars) => Got::Env(self.source.env(vars)),
+            Need::File(path) => {
+                Got::File(self.source.path(path).and_then(|p| std::fs::read(p).ok()))
             }
-            (Need::File(_), Source::Given(value)) => Got::File(Some(value.expose().to_vec())),
-            (Need::Exec(argv), _) => {
+            Need::Exec(c) => {
                 return Err(self.refused(format!(
                     "its signer asks to run {:?}, which the host does not do yet (WORK.org: a \
                      signer's exec need)",
-                    argv.first().map_or("", String::as_str)
+                    c.argv.first().map_or("", String::as_str)
                 )));
             }
-            (Need::Fetch(req), _) => Got::Fetch(self.fetch(req)?),
+            Need::Fetch(req) => Got::Fetch(self.fetch(req)?),
         })
     }
 
@@ -170,41 +214,39 @@ impl Steps<'_> {
     }
 }
 
-/// `path`, its `~/` the operator's home.
-fn home(path: &str) -> Option<PathBuf> {
-    match path.strip_prefix("~/") {
-        Some(rest) => std::env::var_os("HOME").map(|h| PathBuf::from(h).join(rest)),
-        None => Some(PathBuf::from(path)),
-    }
-}
-
 /// The credential `name` applied as `material`'s recipe says.
 pub fn applied(name: &str, material: Material) -> Credential {
     let mut c = Credential {
         name: name.to_string(),
+        endpoint: material.endpoint.clone(),
+        namespace: material.namespace.clone(),
         expires: material
             .expires
             .map(|e| UNIX_EPOCH + Duration::from_secs(e)),
         ..Credential::default()
     };
-    match &material.recipe {
-        Recipe::Bearer(token) => c.headers.push((
-            "Authorization".into(),
-            Secret::new(format!("Bearer {token}").into_bytes()),
-        )),
-        Recipe::Headers(headers) => c.headers.extend(
-            headers
-                .iter()
-                .map(|(k, v)| (k.clone(), Secret::new(v.as_bytes().to_vec()))),
-        ),
-        Recipe::Signed => {}
-        Recipe::TlsClient(t) => {
-            c.client_cert = Some((Secret::new(t.cert.clone()), Secret::new(t.key.clone())));
-            c.ca = t.ca.clone();
+    for recipe in &material.recipe {
+        match recipe {
+            Recipe::Bearer(token) => c.headers.push((
+                "Authorization".into(),
+                Secret::new(format!("Bearer {token}").into_bytes()),
+            )),
+            Recipe::Headers(headers) => c.headers.extend(
+                headers
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Secret::new(v.as_bytes().to_vec()))),
+            ),
+            Recipe::Signed => {}
+            Recipe::TlsClient(t) => {
+                c.client_cert = Some((Secret::new(t.cert.clone()), Secret::new(t.key.clone())));
+            }
+            Recipe::Proxy(url) => c.proxy = Some(url.clone()),
+            Recipe::Ca(pem) => c.ca = Some(pem.clone()),
+            Recipe::Insecure => c.insecure = true,
+            Recipe::ServerName(n) => c.server_name = Some(n.clone()),
         }
-        Recipe::Proxy(url) => c.proxy = Some(url.clone()),
     }
-    c.signed = Some(material);
+    c.material = Some(material);
     c
 }
 
@@ -231,4 +273,39 @@ pub fn sign(
         body: signed.body,
         ..req
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The operator's file gives its value, named by its kind, and a
+    /// relative path is under its directory; the environment gives no
+    /// value, and a relative path is the working directory's; a program's
+    /// settings give each by its name, and no variable.
+    #[test]
+    fn each_grant_gives_its_own() {
+        let file = Source::File {
+            kind: "kubeconfig",
+            value: Secret::new(b"kc".to_vec()),
+            dir: PathBuf::from("/creds/kubeconfig"),
+        };
+        assert_eq!(file.given(), [("kubeconfig".to_string(), b"kc".to_vec())]);
+        assert_eq!(file.path("ca.pem"), Some("/creds/kubeconfig/ca.pem".into()));
+        assert_eq!(file.path("/etc/ca.pem"), Some("/etc/ca.pem".into()));
+        assert!(Source::Environment.given().is_empty());
+        assert_eq!(Source::Environment.path("ca.pem"), Some("ca.pem".into()));
+        let settings = Source::Settings(BTreeMap::from([
+            ("host".to_string(), Secret::new(b"k".to_vec())),
+            ("token".to_string(), Secret::new(b"t".to_vec())),
+        ]));
+        assert_eq!(
+            settings.given(),
+            [
+                ("host".to_string(), b"k".to_vec()),
+                ("token".to_string(), b"t".to_vec())
+            ]
+        );
+        assert!(settings.env(&["PATH".to_string()]).is_empty());
+    }
 }

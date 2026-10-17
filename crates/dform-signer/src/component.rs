@@ -4,7 +4,7 @@
 //! no std: wasi-libc's allocator, string functions and task hook, which
 //! import nothing, so the component imports nothing at all.
 
-use crate::{Got, Material, Need, Outcome, Recipe, Request, Response, Signer, TlsClient};
+use crate::{Command, Got, Material, Need, Outcome, Recipe, Request, Response, Signer, TlsClient};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -118,8 +118,9 @@ impl From<Need> for w::Need {
         match n {
             Need::Env(vars) => w::Need::Env(vars),
             Need::File(path) => w::Need::File(path),
-            Need::Exec(argv) => w::Need::Exec(argv),
+            Need::Exec(Command { argv, env }) => w::Need::Exec(w::Command { argv, env }),
             Need::Fetch(r) => w::Need::Fetch(r.into()),
+            Need::Given => w::Need::Given,
         }
     }
 }
@@ -136,6 +137,7 @@ impl From<w::Got> for Got {
                 body: r.body,
                 at: r.at,
             }),
+            w::Got::Given(values) => Got::Given(values),
         }
     }
 }
@@ -149,9 +151,11 @@ impl From<w::Recipe> for Recipe {
             w::Recipe::TlsClient(t) => Recipe::TlsClient(TlsClient {
                 cert: t.cert,
                 key: t.key,
-                ca: t.ca,
             }),
             w::Recipe::Proxy(p) => Recipe::Proxy(p),
+            w::Recipe::Ca(pem) => Recipe::Ca(pem),
+            w::Recipe::Insecure => Recipe::Insecure,
+            w::Recipe::ServerName(n) => Recipe::ServerName(n),
         }
     }
 }
@@ -165,9 +169,11 @@ impl From<Recipe> for w::Recipe {
             Recipe::TlsClient(t) => w::Recipe::TlsClient(w::TlsClient {
                 cert: t.cert,
                 key: t.key,
-                ca: t.ca,
             }),
             Recipe::Proxy(p) => w::Recipe::Proxy(p),
+            Recipe::Ca(pem) => w::Recipe::Ca(pem),
+            Recipe::Insecure => w::Recipe::Insecure,
+            Recipe::ServerName(n) => w::Recipe::ServerName(n),
         }
     }
 }
@@ -176,8 +182,10 @@ impl From<w::Material> for Material {
     fn from(m: w::Material) -> Material {
         Material {
             bytes: m.bytes,
-            recipe: m.recipe.into(),
+            recipe: m.recipe.into_iter().map(Into::into).collect(),
             expires: m.expires,
+            endpoint: m.endpoint,
+            namespace: m.namespace,
         }
     }
 }
@@ -186,8 +194,10 @@ impl From<Material> for w::Material {
     fn from(m: Material) -> w::Material {
         w::Material {
             bytes: m.bytes,
-            recipe: m.recipe.into(),
+            recipe: m.recipe.into_iter().map(Into::into).collect(),
             expires: m.expires,
+            endpoint: m.endpoint,
+            namespace: m.namespace,
         }
     }
 }

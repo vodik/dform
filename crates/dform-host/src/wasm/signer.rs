@@ -9,7 +9,7 @@
 use super::{engine, load, ticks};
 use anyhow::{Context, Result, bail};
 use dform_core::plugin::signer::{
-    Got, Material, Need, Outcome, Recipe, Request, Signer, TlsClient,
+    Command, Got, Material, Need, Outcome, Recipe, Request, Signer, TlsClient,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -93,107 +93,146 @@ impl Component {
 impl Signer for Component {
     fn needs(&self) -> Result<Vec<Need>, String> {
         let needs = self.call(|s, g| g.call_needs(s))?;
-        Ok(needs.into_iter().map(need).collect())
+        Ok(needs.into_iter().map(Into::into).collect())
     }
 
     fn step(&self, got: &[Got]) -> Result<Outcome, String> {
-        let got: Vec<w::Got> = got.iter().cloned().map(got_of).collect();
-        self.call(|s, g| g.call_step(s, &got)).map(outcome)
+        let got: Vec<w::Got> = got.iter().cloned().map(Into::into).collect();
+        self.call(|s, g| g.call_step(s, &got)).map(Into::into)
     }
 
     fn sign(&self, req: Request, material: &Material, now: u64) -> Result<Request, String> {
-        let (req, material) = (request_of(req), material_of(material.clone()));
+        let (req, material): (w::Request, w::Material) = (req.into(), material.clone().into());
         self.call(|s, g| g.call_sign(s, &req, &material, now))
-            .map(request)
+            .map(Into::into)
     }
 
     fn refresh(&self, material: &Material, now: u64) -> Result<Outcome, String> {
-        let material = material_of(material.clone());
+        let material: w::Material = material.clone().into();
         self.call(|s, g| g.call_refresh(s, &material, now))
-            .map(outcome)
+            .map(Into::into)
     }
 }
 
-fn request(r: w::Request) -> Request {
-    Request {
-        method: r.method,
-        url: r.url,
-        headers: r.headers,
-        body: r.body,
-    }
-}
-
-fn request_of(r: Request) -> w::Request {
-    w::Request {
-        method: r.method,
-        url: r.url,
-        headers: r.headers,
-        body: r.body,
-    }
-}
-
-fn need(n: w::Need) -> Need {
-    match n {
-        w::Need::Env(vars) => Need::Env(vars),
-        w::Need::File(path) => Need::File(path),
-        w::Need::Exec(argv) => Need::Exec(argv),
-        w::Need::Fetch(r) => Need::Fetch(request(r)),
-    }
-}
-
-fn got_of(g: Got) -> w::Got {
-    match g {
-        Got::Env(vars) => w::Got::Env(vars),
-        Got::File(bytes) => w::Got::File(bytes),
-        Got::Exec(out) => w::Got::Exec(out),
-        Got::Fetch(r) => w::Got::Fetch(w::Response {
-            status: r.status,
+impl From<w::Request> for Request {
+    fn from(r: w::Request) -> Request {
+        Request {
+            method: r.method,
+            url: r.url,
             headers: r.headers,
             body: r.body,
-            at: r.at,
-        }),
+        }
     }
 }
 
-fn material(m: w::Material) -> Material {
-    Material {
-        bytes: m.bytes,
-        recipe: match m.recipe {
+impl From<Request> for w::Request {
+    fn from(r: Request) -> w::Request {
+        w::Request {
+            method: r.method,
+            url: r.url,
+            headers: r.headers,
+            body: r.body,
+        }
+    }
+}
+
+impl From<w::Need> for Need {
+    fn from(n: w::Need) -> Need {
+        match n {
+            w::Need::Env(vars) => Need::Env(vars),
+            w::Need::File(path) => Need::File(path),
+            w::Need::Exec(c) => Need::Exec(Command {
+                argv: c.argv,
+                env: c.env,
+            }),
+            w::Need::Fetch(r) => Need::Fetch(r.into()),
+            w::Need::Given => Need::Given,
+        }
+    }
+}
+
+impl From<Got> for w::Got {
+    fn from(g: Got) -> w::Got {
+        match g {
+            Got::Env(vars) => w::Got::Env(vars),
+            Got::File(bytes) => w::Got::File(bytes),
+            Got::Exec(out) => w::Got::Exec(out),
+            Got::Fetch(r) => w::Got::Fetch(w::Response {
+                status: r.status,
+                headers: r.headers,
+                body: r.body,
+                at: r.at,
+            }),
+            Got::Given(values) => w::Got::Given(values),
+        }
+    }
+}
+
+impl From<w::Recipe> for Recipe {
+    fn from(r: w::Recipe) -> Recipe {
+        match r {
             w::Recipe::Bearer(t) => Recipe::Bearer(t),
             w::Recipe::Headers(h) => Recipe::Headers(h),
             w::Recipe::Signed => Recipe::Signed,
             w::Recipe::TlsClient(t) => Recipe::TlsClient(TlsClient {
                 cert: t.cert,
                 key: t.key,
-                ca: t.ca,
             }),
             w::Recipe::Proxy(p) => Recipe::Proxy(p),
-        },
-        expires: m.expires,
+            w::Recipe::Ca(pem) => Recipe::Ca(pem),
+            w::Recipe::Insecure => Recipe::Insecure,
+            w::Recipe::ServerName(n) => Recipe::ServerName(n),
+        }
     }
 }
 
-fn material_of(m: Material) -> w::Material {
-    w::Material {
-        bytes: m.bytes,
-        recipe: match m.recipe {
+impl From<Recipe> for w::Recipe {
+    fn from(r: Recipe) -> w::Recipe {
+        match r {
             Recipe::Bearer(t) => w::Recipe::Bearer(t),
             Recipe::Headers(h) => w::Recipe::Headers(h),
             Recipe::Signed => w::Recipe::Signed,
             Recipe::TlsClient(t) => w::Recipe::TlsClient(w::TlsClient {
                 cert: t.cert,
                 key: t.key,
-                ca: t.ca,
             }),
             Recipe::Proxy(p) => w::Recipe::Proxy(p),
-        },
-        expires: m.expires,
+            Recipe::Ca(pem) => w::Recipe::Ca(pem),
+            Recipe::Insecure => w::Recipe::Insecure,
+            Recipe::ServerName(n) => w::Recipe::ServerName(n),
+        }
     }
 }
 
-fn outcome(o: w::Outcome) -> Outcome {
-    match o {
-        w::Outcome::More(needs) => Outcome::More(needs.into_iter().map(need).collect()),
-        w::Outcome::Material(m) => Outcome::Material(material(m)),
+impl From<w::Material> for Material {
+    fn from(m: w::Material) -> Material {
+        Material {
+            bytes: m.bytes,
+            recipe: m.recipe.into_iter().map(Into::into).collect(),
+            expires: m.expires,
+            endpoint: m.endpoint,
+            namespace: m.namespace,
+        }
+    }
+}
+
+impl From<Material> for w::Material {
+    fn from(m: Material) -> w::Material {
+        w::Material {
+            bytes: m.bytes,
+            recipe: m.recipe.into_iter().map(Into::into).collect(),
+            expires: m.expires,
+            endpoint: m.endpoint,
+            namespace: m.namespace,
+        }
+    }
+}
+
+impl From<w::Outcome> for Outcome {
+    fn from(o: w::Outcome) -> Outcome {
+        match o {
+            w::Outcome::More(needs) => Outcome::More(needs.into_iter().map(Into::into).collect()),
+            w::Outcome::Material(m) => Outcome::Material(m.into()),
+        }
     }
 }

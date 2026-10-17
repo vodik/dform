@@ -230,13 +230,15 @@ interface log {
   log: func(level: level, message: string);
 }
 
-// A provider's signer: what turns the operator's grant of a `signed`
-// credential into the credential's material, and signs a request with
-// it, for a provider whose API wants its requests signed with a secret
-// (OVH's application keys, AWS's SigV4). It is sans-I/O: it names what it
-// needs (a variable, a file, a command's output, a fetch of one URL), the
-// host performs each, under the operator's grant, and hands it the
-// results; it never reaches the world itself. The host runs it apart from
+// A provider's signer: what turns the operator's grant of a credential
+// its provider makes (`signed`, `kubeconfig`) into the credential's
+// material, and signs a request with it, for a provider whose API wants
+// its requests signed with a secret (OVH's application keys, AWS's
+// SigV4) or whose credential is a file of its own (a kubeconfig). It is
+// sans-I/O: it names what it needs (the value the grant gives, a
+// variable, a file, a command's output, a fetch of one URL), the host
+// performs each, under the operator's grant, and hands it the results;
+// it never reaches the world itself. The host runs it apart from
 // the provider (a component of `world signer-component`, which imports
 // nothing, or a native provider's `Signer` service) and holds the
 // material between its calls: the provider that talks to the network
@@ -259,20 +261,31 @@ interface signer {
     at: u64,
   }
 
+  // A command to run: its argv (never a shell string), and variables set
+  // for it beside the host's own.
+  record command {
+    argv: list<string>,
+    env: list<tuple<string, string>>,
+  }
+
   // What the host performs for the signer, in order.
   variant need {
     // These environment variables: the ones set, by name. Only for
-    // `signed:environment`.
+    // `KIND:environment`.
     env(list<string>),
-    // A file's bytes: `~/` its path under the operator's home. For
-    // `signed:NAME`, the operator's file `credentials/signed/NAME` in its
-    // place.
+    // A file's bytes: `~/` its path under the operator's home; a relative
+    // path is the directory's of the operator's file (`KIND:NAME`), else
+    // the working directory's.
     file(string),
-    // A command's standard output (argv, never a shell string), run under
-    // the operator's grant.
-    exec(list<string>),
+    // A command's standard output, run under the operator's grant, its
+    // standard error the host's log.
+    exec(command),
     // This request, sent as it is to exactly its URL, unauthenticated.
     fetch(request),
+    // The value the grant gives, when it gives one: the settings a
+    // program gave the provider, by setting, or the operator's file
+    // (`KIND:NAME`), named by its kind; none for `KIND:environment`.
+    given,
   }
 
   // What a need got, in the order of the needs.
@@ -282,17 +295,16 @@ interface signer {
     file(option<list<u8>>),
     exec(list<u8>),
     fetch(response),
+    given(list<tuple<string, list<u8>>>),
   }
 
-  // A client certificate and its key, PEM, and a CA to trust beside the
-  // machine's.
+  // A client certificate and its key, PEM.
   record tls-client {
     cert: list<u8>,
     key: list<u8>,
-    ca: option<list<u8>>,
   }
 
-  // How the host applies the material.
+  // One way the host applies the material.
   variant recipe {
     // `Authorization: Bearer TOKEN`.
     bearer(string),
@@ -304,16 +316,26 @@ interface signer {
     tls-client(tls-client),
     // Each request through this proxy, an `http://` URL.
     proxy(string),
+    // A CA to trust beside the machine's, PEM.
+    ca(list<u8>),
+    // The server not verified.
+    insecure,
+    // The name TLS offers and verifies in place of the URL's host.
+    server-name(string),
   }
 
   // The credential, as the signer made it: its bytes (the signer's own
-  // encoding, opaque to the host), how the host applies it, and when it
-  // stops working (seconds since the epoch), when it does: the host asks
-  // `refresh` before then.
+  // encoding, opaque to the host), each way the host applies it, and
+  // when it stops working (seconds since the epoch), when it does: the
+  // host asks `refresh` before then. What it is for, when it says (the
+  // server, the namespace it defaults to), is not secret: the provider
+  // reads it off the credential it opened.
   record material {
     bytes: list<u8>,
-    recipe: recipe,
+    recipe: list<recipe>,
     expires: option<u64>,
+    endpoint: option<string>,
+    namespace: option<string>,
   }
 
   // What a step came to: more to perform, or the material.

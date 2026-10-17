@@ -173,8 +173,8 @@ impl Keys {
         text.push_str(&format!("drift={drift}\n"));
         Material {
             bytes: text.into_bytes(),
-            recipe: Recipe::Signed,
-            expires: None,
+            recipe: vec![Recipe::Signed],
+            ..Material::default()
         }
     }
 
@@ -194,38 +194,69 @@ impl Keys {
     }
 }
 
-impl Signer for Ovh {
-    fn needs(&self) -> Result<Vec<Need>, String> {
-        let mut vars: Vec<String> = KEYS.iter().map(|(_, var)| var.to_string()).collect();
-        vars.push(ENDPOINT.to_string());
-        Ok(vec![Need::Env(vars), Need::File(CONF.to_string())])
+impl Keys {
+    /// The keys the grant gives (the operator's file, or a program's
+    /// setting held for the provider): one `ovh.conf`.
+    fn of_given(given: &[(String, Vec<u8>)]) -> Result<Keys, String> {
+        match given {
+            [(_, text)] => Keys::of_file(text, None),
+            more => Err(format!(
+                "the grant gives {} values, and the OVH keys are one ovh.conf",
+                more.len()
+            )),
+        }
     }
 
-    /// The keys from the environment, else the file; then, the endpoint
-    /// named, its clock; then the material.
-    fn step(&self, got: &[Got]) -> Result<Outcome, String> {
-        let (env, file) = match got {
-            [Got::Env(env), Got::File(file), ..] => (env, file),
-            _ => return Err("the OVH signer is given the environment, then a file".into()),
-        };
-        let keys = match (Keys::of_env(env)?, file) {
-            (Some(keys), _) => keys,
+    /// The environment's keys, else the file's (`~/.ovh.conf`), the
+    /// environment's endpoint before the file's.
+    fn of_environment(env: &[(String, String)], file: &Option<Vec<u8>>) -> Result<Keys, String> {
+        match (Keys::of_env(env)?, file) {
+            (Some(keys), _) => Ok(keys),
             (None, Some(text)) => {
                 let endpoint = env
                     .iter()
                     .find(|(n, _)| n == ENDPOINT)
                     .map(|(_, v)| v.clone());
-                Keys::of_file(text, endpoint).map_err(|e| format!("{CONF}: {e}"))?
+                Keys::of_file(text, endpoint).map_err(|e| format!("{CONF}: {e}"))
             }
-            (None, None) => {
-                return Err(format!(
-                    "no OVH keys: neither {}, {} and {} in the environment nor {CONF}",
-                    KEYS[0].1, KEYS[1].1, KEYS[2].1
-                ));
+            (None, None) => Err(format!(
+                "no OVH keys: neither {}, {} and {} in the environment nor {CONF}",
+                KEYS[0].1, KEYS[1].1, KEYS[2].1
+            )),
+        }
+    }
+}
+
+impl Signer for Ovh {
+    fn needs(&self) -> Result<Vec<Need>, String> {
+        Ok(vec![Need::Given])
+    }
+
+    /// The keys the grant gives, else the environment's, else the file's;
+    /// then, the endpoint named, its clock; then the material.
+    fn step(&self, got: &[Got]) -> Result<Outcome, String> {
+        let (keys, rest) = match got {
+            [Got::Given(given), rest @ ..] if !given.is_empty() => (Keys::of_given(given)?, rest),
+            [Got::Given(_)] => {
+                let mut vars: Vec<String> = KEYS.iter().map(|(_, var)| var.to_string()).collect();
+                vars.push(ENDPOINT.to_string());
+                return Ok(Outcome::More(vec![
+                    Need::Env(vars),
+                    Need::File(CONF.to_string()),
+                ]));
+            }
+            [Got::Given(_), Got::Env(env), Got::File(file), rest @ ..] => {
+                (Keys::of_environment(env, file)?, rest)
+            }
+            _ => {
+                return Err(
+                    "the OVH signer is given the grant's value, else the environment and a file"
+                        .into(),
+                );
             }
         };
         let url = keys.endpoint.as_deref().and_then(endpoint_url);
-        match (got.get(2), url) {
+        match (rest.first(), url) {
             (Some(Got::Fetch(r)), _) => {
                 let text = core::str::from_utf8(&r.body).unwrap_or_default().trim();
                 match (r.status, text.parse::<i64>()) {

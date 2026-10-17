@@ -1,7 +1,8 @@
 //! A provider's signer (wit/host/dform-host.wit, `signer`): what turns the
-//! operator's grant of a `signed` credential into its material, and signs
-//! a request with it, for a provider whose API wants its requests signed
-//! with a secret. Sans I/O: a signer names what it needs ([`Need`]), the
+//! operator's grant of a credential its provider makes (`signed`,
+//! `kubeconfig`) into its material, and signs a request with it, for a
+//! provider whose API wants its requests signed with a secret or whose
+//! credential is a file of its own. Sans I/O: a signer names what it needs ([`Need`]), the
 //! host performs each under the operator's grant and hands it what each
 //! got ([`Got`]), until it answers the material ([`Outcome::Material`]).
 //! The host holds the material between calls and applies it as its
@@ -43,20 +44,30 @@ pub struct Response {
     pub at: u64,
 }
 
+/// A command to run: its argv, never a shell string, and variables set
+/// for it beside the host's own.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Command {
+    pub argv: Vec<String>,
+    pub env: Vec<(String, String)>,
+}
+
 /// What the host performs for a signer, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Need {
     /// These environment variables: the ones set, by name. Only for
-    /// `signed:environment`.
+    /// `KIND:environment`.
     Env(Vec<String>),
-    /// A file's bytes, `~/` its path under the operator's home. For
-    /// `signed:NAME`, the operator's file `credentials/signed/NAME` in its
-    /// place.
+    /// A file's bytes, `~/` its path under the operator's home; a relative
+    /// path is the directory's of the operator's file (`KIND:NAME`), else
+    /// the working directory's.
     File(String),
-    /// A command's standard output: argv, never a shell string.
-    Exec(Vec<String>),
+    /// A command's standard output, run under the operator's grant.
+    Exec(Command),
     /// This request, sent as it is to exactly its URL, unauthenticated.
     Fetch(Request),
+    /// The value the grant gives, when it gives one ([`Got::Given`]).
+    Given,
 }
 
 /// What a need got.
@@ -67,6 +78,10 @@ pub enum Got {
     File(Option<Vec<u8>>),
     Exec(Vec<u8>),
     Fetch(Response),
+    /// The settings a program gave the provider, by setting, or the
+    /// operator's file (`KIND:NAME`), named by its kind; none for
+    /// `KIND:environment`.
+    Given(Vec<(String, Vec<u8>)>),
 }
 
 impl core::fmt::Debug for Got {
@@ -79,20 +94,19 @@ impl core::fmt::Debug for Got {
             Got::File(None) => f.write_str("File(none)"),
             Got::Exec(b) => write!(f, "Exec({} bytes)", b.len()),
             Got::Fetch(r) => write!(f, "Fetch({})", r.status),
+            Got::Given(values) => write!(f, "Given({} values)", values.len()),
         }
     }
 }
 
-/// A client certificate and its key, PEM, and a CA to trust beside the
-/// machine's.
+/// A client certificate and its key, PEM.
 #[derive(Clone, PartialEq, Eq)]
 pub struct TlsClient {
     pub cert: Vec<u8>,
     pub key: Vec<u8>,
-    pub ca: Option<Vec<u8>>,
 }
 
-/// How the host applies a credential's material.
+/// One way the host applies a credential's material.
 #[derive(Clone, PartialEq, Eq)]
 pub enum Recipe {
     /// `Authorization: Bearer TOKEN`.
@@ -105,23 +119,44 @@ pub enum Recipe {
     TlsClient(TlsClient),
     /// Each request through this proxy, an `http://` URL.
     Proxy(String),
+    /// A CA to trust beside the machine's, PEM.
+    Ca(Vec<u8>),
+    /// The server not verified.
+    Insecure,
+    /// The name TLS offers and verifies in place of the URL's host.
+    ServerName(String),
 }
 
 /// A credential as its signer made it: its bytes, the signer's own
-/// encoding, opaque to the host; how the host applies it; and when it
+/// encoding, opaque to the host; each way the host applies it; when it
 /// stops working, in seconds since the epoch, when it does (the host asks
-/// [`Signer::refresh`] before then).
-#[derive(Clone, PartialEq, Eq)]
+/// [`Signer::refresh`] before then); and what it is for, when it says,
+/// which is not secret: the provider reads it off the credential it
+/// opened.
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct Material {
     pub bytes: Vec<u8>,
-    pub recipe: Recipe,
+    pub recipe: Vec<Recipe>,
     pub expires: Option<u64>,
+    /// The server it is for.
+    pub endpoint: Option<String>,
+    /// The namespace it defaults to.
+    pub namespace: Option<String>,
+}
+
+impl Material {
+    /// Whether each request is signed with it ([`Recipe::Signed`]).
+    pub fn signs(&self) -> bool {
+        self.recipe.contains(&Recipe::Signed)
+    }
 }
 
 impl core::fmt::Debug for Material {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Material")
             .field("expires", &self.expires)
+            .field("endpoint", &self.endpoint)
+            .field("namespace", &self.namespace)
             .finish_non_exhaustive()
     }
 }

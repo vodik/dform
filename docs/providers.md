@@ -497,7 +497,7 @@ A credential is a name; its kind says how the host applies it:
 | `header` | `NAME: VALUE` | that header |
 | `tls` | PEM: a certificate chain and its key | the TLS session's client certificate |
 | `kubeconfig` | a kubeconfig, or its parts (`host`, `ca`, `token`, `client_certificate`, `client_key`) | its current context's token, client certificate or exec plugin's answer (run by dform, again once it expires), and its cluster's CA, `tls-server-name` and `proxy-url`; its server is the credential's `endpoint`, its namespace the credential's `namespace` |
-| `signed` | what the provider's signer makes of the grant: the environment's variables it names, else the file it names (`signed:environment`), or the operator's file (`signed:NAME`) | as the material's recipe says: a bearer token, headers, a client certificate, a proxy, or each request signed by the signer as the host sends it |
+| `signed` | what the provider's signer makes of the grant: the environment's variables it names, else the file it names (`signed:environment`), or the operator's file (`signed:NAME`) | as each of the material's recipes says: a bearer token, headers, a client certificate, a CA, a server name, a proxy, or each request signed by the signer as the host sends it |
 | `ssh` | an unencrypted OpenSSH private key, in the operator's file only (or an agent's key by its comment or fingerprint) | by dform's SSH client for an `ssh://` or `git+ssh://` location, never to an HTTP call: `[io] credentials = { "ssh://HOST/*" = "ssh:NAME" }` (docs/reference.md, "Locations and transports") |
 
 The value comes from the program or the operator. A provider declares
@@ -528,13 +528,19 @@ it.
 
 A provider whose API wants each request signed with a secret (OVH's
 application keys, AWS's SigV4) has a signer: wit/host's `signer`, sans
-I/O. It names what it needs (`env` variables, a `file`, an `exec`'s
-output, a `fetch` of one URL, unauthenticated: an API's clock); dform
-performs each under the grant, in order, and hands it what each got
-(`step`), until it answers the material and how dform applies it (a
-`recipe`: `bearer`, `headers`, `tls-client`, `proxy`, or `signed`, each
-request handed to its `sign` with the material and dform's time as dform
-sends it; renewed through `refresh` before it `expires`). dform runs the
+I/O. It names what it needs (the value the grant `given`: a program's
+settings by name, or the operator's file `credentials/KIND/NAME` named
+by its kind, none for `KIND:environment`; `env` variables, for
+`KIND:environment` only; a `file`, `~/` the operator's home and a
+relative path the operator's file's directory's; an `exec`'s output; a
+`fetch` of one URL, unauthenticated: an API's clock); dform performs
+each under the grant, in order, and hands it what each got (`step`),
+until it answers the material, how dform applies it (each `recipe` of
+it: `bearer`, `headers`, `tls-client`, `ca`, `insecure`, `server-name`,
+`proxy`, or `signed`, each request handed to its `sign` with the
+material and dform's time as dform sends it), and the `endpoint` and
+`namespace` it is for, which the provider reads off the credential it
+opened; renewed through `refresh` before it `expires`. dform runs the
 signer apart from its provider: a wasm provider's is a component of its
 own beside it (`NAME_signer.wasm` beside `NAME.wasm`, `world
 signer-component`), linked with nothing (one that imports anything is

@@ -192,9 +192,10 @@ pub struct Credential {
     /// When what it applies stops working (an exec plugin's token, its
     /// `expirationTimestamp`): the host opens it again then.
     pub expires: Option<std::time::SystemTime>,
-    /// The material each request is signed with by the provider's signer
-    /// as the host sends it (`signed`, its recipe `Recipe::Signed`).
-    pub signed: Option<crate::plugin::signer::Material>,
+    /// What the provider's signer made it of, when it made it: renewed
+    /// through the signer, and each request signed with it as the host
+    /// sends it when its recipe says (`Recipe::Signed`).
+    pub material: Option<crate::plugin::signer::Material>,
 }
 
 impl Credential {
@@ -364,21 +365,14 @@ pub fn held(name: &str, to: &str) -> Option<Result<Credential>> {
     Some(of_settings(kind, name, &parts))
 }
 
-/// The credential `name` held for the provider `to` as one setting, its
-/// value as given (a `signed` credential's, which stands for the file its
-/// provider's signer names); `None` when it is not one held for it.
-pub fn held_value(name: &str, to: &str) -> Option<Result<Secret>> {
+/// The settings the credential `name` held for the provider `to` was
+/// given, by setting, as they were given (a credential its provider's
+/// signer makes of them); `None` when it is not one held for it.
+pub fn held_settings(name: &str, to: &str) -> Option<BTreeMap<String, Secret>> {
     let map = held_map();
-    let h = map.get(name).filter(|h| h.to == to)?;
-    let mut values = h.parts.values();
-    Some(match (values.next(), values.next()) {
-        (Some(v), None) => Ok(v.clone()),
-        _ => Err(anyhow!(
-            "a {} credential is one setting, not {}",
-            h.kind.as_str(),
-            h.parts.keys().cloned().collect::<Vec<_>>().join(", ")
-        )),
-    })
+    map.get(name)
+        .filter(|h| h.to == to)
+        .map(|h| h.parts.clone())
 }
 
 /// Where the operator's credential files are: `DFORM_CREDENTIALS`, else

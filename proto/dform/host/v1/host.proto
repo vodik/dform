@@ -287,11 +287,20 @@ message Need {
   message Strings {
     repeated string values = 1;
   }
+  // A command: its argv, and the variables set for it beside the host's.
+  message Command {
+    repeated string argv = 1;
+    repeated Header env = 2;
+  }
+  message Given {}
+  // `exec` was its argv alone.
+  reserved 3;
   oneof need {
     Strings env = 1;
     string file = 2;
-    Strings exec = 3;
     SignerRequest fetch = 4;
+    Command exec = 5;
+    Given given = 6;
   }
 }
 
@@ -305,11 +314,20 @@ message Got {
     bytes body = 3;
     uint64 at = 4;
   }
+  // The grant's values, by name.
+  message Given {
+    repeated Value values = 1;
+  }
+  message Value {
+    string name = 1;
+    bytes value = 2;
+  }
   oneof got {
     Headers env = 1;
     File file = 2;
     bytes exec = 3;
     Fetched fetch = 4;
+    Given given = 5;
   }
 }
 
@@ -318,22 +336,34 @@ message Headers {
   repeated Header values = 1;
 }
 
-message Material {
+// One way the host applies a material (the WIT's `recipe`).
+message Recipe {
   message TlsClient {
     bytes cert = 1;
     bytes key = 2;
-    optional bytes ca = 3;
   }
   message Signed {}
-  bytes bytes = 1;
+  message Insecure {}
   oneof recipe {
-    string bearer = 2;
-    Headers headers = 3;
-    Signed signed = 4;
-    TlsClient tls_client = 5;
-    string proxy = 6;
+    string bearer = 1;
+    Headers headers = 2;
+    Signed signed = 3;
+    TlsClient tls_client = 4;
+    string proxy = 5;
+    bytes ca = 6;
+    Insecure insecure = 7;
+    string server_name = 8;
   }
+}
+
+message Material {
+  bytes bytes = 1;
+  // The one recipe it had, before it had several.
+  reserved 2 to 6;
   optional uint64 expires = 7;
+  repeated Recipe recipe = 8;
+  optional string endpoint = 9;
+  optional string namespace = 10;
 }
 
 message NeedsRequest {}

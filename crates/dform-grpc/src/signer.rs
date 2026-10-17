@@ -6,7 +6,7 @@
 
 use crate::host_pb as h;
 use dform_core::plugin::signer::{
-    Got, Material, Need, Outcome, Recipe, Request, Response, Signer, TlsClient,
+    Command, Got, Material, Need, Outcome, Recipe, Request, Response, Signer, TlsClient,
 };
 use std::sync::Arc;
 use tonic::transport::Channel;
@@ -45,13 +45,17 @@ impl From<h::SignerRequest> for Request {
 
 impl From<Need> for h::Need {
     fn from(n: Need) -> h::Need {
-        use h::need::{Need as N, Strings};
+        use h::need::{Command as C, Given, Need as N, Strings};
         h::Need {
             need: Some(match n {
                 Need::Env(values) => N::Env(Strings { values }),
                 Need::File(path) => N::File(path),
-                Need::Exec(values) => N::Exec(Strings { values }),
+                Need::Exec(c) => N::Exec(C {
+                    argv: c.argv,
+                    env: headers(c.env),
+                }),
                 Need::Fetch(r) => N::Fetch(r.into()),
+                Need::Given => N::Given(Given {}),
             }),
         }
     }
@@ -65,15 +69,19 @@ impl TryFrom<h::Need> for Need {
         Ok(match n.need.ok_or("a need that is none")? {
             N::Env(s) => Need::Env(s.values),
             N::File(path) => Need::File(path),
-            N::Exec(s) => Need::Exec(s.values),
+            N::Exec(c) => Need::Exec(Command {
+                argv: c.argv,
+                env: pairs(c.env),
+            }),
             N::Fetch(r) => Need::Fetch(r.into()),
+            N::Given(_) => Need::Given,
         })
     }
 }
 
 impl From<Got> for h::Got {
     fn from(g: Got) -> h::Got {
-        use h::got::{Fetched, File, Got as G};
+        use h::got::{Fetched, File, Given, Got as G, Value};
         h::Got {
             got: Some(match g {
                 Got::Env(vars) => G::Env(h::Headers {
@@ -86,6 +94,12 @@ impl From<Got> for h::Got {
                     headers: headers(r.headers),
                     body: r.body,
                     at: r.at,
+                }),
+                Got::Given(values) => G::Given(Given {
+                    values: values
+                        .into_iter()
+                        .map(|(name, value)| Value { name, value })
+                        .collect(),
                 }),
             }),
         }
@@ -107,16 +121,16 @@ impl TryFrom<h::Got> for Got {
                 body: r.body,
                 at: r.at,
             }),
+            G::Given(g) => Got::Given(g.values.into_iter().map(|v| (v.name, v.value)).collect()),
         })
     }
 }
 
-impl From<Material> for h::Material {
-    fn from(m: Material) -> h::Material {
-        use h::material::{Recipe as R, Signed, TlsClient as T};
-        h::Material {
-            bytes: m.bytes,
-            recipe: Some(match m.recipe {
+impl From<Recipe> for h::Recipe {
+    fn from(r: Recipe) -> h::Recipe {
+        use h::recipe::{Insecure, Recipe as R, Signed, TlsClient as T};
+        h::Recipe {
+            recipe: Some(match r {
                 Recipe::Bearer(t) => R::Bearer(t),
                 Recipe::Headers(hs) => R::Headers(h::Headers {
                     values: headers(hs),
@@ -125,11 +139,45 @@ impl From<Material> for h::Material {
                 Recipe::TlsClient(t) => R::TlsClient(T {
                     cert: t.cert,
                     key: t.key,
-                    ca: t.ca,
                 }),
                 Recipe::Proxy(p) => R::Proxy(p),
+                Recipe::Ca(pem) => R::Ca(pem),
+                Recipe::Insecure => R::Insecure(Insecure {}),
+                Recipe::ServerName(n) => R::ServerName(n),
             }),
+        }
+    }
+}
+
+impl TryFrom<h::Recipe> for Recipe {
+    type Error = String;
+
+    fn try_from(r: h::Recipe) -> Result<Recipe, String> {
+        use h::recipe::Recipe as R;
+        Ok(match r.recipe.ok_or("a recipe that is none")? {
+            R::Bearer(t) => Recipe::Bearer(t),
+            R::Headers(hs) => Recipe::Headers(pairs(hs.values)),
+            R::Signed(_) => Recipe::Signed,
+            R::TlsClient(t) => Recipe::TlsClient(TlsClient {
+                cert: t.cert,
+                key: t.key,
+            }),
+            R::Proxy(p) => Recipe::Proxy(p),
+            R::Ca(pem) => Recipe::Ca(pem),
+            R::Insecure(_) => Recipe::Insecure,
+            R::ServerName(n) => Recipe::ServerName(n),
+        })
+    }
+}
+
+impl From<Material> for h::Material {
+    fn from(m: Material) -> h::Material {
+        h::Material {
+            bytes: m.bytes,
+            recipe: m.recipe.into_iter().map(Into::into).collect(),
             expires: m.expires,
+            endpoint: m.endpoint,
+            namespace: m.namespace,
         }
     }
 }
@@ -138,21 +186,16 @@ impl TryFrom<h::Material> for Material {
     type Error = String;
 
     fn try_from(m: h::Material) -> Result<Material, String> {
-        use h::material::Recipe as R;
         Ok(Material {
             bytes: m.bytes,
-            recipe: match m.recipe.ok_or("material with no recipe")? {
-                R::Bearer(t) => Recipe::Bearer(t),
-                R::Headers(hs) => Recipe::Headers(pairs(hs.values)),
-                R::Signed(_) => Recipe::Signed,
-                R::TlsClient(t) => Recipe::TlsClient(TlsClient {
-                    cert: t.cert,
-                    key: t.key,
-                    ca: t.ca,
-                }),
-                R::Proxy(p) => Recipe::Proxy(p),
-            },
+            recipe: m
+                .recipe
+                .into_iter()
+                .map(Recipe::try_from)
+                .collect::<Result<_, _>>()?,
             expires: m.expires,
+            endpoint: m.endpoint,
+            namespace: m.namespace,
         })
     }
 }
