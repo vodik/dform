@@ -19,9 +19,9 @@
 //! yet", as a tag the registry does not have yet is.
 
 use crate::ast::ExternFn;
-use crate::plugin::host::{Error, Failure};
 #[cfg(not(target_family = "wasm"))]
 use crate::plugin::host::{Class, HttpRequest};
+use crate::plugin::host::{Error, Failure};
 use crate::value::{OciRef, Value};
 use anyhow::{Result, anyhow};
 use std::path::PathBuf;

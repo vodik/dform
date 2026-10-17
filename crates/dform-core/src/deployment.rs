@@ -1728,6 +1728,17 @@ pub struct Evaluation {
 }
 
 impl Located {
+    /// The relations of the lowered program that are the program's
+    /// ([`crate::infer::relations`]): what an apply records the rows of,
+    /// and what a later plan compares (R-80).
+    pub fn relations(&self) -> BTreeSet<String> {
+        self.loaded
+            .lowered
+            .as_ref()
+            .map(|l| crate::infer::relations(&l.program))
+            .unwrap_or_default()
+    }
+
     /// Other stacks' published outputs: each deployment the program names,
     /// of the project (every registered one, when it names one by a
     /// variable) or of a remote, through its backend (`s3`).

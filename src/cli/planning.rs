@@ -266,8 +266,8 @@ impl<'a> Reporter<'a> {
             .filter(|a| matches!(a.kind, ActionKind::Delete))
             .map(|a| a.addr.to_string())
             .collect();
-        let rows_now = |rel: &str| res.facts.iter().filter(|f| f.pred == rel).count();
-        zset::emptied(then, &deleted, &rows_now, because)
+        let now = zset::rows_now(res, &self.located.relations());
+        zset::emptied(then, &deleted, &now, because)
             .into_iter()
             .filter(|e| !e.allowed(&self.allow_empty))
             .collect()

@@ -1287,13 +1287,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
         }
         // What this apply derived, for the next plan's guardrail and policy
         // pass (R-80).
-        let relations: BTreeSet<String> = self
-            .located
-            .loaded
-            .lowered
-            .as_ref()
-            .map(|l| crate::infer::relations(&l.program))
-            .unwrap_or_default();
+        let relations = self.located.relations();
         let redact = query::Redactor::new(
             &res.facts,
             self.backend().schema(),

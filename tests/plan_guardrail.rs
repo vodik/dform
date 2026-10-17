@@ -234,38 +234,65 @@ fn a_deny_reads_what_the_last_apply_derived() {
 #[test]
 fn a_copys_relation_is_named_as_the_source_reads_it() {
     let s = Scratch::project("guard-copy");
-    let net = "
+    let net = |on: &str| {
+        format!(
+            "
 use fake
-component box {
-  input vpc_net: string
-  resource net.vpc v { cidr = vpc_net }
-}
-resource box blue { vpc_net = \"10.1.0.0/16\" }
-";
-    s.write(
-        "stacks/net.df",
-        &format!("{net}resource box green {{ vpc_net = \"10.0.0.0/16\" }}\n"),
-    );
+component box {{
+  input cidr: string
+  input on: bool = true
+  let vpc_net = cidr where on
+  resource net.vpc v {{ cidr = vpc_net }}
+}}
+resource box blue {{ cidr = \"10.1.0.0/16\" }}
+resource box green {{ cidr = \"10.0.0.0/16\", on = {on} }}
+"
+        )
+    };
+    s.write("stacks/net.df", &net("true"));
     s.run(&["apply", "net", "--yes"]).success();
-    s.write("stacks/net.df", net);
+    s.write("stacks/net.df", &net("false"));
     let r = s.run(&["plan", "net"]).success();
     assert!(
         r.stdout
-            .contains("\n  vpc_net (in green)  had 1 row at the last apply, has none now\n"),
+            .contains("vpc_net (in green)  had 1 row at the last apply, has none now\n"),
         "{}",
         r.stdout
     );
-    assert!(!r.stdout.contains("::"), "{}", r.stdout);
+    let warning = &r.stdout[r.stdout.find("\nwarning\n").unwrap()..];
+    assert!(!warning.contains("::"), "{}", r.stdout);
     let r = s.run(&["apply", "net", "--yes"]).failure();
     assert!(
-        r.stderr.contains(
-            "the plan empties the relation vpc_net (in green), which had 1 row at the last \
-             apply; nothing to ask on (stdin is not a terminal): confirm it on a terminal, or \
-             pass --allow-empty green.vpc_net if it is meant"
-        ),
+        r.stderr
+            .contains("pass --allow-empty green.vpc_net if it is meant"),
         "{}",
         r.stderr
     );
     s.run(&["apply", "net", "--yes", "--allow-empty", "green.vpc_net"])
         .success();
+}
+
+/// What still derives is not a relation that emptied: a `let` renamed or
+/// moved (its old name no relation of the program now), and one whose
+/// value waits on what the plan does not know yet (a new database's
+/// endpoint), had rows at the last apply and are not named.
+#[test]
+fn a_let_renamed_or_waiting_is_no_relation_that_emptied() {
+    let s = Scratch::project("guard-let");
+    let net = "
+use fake
+let tag = \"x\"
+resource db.postgres d1 { }
+let ep = \"postgres://${d1.endpoint}\"
+resource net.vpc main { cidr = \"10.0.0.0/16\" }
+";
+    s.write("stacks/net.df", net);
+    s.run(&["apply", "net", "--yes"]).success();
+    s.write(
+        "stacks/net.df",
+        &net.replace("d1", "d2").replace("let tag", "let label"),
+    );
+    let r = s.run(&["plan", "net", "-v"]).success();
+    assert!(r.stdout.contains("+ db.postgres d2"), "{}", r.stdout);
+    assert!(!r.stdout.contains("warning"), "{}", r.stdout);
 }

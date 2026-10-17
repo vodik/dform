@@ -1189,10 +1189,7 @@ impl Derived {
             r.statement = site.statement;
             r.addresses.push(addr.to_string());
         }
-        for rel in relations {
-            let n = res.facts.iter().filter(|f| &f.pred == rel).count();
-            out.rows.insert(rel.clone(), n);
-        }
+        out.rows = rows_of(res, relations);
         out
     }
 
@@ -1389,14 +1386,46 @@ fn count_rows(n: usize) -> String {
     }
 }
 
+/// How many rows each of `relations` has in `res`.
+fn rows_of(
+    res: &crate::engine::EvalResult,
+    relations: &BTreeSet<String>,
+) -> BTreeMap<String, usize> {
+    let mut rows: BTreeMap<String, usize> = relations.iter().map(|r| (r.clone(), 0)).collect();
+    for f in &res.facts {
+        if let Some(n) = rows.get_mut(&f.pred) {
+            *n += 1;
+        }
+    }
+    rows
+}
+
+/// The rows of each of `relations` (the lowered program's) in `res` that
+/// the guardrail may compare with the last apply's (R-80). A name the
+/// program has no relation of now (renamed, moved into a copy, removed)
+/// is not one that emptied, and neither is one whose rows wait on a value
+/// the plan does not know yet (a stuck instance of it, or one that may
+/// derive after a boundary): neither is a key.
+pub fn rows_now(
+    res: &crate::engine::EvalResult,
+    relations: &BTreeSet<String>,
+) -> BTreeMap<String, usize> {
+    let mut rows = rows_of(res, relations);
+    let waiting = res.stuck.iter().map(|s| &s.head.pred);
+    for pred in waiting.chain(res.may_derive.iter().map(|m| &m.head.pred)) {
+        rows.remove(pred);
+    }
+    rows
+}
+
 /// What the plan empties since the last apply `then`: each rule all of
 /// whose resources are in `deleted`, and each relation with rows then and
-/// none now (`rows_now`). `because` is each address's leaf, when R-79
-/// found one.
+/// none now (`now`, [`rows_now`]: one it has no key of is not compared).
+/// `because` is each address's leaf, when R-79 found one.
 pub fn emptied(
     then: &Derived,
     deleted: &BTreeSet<String>,
-    rows_now: &dyn Fn(&str) -> usize,
+    now: &BTreeMap<String, usize>,
     because: &dyn Fn(&str) -> Option<String>,
 ) -> Vec<Emptied> {
     let mut out = Vec::new();
@@ -1413,7 +1442,7 @@ pub fn emptied(
         });
     }
     for (rel, n) in &then.rows {
-        if *n > 0 && rows_now(rel) == 0 {
+        if *n > 0 && now.get(rel) == Some(&0) {
             out.push(Emptied {
                 name: rel.clone(),
                 statement: None,
