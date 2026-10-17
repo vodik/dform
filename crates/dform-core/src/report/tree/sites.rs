@@ -431,6 +431,31 @@ impl Surface<'_, '_> {
         {
             return None;
         }
+        let beat = self.beaten(c, &contributions, top, focus, depth);
+        let mut site = self.value_site(c, win, focus, depth)?;
+        if site.rank.is_none() && top != Rank::Normal {
+            site.rank = Some(top.name().to_string());
+        }
+        if site.beat.is_none()
+            && let Some((rank, at)) = beat
+        {
+            site.beat = Some(rank);
+            site.beat_at = Some(at);
+        }
+        Some(site)
+    }
+
+    /// What the winner at rank `top` of `contributions` beat: the rank and
+    /// the site of the highest write below it that holds the part asked
+    /// about, `(provider default)` for a provider's value.
+    fn beaten(
+        &mut self,
+        c: &mut Compress,
+        contributions: &[(NodeId, &Fact)],
+        top: Rank,
+        focus: Option<&Focus>,
+        depth: usize,
+    ) -> Option<(String, String)> {
         // The rank of a contribution the program wrote that the winner beat;
         // a provider's default is beaten by every value.
         let lower: Vec<(NodeId, &Fact)> = contributions
@@ -446,7 +471,7 @@ impl Surface<'_, '_> {
                 .and_then(|v| focus.map_or(Some(v), |focus| focus.at(v)))
                 .is_some_and(|part| !matches!(part, Value::Obj(_)))
         };
-        let beat = lower.into_iter().find_map(|(id, f)| match rank_of(f) {
+        lower.into_iter().find_map(|(id, f)| match rank_of(f) {
             r @ Rank::Internal => {
                 provided(f).then(|| (r.name().to_string(), PROVIDER_DEFAULT.to_string()))
             }
@@ -454,18 +479,7 @@ impl Surface<'_, '_> {
                 .site_of(c, id, depth + 1)
                 .filter(|w| !w.at.is_empty() && !w.at.starts_with('<'))
                 .map(|w| (r.name().to_string(), w.at)),
-        });
-        let mut site = self.value_site(c, win, focus, depth)?;
-        if site.rank.is_none() && top != Rank::Normal {
-            site.rank = Some(top.name().to_string());
-        }
-        if site.beat.is_none()
-            && let Some((rank, at)) = beat
-        {
-            site.beat = Some(rank);
-            site.beat_at = Some(at);
-        }
-        Some(site)
+        })
     }
 
     /// The site of fact `id`, a contribution or a cell's value: where its
