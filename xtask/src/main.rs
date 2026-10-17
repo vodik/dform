@@ -8,7 +8,8 @@
 //! - `components`: the components the wasm host's tests run
 //!   (tests/host_wasm.rs), built for wasm32-wasip3 in release: the fake
 //!   provider, the OVH and Kubernetes providers, each carrying its signer
-//!   and its `.df` sources (bundle.rs), and the SDK's async-ABI probe
+//!   and its `.df` sources (bundle.rs), the Tailscale and Vault providers
+//!   (bearer-token HTTP, no signer), and the SDK's async-ABI probe
 //!   (`examples/fetch_at_once`).
 //! - `install [--prefix DIR] [--features F]`: dform and every built-in
 //!   provider, installed where dform looks for them (install.rs).
@@ -100,10 +101,12 @@ struct Component<'a> {
 }
 
 /// The components `components` builds.
-const COMPONENTS: [Component<'static>; 4] = [
+const COMPONENTS: [Component<'static>; 6] = [
     Component::of("dform-provider-fake"),
     Component::of("dform-provider-ovh"),
     Component::of("dform-provider-k8s"),
+    Component::of("dform-provider-tailscale"),
+    Component::of("dform-provider-vault"),
     Component {
         package: "dform-sdk",
         example: Some("fetch_at_once"),

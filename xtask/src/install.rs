@@ -40,8 +40,8 @@ const PROVIDERS: [Provider; 5] = [
     Provider("k8s", Build::Wasm),
     Provider("ovh", Build::Wasm),
     Provider("postgres", Build::Native),
-    Provider("tailscale", Build::Native),
-    Provider("vault", Build::Native),
+    Provider("tailscale", Build::Wasm),
+    Provider("vault", Build::Wasm),
 ];
 
 impl Provider {
