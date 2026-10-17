@@ -76,7 +76,17 @@ scrypt = { version = "0.12", default-features = false }
 # the curve ed25519-dalek is built on, already in the tree.
 curve25519-dalek = { version = "4", default-features = false }
 # A master sealed to a team's age recipients (src/custody.rs, After
-# R-164): X25519 recipients, the identities the operators hold.
+# R-164): X25519 recipients, the identities the operators hold. Pinned
+# at 0.11, not 0.12: age's own manifest (not our `armor` feature) pulls
+# i18n-embed-fl unconditionally for messages dform never shows, which is
+# where the proc-macro-error2 future-incompatibility warning comes from;
+# 0.12 moves to i18n-embed-fl 0.10 (drops proc-macro-error2) but its
+# `ml-kem = "0.2"` resolves against today's `kem` crate (released past
+# the `0.3.0-pre.0` train ml-kem 0.2.1 was written for) to a build
+# failure in ml-kem itself, and russh's own post-quantum ml-kem pins
+# `kem = "0.3"` stable, so no single `kem` version can satisfy both.
+# Revisit when age or ml-kem 0.2.x repins `kem`, or russh's ml-kem moves
+# off 0.3.x.
 age = { version = "0.11", default-features = false, features = ["armor"] }
 # Given secrets (src/custody/given.rs, R-108): a file in SOPS's shape,
 # each value AES-256-GCM under a data key sealed (armored age) to each

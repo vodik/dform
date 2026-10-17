@@ -167,7 +167,8 @@ russh = { version = "=0.64.1", default-features = false, features = ["ring", "rs
 tokio-stream = { version = "0.1", default-features = false, features = ["net"] }
 # tests/recipients.rs makes the team's age identities; tests/given_secrets.rs
 # opens and writes a file of given secrets as SOPS does (armored age, AES-256-GCM
-# with a 32-byte IV, a SHA-512 MAC), the versions dform-core links.
+# with a 32-byte IV, a SHA-512 MAC), the versions dform-core links. Pinned at
+# 0.11, not 0.12: see crates/dform-core/Cargo.toml's `age` line for why.
 age = { version = "0.11", default-features = false, features = ["armor"] }
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
 sha2 = "0.10"
