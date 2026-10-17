@@ -53,7 +53,9 @@ pub(super) fn undeclared(p: &prog::Program, schema: &Schema) -> Vec<Diagnostic> 
 fn write_of(p: &prog::Program, target: &Target) -> Option<(String, String)> {
     let (typ, path) = match target {
         Target::Attr { typ, path, .. } => (*typ, path.clone()),
-        Target::Element { typ, list, rest, .. } => {
+        Target::Element {
+            typ, list, rest, ..
+        } => {
             let path = match rest.is_empty() {
                 true => list.clone(),
                 false => format!("{list}.{}", rest.join(".")),
@@ -227,8 +229,7 @@ mod tests {
         assert_eq!(
             errors,
             [(
-                "s.cred has no attribute `config.nosuch`: its provider does not declare it"
-                    .into(),
+                "s.cred has no attribute `config.nosuch`: its provider does not declare it".into(),
                 "`dform provider schema s` prints s.cred's attributes".into(),
                 "config.nosuch = \"x\"".into(),
             )]
@@ -277,7 +278,7 @@ mod tests {
             [(
                 "s.cred has no attribute `items.config.nosuch`: its provider does not declare \
                  it"
-                    .into(),
+                .into(),
                 "`dform provider schema s` prints s.cred's attributes".into(),
                 "set x.config.nosuch = \"y\" where x in k.items".into(),
             )]
