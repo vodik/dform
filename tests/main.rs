@@ -127,6 +127,7 @@ mod lease_chaos;
 mod lets_params;
 mod lifecycle_seed;
 mod lint_isolated;
+mod list_diffs;
 mod literals;
 mod loader_in_module;
 mod local_lock;
