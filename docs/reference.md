@@ -1330,6 +1330,15 @@ rows do not list, as every type of the `fake` schema does, and a read of
 one is not checked; nor is one of a type its schema declares nothing of
 (a component, a kind a cluster defines).
 
+A write of an attribute its provider does not declare is refused the
+same way, at the write (a block entry, a `set`): `resource aws.vpc main
+{ cidr_blok = ".." }` is an error naming `aws.vpc` and `cidr_blok`, the
+help `cidr_block`. A `set` through a variable is checked against its
+type where the variable's `in` names it; a nested path is checked as
+deep as the schema declares it (an object whose fields it lists), a
+`map` or an untyped object exempt below itself, as `type_open` exempts
+a whole type.
+
 Built-in mock schemas: `fake` (the demo's), `gke` (gke_platform.df), `k8s` (fifteen
 Kubernetes kinds; try `cargo run -- -C tests/fixtures/k8s plan`)
 and `aws-mock` (twelve AWS types in the Terraform provider's shape, with its
