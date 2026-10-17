@@ -7,10 +7,17 @@ publish = false
 
 # The Tailscale provider (R-197), written with the SDK: a tailnet's policy
 # file, its auth keys, its DNS settings and the devices on it, over the
-# Tailscale API v2, every request through the host's HTTP client.
+# Tailscale API v2, every request through the host's HTTP client. Built
+# natively (`cargo build`), or as a wasm provider with the `component`
+# feature (`cargo build --target wasm32-wasip3 --features component`,
+# `cargo xtask components`).
+[lib]
+crate-type = ["rlib", "cdylib"]
+
 [features]
 # `fake`: a Tailscale API in the test process (`src/fake.rs`), for tests.
 fake = []
+component = ["dform-sdk/component"]
 
 [dependencies]
 anyhow = "1.0"
@@ -20,8 +27,3 @@ dform-sdk = { path = "../dform-sdk" }
 
 [dev-dependencies]
 dform-provider-tailscale = { path = ".", features = ["fake"] }
-
-# `dform_sdk::provider!` also writes the component's exports, under the
-# `component` feature on wasm; this provider is native only for now.
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("component"))'] }

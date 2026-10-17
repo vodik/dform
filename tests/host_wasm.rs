@@ -670,8 +670,10 @@ fn k8s_component() -> String {
 /// and its own with its location (and a dry run said), and each
 /// `ratelimit.wait` span by the call of
 /// the request that waited, counted: which of a call's requests sent
-/// together wait is the order they reach the host in. Each request's
-/// bucket and each wait's session filled.
+/// together wait is the order they reach the host in. Each wait's
+/// session filled; a request's bucket, when the provider names one (not
+/// every provider buckets its requests apart: Tailscale and Vault
+/// throttle their whole account as one).
 fn under_calls(spans: &[serde_json::Value]) -> std::collections::BTreeMap<(String, String), usize> {
     let by_id: std::collections::BTreeMap<&str, &serde_json::Value> = spans
         .iter()
@@ -690,9 +692,6 @@ fn under_calls(spans: &[serde_json::Value]) -> std::collections::BTreeMap<(Strin
         let wait = name.ends_with("waits on its window");
         if !request && !wait {
             continue;
-        }
-        if request {
-            assert!(common::attr(sp, "bucket").is_some(), "{sp}");
         }
         if wait {
             assert_ne!(common::attr(sp, "session").as_deref(), Some("0"), "{sp}");
@@ -715,4 +714,134 @@ fn under_calls(spans: &[serde_json::Value]) -> std::collections::BTreeMap<(Strin
         *out.entry((call.to_string(), child)).or_insert(0) += 1;
     }
     out
+}
+
+/// The Tailscale provider's tailnet, in every project below.
+const TS_TAILNET: &str = "vodik.github";
+
+/// The Tailscale provider as a wasm provider, beside the workspace's
+/// target.
+fn tailscale_component() -> String {
+    built(
+        "dform_provider_tailscale.wasm",
+        "cargo build -p dform-provider-tailscale --release --target wasm32-wasip3 --features \
+         component",
+    )
+}
+
+/// A project naming the Tailscale provider at `provider`, granted the
+/// filesystem (its schema's parse, until the crate split) and the
+/// bearer credential the fake server's API key is, `use tailscale`
+/// pointed at `server`, then `body`.
+fn tailscale_project(
+    name: &str,
+    provider: &str,
+    server: &dform_provider_tailscale::fake::Server,
+    body: &str,
+) -> Scratch {
+    use dform_provider_tailscale::fake;
+    let s = Scratch::project(name);
+    s.write(
+        "dform.toml",
+        &format!(
+            "[project]\nedition = \"2026\"\n\n[providers.tailscale]\npath = \"{provider}\"\n\
+             allow = [\"wasi:filesystem\"]\ncredentials = [\"bearer:tailscale\"]\n"
+        ),
+    );
+    s.write("credentials/bearer/tailscale", fake::API_KEY);
+    s.write(
+        "main.df",
+        &format!(
+            "use tailscale {{ tailnet = \"{TS_TAILNET}\", base_url = \"{}\", credential = \
+             \"bearer:tailscale\" }}\n{body}",
+            server.address()
+        ),
+    );
+    s
+}
+
+/// `dform apply main.df --yes` in `s`, its credentials the scratch's
+/// own: the ACL's create reads the tailnet's current policy file before
+/// writing over it (R-13b's "Plan of a create is every leaf" defers the
+/// read to Apply, which a brand-new resource has no prior state for).
+fn apply_tailscale(s: &Scratch) -> common::Run {
+    let out = common::dform()
+        .args(common::on("main.df", &[], &["apply"]))
+        .current_dir(&s.dir)
+        .env("HOME", &s.dir)
+        .env("XDG_CONFIG_HOME", s.path("config"))
+        .env("XDG_CACHE_HOME", wasm_cache())
+        .env("DFORM_CREDENTIALS", s.path("credentials"))
+        .env_remove("DFORM_TRACE")
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .output()
+        .unwrap();
+    common::Run::from(out).success()
+}
+
+const TS_POLICY: &str = r#"
+resource tailscale.acl policy {
+  policy = json.encode({
+    acls = [{ action = "accept", src = ["*"], dst = ["*:*"] }],
+  })
+}
+"#;
+
+/// The Tailscale provider built as a wasm provider (`cargo xtask
+/// components`) against the fake API (its own test module's), granted no
+/// credential but the bearer kind the host applies: Configure, then (at
+/// Apply, the Create's own) a Read of the tailnet's current policy file.
+#[test]
+fn the_tailscale_component_configures_and_reads_through_the_host() {
+    let server = dform_provider_tailscale::fake::Server::start(TS_TAILNET);
+    let s = tailscale_project(
+        "tailscale-wasm-read",
+        &tailscale_component(),
+        &server,
+        TS_POLICY,
+    );
+    apply_tailscale(&s);
+    let seen = server.seen();
+    assert!(
+        seen.iter()
+            .any(|r| r.method == "GET" && r.path == format!("/api/v2/tailnet/{TS_TAILNET}/acl")),
+        "{seen:?}"
+    );
+}
+
+/// The Tailscale provider's trace as a component is its native build's:
+/// an apply of the policy file against the fake API has the same
+/// `io.call` requests under `tailscale Configure` and `tailscale Apply`.
+#[test]
+fn the_tailscale_component_traces_as_its_native_build_does() {
+    let wasm = tailscale_component();
+    let server = dform_provider_tailscale::fake::Server::start(TS_TAILNET);
+    let traced = |name: &str, provider: &str| {
+        let s = tailscale_project(name, provider, &server, TS_POLICY);
+        let out = common::dform()
+            .args(common::yes(&["apply", "main.df", "--trace", "run.jsonl"]))
+            .current_dir(&s.dir)
+            .env("HOME", &s.dir)
+            .env("XDG_CONFIG_HOME", s.path("config"))
+            .env("XDG_CACHE_HOME", wasm_cache())
+            .env("DFORM_CREDENTIALS", s.path("credentials"))
+            .env_remove("DFORM_TRACE")
+            .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+            .output()
+            .unwrap();
+        common::Run::from(out).success();
+        under_calls(&common::spans(&s.path("run.jsonl")))
+    };
+    let native = traced(
+        "tailscale-trace-native",
+        &common::exe("dform-provider-tailscale"),
+    );
+    let component = traced("tailscale-trace-wasm", &wasm);
+    assert!(
+        native
+            .keys()
+            .any(|(call, child)| call == "tailscale Apply" && child.starts_with("tailscale GET")),
+        "{native:#?}"
+    );
+    assert_eq!(component, native);
 }
