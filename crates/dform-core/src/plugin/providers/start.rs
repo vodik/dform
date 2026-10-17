@@ -46,16 +46,22 @@ impl dyn Launch + '_ {
         self.mock()
     }
 
-    /// The provider executable at `exe` started, spawned and its
-    /// handshake answered: a phase of the run.
+    /// The provider `name` started from its executable or component at
+    /// `exe`, spawned or loaded and its handshake answered: a phase of the
+    /// run.
     #[tracing::instrument(
         target = "dform",
         level = "debug",
         name = "plan.phase",
         skip_all,
-        fields(otel.name = %format_args!("provider {} started (spawn and handshake)", exe.display()))
+        fields(otel.name = %format_args!("provider {name} started"), path = %exe.display())
     )]
-    fn start_plugin(&self, exe: &Path, grants: &crate::plugin::host::Grants) -> Result<Link> {
+    fn start_plugin(
+        &self,
+        name: &str,
+        exe: &Path,
+        grants: &crate::plugin::host::Grants,
+    ) -> Result<Link> {
         self.plugin(exe, grants)
     }
 }
@@ -99,6 +105,14 @@ impl Start {
             }
         }
         starts
+    }
+
+    /// The provider's name, as the program's first `use` of it gives it.
+    fn name(&self) -> &str {
+        self.names
+            .first()
+            .or(self.rename.as_ref().map(|b| &b.name))
+            .map_or(self.spec.as_str(), String::as_str)
     }
 
     /// Played by the one mock link: a mock schema no `use` renames.
@@ -281,7 +295,7 @@ impl<'a> Starting<'a> {
                     None => crate::plugin::host::Grants::none_for(&p),
                 };
                 none.files = crate::files::Shared(Some(cfg.files.clone()));
-                launch.start_plugin(&p, cfg.grants_of(&st.spec).unwrap_or(&none))
+                launch.start_plugin(st.name(), &p, cfg.grants_of(&st.spec).unwrap_or(&none))
             }
             (None, Source::Mock(_)) => unreachable!("a plugin"),
         })?;

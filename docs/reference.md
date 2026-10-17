@@ -877,7 +877,7 @@ is in (`tracing`'s format; the spans are the trace's, "A run's trace"):
 ```text
 0.022s DEBUG dform.run{..}:plan.phase{otel.name=located the deployment}:io.call{otel.name=s3.get otel.kind="client" kind="s3.get" addr="s3://dform/stacks.app/state.master"}: close time.busy=0.00ns time.idle=2.20ms
 0.969s DEBUG dform.run{..}:plan.phase{otel.name=providers started and configured}:provider.call{otel.name=configure ovh ..}: close time.busy=0.00ns time.idle=607ms
-1.575s DEBUG dform.run{..}:plan.phase{otel.name=planned (refresh, Plan calls, policy)}:provider.call{otel.name=read ovh.instance lab-0 .. addr="ovh.instance lab-0"}: close time.busy=0.00ns time.idle=606ms
+1.575s DEBUG dform.run{..}:plan.phase{otel.name=planned}:provider.call{otel.name=read ovh.instance lab-0 .. addr="ovh.instance lab-0"}: close time.busy=0.00ns time.idle=606ms
 1.612s DEBUG dform.run{otel.name=dform plan command="plan"}: close time.busy=1.61s time.idle=24.6µs
 ```
 
@@ -5477,14 +5477,14 @@ or a value is never one.
 | `evaluation, round {n}` | `plan.phase`, internal | `evaluated` | | one round of it: the externs it asks are asked together |
 | `io.read` | `io.call`, client | `evaluated`, `evaluation, round {n}` | `kind`, `addr` | a read the program makes (`io.read`) |
 | `oci.resolve` | `io.call`, client | `evaluated`, `evaluation, round {n}` | `kind`, `addr` | an image's tag resolved at its registry |
-| `planned (refresh, Plan calls, policy)` | `plan.phase`, internal | `deployment {deployment}` | | a plan's planning |
-| `refresh` | `plan.phase`, internal | `deployment {deployment}`, `planned (refresh, Plan calls, policy)`, `tick {n}`, `wait, tick {n}` | `count` | the objects the state maps read |
-| `Plan calls` | `plan.phase`, internal | `planned (refresh, Plan calls, policy)`, `deployment {deployment}`, `tick {n}` | `count`, `addresses` | the Plan calls asked together |
-| `policy pass` | `plan.phase`, internal | `planned (refresh, Plan calls, policy)`, `deployment {deployment}`, `tick {n}` | | the policy's rules over the plan |
-| `evaluated the last apply's program, for why` | `plan.phase`, internal | `deployment {deployment}`, `tick {n}` | | the last apply's program evaluated again, for `why` |
+| `planned` | `plan.phase`, internal | `deployment {deployment}` | | a plan's planning |
+| `refresh` | `plan.phase`, internal | `deployment {deployment}`, `planned`, `tick {n}`, `wait, tick {n}` | `count` | the objects the state maps read |
+| `Plan calls` | `plan.phase`, internal | `planned`, `deployment {deployment}`, `tick {n}` | `count`, `addresses` | the Plan calls asked together |
+| `policy pass` | `plan.phase`, internal | `planned`, `deployment {deployment}`, `tick {n}` | | the policy's rules over the plan |
+| `the last apply's program evaluated` | `plan.phase`, internal | `deployment {deployment}`, `tick {n}` | | the last apply's program evaluated again, for `why` |
 | `tick {n}` | `tick`, internal | `deployment {deployment}` | `tick` | an apply's tick |
 | `wait, tick {n}` | `apply.wait`, internal | `tick {n}` | `tick`, `kind` (`world`, `extern`), `count` | a tick waiting on values the world has not reached (R-81) |
-| `{asks} {about}` | `provider.call`, client | `provider {provider} started`, `providers started and configured`, `providers' schema loaded`, `evaluated`, `evaluation, round {n}`, `refresh`, `Plan calls`, `planned (refresh, Plan calls, policy)`, `tick {n}`, `wait, tick {n}` | `provider`, `provider.call` (`Plan`), `addr` (the resource's address or the extern's name), `session` (the configured instance it is made in; a Configure's, the one it opened), `provider.took` (a component's: ms in the provider), `error.type` (a component's trap: `trap`, `exit`, or `deadline`, past the call's epoch deadline) | one call to a provider, from its submit to the run taking its answer |
+| `{asks} {about}` | `provider.call`, client | `provider {provider} started`, `providers started and configured`, `providers' schema loaded`, `evaluated`, `evaluation, round {n}`, `refresh`, `Plan calls`, `planned`, `tick {n}`, `wait, tick {n}` | `provider`, `provider.call` (`Plan`), `addr` (the resource's address or the extern's name), `session` (the configured instance it is made in; a Configure's, the one it opened), `provider.took` (a component's: ms in the provider), `error.type` (a component's trap: `trap`, `exit`, or `deadline`, past the call's epoch deadline) | one call to a provider, from its submit to the run taking its answer |
 | `{provider} {method}` | `io.call`, client | `{asks} {about}` | `kind` (`http`), `provider`, `addr` (the location, without its userinfo, query or fragment), `dry_run` (the request asks for one), `bucket`, `status` | a request a provider sends through the host |
 | `{provider} waits on its window` | `ratelimit.wait`, internal | `{provider} {method}` | `provider`, `session`, `bucket`, `queued` (the requests before it), `window` | the request waiting on its bucket's window |
 | `{provider} ssh exec` | `io.call`, client | `{asks} {about}` | `kind` (`ssh.exec`), `provider`, `addr` (`ssh://HOST`), `status` | a command a provider runs over SSH through the host |

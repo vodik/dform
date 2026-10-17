@@ -77,7 +77,11 @@ impl Providers {
         level = "trace",
         name = "plan.phase",
         skip_all,
-        fields(otel.name = "Plan calls", count = asks.len())
+        fields(
+            otel.name = "Plan calls",
+            count = asks.len(),
+            addresses = %asks.iter().map(|a| a.0.to_string()).collect::<Vec<_>>().join(", ")
+        )
     )]
     fn plan_many(&self, asks: Vec<Ask>) -> Result<Vec<Planned>> {
         let mut out: Vec<Option<Result<Planned>>> = Vec::new();

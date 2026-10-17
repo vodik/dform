@@ -164,7 +164,7 @@ resource k8s.namespace apps {{
     );
     let platform = named(&spans, "deployment stacks.platform[env=lab]");
     let apps = named(&spans, "deployment stacks.apps[env=lab]");
-    let planned = time(under(&spans, platform, "planned (refresh, Plan calls, policy)")[0]);
+    let planned = time(under(&spans, platform, "planned")[0]);
     let evaluated = under(&spans, platform, "evaluated")
         .into_iter()
         .map(time)

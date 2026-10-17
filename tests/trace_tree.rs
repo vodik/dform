@@ -257,10 +257,7 @@ impl Schema {
             .iter()
             .map(|s| (s["spanId"].as_str().unwrap(), s))
             .collect();
-        let name = |s: &Json| {
-            let name = s["name"].as_str().unwrap_or_default();
-            pending(name).unwrap_or(name).to_string()
-        };
+        let name = |s: &Json| s["name"].as_str().unwrap_or_default().to_string();
         let mut out = Vec::new();
         let roots: Vec<String> = spans
             .iter()
@@ -314,17 +311,6 @@ impl Schema {
         }
         out
     }
-}
-
-/// The name a span has in the schema though the code that names it,
-/// another branch's, does not yet give it: a provider's start is named
-/// by its executable's path in plugin/providers/start.rs (fanout/
-/// pipeline's), `provider {provider} started` once it is renamed; then
-/// this goes.
-fn pending(name: &str) -> Option<&'static str> {
-    let path = name.strip_prefix("provider /")?;
-    path.ends_with(" started (spawn and handshake)")
-        .then_some("provider (pending) started")
 }
 
 /// The trace at `path` holds the schema's tree: its deviations, none.

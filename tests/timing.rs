@@ -150,8 +150,9 @@ fn a_plan_writes_its_spans_to_the_trace_file() {
     ] {
         assert!(names.contains(want), "no span {want:?} in {names:?}");
     }
-    // The attributes a span may carry: names, kinds, counts, and the
-    // session a provider call is made in.
+    // The attributes a span may carry: names, kinds, counts, the
+    // addresses of the Plan calls asked together, and the session a
+    // provider call is made in.
     let allowed: BTreeSet<&str> = [
         "provider",
         "provider.call",
@@ -160,6 +161,7 @@ fn a_plan_writes_its_spans_to_the_trace_file() {
         "session",
         "tick",
         "count",
+        "addresses",
         "command",
     ]
     .into();

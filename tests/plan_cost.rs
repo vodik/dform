@@ -147,11 +147,11 @@ fn a_plan_reads_over_one_connection_writes_nothing_and_calls_its_provider_at_onc
     // Every line of the log is there: each phase and call as it ends.
     for phase in [
         "kind=\"s3.get\"",
-        "started (spawn and handshake)",
+        "plan.phase{otel.name=provider ovh started path=",
         "provider.call{otel.name=configure ovh",
         "addr=\"ovh.instance lab-0\"",
         "evaluated",
-        "planned (refresh, Plan calls, policy)",
+        "plan.phase{otel.name=\"planned\"}",
         "dform.run{otel.name=dform plan command=\"plan\"}: close",
     ] {
         assert!(

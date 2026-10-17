@@ -2516,7 +2516,7 @@ impl Evaluator {
         level = "debug",
         name = "plan.phase",
         skip_all,
-        fields(otel.name = "planned (refresh, Plan calls, policy)")
+        fields(otel.name = "planned")
     )]
     fn planned(
         &self,

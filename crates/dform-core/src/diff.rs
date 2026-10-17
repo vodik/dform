@@ -459,7 +459,7 @@ fn explain_in(r: &Rerun, dir: &Path, apply: &Apply, addresses: &[Address]) -> Re
     level = "debug",
     name = "plan.phase",
     skip_all,
-    fields(otel.name = "evaluated the last apply's program, for why")
+    fields(otel.name = "the last apply's program evaluated")
 )]
 pub fn last_apply(
     entries: &[Json],
