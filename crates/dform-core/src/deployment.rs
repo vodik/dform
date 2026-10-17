@@ -2594,6 +2594,39 @@ impl Evaluation {
         };
     }
 
+    /// Whether a provider's settings read the outputs of the deployment
+    /// `name` (as the program names it, `platform[env=lab]`).
+    pub fn configures_from(&self, name: &str) -> bool {
+        settings_upstreams(&self.res)
+            .values()
+            .any(|upstreams| upstreams.contains(name))
+    }
+
+    /// Planned again, in pieces, over what the evaluator reads now
+    /// ([`Evaluator::read_again`]: the outputs of a deployment of its tree
+    /// whose plan made known other than the evaluation read): the program
+    /// evaluated again over the world it read, its resources compiled,
+    /// and only the rows whose documents changed planned again
+    /// ([`Providers::planning_again`]); its notes are not said again.
+    #[tracing::instrument(
+        target = "dform",
+        level = "debug",
+        name = "plan.phase",
+        skip_all,
+        fields(otel.name = "planned again")
+    )]
+    pub fn plan_again(&mut self, opts: &Options) -> Result<()> {
+        let backend = self.evaluator.backend.clone();
+        let _again = backend.planning_again();
+        let (res, violations) = self.evaluator.evaluate(&self.st)?;
+        self.redact = Redactor::new(&res.facts, self.schema(), self.evaluator.backend.secrets());
+        self.compiled = self.evaluator.compile(&res, &violations, opts);
+        (self.res, self.violations) = (res, violations);
+        self.policy = None;
+        self.plan(opts);
+        Ok(())
+    }
+
     pub fn schema(&self) -> &Schema {
         self.evaluator.schema()
     }

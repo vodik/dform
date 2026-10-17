@@ -226,6 +226,21 @@ pub struct Providers {
     proven: RefCell<BTreeMap<Address, Vec<String>>>,
     /// The deployment's run's secrets ([`Providers::secrets`]).
     secrets: Rc<crate::secrets::Run>,
+    /// The run's Plan calls' answers, by what each asked: what a plan made
+    /// again takes for a row asked as it was ([`Providers::planning_again`]).
+    answered: RefCell<BTreeMap<String, provider::Planned>>,
+    /// Whether a plan is being made again ([`PlanningAgain`]).
+    again: std::cell::Cell<bool>,
+}
+
+/// While it lives, the providers' plan is made again over what changed
+/// ([`Providers::planning_again`]).
+pub struct PlanningAgain<'p>(&'p Providers);
+
+impl Drop for PlanningAgain<'_> {
+    fn drop(&mut self) {
+        self.0.again.set(false);
+    }
 }
 
 /// What a resource waits on before its provider plans it
@@ -304,6 +319,15 @@ impl Providers {
     /// deployment's outputs a tree's boundary made known).
     pub fn hold(&self, more: BTreeMap<String, provider::Held>) {
         self.held.borrow_mut().extend(more);
+    }
+
+    /// While the guard lives, a plan is made again over what changed of
+    /// the program's (another deployment's output its plan made other):
+    /// a row whose Plan call asks what one of the run asked already is
+    /// answered as it was, not sent again.
+    pub fn planning_again(&self) -> PlanningAgain<'_> {
+        self.again.set(true);
+        PlanningAgain(self)
     }
 
     /// The calls sent again since the last time they were taken (R-81),

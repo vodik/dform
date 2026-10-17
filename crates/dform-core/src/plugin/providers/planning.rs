@@ -71,7 +71,8 @@ impl Providers {
     /// The owning providers' Plan for each `(address, remote, prior, desired)`:
     /// its changes, and whether they replace it. Every call is submitted
     /// before any answer is taken, so a backend that can runs them at once;
-    /// the first failure, in order, is the error.
+    /// the first failure, in order, is the error. A plan made again takes
+    /// the answer of a call that asked the same ([`Providers::planning_again`]).
     #[tracing::instrument(
         target = "dform",
         level = "trace",
@@ -85,10 +86,20 @@ impl Providers {
     )]
     fn plan_many(&self, asks: Vec<Ask>) -> Result<Vec<Planned>> {
         let mut out: Vec<Option<Result<Planned>>> = Vec::new();
-        let mut submitted: Vec<(usize, usize, Ticket, Address)> = Vec::new();
+        let mut submitted: Vec<(usize, usize, Ticket, Address, String)> = Vec::new();
         for (i, (addr, remote, prior, desired)) in asks.into_iter().enumerate() {
             if prior.is_none() && desired.is_none() {
                 out.push(Some(Ok(Planned::default())));
+                continue;
+            }
+            let asked = json!([addr.typ, addr.name, remote, prior, desired]).to_string();
+            if let Some(p) = self
+                .answered
+                .borrow()
+                .get(&asked)
+                .filter(|_| self.again.get())
+            {
+                out.push(Some(Ok(p.clone())));
                 continue;
             }
             out.push(None);
@@ -101,12 +112,12 @@ impl Providers {
                 ..Default::default()
             };
             let l = self.route(&addr.typ);
-            submitted.push((i, l, self.submit(l, req)?, addr));
+            submitted.push((i, l, self.submit(l, req)?, addr, asked));
         }
         for l in &self.links {
             l.borrow_mut().flush();
         }
-        for (i, l, t, addr) in submitted {
+        for (i, l, t, addr, asked) in submitted {
             let mut link = self.links[l].borrow_mut();
             let r = link
                 .wait(t)
@@ -126,7 +137,11 @@ impl Providers {
                     &e.to_string(),
                 ))
             });
-            out[i] = Some(r.and_then(|r| Planned::try_from(&r)));
+            let planned = r.and_then(|r| Planned::try_from(&r));
+            if let Ok(p) = &planned {
+                self.answered.borrow_mut().insert(asked, p.clone());
+            }
+            out[i] = Some(planned);
         }
         out.into_iter()
             .map(|r| r.expect("every ask is answered"))

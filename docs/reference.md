@@ -303,7 +303,12 @@ applied, or one with a secret sealed to it that the run cannot open
 without its master, it waits until that upstream's evaluation has made
 its outputs known (before its Plan calls and policy). It says what of
 them is known only after a tick once their plans have; one whose plan
-makes known other than it read is planned again over the plan's.
+makes known other than it read is planned again over the plan's, in
+pieces: its program is evaluated again over the world it read, and only
+the rows whose documents changed are planned again (their Plan calls; a
+row that reads nothing of what changed keeps its answer), its warnings
+said once. A reader of an output a provider is configured from is
+planned again whole, the provider configured anew.
 Deployments that read nothing of each other (a project's `prod` and
 `staging`) wait on nothing. A replace in an upstream's plan makes what its evaluation knew
 of the replaced object (a computed endpoint) known only after a tick: a
@@ -5491,11 +5496,12 @@ or a value is never one.
 | `wasm.instantiate` | `wasm.instantiate`, internal | `provider {provider} started` | | its instance made |
 | `providers' schema loaded` | `plan.phase`, internal | `deployment {deployment}` | | each provider's schema asked |
 | `checked against the schema` | `plan.phase`, internal | `deployment {deployment}` | | the program checked against it |
-| `evaluated` | `plan.phase`, internal | `deployment {deployment}`, `tick {n}`, `wait, tick {n}`, `policy pass` | | the program evaluated, its externs asked |
+| `evaluated` | `plan.phase`, internal | `deployment {deployment}`, `planned again`, `tick {n}`, `wait, tick {n}`, `policy pass` | | the program evaluated, its externs asked |
 | `evaluation, round {n}` | `plan.phase`, internal | `evaluated` | | one round of it: the externs it asks are asked together |
 | `io.read` | `io.call`, client | `evaluated`, `evaluation, round {n}` | `kind`, `addr` | a read the program makes (`io.read`) |
 | `oci.resolve` | `io.call`, client | `evaluated`, `evaluation, round {n}` | `kind`, `addr` | an image's tag resolved at its registry |
-| `planned` | `plan.phase`, internal | `deployment {deployment}` | | a plan's planning |
+| `planned` | `plan.phase`, internal | `deployment {deployment}`, `planned again` | | a plan's planning |
+| `planned again` | `plan.phase`, internal | `deployment {deployment}` | | a reader of a tree's plan planned again in pieces over what an upstream's plan made other: its program evaluated again, the rows that changed planned |
 | `refresh` | `plan.phase`, internal | `deployment {deployment}`, `planned`, `tick {n}`, `wait, tick {n}` | `count` | the objects the state maps read |
 | `Plan calls` | `plan.phase`, internal | `planned`, `deployment {deployment}`, `tick {n}` | `count`, `addresses` | the Plan calls asked together |
 | `policy pass` | `plan.phase`, internal | `planned`, `deployment {deployment}`, `tick {n}` | | the policy's rules over the plan |

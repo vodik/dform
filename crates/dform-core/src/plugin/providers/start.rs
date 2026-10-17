@@ -503,6 +503,8 @@ impl Providers {
             digest_key: None,
             proven: RefCell::new(BTreeMap::new()),
             secrets: Rc::default(),
+            answered: RefCell::new(BTreeMap::new()),
+            again: std::cell::Cell::new(false),
         }
     }
 }

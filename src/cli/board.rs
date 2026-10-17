@@ -335,6 +335,40 @@ impl Upstreams {
         }
     }
 
+    /// What those it reads make known as their plans have it, once each
+    /// has planned, and the names of those whose plans make known other
+    /// than the run read: what it is planned again over, in pieces
+    /// (`Plan::run`), and reads from now on ([`Upstreams::reread`]). An
+    /// error when one was not planned.
+    pub(super) fn planned_over(&self) -> Result<(BTreeMap<String, Planned>, Vec<String>)> {
+        let (verdict, planned) = self.settled();
+        if let Verdict::NotPlanned(why) = verdict {
+            bail!("not planned: {why}");
+        }
+        let read = self.read.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = planned
+            .iter()
+            .filter(|(n, p)| {
+                read.as_ref()
+                    .is_some_and(|r| !r.get(*n).is_some_and(|r| r.alike(p)))
+            })
+            .map(|(n, _)| n.clone())
+            .collect();
+        Ok((planned, changed))
+    }
+
+    /// The run reads `names` as their plans make them known (`planned`),
+    /// planned again over them: it stands.
+    pub(super) fn reread(&self, names: &[String], planned: &BTreeMap<String, Planned>) {
+        let mut read = self.read.lock().unwrap_or_else(|e| e.into_inner());
+        let read = read.get_or_insert_with(BTreeMap::new);
+        for n in names {
+            if let Some(p) = planned.get(n) {
+                read.insert(n.clone(), Read::Evaluated(p.clone()));
+            }
+        }
+    }
+
     /// Those of `of` it reads named in `names` (as it names them).
     fn named(&self, names: &BTreeSet<String>) -> Vec<usize> {
         self.of

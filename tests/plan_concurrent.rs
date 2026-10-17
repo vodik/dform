@@ -225,10 +225,13 @@ fn a_reader_of_what_its_upstream_published_is_evaluated_beside_it() {
 
 /// Platform's plan replaces the database its output is made of: what its
 /// evaluation knew of the endpoint (the old one's) is known only after
-/// tick 1 in its plan. Apps, which read the old one, is planned again
-/// over the plan's: its change waits on that tick.
+/// tick 1 in its plan. Apps, which read the old one, is planned again over
+/// the plan's, in pieces: its run is one, and only the row that reads the
+/// endpoint is planned again (one Plan call), its change waiting on that
+/// tick; the row that reads nothing of platform's keeps its answer, and
+/// apps' warning is said once.
 #[test]
-fn a_reader_of_what_its_upstream_s_plan_changes_is_planned_again() {
+fn a_reader_of_what_its_upstream_s_plan_changes_is_planned_again_in_pieces() {
     let s = Scratch::project("plan-concurrent-again");
     s.write(
         "providers/fake/schema.df",
@@ -245,17 +248,42 @@ fn a_reader_of_what_its_upstream_s_plan_changes_is_planned_again() {
     s.write("stacks/platform.df", &platform("db"));
     s.write(
         "stacks/apps.df",
-        &APPS.replace("platform[env].cidr", "platform[env].endpoint"),
+        &format!(
+            "{}resource net.vpc other {{ cidr = \"10.2.0.0/16\" }}\nwarn \"apps is planned\"\n",
+            APPS.replace("platform[env].cidr", "platform[env].endpoint")
+        ),
     );
     s.run(&["apply", "apps", "--yes"]).success();
     s.write("stacks/platform.df", &platform("db2"));
-    let r = s.run(&["plan", "apps"]).success();
+    let (r, spans) = traced(&s, &["plan", "apps"], &[]);
+    let r = r.success();
     assert!(
         r.stdout.contains(
             "  tick 2  1 change\n    waits on  stacks.platform[env=lab].endpoint\n    ~ net.vpc rec"
         ),
         "{}",
         r.stdout
+    );
+    assert_eq!(
+        r.stderr.matches("apps is planned").count(),
+        1,
+        "{}",
+        r.stderr
+    );
+    let runs: Vec<&Json> = spans
+        .iter()
+        .filter(|x| x["name"] == "deployment stacks.apps[env=lab]")
+        .collect();
+    assert_eq!(runs.len(), 1, "apps' run is one");
+    let again = under(&spans, runs[0], "planned again");
+    let [again] = again[..] else {
+        panic!("apps planned again once: {again:?}");
+    };
+    let calls = |name: &str| under(&spans, again, name).len();
+    assert_eq!(
+        (calls("plan net.vpc rec"), calls("plan net.vpc other")),
+        (1, 0),
+        "only the row that reads the endpoint planned again"
     );
 }
 

@@ -738,7 +738,7 @@ impl Context {
     }
 
     /// How the deployment is evaluated for this run's command.
-    fn options(&self, controlled: bool) -> Result<deployment::Options<'static>> {
+    pub(super) fn options(&self, controlled: bool) -> Result<deployment::Options<'static>> {
         let cmd = &self.cli.cmd;
         Ok(deployment::Options {
             launch: launch(),

@@ -27,7 +27,13 @@ impl Plan {
     /// written or the plan needs an approval; refused when the program
     /// denies it.
     pub(super) fn run(&self, run: Evaluated) -> Result<Outcome> {
-        let Evaluated { mut cx, ev, .. } = run;
+        let Evaluated { mut cx, mut ev, .. } = run;
+        // A deployment of a tree's plan says what those it reads know only
+        // after a tick as their plans have it (`board`), planned again in
+        // pieces over one whose plan made other known.
+        if let Some(up) = cx.cli.upstreams.clone() {
+            cx.cli.planned = Self::over(&cx, &up, &mut ev)?;
+        }
         let deployment::Evaluation {
             located,
             st,
@@ -46,11 +52,6 @@ impl Plan {
             true => Vec::new(),
             false => violations,
         };
-        // A deployment of a tree's plan says what those it reads know only
-        // after a tick as their plans have it (`board`).
-        if let Some(up) = &cx.cli.upstreams {
-            cx.cli.planned = up.planned()?;
-        }
         let r = Reporter::new(&cx, &evaluator, &located, &st);
         let report = self.report(&cx, &r, &planned, &st, &moves)?;
         let file = self.file(&cx, &located, &r, &planned, &st)?;
@@ -71,6 +72,38 @@ impl Plan {
             self.save(&cx, out, file, &located, &evaluator)?;
         }
         Ok(Outcome::Done)
+    }
+
+    /// What those `ev` reads in its tree make known as their plans have
+    /// it (`up`): one whose plan made known other than `ev` read, its rows
+    /// that read it planned again over the plan's
+    /// (`deployment::Evaluation::plan_again`); one a provider is
+    /// configured from, the run made again whole (`matrix::Tree`), its
+    /// provider configured anew.
+    fn over(
+        cx: &Context,
+        up: &super::board::Upstreams,
+        ev: &mut deployment::Evaluation,
+    ) -> Result<std::collections::BTreeMap<String, crate::stack::Planned>> {
+        let (planned, changed) = up.planned_over()?;
+        if changed.is_empty() {
+            return Ok(planned);
+        }
+        if changed.iter().any(|n| ev.configures_from(n)) {
+            anyhow::bail!("planned again: what it reads changed in their plans");
+        }
+        let deployed = &ev.located.loaded.deployed;
+        for name in &changed {
+            let read = planned[name].over(name, None);
+            let facts = crate::stack::output_facts(std::slice::from_ref(&read), deployed);
+            ev.evaluator.read_again(name, facts);
+            ev.evaluator
+                .backend
+                .hold(crate::stack::held(std::slice::from_ref(&read)));
+        }
+        ev.plan_again(&cx.options(false)?)?;
+        up.reread(&changed, &planned);
+        Ok(planned)
     }
 
     /// The report of `planned`, explained; a tree's deployment's

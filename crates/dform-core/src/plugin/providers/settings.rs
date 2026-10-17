@@ -101,6 +101,8 @@ impl Providers {
             );
             self.awaiting.borrow_mut().remove(&i);
             self.forget(i);
+            // Its answers were of the settings it had.
+            self.answered.borrow_mut().clear();
             if self.loaded.get().is_some() {
                 self.learn(i)
                     .with_context(|| format!("the schema of provider {name}, configured"))?;
