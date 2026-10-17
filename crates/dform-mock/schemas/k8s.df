@@ -289,6 +289,33 @@ type_attr(k8s.deployment, "spec.template.spec.containers.env", "list", [])
 type_list_key(k8s.deployment, "spec.template.spec.containers.env", ["name"])
 type_attr(k8s.deployment, "spec.template.spec.containers.volumeMounts", "list", [])
 type_list_key(k8s.deployment, "spec.template.spec.containers.volumeMounts", ["mountPath"])
+type_attr(k8s.deployment, "spec.template.spec.containers.securityContext.privileged", "bool", [])
+type_attr(k8s.deployment, "spec.template.spec.containers.securityContext.runAsNonRoot", "bool", [])
+type_attr(k8s.deployment, "spec.template.spec.containers.securityContext.runAsUser", "int", [])
+type_attr(
+  k8s.deployment,
+  "spec.template.spec.containers.securityContext.allowPrivilegeEscalation",
+  "bool",
+  [],
+)
+type_attr(
+  k8s.deployment,
+  "spec.template.spec.containers.securityContext.readOnlyRootFilesystem",
+  "bool",
+  [],
+)
+type_attr(
+  k8s.deployment,
+  "spec.template.spec.containers.securityContext.capabilities.add",
+  "list(string)",
+  [],
+)
+type_attr(
+  k8s.deployment,
+  "spec.template.spec.containers.securityContext.capabilities.drop",
+  "list(string)",
+  [],
+)
 type_attr(
   k8s.deployment,
   "spec.template.spec.containers.imagePullPolicy",
@@ -315,6 +342,15 @@ type_attr(k8s.deployment, "spec.template.spec.dnsPolicy", "string", ["optional_c
 type_mint(k8s.deployment, "spec.template.spec.dnsPolicy", "ClusterFirst")
 type_attr(k8s.deployment, "spec.template.spec.nodeSelector", "map", [])
 type_attr(k8s.deployment, "spec.template.spec.tolerations", "list", [])
+type_attr(k8s.deployment, "spec.template.spec.tolerations.key", "string", [])
+type_attr(k8s.deployment, "spec.template.spec.tolerations.operator", "string", [])
+type_attr(k8s.deployment, "spec.template.spec.tolerations.value", "string", [])
+type_attr(k8s.deployment, "spec.template.spec.tolerations.effect", "string", [])
+type_attr(k8s.deployment, "spec.template.spec.tolerations.tolerationSeconds", "int", [])
+type_attr(k8s.deployment, "spec.template.spec.securityContext.runAsNonRoot", "bool", [])
+type_attr(k8s.deployment, "spec.template.spec.securityContext.runAsUser", "int", [])
+type_attr(k8s.deployment, "spec.template.spec.securityContext.runAsGroup", "int", [])
+type_attr(k8s.deployment, "spec.template.spec.securityContext.fsGroup", "int", [])
 type_attr(k8s.deployment, "spec.strategy.type", "string", ["optional_computed"])
 type_mint(k8s.deployment, "spec.strategy.type", "RollingUpdate")
 type_attr(k8s.deployment, "spec.revisionHistoryLimit", "int", ["optional_computed"])
@@ -392,6 +428,38 @@ type_attr(k8s.stateful_set, "spec.template.spec.containers.env", "list", [])
 type_list_key(k8s.stateful_set, "spec.template.spec.containers.env", ["name"])
 type_attr(k8s.stateful_set, "spec.template.spec.containers.volumeMounts", "list", [])
 type_list_key(k8s.stateful_set, "spec.template.spec.containers.volumeMounts", ["mountPath"])
+type_attr(k8s.stateful_set, "spec.template.spec.containers.securityContext.privileged", "bool", [])
+type_attr(
+  k8s.stateful_set,
+  "spec.template.spec.containers.securityContext.runAsNonRoot",
+  "bool",
+  [],
+)
+type_attr(k8s.stateful_set, "spec.template.spec.containers.securityContext.runAsUser", "int", [])
+type_attr(
+  k8s.stateful_set,
+  "spec.template.spec.containers.securityContext.allowPrivilegeEscalation",
+  "bool",
+  [],
+)
+type_attr(
+  k8s.stateful_set,
+  "spec.template.spec.containers.securityContext.readOnlyRootFilesystem",
+  "bool",
+  [],
+)
+type_attr(
+  k8s.stateful_set,
+  "spec.template.spec.containers.securityContext.capabilities.add",
+  "list(string)",
+  [],
+)
+type_attr(
+  k8s.stateful_set,
+  "spec.template.spec.containers.securityContext.capabilities.drop",
+  "list(string)",
+  [],
+)
 type_attr(
   k8s.stateful_set,
   "spec.template.spec.containers.imagePullPolicy",
@@ -423,6 +491,15 @@ type_attr(k8s.stateful_set, "spec.template.spec.dnsPolicy", "string", ["optional
 type_mint(k8s.stateful_set, "spec.template.spec.dnsPolicy", "ClusterFirst")
 type_attr(k8s.stateful_set, "spec.template.spec.nodeSelector", "map", [])
 type_attr(k8s.stateful_set, "spec.template.spec.tolerations", "list", [])
+type_attr(k8s.stateful_set, "spec.template.spec.tolerations.key", "string", [])
+type_attr(k8s.stateful_set, "spec.template.spec.tolerations.operator", "string", [])
+type_attr(k8s.stateful_set, "spec.template.spec.tolerations.value", "string", [])
+type_attr(k8s.stateful_set, "spec.template.spec.tolerations.effect", "string", [])
+type_attr(k8s.stateful_set, "spec.template.spec.tolerations.tolerationSeconds", "int", [])
+type_attr(k8s.stateful_set, "spec.template.spec.securityContext.runAsNonRoot", "bool", [])
+type_attr(k8s.stateful_set, "spec.template.spec.securityContext.runAsUser", "int", [])
+type_attr(k8s.stateful_set, "spec.template.spec.securityContext.runAsGroup", "int", [])
+type_attr(k8s.stateful_set, "spec.template.spec.securityContext.fsGroup", "int", [])
 type_attr(k8s.stateful_set, "spec.volumeClaimTemplates", "list", [])
 type_attr(k8s.stateful_set, "spec.podManagementPolicy", "string", ["optional_computed"])
 type_mint(k8s.stateful_set, "spec.podManagementPolicy", "OrderedReady")
@@ -485,6 +562,33 @@ type_attr(k8s.daemon_set, "spec.template.spec.containers.env", "list", [])
 type_list_key(k8s.daemon_set, "spec.template.spec.containers.env", ["name"])
 type_attr(k8s.daemon_set, "spec.template.spec.containers.volumeMounts", "list", [])
 type_list_key(k8s.daemon_set, "spec.template.spec.containers.volumeMounts", ["mountPath"])
+type_attr(k8s.daemon_set, "spec.template.spec.containers.securityContext.privileged", "bool", [])
+type_attr(k8s.daemon_set, "spec.template.spec.containers.securityContext.runAsNonRoot", "bool", [])
+type_attr(k8s.daemon_set, "spec.template.spec.containers.securityContext.runAsUser", "int", [])
+type_attr(
+  k8s.daemon_set,
+  "spec.template.spec.containers.securityContext.allowPrivilegeEscalation",
+  "bool",
+  [],
+)
+type_attr(
+  k8s.daemon_set,
+  "spec.template.spec.containers.securityContext.readOnlyRootFilesystem",
+  "bool",
+  [],
+)
+type_attr(
+  k8s.daemon_set,
+  "spec.template.spec.containers.securityContext.capabilities.add",
+  "list(string)",
+  [],
+)
+type_attr(
+  k8s.daemon_set,
+  "spec.template.spec.containers.securityContext.capabilities.drop",
+  "list(string)",
+  [],
+)
 type_attr(
   k8s.daemon_set,
   "spec.template.spec.containers.imagePullPolicy",
@@ -511,6 +615,15 @@ type_attr(k8s.daemon_set, "spec.template.spec.dnsPolicy", "string", ["optional_c
 type_mint(k8s.daemon_set, "spec.template.spec.dnsPolicy", "ClusterFirst")
 type_attr(k8s.daemon_set, "spec.template.spec.nodeSelector", "map", [])
 type_attr(k8s.daemon_set, "spec.template.spec.tolerations", "list", [])
+type_attr(k8s.daemon_set, "spec.template.spec.tolerations.key", "string", [])
+type_attr(k8s.daemon_set, "spec.template.spec.tolerations.operator", "string", [])
+type_attr(k8s.daemon_set, "spec.template.spec.tolerations.value", "string", [])
+type_attr(k8s.daemon_set, "spec.template.spec.tolerations.effect", "string", [])
+type_attr(k8s.daemon_set, "spec.template.spec.tolerations.tolerationSeconds", "int", [])
+type_attr(k8s.daemon_set, "spec.template.spec.securityContext.runAsNonRoot", "bool", [])
+type_attr(k8s.daemon_set, "spec.template.spec.securityContext.runAsUser", "int", [])
+type_attr(k8s.daemon_set, "spec.template.spec.securityContext.runAsGroup", "int", [])
+type_attr(k8s.daemon_set, "spec.template.spec.securityContext.fsGroup", "int", [])
 type_attr(k8s.daemon_set, "spec.updateStrategy.type", "string", ["optional_computed"])
 type_mint(k8s.daemon_set, "spec.updateStrategy.type", "RollingUpdate")
 type_attr(k8s.daemon_set, "status.desiredNumberScheduled", "int", ["computed"])
@@ -553,6 +666,33 @@ type_list_key(k8s.job, "spec.template.spec.containers.ports", ["containerPort", 
 type_attr(k8s.job, "spec.template.spec.containers.env", "list", [])
 type_list_key(k8s.job, "spec.template.spec.containers.env", ["name"])
 type_attr(k8s.job, "spec.template.spec.containers.volumeMounts", "list", [])
+type_attr(k8s.job, "spec.template.spec.containers.securityContext.privileged", "bool", [])
+type_attr(k8s.job, "spec.template.spec.containers.securityContext.runAsNonRoot", "bool", [])
+type_attr(k8s.job, "spec.template.spec.containers.securityContext.runAsUser", "int", [])
+type_attr(
+  k8s.job,
+  "spec.template.spec.containers.securityContext.allowPrivilegeEscalation",
+  "bool",
+  [],
+)
+type_attr(
+  k8s.job,
+  "spec.template.spec.containers.securityContext.readOnlyRootFilesystem",
+  "bool",
+  [],
+)
+type_attr(
+  k8s.job,
+  "spec.template.spec.containers.securityContext.capabilities.add",
+  "list(string)",
+  [],
+)
+type_attr(
+  k8s.job,
+  "spec.template.spec.containers.securityContext.capabilities.drop",
+  "list(string)",
+  [],
+)
 type_list_key(k8s.job, "spec.template.spec.containers.volumeMounts", ["mountPath"])
 type_attr(k8s.job, "spec.template.spec.containers.imagePullPolicy", "string", ["optional_computed"])
 type_mint(k8s.job, "spec.template.spec.containers.imagePullPolicy", "IfNotPresent")
@@ -570,6 +710,15 @@ type_attr(k8s.job, "spec.template.spec.dnsPolicy", "string", ["optional_computed
 type_mint(k8s.job, "spec.template.spec.dnsPolicy", "ClusterFirst")
 type_attr(k8s.job, "spec.template.spec.nodeSelector", "map", [])
 type_attr(k8s.job, "spec.template.spec.tolerations", "list", [])
+type_attr(k8s.job, "spec.template.spec.tolerations.key", "string", [])
+type_attr(k8s.job, "spec.template.spec.tolerations.operator", "string", [])
+type_attr(k8s.job, "spec.template.spec.tolerations.value", "string", [])
+type_attr(k8s.job, "spec.template.spec.tolerations.effect", "string", [])
+type_attr(k8s.job, "spec.template.spec.tolerations.tolerationSeconds", "int", [])
+type_attr(k8s.job, "spec.template.spec.securityContext.runAsNonRoot", "bool", [])
+type_attr(k8s.job, "spec.template.spec.securityContext.runAsUser", "int", [])
+type_attr(k8s.job, "spec.template.spec.securityContext.runAsGroup", "int", [])
+type_attr(k8s.job, "spec.template.spec.securityContext.fsGroup", "int", [])
 type_attr(k8s.job, "spec.backoffLimit", "int", ["optional_computed"])
 type_mint(k8s.job, "spec.backoffLimit", 6)
 type_attr(k8s.job, "spec.completions", "int", ["optional_computed"])
@@ -609,6 +758,8 @@ type_mint(k8s.cron_job, "metadata.generation", 1)
 type_mint(k8s.cron_job, "metadata.creationTimestamp", "2026-01-01T00:00:00Z")
 type_attr(k8s.cron_job, "spec.schedule", "string", ["required"])
 type_attr(k8s.cron_job, "spec.timeZone", "string", [])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.backoffLimit", "int", ["optional_computed"])
+type_mint(k8s.cron_job, "spec.jobTemplate.spec.backoffLimit", 6)
 type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.metadata.labels", "map", [])
 type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers", "list", ["required"])
 type_list_key(k8s.cron_job, "spec.jobTemplate.spec.template.spec.containers", ["name"])
@@ -658,6 +809,48 @@ type_list_key(
 )
 type_attr(
   k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.containers.securityContext.privileged",
+  "bool",
+  [],
+)
+type_attr(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.containers.securityContext.runAsNonRoot",
+  "bool",
+  [],
+)
+type_attr(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.containers.securityContext.runAsUser",
+  "int",
+  [],
+)
+type_attr(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.containers.securityContext.allowPrivilegeEscalation",
+  "bool",
+  [],
+)
+type_attr(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.containers.securityContext.readOnlyRootFilesystem",
+  "bool",
+  [],
+)
+type_attr(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.containers.securityContext.capabilities.add",
+  "list(string)",
+  [],
+)
+type_attr(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.containers.securityContext.capabilities.drop",
+  "list(string)",
+  [],
+)
+type_attr(
+  k8s.cron_job,
   "spec.jobTemplate.spec.template.spec.containers.imagePullPolicy",
   "string",
   ["optional_computed"],
@@ -701,6 +894,25 @@ type_attr(
 type_mint(k8s.cron_job, "spec.jobTemplate.spec.template.spec.dnsPolicy", "ClusterFirst")
 type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.nodeSelector", "map", [])
 type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.tolerations", "list", [])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.tolerations.key", "string", [])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.tolerations.operator", "string", [])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.tolerations.value", "string", [])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.tolerations.effect", "string", [])
+type_attr(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.tolerations.tolerationSeconds",
+  "int",
+  [],
+)
+type_attr(
+  k8s.cron_job,
+  "spec.jobTemplate.spec.template.spec.securityContext.runAsNonRoot",
+  "bool",
+  [],
+)
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.securityContext.runAsUser", "int", [])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.securityContext.runAsGroup", "int", [])
+type_attr(k8s.cron_job, "spec.jobTemplate.spec.template.spec.securityContext.fsGroup", "int", [])
 type_attr(k8s.cron_job, "spec.concurrencyPolicy", "string", ["optional_computed"])
 type_mint(k8s.cron_job, "spec.concurrencyPolicy", "Allow")
 type_attr(k8s.cron_job, "spec.suspend", "bool", ["optional_computed"])

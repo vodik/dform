@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== tests/fixtures/adversarial/adv2_rule3_coarse.df: 137 nodes, 992 edges (248 negative), 5 strata
+== tests/fixtures/adversarial/adv2_rule3_coarse.df: 137 nodes, 997 edges (249 negative), 5 strata
 stratum  node
 0        (arg, google.container_cluster, name)
 0        (arg, google.secret_manager_secret_version, secret_data)

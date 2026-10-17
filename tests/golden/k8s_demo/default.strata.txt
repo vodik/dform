@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== tests/fixtures/k8s/stacks/k8s_demo.df: 105 nodes, 949 edges (228 negative), 7 strata
+== tests/fixtures/k8s/stacks/k8s_demo.df: 105 nodes, 954 edges (229 negative), 7 strata
 stratum  node
 0        (arg, k8s.config_map, data)
 0        (want, k8s.config_map)
