@@ -4095,7 +4095,10 @@ it is about, `file:line` (`file:3-7` for several lines) and the source
 line, a caret under the span when it is narrower than the line and
 what the span is (`checked here`), hung off `why --tree`'s `├─`/`└─`
 when there are several; a site in no file is its text (`--set
-agents=4`); notes dim, the help last. A deny that refuses says its site
+agents=4`); notes dim, the help last. A conflict says each write at its
+site: its value underlined where the source line spells it (the rank
+after the caret), else the rank and the value, laid out as the plan lays
+one, on rows of their own under the line. A deny that refuses says its site
 on its line and what it fired for under it; a provider's refusal of a
 change says the resource's block. An error with no site is its first
 line:

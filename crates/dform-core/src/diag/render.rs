@@ -2,7 +2,8 @@
 //! --tree`'s: the kind word and the sentence on the first line (it reads
 //! alone, a log line), its code dim at the end; each site hung off the
 //! tree's glyphs, `file:line` in the site column and the source line
-//! beside it, a caret under the span when it is narrower than the line;
+//! beside it, a caret under the span when it is narrower than the line,
+//! a label of several lines under it;
 //! notes dim under the tree, the help last. A diagnostic with one site
 //! draws no glyph; one with none is its first line.
 
@@ -100,11 +101,14 @@ impl Site {
         let column = " ".repeat(width);
         let label = |s: &str| style.paint(Paint::Bold, s);
         let mut rows = self.excerpt.clone();
-        // A label with no caret to hang off follows the source line.
+        // A label with no caret to hang off follows the source line; one
+        // of several lines is rows of its own under it.
         if self.caret.is_none() && !self.label.is_empty() {
             match rows.last_mut() {
-                Some(l) => *l = format!("{l}  {}", label(&self.label)),
-                None => rows.push(label(&self.label)),
+                Some(l) if !self.label.contains('\n') => {
+                    *l = format!("{l}  {}", label(&self.label))
+                }
+                _ => rows.extend(self.label.lines().map(label)),
             }
         }
         let place = style.paint(Paint::Dim, &self.place);

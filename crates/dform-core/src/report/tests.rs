@@ -5,6 +5,7 @@ use super::mask::LONG;
 use super::tally::{KINDS, by_kind, changes_text};
 use super::*;
 use crate::spell;
+use crate::value::Value;
 use serde_json::Value as Json;
 
 /// After R-23: a binding is left out when its value is a whole
@@ -303,5 +304,111 @@ fn a_conflicts_object_value_is_the_programs_text() {
         "  ! k8s.deployment web.spec: two contributions disagree\n      \
          { name = web_config.metadata.name }  main.df:5\n      \
          { name = \"other\" }  main.df:9\n"
+    );
+}
+
+/// A conflict's context: two writes to `web.spec` disagreeing at `leaf`,
+/// each `(rank, value, from)`.
+fn conflict_ctx(leaf: &str, ws: Vec<(&str, Value, Option<&str>)>) -> BTreeMap<String, Value> {
+    let s = |x: &str| Value::Str(x.into());
+    let witnesses = ws
+        .into_iter()
+        .map(|(rank, value, from)| {
+            let from = from.map(|f| vec![s(f)]).unwrap_or_default();
+            let w = [
+                ("rank", s(rank)),
+                ("value", value),
+                ("from", Value::List(from)),
+            ];
+            Value::Obj(w.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+        })
+        .collect();
+    [
+        ("type", s("k8s.deployment")),
+        ("addr", s("web")),
+        ("path", s("spec")),
+        (
+            "reason",
+            s(&format!("two contributions disagree at {leaf}")),
+        ),
+        ("witnesses", Value::List(witnesses)),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect()
+}
+
+/// `{k: v}`, a value at `spec`.
+fn spec_of(k: &str, v: Value) -> Value {
+    Value::Obj([(k.to_string(), v)].into_iter().collect())
+}
+
+/// A conflict says each write at its own site, its value the leaf that
+/// disagrees: underlined where the source spells it, the rank after the
+/// caret; else the rank and the value on rows of their own under the
+/// statement, never beside it (a row that wraps).
+#[test]
+fn a_conflict_lays_each_write_out_on_rows_of_its_own() {
+    let src = "use k8s\n\
+               set w.spec.revisionHistoryLimit = history @default where w in k8s.deployment\n\
+               set w.spec.revisionHistoryLimit = 2 @default where w in k8s.deployment\n";
+    crate::diag::add_source("conflict-rows.df", src);
+    let ctx = conflict_ctx(
+        "spec.revisionHistoryLimit",
+        vec![
+            (
+                "default",
+                spec_of("revisionHistoryLimit", Value::Int(1)),
+                Some("set (at conflict-rows.df:2:1)"),
+            ),
+            (
+                "default",
+                spec_of("revisionHistoryLimit", Value::Int(2)),
+                Some("set (at conflict-rows.df:3:1)"),
+            ),
+        ],
+    );
+    let r = Redactor::new(&BTreeSet::new(), &Schema::default(), &Default::default());
+    let out = refusal::conflict(&errors::diag(&ctx, &r)).render(false);
+    assert_eq!(
+        out,
+        "conflict  k8s.deployment web.spec: two contributions disagree at spec.revisionHistoryLimit\n  \
+         ├─ conflict-rows.df:2  set w.spec.revisionHistoryLimit = history @default where w in k8s.deployment\n  \
+         │                      at rank default\n  \
+         │                      = 1\n  \
+         └─ conflict-rows.df:3  set w.spec.revisionHistoryLimit = 2 @default where w in k8s.deployment\n                                                           \
+         ^ at rank default\n"
+    );
+}
+
+/// A value that is an object is laid out as the plan lays one; a write
+/// no statement made says so in its site column.
+#[test]
+fn a_conflicts_object_is_laid_out_under_its_site() {
+    let s = |x: &str| Value::Str(x.into());
+    let ctx = conflict_ctx(
+        "spec.strategy",
+        vec![
+            (
+                "normal",
+                spec_of("strategy", spec_of("type", s("Recreate"))),
+                None,
+            ),
+            (
+                "normal",
+                spec_of("strategy", spec_of("type", s("RollingUpdate"))),
+                None,
+            ),
+        ],
+    );
+    let r = Redactor::new(&BTreeSet::new(), &Schema::default(), &Default::default());
+    let out = refusal::conflict(&errors::diag(&ctx, &r)).render(false);
+    assert_eq!(
+        out,
+        "conflict  k8s.deployment web.spec: two contributions disagree at spec.strategy\n  \
+         ├─ (no site)  at rank normal\n  \
+         │             = { type = \"Recreate\" }\n  \
+         └─ (no site)  at rank normal\n                \
+         = { type = \"RollingUpdate\" }\n"
     );
 }

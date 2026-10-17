@@ -11,7 +11,7 @@ use super::layout::WIDTH;
 use super::mask::{Shown, shown_value};
 use super::style::{Paint, Style};
 use super::tree;
-use crate::address::Address;
+use crate::address::{Address, Tok, tokens};
 use crate::ast::{Atom, Term};
 use crate::diag::{self, Diagnostic, Kind};
 use crate::engine::EvalResult;
@@ -231,7 +231,56 @@ pub struct Witness {
     pub laid: Option<Tree>,
 }
 
+/// The steps from a conflict's cell `path` to the leaf its `reason` says
+/// the contributions disagree at (`two contributions disagree at
+/// spec.replicas`); none when it names none below the cell.
+fn below(path: &str, reason: &str) -> Vec<Tok> {
+    let Some((_, leaf)) = reason.rsplit_once(" at ") else {
+        return vec![];
+    };
+    let (cell, leaf) = (tokens(path), tokens(leaf));
+    let under = leaf.len() > cell.len() && cell.iter().zip(&leaf).all(|(c, l)| c.step == l.step);
+    match under {
+        true => leaf[cell.len()..].to_vec(),
+        false => vec![],
+    }
+}
+
 impl Witness {
+    /// A conflict's witness `w` as its context says it (`rank`, `value`,
+    /// `from`), its value the part at `below`, the leaf that disagrees,
+    /// where it reaches it.
+    fn of(w: &BTreeMap<String, Value>, below: &[Tok], r: &Redactor) -> Witness {
+        let rank = match w.get("rank") {
+            Some(Value::Str(r)) => r.clone(),
+            _ => String::new(),
+        };
+        let part = w
+            .get("value")
+            .map(|v| super::fold::reach(v, below).unwrap_or(v));
+        let value = match part {
+            Some(v) => shown_value(v, r),
+            None => Shown::Absent,
+        };
+        let laid = part.and_then(|v| Witness::laid(v, &value, r));
+        // The contributing rule's text may spell the value.
+        let from: Vec<String> = match w.get("from") {
+            Some(Value::List(fs)) => fs
+                .iter()
+                .filter_map(|f| f.as_str().map(|f| r.text(f)))
+                .collect(),
+            _ => vec![],
+        };
+        let at = from.iter().filter_map(|f| statement_place(f)).collect();
+        Witness {
+            rank,
+            value,
+            from,
+            at,
+            laid,
+        }
+    }
+
     /// Value `v` of a witness, as [`Witness::laid`] holds it: none for a
     /// scalar, and for a value the plan says as a whole (a secret, one
     /// holding a secret).
@@ -302,39 +351,13 @@ pub(super) fn diag(ctx: &BTreeMap<String, Value>, r: &Redactor) -> Diag {
         Some(v) => spell::value(v),
         None => String::new(),
     };
+    let below = below(&s("path"), &s("reason"));
     let witnesses = match ctx.get("witnesses") {
         Some(Value::List(ws)) => ws
             .iter()
             .filter_map(|w| match w {
-                Value::Obj(w) => Some(w),
+                Value::Obj(w) => Some(Witness::of(w, &below, r)),
                 _ => None,
-            })
-            .map(|w| {
-                let rank = match w.get("rank") {
-                    Some(Value::Str(r)) => r.clone(),
-                    _ => String::new(),
-                };
-                let value = match w.get("value") {
-                    Some(v) => shown_value(v, r),
-                    None => Shown::Absent,
-                };
-                let laid = w.get("value").and_then(|v| Witness::laid(v, &value, r));
-                // The contributing rule's text may spell the value.
-                let from: Vec<String> = match w.get("from") {
-                    Some(Value::List(fs)) => fs
-                        .iter()
-                        .filter_map(|f| f.as_str().map(|f| r.text(f)))
-                        .collect(),
-                    _ => vec![],
-                };
-                let at = from.iter().filter_map(|f| statement_place(f)).collect();
-                Witness {
-                    rank,
-                    value,
-                    from,
-                    at,
-                    laid,
-                }
             })
             .collect(),
         _ => vec![],

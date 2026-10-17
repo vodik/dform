@@ -1,6 +1,7 @@
 //! `plan -q` (R-79) says a conflict's object witness as the plan lays a
 //! value out, on one line in the order the program wrote it: never the
-//! witness's JSON (`{"component":"edge","team":"ops"}`, by key).
+//! witness's JSON (`{"name":"lb","tier":"edge"}`, by key). A witness is
+//! its value at the leaf that disagrees.
 
 use crate::common;
 use common::Scratch;
@@ -13,7 +14,7 @@ fn a_bare_conflict_says_an_object_as_the_program_writes_it() {
         "use fake\n\
          ok(1)\n\
          resource net.vpc main { cidr = \"10.0.0.0/16\", tags = { team = \"shop\", component = \"network\" } }\n\
-         set main.tags = { team = \"ops\", component = \"edge\" } where ok(1)\n",
+         set main.tags = { team = \"shop\", component = { tier = \"edge\", name = \"lb\" } } where ok(1)\n",
     );
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "-q", "p.df"])
@@ -27,8 +28,8 @@ fn a_bare_conflict_says_an_object_as_the_program_writes_it() {
     assert_eq!(
         witnesses,
         [
-            "    normal { team = \"ops\", component = \"edge\" }",
-            "    normal { team = \"shop\", component = \"network\" }",
+            "    normal \"network\"",
+            "    normal { tier = \"edge\", name = \"lb\" }",
         ],
         "{}",
         r.stdout
