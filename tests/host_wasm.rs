@@ -811,7 +811,7 @@ fn the_tailscale_component_configures_and_reads_through_the_host() {
 
 /// The Tailscale provider's trace as a component is its native build's:
 /// an apply of the policy file against the fake API has the same
-/// `io.call` requests under `tailscale Configure` and `tailscale Apply`.
+/// `io.call` requests under the resource's `apply` call.
 #[test]
 fn the_tailscale_component_traces_as_its_native_build_does() {
     let wasm = tailscale_component();
@@ -838,9 +838,9 @@ fn the_tailscale_component_traces_as_its_native_build_does() {
     );
     let component = traced("tailscale-trace-wasm", &wasm);
     assert!(
-        native
-            .keys()
-            .any(|(call, child)| call == "tailscale Apply" && child.starts_with("tailscale GET")),
+        native.keys().any(|(call, child)| {
+            call == "apply tailscale.acl policy" && child.starts_with("tailscale GET")
+        }),
         "{native:#?}"
     );
     assert_eq!(component, native);
