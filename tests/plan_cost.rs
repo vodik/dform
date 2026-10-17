@@ -148,7 +148,7 @@ fn a_plan_reads_over_one_connection_writes_nothing_and_calls_its_provider_at_onc
     for phase in [
         "kind=\"s3.get\"",
         "started (spawn and handshake)",
-        "provider.call{otel.name=ovh Configure",
+        "provider.call{otel.name=configure ovh",
         "addr=\"ovh.instance lab-0\"",
         "evaluated",
         "planned (refresh, Plan calls, policy)",
