@@ -157,7 +157,7 @@ fn sum_min_max_over_a_null_is_stuck() {
         ty: "int".into(),
     };
     let fact = |g: &str, v: Value| Atom {
-        pred: "size".into(),
+        pred: crate::ast::Name::user("size"),
         args: vec![str_term(g), Term::Val(v)],
         record: None,
         span: Default::default(),
@@ -254,7 +254,7 @@ fn want_is_partitioned_by_type() {
 
 fn input(k: &str, v: Value) -> Atom {
     Atom {
-        pred: "input".into(),
+        pred: crate::ast::Name::user("input"),
         args: vec![str_term(k), Term::Val(v)],
         record: None,
         span: Default::default(),
@@ -827,13 +827,13 @@ fn round_zero_resolves_through_identity() {
     );
     let s = |x: &str| Term::Val(Value::Str(x.into()));
     extra.push(Atom {
-        pred: "identity".into(),
+        pred: crate::ast::Name::user("identity"),
         args: vec![s("vm"), s("a"), s("remote-a")],
         record: None,
         span: Default::default(),
     });
     extra.push(Atom {
-        pred: "world_attr".into(),
+        pred: crate::ast::Name::user("world_attr"),
         args: vec![s("vm"), s("remote-a"), s("id"), s("vm-123")],
         record: None,
         span: Default::default(),
@@ -1241,7 +1241,7 @@ fn a_memos_leaf_says_when_its_own_run_kept_it() {
     );
     let s = |x: &str| Term::Val(Value::Str(x.into()));
     let fact = Atom {
-        pred: crate::memo::FIRST.into(),
+        pred: crate::ast::Name::user(crate::memo::FIRST),
         args: vec![s("db-created"), s("now"), s("then")],
         record: None,
         span: Default::default(),
@@ -1358,7 +1358,7 @@ fn a_resumed_evaluation_counts_a_constraints_stuck_instance() {
         ty: "int".into(),
     };
     let later = Atom {
-        pred: "later".into(),
+        pred: crate::ast::Name::user("later"),
         args: vec![Term::Val(open)],
         record: None,
         span: Default::default(),
@@ -1397,11 +1397,11 @@ fn a_resumed_evaluation_runs_only_the_readers_of_its_facts_again() {
         .iter()
         .zip(resumable.c.rules.iter())
         .filter(|(a, _)| **a)
-        .map(|(_, r)| r.head.pred.clone())
+        .map(|(_, r)| r.head.pred.to_string())
         .collect();
     assert_eq!(again, ["quiet", "loud", "loudest", "deny"]);
     let later = |n: i64| Atom {
-        pred: "later".into(),
+        pred: crate::ast::Name::user("later"),
         args: vec![Term::Val(Value::Int(n))],
         record: None,
         span: Default::default(),

@@ -664,6 +664,11 @@ impl Reach {
             Reach::Use(m, _) => format!("{m}::{name}"),
         }
     }
+
+    /// The relation `name` as [`Reach::relation`] names it, of its kind.
+    pub fn pred(&self, name: &crate::ast::Name) -> crate::ast::Name {
+        name.map(|name| self.relation(name))
+    }
 }
 
 /// A read's declaration: the scope that declares the name and which of its

@@ -907,7 +907,7 @@ pub fn set_facts(declared: &[Declared], set: &[(String, Value)]) -> Result<Vec<A
             );
         };
         out.push(Atom {
-            pred: "input".into(),
+            pred: crate::ast::Name::user("input"),
             args: vec![Term::Val(Value::Str(k.clone())), Term::Val(v)],
             record: None,
             span: Span::default(),
@@ -945,10 +945,10 @@ pub fn file_stmts(program: &Program, declared: &[Declared]) -> Result<Vec<Stmt>>
             .iter()
             .copied()
             .filter(|d| {
-                d.decl.name == a.pred
+                a.pred == d.decl.name
                     || d.decl
                         .name
-                        .strip_prefix(&a.pred)
+                        .strip_prefix(a.pred.name())
                         .is_some_and(|r| r.starts_with('.'))
             })
             .collect();
@@ -961,7 +961,7 @@ pub fn file_stmts(program: &Program, declared: &[Declared]) -> Result<Vec<Stmt>>
         }
         let mut given = Vec::new();
         for d in &leaves {
-            let value = match d.decl.name.strip_prefix(&a.pred) {
+            let value = match d.decl.name.strip_prefix(a.pred.name()) {
                 Some("") => Some(a.args[0].clone()),
                 Some(rest) => field_term(&a.args[0], &rest[1..]),
                 None => None,
@@ -974,7 +974,7 @@ pub fn file_stmts(program: &Program, declared: &[Declared]) -> Result<Vec<Stmt>>
                 }
                 given.push(d.decl.name.clone());
                 out.push(Stmt::Fact(Atom {
-                    pred: "arg".into(),
+                    pred: crate::ast::Name::user("arg"),
                     args: vec![
                         Term::Val(Value::Str(crate::modules::INPUT.into())),
                         Term::Val(Value::Str(String::new())),
@@ -989,12 +989,12 @@ pub fn file_stmts(program: &Program, declared: &[Declared]) -> Result<Vec<Stmt>>
         }
         // A field no leaf has.
         if let Term::Obj(_) = &a.args[0]
-            && leaves.iter().all(|d| d.decl.name != a.pred)
+            && leaves.iter().all(|d| a.pred != d.decl.name)
         {
             let mut paths = Vec::new();
-            term_leaves(&a.args[0], &a.pred, &mut paths);
+            term_leaves(&a.args[0], a.pred.name(), &mut paths);
             for p in paths {
-                if let Some(field) = field_of(&a.pred, &p)
+                if let Some(field) = field_of(a.pred.name(), &p)
                     && !given.contains(&p)
                 {
                     let names: Vec<&str> = leaves.iter().map(|d| d.decl.name.as_str()).collect();

@@ -165,7 +165,7 @@ impl AttrAggregate {
             return *s;
         }
         let node = Node {
-            pred: "arg".into(),
+            pred: crate::ast::Name::user("arg"),
             typ: Some(typ.into()),
             path: Some(path.into()),
             addr: addr.map(partition::Addr::exact),
@@ -187,7 +187,7 @@ impl AttrAggregate {
     /// Group the contributions inserted since the last call, in fact order.
     fn group_new(&mut self, store: &Store) -> Result<()> {
         let rel = ops::Rel {
-            pred: "arg".into(),
+            pred: crate::ast::Name::user("arg"),
             arity: 5,
         };
         let w = Window {
@@ -222,7 +222,7 @@ impl AttrAggregate {
                         .or_default()
                         .insert(key.clone());
                     let read = Node {
-                        pred: transform::ATTR_BASE.into(),
+                        pred: crate::ast::Name::user(transform::ATTR_BASE),
                         addr: match (self.split.contains(&key.0), &key.1) {
                             (true, Value::Str(a)) => Some(partition::Addr::exact(a)),
                             _ => None,
@@ -289,7 +289,7 @@ impl AttrAggregate {
         for (key, base) in self.complete_at(stratum) {
             let group = self.take(key, base, &prov.store);
             let any = Atom {
-                pred: "attr".into(),
+                pred: crate::ast::Name::user("attr"),
                 ..group.read()
             };
             if known.any(&any) {
@@ -403,7 +403,7 @@ impl AttrAggregate {
         if group.base {
             cell.retain(|a| a.pred == "attr" || a.pred == "attr_stuck");
             for a in cell.iter_mut().filter(|a| a.pred == "attr") {
-                a.pred = transform::ATTR_BASE.into();
+                a.pred = crate::ast::Name::user(transform::ATTR_BASE);
             }
         }
         let children: Vec<NodeId> = std::iter::once(sigma)
@@ -472,7 +472,7 @@ impl Ready {
             "attr"
         };
         Atom {
-            pred: pred.into(),
+            pred: crate::ast::Name::user(pred),
             args: vec![
                 str_term(typ),
                 Term::Val(addr.clone()),
@@ -565,7 +565,7 @@ fn declared_lattices(facts: &[Atom]) -> Result<BTreeMap<(String, String), Lattic
     let defaults = type_defaults(facts);
     let mut decls: Vec<&Atom> = facts
         .iter()
-        .filter(|a| LATTICE_DECLS.contains(&a.pred.as_str()))
+        .filter(|a| LATTICE_DECLS.contains(&a.pred.name()))
         .collect();
     decls.sort();
     let mut out = BTreeMap::new();
@@ -637,7 +637,7 @@ fn declared_lattice(
             })
             .collect()
     };
-    Ok(match (a.pred.as_str(), k) {
+    Ok(match (a.pred.name(), k) {
         ("type_lattice", Value::Str(k)) if k == "flat" => Lattice::Flat,
         ("type_lattice", Value::Str(k)) if k == "map" => Lattice::Map(Box::new(Lattice::Flat)),
         ("type_lattice", Value::Str(k)) if k == "set" => Lattice::Set,

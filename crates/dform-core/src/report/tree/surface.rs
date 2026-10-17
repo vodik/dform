@@ -54,7 +54,7 @@ pub(super) struct Surface<'a, 'b> {
     list_keys: std::cell::OnceCell<BTreeMap<(String, String), Vec<String>>>,
     /// The relations the compiler folds an aggregate's group in
     /// ([`Helper::Aggregate`]), found once.
-    folds: std::cell::OnceCell<BTreeSet<String>>,
+    folds: std::cell::OnceCell<BTreeSet<crate::ast::Name>>,
     /// Each fact node's site at a depth ([`site_of`]), found once: the
     /// leaves of one large value (a manifest's document) share their
     /// statement, whose bindings print the whole value.
@@ -117,7 +117,7 @@ impl Surface<'_, '_> {
         {
             // A value given on the command line is the flag that gave it.
             match src.strip_prefix("input ") {
-                Some(flag) if matches!(fact.pred.as_str(), "input" | "data") => {
+                Some(flag) if matches!(fact.pred.name(), "input" | "data") => {
                     self.push(format!("{lead}{flag}"))
                 }
                 _ => self.push(format!("{lead}{text}   {src}")),
@@ -168,7 +168,7 @@ impl Surface<'_, '_> {
         (fact.pred == "lifecycle")
             .then(|| {
                 children.iter().copied().find(
-                    |ch| matches!(c.view(*ch), View::Fact { fact, .. } if fact.pred == crate::zset::WRITTEN),
+                    |ch| matches!(c.view(*ch), View::Fact { fact, .. } if fact.pred.as_internal() == Some(crate::zset::WRITTEN)),
                 )
             })
             .flatten()
@@ -185,7 +185,7 @@ impl Surface<'_, '_> {
         else {
             return None;
         };
-        if matches!(fact.pred.as_str(), "attr" | "arg" | "want") {
+        if matches!(fact.pred.name(), "attr" | "arg" | "want") {
             return None;
         }
         let View::Times { children, .. } = c.view(*a) else {
@@ -214,7 +214,7 @@ impl Surface<'_, '_> {
     /// A derived fact as the program would name it.
     pub(super) fn fact_text(&self, f: &Fact) -> String {
         let r = self.p.redact;
-        match (f.pred.as_str(), f.args.as_slice()) {
+        match (f.pred.name(), f.args.as_slice()) {
             ("want", [Value::Str(t), Value::Str(a)]) => crate::report::address(&Address {
                 typ: t.clone(),
                 name: a.clone(),
@@ -234,7 +234,7 @@ impl Surface<'_, '_> {
                 format!("{} = {}{}", cell(t, a, p), r.surface(v), rank_text(rank))
             }
             // `x in T` over an enum type (R-70): the type, as declared.
-            ("__enum", [Value::Str(t), Value::List(vs)]) => format!(
+            ("__enum", [Value::Str(t), Value::List(vs)]) if f.pred.is_internal() => format!(
                 "type {t} = enum({})",
                 vs.iter()
                     .map(|v| r.surface(v))
@@ -274,7 +274,7 @@ impl Surface<'_, '_> {
     /// where it is called, with the arguments the call gives) as the call:
     /// `the call cidr(1, 2)   (at p.df:4:29)`.
     fn call_text(&self, a: &Atom) -> Option<String> {
-        let (scope, f) = a.pred.rsplit_once("::")?;
+        let (scope, f) = a.pred.name().rsplit_once("::")?;
         let (f, site) = (f.strip_suffix('?')?, scope.strip_prefix("call at ")?);
         let args: Vec<String> = a.args.iter().map(|t| self.term(t)).collect();
         Some(format!("the call {f}({})   (at {site})", args.join(", ")))
@@ -322,7 +322,7 @@ impl Surface<'_, '_> {
             let mut out = BTreeMap::new();
             for f in self.p.circuit.facts() {
                 if let ("type_list_key", [Value::Str(t), Value::Str(l), ks]) =
-                    (f.pred.as_str(), f.args.as_slice())
+                    (f.pred.name(), f.args.as_slice())
                 {
                     let ks = match ks {
                         Value::List(ks) => ks
@@ -367,7 +367,7 @@ impl Surface<'_, '_> {
             })
             .collect();
         let fact = match ground {
-            Some(args) => self.fact_text(&Fact::new(&a.pred, args)),
+            Some(args) => self.fact_text(&Fact::new(a.pred.clone(), args)),
             None => self.p.redact.surface_atom(a),
         };
         format!("not {fact}")
@@ -405,7 +405,7 @@ impl Surface<'_, '_> {
 
     /// The relations the compiler folds an aggregate's group in, in
     /// whatever scope their names were given.
-    fn folds(&self) -> &BTreeSet<String> {
+    fn folds(&self) -> &BTreeSet<crate::ast::Name> {
         self.folds
             .get_or_init(|| crate::ast::Helper::Aggregate.heads(self.rules))
     }

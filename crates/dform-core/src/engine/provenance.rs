@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 /// The circuit's spelling of a ground fact.
 pub fn circuit_fact(a: &Atom) -> circuit::Fact {
     circuit::Fact::new(
-        &a.pred,
+        a.pred.clone(),
         a.args
             .iter()
             .map(|t| match t {
@@ -118,7 +118,7 @@ pub(super) fn given_leaf(
     if let Some(event) = crate::stack::published(a) {
         return Leaf::World { event };
     }
-    match a.pred.as_str() {
+    match a.pred.name() {
         p if crate::zset::POLICY_INPUTS.contains(&p) => Leaf::Plan { fact: text, tick },
         "input" | "data" => {
             let flag = if a.pred == "input" { "set" } else { "data" };
@@ -142,7 +142,7 @@ pub(super) fn given_leaf(
             _ => Leaf::Extern { call: text },
         },
         // A table's row: stated where its file states it.
-        p if externs.iter().any(|e| e.pred == p) => match crate::tables::at(a) {
+        _ if externs.iter().any(|e| e.pred == a.pred) => match crate::tables::at(a) {
             Some(span) => Leaf::Base { span },
             None => Leaf::Extern { call: text },
         },

@@ -331,7 +331,7 @@ impl TryFrom<&Atom> for pb::Fact {
                 .ok_or_else(|| anyhow!("a fact's arguments are ground, found {t:?}"))
         };
         Ok(pb::Fact {
-            pred: a.pred.clone(),
+            pred: a.pred.to_string(),
             args: a
                 .args
                 .iter()
@@ -345,8 +345,9 @@ impl TryFrom<&pb::Fact> for Atom {
     type Error = anyhow::Error;
 
     fn try_from(f: &pb::Fact) -> Result<Atom> {
+        // A provider's fact is of a relation the program names.
         Ok(Atom {
-            pred: f.pred.clone(),
+            pred: crate::ast::Name::user(&f.pred),
             args: f
                 .args
                 .iter()

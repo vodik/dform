@@ -75,7 +75,7 @@ proptest! {
         };
         let s = |x: &str| Term::Val(Value::Str(x.to_string()));
         let fact = Atom {
-            pred: "attr".into(),
+            pred: dform_core::ast::Name::user("attr"),
             args: vec![s("input"), s(scope), s(&k), Term::Val(v.clone())],
             record: None::<BTreeMap<String, Term>>,
             span: Span::default(),

@@ -10,6 +10,10 @@ fn a_core_variable_reads_as_the_source_name() {
     assert_eq!(source_name("AvailabilityZone"), "availability_zone");
     assert_eq!(source_name("Z"), "z");
     assert_eq!(source_name("__v1"), "__v1");
+    // A program's `__z` is no variable of the compiler's, which begin `__`.
+    let z = super::capitalise("__z");
+    assert!(!z.starts_with("__"), "{z}");
+    assert_eq!(source_name(&z), "__z");
 }
 
 fn lits(ls: &[Lit]) -> String {

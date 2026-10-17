@@ -50,30 +50,32 @@ pub struct TypeRef {
 /// definition's (R-186), read through the copy the body was taken from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelRef {
-    pub name: Name,
+    pub name: ast::Name,
     pub span: Span,
     pub via: Reach,
 }
 
 impl RelRef {
     /// The relation `name` of the scope the read is in, at `span`.
-    pub fn own(name: impl Into<Name>, span: Span) -> RelRef {
+    pub fn own(name: ast::Name, span: Span) -> RelRef {
         RelRef::reached(name, Reach::Own, span)
     }
 
     /// The relation `name` a read reaches `via`, at `span`.
-    pub fn reached(name: impl Into<Name>, via: Reach, span: Span) -> RelRef {
-        RelRef {
-            name: name.into(),
-            span,
-            via,
-        }
+    pub fn reached(name: ast::Name, via: Reach, span: Span) -> RelRef {
+        RelRef { name, span, via }
+    }
+
+    /// The program's relation `name` of the scope the read is in, at
+    /// `span`.
+    pub fn user(name: impl Into<String>, span: Span) -> RelRef {
+        RelRef::own(ast::Name::User(name.into()), span)
     }
 
     /// The relation as the program's own lowering names it (the copies'
     /// put an enclosing definition's under the instance it is read from).
-    pub fn pred(&self) -> String {
-        self.via.relation(&self.name)
+    pub fn pred(&self) -> ast::Name {
+        self.via.pred(&self.name)
     }
 }
 

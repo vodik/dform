@@ -75,7 +75,7 @@ fn renameable(what: &What, t: &SyntaxToken) -> Result<Symbol> {
     }
     match what {
         What::Name(Symbol::Predicate(_, n), _) if builtin(n) => bail!("`{n}` is a builtin"),
-        What::Name(Symbol::Predicate(_, n), _) if dform_core::loader::is_core_pred(n) => {
+        What::Name(Symbol::Predicate(_, n), _) if dform_core::loader::is_core_name(n) => {
             bail!("`{n}` is dform's own relation (the compiler's or a provider's)")
         }
         What::Name(Symbol::Function(f) | Symbol::Package(f), _) => bail!("`{f}` is a builtin"),

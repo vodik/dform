@@ -216,11 +216,11 @@ impl Groups<'_> {
                 group
             }
             Err(msg) => Atom {
-                pred: "deny".into(),
+                pred: crate::ast::Name::user("deny"),
                 args: vec![
                     Term::Val(Value::Str(format!("{}: {msg}", spell::atom(&key_pat)))),
                     Term::Val(obj(vec![
-                        ("pred", Value::Str(rule.head.pred.clone())),
+                        ("pred", Value::Str(rule.head.pred.to_string())),
                         ("group", Value::List(key)),
                         ("rule", Value::Str(self.rec.text.to_string())),
                     ])),

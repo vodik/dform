@@ -8,12 +8,11 @@ use anyhow::{Result, bail};
 
 /// A policy fact: `deny(msg, ctx)` or `warn(msg, ctx)`.
 pub(super) fn policy_fact(pred: &str, msg: &str, ctx: Value) -> Atom {
-    Atom {
-        pred: pred.into(),
-        args: vec![str_term(msg), Term::Val(ctx)],
-        record: None,
-        span: Default::default(),
-    }
+    crate::ast::atom(
+        pred,
+        vec![str_term(msg), Term::Val(ctx)],
+        Default::default(),
+    )
 }
 
 pub(super) fn format_policy_fact(a: &Atom) -> Result<String> {

@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 fn input(k: &str, v: &str) -> Atom {
     Atom {
-        pred: "input".into(),
+        pred: dform_core::ast::Name::user("input"),
         args: vec![
             Term::Val(Value::Str(k.into())),
             Term::Val(Value::Str(v.into())),

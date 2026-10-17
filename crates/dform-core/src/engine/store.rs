@@ -235,7 +235,7 @@ mod tests {
 
     fn atom(pred: &str, args: Vec<Value>) -> Atom {
         Atom {
-            pred: pred.into(),
+            pred: crate::ast::Name::user(pred),
             args: args.into_iter().map(Term::Val).collect(),
             record: None,
             span: Default::default(),
@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn a_lookup_reads_its_bucket_and_the_undecided_tuples() {
         let rel = Rel {
-            pred: "p".into(),
+            pred: crate::ast::Name::user("p"),
             arity: 2,
         };
         let open = Value::Null {
@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn an_undecided_tuple_is_read_only_under_its_decided_prefix() {
         let rel = Rel {
-            pred: "q".into(),
+            pred: crate::ast::Name::user("q"),
             arity: 2,
         };
         let open = |l: &str| Value::Null {

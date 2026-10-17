@@ -11,7 +11,9 @@
 use super::Env;
 use super::expr::Lowering;
 use super::instances::From;
-use crate::ast::{Atom, Helper, Lit, RuleStmt, Span, Stmt, Term, str_term};
+use crate::ast::{
+    self, Atom, Helper, Lit, RuleStmt, Span, Stmt, Term, atom, internal_atom, str_term,
+};
 use crate::program::node::*;
 use crate::program::{NodeId, Program};
 use crate::value::Value;
@@ -101,12 +103,12 @@ pub(super) fn folded(
         let pred = format!("__agg_{}", n.expect("a grouped fold's helper number"));
         let mut args = group.clone();
         args.push(call);
-        let head = finish(atom_at(&pred, args, span));
+        let head = finish(internal_atom(&pred, args, span));
         let rule = RuleStmt::helper(Helper::Aggregate, head, base.clone());
         helpers.push(Stmt::Rule(rule));
         let mut args = group.clone();
         args.push(v);
-        body.push(Lit::Pos(finish(atom_at(&pred, args, span))));
+        body.push(Lit::Pos(finish(internal_atom(&pred, args, span))));
     }
     body.extend(post);
     let mut out = vec![Stmt::Rule(RuleStmt::new(head, body))];
@@ -186,7 +188,7 @@ impl Lowering<'_> {
                 let start = out.len();
                 self.goal(*goal, out);
                 let covered = (out.len() - start) as i64;
-                let mark = self.put(atom_at(
+                let mark = self.put(internal_atom(
                     crate::partition::HAS,
                     vec![
                         typ,
@@ -251,7 +253,7 @@ impl Lowering<'_> {
         let mut inner = Vec::new();
         self.clause(clause, &mut inner);
         let args = h.args.iter().map(|v| self.var(*v)).collect();
-        let head = self.put(atom_at(&format!("__neg_{}", h.number), args, span));
+        let head = self.put(internal_atom(&format!("__neg_{}", h.number), args, span));
         let folded: BTreeSet<&str> = h
             .folded
             .iter()
@@ -317,7 +319,7 @@ impl Lowering<'_> {
             }
             GoalKind::Has(Has::Resource { typ, addr }) => {
                 let args = vec![self.expr(*typ), self.expr(*addr)];
-                vec![Lit::Pos(self.put(atom_at(
+                vec![Lit::Pos(self.put(internal_atom(
                     crate::partition::IDENTITY,
                     args,
                     span,
@@ -342,7 +344,7 @@ impl Lowering<'_> {
                 let e = self.expr(*e);
                 let mut args = vec![e];
                 args.extend(self.columns(pat));
-                vec![Lit::Pos(self.put(atom_at("member", args, span)))]
+                vec![Lit::Pos(self.put(atom("member", args, span)))]
             }
             Coll::Enum {
                 name,
@@ -358,13 +360,13 @@ impl Lowering<'_> {
                 );
                 let mut args = vec![self.expr(*list)];
                 args.extend(self.columns(pat));
-                vec![Lit::Pos(self.put(atom_at("member", args, span)))]
+                vec![Lit::Pos(self.put(atom("member", args, span)))]
             }
             Coll::Type(t) => {
                 let all = self.env.from;
                 let at = [all, self.pattern_from(pat)];
                 let args = vec![self.expr(*t), self.pattern(pat)];
-                vec![Lit::Pos(self.put_at(atom_at("want", args, span), all, &at))]
+                vec![Lit::Pos(self.put_at(atom("want", args, span), all, &at))]
             }
             Coll::Namespace {
                 ns,
@@ -380,14 +382,14 @@ impl Lowering<'_> {
             } => self.tested((PROVIDER_TYPE, typ, names), *var, pat, *enumerate, span),
             Coll::World(t) => {
                 let args = vec![str_term(t), self.pattern(pat)];
-                vec![Lit::Pos(self.put(atom_at("cloud_exists", args, span)))]
+                vec![Lit::Pos(self.put(atom("cloud_exists", args, span)))]
             }
             Coll::Copies { component, scope } => {
                 let all = self.env.from;
                 let at = [all, self.start_of(*scope), self.pattern_from(pat)];
                 let args = vec![str_term(component), self.expr(*scope), self.pattern(pat)];
                 let pred = crate::modules::INSTANCE_OF;
-                vec![Lit::Pos(self.put_at(atom_at(pred, args, span), all, &at))]
+                vec![Lit::Pos(self.put_at(atom(pred, args, span), all, &at))]
             }
             Coll::Each(e) | Coll::TypeOf { ty: e, .. } => {
                 let p = self.pattern(pat);
@@ -398,7 +400,7 @@ impl Lowering<'_> {
 
     /// The fact `pred(args)` a membership states, onto the helpers.
     fn state(&mut self, pred: &str, args: Vec<Term>, at: crate::ast::Span) {
-        let a = self.put(atom_at(pred, args, at));
+        let a = self.put(internal_atom(pred, args, at));
         self.helpers.push(Stmt::Fact(a));
     }
 
@@ -416,7 +418,7 @@ impl Lowering<'_> {
             self.state(pred, vec![str_term(key), str_term(r)], span);
         }
         let t = self.expr(term);
-        let test = self.put(atom_at(pred, vec![str_term(key), t.clone()], span));
+        let test = self.put(internal_atom(pred, vec![str_term(key), t.clone()], span));
         self.enumerate(test, t, pat, enumerate, span)
     }
 
@@ -435,7 +437,7 @@ impl Lowering<'_> {
             let at = [all, self.pattern_from(pat)];
             let x = self.pattern(pat);
             lits.push(Lit::Pos(self.put_at(
-                atom_at("want", vec![typ, x], span),
+                atom("want", vec![typ, x], span),
                 all,
                 &at,
             )));
@@ -501,7 +503,7 @@ impl Lowering<'_> {
     }
 
     /// [`Self::put_rel`] of the relation `pred` and where its parts start.
-    fn put_columns(&self, mut atom: Atom, pred: (String, Option<From>), args: &RelArgs) -> Atom {
+    fn put_columns(&self, mut atom: Atom, pred: (ast::Name, Option<From>), args: &RelArgs) -> Atom {
         if self.env.chain.is_none() {
             return atom;
         }
@@ -529,7 +531,7 @@ impl Lowering<'_> {
             }
         };
         Atom {
-            pred: rel.via.relation(&rel.name),
+            pred: rel.pred(),
             args,
             record,
             span: rel.span,
@@ -559,15 +561,6 @@ impl Lowering<'_> {
 const ENUM: &str = "__enum";
 const NAMESPACE: &str = "__namespace";
 const PROVIDER_TYPE: &str = "__provider_type";
-
-fn atom_at(pred: &str, args: Vec<Term>, span: crate::ast::Span) -> Atom {
-    Atom {
-        pred: pred.to_string(),
-        args,
-        record: None,
-        span,
-    }
-}
 
 fn compare(op: CmpOp, a: Term, b: Term) -> Lit {
     match op {

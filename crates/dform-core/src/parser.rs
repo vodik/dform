@@ -4,7 +4,7 @@
 //! several files is resolved as a whole (`loader::load_program`); these
 //! entry points lower one text on its own.
 
-use crate::ast::{Program, Span};
+use crate::ast::{Atom, Lit, Name, Program, Span, Stmt};
 use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::syntax::parser::{self as p, Parse};
 use crate::syntax::resolve::{self, Mode, Unit};
@@ -63,6 +63,35 @@ pub fn parse_file(name: &str, src: &str) -> Result<Program> {
 /// the core is written freely.
 pub fn parse_program(src: &str) -> Result<Program> {
     program("<input>", src, false, Mode::Program)
+}
+
+/// Program text the compiler writes itself (a prelude): a relation it
+/// spells with a leading `__` is its own ([`Name::Internal`]), which no
+/// program's text is.
+pub fn parse_own(src: &str) -> Result<Program> {
+    let own = |a: &mut Atom| {
+        if let Name::User(t) = &a.pred
+            && t.starts_with("__")
+        {
+            a.pred = Name::internal(t.as_str());
+        }
+    };
+    let mut program = parse_program(src)?;
+    for s in &mut program.statements {
+        match s {
+            Stmt::Fact(a) => own(a),
+            Stmt::Rule(r) => {
+                own(&mut r.head);
+                for l in &mut r.body {
+                    if let Lit::Pos(a) | Lit::Not(a) = l {
+                        own(a);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(program)
 }
 
 /// A `query` or `why` pattern: read on its own, so a dotted name no

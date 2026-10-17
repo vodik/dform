@@ -67,7 +67,7 @@ pub fn why_not(pattern: &str, res: &EvalResult, redact: &Redactor) -> Result<Str
         && let [t, a, ..] = atom.args.as_slice()
     {
         let want = Atom {
-            pred: "want".into(),
+            pred: crate::ast::Name::user("want"),
             args: vec![t.clone(), a.clone()],
             record: None,
             span: Default::default(),
@@ -92,7 +92,7 @@ pub fn waiting(
     res: &EvalResult,
     waits: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    match (a.pred.as_str(), a.args.first()) {
+    match (a.pred.name(), a.args.first()) {
         ("want" | "attr", Some(Term::Val(Value::Str(t)))) => waits(t).or_else(|| unapplied(a, res)),
         _ => None,
     }
@@ -128,7 +128,7 @@ fn evaluated(mut atom: Atom, secrets: &crate::secrets::Run) -> Atom {
 /// set`), for the plan's `not planned` rows.
 pub fn reason(typ: &str, name: &str, res: &EvalResult, redact: &Redactor) -> Option<String> {
     let want = Atom {
-        pred: "want".into(),
+        pred: crate::ast::Name::user("want"),
         args: vec![
             Term::Val(Value::Str(typ.into())),
             Term::Val(Value::Str(name.into())),
@@ -163,7 +163,7 @@ pub fn gone(
     redact: &Redactor,
 ) -> Option<(Option<String>, String)> {
     let want = Atom {
-        pred: "want".into(),
+        pred: crate::ast::Name::user("want"),
         args: vec![
             Term::Val(Value::Str(typ.into())),
             Term::Val(Value::Str(name.into())),
@@ -327,7 +327,7 @@ impl<'a> WhyNot<'a> {
     /// setting it, no row of its relation; at the top, the nearest rows or
     /// address.
     fn no_rule(&mut self, atom: &Atom, pad: &str, depth: usize) {
-        let line = match atom.pred.as_str() {
+        let line = match atom.pred.name() {
             "want" => match atom.args.first() {
                 Some(Term::Val(Value::Str(t))) => format!(
                     "no rule derives {}: no resource {t} is named like it",
@@ -336,13 +336,13 @@ impl<'a> WhyNot<'a> {
                 _ => format!("no rule derives {}", self.name(atom)),
             },
             "attr" => format!("no rule derives {}: no statement sets it", self.name(atom)),
-            p => match self.rows(p, atom.args.len()).is_empty() {
+            p => match self.rows(&atom.pred, atom.args.len()).is_empty() {
                 true => format!("no rule derives {}: nothing states {p}", self.name(atom)),
                 false => format!("no rule derives {}: no row of {p} is it", self.name(atom)),
             },
         };
         self.out.push_str(&format!("{pad}{line}\n"));
-        if depth == 0 && !matches!(atom.pred.as_str(), "want" | "attr") {
+        if depth == 0 && !matches!(atom.pred.name(), "want" | "attr") {
             self.nearest(atom, atom, &format!("{pad}  "));
         }
         if depth == 0
@@ -382,7 +382,9 @@ impl<'a> WhyNot<'a> {
         let lit = &rule.body[k];
         let bound = lit.subst(&a.known);
         match &bound {
-            Lit::Pos(b) if b.pred == "__known" => self.not_known(rule, lit, b, &a.known, &inner),
+            Lit::Pos(b) if b.pred.as_internal() == Some("__known") => {
+                self.not_known(rule, lit, b, &a.known, &inner)
+            }
             Lit::Pos(b) => {
                 if let Lit::Pos(written) = lit {
                     self.not_read(b, written, &inner, depth)?;
@@ -464,7 +466,12 @@ impl<'a> WhyNot<'a> {
             .rules
             .iter()
             .any(|r| r.head.pred == b.pred && r.head.args.len() == b.args.len());
-        let none = match (derived, b.pred.ends_with("::__instance")) {
+        let none = match (
+            derived,
+            b.pred
+                .as_internal()
+                .is_some_and(|p| p.ends_with("::__instance")),
+        ) {
             (true, true) => "not made",
             (true, false) => "not derived",
             (false, _) => "no row",
@@ -560,7 +567,7 @@ impl<'a> WhyNot<'a> {
             let lit = helper
                 .body
                 .iter()
-                .find(|l| matches!(l, Lit::Pos(a) if a.pred == "__known"))?;
+                .find(|l| matches!(l, Lit::Pos(a) if a.pred.as_internal() == Some("__known")))?;
             known_text(helper, lit, &env).map(|t| format!("not {t}"))
         })
     }
@@ -591,7 +598,9 @@ impl<'a> WhyNot<'a> {
         children
             .iter()
             .filter_map(|ch| match circuit.view(*ch) {
-                View::Fact { fact, .. } if fact.pred == crate::zset::WRITTEN => {
+                View::Fact { fact, .. }
+                    if fact.pred.as_internal() == Some(crate::zset::WRITTEN) =>
+                {
                     Some(placed(*ch, &fact.atom()))
                 }
                 _ => None,
@@ -600,11 +609,11 @@ impl<'a> WhyNot<'a> {
     }
 
     /// The rows of relation `pred/arity`, in the store's order.
-    fn rows(&self, pred: &str, arity: usize) -> Vec<&Atom> {
+    fn rows(&self, pred: &crate::ast::Name, arity: usize) -> Vec<&Atom> {
         self.res
             .facts
             .iter()
-            .filter(|f| f.pred == pred && f.args.len() == arity)
+            .filter(|f| f.pred == *pred && f.args.len() == arity)
             .collect()
     }
 
@@ -731,7 +740,7 @@ impl<'a> WhyNot<'a> {
             Term::Val(Value::Str(s)) => Some(s.clone()),
             _ => None,
         };
-        match (a.pred.as_str(), a.args.as_slice()) {
+        match (a.pred.name(), a.args.as_slice()) {
             ("want", [t, n]) => match (s(t), s(n)) {
                 (Some(t), Some(n)) => {
                     crate::report::address(&crate::address::Address { typ: t, name: n })
@@ -813,7 +822,7 @@ fn known_text(rule: &RuleStmt, lit: &Lit, known: &Env) -> Option<String> {
 /// contribution (`arg/5`) against an attribute (`attr/4`), the same
 /// resource and attribute.
 fn head_matches(head: &Atom, atom: &Atom) -> bool {
-    match (head.pred.as_str(), atom.pred.as_str()) {
+    match (head.pred.name(), atom.pred.name()) {
         ("arg", "attr") => head.args.len() == 5 && atom.args.len() == 4,
         (h, a) => h == a && head.args.len() == atom.args.len(),
     }

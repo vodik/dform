@@ -109,7 +109,7 @@ impl Lowerer<'_> {
             {
                 let (args, nodes) = self.ref_args(rc, &pred, list.as_ref(), pos)?;
                 let a = Atom {
-                    pred,
+                    pred: Name::User(pred),
                     args,
                     record: None,
                     span,
@@ -202,7 +202,7 @@ impl Lowerer<'_> {
             nodes.push((key, id));
         }
         let a = Atom {
-            pred,
+            pred: Name::User(pred),
             args: Vec::new(),
             record: Some(fields),
             span,
@@ -258,7 +258,7 @@ impl Lowerer<'_> {
         {
             let (record, nodes) = self.record_pattern(rc, o)?;
             let a = Atom {
-                pred,
+                pred: Name::User(pred),
                 args: Vec::new(),
                 record: Some(record),
                 span,
@@ -283,7 +283,7 @@ impl Lowerer<'_> {
     ) -> (Atom, AtomArgs) {
         let (args, nodes): (Vec<Term>, Vec<ExprId>) = args.into_iter().unzip();
         let a = Atom {
-            pred,
+            pred: Name::User(pred),
             args,
             record: None,
             span,
@@ -393,7 +393,7 @@ impl Lowerer<'_> {
                 cols.into_iter().unzip()
             }
         };
-        let a = atom_at(
+        let a = crate::ast::internal_atom(
             crate::modules::ROWS,
             vec![inst_term, str_term(&p), Term::List(cols)],
             span,
@@ -425,7 +425,7 @@ impl Lowerer<'_> {
         let (cols, nodes) = self.args(rc, n, pos)?;
         let parts = nodes.into_iter().map(ListPart::Elem).collect();
         let list = self.node(span, ExprKind::List { parts });
-        let a = atom_at("member", vec![self.term_of(rows), Term::List(cols)], span);
+        let a = crate::ast::atom("member", vec![self.term_of(rows), Term::List(cols)], span);
         Ok((a, AtomArgs::Positional(vec![rows, list])))
     }
 

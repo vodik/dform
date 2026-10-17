@@ -1,5 +1,5 @@
 use crate::ast::{
-    Atom, Extern, FieldOp, Helper, Lit, Program, Rank, Resource, RuleStmt, Span, Stmt, Term,
+    Atom, Extern, FieldOp, Helper, Lit, Name, Program, Rank, Resource, RuleStmt, Span, Stmt, Term,
     str_term, var,
 };
 use crate::diag::{self, Diagnostic, Diagnostics};
@@ -27,7 +27,7 @@ pub struct Lowered {
     /// Each let with parameters' declared parameter types, by its
     /// relation (`None` where one declares none): a call's copy reads it
     /// through `demand::copies`.
-    pub let_params: BTreeMap<String, Vec<crate::ast::LetParam>>,
+    pub let_params: BTreeMap<Name, Vec<crate::ast::LetParam>>,
 }
 
 /// `secret_cell(Type, Scope, Key)`: an input or output declared
@@ -113,7 +113,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     // `set from DOC` contributes per input path (R-38).
     expanded = crate::tables::expand_set_from(expanded, &mut inputs);
     // A let with parameters is answered at each site that reads it (R-187).
-    let sources = extern_fns.iter().map(|f| f.name.clone()).collect();
+    let sources = extern_fns.iter().map(|f| Name::user(&f.name)).collect();
     let let_params = expanded
         .statements
         .iter()
@@ -208,7 +208,7 @@ pub fn is_pseudo_type(typ: &str) -> bool {
 /// Contribution heads in the source forms, as `(type, addr, path, value)`.
 fn contribution_parts(a: &Atom) -> Option<(Term, Term, Term, Term)> {
     let g = |i: usize| a.args[i].clone();
-    match (a.pred.as_str(), a.args.len()) {
+    match (a.pred.name(), a.args.len()) {
         ("arg", 4) | ("arg_add", 4) => Some((g(0), g(1), g(2), g(3))),
         ("output", 3) => Some((str_term(OUTPUT), g(0), g(1), g(2))),
         ("output", 2) => Some((str_term(OUTPUT), str_term(""), g(0), g(1))),
@@ -263,7 +263,7 @@ fn contribution_head(a: Atom) -> Result<Atom> {
         _ => (path, value),
     };
     Ok(Atom {
-        pred: "arg".into(),
+        pred: crate::ast::Name::user("arg"),
         args: vec![typ, addr, path, value, rank],
         record: None,
         span: a.span,
@@ -288,7 +288,7 @@ fn element_write(value: &Term) -> Option<(Term, Term)> {
 
 /// The `(T, P)` an element write's rule writes: its type and top attribute.
 fn element_target(r: &RuleStmt) -> Option<(Term, String)> {
-    match (r.head.pred.as_str(), r.head.args.as_slice()) {
+    match (r.head.pred.name(), r.head.args.as_slice()) {
         ("arg", [t, _, Term::Val(Value::Str(p)), _, _]) if p.ends_with(ELEM) => Some((
             t.clone(),
             p.split(['.', '[']).next().unwrap_or(p).to_string(),
@@ -303,17 +303,17 @@ fn element_target(r: &RuleStmt) -> Option<(Term, String)> {
 /// helpers the compiler wrote for its body (`__neg_0` for a `not`), which
 /// belong to it.
 fn base_reads(statements: Vec<Stmt>) -> Vec<Stmt> {
-    let mut targets: BTreeMap<String, (Term, String)> = BTreeMap::new();
-    let helpers = |r: &RuleStmt| -> Vec<String> {
+    let mut targets: BTreeMap<Name, (Term, String)> = BTreeMap::new();
+    let helpers = |r: &RuleStmt| -> Vec<Name> {
         r.body
             .iter()
             .filter_map(|l| match l {
-                Lit::Pos(a) | Lit::Not(a) if a.pred.starts_with("__") => Some(a.pred.clone()),
+                Lit::Pos(a) | Lit::Not(a) if a.pred.is_internal() => Some(a.pred.clone()),
                 _ => None,
             })
             .collect()
     };
-    let mut work: Vec<(String, (Term, String))> = Vec::new();
+    let mut work: Vec<(Name, (Term, String))> = Vec::new();
     for st in &statements {
         if let Stmt::Rule(r) = st
             && let Some(t) = element_target(r)
@@ -351,7 +351,7 @@ fn base_reads(statements: Vec<Stmt>) -> Vec<Stmt> {
 fn base_body(r: RuleStmt, typ: &Term, top: &str) -> RuleStmt {
     let base = |a: Atom| match a.args.as_slice() {
         [t, _, Term::Val(Value::Str(p)), _] if a.pred == "attr" && t == typ && p == top => Atom {
-            pred: ATTR_BASE.into(),
+            pred: crate::ast::Name::user(ATTR_BASE),
             ..a
         },
         _ => a,
@@ -395,7 +395,7 @@ fn attr_read(a: Atom) -> Result<Atom> {
         ));
     }
     Ok(Atom {
-        pred: "attr".into(),
+        pred: crate::ast::Name::user("attr"),
         args: vec![typ, addr, path, value],
         record: None,
         span: a.span,
@@ -444,12 +444,12 @@ fn lower_contributions(program: &Program) -> Result<Program> {
 /// written both ways by design.
 fn check_mixed(program: &Program) -> Result<()> {
     let mut mixed = BTreeSet::new();
-    let mut facts: BTreeMap<(&str, usize), Span> = BTreeMap::new();
-    let mut rules: BTreeMap<(&str, usize), Span> = BTreeMap::new();
+    let mut facts: BTreeMap<(&Name, usize), Span> = BTreeMap::new();
+    let mut rules: BTreeMap<(&Name, usize), Span> = BTreeMap::new();
     for st in &program.statements {
         match st {
             Stmt::Mixed(e) => {
-                mixed.insert((e.pred.as_str(), e.arity));
+                mixed.insert((&e.pred, e.arity));
             }
             Stmt::Fact(a) => {
                 facts.entry((&a.pred, a.args.len())).or_insert(a.span);
@@ -465,7 +465,7 @@ fn check_mixed(program: &Program) -> Result<()> {
     let diags: Vec<Diagnostic> = rules
         .iter()
         .filter(|(k, _)| !mixed.contains(*k))
-        .filter(|((p, _), _)| !crate::loader::is_core_pred(p) && !p.contains("__"))
+        .filter(|((p, _), _)| !crate::loader::is_core_pred(p) && !p.is_internal())
         .filter_map(|(k @ (p, n), rule)| {
             let fact = facts.get(k)?;
             let decl = format!("decl {p}({}) mixed", columns(*n));
@@ -840,7 +840,7 @@ impl Comprehensions<'_> {
     fn comprehension(&mut self, item: Term, body: Vec<Lit>) -> Result<(Term, Vec<Lit>)> {
         *self.counter += 1;
         let counter = *self.counter;
-        let lc_pred = format!("__lc_{counter}");
+        let lc_pred = Name::internal(format!("__lc_{counter}"));
         let list_var = Term::Var(format!("__lc_val_{counter}"));
         let key_vars = self.keys(&item, &body)?;
         let body = self.demanded(counter, &key_vars, body);
@@ -892,7 +892,7 @@ impl Comprehensions<'_> {
             return body;
         }
         let demand = Atom {
-            pred: format!("__lc_{counter}_in"),
+            pred: Name::internal(format!("__lc_{counter}_in")),
             args: given,
             record: None,
             span: Default::default(),
@@ -1003,7 +1003,7 @@ fn membership_text(a: &Atom) -> String {
 }
 
 fn is_membership(a: &Atom) -> bool {
-    matches!(a.pred.as_str(), "member" | "enumerate") && a.args.len() >= 2
+    matches!(a.pred.name(), "member" | "enumerate") && a.args.len() >= 2
 }
 
 /// `x in l` in a comprehension's body, `l` bound by nothing its helper
@@ -1161,7 +1161,7 @@ fn drop_metadata(program: &Program) -> (Program, BTreeSet<Extern>, Vec<crate::as
             Stmt::ExternFn(f) if fns.iter().any(|g: &crate::ast::ExternFn| g.name == f.name) => {}
             Stmt::ExternFn(f) => {
                 externs.insert(Extern {
-                    pred: f.name.clone(),
+                    pred: Name::user(&f.name),
                     arity: f.args.len(),
                     span: f.span,
                 });
@@ -1285,7 +1285,7 @@ fn resource_rules(r: Resource) -> Result<Vec<Stmt>> {
     let body = r.body.unwrap_or_default();
     let mut out = vec![fact_or_rule(
         Atom {
-            pred: "want".to_string(),
+            pred: Name::user("want"),
             args: vec![r.typ.clone(), r.name.clone()],
             record: None,
             span: r.span,
@@ -1306,7 +1306,7 @@ fn resource_rules(r: Resource) -> Result<Vec<Stmt>> {
             }
         };
         let head = Atom {
-            pred: "arg".to_string(),
+            pred: Name::user("arg"),
             args: vec![
                 r.typ.clone(),
                 r.name.clone(),
@@ -1371,7 +1371,7 @@ fn unread_field_reports(r: &Resource, n: &mut usize) -> Vec<Stmt> {
 /// What a field read `read` finds nothing without: the resource's `want`
 /// row, a live object's `cloud_attr`; `None` for any other read.
 fn read_exists(read: &Atom) -> Option<Atom> {
-    match (read.pred.as_str(), read.args.as_slice()) {
+    match (read.pred.name(), read.args.as_slice()) {
         ("attr", [t, a, _, _]) => Some(atom("want", vec![t.clone(), a.clone()])),
         ("cloud_attr", [t, a, _, _]) => Some(atom(
             "cloud_attr",
@@ -1427,7 +1427,7 @@ fn unread_field_report(
         .filter(|v| bound.contains(v))
         .map(|v| var(&v))
         .collect();
-    let helper = atom(&format!("__field_read_{n}"), xs);
+    let helper = internal(&format!("__field_read_{n}"), xs);
     *n += 1;
     let mut ctx = BTreeMap::from([
         ("resource".to_string(), resource_named(r, bound)),
@@ -1515,7 +1515,7 @@ fn not_planned_report(r: &Resource) -> Option<Stmt> {
         Helper::Check,
         Atom {
             span: r.span,
-            ..atom(NOT_PLANNED, vec![r.typ.clone(), r.name.clone()])
+            ..internal(NOT_PLANNED, vec![r.typ.clone(), r.name.clone()])
         },
         body,
     )))
@@ -1579,9 +1579,15 @@ fn is_ground_term(t: &Term) -> bool {
 // These run after lowering, against the provider schema.
 // ---------------------------------------------------------------------------
 
+/// The atom of the program's relation `pred` over `args`, of no place.
 fn atom(pred: &str, args: Vec<Term>) -> Atom {
+    crate::ast::atom(pred, args, Span::default())
+}
+
+/// The atom of the compiler's relation `pred` over `args`, of no place.
+fn internal(pred: &str, args: Vec<Term>) -> Atom {
     Atom {
-        pred: pred.into(),
+        pred: Name::internal(pred),
         args,
         record: None,
         span: Default::default(),
@@ -1856,7 +1862,7 @@ pub fn computed_reads(statements: &[Stmt], schema: &Schema) -> Vec<(Span, String
     for s in statements {
         let Stmt::Rule(r) = s else { continue };
         let block = matches!(
-            (r.head.pred.as_str(), r.head.args.len()),
+            (r.head.pred.name(), r.head.args.len()),
             ("want", 2) | ("arg", 5)
         ) && matches!(&r.head.args[0], Term::Val(Value::Str(t)) if !is_pseudo_type(t));
         if !block {
@@ -2064,7 +2070,7 @@ fn ref_deps(head: &Atom, head_reads: &[(Atom, String)], body: &[Lit]) -> Vec<Rul
         .map(|(read, _)| {
             RuleStmt::helper(
                 Helper::RefDep,
-                atom(
+                internal(
                     REF_DEP,
                     vec![
                         head.args[0].clone(),
@@ -2119,7 +2125,7 @@ fn unanswered_read(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -> 
             ],
         }
     } else {
-        str_term(&head.pred)
+        str_term(head.pred.name())
     };
     // As early as the address is bound: the rest of the body may be stuck
     // on a null (member over a computed list) for an address that is
@@ -2179,7 +2185,7 @@ fn unanswered_read(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -> 
         Helper::Check,
         Atom {
             span: head.span,
-            ..atom(UNANSWERED, vec![Term::Obj(ctx)])
+            ..internal(UNANSWERED, vec![Term::Obj(ctx)])
         },
         body,
     )

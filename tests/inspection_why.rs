@@ -402,7 +402,7 @@ fn why_labels_facts_injected_at_a_tick() {
         attr: String::new(),
     });
     let fact = |pred: &str, args: Vec<Term>| Atom {
-        pred: pred.into(),
+        pred: dform_core::ast::Name::user(pred),
         args,
         record: None,
         span: Default::default(),

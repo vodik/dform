@@ -578,7 +578,7 @@ impl Decls {
     /// or component's that defines it (in a `use` or a copy's block, the
     /// module's or the component's first), else the program's.
     fn predicate(&self, at: &SyntaxNode, name: &str) -> Symbol {
-        let scope = match crate::loader::is_core_pred(name) {
+        let scope = match crate::loader::is_core_name(name) {
             true => None,
             false => {
                 let block = self.block_body(at).map(|b| b.scope);
@@ -1576,7 +1576,7 @@ impl Modules {
 /// declares: the compiler's, the engine's or a provider's (`deformation`,
 /// `drift`), an aggregate.
 pub fn is_builtin_relation(name: &str) -> bool {
-    crate::loader::is_core_pred(name) || crate::reference::reference(name, true).is_some()
+    crate::loader::is_core_name(name) || crate::reference::reference(name, true).is_some()
 }
 
 /// The signature line of a function or a package in `std/*.df`.

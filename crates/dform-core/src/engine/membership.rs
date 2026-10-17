@@ -19,7 +19,7 @@ pub(super) fn eval_member_like(
     out: &mut Vec<HashMap<String, Value>>,
     rec: &Rec,
 ) -> Result<()> {
-    match atom.pred.as_str() {
+    match atom.pred.name() {
         "member" => {
             if atom.args.len() == 2 {
                 return eval_member2(atom, state, out, rec);

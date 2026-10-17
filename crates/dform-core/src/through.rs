@@ -89,7 +89,7 @@ impl<'a> Rule<'a> {
         let Lit::Pos(a) = l else {
             return;
         };
-        match (a.pred.as_str(), a.args.as_slice()) {
+        match (a.pred.name(), a.args.as_slice()) {
             ("want", [Term::Val(Value::Str(t)), Term::Var(v)]) => {
                 self.hold(v, Held::Addr(t.clone()));
             }
@@ -189,7 +189,7 @@ impl<'a> Rule<'a> {
                     .collect(),
             );
         }
-        match (a.pred.as_str(), a.args.as_mut_slice()) {
+        match (a.pred.name(), a.args.as_mut_slice()) {
             // `s.vpc == v`, the join `attr(net.subnet, S, "vpc", V)`: the
             // attribute holds the reference.
             ("attr", [Term::Val(Value::Str(t)), _, Term::Val(Value::Str(p)), value]) => {
@@ -285,7 +285,7 @@ impl<'a> Rule<'a> {
                 };
                 let w = self.fresh(&capitalised(first));
                 pre.push(Lit::Pos(Atom {
-                    pred: "attr".into(),
+                    pred: crate::ast::Name::user("attr"),
                     args: vec![
                         Term::Val(Value::Str(typ.clone())),
                         var(&addr),

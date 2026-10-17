@@ -99,7 +99,7 @@ pub fn address(src: &str) -> Result<Option<Query>> {
             term_vars(&typ, &mut vars);
             return Ok(Some(Query::Body {
                 body: vec![Lit::Pos(Atom {
-                    pred: "want".into(),
+                    pred: crate::ast::Name::user("want"),
                     args: vec![typ, s(&name)],
                     record: None,
                     span: Default::default(),
@@ -412,7 +412,7 @@ pub fn cell(src: &str, facts: &BTreeSet<Atom>) -> Option<Query> {
                 continue;
             };
             let read = |value: Term| Atom {
-                pred: "attr".into(),
+                pred: crate::ast::Name::user("attr"),
                 args: vec![s(kind), s(&scope), s(&name), value],
                 record: None,
                 span: Default::default(),
@@ -460,7 +460,7 @@ pub fn pattern(addr: &crate::address::Address, path: Option<String>, why: bool) 
         ),
     };
     let atom = Atom {
-        pred: pred.into(),
+        pred: crate::ast::Name::user(pred),
         args,
         record: None,
         span: Default::default(),
@@ -625,7 +625,7 @@ impl Redactor {
         let mut paths: BTreeMap<(&str, &str), Vec<&str>> = BTreeMap::new();
         for a in facts
             .iter()
-            .filter(|a| a.pred == crate::secrets::SECRET_PATH)
+            .filter(|a| a.pred.as_internal() == Some(crate::secrets::SECRET_PATH))
         {
             if let [
                 Term::Val(Value::Str(t)),
@@ -646,7 +646,7 @@ impl Redactor {
         // a label of its own (`random.signing_key("synapse")`).
         let mut lets = Vec::new();
         for a in facts {
-            if !VALUE_PREDS.contains(&a.pred.as_str()) || a.args.len() < 4 {
+            if !VALUE_PREDS.contains(&a.pred.name()) || a.args.len() < 4 {
                 continue;
             }
             let [
@@ -708,7 +708,7 @@ impl Redactor {
         // Another in-process extern's secret column: by its call's label,
         // `PRED/INPUTS#N`, from the first answer on.
         for a in facts {
-            for col in crate::externs::secret_columns(&a.pred) {
+            for col in crate::externs::secret_columns(a.pred.name()) {
                 let vals: Option<Vec<Value>> = a
                     .args
                     .iter()
@@ -718,9 +718,12 @@ impl Redactor {
                     })
                     .collect();
                 let Some(vals) = vals else { continue };
-                let inputs = crate::externs::inputs_of(&a.pred, &vals);
+                let inputs = crate::externs::inputs_of(a.pred.name(), &vals);
                 if let Some(v) = vals.get(col) {
-                    r.add(v, &crate::externs::secret_label(&a.pred, &inputs, col));
+                    r.add(
+                        v,
+                        &crate::externs::secret_label(a.pred.name(), &inputs, col),
+                    );
                 }
             }
         }
@@ -748,7 +751,7 @@ impl Redactor {
         let mut columns: BTreeMap<&str, Vec<(usize, &str)>> = BTreeMap::new();
         for a in facts
             .iter()
-            .filter(|a| a.pred == crate::secrets::SECRET_COLUMN)
+            .filter(|a| a.pred.as_internal() == Some(crate::secrets::SECRET_COLUMN))
         {
             if let [
                 Term::Val(Value::Str(p)),
@@ -763,7 +766,7 @@ impl Redactor {
             }
         }
         for a in facts {
-            let Some(cols) = columns.get(a.pred.as_str()) else {
+            let Some(cols) = columns.get(a.pred.name()) else {
                 continue;
             };
             for (c, path) in cols {

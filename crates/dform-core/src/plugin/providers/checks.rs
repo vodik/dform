@@ -24,7 +24,7 @@ impl Providers {
                 .collect();
             let externs = crate::externs::load_answers(std::slice::from_ref(spec))?
                 .into_iter()
-                .map(|a| a.pred)
+                .map(|a| a.pred.to_string())
                 .collect();
             return Ok((types, externs));
         }
@@ -257,14 +257,14 @@ struct Serving<'p, F> {
 impl<F: Fn(&str) -> bool> Serving<'_, F> {
     /// What the body atom `a` reads that the provider serves, if it does.
     fn read_by(&self, a: &Atom) -> Option<String> {
-        if self.declared.contains(a.pred.as_str()) && !(self.local)(&a.pred) {
+        if self.declared.contains(a.pred.name()) && !(self.local)(a.pred.name()) {
             return self
                 .answers
-                .contains(&a.pred)
+                .contains(a.pred.name())
                 .then(|| format!("extern {}", a.pred));
         }
         let typed = matches!(
-            a.pred.as_str(),
+            a.pred.name(),
             "attr" | "cloud_attr" | "cloud_computed" | "cloud_exists"
         );
         let t = a.args.first().and_then(text).filter(|_| typed)?;
@@ -319,9 +319,9 @@ impl<F: Fn(&str) -> bool> Serving<'_, F> {
                     }
                     continue;
                 }
-                if seen.insert(a.pred.as_str()) {
+                if seen.insert(a.pred.name()) {
                     let mut p = path.clone();
-                    p.push(a.pred.clone());
+                    p.push(a.pred.to_string());
                     for (h2, b2) in self.rules {
                         if h2.pred == a.pred {
                             stack.push((h2, b2, p.clone()));
@@ -397,7 +397,7 @@ fn own_types(program: &crate::ast::Program) -> BTreeSet<&str> {
                 let crate::ast::PendingKind::TypeDecl { name, .. } = &p.kind;
                 Some(name.as_str())
             }
-            Stmt::Fact(a) if a.pred.starts_with("type_") => match a.args.first() {
+            Stmt::Fact(a) if a.pred.name().starts_with("type_") => match a.args.first() {
                 Some(Term::Val(Value::Str(t))) => Some(t.as_str()),
                 _ => None,
             },

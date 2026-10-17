@@ -261,7 +261,7 @@ pub(super) fn set_file(k: &str, path: &Path) -> Result<Value> {
 
 pub(super) fn atom_kv(pred: &str, k: &str, v: Value) -> Atom {
     Atom {
-        pred: pred.to_string(),
+        pred: crate::ast::Name::user(pred),
         args: vec![Term::Val(Value::Str(k.to_string())), Term::Val(v)],
         record: None,
         span: Default::default(),

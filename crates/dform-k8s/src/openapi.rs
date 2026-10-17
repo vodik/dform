@@ -312,7 +312,7 @@ fn row_type(f: &Atom) -> &str {
 /// A row's place in [`Derived::order`]: its type's, or (`\0TYPE`) that of
 /// its type's rows a request for any type answers.
 fn row_group(f: &Atom) -> std::borrow::Cow<'_, str> {
-    match dform_core::schema::PER_TYPE.contains(&f.pred.as_str()) {
+    match dform_core::schema::PER_TYPE.contains(&f.pred.name()) {
         true => row_type(f).into(),
         false => format!("\0{}", row_type(f)).into(),
     }
@@ -361,7 +361,7 @@ impl Derived {
         let aliases: BTreeMap<&str, &str> = loaded
             .facts
             .iter()
-            .filter_map(|f| match (f.pred.as_str(), f.args.as_slice()) {
+            .filter_map(|f| match (f.pred.name(), f.args.as_slice()) {
                 ("type_alias", [Term::Val(Value::Str(a)), Term::Val(Value::Str(t))]) => {
                     Some((a.as_str(), t.as_str()))
                 }
@@ -713,13 +713,13 @@ fn encode(d: &Derived, key: &str) -> Option<String> {
     // `type_provider`, a `type_alias`) is read with the kinds.
     let mut by_type: Vec<((&str, bool), Vec<Json>)> = Vec::new();
     for f in &schema.facts {
-        let mut row = vec![Json::String(f.pred.clone())];
+        let mut row = vec![Json::String(f.pred.to_string())];
         for a in &f.args {
             row.push(term(a)?);
         }
         let at = (
             row_type(f),
-            !dform_core::schema::PER_TYPE.contains(&f.pred.as_str()),
+            !dform_core::schema::PER_TYPE.contains(&f.pred.name()),
         );
         match by_type.iter_mut().find(|(x, _)| *x == at) {
             Some((_, rows)) => rows.push(Json::Array(row)),
@@ -799,7 +799,7 @@ fn sym(s: &str) -> Term {
 
 fn atom(pred: &str, args: Vec<Term>) -> Atom {
     Atom {
-        pred: pred.to_string(),
+        pred: dform_core::ast::Name::user(pred),
         args,
         record: None,
         span: Default::default(),

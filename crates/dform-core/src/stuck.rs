@@ -54,7 +54,7 @@ impl Stuck {
     pub fn fact(&self) -> Atom {
         let v = |v: Value| Term::Val(v);
         Atom {
-            pred: "stuck".into(),
+            pred: crate::ast::Name::user("stuck"),
             args: vec![
                 v(self
                     .rule
@@ -82,7 +82,7 @@ impl Stuck {
 fn head_text(head: &Atom) -> String {
     let written = |a: &Atom| crate::query::Redactor::default().surface_atom(a);
     cell_text(head)
-        .or_else(|| match head.pred.contains("::") {
+        .or_else(|| match head.pred.name().contains("::") {
             true => crate::modules::private_text(head, &written, " "),
             false => None,
         })
@@ -168,7 +168,7 @@ impl MayDerive {
     pub fn fact(&self) -> Atom {
         let v = |v: Value| Term::Val(v);
         Atom {
-            pred: MAY_DERIVE.into(),
+            pred: crate::ast::Name::user(MAY_DERIVE),
             args: vec![
                 v(Value::Int(self.rule as i64)),
                 v(Value::Str(head_text(&self.head))),
@@ -195,7 +195,7 @@ impl MayDerive {
 /// resource address in the head, or a builtin in the head. A rule that
 /// only reads relations into fresh variables and copies them into its
 /// head cannot: `stuck/4`'s readers must be such rules.
-pub fn can_stick(head: &Atom, body: &[Lit], aggregates: &BTreeSet<String>) -> bool {
+pub fn can_stick(head: &Atom, body: &[Lit], aggregates: &BTreeSet<crate::ast::Name>) -> bool {
     fn has_func(t: &Term) -> bool {
         match t {
             Term::Func { .. } | Term::ListComp { .. } => true,
@@ -216,7 +216,7 @@ pub fn can_stick(head: &Atom, body: &[Lit], aggregates: &BTreeSet<String>) -> bo
             return true;
         };
         if aggregates.contains(&a.pred)
-            || matches!(a.pred.as_str(), "member" | "enumerate")
+            || matches!(a.pred.name(), "member" | "enumerate")
             || crate::engine::ops::is_builtin_pred(&a.pred)
         {
             return true;
@@ -286,7 +286,7 @@ fn normalize_contribution(mut pat: Atom) -> Atom {
 pub fn as_read(p: &Atom) -> Atom {
     if p.pred == "arg" && p.args.len() == 5 {
         return Atom {
-            pred: "attr".into(),
+            pred: crate::ast::Name::user("attr"),
             args: p.args[..4].to_vec(),
             record: None,
             span: Default::default(),
@@ -311,7 +311,7 @@ pub fn patterns_unify(a: &Atom, b: &Atom) -> bool {
 /// predicate.
 #[derive(Debug, Default, Clone)]
 pub struct Known {
-    by_pred: BTreeMap<String, Heads>,
+    by_pred: BTreeMap<crate::ast::Name, Heads>,
 }
 
 /// One predicate's stuck heads, in the order found, with those whose first
@@ -374,7 +374,7 @@ impl Known {
     }
 
     /// Has `pred` any head at all?
-    pub fn has_pred(&self, pred: &str) -> bool {
+    pub fn has_pred(&self, pred: &crate::ast::Name) -> bool {
         self.by_pred.contains_key(pred)
     }
 
@@ -502,7 +502,7 @@ pub fn sections(
             };
         for (t, a) in named {
             let group = Atom {
-                pred: "attr".into(),
+                pred: crate::ast::Name::user("attr"),
                 args: vec![
                     Term::Val(Value::Str(t.clone())),
                     Term::Val(Value::Str(a.clone())),
@@ -576,7 +576,7 @@ pub fn sections(
     let mut pending_groups = Vec::new();
     let mut undetermined = Vec::new();
     for s in stuck {
-        match s.head.pred.as_str() {
+        match s.head.pred.name() {
             "want" => pending_groups.push(format!(
                 "{} x unknown, on {}  ({})",
                 spell::atom(&s.head),
@@ -647,7 +647,7 @@ mod tests {
     fn a_stuck_head_is_said_in_the_programs_words() {
         let s = |v: &str| Term::Val(Value::Str(v.into()));
         let atom = |pred: &str, args: Vec<Term>| Atom {
-            pred: pred.into(),
+            pred: crate::ast::Name::user(pred),
             args,
             record: None,
             span: Default::default(),

@@ -302,7 +302,7 @@ impl Lowerer<'_> {
                         .collect(),
                 };
                 if let Some((c, _)) = columns.iter().find(|(_, v)| has(v)) {
-                    let p = h.pred.rsplit("::").next().unwrap_or(&h.pred);
+                    let p = h.pred.name().rsplit("::").next().unwrap_or(h.pred.name());
                     bad(
                         self,
                         h.span,

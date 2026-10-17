@@ -40,8 +40,9 @@
 //! boundary where a secret may be checked, so its generated rules are
 //! exempt from E0301/E0302.
 
-use crate::ast::{Atom, Lit, Program, Span, Stmt, Term};
+use crate::ast::{Atom, Helper, Lit, Name, Program, Span, Stmt, Term};
 use crate::diag::{Diagnostic, Diagnostics};
+use crate::engine::ops::Rel;
 use crate::schema::Schema;
 use crate::transform::Lowered;
 use crate::value::Value;
@@ -88,7 +89,7 @@ pub fn rotation_facts(st: &crate::state::State, run: &Run) -> Vec<Atom> {
     };
     let s = |x: &str| Term::Val(Value::Str(x.to_string()));
     let atom = |pred: &str, args: Vec<Term>| Atom {
-        pred: pred.into(),
+        pred: crate::ast::Name::user(pred),
         args,
         record: None,
         span: Default::default(),
@@ -226,7 +227,7 @@ fn label_at<'k>(keys: impl Iterator<Item = &'k str>, p: &str) -> Label {
 struct Pass<'a> {
     schema: &'a Schema,
     /// Secret positions: (predicate, column) -> where in its values.
-    secret: BTreeMap<(String, usize), Label>,
+    secret: BTreeMap<(Name, usize), Label>,
     /// Pseudo-type cells declared secret: (type, scope, key); the key
     /// `conn.password` for a field of an object type.
     cells: BTreeSet<(String, String, String)>,
@@ -490,7 +491,7 @@ impl Pass<'_> {
     }
 
     fn position_label(&self, a: &Atom, i: usize) -> Label {
-        match (a.pred.as_str(), a.args.len()) {
+        match (a.pred.name(), a.args.len()) {
             ("attr" | "world_attr", 4) if i == 3 => {
                 self.attr_label(&a.args[0], &a.args[1], &a.args[2])
             }
@@ -536,19 +537,28 @@ fn rules(program: &Program) -> Vec<(Option<&Atom>, &[Lit], Span)> {
 }
 
 /// An input check's rules (`modules::refinement`): its helper
-/// `__refine_k`, and the deny that fires where the helper does not hold.
-fn is_refinement(head: Option<&Atom>, body: &[Lit]) -> bool {
-    let refine = |a: &Atom| {
-        a.pred
-            .rsplit("::")
-            .next()
-            .unwrap_or(&a.pred)
-            .starts_with("__refine_")
-    };
+/// `__refine_k` ([`Helper::InputCheck`], one of `checks`), and the deny
+/// that fires where the helper does not hold.
+fn is_refinement(head: Option<&Atom>, body: &[Lit], checks: &BTreeSet<Rel>) -> bool {
     head.is_some_and(|h| {
-        refine(h)
-            || (h.pred == "deny" && body.iter().any(|l| matches!(l, Lit::Not(a) if refine(a))))
+        checks.contains(&Rel::of(h))
+            || (h.pred == "deny"
+                && body
+                    .iter()
+                    .any(|l| matches!(l, Lit::Not(a) if checks.contains(&Rel::of(a)))))
     })
+}
+
+/// The relations of `program`'s input checks ([`Helper::InputCheck`]).
+fn input_checks(program: &Program) -> BTreeSet<Rel> {
+    program
+        .statements
+        .iter()
+        .filter_map(|s| match s {
+            Stmt::Rule(r) if r.helper == Some(Helper::InputCheck) => Some(Rel::of(&r.head)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Whether `name` is a function declared `-> secret(T)`.
@@ -597,7 +607,7 @@ fn fixpoint<'a>(
     for f in &lowered.extern_fns {
         for (i, b) in f.args.iter().enumerate() {
             if crate::externs::is_secret(b) {
-                pass.secret.insert((f.name.clone(), i), whole());
+                pass.secret.insert((Name::user(&f.name), i), whole());
             }
         }
     }
@@ -616,7 +626,7 @@ fn fixpoint<'a>(
             }
             // A `let` holding a secret is a secret cell (R-3), each path
             // of it that is.
-            if let ("arg", [t, scope, k, v, _]) = (h.pred.as_str(), h.args.as_slice())
+            if let ("arg", [t, scope, k, v, _]) = (h.pred.name(), h.args.as_slice())
                 && s(t) == Some(crate::modules::LET)
                 && let (Some(scope), Some(k)) = (s(scope), s(k))
             {
@@ -726,7 +736,7 @@ pub fn secret_reads(
     let mut out = Vec::new();
     for (head, body, _) in rules(&lowered.program) {
         let Some(h) = head else { continue };
-        let ("arg", [t, scope, k, ..]) = (h.pred.as_str(), h.args.as_slice()) else {
+        let ("arg", [t, scope, k, ..]) = (h.pred.name(), h.args.as_slice()) else {
             continue;
         };
         let (Some(t), Some(scope), Some(k)) = (s(t), s(scope), s(k)) else {
@@ -740,7 +750,7 @@ pub fn secret_reads(
         }
         for l in body {
             if let Lit::Pos(a) = l
-                && crate::tables::is_document(&a.pred)
+                && crate::tables::is_document(a.pred.name())
             {
                 out.push(a.clone());
             }
@@ -777,8 +787,8 @@ pub fn taint(
     outputs: &BTreeSet<(String, String)>,
 ) -> Vec<Atom> {
     let pass = fixpoint(lowered, schema, outputs);
-    let fact = |pred: &str, args: Vec<Value>| Atom {
-        pred: pred.into(),
+    let fact = |pred: Name, args: Vec<Value>| Atom {
+        pred,
         args: args.into_iter().map(Term::Val).collect(),
         record: None,
         span: Span::default(),
@@ -788,7 +798,7 @@ pub fn taint(
         .iter()
         .map(|(t, sc, k)| {
             fact(
-                crate::transform::SECRET_CELL,
+                Name::user(crate::transform::SECRET_CELL),
                 vec![
                     Value::Str(t.clone()),
                     Value::Str(sc.clone()),
@@ -799,18 +809,18 @@ pub fn taint(
         .collect();
     // A let's relation gathers its calls' copies: a row is secret where
     // its copy's is, which says so by its own column.
-    let unions: BTreeSet<String> = crate::demand::copies(&lowered.program)
+    let unions: BTreeSet<Name> = crate::demand::copies(&lowered.program)
         .into_values()
         .collect();
     for ((pred, col), label) in &pass.secret {
-        if CELL_PREDS.contains(&pred.as_str()) || unions.contains(pred) {
+        if pred.as_user().is_some_and(|p| CELL_PREDS.contains(&p)) || unions.contains(pred) {
             continue;
         }
         for p in label {
             out.push(fact(
-                SECRET_COLUMN,
+                Name::internal(SECRET_COLUMN),
                 vec![
-                    Value::Str(pred.clone()),
+                    Value::Str(pred.to_string()),
                     Value::Int(*col as i64),
                     Value::Str(p.clone()),
                 ],
@@ -830,7 +840,7 @@ pub fn taint(
         let p = p.trim_start_matches('.');
         for q in pass.term_label(value, &pass.body_vars(body)) {
             out.push(fact(
-                SECRET_PATH,
+                Name::internal(SECRET_PATH),
                 vec![Value::Str(t.into()), Value::Str(p.into()), Value::Str(q)],
             ));
         }
@@ -861,7 +871,9 @@ struct Checker<'a> {
     fns: BTreeMap<&'a str, &'a crate::ast::ExternFn>,
     /// The copy of a let with parameters each call reads, with the let
     /// (`demand::copies`).
-    calls: BTreeMap<String, String>,
+    calls: BTreeMap<Name, Name>,
+    /// The relations of the program's input checks ([`is_refinement`]).
+    checks: BTreeSet<Rel>,
     diags: Vec<Diagnostic>,
 }
 
@@ -890,6 +902,7 @@ impl<'a> Checker<'a> {
                 .map(|f| (f.name.as_str(), f))
                 .collect(),
             calls: crate::demand::copies(&lowered.program),
+            checks: input_checks(&lowered.program),
             diags: Vec::new(),
         }
     }
@@ -913,7 +926,7 @@ impl<'a> Checker<'a> {
             return i + 1 == a.args.len();
         }
         self.fns
-            .get(a.pred.as_str())
+            .get(a.pred.name())
             .and_then(|f| f.args.get(i))
             .is_none_or(|b| !b.input)
     }
@@ -934,7 +947,7 @@ impl<'a> Checker<'a> {
             body,
             span,
             vars: self.pass.body_vars(body),
-            refinement: is_refinement(head, body),
+            refinement: is_refinement(head, body, &self.checks),
         };
         self.coeffects(&r);
         self.calls(&r);
@@ -964,14 +977,15 @@ impl<'a> Checker<'a> {
             let (Lit::Pos(a) | Lit::Not(a)) = l else {
                 continue;
             };
-            let Some(f) = fns.get(a.pred.as_str()) else {
+            let Some(f) = fns.get(a.pred.name()) else {
                 continue;
             };
             // What dform answers itself stays on the machine (`memo.first`
             // of a secret candidate seals it, `env.var`); a location's read
             // does not.
-            let location = crate::tables::is_document(&a.pred) || a.pred == crate::files::READ;
-            if crate::externs::in_process(&a.pred) && !location {
+            let location =
+                crate::tables::is_document(a.pred.name()) || a.pred == crate::files::READ;
+            if crate::externs::in_process(a.pred.name()) && !location {
                 continue;
             }
             for (t, b) in a.args.iter().zip(&f.args) {
@@ -1025,7 +1039,7 @@ impl<'a> Checker<'a> {
                 };
                 if self.secret(r, t) {
                     let at = if a.span.is_none() { r.span } else { a.span };
-                    diags.push(secret_parameter(at, f, p, ty));
+                    diags.push(secret_parameter(at, f.name(), p, ty));
                 }
             }
         }
@@ -1160,12 +1174,12 @@ impl<'a> Checker<'a> {
                 "whether `{x}` is there is a bit of it: test `{p}` of a public \
                      value, or of `secret.declassify({x}, \"why\")` if that bit \
                      may be known",
-                p = a.pred.rsplit("::").next().unwrap_or(&a.pred),
+                p = a.pred.name().rsplit("::").next().unwrap_or(a.pred.name()),
             ),
             (None, None) => format!(
                 "whether a secret is there is a bit of it: test `{}` of a \
                      public value",
-                a.pred.rsplit("::").next().unwrap_or(&a.pred),
+                a.pred.name().rsplit("::").next().unwrap_or(a.pred.name()),
             ),
         };
         Some(
@@ -1254,7 +1268,7 @@ impl<'a> Checker<'a> {
         let pass = &self.pass;
         let secret = |t: &Term| self.secret(r, t);
         let mut diags = Vec::new();
-        match (h.pred.as_str(), h.args.len()) {
+        match (h.pred.name(), h.args.len()) {
             ("arg", 5)
                 if let Some(leak) =
                     pass.public_leaf(&h.args[0], &h.args[1], &h.args[2], &h.args[3], vars) =>
@@ -1550,7 +1564,13 @@ fn input_of<'l>(lowered: &'l Lowered, a: &Atom) -> Option<&'l crate::inputs::Dec
     }
     lowered.inputs.iter().find(|d| match d.scope.as_str() {
         "" => a.pred == d.decl.name,
-        sc => a.pred.strip_prefix(sc).and_then(|r| r.strip_prefix("::")) == Some(&d.decl.name),
+        sc => {
+            a.pred
+                .name()
+                .strip_prefix(sc)
+                .and_then(|r| r.strip_prefix("::"))
+                == Some(&d.decl.name)
+        }
     })
 }
 
@@ -1571,8 +1591,8 @@ fn declassified(x: &Option<String>) -> String {
     format!("or `secret.declassify({x}, \"why\")` if it is public")
 }
 
-fn is_builtin_pred(p: &str) -> bool {
-    matches!(p, "member" | "enumerate") || crate::functions::is_predicate(p)
+fn is_builtin_pred(p: &Name) -> bool {
+    matches!(p.as_user(), Some("member" | "enumerate")) || crate::functions::is_predicate(p)
 }
 
 /// The first function in `t` that inspects a secret argument.
@@ -2312,7 +2332,10 @@ pub mod inventory {
             // What a secret manager keeps (R-172): a location read into a
             // secret cell at the version its manager answered, which pins
             // where the read's row is (`files::pinned`).
-            for a in facts.iter().filter(|a| crate::tables::is_document(&a.pred)) {
+            for a in facts
+                .iter()
+                .filter(|a| crate::tables::is_document(a.pred.name()))
+            {
                 if let [Term::Val(loc), Term::Val(Value::Str(at)), Term::Val(v)] = a.args.as_slice()
                     && self.secret(v)
                     && let Some(version) = crate::files::version_of(at)
@@ -2501,5 +2524,31 @@ pub mod inventory {
             v.sort_by(|a, b| (a.kind, &a.key).cmp(&(b.kind, &b.key)));
             v
         }
+    }
+}
+
+#[cfg(test)]
+mod refinement_tests {
+    use super::*;
+    use crate::ast::{RuleStmt, internal_atom, var};
+
+    /// An input's check is one by its kind, never by its name: a type's
+    /// check `__refine_net_vpc_0` (of the type `net.vpc`) is no input
+    /// `net_vpc_0`'s, whose check may read the input's secret.
+    #[test]
+    fn an_input_check_is_one_by_its_helper_kind() {
+        let at = Span::default();
+        let input = internal_atom("__refine_net_vpc_0", vec![var("V")], at);
+        let typed = internal_atom("__refine_net_vpc_0", vec![var("A"), var("V")], at);
+        let program = Program {
+            statements: vec![
+                Stmt::Rule(RuleStmt::helper(Helper::InputCheck, input.clone(), vec![])),
+                Stmt::Rule(RuleStmt::helper(Helper::Check, typed.clone(), vec![])),
+            ],
+            ..Default::default()
+        };
+        let checks = input_checks(&program);
+        assert!(is_refinement(Some(&input), &[], &checks));
+        assert!(!is_refinement(Some(&typed), &[], &checks));
     }
 }

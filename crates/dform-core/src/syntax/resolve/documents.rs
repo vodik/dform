@@ -27,7 +27,7 @@ impl Lowerer<'_> {
         self.check_bound(rc, clause, &[])?;
         Ok(TableRows {
             externs,
-            head: atom_at(pred, vars, span),
+            head: crate::ast::atom(pred, vars, span),
             rows,
             made,
         })
@@ -168,7 +168,7 @@ impl Lowerer<'_> {
         Some(Ok(self.building(rc, read.span, |b| {
             let path = b.bound_into(read.location, &read.path);
             let at = b.variable(&read.at);
-            b.call_into((&read.name, Reach::Own), vec![path, at], &v)
+            b.call_into((Name::user(&read.name), Reach::Own), vec![path, at], &v)
         })))
     }
 
@@ -290,7 +290,7 @@ impl Lowerer<'_> {
     /// The rows of a document `read` reads into `outs`, `name(Path, At,
     /// outs..)` after `Path = LOCATION`: their goal.
     pub(super) fn rows_goal(&mut self, rc: &Rc, read: &DocRead, outs: &[Term]) -> GoalId {
-        let rel = RelRef::own(read.name.clone(), read.span);
+        let rel = RelRef::user(read.name.clone(), read.span);
         self.building(rc, read.span, |b| {
             let path = b.bound_into(read.location, &read.path);
             let mut args = vec![path, b.variable(&read.at)];

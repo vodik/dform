@@ -11,12 +11,14 @@ use crate::value::Value;
 
 /// Relations the compiler writes and reads with values of any type: not a
 /// program's relation, never typed by its uses.
-pub(crate) fn untyped(pred: &str) -> bool {
-    crate::loader::is_core_pred(pred)
-        || pred.contains("__")
+pub(crate) fn untyped(pred: &crate::ast::Name) -> bool {
+    let crate::ast::Name::User(pred) = pred else {
+        return true;
+    };
+    crate::loader::is_core_name(pred)
         || pred.starts_with("type_")
         || matches!(
-            pred,
+            pred.as_str(),
             crate::transform::SECRET_CELL
                 | "instance_of"
                 | "settings_row"
@@ -323,6 +325,13 @@ pub(crate) fn shown_term(t: &Term) -> String {
 pub(crate) fn shown_var(v: &str) -> String {
     let base = v.trim_end_matches(|c: char| c.is_ascii_digit() || c == '_');
     let base = if base.is_empty() { v } else { base };
+    // A program's `__z` (`_~Z`, `resolve::capitalise`): its underscores,
+    // then the rest.
+    if let Some(rest) = base.strip_prefix("_~") {
+        let tildes = rest.len() - rest.trim_start_matches('~').len();
+        let rest = &rest[tildes..];
+        return "_".repeat(tildes + 1) + &shown_var(rest);
+    }
     let mut out = String::new();
     for (i, ch) in base.chars().enumerate() {
         if ch.is_ascii_uppercase() {

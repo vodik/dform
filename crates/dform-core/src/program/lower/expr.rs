@@ -7,7 +7,7 @@
 
 use super::Env;
 use super::instances::From;
-use crate::ast::{Atom, Lit, Span, Stmt, Term, TypeExpr, str_term};
+use crate::ast::{self, Atom, Lit, Span, Stmt, Term, TypeExpr, str_term};
 use crate::program::node::*;
 use crate::program::scope::Reach;
 use crate::program::{NodeId, Program, Reading, Readings};
@@ -44,7 +44,7 @@ pub(super) struct Lowering<'p> {
     pub(super) helpers: Vec<Stmt>,
     /// The relations a copy's block gives rows of (R-55), under the
     /// copy's scope: each such head is the copy's own relation.
-    pub(super) taken: Option<(&'p str, &'p BTreeSet<String>)>,
+    pub(super) taken: Option<(&'p str, &'p BTreeSet<ast::Name>)>,
     /// The literals of each clause around the term being lowered, up to
     /// the goal that holds it: what a negation in a comprehension's body
     /// is guarded by besides that body's own.
@@ -101,10 +101,10 @@ impl<'p> Lowering<'p> {
     /// The relation `rel` reads: an enclosing definition's (R-186) the
     /// relation of the instance it is taken from; and where the copies'
     /// parts start for it.
-    pub(super) fn relation(&self, rel: &RelRef) -> (String, Option<From>) {
+    pub(super) fn relation(&self, rel: &RelRef) -> (ast::Name, Option<From>) {
         match (self.env.chain, &rel.via) {
             (Some(c), Reach::Lexical(body)) => c.lexical_pred(body, &rel.name, rel.span),
-            _ => (rel.via.relation(&rel.name), self.env.from),
+            _ => (rel.pred(), self.env.from),
         }
     }
 
@@ -214,7 +214,7 @@ impl<'p> Lowering<'p> {
         let (item, keys, field) = (self.var(v), self.var(*keys), self.var(*field));
         let atom = |pred: &str, args| {
             Lit::Pos(self.put(Atom {
-                pred: pred.to_string(),
+                pred: ast::Name::user(pred),
                 args,
                 record: None,
                 span,
@@ -254,7 +254,7 @@ impl<'p> Lowering<'p> {
                     (self.expr(*addr), self.start_of(*addr)),
                     (str_term(&path), all),
                 ];
-                (("cloud_attr".to_string(), all), args, 3)
+                ((ast::Name::user("cloud_attr"), all), args, 3)
             }
             ExprKind::Lookup { rel, args, out, .. } => {
                 let args = args
@@ -297,11 +297,11 @@ impl<'p> Lowering<'p> {
                     (self.expr(*addr), self.start_of(*addr)),
                     (str_term(p), all),
                 ];
-                (("attr".to_string(), all), args, 3)
+                ((ast::Name::user("attr"), all), args, 3)
             }
             (_, [Step::Index(i)]) => {
                 let args = vec![(self.expr(base), all), (self.expr(*i), all)];
-                (("member".to_string(), all), args, 2)
+                ((ast::Name::user("member"), all), args, 2)
             }
             _ => return None,
         })
@@ -319,7 +319,7 @@ impl<'p> Lowering<'p> {
             let scope_at = self.start_of(*scope);
             let args = vec![str_term(of), self.expr(*scope), copy.clone()];
             let test = Atom {
-                pred: crate::modules::INSTANCE_OF.to_string(),
+                pred: ast::Name::user(crate::modules::INSTANCE_OF),
                 args,
                 record: None,
                 span: at,
@@ -328,7 +328,7 @@ impl<'p> Lowering<'p> {
             self.reads.push(Lit::Pos(test));
         }
         (
-            ("output".to_string(), all),
+            (ast::Name::user("output"), all),
             vec![(copy, copy_at), (str_term(key), all)],
             2,
         )
@@ -337,11 +337,12 @@ impl<'p> Lowering<'p> {
     /// The relation a value read `via` reads `name` by, and where the
     /// copies' parts start for it: an enclosing definition's (R-186), the
     /// instance's it is taken from.
-    fn value_relation(&self, name: &str, via: &Reach, span: Span) -> (String, Option<From>) {
+    fn value_relation(&self, name: &str, via: &Reach, span: Span) -> (ast::Name, Option<From>) {
+        let name = ast::Name::user(name);
         match (self.env.chain, via) {
-            (Some(c), Reach::Lexical(body)) => c.lexical_pred(body, name, span),
-            (Some(c), Reach::Use(_, Some(body))) => c.lexical_pred(body, &via.relation(name), span),
-            _ => (via.relation(name), self.env.from),
+            (Some(c), Reach::Lexical(body)) => c.lexical_pred(body, &name, span),
+            (Some(c), Reach::Use(_, Some(body))) => c.lexical_pred(body, &via.pred(&name), span),
+            _ => (via.pred(&name), self.env.from),
         }
     }
 
@@ -559,7 +560,7 @@ impl<'p> Lowering<'p> {
 /// A read's relation and where the copies' parts start for it, its
 /// columns but the value's each with its own start, and the value's
 /// column.
-type ReadParts = ((String, Option<From>), Vec<(Term, Option<From>)>, usize);
+type ReadParts = ((ast::Name, Option<From>), Vec<(Term, Option<From>)>, usize);
 
 /// A path of field steps as stored: its segments joined by `.`.
 pub(super) fn stored(path: &[Step]) -> String {

@@ -310,7 +310,7 @@ impl Lowerer<'_> {
         }
         let v = fresh(rc, &capitalise(&name));
         rc.reads.insert(key, var(&v));
-        Ok(self.building(rc, span, |b| b.call_into((pred, via), args, &v)))
+        Ok(self.building(rc, span, |b| b.call_into((Name::user(pred), via), args, &v)))
     }
 
     /// The arguments the call `n` of the let with parameters `ps` named

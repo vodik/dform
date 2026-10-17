@@ -397,7 +397,7 @@ impl Lowerer<'_> {
                 .into_iter()
                 .map(|a| b.pattern_of(a))
                 .collect();
-            let rel = RelRef::own(pred, span);
+            let rel = RelRef::user(pred, span);
             let args = RelArgs::Positional(args);
             b.goal_node(span, GoalKind::Rel { rel, args })
         });

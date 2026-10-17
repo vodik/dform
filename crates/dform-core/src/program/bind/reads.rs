@@ -196,7 +196,7 @@ impl Binder<'_> {
                 ItemKind::LetFn { name, .. } => name.clone(),
                 _ => String::new(),
             },
-            Callee::Extern(rel) => rel.name.clone(),
+            Callee::Extern(rel) => rel.name.to_string(),
             Callee::Loader(name) | Callee::Data(name) => name.clone(),
         }
     }

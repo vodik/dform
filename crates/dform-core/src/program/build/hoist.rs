@@ -100,7 +100,7 @@ impl Builder<'_> {
                 }
                 // A resource whose type is a variable: its relation's.
                 _ => ExprKind::Lookup {
-                    rel: RelRef::own("attr", span),
+                    rel: RelRef::user("attr", span),
                     args: vec![typ, addr, self.lit(Value::Str(attr.to_string()))],
                     out: 3,
                     path: Vec::new(),
@@ -125,7 +125,7 @@ impl Builder<'_> {
                 path: self.fields(path),
             },
             ReadOf::Lookup { rel, args, out } => ExprKind::Lookup {
-                rel: RelRef::own(rel, span),
+                rel: RelRef::user(rel, span),
                 args,
                 out,
                 path: Vec::new(),
@@ -140,7 +140,7 @@ impl Builder<'_> {
     pub fn address_into(&mut self, (rel, via): (&str, Reach), typ: &str, v: &str) -> ExprId {
         let span = self.span;
         let of = self.expr_node(ExprKind::Lookup {
-            rel: RelRef::reached(rel, via, span),
+            rel: RelRef::reached(crate::ast::Name::user(rel), via, span),
             args: Vec::new(),
             out: 0,
             path: Vec::new(),
@@ -177,7 +177,12 @@ impl Builder<'_> {
     /// A call of a let with parameters (or a relation read as one), `f(
     /// args..)` of the relation `rel` read `via`, read into `v`: the
     /// relation `f(args.., V)` (R-187).
-    pub fn call_into(&mut self, (rel, via): (&str, Reach), args: Vec<ExprId>, v: &str) -> ExprId {
+    pub fn call_into(
+        &mut self,
+        (rel, via): (crate::ast::Name, Reach),
+        args: Vec<ExprId>,
+        v: &str,
+    ) -> ExprId {
         let rel = RelRef::reached(rel, via, self.span);
         let out = args.len();
         let kind = ExprKind::Lookup {

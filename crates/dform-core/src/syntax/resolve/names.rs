@@ -86,9 +86,16 @@ pub fn use_parts(n: &SyntaxNode) -> (String, String) {
 }
 
 /// `vpc_net` -> `VpcNet`, `_c` -> `_C`: a variable as the core prints it.
+/// The compiler's own variables begin `__` (`__Identity`, `__copy1`) and
+/// a program's never do: `__z` is `_~Z`, each underscore after the first
+/// a `~`, which no name a program writes holds ([`source_name`] reads it
+/// back).
 pub fn capitalise(s: &str) -> String {
     let lead = s.len() - s.trim_start_matches('_').len();
-    let mut out = "_".repeat(lead);
+    let mut out = match lead {
+        0 | 1 => "_".repeat(lead),
+        n => format!("_{}", "~".repeat(n - 1)),
+    };
     for part in s[lead..].split('_') {
         let mut cs = part.chars();
         if let Some(c) = cs.next() {
@@ -102,8 +109,8 @@ pub fn capitalise(s: &str) -> String {
 /// A core variable by the name the source gave it: `AvailabilityZone` is
 /// `availability_zone` (`resolve::capitalise`, read backwards).
 pub(crate) fn source_name(v: &str) -> String {
-    let lead = v.len() - v.trim_start_matches('_').len();
-    let mut out = v[..lead].to_string();
+    let lead = v.len() - v.trim_start_matches(['_', '~']).len();
+    let mut out = "_".repeat(lead);
     for (i, c) in v[lead..].chars().enumerate() {
         if c.is_uppercase() {
             if i > 0 {

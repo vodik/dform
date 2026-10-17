@@ -1076,7 +1076,10 @@ fn any_types(
     path: &str,
 ) -> std::collections::BTreeSet<String> {
     let namespace = r.body.iter().find_map(|l| match l {
-        Lit::Pos(a) if a.pred == "__namespace" && a.args.get(1) == Some(&r.head.args[0]) => {
+        Lit::Pos(a)
+            if a.pred.as_internal() == Some("__namespace")
+                && a.args.get(1) == Some(&r.head.args[0]) =>
+        {
             match a.args.first() {
                 Some(Term::Val(Value::Str(ns))) => Some(format!("{ns}.")),
                 _ => None,
@@ -1878,7 +1881,7 @@ fn entries(p: &prog::Program, body: &ResourceBody) -> Vec<(String, ExprId, Span)
 fn set_rule(p: &prog::Program, typ: Term, clause: Option<ClauseId>) -> crate::ast::RuleStmt {
     let body = clause.map(|c| prog::lower_clause(p, c, &[]).0);
     let head = Atom {
-        pred: "arg".into(),
+        pred: crate::ast::Name::user("arg"),
         args: vec![typ, Term::Wildcard, Term::Wildcard, Term::Wildcard],
         record: None,
         span: Span::default(),
@@ -2143,7 +2146,7 @@ mod tests {
         };
         let arg = |path: &str| {
             Stmt::Fact(crate::ast::Atom {
-                pred: "arg".into(),
+                pred: crate::ast::Name::user("arg"),
                 args: vec![s("t.s"), s("a"), s(path), main.clone(), s("")],
                 record: None,
                 span: Default::default(),

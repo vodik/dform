@@ -1,4 +1,4 @@
-use crate::ast::Program;
+use crate::ast::{Name, Program};
 use crate::diag;
 use anyhow::{Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
@@ -719,23 +719,26 @@ fn is_provider_pred(pred: &str) -> bool {
 }
 
 /// Predicates the evaluator itself derives (the prelude and Rule 2): the
-/// round-0 resolution, the stuck instances, and the program's
-/// `lifecycle` rows where a type's is seeded (`zset::WRITTEN`).
-pub const ENGINE_PREDS: &[&str] = &[
-    "resolve",
-    "resolved",
-    "stuck",
-    "__ref_dep",
-    crate::zset::WRITTEN,
-];
+/// round-0 resolution and the stuck instances.
+pub const ENGINE_PREDS: &[&str] = &["resolve", "resolved", "stuck"];
 
-fn is_engine_pred(pred: &str) -> bool {
-    ENGINE_PREDS.contains(&pred)
-}
+/// The compiler's relations the evaluator derives: the order a
+/// contribution that reads a reference follows, and the program's
+/// `lifecycle` rows where a type's is seeded (`zset::WRITTEN`).
+const ENGINE_HELPERS: &[&str] = &[crate::transform::REF_DEP, crate::zset::WRITTEN];
 
 /// Compiler-owned predicates: never private to a module, and defined
 /// whether or not the program writes them.
-pub fn is_core_pred(pred: &str) -> bool {
+pub fn is_core_pred(pred: &Name) -> bool {
+    match pred {
+        Name::User(p) => is_core_name(p),
+        Name::Internal(p) => ENGINE_HELPERS.contains(&p.as_str()),
+    }
+}
+
+/// Whether the relation a program names `pred` is a compiler-owned one
+/// ([`is_core_pred`]).
+pub fn is_core_name(pred: &str) -> bool {
     matches!(
         pred,
         "want"
@@ -769,7 +772,7 @@ pub fn is_core_pred(pred: &str) -> bool {
             | "lifecycle"
             | "moved"
             | "doc"
-    ) || is_engine_pred(pred)
+    ) || ENGINE_PREDS.contains(&pred)
         || is_provider_pred(pred)
 }
 

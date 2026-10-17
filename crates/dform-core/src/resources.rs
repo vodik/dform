@@ -46,7 +46,7 @@ pub fn compile_resources(
     let mut contributions: BTreeMap<Address, Vec<Contribution>> = BTreeMap::new();
     let mut resolved: BTreeMap<String, Value> = BTreeMap::new();
     for f in facts {
-        match (f.pred.as_str(), f.args.len()) {
+        match (f.pred.name(), f.args.len()) {
             (transform::REF_DEP, 4) => {
                 let addr = |i: usize| -> Result<Address> {
                     Ok(Address {

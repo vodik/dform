@@ -39,7 +39,7 @@ pub(crate) struct Instancer<'p> {
     /// enclosing definitions' `decl`s and its own over the program's.
     records: BTreeMap<&'p str, Records>,
     /// The relations each definition makes private to a copy, by path.
-    keys: BTreeMap<String, Rc<BTreeSet<String>>>,
+    keys: BTreeMap<String, Rc<BTreeSet<ast::Name>>>,
     /// The copies named by their clause each definition's copy makes.
     named_in: BTreeMap<String, usize>,
     /// The definitions being instanced, outermost first: a component that
@@ -353,7 +353,7 @@ impl<'p> Instancer<'p> {
         let item = self.copy_item(chain, f);
         let records = self.user_records(chain, f);
         let env = self.env(chain, Some(by_row(f)), records);
-        let takes: BTreeSet<String> = iface.relations.iter().map(|e| e.pred.clone()).collect();
+        let takes: BTreeSet<ast::Name> = iface.relations.iter().map(|e| e.pred.clone()).collect();
         super::items::copy_parts(env, item, Some((chain.frames[f].scope.as_str(), &takes)))
     }
 
@@ -527,7 +527,7 @@ impl<'p> Instancer<'p> {
         let frame = &chain.frames[f];
         let after = Some(From::at(f, Stage::Named));
         let finish = |a: Atom| chain.atom_from(a, after);
-        let name = |k: &str| frame.rename(k);
+        let name = |k: &ast::Name| frame.rename(k);
         let stmts = std::mem::take(copy);
         *copy = modules::lets(stmts, &frame.scope, Some(&name), &finish);
         for i in inputs {
@@ -557,7 +557,7 @@ impl<'p> Instancer<'p> {
             None => None,
         };
         if let Some((scope, at)) = scope {
-            let fact = ast::atom(
+            let fact = ast::internal_atom(
                 LEXICAL_OF,
                 vec![str_term(""), str_term(c.name), scope],
                 c.span,
@@ -632,7 +632,7 @@ impl<'p> Instancer<'p> {
             }
             return out;
         };
-        let own = ast::atom(
+        let own = ast::internal_atom(
             &format!("{}::{GATE}", c.name),
             vec![str_term(c.module)],
             c.span,
@@ -729,7 +729,7 @@ impl<'p> Instancer<'p> {
     /// each copy: those its statements define, the copies inside it
     /// instanced, its inputs and their refinements, and the relations it
     /// takes; found by lowering it under a copy that renames nothing.
-    fn keys(&mut self, def: ItemId, path: &str) -> Rc<BTreeSet<String>> {
+    fn keys(&mut self, def: ItemId, path: &str) -> Rc<BTreeSet<ast::Name>> {
         if let Some(k) = self.keys.get(path) {
             return k.clone();
         }
@@ -755,7 +755,7 @@ impl<'p> Instancer<'p> {
         let mut defined = BTreeMap::new();
         modules::defined_preds(&body, &mut defined);
         for i in &iface.inputs {
-            defined.insert(i.name.clone(), (1, i.span));
+            defined.insert(ast::Name::user(&i.name), (1, i.span));
             for l in crate::inputs::leaves(i) {
                 defined.insert(modules::refine_pred(&l.name), (1, i.span));
             }
@@ -763,12 +763,8 @@ impl<'p> Instancer<'p> {
         for e in &iface.relations {
             defined.insert(e.pred.clone(), (e.arity, e.span));
         }
-        let keys: Rc<BTreeSet<String>> = Rc::new(
-            defined
-                .into_keys()
-                .filter(|p| modules::is_private(p))
-                .collect(),
-        );
+        let keys: Rc<BTreeSet<ast::Name>> =
+            Rc::new(defined.into_keys().filter(modules::is_private).collect());
         self.keys.insert(path.to_string(), keys.clone());
         keys
     }

@@ -186,20 +186,20 @@ deny "${v} is retained" where v in net.vpc, lifecycle(v, "retain")
     dev(&s, &["plan"]).success();
 }
 
-/// The program's rows where a type is seeded are dform's own relation: a
-/// program does not write it by name.
+/// The program's rows where a type is seeded are dform's own relation,
+/// which no program's text names: a program's relation of the same text
+/// is its own, and seeds nothing.
 #[test]
 fn the_internal_relation_is_not_the_programs() {
     let s = seeded(
         "seed-internal",
         &format!("{MAIN}__lifecycle_written(main, \"destroy\")\n"),
     );
-    let r = dev(&s, &["plan"]).failure();
+    dev(&s, &["plan"]).success();
+    let r = dev(&s, &["query", "lifecycle"]).success();
     assert!(
-        r.stderr.contains(
-            "p.df:4:1: __lifecycle_written is dform's own, not a relation a program writes"
-        ),
+        r.stdout.contains("retain") && !r.stdout.contains("destroy"),
         "{}",
-        r.stderr
+        r.stdout
     );
 }

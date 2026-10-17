@@ -101,7 +101,7 @@ impl<'a> Names<'a> {
         let lexical: Vec<(String, String)> = res
             .facts
             .iter()
-            .filter(|a| a.pred == crate::modules::LEXICAL_OF)
+            .filter(|a| a.pred.as_internal() == Some(crate::modules::LEXICAL_OF))
             .filter_map(strs)
             .map(|(user, name, scope)| (join(&user, &name), scope))
             .collect();
@@ -282,7 +282,7 @@ impl<'a> Names<'a> {
             .res
             .facts
             .iter()
-            .filter_map(|a| match (a.pred.as_str(), a.args.as_slice()) {
+            .filter_map(|a| match (a.pred.name(), a.args.as_slice()) {
                 ("attr", [Term::Val(Value::Str(k)), Term::Val(Value::Str(s)), ..])
                     if cells.contains(&k.as_str()) =>
                 {

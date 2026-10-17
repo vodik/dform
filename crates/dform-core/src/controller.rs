@@ -438,7 +438,7 @@ impl Hook {
         self.drift
             .iter()
             .map(|d| Atom {
-                pred: "drift".into(),
+                pred: crate::ast::Name::user("drift"),
                 args: vec![
                     Term::Val(Value::Str(d.addr.typ.clone())),
                     Term::Val(Value::Str(d.addr.name.clone())),

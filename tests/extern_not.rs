@@ -45,7 +45,7 @@ fn meaning(src: &str) -> BTreeSet<String> {
     assert!(violations.is_empty(), "{violations:?}");
     res.facts
         .iter()
-        .filter(|a| !a.pred.starts_with("__"))
+        .filter(|a| !a.pred.is_internal())
         .map(dform_core::spell::atom)
         .collect()
 }

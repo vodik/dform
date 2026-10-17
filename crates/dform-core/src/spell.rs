@@ -4,7 +4,7 @@
 //! it (`quote`); a value as JSON (`value_to_json`). One renderer for every
 //! message and report.
 
-use crate::ast::{Atom, Lit, RuleStmt, Term};
+use crate::ast::{Atom, Lit, Name, RuleStmt, Term};
 use crate::query::Redactor;
 use crate::value::Value;
 
@@ -152,7 +152,34 @@ pub(crate) fn rule_short(r: &RuleStmt) -> String {
 /// program gives an object a removal word. `term` spells a column.
 pub fn internal(a: &Atom, negated: bool, term: &dyn Fn(&Term) -> String) -> Option<String> {
     let not = if negated { "not " } else { "" };
-    match (a.pred.as_str(), a.args.as_slice()) {
+    if let Some(p) = a.pred.as_internal() {
+        return own_row(p, a, not, negated, term);
+    }
+    match (a.pred.name(), a.args.as_slice()) {
+        // The world's answer for a computed attribute (`transform::
+        // computed_prelude`), by the attribute it answers.
+        ("resolved", [Term::Val(Value::Str(l))]) => {
+            let (typ, name, path) = crate::value::null_parts(l)?;
+            let a = crate::address::Address { typ, name };
+            let what = format!("{}.{path}", crate::report::address(&a));
+            Some(match negated {
+                true => format!("its provider has not given {what} yet"),
+                false => format!("its provider gave {what}"),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// A row of the compiler's relation `pred` as [`internal`] says it.
+fn own_row(
+    pred: &str,
+    a: &Atom,
+    not: &str,
+    negated: bool,
+    term: &dyn Fn(&Term) -> String,
+) -> Option<String> {
+    match (pred, a.args.as_slice()) {
         (crate::zset::WRITTEN, args) => Some(format!(
             "{not}lifecycle({})",
             args.iter().map(term).collect::<Vec<_>>().join(", ")
@@ -170,33 +197,22 @@ pub fn internal(a: &Atom, negated: bool, term: &dyn Fn(&Term) -> String) -> Opti
             let writes = if negated { "no" } else { "a" };
             Some(format!("the program writes {writes} lifecycle for {what}"))
         }
-        // The world's answer for a computed attribute (`transform::
-        // computed_prelude`), by the attribute it answers.
-        ("resolved", [Term::Val(Value::Str(l))]) => {
-            let (typ, name, path) = crate::value::null_parts(l)?;
-            let a = crate::address::Address { typ, name };
-            let what = format!("{}.{path}", crate::report::address(&a));
-            Some(match negated {
-                true => format!("its provider has not given {what} yet"),
-                false => format!("its provider gave {what}"),
-            })
-        }
         _ => None,
     }
 }
 
 /// Whether a row of `pred` is one of dform's own that [`internal`] says
 /// in words, not as a relation's row.
-pub fn worded(pred: &str) -> bool {
-    pred == crate::zset::SAID
+pub fn worded(pred: &Name) -> bool {
+    pred.as_internal() == Some(crate::zset::SAID)
 }
 
 /// The name a relation is printed by: dform's own by the program's name
 /// for what it holds ([`internal`]).
-pub fn relation(pred: &str) -> &str {
-    match pred {
-        crate::zset::WRITTEN | crate::zset::SAID => "lifecycle",
-        p => p,
+pub fn relation(pred: &Name) -> &str {
+    match pred.as_internal() {
+        Some(crate::zset::WRITTEN | crate::zset::SAID) => "lifecycle",
+        _ => pred.name(),
     }
 }
 
@@ -224,7 +240,7 @@ impl<'a> Written<'a> {
         }
     }
 
-    pub fn pred(&self, pred: &str) -> String {
+    pub fn pred(&self, pred: &Name) -> String {
         relation(pred).to_string()
     }
 
@@ -235,7 +251,10 @@ impl<'a> Written<'a> {
         if let Some(text) = internal(a, false, &|t| self.term(t)) {
             return text;
         }
-        if let Some(scope) = a.pred.strip_suffix("::__instance")
+        if let Some(scope) = a
+            .pred
+            .as_internal()
+            .and_then(|p| p.strip_suffix("::__instance"))
             && let [Term::Val(Value::Str(c))] = a.args.as_slice()
         {
             return format!("resource {c} {}", scope.replace("::", "."));
@@ -248,7 +267,7 @@ impl<'a> Written<'a> {
                 Term::Val(Value::Str(p)),
                 v,
             ],
-        ) = (a.pred.as_str(), a.args.as_slice())
+        ) = (a.pred.name(), a.args.as_slice())
         {
             let addr = Written::attribute(t.clone(), n.clone(), p);
             return match v {

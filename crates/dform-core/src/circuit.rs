@@ -68,16 +68,13 @@ pub enum Leaf {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Fact {
-    pub pred: String,
+    pub pred: crate::ast::Name,
     pub args: Vec<Value>,
 }
 
 impl Fact {
-    pub fn new(pred: &str, args: Vec<Value>) -> Fact {
-        Fact {
-            pred: pred.into(),
-            args,
-        }
+    pub fn new(pred: crate::ast::Name, args: Vec<Value>) -> Fact {
+        Fact { pred, args }
     }
     /// The fact as a ground atom (no record, no span): what the printers
     /// format.
@@ -592,13 +589,13 @@ fn leaf_bytes(l: &Leaf) -> usize {
         | Leaf::Plan { fact: s, .. }
         | Leaf::Input { source: s }
         | Leaf::Extern { call: s } => s.len(),
-        Leaf::Absent { atom } => atom.pred.len() + atom.args.len() * size_of::<Term>(),
+        Leaf::Absent { atom } => atom.pred.name().len() + atom.args.len() * size_of::<Term>(),
     }
 }
 
 /// Heap bytes of a tuple, for `Stats` and for sizing the bare fact store.
 fn fact_bytes(f: &Fact) -> usize {
-    f.pred.len()
+    f.pred.name().len()
         + f.args.capacity() * std::mem::size_of::<Value>()
         + f.args.iter().map(value_bytes).sum::<usize>()
 }
@@ -678,7 +675,10 @@ mod tests {
         let base = c.leaf(Leaf::Base {
             span: "dform.df:40".into(),
         });
-        let want_vpc = Fact::new("want", vec![s("net.vpc"), s("network.main/vpc")]);
+        let want_vpc = Fact::new(
+            crate::ast::Name::user("want"),
+            vec![s("net.vpc"), s("network.main/vpc")],
+        );
         c.derive(want_vpc.clone(), vec![base]);
         let wv = c.fact_id(&want_vpc).unwrap();
 
@@ -689,7 +689,7 @@ mod tests {
             span: "fake:type_attr(net.vpc,.id,computed)".into(),
         });
         let attr_vpc_id = Fact::new(
-            "attr",
+            crate::ast::Name::user("attr"),
             vec![
                 s("net.vpc"),
                 s("network.main/vpc"),
@@ -704,7 +704,7 @@ mod tests {
             id: "network.df:15".into(),
         });
         let attr_sub = Fact::new(
-            "attr",
+            crate::ast::Name::user("attr"),
             vec![
                 s("net.subnet"),
                 s("network.main/private-a"),
@@ -719,7 +719,7 @@ mod tests {
             id: "kubernetes.df:8".into(),
         });
         let attr_cluster = Fact::new(
-            "attr",
+            crate::ast::Name::user("attr"),
             vec![
                 s("k8s.cluster"),
                 s("kubernetes.main/cluster"),
@@ -753,7 +753,7 @@ mod tests {
         );
         // But a null-free *tuple* with one null-free alternative and one null-carrying alternative:
         let p = Fact::new(
-            "subnet_of",
+            crate::ast::Name::user("subnet_of"),
             vec![s("network.main/private-a"), s("network.main/vpc")],
         );
         let r = c.leaf(Leaf::Rule {
@@ -798,7 +798,7 @@ mod tests {
             assert!(!c.has(f));
         }
         let new_sub = Fact::new(
-            "attr",
+            crate::ast::Name::user("attr"),
             vec![
                 s("net.subnet"),
                 s("network.main/private-a"),
@@ -807,7 +807,7 @@ mod tests {
             ],
         );
         let new_cluster = Fact::new(
-            "attr",
+            crate::ast::Name::user("attr"),
             vec![
                 s("k8s.cluster"),
                 s("kubernetes.main/cluster"),
@@ -864,7 +864,7 @@ mod tests {
         let nu = "alloc/cp#cidr";
 
         let arg = Fact::new(
-            "arg",
+            crate::ast::Name::user("arg"),
             vec![
                 s("gke.cluster"),
                 s("gke_platform"),
@@ -876,7 +876,7 @@ mod tests {
         c.derive(arg.clone(), vec![alloc_rule, base]);
         let arg_id = c.fact_id(&arg).unwrap();
         let attr = Fact::new(
-            "attr",
+            crate::ast::Name::user("attr"),
             vec![
                 s("gke.cluster"),
                 s("gke_platform"),
@@ -890,7 +890,7 @@ mod tests {
             id: "monitoring.df:3".into(),
         });
         let fwd = Fact::new(
-            "attr",
+            crate::ast::Name::user("attr"),
             vec![
                 s("google.monitoring_dashboard"),
                 s("gke_platform"),
@@ -916,7 +916,7 @@ mod tests {
         let bad = net("10.0.0.0", 24);
         c.resolve(nu, &bad, world.clone());
         let resolved_attr = Fact::new(
-            "attr",
+            crate::ast::Name::user("attr"),
             vec![
                 s("gke.cluster"),
                 s("gke_platform"),
@@ -937,7 +937,7 @@ mod tests {
         // The engine's reaction: retract the attr row and its cone, derive attr_conflict.
         let gone = c.retract(&resolved_attr);
         let resolved_fwd = Fact::new(
-            "attr",
+            crate::ast::Name::user("attr"),
             vec![
                 s("google.monitoring_dashboard"),
                 s("gke_platform"),
@@ -950,7 +950,7 @@ mod tests {
             "cone retracted: {gone:?}"
         );
         let resolved_arg = Fact::new(
-            "arg",
+            crate::ast::Name::user("arg"),
             vec![
                 s("gke.cluster"),
                 s("gke_platform"),
@@ -966,7 +966,7 @@ mod tests {
 
         let wl = c.leaf(world.clone());
         let conflict = Fact::new(
-            "attr_conflict",
+            crate::ast::Name::user("attr_conflict"),
             vec![
                 s("gke.cluster"),
                 s("gke_platform"),
@@ -994,7 +994,7 @@ mod tests {
         let a = c.leaf(Leaf::Base { span: "a".into() });
         let b = c.leaf(Leaf::Base { span: "b".into() });
         let r = c.leaf(Leaf::Rule { id: "r".into() });
-        let f = Fact::new("p", vec![s("x")]);
+        let f = Fact::new(crate::ast::Name::user("p"), vec![s("x")]);
         c.derive(f.clone(), vec![r, a, b]);
         c.derive(f.clone(), vec![r, a]); // absorbs the first
         assert_eq!(
@@ -1012,7 +1012,7 @@ mod tests {
     fn a_repeated_firing_is_stored_once_and_alternatives_are_capped() {
         let mut c = Circuit::default();
         let r = c.leaf(Leaf::Rule { id: "r".into() });
-        let f = Fact::new("p", vec![s("x")]);
+        let f = Fact::new(crate::ast::Name::user("p"), vec![s("x")]);
         let a = c.leaf(Leaf::Base { span: "a".into() });
         c.derive(f.clone(), vec![r, a]);
         let n = c.stats().times;
@@ -1036,7 +1036,7 @@ mod tests {
 
     #[test]
     fn a_fact_prints_as_its_ground_atom() {
-        let f = Fact::new("p", vec![s("a"), Value::Int(1)]);
+        let f = Fact::new(crate::ast::Name::user("p"), vec![s("a"), Value::Int(1)]);
         assert_eq!(crate::spell::atom(&f.atom()), "p(\"a\", 1)");
     }
 }

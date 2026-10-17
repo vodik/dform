@@ -427,7 +427,7 @@ pub struct Unanswered {
 
 impl Unanswered {
     pub fn of(a: &Atom) -> Option<Unanswered> {
-        if a.pred != crate::transform::UNANSWERED {
+        if a.pred.as_internal() != Some(crate::transform::UNANSWERED) {
             return None;
         }
         let Some(Term::Val(Value::Obj(ctx))) = a.args.first() else {

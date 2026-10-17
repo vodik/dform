@@ -123,7 +123,11 @@ impl Lowerer<'_> {
                     format!(
                         "a rank orders the writes to one attribute, `set r.p = v @override`: \
                          `{}` is a relation, whose rows are not ranked",
-                        head.pred.rsplit("::").next().unwrap_or(&head.pred)
+                        head.pred
+                            .name()
+                            .rsplit("::")
+                            .next()
+                            .unwrap_or(head.pred.name())
                     ),
                 );
             }
@@ -412,7 +416,7 @@ impl Lowerer<'_> {
                     // A column of references holds the copy's resources,
                     // and never leaves a deployment (R-204).
                     let ref_columns = self.published_refs(scope, &name, **n, span)?;
-                    let rel = crate::program::node::RelRef::own(name, span);
+                    let rel = crate::program::node::RelRef::user(name, span);
                     let kind = crate::program::ItemKind::OutputRelation { rel, ref_columns };
                     return Ok(self.program.item(span, self.item_scope, kind));
                 }
@@ -585,7 +589,7 @@ impl Lowerer<'_> {
             _ => None,
         };
         let cond = if has_body { " where .." } else { "" };
-        let surface = match (head.pred.as_str(), head.args.len()) {
+        let surface = match (head.pred.name(), head.args.len()) {
             ("want", 2) if s(0).is_some() => Some(format!(
                 "a resource is declared by a block: `resource {} {} {{ .. }}`",
                 s(0).unwrap(),
@@ -647,7 +651,7 @@ impl Lowerer<'_> {
         }
         // A relation read through a copy or a deployment (R-55) is the
         // compiler's lowering, not a core relation written.
-        if self.callee(n).as_deref() != Some(atom.pred.as_str()) {
+        if self.callee(n).as_deref() != Some(atom.pred.name()) {
             return Ok(());
         }
         let a = arg_texts(n);
@@ -655,7 +659,7 @@ impl Lowerer<'_> {
             Some(Term::Val(Value::Str(s))) => Some(s.clone()),
             _ => None,
         };
-        let (msg, help) = match (atom.pred.as_str(), atom.args.len()) {
+        let (msg, help) = match (atom.pred.name(), atom.args.len()) {
             ("deny" | "warn", _) => (
                 format!("a rule reads `{}`", atom.pred),
                 "a deny or a warn is checked after evaluation: no rule may read deny/2 or \

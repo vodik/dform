@@ -86,14 +86,17 @@ impl Signatures {
 pub fn relations(program: &Program) -> std::collections::BTreeSet<String> {
     arities(program)
         .into_keys()
-        .filter(|p| !untyped(p) && function(p).is_none() && !p.starts_with("table."))
+        .filter(|p| !untyped(p))
+        .map(|p| p.name().to_string())
+        .filter(|p| function(p).is_none() && !p.starts_with("table."))
         .collect()
 }
 
 /// The arities of every relation `program` has: its facts', its rules'
 /// heads' and their bodies'.
-fn arities(program: &Program) -> BTreeMap<String, std::collections::BTreeSet<usize>> {
-    let mut arities: BTreeMap<String, std::collections::BTreeSet<usize>> = BTreeMap::new();
+fn arities(program: &Program) -> BTreeMap<crate::ast::Name, std::collections::BTreeSet<usize>> {
+    let mut arities: BTreeMap<crate::ast::Name, std::collections::BTreeSet<usize>> =
+        BTreeMap::new();
     let mut add = |a: &Atom| {
         arities
             .entry(a.pred.clone())

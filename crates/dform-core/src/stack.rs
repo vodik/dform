@@ -447,7 +447,7 @@ pub fn instance(
     let mut diags = Vec::new();
     for (k, span) in &cfg.keys {
         let given = |a: &Atom| -> Option<Value> {
-            match (a.pred.as_str(), a.args.as_slice()) {
+            match (a.pred.name(), a.args.as_slice()) {
                 ("input", [Term::Val(Value::Str(x)), Term::Val(v)]) if x == k => Some(v.clone()),
                 (
                     "arg",
@@ -1310,7 +1310,7 @@ impl Published {
 /// What a [`Published`] fact a run was given says of where it came from:
 /// `published by NAME`, the deployment (a `why` leaf).
 pub fn published(a: &Atom) -> Option<String> {
-    let name = match (a.pred.as_str(), a.args.as_slice()) {
+    let name = match (a.pred.name(), a.args.as_slice()) {
         (crate::modules::INSTANCE_OF, [_, _, Term::Val(Value::Str(n))]) => n,
         // An output of a deployment not applied yet (R-121).
         (
@@ -2173,7 +2173,7 @@ pub fn reads(
             Term::Var(x) => body.iter().find_map(|l| match l {
                 Lit::Pos(a) if matches!(a.args.as_slice(), [Term::Var(y)] if y == x) => key
                     .iter()
-                    .find(|(k, _)| *k == a.pred)
+                    .find(|(k, _)| a.pred == *k)
                     .map(|(_, v)| v.clone()),
                 _ => None,
             }),

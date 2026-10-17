@@ -220,7 +220,8 @@ pub fn describe(name: &str) -> Option<String> {
 /// a path (`path:line`) or a repository, commit and path
 /// (`repo@commit:path:line`).
 pub fn at(a: &Atom) -> Option<String> {
-    let ("csv" | "json" | "yaml" | "toml" | "text" | SECRETS, _) = parse_name(&a.pred)? else {
+    let ("csv" | "json" | "yaml" | "toml" | "text" | SECRETS, _) = parse_name(a.pred.name())?
+    else {
         return None;
     };
     // A row's line (`net.toml:7`, `teams.yaml:row 2`), or a repository's
@@ -1216,7 +1217,7 @@ fn toml_value(v: toml::Value) -> Result<Value> {
 /// Each of those inputs is one the program gives (`Declared::given`).
 pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared]) -> Program {
     let is_doc = |l: &Lit| {
-        matches!(l, Lit::Pos(a) if parse_name(&a.pred).is_some_and(|(_, t)| {
+        matches!(l, Lit::Pos(a) if parse_name(a.pred.name()).is_some_and(|(_, t)| {
             t.split('|').next() == Some(SET_DOC)
         }))
     };
@@ -1244,7 +1245,7 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
             continue;
         };
         // A file of given secrets gives secret inputs alone (R-108).
-        let sealed = is_sealed(&ext.pred);
+        let sealed = is_sealed(ext.pred.name());
         let secret = |d: &crate::inputs::Declared| matches!(&d.decl.ty, TypeExpr::Apply(n, _) if n == "secret");
         // (the path the document gives it by, the cell's scope, its leaf).
         let addressed = |d: &crate::inputs::Declared| {
@@ -1319,7 +1320,7 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
                     l => l.clone(),
                 })
                 .collect();
-            let csv = parse_name(&ext.pred).is_some_and(|(f, _)| f == "csv");
+            let csv = parse_name(ext.pred.name()).is_some_and(|(f, _)| f == "csv");
             if let Some((parsed, l)) = read_leaf(&d.decl.ty, v, csv) {
                 body.push(l);
                 head.args[3] = Term::Var(parsed);
@@ -1378,7 +1379,7 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
                 )));
             }
         }
-        body.push(Lit::Not(atom(
+        body.push(Lit::Not(crate::ast::internal_atom(
             KNOWN,
             vec![s(scope), Term::Var(p.clone())],
             r.head.span,
@@ -1409,7 +1410,7 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
         )));
     }
     for (scope, path) in known {
-        out.push(Stmt::Fact(atom(
+        out.push(Stmt::Fact(crate::ast::internal_atom(
             KNOWN,
             vec![Term::Val(Value::Str(scope)), Term::Val(Value::Str(path))],
             Span::default(),

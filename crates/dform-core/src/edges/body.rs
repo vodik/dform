@@ -109,12 +109,12 @@ impl Graph<'_> {
             atom: a.span,
             ..at.clone()
         };
-        if let Some(f) = crate::functions::get(&a.pred) {
+        if let Some(f) = crate::functions::get(a.pred.name()) {
             let span = a.span;
             self.params(f, &mut a.args, &At { span, ..at.clone() });
             return;
         }
-        match (a.pred.as_str(), a.args.as_mut_slice()) {
+        match (a.pred.name(), a.args.as_mut_slice()) {
             // `attr(T, A, P, V)`: `V` is the attribute's; a variable's
             // column its type (R-34).
             (

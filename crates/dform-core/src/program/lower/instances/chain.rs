@@ -10,7 +10,7 @@
 //! the copy of that definition it is taken from; a name of the user's
 //! (`Reach::Absolute`), at none.
 
-use crate::ast::{Atom, Resource, Span, Term, Via, str_term};
+use crate::ast::{self, Atom, Resource, Span, Term, Via, str_term};
 use crate::modules::{INPUT, LET, LEXICAL_OF, ROWS};
 use crate::value::Value;
 use std::cell::RefCell;
@@ -31,7 +31,7 @@ pub struct Frame {
     pub vars: bool,
     /// The relations its definition makes private to each copy, by the
     /// definition's names.
-    pub keys: Rc<BTreeSet<String>>,
+    pub keys: Rc<BTreeSet<ast::Name>>,
     /// The module instance a component is named through (R-186): what
     /// its reads of that module's items read.
     pub via: Option<Via>,
@@ -163,9 +163,14 @@ impl Chain {
 
     /// The relation an enclosing definition's `name` is read by, and
     /// where the copies' parts start for it.
-    pub fn lexical_pred(&self, body: &str, name: &str, span: Span) -> (String, Option<From>) {
-        match self.lexical(body, name, span) {
-            Lexical::Own(i) => (name.to_string(), Some(From::at(i, Stage::Rename))),
+    pub fn lexical_pred(
+        &self,
+        body: &str,
+        name: &ast::Name,
+        span: Span,
+    ) -> (ast::Name, Option<From>) {
+        match self.lexical(body, name.name(), span) {
+            Lexical::Own(i) => (name.clone(), Some(From::at(i, Stage::Rename))),
             Lexical::Via(i) => {
                 let via = self.frames[i]
                     .via
@@ -176,7 +181,7 @@ impl Chain {
                     Some(From::at(i, Stage::Named)),
                 )
             }
-            Lexical::Program | Lexical::Unreached => (name.to_string(), None),
+            Lexical::Program | Lexical::Unreached => (name.clone(), None),
         }
     }
 
@@ -318,10 +323,10 @@ pub fn scoped(scope: Term, name: Term) -> Term {
 impl Frame {
     /// `p` as this copy names it: `n::p` when its definition makes it
     /// private, `n.inner::p` for the private `inner::p` of a copy inside.
-    pub fn rename(&self, p: &str) -> String {
+    pub fn rename(&self, p: &ast::Name) -> ast::Name {
         match self.keys.contains(p) {
             true => private_name(&self.scope, p),
-            false => p.to_string(),
+            false => p.clone(),
         }
     }
 
@@ -360,7 +365,7 @@ impl Frame {
         let pseudo = |a: &Term| matches!(a, Term::Val(Value::Str(s)) if s == INPUT || s == LET || s == "output");
         let args = &mut atom.args;
         let take = |args: &mut Vec<Term>, i: usize| std::mem::replace(&mut args[i], Term::Wildcard);
-        match (atom.pred.as_str(), args.len()) {
+        match (atom.pred.name(), args.len()) {
             ("arg" | "attr", 4 | 5) | (crate::refine::ATTR_REFINE, 4) if pseudo(&args[0]) => {
                 if on(1, at) {
                     args[1] = self.prefix(take(args, 1));
@@ -416,11 +421,11 @@ impl Frame {
 
 /// `p` private to `scope`: `scope::p`, or `scope.inner::p` for a name
 /// already private to a copy inside it.
-pub fn private_name(scope: &str, p: &str) -> String {
-    match p.contains("::") {
+pub fn private_name(scope: &str, p: &ast::Name) -> ast::Name {
+    p.map(|p| match p.contains("::") {
         true => format!("{scope}.{p}"),
         false => format!("{scope}::{p}"),
-    }
+    })
 }
 
 impl Named {
@@ -442,8 +447,9 @@ impl Named {
 
     /// Whether `pred` is private to the scope (`agent-${i}::p`, or
     /// `agent-${i}.inner::p` of a copy inside it).
-    pub fn owns(&self, pred: &str) -> bool {
-        pred.split_once("::")
+    pub fn owns(&self, pred: &ast::Name) -> bool {
+        pred.name()
+            .split_once("::")
             .is_some_and(|(scope, _)| self.under(scope).is_some())
     }
 

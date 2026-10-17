@@ -930,7 +930,7 @@ pub(super) fn keyless_sets(typ: &str, all: &BTreeSet<Atom>) -> BTreeSet<String> 
         if t != typ {
             continue;
         }
-        match (f.pred.as_str(), k) {
+        match (f.pred.name(), k) {
             ("type_list_key", _) => {
                 keyed.insert(p.clone());
             }

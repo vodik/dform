@@ -441,7 +441,9 @@ impl Lowerer<'_> {
     ) -> Membership {
         let v = fresh(rc, "Values");
         let of = self.str_node(span, &name);
-        let read = self.building(rc, span, |b| b.call_into((ENUM, Reach::Own), vec![of], &v));
+        let read = self.building(rc, span, |b| {
+            b.call_into((Name::internal(ENUM), Reach::Own), vec![of], &v)
+        });
         let coll = Coll::Enum {
             name,
             values: members,

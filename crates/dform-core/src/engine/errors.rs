@@ -10,7 +10,7 @@ use super::ops;
 use super::store::Window;
 use super::unify::unify_atom;
 use super::{AGGREGATE_OUTPUTS, LATTICE_DECLS, REFINE_DECLS};
-use crate::ast::{Atom, Lit, RuleStmt, Span, Term};
+use crate::ast::{Atom, Lit, Name, RuleStmt, Span, Term};
 use crate::diag;
 use crate::partition;
 use crate::spell;
@@ -23,7 +23,7 @@ use std::collections::{BTreeSet, HashMap};
 /// derives, nor a schema fact the aggregate reads.
 pub(super) fn check_heads(rules: &[RuleStmt]) -> Result<()> {
     for r in rules {
-        if AGGREGATE_OUTPUTS.contains(&r.head.pred.as_str()) {
+        if AGGREGATE_OUTPUTS.contains(&r.head.pred.name()) {
             bail!(
                 "{} is derived by the attribute aggregate; contribute with arg instead: {}",
                 r.head.pred,
@@ -41,8 +41,7 @@ pub(super) fn check_heads(rules: &[RuleStmt]) -> Result<()> {
                 quoted(r)
             );
         }
-        if LATTICE_DECLS.contains(&r.head.pred.as_str())
-            || REFINE_DECLS.contains(&r.head.pred.as_str())
+        if LATTICE_DECLS.contains(&r.head.pred.name()) || REFINE_DECLS.contains(&r.head.pred.name())
         {
             bail!("{} must be a fact, not a rule: {}", r.head.pred, quoted(r));
         }
@@ -58,13 +57,14 @@ pub(super) fn check_defined(
     facts: &[Atom],
     externs: &BTreeSet<crate::ast::Extern>,
 ) -> Result<()> {
-    let mut defined: BTreeSet<&str> = facts.iter().map(|a| a.pred.as_str()).collect();
-    defined.extend(rules.iter().map(|r| r.head.pred.as_str()));
-    defined.extend(externs.iter().map(|e| e.pred.as_str()));
-    let is_defined = |p: &str| {
+    let mut defined: BTreeSet<&Name> = facts.iter().map(|a| &a.pred).collect();
+    defined.extend(rules.iter().map(|r| &r.head.pred));
+    defined.extend(externs.iter().map(|e| &e.pred));
+    let is_defined = |p: &Name| {
         defined.contains(p)
             || ops::is_builtin_pred(p)
-            || matches!(p, "member" | "enumerate")
+            || *p == "member"
+            || *p == "enumerate"
             || crate::loader::is_core_pred(p)
     };
     let mut errors = Vec::new();
@@ -79,15 +79,24 @@ pub(super) fn check_defined(
             // A function std does not have, written as a predicate
             // (`inet.contains(n, a)`): the function's error, naming what
             // replaces it (R-155: `a in n`).
-            if !is_defined(&a.pred) && crate::functions::is_function_name(&a.pred) {
-                errors.push(crate::functions::unknown(a.span, &a.pred));
-            } else if !is_defined(&a.pred) && said.insert((a.span, a.pred.as_str())) {
+            // The lowering's own functions are no names a program's text
+            // has: its `__known(x)` is a relation it does not define.
+            let lowering = crate::functions::get(a.pred.name()).is_some_and(|f| f.internal);
+            if !is_defined(&a.pred)
+                && !lowering
+                && crate::functions::is_function_name(a.pred.name())
+            {
+                errors.push(crate::functions::unknown(a.span, a.pred.name()));
+            } else if !is_defined(&a.pred) && said.insert((a.span, &a.pred)) {
                 // The relation of the program it is nearest (a slip of
                 // the pen), else how one is defined.
-                let p = a.pred.rsplit("::").next().unwrap_or(&a.pred);
+                let p = a.pred.name().rsplit("::").next().unwrap_or(a.pred.name());
                 let decl = format!("decl {p}({})", crate::transform::columns(a.args.len()));
-                let named = defined.iter().filter(|d| !d.starts_with("__")).copied();
-                let help = match crate::diag::nearest(&a.pred, named) {
+                let named = defined
+                    .iter()
+                    .filter(|d| !d.is_internal())
+                    .map(|d| d.name());
+                let help = match crate::diag::nearest(a.pred.name(), named) {
                     Some(n) => format!(
                         "`{}` is a relation of the program; else define `{p}`, or declare one \
                          a provider feeds, `{decl}`",
@@ -153,7 +162,7 @@ pub(super) fn head_error(
     state: &HashMap<String, Value>,
     secrets: &crate::secrets::Run,
 ) -> Option<String> {
-    let at = crate::diag::place(head.span).unwrap_or_else(|| head.pred.clone());
+    let at = crate::diag::place(head.span).unwrap_or_else(|| head.pred.to_string());
     let what = head_cell(head, state, secrets).unwrap_or_else(|| format!("`{}`", head.pred));
     head.args
         .iter()
@@ -172,7 +181,7 @@ fn head_cell(
         Some(Value::Str(s)) => Some(s),
         _ => None,
     };
-    let ("arg", [t, a, k, _, _]) = (head.pred.as_str(), head.args.as_slice()) else {
+    let ("arg", [t, a, k, _, _]) = (head.pred.name(), head.args.as_slice()) else {
         return None;
     };
     let (typ, name, k) = (s(t)?, s(a)?, s(k)?);
@@ -447,7 +456,7 @@ pub(super) fn self_spread(graph: &partition::Graph, edges: &[partition::Edge]) -
         .filter_map(|e| graph.rules.get(e.rule?))
         .find_map(|r| {
             let ("arg", [Term::Val(typ), Term::Val(name), Term::Val(path), merge, ..]) =
-                (r.head.pred.as_str(), r.head.args.as_slice())
+                (r.head.pred.name(), r.head.args.as_slice())
             else {
                 return None;
             };

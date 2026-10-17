@@ -471,7 +471,7 @@ impl Speller<'_> {
                         ItemKind::LetFn { name, .. } => name.clone(),
                         k => kind(k).into(),
                     },
-                    Callee::Extern(r) => r.name.clone(),
+                    Callee::Extern(r) => r.name.to_string(),
                     Callee::Loader(n) | Callee::Data(n) => n.clone(),
                 };
                 let args = args.iter().map(|a| match &a.name {

@@ -46,11 +46,11 @@ fn documents<'c>(
         let View::Fact { fact, alts, .. } = circuit.view(*ch) else {
             continue;
         };
-        if crate::tables::is_document(&fact.pred) {
+        if crate::tables::is_document(fact.pred.name()) {
             out.push(fact);
             continue;
         }
-        if depth >= 2 || !matches!(fact.pred.as_str(), "attr" | "arg") {
+        if depth >= 2 || !matches!(fact.pred.name(), "attr" | "arg") {
             continue;
         }
         if let Some(&alt) = alts.iter().min_by_key(|a| c.size(circuit, **a))
@@ -154,7 +154,7 @@ impl Printer<'_> {
             let View::Times { children, bindings } = circuit.view(alt) else {
                 return None;
             };
-            match fact.pred.as_str() {
+            match fact.pred.name() {
                 "arg" => break (fact, children, bindings),
                 "attr" if !children.iter().any(|ch| matches!(circuit.view(*ch), View::Leaf(Leaf::Rule { id }) if id.starts_with('Σ'))) => {
                     id = children.iter().copied().find(

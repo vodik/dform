@@ -33,8 +33,8 @@
 //! head's constant type and path.
 
 use crate::ast::{
-    Atom, FieldAssign, Helper, InputDecl, Lit, OutputDecl, Program, RuleStmt, Span, Stmt, Term,
-    TypeExpr, atom, str_term,
+    Atom, FieldAssign, Helper, InputDecl, Lit, Name, OutputDecl, Program, RuleStmt, Span, Stmt,
+    Term, TypeExpr, atom, str_term,
 };
 use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::inputs::Declared;
@@ -111,12 +111,12 @@ pub(crate) fn interface(body: &[Stmt]) -> (Interface, Vec<Stmt>) {
 
 /// Every predicate the statements define (heads and facts), by name, with
 /// the arity and span of its first definition.
-pub(crate) fn defined_preds(stmts: &[Stmt], out: &mut BTreeMap<String, (usize, Span)>) {
+pub(crate) fn defined_preds(stmts: &[Stmt], out: &mut BTreeMap<Name, (usize, Span)>) {
     for s in stmts {
         match s {
             Stmt::Fact(a) | Stmt::Rule(RuleStmt { head: a, .. }) => {
                 let (pred, arity) = match let_key(a) {
-                    Some(k) => (k.to_string(), 1),
+                    Some(k) => (Name::user(k), 1),
                     None => (a.pred.clone(), a.args.len()),
                 };
                 out.entry(pred).or_insert((arity, a.span));
@@ -133,7 +133,7 @@ pub(crate) fn defined_preds(stmts: &[Stmt], out: &mut BTreeMap<String, (usize, S
 
 /// The key `k` of a `let(k, t, rank)` head.
 fn let_key(a: &Atom) -> Option<&str> {
-    match (a.pred.as_str(), a.args.as_slice()) {
+    match (a.pred.name(), a.args.as_slice()) {
         (LET, [Term::Val(Value::Str(k)), _, _]) => Some(k),
         _ => None,
     }
@@ -154,7 +154,7 @@ pub const SECRET_LET: &str = "__secret_let";
 pub(crate) fn lets(
     stmts: Vec<Stmt>,
     scope: &str,
-    name: Option<&dyn Fn(&str) -> String>,
+    name: Option<&dyn Fn(&Name) -> Name>,
     finish: &dyn Fn(Atom) -> Atom,
 ) -> Vec<Stmt> {
     let mut out = Vec::with_capacity(stmts.len());
@@ -164,7 +164,7 @@ pub(crate) fn lets(
     let mut secret: Vec<(String, Span)> = Vec::new();
     for s in stmts {
         let (head, body) = match s {
-            Stmt::Fact(a) if a.pred == SECRET_LET => {
+            Stmt::Fact(a) if a.pred.as_internal() == Some(SECRET_LET) => {
                 if let [Term::Val(Value::Str(k)), Term::Val(Value::Str(q))] = a.args.as_slice() {
                     secret.push((crate::types::dotted(k, q), a.span));
                 }
@@ -183,7 +183,7 @@ pub(crate) fn lets(
         };
         keys.entry(key.clone()).or_insert(head.span);
         let arg = Atom {
-            pred: "arg".into(),
+            pred: crate::ast::Name::user("arg"),
             args: vec![str_term(LET), str_term(scope), k, v, rank],
             ..head
         };
@@ -200,10 +200,11 @@ pub(crate) fn lets(
         }
     }
     for (k, span) in keys {
-        let pred = name.map_or_else(|| k.clone(), |n| n(&k));
+        let pred = Name::user(&k);
+        let pred = name.map_or_else(|| pred.clone(), |n| n(&pred));
         let v = Term::Var("V".into());
         out.push(Stmt::Rule(RuleStmt::new(
-            finish(atom(&pred, vec![v.clone()], span)),
+            finish(Atom::new(pred, vec![v.clone()], span)),
             vec![Lit::Pos(finish(atom(
                 "attr",
                 vec![str_term(LET), str_term(scope), str_term(&k), v],
@@ -273,7 +274,7 @@ pub fn declared_with(
 }
 
 fn held(name: &str, i: usize, span: Span) -> Atom {
-    atom(
+    crate::ast::internal_atom(
         DECLARED,
         vec![str_term(name), Term::Val(Value::Int(i as i64))],
         span,
@@ -347,10 +348,10 @@ fn exclusive_copies(stmts: &[Stmt]) -> Vec<Stmt> {
 /// Predicates a module may never make private: the compiler's, the
 /// provider's and the policy heads, and a provider's settings: a
 /// provider's `use` in a module configures it for the deployment (R-129).
-fn is_shared(pred: &str) -> bool {
+fn is_shared(pred: &Name) -> bool {
     crate::loader::is_core_pred(pred)
-        || pred == "provider_config"
-        || pred == crate::plugin::providers::EXPECT_ACCOUNT
+        || *pred == "provider_config"
+        || *pred == crate::plugin::providers::EXPECT_ACCOUNT
 }
 
 /// The relation a copy is recorded in (R-65): `instance_of(Path, User,
@@ -365,8 +366,11 @@ pub const ROWS: &str = "__rows";
 
 /// Whether a module or a copy keeps `pred` its own when it defines it:
 /// every relation but the shared ones and the records of copies.
-pub fn is_private(pred: &str) -> bool {
-    !is_shared(pred) && pred != INSTANCE_OF && pred != ROWS && pred != LEXICAL_OF
+pub fn is_private(pred: &Name) -> bool {
+    match pred {
+        Name::User(p) => !is_shared(pred) && p != INSTANCE_OF,
+        Name::Internal(p) => !is_shared(pred) && p != ROWS && p != LEXICAL_OF,
+    }
 }
 
 /// A program with its modules and components expanded, and the interface
@@ -656,7 +660,7 @@ impl<'a> Cx<'a> {
     fn stack_input(&mut self, i: &InputDecl) -> Vec<Stmt> {
         check_types("stack", std::slice::from_ref(i), &mut self.book.diags);
         let same = |a: Atom| a;
-        let mut out = input_reader("", i, &|p: &str| p.to_string(), &same);
+        let mut out = input_reader("", i, &|p: &Name| p.clone(), &same);
         out.extend(given_rules("", "", i, &same));
         for leaf in crate::inputs::leaves(i) {
             out.extend(refinement(&leaf, &leaf, "", &same));
@@ -702,10 +706,10 @@ impl Book {
     fn private_reads(&mut self, stmts: &[Stmt]) {
         let mut defined = BTreeMap::new();
         defined_preds(stmts, &mut defined);
-        let externs: BTreeSet<&str> = stmts
+        let externs: BTreeSet<&Name> = stmts
             .iter()
             .filter_map(|s| match s {
-                Stmt::Extern(e) => Some(e.pred.as_str()),
+                Stmt::Extern(e) => Some(&e.pred),
                 _ => None,
             })
             .collect();
@@ -714,9 +718,11 @@ impl Book {
             body_atoms(s, &mut reads);
         }
         for a in reads {
-            if let Some((owner, help)) = self.private.get(&a.pred)
+            // A program reads only its own names (`privates`).
+            if let Name::User(p) = &a.pred
+                && let Some((owner, help)) = self.private.get(p)
                 && !defined.contains_key(&a.pred)
-                && !externs.contains(a.pred.as_str())
+                && !externs.contains(&a.pred)
             {
                 let d = Diagnostic::error(a.span, format!("{} is private to {owner}", a.pred));
                 self.diags.push(match help {
@@ -814,10 +820,14 @@ impl Book {
 
     /// The names the copy `c` keeps private (`keys`), each with the error
     /// a read of it from outside says.
-    pub fn privates(&mut self, c: &Copy, keys: &BTreeSet<String>) {
+    pub fn privates(&mut self, c: &Copy, keys: &BTreeSet<Name>) {
         let (scope, module) = (c.scope(), &c.u.module);
         let used = c.kind == "module";
-        for p in keys {
+        // A program reads only its own names: none of the compiler's.
+        for p in keys.iter().filter_map(|p| match p {
+            Name::User(p) => Some(p),
+            Name::Internal(_) => None,
+        }) {
             let help = match used {
                 true => format!("read it as {scope}.{p}, after `use {module}`"),
                 false => format!(
@@ -960,7 +970,10 @@ pub const GATE: &str = "__instance";
 /// agent-1`, `node main.agent-1` inside the copy `main`). Each row of the
 /// clause holds one such fact.
 pub fn copy_by_clause(a: &Atom) -> Option<crate::address::Address> {
-    let (scope, p) = a.pred.rsplit_once("::")?;
+    let Name::Internal(pred) = &a.pred else {
+        return None;
+    };
+    let (scope, p) = pred.rsplit_once("::")?;
     let (name, args) = named::runtime_scope(scope, &a.args);
     let [Term::Val(Value::Str(path))] = args else {
         return None;
@@ -978,10 +991,11 @@ pub fn copy_by_clause(a: &Atom) -> Option<crate::address::Address> {
 /// name there, `p(..) (in n)`; `fmt` prints that atom and `gap` comes
 /// before the parenthesis. `None` for a predicate of the program's.
 pub fn private_text(a: &Atom, fmt: &dyn Fn(&Atom) -> String, gap: &str) -> Option<String> {
-    let (scope, p) = a.pred.rsplit_once("::")?;
+    let (scope, p) = a.pred.name().rsplit_once("::")?;
     // A copy named by its clause (R-191) is the one its columns name.
     let (scope, args) = named::runtime_scope(scope, &a.args);
-    if p == GATE
+    if a.pred.is_internal()
+        && p == GATE
         && let Some(Term::Val(Value::Str(path))) = args.first()
     {
         return Some(match crate::address::scope_split(&scope) {
@@ -990,7 +1004,7 @@ pub fn private_text(a: &Atom, fmt: &dyn Fn(&Atom) -> String, gap: &str) -> Optio
         });
     }
     let own = Atom {
-        pred: p.to_string(),
+        pred: a.pred.map(|_| p.to_string()),
         args: args.to_vec(),
         ..a.clone()
     };
@@ -1160,7 +1174,7 @@ pub(crate) fn check_component(
     let mut own = BTreeMap::new();
     defined_preds(body, &mut own);
     for i in &iface.inputs {
-        if let Some((_, span)) = own.get(&i.name) {
+        if let Some((_, span)) = own.get(&Name::user(&i.name)) {
             diags.push(Diagnostic::error(
                 *span,
                 format!(
@@ -1205,7 +1219,7 @@ pub(crate) fn rows_of(o: &OutputDecl, finish: &dyn Fn(Atom) -> Atom) -> Stmt {
     let vars: Vec<Term> = (0..arity).map(|i| Term::Var(format!("X{i}"))).collect();
     Stmt::Rule(RuleStmt::helper(
         Helper::Check,
-        finish(atom(
+        finish(crate::ast::internal_atom(
             ROWS,
             vec![str_term(&o.name), Term::List(vars.clone())],
             o.span,
@@ -1237,8 +1251,8 @@ fn published_rows(o: &OutputDecl) -> Stmt {
     )
 }
 
-pub(crate) fn refine_pred(input: &str) -> String {
-    format!("__refine_{input}")
+pub(crate) fn refine_pred(input: &str) -> Name {
+    Name::internal(format!("__refine_{input}"))
 }
 
 /// `input k: T where R`: what of `R` fits the checkable table is a
@@ -1279,7 +1293,7 @@ pub(crate) fn refinement(
     let mut body = read.clone();
     let names = |v: &Term| BTreeMap::from([(i.name.clone(), v.clone())]);
     body.extend(rest.iter().map(|l| l.replace_names(&names(&v))));
-    let ok = finish(atom(&refine_pred(&i.name), vec![v.clone()], i.span));
+    let ok = finish(Atom::new(refine_pred(&i.name), vec![v.clone()], i.span));
     // The check as the program writes it, one policy wherever the scope
     // that declares it is copied; the copy is the deny's context, and a
     // secret input's value is not said.
@@ -1299,7 +1313,7 @@ pub(crate) fn refinement(
         i.span,
     ));
     vec![
-        Stmt::Rule(RuleStmt::helper(Helper::Check, ok.clone(), body)),
+        Stmt::Rule(RuleStmt::helper(Helper::InputCheck, ok.clone(), body)),
         Stmt::Rule(RuleStmt::new(
             deny,
             read.into_iter().chain([Lit::Not(ok)]).collect(),
@@ -1317,10 +1331,11 @@ pub(crate) fn refinement(
 pub(crate) fn input_reader(
     scope: &str,
     i: &InputDecl,
-    pred: &dyn Fn(&str) -> String,
+    pred: &dyn Fn(&Name) -> Name,
     finish: &dyn Fn(Atom) -> Atom,
 ) -> Vec<Stmt> {
     let v = Term::Var("V".into());
+    let name = pred(&Name::user(&i.name));
     // A dependent input (R-104) is read, and defaults, where its clause
     // holds; where it holds with no value, it is required.
     let mut body = vec![Lit::Pos(finish(atom(
@@ -1335,7 +1350,7 @@ pub(crate) fn input_reader(
     )))];
     body.extend(i.guard.iter().cloned());
     let mut out = vec![Stmt::Rule(RuleStmt::new(
-        finish(atom(&pred(&i.name), vec![v], i.span)),
+        finish(Atom::new(name.clone(), vec![v], i.span)),
         body,
     ))];
     if !i.guard.is_empty() && i.default.is_none() && i.fields.is_empty() {
@@ -1344,8 +1359,8 @@ pub(crate) fn input_reader(
             s => format!("input {} of {s}", i.name),
         };
         let mut body = i.guard.clone();
-        body.push(Lit::Not(finish(atom(
-            &pred(&i.name),
+        body.push(Lit::Not(finish(Atom::new(
+            name,
             vec![Term::Wildcard],
             i.span,
         ))));
@@ -1610,7 +1625,7 @@ mod tests {
             stmts
                 .into_iter()
                 .filter_map(|s| match s {
-                    Stmt::Fact(a) => Some(a.pred.clone()),
+                    Stmt::Fact(a) => Some(a.pred.to_string()),
                     _ => None,
                 })
                 .collect()

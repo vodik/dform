@@ -137,7 +137,7 @@ fn statements_of(env: Env, id: ItemId) -> Vec<Stmt> {
             clause,
         } => output(env, (name, ty.as_ref()), *value, *clause, it.span),
         ItemKind::OutputRelation { rel, ref_columns } => vec![Stmt::Output(ast::OutputDecl {
-            name: rel.pred(),
+            name: rel.pred().to_string(),
             ty: None,
             value: None,
             relation: Some(ref_columns.clone()),
@@ -263,7 +263,7 @@ fn doc(kind: &str, name: &str, pairs: &[(String, String)], span: Span) -> Vec<St
         .map(|(k, v)| {
             let args = [kind, name, k, v].map(str_term).to_vec();
             Stmt::Fact(Atom {
-                pred: "doc".into(),
+                pred: crate::ast::Name::user("doc"),
                 args,
                 record: None,
                 span,
@@ -354,7 +354,7 @@ fn copy(env: Env, id: ItemId) -> Vec<Stmt> {
 pub(super) fn copy_parts(
     env: Env,
     id: ItemId,
-    taken: Option<(&str, &BTreeSet<String>)>,
+    taken: Option<(&str, &BTreeSet<ast::Name>)>,
 ) -> (ast::Instance, Vec<(Stmt, bool)>, Vec<Stmt>) {
     let program = env.program;
     let it = &program.items[id];
@@ -417,7 +417,7 @@ pub(super) fn copy_parts(
 }
 
 /// The relation a copy block's row `r` gives rows of.
-fn row_relation(program: &Program, r: ItemId) -> String {
+fn row_relation(program: &Program, r: ItemId) -> ast::Name {
     match &program.items[r].kind {
         ItemKind::Rule { head, .. } => head.rel.pred(),
         ItemKind::RelationInput { rel, .. } => rel.pred(),
@@ -488,7 +488,7 @@ fn check(
         CheckKind::Warn => "warn",
     };
     let head = l.put(Atom {
-        pred: pred.to_string(),
+        pred: ast::Name::user(pred),
         args,
         record: None,
         span,
@@ -535,7 +535,7 @@ fn output(
         out.push(decl(None, Some(v)));
     } else {
         let head = l.put(Atom {
-            pred: "output".into(),
+            pred: crate::ast::Name::user("output"),
             args: vec![str_term(name), v],
             record: None,
             span,
@@ -707,7 +707,7 @@ fn let_fn(
 ) -> Vec<Stmt> {
     let mut l = Lowering::new(env);
     let mut args: Vec<ast::Term> = params.iter().map(|p| param(&mut l, p)).collect();
-    let demand = crate::demand::of(name);
+    let demand = ast::Name::user(crate::demand::of(name));
     let seed = vec![ast::Lit::Pos(l.put(Atom {
         pred: demand.clone(),
         args: args.clone(),
@@ -722,13 +722,13 @@ fn let_fn(
     body.append(&mut l.reads);
     let arity = args.len();
     let head = l.put(Atom {
-        pred: name.to_string(),
+        pred: ast::Name::user(name),
         args,
         record: None,
         span,
     });
     let mut out = clause_rule(&l, head, body, folds, true, span);
-    let relation = |pred: String, arity| ast::Extern { pred, arity, span };
+    let relation = |pred: ast::Name, arity| ast::Extern { pred, arity, span };
     out.push(l.put_stmt(Stmt::Extern(relation(demand, arity - 1))));
     let types = params
         .iter()
@@ -737,7 +737,7 @@ fn let_fn(
             ty: p.ty.clone(),
         })
         .collect();
-    out.push(l.put_stmt(Stmt::Mode(relation(name.to_string(), arity), types)));
+    out.push(l.put_stmt(Stmt::Mode(relation(ast::Name::user(name), arity), types)));
     out.append(&mut l.helpers);
     out
 }
@@ -802,7 +802,7 @@ fn provider(env: Env, id: ItemId) -> Vec<Stmt> {
     }
     if !config.is_empty() || clause.is_some() {
         let head = l.put(Atom {
-            pred: "provider_config".into(),
+            pred: crate::ast::Name::user("provider_config"),
             args: vec![str_term(name), ast::Term::Obj(config)],
             record: None,
             span,
@@ -872,7 +872,7 @@ impl Settings {
                     }
                     let args = vec![str_term(name), l.expr(*value)];
                     let head = l.put(Atom {
-                        pred: crate::plugin::providers::EXPECT_ACCOUNT.into(),
+                        pred: ast::Name::user(crate::plugin::providers::EXPECT_ACCOUNT),
                         args,
                         record: None,
                         span: *span,
@@ -974,7 +974,7 @@ fn write_head(w: &Write, cell: Vec<ast::Term>, value: ast::Term) -> Atom {
         ast::FieldOp::Assign | ast::FieldOp::Replace => "arg",
     };
     Atom {
-        pred: pred.into(),
+        pred: ast::Name::user(pred),
         args,
         record: None,
         span: w.span,
@@ -1028,7 +1028,7 @@ fn set_from(
         str_term(rank.unwrap_or(Rank::Normal).name()),
     ];
     let head = l.put(Atom {
-        pred: "arg".into(),
+        pred: crate::ast::Name::user("arg"),
         args,
         record: None,
         span,
@@ -1224,7 +1224,7 @@ impl<'p> Let<'p> {
         let value = l.expr(self.value);
         body.append(&mut l.reads);
         let head = l.put(Atom {
-            pred: crate::modules::LET.to_string(),
+            pred: ast::Name::user(crate::modules::LET),
             args: vec![str_term(self.name), value, str_term(self.rank.name())],
             record: None,
             span,
@@ -1232,7 +1232,7 @@ impl<'p> Let<'p> {
         let mut out = clause_rule(&l, head, body, folds, self.clause.is_some(), span);
         for (q, _) in self.ty.iter().flat_map(|d| crate::types::secret_fields(d)) {
             out.push(Stmt::Fact(l.put(Atom {
-                pred: crate::modules::SECRET_LET.into(),
+                pred: crate::ast::Name::internal(crate::modules::SECRET_LET),
                 args: vec![str_term(self.name), str_term(&q)],
                 record: None,
                 span,
@@ -1240,7 +1240,7 @@ impl<'p> Let<'p> {
         }
         if let (true, Some(d)) = (self.declares, self.ty) {
             out.push(Stmt::Decl(Decl {
-                pred: self.name.to_string(),
+                pred: ast::Name::user(self.name),
                 fields: vec![self.name.to_string()],
                 types: vec![Some(d.clone())],
                 span,

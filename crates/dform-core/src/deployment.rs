@@ -173,7 +173,7 @@ pub fn load(t: &Target, version: &str, read: Reader, obs: &mut dyn Observer) -> 
         let facts = crate::parser::parse_file(&f.display().to_string(), &src)?;
         let stmts = inputs::file_stmts(&facts, &declared)?;
         given.extend(facts.statements.iter().filter_map(|s| match s {
-            Stmt::Fact(a) => Some(a.pred.clone()),
+            Stmt::Fact(a) => Some(a.pred.to_string()),
             _ => None,
         }));
         program.statements.extend(stmts);
@@ -1136,7 +1136,7 @@ impl Evaluator {
     /// boundary made more of its outputs known. The next evaluation is
     /// from the start.
     pub fn read_again(&self, name: &str, facts: Vec<Atom>) {
-        let of = |a: &Atom| match a.pred.as_str() {
+        let of = |a: &Atom| match a.pred.name() {
             crate::modules::INSTANCE_OF => {
                 matches!(a.args.as_slice(), [_, Term::Val(Value::Str(s)), Term::Val(Value::Str(n))] if s.is_empty() && n == name)
             }
@@ -1511,7 +1511,7 @@ fn settings_reads(res: &EvalResult) -> BTreeMap<String, BTreeSet<Address>> {
     let mut out: BTreeMap<String, BTreeSet<Address>> = BTreeMap::new();
     settings_rest_on(res, |name, fact| {
         if let ("attr", [Value::Str(typ), Value::Str(n), ..]) =
-            (fact.pred.as_str(), fact.args.as_slice())
+            (fact.pred.name(), fact.args.as_slice())
             && !transform::is_pseudo_type(typ)
         {
             out.entry(name.to_string()).or_default().insert(Address {
@@ -1529,7 +1529,7 @@ fn settings_upstreams(res: &EvalResult) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     settings_rest_on(res, |_, fact| {
         if let ("attr", [Value::Str(typ), Value::Str(n), ..]) =
-            (fact.pred.as_str(), fact.args.as_slice())
+            (fact.pred.name(), fact.args.as_slice())
             && typ == transform::OUTPUT
         {
             out.insert(n.clone());
@@ -1638,7 +1638,7 @@ pub fn with_schema_externs(l: &transform::Lowered, schema: &Schema) -> transform
         })
         .flatten()
         .filter_map(|l| match l {
-            Lit::Pos(a) | Lit::Not(a) => Some(a.pred.as_str()),
+            Lit::Pos(a) | Lit::Not(a) => a.pred.as_user(),
             _ => None,
         })
         .collect();
@@ -1647,7 +1647,7 @@ pub fn with_schema_externs(l: &transform::Lowered, schema: &Schema) -> transform
         if read.contains(p.as_str()) && !own.contains(p.as_str()) {
             out.extern_fns.push(f.clone());
             out.externs.insert(crate::ast::Extern {
-                pred: p.clone(),
+                pred: crate::ast::Name::user(p),
                 arity: f.args.len(),
                 span: f.span,
             });
@@ -2712,7 +2712,7 @@ impl Explained {
             }
         }
         for a in &self.res.facts {
-            let severity = match a.pred.as_str() {
+            let severity = match a.pred.name() {
                 "deny" => Severity::Error,
                 "warn" => Severity::Warning,
                 _ => continue,
@@ -3155,7 +3155,7 @@ fn world_types(lowered: Option<&transform::Lowered>) -> Option<BTreeSet<String>>
             };
             if !plugin::providers::INVENTORY
                 .iter()
-                .any(|(p, _)| *p == a.pred)
+                .any(|(p, _)| a.pred == *p)
             {
                 continue;
             }

@@ -42,16 +42,16 @@ pub(super) struct Typing {
     /// The columns declared `any`: they take anything and join nothing.
     pub(super) open: BTreeSet<Col>,
     /// The relations a `decl` declares.
-    pub(super) decls: BTreeSet<(ScopeId, String, usize)>,
+    pub(super) decls: BTreeSet<(ScopeId, Name, usize)>,
     /// Each declared relation's columns by name, what a record atom's
     /// fields are placed by (`p { a: x }`).
-    pub(super) fields: BTreeMap<(ScopeId, String), Vec<String>>,
+    pub(super) fields: BTreeMap<(ScopeId, Name), Vec<String>>,
     /// Each column's name: its `decl`'s, else the variable a head first
     /// writes in it; a let with parameters' last, `value`.
     pub(super) names: BTreeMap<Col, String>,
     /// The relations the program's atoms name, by arity: those with a
     /// signature.
-    pub(super) used: BTreeSet<(ScopeId, String, usize)>,
+    pub(super) used: BTreeSet<(ScopeId, Name, usize)>,
     /// The cells, as a message names them: `let apex`, `output ip`.
     pub(super) cells: BTreeMap<Col, String>,
     /// The column of each site that is a relation's argument, by site.
@@ -173,7 +173,7 @@ impl Graph<'_> {
                     && self
                         .typing
                         .used
-                        .contains(&(root, p.to_string(), f.args.len()))
+                        .contains(&(root, Name::user(p.as_str()), f.args.len()))
             })
             .map(|(_, f)| f)
             .collect();
@@ -238,7 +238,7 @@ impl Graph<'_> {
             .columns
             .iter()
             .filter(|(c, _)| self.typing.decls.contains(&(c.0, c.1.clone(), c.2)))
-            .map(|(c, n)| (c.1.as_str(), *n))
+            .map(|(c, n)| (c.1.name(), *n))
             .collect();
         out.sort();
         out.into_iter().map(|(_, n)| n).collect()
@@ -392,7 +392,7 @@ impl Settle<'_, '_> {
             .or_else(|| {
                 let cols = self.classes.get(&r)?;
                 cols.iter()
-                    .filter(|c| !c.1.contains("__"))
+                    .filter(|c| !c.1.is_internal())
                     .min_by_key(|c| !self.g.typing.decls.contains(&(c.0, c.1.clone(), c.2)))
                     .or(cols.first())
                     .map(|c| self.shown_col(c))
@@ -406,8 +406,8 @@ impl Settle<'_, '_> {
         let cols = self.classes.get(&r)?;
         let col = cols
             .iter()
-            .filter(|c| !lattice::untyped(&c.1) && lattice::function(&c.1).is_none())
-            .filter(|c| !c.1.starts_with(OUTPUT))
+            .filter(|c| !lattice::untyped(&c.1) && lattice::function(c.1.name()).is_none())
+            .filter(|c| !c.1.name().starts_with(OUTPUT))
             .min_by_key(|c| !self.g.typing.decls.contains(&(c.0, c.1.clone(), c.2)))?;
         Some(self.shown_col(col))
     }
@@ -466,15 +466,18 @@ impl Settle<'_, '_> {
     /// name and settled type (`any` where it is open).
     fn signatures(&mut self) -> Signatures {
         let mut out = Signatures::default();
-        let used: Vec<(ScopeId, String, usize)> = self.g.typing.used.iter().cloned().collect();
-        for (scope, pred, arity) in used {
-            if lattice::function(&pred).is_some() || pred.starts_with("table.") {
+        let used: Vec<(ScopeId, Name, usize)> = self.g.typing.used.iter().cloned().collect();
+        for (scope, rel, arity) in used {
+            // Only a program's relation has a signature.
+            let Some(pred) = rel.as_user() else { continue };
+            if lattice::function(pred).is_some() || pred.starts_with("table.") {
                 continue;
             }
             let columns = (0..arity)
-                .map(|i| self.column((scope, pred.clone(), arity, i)))
+                .map(|i| self.column((scope, rel.clone(), arity, i)))
                 .collect();
             let def = self.g.scopes.definition(scope).map(|(p, _)| p.clone());
+            let pred = pred.to_string();
             out.insert(def.unwrap_or_default(), arity, Signature { pred, columns });
         }
         out

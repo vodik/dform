@@ -209,7 +209,7 @@ impl Providers {
                 }
                 for row in rows {
                     out.push(Atom {
-                        pred: pred.to_string(),
+                        pred: crate::ast::Name::user(pred),
                         args: row.into_iter().map(Term::Val).collect(),
                         record: None,
                         span: Default::default(),

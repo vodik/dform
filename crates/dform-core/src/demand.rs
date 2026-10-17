@@ -23,7 +23,7 @@
 //! document, a provider's table, the environment, the clock): a let is
 //! the program's answer, and a program's answer is pure.
 
-use crate::ast::{Atom, Helper, Lit, Program, RuleStmt, Span, Stmt, Term};
+use crate::ast::{Atom, Helper, Lit, Name, Program, RuleStmt, Span, Stmt, Term};
 use crate::diag::{Diagnostic, Diagnostics};
 use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,24 +34,32 @@ pub fn of(f: &str) -> String {
     format!("{f}?")
 }
 
+/// [`of`] of the relation `f`, of its kind.
+fn asked(f: &Name) -> Name {
+    f.map(of)
+}
+
 /// The calls [`answer`] answered in `program`: the copy each call site
 /// reads (a relation whose demand a rule derives), by its relation, with
 /// the let it is a copy of, whose relation gathers the copies' rows
 /// ([`union`]). A call's columns but its last are what it asks with, as a
 /// data source's `+` columns are, and bind nothing.
-pub fn copies(program: &Program) -> BTreeMap<String, String> {
+pub fn copies(program: &Program) -> BTreeMap<Name, Name> {
     let rules = || {
         program.statements.iter().filter_map(|s| match s {
             Stmt::Rule(r) => Some(r),
             _ => None,
         })
     };
-    let demanded: BTreeSet<&str> = rules()
-        .filter_map(|r| r.head.pred.strip_suffix('?'))
+    let demanded: BTreeSet<Name> = rules()
+        .filter_map(|r| {
+            let f = r.head.pred.name().strip_suffix('?')?;
+            Some(r.head.pred.map(|_| f.to_string()))
+        })
         .collect();
     rules()
         .filter_map(|r| match r.body.as_slice() {
-            [Lit::Pos(a)] if demanded.contains(a.pred.as_str()) && a.args == r.head.args => {
+            [Lit::Pos(a)] if demanded.contains(&a.pred) && a.args == r.head.args => {
                 Some((a.pred.clone(), r.head.pred.clone()))
             }
             _ => None,
@@ -62,8 +70,8 @@ pub fn copies(program: &Program) -> BTreeMap<String, String> {
 /// The lets with parameters of `program` (their relations as expansion
 /// named them) answered at each site; the `Mode` statements gone.
 /// `externs` are the data sources' relations, which a let may not read.
-pub fn answer(program: Program, externs: &BTreeSet<String>) -> Result<Program> {
-    let modes: BTreeMap<String, Span> = program
+pub fn answer(program: Program, externs: &BTreeSet<Name>) -> Result<Program> {
+    let modes: BTreeMap<Name, Span> = program
         .statements
         .iter()
         .filter_map(|s| match s {
@@ -88,19 +96,18 @@ pub fn answer(program: Program, externs: &BTreeSet<String>) -> Result<Program> {
 /// another of them (a comprehension's helper reading the keys its rule
 /// binds, `transform::Comprehensions::demanded`).
 struct Lets {
-    modes: BTreeMap<String, Span>,
-    family: BTreeMap<String, Vec<RuleStmt>>,
+    modes: BTreeMap<Name, Span>,
+    family: BTreeMap<Name, Vec<RuleStmt>>,
     /// The relations the families' rules define.
-    owned: BTreeSet<String>,
+    owned: BTreeSet<Name>,
 }
 
 impl Lets {
-    fn of(program: &Program, modes: &BTreeMap<String, Span>) -> Lets {
+    fn of(program: &Program, modes: &BTreeMap<Name, Span>) -> Lets {
         // What a rule reads that makes it a let's: the let's demand, or a
         // relation only that let's rules define (never the let itself,
         // whose readers are its calls).
-        let mut owner: BTreeMap<String, String> =
-            modes.keys().map(|f| (of(f), f.clone())).collect();
+        let mut owner: BTreeMap<Name, Name> = modes.keys().map(|f| (asked(f), f.clone())).collect();
         let mut rest: Vec<&RuleStmt> = program
             .statements
             .iter()
@@ -109,7 +116,7 @@ impl Lets {
                 _ => None,
             })
             .collect();
-        let mut family: BTreeMap<String, Vec<RuleStmt>> = BTreeMap::new();
+        let mut family: BTreeMap<Name, Vec<RuleStmt>> = BTreeMap::new();
         loop {
             let (taken, other): (Vec<&RuleStmt>, Vec<&RuleStmt>) =
                 rest.into_iter().partition(|r| {
@@ -149,7 +156,7 @@ impl Lets {
     }
 
     /// The rules of `f` and its helpers.
-    fn rules(&self, f: &str) -> &[RuleStmt] {
+    fn rules(&self, f: &Name) -> &[RuleStmt] {
         self.family.get(f).map_or(&[], Vec::as_slice)
     }
 
@@ -159,7 +166,7 @@ impl Lets {
     }
 
     /// A read of a data source in a let's rules: an error at the read.
-    fn impure(&self, externs: &BTreeSet<String>) -> Vec<Diagnostic> {
+    fn impure(&self, externs: &BTreeSet<Name>) -> Vec<Diagnostic> {
         let mut out = Vec::new();
         for f in self.modes.keys() {
             for r in self.rules(f) {
@@ -170,11 +177,11 @@ impl Lets {
                     if !externs.contains(&a.pred) {
                         continue;
                     }
-                    let what = match crate::tables::describe(&a.pred) {
+                    let what = match crate::tables::describe(a.pred.name()) {
                         Some(d) => format!("a {d}"),
-                        None => format!("`{}`", program_name(&a.pred)),
+                        None => format!("`{}`", program_name(a.pred.name())),
                     };
-                    let name = program_name(f);
+                    let name = program_name(f.name());
                     out.push(
                         Diagnostic::error(
                             a.span,
@@ -197,7 +204,7 @@ impl Lets {
     /// A let that calls itself, directly or through others: an error
     /// naming the calls.
     fn recursive(&self) -> Vec<Diagnostic> {
-        let calls: BTreeMap<&String, BTreeSet<&String>> = self
+        let calls: BTreeMap<&Name, BTreeSet<&Name>> = self
             .modes
             .keys()
             .map(|f| {
@@ -220,12 +227,12 @@ impl Lets {
             let Some(path) = cycle(f, &calls) else {
                 continue;
             };
-            let members: BTreeSet<&String> = path.iter().copied().collect();
+            let members: BTreeSet<&Name> = path.iter().copied().collect();
             if !reported.insert(members) {
                 continue;
             }
-            let names: Vec<String> = path.iter().map(|g| program_name(g)).collect();
-            let name = program_name(f);
+            let names: Vec<String> = path.iter().map(|g| program_name(g.name())).collect();
+            let name = program_name(f.name());
             out.push(
                 Diagnostic::error(
                     self.modes[f],
@@ -268,9 +275,9 @@ impl Lets {
                     continue;
                 }
                 let (scope, new) = sites.scope(&f, a.span, within.as_deref());
-                let copied = format!("{scope}::{}", program_name(&f));
+                let copied = f.map(|f| format!("{scope}::{}", program_name(f)));
                 let demand = Atom {
-                    pred: of(&copied),
+                    pred: asked(&copied),
                     args: a.args[..a.args.len() - 1].to_vec(),
                     record: None,
                     span: a.span,
@@ -287,7 +294,7 @@ impl Lets {
                     }
                 }
                 if let Lit::Pos(a) | Lit::Not(a) = &mut r.body[j] {
-                    a.pred = copied;
+                    a.pred = copied.clone();
                 }
             }
             rules.push(r);
@@ -303,8 +310,8 @@ impl Lets {
 
     /// The columns of `f`, `n` of them, as variables named as the let
     /// names them: its parameters, then `Value`.
-    fn columns(&self, f: &str, n: usize) -> Vec<Term> {
-        let own = self.rules(f).iter().find(|r| r.head.pred == f);
+    fn columns(&self, f: &Name, n: usize) -> Vec<Term> {
+        let own = self.rules(f).iter().find(|r| r.head.pred == *f);
         let mut seen = BTreeSet::new();
         (0..n)
             .map(|k| {
@@ -326,15 +333,15 @@ impl Lets {
 
     /// The names of `f`'s rules in its copy `scope`: the relation, its
     /// demand, and its helpers.
-    fn renames(&self, f: &str, scope: &str) -> BTreeMap<String, String> {
-        let copy = |p: &str| format!("{scope}::{}", program_name(p));
-        let mut out: BTreeMap<String, String> = self
+    fn renames(&self, f: &Name, scope: &str) -> BTreeMap<Name, Name> {
+        let copy = |p: &Name| p.map(|p| format!("{scope}::{}", program_name(p)));
+        let mut out: BTreeMap<Name, Name> = self
             .rules(f)
             .iter()
             .map(|r| (r.head.pred.clone(), copy(&r.head.pred)))
             .collect();
-        out.insert(f.to_string(), copy(f));
-        out.insert(of(f), of(&copy(f)));
+        out.insert(f.clone(), copy(f));
+        out.insert(asked(f), asked(&copy(f)));
         out
     }
 }
@@ -346,7 +353,7 @@ impl Lets {
 /// its parameter is the caller's edge, as the read written inline is.
 fn passed(r: &RuleStmt, j: usize) -> Vec<RuleStmt> {
     let (Lit::Pos(call), ("arg", [typ, addr, _, _, _])) =
-        (&r.body[j], (r.head.pred.as_str(), r.head.args.as_slice()))
+        (&r.body[j], (r.head.pred.name(), r.head.args.as_slice()))
     else {
         return Vec::new();
     };
@@ -358,7 +365,7 @@ fn passed(r: &RuleStmt, j: usize) -> Vec<RuleStmt> {
         .map(|(t, a)| {
             let args = vec![typ.clone(), addr.clone(), t, a];
             let head = Atom {
-                pred: crate::transform::REF_DEP.into(),
+                pred: crate::ast::Name::internal(crate::transform::REF_DEP),
                 args,
                 record: None,
                 span: call.span,
@@ -385,7 +392,7 @@ struct Sites {
 /// lowered out of), in which copy of another let.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 struct Site {
-    f: String,
+    f: Name,
     at: (u32, u32, u32, u32),
     within: Option<String>,
 }
@@ -393,9 +400,9 @@ struct Site {
 impl Sites {
     /// The scope of `f`'s copy for the literal at `span` in the copy
     /// `within`, and whether it is new.
-    fn scope(&mut self, f: &str, span: Span, within: Option<&str>) -> (String, bool) {
+    fn scope(&mut self, f: &Name, span: Span, within: Option<&str>) -> (String, bool) {
         let key = Site {
-            f: f.to_string(),
+            f: f.clone(),
             at: (span.file, span.start, span.end, span.origin),
             within: within.map(str::to_string),
         };
@@ -409,7 +416,7 @@ impl Sites {
         };
         let mut scope = base.clone();
         let mut n = 1;
-        let name = program_name(f);
+        let name = program_name(f.name());
         while !self.used.insert(format!("{scope}::{name}")) {
             n += 1;
             scope = format!("{base} #{n}");
@@ -421,16 +428,16 @@ impl Sites {
 
 /// `f(A, .., V) :- copy(A, .., V)`: the copy's rows are `f`'s, its
 /// columns named as the let's.
-fn union(f: &str, copy: &str, site: &Atom, columns: Vec<Term>) -> RuleStmt {
+fn union(f: &Name, copy: &Name, site: &Atom, columns: Vec<Term>) -> RuleStmt {
     RuleStmt::new(
         Atom {
-            pred: f.to_string(),
+            pred: f.clone(),
             args: columns.clone(),
             record: None,
             span: site.span,
         },
         vec![Lit::Pos(Atom {
-            pred: copy.to_string(),
+            pred: copy.clone(),
             args: columns,
             record: None,
             span: site.span,
@@ -440,7 +447,7 @@ fn union(f: &str, copy: &str, site: &Atom, columns: Vec<Term>) -> RuleStmt {
 
 /// `r` with the relations `names` renames renamed, its head and body: its
 /// copy for the call at `call`.
-fn rename(r: &RuleStmt, names: &BTreeMap<String, String>, call: Span) -> RuleStmt {
+fn rename(r: &RuleStmt, names: &BTreeMap<Name, Name>, call: Span) -> RuleStmt {
     let atom = |mut a: Atom| {
         if let Some(n) = names.get(&a.pred) {
             a.pred = n.clone();
@@ -458,16 +465,13 @@ fn rename(r: &RuleStmt, names: &BTreeMap<String, String>, call: Span) -> RuleStm
 }
 
 /// The calls from `f` back to `f`, in order, `f` first and last.
-fn cycle<'a>(
-    f: &'a String,
-    calls: &BTreeMap<&'a String, BTreeSet<&'a String>>,
-) -> Option<Vec<&'a String>> {
+fn cycle<'a>(f: &'a Name, calls: &BTreeMap<&'a Name, BTreeSet<&'a Name>>) -> Option<Vec<&'a Name>> {
     fn walk<'a>(
-        at: &'a String,
-        goal: &'a String,
-        calls: &BTreeMap<&'a String, BTreeSet<&'a String>>,
-        path: &mut Vec<&'a String>,
-        seen: &mut BTreeSet<&'a String>,
+        at: &'a Name,
+        goal: &'a Name,
+        calls: &BTreeMap<&'a Name, BTreeSet<&'a Name>>,
+        path: &mut Vec<&'a Name>,
+        seen: &mut BTreeSet<&'a Name>,
     ) -> bool {
         for g in calls.get(at).into_iter().flatten() {
             if *g == goal {

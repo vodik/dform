@@ -255,7 +255,7 @@ pub fn undecided(res: &crate::engine::EvalResult, renders: impl Fn(&str) -> bool
     };
     let mut out = Vec::new();
     for s in &res.stuck {
-        match s.head.pred.as_str() {
+        match s.head.pred.name() {
             "deny" => {
                 let msg = str_arg(&s.head, 0).unwrap_or_else(|| crate::spell::atom(&s.head));
                 out.push(format!(

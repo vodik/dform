@@ -34,7 +34,7 @@ pub mod store;
 mod undetermined;
 mod unify;
 
-use crate::ast::{Atom, Helper, Lit, Program, RuleStmt, Span, Term};
+use crate::ast::{Atom, Helper, Lit, Name, Program, RuleStmt, Span, Term};
 use crate::circuit::{Circuit, NodeId};
 use crate::partition::{self, Node};
 use crate::spell;
@@ -166,7 +166,7 @@ pub fn eval_resumable(
         None => {
             let reads_later = |body: &[Lit]| {
                 body.iter().any(|l| match l {
-                    Lit::Pos(a) | Lit::Not(a) => later.contains(&a.pred.as_str()),
+                    Lit::Pos(a) | Lit::Not(a) => later.iter().any(|l| a.pred == *l),
                     _ => false,
                 })
             };
@@ -198,13 +198,13 @@ fn reading(c: &Compiled, later: &[&str]) -> Option<Vec<bool>> {
     if c.stuck_at.is_some() {
         return None;
     }
-    let mut preds: BTreeSet<&str> = later.iter().copied().collect();
+    let mut preds: BTreeSet<Name> = later.iter().map(|&l| Name::user(l)).collect();
     let mut again = vec![false; c.rules.len()];
     loop {
         let mut grew = false;
         for (i, r) in c.rules.iter().enumerate() {
             let reads = r.body.iter().any(|l| match l {
-                Lit::Pos(a) | Lit::Not(a) => preds.contains(a.pred.as_str()),
+                Lit::Pos(a) | Lit::Not(a) => preds.contains(&a.pred),
                 _ => false,
             });
             if again[i] || !reads {
@@ -214,7 +214,7 @@ fn reading(c: &Compiled, later: &[&str]) -> Option<Vec<bool>> {
                 return None;
             }
             again[i] = true;
-            grew |= preds.insert(r.head.pred.as_str());
+            grew |= preds.insert(r.head.pred.clone());
         }
         if !grew {
             break;
@@ -258,10 +258,10 @@ struct Compiled {
     rule_leaf: Vec<NodeId>,
     sigma: NodeId,
     /// Predicates defined by an aggregate rule, and `attr`.
-    aggregates: BTreeSet<String>,
+    aggregates: BTreeSet<Name>,
     /// Predicates a `not { .. }` helper defines, in whatever scope
     /// (`__neg_0`, a module's `m::__neg_0`, a call site's `S::__neg_0`).
-    negations: BTreeSet<String>,
+    negations: BTreeSet<Name>,
     /// The stratum `stuck/4` is derived at, when a rule reads it.
     stuck_at: Option<usize>,
     /// The run's secrets, which its `random.*` calls derive with: kept
@@ -294,7 +294,7 @@ impl Compiled {
             .collect();
         // The operator plan: one body per rule, a Fix per
         // stratum, and the indexes the bodies read through.
-        let extern_preds: BTreeSet<String> = externs.iter().map(|e| e.pred.clone()).collect();
+        let extern_preds: BTreeSet<Name> = externs.iter().map(|e| e.pred.clone()).collect();
         let plans: Vec<ops::Rule> = rules
             .iter()
             .map(|r| ops::compile_rule(r, &extern_preds))
@@ -313,14 +313,16 @@ impl Compiled {
             "attribute aggregate (lub_ranked, E §2.5)",
             Span::default(),
         );
-        let aggregates: BTreeSet<String> = rules
+        let aggregates: BTreeSet<Name> = rules
             .iter()
             .filter(|r| partition::is_aggregate_head(&r.head))
             .map(|r| r.head.pred.clone())
-            .chain(["attr".to_string(), transform::ATTR_BASE.to_string()])
+            .chain([Name::user("attr"), Name::user(transform::ATTR_BASE)])
             .collect();
         let negations = Helper::Negation.heads(&rules);
-        let stuck_at = strata.get(&Node::plain(partition::STUCK)).copied();
+        let stuck_at = strata
+            .get(&Node::plain(&Name::user(partition::STUCK)))
+            .copied();
         Compiled {
             rules: std::sync::Arc::new(rules),
             externs,
@@ -670,7 +672,7 @@ fn finish(c: &Compiled, st: State) -> Result<(EvalResult, Vec<String>)> {
     // Policy facts: deny/warn.
     let mut warnings = Vec::new();
     for a in &facts {
-        match a.pred.as_str() {
+        match a.pred.name() {
             "warn" => warnings.push(format_policy_fact(a)?),
             "deny" => violations.push(format_policy_fact(a)?),
             _ => {}
@@ -738,18 +740,18 @@ pub fn query(
     }
     // Only the relations the body reads: an extern's demand asks this of
     // every fact of an evaluation, a manifest's documents among them.
-    let read: BTreeSet<&str> = body
+    let read: BTreeSet<&Name> = body
         .iter()
         .filter_map(|l| match l {
-            Lit::Pos(a) | Lit::Not(a) => Some(a.pred.as_str()),
+            Lit::Pos(a) | Lit::Not(a) => Some(&a.pred),
             _ => None,
         })
         .collect();
-    for a in facts.iter().filter(|a| read.contains(a.pred.as_str())) {
+    for a in facts.iter().filter(|a| read.contains(&a.pred)) {
         store.insert(a.clone());
     }
     let head = Atom {
-        pred: "query".into(),
+        pred: Name::user("query"),
         args: vec![],
         record: None,
         span: Default::default(),

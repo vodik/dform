@@ -33,7 +33,7 @@
 mod cycle;
 pub use cycle::cycle_error;
 
-use crate::ast::{Atom, Extern, Helper, Lit, Program, RuleStmt, Stmt, Term};
+use crate::ast::{Atom, Extern, Helper, Lit, Name, Program, RuleStmt, Stmt, Term};
 use crate::schema::Schema;
 use crate::spell;
 use crate::transform;
@@ -44,7 +44,7 @@ use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Node {
-    pub pred: String,
+    pub pred: Name,
     pub typ: Option<String>,
     pub path: Option<String>,
     /// The resources of the type this node is about, when the type is
@@ -303,7 +303,7 @@ fn segment_globs(globs: Vec<Vec<String>>) -> Vec<Vec<String>> {
 fn copy_named(x: &str, body: &[Lit]) -> Option<Vec<Vec<String>>> {
     body.iter().find_map(|l| {
         let Lit::Pos(a) = l else { return None };
-        let (scope, _) = a.pred.split_once("::")?;
+        let (scope, _) = a.pred.name().split_once("::")?;
         let j = a
             .args
             .iter()
@@ -417,9 +417,9 @@ fn globs_meet(a: &[String], b: &[String]) -> bool {
 }
 
 impl Node {
-    pub fn plain(pred: &str) -> Node {
+    pub fn plain(pred: &Name) -> Node {
         Node {
-            pred: pred.into(),
+            pred: pred.clone(),
             typ: None,
             path: None,
             addr: None,
@@ -507,7 +507,7 @@ pub struct Graph {
 #[derive(Debug, Clone, Default)]
 pub struct Options {
     /// Predicates that are externs (negative edges into their readers).
-    pub externs: BTreeSet<String>,
+    pub externs: BTreeSet<Name>,
     /// Resource types partitioned by address as well as by path (R-107):
     /// a `want` or an aggregate of one is a node per address its rule's
     /// text fixes, so an agent's `want` reads its server's `attr` without
@@ -571,7 +571,7 @@ fn type_path_node(pred: &str, atom: &Atom) -> Node {
         _ => path,
     };
     Node {
-        pred: pred.into(),
+        pred: Name::user(pred),
         typ,
         path,
         addr: None,
@@ -601,7 +601,7 @@ fn contrib_node(atom: &Atom) -> Option<(Node, Node)> {
 /// write's `P[]` feeds `P`.
 fn aggregate_of(arg: &Node) -> Node {
     Node {
-        pred: "attr".into(),
+        pred: crate::ast::Name::user("attr"),
         typ: arg.typ.clone(),
         path: arg
             .path
@@ -614,7 +614,7 @@ fn aggregate_of(arg: &Node) -> Node {
 /// A read of the aggregate's outputs: `attr/4`, `attr_stuck/4`,
 /// `attr_conflict/5` all read the `(attr, T, P)` node.
 fn aggregate_read(atom: &Atom) -> Option<Node> {
-    match (atom.pred.as_str(), atom.args.len()) {
+    match (atom.pred.name(), atom.args.len()) {
         ("attr", 4) | ("attr_stuck", 4) | ("attr_conflict", 5) => {
             Some(type_path_node("attr", atom))
         }
@@ -626,9 +626,9 @@ fn aggregate_read(atom: &Atom) -> Option<Node> {
 /// Compiler-owned predicates whose first column is a resource type (F's
 /// DR-12 revised), or a reference to a resource of it (R-42). Each is one
 /// node per constant type.
-fn type_keyed(pred: &str) -> bool {
+fn type_keyed(pred: &Name) -> bool {
     matches!(
-        pred,
+        pred.as_user().unwrap_or_default(),
         "want"
             | "adopt"
             | "identity"
@@ -759,8 +759,8 @@ fn addressed(mut n: Node, atom: &Atom, body: &[Lit], opts: &Options) -> Node {
     n
 }
 
-fn is_builtin_or_edb(pred: &str) -> bool {
-    matches!(pred, "member" | "enumerate") || crate::functions::is_predicate(pred)
+fn is_builtin_or_edb(pred: &Name) -> bool {
+    matches!(pred.as_user(), Some("member" | "enumerate")) || crate::functions::is_predicate(pred)
 }
 
 /// The aggregates (docs/grammar.md "Aggregates"): written `n = count(x)` in
@@ -835,7 +835,7 @@ pub fn compile(program: &Program, given: &[Atom]) -> Result<Compiled> {
     rules.extend(transform::remote_name_prelude(&schema));
     let (mut rules, facts) = crate::zset::lifecycle_written(rules, facts, &schema)?;
     rules.extend(crate::zset::lifecycle_prelude(&schema)?);
-    let externs: BTreeSet<String> = lowered.externs.iter().map(|e| e.pred.clone()).collect();
+    let externs: BTreeSet<Name> = lowered.externs.iter().map(|e| e.pred.clone()).collect();
     let mut graph = stratified(&rules, &facts, &schema, &externs);
     // R-116: a write whose type is a variable (`set r.metadata.labels.owner
     // = .. where r in k8s`) is one node `(arg, *, P)`, which every reader
@@ -875,7 +875,7 @@ fn stratified(
     rules: &[RuleStmt],
     facts: &[Atom],
     schema: &Schema,
-    externs: &BTreeSet<String>,
+    externs: &BTreeSet<Name>,
 ) -> Graph {
     let mut opts = Options {
         externs: externs.clone(),
@@ -1073,7 +1073,7 @@ fn per_key(r: &RuleStmt, vb: &ValueBody, schema: &Schema) -> Option<Vec<RuleStmt
         body.insert(
             vb.member + 1,
             Lit::Not(Atom {
-                pred: "member".into(),
+                pred: crate::ast::Name::user("member"),
                 args: vec![
                     Term::Val(Value::List(keys.into_iter().map(Value::Str).collect())),
                     member.args[1].clone(),
@@ -1094,14 +1094,18 @@ fn types_of(t: &str, r: &RuleStmt, facts: &[Atom], graph: &Graph) -> Option<BTre
     for l in &r.body {
         let Lit::Pos(a) = l else { continue };
         let allowed: Option<BTreeSet<String>> = match a.args.as_slice() {
-            [Term::Val(Value::Str(ns)), x] if a.pred == NAMESPACE && is_t(x) => Some(
-                facts
-                    .iter()
-                    .filter(|f| f.pred == NAMESPACE)
-                    .filter(|f| f.args[0].as_str() == Some(ns))
-                    .filter_map(|f| const_str(&f.args[1]))
-                    .collect(),
-            ),
+            [Term::Val(Value::Str(ns)), x]
+                if a.pred.as_internal() == Some(NAMESPACE) && is_t(x) =>
+            {
+                Some(
+                    facts
+                        .iter()
+                        .filter(|f| f.pred.as_internal() == Some(NAMESPACE))
+                        .filter(|f| f.args[0].as_str() == Some(ns))
+                        .filter_map(|f| const_str(&f.args[1]))
+                        .collect(),
+                )
+            }
             [x, ..] if type_keyed(&a.pred) && is_t(x) => {
                 let defs = graph.nodes.iter().filter(|n| n.pred == a.pred);
                 let mut types = BTreeSet::new();
@@ -1141,7 +1145,7 @@ fn define(defs: &mut BTreeSet<Node>, h: &Node) {
         .is_some_and(|p| p.ends_with(transform::ELEM))
     {
         defs.insert(Node {
-            pred: transform::ATTR_BASE.into(),
+            pred: crate::ast::Name::user(transform::ATTR_BASE),
             ..attr.clone()
         });
     }
@@ -1151,7 +1155,7 @@ fn define(defs: &mut BTreeSet<Node>, h: &Node) {
 /// The prelude's contribution to the computed path `p` of `t`.
 fn prelude_arg(t: &str, p: &str, addr: Option<Addr>) -> Node {
     Node {
-        pred: "arg".into(),
+        pred: crate::ast::Name::user("arg"),
         typ: Some(t.to_string()),
         path: Some(p.to_string()),
         addr,
@@ -1172,7 +1176,7 @@ fn want_addrs(defs: &BTreeSet<Node>, t: &str) -> Vec<Option<Addr>> {
 }
 
 fn is_resource_node(n: &Node) -> bool {
-    matches!(n.pred.as_str(), "want" | "arg" | "attr") || n.pred == transform::ATTR_BASE
+    matches!(n.pred.name(), "want" | "arg" | "attr") || n.pred == transform::ATTR_BASE
 }
 
 /// The body literal a rule takes its head's address from (R-107): the
@@ -1233,7 +1237,7 @@ fn answer_identity(rules: Vec<RuleStmt>, schema: &Schema) -> Vec<RuleStmt> {
             if !r
                 .body
                 .iter()
-                .any(|l| matches!(l, Lit::Pos(a) if a.pred == IDENTITY))
+                .any(|l| matches!(l, Lit::Pos(a) if a.pred.as_internal() == Some(IDENTITY)))
             {
                 return r;
             }
@@ -1247,7 +1251,7 @@ fn answer_identity(rules: Vec<RuleStmt>, schema: &Schema) -> Vec<RuleStmt> {
                     body.push(l);
                     continue;
                 };
-                if a.pred != IDENTITY {
+                if a.pred.as_internal() != Some(IDENTITY) {
                     body.push(l);
                     continue;
                 }
@@ -1275,7 +1279,7 @@ fn answer_identity(rules: Vec<RuleStmt>, schema: &Schema) -> Vec<RuleStmt> {
                     }
                     n += 1;
                     body.push(Lit::Pos(Atom {
-                        pred: "__known".into(),
+                        pred: crate::ast::Name::internal("__known"),
                         args: vec![v],
                         record: None,
                         span: a.span,
@@ -1322,7 +1326,9 @@ fn answer_has(
     schema: &Schema,
 ) -> (Vec<RuleStmt>, Vec<Atom>) {
     let mark = |l: &Lit| match l {
-        Lit::Pos(a) | Lit::Not(a) if a.pred == HAS && a.args.len() == 4 => Some(a.clone()),
+        Lit::Pos(a) | Lit::Not(a) if a.pred.as_internal() == Some(HAS) && a.args.len() == 4 => {
+            Some(a.clone())
+        }
         _ => None,
     };
     if !rules
@@ -1392,7 +1398,7 @@ fn answer_has(
     };
     let mut fresh = 0usize;
     let mut helpers: Vec<RuleStmt> = Vec::new();
-    let mut patch: BTreeSet<String> = BTreeSet::new();
+    let mut patch: BTreeSet<Name> = BTreeSet::new();
     let negations = Helper::Negation.heads(&rules);
     let mut asked: BTreeSet<String> = BTreeSet::new();
     let mut out: Vec<RuleStmt> = Vec::with_capacity(rules.len());
@@ -1427,7 +1433,7 @@ fn answer_has(
             lits.by_ref().take(n).for_each(drop);
             asked.extend(a.args[2].as_str().map(str::to_string));
             let answer = Atom {
-                pred: TYPE_HAS.into(),
+                pred: crate::ast::Name::internal(TYPE_HAS),
                 args: vec![a.args[0].clone(), a.args[2].clone()],
                 ..a
             };
@@ -1449,7 +1455,7 @@ fn answer_has(
     for (t, p) in &declared {
         if asked.contains(p) {
             facts.push(Atom {
-                pred: TYPE_HAS.into(),
+                pred: crate::ast::Name::internal(TYPE_HAS),
                 args: vec![
                     Term::Val(Value::Str(t.clone())),
                     Term::Val(Value::Str(p.clone())),
@@ -1492,7 +1498,7 @@ fn known(mut read: Vec<Lit>, fresh: &mut usize) -> Vec<Lit> {
     read.insert(
         at + 1,
         Lit::Pos(Atom {
-            pred: "__known".into(),
+            pred: crate::ast::Name::internal("__known"),
             args: vec![v],
             record: None,
             span,
@@ -1509,10 +1515,10 @@ fn known(mut read: Vec<Lit>, fresh: &mut usize) -> Vec<Lit> {
 /// made to wait in place.
 fn not_known(
     read: Vec<Lit>,
-    negations: &BTreeSet<String>,
+    negations: &BTreeSet<Name>,
     fresh: &mut usize,
     helpers: &mut Vec<RuleStmt>,
-    patch: &mut BTreeSet<String>,
+    patch: &mut BTreeSet<Name>,
 ) -> Vec<Lit> {
     read.into_iter()
         .map(|l| match l {
@@ -1529,7 +1535,7 @@ fn not_known(
                 }
                 let args: Vec<Term> = vars.into_iter().map(Term::Var).collect();
                 let head = Atom {
-                    pred: format!("__has_known_{}", helpers.len()),
+                    pred: Name::internal(format!("__has_known_{}", helpers.len())),
                     args,
                     record: None,
                     span: a.span,
@@ -1570,7 +1576,7 @@ fn own_type_reads(scc: &BTreeSet<Node>, split: &BTreeSet<String>) -> BTreeSet<St
 fn schema_of(given: &[Atom], program_facts: &[Atom]) -> Result<Schema> {
     let is_schema = |a: &&Atom| {
         matches!(
-            a.pred.as_str(),
+            a.pred.name(),
             "type_attr"
                 | "type_provider"
                 | "type_mint"
@@ -1624,7 +1630,7 @@ fn build_lowered(
     // defines.
     let stuck_read = b.rules.iter().any(reads_stuck);
     if stuck_read {
-        b.defs.insert(Node::plain(STUCK));
+        b.defs.insert(Node::plain(&Name::user(STUCK)));
     }
     b.nodes.extend(b.defs.iter().cloned());
     let args = b.aggregate_edges();
@@ -1754,7 +1760,7 @@ impl Builder<'_> {
             for addr in addrs {
                 let arg = prelude_arg(t, p, addr.clone());
                 let want = Node {
-                    pred: "want".into(),
+                    pred: crate::ast::Name::user("want"),
                     typ: Some(t.clone()),
                     path: None,
                     addr,
@@ -1770,7 +1776,9 @@ impl Builder<'_> {
     /// Aggregate edges: every (arg, T, P) definition feeds every (attr, T',
     /// P') definition it unifies with, negatively. The arg nodes.
     fn aggregate_edges(&mut self) -> Vec<Node> {
-        let args: Vec<Node> = unifying(&self.defs, &Node::plain("arg")).cloned().collect();
+        let args: Vec<Node> = unifying(&self.defs, &Node::plain(&Name::user("arg")))
+            .cloned()
+            .collect();
         for a in &args {
             let a_as_attr = aggregate_of(a);
             // The base is every contribution but the element writes.
@@ -1779,7 +1787,7 @@ impl Builder<'_> {
                 .as_ref()
                 .is_some_and(|p| p.ends_with(transform::ELEM)))
             .then(|| Node {
-                pred: transform::ATTR_BASE.into(),
+                pred: crate::ast::Name::user(transform::ATTR_BASE),
                 ..a_as_attr.clone()
             });
             let targets: Vec<Node> = unifying(&self.defs, &a_as_attr)
@@ -1877,13 +1885,13 @@ impl Builder<'_> {
     /// whose head feeds a rule that can stick is on a negative cycle, an
     /// error.
     fn stuck_edges(&mut self, args: Vec<Node>) {
-        let stuck = Node::plain(STUCK);
-        let aggregates: BTreeSet<String> = self
+        let stuck = Node::plain(&Name::user(STUCK));
+        let aggregates: BTreeSet<Name> = self
             .rules
             .iter()
             .filter(|r| is_aggregate_head(&r.head))
             .map(|r| r.head.pred.clone())
-            .chain(["attr".to_string(), transform::ATTR_BASE.to_string()])
+            .chain([Name::user("attr"), Name::user(transform::ATTR_BASE)])
             .collect();
         for (i, r) in self.rules.iter().enumerate() {
             if !crate::stuck::can_stick(&r.head, &r.body, &aggregates) {
@@ -2226,7 +2234,7 @@ mod tests {
             panic!()
         };
         let node = |pred: &str, t: &str, p: &str| Node {
-            pred: pred.into(),
+            pred: Name::user(pred),
             typ: Some(t.into()),
             path: Some(p.into()),
             addr: None,

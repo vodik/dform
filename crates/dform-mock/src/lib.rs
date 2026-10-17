@@ -388,7 +388,7 @@ impl FakeCloud {
         let mut out: Vec<(String, usize)> = self
             .answers
             .iter()
-            .map(|a| (a.pred.clone(), a.args.len()))
+            .map(|a| (a.pred.to_string(), a.args.len()))
             .collect();
         out.sort();
         out.dedup();
@@ -466,7 +466,7 @@ impl FakeCloud {
                 for rr in self.inventory()?.resources.values() {
                     let s = |x: &str| Term::Val(Value::Str(x.to_string()));
                     atoms.push(Atom {
-                        pred: "cloud_exists".into(),
+                        pred: dform_core::ast::Name::user("cloud_exists"),
                         args: vec![s(&rr.typ), s(&rr.name)],
                         record: None,
                         span: Default::default(),
@@ -1395,7 +1395,7 @@ fn flatten_json_facts(
                 _ => Value::Str(other.to_string()),
             };
             out.push(Atom {
-                pred: pred.to_string(),
+                pred: dform_core::ast::Name::user(pred),
                 args: vec![
                     Term::Val(Value::Str(typ.to_string())),
                     Term::Val(Value::Str(name.to_string())),

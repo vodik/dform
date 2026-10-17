@@ -291,7 +291,7 @@ impl Providers {
                 continue;
             };
             out.push(Atom {
-                pred: "identity".into(),
+                pred: crate::ast::Name::user("identity"),
                 args: vec![s(&addr.typ), s(&addr.name), s(&e.remote)],
                 record: None,
                 span: Default::default(),
@@ -302,7 +302,7 @@ impl Providers {
                 && let Some((program, _)) = state::generation(name)
             {
                 out.push(Atom {
-                    pred: crate::transform::REMOTE_NAME.into(),
+                    pred: crate::ast::Name::user(crate::transform::REMOTE_NAME),
                     args: vec![s(&addr.typ), s(&addr.name), s(program), s(name)],
                     record: None,
                     span: Default::default(),
@@ -330,7 +330,7 @@ impl Providers {
                         v = r.read_back(v);
                     }
                     out.push(Atom {
-                        pred: "world_attr".into(),
+                        pred: crate::ast::Name::user("world_attr"),
                         args: vec![s(&addr.typ), s(&e.remote), s(&path), Term::Val(v)],
                         record: None,
                         span: Default::default(),

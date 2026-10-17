@@ -41,13 +41,27 @@ pub fn var(s: &str) -> Term {
     Term::Var(s.to_string())
 }
 
-/// The atom `pred(args..)` written at `span`, of no record.
+/// The atom `pred(args..)` of the program's relation `pred` written at
+/// `span`, of no record.
 pub fn atom(pred: &str, args: Vec<Term>, span: Span) -> Atom {
-    Atom {
-        pred: pred.into(),
-        args,
-        record: None,
-        span,
+    Atom::new(Name::user(pred), args, span)
+}
+
+/// The atom `pred(args..)` of the compiler's relation `pred` at `span`,
+/// of no record.
+pub fn internal_atom(pred: &str, args: Vec<Term>, span: Span) -> Atom {
+    Atom::new(Name::internal(pred), args, span)
+}
+
+impl Atom {
+    /// The atom `pred(args..)` at `span`, of no record.
+    pub fn new(pred: Name, args: Vec<Term>, span: Span) -> Atom {
+        Atom {
+            pred,
+            args,
+            record: None,
+            span,
+        }
     }
 }
 
@@ -368,7 +382,7 @@ impl std::fmt::Debug for Span {
 /// by the program.
 #[derive(Debug, Clone)]
 pub struct Extern {
-    pub pred: String,
+    pub pred: Name,
     pub arity: usize,
     pub span: Span,
 }
@@ -405,7 +419,7 @@ pub struct ExternFn {
 /// of `p`'s record form, in argument order.
 #[derive(Debug, Clone)]
 pub struct Decl {
-    pub pred: String,
+    pub pred: Name,
     pub fields: Vec<String>,
     /// Each column's type as written, `None` where it gives none.
     pub types: Vec<Option<TypeExpr>>,
@@ -726,14 +740,18 @@ pub enum Helper {
     /// follows, stuck exactly when the contribution is.
     RefDep,
     /// The compiler's checks and records: `__not_planned`,
-    /// `__unanswered`, `__rows`, `__declared`, `__refine_*`.
+    /// `__unanswered`, `__rows`, `__declared`, a type's refinement
+    /// `__refine_T_n`.
     Check,
+    /// `__refine_k`: an input's check, which reads the input's value
+    /// where it is declared (its own, secret or not: E0301 is not its).
+    InputCheck,
 }
 
 impl Helper {
     /// The relations the helpers of this kind among `rules` define, in
     /// whatever scope their names were given.
-    pub fn heads(self, rules: &[RuleStmt]) -> BTreeSet<String> {
+    pub fn heads(self, rules: &[RuleStmt]) -> BTreeSet<Name> {
         rules
             .iter()
             .filter(|r| r.helper == Some(self))
@@ -798,12 +816,119 @@ pub fn bound_vars(body: &[Lit]) -> BTreeSet<String> {
     out
 }
 
+/// A relation's name: one the program (a schema, a provider, an input
+/// file) writes, or one the compiler invents for what it lowers a
+/// statement to (a helper, a mark, a fact a later pass reads). No program
+/// can write the second kind: a program's `__neg_0` and the compiler's
+/// are two relations, whatever their text. The text is how either
+/// prints; the compiler spells its own with a leading `__`.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum Name {
+    /// A relation a program, a schema or a provider names.
+    User(String),
+    /// One the compiler invents.
+    Internal(String),
+}
+
+impl Name {
+    pub fn user(text: impl Into<String>) -> Name {
+        Name::User(text.into())
+    }
+
+    pub fn internal(text: impl Into<String>) -> Name {
+        Name::Internal(text.into())
+    }
+
+    /// The name as it prints: what a message, a dump or a sort reads.
+    pub fn name(&self) -> &str {
+        match self {
+            Name::User(t) | Name::Internal(t) => t,
+        }
+    }
+
+    pub fn is_internal(&self) -> bool {
+        matches!(self, Name::Internal(_))
+    }
+
+    /// The text of a program's name; `None` for one of the compiler's.
+    pub fn as_user(&self) -> Option<&str> {
+        match self {
+            Name::User(t) => Some(t),
+            Name::Internal(_) => None,
+        }
+    }
+
+    /// The text of one of the compiler's names; `None` for a program's.
+    pub fn as_internal(&self) -> Option<&str> {
+        match self {
+            Name::Internal(t) => Some(t),
+            Name::User(_) => None,
+        }
+    }
+
+    /// The same kind of name, its text `f` of this one's: a module's copy
+    /// of a relation is its scope's (`m::p`, `m::__neg_0`).
+    pub fn map(&self, f: impl FnOnce(&str) -> String) -> Name {
+        match self {
+            Name::User(t) => Name::User(f(t)),
+            Name::Internal(t) => Name::Internal(f(t)),
+        }
+    }
+}
+
+/// By text, as a name prints; a program's and the compiler's of one text
+/// next to each other.
+impl Ord for Name {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (self.name(), self.is_internal()).cmp(&(other.name(), other.is_internal()))
+    }
+}
+
+impl PartialOrd for Name {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl std::fmt::Display for Name {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// As the text's: a dump prints a name as it printed when it was one.
+impl std::fmt::Debug for Name {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self.name(), f)
+    }
+}
+
+/// The program's relation of that text: a text compares with a written
+/// name only. The compiler's are compared as [`Name::Internal`].
+impl PartialEq<str> for Name {
+    fn eq(&self, text: &str) -> bool {
+        matches!(self, Name::User(t) if t == text)
+    }
+}
+
+impl PartialEq<&str> for Name {
+    fn eq(&self, text: &&str) -> bool {
+        *self == **text
+    }
+}
+
+impl PartialEq<String> for Name {
+    fn eq(&self, text: &String) -> bool {
+        *self == **text
+    }
+}
+
 /// A predicate applied to terms. `span` is where it was written (or the
 /// statement it was lowered from); two atoms equal but for their spans are
 /// one fact.
 #[derive(Clone)]
 pub struct Atom {
-    pub pred: String,
+    pub pred: Name,
     pub args: Vec<Term>,
     pub record: Option<BTreeMap<String, Term>>,
     pub span: Span,
@@ -811,7 +936,7 @@ pub struct Atom {
 
 impl Atom {
     /// What an atom is as a fact: everything but where it was written.
-    fn content(&self) -> (&str, &[Term], &Option<BTreeMap<String, Term>>) {
+    fn content(&self) -> (&Name, &[Term], &Option<BTreeMap<String, Term>>) {
         (&self.pred, &self.args, &self.record)
     }
 }
@@ -981,7 +1106,7 @@ mod tests {
         let pos = Lit::Not(atom("p", vec![var("a")], Span::default()));
         let renamed = pos.clone().map(
             |a| Atom {
-                pred: "q".into(),
+                pred: crate::ast::Name::user("q"),
                 ..a
             },
             up,
@@ -1013,7 +1138,7 @@ mod tests {
             atom("p", vec![var("a")], at(2, 5, 9))
         );
         let ext = |span| Extern {
-            pred: "p".into(),
+            pred: crate::ast::Name::user("p"),
             arity: 1,
             span,
         };

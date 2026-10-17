@@ -12,7 +12,7 @@
 //! a refactor empties many, and only `-v` lists them.
 
 use crate::address::Address;
-use crate::ast::{Atom, Lit, RuleStmt, Term};
+use crate::ast::{Atom, Lit, Name, RuleStmt, Term};
 use crate::engine::EvalResult;
 use crate::value::Value;
 use crate::zset::Derived;
@@ -143,8 +143,9 @@ pub struct Emptying {
 /// How many rows each of `relations` has in `res`.
 pub(crate) fn rows_of(res: &EvalResult, relations: &BTreeSet<String>) -> BTreeMap<String, usize> {
     let mut rows: BTreeMap<String, usize> = relations.iter().map(|r| (r.clone(), 0)).collect();
+    // The relations are the program's (`infer::relations`).
     for f in &res.facts {
-        if let Some(n) = rows.get_mut(&f.pred) {
+        if let Some(n) = f.pred.as_user().and_then(|p| rows.get_mut(p)) {
             *n += 1;
         }
     }
@@ -164,7 +165,7 @@ pub fn rows_now(res: &EvalResult, relations: &BTreeSet<String>) -> BTreeMap<Stri
         .collect();
     let waiting = res.stuck.iter().map(|s| &s.head.pred);
     for pred in waiting.chain(res.may_derive.iter().map(|m| &m.head.pred)) {
-        if let Some(n) = rows.get_mut(pred) {
+        if let Some(n) = pred.as_user().and_then(|p| rows.get_mut(p)) {
             *n = None;
         }
     }
@@ -246,7 +247,7 @@ pub fn emptied(
 struct Reads<'a> {
     rules: &'a [RuleStmt],
     /// The rules by the relation of their head.
-    by_head: BTreeMap<&'a str, Vec<&'a RuleStmt>>,
+    by_head: BTreeMap<&'a Name, Vec<&'a RuleStmt>>,
     /// The program's relations now: a read stops at one that did not
     /// empty. The compiler's own are read through.
     relations: BTreeSet<&'a str>,
@@ -260,9 +261,9 @@ impl<'a> Reads<'a> {
         then: &'a Derived,
         now: &'a BTreeMap<String, Option<usize>>,
     ) -> Reads<'a> {
-        let mut by_head: BTreeMap<&str, Vec<&RuleStmt>> = BTreeMap::new();
+        let mut by_head: BTreeMap<&Name, Vec<&RuleStmt>> = BTreeMap::new();
         for r in rules {
-            by_head.entry(r.head.pred.as_str()).or_default().push(r);
+            by_head.entry(&r.head.pred).or_default().push(r);
         }
         let lost = then
             .rows
@@ -283,7 +284,7 @@ impl<'a> Reads<'a> {
     /// reads, until one reads none.
     fn chain(&self, addr: &Address) -> Vec<Lost> {
         let want = Atom {
-            pred: "want".into(),
+            pred: crate::ast::Name::user("want"),
             args: vec![
                 Term::Val(Value::Str(addr.typ.clone())),
                 Term::Val(Value::Str(addr.name.clone())),
@@ -310,7 +311,12 @@ impl<'a> Reads<'a> {
                 relation: rel.to_string(),
                 rows,
             });
-            from = self.by_head.get(rel).cloned().unwrap_or_default();
+            // A relation that emptied is the program's (`rows_now`).
+            from = self
+                .by_head
+                .get(&Name::user(rel))
+                .cloned()
+                .unwrap_or_default();
         }
         chain
     }
@@ -319,12 +325,12 @@ impl<'a> Reads<'a> {
     /// (`attr(T, A, P, V)`) its contributions (`arg(T, A, P, V, MERGE)`
     /// of the same `T`, `A` and `P`), else those of its relation.
     fn read_by(&self, a: &'a Atom) -> impl Iterator<Item = &'a RuleStmt> + '_ {
-        let (pred, n) = match a.pred.as_str() {
-            "attr" => ("arg", 3),
-            p => (p, a.args.len()),
+        let (pred, n) = match a.pred.as_user() {
+            Some("attr") => (Name::user("arg"), 3),
+            _ => (a.pred.clone(), a.args.len()),
         };
         self.by_head
-            .get(pred)
+            .get(&pred)
             .into_iter()
             .flatten()
             .copied()
@@ -348,7 +354,7 @@ impl<'a> Reads<'a> {
                 let Lit::Pos(a) = l else {
                     continue;
                 };
-                let pred = a.pred.as_str();
+                let pred = a.pred.name();
                 if !seen.insert(pred) {
                     continue;
                 }

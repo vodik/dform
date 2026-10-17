@@ -19,7 +19,13 @@ pub struct Mode {
 impl Mode {
     /// The mode of the relation `rel` a read in `scope` names.
     pub fn of(scopes: &Scopes, scope: ScopeId, rel: &RelRef) -> Mode {
-        let pred = rel.pred();
+        // A relation of the compiler's has no declaration a scope holds.
+        let crate::ast::Name::User(pred) = rel.pred() else {
+            return Mode {
+                reads: Vec::new(),
+                rest: false,
+            };
+        };
         if crate::functions::callable(&pred) {
             return Mode {
                 reads: Vec::new(),
@@ -27,7 +33,7 @@ impl Mode {
             };
         }
         let params = scopes
-            .function_columns(scope, &rel.name)
+            .function_columns(scope, rel.name.name())
             .map_or(0, |n| n - 1);
         let table: Vec<bool> = scopes
             .externs

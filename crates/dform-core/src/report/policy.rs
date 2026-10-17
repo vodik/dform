@@ -418,7 +418,7 @@ impl<'a> Wanted<'a> {
             attrs: BTreeMap::new(),
         };
         for a in &res.facts {
-            match (a.pred.as_str(), a.args.as_slice()) {
+            match (a.pred.name(), a.args.as_slice()) {
                 ("want", [Term::Val(Value::Str(t)), Term::Val(Value::Str(n))]) => {
                     w.by_type.entry(t).or_default().push(n)
                 }

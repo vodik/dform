@@ -208,7 +208,7 @@ fn address(a: &Addr) -> String {
 /// What the program names a node by: the relations the compiler writes
 /// beside the program's ([`crate::ast::Helper`]) it does not.
 struct Names {
-    helpers: BTreeSet<String>,
+    helpers: BTreeSet<crate::ast::Name>,
 }
 
 impl Names {
@@ -225,14 +225,14 @@ impl Names {
     /// k3s.name`), the resources of a type, a relation by its name; none
     /// for one only the compiler writes.
     fn node(&self, n: &Node) -> Option<String> {
-        match n.pred.as_str() {
+        match n.pred.name() {
             "arg" | "attr" | ATTR_BASE => Some(value(n)),
             "want" => Some(match (&n.typ, &n.addr) {
                 (Some(t), Some(a)) => format!("{t} {}", address(a)),
                 (Some(t), None) => format!("the {t} resources"),
                 (None, _) => "every resource".into(),
             }),
-            p => self.relation(p),
+            _ => self.relation(&n.pred),
         }
     }
 
@@ -240,16 +240,19 @@ impl Names {
     /// definition's by its own, a module's after its scope, a let's copy
     /// for a call by the let's; none for a helper, or one of the core's
     /// own relations (`__known`), which no program names.
-    fn relation(&self, pred: &str) -> Option<String> {
+    fn relation(&self, pred: &crate::ast::Name) -> Option<String> {
+        let crate::ast::Name::User(text) = pred else {
+            return None;
+        };
         if self.helpers.contains(pred) {
             return None;
         }
+        let pred = text;
         let (scope, name) = match pred.rsplit_once("::") {
             Some((s, n)) => (Some(s), n),
-            None => (None, pred),
+            None => (None, pred.as_str()),
         };
         Some(match scope {
-            _ if name.starts_with("__") => return None,
             Some(s) if s.starts_with("call at ") => name.trim_end_matches('?').to_string(),
             Some(s) => format!("{name} (in {s})"),
             None => name.to_string(),
@@ -274,9 +277,9 @@ fn unless_itself(names: &Names, g: &Graph, negative: &[Edge]) -> Option<String> 
 
 /// The value a write's node writes, as a read of it reads it.
 fn value_of(n: &Node) -> Node {
-    match n.pred.as_str() {
+    match n.pred.name() {
         "arg" => Node {
-            pred: "attr".into(),
+            pred: crate::ast::Name::user("attr"),
             ..n.clone()
         },
         _ => n.clone(),

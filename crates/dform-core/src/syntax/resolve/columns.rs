@@ -448,7 +448,7 @@ impl Lowerer<'_> {
         let g = self.building(rc, span, |b| {
             let typ = b.variable(&v);
             let args = vec![b.pattern_of(list), b.pattern_of(typ)];
-            let rel = RelRef::own("member", span);
+            let rel = RelRef::user("member", span);
             let args = RelArgs::Positional(args);
             b.goal_node(span, GoalKind::Rel { rel, args })
         });

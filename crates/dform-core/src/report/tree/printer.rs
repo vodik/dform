@@ -96,9 +96,7 @@ pub fn find(pattern: &Atom, facts: &BTreeSet<Atom>) -> Result<Vec<(Atom, Option<
         Ok(out)
     };
     let exact = matched(pattern)?;
-    if !exact.is_empty()
-        || !matches!(pattern.pred.as_str(), "attr" | "arg")
-        || pattern.args.len() < 4
+    if !exact.is_empty() || !matches!(pattern.pred.name(), "attr" | "arg") || pattern.args.len() < 4
     {
         return Ok(exact.into_iter().map(|a| (a, None)).collect());
     }
@@ -334,7 +332,7 @@ impl Printer<'_> {
         let View::Fact { fact, alts, .. } = self.circuit.view(id) else {
             return None;
         };
-        let rank = match (fact.pred.as_str(), fact.args.get(4)) {
+        let rank = match (fact.pred.name(), fact.args.get(4)) {
             ("arg", Some(crate::value::Value::Str(r))) => format!("rank {r}"),
             _ => return None,
         };

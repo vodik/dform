@@ -130,8 +130,7 @@ impl Instances {
         let mut by_scope = BTreeMap::new();
         let mut live = BTreeSet::new();
         for a in facts {
-            if let ("want", [_, Term::Val(Value::Str(name))]) = (a.pred.as_str(), a.args.as_slice())
-            {
+            if let ("want", [_, Term::Val(Value::Str(name))]) = (a.pred.name(), a.args.as_slice()) {
                 let mut name = name.as_str();
                 while let Some((scope, _)) = crate::address::scope_split(name) {
                     live.insert(scope.to_string());
@@ -259,7 +258,7 @@ pub fn instance_facts<'a>(
         }
         for i in instances.enclosing(addr) {
             out.push(Atom {
-                pred: IN_INSTANCE.into(),
+                pred: crate::ast::Name::user(IN_INSTANCE),
                 args: vec![r(addr), r(&i)],
                 record: None,
                 span: Default::default(),
@@ -270,7 +269,7 @@ pub fn instance_facts<'a>(
     for (i, ks) in kinds {
         let kind = instances.row_kind(&i, &ks);
         out.push(Atom {
-            pred: "deformation".into(),
+            pred: crate::ast::Name::user("deformation"),
             args: vec![s(kind), r(&i), s("absent")],
             record: None,
             span: Default::default(),
@@ -339,7 +338,7 @@ pub const REF_RELATIONS: &[(&str, usize, &str)] = &[
 /// (Rule 2): `want(T, A)`'s and `arg(T, A, ..)`'s `A`, `adopt(r, _)`'s
 /// reference.
 pub fn address_arg(head: &Atom) -> Option<&Term> {
-    match head.pred.as_str() {
+    match head.pred.name() {
         "want" | "arg" if head.args.len() >= 2 => Some(&head.args[1]),
         "adopt" => head.args.first(),
         _ => None,
@@ -532,7 +531,7 @@ impl Lifecycle {
             instances: Instances::from_facts(facts.iter().copied()),
             wants: facts
                 .iter()
-                .filter_map(|f| match (f.pred.as_str(), f.args.as_slice()) {
+                .filter_map(|f| match (f.pred.name(), f.args.as_slice()) {
                     ("want", [t, a]) => Some(Address {
                         typ: text(t)?,
                         name: text(a)?,
@@ -543,7 +542,7 @@ impl Lifecycle {
             removal: BTreeMap::new(),
         };
         for f in facts {
-            match (f.pred.as_str(), f.args.as_slice()) {
+            match (f.pred.name(), f.args.as_slice()) {
                 ("lifecycle", [res, what, path]) => r.attribute(f, res, what, path)?,
                 ("lifecycle", [res, what]) => r.flag(f, res, what)?,
                 ("moved", [typ, old, new]) => r.moved(f, typ, old, new)?,
@@ -632,32 +631,20 @@ pub const SAID: &str = "__lifecycle_said";
 
 /// The program's `lifecycle/2` rows as [`WRITTEN`]'s, when the schema
 /// seeds a type's lifecycle ([`lifecycle_prelude`] makes `lifecycle` of
-/// them again); `rules` and `facts` as they are otherwise. A program that
-/// writes [`WRITTEN`] or [`SAID`] by name is refused: they are dform's.
+/// them again); `rules` and `facts` as they are otherwise. Both are the
+/// compiler's names ([`crate::ast::Name::Internal`]): a program's relation
+/// of the same text is its own.
 pub fn lifecycle_written(
     mut rules: Vec<RuleStmt>,
     mut facts: Vec<Atom>,
     schema: &Schema,
 ) -> Result<(Vec<RuleStmt>, Vec<Atom>)> {
-    if let Some(a) = rules
-        .iter()
-        .map(|r| &r.head)
-        .chain(&facts)
-        .find(|a| a.pred == WRITTEN || a.pred == SAID)
-    {
-        let at = crate::diag::place(a.span).map_or(String::new(), |p| format!("{p}: "));
-        bail!(
-            "{at}{} is dform's own, not a relation a program writes; a resource's lifecycle is \
-             `lifecycle(r, \"retain\")`",
-            a.pred
-        );
-    }
     if schema.lifecycle.is_empty() {
         return Ok((rules, facts));
     }
     let rename = |a: &mut Atom| {
         if a.pred == "lifecycle" && a.args.len() == 2 {
-            a.pred = WRITTEN.into();
+            a.pred = crate::ast::Name::internal(WRITTEN);
         }
     };
     rules.iter_mut().for_each(|r| rename(&mut r.head));
@@ -688,7 +675,7 @@ pub fn lifecycle_prelude(schema: &Schema) -> Result<Vec<RuleStmt>> {
              not {SAID}(\"{t}\", r)\n"
         ));
     }
-    let lowered = crate::transform::lower(&crate::parser::parse_program(&src)?)?;
+    let lowered = crate::transform::lower(&crate::parser::parse_own(&src)?)?;
     let mut out: Vec<RuleStmt> = lowered
         .program
         .statements
@@ -714,12 +701,9 @@ pub fn lifecycle_prelude(schema: &Schema) -> Result<Vec<RuleStmt>> {
 fn said_rules() -> Vec<RuleStmt> {
     use crate::ast::{Lit, str_term};
     let var = |v: &str| Term::Var(v.into());
-    let atom = |pred: &str, args: Vec<Term>| Atom {
-        pred: pred.into(),
-        args,
-        record: None,
-        span: Default::default(),
-    };
+    let atom = |pred: &str, args: Vec<Term>| crate::ast::atom(pred, args, Default::default());
+    let internal =
+        |pred: &str, args: Vec<Term>| crate::ast::internal_atom(pred, args, Default::default());
     let reference = |t: &str, a: &str| Term::Func {
         name: crate::address::REF.into(),
         args: vec![var(t), var(a), str_term("")],
@@ -737,17 +721,17 @@ fn said_rules() -> Vec<RuleStmt> {
             var("W"),
         ],
     ));
-    let head = atom(SAID, vec![var("T"), var("A")]);
+    let head = internal(SAID, vec![var("T"), var("A")]);
     let own = RuleStmt::new(
         head.clone(),
         vec![
-            Lit::Pos(atom(WRITTEN, vec![reference("T", "A"), var("W")])),
+            Lit::Pos(internal(WRITTEN, vec![reference("T", "A"), var("W")])),
             removal.clone(),
         ],
     );
     let copy = |scope: Vec<Lit>| {
         let mut body = vec![
-            Lit::Pos(atom(WRITTEN, vec![reference("C", "S"), var("W")])),
+            Lit::Pos(internal(WRITTEN, vec![reference("C", "S"), var("W")])),
             removal.clone(),
         ];
         body.extend(scope);
@@ -970,7 +954,7 @@ pub fn deformation_facts<'a>(
     let mut seen = BTreeSet::new();
     for (kind, addr) in deformations {
         out.push(Atom {
-            pred: "deformation".into(),
+            pred: crate::ast::Name::user("deformation"),
             args: vec![
                 s(kind),
                 r(addr),
@@ -981,7 +965,7 @@ pub fn deformation_facts<'a>(
         });
         if seen.insert(addr) {
             out.push(Atom {
-                pred: "world_digest".into(),
+                pred: crate::ast::Name::user("world_digest"),
                 args: vec![r(addr), s(&doc_digest(now.get(addr)))],
                 record: None,
                 span: Default::default(),
@@ -1223,7 +1207,7 @@ impl Derived {
     /// resources it derived, each relation by its name with its rows.
     pub fn facts(&self) -> Vec<Atom> {
         let row = |name: &str, n: usize| Atom {
-            pred: DERIVED_AT_LAST_APPLY.into(),
+            pred: crate::ast::Name::user(DERIVED_AT_LAST_APPLY),
             args: vec![
                 Term::Val(Value::Str(name.to_string())),
                 Term::Val(Value::Int(n as i64)),
@@ -1303,7 +1287,7 @@ pub fn not_planned(
     };
     res.facts
         .iter()
-        .filter(|f| f.pred == crate::transform::NOT_PLANNED)
+        .filter(|f| f.pred.as_internal() == Some(crate::transform::NOT_PLANNED))
         .filter_map(|f| {
             let [t, a] = f.args.as_slice() else {
                 return None;
@@ -1622,9 +1606,9 @@ pub mod file {
     pub fn guarded(res: &EvalResult) -> Vec<Guarded> {
         let mut by: BTreeMap<String, std::collections::BTreeSet<i64>> = BTreeMap::new();
         for r in res.rules.iter() {
-            let (scope, pred) = match r.head.pred.rsplit_once("::") {
+            let (scope, pred) = match r.head.pred.name().rsplit_once("::") {
                 Some((s, p)) => (Some(s), p),
-                None => (None, r.head.pred.as_str()),
+                None => (None, r.head.pred.name()),
             };
             let (crate::modules::DECLARED, [Term::Val(Value::Str(n)), Term::Val(Value::Int(i))]) =
                 (pred, r.head.args.as_slice())

@@ -182,7 +182,7 @@ impl Collapse<'_> {
     fn head(&self, pred: &str, rest: Vec<Value>) -> Atom {
         let (typ, addr, path) = self.key;
         Atom {
-            pred: pred.into(),
+            pred: crate::ast::Name::user(pred),
             args: [str_term(typ), Term::Val(addr.clone()), str_term(path)]
                 .into_iter()
                 .chain(rest.into_iter().map(Term::Val))
@@ -272,7 +272,7 @@ impl Collapse<'_> {
         for d in deferred {
             let nulls = lattice::nulls_in(&d.value);
             self.out.push(Atom {
-                pred: crate::refine::DEFERRED.into(),
+                pred: crate::ast::Name::user(crate::refine::DEFERRED),
                 args: [
                     Value::Str(typ.clone()),
                     addr.clone(),

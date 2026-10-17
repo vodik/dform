@@ -286,7 +286,7 @@ pub(super) fn reads_schema(pattern: &str) -> bool {
         Ok(query::Query::Pred(p)) => schema::is_schema_pred(&p),
         Ok(query::Query::Body { body, .. }) => body.iter().any(|l| {
             matches!(l, crate::ast::Lit::Pos(a) | crate::ast::Lit::Not(a)
-                if schema::is_schema_pred(&a.pred))
+                if a.pred.as_user().is_some_and(schema::is_schema_pred))
         }),
         Err(_) => false,
     }
@@ -405,7 +405,7 @@ fn short_name(pattern: &str, res: &crate::engine::EvalResult) -> Result<String> 
     }
     let mut wanted = Vec::new();
     for a in res.facts.iter() {
-        match (a.pred.as_str(), a.args.as_slice()) {
+        match (a.pred.name(), a.args.as_slice()) {
             ("want", [Term::Val(Value::Str(t)), Term::Val(Value::Str(n))]) => {
                 wanted.push(address::Address {
                     typ: t.clone(),
@@ -445,7 +445,7 @@ fn short_name(pattern: &str, res: &crate::engine::EvalResult) -> Result<String> 
         let values: std::collections::BTreeSet<String> = res
             .facts
             .iter()
-            .filter_map(|a| match (a.pred.as_str(), a.args.as_slice()) {
+            .filter_map(|a| match (a.pred.name(), a.args.as_slice()) {
                 (
                     "attr",
                     [

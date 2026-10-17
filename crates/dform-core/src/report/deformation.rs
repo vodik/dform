@@ -422,7 +422,7 @@ impl<'a> Refs<'a> {
         let mut ids: Vec<(&str, &str, &str)> = Vec::new();
         let mut desired = BTreeMap::new();
         for f in facts {
-            match (f.pred.as_str(), f.args.as_slice()) {
+            match (f.pred.name(), f.args.as_slice()) {
                 ("identity", [t, a, r]) => {
                     if let (Some(t), Some(a), Some(r)) = (s(t), s(a), s(r)) {
                         names.insert((t, r), a);

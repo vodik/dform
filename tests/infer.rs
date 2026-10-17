@@ -290,7 +290,7 @@ fn a_components_relation_has_its_definitions_signature() {
     let hosts: Vec<String> = r
         .facts
         .iter()
-        .filter(|a| a.pred.ends_with("::seen"))
+        .filter(|a| a.pred.name().ends_with("::seen"))
         .map(spell::atom)
         .collect();
     assert_eq!(hosts, ["a::seen(10.0.0.1)", "b::seen(10.0.0.1)"]);

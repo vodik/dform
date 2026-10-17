@@ -47,14 +47,14 @@ pub(super) fn eval_builtin_pred(
         }
         return Ok(Some(false));
     }
-    let nulls = waits_on(&atom.pred, &vals);
+    let nulls = waits_on(atom.pred.name(), &vals);
     if !nulls.is_empty() {
-        rec.stuck_in(state, nulls, &atom.pred);
+        rec.stuck_in(state, nulls, atom.pred.name());
         return Ok(None);
     }
-    let body = crate::functions::body(&atom.pred)
+    let body = crate::functions::body(atom.pred.name())
         .ok_or_else(|| anyhow!("internal: no body for the builtin {}", atom.pred))?;
-    match body(&as_params(&atom.pred, vals.clone())) {
+    match body(&as_params(atom.pred.name(), vals.clone())) {
         Some(Value::Bool(b)) => Ok(Some(b)),
         Some(other) => bail!(
             "`{}(..)`{} is not true or false: {}",
@@ -62,7 +62,9 @@ pub(super) fn eval_builtin_pred(
             at_suffix(atom.span),
             spell::value(&other)
         ),
-        None if crate::functions::get(&atom.pred).is_some_and(|f| f.partial) => Ok(Some(false)),
+        None if crate::functions::get(atom.pred.name()).is_some_and(|f| f.partial) => {
+            Ok(Some(false))
+        }
         None => bail!(
             "`{}({})`{} is not defined for these arguments",
             atom.pred,

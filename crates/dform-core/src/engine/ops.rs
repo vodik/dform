@@ -10,14 +10,14 @@
 //! the body's binding pattern. The engine keeps every index up to date as
 //! tuples are inserted.
 
-use crate::ast::{Atom, Lit, RuleStmt, Term};
+use crate::ast::{Atom, Lit, Name, RuleStmt, Term};
 use crate::lattice::nulls_in;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A relation: a predicate at one arity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Rel {
-    pub pred: String,
+    pub pred: Name,
     pub arity: usize,
 }
 
@@ -150,7 +150,7 @@ pub struct Fix {
 }
 
 /// Compile a rule body. `externs` are the extern predicates.
-pub fn compile_body(body: &[Lit], externs: &BTreeSet<String>) -> Body {
+pub fn compile_body(body: &[Lit], externs: &BTreeSet<Name>) -> Body {
     let mut bound: BTreeSet<String> = BTreeSet::new();
     let mut ops = Vec::with_capacity(body.len());
     for (lit, l) in body.iter().enumerate() {
@@ -257,7 +257,7 @@ fn bind_vars(t: &Term, out: &mut BTreeSet<String>) {
 }
 
 /// Builtin predicates: functions to Bool, never relations.
-pub fn is_builtin_pred(pred: &str) -> bool {
+pub fn is_builtin_pred(pred: &Name) -> bool {
     crate::functions::is_predicate(pred)
 }
 
@@ -286,7 +286,7 @@ pub fn find_agg(head: &Atom) -> Option<(usize, AggKind)> {
 }
 
 /// Compile a rule.
-pub fn compile_rule(r: &RuleStmt, externs: &BTreeSet<String>) -> Rule {
+pub fn compile_rule(r: &RuleStmt, externs: &BTreeSet<Name>) -> Rule {
     Rule {
         body: compile_body(&r.body, externs),
         head: match find_agg(&r.head) {
@@ -366,7 +366,7 @@ mod tests {
         let idx = indexes([&b]);
         assert_eq!(
             idx[&Rel {
-                pred: "r".into(),
+                pred: crate::ast::Name::user("r"),
                 arity: 1
             }],
             BTreeSet::from([vec![0]])

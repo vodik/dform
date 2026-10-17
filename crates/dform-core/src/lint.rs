@@ -618,7 +618,7 @@ pub fn guard_holds(body: &[Lit], at: &BTreeMap<String, Value>) -> Option<bool> {
         let (Lit::Pos(a) | Lit::Not(a)) = l else {
             continue;
         };
-        let v = at.get(&a.pred)?;
+        let v = at.get(a.pred.as_user()?)?;
         let [t] = a.args.as_slice() else {
             return None;
         };
@@ -685,7 +685,7 @@ pub fn guard_reads<'a>(
     let preds: BTreeSet<&str> = body
         .iter()
         .filter_map(|l| match l {
-            Lit::Pos(a) | Lit::Not(a) => Some(a.pred.as_str()),
+            Lit::Pos(a) | Lit::Not(a) => Some(a.pred.name()),
             _ => None,
         })
         .collect();
@@ -702,11 +702,13 @@ pub fn guard_reads<'a>(
 /// the evaluation's to decide.
 fn guard_lints(program: &Program, lowered: &Program) -> Vec<String> {
     let space = enum_inputs(program);
-    let mut groups: BTreeMap<(String, String), Vec<(&RuleStmt, Span)>> = BTreeMap::new();
+    let mut groups: BTreeMap<(crate::ast::Name, String), Vec<(&RuleStmt, Span)>> = BTreeMap::new();
     for s in &lowered.statements {
         let Stmt::Rule(r) = s else { continue };
-        let pred = r.head.pred.rsplit("::").next().unwrap_or(&r.head.pred);
-        if pred != crate::modules::DECLARED {
+        let crate::ast::Name::Internal(pred) = &r.head.pred else {
+            continue;
+        };
+        if pred.rsplit("::").next() != Some(crate::modules::DECLARED) {
             continue;
         }
         let [Term::Val(Value::Str(name)), _] = r.head.args.as_slice() else {
@@ -883,7 +885,7 @@ fn read_key(lit: &Lit) -> Option<String> {
 
 /// The key of `input(Key, Value)` when it is a literal.
 fn input_key(atom: &Atom) -> Option<String> {
-    match (atom.pred.as_str(), atom.args.as_slice()) {
+    match (atom.pred.name(), atom.args.as_slice()) {
         ("input", [Term::Val(Value::Str(k)), _]) => Some(k.clone()),
         _ => None,
     }
@@ -911,7 +913,7 @@ mod tests {
         let program = loader::load_program(&[file]).expect("load adopt_demo.df");
 
         let set_env_prod = Atom {
-            pred: "input".to_string(),
+            pred: crate::ast::Name::user("input"),
             args: vec![
                 Term::Val(Value::Str("env".to_string())),
                 Term::Val(Value::Str("prod".to_string())),

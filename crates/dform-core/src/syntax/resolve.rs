@@ -27,8 +27,8 @@ use super::SyntaxKind::{self, *};
 use super::parser as parse;
 use super::{SyntaxNode, SyntaxToken, tokens};
 use crate::ast::{
-    Atom, BindArg, Config, ExternFn, FieldAssign, FieldOp, Lit, Program, Rank, Span, Stmt, Term,
-    TypeExpr, Via, str_term, var,
+    Atom, BindArg, Config, ExternFn, FieldAssign, FieldOp, Lit, Name, Program, Rank, Span, Stmt,
+    Term, TypeExpr, Via, str_term, var,
 };
 use crate::diag::Diagnostic;
 use crate::program::bind;
@@ -1079,15 +1079,6 @@ fn fresh(rc: &mut Rc, base: &str) -> String {
     }
     rc.reserved.insert(name.clone());
     name
-}
-
-fn atom_at(pred: &str, args: Vec<Term>, span: Span) -> Atom {
-    Atom {
-        pred: pred.to_string(),
-        args,
-        record: None,
-        span,
-    }
 }
 
 /// A relation's arguments as the terms of its head.

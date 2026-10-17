@@ -124,6 +124,28 @@ fn an_element_write_reads_the_list_without_element_writes() {
     );
 }
 
+/// So does a module's (R-212): the helper of its `not { }`, the module's
+/// own `limits::__neg_0`, reads the base too, so the write is no cycle.
+#[test]
+fn a_modules_element_write_reads_the_list_without_element_writes() {
+    let s = project("kl-base-module", "use limits");
+    s.write(
+        "limits.df",
+        "use k8s
+         set w.spec.template.spec.containers[c.name].resources.limits.memory = 512Mi @default \
+         where w in k8s.deployment, c in w.spec.template.spec.containers, \
+         not { d in w.spec.template.spec.containers, d.name == \"log\" }\n",
+    );
+    let r = plan(&s).success();
+    has(
+        &r,
+        &[
+            "containers[name=api].resources.limits.memory = \"512Mi\"",
+            "containers[name=side].resources.limits.memory = \"1Gi\"",
+        ],
+    );
+}
+
 /// Any term indexes a keyed list: a string makes the element when no list
 /// has it, an `@override` replaces one leaf; and a second author's whole
 /// list merges with the block's by key.

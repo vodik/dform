@@ -51,7 +51,7 @@ mod values;
 mod walk;
 
 use crate::address::Address;
-use crate::ast::{Atom, Lit, Span, Stmt, Term, TypeExpr};
+use crate::ast::{Atom, Lit, Name, Span, Stmt, Term, TypeExpr};
 use crate::diag::Diagnostic;
 use crate::infer::Signatures;
 use crate::schema::Schema;
@@ -68,7 +68,7 @@ const OUTPUT: &str = "output:";
 
 /// A column: (the scope that declares the relation, the relation, arity,
 /// index).
-type Col = (ScopeId, String, usize, usize);
+type Col = (ScopeId, Name, usize, usize);
 
 struct Graph<'a> {
     schema: &'a Schema,
@@ -205,7 +205,7 @@ impl<'a> Graph<'a> {
         n
     }
 
-    fn column(&mut self, scope: ScopeId, pred: &str, arity: usize, i: usize) -> usize {
+    fn column(&mut self, scope: ScopeId, pred: &Name, arity: usize, i: usize) -> usize {
         let (declaring, name) = self.resolve(scope, pred);
         let c = (declaring, name, arity, i);
         if let Some(&n) = self.columns.get(&c) {
@@ -220,12 +220,16 @@ impl<'a> Graph<'a> {
     /// The relation `pred` a read in `scope` names: the scope that declares
     /// it and its name there. A used module's, `m::k` (R-113), is the
     /// module's `k`.
-    fn resolve(&self, scope: ScopeId, pred: &str) -> (ScopeId, String) {
+    fn resolve(&self, scope: ScopeId, pred: &Name) -> (ScopeId, Name) {
+        // The compiler's relations are no scope's declaration.
+        let Name::User(pred) = pred else {
+            return (self.scopes.root, pred.clone());
+        };
         let used = pred.split_once("::").and_then(|(m, k)| {
             let body = self.used(scope, m)?;
-            Some((self.declaring(body, k), k.to_string()))
+            Some((self.declaring(body, k), Name::user(k)))
         });
-        used.unwrap_or_else(|| (self.declaring(scope, pred), pred.to_string()))
+        used.unwrap_or_else(|| (self.declaring(scope, pred), Name::user(pred)))
     }
 
     /// The body of the module a `use` binds to `name`, read in `scope`.

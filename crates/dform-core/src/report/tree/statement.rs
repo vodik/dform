@@ -306,7 +306,7 @@ fn negated(n: &SyntaxNode, stmt: &SyntaxNode) -> bool {
 /// contribution.
 pub(super) fn is_check(f: &Fact) -> bool {
     matches!(
-        (f.pred.as_str(), f.args.len()),
+        (f.pred.name(), f.args.len()),
         (crate::refine::TYPE_REFINE, 3) | (crate::refine::ATTR_REFINE, 4)
     )
 }
@@ -407,7 +407,7 @@ impl Cx<'_> {
             return None;
         }
         self.found()
-            .filter(|a| crate::tables::is_document(&a.pred))
+            .filter(|a| crate::tables::is_document(a.pred.name()))
             .find_map(|a| {
                 let [.., at, doc] = a.args.as_slice() else {
                     return None;
@@ -652,7 +652,7 @@ impl Cx<'_> {
         if rest.is_empty() {
             // A relation's row (`zone_index[z]`): its last column.
             let row = self.found().find(|a| {
-                (a.pred == base || a.pred.ends_with(&format!("::{base}")))
+                (a.pred == base || a.pred.name().ends_with(&format!("::{base}")))
                     && a.args.len() == keys.len() + 1
                     && a.args
                         .iter()

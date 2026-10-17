@@ -169,7 +169,7 @@ impl Lowerer<'_> {
     /// outward, reaches it: an enclosing body's own relation lexically, as
     /// [`Self::value_decl`] reaches a value; anything else as its own.
     pub(super) fn relation_reach(&self, scope: ScopeId, from: ScopeId, p: &str) -> Reach {
-        if !crate::modules::is_private(p) {
+        if !crate::modules::is_private(&Name::user(p)) {
             return Reach::Own;
         }
         let declared = self.chain_of(from).into_iter().find(|s| {

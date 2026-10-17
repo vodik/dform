@@ -80,7 +80,7 @@ impl Lowerer<'_> {
         // another module of the same name is another relation (R-65).
         let fed = !self.names(self.decl_scope(scope)).defines(&pred);
         let span = self.span(n);
-        let rel = crate::program::node::RelRef::own(pred, span);
+        let rel = crate::program::node::RelRef::user(pred, span);
         let kind = crate::program::ItemKind::Decl {
             rel,
             columns,

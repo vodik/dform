@@ -901,7 +901,7 @@ fn deny_rules(
         .map(|l| spell::written(&l.replace_names(&named)))
         .collect::<Vec<_>>()
         .join(", ");
-    let ok = atom(
+    let ok = crate::ast::internal_atom(
         &format!("__refine_{}_{n}", typ.replace('.', "_")),
         vec![addr.clone(), v.clone()],
         span,
@@ -981,7 +981,7 @@ impl Stated {
             Term::Val(v) => Some(v.clone()),
             _ => None,
         };
-        let (typ, addr, path, c) = match (a.pred.as_str(), a.args.as_slice()) {
+        let (typ, addr, path, c) = match (a.pred.name(), a.args.as_slice()) {
             (TYPE_REFINE, [t, p, c]) => (v(t)?, None, v(p)?, c),
             (ATTR_REFINE, [t, x, p, c]) => (v(t)?, Some(v(x)?), v(p)?, c),
             _ => return None,

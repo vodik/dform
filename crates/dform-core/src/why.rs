@@ -239,7 +239,7 @@ fn unset_required(addr: &address::Address, cx: &Context) -> Vec<String> {
 
 /// The resource a `want` or an `attr` fact is of.
 fn resource_of(a: &Atom) -> Option<address::Address> {
-    match (a.pred.as_str(), a.args.as_slice()) {
+    match (a.pred.name(), a.args.as_slice()) {
         ("want" | "attr", [Term::Val(Value::Str(t)), Term::Val(Value::Str(n)), ..]) => {
             Some(address::Address {
                 typ: t.clone(),
@@ -272,7 +272,7 @@ pub fn why_json(pattern: &str, how: As, cx: &Context) -> Result<serde_json::Valu
         let (a, focus) = m;
         let keys = focus.as_ref().map(tree::Focus::keys).unwrap_or_default();
         let below = focus.as_ref().map(tree::Focus::below).unwrap_or_default();
-        let reached = match a.pred.as_str() {
+        let reached = match a.pred.name() {
             "attr" => report::fold::Shape::of(&cx.res.facts, a).reach(a, keys, below),
             _ => None,
         };
@@ -360,7 +360,9 @@ fn derivations(
             out.push('\n');
         }
         if !core
-            && let Some(sig) = cx.program.and_then(|p| p.signature(&a.pred, a.args.len()))
+            && let Some(sig) = cx
+                .program
+                .and_then(|p| p.signature(a.pred.name(), a.args.len()))
             && sig
                 .columns
                 .iter()
@@ -369,7 +371,7 @@ fn derivations(
         {
             // A copy's relation by the name its facts have.
             let sig = crate::infer::Signature {
-                pred: a.pred.clone(),
+                pred: a.pred.to_string(),
                 columns: sig.columns.clone(),
             };
             out.push_str(&format!("decl {sig}\n"));
@@ -540,7 +542,7 @@ pub fn chain(
         top,
     };
     let style = report::Style::PLAIN;
-    match a.pred.as_str() {
+    match a.pred.name() {
         "attr" => {
             let items = c.leaves(a, &head_name(a, stack_keys)?, focus);
             Some(report::chains_text(&items, "", style, whole))
@@ -939,7 +941,7 @@ fn input_cell(
     for kind in kinds {
         for (scope, path) in &splits {
             let pat = Atom {
-                pred: "attr".into(),
+                pred: crate::ast::Name::user("attr"),
                 args: vec![s(kind), s(scope), s(path), Term::Var("value".into())],
                 record: None,
                 span: Default::default(),

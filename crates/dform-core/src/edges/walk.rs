@@ -14,7 +14,7 @@ fn is_any(t: &TypeExpr) -> bool {
 
 /// The key `k` of a `let(k, t, rank)` head.
 fn let_key(a: &Atom) -> Option<&str> {
-    match (a.pred.as_str(), a.args.as_slice()) {
+    match (a.pred.name(), a.args.as_slice()) {
         (crate::modules::LET, [Term::Val(Value::Str(k)), _, _]) => Some(k),
         _ => None,
     }
@@ -60,7 +60,7 @@ impl Graph<'_> {
             }
             Stmt::Resource(r) => self.resource(r, &at(r.span)),
             Stmt::Input(i) => {
-                let n = self.column(scope, &i.name, 1, 0);
+                let n = self.column(scope, &Name::user(&i.name), 1, 0);
                 self.uses(n);
                 let what = format!("input {}", i.name);
                 let ty = Shape::Declared(i.ty.clone());
@@ -76,7 +76,7 @@ impl Graph<'_> {
             // A let with parameters (R-187): its last column its value.
             Stmt::Mode(e, _) if e.arity > 0 => {
                 let col = (
-                    self.declaring(scope, &e.pred),
+                    self.declaring(scope, e.pred.name()),
                     e.pred.clone(),
                     e.arity,
                     e.arity - 1,
@@ -137,7 +137,7 @@ impl Graph<'_> {
     /// An output's declaration and its value are two statements: its
     /// cell is one.
     fn output(&mut self, o: &mut crate::ast::OutputDecl, at: &At) {
-        let n = self.column(at.scope, &format!("{OUTPUT}{}", o.name), 1, 0);
+        let n = self.column(at.scope, &Name::user(format!("{OUTPUT}{}", o.name)), 1, 0);
         self.cell(n, format!("output {}", o.name));
         if let Some(ty) = &o.ty {
             let what = format!("output {}", o.name);
@@ -152,7 +152,7 @@ impl Graph<'_> {
     /// `any` open ([`Self::declarations`]); its names the columns'.
     fn decl(&mut self, d: &crate::ast::Decl, scope: ScopeId) {
         let arity = d.fields.len();
-        let declaring = self.declaring(scope, &d.pred);
+        let declaring = self.declaring(scope, d.pred.name());
         self.typing.decls.insert((declaring, d.pred.clone(), arity));
         for (i, f) in d.fields.iter().enumerate() {
             let col = (declaring, d.pred.clone(), arity, i);
@@ -179,7 +179,7 @@ impl Graph<'_> {
         let arity = e.args.len();
         for (i, b) in e.args.iter().enumerate() {
             let Some(ty) = &b.ty else { continue };
-            let n = self.column(scope, &e.name, arity, i);
+            let n = self.column(scope, &Name::user(&e.name), arity, i);
             let what = format!("{}'s column {}", e.name, b.name);
             let role = Role::Types { prints: false };
             self.edge(n, Shape::Declared(ty.clone()), what, e.span, role);
@@ -193,7 +193,7 @@ impl Graph<'_> {
         for s in stmts {
             match s {
                 Stmt::Decl(d) => {
-                    let declaring = self.declaring(scope, &d.pred);
+                    let declaring = self.declaring(scope, d.pred.name());
                     let named = (declaring, d.pred.clone());
                     self.typing.fields.entry(named).or_insert(d.fields.clone());
                     for (i, t) in d.types.iter().enumerate() {
@@ -254,7 +254,7 @@ impl Graph<'_> {
             let Some(Seg::Key(input)) = (!path.is_empty()).then(|| path.remove(0)) else {
                 continue;
             };
-            let n = self.column(scope, &input, 1, 0);
+            let n = self.column(scope, &Name::user(&input), 1, 0);
             let holder = Holder::Named(format!("input {k} of {kind} {module}"));
             let at = At {
                 span: *span,
@@ -297,7 +297,7 @@ impl Graph<'_> {
             ..at.clone()
         };
         if let Some(k) = let_key(a).map(str::to_string) {
-            let n = self.column(at.scope, &k, 1, 0);
+            let n = self.column(at.scope, &Name::user(&k), 1, 0);
             self.uses(n);
             self.cell(n, format!("let {k}"));
             let at = At {
@@ -309,8 +309,8 @@ impl Graph<'_> {
             return;
         }
         // `output(k, V) :- B`: the value of `output k`.
-        if let ("output", [Term::Val(Value::Str(k)), _]) = (a.pred.as_str(), a.args.as_slice()) {
-            let n = self.column(at.scope, &format!("{OUTPUT}{k}"), 1, 0);
+        if let ("output", [Term::Val(Value::Str(k)), _]) = (a.pred.name(), a.args.as_slice()) {
+            let n = self.column(at.scope, &Name::user(format!("{OUTPUT}{k}")), 1, 0);
             self.cell(n, format!("output {k}"));
             let at = At {
                 span: a.span,

@@ -9,7 +9,7 @@ use dform::value::Value;
 
 fn atom(pred: &str, args: Vec<Term>) -> Atom {
     Atom {
-        pred: pred.into(),
+        pred: dform_core::ast::Name::user(pred),
         args,
         record: None,
         span: Default::default(),

@@ -789,7 +789,7 @@ fn resolve(planned: &Planned, choices: &[u8]) -> (Json, State, BTreeMap<String, 
             .res
             .facts
             .iter()
-            .filter_map(|a| match (a.pred.as_str(), a.args.as_slice()) {
+            .filter_map(|a| match (a.pred.name(), a.args.as_slice()) {
                 ("want", [Term::Val(Value::Str(typ)), Term::Val(Value::Str(name))]) => {
                     Some(Address {
                         typ: typ.clone(),
@@ -889,7 +889,7 @@ fn collect_nulls(v: &Value, out: &mut BTreeMap<String, Value>) {
 
 /// The program's own relations, and the core ones the properties name.
 fn watched(a: &Atom) -> bool {
-    let p = a.pred.as_str();
+    let p = a.pred.name();
     matches!(p, "want" | "deny")
         || (p.len() >= 2
             && (p.starts_with('p') || p.starts_with('c'))
@@ -1095,7 +1095,7 @@ fn properties(first: &Planned, second: &Planned, by: &BTreeMap<String, Value>) -
         seen.new_wants += w2.difference(&w1).count();
         seen.undetermined += first.report.policies.len();
         seen.denies_after += fired2.difference(&fired1).count();
-        let folds: BTreeSet<&str> = first
+        let folds: BTreeSet<&dform_core::ast::Name> = first
             .res
             .rules
             .iter()
@@ -1104,19 +1104,19 @@ fn properties(first: &Planned, second: &Planned, by: &BTreeMap<String, Value>) -
                     matches!(t, Term::Func { name, .. } if matches!(name.as_str(), "sum" | "min" | "max"))
                 })
             })
-            .map(|r| r.head.pred.as_str())
+            .map(|r| &r.head.pred)
             .collect();
         seen.folds += first
             .res
             .facts
             .iter()
-            .filter(|a| folds.contains(a.pred.as_str()))
+            .filter(|a| folds.contains(&a.pred))
             .count();
         seen.folds_stuck += first
             .res
             .stuck
             .iter()
-            .filter(|s| folds.contains(s.head.pred.as_str()) && s.reason.ends_with("over a null"))
+            .filter(|s| folds.contains(&s.head.pred) && s.reason.ends_with("over a null"))
             .count();
     });
     Ok(())

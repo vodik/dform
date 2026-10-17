@@ -83,7 +83,9 @@ pub(super) fn table_row(c: &Circuit, alts: &[NodeId]) -> Option<String> {
     for ch in children {
         match c.view(*ch) {
             View::Leaf(Leaf::Rule { .. }) => {}
-            View::Fact { fact, alts, .. } if row.is_none() && fact.pred.starts_with("table.") => {
+            View::Fact { fact, alts, .. }
+                if row.is_none() && fact.pred.name().starts_with("table.") =>
+            {
                 row = Some(alts)
             }
             _ => return None,
@@ -160,7 +162,7 @@ impl Printer<'_> {
     /// when the program does not want it.
     pub fn want_site(&self, rules: &[RuleStmt], addr: &Address) -> Option<Site> {
         let f = Fact::new(
-            "want",
+            crate::ast::Name::user("want"),
             vec![Value::Str(addr.typ.clone()), Value::Str(addr.name.clone())],
         );
         self.site(rules, self.circuit.fact_id(&f)?)
@@ -446,7 +448,7 @@ impl Surface<'_, '_> {
         let View::Fact { fact, alts, .. } = circuit.view(id) else {
             return own;
         };
-        let mut value = match fact.pred.as_str() {
+        let mut value = match fact.pred.name() {
             "arg" | "attr" => fact.args.get(3),
             _ => None,
         };
@@ -726,7 +728,10 @@ pub fn core_words(r: &RuleStmt) -> Option<&'static str> {
             .iter()
             .any(|l| matches!(l, Lit::Pos(a) | Lit::Not(a) if a.pred == p))
     };
-    Some(match r.head.pred.as_str() {
+    if r.head.pred.as_internal() == Some(crate::zset::SAID) {
+        return Some("the program writes a lifecycle for the object, or for its copy");
+    }
+    Some(match r.head.pred.name() {
         "resolve" => "a computed attribute's value, as the world holds it",
         "resolved" => "the world holds a computed attribute's value",
         "arg" if reads(crate::transform::REMOTE_NAME) => {
@@ -736,7 +741,6 @@ pub fn core_words(r: &RuleStmt) -> Option<&'static str> {
             "a computed attribute is not known until its provider gives it"
         }
         "arg" if reads("resolve") => "a computed attribute is the value its provider gave",
-        crate::zset::SAID => "the program writes a lifecycle for the object, or for its copy",
         _ => return None,
     })
 }

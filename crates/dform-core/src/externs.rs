@@ -100,16 +100,16 @@ fn node(a: &Atom) -> String {
             _ => None,
         }
     }
-    match (a.pred.as_str(), a.args.as_slice()) {
+    match (a.pred.name(), a.args.as_slice()) {
         ("arg", [t, scope, k, _, _]) | ("attr", [t, scope, k, _])
             if s(t).is_some_and(crate::transform::is_pseudo_type) =>
         {
             match (s(t), s(scope), s(k)) {
                 (Some(t), Some(scope), Some(k)) => format!("({t}, {scope}, {k})"),
-                _ => a.pred.clone(),
+                _ => a.pred.to_string(),
             }
         }
-        _ => a.pred.clone(),
+        _ => a.pred.to_string(),
     }
 }
 
@@ -124,7 +124,7 @@ pub fn check(program: &Program, fns: &[ExternFn]) -> Result<()> {
     let mut c = Checker::new(program, fns);
     for s in &program.statements {
         if let Stmt::Fact(a) = s
-            && let Some(f) = c.by.get(a.pred.as_str())
+            && let Some(f) = c.by.get(a.pred.name())
         {
             c.diags.push(defined_here(a, f));
         }
@@ -185,15 +185,15 @@ impl<'p> Checker<'p> {
     /// bind.
     fn rule(&mut self, head: Option<&Atom>, body: &[Lit]) {
         if let Some(h) = head
-            && let Some(f) = self.by.get(h.pred.as_str())
+            && let Some(f) = self.by.get(h.pred.name())
         {
             self.diags.push(defined_here(h, f));
         }
         let mut bound: BTreeSet<String> = BTreeSet::new();
         for l in body {
             match l {
-                Lit::Pos(a) | Lit::Not(a) if self.by.contains_key(a.pred.as_str()) => {
-                    let f = self.by[a.pred.as_str()];
+                Lit::Pos(a) | Lit::Not(a) if self.by.contains_key(a.pred.name()) => {
+                    let f = self.by[a.pred.name()];
                     if !self.call(head, body, a, f, &bound) {
                         continue;
                     }
@@ -255,9 +255,9 @@ impl<'p> Checker<'p> {
         if let Some(h) = head
             && let Some(p) = body.iter().find_map(|l| match l {
                 Lit::Pos(b) | Lit::Not(b)
-                    if !self.by.contains_key(b.pred.as_str()) && self.reaches(h, b) =>
+                    if !self.by.contains_key(b.pred.name()) && self.reaches(h, b) =>
                 {
-                    Some(b.pred.as_str())
+                    Some(b.pred.name())
                 }
                 _ => None,
             })
@@ -291,7 +291,7 @@ fn recursive(a: &Atom, f: &ExternFn, head: &Atom, through: &str) -> Diagnostic {
     };
     Diagnostic::error(a.span, msg).with_note(format!(
         "{} depends on itself through {}; {asked}",
-        program_name(&head.pred),
+        program_name(head.pred.name()),
         program_name(through)
     ))
 }
@@ -377,7 +377,7 @@ fn demand_prefix(
         let Lit::Pos(a) = &prefix[j] else {
             return false;
         };
-        let Some(g) = fns.get(a.pred.as_str()).filter(|_| one_row(&a.pred)) else {
+        let Some(g) = fns.get(a.pred.name()).filter(|_| one_row(a.pred.name())) else {
             return false;
         };
         let mut answers = BTreeSet::new();
@@ -455,7 +455,7 @@ impl<'a> Externs<'a> {
         for (_, body, _) in bodies(lowered) {
             for (i, l) in body.iter().enumerate() {
                 if let Lit::Pos(a) | Lit::Not(a) = l
-                    && let Some(f) = by.get(a.pred.as_str())
+                    && let Some(f) = by.get(a.pred.name())
                 {
                     sites.push((demand_prefix(&body[..i], a, f, &by), a.clone()));
                 }
@@ -508,8 +508,9 @@ impl<'a> Externs<'a> {
             .borrow()
             .iter()
             .flat_map(|(c, rows)| {
+                // An extern is a relation the program names.
                 rows.iter().map(|r| Atom {
-                    pred: c.pred.clone(),
+                    pred: crate::ast::Name::user(&c.pred),
                     args: r.iter().cloned().map(Term::Val).collect(),
                     record: None,
                     span: Span::default(),
@@ -526,7 +527,7 @@ impl<'a> Externs<'a> {
         let mut out = BTreeSet::new();
         let secret_sites = self.secret_sites.borrow();
         for (site, (prefix, a)) in self.sites.iter().enumerate() {
-            let f = &self.fns[&a.pred];
+            let f = &self.fns[a.pred.name()];
             let mut body = prefix.clone();
             let mut inputs = Vec::new();
             for (k, (t, b)) in a.args.iter().zip(&f.args).enumerate() {
@@ -544,7 +545,7 @@ impl<'a> Externs<'a> {
                     continue;
                 }
                 let call = Call {
-                    pred: a.pred.clone(),
+                    pred: a.pred.to_string(),
                     inputs: vals,
                 };
                 if secret_sites.contains(&site) {

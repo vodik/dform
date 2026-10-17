@@ -5,14 +5,14 @@
 //! any outer one of the same name (R-211: lowered by scope, where
 //! `transform::apply_decls` rewrote each module's body).
 
-use crate::ast::{Atom, Stmt, Term};
+use crate::ast::{Atom, Name, Stmt, Term};
 use crate::diag::Diagnostic;
 use crate::program::{ItemId, ItemKind, Program};
 use std::collections::BTreeMap;
 
 /// The fields of each relation a record atom may name.
 #[derive(Debug, Clone)]
-pub struct Records(BTreeMap<String, Vec<String>>);
+pub struct Records(BTreeMap<Name, Vec<String>>);
 
 impl Records {
     /// The core's relations' fields.
@@ -20,15 +20,15 @@ impl Records {
         let fields = |fs: &[&str]| fs.iter().map(|f| f.to_string()).collect::<Vec<_>>();
         let arg = fields(&["type", "name", "path", "value"]);
         Records(BTreeMap::from([
-            ("want".to_string(), fields(&["type", "name"])),
-            ("arg".to_string(), arg.clone()),
-            ("arg_add".to_string(), arg),
-            ("output".to_string(), fields(&["scope", "key", "value"])),
-            ("input".to_string(), fields(&["key", "value"])),
-            ("data".to_string(), fields(&["key", "value"])),
-            ("merge_rule".to_string(), fields(&["type", "path", "op"])),
-            ("warn".to_string(), fields(&["msg", "ctx"])),
-            ("deny".to_string(), fields(&["msg", "ctx"])),
+            (Name::user("want"), fields(&["type", "name"])),
+            (Name::user("arg"), arg.clone()),
+            (Name::user("arg_add"), arg),
+            (Name::user("output"), fields(&["scope", "key", "value"])),
+            (Name::user("input"), fields(&["key", "value"])),
+            (Name::user("data"), fields(&["key", "value"])),
+            (Name::user("merge_rule"), fields(&["type", "path", "op"])),
+            (Name::user("warn"), fields(&["msg", "ctx"])),
+            (Name::user("deny"), fields(&["msg", "ctx"])),
         ]))
     }
 
@@ -61,7 +61,7 @@ impl Records {
                     declares: true,
                     ..
                 } => {
-                    out.0.insert(name.clone(), vec![name.clone()]);
+                    out.0.insert(Name::user(name), vec![name.clone()]);
                 }
                 _ => {}
             }

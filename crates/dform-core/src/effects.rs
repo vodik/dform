@@ -57,13 +57,13 @@ pub fn compute(program: &Program, schema: &Schema) -> Result<BTreeMap<String, Sc
 
     let compiled = partition::compile(program, &schema.facts)?;
     let inputs_by_scope = input_names(&compiled.inputs);
-    let externs: BTreeSet<&str> = compiled.externs.iter().map(|e| e.pred.as_str()).collect();
+    let externs: BTreeSet<&str> = compiled.externs.iter().map(|e| e.pred.name()).collect();
     let relations = relations(program);
 
     for a in &compiled.facts {
         let scope = scope_of(a.span);
         let entry = out.entry(scope.clone()).or_default();
-        if let Some(w) = classify_write(a).or_else(|| relations.write(&scope, &a.pred)) {
+        if let Some(w) = classify_write(a).or_else(|| relations.write(&scope, a.pred.name())) {
             entry.writes.insert(w);
         }
     }
@@ -72,7 +72,7 @@ pub fn compute(program: &Program, schema: &Schema) -> Result<BTreeMap<String, Sc
         {
             let entry = out.entry(scope.clone()).or_default();
             if let Some(w) =
-                classify_write(&r.head).or_else(|| relations.write(&scope, &r.head.pred))
+                classify_write(&r.head).or_else(|| relations.write(&scope, r.head.pred.name()))
             {
                 entry.writes.insert(w);
             }
@@ -82,7 +82,7 @@ pub fn compute(program: &Program, schema: &Schema) -> Result<BTreeMap<String, Sc
                 Lit::Pos(a) | Lit::Not(a) => a,
                 _ => continue,
             };
-            if externs.contains(a.pred.as_str()) {
+            if externs.contains(a.pred.name()) {
                 if let Some((effect, what)) = coeffect(a, &r.body) {
                     let entry = out.entry(scope.clone()).or_default();
                     match effect {
@@ -93,7 +93,7 @@ pub fn compute(program: &Program, schema: &Schema) -> Result<BTreeMap<String, Sc
                 continue;
             }
             if let Some(rd) = classify_read(&scope, a, &inputs_by_scope)
-                .or_else(|| relations.read(&scope, &a.pred))
+                .or_else(|| relations.read(&scope, a.pred.name()))
                 .or_else(|| rows_read(&scope, a))
             {
                 out.entry(scope.clone()).or_default().reads.insert(rd);
@@ -114,7 +114,7 @@ fn guarded_providers(program: &Program) -> BTreeSet<String> {
     for s in &program.statements {
         let Stmt::Rule(r) = s else { continue };
         let (crate::modules::DECLARED, [crate::ast::Term::Val(crate::value::Value::Str(name)), _]) =
-            (r.head.pred.as_str(), r.head.args.as_slice())
+            (r.head.pred.name(), r.head.args.as_slice())
         else {
             continue;
         };
@@ -184,7 +184,7 @@ impl Relations {
 /// Another scope's exported relation read through its rows
 /// (`modules::ROWS`, `__rows("blue", "made", [..])`): `output S.p`.
 fn rows_read(scope: &str, a: &crate::ast::Atom) -> Option<String> {
-    if a.pred != modules::ROWS {
+    if a.pred.as_internal() != Some(modules::ROWS) {
         return None;
     }
     let (s, p) = (const_str(a.args.first()?)?, const_str(a.args.get(1)?)?);
@@ -210,7 +210,7 @@ fn relations(program: &Program) -> Relations {
                     out.inputs
                         .entry(u.name.clone())
                         .or_default()
-                        .insert(e.pred.clone());
+                        .insert(e.pred.to_string());
                 }
                 Stmt::Output(o) if o.value.is_none() && o.ty.is_none() => {
                     out.outputs
@@ -273,7 +273,7 @@ fn input_names(declared: &[Declared]) -> BTreeMap<String, BTreeSet<String>> {
 /// (`collect_offers`), from the declaration, whether or not a rule ever
 /// gives it a value.
 fn classify_write(a: &crate::ast::Atom) -> Option<String> {
-    match (a.pred.as_str(), a.args.len()) {
+    match (a.pred.name(), a.args.len()) {
         ("arg" | "arg_add", 5) => {
             let typ = const_str(&a.args[0]);
             match typ.as_deref() {
@@ -314,7 +314,7 @@ fn classify_read(
     a: &crate::ast::Atom,
     inputs_by_scope: &BTreeMap<String, BTreeSet<String>>,
 ) -> Option<String> {
-    match (a.pred.as_str(), a.args.len()) {
+    match (a.pred.name(), a.args.len()) {
         ("attr" | "attr_stuck", 4) | ("attr_conflict", 5) => {
             let typ = const_str(&a.args[0]);
             match typ.as_deref() {
@@ -386,7 +386,7 @@ fn coeffect(a: &crate::ast::Atom, body: &[Lit]) -> Option<(Coeffect, String)> {
             t => pattern(t),
         }
     };
-    let pred = a.pred.as_str();
+    let pred = a.pred.name();
     if let Some((format, _)) = pred.strip_prefix("table.").and_then(|r| r.split_once('.')) {
         if format == crate::tables::VALUE {
             return None;

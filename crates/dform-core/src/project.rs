@@ -1309,7 +1309,7 @@ impl Checking<'_> {
 
 fn atom(pred: &str, args: Vec<Term>) -> Atom {
     Atom {
-        pred: pred.to_string(),
+        pred: crate::ast::Name::user(pred),
         args,
         record: None,
         span: Default::default(),

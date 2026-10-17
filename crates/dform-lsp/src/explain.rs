@@ -172,7 +172,7 @@ fn up(e: &Evaluated, n: NodeId) -> Vec<NodeId> {
     let View::Fact { fact, .. } = c.view(n) else {
         return Vec::new();
     };
-    match fact.pred.as_str() {
+    match fact.pred.name() {
         "arg" => {
             let attrs: Vec<NodeId> = e
                 .parents(n)

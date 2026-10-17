@@ -175,7 +175,7 @@ impl Surface<'_, '_> {
     /// of it, masked where it is a secret's, else the value.
     fn written_step<'f>(&self, fact: &'f Fact, own: &Site, focus: Option<&Focus>) -> Written<'f> {
         let keys = focus.map(|f| f.keys.as_slice()).unwrap_or_default();
-        let mut value = match fact.pred.as_str() {
+        let mut value = match fact.pred.name() {
             "arg" | "attr" => fact.args.get(3),
             _ => None,
         };
@@ -216,7 +216,7 @@ impl Surface<'_, '_> {
         rhs: Option<&str>,
     ) -> String {
         let redact = self.p.redact;
-        let whole = match fact.pred.as_str() {
+        let whole = match fact.pred.name() {
             "arg" | "attr" => fact.args.get(3),
             _ => None,
         };
@@ -451,7 +451,7 @@ fn read_cell(
         let View::Fact { fact, alts, .. } = circuit.view(*ch) else {
             continue;
         };
-        if matches!(fact.pred.as_str(), "attr" | "arg" | "want") {
+        if matches!(fact.pred.name(), "attr" | "arg" | "want") {
             continue;
         }
         if let Some(&alt) = alts.iter().min_by_key(|a| c.size(circuit, **a))
@@ -490,6 +490,7 @@ fn called(circuit: &Circuit, children: &[NodeId]) -> Option<(NodeId, Vec<String>
 /// relation is named for the call; not the call's demand (`f?`).
 fn is_call(fact: &Fact) -> bool {
     fact.pred
+        .name()
         .rsplit_once("::")
         .is_some_and(|(scope, f)| scope.starts_with("call at ") && !f.ends_with('?'))
 }
@@ -687,7 +688,7 @@ pub(super) fn passed_cell(
         let View::Fact { fact, alts, .. } = circuit.view(*ch) else {
             return None;
         };
-        if matches!(fact.pred.as_str(), "attr" | "arg" | "want") {
+        if matches!(fact.pred.name(), "attr" | "arg" | "want") {
             return None;
         }
         let alt = *alts.iter().min_by_key(|a| c.size(circuit, **a))?;

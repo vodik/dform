@@ -299,8 +299,11 @@ pub fn shown_call(name: &str) -> String {
 }
 
 /// Whether `name` is a builtin predicate: a function to bool.
-pub fn is_predicate(name: &str) -> bool {
-    get(name).is_some_and(Function::is_predicate)
+/// Whether the atom `name(..)` is a call of a function to bool: a public
+/// one by a program's name, one of the lowering's (`__known`) only by the
+/// compiler's.
+pub fn is_predicate(name: &crate::ast::Name) -> bool {
+    get(name.name()).is_some_and(|f| f.is_predicate() && f.internal == name.is_internal())
 }
 
 /// The error at a call of `name`, which no program may call: unknown, or

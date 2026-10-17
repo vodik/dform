@@ -67,7 +67,7 @@ impl Printer<'_> {
     /// [`because`]: Printer::because
     pub fn want(&self, rules: &[RuleStmt], addr: &Address) -> Option<Vec<Because>> {
         let f = Fact::new(
-            "want",
+            crate::ast::Name::user("want"),
             vec![Value::Str(addr.typ.clone()), Value::Str(addr.name.clone())],
         );
         let id = self.circuit.fact_id(&f)?;
@@ -89,7 +89,7 @@ impl Printer<'_> {
         let path = path.split('[').next().unwrap_or(path);
         let s = |x: &str| Term::Val(Value::Str(x.to_string()));
         let pattern = Atom {
-            pred: "attr".into(),
+            pred: crate::ast::Name::user("attr"),
             args: vec![s(&addr.typ), s(&addr.name), s(path), Term::Wildcard],
             record: None,
             span: Default::default(),
@@ -110,7 +110,9 @@ impl Printer<'_> {
         let c = self.circuit;
         let mut out = Vec::new();
         for f in c.facts() {
-            if matches!(f.pred.as_str(), "want" | "attr" | "arg") || f.pred.starts_with("table.") {
+            if matches!(f.pred.name(), "want" | "attr" | "arg")
+                || f.pred.name().starts_with("table.")
+            {
                 continue;
             }
             let Some(View::Fact { fact, alts, .. }) = c.fact_id(&f).map(|id| c.view(id)) else {

@@ -144,7 +144,7 @@ impl Graph<'_> {
         let Some(body) = body.or_else(|| self.used(scope, copy)) else {
             return;
         };
-        let cell = self.column(body, &format!("{OUTPUT}{k}"), 1, 0);
+        let cell = self.column(body, &Name::user(format!("{OUTPUT}{k}")), 1, 0);
         match v {
             Term::Var(x) => {
                 let x = self.var(&x);

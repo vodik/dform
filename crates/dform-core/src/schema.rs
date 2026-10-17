@@ -840,7 +840,7 @@ impl Schema {
                     args.len()
                 )
             };
-            match f.pred.as_str() {
+            match f.pred.name() {
                 "type_attr" => {
                     let [Value::Str(t), Value::Str(p), ty, Value::List(flags)] = args.as_slice()
                     else {
@@ -1046,7 +1046,7 @@ impl Schema {
             .iter()
             .map(|f| {
                 let mut f = f.clone();
-                if PER_TYPE.contains(&f.pred.as_str())
+                if PER_TYPE.contains(&f.pred.name())
                     && let [t, p, ..] = f.args.as_mut_slice()
                 {
                     match p {
@@ -1197,7 +1197,7 @@ impl Schema {
         self.facts
             .iter()
             .filter(|f| {
-                !PER_TYPE.contains(&f.pred.as_str())
+                !PER_TYPE.contains(&f.pred.name())
                     || matches!(f.args.first(), Some(Term::Val(Value::Str(t))) if keep.contains(t))
             })
             .cloned()
@@ -1273,7 +1273,7 @@ pub fn named_types(program: &crate::ast::Program, facts: &[Atom]) -> Option<BTre
     fn lit(l: &Lit, out: &mut BTreeSet<String>) -> Option<()> {
         match l {
             Lit::Pos(a) | Lit::Not(a) => {
-                if PER_TYPE.contains(&a.pred.as_str())
+                if PER_TYPE.contains(&a.pred.name())
                     && !matches!(a.args.first(), Some(Term::Val(_)))
                 {
                     return None;

@@ -39,9 +39,9 @@ pub(super) struct Rec<'a> {
     pub(super) known: &'a RefCell<stuck::Known>,
     /// Predicates defined by an aggregate rule (and `attr`): a positive read
     /// of one of their stuck groups is undetermined.
-    pub(super) aggregates: &'a BTreeSet<String>,
+    pub(super) aggregates: &'a BTreeSet<crate::ast::Name>,
     /// Predicates a `not { .. }` helper defines ([`Helper::Negation`]).
-    pub(super) negations: &'a BTreeSet<String>,
+    pub(super) negations: &'a BTreeSet<crate::ast::Name>,
     pub(super) found: RefCell<Vec<Stuck>>,
     /// The run's secrets, which its `random.*` calls derive with.
     pub(super) secrets: &'a crate::secrets::Run,
