@@ -259,6 +259,7 @@ mod tick_assignment;
 mod time;
 mod timing;
 mod trace_export;
+mod trace_tree;
 mod transport_ssh;
 mod transports;
 mod tree_tick;

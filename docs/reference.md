@@ -862,8 +862,8 @@ is in (`tracing`'s format; the spans are the trace's, "A run's trace"):
 
 ```text
 0.022s DEBUG dform.run{..}:plan.phase{otel.name=located the deployment}:io.call{otel.name=s3.get otel.kind="client" kind="s3.get" addr="s3://dform/stacks.app/state.master"}: close time.busy=0.00ns time.idle=2.20ms
-0.969s DEBUG dform.run{..}:plan.phase{otel.name=providers started and configured}:provider.call{otel.name=ovh Configure ..}: close time.busy=0.00ns time.idle=607ms
-1.575s DEBUG dform.run{..}:plan.phase{otel.name=planned (refresh, Plan calls, policy)}:provider.call{otel.name=ovh Read .. addr="ovh.instance lab-0"}: close time.busy=0.00ns time.idle=606ms
+0.969s DEBUG dform.run{..}:plan.phase{otel.name=providers started and configured}:provider.call{otel.name=configure ovh ..}: close time.busy=0.00ns time.idle=607ms
+1.575s DEBUG dform.run{..}:plan.phase{otel.name=planned (refresh, Plan calls, policy)}:provider.call{otel.name=read ovh.instance lab-0 .. addr="ovh.instance lab-0"}: close time.busy=0.00ns time.idle=606ms
 1.612s DEBUG dform.run{otel.name=dform plan command="plan"}: close time.busy=1.61s time.idle=24.6µs
 ```
 
@@ -5422,30 +5422,89 @@ an export fails or the collector takes nothing for 20s; then it says how
 many spans did not reach the collector, and why. The file is written as
 the spans end, its last line at the run's end.
 
-A run is one trace, under its `dform.run` span (`dform plan`); a run that
-fails says its trace id after the error. The spans:
+A run is one trace, one root: its `dform.run` span (`dform plan`); a run
+that fails says its trace id after the error. The tree is this table,
+which tests/trace_tree.rs reads and checks a plan's and an apply's trace
+against. A span is named by what it is, in the reader's words: a noun
+phrase (a call by what it asks and what it is about), a provider by its
+name (`ovh`, its handshake's; a provider not named yet by its file's,
+`k8s` for `dform-provider-k8s.wasm`), never a path or a name of dform's
+own. In a name, `{n}` is a number, `{command}` dform's command,
+`{deployment}` a deployment's full name, `{provider}` a provider's name,
+`{method}` an HTTP method (`PATCH`), `{asks}` what a call asks
+(`handshake`, `configure`, `schema`, `query`, `read`, `plan`, `apply`,
+`import`, `reveal`, `health`), and `{about}` what it is about: the
+resource's address (`ovh.instance k3s.server`), the extern's name
+(`ovh.zone`), or for a call about none, its provider (`configure ovh`).
+A span is under one of those its row names; where that is a
+deployment's span, a run of one deployment has it under the run's
+instead. Kind is the span as `tracing` names it (what a `DFORM_LOG` line
+says), then OpenTelemetry's kind: a client span is a call, from its
+request to its answer, its status `ok` or `error`. A span carries the
+attributes its row names, each at most once; they name things
+(addresses, kinds, locations) and count them, and an account, a secret
+or a value is never one.
 
-| Span | What | Attributes |
-|---|---|---|
-| `plan.phase` | a step: loaded and compiled, located the deployment, providers started and configured, evaluated, each extern round, refresh, Plan calls, the policy pass, each deployment of a project's plan | `count` (the refresh's objects, the Plan calls asked) |
-| `provider.call` | one call to a provider, from its submit to its answer (a client span, its status `ok` or `error`) | `provider`, `kind` (`Configure`, `Read`, `Plan`, `Apply`, `Query`, ..), `addr` (the resource's address or the extern's name), `session` (the configured instance the call is made in; a Configure's, the one it opened) |
-| `provider.export` | a wasm provider's run of one call: the server's side of its `provider.call`, under it and named as it is (a server span, its status the answer's) | `export` (the WIT export, `dform:provider/provider@1.0.0#read`), `error.type` when it trapped (`trap`, `exit`, or `deadline`: past the call's epoch deadline) |
-| `io.call` | a request dform makes itself, or one a provider sends through the host (`http`, under the `provider.call` it is made for, a wasm provider's under its `provider.export`; a client span) | `kind` (`s3.get`, `s3.put`, `s3.list`, `io.read`, `oci.resolve`, `http`), `addr` (the location, without its userinfo, query or fragment); for `http`, `provider`, `bucket` and the answer's `status` |
-| `tick` | an apply tick | `tick` |
-| `apply.wait` | a tick waiting on values the world has not reached (R-81) | `tick`, `kind` (`world`, `extern`), `count` |
-| `wasm.compile` | a wasm provider's code, under its start: compiled, or the cache's (`~/.cache/dform/wasm`) | `path`, `cached` |
-| `wasm.link` | its imports resolved against the host's, under its start | |
-| `wasm.instantiate` | its instance made, under its start | |
-| `ratelimit.wait` | a provider's request waiting on its bucket's window in the host, under its `io.call` | `provider`, `session`, `bucket`, `queued` (the requests before it), `window` |
+| Span | Kind | Under | Attributes | What |
+|---|---|---|---|---|
+| `dform {command}` | `dform.run`, internal | (the root) | `command` | the run |
+| `deployment {deployment}` | `plan.phase`, internal | `dform {command}` | | one deployment of a tree's run, its steps under it |
+| `waits on {deployment}` | `plan.wait`, internal | `deployment {deployment}` | `upstream`, `until` | a deployment of a tree's plan waiting on another's plan, `until` it is evaluated or planned |
+| `loaded and compiled` | `plan.phase`, internal | `deployment {deployment}` | | the program read and compiled |
+| `located the deployment` | `plan.phase`, internal | `deployment {deployment}` | | its key, its backend and its master found |
+| `state read` | `plan.phase`, internal | `deployment {deployment}` | | its state: the checkpoint and the log after it |
+| `providers started and configured` | `plan.phase`, internal | `deployment {deployment}` | | each provider it uses started or reused, and configured |
+| `provider {provider} started` | `plan.phase`, internal | `providers started and configured` | `path` | a provider's process spawned, or its component loaded, and its handshake |
+| `wasm.compile` | `wasm.compile`, internal | `provider {provider} started` | `path`, `cached` | a component's code compiled, or the cache's (`~/.cache/dform/wasm`) |
+| `wasm.link` | `wasm.link`, internal | `provider {provider} started` | | its imports resolved against the host's |
+| `wasm.instantiate` | `wasm.instantiate`, internal | `provider {provider} started` | | its instance made |
+| `providers' schema loaded` | `plan.phase`, internal | `deployment {deployment}` | | each provider's schema asked |
+| `checked against the schema` | `plan.phase`, internal | `deployment {deployment}` | | the program checked against it |
+| `evaluated` | `plan.phase`, internal | `deployment {deployment}`, `tick {n}`, `wait, tick {n}`, `policy pass` | | the program evaluated, its externs asked |
+| `evaluation, round {n}` | `plan.phase`, internal | `evaluated` | | one round of it: the externs it asks are asked together |
+| `io.read` | `io.call`, client | `evaluated`, `evaluation, round {n}` | `kind`, `addr` | a read the program makes (`io.read`) |
+| `oci.resolve` | `io.call`, client | `evaluated`, `evaluation, round {n}` | `kind`, `addr` | an image's tag resolved at its registry |
+| `planned (refresh, Plan calls, policy)` | `plan.phase`, internal | `deployment {deployment}` | | a plan's planning |
+| `refresh` | `plan.phase`, internal | `deployment {deployment}`, `planned (refresh, Plan calls, policy)`, `tick {n}`, `wait, tick {n}` | `count` | the objects the state maps read |
+| `Plan calls` | `plan.phase`, internal | `planned (refresh, Plan calls, policy)`, `deployment {deployment}`, `tick {n}` | `count`, `addresses` | the Plan calls asked together |
+| `policy pass` | `plan.phase`, internal | `planned (refresh, Plan calls, policy)`, `deployment {deployment}`, `tick {n}` | | the policy's rules over the plan |
+| `evaluated the last apply's program, for why` | `plan.phase`, internal | `deployment {deployment}`, `tick {n}` | | the last apply's program evaluated again, for `why` |
+| `tick {n}` | `tick`, internal | `deployment {deployment}` | `tick` | an apply's tick |
+| `wait, tick {n}` | `apply.wait`, internal | `tick {n}` | `tick`, `kind` (`world`, `extern`), `count` | a tick waiting on values the world has not reached (R-81) |
+| `{asks} {about}` | `provider.call`, client | `provider {provider} started`, `providers started and configured`, `providers' schema loaded`, `evaluated`, `evaluation, round {n}`, `refresh`, `Plan calls`, `planned (refresh, Plan calls, policy)`, `tick {n}`, `wait, tick {n}` | `provider`, `provider.call` (`Plan`), `addr` (the resource's address or the extern's name), `session` (the configured instance it is made in; a Configure's, the one it opened), `provider.took` (a component's: ms in the provider), `error.type` (a component's trap: `trap`, `exit`, or `deadline`, past the call's epoch deadline) | one call to a provider, from its submit to the run taking its answer |
+| `{provider} {method}` | `io.call`, client | `{asks} {about}` | `kind` (`http`), `provider`, `addr` (the location, without its userinfo, query or fragment), `dry_run` (the request asks for one), `bucket`, `status` | a request a provider sends through the host |
+| `{provider} waits on its window` | `ratelimit.wait`, internal | `{provider} {method}` | `provider`, `session`, `bucket`, `queued` (the requests before it), `window` | the request waiting on its bucket's window |
+| `{provider} ssh exec` | `io.call`, client | `{asks} {about}` | `kind` (`ssh.exec`), `provider`, `addr` (`ssh://HOST`), `status` | a command a provider runs over SSH through the host |
+| `{provider} ssh write` | `io.call`, client | `{asks} {about}` | `kind`, `provider`, `addr` | a file a provider writes over SSH |
+| `{provider} ssh forward` | `io.call`, client | `{asks} {about}` | `kind`, `provider`, `addr` | a tunnel a provider forwards over SSH |
+| `{provider} git commit` | `io.call`, client | `{asks} {about}` | `kind`, `provider`, `addr` | a commit a provider pushes to a repository |
+| `{provider} io.read` | `io.call`, client | `{asks} {about}` | `kind`, `provider`, `addr` | a read a provider asks of the host |
+| `backend opened` | `store`, internal | `deployment {deployment}`, `located the deployment`, `outputs read`, `stack listed` | `addr` | a bucket's prefix opened: whether the bucket holds a write's condition asked once |
+| `master found` | `store`, internal | `deployment {deployment}`, `located the deployment` | | the deployment's master key read, or made for one with no state |
+| `lock taken` | `store`, internal | `deployment {deployment}` | | an apply's lock (its lease) taken, the state fenced |
+| `lease renewed` | `store`, internal | `lock taken`, `lease checked` | | the lease extended, on its own thread |
+| `lease checked` | `store`, internal | `state written`, `outputs published`, `tick {n}` | | the lease found still this run's, before a write or an Apply call |
+| `state written` | `store`, internal | `deployment {deployment}`, `tick {n}` | | the state's change logged and its checkpoint written |
+| `audit appended` | `store`, internal | `deployment {deployment}`, `lock taken`, `state written`, `tick {n}` | `entry` (its kind: `state`, `lease`, `apply_start`, ..) | an entry in the audit log |
+| `audit read` | `store`, internal | `deployment {deployment}`, `state read`, `master found`, `lock taken`, `stack listed` | | the audit log read: its object, or its segments |
+| `outputs published` | `store`, internal | `deployment {deployment}`, `tick {n}` | | the outputs written beside the state |
+| `outputs read` | `store`, internal | `deployment {deployment}`, `located the deployment`, `evaluated` | `deployment` | another deployment's published outputs read |
+| `lock released` | `store`, internal | `deployment {deployment}`, `tick {n}` | | the lease given up |
+| `stack listed` | `store`, internal | `dform {command}` | `stack` | `dform stack list`'s look at one stack's deployments, at its backend |
+| `s3.get` | `io.call`, client | `located the deployment`, `state read`, `master found`, `audit read`, `lock taken`, `lease checked`, `lease renewed`, `state written`, `audit appended`, `outputs published`, `outputs read`, `lock released`, `tick {n}`, `stack listed` | `kind`, `addr` | an object read from the bucket |
+| `s3.put` | `io.call`, client | `backend opened`, `master found`, `lock taken`, `lease renewed`, `state written`, `audit appended`, `outputs published`, `lock released` | `kind`, `addr` | an object written |
+| `s3.list` | `io.call`, client | `state read`, `audit read`, `lock taken`, `audit appended`, `stack listed` | `kind`, `addr` | a prefix's keys listed |
+| `s3.delete` | `io.call`, client | `backend opened`, `deployment {deployment}`, `tick {n}` | `kind`, `addr` | an object removed |
 
 The order the run took is the viewer's, from each span's times and
 parent: calls sent one after another follow each other, a batch sent
 together begins before any of it ends; the deployments of a tree's plan
-run at once, each's phases under its own `deployment` span. A call ends when the run takes
-its answer: while the run waits on one provider, another's answer waits
-for it, so a batch to two providers shows the quicker one's calls as
-long as the slower one's. A span names things (addresses, kinds,
-locations) and counts them; it never holds a value.
+run at once, each's steps under its own `deployment` span. A call ends
+when the run takes its answer: while the run waits on one provider,
+another's answer waits for it, so a batch to two providers shows the
+quicker one's calls as long as the slower one's. A component runs in
+dform's process: its side of a call is the call's `provider.took`, not
+a span of its own.
 
 ## Status
 

@@ -1,28 +1,36 @@
 //! Where a run's time goes: `tracing` spans, for a trace file (`--trace
 //! FILE`) or a collector (`OTEL_EXPORTER_OTLP_ENDPOINT`, the `dform`
 //! crate's `otel` feature), both src/trace.rs, and for `DFORM_LOG`'s
-//! lines ([`crate::log`]). Each is named for what it is, the same in
-//! every run, and carries names, kinds and counts, never a value:
+//! lines ([`crate::log`]). Their tree is docs/reference.md's "A run's
+//! trace" table, which tests/trace_tree.rs checks a run's trace against:
+//! each span's name (`otel.name`, what it is in the reader's words, a
+//! call by what it asks and what it is about, never a path), its kind,
+//! the spans it may be under and its attributes, which name and count
+//! things, never a value. As `tracing` names them:
 //!
-//! - `plan.phase`: a step of the run (loaded and compiled, located the
-//!   deployment, evaluated, refresh, Plan calls, the policy pass, ..),
-//!   its text under `otel.name`;
-//! - `provider.call`: one call to a provider, with `provider` (its name
-//!   as the run says it), `kind` (`Configure`, `Read`, `Plan`, `Query`,
-//!   ..), `addr` (the resource's address, or the extern's name) and
-//!   `session` (the configured instance the call is made in);
-//! - `io.call`: one request dform makes itself, with `kind` (`s3.get`,
-//!   `s3.put`, `s3.list`, `io.read`, `oci.resolve`, ..) and `addr` (the
-//!   location, without its userinfo, query or fragment); or one a
-//!   provider sends through the host (`http`, with `provider`, `bucket`
-//!   and `status`), under the `provider.call` it is made for
-//!   (`plugin::timed::call_span`);
-//! - `tick`: one apply tick, with `tick` (from 1);
-//! - `apply.wait`: a tick waiting on values the world has not reached
-//!   (R-81), with `tick`, `kind` (`world`, `extern`) and `count`;
+//! - `dform.run`: the run, the one root (src/trace.rs);
+//! - `plan.phase`: a step of the run (a deployment of a tree, loaded and
+//!   compiled, located the deployment, evaluated, refresh, Plan calls,
+//!   the policy pass, ..);
+//! - `plan.wait`: a deployment of a tree waiting on another's plan;
+//! - `provider.call`: one call to a provider (`plan ovh.instance a`),
+//!   with `provider`, `provider.call` (its kind: `Configure`, `Plan`,
+//!   ..), `addr` and `session`, and a component's `provider.took` and
+//!   `error.type` (`plugin::timed`);
+//! - `io.call`: one request dform makes itself (`s3.get`, `io.read`,
+//!   `oci.resolve`, ..), or one the host makes for a provider (`http`, an
+//!   SSH call, a commit, a read), under the `provider.call` it is made
+//!   for (`plugin::timed::call_span`), with `kind` and `addr` (the
+//!   location, without its userinfo, query or fragment: [`location`]);
 //! - `ratelimit.wait`: a provider's request waiting on its bucket's
-//!   window in the host (`dform_host::ratelimit`), under its `io.call`,
-//!   with `provider`, `session`, `bucket`, `queued` and `window`.
+//!   window in the host, under its `io.call`;
+//! - `store`: what a deployment's store does (its backend opened, its
+//!   state written, its lock taken, its lease renewed, its audit log
+//!   appended to, its outputs read and published);
+//! - `tick`, `apply.wait`: an apply's tick, and a tick waiting on values
+//!   the world has not reached (R-81);
+//! - `wasm.compile`, `wasm.link`, `wasm.instantiate`: a component's
+//!   start, under its provider's.
 //!
 //! Each is the function that does the work, `#[tracing::instrument]`ed
 //! under [`TARGET`]; a call, whose answer may come after others', is a
