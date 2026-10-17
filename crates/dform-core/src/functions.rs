@@ -15,8 +15,9 @@
 //! (R-155) but the lowering's own (`add`, `__path`), which no program
 //! writes. `?` after
 //! the result marks a partial function, `forwards` one a secret flows
-//! through uninspected (`secrets`, E0301), `forwards nulls` one whose null
-//! arguments are not content positions (Rule 2), and `internal` the
+//! through uninspected (`secrets`, E0301), `forwards nulls` one that
+//! carries a null inside an argument (Rule 2; an argument that is a null
+//! waits, whatever the flag: `engine::nulls::waits_on`), and `internal` the
 //! lowering's own (`add`, `__path`), which a program may not call. A
 //! function is pure, or a coeffect, `reads` (`io.read`): a read the
 //! context satisfies, lowered to a table, never a body.
@@ -153,7 +154,8 @@ pub struct Function {
     pub partial: bool,
     /// `forwards`: a secret argument flows to the result uninspected.
     pub forwards: bool,
-    /// `forwards nulls`: a null argument is not a content position.
+    /// `forwards nulls`: a null inside an argument is not a content
+    /// position; an argument that is a null still is.
     pub forwards_nulls: bool,
     /// `internal`: the lowering's, not callable from a program.
     pub internal: bool,

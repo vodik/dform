@@ -5,7 +5,7 @@ use super::errors::{
     at_suffix, failed_builtin, missing_walk, not_an_object, ref_and_string, side_unanswered,
     unanswered,
 };
-use super::nulls::{Rec, forwards_nulls, spreads};
+use super::nulls::{Rec, waits_on};
 use super::unify::bind_term;
 use crate::ast::{Atom, Lit, Term};
 use crate::lattice::{Truth, nulls_in};
@@ -47,8 +47,8 @@ pub(super) fn eval_builtin_pred(
         }
         return Ok(Some(false));
     }
-    if !forwards_nulls(&atom.pred) && vals.iter().any(stuck::has_null) {
-        let nulls = vals.iter().flat_map(nulls_in).collect();
+    let nulls = waits_on(&atom.pred, &vals);
+    if !nulls.is_empty() {
         rec.stuck_in(state, nulls, &atom.pred);
         return Ok(None);
     }
@@ -271,13 +271,16 @@ pub(super) fn eval_func(
     secrets: &crate::secrets::Run,
 ) -> Option<Value> {
     // A path into a bound value is followed in place: the value is not
-    // copied to be an argument (`__path` forwards nulls, its path is a
-    // string).
+    // copied to be an argument (its path is a string).
     if name == "__path"
         && let [Term::Var(x), path] = args
         && let Some(Value::Str(path)) = eval_term(path, state, secrets)
     {
-        return crate::functions::path_of(state.get(x)?, &path);
+        let value = state.get(x)?;
+        return match waits_on(name, [value]).is_empty() {
+            true => crate::functions::path_of(value, &path),
+            false => None,
+        };
     }
     if !crate::functions::applies(name) {
         return None;
@@ -286,15 +289,12 @@ pub(super) fn eval_func(
     for a in args {
         vals.push(eval_term(a, state, secrets)?);
     }
-    // Rule 2: every builtin argument is a content position. A builtin
-    // over a null has no value; the literal that needs it is stuck. But a
-    // string template over secrets a provider holds, which no evaluation
-    // fills: each is in place as its placeholder (R-218).
-    if !forwards_nulls(name) && vals.iter().any(stuck::has_null) {
+    // Rule 2: a builtin that waits on a null ([`waits_on`]) has no value;
+    // the literal that needs it is stuck. But a string template over
+    // secrets a provider holds, which no evaluation fills: each is in
+    // place as its placeholder (R-218).
+    if !waits_on(name, &vals).is_empty() {
         vals = crate::secrets::held::in_template(name, &vals)?;
-    }
-    if spreads(name) && vals.iter().any(|v| matches!(v, Value::Null { .. })) {
-        return None;
     }
     crate::functions::apply(name, secrets, &as_params(name, vals))
 }

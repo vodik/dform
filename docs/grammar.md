@@ -2637,7 +2637,9 @@ flag       := "forwards" | "forwards" "nulls" | "reads"
 `?` marks a partial function: one with no answer for some valid input (a
 match that fails, an empty list, a text that is no document). `forwards`: a secret argument flows through
 to the result uninspected (otherwise a call over a secret is E0301).
-`forwards nulls`: a null argument is not a content position (Rule 2).
+`forwards nulls`: a null inside an argument is carried to the result where
+the function puts it, not a content position (Rule 2). An argument that is
+a null itself is unknown whole: the call waits for it, whatever the flag.
 `reads`: a coeffect, a read the context satisfies (`io.read`): it lowers
 to a table the host answers, never a body; every other function is pure.
 `internal`: the lowering's own, not callable from a program

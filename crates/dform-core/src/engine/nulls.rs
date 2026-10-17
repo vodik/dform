@@ -7,6 +7,7 @@ use crate::lattice::{Truth, nulls_in};
 use crate::partition;
 use crate::stuck::{self, Stuck};
 use crate::value::Value;
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 
@@ -138,23 +139,33 @@ impl Rec<'_> {
     }
 }
 
-/// A spread's lowering (R-199): it carries a null leaf in a part, and a
-/// part that is a null blocks it ([`blocked_by_null`]).
-pub(super) fn spreads(name: &str) -> bool {
-    name == crate::functions::MERGE || name == crate::functions::CONCAT
+/// Rule 2 for a call, the one rule every builtin is read by (R-199,
+/// R-183): an argument that is entirely unknown, a null itself, leaves the
+/// call nothing to compute from, so the call waits for it, whatever the
+/// function; a null inside an argument otherwise known is a content
+/// position too, unless the function carries it where it puts the argument
+/// (`forwards nulls`). The labels of the nulls the call waits on, none
+/// when it runs. The aggregates are not calls: `eval_rule_collect` decides
+/// their content positions.
+pub(super) fn waits_on<'v>(
+    name: &str,
+    args: impl IntoIterator<Item = &'v Value>,
+) -> BTreeSet<String> {
+    let mut nulls = BTreeSet::new();
+    if partition::AGGREGATES.contains(&name) {
+        return nulls;
+    }
+    let carries = crate::functions::get(name).is_some_and(|f| f.forwards_nulls);
+    for v in args {
+        if !carries || matches!(v, Value::Null { .. }) {
+            nulls.extend(nulls_in(v));
+        }
+    }
+    nulls
 }
 
-/// Builtins that carry nulls instead of reading them: the aggregates (whose
-/// content positions `eval_rule_collect` decides) and the functions
-/// declared `forwards nulls`.
-pub(super) fn forwards_nulls(name: &str) -> bool {
-    partition::AGGREGATES.contains(&name)
-        || crate::functions::get(name).is_some_and(|f| f.forwards_nulls)
-}
-
-/// The innermost builtin application in `t` whose arguments are ground but
-/// carry a null, with those nulls: every builtin argument is a content
-/// position (Rule 2).
+/// The innermost builtin application in `t` whose arguments are ground
+/// and that waits on a null ([`waits_on`]), with those nulls.
 fn blocked_by_null(
     t: &Term,
     state: &HashMap<String, Value>,
@@ -165,34 +176,20 @@ fn blocked_by_null(
             if let Some(inner) = args.iter().find_map(|a| blocked_by_null(a, state, secrets)) {
                 return Some(inner);
             }
-            if spreads(name) {
-                // A spread's part not known yet (R-199): the literal's
-                // fields are not known either, so it waits; a null leaf
-                // inside a part is carried (R-183).
-                let mut nulls = BTreeSet::new();
-                for a in args {
-                    if let v @ Value::Null { .. } = eval_term(a, state, secrets)? {
-                        nulls.extend(nulls_in(&v));
-                    }
-                }
-                return (!nulls.is_empty()).then(|| (name.clone(), nulls));
-            }
-            if forwards_nulls(name) {
-                return None;
-            }
             // A template over held secrets has its value (R-218).
             if name == crate::address::FORMAT && eval_term(t, state, secrets).is_some() {
                 return None;
             }
-            let mut nulls = BTreeSet::new();
+            let mut vals = Vec::with_capacity(args.len());
             for a in args {
                 // A bound variable's value is read where it is, not copied.
-                match a {
-                    Term::Var(x) => nulls.extend(nulls_in(state.get(x)?)),
-                    Term::Val(v) => nulls.extend(nulls_in(v)),
-                    a => nulls.extend(nulls_in(&eval_term(a, state, secrets)?)),
-                }
+                vals.push(match a {
+                    Term::Var(x) => Cow::Borrowed(state.get(x)?),
+                    Term::Val(v) => Cow::Borrowed(v),
+                    a => Cow::Owned(eval_term(a, state, secrets)?),
+                });
             }
+            let nulls = waits_on(name, vals.iter().map(|v| &**v));
             (!nulls.is_empty()).then(|| (name.clone(), nulls))
         }
         Term::List(xs) => xs.iter().find_map(|x| blocked_by_null(x, state, secrets)),

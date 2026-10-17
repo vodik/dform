@@ -56,11 +56,11 @@ internal fn __null(
   path: string,
   class: string,
   ty: string,
-) -> any forwards nulls
+) -> any
 
 #| The label a null of an attribute path carries.
 #| example: __label(T, A, P)
-internal fn __label(type: string, name: string, path: string) -> string forwards nulls
+internal fn __label(type: string, name: string, path: string) -> string
 
 #| The value read as the value type `ty` (`inet`, `time`, `bytes`, ..): a string parsed, a value of the type itself; an error at the position for a string that is not one. A typed position over a computed value lowers to it (`let n: inet = cfg.net`).
 #| example: __as(cfg.net, "inet")
@@ -110,9 +110,9 @@ internal fn __rest(value: any, key: string, ...) -> any? forwards, forwards null
 #| example: __without(Base, "tags.team")
 internal fn __without(value: any, path: string, ...) -> any? forwards, forwards nulls
 
-#| A range, `start..end` (`inclusive`: `start..=end`), of one ordered type (R-180); no value for ends of two types or of a type with no order. A range literal whose ends are computed lowers to it.
+#| A range, `start..end` (`inclusive`: `start..=end`), of one ordered type (R-180); no value for ends of two types or of a type with no order; it waits while an end is unknown. A range literal whose ends are computed lowers to it.
 #| example: __range(0, N, true)
-internal fn __range(start: any, end: any, inclusive: bool) -> any? forwards nulls
+internal fn __range(start: any, end: any, inclusive: bool) -> any?
 
 #| The number of elements of a list, keys of an object or characters of a string; `x.len` lowers to it (R-155).
 #| example: __len(Xs)

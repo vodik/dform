@@ -146,6 +146,7 @@ mod nested_strings;
 mod no_shell_outs;
 mod nokey_apply;
 mod not_in;
+mod null_waits;
 mod object_leaves;
 mod oci_resolve;
 mod oci_type;
