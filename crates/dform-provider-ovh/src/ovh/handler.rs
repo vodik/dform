@@ -24,7 +24,7 @@ impl Handler for Provider {
         session: Session,
         call: backend::Call,
         progress: backend::Progress<'_>,
-    ) -> std::result::Result<Reply, CallError> {
+    ) -> std::result::Result<Reply, dform_sdk::Unanswered> {
         use backend::Call as C;
         match call {
             C::Handshake(req) => Ok(Reply::Handshake(handshake(&req)?)),
@@ -36,10 +36,11 @@ impl Handler for Provider {
                 ))
             }
             call => match self.sessions.get(session) {
-                Some(ovh) => ovh.answer(call, progress).await,
+                Some(ovh) => Ok(ovh.answer(call, progress).await?),
                 None => Err(CallError::Refused(format!(
                     "the provider {PROVIDER} has no session {session}: a Configure opens one"
-                ))),
+                ))
+                .into()),
             },
         }
     }

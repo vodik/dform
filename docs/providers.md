@@ -67,6 +67,33 @@ learns them. What a call awaits is the call's (paced in its session's
 windows, traced under its span), however many it awaits together; a
 thread it starts by itself is in no call.
 
+### The WIT names intent, the host owns policy
+
+A provider says what it means; the host decides how. It never names a
+path, a TTL, a backoff, a destination or a cadence the host did not
+grant, because each of those is a policy the operator owns and every
+provider would otherwise get differently wrong. Three are in the WIT:
+
+- **What it keeps** is a key and a scope (`cache`, below), never a
+  file or an age.
+- **Waiting is an answer**, never a sleep: a call the world is not
+  ready for (an object still terminating, a kind not served yet)
+  answers `not-yet { after-ms, why }` (`call-error`'s case;
+  `dform_sdk::not_yet(after, why)`), and the host asks the same call
+  again in its session after that long, until the call's timeout; the
+  wait is a span under the call (`{provider} waits to ask again`), and
+  the run's end cancels it with the call. The engine never sees it.
+  Natively the SDK waits and asks again (the proto has no not-yet).
+- **Retries are the host's**: a request says whether sending it twice is
+  sending it once (`request.idempotent`, the SDK's from the method
+  unless told: a GET; the k8s provider's dry runs say so), and the host
+  sends an idempotent one again on a transport failure, a 429 or a 5xx
+  (above). A provider never loops on a failure.
+
+Still to come, written into this principle: `log` with a level, a
+target and fields (a provider's `tracing` events forwarded), sessions
+as WIT resources, and the destinations a provider declares (`egress`).
+
 ### The host's cache
 
 A provider that keeps what it fetched or derived (a cluster's OpenAPI
@@ -427,7 +454,9 @@ ABI, WASI 0.3): one instance has every call dform submits in flight at
 once, and an Apply answers a `stream<event>` and a `future` of its
 result, each event written as the provider says it. The host's calls
 that wait on the world (`http.send`, `io.read`, `ssh.exec`, and
-`wasi:clocks`' wait under `dform_sdk::sleep`) are async too, each a
+`wasi:clocks`' wait under `dform_sdk::sleep`, which the OVH provider's
+polls and the k8s provider's wait for a new kind still use: waiting is
+an answer, above) are async too, each a
 subtask: a `Handler` awaits them, and the instance answers its other
 calls meanwhile, so `--parallel` holds for a component as natively.
 What a call awaits together (`dform_sdk::join`, `join_all`) is in

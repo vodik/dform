@@ -1316,47 +1316,37 @@ impl Instance {
         let made = Instance::made(a, t, call);
         let answer = match call {
             Call::Handshake(r) => answered(
-                Instance::exported(
-                    a,
-                    made.clone(),
-                    p.func_handshake(),
-                    conv::to_handshake_request(r),
-                )
-                .await?,
+                self.asked(a, &made, p.func_handshake(), conv::to_handshake_request(r))
+                    .await?,
                 conv::from_handshake_response,
                 Reply::Handshake,
             ),
             Call::Configure(r) => answered(
-                Instance::exported(
-                    a,
-                    made.clone(),
-                    p.func_configure(),
-                    conv::to_configure_request(r),
-                )
-                .await?,
+                self.asked(a, &made, p.func_configure(), conv::to_configure_request(r))
+                    .await?,
                 conv::from_configure_response,
                 Reply::Configure,
             ),
             Call::Schema(r) => answered(
-                Instance::exported(a, made.clone(), p.func_schema(), conv::to_schema_request(r))
+                self.asked(a, &made, p.func_schema(), conv::to_schema_request(r))
                     .await?,
                 conv::from_schema_response,
                 Reply::Schema,
             ),
             Call::Query(r) => answered(
-                Instance::exported(a, made.clone(), p.func_query(), conv::to_query_request(r))
+                self.asked(a, &made, p.func_query(), conv::to_query_request(r))
                     .await?,
                 |rows: &Vec<wp::Row>| conv::from_rows(rows),
                 Reply::Query,
             ),
             Call::Read(r) => answered(
-                Instance::exported(a, made.clone(), p.func_read(), conv::to_read_request(r))
+                self.asked(a, &made, p.func_read(), conv::to_read_request(r))
                     .await?,
                 conv::from_read_response,
                 Reply::Read,
             ),
             Call::Plan(r) => answered(
-                Instance::exported(a, made.clone(), p.func_plan(), conv::to_plan_request(r))
+                self.asked(a, &made, p.func_plan(), conv::to_plan_request(r))
                     .await?,
                 conv::from_plan_response,
                 Reply::Plan,
@@ -1366,19 +1356,19 @@ impl Instance {
             }
             Call::Apply(r) => return self.apply(a, p, who, t, made, r).await,
             Call::Import(r) => answered(
-                Instance::exported(a, made.clone(), p.func_import(), conv::to_import_request(r))
+                self.asked(a, &made, p.func_import(), conv::to_import_request(r))
                     .await?,
                 conv::from_import_response,
                 Reply::Import,
             ),
             Call::Reveal(r) => answered(
-                Instance::exported(a, made.clone(), p.func_reveal(), conv::to_reveal_request(r))
+                self.asked(a, &made, p.func_reveal(), conv::to_reveal_request(r))
                     .await?,
                 conv::from_reveal_response,
                 Reply::Reveal,
             ),
             Call::Health(r) => answered(
-                Instance::exported(a, made.clone(), p.func_health(), conv::to_health_request(r))
+                self.asked(a, &made, p.func_health(), conv::to_health_request(r))
                     .await?,
                 conv::from_health_response,
                 Reply::Health,
@@ -1403,6 +1393,35 @@ impl Instance {
         made: Made,
         r: &pb::ApplyRequest,
     ) -> wasmtime::Result<Result<Reply, CallError>> {
+        loop {
+            match self.apply_once(a, p, t, made.clone(), r).await? {
+                Ok(Err(wp::CallError::NotYet(n))) => self.wait(&n).await,
+                Ok(answer) => {
+                    return Ok(answer
+                        .map_err(conv::from_call_error)
+                        .and_then(|r| decode(conv::from_apply_response(&r)).map(Reply::Apply)));
+                }
+                Err(()) => {
+                    return Ok(Err(CallError::Crashed(format!(
+                        "the provider {} dropped its Apply's answer",
+                        who.borrow()
+                    ))));
+                }
+            }
+        }
+    }
+
+    /// One Apply's answer: its events told as the component writes them,
+    /// then its result once it resolves its future; `Err` when it dropped
+    /// the future.
+    async fn apply_once(
+        &self,
+        a: &Accessor<State>,
+        p: &bindings::exports::dform::provider::provider::Guest,
+        t: Ticket,
+        made: Made,
+        r: &pb::ApplyRequest,
+    ) -> wasmtime::Result<Result<Result<wp::ApplyResponse, wp::CallError>, ()>> {
         let f = p.func_apply();
         let started = a.with(|mut s| {
             f.start_call_concurrent(s.as_context_mut(), (conv::to_apply_request(r),))
@@ -1424,15 +1443,46 @@ impl Instance {
         })?;
         let answered = answer.await;
         Instance::traced(a, task, None);
-        Ok(match answered {
-            Ok(r) => r
-                .map_err(conv::from_call_error)
-                .and_then(|r| decode(conv::from_apply_response(&r)).map(Reply::Apply)),
-            Err(_) => Err(CallError::Crashed(format!(
-                "the provider {} dropped its Apply's answer",
-                who.borrow()
-            ))),
-        })
+        Ok(answered.map_err(|_| ()))
+    }
+
+    /// The export `f`'s answer to `arg` in the call `made`, asked again
+    /// after each not-yet it answers ([`Instance::wait`]).
+    async fn asked<P, W>(
+        &self,
+        a: &Accessor<State>,
+        made: &Made,
+        f: TypedFunc<(P,), (Result<W, wp::CallError>,)>,
+        arg: P,
+    ) -> wasmtime::Result<Result<W, wp::CallError>>
+    where
+        P: Clone,
+        (P,): ComponentNamedList + Lower + Send + Sync + 'static,
+        (Result<W, wp::CallError>,): ComponentNamedList + Lift + Send + Sync + 'static,
+    {
+        loop {
+            match Instance::exported(a, made.clone(), f, arg.clone()).await? {
+                Err(wp::CallError::NotYet(n)) => self.wait(&n).await,
+                answer => return Ok(answer),
+            }
+        }
+    }
+
+    /// Wait the time a not-yet `n` asks before its call is asked again:
+    /// a `provider.wait` span under the call, ended early when the
+    /// instance is stopped (the call's future is dropped with it).
+    async fn wait(&self, n: &wp::NotYet) {
+        let span = tracing::debug_span!(
+            target: "dform",
+            "provider.wait",
+            otel.name = %format_args!("{} waits to ask again", self.grants.provider),
+            provider = self.grants.provider.as_str(),
+            after = n.after_ms,
+            why = n.why.as_str(),
+        );
+        tokio::time::sleep(Duration::from_millis(n.after_ms))
+            .instrument(span)
+            .await;
     }
 }
 

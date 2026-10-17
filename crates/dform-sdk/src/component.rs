@@ -18,7 +18,7 @@
 //! host that drops the stream (it cancelled the call) is written no more
 //! events.
 
-use crate::{CallError, Handler};
+use crate::{Handler, Unanswered};
 use dform_core::plugin::backend::{Call, Reply, Sessions, Within};
 use dform_core::plugin::host::{
     self as h, Calls, Endpoint, Failure, GitFile, Handle, HttpRequest, HttpResponse, Level, Opened,
@@ -54,7 +54,7 @@ pub trait Serve: Send + Sync {
 }
 
 /// A call's answer, being worked out.
-pub type Answer<'a> = Pin<Box<dyn Future<Output = Result<Reply, CallError>> + 'a>>;
+pub type Answer<'a> = Pin<Box<dyn Future<Output = Result<Reply, Unanswered>> + 'a>>;
 
 type Progress<'a> = dform_core::plugin::backend::Progress<'a>;
 
@@ -72,7 +72,7 @@ async fn serve<H: Handler + ?Sized>(
     handler: &H,
     call: Call,
     progress: Progress<'_>,
-) -> Result<Reply, CallError> {
+) -> Result<Reply, Unanswered> {
     let session = sessions.of(&call);
     let within = Within {
         session,
@@ -147,10 +147,14 @@ fn start(make: Make) -> Box<dyn Serve> {
 
 async fn call(make: Make, c: Call, progress: Progress<'_>) -> Result<Reply, t::CallError> {
     let handler = HANDLER.get_or_init(|| start(make));
-    handler
-        .serve(c, progress)
-        .await
-        .map_err(|e| conv::to_call_error(&e))
+    handler.serve(c, progress).await.map_err(|e| match e {
+        Unanswered::Failed(e) => conv::to_call_error(&e),
+        // The host asks again after it.
+        Unanswered::NotYet(n) => t::CallError::NotYet(t::NotYet {
+            after_ms: u64::try_from(n.after.as_millis()).unwrap_or(u64::MAX),
+            why: n.why,
+        }),
+    })
 }
 
 fn decode<T>(r: Result<T, String>) -> Result<T, t::CallError> {

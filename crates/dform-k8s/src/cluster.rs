@@ -568,19 +568,9 @@ impl Cluster {
         }
     }
 
-    /// Wait until the object is gone (a finalizer can hold it), polling,
-    /// up to `timeout`. Whether it went.
-    pub async fn gone(&self, kind: &Kind, ns: &str, name: &str, timeout: Duration) -> Result<bool> {
-        let start = std::time::Instant::now();
-        loop {
-            if self.get(kind, ns, name).await?.is_none() {
-                return Ok(true);
-            }
-            if start.elapsed() >= timeout {
-                return Ok(false);
-            }
-            dform_sdk::sleep(Duration::from_millis(250)).await;
-        }
+    /// Whether the object is gone (a finalizer can hold it a while).
+    pub async fn gone(&self, kind: &Kind, ns: &str, name: &str) -> Result<bool> {
+        Ok(self.get(kind, ns, name).await?.is_none())
     }
 }
 

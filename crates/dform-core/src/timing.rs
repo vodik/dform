@@ -24,6 +24,9 @@
 //!   location, without its userinfo, query or fragment: [`location`]);
 //! - `ratelimit.wait`: a provider's request waiting on its bucket's
 //!   window in the host, under its `io.call`;
+//! - `provider.wait`: a component's call that answered not yet, waiting
+//!   before the host asks it again, under its `provider.call`, with
+//!   `after` and `why`;
 //! - `cache`: a get or a put of what the host keeps for a provider
 //!   (`dform:host/cache`), under the `provider.call` it is made in, with
 //!   `scope` and a get's `hit`;

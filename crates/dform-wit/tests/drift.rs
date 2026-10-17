@@ -22,8 +22,10 @@ use prost_types::field_descriptor_proto::{Label, Type as Pt};
 use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet};
 use wit_parser::{FunctionKind, InterfaceId, Resolve, Type, TypeDefKind, TypeId};
 
-/// WIT types with no proto message: the encoding's own.
-const WIT_ONLY: &[&str] = &["tree", "node", "call-error"];
+/// WIT types with no proto message: the encoding's own, and `not-yet`,
+/// call-error's case the host consumes (a native provider's SDK waits
+/// itself: the proto has none).
+const WIT_ONLY: &[&str] = &["tree", "node", "call-error", "not-yet"];
 
 /// Proto messages with no WIT type: a stream's messages that the WIT
 /// carries as a stream and a future.
@@ -332,7 +334,9 @@ fn the_messages_match() {
     }
 }
 
-/// call-error's cases are dform-core's `CallError` variants.
+/// call-error's cases are dform-core's `CallError` variants, and
+/// `not-yet`, which the host consumes (it asks the call again) and the
+/// engine never sees.
 #[test]
 fn call_error_is_core_call_error() {
     let c = contract();
@@ -354,6 +358,7 @@ fn call_error_is_core_call_error() {
         .map(str::trim)
         .filter(|l| !l.starts_with("//") && !l.is_empty())
         .map(|l| kebab(l.split('(').next().unwrap()))
+        .chain(["not-yet".to_string()])
         .collect();
     assert_eq!(cases, variants);
 }

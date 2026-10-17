@@ -15,10 +15,12 @@
 //! while one waits. A Read of `web.locked` fetches its `remote` holding
 //! the provider's one lock ([`dform_sdk::sync::Mutex`]): two at once, the
 //! second awaits the lock and is woken by the first's task letting it go.
-//! Its requests are sent once ([`once`]): a 503 is what it measures.
+//! Its requests are sent once ([`once`]): a 503 is what it measures. A
+//! Read of `web.later` answers not yet the first two times it is asked:
+//! the host asks it again.
 
 use dform_core::plugin::backend::{Call, Progress, Reply, Session, VERSION};
-use dform_sdk::{CallError, Handler, Request, host, pb};
+use dform_sdk::{CallError, Handler, Request, Unanswered, host, pb};
 use std::sync::OnceLock;
 
 /// The lock a `web.locked` Read holds across its request.
@@ -27,7 +29,7 @@ static LOCK: OnceLock<dform_sdk::sync::Mutex<()>> = OnceLock::new();
 struct FetchAtOnce;
 
 impl Handler for FetchAtOnce {
-    async fn handle(&self, _: Session, call: Call, _: Progress<'_>) -> Result<Reply, CallError> {
+    async fn handle(&self, _: Session, call: Call, _: Progress<'_>) -> Result<Reply, Unanswered> {
         match call {
             Call::Handshake(_) => Ok(Reply::Handshake(pb::HandshakeResponse {
                 protocol_version: VERSION,
@@ -48,6 +50,18 @@ impl Handler for FetchAtOnce {
                 let answer = dform_sdk::block_on(host().http.request(once(&r.remote)));
                 found(answer.map_err(|e| CallError::Refused(e.message))?.status == 200)
             }
+            Call::Read(r) if r.r#type == "web.later" => {
+                // Not there the first two times it is asked: an answer,
+                // the host's to ask again.
+                let n = ASKED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                match n < 2 {
+                    true => Err(dform_sdk::not_yet(
+                        std::time::Duration::from_millis(200),
+                        format!("web.later {}: not there yet", r.name),
+                    )),
+                    false => found(true),
+                }
+            }
             Call::Read(r) => {
                 let get = |p: &str| host().http.request(once(format!("{}/{p}", r.remote)));
                 let (a, b) = dform_sdk::join(get("a"), get("b")).await;
@@ -57,12 +71,15 @@ impl Handler for FetchAtOnce {
                 }
                 found(both)
             }
-            other => Err(CallError::Refused(format!("{} only", other.method()))),
+            other => Err(CallError::Refused(format!("{} only", other.method())).into()),
         }
     }
 }
 
-fn found(found: bool) -> Result<Reply, CallError> {
+/// How many times a `web.later` Read was asked.
+static ASKED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn found(found: bool) -> Result<Reply, Unanswered> {
     Ok(Reply::Read(pb::ReadResponse {
         found,
         ..Default::default()

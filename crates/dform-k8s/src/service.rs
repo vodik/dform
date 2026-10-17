@@ -57,15 +57,11 @@ use dform_core::plugin::wire;
 use dform_core::provider::{self, diff, get_path, marker, set_path};
 use dform_core::schema::Schema;
 use dform_core::value::Value;
-use dform_sdk::{Handler, join_all};
+use dform_sdk::{Handler, Unanswered, join_all};
 use serde_json::{Value as Json, json};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// How long a delete waits for the object to go before it answers.
-const DELETE_WAIT: Duration = Duration::from_secs(60);
-/// How long a destroy-first replacement waits for the old object to go.
-const REPLACE_WAIT: Duration = Duration::from_secs(120);
 /// How long a Configure that names the kinds dform expects (a CRD made at
 /// the last tick, R-126) waits for the cluster to serve them.
 const KIND_WAIT: Duration = Duration::from_secs(30);
@@ -626,17 +622,11 @@ impl K8s {
             ));
         }
         if !req.create_first || same {
+            // Asked again until the old one is gone: a DELETE of one
+            // terminating, or gone, changes nothing.
             c.delete(kind, ns, n).await.map_err(|e| maybe(at, e))?;
-            if !c
-                .gone(kind, ns, n, REPLACE_WAIT)
-                .await
-                .map_err(|e| maybe(at, e))?
-            {
-                return Err(Failed::MaybeApplied(format!(
-                    "{at}: {} is still terminating after {}s; its replacement is not created",
-                    req.remote,
-                    REPLACE_WAIT.as_secs()
-                )));
+            if !c.gone(kind, ns, n).await.map_err(|e| maybe(at, e))? {
+                return Err(terminating(at, &req.remote));
             }
         }
         self.create(c, kind, &req.r#type, at, config, &req.idempotency_key)
@@ -846,25 +836,42 @@ impl K8s {
     }
 }
 
-/// Why an Apply failed: `Refused` changed nothing; `MaybeApplied` may have
-/// taken effect (the call's outcome is unknown).
+/// Why an Apply has no answer: `Refused` changed nothing; `MaybeApplied`
+/// may have taken effect (the call's outcome is unknown); `NotYet` is
+/// waiting on the cluster (an object still terminating), which the host
+/// asks again.
 #[derive(Debug)]
 pub enum Failed {
     Refused(String),
     MaybeApplied(String),
+    NotYet(dform_sdk::NotYet),
 }
 
-impl From<Failed> for CallError {
-    fn from(f: Failed) -> CallError {
+impl From<Failed> for Unanswered {
+    fn from(f: Failed) -> Unanswered {
         match f {
-            Failed::Refused(m) => CallError::Refused(m),
-            Failed::MaybeApplied(m) => CallError::MaybeApplied(m),
+            Failed::Refused(m) => CallError::Refused(m).into(),
+            Failed::MaybeApplied(m) => CallError::MaybeApplied(m).into(),
+            Failed::NotYet(n) => Unanswered::NotYet(n),
         }
     }
 }
 
-/// A delete: background propagation, then the object waited for (bounded:
-/// still terminating after [`DELETE_WAIT`] is a note, not a failure).
+/// How soon an object still terminating is asked after again.
+const TERMINATING: Duration = Duration::from_millis(250);
+
+/// The object `remote` is still terminating (a finalizer holds it): the
+/// call that waits on it is asked again.
+fn terminating(at: &str, remote: &str) -> Failed {
+    Failed::NotYet(dform_sdk::NotYet {
+        after: TERMINATING,
+        why: format!("{at}: {remote} is still terminating"),
+    })
+}
+
+/// A delete: background propagation, then not yet until the object is
+/// gone (a finalizer can hold it): the host asks again, within the call's
+/// timeout, and a DELETE of one terminating, or gone, changes nothing.
 async fn delete(
     c: &Cluster,
     kind: &Kind,
@@ -873,17 +880,10 @@ async fn delete(
 ) -> std::result::Result<Vec<String>, Failed> {
     let (ns, n) = parse_remote(kind, remote, &c.namespace);
     c.delete(kind, ns, n).await.map_err(|e| maybe(at, e))?;
-    let gone = c
-        .gone(kind, ns, n, DELETE_WAIT)
-        .await
-        .map_err(|e| maybe(at, e))?;
-    Ok(match gone {
-        true => Vec::new(),
-        false => vec![format!(
-            "{at}: {remote} is still terminating after {}s",
-            DELETE_WAIT.as_secs()
-        )],
-    })
+    match c.gone(kind, ns, n).await.map_err(|e| maybe(at, e))? {
+        true => Ok(Vec::new()),
+        false => Err(terminating(at, remote)),
+    }
 }
 
 /// Each secret another object holds in `v` (its marker, `provider::Held`)
@@ -1053,7 +1053,7 @@ impl Handler for Provider {
         session: Session,
         call: Call,
         _: Progress<'_>,
-    ) -> std::result::Result<Reply, CallError> {
+    ) -> std::result::Result<Reply, Unanswered> {
         match call {
             Call::Handshake(req) => Ok(Reply::Handshake(handshake(&req)?)),
             Call::Configure(req) => Ok(Reply::Configure(self.configure(session, &req).await?)),
@@ -1123,13 +1123,14 @@ impl Provider {
 impl K8s {
     /// The answer to `call`, a call of this session but its Handshake and
     /// Configure.
-    async fn answer(&self, call: Call) -> std::result::Result<Reply, CallError> {
+    async fn answer(&self, call: Call) -> std::result::Result<Reply, Unanswered> {
         Ok(match call {
             Call::Handshake(_) | Call::Configure(_) => {
                 return Err(CallError::Refused(format!(
                     "a {} call is the provider's, not its session's",
                     call.method()
-                )));
+                ))
+                .into());
             }
             Call::Schema(r) => Reply::Schema(self.schema_reply(&r)?),
             Call::Query(q) => Reply::Query(self.query_reply(&q).await?),
@@ -1150,7 +1151,8 @@ impl K8s {
                 return Err(CallError::Refused(format!(
                     "reveal {} {}#{}: the k8s provider holds no secret",
                     h.r#type, h.remote, h.path
-                )));
+                ))
+                .into());
             }
             Call::Health(r) => Reply::Health(pb::HealthResponse {
                 answers: self.health(&r.objects).await.map_err(refusal)?,

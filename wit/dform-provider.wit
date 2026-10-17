@@ -176,6 +176,21 @@ interface types {
     // and the engine treats a crashed apply as one that may have taken
     // effect (idempotency keys, the `managed` capability).
     crashed(string),
+    // Not yet: what the call is about has not reached where the call can
+    // answer it (an object still being deleted, a kind not served yet).
+    // Waiting is an answer, never a sleep: the host asks the same call
+    // again, in the same session, after `after-ms`, its wait a span under
+    // the call, until the call's timeout (the WIT names intent, the host
+    // owns policy). Never the engine's: the host consumes it, so the
+    // proto (a native provider's SDK waits itself) has no such status.
+    not-yet(not-yet),
+  }
+
+  // How long until the call is worth asking again, and why it is not now,
+  // in the provider's words naming what it waits on.
+  record not-yet {
+    after-ms: u64,
+    why: string,
   }
 
   record handshake-request {

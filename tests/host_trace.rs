@@ -333,3 +333,66 @@ fn a_call_running_as_the_run_ends_is_cancelled_and_its_span_closed() {
         "the run waited the call out: {took}ns"
     );
 }
+
+/// Waiting is an answer, never a sleep: the Kubernetes provider as a
+/// component deletes a namespace a finalizer holds for two more GETs,
+/// and answers not yet each time it finds it terminating; the host asks
+/// the Apply again after the time it said, each wait a span under the
+/// call (`k8s waits to ask again`, its `after` and `why`), and the third
+/// asking finds it gone.
+#[test]
+fn a_not_yet_is_asked_again_after_its_time_and_its_wait_traced() {
+    use crate::k8s_api::{Api, kubeconfig};
+    let k8s = built(
+        "dform_provider_k8s.wasm",
+        "cargo build -p dform-provider-k8s --release --target wasm32-wasip3 --features component",
+    );
+    let (api, url) = Api::start();
+    let s = Scratch::project("host-trace-not-yet");
+    s.write(
+        "dform.toml",
+        &format!(
+            "[project]\nedition = \"2026\"\n\n[providers.k8s]\npath = \"{k8s}\"\n\
+             allow = [\"wasi:filesystem\"]\ncredentials = [\"kubeconfig:environment\"]\n"
+        ),
+    );
+    let kc = kubeconfig(&s, &url);
+    let apply = |program: &str| {
+        s.write("p.df", program);
+        let out = common::dform()
+            .args(["apply", "--yes", "p.df", "--trace", "run.jsonl"])
+            .current_dir(&s.dir)
+            .env("HOME", &s.dir)
+            .env("XDG_CONFIG_HOME", s.path("config"))
+            .env("XDG_CACHE_HOME", wasm_cache())
+            .env("KUBECONFIG", &kc)
+            .env_remove("DFORM_K8S_OFFLINE")
+            .env_remove("KUBERNETES_SERVICE_HOST")
+            .env_remove("DFORM_TRACE")
+            .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+            .output()
+            .unwrap();
+        common::Run::from(out).success();
+        common::spans(&s.path("run.jsonl"))
+    };
+    apply("use k8s\n\nresource k8s.namespace gone { metadata.name = \"gone\" }\n");
+    *api.terminating.lock().unwrap() = 2;
+    let spans = apply("use k8s\n");
+    assert!(api.get("/api/v1/namespaces/gone").is_none(), "deleted");
+    let tree = Tree::of(&spans);
+    let waits = tree.named("k8s waits to ask again");
+    assert_eq!(waits.len(), 2, "{:#?}", tree.edges());
+    for w in &waits {
+        let call = tree.parent(w).unwrap();
+        assert_eq!(Tree::label(call), "provider.call Apply", "{w}");
+        assert_eq!(common::attr(w, "after").as_deref(), Some("250"), "{w}");
+        assert!(
+            common::attr(w, "why").is_some_and(|y| y.ends_with("is still terminating")),
+            "{w}"
+        );
+        let took = time(w, "endTimeUnixNano") - time(w, "startTimeUnixNano");
+        assert!(took >= 250_000_000, "waited its time: {took}ns");
+    }
+    // Asked three times: a DELETE and a GET each.
+    assert_eq!(api.count("DELETE /api/v1/namespaces/gone", &[]), 3);
+}

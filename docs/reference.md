@@ -5528,6 +5528,7 @@ or a value is never one.
 | `{provider} ssh forward` | `io.call`, client | `{asks} {about}` | `kind`, `provider`, `addr` | a tunnel a provider forwards over SSH |
 | `{provider} git commit` | `io.call`, client | `{asks} {about}` | `kind`, `provider`, `addr` | a commit a provider pushes to a repository |
 | `{provider} io.read` | `io.call`, client | `{asks} {about}` | `kind`, `provider`, `addr` | a read a provider asks of the host |
+| `{provider} waits to ask again` | `provider.wait`, internal | `{asks} {about}` | `provider`, `after` (ms), `why` (what the provider waits on, in its words) | a component's call that answered not yet, waiting before the host asks it again |
 | `{provider} cache get` | `cache`, internal | `{asks} {about}` | `provider`, `scope` (`session`, `run`, `account`, `provider`), `hit` | what a provider kept, asked of the host's cache (`dform:host/cache`) |
 | `{provider} cache put` | `cache`, internal | `{asks} {about}` | `provider`, `scope` | what a provider keeps, in the host's cache |
 | `backend opened` | `store`, internal | `deployment {deployment}`, `located the deployment`, `outputs read`, `stack listed` | `addr` | a bucket's prefix opened: whether the bucket holds a write's condition asked once |

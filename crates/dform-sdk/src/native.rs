@@ -55,7 +55,14 @@ impl<H: Handler> backend::Handler for Blocking<H> {
         progress: backend::Progress,
     ) -> Result<backend::Reply, backend::CallError> {
         crate::configuring(session, &call);
-        block_on(self.0.handle(session, call, progress))
+        // Natively the SDK is the not-yet's scheduler: the proto has none.
+        loop {
+            match block_on(self.0.handle(session, call.clone(), progress)) {
+                Ok(r) => return Ok(r),
+                Err(crate::Unanswered::Failed(e)) => return Err(e),
+                Err(crate::Unanswered::NotYet(n)) => std::thread::sleep(n.after),
+            }
+        }
     }
 
     fn is_dead(&self) -> bool {

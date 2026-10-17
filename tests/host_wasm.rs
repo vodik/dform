@@ -912,3 +912,31 @@ fn own_cache(s: &Scratch) -> std::path::PathBuf {
     }
     own
 }
+
+/// A component's Read that answers not yet (the probe's `web.later`, the
+/// first two times) is asked again by the host after the time it says,
+/// and answered the third time: waiting is an answer, never a sleep.
+#[test]
+fn a_components_not_yet_is_asked_again_after_its_time() {
+    use dform::plugin::backend::Session;
+    use dform::plugin::pb;
+    let mut link = probe();
+    let from = std::time::Instant::now();
+    let read: pb::ReadResponse = link
+        .call(
+            Session::NONE,
+            pb::ReadRequest {
+                r#type: "web.later".into(),
+                remote: "later".into(),
+                name: "later".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(read.found);
+    assert!(
+        from.elapsed() >= std::time::Duration::from_millis(400),
+        "asked again twice, 200ms after each: {:?}",
+        from.elapsed()
+    );
+}

@@ -972,12 +972,12 @@ impl<P: Provider> Handler for Typed<P> {
         session: Session,
         call: Call,
         progress: backend::Progress<'_>,
-    ) -> std::result::Result<Reply, CallError> {
+    ) -> std::result::Result<Reply, crate::Unanswered> {
         self.answer(session, call, progress)
             .await
             .map_err(|e| match e {
-                Error::Refused(m) => CallError::Refused(m),
-                Error::MaybeApplied(m) => CallError::MaybeApplied(m),
+                Error::Refused(m) => CallError::Refused(m).into(),
+                Error::MaybeApplied(m) => CallError::MaybeApplied(m).into(),
             })
     }
 }

@@ -30,6 +30,11 @@ pub struct Api {
     /// The group-version whose document changed, its hash in the index
     /// another.
     pub changed: Mutex<Option<String>>,
+    /// How many GETs an object deleted is still answered for, terminating
+    /// (a finalizer holding it), before it is gone.
+    pub terminating: Mutex<usize>,
+    /// The objects deleted and still terminating: GETs left of each.
+    held: Mutex<BTreeMap<String, usize>>,
     /// The group-version documents being answered now, and the most at
     /// once so far: each is answered [`DOCUMENT`] after it is asked, as a
     /// server's are some time after.
@@ -288,14 +293,41 @@ impl Api {
         let name = rest[rest.len() - 1];
         let mut objects = self.objects.lock().unwrap();
         match method {
-            "GET" => match objects.get(path) {
-                Some(o) => (200, o.clone()),
-                None => status(404, "NotFound", &format!("{name} not found"), json!([])),
-            },
-            "DELETE" => match objects.remove(path) {
-                Some(_) => (200, json!({"kind": "Status", "status": "Success"})),
-                None => status(404, "NotFound", &format!("{name} not found"), json!([])),
-            },
+            "GET" => {
+                let mut held = self.held.lock().unwrap();
+                if let Some(left) = held.get_mut(path) {
+                    if *left == 0 {
+                        held.remove(path);
+                        objects.remove(path);
+                    } else {
+                        *left -= 1;
+                    }
+                }
+                match objects.get(path) {
+                    Some(o) => (200, o.clone()),
+                    None => status(404, "NotFound", &format!("{name} not found"), json!([])),
+                }
+            }
+            "DELETE" => {
+                let terminating = *self.terminating.lock().unwrap();
+                match objects.get_mut(path) {
+                    // Held by a finalizer: marked, gone after its GETs.
+                    Some(o) if terminating > 0 => {
+                        o["metadata"]["deletionTimestamp"] = json!("2026-10-17T00:00:00Z");
+                        self.held
+                            .lock()
+                            .unwrap()
+                            .entry(path.to_string())
+                            .or_insert(terminating);
+                        (200, o.clone())
+                    }
+                    Some(_) => {
+                        objects.remove(path);
+                        (200, json!({"kind": "Status", "status": "Success"}))
+                    }
+                    None => status(404, "NotFound", &format!("{name} not found"), json!([])),
+                }
+            }
             "PATCH" => {
                 let applied: Json = serde_json::from_slice(body).unwrap();
                 // A namespaced object needs its namespace, as a server's

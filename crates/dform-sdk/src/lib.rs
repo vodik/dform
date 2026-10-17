@@ -77,6 +77,39 @@ use std::future::Future;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
+/// The world has not reached what a call is about yet (an object still
+/// being deleted, a kind not served yet): an answer, never a sleep. The
+/// host asks the same call again, in its session, after `after`, until
+/// the call's timeout; natively, the SDK does (the proto has no
+/// not-yet). `why` names what it waits on, as the trace shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotYet {
+    pub after: Duration,
+    pub why: String,
+}
+
+/// Why a call has no answer: it failed ([`CallError`]), or not yet
+/// ([`NotYet`]). A `CallError` is one (`?` makes it so).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unanswered {
+    Failed(CallError),
+    NotYet(NotYet),
+}
+
+impl From<CallError> for Unanswered {
+    fn from(e: CallError) -> Unanswered {
+        Unanswered::Failed(e)
+    }
+}
+
+/// Ask again after `after`: `why` names what the call waits on.
+pub fn not_yet(after: Duration, why: impl Into<String>) -> Unanswered {
+    Unanswered::NotYet(NotYet {
+        after,
+        why: why.into(),
+    })
+}
+
 /// A provider: the protocol's calls, each answered as dform sends it,
 /// several at once (a session's, and several sessions'). Its answers may
 /// await the host ([`host()`]): natively each call is served on a thread
@@ -88,15 +121,16 @@ use std::time::Duration;
 #[allow(async_fn_in_trait)] // a call's future is polled where it is served, never sent
 pub trait Handler: Send + Sync + 'static {
     /// Answer `call`, made in `session`, saying how it goes on `progress`
-    /// while it runs. A Configure's session is the one it configures (a new
-    /// one when it opens one: its answer names it, whatever the handler
+    /// while it runs, or say why not ([`Unanswered`]: not yet is an
+    /// answer). A Configure's session is the one it configures (a new one
+    /// when it opens one: its answer names it, whatever the handler
     /// answers); a Handshake's is none.
     async fn handle(
         &self,
         session: Session,
         call: Call,
         progress: backend::Progress<'_>,
-    ) -> Result<Reply, CallError>;
+    ) -> Result<Reply, Unanswered>;
 
     /// Whether the provider is gone (it crashed).
     fn is_dead(&self) -> bool {
@@ -135,8 +169,8 @@ impl<H: backend::Handler + Send + Sync + 'static> Handler for H {
         session: Session,
         call: Call,
         progress: backend::Progress<'_>,
-    ) -> Result<Reply, CallError> {
-        backend::Handler::handle(self, session, call, progress)
+    ) -> Result<Reply, Unanswered> {
+        backend::Handler::handle(self, session, call, progress).map_err(Unanswered::Failed)
     }
 
     fn is_dead(&self) -> bool {

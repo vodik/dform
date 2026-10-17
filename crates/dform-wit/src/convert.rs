@@ -193,6 +193,9 @@ macro_rules! convert {
                     w::CallError::Refused(m) => E::Refused(m),
                     w::CallError::MaybeApplied(m) => E::MaybeApplied(m),
                     w::CallError::Crashed(m) => E::Crashed(m),
+                    // The host asks again on a not-yet; one that reaches
+                    // here was given up on, nothing changed.
+                    w::CallError::NotYet(n) => E::Refused(format!("not yet: {}", n.why)),
                 }
             }
 
