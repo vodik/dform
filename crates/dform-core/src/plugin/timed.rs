@@ -110,10 +110,17 @@ pub fn call_name(provider: &str, kind: &str) -> String {
     format!("{} {kind}", short(provider))
 }
 
-/// A provider as a trace names it: one not yet named by its handshake by
-/// its executable's name.
+/// A provider as a trace names it: by its name, which one not yet named
+/// by its handshake has in its file's (`/opt/dform-provider-k8s.wasm`
+/// is `k8s`) or its command's last word (`dform __provider fake`), never
+/// a path.
 fn short(provider: &str) -> &str {
-    provider.rsplit('/').next().unwrap_or(provider)
+    let file = provider.rsplit(['/', ' ']).next().unwrap_or(provider);
+    let name = file
+        .strip_prefix(super::source::MAGIC)
+        .and_then(|n| n.strip_prefix('-'))
+        .unwrap_or(file);
+    name.strip_suffix(".wasm").unwrap_or(name)
 }
 
 fn traced() -> std::sync::MutexGuard<'static, BTreeMap<u64, tracing::Span>> {
@@ -148,7 +155,8 @@ impl Live {
     fn new(provider: &str, call: &Call, due: Instant) -> Live {
         let what = describe(call);
         let span = Live::span(provider, call.method(), &what);
-        if call.session() != Session::NONE {
+        // A Configure's is the session it opens, recorded with its answer.
+        if call.session() != Session::NONE && !matches!(call, Call::Configure(_)) {
             span.record("session", call.session().0);
         }
         let traced = Traced::new(&span);
@@ -692,6 +700,99 @@ mod tests {
         let mut b = b;
         let t = b.submit(apply("0"));
         assert_eq!(b.next_completed(&mut |_, _| {}).0, t);
+    }
+
+    /// Answers a Configure with the session it configures.
+    struct Configures;
+
+    impl Handler for Configures {
+        fn handle(&self, _: Session, call: Call, _: Progress) -> Result<Reply, CallError> {
+            let Call::Configure(r) = call else {
+                return Err(CallError::Refused("configure only".into()));
+            };
+            Ok(Reply::Configure(pb::ConfigureResponse {
+                session: r.session,
+                ..Default::default()
+            }))
+        }
+    }
+
+    /// The fields each span recorded, as it began and after, in order.
+    #[derive(Clone, Default)]
+    struct Recorded(Arc<Mutex<HashMap<u64, Vec<String>>>>);
+
+    struct Names<'a>(&'a mut Vec<String>);
+
+    impl tracing::field::Visit for Names<'_> {
+        fn record_debug(&mut self, f: &tracing::field::Field, _: &dyn std::fmt::Debug) {
+            self.0.push(f.name().to_string());
+        }
+    }
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Recorded {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            id: &tracing::span::Id,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut spans = self.0.lock().unwrap();
+            attrs.record(&mut Names(spans.entry(id.into_u64()).or_default()));
+        }
+
+        fn on_record(
+            &self,
+            id: &tracing::span::Id,
+            values: &tracing::span::Record<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut spans = self.0.lock().unwrap();
+            values.record(&mut Names(spans.entry(id.into_u64()).or_default()));
+        }
+    }
+
+    /// A Configure of a session its provider answered before (a second
+    /// Configure) names the session once, the one it configured: a
+    /// field a span carries is carried once.
+    #[test]
+    fn a_reconfigure_names_its_session_once() {
+        use tracing_subscriber::layer::SubscriberExt;
+        let recorded = Recorded::default();
+        let subscriber = tracing_subscriber::registry().with(recorded.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            // A test on another thread may have found the call's callsite
+            // with no subscriber, as this one began.
+            tracing::callsite::rebuild_interest_cache();
+            let q = Queue::new(Configures, Order::Clock, false);
+            let mut p =
+                Timed::new("configures".into(), Box::new(q), Duration::from_secs(5)).unwrap();
+            p.submit(Call::Configure(pb::ConfigureRequest {
+                session: 3,
+                ..Default::default()
+            }));
+            assert!(p.next_completed(&mut |_, _| {}).1.is_ok());
+        });
+        let spans = recorded.0.lock().unwrap().clone();
+        let call = spans
+            .values()
+            .find(|f| f.iter().any(|n| n == "provider"))
+            .unwrap_or_else(|| panic!("the call's span: {spans:?}"));
+        let sessions = call.iter().filter(|n| *n == "session").count();
+        assert_eq!(sessions, 1, "{call:?}");
+    }
+
+    /// A provider is named by its name, never its file's path: before its
+    /// handshake names it, by the name its file or command gives it.
+    #[test]
+    fn a_call_names_its_provider_not_its_file() {
+        for (program, name) in [
+            ("/opt/providers/dform-provider-k8s.wasm", "k8s Handshake"),
+            ("./prov/dform-provider-fake", "fake Handshake"),
+            ("dform __provider fake", "fake Handshake"),
+            ("ovh", "ovh Handshake"),
+        ] {
+            assert_eq!(call_name(program, "Handshake"), name, "{program}");
+        }
     }
 
     /// Within the timeout the backend answers as it would unwrapped: the
