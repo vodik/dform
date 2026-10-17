@@ -222,10 +222,11 @@ fn a_trap_is_its_exports_error() {
 }
 
 /// The OVH provider as a component: each request it sends through the
-/// host is under its call's export, which is under the call and named as
-/// it is, so a trace read by names (tests/host_wasm.rs's parity with the
-/// native build) reads as the native provider's, the request under its
-/// call's name.
+/// host is under its call's export (and so is its signer's fetch of the
+/// API's clock, made as the Configure opens the keys), which is under the
+/// call and named as it is, so a trace read by names (tests/host_wasm.rs's
+/// parity with the native build) reads as the native provider's, the
+/// request under its call's name.
 #[test]
 fn the_ovh_components_requests_are_under_its_exports() {
     use dform_provider_ovh::fake::{self, Server};
@@ -239,31 +240,33 @@ fn the_ovh_components_requests_are_under_its_exports() {
         "dform.toml",
         &format!(
             "[project]\nedition = \"2026\"\n\n[providers]\novh = {{ path = \"{wasm}\", allow = \
-             [\"wasi:filesystem\"] }}\n"
+             [\"wasi:filesystem\"], credentials = [\"signed:environment\"] }}\n"
         ),
     );
     s.write(
         "main.df",
         &format!(
-            "use ovh {{ endpoint = \"{}\", project = \"{}\", token = \"{}\" }}\n\n\
+            "use ovh {{ endpoint = \"{}\", project = \"{}\" }}\n\n\
              resource ovh.ssh_key admin {{ name = \"lab-admin\", public_key = \"ssh-ed25519 \
              AAAAC3Nz lab\" }}\n",
             server.endpoint,
             fake::DESCRIPTION,
-            server.access_token()
         ),
     );
-    let out = common::dform()
-        .args(["plan", "main.df", "--trace", "run.jsonl"])
+    let mut plan = common::dform();
+    plan.args(["plan", "main.df", "--trace", "run.jsonl"])
         .current_dir(&s.dir)
         .env("HOME", &s.dir)
         .env("XDG_CONFIG_HOME", s.path("config"))
         .env("XDG_CACHE_HOME", wasm_cache())
-        .env("DFORM_OVH_RESOLVER", "127.0.0.1:9")
         .env_remove("DFORM_TRACE")
-        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
-        .output()
-        .unwrap();
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT");
+    // The keys its signer signs with, granted from the environment: its
+    // signer fetches the API's clock as the Configure opens them.
+    for (k, v) in server.env() {
+        plan.env(k, v);
+    }
+    let out = plan.output().unwrap();
     common::Run::from(out).success();
     let spans = common::spans(&s.path("run.jsonl"));
     let tree = Tree::of(&spans);
@@ -271,7 +274,12 @@ fn the_ovh_components_requests_are_under_its_exports() {
         .iter()
         .filter(|s| common::attr(s, "kind").as_deref() == Some("http"))
         .collect();
-    assert!(!requests.is_empty());
+    assert!(
+        requests.iter().any(|r| r["name"]
+            .as_str()
+            .is_some_and(|n| n.ends_with("/auth/time"))),
+        "the signer's fetch of the API's clock: {requests:#?}"
+    );
     for r in requests {
         let export = tree.parent(r).unwrap();
         assert_eq!(export["kind"], 2, "{r} under {export}");

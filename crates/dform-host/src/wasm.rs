@@ -63,6 +63,11 @@ mod bindings {
         path: "../../wit/host",
         world: "dform:host/hosted-provider",
         require_store_data_send: true,
+        // Opening a credential may perform its signer's needs (a fetch),
+        // which are traced in the span of the export it is opened in.
+        imports: {
+            "dform:host/secrets.open": store,
+        },
         with: {
             "wasi:cli": wasmtime_wasi::p3::bindings::cli,
             "wasi:clocks": wasmtime_wasi::p3::bindings::clocks,
@@ -316,10 +321,21 @@ impl wh::types::HostTunnel for State {
 
 impl wh::types::Host for State {}
 
-impl wh::secrets::Host for State {
-    fn open(&mut self, name: String) -> Result<Resource<Credential>, wh::types::Error> {
-        let o = self.host.open(&name).map_err(error)?;
-        self.table
+impl wh::secrets::Host for State {}
+
+impl<U> wh::secrets::HostWithStore<U> for HasSelf<State> {
+    /// The credential `name`, opened in the span of the export it is
+    /// opened in ([`made_in`]): what its signer's needs make, a fetch,
+    /// is under that call, as natively.
+    fn open(
+        mut s: Access<'_, U, Self>,
+        name: String,
+    ) -> Result<Resource<Credential>, wh::types::Error> {
+        let span = made_in(&mut s);
+        let state = s.get();
+        let o = span.in_scope(|| state.host.open(&name)).map_err(error)?;
+        state
+            .table
             .push(Credential {
                 handle: o.handle,
                 name,
