@@ -4,7 +4,7 @@
 //!
 //! A provider built on `serve` listens on TCP unless
 //! `DFORM_PROVIDER_TRANSPORT=unix` is in its environment (dform's, which it
-//! inherits): then on a socket in the temporary directory, removed when
+//! inherits): then on a socket in a scratch directory, removed when
 //! the provider exits or dform closes the connection.
 
 use anyhow::{Result, bail};

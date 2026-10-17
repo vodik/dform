@@ -1,6 +1,5 @@
-//! Prototype of the synthesis lattice from proposals/E-synthesis.org.
-//!
-//! What is here, and only this:
+//! The synthesis lattice (proposals/E-synthesis.org), the evaluator's own
+//! way of settling a value two contributions disagree on:
 //!   * three-valued equality `eq3` over values that may contain labeled nulls,
 //!     driven by the null class (fresh / open / secret);
 //!   * the four lattices of direction A (Flat, Map, Set, Keyed) with one new
@@ -11,8 +10,9 @@
 //!   * `collapse`, the one non-monotone read, and `resolve`, the substitution
 //!     a phase boundary performs.
 //!
-//! Nothing here touches the evaluator. The tests are the point: they run the
-//! four seam-1 cases and check order independence under every permutation.
+//! The engine's own modules (`engine::*`) and the executor build their
+//! membership and aggregation on these types; the tests here run the four
+//! seam-1 cases and check order independence under every permutation.
 
 use crate::spell;
 use crate::value::{NullClass, Value};

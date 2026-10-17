@@ -10,7 +10,7 @@
 //! to: VALUE}` or `{at: PATH, gone: true}`, PATH the keys down to it), and
 //! the fence of the lease it was written under (0 where the store does
 //! not fence). The checkpoint, written per tick by a whole-object write
-//! (on the local backend: a temporary file, fsynced, renamed over), says
+//! (on the local backend: a scratch file, fsynced, renamed over), says
 //! the last entry it includes (`log`: its `seq` and `hash`, and in a store
 //! kept in segments its `part`).
 //!
