@@ -301,7 +301,8 @@ resource db.user old {
         "providers/fake/schema.df",
         &(s.read("providers/fake/schema.df")
             + "type_provider(db.user, \"fakecloud\")\n\
-               type_attr(db.user, \"password\", \"string\", [\"sensitive\"])\n"),
+               type_attr(db.user, \"password\", \"string\", [\"sensitive\"])\n\
+               type_attr(db.user, \"name\", \"string\", [\"sensitive\"])\n"),
     );
     run(&s, NOW, &["apply", "p"]).success();
     let w = world(&s);

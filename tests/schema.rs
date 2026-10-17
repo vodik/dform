@@ -26,7 +26,7 @@ fn a_schema_file_in_the_working_directory_is_a_provider() {
     let s = Scratch::new("schema-local");
     s.write(
         "providers/ldap/schema.df",
-        "\ntype_provider(ldap.group, \"ldap\")\ntype_attr(ldap.group, \"dn\", \"string\", [\"computed\", \"id\"])\n",
+        "\ntype_provider(ldap.group, \"ldap\")\ntype_attr(ldap.group, \"dn\", \"string\", [\"computed\", \"id\"])\ntype_attr(ldap.group, \"cn\", \"string\", [])\n",
     );
     s.write("p.df", "\nresource ldap.group admins { cn = \"admins\" }\n");
     let r = s

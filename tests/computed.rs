@@ -51,9 +51,11 @@ type_provider(db.instance, "mock")
 type_attr(db.instance, "id", "string", ["computed", "id"])
 type_attr(db.instance, "password", "string", ["computed", "sensitive"])
 type_attr(db.instance, "master_password", "string", ["sensitive"])
+type_attr(db.instance, "size", "int", [])
 type_provider(app.secret, "mock")
 type_attr(app.secret, "id", "string", ["computed", "id"])
 type_attr(app.secret, "value", "string", ["sensitive"])   # E0304 unless it is
+type_attr(app.secret, "db", "db.instance", [])
 "#;
 
 const SECRET_PROG: &str = r#"
@@ -151,7 +153,7 @@ fn optional_computed_is_the_programs_when_set_else_minted_at_apply() {
     let s = Scratch::new("computed-optional");
     s.write(
         "schema.df",
-        "\ntype_provider(\"vm\", \"mock\")\ntype_attr(\"vm\", \"id\", \"string\", [\"computed\", \"id\"])\ntype_attr(\"vm\", \"zone\", \"string\", [\"optional_computed\"])\n",
+        "\ntype_provider(\"vm\", \"mock\")\ntype_attr(\"vm\", \"id\", \"string\", [\"computed\", \"id\"])\ntype_attr(\"vm\", \"zone\", \"string\", [\"optional_computed\"])\ntype_attr(\"vm\", \"size\", \"int\", [])\ntype_attr(\"vm\", \"peer_zone\", \"string\", [])\ntype_attr(\"vm\", \"other_zone\", \"string\", [])\n",
     );
     s.write(
         "p.df",
@@ -210,7 +212,7 @@ fn an_update_leaves_a_picked_optional_computed_value_to_the_provider() {
     let s = Scratch::new("computed-optional-update");
     s.write(
         "schema.df",
-        "\ntype_provider(\"vm\", \"mock\")\ntype_attr(\"vm\", \"id\", \"string\", [\"computed\", \"id\"])\ntype_attr(\"vm\", \"zone\", \"string\", [\"optional_computed\"])\n",
+        "\ntype_provider(\"vm\", \"mock\")\ntype_attr(\"vm\", \"id\", \"string\", [\"computed\", \"id\"])\ntype_attr(\"vm\", \"zone\", \"string\", [\"optional_computed\"])\ntype_attr(\"vm\", \"size\", \"int\", [])\n",
     );
     let program = |size: u32| {
         format!(

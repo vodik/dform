@@ -96,6 +96,7 @@ const BOX: &str = r#"
 type_provider(x.box, "boxcloud")
 type_attr(x.box, "id", "string", ["computed", "id"])
 type_attr(x.box, "status", "object", ["computed"])
+type_attr(x.box, "size", "int", [])
 "#;
 
 /// The policy's denies over `x.box`: `not has` of a field of the computed

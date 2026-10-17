@@ -175,7 +175,8 @@ fn a_copys_gate_is_stuck_in_the_programs_words() {
         "s.df",
         "type_provider(x.box, \"boxcloud\")\n\
          type_attr(x.box, \"id\", \"string\", [\"computed\", \"id\"])\n\
-         type_attr(x.box, \"status\", \"object\", [\"computed\"])\n",
+         type_attr(x.box, \"status\", \"object\", [\"computed\"])\n\
+         type_attr(x.box, \"size\", \"int\", [])\n",
     );
     s.write("w.json", "{}");
     s.write(

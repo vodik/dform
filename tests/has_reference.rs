@@ -186,6 +186,7 @@ type_provider(x.box, "boxcloud")
 type_provider(y.box, "boxcloud")
 type_attr(x.box, "id", "string", ["computed", "id"])
 type_attr(x.box, "status", "object", ["computed"])
+type_attr(x.box, "size", "int", [])
 "#,
     );
     s.write(
